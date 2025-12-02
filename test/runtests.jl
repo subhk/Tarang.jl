@@ -9,6 +9,7 @@ const TEST_FILES = [
     "test_quick_domains.jl",
     "test_plot_tools.jl",
     "test_ball_domain.jl",
+    "test_dedalus_parity.jl",
 ]
 
 for file in TEST_FILES
