@@ -436,7 +436,9 @@ function create_current_file!(handler::NetCDFFileHandler)
         "source" => "Tarang.jl - Julia implementation of Dedalus",
         "history" => "Created on $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))",
         "Conventions" => "CF-1.8",
-        "tarang_version" => "0.1.0"
+        "tarang_version" => "0.1.0",
+        "software" => "Tarang",
+        "software_repository" => "https://github.com/subhajitkar/Tarang.jl"
     )
     
     # Add MPI information
@@ -572,5 +574,22 @@ end
 
 # Export main functionality matching Dedalus interface
 export NetCDFFileHandler, add_netcdf_handler
+
+"""
+Dedalus-style helper to create a NetCDF file handler.
+Matches evaluator.add_file_handler(...) usage in Dedalus.
+"""
+function add_file_handler(base_path::String, dist, vars; kwargs...)
+    return NetCDFFileHandler(base_path, dist, vars; kwargs...)
+end
+
+"""
+Alias without bang for Dedalus-style task addition.
+"""
+function add_task(handler::NetCDFFileHandler, task; kwargs...)
+    return add_task!(handler, task; kwargs...)
+end
+
+export add_file_handler, add_task
 export add_task!, check_schedule, process!
 export current_path, current_file, create_current_file!
