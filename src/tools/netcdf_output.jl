@@ -558,6 +558,11 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
             data = zeros(Float64, data_shape...)
         end
     end
+    # Apply optional postprocess (slices/reductions)
+    if task["postprocess"] !== nothing
+        data = task["postprocess"](data)
+    end
+    data = Array(data)  # Ensure plain array for NetCDF
     nc_type = eltype(data) == Float32 ? NC_FLOAT : NC_DOUBLE
     
     # Check if variable exists
