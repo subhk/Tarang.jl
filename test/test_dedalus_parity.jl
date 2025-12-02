@@ -72,3 +72,32 @@ end
         @test all(isapprox.(data[1, :], 2.5))
     end
 end
+
+@testset "NetCDF analysis helpers" begin
+    tmp = mktempdir()
+    cd(tmp) do
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64, device="cpu")
+        basis = RealFourier(coords["x"]; size=4, bounds=(0.0, 1.0))
+        u = ScalarField(dist, "u", (basis,), Float64)
+        ensure_layout!(u, :g)
+        u.data_g .= [1.0, 2.0, 3.0, 4.0]
+
+        handler = add_file_handler(joinpath(tmp, "analysis"), dist, Dict("u" => u);
+                                   parallel="gather", max_writes=1)
+        add_task(handler, u; name="u_raw")
+        add_mean_task!(handler, u; dims=1, name="u_mean")
+        add_slice_task!(handler, u; dim=1, idx=2, name="u_slice")
+
+        process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
+
+        file = Tarang.current_file(handler)
+        raw = ncread(file, "u_raw")
+        mean_val = ncread(file, "u_mean")
+        slice_val = ncread(file, "u_slice")
+
+        @test all(isapprox.(raw[1, :], u.data_g))
+        @test isapprox(mean_val[1], 2.5; atol=1e-12)
+        @test isapprox(slice_val[1], 2.0; atol=1e-12)
+    end
+end

@@ -25,7 +25,7 @@ This gallery showcases various problems that can be solved with Tarang.jl. Each 
 
 ## Fluid Dynamics
 
-### 2D Rayleigh-Bénard Convection ⭐⭐
+### 2D Rayleigh-Bénard Convection (Intermediate)
 
 Thermal convection in a horizontal layer heated from below.
 
@@ -65,7 +65,7 @@ t = 1.000, dt = 2.28e-04, Nu = 4.523
 
 ---
 
-### 3D Taylor-Green Vortex ⭐⭐⭐
+### 3D Taylor-Green Vortex (Advanced)
 
 Canonical test case for 3D turbulence and vortex dynamics.
 
@@ -88,7 +88,7 @@ mpiexec -n 8 julia examples/taylor_green_3d.jl
 
 ---
 
-### 3D Channel Flow ⭐⭐⭐
+### 3D Channel Flow (Advanced)
 
 Turbulent flow between parallel plates.
 
@@ -106,7 +106,7 @@ Turbulent flow between parallel plates.
 
 ---
 
-### 2D Kelvin-Helmholtz Instability ⭐⭐
+### 2D Kelvin-Helmholtz Instability (Intermediate)
 
 Shear flow instability and vortex formation.
 
@@ -124,7 +124,7 @@ Shear flow instability and vortex formation.
 
 ## Heat Transfer
 
-### 1D Heat Diffusion ⭐
+### 1D Heat Diffusion (Beginner)
 
 Simple diffusion equation in one dimension.
 
@@ -169,7 +169,7 @@ MPI.Finalize()
 
 ---
 
-### 2D Steady-State Heat Conduction ⭐
+### 2D Steady-State Heat Conduction (Beginner)
 
 Solve Laplace equation for steady heat distribution.
 
@@ -184,7 +184,7 @@ Solve Laplace equation for steady heat distribution.
 
 ---
 
-### 3D Thermal Convection with Rotation ⭐⭐⭐
+### 3D Thermal Convection with Rotation (Advanced)
 
 Rotating Rayleigh-Bénard convection.
 
@@ -201,7 +201,7 @@ Rotating Rayleigh-Bénard convection.
 
 ## Stability Analysis
 
-### Rayleigh-Bénard Linear Stability ⭐⭐
+### Rayleigh-Bénard Linear Stability (Intermediate)
 
 Compute critical Rayleigh number and eigenmodes.
 
@@ -218,7 +218,7 @@ Compute critical Rayleigh number and eigenmodes.
 
 ---
 
-### Plane Poiseuille Stability ⭐⭐⭐
+### Plane Poiseuille Stability (Advanced)
 
 Stability of parallel shear flow.
 
@@ -235,7 +235,7 @@ Stability of parallel shear flow.
 
 ## Wave Propagation
 
-### 1D Linear Wave Equation ⭐
+### 1D Linear Wave Equation (Beginner)
 
 Simple wave propagation.
 
@@ -250,7 +250,7 @@ Simple wave propagation.
 
 ---
 
-### 2D Acoustic Waves ⭐⭐
+### 2D Acoustic Waves (Intermediate)
 
 Sound wave propagation in 2D.
 
@@ -267,7 +267,7 @@ Sound wave propagation in 2D.
 
 ## Atmospheric Flows
 
-### 2D Gravity Waves ⭐⭐
+### 2D Gravity Waves (Intermediate)
 
 Internal gravity waves in stratified fluid.
 
@@ -282,7 +282,7 @@ Internal gravity waves in stratified fluid.
 
 ---
 
-### 2D Quasi-Geostrophic Flow ⭐⭐⭐
+### 2D Quasi-Geostrophic Flow (Advanced)
 
 Large-scale atmospheric/oceanic flows.
 
@@ -299,7 +299,7 @@ Large-scale atmospheric/oceanic flows.
 
 ## Advanced Examples
 
-### MHD (Magnetohydrodynamics) ⭐⭐⭐
+### MHD (Magnetohydrodynamics) (Advanced)
 
 Fluid dynamics with magnetic fields.
 
@@ -314,7 +314,7 @@ Fluid dynamics with magnetic fields.
 
 ---
 
-### Double-Diffusive Convection ⭐⭐⭐
+### Double-Diffusive Convection (Advanced)
 
 Convection driven by two diffusing species.
 
@@ -329,7 +329,7 @@ Convection driven by two diffusing species.
 
 ---
 
-### Stratified Shear Flow ⭐⭐⭐
+### Stratified Shear Flow (Advanced)
 
 Combined shear and stratification.
 

@@ -36,9 +36,9 @@ Time-evolution problems where you integrate PDEs forward in time.
 
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
-| [2D Rayleigh-Bénard](ivp_2d_rbc.md) | Thermal convection in 2D | ⭐⭐ | Navier-Stokes, buoyancy, CFL |
-| [3D Taylor-Green Vortex](ivp_3d_turbulence.md) | 3D turbulence simulation | ⭐⭐⭐ | 3D FFTs, energy spectra |
-| [Channel Flow](../notebooks/channel_flow.md) | Turbulent channel flow | ⭐⭐⭐ | Wall-bounded, statistics |
+| [2D Rayleigh-Bénard](ivp_2d_rbc.md) | Thermal convection in 2D | Intermediate | Navier-Stokes, buoyancy, CFL |
+| [3D Taylor-Green Vortex](ivp_3d_turbulence.md) | 3D turbulence simulation | Advanced | 3D FFTs, energy spectra |
+| [Channel Flow](../notebooks/channel_flow.md) | Turbulent channel flow | Advanced | Wall-bounded, statistics |
 
 ### Boundary Value Problems (BVP)
 
@@ -46,8 +46,8 @@ Steady-state problems with boundary conditions.
 
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
-| Steady Convection | Fixed temperature Rayleigh-Bénard | ⭐⭐ | LBVP, sparse linear solve |
-| Stokes Flow | Low Reynolds number flow | ⭐ | Simple BVP example |
+| Steady Convection | Fixed temperature Rayleigh-Bénard | Intermediate | LBVP, sparse linear solve |
+| Stokes Flow | Low Reynolds number flow | Beginner | Simple BVP example |
 
 ### Eigenvalue Problems (EVP)
 
@@ -55,14 +55,14 @@ Linear stability analysis and normal modes.
 
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
-| [Stability Analysis](eigenvalue_problems.md) | Eigenvalue problem setup | ⭐⭐⭐ | EVP, eigensolvers |
+| [Stability Analysis](eigenvalue_problems.md) | Eigenvalue problem setup | Advanced | EVP, eigensolvers |
 
 ### Special Topics
 
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
-| [Boundary Conditions](boundary_conditions.md) | All BC types and usage | ⭐⭐ | Dirichlet, Neumann, Robin |
-| [Analysis & Output](analysis_and_output.md) | Data management | ⭐⭐ | NetCDF, HDF5, analysis |
+| [Boundary Conditions](boundary_conditions.md) | All BC types and usage | Intermediate | Dirichlet, Neumann, Robin |
+| [Analysis & Output](analysis_and_output.md) | Data management | Intermediate | NetCDF, HDF5, analysis |
 
 ## Problem Types Explained
 
@@ -156,15 +156,15 @@ eigenvalues = solve!(solver, nev=10)
 
 ### By Complexity
 
-**Level 1 (⭐)**: Basic concepts, single field
+**Beginner**: Basic concepts, single field
 - [First Steps](../getting_started/first_steps.md)
 
-**Level 2 (⭐⭐)**: Multiple fields, coupled equations
+**Intermediate**: Multiple fields, coupled equations
 - [2D Rayleigh-Bénard](ivp_2d_rbc.md)
 - [Boundary Conditions](boundary_conditions.md)
 - [Analysis and Output](analysis_and_output.md)
 
-**Level 3 (⭐⭐⭐)**: 3D problems, advanced analysis
+**Advanced**: 3D problems, advanced analysis
 - [3D Turbulence](ivp_3d_turbulence.md)
 - [Eigenvalue Problems](eigenvalue_problems.md)
 

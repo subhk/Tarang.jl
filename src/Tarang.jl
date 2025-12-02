@@ -67,6 +67,7 @@ include("tools/netcdf_merge.jl")
 include("extras/flow_tools.jl")
 include("extras/plot_tools.jl")
 include("extras/quick_domains.jl")
+include("extras/analysis_tasks.jl")
 
 # Libraries submodule to avoid name collisions with core types
 module Libraries
