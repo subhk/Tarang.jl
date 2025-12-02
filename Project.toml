@@ -1,6 +1,6 @@
 name = "Tarang"
 uuid = "3caadacf-3504-43fd-90cf-12adede613ab"
-authors = ["Subhajit Kar <subhajitkar@gmail.com>"]
+authors = ["Subhajit Kar <subhajitkar19@gmail.com>"]
 version = "0.1.0"
 
 [deps]
