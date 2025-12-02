@@ -157,7 +157,7 @@ snapshots = evaluator.add_file_handler('snapshots', sim_dt=0.25, max_writes=50)
 snapshots.add_task(b, name='buoyancy')
 snapshots.add_task(-d3.div(d3.skew(u)), name='vorticity')
 """
-function add_task!(handler::NetCDFFileHandler, task; layout="g", name=nothing, scales=nothing)
+function add_task!(handler::NetCDFFileHandler, task; layout="g", name=nothing, scales=nothing, postprocess=nothing)
     # Default name
     if name === nothing
         name = string(task)
@@ -191,7 +191,8 @@ function add_task!(handler::NetCDFFileHandler, task; layout="g", name=nothing, s
         "layout" => layout_obj,
         "scales" => scales,
         "name" => name,
-        "dtype" => get_operator_dtype(operator, handler.precision)
+        "dtype" => get_operator_dtype(operator, handler.precision),
+        "postprocess" => postprocess
     )
     
     # Add data distribution information following Dedalus get_data_distribution
@@ -215,6 +216,8 @@ function create_operator(task, vars::Dict, dist)
         return parse_field_expression(task, vars, dist)
     elseif isa(task, ScalarField) || isa(task, VectorField) || isa(task, TensorField)
         # Existing field/operator
+        return task
+    elseif isa(task, Dict)
         return task
     else
         # Assume it's already an operator
@@ -321,7 +324,9 @@ end
 Get domain from operator (placeholder)
 """
 function get_operator_domain(operator)
-    if isa(operator, ScalarField)
+    if isa(operator, Dict) && haskey(operator, "shape")
+        return Dict("dims" => length(operator["shape"]), "shape" => operator["shape"])
+    elseif isa(operator, ScalarField)
         if operator.data_g === nothing
             ensure_layout!(operator, :g)
         end
@@ -569,8 +574,8 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         # Dimensions: (time, [components], spatial dims...)
         data_shape = size(data)
         dim_names = ["sim_time"]
-        for i in 2:length(data_shape)
-            push!(dim_names, "$(task_name)_dim$(i-1)")  # Use task-specific dimension names
+        for i in 1:length(data_shape)
+            push!(dim_names, "$(task_name)_dim$i")  # Use task-specific dimension names
         end
         
         # Create spatial coordinate variables if they don't exist
@@ -584,9 +589,9 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
             end
             
             if !coord_exists
-                # Create coordinate variable
-                coord_data = collect(range(0.0, 1.0, length=data_shape[i]))
-                nccreate(filename, dim_name, dim_name, data_shape[i],
+                coord_length = data_shape[i]
+                coord_data = collect(range(0.0, 1.0, length=coord_length))
+                nccreate(filename, dim_name, dim_name, coord_length,
                         atts=Dict("long_name" => dim_name,
                                  "axis" => "XYZ"[min(i,3):min(i,3)]))
                 ncwrite(coord_data, filename, dim_name)
@@ -596,7 +601,7 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         # Create main data variable using NetCDF.jl syntax
         # First collect dimension names and sizes
         dims_for_var = copy(dim_names)  # ["sim_time", "task_dim1", ...]
-        sizes_for_var = [0; collect(data_shape[2:end])]  # 0=unlimited for time
+        sizes_for_var = [0; collect(data_shape)]  # 0=unlimited for time
         
         # Create main data variable
         nccreate(filename, task_name, dims_for_var, sizes_for_var,
@@ -609,7 +614,7 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     end
     
     # Write data with time index
-    start_indices = [write_index; ones(Int, ndims(data))]
+    start_indices = [write_index; ones(Int, length(size(data)))]
     ncwrite(data, filename, task_name, start=start_indices)
     
     return true
@@ -644,3 +649,4 @@ end
 export add_file_handler, add_task
 export add_task!, check_schedule, process!
 export current_path, current_file, create_current_file!
+export add_mean_task!, add_slice_task!, add_profile_task!
