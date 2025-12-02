@@ -11,6 +11,7 @@ This page is a concise newcomer guide in the spirit of the Dedalus docs. It walk
 - [6. Logging & Configuration](#6-logging--configuration)
 - [7. NetCDF Output & Postprocessing](#7-netcdf-output--postprocessing)
 - [8. Hosting on GitHub Pages](#8-hosting-on-github-pages)
+- [Dedalus-Style Guide](dedalus_style_guide.md)
 
 ## 1. Prerequisites
 - **Julia** >= 1.6

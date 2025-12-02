@@ -52,8 +52,13 @@ end
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2 * pi))
         u = ScalarField(dist, "u", (basis,), Float64)
 
-        handler = NetCDFFileHandler(joinpath(tmp, "snapshots"), dist, Dict("u" => u);
-                                    parallel="gather", max_writes=1)
+        handler = add_file_handler(joinpath(tmp, "snapshots"), dist, Dict("u" => u);
+                                   parallel="gather", max_writes=1)
+        add_task(handler, u; name="u")
+
+        ensure_layout!(u, :g)
+        fill!(u.data_g, 2.5)
+
         process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
 
         file = Tarang.current_file(handler)
@@ -61,5 +66,9 @@ end
         @test ncreadatt(file, "NC_GLOBAL", "title") == "Tarang.jl simulation output"
         @test ncreadatt(file, "NC_GLOBAL", "handler_name") == handler.name
         @test ncreadatt(file, "NC_GLOBAL", "tarang_version") == "0.1.0"
+        @test ncreadatt(file, "NC_GLOBAL", "software") == "Tarang"
+
+        data = ncread(file, "u")
+        @test all(isapprox.(data[1, :], 2.5))
     end
 end
