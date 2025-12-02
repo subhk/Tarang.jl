@@ -321,40 +321,61 @@ end
 Get domain from operator (placeholder)
 """
 function get_operator_domain(operator)
-    # Placeholder - would extract domain from operator
-    return Dict("dims" => 2, "shape" => (64, 32))
+    if isa(operator, ScalarField)
+        if operator.data_g === nothing
+            ensure_layout!(operator, :g)
+        end
+        return Dict("dims" => ndims(operator.data_g), "shape" => size(operator.data_g))
+    elseif isa(operator, VectorField)
+        first_comp = operator.components[1]
+        if first_comp.data_g === nothing
+            ensure_layout!(first_comp, :g)
+        end
+        return Dict("dims" => ndims(first_comp.data_g), "shape" => size(first_comp.data_g))
+    elseif isa(operator, TensorField)
+        first_comp = operator.components[1, 1]
+        if first_comp.data_g === nothing
+            ensure_layout!(first_comp, :g)
+        end
+        return Dict("dims" => ndims(first_comp.data_g), "shape" => size(first_comp.data_g))
+    end
+    return Dict("dims" => 0, "shape" => ())
 end
 
 """
 Get tensor signature from operator (placeholder)
 """
 function get_operator_tensorsig(operator)
-    # Placeholder - would extract tensor signature
-    return ()
+    if isa(operator, ScalarField)
+        return ()
+    elseif isa(operator, VectorField)
+        return (:component,)
+    elseif isa(operator, TensorField)
+        return (:component_i, :component_j)
+    else
+        return ()
+    end
 end
 
 """
 Get global shape from layout (placeholder)
 """
 function get_global_shape(layout, domain, scales)
-    # Placeholder - would calculate using layout.global_shape(domain, scales)
-    return (64, 32)
+    return domain["shape"]
 end
 
 """
 Get local shape from layout (placeholder)
 """
 function get_local_shape(layout, domain, scales, rank)
-    # Placeholder - would calculate using layout.local_shape(domain, scales, rank)
-    return (64, 32)
+    return domain["shape"]
 end
 
 """
 Get local start from layout (placeholder)
 """
 function get_local_start(layout, domain, scales, rank)
-    # Placeholder - would calculate starting indices for this rank
-    return (0, 0)
+    return ntuple(_ -> 0, length(domain["shape"]))
 end
 
 """
