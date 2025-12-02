@@ -213,9 +213,9 @@ function create_operator(task, vars::Dict, dist)
     if isa(task, AbstractString)
         # Parse string expression like "u*v" or "d(u,x)" using vars namespace
         return parse_field_expression(task, vars, dist)
-    elseif is_field(task)
-        # Create copy operator for existing fields
-        return create_copy_operator(task)
+    elseif isa(task, ScalarField) || isa(task, VectorField) || isa(task, TensorField)
+        # Existing field/operator
+        return task
     else
         # Assume it's already an operator
         return task
@@ -251,8 +251,7 @@ end
 Check if input is a field object
 """
 function is_field(obj)
-    # Placeholder - would check if obj is a Field type
-    return haskey(obj, "data") || haskey(obj, "field_type")
+    return isa(obj, ScalarField) || isa(obj, VectorField) || isa(obj, TensorField)
 end
 
 """
