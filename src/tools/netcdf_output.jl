@@ -514,16 +514,46 @@ Write individual task data to NetCDF file
 function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Dict, write_index::Int)
     init_mpi!(handler)  # Ensure MPI info is available
     task_name = task["name"]
+    operator = task["operator"]
     
-    # Generate sample data (in real implementation, this would be task["out"].data)
-    data_shape = task["local_shape"]
-    if handler.precision == Float32
-        data = randn(Float32, data_shape...) .+ Float32(handler.rank)
-        nc_type = NC_FLOAT
+    # Generate data from operator/field when possible; otherwise fallback to zeros
+    data = nothing
+    if isa(operator, ScalarField)
+        ensure_layout!(operator, :g)
+        data = Array(operator.data_g)
+    elseif isa(operator, VectorField)
+        comps = operator.components
+        for comp in comps
+            ensure_layout!(comp, :g)
+        end
+        comp_data = [Array(c.data_g) for c in comps]
+        data_shape = (length(comp_data), size(comp_data[1])...)
+        data_arr = zeros(eltype(comp_data[1]), data_shape...)
+        for (i, arr) in enumerate(comp_data)
+            data_arr[i, :, :] .= arr
+        end
+        data = data_arr
+    elseif isa(operator, TensorField)
+        comps = operator.components
+        for comp in vec(comps)
+            ensure_layout!(comp, :g)
+        end
+        comp_data = [Array(c.data_g) for c in vec(comps)]
+        data_shape = (size(comps, 1), size(comps, 2), size(comp_data[1])...)
+        data_arr = zeros(eltype(comp_data[1]), data_shape...)
+        for i in 1:size(comps, 1), j in 1:size(comps, 2)
+            data_arr[i, j, :, :] .= comp_data[(i - 1) * size(comps, 2) + j]
+        end
+        data = data_arr
     else
-        data = randn(Float64, data_shape...) .+ Float64(handler.rank)
-        nc_type = NC_DOUBLE
+        data_shape = task["local_shape"]
+        if handler.precision == Float32
+            data = zeros(Float32, data_shape...)
+        else
+            data = zeros(Float64, data_shape...)
+        end
     end
+    nc_type = eltype(data) == Float32 ? NC_FLOAT : NC_DOUBLE
     
     # Check if variable exists
     variable_exists = false
@@ -536,10 +566,11 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     
     if !variable_exists
         # Variable doesn't exist, create it
-        # Dimensions: (time, spatial dims...)
+        # Dimensions: (time, [components], spatial dims...)
+        data_shape = size(data)
         dim_names = ["sim_time"]
-        for i in 1:length(data_shape)
-            push!(dim_names, "$(task_name)_dim$i")  # Use task-specific dimension names
+        for i in 2:length(data_shape)
+            push!(dim_names, "$(task_name)_dim$(i-1)")  # Use task-specific dimension names
         end
         
         # Create spatial coordinate variables if they don't exist
@@ -564,8 +595,8 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         
         # Create main data variable using NetCDF.jl syntax
         # First collect dimension names and sizes
-        dims_for_var = copy(dim_names)  # ["sim_time", "task_dim1", "task_dim2"]
-        sizes_for_var = [0; collect(data_shape)]  # [0, 64, 32] where 0=unlimited
+        dims_for_var = copy(dim_names)  # ["sim_time", "task_dim1", ...]
+        sizes_for_var = [0; collect(data_shape[2:end])]  # 0=unlimited for time
         
         # Create main data variable
         nccreate(filename, task_name, dims_for_var, sizes_for_var,
@@ -578,7 +609,7 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     end
     
     # Write data with time index
-    start_indices = [write_index; ones(Int, length(data_shape))]
+    start_indices = [write_index; ones(Int, ndims(data))]
     ncwrite(data, filename, task_name, start=start_indices)
     
     return true
