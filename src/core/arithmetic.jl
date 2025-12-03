@@ -256,12 +256,12 @@ Base.:*(a, b::Future) = multiclass_new(Multiply, a, b)
 Base.:+(a::Future, b) = multiclass_new(Add, a, b)
 Base.:+(a, b::Future) = multiclass_new(Add, a, b)
 
-import LinearAlgebra: dot, cross
+import LinearAlgebra: dot, cross, ⋅, ×
 dot(a::Operand, b::Operand) = DotProduct(a, b)
 cross(a::Operand, b::Operand) = CrossProduct(a, b)
 
-Base.:⋅(a::Operand, b::Operand) = DotProduct(a, b)
-Base.:×(a::Operand, b::Operand) = CrossProduct(a, b)
+⋅(a::Operand, b::Operand) = DotProduct(a, b)
+×(a::Operand, b::Operand) = CrossProduct(a, b)
 
 # ---------------------------------------------------------------------------
 # Dispatch integration
