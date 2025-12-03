@@ -6,7 +6,7 @@ Thank you for considering contributing to Tarang.jl! This document provides guid
 
 ### Prerequisites
 
-- Julia 1.6 or later
+- Julia 1.10 or later
 - MPI library (OpenMPI or MPICH)
 - Git
 - GitHub account
@@ -48,15 +48,6 @@ Thank you for considering contributing to Tarang.jl! This document provides guid
 Before creating a bug report:
 1. Check existing [issues](https://github.com/subhajitkar/Tarang.jl/issues)
 2. Try the latest version from main branch
-3. Collect relevant information
-
-**Create a bug report with**:
-- Clear, descriptive title
-- Steps to reproduce
-- Expected vs actual behavior
-- Julia version, OS, MPI implementation
-- Minimal reproducible example
-- Stack trace if applicable
 
 ### Suggesting Enhancements
 
@@ -376,10 +367,6 @@ Maintainers follow this process for releases:
 - Open an [issue](https://github.com/subhajitkar/Tarang.jl/issues)
 - Start a [discussion](https://github.com/subhajitkar/Tarang.jl/discussions)
 - Email: subhajitkar19@gmail.com
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the GPL-3.0 license.
 
 ## Code of Conduct
 
