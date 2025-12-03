@@ -66,6 +66,19 @@ end
 
 # GPU support
 
+mutable struct GPUPencilStats
+    pencil_creations::Int
+    gpu_fallbacks::Int
+    cpu_transfers::Int
+    transpose_operations::Int
+    mpi_operations::Int
+    total_time::Float64
+    
+    function GPUPencilStats()
+        new(0, 0, 0, 0, 0, 0.0)
+    end
+end
+
 """
 GPU-aware PencilArrays configuration that handles current limitations
 """
@@ -120,19 +133,6 @@ mutable struct GPUPencilConfig
         perf_stats = GPUPencilStats()
         
         new(base_config, device_config, gpu_pencils, fallback_to_cpu, perf_stats)
-    end
-end
-
-mutable struct GPUPencilStats
-    pencil_creations::Int
-    gpu_fallbacks::Int
-    cpu_transfers::Int
-    transpose_operations::Int
-    mpi_operations::Int
-    total_time::Float64
-    
-    function GPUPencilStats()
-        new(0, 0, 0, 0, 0, 0.0)
     end
 end
 

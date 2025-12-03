@@ -40,8 +40,8 @@ include("core/gpu_pencil_compat.jl")
 
 # Core modules
 include("core/basis.jl")  
-include("core/domain.jl")
 include("core/distributor.jl")
+include("core/domain.jl")
 include("core/field.jl")
 include("core/future.jl")
 include("core/arithmetic.jl")
