@@ -463,7 +463,8 @@ function create_current_file!(handler::NetCDFFileHandler)
         "Conventions" => "CF-1.8",
         "tarang_version" => "0.1.0",
         "software" => "Tarang",
-        "software_repository" => "https://github.com/subhajitkar/Tarang.jl"
+        "software_repository" => "https://github.com/subhajitkar/Tarang.jl",
+        "restart_compatible" => false
     )
     
     # Add MPI information
@@ -609,13 +610,19 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         sizes_for_var = [0; collect(data_shape)]  # 0=unlimited for time
         
         # Create main data variable
+        var_atts = Dict(
+            "long_name" => task_name,
+            "standard_name" => task_name,
+            "_FillValue" => handler.precision(NaN),
+            "grid_space" => true,
+            "layout" => task["layout"]
+        )
+        if task["scales"] !== nothing
+            var_atts["scales"] = string(task["scales"])
+        end
         nccreate(filename, task_name, dims_for_var, sizes_for_var,
                 t=nc_type,
-                atts=Dict("long_name" => task_name,
-                         "standard_name" => task_name,
-                         "_FillValue" => handler.precision(NaN),
-                         "grid_space" => true,
-                         "layout" => task["layout"]))
+                atts=var_atts)
     end
     
     # Write data with time index

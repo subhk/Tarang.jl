@@ -62,21 +62,21 @@ docs/
 2. Tarang.jl installed
 3. MPI library (OpenMPI or MPICH)
 
-### Setup
+### Setup and Build
+
+**Option 1: Use the build script (easiest)**
 
 ```bash
-# Navigate to docs directory
-cd docs/
-
-# Install documentation dependencies
-julia --project=. -e 'using Pkg; Pkg.instantiate()'
+# From repository root
+./docs/build_docs.sh
 ```
 
-### Build
+**Option 2: Manual build**
 
 ```bash
-# Build documentation
-julia --project=. make.jl
+# From repository root
+julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+julia --project=docs/ docs/make.jl
 ```
 
 This will generate HTML documentation in `docs/build/`.

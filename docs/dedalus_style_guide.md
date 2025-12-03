@@ -27,6 +27,7 @@ This guide mirrors the structure of the Dedalus docs for newcomers migrating scr
 ## Analysis & Output
 - File handlers: `NetCDFFileHandler` or Dedalus-style `add_file_handler(base_path, dist, vars; sim_dt=..., max_writes=..., parallel="gather")`.
 - Tasks: `add_task!(handler, expr_or_field; name, layout, scales)` or alias `add_task(...)`.
+- Analysis helpers: `add_mean_task!`, `add_slice_task!`, `add_profile_task!` for common reductions/slices.
 - Merge outputs: `scripts/merge_netcdf.jl --auto --cleanup` (Dedalus naming: `handler_s1/handler_s1_p0.nc`).
 - Plot/flow helpers: `extras/plot_tools.jl`, `extras/flow_tools.jl`, `extras/quick_domains.jl`.
 
