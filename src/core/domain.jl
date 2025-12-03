@@ -9,6 +9,18 @@ using OrderedCollections: OrderedDict
 
 # GPU support
 
+mutable struct DomainPerformanceStats
+    total_time::Float64
+    coordinate_generations::Int
+    weight_computations::Int
+    cache_hits::Int
+    cache_misses::Int
+    
+    function DomainPerformanceStats()
+        new(0.0, 0, 0, 0, 0)
+    end
+end
+
 mutable struct Domain
     dist::Distributor
     bases::Tuple{Vararg{Basis}}
@@ -240,6 +252,8 @@ end
 
 function clear_domain_cache!(domain::Domain)
     empty!(domain.attribute_cache)
+    empty!(domain.grid_coordinates)
+    empty!(domain.integration_weights_cache)
     return domain
 end
 
@@ -529,13 +543,6 @@ function move_domain_to_device!(domain::Domain, device_config::DeviceConfig)
     return domain
 end
 
-function clear_domain_cache!(domain::Domain)
-    """Clear GPU caches for domain"""
-    empty!(domain.grid_coordinates)
-    empty!(domain.integration_weights_cache)
-    return domain
-end
-
 function get_domain_memory_info(domain::Domain)
     """Get GPU memory usage information for domain"""
     
@@ -568,19 +575,6 @@ function get_domain_memory_info(domain::Domain)
             domain_memory = 0,
             memory_utilization = 0.0
         )
-    end
-end
-
-# Performance tracking structure for domain
-mutable struct DomainPerformanceStats
-    total_time::Float64
-    coordinate_generations::Int
-    weight_computations::Int
-    cache_hits::Int
-    cache_misses::Int
-    
-    function DomainPerformanceStats()
-        new(0.0, 0, 0, 0, 0)
     end
 end
 

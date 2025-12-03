@@ -493,7 +493,7 @@ function backward_transform_axis!(field::ScalarField)
 
     CORRECT PencilFFTs usage pattern:
     1. Inverse FFT: coefficient space (spectral) → grid space (physical)
-    2. Uses ldiv! or \ for backward transform
+    2. Uses ldiv! (\\) for backward transform
     3. Maintains Pencil objects throughout
 
     Following Dedalus distributor pattern in distributor.py:621-634
@@ -600,7 +600,7 @@ function integrate(field::ScalarField, axes=:)
     
     result = field.data_g
     for (i, w) in enumerate(weights)
-        if axes == : || i in axes
+        if axes === Colon() || i in axes
             # Apply weights and sum along dimension i
             result = sum(result .* reshape(w, ntuple(j -> j==i ? length(w) : 1, ndims(result))), dims=i)
         end

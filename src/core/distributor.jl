@@ -14,6 +14,21 @@ struct Layout
     global_shape::Tuple{Vararg{Int}}
 end
 
+# Performance tracking structure for distributor
+mutable struct DistributorPerformanceStats
+    total_time::Float64
+    pencil_creations::Int
+    layout_creations::Int
+    mpi_operations::Int
+    gpu_transfers::Int
+    cache_hits::Int
+    cache_misses::Int
+    
+    function DistributorPerformanceStats()
+        new(0.0, 0, 0, 0, 0, 0, 0)
+    end
+end
+
 mutable struct Distributor
     comm::MPI.Comm
     size::Int
@@ -28,7 +43,7 @@ mutable struct Distributor
     # PencilArrays integration
     use_pencil_arrays::Bool  # Flag to enable/disable PencilArrays for MPI parallelization
     pencil_config::Union{Nothing, PencilConfig}
-    transforms::Vector{PencilArrays.Transforms.AbstractTransform}
+    transforms::Vector{Any}
 
     # GPU-PencilArrays compatibility
     gpu_pencil_config::Union{Nothing, GPUPencilConfig}
@@ -84,7 +99,7 @@ mutable struct Distributor
         # Enable PencilArrays for MPI parallelization (always true for distributed runs)
         use_pencil_arrays = (size > 1)  # Use PencilArrays for MPI, not for serial runs
         pencil_config = nothing
-        transforms = PencilArrays.Transforms.AbstractTransform[]
+        transforms = Any[]
         layouts = Dict{Any, Layout}()
 
         # Initialize GPU support
@@ -471,21 +486,6 @@ function allreduce_array(dist::Distributor, local_array::AbstractArray, op=MPI.S
     dist.performance_stats.total_time += time() - start_time
     
     return result
-end
-
-# Performance tracking structure for distributor
-mutable struct DistributorPerformanceStats
-    total_time::Float64
-    pencil_creations::Int
-    layout_creations::Int
-    mpi_operations::Int
-    gpu_transfers::Int
-    cache_hits::Int
-    cache_misses::Int
-    
-    function DistributorPerformanceStats()
-        new(0.0, 0, 0, 0, 0, 0, 0)
-    end
 end
 
 # GPU-specific distributor functions
