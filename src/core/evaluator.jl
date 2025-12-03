@@ -9,6 +9,19 @@ using MPI
 
 # GPU support
 
+# Performance tracking structure for evaluator
+mutable struct EvaluatorPerformanceStats
+    total_time::Float64
+    gpu_transfer_time::Float64
+    total_evaluations::Int
+    total_writes::Int
+    avg_evaluation_time::Float64
+    
+    function EvaluatorPerformanceStats()
+        new(0.0, 0.0, 0, 0, 0.0)
+    end
+end
+
 # Include NetCDF support
 include("../tools/netcdf_output.jl")
 
@@ -1121,19 +1134,6 @@ function evaluate_task_gpu(task, solver::InitialValueSolver, device_config::Devi
     end
     
     return result
-end
-
-# Performance tracking structure for evaluator
-mutable struct EvaluatorPerformanceStats
-    total_time::Float64
-    gpu_transfer_time::Float64
-    total_evaluations::Int
-    total_writes::Int
-    avg_evaluation_time::Float64
-    
-    function EvaluatorPerformanceStats()
-        new(0.0, 0.0, 0, 0, 0.0)
-    end
 end
 
 # GPU utility functions for evaluator

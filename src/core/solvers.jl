@@ -16,12 +16,25 @@ using .MatSolvers
 
 abstract type Solver end
 
+mutable struct SolverPerformanceStats
+    total_time::Float64
+    gpu_transfer_time::Float64
+    total_steps::Int
+    total_solves::Int
+    avg_step_time::Float64
+    gpu_memory_usage::Int
+    
+    function SolverPerformanceStats()
+        new(0.0, 0.0, 0, 0, 0.0, 0)
+    end
+end
+
 mutable struct SolverBaseData
     problem::Problem
     matrix_coupling::Vector{Bool}
     entry_cutoff::Float64
     matsolver::Any
-    evaluator::Union{Nothing, Evaluator}
+    evaluator::Any
 end
 
 function SolverBaseData(problem::Problem; matrix_coupling=nothing, entry_cutoff::Real=1e-12, matsolver::Union{String,Symbol,Type}= :sparse)
@@ -36,15 +49,6 @@ function SolverBaseData(problem::Problem; matrix_coupling=nothing, entry_cutoff:
     end
     solver_type = MatSolvers.get_solver(matsolver)
     SolverBaseData(problem, coupling, Float64(entry_cutoff), solver_type, nothing)
-end
-
-function attach_evaluator!(solver::InitialValueSolver)
-    if solver.base.evaluator === nothing
-        solver.base.evaluator = Evaluator(solver)
-    else
-        solver.base.evaluator.solver = solver
-    end
-    solver.evaluator = solver.base.evaluator
 end
 
 function solver_comm(problem::Problem)
@@ -72,7 +76,7 @@ mutable struct InitialValueSolver <: Solver
     dt::Float64
     
     # Timestepper state for existing timesteppers.jl infrastructure
-    timestepper_state::Union{Nothing, TimestepperState}
+    timestepper_state::Any
     
     # Evaluator for analysis
     evaluator::Union{Nothing, Any}
@@ -86,6 +90,15 @@ mutable struct InitialValueSolver <: Solver
     gpu_memory_pool::Vector{AbstractArray}
     performance_stats::SolverPerformanceStats
     
+end
+
+function attach_evaluator!(solver::InitialValueSolver)
+    if solver.base.evaluator === nothing
+        solver.base.evaluator = Evaluator(solver)
+    else
+        solver.base.evaluator.solver = solver
+    end
+    solver.evaluator = solver.base.evaluator
 end
 
 function _build_initial_value_solver(problem::IVP, timestepper; device::String="cpu")
@@ -192,9 +205,6 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP}; device::Strin
 
     return solver
 end
-
-const _BoundaryValueSolver_constructor = _build_boundary_value_solver
-const _EigenvalueSolver_constructor = _build_eigenvalue_solver
 
 function InitialValueSolver(problem::IVP, timestepper; kwargs...)
     return multiclass_new(InitialValueSolver, problem, timestepper; kwargs...)
@@ -1501,20 +1511,6 @@ function evaluate_expression_gpu(expr, variables, device_config::DeviceConfig)
     end
     
     return result_cpu
-end
-
-# Performance tracking structure
-mutable struct SolverPerformanceStats
-    total_time::Float64
-    gpu_transfer_time::Float64
-    total_steps::Int
-    total_solves::Int
-    avg_step_time::Float64
-    gpu_memory_usage::Int
-    
-    function SolverPerformanceStats()
-        new(0.0, 0.0, 0, 0, 0.0, 0)
-    end
 end
 
 # GPU utility functions for solvers

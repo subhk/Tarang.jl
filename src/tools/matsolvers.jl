@@ -39,7 +39,7 @@ end
 solve(s::DenseLUSolver, rhs) = s.lu \ rhs
 
 struct SparseLUSolver{T} <: AbstractMatSolver
-    factor::SuiteSparse.UMFPACK.UmfpackFactorization{T, Int}
+    factor::Any  # Use a generic factorization type for compatibility across Julia versions
 end
 
 function SparseLUSolver(matrix::SparseMatrixCSC; kwargs...)
