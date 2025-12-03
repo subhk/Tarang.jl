@@ -58,12 +58,20 @@ jobs:
       - name: Install MPI (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install msmpisdk -y
+          (new-object net.webclient).DownloadFile("https://download.microsoft.com/download/a/5/2/a5207ca5-1203-491a-8fb8-906fd68ae623/msmpisetup.exe", "msmpisetup.exe")
+          .\msmpisetup.exe -unattend -minimal
+        shell: pwsh
 
       - uses: julia-actions/cache@v1
 
       - name: Build package
         uses: julia-actions/julia-buildpkg@v1
+
+      - name: Configure MPI (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          julia --project -e 'using Pkg; Pkg.add("MPIPreferences"); using MPIPreferences; MPIPreferences.use_system_binary(; mpiexec="C:\\Program Files\\Microsoft MPI\\Bin\\mpiexec")'
+        shell: pwsh
 
       - name: Run tests
         uses: julia-actions/julia-runtest@v1
