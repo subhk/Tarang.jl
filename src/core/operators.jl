@@ -288,16 +288,6 @@ function ∇²(operand::Operand)
     return lap(operand)
 end
 
-function ∇·(operand::Operand)
-    """Unicode divergence operator"""
-    return div(operand)
-end
-
-function ∇×(operand::Operand, coordsys::CoordinateSystem=operand.dist.coordsys)
-    """Unicode curl operator"""
-    return curl(operand, coordsys)
-end
-
 # Include nonlinear terms for integration
 # This will be included after nonlinear_terms.jl is loaded
 
