@@ -114,7 +114,7 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
     
     try
         # Create pencils for both directions to enable full 2D parallelization
-        config = PencilArrays.PencilConfig(shape, dist.mesh, comm=dist.comm)
+        config = PencilConfig(shape, dist.mesh, comm=dist.comm)
         
         # Forward transforms (grid -> spectral)
         forward_pencil_1 = PencilArrays.Pencil(config, 1, ComplexF64)
@@ -500,7 +500,7 @@ function apply_1d_spectral_cutoff!(data::AbstractArray, axis::Int, cutoff::Int)
 end
 
 # Utility functions for PencilArray compatibility
-function get_pencil_compatible_data(field::ScalarField, config::PencilArrays.PencilConfig)
+function get_pencil_compatible_data(field::ScalarField, config::PencilConfig)
     """
     Convert field data to PencilArray format.
     Since ScalarField already stores data as PencilArrays, this mainly ensures
@@ -529,7 +529,7 @@ function get_pencil_compatible_data(field::ScalarField, config::PencilArrays.Pen
     return field_pencil
 end
 
-function set_pencil_compatible_data!(field::ScalarField, data, config::PencilArrays.PencilConfig)
+function set_pencil_compatible_data!(field::ScalarField, data, config::PencilConfig)
     """
     Set field data from PencilArray format.
     Since ScalarField stores data as PencilArrays, this mainly ensures

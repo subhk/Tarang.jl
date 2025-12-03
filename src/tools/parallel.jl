@@ -528,7 +528,7 @@ function validate_process_mesh(mesh::Tuple{Vararg{Int}}, total_procs::Int)
 end
 
 # Load balancing using PencilArrays for distributed computation
-function balance_load(global_shape::Tuple{Vararg{Int}}, pencil_config::PencilArrays.PencilConfig)
+function balance_load(global_shape::Tuple{Vararg{Int}}, pencil_config::PencilConfig)
     """
     Balance load across processes using PencilArrays decomposition.
     
@@ -595,44 +595,21 @@ function balance_load(global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}}
     end
     
     # Create PencilArrays configuration from mesh specification
-    pencil_config = create_pencilarray_config(mesh, info.comm)
+    pencil_config = create_pencilarray_config(global_shape, mesh, info.comm)
     
     # Use PencilArrays for load balancing
     return balance_load(global_shape, pencil_config)
 end
 
-function create_pencilarray_config(mesh::Tuple{Vararg{Int}}, comm::MPI.Comm)
+function create_pencilarray_config(global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}}, comm::MPI.Comm)
     """
     Create PencilArrays configuration from process mesh specification.
     
     Converts dedalus-style mesh specification to PencilArrays.jl configuration,
     following the project requirements to use PencilArrays for parallelization.
     """
-    # Create MPI topology for PencilArrays
-    if length(mesh) == 2
-        # 2D process mesh - use both dimensions for pencil decomposition
-        pencil_config = PencilArrays.PencilConfig(
-            (mesh[1], mesh[2]),
-            comm=comm,
-            permute_dims=true  # Allow dimension permutation for optimal FFTs
-        )
-    elseif length(mesh) == 3  
-        # 3D process mesh - optimal for 3D spectral methods
-        pencil_config = PencilArrays.PencilConfig(
-            (mesh[1], mesh[2], mesh[3]),
-            comm=comm,
-            permute_dims=true
-        )
-    else
-        # 1D mesh or fallback
-        mesh_1d = prod(mesh)
-        pencil_config = PencilArrays.PencilConfig(
-            (mesh_1d,),
-            comm=comm
-        )
-    end
-    
-    return pencil_config
+    decomp_dims = ntuple(_ -> true, length(mesh))
+    return PencilConfig(global_shape, mesh; comm=comm, decomp_dims=decomp_dims)
 end
 
 function calculate_block_distribution(global_size::Int, mesh_size::Int, coord::Int)
@@ -758,7 +735,7 @@ function optimize_spectral_load_balance(global_shape::Tuple{Vararg{Int}}, mesh::
     end
     
     # Create PencilArrays configuration and analyze efficiency
-    pencil_config = create_pencilarray_config(mesh, info.comm)
+    pencil_config = create_pencilarray_config(global_shape, mesh, info.comm)
     
     # Validate mesh for spectral method efficiency with PencilArrays
     validation_result = validate_pencilarray_mesh(global_shape, mesh, pencil_config)
@@ -783,7 +760,7 @@ function optimize_spectral_load_balance(global_shape::Tuple{Vararg{Int}}, mesh::
     return global_shape
 end
 
-function validate_pencilarray_mesh(global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}}, pencil_config::PencilArrays.PencilConfig)
+function validate_pencilarray_mesh(global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}}, pencil_config::PencilConfig)
     """
     Validate process mesh for PencilArrays spectral method efficiency.
     Extends dedalus validation with PencilArrays-specific considerations.
@@ -851,7 +828,7 @@ struct PencilArrayMetrics
     local_shape::Tuple{Vararg{Int}}
 end
 
-function analyze_pencilarray_performance(global_shape::Tuple{Vararg{Int}}, pencil_config::PencilArrays.PencilConfig)
+function analyze_pencilarray_performance(global_shape::Tuple{Vararg{Int}}, pencil_config::PencilConfig)
     """
     Analyze PencilArrays performance metrics for the given configuration.
     """
@@ -1100,7 +1077,7 @@ function create_gpu_pencil_config(manager::GPUParallelManager, global_shape::Tup
     # Create pencil configuration following project requirements
     pencil_config = if length(mesh) == 2
         # 2D case with both horizontal and vertical distribution
-        PencilArrays.PencilConfig(
+        PencilConfig(
             global_shape,
             mesh,
             comm=manager.mpi_info.comm,
@@ -1108,7 +1085,7 @@ function create_gpu_pencil_config(manager::GPUParallelManager, global_shape::Tup
         )
     elseif length(mesh) == 3
         # 3D case with full decomposition
-        PencilArrays.PencilConfig(
+        PencilConfig(
             global_shape,
             mesh,
             comm=manager.mpi_info.comm,
@@ -1116,7 +1093,7 @@ function create_gpu_pencil_config(manager::GPUParallelManager, global_shape::Tup
         )
     else
         # 1D fallback
-        PencilArrays.PencilConfig(
+        PencilConfig(
             global_shape,
             (prod(mesh),),
             comm=manager.mpi_info.comm

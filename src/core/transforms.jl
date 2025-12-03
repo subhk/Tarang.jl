@@ -1259,7 +1259,7 @@ function setup_pencil_arrays_3d(dist::Distributor, global_shape::Tuple{Vararg{In
     end
     
     # Create 3D PencilArrays configuration with full 3D decomposition
-    dist.pencil_config = PencilArrays.PencilConfig(
+    dist.pencil_config = PencilConfig(
         global_shape, 
         dist.mesh, 
         comm=dist.comm,

@@ -27,7 +27,7 @@ mutable struct Distributor
 
     # PencilArrays integration
     use_pencil_arrays::Bool  # Flag to enable/disable PencilArrays for MPI parallelization
-    pencil_config::Union{Nothing, PencilArrays.PencilConfig}
+    pencil_config::Union{Nothing, PencilConfig}
     transforms::Vector{PencilArrays.Transforms.AbstractTransform}
 
     # GPU-PencilArrays compatibility
@@ -120,9 +120,9 @@ function setup_pencil_arrays(dist::Distributor, global_shape::Tuple{Vararg{Int}}
         decomp_dims = ntuple(i -> true, length(dist.mesh))
     end
     
-    dist.pencil_config = PencilArrays.PencilConfig(
-        global_shape, 
-        dist.mesh, 
+    dist.pencil_config = PencilConfig(
+        global_shape,
+        dist.mesh,
         comm=dist.comm,
         decomp_dims=decomp_dims
     )
