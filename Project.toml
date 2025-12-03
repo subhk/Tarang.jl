@@ -29,6 +29,7 @@ GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
 KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
 Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
 Preferences = "21216c6a-2e73-6563-6e65-726566657250"
+SuiteSparse = "4607b0f0-06f3-5cda-b6b1-a6196a1729e9"
 
 [compat]
 julia = "1.6"
