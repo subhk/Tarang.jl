@@ -9,7 +9,7 @@ This directory contains GitHub Actions workflows for continuous integration and 
 Comprehensive testing workflow that runs on every push and pull request.
 
 **Test Matrix:**
-- Julia versions: 1.6 (LTS), 1.9 (Stable), 1.x (Latest)
+- Julia versions: 1.10, 1.11, 1.12
 - Operating systems: Ubuntu, macOS, Windows
 - Architecture: x64
 
@@ -139,9 +139,9 @@ Edit `.github/workflows/CI.yml`:
 ```yaml
 matrix:
   version:
-    - '1.6'  # Add/remove Julia versions
-    - '1.9'
-    - '1'
+    - '1.10'  # Add/remove Julia versions
+    - '1.11'
+    - '1.12'
   os:
     - ubuntu-latest  # Add/remove operating systems
     - macOS-latest
