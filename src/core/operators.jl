@@ -5,8 +5,8 @@ Translated from dedalus/core/operators.py
 """
 
 using LinearAlgebra
+using LinearAlgebra: BLAS
 using SparseArrays
-using BLAS  # For optimized BLAS operations
 using LoopVectorization  # For SIMD-optimized loops
 
 # Operator registration tables (mirroring Dedalus parsing registries)

@@ -14,6 +14,7 @@ using MPI
 using PencilArrays
 using PencilFFTs
 using LinearAlgebra
+using LinearAlgebra: BLAS
 using SparseArrays
 using FFTW
 using StaticArrays
@@ -21,7 +22,6 @@ using Parameters
 using ChainRulesCore
 using ForwardDiff
 using HDF5
-using BLAS
 using LoopVectorization
 
 # Core utilities needed across modules

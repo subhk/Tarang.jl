@@ -5,7 +5,7 @@ Translated from dedalus/core/timesteppers.py
 """
 
 using LinearAlgebra
-using BLAS  # For optimized linear algebra operations
+using LinearAlgebra: BLAS
 using LoopVectorization  # For SIMD-optimized loops
 
 # GPU support packages

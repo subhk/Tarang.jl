@@ -6,9 +6,9 @@ Translated from dedalus/core/field.py with PencilArrays integration
 
 using PencilArrays
 using LinearAlgebra
+using LinearAlgebra: BLAS
 using SparseArrays
 using HDF5
-using BLAS  # For optimized BLAS operations
 using LoopVectorization  # For SIMD-optimized loops
 
 # Include GPU manager for device-agnostic operations

@@ -11,8 +11,8 @@ optimized for spectral PDE solvers, with particular focus on:
 """
 
 using LinearAlgebra
+using LinearAlgebra: BLAS
 using SparseArrays
-using BLAS
 using LoopVectorization
 using StaticArrays
 using BenchmarkTools
