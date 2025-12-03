@@ -272,17 +272,17 @@ function build_subproblem_matrices(solver, subproblems, matrices)
     for sp in log_progress(subproblems; desc="Building subproblem matrices", frac=1.0, iter=1)
         eq_range = sp.equation_range
         var_range = sp.variable_range
-        local = Dict{String, Any}()
+        local_mats = Dict{String, Any}()
         for name in matrices
             matrix_name = String(name)
             if matrix_name == "F" && haskey(global_mats, "F")
-                local["F"] = copy(global_mats["F"][eq_range])
+                local_mats["F"] = copy(global_mats["F"][eq_range])
             elseif haskey(global_mats, matrix_name)
                 global_mat = global_mats[matrix_name]
-                local[matrix_name] = sparse(global_mat[eq_range, var_range])
+                local_mats[matrix_name] = sparse(global_mat[eq_range, var_range])
             end
         end
-        sp.matrices = local
+        sp.matrices = local_mats
     end
 
     return nothing

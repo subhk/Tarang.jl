@@ -7,9 +7,6 @@ Translated from dedalus/core/problems.py
 using LinearAlgebra
 using SparseArrays
 
-# Include boundary condition support
-include("boundary_conditions.jl")
-
 abstract type Problem end
 
 mutable struct IVP <: Problem

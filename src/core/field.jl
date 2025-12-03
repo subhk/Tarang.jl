@@ -533,17 +533,6 @@ function backward_transform_axis!(field::ScalarField)
     end
 end
 
-# Convenience functions maintaining backward compatibility
-function forward_transform!(field::ScalarField)
-    """Transform from grid to coefficient space."""
-    require_coeff_space!(field)
-end
-
-function backward_transform!(field::ScalarField)
-    """Transform from coefficient to grid space."""
-    require_grid_space!(field)
-end
-
 # VectorField transform methods
 function require_grid_space!(field::VectorField, axis::Union{Int, Nothing}=nothing)
     """Require vector field components to be in grid space."""

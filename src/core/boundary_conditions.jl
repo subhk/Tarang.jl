@@ -18,6 +18,19 @@ using SparseArrays
 
 # GPU support
 
+mutable struct BCPerformanceStats
+    total_time::Float64
+    gpu_transfer_time::Float64
+    total_evaluations::Int
+    bc_updates::Int
+    cache_hits::Int
+    cache_misses::Int
+    
+    function BCPerformanceStats()
+        new(0.0, 0.0, 0, 0, 0, 0)
+    end
+end
+
 # Field reference for time/space dependent boundary conditions
 struct FieldReference
     name::String
@@ -920,20 +933,6 @@ function evaluate_expression_gpu(expr, current_time=0.0, coords=Dict(), device_c
     end
     
     return expr
-end
-
-# Performance tracking structure for boundary conditions
-mutable struct BCPerformanceStats
-    total_time::Float64
-    gpu_transfer_time::Float64
-    total_evaluations::Int
-    bc_updates::Int
-    cache_hits::Int
-    cache_misses::Int
-    
-    function BCPerformanceStats()
-        new(0.0, 0.0, 0, 0, 0, 0)
-    end
 end
 
 # GPU utility functions for boundary conditions

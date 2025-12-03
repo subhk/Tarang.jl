@@ -1020,7 +1020,7 @@ function dealias!(field::ScalarField, scales::Union{Real, Vector{Real}})
     @debug "Dealiasing completed"
 end
 
-function apply_basis_dealiasing!(field::ScalarField, basis::FourierBasis, axis::Int, scale::Real)
+function apply_basis_dealiasing!(field::ScalarField, basis::Union{RealFourier, ComplexFourier}, axis::Int, scale::Real)
     """Apply Fourier basis dealiasing following Dedalus patterns"""
     
     # Calculate cutoff mode for Fourier basis

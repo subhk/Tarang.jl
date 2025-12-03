@@ -436,8 +436,8 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
     
     # Choose optimized implementation based on device and size
     if device_config.device_type == CPU_DEVICE && order == 1 && length(operand.data_c) > 100
-        # CPU optimization with LoopVectorization
-        @turbo for k in 1:k_max-(is_even ? 1 : 0)  # k=1 to k_max-1 (excluding Nyquist)
+        # CPU path without LoopVectorization to avoid macro issues during precompilation
+        for k in 1:k_max-(is_even ? 1 : 0)  # k=1 to k_max-1 (excluding Nyquist)
             # Physical wavenumber
             k_phys = 2π * k / L
             
@@ -540,8 +540,8 @@ function evaluate_complex_fourier_derivative!(result::ScalarField, operand::Scal
     k = device_array(k_cpu, device_config)
     
     if device_config.device_type == CPU_DEVICE && length(operand.data_c) > 100 && order <= 3
-        # CPU optimization with LoopVectorization
-        @turbo for i in eachindex(result.data_c, operand.data_c)
+        # CPU path without LoopVectorization to avoid macro errors
+        for i in eachindex(result.data_c, operand.data_c)
             k_val = k[i]
             factor = (im * k_val)^order
             result.data_c[i] = operand.data_c[i] * factor
@@ -616,8 +616,8 @@ function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::Sca
     fill!(result.data_c, 0.0)
     
     if device_config.device_type == CPU_DEVICE && N > 100 && length(operand.data_c) > 100
-        # CPU optimization with LoopVectorization for larger problems
-        @turbo for k in 1:min(N, length(result.data_c))
+        # CPU path without LoopVectorization to keep precompilation simple
+        for k in 1:min(N, length(result.data_c))
             deriv_sum = 0.0
             for j in (k+1):min(N, length(operand.data_c))
                 if (j - k) % 2 == 1  # j-k is odd
@@ -737,8 +737,8 @@ function evaluate_legendre_single_derivative!(result::ScalarField, operand::Scal
     fill!(result.data_c, 0.0)
     
     if device_config.device_type == CPU_DEVICE && N > 100 && length(operand.data_c) > 100
-        # CPU optimization with LoopVectorization for larger problems
-        @turbo for k in 1:min(N, length(result.data_c))
+        # CPU path without LoopVectorization for simplicity
+        for k in 1:min(N, length(result.data_c))
             deriv_sum = 0.0
             for j in (k+1):min(N, length(operand.data_c))
                 if (j - k) % 2 == 1  # j-k is odd
