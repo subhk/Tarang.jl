@@ -58,7 +58,7 @@ jobs:
       - name: Install MPI (Windows)
         if: runner.os == 'Windows'
         run: |
-          choco install msmpi
+          choco install msmpisdk -y
 
       - uses: julia-actions/cache@v1
 
