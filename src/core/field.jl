@@ -11,10 +11,6 @@ using SparseArrays
 using HDF5
 using LoopVectorization  # For SIMD-optimized loops
 
-# Include GPU manager for device-agnostic operations
-include("gpu_manager.jl")
-using .GPUManager
-
 abstract type Operand end
 
 mutable struct ScalarField <: Operand

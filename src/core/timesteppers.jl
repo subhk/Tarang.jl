@@ -14,41 +14,8 @@ using GPUArrays
 using KernelAbstractions
 using Adapt
 
-# Optional GPU backends (loaded conditionally)
-import Preferences
-has_cuda = false
-has_amdgpu = false
-has_metal = false
-
-try
-    import CUDA
-    if CUDA.functional()
-        global has_cuda = true
-        import CUDA: cu
-    end
-catch
-    @debug "CUDA not available"
-end
-
-try
-    import AMDGPU
-    if AMDGPU.functional()
-        global has_amdgpu = true
-        import AMDGPU: roc
-    end
-catch
-    @debug "AMDGPU not available"
-end
-
-try
-    import Metal
-    if Metal.functional()
-        global has_metal = true
-        import Metal: mtl
-    end
-catch
-    @debug "Metal not available"
-end
+# GPU backends are already loaded in gpu_manager.jl
+# Use the global has_cuda, has_amdgpu, has_metal flags from there
 
 abstract type TimeStepper end
 

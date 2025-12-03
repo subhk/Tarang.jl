@@ -36,8 +36,6 @@ function register_operator_prefix!(op, names::AbstractString...)
 end
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 abstract type Operator <: Operand end
 

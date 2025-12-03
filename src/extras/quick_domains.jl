@@ -6,10 +6,6 @@ Convenient functions for creating common domains
 
 using LinearAlgebra
 
-# GPU support
-include("../core/gpu_manager.jl")
-using .GPUManager
-
 function _require_coords(dist::Distributor, needed::Int)
     coords = dist.coords
     if length(coords) < needed

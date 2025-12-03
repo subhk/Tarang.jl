@@ -11,8 +11,6 @@ using Arpack
 using .MatSolvers
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 # Optimized linear algebra - will be properly integrated below
 

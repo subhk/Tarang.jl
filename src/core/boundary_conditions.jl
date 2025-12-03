@@ -17,8 +17,6 @@ using LinearAlgebra
 using SparseArrays
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 # Field reference for time/space dependent boundary conditions
 struct FieldReference

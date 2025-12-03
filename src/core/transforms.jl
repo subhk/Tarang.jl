@@ -10,8 +10,6 @@ using LinearAlgebra
 using SparseArrays
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 abstract type Transform end
 

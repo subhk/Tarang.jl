@@ -8,16 +8,6 @@ using MPI
 using PencilArrays
 using LinearAlgebra
 
-# GPU support
-include("gpu_manager.jl")
-using .GPUManager
-
-# GPU-PencilArrays compatibility
-include("gpu_pencil_compat.jl")
-
-# Multi-GPU support
-include("multi_gpu_manager.jl")
-
 struct Layout
     dist::Any
     local_shape::Tuple{Vararg{Int}}

@@ -9,8 +9,6 @@ using SparseArrays
 using FFTW
 
 # Include GPU manager for device-agnostic operations
-include("gpu_manager.jl")
-using .GPUManager
 
 abstract type Basis end
 

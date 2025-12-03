@@ -30,6 +30,11 @@ include("tools/exceptions.jl")
 include("tools/dispatch.jl")
 include("tools/parsing.jl")
 
+# GPU management (needed by many core modules)
+include("core/gpu_manager.jl")
+include("core/multi_gpu_manager.jl")
+include("core/gpu_pencil_compat.jl")
+
 # Core modules
 include("core/coords.jl")
 include("core/basis.jl")  

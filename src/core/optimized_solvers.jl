@@ -10,8 +10,6 @@ using SparseArrays
 using MPI
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 # Enhanced solver with optimized linear algebra
 mutable struct OptimizedInitialValueSolver <: Solver

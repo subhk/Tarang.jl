@@ -27,31 +27,34 @@ has_cuda = false
 has_amdgpu = false
 has_metal = false
 
+# Try to load CUDA
 try
-    import CUDA
+    @eval import CUDA
     if CUDA.functional()
         global has_cuda = true
-        import CUDA: cu
+        @eval import CUDA: cu
     end
 catch
     @debug "CUDA not available"
 end
 
+# Try to load AMDGPU
 try
-    import AMDGPU
+    @eval import AMDGPU
     if AMDGPU.functional()
         global has_amdgpu = true
-        import AMDGPU: roc
+        @eval import AMDGPU: roc
     end
 catch
     @debug "AMDGPU not available"
 end
 
+# Try to load Metal
 try
-    import Metal
+    @eval import Metal
     if Metal.functional()
         global has_metal = true
-        import Metal: mtl
+        @eval import Metal: mtl
     end
 catch
     @debug "Metal not available"
@@ -69,6 +72,26 @@ export ensure_device!, check_device_compatibility
 
 # Device management
 @enum DeviceType CPU_DEVICE GPU_CUDA GPU_AMDGPU GPU_METAL
+
+function get_default_memory_limit(device_type::DeviceType, device_id::Int)
+    """Get default memory limit for device"""
+    if device_type == CPU_DEVICE
+        return typemax(Int64)  # Unlimited for CPU
+    elseif device_type == GPU_CUDA && has_cuda
+        try
+            CUDA.device!(device_id)
+            return Int64(CUDA.total_memory())
+        catch
+            return 8 * 1024^3  # Default 8GB
+        end
+    elseif device_type == GPU_AMDGPU && has_amdgpu
+        return 8 * 1024^3  # Default 8GB (AMDGPU.jl may not have memory query)
+    elseif device_type == GPU_METAL && has_metal
+        return 8 * 1024^3  # Default 8GB (Metal.jl may not have memory query)
+    else
+        return 8 * 1024^3
+    end
+end
 
 struct DeviceConfig
     device_type::DeviceType
@@ -137,26 +160,6 @@ function select_device(device::String, device_id::Int=0)
     else
         @warn "Unknown device '$device', falling back to CPU"
         return DeviceConfig(CPU_DEVICE, 0)
-    end
-end
-
-function get_default_memory_limit(device_type::DeviceType, device_id::Int)
-    """Get default memory limit for device"""
-    if device_type == CPU_DEVICE
-        return typemax(Int64)  # Unlimited for CPU
-    elseif device_type == GPU_CUDA && has_cuda
-        try
-            CUDA.device!(device_id)
-            return Int64(CUDA.total_memory())
-        catch
-            return 8 * 1024^3  # Default 8GB
-        end
-    elseif device_type == GPU_AMDGPU && has_amdgpu
-        return 8 * 1024^3  # Default 8GB (AMDGPU.jl may not have memory query)
-    elseif device_type == GPU_METAL && has_metal
-        return 8 * 1024^3  # Default 8GB (Metal.jl may not have memory query)
-    else
-        return 8 * 1024^3
     end
 end
 

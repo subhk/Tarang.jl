@@ -15,8 +15,6 @@ using MPI
 using PencilArrays
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 """
 GPU-aware PencilArrays configuration that handles current limitations

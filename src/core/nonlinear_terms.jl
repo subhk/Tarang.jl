@@ -19,8 +19,6 @@ using MPI
 using LinearAlgebra
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 # Nonlinear operator types
 abstract type NonlinearOperator <: Operator end

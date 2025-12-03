@@ -8,8 +8,6 @@ using LinearAlgebra
 using OrderedCollections: OrderedDict
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 mutable struct Domain
     dist::Distributor

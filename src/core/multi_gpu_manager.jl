@@ -10,12 +10,23 @@ This module provides comprehensive support for:
 """
 
 using MPI
-include("gpu_manager.jl")
-using .GPUManager
 
 """
 Multi-node GPU configuration and management
 """
+
+mutable struct MultiGPUStats
+    inter_node_transfers::Int
+    intra_node_transfers::Int
+    gpu_memory_moves::Int
+    mpi_gpu_operations::Int
+    total_time::Float64
+
+    function MultiGPUStats()
+        new(0, 0, 0, 0, 0.0)
+    end
+end
+
 mutable struct MultiGPUConfig
     # MPI information
     mpi_comm::MPI.Comm
@@ -71,18 +82,6 @@ mutable struct MultiGPUConfig
     end
 end
 
-mutable struct MultiGPUStats
-    inter_node_transfers::Int
-    intra_node_transfers::Int
-    gpu_memory_moves::Int
-    mpi_gpu_operations::Int
-    total_time::Float64
-    
-    function MultiGPUStats()
-        new(0, 0, 0, 0, 0.0)
-    end
-end
-
 """
 Detect node-local rank for multi-GPU assignment
 """
@@ -117,7 +116,6 @@ function detect_local_gpus()
     # Check CUDA GPUs
     if has_cuda
         try
-            import CUDA
             cuda_device_count = CUDA.ndevices()
             for i in 0:(cuda_device_count-1)
                 CUDA.device!(i)
@@ -133,7 +131,6 @@ function detect_local_gpus()
     # Check AMD GPUs
     if has_amdgpu
         try
-            import AMDGPU
             amd_device_count = AMDGPU.ndevices()
             for i in 0:(amd_device_count-1)
                 AMDGPU.device!(i)
@@ -196,10 +193,8 @@ function assign_gpu_to_process(gpus::Vector{DeviceConfig}, node_rank::Int, node_
     # Set the device as current
     try
         if assigned_gpu.device_type == GPU_CUDA
-            import CUDA
             CUDA.device!(assigned_gpu.device_id)
         elseif assigned_gpu.device_type == GPU_AMDGPU
-            import AMDGPU  
             AMDGPU.device!(assigned_gpu.device_id)
         end
     catch e
@@ -336,7 +331,6 @@ function multi_gpu_transfer!(src_array::AbstractArray, dest_array::AbstractArray
         try
             if src_config.assigned_gpu.device_type == GPU_CUDA && dest_config.assigned_gpu.device_type == GPU_CUDA
                 # CUDA peer-to-peer transfer
-                import CUDA
                 CUDA.unsafe_copyto!(dest_array, src_array)
                 src_config.performance_stats.intra_node_transfers += 1
             else

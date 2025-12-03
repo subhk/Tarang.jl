@@ -7,13 +7,6 @@ MPI and parallel processing support
 using MPI
 using PencilArrays
 
-# GPU support
-include("../core/gpu_manager.jl")
-using .GPUManager
-
-# Multi-GPU support  
-include("../core/multi_gpu_manager.jl")
-
 # MPI utilities
 function ensure_mpi_initialized()
     """Ensure MPI is initialized"""

@@ -8,8 +8,6 @@ using HDF5
 using MPI
 
 # GPU support
-include("gpu_manager.jl")
-using .GPUManager
 
 # Include NetCDF support
 include("../tools/netcdf_output.jl")
