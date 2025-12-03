@@ -5,6 +5,7 @@ Translated from dedalus/tools/general.py
 """
 
 using OrderedCollections
+using Logging
 
 # Ordered set implementation
 struct OrderedSet{T}
@@ -511,8 +512,7 @@ end
 function setup_logger(level::String="INFO", filename::Union{String, Nothing}=nothing)
     """Setup logging configuration"""
     # Julia uses the Logging standard library
-    using Logging
-    
+
     log_level = if level == "DEBUG"
         Logging.Debug
     elseif level == "INFO"

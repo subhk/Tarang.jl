@@ -31,7 +31,6 @@ try
     import CUDA
     if CUDA.functional()
         global has_cuda = true
-        using CUDA
         import CUDA: cu
     end
 catch
@@ -42,7 +41,6 @@ try
     import AMDGPU
     if AMDGPU.functional()
         global has_amdgpu = true
-        using AMDGPU
         import AMDGPU: roc
     end
 catch
@@ -53,7 +51,6 @@ try
     import Metal
     if Metal.functional()
         global has_metal = true
-        using Metal
         import Metal: mtl
     end
 catch

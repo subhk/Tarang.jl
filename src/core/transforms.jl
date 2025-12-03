@@ -340,8 +340,6 @@ function setup_chebyshev_cpu_transform!(transform::ChebyshevTransform, grid_size
     
     try
         # Try to use FFTW for fast DCT transforms
-        using FFTW
-        
         # Create DCT-II plan (forward: grid to coefficients)
         forward_plan = FFTW.plan_r2r(zeros(grid_size), FFTW.REDFT10, flags=FFTW.MEASURE)
         
@@ -504,8 +502,7 @@ function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int
     try
         # Get Gauss-Legendre quadrature points and weights
         try
-            using FastGaussQuadrature
-            grid_points, quad_weights = gausslegendre(grid_size)
+            grid_points, quad_weights = FastGaussQuadrature.gausslegendre(grid_size)
             @info "Using FastGaussQuadrature for Legendre transform, N=$grid_size"
         catch e
             @warn "FastGaussQuadrature not available ($e), using manual implementation"

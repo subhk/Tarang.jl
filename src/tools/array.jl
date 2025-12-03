@@ -6,6 +6,7 @@ Translated from dedalus/tools/array.py
 
 using LinearAlgebra
 using SparseArrays
+using Arpack
 
 # Array copying and manipulation
 function copyto!(dest::AbstractArray, src::AbstractArray)
@@ -188,12 +189,10 @@ function interleave_matrices(matrices::AbstractMatrix...)
 end
 
 # Eigenvalue utilities for sparse matrices
-function scipy_sparse_eigs(A::SparseMatrixCSC, B::Union{SparseMatrixCSC, Nothing}=nothing; 
+function scipy_sparse_eigs(A::SparseMatrixCSC, B::Union{SparseMatrixCSC, Nothing}=nothing;
                           nev::Int=6, which::Symbol=:LM, sigma=nothing)
     """Compute eigenvalues of sparse matrix using Arpack"""
-    
-    using Arpack
-    
+
     if B === nothing
         # Standard eigenvalue problem
         if sigma === nothing
