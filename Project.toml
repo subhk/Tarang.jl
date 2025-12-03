@@ -23,6 +23,12 @@ NetCDF = "30363a11-5582-574a-97bb-aa9a979735b9"
 Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
 Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+GPUArraysCore = "46192b85-c4d5-4398-a991-12ede77f4527"
+GPUArrays = "0c68f7d7-f131-5f86-a1c3-88cf8149b2d7"
+KernelAbstractions = "63c18a36-062a-441e-b654-da1e3ab1ce7c"
+Adapt = "79e6a3ab-5dfb-504d-930d-738a2a938a0e"
+Preferences = "21216c6a-2e73-6563-6e65-726566657250"
 
 [compat]
 julia = "1.6"
