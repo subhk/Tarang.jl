@@ -1,6 +1,6 @@
 # Tarang.jl
 
-A Julia implementation of the Dedalus spectral PDE framework, designed for high-performance parallel computing with MPI and optimized for 2D problems using PencilFFTs.
+A Julia implementation of the spectral PDE framework, designed for high-performance parallel computing.
 
 ## Features
 
