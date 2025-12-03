@@ -820,7 +820,7 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
         for (i, eq_data) in enumerate(problem.equation_data)
             if haskey(eq_data, "F_expr") && eq_data["F_expr"] !== nothing
                 # Evaluate the residual expression symbolically
-                residual_field = evaluate_expression(eq_data["F_expr"], problem.variables)
+                residual_field = evaluate_solver_expression(eq_data["F_expr"], problem.variables)
                 push!(residual_fields, residual_field)
                 @debug "Evaluated residual for equation $i"
             else
@@ -903,7 +903,7 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
 end
 
 # Helper functions for expression evaluation
-function evaluate_expression(expr, variables)
+function evaluate_solver_expression(expr, variables)
     """
     Evaluate symbolic expression with current field values following Dedalus patterns.
     
@@ -969,7 +969,7 @@ function evaluate_operator_expression(expr, variables)
     # Recursively evaluate operands
     eval_operands = []
     for operand in operands
-        eval_op = evaluate_expression(operand, variables)
+        eval_op = evaluate_solver_expression(operand, variables)
         push!(eval_operands, eval_op)
     end
     
@@ -1450,7 +1450,7 @@ function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, de
         for (i, eq_data) in enumerate(problem.equation_data)
             if haskey(eq_data, "F_expr") && eq_data["F_expr"] !== nothing
                 # Evaluate the residual expression on GPU
-                residual_field = evaluate_expression_gpu(eq_data["F_expr"], problem.variables, device_config)
+                residual_field = evaluate_solver_expression_gpu(eq_data["F_expr"], problem.variables, device_config)
                 push!(residual_fields, residual_field)
             else
                 # Create zero residual field on GPU
@@ -1491,7 +1491,7 @@ function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, de
     return residual, jacobian
 end
 
-function evaluate_expression_gpu(expr, variables, device_config::DeviceConfig)
+function evaluate_solver_expression_gpu(expr, variables, device_config::DeviceConfig)
     """Evaluate expression with GPU acceleration"""
     
     if expr === nothing
@@ -1500,7 +1500,7 @@ function evaluate_expression_gpu(expr, variables, device_config::DeviceConfig)
     
     # For now, use CPU evaluation and move result to GPU
     # Full GPU expression evaluation would be a complex implementation
-    result_cpu = evaluate_expression(expr, variables)
+    result_cpu = evaluate_solver_expression(expr, variables)
     
     # Move result to GPU
     if result_cpu.data_c !== nothing
