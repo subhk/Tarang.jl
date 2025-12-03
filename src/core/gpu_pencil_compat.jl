@@ -13,6 +13,56 @@ Based on PencilArrays.jl v0.15+ limitations:
 
 using MPI
 using PencilArrays
+import PencilArrays: Pencil
+
+# Compatibility shim for older Tarang code expecting `PencilConfig`
+function _tarang_pencil_decomp_dims(global_shape::Tuple{Vararg{Int}},
+                                   mesh::Tuple{Vararg{Int}},
+                                   decomp_dims)
+    N = length(global_shape)
+    M = length(mesh)
+    
+    if decomp_dims === nothing
+        return ntuple(i -> N - M + i, M)  # default to last M dims
+    elseif all(x -> x isa Bool, decomp_dims)
+        dims = Tuple(findall(identity, decomp_dims))
+        return length(dims) == M ? dims : ntuple(i -> N - M + i, M)
+    else
+        dims = Tuple(Int.(decomp_dims))
+        return length(dims) == M ? dims : ntuple(i -> N - M + i, M)
+    end
+end
+
+if !isdefined(PencilArrays, :PencilConfig)
+    """
+    Lightweight wrapper that mimics the old PencilArrays.PencilConfig API using
+    the current MPITopology/Pencil constructors.
+    """
+    struct PencilConfig
+        topology::PencilArrays.MPITopology
+        global_shape::Tuple{Vararg{Int}}
+        decomp_dims::Tuple{Vararg{Int}}
+    end
+    
+    function PencilConfig(global_shape::Tuple{Vararg{Int}}, 
+                          mesh::Tuple{Vararg{Int}};
+                          comm::MPI.Comm=MPI.COMM_WORLD,
+                          decomp_dims=nothing)
+        topology = PencilArrays.MPITopology(comm, mesh)
+        dims = _tarang_pencil_decomp_dims(global_shape, mesh, decomp_dims)
+        return PencilConfig(topology, global_shape, dims)
+    end
+else
+    # If PencilArrays ever ships PencilConfig, alias it for downstream uses
+    const PencilConfig = PencilArrays.PencilConfig
+end
+
+# Allow the existing Tarang call sites to construct a Pencil from the config
+function Pencil(config::PencilConfig, 
+                decomp_index::Int=1, dtype::Type=Float64)
+    # decomp_index/dtype are currently unused; kept for signature compatibility
+    return Pencil(config.topology, config.global_shape, config.decomp_dims)
+end
 
 # GPU support
 
@@ -20,7 +70,7 @@ using PencilArrays
 GPU-aware PencilArrays configuration that handles current limitations
 """
 mutable struct GPUPencilConfig
-    base_config::Union{PencilArrays.PencilConfig, Nothing}
+    base_config::Union{PencilConfig, Nothing}
     device_config::DeviceConfig
     use_gpu_pencils::Bool
     fallback_to_cpu::Bool
@@ -42,21 +92,21 @@ mutable struct GPUPencilConfig
         # Create base PencilArrays configuration
         base_config = try
             if length(mesh) == 2
-                PencilArrays.PencilConfig(
+                PencilConfig(
                     global_shape,
                     mesh,
                     comm=comm,
                     decomp_dims=(true, true)
                 )
             elseif length(mesh) == 3
-                PencilArrays.PencilConfig(
+                PencilConfig(
                     global_shape,
                     mesh,
                     comm=comm,
                     decomp_dims=(true, true, true)
                 )
             else
-                PencilArrays.PencilConfig(
+                PencilConfig(
                     global_shape,
                     (prod(mesh),),
                     comm=comm
