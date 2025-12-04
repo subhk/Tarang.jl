@@ -63,12 +63,12 @@ end
 
         file = Tarang.current_file(handler)
         @test isfile(file)
-        @test ncreadatt(file, "NC_GLOBAL", "title") == "Tarang.jl simulation output"
-        @test ncreadatt(file, "NC_GLOBAL", "handler_name") == handler.name
-        @test ncreadatt(file, "NC_GLOBAL", "tarang_version") == "0.1.0"
-        @test ncreadatt(file, "NC_GLOBAL", "software") == "Tarang"
+        @test NetCDF.ncgetatt(file, "NC_GLOBAL", "title") == "Tarang.jl simulation output"
+        @test NetCDF.ncgetatt(file, "NC_GLOBAL", "handler_name") == handler.name
+        @test NetCDF.ncgetatt(file, "NC_GLOBAL", "tarang_version") == "0.1.0"
+        @test NetCDF.ncgetatt(file, "NC_GLOBAL", "software") == "Tarang"
 
-        data = ncread(file, "u")
+        data = NetCDF.ncread(file, "u")
         @test all(isapprox.(data[1, :], 2.5))
     end
 end
