@@ -16,21 +16,21 @@ mutable struct GlobalArrayReducer
     end
 end
 
-function reduce_scalar(reducer::GlobalArrayReducer, value::Float64, op)
+function reduce_scalar(reducer::GlobalArrayReducer, value::Real, op)
     if !MPI.Initialized()
-        return value
+        return Float64(value)
     end
-    reducer.buffer[1] = value
+    reducer.buffer[1] = Float64(value)
     MPI.Allreduce!(MPI.IN_PLACE, reducer.buffer, op, reducer.comm)
     return reducer.buffer[1]
 end
 
-global_min(reducer::GlobalArrayReducer, value::Float64) = reduce_scalar(reducer, value, MPI.MIN)
-global_max(reducer::GlobalArrayReducer, value::Float64) = reduce_scalar(reducer, value, MPI.MAX)
+global_min(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, value, MPI.MIN)
+global_max(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, value, MPI.MAX)
 
 function global_mean(reducer::GlobalArrayReducer, data::AbstractArray)
-    local_sum = sum(data)
-    local_count = length(data)
+    local_sum = Float64(sum(data))
+    local_count = Float64(length(data))
     sum_total = reduce_scalar(reducer, local_sum, MPI.SUM)
     count_total = reduce_scalar(reducer, local_count, MPI.SUM)
     return count_total == 0 ? 0.0 : sum_total / count_total
