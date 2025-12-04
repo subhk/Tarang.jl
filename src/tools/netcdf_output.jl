@@ -243,11 +243,27 @@ function create_copy_operator(field)
 end
 
 """
-Check if operator represents a locked field
+Check if operator represents a locked field.
+Locked fields have fixed scales and cannot be rescaled.
 """
 function is_locked_field(operator)
-    # Placeholder - would check if operator is a locked field type
-    return haskey(operator, "locked") && operator["locked"] == true
+    # Check for Dict-based operators
+    if isa(operator, Dict)
+        return get(operator, "locked", false) == true
+    end
+
+    # Check for field types with locked property
+    if hasproperty(operator, :locked)
+        return getproperty(operator, :locked) == true
+    end
+
+    # Check for LockedField type (if defined)
+    type_name = string(typeof(operator))
+    if occursin("Locked", type_name)
+        return true
+    end
+
+    return false
 end
 
 """
@@ -282,15 +298,29 @@ function get_layout_object(dist, layout)
 end
 
 """
-Get operator data type
+Get operator data type.
 """
 function get_operator_dtype(operator, default_precision)
-    # Try to extract dtype from operator, fall back to handler precision
-    if haskey(operator, "dtype")
-        return operator["dtype"]
-    else
-        return default_precision
+    # Check for Dict-based operators
+    if isa(operator, Dict)
+        return get(operator, "dtype", default_precision)
     end
+
+    # Check for field types with dtype property
+    if isa(operator, ScalarField)
+        return operator.dtype
+    elseif isa(operator, VectorField)
+        return operator.components[1].dtype
+    elseif isa(operator, TensorField)
+        return operator.components[1, 1].dtype
+    end
+
+    # Check for generic dtype property
+    if hasproperty(operator, :dtype)
+        return getproperty(operator, :dtype)
+    end
+
+    return default_precision
 end
 
 """
@@ -658,7 +688,403 @@ function add_task(handler::NetCDFFileHandler, task; kwargs...)
     return add_task!(handler, task; kwargs...)
 end
 
+"""
+Add a task that computes the mean over specified dimensions.
+
+# Arguments
+- `handler`: NetCDFFileHandler instance
+- `field`: Field to compute mean of
+- `dims`: Dimensions to average over (e.g., (:x, :y) or (1, 2))
+- `name`: Optional name for the output variable
+
+# Example
+```julia
+add_mean_task!(handler, u, dims=(:x, :y), name="u_mean_z")
+```
+"""
+function add_mean_task!(handler::NetCDFFileHandler, field; dims=nothing, name=nothing)
+    if name === nothing
+        field_name = get_field_name(field)
+        if dims !== nothing
+            dims_str = join(string.(dims), "_")
+            name = "$(field_name)_mean_$(dims_str)"
+        else
+            name = "$(field_name)_mean"
+        end
+    end
+
+    # Create postprocess function for mean computation
+    if dims === nothing
+        # Global mean
+        postprocess = data -> [mean(data)]
+    else
+        # Mean over specified dimensions
+        dim_indices = resolve_dimension_indices(field, dims)
+        postprocess = data -> dropdims(mean(data, dims=dim_indices), dims=dim_indices)
+    end
+
+    return add_task!(handler, field; name=name, postprocess=postprocess)
+end
+
+"""
+Add a task that extracts a slice of a field.
+
+# Arguments
+- `handler`: NetCDFFileHandler instance
+- `field`: Field to slice
+- `slices`: Dictionary or named tuple specifying slice positions
+          e.g., Dict(:z => 0.5) or (z=0.5,) for midplane slice
+- `name`: Optional name for the output variable
+
+# Example
+```julia
+add_slice_task!(handler, u, slices=Dict(:z => 0.0), name="u_bottom")
+add_slice_task!(handler, T, slices=(x=0.5, y=0.5), name="T_centerline")
+```
+"""
+function add_slice_task!(handler::NetCDFFileHandler, field; slices=Dict(), name=nothing)
+    if name === nothing
+        field_name = get_field_name(field)
+        slice_parts = ["$(k)=$(v)" for (k, v) in pairs(slices)]
+        slice_str = join(slice_parts, "_")
+        name = isempty(slice_str) ? field_name : "$(field_name)_$(slice_str)"
+    end
+
+    # Create postprocess function for slicing
+    postprocess = data -> apply_field_slices(data, field, slices)
+
+    return add_task!(handler, field; name=name, postprocess=postprocess)
+end
+
+"""
+Add a task that computes a 1D profile (mean over all but one dimension).
+
+# Arguments
+- `handler`: NetCDFFileHandler instance
+- `field`: Field to compute profile of
+- `dim`: The dimension to keep (profile along this dimension)
+- `name`: Optional name for the output variable
+
+# Example
+```julia
+add_profile_task!(handler, u, dim=:z, name="u_profile_z")
+```
+"""
+function add_profile_task!(handler::NetCDFFileHandler, field; dim=nothing, name=nothing)
+    if dim === nothing
+        throw(ArgumentError("Must specify 'dim' for profile task"))
+    end
+
+    if name === nothing
+        field_name = get_field_name(field)
+        name = "$(field_name)_profile_$(dim)"
+    end
+
+    # Create postprocess function for profile computation
+    keep_dim = resolve_dimension_index(field, dim)
+
+    postprocess = function(data)
+        ndims_data = ndims(data)
+        # Average over all dimensions except keep_dim
+        result = data
+        for d in ndims_data:-1:1
+            if d != keep_dim
+                result = dropdims(mean(result, dims=d), dims=d)
+            end
+        end
+        return result
+    end
+
+    return add_task!(handler, field; name=name, postprocess=postprocess)
+end
+
+"""
+Add a task that computes the variance over specified dimensions.
+"""
+function add_variance_task!(handler::NetCDFFileHandler, field; dims=nothing, name=nothing)
+    if name === nothing
+        field_name = get_field_name(field)
+        if dims !== nothing
+            dims_str = join(string.(dims), "_")
+            name = "$(field_name)_var_$(dims_str)"
+        else
+            name = "$(field_name)_var"
+        end
+    end
+
+    if dims === nothing
+        postprocess = data -> [var(data)]
+    else
+        dim_indices = resolve_dimension_indices(field, dims)
+        postprocess = data -> dropdims(var(data, dims=dim_indices), dims=dim_indices)
+    end
+
+    return add_task!(handler, field; name=name, postprocess=postprocess)
+end
+
+"""
+Add a task that computes the RMS (root mean square) over specified dimensions.
+"""
+function add_rms_task!(handler::NetCDFFileHandler, field; dims=nothing, name=nothing)
+    if name === nothing
+        field_name = get_field_name(field)
+        if dims !== nothing
+            dims_str = join(string.(dims), "_")
+            name = "$(field_name)_rms_$(dims_str)"
+        else
+            name = "$(field_name)_rms"
+        end
+    end
+
+    if dims === nothing
+        postprocess = data -> [sqrt(mean(data .^ 2))]
+    else
+        dim_indices = resolve_dimension_indices(field, dims)
+        postprocess = data -> sqrt.(dropdims(mean(data .^ 2, dims=dim_indices), dims=dim_indices))
+    end
+
+    return add_task!(handler, field; name=name, postprocess=postprocess)
+end
+
+"""
+Add a task that computes min/max over the domain.
+"""
+function add_extrema_task!(handler::NetCDFFileHandler, field; name=nothing)
+    field_name = get_field_name(field)
+
+    # Add min task
+    min_name = name !== nothing ? "$(name)_min" : "$(field_name)_min"
+    add_task!(handler, field; name=min_name, postprocess=data -> [minimum(data)])
+
+    # Add max task
+    max_name = name !== nothing ? "$(name)_max" : "$(field_name)_max"
+    add_task!(handler, field; name=max_name, postprocess=data -> [maximum(data)])
+
+    return handler
+end
+
+# ============================================================================
+# Helper functions
+# ============================================================================
+
+"""
+Get field name from various field types.
+"""
+function get_field_name(field)
+    if isa(field, ScalarField)
+        return field.name
+    elseif isa(field, VectorField)
+        return field.name
+    elseif isa(field, TensorField)
+        return field.name
+    elseif isa(field, Dict) && haskey(field, "name")
+        return field["name"]
+    elseif isa(field, AbstractString)
+        return field
+    else
+        return "field"
+    end
+end
+
+"""
+Resolve dimension specification to index.
+Handles both symbolic (:x, :y, :z) and integer specifications.
+"""
+function resolve_dimension_index(field, dim)
+    if isa(dim, Integer)
+        return dim
+    elseif isa(dim, Symbol)
+        # Map symbolic dimensions to indices
+        dim_map = Dict(:x => 1, :y => 2, :z => 3, :t => 0)
+        if haskey(dim_map, dim)
+            return dim_map[dim]
+        else
+            # Try to get from field's domain
+            return get_dimension_index_from_field(field, dim)
+        end
+    else
+        throw(ArgumentError("Unsupported dimension specification: $dim"))
+    end
+end
+
+"""
+Resolve multiple dimension specifications to indices.
+"""
+function resolve_dimension_indices(field, dims)
+    if isa(dims, Tuple) || isa(dims, Vector)
+        return Tuple(resolve_dimension_index(field, d) for d in dims)
+    else
+        return (resolve_dimension_index(field, dims),)
+    end
+end
+
+"""
+Get dimension index from field's domain information.
+"""
+function get_dimension_index_from_field(field, dim_symbol)
+    if isa(field, ScalarField) && field.domain !== nothing
+        # Try to match against coordinate names
+        for (i, basis) in enumerate(field.bases)
+            if hasproperty(basis, :coord) && hasproperty(basis.coord, :name)
+                if Symbol(basis.coord.name) == dim_symbol
+                    return i
+                end
+            end
+        end
+    end
+    # Default mapping
+    dim_map = Dict(:x => 1, :y => 2, :z => 3)
+    return get(dim_map, dim_symbol, 1)
+end
+
+"""
+Apply slices to field data based on slice specification.
+"""
+function apply_field_slices(data, field, slices)
+    if isempty(slices)
+        return data
+    end
+
+    # Build slice indices
+    ndims_data = ndims(data)
+    indices = [Colon() for _ in 1:ndims_data]
+
+    for (dim, value) in pairs(slices)
+        dim_idx = resolve_dimension_index(field, dim)
+        if dim_idx >= 1 && dim_idx <= ndims_data
+            # Convert value to index
+            n = size(data, dim_idx)
+            if isa(value, Integer)
+                indices[dim_idx] = value
+            elseif isa(value, AbstractFloat)
+                # Interpret as fractional position (0.0 to 1.0)
+                idx = clamp(round(Int, value * (n - 1)) + 1, 1, n)
+                indices[dim_idx] = idx
+            end
+        end
+    end
+
+    # Apply slicing
+    result = data[indices...]
+
+    # Ensure result is at least 1D
+    if ndims(result) == 0
+        return [result]
+    end
+
+    return result
+end
+
+"""
+Close handler and finalize all files.
+"""
+function close!(handler::NetCDFFileHandler)
+    # Update global attributes with final write count
+    try
+        filename = current_file(handler)
+        if isfile(filename)
+            ncputatt(filename, "NC_GLOBAL", Dict(
+                "writes" => handler.file_write_num,
+                "total_writes" => handler.total_write_num,
+                "closed" => Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
+            ))
+        end
+    catch e
+        @warn "Failed to update final attributes" exception=e
+    end
+
+    return nothing
+end
+
+"""
+Get list of all output files created by this handler.
+"""
+function get_output_files(handler::NetCDFFileHandler)
+    files = String[]
+
+    for set_num in 1:handler.set_num
+        set_name = "$(handler.name)_s$(set_num)"
+        set_path = joinpath(dirname(handler.base_path), set_name)
+
+        if isdir(set_path)
+            for f in readdir(set_path, join=true)
+                if endswith(f, ".nc")
+                    push!(files, f)
+                end
+            end
+        end
+    end
+
+    return files
+end
+
+"""
+Get metadata about the handler's output.
+"""
+function get_handler_info(handler::NetCDFFileHandler)
+    return Dict(
+        "name" => handler.name,
+        "base_path" => handler.base_path,
+        "set_num" => handler.set_num,
+        "total_writes" => handler.total_write_num,
+        "file_writes" => handler.file_write_num,
+        "max_writes" => handler.max_writes,
+        "precision" => string(handler.precision),
+        "parallel" => handler.parallel,
+        "num_tasks" => length(handler.tasks),
+        "task_names" => [t["name"] for t in handler.tasks],
+        "mpi_size" => handler.size,
+        "mpi_rank" => handler.rank
+    )
+end
+
+"""
+Reset handler for a new simulation run.
+"""
+function reset!(handler::NetCDFFileHandler; keep_tasks::Bool=true)
+    handler.set_num = 1
+    handler.total_write_num = 0
+    handler.file_write_num = 0
+
+    if !keep_tasks
+        empty!(handler.tasks)
+    end
+
+    return handler
+end
+
+# ============================================================================
+# Statistics helpers (using Base.mean would require Statistics)
+# ============================================================================
+
+# Simple mean implementation to avoid dependency
+function mean(x)
+    return sum(x) / length(x)
+end
+
+function mean(x; dims)
+    return sum(x, dims=dims) ./ size(x, dims...)
+end
+
+# Simple variance implementation
+function var(x)
+    m = mean(x)
+    return sum((x .- m) .^ 2) / (length(x) - 1)
+end
+
+function var(x; dims)
+    m = mean(x, dims=dims)
+    n = prod(size(x, d) for d in dims)
+    return sum((x .- m) .^ 2, dims=dims) ./ (n - 1)
+end
+
+# ============================================================================
+# Exports
+# ============================================================================
+
 export add_file_handler, add_task
-export add_task!, check_schedule, process!
+export add_task!, check_schedule, process!, close!
 export current_path, current_file, create_current_file!
 export add_mean_task!, add_slice_task!, add_profile_task!
+export add_variance_task!, add_rms_task!, add_extrema_task!
+export get_output_files, get_handler_info, reset!
