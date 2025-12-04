@@ -298,20 +298,20 @@ function local_grid(basis::Basis, dist, scale)
     """
     # Get the axis index for this basis
     axis = get_basis_axis(dist, basis)
-    
-    # Get local elements from the layout
-    layout = get_layout(dist, (basis,))
-    local_elements = local_indices(layout.dist, axis + 1)  # Julia is 1-indexed
-    
+
     # Create the native grid with scaling
     native_grid = _native_grid(basis, scale)
-    
+    global_size = length(native_grid)
+
+    # Get local elements from the distributor
+    local_elements = local_indices(dist, axis + 1, global_size)  # Julia is 1-indexed
+
     # Extract local elements
     local_grid_data = native_grid[local_elements]
-    
+
     # Map to problem coordinates if needed
     problem_grid = problem_coord(basis, local_grid_data)
-    
+
     return problem_grid
 end
 
