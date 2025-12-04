@@ -2,6 +2,7 @@
 Solver classes for different problem types
 
 Translated from dedalus/core/solvers.py
+CPU-only (GPU support removed).
 """
 
 using LinearAlgebra
@@ -10,21 +11,16 @@ using MPI
 using Arpack
 using .MatSolvers
 
-# GPU support
-
-# Optimized linear algebra - will be properly integrated below
-
 abstract type Solver end
 
 mutable struct SolverPerformanceStats
     total_time::Float64
-    gpu_transfer_time::Float64
     total_steps::Int
     total_solves::Int
     avg_step_time::Float64
-    
+
     function SolverPerformanceStats()
-        new(0.0, 0.0, 0, 0, 0.0, 0)
+        new(0.0, 0, 0, 0.0)
     end
 end
 
@@ -62,32 +58,28 @@ mutable struct InitialValueSolver <: Solver
     base::SolverBaseData
     problem::IVP
     timestepper::Any
-    
+
     # State variables
     sim_time::Float64
     iteration::Int
     stop_sim_time::Float64
     stop_wall_time::Float64
     stop_iteration::Int
-    
+
     # Solution state
     state::Vector{ScalarField}
     dt::Float64
-    
+
     # Timestepper state for existing timesteppers.jl infrastructure
     timestepper_state::Any
-    
+
     # Evaluator for analysis
     evaluator::Union{Nothing, Any}
-    
+
     # Performance tracking
     wall_time_start::Float64
-    
-    # GPU support
-    
-    gpu_workspace::Dict{String, AbstractArray}
+    workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
-    
 end
 
 function attach_evaluator!(solver::InitialValueSolver)
@@ -102,35 +94,26 @@ end
 function _build_initial_value_solver(problem::IVP, timestepper; device::String="cpu")
     setup_domain!(problem)
     validate_problem(problem)
-    
+
     base = SolverBaseData(problem)
 
     state = ScalarField[]
     for var in problem.variables
         if isa(var, ScalarField)
-            var.data_g = var.data_g
-            var.data_c = var.data_c
             push!(state, var)
         elseif isa(var, VectorField)
-            for comp in var.components
-                comp.data_g = comp.data_g
-                comp.data_c = comp.data_c
-            end
             append!(state, var.components)
         elseif isa(var, TensorField)
-            for comp in vec(var.components)
-                comp.data_g = comp.data_g
-                comp.data_c = comp.data_c
-            end
             append!(state, vec(var.components))
         end
     end
 
-    gpu_workspace = Dict{String, AbstractArray}()
+    workspace = Dict{String, AbstractArray}()
     perf_stats = SolverPerformanceStats()
 
     solver = InitialValueSolver(base, problem, timestepper, 0.0, 0, Inf, Inf, typemax(Int),
-                                state, 0.001, nothing, nothing, time(), device_config,
+                                state, 0.001, nothing, nothing, time(),
+                                workspace, perf_stats)
     attach_evaluator!(solver)
 
     if has_time_dependent_bcs(problem.bc_manager)
@@ -148,26 +131,15 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP}; device::Strin
     setup_domain!(problem)
     validate_problem(problem)
 
-    
     base = SolverBaseData(problem; matsolver=matsolver)
 
     state = ScalarField[]
     for var in problem.variables
         if isa(var, ScalarField)
-            var.data_g = var.data_g
-            var.data_c = var.data_c
             push!(state, var)
         elseif isa(var, VectorField)
-            for comp in var.components
-                comp.data_g = comp.data_g
-                comp.data_c = comp.data_c
-            end
             append!(state, var.components)
         elseif isa(var, TensorField)
-            for comp in vec(var.components)
-                comp.data_g = comp.data_g
-                comp.data_c = comp.data_c
-            end
             append!(state, vec(var.components))
         end
     end
@@ -189,7 +161,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP}; device::Strin
     global_solver = MatSolvers.solver_instance(base.matsolver, L_sparse)
 
     solver = BoundaryValueSolver(base, problem, state, L_sparse, M_sparse, F_vec, 1e-10, 100,
-                                 device_config, Dict{String, AbstractArray}(), nothing,
+                                 Dict{String, AbstractArray}(), nothing,
                                  perf_stats, global_solver, (), (), nothing)
 
     subsystems = build_subsystems(solver)
@@ -217,22 +189,20 @@ end
 mutable struct BoundaryValueSolver <: Solver
     base::SolverBaseData
     problem::Union{LBVP, NLBVP}
-    
-    # Solution state  
+
+    # Solution state
     state::Vector{ScalarField}
-    
+
     # Linear algebra objects
     L_matrix::SparseMatrixCSC{ComplexF64, Int}
     M_matrix::SparseMatrixCSC{ComplexF64, Int}
     F_vector::Vector{ComplexF64}
-    
+
     # Solver parameters
     tolerance::Float64
     max_iterations::Int
-    
-    # GPU support
-    
-    gpu_matrices::Dict{String, AbstractArray}
+
+    workspace::Dict{String, AbstractArray}
     factorization::Union{Nothing, Any}
     performance_stats::SolverPerformanceStats
     global_solver::Any
@@ -1247,124 +1217,15 @@ function create_evaluator(solver::InitialValueSolver)
     return solver.evaluator
 end
 
-# GPU-specific solver functions
-function solve_linear_gpu!(solver::BoundaryValueSolver)
-    """Solve linear system using GPU-accelerated methods"""
-    
-    if solver.device_type == CPU_DEVICE
-        # CPU fallback
-        if solver.global_solver !== nothing
-            return MatSolvers.solve(solver.global_solver, solver.F_vector)
-        else
-            solver.global_solver = MatSolvers.solver_instance(solver.base.matsolver, solver.L_matrix)
-            return MatSolvers.solve(solver.global_solver, solver.F_vector)
-        end
-    else
-        # GPU solution - may need specialized GPU linear algebra
-        try
-            # Direct solve on GPU
-            solution = solver.L_matrix \ solver.F_vector
-            return solution
-        catch e
-            @warn "GPU linear solve failed: $e, falling back to CPU"
-            L_cpu = Array(solver.L_matrix)
-            F_cpu = Array(solver.F_vector)
-            cpu_solver = MatSolvers.solver_instance(solver.base.matsolver, L_cpu)
-            solution_cpu = MatSolvers.solve(cpu_solver, F_cpu)
-            return solution_cpu
-        end
-    end
-end
-
-function solve_nonlinear_gpu!(solver::BoundaryValueSolver)
-    """Solve nonlinear system using GPU-accelerated Newton iteration"""
-    
-    # Initial guess (current state)
-    x = fields_to_vector_gpu(solver.state, solver)
-    
-    for iter in 1:solver.max_iterations
-        # Evaluate residual and Jacobian on GPU
-        residual, jacobian = evaluate_residual_and_jacobian_gpu(solver.problem, x, solver)
-        
-        # Newton update: J * dx = -R (GPU-accelerated)
-        try
-            dx = -(jacobian \ residual)
-        catch e
-            @warn "GPU Newton solve failed at iteration $iter: $e, using CPU fallback"
-            jacobian_cpu = Array(jacobian)
-            residual_cpu = Array(residual)
-            dx_cpu = -(jacobian_cpu \ residual_cpu)
-            dx = dx_cpu
-        end
-        
-        x .+= dx
-        
-        # Check convergence
-        if norm(dx) < solver.tolerance
-            @info "Nonlinear GPU solver converged in $iter iterations"
-            break
-        end
-        
-        if iter == solver.max_iterations
-            @warn "Nonlinear GPU solver did not converge"
-        end
-    end
-    
-    # Copy solution back
-    copy_solution_to_fields_gpu!(solver.state, x, solver)
-end
-
-function fields_to_vector_gpu(fields::Vector{ScalarField}, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """CPU-only wrapper for compatibility."""
-    return fields_to_vector(fields)
-end
-
-function copy_solution_to_fields_gpu!(fields::Vector{ScalarField}, solution::AbstractArray, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """CPU-only wrapper for compatibility."""
-    copy_solution_to_fields!(fields, vec(solution))
-end
-
-function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """CPU-only wrapper for compatibility."""
-    return evaluate_residual_and_jacobian(problem, vec(x))
-end
-
-function evaluate_solver_expression_gpu(expr, variables, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """CPU-only wrapper for compatibility."""
-    return evaluate_solver_expression(expr, variables)
-end
-
-# GPU utility functions for solvers
-function move_solver_to_device!(solver::InitialValueSolver, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """No-op for CPU-only mode."""
-    return solver
-end
-
-function move_solver_to_device!(solver::BoundaryValueSolver, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """No-op for CPU-only mode."""
-    return solver
-end
-
-function get_solver_memory_info(solver::Union{InitialValueSolver, BoundaryValueSolver})
-    """Placeholder memory info (CPU-only)."""
-    mem = default_memory_info()
-    return (
-        total_memory = mem.total,
-        available_memory = mem.available,
-        used_memory = mem.used,
-        solver_memory = 0,
-        memory_utilization = 0.0
-    )
-end
 function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueSolver})
     """Log solver performance statistics"""
-    
+
     stats = solver.performance_stats
-    
+
     if MPI.Initialized()
         rank = MPI.Comm_rank(MPI.COMM_WORLD)
         if rank == 0
-            @info "Solver performance ($(solver.device_type)):"
+            @info "Solver performance:"
             if isa(solver, InitialValueSolver)
                 @info "  Total steps: $(stats.total_steps)"
                 if stats.total_steps > 0
@@ -1376,7 +1237,7 @@ function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueS
             @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
         end
     else
-        @info "Solver performance ($(solver.device_type)):"
+        @info "Solver performance:"
         if isa(solver, InitialValueSolver)
             @info "  Total steps: $(stats.total_steps)"
             if stats.total_steps > 0

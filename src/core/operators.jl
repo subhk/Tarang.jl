@@ -35,7 +35,7 @@ function register_operator_prefix!(op, names::AbstractString...)
     return op
 end
 
-# GPU support
+# CPU-only (GPU support removed)
 
 abstract type Operator <: Operand end
 
@@ -414,7 +414,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
 end
 
 
-function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
     """Real Fourier derivative following Dedalus 2x2 group matrix approach with GPU support"""
     
     # Dedalus stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
@@ -453,7 +453,7 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
             end
         end
     elseif device_config.device_type != CPU_DEVICE && order == 1
-        # GPU-optimized implementation using broadcasting
+        # Optimized implementation using broadcasting
         evaluate_real_fourier_derivative_gpu!(result, operand, N, L, k_max, is_even)
     else
         # Fallback implementation for higher orders or other cases
@@ -480,7 +480,7 @@ function evaluate_real_fourier_derivative_gpu!(result::ScalarField, operand::Sca
     # Create wavenumber arrays on GPU
     k_range = 1:(k_max-(is_even ? 1 : 0))
     if !isempty(k_range)
-        # GPU-friendly vectorized operations
+        # Vectorized vectorized operations
         for k in k_range
             k_phys = 2π * k / L
             cos_idx = 2*k
@@ -528,7 +528,7 @@ function evaluate_real_fourier_derivative_fallback!(result::ScalarField, operand
     end
 end
 
-function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
     """Complex Fourier derivative: simple multiplication by (ik)^order with GPU support"""
     
     # Complex FFT wavenumbers: [0, 1, ..., N/2-1, -N/2, -(N/2-1), ..., -1]
@@ -545,7 +545,7 @@ function evaluate_complex_fourier_derivative!(result::ScalarField, operand::Scal
             result.data_c[i] = operand.data_c[i] * factor
         end
     else
-        # GPU-friendly or standard version using broadcasting
+        # Vectorized or standard version using broadcasting
         factors = (im .* k).^order
         result.data_c .= operand.data_c .* factors
     end
@@ -598,7 +598,7 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     end
 end
 
-function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64)
     """
     Single Chebyshev derivative using correct backward recurrence with GPU support.
     
@@ -623,7 +623,7 @@ function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::Sca
             result.data_c[k] = deriv_sum * scale
         end
     else
-        # GPU-friendly or standard implementation
+        # Vectorized or standard implementation
         for k in 1:min(N, length(result.data_c))
             deriv_sum = 0.0
             
@@ -713,7 +713,7 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     end
 end
 
-function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64)
     """
     Single Legendre derivative using Dedalus Jacobi approach with GPU support.
     
@@ -742,7 +742,7 @@ function evaluate_legendre_single_derivative!(result::ScalarField, operand::Scal
             result.data_c[k] = deriv_sum * scale
         end
     else
-        # GPU-friendly or standard implementation
+        # Vectorized or standard implementation
         for k in 1:min(N, length(result.data_c))
             deriv_sum = 0.0
             
@@ -1215,81 +1215,3 @@ struct MultiplyOperator <: Operator
     right::Union{Real, Operator}
 end
 
-# GPU utility functions for operators
-function to_device!(operator::Operator, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """No-op for CPU-only mode."""
-    return operator
-end
-end
-
-function synchronize_operator!(operator::Operator)
-    """Synchronize operator operations on GPU"""
-    # Most operators don't require explicit synchronization
-    # The synchronization is handled at the evaluation level
-    return operator
-end
-
-# Enhanced operator evaluation functions with GPU support
-function evaluate_gradient_gpu(grad_op::Gradient, layout::Symbol=:g)
-    """Evaluate gradient operator with GPU acceleration"""
-    operand = grad_op.operand
-    coordsys = grad_op.coordsys
-    
-    if isa(operand, ScalarField)
-        # Get device configuration
-        
-        # Create vector field for result on same device
-        result = VectorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
-        
-        # Ensure result components are on correct device
-        for i in 1:length(result.components)
-            result.components[i].data_g = result.components[i].data_g
-            result.components[i].data_c = result.components[i].data_c
-        end
-        
-        # Compute partial derivatives for each component
-        for (i, coord_name) in enumerate(coordsys.names)
-            coord = coordsys[coord_name]
-            # Apply differentiation operator (GPU-aware)
-            result.components[i] = evaluate_differentiate(Differentiate(operand, coord, 1), layout)
-        end
-        
-        # Synchronize GPU operations
-        
-        return result
-    else
-        throw(ArgumentError("Gradient not implemented for operand type $(typeof(operand))"))
-    end
-end
-
-function evaluate_laplacian_gpu(lap_op::Laplacian, layout::Symbol=:g)
-    """Evaluate Laplacian operator with GPU acceleration"""
-    operand = lap_op.operand
-    
-    if isa(operand, ScalarField)
-        
-        # Create result field on same device
-        result = ScalarField(operand.dist, "lap_$(operand.name)", operand.bases, operand.dtype)
-        result.data_g = result.data_g
-        result.data_c = result.data_c
-        
-        # Initialize result to zero
-        ensure_layout!(result, layout)
-        fill!(result[string(layout)], 0)
-        
-        # Sum second derivatives: ∇²u = ∂²u/∂x₁² + ∂²u/∂x₂² + ...
-        for basis in operand.bases
-            coord_name = basis.meta.element_label
-            coord = Coordinate(coord_name, basis.meta.coordsys)
-            
-            # Add ∂²u/∂xᵢ²
-            second_deriv = evaluate_differentiate(Differentiate(operand, coord, 2), layout)
-            result = result + second_deriv
-        end
-        
-        return result
-        
-    else
-        throw(ArgumentError("Laplacian not implemented for operand type $(typeof(operand))"))
-    end
-end

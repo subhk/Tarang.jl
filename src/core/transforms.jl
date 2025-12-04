@@ -193,14 +193,13 @@ end
 
 function setup_chebyshev_transform!(dist::Distributor, basis::ChebyshevT, axis::Int)
     """
-    Setup Chebyshev transform following Dedalus FastChebyshevTransform implementation with GPU support.
-    
+    Setup Chebyshev transform following Dedalus FastChebyshevTransform implementation.
+
     Based on Dedalus transforms.py:
     - Uses DCT-II for forward transform (grid to coefficients)
-    - Uses DCT-III for backward transform (coefficients to grid)  
+    - Uses DCT-III for backward transform (coefficients to grid)
     - Proper scaling factors for unit-amplitude normalization
     - Supports padding/truncation for different grid/coefficient sizes
-    - GPU-compatible implementation
     """
     
     transform = ChebyshevTransform(basis)
@@ -280,14 +279,13 @@ end
 
 function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int)
     """
-    Setup Legendre transform following Dedalus JacobiMMT implementation with GPU support.
-    
+    Setup Legendre transform following Dedalus JacobiMMT implementation.
+
     Based on Dedalus transforms.py JacobiMMT and jacobi.py:
     - Uses Gauss-Legendre quadrature (Jacobi with a=0, b=0)
-    - Forward transform: integration using quadrature weights  
+    - Forward transform: integration using quadrature weights
     - Backward transform: polynomial evaluation at quadrature points
     - Proper normalization for orthogonal Legendre polynomials
-    - GPU-compatible implementation
     """
     
     transform = LegendreTransform(basis)
@@ -463,7 +461,7 @@ end
 
 # Transform execution functions
 function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
-    """Apply forward transform to field with GPU support"""
+    """Apply forward transform to field"""
     
     if field.domain === nothing
         return
@@ -479,17 +477,17 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
             field.current_layout = :c
             return
         elseif isa(transform, FourierTransform)
-            # Use GPU or CPU FFT based on device config
+            # Apply FFT
             apply_fourier_forward!(field, transform)
             field.current_layout = :c
             return
         elseif isa(transform, ChebyshevTransform)
-            # Use GPU or CPU Chebyshev transform
+            # Apply Chebyshev transform
             apply_chebyshev_forward!(field, transform)
             field.current_layout = :c
             return
         elseif isa(transform, LegendreTransform)
-            # Use GPU or CPU Legendre transform
+            # Apply Legendre transform
             apply_legendre_forward!(field, transform)
             field.current_layout = :c
             return
@@ -502,7 +500,7 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
 end
 
 function apply_fourier_forward!(field::ScalarField, transform::FourierTransform)
-    """Apply forward Fourier transform with GPU support"""
+    """Apply forward Fourier transform """
     
     # Ensure field data is on correct device
     field.data_g = field.data_g
@@ -515,7 +513,7 @@ function apply_fourier_forward!(field::ScalarField, transform::FourierTransform)
 end
 
 function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
-    """Apply backward transform to field with GPU support"""
+    """Apply backward transform to field """
     
     if field.domain === nothing
         return
@@ -531,17 +529,17 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
             field.current_layout = :g
             return
         elseif isa(transform, FourierTransform)
-            # Use GPU or CPU FFT based on device config
+            # Apply FFT
             apply_fourier_backward!(field, transform)
             field.current_layout = :g
             return
         elseif isa(transform, ChebyshevTransform)
-            # Use GPU or CPU Chebyshev transform
+            # Apply Chebyshev transform
             apply_chebyshev_backward!(field, transform)
             field.current_layout = :g
             return
         elseif isa(transform, LegendreTransform)
-            # Use GPU or CPU Legendre transform
+            # Apply Legendre transform
             apply_legendre_backward!(field, transform)
             field.current_layout = :g
             return
@@ -554,7 +552,7 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
 end
 
 function apply_fourier_backward!(field::ScalarField, transform::FourierTransform)
-    """Apply backward Fourier transform with GPU support"""
+    """Apply backward Fourier transform """
     
     # Ensure field data is on correct device
     field.data_c = field.data_c
@@ -569,13 +567,13 @@ end
 # Chebyshev transform application functions following Dedalus patterns
 function apply_chebyshev_forward!(field::ScalarField, transform::ChebyshevTransform)
     """
-    Apply forward Chebyshev transform (grid to coefficients) with GPU support.
+    Apply forward Chebyshev transform (grid to coefficients) .
     
     Based on Dedalus ScipyDCT.forward and FFTWDCT.forward methods:
     - Uses DCT-II with proper scaling for unit-amplitude normalization
     - Handles padding/truncation for different grid/coefficient sizes  
     - Follows resize_rescale_forward pattern
-    - GPU-compatible implementation
+    - CPU-based implementation
     """
     
     # Ensure field data is on correct device
@@ -623,13 +621,13 @@ end
 
 function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTransform)
     """
-    Apply backward Chebyshev transform (coefficients to grid) with GPU support.
+    Apply backward Chebyshev transform (coefficients to grid) .
     
     Based on Dedalus ScipyDCT.backward and FFTWDCT.backward methods:
     - Uses DCT-III with proper scaling for unit-amplitude normalization
     - Handles padding/truncation for different coefficient/grid sizes
     - Follows resize_rescale_backward pattern
-    - GPU-compatible implementation
+    - CPU-based implementation
     """
     
     # Ensure field data is on correct device
@@ -665,7 +663,7 @@ function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTrans
 end
 
 function apply_chebyshev_matrix_forward!(field::ScalarField, transform::ChebyshevTransform)
-    """Apply forward Chebyshev transform using matrix multiplication (GPU-compatible)"""
+    """Apply forward Chebyshev transform using matrix multiplication (CPU-based)"""
     
     # Ensure field data is on correct device
     field.data_g = field.data_g
@@ -679,7 +677,7 @@ function apply_chebyshev_matrix_forward!(field::ScalarField, transform::Chebyshe
 end
 
 function apply_chebyshev_matrix_backward!(field::ScalarField, transform::ChebyshevTransform)
-    """Apply backward Chebyshev transform using matrix multiplication (GPU-compatible)"""
+    """Apply backward Chebyshev transform using matrix multiplication (CPU-based)"""
     
     # Ensure field data is on correct device
     field.data_c = field.data_c
@@ -695,13 +693,13 @@ end
 # Legendre transform application functions following Dedalus JacobiMMT patterns
 function apply_legendre_forward!(field::ScalarField, transform::LegendreTransform)
     """
-    Apply forward Legendre transform (grid to coefficients) with GPU support.
+    Apply forward Legendre transform (grid to coefficients) .
     
     Based on Dedalus JacobiMMT.forward_matrix:
     - Uses Gauss-Legendre quadrature integration
     - Proper normalization for orthonormal Legendre expansion
     - Matrix-based computation for spectral accuracy
-    - GPU-compatible implementation
+    - CPU-based implementation
     """
     
     # Ensure field data is on correct device
@@ -721,13 +719,13 @@ end
 
 function apply_legendre_backward!(field::ScalarField, transform::LegendreTransform)
     """
-    Apply backward Legendre transform (coefficients to grid) with GPU support.
+    Apply backward Legendre transform (coefficients to grid) .
     
     Based on Dedalus polynomial evaluation:
     - Evaluates f(x) = Σ c_n P_n(x) at Gauss-Legendre quadrature points
     - Uses precomputed polynomial matrix for efficiency
     - Proper handling of orthonormal coefficients
-    - GPU-compatible implementation
+    - CPU-based implementation
     """
     
     # Ensure field data is on correct device
