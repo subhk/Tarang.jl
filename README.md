@@ -6,6 +6,6 @@ A Julia implementation of the spectral PDE framework, designed for high-performa
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/subhajitkar/Tarang.jl")
+Pkg.add(url="https://github.com/subhk/Tarang.jl")
 ```
 
