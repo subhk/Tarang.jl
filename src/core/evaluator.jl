@@ -498,38 +498,214 @@ function volume_integral(flow::GlobalFlowProperty, name::String)
     """
     Compute volume integral of a property.
     Following Dedalus implementation in flow_tools.py:117-130
+
+    Uses proper quadrature weights for each basis type:
+    - Fourier: uniform weights (trapezoidal rule)
+    - Chebyshev: Clenshaw-Curtis weights
+    - Legendre: Gauss-Legendre weights
+
+    The integral is computed as:
+    ∫ f(x) dx ≈ Σᵢ wᵢ f(xᵢ)
+
+    For multi-dimensional domains, the weights are the outer product
+    of 1D weights along each axis.
     """
     # Check for precomputed integral
     integral_name = "_$(name)_integral"
     if haskey(flow.properties, integral_name)
-        integral_field = flow.properties[integral_name]
         integral_data = evaluate_property(flow, integral_name)
-    else
-        # Compute volume integral
-        field = flow.properties[name]
-        # This would need proper integration operator implementation
-        # For now, return sum (approximation of integral)
-        gdata = evaluate_property(flow, name)
-        integral_data = [sum(gdata)]  # Simple sum approximation
+        integral_value = global_sum(flow.reducer, integral_data)
+        return integral_value
     end
-    
-    # Communicate integral value to all processes  
-    integral_value = global_max(flow.reducer, integral_data)
-    return integral_value
+
+    # Get field data in grid space
+    if !haskey(flow.properties, name)
+        throw(KeyError("Property '$name' not found"))
+    end
+
+    gdata = evaluate_property(flow, name)
+
+    # Get domain and integration weights
+    domain = get_solver_domain(flow.solver)
+    if domain === nothing
+        # Fallback: simple sum approximation (assumes uniform grid with unit spacing)
+        @warn "No domain information available, using simple sum for volume integral"
+        local_integral = sum(gdata)
+        return global_sum(flow.reducer, [local_integral])
+    end
+
+    # Get integration weights for each dimension
+    weights = integration_weights(domain)
+
+    if isempty(weights)
+        # Fallback: simple sum
+        local_integral = sum(gdata)
+        return global_sum(flow.reducer, [local_integral])
+    end
+
+    # Compute weighted integral
+    # For multi-dimensional data, we need to apply weights along each axis
+    local_integral = compute_weighted_integral(gdata, weights)
+
+    # Global reduction across MPI processes
+    return global_sum(flow.reducer, [local_integral])
+end
+
+function compute_weighted_integral(data::AbstractArray, weights::Vector)
+    """
+    Compute weighted integral of multi-dimensional data.
+
+    For N-dimensional data with weights w₁, w₂, ..., wₙ along each axis,
+    the integral is:
+    ∫∫...∫ f(x₁,x₂,...,xₙ) dx₁dx₂...dxₙ ≈ Σᵢ₁Σᵢ₂...Σᵢₙ w₁[i₁]w₂[i₂]...wₙ[iₙ] f[i₁,i₂,...,iₙ]
+    """
+    ndims_data = ndims(data)
+    nweights = length(weights)
+
+    if ndims_data == 0
+        return data[]
+    end
+
+    if nweights == 0
+        return sum(data)
+    end
+
+    # Handle dimension mismatch
+    if ndims_data != nweights
+        @warn "Data dimensions ($ndims_data) != weight dimensions ($nweights), using available weights"
+    end
+
+    # 1D case
+    if ndims_data == 1 && nweights >= 1
+        w = weights[1]
+        if length(w) == length(data)
+            return sum(w .* data)
+        else
+            # Size mismatch, interpolate weights or use uniform
+            return sum(data) * (sum(w) / length(w))
+        end
+    end
+
+    # Multi-dimensional case: apply weights successively along each axis
+    result = data
+    for (axis, w) in enumerate(weights)
+        if axis > ndims_data
+            break
+        end
+
+        # Create weight array with proper shape for broadcasting
+        weight_shape = ones(Int, ndims_data)
+        weight_shape[axis] = length(w)
+
+        # Check if weight length matches data size along this axis
+        if length(w) == size(data, axis)
+            w_reshaped = reshape(w, weight_shape...)
+            result = result .* w_reshaped
+        else
+            # Size mismatch along this axis, use mean weight
+            mean_weight = sum(w) / length(w)
+            result = result .* mean_weight
+        end
+    end
+
+    return sum(result)
+end
+
+function global_sum(reducer::GlobalArrayReducer, data::AbstractArray)
+    """Compute global sum of all array data across MPI processes."""
+    local_sum = sum(data)
+    return reduce_scalar(reducer, Float64(local_sum), MPI.SUM)
+end
+
+function get_solver_domain(solver::InitialValueSolver)
+    """Get domain from solver, handling various solver configurations."""
+    # Try direct domain access
+    if hasfield(typeof(solver), :domain) && solver.domain !== nothing
+        return solver.domain
+    end
+
+    # Try through problem
+    if hasfield(typeof(solver), :problem) && solver.problem !== nothing
+        problem = solver.problem
+        if hasfield(typeof(problem), :domain) && problem.domain !== nothing
+            return problem.domain
+        end
+        # Try through variables
+        if hasfield(typeof(problem), :variables) && !isempty(problem.variables)
+            var = problem.variables[1]
+            if hasfield(typeof(var), :domain) && var.domain !== nothing
+                return var.domain
+            end
+        end
+    end
+
+    # Try through state
+    if hasfield(typeof(solver), :state) && !isempty(solver.state)
+        field = solver.state[1]
+        if hasfield(typeof(field), :domain) && field.domain !== nothing
+            return field.domain
+        end
+    end
+
+    return nothing
 end
 
 function volume_average(flow::GlobalFlowProperty, name::String)
     """
     Compute volume average of a property.
     Following Dedalus implementation in flow_tools.py:132-137
+
+    Volume average = (∫ f dV) / (∫ dV) = volume_integral(f) / hypervolume
     """
-    # TODO: missing hypervolume definition (same as Dedalus comment)
-    # For now, use grid average as approximation
-    return grid_average(flow, name)
-    
-    # When hypervolume is implemented:
-    # average_value = volume_integral(flow, name) / solver.domain.hypervolume
-    # return average_value
+    # Get domain to compute hypervolume
+    domain = get_solver_domain(flow.solver)
+
+    if domain === nothing
+        # Fallback to grid average
+        return grid_average(flow, name)
+    end
+
+    # Compute hypervolume (total volume of domain)
+    hypervolume = compute_hypervolume(domain)
+
+    if hypervolume <= 0.0
+        # Fallback to grid average
+        @warn "Invalid hypervolume ($hypervolume), using grid average"
+        return grid_average(flow, name)
+    end
+
+    # Compute volume integral and divide by hypervolume
+    integral_value = volume_integral(flow, name)
+    return integral_value / hypervolume
+end
+
+function compute_hypervolume(domain::Domain)
+    """
+    Compute the total volume (hypervolume) of a domain.
+
+    For a domain with bases along coordinates x₁, x₂, ..., xₙ,
+    the hypervolume is the product of the interval lengths:
+    V = (b₁ - a₁) × (b₂ - a₂) × ... × (bₙ - aₙ)
+    """
+    hypervolume = 1.0
+
+    for basis in domain.bases
+        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :bounds)
+            bounds = basis.meta.bounds
+            if length(bounds) >= 2
+                L = bounds[2] - bounds[1]
+                hypervolume *= L
+            else
+                # Assume unit interval
+                hypervolume *= 1.0
+            end
+        else
+            # Default to unit interval
+            hypervolume *= 1.0
+        end
+    end
+
+    return hypervolume
 end
 
 # Enhanced evaluator functions with NetCDF support
