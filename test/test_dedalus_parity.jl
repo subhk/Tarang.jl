@@ -13,33 +13,33 @@ end
     coords, dist, basis = simple_1d_setup()
     u_lbvp = ScalarField(dist, "u", (basis,), Float64)
 
-    lbvp = LBVP([u_lbvp])
-    add_equation!(lbvp, "lap(u) = 0")
-    add_dirichlet_bc!(lbvp, "u", "z", 0.0, 0.0)
-    add_neumann_bc!(lbvp, "u", "z", 1.0, 1.0)
-    add_robin_bc!(lbvp, "u", "z", 0.0, 1.0, 2.0, 0.5)
-    add_stress_free_bc!(lbvp, "u", "z", 1.0)
+    lbvp = Tarang.LBVP([u_lbvp])
+    Tarang.add_equation!(lbvp, "lap(u) = 0")
+    Tarang.add_dirichlet_bc!(lbvp, "u", "z", 0.0, 0.0)
+    Tarang.add_neumann_bc!(lbvp, "u", "z", 1.0, 1.0)
+    Tarang.add_robin_bc!(lbvp, "u", "z", 0.0, 1.0, 2.0, 0.5)
+    Tarang.add_stress_free_bc!(lbvp, "u", "z", 1.0)
 
-    @test validate_problem(lbvp)
+    @test Tarang.validate_problem(lbvp)
     @test length(lbvp.boundary_conditions) >= 4
 
     u_nlbvp = ScalarField(dist, "u_nl", (basis,), Float64)
-    nlbvp = NLBVP([u_nlbvp])
-    add_equation!(nlbvp, "u = 1 - u")
-    add_dirichlet_bc!(nlbvp, "u_nl", "z", 0.0, 0.0)
-    @test validate_problem(nlbvp)
+    nlbvp = Tarang.NLBVP([u_nlbvp])
+    Tarang.add_equation!(nlbvp, "u = 1 - u")
+    Tarang.add_dirichlet_bc!(nlbvp, "u_nl", "z", 0.0, 0.0)
+    @test Tarang.validate_problem(nlbvp)
 
     u_evp = ScalarField(dist, "u_evp", (basis,), Float64)
-    evp = EVP([u_evp]; eigenvalue=:sigma)
-    add_equation!(evp, "sigma*u_evp = lap(u_evp)")
-    @test validate_problem(evp)
+    evp = Tarang.EVP([u_evp]; eigenvalue=:sigma)
+    Tarang.add_equation!(evp, "sigma*u_evp = lap(u_evp)")
+    @test Tarang.validate_problem(evp)
 end
 
 @testset "Time steppers construct" begin
     steppers = [
-        RK111(), RK222(), RK443(),
-        CNAB1(), CNAB2(),
-        SBDF1(), SBDF2(), SBDF3(), SBDF4()
+        Tarang.RK111(), Tarang.RK222(), Tarang.RK443(),
+        Tarang.CNAB1(), Tarang.CNAB2(),
+        Tarang.SBDF1(), Tarang.SBDF2(), Tarang.SBDF3(), Tarang.SBDF4()
     ]
     @test all(ts -> ts isa Tarang.TimeStepper, steppers)
 end
@@ -52,14 +52,14 @@ end
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2 * pi))
         u = ScalarField(dist, "u", (basis,), Float64)
 
-        handler = add_file_handler(joinpath(tmp, "snapshots"), dist, Dict("u" => u);
+        handler = Tarang.add_file_handler(joinpath(tmp, "snapshots"), dist, Dict("u" => u);
                                    parallel="gather", max_writes=1)
-        add_task(handler, u; name="u")
+        Tarang.add_task(handler, u; name="u")
 
-        ensure_layout!(u, :g)
+        Tarang.ensure_layout!(u, :g)
         fill!(u.data_g, 2.5)
 
-        process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
+        Tarang.process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
 
         file = Tarang.current_file(handler)
         @test isfile(file)
@@ -80,16 +80,16 @@ end
         dist = Distributor(coords; mesh=(1,), dtype=Float64)
         basis = RealFourier(coords["x"]; size=4, bounds=(0.0, 1.0))
         u = ScalarField(dist, "u", (basis,), Float64)
-        ensure_layout!(u, :g)
+        Tarang.ensure_layout!(u, :g)
         u.data_g .= [1.0, 2.0, 3.0, 4.0]
 
-        handler = add_file_handler(joinpath(tmp, "analysis"), dist, Dict("u" => u);
+        handler = Tarang.add_file_handler(joinpath(tmp, "analysis"), dist, Dict("u" => u);
                                    parallel="gather", max_writes=1)
-        add_task(handler, u; name="u_raw")
-        add_mean_task!(handler, u; dims=1, name="u_mean")
-        add_slice_task!(handler, u; dim=1, idx=2, name="u_slice")
+        Tarang.add_task(handler, u; name="u_raw")
+        Tarang.add_mean_task!(handler, u; dims=1, name="u_mean")
+        Tarang.add_slice_task!(handler, u; dim=1, idx=2, name="u_slice")
 
-        process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
+        Tarang.process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
 
         file = Tarang.current_file(handler)
         raw = ncread(file, "u_raw")
