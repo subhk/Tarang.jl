@@ -1146,7 +1146,7 @@ end
 # Exponential Time Differencing methods
 function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
     """
-    GPU-compatible 2nd-order exponential Runge-Kutta method (ETDRK2).
+    2nd-order exponential Runge-Kutta method (ETDRK2).
 
     Standard formulation from Cox-Matthews (2002), Eq. 22:
     Stage 1 (predictor): a_n = exp(hL)u_n
@@ -1235,7 +1235,7 @@ end
 
 function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     """
-    GPU-compatible 2nd-order exponential Adams-Bashforth method (ETDAB2/ETD-CNAB2).
+    2nd-order exponential Adams-Bashforth method (ETDAB2/ETD-CNAB2).
 
     Formulation:
     u_{n+1} = exp(hL)u_n + h*φ₁(hL)*N_AB2
@@ -1345,7 +1345,7 @@ end
 
 function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     """
-    GPU-compatible 2nd-order exponential multistep method (ETDBDF2-style).
+    2nd-order exponential multistep method (ETDBDF2-style).
 
     Formulation (simplified exponential BDF2):
     u_{n+1} = a₀*exp(hL)u_n + a₁*exp(2hL)u_{n-1} + h*φ₁(hL)*N_BDF2

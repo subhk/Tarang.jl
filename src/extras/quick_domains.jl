@@ -175,44 +175,27 @@ function annulus_domain(dist::Distributor, inner_radius::Float64=0.5, outer_radi
     return Domain(dist, (annulus_basis,))
 end
 
-# Quick field creation with GPU support
+# Quick field creation
 function create_fields(domain::Domain, field_names::Vector{String}, field_types::Vector{String}=String[])
-    """Create multiple fields on domain with GPU support"""
-    
+    """Create multiple fields on domain"""
+
     if isempty(field_types)
         field_types = fill("scalar", length(field_names))
     end
-    
+
     if length(field_names) != length(field_types)
         throw(ArgumentError("Number of field names must match number of field types"))
     end
-    
+
     fields = Dict{String, Any}()
-    
+
     for (name, ftype) in zip(field_names, field_types)
         if ftype == "scalar"
-            field = ScalarField(domain.dist, name, domain.bases, domain.dist.dtype)
-            # Ensure field data is on same device as domain
-            field.data_g = field.data_g
-            field.data_c = field.data_c
-            fields[name] = field
+            fields[name] = ScalarField(domain.dist, name, domain.bases, domain.dist.dtype)
         elseif ftype == "vector"
-            field = VectorField(domain.dist, domain.dist.coordsys, name, domain.bases, domain.dist.dtype)
-            # Ensure vector components are on same device as domain
-            for comp in field.components
-                comp.data_g = comp.data_g
-                comp.data_c = comp.data_c
-            end
-            fields[name] = field
+            fields[name] = VectorField(domain.dist, domain.dist.coordsys, name, domain.bases, domain.dist.dtype)
         elseif ftype == "tensor"
-            field = TensorField(domain.dist, domain.dist.coordsys, name, domain.bases, domain.dist.dtype)
-            # Ensure tensor components are on same device as domain
-            for i in 1:size(field.components, 1), j in 1:size(field.components, 2)
-                comp = field.components[i, j]
-                comp.data_g = comp.data_g
-                comp.data_c = comp.data_c
-            end
-            fields[name] = field
+            fields[name] = TensorField(domain.dist, domain.dist.coordsys, name, domain.bases, domain.dist.dtype)
         else
             throw(ArgumentError("Unknown field type: $ftype"))
         end
@@ -339,29 +322,20 @@ end
 
 # 3D field creation utilities
 function create_navier_stokes_3d_fields(domain::Domain)
-    """Create complete set of fields for 3D Navier-Stokes equations with GPU support"""
-    
+    """Create complete set of fields for 3D Navier-Stokes equations"""
+
     dist = domain.dist
     coordsys = dist.coordsys
     bases = domain.bases
     dtype = dist.dtype
-    
+
     # Primary fields
     u = VectorField(dist, coordsys, "velocity", bases, dtype)      # Velocity vector
     p = ScalarField(dist, "pressure", bases, dtype)               # Pressure
-    
+
     # For incompressible flow with tau method (simplified)
     tau_u = VectorField(dist, coordsys, "tau_u", bases, dtype)    # Velocity tau terms
     tau_p = ScalarField(dist, "tau_p", (), dtype)                 # Pressure gauge
-    
-    # Ensure all fields are on same device as domain
-    for comp in u.components
-        comp.data_g = comp.data_g
-        comp.data_c = comp.data_c
-    end
-    
-    p.data_g = p.data_g
-    p.data_c = p.data_c
     
     for comp in tau_u.components
         comp.data_g = comp.data_g
@@ -538,18 +512,15 @@ function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
     end
 end
 
-function create_gpu_optimized_domain(dist::Distributor, domain_type::Symbol, args...; kwargs...)
-    """Create domain for common use cases (CPU-only placeholder for legacy API)."""
-    
-    # Device keyword is ignored in CPU-only builds
-    device = get(kwargs, :device, "cpu")
+function create_optimized_domain(dist::Distributor, domain_type::Symbol, args...; kwargs...)
+    """Create domain for common use cases."""
 
     domain = if domain_type == :rayleigh_benard_2d
         aspect_ratio = length(args) >= 1 ? args[1] : 4.0
         Nx = length(args) >= 2 ? args[2] : 256
         Nz = length(args) >= 3 ? args[3] : 64
         rayleigh_benard_domain(dist, aspect_ratio, Nx, Nz; kwargs...)
-        
+
     elseif domain_type == :channel_3d
         Lx = length(args) >= 1 ? args[1] : 4π
         Ly = length(args) >= 2 ? args[2] : 2π
@@ -558,18 +529,18 @@ function create_gpu_optimized_domain(dist::Distributor, domain_type::Symbol, arg
         Ny = length(args) >= 5 ? args[5] : 128
         Nz = length(args) >= 6 ? args[6] : 64
         channel_flow_3d_domain(dist, Lx, Ly, Lz, Nx, Ny, Nz; kwargs...)
-        
+
     elseif domain_type == :taylor_green_3d
         N = length(args) >= 1 ? args[1] : 128
         taylor_green_vortex_domain(dist, N; kwargs...)
-        
+
     elseif domain_type == :periodic_2d
         Lx = length(args) >= 1 ? args[1] : 2π
         Ly = length(args) >= 2 ? args[2] : 2π
         Nx = length(args) >= 3 ? args[3] : 128
         Ny = length(args) >= 4 ? args[4] : 128
         create_2d_periodic_domain(dist, Lx, Ly, Nx, Ny; kwargs...)
-        
+
     elseif domain_type == :periodic_3d
         Lx = length(args) >= 1 ? args[1] : 2π
         Ly = length(args) >= 2 ? args[2] : 2π
@@ -578,26 +549,22 @@ function create_gpu_optimized_domain(dist::Distributor, domain_type::Symbol, arg
         Ny = length(args) >= 5 ? args[5] : 64
         Nz = length(args) >= 6 ? args[6] : 64
         create_3d_periodic_domain(dist, Lx, Ly, Lz, Nx, Ny, Nz; kwargs...)
-        
+
     else
         throw(ArgumentError("Unknown domain type: $domain_type"))
     end
-    
-    @info "Created $domain_type domain on $(domain.device_type) (requested device: $device)"
-    
+
+    @info "Created $domain_type domain"
+
     return domain
 end
 
-function optimize_domain_for_gpu!(domain::Domain)
-    """No-op placeholder to maintain API; GPU optimizations removed."""
-    @info "Domain is CPU-only; GPU optimizations skipped."
-    return domain
-end
+# Legacy alias for API compatibility
+const create_gpu_optimized_domain = create_optimized_domain
 
-function compare_gpu_cpu_performance(domain_spec::Tuple)
-    """CPU-only placeholder; GPU comparison removed."""
+function benchmark_cpu_performance(domain_spec::Tuple)
+    """Benchmark CPU domain performance."""
     dist, args = domain_spec[1], domain_spec[2:end]
-    @info "GPU support removed; benchmarking CPU domain only."
     cpu_domain = create_2d_periodic_domain(dist, args...)
     benchmark_domain_operations(cpu_domain; n_iterations=50)
     estimate_memory_usage(cpu_domain, 4)

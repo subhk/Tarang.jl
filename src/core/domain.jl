@@ -7,8 +7,6 @@ Translated from dedalus/core/domain.py
 using LinearAlgebra
 using OrderedCollections: OrderedDict
 
-# GPU support
-
 mutable struct DomainPerformanceStats
     total_time::Float64
     coordinate_generations::Int
@@ -317,22 +315,22 @@ function grid_spacing(domain::Domain)
 end
 
 function integration_weights(domain::Domain)
-    """Get integration weights for each basis with GPU support"""
-    
+    """Get integration weights for each basis"""
+
     start_time = time()
     weights = []
-    
+
     for (i, basis) in enumerate(domain.bases)
         basis_name = basis.meta.element_label
         cache_key = "weights_$(basis_name)_$(basis.meta.size)"
-        
+
         # Check cache first
         if haskey(domain.integration_weights_cache, cache_key)
             push!(weights, Array(domain.integration_weights_cache[cache_key]))
             continue
         end
-        
-        # Compute weights on GPU
+
+        # Compute weights
         w = if isa(basis, RealFourier) || isa(basis, ComplexFourier)
             # Uniform weights for Fourier
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
