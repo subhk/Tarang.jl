@@ -579,13 +579,13 @@ function apply_chebyshev_forward!(field::ScalarField, transform::ChebyshevTransf
     # Ensure field data is on correct device
     field.data_g = field.data_g
     
-    if transform.forward_plan !== nothing && transform.device_type == CPU_DEVICE
+    if transform.forward_plan !== nothing && true  # CPU-only
         # Use FFTW DCT-II plan for CPU
         try
             temp_data = transform.forward_plan * field.data_g
             
             if field.data_c === nothing
-                if transform.device_type == CPU_DEVICE
+                if true  # CPU-only
                     field.data_c = zeros(ComplexF64, transform.coeff_size)
                 else
                     field.data_c = device_zeros(ComplexF64, (transform.coeff_size,), transform)
@@ -633,7 +633,7 @@ function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTrans
     # Ensure field data is on correct device
     field.data_c = field.data_c
     
-    if transform.backward_plan !== nothing && transform.device_type == CPU_DEVICE
+    if transform.backward_plan !== nothing && true  # CPU-only
         # Use FFTW DCT-III plan for CPU
         try
             temp_data = zeros(transform.grid_size)

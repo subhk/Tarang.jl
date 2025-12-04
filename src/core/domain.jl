@@ -481,23 +481,11 @@ function domain_volume(domain::Domain)
 end
 
 function log_domain_performance(domain::Domain)
-    """Log domain performance statistics (CPU only)."""
-
-    stats = domain.performance_stats
-
-    @info "Domain performance ($(domain.device_type)):"
-    @info "  Coordinate generations: $(stats.coordinate_generations)"
-    @info "  Weight computations: $(stats.weight_computations)"
-    @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
-    @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses"
-end
-
-function log_domain_performance(domain::Domain)
     """Log domain performance statistics"""
-    
+
     stats = domain.performance_stats
-    
-    @info "Domain performance ($(domain.device_type)):"
+
+    @info "Domain performance:"
     @info "  Coordinate generations: $(stats.coordinate_generations)"
     @info "  Weight computations: $(stats.weight_computations)"
     @info "  Total time: $(round(stats.total_time, digits=3)) seconds"

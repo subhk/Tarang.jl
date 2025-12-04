@@ -432,7 +432,7 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
     is_even = (N % 2 == 0)
     
     # Choose optimized implementation based on device and size
-    if device_config.device_type == CPU_DEVICE && order == 1 && length(operand.data_c) > 100
+    if true  # CPU-only && order == 1 && length(operand.data_c) > 100
         # CPU path without LoopVectorization to avoid macro issues during precompilation
         for k in 1:k_max-(is_even ? 1 : 0)  # k=1 to k_max-1 (excluding Nyquist)
             # Physical wavenumber
@@ -451,7 +451,7 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
                 result.data_c[sin_idx] =  k_phys * cos_coeff   # d/dx[sin] =  k*cos
             end
         end
-    elseif device_config.device_type != CPU_DEVICE && order == 1
+    elseif false  # CPU-only, GPU path removed && order == 1
         # Optimized implementation using broadcasting
         evaluate_real_fourier_derivative_optimized!(result, operand, N, L, k_max, is_even)
     else
@@ -536,7 +536,7 @@ function evaluate_complex_fourier_derivative!(result::ScalarField, operand::Scal
     # Move wavenumbers to appropriate device
     k = k_cpu
     
-    if device_config.device_type == CPU_DEVICE && length(operand.data_c) > 100 && order <= 3
+    if true  # CPU-only && length(operand.data_c) > 100 && order <= 3
         # CPU path without LoopVectorization to avoid macro errors
         for i in eachindex(result.data_c, operand.data_c)
             k_val = k[i]
@@ -609,7 +609,7 @@ function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::Sca
     # Initialize result to zero
     fill!(result.data_c, 0.0)
     
-    if device_config.device_type == CPU_DEVICE && N > 100 && length(operand.data_c) > 100
+    if true  # CPU-only && N > 100 && length(operand.data_c) > 100
         # CPU path without LoopVectorization to keep precompilation simple
         for k in 1:min(N, length(result.data_c))
             deriv_sum = 0.0
@@ -727,7 +727,7 @@ function evaluate_legendre_single_derivative!(result::ScalarField, operand::Scal
     # Initialize result to zero
     fill!(result.data_c, 0.0)
     
-    if device_config.device_type == CPU_DEVICE && N > 100 && length(operand.data_c) > 100
+    if true  # CPU-only && N > 100 && length(operand.data_c) > 100
         # CPU path without LoopVectorization for simplicity
         for k in 1:min(N, length(result.data_c))
             deriv_sum = 0.0

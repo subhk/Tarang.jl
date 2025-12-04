@@ -710,93 +710,15 @@ mutable struct NonlinearPerformanceStats
     total_time::Float64
     dealiasing_time::Float64
     transform_time::Float64
-    gpu_computation_time::Float64
-    
+
     function NonlinearPerformanceStats()
-        new(0, 0.0, 0.0, 0.0, 0.0)
+        new(0, 0.0, 0.0, 0.0)
     end
 end
 
-# GPU utility functions for nonlinear terms
-function to_device!(evaluator::NonlinearEvaluator, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """No-op device transfer for CPU-only mode."""
-    return evaluator
-end
-
-function synchronize_nonlinear_evaluator!(evaluator::NonlinearEvaluator)
-    """No-op for CPU-only mode."""
-end
-
-function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
-    """optimized evaluation of u·∇φ nonlinear term"""
-    
-    velocity = op.velocity
-    scalar = op.scalar
-    
-    # Get or create evaluator (CPU-only)
-    dist = velocity.dist
-    if !hasfield(typeof(dist), :nonlinear_evaluator)
-        evaluator = NonlinearEvaluator(dist)
-        dist.nonlinear_evaluator = evaluator
-    else
-        evaluator = dist.nonlinear_evaluator
-    end
-    
-    start_time = time()
-    
-    # Ensure all fields are on correct device
-    for i in 1:length(velocity.components)
-        velocity.components[i].data_g = velocity.components[i].data_g
-        velocity.components[i].data_c = velocity.components[i].data_c
-    end
-    scalar.data_g = scalar.data_g
-    scalar.data_c = scalar.data_c
-    
-    # Compute gradient of scalar field: ∇φ (optimized)
-    grad_scalar = evaluate_gradient(Gradient(scalar, dist.coordsys), :g)
-    
-    # Ensure gradient components are on GPU
-    for i in 1:length(grad_scalar.components)
-        grad_scalar.components[i].data_g = grad_scalar.components[i].data_g
-        grad_scalar.components[i].data_c = grad_scalar.components[i].data_c
-    end
-    
-    # Evaluate u·∇φ = u_x ∂φ/∂x + u_y ∂φ/∂y (+ u_z ∂φ/∂z in 3D)
-    result = ScalarField(dist, "$(op.name)_$(scalar.name)", scalar.bases, scalar.dtype)
-    result.data_g = result.data_g
-    result.data_c = result.data_c
-    ensure_layout!(result, :g)
-    fill!(result["g"], 0.0)
-    
-    # Sum velocity components times gradient components (optimized)
-    for i in 1:length(velocity.components)
-        # Multiply u_i * (∂φ/∂x_i) using GPU-aware transform-based multiplication
-        product = evaluate_transform_multiply(velocity.components[i], grad_scalar.components[i], evaluator)
-        result = result + product
-    end
-    
-    # Synchronize GPU operations
-    
-    # Update performance statistics
-    evaluator.performance_stats.gpu_computation_time += (time() - start_time)
-    
-    return result
-end
-function get_nonlinear_memory_info(evaluator::NonlinearEvaluator)
-    """Placeholder memory info (CPU-only)."""
-    mem = default_memory_info()
-    return (
-        total_memory = mem.total,
-        available_memory = mem.available,
-        used_memory = mem.used,
-        temp_field_memory = 0,
-        pool_memory = 0,
-        estimated_evaluator_memory = 0
-    )
-end
 function log_nonlinear_performance(stats::NonlinearPerformanceStats)
     """Log nonlinear evaluation performance statistics"""
-    
+
     if MPI.Initialized()
         rank = MPI.Comm_rank(MPI.COMM_WORLD)
         if rank == 0
@@ -810,7 +732,7 @@ function log_nonlinear_performance(stats::NonlinearPerformanceStats)
     else
         @info "Nonlinear evaluation performance:"
         @info "  Total evaluations: $(stats.total_evaluations)"
-        @info "  Total time: $(round(stats.total_time, digits=3)) seconds" 
+        @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
         @info "  Average time per evaluation: $(round(stats.total_time/max(stats.total_evaluations, 1), digits=6)) seconds"
     end
 end

@@ -1219,7 +1219,7 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
 
         push!(state.history, new_state)
 
-        @debug "ETDRK2 step completed: dt=$dt, device=$(config.device_type), |X_new|=$(norm(X_new_cpu))"
+        @debug "ETDRK2 step completed: dt=$dt, |X_new|=$(norm(X_new_cpu))"
 
     catch e
         @warn "ETD-RK222 failed: $e, falling back to RK222"

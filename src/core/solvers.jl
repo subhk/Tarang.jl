@@ -214,35 +214,31 @@ end
 mutable struct EigenvalueSolver <: Solver
     base::SolverBaseData
     problem::EVP
-    
+
     # Solution state
     eigenvalues::Vector{ComplexF64}
     eigenvectors::Matrix{ComplexF64}
-    
+
     # Linear algebra objects
     L_matrix::SparseMatrixCSC{ComplexF64, Int}
     M_matrix::SparseMatrixCSC{ComplexF64, Int}
-    
+
     # Solver parameters
     n_modes::Int
     target::Union{Nothing, ComplexF64}
-    
-    # GPU support
-    
-    gpu_matrices::Dict{String, AbstractArray}
+
+    workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
     global_solver::Any
     subsystems::Tuple{Vararg{Subsystem}}
     subproblems::Tuple{Vararg{Subproblem}}
     coeff_system::Union{Nothing, CoeffSystem}
-
 end
 
 function _build_eigenvalue_solver(problem::EVP; n_modes::Int=10, target::Union{Nothing, ComplexF64}=nothing, matsolver::Union{String,Symbol,Type}=:sparse)
     setup_domain!(problem)
     validate_problem(problem)
 
-    
     base = SolverBaseData(problem; matsolver=matsolver)
     L, M, _ = build_matrices(problem)
     apply_entry_cutoff!(L, base.entry_cutoff)
@@ -253,12 +249,12 @@ function _build_eigenvalue_solver(problem::EVP; n_modes::Int=10, target::Union{N
     problem.parameters["L_matrix"] = L_sparse
     problem.parameters["M_matrix"] = M_sparse
 
-    gpu_matrices = Dict{String, AbstractArray}()
+    workspace = Dict{String, AbstractArray}()
     perf_stats = SolverPerformanceStats()
     global_solver = MatSolvers.solver_instance(base.matsolver, L_sparse)
     solver = EigenvalueSolver(base, problem, ComplexF64[], zeros(ComplexF64, 0, 0),
-                              L_sparse, M_sparse, n_modes, target, device_config,
-                              gpu_matrices, perf_stats, global_solver, (), (), nothing)
+                              L_sparse, M_sparse, n_modes, target,
+                              workspace, perf_stats, global_solver, (), (), nothing)
 
     subsystems = build_subsystems(solver)
     subproblems = build_subproblems(solver, subsystems; build_matrices=["L", "M"])
