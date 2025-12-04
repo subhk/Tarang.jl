@@ -155,7 +155,7 @@ end
 function nonconstant(domain::Domain)
     """Tuple inverse of constant axes."""
     _domain_cached_get!(domain, :nonconstant) do
-        tuple(!flag for flag in constant(domain))
+        tuple((!flag for flag in constant(domain))...)
     end
 end
 
