@@ -761,16 +761,30 @@ add_slice_task!(handler, u, slices=Dict(:z => 0.0), name="u_bottom")
 add_slice_task!(handler, T, slices=(x=0.5, y=0.5), name="T_centerline")
 ```
 """
-function add_slice_task!(handler::NetCDFFileHandler, field; slices=Dict(), name=nothing)
-    if name === nothing
-        field_name = get_field_name(field)
-        slice_parts = ["$(k)=$(v)" for (k, v) in pairs(slices)]
-        slice_str = join(slice_parts, "_")
-        name = isempty(slice_str) ? field_name : "$(field_name)_$(slice_str)"
+function add_slice_task!(handler::NetCDFFileHandler, field; slices=Dict(), dim=nothing, idx=nothing, name=nothing)
+    # Support both slices dict and dim/idx syntax
+    if dim !== nothing && idx !== nothing
+        # Use dim/idx syntax - create a slice at index idx along dimension dim
+        if name === nothing
+            field_name = get_field_name(field)
+            name = "$(field_name)_slice_dim$(dim)_idx$(idx)"
+        end
+        # Create postprocess function that extracts slice at given index
+        postprocess = data -> begin
+            indices = ntuple(i -> i == dim ? idx : Colon(), ndims(data))
+            data[indices...]
+        end
+    else
+        # Use slices dict syntax
+        if name === nothing
+            field_name = get_field_name(field)
+            slice_parts = ["$(k)=$(v)" for (k, v) in pairs(slices)]
+            slice_str = join(slice_parts, "_")
+            name = isempty(slice_str) ? field_name : "$(field_name)_$(slice_str)"
+        end
+        # Create postprocess function for slicing
+        postprocess = data -> apply_field_slices(data, field, slices)
     end
-
-    # Create postprocess function for slicing
-    postprocess = data -> apply_field_slices(data, field, slices)
 
     return add_task!(handler, field; name=name, postprocess=postprocess)
 end
