@@ -366,10 +366,7 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
     # Use existing timestepper infrastructure from timesteppers.jl
     # Create TimestepperState if needed
     if solver.timestepper_state === nothing
-        solver.timestepper_state = TimestepperState(solver.timestepper, dt)
-        # Initialize history with current state
-        state_copy = deepcopy(solver.state)
-        push!(solver.timestepper_state.history, state_copy)
+        solver.timestepper_state = TimestepperState(solver.timestepper, dt, solver.state)
     else
         # Update timestep history for variable timestep support
         update_timestep_history!(solver.timestepper_state, dt)

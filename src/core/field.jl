@@ -114,10 +114,39 @@ end
 struct LockedField <: Operand
     field::ScalarField
     layout::Symbol
-    
+
     function LockedField(field::ScalarField, layout::Symbol)
         new(field, layout)
     end
+end
+
+# Copy methods for ScalarField
+function Base.copy(field::ScalarField)
+    """Create a shallow copy of ScalarField with copied data arrays"""
+    new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
+    if field.data_g !== nothing
+        new_field.data_g = copy(field.data_g)
+    end
+    if field.data_c !== nothing
+        new_field.data_c = copy(field.data_c)
+    end
+    new_field.current_layout = field.current_layout
+    new_field.scales = field.scales
+    return new_field
+end
+
+function Base.deepcopy(field::ScalarField)
+    """Create a deep copy of ScalarField"""
+    new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
+    if field.data_g !== nothing
+        new_field.data_g = deepcopy(field.data_g)
+    end
+    if field.data_c !== nothing
+        new_field.data_c = deepcopy(field.data_c)
+    end
+    new_field.current_layout = field.current_layout
+    new_field.scales = field.scales
+    return new_field
 end
 
 # Data allocation and management
