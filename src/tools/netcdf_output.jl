@@ -464,26 +464,29 @@ function create_current_file!(handler::NetCDFFileHandler)
     end
 
     # Create basic structure matching Dedalus HDF5 layout
-    # First variable creates the unlimited "sim_time" dimension
-    nccreate(filename, "sim_time", "sim_time", Inf,  # Inf = unlimited
+    # Use a single nccreate call pattern that works with NetCDF.jl
+    # All variables share the same unlimited "sim_time" dimension
+
+    # Create sim_time variable (defines the dimension)
+    nccreate(filename, "sim_time", "sim_time", Inf,
             atts=Dict("long_name" => "simulation time",
                      "units" => "dimensionless time",
                      "axis" => "T"))
 
-    # Subsequent variables reuse the existing "sim_time" dimension
-    # by not specifying a size (NetCDF.jl will find the existing dimension)
-    nccreate(filename, "wall_time", "sim_time",
+    # For other variables, we need to specify the dimension size as Inf again
+    # NetCDF.jl will recognize it's the same unlimited dimension
+    nccreate(filename, "wall_time", "sim_time", Inf,
             atts=Dict("long_name" => "wall clock time",
                      "units" => "seconds"))
 
-    nccreate(filename, "timestep", "sim_time",
+    nccreate(filename, "timestep", "sim_time", Inf,
             atts=Dict("long_name" => "timestep",
                      "units" => "dimensionless time"))
 
-    nccreate(filename, "iteration", "sim_time", t=Int64,
+    nccreate(filename, "iteration", "sim_time", Inf, t=Int64,
             atts=Dict("long_name" => "iteration number"))
 
-    nccreate(filename, "write_number", "sim_time", t=Int64,
+    nccreate(filename, "write_number", "sim_time", Inf, t=Int64,
             atts=Dict("long_name" => "write number"))
     
     # Add global attributes (matching Dedalus metadata)
@@ -641,11 +644,9 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         end
         
         # Create main data variable using NetCDF.jl syntax
-        # First collect dimension names and sizes
-        dims_for_var = copy(dim_names)  # ["sim_time", "task_dim1", ...]
-        sizes_for_var = [0; collect(data_shape)]  # 0=unlimited for time
-        
-        # Create main data variable
+        # Build dimension arguments for nccreate: dim1, size1, dim2, size2, ...
+        # Use Inf for unlimited time dimension, actual sizes for spatial dims
+
         # Note: NetCDF.jl doesn't support Bool attributes, so we use Int (0/1)
         var_atts = Dict(
             "long_name" => task_name,
@@ -657,9 +658,18 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         if task["scales"] !== nothing
             var_atts["scales"] = string(task["scales"])
         end
-        nccreate(filename, task_name, dims_for_var, sizes_for_var,
-                t=nc_type,
-                atts=var_atts)
+
+        # Build the nccreate call with alternating dim names and sizes
+        # nccreate(filename, varname, dim1, size1, dim2, size2, ...; kwargs...)
+        dim_args = Any[]
+        push!(dim_args, "sim_time")
+        push!(dim_args, Inf)  # Unlimited time dimension
+        for (i, dim_name) in enumerate(dim_names[2:end])
+            push!(dim_args, dim_name)
+            push!(dim_args, data_shape[i])
+        end
+
+        nccreate(filename, task_name, dim_args..., t=nc_type, atts=var_atts)
     end
     
     # Write data with time index
