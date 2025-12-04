@@ -6,10 +6,6 @@ Problems define the PDE systems to be solved, including equations, parameters, a
 
 ### Initial Value Problems (IVP)
 
-```@docs
-IVP
-```
-
 Time-evolution problems where PDEs are integrated forward in time from initial conditions.
 
 **Constructor**:
@@ -40,10 +36,6 @@ problem = IVP([ux, uz, p, T, S])
 ---
 
 ### Linear Boundary Value Problems (LBVP)
-
-```@docs
-LBVP
-```
 
 Steady-state linear problems with boundary conditions.
 
@@ -78,10 +70,6 @@ add_equation!(problem, "dx(u) + dz(v) = 0")
 ---
 
 ### Nonlinear Boundary Value Problems (NLBVP)
-
-```@docs
-NLBVP
-```
 
 Steady-state nonlinear problems with boundary conditions.
 
