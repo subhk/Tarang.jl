@@ -189,110 +189,8 @@ function Jacobi(coord::Coordinate; kwargs...)
     return multiclass_new(Jacobi, coord; kwargs...)
 end
 
-# Disk and annulus bases for polar coordinates
-struct DiskBasis <: Basis
-    meta::BasisMeta
-    transforms::Dict{String, Any}
-    radius::Float64
-end
-
-function _build_disk_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64)
-    dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias)
-    bounds = (0.0, radius)
-    meta = BasisMeta(coord.coordsys, coord.name, 2, size, bounds, dealias_tuple, dtype;
-                     constant=[false, false], subaxis_dependence=[true, true])
-    transforms = Dict{String, Any}()
-    return DiskBasis(meta, transforms, radius)
-end
-
-const _DiskBasis_constructor = _build_disk_basis
-
-function DiskBasis(coord::Coordinate; kwargs...)
-    return multiclass_new(DiskBasis, coord; kwargs...)
-end
-
-struct AnnulusBasis <: Basis
-    meta::BasisMeta
-    transforms::Dict{String, Any}
-    radii::Tuple{Float64, Float64}
-end
-
-function _build_annulus_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64)
-    dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias)
-    meta = BasisMeta(coord.coordsys, coord.name, 2, size, radii, dealias_tuple, dtype;
-                     constant=[false, false], subaxis_dependence=[false, true])
-    transforms = Dict{String, Any}()
-    return AnnulusBasis(meta, transforms, radii)
-end
-
-const _AnnulusBasis_constructor = _build_annulus_basis
-
-function AnnulusBasis(coord::Coordinate; kwargs...)
-    return multiclass_new(AnnulusBasis, coord; kwargs...)
-end
-
-# Spherical bases
-struct SphereBasis <: Basis
-    meta::BasisMeta
-    transforms::Dict{String, Any}
-    radius::Float64
-end
-
-function _build_sphere_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
-    dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
-    bounds = (0.0, radius)
-    meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype;
-                     constant=[false, false, false], subaxis_dependence=[false, true, true])
-    transforms = Dict{String, Any}()
-    return SphereBasis(meta, transforms, radius)
-end
-
-const _SphereBasis_constructor = _build_sphere_basis
-
-function SphereBasis(coord::Coordinate; kwargs...)
-    return multiclass_new(SphereBasis, coord; kwargs...)
-end
-
-struct BallBasis <: Basis
-    meta::BasisMeta
-    transforms::Dict{String, Any}
-    radius::Float64
-end
-
-function _build_ball_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
-    dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
-    bounds = (0.0, radius)
-    meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype;
-                     constant=[false, false, false], subaxis_dependence=[false, true, true])
-    transforms = Dict{String, Any}()
-    return BallBasis(meta, transforms, radius)
-end
-
-const _BallBasis_constructor = _build_ball_basis
-
-function BallBasis(coord::Coordinate; kwargs...)
-    return multiclass_new(BallBasis, coord; kwargs...)
-end
-
-struct ShellBasis <: Basis
-    meta::BasisMeta
-    transforms::Dict{String, Any}
-    radii::Tuple{Float64, Float64}
-end
-
-function _build_shell_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
-    dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
-    meta = BasisMeta(coord.coordsys, coord.name, 3, size, radii, dealias_tuple, dtype;
-                     constant=[false, false, false], subaxis_dependence=[false, true, true])
-    transforms = Dict{String, Any}()
-    return ShellBasis(meta, transforms, radii)
-end
-
-const _ShellBasis_constructor = _build_shell_basis
-
-function ShellBasis(coord::Coordinate; kwargs...)
-    return multiclass_new(ShellBasis, coord; kwargs...)
-end
+# Note: Polar/Spherical bases (DiskBasis, AnnulusBasis, SphereBasis, BallBasis, ShellBasis)
+# are not yet implemented. They require specialized transforms and will be added in a future version.
 
 # ---------------------------------------------------------------------------
 # Basis dispatcher helpers
@@ -305,11 +203,6 @@ _basis_builder(::Type{ChebyshevU}) = _ChebyshevU_constructor
 _basis_builder(::Type{Legendre}) = _Legendre_constructor
 _basis_builder(::Type{Ultraspherical}) = _Ultraspherical_constructor
 _basis_builder(::Type{Jacobi}) = _Jacobi_constructor
-_basis_builder(::Type{DiskBasis}) = _DiskBasis_constructor
-_basis_builder(::Type{AnnulusBasis}) = _AnnulusBasis_constructor
-_basis_builder(::Type{SphereBasis}) = _SphereBasis_constructor
-_basis_builder(::Type{BallBasis}) = _BallBasis_constructor
-_basis_builder(::Type{ShellBasis}) = _ShellBasis_constructor
 _basis_builder(::Type{T}) where {T<:Basis} = error("No basis builder registered for type $(T)")
 
 function dispatch_preprocess(::Type{T}, args::Tuple, kwargs::NamedTuple) where {T<:Basis}
@@ -398,11 +291,6 @@ function local_grids(basis::Jacobi, dist, scales)
     return (local_grid(basis, dist, scales[1]),)
 end
 
-function local_grids(basis::DiskBasis, dist, scales)
-    """Local grids for Disk basis."""
-    return (local_grid(basis, dist, scales[1]),)
-end
-
 function local_grid(basis::Basis, dist, scale)
     """
     Local grid for a basis.
@@ -485,15 +373,6 @@ function _native_grid(basis::Jacobi, scale)
     return grid_cpu
 end
 
-function _native_grid(basis::DiskBasis, scale)
-    """Native grid for Disk basis."""
-    N = Int(round(basis.meta.size * scale))
-    # Radial coordinates from 0 to radius
-    dr = basis.radius / (N - 1)
-    grid_cpu = [i * dr for i in 0:N-1]
-    return grid_cpu
-end
-
 function problem_coord(basis::Basis, native_grid)
     """
     Map native coordinates to problem coordinates.
@@ -501,9 +380,6 @@ function problem_coord(basis::Basis, native_grid)
     """
     if isa(basis, RealFourier) || isa(basis, ComplexFourier)
         # Fourier bases are already in problem coordinates
-        return native_grid
-    elseif isa(basis, DiskBasis)
-        # Disk basis is already in problem coordinates
         return native_grid
     else
         # Spectral bases need to be mapped to physical bounds

@@ -29,19 +29,3 @@ using Tarang
     @test Tarang.get_basis_subaxis(domain, y) == 0
     @test Tarang.dim(domain) == 2
 end
-
-@testset "Polar metadata" begin
-    polar = PolarCoordinates("phi", "r")
-    polar_dist = Distributor(polar; mesh=(1, 1), dtype=Float64)
-    disk = DiskBasis(polar["phi"]; radius=1.0, size=10, dealias=(1.0, 1.25))
-    disk_domain = Domain(polar_dist, (disk,))
-
-    @test Tarang.dealias(disk_domain) == (1.0, 1.25)
-    @test Tarang.mode_dependence(disk_domain) == (true, true)
-
-    annulus = AnnulusBasis(polar["phi"]; radii=(0.5, 1.0), size=12, dealias=(1.5, 1.0))
-    annulus_domain = Domain(polar_dist, (annulus,))
-
-    @test Tarang.dealias(annulus_domain) == (1.5, 1.0)
-    @test Tarang.mode_dependence(annulus_domain) == (false, true)
-end

@@ -154,26 +154,7 @@ function taylor_couette_domain(dist::Distributor, inner_radius::Float64=0.5, out
     return Domain(dist, (r_basis, theta_basis))
 end
 
-function disk_domain(dist::Distributor, radius::Float64=1.0, N::Int=64; dtype::Type=ComplexF64, dealias::Float64=1.0, kwargs...)
-    """Create disk domain using disk basis"""
-    
-    disk_coord = _require_coords(dist, 1)[1]
-    
-    disk_basis = DiskBasis(disk_coord, radius=radius, size=N, dealias=dealias, dtype=dtype)
-    
-    return Domain(dist, (disk_basis,))
-end
-
-function annulus_domain(dist::Distributor, inner_radius::Float64=0.5, outer_radius::Float64=1.0,
-                       N::Int=64; dtype::Type=ComplexF64, dealias::Float64=1.0, kwargs...)
-    """Create annulus domain using annulus basis"""
-    
-    annulus_coord = _require_coords(dist, 1)[1]
-    
-    annulus_basis = AnnulusBasis(annulus_coord, radii=(inner_radius, outer_radius), size=N, dealias=dealias, dtype=dtype)
-    
-    return Domain(dist, (annulus_basis,))
-end
+# Note: disk_domain and annulus_domain removed - DiskBasis/AnnulusBasis not yet implemented
 
 # Quick field creation
 function create_fields(domain::Domain, field_names::Vector{String}, field_types::Vector{String}=String[])
