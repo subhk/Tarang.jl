@@ -37,11 +37,7 @@ struct ProgressIterator{T}
     writer::Function
     prog::ProgressLogger
 end
-
-# Outer constructor that infers the type parameter from the items vector
-function ProgressIterator(items::Vector{T}, writer::Function, prog::ProgressLogger) where T
-    return ProgressIterator{T}(items, writer, prog)
-end
+# Julia automatically creates ProgressIterator(items::Vector{T}, ...) where T
 
 function log_progress(iterable, logger::Module=Logging, level::LogLevel=Logging.Info;
                       desc::String="Iteration", frac::Float64=1.0, iter::Int=1, dt::Float64=Inf)

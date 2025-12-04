@@ -1080,9 +1080,12 @@ function build_matrices(problem::Problem)
                             block = build_expression_matrix_block(expr, var, eqn_size, var_size)
                             if !isempty(block.nzval)
                                 # Add to sparse matrix data
-                                append!(data, block.nzval)
-                                append!(rows, i0 .+ block.rowval)
-                                append!(cols, j0 .+ block.colval)
+                                # SparseMatrixCSC stores: rowval (row indices), colptr (column pointers), nzval (values)
+                                # We need to expand colptr to get column indices for each non-zero
+                                block_rows, block_cols, block_vals = findnz(block)
+                                append!(data, block_vals)
+                                append!(rows, i0 .+ block_rows)
+                                append!(cols, j0 .+ block_cols)
                             end
                         end
                         j0 += var_size

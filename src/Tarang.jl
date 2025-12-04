@@ -69,6 +69,9 @@ include("core/system.jl")
 include("tools/matsolvers.jl")
 include("core/solvers.jl")
 include("core/timesteppers.jl")
+
+# NetCDF output must be included before evaluator (evaluator uses NetCDFFileHandler)
+include("tools/netcdf_output.jl")
 include("core/evaluator.jl")
 include("core/nonlinear_terms.jl")
 
@@ -80,7 +83,6 @@ include("tools/parallel.jl")
 include("tools/logging.jl")
 include("tools/progress.jl")
 include("tools/random_arrays.jl")
-include("tools/netcdf_output.jl")
 include("tools/netcdf_merge.jl")
 
 # Extras
