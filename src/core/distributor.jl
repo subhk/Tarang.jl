@@ -293,9 +293,16 @@ function get_basis_axis(dist::Distributor, basis::Basis)
     Get axis index for a basis.
     Following Dedalus implementation in distributor.py:207
     """
-    # In Dedalus: return self.get_axis(basis.coordsys.coords[0])
+    # Find the coordinate that matches this basis's element_label
+    coord_name = basis.meta.element_label
+    for (i, c) in enumerate(dist.coords)
+        if c.name == coord_name
+            return i - 1  # 0-indexed like Python
+        end
+    end
+    # Fallback: use the first coordinate of the basis's coordinate system
     basis_coords = coords(basis.meta.coordsys)
-    return get_axis(dist, basis_coords[1])  # First coordinate of the basis's coordinate system
+    return get_axis(dist, basis_coords[1])
 end
 
 function first_axis(dist::Distributor, basis::Basis)
