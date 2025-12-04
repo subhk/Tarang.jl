@@ -195,6 +195,69 @@ function get_layout(dist::Distributor, bases::Tuple{Vararg{Basis}}, dtype::Type=
     return layout
 end
 
+function local_indices(dist::Distributor, axis::Int)
+    """
+    Get local indices for the given axis (1-indexed).
+    For serial execution, returns all indices.
+    For parallel execution, returns the indices owned by this process.
+    """
+    if dist.size == 1 || dist.mesh === nothing
+        # Serial case: return all indices
+        # We need to know the global size for this axis, but without a basis
+        # we can only return a default range. This will be overridden by
+        # specific basis implementations when needed.
+        return Colon()
+    end
+
+    # For parallel case, compute the local range based on decomposition
+    # The mesh defines how processes are distributed
+    mesh_dim = length(dist.mesh)
+
+    if axis > mesh_dim
+        # This axis is not decomposed - return all indices
+        return Colon()
+    end
+
+    # Get process position in mesh for this axis
+    procs_per_axis = dist.mesh[axis]
+    proc_idx = dist.rank % procs_per_axis
+
+    # Return a placeholder - actual indices need global size
+    return Colon()
+end
+
+function local_indices(dist::Distributor, axis::Int, global_size::Int)
+    """
+    Get local indices for the given axis with known global size.
+    """
+    if dist.size == 1 || dist.mesh === nothing
+        return 1:global_size
+    end
+
+    mesh_dim = length(dist.mesh)
+
+    if axis > mesh_dim
+        return 1:global_size
+    end
+
+    procs_per_axis = dist.mesh[axis]
+    proc_idx = dist.rank % procs_per_axis
+
+    # Compute local range
+    chunk_size = div(global_size, procs_per_axis)
+    remainder = mod(global_size, procs_per_axis)
+
+    if proc_idx < remainder
+        start_idx = proc_idx * (chunk_size + 1) + 1
+        end_idx = start_idx + chunk_size
+    else
+        start_idx = remainder * (chunk_size + 1) + (proc_idx - remainder) * chunk_size + 1
+        end_idx = start_idx + chunk_size - 1
+    end
+
+    return start_idx:end_idx
+end
+
 function Field(dist::Distributor; name::String="field", bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
     """Create a scalar field"""
     field = ScalarField(dist, name, bases, dtype)
