@@ -15,142 +15,145 @@ function _require_coords(dist::Distributor, needed::Int)
 end
 
 # 1D domains
-function create_fourier_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, kwargs...)
+function create_fourier_domain(dist::Distributor, L::Real, N::Integer; dtype::Type=Float64, kwargs...)
     """Create 1D periodic Fourier domain (CPU only)"""
-    
+
     x_coord = _require_coords(dist, 1)[1]
-    x_basis = RealFourier(x_coord, size=N, bounds=(0.0, L), dtype=dtype)
-    
+    x_basis = RealFourier(x_coord, size=Int(N), bounds=(0.0, Float64(L)), dtype=dtype)
+
     return Domain(dist, (x_basis,))
 end
 
-function create_chebyshev_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, kwargs...)
+function create_chebyshev_domain(dist::Distributor, L::Real, N::Integer; dtype::Type=Float64, kwargs...)
     """Create 1D Chebyshev domain (CPU only)"""
-    
+
     x_coord = _require_coords(dist, 1)[1]
-    x_basis = ChebyshevT(x_coord, size=N, bounds=(0.0, L), dtype=dtype)
-    
+    x_basis = ChebyshevT(x_coord, size=Int(N), bounds=(0.0, Float64(L)), dtype=dtype)
+
     return Domain(dist, (x_basis,))
 end
 
-function create_legendre_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, kwargs...)
+function create_legendre_domain(dist::Distributor, L::Real, N::Integer; dtype::Type=Float64, kwargs...)
     """Create 1D Legendre domain (CPU only)"""
-    
+
     x_coord = _require_coords(dist, 1)[1]
-    x_basis = Legendre(x_coord, size=N, bounds=(0.0, L), dtype=dtype)
-    
+    x_basis = Legendre(x_coord, size=Int(N), bounds=(0.0, Float64(L)), dtype=dtype)
+
     return Domain(dist, (x_basis,))
 end
 
 # 2D domains
-function create_2d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int; 
-                                  dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function create_2d_periodic_domain(dist::Distributor, Lx::Real, Ly::Real, Nx::Integer, Ny::Integer;
+                                  dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create 2D doubly-periodic domain with Fourier bases in both directions (CPU only)"""
-    
+
     x_coord, y_coord = _require_coords(dist, 2)
-    
-    x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
-    
+
+    x_basis = RealFourier(x_coord, size=Int(Nx), bounds=(0.0, Float64(Lx)), dealias=Float64(dealias), dtype=dtype)
+    y_basis = RealFourier(y_coord, size=Int(Ny), bounds=(0.0, Float64(Ly)), dealias=Float64(dealias), dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis))
 end
 
-function create_channel_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int;
-                              dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function create_channel_domain(dist::Distributor, Lx::Real, Ly::Real, Nx::Integer, Ny::Integer;
+                              dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create 2D channel domain: periodic in x, Chebyshev in y (CPU only)"""
-    
+
     x_coord, y_coord = _require_coords(dist, 2)
-    
-    x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    y_basis = ChebyshevT(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
-    
+
+    x_basis = RealFourier(x_coord, size=Int(Nx), bounds=(0.0, Float64(Lx)), dealias=Float64(dealias), dtype=dtype)
+    y_basis = ChebyshevT(y_coord, size=Int(Ny), bounds=(0.0, Float64(Ly)), dealias=Float64(dealias), dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis))
 end
 
-function create_rectangular_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int;
+function create_rectangular_domain(dist::Distributor, Lx::Real, Ly::Real, Nx::Integer, Ny::Integer;
                                   x_basis_type::Type=ChebyshevT, y_basis_type::Type=ChebyshevT,
-                                  dtype::Type=Float64, dealias::Float64=1.0)
+                                  dtype::Type=Float64, dealias::Real=1.0)
     """Create 2D rectangular domain with specified basis types"""
-    
+
     x_coord, y_coord = _require_coords(dist, 2)
-    
+    Lx_f, Ly_f = Float64(Lx), Float64(Ly)
+    Nx_i, Ny_i = Int(Nx), Int(Ny)
+    dealias_f = Float64(dealias)
+
     if x_basis_type == RealFourier
-        x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
+        x_basis = RealFourier(x_coord, size=Nx_i, bounds=(0.0, Lx_f), dealias=dealias_f, dtype=dtype)
     elseif x_basis_type == ChebyshevT
-        x_basis = ChebyshevT(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
+        x_basis = ChebyshevT(x_coord, size=Nx_i, bounds=(0.0, Lx_f), dealias=dealias_f, dtype=dtype)
     elseif x_basis_type == Legendre
-        x_basis = Legendre(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
+        x_basis = Legendre(x_coord, size=Nx_i, bounds=(0.0, Lx_f), dealias=dealias_f, dtype=dtype)
     else
         throw(ArgumentError("Unsupported x basis type: $x_basis_type"))
     end
-    
+
     if y_basis_type == RealFourier
-        y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
+        y_basis = RealFourier(y_coord, size=Ny_i, bounds=(0.0, Ly_f), dealias=dealias_f, dtype=dtype)
     elseif y_basis_type == ChebyshevT
-        y_basis = ChebyshevT(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
+        y_basis = ChebyshevT(y_coord, size=Ny_i, bounds=(0.0, Ly_f), dealias=dealias_f, dtype=dtype)
     elseif y_basis_type == Legendre
-        y_basis = Legendre(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
+        y_basis = Legendre(y_coord, size=Ny_i, bounds=(0.0, Ly_f), dealias=dealias_f, dtype=dtype)
     else
         throw(ArgumentError("Unsupported y basis type: $y_basis_type"))
     end
-    
+
     return Domain(dist, (x_basis, y_basis))
 end
 
 # 3D domains
-function create_3d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, Lz::Float64, 
-                                  Nx::Int, Ny::Int, Nz::Int; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function create_3d_periodic_domain(dist::Distributor, Lx::Real, Ly::Real, Lz::Real,
+                                  Nx::Integer, Ny::Integer, Nz::Integer; dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create 3D triply-periodic domain (CPU only)"""
-    
+
     x_coord, y_coord, z_coord = _require_coords(dist, 3)
-    
-    x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
-    z_basis = RealFourier(z_coord, size=Nz, bounds=(0.0, Lz), dealias=dealias, dtype=dtype)
-    
+
+    x_basis = RealFourier(x_coord, size=Int(Nx), bounds=(0.0, Float64(Lx)), dealias=Float64(dealias), dtype=dtype)
+    y_basis = RealFourier(y_coord, size=Int(Ny), bounds=(0.0, Float64(Ly)), dealias=Float64(dealias), dtype=dtype)
+    z_basis = RealFourier(z_coord, size=Int(Nz), bounds=(0.0, Float64(Lz)), dealias=Float64(dealias), dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis, z_basis))
 end
 
-function create_box_domain(dist::Distributor, Lx::Float64, Ly::Float64, Lz::Float64,
-                          Nx::Int, Ny::Int, Nz::Int; dtype::Type=Float64, dealias::Float64=1.0)
+function create_box_domain(dist::Distributor, Lx::Real, Ly::Real, Lz::Real,
+                          Nx::Integer, Ny::Integer, Nz::Integer; dtype::Type=Float64, dealias::Real=1.0)
     """Create 3D box domain with Chebyshev bases"""
-    
+
     x_coord, y_coord, z_coord = _require_coords(dist, 3)
-    
-    x_basis = ChebyshevT(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    y_basis = ChebyshevT(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
-    z_basis = ChebyshevT(z_coord, size=Nz, bounds=(0.0, Lz), dealias=dealias, dtype=dtype)
-    
+
+    x_basis = ChebyshevT(x_coord, size=Int(Nx), bounds=(0.0, Float64(Lx)), dealias=Float64(dealias), dtype=dtype)
+    y_basis = ChebyshevT(y_coord, size=Int(Ny), bounds=(0.0, Float64(Ly)), dealias=Float64(dealias), dtype=dtype)
+    z_basis = ChebyshevT(z_coord, size=Int(Nz), bounds=(0.0, Float64(Lz)), dealias=Float64(dealias), dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis, z_basis))
 end
 
 # Specialized domains for common problems
-function rayleigh_benard_domain(dist::Distributor, aspect_ratio::Float64=4.0, Nx::Int=256, Nz::Int=64;
-                               dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function rayleigh_benard_domain(dist::Distributor, aspect_ratio::Real=4.0, Nx::Integer=256, Nz::Integer=64;
+                               dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create domain for Rayleigh-Bénard convection"""
-    
-    Lx = aspect_ratio  # Horizontal extent
-    Lz = 1.0          # Vertical extent
-    
+
+    Lx = Float64(aspect_ratio)  # Horizontal extent
+    Lz = 1.0                    # Vertical extent
+
     x_coord, z_coord = _require_coords(dist, 2)
-    
+
     # Periodic in x (horizontal), Chebyshev in z (vertical)
-    x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    z_basis = ChebyshevT(z_coord, size=Nz, bounds=(0.0, Lz), dealias=dealias, dtype=dtype)
-    
+    x_basis = RealFourier(x_coord, size=Int(Nx), bounds=(0.0, Lx), dealias=Float64(dealias), dtype=dtype)
+    z_basis = ChebyshevT(z_coord, size=Int(Nz), bounds=(0.0, Lz), dealias=Float64(dealias), dtype=dtype)
+
     return Domain(dist, (x_basis, z_basis))
 end
 
-function taylor_couette_domain(dist::Distributor, inner_radius::Float64=0.5, outer_radius::Float64=1.0,
-                              Nr::Int=64, Ntheta::Int=128; dtype::Type=ComplexF64, dealias::Float64=3.0/2.0, kwargs...)
+function taylor_couette_domain(dist::Distributor, inner_radius::Real=0.5, outer_radius::Real=1.0,
+                              Nr::Integer=64, Ntheta::Integer=128; dtype::Type=ComplexF64, dealias::Real=3.0/2.0, kwargs...)
     """Create domain for Taylor-Couette flow (cylindrical coordinates)"""
-    
+
     r_coord, theta_coord = _require_coords(dist, 2)
-    
+
     # Chebyshev in r, Fourier in θ
-    r_basis = ChebyshevT(r_coord, size=Nr, bounds=(inner_radius, outer_radius), dealias=dealias, dtype=Float64)
-    theta_basis = ComplexFourier(theta_coord, size=Ntheta, bounds=(0.0, 2π), dealias=dealias, dtype=dtype)
-    
+    r_basis = ChebyshevT(r_coord, size=Int(Nr), bounds=(Float64(inner_radius), Float64(outer_radius)), dealias=Float64(dealias), dtype=Float64)
+    theta_basis = ComplexFourier(theta_coord, size=Int(Ntheta), bounds=(0.0, 2π), dealias=Float64(dealias), dtype=dtype)
+
     return Domain(dist, (r_basis, theta_basis))
 end
 
