@@ -602,8 +602,15 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     if task["postprocess"] !== nothing
         data = task["postprocess"](data)
     end
-    data = Array(data)  # Ensure plain array for NetCDF
-    nc_type = eltype(data) == Float32 ? NC_FLOAT : NC_DOUBLE
+    # Ensure plain array for NetCDF - handle scalars by wrapping in 1-element array
+    if isa(data, Number)
+        data = [data]
+    elseif isa(data, AbstractArray)
+        data = Array(data)
+    else
+        data = [data]  # Fallback for other types
+    end
+    nc_type = eltype(data) <: Float32 ? NC_FLOAT : NC_DOUBLE
     
     # Check if variable exists
     variable_exists = false
