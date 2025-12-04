@@ -26,6 +26,7 @@ using ChainRulesCore
 using ForwardDiff
 using HDF5
 using LoopVectorization
+using ExponentialUtilities  # For Krylov-based exponential integrators
 
 # Custom PencilConfig struct for pencil array configuration
 struct PencilConfig

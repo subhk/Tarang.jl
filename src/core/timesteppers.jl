@@ -7,6 +7,7 @@ Translated from dedalus/core/timesteppers.py
 using LinearAlgebra
 using LinearAlgebra: BLAS
 using LoopVectorization  # For SIMD loops
+using ExponentialUtilities  # For Krylov-based φ functions
 
 abstract type TimeStepper end
 
@@ -120,24 +121,97 @@ function _phi_functions_pade(z)
     return exp_z, φ₁, φ₂
 end
 
-function _phi_functions_krylov(z, krylov_dim::Int=30)
-    """Krylov subspace approximation for φ functions (simplified version)"""
-    I = Matrix{eltype(z)}(LinearAlgebra.I, size(z, 1), size(z, 1))
+function _phi_functions_krylov(A::AbstractMatrix, krylov_dim::Int=30)
+    """
+    Krylov subspace approximation for φ functions using ExponentialUtilities.jl.
 
-    # For now, fall back to direct computation with warning
-    # In practice, would implement Arnoldi/Lanczos methods
-    @warn "Krylov methods not fully implemented, using direct computation"
+    Uses the phiv function which computes [φ₀(A)b, φ₁(A)b, ..., φₖ(A)b] efficiently
+    via Krylov subspace methods (Arnoldi iteration).
+
+    For matrix φ functions, we compute φₖ(A) by applying to identity vectors.
+    """
+    n = size(A, 1)
+    I_mat = Matrix{eltype(A)}(LinearAlgebra.I, n, n)
+
+    # Allocate result matrices
+    exp_A = similar(I_mat)
+    φ₁ = similar(I_mat)
+    φ₂ = similar(I_mat)
+
+    # Use ExponentialUtilities.phiv to compute φ functions column by column
+    # phiv(t, A, b, k) returns [φ₀(tA)b, φ₁(tA)b, ..., φₖ(tA)b]
+    # We use t=1 since A already contains the timestep scaling
 
     try
-        exp_z = exp(z)
-        φ₁ = inv(z) * (exp_z - I)
-        φ₂ = inv(z^2) * (exp_z - I - z)
-        return exp_z, φ₁, φ₂
+        for j in 1:n
+            # Unit vector e_j
+            e_j = zeros(eltype(A), n)
+            e_j[j] = one(eltype(A))
+
+            # Compute φ functions applied to e_j using Krylov methods
+            # phiv returns a matrix where columns are φ₀(A)e_j, φ₁(A)e_j, φ₂(A)e_j
+            phi_result = phiv(1.0, A, e_j, 2; m=min(krylov_dim, n))
+
+            # Extract columns for each φ function
+            exp_A[:, j] = phi_result[:, 1]  # φ₀(A)e_j = exp(A)e_j
+            φ₁[:, j] = phi_result[:, 2]     # φ₁(A)e_j
+            φ₂[:, j] = phi_result[:, 3]     # φ₂(A)e_j
+        end
+
+        return exp_A, φ₁, φ₂
+
     catch e
-        @error "All φ function computations failed: $e"
-        # Return identity matrices as last resort
-        return I, I, I/2
+        @warn "Krylov φ computation failed: $e, falling back to direct method"
+        # Fallback to direct computation
+        try
+            exp_A = exp(A)
+            φ₁ = (exp_A - I_mat) * inv(A)
+            φ₂ = (exp_A - I_mat - A) * inv(A^2)
+            return exp_A, φ₁, φ₂
+        catch e2
+            @error "All φ function computations failed: $e2"
+            return I_mat, I_mat, I_mat/2
+        end
     end
+end
+
+function phiv_vector(t::Real, A::AbstractMatrix, b::AbstractVector, k::Int; m::Int=30)
+    """
+    Compute [φ₀(tA)b, φ₁(tA)b, ..., φₖ(tA)b] using Krylov subspace methods.
+
+    This is a convenience wrapper around ExponentialUtilities.phiv for
+    computing φ-function vector products efficiently.
+
+    Arguments:
+    - t: Time scaling factor
+    - A: Matrix (typically the linear operator L)
+    - b: Vector to apply φ functions to
+    - k: Maximum φ index to compute (computes φ₀ through φₖ)
+    - m: Krylov subspace dimension (default 30)
+
+    Returns:
+    - Matrix of size (n, k+1) where column j+1 contains φⱼ(tA)b
+    """
+    return phiv(t, A, b, k; m=min(m, length(b)))
+end
+
+function expv_krylov(t::Real, A::AbstractMatrix, b::AbstractVector; m::Int=30)
+    """
+    Compute exp(tA)b using Krylov subspace methods.
+
+    More efficient than computing exp(tA) and then multiplying by b,
+    especially for large sparse matrices.
+
+    Arguments:
+    - t: Time scaling factor
+    - A: Matrix (typically the linear operator L)
+    - b: Vector to apply exponential to
+    - m: Krylov subspace dimension (default 30)
+
+    Returns:
+    - Vector exp(tA)b
+    """
+    return expv(t, A, b; m=min(m, length(b)))
 end
 
 # Explicit Runge-Kutta methods

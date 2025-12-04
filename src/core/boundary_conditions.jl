@@ -402,10 +402,131 @@ function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, d
 end
 
 function get_boundary_basis(manager::BoundaryConditionManager, coordinate::String)
-    """Get basis for boundary along specified coordinate"""
-    # This would need to be implemented based on the domain structure
-    # For now, return nothing as placeholder
-    return nothing
+    """
+    Get basis for boundary along specified coordinate.
+
+    For a boundary condition along a given coordinate, the tau field lives on
+    a lower-dimensional space (the boundary). This function returns the appropriate
+    basis for that boundary space.
+
+    For example:
+    - In 2D with bases (Fourier_x, Chebyshev_y), a BC along "y" needs a Fourier_x basis
+    - In 3D with bases (Fourier_x, Fourier_y, Chebyshev_z), a BC along "z" needs (Fourier_x, Fourier_y)
+
+    Arguments:
+    - manager: The BoundaryConditionManager containing coordinate/basis information
+    - coordinate: The coordinate name along which the BC is applied (e.g., "x", "y", "z")
+
+    Returns:
+    - Basis or tuple of bases for the boundary, or nothing if not found
+    """
+
+    # Check if coordinate info has been registered
+    if !haskey(manager.coordinate_info, "bases") || !haskey(manager.coordinate_info, "coordinates")
+        @debug "No coordinate/basis info registered in BoundaryConditionManager"
+        return nothing
+    end
+
+    bases = manager.coordinate_info["bases"]
+    coordinates = manager.coordinate_info["coordinates"]
+
+    if isempty(bases) || isempty(coordinates)
+        return nothing
+    end
+
+    # Find which axis corresponds to this coordinate
+    coord_axis = nothing
+    for (i, coord) in enumerate(coordinates)
+        coord_name = isa(coord, String) ? coord :
+                     (hasfield(typeof(coord), :name) ? coord.name : string(coord))
+        if coord_name == coordinate
+            coord_axis = i
+            break
+        end
+    end
+
+    if coord_axis === nothing
+        @warn "Coordinate '$coordinate' not found in registered coordinates: $coordinates"
+        return nothing
+    end
+
+    # Get bases for all OTHER coordinates (the boundary is the remaining dimensions)
+    boundary_bases = []
+    for (i, basis) in enumerate(bases)
+        if i != coord_axis
+            push!(boundary_bases, basis)
+        end
+    end
+
+    # Return appropriate result based on dimensionality
+    if isempty(boundary_bases)
+        # 1D case: boundary is a point, no basis needed
+        # Return a trivial constant basis or nothing
+        return nothing
+    elseif length(boundary_bases) == 1
+        # 2D case: boundary is 1D
+        return boundary_bases[1]
+    else
+        # 3D+ case: boundary is multi-dimensional
+        return tuple(boundary_bases...)
+    end
+end
+
+function register_coordinate_info!(manager::BoundaryConditionManager,
+                                   coordinates::Vector, bases::Vector)
+    """
+    Register coordinate and basis information for boundary basis lookup.
+
+    Arguments:
+    - manager: The BoundaryConditionManager
+    - coordinates: Vector of coordinate names or Coordinate objects (e.g., ["x", "y", "z"])
+    - bases: Vector of Basis objects corresponding to each coordinate
+    """
+    if length(coordinates) != length(bases)
+        throw(ArgumentError("Number of coordinates ($(length(coordinates))) must match number of bases ($(length(bases)))"))
+    end
+
+    manager.coordinate_info["coordinates"] = coordinates
+    manager.coordinate_info["bases"] = bases
+
+    @debug "Registered $(length(coordinates)) coordinates with bases for boundary conditions"
+    return manager
+end
+
+function register_domain_info!(manager::BoundaryConditionManager, domain::Domain)
+    """
+    Register domain information for boundary basis lookup.
+
+    Extracts coordinate and basis information from a Domain object.
+    """
+    if !hasfield(typeof(domain), :bases) || domain.bases === nothing
+        @warn "Domain has no bases information"
+        return manager
+    end
+
+    bases = collect(domain.bases)
+
+    # Extract coordinate names from bases
+    coordinates = String[]
+    for basis in bases
+        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :coordsys)
+            coordsys = basis.meta.coordsys
+            if hasfield(typeof(coordsys), :names) && !isempty(coordsys.names)
+                push!(coordinates, coordsys.names[1])
+            else
+                push!(coordinates, "coord_$(length(coordinates)+1)")
+            end
+        else
+            push!(coordinates, "coord_$(length(coordinates)+1)")
+        end
+    end
+
+    manager.coordinate_info["coordinates"] = coordinates
+    manager.coordinate_info["bases"] = bases
+    manager.coordinate_info["domain"] = domain
+
+    @debug "Registered domain with $(length(bases)) bases for boundary conditions"
+    return manager
 end
 
 # Lift operator support
