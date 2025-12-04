@@ -151,11 +151,225 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
 end
 
 function setup_1d_nonlinear_transforms!(evaluator::NonlinearEvaluator)
-    """Fallback 1D transform setup"""
-    
-    @debug "Using 1D fallback for nonlinear transforms"
-    # This would use regular FFTW for 1D parallelization
-    # Implementation would depend on the specific 1D parallel strategy
+    """
+    Setup 1D FFT transforms for nonlinear term evaluation.
+
+    This is the fallback for when only 1D domain decomposition is used
+    (single process or 1D process mesh). Uses FFTW directly instead of
+    PencilFFTs since there's no need for pencil transposes.
+
+    For 1D parallelization:
+    - The domain is split along one dimension only
+    - FFTs along the local (non-decomposed) dimensions use FFTW
+    - FFTs along the decomposed dimension require MPI communication
+
+    This setup creates:
+    - Local FFTW plans for each common array size
+    - Scratch arrays for in-place transforms
+    - Dealiased array configurations
+    """
+
+    dist = evaluator.dist
+    @info "Setting up 1D nonlinear transforms"
+
+    # Common 1D sizes for spectral methods
+    common_1d_sizes = [32, 64, 128, 256, 512, 1024]
+
+    # Common 2D shapes (for 2D problems with 1D decomposition)
+    common_2d_shapes = [(64, 64), (128, 64), (128, 128), (256, 128), (256, 256), (512, 256)]
+
+    # Common 3D shapes (for 3D problems with 1D decomposition)
+    common_3d_shapes = [(64, 64, 64), (128, 64, 64), (128, 128, 64), (128, 128, 128)]
+
+    # Setup 1D transforms
+    for n in common_1d_sizes
+        setup_1d_fftw_plans!(evaluator, n)
+    end
+
+    # Setup 2D transforms (1D decomposition means one axis is fully local)
+    for shape in common_2d_shapes
+        setup_2d_fftw_plans!(evaluator, shape)
+    end
+
+    # Setup 3D transforms
+    for shape in common_3d_shapes
+        setup_3d_fftw_plans!(evaluator, shape)
+    end
+
+    @info "1D nonlinear transform setup complete"
+    @info "  MPI size: $(dist.size)"
+    @info "  Dealiasing factor: $(evaluator.dealiasing_factor)"
+end
+
+function setup_1d_fftw_plans!(evaluator::NonlinearEvaluator, n::Int)
+    """Setup FFTW plans for 1D transforms of size n."""
+
+    shape_key = "1d_$n"
+
+    if haskey(evaluator.pencil_transforms, shape_key)
+        return  # Already configured
+    end
+
+    try
+        # Dealiased size using 3/2 rule
+        n_dealias = ceil(Int, n * evaluator.dealiasing_factor)
+
+        # Create scratch arrays
+        scratch_real = zeros(Float64, n_dealias)
+        scratch_complex = zeros(ComplexF64, div(n_dealias, 2) + 1)
+
+        # Create FFTW plans
+        # Real-to-complex forward transform
+        forward_plan = FFTW.plan_rfft(scratch_real; flags=FFTW.MEASURE)
+
+        # Complex-to-real backward transform
+        backward_plan = FFTW.plan_brfft(scratch_complex, n_dealias; flags=FFTW.MEASURE)
+
+        evaluator.pencil_transforms[shape_key] = Dict(
+            "type" => :fftw_1d,
+            "size" => n,
+            "dealiased_size" => n_dealias,
+            "forward_plan" => forward_plan,
+            "backward_plan" => backward_plan,
+            "scratch_real" => scratch_real,
+            "scratch_complex" => scratch_complex
+        )
+
+        @debug "Created 1D FFTW plans for size $n (dealiased: $n_dealias)"
+
+    catch e
+        @warn "Failed to create 1D FFTW plans for size $n: $e"
+    end
+end
+
+function setup_2d_fftw_plans!(evaluator::NonlinearEvaluator, shape::Tuple{Int, Int})
+    """Setup FFTW plans for 2D transforms."""
+
+    shape_key = "2d_$(shape[1])x$(shape[2])"
+
+    if haskey(evaluator.pencil_transforms, shape_key)
+        return  # Already configured
+    end
+
+    try
+        # Dealiased sizes
+        nx_dealias = ceil(Int, shape[1] * evaluator.dealiasing_factor)
+        ny_dealias = ceil(Int, shape[2] * evaluator.dealiasing_factor)
+        dealias_shape = (nx_dealias, ny_dealias)
+
+        # Create scratch arrays
+        scratch_real = zeros(Float64, dealias_shape)
+        scratch_complex = zeros(ComplexF64, div(nx_dealias, 2) + 1, ny_dealias)
+
+        # Create FFTW plans for 2D real-to-complex transforms
+        forward_plan = FFTW.plan_rfft(scratch_real; flags=FFTW.MEASURE)
+        backward_plan = FFTW.plan_brfft(scratch_complex, nx_dealias; flags=FFTW.MEASURE)
+
+        evaluator.pencil_transforms[shape_key] = Dict(
+            "type" => :fftw_2d,
+            "shape" => shape,
+            "dealiased_shape" => dealias_shape,
+            "forward_plan" => forward_plan,
+            "backward_plan" => backward_plan,
+            "scratch_real" => scratch_real,
+            "scratch_complex" => scratch_complex
+        )
+
+        @debug "Created 2D FFTW plans for shape $shape (dealiased: $dealias_shape)"
+
+    catch e
+        @warn "Failed to create 2D FFTW plans for shape $shape: $e"
+    end
+end
+
+function setup_3d_fftw_plans!(evaluator::NonlinearEvaluator, shape::Tuple{Int, Int, Int})
+    """Setup FFTW plans for 3D transforms."""
+
+    shape_key = "3d_$(shape[1])x$(shape[2])x$(shape[3])"
+
+    if haskey(evaluator.pencil_transforms, shape_key)
+        return  # Already configured
+    end
+
+    try
+        # Dealiased sizes
+        nx_dealias = ceil(Int, shape[1] * evaluator.dealiasing_factor)
+        ny_dealias = ceil(Int, shape[2] * evaluator.dealiasing_factor)
+        nz_dealias = ceil(Int, shape[3] * evaluator.dealiasing_factor)
+        dealias_shape = (nx_dealias, ny_dealias, nz_dealias)
+
+        # Create scratch arrays
+        scratch_real = zeros(Float64, dealias_shape)
+        scratch_complex = zeros(ComplexF64, div(nx_dealias, 2) + 1, ny_dealias, nz_dealias)
+
+        # Create FFTW plans for 3D real-to-complex transforms
+        forward_plan = FFTW.plan_rfft(scratch_real; flags=FFTW.MEASURE)
+        backward_plan = FFTW.plan_brfft(scratch_complex, nx_dealias; flags=FFTW.MEASURE)
+
+        evaluator.pencil_transforms[shape_key] = Dict(
+            "type" => :fftw_3d,
+            "shape" => shape,
+            "dealiased_shape" => dealias_shape,
+            "forward_plan" => forward_plan,
+            "backward_plan" => backward_plan,
+            "scratch_real" => scratch_real,
+            "scratch_complex" => scratch_complex
+        )
+
+        @debug "Created 3D FFTW plans for shape $shape (dealiased: $dealias_shape)"
+
+    catch e
+        @warn "Failed to create 3D FFTW plans for shape $shape: $e"
+    end
+end
+
+function get_nonlinear_transform(evaluator::NonlinearEvaluator, shape::Tuple)
+    """
+    Get the appropriate transform configuration for a given shape.
+
+    Automatically selects between PencilFFT (for multi-D parallelization)
+    and FFTW (for 1D parallelization or serial) based on what's available.
+    """
+    ndims_shape = length(shape)
+
+    # Try to find exact match first
+    if ndims_shape == 1
+        shape_key = "1d_$(shape[1])"
+    elseif ndims_shape == 2
+        shape_key = "2d_$(shape[1])x$(shape[2])"
+        # Also try PencilFFT format
+        pencil_key = "$(shape[1])x$(shape[2])"
+    elseif ndims_shape == 3
+        shape_key = "3d_$(shape[1])x$(shape[2])x$(shape[3])"
+        pencil_key = "$(shape[1])x$(shape[2])x$(shape[3])"
+    else
+        @warn "Unsupported shape dimension: $ndims_shape"
+        return nothing
+    end
+
+    # Check for FFTW-based transform
+    if haskey(evaluator.pencil_transforms, shape_key)
+        return evaluator.pencil_transforms[shape_key]
+    end
+
+    # Check for PencilFFT-based transform (2D/3D only)
+    if ndims_shape >= 2 && haskey(evaluator.pencil_transforms, pencil_key)
+        return evaluator.pencil_transforms[pencil_key]
+    end
+
+    # No exact match - try to create one on the fly
+    @debug "Creating transform on-the-fly for shape $shape"
+
+    if ndims_shape == 1
+        setup_1d_fftw_plans!(evaluator, shape[1])
+    elseif ndims_shape == 2
+        setup_2d_fftw_plans!(evaluator, shape)
+    elseif ndims_shape == 3
+        setup_3d_fftw_plans!(evaluator, shape)
+    end
+
+    # Return the newly created transform
+    return get(evaluator.pencil_transforms, shape_key, nothing)
 end
 
 # Main nonlinear evaluation functions
@@ -427,26 +641,253 @@ end
 
 
 function apply_spectral_cutoff!(data::AbstractArray, cutoffs::Tuple)
-    """Apply spectral cutoff to remove high-frequency modes"""
-    
-    # This is a simplified implementation
-    # Production code would need proper indexing for different array layouts
-    
+    """
+    Apply spectral cutoff to remove high-frequency modes (dealiasing).
+
+    For spectral data stored in standard FFT layout:
+    - Positive frequencies: indices 1 to N/2+1
+    - Negative frequencies: indices N/2+2 to N (for complex FFT)
+
+    This function zeros out modes beyond the cutoff wavenumber in each dimension.
+    Used for dealiasing in nonlinear term evaluation.
+
+    Arguments:
+    - data: Complex spectral coefficient array
+    - cutoffs: Tuple of cutoff wavenumbers for each dimension
+
+    The cutoff is applied symmetrically: modes with |k| > cutoff are zeroed.
+    """
+    ndims_data = ndims(data)
     shape = size(data)
-    for (i, cutoff) in enumerate(cutoffs)
-        if i <= length(shape) && cutoff < shape[i]
-            # Zero out high-frequency modes beyond cutoff
-            # Actual implementation would depend on specific array layout and FFT convention
-            @debug "Applying spectral cutoff along dimension $i: $cutoff / $(shape[i])"
+
+    if ndims_data == 1
+        apply_1d_spectral_cutoff!(data, 1, cutoffs[1])
+    elseif ndims_data == 2
+        apply_2d_spectral_cutoff!(data, cutoffs)
+    elseif ndims_data == 3
+        apply_3d_spectral_cutoff!(data, cutoffs)
+    else
+        # General N-dimensional case
+        apply_nd_spectral_cutoff!(data, cutoffs)
+    end
+end
+
+function apply_1d_spectral_cutoff!(data::AbstractVector, axis::Int, cutoff::Int)
+    """
+    Apply 1D spectral cutoff along a vector.
+
+    For FFT layout with N points:
+    - Index 1: k=0 (DC component)
+    - Indices 2 to N/2+1: positive frequencies k=1 to N/2
+    - Indices N/2+2 to N: negative frequencies k=-(N/2-1) to -1
+
+    Modes with |k| > cutoff are set to zero.
+    """
+    n = length(data)
+    if cutoff >= div(n, 2)
+        return  # No cutoff needed
+    end
+
+    # Zero positive high frequencies: indices cutoff+2 to N/2+1
+    # (index 1 is k=0, index 2 is k=1, ..., index cutoff+1 is k=cutoff)
+    half_n = div(n, 2)
+    for i in (cutoff + 2):(half_n + 1)
+        if i <= n
+            data[i] = zero(eltype(data))
+        end
+    end
+
+    # Zero negative high frequencies: indices N/2+2 to N-cutoff
+    # Negative frequencies are stored in reverse order at the end
+    for i in (half_n + 2):(n - cutoff)
+        if i <= n
+            data[i] = zero(eltype(data))
         end
     end
 end
 
 function apply_1d_spectral_cutoff!(data::AbstractArray, axis::Int, cutoff::Int)
-    """Apply 1D spectral cutoff along specified axis"""
-    
-    # Simplified implementation - production code would handle proper indexing
-    @debug "Applying 1D spectral cutoff: axis=$axis, cutoff=$cutoff"
+    """
+    Apply 1D spectral cutoff along specified axis of multi-dimensional array.
+    """
+    shape = size(data)
+    n = shape[axis]
+
+    if cutoff >= div(n, 2)
+        return  # No cutoff needed
+    end
+
+    half_n = div(n, 2)
+
+    # Create index ranges for slicing
+    # Zero out positive high frequencies
+    for k in (cutoff + 2):(half_n + 1)
+        if k <= n
+            indices = ntuple(ndims(data)) do d
+                d == axis ? k : Colon()
+            end
+            data[indices...] .= zero(eltype(data))
+        end
+    end
+
+    # Zero out negative high frequencies
+    for k in (half_n + 2):(n - cutoff)
+        if k <= n
+            indices = ntuple(ndims(data)) do d
+                d == axis ? k : Colon()
+            end
+            data[indices...] .= zero(eltype(data))
+        end
+    end
+end
+
+function apply_2d_spectral_cutoff!(data::AbstractMatrix, cutoffs::Tuple)
+    """
+    Apply 2D spectral cutoff for dealiasing.
+
+    Zeros out modes where |kx| > cutoffs[1] or |ky| > cutoffs[2].
+    """
+    nx, ny = size(data)
+    kx_cut = min(cutoffs[1], div(nx, 2))
+    ky_cut = length(cutoffs) >= 2 ? min(cutoffs[2], div(ny, 2)) : div(ny, 2)
+
+    half_nx = div(nx, 2)
+    half_ny = div(ny, 2)
+
+    for j in 1:ny
+        # Determine if this y-frequency is within cutoff
+        ky = j <= half_ny + 1 ? j - 1 : j - ny - 1
+        y_in_range = abs(ky) <= ky_cut
+
+        for i in 1:nx
+            # Determine if this x-frequency is within cutoff
+            kx = i <= half_nx + 1 ? i - 1 : i - nx - 1
+            x_in_range = abs(kx) <= kx_cut
+
+            # Zero out if either frequency is outside cutoff
+            if !x_in_range || !y_in_range
+                data[i, j] = zero(eltype(data))
+            end
+        end
+    end
+end
+
+function apply_3d_spectral_cutoff!(data::AbstractArray{T, 3}, cutoffs::Tuple) where T
+    """
+    Apply 3D spectral cutoff for dealiasing.
+
+    Zeros out modes where |kx| > cutoffs[1], |ky| > cutoffs[2], or |kz| > cutoffs[3].
+    """
+    nx, ny, nz = size(data)
+    kx_cut = min(cutoffs[1], div(nx, 2))
+    ky_cut = length(cutoffs) >= 2 ? min(cutoffs[2], div(ny, 2)) : div(ny, 2)
+    kz_cut = length(cutoffs) >= 3 ? min(cutoffs[3], div(nz, 2)) : div(nz, 2)
+
+    half_nx = div(nx, 2)
+    half_ny = div(ny, 2)
+    half_nz = div(nz, 2)
+
+    for k in 1:nz
+        kz = k <= half_nz + 1 ? k - 1 : k - nz - 1
+        z_in_range = abs(kz) <= kz_cut
+
+        for j in 1:ny
+            ky = j <= half_ny + 1 ? j - 1 : j - ny - 1
+            y_in_range = abs(ky) <= ky_cut
+
+            for i in 1:nx
+                kx = i <= half_nx + 1 ? i - 1 : i - nx - 1
+                x_in_range = abs(kx) <= kx_cut
+
+                if !x_in_range || !y_in_range || !z_in_range
+                    data[i, j, k] = zero(T)
+                end
+            end
+        end
+    end
+end
+
+function apply_nd_spectral_cutoff!(data::AbstractArray, cutoffs::Tuple)
+    """
+    Apply N-dimensional spectral cutoff (general case).
+    """
+    shape = size(data)
+    ndims_data = ndims(data)
+
+    # Extend cutoffs to match dimensions
+    actual_cutoffs = ntuple(ndims_data) do d
+        d <= length(cutoffs) ? min(cutoffs[d], div(shape[d], 2)) : div(shape[d], 2)
+    end
+
+    half_shape = div.(shape, 2)
+
+    for I in CartesianIndices(data)
+        # Check if any frequency is outside cutoff
+        outside_cutoff = false
+
+        for d in 1:ndims_data
+            idx = I[d]
+            n = shape[d]
+            half_n = half_shape[d]
+
+            # Convert index to wavenumber
+            k = idx <= half_n + 1 ? idx - 1 : idx - n - 1
+
+            if abs(k) > actual_cutoffs[d]
+                outside_cutoff = true
+                break
+            end
+        end
+
+        if outside_cutoff
+            data[I] = zero(eltype(data))
+        end
+    end
+end
+
+function apply_spherical_spectral_cutoff!(data::AbstractArray, k_max::Int)
+    """
+    Apply spherical spectral cutoff: zero modes with |k| > k_max.
+
+    This is useful for isotropic dealiasing where the cutoff is based
+    on the magnitude of the wavevector rather than individual components.
+
+    |k|² = kx² + ky² + kz² (for 3D)
+    """
+    shape = size(data)
+    ndims_data = ndims(data)
+    half_shape = div.(shape, 2)
+    k_max_sq = k_max^2
+
+    for I in CartesianIndices(data)
+        # Compute |k|²
+        k_sq = 0
+        for d in 1:ndims_data
+            idx = I[d]
+            n = shape[d]
+            half_n = half_shape[d]
+            k = idx <= half_n + 1 ? idx - 1 : idx - n - 1
+            k_sq += k^2
+        end
+
+        if k_sq > k_max_sq
+            data[I] = zero(eltype(data))
+        end
+    end
+end
+
+function get_dealiasing_cutoffs(shape::Tuple, dealiasing_factor::Float64=1.5)
+    """
+    Compute spectral cutoffs for dealiasing.
+
+    For the 3/2 rule (dealiasing_factor=1.5):
+    cutoff = N / dealiasing_factor = 2N/3
+
+    This ensures that when two fields with max wavenumber k_max are multiplied,
+    the product (with max wavenumber 2*k_max) doesn't alias back into the
+    resolved modes.
+    """
+    return tuple([floor(Int, n / dealiasing_factor) for n in shape]...)
 end
 
 # Utility functions for PencilArray compatibility
