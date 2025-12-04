@@ -264,17 +264,8 @@ function Field(dist::Distributor; name::String="field", bases::Tuple{Vararg{Basi
     return field
 end
 
-function VectorField(dist::Distributor, coordsys::CoordinateSystem; name::String="vector", bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
-    """Create a vector field"""
-    field = VectorField(dist, coordsys, name, bases, dtype)
-    return field
-end
-
-function TensorField(dist::Distributor, coordsys::CoordinateSystem; name::String="tensor", bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
-    """Create a tensor field"""
-    field = TensorField(dist, coordsys, name, bases, dtype)
-    return field
-end
+# Note: VectorField and TensorField convenience constructors are defined in field.jl
+# to avoid conflict with the struct definitions (functions and structs cannot share names in Julia)
 
 function local_grids(dist::Distributor, bases::Vararg{Basis}; scales=nothing)
     """
