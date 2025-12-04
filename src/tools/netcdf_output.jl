@@ -716,11 +716,11 @@ function add_mean_task!(handler::NetCDFFileHandler, field; dims=nothing, name=no
     # Create postprocess function for mean computation
     if dims === nothing
         # Global mean
-        postprocess = data -> [mean(data)]
+        postprocess = data -> [netcdf_mean(data)]
     else
         # Mean over specified dimensions
         dim_indices = resolve_dimension_indices(field, dims)
-        postprocess = data -> dropdims(mean(data, dims=dim_indices), dims=dim_indices)
+        postprocess = data -> dropdims(netcdf_mean(data, dims=dim_indices), dims=dim_indices)
     end
 
     return add_task!(handler, field; name=name, postprocess=postprocess)
@@ -789,7 +789,7 @@ function add_profile_task!(handler::NetCDFFileHandler, field; dim=nothing, name=
         result = data
         for d in ndims_data:-1:1
             if d != keep_dim
-                result = dropdims(mean(result, dims=d), dims=d)
+                result = dropdims(netcdf_mean(result, dims=d), dims=d)
             end
         end
         return result
@@ -837,10 +837,10 @@ function add_rms_task!(handler::NetCDFFileHandler, field; dims=nothing, name=not
     end
 
     if dims === nothing
-        postprocess = data -> [sqrt(mean(data .^ 2))]
+        postprocess = data -> [sqrt(netcdf_mean(data .^ 2))]
     else
         dim_indices = resolve_dimension_indices(field, dims)
-        postprocess = data -> sqrt.(dropdims(mean(data .^ 2, dims=dim_indices), dims=dim_indices))
+        postprocess = data -> sqrt.(dropdims(netcdf_mean(data .^ 2, dims=dim_indices), dims=dim_indices))
     end
 
     return add_task!(handler, field; name=name, postprocess=postprocess)
@@ -1058,24 +1058,24 @@ end
 # ============================================================================
 
 # Simple mean implementation to avoid dependency
-function mean(x)
-    return sum(x) / length(x)
-end
-
-function mean(x; dims)
-    return sum(x, dims=dims) ./ size(x, dims...)
+function netcdf_mean(x; dims=nothing)
+    if dims === nothing
+        return sum(x) / length(x)
+    else
+        return sum(x, dims=dims) ./ size(x, dims...)
+    end
 end
 
 # Simple variance implementation
-function var(x)
-    m = mean(x)
-    return sum((x .- m) .^ 2) / (length(x) - 1)
-end
-
-function var(x; dims)
-    m = mean(x, dims=dims)
-    n = prod(size(x, d) for d in dims)
-    return sum((x .- m) .^ 2, dims=dims) ./ (n - 1)
+function netcdf_var(x; dims=nothing)
+    if dims === nothing
+        m = netcdf_mean(x)
+        return sum((x .- m) .^ 2) / (length(x) - 1)
+    else
+        m = netcdf_mean(x, dims=dims)
+        n = prod(size(x, d) for d in dims)
+        return sum((x .- m) .^ 2, dims=dims) ./ (n - 1)
+    end
 end
 
 # ============================================================================

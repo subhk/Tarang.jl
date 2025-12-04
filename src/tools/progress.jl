@@ -38,8 +38,9 @@ struct ProgressIterator{T}
     prog::ProgressLogger
 end
 
-function ProgressIterator(items::Vector, writer::Function, prog::ProgressLogger)
-    return ProgressIterator{eltype(items)}(items, writer, prog)
+# Outer constructor that infers the type parameter from the items vector
+function ProgressIterator(items::Vector{T}, writer::Function, prog::ProgressLogger) where T
+    return ProgressIterator{T}(items, writer, prog)
 end
 
 function log_progress(iterable, logger::Module=Logging, level::LogLevel=Logging.Info;
@@ -100,13 +101,15 @@ function build_message(prog::ProgressLogger, completed::Int, elapsed::Float64)
     return string(
         prog.desc, " ",
         completed, "/", prog.total, " (~", percent, "%) ",
-        "Elapsed: ", format_time(elapsed),
-        ", Remaining: ", format_time(remaining),
+        "Elapsed: ", format_progress_time(elapsed),
+        ", Remaining: ", format_progress_time(remaining),
         ", Rate: ", rate > 0 ? @sprintf("%.2e/s", rate) : "0/s"
     )
 end
 
-function format_time(seconds::Float64)
+# format_time is defined in general.jl
+# This local version handles edge cases for progress display
+function format_progress_time(seconds::Float64)
     if !isfinite(seconds) || seconds < 0
         return "?"
     end
