@@ -3,7 +3,7 @@ using Tarang
 
 @testset "Plot data extraction" begin
     coords1 = CartesianCoordinates("x")
-    dist1 = Distributor(coords1; mesh=(1,), dtype=Float64, device="cpu")
+    dist1 = Distributor(coords1; mesh=(1,), dtype=Float64)
     domain1 = Tarang.create_fourier_domain(dist1, 2π, 8)
     field1 = ScalarField(dist1, "phi", domain1.bases, Float64)
     Tarang.ensure_layout!(field1, :g)
@@ -15,7 +15,7 @@ using Tarang
     @test plot1.title == "phi"
 
     coords2 = CartesianCoordinates("x", "y")
-    dist2 = Distributor(coords2; mesh=(1, 1), dtype=Float64, device="cpu")
+    dist2 = Distributor(coords2; mesh=(1, 1), dtype=Float64)
     domain2 = Tarang.create_2d_periodic_domain(dist2, 2π, 2π, 4, 4)
     field2 = ScalarField(dist2, "psi", domain2.bases, Float64)
     Tarang.ensure_layout!(field2, :g)

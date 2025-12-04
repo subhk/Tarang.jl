@@ -3,7 +3,7 @@ using Tarang
 
 @testset "InitialValueSolver minimal workflow" begin
     coords = CartesianCoordinates("x")
-    dist = Distributor(coords; mesh=(1,), dtype=Float64, device="cpu")
+    dist = Distributor(coords; mesh=(1,), dtype=Float64)
     basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
     field = ScalarField(dist, "u", (basis,), Float64)
 

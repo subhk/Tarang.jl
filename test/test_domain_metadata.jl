@@ -3,7 +3,7 @@ using Tarang
 
 @testset "Domain metadata basics" begin
     coords = CartesianCoordinates("x", "y")
-    dist = Distributor(coords; mesh=(1, 1), dtype=Float64, device="cpu")
+    dist = Distributor(coords; mesh=(1, 1), dtype=Float64)
 
     x = coords["x"]
     y = coords["y"]
@@ -32,7 +32,7 @@ end
 
 @testset "Polar and spherical metadata" begin
     polar = PolarCoordinates("phi", "r")
-    polar_dist = Distributor(polar; mesh=(1, 1), dtype=Float64, device="cpu")
+    polar_dist = Distributor(polar; mesh=(1, 1), dtype=Float64)
     disk = DiskBasis(polar["phi"]; radius=1.0, size=10, dealias=(1.0, 1.25))
     disk_domain = Domain(polar_dist, (disk,))
 
@@ -46,7 +46,7 @@ end
     @test mode_dependence(annulus_domain) == (false, true)
 
     sphere_coords = SphericalCoordinates("phi", "theta", "r")
-    sphere_dist = Distributor(sphere_coords; mesh=(1, 1, 1), dtype=Float64, device="cpu")
+    sphere_dist = Distributor(sphere_coords; mesh=(1, 1, 1), dtype=Float64)
     sphere_basis = SphereBasis(sphere_coords["phi"]; radius=1.0, size=8, dealias=(1.0, 1.0, 1.0))
     sphere_domain = Domain(sphere_dist, (sphere_basis,))
 

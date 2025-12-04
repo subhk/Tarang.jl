@@ -4,7 +4,7 @@ using NetCDF
 
 function simple_1d_setup()
     coords = CartesianCoordinates("z")
-    dist = Distributor(coords; mesh=(1,), dtype=Float64, device="cpu")
+    dist = Distributor(coords; mesh=(1,), dtype=Float64)
     basis = ChebyshevT(coords["z"]; size=8, bounds=(0.0, 1.0))
     return coords, dist, basis
 end
@@ -48,7 +48,7 @@ end
     tmp = mktempdir()
     cd(tmp) do
         coords = CartesianCoordinates("x")
-        dist = Distributor(coords; mesh=(1,), dtype=Float64, device="cpu")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2 * pi))
         u = ScalarField(dist, "u", (basis,), Float64)
 
@@ -77,7 +77,7 @@ end
     tmp = mktempdir()
     cd(tmp) do
         coords = CartesianCoordinates("x")
-        dist = Distributor(coords; mesh=(1,), dtype=Float64, device="cpu")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
         basis = RealFourier(coords["x"]; size=4, bounds=(0.0, 1.0))
         u = ScalarField(dist, "u", (basis,), Float64)
         ensure_layout!(u, :g)

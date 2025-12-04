@@ -161,13 +161,11 @@ function __init__()
     if !MPI.Initialized()
         MPI.Init()
     end
-    
-    # Warn about threading like Dedalus
-    omp_num_threads = get(ENV, "OMP_NUM_THREADS", nothing)
-    if omp_num_threads != "1"
-        @warn "Threading has not been disabled. This may massively degrade Tarang performance."
-        @warn "We strongly suggest setting the \"OMP_NUM_THREADS\" environment variable to \"1\"."
-    end
+
+    # Note: OMP_NUM_THREADS controls OpenMP threads in BLAS/LAPACK libraries (OpenBLAS, MKL).
+    # When using MPI parallelism, it's recommended to set OMP_NUM_THREADS=1 to avoid
+    # oversubscription. Julia's native threading (Threads.@threads) is controlled by
+    # JULIA_NUM_THREADS and works independently.
 end
 
 end # module
