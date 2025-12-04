@@ -357,14 +357,12 @@ function integration_weights(domain::Domain)
             dx = L / basis.meta.size
             device_fill(dx, (basis.meta.size,), domain)
         end
-        
-        # Cache the weights on GPU
+
+        # Cache the weights
         domain.integration_weights_cache[cache_key] = w
-        push!(weights, Array(w))  # Return CPU copy for compatibility
+        push!(weights, Array(w))
     end
-    
-    # Synchronize GPU operations
-    
+
     # Update performance statistics
     domain.performance_stats.total_time += time() - start_time
     domain.performance_stats.weight_computations += 1

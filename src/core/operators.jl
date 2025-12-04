@@ -392,16 +392,12 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
     
     # Get device configuration from the field
     
-    # Ensure data is on correct device
-    operand.data_c = operand.data_c
-    result.data_c = result.data_c
-    
     if isa(basis, RealFourier)
         # Real Fourier case: use Dedalus approach with 2x2 group matrices
-        evaluate_real_fourier_derivative_dedalus!(result, operand, axis, order, N, L, device_config)
+        evaluate_real_fourier_derivative_dedalus!(result, operand, axis, order, N, L)
     elseif isa(basis, ComplexFourier)
         # Complex Fourier case: simple multiplication by (ik)^order
-        evaluate_complex_fourier_derivative!(result, operand, axis, order, N, L, device_config)
+        evaluate_complex_fourier_derivative!(result, operand, axis, order, N, L)
     else
         throw(ArgumentError("Fourier derivative only applicable to Fourier bases"))
     end
@@ -451,7 +447,7 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
                 result.data_c[sin_idx] =  k_phys * cos_coeff   # d/dx[sin] =  k*cos
             end
         end
-    elseif false  # CPU-only, GPU path removed && order == 1
+    elseif false  # Not used; legacy GPU path removed
         # Optimized implementation using broadcasting
         evaluate_real_fourier_derivative_optimized!(result, operand, N, L, k_max, is_even)
     else
@@ -571,20 +567,19 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     # Apply multiple derivatives if order > 1
     if order == 1
         # Single derivative with optimized implementation
-        evaluate_chebyshev_single_derivative!(result, operand, N, scale, device_config)
+        evaluate_chebyshev_single_derivative!(result, operand, N, scale)
     else
         # Multiple derivatives: apply single derivative 'order' times
         temp_field = ScalarField(operand.dist, "temp_deriv", operand.bases, operand.dtype)
-        temp_field.data_c = temp_field.data_c
         current_operand = operand
-        
+
         for i in 1:order
             if i == order
                 # Last iteration: store in result
-                evaluate_chebyshev_single_derivative!(result, current_operand, N, scale, device_config)
+                evaluate_chebyshev_single_derivative!(result, current_operand, N, scale)
             else
                 # Intermediate iterations: use temp field
-                evaluate_chebyshev_single_derivative!(temp_field, current_operand, N, scale, device_config)
+                evaluate_chebyshev_single_derivative!(temp_field, current_operand, N, scale)
                 current_operand = temp_field
             end
         end
@@ -685,20 +680,19 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     # Apply multiple derivatives if order > 1
     if order == 1
         # Single derivative with optimized implementation
-        evaluate_legendre_single_derivative!(result, operand, N, scale, device_config)
+        evaluate_legendre_single_derivative!(result, operand, N, scale)
     else
         # Multiple derivatives: apply single derivative 'order' times
         temp_field = ScalarField(operand.dist, "temp_deriv", operand.bases, operand.dtype)
-        temp_field.data_c = temp_field.data_c
         current_operand = operand
-        
+
         for i in 1:order
             if i == order
                 # Last iteration: store in result
-                evaluate_legendre_single_derivative!(result, current_operand, N, scale, device_config)
+                evaluate_legendre_single_derivative!(result, current_operand, N, scale)
             else
                 # Intermediate iterations: use temp field
-                evaluate_legendre_single_derivative!(temp_field, current_operand, N, scale, device_config)
+                evaluate_legendre_single_derivative!(temp_field, current_operand, N, scale)
                 current_operand = temp_field
             end
         end
