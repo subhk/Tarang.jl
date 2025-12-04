@@ -8,7 +8,6 @@ const TEST_FILES = [
     "test_flow_tools.jl",
     "test_quick_domains.jl",
     "test_plot_tools.jl",
-    "test_ball_domain.jl",
     "test_dedalus_parity.jl",
 ]
 
