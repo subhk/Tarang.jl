@@ -126,7 +126,7 @@ end
 
 # Specialized domains for common problems
 function rayleigh_benard_domain(dist::Distributor, aspect_ratio::Float64=4.0, Nx::Int=256, Nz::Int=64;
-                               dtype::Type=Float64, dealias::Float64=3.0/2.0)
+                               dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
     """Create domain for Rayleigh-Bénard convection"""
     
     Lx = aspect_ratio  # Horizontal extent
@@ -142,7 +142,7 @@ function rayleigh_benard_domain(dist::Distributor, aspect_ratio::Float64=4.0, Nx
 end
 
 function taylor_couette_domain(dist::Distributor, inner_radius::Float64=0.5, outer_radius::Float64=1.0,
-                              Nr::Int=64, Ntheta::Int=128; dtype::Type=ComplexF64, dealias::Float64=3.0/2.0)
+                              Nr::Int=64, Ntheta::Int=128; dtype::Type=ComplexF64, dealias::Float64=3.0/2.0, kwargs...)
     """Create domain for Taylor-Couette flow (cylindrical coordinates)"""
     
     r_coord, theta_coord = _require_coords(dist, 2)
@@ -154,7 +154,7 @@ function taylor_couette_domain(dist::Distributor, inner_radius::Float64=0.5, out
     return Domain(dist, (r_basis, theta_basis))
 end
 
-function disk_domain(dist::Distributor, radius::Float64=1.0, N::Int=64; dtype::Type=ComplexF64, dealias::Float64=1.0)
+function disk_domain(dist::Distributor, radius::Float64=1.0, N::Int=64; dtype::Type=ComplexF64, dealias::Float64=1.0, kwargs...)
     """Create disk domain using disk basis"""
     
     disk_coord = _require_coords(dist, 1)[1]
@@ -165,7 +165,7 @@ function disk_domain(dist::Distributor, radius::Float64=1.0, N::Int=64; dtype::T
 end
 
 function annulus_domain(dist::Distributor, inner_radius::Float64=0.5, outer_radius::Float64=1.0,
-                       N::Int=64; dtype::Type=ComplexF64, dealias::Float64=1.0)
+                       N::Int=64; dtype::Type=ComplexF64, dealias::Float64=1.0, kwargs...)
     """Create annulus domain using annulus basis"""
     
     annulus_coord = _require_coords(dist, 1)[1]
@@ -266,7 +266,7 @@ function domain_info(domain::Domain)
 end
 
 # Advanced 3D domains for specific applications
-function taylor_green_vortex_domain(dist::Distributor, N::Int=128; dtype::Type=Float64, dealias::Float64=3.0/2.0)
+function taylor_green_vortex_domain(dist::Distributor, N::Int=128; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
     """Create domain for 3D Taylor-Green vortex simulation"""
     
     coords = CartesianCoordinates("x", "y", "z")
@@ -283,7 +283,7 @@ function taylor_green_vortex_domain(dist::Distributor, N::Int=128; dtype::Type=F
 end
 
 function channel_flow_3d_domain(dist::Distributor, Lx::Float64=4π, Ly::Float64=2π, Lz::Float64=2.0,
-                               Nx::Int=128, Ny::Int=128, Nz::Int=64; dtype::Type=Float64, dealias::Float64=3.0/2.0)
+                               Nx::Int=128, Ny::Int=128, Nz::Int=64; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
     """Create domain for 3D turbulent channel flow"""
     
     coords = CartesianCoordinates("x", "y", "z")
@@ -300,7 +300,7 @@ function channel_flow_3d_domain(dist::Distributor, Lx::Float64=4π, Ly::Float64=
 end
 
 function mixing_layer_3d_domain(dist::Distributor, Lx::Float64=20.0, Ly::Float64=10.0, Lz::Float64=10.0,
-                               Nx::Int=256, Ny::Int=128, Nz::Int=128; dtype::Type=Float64, dealias::Float64=3.0/2.0)
+                               Nx::Int=256, Ny::Int=128, Nz::Int=128; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
     """Create domain for 3D mixing layer simulation"""
     
     coords = CartesianCoordinates("x", "y", "z")
@@ -318,7 +318,7 @@ end
 
 function turbulent_convection_3d_domain(dist::Distributor, aspect_ratio::Float64=2.0, 
                                        Nx::Int=128, Ny::Int=128, Nz::Int=64; 
-                                       dtype::Type=Float64, dealias::Float64=3.0/2.0)
+                                       dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
     """Create domain for 3D Rayleigh-Bénard convection"""
     
     Lx = Ly = aspect_ratio  # Horizontal extent
@@ -539,50 +539,51 @@ function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
 end
 
 function create_gpu_optimized_domain(dist::Distributor, domain_type::Symbol, args...; kwargs...)
-    """Create domain for common use cases (CPU-only)."""
+    """Create domain for common use cases (CPU-only placeholder for legacy API)."""
     
+    # Device keyword is ignored in CPU-only builds
     device = get(kwargs, :device, "cpu")
-    
+
     domain = if domain_type == :rayleigh_benard_2d
-        aspect_ratio = get(args, 1, 4.0)
-        Nx = get(args, 2, 256)
-        Nz = get(args, 3, 64)
-        rayleigh_benard_domain(dist, aspect_ratio, Nx, Nz; device=device, kwargs...)
+        aspect_ratio = length(args) >= 1 ? args[1] : 4.0
+        Nx = length(args) >= 2 ? args[2] : 256
+        Nz = length(args) >= 3 ? args[3] : 64
+        rayleigh_benard_domain(dist, aspect_ratio, Nx, Nz; kwargs...)
         
     elseif domain_type == :channel_3d
-        Lx = get(args, 1, 4π)
-        Ly = get(args, 2, 2π)
-        Lz = get(args, 3, 2.0)
-        Nx = get(args, 4, 128)
-        Ny = get(args, 5, 128)
-        Nz = get(args, 6, 64)
-        channel_flow_3d_domain(dist, Lx, Ly, Lz, Nx, Ny, Nz; device=device, kwargs...)
+        Lx = length(args) >= 1 ? args[1] : 4π
+        Ly = length(args) >= 2 ? args[2] : 2π
+        Lz = length(args) >= 3 ? args[3] : 2.0
+        Nx = length(args) >= 4 ? args[4] : 128
+        Ny = length(args) >= 5 ? args[5] : 128
+        Nz = length(args) >= 6 ? args[6] : 64
+        channel_flow_3d_domain(dist, Lx, Ly, Lz, Nx, Ny, Nz; kwargs...)
         
     elseif domain_type == :taylor_green_3d
-        N = get(args, 1, 128)
-        taylor_green_vortex_domain(dist, N; device=device, kwargs...)
+        N = length(args) >= 1 ? args[1] : 128
+        taylor_green_vortex_domain(dist, N; kwargs...)
         
     elseif domain_type == :periodic_2d
-        Lx = get(args, 1, 2π)
-        Ly = get(args, 2, 2π)
-        Nx = get(args, 3, 128)
-        Ny = get(args, 4, 128)
-        create_2d_periodic_domain(dist, Lx, Ly, Nx, Ny; device=device, kwargs...)
+        Lx = length(args) >= 1 ? args[1] : 2π
+        Ly = length(args) >= 2 ? args[2] : 2π
+        Nx = length(args) >= 3 ? args[3] : 128
+        Ny = length(args) >= 4 ? args[4] : 128
+        create_2d_periodic_domain(dist, Lx, Ly, Nx, Ny; kwargs...)
         
     elseif domain_type == :periodic_3d
-        Lx = get(args, 1, 2π)
-        Ly = get(args, 2, 2π)
-        Lz = get(args, 3, 2π)
-        Nx = get(args, 4, 64)
-        Ny = get(args, 5, 64)
-        Nz = get(args, 6, 64)
-        create_3d_periodic_domain(dist, Lx, Ly, Lz, Nx, Ny, Nz; device=device, kwargs...)
+        Lx = length(args) >= 1 ? args[1] : 2π
+        Ly = length(args) >= 2 ? args[2] : 2π
+        Lz = length(args) >= 3 ? args[3] : 2π
+        Nx = length(args) >= 4 ? args[4] : 64
+        Ny = length(args) >= 5 ? args[5] : 64
+        Nz = length(args) >= 6 ? args[6] : 64
+        create_3d_periodic_domain(dist, Lx, Ly, Lz, Nx, Ny, Nz; kwargs...)
         
     else
         throw(ArgumentError("Unknown domain type: $domain_type"))
     end
     
-    @info "Created $domain_type domain on $(domain.device_type)"
+    @info "Created $domain_type domain on $(domain.device_type) (requested device: $device)"
     
     return domain
 end
@@ -597,7 +598,7 @@ function compare_gpu_cpu_performance(domain_spec::Tuple)
     """CPU-only placeholder; GPU comparison removed."""
     dist, args = domain_spec[1], domain_spec[2:end]
     @info "GPU support removed; benchmarking CPU domain only."
-    cpu_domain = create_2d_periodic_domain(dist, args...; device="cpu")
+    cpu_domain = create_2d_periodic_domain(dist, args...)
     benchmark_domain_operations(cpu_domain; n_iterations=50)
     estimate_memory_usage(cpu_domain, 4)
 end
