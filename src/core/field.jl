@@ -156,34 +156,285 @@ function allocate_data!(field::ScalarField)
 end
 
 function get_local_array_size(dist::Distributor, global_shape::Tuple)
-    """Get local array size for this process"""
-    # Simplified - in practice would depend on MPI decomposition
-    return global_shape
+    """
+    Get local array size for this process based on MPI decomposition.
+
+    For a pencil decomposition with process mesh (P₁, P₂, ..., Pₖ),
+    the global array is divided along the last k dimensions.
+
+    For example, with a 3D array of shape (Nx, Ny, Nz) and mesh (Py, Pz):
+    - x dimension is not decomposed: local_nx = Nx
+    - y dimension is split among Py processes: local_ny = Ny / Py
+    - z dimension is split among Pz processes: local_nz = Nz / Pz
+
+    Arguments:
+    - dist: Distributor with MPI decomposition info
+    - global_shape: Tuple of global array dimensions
+
+    Returns:
+    - Tuple of local array dimensions for this process
+    """
+    # Serial case: local = global
+    if dist.size == 1 || dist.mesh === nothing
+        return global_shape
+    end
+
+    mesh = dist.mesh
+    ndims_global = length(global_shape)
+    ndims_mesh = length(mesh)
+
+    # Compute local shape
+    local_shape = collect(global_shape)
+
+    # Pencil decomposition: last ndims_mesh dimensions are distributed
+    # The decomposition starts from the last dimension
+    for i in 1:min(ndims_mesh, ndims_global)
+        # Map mesh dimension to global dimension
+        # mesh[1] corresponds to global_shape[end - ndims_mesh + 1], etc.
+        global_dim_idx = ndims_global - ndims_mesh + i
+        mesh_dim_idx = i
+
+        if global_dim_idx >= 1 && global_dim_idx <= ndims_global
+            n_global = global_shape[global_dim_idx]
+            n_procs = mesh[mesh_dim_idx]
+
+            # Compute local size for this dimension
+            # Use ceiling division for load balancing
+            base_size = div(n_global, n_procs)
+            remainder = n_global % n_procs
+
+            # Get process coordinate in this mesh dimension
+            proc_coord = get_process_coordinate(dist, mesh_dim_idx)
+
+            # Processes with coord < remainder get one extra element
+            if proc_coord < remainder
+                local_shape[global_dim_idx] = base_size + 1
+            else
+                local_shape[global_dim_idx] = base_size
+            end
+        end
+    end
+
+    return tuple(local_shape...)
+end
+
+function get_process_coordinate(dist::Distributor, dim::Int)
+    """
+    Get the coordinate of this process in the specified mesh dimension.
+
+    For a mesh (P₁, P₂, ..., Pₖ), the process with rank r has coordinates:
+    (r % P₁, (r ÷ P₁) % P₂, ..., (r ÷ (P₁×P₂×...×Pₖ₋₁)) % Pₖ)
+    """
+    if dist.mesh === nothing || dim < 1 || dim > length(dist.mesh)
+        return 0
+    end
+
+    mesh = dist.mesh
+    rank = dist.rank
+
+    # Compute coordinate using row-major ordering
+    stride = 1
+    for i in 1:(dim-1)
+        stride *= mesh[i]
+    end
+
+    coord = div(rank, stride) % mesh[dim]
+    return coord
+end
+
+function get_local_range(dist::Distributor, global_size::Int, dim::Int)
+    """
+    Get the local range [start, end] for this process in a given dimension.
+
+    Arguments:
+    - dist: Distributor with MPI decomposition info
+    - global_size: Size of the global array in this dimension
+    - dim: Mesh dimension index (1-based)
+
+    Returns:
+    - (start_idx, end_idx) tuple with 1-based indices
+    """
+    if dist.size == 1 || dist.mesh === nothing || dim > length(dist.mesh)
+        return (1, global_size)
+    end
+
+    n_procs = dist.mesh[dim]
+    proc_coord = get_process_coordinate(dist, dim)
+
+    base_size = div(global_size, n_procs)
+    remainder = global_size % n_procs
+
+    if proc_coord < remainder
+        local_size = base_size + 1
+        start_idx = proc_coord * (base_size + 1) + 1
+    else
+        local_size = base_size
+        start_idx = remainder * (base_size + 1) + (proc_coord - remainder) * base_size + 1
+    end
+
+    end_idx = start_idx + local_size - 1
+    return (start_idx, end_idx)
+end
+
+function global_to_local_index(dist::Distributor, global_idx::Int, dim::Int)
+    """
+    Convert a global index to a local index for this process.
+
+    Returns nothing if the global index is not owned by this process.
+    """
+    start_idx, end_idx = get_local_range(dist, get_global_size(dist, dim), dim)
+
+    if global_idx >= start_idx && global_idx <= end_idx
+        return global_idx - start_idx + 1
+    else
+        return nothing
+    end
+end
+
+function local_to_global_index(dist::Distributor, local_idx::Int, global_size::Int, dim::Int)
+    """
+    Convert a local index to a global index.
+    """
+    start_idx, _ = get_local_range(dist, global_size, dim)
+    return start_idx + local_idx - 1
+end
+
+function get_global_size(dist::Distributor, dim::Int)
+    """Get the global size in a dimension (placeholder - needs domain info)."""
+    # This would typically be obtained from the domain/basis
+    # For now, return a default
+    return 64
 end
 
 function preset_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple{Vararg{Real}}, Nothing})
     """
     Set new transform scales without data transformation.
     Following Dedalus implementation in field.py:498-515
+
+    Scales control the grid resolution relative to the coefficient resolution.
+    A scale of 1.0 means grid size equals coefficient size.
+    A scale of 1.5 (3/2 rule) is used for dealiasing in nonlinear computations.
+
+    This function:
+    1. Updates the field's scale parameters
+    2. Reallocates data arrays if the new scaled size differs
+    3. Does NOT preserve or transform existing data (use set_scales! for that)
+
+    Arguments:
+    - field: ScalarField to modify
+    - scales: New scale values (scalar applied to all dims, or per-dimension)
+
+    Returns:
+    - The modified field
     """
     new_scales = remedy_scales(field.dist, scales)
     old_scales = field.scales
-    
+
     # Return if scales are unchanged
     if new_scales == old_scales
         return field
     end
-    
+
+    # Compute old and new grid sizes
+    old_grid_shape = get_scaled_shape(field, old_scales)
+    new_grid_shape = get_scaled_shape(field, new_scales)
+
     # Update scales
     field.scales = new_scales
-    
-    # Note: In full implementation, this would:
-    # 1. Get required buffer size: buffer_size = dist.buffer_size(domain, new_scales, dtype=dtype)
-    # 2. Allocate new buffer if needed
-    # 3. Reset layout to build new data view: preset_layout(layout)
-    
-    @debug "Updated field scales" old_scales new_scales
+
+    # Reallocate grid data if shape changed
+    if old_grid_shape != new_grid_shape && field.domain !== nothing
+        @debug "Reallocating field data for new scales" old_grid_shape new_grid_shape
+
+        # Reallocate grid-space data with new size
+        if field.dist.use_pencil_arrays
+            # For MPI: create new pencil with scaled shape
+            field.data_g = create_pencil(field.dist, new_grid_shape, 1, dtype=field.dtype)
+        else
+            # For serial: create new array
+            local_shape = get_local_array_size(field.dist, new_grid_shape)
+            field.data_g = zeros(field.dtype, local_shape...)
+        end
+
+        # Coefficient data size typically doesn't change with scales
+        # (scales affect grid resolution, not spectral resolution)
+    end
+
+    @debug "Updated field scales" old_scales=old_scales new_scales=new_scales
     return field
+end
+
+function get_scaled_shape(field::ScalarField, scales::Union{Tuple, Nothing})
+    """
+    Compute the grid shape with given scales applied.
+
+    For each basis, the scaled size is: ceil(Int, basis_size * scale)
+    """
+    if field.domain === nothing || isempty(field.bases)
+        return ()
+    end
+
+    # Handle nothing scales (use 1.0 for all dimensions)
+    if scales === nothing
+        scales = tuple(ones(Float64, length(field.bases))...)
+    end
+
+    scaled_shape = Int[]
+    for (i, basis) in enumerate(field.bases)
+        base_size = basis.meta.size
+        scale = i <= length(scales) ? scales[i] : 1.0
+        scaled_size = ceil(Int, base_size * scale)
+        push!(scaled_shape, scaled_size)
+    end
+
+    return tuple(scaled_shape...)
+end
+
+function get_scaled_shape(field::ScalarField)
+    """Get the current scaled grid shape."""
+    if field.scales === nothing
+        scales = tuple(ones(Float64, length(field.bases))...)
+    else
+        scales = field.scales
+    end
+    return get_scaled_shape(field, scales)
+end
+
+function get_coefficient_shape(field::ScalarField)
+    """Get the coefficient (unscaled) shape."""
+    if field.domain === nothing || isempty(field.bases)
+        return ()
+    end
+
+    return tuple([basis.meta.size for basis in field.bases]...)
+end
+
+function require_scales!(field::ScalarField, scales::Union{Real, Tuple, Nothing})
+    """
+    Ensure field has the specified scales, reallocating if necessary.
+    Similar to Dedalus require_scales pattern.
+    """
+    new_scales = remedy_scales(field.dist, scales)
+
+    if field.scales != new_scales
+        preset_scales!(field, new_scales)
+    end
+
+    return field
+end
+
+function dealias_scales(field::ScalarField)
+    """
+    Get the standard 3/2 dealiasing scales for this field.
+    Used for computing nonlinear terms without aliasing errors.
+    """
+    ndims = length(field.bases)
+    return tuple(fill(1.5, ndims)...)
+end
+
+function apply_dealiasing_scales!(field::ScalarField)
+    """Apply 3/2 dealiasing scales to the field."""
+    return preset_scales!(field, dealias_scales(field))
 end
 
 function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple{Vararg{Real}}, Nothing})
