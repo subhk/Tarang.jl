@@ -18,7 +18,7 @@ using PencilFFTs
 using MPI
 using LinearAlgebra
 
-# GPU support
+# CPU-only (GPU support removed)
 
 # Nonlinear operator types
 abstract type NonlinearOperator <: Operator end
@@ -60,14 +60,12 @@ mutable struct NonlinearEvaluator
     dealiasing_factor::Float64
     temp_fields::Dict{String, Any}
     memory_pool::Vector{PencilArray}
-    device_config::CPUDeviceConfig
     scratch_arrays::Vector{AbstractArray}
-    
     performance_stats::NonlinearPerformanceStats
-    
+
     function NonlinearEvaluator(dist::Distributor; dealiasing_factor::Float64=3.0/2.0)
-        evaluator = new(dist, Dict{String, Any}(), dealiasing_factor, Dict{String, Any}(), PencilArray[], 
-                       DEFAULT_DEVICE, AbstractArray[], NonlinearPerformanceStats())
+        evaluator = new(dist, Dict{String, Any}(), dealiasing_factor, Dict{String, Any}(), PencilArray[],
+                       AbstractArray[], NonlinearPerformanceStats())
         setup_nonlinear_transforms!(evaluator)
         return evaluator
     end
@@ -225,12 +223,12 @@ function evaluate_nonlinear_term(op::NonlinearAdvectionOperator, layout::Symbol=
 end
 
 function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, evaluator::NonlinearEvaluator)
-    """Efficiently multiply two fields using transform method with GPU support and proper dealiasing
+    """Efficiently multiply two fields using transform method  and proper dealiasing
     
     This follows the standard spectral method approach with GPU acceleration:
     1. Ensure both fields are on the correct device
     2. Transform both fields to grid space (if not already)
-    3. Pointwise multiply in grid space (GPU-accelerated)
+    3. Pointwise multiply in grid space (optimized)
     4. Transform product back to spectral space
     5. Apply dealiasing to remove aliasing errors
     
@@ -527,7 +525,7 @@ end
 
 # Memory management
 function get_temp_field(evaluator::NonlinearEvaluator, template::ScalarField, name::String)
-    """Get temporary field for intermediate calculations with GPU support"""
+    """Get temporary field for intermediate calculations """
     
     key = "$(name)_$(hash(template.bases))"
     
@@ -730,7 +728,7 @@ function synchronize_nonlinear_evaluator!(evaluator::NonlinearEvaluator)
 end
 
 function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
-    """GPU-accelerated evaluation of u·∇φ nonlinear term"""
+    """optimized evaluation of u·∇φ nonlinear term"""
     
     velocity = op.velocity
     scalar = op.scalar
@@ -754,7 +752,7 @@ function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
     scalar.data_g = scalar.data_g
     scalar.data_c = scalar.data_c
     
-    # Compute gradient of scalar field: ∇φ (GPU-accelerated)
+    # Compute gradient of scalar field: ∇φ (optimized)
     grad_scalar = evaluate_gradient(Gradient(scalar, dist.coordsys), :g)
     
     # Ensure gradient components are on GPU
@@ -770,7 +768,7 @@ function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
     ensure_layout!(result, :g)
     fill!(result["g"], 0.0)
     
-    # Sum velocity components times gradient components (GPU-accelerated)
+    # Sum velocity components times gradient components (optimized)
     for i in 1:length(velocity.components)
         # Multiply u_i * (∂φ/∂x_i) using GPU-aware transform-based multiplication
         product = evaluate_transform_multiply(velocity.components[i], grad_scalar.components[i], evaluator)

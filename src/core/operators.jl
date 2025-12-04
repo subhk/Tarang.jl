@@ -35,7 +35,7 @@ function register_operator_prefix!(op, names::AbstractString...)
     return op
 end
 
-# CPU-only (GPU support removed)
+# CPU-only (CPU support removed)
 
 abstract type Operator <: Operand end
 
@@ -381,7 +381,7 @@ function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
 end
 
 function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Fourier derivative following Dedalus conventions with GPU support"""
+    """Evaluate Fourier derivative following Dedalus conventions """
     ensure_layout!(operand, :c)  # Work in coefficient space
     ensure_layout!(result, :c)
     
@@ -406,8 +406,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
         throw(ArgumentError("Fourier derivative only applicable to Fourier bases"))
     end
     
-    # Synchronize GPU operations
-    
+        
     if layout == :g
         backward_transform!(result)
     end
@@ -415,7 +414,7 @@ end
 
 
 function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
-    """Real Fourier derivative following Dedalus 2x2 group matrix approach with GPU support"""
+    """Real Fourier derivative following Dedalus 2x2 group matrix approach """
     
     # Dedalus stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
     # Each wavenumber k>0 has a 2x2 group matrix:
@@ -454,7 +453,7 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
         end
     elseif device_config.device_type != CPU_DEVICE && order == 1
         # Optimized implementation using broadcasting
-        evaluate_real_fourier_derivative_gpu!(result, operand, N, L, k_max, is_even)
+        evaluate_real_fourier_derivative_optimized!(result, operand, N, L, k_max, is_even)
     else
         # Fallback implementation for higher orders or other cases
         evaluate_real_fourier_derivative_fallback!(result, operand, N, L, k_max, is_even, order)
@@ -474,10 +473,10 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
     end
 end
 
-function evaluate_real_fourier_derivative_gpu!(result::ScalarField, operand::ScalarField, N::Int, L::Float64, k_max::Int, is_even::Bool)
-    """GPU-optimized Real Fourier derivative implementation"""
-    
-    # Create wavenumber arrays on GPU
+function evaluate_real_fourier_derivative_optimized!(result::ScalarField, operand::ScalarField, N::Int, L::Float64, k_max::Int, is_even::Bool)
+    """Optimized Real Fourier derivative implementation"""
+
+    # Create wavenumber arrays
     k_range = 1:(k_max-(is_even ? 1 : 0))
     if !isempty(k_range)
         # Vectorized vectorized operations
@@ -529,7 +528,7 @@ function evaluate_real_fourier_derivative_fallback!(result::ScalarField, operand
 end
 
 function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
-    """Complex Fourier derivative: simple multiplication by (ik)^order with GPU support"""
+    """Complex Fourier derivative: simple multiplication by (ik)^order """
     
     # Complex FFT wavenumbers: [0, 1, ..., N/2-1, -N/2, -(N/2-1), ..., -1]
     k_cpu = 2π/L * [0:(N÷2-1); -(N÷2):(-1)]
@@ -552,7 +551,7 @@ function evaluate_complex_fourier_derivative!(result::ScalarField, operand::Scal
 end
 
 function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Chebyshev derivative using Dedalus-compatible differentiation matrix with GPU support"""
+    """Evaluate Chebyshev derivative using Dedalus-compatible differentiation matrix """
     ensure_layout!(operand, :c)  # Work in coefficient space
     ensure_layout!(result, :c)
     
@@ -591,8 +590,7 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
         end
     end
     
-    # Synchronize GPU operations
-    
+        
     if layout == :g
         backward_transform!(result)
     end
@@ -600,7 +598,7 @@ end
 
 function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64)
     """
-    Single Chebyshev derivative using correct backward recurrence with GPU support.
+    Single Chebyshev derivative using correct backward recurrence .
     
     The standard Chebyshev derivative formula is:
     c'_k = sum_{j=k+1, j-k odd} 2*j*c_j  for k >= 0
@@ -667,7 +665,7 @@ function build_chebyshev_differentiation_matrix(N::Int)
 end
 
 function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Legendre derivative using Dedalus-compatible Jacobi implementation with GPU support"""
+    """Evaluate Legendre derivative using Dedalus-compatible Jacobi implementation """
     ensure_layout!(operand, :c)  # Work in coefficient space
     ensure_layout!(result, :c)
     
@@ -706,8 +704,7 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
         end
     end
     
-    # Synchronize GPU operations
-    
+        
     if layout == :g
         backward_transform!(result)
     end
@@ -715,7 +712,7 @@ end
 
 function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64)
     """
-    Single Legendre derivative using Dedalus Jacobi approach with GPU support.
+    Single Legendre derivative using Dedalus Jacobi approach .
     
     Legendre polynomials are Jacobi polynomials with a=0, b=0.
     From Dedalus Jacobi D(+1): bands = [(N + a + b + 1) * 2^(-1)]
@@ -779,7 +776,7 @@ end
 
 function apply_dense_along_axis(matrix::AbstractMatrix, array::AbstractArray, axis::Int; out=nothing)
     """
-    Apply dense matrix along any axis of an array with GPU support.
+    Apply dense matrix along any axis of an array .
     Following Dedalus apply_dense implementation in array.py:104-126.
     """
     ndim = ndims(array)
@@ -803,7 +800,7 @@ function apply_dense_along_axis(matrix::AbstractMatrix, array::AbstractArray, ax
         array = reshape(array, (array_shape[1], prod(array_shape[2:end])))
     end
     
-    # Apply matrix multiplication (GPU-compatible)
+    # Apply matrix multiplication (CPU-compatible)
     temp = matrix * array
     
     # Unflatten later axes
