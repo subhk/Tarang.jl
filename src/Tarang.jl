@@ -68,7 +68,6 @@ include("core/solvers.jl")
 include("core/timesteppers.jl")
 include("core/evaluator.jl")
 include("core/nonlinear_terms.jl")
-# Note: Optimizations are integrated directly into the core modules above
 
 # Tools
 include("tools/config.jl")
@@ -116,8 +115,8 @@ export
     # Solvers
     InitialValueSolver, EigenvalueSolver, BoundaryValueSolver,
     
-    # Optimized operations (integrated into core modules)
-    has_spectral_bases, apply_dealiasing_to_product!, optimized_axpy!,
+    # Field operations
+    has_spectral_bases, apply_dealiasing_to_product!, fast_axpy!,
     vectorized_add!, vectorized_sub!, vectorized_mul!, vectorized_scale!,
     vectorized_axpy!, vectorized_linear_combination!,
     

@@ -1,12 +1,12 @@
 """
-Optimized Linear Algebra Operations for Spectral Methods
+Linear Algebra Operations for Spectral Methods
 
 This module implements high-performance matrix-vector and matrix-matrix operations
-optimized for spectral PDE solvers, with particular focus on:
+for spectral PDE solvers, with particular focus on:
 - Sparse matrix operations for differential operators
 - Dense BLAS operations for transforms and nonlinear terms
 - Memory-efficient tensor operations
-- SIMD and threading optimizations
+- SIMD and threading implementations
 """
 
 using LinearAlgebra
@@ -19,10 +19,10 @@ using BenchmarkTools
 # Import BLAS symbols for direct calls
 import LinearAlgebra.BLAS: gemm!, gemv!, axpy!, scal!
 
-# Optimized matrix-vector multiplication types
-abstract type OptimizedMatVec end
+# Matrix-vector multiplication types
+abstract type MatVecOp end
 
-struct SparseMatVec <: OptimizedMatVec
+struct SparseMatVec <: MatVecOp
     matrix::SparseMatrixCSC
     workspace::Vector{Float64}
     
@@ -32,7 +32,7 @@ struct SparseMatVec <: OptimizedMatVec
     end
 end
 
-struct DenseMatVec <: OptimizedMatVec
+struct DenseMatVec <: MatVecOp
     matrix::Matrix{Float64}
     transposed::Bool
     
@@ -41,21 +41,21 @@ struct DenseMatVec <: OptimizedMatVec
     end
 end
 
-struct BlockSparseMatVec <: OptimizedMatVec
+struct BlockSparseMatVec <: MatVecOp
     blocks::Vector{SparseMatrixCSC}
     block_structure::Matrix{Int}  # Maps to block indices
     workspace::Vector{Vector{Float64}}
 end
 
-# Optimized matrix-matrix multiplication types  
-abstract type OptimizedMatMat end
+# Matrix-matrix multiplication types
+abstract type MatMatOp end
 
-struct SparseDenseMatMat <: OptimizedMatMat
+struct SparseDenseMatMat <: MatMatOp
     sparse_matrix::SparseMatrixCSC
     dense_workspace::Matrix{Float64}
 end
 
-struct DenseDenseMatMat <: OptimizedMatMat
+struct DenseDenseMatMat <: MatMatOp
     use_blas::Bool
     use_threads::Bool
     block_size::Int
@@ -65,7 +65,7 @@ struct DenseDenseMatMat <: OptimizedMatMat
     end
 end
 
-struct TensorMatMat <: OptimizedMatMat
+struct TensorMatMat <: MatMatOp
     # For operations like A ⊗ B * vec(C) common in spectral methods
     kronecker_factors::Vector{Matrix{Float64}}
     temp_matrices::Vector{Matrix{Float64}}
@@ -88,13 +88,13 @@ end
 
 const GLOBAL_LINALG_STATS = LinalgPerformanceStats()
 
-# Optimized matrix-vector operations
-function optimized_matvec!(y::AbstractVector, op::SparseMatVec, x::AbstractVector, α::Real=1.0, β::Real=0.0)
-    """Optimized sparse matrix-vector multiplication: y = α*A*x + β*y"""
+# Matrix-vector operations
+function fast_matvec!(y::AbstractVector, op::SparseMatVec, x::AbstractVector, α::Real=1.0, β::Real=0.0)
+    """Sparse matrix-vector multiplication: y = α*A*x + β*y"""
     
     start_time = time()
     
-    # Use optimized sparse matrix-vector multiplication
+    # Use sparse matrix-vector multiplication
     if β == 0.0
         # y = α*A*x (can skip the β*y term)
         if α == 1.0
@@ -122,8 +122,8 @@ function optimized_matvec!(y::AbstractVector, op::SparseMatVec, x::AbstractVecto
     return y
 end
 
-function optimized_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α::Real=1.0, β::Real=0.0)
-    """Optimized dense matrix-vector multiplication using BLAS"""
+function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α::Real=1.0, β::Real=0.0)
+    """Dense matrix-vector multiplication using BLAS"""
     
     start_time = time()
     
@@ -144,7 +144,7 @@ function optimized_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector
     return y
 end
 
-function optimized_matvec!(y::AbstractVector, op::BlockSparseMatVec, x::AbstractVector, α::Real=1.0, β::Real=0.0)
+function fast_matvec!(y::AbstractVector, op::BlockSparseMatVec, x::AbstractVector, α::Real=1.0, β::Real=0.0)
     """Block sparse matrix-vector multiplication for structured problems"""
     
     start_time = time()
@@ -180,9 +180,9 @@ function optimized_matvec!(y::AbstractVector, op::BlockSparseMatVec, x::Abstract
     return y
 end
 
-# Optimized matrix-matrix operations
-function optimized_matmat!(C::AbstractMatrix, op::SparseDenseMatMat, A_is_sparse::Bool, A::AbstractMatrix, B::AbstractMatrix, α::Real=1.0, β::Real=0.0)
-    """Optimized sparse-dense matrix multiplication"""
+# Matrix-matrix operations
+function fast_matmat!(C::AbstractMatrix, op::SparseDenseMatMat, A_is_sparse::Bool, A::AbstractMatrix, B::AbstractMatrix, α::Real=1.0, β::Real=0.0)
+    """Sparse-dense matrix multiplication"""
     
     start_time = time()
     
@@ -220,8 +220,8 @@ function optimized_matmat!(C::AbstractMatrix, op::SparseDenseMatMat, A_is_sparse
     return C
 end
 
-function optimized_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix, B::AbstractMatrix, α::Real=1.0, β::Real=0.0)
-    """Highly optimized dense matrix multiplication"""
+function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix, B::AbstractMatrix, α::Real=1.0, β::Real=0.0)
+    """Dense matrix multiplication with BLAS"""
     
     start_time = time()
     
@@ -247,7 +247,7 @@ function optimized_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractM
     return C
 end
 
-function optimized_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector, α::Real=1.0, β::Real=0.0)
+function fast_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector, α::Real=1.0, β::Real=0.0)
     """Kronecker product matrix multiplication: C = α*(A₁⊗A₂⊗...)*vec(C) + β*C"""
     
     start_time = time()
@@ -279,7 +279,7 @@ function optimized_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractV
         end
         
     else
-        # General case for multiple Kronecker factors (less optimized)
+        # General case for multiple Kronecker factors
         error("General Kronecker products with >2 factors not yet implemented")
     end
     
@@ -293,7 +293,7 @@ end
 
 # Specialized optimizations
 @inline function vectorized_matmat!(C, A, B, α, β)
-    """SIMD-optimized small matrix multiplication"""
+    """SIMD small matrix multiplication"""
     
     m, n, k = size(A, 1), size(B, 2), size(A, 2)
     
@@ -398,8 +398,8 @@ function cache_efficient_matmat!(C::AbstractMatrix, A::AbstractMatrix, B::Abstra
 end
 
 # Integration with spectral operators
-function create_optimized_operator(matrix::AbstractMatrix, operation_type::Symbol)
-    """Create optimized operator for spectral method matrices"""
+function create_operator(matrix::AbstractMatrix, operation_type::Symbol)
+    """Create operator for spectral method matrices"""
     
     if issparse(matrix)
         if operation_type == :matvec
@@ -418,7 +418,7 @@ function create_optimized_operator(matrix::AbstractMatrix, operation_type::Symbo
 end
 
 function create_kronecker_operator(factors::Vector{<:AbstractMatrix})
-    """Create optimized Kronecker product operator"""
+    """Create Kronecker product operator"""
     
     # Pre-allocate workspace matrices
     temp_matrices = Vector{Matrix{Float64}}()
@@ -545,7 +545,7 @@ end
 function benchmark_linalg_operations(sizes::Vector{Int}=[100, 500, 1000, 2000])
     """Benchmark various linear algebra operations"""
     
-    println("Benchmarking optimized linear algebra operations...")
+    println("Benchmarking linear algebra operations...")
     println("=" ^ 60)
     
     for n in sizes
@@ -557,7 +557,7 @@ function benchmark_linalg_operations(sizes::Vector{Int}=[100, 500, 1000, 2000])
         x = randn(n)
         B = randn(n, n ÷ 2)
         
-        # Create optimized operators
+        # Create operators
         dense_matvec_op = DenseMatVec(A_dense)
         sparse_matvec_op = SparseMatVec(A_sparse)
         dense_matmat_op = DenseDenseMatMat()
@@ -566,18 +566,18 @@ function benchmark_linalg_operations(sizes::Vector{Int}=[100, 500, 1000, 2000])
         y_dense = similar(x)
         y_sparse = similar(x)
         
-        t_dense_mv = @belapsed optimized_matvec!($y_dense, $dense_matvec_op, $x)
-        t_sparse_mv = @belapsed optimized_matvec!($y_sparse, $sparse_matvec_op, $x)
+        t_dense_mv = @belapsed fast_matvec!($y_dense, $dense_matvec_op, $x)
+        t_sparse_mv = @belapsed fast_matvec!($y_sparse, $sparse_matvec_op, $x)
         t_stdlib_mv = @belapsed mul!($y_dense, $A_dense, $x)
         
         # Benchmark matrix-matrix
         C = Matrix{Float64}(undef, n, size(B, 2))
-        t_optimized_mm = @belapsed optimized_matmat!($C, $dense_matmat_op, $A_dense, $B)
+        t_fast_mm = @belapsed fast_matmat!($C, $dense_matmat_op, $A_dense, $B)
         t_stdlib_mm = @belapsed mul!($C, $A_dense, $B)
-        
+
         println("  Dense MatVec:    $(round(t_dense_mv*1e6, digits=1))μs ($(round(t_stdlib_mv/t_dense_mv, digits=2))x stdlib)")
         println("  Sparse MatVec:   $(round(t_sparse_mv*1e6, digits=1))μs")
-        println("  Dense MatMat:    $(round(t_optimized_mm*1e6, digits=1))μs ($(round(t_stdlib_mm/t_optimized_mm, digits=2))x stdlib)")
+        println("  Dense MatMat:    $(round(t_fast_mm*1e6, digits=1))μs ($(round(t_stdlib_mm/t_fast_mm, digits=2))x stdlib)")
         println()
     end
 end
@@ -631,10 +631,10 @@ function print_linalg_stats()
 end
 
 # Export main interface
-export OptimizedMatVec, OptimizedMatMat, SparseMatVec, DenseMatVec, BlockSparseMatVec
+export MatVecOp, MatMatOp, SparseMatVec, DenseMatVec, BlockSparseMatVec
 export SparseDenseMatMat, DenseDenseMatMat, TensorMatMat
-export optimized_matvec!, optimized_matmat!
-export create_optimized_operator, create_kronecker_operator
+export fast_matvec!, fast_matmat!
+export create_operator, create_kronecker_operator
 export streaming_matvec!, cache_efficient_matmat!
 export benchmark_linalg_operations, reset_linalg_stats!, print_linalg_stats
 export LinalgPerformanceStats, GLOBAL_LINALG_STATS

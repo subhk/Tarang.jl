@@ -9,7 +9,7 @@ using LinearAlgebra
 using LinearAlgebra: BLAS
 using SparseArrays
 using HDF5
-using LoopVectorization  # For SIMD-optimized loops
+using LoopVectorization  # For SIMD loops
 
 abstract type Operand end
 
@@ -787,7 +787,7 @@ function get_global_grid_shape(dist::Distributor, domain::Domain; scales=ones(Fl
     return tuple([Int(round(basis.meta.size * scales[i])) for (i, basis) in enumerate(domain.bases)]...)
 end
 
-# LoopVectorization optimized functions
+# LoopVectorization functions
 @inline function vectorized_add!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
     """Vectorized addition: result = a + b"""
     if length(result) > 100
@@ -854,9 +854,9 @@ end
     end
 end
 
-# Optimized field arithmetic with multi-tier optimization
-function optimized_axpy!(α::Real, x::ScalarField, y::ScalarField)
-    """Optimized y ← α*x + y using best available method"""
+# Fast field arithmetic with multi-tier implementation
+function fast_axpy!(α::Real, x::ScalarField, y::ScalarField)
+    """Fast y ← α*x + y using best available method"""
     ensure_layout!(x, :g)
     ensure_layout!(y, :g)
 

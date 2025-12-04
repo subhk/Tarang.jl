@@ -6,7 +6,7 @@ Translated from dedalus/core/timesteppers.py
 
 using LinearAlgebra
 using LinearAlgebra: BLAS
-using LoopVectorization  # For SIMD-optimized loops
+using LoopVectorization  # For SIMD loops
 
 abstract type TimeStepper end
 

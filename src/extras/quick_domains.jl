@@ -512,7 +512,7 @@ function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
     end
 end
 
-function create_optimized_domain(dist::Distributor, domain_type::Symbol, args...; kwargs...)
+function create_domain(dist::Distributor, domain_type::Symbol, args...; kwargs...)
     """Create domain for common use cases."""
 
     domain = if domain_type == :rayleigh_benard_2d
@@ -559,8 +559,9 @@ function create_optimized_domain(dist::Distributor, domain_type::Symbol, args...
     return domain
 end
 
-# Legacy alias for API compatibility
-const create_gpu_optimized_domain = create_optimized_domain
+# Legacy aliases for API compatibility
+const create_optimized_domain = create_domain
+const create_gpu_optimized_domain = create_domain
 
 function benchmark_cpu_performance(domain_spec::Tuple)
     """Benchmark CPU domain performance."""

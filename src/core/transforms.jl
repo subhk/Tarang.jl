@@ -115,7 +115,7 @@ function plan_transforms!(dist::Distributor, domain::Domain)
         elseif ndim == 3
             setup_pencil_fft_transforms_3d!(dist, domain, global_shape, fourier_axes)
         else
-            @warn "PencilFFTs not optimized for $(ndim)D, falling back to FFTW"
+            @warn "PencilFFTs not configured for $(ndim)D, falling back to FFTW"
             setup_fftw_transforms_nd!(dist, domain, fourier_axes)
         end
     else

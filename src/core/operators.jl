@@ -7,7 +7,7 @@ Translated from dedalus/core/operators.py
 using LinearAlgebra
 using LinearAlgebra: BLAS
 using SparseArrays
-using LoopVectorization  # For SIMD-optimized loops
+using LoopVectorization  # For SIMD loops
 
 # Operator registration tables (mirroring Dedalus parsing registries)
 const OPERATOR_ALIASES = Dict{String, Any}()
@@ -427,7 +427,7 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
     k_max = N ÷ 2
     is_even = (N % 2 == 0)
     
-    # Choose optimized implementation based on device and size
+    # Choose implementation based on size
     if true  # CPU-only && order == 1 && length(operand.data_c) > 100
         # CPU path without LoopVectorization to avoid macro issues during precompilation
         for k in 1:k_max-(is_even ? 1 : 0)  # k=1 to k_max-1 (excluding Nyquist)
@@ -448,8 +448,8 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
             end
         end
     elseif false  # Not used; legacy GPU path removed
-        # Optimized implementation using broadcasting
-        evaluate_real_fourier_derivative_optimized!(result, operand, N, L, k_max, is_even)
+        # Vectorized implementation using broadcasting
+        evaluate_real_fourier_derivative_vectorized!(result, operand, N, L, k_max, is_even)
     else
         # Fallback implementation for higher orders or other cases
         evaluate_real_fourier_derivative_fallback!(result, operand, N, L, k_max, is_even, order)
@@ -469,8 +469,8 @@ function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand:
     end
 end
 
-function evaluate_real_fourier_derivative_optimized!(result::ScalarField, operand::ScalarField, N::Int, L::Float64, k_max::Int, is_even::Bool)
-    """Optimized Real Fourier derivative implementation"""
+function evaluate_real_fourier_derivative_vectorized!(result::ScalarField, operand::ScalarField, N::Int, L::Float64, k_max::Int, is_even::Bool)
+    """Vectorized Real Fourier derivative implementation"""
 
     # Create wavenumber arrays
     k_range = 1:(k_max-(is_even ? 1 : 0))
@@ -566,7 +566,7 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     
     # Apply multiple derivatives if order > 1
     if order == 1
-        # Single derivative with optimized implementation
+        # Single derivative
         evaluate_chebyshev_single_derivative!(result, operand, N, scale)
     else
         # Multiple derivatives: apply single derivative 'order' times
@@ -679,7 +679,7 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     
     # Apply multiple derivatives if order > 1
     if order == 1
-        # Single derivative with optimized implementation
+        # Single derivative
         evaluate_legendre_single_derivative!(result, operand, N, scale)
     else
         # Multiple derivatives: apply single derivative 'order' times

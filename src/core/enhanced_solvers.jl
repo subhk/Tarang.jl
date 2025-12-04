@@ -1,9 +1,8 @@
 """
-Enhanced Solvers with Optimized Linear Algebra
+Enhanced Solvers for Spectral Methods
 
-This module provides optimized versions of the core solvers that leverage
-the optimized linear algebra operations for maximum performance in spectral methods.
-CPU-only (GPU support removed).
+This module provides enhanced versions of the core solvers that leverage
+high-performance linear algebra operations for spectral methods.
 """
 
 using LinearAlgebra
@@ -21,8 +20,8 @@ mutable struct SolverPerformanceStats
     end
 end
 
-# Enhanced solver with optimized linear algebra
-mutable struct OptimizedInitialValueSolver <: Solver
+# Enhanced IVP solver
+mutable struct EnhancedInitialValueSolver <: Solver
     problem::IVP
     timestepper::Any
 
@@ -33,12 +32,12 @@ mutable struct OptimizedInitialValueSolver <: Solver
     stop_wall_time::Union{Nothing, Float64}
     stop_iteration::Union{Nothing, Int}
 
-    # Optimized operators
-    linear_operators::Dict{String, OptimizedMatVec}
-    matrix_operators::Dict{String, OptimizedMatMat}
+    # Linear algebra operators
+    linear_operators::Dict{String, MatVecOp}
+    matrix_operators::Dict{String, MatMatOp}
 
     # Performance optimization settings
-    use_optimized_linalg::Bool
+    use_fast_linalg::Bool
     preallocate_workspace::Bool
     monitor_performance::Bool
 
@@ -49,8 +48,8 @@ mutable struct OptimizedInitialValueSolver <: Solver
     workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
 
-    function OptimizedInitialValueSolver(problem::IVP, timestepper;
-                                       use_optimized_linalg::Bool=true,
+    function EnhancedInitialValueSolver(problem::IVP, timestepper;
+                                       use_fast_linalg::Bool=true,
                                        preallocate_workspace::Bool=true,
                                        monitor_performance::Bool=true,
                                        device::String="cpu")
@@ -59,23 +58,23 @@ mutable struct OptimizedInitialValueSolver <: Solver
         perf_stats = SolverPerformanceStats()
 
         solver = new(problem, timestepper, 0.0, 0, 10.0, nothing, nothing,
-                    Dict{String, OptimizedMatVec}(),
-                    Dict{String, OptimizedMatMat}(),
-                    use_optimized_linalg, preallocate_workspace, monitor_performance,
+                    Dict{String, MatVecOp}(),
+                    Dict{String, MatMatOp}(),
+                    use_fast_linalg, preallocate_workspace, monitor_performance,
                     Dict{String, Vector{Float64}}(),
                     Dict{String, Matrix{Float64}}(),
                     workspace, perf_stats)
 
-        # Initialize optimized operators
-        if use_optimized_linalg
-            setup_optimized_operators!(solver)
+        # Initialize operators
+        if use_fast_linalg
+            setup_operators!(solver)
         end
 
         return solver
     end
 end
 
-mutable struct OptimizedBoundaryValueSolver <: Solver
+mutable struct EnhancedBoundaryValueSolver <: Solver
     problem::Union{LBVP, NLBVP}
 
     # Linear system components
@@ -83,9 +82,9 @@ mutable struct OptimizedBoundaryValueSolver <: Solver
     RHS_vector::Vector{Float64}
     solution_vector::Vector{Float64}
 
-    # Optimized operators
-    matrix_solver::Union{Nothing, OptimizedMatVec}
-    preconditioner::Union{Nothing, OptimizedMatVec}
+    # Linear algebra operators
+    matrix_solver::Union{Nothing, MatVecOp}
+    preconditioner::Union{Nothing, MatVecOp}
 
     # Factorization for direct solvers
     factorization::Union{Nothing, Any}
@@ -99,7 +98,7 @@ mutable struct OptimizedBoundaryValueSolver <: Solver
     workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
 
-    function OptimizedBoundaryValueSolver(problem::Union{LBVP, NLBVP};
+    function EnhancedBoundaryValueSolver(problem::Union{LBVP, NLBVP};
                                         solver_type::Symbol=:direct,
                                         tolerance::Float64=1e-10,
                                         max_iterations::Int=1000,
@@ -122,15 +121,15 @@ mutable struct OptimizedBoundaryValueSolver <: Solver
                     workspace, perf_stats)
 
         # Build and optimize the linear system
-        build_optimized_system!(solver)
+        build_system!(solver)
 
         return solver
     end
 end
 
-# Setup optimized operators for IVP solver
-function setup_optimized_operators!(solver::OptimizedInitialValueSolver)
-    """Setup optimized linear algebra operators for faster solving"""
+# Setup operators for IVP solver
+function setup_operators!(solver::EnhancedInitialValueSolver)
+    """Setup linear algebra operators for faster solving"""
 
     problem = solver.problem
 
@@ -148,7 +147,7 @@ function setup_optimized_operators!(solver::OptimizedInitialValueSolver)
                 solver.linear_operators["L_$eq_name"] = DenseMatVec(L_matrix)
             end
 
-            @info "Created optimized operator for equation $eq_idx: $(typeof(solver.linear_operators["L_$eq_name"]))"
+            @info "Created operator for equation $eq_idx: $(typeof(solver.linear_operators["L_$eq_name"]))"
         end
 
         # Extract mass matrix (time derivative terms)
@@ -169,7 +168,7 @@ function setup_optimized_operators!(solver::OptimizedInitialValueSolver)
     end
 end
 
-function build_optimized_system!(solver::OptimizedBoundaryValueSolver)
+function build_system!(solver::EnhancedBoundaryValueSolver)
     """Build and optimize the linear system for boundary value problems"""
 
     problem = solver.problem
@@ -193,7 +192,7 @@ function build_optimized_system!(solver::OptimizedBoundaryValueSolver)
     solver.LHS_matrix = global_matrix
     solver.RHS_vector = global_rhs
 
-    # Create optimized solver
+    # Create solver
     if solver.solver_type == :direct
         setup_direct_solver!(solver)
     elseif solver.solver_type == :iterative
@@ -203,8 +202,8 @@ function build_optimized_system!(solver::OptimizedBoundaryValueSolver)
     end
 end
 
-function setup_direct_solver!(solver::OptimizedBoundaryValueSolver)
-    """Setup optimized direct solver"""
+function setup_direct_solver!(solver::EnhancedBoundaryValueSolver)
+    """Setup direct solver"""
 
     matrix = solver.LHS_matrix
 
@@ -228,14 +227,14 @@ function setup_direct_solver!(solver::OptimizedBoundaryValueSolver)
     @info "Factorization completed in $(round(factorization_time, digits=3))s"
 end
 
-function setup_iterative_solver!(solver::OptimizedBoundaryValueSolver)
-    """Setup optimized iterative solver with preconditioning"""
+function setup_iterative_solver!(solver::EnhancedBoundaryValueSolver)
+    """Setup iterative solver with preconditioning"""
 
     matrix = solver.LHS_matrix
 
     @info "Setting up iterative solver..."
 
-    # Create optimized matrix-vector operator
+    # Create matrix-vector operator
     if issparse(matrix)
         solver.matrix_solver = SparseMatVec(matrix)
     else
@@ -256,16 +255,16 @@ function setup_iterative_solver!(solver::OptimizedBoundaryValueSolver)
     end
 end
 
-function setup_multigrid_solver!(solver::OptimizedBoundaryValueSolver)
+function setup_multigrid_solver!(solver::EnhancedBoundaryValueSolver)
     """Setup multigrid solver (placeholder for advanced implementation)"""
     @warn "Multigrid solver not yet implemented, falling back to iterative"
     solver.solver_type = :iterative
     setup_iterative_solver!(solver)
 end
 
-# Enhanced stepping with optimized operations
-function step!(solver::OptimizedInitialValueSolver, dt::Float64)
-    """Take optimized timestep"""
+# Enhanced stepping
+function step!(solver::EnhancedInitialValueSolver, dt::Float64)
+    """Take timestep"""
 
     if solver.monitor_performance
         start_time = time()
@@ -275,9 +274,9 @@ function step!(solver::OptimizedInitialValueSolver, dt::Float64)
     # Get current state
     state = get_state_vector(solver)
 
-    # Apply timestepper with optimized operations
-    if solver.use_optimized_linalg
-        new_state = optimized_timestep!(solver, state, dt)
+    # Apply timestepper
+    if solver.use_fast_linalg
+        new_state = enhanced_timestep!(solver, state, dt)
     else
         new_state = standard_timestep!(solver, state, dt)
     end
@@ -301,8 +300,8 @@ function step!(solver::OptimizedInitialValueSolver, dt::Float64)
     end
 end
 
-function optimized_timestep!(solver::OptimizedInitialValueSolver, state::Vector, dt::Float64)
-    """Perform timestep using optimized linear algebra operations"""
+function enhanced_timestep!(solver::EnhancedInitialValueSolver, state::Vector, dt::Float64)
+    """Perform timestep using fast linear algebra operations"""
 
     problem = solver.problem
     timestepper = solver.timestepper
@@ -310,16 +309,16 @@ function optimized_timestep!(solver::OptimizedInitialValueSolver, state::Vector,
     workspace = get_workspace_vectors(solver, length(state))
 
     if isa(timestepper, RK222) || isa(timestepper, RK443)
-        return optimized_runge_kutta_step!(solver, state, dt, workspace)
+        return runge_kutta_step!(solver, state, dt, workspace)
     elseif isa(timestepper, CNAB1) || isa(timestepper, CNAB2)
-        return optimized_imex_step!(solver, state, dt, workspace)
+        return imex_step!(solver, state, dt, workspace)
     else
         return standard_timestep!(solver, state, dt)
     end
 end
 
-function optimized_runge_kutta_step!(solver::OptimizedInitialValueSolver, state::Vector, dt::Float64, workspace::Dict)
-    """Optimized Runge-Kutta stepping"""
+function runge_kutta_step!(solver::EnhancedInitialValueSolver, state::Vector, dt::Float64, workspace::Dict)
+    """Runge-Kutta stepping"""
 
     k1 = workspace["k1"]
     k2 = workspace["k2"]
@@ -328,19 +327,19 @@ function optimized_runge_kutta_step!(solver::OptimizedInitialValueSolver, state:
     temp_state = workspace["temp_state"]
 
     # k1 = f(t, y)
-    evaluate_rhs_optimized!(k1, solver, state, solver.sim_time)
+    evaluate_rhs_fast!(k1, solver, state, solver.sim_time)
 
     # k2 = f(t + dt/2, y + dt/2 * k1)
     @. temp_state = state + dt/2 * k1
-    evaluate_rhs_optimized!(k2, solver, temp_state, solver.sim_time + dt/2)
+    evaluate_rhs_fast!(k2, solver, temp_state, solver.sim_time + dt/2)
 
     # k3 = f(t + dt/2, y + dt/2 * k2)
     @. temp_state = state + dt/2 * k2
-    evaluate_rhs_optimized!(k3, solver, temp_state, solver.sim_time + dt/2)
+    evaluate_rhs_fast!(k3, solver, temp_state, solver.sim_time + dt/2)
 
     # k4 = f(t + dt, y + dt * k3)
     @. temp_state = state + dt * k3
-    evaluate_rhs_optimized!(k4, solver, temp_state, solver.sim_time + dt)
+    evaluate_rhs_fast!(k4, solver, temp_state, solver.sim_time + dt)
 
     # Final update
     new_state = similar(state)
@@ -349,17 +348,17 @@ function optimized_runge_kutta_step!(solver::OptimizedInitialValueSolver, state:
     return new_state
 end
 
-function optimized_imex_step!(solver::OptimizedInitialValueSolver, state::Vector, dt::Float64, workspace::Dict)
-    """Optimized IMEX stepping with fast linear solvers"""
+function imex_step!(solver::EnhancedInitialValueSolver, state::Vector, dt::Float64, workspace::Dict)
+    """IMEX stepping with fast linear solvers"""
 
     implicit_rhs = workspace["implicit_rhs"]
     explicit_rhs = workspace["explicit_rhs"]
     temp_state = workspace["temp_state"]
 
-    evaluate_explicit_rhs_optimized!(explicit_rhs, solver, state, solver.sim_time)
+    evaluate_explicit_rhs!(explicit_rhs, solver, state, solver.sim_time)
 
     if haskey(solver.linear_operators, "M_combined")
-        optimized_matvec!(implicit_rhs, solver.linear_operators["M_combined"], state)
+        fast_matvec!(implicit_rhs, solver.linear_operators["M_combined"], state)
     else
         implicit_rhs .= state
     end
@@ -367,7 +366,7 @@ function optimized_imex_step!(solver::OptimizedInitialValueSolver, state::Vector
     @. implicit_rhs += dt * explicit_rhs
 
     if haskey(solver.linear_operators, "implicit_matrix")
-        solve_implicit_system_optimized!(temp_state, solver, implicit_rhs)
+        solve_implicit_system!(temp_state, solver, implicit_rhs)
     else
         temp_state .= implicit_rhs
     end
@@ -375,38 +374,38 @@ function optimized_imex_step!(solver::OptimizedInitialValueSolver, state::Vector
     return temp_state
 end
 
-function evaluate_rhs_optimized!(rhs::Vector, solver::OptimizedInitialValueSolver, state::Vector, time::Float64)
-    """Evaluate right-hand side using optimized operations"""
+function evaluate_rhs_fast!(rhs::Vector, solver::EnhancedInitialValueSolver, state::Vector, time::Float64)
+    """Evaluate right-hand side"""
 
     fill!(rhs, 0.0)
 
     for (op_name, op) in solver.linear_operators
         if startswith(op_name, "L_")
             temp_result = get_temp_vector(solver, length(state))
-            optimized_matvec!(temp_result, op, state)
+            fast_matvec!(temp_result, op, state)
             rhs .+= temp_result
         end
     end
 
-    add_nonlinear_terms_optimized!(rhs, solver, state, time)
+    add_nonlinear_terms!(rhs, solver, state, time)
 end
 
-function solve_implicit_system_optimized!(solution::Vector, solver::OptimizedInitialValueSolver, rhs::Vector)
-    """Solve implicit system using optimized methods"""
+function solve_implicit_system!(solution::Vector, solver::EnhancedInitialValueSolver, rhs::Vector)
+    """Solve implicit system"""
     solution .= rhs
 end
 
 # Boundary value solver
-function solve!(solver::OptimizedBoundaryValueSolver)
-    """Solve boundary value problem with optimized linear algebra"""
+function solve!(solver::EnhancedBoundaryValueSolver)
+    """Solve boundary value problem"""
 
     @info "Solving boundary value problem..."
     start_time = time()
 
     if solver.solver_type == :direct
-        solve_direct_optimized!(solver)
+        solve_direct!(solver)
     elseif solver.solver_type == :iterative
-        solve_iterative_optimized!(solver)
+        solve_iterative!(solver)
     end
 
     solve_time = time() - start_time
@@ -418,8 +417,8 @@ function solve!(solver::OptimizedBoundaryValueSolver)
     distribute_solution!(solver)
 end
 
-function solve_direct_optimized!(solver::OptimizedBoundaryValueSolver)
-    """Direct solve using optimized factorization"""
+function solve_direct!(solver::EnhancedBoundaryValueSolver)
+    """Direct solve using factorization"""
 
     if solver.factorization !== nothing
         ldiv!(solver.solution_vector, solver.factorization, solver.RHS_vector)
@@ -428,8 +427,8 @@ function solve_direct_optimized!(solver::OptimizedBoundaryValueSolver)
     end
 end
 
-function solve_iterative_optimized!(solver::OptimizedBoundaryValueSolver)
-    """Iterative solve using optimized operations"""
+function solve_iterative!(solver::EnhancedBoundaryValueSolver)
+    """Iterative solve"""
 
     x = solver.solution_vector
     b = solver.RHS_vector
@@ -444,7 +443,7 @@ function solve_iterative_optimized!(solver::OptimizedBoundaryValueSolver)
     max_iter = solver.max_iterations
 
     for iter in 1:max_iter
-        optimized_matvec!(residual, A_op, x)
+        fast_matvec!(residual, A_op, x)
         @. residual = b - residual
 
         residual_norm = norm(residual)
@@ -455,7 +454,7 @@ function solve_iterative_optimized!(solver::OptimizedBoundaryValueSolver)
         end
 
         if P_op !== nothing
-            optimized_matvec!(temp_vec, P_op, residual)
+            fast_matvec!(temp_vec, P_op, residual)
             residual .= temp_vec
         end
 
@@ -464,7 +463,7 @@ function solve_iterative_optimized!(solver::OptimizedBoundaryValueSolver)
 end
 
 # Utility functions
-function get_workspace_vectors(solver::OptimizedInitialValueSolver, size::Int)
+function get_workspace_vectors(solver::EnhancedInitialValueSolver, size::Int)
     """Get pre-allocated workspace vectors"""
 
     workspace = Dict{String, Vector{Float64}}()
@@ -481,7 +480,7 @@ function get_workspace_vectors(solver::OptimizedInitialValueSolver, size::Int)
     return workspace
 end
 
-function get_temp_vector(solver::OptimizedInitialValueSolver, size::Int)
+function get_temp_vector(solver::EnhancedInitialValueSolver, size::Int)
     """Get temporary vector for intermediate calculations"""
 
     key = "temp_$(size)"
@@ -492,7 +491,7 @@ function get_temp_vector(solver::OptimizedInitialValueSolver, size::Int)
     return solver.workspace_vectors[key]
 end
 
-function allocate_solver_workspace!(solver::OptimizedInitialValueSolver)
+function allocate_solver_workspace!(solver::EnhancedInitialValueSolver)
     """Pre-allocate all workspace arrays"""
 
     state_size = total_field_size(solver.problem)
@@ -691,12 +690,12 @@ function evaluate_rhs(solver, state::Vector)
     return zeros(Float64, length(state))
 end
 
-function evaluate_explicit_rhs_optimized!(rhs, solver, state, time)
+function evaluate_explicit_rhs!(rhs, solver, state, time)
     """Evaluate explicit RHS terms"""
     nothing
 end
 
-function add_nonlinear_terms_optimized!(rhs, solver, state, time)
+function add_nonlinear_terms!(rhs, solver, state, time)
     """Add nonlinear terms to RHS"""
     nothing
 end
@@ -730,7 +729,7 @@ function assemble_global_rhs(problem)
     return zeros(Float64, 100)
 end
 
-# Export optimized solvers
-export OptimizedInitialValueSolver, OptimizedBoundaryValueSolver
-export setup_optimized_operators!, build_optimized_system!
+# Export enhanced solvers
+export EnhancedInitialValueSolver, EnhancedBoundaryValueSolver
+export setup_operators!, build_system!
 export step!, solve!
