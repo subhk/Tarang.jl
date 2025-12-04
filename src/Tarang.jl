@@ -24,6 +24,20 @@ using ForwardDiff
 using HDF5
 using LoopVectorization
 
+# Custom PencilConfig struct for pencil array configuration
+struct PencilConfig
+    global_shape::Tuple{Vararg{Int}}
+    mesh::Tuple{Vararg{Int}}
+    comm::MPI.Comm
+    decomp_dims::Tuple{Vararg{Bool}}
+
+    function PencilConfig(global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}};
+                         comm::MPI.Comm=MPI.COMM_WORLD,
+                         decomp_dims::Tuple{Vararg{Bool}}=ntuple(i -> true, length(mesh)))
+        new(global_shape, mesh, comm, decomp_dims)
+    end
+end
+
 # Core utilities needed across modules
 include("tools/general.jl")
 include("tools/exceptions.jl")

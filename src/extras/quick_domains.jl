@@ -481,20 +481,19 @@ function analyze_3d_performance(domain::Domain, n_fields::Int=4)
 end
 
 function estimate_memory_usage(domain::Domain, n_fields::Int=1; dtype::Type=Float64)
-    """Estimate memory usage for domain and fields with GPU considerations"""
-    
+    """Estimate memory usage for domain and fields (CPU only)."""
+
     global_size = prod(global_shape(domain))
     local_size = prod(local_shape(domain))
-    
+
     bytes_per_element = sizeof(dtype)
-    
-    # Memory per field (grid + coefficient layouts)
+
     memory_per_field_local = 2 * local_size * bytes_per_element
     memory_per_field_global = 2 * global_size * bytes_per_element
-    
+
     total_local = n_fields * memory_per_field_local
     total_global = n_fields * memory_per_field_global
-    
+
     @info "Memory Usage Estimate ($(domain.device_type)):"
     @info "  Element type: $dtype ($(bytes_per_element) bytes per element)"
     @info "  Global elements per field: $global_size"
@@ -502,39 +501,23 @@ function estimate_memory_usage(domain::Domain, n_fields::Int=1; dtype::Type=Floa
     @info "  Fields: $n_fields"
     @info "  Memory per process: $(round(total_local / 1024^2, digits=2)) MB"
     @info "  Total memory: $(round(total_global / 1024^2, digits=2)) MB"
-    
-    # GPU-specific memory considerations
-    if domainfalse
-        @info "  GPU Memory Information:"
-        @info "    Required for fields: $(round(total_local / 1024^3, digits=3)) GB"
-        
-        # Check if fields will fit in GPU memory
-        field_memory_gb = total_local / 1024^3
-        
-        if field_memory_gb > available_gb * 0.8  # Leave 20% safety margin
-            @warn "  Fields may not fit in GPU memory! Consider reducing field count or resolution."
-        else
-            utilization = field_memory_gb / available_gb * 100
-            @info "    Expected GPU utilization: $(round(utilization, digits=1))%"
-        end
-    end
-    
+
     if domain.dist.size > 1
         avg_memory_per_process = total_global / domain.dist.size / 1024^2
         @info "  Average per process: $(round(avg_memory_per_process, digits=2)) MB"
     end
 end
 
-# GPU-specific domain utilities
+# Domain utilities (CPU-only)
 function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
-    """Benchmark domain operations on GPU vs CPU"""
+    """Benchmark domain operations on CPU"""
     
     @info "Benchmarking domain operations ($(domain.device_type)):"
     
     # Benchmark coordinate generation
     @info "  Testing coordinate generation..."
     coord_time = @elapsed for i in 1:n_iterations
-        coords = get_grid_coordinates_gpu(domain)
+        coords = get_grid_coordinates(domain)
     end
     @info "    Average time: $(round(coord_time / n_iterations * 1000, digits=2)) ms"
     
@@ -549,45 +532,16 @@ function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
     if length(domain.bases) > 1
         @info "  Testing meshgrid creation..."
         meshgrid_time = @elapsed for i in 1:n_iterations
-            meshgrid = create_meshgrid_gpu(domain)
+            meshgrid = create_meshgrid(domain)
         end
         @info "    Average time: $(round(meshgrid_time / n_iterations * 1000, digits=2)) ms"
-    end
-    
-    # Memory transfer benchmarks (GPU only)
-    if domainfalse
-        @info "  Testing GPU memory transfers..."
-        coords = get_grid_coordinates_gpu(domain)
-        coord_name = domain.bases[1].meta.element_label
-        test_array = coords[coord_name]
-        
-        # GPU to CPU transfer
-        gpu_to_cpu_time = @elapsed for i in 1:n_iterations
-            Array(test_array)
-        end
-        
-        # CPU to GPU transfer  
-        cpu_array = Array(test_array)
-        cpu_to_gpu_time = @elapsed for i in 1:n_iterations
-            cpu_array
-        end
-        
-        array_size_mb = sizeof(test_array) / 1024^2
-        @info "    GPU→CPU: $(round(gpu_to_cpu_time / n_iterations * 1000, digits=2)) ms ($(round(array_size_mb, digits=2)) MB)"
-        @info "    CPU→GPU: $(round(cpu_to_gpu_time / n_iterations * 1000, digits=2)) ms ($(round(array_size_mb, digits=2)) MB)"
-        
-        gpu_to_cpu_bandwidth = array_size_mb * n_iterations / gpu_to_cpu_time * 1000  # MB/s
-        cpu_to_gpu_bandwidth = array_size_mb * n_iterations / cpu_to_gpu_time * 1000  # MB/s
-        
-        @info "    Transfer bandwidth: GPU→CPU $(round(gpu_to_cpu_bandwidth, digits=1)) MB/s, CPU→GPU $(round(cpu_to_gpu_bandwidth, digits=1)) MB/s"
     end
 end
 
 function create_gpu_optimized_domain(dist::Distributor, domain_type::Symbol, args...; kwargs...)
-    """Create GPU-optimized domain for common use cases"""
+    """Create domain for common use cases (CPU-only)."""
     
-    # Select appropriate device
-    device = get(kwargs, :device, "gpu")  # Default to GPU
+    device = get(kwargs, :device, "cpu")
     
     domain = if domain_type == :rayleigh_benard_2d
         aspect_ratio = get(args, 1, 4.0)
@@ -628,69 +582,22 @@ function create_gpu_optimized_domain(dist::Distributor, domain_type::Symbol, arg
         throw(ArgumentError("Unknown domain type: $domain_type"))
     end
     
-    @info "Created GPU-optimized $domain_type domain on $(domain.device_type)"
+    @info "Created $domain_type domain on $(domain.device_type)"
     
     return domain
 end
 
 function optimize_domain_for_gpu!(domain::Domain)
-    """Optimize domain settings for GPU performance"""
-    
-    if domain.device_type == CPU_DEVICE
-        @info "Domain is on CPU, no GPU optimizations applied"
-        return domain
-    end
-    
-    @info "Optimizing domain for GPU performance..."
-    
-    # Pre-generate and cache commonly used arrays
-    @info "  Pre-generating grid coordinates..."
-    coords = get_grid_coordinates_gpu(domain)
-    
-    @info "  Pre-computing integration weights..."
-    weights = integration_weights(domain)
-    
-    # Create meshgrid for multi-dimensional domains
-    if length(domain.bases) > 1
-        @info "  Creating meshgrid..."
-        meshgrid = create_meshgrid_gpu(domain)
-    end
-    
-    # Report memory usage
-    mem_info = get_domain_memory_info(domain)
-    @info "  GPU memory usage: $(round(mem_info.domain_memory / 1024^2, digits=2)) MB ($(round(mem_info.memory_utilization, digits=1))%)"
-    
-    @info "Domain optimization complete!"
-    
+    """No-op placeholder to maintain API; GPU optimizations removed."""
+    @info "Domain is CPU-only; GPU optimizations skipped."
     return domain
 end
 
 function compare_gpu_cpu_performance(domain_spec::Tuple)
-    """Compare GPU vs CPU performance for domain operations"""
-    
+    """CPU-only placeholder; GPU comparison removed."""
     dist, args = domain_spec[1], domain_spec[2:end]
-    
-    @info "Comparing GPU vs CPU performance for domain operations..."
-    
-    # Create CPU domain
-    @info "Creating CPU domain..."
+    @info "GPU support removed; benchmarking CPU domain only."
     cpu_domain = create_2d_periodic_domain(dist, args...; device="cpu")
-    
-    # Create GPU domain
-    @info "Creating GPU domain..."
-    gpu_domain = create_2d_periodic_domain(dist, args...; device="gpu")
-    
-    # Benchmark both
-    @info "\nCPU Performance:"
     benchmark_domain_operations(cpu_domain; n_iterations=50)
-    
-    @info "\nGPU Performance:"
-    benchmark_domain_operations(gpu_domain; n_iterations=50)
-    
-    # Memory comparison
-    @info "\nMemory Usage Comparison:"
-    @info "CPU Domain:"
     estimate_memory_usage(cpu_domain, 4)
-    @info "\nGPU Domain:"
-    estimate_memory_usage(gpu_domain, 4)
 end

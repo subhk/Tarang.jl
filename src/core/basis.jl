@@ -35,12 +35,12 @@ mutable struct BasisMeta
     subaxis_dependence::Vector{Bool}
     
     
-    function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, constant::Vector{Bool}, subaxis_dependence::Vector{Bool}, )
-        new(coordsys, element_label, dim, size, bounds, dealias, dtype, constant, subaxis_dependence, device_config)
+    function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, constant::Vector{Bool}, subaxis_dependence::Vector{Bool})
+        new(coordsys, element_label, dim, size, bounds, dealias, dtype, constant, subaxis_dependence)
     end
 end
 
-function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, device_config=nothing; constant=nothing, subaxis_dependence=nothing)
+function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype; constant=nothing, subaxis_dependence=nothing)
     const_vec = if constant === nothing
         fill(false, dim)
     elseif constant isa Bool
@@ -61,7 +61,7 @@ function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, d
     if length(dep_vec) != dim
         throw(ArgumentError("subaxis_dependence length $(length(dep_vec)) does not match basis dimension $dim"))
     end
-    return BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, const_vec, dep_vec, device_config)
+    return BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, const_vec, dep_vec)
 end
 
 struct RealFourier <: Basis
@@ -70,7 +70,7 @@ struct RealFourier <: Basis
 end
 
 function _build_real_fourier(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(0.0,2π), dealias::Float64=1.0, dtype=Float64)
-    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype)
     transforms = Dict{String, Any}()
     return RealFourier(meta, transforms)
 end
@@ -87,7 +87,7 @@ struct ComplexFourier <: Basis
 end
 
 function _build_complex_fourier(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(0.0,2π), dealias::Float64=1.0, dtype=ComplexF64)
-    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype)
     transforms = Dict{String, Any}()
     return ComplexFourier(meta, transforms)
 end
@@ -108,7 +108,7 @@ struct ChebyshevT <: Basis
 end
 
 function _build_chebyshev_t(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64, a=0.0, b=0.0)
-    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype)
     transforms = Dict{String, Any}()
     return ChebyshevT(meta, transforms, a, b)
 end
@@ -125,7 +125,7 @@ struct ChebyshevU <: Basis
 end
 
 function _build_chebyshev_u(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
-    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype)
     transforms = Dict{String, Any}()
     return ChebyshevU(meta, transforms)
 end
@@ -142,7 +142,7 @@ struct Legendre <: Basis
 end
 
 function _build_legendre(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
-    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype)
     transforms = Dict{String, Any}()
     return Legendre(meta, transforms)
 end
@@ -160,7 +160,7 @@ struct Ultraspherical <: Basis
 end
 
 function _build_ultraspherical(coord::Coordinate; alpha::Float64=0.5, size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
-    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype)
     transforms = Dict{String, Any}()
     return Ultraspherical(meta, transforms, alpha)
 end
@@ -180,7 +180,7 @@ struct Jacobi <: Basis
 end
 
 function _build_jacobi(coord::Coordinate; a::Float64=0.0, b::Float64=0.0, size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
-    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype)
     transforms = Dict{String, Any}()
     return Jacobi(meta, transforms, a, b)
 end
@@ -201,7 +201,7 @@ end
 function _build_disk_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias)
     bounds = (0.0, radius)
-    meta = BasisMeta(coord.coordsys, coord.name, 2, size, bounds, dealias_tuple, dtype, device_config;
+    meta = BasisMeta(coord.coordsys, coord.name, 2, size, bounds, dealias_tuple, dtype;
                      constant=[false, false], subaxis_dependence=[true, true])
     transforms = Dict{String, Any}()
     return DiskBasis(meta, transforms, radius)
@@ -221,7 +221,7 @@ end
 
 function _build_annulus_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias)
-    meta = BasisMeta(coord.coordsys, coord.name, 2, size, radii, dealias_tuple, dtype, device_config;
+    meta = BasisMeta(coord.coordsys, coord.name, 2, size, radii, dealias_tuple, dtype;
                      constant=[false, false], subaxis_dependence=[false, true])
     transforms = Dict{String, Any}()
     return AnnulusBasis(meta, transforms, radii)
@@ -243,7 +243,7 @@ end
 function _build_sphere_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
     bounds = (0.0, radius)
-    meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype, device_config;
+    meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype;
                      constant=[false, false, false], subaxis_dependence=[false, true, true])
     transforms = Dict{String, Any}()
     return SphereBasis(meta, transforms, radius)
@@ -264,7 +264,7 @@ end
 function _build_ball_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
     bounds = (0.0, radius)
-    meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype, device_config;
+    meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype;
                      constant=[false, false, false], subaxis_dependence=[false, true, true])
     transforms = Dict{String, Any}()
     return BallBasis(meta, transforms, radius)
@@ -284,7 +284,7 @@ end
 
 function _build_shell_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
-    meta = BasisMeta(coord.coordsys, coord.name, 3, size, radii, dealias_tuple, dtype, device_config;
+    meta = BasisMeta(coord.coordsys, coord.name, 3, size, radii, dealias_tuple, dtype;
                      constant=[false, false, false], subaxis_dependence=[false, true, true])
     transforms = Dict{String, Any}()
     return ShellBasis(meta, transforms, radii)
@@ -628,14 +628,9 @@ function derivative_basis_gpu(basis::RealFourier, coords, modes, order=1)
     return result
 end
 
-function to_device!(basis::Basis, )
-    """Move basis to specified device."""
-    basis.meta = device_config
+function to_device!(basis::Basis, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """No-op device transfer for CPU-only mode."""
     return basis
-end
-
-    """Get device configuration of basis."""
-    return basis.meta
 end
 
 function synchronize_basis!(basis::Basis)

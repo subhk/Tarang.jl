@@ -25,37 +25,35 @@ mutable struct Domain
     dist::Distributor
     bases::Tuple{Vararg{Basis}}
     dim::Int
-    
-    # GPU support
-    
+    device_type::Symbol
     grid_coordinates::Dict{String, AbstractArray}  # Cached grid coordinates on device
     integration_weights_cache::Dict{String, AbstractArray}  # Cached integration weights on device
     performance_stats::DomainPerformanceStats
     attribute_cache::Dict{Symbol, Any}
-    
+
+    function Domain(dist::Distributor, bases::Tuple{Vararg{Basis}})
         # Filter out nothing bases and remove duplicates
         filtered_bases = filter(b -> b !== nothing, bases)
         unique_bases = unique(filtered_bases)
-        
+
         # Check for overlapping coordinate systems
         coordsys_list = [basis.meta.coordsys for basis in unique_bases]
         if length(Set(coordsys_list)) < length(coordsys_list)
             throw(ArgumentError("Overlapping bases specified"))
         end
-        
+
         # Sort bases by axis index
         sorted_bases = sort(unique_bases, by=b -> get_basis_axis(dist, b))
-        
+
         # Calculate total dimension
         total_dim = sum(basis.meta.dim for basis in sorted_bases)
-        
-        # Initialize GPU support
+
         grid_coords = Dict{String, AbstractArray}()
         weights_cache = Dict{String, AbstractArray}()
         perf_stats = DomainPerformanceStats()
         attribute_cache = Dict{Symbol, Any}()
-        
-        new(dist, tuple(sorted_bases...), total_dim, device_config, grid_coords, weights_cache, perf_stats, attribute_cache)
+
+        new(dist, tuple(sorted_bases...), total_dim, CPU_DEVICE, grid_coords, weights_cache, perf_stats, attribute_cache)
     end
 end
 
@@ -392,185 +390,106 @@ function basis_names(domain::Domain)
     return [basis.meta.element_label for basis in domain.bases]
 end
 
-# GPU-specific domain functions
-function get_grid_coordinates_gpu(domain::Domain)
-    """Get grid coordinates on GPU for all bases"""
-    
+function get_grid_coordinates(domain::Domain)
+    """Get grid coordinates for all bases (CPU only)."""
+
     start_time = time()
-    coordinates = Dict{String, AbstractArray}()
-    
+    coordinates = Dict{String, Vector{Float64}}()
+
     for basis in domain.bases
         coord_name = basis.meta.element_label
         cache_key = "coords_$(coord_name)_$(basis.meta.size)"
-        
-        # Check cache first
+
         if haskey(domain.grid_coordinates, cache_key)
             coordinates[coord_name] = domain.grid_coordinates[cache_key]
             continue
         end
-        
-        # Generate coordinates on GPU
+
         coords = if isa(basis, RealFourier) || isa(basis, ComplexFourier)
-            # Fourier grid points
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
             dx = L / basis.meta.size
-            x_range = range(basis.meta.bounds[1], length=basis.meta.size, step=dx)
-            collect(x_range)
+            collect(range(basis.meta.bounds[1], length=basis.meta.size, step=dx))
         elseif isa(basis, ChebyshevT)
-            # Chebyshev-Gauss-Lobatto points
             N = basis.meta.size
             a, b = basis.meta.bounds
-            # Chebyshev points in [-1, 1]
             cheb_points = [cos(π * (2*k - 1) / (2*N)) for k in N:-1:1]
-            # Map to [a, b]
-            x_points = [(b - a) * (p + 1) / 2 + a for p in cheb_points]
-            x_points
+            [(b - a) * (p + 1) / 2 + a for p in cheb_points]
         elseif isa(basis, Legendre)
-            # Gauss-Legendre points (placeholder - uniform grid)
-            x_range = range(basis.meta.bounds[1], basis.meta.bounds[2], length=basis.meta.size)
-            collect(x_range)
+            collect(range(basis.meta.bounds[1], basis.meta.bounds[2], length=basis.meta.size))
         else
-            # Default uniform grid
-            x_range = range(basis.meta.bounds[1], basis.meta.bounds[2], length=basis.meta.size)
-            collect(x_range)
+            collect(range(basis.meta.bounds[1], basis.meta.bounds[2], length=basis.meta.size))
         end
-        
-        # Cache coordinates on GPU
+
         domain.grid_coordinates[cache_key] = coords
         coordinates[coord_name] = coords
     end
-    
-    # Synchronize GPU operations
-    
-    # Update performance statistics
+
     domain.performance_stats.total_time += time() - start_time
     domain.performance_stats.coordinate_generations += 1
-    
+
     return coordinates
 end
 
-function get_grid_coordinates(domain::Domain)
-    """Get grid coordinates (CPU version for compatibility)"""
-    gpu_coords = get_grid_coordinates_gpu(domain)
-    # Convert to CPU arrays
-    cpu_coords = Dict{String, Vector{Float64}}()
-    for (name, coords) in gpu_coords
-        cpu_coords[name] = Array(coords)
-    end
-    return cpu_coords
-end
+function create_meshgrid(domain::Domain)
+    """Create meshgrid arrays for multi-dimensional domains (CPU)."""
 
-function create_meshgrid_gpu(domain::Domain)
-    """Create meshgrid arrays on GPU for multi-dimensional domains"""
-    
-    coords = get_grid_coordinates_gpu(domain)
-    
+    coords = get_grid_coordinates(domain)
+
     if length(domain.bases) == 1
-        # 1D case - return the single coordinate
         coord_name = domain.bases[1].meta.element_label
         return Dict(coord_name => coords[coord_name])
     elseif length(domain.bases) == 2
-        # 2D meshgrid
         x_name = domain.bases[1].meta.element_label
         y_name = domain.bases[2].meta.element_label
-        
+
         x_coords = coords[x_name]
         y_coords = coords[y_name]
-        
-        # Create GPU meshgrid
-        X = repeat(Array(x_coords)', 1), domain)
-        Y = repeat(Array(y_coords)), domain)
-        
+
+        X = repeat(reshape(x_coords, 1, :), length(y_coords), 1)'
+        Y = repeat(reshape(y_coords, :, 1), 1, length(x_coords))
+
         return Dict(x_name => X, y_name => Y)
     elseif length(domain.bases) == 3
-        # 3D meshgrid
         x_name = domain.bases[1].meta.element_label
         y_name = domain.bases[2].meta.element_label
         z_name = domain.bases[3].meta.element_label
-        
-        x_coords = Array(coords[x_name])
-        y_coords = Array(coords[y_name])
-        z_coords = Array(coords[z_name])
-        
+
+        x_coords = coords[x_name]
+        y_coords = coords[y_name]
+        z_coords = coords[z_name]
+
         nx, ny, nz = length(x_coords), length(y_coords), length(z_coords)
-        
-        # Create 3D meshgrids on GPU
-        X = repeat(reshape(x_coords), 1, ny, nz), domain)
-        Y = repeat(reshape(y_coords), nx, 1, nz), domain)
-        Z = repeat(reshape(z_coords), nx, ny, 1), domain)
-        
+
+        X = repeat(reshape(x_coords, nx, 1, 1), 1, ny, nz)
+        Y = repeat(reshape(y_coords, 1, ny, 1), nx, 1, nz)
+        Z = repeat(reshape(z_coords, 1, 1, nz), nx, ny, 1)
+
         return Dict(x_name => X, y_name => Y, z_name => Z)
     else
         throw(ArgumentError("Meshgrid not implemented for $(length(domain.bases))D domains"))
     end
 end
 
-function domain_volume_gpu(domain::Domain)
-    """Calculate domain volume using GPU acceleration"""
-    
-    vol = device_ones(Float64, (1,), domain)[1]
-    
+function domain_volume(domain::Domain)
+    """Calculate domain volume (CPU)."""
+    vol = 1.0
     for basis in domain.bases
         interval_length = basis.meta.bounds[2] - basis.meta.bounds[1]
         vol *= interval_length
     end
-    
     return vol
 end
 
-function move_domain_to_device!(domain::Domain, )
-    """Move domain data to specified device"""
-    
-    old_device = domain
-    domain = device_config
-    
-    # Move cached grid coordinates
-    for (key, coords) in domain.grid_coordinates
-        domain.grid_coordinates[key] = Array(coords)
-    end
-    
-    # Move cached integration weights
-    for (key, weights) in domain.integration_weights_cache
-        domain.integration_weights_cache[key] = Array(weights)
-    end
-    
-    @info "Moved domain from $(old_device.device_type) to $(device_config.device_type)"
-    
-    return domain
-end
+function log_domain_performance(domain::Domain)
+    """Log domain performance statistics (CPU only)."""
 
-function get_domain_memory_info(domain::Domain)
-    """Get GPU memory usage information for domain"""
-    
-    if domainfalse
-        
-        # Estimate memory used by domain caches
-        domain_memory = 0
-        
-        for (key, coords) in domain.grid_coordinates
-            domain_memory += sizeof(coords)
-        end
-        
-        for (key, weights) in domain.integration_weights_cache
-            domain_memory += sizeof(weights)
-        end
-        
-        return (
-            total_memory = memory_info.total,
-            available_memory = memory_info.available,
-            used_memory = memory_info.used,
-            domain_memory = domain_memory,
-            memory_utilization = domain_memory / memory_info.total * 100
-        )
-    else
-        return (
-            total_memory = typemax(Int64),
-            available_memory = typemax(Int64),
-            used_memory = 0,
-            domain_memory = 0,
-            memory_utilization = 0.0
-        )
-    end
+    stats = domain.performance_stats
+
+    @info "Domain performance ($(domain.device_type)):"
+    @info "  Coordinate generations: $(stats.coordinate_generations)"
+    @info "  Weight computations: $(stats.weight_computations)"
+    @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
+    @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses"
 end
 
 function log_domain_performance(domain::Domain)
@@ -583,10 +502,18 @@ function log_domain_performance(domain::Domain)
     @info "  Weight computations: $(stats.weight_computations)"
     @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
     @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses"
-    
-    # Memory usage
-    mem_info = get_domain_memory_info(domain)
-    @info "  GPU memory usage: $(round(mem_info.domain_memory / 1024^2, digits=2)) MB ($(round(mem_info.memory_utilization, digits=1))%)"
+end
+
+function get_domain_memory_info(domain::Domain)
+    """Return placeholder memory info (CPU-only)."""
+    mem = default_memory_info()
+    return (
+        total_memory = mem.total,
+        available_memory = mem.available,
+        used_memory = mem.used,
+        domain_memory = 0,
+        memory_utilization = 0.0
+    )
 end
 
 # Iteration interface

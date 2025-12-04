@@ -537,39 +537,15 @@ function solve!(solver::EigenvalueSolver)
     solver.L_matrix = solver.L_matrix
     solver.M_matrix = solver.M_matrix
     
-    # Solve generalized eigenvalue problem: L * v = λ * M * v
-    # Note: GPU eigenvalue solvers may have limitations, might need CPU fallback
-    if solverfalse
-        @info "GPU eigenvalue solver may not be available, using CPU fallback"
-        L_cpu = Array(solver.L_matrix)
-        M_cpu = Array(solver.M_matrix)
-        
-        if solver.target === nothing
-            # Find largest magnitude eigenvalues
-            λ, v = eigs(L_cpu, M_cpu, nev=solver.n_modes, which=:LM)
-        else
-            # Find eigenvalues near target
-            σ = solver.target
-            λ, v = eigs(L_cpu, M_cpu, nev=solver.n_modes, sigma=σ)
-        end
-        
-        # Move results back to GPU if needed
-        solver.eigenvalues = λ
-        solver.eigenvectors = v
+    # Solve generalized eigenvalue problem: L * v = λ * M * v (CPU only)
+    if solver.target === nothing
+        λ, v = eigs(solver.L_matrix, solver.M_matrix, nev=solver.n_modes, which=:LM)
     else
-        # CPU solution
-        if solver.target === nothing
-            # Find largest magnitude eigenvalues
-            λ, v = eigs(solver.L_matrix, solver.M_matrix, nev=solver.n_modes, which=:LM)
-        else
-            # Find eigenvalues near target
-            σ = solver.target
-            λ, v = eigs(solver.L_matrix, solver.M_matrix, nev=solver.n_modes, sigma=σ)
-        end
-        
-        solver.eigenvalues = λ
-        solver.eigenvectors = v
+        λ, v = eigs(solver.L_matrix, solver.M_matrix, nev=solver.n_modes, sigma=solver.target)
     end
+    
+    solver.eigenvalues = λ
+    solver.eigenvectors = v
     
     # Synchronize GPU operations
     
@@ -1338,274 +1314,48 @@ function solve_nonlinear_gpu!(solver::BoundaryValueSolver)
     copy_solution_to_fields_gpu!(solver.state, x, solver)
 end
 
-function fields_to_vector_gpu(fields::Vector{ScalarField}, )
-    """Convert field array to solution vector with GPU support"""
-    
-    # Ensure all fields are in coefficient space and on correct device
-    for field in fields
-        ensure_layout!(field, :c)
-        field.data_c = field.data_c
-    end
-    
-    # Calculate total vector size
-    total_size = sum(compute_field_vector_size(field) for field in fields)
-    
-    # Allocate output vector on device
-    vector = device_zeros(ComplexF64, (total_size,), device_config)
-    
-    # Gather field data into vector
-    offset = 1
-    for field in fields
-        field_size = compute_field_vector_size(field)
-        if field_size > 0
-            # Extract field data
-            field_data = vec(field.data_c)
-            
-            # Copy to vector buffer
-            end_offset = offset + field_size - 1
-            if end_offset <= length(vector) && length(field_data) == field_size
-                vector[offset:end_offset] .= field_data
-            else
-                @warn "Size mismatch in GPU fields_to_vector: expected $field_size, got $(length(field_data))"
-                copy_size = min(field_size, length(field_data), length(vector) - offset + 1)
-                if copy_size > 0
-                    vector[offset:offset+copy_size-1] .= field_data[1:copy_size]
-                end
-            end
-            
-            offset += field_size
-        end
-    end
-    
-    return vector
+function fields_to_vector_gpu(fields::Vector{ScalarField}, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """CPU-only wrapper for compatibility."""
+    return fields_to_vector(fields)
 end
 
-function copy_solution_to_fields_gpu!(fields::Vector{ScalarField}, solution::AbstractArray, )
-    """Copy solution vector back to fields with GPU support"""
-    
-    # Ensure solution is on correct device
-    solution = solution
-    
-    offset = 1
-    for field in fields
-        field_size = compute_field_vector_size(field)
-        
-        if field_size > 0 && offset <= length(solution)
-            # Extract data from solution vector
-            end_offset = min(offset + field_size - 1, length(solution))
-            actual_size = end_offset - offset + 1
-            
-            if actual_size > 0
-                field_data = solution[offset:end_offset]
-                
-                # Ensure field coefficient data is on correct device
-                field.data_c = field.data_c
-                
-                # Reshape and copy data back to field
-                target_shape = size(field.data_c)
-                expected_size = prod(target_shape)
-                
-                if length(field_data) == expected_size
-                    field.data_c .= reshape(field_data, target_shape)
-                else
-                    @warn "GPU size mismatch for field $(field.name): expected $expected_size, got $(length(field_data))"
-                    copy_size = min(length(field_data), expected_size)
-                    if copy_size > 0
-                        field.data_c[1:copy_size] .= field_data[1:copy_size]
-                    end
-                end
-                
-                field.current_layout = :c
-            end
-            
-            offset += field_size
-        end
-    end
-    
-    # Synchronize GPU operations
+function copy_solution_to_fields_gpu!(fields::Vector{ScalarField}, solution::AbstractArray, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """CPU-only wrapper for compatibility."""
+    copy_solution_to_fields!(fields, vec(solution))
 end
 
-function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, )
-    """Evaluate residual and Jacobian with GPU acceleration"""
-    
-    # Ensure x is on correct device
-    x = x
-    
-    # Copy solution vector back to problem fields (GPU-aware)
-    copy_solution_to_fields_gpu!(problem.variables, x, device_config)
-    
-    # Evaluate residual expressions F(x) on GPU
-    residual_fields = ScalarField[]
-    
-    if hasfield(typeof(problem), :equation_data) && problem.equation_data !== nothing
-        for (i, eq_data) in enumerate(problem.equation_data)
-            if haskey(eq_data, "F_expr") && eq_data["F_expr"] !== nothing
-                # Evaluate the residual expression on GPU
-                residual_field = evaluate_solver_expression_gpu(eq_data["F_expr"], problem.variables, device_config)
-                push!(residual_fields, residual_field)
-            else
-                # Create zero residual field on GPU
-                var_field = problem.variables[min(i, length(problem.variables))]
-                residual_field = ScalarField(var_field.dist, "residual_$i", var_field.bases, var_field.dtype)
-                ensure_layout!(residual_field, :c)
-                residual_field.data_c = device_zeros(eltype(var_field.data_c), size(var_field.data_c), device_config)
-                push!(residual_fields, residual_field)
-            end
-        end
-    else
-        @warn "No equation data available for GPU residual evaluation - creating zero residuals"
-        for (i, var) in enumerate(problem.variables)
-            residual_field = ScalarField(var.dist, "residual_$i", var.bases, var.dtype)
-            ensure_layout!(residual_field, :c)
-            residual_field.data_c = device_zeros(eltype(var.data_c), size(var.data_c), device_config)
-            push!(residual_fields, residual_field)
-        end
-    end
-    
-    # Convert residual fields to vector on GPU
-    residual = fields_to_vector_gpu(residual_fields, device_config)
-    
-    # Build Jacobian matrix on GPU
-    n = length(x)
-    if device_config.device_type == CPU_DEVICE
-        jacobian = sparse(zeros(ComplexF64, n, n))
-    else
-        # For GPU, create dense matrix (sparse operations may be limited)
-        jacobian = device_zeros(ComplexF64, (n, n), device_config)
-        
-        # Fill diagonal as placeholder (would need proper GPU Jacobian assembly)
-        for i in 1:n
-            jacobian[i, i] = 1.0
-        end
-    end
-    
-    return residual, jacobian
+function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """CPU-only wrapper for compatibility."""
+    return evaluate_residual_and_jacobian(problem, vec(x))
 end
 
-function evaluate_solver_expression_gpu(expr, variables, )
-    """Evaluate expression with GPU acceleration"""
-    
-    if expr === nothing
-        throw(ArgumentError("Cannot evaluate null expression on GPU"))
-    end
-    
-    # For now, use CPU evaluation and move result to GPU
-    # Full GPU expression evaluation would be a complex implementation
-    result_cpu = evaluate_solver_expression(expr, variables)
-    
-    # Move result to GPU
-    if result_cpu.data_c !== nothing
-        result_cpu.data_c = result_cpu.data_c
-    end
-    if result_cpu.data_g !== nothing
-        result_cpu.data_g = result_cpu.data_g
-    end
-    
-    return result_cpu
+function evaluate_solver_expression_gpu(expr, variables, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """CPU-only wrapper for compatibility."""
+    return evaluate_solver_expression(expr, variables)
 end
 
 # GPU utility functions for solvers
-function move_solver_to_device!(solver::InitialValueSolver, )
-    """Move solver and all its data to specified device"""
-    
-    old_device = solver
-    solver = device_config
-    
-    # Move state fields to new device
-    for field in solver.state
-        field.data_g = Array(field.data_g)
-        field.data_c = Array(field.data_c)
-    end
-    
-    # Clear GPU memory pool if changing device types
-    if old_device.device_type != device_config.device_type
-    end
-    
-    @info "Moved IVP solver from $(old_device.device_type) to $(device_config.device_type)"
-    
+function move_solver_to_device!(solver::InitialValueSolver, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """No-op for CPU-only mode."""
     return solver
 end
 
-function move_solver_to_device!(solver::BoundaryValueSolver, )
-    """Move boundary value solver and all its data to specified device"""
-    
-    old_device = solver
-    solver = device_config
-    
-    # Move matrices and vectors to new device
-    solver.L_matrix = Array(solver.L_matrix)
-    solver.M_matrix = Array(solver.M_matrix)
-    solver.F_vector = Array(solver.F_vector)
-    
-    # Move state fields to new device
-    for field in solver.state
-        field.data_g = Array(field.data_g)
-        field.data_c = Array(field.data_c)
-    end
-    
-    # Clear GPU matrices cache
-    empty!(solver.gpu_matrices)
-    solver.factorization = nothing  # Invalidate factorization
-    solver.global_solver = nothing
-    
-    @info "Moved BVP solver from $(old_device.device_type) to $(device_config.device_type)"
-    
+function move_solver_to_device!(solver::BoundaryValueSolver, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """No-op for CPU-only mode."""
     return solver
 end
 
 function get_solver_memory_info(solver::Union{InitialValueSolver, BoundaryValueSolver})
-    """Get GPU memory usage information for solver"""
-    
-    if solverfalse
-        
-        # Estimate memory used by solver components
-        solver_memory = 0
-        
-        if isa(solver, InitialValueSolver)
-            # Estimate memory from workspace and state
-                solver_memory += sizeof(arr)
-            end
-            for field in solver.state
-                if field.data_g !== nothing
-                    solver_memory += sizeof(field.data_g)
-                end
-                if field.data_c !== nothing
-                    solver_memory += sizeof(field.data_c)
-                end
-            end
-        elseif isa(solver, BoundaryValueSolver)
-            # Estimate memory from matrices and state
-            solver_memory += sizeof(solver.L_matrix)
-            solver_memory += sizeof(solver.M_matrix) 
-            solver_memory += sizeof(solver.F_vector)
-            for field in solver.state
-                if field.data_g !== nothing
-                    solver_memory += sizeof(field.data_g)
-                end
-                if field.data_c !== nothing
-                    solver_memory += sizeof(field.data_c)
-                end
-            end
-        end
-        
-        return (
-            total_memory = memory_info.total,
-            available_memory = memory_info.available,
-            used_memory = memory_info.used,
-            solver_memory = solver_memory,
-            memory_utilization = solver_memory / memory_info.total * 100
-        )
-    else
-        return (
-            total_memory = typemax(Int64),
-            available_memory = typemax(Int64),
-            used_memory = 0,
-            solver_memory = 0,
-            memory_utilization = 0.0
-        )
-    end
+    """Placeholder memory info (CPU-only)."""
+    mem = default_memory_info()
+    return (
+        total_memory = mem.total,
+        available_memory = mem.available,
+        used_memory = mem.used,
+        solver_memory = 0,
+        memory_utilization = 0.0
+    )
 end
-
 function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueSolver})
     """Log solver performance statistics"""
     

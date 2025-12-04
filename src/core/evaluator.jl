@@ -7,18 +7,17 @@ Translated from dedalus/core/evaluator.py
 using HDF5
 using MPI
 
-# GPU support
+# CPU-only (GPU support removed)
 
 # Performance tracking structure for evaluator
 mutable struct EvaluatorPerformanceStats
     total_time::Float64
-    gpu_transfer_time::Float64
     total_evaluations::Int
     total_writes::Int
     avg_evaluation_time::Float64
-    
+
     function EvaluatorPerformanceStats()
-        new(0.0, 0.0, 0, 0, 0.0)
+        new(0.0, 0, 0, 0.0)
     end
 end
 
@@ -49,16 +48,13 @@ end
 mutable struct Evaluator
     solver::InitialValueSolver
     handlers::Vector{FileHandler}
-    
-    gpu_workspace::Dict{String, AbstractArray}
+    workspace::Dict{String, AbstractArray}
     performance_stats::EvaluatorPerformanceStats
-    
+
     function Evaluator(solver::InitialValueSolver)
-        # Use same device configuration as solver
-        device_config = nothing
-        gpu_workspace = Dict{String, AbstractArray}()
+        workspace = Dict{String, AbstractArray}()
         perf_stats = EvaluatorPerformanceStats()
-        new(solver, FileHandler[], device_config, gpu_workspace, perf_stats)
+        new(solver, FileHandler[], workspace, perf_stats)
     end
 end
 
@@ -172,54 +168,37 @@ function write_handler!(handler::FileHandler, solver::InitialValueSolver, wall_t
 end
 
 function evaluate_task(task, solver::InitialValueSolver)
-    """Evaluate a task (field or operator) and return data with GPU support"""
-    
-    # Get device configuration from solver or evaluator
-    device_config = nothing
-    
-    gpu_transfer_start = time()
-    
+    """Evaluate a task (field or operator) and return data"""
+
     if isa(task, ScalarField)
-        # Return field data in grid layout (GPU-aware)
         ensure_layout!(task, :g)
-        # Ensure data is moved to GPU if needed for evaluation, then to CPU for output
-        task.data_g = task.data_g
-        result = Array(task.data_g)  # Always return CPU array for file I/O
-        
+        result = Array(task.data_g)
+
     elseif isa(task, VectorField)
-        # Return vector components (GPU-aware)
         data = []
         for component in task.components
             ensure_layout!(component, :g)
-            component.data_g = component.data_g
-            push!(data, Array(component.data_g))  # Always return CPU array for file I/O
+            push!(data, Array(component.data_g))
         end
         result = data
-        
+
     elseif isa(task, TensorField)
-        # Return tensor components (GPU-aware)
         data = []
         for i in 1:size(task.components, 1), j in 1:size(task.components, 2)
             component = task.components[i, j]
             ensure_layout!(component, :g)
-            component.data_g = component.data_g
-            push!(data, Array(component.data_g))  # Always return CPU array for file I/O
+            push!(data, Array(component.data_g))
         end
         result = data
-        
+
     elseif isa(task, Operator)
-        # Evaluate operator (GPU-aware)
-        operator_result = evaluate_operator_gpu(task, device_config)
+        operator_result = evaluate_operator(task)
         result = evaluate_task(operator_result, solver)
-        
+
     else
         throw(ArgumentError("Unknown task type: $(typeof(task))"))
     end
-    
-    # Track GPU transfer time if evaluator has performance stats
-    if hasfield(typeof(solver), :evaluator) && solver.evaluator !== nothing && hasfield(typeof(solver.evaluator), :performance_stats)
-    end
-    
+
     return result
 end
 
@@ -241,40 +220,6 @@ function evaluate_operator(op::Operator)
     end
 end
 
-function evaluate_operator_gpu(op::Operator, )
-    """Evaluate operator with GPU acceleration"""
-    
-    # Ensure operand data is on correct device before evaluation
-    if hasfield(typeof(op), :operand)
-        operand = op.operand
-        if isa(operand, ScalarField)
-            operand.data_g = operand.data_g
-            operand.data_c = operand.data_c
-        elseif isa(operand, VectorField)
-            for comp in operand.components
-                comp.data_g = comp.data_g
-                comp.data_c = comp.data_c
-            end
-        end
-    end
-    
-    # Evaluate operator using existing functions (they will work on GPU data)
-    if isa(op, Gradient)
-        return evaluate_gradient_gpu(op, device_config)
-    elseif isa(op, Divergence)
-        return evaluate_divergence_gpu(op, device_config)
-    elseif isa(op, Curl)
-        return evaluate_curl_gpu(op, device_config)
-    elseif isa(op, Laplacian)
-        return evaluate_laplacian_gpu(op, device_config)
-    elseif isa(op, Differentiate)
-        return evaluate_differentiate_gpu(op, device_config)
-    else
-        # Fallback to CPU evaluation
-        @warn "GPU evaluation not available for $(typeof(op)), using CPU fallback"
-        return evaluate_operator(op)
-    end
-end
 
 function evaluate_curl(curl_op::Curl, layout::Symbol=:g)
     """Evaluate curl operator"""
@@ -443,20 +388,17 @@ end
 mutable struct GlobalFlowProperty
     solver::InitialValueSolver
     cadence::Int
-    properties::Dict{String, Any}  # Stores evaluated field data
+    properties::Dict{String, Any}
     reducer::GlobalArrayReducer
-    evaluator_handler::Union{Nothing, FileHandler}  # Dictionary-like handler for evaluation
-    
-    gpu_workspace::Dict{String, AbstractArray}
+    evaluator_handler::Union{Nothing, FileHandler}
+    workspace::Dict{String, AbstractArray}
     performance_stats::EvaluatorPerformanceStats
-    
+
     function GlobalFlowProperty(solver::InitialValueSolver; cadence::Int=1)
         reducer = GlobalArrayReducer(solver.dist.comm)
-        # Use same device configuration as solver
-        device_config = nothing
-        gpu_workspace = Dict{String, AbstractArray}()
+        workspace = Dict{String, AbstractArray}()
         perf_stats = EvaluatorPerformanceStats()
-        new(solver, cadence, Dict{String, Any}(), reducer, nothing, device_config, gpu_workspace, perf_stats)
+        new(solver, cadence, Dict{String, Any}(), reducer, nothing, workspace, perf_stats)
     end
 end
 
@@ -502,38 +444,26 @@ end
 
 function evaluate_property(flow::GlobalFlowProperty, name::String)
     """
-    Get grid data for property evaluation with GPU support.
+    Get grid data for property evaluation.
     Following Dedalus pattern: gdata = self.properties[name]['g']
     Returns the grid data array for the named property.
     """
     if !haskey(flow.properties, name)
         throw(KeyError("Property '$name' not found"))
     end
-    
+
     field = flow.properties[name]
-    
-    gpu_transfer_start = time()
-    
-    # Extract grid data similar to Dedalus self.properties[name]['g']
+
     if isa(field, ScalarField)
-        # Ensure field is on correct device for evaluation
-        field.data_g = field.data_g
-        result = Array(field["g"])  # Always return CPU array for reductions
+        result = Array(field["g"])
     elseif isa(field, VectorField)
-        # For vector fields, could return magnitude or individual components
-        # For now, return first component
-        field.components[1].data_g = field.components[1].data_g
         result = Array(field.components[1]["g"])
     elseif isa(field, AbstractArray)
-        # Ensure array is on correct device
-        field_device = field
-        result = Array(field_device)
+        result = Array(field)
     else
         error("Unsupported property type: $(typeof(field))")
     end
-    
-    # Track GPU transfer time
-    
+
     return result
 end
 
@@ -618,16 +548,13 @@ mutable struct UnifiedEvaluator
     solver::InitialValueSolver
     hdf5_handlers::Vector{FileHandler}
     netcdf_handlers::Vector{NetCDFFileHandler}
-    
-    gpu_workspace::Dict{String, AbstractArray}
+    workspace::Dict{String, AbstractArray}
     performance_stats::EvaluatorPerformanceStats
-    
+
     function UnifiedEvaluator(solver::InitialValueSolver)
-        # Use same device configuration as solver
-        device_config = nothing
-        gpu_workspace = Dict{String, AbstractArray}()
+        workspace = Dict{String, AbstractArray}()
         perf_stats = EvaluatorPerformanceStats()
-        new(solver, FileHandler[], NetCDFFileHandler[], device_config, gpu_workspace, perf_stats)
+        new(solver, FileHandler[], NetCDFFileHandler[], workspace, perf_stats)
     end
 end
 
@@ -908,310 +835,15 @@ function add_task!(handler::FileHandler, name::String, field::Union{ScalarField,
     handler.datasets[name] = field
 end
 
-# GPU-specific operator evaluation functions
-function evaluate_gradient_gpu(grad_op::Gradient, )
-    """Evaluate gradient operator with GPU acceleration"""
-    
-    # Ensure operand data is on correct device
-    operand = grad_op.operand
-    operand.data_g = operand.data_g
-    operand.data_c = operand.data_c
-    
-    # Use existing gradient evaluation (works with GPU arrays)
-    result = evaluate_gradient(grad_op)
-    
-    # Ensure result components are on correct device
-    if isa(result, VectorField)
-        for comp in result.components
-            comp.data_g = comp.data_g
-            comp.data_c = comp.data_c
-        end
-    end
-    
-    # Synchronize GPU operations
-    
-    return result
-end
-
-function evaluate_divergence_gpu(div_op::Divergence, )
-    """Evaluate divergence operator with GPU acceleration"""
-    
-    # Ensure operand components are on correct device
-    operand = div_op.operand
-    if isa(operand, VectorField)
-        for comp in operand.components
-            comp.data_g = comp.data_g
-            comp.data_c = comp.data_c
-        end
-    end
-    
-    # Use existing divergence evaluation (works with GPU arrays)
-    result = evaluate_divergence(div_op)
-    
-    # Ensure result is on correct device
-    result.data_g = result.data_g
-    result.data_c = result.data_c
-    
-    # Synchronize GPU operations
-    
-    return result
-end
-
-function evaluate_curl_gpu(curl_op::Curl, )
-    """Evaluate curl operator with GPU acceleration"""
-    
-    # Ensure operand components are on correct device
-    operand = curl_op.operand
-    if isa(operand, VectorField)
-        for comp in operand.components
-            comp.data_g = comp.data_g
-            comp.data_c = comp.data_c
-        end
-    end
-    
-    # Use existing curl evaluation (works with GPU arrays) 
-    result = evaluate_curl(curl_op)
-    
-    # Ensure result is on correct device
-    if isa(result, ScalarField)
-        result.data_g = result.data_g
-        result.data_c = result.data_c
-    elseif isa(result, VectorField)
-        for comp in result.components
-            comp.data_g = comp.data_g
-            comp.data_c = comp.data_c
-        end
-    end
-    
-    # Synchronize GPU operations
-    
-    return result
-end
-
-function evaluate_laplacian_gpu(lap_op::Laplacian, )
-    """Evaluate Laplacian operator with GPU acceleration"""
-    
-    # Ensure operand data is on correct device
-    operand = lap_op.operand
-    operand.data_g = operand.data_g
-    operand.data_c = operand.data_c
-    
-    # Use existing Laplacian evaluation (works with GPU arrays)
-    result = evaluate_laplacian(lap_op)
-    
-    # Ensure result is on correct device
-    result.data_g = result.data_g
-    result.data_c = result.data_c
-    
-    # Synchronize GPU operations
-    
-    return result
-end
-
-function evaluate_differentiate_gpu(diff_op::Differentiate, )
-    """Evaluate differentiation operator with GPU acceleration"""
-    
-    # Ensure operand data is on correct device
-    operand = diff_op.operand
-    operand.data_g = operand.data_g
-    operand.data_c = operand.data_c
-    
-    # Use existing differentiation evaluation (works with GPU arrays)
-    result = evaluate_differentiate(diff_op)
-    
-    # Ensure result is on correct device
-    result.data_g = result.data_g
-    result.data_c = result.data_c
-    
-    # Synchronize GPU operations
-    
-    return result
-end
-
-# GPU-aware evaluation functions
-function evaluate_handlers_gpu!(evaluator::Evaluator, wall_time::Float64, sim_time::Float64, iteration::Int)
-    """Evaluate all handlers with GPU support and write output if conditions are met"""
-    
-    start_time = time()
-    
-    for handler in evaluator.handlers
-        if should_write(handler, wall_time, sim_time, iteration)
-            write_handler_gpu!(handler, evaluator.solver, wall_time, sim_time, iteration, evaluator)
-        end
-    end
-    
-    # Update performance statistics
-    evaluator.performance_stats.total_time += time() - start_time
-    evaluator.performance_stats.total_evaluations += 1
-end
-
-function write_handler_gpu!(handler::FileHandler, solver::InitialValueSolver, wall_time::Float64, sim_time::Float64, iteration::Int, )
-    """Write handler output to file with GPU-aware data transfer"""
-    
-    # Create filename with iteration number
-    base_name = splitext(handler.filename)[1]
-    extension = splitext(handler.filename)[2]
-    if isempty(extension)
-        extension = ".h5"
-    end
-    
-    filename = "$(base_name)_$(iteration)$(extension)"
-    
-    # Only rank 0 creates the file initially
-    if MPI.Initialized()
-        rank = MPI.Comm_rank(MPI.COMM_WORLD)
-    else
-        rank = 0
-    end
-    
-    # Evaluate all tasks and gather data (GPU-aware)
-    task_data = Dict{String, Any}()
-    
-    for (name, task) in handler.datasets
-        data = evaluate_task_gpu(task, solver, device_config)
-        task_data[name] = data
-    end
-    
-    # Write to HDF5 file
-    write_hdf5_output(filename, task_data, sim_time, iteration, rank)
-    
-    # Update handler state
-    handler.write_count += 1
-    handler.last_write_time = wall_time
-    handler.last_write_sim_time = sim_time
-    
-    if rank == 0
-        @info "Written GPU output to $filename at t=$(sim_time), iteration=$iteration"
-    end
-end
-
-function evaluate_task_gpu(task, solver::InitialValueSolver, )
-    """GPU-aware task evaluation"""
-    
-    gpu_transfer_start = time()
-    
-    if isa(task, ScalarField)
-        # Return field data in grid layout (GPU-aware)
-        ensure_layout!(task, :g)
-        task.data_g = task.data_g
-        result = Array(task.data_g)  # Always return CPU array for file I/O
-        
-    elseif isa(task, VectorField)
-        # Return vector components (GPU-aware)
-        data = []
-        for component in task.components
-            ensure_layout!(component, :g)
-            component.data_g = component.data_g
-            push!(data, Array(component.data_g))
-        end
-        result = data
-        
-    elseif isa(task, TensorField)
-        # Return tensor components (GPU-aware)
-        data = []
-        for i in 1:size(task.components, 1), j in 1:size(task.components, 2)
-            component = task.components[i, j]
-            ensure_layout!(component, :g)
-            component.data_g = component.data_g
-            push!(data, Array(component.data_g))
-        end
-        result = data
-        
-    elseif isa(task, Operator)
-        # Evaluate operator (GPU-aware)
-        operator_result = evaluate_operator_gpu(task, device_config)
-        result = evaluate_task_gpu(operator_result, solver, device_config)
-        
-    else
-        throw(ArgumentError("Unknown task type: $(typeof(task))"))
-    end
-    
-    return result
-end
-
-# GPU utility functions for evaluator
-function move_evaluator_to_device!(evaluator::Evaluator, )
-    """Move evaluator to specified device"""
-    
-    old_device = evaluator
-    evaluator = device_config
-    
-    # Clear GPU workspace if changing device types
-    if old_device.device_type != device_config.device_type
-    end
-    
-    @info "Moved evaluator from $(old_device.device_type) to $(device_config.device_type)"
-    
-    return evaluator
-end
-
-function move_evaluator_to_device!(evaluator::UnifiedEvaluator, )
-    """Move unified evaluator to specified device"""
-    
-    old_device = evaluator
-    evaluator = device_config
-    
-    # Clear GPU workspace if changing device types
-    if old_device.device_type != device_config.device_type
-    end
-    
-    @info "Moved unified evaluator from $(old_device.device_type) to $(device_config.device_type)"
-    
-    return evaluator
-end
-
-function move_evaluator_to_device!(flow::GlobalFlowProperty, )
-    """Move global flow property evaluator to specified device"""
-    
-    old_device = flow
-    flow = device_config
-    
-    # Clear GPU workspace if changing device types
-    if old_device.device_type != device_config.device_type
-    end
-    
-    @info "Moved flow property evaluator from $(old_device.device_type) to $(device_config.device_type)"
-    
-    return flow
-end
-
-function get_evaluator_memory_info(evaluator::Union{Evaluator, UnifiedEvaluator, GlobalFlowProperty})
-    """Get GPU memory usage information for evaluator"""
-    
-    if evaluatorfalse
-        
-        # Estimate memory used by evaluator workspace
-        evaluator_memory = 0
-            evaluator_memory += sizeof(arr)
-        end
-        
-        return (
-            total_memory = memory_info.total,
-            available_memory = memory_info.available,
-            used_memory = memory_info.used,
-            evaluator_memory = evaluator_memory,
-            memory_utilization = evaluator_memory / memory_info.total * 100
-        )
-    else
-        return (
-            total_memory = typemax(Int64),
-            available_memory = typemax(Int64),
-            used_memory = 0,
-            evaluator_memory = 0,
-            memory_utilization = 0.0
-        )
-    end
-end
-
 function log_evaluator_performance(evaluator::Union{Evaluator, UnifiedEvaluator, GlobalFlowProperty})
     """Log evaluator performance statistics"""
-    
+
     stats = evaluator.performance_stats
-    
+
     if MPI.Initialized()
         rank = MPI.Comm_rank(MPI.COMM_WORLD)
         if rank == 0
-            @info "Evaluator performance ($(evaluator.device_type)):"
+            @info "Evaluator performance:"
             @info "  Total evaluations: $(stats.total_evaluations)"
             @info "  Total writes: $(stats.total_writes)"
             @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
@@ -1220,7 +852,7 @@ function log_evaluator_performance(evaluator::Union{Evaluator, UnifiedEvaluator,
             end
         end
     else
-        @info "Evaluator performance ($(evaluator.device_type)):"
+        @info "Evaluator performance:"
         @info "  Total evaluations: $(stats.total_evaluations)"
         @info "  Total writes: $(stats.total_writes)"
         @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
@@ -1228,57 +860,4 @@ function log_evaluator_performance(evaluator::Union{Evaluator, UnifiedEvaluator,
             @info "  Average evaluation time: $(round(stats.total_time/stats.total_evaluations*1000, digits=3)) ms"
         end
     end
-end
-
-# Enhanced GPU-aware reduction operations
-function global_min_gpu(reducer::GlobalArrayReducer, data::AbstractArray, ; empty::Float64=Inf)
-    """Compute global min with GPU support"""
-    
-    # Move data to GPU for computation if needed
-    data_device = data
-    
-    local_min = isempty(data_device) ? empty : minimum(Array(data_device))
-    return reduce_scalar(reducer, local_min, MPI.MIN)
-end
-
-function global_max_gpu(reducer::GlobalArrayReducer, data::AbstractArray, ; empty::Float64=-Inf)
-    """Compute global max with GPU support"""
-    
-    # Move data to GPU for computation if needed
-    data_device = data
-    
-    local_max = isempty(data_device) ? empty : maximum(Array(data_device))
-    return reduce_scalar(reducer, local_max, MPI.MAX)
-end
-
-function global_mean_gpu(reducer::GlobalArrayReducer, data::AbstractArray, )
-    """Compute global mean with GPU support"""
-    
-    # Move data to GPU for computation if needed
-    data_device = data
-    
-    local_sum = sum(Array(data_device))
-    local_size = Float64(length(data_device))
-    global_sum = reduce_scalar(reducer, local_sum, MPI.SUM)
-    global_size = reduce_scalar(reducer, local_size, MPI.SUM)
-    return global_size > 0 ? global_sum / global_size : 0.0
-end
-
-# Enhanced flow property methods with GPU support
-function max_gpu(flow::GlobalFlowProperty, name::String)
-    """Compute global max of a property on GPU"""
-    gdata = evaluate_property(flow, name)
-    return global_max_gpu(flow.reducer, gdata, flow)
-end
-
-function min_gpu(flow::GlobalFlowProperty, name::String)
-    """Compute global min of a property on GPU"""
-    gdata = evaluate_property(flow, name)
-    return global_min_gpu(flow.reducer, gdata, flow)
-end
-
-function grid_average_gpu(flow::GlobalFlowProperty, name::String)
-    """Compute global mean of a property on GPU"""
-    gdata = evaluate_property(flow, name)
-    return global_mean_gpu(flow.reducer, gdata, flow)
 end

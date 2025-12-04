@@ -414,7 +414,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
 end
 
 
-function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, )
+function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
     """Real Fourier derivative following Dedalus 2x2 group matrix approach with GPU support"""
     
     # Dedalus stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
@@ -528,7 +528,7 @@ function evaluate_real_fourier_derivative_fallback!(result::ScalarField, operand
     end
 end
 
-function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, )
+function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
     """Complex Fourier derivative: simple multiplication by (ik)^order with GPU support"""
     
     # Complex FFT wavenumbers: [0, 1, ..., N/2-1, -N/2, -(N/2-1), ..., -1]
@@ -598,7 +598,7 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     end
 end
 
-function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, )
+function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
     """
     Single Chebyshev derivative using correct backward recurrence with GPU support.
     
@@ -713,7 +713,7 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     end
 end
 
-function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, )
+function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
     """
     Single Legendre derivative using Dedalus Jacobi approach with GPU support.
     
@@ -1216,21 +1216,10 @@ struct MultiplyOperator <: Operator
 end
 
 # GPU utility functions for operators
-function to_device!(operator::Operator, )
-    """Move operator data to specified device"""
-    
-    # For most operators, there's no persistent data to move
-    # The actual computation will be done device-aware when evaluated
+function to_device!(operator::Operator, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+    """No-op for CPU-only mode."""
     return operator
 end
-
-    """Get device configuration from operand"""
-    if hasfield(typeof(operand), :device_config)
-        return operand
-    elseif hasfield(typeof(operand), :meta) && hasfield(typeof(operand.meta), :device_config)
-        return operand.meta
-    else
-    end
 end
 
 function synchronize_operator!(operator::Operator)

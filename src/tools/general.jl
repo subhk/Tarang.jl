@@ -7,6 +7,35 @@ Translated from dedalus/tools/general.py
 using OrderedCollections
 using Logging
 
+# ---------------------------------------------------------------------------
+# CPU-only device stubs (GPU support removed)
+# ---------------------------------------------------------------------------
+
+const CPU_DEVICE = :cpu
+
+"""
+Lightweight device configuration used for CPU-only execution.
+"""
+struct CPUDeviceConfig
+    device_type::Symbol
+end
+
+CPUDeviceConfig() = CPUDeviceConfig(CPU_DEVICE)
+const DEFAULT_DEVICE = CPUDeviceConfig()
+const device_config = DEFAULT_DEVICE
+const DEFAULT_MEMORY_INFO = (total=typemax(Int64), available=typemax(Int64), used=0)
+
+default_memory_info() = DEFAULT_MEMORY_INFO
+
+# Basic array helpers that ignore device placement and always use CPU arrays.
+device_zeros(::Type{T}, dims, ::Any=CPUDeviceConfig()) where {T} = zeros(T, dims)
+device_ones(::Type{T}, dims, ::Any=CPUDeviceConfig()) where {T} = ones(T, dims)
+device_fill(val, dims, ::Any=CPUDeviceConfig()) = fill(val, dims)
+device_similar(arr::AbstractArray, ::Any=CPUDeviceConfig()) = similar(arr)
+move_to_device(x, ::Any=CPUDeviceConfig()) = x
+move_to_host(x) = x
+check_device_compatibility(::Any, ::Any=CPUDeviceConfig()) = true
+
 # Ordered set implementation
 struct OrderedSet{T}
     dict::OrderedDict{T, Nothing}
