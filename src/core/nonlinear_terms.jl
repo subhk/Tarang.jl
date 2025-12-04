@@ -20,6 +20,18 @@ using LinearAlgebra
 
 # CPU-only (GPU support removed)
 
+# Performance monitoring (defined first as it's used by NonlinearEvaluator)
+mutable struct NonlinearPerformanceStats
+    total_evaluations::Int
+    total_time::Float64
+    dealiasing_time::Float64
+    transform_time::Float64
+
+    function NonlinearPerformanceStats()
+        new(0, 0.0, 0.0, 0.0)
+    end
+end
+
 # Nonlinear operator types
 abstract type NonlinearOperator <: Operator end
 
@@ -702,18 +714,6 @@ end
 function convection(f1, f2, op::Symbol)
     """Create convective operator"""
     return ConvectiveOperator(f1, f2, op)
-end
-
-# Performance monitoring
-mutable struct NonlinearPerformanceStats
-    total_evaluations::Int
-    total_time::Float64
-    dealiasing_time::Float64
-    transform_time::Float64
-
-    function NonlinearPerformanceStats()
-        new(0, 0.0, 0.0, 0.0)
-    end
 end
 
 function log_nonlinear_performance(stats::NonlinearPerformanceStats)
