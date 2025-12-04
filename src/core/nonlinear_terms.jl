@@ -123,30 +123,72 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
     end
     
     try
-        # Create pencils for both directions to enable full 2D parallelization
+        # Create pencil configuration for this shape
         config = PencilConfig(shape, dist.mesh, comm=dist.comm)
-        
-        # Forward transforms (grid -> spectral)
-        forward_pencil_1 = PencilArrays.Pencil(config, 1, ComplexF64)
-        forward_pencil_2 = PencilArrays.Pencil(config, 2, ComplexF64)
-        
-        # Create FFT plans for both pencil orientations
-        fft_plan_1 = PencilFFTs.PencilFFTPlan(forward_pencil_1, PencilFFTs.Transforms.FFT(), (1, 2))
-        fft_plan_2 = PencilFFTs.PencilFFTPlan(forward_pencil_2, PencilFFTs.Transforms.FFT(), (1, 2))
-        
-        evaluator.pencil_transforms[shape_key] = Dict(
-            "config" => config,
-            "forward_pencil_1" => forward_pencil_1,
-            "forward_pencil_2" => forward_pencil_2,
-            "fft_plan_1" => fft_plan_1,
-            "fft_plan_2" => fft_plan_2,
-            "shape" => shape
-        )
-        
-        @debug "Created PencilFFT transforms for shape $shape"
-        
+
+        # For serial execution, use simple arrays and FFTW plans
+        if MPI.Comm_size(dist.comm) == 1
+            # Serial execution - use regular arrays
+            forward_data_1 = zeros(ComplexF64, shape...)
+            forward_data_2 = zeros(ComplexF64, shape...)
+
+            # Create FFTW plans
+            fft_plan_1 = FFTW.plan_fft(forward_data_1)
+            fft_plan_2 = FFTW.plan_fft(forward_data_2)
+
+            evaluator.pencil_transforms[shape_key] = Dict(
+                "config" => config,
+                "forward_pencil_1" => forward_data_1,
+                "forward_pencil_2" => forward_data_2,
+                "fft_plan_1" => fft_plan_1,
+                "fft_plan_2" => fft_plan_2,
+                "shape" => shape,
+                "serial" => true
+            )
+        else
+            # Parallel execution - use PencilArrays/PencilFFTs
+            try
+                # Create PencilArray-based transforms
+                forward_data_1 = PencilArrays.PencilArray{ComplexF64}(undef, shape, config.comm)
+                forward_data_2 = PencilArrays.PencilArray{ComplexF64}(undef, shape, config.comm)
+
+                # Create FFT plans for pencil arrays
+                fft_plan_1 = PencilFFTs.PencilFFTPlan(forward_data_1, PencilFFTs.Transforms.FFT())
+                fft_plan_2 = PencilFFTs.PencilFFTPlan(forward_data_2, PencilFFTs.Transforms.FFT())
+
+                evaluator.pencil_transforms[shape_key] = Dict(
+                    "config" => config,
+                    "forward_pencil_1" => forward_data_1,
+                    "forward_pencil_2" => forward_data_2,
+                    "fft_plan_1" => fft_plan_1,
+                    "fft_plan_2" => fft_plan_2,
+                    "shape" => shape,
+                    "serial" => false
+                )
+            catch pe
+                # Fallback to serial FFTW if PencilArrays fails
+                @warn "PencilArrays setup failed, falling back to serial FFTW" exception=pe
+                forward_data_1 = zeros(ComplexF64, shape...)
+                forward_data_2 = zeros(ComplexF64, shape...)
+                fft_plan_1 = FFTW.plan_fft(forward_data_1)
+                fft_plan_2 = FFTW.plan_fft(forward_data_2)
+
+                evaluator.pencil_transforms[shape_key] = Dict(
+                    "config" => config,
+                    "forward_pencil_1" => forward_data_1,
+                    "forward_pencil_2" => forward_data_2,
+                    "fft_plan_1" => fft_plan_1,
+                    "fft_plan_2" => fft_plan_2,
+                    "shape" => shape,
+                    "serial" => true
+                )
+            end
+        end
+
+        @debug "Created FFT transforms for shape $shape"
+
     catch e
-        @warn "Failed to create PencilFFT transforms for shape $shape: $e"
+        @warn "Failed to create FFT transforms for shape $shape: $e"
     end
 end
 

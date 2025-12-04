@@ -55,7 +55,7 @@ mutable struct EVP <: Problem
     equation_data::Vector{Dict{String, Any}}
 end
 
-function build_problem_namespace(variables::Vector{Operand}, user_ns::Union{Nothing, AbstractDict})
+function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{Nothing, AbstractDict{String}})
     ns = Dict{String, Any}()
     
     # Lowest priority: operator registries (parseables first, then aliases)
@@ -86,29 +86,29 @@ function build_problem_namespace(variables::Vector{Operand}, user_ns::Union{Noth
     return ns
 end
 
-function _build_ivp(variables::Vector{Operand}; namespace::Union{Nothing, Dict{String, Any}}=Dict{String, Any}())
-    vars = copy(variables)
+function _build_ivp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
+    vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return IVP(vars, String[], String[], Dict{String, Any}(), ns,
                nothing, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
 end
 
-function _build_lbvp(variables::Vector{Operand}; namespace::Union{Nothing, Dict{String, Any}}=Dict{String, Any}())
-    vars = copy(variables)
+function _build_lbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
+    vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return LBVP(vars, String[], String[], Dict{String, Any}(), ns,
                 nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
 end
 
-function _build_nlbvp(variables::Vector{Operand}; namespace::Union{Nothing, Dict{String, Any}}=Dict{String, Any}())
-    vars = copy(variables)
+function _build_nlbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
+    vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return NLBVP(vars, String[], String[], Dict{String, Any}(), ns,
                  nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
 end
 
-function _build_evp(variables::Vector{Operand}; eigenvalue::Union{Nothing, Symbol}=nothing, namespace::Union{Nothing, Dict{String, Any}}=Dict{String, Any}())
-    vars = copy(variables)
+function _build_evp(variables::Vector{<:Operand}; eigenvalue::Union{Nothing, Symbol}=nothing, namespace::Union{Nothing, AbstractDict{String}}=nothing)
+    vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return EVP(vars, String[], String[], Dict{String, Any}(), ns,
                eigenvalue, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
@@ -119,19 +119,19 @@ const _LBVP_constructor = _build_lbvp
 const _NLBVP_constructor = _build_nlbvp
 const _EVP_constructor = _build_evp
 
-function IVP(variables::Vector{Operand}; kwargs...)
+function IVP(variables::Vector{<:Operand}; kwargs...)
     return multiclass_new(IVP, variables; kwargs...)
 end
 
-function LBVP(variables::Vector{Operand}; kwargs...)
+function LBVP(variables::Vector{<:Operand}; kwargs...)
     return multiclass_new(LBVP, variables; kwargs...)
 end
 
-function NLBVP(variables::Vector{Operand}; kwargs...)
+function NLBVP(variables::Vector{<:Operand}; kwargs...)
     return multiclass_new(NLBVP, variables; kwargs...)
 end
 
-function EVP(variables::Vector{Operand}; kwargs...)
+function EVP(variables::Vector{<:Operand}; kwargs...)
     return multiclass_new(EVP, variables; kwargs...)
 end
 
@@ -189,7 +189,7 @@ end
 
 function invoke_constructor(::Type{T}, args::Tuple, kwargs::NamedTuple) where {T<:Problem}
     builder = _problem_builder(T)
-    variables = copy(args[1])
+    variables = args[1]  # Don't copy here, _build_* functions handle conversion
     return builder(variables; kwargs...)
 end
 
@@ -330,7 +330,7 @@ function parse_equation(equation::String, namespace::Dict{String, Any})
     end
 end
 
-function parse_linear_expression(expr_str::String, namespace::Dict{String, Any})
+function parse_linear_expression(expr_str::AbstractString, namespace::Dict{String, Any})
     """
     Parse LHS expression ensuring it contains only linear terms.
     
@@ -426,9 +426,13 @@ function validate_equation_structure(LHS, RHS, original_equation::String)
     end
     
     # Check for proper linear structure on LHS
-    if !is_proper_lhs_structure(LHS)
+    is_valid_lhs, lhs_info = is_proper_lhs_structure(LHS)
+    if !is_valid_lhs
         @warn "LHS may not follow Dedalus linear structure: $original_equation"
         @warn "Ensure LHS contains only: dt(vars), linear spatial derivatives, constant coefficients"
+        if lhs_info[:error_message] !== nothing
+            @warn "Issue: $(lhs_info[:error_message])"
+        end
     end
     
     return true
@@ -769,7 +773,7 @@ function validate_lhs_structure(expr)
     return info
 end
 
-function parse_expression(expr_str::String, namespace::Dict{String, Any})
+function parse_expression(expr_str::AbstractString, namespace::Dict{String, Any})
     """
     Parse expression string into operator tree following Dedalus patterns.
     Uses Julia's Meta.parse for proper AST parsing and operator precedence handling.
@@ -942,7 +946,7 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
     end
 end
 
-function fallback_parse_expression(expr_str::String, namespace::Dict{String, Any})
+function fallback_parse_expression(expr_str::AbstractString, namespace::Dict{String, Any})
     """
     Fallback parsing for expressions that fail Meta.parse evaluation.
     Uses simple string pattern matching as backup.
@@ -1498,19 +1502,19 @@ function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
     
     if isa(expr, TimeDerivative) && expr.operand === var
         # Time derivative of this variable -> identity block
-        return sparse(I, var_size)
-        
+        return sparse(I, var_size, var_size)
+
     elseif isa(expr, Laplacian) && expr.operand === var
         # Laplacian of this variable -> Laplacian matrix (simplified)
-        return sparse(-I, var_size)  # Negative Laplacian
-        
+        return sparse(-1.0 * I, var_size, var_size)  # Negative Laplacian
+
     elseif isa(expr, Union{Gradient, Divergence, Differentiate}) && expr.operand === var
         # Other spatial operators -> identity (simplified)
-        return sparse(I, var_size)
-        
+        return sparse(I, var_size, var_size)
+
     elseif expr === var
         # Direct variable reference -> identity
-        return sparse(I, var_size)
+        return sparse(I, var_size, var_size)
         
     elseif isa(expr, AddOperator)
         # Sum of operators

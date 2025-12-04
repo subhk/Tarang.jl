@@ -1181,12 +1181,7 @@ function log_stats(solver::Solver)
     end
 end
 
-# Analysis and output
-function create_evaluator(solver::InitialValueSolver)
-    """Create evaluator for analysis output"""
-    attach_evaluator!(solver)
-    return solver.evaluator
-end
+# Analysis and output - create_evaluator is defined in evaluator.jl
 
 function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueSolver})
     """Log solver performance statistics"""

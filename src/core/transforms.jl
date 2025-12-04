@@ -1041,16 +1041,29 @@ function setup_pencil_arrays_3d(dist::Distributor, global_shape::Tuple{Vararg{In
     return dist.pencil_config
 end
 
-function create_pencil_3d(dist::Distributor, global_shape::Tuple{Vararg{Int}}, 
+function create_pencil_3d(dist::Distributor, global_shape::Tuple{Vararg{Int}},
                         decomp_index::Int=1; dtype::Type=dist.dtype)
-                        
+
     """Create a 3D pencil array with specified decomposition"""
-    
+
     if dist.pencil_config === nothing
         setup_pencil_arrays_3d(dist, global_shape)
     end
-    
-    return PencilArrays.Pencil(dist.pencil_config, decomp_index, dtype)
+
+    config = dist.pencil_config
+
+    if dist.size == 1
+        # Serial execution - just create a regular array
+        return zeros(dtype, global_shape...)
+    else
+        # Parallel execution - use PencilArrays properly
+        try
+            return PencilArrays.PencilArray{dtype}(undef, global_shape, config.comm)
+        catch e
+            @warn "PencilArrays creation failed, using regular array" exception=e
+            return zeros(dtype, global_shape...)
+        end
+    end
 end
 
 # Enhanced 3D transform execution

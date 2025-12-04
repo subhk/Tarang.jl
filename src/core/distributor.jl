@@ -134,7 +134,27 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
         setup_pencil_arrays(dist, global_shape)
     end
 
-    pencil = PencilArrays.Pencil(dist.pencil_config, decomp_index, dtype)
+    # PencilArrays.Pencil requires (global_dims, decomp_dims, comm) or similar
+    # For serial execution or when PencilArrays isn't properly configured,
+    # return a simple array wrapper
+    config = dist.pencil_config
+
+    if dist.size == 1
+        # Serial execution - just create a regular array
+        pencil = zeros(dtype, global_shape...)
+    else
+        # Parallel execution - use PencilArrays properly
+        try
+            # Create a Pencil using the proper PencilArrays API
+            # PencilArrays.Pencil constructor: Pencil(topology, local_range, global_dims)
+            # For simplicity, we create a PencilArray directly
+            pencil = PencilArrays.PencilArray{dtype}(undef, global_shape, config.comm)
+        catch e
+            # Fallback to simple array if PencilArrays fails
+            @warn "PencilArrays creation failed, using regular array" exception=e
+            pencil = zeros(dtype, global_shape...)
+        end
+    end
 
     # Update performance stats
     dist.performance_stats.total_time += time() - start_time

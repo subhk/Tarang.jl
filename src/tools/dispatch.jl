@@ -6,6 +6,8 @@ around class-style hierarchies.  These utilities keep the same semantics so we
 can port code that expects ``MultiClass``/``CachedMultiClass`` behaviour.
 """
 
+using InteractiveUtils: subtypes
+
 export multiclass_new, cached_multiclass_new, dispatch_preprocess,
        dispatch_check, dispatch_postprocess, stop_dispatch
 

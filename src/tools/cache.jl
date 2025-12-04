@@ -4,7 +4,7 @@ Caching utilities
 Simplified version of dedalus caching system
 """
 
-using WeakKeyDict
+# WeakKeyDict is part of Base, no import needed
 
 # Cached method decorator-like functionality
 struct CachedMethod{F}

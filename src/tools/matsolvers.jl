@@ -64,7 +64,12 @@ function get_solver(name_or_type)
         solver_type = get(SOLVER_REGISTRY, lowercase(String(name_or_type)), nothing)
         solver_type === nothing && throw(ArgumentError("Unknown matrix solver: $(name_or_type)"))
         return solver_type
-    elseif name_or_type <: AbstractMatSolver
+    elseif name_or_type isa Symbol
+        # Convert Symbol to String and lookup
+        solver_type = get(SOLVER_REGISTRY, lowercase(String(name_or_type)), nothing)
+        solver_type === nothing && throw(ArgumentError("Unknown matrix solver: $(name_or_type)"))
+        return solver_type
+    elseif name_or_type isa Type && name_or_type <: AbstractMatSolver
         return name_or_type
     else
         throw(ArgumentError("Unsupported solver reference: $(name_or_type)"))

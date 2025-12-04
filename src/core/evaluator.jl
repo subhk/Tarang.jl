@@ -21,8 +21,7 @@ mutable struct EvaluatorPerformanceStats
     end
 end
 
-# Include NetCDF support
-include("../tools/netcdf_output.jl")
+# NetCDF support is included in main Tarang.jl module
 
 mutable struct FileHandler
     filename::String
@@ -467,7 +466,7 @@ function evaluate_property(flow::GlobalFlowProperty, name::String)
     return result
 end
 
-function max(flow::GlobalFlowProperty, name::String)
+function property_max(flow::GlobalFlowProperty, name::String)
     """
     Compute global max of a property on the grid.
     Following Dedalus implementation in flow_tools.py:107-110
@@ -476,7 +475,7 @@ function max(flow::GlobalFlowProperty, name::String)
     return global_max(flow.reducer, gdata)
 end
 
-function min(flow::GlobalFlowProperty, name::String)
+function property_min(flow::GlobalFlowProperty, name::String)
     """
     Compute global min of a property on the grid.
     Following Dedalus implementation in flow_tools.py:102-105

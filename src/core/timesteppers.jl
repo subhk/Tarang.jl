@@ -1734,44 +1734,7 @@ function get_max_timestep_history(timestepper::TimeStepper)
     end
 end
 
-# Helper functions for exponential integrators
-function fields_to_vector(fields::Vector{ScalarField})
-    """Convert vector of ScalarFields to a single vector for matrix operations"""
-    if isempty(fields)
-        return Float64[]
-    end
-    
-    # Ensure all fields are in grid space for consistent vectorization
-    for field in fields
-        ensure_layout!(field, :g)
-    end
-    
-    # Concatenate all field data
-    total_length = sum(length(field.data_g) for field in fields)
-    result = Vector{Float64}(undef, total_length)
-    
-    offset = 1
-    for field in fields
-        len = length(field.data_g)
-        result[offset:offset+len-1] .= field.data_g[:]
-        offset += len
-    end
-    
-    return result
-end
-
-function copy_solution_to_fields!(fields::Vector{ScalarField}, solution_vector::Vector{Float64})
-    """Copy solution vector back to ScalarField array"""
-    if isempty(fields)
-        return
-    end
-    
-    offset = 1
-    for field in fields
-        ensure_layout!(field, :g)
-        len = length(field.data_g)
-        field.data_g[:] .= solution_vector[offset:offset+len-1]
-        offset += len
-    end
-end
+# Helper functions for exponential integrators are defined in solvers.jl:
+# - fields_to_vector: Convert fields to coefficient-space vector
+# - copy_solution_to_fields!: Copy solution vector back to fields
 

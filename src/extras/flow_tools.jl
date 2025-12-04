@@ -77,34 +77,34 @@ end
 
 function compute_timestep(cfl::CFL)
     """Compute adaptive timestep based on CFL condition"""
-    
+
     cfl.iteration_count += 1
-    
+
     # Only compute every cadence iterations
     if cfl.iteration_count % cfl.cadence != 0
         return cfl.current_dt
     end
-    
+
     if isempty(cfl.velocities)
         return cfl.current_dt
     end
-    
+
     min_dt = Inf
-    
+
     for velocity in cfl.velocities
         # Get domain and grid spacing
         domain = velocity.domain
         spacings = grid_spacing(domain)
-        
+
         for (i, component) in enumerate(velocity.components)
             ensure_layout!(component, :g)
-            
+
             # Get velocity magnitude in this direction
             vel_data = abs.(component.data_g)
             max_vel = maximum(vel_data)
-            
+
             max_vel = global_max(cfl.reducer, max_vel)
-            
+
             if max_vel > 0
                 # CFL condition: dt < dx / |u|
                 dt_limit = spacings[i] / max_vel
@@ -112,23 +112,24 @@ function compute_timestep(cfl::CFL)
             end
         end
     end
-    
+
     if min_dt == Inf
         proposed_dt = cfl.initial_dt
     else
         proposed_dt = cfl.safety * min_dt
     end
-    
+
     # Apply constraints
     proposed_dt = min(proposed_dt, cfl.max_dt)
-    
-    # Limit change rate
-    if cfl.current_dt > 0
+
+    # Limit change rate (only after first real CFL computation)
+    # Skip rate limiting on first iteration to allow proper initialization
+    if cfl.iteration_count > 1 && cfl.current_dt > 0 && cfl.current_dt != cfl.initial_dt
         max_allowed = cfl.current_dt * cfl.max_change
         min_allowed = cfl.current_dt * cfl.min_change
         proposed_dt = clamp(proposed_dt, min_allowed, max_allowed)
     end
-    
+
     cfl.current_dt = proposed_dt
     return proposed_dt
 end
