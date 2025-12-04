@@ -34,9 +34,10 @@ mutable struct Domain
         filtered_bases = filter(b -> b !== nothing, bases)
         unique_bases = unique(filtered_bases)
 
-        # Check for overlapping coordinate systems
-        coordsys_list = [basis.meta.coordsys for basis in unique_bases]
-        if length(Set(coordsys_list)) < length(coordsys_list)
+        # Check for overlapping bases (same coordinate name within same coordinate system)
+        # Two bases overlap if they operate on the same coordinate
+        coord_keys = [(basis.meta.coordsys, basis.meta.element_label) for basis in unique_bases]
+        if length(Set(coord_keys)) < length(coord_keys)
             throw(ArgumentError("Overlapping bases specified"))
         end
 
