@@ -893,31 +893,256 @@ end
 # Utility functions for PencilArray compatibility
 function get_pencil_compatible_data(field::ScalarField, config::PencilConfig)
     """
-    Convert field data to PencilArray format.
-    Since ScalarField already stores data as PencilArrays, this mainly ensures
-    proper layout and returns the compatible data format.
+    Convert field data to PencilArray format compatible with the given PencilConfig.
+
+    This function ensures that the field's data is:
+    1. In grid space layout (for nonlinear operations)
+    2. Compatible with the PencilConfig's global shape
+    3. Uses the correct data type
+    4. Properly distributed according to the mesh configuration
+
+    Returns the field's grid space data as a PencilArray or compatible array.
     """
-    
+
     # Ensure field is in grid space layout for nonlinear operations
     ensure_layout!(field, :g)
-    
-    # ScalarField.data_g is already a PencilArray, so we need to ensure
-    # it's compatible with the provided configuration
+
+    # Verify field has allocated data
     if field.data_g === nothing
         throw(ArgumentError("Field $(field.name) has no grid space data allocated"))
     end
-    
-    # Check if the field's data is compatible with the provided config
-    # In a full implementation, this would verify pencil decomposition compatibility
+
     field_pencil = field.data_g
-    
-    # Verify data type compatibility
-    if eltype(field_pencil) != config.dtype
-        @warn "Data type mismatch: field has $(eltype(field_pencil)), config expects $(config.dtype)"
+    field_shape = size(field_pencil)
+
+    # Verify shape compatibility
+    # The field's local shape should be consistent with the global shape and mesh decomposition
+    if !is_shape_compatible(field_shape, config.global_shape, config.mesh, config.comm)
+        @warn "Shape mismatch: field local shape $(field_shape) may not be compatible with " *
+              "global shape $(config.global_shape) and mesh $(config.mesh)"
     end
-    
-    # Return the PencilArray data - it's already in the correct format
+
+    # Verify data type compatibility and convert if needed
+    if eltype(field_pencil) != config.dtype
+        @debug "Converting field data type from $(eltype(field_pencil)) to $(config.dtype)"
+        # Create converted copy if types don't match
+        converted_data = convert.(config.dtype, field_pencil)
+        return converted_data
+    end
+
+    # Verify MPI communicator compatibility
+    if field.dist.use_pencil_arrays && field.dist.pencil_config !== nothing
+        if field.dist.pencil_config.comm != config.comm
+            @warn "MPI communicator mismatch between field and config"
+        end
+    end
+
+    @debug "Retrieved pencil compatible data for field $(field.name)" size=field_shape eltype=eltype(field_pencil)
+
     return field_pencil
+end
+
+function is_shape_compatible(local_shape::Tuple, global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
+    """
+    Check if the local shape is compatible with the global shape given the mesh decomposition.
+
+    For a valid pencil decomposition:
+    - The product of local shapes across all ranks should equal the global shape
+    - The local shape should be approximately global_shape / mesh for distributed dimensions
+    """
+
+    if length(local_shape) != length(global_shape)
+        return false
+    end
+
+    # For serial execution (single rank), local shape should match global shape
+    if MPI.Comm_size(comm) == 1
+        return local_shape == global_shape
+    end
+
+    # For parallel execution, check that local shape is reasonable
+    # (within expected range given the mesh decomposition)
+    ndims = length(global_shape)
+    mesh_dims = length(mesh)
+
+    for i in 1:ndims
+        # Determine if this dimension is decomposed
+        if i <= mesh_dims && mesh[i] > 1
+            # This dimension is distributed
+            expected_local = ceil(Int, global_shape[i] / mesh[i])
+            min_local = floor(Int, global_shape[i] / mesh[i])
+
+            if local_shape[i] < min_local || local_shape[i] > expected_local
+                return false
+            end
+        else
+            # This dimension is not distributed, should match global
+            if local_shape[i] != global_shape[i]
+                return false
+            end
+        end
+    end
+
+    return true
+end
+
+function get_pencil_config_from_field(field::ScalarField)
+    """
+    Extract a PencilConfig from a ScalarField's distributor configuration.
+    """
+    dist = field.dist
+
+    if dist.pencil_config !== nothing
+        return dist.pencil_config
+    end
+
+    # Build a config from field properties
+    gshape = global_shape(field.domain)
+    mesh_config = dist.mesh !== nothing ? dist.mesh : (1,)
+
+    return PencilConfig(
+        gshape,
+        mesh_config;
+        comm=dist.comm,
+        dtype=field.dtype
+    )
+end
+
+function ensure_pencil_compatibility!(field::ScalarField, config::PencilConfig)
+    """
+    Ensure field is compatible with the given PencilConfig, reallocating if necessary.
+
+    This function modifies the field in-place to ensure compatibility with the config.
+    Returns true if the field was modified, false otherwise.
+    """
+
+    # Ensure field is in grid space
+    ensure_layout!(field, :g)
+
+    if field.data_g === nothing
+        # Allocate new data with the correct configuration
+        allocate_field_data!(field, config)
+        return true
+    end
+
+    current_shape = size(field.data_g)
+
+    # Check if reallocation is needed
+    needs_realloc = false
+
+    # Check shape compatibility
+    if !is_shape_compatible(current_shape, config.global_shape, config.mesh, config.comm)
+        needs_realloc = true
+    end
+
+    # Check dtype compatibility
+    if eltype(field.data_g) != config.dtype
+        needs_realloc = true
+    end
+
+    if needs_realloc
+        # Store old data for potential interpolation
+        old_data = copy(field.data_g)
+
+        # Allocate new data
+        allocate_field_data!(field, config)
+
+        # Attempt to interpolate/copy data if shapes are compatible enough
+        try
+            interpolate_field_data!(field.data_g, old_data)
+        catch e
+            @warn "Could not preserve field data during reallocation: $e"
+            fill!(field.data_g, zero(config.dtype))
+        end
+
+        return true
+    end
+
+    return false
+end
+
+function allocate_field_data!(field::ScalarField, config::PencilConfig)
+    """
+    Allocate field data according to the PencilConfig.
+    """
+    dist = field.dist
+
+    if dist.use_pencil_arrays && MPI.Comm_size(config.comm) > 1
+        # For parallel execution, compute local shape based on pencil decomposition
+        local_shape = compute_local_shape(config.global_shape, config.mesh, config.comm)
+        field.data_g = zeros(config.dtype, local_shape...)
+    else
+        # For serial execution, use global shape directly
+        field.data_g = zeros(config.dtype, config.global_shape...)
+    end
+
+    # Also allocate coefficient space data with same shape
+    field.data_c = zeros(Complex{real(config.dtype)}, size(field.data_g)...)
+
+    field.current_layout = :g
+end
+
+function compute_local_shape(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
+    """
+    Compute the local shape for this rank given the global shape and mesh decomposition.
+    """
+    rank = MPI.Comm_rank(comm)
+    nprocs = MPI.Comm_size(comm)
+    ndims = length(global_shape)
+    mesh_dims = length(mesh)
+
+    local_shape = collect(global_shape)
+
+    # Compute local sizes for each decomposed dimension
+    for i in 1:min(ndims, mesh_dims)
+        if mesh[i] > 1
+            # Compute which portion of this dimension belongs to this rank
+            n = global_shape[i]
+            p = mesh[i]
+
+            # Determine rank position in this dimension of the mesh
+            # (simplified: assumes row-major ordering)
+            mesh_rank = (rank % prod(mesh[1:i])) ÷ prod(mesh[1:i-1])
+
+            # Compute local size (even distribution with remainder going to last ranks)
+            base_size = n ÷ p
+            remainder = n % p
+
+            if mesh_rank < p - remainder
+                local_shape[i] = base_size
+            else
+                local_shape[i] = base_size + 1
+            end
+        end
+    end
+
+    return tuple(local_shape...)
+end
+
+function interpolate_field_data!(dest::AbstractArray, src::AbstractArray)
+    """
+    Interpolate source data into destination array.
+    Uses nearest-neighbor or linear interpolation depending on relative sizes.
+    """
+    src_shape = size(src)
+    dest_shape = size(dest)
+
+    if src_shape == dest_shape
+        copyto!(dest, src)
+        return
+    end
+
+    # Use nearest-neighbor interpolation for simplicity
+    ndims = length(dest_shape)
+
+    for I in CartesianIndices(dest)
+        src_indices = ntuple(ndims) do d
+            # Map destination index to source index
+            src_idx = round(Int, (I[d] - 1) * (src_shape[d] - 1) / max(dest_shape[d] - 1, 1)) + 1
+            clamp(src_idx, 1, src_shape[d])
+        end
+        dest[I] = src[src_indices...]
+    end
 end
 
 function set_pencil_compatible_data!(field::ScalarField, data, config::PencilConfig)
