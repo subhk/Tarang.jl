@@ -89,10 +89,11 @@ end
 export
     # Coordinate systems
     CartesianCoordinates, S2Coordinates, SphericalCoordinates, PolarCoordinates,
-    
+    coords, unit_vector_fields,
+
     # Bases
     RealFourier, ComplexFourier, Fourier, ChebyshevT, ChebyshevU, Legendre,
-    
+
     # Core classes
     Domain, Distributor, Field, ScalarField, VectorField, TensorField,
     
