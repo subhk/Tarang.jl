@@ -431,6 +431,15 @@ function write_hdf5_output(filename::String, data::Dict{String, Any}, sim_time::
     end
 end
 
+struct GlobalArrayReducer
+    comm::MPI.Comm
+    scalar_buffer::Vector{Float64}
+    
+    function GlobalArrayReducer(comm::MPI.Comm)
+        new(comm, zeros(Float64, 1))
+    end
+end
+
 # Analysis utilities
 mutable struct GlobalFlowProperty
     solver::InitialValueSolver
@@ -449,15 +458,6 @@ mutable struct GlobalFlowProperty
         gpu_workspace = Dict{String, AbstractArray}()
         perf_stats = EvaluatorPerformanceStats()
         new(solver, cadence, Dict{String, Any}(), reducer, nothing, device_config, gpu_workspace, perf_stats)
-    end
-end
-
-struct GlobalArrayReducer
-    comm::MPI.Comm
-    scalar_buffer::Vector{Float64}
-    
-    function GlobalArrayReducer(comm::MPI.Comm)
-        new(comm, zeros(Float64, 1))
     end
 end
 
