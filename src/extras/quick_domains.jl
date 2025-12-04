@@ -392,18 +392,18 @@ end
 # 3D performance analysis
 function analyze_3d_performance(domain::Domain, n_fields::Int=4)
     """Analyze performance characteristics for 3D domain"""
-    
-    global_shape = global_shape(domain)
-    local_shape = local_shape(domain)
-    
+
+    gshape = global_shape(domain)
+    lshape = local_shape(domain)
+
     @info "3D Performance Analysis:"
-    @info "  Global shape: $global_shape"
-    @info "  Local shape: $local_shape"
+    @info "  Global shape: $gshape"
+    @info "  Local shape: $lshape"
     @info "  Process mesh: $(domain.dist.mesh)"
-    
+
     # Memory analysis
-    global_size = prod(global_shape)
-    local_size = prod(local_shape)
+    global_size = prod(gshape)
+    local_size = prod(lshape)
     
     bytes_per_element = sizeof(domain.dist.dtype)
     

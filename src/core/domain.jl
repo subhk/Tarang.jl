@@ -288,8 +288,8 @@ end
 
 function get_pencil(domain::Domain, decomp_index::Int=1)
     """Get pencil array for domain"""
-    global_shape = global_shape(domain)
-    return create_pencil(domain.dist, global_shape, decomp_index)
+    gshape = global_shape(domain)
+    return create_pencil(domain.dist, gshape, decomp_index)
 end
 
 # Grid and coefficient utilities

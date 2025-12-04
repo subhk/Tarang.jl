@@ -89,8 +89,8 @@ end
 # Transform planning and execution
 function plan_transforms!(dist::Distributor, domain::Domain)
     """Plan all transforms for a domain using PencilFFTs for parallel multi-D FFT"""
-    
-    global_shape = global_shape(domain)
+
+    gshape = global_shape(domain)
     ndim = length(domain.bases)
     
     # Analyze basis types

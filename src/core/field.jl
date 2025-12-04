@@ -134,7 +134,7 @@ function allocate_data!(field::ScalarField)
         return
     end
 
-    global_shape = global_shape(field.domain)
+    gshape = global_shape(field.domain)
 
     if field.dist.use_pencil_arrays
         # CORRECT: Store Pencil objects directly for MPI parallelization
@@ -143,13 +143,13 @@ function allocate_data!(field::ScalarField)
         # - PencilFFT transforms
         # - MPI communication patterns
 
-        field.data_g = create_pencil(field.dist, global_shape, 1, dtype=field.dtype)
-        field.data_c = create_pencil(field.dist, global_shape, 1, dtype=field.dtype)
+        field.data_g = create_pencil(field.dist, gshape, 1, dtype=field.dtype)
+        field.data_c = create_pencil(field.dist, gshape, 1, dtype=field.dtype)
 
         # For local computations on pencil.data
     else
         # Serial computation
-        local_size = get_local_array_size(field.dist, global_shape)
+        local_size = get_local_array_size(field.dist, gshape)
         field.data_g = zeros(field.dtype, local_size...)
         field.data_c = zeros(field.dtype, local_size...)
     end
