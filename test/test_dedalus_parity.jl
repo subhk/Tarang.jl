@@ -92,9 +92,9 @@ end
         Tarang.process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
 
         file = Tarang.current_file(handler)
-        raw = ncread(file, "u_raw")
-        mean_val = ncread(file, "u_mean")
-        slice_val = ncread(file, "u_slice")
+        raw = NetCDF.ncread(file, "u_raw")
+        mean_val = NetCDF.ncread(file, "u_mean")
+        slice_val = NetCDF.ncread(file, "u_slice")
 
         @test all(isapprox.(raw[1, :], u.data_g))
         @test isapprox(mean_val[1], 2.5; atol=1e-12)
