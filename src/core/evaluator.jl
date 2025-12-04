@@ -401,9 +401,9 @@ mutable struct GlobalFlowProperty
     end
 end
 
-function reduce_scalar(reducer::GlobalArrayReducer, local_scalar::Float64, mpi_op)
+function reduce_scalar(reducer::GlobalArrayReducer, local_scalar::Real, mpi_op)
     """Compute global reduction of a scalar from each process."""
-    reducer.scalar_buffer[1] = local_scalar
+    reducer.scalar_buffer[1] = Float64(local_scalar)
     if MPI.Initialized()
         MPI.Allreduce!(reducer.scalar_buffer, mpi_op, reducer.comm)
     end
@@ -412,19 +412,19 @@ end
 
 function global_min(reducer::GlobalArrayReducer, data::AbstractArray; empty::Float64=Inf)
     """Compute global min of all array data."""
-    local_min = isempty(data) ? empty : minimum(data)
+    local_min = isempty(data) ? empty : Float64(minimum(data))
     return reduce_scalar(reducer, local_min, MPI.MIN)
 end
 
 function global_max(reducer::GlobalArrayReducer, data::AbstractArray; empty::Float64=-Inf)
     """Compute global max of all array data."""
-    local_max = isempty(data) ? empty : maximum(data)
+    local_max = isempty(data) ? empty : Float64(maximum(data))
     return reduce_scalar(reducer, local_max, MPI.MAX)
 end
 
 function global_mean(reducer::GlobalArrayReducer, data::AbstractArray)
     """Compute global mean of all array data."""
-    local_sum = sum(data)
+    local_sum = Float64(sum(data))
     local_size = Float64(length(data))
     global_sum = reduce_scalar(reducer, local_sum, MPI.SUM)
     global_size = reduce_scalar(reducer, local_size, MPI.SUM)
