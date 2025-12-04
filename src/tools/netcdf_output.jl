@@ -673,9 +673,11 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     end
     
     # Write data with time index
+    # Reshape data to include time dimension: (x,) -> (1, x) for writing at time index
+    data_with_time = reshape(data, 1, size(data)...)
     start_indices = [write_index; ones(Int, length(size(data)))]
-    ncwrite(data, filename, task_name, start=start_indices)
-    
+    ncwrite(data_with_time, filename, task_name, start=start_indices)
+
     return true
 end
 
