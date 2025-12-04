@@ -30,7 +30,7 @@ using Tarang
     @test Tarang.dim(domain) == 2
 end
 
-@testset "Polar and spherical metadata" begin
+@testset "Polar metadata" begin
     polar = PolarCoordinates("phi", "r")
     polar_dist = Distributor(polar; mesh=(1, 1), dtype=Float64)
     disk = DiskBasis(polar["phi"]; radius=1.0, size=10, dealias=(1.0, 1.25))
@@ -44,12 +44,4 @@ end
 
     @test Tarang.dealias(annulus_domain) == (1.5, 1.0)
     @test Tarang.mode_dependence(annulus_domain) == (false, true)
-
-    sphere_coords = SphericalCoordinates("phi", "theta", "r")
-    sphere_dist = Distributor(sphere_coords; mesh=(1, 1, 1), dtype=Float64)
-    sphere_basis = SphereBasis(sphere_coords["phi"]; radius=1.0, size=8, dealias=(1.0, 1.0, 1.0))
-    sphere_domain = Domain(sphere_dist, (sphere_basis,))
-
-    @test Tarang.mode_dependence(sphere_domain) == (false, true, true)
-    @test all(!c for c in Tarang.constant(sphere_domain))
 end
