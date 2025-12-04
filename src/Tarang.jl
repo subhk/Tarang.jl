@@ -9,6 +9,7 @@ under the terms of the GPLv3 license.
 module Tarang
 
 __version__ = "0.1.0"
+const dtype = Float64  # Default scalar type for CPU-only builds
 
 using MPI
 using PencilArrays
