@@ -6,10 +6,6 @@ Coordinates define the dimensional structure of your problem domain. Tarang.jl s
 
 ### CartesianCoordinates
 
-```@docs
-CartesianCoordinates
-```
-
 Cartesian coordinate system for rectangular domains.
 
 **Constructor**:
@@ -74,11 +70,10 @@ add_equation!(problem, "dt(u) = ... + Ra*Pr*T*ez")
 
 ### SphericalCoordinates
 
-```@docs
-SphericalCoordinates
-```
-
 Spherical coordinate system (r, θ, φ) for problems with spherical geometry.
+
+!!! note
+    SphericalCoordinates is not yet implemented in Tarang.jl. This is planned for a future release.
 
 **Constructor**:
 ```julia
@@ -109,11 +104,10 @@ coords = SphericalCoordinates(("radius", "theta", "phi"))
 
 ### PolarCoordinates
 
-```@docs
-PolarCoordinates
-```
-
 Polar coordinate system (r, φ) for 2D axisymmetric problems.
+
+!!! note
+    PolarCoordinates is not yet implemented in Tarang.jl. This is planned for a future release.
 
 **Constructor**:
 ```julia
@@ -164,10 +158,6 @@ println(x.index)    # 1
 ## Distributor
 
 The distributor manages MPI process distribution across coordinate dimensions.
-
-```@docs
-Distributor
-```
 
 **Constructor**:
 ```julia

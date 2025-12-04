@@ -26,10 +26,6 @@ Each coordinate dimension requires a spectral basis that determines:
 
 ### RealFourier
 
-```@docs
-RealFourier
-```
-
 Real-valued Fourier basis for periodic coordinates with real data.
 
 **Constructor**:
@@ -100,10 +96,6 @@ k0 = 2π / basis.length
 
 ### ComplexFourier
 
-```@docs
-ComplexFourier
-```
-
 Complex-valued Fourier basis for periodic coordinates.
 
 **Constructor**:
@@ -144,10 +136,6 @@ k = get_wavenumbers(basis)
 ## Chebyshev Bases
 
 ### ChebyshevT
-
-```@docs
-ChebyshevT
-```
 
 Chebyshev polynomials of the first kind for bounded, non-periodic coordinates.
 
@@ -218,10 +206,6 @@ where T_n(x) is the nth Chebyshev polynomial.
 
 ### ChebyshevU
 
-```@docs
-ChebyshevU
-```
-
 Chebyshev polynomials of the second kind.
 
 **Constructor**:
@@ -250,10 +234,6 @@ grid = get_grid(basis)
 ## Legendre Basis
 
 ### Legendre
-
-```@docs
-Legendre
-```
 
 Legendre polynomials for bounded coordinates.
 

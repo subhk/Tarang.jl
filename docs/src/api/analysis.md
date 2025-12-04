@@ -6,10 +6,6 @@ Analysis tools for computing diagnostics, managing output, and monitoring simula
 
 ### CFL
 
-```@docs
-CFL
-```
-
 Computes adaptive timesteps based on the Courant-Friedrichs-Lewy (CFL) stability criterion.
 
 **Constructor**:
@@ -109,10 +105,6 @@ cfl.current_dt      # Last computed timestep
 ### NetCDF Output
 
 #### add_netcdf_handler
-
-```@docs
-add_netcdf_handler
-```
 
 Create NetCDF output handler for saving fields to files.
 

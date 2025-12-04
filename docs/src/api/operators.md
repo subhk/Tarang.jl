@@ -17,10 +17,6 @@ Tarang.jl supports:
 
 ### Gradient (grad)
 
-```@docs
-grad
-```
-
 Computes the gradient of a scalar field, returning a vector field.
 
 **Syntax**:
@@ -71,10 +67,6 @@ add_equation!(problem, "dt(u) = -grad(p)")
 
 ### Divergence (div)
 
-```@docs
-div
-```
-
 Computes the divergence of a vector field, returning a scalar field.
 
 **Syntax**:
@@ -116,10 +108,6 @@ add_equation!(problem, "div(u) = S")
 ---
 
 ### Curl (curl)
-
-```@docs
-curl
-```
 
 Computes the curl of a vector field, returning a vector field.
 
@@ -164,10 +152,6 @@ add_equation!(problem, "omega = dx(v) - dy(u)")
 ---
 
 ### Laplacian (lap)
-
-```@docs
-lap
-```
 
 Computes the Laplacian (second derivative) of a field.
 

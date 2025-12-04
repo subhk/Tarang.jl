@@ -4,10 +4,6 @@ A domain represents the spatial discretization of your problem, combining coordi
 
 ## Domain
 
-```@docs
-Domain
-```
-
 The domain class combines multiple spectral bases and manages the spatial discretization.
 
 **Constructor**:

@@ -4,10 +4,6 @@ Fields represent variables in your PDE system. Tarang.jl provides scalar, vector
 
 ## ScalarField
 
-```@docs
-ScalarField
-```
-
 ### Constructor
 
 ```julia
@@ -91,10 +87,6 @@ field.distributor   # Distributor: MPI distribution
 
 ## VectorField
 
-```@docs
-VectorField
-```
-
 ### Constructor
 
 ```julia
@@ -173,10 +165,6 @@ u.ndim          # Int: Number of dimensions
 ```
 
 ## TensorField
-
-```@docs
-TensorField
-```
 
 ### Constructor
 
