@@ -98,31 +98,8 @@ function Base.getindex(coordsys::CoordinateSystem, key::Union{String, Int})
     end
 end
 
-function unit_vector_fields(coordsys::CoordinateSystem, dist)
-    # Return unit vector fields for each coordinate
-    # Following Dedalus implementation in coords.py:183
-    fields = VectorField[]
-    for (i, coord) in enumerate(coordsys.coords)
-        # Create vector field for each coordinate direction
-        ec = VectorField(dist, coordsys, name="e$(coord.name)")
-        
-        # Set the i-th component to 1 (unit vector in that direction)
-        # In Dedalus: ec['g'][i] = 1
-        # This means the i-th component of the vector field is set to 1
-        for j in 1:length(ec.components)
-            if j == i
-                # Set the i-th component to 1 (unit vector in that direction)
-                fill!(ec.components[j]["g"], 1.0)
-            else
-                # Set all other components to 0
-                fill!(ec.components[j]["g"], 0.0)
-            end
-        end
-        
-        push!(fields, ec)
-    end
-    return tuple(fields...)
-end
+# Note: unit_vector_fields has been moved to field.jl to avoid circular dependency
+# (it needs VectorField which is defined in field.jl, but coords.jl is included first)
 
 # Note: local_grids is implemented in distributor.jl
 # The distributor's local_grids method handles coordinate grid generation

@@ -950,7 +950,7 @@ function optimized_axpy!(α::Real, x::ScalarField, y::ScalarField)
     """Optimized y ← α*x + y using best available method"""
     ensure_layout!(x, :g)
     ensure_layout!(y, :g)
-    
+
     n = length(x.data_g)
     if n > 2000  # Use BLAS for very large arrays
         BLAS.axpy!(α, x.data_g, y.data_g)
@@ -961,4 +961,36 @@ function optimized_axpy!(α::Real, x::ScalarField, y::ScalarField)
     else  # Use broadcasting for small arrays
         y.data_g .+= α .* x.data_g
     end
+end
+
+# Coordinate system utilities (moved from coords.jl to avoid circular dependency)
+function unit_vector_fields(coordsys::CoordinateSystem, dist)
+    """
+    Return unit vector fields for each coordinate direction.
+    Following Dedalus implementation in coords.py:183
+
+    Note: This function was moved from coords.jl to field.jl to avoid circular dependency,
+    as it needs VectorField which is defined in field.jl.
+    """
+    fields = VectorField[]
+    for (i, coord) in enumerate(coords(coordsys))
+        # Create vector field for each coordinate direction
+        ec = VectorField(dist, coordsys, name="e$(coord.name)")
+
+        # Set the i-th component to 1 (unit vector in that direction)
+        # In Dedalus: ec['g'][i] = 1
+        # This means the i-th component of the vector field is set to 1
+        for j in 1:length(ec.components)
+            if j == i
+                # Set the i-th component to 1 (unit vector in that direction)
+                fill!(ec.components[j]["g"], 1.0)
+            else
+                # Set all other components to 0
+                fill!(ec.components[j]["g"], 0.0)
+            end
+        end
+
+        push!(fields, ec)
+    end
+    return tuple(fields...)
 end
