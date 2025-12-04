@@ -15,56 +15,56 @@ function _require_coords(dist::Distributor, needed::Int)
 end
 
 # 1D domains
-function create_fourier_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64)
-    """Create 1D periodic Fourier domain with GPU support"""
+function create_fourier_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, kwargs...)
+    """Create 1D periodic Fourier domain (CPU only)"""
     
     x_coord = _require_coords(dist, 1)[1]
     x_basis = RealFourier(x_coord, size=N, bounds=(0.0, L), dtype=dtype)
     
-    return Domain(dist, (x_basis,); device=device)
+    return Domain(dist, (x_basis,))
 end
 
-function create_chebyshev_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64)
-    """Create 1D Chebyshev domain with GPU support"""
+function create_chebyshev_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, kwargs...)
+    """Create 1D Chebyshev domain (CPU only)"""
     
     x_coord = _require_coords(dist, 1)[1]
     x_basis = ChebyshevT(x_coord, size=N, bounds=(0.0, L), dtype=dtype)
     
-    return Domain(dist, (x_basis,); device=device)
+    return Domain(dist, (x_basis,))
 end
 
-function create_legendre_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64)
-    """Create 1D Legendre domain with GPU support"""
+function create_legendre_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, kwargs...)
+    """Create 1D Legendre domain (CPU only)"""
     
     x_coord = _require_coords(dist, 1)[1]
     x_basis = Legendre(x_coord, size=N, bounds=(0.0, L), dtype=dtype)
     
-    return Domain(dist, (x_basis,); device=device)
+    return Domain(dist, (x_basis,))
 end
 
 # 2D domains
 function create_2d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int; 
-                                  dtype::Type=Float64, dealias::Float64=3.0/2.0)
-    """Create 2D doubly-periodic domain with Fourier bases in both directions and GPU support"""
+                                  dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+    """Create 2D doubly-periodic domain with Fourier bases in both directions (CPU only)"""
     
     x_coord, y_coord = _require_coords(dist, 2)
     
     x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
     y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
     
-    return Domain(dist, (x_basis, y_basis); device=device)
+    return Domain(dist, (x_basis, y_basis))
 end
 
 function create_channel_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int;
-                              dtype::Type=Float64, dealias::Float64=3.0/2.0)
-    """Create 2D channel domain: periodic in x, Chebyshev in y with GPU support"""
+                              dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+    """Create 2D channel domain: periodic in x, Chebyshev in y (CPU only)"""
     
     x_coord, y_coord = _require_coords(dist, 2)
     
     x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
     y_basis = ChebyshevT(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
     
-    return Domain(dist, (x_basis, y_basis); device=device)
+    return Domain(dist, (x_basis, y_basis))
 end
 
 function create_rectangular_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int;

@@ -31,7 +31,7 @@ mutable struct Domain
     performance_stats::DomainPerformanceStats
     attribute_cache::Dict{Symbol, Any}
 
-    function Domain(dist::Distributor, bases::Tuple{Vararg{Basis}})
+    function Domain(dist::Distributor, bases::Tuple{Vararg{Basis}}; device_type::Symbol=CPU_DEVICE, device=nothing)
         # Filter out nothing bases and remove duplicates
         filtered_bases = filter(b -> b !== nothing, bases)
         unique_bases = unique(filtered_bases)
@@ -53,13 +53,13 @@ mutable struct Domain
         perf_stats = DomainPerformanceStats()
         attribute_cache = Dict{Symbol, Any}()
 
-        new(dist, tuple(sorted_bases...), total_dim, CPU_DEVICE, grid_coords, weights_cache, perf_stats, attribute_cache)
+        new(dist, tuple(sorted_bases...), total_dim, device_type, grid_coords, weights_cache, perf_stats, attribute_cache)
     end
 end
 
 # Convenience constructors
-function Domain(dist::Distributor, bases::Vararg{Basis}; kwargs...)
-    return Domain(dist, bases; kwargs...)
+function Domain(dist::Distributor, bases::Vararg{Basis}; device_type::Symbol=CPU_DEVICE, device=nothing)
+    return Domain(dist, tuple(bases...); device_type=device_type, device=device)
 end
 
 @inline function _domain_cached_get!(domain::Domain, key::Symbol, builder::Function)
@@ -183,7 +183,7 @@ function substitute_basis(domain::Domain, old_basis::Basis, new_basis::Basis)
         deleteat!(bases_vec, idx)
     end
     push!(bases_vec, new_basis)
-    return Domain(domain.dist, tuple(bases_vec...); device=domain)
+    return Domain(domain.dist, tuple(bases_vec...); device_type=domain.device_type)
 end
 
 function get_basis(domain::Domain, coords)

@@ -571,29 +571,14 @@ end
 function get_gpu_temp_array(evaluator::NonlinearEvaluator, shape::Tuple, dtype::Type)
     """Get temporary GPU array for intermediate calculations"""
     
-    # Try to reuse existing array of same shape and type
-        if size(arr) == shape && eltype(arr) == dtype
-            # Remove from pool and return
-            fill!(temp_arr, 0)  # Clear contents
-            return temp_arr
-        end
-    end
-    
-    # Create new array on device if no suitable one found
-    return device_zeros(dtype, shape, evaluator)
+    # No GPU pool in CPU-only mode; just allocate a new array
+    return zeros(dtype, shape)
 end
 
 function return_gpu_temp_array!(evaluator::NonlinearEvaluator, arr::AbstractArray)
     """Return temporary GPU array to memory pool for reuse"""
-    
-    # Only pool arrays up to a reasonable size to avoid memory bloat
-    max_elements = 10^6  # 1M elements max
-    if length(arr) <= max_elements
-    end
-    
-    # Keep pool size reasonable
-    max_pool_size = 10
-    end
+    # No pooling in CPU-only mode; let GC reclaim.
+    return nothing
 end
 
 # Integration with existing operator evaluation

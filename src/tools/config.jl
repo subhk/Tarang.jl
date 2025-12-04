@@ -4,7 +4,7 @@ Configuration management
 Simplified version of dedalus/tools/config.py
 """
 
-using Pkg.TOML
+import TOML
 
 mutable struct Config
     data::Dict{String, Any}

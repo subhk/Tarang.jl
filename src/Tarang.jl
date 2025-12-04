@@ -10,7 +10,8 @@ module Tarang
 
 __version__ = "0.1.0"
 const dtype = Float64  # Default scalar type for CPU-only builds
-const shape = nothing  # Placeholder to satisfy legacy references during CPU-only load
+const shape = ()  # Placeholder tuple to satisfy legacy references during CPU-only load
+const evaluator = nothing  # Placeholder to satisfy legacy references during CPU-only load
 
 using MPI
 using PencilArrays
