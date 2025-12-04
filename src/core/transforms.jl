@@ -614,26 +614,22 @@ function apply_chebyshev_forward!(field::ScalarField, transform::ChebyshevTransf
         end
         
     else
-        # Use matrix-based transform (works for both CPU and GPU)
+        # Use matrix-based transform
         apply_chebyshev_matrix_forward!(field, transform)
     end
 end
 
 function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTransform)
     """
-    Apply backward Chebyshev transform (coefficients to grid) .
-    
+    Apply backward Chebyshev transform (coefficients to grid).
+
     Based on Dedalus ScipyDCT.backward and FFTWDCT.backward methods:
     - Uses DCT-III with proper scaling for unit-amplitude normalization
     - Handles padding/truncation for different coefficient/grid sizes
     - Follows resize_rescale_backward pattern
-    - CPU-based implementation
     """
-    
-    # Ensure field data is on correct device
-    field.data_c = field.data_c
-    
-    if transform.backward_plan !== nothing && true  # CPU-only
+
+    if transform.backward_plan !== nothing
         # Use FFTW DCT-III plan for CPU
         try
             temp_data = zeros(transform.grid_size)
@@ -655,18 +651,15 @@ function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTrans
             @warn "DCT backward transform failed: $e, falling back to matrix method"
             apply_chebyshev_matrix_backward!(field, transform)
         end
-        
+
     else
-        # Use matrix-based transform (works for both CPU and GPU)
+        # Use matrix-based transform
         apply_chebyshev_matrix_backward!(field, transform)
     end
 end
 
 function apply_chebyshev_matrix_forward!(field::ScalarField, transform::ChebyshevTransform)
-    """Apply forward Chebyshev transform using matrix multiplication (CPU-based)"""
-    
-    # Ensure field data is on correct device
-    field.data_g = field.data_g
+    """Apply forward Chebyshev transform using matrix multiplication"""
     
     if haskey(transform.matrices, "forward")
         field.data_c = transform.matrices["forward"] * field.data_g

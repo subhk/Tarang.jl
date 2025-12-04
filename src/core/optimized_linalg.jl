@@ -7,7 +7,6 @@ optimized for spectral PDE solvers, with particular focus on:
 - Dense BLAS operations for transforms and nonlinear terms
 - Memory-efficient tensor operations
 - SIMD and threading optimizations
-- GPU acceleration support (future)
 """
 
 using LinearAlgebra
