@@ -80,7 +80,6 @@ include("tools/parallel.jl")
 include("tools/logging.jl")
 include("tools/progress.jl")
 include("tools/random_arrays.jl")
-include("tools/memory_3d.jl")
 include("tools/netcdf_output.jl")
 include("tools/netcdf_merge.jl")
 
