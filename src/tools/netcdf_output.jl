@@ -642,7 +642,8 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
             
             if !coord_exists
                 coord_length = data_shape[i]
-                coord_data = collect(range(0.0, 1.0, length=coord_length))
+                # Handle single-element case where range() fails with different endpoints
+                coord_data = coord_length == 1 ? [0.0] : collect(range(0.0, 1.0, length=coord_length))
                 nccreate(filename, dim_name, dim_name, coord_length,
                         atts=Dict("long_name" => dim_name,
                                  "axis" => "XYZ"[min(i,3):min(i,3)]))
