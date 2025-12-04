@@ -233,74 +233,83 @@ function domain_info(domain::Domain)
 end
 
 # Advanced 3D domains for specific applications
-function taylor_green_vortex_domain(dist::Distributor, N::Int=128; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function taylor_green_vortex_domain(dist::Distributor, N::Integer=128; dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create domain for 3D Taylor-Green vortex simulation"""
-    
+
     coords = CartesianCoordinates("x", "y", "z")
     x_coord = coords["x"]
     y_coord = coords["y"]
     z_coord = coords["z"]
-    
+
+    N_i = Int(N)
+    dealias_f = Float64(dealias)
+
     # Triple periodic domain [0, 2π]³
-    x_basis = RealFourier(x_coord, size=N, bounds=(0.0, 2π), dealias=dealias, dtype=dtype)
-    y_basis = RealFourier(y_coord, size=N, bounds=(0.0, 2π), dealias=dealias, dtype=dtype)
-    z_basis = RealFourier(z_coord, size=N, bounds=(0.0, 2π), dealias=dealias, dtype=dtype)
-    
+    x_basis = RealFourier(x_coord, size=N_i, bounds=(0.0, 2π), dealias=dealias_f, dtype=dtype)
+    y_basis = RealFourier(y_coord, size=N_i, bounds=(0.0, 2π), dealias=dealias_f, dtype=dtype)
+    z_basis = RealFourier(z_coord, size=N_i, bounds=(0.0, 2π), dealias=dealias_f, dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis, z_basis))
 end
 
-function channel_flow_3d_domain(dist::Distributor, Lx::Float64=4π, Ly::Float64=2π, Lz::Float64=2.0,
-                               Nx::Int=128, Ny::Int=128, Nz::Int=64; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function channel_flow_3d_domain(dist::Distributor, Lx::Real=4π, Ly::Real=2π, Lz::Real=2.0,
+                               Nx::Integer=128, Ny::Integer=128, Nz::Integer=64; dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create domain for 3D turbulent channel flow"""
-    
+
     coords = CartesianCoordinates("x", "y", "z")
     x_coord = coords["x"]
-    y_coord = coords["y"] 
+    y_coord = coords["y"]
     z_coord = coords["z"]
-    
+
+    dealias_f = Float64(dealias)
+
     # Periodic in x and y, Chebyshev in z (wall-normal)
-    x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
-    z_basis = ChebyshevT(z_coord, size=Nz, bounds=(-1.0, 1.0), dealias=dealias, dtype=dtype)
-    
+    x_basis = RealFourier(x_coord, size=Int(Nx), bounds=(0.0, Float64(Lx)), dealias=dealias_f, dtype=dtype)
+    y_basis = RealFourier(y_coord, size=Int(Ny), bounds=(0.0, Float64(Ly)), dealias=dealias_f, dtype=dtype)
+    z_basis = ChebyshevT(z_coord, size=Int(Nz), bounds=(-1.0, 1.0), dealias=dealias_f, dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis, z_basis))
 end
 
-function mixing_layer_3d_domain(dist::Distributor, Lx::Float64=20.0, Ly::Float64=10.0, Lz::Float64=10.0,
-                               Nx::Int=256, Ny::Int=128, Nz::Int=128; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function mixing_layer_3d_domain(dist::Distributor, Lx::Real=20.0, Ly::Real=10.0, Lz::Real=10.0,
+                               Nx::Integer=256, Ny::Integer=128, Nz::Integer=128; dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create domain for 3D mixing layer simulation"""
-    
+
     coords = CartesianCoordinates("x", "y", "z")
     x_coord = coords["x"]
     y_coord = coords["y"]
     z_coord = coords["z"]
-    
+
+    dealias_f = Float64(dealias)
+
     # Periodic in y and z, Fourier in x (streamwise)
-    x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
-    z_basis = RealFourier(z_coord, size=Nz, bounds=(0.0, Lz), dealias=dealias, dtype=dtype)
-    
+    x_basis = RealFourier(x_coord, size=Int(Nx), bounds=(0.0, Float64(Lx)), dealias=dealias_f, dtype=dtype)
+    y_basis = RealFourier(y_coord, size=Int(Ny), bounds=(0.0, Float64(Ly)), dealias=dealias_f, dtype=dtype)
+    z_basis = RealFourier(z_coord, size=Int(Nz), bounds=(0.0, Float64(Lz)), dealias=dealias_f, dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis, z_basis))
 end
 
-function turbulent_convection_3d_domain(dist::Distributor, aspect_ratio::Float64=2.0, 
-                                       Nx::Int=128, Ny::Int=128, Nz::Int=64; 
-                                       dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+function turbulent_convection_3d_domain(dist::Distributor, aspect_ratio::Real=2.0,
+                                       Nx::Integer=128, Ny::Integer=128, Nz::Integer=64;
+                                       dtype::Type=Float64, dealias::Real=3.0/2.0, kwargs...)
     """Create domain for 3D Rayleigh-Bénard convection"""
-    
-    Lx = Ly = aspect_ratio  # Horizontal extent
-    Lz = 1.0               # Vertical extent
-    
+
+    Lx = Ly = Float64(aspect_ratio)  # Horizontal extent
+    Lz = 1.0                         # Vertical extent
+
     coords = CartesianCoordinates("x", "y", "z")
     x_coord = coords["x"]
     y_coord = coords["y"]
     z_coord = coords["z"]
-    
+
+    dealias_f = Float64(dealias)
+
     # Periodic in x and y (horizontal), Chebyshev in z (vertical)
-    x_basis = RealFourier(x_coord, size=Nx, bounds=(0.0, Lx), dealias=dealias, dtype=dtype)
-    y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
-    z_basis = ChebyshevT(z_coord, size=Nz, bounds=(0.0, Lz), dealias=dealias, dtype=dtype)
-    
+    x_basis = RealFourier(x_coord, size=Int(Nx), bounds=(0.0, Lx), dealias=dealias_f, dtype=dtype)
+    y_basis = RealFourier(y_coord, size=Int(Ny), bounds=(0.0, Ly), dealias=dealias_f, dtype=dtype)
+    z_basis = ChebyshevT(z_coord, size=Int(Nz), bounds=(0.0, Lz), dealias=dealias_f, dtype=dtype)
+
     return Domain(dist, (x_basis, y_basis, z_basis))
 end
 
