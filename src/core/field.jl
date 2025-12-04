@@ -439,39 +439,294 @@ end
 
 function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple{Vararg{Real}}, Nothing})
     """
-    Change data to specified scales.
+    Change data to specified scales, properly handling data transformation.
     Following Dedalus implementation in field.py:631-649
+
+    When changing scales:
+    - If in grid space: interpolate/resample data to new grid size
+    - If in coefficient space: pad/truncate spectral coefficients
+
+    For upscaling (scale increases):
+    - Grid space: interpolate to finer grid
+    - Coefficient space: zero-pad high frequencies
+
+    For downscaling (scale decreases):
+    - Grid space: subsample or average to coarser grid
+    - Coefficient space: truncate high frequencies
+
+    Arguments:
+    - field: ScalarField to modify
+    - scales: New scale values
+
+    Returns:
+    - The modified field with transformed data
     """
     # Remedy scales
     new_scales = remedy_scales(field.dist, scales)
     old_scales = field.scales
-    
+
     # Quit if new scales aren't new
     if new_scales == old_scales
         return field
     end
-    
-    # In full implementation, this would:
-    # 1. Forward transform until remaining scales match
-    # 2. Handle coefficient space transforms as needed
-    # 3. Copy data with scale change
-    
-    # For now, use preset_scales approach
-    old_data_g = field.data_g !== nothing ? copy(field.data_g) : nothing
-    old_data_c = field.data_c !== nothing ? copy(field.data_c) : nothing
-    
-    preset_scales!(field, scales)
-    
-    # Copy over data (in full implementation this would handle transforms)
-    if old_data_g !== nothing && field.data_g !== nothing
-        copyto!(field.data_g, old_data_g)
+
+    # Get old and new shapes
+    old_grid_shape = get_scaled_shape(field, old_scales)
+    new_grid_shape = get_scaled_shape(field, new_scales)
+    coeff_shape = get_coefficient_shape(field)
+
+    # Determine current layout
+    is_grid_space = (field.current_layout == :g)
+
+    if is_grid_space && field.data_g !== nothing
+        # Transform grid-space data to new resolution
+        old_data = get_local_data(field.data_g)
+
+        if old_data !== nothing && !isempty(old_data)
+            # Store coefficient data if it exists
+            old_coeff_data = field.data_c !== nothing ? copy(get_local_data(field.data_c)) : nothing
+
+            # Reallocate with new scales
+            preset_scales!(field, new_scales)
+
+            # Resample grid data to new resolution
+            new_data = get_local_data(field.data_g)
+            if new_data !== nothing
+                resample_grid_data!(new_data, old_data, old_grid_shape, new_grid_shape)
+            end
+
+            # Restore coefficient data (unchanged by grid scaling)
+            if old_coeff_data !== nothing && field.data_c !== nothing
+                coeff_data = get_local_data(field.data_c)
+                if coeff_data !== nothing && size(coeff_data) == size(old_coeff_data)
+                    copyto!(coeff_data, old_coeff_data)
+                end
+            end
+        else
+            preset_scales!(field, new_scales)
+        end
+
+    elseif !is_grid_space && field.data_c !== nothing
+        # In coefficient space: scales don't affect coefficient storage
+        # but we still need to update the field's scale parameter
+        # The grid data will be recomputed on next backward transform
+        preset_scales!(field, new_scales)
+
+    else
+        # No data to transform
+        preset_scales!(field, new_scales)
     end
-    if old_data_c !== nothing && field.data_c !== nothing
-        copyto!(field.data_c, old_data_c)
-    end
-    
-    @debug "Changed field scales with data" old_scales new_scales
+
+    @debug "Changed field scales with data transformation" old_scales=old_scales new_scales=new_scales
     return field
+end
+
+function resample_grid_data!(new_data::AbstractArray, old_data::AbstractArray,
+                             old_shape::Tuple, new_shape::Tuple)
+    """
+    Resample grid data from old resolution to new resolution.
+
+    Uses spectral interpolation for accurate resampling:
+    1. FFT old data to spectral space
+    2. Pad/truncate spectral coefficients
+    3. IFFT back to new grid
+
+    For simple cases, uses linear interpolation as fallback.
+    """
+    old_size = size(old_data)
+    new_size = size(new_data)
+
+    # Handle dimension mismatch
+    if length(old_size) != length(new_size)
+        @warn "Dimension mismatch in resample_grid_data!"
+        fill!(new_data, 0)
+        return
+    end
+
+    # If sizes match, just copy
+    if old_size == new_size
+        copyto!(new_data, old_data)
+        return
+    end
+
+    ndims_data = length(old_size)
+
+    if ndims_data == 1
+        resample_1d!(new_data, old_data)
+    elseif ndims_data == 2
+        resample_2d!(new_data, old_data)
+    elseif ndims_data == 3
+        resample_3d!(new_data, old_data)
+    else
+        # Fallback: simple nearest-neighbor for higher dimensions
+        resample_nearest!(new_data, old_data)
+    end
+end
+
+function resample_1d!(new_data::AbstractVector, old_data::AbstractVector)
+    """Resample 1D data using spectral interpolation."""
+    n_old = length(old_data)
+    n_new = length(new_data)
+
+    if n_old == n_new
+        copyto!(new_data, old_data)
+        return
+    end
+
+    # Use FFT-based resampling for spectral accuracy
+    try
+        # Forward FFT
+        old_fft = FFTW.fft(complex(old_data))
+
+        # Create padded/truncated spectrum
+        new_fft = zeros(ComplexF64, n_new)
+
+        if n_new > n_old
+            # Upsampling: zero-pad high frequencies
+            # Copy positive frequencies
+            n_pos = div(n_old, 2)
+            new_fft[1:n_pos+1] = old_fft[1:n_pos+1]
+            # Copy negative frequencies
+            new_fft[end-n_pos+1:end] = old_fft[end-n_pos+1:end]
+            # Scale for energy conservation
+            new_fft .*= n_new / n_old
+        else
+            # Downsampling: truncate high frequencies
+            n_pos = div(n_new, 2)
+            new_fft[1:n_pos+1] = old_fft[1:n_pos+1]
+            new_fft[end-n_pos+1:end] = old_fft[end-n_pos+1:end]
+            new_fft .*= n_new / n_old
+        end
+
+        # Inverse FFT
+        result = real(FFTW.ifft(new_fft))
+        copyto!(new_data, result)
+
+    catch e
+        @warn "FFT resampling failed, using linear interpolation: $e"
+        resample_linear_1d!(new_data, old_data)
+    end
+end
+
+function resample_linear_1d!(new_data::AbstractVector, old_data::AbstractVector)
+    """Fallback linear interpolation for 1D resampling."""
+    n_old = length(old_data)
+    n_new = length(new_data)
+
+    for i in 1:n_new
+        # Map new index to old index (0-based for interpolation)
+        t = (i - 1) / (n_new - 1) * (n_old - 1)
+        i_old = floor(Int, t) + 1
+        frac = t - (i_old - 1)
+
+        if i_old >= n_old
+            new_data[i] = old_data[n_old]
+        elseif i_old < 1
+            new_data[i] = old_data[1]
+        else
+            new_data[i] = (1 - frac) * old_data[i_old] + frac * old_data[i_old + 1]
+        end
+    end
+end
+
+function resample_2d!(new_data::AbstractMatrix, old_data::AbstractMatrix)
+    """Resample 2D data using spectral interpolation."""
+    n_old = size(old_data)
+    n_new = size(new_data)
+
+    if n_old == n_new
+        copyto!(new_data, old_data)
+        return
+    end
+
+    try
+        # Forward 2D FFT
+        old_fft = FFTW.fft(complex(old_data))
+
+        # Create padded/truncated spectrum
+        new_fft = zeros(ComplexF64, n_new)
+
+        # Copy/pad each dimension
+        for dim in 1:2
+            n_o = n_old[dim]
+            n_n = n_new[dim]
+            n_copy = min(div(n_o, 2), div(n_n, 2))
+
+            # This is simplified; proper 2D padding requires careful index handling
+        end
+
+        # For now, use separable 1D resampling as simpler approach
+        temp = zeros(eltype(new_data), n_new[1], n_old[2])
+
+        # Resample along first dimension
+        for j in 1:n_old[2]
+            resample_1d!(view(temp, :, j), view(old_data, :, j))
+        end
+
+        # Resample along second dimension
+        for i in 1:n_new[1]
+            resample_1d!(view(new_data, i, :), view(temp, i, :))
+        end
+
+    catch e
+        @warn "2D spectral resampling failed: $e"
+        resample_nearest!(new_data, old_data)
+    end
+end
+
+function resample_3d!(new_data::AbstractArray{T,3}, old_data::AbstractArray{T,3}) where T
+    """Resample 3D data using separable 1D spectral interpolation."""
+    n_old = size(old_data)
+    n_new = size(new_data)
+
+    if n_old == n_new
+        copyto!(new_data, old_data)
+        return
+    end
+
+    try
+        # Separable resampling: resample along each dimension sequentially
+        temp1 = zeros(T, n_new[1], n_old[2], n_old[3])
+        temp2 = zeros(T, n_new[1], n_new[2], n_old[3])
+
+        # Resample along first dimension
+        for k in 1:n_old[3], j in 1:n_old[2]
+            resample_1d!(view(temp1, :, j, k), view(old_data, :, j, k))
+        end
+
+        # Resample along second dimension
+        for k in 1:n_old[3], i in 1:n_new[1]
+            resample_1d!(view(temp2, i, :, k), view(temp1, i, :, k))
+        end
+
+        # Resample along third dimension
+        for j in 1:n_new[2], i in 1:n_new[1]
+            resample_1d!(view(new_data, i, j, :), view(temp2, i, j, :))
+        end
+
+    catch e
+        @warn "3D spectral resampling failed: $e"
+        resample_nearest!(new_data, old_data)
+    end
+end
+
+function resample_nearest!(new_data::AbstractArray, old_data::AbstractArray)
+    """Nearest-neighbor resampling for arbitrary dimensions."""
+    old_size = size(old_data)
+    new_size = size(new_data)
+    ndims_data = length(old_size)
+
+    for I in CartesianIndices(new_data)
+        # Map new indices to old indices
+        old_indices = ntuple(ndims_data) do d
+            # Scale index from new to old grid
+            new_idx = I[d]
+            old_idx = round(Int, (new_idx - 1) / (new_size[d] - 1) * (old_size[d] - 1)) + 1
+            clamp(old_idx, 1, old_size[d])
+        end
+
+        new_data[I] = old_data[CartesianIndex(old_indices)]
+    end
 end
 
 # Alias for compatibility  
@@ -1032,10 +1287,188 @@ function get_data(field::ScalarField, layout::Symbol)
     end
 end
 
-function get_global_grid_shape(dist::Distributor, domain::Domain; scales=ones(Float64, length(domain.bases)))
-    """Get global grid shape for a domain with given scales."""
-    # This is a simplified implementation - should get from layout
-    return tuple([Int(round(basis.meta.size * scales[i])) for (i, basis) in enumerate(domain.bases)]...)
+function get_global_grid_shape(dist::Distributor, domain::Domain; scales=nothing)
+    """
+    Get global grid shape for a domain with given scales.
+
+    The global grid shape is the full size of the grid across all MPI processes.
+    Each dimension's size is determined by:
+    - The basis size (number of modes/coefficients)
+    - The scale factor (for dealiasing, typically 1.0 or 1.5)
+
+    Arguments:
+    - dist: Distributor with domain decomposition info
+    - domain: Domain containing basis information
+    - scales: Scale factors per dimension (default: 1.0 for all)
+              Can be a scalar (applied to all), vector, or tuple
+
+    Returns:
+    - Tuple of global grid dimensions
+
+    Example:
+    - For a 2D domain with bases of size (64, 32) and scales (1.5, 1.5):
+      Returns (96, 48)
+    """
+    if isempty(domain.bases)
+        return ()
+    end
+
+    n_bases = length(domain.bases)
+
+    # Handle scales argument
+    if scales === nothing
+        scales = ones(Float64, n_bases)
+    elseif isa(scales, Number)
+        scales = fill(Float64(scales), n_bases)
+    elseif isa(scales, Tuple)
+        scales = collect(Float64, scales)
+    end
+
+    # Ensure scales vector has correct length
+    if length(scales) < n_bases
+        scales = vcat(scales, ones(Float64, n_bases - length(scales)))
+    end
+
+    # Compute scaled grid shape
+    grid_shape = Int[]
+    for (i, basis) in enumerate(domain.bases)
+        base_size = get_basis_grid_size(basis)
+        scale = scales[i]
+        scaled_size = ceil(Int, base_size * scale)
+        push!(grid_shape, scaled_size)
+    end
+
+    return tuple(grid_shape...)
+end
+
+function get_basis_grid_size(basis::Basis)
+    """
+    Get the natural grid size for a basis.
+
+    For most bases, this is the number of modes/coefficients.
+    Some bases may have different grid vs coefficient sizes.
+    """
+    if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :size)
+        return basis.meta.size
+    else
+        # Fallback
+        return 64
+    end
+end
+
+function get_global_coeff_shape(dist::Distributor, domain::Domain)
+    """
+    Get global coefficient shape for a domain.
+
+    The coefficient shape is the unscaled size (number of spectral modes).
+    This is independent of the grid scale factor.
+
+    Returns:
+    - Tuple of global coefficient dimensions
+    """
+    if isempty(domain.bases)
+        return ()
+    end
+
+    coeff_shape = Int[]
+    for basis in domain.bases
+        push!(coeff_shape, get_basis_coeff_size(basis))
+    end
+
+    return tuple(coeff_shape...)
+end
+
+function get_basis_coeff_size(basis::Basis)
+    """
+    Get the coefficient size for a basis.
+
+    For Fourier bases: same as grid size
+    For Chebyshev/Legendre: may differ due to boundary conditions
+    """
+    if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :size)
+        return basis.meta.size
+    else
+        return 64
+    end
+end
+
+function get_local_grid_shape(dist::Distributor, domain::Domain; scales=nothing)
+    """
+    Get local grid shape for this MPI process.
+
+    Arguments:
+    - dist: Distributor with domain decomposition info
+    - domain: Domain containing basis information
+    - scales: Scale factors per dimension
+
+    Returns:
+    - Tuple of local grid dimensions for this process
+    """
+    global_shape = get_global_grid_shape(dist, domain; scales=scales)
+    return get_local_array_size(dist, global_shape)
+end
+
+function get_local_coeff_shape(dist::Distributor, domain::Domain)
+    """
+    Get local coefficient shape for this MPI process.
+
+    Returns:
+    - Tuple of local coefficient dimensions for this process
+    """
+    global_shape = get_global_coeff_shape(dist, domain)
+    return get_local_array_size(dist, global_shape)
+end
+
+function get_grid_layout_info(dist::Distributor, domain::Domain; scales=nothing)
+    """
+    Get comprehensive grid layout information.
+
+    Returns a NamedTuple with:
+    - global_shape: Full grid size across all processes
+    - local_shape: Grid size on this process
+    - local_start: Starting global index for this process (1-based)
+    - local_end: Ending global index for this process (1-based)
+    - scales: Applied scale factors
+    """
+    n_bases = length(domain.bases)
+
+    # Handle scales
+    if scales === nothing
+        scales = tuple(ones(Float64, n_bases)...)
+    elseif isa(scales, Number)
+        scales = tuple(fill(Float64(scales), n_bases)...)
+    elseif isa(scales, Vector)
+        scales = tuple(scales...)
+    end
+
+    global_shape = get_global_grid_shape(dist, domain; scales=scales)
+    local_shape = get_local_array_size(dist, global_shape)
+
+    # Compute local start/end indices
+    ndims_mesh = dist.mesh !== nothing ? length(dist.mesh) : 0
+    ndims_global = length(global_shape)
+
+    local_start = ones(Int, ndims_global)
+    local_end = collect(global_shape)
+
+    if dist.mesh !== nothing && dist.size > 1
+        for i in 1:min(ndims_mesh, ndims_global)
+            global_dim_idx = ndims_global - ndims_mesh + i
+            if global_dim_idx >= 1
+                start_idx, end_idx = get_local_range(dist, global_shape[global_dim_idx], i)
+                local_start[global_dim_idx] = start_idx
+                local_end[global_dim_idx] = end_idx
+            end
+        end
+    end
+
+    return (
+        global_shape = global_shape,
+        local_shape = local_shape,
+        local_start = tuple(local_start...),
+        local_end = tuple(local_end...),
+        scales = scales
+    )
 end
 
 # LoopVectorization functions

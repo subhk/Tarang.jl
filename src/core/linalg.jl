@@ -433,53 +433,155 @@ function create_kronecker_operator(factors::Vector{<:AbstractMatrix})
 end
 
 # Utility functions
-function get_block_ranges(block_structure::Matrix{Int}, block_idx::Int)
+function get_block_ranges(block_structure::Matrix{Int}, block_idx::Int;
+                          block_sizes::Union{Nothing, Vector{Tuple{Int,Int}}}=nothing,
+                          row_sizes::Union{Nothing, Vector{Int}}=nothing,
+                          col_sizes::Union{Nothing, Vector{Int}}=nothing,
+                          default_block_size::Int=64)
     """
-    Get index ranges for a block in block sparse matrix.
-    
+    Get index ranges for a block in a block sparse matrix.
+
     The block_structure matrix defines the layout of blocks where:
     - block_structure[i,j] contains the block index for block at position (i,j)
+    - Zero or negative values indicate empty/missing blocks
     - block_idx specifies which block we want the ranges for
-    
-    Returns (i_range, j_range) where:
-    - i_range: row indices covered by this block
-    - j_range: column indices covered by this block
+
+    Arguments:
+    - block_structure: Matrix mapping (block_row, block_col) -> block_index
+    - block_idx: The block index to find ranges for
+    - block_sizes: Optional vector of (rows, cols) for each block index
+    - row_sizes: Optional vector of row sizes for each block row
+    - col_sizes: Optional vector of column sizes for each block column
+    - default_block_size: Size to use when no size info available
+
+    Returns:
+    - (i_range, j_range): Tuple of UnitRange for row and column indices
+
+    Example:
+    ```julia
+    # 2x2 block structure with 4 blocks
+    block_structure = [1 2; 3 4]
+    row_sizes = [32, 64]  # First block row has 32 rows, second has 64
+    col_sizes = [32, 64]  # First block col has 32 cols, second has 64
+
+    i_range, j_range = get_block_ranges(block_structure, 4,
+                                        row_sizes=row_sizes, col_sizes=col_sizes)
+    # Returns (33:96, 33:96) for block 4 at position (2,2)
+    ```
     """
-    
+
     # Find the position of the requested block in the block structure
     block_pos = findfirst(x -> x == block_idx, block_structure)
-    
+
     if block_pos === nothing
         throw(ArgumentError("Block index $block_idx not found in block structure"))
     end
-    
+
     # Get block matrix dimensions
     num_block_rows, num_block_cols = size(block_structure)
-    
-    # Convert linear index to (i,j) coordinates in block structure
+
+    # Convert CartesianIndex to (row, col) coordinates
     block_row, block_col = Tuple(block_pos)
-    
-    # For uniform block sizes, we need to determine block dimensions
-    # This assumes the block structure represents a regular grid of blocks
-    # In a more sophisticated implementation, this would be computed from
-    # the actual sparse matrix dimensions and block layout
-    
-    # Estimate block sizes based on typical spectral method patterns
-    # This is a simplified approach - in practice, block sizes might vary
-    total_size = maximum(block_structure) * 10  # Rough estimate
-    rows_per_block = max(1, div(total_size, num_block_rows))
-    cols_per_block = max(1, div(total_size, num_block_cols))
-    
-    # Calculate index ranges for this block
-    i_start = (block_row - 1) * rows_per_block + 1
-    i_end = min(block_row * rows_per_block, total_size)
+
+    # Determine block sizes for each block row and column
+    if row_sizes !== nothing && col_sizes !== nothing
+        # Use provided sizes directly
+        actual_row_sizes = row_sizes
+        actual_col_sizes = col_sizes
+    elseif block_sizes !== nothing
+        # Derive row/col sizes from block_sizes
+        actual_row_sizes = zeros(Int, num_block_rows)
+        actual_col_sizes = zeros(Int, num_block_cols)
+
+        for i in 1:num_block_rows
+            for j in 1:num_block_cols
+                idx = block_structure[i, j]
+                if idx > 0 && idx <= length(block_sizes)
+                    if actual_row_sizes[i] == 0
+                        actual_row_sizes[i] = block_sizes[idx][1]
+                    end
+                    if actual_col_sizes[j] == 0
+                        actual_col_sizes[j] = block_sizes[idx][2]
+                    end
+                end
+            end
+        end
+
+        # Fill any remaining zeros with default
+        for i in 1:num_block_rows
+            if actual_row_sizes[i] == 0
+                actual_row_sizes[i] = default_block_size
+            end
+        end
+        for j in 1:num_block_cols
+            if actual_col_sizes[j] == 0
+                actual_col_sizes[j] = default_block_size
+            end
+        end
+    else
+        # Use uniform default sizes
+        actual_row_sizes = fill(default_block_size, num_block_rows)
+        actual_col_sizes = fill(default_block_size, num_block_cols)
+    end
+
+    # Calculate cumulative offsets
+    row_offsets = cumsum([0; actual_row_sizes[1:end-1]])
+    col_offsets = cumsum([0; actual_col_sizes[1:end-1]])
+
+    # Get ranges for this block
+    i_start = row_offsets[block_row] + 1
+    i_end = row_offsets[block_row] + actual_row_sizes[block_row]
     i_range = i_start:i_end
-    
-    j_start = (block_col - 1) * cols_per_block + 1
-    j_end = min(block_col * cols_per_block, total_size)
+
+    j_start = col_offsets[block_col] + 1
+    j_end = col_offsets[block_col] + actual_col_sizes[block_col]
     j_range = j_start:j_end
-    
+
     return (i_range, j_range)
+end
+
+function get_all_block_ranges(block_structure::Matrix{Int};
+                              row_sizes::Union{Nothing, Vector{Int}}=nothing,
+                              col_sizes::Union{Nothing, Vector{Int}}=nothing,
+                              default_block_size::Int=64)
+    """
+    Get index ranges for all blocks in a block sparse matrix.
+
+    Returns a Dict mapping block_idx -> (i_range, j_range)
+    """
+    ranges = Dict{Int, Tuple{UnitRange{Int}, UnitRange{Int}}}()
+
+    for idx in unique(block_structure)
+        if idx > 0
+            ranges[idx] = get_block_ranges(block_structure, idx;
+                                           row_sizes=row_sizes,
+                                           col_sizes=col_sizes,
+                                           default_block_size=default_block_size)
+        end
+    end
+
+    return ranges
+end
+
+function get_total_matrix_size(block_structure::Matrix{Int};
+                               row_sizes::Union{Nothing, Vector{Int}}=nothing,
+                               col_sizes::Union{Nothing, Vector{Int}}=nothing,
+                               default_block_size::Int=64)
+    """
+    Get the total size of the full matrix from block structure.
+
+    Returns (total_rows, total_cols)
+    """
+    num_block_rows, num_block_cols = size(block_structure)
+
+    if row_sizes === nothing
+        row_sizes = fill(default_block_size, num_block_rows)
+    end
+    if col_sizes === nothing
+        col_sizes = fill(default_block_size, num_block_cols)
+    end
+
+    return (sum(row_sizes), sum(col_sizes))
 end
 
 function get_block_ranges(blocks::Vector{SparseMatrixCSC}, block_structure::Matrix{Int}, block_idx::Int)
