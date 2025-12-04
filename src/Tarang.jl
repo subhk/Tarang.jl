@@ -34,11 +34,13 @@ struct PencilConfig
     mesh::Tuple{Vararg{Int}}
     comm::MPI.Comm
     decomp_dims::Tuple{Vararg{Bool}}
+    dtype::Type  # Data type for the pencil arrays
 
     function PencilConfig(global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}};
                          comm::MPI.Comm=MPI.COMM_WORLD,
-                         decomp_dims::Tuple{Vararg{Bool}}=ntuple(i -> true, length(mesh)))
-        new(global_shape, mesh, comm, decomp_dims)
+                         decomp_dims::Tuple{Vararg{Bool}}=ntuple(i -> true, length(mesh)),
+                         dtype::Type=Float64)
+        new(global_shape, mesh, comm, decomp_dims, dtype)
     end
 end
 
