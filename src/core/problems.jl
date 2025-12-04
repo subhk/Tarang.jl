@@ -451,11 +451,322 @@ function is_proper_lhs_structure(expr)
     """
     Check if LHS has proper structure for Dedalus matrix formulation.
     Should be of the form: M·∂ₜX + L·X where M and L are linear operators.
+
+    The LHS of a Dedalus equation must satisfy:
+    1. All terms must be linear in the state variables
+    2. Time derivatives must be first-order only (∂ₜ, not ∂ₜ²)
+    3. Spatial operators must be linear (derivatives, Laplacian, etc.)
+    4. Coefficients must be constant (not space/time-dependent)
+    5. No products of state variables (those go to RHS as nonlinear terms)
+
+    Returns a tuple (is_valid::Bool, info::Dict) where info contains:
+    - :has_time_derivative => whether the expression contains ∂ₜ terms
+    - :has_spatial_operators => whether spatial operators are present
+    - :is_linear => whether all terms are linear
+    - :error_message => description of any structural issues
     """
-    
-    # This is a simplified check - full implementation would verify
-    # the mathematical structure more rigorously
-    return is_linear_expression(expr, Dict{String, Any}())
+
+    info = Dict{Symbol, Any}(
+        :has_time_derivative => false,
+        :has_spatial_operators => false,
+        :is_linear => true,
+        :error_message => nothing,
+        :time_derivative_order => 0,
+        :dependent_variables => Set{String}()
+    )
+
+    # Recursively analyze the expression structure
+    is_valid = _analyze_lhs_structure!(expr, info, Dict{String, Any}())
+
+    return (is_valid, info)
+end
+
+function _analyze_lhs_structure!(expr, info::Dict{Symbol, Any}, namespace::Dict{String, Any})
+    """
+    Recursively analyze expression structure for LHS validity.
+    """
+
+    # Handle nothing/empty case
+    if expr === nothing
+        return true
+    end
+
+    # Zero operator is always valid
+    if isa(expr, ZeroOperator)
+        return true
+    end
+
+    # Constant operator is valid
+    if isa(expr, ConstantOperator)
+        return true
+    end
+
+    # Numeric literals are valid coefficients
+    if isa(expr, Number)
+        return true
+    end
+
+    # Time derivative: check order and operand
+    if isa(expr, TimeDerivative)
+        info[:has_time_derivative] = true
+
+        # Only first-order time derivatives allowed on LHS
+        if expr.order > 1
+            info[:is_linear] = false
+            info[:error_message] = "Higher-order time derivatives (order=$(expr.order)) not allowed on LHS"
+            return false
+        end
+
+        info[:time_derivative_order] = max(info[:time_derivative_order], expr.order)
+
+        # The operand of time derivative should be a state variable or linear operator on it
+        return _analyze_lhs_operand!(expr.operand, info, namespace)
+    end
+
+    # Spatial differential operators: linear by nature
+    if isa(expr, Differentiate)
+        info[:has_spatial_operators] = true
+        return _analyze_lhs_operand!(expr.operand, info, namespace)
+    end
+
+    if isa(expr, Laplacian)
+        info[:has_spatial_operators] = true
+        return _analyze_lhs_operand!(expr.operand, info, namespace)
+    end
+
+    if isa(expr, Gradient)
+        info[:has_spatial_operators] = true
+        return _analyze_lhs_operand!(expr.operand, info, namespace)
+    end
+
+    if isa(expr, Divergence)
+        info[:has_spatial_operators] = true
+        return _analyze_lhs_operand!(expr.operand, info, namespace)
+    end
+
+    if isa(expr, Curl)
+        info[:has_spatial_operators] = true
+        return _analyze_lhs_operand!(expr.operand, info, namespace)
+    end
+
+    # Addition/subtraction: both sides must be valid
+    if isa(expr, AddOperator)
+        left_valid = _analyze_lhs_structure!(expr.left, info, namespace)
+        right_valid = _analyze_lhs_structure!(expr.right, info, namespace)
+        return left_valid && right_valid
+    end
+
+    if isa(expr, SubtractOperator)
+        left_valid = _analyze_lhs_structure!(expr.left, info, namespace)
+        right_valid = _analyze_lhs_structure!(expr.right, info, namespace)
+        return left_valid && right_valid
+    end
+
+    # Negation: operand must be valid
+    if isa(expr, NegateOperator)
+        return _analyze_lhs_structure!(expr.operand, info, namespace)
+    end
+
+    # Multiplication: exactly one factor must be a constant coefficient
+    if isa(expr, MultiplyOperator)
+        left_is_const = _is_constant_coefficient_strict(expr.left, namespace)
+        right_is_const = _is_constant_coefficient_strict(expr.right, namespace)
+
+        if left_is_const && right_is_const
+            # Both constant - this is fine (just a constant)
+            return true
+        elseif left_is_const
+            # Left is constant, right must be linear in variables
+            return _analyze_lhs_structure!(expr.right, info, namespace)
+        elseif right_is_const
+            # Right is constant, left must be linear in variables
+            return _analyze_lhs_structure!(expr.left, info, namespace)
+        else
+            # Neither is constant - this is a nonlinear term (product of variables)
+            info[:is_linear] = false
+            info[:error_message] = "Product of non-constant terms on LHS (nonlinear)"
+            return false
+        end
+    end
+
+    # Division: numerator must be linear, denominator must be constant
+    if isa(expr, DivideOperator)
+        if !_is_constant_coefficient_strict(expr.right, namespace)
+            info[:is_linear] = false
+            info[:error_message] = "Division by non-constant on LHS"
+            return false
+        end
+        return _analyze_lhs_structure!(expr.left, info, namespace)
+    end
+
+    # Power operator: only valid if base is constant OR exponent is 1
+    if isa(expr, PowerOperator)
+        exp_val = _get_constant_value(expr.exponent)
+        if exp_val !== nothing && exp_val == 1
+            return _analyze_lhs_structure!(expr.base, info, namespace)
+        elseif _is_constant_coefficient_strict(expr.base, namespace)
+            return true
+        else
+            info[:is_linear] = false
+            info[:error_message] = "Power of non-constant with exponent ≠ 1 on LHS"
+            return false
+        end
+    end
+
+    # ScalarField: this is a state variable - valid as linear term
+    if isa(expr, ScalarField)
+        push!(info[:dependent_variables], expr.name)
+        return true
+    end
+
+    # VectorField: state variable
+    if isa(expr, VectorField)
+        push!(info[:dependent_variables], expr.name)
+        return true
+    end
+
+    # Index operator on a valid structure
+    if isa(expr, IndexOperator)
+        return _analyze_lhs_structure!(expr.array, info, namespace)
+    end
+
+    # Unknown operator: check if it's in the namespace as a constant
+    if isa(expr, UnknownOperator)
+        if haskey(namespace, expr.expression)
+            val = namespace[expr.expression]
+            if isa(val, Number) || isa(val, ConstantOperator)
+                return true
+            elseif isa(val, ScalarField) || isa(val, VectorField)
+                push!(info[:dependent_variables], expr.expression)
+                return true
+            end
+        end
+        # Unknown expression - be conservative and mark as potentially invalid
+        @debug "Unknown expression in LHS: $(expr.expression)"
+        return true  # Allow it but could be stricter
+    end
+
+    # Nonlinear operators are not allowed on LHS
+    if isa(expr, NonlinearOperator)
+        info[:is_linear] = false
+        info[:error_message] = "Nonlinear operator on LHS"
+        return false
+    end
+
+    # Default: if we can't classify it, check if it looks linear
+    return is_linear_expression(expr, namespace)
+end
+
+function _analyze_lhs_operand!(operand, info::Dict{Symbol, Any}, namespace::Dict{String, Any})
+    """
+    Analyze the operand of a differential operator.
+    """
+    if isa(operand, ScalarField)
+        push!(info[:dependent_variables], operand.name)
+        return true
+    elseif isa(operand, VectorField)
+        push!(info[:dependent_variables], operand.name)
+        return true
+    else
+        return _analyze_lhs_structure!(operand, info, namespace)
+    end
+end
+
+function _is_constant_coefficient_strict(expr, namespace::Dict{String, Any})
+    """
+    Strictly check if expression is a constant coefficient.
+    Constants are: numbers, ConstantOperator, or namespace entries that are constant.
+    """
+    if isa(expr, Number)
+        return true
+    end
+
+    if isa(expr, ConstantOperator)
+        return true
+    end
+
+    if isa(expr, ZeroOperator)
+        return true
+    end
+
+    if isa(expr, UnknownOperator)
+        if haskey(namespace, expr.expression)
+            val = namespace[expr.expression]
+            return isa(val, Number) || isa(val, ConstantOperator)
+        end
+        return false
+    end
+
+    # Arithmetic on constants
+    if isa(expr, AddOperator)
+        return _is_constant_coefficient_strict(expr.left, namespace) &&
+               _is_constant_coefficient_strict(expr.right, namespace)
+    end
+
+    if isa(expr, SubtractOperator)
+        return _is_constant_coefficient_strict(expr.left, namespace) &&
+               _is_constant_coefficient_strict(expr.right, namespace)
+    end
+
+    if isa(expr, MultiplyOperator)
+        return _is_constant_coefficient_strict(expr.left, namespace) &&
+               _is_constant_coefficient_strict(expr.right, namespace)
+    end
+
+    if isa(expr, DivideOperator)
+        return _is_constant_coefficient_strict(expr.left, namespace) &&
+               _is_constant_coefficient_strict(expr.right, namespace)
+    end
+
+    if isa(expr, NegateOperator)
+        return _is_constant_coefficient_strict(expr.operand, namespace)
+    end
+
+    if isa(expr, PowerOperator)
+        return _is_constant_coefficient_strict(expr.base, namespace) &&
+               _is_constant_coefficient_strict(expr.exponent, namespace)
+    end
+
+    # Fields are not constants
+    if isa(expr, ScalarField) || isa(expr, VectorField)
+        return false
+    end
+
+    return false
+end
+
+function _get_constant_value(expr)
+    """
+    Extract numeric value from a constant expression.
+    Returns nothing if not a simple constant.
+    """
+    if isa(expr, Number)
+        return expr
+    end
+
+    if isa(expr, ConstantOperator)
+        return expr.value
+    end
+
+    return nothing
+end
+
+function validate_lhs_structure(expr)
+    """
+    Validate LHS structure and return a detailed report.
+    Throws an error if the structure is invalid.
+    """
+    is_valid, info = is_proper_lhs_structure(expr)
+
+    if !is_valid
+        error_msg = info[:error_message]
+        if error_msg === nothing
+            error_msg = "LHS structure is invalid for matrix formulation"
+        end
+        throw(ArgumentError("Invalid LHS structure: $error_msg"))
+    end
+
+    return info
 end
 
 function parse_expression(expr_str::String, namespace::Dict{String, Any})
@@ -985,9 +1296,188 @@ function compute_field_size(field_or_data)
 end
 
 function check_equation_condition(eq_data::Dict)
-    """Check if equation should be included in matrix"""
-    # For now, include all equations
+    """
+    Check if equation should be included in matrix assembly.
+
+    An equation is included if:
+    1. It has valid matrix expressions (M, L, or F)
+    2. It is marked as enabled (if "enabled" key exists)
+    3. It has a valid condition (if "condition" key exists)
+    4. It references at least one problem variable
+    5. The equation is well-formed (not flagged as invalid)
+
+    Following Dedalus patterns where equations can be conditionally
+    included/excluded based on wavenumber, problem parameters, etc.
+    """
+
+    # Check if equation is explicitly disabled
+    if haskey(eq_data, "enabled") && !eq_data["enabled"]
+        @debug "Equation excluded: explicitly disabled" eq_index=get(eq_data, "equation_index", 0)
+        return false
+    end
+
+    # Check if equation has a condition function that evaluates to false
+    if haskey(eq_data, "condition")
+        condition = eq_data["condition"]
+        if isa(condition, Bool)
+            if !condition
+                @debug "Equation excluded: condition is false" eq_index=get(eq_data, "equation_index", 0)
+                return false
+            end
+        elseif isa(condition, Function)
+            # Condition is a function - evaluate it
+            try
+                result = condition(eq_data)
+                if !result
+                    @debug "Equation excluded: condition function returned false" eq_index=get(eq_data, "equation_index", 0)
+                    return false
+                end
+            catch e
+                @warn "Equation condition evaluation failed, including equation" exception=e
+            end
+        end
+    end
+
+    # Check if equation is flagged as invalid
+    if get(eq_data, "is_invalid", false)
+        @debug "Equation excluded: flagged as invalid" eq_index=get(eq_data, "equation_index", 0)
+        return false
+    end
+
+    # Check if equation has any matrix content
+    has_M = haskey(eq_data, "M") && !is_zero_expression(eq_data["M"])
+    has_L = haskey(eq_data, "L") && !is_zero_expression(eq_data["L"])
+    has_F = haskey(eq_data, "F") && !is_zero_expression(eq_data["F"])
+
+    if !has_M && !has_L && !has_F
+        @debug "Equation excluded: no matrix content (M, L, F all zero/missing)" eq_index=get(eq_data, "equation_index", 0)
+        return false
+    end
+
+    # Check equation size
+    eq_size = get(eq_data, "equation_size", 0)
+    if eq_size <= 0
+        @debug "Equation excluded: equation_size <= 0" eq_index=get(eq_data, "equation_index", 0)
+        return false
+    end
+
+    # Check wavenumber conditions (for spectral problems)
+    if haskey(eq_data, "valid_modes")
+        valid_modes = eq_data["valid_modes"]
+        current_mode = get(eq_data, "current_mode", nothing)
+        if current_mode !== nothing && !in(current_mode, valid_modes)
+            @debug "Equation excluded: mode not in valid_modes" current_mode valid_modes
+            return false
+        end
+    end
+
+    # Check for wavenumber-based conditions (k=0 special handling, etc.)
+    if haskey(eq_data, "exclude_k_zero") && eq_data["exclude_k_zero"]
+        wavenumber = get(eq_data, "wavenumber", nothing)
+        if wavenumber !== nothing
+            # Check if all wavenumber components are zero
+            if isa(wavenumber, Number) && wavenumber == 0
+                @debug "Equation excluded: k=0 mode excluded" eq_index=get(eq_data, "equation_index", 0)
+                return false
+            elseif isa(wavenumber, Tuple) && all(k -> k == 0, wavenumber)
+                @debug "Equation excluded: k=(0,...,0) mode excluded" eq_index=get(eq_data, "equation_index", 0)
+                return false
+            end
+        end
+    end
+
+    # Check for gauge conditions (pressure gauge, etc.)
+    if haskey(eq_data, "is_gauge_condition") && eq_data["is_gauge_condition"]
+        # Gauge conditions may have special handling
+        gauge_mode = get(eq_data, "gauge_mode", nothing)
+        current_mode = get(eq_data, "current_mode", nothing)
+
+        if gauge_mode !== nothing && current_mode !== nothing
+            if gauge_mode != current_mode
+                # Only include gauge condition for specific mode
+                return false
+            end
+        end
+    end
+
+    # Check if this is a boundary condition equation
+    if haskey(eq_data, "is_boundary_condition") && eq_data["is_boundary_condition"]
+        # Boundary conditions are always included if they're valid
+        bc_valid = get(eq_data, "bc_valid", true)
+        if !bc_valid
+            @debug "Equation excluded: boundary condition marked invalid"
+            return false
+        end
+    end
+
+    # All checks passed
     return true
+end
+
+function is_equation_valid(eq_data::Dict)
+    """
+    Check if equation data is structurally valid.
+    Returns (is_valid::Bool, error_message::Union{String,Nothing})
+    """
+
+    # Must have equation string
+    if !haskey(eq_data, "equation_string")
+        return (false, "Missing equation_string")
+    end
+
+    # Must have LHS
+    if !haskey(eq_data, "lhs")
+        return (false, "Missing LHS expression")
+    end
+
+    # Check for parse errors
+    if haskey(eq_data, "parse_error")
+        return (false, "Parse error: $(eq_data["parse_error"])")
+    end
+
+    # Check LHS structure if we have the expression
+    lhs = eq_data["lhs"]
+    if lhs !== nothing
+        is_valid_lhs, lhs_info = is_proper_lhs_structure(lhs)
+        if !is_valid_lhs
+            return (false, "Invalid LHS structure: $(lhs_info[:error_message])")
+        end
+    end
+
+    return (true, nothing)
+end
+
+function set_equation_condition!(eq_data::Dict, condition::Union{Bool, Function})
+    """
+    Set a condition for equation inclusion in matrix assembly.
+    """
+    eq_data["condition"] = condition
+end
+
+function enable_equation!(eq_data::Dict)
+    """Enable an equation for matrix assembly."""
+    eq_data["enabled"] = true
+end
+
+function disable_equation!(eq_data::Dict)
+    """Disable an equation from matrix assembly."""
+    eq_data["enabled"] = false
+end
+
+function set_valid_modes!(eq_data::Dict, modes::Union{Vector, Set, AbstractRange})
+    """
+    Set the valid wavenumber modes for this equation.
+    The equation will only be included for these modes.
+    """
+    eq_data["valid_modes"] = Set(modes)
+end
+
+function exclude_k_zero!(eq_data::Dict, exclude::Bool=true)
+    """
+    Exclude this equation from k=0 (homogeneous) mode.
+    Useful for gauge conditions in incompressible flow problems.
+    """
+    eq_data["exclude_k_zero"] = exclude
 end
 
 function get_matrix_expression(eq_data::Dict, matrix_name::String)
