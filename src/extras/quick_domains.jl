@@ -99,8 +99,8 @@ end
 
 # 3D domains
 function create_3d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, Lz::Float64, 
-                                  Nx::Int, Ny::Int, Nz::Int; dtype::Type=Float64, dealias::Float64=3.0/2.0)
-    """Create 3D triply-periodic domain with GPU support"""
+                                  Nx::Int, Ny::Int, Nz::Int; dtype::Type=Float64, dealias::Float64=3.0/2.0, kwargs...)
+    """Create 3D triply-periodic domain (CPU only)"""
     
     x_coord, y_coord, z_coord = _require_coords(dist, 3)
     
@@ -108,7 +108,7 @@ function create_3d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, 
     y_basis = RealFourier(y_coord, size=Ny, bounds=(0.0, Ly), dealias=dealias, dtype=dtype)
     z_basis = RealFourier(z_coord, size=Nz, bounds=(0.0, Lz), dealias=dealias, dtype=dtype)
     
-    return Domain(dist, (x_basis, y_basis, z_basis); device=device)
+    return Domain(dist, (x_basis, y_basis, z_basis))
 end
 
 function create_box_domain(dist::Distributor, Lx::Float64, Ly::Float64, Lz::Float64,
