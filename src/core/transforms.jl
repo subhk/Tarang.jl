@@ -2,6 +2,7 @@
 Spectral transform classes with PencilFFTs integration
 
 Translated from dedalus/core/transforms.py
+CPU-only (GPU support removed).
 """
 
 using PencilFFTs
@@ -9,90 +10,76 @@ using FFTW
 using LinearAlgebra
 using SparseArrays
 
-# GPU support
-
 abstract type Transform end
 
 # PencilFFTs-based transforms for parallel 2D FFTs
 struct PencilFFTTransform <: Transform
     plan::Union{Nothing, PencilFFTs.PencilFFTPlan}
     basis::Basis
-    device_config::CPUDeviceConfig
 
-    function PencilFFTTransform(basis::Basis; device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-        new(nothing, basis, device_config)
+    function PencilFFTTransform(basis::Basis)
+        new(nothing, basis)
     end
 end
 
 struct FourierTransform <: Transform
-    plan_forward::Union{Nothing, Any}  # Can be FFTW or GPU FFT plan
-    plan_backward::Union{Nothing, Any}  # Can be FFTW or GPU FFT plan
+    plan_forward::Union{Nothing, Any}
+    plan_backward::Union{Nothing, Any}
     basis::Basis
-    device_config::CPUDeviceConfig
-    gpu_fft_plan::Union{Nothing, Any}  # GPU-specific FFT plan
 
-    function FourierTransform(basis::Basis; device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-        new(nothing, nothing, basis, device_config, nothing)
+    function FourierTransform(basis::Basis)
+        new(nothing, nothing, basis)
     end
 end
 
 mutable struct ChebyshevTransform <: Transform
-    matrices::Dict{String, AbstractMatrix}  # Can be CPU or GPU matrices
+    matrices::Dict{String, AbstractMatrix}
     basis::ChebyshevT
-    device_config::CPUDeviceConfig
 
-    # FFTW DCT plans (if available)
+    # FFTW DCT plans
     forward_plan::Union{Nothing, Any}
     backward_plan::Union{Nothing, Any}
-    
-    # GPU-specific DCT plans
-    gpu_forward_plan::Union{Nothing, Any}
-    gpu_backward_plan::Union{Nothing, Any}
-    
+
     # Scaling factors following Dedalus FastCosineTransform
     forward_rescale_zero::Float64
     forward_rescale_pos::Float64
     backward_rescale_zero::Float64
     backward_rescale_pos::Float64
-    
+
     # Size information for padding/truncation
     grid_size::Int
     coeff_size::Int
     Kmax::Int
     axis::Int
-    
-    function ChebyshevTransform(basis::ChebyshevT; device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+
+    function ChebyshevTransform(basis::ChebyshevT)
         new(
             Dict{String, AbstractMatrix}(),
             basis,
-            device_config,
             nothing, nothing,      # FFTW plans
-            nothing, nothing,      # GPU plans
-            0.0, 0.0, 0.0, 0.0,    # Scaling factors 
+            0.0, 0.0, 0.0, 0.0,    # Scaling factors
             0, 0, 0, 0             # Sizes and axis
         )
     end
 end
 
 mutable struct LegendreTransform <: Transform
-    matrices::Dict{String, AbstractMatrix}  # Can be CPU or GPU matrices
+    matrices::Dict{String, AbstractMatrix}
     basis::Legendre
-    device_config::CPUDeviceConfig
 
-    # Quadrature information (can be on GPU)
+    # Quadrature information
     grid_points::Union{Nothing, AbstractVector{Float64}}
     quad_weights::Union{Nothing, AbstractVector{Float64}}
-    
+
     # Size information for dealiasing
     grid_size::Int
     coeff_size::Int
     axis::Int
-    
-    function LegendreTransform(basis::Legendre; device_config::CPUDeviceConfig=DEFAULT_DEVICE)
+
+    function LegendreTransform(basis::Legendre)
         new(
             Dict{String, AbstractMatrix}(),
             basis,
-            device_config,
             nothing, nothing,  # Quadrature points and weights
             0, 0, 0            # Sizes and axis
         )
@@ -203,82 +190,6 @@ function setup_cpu_fft_transform!(transform::FourierTransform, basis::Union{Real
     end
 end
 
-function setup_gpu_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier}, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """GPU FFT setup removed; always fall back to CPU."""
-    setup_cpu_fft_transform!(transform, basis)
-    return transform
-end
-
-function setup_cuda_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier})
-    """Setup CUDA FFT transforms"""
-    
-    if isa(basis, RealFourier)
-        # Create dummy GPU arrays for planning
-        dummy_in = device_zeros(Float64, (basis.meta.size,), transform)
-        dummy_out = device_zeros(ComplexF64, (div(basis.meta.size, 2) + 1,), transform)
-        
-        # Use CUDA.jl FFT planning
-        transform.gpu_fft_plan = CUDA.CUFFT.plan_rfft(dummy_in)
-        transform.plan_forward = transform.gpu_fft_plan
-        transform.plan_backward = CUDA.CUFFT.plan_irfft(dummy_out, basis.meta.size)
-        
-    else # ComplexFourier
-        dummy = device_zeros(ComplexF64, (basis.meta.size,), transform)
-        
-        transform.gpu_fft_plan = CUDA.CUFFT.plan_fft(dummy)
-        transform.plan_forward = transform.gpu_fft_plan
-        transform.plan_backward = CUDA.CUFFT.plan_ifft(dummy)
-    end
-    
-    @info "Setup CUDA FFT transform for $(typeof(basis)), size=$(basis.meta.size)"
-end
-
-function setup_amdgpu_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier})
-    """Setup AMD GPU FFT transforms"""
-    
-    if isa(basis, RealFourier)
-        # AMDGPU.jl FFT support
-        dummy_in = device_zeros(Float64, (basis.meta.size,), transform)
-        dummy_out = device_zeros(ComplexF64, (div(basis.meta.size, 2) + 1,), transform)
-        
-        # Use AMDGPU.jl FFT (if available)
-        transform.gpu_fft_plan = AMDGPU.rocFFT.plan_rfft(dummy_in)
-        transform.plan_forward = transform.gpu_fft_plan
-        transform.plan_backward = AMDGPU.rocFFT.plan_irfft(dummy_out, basis.meta.size)
-        
-    else # ComplexFourier
-        dummy = device_zeros(ComplexF64, (basis.meta.size,), transform)
-        
-        transform.gpu_fft_plan = AMDGPU.rocFFT.plan_fft(dummy)
-        transform.plan_forward = transform.gpu_fft_plan
-        transform.plan_backward = AMDGPU.rocFFT.plan_ifft(dummy)
-    end
-    
-    @info "Setup AMD GPU FFT transform for $(typeof(basis)), size=$(basis.meta.size)"
-end
-
-function setup_metal_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier})
-    """Setup Metal FFT transforms"""
-    
-    # Metal.jl FFT support (simplified implementation)
-    if isa(basis, RealFourier)
-        dummy_in = device_zeros(Float64, (basis.meta.size,), transform)
-        dummy_out = device_zeros(ComplexF64, (div(basis.meta.size, 2) + 1,), transform)
-        
-        # Use Metal.jl FFT if available
-        # Note: Metal.jl may not have full FFT support - this is a placeholder
-        transform.plan_forward = x -> fft(x)  # Fallback to generic FFT
-        transform.plan_backward = x -> real(ifft(x))
-        
-    else # ComplexFourier
-        dummy = device_zeros(ComplexF64, (basis.meta.size,), transform)
-        
-        transform.plan_forward = x -> fft(x)
-        transform.plan_backward = x -> ifft(x)
-    end
-    
-    @info "Setup Metal FFT transform for $(typeof(basis)), size=$(basis.meta.size)"
-end
 
 function setup_chebyshev_transform!(dist::Distributor, basis::ChebyshevT, axis::Int)
     """
@@ -338,42 +249,9 @@ function setup_chebyshev_cpu_transform!(transform::ChebyshevTransform, grid_size
     transform.axis = axis
 end
 
-function setup_chebyshev_gpu_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int, axis::Int, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """GPU Chebyshev setup removed; use CPU matrix transform."""
-    setup_chebyshev_matrix_transform!(transform, grid_size, coeff_size, axis)
-    transform.grid_size = grid_size
-    transform.coeff_size = coeff_size
-    transform.Kmax = min(grid_size - 1, coeff_size - 1)
-    transform.axis = axis
-end
-
-function setup_chebyshev_cuda_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int)
-    """Setup CUDA Chebyshev transform using cuFFT DCT (if available)"""
-    
-    # CUDA DCT support may be limited - use matrix approach for now
-    setup_chebyshev_gpu_matrix_transform!(transform, grid_size, coeff_size, transform)
-    @info "Setup CUDA matrix-based Chebyshev transform, N=$grid_size"
-end
-
-function setup_chebyshev_amdgpu_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int)
-    """Setup AMD GPU Chebyshev transform"""
-    
-    # AMD GPU DCT support may be limited - use matrix approach for now
-    setup_chebyshev_gpu_matrix_transform!(transform, grid_size, coeff_size, transform)
-    @info "Setup AMD GPU matrix-based Chebyshev transform, N=$grid_size"
-end
-
-function setup_chebyshev_metal_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int)
-    """Setup Metal Chebyshev transform"""
-    
-    # Metal DCT support may be limited - use matrix approach for now
-    setup_chebyshev_gpu_matrix_transform!(transform, grid_size, coeff_size, transform)
-    @info "Setup Metal matrix-based Chebyshev transform, N=$grid_size"
-end
-
 function setup_chebyshev_matrix_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int, axis::Int)
     """Setup CPU matrix-based Chebyshev transform"""
-    
+
     # DCT-II matrix for forward transform (grid to coefficients)
     forward_matrix = zeros(coeff_size, grid_size)
     for i in 0:coeff_size-1, j in 0:grid_size-1
@@ -383,7 +261,7 @@ function setup_chebyshev_matrix_transform!(transform::ChebyshevTransform, grid_s
             forward_matrix[i+1, j+1] = cos(π * i * j / (grid_size-1)) / grid_size
         end
     end
-    
+
     # DCT-III matrix for backward transform (coefficients to grid)
     backward_matrix = zeros(grid_size, coeff_size)
     for i in 0:grid_size-1, j in 0:coeff_size-1
@@ -393,38 +271,11 @@ function setup_chebyshev_matrix_transform!(transform::ChebyshevTransform, grid_s
             backward_matrix[i+1, j+1] = 2.0 * cos(π * j * i / (grid_size-1)) * 0.5
         end
     end
-    
+
     transform.matrices["forward"] = sparse(forward_matrix)
     transform.matrices["backward"] = sparse(backward_matrix)
-    
+
     @info "Setup CPU matrix-based Chebyshev transform for axis $axis, N=$grid_size"
-end
-
-function setup_chebyshev_gpu_matrix_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """GPU matrix-based Chebyshev setup removed; reuse CPU matrices."""
-
-    forward_matrix_cpu = zeros(Float64, coeff_size, grid_size)
-    for i in 0:coeff_size-1, j in 0:grid_size-1
-        if i == 0
-            forward_matrix_cpu[i+1, j+1] = 1.0 / grid_size / 2.0
-        else
-            forward_matrix_cpu[i+1, j+1] = cos(π * i * j / (grid_size-1)) / grid_size
-        end
-    end
-
-    backward_matrix_cpu = zeros(Float64, grid_size, coeff_size)
-    for i in 0:grid_size-1, j in 0:coeff_size-1
-        if j == 0
-            backward_matrix_cpu[i+1, j+1] = 1.0
-        else
-            backward_matrix_cpu[i+1, j+1] = 2.0 * cos(π * j * i / (grid_size-1)) * 0.5
-        end
-    end
-
-    transform.matrices["forward"] = forward_matrix_cpu
-    transform.matrices["backward"] = backward_matrix_cpu
-
-    @info "Setup CPU matrix-based Chebyshev transform, N=$grid_size"
 end
 
 function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int)
@@ -501,30 +352,6 @@ function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int
     @debug "Legendre transform setup completed for axis $axis"
 end
 
-# CPU-only overrides for GPU helper stubs
-function setup_cuda_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier})
-    setup_cpu_fft_transform!(transform, basis)
-end
-
-function setup_amdgpu_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier})
-    setup_cpu_fft_transform!(transform, basis)
-end
-
-function setup_metal_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier})
-    setup_cpu_fft_transform!(transform, basis)
-end
-
-function setup_chebyshev_cuda_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int)
-    setup_chebyshev_matrix_transform!(transform, grid_size, coeff_size, transform.axis)
-end
-
-function setup_chebyshev_amdgpu_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int)
-    setup_chebyshev_matrix_transform!(transform, grid_size, coeff_size, transform.axis)
-end
-
-function setup_chebyshev_metal_transform!(transform::ChebyshevTransform, grid_size::Int, coeff_size::Int)
-    setup_chebyshev_matrix_transform!(transform, grid_size, coeff_size, transform.axis)
-end
 
 # Helper functions for Legendre transform following Dedalus jacobi.py patterns
 function compute_legendre_quadrature(N::Int)
@@ -1319,29 +1146,9 @@ function dealias_3d!(field::ScalarField, scales::Union{Real, Vector{Real}})
     end
 end
 
-# GPU utility functions for transforms
-function to_device!(transform::Transform, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """No-op device transfer for CPU-only mode."""
-
-    if hasfield(typeof(transform), :device_config)
-        setfield!(transform, :device_config, device_config)
-    end
-    return transform
-end
-
-    """Get device configuration of transform"""
-    if hasfield(typeof(transform), :device_config)
-        return transform
-    else
-    end
-end
-
 function synchronize_transforms!(transforms::Vector)
-    """Synchronize all transforms on their respective devices"""
-    for transform in transforms
-        if hasfield(typeof(transform), :device_config)
-        end
-    end
+    """Synchronize all transforms (no-op for CPU-only)"""
+    # No-op for CPU-only mode
 end
 
 function is_pencil_compatible(bases::Tuple{Vararg{Basis}})
