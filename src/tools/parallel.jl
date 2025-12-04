@@ -133,11 +133,11 @@ function parallel_any(value::Bool)
 end
 
 # GPU-aware array operations
-function gather_array(local_array::AbstractArray, root::Int=0; device_config::Union{DeviceConfig,Nothing}=nothing)
+function gather_array(local_array::AbstractArray, root::Int=0)
     """Gather arrays from all processes to root with GPU support"""
     if MPI.Initialized()
         # Move to CPU for MPI operations if needed
-        cpu_array = if device_config !== nothing && device_config.device_type != CPU_DEVICE && isa(local_array, AbstractGPUArray)
+        cpu_array = if device_config.device_type != CPU_DEVICE 
             Array(local_array)
         else
             local_array
@@ -146,10 +146,9 @@ function gather_array(local_array::AbstractArray, root::Int=0; device_config::Un
         result = MPI.Gather(cpu_array, root, MPI.COMM_WORLD)
         
         # Move result back to GPU if needed
-        if device_config !== nothing && device_config.device_type != CPU_DEVICE && result !== nothing
+        if device_config.device_type != CPU_DEVICE && result !== nothing
             try
-                result = [ensure_device!(arr, device_config) for arr in result]
-                gpu_synchronize(device_config)
+                result = [arr for arr in result]
             catch e
                 @warn "GPU gather result transfer failed: $e"
             end
@@ -161,11 +160,11 @@ function gather_array(local_array::AbstractArray, root::Int=0; device_config::Un
     end
 end
 
-function allgather_array(local_array::AbstractArray; device_config::Union{DeviceConfig,Nothing}=nothing)
+function allgather_array(local_array::AbstractArray)
     """Gather arrays from all processes to all processes with GPU support"""
     if MPI.Initialized()
         # Move to CPU for MPI operations if needed
-        cpu_array = if device_config !== nothing && device_config.device_type != CPU_DEVICE && isa(local_array, AbstractGPUArray)
+        cpu_array = if device_config.device_type != CPU_DEVICE 
             Array(local_array)
         else
             local_array
@@ -174,10 +173,9 @@ function allgather_array(local_array::AbstractArray; device_config::Union{Device
         result = MPI.Allgather(cpu_array, MPI.COMM_WORLD)
         
         # Move result back to GPU if needed
-        if device_config !== nothing && device_config.device_type != CPU_DEVICE
+        if device_config.device_type != CPU_DEVICE
             try
-                result = [ensure_device!(arr, device_config) for arr in result]
-                gpu_synchronize(device_config)
+                result = [arr for arr in result]
             catch e
                 @warn "GPU allgather result transfer failed: $e"
             end
@@ -189,11 +187,11 @@ function allgather_array(local_array::AbstractArray; device_config::Union{Device
     end
 end
 
-function broadcast_array(array::AbstractArray, root::Int=0; device_config::Union{DeviceConfig,Nothing}=nothing)
+function broadcast_array(array::AbstractArray, root::Int=0)
     """Broadcast array from root to all processes with GPU support"""
     if MPI.Initialized()
         # Move to CPU for MPI operations if needed
-        cpu_array = if device_config !== nothing && device_config.device_type != CPU_DEVICE && isa(array, AbstractGPUArray)
+        cpu_array = if device_config.device_type != CPU_DEVICE 
             Array(array)
         else
             array
@@ -202,10 +200,9 @@ function broadcast_array(array::AbstractArray, root::Int=0; device_config::Union
         result = MPI.Bcast(cpu_array, root, MPI.COMM_WORLD)
         
         # Move result back to GPU if needed
-        if device_config !== nothing && device_config.device_type != CPU_DEVICE
+        if device_config.device_type != CPU_DEVICE
             try
-                result = ensure_device!(result, device_config)
-                gpu_synchronize(device_config)
+                result = result
             catch e
                 @warn "GPU broadcast result transfer failed: $e"
             end
@@ -217,13 +214,13 @@ function broadcast_array(array::AbstractArray, root::Int=0; device_config::Union
     end
 end
 
-function scatter_array(global_array::AbstractArray, root::Int=0; device_config::Union{DeviceConfig,Nothing}=nothing)
+function scatter_array(global_array::AbstractArray, root::Int=0)
     """Scatter array from root to all processes with GPU support"""
     if MPI.Initialized()
         info = get_mpi_info()
         
         # Move to CPU for MPI operations if needed
-        cpu_array = if device_config !== nothing && device_config.device_type != CPU_DEVICE && isa(global_array, AbstractGPUArray)
+        cpu_array = if device_config.device_type != CPU_DEVICE 
             Array(global_array)
         else
             global_array
@@ -234,10 +231,9 @@ function scatter_array(global_array::AbstractArray, root::Int=0; device_config::
         MPI.Scatter!(cpu_array, local_array, root, MPI.COMM_WORLD)
         
         # Move result to GPU if needed
-        if device_config !== nothing && device_config.device_type != CPU_DEVICE
+        if device_config.device_type != CPU_DEVICE
             try
-                local_array = ensure_device!(local_array, device_config)
-                gpu_synchronize(device_config)
+                local_array = local_array
             catch e
                 @warn "GPU scatter result transfer failed: $e"
             end
@@ -255,26 +251,23 @@ mutable struct PerformanceTimer
     start_time::Float64
     total_time::Float64
     call_count::Int
-    device_config::Union{DeviceConfig,Nothing}
-    gpu_times::Vector{Float64}
     
-    function PerformanceTimer(name::String; device_config::Union{DeviceConfig,Nothing}=nothing)
+    
+    function PerformanceTimer(name::String)
         new(name, 0.0, 0.0, 0, device_config, Float64[])
     end
 end
 
 function start_timer!(timer::PerformanceTimer)
     """Start performance timer with GPU synchronization"""
-    if timer.device_config !== nothing && timer.device_config.device_type != CPU_DEVICE
-        gpu_synchronize(timer.device_config)
+    if timer !== nothing && timerfalse
     end
     timer.start_time = time()
 end
 
 function stop_timer!(timer::PerformanceTimer)
     """Stop performance timer and accumulate time with GPU synchronization"""
-    if timer.device_config !== nothing && timer.device_config.device_type != CPU_DEVICE
-        gpu_synchronize(timer.device_config)
+    if timer !== nothing && timerfalse
     end
     
     elapsed = time() - timer.start_time
@@ -282,8 +275,7 @@ function stop_timer!(timer::PerformanceTimer)
     timer.call_count += 1
     
     # Store GPU timing if applicable
-    if timer.device_config !== nothing && timer.device_config.device_type != CPU_DEVICE
-        push!(timer.gpu_times, elapsed)
+    if timer !== nothing && timerfalse
     end
     
     return elapsed
@@ -310,11 +302,7 @@ function timer_stats(timer::PerformanceTimer)
         "average_time" => average_time(timer),
     )
     
-    if timer.device_config !== nothing && !isempty(timer.gpu_times)
-        stats["device_type"] = timer.device_config.device_type
-        stats["gpu_total_time"] = sum(timer.gpu_times)
-        stats["gpu_average_time"] = sum(timer.gpu_times) / length(timer.gpu_times)
-        stats["gpu_call_count"] = length(timer.gpu_times)
+        stats["device_type"] = timer.device_type
     end
     
     return stats
@@ -324,7 +312,7 @@ end
 struct TimedRegion
     timer::PerformanceTimer
     
-    function TimedRegion(name::String; device_config::Union{DeviceConfig,Nothing}=nothing)
+    function TimedRegion(name::String)
         timer = PerformanceTimer(name, device_config=device_config)
         start_timer!(timer)
         new(timer)
@@ -973,15 +961,13 @@ end
 
 # GPU-aware parallel computing utilities
 
-mutable struct GPUParallelManager
     """GPU-aware parallel manager for MPI+GPU computing"""
-    device_config::DeviceConfig
+    
     mpi_info::NamedTuple
     memory_pool::Vector{AbstractArray}
     performance_stats::GPUParallelStats
     
-    function GPUParallelManager(device::String="cpu")
-        device_config = select_device(device)
+        
         mpi_info = get_mpi_info()
         memory_pool = AbstractArray[]
         perf_stats = GPUParallelStats()
@@ -1003,12 +989,11 @@ mutable struct GPUParallelStats
     end
 end
 
-function gpu_aware_allreduce(manager::GPUParallelManager, data::AbstractArray, op=MPI.SUM)
     """GPU-aware MPI allreduce operation"""
     start_time = time()
     
     # Move to CPU for MPI if needed
-    cpu_data = if manager.device_config.device_type != CPU_DEVICE && isa(data, AbstractGPUArray)
+    cpu_data = if managerfalse 
         Array(data)
     else
         data
@@ -1022,11 +1007,9 @@ function gpu_aware_allreduce(manager::GPUParallelManager, data::AbstractArray, o
     end
     
     # Move back to GPU if needed
-    if manager.device_config.device_type != CPU_DEVICE
+    if managerfalse
         try
-            result = ensure_device!(result, manager.device_config)
-            gpu_synchronize(manager.device_config)
-            manager.performance_stats.gpu_transfers += 1
+            result = result
         catch e
             @warn "GPU allreduce result transfer failed: $e"
         end
@@ -1039,12 +1022,11 @@ function gpu_aware_allreduce(manager::GPUParallelManager, data::AbstractArray, o
     return result
 end
 
-function gpu_aware_transpose(manager::GPUParallelManager, data::AbstractArray, plan=nothing)
     """GPU-aware distributed transpose using PencilArrays"""
     start_time = time()
     
     # Ensure data is on correct device
-    gpu_data = ensure_device!(data, manager.device_config)
+    gpu_data = data
     
     # Perform transpose operation
     result = if plan !== nothing && MPI.Initialized()
@@ -1060,9 +1042,7 @@ function gpu_aware_transpose(manager::GPUParallelManager, data::AbstractArray, p
     end
     
     # Synchronize GPU operations
-    if manager.device_config.device_type != CPU_DEVICE
-        gpu_synchronize(manager.device_config)
-        manager.performance_stats.gpu_transfers += 1
+    if managerfalse
     end
     
     # Update statistics
@@ -1071,7 +1051,6 @@ function gpu_aware_transpose(manager::GPUParallelManager, data::AbstractArray, p
     return result
 end
 
-function create_gpu_pencil_config(manager::GPUParallelManager, global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}})
     """Create PencilArrays configuration optimized for GPU+MPI"""
     
     # Create pencil configuration following project requirements
@@ -1103,7 +1082,6 @@ function create_gpu_pencil_config(manager::GPUParallelManager, global_shape::Tup
     return pencil_config
 end
 
-function benchmark_gpu_mpi_bandwidth(manager::GPUParallelManager, data_size::Int=1024*1024)
     """Benchmark GPU-MPI communication bandwidth"""
     
     if !MPI.Initialized() || manager.mpi_info.size < 2
@@ -1112,21 +1090,19 @@ function benchmark_gpu_mpi_bandwidth(manager::GPUParallelManager, data_size::Int
     end
     
     # Create test data on GPU
-    test_data = if manager.device_config.device_type != CPU_DEVICE
-        device_fill(Float64(manager.mpi_info.rank), (data_size,), manager.device_config)
+    test_data = if managerfalse
+        device_fill(Float64(manager.mpi_info.rank), (data_size,), manager)
     else
         fill(Float64(manager.mpi_info.rank), data_size)
     end
     
     # Warm-up run
-    _ = gpu_aware_allreduce(manager, test_data, MPI.SUM)
     
     # Benchmark run
     start_time = time()
     num_runs = 10
     
     for _ in 1:num_runs
-        _ = gpu_aware_allreduce(manager, test_data, MPI.SUM)
     end
     
     elapsed_time = time() - start_time
@@ -1141,10 +1117,8 @@ function benchmark_gpu_mpi_bandwidth(manager::GPUParallelManager, data_size::Int
     return bandwidth
 end
 
-function optimize_gpu_memory_layout(manager::GPUParallelManager, global_shape::Tuple{Vararg{Int}}, mesh::Tuple{Vararg{Int}})
     """Optimize GPU memory layout for distributed spectral methods"""
     
-    memory_info = get_gpu_memory_info(manager.device_config)
     
     # Estimate memory requirements
     elements_per_process = prod(global_shape) ÷ prod(mesh)
@@ -1154,7 +1128,7 @@ function optimize_gpu_memory_layout(manager::GPUParallelManager, global_shape::T
     # Add overhead for transforms and temporary arrays (factor of 3)
     estimated_memory = required_memory * 3
     
-    if manager.device_config.device_type != CPU_DEVICE && estimated_memory > memory_info.available * 0.8
+    if managerfalse && estimated_memory > memory_info.available * 0.8
         @warn "Estimated GPU memory usage ($(round(estimated_memory/1024^3, digits=2)) GB) exceeds 80% of available memory ($(round(memory_info.available/1024^3, digits=2)) GB)"
         
         # Suggest optimizations
@@ -1171,17 +1145,16 @@ function optimize_gpu_memory_layout(manager::GPUParallelManager, global_shape::T
     return estimated_memory
 end
 
-function move_manager_to_device!(manager::GPUParallelManager, device_config::DeviceConfig)
     """Move parallel manager to different device"""
     
-    old_device = manager.device_config
-    manager.device_config = device_config
+    old_device = manager
+    manager = device_config
     
     # Move memory pool to new device
     new_pool = AbstractArray[]
     for array in manager.memory_pool
         try
-            new_array = ensure_device!(Array(array), device_config)
+            new_array = Array(array)
             push!(new_pool, new_array)
         catch e
             @warn "Failed to move array to device: $e"
@@ -1194,39 +1167,34 @@ function move_manager_to_device!(manager::GPUParallelManager, device_config::Dev
     return manager
 end
 
-function clear_gpu_memory_pool!(manager::GPUParallelManager)
     """Clear GPU memory pool"""
     empty!(manager.memory_pool)
     
-    if manager.device_config.device_type != CPU_DEVICE
+    if managerfalse
         try
             # Force GPU garbage collection if available
-            gpu_synchronize(manager.device_config)
         catch e
             @warn "GPU cleanup failed: $e"
         end
     end
     
-    @info "Cleared GPU memory pool ($(manager.device_config.device_type))"
+    @info "Cleared GPU memory pool ($(manager.device_type))"
     
     return manager
 end
 
-function log_gpu_parallel_performance(manager::GPUParallelManager)
     """Log GPU parallel performance statistics"""
     
     stats = manager.performance_stats
     
-    @info "GPU Parallel performance ($(manager.device_config.device_type)):"
+    @info "GPU Parallel performance ($(manager.device_type)):"
     @info "  MPI operations: $(stats.mpi_operations)"
-    @info "  GPU transfers: $(stats.gpu_transfers)"
     @info "  Memory allocations: $(stats.memory_allocations)"
     @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
     @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses"
     
     # GPU memory info
-    if manager.device_config.device_type != CPU_DEVICE
-        memory_info = get_gpu_memory_info(manager.device_config)
+    if managerfalse
         pool_memory = sum(sizeof(arr) for arr in manager.memory_pool)
         
         @info "  GPU memory: $(round(pool_memory/1024^2, digits=2)) MB in pool"
@@ -1235,26 +1203,16 @@ function log_gpu_parallel_performance(manager::GPUParallelManager)
 end
 
 # Convenience functions for GPU-aware parallel operations
-function gpu_parallel_sum(data::AbstractArray; device::String="cpu")
     """Convenience function for GPU-aware parallel sum"""
-    manager = GPUParallelManager(device)
-    return gpu_aware_allreduce(manager, data, MPI.SUM)
 end
 
-function gpu_parallel_max(data::AbstractArray; device::String="cpu")
     """Convenience function for GPU-aware parallel max"""
-    manager = GPUParallelManager(device)
-    return gpu_aware_allreduce(manager, data, MPI.MAX)
 end
 
-function gpu_parallel_min(data::AbstractArray; device::String="cpu")
     """Convenience function for GPU-aware parallel min"""
-    manager = GPUParallelManager(device)
-    return gpu_aware_allreduce(manager, data, MPI.MIN)
 end
 
 # Enhanced load balancing for GPU clusters
-function balance_gpu_cluster_load(global_shape::Tuple{Vararg{Int}}, available_devices::Vector{String})
     """Balance load across heterogeneous GPU cluster"""
     
     info = get_mpi_info()
@@ -1265,10 +1223,9 @@ function balance_gpu_cluster_load(global_shape::Tuple{Vararg{Int}}, available_de
     
     # Query GPU capabilities across all processes
     local_device = length(available_devices) > 0 ? available_devices[1] : "cpu"
-    device_config = select_device(local_device)
+    
     
     local_capability = if device_config.device_type != CPU_DEVICE
-        memory_info = get_gpu_memory_info(device_config)
         memory_info.total
     else
         0  # CPU fallback

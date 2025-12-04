@@ -60,12 +60,10 @@ mutable struct NonlinearEvaluator
     dealiasing_factor::Float64
     temp_fields::Dict{String, Any}
     memory_pool::Vector{PencilArray}
-    device_config::DeviceConfig
-    gpu_memory_pool::Vector{AbstractArray}
+    
     performance_stats::NonlinearPerformanceStats
     
-    function NonlinearEvaluator(dist::Distributor; dealiasing_factor::Float64=3.0/2.0, device::String="auto")
-        device_config = device == "auto" ? get_device_config() : select_device(device)
+    function NonlinearEvaluator(dist::Distributor; dealiasing_factor::Float64=3.0/2.0)
         evaluator = new(dist, Dict{String, Any}(), dealiasing_factor, Dict{String, Any}(), PencilArray[], 
                        device_config, AbstractArray[], NonlinearPerformanceStats())
         setup_nonlinear_transforms!(evaluator)
@@ -240,11 +238,11 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
     start_time = time()
     
     # Ensure both fields are on the same device
-    device_config = evaluator.device_config
-    field1.data_g = ensure_device!(field1.data_g, device_config)
-    field1.data_c = ensure_device!(field1.data_c, device_config)
-    field2.data_g = ensure_device!(field2.data_g, device_config)
-    field2.data_c = ensure_device!(field2.data_c, device_config)
+    device_config = evaluator
+    field1.data_g = field1.data_g
+    field1.data_c = field1.data_c
+    field2.data_g = field2.data_g
+    field2.data_c = field2.data_c
     
     # Ensure both fields are in grid space for multiplication
     ensure_layout!(field1, :g)
@@ -260,8 +258,8 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
     result = field1 * field2  # This now uses the GPU-aware Base.:* we implemented
     
     # Ensure result is on correct device
-    result.data_g = ensure_device!(result.data_g, device_config)
-    result.data_c = ensure_device!(result.data_c, device_config)
+    result.data_g = result.data_g
+    result.data_c = result.data_c
     
     # Apply GPU-compatible dealiasing if requested
     if evaluator.dealiasing_factor > 1.0
@@ -269,7 +267,6 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(device_config)
     
     # Update performance statistics
     evaluator.performance_stats.total_evaluations += 1
@@ -431,7 +428,7 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     backward_transform!(field)
 end
 
-function apply_gpu_dealiasing!(field::ScalarField, dealiasing_factor::Float64, device_config::DeviceConfig)
+function apply_gpu_dealiasing!(field::ScalarField, dealiasing_factor::Float64, )
     """GPU-compatible dealiasing function"""
     
     dealiasing_start_time = time()
@@ -440,7 +437,7 @@ function apply_gpu_dealiasing!(field::ScalarField, dealiasing_factor::Float64, d
     forward_transform!(field)
     
     # Ensure data is on correct device
-    field.data_c = ensure_device!(field.data_c, device_config)
+    field.data_c = field.data_c
     
     # Apply cutoff using GPU-compatible operations
     for (i, basis) in enumerate(field.bases)
@@ -454,12 +451,11 @@ function apply_gpu_dealiasing!(field::ScalarField, dealiasing_factor::Float64, d
     backward_transform!(field)
     
     # Synchronize GPU operations
-    gpu_synchronize(device_config)
     
     return time() - dealiasing_start_time
 end
 
-function apply_gpu_spectral_cutoff!(data::AbstractArray, axis::Int, cutoff::Int, device_config::DeviceConfig)
+function apply_gpu_spectral_cutoff!(data::AbstractArray, axis::Int, cutoff::Int, )
     """Apply spectral cutoff using GPU-optimized operations"""
     
     # This is a placeholder for GPU-optimized spectral cutoff
@@ -572,8 +568,8 @@ function get_temp_field(evaluator::NonlinearEvaluator, template::ScalarField, na
         temp_field = ScalarField(template.dist, name, template.bases, template.dtype)
         
         # Ensure temporary field is on the same device as evaluator
-        temp_field.data_g = ensure_device!(temp_field.data_g, evaluator.device_config)
-        temp_field.data_c = ensure_device!(temp_field.data_c, evaluator.device_config)
+        temp_field.data_g = temp_field.data_g
+        temp_field.data_c = temp_field.data_c
         
         evaluator.temp_fields[key] = temp_field
     end
@@ -588,30 +584,26 @@ function clear_temp_fields!(evaluator::NonlinearEvaluator)
     empty!(evaluator.temp_fields)
     
     # Clear GPU memory pool
-    empty!(evaluator.gpu_memory_pool)
     
     # Force garbage collection to free GPU memory
     GC.gc()
     
     # Synchronize GPU to ensure memory is freed
-    gpu_synchronize(evaluator.device_config)
 end
 
 function get_gpu_temp_array(evaluator::NonlinearEvaluator, shape::Tuple, dtype::Type)
     """Get temporary GPU array for intermediate calculations"""
     
     # Try to reuse existing array of same shape and type
-    for (i, arr) in enumerate(evaluator.gpu_memory_pool)
         if size(arr) == shape && eltype(arr) == dtype
             # Remove from pool and return
-            temp_arr = splice!(evaluator.gpu_memory_pool, i)
             fill!(temp_arr, 0)  # Clear contents
             return temp_arr
         end
     end
     
     # Create new array on device if no suitable one found
-    return device_zeros(dtype, shape, evaluator.device_config)
+    return device_zeros(dtype, shape, evaluator)
 end
 
 function return_gpu_temp_array!(evaluator::NonlinearEvaluator, arr::AbstractArray)
@@ -620,13 +612,10 @@ function return_gpu_temp_array!(evaluator::NonlinearEvaluator, arr::AbstractArra
     # Only pool arrays up to a reasonable size to avoid memory bloat
     max_elements = 10^6  # 1M elements max
     if length(arr) <= max_elements
-        push!(evaluator.gpu_memory_pool, arr)
     end
     
     # Keep pool size reasonable
     max_pool_size = 10
-    if length(evaluator.gpu_memory_pool) > max_pool_size
-        popfirst!(evaluator.gpu_memory_pool)  # Remove oldest
     end
 end
 
@@ -756,7 +745,6 @@ mutable struct NonlinearPerformanceStats
     total_time::Float64
     dealiasing_time::Float64
     transform_time::Float64
-    gpu_memory_transfers::Int
     gpu_computation_time::Float64
     
     function NonlinearPerformanceStats()
@@ -765,21 +753,20 @@ mutable struct NonlinearPerformanceStats
 end
 
 # GPU utility functions for nonlinear terms
-function to_device!(evaluator::NonlinearEvaluator, device_config::DeviceConfig)
+function to_device!(evaluator::NonlinearEvaluator, )
     """Move nonlinear evaluator to specified device"""
     
-    old_device = evaluator.device_config
-    evaluator.device_config = device_config
+    old_device = evaluator
+    evaluator = device_config
     
     # Move temporary fields to new device
     for (key, field) in evaluator.temp_fields
-        field.data_g = device_array(Array(field.data_g), device_config)
-        field.data_c = device_array(Array(field.data_c), device_config)
+        field.data_g = Array(field.data_g)
+        field.data_c = Array(field.data_c)
     end
     
     # Clear GPU memory pool if changing devices
     if old_device.device_type != device_config.device_type
-        empty!(evaluator.gpu_memory_pool)
     end
     
     @info "Moved nonlinear evaluator from $(old_device.device_type) to $(device_config.device_type)"
@@ -787,14 +774,12 @@ function to_device!(evaluator::NonlinearEvaluator, device_config::DeviceConfig)
     return evaluator
 end
 
-function get_device_config(evaluator::NonlinearEvaluator)
     """Get device configuration from nonlinear evaluator"""
-    return evaluator.device_config
+    return evaluator
 end
 
 function synchronize_nonlinear_evaluator!(evaluator::NonlinearEvaluator)
     """Synchronize all GPU operations for nonlinear evaluator"""
-    gpu_synchronize(evaluator.device_config)
 end
 
 function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
@@ -806,7 +791,6 @@ function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
     # Get or create GPU-aware evaluator
     dist = velocity.dist
     if !hasfield(typeof(dist), :nonlinear_evaluator)
-        device_config = get_device_config(scalar)
         evaluator = NonlinearEvaluator(dist, device=string(device_config.device_type))
         dist.nonlinear_evaluator = evaluator
     else
@@ -816,27 +800,27 @@ function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
     start_time = time()
     
     # Ensure all fields are on correct device
-    device_config = evaluator.device_config
+    device_config = evaluator
     for i in 1:length(velocity.components)
-        velocity.components[i].data_g = ensure_device!(velocity.components[i].data_g, device_config)
-        velocity.components[i].data_c = ensure_device!(velocity.components[i].data_c, device_config)
+        velocity.components[i].data_g = velocity.components[i].data_g
+        velocity.components[i].data_c = velocity.components[i].data_c
     end
-    scalar.data_g = ensure_device!(scalar.data_g, device_config)
-    scalar.data_c = ensure_device!(scalar.data_c, device_config)
+    scalar.data_g = scalar.data_g
+    scalar.data_c = scalar.data_c
     
     # Compute gradient of scalar field: ∇φ (GPU-accelerated)
     grad_scalar = evaluate_gradient(Gradient(scalar, dist.coordsys), :g)
     
     # Ensure gradient components are on GPU
     for i in 1:length(grad_scalar.components)
-        grad_scalar.components[i].data_g = ensure_device!(grad_scalar.components[i].data_g, device_config)
-        grad_scalar.components[i].data_c = ensure_device!(grad_scalar.components[i].data_c, device_config)
+        grad_scalar.components[i].data_g = grad_scalar.components[i].data_g
+        grad_scalar.components[i].data_c = grad_scalar.components[i].data_c
     end
     
     # Evaluate u·∇φ = u_x ∂φ/∂x + u_y ∂φ/∂y (+ u_z ∂φ/∂z in 3D)
     result = ScalarField(dist, "$(op.name)_$(scalar.name)", scalar.bases, scalar.dtype)
-    result.data_g = ensure_device!(result.data_g, device_config)
-    result.data_c = ensure_device!(result.data_c, device_config)
+    result.data_g = result.data_g
+    result.data_c = result.data_c
     ensure_layout!(result, :g)
     fill!(result["g"], 0.0)
     
@@ -848,7 +832,6 @@ function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(device_config)
     
     # Update performance statistics
     evaluator.performance_stats.gpu_computation_time += (time() - start_time)
@@ -856,11 +839,9 @@ function evaluate_nonlinear_term_gpu(op::AdvectionOperator, layout::Symbol=:g)
     return result
 end
 
-function evaluate_gpu_memory_usage(evaluator::NonlinearEvaluator)
     """Get GPU memory usage information for nonlinear evaluator"""
     
-    if evaluator.device_config.device_type != CPU_DEVICE
-        memory_info = gpu_memory_info(evaluator.device_config)
+    if evaluatorfalse
         
         # Estimate memory used by temporary fields
         temp_memory = 0
@@ -874,7 +855,6 @@ function evaluate_gpu_memory_usage(evaluator::NonlinearEvaluator)
         end
         
         # Estimate memory used by GPU memory pool
-        pool_memory = sum(sizeof(arr) for arr in evaluator.gpu_memory_pool)
         
         return (
             total_memory = memory_info.total,

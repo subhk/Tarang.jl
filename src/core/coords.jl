@@ -28,58 +28,10 @@ end
 struct CartesianCoordinates <: CoordinateSystem
     names::Vector{String}
     dim::Int
-    
+
     function CartesianCoordinates(names...)
         names_vec = collect(String(name) for name in names)
         new(names_vec, length(names_vec))
-    end
-end
-
-struct PolarCoordinates <: CoordinateSystem
-    names::Vector{String}
-    dim::Int
-    
-    function PolarCoordinates(names...)
-        names_vec = collect(String(name) for name in names)
-        if length(names_vec) != 2
-            throw(ArgumentError("Polar coordinates must have exactly 2 dimensions"))
-        end
-        new(names_vec, 2)
-    end
-end
-
-struct SphericalCoordinates <: CoordinateSystem
-    names::Vector{String}
-    dim::Int
-    
-    function SphericalCoordinates(names...)
-        names_vec = collect(String(name) for name in names)
-        if length(names_vec) != 3
-            throw(ArgumentError("Spherical coordinates must have exactly 3 dimensions"))
-        end
-        new(names_vec, 3)
-    end
-end
-
-struct S2Coordinates <: CoordinateSystem
-    names::Vector{String}
-    dim::Int
-    
-    function S2Coordinates(names...)
-        names_vec = collect(String(name) for name in names)
-        if length(names_vec) != 2
-            throw(ArgumentError("S2 coordinates must have exactly 2 dimensions"))
-        end
-        new(names_vec, 2)
-    end
-end
-
-struct AzimuthalCoordinate <: CoordinateSystem
-    names::Vector{String}
-    dim::Int
-    
-    function AzimuthalCoordinate(name)
-        new([String(name)], 1)
     end
 end
 

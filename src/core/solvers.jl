@@ -22,7 +22,6 @@ mutable struct SolverPerformanceStats
     total_steps::Int
     total_solves::Int
     avg_step_time::Float64
-    gpu_memory_usage::Int
     
     function SolverPerformanceStats()
         new(0.0, 0.0, 0, 0, 0.0, 0)
@@ -85,9 +84,8 @@ mutable struct InitialValueSolver <: Solver
     wall_time_start::Float64
     
     # GPU support
-    device_config::DeviceConfig
+    
     gpu_workspace::Dict{String, AbstractArray}
-    gpu_memory_pool::Vector{AbstractArray}
     performance_stats::SolverPerformanceStats
     
 end
@@ -104,37 +102,35 @@ end
 function _build_initial_value_solver(problem::IVP, timestepper; device::String="cpu")
     setup_domain!(problem)
     validate_problem(problem)
-    device_config = select_device(device)
+    
     base = SolverBaseData(problem)
 
     state = ScalarField[]
     for var in problem.variables
         if isa(var, ScalarField)
-            var.data_g = ensure_device!(var.data_g, device_config)
-            var.data_c = ensure_device!(var.data_c, device_config)
+            var.data_g = var.data_g
+            var.data_c = var.data_c
             push!(state, var)
         elseif isa(var, VectorField)
             for comp in var.components
-                comp.data_g = ensure_device!(comp.data_g, device_config)
-                comp.data_c = ensure_device!(comp.data_c, device_config)
+                comp.data_g = comp.data_g
+                comp.data_c = comp.data_c
             end
             append!(state, var.components)
         elseif isa(var, TensorField)
             for comp in vec(var.components)
-                comp.data_g = ensure_device!(comp.data_g, device_config)
-                comp.data_c = ensure_device!(comp.data_c, device_config)
+                comp.data_g = comp.data_g
+                comp.data_c = comp.data_c
             end
             append!(state, vec(var.components))
         end
     end
 
     gpu_workspace = Dict{String, AbstractArray}()
-    gpu_memory_pool = AbstractArray[]
     perf_stats = SolverPerformanceStats()
 
     solver = InitialValueSolver(base, problem, timestepper, 0.0, 0, Inf, Inf, typemax(Int),
                                 state, 0.001, nothing, nothing, time(), device_config,
-                                gpu_workspace, gpu_memory_pool, perf_stats)
     attach_evaluator!(solver)
 
     if has_time_dependent_bcs(problem.bc_manager)
@@ -152,25 +148,25 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP}; device::Strin
     setup_domain!(problem)
     validate_problem(problem)
 
-    device_config = select_device(device)
+    
     base = SolverBaseData(problem; matsolver=matsolver)
 
     state = ScalarField[]
     for var in problem.variables
         if isa(var, ScalarField)
-            var.data_g = ensure_device!(var.data_g, device_config)
-            var.data_c = ensure_device!(var.data_c, device_config)
+            var.data_g = var.data_g
+            var.data_c = var.data_c
             push!(state, var)
         elseif isa(var, VectorField)
             for comp in var.components
-                comp.data_g = ensure_device!(comp.data_g, device_config)
-                comp.data_c = ensure_device!(comp.data_c, device_config)
+                comp.data_g = comp.data_g
+                comp.data_c = comp.data_c
             end
             append!(state, var.components)
         elseif isa(var, TensorField)
             for comp in vec(var.components)
-                comp.data_g = ensure_device!(comp.data_g, device_config)
-                comp.data_c = ensure_device!(comp.data_c, device_config)
+                comp.data_g = comp.data_g
+                comp.data_c = comp.data_c
             end
             append!(state, vec(var.components))
         end
@@ -180,9 +176,9 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP}; device::Strin
     apply_entry_cutoff!(L, base.entry_cutoff)
     apply_entry_cutoff!(M, base.entry_cutoff)
     apply_entry_cutoff!(F, base.entry_cutoff)
-    L_sparse = ensure_device!(sparse(L), device_config)
-    M_sparse = ensure_device!(sparse(M), device_config)
-    F_vec = ensure_device!(F, device_config)
+    L_sparse = sparse(L)
+    M_sparse = sparse(M)
+    F_vec = F
 
     perf_stats = SolverPerformanceStats()
 
@@ -235,7 +231,7 @@ mutable struct BoundaryValueSolver <: Solver
     max_iterations::Int
     
     # GPU support
-    device_config::DeviceConfig
+    
     gpu_matrices::Dict{String, AbstractArray}
     factorization::Union{Nothing, Any}
     performance_stats::SolverPerformanceStats
@@ -262,7 +258,7 @@ mutable struct EigenvalueSolver <: Solver
     target::Union{Nothing, ComplexF64}
     
     # GPU support
-    device_config::DeviceConfig
+    
     gpu_matrices::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
     global_solver::Any
@@ -272,17 +268,17 @@ mutable struct EigenvalueSolver <: Solver
 
 end
 
-function _build_eigenvalue_solver(problem::EVP; n_modes::Int=10, target::Union{Nothing, ComplexF64}=nothing, device::String="cpu", matsolver::Union{String,Symbol,Type}=:sparse)
+function _build_eigenvalue_solver(problem::EVP; n_modes::Int=10, target::Union{Nothing, ComplexF64}=nothing, matsolver::Union{String,Symbol,Type}=:sparse)
     setup_domain!(problem)
     validate_problem(problem)
 
-    device_config = select_device(device)
+    
     base = SolverBaseData(problem; matsolver=matsolver)
     L, M, _ = build_matrices(problem)
     apply_entry_cutoff!(L, base.entry_cutoff)
     apply_entry_cutoff!(M, base.entry_cutoff)
-    L_sparse = ensure_device!(sparse(L), device_config)
-    M_sparse = ensure_device!(sparse(M), device_config)
+    L_sparse = sparse(L)
+    M_sparse = sparse(M)
 
     problem.parameters["L_matrix"] = L_sparse
     problem.parameters["M_matrix"] = M_sparse
@@ -404,10 +400,9 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
     # Ensure all state fields are on correct device
     gpu_transfer_start = time()
     for field in solver.state
-        field.data_g = ensure_device!(field.data_g, solver.device_config)
-        field.data_c = ensure_device!(field.data_c, solver.device_config)
+        field.data_g = field.data_g
+        field.data_c = field.data_c
     end
-    solver.performance_stats.gpu_transfer_time += time() - gpu_transfer_start
     
     # Use existing timestepper infrastructure from timesteppers.jl
     # Create TimestepperState if needed
@@ -416,8 +411,8 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
         # Initialize history with current state (ensure GPU compatibility)
         state_copy = deepcopy(solver.state)
         for field in state_copy
-            field.data_g = ensure_device!(field.data_g, solver.device_config)
-            field.data_c = ensure_device!(field.data_c, solver.device_config)
+            field.data_g = field.data_g
+            field.data_c = field.data_c
         end
         push!(solver.timestepper_state.history, state_copy)
     else
@@ -433,13 +428,12 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
         solver.state = solver.timestepper_state.history[end]
         # Ensure result is on correct device
         for field in solver.state
-            field.data_g = ensure_device!(field.data_g, solver.device_config)
-            field.data_c = ensure_device!(field.data_c, solver.device_config)
+            field.data_g = field.data_g
+            field.data_c = field.data_c
         end
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(solver.device_config)
     
     # Update time and iteration
     solver.sim_time += dt
@@ -478,9 +472,9 @@ function solve!(solver::BoundaryValueSolver)
     start_time = time()
     
     # Ensure matrices and vectors are on correct device
-    solver.L_matrix = ensure_device!(solver.L_matrix, solver.device_config)
-    solver.M_matrix = ensure_device!(solver.M_matrix, solver.device_config)
-    solver.F_vector = ensure_device!(solver.F_vector, solver.device_config)
+    solver.L_matrix = solver.L_matrix
+    solver.M_matrix = solver.M_matrix
+    solver.F_vector = solver.F_vector
     
     if isa(solver.problem, LBVP)
         # Linear boundary value problem with GPU support
@@ -495,7 +489,6 @@ function solve!(solver::BoundaryValueSolver)
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(solver.device_config)
     
     # Update performance statistics
     solve_time = time() - start_time
@@ -541,12 +534,12 @@ function solve!(solver::EigenvalueSolver)
     start_time = time()
     
     # Ensure matrices are on correct device
-    solver.L_matrix = ensure_device!(solver.L_matrix, solver.device_config)
-    solver.M_matrix = ensure_device!(solver.M_matrix, solver.device_config)
+    solver.L_matrix = solver.L_matrix
+    solver.M_matrix = solver.M_matrix
     
     # Solve generalized eigenvalue problem: L * v = λ * M * v
     # Note: GPU eigenvalue solvers may have limitations, might need CPU fallback
-    if solver.device_config.device_type != CPU_DEVICE
+    if solverfalse
         @info "GPU eigenvalue solver may not be available, using CPU fallback"
         L_cpu = Array(solver.L_matrix)
         M_cpu = Array(solver.M_matrix)
@@ -561,8 +554,8 @@ function solve!(solver::EigenvalueSolver)
         end
         
         # Move results back to GPU if needed
-        solver.eigenvalues = device_array(λ, solver.device_config)
-        solver.eigenvectors = device_array(v, solver.device_config)
+        solver.eigenvalues = λ
+        solver.eigenvectors = v
     else
         # CPU solution
         if solver.target === nothing
@@ -579,7 +572,6 @@ function solve!(solver::EigenvalueSolver)
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(solver.device_config)
     
     # Update performance statistics
     solve_time = time() - start_time
@@ -1283,7 +1275,7 @@ end
 function solve_linear_gpu!(solver::BoundaryValueSolver)
     """Solve linear system using GPU-accelerated methods"""
     
-    if solver.device_config.device_type == CPU_DEVICE
+    if solver.device_type == CPU_DEVICE
         # CPU fallback
         if solver.global_solver !== nothing
             return MatSolvers.solve(solver.global_solver, solver.F_vector)
@@ -1303,7 +1295,7 @@ function solve_linear_gpu!(solver::BoundaryValueSolver)
             F_cpu = Array(solver.F_vector)
             cpu_solver = MatSolvers.solver_instance(solver.base.matsolver, L_cpu)
             solution_cpu = MatSolvers.solve(cpu_solver, F_cpu)
-            return device_array(solution_cpu, solver.device_config)
+            return solution_cpu
         end
     end
 end
@@ -1312,11 +1304,11 @@ function solve_nonlinear_gpu!(solver::BoundaryValueSolver)
     """Solve nonlinear system using GPU-accelerated Newton iteration"""
     
     # Initial guess (current state)
-    x = fields_to_vector_gpu(solver.state, solver.device_config)
+    x = fields_to_vector_gpu(solver.state, solver)
     
     for iter in 1:solver.max_iterations
         # Evaluate residual and Jacobian on GPU
-        residual, jacobian = evaluate_residual_and_jacobian_gpu(solver.problem, x, solver.device_config)
+        residual, jacobian = evaluate_residual_and_jacobian_gpu(solver.problem, x, solver)
         
         # Newton update: J * dx = -R (GPU-accelerated)
         try
@@ -1326,7 +1318,7 @@ function solve_nonlinear_gpu!(solver::BoundaryValueSolver)
             jacobian_cpu = Array(jacobian)
             residual_cpu = Array(residual)
             dx_cpu = -(jacobian_cpu \ residual_cpu)
-            dx = device_array(dx_cpu, solver.device_config)
+            dx = dx_cpu
         end
         
         x .+= dx
@@ -1343,16 +1335,16 @@ function solve_nonlinear_gpu!(solver::BoundaryValueSolver)
     end
     
     # Copy solution back
-    copy_solution_to_fields_gpu!(solver.state, x, solver.device_config)
+    copy_solution_to_fields_gpu!(solver.state, x, solver)
 end
 
-function fields_to_vector_gpu(fields::Vector{ScalarField}, device_config::DeviceConfig)
+function fields_to_vector_gpu(fields::Vector{ScalarField}, )
     """Convert field array to solution vector with GPU support"""
     
     # Ensure all fields are in coefficient space and on correct device
     for field in fields
         ensure_layout!(field, :c)
-        field.data_c = ensure_device!(field.data_c, device_config)
+        field.data_c = field.data_c
     end
     
     # Calculate total vector size
@@ -1388,11 +1380,11 @@ function fields_to_vector_gpu(fields::Vector{ScalarField}, device_config::Device
     return vector
 end
 
-function copy_solution_to_fields_gpu!(fields::Vector{ScalarField}, solution::AbstractArray, device_config::DeviceConfig)
+function copy_solution_to_fields_gpu!(fields::Vector{ScalarField}, solution::AbstractArray, )
     """Copy solution vector back to fields with GPU support"""
     
     # Ensure solution is on correct device
-    solution = ensure_device!(solution, device_config)
+    solution = solution
     
     offset = 1
     for field in fields
@@ -1407,7 +1399,7 @@ function copy_solution_to_fields_gpu!(fields::Vector{ScalarField}, solution::Abs
                 field_data = solution[offset:end_offset]
                 
                 # Ensure field coefficient data is on correct device
-                field.data_c = ensure_device!(field.data_c, device_config)
+                field.data_c = field.data_c
                 
                 # Reshape and copy data back to field
                 target_shape = size(field.data_c)
@@ -1431,14 +1423,13 @@ function copy_solution_to_fields_gpu!(fields::Vector{ScalarField}, solution::Abs
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(device_config)
 end
 
-function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, device_config::DeviceConfig)
+function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, )
     """Evaluate residual and Jacobian with GPU acceleration"""
     
     # Ensure x is on correct device
-    x = ensure_device!(x, device_config)
+    x = x
     
     # Copy solution vector back to problem fields (GPU-aware)
     copy_solution_to_fields_gpu!(problem.variables, x, device_config)
@@ -1491,7 +1482,7 @@ function evaluate_residual_and_jacobian_gpu(problem::NLBVP, x::AbstractArray, de
     return residual, jacobian
 end
 
-function evaluate_solver_expression_gpu(expr, variables, device_config::DeviceConfig)
+function evaluate_solver_expression_gpu(expr, variables, )
     """Evaluate expression with GPU acceleration"""
     
     if expr === nothing
@@ -1504,31 +1495,30 @@ function evaluate_solver_expression_gpu(expr, variables, device_config::DeviceCo
     
     # Move result to GPU
     if result_cpu.data_c !== nothing
-        result_cpu.data_c = ensure_device!(result_cpu.data_c, device_config)
+        result_cpu.data_c = result_cpu.data_c
     end
     if result_cpu.data_g !== nothing
-        result_cpu.data_g = ensure_device!(result_cpu.data_g, device_config)
+        result_cpu.data_g = result_cpu.data_g
     end
     
     return result_cpu
 end
 
 # GPU utility functions for solvers
-function move_solver_to_device!(solver::InitialValueSolver, device_config::DeviceConfig)
+function move_solver_to_device!(solver::InitialValueSolver, )
     """Move solver and all its data to specified device"""
     
-    old_device = solver.device_config
-    solver.device_config = device_config
+    old_device = solver
+    solver = device_config
     
     # Move state fields to new device
     for field in solver.state
-        field.data_g = device_array(Array(field.data_g), device_config)
-        field.data_c = device_array(Array(field.data_c), device_config)
+        field.data_g = Array(field.data_g)
+        field.data_c = Array(field.data_c)
     end
     
     # Clear GPU memory pool if changing device types
     if old_device.device_type != device_config.device_type
-        empty!(solver.gpu_memory_pool)
     end
     
     @info "Moved IVP solver from $(old_device.device_type) to $(device_config.device_type)"
@@ -1536,21 +1526,21 @@ function move_solver_to_device!(solver::InitialValueSolver, device_config::Devic
     return solver
 end
 
-function move_solver_to_device!(solver::BoundaryValueSolver, device_config::DeviceConfig)
+function move_solver_to_device!(solver::BoundaryValueSolver, )
     """Move boundary value solver and all its data to specified device"""
     
-    old_device = solver.device_config
-    solver.device_config = device_config
+    old_device = solver
+    solver = device_config
     
     # Move matrices and vectors to new device
-    solver.L_matrix = device_array(Array(solver.L_matrix), device_config)
-    solver.M_matrix = device_array(Array(solver.M_matrix), device_config)
-    solver.F_vector = device_array(Array(solver.F_vector), device_config)
+    solver.L_matrix = Array(solver.L_matrix)
+    solver.M_matrix = Array(solver.M_matrix)
+    solver.F_vector = Array(solver.F_vector)
     
     # Move state fields to new device
     for field in solver.state
-        field.data_g = device_array(Array(field.data_g), device_config)
-        field.data_c = device_array(Array(field.data_c), device_config)
+        field.data_g = Array(field.data_g)
+        field.data_c = Array(field.data_c)
     end
     
     # Clear GPU matrices cache
@@ -1566,15 +1556,13 @@ end
 function get_solver_memory_info(solver::Union{InitialValueSolver, BoundaryValueSolver})
     """Get GPU memory usage information for solver"""
     
-    if solver.device_config.device_type != CPU_DEVICE
-        memory_info = gpu_memory_info(solver.device_config)
+    if solverfalse
         
         # Estimate memory used by solver components
         solver_memory = 0
         
         if isa(solver, InitialValueSolver)
             # Estimate memory from workspace and state
-            for arr in solver.gpu_memory_pool
                 solver_memory += sizeof(arr)
             end
             for field in solver.state
@@ -1626,7 +1614,7 @@ function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueS
     if MPI.Initialized()
         rank = MPI.Comm_rank(MPI.COMM_WORLD)
         if rank == 0
-            @info "Solver performance ($(solver.device_config.device_type)):"
+            @info "Solver performance ($(solver.device_type)):"
             if isa(solver, InitialValueSolver)
                 @info "  Total steps: $(stats.total_steps)"
                 if stats.total_steps > 0
@@ -1636,10 +1624,9 @@ function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueS
                 @info "  Total solves: $(stats.total_solves)"
             end
             @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
-            @info "  GPU transfer time: $(round(stats.gpu_transfer_time, digits=3)) seconds ($(round(100*stats.gpu_transfer_time/max(stats.total_time, 1e-10), digits=1))%)"
         end
     else
-        @info "Solver performance ($(solver.device_config.device_type)):"
+        @info "Solver performance ($(solver.device_type)):"
         if isa(solver, InitialValueSolver)
             @info "  Total steps: $(stats.total_steps)"
             if stats.total_steps > 0
@@ -1649,6 +1636,5 @@ function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueS
             @info "  Total solves: $(stats.total_solves)"
         end
         @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
-        @info "  GPU transfer time: $(round(stats.gpu_transfer_time, digits=3)) seconds ($(round(100*stats.gpu_transfer_time/max(stats.total_time, 1e-10), digits=1))%)"
     end
 end

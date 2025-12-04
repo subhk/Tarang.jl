@@ -193,7 +193,7 @@ function cross_operands(a::VectorField, b::VectorField)
     end
     dist = a.dist
     coordsys = a.coordsys
-    result = VectorField(dist, coordsys, "$(a.name)_cross_$(b.name)", a.bases, a.dtype, a.device_config)
+    result = VectorField(dist, coordsys, "$(a.name)_cross_$(b.name)", a.bases, a.dtype, a)
 
     result[1] = a.components[2] * b.components[3] - a.components[3] * b.components[2]
     result[2] = a.components[3] * b.components[1] - a.components[1] * b.components[3]
@@ -220,7 +220,7 @@ function add_scalar_to_field(field::ScalarField, value::Number)
 end
 
 function constant_field_like(field::ScalarField, value::Number)
-    const_field = ScalarField(field.dist, "$(field.name)_const", field.bases, field.dtype, field.device_config)
+    const_field = ScalarField(field.dist, "$(field.name)_const", field.bases, field.dtype, field)
     ensure_layout!(const_field, :g)
     if const_field.data_g !== nothing
         fill!(const_field.data_g, convert(field.dtype, value))
@@ -232,7 +232,7 @@ function add_vector_fields(a::VectorField, b::VectorField)
     if length(a.components) != length(b.components)
         throw(ArgumentError("VectorField component mismatch for addition"))
     end
-    result = VectorField(a.dist, a.coordsys, "$(a.name)_plus_$(b.name)", a.bases, a.dtype, a.device_config)
+    result = VectorField(a.dist, a.coordsys, "$(a.name)_plus_$(b.name)", a.bases, a.dtype, a)
     for i in 1:length(a.components)
         result[i] = a.components[i] + b.components[i]
     end

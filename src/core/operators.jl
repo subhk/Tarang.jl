@@ -391,11 +391,10 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
     
     # Get device configuration from the field
-    device_config = get_device_config(operand)
     
     # Ensure data is on correct device
-    operand.data_c = ensure_device!(operand.data_c, device_config)
-    result.data_c = ensure_device!(result.data_c, device_config)
+    operand.data_c = operand.data_c
+    result.data_c = result.data_c
     
     if isa(basis, RealFourier)
         # Real Fourier case: use Dedalus approach with 2x2 group matrices
@@ -408,7 +407,6 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(device_config)
     
     if layout == :g
         backward_transform!(result)
@@ -416,7 +414,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
 end
 
 
-function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, device_config::DeviceConfig)
+function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, )
     """Real Fourier derivative following Dedalus 2x2 group matrix approach with GPU support"""
     
     # Dedalus stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
@@ -530,14 +528,14 @@ function evaluate_real_fourier_derivative_fallback!(result::ScalarField, operand
     end
 end
 
-function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, device_config::DeviceConfig)
+function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64, )
     """Complex Fourier derivative: simple multiplication by (ik)^order with GPU support"""
     
     # Complex FFT wavenumbers: [0, 1, ..., N/2-1, -N/2, -(N/2-1), ..., -1]
     k_cpu = 2π/L * [0:(N÷2-1); -(N÷2):(-1)]
     
     # Move wavenumbers to appropriate device
-    k = device_array(k_cpu, device_config)
+    k = k_cpu
     
     if device_config.device_type == CPU_DEVICE && length(operand.data_c) > 100 && order <= 3
         # CPU path without LoopVectorization to avoid macro errors
@@ -559,11 +557,10 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     ensure_layout!(result, :c)
     
     # Get device configuration from the field
-    device_config = get_device_config(operand)
     
     # Ensure data is on correct device
-    operand.data_c = ensure_device!(operand.data_c, device_config)
-    result.data_c = ensure_device!(result.data_c, device_config)
+    operand.data_c = operand.data_c
+    result.data_c = result.data_c
     
     basis = operand.bases[axis]
     N = basis.meta.size
@@ -579,7 +576,7 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     else
         # Multiple derivatives: apply single derivative 'order' times
         temp_field = ScalarField(operand.dist, "temp_deriv", operand.bases, operand.dtype)
-        temp_field.data_c = ensure_device!(temp_field.data_c, device_config)
+        temp_field.data_c = temp_field.data_c
         current_operand = operand
         
         for i in 1:order
@@ -595,14 +592,13 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(device_config)
     
     if layout == :g
         backward_transform!(result)
     end
 end
 
-function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, device_config::DeviceConfig)
+function evaluate_chebyshev_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, )
     """
     Single Chebyshev derivative using correct backward recurrence with GPU support.
     
@@ -676,11 +672,10 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     ensure_layout!(result, :c)
     
     # Get device configuration from the field
-    device_config = get_device_config(operand)
     
     # Ensure data is on correct device
-    operand.data_c = ensure_device!(operand.data_c, device_config)
-    result.data_c = ensure_device!(result.data_c, device_config)
+    operand.data_c = operand.data_c
+    result.data_c = result.data_c
     
     basis = operand.bases[axis]
     N = basis.meta.size
@@ -696,7 +691,7 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     else
         # Multiple derivatives: apply single derivative 'order' times
         temp_field = ScalarField(operand.dist, "temp_deriv", operand.bases, operand.dtype)
-        temp_field.data_c = ensure_device!(temp_field.data_c, device_config)
+        temp_field.data_c = temp_field.data_c
         current_operand = operand
         
         for i in 1:order
@@ -712,14 +707,13 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(device_config)
     
     if layout == :g
         backward_transform!(result)
     end
 end
 
-function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, device_config::DeviceConfig)
+function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, )
     """
     Single Legendre derivative using Dedalus Jacobi approach with GPU support.
     
@@ -1222,7 +1216,7 @@ struct MultiplyOperator <: Operator
 end
 
 # GPU utility functions for operators
-function to_device!(operator::Operator, device_config::DeviceConfig)
+function to_device!(operator::Operator, )
     """Move operator data to specified device"""
     
     # For most operators, there's no persistent data to move
@@ -1230,14 +1224,12 @@ function to_device!(operator::Operator, device_config::DeviceConfig)
     return operator
 end
 
-function get_device_config(operand::Operand)
     """Get device configuration from operand"""
     if hasfield(typeof(operand), :device_config)
-        return operand.device_config
+        return operand
     elseif hasfield(typeof(operand), :meta) && hasfield(typeof(operand.meta), :device_config)
-        return operand.meta.device_config
+        return operand.meta
     else
-        return get_device_config()  # Global default
     end
 end
 
@@ -1256,15 +1248,14 @@ function evaluate_gradient_gpu(grad_op::Gradient, layout::Symbol=:g)
     
     if isa(operand, ScalarField)
         # Get device configuration
-        device_config = get_device_config(operand)
         
         # Create vector field for result on same device
         result = VectorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
         
         # Ensure result components are on correct device
         for i in 1:length(result.components)
-            result.components[i].data_g = ensure_device!(result.components[i].data_g, device_config)
-            result.components[i].data_c = ensure_device!(result.components[i].data_c, device_config)
+            result.components[i].data_g = result.components[i].data_g
+            result.components[i].data_c = result.components[i].data_c
         end
         
         # Compute partial derivatives for each component
@@ -1275,7 +1266,6 @@ function evaluate_gradient_gpu(grad_op::Gradient, layout::Symbol=:g)
         end
         
         # Synchronize GPU operations
-        gpu_synchronize(device_config)
         
         return result
     else
@@ -1288,12 +1278,11 @@ function evaluate_laplacian_gpu(lap_op::Laplacian, layout::Symbol=:g)
     operand = lap_op.operand
     
     if isa(operand, ScalarField)
-        device_config = get_device_config(operand)
         
         # Create result field on same device
         result = ScalarField(operand.dist, "lap_$(operand.name)", operand.bases, operand.dtype)
-        result.data_g = ensure_device!(result.data_g, device_config)
-        result.data_c = ensure_device!(result.data_c, device_config)
+        result.data_g = result.data_g
+        result.data_c = result.data_c
         
         # Initialize result to zero
         ensure_layout!(result, layout)
@@ -1309,7 +1298,6 @@ function evaluate_laplacian_gpu(lap_op::Laplacian, layout::Symbol=:g)
             result = result + second_deriv
         end
         
-        gpu_synchronize(device_config)
         return result
         
     else

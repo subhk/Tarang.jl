@@ -20,12 +20,11 @@ mutable struct DistributorPerformanceStats
     pencil_creations::Int
     layout_creations::Int
     mpi_operations::Int
-    gpu_transfers::Int
     cache_hits::Int
     cache_misses::Int
-    
+
     function DistributorPerformanceStats()
-        new(0.0, 0, 0, 0, 0, 0, 0)
+        new(0.0, 0, 0, 0, 0, 0)
     end
 end
 
@@ -45,25 +44,16 @@ mutable struct Distributor
     pencil_config::Union{Nothing, PencilConfig}
     transforms::Vector{Any}
 
-    # GPU-PencilArrays compatibility
-    gpu_pencil_config::Union{Nothing, GPUPencilConfig}
-
     # Layout cache
     layouts::Dict{Any, Layout}
 
-    # GPU support
-    device_config::DeviceConfig
-    gpu_memory_pool::Vector{AbstractArray}
+    # Performance tracking
     performance_stats::DistributorPerformanceStats
-
-    # Multi-GPU support (optional)
-    multi_gpu_config::Union{Nothing, MultiGPUConfig}
     
-    function Distributor(coordsys::CoordinateSystem; 
-                        comm::MPI.Comm=MPI.COMM_WORLD, 
+    function Distributor(coordsys::CoordinateSystem;
+                        comm::MPI.Comm=MPI.COMM_WORLD,
                         mesh::Union{Nothing, Tuple{Vararg{Int}}}=nothing,
-                        dtype::Type=Float64,
-                        device::String="cpu")
+                        dtype::Type=Float64)
         
         size = MPI.Comm_size(comm)
         rank = MPI.Comm_rank(comm)
@@ -101,32 +91,21 @@ mutable struct Distributor
         pencil_config = nothing
         transforms = Any[]
         layouts = Dict{Any, Layout}()
-
-        # Initialize GPU support
-        device_config = select_device(device)
-        gpu_memory_pool = AbstractArray[]
         perf_stats = DistributorPerformanceStats()
 
-        # Initialize GPU-PencilArrays compatibility (but don't create config yet)
-        gpu_pencil_config = nothing
-
-        # Initialize multi-GPU config (optional - created when needed)
-        multi_gpu_config = nothing
-
         new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
-            use_pencil_arrays, pencil_config, transforms, gpu_pencil_config, layouts,
-            device_config, gpu_memory_pool, perf_stats, multi_gpu_config)
+            use_pencil_arrays, pencil_config, transforms, layouts, perf_stats)
     end
 end
 
 
 function setup_pencil_arrays(dist::Distributor, global_shape::Tuple{Vararg{Int}})
-    """Setup PencilArrays configuration for given global shape with GPU compatibility"""
-    
+    """Setup PencilArrays configuration for given global shape"""
+
     if length(global_shape) != length(dist.mesh)
         throw(ArgumentError("Global shape dimensions must match mesh dimensions"))
     end
-    
+
     # Create standard PencilArrays configuration
     if length(dist.mesh) == 2
         # Both dimensions can be distributed
@@ -134,75 +113,38 @@ function setup_pencil_arrays(dist::Distributor, global_shape::Tuple{Vararg{Int}}
     else
         decomp_dims = ntuple(i -> true, length(dist.mesh))
     end
-    
+
     dist.pencil_config = PencilConfig(
         global_shape,
         dist.mesh,
         comm=dist.comm,
         decomp_dims=decomp_dims
     )
-    
-    # Create GPU-PencilArrays compatibility configuration
-    dist.gpu_pencil_config = create_optimized_gpu_pencil_config(
-        global_shape, 
-        dist.mesh,
-        device=dist.device_config.device_type == CPU_DEVICE ? "cpu" : "cuda",  # Simplified for now
-        comm=dist.comm
-    )
-    
-    # Log recommendations
-    if dist.device_config.device_type != CPU_DEVICE
-        @info """GPU-PencilArrays Setup Complete:
-        PencilArrays.jl currently has limitations with GPU support.
-        Using hybrid approach:
-        - Distributed operations: CPU (stable)
-        - Local computations: GPU ($(dist.device_config.device_type))
-        - Smart data transfers as needed
-        
-        This provides optimal performance/stability until PencilArrays GPU support matures.
-        """
-    end
-    
+
     return dist.pencil_config
 end
 
-function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}}, 
+function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
                       decomp_index::Int=1; dtype::Type=dist.dtype)
-    """Create a pencil array with specified decomposition with GPU support"""
-    
+    """Create a pencil array with specified decomposition"""
+
     start_time = time()
-    
+
     if dist.pencil_config === nothing
         setup_pencil_arrays(dist, global_shape)
     end
-    
+
     pencil = PencilArrays.Pencil(dist.pencil_config, decomp_index, dtype)
-    
-    # Move pencil data to GPU if needed
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            # Convert pencil data to GPU arrays if possible
-            # Note: This depends on PencilArrays GPU support implementation
-            pencil_data = ensure_device!(pencil.data, dist.device_config)
-            
-            # Store in memory pool for management
-            push!(dist.gpu_memory_pool, pencil_data)
-            
-            # Update performance stats
-            dist.performance_stats.total_time += time() - start_time
-            dist.performance_stats.pencil_creations += 1
-            
-            gpu_synchronize(dist.device_config)
-        catch e
-            @warn "GPU pencil creation failed, falling back to CPU: $e"
-        end
-    end
-    
+
+    # Update performance stats
+    dist.performance_stats.total_time += time() - start_time
+    dist.performance_stats.pencil_creations += 1
+
     return pencil
 end
 
 function get_layout(dist::Distributor, bases::Tuple{Vararg{Basis}}, dtype::Type=dist.dtype)
-    """Get layout for given bases with GPU support"""
+    """Get layout for given bases"""
     
     start_time = time()
     
@@ -234,59 +176,20 @@ function get_layout(dist::Distributor, bases::Tuple{Vararg{Basis}}, dtype::Type=
 end
 
 function Field(dist::Distributor; name::String="field", bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
-    """Create a scalar field with GPU support"""
+    """Create a scalar field"""
     field = ScalarField(dist, name, bases, dtype)
-    
-    # Move field data to GPU if configured
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            field.data = ensure_device!(field.data, dist.device_config)
-            push!(dist.gpu_memory_pool, field.data)
-        catch e
-            @warn "GPU field creation failed, using CPU: $e"
-        end
-    end
-    
     return field
 end
 
 function VectorField(dist::Distributor, coordsys::CoordinateSystem; name::String="vector", bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
-    """Create a vector field with GPU support"""
+    """Create a vector field"""
     field = VectorField(dist, coordsys, name, bases, dtype)
-    
-    # Move field components to GPU if configured
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            for i in 1:length(field.components)
-                field.components[i].data = ensure_device!(field.components[i].data, dist.device_config)
-                push!(dist.gpu_memory_pool, field.components[i].data)
-            end
-        catch e
-            @warn "GPU vector field creation failed, using CPU: $e"
-        end
-    end
-    
     return field
 end
 
 function TensorField(dist::Distributor, coordsys::CoordinateSystem; name::String="tensor", bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
-    """Create a tensor field with GPU support"""
+    """Create a tensor field"""
     field = TensorField(dist, coordsys, name, bases, dtype)
-    
-    # Move tensor components to GPU if configured
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            for i in 1:size(field.components, 1)
-                for j in 1:size(field.components, 2)
-                    field.components[i,j].data = ensure_device!(field.components[i,j].data, dist.device_config)
-                    push!(dist.gpu_memory_pool, field.components[i,j].data)
-                end
-            end
-        catch e
-            @warn "GPU tensor field creation failed, using CPU: $e"
-        end
-    end
-    
     return field
 end
 
@@ -391,260 +294,104 @@ function last_axis(dist::Distributor, basis::Basis)
     return first_axis(dist, basis) + basis.meta.dim - 1
 end
 
-# GPU+MPI communication helpers
+# MPI communication helpers
 function gather_array(dist::Distributor, local_array::AbstractArray)
-    """Gather array from all processes with GPU support"""
-    
+    """Gather array from all processes"""
+
     start_time = time()
-    
-    # Move to CPU for MPI operations if needed
-    cpu_array = if dist.device_config.device_type != CPU_DEVICE && isa(local_array, AbstractGPUArray)
-        Array(local_array)
-    else
-        local_array
-    end
-    
-    result = MPI.Allgather(cpu_array, dist.comm)
-    
-    # Move result back to GPU if needed
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            result = ensure_device!(result, dist.device_config)
-            gpu_synchronize(dist.device_config)
-        catch e
-            @warn "GPU gather result transfer failed: $e"
-        end
-    end
-    
+
+    result = MPI.Allgather(local_array, dist.comm)
+
     # Update performance stats
     dist.performance_stats.mpi_operations += 1
     dist.performance_stats.total_time += time() - start_time
-    
+
     return result
 end
 
 function scatter_array(dist::Distributor, global_array::AbstractArray)
-    """Scatter array to all processes with GPU support"""
-    
+    """Scatter array to all processes"""
+
     start_time = time()
-    
-    # Move to CPU for MPI operations if needed
-    cpu_array = if dist.device_config.device_type != CPU_DEVICE && isa(global_array, AbstractGPUArray)
-        Array(global_array)
-    else
-        global_array
-    end
-    
-    local_size = div(length(cpu_array), dist.size)
-    local_array = zeros(eltype(cpu_array), local_size)
-    MPI.Scatter!(cpu_array, local_array, 0, dist.comm)
-    
-    # Move result to GPU if needed
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            local_array = ensure_device!(local_array, dist.device_config)
-            gpu_synchronize(dist.device_config)
-        catch e
-            @warn "GPU scatter result transfer failed: $e"
-        end
-    end
-    
+
+    local_size = div(length(global_array), dist.size)
+    local_array = zeros(eltype(global_array), local_size)
+    MPI.Scatter!(global_array, local_array, 0, dist.comm)
+
     # Update performance stats
     dist.performance_stats.mpi_operations += 1
     dist.performance_stats.total_time += time() - start_time
-    
+
     return local_array
 end
 
 function allreduce_array(dist::Distributor, local_array::AbstractArray, op=MPI.SUM)
-    """All-reduce operation on array with GPU support"""
-    
+    """All-reduce operation on array"""
+
     start_time = time()
-    
-    # Move to CPU for MPI operations if needed
-    cpu_array = if dist.device_config.device_type != CPU_DEVICE && isa(local_array, AbstractGPUArray)
-        Array(local_array)
-    else
-        local_array
-    end
-    
-    result = similar(cpu_array)
-    MPI.Allreduce!(cpu_array, result, op, dist.comm)
-    
-    # Move result back to GPU if needed
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            result = ensure_device!(result, dist.device_config)
-            gpu_synchronize(dist.device_config)
-        catch e
-            @warn "GPU allreduce result transfer failed: $e"
-        end
-    end
-    
+
+    result = similar(local_array)
+    MPI.Allreduce!(local_array, result, op, dist.comm)
+
     # Update performance stats
     dist.performance_stats.mpi_operations += 1
     dist.performance_stats.total_time += time() - start_time
-    
+
     return result
 end
 
-# GPU-specific distributor functions
-function move_distributor_to_device!(dist::Distributor, device_config::DeviceConfig)
-    """Move distributor data to specified device"""
-    
-    start_time = time()
-    old_device = dist.device_config
-    dist.device_config = device_config
-    
-    # Move memory pool arrays to new device
-    new_pool = AbstractArray[]
-    for array in dist.gpu_memory_pool
-        try
-            new_array = ensure_device!(Array(array), device_config)
-            push!(new_pool, new_array)
-        catch e
-            @warn "Failed to move array to device: $e"
-        end
-    end
-    dist.gpu_memory_pool = new_pool
-    
-    # Update cached layouts if they contain device-specific data
-    for (key, layout) in dist.layouts
-        if hasfield(typeof(layout.dist), :data)
-            try
-                layout.dist.data = ensure_device!(Array(layout.dist.data), device_config)
-            catch e
-                @warn "Failed to move layout data to device: $e"
-            end
-        end
-    end
-    
-    # Update performance stats
-    dist.performance_stats.gpu_transfers += 1
-    dist.performance_stats.total_time += time() - start_time
-    
-    @info "Moved distributor from $(old_device.device_type) to $(device_config.device_type)"
-    
-    return dist
-end
-
 function clear_distributor_cache!(dist::Distributor)
-    """Clear GPU caches and memory pool for distributor"""
-    
-    # Clear memory pool
-    empty!(dist.gpu_memory_pool)
-    
+    """Clear caches for distributor"""
+
     # Clear layout cache
     empty!(dist.layouts)
-    
+
     # Reset PencilArrays configuration if needed
     dist.pencil_config = nothing
-    
-    @info "Cleared distributor caches ($(dist.device_config.device_type))"
-    
+
+    @info "Cleared distributor caches"
+
     return dist
 end
 
 function get_distributor_memory_info(dist::Distributor)
-    """Get GPU memory usage information for distributor"""
-    
-    if dist.device_config.device_type != CPU_DEVICE
-        memory_info = gpu_memory_info(dist.device_config)
-        
-        # Estimate memory used by distributor
-        distributor_memory = 0
-        
-        for array in dist.gpu_memory_pool
-            distributor_memory += sizeof(array)
-        end
-        
-        # Add layout memory
-        for (key, layout) in dist.layouts
-            if hasfield(typeof(layout.dist), :data) && isa(layout.dist.data, AbstractArray)
-                distributor_memory += sizeof(layout.dist.data)
-            end
-        end
-        
-        return (
-            total_memory = memory_info.total,
-            available_memory = memory_info.available,
-            used_memory = memory_info.used,
-            distributor_memory = distributor_memory,
-            memory_utilization = distributor_memory / memory_info.total * 100,
-            pool_arrays = length(dist.gpu_memory_pool),
-            cached_layouts = length(dist.layouts)
-        )
-    else
-        return (
-            total_memory = typemax(Int64),
-            available_memory = typemax(Int64),
-            used_memory = 0,
-            distributor_memory = 0,
-            memory_utilization = 0.0,
-            pool_arrays = length(dist.gpu_memory_pool),
-            cached_layouts = length(dist.layouts)
-        )
-    end
+    """Get memory usage information for distributor"""
+
+    return (
+        cached_layouts = length(dist.layouts)
+    )
 end
 
 function log_distributor_performance(dist::Distributor)
     """Log distributor performance statistics"""
-    
+
     stats = dist.performance_stats
-    
-    @info "Distributor performance ($(dist.device_config.device_type)):"
+
+    @info "Distributor performance:"
     @info "  Pencil creations: $(stats.pencil_creations)"
     @info "  Layout creations: $(stats.layout_creations)"
     @info "  MPI operations: $(stats.mpi_operations)"
-    @info "  GPU transfers: $(stats.gpu_transfers)"
     @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
     @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses"
-    
+
     # Memory usage
     mem_info = get_distributor_memory_info(dist)
-    @info "  GPU memory usage: $(round(mem_info.distributor_memory / 1024^2, digits=2)) MB ($(round(mem_info.memory_utilization, digits=1))%)"
-    @info "  Memory pool: $(mem_info.pool_arrays) arrays, Cached layouts: $(mem_info.cached_layouts)"
+    @info "  Cached layouts: $(mem_info.cached_layouts)"
 end
 
-# Enhanced MPI+GPU communication functions
-function gpu_aware_alltoall(dist::Distributor, send_data::AbstractArray, recv_data::AbstractArray)
-    """GPU-aware all-to-all communication"""
-    
+# MPI communication functions
+function mpi_alltoall(dist::Distributor, send_data::AbstractArray, recv_data::AbstractArray)
+    """All-to-all communication"""
+
     start_time = time()
-    
-    # Move to CPU for MPI if needed
-    send_cpu = if dist.device_config.device_type != CPU_DEVICE && isa(send_data, AbstractGPUArray)
-        Array(send_data)
-    else
-        send_data
-    end
-    
-    recv_cpu = if dist.device_config.device_type != CPU_DEVICE && isa(recv_data, AbstractGPUArray)
-        Array(recv_data)
-    else
-        recv_data
-    end
-    
+
     # Perform MPI all-to-all
-    MPI.Alltoall!(send_cpu, recv_cpu, dist.comm)
-    
-    # Move back to GPU if needed
-    if dist.device_config.device_type != CPU_DEVICE
-        try
-            recv_data .= ensure_device!(recv_cpu, dist.device_config)
-            gpu_synchronize(dist.device_config)
-        catch e
-            @warn "GPU alltoall result transfer failed: $e"
-            recv_data .= recv_cpu
-        end
-    else
-        recv_data .= recv_cpu
-    end
-    
+    MPI.Alltoall!(send_data, recv_data, dist.comm)
+
     # Update performance stats
     dist.performance_stats.mpi_operations += 1
     dist.performance_stats.total_time += time() - start_time
-    
+
     return recv_data
 end
 

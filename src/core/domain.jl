@@ -27,13 +27,12 @@ mutable struct Domain
     dim::Int
     
     # GPU support
-    device_config::DeviceConfig
+    
     grid_coordinates::Dict{String, AbstractArray}  # Cached grid coordinates on device
     integration_weights_cache::Dict{String, AbstractArray}  # Cached integration weights on device
     performance_stats::DomainPerformanceStats
     attribute_cache::Dict{Symbol, Any}
     
-    function Domain(dist::Distributor, bases::Tuple{Vararg{Basis}}; device::Union{String, DeviceConfig}="cpu")
         # Filter out nothing bases and remove duplicates
         filtered_bases = filter(b -> b !== nothing, bases)
         unique_bases = unique(filtered_bases)
@@ -51,7 +50,6 @@ mutable struct Domain
         total_dim = sum(basis.meta.dim for basis in sorted_bases)
         
         # Initialize GPU support
-        device_config = device isa String ? select_device(device) : device
         grid_coords = Dict{String, AbstractArray}()
         weights_cache = Dict{String, AbstractArray}()
         perf_stats = DomainPerformanceStats()
@@ -187,7 +185,7 @@ function substitute_basis(domain::Domain, old_basis::Basis, new_basis::Basis)
         deleteat!(bases_vec, idx)
     end
     push!(bases_vec, new_basis)
-    return Domain(domain.dist, tuple(bases_vec...); device=domain.device_config)
+    return Domain(domain.dist, tuple(bases_vec...); device=domain)
 end
 
 function get_basis(domain::Domain, coords)
@@ -341,7 +339,7 @@ function integration_weights(domain::Domain)
             # Uniform weights for Fourier
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
             dx = L / basis.meta.size
-            device_fill(dx, (basis.meta.size,), domain.device_config)
+            device_fill(dx, (basis.meta.size,), domain)
         elseif isa(basis, ChebyshevT)
             # Clenshaw-Curtis weights for Chebyshev
             N = basis.meta.size
@@ -351,17 +349,17 @@ function integration_weights(domain::Domain)
             # Scale by interval length
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
             w_cpu .*= L / (N - 1)
-            device_array(w_cpu, domain.device_config)
+            w_cpu
         elseif isa(basis, Legendre)
             # Gauss-Legendre weights
             N = basis.meta.size
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
-            device_fill(L/N, (N,), domain.device_config)  # Placeholder - uniform weights
+            device_fill(L/N, (N,), domain)  # Placeholder - uniform weights
         else
             # Default uniform weights
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
             dx = L / basis.meta.size
-            device_fill(dx, (basis.meta.size,), domain.device_config)
+            device_fill(dx, (basis.meta.size,), domain)
         end
         
         # Cache the weights on GPU
@@ -370,7 +368,6 @@ function integration_weights(domain::Domain)
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(domain.device_config)
     
     # Update performance statistics
     domain.performance_stats.total_time += time() - start_time
@@ -418,7 +415,7 @@ function get_grid_coordinates_gpu(domain::Domain)
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
             dx = L / basis.meta.size
             x_range = range(basis.meta.bounds[1], length=basis.meta.size, step=dx)
-            device_array(collect(x_range), domain.device_config)
+            collect(x_range)
         elseif isa(basis, ChebyshevT)
             # Chebyshev-Gauss-Lobatto points
             N = basis.meta.size
@@ -427,15 +424,15 @@ function get_grid_coordinates_gpu(domain::Domain)
             cheb_points = [cos(π * (2*k - 1) / (2*N)) for k in N:-1:1]
             # Map to [a, b]
             x_points = [(b - a) * (p + 1) / 2 + a for p in cheb_points]
-            device_array(x_points, domain.device_config)
+            x_points
         elseif isa(basis, Legendre)
             # Gauss-Legendre points (placeholder - uniform grid)
             x_range = range(basis.meta.bounds[1], basis.meta.bounds[2], length=basis.meta.size)
-            device_array(collect(x_range), domain.device_config)
+            collect(x_range)
         else
             # Default uniform grid
             x_range = range(basis.meta.bounds[1], basis.meta.bounds[2], length=basis.meta.size)
-            device_array(collect(x_range), domain.device_config)
+            collect(x_range)
         end
         
         # Cache coordinates on GPU
@@ -444,7 +441,6 @@ function get_grid_coordinates_gpu(domain::Domain)
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(domain.device_config)
     
     # Update performance statistics
     domain.performance_stats.total_time += time() - start_time
@@ -482,8 +478,8 @@ function create_meshgrid_gpu(domain::Domain)
         y_coords = coords[y_name]
         
         # Create GPU meshgrid
-        X = device_array(repeat(Array(x_coords)', length(y_coords), 1), domain.device_config)
-        Y = device_array(repeat(Array(y_coords), 1, length(x_coords)), domain.device_config)
+        X = repeat(Array(x_coords)', 1), domain)
+        Y = repeat(Array(y_coords)), domain)
         
         return Dict(x_name => X, y_name => Y)
     elseif length(domain.bases) == 3
@@ -499,9 +495,9 @@ function create_meshgrid_gpu(domain::Domain)
         nx, ny, nz = length(x_coords), length(y_coords), length(z_coords)
         
         # Create 3D meshgrids on GPU
-        X = device_array(repeat(reshape(x_coords, (nx, 1, 1)), 1, ny, nz), domain.device_config)
-        Y = device_array(repeat(reshape(y_coords, (1, ny, 1)), nx, 1, nz), domain.device_config)
-        Z = device_array(repeat(reshape(z_coords, (1, 1, nz)), nx, ny, 1), domain.device_config)
+        X = repeat(reshape(x_coords), 1, ny, nz), domain)
+        Y = repeat(reshape(y_coords), nx, 1, nz), domain)
+        Z = repeat(reshape(z_coords), nx, ny, 1), domain)
         
         return Dict(x_name => X, y_name => Y, z_name => Z)
     else
@@ -512,7 +508,7 @@ end
 function domain_volume_gpu(domain::Domain)
     """Calculate domain volume using GPU acceleration"""
     
-    vol = device_ones(Float64, (1,), domain.device_config)[1]
+    vol = device_ones(Float64, (1,), domain)[1]
     
     for basis in domain.bases
         interval_length = basis.meta.bounds[2] - basis.meta.bounds[1]
@@ -522,20 +518,20 @@ function domain_volume_gpu(domain::Domain)
     return vol
 end
 
-function move_domain_to_device!(domain::Domain, device_config::DeviceConfig)
+function move_domain_to_device!(domain::Domain, )
     """Move domain data to specified device"""
     
-    old_device = domain.device_config
-    domain.device_config = device_config
+    old_device = domain
+    domain = device_config
     
     # Move cached grid coordinates
     for (key, coords) in domain.grid_coordinates
-        domain.grid_coordinates[key] = device_array(Array(coords), device_config)
+        domain.grid_coordinates[key] = Array(coords)
     end
     
     # Move cached integration weights
     for (key, weights) in domain.integration_weights_cache
-        domain.integration_weights_cache[key] = device_array(Array(weights), device_config)
+        domain.integration_weights_cache[key] = Array(weights)
     end
     
     @info "Moved domain from $(old_device.device_type) to $(device_config.device_type)"
@@ -546,8 +542,7 @@ end
 function get_domain_memory_info(domain::Domain)
     """Get GPU memory usage information for domain"""
     
-    if domain.device_config.device_type != CPU_DEVICE
-        memory_info = gpu_memory_info(domain.device_config)
+    if domainfalse
         
         # Estimate memory used by domain caches
         domain_memory = 0
@@ -583,7 +578,7 @@ function log_domain_performance(domain::Domain)
     
     stats = domain.performance_stats
     
-    @info "Domain performance ($(domain.device_config.device_type)):"
+    @info "Domain performance ($(domain.device_type)):"
     @info "  Coordinate generations: $(stats.coordinate_generations)"
     @info "  Weight computations: $(stats.weight_computations)"
     @info "  Total time: $(round(stats.total_time, digits=3)) seconds"

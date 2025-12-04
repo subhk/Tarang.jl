@@ -37,9 +37,8 @@ mutable struct OptimizedInitialValueSolver <: Solver
     workspace_matrices::Dict{String, Matrix{Float64}}
     
     # GPU support
-    device_config::DeviceConfig
+    
     gpu_workspace::Dict{String, AbstractArray}
-    gpu_memory_pool::Vector{AbstractArray}
     performance_stats::SolverPerformanceStats
     
     function OptimizedInitialValueSolver(problem::IVP, timestepper; 
@@ -49,11 +48,10 @@ mutable struct OptimizedInitialValueSolver <: Solver
                                        device::String="cpu")
         
         # Initialize device configuration
-        device_config = select_device(device)
+        
         
         # Initialize GPU workspace and performance tracking
         gpu_workspace = Dict{String, AbstractArray}()
-        gpu_memory_pool = AbstractArray[]
         perf_stats = SolverPerformanceStats()
         
         solver = new(problem, timestepper, 0.0, 0, 10.0, nothing, nothing,
@@ -62,7 +60,6 @@ mutable struct OptimizedInitialValueSolver <: Solver
                     use_optimized_linalg, preallocate_workspace, monitor_performance,
                     Dict{String, Vector{Float64}}(),
                     Dict{String, Matrix{Float64}}(),
-                    device_config, gpu_workspace, gpu_memory_pool, perf_stats)
         
         # Initialize optimized operators
         if use_optimized_linalg
@@ -95,7 +92,7 @@ mutable struct OptimizedBoundaryValueSolver <: Solver
     use_preconditioning::Bool
     
     # GPU support
-    device_config::DeviceConfig
+    
     gpu_workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
     
@@ -107,7 +104,7 @@ mutable struct OptimizedBoundaryValueSolver <: Solver
                                         device::String="cpu")
         
         # Initialize device configuration
-        device_config = select_device(device)
+        
         
         # Determine problem size
         n_vars = length(problem.variables)
@@ -282,10 +279,9 @@ function step!(solver::OptimizedInitialValueSolver, dt::Float64)
     # Get current state (GPU-aware)
     state = get_state_vector_gpu(solver)
     
-    solver.performance_stats.gpu_transfer_time += time() - gpu_transfer_start
     
     # Apply timestepper with optimized operations
-    if solver.use_optimized_linalg && solver.device_config.device_type != CPU_DEVICE
+    if solver.use_optimized_linalg && solverfalse
         new_state = optimized_timestep_gpu!(solver, state, dt)
     elseif solver.use_optimized_linalg
         new_state = optimized_timestep!(solver, state, dt)
@@ -296,10 +292,8 @@ function step!(solver::OptimizedInitialValueSolver, dt::Float64)
     # Update state (GPU-aware)
     gpu_transfer_start = time()
     set_state_vector_gpu!(solver, new_state)
-    solver.performance_stats.gpu_transfer_time += time() - gpu_transfer_start
     
     # Synchronize GPU operations
-    gpu_synchronize(solver.device_config)
     
     # Update time and iteration
     solver.sim_time += dt
@@ -311,7 +305,7 @@ function step!(solver::OptimizedInitialValueSolver, dt::Float64)
         solver.performance_stats.total_steps += 1
         
         if solver.iteration % 100 == 0  # Log every 100 steps
-            @info "Step $(solver.iteration) ($(solver.device_config.device_type)): $(round(step_time*1000, digits=2))ms"
+            @info "Step $(solver.iteration) ($(solver.device_type)): $(round(step_time*1000, digits=2))ms"
             print_linalg_stats()
         end
     end
@@ -438,15 +432,14 @@ end
 function solve!(solver::OptimizedBoundaryValueSolver)
     """Solve boundary value problem with optimized linear algebra and GPU acceleration"""
     
-    @info "Solving boundary value problem on $(solver.device_config.device_type)..."
+    @info "Solving boundary value problem on $(solver.device_type)..."
     start_time = time()
     
     # Ensure all data is on correct device
     gpu_transfer_start = time()
-    solver.LHS_matrix = ensure_device!(solver.LHS_matrix, solver.device_config)
-    solver.RHS_vector = ensure_device!(solver.RHS_vector, solver.device_config)
-    solver.solution_vector = ensure_device!(solver.solution_vector, solver.device_config)
-    solver.performance_stats.gpu_transfer_time += time() - gpu_transfer_start
+    solver.LHS_matrix = solver.LHS_matrix
+    solver.RHS_vector = solver.RHS_vector
+    solver.solution_vector = solver.solution_vector
     
     if solver.solver_type == :direct
         solve_direct_optimized_gpu!(solver)
@@ -455,13 +448,12 @@ function solve!(solver::OptimizedBoundaryValueSolver)
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(solver.device_config)
     
     solve_time = time() - start_time
     solver.performance_stats.total_time += solve_time
     solver.performance_stats.total_solves += 1
     
-    @info "Solution completed in $(round(solve_time, digits=3))s on $(solver.device_config.device_type)"
+    @info "Solution completed in $(round(solve_time, digits=3))s on $(solver.device_type)"
     
     # Update solution in problem variables (GPU-aware)
     distribute_solution_gpu!(solver)
@@ -1584,7 +1576,7 @@ function optimized_timestep_gpu!(solver::OptimizedInitialValueSolver, state::Abs
     """Perform GPU-accelerated optimized timestep"""
     
     # Ensure state is on correct device
-    state = ensure_device!(state, solver.device_config)
+    state = state
     
     problem = solver.problem
     timestepper = solver.timestepper
@@ -1604,7 +1596,7 @@ function optimized_timestep_gpu!(solver::OptimizedInitialValueSolver, state::Abs
         # Fall back to CPU optimization
         state_cpu = Array(state)
         result_cpu = optimized_timestep!(solver, state_cpu, dt)
-        return device_array(result_cpu, solver.device_config)
+        return result_cpu
     end
 end
 
@@ -1635,7 +1627,7 @@ function optimized_runge_kutta_step_gpu!(solver::OptimizedInitialValueSolver, st
     evaluate_rhs_optimized_gpu!(k4, solver, temp_state, solver.sim_time + dt)
     
     # Final update: y_new = y + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
-    new_state = device_similar(state, solver.device_config)
+    new_state = device_similar(state, solver)
     @. new_state = state + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
     
     return new_state
@@ -1655,7 +1647,7 @@ function optimized_imex_step_gpu!(solver::OptimizedInitialValueSolver, state::Ab
     
     # Right-hand side: M*y_old + dt*explicit_rhs
     if haskey(solver.linear_operators, "M_combined")
-        optimized_matvec_gpu!(implicit_rhs, solver.linear_operators["M_combined"], state, solver.device_config)
+        optimized_matvec_gpu!(implicit_rhs, solver.linear_operators["M_combined"], state, solver)
     else
         implicit_rhs .= state  # Identity mass matrix
     end
@@ -1682,7 +1674,7 @@ function evaluate_rhs_optimized_gpu!(rhs::AbstractArray, solver::OptimizedInitia
     for (op_name, op) in solver.linear_operators
         if startswith(op_name, "L_")
             temp_result = get_temp_array_gpu(solver, size(state))
-            optimized_matvec_gpu!(temp_result, op, state, solver.device_config)
+            optimized_matvec_gpu!(temp_result, op, state, solver)
             rhs .+= temp_result
             return_temp_array_gpu!(solver, temp_result)
         end
@@ -1706,24 +1698,24 @@ function add_nonlinear_terms_optimized_gpu!(rhs::AbstractArray, solver::Optimize
     nothing
 end
 
-function optimized_matvec_gpu!(result::AbstractArray, op, input::AbstractArray, device_config::DeviceConfig)
+function optimized_matvec_gpu!(result::AbstractArray, op, input::AbstractArray, )
     """GPU-optimized matrix-vector product"""
     
     # Ensure arrays are on correct device
-    input = ensure_device!(input, device_config)
-    result = ensure_device!(result, device_config)
+    input = input
+    result = result
     
     if device_config.device_type != CPU_DEVICE
         # Use GPU-accelerated linear algebra
         if hasfield(typeof(op), :matrix)
-            op_matrix = ensure_device!(op.matrix, device_config)
+            op_matrix = op.matrix
             result .= op_matrix * input
         else
             @warn "GPU matrix-vector product not available for $(typeof(op)), using CPU fallback"
             input_cpu = Array(input)
             result_cpu = Array(result)
             optimized_matvec!(result_cpu, op, input_cpu)
-            result .= device_array(result_cpu, device_config)
+            result .= result_cpu
         end
     else
         # CPU optimized operation
@@ -1735,10 +1727,10 @@ function solve_implicit_system_optimized_gpu!(solution::AbstractArray, solver::O
     """Solve implicit system using GPU-optimized methods"""
     
     # Ensure arrays are on correct device
-    rhs = ensure_device!(rhs, solver.device_config)
-    solution = ensure_device!(solution, solver.device_config)
+    rhs = rhs
+    solution = solution
     
-    if solver.device_config.device_type != CPU_DEVICE
+    if solverfalse
         # GPU-accelerated solve
         try
             # Would use GPU-optimized solver here
@@ -1748,7 +1740,7 @@ function solve_implicit_system_optimized_gpu!(solution::AbstractArray, solver::O
             rhs_cpu = Array(rhs)
             solution_cpu = Array(solution)
             solve_implicit_system_optimized!(solution_cpu, solver, rhs_cpu)
-            solution .= device_array(solution_cpu, solver.device_config)
+            solution .= solution_cpu
         end
     else
         # CPU optimized solve
@@ -1759,14 +1751,14 @@ end
 function solve_direct_optimized_gpu!(solver::OptimizedBoundaryValueSolver)
     """Direct solve using GPU-optimized factorization"""
     
-    if solver.device_config.device_type == CPU_DEVICE
+    if solver.device_type == CPU_DEVICE
         # CPU optimized solve
         solve_direct_optimized!(solver)
         return
     end
     
     # GPU factorization and solve
-    if solver.factorization !== nothing && check_device_compatibility(solver.factorization, solver.device_config)
+    if solver.factorization !== nothing && check_device_compatibility(solver.factorization, solver)
         # Use pre-computed GPU factorization
         try
             ldiv!(solver.solution_vector, solver.factorization, solver.RHS_vector)
@@ -1790,7 +1782,7 @@ function solve_direct_optimized_gpu!(solver::OptimizedBoundaryValueSolver)
             LHS_cpu = Array(solver.LHS_matrix)
             RHS_cpu = Array(solver.RHS_vector)
             solution_cpu = LHS_cpu \ RHS_cpu
-            solver.solution_vector .= device_array(solution_cpu, solver.device_config)
+            solver.solution_vector .= solution_cpu
         end
     end
 end
@@ -1798,7 +1790,7 @@ end
 function solve_iterative_optimized_gpu!(solver::OptimizedBoundaryValueSolver)
     """Iterative solve using GPU-optimized operations"""
     
-    if solver.device_config.device_type == CPU_DEVICE
+    if solver.device_type == CPU_DEVICE
         # CPU optimized solve
         solve_iterative_optimized!(solver)
         return
@@ -1810,8 +1802,8 @@ function solve_iterative_optimized_gpu!(solver::OptimizedBoundaryValueSolver)
     max_iter = solver.max_iterations
     
     # GPU-optimized iterative solver
-    residual = device_similar(b, solver.device_config)
-    temp_vec = device_similar(b, solver.device_config)
+    residual = device_similar(b, solver)
+    temp_vec = device_similar(b, solver)
     
     fill!(x, 0.0)  # Initial guess
     
@@ -1851,10 +1843,7 @@ function get_workspace_arrays_gpu(solver::OptimizedInitialValueSolver, state_siz
     required_arrays = ["k1", "k2", "k3", "k4", "temp_state", "implicit_rhs", "explicit_rhs"]
     
     for name in required_arrays
-        if !haskey(solver.gpu_workspace, name)
-            solver.gpu_workspace[name] = device_zeros(Float64, state_size, solver.device_config)
         end
-        workspace[name] = solver.gpu_workspace[name]
     end
     
     return workspace
@@ -1864,17 +1853,15 @@ function get_temp_array_gpu(solver::OptimizedInitialValueSolver, array_size::Tup
     """Get temporary GPU array for intermediate calculations"""
     
     # Try to reuse existing array of same size
-    for (i, arr) in enumerate(solver.gpu_memory_pool)
-        if size(arr) == array_size && check_device_compatibility(arr, solver.device_config)
+        if size(arr) == array_size && check_device_compatibility(arr, solver)
             # Remove from pool and return
-            temp_arr = splice!(solver.gpu_memory_pool, i)
             fill!(temp_arr, 0)
             return temp_arr
         end
     end
     
     # Create new array on device if no suitable one found
-    return device_zeros(Float64, array_size, solver.device_config)
+    return device_zeros(Float64, array_size, solver)
 end
 
 function return_temp_array_gpu!(solver::OptimizedInitialValueSolver, arr::AbstractArray)
@@ -1882,14 +1869,11 @@ function return_temp_array_gpu!(solver::OptimizedInitialValueSolver, arr::Abstra
     
     # Only pool arrays up to a reasonable size to avoid memory bloat
     max_elements = 10^6
-    if length(arr) <= max_elements && check_device_compatibility(arr, solver.device_config)
-        push!(solver.gpu_memory_pool, arr)
+    if length(arr) <= max_elements && check_device_compatibility(arr, solver)
     end
     
     # Keep pool size reasonable
     max_pool_size = 20
-    if length(solver.gpu_memory_pool) > max_pool_size
-        popfirst!(solver.gpu_memory_pool)
     end
 end
 
@@ -1898,16 +1882,16 @@ function get_state_vector_gpu(solver::OptimizedInitialValueSolver)
     
     problem = solver.problem
     if !hasfield(typeof(problem), :variables) || problem.variables === nothing
-        return device_zeros(Float64, (0,), solver.device_config)
+        return device_zeros(Float64, (0,), solver)
     end
     
     # Calculate total size and create GPU array
     total_size = total_field_size(problem)
     if total_size == 0
-        return device_zeros(Float64, (0,), solver.device_config)
+        return device_zeros(Float64, (0,), solver)
     end
     
-    state_vector = device_zeros(Float64, (total_size,), solver.device_config)
+    state_vector = device_zeros(Float64, (total_size,), solver)
     
     # Gather data from all variables (ensure on correct device)
     offset = 1
@@ -1915,9 +1899,9 @@ function get_state_vector_gpu(solver::OptimizedInitialValueSolver)
         var_size = field_size(var)
         if var_size > 0
             # Ensure variable data is on correct device
-            var.data_c = ensure_device!(var.data_c, solver.device_config)
+            var.data_c = var.data_c
             field_data = extract_field_data_for_state(var)
-            field_data = ensure_device!(field_data, solver.device_config)
+            field_data = field_data
             
             # Copy to state vector
             end_idx = offset + var_size - 1
@@ -1940,7 +1924,7 @@ function set_state_vector_gpu!(solver::OptimizedInitialValueSolver, state_vector
     """Set state vector with GPU support"""
     
     # Ensure state vector is on correct device
-    state_vector = ensure_device!(state_vector, solver.device_config)
+    state_vector = state_vector
     
     problem = solver.problem
     if !hasfield(typeof(problem), :variables) || problem.variables === nothing
@@ -1957,7 +1941,7 @@ function set_state_vector_gpu!(solver::OptimizedInitialValueSolver, state_vector
                 var_data = state_vector[offset:end_idx]
                 
                 # Ensure variable coefficient space is on correct device
-                var.data_c = ensure_device!(var.data_c, solver.device_config)
+                var.data_c = var.data_c
                 
                 # Set data in field
                 set_field_data_from_state!(var, var_data)
@@ -1971,7 +1955,7 @@ function distribute_solution_gpu!(solver::OptimizedBoundaryValueSolver)
     """Distribute solution back to problem variables with GPU support"""
     
     # Ensure solution vector is on correct device
-    solver.solution_vector = ensure_device!(solver.solution_vector, solver.device_config)
+    solver.solution_vector = solver.solution_vector
     
     problem = solver.problem
     if !hasfield(typeof(problem), :variables) || problem.variables === nothing
@@ -1988,7 +1972,7 @@ function distribute_solution_gpu!(solver::OptimizedBoundaryValueSolver)
                 var_data = solver.solution_vector[offset:end_idx]
                 
                 # Ensure variable data is on correct device
-                var.data_c = ensure_device!(var.data_c, solver.device_config)
+                var.data_c = var.data_c
                 
                 # Set field data
                 if isa(var, ScalarField) && var.data_c !== nothing
@@ -2005,7 +1989,7 @@ function distribute_solution_gpu!(solver::OptimizedBoundaryValueSolver)
 end
 
 # GPU utility functions
-function device_similar(arr::AbstractArray, device_config::DeviceConfig)
+function device_similar(arr::AbstractArray, )
     """Create similar array on specified device"""
     return device_zeros(eltype(arr), size(arr), device_config)
 end

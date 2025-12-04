@@ -127,13 +127,13 @@ mutable struct BoundaryConditionManager
     bc_update_required::Bool  # Flag indicating if BC values need updating
     
     # GPU support
-    device_config::DeviceConfig
+    
     gpu_workspace::Dict{String, AbstractArray}
     gpu_bc_cache::Dict{String, AbstractArray}  # Cached BC evaluations on GPU
     performance_stats::BCPerformanceStats
     
     function BoundaryConditionManager(; device::String="cpu")
-        device_config = select_device(device)
+        
         gpu_workspace = Dict{String, AbstractArray}()
         gpu_bc_cache = Dict{String, AbstractArray}()
         perf_stats = BCPerformanceStats()
@@ -316,12 +316,12 @@ function register_tau_field!(manager::BoundaryConditionManager, name::String, fi
     
     # Ensure tau field data is on correct device
     if isa(field, ScalarField)
-        field.data_g = ensure_device!(field.data_g, manager.device_config)
-        field.data_c = ensure_device!(field.data_c, manager.device_config)
+        field.data_g = field.data_g
+        field.data_c = field.data_c
     elseif isa(field, VectorField)
         for comp in field.components
-            comp.data_g = ensure_device!(comp.data_g, manager.device_config)
-            comp.data_c = ensure_device!(comp.data_c, manager.device_config)
+            comp.data_g = comp.data_g
+            comp.data_c = comp.data_c
         end
     end
     
@@ -351,8 +351,8 @@ function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, d
             if coord_basis !== nothing
                 tau_field = ScalarField(dist, tau_name, (coord_basis,))
                 # Ensure tau field is on correct device
-                tau_field.data_g = ensure_device!(tau_field.data_g, manager.device_config)
-                tau_field.data_c = ensure_device!(tau_field.data_c, manager.device_config)
+                tau_field.data_g = tau_field.data_g
+                tau_field.data_c = tau_field.data_c
                 
                 register_tau_field!(manager, tau_name, tau_field)
                 bc = DirichletBC(bc.field, bc.coordinate, bc.position, bc.value, tau_name, bc.is_time_dependent, bc.is_space_dependent)
@@ -373,8 +373,8 @@ function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, d
             if coord_basis !== nothing
                 tau_field = ScalarField(dist, tau_name, (coord_basis,))
                 # Ensure tau field is on correct device
-                tau_field.data_g = ensure_device!(tau_field.data_g, manager.device_config)
-                tau_field.data_c = ensure_device!(tau_field.data_c, manager.device_config)
+                tau_field.data_g = tau_field.data_g
+                tau_field.data_c = tau_field.data_c
                 
                 register_tau_field!(manager, tau_name, tau_field)
                 bc = NeumannBC(bc.field, bc.coordinate, bc.position, 
@@ -396,8 +396,8 @@ function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, d
             if coord_basis !== nothing
                 tau_field = ScalarField(dist, tau_name, (coord_basis,))
                 # Ensure tau field is on correct device
-                tau_field.data_g = ensure_device!(tau_field.data_g, manager.device_config)
-                tau_field.data_c = ensure_device!(tau_field.data_c, manager.device_config)
+                tau_field.data_g = tau_field.data_g
+                tau_field.data_c = tau_field.data_c
                 
                 register_tau_field!(manager, tau_name, tau_field)
                 bc = RobinBC(bc.field, bc.coordinate, bc.position,
@@ -683,12 +683,11 @@ function evaluate_bc_value(manager::BoundaryConditionManager, bc, current_time=0
         value = bc.value
     elseif isa(bc, RobinBC)
         # For Robin BCs, evaluate all components on GPU if needed
-        alpha = evaluate_expression_gpu(bc.alpha, current_time, coords, manager.device_config)
-        beta = evaluate_expression_gpu(bc.beta, current_time, coords, manager.device_config)
-        val = evaluate_expression_gpu(bc.value, current_time, coords, manager.device_config)
+        alpha = evaluate_expression(bc.alpha, current_time, coords, manager)
+        beta = evaluate_expression(bc.beta, current_time, coords, manager)
+        val = evaluate_expression(bc.value, current_time, coords, manager)
         
         # Update performance statistics
-        manager.performance_stats.gpu_transfer_time += time() - gpu_transfer_start
         manager.performance_stats.total_evaluations += 3
         
         return (alpha, beta, val)
@@ -696,10 +695,9 @@ function evaluate_bc_value(manager::BoundaryConditionManager, bc, current_time=0
         return nothing
     end
     
-    result = evaluate_expression_gpu(value, current_time, coords, manager.device_config)
+    result = evaluate_expression(value, current_time, coords, manager)
     
     # Update performance statistics
-    manager.performance_stats.gpu_transfer_time += time() - gpu_transfer_start
     manager.performance_stats.total_evaluations += 1
     
     return result
@@ -779,7 +777,7 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
     end
     
     start_time = time()
-    @debug "Updating $(length(manager.time_dependent_bcs)) time-dependent BCs at t=$current_time on $(manager.device_config.device_type)"
+    @debug "Updating $(length(manager.time_dependent_bcs)) time-dependent BCs at t=$current_time on $(manager.device_type)"
     
     for bc_index in manager.time_dependent_bcs
         bc = manager.conditions[bc_index]
@@ -793,7 +791,7 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
                 new_value = evaluate_bc_value(manager, bc, current_time)
                 # Cache the result on GPU if it's an array
                 if isa(new_value, AbstractArray)
-                    manager.gpu_bc_cache[cache_key] = ensure_device!(new_value, manager.device_config)
+                    manager.gpu_bc_cache[cache_key] = new_value
                 end
             end
             @debug "Updated Dirichlet BC for $(bc.field) on GPU"
@@ -802,7 +800,7 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
             if !haskey(manager.gpu_bc_cache, cache_key)
                 new_value = evaluate_bc_value(manager, bc, current_time)
                 if isa(new_value, AbstractArray)
-                    manager.gpu_bc_cache[cache_key] = ensure_device!(new_value, manager.device_config)
+                    manager.gpu_bc_cache[cache_key] = new_value
                 end
             end
             @debug "Updated Neumann BC for $(bc.field) on GPU"
@@ -813,7 +811,7 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
                 # Cache each component
                 for (comp_name, comp_value) in [("alpha", alpha), ("beta", beta), ("value", value)]
                     if isa(comp_value, AbstractArray)
-                        manager.gpu_bc_cache["$(cache_key)_$(comp_name)"] = ensure_device!(comp_value, manager.device_config)
+                        manager.gpu_bc_cache["$(cache_key)_$(comp_name)"] = comp_value
                     end
                 end
             end
@@ -822,7 +820,6 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(manager.device_config)
     
     # Update performance statistics
     update_time = time() - start_time
@@ -860,7 +857,6 @@ function clear_boundary_conditions!(manager::BoundaryConditionManager)
 end
 
 # GPU-specific expression evaluation
-function evaluate_expression_gpu(expr, current_time=0.0, coords=Dict(), device_config::DeviceConfig=select_device("cpu"))
     """Evaluate a boundary condition expression with GPU acceleration"""
     
     if isa(expr, Real)
@@ -880,7 +876,7 @@ function evaluate_expression_gpu(expr, current_time=0.0, coords=Dict(), device_c
             else
                 result = evaluate_expression(expr, current_time, coords)
             end
-            return isa(result, AbstractArray) ? ensure_device!(result, device_config) : result
+            return isa(result, AbstractArray) ? result : result
             
         elseif occursin("cos(", expr) && occursin("t", expr)
             if occursin("cos(2*pi*t)", expr)
@@ -890,7 +886,7 @@ function evaluate_expression_gpu(expr, current_time=0.0, coords=Dict(), device_c
             else
                 result = evaluate_expression(expr, current_time, coords)
             end
-            return isa(result, AbstractArray) ? ensure_device!(result, device_config) : result
+            return isa(result, AbstractArray) ? result : result
             
         elseif occursin("exp(", expr) && occursin("t", expr)
             if occursin("exp(-t)", expr)
@@ -900,12 +896,12 @@ function evaluate_expression_gpu(expr, current_time=0.0, coords=Dict(), device_c
             else
                 result = evaluate_expression(expr, current_time, coords)
             end
-            return isa(result, AbstractArray) ? ensure_device!(result, device_config) : result
+            return isa(result, AbstractArray) ? result : result
         end
         
         # For complex expressions, use CPU evaluation then move to GPU
         result = evaluate_expression(expr, current_time, coords)
-        return isa(result, AbstractArray) ? ensure_device!(result, device_config) : result
+        return isa(result, AbstractArray) ? result : result
         
     elseif isa(expr, Function)
         # Evaluate function and move result to GPU if needed
@@ -920,7 +916,7 @@ function evaluate_expression_gpu(expr, current_time=0.0, coords=Dict(), device_c
         catch
             expr(current_time)
         end
-        return isa(result, AbstractArray) ? ensure_device!(result, device_config) : result
+        return isa(result, AbstractArray) ? result : result
         
     elseif isa(expr, TimeDependentValue) || isa(expr, TimeSpaceDependentValue)
         # Use compiled function or fall back to string evaluation
@@ -929,28 +925,28 @@ function evaluate_expression_gpu(expr, current_time=0.0, coords=Dict(), device_c
         else
             result = evaluate_expression(expr.expression, current_time, coords)
         end
-        return isa(result, AbstractArray) ? ensure_device!(result, device_config) : result
+        return isa(result, AbstractArray) ? result : result
     end
     
     return expr
 end
 
 # GPU utility functions for boundary conditions
-function move_bc_manager_to_device!(manager::BoundaryConditionManager, device_config::DeviceConfig)
+function move_bc_manager_to_device!(manager::BoundaryConditionManager, )
     """Move boundary condition manager and all its data to specified device"""
     
-    old_device = manager.device_config
-    manager.device_config = device_config
+    old_device = manager
+    manager = device_config
     
     # Move tau fields to new device
     for (name, field) in manager.tau_fields
         if isa(field, ScalarField)
-            field.data_g = device_array(Array(field.data_g), device_config)
-            field.data_c = device_array(Array(field.data_c), device_config)
+            field.data_g = Array(field.data_g)
+            field.data_c = Array(field.data_c)
         elseif isa(field, VectorField)
             for comp in field.components
-                comp.data_g = device_array(Array(comp.data_g), device_config)
-                comp.data_c = device_array(Array(comp.data_c), device_config)
+                comp.data_g = Array(comp.data_g)
+                comp.data_c = Array(comp.data_c)
             end
         end
     end
@@ -958,16 +954,15 @@ function move_bc_manager_to_device!(manager::BoundaryConditionManager, device_co
     # Move coordinate fields to new device
     for (name, field) in manager.coordinate_fields
         if isa(field, AbstractArray)
-            manager.coordinate_fields[name] = device_array(Array(field), device_config)
+            manager.coordinate_fields[name] = Array(field)
         elseif isa(field, ScalarField)
-            field.data_g = device_array(Array(field.data_g), device_config)
-            field.data_c = device_array(Array(field.data_c), device_config)
+            field.data_g = Array(field.data_g)
+            field.data_c = Array(field.data_c)
         end
     end
     
     # Clear GPU caches if changing device types
     if old_device.device_type != device_config.device_type
-        empty!(manager.gpu_workspace)
         empty!(manager.gpu_bc_cache)
     end
     
@@ -979,8 +974,7 @@ end
 function get_bc_memory_info(manager::BoundaryConditionManager)
     """Get GPU memory usage information for boundary condition manager"""
     
-    if manager.device_config.device_type != CPU_DEVICE
-        memory_info = gpu_memory_info(manager.device_config)
+    if managerfalse
         
         # Estimate memory used by BC components
         bc_memory = 0
@@ -1021,7 +1015,6 @@ function get_bc_memory_info(manager::BoundaryConditionManager)
         end
         
         # Memory from GPU workspace and cache
-        for (key, arr) in manager.gpu_workspace
             bc_memory += sizeof(arr)
         end
         for (key, arr) in manager.gpu_bc_cache
@@ -1051,14 +1044,13 @@ function log_bc_performance(manager::BoundaryConditionManager)
     
     stats = manager.performance_stats
     
-    @info "BC performance ($(manager.device_config.device_type)):"
+    @info "BC performance ($(manager.device_type)):"
     @info "  Total evaluations: $(stats.total_evaluations)"
     @info "  BC updates: $(stats.bc_updates)"
     @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
     if stats.total_evaluations > 0
         @info "  Average evaluation time: $(round(stats.total_time/stats.total_evaluations*1000, digits=3)) ms"
     end
-    @info "  GPU transfer time: $(round(stats.gpu_transfer_time, digits=3)) seconds ($(round(100*stats.gpu_transfer_time/max(stats.total_time, 1e-10), digits=1))%)"
     @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses ($(round(100*stats.cache_hits/max(stats.cache_hits+stats.cache_misses, 1), digits=1))% hit rate)"
 end
 
@@ -1072,12 +1064,12 @@ function apply_boundary_conditions_gpu!(manager::BoundaryConditionManager, probl
     # Ensure all tau fields are on correct device
     for (name, field) in manager.tau_fields
         if isa(field, ScalarField)
-            field.data_g = ensure_device!(field.data_g, manager.device_config)
-            field.data_c = ensure_device!(field.data_c, manager.device_config)
+            field.data_g = field.data_g
+            field.data_c = field.data_c
         elseif isa(field, VectorField)
             for comp in field.components
-                comp.data_g = ensure_device!(comp.data_g, manager.device_config)
-                comp.data_c = ensure_device!(comp.data_c, manager.device_config)
+                comp.data_g = comp.data_g
+                comp.data_c = comp.data_c
             end
         end
     end
@@ -1100,7 +1092,6 @@ function apply_boundary_conditions_gpu!(manager::BoundaryConditionManager, probl
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(manager.device_config)
     
     # Update performance statistics
     manager.performance_stats.total_time += time() - start_time
@@ -1122,13 +1113,12 @@ function evaluate_space_dependent_bcs_gpu!(manager::BoundaryConditionManager, co
     gpu_coords = Dict{String, AbstractArray}()
     for (name, coord_array) in coordinates
         if isa(coord_array, AbstractArray)
-            gpu_coords[name] = ensure_device!(coord_array, manager.device_config)
+            gpu_coords[name] = coord_array
         else
             gpu_coords[name] = coord_array
         end
     end
     
-    manager.performance_stats.gpu_transfer_time += time() - gpu_transfer_start
     
     @debug "Evaluating $(length(manager.space_dependent_bcs)) space-dependent BCs on GPU"
     
@@ -1143,13 +1133,13 @@ function evaluate_space_dependent_bcs_gpu!(manager::BoundaryConditionManager, co
             if isa(bc, DirichletBC) && bc.is_space_dependent
                 new_value = evaluate_bc_value(manager, bc, 0.0, gpu_coords)
                 if isa(new_value, AbstractArray)
-                    manager.gpu_bc_cache[cache_key] = ensure_device!(new_value, manager.device_config)
+                    manager.gpu_bc_cache[cache_key] = new_value
                 end
                 manager.performance_stats.cache_misses += 1
             elseif isa(bc, NeumannBC) && bc.is_space_dependent
                 new_value = evaluate_bc_value(manager, bc, 0.0, gpu_coords)
                 if isa(new_value, AbstractArray)
-                    manager.gpu_bc_cache[cache_key] = ensure_device!(new_value, manager.device_config)
+                    manager.gpu_bc_cache[cache_key] = new_value
                 end
                 manager.performance_stats.cache_misses += 1
             elseif isa(bc, RobinBC) && bc.is_space_dependent
@@ -1157,7 +1147,7 @@ function evaluate_space_dependent_bcs_gpu!(manager::BoundaryConditionManager, co
                 # Cache each component
                 for (comp_name, comp_value) in [("alpha", alpha), ("beta", beta), ("value", value)]
                     if isa(comp_value, AbstractArray)
-                        manager.gpu_bc_cache["$(cache_key)_$(comp_name)"] = ensure_device!(comp_value, manager.device_config)
+                        manager.gpu_bc_cache["$(cache_key)_$(comp_name)"] = comp_value
                     end
                 end
                 manager.performance_stats.cache_misses += 1
@@ -1168,7 +1158,6 @@ function evaluate_space_dependent_bcs_gpu!(manager::BoundaryConditionManager, co
     end
     
     # Synchronize GPU operations
-    gpu_synchronize(manager.device_config)
     
     # Update performance statistics
     manager.performance_stats.total_time += time() - start_time
@@ -1179,7 +1168,6 @@ end
 function clear_bc_gpu_cache!(manager::BoundaryConditionManager)
     """Clear GPU cache for boundary conditions"""
     empty!(manager.gpu_bc_cache)
-    empty!(manager.gpu_workspace)
     return manager
 end
 
@@ -1199,5 +1187,5 @@ export AbstractBoundaryCondition, DirichletBC, NeumannBC, RobinBC, PeriodicBC,
        update_time_dependent_bcs!, requires_bc_update, has_time_dependent_bcs, has_space_dependent_bcs,
        is_time_dependent, is_space_dependent,
        # GPU functions
-       evaluate_expression_gpu, move_bc_manager_to_device!, get_bc_memory_info, log_bc_performance,
+       evaluate_expression, move_bc_manager_to_device!, get_bc_memory_info, log_bc_performance,
        apply_boundary_conditions_gpu!, evaluate_space_dependent_bcs_gpu!, clear_bc_gpu_cache!

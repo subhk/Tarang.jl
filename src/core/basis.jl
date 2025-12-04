@@ -33,14 +33,14 @@ mutable struct BasisMeta
     dtype::Type
     constant::Vector{Bool}
     subaxis_dependence::Vector{Bool}
-    device_config::DeviceConfig
     
-    function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, constant::Vector{Bool}, subaxis_dependence::Vector{Bool}, device_config::DeviceConfig)
+    
+    function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, constant::Vector{Bool}, subaxis_dependence::Vector{Bool}, )
         new(coordsys, element_label, dim, size, bounds, dealias, dtype, constant, subaxis_dependence, device_config)
     end
 end
 
-function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, device_config=get_device_config(); constant=nothing, subaxis_dependence=nothing)
+function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype, device_config=nothing; constant=nothing, subaxis_dependence=nothing)
     const_vec = if constant === nothing
         fill(false, dim)
     elseif constant isa Bool
@@ -69,8 +69,7 @@ struct RealFourier <: Basis
     transforms::Dict{String, Any}
 end
 
-function _build_real_fourier(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(0.0,2π), dealias::Float64=1.0, dtype=Float64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_real_fourier(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(0.0,2π), dealias::Float64=1.0, dtype=Float64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
     transforms = Dict{String, Any}()
     return RealFourier(meta, transforms)
@@ -87,8 +86,7 @@ struct ComplexFourier <: Basis
     transforms::Dict{String, Any}
 end
 
-function _build_complex_fourier(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(0.0,2π), dealias::Float64=1.0, dtype=ComplexF64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_complex_fourier(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(0.0,2π), dealias::Float64=1.0, dtype=ComplexF64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
     transforms = Dict{String, Any}()
     return ComplexFourier(meta, transforms)
@@ -109,8 +107,7 @@ struct ChebyshevT <: Basis
     b::Float64
 end
 
-function _build_chebyshev_t(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64, a=0.0, b=0.0, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_chebyshev_t(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64, a=0.0, b=0.0)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
     transforms = Dict{String, Any}()
     return ChebyshevT(meta, transforms, a, b)
@@ -127,8 +124,7 @@ struct ChebyshevU <: Basis
     transforms::Dict{String, Any}
 end
 
-function _build_chebyshev_u(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_chebyshev_u(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
     transforms = Dict{String, Any}()
     return ChebyshevU(meta, transforms)
@@ -145,8 +141,7 @@ struct Legendre <: Basis
     transforms::Dict{String, Any}
 end
 
-function _build_legendre(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_legendre(coord::Coordinate; size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
     transforms = Dict{String, Any}()
     return Legendre(meta, transforms)
@@ -164,8 +159,7 @@ struct Ultraspherical <: Basis
     alpha::Float64
 end
 
-function _build_ultraspherical(coord::Coordinate; alpha::Float64=0.5, size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_ultraspherical(coord::Coordinate; alpha::Float64=0.5, size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
     transforms = Dict{String, Any}()
     return Ultraspherical(meta, transforms, alpha)
@@ -185,8 +179,7 @@ struct Jacobi <: Basis
     b::Float64
 end
 
-function _build_jacobi(coord::Coordinate; a::Float64=0.0, b::Float64=0.0, size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_jacobi(coord::Coordinate; a::Float64=0.0, b::Float64=0.0, size::Int=32, bounds::Tuple{Float64,Float64}=(-1.0,1.0), dealias::Float64=1.0, dtype=Float64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype, device_config)
     transforms = Dict{String, Any}()
     return Jacobi(meta, transforms, a, b)
@@ -205,8 +198,7 @@ struct DiskBasis <: Basis
     radius::Float64
 end
 
-function _build_disk_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_disk_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias)
     bounds = (0.0, radius)
     meta = BasisMeta(coord.coordsys, coord.name, 2, size, bounds, dealias_tuple, dtype, device_config;
@@ -227,8 +219,7 @@ struct AnnulusBasis <: Basis
     radii::Tuple{Float64, Float64}
 end
 
-function _build_annulus_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_annulus_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias)
     meta = BasisMeta(coord.coordsys, coord.name, 2, size, radii, dealias_tuple, dtype, device_config;
                      constant=[false, false], subaxis_dependence=[false, true])
@@ -249,8 +240,7 @@ struct SphereBasis <: Basis
     radius::Float64
 end
 
-function _build_sphere_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_sphere_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
     bounds = (0.0, radius)
     meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype, device_config;
@@ -271,8 +261,7 @@ struct BallBasis <: Basis
     radius::Float64
 end
 
-function _build_ball_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_ball_basis(coord::Coordinate; radius::Float64=1.0, size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
     bounds = (0.0, radius)
     meta = BasisMeta(coord.coordsys, coord.name, 3, size, bounds, dealias_tuple, dtype, device_config;
@@ -293,8 +282,7 @@ struct ShellBasis <: Basis
     radii::Tuple{Float64, Float64}
 end
 
-function _build_shell_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64, device::String="auto")
-    device_config = device == "auto" ? get_device_config() : select_device(device)
+function _build_shell_basis(coord::Coordinate; radii::Tuple{Float64,Float64}=(0.5,1.0), size::Int=32, dealias::Union{Float64, Tuple{Vararg{Float64}}}=(1.0,1.0,1.0), dtype=ComplexF64)
     dealias_tuple = dealias isa Tuple ? dealias : (dealias, dealias, dealias)
     meta = BasisMeta(coord.coordsys, coord.name, 3, size, radii, dealias_tuple, dtype, device_config;
                      constant=[false, false, false], subaxis_dependence=[false, true, true])
@@ -447,7 +435,7 @@ function _native_grid(basis::RealFourier, scale)
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
     dx = L / N
     grid_cpu = [basis.meta.bounds[1] + i * dx for i in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function _native_grid(basis::ComplexFourier, scale)
@@ -456,7 +444,7 @@ function _native_grid(basis::ComplexFourier, scale)
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
     dx = L / N
     grid_cpu = [basis.meta.bounds[1] + i * dx for i in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function _native_grid(basis::ChebyshevT, scale)
@@ -464,7 +452,7 @@ function _native_grid(basis::ChebyshevT, scale)
     N = Int(round(basis.meta.size * scale))
     # Gauss-Lobatto points
     grid_cpu = [-cos(π * k / (N - 1)) for k in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function _native_grid(basis::ChebyshevU, scale)
@@ -472,7 +460,7 @@ function _native_grid(basis::ChebyshevU, scale)
     N = Int(round(basis.meta.size * scale))
     # Gauss points
     grid_cpu = [-cos(π * (k + 0.5) / N) for k in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function _native_grid(basis::Legendre, scale)
@@ -480,7 +468,7 @@ function _native_grid(basis::Legendre, scale)
     N = Int(round(basis.meta.size * scale))
     # Use Gauss-Lobatto points for Legendre
     grid_cpu = [-cos(π * k / (N - 1)) for k in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function _native_grid(basis::Ultraspherical, scale)
@@ -488,7 +476,7 @@ function _native_grid(basis::Ultraspherical, scale)
     N = Int(round(basis.meta.size * scale))
     # Use Gauss-Lobatto points
     grid_cpu = [-cos(π * k / (N - 1)) for k in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function _native_grid(basis::Jacobi, scale)
@@ -496,7 +484,7 @@ function _native_grid(basis::Jacobi, scale)
     N = Int(round(basis.meta.size * scale))
     # Use Gauss-Lobatto points
     grid_cpu = [-cos(π * k / (N - 1)) for k in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function _native_grid(basis::DiskBasis, scale)
@@ -505,7 +493,7 @@ function _native_grid(basis::DiskBasis, scale)
     # Radial coordinates from 0 to radius
     dr = basis.radius / (N - 1)
     grid_cpu = [i * dr for i in 0:N-1]
-    return device_array(grid_cpu, basis.meta.device_config)
+    return grid_cpu
 end
 
 function problem_coord(basis::Basis, native_grid)
@@ -533,8 +521,8 @@ end
 function evaluate_basis_gpu(basis::RealFourier, coords, modes)
     """Evaluate real Fourier basis functions on GPU."""
     # Ensure coordinates are on the correct device
-    coords_device = ensure_device!(coords, basis.meta.device_config)
-    modes_device = ensure_device!(modes, basis.meta.device_config)
+    coords_device = coords
+    modes_device = modes
     
     # Normalize coordinates to [0, 2π]
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
@@ -543,7 +531,7 @@ function evaluate_basis_gpu(basis::RealFourier, coords, modes)
     # Evaluate Fourier modes: cos(k*x) and sin(k*x)
     n_modes = length(modes_device)
     n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta.device_config)
+    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
     
     # GPU-optimized trigonometric evaluation
     for (i, k) in enumerate(modes_device)
@@ -559,15 +547,15 @@ end
 
 function evaluate_basis_gpu(basis::ComplexFourier, coords, modes)
     """Evaluate complex Fourier basis functions on GPU."""
-    coords_device = ensure_device!(coords, basis.meta.device_config)
-    modes_device = ensure_device!(modes, basis.meta.device_config)
+    coords_device = coords
+    modes_device = modes
     
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
     normalized_coords = @. 2π * (coords_device - basis.meta.bounds[1]) / L
     
     n_modes = length(modes_device)
     n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta.device_config)
+    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
     
     # Complex exponentials: exp(i*k*x)
     for (i, k) in enumerate(modes_device)
@@ -579,8 +567,8 @@ end
 
 function evaluate_basis_gpu(basis::ChebyshevT, coords, modes)
     """Evaluate Chebyshev T polynomials on GPU."""
-    coords_device = ensure_device!(coords, basis.meta.device_config)
-    modes_device = ensure_device!(modes, basis.meta.device_config)
+    coords_device = coords
+    modes_device = modes
     
     # Map to [-1, 1] interval
     a, b = basis.meta.bounds
@@ -588,7 +576,7 @@ function evaluate_basis_gpu(basis::ChebyshevT, coords, modes)
     
     n_modes = length(modes_device)
     n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta.device_config)
+    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
     
     # Evaluate Chebyshev polynomials using recurrence relation
     for (i, n) in enumerate(modes_device)
@@ -607,15 +595,15 @@ end
 
 function derivative_basis_gpu(basis::RealFourier, coords, modes, order=1)
     """Evaluate derivatives of real Fourier basis on GPU."""
-    coords_device = ensure_device!(coords, basis.meta.device_config)
-    modes_device = ensure_device!(modes, basis.meta.device_config)
+    coords_device = coords
+    modes_device = modes
     
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
     normalized_coords = @. 2π * (coords_device - basis.meta.bounds[1]) / L
     
     n_modes = length(modes_device)
     n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta.device_config)
+    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
     
     # Derivative factor
     factor = (2π / L)^order
@@ -640,20 +628,18 @@ function derivative_basis_gpu(basis::RealFourier, coords, modes, order=1)
     return result
 end
 
-function to_device!(basis::Basis, device_config::DeviceConfig)
+function to_device!(basis::Basis, )
     """Move basis to specified device."""
-    basis.meta.device_config = device_config
+    basis.meta = device_config
     return basis
 end
 
-function get_device_config(basis::Basis)
     """Get device configuration of basis."""
-    return basis.meta.device_config
+    return basis.meta
 end
 
 function synchronize_basis!(basis::Basis)
     """Synchronize basis operations on GPU."""
-    gpu_synchronize(basis.meta.device_config)
 end
 
 # Transform methods for basis types

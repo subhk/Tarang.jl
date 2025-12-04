@@ -8,15 +8,6 @@ using LinearAlgebra
 using LinearAlgebra: BLAS
 using LoopVectorization  # For SIMD-optimized loops
 
-# GPU support packages
-using GPUArraysCore
-using GPUArrays
-using KernelAbstractions
-using Adapt
-
-# GPU backends are already loaded in gpu_manager.jl
-# Use the global has_cuda, has_amdgpu, has_metal flags from there
-
 abstract type TimeStepper end
 
 # Exponential Time Differencing (ETD) utility functions
@@ -47,66 +38,55 @@ function phi_functions(z::Number)
     return φ₀, φ₁, φ₂, φ₃
 end
 
-function phi_functions_matrix(A::AbstractMatrix, dt::Float64, config::DeviceConfig=DeviceConfig())
-    """Compute matrix φ functions for exponential integrators on specified device"""
-    
-    # Move matrix to device
-    A_device = device_array(A, config)
-    z = dt * A_device
-    
+function phi_functions_matrix(A::AbstractMatrix, dt::Float64)
+    """Compute matrix φ functions for exponential integrators"""
+
+    z = dt * A
+
     # Check matrix norm for stability
     z_norm = norm(z)
-    
+
     if z_norm < 1e-8
         # Use Taylor expansions for small matrices (numerically stable)
-        I = device_identity(eltype(A_device), size(A_device, 1), config)
-        
+        I = Matrix{eltype(A)}(LinearAlgebra.I, size(A, 1), size(A, 1))
+
         # Taylor series: φ₀(z) = I + z + z²/2 + z³/6 + z⁴/24
         exp_z = I + z + (z^2)/2 + (z^3)/6 + (z^4)/24
-        
+
         # Taylor series: φ₁(z) = I + z/2 + z²/6 + z³/24 + z⁴/120
         φ₁ = I + z/2 + (z^2)/6 + (z^3)/24 + (z^4)/120
-        
+
         # Taylor series: φ₂(z) = I/2 + z/6 + z²/24 + z³/120 + z⁴/720
         φ₂ = I/2 + z/6 + (z^2)/24 + (z^3)/120 + (z^4)/720
-        
+
         return exp_z, φ₁, φ₂
-        
+
     elseif z_norm < 50.0
         # Use matrix exponential for moderate matrices
-        I = device_identity(eltype(A_device), size(A_device, 1), config)
-        
+        I = Matrix{eltype(A)}(LinearAlgebra.I, size(A, 1), size(A, 1))
+
         try
             exp_z = exp(z)
-            
-            # Compute φ₁ = (exp(z) - I) * inv(z)
-            # Use more stable computation: φ₁ = exp(z) * expm1(-z) / (-z) + I/z
-            if config.device_type == CPU_DEVICE
-                # CPU implementation using more stable algorithms
-                φ₁ = _compute_phi1_stable(z, exp_z, I)
-                φ₂ = _compute_phi2_stable(z, exp_z, I, φ₁)
-            else
-                # GPU implementation using direct computation
-                z_inv = inv(z)
-                φ₁ = (exp_z - I) * z_inv
-                φ₂ = (exp_z - I - z) * (z_inv^2)
-            end
-            
+
+            # Use stable computation
+            φ₁ = _compute_phi1_stable(z, exp_z, I)
+            φ₂ = _compute_phi2_stable(z, exp_z, I, φ₁)
+
             return exp_z, φ₁, φ₂
-            
+
         catch e
             @warn "Matrix exponential failed: $e, using Padé approximation"
-            return _phi_functions_pade(z, config)
+            return _phi_functions_pade(z)
         end
     else
         # Use Krylov subspace methods for large/stiff matrices
         @warn "Matrix is large or stiff (norm=$z_norm), using Krylov approximation"
-        return _phi_functions_krylov(z, config)
+        return _phi_functions_krylov(z)
     end
 end
 
 function _compute_phi1_stable(z, exp_z, I)
-    """Stable computation of φ₁ on CPU"""
+    """Stable computation of φ₁"""
     z_norm = norm(z)
     if z_norm < 1e-2
         # Use series expansion for better accuracy
@@ -117,7 +97,7 @@ function _compute_phi1_stable(z, exp_z, I)
 end
 
 function _compute_phi2_stable(z, exp_z, I, φ₁)
-    """Stable computation of φ₂ on CPU"""
+    """Stable computation of φ₂"""
     z_norm = norm(z)
     if z_norm < 1e-2
         # Use series expansion for better accuracy  
@@ -127,27 +107,27 @@ function _compute_phi2_stable(z, exp_z, I, φ₁)
     end
 end
 
-function _phi_functions_pade(z, config::DeviceConfig)
+function _phi_functions_pade(z)
     """Padé approximation fallback for φ functions"""
-    I = device_identity(eltype(z), size(z, 1), config)
-    
+    I = Matrix{eltype(z)}(LinearAlgebra.I, size(z, 1), size(z, 1))
+
     # Simple Padé [1/1] approximation for demonstration
     # In practice, would use higher-order approximations
     exp_z = (I + z/2) * inv(I - z/2)  # Padé [1/1] for exp
     φ₁ = inv(z) * (exp_z - I)
     φ₂ = inv(z^2) * (exp_z - I - z)
-    
+
     return exp_z, φ₁, φ₂
 end
 
-function _phi_functions_krylov(z, config::DeviceConfig, krylov_dim::Int=30)
+function _phi_functions_krylov(z, krylov_dim::Int=30)
     """Krylov subspace approximation for φ functions (simplified version)"""
-    I = device_identity(eltype(z), size(z, 1), config)
-    
+    I = Matrix{eltype(z)}(LinearAlgebra.I, size(z, 1), size(z, 1))
+
     # For now, fall back to direct computation with warning
     # In practice, would implement Arnoldi/Lanczos methods
     @warn "Krylov methods not fully implemented, using direct computation"
-    
+
     try
         exp_z = exp(z)
         φ₁ = inv(z) * (exp_z - I)
@@ -326,23 +306,12 @@ mutable struct TimestepperState
     dt_history::Vector{Float64}  # Track timestep history for variable timesteps
     stage::Int
     timestepper_data::Dict{String, Any}  # Additional data for specific timesteppers
-    device_config::DeviceConfig  # Device configuration for GPU support
-    
-    function TimestepperState(timestepper::TimeStepper, dt::Float64, initial_state::Vector{ScalarField}, 
-                              device::String="cpu", device_id::Int=0)
+
+    function TimestepperState(timestepper::TimeStepper, dt::Float64, initial_state::Vector{ScalarField})
         history = [copy.(initial_state)]
         dt_history = [dt]  # Initialize with current timestep
         timestepper_data = Dict{String, Any}()
-        device_config = select_device(device, device_id)
-        new(timestepper, dt, history, dt_history, 0, timestepper_data, device_config)
-    end
-    
-    function TimestepperState(timestepper::TimeStepper, dt::Float64, initial_state::Vector{ScalarField}, 
-                              config::DeviceConfig)
-        history = [copy.(initial_state)]
-        dt_history = [dt]  # Initialize with current timestep
-        timestepper_data = Dict{String, Any}()
-        new(timestepper, dt, history, dt_history, 0, timestepper_data, config)
+        new(timestepper, dt, history, dt_history, 0, timestepper_data)
     end
 end
 
@@ -1203,7 +1172,6 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt = state.dt
-    config = state.device_config
 
     # Get linear operator from solver
     if !haskey(solver.problem.parameters, "L_matrix")
@@ -1215,41 +1183,37 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = solver.problem.parameters["L_matrix"]
 
     try
-        # Compute matrix exponentials and φ functions on specified device
-        exp_hL, φ₁_hL, _ = phi_functions_matrix(L_matrix, dt, config)
+        # Compute matrix exponentials and φ functions
+        exp_hL, φ₁_hL, _ = phi_functions_matrix(L_matrix, dt)
 
-        # Convert state to vector form and move to device
-        X₀_cpu = fields_to_vector(current_state)
-        X₀ = device_array(X₀_cpu, config)
+        # Convert state to vector form
+        X₀ = fields_to_vector(current_state)
 
         # Compute exponential propagator: a_n = exp(hL)*u_n
         a_n = exp_hL * X₀
 
         # Stage 1 (predictor): Evaluate nonlinear term N(u_n) at current state
         F₀ = evaluate_rhs(solver, current_state, solver.sim_time)
-        F₀_vec_cpu = fields_to_vector(F₀)
-        N_u_n = device_array(F₀_vec_cpu, config)
+        N_u_n = fields_to_vector(F₀)
 
         # Predictor: c = a_n + h*φ₁(hL)*N(u_n)
         c = a_n + dt * (φ₁_hL * N_u_n)
 
         # Convert back to field form for nonlinear evaluation
-        c_cpu = Array(c)
         temp_state = copy.(current_state)
-        copy_solution_to_fields!(temp_state, c_cpu)
+        copy_solution_to_fields!(temp_state, c)
 
         # Stage 2 (corrector): Evaluate N(c) at predicted state
         F_c = evaluate_rhs(solver, temp_state, solver.sim_time + dt)
-        F_c_vec_cpu = fields_to_vector(F_c)
-        N_c = device_array(F_c_vec_cpu, config)
+        N_c = fields_to_vector(F_c)
 
         # Final update (standard ETDRK2 formula):
         # u_{n+1} = a_n + h*φ₁(hL)*N(c)
         # This is the Cox-Matthews Eq. 22 formulation
         X_new = a_n + dt * (φ₁_hL * N_c)
 
-        # Move result back to CPU and update state
-        X_new_cpu = Array(X_new)
+        # Update state
+        X_new_cpu = X_new
         new_state = copy.(current_state)
         copy_solution_to_fields!(new_state, X_new_cpu)
 
@@ -1294,7 +1258,6 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt = state.dt
-    config = state.device_config
 
     # Initialize history arrays if needed
     if !haskey(state.timestepper_data, "F_history")
@@ -1327,21 +1290,19 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     w1 = dt_current / dt_previous
 
     try
-        # Compute exponential integrators on device
-        exp_hL, φ₁_hL, _ = phi_functions_matrix(L_matrix, dt_current, config)
+        # Compute exponential integrators
+        exp_hL, φ₁_hL, _ = phi_functions_matrix(L_matrix, dt_current)
 
-        # Convert current state to vector and move to device
-        X_current_cpu = fields_to_vector(current_state)
-        X_current = device_array(X_current_cpu, config)
+        # Convert current state to vector
+        X_current = fields_to_vector(current_state)
 
         # Evaluate nonlinear term N(u_n)
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_current_vec_cpu = fields_to_vector(F_current)
-        F_current_vec = device_array(F_current_vec_cpu, config)
+        F_current_vec = fields_to_vector(F_current)
 
-        # Rotate and store history (keep on CPU for simplicity)
+        # Rotate and store history
         F_history = state.timestepper_data["F_history"]
-        pushfirst!(F_history, F_current_vec_cpu)
+        pushfirst!(F_history, F_current_vec)
 
         # Keep only needed history for Adams-Bashforth 2
         while length(F_history) > 2; pop!(F_history); end
@@ -1352,25 +1313,23 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
         c₂ = -w1/2.0       # Previous step weight
 
         # Build Adams-Bashforth extrapolated nonlinear term
-        F_extrap_cpu = c₁ * F_history[1]
+        F_extrap = c₁ * F_history[1]
         if length(F_history) >= 2
-            F_extrap_cpu .+= c₂ * F_history[2]
+            F_extrap .+= c₂ * F_history[2]
         end
-        F_extrap = device_array(F_extrap_cpu, config)
 
         # Exponential time differencing step with Adams-Bashforth extrapolation:
         # u_{n+1} = exp(hL)u_n + h*φ₁(hL)*N_AB2
         X_new = exp_hL * X_current + dt_current * (φ₁_hL * F_extrap)
 
-        # Move result back to CPU and update state
-        X_new_cpu = Array(X_new)
+        # Update state
         new_state = copy.(current_state)
-        copy_solution_to_fields!(new_state, X_new_cpu)
+        copy_solution_to_fields!(new_state, X_new)
 
         push!(state.history, new_state)
         state.timestepper_data["iteration"] += 1
 
-        @debug "ETDAB2 step completed: dt=$dt_current, device=$(config.device_type), w1=$w1, iteration=$(state.timestepper_data["iteration"]), |X_new|=$(norm(X_new_cpu))"
+        @debug "ETDAB2 step completed: dt=$dt_current, w1=$w1, iteration=$(state.timestepper_data["iteration"]), |X_new|=$(norm(X_new))"
 
     catch e
         @warn "ETD-CNAB2 failed: $e, falling back to CNAB2"
@@ -1410,7 +1369,6 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt = state.dt
-    config = state.device_config
 
     # Initialize history arrays if needed
     if !haskey(state.timestepper_data, "F_history")
@@ -1444,24 +1402,22 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 
     try
         # Compute exponential integrators for current and previous timesteps
-        exp_hL, φ₁_hL, _ = phi_functions_matrix(L_matrix, dt_current, config)
+        exp_hL, φ₁_hL, _ = phi_functions_matrix(L_matrix, dt_current)
 
         # For the previous state, we need exp(h_previous * L) applied to u_{n-1}
         # In the exponential BDF framework, we need proper weighting
 
-        # Convert states to vectors and move to device
-        X_current_cpu = fields_to_vector(current_state)
-        X_previous_cpu = fields_to_vector(state.history[end-1])
-        X_current = device_array(X_current_cpu, config)
-        X_previous = device_array(X_previous_cpu, config)
+        # Convert states to vectors
+        X_current = fields_to_vector(current_state)
+        X_previous = fields_to_vector(state.history[end-1])
 
         # Evaluate nonlinear term N(u_n)
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_current_vec_cpu = fields_to_vector(F_current)
+        F_current_vec = fields_to_vector(F_current)
 
         # Rotate and store history
         F_history = state.timestepper_data["F_history"]
-        pushfirst!(F_history, F_current_vec_cpu)
+        pushfirst!(F_history, F_current_vec)
 
         # Keep only needed history for BDF2
         while length(F_history) > 2; pop!(F_history); end
@@ -1472,11 +1428,10 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         c₂ = -w              # Previous step weight
 
         # Build BDF2-extrapolated nonlinear term
-        F_extrap_cpu = c₁ * F_history[1]
+        F_extrap = c₁ * F_history[1]
         if length(F_history) >= 2
-            F_extrap_cpu .+= c₂ * F_history[2]
+            F_extrap .+= c₂ * F_history[2]
         end
-        F_extrap = device_array(F_extrap_cpu, config)
 
         # Exponential BDF2-style coefficients for linear part
         # These provide the implicit stability of BDF2 via exponential propagation
@@ -1494,15 +1449,14 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         # Add nonlinear contribution
         X_new = X_propagated + dt_current * (φ₁_hL * F_extrap)
 
-        # Move result back to CPU and update state
-        X_new_cpu = Array(X_new)
+        # Update state
         new_state = copy.(current_state)
-        copy_solution_to_fields!(new_state, X_new_cpu)
+        copy_solution_to_fields!(new_state, X_new)
 
         push!(state.history, new_state)
         state.timestepper_data["iteration"] += 1
 
-        @debug "ETDBDF2 step completed: dt=$dt_current, device=$(config.device_type), w=$w, a₀=$a₀, a₁=$a₁, iteration=$(state.timestepper_data["iteration"]), |X_new|=$(norm(X_new_cpu))"
+        @debug "ETDBDF2 step completed: dt=$dt_current, w=$w, a₀=$a₀, a₁=$a₁, iteration=$(state.timestepper_data["iteration"]), |X_new|=$(norm(X_new))"
 
     catch e
         @warn "ETD-SBDF2 failed: $e, falling back to SBDF2"
@@ -1747,30 +1701,3 @@ function copy_solution_to_fields!(fields::Vector{ScalarField}, solution_vector::
     end
 end
 
-# GPU-compatible memory management for exponential integrators
-function gpu_synchronize(config::DeviceConfig)
-    """Synchronize GPU operations"""
-    if config.device_type == GPU_CUDA && has_cuda
-        CUDA.synchronize()
-    elseif config.device_type == GPU_AMDGPU && has_amdgpu
-        AMDGPU.synchronize()
-    elseif config.device_type == GPU_METAL && has_metal
-        Metal.synchronize()
-    end
-    # CPU operations are always synchronous
-end
-
-function available_gpu_memory(config::DeviceConfig)
-    """Get available GPU memory in bytes"""
-    if config.device_type == GPU_CUDA && has_cuda
-        return CUDA.available_memory()
-    elseif config.device_type == GPU_AMDGPU && has_amdgpu
-        # AMDGPU memory query (simplified)
-        return 8 * 1024^3  # Default to 8GB if unable to query
-    elseif config.device_type == GPU_METAL && has_metal
-        # Metal memory query (simplified) 
-        return 8 * 1024^3  # Default to 8GB if unable to query
-    else
-        return typemax(Int64)  # Unlimited for CPU
-    end
-end

@@ -15,7 +15,7 @@ function _require_coords(dist::Distributor, needed::Int)
 end
 
 # 1D domains
-function create_fourier_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, device::String="cpu")
+function create_fourier_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64)
     """Create 1D periodic Fourier domain with GPU support"""
     
     x_coord = _require_coords(dist, 1)[1]
@@ -24,7 +24,7 @@ function create_fourier_domain(dist::Distributor, L::Float64, N::Int; dtype::Typ
     return Domain(dist, (x_basis,); device=device)
 end
 
-function create_chebyshev_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, device::String="cpu")
+function create_chebyshev_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64)
     """Create 1D Chebyshev domain with GPU support"""
     
     x_coord = _require_coords(dist, 1)[1]
@@ -33,7 +33,7 @@ function create_chebyshev_domain(dist::Distributor, L::Float64, N::Int; dtype::T
     return Domain(dist, (x_basis,); device=device)
 end
 
-function create_legendre_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64, device::String="cpu")
+function create_legendre_domain(dist::Distributor, L::Float64, N::Int; dtype::Type=Float64)
     """Create 1D Legendre domain with GPU support"""
     
     x_coord = _require_coords(dist, 1)[1]
@@ -44,7 +44,7 @@ end
 
 # 2D domains
 function create_2d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int; 
-                                  dtype::Type=Float64, dealias::Float64=3.0/2.0, device::String="cpu")
+                                  dtype::Type=Float64, dealias::Float64=3.0/2.0)
     """Create 2D doubly-periodic domain with Fourier bases in both directions and GPU support"""
     
     x_coord, y_coord = _require_coords(dist, 2)
@@ -56,7 +56,7 @@ function create_2d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, 
 end
 
 function create_channel_domain(dist::Distributor, Lx::Float64, Ly::Float64, Nx::Int, Ny::Int;
-                              dtype::Type=Float64, dealias::Float64=3.0/2.0, device::String="cpu")
+                              dtype::Type=Float64, dealias::Float64=3.0/2.0)
     """Create 2D channel domain: periodic in x, Chebyshev in y with GPU support"""
     
     x_coord, y_coord = _require_coords(dist, 2)
@@ -99,7 +99,7 @@ end
 
 # 3D domains
 function create_3d_periodic_domain(dist::Distributor, Lx::Float64, Ly::Float64, Lz::Float64, 
-                                  Nx::Int, Ny::Int, Nz::Int; dtype::Type=Float64, dealias::Float64=3.0/2.0, device::String="cpu")
+                                  Nx::Int, Ny::Int, Nz::Int; dtype::Type=Float64, dealias::Float64=3.0/2.0)
     """Create 3D triply-periodic domain with GPU support"""
     
     x_coord, y_coord, z_coord = _require_coords(dist, 3)
@@ -193,15 +193,15 @@ function create_fields(domain::Domain, field_names::Vector{String}, field_types:
         if ftype == "scalar"
             field = ScalarField(domain.dist, name, domain.bases, domain.dist.dtype)
             # Ensure field data is on same device as domain
-            field.data_g = ensure_device!(field.data_g, domain.device_config)
-            field.data_c = ensure_device!(field.data_c, domain.device_config)
+            field.data_g = field.data_g
+            field.data_c = field.data_c
             fields[name] = field
         elseif ftype == "vector"
             field = VectorField(domain.dist, domain.dist.coordsys, name, domain.bases, domain.dist.dtype)
             # Ensure vector components are on same device as domain
             for comp in field.components
-                comp.data_g = ensure_device!(comp.data_g, domain.device_config)
-                comp.data_c = ensure_device!(comp.data_c, domain.device_config)
+                comp.data_g = comp.data_g
+                comp.data_c = comp.data_c
             end
             fields[name] = field
         elseif ftype == "tensor"
@@ -209,8 +209,8 @@ function create_fields(domain::Domain, field_names::Vector{String}, field_types:
             # Ensure tensor components are on same device as domain
             for i in 1:size(field.components, 1), j in 1:size(field.components, 2)
                 comp = field.components[i, j]
-                comp.data_g = ensure_device!(comp.data_g, domain.device_config)
-                comp.data_c = ensure_device!(comp.data_c, domain.device_config)
+                comp.data_g = comp.data_g
+                comp.data_c = comp.data_c
             end
             fields[name] = field
         else
@@ -356,20 +356,20 @@ function create_navier_stokes_3d_fields(domain::Domain)
     
     # Ensure all fields are on same device as domain
     for comp in u.components
-        comp.data_g = ensure_device!(comp.data_g, domain.device_config)
-        comp.data_c = ensure_device!(comp.data_c, domain.device_config)
+        comp.data_g = comp.data_g
+        comp.data_c = comp.data_c
     end
     
-    p.data_g = ensure_device!(p.data_g, domain.device_config)
-    p.data_c = ensure_device!(p.data_c, domain.device_config)
+    p.data_g = p.data_g
+    p.data_c = p.data_c
     
     for comp in tau_u.components
-        comp.data_g = ensure_device!(comp.data_g, domain.device_config)
-        comp.data_c = ensure_device!(comp.data_c, domain.device_config)
+        comp.data_g = comp.data_g
+        comp.data_c = comp.data_c
     end
     
-    tau_p.data_g = ensure_device!(tau_p.data_g, domain.device_config)
-    tau_p.data_c = ensure_device!(tau_p.data_c, domain.device_config)
+    tau_p.data_g = tau_p.data_g
+    tau_p.data_c = tau_p.data_c
     
     return Dict(
         "velocity" => u,
@@ -495,7 +495,7 @@ function estimate_memory_usage(domain::Domain, n_fields::Int=1; dtype::Type=Floa
     total_local = n_fields * memory_per_field_local
     total_global = n_fields * memory_per_field_global
     
-    @info "Memory Usage Estimate ($(domain.device_config.device_type)):"
+    @info "Memory Usage Estimate ($(domain.device_type)):"
     @info "  Element type: $dtype ($(bytes_per_element) bytes per element)"
     @info "  Global elements per field: $global_size"
     @info "  Local elements per field: $local_size"
@@ -504,16 +504,12 @@ function estimate_memory_usage(domain::Domain, n_fields::Int=1; dtype::Type=Floa
     @info "  Total memory: $(round(total_global / 1024^2, digits=2)) MB"
     
     # GPU-specific memory considerations
-    if domain.device_config.device_type != CPU_DEVICE
-        gpu_memory_info = get_domain_memory_info(domain)
+    if domainfalse
         @info "  GPU Memory Information:"
-        @info "    Available: $(round(gpu_memory_info.available_memory / 1024^3, digits=2)) GB"
         @info "    Required for fields: $(round(total_local / 1024^3, digits=3)) GB"
-        @info "    Domain cache usage: $(round(gpu_memory_info.domain_memory / 1024^2, digits=2)) MB"
         
         # Check if fields will fit in GPU memory
         field_memory_gb = total_local / 1024^3
-        available_gb = gpu_memory_info.available_memory / 1024^3
         
         if field_memory_gb > available_gb * 0.8  # Leave 20% safety margin
             @warn "  Fields may not fit in GPU memory! Consider reducing field count or resolution."
@@ -533,7 +529,7 @@ end
 function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
     """Benchmark domain operations on GPU vs CPU"""
     
-    @info "Benchmarking domain operations ($(domain.device_config.device_type)):"
+    @info "Benchmarking domain operations ($(domain.device_type)):"
     
     # Benchmark coordinate generation
     @info "  Testing coordinate generation..."
@@ -559,7 +555,7 @@ function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
     end
     
     # Memory transfer benchmarks (GPU only)
-    if domain.device_config.device_type != CPU_DEVICE
+    if domainfalse
         @info "  Testing GPU memory transfers..."
         coords = get_grid_coordinates_gpu(domain)
         coord_name = domain.bases[1].meta.element_label
@@ -573,7 +569,7 @@ function benchmark_domain_operations(domain::Domain; n_iterations::Int=100)
         # CPU to GPU transfer  
         cpu_array = Array(test_array)
         cpu_to_gpu_time = @elapsed for i in 1:n_iterations
-            device_array(cpu_array, domain.device_config)
+            cpu_array
         end
         
         array_size_mb = sizeof(test_array) / 1024^2
@@ -632,7 +628,7 @@ function create_gpu_optimized_domain(dist::Distributor, domain_type::Symbol, arg
         throw(ArgumentError("Unknown domain type: $domain_type"))
     end
     
-    @info "Created GPU-optimized $domain_type domain on $(domain.device_config.device_type)"
+    @info "Created GPU-optimized $domain_type domain on $(domain.device_type)"
     
     return domain
 end
@@ -640,7 +636,7 @@ end
 function optimize_domain_for_gpu!(domain::Domain)
     """Optimize domain settings for GPU performance"""
     
-    if domain.device_config.device_type == CPU_DEVICE
+    if domain.device_type == CPU_DEVICE
         @info "Domain is on CPU, no GPU optimizations applied"
         return domain
     end

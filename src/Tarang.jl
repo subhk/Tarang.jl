@@ -30,13 +30,8 @@ include("tools/exceptions.jl")
 include("tools/dispatch.jl")
 include("tools/parsing.jl")
 
-# Coordinate systems are needed by GPU/distributor utilities
+# Coordinate systems
 include("core/coords.jl")
-
-# GPU management (needed by many core modules)
-include("core/gpu_manager.jl")
-include("core/multi_gpu_manager.jl")
-include("core/gpu_pencil_compat.jl")
 
 # Core modules
 include("core/basis.jl")  
@@ -77,18 +72,12 @@ include("extras/quick_domains.jl")
 include("extras/analysis_tasks.jl")
 
 # Libraries submodule to avoid name collisions with core types
-module Libraries
-    include("libraries/spherical_coordinates.jl")
-    include("libraries/spherical_bases.jl")
-    include("libraries/spherical_boundary_conditions.jl")
-    include("libraries/spherical_operators.jl")
-    include("libraries/spherical_fields.jl")
-end
+# (Currently empty - spherical geometry support removed)
 
 # Public interface - mirroring Dedalus structure
 export
     # Coordinate systems
-    CartesianCoordinates, S2Coordinates, SphericalCoordinates, PolarCoordinates,
+    CartesianCoordinates,
     coords, unit_vector_fields,
 
     # Bases
@@ -145,8 +134,7 @@ export
     rng_elements,
     IndexArray,
     ChunkedRandomArray,
-    MatSolvers,
-    Libraries
+    MatSolvers
 
 # Initialize MPI if not already initialized
 function __init__()

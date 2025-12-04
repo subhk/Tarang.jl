@@ -33,30 +33,20 @@ mutable struct ScalarField <: Operand
     # Scale information (following Dedalus pattern)
     scales::Union{Nothing, Tuple{Vararg{Float64}}}  # Current scales for each dimension
 
-    # Device configuration for GPU support
-    device_config::DeviceConfig
-    
-    function ScalarField(dist::Distributor, name::String="field", bases::Tuple{Vararg{Basis}}=(), 
-                         dtype::Type=dist.dtype, device::Union{String, DeviceConfig}="cpu")
+    function ScalarField(dist::Distributor, name::String="field", bases::Tuple{Vararg{Basis}}=(),
+                         dtype::Type=dist.dtype)
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
-        
-        # Set device configuration
-        if isa(device, String)
-            device_config = select_device(device)
-        else
-            device_config = device
-        end
-        
+
         # Initialize with grid layout
         data_g = nothing
         data_c = nothing
         current_layout = :g
-        
+
         # Initialize scales (following Dedalus pattern: (1,) * dist.dim)
         initial_scales = length(bases) > 0 ? tuple(ones(Float64, dist.dim)...) : nothing
-        
-        field = new(dist, name, bases, domain, dtype, data_g, data_c, layout, current_layout, initial_scales, device_config)
+
+        field = new(dist, name, bases, domain, dtype, data_g, data_c, layout, current_layout, initial_scales)
         
         # Allocate data if we have a domain
         if domain !== nothing
@@ -77,30 +67,20 @@ mutable struct VectorField <: Operand
     
     # Component fields
     components::Vector{ScalarField}
-    
-    # Device configuration for GPU support
-    device_config::DeviceConfig
-    
-    function VectorField(dist::Distributor, coordsys::CoordinateSystem, name::String="vector", 
-                         bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype, device::Union{String, DeviceConfig}="cpu")
+
+    function VectorField(dist::Distributor, coordsys::CoordinateSystem, name::String="vector",
+                         bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
-        
-        # Set device configuration
-        if isa(device, String)
-            device_config = select_device(device)
-        else
-            device_config = device
-        end
-        
+
         # Create component fields
         components = ScalarField[]
         for (i, coord_name) in enumerate(coordsys.names)
             component_name = "$(name)_$coord_name"
-            component = ScalarField(dist, component_name, bases, dtype, device_config)
+            component = ScalarField(dist, component_name, bases, dtype)
             push!(components, component)
         end
-        
-        new(dist, coordsys, name, bases, domain, dtype, components, device_config)
+
+        new(dist, coordsys, name, bases, domain, dtype, components)
     end
 end
 
@@ -114,30 +94,20 @@ mutable struct TensorField <: Operand
     
     # Component fields as matrix
     components::Matrix{ScalarField}
-    
-    # Device configuration for GPU support
-    device_config::DeviceConfig
-    
-    function TensorField(dist::Distributor, coordsys::CoordinateSystem, name::String="tensor", 
-                         bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype, device::Union{String, DeviceConfig}="cpu")
+
+    function TensorField(dist::Distributor, coordsys::CoordinateSystem, name::String="tensor",
+                         bases::Tuple{Vararg{Basis}}=(), dtype::Type=dist.dtype)
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
-        
-        # Set device configuration
-        if isa(device, String)
-            device_config = select_device(device)
-        else
-            device_config = device
-        end
-        
+
         # Create component fields
         dim = coordsys.dim
         components = Matrix{ScalarField}(undef, dim, dim)
         for i in 1:dim, j in 1:dim
             component_name = "$(name)_$(coordsys.names[i])$(coordsys.names[j])"
-            components[i,j] = ScalarField(dist, component_name, bases, dtype, device_config)
+            components[i,j] = ScalarField(dist, component_name, bases, dtype)
         end
-        
-        new(dist, coordsys, name, bases, domain, dtype, components, device_config)
+
+        new(dist, coordsys, name, bases, domain, dtype, components)
     end
 end
 
@@ -177,18 +147,12 @@ function allocate_data!(field::ScalarField)
         field.data_c = create_pencil(field.dist, global_shape, 1, dtype=field.dtype)
 
         # For GPU operations on pencil data, access pencil.data (local portion)
-        # and move ONLY that to GPU when needed. DO NOT convert entire pencil.
-        if field.device_config.device_type != CPU_DEVICE
-            @info """GPU + MPI: Using hybrid approach
-            - Pencil structure: CPU (for MPI operations)
-            - Local data (pencil.data): Can be moved to GPU for computation
-            - Transposes/FFTs: Performed on CPU, then local data → GPU"""
-        end
+        # For local computations on pencil.data
     else
-        # Serial or local GPU computation only
+        # Serial computation
         local_size = get_local_array_size(field.dist, global_shape)
-        field.data_g = device_zeros(field.dtype, local_size, field.device_config)
-        field.data_c = device_zeros(field.dtype, local_size, field.device_config)
+        field.data_g = zeros(field.dtype, local_size...)
+        field.data_c = zeros(field.dtype, local_size...)
     end
 end
 
@@ -633,14 +597,14 @@ function Base.:+(a::ScalarField, b::ScalarField)
     end
     
     # Use same device as first field
-    result = ScalarField(a.dist, "$(a.name)_plus_$(b.name)", a.bases, a.dtype, a.device_config)
+    result = ScalarField(a.dist, "$(a.name)_plus_$(b.name)", a.bases, a.dtype)
     ensure_layout!(a, :g)
     ensure_layout!(b, :g) 
     ensure_layout!(result, :g)
     
     # Ensure all arrays are on same device
-    a_data = ensure_device!(a.data_g, a.device_config)
-    b_data = ensure_device!(b.data_g, a.device_config)
+    a_data = a.data_g
+    b_data = b.data_g
     
     # GPU-compatible element-wise addition
     result.data_g .= a_data .+ b_data
@@ -654,14 +618,14 @@ function Base.:-(a::ScalarField, b::ScalarField)
         throw(ArgumentError("Cannot subtract fields with different bases"))
     end
     
-    result = ScalarField(a.dist, "$(a.name)_minus_$(b.name)", a.bases, a.dtype, a.device_config)
+    result = ScalarField(a.dist, "$(a.name)_minus_$(b.name)", a.bases, a.dtype)
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
     ensure_layout!(result, :g)
     
     # Ensure all arrays are on same device
-    a_data = ensure_device!(a.data_g, a.device_config)
-    b_data = ensure_device!(b.data_g, a.device_config)
+    a_data = a.data_g
+    b_data = b.data_g
     
     # GPU-compatible element-wise subtraction
     result.data_g .= a_data .- b_data
@@ -672,12 +636,12 @@ end
 function Base.:*(a::ScalarField, b::Union{Real, ScalarField})
     """Multiply scalar field by scalar or another field with GPU-compatible optimization"""
     if isa(b, Real)
-        result = ScalarField(a.dist, "$(a.name)_times_$(b)", a.bases, a.dtype, a.device_config)
+        result = ScalarField(a.dist, "$(a.name)_times_$(b)", a.bases, a.dtype)
         ensure_layout!(a, :g)
         ensure_layout!(result, :g)
         
         # Ensure array is on correct device
-        a_data = ensure_device!(a.data_g, a.device_config)
+        a_data = a.data_g
         
         # GPU-compatible scalar multiplication
         result.data_g .= b .* a_data
@@ -687,14 +651,14 @@ function Base.:*(a::ScalarField, b::Union{Real, ScalarField})
         if a.bases != b.bases
             throw(ArgumentError("Cannot multiply fields with different bases"))
         end
-        result = ScalarField(a.dist, "$(a.name)_times_$(b.name)", a.bases, a.dtype, a.device_config)
+        result = ScalarField(a.dist, "$(a.name)_times_$(b.name)", a.bases, a.dtype)
         ensure_layout!(a, :g)
         ensure_layout!(b, :g)
         ensure_layout!(result, :g)
         
         # Ensure arrays are on same device
-        a_data = ensure_device!(a.data_g, a.device_config)
-        b_data = ensure_device!(b.data_g, a.device_config)
+        a_data = a.data_g
+        b_data = b.data_g
         
         # GPU-compatible element-wise multiplication (key for nonlinear terms)
         result.data_g .= a_data .* b_data
@@ -738,40 +702,6 @@ function load_field!(field::ScalarField, filename::String, dataset_name::String=
     
     ensure_layout!(field, :g)
     field.data_g .= local_data
-end
-
-# Device management for fields
-function to_device!(field::ScalarField, device::Union{String, DeviceConfig})
-    """Move field data to specified device"""
-    new_config = isa(device, String) ? select_device(device) : device
-    
-    if new_config.device_type != field.device_config.device_type
-        # Move data to new device
-        if field.data_g !== nothing
-            field.data_g = device_array(field.data_g, new_config)
-        end
-        if field.data_c !== nothing
-            field.data_c = device_array(field.data_c, new_config)
-        end
-        field.device_config = new_config
-    end
-    
-    return field
-end
-
-function to_cpu!(field::ScalarField)
-    """Move field data to CPU"""
-    return to_device!(field, "cpu")
-end
-
-function to_gpu!(field::ScalarField, device_id::Int=0)
-    """Move field data to GPU (auto-select backend)"""
-    return to_device!(field, "gpu")
-end
-
-function synchronize_field(field::ScalarField)
-    """Synchronize field operations on device"""
-    gpu_synchronize(field.device_config)
 end
 
 # Optimization support functions
