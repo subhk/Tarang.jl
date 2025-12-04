@@ -891,41 +891,276 @@ end
 function apply_layout_transformation(field_data, grid_space_flags, target_layout, merger)
     """
     Apply layout transformation to individual field data.
-    
-    This is a simplified implementation - a full version would need:
-    1. FFT/IFFT operations for spectral transforms
-    2. Proper handling of spectral coefficients
-    3. Domain-specific transformation logic
-    
-    For now, we implement basic transformations with proper metadata handling.
+
+    Transforms data between grid space and coefficient space layouts using FFT/IFFT.
+
+    Arguments:
+    - field_data: Array of field values (can be real or complex)
+    - grid_space_flags: Tuple/Vector of booleans indicating which dimensions are in grid space
+                       (true = grid space, false = coefficient space)
+    - target_layout: :grid_space or :coeff_space
+    - merger: NetCDFMerger instance for configuration
+
+    Returns:
+    - Transformed array, or nothing if transformation fails
     """
     try
-        # For this implementation, we'll primarily handle data reorganization
-        # rather than actual spectral transforms (which would require FFT libraries)
-        
-        if target_layout == :grid_space
-            # Transform mixed layout to pure grid space
-            # In a full implementation, this would apply inverse transforms 
-            # to coefficient space dimensions
-            
-            merger.verbose && println("              Transforming to grid space (simplified)")
-            # For now, return data as-is (real transformation would apply IFFT to coeff dims)
+        # Validate inputs
+        if field_data === nothing || isempty(field_data)
+            return nothing
+        end
+
+        ndims_data = ndims(field_data)
+
+        # Ensure grid_space_flags has correct length
+        if length(grid_space_flags) != ndims_data
+            merger.verbose && println("              Warning: grid_space_flags length mismatch, using default")
+            # Default: assume all dimensions are in grid space
+            grid_space_flags = ntuple(i -> true, ndims_data)
+        end
+
+        # Check if transformation is needed
+        all_grid = all(grid_space_flags)
+        all_coeff = !any(grid_space_flags)
+
+        if target_layout == :grid_space && all_grid
+            # Already in grid space
+            merger.verbose && println("              Data already in grid space")
             return field_data
-            
-        else  # target_layout == :coeff_space
-            # Transform mixed layout to pure coefficient space  
-            # In a full implementation, this would apply forward transforms
-            # to grid space dimensions
-            
-            merger.verbose && println("              Transforming to coefficient space (simplified)")
-            # For now, return data as-is (real transformation would apply FFT to grid dims)
+        elseif target_layout == :coeff_space && all_coeff
+            # Already in coefficient space
+            merger.verbose && println("              Data already in coefficient space")
             return field_data
         end
-        
+
+        # Perform transformation
+        if target_layout == :grid_space
+            return transform_to_grid_space(field_data, grid_space_flags, merger)
+        else  # target_layout == :coeff_space
+            return transform_to_coeff_space(field_data, grid_space_flags, merger)
+        end
+
     catch e
         merger.verbose && println("              Layout transformation failed: $e")
+        @debug "Layout transformation error" exception=(e, catch_backtrace())
         return nothing
     end
+end
+
+function transform_to_grid_space(field_data, grid_space_flags, merger)
+    """
+    Transform field data to grid space by applying inverse FFT to coefficient dimensions.
+    """
+    result = copy(field_data)
+    ndims_data = ndims(result)
+
+    # Convert to complex if needed for FFT operations
+    if eltype(result) <: Real
+        result = complex(result)
+    end
+
+    transforms_applied = 0
+
+    # Apply inverse FFT to each dimension that is in coefficient space
+    for dim in 1:ndims_data
+        if !grid_space_flags[dim]
+            # This dimension is in coefficient space - apply inverse FFT
+            try
+                # Use FFTW for the inverse transform along this dimension
+                result = apply_ifft_along_dim(result, dim)
+                transforms_applied += 1
+            catch e
+                merger.verbose && println("              IFFT failed for dimension $dim: $e")
+                # Continue with other dimensions
+            end
+        end
+    end
+
+    merger.verbose && println("              Applied $transforms_applied inverse transforms to grid space")
+
+    # Return real part if the result should be real-valued
+    # (for physical fields, the imaginary part should be negligible)
+    if all(grid_space_flags[i] || i > ndims_data for i in 1:ndims_data)
+        # Check if imaginary part is negligible
+        max_imag = maximum(abs.(imag(result)))
+        max_real = maximum(abs.(real(result)))
+        if max_real > 0 && max_imag / max_real < 1e-10
+            return real(result)
+        end
+    end
+
+    return result
+end
+
+function transform_to_coeff_space(field_data, grid_space_flags, merger)
+    """
+    Transform field data to coefficient space by applying forward FFT to grid dimensions.
+    """
+    result = copy(field_data)
+    ndims_data = ndims(result)
+
+    # Convert to complex for FFT operations
+    if eltype(result) <: Real
+        result = complex(result)
+    end
+
+    transforms_applied = 0
+
+    # Apply forward FFT to each dimension that is in grid space
+    for dim in 1:ndims_data
+        if grid_space_flags[dim]
+            # This dimension is in grid space - apply forward FFT
+            try
+                result = apply_fft_along_dim(result, dim)
+                transforms_applied += 1
+            catch e
+                merger.verbose && println("              FFT failed for dimension $dim: $e")
+                # Continue with other dimensions
+            end
+        end
+    end
+
+    merger.verbose && println("              Applied $transforms_applied forward transforms to coefficient space")
+
+    return result
+end
+
+function apply_fft_along_dim(data::AbstractArray{T}, dim::Int) where T <: Complex
+    """
+    Apply forward FFT along a specific dimension.
+    Uses normalized FFT (1/N factor applied).
+    """
+    n = size(data, dim)
+
+    # Create FFT plan for this dimension
+    # We use fft with the dims keyword to transform along a specific axis
+    result = fft(data, dim)
+
+    # Normalize by 1/N for proper spectral coefficients
+    result ./= n
+
+    return result
+end
+
+function apply_fft_along_dim(data::AbstractArray{T}, dim::Int) where T <: Real
+    """Apply FFT to real data along a specific dimension."""
+    return apply_fft_along_dim(complex(data), dim)
+end
+
+function apply_ifft_along_dim(data::AbstractArray{T}, dim::Int) where T <: Complex
+    """
+    Apply inverse FFT along a specific dimension.
+    Uses unnormalized IFFT (multiply by N to invert the forward normalization).
+    """
+    n = size(data, dim)
+
+    # Apply inverse FFT along specified dimension
+    result = ifft(data, dim)
+
+    # IFFT in Julia is already normalized by 1/N, but we used 1/N in forward FFT
+    # So we need to multiply by N to get back the original values
+    result .*= n
+
+    return result
+end
+
+function apply_ifft_along_dim(data::AbstractArray{T}, dim::Int) where T <: Real
+    """Apply IFFT to real data along a specific dimension."""
+    return apply_ifft_along_dim(complex(data), dim)
+end
+
+function detect_layout_from_data(field_data, field_name::String="")
+    """
+    Attempt to detect whether data is in grid space or coefficient space
+    based on data characteristics.
+
+    Heuristics:
+    1. Complex data with significant imaginary parts likely in coefficient space
+    2. Data with values concentrated near zero indices likely in coefficient space
+    3. Smooth real data likely in grid space
+
+    Returns a tuple of booleans (grid_space_flags) for each dimension.
+    """
+    ndims_data = ndims(field_data)
+
+    # Default: assume grid space
+    grid_space_flags = fill(true, ndims_data)
+
+    # Check if data is complex
+    if eltype(field_data) <: Complex
+        # Check imaginary content
+        total_mag = sum(abs.(field_data))
+        imag_mag = sum(abs.(imag(field_data)))
+
+        if total_mag > 0 && imag_mag / total_mag > 0.01
+            # Significant imaginary content - likely coefficient space
+            # For Fourier dimensions, mark as coefficient space
+            for dim in 1:ndims_data
+                # Check if energy is concentrated at low wavenumbers
+                if is_spectral_dimension(field_data, dim)
+                    grid_space_flags[dim] = false
+                end
+            end
+        end
+    end
+
+    return tuple(grid_space_flags...)
+end
+
+function is_spectral_dimension(data::AbstractArray, dim::Int)
+    """
+    Check if a dimension appears to be in spectral (coefficient) space
+    by examining the energy distribution.
+
+    In coefficient space, energy is typically concentrated at low wavenumbers.
+    """
+    n = size(data, dim)
+    if n < 4
+        return false  # Too small to determine
+    end
+
+    # Sum absolute values along this dimension
+    # Move the target dimension to first position for easier slicing
+    perm = collect(1:ndims(data))
+    perm[1], perm[dim] = perm[dim], perm[1]
+    permuted = permutedims(data, perm)
+
+    # Compute energy in low vs high wavenumber regions
+    quarter_n = max(1, n ÷ 4)
+
+    # Low wavenumber region (first and last quarter for symmetric spectra)
+    low_k_energy = sum(abs.(selectdim(permuted, 1, 1:quarter_n))) +
+                   sum(abs.(selectdim(permuted, 1, (n - quarter_n + 1):n)))
+
+    # High wavenumber region (middle half)
+    mid_start = quarter_n + 1
+    mid_end = n - quarter_n
+    if mid_end >= mid_start
+        high_k_energy = sum(abs.(selectdim(permuted, 1, mid_start:mid_end)))
+    else
+        high_k_energy = 0.0
+    end
+
+    total_energy = low_k_energy + high_k_energy
+
+    if total_energy == 0
+        return false
+    end
+
+    # If more than 80% of energy is in low wavenumbers, likely spectral
+    return low_k_energy / total_energy > 0.8
+end
+
+function get_layout_string(grid_space_flags)
+    """Convert grid_space_flags to a readable string."""
+    parts = [flag ? "G" : "C" for flag in grid_space_flags]
+    return join(parts, "-")
+end
+
+function parse_layout_string(layout_str::String)
+    """Parse layout string like 'G-C-G' to grid_space_flags tuple."""
+    parts = split(layout_str, "-")
+    return tuple([uppercase(strip(p)) == "G" for p in parts]...)
 end
 
 function estimate_global_shape_from_decomposition(processor_data)
