@@ -61,7 +61,7 @@ function Domain(dist::Distributor, bases::Vararg{Basis}; device_type::Symbol=CPU
     return Domain(dist, tuple(bases...); device_type=device_type, device=device)
 end
 
-@inline function _domain_cached_get!(domain::Domain, key::Symbol, builder::Function)
+@inline function _domain_cached_get!(builder::Function, domain::Domain, key::Symbol)
     cache = domain.attribute_cache
     return get!(cache, key) do
         builder()
