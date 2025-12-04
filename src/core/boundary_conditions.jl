@@ -682,12 +682,13 @@ function validate_boundary_conditions(manager::BoundaryConditionManager, problem
         end
         
         if tau_needed && tau_field === nothing
-            push!(warnings, "Boundary condition for $(bc.field) may need tau field")
-        elseif tau_needed && get_tau_field(manager, tau_field) === nothing
+            # This is informational - tau fields are optional for simple problems
+            @debug "Boundary condition for $(bc.field) does not have tau field (optional for simple problems)"
+        elseif tau_needed && tau_field !== nothing && get_tau_field(manager, tau_field) === nothing
             push!(errors, "Tau field $tau_field not registered")
         end
     end
-    
+
     # Check for coordinate consistency
     field_coords = Dict{String, Set{String}}()
     for bc in manager.conditions
