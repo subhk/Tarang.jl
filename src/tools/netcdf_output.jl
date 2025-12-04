@@ -451,35 +451,47 @@ Create NetCDF file with Dedalus-style structure
 """
 function create_current_file!(handler::NetCDFFileHandler)
     filename = current_file(handler)
-    
+
     # Create file directory if needed
     dir = dirname(filename)
     if !isdir(dir)
         mkpath(dir)
     end
-    
+
+    # Remove existing file to avoid dimension conflicts
+    if isfile(filename)
+        rm(filename)
+    end
+
     # Create basic structure matching Dedalus HDF5 layout
-    
-    # Create time coordinate (unlimited)
-    nccreate(filename, "sim_time", "sim_time", 0,  # 0 = unlimited
-            atts=Dict("long_name" => "simulation time",
-                     "units" => "dimensionless time",
-                     "axis" => "T"))
-                     
-    # Create other time-related scales
-    nccreate(filename, "wall_time", "sim_time", 0,
-            atts=Dict("long_name" => "wall clock time",
-                     "units" => "seconds"))
-                     
-    nccreate(filename, "timestep", "sim_time", 0,  
-            atts=Dict("long_name" => "timestep",
-                     "units" => "dimensionless time"))
-                     
-    nccreate(filename, "iteration", "sim_time", 0,
-            atts=Dict("long_name" => "iteration number"))
-            
-    nccreate(filename, "write_number", "sim_time", 0,
-            atts=Dict("long_name" => "write number"))
+    # Use NetCDF.create for better control over file creation
+    NetCDF.create(filename, mode=NC_NETCDF4) do nc
+        # Define unlimited time dimension
+        timedim = NcDim("sim_time", 0, unlimited=true)
+
+        # Create time-related variables with shared time dimension
+        sim_time_var = NcVar("sim_time", [timedim], t=Float64,
+                            atts=Dict("long_name" => "simulation time",
+                                     "units" => "dimensionless time",
+                                     "axis" => "T"))
+        wall_time_var = NcVar("wall_time", [timedim], t=Float64,
+                             atts=Dict("long_name" => "wall clock time",
+                                      "units" => "seconds"))
+        timestep_var = NcVar("timestep", [timedim], t=Float64,
+                            atts=Dict("long_name" => "timestep",
+                                     "units" => "dimensionless time"))
+        iteration_var = NcVar("iteration", [timedim], t=Int64,
+                             atts=Dict("long_name" => "iteration number"))
+        write_number_var = NcVar("write_number", [timedim], t=Int64,
+                                atts=Dict("long_name" => "write number"))
+
+        # Add variables to file
+        NetCDF.putvar(nc, sim_time_var)
+        NetCDF.putvar(nc, wall_time_var)
+        NetCDF.putvar(nc, timestep_var)
+        NetCDF.putvar(nc, iteration_var)
+        NetCDF.putvar(nc, write_number_var)
+    end
     
     # Add global attributes (matching Dedalus metadata)
     # Note: NetCDF.jl doesn't support Bool attributes, so we use Int (0/1)
