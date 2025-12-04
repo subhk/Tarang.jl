@@ -22,7 +22,7 @@ mutable struct ScalarField <: Operand
 
     # Data storage - both grid and coefficient layouts
     # For MPI: Store Pencil objects to maintain distribution information
-    # For serial/GPU: Store regular arrays
+    # For serial: Store regular arrays
     data_g::Union{Nothing, AbstractArray, PencilArrays.Pencil}  # Grid space data
     data_c::Union{Nothing, AbstractArray, PencilArrays.Pencil}  # Coefficient space data
 
@@ -120,14 +120,14 @@ struct LockedField <: Operand
     end
 end
 
-# Data allocation and management (GPU-compatible)
+# Data allocation and management
 function allocate_data!(field::ScalarField)
     """
     Allocate data for field following proper PencilArrays pattern.
 
     Key principles:
     1. For MPI (use_pencil_arrays=true): Store Pencil objects to maintain distribution
-    2. For serial/GPU: Can use regular arrays
+    2. For serial: Use regular arrays
     3. NEVER convert Pencil to Array - work with pencil.data for local access
     """
     if field.domain === nothing
@@ -146,7 +146,6 @@ function allocate_data!(field::ScalarField)
         field.data_g = create_pencil(field.dist, global_shape, 1, dtype=field.dtype)
         field.data_c = create_pencil(field.dist, global_shape, 1, dtype=field.dtype)
 
-        # For GPU operations on pencil data, access pencil.data (local portion)
         # For local computations on pencil.data
     else
         # Serial computation
@@ -589,63 +588,48 @@ function Base.setindex!(field::TensorField, value, i::Int, j::Int)
     field.components[i, j] = value
 end
 
-# Field arithmetic (GPU-compatible)
+# Field arithmetic
 function Base.:+(a::ScalarField, b::ScalarField)
-    """Add two scalar fields with GPU-compatible optimization"""
+    """Add two scalar fields"""
     if a.bases != b.bases
         throw(ArgumentError("Cannot add fields with different bases"))
     end
-    
-    # Use same device as first field
+
     result = ScalarField(a.dist, "$(a.name)_plus_$(b.name)", a.bases, a.dtype)
     ensure_layout!(a, :g)
-    ensure_layout!(b, :g) 
+    ensure_layout!(b, :g)
     ensure_layout!(result, :g)
-    
-    # Ensure all arrays are on same device
-    a_data = a.data_g
-    b_data = b.data_g
-    
-    # GPU-compatible element-wise addition
-    result.data_g .= a_data .+ b_data
-    
+
+    result.data_g .= a.data_g .+ b.data_g
+
     return result
 end
 
 function Base.:-(a::ScalarField, b::ScalarField)
-    """Subtract two scalar fields with GPU-compatible optimization"""
+    """Subtract two scalar fields"""
     if a.bases != b.bases
         throw(ArgumentError("Cannot subtract fields with different bases"))
     end
-    
+
     result = ScalarField(a.dist, "$(a.name)_minus_$(b.name)", a.bases, a.dtype)
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
     ensure_layout!(result, :g)
-    
-    # Ensure all arrays are on same device
-    a_data = a.data_g
-    b_data = b.data_g
-    
-    # GPU-compatible element-wise subtraction
-    result.data_g .= a_data .- b_data
-    
+
+    result.data_g .= a.data_g .- b.data_g
+
     return result
 end
 
 function Base.:*(a::ScalarField, b::Union{Real, ScalarField})
-    """Multiply scalar field by scalar or another field with GPU-compatible optimization"""
+    """Multiply scalar field by scalar or another field"""
     if isa(b, Real)
         result = ScalarField(a.dist, "$(a.name)_times_$(b)", a.bases, a.dtype)
         ensure_layout!(a, :g)
         ensure_layout!(result, :g)
-        
-        # Ensure array is on correct device
-        a_data = a.data_g
-        
-        # GPU-compatible scalar multiplication
-        result.data_g .= b .* a_data
-        
+
+        result.data_g .= b .* a.data_g
+
         return result
     else
         if a.bases != b.bases
@@ -655,19 +639,14 @@ function Base.:*(a::ScalarField, b::Union{Real, ScalarField})
         ensure_layout!(a, :g)
         ensure_layout!(b, :g)
         ensure_layout!(result, :g)
-        
-        # Ensure arrays are on same device
-        a_data = a.data_g
-        b_data = b.data_g
-        
-        # GPU-compatible element-wise multiplication (key for nonlinear terms)
-        result.data_g .= a_data .* b_data
-        
+
+        result.data_g .= a.data_g .* b.data_g
+
         # Apply basic dealiasing for spectral methods (3/2 rule)
         if has_spectral_bases(a) && length(a.data_g) > 64
             apply_dealiasing_to_product!(result)
         end
-        
+
         return result
     end
 end

@@ -351,65 +351,47 @@ end
 
 # Time stepping for IVP
 function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
-    """Advance solution by one time step using existing timestepper infrastructure with GPU support"""
-    
+    """Advance solution by one time step using existing timestepper infrastructure"""
+
     start_time = time()
-    
+
     solver.dt = dt
-    
+
     # Update time-dependent boundary conditions BEFORE taking the step
     if has_time_dependent_bcs(solver.problem.bc_manager)
         update_time_dependent_bcs!(solver.problem.bc_manager, solver.sim_time + dt)
         @debug "Updated time-dependent BCs for t=$(solver.sim_time + dt)"
     end
-    
-    # Ensure all state fields are on correct device
-    gpu_transfer_start = time()
-    for field in solver.state
-        field.data_g = field.data_g
-        field.data_c = field.data_c
-    end
-    
+
     # Use existing timestepper infrastructure from timesteppers.jl
     # Create TimestepperState if needed
     if solver.timestepper_state === nothing
         solver.timestepper_state = TimestepperState(solver.timestepper, dt)
-        # Initialize history with current state (ensure GPU compatibility)
+        # Initialize history with current state
         state_copy = deepcopy(solver.state)
-        for field in state_copy
-            field.data_g = field.data_g
-            field.data_c = field.data_c
-        end
         push!(solver.timestepper_state.history, state_copy)
     else
         # Update timestep history for variable timestep support
         update_timestep_history!(solver.timestepper_state, dt)
     end
-    
+
     # Call existing timestepper step function from timesteppers.jl
     step!(solver.timestepper_state, solver)
-    
+
     # Get the updated state from timestepper history
     if length(solver.timestepper_state.history) > 0
         solver.state = solver.timestepper_state.history[end]
-        # Ensure result is on correct device
-        for field in solver.state
-            field.data_g = field.data_g
-            field.data_c = field.data_c
-        end
     end
-    
-    # Synchronize GPU operations
-    
+
     # Update time and iteration
     solver.sim_time += dt
     solver.iteration += 1
-    
+
     # Update performance statistics
     step_time = time() - start_time
     solver.performance_stats.total_time += step_time
     solver.performance_stats.total_steps += 1
-    
+
     return solver
 end
 
@@ -433,40 +415,39 @@ end
 
 # Boundary value solver
 function solve!(solver::BoundaryValueSolver)
-    """Solve boundary value problem with GPU acceleration"""
-    
+    """Solve boundary value problem"""
+
     start_time = time()
-    
-    # Ensure matrices and vectors are on correct device
-    solver.L_matrix = solver.L_matrix
-    solver.M_matrix = solver.M_matrix
-    solver.F_vector = solver.F_vector
-    
+
     if isa(solver.problem, LBVP)
-        # Linear boundary value problem with GPU support
-        solution = solve_linear_gpu!(solver)
-        
+        # Linear boundary value problem
+        solution = solve_linear!(solver)
+
         # Copy solution back to state fields
         copy_solution_to_fields!(solver.state, solution)
-        
+
     elseif isa(solver.problem, NLBVP)
-        # Nonlinear boundary value problem - Newton iteration with GPU
-        solve_nonlinear_gpu!(solver)
+        # Nonlinear boundary value problem - Newton iteration
+        solve_nonlinear!(solver)
     end
-    
-    # Synchronize GPU operations
-    
+
     # Update performance statistics
     solve_time = time() - start_time
     solver.performance_stats.total_time += solve_time
     solver.performance_stats.total_solves += 1
-    
+
     return solver
+end
+
+function solve_linear!(solver::BoundaryValueSolver)
+    """Solve linear boundary value problem"""
+    # Direct solve: L * x = F
+    return solver.L_matrix \ solver.F_vector
 end
 
 function solve_nonlinear!(solver::BoundaryValueSolver)
     """Solve nonlinear boundary value problem using Newton iteration"""
-    
+
     # Initial guess (current state)
     x = fields_to_vector(solver.state)
     
@@ -495,31 +476,25 @@ end
 
 # Eigenvalue solver
 function solve!(solver::EigenvalueSolver)
-    """Solve eigenvalue problem with GPU acceleration"""
-    
+    """Solve eigenvalue problem"""
+
     start_time = time()
-    
-    # Ensure matrices are on correct device
-    solver.L_matrix = solver.L_matrix
-    solver.M_matrix = solver.M_matrix
-    
-    # Solve generalized eigenvalue problem: L * v = λ * M * v (CPU only)
+
+    # Solve generalized eigenvalue problem: L * v = λ * M * v
     if solver.target === nothing
         λ, v = eigs(solver.L_matrix, solver.M_matrix, nev=solver.n_modes, which=:LM)
     else
         λ, v = eigs(solver.L_matrix, solver.M_matrix, nev=solver.n_modes, sigma=solver.target)
     end
-    
+
     solver.eigenvalues = λ
     solver.eigenvectors = v
-    
-    # Synchronize GPU operations
-    
+
     # Update performance statistics
     solve_time = time() - start_time
     solver.performance_stats.total_time += solve_time
     solver.performance_stats.total_solves += 1
-    
+
     return solver
 end
 

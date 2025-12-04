@@ -235,54 +235,40 @@ function evaluate_nonlinear_term(op::NonlinearAdvectionOperator, layout::Symbol=
 end
 
 function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, evaluator::NonlinearEvaluator)
-    """Efficiently multiply two fields using transform method  and proper dealiasing
-    
-    This follows the standard spectral method approach with GPU acceleration:
-    1. Ensure both fields are on the correct device
-    2. Transform both fields to grid space (if not already)
-    3. Pointwise multiply in grid space (optimized)
-    4. Transform product back to spectral space
-    5. Apply dealiasing to remove aliasing errors
-    
-    INTEGRATED WITH ACTUAL FIELD OPERATIONS - uses the optimized field multiplication
+    """Efficiently multiply two fields using transform method and proper dealiasing
+
+    This follows the standard spectral method approach:
+    1. Transform both fields to grid space (if not already)
+    2. Pointwise multiply in grid space
+    3. Transform product back to spectral space
+    4. Apply dealiasing to remove aliasing errors
+
+    Uses optimized field multiplication operations.
     """
-    
+
     start_time = time()
-    
-    # Ensure both fields are on the same device
-    field1.data_g = field1.data_g
-    field1.data_c = field1.data_c
-    field2.data_g = field2.data_g
-    field2.data_c = field2.data_c
-    
+
     # Ensure both fields are in grid space for multiplication
     ensure_layout!(field1, :g)
     ensure_layout!(field2, :g)
-    
+
     # Check compatibility
     if field1.bases != field2.bases
         throw(ArgumentError("Cannot multiply fields with different bases"))
     end
-    
-    # ACTUAL OPTIMIZATION: Use the optimized field multiplication directly
-    # This automatically applies GPU acceleration and optimizations from field.jl
-    result = field1 * field2  # This now uses the GPU-aware Base.:* we implemented
-    
-    # Ensure result is on correct device
-    result.data_g = result.data_g
-    result.data_c = result.data_c
-    
-    # Apply GPU-compatible dealiasing if requested
+
+    # Use the optimized field multiplication directly
+    result = field1 * field2
+
+    # Apply dealiasing if requested
     if evaluator.dealiasing_factor > 1.0
-        apply_gpu_dealiasing!(result, evaluator.dealiasing_factor)
+        apply_basic_dealiasing!(result, evaluator.dealiasing_factor)
     end
-    
-    # Synchronize GPU operations
-    
+
     # Update performance statistics
     evaluator.performance_stats.total_evaluations += 1
     evaluator.performance_stats.total_time += (time() - start_time)
-    
+
     return result
 end
 
@@ -439,15 +425,6 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     backward_transform!(field)
 end
 
-function apply_gpu_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
-    """Alias to CPU dealiasing (GPU support removed)."""
-    return apply_basic_dealiasing!(field, dealiasing_factor)
-end
-
-function apply_gpu_spectral_cutoff!(data::AbstractArray, axis::Int, cutoff::Int)
-    """CPU-only spectral cutoff placeholder."""
-    apply_1d_spectral_cutoff!(data, axis, cutoff)
-end
 
 function apply_spectral_cutoff!(data::AbstractArray, cutoffs::Tuple)
     """Apply spectral cutoff to remove high-frequency modes"""
@@ -555,29 +532,18 @@ function get_temp_field(evaluator::NonlinearEvaluator, template::ScalarField, na
 end
 
 function clear_temp_fields!(evaluator::NonlinearEvaluator)
-    """Clear temporary fields to free memory on both CPU and GPU"""
-    
-    # Clear CPU temporary fields
+    """Clear temporary fields to free memory"""
     empty!(evaluator.temp_fields)
-    
-    # Clear GPU memory pool
-    
-    # Force garbage collection to free GPU memory
     GC.gc()
-    
-    # Synchronize GPU to ensure memory is freed
 end
 
-function get_gpu_temp_array(evaluator::NonlinearEvaluator, shape::Tuple, dtype::Type)
-    """Get temporary GPU array for intermediate calculations"""
-    
-    # No GPU pool in CPU-only mode; just allocate a new array
+function get_temp_array(evaluator::NonlinearEvaluator, shape::Tuple, dtype::Type)
+    """Get temporary array for intermediate calculations"""
     return zeros(dtype, shape)
 end
 
-function return_gpu_temp_array!(evaluator::NonlinearEvaluator, arr::AbstractArray)
-    """Return temporary GPU array to memory pool for reuse"""
-    # No pooling in CPU-only mode; let GC reclaim.
+function return_temp_array!(evaluator::NonlinearEvaluator, arr::AbstractArray)
+    """Return temporary array (no-op for CPU, let GC reclaim)"""
     return nothing
 end
 

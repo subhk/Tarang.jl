@@ -8,8 +8,6 @@ using LinearAlgebra
 using SparseArrays
 using FFTW
 
-# Include GPU manager for device-agnostic operations
-
 abstract type Basis end
 
 struct AffineCOV
@@ -516,99 +514,85 @@ end
 
 # Note: get_basis_axis is implemented in distributor.jl
 
-# GPU-compatible basis evaluation functions
+# Basis evaluation functions
 
-function evaluate_basis_gpu(basis::RealFourier, coords, modes)
-    """Evaluate real Fourier basis functions on GPU."""
-    # Ensure coordinates are on the correct device
-    coords_device = coords
-    modes_device = modes
-    
+function evaluate_basis(basis::RealFourier, coords, modes)
+    """Evaluate real Fourier basis functions."""
     # Normalize coordinates to [0, 2π]
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
-    normalized_coords = @. 2π * (coords_device - basis.meta.bounds[1]) / L
-    
+    normalized_coords = @. 2π * (coords - basis.meta.bounds[1]) / L
+
     # Evaluate Fourier modes: cos(k*x) and sin(k*x)
-    n_modes = length(modes_device)
-    n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
-    
-    # GPU-optimized trigonometric evaluation
-    for (i, k) in enumerate(modes_device)
+    n_modes = length(modes)
+    n_points = length(coords)
+    result = zeros(basis.meta.dtype, n_points, n_modes)
+
+    for (i, k) in enumerate(modes)
         if k == 0
             result[:, i] .= 1.0  # Constant mode
         else
             result[:, i] .= cos.(k * normalized_coords)
         end
     end
-    
+
     return result
 end
 
-function evaluate_basis_gpu(basis::ComplexFourier, coords, modes)
-    """Evaluate complex Fourier basis functions on GPU."""
-    coords_device = coords
-    modes_device = modes
-    
+function evaluate_basis(basis::ComplexFourier, coords, modes)
+    """Evaluate complex Fourier basis functions."""
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
-    normalized_coords = @. 2π * (coords_device - basis.meta.bounds[1]) / L
-    
-    n_modes = length(modes_device)
-    n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
-    
+    normalized_coords = @. 2π * (coords - basis.meta.bounds[1]) / L
+
+    n_modes = length(modes)
+    n_points = length(coords)
+    result = zeros(Complex{basis.meta.dtype}, n_points, n_modes)
+
     # Complex exponentials: exp(i*k*x)
-    for (i, k) in enumerate(modes_device)
+    for (i, k) in enumerate(modes)
         result[:, i] .= exp.(im * k * normalized_coords)
     end
-    
+
     return result
 end
 
-function evaluate_basis_gpu(basis::ChebyshevT, coords, modes)
-    """Evaluate Chebyshev T polynomials on GPU."""
-    coords_device = coords
-    modes_device = modes
-    
+function evaluate_basis(basis::ChebyshevT, coords, modes)
+    """Evaluate Chebyshev T polynomials."""
     # Map to [-1, 1] interval
     a, b = basis.meta.bounds
-    mapped_coords = @. 2 * (coords_device - a) / (b - a) - 1
-    
-    n_modes = length(modes_device)
-    n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
-    
+    mapped_coords = @. 2 * (coords - a) / (b - a) - 1
+
+    n_modes = length(modes)
+    n_points = length(coords)
+    result = zeros(basis.meta.dtype, n_points, n_modes)
+
     # Evaluate Chebyshev polynomials using recurrence relation
-    for (i, n) in enumerate(modes_device)
+    for (i, n) in enumerate(modes)
         if n == 0
             result[:, i] .= 1.0
         elseif n == 1
             result[:, i] .= mapped_coords
         else
-            # Use cos(n*arccos(x)) for stability on GPU
+            # Use cos(n*arccos(x)) for stability
             result[:, i] .= cos.(n * acos.(clamp.(mapped_coords, -1, 1)))
         end
     end
-    
+
     return result
 end
 
-function derivative_basis_gpu(basis::RealFourier, coords, modes, order=1)
-    """Evaluate derivatives of real Fourier basis on GPU."""
-    coords_device = coords
-    modes_device = modes
-    
+function derivative_basis(basis::RealFourier, coords, modes, order=1)
+    """Evaluate derivatives of real Fourier basis."""
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
-    normalized_coords = @. 2π * (coords_device - basis.meta.bounds[1]) / L
-    
-    n_modes = length(modes_device)
-    n_points = length(coords_device)
-    result = device_zeros(basis.meta.dtype, (n_points, n_modes), basis.meta)
-    
+    normalized_coords = @. 2π * (coords - basis.meta.bounds[1]) / L
+
+    n_modes = length(modes)
+    n_points = length(coords)
+    result = zeros(basis.meta.dtype, n_points, n_modes)
+
     # Derivative factor
     factor = (2π / L)^order
-    
-    for (i, k) in enumerate(modes_device)
+
+    for (i, k) in enumerate(modes)
         if k == 0
             result[:, i] .= 0.0  # Derivative of constant is zero
         else
@@ -624,17 +608,12 @@ function derivative_basis_gpu(basis::RealFourier, coords, modes, order=1)
             end
         end
     end
-    
+
     return result
 end
 
-function to_device!(basis::Basis, device_config::CPUDeviceConfig=DEFAULT_DEVICE)
-    """No-op device transfer for CPU-only mode."""
-    return basis
-end
-
 function synchronize_basis!(basis::Basis)
-    """Synchronize basis operations on GPU."""
+    """No-op for CPU-only mode."""
 end
 
 # Transform methods for basis types

@@ -20,14 +20,13 @@ using SparseArrays
 
 mutable struct BCPerformanceStats
     total_time::Float64
-    gpu_transfer_time::Float64
     total_evaluations::Int
     bc_updates::Int
     cache_hits::Int
     cache_misses::Int
-    
+
     function BCPerformanceStats()
-        new(0.0, 0.0, 0, 0, 0, 0)
+        new(0.0, 0, 0, 0, 0)
     end
 end
 
@@ -114,7 +113,7 @@ struct CustomBC <: AbstractBoundaryCondition
     tau_fields::Vector{String}
 end
 
-# Enhanced boundary condition manager with time/space dependency and GPU support
+# Enhanced boundary condition manager with time/space dependency
 mutable struct BoundaryConditionManager
     conditions::Vector{AbstractBoundaryCondition}
     tau_fields::Dict{String, Any}  # Maps tau field names to field objects
@@ -310,19 +309,7 @@ end
 
 # Tau field management
 function register_tau_field!(manager::BoundaryConditionManager, name::String, field)
-    """Register tau field for boundary condition enforcement with GPU support"""
-    
-    # Ensure tau field data is on correct device
-    if isa(field, ScalarField)
-        field.data_g = field.data_g
-        field.data_c = field.data_c
-    elseif isa(field, VectorField)
-        for comp in field.components
-            comp.data_g = comp.data_g
-            comp.data_c = comp.data_c
-        end
-    end
-    
+    """Register tau field for boundary condition enforcement"""
     manager.tau_fields[name] = field
     return manager
 end
@@ -333,7 +320,7 @@ function get_tau_field(manager::BoundaryConditionManager, name::String)
 end
 
 function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, dist)
-    """Automatically generate tau fields for boundary conditions that need them with GPU support"""
+    """Automatically generate tau fields for boundary conditions that need them"""
     
     tau_counter = 1
     
@@ -344,7 +331,7 @@ function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, d
             tau_name = "tau_$(bc.field)_dirichlet_$tau_counter"
             tau_counter += 1
             
-            # Create scalar tau field on boundary basis (GPU-aware)
+            # Create scalar tau field on boundary basis
             coord_basis = get_boundary_basis(manager, bc.coordinate)
             if coord_basis !== nothing
                 tau_field = ScalarField(dist, tau_name, (coord_basis,))
@@ -671,16 +658,14 @@ function add_coordinate_field!(manager::BoundaryConditionManager, coord_name::St
 end
 
 function evaluate_bc_value(manager::BoundaryConditionManager, bc, current_time=0.0, coords=Dict())
-    """Evaluate boundary condition value at current time and spatial coordinates with GPU support"""
-    
-    gpu_transfer_start = time()
-    
+    """Evaluate boundary condition value at current time and spatial coordinates"""
+
     if isa(bc, DirichletBC)
         value = bc.value
     elseif isa(bc, NeumannBC)
         value = bc.value
     elseif isa(bc, RobinBC)
-        # For Robin BCs, evaluate all components on GPU if needed
+        # For Robin BCs, evaluate all components
         alpha = evaluate_expression(bc.alpha, current_time, coords, manager)
         beta = evaluate_expression(bc.beta, current_time, coords, manager)
         val = evaluate_expression(bc.value, current_time, coords, manager)
@@ -768,7 +753,7 @@ function evaluate_expression(expr, current_time=0.0, coords=Dict())
 end
 
 function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_time)
-    """Update all time-dependent boundary conditions for current time with GPU acceleration"""
+    """Update all time-dependent boundary conditions for current time"""
     
     if isempty(manager.time_dependent_bcs)
         return manager
@@ -780,8 +765,8 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
     for bc_index in manager.time_dependent_bcs
         bc = manager.conditions[bc_index]
         
-        # Update the BC value based on current time (GPU-accelerated)
-        # Cache evaluated values on GPU for repeated use
+        # Update the BC value based on current time
+        # Cache evaluated values for repeated use
         cache_key = "bc_$(bc_index)_t_$(current_time)"
         
         if isa(bc, DirichletBC) && bc.is_time_dependent
