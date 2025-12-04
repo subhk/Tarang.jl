@@ -365,8 +365,8 @@ function step_rk111!(state::TimestepperState, solver::InitialValueSolver)
         ensure_layout!(rhs[i], :g)
         ensure_layout!(new_field, :g)
         
-        # OPTIMIZED Forward Euler: u^{n+1} = u^n + dt * F(u^n)
-        # Multi-tier optimization: BLAS > LoopVectorization > Broadcasting
+        # Forward Euler: u^{n+1} = u^n + dt * F(u^n)
+        # Multi-tier implementation: BLAS > LoopVectorization > Broadcasting
         n = length(field.data_g)
         new_field.data_g .= field.data_g  # Copy initial state
         

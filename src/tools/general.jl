@@ -293,10 +293,10 @@ function axis_sort(arr::AbstractArray, axis::Int)
     return apply_along_axis(sort, axis, arr)
 end
 
-# Optimized version using Julia's mapslices when function output shape is predictable
+# Fast version using Julia's mapslices when function output shape is predictable
 function apply_along_axis_fast(func::Function, axis::Int, arr::AbstractArray)
     """
-    Optimized version of apply_along_axis using Julia's mapslices
+    Fast version of apply_along_axis using Julia's mapslices
     
     This version is more efficient for functions that:
     1. Return arrays of the same size as input

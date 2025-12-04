@@ -2,7 +2,7 @@
 Nonlinear term evaluation using PencilArrays and PencilFFTs
 
 This module implements efficient evaluation of nonlinear terms in spectral methods,
-following the Dedalus approach but optimized for Julia with PencilArrays/PencilFFTs.
+following the Dedalus approach and designed for Julia with PencilArrays/PencilFFTs.
 Supports both 2D and 3D parallelization with proper dealiasing.
 
 Key features:
@@ -243,7 +243,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
     3. Transform product back to spectral space
     4. Apply dealiasing to remove aliasing errors
 
-    Uses optimized field multiplication operations.
+    Uses efficient field multiplication operations.
     """
 
     start_time = time()
@@ -257,7 +257,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
         throw(ArgumentError("Cannot multiply fields with different bases"))
     end
 
-    # Use the optimized field multiplication directly
+    # Use the field multiplication directly
     result = field1 * field2
 
     # Apply dealiasing if requested

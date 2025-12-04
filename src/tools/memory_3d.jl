@@ -125,7 +125,7 @@ function copy_3d_inplace!(dest::Array{T,3}, src::Array{T,3}) where T
     return dest
 end
 
-# Optimized 3D field operations
+# 3D field operations
 function compute_3d_gradient_inplace!(grad_x::Array{T,3}, grad_y::Array{T,3}, grad_z::Array{T,3},
                                      field::Array{T,3}, dx::Real, dy::Real, dz::Real) where T
     """Compute 3D gradient in-place using finite differences"""

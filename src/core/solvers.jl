@@ -1102,7 +1102,7 @@ function apply_differentiate_operator(operands, expr)
     This leverages the complete implementation in operators.jl which includes:
     - Basis-specific differentiation (Fourier, Chebyshev, Legendre)
     - Proper spectral differentiation matrices
-    - Layout management and optimized operations
+    - Layout management and efficient operations
     """
     
     if length(operands) == 0
