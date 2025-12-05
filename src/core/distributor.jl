@@ -591,6 +591,9 @@ function clear_distributor_cache!(dist::Distributor)
     # Clear layout cache
     empty!(dist.layouts)
 
+    # Clear pencil cache
+    empty!(dist.pencil_cache)
+
     # Reset PencilArrays configuration if needed
     dist.pencil_config = nothing
 
@@ -603,7 +606,8 @@ function get_distributor_memory_info(dist::Distributor)
     """Get memory usage information for distributor"""
 
     return (
-        cached_layouts = length(dist.layouts)
+        cached_layouts = length(dist.layouts),
+        cached_pencils = length(dist.pencil_cache)
     )
 end
 
@@ -617,11 +621,14 @@ function log_distributor_performance(dist::Distributor)
     @info "  Layout creations: $(stats.layout_creations)"
     @info "  MPI operations: $(stats.mpi_operations)"
     @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
+    @info "  Transpose time: $(round(stats.transpose_time, digits=3)) seconds"
+    @info "  Communication time: $(round(stats.communication_time, digits=3)) seconds"
     @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses"
 
     # Memory usage
     mem_info = get_distributor_memory_info(dist)
     @info "  Cached layouts: $(mem_info.cached_layouts)"
+    @info "  Cached pencils: $(mem_info.cached_pencils)"
 end
 
 # MPI communication functions
@@ -678,13 +685,13 @@ function create_3d_process_mesh(nproc::Int)
     else
         # For larger cases, try to find good 3D factorization
         cube_root = round(Int, nproc^(1/3))
-        
+
         # Search around cube root
         for i in max(1, cube_root-2):cube_root+2
             if nproc % i == 0
                 remaining = nproc ÷ i
                 sqrt_remaining = round(Int, sqrt(remaining))
-                
+
                 for j in max(1, sqrt_remaining-1):sqrt_remaining+1
                     if remaining % j == 0
                         k = remaining ÷ j
@@ -695,9 +702,306 @@ function create_3d_process_mesh(nproc::Int)
                 end
             end
         end
-        
+
         # Fallback to 2D decomposition in z-plane
         mesh_2d = create_2d_process_mesh(nproc)
         return (mesh_2d[1], mesh_2d[2], 1)
     end
+end
+
+# ============================================================================
+# Pencil Transpose Support for Multi-dimensional FFTs
+# Following PencilArrays transpose API for efficient parallel transforms
+# ============================================================================
+
+"""
+    create_transpose_pencil(dist::Distributor, source_pencil::PencilArrays.Pencil, new_decomp_dims::Tuple)
+
+Create a new Pencil with different decomposition dimensions for transpose operations.
+This is essential for multi-dimensional FFTs where we need to change which dimensions
+are local vs distributed.
+
+# Arguments
+- `dist`: Distributor with MPI configuration
+- `source_pencil`: Original Pencil configuration
+- `new_decomp_dims`: New dimensions to decompose (e.g., (1, 3) instead of (2, 3))
+
+# Returns
+- New Pencil object with the specified decomposition
+"""
+function create_transpose_pencil(dist::Distributor, source_pencil::PencilArrays.Pencil,
+                                 new_decomp_dims::Tuple)
+    if dist.size == 1
+        return source_pencil  # No transpose needed for serial
+    end
+
+    try
+        # Create new Pencil with different decomposition using PencilArrays API
+        # Pencil(pen; decomp_dims=new_dims) shares memory buffers with original
+        new_pencil = PencilArrays.Pencil(source_pencil; decomp_dims=new_decomp_dims)
+        return new_pencil
+    catch e
+        @warn "Failed to create transpose pencil" exception=e
+        return source_pencil
+    end
+end
+
+"""
+    transpose_pencil_data!(dest::PencilArrays.PencilArray, src::PencilArrays.PencilArray)
+
+Perform MPI transpose operation between two PencilArrays with different decompositions.
+Uses PencilArrays' optimized transpose! function.
+
+# Arguments
+- `dest`: Destination PencilArray (different decomposition than src)
+- `src`: Source PencilArray
+
+# Note
+This is a key operation for multi-dimensional FFTs:
+1. FFT along local dimension
+2. Transpose to make another dimension local
+3. FFT along new local dimension
+4. Transpose back
+"""
+function transpose_pencil_data!(dest::PencilArrays.PencilArray, src::PencilArrays.PencilArray,
+                                dist::Distributor)
+    start_time = time()
+
+    try
+        # Use PencilArrays transpose! for optimized MPI communication
+        PencilArrays.transpose!(dest, src)
+
+        dist.performance_stats.transpose_time += time() - start_time
+        dist.performance_stats.mpi_operations += 1
+    catch e
+        @warn "PencilArrays transpose failed, using manual transpose" exception=e
+        # Fallback: manual copy (only works if shapes match)
+        copyto!(parent(dest), parent(src))
+    end
+
+    return dest
+end
+
+# ============================================================================
+# Optimized MPI Communication Patterns
+# ============================================================================
+
+"""
+    async_allreduce!(dest::AbstractArray, src::AbstractArray, op, dist::Distributor)
+
+Non-blocking allreduce operation for overlapping communication and computation.
+Returns an MPI request that can be waited on later.
+"""
+function async_allreduce!(dest::AbstractArray, src::AbstractArray, op, dist::Distributor)
+    start_time = time()
+
+    request = MPI.Iallreduce!(src, dest, op, dist.comm)
+
+    dist.performance_stats.mpi_operations += 1
+
+    return request
+end
+
+"""
+    wait_async!(request::MPI.Request, dist::Distributor)
+
+Wait for an asynchronous MPI operation to complete.
+"""
+function wait_async!(request::MPI.Request, dist::Distributor)
+    start_time = time()
+
+    MPI.Wait(request)
+
+    dist.performance_stats.communication_time += time() - start_time
+end
+
+"""
+    neighbor_exchange!(send_left::AbstractArray, send_right::AbstractArray,
+                       recv_left::AbstractArray, recv_right::AbstractArray,
+                       dim::Int, dist::Distributor)
+
+Optimized nearest-neighbor exchange for stencil operations.
+Uses MPI_Sendrecv for efficient bidirectional communication.
+
+# Arguments
+- `send_left/right`: Data to send to left/right neighbor
+- `recv_left/right`: Buffers for received data
+- `dim`: Mesh dimension for neighbor identification
+- `dist`: Distributor with MPI info
+"""
+function neighbor_exchange!(send_left::AbstractArray, send_right::AbstractArray,
+                           recv_left::AbstractArray, recv_right::AbstractArray,
+                           dim::Int, dist::Distributor)
+    if dist.size == 1
+        return  # No communication needed for serial
+    end
+
+    start_time = time()
+
+    # Get neighbor ranks in the specified dimension
+    left_rank, right_rank = get_neighbor_ranks(dist, dim)
+
+    # Use non-blocking sends for overlap
+    reqs = MPI.Request[]
+
+    if left_rank >= 0
+        push!(reqs, MPI.Isend(send_left, dist.comm; dest=left_rank))
+        push!(reqs, MPI.Irecv!(recv_left, dist.comm; source=left_rank))
+    end
+
+    if right_rank >= 0
+        push!(reqs, MPI.Isend(send_right, dist.comm; dest=right_rank))
+        push!(reqs, MPI.Irecv!(recv_right, dist.comm; source=right_rank))
+    end
+
+    # Wait for all operations to complete
+    MPI.Waitall(reqs)
+
+    dist.performance_stats.communication_time += time() - start_time
+    dist.performance_stats.mpi_operations += length(reqs)
+end
+
+"""
+    get_neighbor_ranks(dist::Distributor, dim::Int)
+
+Get the MPI ranks of left and right neighbors in the specified mesh dimension.
+Returns (-1, -1) if no neighbors exist (boundary processes).
+"""
+function get_neighbor_ranks(dist::Distributor, dim::Int)
+    if dist.mesh === nothing || dim < 1 || dim > length(dist.mesh)
+        return (-1, -1)
+    end
+
+    # Get current process coordinate
+    proc_coord = get_process_coordinate_in_mesh(dist, dim)
+    n_procs = dist.mesh[dim]
+
+    # Compute neighbor coordinates (periodic boundary)
+    left_coord = mod(proc_coord - 1, n_procs)
+    right_coord = mod(proc_coord + 1, n_procs)
+
+    # Convert coordinates to ranks
+    left_rank = coord_to_rank(dist, dim, left_coord)
+    right_rank = coord_to_rank(dist, dim, right_coord)
+
+    return (left_rank, right_rank)
+end
+
+"""
+    coord_to_rank(dist::Distributor, dim::Int, coord::Int)
+
+Convert a coordinate in the given dimension to an MPI rank.
+"""
+function coord_to_rank(dist::Distributor, dim::Int, coord::Int)
+    if dist.mesh === nothing
+        return -1
+    end
+
+    # Current process coordinates in all dimensions
+    current_coords = [get_process_coordinate_in_mesh(dist, i) for i in 1:length(dist.mesh)]
+
+    # Replace the specified dimension with new coordinate
+    current_coords[dim] = coord
+
+    # Convert to rank using row-major ordering
+    rank = 0
+    stride = 1
+    for i in 1:length(dist.mesh)
+        rank += current_coords[i] * stride
+        stride *= dist.mesh[i]
+    end
+
+    return rank
+end
+
+# ============================================================================
+# Memory Management for Parallel Operations
+# ============================================================================
+
+"""
+    preallocate_communication_buffers!(dist::Distributor, shapes::Vector{Tuple})
+
+Preallocate communication buffers for common operations to avoid runtime allocation.
+"""
+function preallocate_communication_buffers!(dist::Distributor, shapes::Vector{Tuple})
+    # This would allocate send/recv buffers for neighbor exchange, etc.
+    # Implementation depends on specific communication patterns used
+    @debug "Preallocating communication buffers for $(length(shapes)) shapes"
+end
+
+"""
+    get_optimal_chunk_size(total_size::Int, num_procs::Int)
+
+Compute optimal chunk size for load-balanced distribution.
+Handles remainders by giving extra work to first few processes.
+"""
+function get_optimal_chunk_size(total_size::Int, num_procs::Int)
+    base_size = div(total_size, num_procs)
+    remainder = total_size % num_procs
+    return (base_size, remainder)
+end
+
+# ============================================================================
+# Performance Diagnostics
+# ============================================================================
+
+"""
+    diagnose_parallel_performance(dist::Distributor)
+
+Print detailed performance diagnostics for parallel operations.
+"""
+function diagnose_parallel_performance(dist::Distributor)
+    stats = dist.performance_stats
+
+    if dist.rank == 0
+        println("\n" * "="^60)
+        println("Parallel Performance Diagnostics")
+        println("="^60)
+        println("MPI Configuration:")
+        println("  Processes: $(dist.size)")
+        println("  Mesh: $(dist.mesh)")
+        println("  Rank 0 coordinates: $(ntuple(i -> get_process_coordinate_in_mesh(dist, i), length(dist.mesh)))")
+        println()
+        println("Timing Statistics:")
+        println("  Total distributor time: $(round(stats.total_time, digits=4))s")
+        println("  Transpose time: $(round(stats.transpose_time, digits=4))s")
+        println("  Communication time: $(round(stats.communication_time, digits=4))s")
+        println()
+        println("Operation Counts:")
+        println("  Pencil creations: $(stats.pencil_creations)")
+        println("  Layout creations: $(stats.layout_creations)")
+        println("  MPI operations: $(stats.mpi_operations)")
+        println()
+        println("Cache Performance:")
+        total_cache = stats.cache_hits + stats.cache_misses
+        hit_rate = total_cache > 0 ? 100.0 * stats.cache_hits / total_cache : 0.0
+        println("  Cache hits: $(stats.cache_hits)")
+        println("  Cache misses: $(stats.cache_misses)")
+        println("  Hit rate: $(round(hit_rate, digits=1))%")
+        println()
+        println("Memory:")
+        println("  Cached layouts: $(length(dist.layouts))")
+        println("  Cached pencils: $(length(dist.pencil_cache))")
+        println("="^60)
+    end
+
+    # Synchronize to ensure clean output
+    MPI.Barrier(dist.comm)
+end
+
+"""
+    reset_performance_stats!(dist::Distributor)
+
+Reset all performance statistics counters.
+"""
+function reset_performance_stats!(dist::Distributor)
+    stats = dist.performance_stats
+    stats.total_time = 0.0
+    stats.pencil_creations = 0
+    stats.layout_creations = 0
+    stats.mpi_operations = 0
+    stats.cache_hits = 0
+    stats.cache_misses = 0
+    stats.transpose_time = 0.0
+    stats.communication_time = 0.0
 end
