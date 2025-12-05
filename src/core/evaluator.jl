@@ -422,6 +422,10 @@ function global_max(reducer::GlobalArrayReducer, data::AbstractArray; empty::Flo
     return reduce_scalar(reducer, local_max, MPI.MAX)
 end
 
+# Scalar versions for convenience (used by CFL in flow_tools.jl)
+global_min(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, Float64(value), MPI.MIN)
+global_max(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, Float64(value), MPI.MAX)
+
 function global_mean(reducer::GlobalArrayReducer, data::AbstractArray)
     """Compute global mean of all array data."""
     local_sum = Float64(sum(data))

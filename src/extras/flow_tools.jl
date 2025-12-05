@@ -2,39 +2,14 @@
 Flow analysis tools
 
 Translated from dedalus/extras/flow_tools.py
+
+Note: GlobalArrayReducer, reduce_scalar, global_min, global_max, and global_mean
+are defined in core/evaluator.jl and reused here.
 """
 
 using Statistics
 using LinearAlgebra
 using MPI
-
-mutable struct GlobalArrayReducer
-    comm::MPI.Comm
-    buffer::Vector{Float64}
-    function GlobalArrayReducer(comm::MPI.Comm=MPI.COMM_WORLD)
-        new(comm, zeros(Float64, 1))
-    end
-end
-
-function reduce_scalar(reducer::GlobalArrayReducer, value::Real, op)
-    if !MPI.Initialized()
-        return Float64(value)
-    end
-    reducer.buffer[1] = Float64(value)
-    MPI.Allreduce!(MPI.IN_PLACE, reducer.buffer, op, reducer.comm)
-    return reducer.buffer[1]
-end
-
-global_min(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, value, MPI.MIN)
-global_max(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, value, MPI.MAX)
-
-function global_mean(reducer::GlobalArrayReducer, data::AbstractArray)
-    local_sum = Float64(sum(data))
-    local_count = Float64(length(data))
-    sum_total = reduce_scalar(reducer, local_sum, MPI.SUM)
-    count_total = reduce_scalar(reducer, local_count, MPI.SUM)
-    return count_total == 0 ? 0.0 : sum_total / count_total
-end
 
 # CFL condition calculation
 mutable struct CFL
