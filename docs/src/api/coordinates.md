@@ -2,6 +2,13 @@
 
 Coordinates define the dimensional structure of your problem domain. Tarang.jl supports Cartesian, spherical, and polar coordinate systems.
 
+## Docstrings
+
+```@docs
+CartesianCoordinates
+coords(::CartesianCoordinates)
+```
+
 ## Coordinate Systems
 
 ### CartesianCoordinates

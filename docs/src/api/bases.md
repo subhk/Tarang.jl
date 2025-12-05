@@ -2,6 +2,16 @@
 
 Spectral bases define how functions are represented in each coordinate direction. Tarang.jl provides Fourier, Chebyshev, and Legendre bases for different boundary conditions.
 
+## Docstrings
+
+```@docs
+RealFourier
+ComplexFourier
+ChebyshevT
+ChebyshevU
+Legendre
+```
+
 ## Overview
 
 Each coordinate dimension requires a spectral basis that determines:
