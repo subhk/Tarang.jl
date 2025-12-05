@@ -1,8 +1,20 @@
 using Documenter
-using Tarang
 
-# Set up documentation metadata
-DocMeta.setdocmeta!(Tarang, :DocTestSetup, :(using Tarang); recursive=true)
+# Try to load Tarang, but don't fail if it errors
+tarang_loaded = false
+try
+    @eval using Tarang
+    global tarang_loaded = true
+    @info "Successfully loaded Tarang from: $(pathof(Tarang))"
+catch e
+    @warn "Failed to load Tarang module: $e"
+    @warn "Building docs without module - API docs will be incomplete"
+end
+
+# Set up documentation metadata only if Tarang loaded
+if tarang_loaded
+    DocMeta.setdocmeta!(Tarang, :DocTestSetup, :(using Tarang); recursive=true)
+end
 
 makedocs(
     sitename = "Tarang.jl",
@@ -12,7 +24,7 @@ makedocs(
         assets = ["assets/custom.css"],
         mathengine = MathJax3(),
     ),
-    modules = [Tarang],
+    modules = tarang_loaded ? [Tarang] : Module[],
     pages = [
         "Home" => "index.md",
         "Getting Started" => [
