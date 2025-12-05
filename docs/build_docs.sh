@@ -8,9 +8,26 @@ echo "Building Tarang.jl documentation..."
 # Navigate to repository root
 cd "$(dirname "$0")/.."
 
-# Install dependencies (only needed first time)
-echo "Installing documentation dependencies..."
-julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+# Clean old build artifacts to ensure fresh build
+echo "Cleaning old build artifacts..."
+rm -rf docs/build
+rm -f docs/Manifest.toml
+
+# Force re-develop to pick up latest code changes
+echo "Installing documentation dependencies (forcing fresh install)..."
+julia --project=docs/ -e '
+using Pkg
+# Remove old Tarang entry if it exists to force fresh develop
+try
+    Pkg.rm("Tarang")
+catch
+end
+# Re-add local development version
+Pkg.develop(PackageSpec(path=pwd()))
+Pkg.instantiate()
+# Force precompilation of fresh code
+Pkg.precompile()
+'
 
 # Build documentation
 echo "Building documentation..."

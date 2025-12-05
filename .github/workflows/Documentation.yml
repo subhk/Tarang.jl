@@ -23,9 +23,21 @@ jobs:
           sudo apt-get install -y openmpi-bin libopenmpi-dev
 
       - uses: julia-actions/cache@v1
+        with:
+          # Cache key includes hash of source files to invalidate when code changes
+          cache-name: docs-cache-${{ hashFiles('src/**/*.jl', 'Project.toml') }}
 
-      - name: Install dependencies
-        run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+      - name: Clean old Manifest and force fresh install
+        run: |
+          rm -f docs/Manifest.toml
+          julia --project=docs/ -e '
+            using Pkg
+            # Force fresh develop to pick up latest code
+            try Pkg.rm("Tarang") catch end
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()
+            Pkg.precompile()
+          '
 
       - name: Build and deploy
         env:
