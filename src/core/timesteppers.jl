@@ -1616,7 +1616,8 @@ function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, ti
                         push!(rhs, rhs_field)
                     end
                 else
-                    @warn "No F_expr found for equation $eq_idx, creating zero field"
+                    # No F_expr means zero RHS (e.g., ∂u/∂t = 0 or purely linear equation)
+                    @debug "No F_expr found for equation $eq_idx, using zero field"
                     rhs_field = create_zero_field(state[eq_idx])
                     push!(rhs, rhs_field)
                 end
