@@ -18,6 +18,16 @@ Tarang.add_netcdf_handler
 
 Create a file handler for NetCDF output.
 
+---
+
+### add_file_handler
+
+```@docs
+Tarang.add_file_handler
+```
+
+Alternative constructor for file handlers.
+
 ```julia
 handler = add_netcdf_handler(
     base_path,          # Output path/name
@@ -46,6 +56,16 @@ Tarang.add_task!
 ```
 
 Add a field output task.
+
+---
+
+### add_task
+
+```@docs
+Tarang.add_task
+```
+
+Add a field output task (alternative syntax).
 
 ```julia
 add_task!(handler, field; name="field_name")
@@ -76,6 +96,38 @@ add_profile_task!(handler, field; dims=1, name="field_profile")
 
 # Mean over x and y
 add_profile_task!(handler, field; dims=(1,2), name="field_profile_xy")
+```
+
+---
+
+### add_mean_task!
+
+```@docs
+Tarang.add_mean_task!
+```
+
+Add a task that computes mean values.
+
+```julia
+add_mean_task!(handler, field; name="field_mean")
+```
+
+---
+
+### add_slice_task!
+
+```@docs
+Tarang.add_slice_task!
+```
+
+Add a task that extracts a slice.
+
+```julia
+# Slice at index
+add_slice_task!(handler, field; dim=1, idx=64, name="field_slice")
+
+# Using slices dictionary
+add_slice_task!(handler, field; slices=Dict(1 => 32), name="slice")
 ```
 
 ---
@@ -122,6 +174,25 @@ add_extrema_task!(handler, field; name="field_extrema")
 
 ---
 
+### process!
+
+```@docs
+Tarang.process!
+```
+
+Write pending data to file.
+
+```julia
+process!(handler;
+    iteration=solver.iteration,
+    wall_time=elapsed,
+    sim_time=solver.sim_time,
+    timestep=dt
+)
+```
+
+---
+
 ## Handler Management
 
 ### check_schedule
@@ -154,6 +225,20 @@ Get the current output file path.
 
 ```julia
 filepath = current_path(handler)
+```
+
+---
+
+### current_file
+
+```@docs
+Tarang.current_file
+```
+
+Get the current output file (alternative to current_path).
+
+```julia
+filepath = current_file(handler)
 ```
 
 ---
