@@ -37,7 +37,7 @@ Thermal convection in a horizontal layer heated from below.
 - Adaptive time stepping
 - Nusselt number analysis
 
-**Code**: [`examples/rayleigh_benard_2d.jl`](../../examples/rayleigh_benard_2d.jl)
+**Code**: See [2D Rayleigh-Bénard Tutorial](../tutorials/ivp_2d_rbc.md) for complete implementation
 
 **Tutorial**: [2D Rayleigh-Bénard](../tutorials/ivp_2d_rbc.md)
 
@@ -77,7 +77,7 @@ Canonical test case for 3D turbulence and vortex dynamics.
 - Energy spectrum analysis
 - Enstrophy tracking
 
-**Code**: [`examples/taylor_green_3d.jl`](../../examples/taylor_green_3d.jl)
+**Code**: See [3D Turbulence Tutorial](../tutorials/ivp_3d_turbulence.md) for complete implementation
 
 ```julia
 # Run with 8 processes (2×2×2 mesh)
@@ -100,7 +100,7 @@ Turbulent flow between parallel plates.
 - Mean flow forcing
 - Turbulence statistics
 
-**Code**: [`examples/channel_flow_3d.jl`](../../examples/channel_flow_3d.jl)
+**Code**: Example coming soon
 
 **Analysis**: Mean velocity profile, Reynolds stresses, energy spectra
 
@@ -118,7 +118,7 @@ Shear flow instability and vortex formation.
 - Periodic boundaries
 - Vorticity evolution
 
-**Code**: [`examples/kelvin_helmholtz_2d.jl`](../../examples/kelvin_helmholtz_2d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -136,7 +136,7 @@ Simple diffusion equation in one dimension.
 - Exact solution comparison
 - Good first example
 
-**Code**: [`examples/heat_diffusion_1d.jl`](../../examples/heat_diffusion_1d.jl)
+**Code**: See example below
 
 ```julia
 using Tarang, MPI
@@ -180,7 +180,7 @@ Solve Laplace equation for steady heat distribution.
 - Mixed boundary conditions
 - Sparse linear solve
 
-**Code**: [`examples/steady_heat_2d.jl`](../../examples/steady_heat_2d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -195,7 +195,7 @@ Rotating Rayleigh-Bénard convection.
 - 3D buoyancy-driven flow
 - Pattern formation
 
-**Code**: [`examples/rotating_convection_3d.jl`](../../examples/rotating_convection_3d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -212,7 +212,7 @@ Compute critical Rayleigh number and eigenmodes.
 - Growth rates and frequencies
 - Critical modes visualization
 
-**Code**: [`examples/rb_stability.jl`](../../examples/rb_stability.jl)
+**Code**: See [Eigenvalue Problems Tutorial](../tutorials/eigenvalue_problems.md) for complete implementation
 
 **Tutorial**: [Eigenvalue Problems](../tutorials/eigenvalue_problems.md)
 
@@ -229,7 +229,7 @@ Stability of parallel shear flow.
 - Neutral stability curves
 - Most unstable modes
 
-**Code**: [`examples/poiseuille_stability.jl`](../../examples/poiseuille_stability.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -246,7 +246,7 @@ Simple wave propagation.
 - Exact solutions
 - Wave reflections
 
-**Code**: [`examples/wave_1d.jl`](../../examples/wave_1d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -261,7 +261,7 @@ Sound wave propagation in 2D.
 - Point source
 - Radiation patterns
 
-**Code**: [`examples/acoustic_2d.jl`](../../examples/acoustic_2d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -278,7 +278,7 @@ Internal gravity waves in stratified fluid.
 - Stable stratification
 - Wave propagation
 
-**Code**: [`examples/gravity_waves_2d.jl`](../../examples/gravity_waves_2d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -293,7 +293,7 @@ Large-scale atmospheric/oceanic flows.
 - Beta-plane approximation
 - Jet formation
 
-**Code**: [`examples/qg_flow_2d.jl`](../../examples/qg_flow_2d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -310,7 +310,7 @@ Fluid dynamics with magnetic fields.
 - Alfvén waves
 - Magnetic energy
 
-**Code**: [`examples/mhd_3d.jl`](../../examples/mhd_3d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -325,7 +325,7 @@ Convection driven by two diffusing species.
 - Different diffusivities
 - Layering phenomena
 
-**Code**: [`examples/double_diffusive_2d.jl`](../../examples/double_diffusive_2d.jl)
+**Code**: Example coming soon
 
 ---
 
@@ -340,7 +340,7 @@ Combined shear and stratification.
 - Kelvin-Helmholtz + gravity waves
 - Mixing efficiency
 
-**Code**: [`examples/stratified_shear_3d.jl`](../../examples/stratified_shear_3d.jl)
+**Code**: Example coming soon
 
 ---
 

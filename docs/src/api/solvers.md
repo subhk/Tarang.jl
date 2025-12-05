@@ -6,10 +6,6 @@ Solvers integrate PDEs in time or solve for steady states. Tarang.jl provides sp
 
 ### InitialValueSolver
 
-```@docs
-InitialValueSolver
-```
-
 Time-stepping solver for Initial Value Problems (IVP).
 
 **Constructor**:
@@ -100,10 +96,6 @@ end
 
 ### BoundaryValueSolver
 
-```@docs
-BoundaryValueSolver
-```
-
 Solver for Linear Boundary Value Problems (LBVP).
 
 **Constructor**:
@@ -161,10 +153,6 @@ phi_grid = get_grid_data(phi)
 ---
 
 ### NonlinearBoundaryValueSolver
-
-```@docs
-NonlinearBoundaryValueSolver
-```
 
 Newton-Raphson solver for Nonlinear Boundary Value Problems (NLBVP).
 
@@ -234,10 +222,6 @@ solver.converged        # Convergence status
 ---
 
 ### EigenvalueSolver
-
-```@docs
-EigenvalueSolver
-```
 
 Solver for Eigenvalue Problems (EVP).
 

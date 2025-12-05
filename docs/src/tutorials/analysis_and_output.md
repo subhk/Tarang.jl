@@ -404,5 +404,5 @@ MPI.Finalize()
 ## See Also
 
 - [Analysis API](../api/analysis.md): Full API reference
-- [NetCDF Output](../pages/io.md): Detailed I/O documentation
-- [Visualization](../pages/visualization.md): Plotting guides
+- [I/O API](../api/io.md): NetCDF output documentation
+- [Parallelism](../pages/parallelism.md): Parallel I/O configuration

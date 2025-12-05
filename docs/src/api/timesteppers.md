@@ -16,10 +16,6 @@ All timesteppers inherit from this abstract type.
 
 ### RK111
 
-```@docs
-RK111
-```
-
 Forward Euler method (1st order).
 
 ```julia
@@ -33,10 +29,6 @@ RK111()
 - Memory: Minimal
 
 ### RK222
-
-```@docs
-RK222
-```
 
 2nd-order, 2-stage Runge-Kutta.
 
@@ -53,10 +45,6 @@ RK222()
 **Recommended for**: General purpose non-stiff problems.
 
 ### RK443
-
-```@docs
-RK443
-```
 
 4th-order, 4-stage Runge-Kutta.
 
@@ -76,11 +64,6 @@ RK443()
 
 ### CNAB (Crank-Nicolson Adams-Bashforth)
 
-```@docs
-CNAB1
-CNAB2
-```
-
 ```julia
 CNAB1()  # 1st order
 CNAB2()  # 2nd order
@@ -95,13 +78,6 @@ CNAB2()  # 2nd order
 - CNAB2: Order 2, 2 history levels
 
 ### SBDF (Semi-implicit BDF)
-
-```@docs
-SBDF1
-SBDF2
-SBDF3
-SBDF4
-```
 
 ```julia
 SBDF1()  # 1st order

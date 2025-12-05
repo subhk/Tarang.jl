@@ -102,10 +102,6 @@ add_equation!(problem, "dx(u) + dz(v) = 0")
 
 ### Eigenvalue Problems (EVP)
 
-```@docs
-EVP
-```
-
 Linear eigenvalue problems for stability analysis and normal modes.
 
 **Constructor**:
@@ -139,10 +135,6 @@ add_equation!(problem, "dx(u) + dz(v) = 0")
 ## Adding Equations
 
 ### add_equation!
-
-```@docs
-add_equation!
-```
 
 Add a PDE to the problem.
 
@@ -249,10 +241,6 @@ end
 
 ### add_dirichlet_bc!
 
-```@docs
-add_dirichlet_bc!
-```
-
 Add Dirichlet (fixed value) boundary condition.
 
 **Syntax**:
@@ -292,10 +280,6 @@ add_dirichlet_bc!(problem, "u", "z", 0.0, bc_func)
 
 ### add_neumann_bc!
 
-```@docs
-add_neumann_bc!
-```
-
 Add Neumann (fixed derivative) boundary condition.
 
 **Syntax**:
@@ -321,10 +305,6 @@ add_neumann_bc!(problem, "phi", "x", 0.0, "sin(omega*t)")
 ---
 
 ### add_robin_bc!
-
-```@docs
-add_robin_bc!
-```
 
 Add Robin (mixed) boundary condition: α*f + β*df/dn = value
 
@@ -354,10 +334,6 @@ add_robin_bc!(problem, "T", "x", 0.0, 1.0, epsilon, 0.0)
 
 ### add_stress_free_bc!
 
-```@docs
-add_stress_free_bc!
-```
-
 Add stress-free boundary condition for fluid mechanics: u_normal = 0, ∂u_tangential/∂n = 0
 
 **Syntax**:
@@ -380,10 +356,6 @@ add_stress_free_bc!(problem, "u", "z", 1.0)
 ---
 
 ### add_bc!
-
-```@docs
-add_bc!
-```
 
 Add custom boundary condition using equation syntax.
 

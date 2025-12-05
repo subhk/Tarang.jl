@@ -533,4 +533,4 @@ Chebyshev/Legendre derivatives are sparse matrix operations - very efficient.
 - [Fields](fields.md): Field types that operators act on
 - [Problems](problems.md): Using operators in equations
 - [Domains](domains.md): Spatial discretization for operators
-- [Tutorial: Operators](../tutorials/operators.md): Detailed examples
+- [Bases](bases.md): Spectral bases for differentiation
