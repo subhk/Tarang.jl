@@ -17,26 +17,41 @@ jobs:
         with:
           version: '1.12'
 
-      - name: Install dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y openmpi-bin libopenmpi-dev
 
-      - uses: julia-actions/cache@v1
-        with:
-          # Cache key includes hash of source files to invalidate when code changes
-          cache-name: docs-cache-${{ hashFiles('src/**/*.jl', 'Project.toml') }}
+      # Disable Julia cache to ensure fresh builds every time
+      # - uses: julia-actions/cache@v1
 
-      - name: Clean old Manifest and force fresh install
+      - name: Clean and install fresh
         run: |
+          # Remove any cached/old files
+          rm -rf docs/build
           rm -f docs/Manifest.toml
+
+          # Clear Julia compiled cache for this package
+          rm -rf ~/.julia/compiled/v1.12/Tarang* || true
+
+          # Fresh install
           julia --project=docs/ -e '
             using Pkg
-            # Force fresh develop to pick up latest code
-            try Pkg.rm("Tarang") catch end
+            # Remove old entry if exists
+            try
+              Pkg.rm("Tarang")
+            catch e
+              @info "No existing Tarang to remove"
+            end
+            # Develop from current directory
             Pkg.develop(PackageSpec(path=pwd()))
             Pkg.instantiate()
+            # Force recompilation
             Pkg.precompile()
+
+            # Verify we have the right version
+            using Tarang
+            @info "Building docs with Tarang from: $(pathof(Tarang))"
           '
 
       - name: Build and deploy
