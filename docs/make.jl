@@ -20,7 +20,7 @@ makedocs(
     sitename = "Tarang.jl",
     format = Documenter.HTML(
         prettyurls = get(ENV, "CI", nothing) == "true",
-        canonical = "https://subhajitkar.github.io/Tarang.jl",
+        canonical = "https://subhk.github.io/Tarang.jl",
         assets = ["assets/custom.css"],
         mathengine = MathJax3(),
     ),
@@ -88,13 +88,13 @@ makedocs(
             "pages/testing.md",
         ],
     ],
-    repo = "https://github.com/subhajitkar/Tarang.jl/blob/{commit}{path}#{line}",
+    repo = "https://github.com/subhk/Tarang.jl/blob/{commit}{path}#{line}",
     authors = "Subhajit Kar",
     checkdocs = :none,  # Temporarily disabled until all docstrings are documented
 )
 
 deploydocs(
-    repo = "github.com/subhajitkar/Tarang.jl.git",
+    repo = "github.com/subhk/Tarang.jl.git",
     devbranch = "main",
     push_preview = true,
 )
