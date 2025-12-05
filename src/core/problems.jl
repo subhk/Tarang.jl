@@ -996,22 +996,9 @@ end
 
 @inline coerce_constant_value(x) = x isa ConstantOperator ? x.value : x
 
-# Arithmetic operators (these would be replaced by proper operator implementations)
-struct AddOperator <: Operator
-    left::Any
-    right::Any
-end
+# Note: AddOperator, SubtractOperator, MultiplyOperator are defined in operators.jl
 
-struct SubtractOperator <: Operator
-    left::Any
-    right::Any
-end
-
-struct MultiplyOperator <: Operator
-    left::Any
-    right::Any
-end
-
+# Additional arithmetic operators for equation parsing
 struct DivideOperator <: Operator
     left::Any
     right::Any
