@@ -178,13 +178,7 @@ function InitialValueSolver(problem::IVP, timestepper; kwargs...)
     return multiclass_new(InitialValueSolver, problem, timestepper; kwargs...)
 end
 
-function BoundaryValueSolver(problem::Union{LBVP, NLBVP}; kwargs...)
-    return multiclass_new(BoundaryValueSolver, problem; kwargs...)
-end
-
-function EigenvalueSolver(problem::EVP; kwargs...)
-    return multiclass_new(EigenvalueSolver, problem; kwargs...)
-end
+# Note: BoundaryValueSolver and EigenvalueSolver convenience constructors are defined after the struct definitions below
 
 mutable struct BoundaryValueSolver <: Solver
     base::SolverBaseData
@@ -233,6 +227,15 @@ mutable struct EigenvalueSolver <: Solver
     subsystems::Tuple{Vararg{Subsystem}}
     subproblems::Tuple{Vararg{Subproblem}}
     coeff_system::Union{Nothing, CoeffSystem}
+end
+
+# Convenience constructors (must be after struct definitions)
+function BoundaryValueSolver(problem::Union{LBVP, NLBVP}; kwargs...)
+    return multiclass_new(BoundaryValueSolver, problem; kwargs...)
+end
+
+function EigenvalueSolver(problem::EVP; kwargs...)
+    return multiclass_new(EigenvalueSolver, problem; kwargs...)
 end
 
 function _build_eigenvalue_solver(problem::EVP; n_modes::Int=10, target::Union{Nothing, ComplexF64}=nothing, matsolver::Union{String,Symbol,Type}=:sparse)
