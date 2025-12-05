@@ -61,6 +61,10 @@ mutable struct Distributor
     # Performance tracking
     performance_stats::DistributorPerformanceStats
 
+    # OPTIMIZATION: Precomputed mesh coordinates to avoid O(ndim) computation per lookup
+    mesh_coords::Vector{Int}  # Precomputed coordinates of this process in the mesh
+    neighbor_ranks::Dict{Int, Tuple{Int, Int}}  # Cached neighbor ranks per dimension (left, right)
+
     function Distributor(coordsys::CoordinateSystem;
                         comm::MPI.Comm=MPI.COMM_WORLD,
                         mesh::Union{Nothing, Tuple{Vararg{Int}}}=nothing,
@@ -107,8 +111,18 @@ mutable struct Distributor
         layouts = Dict{Any, Layout}()
         perf_stats = DistributorPerformanceStats()
 
+        # OPTIMIZATION: Precompute mesh coordinates to avoid O(ndim) per lookup
+        mesh_coords = precompute_mesh_coordinates(rank, mesh)
+        neighbor_ranks = Dict{Int, Tuple{Int, Int}}()
+
         dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
-            use_pencil_arrays, pencil_config, mpi_topology, pencil_cache, transforms, layouts, perf_stats)
+            use_pencil_arrays, pencil_config, mpi_topology, pencil_cache, transforms, layouts, perf_stats,
+            mesh_coords, neighbor_ranks)
+
+        # Precompute neighbor ranks for all mesh dimensions
+        if mesh !== nothing && size > 1
+            precompute_neighbor_ranks!(dist)
+        end
 
         # Initialize MPI topology for parallel runs
         if size > 1
@@ -117,6 +131,94 @@ mutable struct Distributor
 
         return dist
     end
+end
+
+"""
+    precompute_mesh_coordinates(rank::Int, mesh::Union{Nothing, Tuple})
+
+Precompute process coordinates in the mesh to avoid O(ndim) computation per lookup.
+Uses row-major ordering consistent with PencilArrays.
+"""
+function precompute_mesh_coordinates(rank::Int, mesh::Union{Nothing, Tuple})
+    if mesh === nothing
+        return Int[]
+    end
+
+    ndims_mesh = length(mesh)
+    coords = zeros(Int, ndims_mesh)
+
+    # Compute all coordinates at once using row-major ordering
+    remaining_rank = rank
+    for dim in 1:ndims_mesh
+        stride = prod(mesh[1:dim-1]; init=1)
+        coords[dim] = (remaining_rank ÷ stride) % mesh[dim]
+    end
+
+    return coords
+end
+
+"""
+    precompute_neighbor_ranks!(dist::Distributor)
+
+Precompute neighbor ranks for all mesh dimensions to avoid repeated computation.
+Cached in dist.neighbor_ranks as Dict{dim => (left_rank, right_rank)}.
+"""
+function precompute_neighbor_ranks!(dist::Distributor)
+    if dist.mesh === nothing
+        return
+    end
+
+    for dim in 1:length(dist.mesh)
+        left_rank, right_rank = compute_neighbor_ranks_for_dim(dist, dim)
+        dist.neighbor_ranks[dim] = (left_rank, right_rank)
+    end
+end
+
+"""
+    compute_neighbor_ranks_for_dim(dist::Distributor, dim::Int)
+
+Compute neighbor ranks for a specific dimension using precomputed mesh coordinates.
+"""
+function compute_neighbor_ranks_for_dim(dist::Distributor, dim::Int)
+    if isempty(dist.mesh_coords) || dim < 1 || dim > length(dist.mesh)
+        return (-1, -1)
+    end
+
+    n_procs = dist.mesh[dim]
+    proc_coord = dist.mesh_coords[dim]
+
+    # Compute neighbor coordinates (periodic boundary)
+    left_coord = mod(proc_coord - 1, n_procs)
+    right_coord = mod(proc_coord + 1, n_procs)
+
+    # Convert coordinates to ranks using precomputed mesh_coords
+    left_rank = coords_to_rank_fast(dist, dim, left_coord)
+    right_rank = coords_to_rank_fast(dist, dim, right_coord)
+
+    return (left_rank, right_rank)
+end
+
+"""
+    coords_to_rank_fast(dist::Distributor, dim::Int, new_coord::Int)
+
+Fast coordinate-to-rank conversion using precomputed mesh coordinates.
+Only changes the specified dimension's coordinate.
+"""
+function coords_to_rank_fast(dist::Distributor, dim::Int, new_coord::Int)
+    if isempty(dist.mesh_coords)
+        return -1
+    end
+
+    # Start with precomputed coordinates, replace the specified dimension
+    rank = 0
+    stride = 1
+    for i in 1:length(dist.mesh)
+        coord = (i == dim) ? new_coord : dist.mesh_coords[i]
+        rank += coord * stride
+        stride *= dist.mesh[i]
+    end
+
+    return rank
 end
 
 """
@@ -235,6 +337,9 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
         dist.performance_stats.pencil_creations += 1
         dist.performance_stats.total_time += time() - start_time
 
+        # Periodically check cache limits
+        maybe_cleanup_caches!(dist)
+
         return pencil_array
 
     catch e
@@ -294,14 +399,19 @@ end
     get_process_coordinate_in_mesh(dist::Distributor, dim::Int)
 
 Get the coordinate of this process in the specified mesh dimension.
-Uses row-major ordering consistent with PencilArrays.
+OPTIMIZED: Uses precomputed mesh_coords for O(1) lookup instead of O(ndim) computation.
 """
 function get_process_coordinate_in_mesh(dist::Distributor, dim::Int)
     if dist.mesh === nothing || dim < 1 || dim > length(dist.mesh)
         return 0
     end
 
-    # Row-major ordering for consistency with PencilArrays
+    # OPTIMIZATION: Use precomputed coordinates
+    if !isempty(dist.mesh_coords) && dim <= length(dist.mesh_coords)
+        return dist.mesh_coords[dim]
+    end
+
+    # Fallback to computation if precomputed coords not available
     stride = 1
     for i in 1:(dim-1)
         stride *= dist.mesh[i]
@@ -355,6 +465,9 @@ function get_layout(dist::Distributor, bases::Tuple{Vararg{Basis}}, dtype::Type=
     # Update performance stats
     dist.performance_stats.total_time += time() - start_time
     dist.performance_stats.layout_creations += 1
+
+    # Periodically check cache limits
+    maybe_cleanup_caches!(dist)
 
     return layout
 end
@@ -585,6 +698,10 @@ function allreduce_array(dist::Distributor, local_array::AbstractArray, op=MPI.S
     return result
 end
 
+# Maximum cache sizes to prevent unbounded memory growth
+const MAX_LAYOUT_CACHE_SIZE = 100
+const MAX_PENCIL_CACHE_SIZE = 50
+
 function clear_distributor_cache!(dist::Distributor)
     """Clear caches for distributor"""
 
@@ -600,6 +717,50 @@ function clear_distributor_cache!(dist::Distributor)
     @info "Cleared distributor caches"
 
     return dist
+end
+
+"""
+    enforce_cache_limits!(dist::Distributor)
+
+Enforce cache size limits by evicting oldest entries when limits are exceeded.
+This prevents unbounded memory growth in long-running simulations.
+"""
+function enforce_cache_limits!(dist::Distributor)
+    # Check layout cache
+    if length(dist.layouts) > MAX_LAYOUT_CACHE_SIZE
+        # Remove half of the entries (LRU would be better but more complex)
+        n_to_remove = length(dist.layouts) ÷ 2
+        keys_to_remove = collect(keys(dist.layouts))[1:n_to_remove]
+        for k in keys_to_remove
+            delete!(dist.layouts, k)
+        end
+        dist.performance_stats.cache_misses += n_to_remove  # Track evictions
+        @debug "Evicted $n_to_remove layout cache entries"
+    end
+
+    # Check pencil cache
+    if length(dist.pencil_cache) > MAX_PENCIL_CACHE_SIZE
+        n_to_remove = length(dist.pencil_cache) ÷ 2
+        keys_to_remove = collect(keys(dist.pencil_cache))[1:n_to_remove]
+        for k in keys_to_remove
+            delete!(dist.pencil_cache, k)
+        end
+        @debug "Evicted $n_to_remove pencil cache entries"
+    end
+end
+
+"""
+    maybe_cleanup_caches!(dist::Distributor)
+
+Periodically check and enforce cache limits.
+Called automatically during pencil/layout creation.
+"""
+function maybe_cleanup_caches!(dist::Distributor)
+    # Only check every 10 operations to amortize overhead
+    total_ops = dist.performance_stats.pencil_creations + dist.performance_stats.layout_creations
+    if total_ops > 0 && total_ops % 10 == 0
+        enforce_cache_limits!(dist)
+    end
 end
 
 function get_distributor_memory_info(dist::Distributor)
@@ -862,9 +1023,93 @@ function neighbor_exchange!(send_left::AbstractArray, send_right::AbstractArray,
 end
 
 """
+    async_neighbor_exchange!(send_left::AbstractArray, send_right::AbstractArray,
+                             recv_left::AbstractArray, recv_right::AbstractArray,
+                             dim::Int, dist::Distributor)
+
+OPTIMIZED: Non-blocking neighbor exchange for computation/communication overlap.
+Returns MPI requests that can be waited on later with wait_neighbor_exchange!.
+
+Usage pattern for overlap:
+    reqs = async_neighbor_exchange!(...)  # Start communication
+    compute_interior!(data)                # Compute while communicating
+    wait_neighbor_exchange!(reqs, dist)    # Wait for boundary data
+    compute_boundary!(data)                # Process boundary using received data
+"""
+function async_neighbor_exchange!(send_left::AbstractArray, send_right::AbstractArray,
+                                  recv_left::AbstractArray, recv_right::AbstractArray,
+                                  dim::Int, dist::Distributor)
+    if dist.size == 1
+        return MPI.Request[]  # No communication needed for serial
+    end
+
+    # Get neighbor ranks in the specified dimension
+    left_rank, right_rank = get_neighbor_ranks(dist, dim)
+
+    # Use non-blocking sends/receives
+    reqs = MPI.Request[]
+
+    if left_rank >= 0
+        push!(reqs, MPI.Isend(send_left, dist.comm; dest=left_rank))
+        push!(reqs, MPI.Irecv!(recv_left, dist.comm; source=left_rank))
+    end
+
+    if right_rank >= 0
+        push!(reqs, MPI.Isend(send_right, dist.comm; dest=right_rank))
+        push!(reqs, MPI.Irecv!(recv_right, dist.comm; source=right_rank))
+    end
+
+    dist.performance_stats.mpi_operations += length(reqs)
+    return reqs
+end
+
+"""
+    wait_neighbor_exchange!(reqs::Vector{MPI.Request}, dist::Distributor)
+
+Wait for async neighbor exchange to complete.
+"""
+function wait_neighbor_exchange!(reqs::Vector{MPI.Request}, dist::Distributor)
+    if isempty(reqs)
+        return
+    end
+
+    start_time = time()
+    MPI.Waitall(reqs)
+    dist.performance_stats.communication_time += time() - start_time
+end
+
+"""
+    test_neighbor_exchange(reqs::Vector{MPI.Request})
+
+Test if any async neighbor exchange operations have completed.
+Returns (completed, pending) tuple of request indices.
+Useful for checking progress during computation overlap.
+"""
+function test_neighbor_exchange(reqs::Vector{MPI.Request})
+    if isempty(reqs)
+        return (Int[], Int[])
+    end
+
+    completed = Int[]
+    pending = Int[]
+
+    for (i, req) in enumerate(reqs)
+        flag, _ = MPI.Test(req)
+        if flag
+            push!(completed, i)
+        else
+            push!(pending, i)
+        end
+    end
+
+    return (completed, pending)
+end
+
+"""
     get_neighbor_ranks(dist::Distributor, dim::Int)
 
 Get the MPI ranks of left and right neighbors in the specified mesh dimension.
+OPTIMIZED: Uses precomputed neighbor_ranks cache for O(1) lookup.
 Returns (-1, -1) if no neighbors exist (boundary processes).
 """
 function get_neighbor_ranks(dist::Distributor, dim::Int)
@@ -872,18 +1117,14 @@ function get_neighbor_ranks(dist::Distributor, dim::Int)
         return (-1, -1)
     end
 
-    # Get current process coordinate
-    proc_coord = get_process_coordinate_in_mesh(dist, dim)
-    n_procs = dist.mesh[dim]
+    # OPTIMIZATION: Use precomputed neighbor ranks
+    if haskey(dist.neighbor_ranks, dim)
+        return dist.neighbor_ranks[dim]
+    end
 
-    # Compute neighbor coordinates (periodic boundary)
-    left_coord = mod(proc_coord - 1, n_procs)
-    right_coord = mod(proc_coord + 1, n_procs)
-
-    # Convert coordinates to ranks
-    left_rank = coord_to_rank(dist, dim, left_coord)
-    right_rank = coord_to_rank(dist, dim, right_coord)
-
+    # Fallback: compute and cache
+    left_rank, right_rank = compute_neighbor_ranks_for_dim(dist, dim)
+    dist.neighbor_ranks[dim] = (left_rank, right_rank)
     return (left_rank, right_rank)
 end
 
