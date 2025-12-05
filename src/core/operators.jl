@@ -1206,3 +1206,486 @@ struct MultiplyOperator <: Operator
     right::Union{Real, Operator}
 end
 
+# ============================================================================
+# Expression matrices for matrix assembly (following Dedalus operators.py)
+# ============================================================================
+
+"""
+    expression_matrices(op::Operator, sp, vars; kwargs...)
+
+Build expression matrices for operator applied to each variable.
+Following Dedalus operators.py expression_matrices method.
+
+Returns Dict mapping variables to sparse matrices.
+"""
+function expression_matrices(op::Operator, sp, vars; kwargs...)
+    # Default: return empty dict (override for specific operators)
+    return Dict{Any, SparseMatrixCSC}()
+end
+
+"""
+    expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
+
+Time derivative matrices: returns M matrix contribution.
+Following Dedalus operators.py TimeDerivative.expression_matrices.
+"""
+function expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
+    operand = op.operand
+    result = Dict{Any, SparseMatrixCSC}()
+
+    for var in vars
+        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
+            # Identity matrix for time derivative term
+            n = field_dofs(var)
+            result[var] = sparse(I, n, n) * Float64(op.order)
+        end
+    end
+
+    return result
+end
+
+"""
+    expression_matrices(op::Differentiate, sp, vars; kwargs...)
+
+Spatial differentiation matrices.
+Following Dedalus operators.py Differentiate.expression_matrices.
+"""
+function expression_matrices(op::Differentiate, sp, vars; kwargs...)
+    operand = op.operand
+    coord = op.coord
+    order = op.order
+    result = Dict{Any, SparseMatrixCSC}()
+
+    for var in vars
+        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
+            # Build differentiation matrix for this variable
+            D = build_operator_differentiation_matrix(var, coord, order; kwargs...)
+            if D !== nothing
+                result[var] = D
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    expression_matrices(op::Laplacian, sp, vars; kwargs...)
+
+Laplacian matrices: sum of second derivatives.
+Following Dedalus operators.py Laplacian.expression_matrices.
+"""
+function expression_matrices(op::Laplacian, sp, vars; kwargs...)
+    operand = op.operand
+    result = Dict{Any, SparseMatrixCSC}()
+
+    for var in vars
+        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
+            # Build Laplacian matrix = sum of D_i^2 for each coordinate
+            lap_mat = nothing
+
+            if hasfield(typeof(var), :bases)
+                for basis in var.bases
+                    if basis !== nothing
+                        coord = get_coord_for_basis(basis)
+                        D2 = build_operator_differentiation_matrix(var, coord, 2; kwargs...)
+                        if D2 !== nothing
+                            if lap_mat === nothing
+                                lap_mat = D2
+                            else
+                                lap_mat = lap_mat + D2
+                            end
+                        end
+                    end
+                end
+            end
+
+            if lap_mat !== nothing
+                result[var] = lap_mat
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    expression_matrices(op::Gradient, sp, vars; kwargs...)
+
+Gradient matrices for scalar -> vector.
+Following Dedalus operators.py Gradient.expression_matrices.
+"""
+function expression_matrices(op::Gradient, sp, vars; kwargs...)
+    operand = op.operand
+    coordsys = op.coordsys
+    result = Dict{Any, SparseMatrixCSC}()
+
+    for var in vars
+        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
+            # For Cartesian: gradient is vector of partial derivatives
+            # Build block diagonal matrix with D_i for each component
+            n = field_dofs(var)
+            ndim = coordsys.dim
+
+            blocks = SparseMatrixCSC[]
+            for coord in coordsys.coords
+                D = build_operator_differentiation_matrix(var, coord, 1; kwargs...)
+                if D !== nothing
+                    push!(blocks, D)
+                else
+                    push!(blocks, spzeros(Float64, n, n))
+                end
+            end
+
+            # Stack blocks vertically for vector output
+            if !isempty(blocks)
+                result[var] = vcat(blocks...)
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    expression_matrices(op::Divergence, sp, vars; kwargs...)
+
+Divergence matrices for vector -> scalar.
+Following Dedalus operators.py Divergence.expression_matrices.
+"""
+function expression_matrices(op::Divergence, sp, vars; kwargs...)
+    operand = op.operand
+    result = Dict{Any, SparseMatrixCSC}()
+
+    if !isa(operand, VectorField)
+        return result
+    end
+
+    coordsys = operand.coordsys
+
+    for var in vars
+        if var === operand || (hasfield(typeof(var), :name) && var.name == operand.name)
+            # For Cartesian: divergence is sum of partial derivatives of components
+            # Build row of blocks [D_x, D_y, D_z]
+            n_comp = length(operand.components)
+            n_per_comp = n_comp > 0 ? field_dofs(operand.components[1]) : 0
+
+            blocks = SparseMatrixCSC[]
+            for (i, coord) in enumerate(coordsys.coords)
+                comp = operand.components[i]
+                D = build_operator_differentiation_matrix(comp, coord, 1; kwargs...)
+                if D !== nothing
+                    push!(blocks, D)
+                else
+                    push!(blocks, spzeros(Float64, n_per_comp, n_per_comp))
+                end
+            end
+
+            # Concatenate blocks horizontally for scalar output
+            if !isempty(blocks)
+                result[var] = hcat(blocks...)
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    expression_matrices(op::Lift, sp, vars; kwargs...)
+
+Lift matrices for boundary conditions (tau method).
+Following Dedalus operators.py Lift.expression_matrices.
+"""
+function expression_matrices(op::Lift, sp, vars; kwargs...)
+    operand = op.operand
+    basis = op.basis
+    n = op.n
+    result = Dict{Any, SparseMatrixCSC}()
+
+    for var in vars
+        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
+            # Lift matrix places tau values at specific spectral modes
+            # Following Dedalus tau method
+            lift_mat = build_lift_matrix(var, basis, n; kwargs...)
+            if lift_mat !== nothing
+                result[var] = lift_mat
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    expression_matrices(op::Convert, sp, vars; kwargs...)
+
+Basis conversion matrices.
+Following Dedalus operators.py Convert.expression_matrices.
+"""
+function expression_matrices(op::Convert, sp, vars; kwargs...)
+    operand = op.operand
+    out_basis = op.basis
+    result = Dict{Any, SparseMatrixCSC}()
+
+    for var in vars
+        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
+            # Get input basis and build conversion matrix
+            if hasfield(typeof(var), :bases) && !isempty(var.bases)
+                in_basis = var.bases[1]
+                if in_basis !== nothing && isa(in_basis, JacobiBasis) && isa(out_basis, JacobiBasis)
+                    conv_mat = conversion_matrix(in_basis, out_basis)
+                    result[var] = conv_mat
+                end
+            end
+        end
+    end
+
+    return result
+end
+
+# ============================================================================
+# Helper functions for building operator matrices
+# ============================================================================
+
+"""
+    build_operator_differentiation_matrix(var, coord, order; kwargs...)
+
+Build differentiation matrix for variable with respect to coordinate.
+"""
+function build_operator_differentiation_matrix(var, coord::Coordinate, order::Int; kwargs...)
+    if !hasfield(typeof(var), :bases)
+        return nothing
+    end
+
+    # Find the basis corresponding to this coordinate
+    basis_idx = nothing
+    target_basis = nothing
+
+    for (i, basis) in enumerate(var.bases)
+        if basis !== nothing && basis.meta.element_label == coord.name
+            basis_idx = i
+            target_basis = basis
+            break
+        end
+    end
+
+    if target_basis === nothing
+        return nothing
+    end
+
+    n_total = field_dofs(var)
+    n_basis = target_basis.meta.size
+
+    # Build 1D differentiation matrix based on basis type
+    D1d = nothing
+
+    if isa(target_basis, JacobiBasis)
+        D1d = differentiation_matrix(target_basis, order)
+    elseif isa(target_basis, FourierBasis)
+        D1d = fourier_differentiation_matrix(target_basis, order)
+    end
+
+    if D1d === nothing
+        return nothing
+    end
+
+    # For multi-dimensional fields, apply Kronecker product
+    if length(var.bases) == 1
+        return D1d
+    else
+        # Build identity matrices for other dimensions
+        matrices = AbstractMatrix[]
+        for (i, basis) in enumerate(var.bases)
+            if basis === nothing
+                continue
+            end
+            if i == basis_idx
+                push!(matrices, D1d)
+            else
+                push!(matrices, sparse(I, basis.meta.size, basis.meta.size))
+            end
+        end
+
+        # Kronecker product in reverse order (column-major)
+        result = matrices[end]
+        for i in (length(matrices)-1):-1:1
+            result = kron(result, matrices[i])
+        end
+
+        return result
+    end
+end
+
+"""
+    fourier_differentiation_matrix(basis::FourierBasis, order::Int)
+
+Build Fourier differentiation matrix.
+"""
+function fourier_differentiation_matrix(basis::RealFourier, order::Int)
+    N = basis.meta.size
+    L = basis.meta.bounds[2] - basis.meta.bounds[1]
+    k0 = 2π / L
+
+    # RealFourier: derivative mixes cos and sin modes
+    # d/dx[cos(kx)] = -k*sin(kx)
+    # d/dx[sin(kx)] = k*cos(kx)
+
+    I_list = Int[]
+    J_list = Int[]
+    V_list = Float64[]
+
+    # DC mode (k=0) -> 0
+    push!(I_list, 1)
+    push!(J_list, 1)
+    push!(V_list, 0.0)
+
+    k_max = (N - 1) ÷ 2
+
+    for k in 1:k_max
+        cos_idx = 2*k
+        sin_idx = 2*k + 1
+        k_phys = k0 * k
+
+        if cos_idx <= N && sin_idx <= N
+            if order == 1
+                # d/dx cos -> -k sin, d/dx sin -> k cos
+                push!(I_list, cos_idx); push!(J_list, sin_idx); push!(V_list, -k_phys)
+                push!(I_list, sin_idx); push!(J_list, cos_idx); push!(V_list, k_phys)
+            elseif order == 2
+                # d²/dx² cos -> -k² cos, d²/dx² sin -> -k² sin
+                push!(I_list, cos_idx); push!(J_list, cos_idx); push!(V_list, -k_phys^2)
+                push!(I_list, sin_idx); push!(J_list, sin_idx); push!(V_list, -k_phys^2)
+            else
+                # General order
+                factor = (im * k_phys)^order
+                push!(I_list, cos_idx); push!(J_list, cos_idx); push!(V_list, real(factor))
+                push!(I_list, sin_idx); push!(J_list, sin_idx); push!(V_list, real(factor))
+            end
+        end
+    end
+
+    if isempty(I_list)
+        return spzeros(Float64, N, N)
+    end
+
+    return sparse(I_list, J_list, V_list, N, N)
+end
+
+function fourier_differentiation_matrix(basis::ComplexFourier, order::Int)
+    N = basis.meta.size
+    L = basis.meta.bounds[2] - basis.meta.bounds[1]
+    k0 = 2π / L
+
+    # ComplexFourier: diagonal matrix with (ik)^order
+    k_native = [0:(N÷2-1); -(N÷2):-1]
+    k_phys = k0 .* k_native
+
+    diag_vals = (im .* k_phys).^order
+
+    return spdiagm(0 => diag_vals)
+end
+
+"""
+    build_lift_matrix(var, basis, n; kwargs...)
+
+Build lifting matrix for tau method boundary conditions.
+Following Dedalus operators.py Lift implementation.
+"""
+function build_lift_matrix(var, basis, n::Int; kwargs...)
+    if !hasfield(typeof(var), :bases)
+        return nothing
+    end
+
+    # Find the basis index
+    basis_idx = nothing
+    for (i, b) in enumerate(var.bases)
+        if b === basis
+            basis_idx = i
+            break
+        end
+    end
+
+    if basis_idx === nothing
+        # Try matching by name
+        for (i, b) in enumerate(var.bases)
+            if b !== nothing && basis.meta.element_label == b.meta.element_label
+                basis_idx = i
+                break
+            end
+        end
+    end
+
+    if basis_idx === nothing
+        return nothing
+    end
+
+    N = basis.meta.size
+    n_total = field_dofs(var)
+
+    # Lift places boundary values at last n modes
+    # Following Dedalus tau method convention
+    I_list = Int[]
+    J_list = Int[]
+    V_list = Float64[]
+
+    # Place lift contribution at mode N-n+1
+    lift_mode = N - n
+    if lift_mode >= 1 && lift_mode <= N
+        push!(I_list, lift_mode)
+        push!(J_list, 1)
+        push!(V_list, 1.0)
+    end
+
+    if isempty(I_list)
+        return spzeros(Float64, N, 1)
+    end
+
+    return sparse(I_list, J_list, V_list, N, 1)
+end
+
+"""
+    get_coord_for_basis(basis::Basis)
+
+Get coordinate associated with a basis.
+"""
+function get_coord_for_basis(basis::Basis)
+    if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :coordsys)
+        coordsys = basis.meta.coordsys
+        coord_name = basis.meta.element_label
+        if hasfield(typeof(coordsys), :coords)
+            for coord in coordsys.coords
+                if coord.name == coord_name
+                    return coord
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    field_dofs(field)
+
+Get total degrees of freedom for a field.
+"""
+function field_dofs(field)
+    if hasfield(typeof(field), :data_c) && field.data_c !== nothing
+        return length(field.data_c)
+    elseif hasfield(typeof(field), :data_g) && field.data_g !== nothing
+        return length(field.data_g)
+    elseif hasfield(typeof(field), :bases)
+        total = 1
+        for basis in field.bases
+            if basis !== nothing
+                total *= basis.meta.size
+            end
+        end
+        return total
+    elseif hasfield(typeof(field), :components)
+        # VectorField or TensorField
+        return sum(field_dofs(comp) for comp in field.components)
+    end
+    return 0
+end
+
