@@ -2,6 +2,12 @@
 Distributor class for parallel distribution and transformations
 
 Translated from dedalus/core/distributor.py with MPI and PencilArrays integration
+
+Key parallelization features:
+- PencilArrays for efficient MPI domain decomposition
+- PencilFFTs for parallel spectral transforms
+- Automatic mesh optimization for 2D/3D decomposition
+- Layout caching for performance
 """
 
 using MPI
@@ -12,6 +18,7 @@ struct Layout
     dist::Any
     local_shape::Tuple{Vararg{Int}}
     global_shape::Tuple{Vararg{Int}}
+    pencil::Union{Nothing, PencilArrays.Pencil}  # Store Pencil for proper decomposition info
 end
 
 # Performance tracking structure for distributor
@@ -22,9 +29,11 @@ mutable struct DistributorPerformanceStats
     mpi_operations::Int
     cache_hits::Int
     cache_misses::Int
+    transpose_time::Float64  # Track transpose overhead
+    communication_time::Float64  # Track MPI communication time
 
     function DistributorPerformanceStats()
-        new(0.0, 0, 0, 0, 0, 0)
+        new(0.0, 0, 0, 0, 0, 0, 0.0, 0.0)
     end
 end
 
@@ -39,9 +48,11 @@ mutable struct Distributor
     dim::Int  # Total dimension
     dtype::Type
 
-    # PencilArrays integration
+    # PencilArrays integration - CORRECT API usage
     use_pencil_arrays::Bool  # Flag to enable/disable PencilArrays for MPI parallelization
     pencil_config::Union{Nothing, PencilConfig}
+    mpi_topology::Union{Nothing, PencilArrays.MPITopology}  # MPI Cartesian topology
+    pencil_cache::Dict{Tuple, PencilArrays.Pencil}  # Cache Pencil objects by (shape, decomp_dims)
     transforms::Vector{Any}
 
     # Layout cache
@@ -49,17 +60,18 @@ mutable struct Distributor
 
     # Performance tracking
     performance_stats::DistributorPerformanceStats
-    
+
     function Distributor(coordsys::CoordinateSystem;
                         comm::MPI.Comm=MPI.COMM_WORLD,
                         mesh::Union{Nothing, Tuple{Vararg{Int}}}=nothing,
                         dtype::Type=Float64)
-        
+
         size = MPI.Comm_size(comm)
         rank = MPI.Comm_rank(comm)
-        
+
         if mesh === nothing
             # Auto-generate optimal mesh based on coordinate system dimension
+            # Following PencilArrays best practices for load balancing
             if isa(coordsys, CartesianCoordinates)
                 if coordsys.dim == 1
                     mesh = (size,)
@@ -74,124 +86,276 @@ mutable struct Distributor
                 mesh = (size,)  # Default for other coordinate systems
             end
         end
-        
+
         # Validate mesh
         if prod(mesh) != size
             throw(ArgumentError("Mesh size $(prod(mesh)) does not match number of processes $size"))
         end
-        
+
         # Build coordinate information following Dedalus pattern
         coordsystems = (coordsys,)  # Single coordinate system for now
         coords_tuple = coords(coordsys)  # Get coordinates from the coordinate system
         total_dim = coordsys.dim  # Total dimension
-        
+
         # Initialize empty structures
         # Enable PencilArrays for MPI parallelization (always true for distributed runs)
         use_pencil_arrays = (size > 1)  # Use PencilArrays for MPI, not for serial runs
         pencil_config = nothing
+        mpi_topology = nothing
+        pencil_cache = Dict{Tuple, PencilArrays.Pencil}()
         transforms = Any[]
         layouts = Dict{Any, Layout}()
         perf_stats = DistributorPerformanceStats()
 
-        new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
-            use_pencil_arrays, pencil_config, transforms, layouts, perf_stats)
+        dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
+            use_pencil_arrays, pencil_config, mpi_topology, pencil_cache, transforms, layouts, perf_stats)
+
+        # Initialize MPI topology for parallel runs
+        if size > 1
+            initialize_mpi_topology!(dist)
+        end
+
+        return dist
     end
 end
 
+"""
+    initialize_mpi_topology!(dist::Distributor)
+
+Initialize MPI Cartesian topology for PencilArrays.
+Following PencilArrays best practices from documentation.
+"""
+function initialize_mpi_topology!(dist::Distributor)
+    if dist.size == 1
+        return  # No topology needed for serial
+    end
+
+    try
+        # Create MPI Cartesian topology using PencilArrays API
+        # MPITopology(comm, pdims) where pdims is the process grid dimensions
+        dist.mpi_topology = PencilArrays.MPITopology(dist.comm, dist.mesh)
+
+        if dist.rank == 0
+            @info "Initialized MPI topology: $(dist.mesh) processes"
+        end
+    catch e
+        @warn "Failed to initialize MPI topology, falling back to manual decomposition" exception=e
+        dist.mpi_topology = nothing
+    end
+end
 
 function setup_pencil_arrays(dist::Distributor, global_shape::Tuple{Vararg{Int}})
     """Setup PencilArrays configuration for given global shape"""
 
-    if length(global_shape) != length(dist.mesh)
-        throw(ArgumentError("Global shape dimensions must match mesh dimensions"))
+    ndims_global = length(global_shape)
+    ndims_mesh = length(dist.mesh)
+
+    # Determine which dimensions to decompose
+    # PencilArrays convention: decompose the LAST ndims_mesh dimensions by default
+    # For 3D data with 2D mesh: decompose dims (2, 3), keep dim 1 local
+    if ndims_global >= ndims_mesh
+        decomp_dims = ntuple(i -> ndims_global - ndims_mesh + i, ndims_mesh)
+    else
+        decomp_dims = ntuple(identity, ndims_global)
     end
 
     # Create standard PencilArrays configuration
-    if length(dist.mesh) == 2
-        # Both dimensions can be distributed
-        decomp_dims = (true, true)
-    else
-        decomp_dims = ntuple(i -> true, length(dist.mesh))
-    end
+    decomp_flags = ntuple(i -> i in decomp_dims, ndims_global)
 
     dist.pencil_config = PencilConfig(
         global_shape,
         dist.mesh,
         comm=dist.comm,
-        decomp_dims=decomp_dims
+        decomp_dims=decomp_flags
     )
 
     return dist.pencil_config
 end
 
+"""
+    create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}}, decomp_index::Int=1; dtype::Type=dist.dtype)
+
+Create a Pencil object with proper MPI decomposition.
+Uses PencilArrays.Pencil API correctly for efficient parallel operations.
+"""
 function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
                       decomp_index::Int=1; dtype::Type=dist.dtype)
-    """Create a pencil array with specified decomposition"""
 
     start_time = time()
 
-    if dist.pencil_config === nothing
-        setup_pencil_arrays(dist, global_shape)
+    # Serial execution - just create a regular array
+    if dist.size == 1
+        dist.performance_stats.pencil_creations += 1
+        dist.performance_stats.total_time += time() - start_time
+        return zeros(dtype, global_shape...)
     end
 
-    # PencilArrays.Pencil requires (global_dims, decomp_dims, comm) or similar
-    # For serial execution or when PencilArrays isn't properly configured,
-    # return a simple array wrapper
-    config = dist.pencil_config
+    # Check cache first
+    ndims_global = length(global_shape)
+    ndims_mesh = length(dist.mesh)
 
-    if dist.size == 1
-        # Serial execution - just create a regular array
-        pencil = zeros(dtype, global_shape...)
+    # Default decomposition: last ndims_mesh dimensions
+    decomp_dims = if ndims_global >= ndims_mesh
+        ntuple(i -> ndims_global - ndims_mesh + i, ndims_mesh)
     else
-        # Parallel execution - use PencilArrays properly
-        try
-            # Create a Pencil using the proper PencilArrays API
-            # PencilArrays.Pencil constructor: Pencil(topology, local_range, global_dims)
-            # For simplicity, we create a PencilArray directly
-            pencil = PencilArrays.PencilArray{dtype}(undef, global_shape, config.comm)
-        catch e
-            # Fallback to simple array if PencilArrays fails
-            @warn "PencilArrays creation failed, using regular array" exception=e
-            pencil = zeros(dtype, global_shape...)
+        ntuple(identity, ndims_global)
+    end
+
+    cache_key = (global_shape, decomp_dims, dtype)
+
+    if haskey(dist.pencil_cache, cache_key)
+        dist.performance_stats.cache_hits += 1
+        pencil = dist.pencil_cache[cache_key]
+        # Return a new PencilArray with the cached Pencil configuration
+        dist.performance_stats.total_time += time() - start_time
+        return PencilArrays.PencilArray{dtype}(undef, pencil)
+    end
+
+    dist.performance_stats.cache_misses += 1
+
+    # Create Pencil using proper PencilArrays API
+    try
+        if dist.mpi_topology !== nothing
+            # Use pre-created MPI topology (preferred)
+            # Pencil(topology, global_dims, decomp_dims)
+            pencil = PencilArrays.Pencil(dist.mpi_topology, global_shape, decomp_dims)
+        else
+            # Fallback: create Pencil directly with comm
+            # Pencil(global_dims, comm) uses default decomposition
+            pencil = PencilArrays.Pencil(global_shape, dist.comm)
+        end
+
+        # Cache the Pencil object for reuse
+        dist.pencil_cache[cache_key] = pencil
+
+        # Create and return PencilArray
+        pencil_array = PencilArrays.PencilArray{dtype}(undef, pencil)
+        fill!(pencil_array, zero(dtype))
+
+        dist.performance_stats.pencil_creations += 1
+        dist.performance_stats.total_time += time() - start_time
+
+        return pencil_array
+
+    catch e
+        # Fallback to simple array if PencilArrays fails
+        @warn "PencilArrays creation failed, using regular array" exception=e
+
+        # Compute local shape manually
+        local_shape = compute_local_shape(dist, global_shape)
+
+        dist.performance_stats.pencil_creations += 1
+        dist.performance_stats.total_time += time() - start_time
+
+        return zeros(dtype, local_shape...)
+    end
+end
+
+"""
+    compute_local_shape(dist::Distributor, global_shape::Tuple)
+
+Compute local array shape based on MPI decomposition.
+"""
+function compute_local_shape(dist::Distributor, global_shape::Tuple)
+    if dist.size == 1
+        return global_shape
+    end
+
+    ndims_global = length(global_shape)
+    ndims_mesh = length(dist.mesh)
+    local_shape = collect(global_shape)
+
+    # Decompose the last ndims_mesh dimensions
+    for i in 1:min(ndims_mesh, ndims_global)
+        global_dim_idx = ndims_global - ndims_mesh + i
+        mesh_dim_idx = i
+
+        n_global = global_shape[global_dim_idx]
+        n_procs = dist.mesh[mesh_dim_idx]
+
+        # Get process coordinate in this dimension
+        proc_coord = get_process_coordinate_in_mesh(dist, mesh_dim_idx)
+
+        # Compute local size with load balancing
+        base_size = div(n_global, n_procs)
+        remainder = n_global % n_procs
+
+        if proc_coord < remainder
+            local_shape[global_dim_idx] = base_size + 1
+        else
+            local_shape[global_dim_idx] = base_size
         end
     end
 
-    # Update performance stats
-    dist.performance_stats.total_time += time() - start_time
-    dist.performance_stats.pencil_creations += 1
+    return tuple(local_shape...)
+end
 
-    return pencil
+"""
+    get_process_coordinate_in_mesh(dist::Distributor, dim::Int)
+
+Get the coordinate of this process in the specified mesh dimension.
+Uses row-major ordering consistent with PencilArrays.
+"""
+function get_process_coordinate_in_mesh(dist::Distributor, dim::Int)
+    if dist.mesh === nothing || dim < 1 || dim > length(dist.mesh)
+        return 0
+    end
+
+    # Row-major ordering for consistency with PencilArrays
+    stride = 1
+    for i in 1:(dim-1)
+        stride *= dist.mesh[i]
+    end
+
+    return div(dist.rank, stride) % dist.mesh[dim]
 end
 
 function get_layout(dist::Distributor, bases::Tuple{Vararg{Basis}}, dtype::Type=dist.dtype)
     """Get layout for given bases"""
-    
+
     start_time = time()
-    
+
     key = (bases, dtype)
     if haskey(dist.layouts, key)
         # Cache hit
         dist.performance_stats.cache_hits += 1
         return dist.layouts[key]
     end
-    
+
     # Cache miss
     dist.performance_stats.cache_misses += 1
-    
+
     # Calculate global shape from bases
     global_shape = tuple([basis.meta.size for basis in bases]...)
-    
-    # Create pencil for this layout
-    pencil = create_pencil(dist, global_shape, 1, dtype=dtype)
-    local_shape = size(pencil)
-    
-    layout = Layout(pencil, local_shape, global_shape)
+
+    # Get or create Pencil object for this configuration
+    pencil_obj = nothing
+    if dist.size > 1
+        ndims_global = length(global_shape)
+        ndims_mesh = length(dist.mesh)
+        decomp_dims = if ndims_global >= ndims_mesh
+            ntuple(i -> ndims_global - ndims_mesh + i, ndims_mesh)
+        else
+            ntuple(identity, ndims_global)
+        end
+        cache_key = (global_shape, decomp_dims, dtype)
+
+        if haskey(dist.pencil_cache, cache_key)
+            pencil_obj = dist.pencil_cache[cache_key]
+        end
+    end
+
+    # Create pencil array for this layout
+    pencil_array = create_pencil(dist, global_shape, 1, dtype=dtype)
+    local_shape = size(pencil_array)
+
+    layout = Layout(dist, local_shape, global_shape, pencil_obj)
     dist.layouts[key] = layout
-    
+
     # Update performance stats
     dist.performance_stats.total_time += time() - start_time
     dist.performance_stats.layout_creations += 1
-    
+
     return layout
 end
 
