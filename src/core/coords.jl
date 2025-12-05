@@ -2,64 +2,572 @@
 Coordinate system classes
 
 Translated from dedalus/core/coords.py
+
+This module implements coordinate systems following the Dedalus approach:
+- CoordinateSystem: Abstract base type for all coordinate systems
+- Coordinate: Individual coordinate within a coordinate system
+- CartesianCoordinates: Cartesian (x, y, z) coordinate system
+- DirectProduct: Direct product of coordinate systems
+- S2Coordinates: Spherical surface coordinates (azimuth, colatitude)
+- PolarCoordinates: Polar coordinates (azimuth, radius)
+- SphericalCoordinates: Full spherical coordinates (azimuth, colatitude, radius)
 """
 
 using StaticArrays
 using LinearAlgebra
+using SparseArrays
+
+# ============================================================================
+# Abstract types
+# ============================================================================
 
 abstract type CoordinateSystem end
 
-struct Coordinate
-    coordsys::CoordinateSystem
-    index::Int
-    name::String
-end
+# ============================================================================
+# Coordinate: Individual coordinate within a system
+# Following Dedalus coords.py:66-96
+# ============================================================================
 
-struct DirectProduct <: CoordinateSystem
-    components::Tuple{Vararg{CoordinateSystem}}
-    names::Vector{String}
-    
-    function DirectProduct(components...)
-        names = vcat([cs.names for cs in components]...)
-        new(components, names)
+"""
+    Coordinate
+
+Represents a single coordinate within a coordinate system.
+Following Dedalus implementation in coords.py:66-96.
+
+Fields:
+- `name`: Name of the coordinate (e.g., "x", "y", "z")
+- `coordsys`: Parent coordinate system (can be nothing for standalone coordinates)
+- `dim`: Always 1 for a single coordinate
+- `curvilinear`: Whether this coordinate is curvilinear (false for Cartesian)
+- `default_nonconst_groups`: Default groups for non-constant modes
+"""
+mutable struct Coordinate
+    name::String
+    coordsys::Union{Nothing, CoordinateSystem}  # Note: Dedalus uses 'cs', we use 'coordsys' for clarity
+    dim::Int
+    curvilinear::Bool
+    default_nonconst_groups::Tuple{Vararg{Int}}
+
+    function Coordinate(name::String; cs::Union{Nothing, CoordinateSystem}=nothing)
+        new(name, cs, 1, false, (1,))
     end
 end
 
+function Base.:(==)(a::Coordinate, b::Coordinate)
+    return typeof(a) == typeof(b) && a.name == b.name
+end
+
+function Base.hash(c::Coordinate, h::UInt)
+    return hash(c.name, hash(:Coordinate, h))
+end
+
+function Base.show(io::IO, c::Coordinate)
+    print(io, c.name)
+end
+
+"""
+    check_bounds(coord::Coordinate, bounds)
+
+Check if bounds are valid for this coordinate.
+"""
+function check_bounds(coord::Coordinate, bounds)
+    if coord.coordsys !== nothing
+        check_bounds(coord.coordsys, coord, bounds)
+    end
+end
+
+"""
+    forward_vector_intertwiner(coord::Coordinate, subaxis, group)
+
+Forward intertwiner for vector components. Identity for Cartesian coordinates.
+Following Dedalus coords.py:92-93.
+"""
+function forward_vector_intertwiner(coord::Coordinate, subaxis, group)
+    return [1.0][:, :]  # 1x1 identity matrix
+end
+
+"""
+    backward_vector_intertwiner(coord::Coordinate, subaxis, group)
+
+Backward intertwiner for vector components. Identity for Cartesian coordinates.
+Following Dedalus coords.py:95-96.
+"""
+function backward_vector_intertwiner(coord::Coordinate, subaxis, group)
+    return [1.0][:, :]  # 1x1 identity matrix
+end
+
+# ============================================================================
+# AzimuthalCoordinate: Special coordinate for azimuthal directions
+# Following Dedalus coords.py:192-193
+# ============================================================================
+
+"""
+    AzimuthalCoordinate
+
+Special coordinate type for azimuthal (angular) coordinates.
+Used in polar, cylindrical, and spherical coordinate systems.
+"""
+mutable struct AzimuthalCoordinate
+    name::String
+    coordsys::Union{Nothing, CoordinateSystem}
+    dim::Int
+    curvilinear::Bool
+    default_nonconst_groups::Tuple{Vararg{Int}}
+
+    function AzimuthalCoordinate(name::String; cs::Union{Nothing, CoordinateSystem}=nothing)
+        new(name, cs, 1, false, (1,))
+    end
+end
+
+function Base.:(==)(a::AzimuthalCoordinate, b::AzimuthalCoordinate)
+    return a.name == b.name
+end
+
+function Base.hash(c::AzimuthalCoordinate, h::UInt)
+    return hash(c.name, hash(:AzimuthalCoordinate, h))
+end
+
+function Base.show(io::IO, c::AzimuthalCoordinate)
+    print(io, c.name)
+end
+
+# ============================================================================
+# CartesianCoordinates: Cartesian coordinate system
+# Following Dedalus coords.py:159-189
+# ============================================================================
+
+"""
+    CartesianCoordinates
+
+Cartesian coordinate system with named coordinates.
+Following Dedalus implementation in coords.py:159-189.
+
+# Constructor
+    CartesianCoordinates(names...; right_handed=true)
+
+# Arguments
+- `names`: Names for each coordinate (e.g., "x", "y", "z")
+- `right_handed`: Whether the coordinate system is right-handed (only used for 3D)
+
+# Examples
+```julia
+# 1D
+coords = CartesianCoordinates("x")
+
+# 2D
+coords = CartesianCoordinates("x", "z")
+
+# 3D
+coords = CartesianCoordinates("x", "y", "z")
+coords["x"]  # Get x coordinate
+coords[1]    # Get first coordinate
+```
+"""
 struct CartesianCoordinates <: CoordinateSystem
     names::Vector{String}
     dim::Int
+    coords::Vector{Coordinate}
+    curvilinear::Bool
+    right_handed::Union{Nothing, Bool}
+    default_nonconst_groups::Tuple{Vararg{Int}}
 
-    function CartesianCoordinates(names...)
+    function CartesianCoordinates(names...; right_handed::Bool=true)
         names_vec = collect(String(name) for name in names)
-        new(names_vec, length(names_vec))
+
+        # Check for unique names (Dedalus coords.py:164-165)
+        if length(Set(names_vec)) < length(names_vec)
+            throw(ArgumentError("Must specify unique coordinate names."))
+        end
+
+        dim = length(names_vec)
+
+        # Create coordinate objects
+        # We need to create the CartesianCoordinates first, then set cs on coordinates
+        coords_vec = Coordinate[]
+
+        # Create the coordinate system first (with empty coords)
+        cs = new(
+            names_vec,
+            dim,
+            coords_vec,
+            false,  # curvilinear = false for Cartesian
+            dim == 3 ? right_handed : nothing,  # right_handed only for 3D
+            ntuple(_ -> 1, dim)  # default_nonconst_groups = (1,) * dim
+        )
+
+        # Now create coordinates with reference to this coordinate system
+        for name in names_vec
+            coord = Coordinate(name; cs=cs)
+            push!(coords_vec, coord)
+        end
+
+        return cs
     end
 end
 
-function Base.getindex(coordsys::CoordinateSystem, key::Union{String, Int})
+function Base.show(io::IO, cs::CartesianCoordinates)
+    print(io, "{", join(cs.names, ","), "}")
+end
+
+function Base.:(==)(a::CartesianCoordinates, b::CartesianCoordinates)
+    if length(a.coords) != length(b.coords)
+        return false
+    end
+    for i in 1:length(a.coords)
+        if a.coords[i] != b.coords[i]
+            return false
+        end
+    end
+    return true
+end
+
+function Base.hash(cs::CartesianCoordinates, h::UInt)
+    return hash(cs.names, hash(:CartesianCoordinates, h))
+end
+
+"""
+    check_bounds(cs::CartesianCoordinates, coord, bounds)
+
+Check if bounds are valid. Cartesian coordinates have no restrictions.
+"""
+function check_bounds(cs::CartesianCoordinates, coord, bounds)
+    # No restrictions for Cartesian coordinates
+    return nothing
+end
+
+"""
+    forward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
+
+Forward intertwiner for vector components. Identity for Cartesian coordinates.
+Following Dedalus coords.py:176-177.
+"""
+function forward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
+    return Matrix{Float64}(I, cs.dim, cs.dim)
+end
+
+"""
+    backward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
+
+Backward intertwiner for vector components. Identity for Cartesian coordinates.
+Following Dedalus coords.py:179-180.
+"""
+function backward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
+    return Matrix{Float64}(I, cs.dim, cs.dim)
+end
+
+"""
+    forward_intertwiner(cs::CartesianCoordinates, subaxis, order, group)
+
+Forward intertwiner for tensor components. Identity for Cartesian coordinates.
+"""
+function forward_intertwiner(cs::CartesianCoordinates, subaxis, order, group)
+    vector_int = forward_vector_intertwiner(cs, subaxis, group)
+    return nkron(vector_int, order)
+end
+
+"""
+    backward_intertwiner(cs::CartesianCoordinates, subaxis, order, group)
+
+Backward intertwiner for tensor components. Identity for Cartesian coordinates.
+"""
+function backward_intertwiner(cs::CartesianCoordinates, subaxis, order, group)
+    vector_int = backward_vector_intertwiner(cs, subaxis, group)
+    return nkron(vector_int, order)
+end
+
+# ============================================================================
+# DirectProduct: Direct product of coordinate systems
+# Following Dedalus coords.py:99-156
+# ============================================================================
+
+"""
+    DirectProduct
+
+Direct product of coordinate systems.
+Following Dedalus implementation in coords.py:99-156.
+
+# Constructor
+    DirectProduct(coordsystems...; right_handed=nothing)
+
+# Examples
+```julia
+# Combine 1D systems
+x_coord = CartesianCoordinates("x")
+z_coord = CartesianCoordinates("z")
+coords = DirectProduct(x_coord, z_coord)
+```
+"""
+struct DirectProduct <: CoordinateSystem
+    coordsystems::Tuple{Vararg{CoordinateSystem}}
+    coords::Vector{Union{Coordinate, AzimuthalCoordinate}}
+    names::Vector{String}
+    dim::Int
+    curvilinear::Bool
+    right_handed::Union{Nothing, Bool}
+    default_nonconst_groups::Tuple{Vararg{Int}}
+    subaxis_by_cs::Dict{CoordinateSystem, Int}
+
+    function DirectProduct(coordsystems...; right_handed::Union{Nothing, Bool}=nothing)
+        # Collect all coordinates from component systems
+        all_coords = Union{Coordinate, AzimuthalCoordinate}[]
+        for cs in coordsystems
+            append!(all_coords, get_coords(cs))
+        end
+
+        # Check for duplicate coordinates (Dedalus coords.py:107-108)
+        if length(Set(all_coords)) < length(all_coords)
+            throw(ArgumentError("Cannot repeat coordinates in DirectProduct."))
+        end
+
+        # Collect names
+        names = String[]
+        for cs in coordsystems
+            append!(names, cs.names)
+        end
+
+        dim = sum(cs.dim for cs in coordsystems)
+
+        # Determine curvilinear property
+        curv = any(cs.curvilinear for cs in coordsystems)
+
+        # Handle right_handed for 3D (Dedalus coords.py:110-117)
+        if dim == 3
+            if curv
+                right_handed = right_handed === nothing ? false : right_handed
+            else
+                right_handed = right_handed === nothing ? true : right_handed
+            end
+        end
+
+        # Build subaxis mapping
+        subaxis_dict = Dict{CoordinateSystem, Int}()
+        subaxis = 0
+        for cs in coordsystems
+            subaxis_dict[cs] = subaxis
+            subaxis += cs.dim
+        end
+
+        # Collect default_nonconst_groups
+        groups = Int[]
+        for cs in coordsystems
+            append!(groups, collect(cs.default_nonconst_groups))
+        end
+
+        new(
+            coordsystems,
+            all_coords,
+            names,
+            dim,
+            curv,
+            right_handed,
+            Tuple(groups),
+            subaxis_dict
+        )
+    end
+end
+
+"""
+    forward_vector_intertwiner(cs::DirectProduct, subaxis, group)
+
+Forward intertwiner for vector components in a direct product.
+Following Dedalus coords.py:132-141.
+"""
+function forward_vector_intertwiner(cs::DirectProduct, subaxis, group)
+    factors = []
+    start_axis = 0
+
+    for sub_cs in cs.coordsystems
+        if start_axis <= subaxis < start_axis + sub_cs.dim
+            push!(factors, forward_vector_intertwiner(sub_cs, subaxis - start_axis, group))
+        else
+            push!(factors, Matrix{Float64}(I, sub_cs.dim, sub_cs.dim))
+        end
+        start_axis += sub_cs.dim
+    end
+
+    return sparse_block_diag(factors)
+end
+
+"""
+    backward_vector_intertwiner(cs::DirectProduct, subaxis, group)
+
+Backward intertwiner for vector components in a direct product.
+Following Dedalus coords.py:143-152.
+"""
+function backward_vector_intertwiner(cs::DirectProduct, subaxis, group)
+    factors = []
+    start_axis = 0
+
+    for sub_cs in cs.coordsystems
+        if start_axis <= subaxis < start_axis + sub_cs.dim
+            push!(factors, backward_vector_intertwiner(sub_cs, subaxis - start_axis, group))
+        else
+            push!(factors, Matrix{Float64}(I, sub_cs.dim, sub_cs.dim))
+        end
+        start_axis += sub_cs.dim
+    end
+
+    return sparse_block_diag(factors)
+end
+
+"""
+    forward_intertwiner(cs::DirectProduct, subaxis, order, group)
+
+Forward intertwiner for tensor components.
+"""
+function forward_intertwiner(cs::DirectProduct, subaxis, order, group)
+    vector_int = forward_vector_intertwiner(cs, subaxis, group)
+    return nkron(vector_int, order)
+end
+
+"""
+    backward_intertwiner(cs::DirectProduct, subaxis, order, group)
+
+Backward intertwiner for tensor components.
+"""
+function backward_intertwiner(cs::DirectProduct, subaxis, order, group)
+    vector_int = backward_vector_intertwiner(cs, subaxis, group)
+    return nkron(vector_int, order)
+end
+
+# ============================================================================
+# Helper functions
+# ============================================================================
+
+"""
+    nkron(A, n)
+
+N-fold Kronecker product of matrix A with itself.
+Following Dedalus tools/array.py nkron function.
+"""
+function nkron(A::AbstractMatrix, n::Int)
+    if n == 0
+        return ones(eltype(A), 1, 1)
+    elseif n == 1
+        return A
+    else
+        result = A
+        for _ in 2:n
+            result = kron(result, A)
+        end
+        return result
+    end
+end
+
+"""
+    sparse_block_diag(matrices)
+
+Create a sparse block diagonal matrix from a vector of matrices.
+Following Dedalus tools/array.py sparse_block_diag function.
+"""
+function sparse_block_diag(matrices::Vector)
+    if isempty(matrices)
+        return spzeros(Float64, 0, 0)
+    end
+
+    # Calculate total dimensions
+    total_rows = sum(size(m, 1) for m in matrices)
+    total_cols = sum(size(m, 2) for m in matrices)
+
+    # Build the block diagonal matrix
+    result = spzeros(Float64, total_rows, total_cols)
+    row_offset = 0
+    col_offset = 0
+
+    for m in matrices
+        nrows, ncols = size(m)
+        result[row_offset+1:row_offset+nrows, col_offset+1:col_offset+ncols] = m
+        row_offset += nrows
+        col_offset += ncols
+    end
+
+    return Matrix(result)  # Convert to dense for compatibility
+end
+
+"""
+    get_coords(cs::CoordinateSystem)
+
+Get the coordinates from a coordinate system.
+"""
+function get_coords(cs::CartesianCoordinates)
+    return cs.coords
+end
+
+function get_coords(cs::DirectProduct)
+    return cs.coords
+end
+
+"""
+    coords(coordsys::CoordinateSystem)
+
+Return tuple of Coordinate objects for this coordinate system.
+Following Dedalus pattern.
+"""
+function coords(coordsys::CartesianCoordinates)
+    return tuple(coordsys.coords...)
+end
+
+function coords(coordsys::DirectProduct)
+    return tuple(coordsys.coords...)
+end
+
+# ============================================================================
+# Indexing
+# ============================================================================
+
+function Base.getindex(coordsys::CartesianCoordinates, key::String)
+    index = findfirst(==(key), coordsys.names)
+    if index === nothing
+        throw(KeyError("Coordinate '$key' not found"))
+    end
+    return coordsys.coords[index]
+end
+
+function Base.getindex(coordsys::CartesianCoordinates, key::Int)
+    if key < 1 || key > coordsys.dim
+        throw(BoundsError(coordsys.coords, key))
+    end
+    return coordsys.coords[key]
+end
+
+function Base.getindex(coordsys::DirectProduct, key::String)
+    index = findfirst(==(key), coordsys.names)
+    if index === nothing
+        throw(KeyError("Coordinate '$key' not found"))
+    end
+    return coordsys.coords[index]
+end
+
+function Base.getindex(coordsys::DirectProduct, key::Int)
+    if key < 1 || key > coordsys.dim
+        throw(BoundsError(coordsys.coords, key))
+    end
+    return coordsys.coords[key]
+end
+
+# Legacy getindex for generic CoordinateSystem (for backwards compatibility)
+function Base.getindex(cs::CoordinateSystem, key::Union{String, Int})
     if isa(key, String)
-        index = findfirst(==(key), coordsys.names)
+        index = findfirst(==(key), cs.names)
         if index === nothing
             throw(KeyError("Coordinate '$key' not found"))
         end
-        return Coordinate(coordsys, index, key)
+        return Coordinate(key; cs=cs)
     else
-        if key < 1 || key > length(coordsys.names)
-            throw(BoundsError(coordsys.names, key))
+        if key < 1 || key > length(cs.names)
+            throw(BoundsError(cs.names, key))
         end
-        return Coordinate(coordsys, key, coordsys.names[key])
+        return Coordinate(cs.names[key]; cs=cs)
     end
 end
 
+# ============================================================================
 # Note: unit_vector_fields has been moved to field.jl to avoid circular dependency
 # (it needs VectorField which is defined in field.jl, but coords.jl is included first)
+# ============================================================================
 
+# ============================================================================
 # Note: local_grids is implemented in distributor.jl
 # The distributor's local_grids method handles coordinate grid generation
 # by delegating to individual basis local_grids methods
-
-# Add coords property to coordinate systems
-# Following Dedalus pattern where coords is a tuple of Coordinate objects
-function coords(coordsys::CoordinateSystem)
-    """Return tuple of Coordinate objects for this coordinate system."""
-    return tuple([Coordinate(coordsys, i, name) for (i, name) in enumerate(coordsys.names)]...)
-end
+# ============================================================================
