@@ -377,8 +377,8 @@ end
 struct GlobalArrayReducer
     comm::MPI.Comm
     scalar_buffer::Vector{Float64}
-    
-    function GlobalArrayReducer(comm::MPI.Comm)
+
+    function GlobalArrayReducer(comm::MPI.Comm=MPI.COMM_WORLD)
         new(comm, zeros(Float64, 1))
     end
 end
