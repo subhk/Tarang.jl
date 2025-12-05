@@ -4,16 +4,22 @@ File input/output for simulation data.
 
 ## NetCDF Output
 
-### add_file_handler
+### NetCDFFileHandler
 
 ```@docs
-add_file_handler
+Tarang.NetCDFFileHandler
+```
+
+### add_netcdf_handler
+
+```@docs
+Tarang.add_netcdf_handler
 ```
 
 Create a file handler for NetCDF output.
 
 ```julia
-handler = add_file_handler(
+handler = add_netcdf_handler(
     base_path,          # Output path/name
     dist,               # Distributor
     fields_dict;        # Dict of fields
@@ -31,87 +37,264 @@ handler = add_file_handler(
 
 **Returns**: `NetCDFFileHandler`
 
-### add_task
+---
+
+### add_task!
 
 ```@docs
-add_task
+Tarang.add_task!
 ```
 
 Add a field output task.
 
 ```julia
-add_task(handler, field; name="field_name")
+add_task!(handler, field; name="field_name")
 ```
 
 With postprocessing:
 
 ```julia
-add_task(handler, field;
+add_task!(handler, field;
     name="processed",
     postprocess=data -> mean(data, dims=1)
 )
 ```
 
-### add_mean_task!
+---
+
+### add_profile_task!
 
 ```@docs
-add_mean_task!
+Tarang.add_profile_task!
 ```
 
-Add a task that computes mean over dimensions.
+Add a task that computes mean profile over specified dimensions.
 
 ```julia
-# Mean over x (dimension 1)
-add_mean_task!(handler, field; dims=1, name="field_mean_x")
+# Mean over x (dimension 1) - produces z-profile
+add_profile_task!(handler, field; dims=1, name="field_profile")
 
 # Mean over x and y
-add_mean_task!(handler, field; dims=(1,2), name="field_mean_xy")
+add_profile_task!(handler, field; dims=(1,2), name="field_profile_xy")
 ```
 
-### add_slice_task!
+---
+
+### add_rms_task!
 
 ```@docs
-add_slice_task!
+Tarang.add_rms_task!
 ```
 
-Add a task that extracts a slice.
+Add a task that computes RMS (root-mean-square) values.
 
 ```julia
-# Slice at index
-add_slice_task!(handler, field; dim=1, idx=64, name="field_slice")
-
-# Using slices dictionary
-add_slice_task!(handler, field; slices=Dict(1 => 32), name="slice")
+add_rms_task!(handler, field; name="field_rms")
 ```
 
-### process!
+---
+
+### add_variance_task!
 
 ```@docs
-process!
+Tarang.add_variance_task!
 ```
 
-Write pending data to file.
+Add a task that computes variance.
 
 ```julia
-process!(handler;
-    iteration=solver.iteration,
-    wall_time=elapsed,
-    sim_time=solver.sim_time,
-    timestep=dt
-)
+add_variance_task!(handler, field; name="field_variance")
 ```
 
-### current_file
+---
+
+### add_extrema_task!
 
 ```@docs
-current_file
+Tarang.add_extrema_task!
+```
+
+Add a task that tracks minimum and maximum values.
+
+```julia
+add_extrema_task!(handler, field; name="field_extrema")
+```
+
+---
+
+## Handler Management
+
+### check_schedule
+
+```@docs
+Tarang.check_schedule
+```
+
+Check if the handler should write based on schedule.
+
+---
+
+### create_current_file!
+
+```@docs
+Tarang.create_current_file!
+```
+
+Create a new output file.
+
+---
+
+### current_path
+
+```@docs
+Tarang.current_path
 ```
 
 Get the current output file path.
 
 ```julia
-filepath = current_file(handler)
+filepath = current_path(handler)
 ```
+
+---
+
+### get_output_files
+
+```@docs
+Tarang.get_output_files
+```
+
+Get list of all output files created by handler.
+
+---
+
+### get_handler_info
+
+```@docs
+Tarang.get_handler_info
+```
+
+Get information about the handler state.
+
+---
+
+### close!
+
+```@docs
+Tarang.close!
+```
+
+Close the handler and finalize output.
+
+```julia
+close!(handler)
+```
+
+---
+
+### reset!
+
+```@docs
+Tarang.reset!
+```
+
+Reset the handler state.
+
+---
+
+## File Merging
+
+### NetCDFMerger
+
+```@docs
+Tarang.NetCDFMerger
+```
+
+---
+
+### merge_netcdf_files
+
+```@docs
+Tarang.merge_netcdf_files
+```
+
+Merge multiple NetCDF files from parallel output.
+
+```julia
+merge_netcdf_files(base_path; output_file="merged.nc")
+```
+
+---
+
+### merge_files!
+
+```@docs
+Tarang.merge_files!
+```
+
+---
+
+### batch_merge_netcdf
+
+```@docs
+Tarang.batch_merge_netcdf
+```
+
+Merge multiple sets of parallel output files.
+
+```julia
+batch_merge_netcdf(["output1", "output2", "output3"])
+```
+
+---
+
+### find_mergeable_handlers
+
+```@docs
+Tarang.find_mergeable_handlers
+```
+
+Find handlers that can be merged.
+
+---
+
+### cleanup_source_files!
+
+```@docs
+Tarang.cleanup_source_files!
+```
+
+Remove source files after merging.
+
+---
+
+## Equation Parsing
+
+Internal functions for parsing equation strings.
+
+### split_equation
+
+```@docs
+Tarang.split_equation
+```
+
+---
+
+### split_call
+
+```@docs
+Tarang.split_call
+```
+
+---
+
+### lambdify_functions
+
+```@docs
+Tarang.lambdify_functions
+```
+
+---
 
 ## Reading NetCDF
 
@@ -216,7 +399,7 @@ end
 ### Gather Mode
 
 ```julia
-handler = add_file_handler(path, dist, fields; parallel="gather")
+handler = add_netcdf_handler(path, dist, fields; parallel="gather")
 ```
 
 - All data gathered to rank 0
@@ -226,7 +409,7 @@ handler = add_file_handler(path, dist, fields; parallel="gather")
 ### Virtual Mode
 
 ```julia
-handler = add_file_handler(path, dist, fields; parallel="virtual")
+handler = add_netcdf_handler(path, dist, fields; parallel="virtual")
 ```
 
 - Each process writes own file
@@ -250,12 +433,11 @@ output_s3.nc   # etc.
 For post-processing virtual files:
 
 ```julia
-# Merge script (conceptual)
-function merge_virtual_files(base_path, num_procs)
-    # Read all partial files
-    # Combine into single array
-    # Write merged output
-end
+# Merge all parallel files
+merge_netcdf_files("output"; output_file="output_merged.nc", cleanup=true)
+
+# Batch merge multiple handlers
+batch_merge_netcdf(["snapshots", "analysis", "checkpoints"])
 ```
 
 ## Performance Tips
