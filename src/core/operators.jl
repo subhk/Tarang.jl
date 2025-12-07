@@ -1698,9 +1698,9 @@ end
     build_lift_matrix(var, basis, n; kwargs...)
 
 Build lifting matrix for tau method boundary conditions.
-Following Dedalus basis.py LiftJacobi implementation (lines 790-814).
+Following the standard basis.py LiftJacobi implementation (lines 790-814).
 
-Dedalus convention:
+the standard convention:
 - n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
 - n < 0: wraps around (n = -1 means last mode, n = -2 means second-to-last, etc.)
 
@@ -1739,8 +1739,8 @@ function build_lift_matrix(var, basis, n::Int; kwargs...)
 
     N = basis.meta.size
 
-    # Following Dedalus convention: direct indexing with negative wrap-around
-    # In Dedalus (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
+    # Following the standard convention: direct indexing with negative wrap-around
+    # In the standard (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
     # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
     lift_mode = n
     if lift_mode < 0
@@ -2399,9 +2399,9 @@ end
     evaluate_lift(lift_op::Lift, layout::Symbol=:g)
 
 Evaluate lifting operator for tau method boundary conditions.
-Following Dedalus basis.py LiftJacobi implementation (lines 790-814).
+Following the standard basis.py LiftJacobi implementation (lines 790-814).
 
-Dedalus convention:
+the standard convention:
 - n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
 - n < 0: wraps around (n = -1 means last mode, n = -2 means second-to-last, etc.)
 
@@ -2441,8 +2441,8 @@ function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
     # Zero out result
     fill!(result.data_c, 0.0)
 
-    # Following Dedalus convention: direct indexing with negative wrap-around
-    # In Dedalus (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
+    # Following the standard convention: direct indexing with negative wrap-around
+    # In the standard (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
     # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
     lift_mode = n
     if lift_mode < 0

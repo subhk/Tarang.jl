@@ -377,8 +377,8 @@ struct ETD_SBDF2 <: TimeStepper
 end
 
 # ============================================================================
-# Additional Timesteppers from Dedalus
-# Following dedalus/core/timesteppers.py
+# Additional Timesteppers from Tarang
+# Following Tarang/core/timesteppers.py
 # ============================================================================
 
 struct MCNAB2 <: TimeStepper
@@ -856,9 +856,9 @@ end
 # Implicit-explicit methods
 function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     """
-    Crank-Nicolson Adams-Bashforth 1st order following Dedalus MultistepIMEX implementation.
+    Crank-Nicolson Adams-Bashforth 1st order following Tarang MultistepIMEX implementation.
     
-    Based on Dedalus timesteppers.py:95-188 MultistepIMEX.step method:
+    Based on Tarang timesteppers.py:95-188 MultistepIMEX.step method:
     - Proper coefficient computation: a[0] = 1/dt, a[1] = -1/dt, b[0] = 1/2, b[1] = 1/2, c[1] = 1
     - RHS construction: c[1]*F[0] - a[1]*MX[0] - b[1]*LX[0] (following lines 156-166)
     - LHS solution: (a[0]*M + b[0]*L).X = RHS (following lines 174-184)
@@ -868,7 +868,7 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
     
-    # Initialize history arrays if needed (following Dedalus MultistepIMEX.__init__)
+    # Initialize history arrays if needed (following Tarang MultistepIMEX.__init__)
     if !haskey(state.timestepper_data, "MX_history")
         state.timestepper_data["MX_history"] = []
         state.timestepper_data["LX_history"] = []
@@ -886,24 +886,24 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = solver.problem.parameters["L_matrix"]
     M_matrix = solver.problem.parameters["M_matrix"]
     
-    # Get CNAB1 coefficients following Dedalus (timesteppers.py:206-220)
+    # Get CNAB1 coefficients following Tarang (timesteppers.py:206-220)
     a = [1.0/dt, -1.0/dt]  # a[0], a[1]
     b = [0.5, 0.5]         # b[0], b[1] 
     c = [0.0, 1.0]         # c[0], c[1]
     
     try
-        # Step 1: Convert current state to vector (following Dedalus gather_inputs)
+        # Step 1: Convert current state to vector (following Tarang gather_inputs)
         X_current = fields_to_vector(current_state)
         
-        # Step 2: Compute M.X[0] and L.X[0] (following Dedalus lines 142-147)
+        # Step 2: Compute M.X[0] and L.X[0] (following Tarang lines 142-147)
         MX_current = M_matrix * X_current
         LX_current = L_matrix * X_current
         
-        # Step 3: Evaluate F(X[0]) at current time step (following Dedalus lines 149-153)
+        # Step 3: Evaluate F(X[0]) at current time step (following Tarang lines 149-153)
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
         F_current_vec = fields_to_vector(F_current)
         
-        # Step 4: Rotate and store history (following Dedalus lines 124-126)
+        # Step 4: Rotate and store history (following Tarang lines 124-126)
         MX_history = state.timestepper_data["MX_history"]
         LX_history = state.timestepper_data["LX_history"]
         F_history = state.timestepper_data["F_history"]
@@ -917,7 +917,7 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
         while length(LX_history) > 1; pop!(LX_history); end
         while length(F_history) > 1; pop!(F_history); end
         
-        # Step 5: Build RHS following Dedalus exactly (timesteppers.py:156-166)
+        # Step 5: Build RHS following Tarang exactly (timesteppers.py:156-166)
         # RHS = c[1] * F[0] - a[1] * MX[0] - b[1] * LX[0]
         rhs = c[2] * F_history[1]  # c[1] * F[0] (using 1-based indexing)
         if length(MX_history) >= 1  # a[1] term
@@ -927,12 +927,12 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
             rhs .-= b[2] * LX_history[1]  # -b[1] * LX[0]
         end
         
-        # Step 6: Build and solve LHS system (following Dedalus lines 174-184)
+        # Step 6: Build and solve LHS system (following Tarang lines 174-184)
         # (a[0] * M + b[0] * L).X = RHS
         LHS_matrix = a[1] * M_matrix + b[1] * L_matrix  # a[0] * M + b[0] * L
         X_new = LHS_matrix \ rhs
         
-        # Step 7: Update state (following Dedalus scatter_inputs)
+        # Step 7: Update state (following Tarang scatter_inputs)
         new_state = copy.(current_state)
         copy_solution_to_fields!(new_state, X_new)
         
@@ -955,9 +955,9 @@ end
 
 function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     """
-    Crank-Nicolson Adams-Bashforth 2nd order following Dedalus MultistepIMEX implementation.
+    Crank-Nicolson Adams-Bashforth 2nd order following Tarang MultistepIMEX implementation.
     
-    Based on Dedalus timesteppers.py:95-188 MultistepIMEX.step method:
+    Based on Tarang timesteppers.py:95-188 MultistepIMEX.step method:
     - Variable timestep coefficients: w1 = k1/k0, c[1] = 1 + w1/2, c[2] = -w1/2 (lines 276-290)
     - Full RHS construction: c[1]*F[0] + c[2]*F[1] - a[1]*MX[0] - b[1]*LX[0] (lines 156-166)
     - Proper history management with rotation for MX, LX, F arrays (lines 124-126)
@@ -977,7 +977,7 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     
     iteration = state.timestepper_data["iteration"]
     
-    # Check if we have enough history for CNAB2 (following Dedalus line 274)
+    # Check if we have enough history for CNAB2 (following Tarang line 274)
     if iteration < 1 || length(state.history) < 2
         @debug "CNAB2 requires iteration >= 1, falling back to CNAB1"
         step_cnab1!(state, solver)
@@ -994,12 +994,12 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = solver.problem.parameters["L_matrix"]
     M_matrix = solver.problem.parameters["M_matrix"]
     
-    # Get timestep history for variable timestep (following Dedalus lines 280-281)
+    # Get timestep history for variable timestep (following Tarang lines 280-281)
     dt_current = dt
     dt_previous = get_previous_timestep(state)
     w1 = dt_current / dt_previous
     
-    # Get CNAB2 coefficients following Dedalus exactly (timesteppers.py:283-288)
+    # Get CNAB2 coefficients following Tarang exactly (timesteppers.py:283-288)
     a = [1.0/dt_current, -1.0/dt_current]  # a[0], a[1]
     b = [0.5, 0.5]                         # b[0], b[1]
     c = [0.0, 1.0 + w1/2.0, -w1/2.0]      # c[0], c[1], c[2]
@@ -1010,15 +1010,15 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
         # Step 1: Convert current state to vector
         X_current = fields_to_vector(current_state)
         
-        # Step 2: Compute M.X[0] and L.X[0] (following Dedalus lines 142-147)
+        # Step 2: Compute M.X[0] and L.X[0] (following Tarang lines 142-147)
         MX_current = M_matrix * X_current
         LX_current = L_matrix * X_current
         
-        # Step 3: Evaluate F(X[0]) at current time step (following Dedalus lines 149-153)
+        # Step 3: Evaluate F(X[0]) at current time step (following Tarang lines 149-153)
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
         F_current_vec = fields_to_vector(F_current)
         
-        # Step 4: Rotate and store history (following Dedalus lines 124-126)
+        # Step 4: Rotate and store history (following Tarang lines 124-126)
         MX_history = state.timestepper_data["MX_history"]
         LX_history = state.timestepper_data["LX_history"]
         F_history = state.timestepper_data["F_history"]
@@ -1032,7 +1032,7 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
         while length(LX_history) > 2; pop!(LX_history); end
         while length(F_history) > 2; pop!(F_history); end
         
-        # Step 5: Build RHS following Dedalus exactly (timesteppers.py:156-166)
+        # Step 5: Build RHS following Tarang exactly (timesteppers.py:156-166)
         # RHS = c[1] * F[0] + c[2] * F[1] - a[1] * MX[0] - b[1] * LX[0]
         rhs = c[2] * F_history[1]  # c[1] * F[0]
         if length(F_history) >= 2  # c[2] term
@@ -1045,7 +1045,7 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
             rhs .-= b[2] * LX_history[1]  # -b[1] * LX[0]
         end
         
-        # Step 6: Build and solve LHS system (following Dedalus lines 174-184)
+        # Step 6: Build and solve LHS system (following Tarang lines 174-184)
         # (a[0] * M + b[0] * L).X = RHS
         LHS_matrix = a[1] * M_matrix + b[1] * L_matrix  # a[0] * M + b[0] * L
         X_new = LHS_matrix \ rhs
@@ -1074,9 +1074,9 @@ end
 # BDF methods
 function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     """
-    Semi-implicit BDF1 (backward Euler) following Dedalus MultistepIMEX implementation.
+    Semi-implicit BDF1 (backward Euler) following Tarang MultistepIMEX implementation.
     
-    Based on Dedalus timesteppers.py:224-252 SBDF1 coefficients:
+    Based on Tarang timesteppers.py:224-252 SBDF1 coefficients:
     - a[0] = 1/k0, a[1] = -1/k0 (BDF1 time derivative)
     - b[0] = 1 (fully implicit, not Crank-Nicolson 1/2)
     - c[1] = 1 (forward Euler explicit)
@@ -1106,7 +1106,7 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = solver.problem.parameters["L_matrix"]
     M_matrix = solver.problem.parameters["M_matrix"]
     
-    # Get SBDF1 coefficients following Dedalus exactly (timesteppers.py:247-250)
+    # Get SBDF1 coefficients following Tarang exactly (timesteppers.py:247-250)
     a = [1.0/dt, -1.0/dt]  # a[0], a[1] - BDF1 time derivative
     b = [1.0]              # b[0] - fully implicit (not 1/2 like CNAB)
     c = [0.0, 1.0]         # c[0], c[1] - forward Euler explicit
@@ -1115,7 +1115,7 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
         # Step 1: Convert current state to vector
         X_current = fields_to_vector(current_state)
         
-        # Step 2: Compute M.X[0] and L.X[0] (following Dedalus MultistepIMEX pattern)
+        # Step 2: Compute M.X[0] and L.X[0] (following Tarang MultistepIMEX pattern)
         MX_current = M_matrix * X_current
         LX_current = L_matrix * X_current
         
@@ -1137,7 +1137,7 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
         while length(LX_history) > 1; pop!(LX_history); end
         while length(F_history) > 1; pop!(F_history); end
         
-        # Step 5: Build RHS following Dedalus MultistepIMEX pattern
+        # Step 5: Build RHS following Tarang MultistepIMEX pattern
         # RHS = c[1] * F[0] - a[1] * MX[0] - 0 * LX[0] (since bmax=1, no b[1] term)
         rhs = c[2] * F_history[1]  # c[1] * F[0]
         if length(MX_history) >= 1  # a[1] term
@@ -1173,9 +1173,9 @@ end
 
 function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     """
-    Semi-implicit BDF2 following Dedalus MultistepIMEX implementation.
+    Semi-implicit BDF2 following Tarang MultistepIMEX implementation.
     
-    Based on Dedalus timesteppers.py:333-367 SBDF2 coefficients:
+    Based on Tarang timesteppers.py:333-367 SBDF2 coefficients:
     - Variable timestep with w1 = k1/k0
     - a[0] = (1 + 2*w1) / (1 + w1) / k1
     - a[1] = -(1 + w1) / k1  
@@ -1200,7 +1200,7 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     
     iteration = state.timestepper_data["iteration"]
     
-    # Check if we have enough history for SBDF2 (following Dedalus line 350)
+    # Check if we have enough history for SBDF2 (following Tarang line 350)
     if iteration < 1 || length(state.history) < 2
         @debug "SBDF2 requires iteration >= 1, falling back to SBDF1"
         step_sbdf1!(state, solver)
@@ -1217,12 +1217,12 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = solver.problem.parameters["L_matrix"]
     M_matrix = solver.problem.parameters["M_matrix"]
     
-    # Get timestep history for variable timestep (following Dedalus lines 357-358)
+    # Get timestep history for variable timestep (following Tarang lines 357-358)
     dt_current = dt
     dt_previous = get_previous_timestep(state)
     w1 = dt_current / dt_previous
     
-    # Get SBDF2 coefficients following Dedalus exactly (timesteppers.py:360-365)
+    # Get SBDF2 coefficients following Tarang exactly (timesteppers.py:360-365)
     a = [(1.0 + 2.0*w1) / (1.0 + w1) / dt_current,  # a[0]
          -(1.0 + w1) / dt_current,                    # a[1]
          w1^2 / (1.0 + w1) / dt_current]              # a[2]
@@ -1257,7 +1257,7 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         while length(LX_history) > 2; pop!(LX_history); end
         while length(F_history) > 2; pop!(F_history); end
         
-        # Step 5: Build RHS following Dedalus MultistepIMEX pattern
+        # Step 5: Build RHS following Tarang MultistepIMEX pattern
         # RHS = c[1]*F[0] + c[2]*F[1] - a[1]*MX[0] - a[2]*MX[1] - 0*LX terms (bmax=1)
         rhs = c[2] * F_history[1]  # c[1] * F[0]
         if length(F_history) >= 2  # c[2] term
@@ -1299,9 +1299,9 @@ end
 
 function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     """
-    Semi-implicit BDF3 following Dedalus implementation.
+    Semi-implicit BDF3 following Tarang implementation.
     
-    Dedalus coefficients (timesteppers.py:425-447):
+    Tarang coefficients (timesteppers.py:425-447):
     For iteration >= 2: uses complex 3rd-order BDF coefficients
     For iteration < 2: falls back to SBDF2
     
@@ -1319,7 +1319,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
     
-    # Get timestep history for variable timestep ratios (Dedalus pattern)
+    # Get timestep history for variable timestep ratios (Tarang pattern)
     if length(state.dt_history) < 3
         @warn "SBDF3 requires 3 timestep history, falling back to SBDF2"
         step_sbdf2!(state, solver)
@@ -1330,7 +1330,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     k1 = state.dt_history[end-1]   # previous timestep  
     k0 = state.dt_history[end-2]   # timestep before that
     
-    # Compute timestep ratios following Dedalus (timesteppers.py:435-436)
+    # Compute timestep ratios following Tarang (timesteppers.py:435-436)
     w2 = k2 / k1
     w1 = k1 / k0
     
@@ -1345,7 +1345,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     M_matrix = solver.problem.parameters["M_matrix"]
     
     try
-        # Get SBDF3 coefficients following Dedalus exactly (timesteppers.py:438-445)
+        # Get SBDF3 coefficients following Tarang exactly (timesteppers.py:438-445)
         a = zeros(4)
         b = zeros(4)
         c = zeros(4)
@@ -1372,7 +1372,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
         F_prev1_vec = fields_to_vector(F_prev1)
         F_prev2_vec = fields_to_vector(F_prev2)
         
-        # Build RHS following Dedalus multistep pattern
+        # Build RHS following Tarang multistep pattern
         # RHS = sum(cj * F(n-j)) - sum(aj * M.X(n-j)) (j >= 2 for a)
         rhs = (c[2] * F_current_vec + c[3] * F_prev1_vec + c[4] * F_prev2_vec - 
                a[2] * (M_matrix * X_current) - a[3] * (M_matrix * X_prev1) - a[4] * (M_matrix * X_prev2))
@@ -1405,9 +1405,9 @@ end
 
 function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     """
-    Semi-implicit BDF4 following Dedalus implementation.
+    Semi-implicit BDF4 following Tarang implementation.
     
-    Dedalus coefficients (timesteppers.py:466-495):
+    Tarang coefficients (timesteppers.py:466-495):
     For iteration >= 3: uses complex 4th-order BDF coefficients  
     For iteration < 3: falls back to SBDF3
     
@@ -1437,7 +1437,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     k1 = state.dt_history[end-2]   # timestep before that
     k0 = state.dt_history[end-3]   # timestep 3 back
     
-    # Compute timestep ratios following Dedalus (timesteppers.py:476-478)
+    # Compute timestep ratios following Tarang (timesteppers.py:476-478)
     w3 = k3 / k2
     w2 = k2 / k1
     w1 = k1 / k0
@@ -1453,7 +1453,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     M_matrix = solver.problem.parameters["M_matrix"]
     
     try
-        # Get SBDF4 coefficients following Dedalus exactly (timesteppers.py:480-494)
+        # Get SBDF4 coefficients following Tarang exactly (timesteppers.py:480-494)
         A1 = 1 + w1*(1 + w2)
         A2 = 1 + w2*(1 + w3) 
         A3 = 1 + w1*A2
@@ -1489,7 +1489,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
         F_prev2_vec = fields_to_vector(F_prev2)
         F_prev3_vec = fields_to_vector(F_prev3)
         
-        # Build RHS following Dedalus multistep pattern
+        # Build RHS following Tarang multistep pattern
         rhs = (c[2] * F_current_vec + c[3] * F_prev1_vec + c[4] * F_prev2_vec + c[5] * F_prev3_vec - 
                a[2] * (M_matrix * X_current) - a[3] * (M_matrix * X_prev1) - 
                a[4] * (M_matrix * X_prev2) - a[5] * (M_matrix * X_prev3))
@@ -1624,7 +1624,7 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     Linear treatment: Exact via exponential propagator exp(hL)
     Nonlinear treatment: Explicit 2nd-order Adams-Bashforth extrapolation
 
-    Note: This method is called ETD-CNAB2 following Dedalus naming convention,
+    Note: This method is called ETD-CNAB2 following Tarang naming convention,
     but it uses exponential treatment (not Crank-Nicolson) for the linear operator.
     The "CNAB" refers to the multistep structure, not implicit treatment.
 
@@ -2390,9 +2390,9 @@ end
 # Helper functions
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, time::Float64)
     """
-    Evaluate right-hand side of differential equations following Dedalus pattern.
+    Evaluate right-hand side of differential equations following Tarang pattern.
     
-    Based on Dedalus MultistepIMEX.step method (timesteppers.py:149-153):
+    Based on Tarang MultistepIMEX.step method (timesteppers.py:149-153):
     - evaluator.evaluate_scheduled(iteration=iteration, wall_time=wall_time, sim_time=sim_time, timestep=dt)
     - evaluator.require_coeff_space(F_fields)  
     - sp.gather_outputs(F_fields, out=F0.get_subdata(sp))
@@ -2405,7 +2405,7 @@ function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, ti
     
     try
         # Set current state fields to the provided state for evaluation
-        # This mimics how Dedalus sets the current field values before evaluation
+        # This mimics how Tarang sets the current field values before evaluation
         for (i, field) in enumerate(state)
             if i <= length(problem.variables)
                 # Update the problem variable with current state data
@@ -2423,7 +2423,7 @@ function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, ti
             end
         end
         
-        # Update time parameter if it exists (like Dedalus sim_time updates)
+        # Update time parameter if it exists (like Tarang sim_time updates)
         if hasfield(typeof(problem), :time) && problem.time !== nothing
             # Update time field value for time-dependent expressions
             if hasfield(typeof(problem.time), :data)
@@ -2433,7 +2433,7 @@ function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, ti
             end
         end
         
-        # Evaluate each equation's RHS (F expression) following Dedalus pattern
+        # Evaluate each equation's RHS (F expression) following Tarang pattern
         if hasfield(typeof(problem), :equation_data) && !isempty(problem.equation_data)
             for (eq_idx, eq_data) in enumerate(problem.equation_data)
                 if haskey(eq_data, "F_expr") && eq_data["F_expr"] !== nothing
@@ -2443,7 +2443,7 @@ function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, ti
                         
                         # Ensure correct field properties
                         if isa(rhs_field, ScalarField)
-                            # Convert to coefficient space as done in Dedalus
+                            # Convert to coefficient space as done in Tarang
                             ensure_layout!(rhs_field, :c)
                             push!(rhs, rhs_field)
                         else
@@ -2491,7 +2491,7 @@ end
 function create_zero_field(template_field::ScalarField)
     """Create a zero field matching the template field properties"""
     rhs_field = ScalarField(template_field.dist, "rhs_$(template_field.name)", template_field.bases, template_field.dtype)
-    ensure_layout!(rhs_field, :c)  # Coefficient space following Dedalus
+    ensure_layout!(rhs_field, :c)  # Coefficient space following Tarang
     fill!(rhs_field.data_c, 0.0)
     return rhs_field
 end
@@ -2642,11 +2642,11 @@ function get_previous_timestep(state::TimestepperState)
 end
 
 function update_timestep_history!(state::TimestepperState, dt::Float64)
-    """Update timestep history following Dedalus deque rotation pattern"""
+    """Update timestep history following Tarang deque rotation pattern"""
     # Update current timestep
     state.dt = dt
     
-    # Add to history (following Dedalus rotation)
+    # Add to history (following Tarang rotation)
     push!(state.dt_history, dt)
     
     # Keep only necessary timestep history (limit to what multistep methods need)

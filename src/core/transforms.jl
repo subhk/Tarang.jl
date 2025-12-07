@@ -192,9 +192,9 @@ end
 
 function setup_chebyshev_transform!(dist::Distributor, basis::ChebyshevT, axis::Int)
     """
-    Setup Chebyshev transform following Dedalus FastChebyshevTransform implementation.
+    Setup Chebyshev transform following Tarang FastChebyshevTransform implementation.
 
-    Based on Dedalus transforms.py:
+    Based on Tarang transforms.py:
     - Uses DCT-II for forward transform (grid to coefficients)
     - Uses DCT-III for backward transform (coefficients to grid)
     - Proper scaling factors for unit-amplitude normalization
@@ -227,7 +227,7 @@ function setup_chebyshev_cpu_transform!(transform::ChebyshevTransform, grid_size
         transform.forward_plan = forward_plan
         transform.backward_plan = backward_plan
         
-        # Set scaling factors following Dedalus FastCosineTransform
+        # Set scaling factors following Tarang FastCosineTransform
         transform.forward_rescale_zero = 1.0 / grid_size / 2.0   # DC component
         transform.forward_rescale_pos = 1.0 / grid_size          # AC components
         transform.backward_rescale_zero = 1.0                    # DC component
@@ -278,9 +278,9 @@ end
 
 function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int)
     """
-    Setup Legendre transform following Dedalus JacobiMMT implementation.
+    Setup Legendre transform following Tarang JacobiMMT implementation.
 
-    Based on Dedalus transforms.py JacobiMMT and jacobi.py:
+    Based on Tarang transforms.py JacobiMMT and jacobi.py:
     - Uses Gauss-Legendre quadrature (Jacobi with a=0, b=0)
     - Forward transform: integration using quadrature weights
     - Backward transform: polynomial evaluation at quadrature points
@@ -350,7 +350,7 @@ function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int
 end
 
 
-# Helper functions for Legendre transform following Dedalus jacobi.py patterns
+# Helper functions for Legendre transform following Tarang jacobi.py patterns
 function compute_legendre_quadrature(N::Int)
     """
     Compute Gauss-Legendre quadrature points and weights manually.
@@ -563,12 +563,12 @@ function apply_fourier_backward!(field::ScalarField, transform::FourierTransform
     end
 end
 
-# Chebyshev transform application functions following Dedalus patterns
+# Chebyshev transform application functions following Tarang patterns
 function apply_chebyshev_forward!(field::ScalarField, transform::ChebyshevTransform)
     """
     Apply forward Chebyshev transform (grid to coefficients) with in-place operations.
 
-    Based on Dedalus ScipyDCT.forward and FFTWDCT.forward methods:
+    Based on Tarang ScipyDCT.forward and FFTWDCT.forward methods:
     - Uses DCT-II with proper scaling for unit-amplitude normalization
     - Handles padding/truncation for different grid/coefficient sizes
     - Follows resize_rescale_forward pattern
@@ -625,7 +625,7 @@ function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTrans
     """
     Apply backward Chebyshev transform (coefficients to grid) with in-place operations.
 
-    Based on Dedalus ScipyDCT.backward and FFTWDCT.backward methods:
+    Based on Tarang ScipyDCT.backward and FFTWDCT.backward methods:
     - Uses DCT-III with proper scaling for unit-amplitude normalization
     - Handles padding/truncation for different coefficient/grid sizes
     - OPTIMIZED: Uses workspace buffers and in-place operations
@@ -641,7 +641,7 @@ function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTrans
             # Zero the workspace (needed for correct transform)
             fill!(temp_data, 0.0)
 
-            # Apply scaling factors following Dedalus resize_rescale_backward
+            # Apply scaling factors following Tarang resize_rescale_backward
             if length(field.data_c) > 0
                 @inbounds temp_data[1] = real(field.data_c[1]) * transform.backward_rescale_zero
             end
@@ -734,12 +734,12 @@ function apply_chebyshev_matrix_backward!(field::ScalarField, transform::Chebysh
     end
 end
 
-# Legendre transform application functions following Dedalus JacobiMMT patterns
+# Legendre transform application functions following Tarang JacobiMMT patterns
 function apply_legendre_forward!(field::ScalarField, transform::LegendreTransform)
     """
     Apply forward Legendre transform (grid to coefficients) with in-place operations.
 
-    Based on Dedalus JacobiMMT.forward_matrix:
+    Based on Tarang JacobiMMT.forward_matrix:
     - Uses Gauss-Legendre quadrature integration
     - Proper normalization for orthonormal Legendre expansion
     - OPTIMIZED: In-place matrix-vector multiplication
@@ -773,7 +773,7 @@ function apply_legendre_backward!(field::ScalarField, transform::LegendreTransfo
     """
     Apply backward Legendre transform (coefficients to grid) with in-place operations.
 
-    Based on Dedalus polynomial evaluation:
+    Based on Tarang polynomial evaluation:
     - Evaluates f(x) = Σ c_n P_n(x) at Gauss-Legendre quadrature points
     - OPTIMIZED: Uses workspace buffer and in-place operations
     """
@@ -815,12 +815,12 @@ function apply_legendre_backward!(field::ScalarField, transform::LegendreTransfo
     end
 end
 
-# Dealiasing operations following Dedalus patterns
+# Dealiasing operations following Tarang patterns
 function dealias!(field::ScalarField, scales::Union{Real, Vector{Real}})
     """
-    Apply dealiasing to field following Dedalus field.change_scales and low_pass_filter implementation.
+    Apply dealiasing to field following Tarang field.change_scales and low_pass_filter implementation.
     
-    Based on Dedalus field.py:
+    Based on Tarang field.py:
     - Ensures field is in coefficient space for mode truncation
     - Applies scale-based truncation for each basis type
     - Handles multi-dimensional tensor product bases properly
@@ -854,7 +854,7 @@ function dealias!(field::ScalarField, scales::Union{Real, Vector{Real}})
     
     @debug "Applying dealiasing with scales: $scale_vec"
     
-    # Apply dealiasing for each basis dimension following Dedalus patterns
+    # Apply dealiasing for each basis dimension following Tarang patterns
     for (axis, (basis, scale)) in enumerate(zip(field.domain.bases, scale_vec))
         if scale >= 1.0
             continue  # No dealiasing needed for this axis
@@ -867,7 +867,7 @@ function dealias!(field::ScalarField, scales::Union{Real, Vector{Real}})
 end
 
 function apply_basis_dealiasing!(field::ScalarField, basis::Union{RealFourier, ComplexFourier}, axis::Int, scale::Real)
-    """Apply Fourier basis dealiasing following Dedalus patterns"""
+    """Apply Fourier basis dealiasing following Tarang patterns"""
     
     # Calculate cutoff mode for Fourier basis
     total_modes = basis.meta.size
@@ -923,7 +923,7 @@ function apply_basis_dealiasing!(field::ScalarField, basis::Union{RealFourier, C
 end
 
 function apply_basis_dealiasing!(field::ScalarField, basis::ChebyshevT, axis::Int, scale::Real)
-    """Apply Chebyshev basis dealiasing following Dedalus patterns"""
+    """Apply Chebyshev basis dealiasing following Tarang patterns"""
     
     # Calculate cutoff mode for Chebyshev basis
     total_modes = basis.meta.size
@@ -954,7 +954,7 @@ function apply_basis_dealiasing!(field::ScalarField, basis::ChebyshevT, axis::In
 end
 
 function apply_basis_dealiasing!(field::ScalarField, basis::Legendre, axis::Int, scale::Real)
-    """Apply Legendre basis dealiasing following Dedalus patterns"""
+    """Apply Legendre basis dealiasing following Tarang patterns"""
     
     # Calculate cutoff mode for Legendre basis
     total_modes = basis.meta.size
