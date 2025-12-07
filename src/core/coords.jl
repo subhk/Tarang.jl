@@ -76,7 +76,7 @@ end
     forward_vector_intertwiner(coord::Coordinate, subaxis, group)
 
 Forward intertwiner for vector components. Identity for Cartesian coordinates.
-Following Dedalus coords.py:92-93.
+Following coords.py:92-93.
 """
 function forward_vector_intertwiner(coord::Coordinate, subaxis, group)
     return [1.0][:, :]  # 1x1 identity matrix
@@ -86,7 +86,7 @@ end
     backward_vector_intertwiner(coord::Coordinate, subaxis, group)
 
 Backward intertwiner for vector components. Identity for Cartesian coordinates.
-Following Dedalus coords.py:95-96.
+Following coords.py:95-96.
 """
 function backward_vector_intertwiner(coord::Coordinate, subaxis, group)
     return [1.0][:, :]  # 1x1 identity matrix
@@ -94,7 +94,7 @@ end
 
 # ============================================================================
 # AzimuthalCoordinate: Special coordinate for azimuthal directions
-# Following Dedalus coords.py:192-193
+# Following coords.py:192-193
 # ============================================================================
 
 """
@@ -129,14 +129,14 @@ end
 
 # ============================================================================
 # CartesianCoordinates: Cartesian coordinate system
-# Following Dedalus coords.py:159-189
+# Following coords.py:159-189
 # ============================================================================
 
 """
     CartesianCoordinates
 
 Cartesian coordinate system with named coordinates.
-Following Dedalus implementation in coords.py:159-189.
+Following implementation in coords.py:159-189.
 
 # Constructor
     CartesianCoordinates(names...; right_handed=true)
@@ -235,7 +235,7 @@ end
     forward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
 
 Forward intertwiner for vector components. Identity for Cartesian coordinates.
-Following Dedalus coords.py:176-177.
+Following coords.py:176-177.
 """
 function forward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
     return Matrix{Float64}(I, cs.dim, cs.dim)
@@ -245,7 +245,7 @@ end
     backward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
 
 Backward intertwiner for vector components. Identity for Cartesian coordinates.
-Following Dedalus coords.py:179-180.
+Following coords.py:179-180.
 """
 function backward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
     return Matrix{Float64}(I, cs.dim, cs.dim)
@@ -273,14 +273,14 @@ end
 
 # ============================================================================
 # DirectProduct: Direct product of coordinate systems
-# Following Dedalus coords.py:99-156
+# Following coords.py:99-156
 # ============================================================================
 
 """
     DirectProduct
 
 Direct product of coordinate systems.
-Following Dedalus implementation in coords.py:99-156.
+Following implementation in coords.py:99-156.
 
 # Constructor
     DirectProduct(coordsystems...; right_handed=nothing)
@@ -366,7 +366,7 @@ end
     forward_vector_intertwiner(cs::DirectProduct, subaxis, group)
 
 Forward intertwiner for vector components in a direct product.
-Following Dedalus coords.py:132-141.
+Following coords.py:132-141.
 """
 function forward_vector_intertwiner(cs::DirectProduct, subaxis, group)
     factors = []
@@ -388,7 +388,7 @@ end
     backward_vector_intertwiner(cs::DirectProduct, subaxis, group)
 
 Backward intertwiner for vector components in a direct product.
-Following Dedalus coords.py:143-152.
+Following coords.py:143-152.
 """
 function backward_vector_intertwiner(cs::DirectProduct, subaxis, group)
     factors = []
@@ -434,7 +434,7 @@ end
     nkron(A, n)
 
 N-fold Kronecker product of matrix A with itself.
-Following Dedalus tools/array.py nkron function.
+Following tools/array.py nkron function.
 """
 function nkron(A::AbstractMatrix, n::Int)
     if n == 0
@@ -454,7 +454,7 @@ end
     sparse_block_diag(matrices)
 
 Create a sparse block diagonal matrix from a vector of matrices.
-Following Dedalus tools/array.py sparse_block_diag function.
+Following tools/array.py sparse_block_diag function.
 """
 function sparse_block_diag(matrices::Vector)
     if isempty(matrices)
@@ -497,7 +497,7 @@ end
     coords(coordsys::CoordinateSystem)
 
 Return tuple of Coordinate objects for this coordinate system.
-Following Dedalus pattern.
+Following pattern.
 """
 function coords(coordsys::CartesianCoordinates)
     return tuple(coordsys.coords...)

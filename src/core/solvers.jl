@@ -501,7 +501,7 @@ end
 function fields_to_vector(fields::Vector{ScalarField})
     """
     Convert field array to solution vector following Dedalus gather pattern.
-    Following Dedalus subsystems.py gather_inputs (subsystems.py:340-350).
+    Following subsystems.py gather_inputs (subsystems.py:340-350).
     """
     
     # Ensure all fields are in coefficient space (following Dedalus pattern)
@@ -549,7 +549,7 @@ end
 function copy_solution_to_fields!(fields::Vector{ScalarField}, solution::Vector{ComplexF64})
     """
     Copy solution vector back to fields following Dedalus scatter pattern.
-    Following Dedalus subsystems.py scatter_inputs (subsystems.py:364-371).
+    Following subsystems.py scatter_inputs (subsystems.py:364-371).
     """
     
     offset = 1
@@ -581,7 +581,7 @@ end
 function compute_field_vector_size(field::ScalarField)
     """
     Compute the number of degrees of freedom for a field in vector form.
-    Following Dedalus field size computation patterns.
+    Following field size computation patterns.
     """
     
     if field.data_c !== nothing
@@ -609,7 +609,7 @@ end
 function extract_field_data_for_vector(field::ScalarField)
     """
     Extract field data for vector conversion with proper layout handling.
-    Following Dedalus field data extraction patterns.
+    Following field data extraction patterns.
     """
     
     # Ensure coefficient space layout
@@ -632,7 +632,7 @@ end
 function set_field_data_from_vector!(field::ScalarField, data::Vector{ComplexF64})
     """
     Set field data from vector with proper shape and layout handling.
-    Following Dedalus field data setting patterns.
+    Following field data setting patterns.
     """
     
     if field.data_c !== nothing
@@ -676,7 +676,7 @@ end
 function get_basis_size(basis)
     """Get the size (number of modes) for a basis following Dedalus patterns"""
     
-    # Following Dedalus basis.py structure, bases store size information in different ways:
+    # Following basis.py structure, bases store size information in different ways:
     # 1. Most common: meta.size field (for Julia BasisMeta structure)
     # 2. Direct size field (for direct Dedalus translation)  
     # 3. Shape tuple (for multidimensional bases)
@@ -717,7 +717,7 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     """
     
     # Step 1: Copy solution vector back to problem fields
-    # Following Dedalus pattern where fields are updated before evaluation
+    # Following pattern where fields are updated before evaluation
     copy_solution_to_fields!(problem.variables, x)
     
     # Step 2: Evaluate residual expressions F(x)  
@@ -972,7 +972,7 @@ function build_operator_jacobian_block(expr, variables, perturbations)
     operator = expr["operator"]
     operands = expr["operands"]
     
-    # Following Dedalus arithmetic.py line 189-193 pattern: iteratively add matrices
+    # Following arithmetic.py line 189-193 pattern: iteratively add matrices
     if operator == "Add"
         # Addition: sum of operand Jacobians
         result_matrix = nothing

@@ -385,7 +385,7 @@ struct MCNAB2 <: TimeStepper
     """
     Modified Crank-Nicolson Adams-Bashforth 2nd order.
 
-    Following Dedalus timesteppers.py MCNAB2 implementation.
+    Following timesteppers.py MCNAB2 implementation.
     Uses modified CN weighting for improved stability with stiff linear terms.
 
     Implicit: Modified Crank-Nicolson with θ = 1/2 + ε
@@ -407,7 +407,7 @@ struct CNLF2 <: TimeStepper
     """
     Crank-Nicolson Leapfrog 2nd order (also known as CNLF or Adam-Bashforth Leapfrog).
 
-    Following Dedalus timesteppers.py CNLF implementation.
+    Following timesteppers.py CNLF implementation.
     Uses leapfrog for explicit extrapolation with Crank-Nicolson implicit treatment.
 
     This is a 2-step method that uses centered differences for explicit treatment:
@@ -432,7 +432,7 @@ struct RKSMR <: TimeStepper
     """
     Strong Stability Preserving Runge-Kutta method (SSP-RK).
 
-    Following Dedalus timesteppers.py RKSMR implementation.
+    Following timesteppers.py RKSMR implementation.
     Also known as TVD (Total Variation Diminishing) RK methods.
 
     This implements SSP-RK3 (Shu-Osher form):
@@ -466,7 +466,7 @@ struct RKGFY <: TimeStepper
     """
     General Framework Runge-Kutta IMEX method (RKGFY).
 
-    Following Dedalus timesteppers.py RungeKuttaIMEX implementation.
+    Following timesteppers.py RungeKuttaIMEX implementation.
     This is the ARK (Additive Runge-Kutta) form for IMEX problems.
 
     Implements the 2nd-order L-stable IMEX scheme from Ascher, Ruuth, Spiteri (1997):
@@ -522,7 +522,7 @@ struct RK443_IMEX <: TimeStepper
     """
     4-stage 3rd-order IMEX Runge-Kutta method.
 
-    Following Dedalus timesteppers.py RK443 for IMEX problems.
+    Following timesteppers.py RK443 for IMEX problems.
     Based on Kennedy & Carpenter (2003) ARK4(3)6L[2]SA.
 
     This is a higher-order IMEX method with:
@@ -1858,7 +1858,7 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
     """
     Modified Crank-Nicolson Adams-Bashforth 2nd order step.
 
-    Following Dedalus timesteppers.py MCNAB2 implementation.
+    Following timesteppers.py MCNAB2 implementation.
     Uses modified θ parameter for the implicit Crank-Nicolson treatment.
 
     The modification uses θ slightly different from 0.5 to improve stability
@@ -1977,7 +1977,7 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
     """
     Crank-Nicolson Leapfrog 2nd order step.
 
-    Following Dedalus timesteppers.py CNLF implementation.
+    Following timesteppers.py CNLF implementation.
     Uses leapfrog (centered) treatment for explicit terms with Crank-Nicolson
     for implicit terms.
 
@@ -2061,7 +2061,7 @@ function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
     """
     Strong Stability Preserving Runge-Kutta 3rd order step (SSP-RK3).
 
-    Following Dedalus timesteppers.py RKSMR implementation.
+    Following timesteppers.py RKSMR implementation.
     This is the Shu-Osher form of SSP-RK3, optimal for hyperbolic PDEs.
 
     Shu-Osher form:
@@ -2142,7 +2142,7 @@ function step_rkgfy!(state::TimestepperState, solver::InitialValueSolver)
     """
     General Framework IMEX Runge-Kutta step (ARK2).
 
-    Following Dedalus timesteppers.py RungeKuttaIMEX implementation.
+    Following timesteppers.py RungeKuttaIMEX implementation.
     This implements the Ascher-Ruuth-Spiteri ARK2 method.
 
     For the system: du/dt = L*u + N(u)
@@ -2264,7 +2264,7 @@ function step_rk443_imex!(state::TimestepperState, solver::InitialValueSolver)
     """
     4-stage 3rd-order IMEX Runge-Kutta step.
 
-    Following Dedalus timesteppers.py RK443 IMEX implementation.
+    Following timesteppers.py RK443 IMEX implementation.
     Similar to RKGFY but with 4 stages for 3rd order accuracy.
 
     Uses the same ARK framework with:

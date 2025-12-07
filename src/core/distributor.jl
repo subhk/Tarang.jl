@@ -545,7 +545,7 @@ end
 function local_grids(dist::Distributor, bases::Vararg{Basis}; scales=nothing)
     """
     Return local coordinate grids for the given bases.
-    Following Dedalus implementation in distributor.py:294
+    Following implementation in distributor.py:294
     """
     scales = remedy_scales(dist, scales, length(bases))
     grids = []
@@ -580,7 +580,7 @@ end
 function remedy_scales(dist::Distributor, scales)
     """
     Remedy different scale inputs.
-    Following Dedalus implementation in distributor.py:188-197
+    Following implementation in distributor.py:188-197
     """
     if scales === nothing
         scales = 1.0
@@ -602,7 +602,7 @@ end
 function get_axis(dist::Distributor, coord::Coordinate)
     """
     Get axis index for a coordinate.
-    Following Dedalus implementation in distributor.py:202
+    Following implementation in distributor.py:202
     """
     for (i, c) in enumerate(dist.coords)
         if c.coordsys == coord.coordsys && c.name == coord.name
@@ -620,7 +620,7 @@ end
 function get_basis_axis(dist::Distributor, basis::Basis)
     """
     Get axis index for a basis.
-    Following Dedalus implementation in distributor.py:207
+    Following implementation in distributor.py:207
     """
     # Find the coordinate that matches this basis's element_label
     coord_name = basis.meta.element_label
@@ -637,7 +637,7 @@ end
 function first_axis(dist::Distributor, basis::Basis)
     """
     Get first axis index for a basis.
-    Following Dedalus implementation in distributor.py:210
+    Following implementation in distributor.py:210
     """
     return get_basis_axis(dist, basis)
 end
@@ -645,7 +645,7 @@ end
 function last_axis(dist::Distributor, basis::Basis)
     """
     Get last axis index for a basis.
-    Following Dedalus implementation in distributor.py:213
+    Following implementation in distributor.py:213
     """
     return first_axis(dist, basis) + basis.meta.dim - 1
 end

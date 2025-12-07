@@ -436,7 +436,7 @@ end
 function add_property!(flow::GlobalFlowProperty, field::Union{ScalarField, VectorField}, name::String)
     """
     Add property to track.
-    Following Dedalus pattern: properties.add_task(property, layout='g', name=name)
+    Following pattern: properties.add_task(property, layout='g', name=name)
     """
     # Store field reference for evaluation
     # In Dedalus, this gets added to the dictionary handler as a task
@@ -446,7 +446,7 @@ end
 function evaluate_property(flow::GlobalFlowProperty, name::String)
     """
     Get grid data for property evaluation.
-    Following Dedalus pattern: gdata = self.properties[name]['g']
+    Following pattern: gdata = self.properties[name]['g']
     Returns the grid data array for the named property.
     """
     if !haskey(flow.properties, name)
@@ -471,7 +471,7 @@ end
 function property_max(flow::GlobalFlowProperty, name::String)
     """
     Compute global max of a property on the grid.
-    Following Dedalus implementation in flow_tools.py:107-110
+    Following implementation in flow_tools.py:107-110
     """
     gdata = evaluate_property(flow, name)
     return global_max(flow.reducer, gdata)
@@ -480,7 +480,7 @@ end
 function property_min(flow::GlobalFlowProperty, name::String)
     """
     Compute global min of a property on the grid.
-    Following Dedalus implementation in flow_tools.py:102-105
+    Following implementation in flow_tools.py:102-105
     """
     gdata = evaluate_property(flow, name)
     return global_min(flow.reducer, gdata)
@@ -489,7 +489,7 @@ end
 function grid_average(flow::GlobalFlowProperty, name::String)
     """
     Compute global mean of a property on the grid.
-    Following Dedalus implementation in flow_tools.py:112-115
+    Following implementation in flow_tools.py:112-115
     """
     gdata = evaluate_property(flow, name)
     return global_mean(flow.reducer, gdata)
@@ -498,7 +498,7 @@ end
 function volume_integral(flow::GlobalFlowProperty, name::String)
     """
     Compute volume integral of a property.
-    Following Dedalus implementation in flow_tools.py:117-130
+    Following implementation in flow_tools.py:117-130
 
     Uses proper quadrature weights for each basis type:
     - Fourier: uniform weights (trapezoidal rule)
@@ -654,7 +654,7 @@ end
 function volume_average(flow::GlobalFlowProperty, name::String)
     """
     Compute volume average of a property.
-    Following Dedalus implementation in flow_tools.py:132-137
+    Following implementation in flow_tools.py:132-137
 
     Volume average = (∫ f dV) / (∫ dV) = volume_integral(f) / hypervolume
     """
@@ -903,7 +903,7 @@ end
 function write_file_metadata!(file::HDF5.File, handler::FileHandler, iteration::Int, sim_time::Float64)
     """
     Write file metadata and time scales.
-    Following Dedalus write_file_metadata pattern
+    Following write_file_metadata pattern
     """
     
     # Create/update metadata group
@@ -948,7 +948,7 @@ end
 function write_task_data!(file::HDF5.File, task_name::String, task_data::Any, write_number::Int)
     """
     Write task data to HDF5 file.
-    Following Dedalus write_task pattern from evaluator.py:641-650 and 693-702
+    Following write_task pattern from evaluator.py:641-650 and 693-702
     """
     
     # Create tasks group if it doesn't exist
