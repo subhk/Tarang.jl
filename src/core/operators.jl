@@ -262,8 +262,8 @@ register_operator_parseable!(interpolate, "interpolate")
 register_operator_alias!(integrate, "integrate", "integ")
 register_operator_parseable!(integrate, "integrate", "integ")
 
-register_operator_alias!(average, "average", "avg")
-register_operator_parseable!(average, "average", "avg")
+register_operator_alias!(average, "average", "avg", "ave")
+register_operator_parseable!(average, "average", "avg", "ave")
 
 register_operator_alias!(convert, "convert")
 register_operator_parseable!(convert, "convert")
@@ -1687,5 +1687,1392 @@ function field_dofs(field)
         return sum(field_dofs(comp) for comp in field.components)
     end
     return 0
+end
+
+# ============================================================================
+# Utility Operator Evaluation Functions
+# Following Dedalus operators.py implementation
+# ============================================================================
+
+"""
+    evaluate_interpolate(interp_op::Interpolate, layout::Symbol=:g)
+
+Evaluate interpolation operator at a specific position along a coordinate.
+Following Dedalus operators.py Interpolate implementation.
+
+For Fourier bases: uses spectral interpolation (sum of modes)
+For Jacobi bases: uses barycentric interpolation or Clenshaw algorithm
+"""
+function evaluate_interpolate(interp_op::Interpolate, layout::Symbol=:g)
+    operand = interp_op.operand
+    coord = interp_op.coord
+    position = interp_op.position
+
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("Interpolate currently only supports scalar fields"))
+    end
+
+    # Find which basis corresponds to this coordinate
+    basis_index = nothing
+    for (i, basis) in enumerate(operand.bases)
+        if basis.meta.element_label == coord.name
+            basis_index = i
+            break
+        end
+    end
+
+    if basis_index === nothing
+        throw(ArgumentError("Coordinate $(coord.name) not found in field bases"))
+    end
+
+    basis = operand.bases[basis_index]
+
+    # Work in coefficient space for spectral interpolation
+    ensure_layout!(operand, :c)
+
+    if isa(basis, RealFourier) || isa(basis, ComplexFourier)
+        return interpolate_fourier(operand, basis, basis_index, position, layout)
+    elseif isa(basis, JacobiBasis)
+        return interpolate_jacobi(operand, basis, basis_index, position, layout)
+    else
+        throw(ArgumentError("Interpolation not implemented for basis type $(typeof(basis))"))
+    end
+end
+
+"""
+    interpolate_fourier(field, basis, axis, position, layout)
+
+Interpolate Fourier field at a specific position using spectral reconstruction.
+f(x) = Σ c_k exp(i k x) for ComplexFourier
+f(x) = a_0 + Σ (a_k cos(kx) + b_k sin(kx)) for RealFourier
+"""
+function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int, position::Real, layout::Symbol)
+    N = basis.meta.size
+    L = basis.meta.bounds[2] - basis.meta.bounds[1]
+    x0 = basis.meta.bounds[1]
+
+    # Normalize position to [0, L)
+    x = mod(position - x0, L)
+
+    # Get coefficient data
+    coeffs = field.data_c
+
+    if isa(basis, RealFourier)
+        # RealFourier: [a_0, a_1, b_1, a_2, b_2, ..., a_nyq]
+        result = coeffs[1]  # DC component
+
+        k_max = N ÷ 2
+        is_even = (N % 2 == 0)
+
+        for k in 1:(k_max - (is_even ? 1 : 0))
+            k_phys = 2π * k / L
+            cos_idx = 2*k
+            sin_idx = 2*k + 1
+
+            if cos_idx <= length(coeffs) && sin_idx <= length(coeffs)
+                result += coeffs[cos_idx] * cos(k_phys * x)
+                result += coeffs[sin_idx] * sin(k_phys * x)
+            end
+        end
+
+        # Nyquist component for even N
+        if is_even && N <= length(coeffs)
+            k_nyq = 2π * k_max / L
+            result += coeffs[N] * cos(k_nyq * x)
+        end
+
+    else  # ComplexFourier
+        # ComplexFourier: standard FFT ordering [0, 1, ..., N/2-1, -N/2, ..., -1]
+        result = complex(0.0, 0.0)
+
+        for i in 1:N
+            if i <= N÷2
+                k = i - 1
+            else
+                k = i - N - 1
+            end
+            k_phys = 2π * k / L
+            result += coeffs[i] * exp(im * k_phys * x)
+        end
+
+        result = real(result)
+    end
+
+    return result
+end
+
+"""
+    interpolate_jacobi(field, basis, axis, position, layout)
+
+Interpolate Jacobi-type field (Chebyshev, Legendre) using Clenshaw algorithm.
+"""
+function interpolate_jacobi(field::ScalarField, basis::JacobiBasis, axis::Int, position::Real, layout::Symbol)
+    N = basis.meta.size
+    a, b = basis.meta.bounds
+
+    # Map position to native [-1, 1] interval
+    x_native = 2.0 * (position - a) / (b - a) - 1.0
+
+    # Clamp to valid range
+    x_native = clamp(x_native, -1.0, 1.0)
+
+    # Get coefficient data
+    coeffs = field.data_c
+
+    if isa(basis, ChebyshevT)
+        # Clenshaw algorithm for Chebyshev T_n
+        return clenshaw_chebyshev_t(coeffs, x_native)
+    elseif isa(basis, ChebyshevU)
+        # Clenshaw algorithm for Chebyshev U_n
+        return clenshaw_chebyshev_u(coeffs, x_native)
+    elseif isa(basis, Legendre)
+        # Clenshaw algorithm for Legendre P_n
+        return clenshaw_legendre(coeffs, x_native)
+    else
+        # General Jacobi: use direct polynomial evaluation
+        return clenshaw_jacobi(coeffs, x_native, basis.a, basis.b)
+    end
+end
+
+"""
+    clenshaw_chebyshev_t(coeffs, x)
+
+Clenshaw algorithm for evaluating Chebyshev T polynomial sum.
+T_n(x) satisfies: T_{n+1}(x) = 2x T_n(x) - T_{n-1}(x)
+"""
+function clenshaw_chebyshev_t(coeffs::AbstractVector, x::Real)
+    n = length(coeffs)
+    if n == 0
+        return 0.0
+    elseif n == 1
+        return coeffs[1]
+    end
+
+    # Backward recurrence: b_k = c_k + 2x b_{k+1} - b_{k+2}
+    b_k2 = 0.0  # b_{n+1}
+    b_k1 = 0.0  # b_{n}
+
+    for k in n:-1:2
+        b_k = coeffs[k] + 2x * b_k1 - b_k2
+        b_k2 = b_k1
+        b_k1 = b_k
+    end
+
+    # Final step: f(x) = c_0 + x*b_1 - b_2
+    return coeffs[1] + x * b_k1 - b_k2
+end
+
+"""
+    clenshaw_chebyshev_u(coeffs, x)
+
+Clenshaw algorithm for evaluating Chebyshev U polynomial sum.
+U_n(x) satisfies: U_{n+1}(x) = 2x U_n(x) - U_{n-1}(x)
+"""
+function clenshaw_chebyshev_u(coeffs::AbstractVector, x::Real)
+    n = length(coeffs)
+    if n == 0
+        return 0.0
+    elseif n == 1
+        return coeffs[1]
+    end
+
+    # Same recurrence as T_n
+    b_k2 = 0.0
+    b_k1 = 0.0
+
+    for k in n:-1:2
+        b_k = coeffs[k] + 2x * b_k1 - b_k2
+        b_k2 = b_k1
+        b_k1 = b_k
+    end
+
+    # For U_n: f(x) = c_0 * U_0(x) + b_1 * U_1(x) - b_2 * U_0(x)
+    # where U_0(x) = 1, U_1(x) = 2x
+    return coeffs[1] + 2x * b_k1 - b_k2
+end
+
+"""
+    clenshaw_legendre(coeffs, x)
+
+Clenshaw algorithm for evaluating Legendre polynomial sum.
+P_n(x) satisfies: (n+1) P_{n+1}(x) = (2n+1) x P_n(x) - n P_{n-1}(x)
+"""
+function clenshaw_legendre(coeffs::AbstractVector, x::Real)
+    n = length(coeffs)
+    if n == 0
+        return 0.0
+    elseif n == 1
+        return coeffs[1]
+    end
+
+    # Backward recurrence for Legendre
+    b_k2 = 0.0
+    b_k1 = 0.0
+
+    for k in n:-1:2
+        # Recurrence: b_k = c_k + ((2k-1)/(k)) x b_{k+1} - (k/(k+1)) b_{k+2}
+        # Note: k here is 0-indexed polynomial degree, so adjust
+        deg = k - 1  # 0-indexed degree
+        alpha = (2*deg + 1) / (deg + 1) * x
+        beta = deg / (deg + 1)
+        b_k = coeffs[k] + alpha * b_k1 - beta * b_k2
+        b_k2 = b_k1
+        b_k1 = b_k
+    end
+
+    # Final step
+    return coeffs[1] + x * b_k1 - 0.5 * b_k2
+end
+
+"""
+    clenshaw_jacobi(coeffs, x, a, b)
+
+Clenshaw algorithm for evaluating general Jacobi polynomial sum.
+"""
+function clenshaw_jacobi(coeffs::AbstractVector, x::Real, a::Float64, b::Float64)
+    n = length(coeffs)
+    if n == 0
+        return 0.0
+    elseif n == 1
+        return coeffs[1]
+    end
+
+    # Use direct evaluation for general Jacobi (less efficient but correct)
+    result = 0.0
+    for k in 1:n
+        result += coeffs[k] * jacobi_polynomial(k-1, a, b, x)
+    end
+    return result
+end
+
+"""
+    jacobi_polynomial(n, a, b, x)
+
+Evaluate Jacobi polynomial P_n^{(a,b)}(x) using three-term recurrence.
+"""
+function jacobi_polynomial(n::Int, a::Float64, b::Float64, x::Real)
+    if n == 0
+        return 1.0
+    elseif n == 1
+        return 0.5 * (a - b + (a + b + 2) * x)
+    end
+
+    p_km2 = 1.0
+    p_km1 = 0.5 * (a - b + (a + b + 2) * x)
+
+    for k in 2:n
+        # Three-term recurrence for Jacobi polynomials
+        k_f = Float64(k)
+        a1 = 2 * k_f * (k_f + a + b) * (2*k_f + a + b - 2)
+        a2 = (2*k_f + a + b - 1) * (a^2 - b^2)
+        a3 = (2*k_f + a + b - 2) * (2*k_f + a + b - 1) * (2*k_f + a + b)
+        a4 = 2 * (k_f + a - 1) * (k_f + b - 1) * (2*k_f + a + b)
+
+        p_k = ((a2 + a3 * x) * p_km1 - a4 * p_km2) / a1
+        p_km2 = p_km1
+        p_km1 = p_k
+    end
+
+    return p_km1
+end
+
+"""
+    evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
+
+Evaluate integration operator over specified coordinate(s).
+Following Dedalus operators.py Integrate implementation.
+
+Uses appropriate quadrature weights for each basis type:
+- Fourier: trapezoidal rule (uniform weights)
+- Chebyshev: Clenshaw-Curtis quadrature
+- Legendre: Gauss-Legendre quadrature
+"""
+function evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
+    operand = int_op.operand
+    coord = int_op.coord
+
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("Integrate currently only supports scalar fields"))
+    end
+
+    # Handle single coordinate or tuple of coordinates
+    coords = isa(coord, Coordinate) ? (coord,) : coord
+
+    # Start with the operand
+    result_field = copy(operand)
+
+    # Integrate over each coordinate in sequence
+    for c in coords
+        result_field = integrate_along_coord(result_field, c)
+    end
+
+    # If all dimensions integrated, return scalar
+    if length(coords) == length(operand.bases)
+        ensure_layout!(result_field, :g)
+        return sum(result_field.data_g)
+    end
+
+    if layout == :g
+        ensure_layout!(result_field, :g)
+    else
+        ensure_layout!(result_field, :c)
+    end
+
+    return result_field
+end
+
+"""
+    integrate_along_coord(field, coord)
+
+Integrate field along a single coordinate using appropriate quadrature.
+"""
+function integrate_along_coord(field::ScalarField, coord::Coordinate)
+    # Find which basis corresponds to this coordinate
+    basis_index = nothing
+    for (i, basis) in enumerate(field.bases)
+        if basis.meta.element_label == coord.name
+            basis_index = i
+            break
+        end
+    end
+
+    if basis_index === nothing
+        throw(ArgumentError("Coordinate $(coord.name) not found in field bases"))
+    end
+
+    basis = field.bases[basis_index]
+
+    # Work in grid space for integration
+    ensure_layout!(field, :g)
+
+    # Get quadrature weights for this basis
+    weights = get_integration_weights(basis)
+
+    # Apply weighted sum along the axis
+    data = field.data_g
+
+    # Sum along the specified axis with weights
+    result_data = integrate_weighted_sum(data, weights, basis_index)
+
+    # Create result field with reduced dimensionality
+    # For now, return scalar for 1D or the summed array
+    if ndims(data) == 1
+        return sum(data .* weights)
+    else
+        # Create new field without the integrated dimension
+        new_bases = [b for (i, b) in enumerate(field.bases) if i != basis_index]
+        if isempty(new_bases)
+            return sum(data .* reshape(weights, size_for_axis(length(weights), basis_index, ndims(data))))
+        end
+
+        result = ScalarField(field.dist, "int_$(field.name)", tuple(new_bases...), field.dtype)
+        result.data_g = result_data
+        result.current_layout = :g
+        return result
+    end
+end
+
+"""
+    get_integration_weights(basis)
+
+Get quadrature weights for integration over a basis.
+"""
+function get_integration_weights(basis::Basis)
+    N = basis.meta.size
+    a, b = basis.meta.bounds
+    L = b - a
+
+    if isa(basis, RealFourier) || isa(basis, ComplexFourier)
+        # Uniform weights for periodic Fourier
+        return fill(L / N, N)
+
+    elseif isa(basis, ChebyshevT)
+        # Clenshaw-Curtis quadrature weights
+        return clenshaw_curtis_weights(N, L)
+
+    elseif isa(basis, Legendre)
+        # Gauss-Legendre quadrature weights
+        _, weights = gauss_legendre_quadrature(N)
+        return weights .* (L / 2)  # Scale from [-1,1] to [a,b]
+
+    else
+        # Default: uniform weights
+        return fill(L / N, N)
+    end
+end
+
+"""
+    clenshaw_curtis_weights(N, L)
+
+Compute Clenshaw-Curtis quadrature weights for Chebyshev integration.
+"""
+function clenshaw_curtis_weights(N::Int, L::Float64)
+    weights = zeros(N)
+
+    if N == 1
+        return [L]
+    end
+
+    # Clenshaw-Curtis weights on [-1, 1]
+    for j in 1:N
+        theta_j = π * (j - 1) / (N - 1)
+        w = 0.0
+        for k in 0:(N÷2)
+            if k == 0 || k == N÷2
+                factor = 1.0
+            else
+                factor = 2.0
+            end
+            if 2*k != N - 1
+                w += factor * cos(2*k * theta_j) / (1 - 4*k^2)
+            end
+        end
+        weights[j] = 2 * w / (N - 1)
+    end
+
+    # Handle endpoints
+    weights[1] *= 0.5
+    weights[N] *= 0.5
+
+    # Scale to interval [a, b]
+    return weights .* (L / 2)
+end
+
+"""
+    gauss_legendre_quadrature(N)
+
+Compute Gauss-Legendre quadrature points and weights on [-1, 1].
+"""
+function gauss_legendre_quadrature(N::Int)
+    points = zeros(N)
+    weights = zeros(N)
+
+    # Initial guesses for roots using Chebyshev nodes
+    for i in 1:N
+        points[i] = -cos(π * (i - 0.25) / (N + 0.5))
+    end
+
+    # Newton-Raphson iteration for roots
+    for i in 1:N
+        x = points[i]
+        for _ in 1:100  # Max iterations
+            # Evaluate P_N and P_{N-1} using recurrence
+            p_km2 = 1.0
+            p_km1 = x
+
+            for k in 2:N
+                p_k = ((2*k - 1) * x * p_km1 - (k - 1) * p_km2) / k
+                p_km2 = p_km1
+                p_km1 = p_k
+            end
+
+            # Derivative: P'_N = N(x P_N - P_{N-1}) / (x^2 - 1)
+            dp = N * (x * p_km1 - p_km2) / (x^2 - 1)
+
+            # Newton update
+            dx = -p_km1 / dp
+            x += dx
+
+            if abs(dx) < 1e-14
+                break
+            end
+        end
+
+        points[i] = x
+
+        # Compute weight
+        p_km2 = 1.0
+        p_km1 = x
+        for k in 2:N
+            p_k = ((2*k - 1) * x * p_km1 - (k - 1) * p_km2) / k
+            p_km2 = p_km1
+            p_km1 = p_k
+        end
+        dp = N * (x * p_km1 - p_km2) / (x^2 - 1)
+        weights[i] = 2 / ((1 - x^2) * dp^2)
+    end
+
+    return points, weights
+end
+
+"""
+    integrate_weighted_sum(data, weights, axis)
+
+Apply weighted sum along specified axis.
+"""
+function integrate_weighted_sum(data::AbstractArray, weights::AbstractVector, axis::Int)
+    nd = ndims(data)
+
+    if nd == 1
+        return sum(data .* weights)
+    end
+
+    # Reshape weights to broadcast along the correct axis
+    shape = ones(Int, nd)
+    shape[axis] = length(weights)
+    w_shaped = reshape(weights, shape...)
+
+    # Weighted sum along axis
+    return dropdims(sum(data .* w_shaped, dims=axis), dims=axis)
+end
+
+"""
+    size_for_axis(n, axis, ndims)
+
+Create a size tuple with n in the specified axis position and 1 elsewhere.
+"""
+function size_for_axis(n::Int, axis::Int, nd::Int)
+    shape = ones(Int, nd)
+    shape[axis] = n
+    return tuple(shape...)
+end
+
+"""
+    evaluate_average(avg_op::Average, layout::Symbol=:g)
+
+Evaluate averaging operator along a coordinate.
+Average = Integrate / (interval length)
+"""
+function evaluate_average(avg_op::Average, layout::Symbol=:g)
+    operand = avg_op.operand
+    coord = avg_op.coord
+
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("Average currently only supports scalar fields"))
+    end
+
+    # Find the basis for this coordinate
+    basis_index = nothing
+    for (i, basis) in enumerate(operand.bases)
+        if basis.meta.element_label == coord.name
+            basis_index = i
+            break
+        end
+    end
+
+    if basis_index === nothing
+        throw(ArgumentError("Coordinate $(coord.name) not found in field bases"))
+    end
+
+    basis = operand.bases[basis_index]
+    L = basis.meta.bounds[2] - basis.meta.bounds[1]
+
+    # Integrate and divide by interval length
+    int_result = integrate_along_coord(operand, coord)
+
+    if isa(int_result, Real)
+        return int_result / L
+    else
+        # Scale the field data
+        if int_result.data_g !== nothing
+            int_result.data_g ./= L
+        end
+        if int_result.data_c !== nothing
+            int_result.data_c ./= L
+        end
+        return int_result
+    end
+end
+
+"""
+    evaluate_lift(lift_op::Lift, layout::Symbol=:g)
+
+Evaluate lifting operator for tau method boundary conditions.
+Following Dedalus operators.py Lift implementation.
+
+Lift places boundary condition values into the last n spectral modes,
+which are the "tau" degrees of freedom used to enforce BCs.
+"""
+function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
+    operand = lift_op.operand
+    basis = lift_op.basis
+    n = lift_op.n
+
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("Lift currently only supports scalar fields"))
+    end
+
+    # Find the basis index
+    basis_index = nothing
+    for (i, b) in enumerate(operand.bases)
+        if b === basis || b.meta.element_label == basis.meta.element_label
+            basis_index = i
+            break
+        end
+    end
+
+    if basis_index === nothing
+        throw(ArgumentError("Basis not found in operand"))
+    end
+
+    # Create result field with same structure
+    result = ScalarField(operand.dist, "lift_$(operand.name)", operand.bases, operand.dtype)
+
+    # Work in coefficient space
+    ensure_layout!(operand, :c)
+    ensure_layout!(result, :c)
+
+    N = basis.meta.size
+
+    # Zero out result
+    fill!(result.data_c, 0.0)
+
+    # Place operand values at mode N-n (tau position)
+    lift_mode = N - n
+    if lift_mode >= 1 && lift_mode <= N
+        if ndims(operand.data_c) == 1
+            result.data_c[lift_mode] = operand.data_c[1]
+        else
+            # For multi-dimensional fields, apply along the appropriate axis
+            apply_lift_nd!(result.data_c, operand.data_c, basis_index, lift_mode)
+        end
+    end
+
+    if layout == :g
+        backward_transform!(result)
+    end
+
+    return result
+end
+
+"""
+    apply_lift_nd!(result, operand, axis, lift_mode)
+
+Apply lift operation along specified axis for multi-dimensional arrays.
+"""
+function apply_lift_nd!(result::AbstractArray, operand::AbstractArray, axis::Int, lift_mode::Int)
+    nd = ndims(result)
+
+    # Use selectdim to access the lift mode slice
+    selectdim(result, axis, lift_mode) .= selectdim(operand, axis, 1)
+end
+
+"""
+    evaluate_convert(conv_op::Convert, layout::Symbol=:g)
+
+Evaluate basis conversion operator.
+Following Dedalus operators.py Convert implementation.
+
+Converts field from one basis representation to another using
+spectral conversion matrices.
+"""
+function evaluate_convert(conv_op::Convert, layout::Symbol=:g)
+    operand = conv_op.operand
+    out_basis = conv_op.basis
+
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("Convert currently only supports scalar fields"))
+    end
+
+    # Find the input basis to convert
+    in_basis_index = nothing
+    in_basis = nothing
+
+    for (i, b) in enumerate(operand.bases)
+        if b !== nothing && isa(b, JacobiBasis) && isa(out_basis, JacobiBasis)
+            # Check if bases are on same coordinate
+            if b.meta.element_label == out_basis.meta.element_label
+                in_basis_index = i
+                in_basis = b
+                break
+            end
+        end
+    end
+
+    if in_basis === nothing
+        # No conversion needed or not applicable
+        return copy(operand)
+    end
+
+    # Work in coefficient space
+    ensure_layout!(operand, :c)
+
+    # Build or retrieve conversion matrix
+    conv_mat = conversion_matrix(in_basis, out_basis)
+
+    # Create result field
+    new_bases = collect(operand.bases)
+    new_bases[in_basis_index] = out_basis
+    result = ScalarField(operand.dist, "conv_$(operand.name)", tuple(new_bases...), operand.dtype)
+    ensure_layout!(result, :c)
+
+    # Apply conversion matrix
+    if ndims(operand.data_c) == 1
+        result.data_c .= conv_mat * operand.data_c
+    else
+        result.data_c .= apply_matrix_along_axis(conv_mat, operand.data_c, in_basis_index)
+    end
+
+    if layout == :g
+        backward_transform!(result)
+    end
+
+    return result
+end
+
+# ============================================================================
+# Power and General Function Operators
+# ============================================================================
+
+"""
+    Power <: Operator
+
+Nonlinear power operator: f^p
+"""
+struct Power <: Operator
+    operand::Operand
+    power::Real
+end
+const _Power_constructor = Power
+
+"""
+    power(operand::Operand, p::Real)
+
+Raise operand to power p.
+"""
+function power(operand::Operand, p::Real)
+    return multiclass_new(Power, operand, p)
+end
+
+register_operator_alias!(power, "power", "pow")
+register_operator_parseable!(power, "power", "pow")
+
+"""
+    evaluate_power(pow_op::Power, layout::Symbol=:g)
+
+Evaluate power operator in grid space.
+"""
+function evaluate_power(pow_op::Power, layout::Symbol=:g)
+    operand = pow_op.operand
+    p = pow_op.power
+
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("Power currently only supports scalar fields"))
+    end
+
+    # Work in grid space for nonlinear operations
+    ensure_layout!(operand, :g)
+
+    # Create result field
+    result = ScalarField(operand.dist, "pow_$(operand.name)_$p", operand.bases, operand.dtype)
+    ensure_layout!(result, :g)
+
+    # Apply power operation
+    result.data_g .= operand.data_g .^ p
+
+    if layout == :c
+        forward_transform!(result)
+    end
+
+    return result
+end
+
+function dispatch_check(::Type{Power}, args::Tuple, kwargs::NamedTuple)
+    operand, p = args
+    if !isa(operand, Operand)
+        throw(ArgumentError("Power requires an Operand"))
+    end
+    if !isa(p, Real)
+        throw(ArgumentError("Power exponent must be real"))
+    end
+    return true
+end
+
+function invoke_constructor(::Type{Power}, args::Tuple, kwargs::NamedTuple)
+    operand, p = args
+    return _Power_constructor(operand, p)
+end
+
+"""
+    GeneralFunction <: Operator
+
+Apply general function to field in grid space.
+"""
+struct GeneralFunction <: Operator
+    operand::Operand
+    func::Function
+    name::String
+end
+const _GeneralFunction_constructor = GeneralFunction
+
+"""
+    apply_function(operand::Operand, f::Function, name::String="func")
+
+Apply arbitrary function to operand in grid space.
+"""
+function apply_function(operand::Operand, f::Function, name::String="func")
+    return multiclass_new(GeneralFunction, operand, f, name)
+end
+
+register_operator_alias!(apply_function, "apply_function", "apply_func")
+register_operator_parseable!(apply_function, "apply_function", "apply_func")
+
+"""
+    evaluate_general_function(gf_op::GeneralFunction, layout::Symbol=:g)
+
+Evaluate general function operator in grid space.
+"""
+function evaluate_general_function(gf_op::GeneralFunction, layout::Symbol=:g)
+    operand = gf_op.operand
+    f = gf_op.func
+    name = gf_op.name
+
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("GeneralFunction currently only supports scalar fields"))
+    end
+
+    # Work in grid space
+    ensure_layout!(operand, :g)
+
+    # Create result field
+    result = ScalarField(operand.dist, "$(name)_$(operand.name)", operand.bases, operand.dtype)
+    ensure_layout!(result, :g)
+
+    # Apply function element-wise
+    result.data_g .= f.(operand.data_g)
+
+    if layout == :c
+        forward_transform!(result)
+    end
+
+    return result
+end
+
+function dispatch_check(::Type{GeneralFunction}, args::Tuple, kwargs::NamedTuple)
+    operand, f, name = args
+    if !isa(operand, Operand)
+        throw(ArgumentError("GeneralFunction requires an Operand"))
+    end
+    if !isa(f, Function)
+        throw(ArgumentError("GeneralFunction requires a Function"))
+    end
+    return true
+end
+
+function invoke_constructor(::Type{GeneralFunction}, args::Tuple, kwargs::NamedTuple)
+    operand, f, name = args
+    return _GeneralFunction_constructor(operand, f, name)
+end
+
+"""
+    UnaryGridFunction <: Operator
+
+Apply unary numpy-style function (sin, cos, exp, etc.) to field.
+"""
+struct UnaryGridFunction <: Operator
+    operand::Operand
+    func::Function
+    name::String
+end
+const _UnaryGridFunction_constructor = UnaryGridFunction
+
+# Common unary functions following Dedalus
+function sin_field(operand::Operand)
+    return UnaryGridFunction(operand, sin, "sin")
+end
+
+function cos_field(operand::Operand)
+    return UnaryGridFunction(operand, cos, "cos")
+end
+
+function tan_field(operand::Operand)
+    return UnaryGridFunction(operand, tan, "tan")
+end
+
+function exp_field(operand::Operand)
+    return UnaryGridFunction(operand, exp, "exp")
+end
+
+function log_field(operand::Operand)
+    return UnaryGridFunction(operand, log, "log")
+end
+
+function sqrt_field(operand::Operand)
+    return UnaryGridFunction(operand, sqrt, "sqrt")
+end
+
+function abs_field(operand::Operand)
+    return UnaryGridFunction(operand, abs, "abs")
+end
+
+function tanh_field(operand::Operand)
+    return UnaryGridFunction(operand, tanh, "tanh")
+end
+
+# Register unary functions
+register_operator_parseable!(sin_field, "sin")
+register_operator_parseable!(cos_field, "cos")
+register_operator_parseable!(tan_field, "tan")
+register_operator_parseable!(exp_field, "exp")
+register_operator_parseable!(log_field, "log")
+register_operator_parseable!(sqrt_field, "sqrt")
+register_operator_parseable!(abs_field, "abs")
+register_operator_parseable!(tanh_field, "tanh")
+
+"""
+    evaluate_unary_grid_function(ugf_op::UnaryGridFunction, layout::Symbol=:g)
+
+Evaluate unary grid function operator.
+"""
+function evaluate_unary_grid_function(ugf_op::UnaryGridFunction, layout::Symbol=:g)
+    return evaluate_general_function(
+        GeneralFunction(ugf_op.operand, ugf_op.func, ugf_op.name),
+        layout
+    )
+end
+
+# ============================================================================
+# Grid and Coeff conversion evaluation
+# ============================================================================
+
+"""
+    evaluate_grid(grid_op::Grid)
+
+Convert operand to grid space.
+"""
+function evaluate_grid(grid_op::Grid)
+    operand = grid_op.operand
+
+    if isa(operand, ScalarField)
+        ensure_layout!(operand, :g)
+        return operand
+    else
+        throw(ArgumentError("Grid conversion not implemented for $(typeof(operand))"))
+    end
+end
+
+"""
+    evaluate_coeff(coeff_op::Coeff)
+
+Convert operand to coefficient space.
+"""
+function evaluate_coeff(coeff_op::Coeff)
+    operand = coeff_op.operand
+
+    if isa(operand, ScalarField)
+        ensure_layout!(operand, :c)
+        return operand
+    else
+        throw(ArgumentError("Coeff conversion not implemented for $(typeof(operand))"))
+    end
+end
+
+# ============================================================================
+# Component extraction evaluation
+# ============================================================================
+
+"""
+    evaluate_component(comp_op::Component)
+
+Extract specific component from vector/tensor field.
+"""
+function evaluate_component(comp_op::Component)
+    operand = comp_op.operand
+    index = comp_op.index
+
+    if isa(operand, VectorField)
+        if index < 1 || index > length(operand.components)
+            throw(BoundsError("Component index $index out of bounds"))
+        end
+        return operand.components[index]
+
+    elseif isa(operand, TensorField)
+        # For tensors, index could be linear or we need (i,j)
+        # Use linear indexing for now
+        if index < 1 || index > length(operand.components)
+            throw(BoundsError("Component index $index out of bounds"))
+        end
+        return operand.components[index]
+
+    else
+        throw(ArgumentError("Component extraction requires VectorField or TensorField"))
+    end
+end
+
+"""
+    evaluate_radial_component(rc_op::RadialComponent)
+
+Extract radial component from vector field.
+For Cartesian coordinates, this is the x-component.
+"""
+function evaluate_radial_component(rc_op::RadialComponent)
+    operand = rc_op.operand
+
+    if !isa(operand, VectorField)
+        throw(ArgumentError("RadialComponent requires a VectorField"))
+    end
+
+    # In Cartesian, "radial" is typically the first component
+    # For proper polar/spherical, would need coordinate system info
+    return operand.components[1]
+end
+
+"""
+    evaluate_angular_component(ac_op::AngularComponent)
+
+Extract angular component from vector field.
+For Cartesian 2D, this is the y-component.
+"""
+function evaluate_angular_component(ac_op::AngularComponent)
+    operand = ac_op.operand
+
+    if !isa(operand, VectorField)
+        throw(ArgumentError("AngularComponent requires a VectorField"))
+    end
+
+    if length(operand.components) < 2
+        throw(ArgumentError("VectorField must have at least 2 components"))
+    end
+
+    return operand.components[2]
+end
+
+"""
+    evaluate_azimuthal_component(az_op::AzimuthalComponent)
+
+Extract azimuthal component from vector field.
+For Cartesian 3D, this is the z-component.
+"""
+function evaluate_azimuthal_component(az_op::AzimuthalComponent)
+    operand = az_op.operand
+
+    if !isa(operand, VectorField)
+        throw(ArgumentError("AzimuthalComponent requires a VectorField"))
+    end
+
+    if length(operand.components) < 3
+        throw(ArgumentError("VectorField must have at least 3 components"))
+    end
+
+    return operand.components[3]
+end
+
+# ============================================================================
+# Trace and Skew evaluation for tensors
+# ============================================================================
+
+"""
+    evaluate_trace(trace_op::Trace, layout::Symbol=:g)
+
+Evaluate trace of a tensor field.
+trace(T) = Σ_i T_ii
+"""
+function evaluate_trace(trace_op::Trace, layout::Symbol=:g)
+    operand = trace_op.operand
+
+    if !isa(operand, TensorField)
+        throw(ArgumentError("Trace requires a TensorField"))
+    end
+
+    # Create result scalar field
+    result = ScalarField(operand.dist, "trace_$(operand.name)", operand.bases, operand.dtype)
+
+    # Ensure diagonal components are in correct layout
+    dim = size(operand.components, 1)
+
+    for i in 1:dim
+        ensure_layout!(operand.components[i,i], layout)
+    end
+
+    ensure_layout!(result, layout)
+
+    # Sum diagonal components
+    data_field = layout == :g ? :data_g : :data_c
+    fill!(getfield(result, data_field), 0.0)
+
+    for i in 1:dim
+        comp_data = getfield(operand.components[i,i], data_field)
+        result_data = getfield(result, data_field)
+        result_data .+= comp_data
+    end
+
+    return result
+end
+
+"""
+    evaluate_skew(skew_op::Skew, layout::Symbol=:g)
+
+Evaluate skew-symmetric part of a tensor field.
+skew(T) = (T - T^T) / 2
+"""
+function evaluate_skew(skew_op::Skew, layout::Symbol=:g)
+    operand = skew_op.operand
+
+    if !isa(operand, TensorField)
+        throw(ArgumentError("Skew requires a TensorField"))
+    end
+
+    coordsys = operand.coordsys
+    result = TensorField(operand.dist, coordsys, "skew_$(operand.name)", operand.bases, operand.dtype)
+
+    dim = size(operand.components, 1)
+    data_field = layout == :g ? :data_g : :data_c
+
+    for i in 1:dim
+        for j in 1:dim
+            ensure_layout!(operand.components[i,j], layout)
+            ensure_layout!(operand.components[j,i], layout)
+            ensure_layout!(result.components[i,j], layout)
+
+            T_ij = getfield(operand.components[i,j], data_field)
+            T_ji = getfield(operand.components[j,i], data_field)
+            result_data = getfield(result.components[i,j], data_field)
+
+            result_data .= 0.5 .* (T_ij .- T_ji)
+        end
+    end
+
+    return result
+end
+
+"""
+    evaluate_transpose_components(trans_op::TransposeComponents, layout::Symbol=:g)
+
+Evaluate transpose of tensor field components.
+"""
+function evaluate_transpose_components(trans_op::TransposeComponents, layout::Symbol=:g)
+    operand = trans_op.operand
+
+    if !isa(operand, TensorField)
+        throw(ArgumentError("TransposeComponents requires a TensorField"))
+    end
+
+    coordsys = operand.coordsys
+    result = TensorField(operand.dist, coordsys, "trans_$(operand.name)", operand.bases, operand.dtype)
+
+    dim = size(operand.components, 1)
+    data_field = layout == :g ? :data_g : :data_c
+
+    for i in 1:dim
+        for j in 1:dim
+            ensure_layout!(operand.components[j,i], layout)
+            ensure_layout!(result.components[i,j], layout)
+
+            src_data = getfield(operand.components[j,i], data_field)
+            dst_data = getfield(result.components[i,j], data_field)
+
+            copyto!(dst_data, src_data)
+        end
+    end
+
+    return result
+end
+
+# ============================================================================
+# Curl evaluation for 2D and 3D
+# ============================================================================
+
+"""
+    evaluate_curl(curl_op::Curl, layout::Symbol=:g)
+
+Evaluate curl of a vector field.
+2D: curl(v) = ∂v_y/∂x - ∂v_x/∂y (scalar)
+3D: curl(v) = (∂v_z/∂y - ∂v_y/∂z, ∂v_x/∂z - ∂v_z/∂x, ∂v_y/∂x - ∂v_x/∂y)
+"""
+function evaluate_curl(curl_op::Curl, layout::Symbol=:g)
+    operand = curl_op.operand
+    coordsys = curl_op.coordsys
+
+    if !isa(operand, VectorField)
+        throw(ArgumentError("Curl requires a VectorField"))
+    end
+
+    dim = length(operand.components)
+
+    if dim == 2
+        # 2D curl: returns scalar
+        return evaluate_curl_2d(operand, coordsys, layout)
+    elseif dim == 3
+        # 3D curl: returns vector
+        return evaluate_curl_3d(operand, coordsys, layout)
+    else
+        throw(ArgumentError("Curl only implemented for 2D and 3D"))
+    end
+end
+
+function evaluate_curl_2d(operand::VectorField, coordsys::CoordinateSystem, layout::Symbol)
+    # curl(v) = ∂v_y/∂x - ∂v_x/∂y
+    vx = operand.components[1]
+    vy = operand.components[2]
+
+    coord_x = coordsys.coords[1]
+    coord_y = coordsys.coords[2]
+
+    # ∂v_y/∂x
+    dvy_dx = evaluate_differentiate(Differentiate(vy, coord_x, 1), layout)
+
+    # ∂v_x/∂y
+    dvx_dy = evaluate_differentiate(Differentiate(vx, coord_y, 1), layout)
+
+    # Result = dvy_dx - dvx_dy
+    result = ScalarField(operand.dist, "curl_$(operand.name)", operand.bases, operand.dtype)
+    ensure_layout!(result, layout)
+
+    data_field = layout == :g ? :data_g : :data_c
+    result_data = getfield(result, data_field)
+    dvy_data = getfield(dvy_dx, data_field)
+    dvx_data = getfield(dvx_dy, data_field)
+
+    result_data .= dvy_data .- dvx_data
+
+    return result
+end
+
+function evaluate_curl_3d(operand::VectorField, coordsys::CoordinateSystem, layout::Symbol)
+    vx = operand.components[1]
+    vy = operand.components[2]
+    vz = operand.components[3]
+
+    coord_x = coordsys.coords[1]
+    coord_y = coordsys.coords[2]
+    coord_z = coordsys.coords[3]
+
+    # Component 1: ∂v_z/∂y - ∂v_y/∂z
+    dvz_dy = evaluate_differentiate(Differentiate(vz, coord_y, 1), layout)
+    dvy_dz = evaluate_differentiate(Differentiate(vy, coord_z, 1), layout)
+
+    # Component 2: ∂v_x/∂z - ∂v_z/∂x
+    dvx_dz = evaluate_differentiate(Differentiate(vx, coord_z, 1), layout)
+    dvz_dx = evaluate_differentiate(Differentiate(vz, coord_x, 1), layout)
+
+    # Component 3: ∂v_y/∂x - ∂v_x/∂y
+    dvy_dx = evaluate_differentiate(Differentiate(vy, coord_x, 1), layout)
+    dvx_dy = evaluate_differentiate(Differentiate(vx, coord_y, 1), layout)
+
+    result = VectorField(operand.dist, coordsys, "curl_$(operand.name)", operand.bases, operand.dtype)
+
+    data_field = layout == :g ? :data_g : :data_c
+
+    for comp in result.components
+        ensure_layout!(comp, layout)
+    end
+
+    # Set component data
+    getfield(result.components[1], data_field) .= getfield(dvz_dy, data_field) .- getfield(dvy_dz, data_field)
+    getfield(result.components[2], data_field) .= getfield(dvx_dz, data_field) .- getfield(dvz_dx, data_field)
+    getfield(result.components[3], data_field) .= getfield(dvy_dx, data_field) .- getfield(dvx_dy, data_field)
+
+    return result
+end
+
+# ============================================================================
+# Laplacian evaluation
+# ============================================================================
+
+"""
+    evaluate_laplacian(lap_op::Laplacian, layout::Symbol=:g)
+
+Evaluate Laplacian operator.
+∇²f = Σ_i ∂²f/∂x_i²
+"""
+function evaluate_laplacian(lap_op::Laplacian, layout::Symbol=:g)
+    operand = lap_op.operand
+
+    if isa(operand, ScalarField)
+        return evaluate_scalar_laplacian(operand, layout)
+    elseif isa(operand, VectorField)
+        return evaluate_vector_laplacian(operand, layout)
+    else
+        throw(ArgumentError("Laplacian not implemented for $(typeof(operand))"))
+    end
+end
+
+function evaluate_scalar_laplacian(operand::ScalarField, layout::Symbol)
+    result = ScalarField(operand.dist, "lap_$(operand.name)", operand.bases, operand.dtype)
+    ensure_layout!(result, layout)
+
+    data_field = layout == :g ? :data_g : :data_c
+    fill!(getfield(result, data_field), 0.0)
+
+    for (i, basis) in enumerate(operand.bases)
+        # Find coordinate for this basis
+        coord = Coordinate(basis.meta.coordsys, basis.meta.element_label)
+
+        # Second derivative
+        d2f = evaluate_differentiate(Differentiate(operand, coord, 2), layout)
+
+        result_data = getfield(result, data_field)
+        d2f_data = getfield(d2f, data_field)
+        result_data .+= d2f_data
+    end
+
+    return result
+end
+
+function evaluate_vector_laplacian(operand::VectorField, layout::Symbol)
+    result = VectorField(operand.dist, operand.coordsys, "lap_$(operand.name)",
+                        operand.bases, operand.dtype)
+
+    for (i, comp) in enumerate(operand.components)
+        lap_comp = evaluate_scalar_laplacian(comp, layout)
+
+        data_field = layout == :g ? :data_g : :data_c
+        ensure_layout!(result.components[i], layout)
+        copyto!(getfield(result.components[i], data_field), getfield(lap_comp, data_field))
+    end
+
+    return result
+end
+
+# ============================================================================
+# Unified operator evaluation dispatcher
+# ============================================================================
+
+"""
+    evaluate(op::Operator, layout::Symbol=:g)
+
+Unified evaluation function that dispatches to specific operator evaluators.
+"""
+function evaluate(op::Operator, layout::Symbol=:g)
+    if isa(op, Gradient)
+        return evaluate_gradient(op, layout)
+    elseif isa(op, Divergence)
+        return evaluate_divergence(op, layout)
+    elseif isa(op, Curl)
+        return evaluate_curl(op, layout)
+    elseif isa(op, Laplacian)
+        return evaluate_laplacian(op, layout)
+    elseif isa(op, Differentiate)
+        return evaluate_differentiate(op, layout)
+    elseif isa(op, Interpolate)
+        return evaluate_interpolate(op, layout)
+    elseif isa(op, Integrate)
+        return evaluate_integrate(op, layout)
+    elseif isa(op, Average)
+        return evaluate_average(op, layout)
+    elseif isa(op, Lift)
+        return evaluate_lift(op, layout)
+    elseif isa(op, Convert)
+        return evaluate_convert(op, layout)
+    elseif isa(op, Power)
+        return evaluate_power(op, layout)
+    elseif isa(op, GeneralFunction)
+        return evaluate_general_function(op, layout)
+    elseif isa(op, UnaryGridFunction)
+        return evaluate_unary_grid_function(op, layout)
+    elseif isa(op, Grid)
+        return evaluate_grid(op)
+    elseif isa(op, Coeff)
+        return evaluate_coeff(op)
+    elseif isa(op, Component)
+        return evaluate_component(op)
+    elseif isa(op, RadialComponent)
+        return evaluate_radial_component(op)
+    elseif isa(op, AngularComponent)
+        return evaluate_angular_component(op)
+    elseif isa(op, AzimuthalComponent)
+        return evaluate_azimuthal_component(op)
+    elseif isa(op, Trace)
+        return evaluate_trace(op, layout)
+    elseif isa(op, Skew)
+        return evaluate_skew(op, layout)
+    elseif isa(op, TransposeComponents)
+        return evaluate_transpose_components(op, layout)
+    elseif isa(op, TimeDerivative)
+        # TimeDerivative is handled by solvers, not direct evaluation
+        throw(ArgumentError("TimeDerivative cannot be directly evaluated; use solver"))
+    else
+        throw(ArgumentError("Evaluation not implemented for operator type $(typeof(op))"))
+    end
 end
 
