@@ -45,7 +45,7 @@ MERGE MODES:
     decomp      - Domain decomposition reconstruction (advanced)
 
 FILE STRUCTURE:
-Input files should follow Tarang.jl/Dedalus naming:
+Input files should follow Tarang.jl naming:
     snapshots_s1/snapshots_s1_p0.nc    # Processor 0
     snapshots_s1/snapshots_s1_p1.nc    # Processor 1  
     snapshots_s1/snapshots_s1_p2.nc    # Processor 2
