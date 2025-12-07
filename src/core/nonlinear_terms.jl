@@ -18,8 +18,6 @@ using PencilFFTs
 using MPI
 using LinearAlgebra
 
-# CPU-only (GPU support removed)
-
 # Performance monitoring (defined first as it's used by NonlinearEvaluator)
 mutable struct NonlinearPerformanceStats
     total_evaluations::Int
