@@ -1,5 +1,5 @@
 """
-Tarang.jl - Julia implementation of Dedalus spectral PDE framework
+Tarang.jl - Spectral PDE framework for Julia
 Copyright (c) 2024, Subhajit Kar
 
 This file is part of Tarang, which is free software distributed
@@ -95,7 +95,7 @@ include("extras/analysis_tasks.jl")
 # Libraries submodule to avoid name collisions with core types
 # (Currently empty - spherical geometry support removed)
 
-# Public interface - mirroring Dedalus structure
+# Public interface
 export
     # Coordinate systems
     CartesianCoordinates,
