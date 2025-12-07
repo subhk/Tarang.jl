@@ -88,7 +88,7 @@ mutable struct BasisMeta
     dtype::Type
     constant::Vector{Bool}
     subaxis_dependence::Vector{Bool}
-    # Additional Dedalus fields
+    # Additional fields
     COV::Union{Nothing, AffineCOV}
     constant_mode_value::Float64
 
@@ -133,14 +133,13 @@ function BasisMeta(coordsys, element_label, dim, size, bounds, dealias, dtype;
 end
 
 # ============================================================================
-# Jacobi Basis (following Dedalus basis.py:435-648)
+# Jacobi Basis
 # ============================================================================
 
 """
     Jacobi <: JacobiBasis
 
 General Jacobi polynomial basis P_n^{(a,b)}(x).
-Following Dedalus basis.py:435-648.
 
 Parameters:
 - a, b: Jacobi parameters for the basis polynomials
@@ -174,7 +173,7 @@ function _build_jacobi(coord::Coordinate;
                        bounds::Tuple{Float64,Float64}=(-1.0,1.0),
                        dealias::Float64=1.0,
                        dtype=Float64)
-    # Default a0, b0 to a, b if not specified (following Dedalus basis.py:463-469)
+    # Default a0, b0 to a, b if not specified
     a0 = a0 === nothing ? a : a0
     b0 = b0 === nothing ? b : b0
 
@@ -195,7 +194,7 @@ function Jacobi(coord::Coordinate; kwargs...)
 end
 
 # ============================================================================
-# Ultraspherical Basis (following Dedalus basis.py - Jacobi with a=b)
+# Ultraspherical Basis (Jacobi with a=b)
 # ============================================================================
 
 """
@@ -204,7 +203,7 @@ end
 Ultraspherical (Gegenbauer) polynomial basis C_n^{alpha}(x).
 Special case of Jacobi with a = b = alpha - 1/2.
 
-Following Dedalus convention where ChebyshevT = Ultraspherical(alpha=0).
+ChebyshevT = Ultraspherical(alpha=0).
 """
 struct Ultraspherical <: JacobiBasis
     meta::BasisMeta
@@ -250,7 +249,6 @@ end
 
 # ============================================================================
 # ChebyshevT = Ultraspherical(alpha=0) = Jacobi(a=-1/2, b=-1/2)
-# Following Dedalus basis.py:649-650
 # ============================================================================
 
 """
@@ -301,7 +299,6 @@ end
 
 # ============================================================================
 # ChebyshevU = Ultraspherical(alpha=1) = Jacobi(a=1/2, b=1/2)
-# Following Dedalus basis.py:653-654
 # ============================================================================
 
 """
@@ -355,7 +352,6 @@ const Chebyshev = ChebyshevT
 
 # ============================================================================
 # ChebyshevV = Ultraspherical(alpha=2) = Jacobi(a=3/2, b=3/2)
-# Following Dedalus basis.py:657-658
 # ============================================================================
 
 """
@@ -366,8 +362,6 @@ Equivalent to Ultraspherical(alpha=2) or Jacobi(a=3/2, b=3/2).
 
 This basis is useful for second-order derivatives and appears in
 spectral methods for fourth-order PDEs.
-
-Following Dedalus basis.py:657-658.
 """
 struct ChebyshevV <: JacobiBasis
     meta::BasisMeta
@@ -460,7 +454,7 @@ function Legendre(coord::Coordinate; kwargs...)
 end
 
 # ============================================================================
-# Fourier Bases (following Dedalus basis.py:817-1105, 1108-1230)
+# Fourier Bases
 # ============================================================================
 
 const FOURIER_NATIVE_BOUNDS = (0.0, 2π)
@@ -470,7 +464,6 @@ const FOURIER_NATIVE_BOUNDS = (0.0, 2π)
 
 Real Fourier sine/cosine basis.
 Modes: [cos(0*x), cos(1*x), sin(1*x), cos(2*x), sin(2*x), ...]
-Following Dedalus basis.py:1108-1230.
 """
 struct RealFourier <: FourierBasis
     meta::BasisMeta
@@ -533,14 +526,13 @@ end
 const Fourier = RealFourier
 
 # ============================================================================
-# Wavenumber computation (following Dedalus basis.py:1117-1121)
+# Wavenumber computation
 # ============================================================================
 
 """
     wavenumbers(basis::RealFourier)
 
 Get wavenumbers for RealFourier basis.
-Following Dedalus basis.py:1117-1121.
 """
 function wavenumbers(basis::RealFourier)
     N = basis.meta.size
@@ -568,14 +560,13 @@ function wavenumbers(basis::ComplexFourier)
 end
 
 # ============================================================================
-# Product matrices for NCC support (following Dedalus basis.py:1136-1200)
+# Product matrices for NCC support
 # ============================================================================
 
 """
     ncc_matrix(ncc_basis, arg_basis, out_basis, coeffs; cutoff=1e-6)
 
 Build full NCC matrix via direct summation of product matrices.
-Following Dedalus basis.py:248-262 ncc_matrix method.
 
 The NCC matrix represents multiplication by a spatially-varying coefficient field:
     (ncc * operand)_coeffs = NCC_matrix @ operand_coeffs
@@ -631,7 +622,6 @@ end
     product_matrix(basis::JacobiBasis, arg_basis, out_basis, ncc_mode::Int)
 
 Build multiplication matrix for Non-Constant Coefficient (NCC) terms.
-Following Dedalus basis.py product_matrix methods.
 
 This computes the matrix M such that:
     (f * g)_coeffs = M @ g_coeffs
@@ -660,7 +650,6 @@ end
     product_matrix(basis::RealFourier, arg_basis, out_basis, ncc_mode::Int)
 
 Build multiplication matrix for RealFourier NCC.
-Following Dedalus basis.py:1136-1200.
 
 For Fourier: cos(m*x) * cos(n*x) = 0.5*(cos((m-n)*x) + cos((m+n)*x))
 """
@@ -682,7 +671,6 @@ function product_matrix(basis::RealFourier, arg_basis, out_basis, ncc_mode::Int)
     m = ncc_mode < length(k_ncc) ? Int(round(k_ncc[ncc_mode+1] / k0)) : 0
 
     # Build sparse product matrix
-    # Following Dedalus RealFourier.product_matrix (basis.py:1136-1200)
     if m == 0
         # Constant NCC: identity or truncation
         if ncc_mode % 2 == 0  # cos mode
@@ -700,11 +688,10 @@ end
 
 """
 Build RealFourier product matrix for specific wavenumber.
-Following Dedalus basis.py:1136-1183 exactly.
 
 The RealFourier product matrix handles multiplication of trig functions:
 - 2 cos(mx) cos(nx) = cos((m+n)x) + cos((m-n)x)
-- 2 cos(mx) sin(nx) = sin((m+n)x) - sin((m-n)x)  (msin = -sin in Dedalus notation)
+- 2 cos(mx) sin(nx) = sin((m+n)x) - sin((m-n)x)  (msin = -sin notation)
 - 2 sin(mx) cos(nx) = sin((m+n)x) + sin((m-n)x)
 - 2 sin(mx) sin(nx) = -cos((m+n)x) + cos((m-n)x)
 """
@@ -717,18 +704,17 @@ function _build_real_fourier_product_matrix(N_arg::Int, N_out::Int, m::Int, is_s
     J_list = Int[]
     V_list = Float64[]
 
-    # Generate wavenumber arrays following Dedalus pattern
+    # Generate wavenumber arrays
     # RealFourier stores: [cos_0, cos_1, msin_1, cos_2, msin_2, ...]
     # where msin = -sin
 
-    # Process the three coupling cases from Dedalus:
+    # Process the three coupling cases:
     # 1. k_out = k_ncc + k_arg (rows_p, cols_p)
     # 2. k_out = k_ncc - k_arg (rows_m, cols_m)
     # 3. k_out = k_arg - k_ncc for negative result (rows_mn, cols_mn)
 
     # k_arg wavenumbers (even indices only = cos modes, indices 1, 3, 5, ...)
     # In Julia 1-based: cos_0 at 1, cos_1 at 2, msin_1 at 3, cos_2 at 4, msin_2 at 5...
-    # Dedalus uses 0-based: cos_0 at 0, cos_1 at 2, msin_1 at 3, cos_2 at 4, msin_2 at 5...
 
     for j_arg in 1:2:N_arg  # cos modes in arg (1, 3, 5, ... in 1-based = 0, 2, 4, ... wavenumbers)
         n = (j_arg - 1) ÷ 2  # wavenumber
@@ -970,7 +956,6 @@ function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float
         end
     else
         # General Jacobi - use simple approximation
-        # (Full implementation would need dedalus_sphere library)
         for k in k_min:k_max
             if k < N_max
                 # Approximate coefficient
@@ -1014,14 +999,13 @@ function _legendre_linearization_coeff(m::Int, n::Int, k::Int)
 end
 
 # ============================================================================
-# Valid elements / mode filtering (following Dedalus basis.py:1123-1134)
+# Valid elements / mode filtering
 # ============================================================================
 
 """
     valid_elements(basis::Basis, tensorsig, grid_space, elements)
 
 Determine which elements are valid for the given tensor signature.
-Following Dedalus basis.py:1123-1134.
 """
 function valid_elements(basis::RealFourier, tensorsig, grid_space, elements)
     vshape = (length(tensorsig) > 0 ? prod(cs.dim for cs in tensorsig) : 1,) .* size(elements[1])
@@ -1029,7 +1013,6 @@ function valid_elements(basis::RealFourier, tensorsig, grid_space, elements)
 
     if !grid_space[1]
         # Drop msin part of k=0 for all Cartesian components
-        # Following Dedalus: valid[(groups == 0) * (elements % 2 == 1)] = False
         groups = elements_to_groups(basis, grid_space, elements)
         for i in eachindex(valid)
             if groups[1][i] == 0 && elements[1][i] % 2 == 1
@@ -1059,7 +1042,7 @@ function elements_to_groups(basis::JacobiBasis, grid_space, elements)
 end
 
 # ============================================================================
-# Derivative basis (following Dedalus operators - D maps T to U)
+# Derivative basis (D maps T to U)
 # ============================================================================
 
 """
@@ -1067,13 +1050,11 @@ end
 
 Return the basis for the derivative of fields in this basis.
 
-Following Dedalus derivative basis chain:
+Derivative basis chain:
 - d/dx(ChebyshevT) -> ChebyshevU (Jacobi a,b: -1/2,-1/2 -> 1/2,1/2)
 - d/dx(ChebyshevU) -> ChebyshevV (Jacobi a,b: 1/2,1/2 -> 3/2,3/2)
 - d/dx(ChebyshevV) -> Jacobi(5/2, 5/2)
 - General: d/dx P_n^{(a,b)} is proportional to P_{n-1}^{(a+1,b+1)}
-
-Reference: Dedalus basis.py:630-633, 649-658
 """
 function derivative_basis(basis::ChebyshevT, order::Int=1)
     # d/dx(T_n) is proportional to U_{n-1}
@@ -1190,14 +1171,13 @@ function derivative_basis(basis::FourierBasis, order::Int=1)
 end
 
 # ============================================================================
-# Conversion matrices between bases (following Dedalus basis.py:664-700)
+# Conversion matrices between bases
 # ============================================================================
 
 """
     conversion_matrix(input_basis::JacobiBasis, output_basis::JacobiBasis)
 
 Build conversion matrix from input basis to output basis.
-Following Dedalus ConvertJacobi in basis.py:664-679.
 """
 function conversion_matrix(input_basis::JacobiBasis, output_basis::JacobiBasis)
     cache_key = (input_basis.a, input_basis.b, output_basis.a, output_basis.b)
@@ -1264,19 +1244,17 @@ end
 """General Jacobi conversion using recurrence."""
 function _general_jacobi_conversion(N::Int, a0::Float64, b0::Float64, a1::Float64, b1::Float64)
     # Simplified: identity with scaling
-    # Full implementation would use the recursion from dedalus/libraries/dedalus_sphere/jacobi.py
     return sparse(I, N, N)
 end
 
 # ============================================================================
-# Differentiation matrices (following Dedalus basis.py:701-750)
+# Differentiation matrices
 # ============================================================================
 
 """
     differentiation_matrix(basis::JacobiBasis, order::Int=1)
 
 Build spectral differentiation matrix.
-Following Dedalus DifferentiateJacobi in basis.py:701-750.
 """
 function differentiation_matrix(basis::JacobiBasis, order::Int=1)
     if haskey(basis._differentiation_matrix_cache, order)
@@ -1474,7 +1452,6 @@ end
 function local_grid(basis::Basis, dist, scale)
     """
     Local grid for a basis.
-    Following Dedalus implementation in basis.py:374
     """
     axis = get_basis_axis(dist, basis)
     native_grid = _native_grid(basis, scale)
