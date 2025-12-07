@@ -221,9 +221,26 @@ end
     check_conditions(op::CartesianComponent)
 
 Check that operands are in a proper layout for operation.
+
+CartesianComponent extraction works in both grid and coefficient layouts,
+so this always returns true. The layout of the output matches the operand.
 """
 function check_conditions(op::CartesianComponent)
-    # Component extraction works in any layout
+    # Component extraction is purely algebraic - it just selects a subarray
+    # from the operand's data. Works in any layout.
+    operand = op.operand
+
+    # Verify operand has valid data in at least one layout
+    if hasfield(typeof(operand), :current_layout)
+        layout = operand.current_layout
+        if layout == :g
+            return operand.data_g !== nothing
+        elseif layout == :c
+            return operand.data_c !== nothing
+        end
+    end
+
+    # For non-field operands or missing layout info, assume OK
     return true
 end
 
@@ -231,9 +248,29 @@ end
     enforce_conditions(op::CartesianComponent)
 
 Require operands to be in a proper layout.
+
+Since CartesianComponent works in any layout, this only ensures
+the operand has valid data allocated in its current layout.
 """
 function enforce_conditions(op::CartesianComponent)
-    # No specific layout required
+    operand = op.operand
+
+    # Ensure operand has data in its current layout
+    if hasfield(typeof(operand), :current_layout) && hasfield(typeof(operand), :data_g)
+        layout = operand.current_layout
+        if layout == :g && operand.data_g === nothing
+            # Need to transform from coefficient space to grid space
+            if hasfield(typeof(operand), :data_c) && operand.data_c !== nothing
+                # Trigger transform - this depends on the field's transform implementation
+                ensure_layout!(operand, :g)
+            end
+        elseif layout == :c && operand.data_c === nothing
+            if hasfield(typeof(operand), :data_g) && operand.data_g !== nothing
+                ensure_layout!(operand, :c)
+            end
+        end
+    end
+
     return nothing
 end
 
