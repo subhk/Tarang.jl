@@ -1,9 +1,8 @@
 """
-Multiple-dispatch helpers inspired by Dedalus ``tools/dispatch.py``.
+Multiple-dispatch helpers.
 
-Julia already provides multiple dispatch, but Dedalus builds additional logic
-around class-style hierarchies.  These utilities keep the same semantics so we
-can port code that expects ``MultiClass``/``CachedMultiClass`` behaviour.
+Julia already provides multiple dispatch, but this module builds additional logic
+around class-style hierarchies for ``MultiClass``/``CachedMultiClass`` behaviour.
 """
 
 using InteractiveUtils: subtypes

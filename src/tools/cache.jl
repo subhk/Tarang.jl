@@ -1,7 +1,5 @@
 """
 Caching utilities
-
-Simplified version of dedalus caching system
 """
 
 # WeakKeyDict is part of Base, no import needed

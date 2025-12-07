@@ -1,10 +1,9 @@
 """
-Coefficient/field system helpers inspired by ``dedalus/core/system.py``.
+Coefficient/field system helpers.
 
-The Dedalus implementation manages large contiguous coefficient buffers to
-streamline pencil manipulations.  We mirror that structure with a simplified
-version that stores contiguous views for each subproblem/subsystem pair, so
-future optimisations can hook into the same API.
+This module manages large contiguous coefficient buffers to
+streamline pencil manipulations with a simplified version that stores
+contiguous views for each subproblem/subsystem pair.
 """
 
 struct CoeffSystem

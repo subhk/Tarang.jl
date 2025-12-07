@@ -1,5 +1,5 @@
 """
-Custom exception definitions mirroring Dedalus ``tools/exceptions.py``.
+Custom exception definitions.
 
 Providing named exception types helps upstream code express intent clearly
 and lets callers catch specific error conditions.

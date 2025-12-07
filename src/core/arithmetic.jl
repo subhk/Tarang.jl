@@ -1,9 +1,8 @@
 """
-Arithmetic futures translated from ``dedalus/core/arithmetic.py``.
+Arithmetic futures for deferred operations.
 
 These types create deferred-operation nodes that integrate with the
-``Future`` infrastructure provided in ``future.jl``.  The goal is feature
-parity with Dedalus while remaining idiomatic to Julia.
+``Future`` infrastructure provided in ``future.jl``.
 """
 
 # ---------------------------------------------------------------------------

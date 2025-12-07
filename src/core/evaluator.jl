@@ -1,7 +1,5 @@
 """
 Evaluator for analysis and output
-
-Translated from dedalus/core/evaluator.py
 """
 
 using HDF5

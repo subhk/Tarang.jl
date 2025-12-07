@@ -1,7 +1,6 @@
 """
 Solver classes for different problem types
 
-Translated from dedalus/core/solvers.py
 CPU-only (GPU support removed).
 """
 

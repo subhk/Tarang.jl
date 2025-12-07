@@ -1,5 +1,5 @@
 """
-Tools for equation parsing following Dedalus ``tools/parsing.py`` patterns.
+Tools for equation parsing.
 """
 
 export split_equation, split_call, lambdify_functions

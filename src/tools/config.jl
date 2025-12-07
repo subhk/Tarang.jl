@@ -10,7 +10,6 @@ Provides a comprehensive configuration system with:
 - Thread-safe access
 - Runtime configuration updates
 
-Based on dedalus/tools/config.py patterns.
 """
 
 import TOML

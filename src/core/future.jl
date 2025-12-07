@@ -1,17 +1,14 @@
 """
-Deferred evaluation infrastructure mirroring Dedalus ``future.py``.
+Deferred evaluation infrastructure for symbolic/deferred operator trees.
 
-This module provides a lightweight translation of the Python ``Future`` class
-hierarchy used throughout Dedalus for symbolic/deferred operator trees.  The
-Julia version keeps the same conceptual layout:
+This module provides:
 
 - ``FutureState`` stores common bookkeeping (arguments, cached outputs, etc.).
 - Concrete ``Future`` subtypes wrap a ``FutureState`` and implement ``operate``.
 - ``evaluate`` recursively resolves subtrees and applies the concrete operator.
 
-The implementation is intentionally conservative: it focuses on the parts of
-Dedalus that other modules depend on (argument tracking, caching, substitution
-helpers).  Additional hooks (e.g. NCC preparation) can be expanded later.
+The implementation focuses on argument tracking, caching, and substitution
+helpers. Additional hooks (e.g. NCC preparation) can be expanded later.
 """
 
 # ---------------------------------------------------------------------------

@@ -1,16 +1,14 @@
 """
 Advanced Boundary Condition Handling for Tarang.jl
 
-This module implements comprehensive boundary condition support following
-the Dedalus tau method approach, with support for:
+This module implements comprehensive boundary condition support using
+the tau method approach, with support for:
 - Dirichlet boundary conditions
-- Neumann boundary conditions  
+- Neumann boundary conditions
 - Robin (mixed) boundary conditions
 - Periodic boundary conditions
 - Stress-free boundary conditions
 - Custom boundary condition expressions
-
-Translated from dedalus/core/boundary_conditions.py and enhanced
 """
 
 using LinearAlgebra

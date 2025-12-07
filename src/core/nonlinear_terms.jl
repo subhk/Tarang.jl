@@ -2,7 +2,7 @@
 Nonlinear term evaluation using PencilArrays and PencilFFTs
 
 This module implements efficient evaluation of nonlinear terms in spectral methods,
-following the Dedalus approach and designed for Julia with PencilArrays/PencilFFTs.
+designed for Julia with PencilArrays/PencilFFTs.
 Supports both 2D and 3D parallelization with proper dealiasing.
 
 Key features:

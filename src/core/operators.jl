@@ -1698,7 +1698,16 @@ end
     build_lift_matrix(var, basis, n; kwargs...)
 
 Build lifting matrix for tau method boundary conditions.
-Following operators.py Lift implementation.
+Following Dedalus basis.py LiftJacobi implementation (lines 790-814).
+
+Dedalus convention:
+- n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
+- n < 0: wraps around (n = -1 means last mode, n = -2 means second-to-last, etc.)
+
+Example: For N=10 modes
+- Lift(tau, basis, 0) → sets mode 1 (Julia 1-indexed, equivalent to Python mode 0)
+- Lift(tau, basis, -1) → sets mode N (last mode)
+- Lift(tau, basis, -2) → sets mode N-1 (second-to-last mode)
 """
 function build_lift_matrix(var, basis, n::Int; kwargs...)
     if !hasfield(typeof(var), :bases)
@@ -1729,16 +1738,20 @@ function build_lift_matrix(var, basis, n::Int; kwargs...)
     end
 
     N = basis.meta.size
-    n_total = field_dofs(var)
 
-    # Lift places boundary values at last n modes
-    # Following tau method convention
+    # Following Dedalus convention: direct indexing with negative wrap-around
+    # In Dedalus (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
+    # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
+    lift_mode = n
+    if lift_mode < 0
+        lift_mode = N + lift_mode  # Wrap negative indices (e.g., -1 → N-1 in 0-indexed → N in 1-indexed)
+    end
+    lift_mode += 1  # Convert from 0-indexed to 1-indexed
+
     I_list = Int[]
     J_list = Int[]
     V_list = Float64[]
 
-    # Place lift contribution at mode N-n+1
-    lift_mode = N - n
     if lift_mode >= 1 && lift_mode <= N
         push!(I_list, lift_mode)
         push!(J_list, 1)
@@ -2386,10 +2399,13 @@ end
     evaluate_lift(lift_op::Lift, layout::Symbol=:g)
 
 Evaluate lifting operator for tau method boundary conditions.
-Following operators.py Lift implementation.
+Following Dedalus basis.py LiftJacobi implementation (lines 790-814).
 
-Lift places boundary condition values into the last n spectral modes,
-which are the "tau" degrees of freedom used to enforce BCs.
+Dedalus convention:
+- n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
+- n < 0: wraps around (n = -1 means last mode, n = -2 means second-to-last, etc.)
+
+This creates a polynomial field P with coefficient n set to 1, then returns P * operand.
 """
 function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
     operand = lift_op.operand
@@ -2425,8 +2441,15 @@ function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
     # Zero out result
     fill!(result.data_c, 0.0)
 
-    # Place operand values at mode N-n (tau position)
-    lift_mode = N - n
+    # Following Dedalus convention: direct indexing with negative wrap-around
+    # In Dedalus (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
+    # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
+    lift_mode = n
+    if lift_mode < 0
+        lift_mode = N + lift_mode  # Wrap negative indices (e.g., -1 → N-1 in 0-indexed → N in 1-indexed)
+    end
+    lift_mode += 1  # Convert from 0-indexed to 1-indexed
+
     if lift_mode >= 1 && lift_mode <= N
         if ndims(operand.data_c) == 1
             result.data_c[lift_mode] = operand.data_c[1]

@@ -1,5 +1,5 @@
 """
-Random array utilities inspired by ``dedalus/tools/random_arrays.py``.
+Random array utilities.
 
 Provides chunked random number generators and helper containers that
 deliver deterministic pseudo-random data without materialising entire
