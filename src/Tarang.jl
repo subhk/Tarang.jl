@@ -103,7 +103,7 @@ export
 
     # Bases
     RealFourier, ComplexFourier, Fourier, ChebyshevT, ChebyshevU, ChebyshevV, Legendre, Jacobi,
-    derivative_basis,
+    derivative_basis, product_matrix, ncc_matrix,
 
     # Core classes
     Domain, Distributor, Field, ScalarField, VectorField, TensorField,
