@@ -1635,15 +1635,26 @@ function fourier_differentiation_matrix(basis::RealFourier, order::Int)
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
     k0 = 2π / L
 
-    # RealFourier: derivative mixes cos and sin modes
-    # d/dx[cos(kx)] = -k*sin(kx)
-    # d/dx[sin(kx)] = k*cos(kx)
+    # RealFourier differentiation follows Dedalus convention:
+    # Modes: [cos(0x), cos(1x), -sin(1x), cos(2x), -sin(2x), ...]
+    # Note: Using -sin (msin) convention
+    #
+    # For differentiation with (ik)^order factor:
+    # d/dx cos(kx) = -k sin(kx) = k * (-sin(kx))  -> k * msin
+    # d/dx (-sin(kx)) = -k cos(kx)                -> -k * cos
+    #
+    # The 2x2 block for each wavenumber k is:
+    # | 0  -k |   (maps: cos <- -k*msin, msin <- k*cos)
+    # | k   0 |
+    #
+    # For order n, we apply this matrix n times, or equivalently compute (ik)^n
+    # and extract the real/imaginary parts for the rotation.
 
     I_list = Int[]
     J_list = Int[]
     V_list = Float64[]
 
-    # DC mode (k=0) -> 0
+    # DC mode (k=0) -> 0 for any derivative order
     push!(I_list, 1)
     push!(J_list, 1)
     push!(V_list, 0.0)
@@ -1651,24 +1662,46 @@ function fourier_differentiation_matrix(basis::RealFourier, order::Int)
     k_max = (N - 1) ÷ 2
 
     for k in 1:k_max
-        cos_idx = 2*k
-        sin_idx = 2*k + 1
+        cos_idx = 2*k      # 1-indexed: mode 2 is cos(1x), mode 4 is cos(2x), etc.
+        sin_idx = 2*k + 1  # 1-indexed: mode 3 is -sin(1x), mode 5 is -sin(2x), etc.
         k_phys = k0 * k
 
         if cos_idx <= N && sin_idx <= N
-            if order == 1
-                # d/dx cos -> -k sin, d/dx sin -> k cos
-                push!(I_list, cos_idx); push!(J_list, sin_idx); push!(V_list, -k_phys)
-                push!(I_list, sin_idx); push!(J_list, cos_idx); push!(V_list, k_phys)
-            elseif order == 2
-                # d²/dx² cos -> -k² cos, d²/dx² sin -> -k² sin
-                push!(I_list, cos_idx); push!(J_list, cos_idx); push!(V_list, -k_phys^2)
-                push!(I_list, sin_idx); push!(J_list, sin_idx); push!(V_list, -k_phys^2)
-            else
-                # General order
-                factor = (im * k_phys)^order
-                push!(I_list, cos_idx); push!(J_list, cos_idx); push!(V_list, real(factor))
-                push!(I_list, sin_idx); push!(J_list, sin_idx); push!(V_list, real(factor))
+            # Compute (ik)^order = k^order * i^order
+            # i^0 = 1, i^1 = i, i^2 = -1, i^3 = -i, i^4 = 1, ...
+            # For real representation: (ik)^n = k^n * (cos(nπ/2) + i*sin(nπ/2))
+            #
+            # The 2x2 derivative block D^n for the (cos, msin) pair:
+            # D^1 = | 0  -k |    D^2 = |-k²  0  |    D^3 = | 0   k³ |   D^4 = |k⁴  0 |
+            #       | k   0 |          | 0  -k² |          |-k³  0  |         | 0  k⁴|
+            #
+            # Pattern: D^n has form k^n * |cos(nπ/2)  -sin(nπ/2)|
+            #                             |sin(nπ/2)   cos(nπ/2)|
+
+            kn = k_phys^order
+            phase = order * π / 2
+            c = cos(phase)
+            s = sin(phase)
+
+            # Matrix entries for the 2x2 block:
+            # cos_out = c * k^n * cos_in - s * k^n * msin_in
+            # msin_out = s * k^n * cos_in + c * k^n * msin_in
+
+            # (cos_idx, cos_idx): c * k^n
+            if abs(c * kn) > 1e-15
+                push!(I_list, cos_idx); push!(J_list, cos_idx); push!(V_list, c * kn)
+            end
+            # (cos_idx, sin_idx): -s * k^n
+            if abs(s * kn) > 1e-15
+                push!(I_list, cos_idx); push!(J_list, sin_idx); push!(V_list, -s * kn)
+            end
+            # (sin_idx, cos_idx): s * k^n
+            if abs(s * kn) > 1e-15
+                push!(I_list, sin_idx); push!(J_list, cos_idx); push!(V_list, s * kn)
+            end
+            # (sin_idx, sin_idx): c * k^n
+            if abs(c * kn) > 1e-15
+                push!(I_list, sin_idx); push!(J_list, sin_idx); push!(V_list, c * kn)
             end
         end
     end
