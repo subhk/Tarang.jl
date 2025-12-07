@@ -2,7 +2,7 @@
 NetCDF File Merging Utility for Tarang.jl
 
 This module provides comprehensive utilities for merging per-processor NetCDF files
-created by Tarang.jl's distributed output system. Follows Dedalus post-processing patterns.
+created by Tarang.jl's distributed output system.
 
 Key Features:
 - Merge per-processor files (handler_s1_p*.nc) into single files

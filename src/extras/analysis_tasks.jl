@@ -1,7 +1,7 @@
 """
-Dedalus-style analysis task helpers for Tarang.
+Analysis task helpers for Tarang.
 
-These helpers wrap common reductions/slices used in Dedalus analysis tasks so they
+These helpers wrap common reductions/slices used in analysis tasks so they
 can be scheduled via NetCDF handlers.
 """
 

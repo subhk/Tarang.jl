@@ -1,15 +1,13 @@
 """
 NetCDF Output Support for Tarang.jl
 
-This module provides NetCDF output capabilities matching Dedalus file handling style:
-- Per-processor NetCDF files following Dedalus naming: handler_s1/handler_s1_p0.nc
-- User-selectable precision (Float32/Float64)  
-- Rich metadata and coordinate information following Dedalus structure
+This module provides NetCDF output capabilities:
+- Per-processor NetCDF files: handler_s1/handler_s1_p0.nc
+- User-selectable precision (Float32/Float64)
+- Rich metadata and coordinate information
 - CF conventions compliance
 - Set-based file organization with automatic file management
 - Task-based field output system
-
-Matches Dedalus evaluator.add_file_handler() API pattern.
 """
 
 using NetCDF

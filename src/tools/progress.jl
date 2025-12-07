@@ -1,5 +1,5 @@
 """
-Progress reporting utilities adapted from Dedalus ``tools/progress.py``.
+Progress reporting utilities.
 
 These helpers expose lightweight logging/printing wrappers so long-running
 loops can emit periodic updates without duplicating timing logic.

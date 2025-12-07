@@ -1,7 +1,5 @@
 """
 Array manipulation utilities
-
-Translated from dedalus/tools/array.py
 """
 
 using LinearAlgebra

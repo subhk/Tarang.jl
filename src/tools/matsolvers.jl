@@ -1,5 +1,5 @@
 """
-Matrix solver registry inspired by ``dedalus/libraries/matsolvers.py``.
+Matrix solver registry.
 
 This module provides Julia-friendly wrappers over linear-system solvers so
 other components can select a solver by name or by passing a constructor.

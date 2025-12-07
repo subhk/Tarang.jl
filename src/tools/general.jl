@@ -1,7 +1,5 @@
 """
 General utility functions
-
-Translated from dedalus/tools/general.py
 """
 
 using OrderedCollections

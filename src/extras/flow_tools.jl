@@ -1,8 +1,6 @@
 """
 Flow analysis tools
 
-Translated from dedalus/extras/flow_tools.py
-
 Note: GlobalArrayReducer, reduce_scalar, global_min, global_max, and global_mean
 are defined in core/evaluator.jl and reused here.
 """
