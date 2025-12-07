@@ -1,8 +1,6 @@
 """
 Test Cartesian operators: skew, trace, transpose, curl, gradient, divergence, laplacian.
 
-Translated from dedalus/tests/test_cartesian_operators.py
-
 This test module provides comprehensive tests for:
 - 2D operations with (Fourier,Fourier), (Fourier,Chebyshev), (Chebyshev,Chebyshev)
 - 3D operations with (Fourier,Fourier,Fourier) and (Fourier,Fourier,Chebyshev)
@@ -27,7 +25,7 @@ const Ly = 2.4
 const Lz = 1.9
 
 # ============================================================================
-# Domain builders (following Dedalus test patterns)
+# Domain builders
 # ============================================================================
 
 """Build 2D Fourier-Fourier domain."""
