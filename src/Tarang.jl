@@ -61,6 +61,7 @@ include("core/field.jl")
 include("core/future.jl")
 include("core/arithmetic.jl")
 include("core/operators.jl")
+include("core/cartesian_operators.jl")
 include("core/transforms.jl")
 include("core/boundary_conditions.jl")
 include("core/problems.jl")
@@ -111,6 +112,16 @@ export
     grad, div, curl, lap, trace, skew, transpose_components,
     outer, advective_cfl, cfl,
     interpolate, integrate, average, convert, lift, d, dt,
+
+    # Cartesian-specific operators (multiclass dispatch)
+    CartesianComponent, CartesianGradient, CartesianDivergence, CartesianCurl,
+    CartesianLaplacian, CartesianTrace, CartesianSkew,
+    DirectProductGradient, DirectProductDivergence, DirectProductLaplacian,
+    cartesian_component, dispatch_cartesian_operator,
+
+    # Matrix operation methods for implicit solvers
+    matrix_dependence, matrix_coupling, subproblem_matrix,
+    check_conditions, enforce_conditions,
     
     # Nonlinear operators
     advection, nonlinear_momentum, convection, AdvectionOperator, NonlinearAdvectionOperator, ConvectiveOperator,
