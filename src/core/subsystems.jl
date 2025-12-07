@@ -23,7 +23,7 @@ using LinearAlgebra
 
 const SUBSYSTEM_GROUP = (:global,)
 
-# Solver configuration options (following solvers.py:39-65)
+# Solver configuration options (following solvers:39-65)
 Base.@kwdef mutable struct SolverConfig
     ncc_cutoff::Float64 = 1e-6
     max_ncc_terms::Union{Nothing, Int} = nothing
@@ -42,7 +42,7 @@ end
     Subsystem
 
 Represents a subset of the global coefficient space (pencil).
-Following subsystems.py:107-150.
+Following subsystems:107-150.
 
 Each subsystem is described by a "group" tuple containing a
 group index (for each separable axis) or nothing (for each coupled axis).
@@ -155,7 +155,7 @@ end
     compute_matrix_group(group, matrix_dependence, matrix_coupling, default_nonconst_groups)
 
 Compute matrix group from subsystem group.
-Following subsystems.py:124-129.
+Following subsystems:124-129.
 """
 function compute_matrix_group(group::Tuple, matrix_dependence::Vector{Bool},
                               matrix_coupling::Vector{Bool}, default_nonconst_groups::Tuple)
@@ -181,7 +181,7 @@ function Subsystem(solver, group::Tuple=SUBSYSTEM_GROUP)
     scalar_ranges, variable_ranges, total_var = compute_variable_ranges(problem)
     equation_ranges, total_eq = compute_equation_ranges(problem)
 
-    # Compute matrix group (following subsystems.py:124-129)
+    # Compute matrix group (following subsystems:124-129)
     matrix_coupling = hasfield(typeof(solver), :base) ? solver.base.matrix_coupling : fill(true, dist.dim)
     matrix_dependence = copy(matrix_coupling)  # Default: same as coupling
     default_nonconst_groups = hasfield(typeof(dist), :default_nonconst_groups) ?
@@ -197,7 +197,7 @@ end
     build_subsystems(solver)
 
 Build local subsystem objects.
-Following subsystems.py:34-53.
+Following subsystems:34-53.
 """
 function build_subsystems(solver)
     # For now, create a single subsystem spanning the full problem
@@ -271,7 +271,7 @@ end
     gather(subsystem, fields)
 
 Gather coefficient data from fields into a single vector.
-Following subsystems.py:213-220.
+Following subsystems:213-220.
 """
 function gather(subsystem::Subsystem, fields::Vector{<:ScalarField})
     buffers = ComplexF64[]
@@ -286,7 +286,7 @@ end
     scatter(subsystem, data, fields)
 
 Scatter vector entries back into field coefficient arrays.
-Following subsystems.py:222-231.
+Following subsystems:222-231.
 """
 function scatter(subsystem::Subsystem, data::AbstractVector, fields::Vector{<:ScalarField})
     offset = 0
@@ -310,7 +310,7 @@ end
     Subproblem
 
 Object representing one coupled subsystem of a problem.
-Following subsystems.py:234-296.
+Following subsystems:234-296.
 
 Subproblems are identified by their group multi-index, which identifies
 the corresponding group of each separable dimension of the problem.
@@ -332,7 +332,7 @@ mutable struct Subproblem
     # Matrices (built by build_matrices!)
     matrices::Dict{String, Any}
 
-    # Preconditioners (following subsystems.py:560-563)
+    # Preconditioners (following subsystems:560-563)
     pre_left::Union{Nothing, SparseMatrixCSC}
     pre_left_pinv::Union{Nothing, SparseMatrixCSC}
     pre_right::Union{Nothing, SparseMatrixCSC}
@@ -393,7 +393,7 @@ function Subproblem(solver, subsystems::Tuple{Vararg{Subsystem}}, group::Tuple=S
         subsystem.subproblem[] = nothing  # Will be set after construction
     end
 
-    # Build group dictionary (following subsystems.py:257-261)
+    # Build group dictionary (following subsystems:257-261)
     group_dict = Dict{String, Any}()
     for (axis, ax_group) in enumerate(group)
         if ax_group !== nothing && hasfield(typeof(dist), :coords)
@@ -435,7 +435,7 @@ field_size(sp::Subproblem, field) = field_size(sp.subsystems[1], field)
     check_condition(sp::Subproblem, eq_data)
 
 Check if equation condition is satisfied for this subproblem.
-Following subsystems.py:494-495.
+Following subsystems:494-495.
 """
 function check_condition(sp::Subproblem, eq_data::Dict)
     condition = get(eq_data, "condition", "true")
@@ -451,7 +451,7 @@ end
     valid_modes(sp::Subproblem, field, valid_modes_array)
 
 Get valid modes for field in this subproblem.
-Following subsystems.py:476-478.
+Following subsystems:476-478.
 """
 function valid_modes(sp::Subproblem, field, valid_modes_array)
     if valid_modes_array === nothing
@@ -470,7 +470,7 @@ end
     build_subproblems(solver, subsystems; build_matrices=nothing)
 
 Construct subproblems from the supplied subsystems.
-Following subsystems.py:55-70.
+Following subsystems:55-70.
 """
 function build_subproblems(solver, subsystems; build_matrices=nothing)
     # Arrange subsystems by matrix groups
@@ -503,7 +503,7 @@ end
     build_subproblem_matrices(solver, subproblems, matrices)
 
 Build matrices for all subproblems.
-Following subsystems.py:72-81.
+Following subsystems:72-81.
 """
 function build_subproblem_matrices(solver, subproblems, matrices)
     # Setup NCCs (gather coefficients)
@@ -529,7 +529,7 @@ end
     gather_ncc_coeffs!(expr)
 
 Gather NCC coefficients for expression.
-Following arithmetic.py:370-373.
+Following arithmetic:370-373.
 """
 function gather_ncc_coeffs!(expr)
     # Recursively gather NCC coefficients
@@ -559,7 +559,7 @@ gather_ncc_coeffs!(::Number) = nothing
     build_matrices!(sp::Subproblem, names, solver)
 
 Build problem matrices for subproblem.
-Following subsystems.py:497-596.
+Following subsystems:497-596.
 """
 function build_matrices!(sp::Subproblem, names, solver)
     problem = sp.problem
@@ -584,7 +584,7 @@ function build_matrices!(sp::Subproblem, names, solver)
     I = sum(eqn_sizes)
     J = sum(var_sizes)
 
-    # Construct matrices (following subsystems.py:512-537)
+    # Construct matrices (following subsystems:512-537)
     matrices = Dict{String, SparseMatrixCSC}()
     for name in names
         name_str = String(name)
@@ -627,7 +627,7 @@ function build_matrices!(sp::Subproblem, names, solver)
         matrices[name_str] = sparse(rows, cols, ComplexF64.(data), I, J)
     end
 
-    # Valid modes (following subsystems.py:539-548)
+    # Valid modes (following subsystems:539-548)
     valid_eqn = vcat([get_valid_modes(eq, sp, eqn_sizes[i]) .* eqn_conditions[i]
                       for (i, eq) in enumerate(eqns)]...)
     valid_var = vcat([get_valid_modes_var(var, sp) for var in vars]...)
@@ -636,29 +636,29 @@ function build_matrices!(sp::Subproblem, names, solver)
     valid_eqn_mat = spdiagm(0 => Float64.(valid_eqn))
     valid_var_mat = spdiagm(0 => Float64.(valid_var))
 
-    # Check squareness (following subsystems.py:551-552)
+    # Check squareness (following subsystems:551-552)
     n_valid_eqn = sum(valid_eqn)
     n_valid_var = sum(valid_var)
     if n_valid_eqn != n_valid_var
         @warn "Non-square system: group=$(sp.group), valid_eqn=$n_valid_eqn, valid_var=$n_valid_var"
     end
 
-    # Build permutation matrices (following subsystems.py:554-556)
+    # Build permutation matrices (following subsystems:554-556)
     left_perm = left_permutation(sp, eqns, bc_top, interleave_components)
     right_perm = right_permutation(sp, vars, tau_left, interleave_components)
 
-    # Build preconditioners (following subsystems.py:559-563)
+    # Build preconditioners (following subsystems:559-563)
     sp.pre_left = drop_empty_rows(left_perm * valid_eqn_mat)
     sp.pre_left_pinv = sparse(sp.pre_left')
     sp.pre_right_pinv = drop_empty_rows(right_perm * valid_var_mat)
     sp.pre_right = sparse(sp.pre_right_pinv')
 
-    # Precondition matrices (following subsystems.py:569-571)
+    # Precondition matrices (following subsystems:569-571)
     for (name, matrix) in matrices
         matrices[name] = sp.pre_left * matrix * sp.pre_right
     end
 
-    # Store minimal CSR matrices (following subsystems.py:573-575)
+    # Store minimal CSR matrices (following subsystems:573-575)
     sp.matrices = matrices
     if haskey(matrices, "L")
         sp.L_min = matrices["L"]
@@ -667,7 +667,7 @@ function build_matrices!(sp::Subproblem, names, solver)
         sp.M_min = matrices["M"]
     end
 
-    # Store expanded matrices for IMEX if requested (following subsystems.py:577-588)
+    # Store expanded matrices for IMEX if requested (following subsystems:577-588)
     if length(matrices) > 1 && store_expanded
         sp.LHS = zeros_with_pattern(values(matrices)...)
         for (name, matrix) in matrices
@@ -741,7 +741,7 @@ is_zero_expression(x::Number) = x == 0
     compute_update_rank(sp, eqns, eqn_conditions, eqn_sizes)
 
 Compute update rank for Woodbury formula.
-Following subsystems.py:591-595.
+Following subsystems:591-595.
 """
 function compute_update_rank(sp::Subproblem, eqns, eqn_conditions, eqn_sizes)
     # Group equation DOFs by dimension
@@ -770,7 +770,7 @@ end
     left_permutation(sp, equations, bc_top, interleave_components)
 
 Left permutation acting on equations.
-Following subsystems.py:614-675.
+Following subsystems:614-675.
 
 bc_top determines if lower-dimensional equations are placed at the top or bottom.
 
@@ -870,7 +870,7 @@ end
     right_permutation(sp, variables, tau_left, interleave_components)
 
 Right permutation acting on variables.
-Following subsystems.py:678-739.
+Following subsystems:678-739.
 
 tau_left determines if lower-dimensional variables are placed at the left or right.
 
@@ -986,7 +986,7 @@ end
     perm_matrix(indices, n)
 
 Create permutation matrix from index array.
-Following tools/array.py perm_matrix.
+Following tools/array perm_matrix.
 """
 function perm_matrix(indices::Vector{Int}, n::Int)
     m = length(indices)
@@ -1015,7 +1015,7 @@ end
     drop_empty_rows(A)
 
 Remove empty rows from sparse matrix.
-Following tools/array.py drop_empty_rows.
+Following tools/array drop_empty_rows.
 """
 function drop_empty_rows(A::SparseMatrixCSC)
     row_sums = vec(sum(abs.(A), dims=2))
@@ -1030,7 +1030,7 @@ end
     zeros_with_pattern(matrices...)
 
 Create zero matrix with combined sparsity pattern.
-Following tools/array.py zeros_with_pattern.
+Following tools/array zeros_with_pattern.
 """
 function zeros_with_pattern(matrices...)
     if isempty(matrices)
@@ -1064,7 +1064,7 @@ end
     expand_pattern(A, B)
 
 Expand A to have same sparsity pattern as B.
-Following tools/array.py expand_pattern.
+Following tools/array expand_pattern.
 """
 function expand_pattern(A::SparseMatrixCSC, B::SparseMatrixCSC)
     # Get pattern of B
@@ -1085,7 +1085,7 @@ end
     apply_sparse(A, x; axis=0, out=nothing)
 
 Apply sparse matrix along specified axis.
-Following tools/array.py apply_sparse.
+Following tools/array apply_sparse.
 """
 function apply_sparse(A::SparseMatrixCSC, x::AbstractArray; axis::Int=1, out::Union{Nothing, AbstractArray}=nothing)
     if axis == 1
@@ -1111,7 +1111,7 @@ end
     gather_inputs(sp::Subproblem, fields)
 
 Gather and precondition subproblem data from input-like field list.
-Following subsystems.py:340-350.
+Following subsystems:340-350.
 """
 function gather_inputs(sp::Subproblem, fields::Vector{<:ScalarField})
     # Gather from subsystems
@@ -1129,7 +1129,7 @@ end
     scatter_inputs(sp::Subproblem, data, fields)
 
 Precondition and scatter subproblem data out to input-like field list.
-Following subsystems.py:364-371.
+Following subsystems:364-371.
 """
 function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector{<:ScalarField})
     # Undo right preconditioner inverse to expand inputs
@@ -1162,7 +1162,7 @@ NCCData() = NCCData(nothing, 1e-6, nothing)
     build_ncc_matrix(ncc_data, sp, arg_domain, out_domain; ncc_cutoff=1e-6, max_ncc_terms=nothing)
 
 Build NCC matrix for Cartesian coordinates.
-Following arithmetic.py:418-444.
+Following arithmetic:418-444.
 """
 function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_domain;
                           ncc_cutoff::Float64=1e-6, max_ncc_terms::Union{Nothing, Int}=nothing)
@@ -1204,7 +1204,7 @@ end
     cartesian_mode_matrix(sp_shape, arg_domain, out_domain, ncc_mode)
 
 Build mode matrix for Cartesian NCC.
-Following arithmetic.py:446-460.
+Following arithmetic:446-460.
 """
 function cartesian_mode_matrix(sp_shape, arg_domain, out_domain, ncc_mode::Tuple)
     # Build Kronecker product of 1D mode matrices

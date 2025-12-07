@@ -545,7 +545,7 @@ end
 function local_grids(dist::Distributor, bases::Vararg{Basis}; scales=nothing)
     """
     Return local coordinate grids for the given bases.
-    Following implementation in distributor.py:294
+    Following implementation in distributor:294
     """
     scales = remedy_scales(dist, scales, length(bases))
     grids = []
@@ -580,7 +580,7 @@ end
 function remedy_scales(dist::Distributor, scales)
     """
     Remedy different scale inputs.
-    Following implementation in distributor.py:188-197
+    Following implementation in distributor:188-197
     """
     if scales === nothing
         scales = 1.0
@@ -600,13 +600,10 @@ function remedy_scales(dist::Distributor, scales)
 end
 
 function get_axis(dist::Distributor, coord::Coordinate)
-    """
-    Get axis index for a coordinate.
-    Following implementation in distributor.py:202
-    """
+    """Get axis index for a coordinate."""
     for (i, c) in enumerate(dist.coords)
         if c.coordsys == coord.coordsys && c.name == coord.name
-            return i - 1  # 0-indexed like Python
+            return i - 1  # 0-indexed
         end
     end
     throw(ArgumentError("Coordinate $(coord.name) not found in distributor"))
@@ -618,15 +615,12 @@ function get_axis(dist::Distributor, coordsys::CoordinateSystem)
 end
 
 function get_basis_axis(dist::Distributor, basis::Basis)
-    """
-    Get axis index for a basis.
-    Following implementation in distributor.py:207
-    """
+    """Get axis index for a basis."""
     # Find the coordinate that matches this basis's element_label
     coord_name = basis.meta.element_label
     for (i, c) in enumerate(dist.coords)
         if c.name == coord_name
-            return i - 1  # 0-indexed like Python
+            return i - 1  # 0-indexed
         end
     end
     # Fallback: use the first coordinate of the basis's coordinate system
@@ -637,7 +631,7 @@ end
 function first_axis(dist::Distributor, basis::Basis)
     """
     Get first axis index for a basis.
-    Following implementation in distributor.py:210
+    Following implementation in distributor:210
     """
     return get_basis_axis(dist, basis)
 end
@@ -645,7 +639,7 @@ end
 function last_axis(dist::Distributor, basis::Basis)
     """
     Get last axis index for a basis.
-    Following implementation in distributor.py:213
+    Following implementation in distributor:213
     """
     return first_axis(dist, basis) + basis.meta.dim - 1
 end

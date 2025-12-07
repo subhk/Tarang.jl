@@ -337,7 +337,7 @@ end
 """
 Reconstruction merge: reconstruct global field from distributed data following Tarang patterns.
 This reconstructs the global field using spatial domain decomposition information from each processor.
-Based on Tarang post.py:merge_data() function (lines 317-342).
+Based on Tarang post:merge_data() function (lines 317-342).
 """
 function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, var_name::String, file_info::Dict)
     merger.verbose && println("    Reconstructing global field for $var_name")
@@ -467,7 +467,7 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
         count_indices = proc_info["count"]
         
         if start_indices !== nothing && count_indices !== nothing
-            # Use Tarang-style spatial slicing (post.py:339)
+            # Use Tarang-style spatial slicing (post:339)
             try
                 # Skip time dimension (index 1), apply to spatial dimensions
                 spatial_slices = []
@@ -542,7 +542,7 @@ patterns that require specialized merging strategies:
 - Coefficient space: Often distributed in spectral mode dimensions
 - Mixed layouts: May require transpose-like operations during merging
 
-Based on Tarang distributor.py concepts and post.py merge patterns.
+Based on Tarang distributor concepts and post merge patterns.
 """
 function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String, var_name::String, file_info::Dict)
     merger.verbose && println("    Domain decomposition merge for $var_name")
@@ -561,7 +561,7 @@ function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String
             # Read variable data
             data = ncread(file, var_name)
             
-            # Read layout information (following Tarang post.py:281)
+            # Read layout information (following Tarang post:281)
             layout_info = Dict{String, Any}()
             try
                 info = ncinfo(file)
@@ -753,7 +753,7 @@ function merge_mixed_layout_field!(processor_data, var_attrs, output_file, var_n
     Merge field with mixed layout (some dimensions in grid space, others in coefficient space).
     Following Tarang patterns, mixed layouts are transformed to pure layouts before merging.
     
-    Based on Tarang post.py and field.py - mixed layout fields cannot be directly merged
+    Based on Tarang post and field - mixed layout fields cannot be directly merged
     and must be transformed to either pure grid space or pure coefficient space first.
     """
     merger.verbose && println("        Merging mixed layout field")
@@ -1191,7 +1191,7 @@ function reconstruct_spectral_modes(processor_data, data_type, merger)
     """
     Reconstruct spectral coefficient field from distributed modes.
     
-    Based on Tarang distributor.py Layout class and post.py merge_data function.
+    Based on Tarang distributor Layout class and post merge_data function.
     Handles block distribution of spectral coefficients across processors.
     """
     merger.verbose && println("          Reconstructing spectral coefficient field")

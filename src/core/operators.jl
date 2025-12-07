@@ -282,7 +282,7 @@ function outer(left::Operand, right::Operand)
 
     Returns a rank-2 tensor field T where T_ij = u_i * v_j.
 
-    Following operators.py pattern for tensor construction.
+    Following operators pattern for tensor construction.
 
     Arguments:
     - left: First vector field (u)
@@ -303,7 +303,7 @@ function advective_cfl(velocity::Operand, coords::CoordinateSystem)
 
     This is useful for adaptive timestepping where Δt < 1/max(f).
 
-    Following operators.py:4342 AdvectiveCFL pattern.
+    Following operators:4342 AdvectiveCFL pattern.
 
     Arguments:
     - velocity: Vector field representing fluid velocity
@@ -867,7 +867,7 @@ end
 function apply_matrix_along_axis(matrix::AbstractMatrix, array::AbstractArray, axis::Int; out=nothing)
     """
     Apply matrix along any axis of an array.
-    Following array.py:77-82 and apply_dense:104-126 implementation.
+    Following array:77-82 and apply_dense:104-126 implementation.
     """
     if issparse(matrix)
         return apply_sparse_along_axis(matrix, array, axis; out=out)
@@ -879,7 +879,7 @@ end
 function apply_dense_along_axis(matrix::AbstractMatrix, array::AbstractArray, axis::Int; out=nothing)
     """
     Apply dense matrix along any axis of an array .
-    Following apply_dense implementation in array.py:104-126.
+    Following apply_dense implementation in array:104-126.
     """
     ndim = ndims(array)
     
@@ -931,7 +931,7 @@ end
 function apply_sparse_along_axis(matrix::SparseMatrixCSC, array::AbstractArray, axis::Int; out=nothing, check_shapes=false)
     """
     Apply sparse matrix along any axis of an array.
-    Following apply_sparse implementation in array.py:171-203.
+    Following apply_sparse implementation in array:171-203.
     Note: Uses SparseMatrixCSC (Julia's sparse format) instead of CSR.
     """
     ndim = ndims(array)
@@ -1315,14 +1315,14 @@ struct MultiplyOperator <: Operator
 end
 
 # ============================================================================
-# Expression matrices for matrix assembly (following operators.py)
+# Expression matrices for matrix assembly (following operators)
 # ============================================================================
 
 """
     expression_matrices(op::Operator, sp, vars; kwargs...)
 
 Build expression matrices for operator applied to each variable.
-Following operators.py expression_matrices method.
+Following operators expression_matrices method.
 
 Returns Dict mapping variables to sparse matrices.
 """
@@ -1335,7 +1335,7 @@ end
     expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
 
 Time derivative matrices: returns M matrix contribution.
-Following operators.py TimeDerivative.expression_matrices.
+Following operators TimeDerivative.expression_matrices.
 """
 function expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
     operand = op.operand
@@ -1356,7 +1356,7 @@ end
     expression_matrices(op::Differentiate, sp, vars; kwargs...)
 
 Spatial differentiation matrices.
-Following operators.py Differentiate.expression_matrices.
+Following operators Differentiate.expression_matrices.
 """
 function expression_matrices(op::Differentiate, sp, vars; kwargs...)
     operand = op.operand
@@ -1381,7 +1381,7 @@ end
     expression_matrices(op::Laplacian, sp, vars; kwargs...)
 
 Laplacian matrices: sum of second derivatives.
-Following operators.py Laplacian.expression_matrices.
+Following operators Laplacian.expression_matrices.
 """
 function expression_matrices(op::Laplacian, sp, vars; kwargs...)
     operand = op.operand
@@ -1421,7 +1421,7 @@ end
     expression_matrices(op::Gradient, sp, vars; kwargs...)
 
 Gradient matrices for scalar -> vector.
-Following operators.py Gradient.expression_matrices.
+Following operators Gradient.expression_matrices.
 """
 function expression_matrices(op::Gradient, sp, vars; kwargs...)
     operand = op.operand
@@ -1459,7 +1459,7 @@ end
     expression_matrices(op::Divergence, sp, vars; kwargs...)
 
 Divergence matrices for vector -> scalar.
-Following operators.py Divergence.expression_matrices.
+Following operators Divergence.expression_matrices.
 """
 function expression_matrices(op::Divergence, sp, vars; kwargs...)
     operand = op.operand
@@ -1503,7 +1503,7 @@ end
     expression_matrices(op::Lift, sp, vars; kwargs...)
 
 Lift matrices for boundary conditions (tau method).
-Following operators.py Lift.expression_matrices.
+Following operators Lift.expression_matrices.
 """
 function expression_matrices(op::Lift, sp, vars; kwargs...)
     operand = op.operand
@@ -1529,7 +1529,7 @@ end
     expression_matrices(op::Convert, sp, vars; kwargs...)
 
 Basis conversion matrices.
-Following operators.py Convert.expression_matrices.
+Following operators Convert.expression_matrices.
 """
 function expression_matrices(op::Convert, sp, vars; kwargs...)
     operand = op.operand
@@ -1698,7 +1698,7 @@ end
     build_lift_matrix(var, basis, n; kwargs...)
 
 Build lifting matrix for tau method boundary conditions.
-Following the standard basis.py LiftJacobi implementation (lines 790-814).
+Following the standard basis LiftJacobi implementation (lines 790-814).
 
 the standard convention:
 - n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
@@ -1812,14 +1812,14 @@ end
 
 # ============================================================================
 # Utility Operator Evaluation Functions
-# Following operators.py implementation
+# Following operators implementation
 # ============================================================================
 
 """
     evaluate_interpolate(interp_op::Interpolate, layout::Symbol=:g)
 
 Evaluate interpolation operator at a specific position along a coordinate.
-Following operators.py Interpolate implementation.
+Following operators Interpolate implementation.
 
 For Fourier bases: uses spectral interpolation (sum of modes)
 For Jacobi bases: uses barycentric interpolation or Clenshaw algorithm
@@ -2101,7 +2101,7 @@ end
     evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
 
 Evaluate integration operator over specified coordinate(s).
-Following operators.py Integrate implementation.
+Following operators Integrate implementation.
 
 Uses appropriate quadrature weights for each basis type:
 - Fourier: trapezoidal rule (uniform weights)
@@ -2399,7 +2399,7 @@ end
     evaluate_lift(lift_op::Lift, layout::Symbol=:g)
 
 Evaluate lifting operator for tau method boundary conditions.
-Following the standard basis.py LiftJacobi implementation (lines 790-814).
+Following the standard basis LiftJacobi implementation (lines 790-814).
 
 the standard convention:
 - n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
@@ -2482,7 +2482,7 @@ end
     evaluate_convert(conv_op::Convert, layout::Symbol=:g)
 
 Evaluate basis conversion operator.
-Following operators.py Convert implementation.
+Following operators Convert implementation.
 
 Converts field from one basis representation to another using
 spectral conversion matrices.
@@ -3236,7 +3236,7 @@ where u, v, w are velocity components and Δx, Δy, Δz are local grid spacings.
 
 This field can be used for adaptive timestepping: Δt < 1/max(f).
 
-Following operators.py:4342-4411 AdvectiveCFL pattern.
+Following operators:4342-4411 AdvectiveCFL pattern.
 
 Arguments:
 - cfl_op: AdvectiveCFL operator containing velocity field and coordinate system
@@ -3305,7 +3305,7 @@ Compute local grid spacing for a basis.
 For Fourier bases: uniform spacing Δx = L/N
 For Chebyshev bases: variable spacing based on Chebyshev nodes
 
-Following basis.py CartesianAdvectiveCFL.grid_spacing pattern.
+Following basis CartesianAdvectiveCFL.grid_spacing pattern.
 """
 function compute_grid_spacing(basis::Basis, dist, axis::Int)
     if basis === nothing

@@ -500,8 +500,7 @@ end
 # Utility functions
 function fields_to_vector(fields::Vector{ScalarField})
     """
-    Convert field array to solution vector following Tarang gather pattern.
-    Following subsystems.py gather_inputs (subsystems.py:340-350).
+    Convert field array to solution vector following gather pattern.
     """
     
     # Ensure all fields are in coefficient space (following Tarang pattern)
@@ -548,8 +547,7 @@ end
 
 function copy_solution_to_fields!(fields::Vector{ScalarField}, solution::Vector{ComplexF64})
     """
-    Copy solution vector back to fields following Tarang scatter pattern.
-    Following subsystems.py scatter_inputs (subsystems.py:364-371).
+    Copy solution vector back to fields following scatter pattern.
     """
     
     offset = 1
@@ -676,7 +674,7 @@ end
 function get_basis_size(basis)
     """Get the size (number of modes) for a basis following Tarang patterns"""
     
-    # Following basis.py structure, bases store size information in different ways:
+    # Following basis structure, bases store size information in different ways:
     # 1. Most common: meta.size field (for Julia BasisMeta structure)
     # 2. Direct size field (for direct Tarang translation)  
     # 3. Shape tuple (for multidimensional bases)
@@ -972,7 +970,7 @@ function build_operator_jacobian_block(expr, variables, perturbations)
     operator = expr["operator"]
     operands = expr["operands"]
     
-    # Following arithmetic.py line 189-193 pattern: iteratively add matrices
+    # Following arithmetic line 189-193 pattern: iteratively add matrices
     if operator == "Add"
         # Addition: sum of operand Jacobians
         result_matrix = nothing

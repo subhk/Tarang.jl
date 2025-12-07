@@ -194,7 +194,7 @@ function setup_chebyshev_transform!(dist::Distributor, basis::ChebyshevT, axis::
     """
     Setup Chebyshev transform following Tarang FastChebyshevTransform implementation.
 
-    Based on Tarang transforms.py:
+    Based on Tarang transforms:
     - Uses DCT-II for forward transform (grid to coefficients)
     - Uses DCT-III for backward transform (coefficients to grid)
     - Proper scaling factors for unit-amplitude normalization
@@ -278,9 +278,8 @@ end
 
 function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int)
     """
-    Setup Legendre transform following Tarang JacobiMMT implementation.
+    Setup Legendre transform using JacobiMMT implementation.
 
-    Based on Tarang transforms.py JacobiMMT and jacobi.py:
     - Uses Gauss-Legendre quadrature (Jacobi with a=0, b=0)
     - Forward transform: integration using quadrature weights
     - Backward transform: polynomial evaluation at quadrature points
@@ -350,7 +349,7 @@ function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int
 end
 
 
-# Helper functions for Legendre transform following Tarang jacobi.py patterns
+# Helper functions for Legendre transform
 function compute_legendre_quadrature(N::Int)
     """
     Compute Gauss-Legendre quadrature points and weights manually.
@@ -820,7 +819,7 @@ function dealias!(field::ScalarField, scales::Union{Real, Vector{Real}})
     """
     Apply dealiasing to field following Tarang field.change_scales and low_pass_filter implementation.
     
-    Based on Tarang field.py:
+    Based on Tarang field:
     - Ensures field is in coefficient space for mode truncation
     - Applies scale-based truncation for each basis type
     - Handles multi-dimensional tensor product bases properly
