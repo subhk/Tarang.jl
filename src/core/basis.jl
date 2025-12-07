@@ -933,47 +933,13 @@ function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float
         return coeffs
     end
 
-    # Chebyshev T case (a=b=-1/2): exact formula
-    # T_m * T_n = 0.5*(T_{m+n} + T_{|m-n|})
-    if abs(a + 0.5) < 1e-10 && abs(b + 0.5) < 1e-10
-        k1 = m + n
-        k2 = abs(m - n)
-        if k1 < N_max
-            coeffs[k1 + 1] = 0.5
-        end
-        if k2 < N_max
-            coeffs[k2 + 1] += 0.5
-        end
-        return coeffs
-    end
-
-    # Chebyshev U case (a=b=1/2): exact formula
-    # U_m * U_n = sum_{k=|m-n|, step 2}^{m+n} U_k
-    if abs(a - 0.5) < 1e-10 && abs(b - 0.5) < 1e-10
-        for k in k_min:2:k_max
-            if k < N_max
-                coeffs[k + 1] = 1.0
-            end
-        end
-        return coeffs
-    end
-
-    # Legendre case (a=b=0): use Clebsch-Gordan coefficients
-    if abs(a) < 1e-10 && abs(b) < 1e-10
-        for k in k_min:2:k_max
-            if k < N_max
-                c = _legendre_linearization_coeff(m, n, k)
-                coeffs[k + 1] = c
-            end
-        end
-        return coeffs
-    end
-
-    # General Jacobi case: use Dougall's formula (linearization of Jacobi polynomials)
+    # General Jacobi case (includes all special cases: Chebyshev, Legendre, etc.):
+    # Note: The Chebyshev T (a=b=-1/2) and U (a=b=1/2) formulas for product
+    # linearization use the normalized Chebyshev polynomials T_n and U_n,
+    # not the standard Jacobi polynomials P_n^{(a,b)}. Since this function
+    # computes coefficients for standard Jacobi polynomials, we use numerical
+    # quadrature for all cases to ensure correctness.
     # P_m^{(a,b)} * P_n^{(a,b)} = sum_k A_{m,n,k}^{(a,b)} P_k^{(a,b)}
-    #
-    # The coefficients are given by the Dougall-Ramanujan identity.
-    # For the general case, we use numerical evaluation via Clenshaw algorithm.
 
     # Build Jacobi matrix J (tridiagonal) for the recurrence relation
     # x * P_n^{(a,b)} = A_n * P_{n-1} + B_n * P_n + C_n * P_{n+1}
