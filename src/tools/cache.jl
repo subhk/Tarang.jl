@@ -402,13 +402,33 @@ function release_workspace!(wm::WorkspaceManager, buf::Array{ComplexF64})
     end
 end
 
-# No-op for views or non-pooled arrays
+"""
+    release_workspace!(wm::WorkspaceManager, buf::SubArray)
+
+No-op for SubArray views. Views don't own their memory - the parent array
+is responsible for memory management. This method exists to allow safe
+calling of `release_workspace!` on any array type without type checking.
+"""
 function release_workspace!(wm::WorkspaceManager, buf::SubArray)
-    # Views are handled by their parent array
+    # Views are handled by their parent array - nothing to do
+    return nothing
 end
 
+"""
+    release_workspace!(wm::WorkspaceManager, buf::AbstractArray)
+
+Fallback no-op for array types not managed by the workspace pool.
+
+The workspace manager only tracks `Array{Float64}` and `Array{ComplexF64}`
+buffers. Other array types (e.g., GPU arrays, sparse arrays, special array
+wrappers) are not pooled and don't need explicit release.
+
+This method exists to allow safe calling of `release_workspace!` on any
+array type without runtime type checking at call sites.
+"""
 function release_workspace!(wm::WorkspaceManager, buf::AbstractArray)
-    # Other array types not managed
+    # Other array types not managed by this pool - nothing to do
+    return nothing
 end
 
 """
