@@ -326,11 +326,106 @@ function local_to_global_index(dist::Distributor, local_idx::Int, global_size::I
     return start_idx + local_idx - 1
 end
 
+"""
+    get_global_size(dist::Distributor, dim::Int)
+
+Get the global size in a dimension. This method requires domain/basis information
+to determine actual sizes. Without that context, it returns a conservative default.
+
+For accurate global sizes, use one of the following methods instead:
+- `get_global_size(dist, basis, dim)` - for a specific basis
+- `get_global_size(dist, domain, dim)` - for a specific domain
+- `get_global_grid_shape(dist, domain; scales=...)` - for full grid shape
+
+# Arguments
+- `dist`: The Distributor
+- `dim`: Dimension index (1-based)
+
+# Returns
+- The global size in the specified dimension, or a default value if unknown
+"""
 function get_global_size(dist::Distributor, dim::Int)
-    """Get the global size in a dimension (placeholder - needs domain info)."""
-    # This would typically be obtained from the domain/basis
-    # For now, return a default
+    # Without domain/basis context, we cannot determine the actual global size.
+    # Check if distributor has cached layout information that might help.
+    if !isempty(dist.layouts)
+        # Try to get size from cached layouts
+        for (key, layout) in dist.layouts
+            if hasfield(typeof(layout), :global_shape) && layout.global_shape !== nothing
+                if dim <= length(layout.global_shape)
+                    return layout.global_shape[dim]
+                end
+            end
+        end
+    end
+
+    # Fallback: Check if pencil_cache has any entries with shape info
+    if !isempty(dist.pencil_cache)
+        for (shape_key, pencil) in dist.pencil_cache
+            if isa(shape_key, Tuple) && dim <= length(shape_key)
+                return shape_key[dim]
+            end
+        end
+    end
+
+    @warn "get_global_size called without domain context; returning default. " *
+          "Use get_global_size(dist, basis, dim) or get_global_size(dist, domain, dim) for accurate sizes." maxlog=1
     return 64
+end
+
+"""
+    get_global_size(dist::Distributor, basis::Basis, dim::Int=1)
+
+Get the global size for a specific basis dimension.
+
+# Arguments
+- `dist`: The Distributor (unused but kept for API consistency)
+- `basis`: The Basis to query
+- `dim`: Dimension within the basis (default 1, as most bases are 1D)
+
+# Returns
+- The global size (number of grid/coefficient points) for this basis
+"""
+function get_global_size(dist::Distributor, basis::Basis, dim::Int=1)
+    if dim != 1
+        @warn "Most bases are 1D; dim=$dim requested but using basis size"
+    end
+    return basis.meta.size
+end
+
+"""
+    get_global_size(dist::Distributor, domain::Domain, dim::Int)
+
+Get the global size in a specific dimension of the domain.
+
+# Arguments
+- `dist`: The Distributor (unused but kept for API consistency)
+- `domain`: The Domain containing the bases
+- `dim`: Dimension index (1-based)
+
+# Returns
+- The global size in the specified dimension
+"""
+function get_global_size(dist::Distributor, domain::Domain, dim::Int)
+    if dim < 1 || dim > length(domain.bases)
+        throw(BoundsError("Dimension $dim out of range for domain with $(length(domain.bases)) dimensions"))
+    end
+    return domain.bases[dim].meta.size
+end
+
+"""
+    get_global_sizes(dist::Distributor, domain::Domain)
+
+Get all global sizes for a domain as a tuple.
+
+# Arguments
+- `dist`: The Distributor
+- `domain`: The Domain containing the bases
+
+# Returns
+- Tuple of global sizes for each dimension
+"""
+function get_global_sizes(dist::Distributor, domain::Domain)
+    return tuple([basis.meta.size for basis in domain.bases]...)
 end
 
 function preset_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple{Vararg{Real}}, Nothing})

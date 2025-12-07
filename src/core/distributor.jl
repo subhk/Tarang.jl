@@ -1262,15 +1262,128 @@ end
 # Memory Management for Parallel Operations
 # ============================================================================
 
+# Module-level cache for communication buffers, keyed by (distributor_id, shape, dim)
+const _COMM_BUFFER_CACHE = Dict{UInt64, Dict{Tuple, NamedTuple}}()
+
+"""
+    _get_distributor_id(dist::Distributor)
+
+Get a unique identifier for a distributor instance for buffer caching.
+"""
+function _get_distributor_id(dist::Distributor)
+    return objectid(dist)
+end
+
 """
     preallocate_communication_buffers!(dist::Distributor, shapes::Vector{Tuple})
 
 Preallocate communication buffers for common operations to avoid runtime allocation.
+
+For each shape, allocates send/receive buffers for neighbor exchange operations
+in all mesh dimensions. Buffers are cached and reused across multiple calls.
+
+# Arguments
+- `dist`: The Distributor managing parallel decomposition
+- `shapes`: Vector of array shapes that will be communicated
+
+# Example
+```julia
+# Preallocate buffers for 3D field data
+shapes = [(64, 64, 1), (64, 1, 64), (1, 64, 64)]  # Boundary slices
+preallocate_communication_buffers!(dist, shapes)
+```
 """
 function preallocate_communication_buffers!(dist::Distributor, shapes::Vector{Tuple})
-    # This would allocate send/recv buffers for neighbor exchange, etc.
-    # Implementation depends on specific communication patterns used
-    @debug "Preallocating communication buffers for $(length(shapes)) shapes"
+    if dist.size == 1
+        @debug "Serial mode: no communication buffers needed"
+        return
+    end
+
+    dist_id = _get_distributor_id(dist)
+
+    # Initialize cache for this distributor if needed
+    if !haskey(_COMM_BUFFER_CACHE, dist_id)
+        _COMM_BUFFER_CACHE[dist_id] = Dict{Tuple, NamedTuple}()
+    end
+
+    buffer_cache = _COMM_BUFFER_CACHE[dist_id]
+    n_dims = dist.mesh !== nothing ? length(dist.mesh) : dist.dim
+
+    for shape in shapes
+        for dim in 1:n_dims
+            cache_key = (shape, dim)
+
+            if haskey(buffer_cache, cache_key)
+                continue  # Already allocated
+            end
+
+            # Allocate send/receive buffers for this shape and dimension
+            # Buffer type matches distributor dtype (complex for spectral methods)
+            T = dist.dtype <: Real ? Complex{dist.dtype} : dist.dtype
+
+            send_left = zeros(T, shape...)
+            send_right = zeros(T, shape...)
+            recv_left = zeros(T, shape...)
+            recv_right = zeros(T, shape...)
+
+            buffer_cache[cache_key] = (
+                send_left = send_left,
+                send_right = send_right,
+                recv_left = recv_left,
+                recv_right = recv_right
+            )
+        end
+    end
+
+    @debug "Preallocated communication buffers" n_shapes=length(shapes) n_dims=n_dims total_buffers=length(buffer_cache)
+end
+
+"""
+    get_communication_buffers(dist::Distributor, shape::Tuple, dim::Int)
+
+Retrieve preallocated communication buffers for a given shape and dimension.
+Returns a NamedTuple with (send_left, send_right, recv_left, recv_right).
+
+If buffers haven't been preallocated, allocates them on demand.
+"""
+function get_communication_buffers(dist::Distributor, shape::Tuple, dim::Int)
+    if dist.size == 1
+        # Return empty buffers for serial mode
+        T = dist.dtype <: Real ? Complex{dist.dtype} : dist.dtype
+        empty = zeros(T, 0)
+        return (send_left=empty, send_right=empty, recv_left=empty, recv_right=empty)
+    end
+
+    dist_id = _get_distributor_id(dist)
+    cache_key = (shape, dim)
+
+    # Initialize cache if needed
+    if !haskey(_COMM_BUFFER_CACHE, dist_id)
+        _COMM_BUFFER_CACHE[dist_id] = Dict{Tuple, NamedTuple}()
+    end
+
+    buffer_cache = _COMM_BUFFER_CACHE[dist_id]
+
+    # Allocate on demand if not preallocated
+    if !haskey(buffer_cache, cache_key)
+        preallocate_communication_buffers!(dist, [shape])
+    end
+
+    return buffer_cache[cache_key]
+end
+
+"""
+    clear_communication_buffers!(dist::Distributor)
+
+Clear all preallocated communication buffers for a distributor.
+Useful for freeing memory when buffers are no longer needed.
+"""
+function clear_communication_buffers!(dist::Distributor)
+    dist_id = _get_distributor_id(dist)
+    if haskey(_COMM_BUFFER_CACHE, dist_id)
+        delete!(_COMM_BUFFER_CACHE, dist_id)
+        @debug "Cleared communication buffers for distributor"
+    end
 end
 
 """
