@@ -19,6 +19,7 @@ Key features implemented:
 using LinearAlgebra
 using SparseArrays
 using FFTW
+using SpecialFunctions: gamma
 
 # ============================================================================
 # Abstract types for basis hierarchy
@@ -1383,10 +1384,364 @@ function _chebyshev_t_to_u_matrix(N::Int)
     return sparse(I_list, J_list, V_list, N, N)
 end
 
-"""General Jacobi conversion using recurrence."""
+"""
+    _general_jacobi_conversion(N, a0, b0, a1, b1)
+
+General Jacobi polynomial conversion matrix from P_n^{(a0,b0)} to P_n^{(a1,b1)}.
+
+Uses the connection coefficient formula. For integer parameter shifts, the conversion
+matrix is sparse (banded). For general shifts, we use quadrature-based projection.
+
+The conversion is computed via:
+    P_n^{(a0,b0)}(x) = Σ_m C_{nm} P_m^{(a1,b1)}(x)
+
+where C_{nm} are the connection coefficients.
+
+Reference:
+- NIST DLMF 18.9 (Connection formulas)
+- Dedalus Project jacobi.py
+"""
 function _general_jacobi_conversion(N::Int, a0::Float64, b0::Float64, a1::Float64, b1::Float64)
-    # Simplified: identity with scaling
-    return sparse(I, N, N)
+    # Check if parameters are the same (identity conversion)
+    if abs(a0 - a1) < 1e-12 && abs(b0 - b1) < 1e-12
+        return sparse(I, N, N)
+    end
+
+    # Check for integer shifts - these have sparse representations
+    da = a1 - a0
+    db = b1 - b0
+
+    # Special case: shift by integer in both parameters
+    if abs(da - round(da)) < 1e-12 && abs(db - round(db)) < 1e-12
+        da_int = Int(round(da))
+        db_int = Int(round(db))
+
+        # Build conversion through successive single-step shifts
+        if da_int >= 0 && db_int >= 0
+            return _jacobi_conversion_positive_shift(N, a0, b0, da_int, db_int)
+        elseif da_int <= 0 && db_int <= 0
+            return _jacobi_conversion_negative_shift(N, a0, b0, -da_int, -db_int)
+        end
+    end
+
+    # General case: use quadrature-based projection
+    # Evaluate input basis at output basis quadrature points, then project
+    return _jacobi_conversion_quadrature(N, a0, b0, a1, b1)
+end
+
+"""
+Build conversion for positive integer shifts in (a,b) parameters.
+Uses the recurrence: P_n^{(a,b)} can be written in terms of P_m^{(a+1,b)} or P_m^{(a,b+1)}.
+"""
+function _jacobi_conversion_positive_shift(N::Int, a0::Float64, b0::Float64, da::Int, db::Int)
+    result = sparse(I, N, N)
+
+    # Shift a first, then b
+    a_curr, b_curr = a0, b0
+
+    for _ in 1:da
+        step = _jacobi_a_shift_up_matrix(N, a_curr, b_curr)
+        result = step * result
+        a_curr += 1.0
+    end
+
+    for _ in 1:db
+        step = _jacobi_b_shift_up_matrix(N, a_curr, b_curr)
+        result = step * result
+        b_curr += 1.0
+    end
+
+    return result
+end
+
+"""
+Build conversion for negative integer shifts in (a,b) parameters.
+"""
+function _jacobi_conversion_negative_shift(N::Int, a0::Float64, b0::Float64, da::Int, db::Int)
+    result = sparse(I, N, N)
+
+    a_curr, b_curr = a0, b0
+
+    for _ in 1:da
+        step = _jacobi_a_shift_down_matrix(N, a_curr, b_curr)
+        result = step * result
+        a_curr -= 1.0
+    end
+
+    for _ in 1:db
+        step = _jacobi_b_shift_down_matrix(N, a_curr, b_curr)
+        result = step * result
+        b_curr -= 1.0
+    end
+
+    return result
+end
+
+"""
+Single step conversion: P_n^{(a,b)} -> P_m^{(a+1,b)}
+
+Uses the recurrence relation (DLMF 18.9.5):
+P_n^{(a,b)}(x) = c1 * P_n^{(a+1,b)}(x) + c2 * P_{n-1}^{(a+1,b)}(x)
+
+where:
+c1 = (n + a + b + 1) / (2n + a + b + 1)
+c2 = (n + b) / (2n + a + b + 1)
+"""
+function _jacobi_a_shift_up_matrix(N::Int, a::Float64, b::Float64)
+    I_list = Int[]
+    J_list = Int[]
+    V_list = Float64[]
+
+    for n in 0:(N-1)
+        denom = 2*n + a + b + 1
+
+        if abs(denom) > 1e-14
+            c1 = (n + a + b + 1) / denom
+            c2 = (n + b) / denom
+
+            # P_n^{(a,b)} contributes to P_n^{(a+1,b)} with coefficient c1
+            push!(I_list, n + 1); push!(J_list, n + 1); push!(V_list, c1)
+
+            # P_n^{(a,b)} contributes to P_{n-1}^{(a+1,b)} with coefficient c2
+            if n > 0
+                push!(I_list, n); push!(J_list, n + 1); push!(V_list, c2)
+            end
+        else
+            # Degenerate case: identity
+            push!(I_list, n + 1); push!(J_list, n + 1); push!(V_list, 1.0)
+        end
+    end
+
+    return sparse(I_list, J_list, V_list, N, N)
+end
+
+"""
+Single step conversion: P_n^{(a,b)} -> P_m^{(a,b+1)}
+
+Similar recurrence with swapped roles of a and b.
+"""
+function _jacobi_b_shift_up_matrix(N::Int, a::Float64, b::Float64)
+    I_list = Int[]
+    J_list = Int[]
+    V_list = Float64[]
+
+    for n in 0:(N-1)
+        denom = 2*n + a + b + 1
+
+        if abs(denom) > 1e-14
+            c1 = (n + a + b + 1) / denom
+            c2 = (n + a) / denom
+
+            push!(I_list, n + 1); push!(J_list, n + 1); push!(V_list, c1)
+
+            if n > 0
+                push!(I_list, n); push!(J_list, n + 1); push!(V_list, c2)
+            end
+        else
+            push!(I_list, n + 1); push!(J_list, n + 1); push!(V_list, 1.0)
+        end
+    end
+
+    return sparse(I_list, J_list, V_list, N, N)
+end
+
+"""
+Single step conversion: P_n^{(a,b)} -> P_m^{(a-1,b)}
+
+Uses the inverse/adjoint relationship.
+"""
+function _jacobi_a_shift_down_matrix(N::Int, a::Float64, b::Float64)
+    I_list = Int[]
+    J_list = Int[]
+    V_list = Float64[]
+
+    for n in 0:(N-1)
+        # Use recurrence: P_n^{(a-1,b)} = d1 * P_n^{(a,b)} + d2 * P_{n+1}^{(a,b)}
+        # Derived from inverting the shift-up relation
+
+        denom_n = 2*n + a + b
+        denom_np1 = 2*(n+1) + a + b
+
+        if abs(denom_n) > 1e-14
+            d1 = (2*n + a + b) / (n + a + b)
+            push!(I_list, n + 1); push!(J_list, n + 1); push!(V_list, d1)
+        end
+
+        if n + 1 < N && abs(denom_np1) > 1e-14
+            d2 = -(n + 1) / (n + a + b + 1)
+            push!(I_list, n + 1); push!(J_list, n + 2); push!(V_list, d2)
+        end
+    end
+
+    if isempty(I_list)
+        return sparse(I, N, N)
+    end
+
+    return sparse(I_list, J_list, V_list, N, N)
+end
+
+"""
+Single step conversion: P_n^{(a,b)} -> P_m^{(a,b-1)}
+"""
+function _jacobi_b_shift_down_matrix(N::Int, a::Float64, b::Float64)
+    I_list = Int[]
+    J_list = Int[]
+    V_list = Float64[]
+
+    for n in 0:(N-1)
+        denom_n = 2*n + a + b
+        denom_np1 = 2*(n+1) + a + b
+
+        if abs(denom_n) > 1e-14
+            d1 = (2*n + a + b) / (n + a + b)
+            push!(I_list, n + 1); push!(J_list, n + 1); push!(V_list, d1)
+        end
+
+        if n + 1 < N && abs(denom_np1) > 1e-14
+            d2 = -(n + 1) / (n + a + b + 1)
+            push!(I_list, n + 1); push!(J_list, n + 2); push!(V_list, d2)
+        end
+    end
+
+    if isempty(I_list)
+        return sparse(I, N, N)
+    end
+
+    return sparse(I_list, J_list, V_list, N, N)
+end
+
+"""
+Quadrature-based conversion for non-integer parameter shifts.
+
+Evaluates input polynomials at output basis quadrature points,
+then computes weighted projection coefficients.
+"""
+function _jacobi_conversion_quadrature(N::Int, a0::Float64, b0::Float64, a1::Float64, b1::Float64)
+    # Get Gauss-Jacobi quadrature for output basis (need 2N points for exactness)
+    N_quad = 2 * N
+    nodes, weights = gauss_jacobi_quadrature(N_quad, a1, b1)
+
+    # Evaluate input basis polynomials at quadrature points
+    P_input = zeros(Float64, N_quad, N)
+    for j in 1:N
+        P_input[:, j] = jacobi_polynomial.(nodes, j - 1, a0, b0)
+    end
+
+    # Evaluate output basis polynomials at quadrature points
+    P_output = zeros(Float64, N_quad, N)
+    for j in 1:N
+        P_output[:, j] = jacobi_polynomial.(nodes, j - 1, a1, b1)
+    end
+
+    # Compute conversion matrix via weighted inner products
+    # C_ij = <P_i^{out}, P_j^{in}>_w / <P_i^{out}, P_i^{out}>_w
+    # where w is the Jacobi weight for output basis
+
+    W = Diagonal(weights)
+
+    # Normalization factors for output basis
+    norms = zeros(Float64, N)
+    for i in 1:N
+        norms[i] = dot(P_output[:, i], W * P_output[:, i])
+    end
+
+    # Projection matrix
+    C = zeros(Float64, N, N)
+    for i in 1:N
+        for j in 1:N
+            if abs(norms[i]) > 1e-14
+                C[i, j] = dot(P_output[:, i], W * P_input[:, j]) / norms[i]
+            end
+        end
+    end
+
+    # Sparsify small entries
+    threshold = 1e-14 * maximum(abs.(C))
+    C[abs.(C) .< threshold] .= 0.0
+
+    return sparse(C)
+end
+
+"""
+Evaluate Jacobi polynomial P_n^{(a,b)}(x) using three-term recurrence.
+"""
+function jacobi_polynomial(x::Float64, n::Int, a::Float64, b::Float64)
+    if n == 0
+        return 1.0
+    elseif n == 1
+        return 0.5 * (a - b + (a + b + 2) * x)
+    end
+
+    P_prev2 = 1.0
+    P_prev1 = 0.5 * (a - b + (a + b + 2) * x)
+
+    for k in 2:n
+        # Three-term recurrence coefficients
+        k_f = Float64(k)
+        c1 = 2 * k_f * (k_f + a + b) * (2*k_f + a + b - 2)
+        c2 = (2*k_f + a + b - 1) * (a^2 - b^2)
+        c3 = (2*k_f + a + b - 2) * (2*k_f + a + b - 1) * (2*k_f + a + b)
+        c4 = 2 * (k_f + a - 1) * (k_f + b - 1) * (2*k_f + a + b)
+
+        if abs(c1) > 1e-14
+            P_curr = ((c2 + c3 * x) * P_prev1 - c4 * P_prev2) / c1
+        else
+            P_curr = P_prev1
+        end
+
+        P_prev2 = P_prev1
+        P_prev1 = P_curr
+    end
+
+    return P_prev1
+end
+
+"""
+Compute Gauss-Jacobi quadrature nodes and weights.
+
+Uses the Golub-Welsch algorithm based on the eigenvalues of the Jacobi matrix.
+"""
+function gauss_jacobi_quadrature(N::Int, a::Float64, b::Float64)
+    if N == 0
+        return Float64[], Float64[]
+    end
+
+    # Build tridiagonal Jacobi matrix
+    # The eigenvalues give the nodes, eigenvectors give the weights
+
+    # Diagonal elements
+    d = zeros(Float64, N)
+    for n in 0:(N-1)
+        num = b^2 - a^2
+        denom = (2*n + a + b) * (2*n + a + b + 2)
+        if abs(denom) > 1e-14
+            d[n + 1] = num / denom
+        end
+    end
+
+    # Sub/super-diagonal elements
+    e = zeros(Float64, N - 1)
+    for n in 1:(N-1)
+        num = 2 * sqrt(n * (n + a) * (n + b) * (n + a + b))
+        denom = (2*n + a + b) * sqrt((2*n + a + b - 1) * (2*n + a + b + 1))
+        if abs(denom) > 1e-14
+            e[n] = num / denom
+        end
+    end
+
+    # Build tridiagonal matrix and compute eigendecomposition
+    J = SymTridiagonal(d, e)
+    eigenvalues, eigenvectors = eigen(J)
+
+    # Nodes are eigenvalues
+    nodes = eigenvalues
+
+    # Weights from first component of eigenvectors
+    # w_i = μ_0 * v_i[1]^2 where μ_0 = ∫_{-1}^{1} (1-x)^a (1+x)^b dx
+    mu0 = 2^(a + b + 1) * gamma(a + 1) * gamma(b + 1) / gamma(a + b + 2)
+    weights = mu0 .* eigenvectors[1, :].^2
+
+    return nodes, weights
 end
 
 # ============================================================================
