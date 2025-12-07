@@ -1646,28 +1646,118 @@ function process_rhs_operator!(F_vector::Vector, rhs_op, eq_idx::Int, variables:
     """
     Process RHS operator and extract contributions to forcing vector.
     Following pattern where RHS represents known terms/forcing.
+
+    Recursively evaluates composite operators (Add, Subtract, Multiply) to
+    compute the scalar forcing value for each equation.
     """
-    
+
     if isa(rhs_op, ConstantOperator)
         # Constant forcing term
         F_vector[eq_idx] = rhs_op.value
-        
+
     elseif isa(rhs_op, ZeroOperator)
         # Zero RHS (homogeneous equation)
         F_vector[eq_idx] = 0.0
-        
+
     elseif isa(rhs_op, AddOperator)
-        # Sum of RHS terms
-        # For now, simplified handling
-        @debug "Addition in RHS needs proper evaluation"
-        
+        # Sum of RHS terms: recursively evaluate left and right
+        left_value = evaluate_rhs_scalar(rhs_op.left, variables)
+        right_value = evaluate_rhs_scalar(rhs_op.right, variables)
+        F_vector[eq_idx] = left_value + right_value
+
+    elseif isa(rhs_op, SubtractOperator)
+        # Difference of RHS terms: recursively evaluate left and right
+        left_value = evaluate_rhs_scalar(rhs_op.left, variables)
+        right_value = evaluate_rhs_scalar(rhs_op.right, variables)
+        F_vector[eq_idx] = left_value - right_value
+
+    elseif isa(rhs_op, MultiplyOperator)
+        # Product of RHS terms
+        left_value = evaluate_rhs_scalar(rhs_op.left, variables)
+        if isa(rhs_op.right, Real)
+            F_vector[eq_idx] = left_value * rhs_op.right
+        else
+            right_value = evaluate_rhs_scalar(rhs_op.right, variables)
+            F_vector[eq_idx] = left_value * right_value
+        end
+
+    elseif isa(rhs_op, Real)
+        # Direct numeric value
+        F_vector[eq_idx] = Float64(rhs_op)
+
     elseif isa(rhs_op, String) && (rhs_op == "0" || rhs_op == "zero")
         # String representation of zero
         F_vector[eq_idx] = 0.0
-        
+
     else
         @debug "Unhandled RHS operator type: $(typeof(rhs_op)), using zero"
         F_vector[eq_idx] = 0.0
+    end
+end
+
+"""
+    evaluate_rhs_scalar(op, variables::Vector) -> Float64
+
+Recursively evaluate an operator expression to obtain a scalar value.
+Used for extracting forcing terms from composite RHS expressions.
+
+Returns the scalar value of the expression, or 0.0 for unhandled types.
+"""
+function evaluate_rhs_scalar(op, variables::Vector)
+    if isa(op, ConstantOperator)
+        return Float64(op.value)
+
+    elseif isa(op, ZeroOperator)
+        return 0.0
+
+    elseif isa(op, Real)
+        return Float64(op)
+
+    elseif isa(op, AddOperator)
+        left_val = evaluate_rhs_scalar(op.left, variables)
+        right_val = evaluate_rhs_scalar(op.right, variables)
+        return left_val + right_val
+
+    elseif isa(op, SubtractOperator)
+        left_val = evaluate_rhs_scalar(op.left, variables)
+        right_val = evaluate_rhs_scalar(op.right, variables)
+        return left_val - right_val
+
+    elseif isa(op, MultiplyOperator)
+        left_val = evaluate_rhs_scalar(op.left, variables)
+        if isa(op.right, Real)
+            return left_val * op.right
+        else
+            right_val = evaluate_rhs_scalar(op.right, variables)
+            return left_val * right_val
+        end
+
+    elseif isa(op, ScalarField)
+        # For field-valued RHS, we need to evaluate at specific points
+        # For now, return the mean value if available
+        if op.data_g !== nothing
+            return real(sum(op.data_g) / length(op.data_g))
+        elseif op.data_c !== nothing
+            # First coefficient is often the mean for spectral methods
+            return real(op.data_c[1])
+        else
+            return 0.0
+        end
+
+    elseif isa(op, String)
+        # Try to parse as number
+        if op == "0" || op == "zero"
+            return 0.0
+        end
+        try
+            return parse(Float64, op)
+        catch
+            return 0.0
+        end
+
+    else
+        @debug "evaluate_rhs_scalar: unhandled type $(typeof(op)), returning 0.0"
+        return 0.0
     end
 end
 
