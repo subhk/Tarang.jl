@@ -1124,41 +1124,129 @@ function allocate_field_data!(field::ScalarField, config::PencilConfig)
     field.current_layout = :g
 end
 
+"""
+    compute_local_shape(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
+
+Compute the local shape for this rank given the global shape and mesh decomposition.
+
+The mesh defines how processes are arranged in a Cartesian grid. For example,
+mesh=(2,4) means 2 processes in dimension 1 and 4 in dimension 2, for 8 total.
+
+The global array is decomposed such that each dimension is split among the
+processes in that mesh dimension. Load balancing distributes remainders
+to the first ranks in each dimension.
+
+# Arguments
+- `global_shape`: Total size of the array in each dimension
+- `mesh`: Number of processes in each decomposition dimension
+- `comm`: MPI communicator
+
+# Returns
+- Tuple of local sizes for each dimension on this rank
+
+# Example
+```julia
+# 4 processes with mesh (2, 2), global shape (100, 100)
+# Each process gets local shape (50, 50)
+local_shape = compute_local_shape((100, 100), (2, 2), comm)
+```
+"""
 function compute_local_shape(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
-    """
-    Compute the local shape for this rank given the global shape and mesh decomposition.
-    """
     rank = MPI.Comm_rank(comm)
     nprocs = MPI.Comm_size(comm)
     ndims = length(global_shape)
     mesh_dims = length(mesh)
 
+    # Validate mesh configuration
+    mesh_size = prod(mesh)
+    if mesh_size != nprocs
+        @warn "Mesh size ($mesh_size) doesn't match number of processes ($nprocs)"
+    end
+
     local_shape = collect(global_shape)
+
+    # Compute mesh coordinates for this rank using row-major (C-style) ordering
+    # rank = coord[1] + coord[2]*mesh[1] + coord[3]*mesh[1]*mesh[2] + ...
+    mesh_coords = zeros(Int, mesh_dims)
+    remaining_rank = rank
+    for i in 1:mesh_dims
+        mesh_coords[i] = remaining_rank % mesh[i]
+        remaining_rank = remaining_rank ÷ mesh[i]
+    end
 
     # Compute local sizes for each decomposed dimension
     for i in 1:min(ndims, mesh_dims)
         if mesh[i] > 1
-            # Compute which portion of this dimension belongs to this rank
-            n = global_shape[i]
-            p = mesh[i]
+            n = global_shape[i]  # Global size in this dimension
+            p = mesh[i]          # Number of processes in this dimension
+            coord = mesh_coords[i]  # This rank's position in dimension i
 
-            # Determine rank position in this dimension of the mesh
-            # (simplified: assumes row-major ordering)
-            mesh_rank = (rank % prod(mesh[1:i])) ÷ prod(mesh[1:i-1])
-
-            # Compute local size (even distribution with remainder going to last ranks)
+            # Compute local size with load balancing
+            # First (remainder) ranks get one extra element
             base_size = n ÷ p
             remainder = n % p
 
-            if mesh_rank < p - remainder
-                local_shape[i] = base_size
-            else
+            if coord < remainder
+                # First 'remainder' ranks get base_size + 1
                 local_shape[i] = base_size + 1
+            else
+                local_shape[i] = base_size
             end
         end
+        # Dimensions beyond mesh_dims or with mesh[i] == 1 keep their global size
     end
 
     return tuple(local_shape...)
+end
+
+"""
+    compute_local_range(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
+
+Compute the global index ranges owned by this rank for each dimension.
+
+# Returns
+- Vector of (start, stop) tuples for each dimension (1-based indices)
+"""
+function compute_local_range(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
+    rank = MPI.Comm_rank(comm)
+    ndims = length(global_shape)
+    mesh_dims = length(mesh)
+
+    # Compute mesh coordinates
+    mesh_coords = zeros(Int, mesh_dims)
+    remaining_rank = rank
+    for i in 1:mesh_dims
+        mesh_coords[i] = remaining_rank % mesh[i]
+        remaining_rank = remaining_rank ÷ mesh[i]
+    end
+
+    ranges = Vector{Tuple{Int,Int}}(undef, ndims)
+
+    for i in 1:ndims
+        if i <= mesh_dims && mesh[i] > 1
+            n = global_shape[i]
+            p = mesh[i]
+            coord = mesh_coords[i]
+
+            base_size = n ÷ p
+            remainder = n % p
+
+            if coord < remainder
+                local_size = base_size + 1
+                start_idx = coord * (base_size + 1) + 1
+            else
+                local_size = base_size
+                start_idx = remainder * (base_size + 1) + (coord - remainder) * base_size + 1
+            end
+
+            ranges[i] = (start_idx, start_idx + local_size - 1)
+        else
+            # Not decomposed in this dimension
+            ranges[i] = (1, global_shape[i])
+        end
+    end
+
+    return ranges
 end
 
 function interpolate_field_data!(dest::AbstractArray, src::AbstractArray)
