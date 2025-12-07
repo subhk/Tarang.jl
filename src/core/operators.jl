@@ -1701,11 +1701,11 @@ Build lifting matrix for tau method boundary conditions.
 Following the standard basis LiftJacobi implementation (lines 790-814).
 
 the standard convention:
-- n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
+- n >= 0: sets mode n directly (0-indexed convention, 1-indexed in Julia)
 - n < 0: wraps around (n = -1 means last mode, n = -2 means second-to-last, etc.)
 
 Example: For N=10 modes
-- Lift(tau, basis, 0) → sets mode 1 (Julia 1-indexed, equivalent to Python mode 0)
+- Lift(tau, basis, 0) → sets mode 1 (Julia 1-indexed)
 - Lift(tau, basis, -1) → sets mode N (last mode)
 - Lift(tau, basis, -2) → sets mode N-1 (second-to-last mode)
 """
@@ -1740,7 +1740,7 @@ function build_lift_matrix(var, basis, n::Int; kwargs...)
     N = basis.meta.size
 
     # Following the standard convention: direct indexing with negative wrap-around
-    # In the standard (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
+    # In the standard (0-indexed) convention: P['c'][axslice(axis, n, n+1)] = 1
     # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
     lift_mode = n
     if lift_mode < 0
@@ -2402,7 +2402,7 @@ Evaluate lifting operator for tau method boundary conditions.
 Following the standard basis LiftJacobi implementation (lines 790-814).
 
 the standard convention:
-- n >= 0: sets mode n directly (0-indexed in Python, 1-indexed in Julia)
+- n >= 0: sets mode n directly (0-indexed convention, 1-indexed in Julia)
 - n < 0: wraps around (n = -1 means last mode, n = -2 means second-to-last, etc.)
 
 This creates a polynomial field P with coefficient n set to 1, then returns P * operand.
@@ -2442,7 +2442,7 @@ function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
     fill!(result.data_c, 0.0)
 
     # Following the standard convention: direct indexing with negative wrap-around
-    # In the standard (Python 0-indexed): P['c'][axslice(axis, n, n+1)] = 1
+    # In the standard (0-indexed) convention: P['c'][axslice(axis, n, n+1)] = 1
     # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
     lift_mode = n
     if lift_mode < 0
