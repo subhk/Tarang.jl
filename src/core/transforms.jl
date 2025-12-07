@@ -1199,38 +1199,194 @@ function backward_transform_3d!(field::ScalarField, target_layout::Symbol=:g)
     backward_transform!(field, target_layout)
 end
 
-# Enhanced 3D dealiasing
+"""
+    dealias_3d!(field::ScalarField, scales::Union{Real, Vector{Real}})
+
+Apply 3D dealiasing to a scalar field by zeroing out high-frequency modes.
+
+Dealiasing is essential for nonlinear computations to avoid aliasing errors.
+The 2/3 rule (scale = 2/3) is commonly used: modes with k > k_max * scale are zeroed.
+
+For Fourier bases, this zeros modes beyond the cutoff frequency.
+For Chebyshev bases, this zeros high-order polynomial coefficients.
+
+# Arguments
+- `field`: ScalarField to dealias (modified in-place)
+- `scales`: Dealiasing scale(s). Can be:
+  - A single Real value applied to all dimensions
+  - A Vector of scales for each dimension
+
+# Example
+```julia
+# Apply 2/3 dealiasing rule to all dimensions
+dealias_3d!(field, 2/3)
+
+# Apply different scales per dimension
+dealias_3d!(field, [2/3, 2/3, 1.0])  # No dealiasing in z
+```
+"""
 function dealias_3d!(field::ScalarField, scales::Union{Real, Vector{Real}})
-    """Apply 3D dealiasing to field"""
-    
-    ensure_layout!(field, :c)
-    
-    # Apply dealiasing in coefficient space
-    if isa(scales, Real)
-        scale_vec = fill(scales, 3)
-    else
-        scale_vec = length(scales) == 3 ? scales : [scales[1], scales[1], scales[1]]
+    if field.domain === nothing
+        @warn "Cannot dealias field without domain"
+        return
     end
-    
-    # 3D dealiasing - zero out high-frequency modes in all directions
+
+    ensure_layout!(field, :c)
+
+    if field.data_c === nothing
+        @warn "No coefficient data to dealias"
+        return
+    end
+
+    ndim = ndims(field.data_c)
+    nbases = length(field.domain.bases)
+
+    # Normalize scales to a vector matching the number of bases
+    if isa(scales, Real)
+        scale_vec = fill(Float64(scales), nbases)
+    else
+        if length(scales) >= nbases
+            scale_vec = Float64.(scales[1:nbases])
+        else
+            # Extend with the last value
+            scale_vec = vcat(Float64.(scales), fill(Float64(scales[end]), nbases - length(scales)))
+        end
+    end
+
+    # Get array dimensions
+    data_shape = size(field.data_c)
+
+    # Compute cutoff indices for each dimension
+    cutoffs = Int[]
     for (i, (basis, scale)) in enumerate(zip(field.domain.bases, scale_vec))
+        if i <= ndim
+            n = data_shape[i]
+            # Cutoff: keep modes 1:cutoff, zero modes (cutoff+1):n
+            cutoff = max(1, Int(floor(n * scale)))
+            push!(cutoffs, min(cutoff, n))
+        end
+    end
+
+    # Apply dealiasing by zeroing high-frequency modes
+    # This needs to handle different basis types appropriately
+    for (dim, (basis, cutoff)) in enumerate(zip(field.domain.bases, cutoffs))
+        if dim > ndim
+            break
+        end
+
+        n = data_shape[dim]
+        if cutoff >= n
+            # No dealiasing needed for this dimension
+            continue
+        end
+
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
-            cutoff = Int(floor(basis.meta.size * scale))
-            
-            # Apply 3D dealiasing along axis i
-            # This is a simplified version - production code would need proper 3D indexing
-            if i <= ndims(field.data_c)
-                @debug "Applying dealiasing along axis $i with cutoff $cutoff"
-                # Actual implementation would zero out high modes properly
-                # field.data_c[high_mode_indices] .= 0
-            end
+            # For Fourier: zero out high-frequency modes
+            # For real FFT: positive frequencies are at indices 1:N/2+1
+            # High frequencies to zero: (cutoff+1):end
+            zero_fourier_modes!(field.data_c, dim, cutoff, n)
+            @debug "Dealiased Fourier dimension $dim: kept modes 1:$cutoff of $n"
+
+        elseif isa(basis, ChebyshevT) || isa(basis, ChebyshevU) ||
+               isa(basis, Jacobi) || isa(basis, Ultraspherical)
+            # For polynomial bases: zero high-order coefficients
+            zero_polynomial_modes!(field.data_c, dim, cutoff, n)
+            @debug "Dealiased polynomial dimension $dim: kept modes 1:$cutoff of $n"
         end
     end
 end
 
+"""
+    zero_fourier_modes!(data::AbstractArray, dim::Int, cutoff::Int, n::Int)
+
+Zero out high-frequency Fourier modes beyond the cutoff in dimension `dim`.
+
+For real FFTs, the data is typically stored as complex with size N÷2+1.
+Modes to keep: 1:cutoff (DC and low frequencies)
+Modes to zero: (cutoff+1):n (high frequencies)
+"""
+function zero_fourier_modes!(data::AbstractArray, dim::Int, cutoff::Int, n::Int)
+    if cutoff >= n
+        return
+    end
+
+    ndim = ndims(data)
+
+    # Build index ranges for the high-frequency modes to zero
+    # Use selectdim for dimension-agnostic indexing
+    for i in (cutoff + 1):n
+        indices = ntuple(d -> d == dim ? i : Colon(), ndim)
+        view(data, indices...) .= zero(eltype(data))
+    end
+end
+
+"""
+    zero_polynomial_modes!(data::AbstractArray, dim::Int, cutoff::Int, n::Int)
+
+Zero out high-order polynomial coefficients beyond the cutoff in dimension `dim`.
+
+For Chebyshev/Jacobi bases, coefficients are stored in order of polynomial degree.
+Modes to keep: 1:cutoff (low-order polynomials)
+Modes to zero: (cutoff+1):n (high-order polynomials)
+"""
+function zero_polynomial_modes!(data::AbstractArray, dim::Int, cutoff::Int, n::Int)
+    if cutoff >= n
+        return
+    end
+
+    ndim = ndims(data)
+
+    # Zero high-order coefficients
+    for i in (cutoff + 1):n
+        indices = ntuple(d -> d == dim ? i : Colon(), ndim)
+        view(data, indices...) .= zero(eltype(data))
+    end
+end
+
+"""
+    dealias_field!(field::ScalarField)
+
+Apply dealiasing using the field's basis dealias parameters.
+"""
+function dealias_field!(field::ScalarField)
+    if field.domain === nothing
+        return
+    end
+
+    # Get dealias scales from bases
+    scales = Float64[]
+    for basis in field.domain.bases
+        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :dealias)
+            push!(scales, Float64(basis.meta.dealias))
+        else
+            push!(scales, 1.0)  # No dealiasing
+        end
+    end
+
+    if all(s -> s >= 1.0, scales)
+        # No dealiasing needed
+        return
+    end
+
+    dealias_3d!(field, scales)
+end
+
+"""
+    synchronize_transforms!(transforms::Vector)
+
+Synchronize all transform operations to ensure completion before proceeding.
+
+This is a no-op for CPU-only execution. When GPU support is added, this would
+call the appropriate GPU synchronization (e.g., `CUDA.synchronize()`) to ensure
+all asynchronous GPU operations have completed.
+
+# Arguments
+- `transforms`: Vector of transform objects (currently unused)
+"""
 function synchronize_transforms!(transforms::Vector)
-    """Synchronize all transforms (no-op for CPU-only)"""
     # No-op for CPU-only mode
+    # For GPU: would call CUDA.synchronize() or equivalent
+    return nothing
 end
 
 function is_pencil_compatible(bases::Tuple{Vararg{Basis}})
