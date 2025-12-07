@@ -604,27 +604,186 @@ function is_field(obj)
 end
 
 """
-Get domain dealias scales from operator
+    get_domain_dealias(operator) -> Union{Tuple, Vector, Nothing}
+
+Extract dealias scales from an operator's domain.
+
+Returns the dealias scales defined in the domain's bases, which control
+the padding used for dealiasing in nonlinear computations (typically 3/2 rule).
+
+# Arguments
+- `operator`: An operator, field, or Dict that may contain domain information
+
+# Returns
+- Tuple or Vector of dealias scales for each dimension, or `nothing` if not available
 """
 function get_domain_dealias(operator)
-    # Placeholder - would extract dealias scales from operator's domain
+    # Try to extract domain from different operator types
+    domain = nothing
+
+    if isa(operator, ScalarField)
+        domain = operator.domain
+    elseif isa(operator, VectorField)
+        # Get domain from first component
+        if !isempty(operator.components)
+            domain = operator.components[1].domain
+        end
+    elseif isa(operator, TensorField)
+        # Get domain from first component
+        if !isempty(operator.components)
+            domain = operator.components[1, 1].domain
+        end
+    elseif isa(operator, Dict)
+        # Check for domain in Dict-based operators
+        if haskey(operator, "domain")
+            domain = operator["domain"]
+        elseif haskey(operator, "operand")
+            # Recursively get from operand
+            return get_domain_dealias(operator["operand"])
+        end
+    elseif hasfield(typeof(operator), :operand)
+        # Recursive case for wrapped operators
+        return get_domain_dealias(operator.operand)
+    elseif hasfield(typeof(operator), :domain)
+        domain = operator.domain
+    end
+
+    if domain === nothing
+        return nothing
+    end
+
+    # Extract dealias scales from domain's bases
+    if hasfield(typeof(domain), :bases) && domain.bases !== nothing
+        dealias_scales = Float64[]
+        for basis in domain.bases
+            if basis === nothing
+                push!(dealias_scales, 1.0)
+            elseif hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :dealias)
+                push!(dealias_scales, Float64(basis.meta.dealias))
+            elseif hasfield(typeof(basis), :dealias)
+                push!(dealias_scales, Float64(basis.dealias))
+            else
+                push!(dealias_scales, 1.0)  # Default: no dealiasing
+            end
+        end
+        return Tuple(dealias_scales)
+    end
+
     return nothing
 end
 
 """
-Remedy scales using distributor
+    remedy_scales(dist, scales) -> Tuple
+
+Remedy and validate scales parameter for a distributor.
+
+Converts various scale input formats to a standardized tuple of Float64 values,
+ensuring consistency and validity.
+
+# Arguments
+- `dist`: Distributor object (or nothing for default behavior)
+- `scales`: Scale input - can be Nothing, Number, Tuple, or Vector
+
+# Returns
+- Tuple of Float64 scales matching the distributor's dimensionality
+
+# Example
+```julia
+scales = remedy_scales(dist, 1.5)      # -> (1.5, 1.5, 1.5) for 3D
+scales = remedy_scales(dist, nothing)  # -> (1.0, 1.0, 1.0) for 3D
+scales = remedy_scales(dist, [1.0, 2.0, 1.5])  # -> (1.0, 2.0, 1.5)
+```
 """
 function remedy_scales(dist, scales)
-    # Placeholder - would call dist.remedy_scales equivalent
-    return scales
+    # Determine dimensionality
+    ndim = 3  # Default
+    if dist !== nothing
+        if hasfield(typeof(dist), :dim)
+            ndim = dist.dim
+        elseif hasfield(typeof(dist), :coords)
+            ndim = length(dist.coords)
+        end
+    end
+
+    # Handle nothing -> default scales of 1.0
+    if scales === nothing
+        return Tuple(ones(Float64, ndim))
+    end
+
+    # Handle single number -> broadcast to all dimensions
+    if isa(scales, Number)
+        return Tuple(fill(Float64(scales), ndim))
+    end
+
+    # Handle tuple or array -> convert to Float64 tuple
+    if isa(scales, Tuple) || isa(scales, AbstractVector)
+        scale_vec = Float64.(collect(scales))
+
+        # Pad or truncate to match dimensionality
+        if length(scale_vec) < ndim
+            # Extend with last value or 1.0
+            last_val = isempty(scale_vec) ? 1.0 : scale_vec[end]
+            scale_vec = vcat(scale_vec, fill(last_val, ndim - length(scale_vec)))
+        elseif length(scale_vec) > ndim
+            scale_vec = scale_vec[1:ndim]
+        end
+
+        # Validate positive scales
+        if any(s -> s <= 0, scale_vec)
+            @warn "Scales must be positive; using absolute values"
+            scale_vec = abs.(scale_vec)
+            scale_vec[scale_vec .== 0] .= 1.0
+        end
+
+        return Tuple(scale_vec)
+    end
+
+    # Fallback: return default
+    @warn "Unrecognized scales type $(typeof(scales)), using default"
+    return Tuple(ones(Float64, ndim))
 end
 
 """
-Get layout object from distributor
+    get_layout_object(dist, layout) -> Any
+
+Get a layout object from a distributor for a given layout specification.
+
+# Arguments
+- `dist`: Distributor object
+- `layout`: Layout specification (Symbol like :g or :c, or layout object)
+
+# Returns
+- Layout object suitable for data transformation
 """
 function get_layout_object(dist, layout)
-    # Placeholder - would call dist.get_layout_object equivalent
-    return layout
+    if dist === nothing
+        return layout
+    end
+
+    # If layout is already an object, return it
+    if !isa(layout, Symbol) && !isa(layout, String)
+        return layout
+    end
+
+    # Convert string to symbol
+    layout_sym = isa(layout, String) ? Symbol(layout) : layout
+
+    # Check if distributor has layouts cache
+    if hasfield(typeof(dist), :layouts) && dist.layouts !== nothing
+        layout_key = layout_sym == :g ? "grid" : (layout_sym == :c ? "coeff" : string(layout_sym))
+
+        if haskey(dist.layouts, layout_key)
+            return dist.layouts[layout_key]
+        end
+
+        # Try alternative keys
+        if haskey(dist.layouts, layout_sym)
+            return dist.layouts[layout_sym]
+        end
+    end
+
+    # Return the symbol as-is if no layout object found
+    return layout_sym
 end
 
 """
