@@ -911,10 +911,7 @@ end
 Compute Jacobi polynomial linearization coefficients.
 P_m^{(a,b)}(x) * P_n^{(a,b)}(x) = sum_{k=|m-n|}^{m+n} c_k P_k^{(a,b)}(x)
 
-Following Dedalus approach using Clenshaw algorithm with Jacobi matrices.
-References:
-- Dedalus tools/clenshaw.py: matrix_clenshaw, jacobi_recursion
-- Dedalus core/basis.py: Jacobi._last_axis_component_ncc_matrix
+Uses Clenshaw algorithm with Jacobi matrices.
 """
 function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float64, N_max::Int)
     coeffs = zeros(Float64, N_max)
