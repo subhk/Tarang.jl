@@ -1,7 +1,5 @@
 """
 Problem formulation classes
-
-Translated from dedalus/core/problems.py
 """
 
 using LinearAlgebra

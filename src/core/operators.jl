@@ -1,7 +1,5 @@
 """
 Operator classes for spectral operations
-
-Translated from dedalus/core/operators.py
 """
 
 using LinearAlgebra
@@ -9,7 +7,7 @@ using LinearAlgebra: BLAS
 using SparseArrays
 using LoopVectorization  # For SIMD loops
 
-# Operator registration tables (mirroring Dedalus parsing registries)
+# Operator registration tables (for parsing registries)
 const OPERATOR_ALIASES = Dict{String, Any}()
 const OPERATOR_PARSEABLES = Dict{String, Any}()
 const OPERATOR_PREFIXES = Dict{String, Any}()
@@ -176,7 +174,7 @@ struct AdvectiveCFL <: Operator
 end
 const _AdvectiveCFL_constructor = AdvectiveCFL
 
-# Constructor functions (following Dedalus API)
+# Constructor functions (following API)
 function grad(operand::Operand, coordsys::CoordinateSystem=operand.dist.coordsys)
     """Gradient operator"""
     return multiclass_new(Gradient, operand, coordsys)
@@ -284,7 +282,7 @@ function outer(left::Operand, right::Operand)
 
     Returns a rank-2 tensor field T where T_ij = u_i * v_j.
 
-    Following Dedalus operators.py pattern for tensor construction.
+    Following operators.py pattern for tensor construction.
 
     Arguments:
     - left: First vector field (u)
@@ -305,7 +303,7 @@ function advective_cfl(velocity::Operand, coords::CoordinateSystem)
 
     This is useful for adaptive timestepping where Δt < 1/max(f).
 
-    Following Dedalus operators.py:4342 AdvectiveCFL pattern.
+    Following operators.py:4342 AdvectiveCFL pattern.
 
     Arguments:
     - velocity: Vector field representing fluid velocity
@@ -491,7 +489,7 @@ function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
 end
 
 function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Fourier derivative following Dedalus conventions """
+    """Evaluate Fourier derivative following conventions """
     ensure_layout!(operand, :c)  # Work in coefficient space
     ensure_layout!(result, :c)
     
@@ -520,7 +518,7 @@ end
 
 
 function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
-    """Real Fourier derivative following Dedalus 2x2 group matrix approach """
+    """Real Fourier derivative following 2x2 group matrix approach """
     
     # Dedalus stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
     # Each wavenumber k>0 has a 2x2 group matrix:
@@ -869,7 +867,7 @@ end
 function apply_matrix_along_axis(matrix::AbstractMatrix, array::AbstractArray, axis::Int; out=nothing)
     """
     Apply matrix along any axis of an array.
-    Following Dedalus array.py:77-82 and apply_dense:104-126 implementation.
+    Following array.py:77-82 and apply_dense:104-126 implementation.
     """
     if issparse(matrix)
         return apply_sparse_along_axis(matrix, array, axis; out=out)
@@ -881,7 +879,7 @@ end
 function apply_dense_along_axis(matrix::AbstractMatrix, array::AbstractArray, axis::Int; out=nothing)
     """
     Apply dense matrix along any axis of an array .
-    Following Dedalus apply_dense implementation in array.py:104-126.
+    Following apply_dense implementation in array.py:104-126.
     """
     ndim = ndims(array)
     
@@ -933,7 +931,7 @@ end
 function apply_sparse_along_axis(matrix::SparseMatrixCSC, array::AbstractArray, axis::Int; out=nothing, check_shapes=false)
     """
     Apply sparse matrix along any axis of an array.
-    Following Dedalus apply_sparse implementation in array.py:171-203.
+    Following apply_sparse implementation in array.py:171-203.
     Note: Uses SparseMatrixCSC (Julia's sparse format) instead of CSR.
     """
     ndim = ndims(array)
@@ -1317,14 +1315,14 @@ struct MultiplyOperator <: Operator
 end
 
 # ============================================================================
-# Expression matrices for matrix assembly (following Dedalus operators.py)
+# Expression matrices for matrix assembly (following operators.py)
 # ============================================================================
 
 """
     expression_matrices(op::Operator, sp, vars; kwargs...)
 
 Build expression matrices for operator applied to each variable.
-Following Dedalus operators.py expression_matrices method.
+Following operators.py expression_matrices method.
 
 Returns Dict mapping variables to sparse matrices.
 """
@@ -1337,7 +1335,7 @@ end
     expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
 
 Time derivative matrices: returns M matrix contribution.
-Following Dedalus operators.py TimeDerivative.expression_matrices.
+Following operators.py TimeDerivative.expression_matrices.
 """
 function expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
     operand = op.operand
@@ -1358,7 +1356,7 @@ end
     expression_matrices(op::Differentiate, sp, vars; kwargs...)
 
 Spatial differentiation matrices.
-Following Dedalus operators.py Differentiate.expression_matrices.
+Following operators.py Differentiate.expression_matrices.
 """
 function expression_matrices(op::Differentiate, sp, vars; kwargs...)
     operand = op.operand
@@ -1383,7 +1381,7 @@ end
     expression_matrices(op::Laplacian, sp, vars; kwargs...)
 
 Laplacian matrices: sum of second derivatives.
-Following Dedalus operators.py Laplacian.expression_matrices.
+Following operators.py Laplacian.expression_matrices.
 """
 function expression_matrices(op::Laplacian, sp, vars; kwargs...)
     operand = op.operand
@@ -1423,7 +1421,7 @@ end
     expression_matrices(op::Gradient, sp, vars; kwargs...)
 
 Gradient matrices for scalar -> vector.
-Following Dedalus operators.py Gradient.expression_matrices.
+Following operators.py Gradient.expression_matrices.
 """
 function expression_matrices(op::Gradient, sp, vars; kwargs...)
     operand = op.operand
@@ -1461,7 +1459,7 @@ end
     expression_matrices(op::Divergence, sp, vars; kwargs...)
 
 Divergence matrices for vector -> scalar.
-Following Dedalus operators.py Divergence.expression_matrices.
+Following operators.py Divergence.expression_matrices.
 """
 function expression_matrices(op::Divergence, sp, vars; kwargs...)
     operand = op.operand
@@ -1505,7 +1503,7 @@ end
     expression_matrices(op::Lift, sp, vars; kwargs...)
 
 Lift matrices for boundary conditions (tau method).
-Following Dedalus operators.py Lift.expression_matrices.
+Following operators.py Lift.expression_matrices.
 """
 function expression_matrices(op::Lift, sp, vars; kwargs...)
     operand = op.operand
@@ -1516,7 +1514,7 @@ function expression_matrices(op::Lift, sp, vars; kwargs...)
     for var in vars
         if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
             # Lift matrix places tau values at specific spectral modes
-            # Following Dedalus tau method
+            # Following tau method
             lift_mat = build_lift_matrix(var, basis, n; kwargs...)
             if lift_mat !== nothing
                 result[var] = lift_mat
@@ -1531,7 +1529,7 @@ end
     expression_matrices(op::Convert, sp, vars; kwargs...)
 
 Basis conversion matrices.
-Following Dedalus operators.py Convert.expression_matrices.
+Following operators.py Convert.expression_matrices.
 """
 function expression_matrices(op::Convert, sp, vars; kwargs...)
     operand = op.operand
@@ -1700,7 +1698,7 @@ end
     build_lift_matrix(var, basis, n; kwargs...)
 
 Build lifting matrix for tau method boundary conditions.
-Following Dedalus operators.py Lift implementation.
+Following operators.py Lift implementation.
 """
 function build_lift_matrix(var, basis, n::Int; kwargs...)
     if !hasfield(typeof(var), :bases)
@@ -1734,7 +1732,7 @@ function build_lift_matrix(var, basis, n::Int; kwargs...)
     n_total = field_dofs(var)
 
     # Lift places boundary values at last n modes
-    # Following Dedalus tau method convention
+    # Following tau method convention
     I_list = Int[]
     J_list = Int[]
     V_list = Float64[]
@@ -1801,14 +1799,14 @@ end
 
 # ============================================================================
 # Utility Operator Evaluation Functions
-# Following Dedalus operators.py implementation
+# Following operators.py implementation
 # ============================================================================
 
 """
     evaluate_interpolate(interp_op::Interpolate, layout::Symbol=:g)
 
 Evaluate interpolation operator at a specific position along a coordinate.
-Following Dedalus operators.py Interpolate implementation.
+Following operators.py Interpolate implementation.
 
 For Fourier bases: uses spectral interpolation (sum of modes)
 For Jacobi bases: uses barycentric interpolation or Clenshaw algorithm
@@ -2090,7 +2088,7 @@ end
     evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
 
 Evaluate integration operator over specified coordinate(s).
-Following Dedalus operators.py Integrate implementation.
+Following operators.py Integrate implementation.
 
 Uses appropriate quadrature weights for each basis type:
 - Fourier: trapezoidal rule (uniform weights)
@@ -2388,7 +2386,7 @@ end
     evaluate_lift(lift_op::Lift, layout::Symbol=:g)
 
 Evaluate lifting operator for tau method boundary conditions.
-Following Dedalus operators.py Lift implementation.
+Following operators.py Lift implementation.
 
 Lift places boundary condition values into the last n spectral modes,
 which are the "tau" degrees of freedom used to enforce BCs.
@@ -2461,7 +2459,7 @@ end
     evaluate_convert(conv_op::Convert, layout::Symbol=:g)
 
 Evaluate basis conversion operator.
-Following Dedalus operators.py Convert implementation.
+Following operators.py Convert implementation.
 
 Converts field from one basis representation to another using
 spectral conversion matrices.
@@ -2676,7 +2674,7 @@ struct UnaryGridFunction <: Operator
 end
 const _UnaryGridFunction_constructor = UnaryGridFunction
 
-# Common unary functions following Dedalus
+# Common unary functions following
 function sin_field(operand::Operand)
     return UnaryGridFunction(operand, sin, "sin")
 end
@@ -3135,7 +3133,7 @@ Evaluate outer product (tensor product) of two vector fields.
 
 For vectors u and v, returns tensor T where T_ij = u_i * v_j.
 
-Following Dedalus pattern for tensor construction from vector products.
+Following pattern for tensor construction from vector products.
 
 Arguments:
 - outer_op: Outer operator containing left and right operands
@@ -3215,7 +3213,7 @@ where u, v, w are velocity components and Δx, Δy, Δz are local grid spacings.
 
 This field can be used for adaptive timestepping: Δt < 1/max(f).
 
-Following Dedalus operators.py:4342-4411 AdvectiveCFL pattern.
+Following operators.py:4342-4411 AdvectiveCFL pattern.
 
 Arguments:
 - cfl_op: AdvectiveCFL operator containing velocity field and coordinate system
@@ -3284,7 +3282,7 @@ Compute local grid spacing for a basis.
 For Fourier bases: uniform spacing Δx = L/N
 For Chebyshev bases: variable spacing based on Chebyshev nodes
 
-Following Dedalus basis.py CartesianAdvectiveCFL.grid_spacing pattern.
+Following basis.py CartesianAdvectiveCFL.grid_spacing pattern.
 """
 function compute_grid_spacing(basis::Basis, dist, axis::Int)
     if basis === nothing

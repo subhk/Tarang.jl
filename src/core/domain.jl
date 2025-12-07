@@ -1,7 +1,5 @@
 """
 Domain class definition
-
-Translated from dedalus/core/domain.py
 """
 
 using LinearAlgebra
@@ -137,7 +135,7 @@ function dealias(domain::Domain)
 end
 
 function constant(domain::Domain)
-    """Tuple indicating which axes are constant (heuristic translation from Dedalus)."""
+    """Tuple indicating which axes are constant."""
     _domain_cached_get!(domain, :constant) do
         const_flags = falses(domain.dist.dim)
         for basis in domain.bases
@@ -226,7 +224,7 @@ function enumerate_unique_bases(domain::Domain)
         seen = OrderedSet()
         pairs = Vector{Tuple{Int, Union{Basis, Nothing}}}()
         for (axis, basis) in enumerate(full_bases(domain))
-            actual_axis = axis - 1  # Dedalus-style 0-based axes
+            actual_axis = axis - 1  # 0-based axes
             if basis === nothing || !(basis in seen)
                 push!(pairs, (actual_axis, basis))
                 if basis !== nothing
