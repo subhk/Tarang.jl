@@ -1,16 +1,14 @@
 """
 Spectral basis classes
 
-Translated from dedalus/core/basis.py
-
-This module implements the Dedalus basis hierarchy:
+This module implements the spectral basis hierarchy:
 - Basis: Abstract base type
 - IntervalBasis: 1D bases on intervals
 - Jacobi: General Jacobi polynomial basis (base for Chebyshev, Legendre, etc.)
 - Ultraspherical/ChebyshevT/ChebyshevU: Jacobi with specific parameters
 - RealFourier/ComplexFourier: Periodic Fourier bases
 
-Key Dedalus features implemented:
+Key features implemented:
 - Proper Jacobi parameter inheritance (a, b, a0, b0)
 - product_matrix for NCC (Non-Constant Coefficient) support
 - valid_elements for mode filtering
@@ -23,7 +21,7 @@ using SparseArrays
 using FFTW
 
 # ============================================================================
-# Abstract types following Dedalus hierarchy
+# Abstract types for basis hierarchy
 # ============================================================================
 
 abstract type Basis end
@@ -32,14 +30,13 @@ abstract type JacobiBasis <: IntervalBasis end  # Base for all Jacobi-type bases
 abstract type FourierBasis <: IntervalBasis end  # Base for Fourier bases
 
 # ============================================================================
-# Affine Change of Variables (following Dedalus basis.py:46-98)
+# Affine Change of Variables
 # ============================================================================
 
 """
     AffineCOV
 
 Class for affine change-of-variables for remapping space bounds.
-Following Dedalus basis.py:46-98.
 """
 struct AffineCOV
     native_bounds::Tuple{Float64, Float64}
