@@ -696,7 +696,7 @@ The RealFourier product matrix handles multiplication of trig functions:
 - 2 sin(mx) sin(nx) = -cos((m+n)x) + cos((m-n)x)
 """
 function _build_real_fourier_product_matrix(N_arg::Int, N_out::Int, m::Int, is_sin::Bool)
-    # Following Dedalus: use wavenumber intersection approach
+    # Use wavenumber intersection approach
     # k_out (even indices) are cos modes, k_arg (even indices) are cos modes
     # Odd indices are -sin (msin) modes
 
@@ -913,8 +913,6 @@ P_m^{(a,b)}(x) * P_n^{(a,b)}(x) = sum_{k=|m-n|}^{m+n} c_k P_k^{(a,b)}(x)
 """
 function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float64, N_max::Int)
     # Use the Dougall formula for Jacobi linearization
-    # This is a simplified implementation - full implementation would use
-    # the recursive formulas from dedalus/libraries/dedalus_sphere/jacobi.py
 
     coeffs = zeros(Float64, N_max)
 
