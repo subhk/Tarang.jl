@@ -162,6 +162,20 @@ struct Differentiate <: Operator
 end
 const _Differentiate_constructor = Differentiate
 
+# Outer product (tensor product of vectors)
+struct Outer <: Operator
+    left::Operand
+    right::Operand
+end
+const _Outer_constructor = Outer
+
+# AdvectiveCFL operator - computes grid-crossing frequency field
+struct AdvectiveCFL <: Operator
+    operand::Operand  # Velocity vector field
+    coords::CoordinateSystem
+end
+const _AdvectiveCFL_constructor = AdvectiveCFL
+
 # Constructor functions (following Dedalus API)
 function grad(operand::Operand, coordsys::CoordinateSystem=operand.dist.coordsys)
     """Gradient operator"""
@@ -264,6 +278,48 @@ function coeff(operand::Operand)
     return multiclass_new(Coeff, operand)
 end
 
+function outer(left::Operand, right::Operand)
+    """
+    Outer product (tensor product) of two vector fields.
+
+    Returns a rank-2 tensor field T where T_ij = u_i * v_j.
+
+    Following Dedalus operators.py pattern for tensor construction.
+
+    Arguments:
+    - left: First vector field (u)
+    - right: Second vector field (v)
+
+    Returns:
+    - TensorField with components T_ij = u_i * v_j
+    """
+    return multiclass_new(Outer, left, right)
+end
+
+function advective_cfl(velocity::Operand, coords::CoordinateSystem)
+    """
+    Compute advective CFL grid-crossing frequency field.
+
+    Returns a scalar field representing the local grid-crossing frequency:
+    f = |u|/Δx + |v|/Δy + |w|/Δz
+
+    This is useful for adaptive timestepping where Δt < 1/max(f).
+
+    Following Dedalus operators.py:4342 AdvectiveCFL pattern.
+
+    Arguments:
+    - velocity: Vector field representing fluid velocity
+    - coords: Coordinate system for the domain
+
+    Returns:
+    - ScalarField with CFL frequency at each grid point
+    """
+    return multiclass_new(AdvectiveCFL, velocity, coords)
+end
+
+# Alias for convenience
+const cfl = advective_cfl
+
 # Register core operators for parsing namespace consistency
 register_operator_alias!(grad, "grad", "gradient")
 register_operator_parseable!(grad, "grad", "gradient")
@@ -324,6 +380,12 @@ register_operator_parseable!(grid, "grid")
 
 register_operator_alias!(coeff, "coeff")
 register_operator_parseable!(coeff, "coeff")
+
+register_operator_alias!(outer, "outer", "tensor_product")
+register_operator_parseable!(outer, "outer", "tensor_product")
+
+register_operator_alias!(advective_cfl, "advective_cfl", "cfl")
+register_operator_parseable!(advective_cfl, "advective_cfl", "cfl")
 
 # Helper functions for creating common operators
 function ∇(operand::Operand, coordsys::CoordinateSystem=operand.dist.coordsys)
@@ -3063,6 +3125,208 @@ function evaluate_vector_laplacian(operand::VectorField, layout::Symbol)
 end
 
 # ============================================================================
+# Outer Product (Tensor Product) evaluation
+# ============================================================================
+
+"""
+    evaluate_outer(outer_op::Outer, layout::Symbol=:g)
+
+Evaluate outer product (tensor product) of two vector fields.
+
+For vectors u and v, returns tensor T where T_ij = u_i * v_j.
+
+Following Dedalus pattern for tensor construction from vector products.
+
+Arguments:
+- outer_op: Outer operator containing left and right operands
+- layout: :g for grid space, :c for coefficient space
+
+Returns:
+- TensorField with components T_ij = u_i * v_j
+"""
+function evaluate_outer(outer_op::Outer, layout::Symbol=:g)
+    left = outer_op.left
+    right = outer_op.right
+
+    # Validate operands are vector fields
+    if !isa(left, VectorField) || !isa(right, VectorField)
+        throw(ArgumentError("Outer product requires two VectorFields"))
+    end
+
+    # Get dimensions
+    dim_left = length(left.components)
+    dim_right = length(right.components)
+
+    # Create result tensor field
+    dist = left.dist
+    coordsys = left.coordsys
+    bases = left.bases
+    dtype = promote_type(left.dtype, right.dtype)
+
+    result = TensorField(dist, coordsys, "outer_$(left.name)_$(right.name)", bases, dtype)
+
+    # Ensure proper dimensions
+    if size(result.components) != (dim_left, dim_right)
+        # Reinitialize with correct dimensions
+        result.components = Matrix{ScalarField}(undef, dim_left, dim_right)
+        for i in 1:dim_left
+            for j in 1:dim_right
+                result.components[i,j] = ScalarField(dist, "T_$(i)$(j)", bases, dtype)
+            end
+        end
+    end
+
+    data_field = layout == :g ? :data_g : :data_c
+
+    # Compute T_ij = u_i * v_j for each component
+    for i in 1:dim_left
+        for j in 1:dim_right
+            # Ensure operands are in correct layout
+            ensure_layout!(left.components[i], layout)
+            ensure_layout!(right.components[j], layout)
+            ensure_layout!(result.components[i,j], layout)
+
+            # Get data arrays
+            u_data = getfield(left.components[i], data_field)
+            v_data = getfield(right.components[j], data_field)
+            result_data = getfield(result.components[i,j], data_field)
+
+            # Compute outer product component: T_ij = u_i * v_j
+            result_data .= u_data .* v_data
+        end
+    end
+
+    return result
+end
+
+# ============================================================================
+# AdvectiveCFL evaluation
+# ============================================================================
+
+"""
+    evaluate_advective_cfl(cfl_op::AdvectiveCFL, layout::Symbol=:g)
+
+Evaluate advective CFL grid-crossing frequency field.
+
+Computes the local grid-crossing frequency:
+    f = |u|/Δx + |v|/Δy + |w|/Δz
+
+where u, v, w are velocity components and Δx, Δy, Δz are local grid spacings.
+
+This field can be used for adaptive timestepping: Δt < 1/max(f).
+
+Following Dedalus operators.py:4342-4411 AdvectiveCFL pattern.
+
+Arguments:
+- cfl_op: AdvectiveCFL operator containing velocity field and coordinate system
+- layout: Must be :g (grid space) for CFL computation
+
+Returns:
+- ScalarField with CFL frequency at each grid point
+"""
+function evaluate_advective_cfl(cfl_op::AdvectiveCFL, layout::Symbol=:g)
+    velocity = cfl_op.operand
+    coords = cfl_op.coords
+
+    # CFL must be computed in grid space
+    if layout != :g
+        @warn "AdvectiveCFL requires grid space; converting to :g"
+        layout = :g
+    end
+
+    # Validate operand is a vector field
+    if !isa(velocity, VectorField)
+        throw(ArgumentError("AdvectiveCFL requires a VectorField (velocity)"))
+    end
+
+    dim = length(velocity.components)
+
+    # Create result scalar field
+    dist = velocity.dist
+    bases = velocity.bases
+    dtype = velocity.dtype
+
+    result = ScalarField(dist, "cfl_freq", bases, dtype)
+    ensure_layout!(result, :g)
+
+    # Initialize result to zero
+    result.data_g .= 0
+
+    # Compute CFL frequency for each coordinate direction
+    for i in 1:dim
+        # Ensure velocity component is in grid space
+        ensure_layout!(velocity.components[i], :g)
+        vel_data = velocity.components[i].data_g
+
+        # Get grid spacing for this coordinate
+        # Grid spacing depends on the basis type
+        basis = bases[i]
+        grid_spacing = compute_grid_spacing(basis, dist, i)
+
+        # Add contribution: |u_i| / Δx_i
+        if isa(grid_spacing, AbstractArray)
+            # Variable grid spacing (e.g., Chebyshev)
+            result.data_g .+= abs.(vel_data) ./ grid_spacing
+        else
+            # Uniform grid spacing (e.g., Fourier)
+            result.data_g .+= abs.(vel_data) ./ grid_spacing
+        end
+    end
+
+    return result
+end
+
+"""
+    compute_grid_spacing(basis::Basis, dist, axis::Int)
+
+Compute local grid spacing for a basis.
+
+For Fourier bases: uniform spacing Δx = L/N
+For Chebyshev bases: variable spacing based on Chebyshev nodes
+
+Following Dedalus basis.py CartesianAdvectiveCFL.grid_spacing pattern.
+"""
+function compute_grid_spacing(basis::Basis, dist, axis::Int)
+    if basis === nothing
+        return 1.0  # Fallback for undefined basis
+    end
+
+    N = basis.N
+
+    if isa(basis, FourierBasis)
+        # Uniform spacing for Fourier
+        L = basis.bounds[2] - basis.bounds[1]
+        return L / N
+    elseif isa(basis, ChebyshevT) || isa(basis, ChebyshevU) || isa(basis, Chebyshev)
+        # Chebyshev grid spacing (clustered at boundaries)
+        # For Chebyshev-Gauss-Lobatto points: x_j = cos(π*j/N)
+        # Local spacing: Δx_j ≈ π * sqrt(1 - x_j²) / N
+        L = basis.bounds[2] - basis.bounds[1]
+
+        # Compute grid points
+        j = 0:(N-1)
+        x_j = cos.(π .* j ./ (N - 1))
+
+        # Local spacing (avoiding singularity at boundaries)
+        spacing = (π / N) .* sqrt.(max.(1 .- x_j.^2, 1e-10))
+
+        # Scale to physical domain
+        return spacing .* (L / 2)
+    elseif isa(basis, Legendre)
+        # Legendre-Gauss-Lobatto spacing (similar to Chebyshev)
+        L = basis.bounds[2] - basis.bounds[1]
+        return L / N  # Approximate with uniform for simplicity
+    elseif isa(basis, Jacobi)
+        # General Jacobi basis
+        L = basis.bounds[2] - basis.bounds[1]
+        return L / N  # Approximate with uniform
+    else
+        # Default uniform spacing
+        return 1.0
+    end
+end
+
+# ============================================================================
 # Unified operator evaluation dispatcher
 # ============================================================================
 
@@ -3116,6 +3380,10 @@ function evaluate(op::Operator, layout::Symbol=:g)
         return evaluate_skew(op, layout)
     elseif isa(op, TransposeComponents)
         return evaluate_transpose_components(op, layout)
+    elseif isa(op, Outer)
+        return evaluate_outer(op, layout)
+    elseif isa(op, AdvectiveCFL)
+        return evaluate_advective_cfl(op, layout)
     elseif isa(op, TimeDerivative)
         # TimeDerivative is handled by solvers, not direct evaluation
         throw(ArgumentError("TimeDerivative cannot be directly evaluated; use solver"))

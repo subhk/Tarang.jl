@@ -357,6 +357,62 @@ end
 const Chebyshev = ChebyshevT
 
 # ============================================================================
+# ChebyshevV = Ultraspherical(alpha=2) = Jacobi(a=3/2, b=3/2)
+# Following Dedalus basis.py:657-658
+# ============================================================================
+
+"""
+    ChebyshevV <: JacobiBasis
+
+Chebyshev-like polynomials with alpha=2 (third kind variant).
+Equivalent to Ultraspherical(alpha=2) or Jacobi(a=3/2, b=3/2).
+
+This basis is useful for second-order derivatives and appears in
+spectral methods for fourth-order PDEs.
+
+Following Dedalus basis.py:657-658.
+"""
+struct ChebyshevV <: JacobiBasis
+    meta::BasisMeta
+    transforms::Dict{String, Any}
+    a::Float64
+    b::Float64
+    a0::Float64
+    b0::Float64
+    _product_matrix_cache::Dict{Tuple, AbstractMatrix}
+    _conversion_matrix_cache::Dict{Tuple, AbstractMatrix}
+    _differentiation_matrix_cache::Dict{Int, AbstractMatrix}
+end
+
+function _build_chebyshev_v(coord::Coordinate;
+                            size::Int=32,
+                            bounds::Tuple{Float64,Float64}=(-1.0,1.0),
+                            dealias::Float64=1.0,
+                            dtype=Float64)
+    # ChebyshevV = Jacobi(a=3/2, b=3/2) = Ultraspherical(alpha=2)
+    a = 1.5
+    b = 1.5
+    a0 = a
+    b0 = b
+
+    meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype;
+                     native_bounds=JACOBI_NATIVE_BOUNDS, constant_mode_value=1.0)
+    transforms = Dict{String, Any}()
+    product_cache = Dict{Tuple, AbstractMatrix}()
+    conversion_cache = Dict{Tuple, AbstractMatrix}()
+    diff_cache = Dict{Int, AbstractMatrix}()
+
+    return ChebyshevV(meta, transforms, a, b, a0, b0,
+                      product_cache, conversion_cache, diff_cache)
+end
+
+const _ChebyshevV_constructor = _build_chebyshev_v
+
+function ChebyshevV(coord::Coordinate; kwargs...)
+    return multiclass_new(ChebyshevV, coord; kwargs...)
+end
+
+# ============================================================================
 # Legendre = Jacobi(a=0, b=0)
 # ============================================================================
 
@@ -835,31 +891,126 @@ end
     derivative_basis(basis::JacobiBasis, order::Int=1)
 
 Return the basis for the derivative of fields in this basis.
-Following Dedalus: d/dx(ChebyshevT) -> ChebyshevU, etc.
+
+Following Dedalus derivative basis chain:
+- d/dx(ChebyshevT) -> ChebyshevU (Jacobi a,b: -1/2,-1/2 -> 1/2,1/2)
+- d/dx(ChebyshevU) -> ChebyshevV (Jacobi a,b: 1/2,1/2 -> 3/2,3/2)
+- d/dx(ChebyshevV) -> Jacobi(5/2, 5/2)
+- General: d/dx P_n^{(a,b)} is proportional to P_{n-1}^{(a+1,b+1)}
+
+Reference: Dedalus basis.py:630-633, 649-658
 """
 function derivative_basis(basis::ChebyshevT, order::Int=1)
     # d/dx(T_n) is proportional to U_{n-1}
     # After differentiation, output is in ChebyshevU
-    # For simplicity, return same basis with adjusted parameters
-    # Full implementation would create ChebyshevU basis
-    return basis  # Simplified - full implementation creates output basis
+    # Create new ChebyshevU basis with same domain parameters
+    if order == 0
+        return basis
+    end
+
+    coord = Coordinate(basis.meta.name; cs=basis.meta.coordsys)
+    output = ChebyshevU(coord;
+                        size=basis.meta.size,
+                        bounds=basis.meta.bounds,
+                        dealias=basis.meta.dealias,
+                        dtype=basis.meta.dtype)
+
+    # Recursively apply for higher orders
+    if order > 1
+        return derivative_basis(output, order - 1)
+    end
+    return output
 end
 
 function derivative_basis(basis::ChebyshevU, order::Int=1)
-    return basis
+    # d/dx(U_n) is proportional to polynomials in ChebyshevV family
+    # ChebyshevU = Jacobi(1/2, 1/2), derivative -> Jacobi(3/2, 3/2) = ChebyshevV
+    if order == 0
+        return basis
+    end
+
+    coord = Coordinate(basis.meta.name; cs=basis.meta.coordsys)
+    output = ChebyshevV(coord;
+                        size=basis.meta.size,
+                        bounds=basis.meta.bounds,
+                        dealias=basis.meta.dealias,
+                        dtype=basis.meta.dtype)
+
+    if order > 1
+        return derivative_basis(output, order - 1)
+    end
+    return output
+end
+
+function derivative_basis(basis::ChebyshevV, order::Int=1)
+    # d/dx(V_n) -> Jacobi(5/2, 5/2)
+    # Continue the Jacobi parameter increment chain
+    if order == 0
+        return basis
+    end
+
+    coord = Coordinate(basis.meta.name; cs=basis.meta.coordsys)
+    # Create Jacobi basis with incremented parameters
+    output = Jacobi(coord;
+                    a=basis.a + 1.0,
+                    b=basis.b + 1.0,
+                    size=basis.meta.size,
+                    bounds=basis.meta.bounds,
+                    dealias=basis.meta.dealias,
+                    dtype=basis.meta.dtype)
+
+    if order > 1
+        return derivative_basis(output, order - 1)
+    end
+    return output
 end
 
 function derivative_basis(basis::Legendre, order::Int=1)
-    return basis
+    # d/dx(P_n) is proportional to Jacobi with a=1, b=1
+    # Legendre = Jacobi(0,0), derivative -> Jacobi(1,1)
+    if order == 0
+        return basis
+    end
+
+    coord = Coordinate(basis.meta.name; cs=basis.meta.coordsys)
+    output = Jacobi(coord;
+                    a=1.0,
+                    b=1.0,
+                    size=basis.meta.size,
+                    bounds=basis.meta.bounds,
+                    dealias=basis.meta.dealias,
+                    dtype=basis.meta.dtype)
+
+    if order > 1
+        return derivative_basis(output, order - 1)
+    end
+    return output
 end
 
 function derivative_basis(basis::Jacobi, order::Int=1)
     # d/dx P_n^{(a,b)} is proportional to P_{n-1}^{(a+1,b+1)}
-    return basis  # Simplified
+    if order == 0
+        return basis
+    end
+
+    coord = Coordinate(basis.meta.name; cs=basis.meta.coordsys)
+    output = Jacobi(coord;
+                    a=basis.a + 1.0,
+                    b=basis.b + 1.0,
+                    size=basis.meta.size,
+                    bounds=basis.meta.bounds,
+                    dealias=basis.meta.dealias,
+                    dtype=basis.meta.dtype)
+
+    if order > 1
+        return derivative_basis(output, order - 1)
+    end
+    return output
 end
 
 function derivative_basis(basis::FourierBasis, order::Int=1)
     # Fourier derivative stays in same basis
+    # d/dx(exp(ikx)) = ik*exp(ikx), still in Fourier space
     return basis
 end
 
