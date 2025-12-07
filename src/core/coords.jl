@@ -434,7 +434,6 @@ end
     nkron(A, n)
 
 N-fold Kronecker product of matrix A with itself.
-Following tools/array.py nkron function.
 """
 function nkron(A::AbstractMatrix, n::Int)
     if n == 0
@@ -454,7 +453,6 @@ end
     sparse_block_diag(matrices)
 
 Create a sparse block diagonal matrix from a vector of matrices.
-Following tools/array.py sparse_block_diag function.
 """
 function sparse_block_diag(matrices::Vector)
     if isempty(matrices)
