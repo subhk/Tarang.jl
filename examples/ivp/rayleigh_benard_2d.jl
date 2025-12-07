@@ -1,9 +1,6 @@
 """
 2D Rayleigh-Benard Convection
 
-Tarang.jl implementation following the Dedalus example:
-dedalus/examples/ivp_2d_rayleigh_benard/rayleigh_benard.py
-
 This script simulates 2D horizontally-periodic Rayleigh-Benard convection.
 The problem is non-dimensionalized using the box height and freefall time, so
 the resulting thermal diffusivity and viscosity are related to the Prandtl
@@ -33,7 +30,7 @@ function main()
     comm = MPI.COMM_WORLD
     rank = MPI.Comm_rank(comm)
 
-    # Parameters (matching Dedalus example)
+    # Parameters
     Lx, Lz = 4.0, 1.0           # Domain size
     Nx, Nz = 256, 64            # Resolution
     Rayleigh = 2e6              # Rayleigh number
@@ -93,7 +90,7 @@ function main()
     Tarang.add_substitution!(problem, "nu", nu)
     Tarang.add_substitution!(problem, "Lz", Lz)
 
-    # Equations (following Dedalus first-order formulation)
+    # Equations (following first-order formulation)
     # Continuity: div(u) + tau_p = 0
     Tarang.add_equation!(problem, "div(u) + tau_p = 0")
 

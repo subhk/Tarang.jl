@@ -23,7 +23,7 @@ Where:
 - T₀(r) is the conductive temperature profile
 - Ra is Rayleigh number, Ek is Ekman number, Pm is magnetic Prandtl number
 
-Based on dedalus/examples/evp_shell_rotating_convection but extended for MHD.
+This implements the rotating MHD convection EVP.
 """
 
 using Tarang
@@ -411,7 +411,7 @@ function solve_critical_rayleigh_number(;
         # Build solver
         solver = EigenvalueSolver(problem, n_modes=n_modes)
         
-        # Select azimuthal mode m (following Dedalus subproblem pattern)
+        # Select azimuthal mode m (following subproblem pattern)
         if target_azimuthal_mode !== nothing
             # Use specific azimuthal mode
             target_m = target_azimuthal_mode
