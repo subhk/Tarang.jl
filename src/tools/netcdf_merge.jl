@@ -302,16 +302,38 @@ function merge_variable_concat!(merger::NetCDFMerger, output_file::String, var_n
     end
     
     # For simple concat, we add a processor dimension
-    # Combined data shape: [time, spatial..., processor]
+    # Combined data shape: [spatial/time dims..., processor]
     first_data = all_data[1]
-    combined_shape = (size(first_data)..., length(all_data))
-    
+    n_dims = ndims(first_data)
+    n_procs = length(all_data)
+    combined_shape = (size(first_data)..., n_procs)
+
     # Stack data along new processor dimension
     combined_data = zeros(data_type, combined_shape)
+    skipped_count = 0
+
     for (i, data) in enumerate(all_data)
         if size(data) == size(first_data)
-            combined_data[fill(:, ndims(first_data))..., i] = data
+            # Build proper index tuple: (:, :, ..., :, i) for the i-th processor slice
+            # Use selectdim-style indexing for dimension-agnostic assignment
+            indices = ntuple(d -> d <= n_dims ? Colon() : i, n_dims + 1)
+            combined_data[indices...] = data
+        else
+            # Data shape mismatch - log warning and skip
+            skipped_count += 1
+            if merger.verbose && skipped_count <= 3
+                println("    Warning: Processor $i data shape $(size(data)) != expected $(size(first_data)), skipping")
+            end
         end
+    end
+
+    if skipped_count > 0
+        merger.verbose && println("    Skipped $skipped_count processors due to shape mismatch")
+    end
+
+    if skipped_count == n_procs
+        merger.verbose && println("    Error: All processor data had mismatched shapes")
+        return
     end
     
     # Create processor coordinate
