@@ -497,4 +497,4 @@ The full script is available in `examples/rayleigh_benard_2d.jl`. Key points:
 
 1. Chandrasekhar, S. (1961). *Hydrodynamic and Hydromagnetic Stability*
 2. Tritton, D. J. (1988). *Physical Fluid Dynamics*
-3. Dedalus Documentation: [Rayleigh-Bénard Example](https://dedalus-project.readthedocs.io/)
+3. Spectral Methods Resources

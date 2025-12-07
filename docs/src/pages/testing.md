@@ -33,7 +33,7 @@ test/
 ├── test_flow_tools.jl       # Analysis tools
 ├── test_quick_domains.jl    # Domain helpers
 ├── test_plot_tools.jl       # Visualization
-└── test_dedalus_parity.jl   # Compatibility tests
+└── test_compatibility.jl    # Compatibility tests
 ```
 
 ## Writing Tests

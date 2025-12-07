@@ -377,7 +377,6 @@ For documentation changes:
 
 - [Documenter.jl Documentation](https://juliadocs.github.io/Documenter.jl/)
 - [Julia Documentation](https://docs.julialang.org/)
-- [Dedalus Documentation](https://dedalus-project.readthedocs.io/) (inspiration)
 - [Markdown Guide](https://www.markdownguide.org/)
 
 ## Questions?

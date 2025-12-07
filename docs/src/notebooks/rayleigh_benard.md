@@ -158,4 +158,4 @@ MPI.Finalize()
 ## References
 
 - Chandrasekhar, S. (1961). Hydrodynamic and Hydromagnetic Stability
-- Dedalus Project tutorials
+- Spectral methods tutorials
