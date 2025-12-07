@@ -1748,6 +1748,543 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     end
 end
 
+# ============================================================================
+# Additional Timestepper Step Functions
+# ============================================================================
+
+function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
+    """
+    Modified Crank-Nicolson Adams-Bashforth 2nd order step.
+
+    Following Dedalus timesteppers.py MCNAB2 implementation.
+    Uses modified θ parameter for the implicit Crank-Nicolson treatment.
+
+    The modification uses θ slightly different from 0.5 to improve stability
+    for certain stiff problems while maintaining 2nd order accuracy.
+
+    Formula:
+    (M + θ*dt*L) X^{n+1} = (M - (1-θ)*dt*L) X^n + dt*(c₁*F^n + c₂*F^{n-1})
+
+    where c₁ = 1.5, c₂ = -0.5 are Adams-Bashforth 2 coefficients.
+    """
+
+    current_state = state.history[end]
+    dt = state.dt
+    θ = state.timestepper.implicit_coefficient
+
+    # Initialize history arrays if needed
+    if !haskey(state.timestepper_data, "MX_history")
+        state.timestepper_data["MX_history"] = []
+        state.timestepper_data["LX_history"] = []
+        state.timestepper_data["F_history"] = []
+        state.timestepper_data["iteration"] = 0
+    end
+
+    iteration = state.timestepper_data["iteration"]
+
+    # Check if we have enough history for MCNAB2
+    if iteration < 1 || length(state.history) < 2
+        @debug "MCNAB2 requires iteration >= 1, falling back to CNAB1"
+        step_cnab1!(state, solver)
+        return
+    end
+
+    # Get matrices from solver
+    if !haskey(solver.problem.parameters, "L_matrix") || !haskey(solver.problem.parameters, "M_matrix")
+        @warn "MCNAB2 requires L_matrix and M_matrix, falling back to CNAB2"
+        step_cnab2!(state, solver)
+        return
+    end
+
+    L_matrix = solver.problem.parameters["L_matrix"]
+    M_matrix = solver.problem.parameters["M_matrix"]
+
+    # Get timestep history for variable timestep
+    dt_current = dt
+    dt_previous = get_previous_timestep(state)
+    w1 = dt_current / dt_previous
+
+    # MCNAB2 coefficients with modified θ
+    # a coefficients for time derivative (same as CNAB2)
+    a = [1.0/dt_current, -1.0/dt_current]
+    # b coefficients for implicit treatment with modified θ
+    b = [θ, 1.0 - θ]
+    # c coefficients for Adams-Bashforth 2 extrapolation (variable timestep)
+    c = [0.0, 1.0 + w1/2.0, -w1/2.0]
+
+    try
+        # Convert current state to vector
+        X_current = fields_to_vector(current_state)
+
+        # Compute M.X[0] and L.X[0]
+        MX_current = M_matrix * X_current
+        LX_current = L_matrix * X_current
+
+        # Evaluate F(X[0]) at current time step
+        F_current = evaluate_rhs(solver, current_state, solver.sim_time)
+        F_current_vec = fields_to_vector(F_current)
+
+        # Rotate and store history
+        MX_history = state.timestepper_data["MX_history"]
+        LX_history = state.timestepper_data["LX_history"]
+        F_history = state.timestepper_data["F_history"]
+
+        pushfirst!(MX_history, MX_current)
+        pushfirst!(LX_history, LX_current)
+        pushfirst!(F_history, F_current_vec)
+
+        # Keep only needed history
+        while length(MX_history) > 2; pop!(MX_history); end
+        while length(LX_history) > 2; pop!(LX_history); end
+        while length(F_history) > 2; pop!(F_history); end
+
+        # Build RHS: c[1]*F[0] + c[2]*F[1] - a[1]*MX[0] - b[1]*LX[0]
+        rhs = c[2] * F_history[1]
+        if length(F_history) >= 2
+            rhs .+= c[3] * F_history[2]
+        end
+        rhs .-= a[2] * MX_history[1]
+        rhs .-= b[2] * LX_history[1]
+
+        # Build and solve LHS: (a[0]*M + b[0]*L) X = RHS
+        LHS_matrix = a[1] * M_matrix + b[1] * L_matrix
+        X_new = LHS_matrix \ rhs
+
+        # Update state
+        new_state = copy.(current_state)
+        copy_solution_to_fields!(new_state, X_new)
+
+        push!(state.history, new_state)
+        state.timestepper_data["iteration"] += 1
+
+        @debug "MCNAB2 step completed: dt=$dt_current, θ=$θ, iteration=$(state.timestepper_data["iteration"])"
+
+    catch e
+        @warn "MCNAB2 failed: $e, falling back to CNAB2"
+        step_cnab2!(state, solver)
+        return
+    end
+
+    # Keep reasonable history length
+    if length(state.history) > 4
+        popfirst!(state.history)
+    end
+end
+
+function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
+    """
+    Crank-Nicolson Leapfrog 2nd order step.
+
+    Following Dedalus timesteppers.py CNLF implementation.
+    Uses leapfrog (centered) treatment for explicit terms with Crank-Nicolson
+    for implicit terms.
+
+    This is a 3-level method that uses X^{n-1}, X^n, and computes X^{n+1}.
+
+    Formula:
+    (M + θ*dt*L) X^{n+1} = (M - (1-θ)*dt*L) X^{n-1} + 2*dt*F^n
+
+    where θ = 0.5 for standard Crank-Nicolson.
+
+    Note: Leapfrog can have computational mode issues; Robert-Asselin filter
+    may be needed for long integrations.
+    """
+
+    current_state = state.history[end]
+    dt = state.dt
+    θ = state.timestepper.implicit_coefficient
+
+    # Initialize history if needed
+    if !haskey(state.timestepper_data, "iteration")
+        state.timestepper_data["iteration"] = 0
+    end
+
+    iteration = state.timestepper_data["iteration"]
+
+    # CNLF requires X^{n-1}, so need at least 2 history states
+    if iteration < 1 || length(state.history) < 2
+        @debug "CNLF2 requires 2 history states, falling back to CNAB1"
+        step_cnab1!(state, solver)
+        return
+    end
+
+    # Get matrices from solver
+    if !haskey(solver.problem.parameters, "L_matrix") || !haskey(solver.problem.parameters, "M_matrix")
+        @warn "CNLF2 requires L_matrix and M_matrix, falling back to RK222"
+        step_rk222!(state, solver)
+        return
+    end
+
+    L_matrix = solver.problem.parameters["L_matrix"]
+    M_matrix = solver.problem.parameters["M_matrix"]
+
+    try
+        # Get X^n and X^{n-1}
+        X_current = fields_to_vector(current_state)
+        X_previous = fields_to_vector(state.history[end-1])
+
+        # Evaluate F^n at current state
+        F_current = evaluate_rhs(solver, current_state, solver.sim_time)
+        F_current_vec = fields_to_vector(F_current)
+
+        # Build RHS: (M - (1-θ)*dt*L) X^{n-1} + 2*dt*F^n
+        rhs = (M_matrix - (1.0 - θ) * dt * L_matrix) * X_previous + 2.0 * dt * F_current_vec
+
+        # Build and solve LHS: (M + θ*dt*L) X^{n+1} = RHS
+        LHS_matrix = M_matrix + θ * dt * L_matrix
+        X_new = LHS_matrix \ rhs
+
+        # Update state
+        new_state = copy.(current_state)
+        copy_solution_to_fields!(new_state, X_new)
+
+        push!(state.history, new_state)
+        state.timestepper_data["iteration"] += 1
+
+        @debug "CNLF2 step completed: dt=$dt, θ=$θ, iteration=$(state.timestepper_data["iteration"])"
+
+    catch e
+        @warn "CNLF2 failed: $e, falling back to CNAB2"
+        step_cnab2!(state, solver)
+        return
+    end
+
+    # Keep reasonable history length (CNLF needs 2 previous states)
+    if length(state.history) > 3
+        popfirst!(state.history)
+    end
+end
+
+function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
+    """
+    Strong Stability Preserving Runge-Kutta 3rd order step (SSP-RK3).
+
+    Following Dedalus timesteppers.py RKSMR implementation.
+    This is the Shu-Osher form of SSP-RK3, optimal for hyperbolic PDEs.
+
+    Shu-Osher form:
+    Stage 1: u^(1) = u^n + dt*F(u^n)
+    Stage 2: u^(2) = 3/4*u^n + 1/4*u^(1) + 1/4*dt*F(u^(1))
+    Stage 3: u^{n+1} = 1/3*u^n + 2/3*u^(2) + 2/3*dt*F(u^(2))
+
+    Properties:
+    - 3rd order accurate
+    - SSP with CFL coefficient C = 1
+    - TVD (Total Variation Diminishing) for scalar conservation laws
+    """
+
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+
+    alpha = state.timestepper.alpha
+    beta = state.timestepper.beta
+
+    try
+        # Stage 1: u^(1) = u^n + dt*F(u^n)
+        F0 = evaluate_rhs(solver, current_state, t)
+        u1 = add_scaled_state(current_state, F0, dt * beta[1])
+
+        # Stage 2: u^(2) = 3/4*u^n + 1/4*u^(1) + 1/4*dt*F(u^(1))
+        F1 = evaluate_rhs(solver, u1, t + dt)
+        # u^(2) = alpha[2,1]*u^n + alpha[2,2]*u^(1) + beta[2]*dt*F(u^(1))
+        u2 = ScalarField[]
+        for (i, field0) in enumerate(current_state)
+            field1 = u1[i]
+            new_field = ScalarField(field0.dist, field0.name, field0.bases, field0.dtype)
+            ensure_layout!(field0, :g)
+            ensure_layout!(field1, :g)
+            ensure_layout!(F1[i], :g)
+            ensure_layout!(new_field, :g)
+
+            new_field.data_g .= alpha[2,1] .* field0.data_g .+
+                                alpha[2,2] .* field1.data_g .+
+                                dt * beta[2] .* F1[i].data_g
+            push!(u2, new_field)
+        end
+
+        # Stage 3: u^{n+1} = 1/3*u^n + 2/3*u^(2) + 2/3*dt*F(u^(2))
+        F2 = evaluate_rhs(solver, u2, t + 0.5*dt)  # Approximate midpoint
+        new_state = ScalarField[]
+        for (i, field0) in enumerate(current_state)
+            field2 = u2[i]
+            new_field = ScalarField(field0.dist, field0.name, field0.bases, field0.dtype)
+            ensure_layout!(field0, :g)
+            ensure_layout!(field2, :g)
+            ensure_layout!(F2[i], :g)
+            ensure_layout!(new_field, :g)
+
+            new_field.data_g .= alpha[3,1] .* field0.data_g .+
+                                alpha[3,3] .* field2.data_g .+
+                                dt * beta[3] .* F2[i].data_g
+            push!(new_state, new_field)
+        end
+
+        push!(state.history, new_state)
+
+        @debug "RKSMR (SSP-RK3) step completed: dt=$dt"
+
+    catch e
+        @warn "RKSMR failed: $e, falling back to RK443"
+        step_rk443!(state, solver)
+        return
+    end
+
+    # Keep only necessary history
+    if length(state.history) > 2
+        popfirst!(state.history)
+    end
+end
+
+function step_rkgfy!(state::TimestepperState, solver::InitialValueSolver)
+    """
+    General Framework IMEX Runge-Kutta step (ARK2).
+
+    Following Dedalus timesteppers.py RungeKuttaIMEX implementation.
+    This implements the Ascher-Ruuth-Spiteri ARK2 method.
+
+    For the system: du/dt = L*u + N(u)
+    where L is the stiff linear part and N is the nonlinear part.
+
+    Each stage solves:
+    (I - γ*dt*L) * k_i = L*Y_i + N(Y_i)
+
+    where γ is the DIRK diagonal coefficient and Y_i are the stage values.
+    """
+
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+
+    A_exp = state.timestepper.A_explicit
+    b_exp = state.timestepper.b_explicit
+    c_exp = state.timestepper.c_explicit
+    A_imp = state.timestepper.A_implicit
+    b_imp = state.timestepper.b_implicit
+    c_imp = state.timestepper.c_implicit
+    stages = state.timestepper.stages
+
+    # Get matrices from solver
+    if !haskey(solver.problem.parameters, "L_matrix") || !haskey(solver.problem.parameters, "M_matrix")
+        @warn "RKGFY requires L_matrix and M_matrix, falling back to RK443"
+        step_rk443!(state, solver)
+        return
+    end
+
+    L_matrix = solver.problem.parameters["L_matrix"]
+    M_matrix = solver.problem.parameters["M_matrix"]
+
+    try
+        # Convert initial state to vector
+        X0 = fields_to_vector(current_state)
+        n = length(X0)
+        I_mat = Matrix{eltype(L_matrix)}(LinearAlgebra.I, n, n)
+
+        # Store stage values and RHS evaluations
+        K_exp = zeros(eltype(X0), n, stages)  # Explicit RHS at each stage
+        K_imp = zeros(eltype(X0), n, stages)  # Implicit RHS at each stage
+        Y = zeros(eltype(X0), n, stages)      # Stage values
+
+        # Stage 1 (initial stage)
+        Y[:, 1] .= X0
+        F0 = evaluate_rhs(solver, current_state, t + c_exp[1]*dt)
+        K_exp[:, 1] .= fields_to_vector(F0)
+        K_imp[:, 1] .= L_matrix * X0
+
+        # Stages 2 to s
+        for i in 2:stages
+            # Build stage value Y_i from previous stages
+            Y_i = copy(X0)
+
+            # Explicit contributions: sum_{j=1}^{i-1} a^E_{ij} * k^E_j
+            for j in 1:(i-1)
+                if A_exp[i,j] != 0.0
+                    Y_i .+= dt * A_exp[i,j] .* K_exp[:, j]
+                end
+            end
+
+            # Implicit contributions from previous stages: sum_{j=1}^{i-1} a^I_{ij} * k^I_j
+            for j in 1:(i-1)
+                if A_imp[i,j] != 0.0
+                    Y_i .+= dt * A_imp[i,j] .* K_imp[:, j]
+                end
+            end
+
+            # Solve implicit stage: (I - γ*dt*L) * Y_i_new = Y_i
+            γ = A_imp[i,i]
+            if γ != 0.0
+                LHS = I_mat - γ * dt * L_matrix
+                Y_i = LHS \ Y_i
+            end
+
+            Y[:, i] .= Y_i
+
+            # Evaluate RHS at stage value
+            temp_state = copy.(current_state)
+            copy_solution_to_fields!(temp_state, Y_i)
+            F_i = evaluate_rhs(solver, temp_state, t + c_exp[i]*dt)
+            K_exp[:, i] .= fields_to_vector(F_i)
+            K_imp[:, i] .= L_matrix * Y_i
+        end
+
+        # Final update: X_{n+1} = X_n + dt * sum_i (b^E_i * k^E_i + b^I_i * k^I_i)
+        X_new = copy(X0)
+        for i in 1:stages
+            if b_exp[i] != 0.0
+                X_new .+= dt * b_exp[i] .* K_exp[:, i]
+            end
+            if b_imp[i] != 0.0
+                X_new .+= dt * b_imp[i] .* K_imp[:, i]
+            end
+        end
+
+        # Update state
+        new_state = copy.(current_state)
+        copy_solution_to_fields!(new_state, X_new)
+
+        push!(state.history, new_state)
+
+        @debug "RKGFY (ARK2) step completed: dt=$dt"
+
+    catch e
+        @warn "RKGFY failed: $e, falling back to RK443"
+        step_rk443!(state, solver)
+        return
+    end
+
+    # Keep only necessary history
+    if length(state.history) > 2
+        popfirst!(state.history)
+    end
+end
+
+function step_rk443_imex!(state::TimestepperState, solver::InitialValueSolver)
+    """
+    4-stage 3rd-order IMEX Runge-Kutta step.
+
+    Following Dedalus timesteppers.py RK443 IMEX implementation.
+    Similar to RKGFY but with 4 stages for 3rd order accuracy.
+
+    Uses the same ARK framework with:
+    - Explicit tableau for nonlinear terms
+    - SDIRK (singly diagonal implicit) tableau for linear terms
+    """
+
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+
+    A_exp = state.timestepper.A_explicit
+    b_exp = state.timestepper.b_explicit
+    c_exp = state.timestepper.c_explicit
+    A_imp = state.timestepper.A_implicit
+    b_imp = state.timestepper.b_implicit
+    c_imp = state.timestepper.c_implicit
+    stages = state.timestepper.stages
+
+    # Get matrices from solver
+    if !haskey(solver.problem.parameters, "L_matrix") || !haskey(solver.problem.parameters, "M_matrix")
+        @warn "RK443_IMEX requires L_matrix and M_matrix, falling back to RK443"
+        step_rk443!(state, solver)
+        return
+    end
+
+    L_matrix = solver.problem.parameters["L_matrix"]
+    M_matrix = solver.problem.parameters["M_matrix"]
+
+    try
+        # Convert initial state to vector
+        X0 = fields_to_vector(current_state)
+        n = length(X0)
+        I_mat = Matrix{eltype(L_matrix)}(LinearAlgebra.I, n, n)
+
+        # Store stage values and RHS evaluations
+        K_exp = zeros(eltype(X0), n, stages)
+        K_imp = zeros(eltype(X0), n, stages)
+        Y = zeros(eltype(X0), n, stages)
+
+        # For SDIRK, compute LU factorization of (I - γ*dt*L) once
+        γ = A_imp[1,1]  # Same γ on diagonal for SDIRK
+        if γ != 0.0
+            LHS = I_mat - γ * dt * L_matrix
+            LHS_factored = lu(LHS)
+        else
+            LHS_factored = nothing
+        end
+
+        # Stage 1
+        if γ != 0.0 && LHS_factored !== nothing
+            Y[:, 1] .= LHS_factored \ X0
+        else
+            Y[:, 1] .= X0
+        end
+
+        temp_state = copy.(current_state)
+        copy_solution_to_fields!(temp_state, Y[:, 1])
+        F0 = evaluate_rhs(solver, temp_state, t + c_exp[1]*dt)
+        K_exp[:, 1] .= fields_to_vector(F0)
+        K_imp[:, 1] .= L_matrix * Y[:, 1]
+
+        # Stages 2 to s
+        for i in 2:stages
+            # Build RHS from previous stages
+            rhs = copy(X0)
+
+            for j in 1:(i-1)
+                if A_exp[i,j] != 0.0
+                    rhs .+= dt * A_exp[i,j] .* K_exp[:, j]
+                end
+                if A_imp[i,j] != 0.0
+                    rhs .+= dt * A_imp[i,j] .* K_imp[:, j]
+                end
+            end
+
+            # Solve implicit stage
+            if A_imp[i,i] != 0.0 && LHS_factored !== nothing
+                Y[:, i] .= LHS_factored \ rhs
+            else
+                Y[:, i] .= rhs
+            end
+
+            # Evaluate RHS
+            temp_state = copy.(current_state)
+            copy_solution_to_fields!(temp_state, Y[:, i])
+            F_i = evaluate_rhs(solver, temp_state, t + c_exp[i]*dt)
+            K_exp[:, i] .= fields_to_vector(F_i)
+            K_imp[:, i] .= L_matrix * Y[:, i]
+        end
+
+        # Final update
+        X_new = copy(X0)
+        for i in 1:stages
+            if b_exp[i] != 0.0
+                X_new .+= dt * b_exp[i] .* K_exp[:, i]
+            end
+            if b_imp[i] != 0.0
+                X_new .+= dt * b_imp[i] .* K_imp[:, i]
+            end
+        end
+
+        # Update state
+        new_state = copy.(current_state)
+        copy_solution_to_fields!(new_state, X_new)
+
+        push!(state.history, new_state)
+
+        @debug "RK443_IMEX step completed: dt=$dt"
+
+    catch e
+        @warn "RK443_IMEX failed: $e, falling back to RK443"
+        step_rk443!(state, solver)
+        return
+    end
+
+    # Keep only necessary history
+    if length(state.history) > 2
+        popfirst!(state.history)
+    end
+end
+
 # Helper functions
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, time::Float64)
     """
@@ -1926,14 +2463,14 @@ function get_max_timestep_history(timestepper::TimeStepper)
     """Get maximum timestep history needed for timestepper"""
     if isa(timestepper, Union{CNAB1, SBDF1})
         return 2  # Current + 1 previous
-    elseif isa(timestepper, Union{CNAB2, SBDF2, ETD_CNAB2, ETD_SBDF2})
-        return 3  # Current + 2 previous  
+    elseif isa(timestepper, Union{CNAB2, SBDF2, ETD_CNAB2, ETD_SBDF2, MCNAB2, CNLF2})
+        return 3  # Current + 2 previous
     elseif isa(timestepper, Union{SBDF3})
         return 4  # Current + 3 previous
     elseif isa(timestepper, Union{SBDF4})
         return 5  # Current + 4 previous
-    elseif isa(timestepper, Union{ETD_RK222})
-        return 2  # Current + 1 previous for exponential methods
+    elseif isa(timestepper, Union{ETD_RK222, RKSMR, RKGFY, RK443_IMEX})
+        return 2  # Current + 1 previous for RK/exponential methods
     else
         return 2  # Default for explicit methods
     end
