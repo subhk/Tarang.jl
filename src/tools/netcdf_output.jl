@@ -224,13 +224,345 @@ function create_operator(task, vars::Dict, dist)
 end
 
 """
-Parse field expression from string (placeholder - needs proper implementation)
+    parse_field_expression(expr_str::String, vars::Dict, dist) -> Union{Operator, ScalarField, Dict}
+
+Parse a field expression string into an operator tree or field.
+
+Supports expressions like:
+- Variable references: "u", "velocity"
+- Arithmetic: "u + v", "2*u", "u - v"
+- Derivatives: "dx(u)", "d(u,x)", "lap(u)"
+- Products: "u*v", "dot(u, v)"
+
+# Arguments
+- `expr_str`: Expression string to parse
+- `vars`: Dictionary mapping variable names to fields/values
+- `dist`: Distributor for creating new fields if needed
+
+# Returns
+- Parsed operator, field, or Dict representation
+
+# Examples
+```julia
+vars = Dict("u" => u_field, "v" => v_field, "nu" => 0.01)
+op = parse_field_expression("nu * lap(u)", vars, dist)
+```
 """
 function parse_field_expression(expr_str::String, vars::Dict, dist)
-    # This would use the parse_expression function from problems.jl
-    # and create appropriate field operators
-    # For now, return a placeholder that represents the parsed expression
-    return Dict("type" => "parsed_expression", "expr" => expr_str, "vars" => vars)
+    expr_str = strip(expr_str)
+
+    if isempty(expr_str)
+        @warn "Empty expression string"
+        return Dict("type" => "zero", "value" => 0.0)
+    end
+
+    # Convert vars Dict to String keys for namespace compatibility
+    namespace = Dict{String, Any}()
+    for (k, v) in vars
+        namespace[string(k)] = v
+    end
+
+    # Handle simple variable lookup first
+    if haskey(namespace, expr_str)
+        value = namespace[expr_str]
+        if isa(value, ScalarField) || isa(value, VectorField) || isa(value, TensorField)
+            return value
+        elseif isa(value, Number)
+            return ConstantOperator(Float64(value))
+        end
+    end
+
+    # Handle numeric literals
+    try
+        num_val = parse(Float64, expr_str)
+        return ConstantOperator(num_val)
+    catch
+        # Not a number, continue parsing
+    end
+
+    # Handle zero
+    if expr_str == "0" || lowercase(expr_str) == "zero"
+        return ZeroOperator()
+    end
+
+    # Try to parse using the expression parser from problems.jl
+    try
+        # Use Meta.parse for proper Julia expression parsing
+        parsed_ast = Meta.parse(expr_str)
+
+        # Evaluate the parsed AST with the namespace
+        result = evaluate_field_ast(parsed_ast, namespace, dist)
+
+        if result !== nothing
+            return result
+        end
+    catch e
+        @debug "Expression parsing failed: $e, trying alternative methods"
+    end
+
+    # Fallback: try pattern-based parsing for common expressions
+    result = parse_field_expression_patterns(expr_str, namespace, dist)
+    if result !== nothing
+        return result
+    end
+
+    # Last resort: return a deferred evaluation Dict
+    @debug "Returning deferred expression for: $expr_str"
+    return Dict(
+        "type" => "deferred_expression",
+        "expr" => expr_str,
+        "namespace" => namespace
+    )
+end
+
+"""
+    evaluate_field_ast(ast, namespace::Dict{String,Any}, dist) -> Union{Operator, ScalarField, Nothing}
+
+Evaluate a parsed Julia AST in the context of field operations.
+"""
+function evaluate_field_ast(ast, namespace::Dict{String,Any}, dist)
+    # Handle symbols (variable references)
+    if isa(ast, Symbol)
+        name = string(ast)
+        if haskey(namespace, name)
+            value = namespace[name]
+            if isa(value, Number)
+                return ConstantOperator(Float64(value))
+            end
+            return value
+        end
+        return nothing
+    end
+
+    # Handle numeric literals
+    if isa(ast, Number)
+        return ConstantOperator(Float64(ast))
+    end
+
+    # Handle expressions
+    if isa(ast, Expr)
+        if ast.head == :call
+            return evaluate_field_call(ast, namespace, dist)
+        elseif ast.head == :block
+            # Handle begin...end blocks - evaluate last expression
+            for arg in ast.args
+                if !isa(arg, LineNumberNode)
+                    result = evaluate_field_ast(arg, namespace, dist)
+                    if result !== nothing
+                        return result
+                    end
+                end
+            end
+        end
+    end
+
+    return nothing
+end
+
+"""
+    evaluate_field_call(ast::Expr, namespace::Dict{String,Any}, dist) -> Union{Operator, Nothing}
+
+Evaluate a function call expression for field operations.
+"""
+function evaluate_field_call(ast::Expr, namespace::Dict{String,Any}, dist)
+    func = ast.args[1]
+    args = ast.args[2:end]
+
+    func_name = isa(func, Symbol) ? string(func) : string(func)
+
+    # Evaluate arguments recursively
+    eval_args = []
+    for arg in args
+        eval_arg = evaluate_field_ast(arg, namespace, dist)
+        if eval_arg === nothing
+            return nothing
+        end
+        push!(eval_args, eval_arg)
+    end
+
+    # Handle arithmetic operators
+    if func_name == "+" && length(eval_args) == 2
+        return create_add_operator(eval_args[1], eval_args[2])
+    elseif func_name == "-" && length(eval_args) == 2
+        return create_subtract_operator(eval_args[1], eval_args[2])
+    elseif func_name == "-" && length(eval_args) == 1
+        # Unary minus
+        return create_multiply_operator(ConstantOperator(-1.0), eval_args[1])
+    elseif func_name == "*" && length(eval_args) == 2
+        return create_multiply_operator(eval_args[1], eval_args[2])
+    elseif func_name == "/" && length(eval_args) == 2
+        if isa(eval_args[2], ConstantOperator)
+            return create_multiply_operator(eval_args[1], ConstantOperator(1.0 / eval_args[2].value))
+        end
+        return nothing
+
+    # Handle differential operators
+    elseif func_name in ["dx", "dy", "dz"] && length(eval_args) >= 1
+        coord_name = func_name[2:end]  # "x", "y", or "z"
+        operand = eval_args[1]
+        order = length(eval_args) >= 2 && isa(eval_args[2], ConstantOperator) ? Int(eval_args[2].value) : 1
+        return create_differentiate_operator(operand, coord_name, order, namespace)
+
+    elseif func_name == "d" && length(eval_args) >= 2
+        # d(field, coord) or d(field, coord, order)
+        operand = eval_args[1]
+        coord = eval_args[2]
+        coord_name = isa(coord, Symbol) ? string(coord) : (isa(coord, String) ? coord : "x")
+        order = length(eval_args) >= 3 && isa(eval_args[3], ConstantOperator) ? Int(eval_args[3].value) : 1
+        return create_differentiate_operator(operand, coord_name, order, namespace)
+
+    elseif func_name in ["lap", "laplacian"] && length(eval_args) == 1
+        return create_laplacian_operator(eval_args[1], namespace)
+
+    elseif func_name in ["grad", "gradient"] && length(eval_args) == 1
+        return create_gradient_operator(eval_args[1], namespace)
+
+    elseif func_name in ["div", "divergence"] && length(eval_args) == 1
+        return create_divergence_operator(eval_args[1], namespace)
+
+    elseif func_name == "curl" && length(eval_args) == 1
+        return create_curl_operator(eval_args[1], namespace)
+
+    elseif func_name == "dot" && length(eval_args) == 2
+        return create_dot_product(eval_args[1], eval_args[2])
+    end
+
+    return nothing
+end
+
+"""
+    parse_field_expression_patterns(expr_str::String, namespace::Dict, dist) -> Union{Operator, Nothing}
+
+Parse common field expression patterns using regex matching.
+Fallback for when AST parsing fails.
+"""
+function parse_field_expression_patterns(expr_str::String, namespace::Dict, dist)
+    # Pattern: dx(var), dy(var), dz(var)
+    m = match(r"^d([xyz])\((\w+)\)$", expr_str)
+    if m !== nothing
+        coord_name = m.captures[1]
+        var_name = m.captures[2]
+        if haskey(namespace, var_name)
+            return create_differentiate_operator(namespace[var_name], coord_name, 1, namespace)
+        end
+    end
+
+    # Pattern: lap(var) or laplacian(var)
+    m = match(r"^(?:lap|laplacian)\((\w+)\)$", expr_str)
+    if m !== nothing
+        var_name = m.captures[1]
+        if haskey(namespace, var_name)
+            return create_laplacian_operator(namespace[var_name], namespace)
+        end
+    end
+
+    # Pattern: scalar * var
+    m = match(r"^([\d.]+)\s*\*\s*(\w+)$", expr_str)
+    if m !== nothing
+        scalar = parse(Float64, m.captures[1])
+        var_name = m.captures[2]
+        if haskey(namespace, var_name)
+            return create_multiply_operator(ConstantOperator(scalar), namespace[var_name])
+        end
+    end
+
+    # Pattern: var * scalar
+    m = match(r"^(\w+)\s*\*\s*([\d.]+)$", expr_str)
+    if m !== nothing
+        var_name = m.captures[1]
+        scalar = parse(Float64, m.captures[2])
+        if haskey(namespace, var_name)
+            return create_multiply_operator(namespace[var_name], ConstantOperator(scalar))
+        end
+    end
+
+    return nothing
+end
+
+# Helper functions for creating operators
+
+function create_add_operator(left, right)
+    if isa(left, Operator) && isa(right, Operator)
+        return AddOperator(left, right)
+    elseif isa(left, ScalarField) && isa(right, ScalarField)
+        # Return a deferred addition
+        return Dict("type" => "add", "left" => left, "right" => right)
+    end
+    return Dict("type" => "add", "left" => left, "right" => right)
+end
+
+function create_subtract_operator(left, right)
+    if isa(left, Operator) && isa(right, Operator)
+        return SubtractOperator(left, right)
+    end
+    return Dict("type" => "subtract", "left" => left, "right" => right)
+end
+
+function create_multiply_operator(left, right)
+    if isa(left, Operator) || isa(right, Operator)
+        left_op = isa(left, Operator) ? left : ConstantOperator(Float64(left))
+        right_val = isa(right, Number) ? Float64(right) : right
+        return MultiplyOperator(left_op, right_val)
+    end
+    return Dict("type" => "multiply", "left" => left, "right" => right)
+end
+
+function create_differentiate_operator(operand, coord_name::String, order::Int, namespace::Dict)
+    # Try to find coordinate in namespace
+    coord = get(namespace, coord_name, nothing)
+    if coord === nothing
+        # Create a placeholder coordinate reference
+        coord = Symbol(coord_name)
+    end
+
+    if isa(operand, ScalarField)
+        return Differentiate(operand, coord, order)
+    end
+    return Dict("type" => "differentiate", "operand" => operand, "coord" => coord_name, "order" => order)
+end
+
+function create_laplacian_operator(operand, namespace::Dict)
+    if isa(operand, ScalarField) || isa(operand, VectorField)
+        coordsys = get(namespace, "coordsys", nothing)
+        if coordsys !== nothing
+            return CartesianLaplacian(operand, coordsys)
+        end
+    end
+    return Dict("type" => "laplacian", "operand" => operand)
+end
+
+function create_gradient_operator(operand, namespace::Dict)
+    if isa(operand, ScalarField)
+        coordsys = get(namespace, "coordsys", nothing)
+        if coordsys !== nothing
+            return CartesianGradient(operand, coordsys)
+        end
+    end
+    return Dict("type" => "gradient", "operand" => operand)
+end
+
+function create_divergence_operator(operand, namespace::Dict)
+    if isa(operand, VectorField)
+        coordsys = get(namespace, "coordsys", nothing)
+        if coordsys !== nothing
+            return CartesianDivergence(operand, coordsys)
+        end
+    end
+    return Dict("type" => "divergence", "operand" => operand)
+end
+
+function create_curl_operator(operand, namespace::Dict)
+    if isa(operand, VectorField)
+        coordsys = get(namespace, "coordsys", nothing)
+        if coordsys !== nothing
+            return CartesianCurl(operand, coordsys)
+        end
+    end
+    return Dict("type" => "curl", "operand" => operand)
+end
+
+function create_dot_product(left, right)
+    return Dict("type" => "dot", "left" => left, "right" => right)
 end
 
 """
