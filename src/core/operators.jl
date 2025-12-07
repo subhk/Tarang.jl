@@ -501,8 +501,8 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
     # Get device configuration from the field
     
     if isa(basis, RealFourier)
-        # Real Fourier case: use Dedalus approach with 2x2 group matrices
-        evaluate_real_fourier_derivative_dedalus!(result, operand, axis, order, N, L)
+        # Real Fourier case: use approach with 2x2 group matrices
+        evaluate_real_fourier_derivative_groups!(result, operand, axis, order, N, L)
     elseif isa(basis, ComplexFourier)
         # Complex Fourier case: simple multiplication by (ik)^order
         evaluate_complex_fourier_derivative!(result, operand, axis, order, N, L)
@@ -517,10 +517,10 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
 end
 
 
-function evaluate_real_fourier_derivative_dedalus!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
+function evaluate_real_fourier_derivative_groups!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
     """Real Fourier derivative following 2x2 group matrix approach """
     
-    # Dedalus stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
+    # Stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
     # Each wavenumber k>0 has a 2x2 group matrix:
     # dx [cos(kx)]   [0  -k] [cos(kx)]   [-k*sin(kx)]
     #    [sin(kx)] = [k   0] [sin(kx)] = [ k*cos(kx)]
@@ -655,7 +655,7 @@ function evaluate_complex_fourier_derivative!(result::ScalarField, operand::Scal
 end
 
 function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Chebyshev derivative using Dedalus-compatible differentiation matrix """
+    """Evaluate Chebyshev derivative using compatible differentiation matrix """
     ensure_layout!(operand, :c)  # Work in coefficient space
     ensure_layout!(result, :c)
     
@@ -768,7 +768,7 @@ function build_chebyshev_differentiation_matrix(N::Int)
 end
 
 function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Legendre derivative using Dedalus-compatible Jacobi implementation """
+    """Evaluate Legendre derivative using compatible Jacobi implementation """
     ensure_layout!(operand, :c)  # Work in coefficient space
     ensure_layout!(result, :c)
     
@@ -814,10 +814,10 @@ end
 
 function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64)
     """
-    Single Legendre derivative using Dedalus Jacobi approach .
+    Single Legendre derivative using Jacobi approach .
     
     Legendre polynomials are Jacobi polynomials with a=0, b=0.
-    From Dedalus Jacobi D(+1): bands = [(N + a + b + 1) * 2^(-1)]
+    From Jacobi D(+1): bands = [(N + a + b + 1) * 2^(-1)]
     For Legendre: bands = [(N + 1) * 0.5]
     
     The standard Legendre derivative recurrence relation is:
