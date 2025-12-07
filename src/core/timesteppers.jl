@@ -1629,26 +1629,35 @@ end
 
 function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     """
-    2nd-order exponential multistep method (ETDBDF2-style).
+    2nd-order Exponential Time Differencing Multistep Method (ETD-MS2).
 
-    Formulation (simplified exponential BDF2):
-    u_{n+1} = a₀*exp(hL)u_n + a₁*exp(2hL)u_{n-1} + h*φ₁(hL)*N_BDF2
+    For the ODE: u'(t) = Lu + N(u), this implements a proper 2-step exponential
+    multistep method derived from the variation-of-constants formula.
 
-    where:
-    - a₀, a₁ are BDF2-derived coefficients adjusted for variable timesteps
-    - N_BDF2 = (1 + w)*N(u_n) - w*N(u_{n-1}) is BDF2 extrapolation
-    - w = h_n / h_{n-1} is the timestep ratio
+    The variation-of-constants formula gives:
+        u(tₙ₊₁) = exp(hL)u(tₙ) + ∫₀ʰ exp((h-τ)L) N(u(tₙ+τ)) dτ
 
-    Linear treatment: Exact via exponential propagator
-    Nonlinear treatment: BDF2-style extrapolation
+    For a 2-step method, we interpolate N using values at tₙ and tₙ₋₁:
+        N(tₙ + τ) ≈ N(uₙ) + (τ/h)[N(uₙ) - N(uₙ₋₁)]  (linear interpolation)
 
-    Note: This is a simplified exponential BDF variant. True exponential BDF2
-    methods (ETDBDF2) are more complex and require additional φ functions.
-    This implementation provides good stability with BDF-like damping properties.
+    Substituting and integrating exactly gives the ETD multistep formula:
+        u_{n+1} = exp(hL)uₙ + h[b₁(hL)Nₙ + b₀(hL)Nₙ₋₁]
+
+    where the coefficient functions are:
+        b₁(z) = φ₁(z) + φ₂(z) = (exp(z) - 1)/z + (exp(z) - 1 - z)/z²
+        b₀(z) = -φ₂(z) = -(exp(z) - 1 - z)/z²
+
+    This is the ETD analog of Adams-Bashforth 2, providing 2nd-order accuracy
+    with exact linear propagation.
+
+    For variable timesteps (w = hₙ/hₙ₋₁):
+        b₁(z) = φ₁(z) + (1/w)φ₂(z)
+        b₀(z) = -(1/w)φ₂(z)
 
     References:
-    - Hochbruck & Ostermann (2010), "Exponential integrators"
-    - Kassam & Trefethen (2005), "Fourth-order time-stepping for stiff PDEs"
+    - Hochbruck & Ostermann (2010), "Exponential integrators", Acta Numerica 19, 209-286
+    - Cox & Matthews (2002), "Exponential Time Differencing for Stiff Systems"
+    - Beylkin, Keiser, & Vozovoi (1998), "A new class of time discretization schemes"
     """
 
     current_state = state.history[end]
@@ -1666,18 +1675,18 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     if iteration < 1 || length(state.history) < 2
         @debug "ETD-SBDF2 requires iteration >= 1, falling back to ETDRK2 for startup"
         step_etd_rk222!(state, solver)
+        state.timestepper_data["iteration"] = get(state.timestepper_data, "iteration", 0) + 1
         return
     end
 
     # Get matrices from solver
-    if !haskey(solver.problem.parameters, "L_matrix") || !haskey(solver.problem.parameters, "M_matrix")
-        @warn "ETD-SBDF2 requires L_matrix and M_matrix, falling back to SBDF2"
+    if !haskey(solver.problem.parameters, "L_matrix")
+        @warn "ETD-SBDF2 requires L_matrix, falling back to SBDF2"
         step_sbdf2!(state, solver)
         return
     end
 
     L_matrix = solver.problem.parameters["L_matrix"]
-    M_matrix = solver.problem.parameters["M_matrix"]
 
     # Get timestep history for variable timestep
     dt_current = dt
@@ -1685,17 +1694,13 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     w = dt_current / dt_previous
 
     try
-        # Compute exponential integrators for current and previous timesteps
-        exp_hL, φ₁_hL, _ = phi_functions_matrix(L_matrix, dt_current)
+        # Compute exponential integrators: exp(hL), φ₁(hL), φ₂(hL)
+        exp_hL, φ₁_hL, φ₂_hL = phi_functions_matrix(L_matrix, dt_current)
 
-        # For the previous state, we need exp(h_previous * L) applied to u_{n-1}
-        # In the exponential BDF framework, we need proper weighting
-
-        # Convert states to vectors
+        # Convert current state to vector
         X_current = fields_to_vector(current_state)
-        X_previous = fields_to_vector(state.history[end-1])
 
-        # Evaluate nonlinear term N(u_n)
+        # Evaluate nonlinear term N(uₙ) at current state
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
         F_current_vec = fields_to_vector(F_current)
 
@@ -1703,35 +1708,33 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         F_history = state.timestepper_data["F_history"]
         pushfirst!(F_history, F_current_vec)
 
-        # Keep only needed history for BDF2
-        while length(F_history) > 2; pop!(F_history); end
-
-        # BDF2-style extrapolation coefficients for nonlinear terms
-        # N_BDF2 = c₁*N(u_n) + c₂*N(u_{n-1})
-        c₁ = 1.0 + w         # Current step weight (BDF2 extrapolation)
-        c₂ = -w              # Previous step weight
-
-        # Build BDF2-extrapolated nonlinear term
-        F_extrap = c₁ * F_history[1]
-        if length(F_history) >= 2
-            F_extrap .+= c₂ * F_history[2]
+        # Keep only needed history for 2-step method
+        while length(F_history) > 2
+            pop!(F_history)
         end
 
-        # Exponential BDF2-style coefficients for linear part
-        # These provide the implicit stability of BDF2 via exponential propagation
-        # Simplified form: a₀ ~ (1+2w)/(1+w), a₁ ~ -w²/(1+w)
-        a₀ = (1.0 + 2.0*w) / (1.0 + w)
-        a₁ = -w * w / (1.0 + w)
+        # Get previous nonlinear term N(uₙ₋₁)
+        Nₙ = F_history[1]      # N(uₙ)
+        Nₙ₋₁ = F_history[2]    # N(uₙ₋₁)
 
-        # Compute exponential propagation with BDF2 weighting:
-        # u_{n+1} = a₀*exp(hL)u_n + a₁*exp(hL)u_{n-1} + h*φ₁(hL)*N_BDF2
-        #
-        # Note: a₁*exp(hL)u_{n-1} ≈ a₁*u_{n-1} for small hL, but we use
-        # exponential propagation for consistency
-        X_propagated = a₀ * (exp_hL * X_current) + a₁ * (exp_hL * X_previous)
+        # Compute ETD multistep coefficients (variable timestep version)
+        # b₁(z) = φ₁(z) + (1/w)φ₂(z)  -- coefficient for Nₙ
+        # b₀(z) = -(1/w)φ₂(z)         -- coefficient for Nₙ₋₁
+        inv_w = 1.0 / w
 
-        # Add nonlinear contribution
-        X_new = X_propagated + dt_current * (φ₁_hL * F_extrap)
+        # Linear propagation: exp(hL)uₙ
+        X_propagated = exp_hL * X_current
+
+        # Nonlinear contribution using ETD coefficients:
+        # h[b₁(hL)Nₙ + b₀(hL)Nₙ₋₁] = h[(φ₁ + φ₂/w)Nₙ - (φ₂/w)Nₙ₋₁]
+        #                          = h[φ₁Nₙ + (φ₂/w)(Nₙ - Nₙ₋₁)]
+
+        # Compute the nonlinear contributions
+        φ₁_Nₙ = φ₁_hL * Nₙ
+        φ₂_diff = φ₂_hL * (Nₙ - Nₙ₋₁)
+
+        # Full update: u_{n+1} = exp(hL)uₙ + h[φ₁Nₙ + (φ₂/w)(Nₙ - Nₙ₋₁)]
+        X_new = X_propagated + dt_current * (φ₁_Nₙ + inv_w * φ₂_diff)
 
         # Update state
         new_state = copy.(current_state)
@@ -1740,7 +1743,7 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         push!(state.history, new_state)
         state.timestepper_data["iteration"] += 1
 
-        @debug "ETDBDF2 step completed: dt=$dt_current, w=$w, a₀=$a₀, a₁=$a₁, iteration=$(state.timestepper_data["iteration"]), |X_new|=$(norm(X_new))"
+        @debug "ETD-MS2 step completed: dt=$dt_current, w=$w, iteration=$(state.timestepper_data["iteration"]), |X_new|=$(norm(X_new))"
 
     catch e
         @warn "ETD-SBDF2 failed: $e, falling back to SBDF2"
