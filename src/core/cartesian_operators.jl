@@ -680,10 +680,26 @@ struct CartesianCurl <: AbstractLinearOperator
         # y-component: ∂ux/∂z - ∂uz/∂x
         # z-component: ∂uy/∂x - ∂ux/∂y
 
+        # Build actual derivative operators for curl computation
+        # curl = (∂uz/∂y - ∂uy/∂z, ∂ux/∂z - ∂uz/∂x, ∂uy/∂x - ∂ux/∂y)
+        # For each output component, store (positive_deriv, negative_deriv)
+
+        comp_x = CartesianComponent(operand; index=index, comp=cx)
+        comp_y = CartesianComponent(operand; index=index, comp=cy)
+        comp_z = CartesianComponent(operand; index=index, comp=cz)
+
+        # x-component: ∂uz/∂y - ∂uy/∂z
+        curl_x = (Differentiate(comp_z, cy, 1), Differentiate(comp_y, cz, 1))
+        # y-component: ∂ux/∂z - ∂uz/∂x
+        curl_y = (Differentiate(comp_x, cz, 1), Differentiate(comp_z, cx, 1))
+        # z-component: ∂uy/∂x - ∂ux/∂y
+        curl_z = (Differentiate(comp_y, cx, 1), Differentiate(comp_x, cy, 1))
+
         arg = Dict(
-            :x => (cz, cy, cy, cz),  # (comp1, deriv1, comp2, deriv2) for u_z,y - u_y,z
-            :y => (cx, cz, cz, cx),  # u_x,z - u_z,x
-            :z => (cy, cx, cx, cy),  # u_y,x - u_x,y
+            :x => curl_x,
+            :y => curl_y,
+            :z => curl_z,
+            :components => (comp_x, comp_y, comp_z),
             :right_handed => coordsys.right_handed
         )
 
@@ -692,13 +708,66 @@ struct CartesianCurl <: AbstractLinearOperator
 end
 
 function matrix_dependence(op::CartesianCurl, vars...)
-    # Curl depends on all spatial derivatives
-    return trues(length(vars))
+    """Determine which variables the curl operator matrix depends on."""
+    result = falses(length(vars))
+
+    # Check dependencies from all derivative operators
+    for key in (:x, :y, :z)
+        pos_deriv, neg_deriv = op.arg[key]
+        if hasmethod(matrix_dependence, Tuple{typeof(pos_deriv), Vararg})
+            result .|= matrix_dependence(pos_deriv, vars...)
+        end
+        if hasmethod(matrix_dependence, Tuple{typeof(neg_deriv), Vararg})
+            result .|= matrix_dependence(neg_deriv, vars...)
+        end
+    end
+
+    return result
 end
 
 function matrix_coupling(op::CartesianCurl, vars...)
-    # Curl couples all components
-    return trues(length(vars))
+    """Determine which variables couple through the curl operator."""
+    result = falses(length(vars))
+
+    # Check coupling from all derivative operators
+    for key in (:x, :y, :z)
+        pos_deriv, neg_deriv = op.arg[key]
+        if hasmethod(matrix_coupling, Tuple{typeof(pos_deriv), Vararg})
+            result .|= matrix_coupling(pos_deriv, vars...)
+        end
+        if hasmethod(matrix_coupling, Tuple{typeof(neg_deriv), Vararg})
+            result .|= matrix_coupling(neg_deriv, vars...)
+        end
+    end
+
+    return result
+end
+
+function subproblem_matrix(op::CartesianCurl, subproblem)
+    """Build operator matrix for curl in a specific subproblem."""
+    # Each output component is a difference of two derivatives
+    # Stack vertically for vector output
+    matrices = []
+
+    for key in (:x, :y, :z)
+        pos_deriv, neg_deriv = op.arg[key]
+
+        # Get matrices for positive and negative terms
+        pos_mat = expression_matrices(pos_deriv, subproblem, [op.operand])
+        neg_mat = expression_matrices(neg_deriv, subproblem, [op.operand])
+
+        if haskey(pos_mat, op.operand) && haskey(neg_mat, op.operand)
+            # Curl component = positive - negative
+            comp_mat = pos_mat[op.operand] - neg_mat[op.operand]
+            push!(matrices, comp_mat)
+        end
+    end
+
+    if isempty(matrices)
+        return spzeros(Float64, 0, 0)
+    end
+
+    return vcat(matrices...)
 end
 
 function check_conditions(op::CartesianCurl)
