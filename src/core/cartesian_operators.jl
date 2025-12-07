@@ -48,7 +48,7 @@ abstract type OperatorConditions end
 
 Extract a specific component of a vector or tensor field in Cartesian coordinates.
 
-Following operators.py:3270-3412 CartesianComponent implementation.
+Following operators:3270-3412 CartesianComponent implementation.
 
 # Arguments
 - `operand`: Vector or tensor field
@@ -145,14 +145,12 @@ end
 
 # ============================================================================
 # Matrix operation methods for CartesianComponent
-# Following operators.py matrix_dependence, matrix_coupling patterns
 # ============================================================================
 
 """
     matrix_dependence(op::CartesianComponent, vars...)
 
 Determine which variables the operator matrix depends on.
-Following operators.py CartesianComponent.matrix_dependence.
 """
 function matrix_dependence(op::CartesianComponent, vars...)
     # Component extraction doesn't add new dependencies
@@ -163,7 +161,6 @@ end
     matrix_coupling(op::CartesianComponent, vars...)
 
 Determine which variables couple through the operator.
-Following operators.py CartesianComponent.matrix_coupling.
 """
 function matrix_coupling(op::CartesianComponent, vars...)
     # Component extraction doesn't add new coupling
@@ -174,7 +171,6 @@ end
     subproblem_matrix(op::CartesianComponent, subproblem)
 
 Build operator matrix for a specific subproblem.
-Following operators.py:3396-3403 CartesianComponent.subproblem_matrix.
 """
 function subproblem_matrix(op::CartesianComponent, subproblem)
     # Build selection matrix that extracts the specified component
@@ -219,7 +215,6 @@ end
 
 # ============================================================================
 # Layout condition check/enforce for CartesianComponent
-# Following operators.py check_conditions/enforce_conditions pattern
 # ============================================================================
 
 """
@@ -246,7 +241,7 @@ end
     operate(op::CartesianComponent, out)
 
 Perform the component extraction operation.
-Following operators.py:3405-3411 CartesianComponent.operate.
+Following operators:3405-3411 CartesianComponent.operate.
 """
 function operate(op::CartesianComponent, out)
     operand = op.operand
@@ -329,7 +324,7 @@ end
 
 # ============================================================================
 # CartesianGradient - Gradient in Cartesian coordinates
-# Following operators.py:2340-2412 CartesianGradient
+# Following operators:2340-2412 CartesianGradient
 # ============================================================================
 
 """
@@ -337,7 +332,7 @@ end
 
 Gradient operator specialized for Cartesian coordinates.
 
-Following operators.py:2340-2412 CartesianGradient implementation.
+Following operators:2340-2412 CartesianGradient implementation.
 
 For scalar field f, gradient is:
 ∇f = (∂f/∂x, ∂f/∂y, ∂f/∂z)
@@ -422,7 +417,7 @@ end
 
 # ============================================================================
 # CartesianDivergence - Divergence in Cartesian coordinates
-# Following operators.py:3438-3495 CartesianDivergence
+# Following operators:3438-3495 CartesianDivergence
 # ============================================================================
 
 """
@@ -430,7 +425,7 @@ end
 
 Divergence operator specialized for Cartesian coordinates.
 
-Following operators.py:3438-3495 CartesianDivergence implementation.
+Following operators:3438-3495 CartesianDivergence implementation.
 
 For vector field u = (u_x, u_y, u_z):
 ∇·u = ∂u_x/∂x + ∂u_y/∂y + ∂u_z/∂z
@@ -530,7 +525,7 @@ end
 
 # ============================================================================
 # CartesianCurl - Curl in 3D Cartesian coordinates
-# Following operators.py:3689-3749 CartesianCurl
+# Following operators:3689-3749 CartesianCurl
 # ============================================================================
 
 """
@@ -538,7 +533,7 @@ end
 
 Curl operator specialized for 3D Cartesian coordinates.
 
-Following operators.py:3689-3749 CartesianCurl implementation.
+Following operators:3689-3749 CartesianCurl implementation.
 
 For vector field u = (u_x, u_y, u_z):
 ∇×u = (∂u_z/∂y - ∂u_y/∂z, ∂u_x/∂z - ∂u_z/∂x, ∂u_y/∂x - ∂u_x/∂y)
@@ -610,7 +605,7 @@ end
 
 # ============================================================================
 # CartesianLaplacian - Laplacian in Cartesian coordinates
-# Following operators.py:4016-4062 CartesianLaplacian
+# Following operators:4016-4062 CartesianLaplacian
 # ============================================================================
 
 """
@@ -618,7 +613,7 @@ end
 
 Laplacian operator specialized for Cartesian coordinates.
 
-Following operators.py:4016-4062 CartesianLaplacian implementation.
+Following operators:4016-4062 CartesianLaplacian implementation.
 
 For scalar field f:
 ∇²f = ∂²f/∂x² + ∂²f/∂y² + ∂²f/∂z²
@@ -693,15 +688,12 @@ end
 
 # ============================================================================
 # CartesianTrace - Trace in Cartesian coordinates
-# Following operators.py:1852-1866 CartesianTrace
 # ============================================================================
 
 """
     CartesianTrace <: AbstractLinearOperator
 
 Trace operator for tensor fields in Cartesian coordinates.
-
-Following operators.py trace implementation.
 
 For tensor T:
 trace(T) = Σ T_ii = T_xx + T_yy + T_zz
@@ -760,7 +752,7 @@ end
 
 # ============================================================================
 # CartesianSkew - Skew operation for 2D vectors
-# Following operators.py:2098-2123 CartesianSkew
+# Following operators:2098-2123 CartesianSkew
 # ============================================================================
 
 """
@@ -768,7 +760,7 @@ end
 
 Skew operator for 2D vector fields in Cartesian coordinates.
 
-Following operators.py:2098-2123 Skew implementation.
+Following operators:2098-2123 Skew implementation.
 
 For 2D vector u = (u_x, u_y):
 skew(u) = (-u_y, u_x)
@@ -1090,15 +1082,12 @@ end
 
 # ============================================================================
 # DirectProduct operator variants
-# Following operators.py DirectProduct* classes
 # ============================================================================
 
 """
     DirectProductGradient <: AbstractLinearOperator
 
 Gradient operator for DirectProduct coordinate systems.
-
-Following operators.py:2414-2492 DirectProductGradient.
 """
 struct DirectProductGradient <: AbstractLinearOperator
     operand::Operand
@@ -1117,7 +1106,7 @@ end
 
 Divergence operator for DirectProduct coordinate systems.
 
-Following operators.py:3497-3544 DirectProductDivergence.
+Following operators:3497-3544 DirectProductDivergence.
 """
 struct DirectProductDivergence <: AbstractLinearOperator
     operand::Operand
@@ -1151,7 +1140,7 @@ end
 
 Laplacian operator for DirectProduct coordinate systems.
 
-Following operators.py:4064-4106 DirectProductLaplacian.
+Following operators:4064-4106 DirectProductLaplacian.
 """
 struct DirectProductLaplacian <: AbstractLinearOperator
     operand::Operand
