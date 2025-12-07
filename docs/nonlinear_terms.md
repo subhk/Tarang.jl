@@ -1,12 +1,12 @@
-# Nonlinear Terms in Tarang.jl: Dedalus-Compatible Implementation
+# Nonlinear Terms in Tarang.jl
 
 ## Overview
 
-Tarang.jl implements nonlinear term handling following the Dedalus framework conventions, using PencilArrays and PencilFFTs for efficient parallel computation. This document explains the key principles and implementation details.
+Tarang.jl implements nonlinear term handling using PencilArrays and PencilFFTs for efficient parallel computation. This document explains the key principles and implementation details.
 
-## Dedalus Convention: Linear LHS, Nonlinear RHS
+## Convention: Linear LHS, Nonlinear RHS
 
-**Important**: Following Dedalus standards, **nonlinear terms must be placed on the right-hand side (RHS)** of equations.
+**Important**: **Nonlinear terms must be placed on the right-hand side (RHS)** of equations.
 
 ### Correct Format:
 ```julia
@@ -24,7 +24,7 @@ add_equation!(problem, "dt(u) + (u·grad(u)) + grad(p) = nu*lap(u)")
 ## Why This Convention?
 
 ### 1. **Mathematical Form**
-Dedalus formulates IVPs in the standard form:
+Tarang formulates IVPs in the standard form:
 ```
 M·dt(X) + L·X = F(X, t)
 ```
@@ -40,10 +40,10 @@ Where:
 - This separation enables efficient implicit-explicit (IMEX) timestepping
 
 ### 3. **Validation Requirements**
-Dedalus enforces these requirements for IVP equations:
+Tarang enforces these requirements for IVP equations:
 
 ```python
-# From dedalus/core/problems.py
+# From problems.jl
 def _check_equation_conditions(self, eqn):
     LHS.require_linearity(*self.variables, allow_affine=False,
         self_name='IVP LHS', vars_name='problem variables')
@@ -232,4 +232,4 @@ log_nonlinear_performance(nonlinear_stats)
 5. **Reuse temporary fields** to minimize memory allocation
 6. **Use appropriate timestepper** (RK443 for nonlinear problems)
 
-This implementation provides efficient, scalable nonlinear term evaluation while maintaining compatibility with the Dedalus framework design principles.
+This implementation provides efficient, scalable nonlinear term evaluation while maintaining compatibility with the Tarang framework design principles.

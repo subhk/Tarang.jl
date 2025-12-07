@@ -309,4 +309,4 @@ print_linalg_stats()
 # Average speedup: 4.2x over standard operations
 ```
 
-This optimization framework provides substantial performance improvements for spectral PDE solvers while maintaining the familiar Dedalus-style API.
+This optimization framework provides substantial performance improvements for spectral PDE solvers while maintaining the familiar standard API.

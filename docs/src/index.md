@@ -125,7 +125,7 @@ If you use Tarang.jl in your research, please cite:
 
 ## Acknowledgments
 
-Tarang.jl is inspired by the [Dedalus Project](https://dedalus-project.org) and builds upon excellent Julia packages including [PencilArrays.jl](https://github.com/jipolanco/PencilArrays.jl), [PencilFFTs.jl](https://github.com/jipolanco/PencilFFTs.jl), and [MPI.jl](https://github.com/JuliaParallel/MPI.jl).
+Tarang.jl builds upon excellent Julia packages including [PencilArrays.jl](https://github.com/jipolanco/PencilArrays.jl), [PencilFFTs.jl](https://github.com/jipolanco/PencilFFTs.jl), and [MPI.jl](https://github.com/JuliaParallel/MPI.jl).
 
 ## Support
 

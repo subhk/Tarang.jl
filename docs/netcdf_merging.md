@@ -4,7 +4,7 @@ This document describes the comprehensive NetCDF file merging system for Tarang.
 
 ## Overview
 
-Tarang.jl creates per-processor NetCDF files during parallel runs, following the Dedalus naming pattern:
+Tarang.jl creates per-processor NetCDF files during parallel runs:
 ```
 snapshots_s1/
 ├── snapshots_s1_p0.nc    # Processor 0 data

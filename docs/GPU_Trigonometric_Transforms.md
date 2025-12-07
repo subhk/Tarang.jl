@@ -188,7 +188,7 @@ end
 function apply_fourier_derivative_gpu!(result::ScalarField, operand::ScalarField, order::Int, device_config::DeviceConfig)
     """GPU-accelerated Fourier derivative using sin/cos properties"""
     
-    # Dedalus-compatible mode storage: [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
+    # Standard mode storage: [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
     coeffs = operand.data_c
     result_coeffs = result.data_c
     

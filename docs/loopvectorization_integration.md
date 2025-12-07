@@ -281,10 +281,9 @@ const BLAS_THRESHOLD = 2000      # Default threshold
 
 ### Fourier Derivative Implementation Completion
 
-The `evaluate_fourier_derivative!` function has been completed with proper Dedalus-compatible implementation:
+The `evaluate_fourier_derivative!` function has been completed with proper compatible implementation:
 
-- **Real Fourier derivatives**: Now use the correct 2x2 group matrix approach from Dedalus
-- **Complex Fourier derivatives**: Optimized with LoopVectorization for `(ik)^order` multiplication
+- **Real Fourier derivatives**: Now use the correct 2x2 group matrix approach - **Complex Fourier derivatives**: Optimized with LoopVectorization for `(ik)^order` multiplication
 - **Coefficient storage**: Proper handling of `[cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]` format
 - **Mathematical correctness**: Verified against analytical derivatives
 
@@ -307,7 +306,7 @@ end
 
 ### Chebyshev Derivative Implementation Completion
 
-The `evaluate_chebyshev_derivative!` function has been completely rewritten with proper Dedalus-compatible implementation:
+The `evaluate_chebyshev_derivative!` function has been completely rewritten with proper compatible implementation:
 
 - **Correct backward recurrence**: Now uses the standard formula `c'_k = sum_{j=k+1, j-k odd} 2*j*c_j`
 - **LoopVectorization optimization**: Optimized inner loops for arrays > 100 elements
@@ -338,8 +337,8 @@ LoopVectorization integration in Tarang.jl provides:
 - **No code changes required** - optimizations are transparent
 - **Intelligent dispatch** based on problem size
 - **2-4x speedups** for typical 2D spectral method grids
-- **Seamless integration** with existing Dedalus-style API
-- **Complete Fourier derivatives** - now properly implemented following Dedalus conventions
+- **Seamless integration** with existing  API
+- **Complete Fourier derivatives** - now properly implemented following standard conventions
 - **Complete Chebyshev derivatives** - now properly implemented with correct backward recurrence
 
-The combination of LoopVectorization, BLAS, and smart thresholds ensures optimal performance across the full range of spectral method problem sizes while maintaining code simplicity and the familiar Dedalus interface. **All core optimization components are now complete and integrated into the execution paths**, including both Fourier and Chebyshev spectral differentiation operators.
+The combination of LoopVectorization, BLAS, and smart thresholds ensures optimal performance across the full range of spectral method problem sizes while maintaining code simplicity and the familiar interface. **All core optimization components are now complete and integrated into the execution paths**, including both Fourier and Chebyshev spectral differentiation operators.
