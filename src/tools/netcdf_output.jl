@@ -840,30 +840,90 @@ function get_data_distribution(handler::NetCDFFileHandler, task::Dict, rank=noth
 end
 
 """
-Get domain from operator (placeholder)
+    get_operator_domain(operator)
+
+Extract domain information from an operator or field.
+
+Returns a Dict with:
+- `dims`: Number of dimensions
+- `shape`: Global shape tuple
+- `domain`: The actual Domain object if available (for accessing bases, distributor)
+- `dist`: The Distributor object if available
+
+Handles ScalarField, VectorField, TensorField, and Dict-based operators.
 """
 function get_operator_domain(operator)
     if isa(operator, Dict) && haskey(operator, "shape")
-        return Dict("dims" => length(operator["shape"]), "shape" => operator["shape"])
+        return Dict(
+            "dims" => length(operator["shape"]),
+            "shape" => operator["shape"],
+            "domain" => get(operator, "domain", nothing),
+            "dist" => get(operator, "dist", nothing)
+        )
     elseif isa(operator, ScalarField)
-        if operator.data_g === nothing
-            ensure_layout!(operator, :g)
+        # Get domain from field if available
+        domain_obj = operator.domain
+        dist_obj = domain_obj !== nothing ? domain_obj.dist : nothing
+
+        # Get global shape from domain's bases
+        if domain_obj !== nothing
+            global_shape = tuple([basis.meta.size for basis in domain_obj.bases]...)
+        else
+            # Fallback to grid data shape
+            if operator.data_g === nothing
+                ensure_layout!(operator, :g)
+            end
+            global_shape = size(operator.data_g)
         end
-        return Dict("dims" => ndims(operator.data_g), "shape" => size(operator.data_g))
+
+        return Dict(
+            "dims" => length(global_shape),
+            "shape" => global_shape,
+            "domain" => domain_obj,
+            "dist" => dist_obj
+        )
     elseif isa(operator, VectorField)
         first_comp = operator.components[1]
-        if first_comp.data_g === nothing
-            ensure_layout!(first_comp, :g)
+        domain_obj = first_comp.domain
+        dist_obj = domain_obj !== nothing ? domain_obj.dist : nothing
+
+        if domain_obj !== nothing
+            global_shape = tuple([basis.meta.size for basis in domain_obj.bases]...)
+        else
+            if first_comp.data_g === nothing
+                ensure_layout!(first_comp, :g)
+            end
+            global_shape = size(first_comp.data_g)
         end
-        return Dict("dims" => ndims(first_comp.data_g), "shape" => size(first_comp.data_g))
+
+        return Dict(
+            "dims" => length(global_shape),
+            "shape" => global_shape,
+            "domain" => domain_obj,
+            "dist" => dist_obj
+        )
     elseif isa(operator, TensorField)
         first_comp = operator.components[1, 1]
-        if first_comp.data_g === nothing
-            ensure_layout!(first_comp, :g)
+        domain_obj = first_comp.domain
+        dist_obj = domain_obj !== nothing ? domain_obj.dist : nothing
+
+        if domain_obj !== nothing
+            global_shape = tuple([basis.meta.size for basis in domain_obj.bases]...)
+        else
+            if first_comp.data_g === nothing
+                ensure_layout!(first_comp, :g)
+            end
+            global_shape = size(first_comp.data_g)
         end
-        return Dict("dims" => ndims(first_comp.data_g), "shape" => size(first_comp.data_g))
+
+        return Dict(
+            "dims" => length(global_shape),
+            "shape" => global_shape,
+            "domain" => domain_obj,
+            "dist" => dist_obj
+        )
     end
-    return Dict("dims" => 0, "shape" => ())
+    return Dict("dims" => 0, "shape" => (), "domain" => nothing, "dist" => nothing)
 end
 
 """
@@ -882,10 +942,55 @@ function get_operator_tensorsig(operator)
 end
 
 """
-Get global shape from layout (placeholder)
+    get_global_shape(layout, domain_info, scales)
+
+Compute the global shape for data output, applying dealiasing scales.
+
+# Arguments
+- `layout`: Layout specification (symbol like :g/:c, or Layout object)
+- `domain_info`: Dict containing domain information from get_operator_domain
+- `scales`: Tuple of scale factors (e.g., (1.0, 1.0, 1.0) or (2/3, 2/3, 2/3))
+
+# Returns
+- Tuple of global dimensions after applying scales
+
+The scales parameter allows for dealiased output - scale < 1.0 reduces
+the resolution for each dimension (typically 2/3 for standard dealiasing).
 """
-function get_global_shape(layout, domain, scales)
-    return domain["shape"]
+function get_global_shape(layout, domain_info, scales)
+    base_shape = domain_info["shape"]
+
+    if isempty(base_shape)
+        return ()
+    end
+
+    # Apply scales to get output shape
+    # Scales can be:
+    # - A tuple of floats (e.g., (1.0, 1.0, 1.0) for full resolution)
+    # - A single float to apply uniformly
+    # - An integer (treated as scale of 1.0)
+
+    if scales === nothing || scales == 1 || scales == 1.0
+        return base_shape
+    end
+
+    if isa(scales, Number)
+        # Single scale value applied to all dimensions
+        return tuple([max(1, round(Int, s * scales)) for s in base_shape]...)
+    elseif isa(scales, Tuple) || isa(scales, AbstractVector)
+        # Per-dimension scales
+        n_scales = length(scales)
+        n_dims = length(base_shape)
+
+        scaled_shape = Vector{Int}(undef, n_dims)
+        for i in 1:n_dims
+            scale_i = i <= n_scales ? scales[i] : 1.0
+            scaled_shape[i] = max(1, round(Int, base_shape[i] * scale_i))
+        end
+        return tuple(scaled_shape...)
+    end
+
+    return base_shape
 end
 
 """
