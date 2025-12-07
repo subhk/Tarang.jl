@@ -10,7 +10,7 @@
 
 ## Overview
 
-Tarang.jl is a Julia implementation of spectral methods for solving partial differential equations (PDEs), inspired by the [Dedalus Project](https://dedalus-project.org). It provides a flexible framework for solving a wide variety of PDEs using spectral methods with efficient MPI parallelization.
+Tarang.jl is a Julia implementation of spectral methods for solving partial differential equations (PDEs). It provides a flexible framework for solving a wide variety of PDEs using spectral methods with efficient MPI parallelization.
 
 ### Key Features
 

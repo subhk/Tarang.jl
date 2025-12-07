@@ -1,6 +1,6 @@
 # Tarang.jl Documentation (Getting Started)
 
-This page is a concise newcomer guide in the spirit of the Dedalus docs. It walks you from a clean machine to a first Tarang run, then shows where to plug in boundary conditions, analysis, and output. Publish this page with GitHub Pages by pointing Pages at the `docs/` folder.
+This page is a concise newcomer guide. It walks you from a clean machine to a first Tarang run, then shows where to plug in boundary conditions, analysis, and output. Publish this page with GitHub Pages by pointing Pages at the `docs/` folder.
 
 ## Quick Navigation
 - [1. Prerequisites](#1-prerequisites)
@@ -11,7 +11,7 @@ This page is a concise newcomer guide in the spirit of the Dedalus docs. It walk
 - [6. Logging & Configuration](#6-logging--configuration)
 - [7. NetCDF Output & Postprocessing](#7-netcdf-output--postprocessing)
 - [8. Hosting on GitHub Pages](#8-hosting-on-github-pages)
-- [Dedalus-Style Guide](dedalus_style_guide.md)
+- [Style Guide](style_guide.md)
 
 ## 1. Prerequisites
 - **Julia** >= 1.6
@@ -41,7 +41,7 @@ julia --project -e 'using Tarang; println("Tarang loaded: ", Tarang.__version__)
 9. **Output/analysis**: add NetCDF handlers, CFL/flow diagnostics, and logging.
 
 ## 4. Minimal IVP Example
-This mirrors the Dedalus "first script" style: 2D Rayleigh-Benard-ish scaffold you can extend.
+This is a basic 2D Rayleigh-Benard-style scaffold you can extend.
 
 ```julia
 using MPI, Tarang
