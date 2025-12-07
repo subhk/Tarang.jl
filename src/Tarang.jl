@@ -101,13 +101,16 @@ export
     coords, unit_vector_fields,
 
     # Bases
-    RealFourier, ComplexFourier, Fourier, ChebyshevT, ChebyshevU, Legendre,
+    RealFourier, ComplexFourier, Fourier, ChebyshevT, ChebyshevU, ChebyshevV, Legendre, Jacobi,
+    derivative_basis,
 
     # Core classes
     Domain, Distributor, Field, ScalarField, VectorField, TensorField,
-    
+
     # Operators
     grad, div, curl, lap, trace, skew, transpose_components,
+    outer, advective_cfl, cfl,
+    interpolate, integrate, average, convert, lift, d, dt,
     
     # Nonlinear operators
     advection, nonlinear_momentum, convection, AdvectionOperator, NonlinearAdvectionOperator, ConvectiveOperator,
