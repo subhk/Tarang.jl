@@ -439,7 +439,7 @@ function add_property!(flow::GlobalFlowProperty, field::Union{ScalarField, Vecto
     Following pattern: properties.add_task(property, layout='g', name=name)
     """
     # Store field reference for evaluation
-    # In Dedalus, this gets added to the dictionary handler as a task
+    # In Tarang, this gets added to the dictionary handler as a task
     flow.properties[name] = field
 end
 
@@ -874,8 +874,8 @@ end
 
 function write_hdf5_data!(handler::FileHandler, sim_time::Float64, iteration::Int)
     """
-    Write HDF5 data following Dedalus structure.
-    Based on dedalus/core/evaluator.py:580-595
+    Write HDF5 data following Tarang structure.
+    Based on Tarang/core/evaluator.py:580-595
     """
     
     @debug "Writing HDF5 data: $(handler.filename), t=$sim_time, iter=$iteration"
@@ -886,10 +886,10 @@ function write_hdf5_data!(handler::FileHandler, sim_time::Float64, iteration::In
     
     # Open/create HDF5 file
     h5open(handler.filename, "cw") do file
-        # Write file metadata (following Dedalus write_file_metadata)
+        # Write file metadata (following Tarang write_file_metadata)
         write_file_metadata!(file, handler, iteration, sim_time)
         
-        # Write task data (following Dedalus write_task pattern)
+        # Write task data (following Tarang write_task pattern)
         for (task_name, task_data) in handler.datasets
             write_task_data!(file, task_name, task_data, handler.write_count)
         end
@@ -913,7 +913,7 @@ function write_file_metadata!(file::HDF5.File, handler::FileHandler, iteration::
         metadata = file["metadata"]
     end
     
-    # Write time information (following Dedalus pattern)
+    # Write time information (following Tarang pattern)
     if !haskey(file, "scales")
         scales_group = create_group(file, "scales")
         

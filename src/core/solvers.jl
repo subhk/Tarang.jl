@@ -500,11 +500,11 @@ end
 # Utility functions
 function fields_to_vector(fields::Vector{ScalarField})
     """
-    Convert field array to solution vector following Dedalus gather pattern.
+    Convert field array to solution vector following Tarang gather pattern.
     Following subsystems.py gather_inputs (subsystems.py:340-350).
     """
     
-    # Ensure all fields are in coefficient space (following Dedalus pattern)
+    # Ensure all fields are in coefficient space (following Tarang pattern)
     for field in fields
         ensure_layout!(field, :c)
     end
@@ -515,7 +515,7 @@ function fields_to_vector(fields::Vector{ScalarField})
     # Allocate output vector
     vector = Vector{ComplexF64}(undef, total_size)
     
-    # Gather field data into vector (following Dedalus gather pattern)
+    # Gather field data into vector (following Tarang gather pattern)
     offset = 1
     for field in fields
         field_size = compute_field_vector_size(field)
@@ -548,7 +548,7 @@ end
 
 function copy_solution_to_fields!(fields::Vector{ScalarField}, solution::Vector{ComplexF64})
     """
-    Copy solution vector back to fields following Dedalus scatter pattern.
+    Copy solution vector back to fields following Tarang scatter pattern.
     Following subsystems.py scatter_inputs (subsystems.py:364-371).
     """
     
@@ -565,7 +565,7 @@ function copy_solution_to_fields!(fields::Vector{ScalarField}, solution::Vector{
             if actual_size > 0
                 field_data = solution[offset:end_offset]
                 
-                # Scatter data back to field (following Dedalus scatter pattern)
+                # Scatter data back to field (following Tarang scatter pattern)
                 set_field_data_from_vector!(field, field_data)
                 
                 @debug "Scattered to field $(field.name): size=$actual_size"
@@ -674,11 +674,11 @@ function set_field_data_from_vector!(field::ScalarField, data::Vector{ComplexF64
 end
 
 function get_basis_size(basis)
-    """Get the size (number of modes) for a basis following Dedalus patterns"""
+    """Get the size (number of modes) for a basis following Tarang patterns"""
     
     # Following basis.py structure, bases store size information in different ways:
     # 1. Most common: meta.size field (for Julia BasisMeta structure)
-    # 2. Direct size field (for direct Dedalus translation)  
+    # 2. Direct size field (for direct Tarang translation)  
     # 3. Shape tuple (for multidimensional bases)
     # 4. Specific basis attributes (N, etc.)
     
@@ -686,7 +686,7 @@ function get_basis_size(basis)
         # Julia BasisMeta structure pattern
         return basis.meta.size
     elseif hasfield(typeof(basis), :shape)
-        # Dedalus shape attribute pattern (can be tuple for multidimensional)
+        # Tarang shape attribute pattern (can be tuple for multidimensional)
         shape = basis.shape
         if isa(shape, Tuple)
             # For multidimensional bases, return total size (product of dimensions)
@@ -708,9 +708,9 @@ end
 
 function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     """
-    Evaluate residual and Jacobian for nonlinear problem following Dedalus patterns.
+    Evaluate residual and Jacobian for nonlinear problem following Tarang patterns.
     
-    In Dedalus, this corresponds to:
+    In Tarang, this corresponds to:
     1. Evaluating F expressions (residual) using evaluator system
     2. Building dF matrices (Jacobian/Frechet differential) 
     3. Gathering results into numerical arrays for Newton solver
@@ -721,7 +721,7 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     copy_solution_to_fields!(problem.variables, x)
     
     # Step 2: Evaluate residual expressions F(x)  
-    # In Dedalus: self.evaluator.evaluate_scheduled(iteration=self.iteration)
+    # In Tarang: self.evaluator.evaluate_scheduled(iteration=self.iteration)
     residual_fields = ScalarField[]
     
     if hasfield(typeof(problem), :equation_data) && problem.equation_data !== nothing
@@ -754,8 +754,8 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     # Step 3: Convert residual fields to vector
     residual = fields_to_vector(residual_fields)
     
-    # Step 4: Build Jacobian matrix (dF) following Dedalus matrix building
-    # In Dedalus: self.build_matrices(self.subproblems, ['dF'])
+    # Step 4: Build Jacobian matrix (dF) following Tarang matrix building
+    # In Tarang: self.build_matrices(self.subproblems, ['dF'])
     n = length(x)
     jacobian = sparse(zeros(ComplexF64, n, n))
     
@@ -813,9 +813,9 @@ end
 # Helper functions for expression evaluation
 function evaluate_solver_expression(expr, variables)
     """
-    Evaluate symbolic expression with current field values following Dedalus patterns.
+    Evaluate symbolic expression with current field values following Tarang patterns.
     
-    In Dedalus, this corresponds to:
+    In Tarang, this corresponds to:
     1. expr.attempt() -> expr.evaluate() -> expr.operate(out)
     2. Recursive evaluation of expression tree
     3. Returns field with evaluated data
@@ -825,7 +825,7 @@ function evaluate_solver_expression(expr, variables)
         throw(ArgumentError("Cannot evaluate null expression"))
     end
     
-    # Handle different expression types following Dedalus patterns
+    # Handle different expression types following Tarang patterns
     if hasfield(typeof(expr), :expr_type)
         expr_type = expr.expr_type
         
@@ -864,7 +864,7 @@ function evaluate_solver_expression(expr, variables)
 end
 
 function evaluate_operator_expression(expr, variables)
-    """Evaluate operator expression following Dedalus operator.operate() patterns"""
+    """Evaluate operator expression following Tarang operator.operate() patterns"""
     
     if !haskey(expr, "operator") || !haskey(expr, "operands")
         @warn "Malformed operator expression, returning zero field"
@@ -881,7 +881,7 @@ function evaluate_operator_expression(expr, variables)
         push!(eval_operands, eval_op)
     end
     
-    # Apply operator following Dedalus patterns
+    # Apply operator following Tarang patterns
     if operator == "Add"
         return apply_add_operator(eval_operands)
     elseif operator == "Multiply" 
@@ -896,9 +896,9 @@ end
 
 function build_jacobian_block(expr, variables, perturbations)
     """
-    Build Jacobian matrix block from Frechet differential expression following Dedalus patterns.
+    Build Jacobian matrix block from Frechet differential expression following Tarang patterns.
     
-    In Dedalus, this corresponds to:
+    In Tarang, this corresponds to:
     1. expr.expression_matrices(subproblem, vars) 
     2. Returns dict {var: matrix} for each variable
     3. Recursively builds matrices for expression tree
@@ -913,12 +913,12 @@ function build_jacobian_block(expr, variables, perturbations)
     total_var_size = sum(compute_field_vector_size(var) for var in variables)
     jacobian_size = total_var_size > 0 ? total_var_size : 1
     
-    # Handle different expression types following Dedalus expression_matrices patterns
+    # Handle different expression types following Tarang expression_matrices patterns
     if hasfield(typeof(expr), :expr_type)
         expr_type = expr.expr_type
         
         if expr_type == "variable"
-            # Variable expression - return identity matrix (Dedalus lines 183-186, 507-510, 957-960)
+            # Variable expression - return identity matrix (Tarang lines 183-186, 507-510, 957-960)
             return build_variable_jacobian_block(expr, variables)
             
         elseif expr_type == "operator"
@@ -934,12 +934,12 @@ function build_jacobian_block(expr, variables, perturbations)
         end
     end
     
-    # Fallback: identity matrix (following Dedalus identity pattern)
+    # Fallback: identity matrix (following Tarang identity pattern)
     return sparse(I, jacobian_size, jacobian_size)
 end
 
 function build_variable_jacobian_block(expr, variables)
-    """Build identity matrix block for variable (Dedalus pattern)"""
+    """Build identity matrix block for variable (Tarang pattern)"""
     
     if !haskey(expr, "field_ref")
         @warn "Variable expression missing field reference"
@@ -961,7 +961,7 @@ function build_variable_jacobian_block(expr, variables)
 end
 
 function build_operator_jacobian_block(expr, variables, perturbations)
-    """Build Jacobian block for operator expression (following Dedalus recursive patterns)"""
+    """Build Jacobian block for operator expression (following Tarang recursive patterns)"""
     
     if !haskey(expr, "operator") || !haskey(expr, "operands")
         @warn "Malformed operator expression for Jacobian"
@@ -1043,7 +1043,7 @@ function create_constant_field(expr, variables)
 end
 
 function apply_add_operator(operands)
-    """Apply addition operator following Dedalus patterns"""
+    """Apply addition operator following Tarang patterns"""
     if length(operands) == 0
         throw(ArgumentError("Addition requires operands"))
     end
@@ -1065,7 +1065,7 @@ function apply_add_operator(operands)
 end
 
 function apply_multiply_operator(operands) 
-    """Apply multiplication operator following Dedalus patterns"""
+    """Apply multiplication operator following Tarang patterns"""
     if length(operands) < 2
         return length(operands) == 1 ? operands[1] : throw(ArgumentError("Multiplication requires 2+ operands"))
     end

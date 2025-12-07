@@ -65,7 +65,7 @@ end
 
 Convert a math-style definition ``"f(x, y)"``/``"x*y"`` into a Julia anonymous
 function encoded as a string ``"(x,y) -> x*y"``. Returns the original result for
-non-call statements to preserve Dedalus semantics.
+non-call statements to preserve standard semantics.
 """
 function lambdify_functions(call::AbstractString, result::AbstractString)
     head, args = split_call(call)

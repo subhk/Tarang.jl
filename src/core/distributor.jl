@@ -94,7 +94,7 @@ mutable struct Distributor
             throw(ArgumentError("Mesh size $(prod(mesh)) does not match number of processes $size"))
         end
 
-        # Build coordinate information following Dedalus pattern
+        # Build coordinate information following standard pattern
         coordsystems = (coordsys,)  # Single coordinate system for now
         coords_tuple = coords(coordsys)  # Get coordinates from the coordinate system
         total_dim = coordsys.dim  # Total dimension
