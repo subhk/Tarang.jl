@@ -1006,10 +1006,24 @@ end
 """
 Compute Gauss-Jacobi quadrature nodes and weights.
 Uses the Golub-Welsch algorithm via eigenvalue decomposition of the Jacobi matrix.
+Special handling for Chebyshev T (a=b=-0.5) and Chebyshev U (a=b=0.5) cases.
 """
 function _gauss_jacobi_quadrature(N::Int, a::Float64, b::Float64)
     if N < 1
         return Float64[], Float64[]
+    end
+
+    # Special case: Chebyshev T (a=b=-0.5)
+    # The standard Golub-Welsch algorithm fails for a+b=-1 because beta[1]=0.
+    # Use the known Chebyshev-Gauss quadrature formula instead.
+    if abs(a + 0.5) < 1e-10 && abs(b + 0.5) < 1e-10
+        nodes = zeros(Float64, N)
+        weights = zeros(Float64, N)
+        for k in 1:N
+            nodes[k] = cos((2*k - 1) * π / (2*N))
+            weights[k] = π / N
+        end
+        return sort(nodes), weights[sortperm(nodes)]
     end
 
     # Build the symmetric tridiagonal Jacobi matrix
