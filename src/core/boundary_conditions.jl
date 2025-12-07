@@ -806,70 +806,233 @@ function evaluate_bc_value(manager::BoundaryConditionManager, bc, current_time=0
     return result
 end
 
+"""
+    evaluate_expression(expr, current_time=0.0, coords=Dict())
+
+Evaluate a boundary condition expression with current time and coordinates.
+
+Supports:
+- Numeric values (returned as-is)
+- String expressions with mathematical functions and variables
+- Function objects
+- TimeDependentValue and TimeSpaceDependentValue wrappers
+
+String expressions can contain:
+- Variables: t (time), x, y, z, r, θ, φ (coordinates)
+- Constants: pi, π, e
+- Functions: sin, cos, tan, exp, log, sqrt, abs, sinh, cosh, tanh
+- Operators: +, -, *, /, ^, ()
+
+Examples:
+- "sin(2*pi*t)" - time-dependent sinusoid
+- "exp(-t)*cos(x)" - exponentially decaying spatial cosine
+- "x^2 + y^2" - spatial quadratic
+- "sin(t)*sin(pi*x)*sin(pi*y)" - product of temporal and spatial modes
+"""
 function evaluate_expression(expr, current_time=0.0, coords=Dict())
-    """Evaluate a boundary condition expression with current time and coordinates"""
-    
     if isa(expr, Real)
         return expr
     elseif isa(expr, String)
-        # Simple expression evaluation
-        # This is a placeholder - in practice, you'd want a proper expression parser
-        # For now, handle some common cases
-        if expr == "0" || expr == "0.0"
-            return 0.0
-        elseif expr == "1" || expr == "1.0"
-            return 1.0
-        elseif occursin("sin(", expr) && occursin("t", expr)
-            # Simple time-dependent case: sin(ωt)
-            if occursin("sin(2*pi*t)", expr)
-                return sin(2*π*current_time)
-            elseif occursin("sin(t)", expr)
-                return sin(current_time)
-            end
-        elseif occursin("cos(", expr) && occursin("t", expr)
-            # Simple time-dependent case: cos(ωt)  
-            if occursin("cos(2*pi*t)", expr)
-                return cos(2*π*current_time)
-            elseif occursin("cos(t)", expr)
-                return cos(current_time)
-            end
-        elseif occursin("exp(", expr) && occursin("t", expr)
-            # Exponential time dependence
-            if occursin("exp(-t)", expr)
-                return exp(-current_time)
-            elseif occursin("exp(t)", expr)
-                return exp(current_time)
-            end
-        end
-        
-        # If we can't parse it, return the string for symbolic processing
-        return expr
-        
+        return _evaluate_string_expression(expr, current_time, coords)
     elseif isa(expr, Function)
-        # Evaluate function with available arguments
-        try
-            if haskey(coords, "x") && haskey(coords, "y")
-                return expr(current_time, coords["x"], coords["y"])
-            elseif haskey(coords, "x")
-                return expr(current_time, coords["x"])
-            else
-                return expr(current_time)
-            end
-        catch
-            return expr(current_time)
-        end
-        
+        return _evaluate_function_expression(expr, current_time, coords)
     elseif isa(expr, TimeDependentValue) || isa(expr, TimeSpaceDependentValue)
-        # Evaluate compiled function if available
         if expr.function_obj !== nothing
             return expr.function_obj(current_time, coords)
         else
-            # Fall back to string evaluation
+            return evaluate_expression(expr.expression, current_time, coords)
+        end
+    elseif isa(expr, SpaceDependentValue)
+        if expr.function_obj !== nothing
+            return expr.function_obj(coords)
+        else
             return evaluate_expression(expr.expression, current_time, coords)
         end
     end
-    
+
     return expr
+end
+
+"""
+Evaluate a string expression by substituting variables and parsing.
+Uses Julia's Meta.parse for safe expression evaluation.
+"""
+function _evaluate_string_expression(expr::String, current_time, coords)
+    # Handle simple constant cases first
+    stripped = strip(expr)
+    if stripped == "0" || stripped == "0.0"
+        return 0.0
+    elseif stripped == "1" || stripped == "1.0"
+        return 1.0
+    elseif stripped == "-1" || stripped == "-1.0"
+        return -1.0
+    end
+
+    # Try to parse as a simple number
+    try
+        return parse(Float64, stripped)
+    catch
+        # Continue with expression parsing
+    end
+
+    # Build variable substitution dictionary
+    vars = Dict{String, Float64}()
+    vars["t"] = Float64(current_time)
+    vars["pi"] = Float64(π)
+    vars["π"] = Float64(π)
+    vars["e"] = Float64(ℯ)
+
+    # Add coordinate values
+    for (key, val) in coords
+        if isa(val, Real)
+            vars[string(key)] = Float64(val)
+        elseif isa(val, AbstractArray)
+            # For array-valued coordinates, we'll need special handling
+            vars[string(key)] = val
+        end
+    end
+
+    # Check if all required variables are present
+    # Build the expression with variable substitution
+    try
+        result = _safe_eval_math_expr(expr, vars)
+        return result
+    catch e
+        @debug "Expression evaluation failed for '$expr': $e"
+        # Return the original string if parsing fails
+        return expr
+    end
+end
+
+"""
+Safely evaluate a mathematical expression string with variable substitutions.
+Only allows mathematical operations - no arbitrary code execution.
+"""
+function _safe_eval_math_expr(expr_str::String, vars::Dict{String, T}) where T
+    # Allowed mathematical functions
+    allowed_funcs = Dict{String, Function}(
+        "sin" => sin,
+        "cos" => cos,
+        "tan" => tan,
+        "sinh" => sinh,
+        "cosh" => cosh,
+        "tanh" => tanh,
+        "asin" => asin,
+        "acos" => acos,
+        "atan" => atan,
+        "exp" => exp,
+        "log" => log,
+        "log10" => log10,
+        "log2" => log2,
+        "sqrt" => sqrt,
+        "abs" => abs,
+        "sign" => sign,
+        "floor" => floor,
+        "ceil" => ceil,
+        "round" => round,
+    )
+
+    # Parse the expression
+    parsed = Meta.parse(expr_str)
+
+    # Evaluate with restrictions
+    return _eval_safe_ast(parsed, vars, allowed_funcs)
+end
+
+"""
+Recursively evaluate an AST node with safety restrictions.
+Only allows arithmetic operations and whitelisted functions.
+"""
+function _eval_safe_ast(node, vars::Dict{String, T}, allowed_funcs::Dict{String, Function}) where T
+    if isa(node, Number)
+        return Float64(node)
+    elseif isa(node, Symbol)
+        name = string(node)
+        if haskey(vars, name)
+            return vars[name]
+        elseif name == "pi" || name == "π"
+            return Float64(π)
+        elseif name == "e" || name == "ℯ"
+            return Float64(ℯ)
+        else
+            throw(ArgumentError("Unknown variable: $name"))
+        end
+    elseif isa(node, Expr)
+        if node.head == :call
+            func_name = string(node.args[1])
+            args = [_eval_safe_ast(arg, vars, allowed_funcs) for arg in node.args[2:end]]
+
+            # Check if it's an allowed function
+            if haskey(allowed_funcs, func_name)
+                return allowed_funcs[func_name](args...)
+            # Handle binary operators
+            elseif func_name == "+"
+                return +(args...)
+            elseif func_name == "-"
+                if length(args) == 1
+                    return -args[1]
+                else
+                    return -(args...)
+                end
+            elseif func_name == "*"
+                return *(args...)
+            elseif func_name == "/"
+                return /(args...)
+            elseif func_name == "^"
+                return ^(args...)
+            elseif func_name == "%" || func_name == "mod"
+                return mod(args...)
+            else
+                throw(ArgumentError("Function not allowed: $func_name"))
+            end
+        elseif node.head == :block
+            # Handle block expressions (multiple statements)
+            result = nothing
+            for child in node.args
+                if !isa(child, LineNumberNode)
+                    result = _eval_safe_ast(child, vars, allowed_funcs)
+                end
+            end
+            return result
+        elseif node.head == :(=)
+            throw(ArgumentError("Assignment not allowed in expressions"))
+        else
+            throw(ArgumentError("Expression type not allowed: $(node.head)"))
+        end
+    elseif isa(node, LineNumberNode)
+        return nothing
+    else
+        throw(ArgumentError("Unsupported node type: $(typeof(node))"))
+    end
+end
+
+"""
+Evaluate a function expression with appropriate arguments.
+"""
+function _evaluate_function_expression(func::Function, current_time, coords)
+    # Try different argument combinations based on function arity
+    try
+        # Try with all available arguments
+        if haskey(coords, "x") && haskey(coords, "y") && haskey(coords, "z")
+            return func(current_time, coords["x"], coords["y"], coords["z"])
+        elseif haskey(coords, "x") && haskey(coords, "y")
+            return func(current_time, coords["x"], coords["y"])
+        elseif haskey(coords, "r") && haskey(coords, "θ")
+            return func(current_time, coords["r"], coords["θ"])
+        elseif haskey(coords, "x")
+            return func(current_time, coords["x"])
+        else
+            return func(current_time)
+        end
+    catch
+        # If that fails, try just time
+        try
+            return func(current_time)
+        catch
+            # Last resort: try no arguments
+            return func()
+        end
+    end
 end
 
 function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_time)
