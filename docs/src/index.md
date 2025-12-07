@@ -4,7 +4,7 @@
 
 ```@raw html
 <div style="text-align: center; margin: 2em 0;">
-  <img src="assets/tarang_logo.svg" alt="Tarang.jl" width="300" style="max-width: 100%;" />
+  <img src="assets/logo_light.svg" alt="Tarang.jl" width="300" style="max-width: 100%;" />
 </div>
 ```
 

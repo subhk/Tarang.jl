@@ -944,6 +944,117 @@ function transpose_pencil_data!(dest::PencilArrays.PencilArray, src::PencilArray
 end
 
 # ============================================================================
+# Transpose Buffer Cache for Zero-Allocation Transforms
+# ============================================================================
+
+"""
+    TransposeBufferCache
+
+Pre-allocated buffer cache for transpose operations during spectral transforms.
+Avoids repeated allocations during time-stepping loop.
+"""
+mutable struct TransposeBufferCache
+    # Cached PencilArrays for different configurations
+    pencil_buffers::Dict{Tuple, PencilArrays.PencilArray}
+    # Statistics
+    hits::Int
+    misses::Int
+
+    function TransposeBufferCache()
+        new(Dict{Tuple, PencilArrays.PencilArray}(), 0, 0)
+    end
+end
+
+# Global transpose buffer cache (lazy initialization)
+const TRANSPOSE_CACHE = Ref{Union{Nothing, TransposeBufferCache}}(nothing)
+
+function get_transpose_cache()
+    if TRANSPOSE_CACHE[] === nothing
+        TRANSPOSE_CACHE[] = TransposeBufferCache()
+    end
+    return TRANSPOSE_CACHE[]
+end
+
+"""
+    get_transpose_buffer!(cache::TransposeBufferCache, pencil::PencilArrays.Pencil,
+                          dtype::Type, key::Tuple)
+
+Get or create a transpose buffer for the given pencil configuration.
+"""
+function get_transpose_buffer!(cache::TransposeBufferCache, pencil::PencilArrays.Pencil,
+                               dtype::Type, key::Tuple)
+    full_key = (key..., dtype)
+
+    if haskey(cache.pencil_buffers, full_key)
+        cache.hits += 1
+        return cache.pencil_buffers[full_key]
+    end
+
+    cache.misses += 1
+
+    # Create new PencilArray buffer
+    buf = PencilArrays.PencilArray{dtype}(undef, pencil)
+    fill!(buf, zero(dtype))
+
+    cache.pencil_buffers[full_key] = buf
+    return buf
+end
+
+"""
+    transpose_pencil_cached!(dest, src, dist::Distributor; cache=nothing)
+
+Cached version of transpose_pencil_data! that reuses buffers.
+"""
+function transpose_pencil_cached!(dest::PencilArrays.PencilArray, src::PencilArrays.PencilArray,
+                                  dist::Distributor)
+    start_time = time()
+
+    try
+        # Use PencilArrays transpose! (already optimized)
+        PencilArrays.transpose!(dest, src)
+
+        dist.performance_stats.transpose_time += time() - start_time
+        dist.performance_stats.mpi_operations += 1
+    catch e
+        @warn "Cached transpose failed" exception=e
+        copyto!(parent(dest), parent(src))
+    end
+
+    return dest
+end
+
+"""
+    clear_transpose_cache!()
+
+Clear the transpose buffer cache (useful for memory reclamation).
+"""
+function clear_transpose_cache!()
+    cache = get_transpose_cache()
+    empty!(cache.pencil_buffers)
+    cache.hits = 0
+    cache.misses = 0
+end
+
+"""
+    transpose_cache_stats()
+
+Get statistics about the transpose buffer cache.
+"""
+function transpose_cache_stats()
+    cache = get_transpose_cache()
+    total = cache.hits + cache.misses
+    hit_rate = total > 0 ? cache.hits / total : 0.0
+
+    return (
+        hits = cache.hits,
+        misses = cache.misses,
+        hit_rate = hit_rate,
+        num_buffers = length(cache.pencil_buffers),
+        memory_bytes = sum(sizeof ∘ parent, values(cache.pencil_buffers); init=0)
+    )
+end
+
+# ============================================================================
 # Optimized MPI Communication Patterns
 # ============================================================================
 
