@@ -988,112 +988,46 @@ function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float
 end
 
 """
-Compute Jacobi linearization using matrix Clenshaw algorithm.
-Following Dedalus tools/clenshaw.py: matrix_clenshaw and jacobi_recursion.
+Compute Jacobi linearization using Gauss-Jacobi quadrature.
+This provides accurate linearization coefficients for general Jacobi polynomials.
 
-This computes the expansion coefficients of P_m^{(a,b)}(x) * P_n^{(a,b)}(x)
-in terms of P_k^{(a,b)}(x) using the Clenshaw algorithm with the Jacobi matrix.
+The linearization coefficients are computed via projection:
+c_k = ∫_{-1}^{1} P_m^{(a,b)}(x) P_n^{(a,b)}(x) P_k^{(a,b)}(x) w(x) dx / h_k
+
+where w(x) = (1-x)^a (1+x)^b is the weight function and h_k is the normalization.
 """
 function _jacobi_linearization_clenshaw(m::Int, n::Int, a::Float64, b::Float64, N_max::Int, N_work::Int)
     coeffs = zeros(Float64, N_max)
 
-    # Build Jacobi matrix (symmetric tridiagonal)
-    # x * P_n = alpha_n * P_{n-1} + beta_n * P_n + gamma_n * P_{n+1}
-    # where J[n,n-1] = alpha_n, J[n,n] = beta_n, J[n,n+1] = gamma_n
+    # Use Gauss-Jacobi quadrature with enough points for exactness
+    # For product of P_m * P_n * P_k (degrees m, n, k), we need N_quad >= (m+n+k+1)/2
+    N_quad = max(m + n + N_max + 2, 2 * N_work)
 
-    J_diag = zeros(Float64, N_work)      # Main diagonal (beta_n)
-    J_subdiag = zeros(Float64, N_work-1)  # Sub/super diagonal
+    # Get Gauss-Jacobi quadrature nodes and weights
+    nodes, weights = _gauss_jacobi_quadrature(N_quad, a, b)
 
-    for k in 0:(N_work-1)
-        # Jacobi recurrence coefficients (0-indexed k)
-        # From DLMF 18.9.2 and Dedalus libraries/dedalus_sphere/jacobi.py
+    # Evaluate P_m and P_n at quadrature nodes
+    P_m = _jacobi_polynomial_values(m, a, b, nodes)
+    P_n = _jacobi_polynomial_values(n, a, b, nodes)
 
-        denom = (2*k + a + b) * (2*k + a + b + 2)
-        if abs(denom) < 1e-14
-            # Handle edge cases
-            J_diag[k+1] = (b^2 - a^2) / (2*(k+1) + a + b) / (2*k + a + b + 2)
-        else
-            J_diag[k+1] = (b^2 - a^2) / denom
-        end
+    # Product values
+    product = P_m .* P_n
 
-        if k < N_work - 1
-            # Sub/super diagonal coefficient
-            num = 2 * (k + 1) * (k + 1 + a + b) * (k + 1 + a) * (k + 1 + b)
-            denom = (2*k + a + b + 1) * (2*k + a + b + 2)^2 * (2*k + a + b + 3)
-            if abs(denom) > 1e-14
-                J_subdiag[k+1] = sqrt(num / denom)
-            else
-                J_subdiag[k+1] = 0.0
-            end
-        end
-    end
+    # Compute coefficients by projection
+    for k in 0:(N_max-1)
+        P_k = _jacobi_polynomial_values(k, a, b, nodes)
 
-    # Build sparse Jacobi matrix
-    J = spdiagm(-1 => J_subdiag, 0 => J_diag, 1 => J_subdiag)
+        # Normalization factor h_k for Jacobi polynomials
+        h_k = _jacobi_norm_squared(k, a, b)
 
-    # Now use Clenshaw algorithm to compute P_m(J) * e_n
-    # where e_n is the n-th unit vector
-    # The result gives the coefficients of P_m * P_n in the Jacobi basis
+        # Inner product: ∫ P_m * P_n * P_k * w dx ≈ sum of weights * values
+        inner_prod = sum(weights .* product .* P_k)
 
-    # Clenshaw recurrence for evaluating polynomial at matrix argument:
-    # b_{N+1} = b_N = 0
-    # b_k = A_k * b_{k+1} + B_{k+1} * b_{k+2} + c_k * I   (for k = N-1, ..., 0)
-    # result = f_0 * b_0
-    #
-    # For P_m, the coefficients c_k are: c_m = 1, c_k = 0 for k != m
-    # f_0 = P_0(x) = 1 (identity matrix for matrix argument)
-
-    # Build A_k and B_k coefficients from Jacobi recursion
-    # x * P_n = J[n,n-1]*P_{n-1} + J[n,n]*P_n + J[n,n+1]*P_{n+1}
-    # => P_{n+1} = (x - J[n,n])/J[n,n+1] * P_n - J[n,n-1]/J[n,n+1] * P_{n-1}
-    # So: A_n = (J - J[n,n]*I)/J[n,n+1], B_n = -J[n,n-1]/J[n,n+1]
-
-    N_clen = m + 1  # We need coefficients c_0, c_1, ..., c_m
-
-    # Clenshaw iteration (backwards)
-    b_k1 = spzeros(Float64, N_work, N_work)  # b_{k+1}
-    b_k2 = spzeros(Float64, N_work, N_work)  # b_{k+2}
-
-    I_mat = sparse(I, N_work, N_work)
-
-    for k in (N_clen-1):-1:0
-        # Compute A_k and B_{k+1}
-        if k < N_work - 1 && abs(J_subdiag[k+1]) > 1e-14
-            A_k = (J - J_diag[k+1] * I_mat) / J_subdiag[k+1]
-        else
-            A_k = spzeros(Float64, N_work, N_work)
-        end
-
-        if k > 0 && k < N_work && abs(J_subdiag[k+1]) > 1e-14
-            B_k1 = -J_subdiag[k] / J_subdiag[k+1] * I_mat
-        else
-            B_k1 = spzeros(Float64, N_work, N_work)
-        end
-
-        # c_k = 1 if k == m, else 0
-        c_k = (k == m) ? 1.0 : 0.0
-
-        # b_k = c_k * I + A_k * b_{k+1} + B_{k+1} * b_{k+2}
-        b_k = c_k * I_mat + A_k * b_k1 + B_k1 * b_k2
-
-        # Shift for next iteration
-        b_k2 = b_k1
-        b_k1 = b_k
-    end
-
-    # Result: P_m(J) ≈ b_0 (since f_0 = P_0 = I)
-    # The column n of this matrix gives P_m * P_n expansion coefficients
-
-    # Extract column n (0-indexed)
-    if n < N_work
-        col = b_k1[:, n+1]
-        for k in 1:min(N_max, N_work)
-            coeffs[k] = col[k]
-        end
+        coeffs[k + 1] = inner_prod / h_k
     end
 
     # Clean up small values
-    cutoff = 1e-14
+    cutoff = 1e-12
     for k in 1:N_max
         if abs(coeffs[k]) < cutoff
             coeffs[k] = 0.0
@@ -1101,6 +1035,99 @@ function _jacobi_linearization_clenshaw(m::Int, n::Int, a::Float64, b::Float64, 
     end
 
     return coeffs
+end
+
+"""
+Compute Gauss-Jacobi quadrature nodes and weights.
+Uses the Golub-Welsch algorithm via eigenvalue decomposition of the Jacobi matrix.
+"""
+function _gauss_jacobi_quadrature(N::Int, a::Float64, b::Float64)
+    if N < 1
+        return Float64[], Float64[]
+    end
+
+    # Build the symmetric tridiagonal Jacobi matrix
+    alpha = zeros(Float64, N)   # Main diagonal
+    beta = zeros(Float64, N-1)  # Sub/super diagonal
+
+    for k in 0:(N-1)
+        # Diagonal element
+        denom = (2*k + a + b) * (2*k + a + b + 2)
+        if abs(denom) > 1e-14
+            alpha[k+1] = (b^2 - a^2) / denom
+        else
+            alpha[k+1] = 0.0
+        end
+
+        # Off-diagonal element
+        if k < N - 1
+            num = 4 * (k + 1) * (k + 1 + a) * (k + 1 + b) * (k + 1 + a + b)
+            denom = (2*k + a + b + 1) * (2*k + a + b + 2)^2 * (2*k + a + b + 3)
+            if abs(denom) > 1e-14 && num >= 0
+                beta[k+1] = sqrt(num / denom)
+            else
+                beta[k+1] = 0.0
+            end
+        end
+    end
+
+    # Build symmetric tridiagonal matrix and compute eigendecomposition
+    J = SymTridiagonal(alpha, beta)
+    eigen_decomp = eigen(J)
+    nodes = eigen_decomp.values
+    V = eigen_decomp.vectors
+
+    # Weights: w_i = μ_0 * v_{1,i}^2
+    mu_0 = 2^(a + b + 1) * exp(lgamma(a + 1) + lgamma(b + 1) - lgamma(a + b + 2))
+    weights = mu_0 * (V[1, :].^2)
+
+    return nodes, weights
+end
+
+"""
+Evaluate Jacobi polynomial P_n^{(a,b)}(x) at given points using stable recurrence.
+"""
+function _jacobi_polynomial_values(n::Int, a::Float64, b::Float64, x::AbstractVector{Float64})
+    N_pts = length(x)
+
+    if n == 0
+        return ones(Float64, N_pts)
+    end
+
+    P_prev = ones(Float64, N_pts)
+    P_curr = @. (a - b) / 2 + (a + b + 2) / 2 * x
+
+    if n == 1
+        return P_curr
+    end
+
+    for k in 1:(n-1)
+        k_ab = 2*k + a + b
+        A_k = (k_ab + 1) * (k_ab + 2) / (2 * (k + 1) * (k + a + b + 1))
+        B_k = (a^2 - b^2) * (k_ab + 1) / (2 * (k + 1) * (k + a + b + 1) * k_ab)
+        C_k = (k + a) * (k + b) * (k_ab + 2) / ((k + 1) * (k + a + b + 1) * k_ab)
+
+        P_next = @. (A_k * x + B_k) * P_curr - C_k * P_prev
+        P_prev = P_curr
+        P_curr = P_next
+    end
+
+    return P_curr
+end
+
+"""
+Compute the squared norm (h_n) of Jacobi polynomial P_n^{(a,b)}.
+"""
+function _jacobi_norm_squared(n::Int, a::Float64, b::Float64)
+    if n == 0
+        return 2^(a + b + 1) * exp(lgamma(a + 1) + lgamma(b + 1) - lgamma(a + b + 2))
+    end
+
+    log_h = (a + b + 1) * log(2) - log(2*n + a + b + 1)
+    log_h += lgamma(n + a + 1) + lgamma(n + b + 1)
+    log_h -= lgamma(n + 1) + lgamma(n + a + b + 1)
+
+    return exp(log_h)
 end
 
 """Compute Legendre linearization coefficient using Clebsch-Gordan formula."""
