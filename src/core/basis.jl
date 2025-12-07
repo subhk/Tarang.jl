@@ -575,6 +575,62 @@ end
 # ============================================================================
 
 """
+    ncc_matrix(ncc_basis, arg_basis, out_basis, coeffs; cutoff=1e-6)
+
+Build full NCC matrix via direct summation of product matrices.
+Following Dedalus basis.py:248-262 ncc_matrix method.
+
+The NCC matrix represents multiplication by a spatially-varying coefficient field:
+    (ncc * operand)_coeffs = NCC_matrix @ operand_coeffs
+
+where ncc is expanded in spectral coefficients and each mode contributes
+via its product_matrix.
+
+# Arguments
+- `ncc_basis`: Basis for the NCC field
+- `arg_basis`: Basis for the argument/operand field
+- `out_basis`: Basis for the output field
+- `coeffs`: Spectral coefficients of the NCC field
+- `cutoff`: Coefficient cutoff for sparsity (default 1e-6)
+
+# Returns
+Sparse matrix representing the NCC multiplication operation.
+"""
+function ncc_matrix(ncc_basis::Basis, arg_basis, out_basis, coeffs::AbstractVector; cutoff::Float64=1e-6)
+    N = length(coeffs)
+    total = nothing
+
+    for i in 1:N
+        coeff = coeffs[i]
+
+        # Skip small coefficients
+        if abs(coeff) <= cutoff
+            continue
+        end
+
+        # Get product matrix for mode i-1 (0-based mode index)
+        matrix = product_matrix(ncc_basis, arg_basis, out_basis, i - 1)
+
+        # Scale by coefficient and accumulate
+        if total === nothing
+            total = coeff * matrix
+        else
+            total = total + coeff * matrix
+        end
+    end
+
+    if total === nothing
+        N_out = out_basis === nothing ? ncc_basis.meta.size : out_basis.meta.size
+        N_arg = arg_basis === nothing ? 1 : arg_basis.meta.size
+        return spzeros(Float64, N_out, N_arg)
+    end
+
+    # Eliminate small entries
+    droptol!(total, cutoff)
+    return total
+end
+
+"""
     product_matrix(basis::JacobiBasis, arg_basis, out_basis, ncc_mode::Int)
 
 Build multiplication matrix for Non-Constant Coefficient (NCC) terms.
@@ -645,67 +701,189 @@ function product_matrix(basis::RealFourier, arg_basis, out_basis, ncc_mode::Int)
     return matrix
 end
 
-"""Build RealFourier product matrix for specific wavenumber."""
+"""
+Build RealFourier product matrix for specific wavenumber.
+Following Dedalus basis.py:1136-1183 exactly.
+
+The RealFourier product matrix handles multiplication of trig functions:
+- 2 cos(mx) cos(nx) = cos((m+n)x) + cos((m-n)x)
+- 2 cos(mx) sin(nx) = sin((m+n)x) - sin((m-n)x)  (msin = -sin in Dedalus notation)
+- 2 sin(mx) cos(nx) = sin((m+n)x) + sin((m-n)x)
+- 2 sin(mx) sin(nx) = -cos((m+n)x) + cos((m-n)x)
+"""
 function _build_real_fourier_product_matrix(N_arg::Int, N_out::Int, m::Int, is_sin::Bool)
-    # cos(m*x) * cos(n*x) = 0.5*(cos((m-n)*x) + cos((m+n)*x))
-    # cos(m*x) * sin(n*x) = 0.5*(sin((m+n)*x) - sin((m-n)*x))
-    # sin(m*x) * cos(n*x) = 0.5*(sin((m+n)*x) + sin((m-n)*x))
-    # sin(m*x) * sin(n*x) = 0.5*(cos((m-n)*x) - cos((m+n)*x))
+    # Following Dedalus: use wavenumber intersection approach
+    # k_out (even indices) are cos modes, k_arg (even indices) are cos modes
+    # Odd indices are -sin (msin) modes
 
     I_list = Int[]
     J_list = Int[]
     V_list = Float64[]
 
-    for j in 1:N_arg
-        # Determine if input mode j is cos or sin
-        n = (j - 1) ÷ 2
-        j_is_sin = (j > 1) && ((j - 1) % 2 == 1)
+    # Generate wavenumber arrays following Dedalus pattern
+    # RealFourier stores: [cos_0, cos_1, msin_1, cos_2, msin_2, ...]
+    # where msin = -sin
 
-        # Compute output modes
+    # Process the three coupling cases from Dedalus:
+    # 1. k_out = k_ncc + k_arg (rows_p, cols_p)
+    # 2. k_out = k_ncc - k_arg (rows_m, cols_m)
+    # 3. k_out = k_arg - k_ncc for negative result (rows_mn, cols_mn)
+
+    # k_arg wavenumbers (even indices only = cos modes, indices 1, 3, 5, ...)
+    # In Julia 1-based: cos_0 at 1, cos_1 at 2, msin_1 at 3, cos_2 at 4, msin_2 at 5...
+    # Dedalus uses 0-based: cos_0 at 0, cos_1 at 2, msin_1 at 3, cos_2 at 4, msin_2 at 5...
+
+    for j_arg in 1:2:N_arg  # cos modes in arg (1, 3, 5, ... in 1-based = 0, 2, 4, ... wavenumbers)
+        n = (j_arg - 1) ÷ 2  # wavenumber
+
+        # Case 1: k_out = m + n (k_plus)
         k_plus = m + n
-        k_minus = abs(m - n)
+        if k_plus >= 0
+            out_cos_idx = k_plus == 0 ? 1 : 2 * k_plus      # cos mode index
+            out_sin_idx = 2 * k_plus + 1                     # msin mode index
 
-        # Output indices (cos modes at 2k, sin modes at 2k+1)
-        for (k, sign_plus, sign_minus) in [(k_plus, 1, 1), (k_minus, 1, -1)]
-            if k == 0
-                # DC mode
-                out_idx = 1
-                if !is_sin && !j_is_sin
-                    # cos * cos -> cos
-                    push!(I_list, out_idx)
-                    push!(J_list, j)
+            if is_sin
+                # sin(mx) * cos(nx) -> sin((m+n)x)
+                if out_sin_idx <= N_out
+                    push!(I_list, out_sin_idx)
+                    push!(J_list, j_arg)
                     push!(V_list, 0.5)
-                elseif is_sin && j_is_sin
-                    # sin * sin -> cos
-                    push!(I_list, out_idx)
-                    push!(J_list, j)
-                    push!(V_list, k == k_plus ? -0.5 : 0.5)
                 end
             else
-                cos_idx = 2 * k
-                sin_idx = 2 * k + 1
-
-                if cos_idx <= N_out
-                    if (!is_sin && !j_is_sin) || (is_sin && j_is_sin)
-                        # cos*cos or sin*sin -> cos
-                        val = (is_sin && j_is_sin) ? (k == k_plus ? -0.5 : 0.5) : 0.5
-                        push!(I_list, cos_idx)
-                        push!(J_list, j)
-                        push!(V_list, val)
-                    end
-                end
-
-                if sin_idx <= N_out
-                    if (is_sin && !j_is_sin) || (!is_sin && j_is_sin)
-                        # sin*cos or cos*sin -> sin
-                        val = 0.5 * (k == k_plus ? 1 : (is_sin ? 1 : -1))
-                        push!(I_list, sin_idx)
-                        push!(J_list, j)
-                        push!(V_list, val)
-                    end
+                # cos(mx) * cos(nx) -> cos((m+n)x)
+                if out_cos_idx <= N_out
+                    push!(I_list, out_cos_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, 0.5)
                 end
             end
         end
+
+        # Case 2: k_out = m - n
+        k_minus = m - n
+        if k_minus >= 0
+            out_cos_idx = k_minus == 0 ? 1 : 2 * k_minus
+            out_sin_idx = 2 * k_minus + 1
+
+            if is_sin
+                # sin(mx) * cos(nx) -> sin((m-n)x)
+                if out_sin_idx <= N_out && k_minus > 0
+                    push!(I_list, out_sin_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, 0.5)
+                end
+            else
+                # cos(mx) * cos(nx) -> cos((m-n)x)
+                if out_cos_idx <= N_out
+                    push!(I_list, out_cos_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, 0.5)
+                end
+            end
+        end
+
+        # Case 3: k_out = n - m (only if n > m)
+        k_nm = n - m
+        if k_nm > 0
+            out_cos_idx = 2 * k_nm
+            out_sin_idx = 2 * k_nm + 1
+
+            if is_sin
+                # sin(mx) * cos(nx) -> -sin((n-m)x) = msin((n-m)x)
+                if out_sin_idx <= N_out
+                    push!(I_list, out_sin_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, -0.5)
+                end
+            else
+                # cos(mx) * cos(nx) -> cos((n-m)x)
+                if out_cos_idx <= N_out
+                    push!(I_list, out_cos_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, 0.5)
+                end
+            end
+        end
+    end
+
+    # Now handle msin input modes (j_arg even in 1-based = 2, 4, 6, ...)
+    for j_arg in 2:2:N_arg  # msin modes in arg
+        n = (j_arg - 1) ÷ 2  # wavenumber (same calculation)
+        if n == 0
+            continue  # No sin mode at k=0
+        end
+
+        # Case 1: k_out = m + n (k_plus)
+        k_plus = m + n
+        out_cos_idx = k_plus == 0 ? 1 : 2 * k_plus
+        out_sin_idx = 2 * k_plus + 1
+
+        if is_sin
+            # sin(mx) * sin(nx) = -0.5*cos((m+n)x) + 0.5*cos((m-n)x)
+            # -> -cos((m+n)x) contribution
+            if out_cos_idx <= N_out
+                push!(I_list, out_cos_idx)
+                push!(J_list, j_arg)
+                push!(V_list, -0.5)
+            end
+        else
+            # cos(mx) * sin(nx) -> sin((m+n)x)
+            if out_sin_idx <= N_out
+                push!(I_list, out_sin_idx)
+                push!(J_list, j_arg)
+                push!(V_list, 0.5)
+            end
+        end
+
+        # Case 2: k_out = m - n
+        k_minus = m - n
+        if k_minus >= 0
+            out_cos_idx = k_minus == 0 ? 1 : 2 * k_minus
+            out_sin_idx = 2 * k_minus + 1
+
+            if is_sin
+                # sin(mx) * sin(nx) -> cos((m-n)x)
+                if out_cos_idx <= N_out
+                    push!(I_list, out_cos_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, 0.5)
+                end
+            else
+                # cos(mx) * sin(nx) -> -sin((m-n)x)
+                if out_sin_idx <= N_out && k_minus > 0
+                    push!(I_list, out_sin_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, -0.5)
+                end
+            end
+        end
+
+        # Case 3: k_out = n - m (only if n > m)
+        k_nm = n - m
+        if k_nm > 0
+            out_cos_idx = 2 * k_nm
+            out_sin_idx = 2 * k_nm + 1
+
+            if is_sin
+                # sin(mx) * sin(nx) -> cos((n-m)x)
+                if out_cos_idx <= N_out
+                    push!(I_list, out_cos_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, 0.5)
+                end
+            else
+                # cos(mx) * sin(nx) -> sin((n-m)x)
+                if out_sin_idx <= N_out
+                    push!(I_list, out_sin_idx)
+                    push!(J_list, j_arg)
+                    push!(V_list, 0.5)
+                end
+            end
+        end
+    end
+
+    if isempty(I_list)
+        return spzeros(Float64, N_out, N_arg)
     end
 
     return sparse(I_list, J_list, V_list, N_out, N_arg)
