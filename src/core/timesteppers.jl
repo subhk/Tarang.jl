@@ -572,7 +572,7 @@ struct RK443_IMEX <: TimeStepper
     end
 end
 
-# Timestepper state management
+# Timestepper state management with workspace optimization
 mutable struct TimestepperState
     timestepper::TimeStepper
     dt::Float64
@@ -581,12 +581,92 @@ mutable struct TimestepperState
     stage::Int
     timestepper_data::Dict{String, Any}  # Additional data for specific timesteppers
 
+    # Pre-allocated workspace fields for zero-allocation time-stepping
+    workspace_fields::Vector{ScalarField}  # Reusable scratch fields
+    workspace_allocated::Bool
+
     function TimestepperState(timestepper::TimeStepper, dt::Float64, initial_state::Vector{ScalarField})
         history = [copy.(initial_state)]
         dt_history = [dt]  # Initialize with current timestep
         timestepper_data = Dict{String, Any}()
-        new(timestepper, dt, history, dt_history, 0, timestepper_data)
+
+        # Pre-allocate workspace fields based on timestepper requirements
+        n_fields = length(initial_state)
+        n_workspace = _workspace_count(timestepper) * n_fields
+        workspace_fields = ScalarField[]
+
+        # Pre-allocate workspace fields matching the initial state structure
+        for _ in 1:n_workspace
+            for field in initial_state
+                ws_field = ScalarField(field.dist, "workspace", field.bases, field.dtype)
+                push!(workspace_fields, ws_field)
+            end
+        end
+
+        new(timestepper, dt, history, dt_history, 0, timestepper_data, workspace_fields, true)
     end
+end
+
+"""
+    _workspace_count(timestepper)
+
+Return the number of workspace field sets needed for a timestepper.
+"""
+function _workspace_count(::RK111)
+    return 1  # 1 for RHS evaluation
+end
+
+function _workspace_count(::RK222)
+    return 2  # k1, temp_state
+end
+
+function _workspace_count(::RK443)
+    return 5  # k1, k2, k3, k4, temp
+end
+
+function _workspace_count(::Union{CNAB1, CNAB2})
+    return 2
+end
+
+function _workspace_count(::Union{SBDF1, SBDF2, SBDF3, SBDF4})
+    return 2
+end
+
+function _workspace_count(::Union{ETD_RK222, ETD_CNAB2, ETD_SBDF2})
+    return 3
+end
+
+function _workspace_count(::TimeStepper)
+    return 2  # Default fallback
+end
+
+"""
+    get_workspace_field!(state::TimestepperState, template::ScalarField, idx::Int)
+
+Get a pre-allocated workspace field, or allocate one if needed.
+"""
+function get_workspace_field!(state::TimestepperState, template::ScalarField, idx::Int)
+    if idx <= length(state.workspace_fields)
+        ws = state.workspace_fields[idx]
+        # Reset to grid layout
+        ws.current_layout = :g
+        return ws
+    else
+        # Fallback: allocate new field (should rarely happen)
+        return ScalarField(template.dist, "workspace", template.bases, template.dtype)
+    end
+end
+
+"""
+    copy_field_data!(dest::ScalarField, src::ScalarField)
+
+Copy field data in-place without allocation.
+"""
+function copy_field_data!(dest::ScalarField, src::ScalarField)
+    ensure_layout!(src, :g)
+    ensure_layout!(dest, :g)
+    copyto!(dest.data_g, src.data_g)
+    dest.current_layout = src.current_layout
 end
 
 # Timestepping implementation
@@ -634,41 +714,56 @@ end
 
 # Explicit Runge-Kutta implementations
 function step_rk111!(state::TimestepperState, solver::InitialValueSolver)
-    """Forward Euler step"""
+    """Forward Euler step - OPTIMIZED with workspace reuse"""
     current_state = state.history[end]
     dt = state.dt
-    
+    n_fields = length(current_state)
+
     # Evaluate RHS: du/dt = F(u)
     rhs = evaluate_rhs(solver, current_state, solver.sim_time)
-    
+
     # Forward Euler: u^{n+1} = u^n + dt * F(u^n)
+    # OPTIMIZATION: Reuse workspace fields instead of allocating new ones
     new_state = ScalarField[]
+
     for (i, field) in enumerate(current_state)
-        new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
+        # Get pre-allocated workspace field
+        new_field = get_workspace_field!(state, field, i)
+
         ensure_layout!(field, :g)
         ensure_layout!(rhs[i], :g)
         ensure_layout!(new_field, :g)
-        
+
         # Forward Euler: u^{n+1} = u^n + dt * F(u^n)
-        # Multi-tier implementation: BLAS > LoopVectorization > Broadcasting
+        # In-place update using multi-tier implementation
         n = length(field.data_g)
-        new_field.data_g .= field.data_g  # Copy initial state
-        
+
+        # Copy initial state in-place
+        copyto!(new_field.data_g, field.data_g)
+
         if n > 2000
-            BLAS.axpy!(dt, rhs[i].data_g, new_field.data_g)  # BLAS for very large arrays
+            # BLAS for very large arrays (most efficient)
+            BLAS.axpy!(dt, rhs[i].data_g, new_field.data_g)
         elseif n > 100
             # LoopVectorization for medium arrays
+            dt_local = dt  # Local variable for @turbo
             @turbo for j in eachindex(new_field.data_g, rhs[i].data_g)
-                new_field.data_g[j] += dt * rhs[i].data_g[j]
+                new_field.data_g[j] += dt_local * rhs[i].data_g[j]
             end
         else
-            new_field.data_g .+= dt .* rhs[i].data_g  # Broadcasting for small arrays
+            # Broadcasting for small arrays
+            new_field.data_g .+= dt .* rhs[i].data_g
         end
-        push!(new_state, new_field)
+
+        # Copy back to a persistent field for history
+        result_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
+        copyto!(result_field.data_g, new_field.data_g)
+        result_field.current_layout = :g
+        push!(new_state, result_field)
     end
-    
+
     push!(state.history, new_state)
-    
+
     # Keep only necessary history
     if length(state.history) > 1
         popfirst!(state.history)
@@ -2407,22 +2502,117 @@ end
 # which supports the operator tree structure used in equation parsing
 
 function add_scaled_state(state1::Vector{ScalarField}, state2::Vector{ScalarField}, scale::Float64)
-    """Compute state1 + scale * state2"""
+    """Compute state1 + scale * state2 - OPTIMIZED version"""
     result = ScalarField[]
-    
+
     for (i, field1) in enumerate(state1)
         field2 = state2[i]
         new_field = ScalarField(field1.dist, field1.name, field1.bases, field1.dtype)
-        
+
         ensure_layout!(field1, :g)
         ensure_layout!(field2, :g)
         ensure_layout!(new_field, :g)
-        
-        new_field.data_g .= field1.data_g .+ scale .* field2.data_g
+
+        # Use optimized in-place operations
+        n = length(field1.data_g)
+        if n > 2000
+            # BLAS-based: y = α*x + β*y via axpby! or copy + axpy
+            copyto!(new_field.data_g, field1.data_g)
+            BLAS.axpy!(scale, field2.data_g, new_field.data_g)
+        elseif n > 100
+            # LoopVectorization for medium arrays
+            scale_local = scale
+            @turbo for j in eachindex(new_field.data_g, field1.data_g, field2.data_g)
+                new_field.data_g[j] = field1.data_g[j] + scale_local * field2.data_g[j]
+            end
+        else
+            # Broadcasting for small arrays
+            new_field.data_g .= field1.data_g .+ scale .* field2.data_g
+        end
         push!(result, new_field)
     end
-    
+
     return result
+end
+
+"""
+    add_scaled_state!(dest::Vector{ScalarField}, state1::Vector{ScalarField},
+                      state2::Vector{ScalarField}, scale::Float64)
+
+In-place version: dest = state1 + scale * state2
+"""
+function add_scaled_state!(dest::Vector{ScalarField}, state1::Vector{ScalarField},
+                           state2::Vector{ScalarField}, scale::Float64)
+    for (i, field1) in enumerate(state1)
+        field2 = state2[i]
+        dest_field = dest[i]
+
+        ensure_layout!(field1, :g)
+        ensure_layout!(field2, :g)
+        ensure_layout!(dest_field, :g)
+
+        n = length(field1.data_g)
+        if n > 2000
+            copyto!(dest_field.data_g, field1.data_g)
+            BLAS.axpy!(scale, field2.data_g, dest_field.data_g)
+        elseif n > 100
+            scale_local = scale
+            @turbo for j in eachindex(dest_field.data_g, field1.data_g, field2.data_g)
+                dest_field.data_g[j] = field1.data_g[j] + scale_local * field2.data_g[j]
+            end
+        else
+            dest_field.data_g .= field1.data_g .+ scale .* field2.data_g
+        end
+    end
+end
+
+"""
+    axpy_state!(scale::Float64, x::Vector{ScalarField}, y::Vector{ScalarField})
+
+In-place AXPY: y = y + scale * x
+"""
+function axpy_state!(scale::Float64, x::Vector{ScalarField}, y::Vector{ScalarField})
+    for i in eachindex(x, y)
+        ensure_layout!(x[i], :g)
+        ensure_layout!(y[i], :g)
+
+        n = length(x[i].data_g)
+        if n > 2000
+            BLAS.axpy!(scale, x[i].data_g, y[i].data_g)
+        elseif n > 100
+            scale_local = scale
+            @turbo for j in eachindex(y[i].data_g, x[i].data_g)
+                y[i].data_g[j] += scale_local * x[i].data_g[j]
+            end
+        else
+            y[i].data_g .+= scale .* x[i].data_g
+        end
+    end
+end
+
+"""
+    linear_combination_state!(dest::Vector{ScalarField}, α::Float64, a::Vector{ScalarField},
+                              β::Float64, b::Vector{ScalarField})
+
+In-place linear combination: dest = α*a + β*b
+"""
+function linear_combination_state!(dest::Vector{ScalarField}, α::Float64, a::Vector{ScalarField},
+                                   β::Float64, b::Vector{ScalarField})
+    for i in eachindex(dest, a, b)
+        ensure_layout!(a[i], :g)
+        ensure_layout!(b[i], :g)
+        ensure_layout!(dest[i], :g)
+
+        n = length(a[i].data_g)
+        if n > 100
+            α_local, β_local = α, β
+            @turbo for j in eachindex(dest[i].data_g, a[i].data_g, b[i].data_g)
+                dest[i].data_g[j] = α_local * a[i].data_g[j] + β_local * b[i].data_g[j]
+            end
+        else
+            dest[i].data_g .= α .* a[i].data_g .+ β .* b[i].data_g
+        end
+    end
 end
 
 function copy_state(state::Vector{ScalarField})

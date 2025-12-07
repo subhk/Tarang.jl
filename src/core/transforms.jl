@@ -567,52 +567,55 @@ end
 # Chebyshev transform application functions following Dedalus patterns
 function apply_chebyshev_forward!(field::ScalarField, transform::ChebyshevTransform)
     """
-    Apply forward Chebyshev transform (grid to coefficients) .
-    
+    Apply forward Chebyshev transform (grid to coefficients) with in-place operations.
+
     Based on Dedalus ScipyDCT.forward and FFTWDCT.forward methods:
     - Uses DCT-II with proper scaling for unit-amplitude normalization
-    - Handles padding/truncation for different grid/coefficient sizes  
+    - Handles padding/truncation for different grid/coefficient sizes
     - Follows resize_rescale_forward pattern
-    - CPU-based implementation
+    - OPTIMIZED: Uses workspace buffers to minimize allocations
     """
-    
-    # Ensure field data is on correct device
-    field.data_g = field.data_g
-    
-    if transform.forward_plan !== nothing && true  # CPU-only
-        # Use FFTW DCT-II plan for CPU
+
+    if transform.forward_plan !== nothing
+        # Use FFTW DCT-II plan for CPU with workspace buffer
         try
-            temp_data = transform.forward_plan * field.data_g
-            
+            # Get workspace buffer instead of allocating
+            wm = get_global_workspace()
+            temp_data = get_workspace!(wm, Float64, (transform.grid_size,))
+
+            # In-place DCT using mul!
+            mul!(temp_data, transform.forward_plan, field.data_g)
+
+            # Ensure output array exists
             if field.data_c === nothing
-                if true  # CPU-only
-                    field.data_c = zeros(ComplexF64, transform.coeff_size)
-                else
-                    field.data_c = device_zeros(ComplexF64, (transform.coeff_size,), transform)
-                end
+                field.data_c = zeros(ComplexF64, transform.coeff_size)
             end
-            
-            # Apply scaling factors for unit-amplitude normalization
-            field.data_c[1] = temp_data[1] * transform.forward_rescale_zero
-            
+
+            # Apply scaling factors for unit-amplitude normalization (in-place)
+            @inbounds field.data_c[1] = temp_data[1] * transform.forward_rescale_zero
+
             if transform.Kmax > 0
-                for k in 1:min(transform.Kmax, transform.coeff_size-1)
-                    field.data_c[k+1] = temp_data[k+1] * transform.forward_rescale_pos
+                scale_pos = transform.forward_rescale_pos
+                @inbounds @simd for k in 1:min(transform.Kmax, transform.coeff_size-1)
+                    field.data_c[k+1] = temp_data[k+1] * scale_pos
                 end
             end
-            
+
             # Zero padding if coeff_size > Kmax+1
             if transform.coeff_size > transform.Kmax + 1
-                for k in (transform.Kmax + 2):transform.coeff_size
+                @inbounds @simd for k in (transform.Kmax + 2):transform.coeff_size
                     field.data_c[k] = 0.0
                 end
             end
-            
+
+            # Return workspace buffer
+            release_workspace!(wm, temp_data)
+
         catch e
             @warn "DCT forward transform failed: $e, falling back to matrix method"
             apply_chebyshev_matrix_forward!(field, transform)
         end
-        
+
     else
         # Use matrix-based transform
         apply_chebyshev_matrix_forward!(field, transform)
@@ -621,32 +624,47 @@ end
 
 function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTransform)
     """
-    Apply backward Chebyshev transform (coefficients to grid).
+    Apply backward Chebyshev transform (coefficients to grid) with in-place operations.
 
     Based on Dedalus ScipyDCT.backward and FFTWDCT.backward methods:
     - Uses DCT-III with proper scaling for unit-amplitude normalization
     - Handles padding/truncation for different coefficient/grid sizes
-    - Follows resize_rescale_backward pattern
+    - OPTIMIZED: Uses workspace buffers and in-place operations
     """
 
     if transform.backward_plan !== nothing
-        # Use FFTW DCT-III plan for CPU
+        # Use FFTW DCT-III plan for CPU with workspace
         try
-            temp_data = zeros(transform.grid_size)
-            
+            # Get workspace buffer instead of allocating
+            wm = get_global_workspace()
+            temp_data = get_workspace!(wm, Float64, (transform.grid_size,))
+
+            # Zero the workspace (needed for correct transform)
+            fill!(temp_data, 0.0)
+
             # Apply scaling factors following Dedalus resize_rescale_backward
             if length(field.data_c) > 0
-                temp_data[1] = real(field.data_c[1]) * transform.backward_rescale_zero
+                @inbounds temp_data[1] = real(field.data_c[1]) * transform.backward_rescale_zero
             end
-            
+
             if transform.Kmax > 0
-                for k in 1:min(transform.Kmax, length(field.data_c)-1)
-                    temp_data[k+1] = real(field.data_c[k+1]) * transform.backward_rescale_pos
+                scale_pos = transform.backward_rescale_pos
+                @inbounds @simd for k in 1:min(transform.Kmax, length(field.data_c)-1)
+                    temp_data[k+1] = real(field.data_c[k+1]) * scale_pos
                 end
             end
-            
-            field.data_g = transform.backward_plan * temp_data
-            
+
+            # Ensure output array exists
+            if field.data_g === nothing
+                field.data_g = zeros(Float64, transform.grid_size)
+            end
+
+            # In-place backward DCT
+            mul!(field.data_g, transform.backward_plan, temp_data)
+
+            # Return workspace buffer
+            release_workspace!(wm, temp_data)
+
         catch e
             @warn "DCT backward transform failed: $e, falling back to matrix method"
             apply_chebyshev_matrix_backward!(field, transform)
@@ -659,80 +677,142 @@ function apply_chebyshev_backward!(field::ScalarField, transform::ChebyshevTrans
 end
 
 function apply_chebyshev_matrix_forward!(field::ScalarField, transform::ChebyshevTransform)
-    """Apply forward Chebyshev transform using matrix multiplication"""
-    
+    """Apply forward Chebyshev transform using in-place matrix multiplication"""
+
     if haskey(transform.matrices, "forward")
-        field.data_c = transform.matrices["forward"] * field.data_g
+        mat = transform.matrices["forward"]
+        # Ensure output array exists with correct size
+        out_size = size(mat, 1)
+        if field.data_c === nothing || length(field.data_c) != out_size
+            field.data_c = zeros(ComplexF64, out_size)
+        end
+        # In-place matrix-vector multiply
+        mul!(field.data_c, mat, field.data_g)
     else
         @warn "No forward matrix available for Chebyshev transform"
-        field.data_c = copy(field.data_g)
+        if field.data_c === nothing
+            field.data_c = copy(field.data_g)
+        else
+            copyto!(field.data_c, field.data_g)
+        end
     end
 end
 
 function apply_chebyshev_matrix_backward!(field::ScalarField, transform::ChebyshevTransform)
-    """Apply backward Chebyshev transform using matrix multiplication (CPU-based)"""
-    
-    # Ensure field data is on correct device
-    field.data_c = field.data_c
-    
+    """Apply backward Chebyshev transform using in-place matrix multiplication"""
+
     if haskey(transform.matrices, "backward")
-        field.data_g = transform.matrices["backward"] * real.(field.data_c)
+        mat = transform.matrices["backward"]
+        out_size = size(mat, 1)
+
+        # Get workspace for real part extraction
+        wm = get_global_workspace()
+        real_coeffs = get_workspace!(wm, Float64, (length(field.data_c),))
+
+        # Extract real part in-place
+        @inbounds @simd for i in eachindex(real_coeffs, field.data_c)
+            real_coeffs[i] = real(field.data_c[i])
+        end
+
+        # Ensure output array exists
+        if field.data_g === nothing || length(field.data_g) != out_size
+            field.data_g = zeros(Float64, out_size)
+        end
+
+        # In-place matrix-vector multiply
+        mul!(field.data_g, mat, real_coeffs)
+
+        release_workspace!(wm, real_coeffs)
     else
         @warn "No backward matrix available for Chebyshev transform"
-        field.data_g = real.(field.data_c)
+        if field.data_g === nothing
+            field.data_g = real.(field.data_c)
+        else
+            @inbounds @simd for i in eachindex(field.data_g)
+                field.data_g[i] = real(field.data_c[i])
+            end
+        end
     end
 end
 
 # Legendre transform application functions following Dedalus JacobiMMT patterns
 function apply_legendre_forward!(field::ScalarField, transform::LegendreTransform)
     """
-    Apply forward Legendre transform (grid to coefficients) .
-    
+    Apply forward Legendre transform (grid to coefficients) with in-place operations.
+
     Based on Dedalus JacobiMMT.forward_matrix:
     - Uses Gauss-Legendre quadrature integration
     - Proper normalization for orthonormal Legendre expansion
-    - Matrix-based computation for spectral accuracy
-    - CPU-based implementation
+    - OPTIMIZED: In-place matrix-vector multiplication
     """
-    
-    # Ensure field data is on correct device
-    field.data_g = field.data_g
-    
+
     if haskey(transform.matrices, "forward")
-        # Apply forward transform: c_n = ∫ f(x) P_n(x) dx ≈ Σ f(x_i) P_n(x_i) w_i
-        field.data_c = transform.matrices["forward"] * field.data_g
-        
+        mat = transform.matrices["forward"]
+        out_size = size(mat, 1)
+
+        # Ensure output array exists
+        if field.data_c === nothing || length(field.data_c) != out_size
+            field.data_c = zeros(ComplexF64, out_size)
+        end
+
+        # In-place forward transform: c_n = ∫ f(x) P_n(x) dx ≈ Σ f(x_i) P_n(x_i) w_i
+        mul!(field.data_c, mat, field.data_g)
+
         @debug "Applied Legendre forward transform: grid_size=$(transform.grid_size), coeff_size=$(transform.coeff_size)"
-        
+
     else
         @warn "No forward matrix available for Legendre transform, using identity"
-        field.data_c = copy(field.data_g)
+        if field.data_c === nothing
+            field.data_c = copy(field.data_g)
+        else
+            copyto!(field.data_c, field.data_g)
+        end
     end
 end
 
 function apply_legendre_backward!(field::ScalarField, transform::LegendreTransform)
     """
-    Apply backward Legendre transform (coefficients to grid) .
-    
+    Apply backward Legendre transform (coefficients to grid) with in-place operations.
+
     Based on Dedalus polynomial evaluation:
     - Evaluates f(x) = Σ c_n P_n(x) at Gauss-Legendre quadrature points
-    - Uses precomputed polynomial matrix for efficiency
-    - Proper handling of orthonormal coefficients
-    - CPU-based implementation
+    - OPTIMIZED: Uses workspace buffer and in-place operations
     """
-    
-    # Ensure field data is on correct device
-    field.data_c = field.data_c
-    
+
     if haskey(transform.matrices, "backward")
-        # Apply backward transform: f(x_i) = Σ c_n P_n(x_i)
-        field.data_g = transform.matrices["backward"] * real.(field.data_c)
-        
+        mat = transform.matrices["backward"]
+        out_size = size(mat, 1)
+
+        # Get workspace for real part extraction
+        wm = get_global_workspace()
+        real_coeffs = get_workspace!(wm, Float64, (length(field.data_c),))
+
+        # Extract real part in-place
+        @inbounds @simd for i in eachindex(real_coeffs, field.data_c)
+            real_coeffs[i] = real(field.data_c[i])
+        end
+
+        # Ensure output array exists
+        if field.data_g === nothing || length(field.data_g) != out_size
+            field.data_g = zeros(Float64, out_size)
+        end
+
+        # In-place backward transform: f(x_i) = Σ c_n P_n(x_i)
+        mul!(field.data_g, mat, real_coeffs)
+
+        release_workspace!(wm, real_coeffs)
+
         @debug "Applied Legendre backward transform: coeff_size=$(transform.coeff_size), grid_size=$(transform.grid_size)"
-        
+
     else
         @warn "No backward matrix available for Legendre transform, using identity"
-        field.data_g = real.(field.data_c)
+        if field.data_g === nothing
+            field.data_g = real.(field.data_c)
+        else
+            @inbounds @simd for i in eachindex(field.data_g)
+                field.data_g[i] = real(field.data_c[i])
+            end
+        end
     end
 end
 
