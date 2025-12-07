@@ -293,7 +293,7 @@ function parse_equation(equation::String, namespace::Dict{String, Any})
     """
     Parse equation string into operator expressions following formulation requirements.
     
-    Dedalus requires:
+    Requires:
     - LHS: Linear terms only (first-order in time derivatives, linear in variables)
     - RHS: Nonlinear terms, time-dependent terms, non-constant coefficients
     - Form: M·∂ₜX + L·X = F(X,t)
@@ -346,7 +346,7 @@ function parse_linear_expression(expr_str::AbstractString, namespace::Dict{Strin
     # Validate linearity (this would need proper implementation)
     if !is_linear_expression(expr, namespace)
         @warn "Non-linear terms detected on LHS of equation. Consider moving to RHS: $expr_str"
-        @warn "Dedalus requires: Linear terms (LHS) = Nonlinear terms (RHS)"
+        @warn "Requires: Linear terms (LHS) = Nonlinear terms (RHS)"
     end
     
     return expr
@@ -388,7 +388,7 @@ end
 function is_constant_coefficient(expr, namespace::Dict{String, Any})
     """
     Check if expression represents a constant coefficient.
-    Non-constant coefficients should be moved to RHS per Dedalus requirements.
+    Non-constant coefficients should be moved to RHS per requirements.
     """
     
     if isa(expr, ConstantOperator)
@@ -408,9 +408,9 @@ end
 
 function validate_equation_structure(LHS, RHS, original_equation::String)
     """
-    Validate that equation follows Dedalus structure requirements.
+    Validate that equation follows structure requirements.
     
-    Dedalus requirements:
+    Requirements:
     1. LHS must be linear in dependent variables
     2. LHS must be first-order in time derivatives  
     3. RHS can contain nonlinear terms
@@ -420,13 +420,13 @@ function validate_equation_structure(LHS, RHS, original_equation::String)
     # Check for temporal derivatives on RHS (not allowed)
     if contains_time_derivatives(RHS)
         throw(ArgumentError("Time derivatives found on RHS of equation: $original_equation. " *
-                           "Dedalus requires all time derivatives on LHS."))
+                           "Requires all time derivatives on LHS."))
     end
     
     # Check for proper linear structure on LHS
     is_valid_lhs, lhs_info = is_proper_lhs_structure(LHS)
     if !is_valid_lhs
-        @warn "LHS may not follow Dedalus linear structure: $original_equation"
+        @warn "LHS may not follow linear structure: $original_equation"
         @warn "Ensure LHS contains only: dt(vars), linear spatial derivatives, constant coefficients"
         if lhs_info[:error_message] !== nothing
             @warn "Issue: $(lhs_info[:error_message])"
@@ -451,10 +451,10 @@ end
 
 function is_proper_lhs_structure(expr)
     """
-    Check if LHS has proper structure for Dedalus matrix formulation.
+    Check if LHS has proper structure for matrix formulation.
     Should be of the form: M·∂ₜX + L·X where M and L are linear operators.
 
-    The LHS of a Dedalus equation must satisfy:
+    The LHS of a equation must satisfy:
     1. All terms must be linear in the state variables
     2. Time derivatives must be first-order only (∂ₜ, not ∂ₜ²)
     3. Spatial operators must be linear (derivatives, Laplacian, etc.)
@@ -776,7 +776,7 @@ function parse_expression(expr_str::AbstractString, namespace::Dict{String, Any}
     Parse expression string into operator tree following patterns.
     Uses Julia's Meta.parse for proper AST parsing and operator precedence handling.
     
-    This function evaluates mathematical expressions similar to how Dedalus uses
+    This function evaluates mathematical expressions similar to how one would use
     eval(string, namespace) in problems.py:73-74.
     """
     
