@@ -351,9 +351,41 @@ function evaluate_cartesian_component(op::CartesianComponent, layout::Symbol=:g)
 
         return result
     elseif isa(operand, TensorField)
-        # Create result field with reduced tensor rank
-        # This requires more complex handling
-        throw(ArgumentError("TensorField component extraction not yet fully implemented"))
+        # Extract a row or column from the tensor to get a VectorField
+        # index determines which tensor axis to extract from (0-based)
+        # comp_subaxis determines which component along that axis (0-based)
+        comp_idx = op.comp_subaxis + 1  # 1-based Julia indexing
+
+        # Create result VectorField with the remaining coordinate system
+        result = VectorField(operand.dist, operand.coordsys,
+                            "$(operand.name)_comp$(comp_idx)",
+                            operand.bases, operand.dtype)
+
+        # Extract components based on which index we're extracting
+        if op.index == 0
+            # Extracting first index: T[comp_idx, :] -> vector
+            for j in 1:size(operand.components, 2)
+                src_field = operand.components[comp_idx, j]
+                result.components[j] = copy(src_field)
+            end
+        else
+            # Extracting second index: T[:, comp_idx] -> vector
+            for i in 1:size(operand.components, 1)
+                src_field = operand.components[i, comp_idx]
+                result.components[i] = copy(src_field)
+            end
+        end
+
+        # Ensure proper layout
+        for comp in result.components
+            if layout == :g
+                ensure_layout!(comp, :g)
+            else
+                ensure_layout!(comp, :c)
+            end
+        end
+
+        return result
     else
         throw(ArgumentError("CartesianComponent requires VectorField or TensorField"))
     end
@@ -551,12 +583,49 @@ function subproblem_matrix(op::CartesianDivergence, subproblem)
 end
 
 function check_conditions(op::CartesianDivergence)
-    # Any layout works since addition is done internally
+    """Check that operands are in a proper layout for divergence computation."""
+    operand = op.operand
+
+    # For VectorField, check that all components are in a consistent layout
+    if isa(operand, VectorField)
+        layouts = Symbol[]
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+                push!(layouts, comp.current_layout)
+            end
+        end
+        # All components should be in the same layout
+        return length(Set(layouts)) <= 1
+    end
+
+    # For other operand types, check if they have valid data
+    if hasfield(typeof(operand), :current_layout)
+        layout = operand.current_layout
+        if layout == :g
+            return hasfield(typeof(operand), :data_g) && operand.data_g !== nothing
+        elseif layout == :c
+            return hasfield(typeof(operand), :data_c) && operand.data_c !== nothing
+        end
+    end
+
     return true
 end
 
 function enforce_conditions(op::CartesianDivergence)
-    # No specific layout required
+    """Ensure operands are in coefficient layout for differentiation."""
+    operand = op.operand
+
+    # For VectorField, ensure all components are in coefficient layout
+    if isa(operand, VectorField)
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout)
+                ensure_layout!(comp, :c)
+            end
+        end
+    elseif hasfield(typeof(operand), :current_layout)
+        ensure_layout!(operand, :c)
+    end
+
     return nothing
 end
 
@@ -633,10 +702,39 @@ function matrix_coupling(op::CartesianCurl, vars...)
 end
 
 function check_conditions(op::CartesianCurl)
+    """Check that operands are in a proper layout for curl computation."""
+    operand = op.operand
+
+    # For VectorField, check that all components are in a consistent layout
+    if isa(operand, VectorField)
+        layouts = Symbol[]
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+                push!(layouts, comp.current_layout)
+            end
+        end
+        # All components should be in the same layout
+        return length(Set(layouts)) <= 1
+    end
+
     return true
 end
 
 function enforce_conditions(op::CartesianCurl)
+    """Ensure operands are in coefficient layout for differentiation."""
+    operand = op.operand
+
+    # For VectorField, ensure all components are in coefficient layout
+    if isa(operand, VectorField)
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout)
+                ensure_layout!(comp, :c)
+            end
+        end
+    elseif hasfield(typeof(operand), :current_layout)
+        ensure_layout!(operand, :c)
+    end
+
     return nothing
 end
 
@@ -716,10 +814,48 @@ function subproblem_matrix(op::CartesianLaplacian, subproblem)
 end
 
 function check_conditions(op::CartesianLaplacian)
+    """Check that operands are in a proper layout for Laplacian computation."""
+    operand = op.operand
+
+    # For VectorField, check that all components are in a consistent layout
+    if isa(operand, VectorField)
+        layouts = Symbol[]
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+                push!(layouts, comp.current_layout)
+            end
+        end
+        return length(Set(layouts)) <= 1
+    end
+
+    # For ScalarField or similar
+    if hasfield(typeof(operand), :current_layout)
+        layout = operand.current_layout
+        if layout == :g
+            return hasfield(typeof(operand), :data_g) && operand.data_g !== nothing
+        elseif layout == :c
+            return hasfield(typeof(operand), :data_c) && operand.data_c !== nothing
+        end
+    end
+
     return true
 end
 
 function enforce_conditions(op::CartesianLaplacian)
+    """Ensure operands are in coefficient layout for differentiation."""
+    operand = op.operand
+
+    # For VectorField, ensure all components are in coefficient layout
+    if isa(operand, VectorField)
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout)
+                ensure_layout!(comp, :c)
+            end
+        end
+    elseif hasfield(typeof(operand), :current_layout)
+        ensure_layout!(operand, :c)
+    end
+
     return nothing
 end
 
