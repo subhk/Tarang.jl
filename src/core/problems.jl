@@ -298,7 +298,7 @@ function parse_equation(equation::String, namespace::Dict{String, Any})
     - RHS: Nonlinear terms, time-dependent terms, non-constant coefficients
     - Form: M·∂ₜX + L·X = F(X,t)
     
-    Following problems.py:add_equation pattern (problems.py:65-80).
+    Following problems:add_equation pattern (problems:65-80).
     """
     
     try
@@ -777,7 +777,7 @@ function parse_expression(expr_str::AbstractString, namespace::Dict{String, Any}
     Uses Julia's Meta.parse for proper AST parsing and operator precedence handling.
     
     This function evaluates mathematical expressions similar to how one would use
-    eval(string, namespace) in problems.py:73-74.
+    eval(string, namespace) in problems:73-74.
     """
     
     expr_str = strip(expr_str)
@@ -1019,15 +1019,15 @@ end
 function build_matrices(problem::Problem)
     """
     Build system matrices for problem following structure.
-    Following subsystems.py:build_subproblem_matrices (subsystems.py:72-81) and
-    Subproblem.build_matrices (subsystems.py:497-576).
+    Following subsystems:build_subproblem_matrices (subsystems:72-81) and
+    Subproblem.build_matrices (subsystems:497-576).
     """
     
     if length(problem.equations) == 0
         throw(ArgumentError("No equations specified"))
     end
     
-    # Build matrix expressions from equations (following problems.py:_build_matrix_expressions)
+    # Build matrix expressions from equations (following problems:_build_matrix_expressions)
     build_matrix_expressions!(problem)
     
     # Compute field sizes for each equation and variable
@@ -1043,7 +1043,7 @@ function build_matrices(problem::Problem)
     # Matrix names to build (following convention)
     matrix_names = ["M", "L"]  # M = mass matrix, L = stiffness matrix
     
-    # Build sparse matrices following subsystems.py:513-537 pattern
+    # Build sparse matrices following subsystems:513-537 pattern
     matrices = Dict{String, Any}()
     for name in matrix_names
         # Collect sparse matrix entries
@@ -1113,7 +1113,7 @@ end
 function build_matrix_expressions!(problem::Problem)
     """
     Build matrix expressions from parsed equations.
-    Following problems.py:_build_matrix_expressions patterns.
+    Following problems:_build_matrix_expressions patterns.
     """
     
     problem.equation_data = []
@@ -1161,7 +1161,7 @@ function build_equation_expressions(lhs, rhs, variables::Vector)
     eq_data = Dict{String, Any}()
     
     # Split LHS into mass matrix (time derivatives) and stiffness matrix (spatial) terms
-    # Following IVP pattern: M.dt(X) + L.X = F (problems.py:328)
+    # Following IVP pattern: M.dt(X) + L.X = F (problems:328)
     M_terms, L_terms = split_time_spatial_operators(lhs)
     
     # Store matrix expressions
@@ -1780,7 +1780,7 @@ end
 function expand_substitutions!(problem::Problem)
     """
     Expand substitutions in equations following pattern.
-    Following expand(*vars) methods (arithmetic.py:319-329, operators.py:704-739).
+    Following expand(*vars) methods (arithmetic:319-329, operators:704-739).
     """
     
     # Get all variables for expansion
@@ -1844,7 +1844,7 @@ end
 function expand_expression(expr, variables::Vector)
     """
     Expand expression over specified variables following pattern.
-    Following operators.py:expand and arithmetic.py:expand methods.
+    Following operators:expand and arithmetic:expand methods.
     """
     
     if expr === nothing || isa(expr, String)
@@ -1939,7 +1939,7 @@ end
 function expand_multiply_expressions(left, right, variables::Vector)
     """
     Expand multiplication with distribution over addition.
-    Following arithmetic.py:expand multiplication pattern.
+    Following arithmetic:expand multiplication pattern.
     """
     
     # If either operand is addition involving variables, distribute
@@ -1964,7 +1964,7 @@ end
 function distribute_operator_over_operand(operator, expanded_operand, variables::Vector)
     """
     Distribute operator over expanded operand.
-    Following operators.py:_expand_add pattern.
+    Following operators:_expand_add pattern.
     """
     
     if isa(expanded_operand, AddOperator) && has_variables(expanded_operand, variables)

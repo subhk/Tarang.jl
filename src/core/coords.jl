@@ -76,7 +76,7 @@ end
     forward_vector_intertwiner(coord::Coordinate, subaxis, group)
 
 Forward intertwiner for vector components. Identity for Cartesian coordinates.
-Following coords.py:92-93.
+Following coords:92-93.
 """
 function forward_vector_intertwiner(coord::Coordinate, subaxis, group)
     return [1.0][:, :]  # 1x1 identity matrix
@@ -86,7 +86,7 @@ end
     backward_vector_intertwiner(coord::Coordinate, subaxis, group)
 
 Backward intertwiner for vector components. Identity for Cartesian coordinates.
-Following coords.py:95-96.
+Following coords:95-96.
 """
 function backward_vector_intertwiner(coord::Coordinate, subaxis, group)
     return [1.0][:, :]  # 1x1 identity matrix
@@ -94,7 +94,7 @@ end
 
 # ============================================================================
 # AzimuthalCoordinate: Special coordinate for azimuthal directions
-# Following coords.py:192-193
+# Following coords:192-193
 # ============================================================================
 
 """
@@ -129,14 +129,14 @@ end
 
 # ============================================================================
 # CartesianCoordinates: Cartesian coordinate system
-# Following coords.py:159-189
+# Following coords:159-189
 # ============================================================================
 
 """
     CartesianCoordinates
 
 Cartesian coordinate system with named coordinates.
-Following implementation in coords.py:159-189.
+Following implementation in coords:159-189.
 
 # Constructor
     CartesianCoordinates(names...; right_handed=true)
@@ -170,7 +170,7 @@ struct CartesianCoordinates <: CoordinateSystem
     function CartesianCoordinates(names...; right_handed::Bool=true)
         names_vec = collect(String(name) for name in names)
 
-        # Check for unique names ( coords.py:164-165)
+        # Check for unique names ( coords:164-165)
         if length(Set(names_vec)) < length(names_vec)
             throw(ArgumentError("Must specify unique coordinate names."))
         end
@@ -235,7 +235,7 @@ end
     forward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
 
 Forward intertwiner for vector components. Identity for Cartesian coordinates.
-Following coords.py:176-177.
+Following coords:176-177.
 """
 function forward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
     return Matrix{Float64}(I, cs.dim, cs.dim)
@@ -245,7 +245,7 @@ end
     backward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
 
 Backward intertwiner for vector components. Identity for Cartesian coordinates.
-Following coords.py:179-180.
+Following coords:179-180.
 """
 function backward_vector_intertwiner(cs::CartesianCoordinates, subaxis, group)
     return Matrix{Float64}(I, cs.dim, cs.dim)
@@ -273,14 +273,14 @@ end
 
 # ============================================================================
 # DirectProduct: Direct product of coordinate systems
-# Following coords.py:99-156
+# Following coords:99-156
 # ============================================================================
 
 """
     DirectProduct
 
 Direct product of coordinate systems.
-Following implementation in coords.py:99-156.
+Following implementation in coords:99-156.
 
 # Constructor
     DirectProduct(coordsystems...; right_handed=nothing)
@@ -310,7 +310,7 @@ struct DirectProduct <: CoordinateSystem
             append!(all_coords, get_coords(cs))
         end
 
-        # Check for duplicate coordinates ( coords.py:107-108)
+        # Check for duplicate coordinates ( coords:107-108)
         if length(Set(all_coords)) < length(all_coords)
             throw(ArgumentError("Cannot repeat coordinates in DirectProduct."))
         end
@@ -326,7 +326,7 @@ struct DirectProduct <: CoordinateSystem
         # Determine curvilinear property
         curv = any(cs.curvilinear for cs in coordsystems)
 
-        # Handle right_handed for 3D ( coords.py:110-117)
+        # Handle right_handed for 3D ( coords:110-117)
         if dim == 3
             if curv
                 right_handed = right_handed === nothing ? false : right_handed
@@ -366,7 +366,7 @@ end
     forward_vector_intertwiner(cs::DirectProduct, subaxis, group)
 
 Forward intertwiner for vector components in a direct product.
-Following coords.py:132-141.
+Following coords:132-141.
 """
 function forward_vector_intertwiner(cs::DirectProduct, subaxis, group)
     factors = []
@@ -388,7 +388,7 @@ end
     backward_vector_intertwiner(cs::DirectProduct, subaxis, group)
 
 Backward intertwiner for vector components in a direct product.
-Following coords.py:143-152.
+Following coords:143-152.
 """
 function backward_vector_intertwiner(cs::DirectProduct, subaxis, group)
     factors = []

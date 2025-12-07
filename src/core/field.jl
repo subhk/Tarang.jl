@@ -466,7 +466,7 @@ end
 function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple{Vararg{Real}}, Nothing})
     """
     Change data to specified scales, properly handling data transformation.
-    Following implementation in field.py:631-649
+    Following implementation in field:631-649
 
     When changing scales:
     - If in grid space: interpolate/resample data to new grid size
@@ -870,7 +870,7 @@ end
 function require_grid_space!(field::ScalarField, axis::Union{Int, Nothing}=nothing)
     """
     Require one axis (default: all axes) to be in grid space.
-    Following implementation in field.py:674-681
+    Following implementation in field:674-681
     """
     if field.domain === nothing
         return
@@ -890,7 +890,7 @@ end
 function require_coeff_space!(field::ScalarField, axis::Union{Int, Nothing}=nothing)
     """
     Require one axis (default: all axes) to be in coefficient space.
-    Following implementation in field.py:683-690
+    Following implementation in field:683-690
     """
     if field.domain === nothing
         return
@@ -910,7 +910,7 @@ end
 function towards_grid_space!(field::ScalarField)
     """
     Change to next layout towards grid space.
-    Following implementation in field.py:664-667
+    Following implementation in field:664-667
     """
     if field.current_layout == :c
         # Transform from coefficient to grid space
@@ -922,7 +922,7 @@ end
 function towards_coeff_space!(field::ScalarField)
     """
     Change to next layout towards coefficient space.
-    Following implementation in field.py:669-672
+    Following implementation in field:669-672
     """
     if field.current_layout == :g
         # Transform from grid to coefficient space
@@ -943,7 +943,7 @@ function forward_transform_axis!(field::ScalarField)
        - Scaling and normalization
     3. For 2D: Enables BOTH vertical and horizontal parallelization
 
-    Following distributor pattern in distributor.py:636-649
+    Following distributor pattern in distributor:636-649
     """
     if field.domain === nothing || field.bases === ()
         return
@@ -991,7 +991,7 @@ function backward_transform_axis!(field::ScalarField)
     2. Uses ldiv! (\\) for backward transform
     3. Maintains Pencil objects throughout
 
-    Following distributor pattern in distributor.py:621-634
+    Following distributor pattern in distributor:621-634
     """
     if field.domain === nothing || field.bases === ()
         return
@@ -1259,7 +1259,7 @@ function low_pass_filter!(field::ScalarField; shape=nothing, scales=nothing)
     """
     Apply a spectral low-pass filter by zeroing modes above specified relative scales.
     The scales can be specified directly or deduced from a specified global grid shape.
-    Following field.py:945-968 implementation.
+    Following field:945-968 implementation.
     """
     original_scales = field.scales
     
@@ -1282,7 +1282,7 @@ end
 function high_pass_filter!(field::ScalarField; shape=nothing, scales=nothing)
     """
     Apply a spectral high-pass filter by zeroing modes below specified relative scales.
-    Following field.py:969-984 implementation.
+    Following field:969-984 implementation.
     """
     # Store original data in coefficient space
     require_coeff_space!(field)
@@ -1586,7 +1586,7 @@ end
 function unit_vector_fields(coordsys::CoordinateSystem, dist)
     """
     Return unit vector fields for each coordinate direction.
-    Following implementation in coords.py:183
+    Following implementation in coords:183
 
     Note: This function was moved from coords.jl to field.jl to avoid circular dependency,
     as it needs VectorField which is defined in field.jl.

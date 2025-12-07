@@ -471,7 +471,7 @@ end
 function property_max(flow::GlobalFlowProperty, name::String)
     """
     Compute global max of a property on the grid.
-    Following implementation in flow_tools.py:107-110
+    Following implementation in flow_tools:107-110
     """
     gdata = evaluate_property(flow, name)
     return global_max(flow.reducer, gdata)
@@ -480,7 +480,7 @@ end
 function property_min(flow::GlobalFlowProperty, name::String)
     """
     Compute global min of a property on the grid.
-    Following implementation in flow_tools.py:102-105
+    Following implementation in flow_tools:102-105
     """
     gdata = evaluate_property(flow, name)
     return global_min(flow.reducer, gdata)
@@ -489,7 +489,7 @@ end
 function grid_average(flow::GlobalFlowProperty, name::String)
     """
     Compute global mean of a property on the grid.
-    Following implementation in flow_tools.py:112-115
+    Following implementation in flow_tools:112-115
     """
     gdata = evaluate_property(flow, name)
     return global_mean(flow.reducer, gdata)
@@ -498,7 +498,7 @@ end
 function volume_integral(flow::GlobalFlowProperty, name::String)
     """
     Compute volume integral of a property.
-    Following implementation in flow_tools.py:117-130
+    Following implementation in flow_tools:117-130
 
     Uses proper quadrature weights for each basis type:
     - Fourier: uniform weights (trapezoidal rule)
@@ -654,7 +654,7 @@ end
 function volume_average(flow::GlobalFlowProperty, name::String)
     """
     Compute volume average of a property.
-    Following implementation in flow_tools.py:132-137
+    Following implementation in flow_tools:132-137
 
     Volume average = (∫ f dV) / (∫ dV) = volume_integral(f) / hypervolume
     """
@@ -875,7 +875,7 @@ end
 function write_hdf5_data!(handler::FileHandler, sim_time::Float64, iteration::Int)
     """
     Write HDF5 data following Tarang structure.
-    Based on Tarang/core/evaluator.py:580-595
+    Based on Tarang/core/evaluator:580-595
     """
     
     @debug "Writing HDF5 data: $(handler.filename), t=$sim_time, iter=$iteration"
@@ -948,7 +948,7 @@ end
 function write_task_data!(file::HDF5.File, task_name::String, task_data::Any, write_number::Int)
     """
     Write task data to HDF5 file.
-    Following write_task pattern from evaluator.py:641-650 and 693-702
+    Following write_task pattern from evaluator:641-650 and 693-702
     """
     
     # Create tasks group if it doesn't exist
