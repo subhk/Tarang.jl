@@ -98,13 +98,19 @@ function _compute_phi1_stable(z, exp_z, I)
 end
 
 function _compute_phi2_stable(z, exp_z, I, φ₁)
-    """Stable computation of φ₂"""
+    """
+    Stable computation of φ₂(z) = (exp(z) - 1 - z) / z² = (φ₁(z) - I) / z
+
+    Reference: Cox & Matthews (2002), Hochbruck & Ostermann (2010)
+    """
     z_norm = norm(z)
     if z_norm < 1e-2
-        # Use series expansion for better accuracy  
+        # Use series expansion for better accuracy near z=0
+        # φ₂(z) = 1/2 + z/6 + z²/24 + z³/120 + z⁴/720 + O(z⁵)
         return I/2 + z/6 + z^2/24 + z^3/120 + z^4/720
     else
-        return (φ₁ - inv(z)) * inv(z)
+        # Standard formula: φ₂ = (φ₁ - I) / z
+        return (φ₁ - I) * inv(z)
     end
 end
 
