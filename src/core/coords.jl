@@ -1,9 +1,7 @@
 """
 Coordinate system classes
 
-Translated from dedalus/core/coords.py
-
-This module implements coordinate systems following the Dedalus approach:
+This module implements coordinate systems:
 - CoordinateSystem: Abstract base type for all coordinate systems
 - Coordinate: Individual coordinate within a coordinate system
 - CartesianCoordinates: Cartesian (x, y, z) coordinate system
@@ -25,14 +23,12 @@ abstract type CoordinateSystem end
 
 # ============================================================================
 # Coordinate: Individual coordinate within a system
-# Following Dedalus coords.py:66-96
 # ============================================================================
 
 """
     Coordinate
 
 Represents a single coordinate within a coordinate system.
-Following Dedalus implementation in coords.py:66-96.
 
 Fields:
 - `name`: Name of the coordinate (e.g., "x", "y", "z")
@@ -43,7 +39,7 @@ Fields:
 """
 mutable struct Coordinate
     name::String
-    coordsys::Union{Nothing, CoordinateSystem}  # Note: Dedalus uses 'cs', we use 'coordsys' for clarity
+    coordsys::Union{Nothing, CoordinateSystem}
     dim::Int
     curvilinear::Bool
     default_nonconst_groups::Tuple{Vararg{Int}}

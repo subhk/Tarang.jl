@@ -1,7 +1,6 @@
 """
 Spectral transform classes with PencilFFTs integration
 
-Translated from dedalus/core/transforms.py
 CPU-only (GPU support removed).
 """
 
@@ -40,7 +39,7 @@ mutable struct ChebyshevTransform <: Transform
     forward_plan::Union{Nothing, Any}
     backward_plan::Union{Nothing, Any}
 
-    # Scaling factors following Dedalus FastCosineTransform
+    # Scaling factors for FastCosineTransform
     forward_rescale_zero::Float64
     forward_rescale_pos::Float64
     backward_rescale_zero::Float64

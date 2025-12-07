@@ -1,8 +1,6 @@
 """
 Distributor class for parallel distribution and transformations
 
-Translated from dedalus/core/distributor.py with MPI and PencilArrays integration
-
 Key parallelization features:
 - PencilArrays for efficient MPI domain decomposition
 - PencilFFTs for parallel spectral transforms

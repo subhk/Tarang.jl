@@ -1,9 +1,7 @@
 """
 Cartesian coordinate system specific operators
 
-Translated from dedalus/core/operators.py Cartesian* classes
-
-This module implements Cartesian-specific operator variants following the Dedalus
+This module implements Cartesian-specific operator variants following the
 MultiClass dispatch pattern. Each operator has:
 - CartesianX version for Cartesian coordinates
 - DirectProductX version for direct product coordinate systems
@@ -25,14 +23,12 @@ using SparseArrays
 
 # ============================================================================
 # Abstract operator infrastructure for multiclass dispatch
-# Following Dedalus operators.py MultiClass metaclass pattern
 # ============================================================================
 
 """
     AbstractLinearOperator
 
 Base type for linear operators that support matrix representations.
-Following Dedalus operators.py LinearOperator class.
 """
 abstract type AbstractLinearOperator <: Operator end
 
@@ -40,13 +36,11 @@ abstract type AbstractLinearOperator <: Operator end
     OperatorConditions
 
 Mixin trait for operators with layout conditions.
-Following Dedalus operators.py check_conditions/enforce_conditions pattern.
 """
 abstract type OperatorConditions end
 
 # ============================================================================
 # CartesianComponent - Extract component from vector/tensor by coordinate
-# Following Dedalus operators.py:3270-3412 CartesianComponent
 # ============================================================================
 
 """

@@ -1,9 +1,7 @@
 """
 Subsystem and Subproblem classes for pencil-based matrix assembly.
 
-Translated from dedalus/core/subsystems.py
-
-This module implements the full Dedalus subsystem architecture including:
+This module implements the subsystem architecture including:
 - Subsystem: Represents a subset of the global coefficient space (pencils)
 - Subproblem: Represents coupled subsystems with matrix assembly
 - Preconditioning: Left/right permutation and valid mode filtering

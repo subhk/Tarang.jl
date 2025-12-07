@@ -1,7 +1,5 @@
 """
 Timestepping schemes for initial value problems
-
-Translated from dedalus/core/timesteppers.py
 """
 
 using LinearAlgebra
