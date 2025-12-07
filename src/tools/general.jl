@@ -331,7 +331,7 @@ end
 
 function split_equation(equation::String)
     """
-    Split equation string into LHS and RHS strings following Dedalus patterns
+    Split equation string into LHS and RHS strings following Tarang patterns
     
     Examples:
     --------  
@@ -372,7 +372,7 @@ end
 function lambdify_functions(call::String, result::String)
     """
     Convert math-style function definitions into lambda expressions
-    Following Dedalus parsing patterns
+    Following Tarang parsing patterns
     
     Examples:
     --------

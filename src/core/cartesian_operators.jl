@@ -52,7 +52,7 @@ Following operators.py:3270-3412 CartesianComponent implementation.
 
 # Arguments
 - `operand`: Vector or tensor field
-- `index`: Tensor index to extract from (0-based following Dedalus)
+- `index`: Tensor index to extract from (0-based following standard)
 - `comp`: Coordinate object specifying which component
 
 # Example
@@ -64,7 +64,7 @@ u_x = CartesianComponent(u, index=0, comp=coords["x"])  # x-component
 """
 struct CartesianComponent <: AbstractLinearOperator
     operand::Operand
-    index::Int           # Tensor index (0-based like Dedalus)
+    index::Int           # Tensor index (0-based like standard)
     comp::Coordinate     # Coordinate for component selection
     coordsys::CoordinateSystem
     comp_subaxis::Int    # Component subaxis within coordsys

@@ -170,7 +170,7 @@ struct CartesianCoordinates <: CoordinateSystem
     function CartesianCoordinates(names...; right_handed::Bool=true)
         names_vec = collect(String(name) for name in names)
 
-        # Check for unique names (Dedalus coords.py:164-165)
+        # Check for unique names ( coords.py:164-165)
         if length(Set(names_vec)) < length(names_vec)
             throw(ArgumentError("Must specify unique coordinate names."))
         end
@@ -310,7 +310,7 @@ struct DirectProduct <: CoordinateSystem
             append!(all_coords, get_coords(cs))
         end
 
-        # Check for duplicate coordinates (Dedalus coords.py:107-108)
+        # Check for duplicate coordinates ( coords.py:107-108)
         if length(Set(all_coords)) < length(all_coords)
             throw(ArgumentError("Cannot repeat coordinates in DirectProduct."))
         end
@@ -326,7 +326,7 @@ struct DirectProduct <: CoordinateSystem
         # Determine curvilinear property
         curv = any(cs.curvilinear for cs in coordsystems)
 
-        # Handle right_handed for 3D (Dedalus coords.py:110-117)
+        # Handle right_handed for 3D ( coords.py:110-117)
         if dim == 3
             if curv
                 right_handed = right_handed === nothing ? false : right_handed

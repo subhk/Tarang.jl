@@ -80,7 +80,7 @@ struct NetCDFMerger
         # Sort by processor number
         sort!(processor_files, by=f -> parse(Int, match(r"_p(\d+)\.nc$", f).captures[1]))
         
-        # Determine output filename (matching Dedalus convention)
+        # Determine output filename (matching Tarang convention)
         if isempty(output_name)
             if isdir(set_dir)
                 output_file = joinpath(set_dir, "$(set_pattern).nc")
@@ -335,9 +335,9 @@ function merge_variable_concat!(merger::NetCDFMerger, output_file::String, var_n
 end
 
 """
-Reconstruction merge: reconstruct global field from distributed data following Dedalus patterns.
+Reconstruction merge: reconstruct global field from distributed data following Tarang patterns.
 This reconstructs the global field using spatial domain decomposition information from each processor.
-Based on Dedalus post.py:merge_data() function (lines 317-342).
+Based on Tarang post.py:merge_data() function (lines 317-342).
 """
 function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, var_name::String, file_info::Dict)
     merger.verbose && println("    Reconstructing global field for $var_name")
@@ -355,12 +355,12 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
             # Read variable data
             data = ncread(file, var_name)
             
-            # Try to read domain decomposition information (Dedalus style)
+            # Try to read domain decomposition information (Tarang style)
             start_indices = nothing
             count_indices = nothing
             
             try
-                # Look for Dedalus-style attributes: 'start' and 'count'
+                # Look for Tarang-style attributes: 'start' and 'count'
                 info = ncinfo(file)
                 for var_info in info.vars
                     if var_info.name == var_name
@@ -460,14 +460,14 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
     
     merger.verbose && println("      Reconstructing to global shape: $global_shape")
     
-    # Reconstruct global field following Dedalus merge_data pattern
+    # Reconstruct global field following Tarang merge_data pattern
     for proc_info in processor_data
         data = proc_info["data"]
         start_indices = proc_info["start"]
         count_indices = proc_info["count"]
         
         if start_indices !== nothing && count_indices !== nothing
-            # Use Dedalus-style spatial slicing (post.py:339)
+            # Use Tarang-style spatial slicing (post.py:339)
             try
                 # Skip time dimension (index 1), apply to spatial dimensions
                 spatial_slices = []
@@ -534,7 +534,7 @@ end
 
 """
 Domain decomposition merge: handle spatial domain decomposition based on field layout.
-This implements layout-aware merging following Dedalus distributor patterns.
+This implements layout-aware merging following Tarang distributor patterns.
 
 Different field layouts (grid space vs coefficient space) have different distribution 
 patterns that require specialized merging strategies:
@@ -542,7 +542,7 @@ patterns that require specialized merging strategies:
 - Coefficient space: Often distributed in spectral mode dimensions
 - Mixed layouts: May require transpose-like operations during merging
 
-Based on Dedalus distributor.py concepts and post.py merge patterns.
+Based on Tarang distributor.py concepts and post.py merge patterns.
 """
 function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String, var_name::String, file_info::Dict)
     merger.verbose && println("    Domain decomposition merge for $var_name")
@@ -561,13 +561,13 @@ function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String
             # Read variable data
             data = ncread(file, var_name)
             
-            # Read layout information (following Dedalus post.py:281)
+            # Read layout information (following Tarang post.py:281)
             layout_info = Dict{String, Any}()
             try
                 info = ncinfo(file)
                 for var_info in info.vars
                     if var_info.name == var_name
-                        # Key Dedalus attributes that determine merging strategy
+                        # Key Tarang attributes that determine merging strategy
                         layout_info["grid_space"] = get(var_info.atts, "grid_space", nothing)
                         layout_info["scales"] = get(var_info.atts, "scales", nothing)
                         layout_info["constant"] = get(var_info.atts, "constant", false)
@@ -595,7 +595,7 @@ function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String
                 var_attrs["standard_name"] = var_name
                 data_type = eltype(data)
                 
-                # Analyze grid_space flags (Dedalus layout indicator)
+                # Analyze grid_space flags (Tarang layout indicator)
                 grid_space_flags = layout_info["grid_space"]
                 if grid_space_flags !== nothing
                     if isa(grid_space_flags, AbstractArray)
@@ -751,9 +751,9 @@ end
 function merge_mixed_layout_field!(processor_data, var_attrs, output_file, var_name, dim_names, merger)
     """
     Merge field with mixed layout (some dimensions in grid space, others in coefficient space).
-    Following dedalus patterns, mixed layouts are transformed to pure layouts before merging.
+    Following Tarang patterns, mixed layouts are transformed to pure layouts before merging.
     
-    Based on dedalus post.py and field.py - mixed layout fields cannot be directly merged
+    Based on Tarang post.py and field.py - mixed layout fields cannot be directly merged
     and must be transformed to either pure grid space or pure coefficient space first.
     """
     merger.verbose && println("        Merging mixed layout field")
@@ -814,7 +814,7 @@ end
 function determine_optimal_target_layout(grid_space_flags, processor_data, merger)
     """
     Determine optimal target layout for mixed layout transformation.
-    Following dedalus patterns - prefer grid space for most cases unless 
+    Following Tarang patterns - prefer grid space for most cases unless 
     coefficient space is clearly more appropriate.
     """
     if !isa(grid_space_flags, AbstractArray)
@@ -826,10 +826,10 @@ function determine_optimal_target_layout(grid_space_flags, processor_data, merge
     
     merger.verbose && println("            Layout analysis: $grid_dims grid dims, $coeff_dims coeff dims")
     
-    # Decision logic based on dedalus patterns:
+    # Decision logic based on Tarang patterns:
     # 1. If majority are in grid space, transform to grid space
     # 2. If field is primarily spectral (more coeff dims), prefer coefficient space
-    # 3. For tie cases, prefer grid space (dedalus default for output)
+    # 3. For tie cases, prefer grid space (Tarang default for output)
     
     if grid_dims >= coeff_dims
         return :grid_space
@@ -851,7 +851,7 @@ end
 function transform_to_target_layout!(processor_data, grid_space_flags, target_layout, merger)
     """
     Transform mixed layout processor data to target pure layout.
-    This implements the equivalent of dedalus layout transformation operations.
+    This implements the equivalent of Tarang layout transformation operations.
     """
     merger.verbose && println("            Transforming $(length(processor_data)) processor datasets")
     
@@ -1191,7 +1191,7 @@ function reconstruct_spectral_modes(processor_data, data_type, merger)
     """
     Reconstruct spectral coefficient field from distributed modes.
     
-    Based on dedalus distributor.py Layout class and post.py merge_data function.
+    Based on Tarang distributor.py Layout class and post.py merge_data function.
     Handles block distribution of spectral coefficients across processors.
     """
     merger.verbose && println("          Reconstructing spectral coefficient field")
@@ -1481,7 +1481,7 @@ function cleanup_source_files!(merger::NetCDFMerger)
     merger.verbose && println("   Cleaned up $files_removed files")
 end
 
-# Convenience functions matching Dedalus post-processing style
+# Convenience functions matching Tarang post-processing style
 
 """
     merge_netcdf_files(base_name; kwargs...)

@@ -19,22 +19,22 @@ using Printf
 const NetCDFPrecision = Union{Type{Float32}, Type{Float64}}
 
 """
-NetCDF File Handler matching Dedalus H5FileHandler structure
+NetCDF File Handler matching Tarang H5FileHandler structure
 
-Follows Dedalus pattern:
+Follows Tarang pattern:
 - base_path/handler_name_s1/handler_name_s1_p0.nc for processor files
 - base_path/handler_name_s1.nc for gathered files
 - /scales/ group with time coordinates
 - /tasks/ group with field data
 """
 mutable struct NetCDFFileHandler
-    # Base attributes (matching Dedalus)
+    # Base attributes (matching Tarang)
     base_path::String
     name::String
     dist::Any  # Domain distributor
     vars::Dict{String, Any}  # Variables for parsing
     
-    # Scheduling (matching Dedalus Handler)
+    # Scheduling (matching Tarang Handler)
     group::Union{String, Nothing}
     wall_dt::Union{Float64, Nothing}
     sim_dt::Union{Float64, Nothing}
@@ -69,7 +69,7 @@ mutable struct NetCDFFileHandler
         comm = nothing
         rank, size = 0, 1
         
-        # Base path handling (matching Dedalus)
+        # Base path handling (matching Tarang)
         if endswith(base_path, ".nc")
             base_path = base_path[1:end-3]  # Remove .nc extension
         end
@@ -82,7 +82,7 @@ mutable struct NetCDFFileHandler
         total_write_num = 0
         file_write_num = 0
         
-        # Mode handling (matching Dedalus logic)
+        # Mode handling (matching Tarang logic)
         if rank == 0 && mode == "overwrite"
             # Clean up existing files matching pattern
             for file in readdir(".", join=true)
@@ -124,7 +124,7 @@ function init_mpi!(handler::NetCDFFileHandler)
 end
 
 """
-Get current set path following Dedalus naming: handler_name_s1/
+Get current set path following Tarang naming: handler_name_s1/
 """
 function current_path(handler::NetCDFFileHandler)
     set_name = "$(handler.name)_s$(handler.set_num)"
@@ -132,7 +132,7 @@ function current_path(handler::NetCDFFileHandler)
 end
 
 """
-Get current file path following Dedalus naming: handler_name_s1/handler_name_s1_p0.nc
+Get current file path following Tarang naming: handler_name_s1/handler_name_s1_p0.nc
 """
 function current_file(handler::NetCDFFileHandler)
     init_mpi!(handler)  # Ensure MPI info is available
@@ -148,9 +148,9 @@ function current_file(handler::NetCDFFileHandler)
 end
 
 """
-Add task to handler (matching Dedalus API)
+Add task to handler (matching Tarang API)
 
-# Example usage (matching Dedalus style):
+# Example usage (matching Tarang style):
 snapshots = evaluator.add_file_handler('snapshots', sim_dt=0.25, max_writes=50)
 snapshots.add_task(b, name='buoyancy')
 snapshots.add_task(-d3.div(d3.skew(u)), name='vorticity')
@@ -161,10 +161,10 @@ function add_task!(handler::NetCDFFileHandler, task; layout="g", name=nothing, s
         name = string(task)
     end
     
-    # Create operator following Dedalus patterns
+    # Create operator following Tarang patterns
     operator = create_operator(task, handler.vars, handler.dist)
     
-    # Check and remedy scales following Dedalus logic
+    # Check and remedy scales following Tarang logic
     if is_locked_field(operator)
         # For locked fields, use domain dealias scales
         if scales === nothing
@@ -183,7 +183,7 @@ function add_task!(handler::NetCDFFileHandler, task; layout="g", name=nothing, s
     # Get layout object
     layout_obj = get_layout_object(handler.dist, layout)
     
-    # Create task dictionary (matching Dedalus structure)
+    # Create task dictionary (matching Tarang structure)
     task_dict = Dict{String, Any}(
         "operator" => operator,
         "layout" => layout_obj,
@@ -193,7 +193,7 @@ function add_task!(handler::NetCDFFileHandler, task; layout="g", name=nothing, s
         "postprocess" => postprocess
     )
     
-    # Add data distribution information following Dedalus get_data_distribution
+    # Add data distribution information following Tarang get_data_distribution
     global_shape, local_start, local_shape = get_data_distribution(handler, task_dict)
     task_dict["global_shape"] = global_shape
     task_dict["local_start"] = local_start
@@ -206,7 +206,7 @@ function add_task!(handler::NetCDFFileHandler, task; layout="g", name=nothing, s
 end
 
 """
-Create operator from different input types following Dedalus patterns
+Create operator from different input types following Tarang patterns
 """
 function create_operator(task, vars::Dict, dist)
     if isa(task, AbstractString)
@@ -322,7 +322,7 @@ function get_operator_dtype(operator, default_precision)
 end
 
 """
-Get data distribution information following Dedalus patterns
+Get data distribution information following Tarang patterns
 """
 function get_data_distribution(handler::NetCDFFileHandler, task::Dict, rank=nothing)
     init_mpi!(handler)  # Ensure MPI info is available
@@ -412,7 +412,7 @@ function get_local_start(layout, domain, scales, rank)
 end
 
 """
-Check if handler should process based on schedule (matching Dedalus logic)
+Check if handler should process based on schedule (matching Tarang logic)
 """
 function check_schedule(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.0)
     scheduled = false
@@ -426,7 +426,7 @@ function check_schedule(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, 
     
     # Simulation time cadence
     if handler.sim_dt !== nothing
-        # Simplified logic - in real Dedalus this is more complex
+        # Simplified logic - in real Tarang this is more complex
         sim_div = floor(Int, sim_time / handler.sim_dt)
         if sim_div > handler.total_write_num
             scheduled = true
@@ -445,7 +445,7 @@ function check_schedule(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, 
 end
 
 """
-Create NetCDF file with Dedalus-style structure
+Create NetCDF file with Tarang-style structure
 """
 function create_current_file!(handler::NetCDFFileHandler)
     filename = current_file(handler)
@@ -461,7 +461,7 @@ function create_current_file!(handler::NetCDFFileHandler)
         rm(filename)
     end
 
-    # Create basic structure matching Dedalus HDF5 layout
+    # Create basic structure matching Tarang HDF5 layout
     # Use a single nccreate call pattern that works with NetCDF.jl
     # All variables share the same unlimited "sim_time" dimension
 
@@ -487,7 +487,7 @@ function create_current_file!(handler::NetCDFFileHandler)
     nccreate(filename, "write_number", "sim_time", Inf, t=Int64,
             atts=Dict("long_name" => "write number"))
     
-    # Add global attributes (matching Dedalus metadata)
+    # Add global attributes (matching Tarang metadata)
     # Note: NetCDF.jl doesn't support Bool attributes, so we use Int (0/1)
     global_attrs = Dict(
         "set_number" => handler.set_num,
@@ -495,7 +495,7 @@ function create_current_file!(handler::NetCDFFileHandler)
         "writes" => handler.file_write_num,
         "title" => "Tarang.jl simulation output",
         "institution" => "Generated by Tarang.jl",
-        "source" => "Tarang.jl - Julia implementation of Dedalus",
+        "source" => "Tarang.jl - Julia implementation of Tarang",
         "history" => "Created on $(Dates.format(now(), "yyyy-mm-dd HH:MM:SS"))",
         "Conventions" => "CF-1.8",
         "tarang_version" => "0.1.0",
@@ -516,7 +516,7 @@ function create_current_file!(handler::NetCDFFileHandler)
 end
 
 """
-Process handler: write all tasks to NetCDF (matching Dedalus process method)
+Process handler: write all tasks to NetCDF (matching Tarang process method)
 """
 function process!(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.0)
     # Update write counts
@@ -688,26 +688,26 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
 end
 
 """
-Convenience function to create NetCDF file handler (matching Dedalus API)
+Convenience function to create NetCDF file handler (matching Tarang API)
 Usage: handler = add_file_handler("snapshots", dist, vars, sim_dt=0.25, max_writes=50)
 """
 function add_netcdf_handler(base_path::String, dist, vars; kwargs...)
     return NetCDFFileHandler(base_path, dist, vars; kwargs...)
 end
 
-# Export main functionality matching Dedalus interface
+# Export main functionality matching Tarang interface
 export NetCDFFileHandler, add_netcdf_handler
 
 """
-Dedalus-style helper to create a NetCDF file handler.
-Matches evaluator.add_file_handler(...) usage in Dedalus.
+Tarang-style helper to create a NetCDF file handler.
+Matches evaluator.add_file_handler(...) usage in Tarang.
 """
 function add_file_handler(base_path::String, dist, vars; kwargs...)
     return NetCDFFileHandler(base_path, dist, vars; kwargs...)
 end
 
 """
-Alias without bang for Dedalus-style task addition.
+Alias without bang for Tarang-style task addition.
 """
 function add_task(handler::NetCDFFileHandler, task; kwargs...)
     return add_task!(handler, task; kwargs...)

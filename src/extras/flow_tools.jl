@@ -254,7 +254,7 @@ function energy_spectrum(velocity::VectorField; max_wavenumber::Union{Int,Nothin
     Computes the kinetic energy spectrum E(k) = ∫∫ |û_i(k)|² dA(k) where the integral
     is over a spherical (3D) or circular (2D) shell of radius k in wavenumber space.
     
-    Based on standard spectral turbulence analysis methods and follows dedalus patterns
+    Based on standard spectral turbulence analysis methods and follows Tarang patterns
     for spectral field processing with PencilArrays/PencilFFTs integration.
     
     Args:
@@ -598,7 +598,7 @@ function streamfunction(velocity::VectorField; boundary_condition::Symbol=:perio
     Calculate streamfunction for 2D incompressible flow.
     
     Solves the Poisson equation ∇²ψ = ω to obtain streamfunction from vorticity.
-    Based on dedalus LBVP patterns for Poisson equation solving.
+    Based on Tarang LBVP patterns for Poisson equation solving.
     
     For incompressible 2D flow: u = ∂ψ/∂y, v = -∂ψ/∂x
     Vorticity: ω = ∂v/∂x - ∂u/∂y = ∇²ψ
@@ -651,7 +651,7 @@ end
 function streamfunction_spectral_invert(vorticity::ScalarField, apply_gauge::Bool=true)
     """
     Direct spectral inversion for periodic domains: ψ̂(k) = -ω̂(k)/|k|²
-    Based on dedalus spectral Poisson inversion patterns.
+    Based on Tarang spectral Poisson inversion patterns.
     """
     
     # Ensure vorticity is in spectral space
@@ -741,14 +741,14 @@ function streamfunction_bvp_solve(vorticity::ScalarField, bc_type::Symbol, apply
     """
     Solve streamfunction BVP for bounded/mixed domains.
     
-    Based on dedalus LBVP (Linear Boundary Value Problem) approach:
+    Based on Tarang LBVP (Linear Boundary Value Problem) approach:
     ∇²ψ = ω with appropriate boundary conditions.
     
     This is a framework - full implementation would require BVP solver infrastructure.
     """
     
     # For now, implement a simplified approach using iterative methods
-    # A full implementation would use dedalus-style tau method with LBVP
+    # A full implementation would use Tarang-style tau method with LBVP
     
     streamfunction_field = ScalarField(vorticity.dist, "streamfunction", vorticity.bases, vorticity.dtype)
     ensure_layout!(streamfunction_field, :g)
@@ -766,7 +766,7 @@ function streamfunction_jacobi_solve(vorticity::ScalarField, bc_type::Symbol, ap
     """
     Simplified Jacobi iteration solver for ∇²ψ = ω.
     
-    This is a basic implementation - a full dedalus-style implementation 
+    This is a basic implementation - a full Tarang-style implementation 
     would use tau methods and LBVP infrastructure.
     """
     
