@@ -4,7 +4,7 @@
 NetCDF Merge Script for Tarang.jl
 
 Command-line utility for merging per-processor NetCDF files created by Tarang.jl
-Follows Dedalus post-processing patterns for easy workflow integration.
+Provides easy workflow integration for post-processing.
 
 USAGE:
     julia merge_netcdf.jl [OPTIONS] HANDLER_NAME [HANDLER_NAME2 ...]

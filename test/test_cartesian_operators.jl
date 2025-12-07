@@ -115,7 +115,7 @@ end
 
 # ============================================================================
 # Skew operator tests (2D only)
-# Following Dedalus test_cartesian_operators.py:101-131
+# Following test_cartesian_operators.py:101-131
 # ============================================================================
 
 @testset "Cartesian Skew Operator" begin
@@ -157,7 +157,7 @@ end
 
 # ============================================================================
 # Trace operator tests
-# Following Dedalus test_cartesian_operators.py:133-187
+# Following test_cartesian_operators.py:133-187
 # ============================================================================
 
 @testset "Cartesian Trace Operator" begin

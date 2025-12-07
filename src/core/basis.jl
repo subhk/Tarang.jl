@@ -910,16 +910,19 @@ end
 """
 Compute Jacobi polynomial linearization coefficients.
 P_m^{(a,b)}(x) * P_n^{(a,b)}(x) = sum_{k=|m-n|}^{m+n} c_k P_k^{(a,b)}(x)
+
+Following Dedalus approach using Clenshaw algorithm with Jacobi matrices.
+References:
+- Dedalus tools/clenshaw.py: matrix_clenshaw, jacobi_recursion
+- Dedalus core/basis.py: Jacobi._last_axis_component_ncc_matrix
 """
 function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float64, N_max::Int)
-    # Use the Dougall formula for Jacobi linearization
-
     coeffs = zeros(Float64, N_max)
 
     k_min = abs(m - n)
     k_max = min(m + n, N_max - 1)
 
-    # Special case: m=0 or n=0
+    # Special case: m=0 or n=0 (multiplication by P_0 = 1)
     if m == 0
         if n < N_max
             coeffs[n + 1] = 1.0
@@ -933,9 +936,9 @@ function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float
         return coeffs
     end
 
-    # General case: use recurrence relation approach
-    # For Chebyshev (a=b=-1/2): T_m * T_n = 0.5*(T_{m+n} + T_{|m-n|})
-    if abs(a + 0.5) < 1e-10 && abs(b + 0.5) < 1e-10  # Chebyshev T
+    # Chebyshev T case (a=b=-1/2): exact formula
+    # T_m * T_n = 0.5*(T_{m+n} + T_{|m-n|})
+    if abs(a + 0.5) < 1e-10 && abs(b + 0.5) < 1e-10
         k1 = m + n
         k2 = abs(m - n)
         if k1 < N_max
@@ -944,22 +947,159 @@ function _jacobi_linearization_coefficients(m::Int, n::Int, a::Float64, b::Float
         if k2 < N_max
             coeffs[k2 + 1] += 0.5
         end
-    elseif abs(a) < 1e-10 && abs(b) < 1e-10  # Legendre
-        # Use Clebsch-Gordan coefficients for Legendre
+        return coeffs
+    end
+
+    # Chebyshev U case (a=b=1/2): exact formula
+    # U_m * U_n = sum_{k=|m-n|, step 2}^{m+n} U_k
+    if abs(a - 0.5) < 1e-10 && abs(b - 0.5) < 1e-10
+        for k in k_min:2:k_max
+            if k < N_max
+                coeffs[k + 1] = 1.0
+            end
+        end
+        return coeffs
+    end
+
+    # Legendre case (a=b=0): use Clebsch-Gordan coefficients
+    if abs(a) < 1e-10 && abs(b) < 1e-10
         for k in k_min:2:k_max
             if k < N_max
                 c = _legendre_linearization_coeff(m, n, k)
                 coeffs[k + 1] = c
             end
         end
-    else
-        # General Jacobi - use simple approximation
-        for k in k_min:k_max
-            if k < N_max
-                # Approximate coefficient
-                weight = 1.0 / (k_max - k_min + 1)
-                coeffs[k + 1] = weight
+        return coeffs
+    end
+
+    # General Jacobi case: use Dougall's formula (linearization of Jacobi polynomials)
+    # P_m^{(a,b)} * P_n^{(a,b)} = sum_k A_{m,n,k}^{(a,b)} P_k^{(a,b)}
+    #
+    # The coefficients are given by the Dougall-Ramanujan identity.
+    # For the general case, we use numerical evaluation via Clenshaw algorithm.
+
+    # Build Jacobi matrix J (tridiagonal) for the recurrence relation
+    # x * P_n^{(a,b)} = A_n * P_{n-1} + B_n * P_n + C_n * P_{n+1}
+
+    N_work = max(m + n + 2, N_max + 1)
+
+    # Compute using matrix Clenshaw algorithm
+    # This evaluates P_m(J) where J is the Jacobi matrix
+    coeffs = _jacobi_linearization_clenshaw(m, n, a, b, N_max, N_work)
+
+    return coeffs
+end
+
+"""
+Compute Jacobi linearization using matrix Clenshaw algorithm.
+Following Dedalus tools/clenshaw.py: matrix_clenshaw and jacobi_recursion.
+
+This computes the expansion coefficients of P_m^{(a,b)}(x) * P_n^{(a,b)}(x)
+in terms of P_k^{(a,b)}(x) using the Clenshaw algorithm with the Jacobi matrix.
+"""
+function _jacobi_linearization_clenshaw(m::Int, n::Int, a::Float64, b::Float64, N_max::Int, N_work::Int)
+    coeffs = zeros(Float64, N_max)
+
+    # Build Jacobi matrix (symmetric tridiagonal)
+    # x * P_n = alpha_n * P_{n-1} + beta_n * P_n + gamma_n * P_{n+1}
+    # where J[n,n-1] = alpha_n, J[n,n] = beta_n, J[n,n+1] = gamma_n
+
+    J_diag = zeros(Float64, N_work)      # Main diagonal (beta_n)
+    J_subdiag = zeros(Float64, N_work-1)  # Sub/super diagonal
+
+    for k in 0:(N_work-1)
+        # Jacobi recurrence coefficients (0-indexed k)
+        # From DLMF 18.9.2 and Dedalus libraries/dedalus_sphere/jacobi.py
+
+        denom = (2*k + a + b) * (2*k + a + b + 2)
+        if abs(denom) < 1e-14
+            # Handle edge cases
+            J_diag[k+1] = (b^2 - a^2) / (2*(k+1) + a + b) / (2*k + a + b + 2)
+        else
+            J_diag[k+1] = (b^2 - a^2) / denom
+        end
+
+        if k < N_work - 1
+            # Sub/super diagonal coefficient
+            num = 2 * (k + 1) * (k + 1 + a + b) * (k + 1 + a) * (k + 1 + b)
+            denom = (2*k + a + b + 1) * (2*k + a + b + 2)^2 * (2*k + a + b + 3)
+            if abs(denom) > 1e-14
+                J_subdiag[k+1] = sqrt(num / denom)
+            else
+                J_subdiag[k+1] = 0.0
             end
+        end
+    end
+
+    # Build sparse Jacobi matrix
+    J = spdiagm(-1 => J_subdiag, 0 => J_diag, 1 => J_subdiag)
+
+    # Now use Clenshaw algorithm to compute P_m(J) * e_n
+    # where e_n is the n-th unit vector
+    # The result gives the coefficients of P_m * P_n in the Jacobi basis
+
+    # Clenshaw recurrence for evaluating polynomial at matrix argument:
+    # b_{N+1} = b_N = 0
+    # b_k = A_k * b_{k+1} + B_{k+1} * b_{k+2} + c_k * I   (for k = N-1, ..., 0)
+    # result = f_0 * b_0
+    #
+    # For P_m, the coefficients c_k are: c_m = 1, c_k = 0 for k != m
+    # f_0 = P_0(x) = 1 (identity matrix for matrix argument)
+
+    # Build A_k and B_k coefficients from Jacobi recursion
+    # x * P_n = J[n,n-1]*P_{n-1} + J[n,n]*P_n + J[n,n+1]*P_{n+1}
+    # => P_{n+1} = (x - J[n,n])/J[n,n+1] * P_n - J[n,n-1]/J[n,n+1] * P_{n-1}
+    # So: A_n = (J - J[n,n]*I)/J[n,n+1], B_n = -J[n,n-1]/J[n,n+1]
+
+    N_clen = m + 1  # We need coefficients c_0, c_1, ..., c_m
+
+    # Clenshaw iteration (backwards)
+    b_k1 = spzeros(Float64, N_work, N_work)  # b_{k+1}
+    b_k2 = spzeros(Float64, N_work, N_work)  # b_{k+2}
+
+    I_mat = sparse(I, N_work, N_work)
+
+    for k in (N_clen-1):-1:0
+        # Compute A_k and B_{k+1}
+        if k < N_work - 1 && abs(J_subdiag[k+1]) > 1e-14
+            A_k = (J - J_diag[k+1] * I_mat) / J_subdiag[k+1]
+        else
+            A_k = spzeros(Float64, N_work, N_work)
+        end
+
+        if k > 0 && k < N_work && abs(J_subdiag[k+1]) > 1e-14
+            B_k1 = -J_subdiag[k] / J_subdiag[k+1] * I_mat
+        else
+            B_k1 = spzeros(Float64, N_work, N_work)
+        end
+
+        # c_k = 1 if k == m, else 0
+        c_k = (k == m) ? 1.0 : 0.0
+
+        # b_k = c_k * I + A_k * b_{k+1} + B_{k+1} * b_{k+2}
+        b_k = c_k * I_mat + A_k * b_k1 + B_k1 * b_k2
+
+        # Shift for next iteration
+        b_k2 = b_k1
+        b_k1 = b_k
+    end
+
+    # Result: P_m(J) ≈ b_0 (since f_0 = P_0 = I)
+    # The column n of this matrix gives P_m * P_n expansion coefficients
+
+    # Extract column n (0-indexed)
+    if n < N_work
+        col = b_k1[:, n+1]
+        for k in 1:min(N_max, N_work)
+            coeffs[k] = col[k]
+        end
+    end
+
+    # Clean up small values
+    cutoff = 1e-14
+    for k in 1:N_max
+        if abs(coeffs[k]) < cutoff
+            coeffs[k] = 0.0
         end
     end
 
