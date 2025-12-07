@@ -2131,40 +2131,169 @@ function expression_to_string(expr)
     end
 end
 
+"""
+    expand_namespace_substitutions!(problem::Problem)
+
+Expand any substitution definitions in problem namespace.
+
+Substitutions are defined in the namespace as strings of the form "pattern = replacement".
+They are applied to all equations using word-boundary-aware replacement to avoid
+partial matches within variable names.
+
+# Example
+```julia
+problem.namespace["sub1"] = "nu = 1e-3"
+problem.namespace["sub2"] = "f = sin(x)"
+# "nu*lap(u)" becomes "1e-3*lap(u)"
+# "f + g" becomes "sin(x) + g" but "freq" stays unchanged
+```
+"""
 function expand_namespace_substitutions!(problem::Problem)
-    """Expand any substitution definitions in problem namespace"""
-    
     # Look for substitution patterns in namespace
-    substitutions = Dict{String, Any}()
-    
+    substitutions = Dict{String, String}()
+
     for (key, value) in problem.namespace
         if isa(value, String) && contains(value, "=")
             # Potential substitution definition
             try
                 lhs, rhs = split_equation(value)
-                substitutions[strip(lhs)] = strip(rhs)
+                lhs_clean = strip(lhs)
+                rhs_clean = strip(rhs)
+                if !isempty(lhs_clean) && !isempty(rhs_clean)
+                    substitutions[lhs_clean] = rhs_clean
+                end
             catch
                 # Not a valid substitution, skip
             end
         end
     end
-    
-    if !isempty(substitutions)
-        @debug "Found substitutions in namespace" substitutions
-        
-        # Apply substitutions to equations (simplified)
-        # This would need more sophisticated pattern matching in practice
-        for (i, equation) in enumerate(problem.equations)
-            modified_equation = equation
-            for (old_pattern, new_pattern) in substitutions
-                modified_equation = replace(modified_equation, old_pattern => new_pattern)
-            end
-            if modified_equation != equation
-                problem.equations[i] = modified_equation
-                @debug "Applied substitution to equation $i" original=equation modified=modified_equation
+
+    if isempty(substitutions)
+        return
+    end
+
+    @debug "Found substitutions in namespace" substitutions
+
+    # Sort substitutions by pattern length (longest first) to avoid partial replacements
+    sorted_patterns = sort(collect(keys(substitutions)), by=length, rev=true)
+
+    # Apply substitutions to equations
+    for (i, equation) in enumerate(problem.equations)
+        modified_equation = apply_substitutions(equation, substitutions, sorted_patterns)
+        if modified_equation != equation
+            problem.equations[i] = modified_equation
+            @debug "Applied substitution to equation $i" original=equation modified=modified_equation
+        end
+    end
+
+    # Also apply to boundary conditions if they are strings
+    for (i, bc) in enumerate(problem.boundary_conditions)
+        if isa(bc, String)
+            modified_bc = apply_substitutions(bc, substitutions, sorted_patterns)
+            if modified_bc != bc
+                problem.boundary_conditions[i] = modified_bc
+                @debug "Applied substitution to boundary condition $i"
             end
         end
     end
+end
+
+"""
+    apply_substitutions(text::String, substitutions::Dict{String,String},
+                       sorted_patterns::Vector{String}) -> String
+
+Apply substitutions to text using word-boundary-aware replacement.
+
+Only replaces patterns that appear as whole words (not as substrings of longer
+identifiers). Uses regex word boundaries to ensure correct matching.
+
+# Arguments
+- `text`: The string to perform substitutions on
+- `substitutions`: Dict mapping patterns to their replacements
+- `sorted_patterns`: Patterns sorted by length (longest first)
+"""
+function apply_substitutions(text::String, substitutions::Dict{String,String},
+                            sorted_patterns::Vector{String})
+    result = text
+
+    for pattern in sorted_patterns
+        replacement = substitutions[pattern]
+
+        # Build word-boundary-aware regex pattern
+        # Match pattern only when surrounded by non-identifier characters
+        # This prevents "nu" from matching inside "enumerate"
+        escaped_pattern = escape_regex_chars(pattern)
+
+        # Use word boundaries: pattern must be preceded and followed by
+        # non-word characters (or start/end of string)
+        regex_pattern = Regex("(?<![a-zA-Z0-9_])$(escaped_pattern)(?![a-zA-Z0-9_])")
+
+        result = replace(result, regex_pattern => replacement)
+    end
+
+    return result
+end
+
+"""
+    escape_regex_chars(s::String) -> String
+
+Escape special regex characters in a string for literal matching.
+"""
+function escape_regex_chars(s::String)
+    # Characters that have special meaning in regex
+    special_chars = raw"\.^$*+?{}[]|()"
+
+    result = IOBuffer()
+    for c in s
+        if c in special_chars
+            write(result, '\\')
+        end
+        write(result, c)
+    end
+
+    return String(take!(result))
+end
+
+"""
+    apply_substitution_recursive!(expr, substitutions::Dict)
+
+Apply substitutions to an operator expression tree recursively.
+Used when equations are already parsed into operator form.
+"""
+function apply_substitution_recursive!(expr, substitutions::Dict)
+    if expr === nothing
+        return expr
+    end
+
+    # Handle different expression types
+    if isa(expr, ScalarField) && haskey(substitutions, expr.name)
+        # Can't directly replace a field, but we can note it
+        @debug "Found field $(expr.name) in substitutions but cannot replace parsed field"
+        return expr
+
+    elseif isa(expr, AddOperator)
+        expr.left = apply_substitution_recursive!(expr.left, substitutions)
+        expr.right = apply_substitution_recursive!(expr.right, substitutions)
+
+    elseif isa(expr, SubtractOperator)
+        expr.left = apply_substitution_recursive!(expr.left, substitutions)
+        expr.right = apply_substitution_recursive!(expr.right, substitutions)
+
+    elseif isa(expr, MultiplyOperator)
+        expr.left = apply_substitution_recursive!(expr.left, substitutions)
+        if !isa(expr.right, Real)
+            expr.right = apply_substitution_recursive!(expr.right, substitutions)
+        end
+
+    elseif hasfield(typeof(expr), :operand)
+        expr.operand = apply_substitution_recursive!(expr.operand, substitutions)
+
+    elseif hasfield(typeof(expr), :left) && hasfield(typeof(expr), :right)
+        expr.left = apply_substitution_recursive!(expr.left, substitutions)
+        expr.right = apply_substitution_recursive!(expr.right, substitutions)
+    end
+
+    return expr
 end
 
 # Problem metadata
