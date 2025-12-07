@@ -234,6 +234,36 @@ function lift(operand::Operand, basis::Basis, n::Int)
     return multiclass_new(Lift, operand, basis, n)
 end
 
+function component(operand::Operand, index::Int)
+    """Extract component from vector/tensor field"""
+    return multiclass_new(Component, operand, index)
+end
+
+function radial(operand::Operand)
+    """Extract radial component from vector field"""
+    return multiclass_new(RadialComponent, operand)
+end
+
+function angular(operand::Operand)
+    """Extract angular component from vector field"""
+    return multiclass_new(AngularComponent, operand)
+end
+
+function azimuthal(operand::Operand)
+    """Extract azimuthal component from vector field"""
+    return multiclass_new(AzimuthalComponent, operand)
+end
+
+function grid(operand::Operand)
+    """Convert operand to grid space"""
+    return multiclass_new(Grid, operand)
+end
+
+function coeff(operand::Operand)
+    """Convert operand to coefficient space"""
+    return multiclass_new(Coeff, operand)
+end
+
 # Register core operators for parsing namespace consistency
 register_operator_alias!(grad, "grad", "gradient")
 register_operator_parseable!(grad, "grad", "gradient")
@@ -276,6 +306,24 @@ register_operator_parseable!(d, "d", "differentiate")
 
 register_operator_alias!(lift, "lift")
 register_operator_parseable!(lift, "lift")
+
+register_operator_alias!(component, "component")
+register_operator_parseable!(component, "component")
+
+register_operator_alias!(radial, "radial")
+register_operator_parseable!(radial, "radial")
+
+register_operator_alias!(angular, "angular")
+register_operator_parseable!(angular, "angular")
+
+register_operator_alias!(azimuthal, "azimuthal")
+register_operator_parseable!(azimuthal, "azimuthal")
+
+register_operator_alias!(grid, "grid")
+register_operator_parseable!(grid, "grid")
+
+register_operator_alias!(coeff, "coeff")
+register_operator_parseable!(coeff, "coeff")
 
 # Helper functions for creating common operators
 function ∇(operand::Operand, coordsys::CoordinateSystem=operand.dist.coordsys)
