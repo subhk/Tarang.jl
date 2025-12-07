@@ -196,13 +196,229 @@ end
 """
     build_subsystems(solver)
 
-Build local subsystem objects.
+Build local subsystem objects based on matrix coupling analysis.
+
+For each dimension, the solver determines whether modes couple across that dimension:
+- Coupled dimensions (matrix_coupling[i] = true): All modes in that dimension must be
+  solved together, so they belong to the same subsystem group
+- Separable dimensions (matrix_coupling[i] = false): Each mode can be solved independently,
+  so they form separate subsystem groups
+
+This implements pencil-based matrix assembly where:
+- The coupled dimensions form the "local" part of each pencil
+- The separable dimensions are iterated over to form multiple subsystems
+
 Following subsystems:34-53.
 """
 function build_subsystems(solver)
-    # For now, create a single subsystem spanning the full problem
-    # TODO: Implement full pencil decomposition based on matrix_coupling
-    return (Subsystem(solver),)
+    problem = solver.problem
+    dist = infer_problem_dist(problem)
+
+    if dist === nothing
+        # No distributor available, use global subsystem
+        return (Subsystem(solver),)
+    end
+
+    # Get matrix coupling information from solver or compute from equations
+    matrix_coupling = get_matrix_coupling(solver, problem, dist)
+
+    # Determine which dimensions are separable (can be parallelized)
+    separable_dims = findall(.!matrix_coupling)
+
+    if isempty(separable_dims)
+        # All dimensions are coupled - single global subsystem
+        return (Subsystem(solver),)
+    end
+
+    # Build subsystems for each mode group in separable dimensions
+    subsystems = Subsystem[]
+
+    # Get the number of modes in each separable dimension
+    separable_sizes = Int[]
+    for dim in separable_dims
+        if dim <= length(dist.coords)
+            coord = dist.coords[dim]
+            if hasfield(typeof(coord), :size)
+                push!(separable_sizes, coord.size)
+            else
+                # Fallback: get size from problem domain
+                size = get_separable_dim_size(problem, dim)
+                push!(separable_sizes, size)
+            end
+        else
+            push!(separable_sizes, 1)
+        end
+    end
+
+    if isempty(separable_sizes) || all(s -> s <= 1, separable_sizes)
+        # No meaningful separation possible
+        return (Subsystem(solver),)
+    end
+
+    # Generate all mode group combinations for separable dimensions
+    # Each combination forms a separate subsystem
+    mode_groups = generate_mode_groups(separable_dims, separable_sizes, dist.dim)
+
+    for group in mode_groups
+        subsystem = Subsystem(solver, group)
+        push!(subsystems, subsystem)
+    end
+
+    if isempty(subsystems)
+        # Fallback to global subsystem
+        return (Subsystem(solver),)
+    end
+
+    return Tuple(subsystems)
+end
+
+"""
+    get_matrix_coupling(solver, problem, dist) -> Vector{Bool}
+
+Determine matrix coupling for each dimension based on operator analysis.
+
+Returns a boolean vector where `true` indicates that dimension couples
+modes together (requires simultaneous solution), and `false` indicates
+modes are separable (can be solved independently).
+"""
+function get_matrix_coupling(solver, problem::Problem, dist::Distributor)
+    ndims = dist.dim
+
+    # Check if solver has explicit matrix coupling
+    if hasfield(typeof(solver), :base) && hasfield(typeof(solver.base), :matrix_coupling)
+        return collect(solver.base.matrix_coupling)
+    end
+
+    # Analyze operators in equations to determine coupling
+    coupling = fill(false, ndims)
+
+    for eq_data in problem.equation_data
+        if haskey(eq_data, :lhs_operator)
+            lhs_op = eq_data[:lhs_operator]
+            op_coupling = analyze_operator_coupling(lhs_op, ndims)
+            coupling .|= op_coupling
+        end
+        if haskey(eq_data, :rhs_operator)
+            rhs_op = eq_data[:rhs_operator]
+            op_coupling = analyze_operator_coupling(rhs_op, ndims)
+            coupling .|= op_coupling
+        end
+    end
+
+    # If no coupling detected, assume all coupled for safety
+    if !any(coupling)
+        return fill(true, ndims)
+    end
+
+    return coupling
+end
+
+"""
+    analyze_operator_coupling(op, ndims) -> Vector{Bool}
+
+Analyze an operator to determine which dimensions it couples.
+
+Differential operators couple modes in their differentiation direction,
+while multiplication operators may couple all dimensions for NCCs.
+"""
+function analyze_operator_coupling(op, ndims::Int)
+    coupling = fill(false, ndims)
+
+    if op === nothing
+        return coupling
+    end
+
+    # Differential operators couple along their direction
+    if isa(op, Differentiate)
+        coord = op.coord
+        if hasfield(typeof(coord), :axis)
+            dim = coord.axis
+            if dim <= ndims
+                coupling[dim] = true
+            end
+        end
+
+    elseif isa(op, CartesianGradient) || isa(op, CartesianDivergence) ||
+           isa(op, CartesianCurl) || isa(op, CartesianLaplacian)
+        # Vector calculus operators couple all spatial dimensions
+        fill!(coupling, true)
+
+    elseif isa(op, AddOperator) || isa(op, SubtractOperator)
+        # Binary operators: combine coupling from both operands
+        left_coupling = analyze_operator_coupling(op.left, ndims)
+        right_coupling = analyze_operator_coupling(op.right, ndims)
+        coupling .|= left_coupling
+        coupling .|= right_coupling
+
+    elseif isa(op, MultiplyOperator)
+        left_coupling = analyze_operator_coupling(op.left, ndims)
+        coupling .|= left_coupling
+        if !isa(op.right, Real)
+            right_coupling = analyze_operator_coupling(op.right, ndims)
+            coupling .|= right_coupling
+        end
+
+    elseif hasfield(typeof(op), :operand)
+        # Single-operand operators
+        coupling .|= analyze_operator_coupling(op.operand, ndims)
+    end
+
+    return coupling
+end
+
+"""
+    get_separable_dim_size(problem, dim) -> Int
+
+Get the number of modes in a separable dimension from problem structure.
+"""
+function get_separable_dim_size(problem::Problem, dim::Int)
+    if problem.domain !== nothing
+        bases = problem.domain.bases
+        if dim <= length(bases) && bases[dim] !== nothing
+            return bases[dim].meta.size
+        end
+    end
+
+    # Fallback: try to get from variables
+    for var in problem.variables
+        for comp in scalar_components(var)
+            if dim <= length(comp.bases) && comp.bases[dim] !== nothing
+                return comp.bases[dim].meta.size
+            end
+        end
+    end
+
+    return 1
+end
+
+"""
+    generate_mode_groups(separable_dims, separable_sizes, ndims) -> Vector{Tuple}
+
+Generate all mode group combinations for separable dimensions.
+
+Each group tuple has:
+- An integer index for each separable dimension (0 to size-1)
+- `nothing` for each coupled dimension
+"""
+function generate_mode_groups(separable_dims::Vector{Int}, separable_sizes::Vector{Int}, ndims::Int)
+    groups = Tuple[]
+
+    # Create ranges for each separable dimension
+    ranges = [0:(size-1) for size in separable_sizes]
+
+    # Generate Cartesian product of mode indices
+    for indices in Iterators.product(ranges...)
+        # Build full group tuple
+        group = Vector{Union{Int, Nothing}}(nothing, ndims)
+        for (i, dim) in enumerate(separable_dims)
+            if dim <= ndims
+                group[dim] = indices[i]
+            end
+        end
+        push!(groups, Tuple(group))
+    end
+
+    return groups
 end
 
 # ---------------------------------------------------------------------------
