@@ -288,23 +288,23 @@ function get_parameter(problem::Problem, name::String, default=nothing)
     return get(problem.parameters, name, default)
 end
 
-# Equation parsing following Dedalus structure
+# Equation parsing following structure
 function parse_equation(equation::String, namespace::Dict{String, Any})
     """
-    Parse equation string into operator expressions following Dedalus formulation requirements.
+    Parse equation string into operator expressions following formulation requirements.
     
     Dedalus requires:
     - LHS: Linear terms only (first-order in time derivatives, linear in variables)
     - RHS: Nonlinear terms, time-dependent terms, non-constant coefficients
     - Form: M·∂ₜX + L·X = F(X,t)
     
-    Following Dedalus problems.py:add_equation pattern (problems.py:65-80).
+    Following problems.py:add_equation pattern (problems.py:65-80).
     """
     
     try
         # Split equation into LHS and RHS expressions
         if isa(equation, String)
-            # Parse string-valued equations following Dedalus pattern
+            # Parse string-valued equations following pattern
             LHS_str, RHS_str = split_equation(equation)
             
             # Parse LHS (should contain only linear terms)
@@ -313,7 +313,7 @@ function parse_equation(equation::String, namespace::Dict{String, Any})
             # Parse RHS (can contain nonlinear terms)
             RHS = parse_expression(RHS_str, namespace)
             
-            # Validate equation structure following Dedalus requirements
+            # Validate equation structure following requirements
             validate_equation_structure(LHS, RHS, equation)
             
             return LHS, RHS
@@ -773,7 +773,7 @@ end
 
 function parse_expression(expr_str::AbstractString, namespace::Dict{String, Any})
     """
-    Parse expression string into operator tree following Dedalus patterns.
+    Parse expression string into operator tree following patterns.
     Uses Julia's Meta.parse for proper AST parsing and operator precedence handling.
     
     This function evaluates mathematical expressions similar to how Dedalus uses
@@ -816,7 +816,7 @@ end
 function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
     """
     Recursively evaluate parsed expression with namespace substitution.
-    Similar to Dedalus eval(string, namespace) but with proper Julia AST handling.
+    Similar to eval(string, namespace) but with proper Julia AST handling.
     """
     
     if isa(expr, Symbol)
@@ -983,7 +983,7 @@ function fallback_parse_expression(expr_str::AbstractString, namespace::Dict{Str
     return UnknownOperator(expr_str)
 end
 
-# Helper operator types for parsing (following Dedalus operator structure)
+# Helper operator types for parsing (following operator structure)
 struct ZeroOperator <: Operator end
 struct ConstantOperator <: Operator
     value::Float64
@@ -1018,7 +1018,7 @@ end
 
 function build_matrices(problem::Problem)
     """
-    Build system matrices for problem following Dedalus structure.
+    Build system matrices for problem following structure.
     Following subsystems.py:build_subproblem_matrices (subsystems.py:72-81) and
     Subproblem.build_matrices (subsystems.py:497-576).
     """
@@ -1040,10 +1040,10 @@ function build_matrices(problem::Problem)
     
     @debug "Building matrices: equations=$I, variables=$J"
     
-    # Matrix names to build (following Dedalus convention)
+    # Matrix names to build (following convention)
     matrix_names = ["M", "L"]  # M = mass matrix, L = stiffness matrix
     
-    # Build sparse matrices following Dedalus subsystems.py:513-537 pattern
+    # Build sparse matrices following subsystems.py:513-537 pattern
     matrices = Dict{String, Any}()
     for name in matrix_names
         # Collect sparse matrix entries
@@ -1082,7 +1082,7 @@ function build_matrices(problem::Problem)
         
         # Create sparse matrix
         if !isempty(data)
-            # Filter small entries (following Dedalus entry_cutoff pattern)
+            # Filter small entries (following entry_cutoff pattern)
             entry_cutoff = 1e-14
             significant = abs.(data) .>= entry_cutoff
             data = data[significant]
@@ -1113,7 +1113,7 @@ end
 function build_matrix_expressions!(problem::Problem)
     """
     Build matrix expressions from parsed equations.
-    Following Dedalus problems.py:_build_matrix_expressions patterns.
+    Following problems.py:_build_matrix_expressions patterns.
     """
     
     problem.equation_data = []
@@ -1155,7 +1155,7 @@ end
 function build_equation_expressions(lhs, rhs, variables::Vector)
     """
     Build matrix expressions from LHS and RHS operators.
-    Following Dedalus _build_matrix_expressions patterns.
+    Following _build_matrix_expressions patterns.
     """
     
     eq_data = Dict{String, Any}()
@@ -1180,7 +1180,7 @@ end
 function split_time_spatial_operators(operator)
     """
     Split operator into time derivative (mass matrix) and spatial (stiffness) terms.
-    Following Dedalus operators split pattern.
+    Following operators split pattern.
     """
     
     M_terms = []  # Time derivative terms
@@ -1298,7 +1298,7 @@ function check_equation_condition(eq_data::Dict)
     4. It references at least one problem variable
     5. The equation is well-formed (not flagged as invalid)
 
-    Following Dedalus patterns where equations can be conditionally
+    Following patterns where equations can be conditionally
     included/excluded based on wavenumber, problem parameters, etc.
     """
 
@@ -1485,7 +1485,7 @@ end
 function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
     """
     Build matrix block for expression acting on variable.
-    Following Dedalus expression_matrices pattern.
+    Following expression_matrices pattern.
     """
     
     if isa(expr, TimeDerivative) && expr.operand === var
@@ -1570,7 +1570,7 @@ end
 function process_lhs_operator!(L_matrix::Matrix, M_matrix::Matrix, lhs_op, eq_idx::Int, variables::Vector)
     """
     Process LHS operator and extract contributions to system matrices.
-    Following Dedalus pattern where time derivatives go to M_matrix,
+    Following pattern where time derivatives go to M_matrix,
     spatial operators go to L_matrix.
     """
     
@@ -1645,7 +1645,7 @@ end
 function process_rhs_operator!(F_vector::Vector, rhs_op, eq_idx::Int, variables::Vector)
     """
     Process RHS operator and extract contributions to forcing vector.
-    Following Dedalus pattern where RHS represents known terms/forcing.
+    Following pattern where RHS represents known terms/forcing.
     """
     
     if isa(rhs_op, ConstantOperator)
@@ -1779,8 +1779,8 @@ end
 
 function expand_substitutions!(problem::Problem)
     """
-    Expand substitutions in equations following Dedalus pattern.
-    Following Dedalus expand(*vars) methods (arithmetic.py:319-329, operators.py:704-739).
+    Expand substitutions in equations following pattern.
+    Following expand(*vars) methods (arithmetic.py:319-329, operators.py:704-739).
     """
     
     # Get all variables for expansion
@@ -1843,7 +1843,7 @@ end
 
 function expand_expression(expr, variables::Vector)
     """
-    Expand expression over specified variables following Dedalus pattern.
+    Expand expression over specified variables following pattern.
     Following operators.py:expand and arithmetic.py:expand methods.
     """
     
