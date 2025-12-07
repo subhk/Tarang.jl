@@ -994,17 +994,179 @@ function get_global_shape(layout, domain_info, scales)
 end
 
 """
-Get local shape from layout (placeholder)
+    get_local_shape(layout, domain_info, scales, rank)
+
+Compute the local shape owned by a specific MPI rank after mesh decomposition.
+
+# Arguments
+- `layout`: Layout specification (symbol like :g/:c, or Layout object)
+- `domain_info`: Dict containing domain information from get_operator_domain
+- `scales`: Tuple of scale factors for dealiasing
+- `rank`: MPI rank (0-indexed)
+
+# Returns
+- Tuple of local dimensions for this rank
+
+The local shape depends on:
+1. The global shape (after scaling)
+2. The MPI mesh decomposition
+3. This rank's position in the mesh
+
+For dimensions that are decomposed, the local size is computed by
+dividing the global size among processes with remainder distribution.
 """
-function get_local_shape(layout, domain, scales, rank)
-    return domain["shape"]
+function get_local_shape(layout, domain_info, scales, rank)
+    # First get the scaled global shape
+    global_shape = get_global_shape(layout, domain_info, scales)
+
+    if isempty(global_shape)
+        return ()
+    end
+
+    # Get distributor for mesh decomposition info
+    dist = domain_info["dist"]
+
+    if dist === nothing || dist.size == 1 || dist.mesh === nothing
+        # Serial execution - local shape equals global shape
+        return global_shape
+    end
+
+    # Parallel execution - compute local shape based on mesh decomposition
+    mesh = dist.mesh
+    n_dims = length(global_shape)
+    n_mesh_dims = length(mesh)
+
+    local_dims = Vector{Int}(undef, n_dims)
+
+    # Decomposition applies to the last n_mesh_dims dimensions
+    # (matching PencilArrays convention)
+    for i in 1:n_dims
+        mesh_dim_idx = i - (n_dims - n_mesh_dims)
+
+        if mesh_dim_idx >= 1 && mesh_dim_idx <= n_mesh_dims
+            # This dimension is decomposed
+            n_procs = mesh[mesh_dim_idx]
+            proc_coord = get_process_coordinate_for_rank(dist, mesh_dim_idx, rank)
+            global_size = global_shape[i]
+
+            # Standard load-balanced decomposition
+            base_size = div(global_size, n_procs)
+            remainder = global_size % n_procs
+
+            if proc_coord < remainder
+                local_dims[i] = base_size + 1
+            else
+                local_dims[i] = base_size
+            end
+        else
+            # This dimension is not decomposed
+            local_dims[i] = global_shape[i]
+        end
+    end
+
+    return tuple(local_dims...)
 end
 
 """
-Get local start from layout (placeholder)
+    get_process_coordinate_for_rank(dist, mesh_dim, rank)
+
+Get the process coordinate in a specific mesh dimension for a given rank.
+Uses row-major ordering consistent with PencilArrays.
 """
-function get_local_start(layout, domain, scales, rank)
-    return ntuple(_ -> 0, length(domain["shape"]))
+function get_process_coordinate_for_rank(dist, mesh_dim::Int, rank::Int)
+    if dist.mesh === nothing
+        return 0
+    end
+
+    mesh = dist.mesh
+    n_mesh_dims = length(mesh)
+
+    # Compute coordinate using row-major ordering
+    remaining_rank = rank
+    for dim in 1:n_mesh_dims
+        stride = prod(mesh[dim+1:end]; init=1)
+        coord = div(remaining_rank, stride)
+        if dim == mesh_dim
+            return coord
+        end
+        remaining_rank = remaining_rank % stride
+    end
+
+    return 0
+end
+
+"""
+    get_local_start(layout, domain_info, scales, rank)
+
+Compute the global starting indices for a specific MPI rank's local data.
+
+# Arguments
+- `layout`: Layout specification (symbol like :g/:c, or Layout object)
+- `domain_info`: Dict containing domain information from get_operator_domain
+- `scales`: Tuple of scale factors for dealiasing
+- `rank`: MPI rank (0-indexed)
+
+# Returns
+- Tuple of 0-indexed starting indices for each dimension
+
+These indices represent where this rank's local data begins in the global
+array, which is essential for parallel NetCDF writes where each process
+writes to a different region of the global dataset.
+"""
+function get_local_start(layout, domain_info, scales, rank)
+    # First get the scaled global shape
+    global_shape = get_global_shape(layout, domain_info, scales)
+
+    if isempty(global_shape)
+        return ()
+    end
+
+    n_dims = length(global_shape)
+
+    # Get distributor for mesh decomposition info
+    dist = domain_info["dist"]
+
+    if dist === nothing || dist.size == 1 || dist.mesh === nothing
+        # Serial execution - starts at origin
+        return ntuple(_ -> 0, n_dims)
+    end
+
+    # Parallel execution - compute start indices based on mesh decomposition
+    mesh = dist.mesh
+    n_mesh_dims = length(mesh)
+
+    start_indices = Vector{Int}(undef, n_dims)
+
+    # Decomposition applies to the last n_mesh_dims dimensions
+    for i in 1:n_dims
+        mesh_dim_idx = i - (n_dims - n_mesh_dims)
+
+        if mesh_dim_idx >= 1 && mesh_dim_idx <= n_mesh_dims
+            # This dimension is decomposed - compute start index
+            n_procs = mesh[mesh_dim_idx]
+            proc_coord = get_process_coordinate_for_rank(dist, mesh_dim_idx, rank)
+            global_size = global_shape[i]
+
+            # Standard load-balanced decomposition
+            base_size = div(global_size, n_procs)
+            remainder = global_size % n_procs
+
+            # Compute start index (0-indexed for NetCDF)
+            if proc_coord < remainder
+                # Processes with coord < remainder get (base_size + 1) elements each
+                start_indices[i] = proc_coord * (base_size + 1)
+            else
+                # Processes with coord >= remainder get base_size elements each
+                # First 'remainder' processes take (base_size + 1) * remainder elements
+                start_indices[i] = remainder * (base_size + 1) + (proc_coord - remainder) * base_size
+            end
+        else
+            # This dimension is not decomposed - starts at 0
+            start_indices[i] = 0
+        end
+    end
+
+    return tuple(start_indices...)
 end
 
 """
