@@ -29,8 +29,8 @@ p = ScalarField(dist, "p", (x_basis, z_basis), Float64)
 problem = IVP([ux, uz, p])
 problem.parameters["nu"] = 1.0/Re
 
-Tarang.add_equation!(problem, "∂ₜ(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = nu*Δ(ux)")
-Tarang.add_equation!(problem, "∂ₜ(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = nu*Δ(uz)")
+Tarang.add_equation!(problem, "∂t(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = nu*Δ(ux)")
+Tarang.add_equation!(problem, "∂t(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = nu*Δ(uz)")
 Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
 
 # Bottom, left, right walls: no-slip
@@ -93,11 +93,11 @@ problem.parameters["tau"] = 0.01  # Diffusivity ratio
 problem.parameters["Ra_T"] = 1e6  # Thermal Rayleigh
 problem.parameters["Ra_S"] = 1e5  # Solutal Rayleigh
 
-Tarang.add_equation!(problem, "∂ₜ(ux) + ... = Pr*Δ(ux)")
-Tarang.add_equation!(problem, "∂ₜ(uz) + ... = Pr*Δ(uz) + Ra_T*Pr*T - Ra_S*Pr*S")
+Tarang.add_equation!(problem, "∂t(ux) + ... = Pr*Δ(ux)")
+Tarang.add_equation!(problem, "∂t(uz) + ... = Pr*Δ(uz) + Ra_T*Pr*T - Ra_S*Pr*S")
 Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
-Tarang.add_equation!(problem, "∂ₜ(T) + ... = Δ(T)")
-Tarang.add_equation!(problem, "∂ₜ(S) + ... = tau*Δ(S)")
+Tarang.add_equation!(problem, "∂t(T) + ... = Δ(T)")
+Tarang.add_equation!(problem, "∂t(S) + ... = tau*Δ(S)")
 ```
 
 ### Rotating Convection
@@ -110,9 +110,9 @@ problem.parameters["Ra"] = 1e7
 
 # Include Coriolis term: 2Ω × u
 Tarang.add_equation!(problem,
-    "∂ₜ(ux) + ... = Pr*Δ(ux) - (2/Ek)*uy")
+    "∂t(ux) + ... = Pr*Δ(ux) - (2/Ek)*uy")
 Tarang.add_equation!(problem,
-    "∂ₜ(uy) + ... = Pr*Δ(uy) + (2/Ek)*ux")
+    "∂t(uy) + ... = Pr*Δ(uy) + (2/Ek)*ux")
 ```
 
 ## Stratified Flows
@@ -123,10 +123,10 @@ Tarang.add_equation!(problem,
 problem = IVP([ux, uz, p, b])  # b = buoyancy
 problem.parameters["N2"] = 1.0  # Brunt-Väisälä frequency squared
 
-Tarang.add_equation!(problem, "∂ₜ(ux) + ... + ∂x(p) = nu*Δ(ux)")
-Tarang.add_equation!(problem, "∂ₜ(uz) + ... + ∂z(p) = nu*Δ(uz) + b")
+Tarang.add_equation!(problem, "∂t(ux) + ... + ∂x(p) = nu*Δ(ux)")
+Tarang.add_equation!(problem, "∂t(uz) + ... + ∂z(p) = nu*Δ(uz) + b")
 Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
-Tarang.add_equation!(problem, "∂ₜ(b) + N2*uz + ... = kappa*Δ(b)")
+Tarang.add_equation!(problem, "∂t(b) + N2*uz + ... = kappa*Δ(b)")
 ```
 
 ## Turbulence

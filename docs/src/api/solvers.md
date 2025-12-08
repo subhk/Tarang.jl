@@ -577,10 +577,10 @@ problem = IVP([u.components[1], u.components[2], p, T])
 problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
-add_equation!(problem, "∂ₜ(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)")
-add_equation!(problem, "∂ₜ(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T")
+add_equation!(problem, "∂t(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)")
+add_equation!(problem, "∂t(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T")
 add_equation!(problem, "∂x(u) + ∂z(w) = 0")
-add_equation!(problem, "∂ₜ(T) + u*∂x(T) + w*∂z(T) = Δ(T)")
+add_equation!(problem, "∂t(T) + u*∂x(T) + w*∂z(T) = Δ(T)")
 
 # Boundary conditions
 add_dirichlet_bc!(problem, "u(z=0) = 0")

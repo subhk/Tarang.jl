@@ -15,8 +15,8 @@ using Tarang
 problem = IVP([u, v, p, T])
 
 # Add evolution equations
-add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + nu*Δ(u)")
-add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)")
+add_equation!(problem, "∂t(u) = -u*∂x(u) + nu*Δ(u)")
+add_equation!(problem, "∂t(T) = -u*∂x(T) + kappa*Δ(T)")
 ```
 
 ### LBVP - Linear Boundary Value Problem
@@ -61,15 +61,15 @@ add_equation!(evp, "sigma*u_hat = Δ(u_hat)")
 
 ```julia
 # Format: "LHS = RHS"
-add_equation!(problem, "∂ₜ(u) = rhs_expression")
+add_equation!(problem, "∂t(u) = rhs_expression")
 
 # Multiple terms
-add_equation!(problem, "∂ₜ(u) + u*∂x(u) = nu*Δ(u) - ∂x(p)")
+add_equation!(problem, "∂t(u) + u*∂x(u) = nu*Δ(u) - ∂x(p)")
 ```
 
 ### Supported Operations
 
-- Derivatives: `∂x`, `∂y`, `∂z`, `∂ₜ`, `Δ`, `∇`, `div`, `curl`
+- Derivatives: `∂x`, `∂y`, `∂z`, `∂t`, `Δ`, `∇`, `div`, `curl`
 - Arithmetic: `+`, `-`, `*`, `/`
 - Functions: `sin`, `cos`, `exp`, `sqrt`
 - Parameters: Any name in `problem.parameters`
@@ -83,8 +83,8 @@ problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
 # Use in equations
-add_equation!(problem, "∂ₜ(u) = nu*Δ(u)")
-add_equation!(problem, "∂ₜ(T) = Ra*Pr*w + Δ(T)")
+add_equation!(problem, "∂t(u) = nu*Δ(u)")
+add_equation!(problem, "∂t(T) = Ra*Pr*w + Δ(T)")
 ```
 
 ## Boundary Conditions
@@ -144,7 +144,7 @@ is_valid = validate_problem(problem)
 ```julia
 problem = IVP([T])
 problem.parameters["kappa"] = 0.01
-add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
+add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 add_dirichlet_bc!(problem, "T(z=0) = 1")
 add_dirichlet_bc!(problem, "T(z=1) = 0")
 ```
@@ -156,8 +156,8 @@ problem = IVP([ux, uz, p])
 problem.parameters["nu"] = 0.01
 
 # Momentum
-add_equation!(problem, "∂ₜ(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = nu*Δ(ux)")
-add_equation!(problem, "∂ₜ(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = nu*Δ(uz)")
+add_equation!(problem, "∂t(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = nu*Δ(ux)")
+add_equation!(problem, "∂t(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = nu*Δ(uz)")
 
 # Continuity
 add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
@@ -176,10 +176,10 @@ problem = IVP([ux, uz, p, T])
 problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
-add_equation!(problem, "∂ₜ(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = Pr*Δ(ux)")
-add_equation!(problem, "∂ₜ(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
+add_equation!(problem, "∂t(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = Pr*Δ(ux)")
+add_equation!(problem, "∂t(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
 add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
-add_equation!(problem, "∂ₜ(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
+add_equation!(problem, "∂t(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
 
 # Boundary conditions
 add_dirichlet_bc!(problem, "ux(z=0) = 0")

@@ -258,7 +258,7 @@ function create_mhd_eigenvalue_problem(
     # 2. Linearized momentum equation:
     #    ∂u/∂t + U₀·∇u + u·∇U₀ = -∇p + Ra*Θ*ê_r + (1/Ek)*coriolis + (1/Ha²)*(∇×B)×B₀ + ν∇²u
     momentum_eq = """
-    ∂ₜ(u) + mean_flow_advection =
+    ∂t(u) + mean_flow_advection =
         -∇(p) + Rayleigh*Θ*ê_r + coriolis +
         (1/Hartmann^2)*lorentz_force - div(grad_u) + lift(τ_u2)
     """
@@ -267,7 +267,7 @@ function create_mhd_eigenvalue_problem(
     # 3. Linearized temperature equation:
     #    ∂Θ/∂t + U₀·∇Θ + u·∇T₀ = κ∇²Θ
     temperature_eq = """
-    ∂ₜ(Θ) + U0_phi*(1/r)*∂(Θ,φ) + u⋅∇(T0) =
+    ∂t(Θ) + U0_phi*(1/r)*∂(Θ,φ) + u⋅∇(T0) =
         (1/Prandtl)*div(grad_Θ) + (1/Prandtl)*lift(τ_Θ2)
     """
     add_equation!(problem, temperature_eq)
@@ -275,7 +275,7 @@ function create_mhd_eigenvalue_problem(
     # 4. Linearized magnetic induction equation:
     #    ∂B/∂t = ∇×(u×B₀) + ∇×(U₀×B) + η∇²B
     induction_eq = """
-    ∂ₜ(B) = induction_rhs + (1/Pm)*div(grad_B) + (1/Pm)*lift(τ_B2)
+    ∂t(B) = induction_rhs + (1/Pm)*div(grad_B) + (1/Pm)*lift(τ_B2)
     """
     add_equation!(problem, induction_eq)
     

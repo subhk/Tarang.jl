@@ -55,12 +55,12 @@ problem.parameters["Ra"] = Ra
 problem.parameters["Pr"] = Pr
 
 Tarang.add_equation!(problem,
-    "∂ₜ(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = Pr*Δ(ux)")
+    "∂t(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = Pr*Δ(ux)")
 Tarang.add_equation!(problem,
-    "∂ₜ(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
+    "∂t(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
 Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
 Tarang.add_equation!(problem,
-    "∂ₜ(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
+    "∂t(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
 ```
 
 ### Boundary Conditions

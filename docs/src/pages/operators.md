@@ -13,7 +13,7 @@ Operators perform mathematical operations on fields, including differentiation a
 ∂z(field)   # ∂/∂z
 
 # Example
-add_equation!(problem, "∂ₜ(T) = -u*∂x(T) - w*∂z(T)")
+add_equation!(problem, "∂t(T) = -u*∂x(T) - w*∂z(T)")
 ```
 
 ### Second Derivatives
@@ -32,7 +32,7 @@ add_equation!(problem, "∂ₜ(T) = -u*∂x(T) - w*∂z(T)")
 Δ(field)
 
 # Example: Diffusion equation
-add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
+add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 ```
 
 ### Fractional Laplacian
@@ -60,10 +60,10 @@ invsqrtlap(field)      # Same as fraclap(f, -0.5)
 
 ```julia
 # SQG buoyancy equation with fractional dissipation
-add_equation!(problem, "∂ₜ(θ) = -u⋅∇(θ) + κ*fraclap(θ, 0.5)")
+add_equation!(problem, "∂t(θ) = -u⋅∇(θ) + κ*fraclap(θ, 0.5)")
 
 # Can also be used on LHS (implicit treatment)
-add_equation!(problem, "∂ₜ(θ) + κ*fraclap(θ, 0.5) = -u⋅∇(θ)")
+add_equation!(problem, "∂t(θ) + κ*fraclap(θ, 0.5) = -u⋅∇(θ)")
 ```
 
 ## Vector Calculus
@@ -128,8 +128,8 @@ u = perp_grad(psi)
 ## Time Derivatives
 
 ```julia
-# ∂ₜ(field) for IVP equations
-add_equation!(problem, "∂ₜ(u) = rhs")
+# ∂t(field) for IVP equations
+add_equation!(problem, "∂t(u) = rhs")
 
 # Only valid in Initial Value Problems
 ```
@@ -143,7 +143,7 @@ Tarang supports Unicode mathematical notation for cleaner, more readable code:
 | `∇` | `grad` | Gradient |
 | `Δ` | `lap` | Laplacian |
 | `∇²` | `lap` | Laplacian (alternative) |
-| `∂ₜ` | `dt` | Time derivative |
+| `∂t` | `dt` | Time derivative |
 | `⋅` | `dot` | Dot product |
 | `×` | `cross` | Cross product |
 | `∇⊥` | `perp_grad` | Perpendicular gradient |
@@ -153,7 +153,7 @@ Tarang supports Unicode mathematical notation for cleaner, more readable code:
 
 ```julia
 # Unicode syntax (preferred)
-add_equation!(problem, "∂ₜ(u) + u⋅∇(u) = nu*Δ(u) - ∇(p)")
+add_equation!(problem, "∂t(u) + u⋅∇(u) = nu*Δ(u) - ∇(p)")
 
 # Traditional ASCII syntax (also supported)
 add_equation!(problem, "dt(u) + u*dx(u) = nu*lap(u) - grad(p)")
@@ -196,7 +196,7 @@ In Julia REPL or editors with Julia support:
 
 ```julia
 # Equations are strings parsed symbolically
-add_equation!(problem, "∂ₜ(T) + u*∂x(T) = kappa*Δ(T)")
+add_equation!(problem, "∂t(T) + u*∂x(T) = kappa*Δ(T)")
 
 # Supports:
 # - Addition/subtraction: +, -

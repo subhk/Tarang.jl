@@ -95,11 +95,11 @@ function main()
     Tarang.add_equation!(problem, "div(u) + tau_p = 0")
 
     # Buoyancy: ∂b/∂t - κ∇²b = -u⋅∇b
-    Tarang.add_equation!(problem, "∂ₜ(b) - kappa*Δ(b) + lift(tau_b2) = -u⋅∇(b)")
+    Tarang.add_equation!(problem, "∂t(b) - kappa*Δ(b) + lift(tau_b2) = -u⋅∇(b)")
 
     # Momentum (vector form): ∂u/∂t - ν∇²u + ∇p = -u⋅∇u + b*ez
     # ez is the unit vector in z-direction (buoyancy acts vertically)
-    Tarang.add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + b*ez")
+    Tarang.add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + b*ez")
 
     # Boundary conditions
     Tarang.add_bc!(problem, "b(z=0) = Lz")      # Hot bottom

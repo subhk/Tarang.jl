@@ -19,7 +19,7 @@ T = ScalarField(dist, "T", (basis,), Float64)
 problem = IVP([T])
 problem.parameters["kappa"] = 0.01
 
-Tarang.add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
+Tarang.add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 Tarang.add_dirichlet_bc!(problem, "T(x=0) = 1")  # Hot
 Tarang.add_dirichlet_bc!(problem, "T(x=1) = 0")  # Cold
 
@@ -53,7 +53,7 @@ T = ScalarField(dist, "T", (x_basis, z_basis), Float64)
 problem = IVP([T])
 problem.parameters["kappa"] = 0.1
 
-Tarang.add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
+Tarang.add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 
 # Dirichlet on all boundaries
 Tarang.add_dirichlet_bc!(problem, "T(x=0) = 0")
@@ -74,7 +74,7 @@ problem = IVP([T])
 problem.parameters["U"] = U
 problem.parameters["kappa"] = 0.01
 
-Tarang.add_equation!(problem, "∂ₜ(T) + U*∂x(T) = kappa*Δ(T)")
+Tarang.add_equation!(problem, "∂t(T) + U*∂x(T) = kappa*Δ(T)")
 ```
 
 ### Natural Convection
@@ -86,10 +86,10 @@ problem = IVP([ux, uz, p, T])
 problem.parameters["Ra"] = 1e5
 problem.parameters["Pr"] = 0.7
 
-Tarang.add_equation!(problem, "∂ₜ(ux) + ... + ∂x(p) = Pr*Δ(ux)")
-Tarang.add_equation!(problem, "∂ₜ(uz) + ... + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
+Tarang.add_equation!(problem, "∂t(ux) + ... + ∂x(p) = Pr*Δ(ux)")
+Tarang.add_equation!(problem, "∂t(uz) + ... + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
 Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
-Tarang.add_equation!(problem, "∂ₜ(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
+Tarang.add_equation!(problem, "∂t(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
 ```
 
 ## Boundary Conditions

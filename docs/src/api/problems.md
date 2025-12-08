@@ -153,10 +153,10 @@ add_equation!(problem, equation_string::String)
 
 ```julia
 # Diffusion
-add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
+add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 
 # Wave equation
-add_equation!(problem, "∂ₜ(∂ₜ(u)) = c^2*Δ(u)")
+add_equation!(problem, "∂t(∂t(u)) = c^2*Δ(u)")
 
 # Poisson
 add_equation!(problem, "Δ(phi) = rho")
@@ -166,25 +166,25 @@ add_equation!(problem, "Δ(phi) = rho")
 
 ```julia
 # Navier-Stokes momentum
-add_equation!(problem, "∂ₜ(u) + u*∂x(u) + w*∂z(u) = -∂x(p) + nu*Δ(u)")
+add_equation!(problem, "∂t(u) + u*∂x(u) + w*∂z(u) = -∂x(p) + nu*Δ(u)")
 
 # Energy equation with dissipation
-add_equation!(problem, "∂ₜ(T) + u*∂x(T) + w*∂z(T) = kappa*Δ(T) + Q")
+add_equation!(problem, "∂t(T) + u*∂x(T) + w*∂z(T) = kappa*Δ(T) + Q")
 
 # With parameters
-add_equation!(problem, "∂ₜ(T) = kappa*Δ(T) + Ra*Pr*w")
+add_equation!(problem, "∂t(T) = kappa*Δ(T) + Ra*Pr*w")
 ```
 
 #### Using Fields and Parameters
 
 ```julia
 # Fields are referenced by name
-add_equation!(problem, "∂ₜ(u) = -u*∂x(u)")  # u is a field
+add_equation!(problem, "∂t(u) = -u*∂x(u)")  # u is a field
 
 # Parameters from problem.parameters
 problem.parameters["nu"] = 0.01
 problem.parameters["Ra"] = 1e6
-add_equation!(problem, "∂ₜ(u) = nu*Δ(u) + Ra*T")
+add_equation!(problem, "∂t(u) = nu*Δ(u) + Ra*T")
 ```
 
 ---
@@ -212,12 +212,12 @@ problem.parameters["g"] = 9.81         # Gravitational acceleration
 
 ```julia
 # Reference by name in equations
-add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + nu*Δ(u)")
-add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)")
+add_equation!(problem, "∂t(u) = -u*∂x(u) + nu*Δ(u)")
+add_equation!(problem, "∂t(T) = -u*∂x(T) + kappa*Δ(T)")
 
 # Dimensionless formulation
-add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + (1/Re)*Δ(u)")
-add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + (1/(Re*Pr))*Δ(T) + Ra*Pr*w")
+add_equation!(problem, "∂t(u) = -u*∂x(u) + (1/Re)*Δ(u)")
+add_equation!(problem, "∂t(T) = -u*∂x(T) + (1/(Re*Pr))*Δ(T) + Ra*Pr*w")
 ```
 
 ### Modifying Parameters
@@ -472,8 +472,8 @@ validate_problem(problem)
 
 ```julia
 problem = IVP([u, v, p])
-add_equation!(problem, "∂ₜ(u) = -u*∂x(u) - v*∂z(u) - ∂x(p) + nu*Δ(u)")
-add_equation!(problem, "∂ₜ(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)")
+add_equation!(problem, "∂t(u) = -u*∂x(u) - v*∂z(u) - ∂x(p) + nu*Δ(u)")
+add_equation!(problem, "∂t(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)")
 add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 
 # Add boundary conditions
@@ -498,7 +498,7 @@ Define intermediate variables for readability:
 add_substitution!(problem, "omega", "∂x(v) - ∂z(u)")
 
 # Use in equations
-add_equation!(problem, "∂ₜ(omega) = -u*∂x(omega) - v*∂z(omega) + nu*Δ(omega)")
+add_equation!(problem, "∂t(omega) = -u*∂x(omega) - v*∂z(omega) + nu*Δ(omega)")
 ```
 
 ### Common Substitutions
@@ -571,10 +571,10 @@ problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
 # Equations
-add_equation!(problem, "∂ₜ(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)")
-add_equation!(problem, "∂ₜ(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T")
+add_equation!(problem, "∂t(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)")
+add_equation!(problem, "∂t(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T")
 add_equation!(problem, "∂x(u) + ∂z(w) = 0")
-add_equation!(problem, "∂ₜ(T) + u*∂x(T) + w*∂z(T) = Δ(T)")
+add_equation!(problem, "∂t(T) + u*∂x(T) + w*∂z(T) = Δ(T)")
 
 # Boundary conditions
 add_dirichlet_bc!(problem, "u(z=0) = 0")
