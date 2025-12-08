@@ -109,13 +109,19 @@ function replace_operand(arg, old, new)
     elseif isa(old, Type) && arg isa old
         return new
     elseif arg isa Future
-        return replace(arg, old, new)
+        return substitute_future(arg, old, new)
     else
         return arg
     end
 end
 
-function replace(f::Future, old, new)
+"""
+    substitute_future(f::Future, old, new)
+
+Substitute `old` with `new` in a Future expression tree.
+Named to avoid shadowing Base.replace.
+"""
+function substitute_future(f::Future, old, new)
     if f === old || (isa(old, Type) && f isa old)
         return new
     end
