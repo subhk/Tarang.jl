@@ -95,8 +95,8 @@ dist.mesh       # Process mesh tuple
 ### Local vs Global Indices
 
 ```julia
-# Get local indices for this process
-local_idx = local_indices(dist, axis, global_size)
+# Get local indices for this process (internal function)
+local_idx = Tarang.local_indices(dist, axis, global_size)
 
 # Example: axis 1 with 128 global points on 4 processes
 # Process 0: 1:32

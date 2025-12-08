@@ -230,13 +230,14 @@ mpiexec -n 8 julia script.jl
 Enable performance logging:
 
 ```julia
-using Tarang.Logging
+using Tarang
 
-setup_tarang_logging(
+# Setup logging with MPI awareness
+Tarang.setup_tarang_logging(
     level="INFO",
     filename="performance.log",
     mpi_aware=true,
-    profile_dir="profiles"
+    console=true
 )
 ```
 

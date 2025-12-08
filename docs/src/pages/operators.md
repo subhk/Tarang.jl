@@ -264,14 +264,18 @@ function advection(u, field)
 end
 ```
 
-### Registered Operators
+### Using Built-in Operators in Equations
+
+The equation parser recognizes all built-in operators:
 
 ```julia
-# Register custom operator with problem
-problem.operators["advect"] = advection
+# Available operators in equations:
+# grad, div, curl, lap (or Δ), dt (or ∂t), d
+# integrate, average, interpolate, convert, lift
+# sin, cos, tan, exp, log, sqrt, abs, tanh
 
-# Use in equations
-add_equation!(problem, "∂t(T) = -advect(u, T)")
+# Use operators directly
+add_equation!(problem, "∂t(T) = -ux*∂x(T) - uz*∂z(T) + kappa*Δ(T)")
 ```
 
 ## Performance Tips

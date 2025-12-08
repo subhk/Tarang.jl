@@ -90,8 +90,8 @@ local_size = size(local_data)
 # Global size
 global_size = (basis1.size, basis2.size)
 
-# Local index range
-start_idx = local_indices(dist, axis, global_size[axis])
+# Local index range (internal function)
+start_idx = Tarang.local_indices(dist, axis, global_size[axis])
 ```
 
 ## Communication Patterns
@@ -107,13 +107,13 @@ Communication happens automatically during:
 ### Manual Communication
 
 ```julia
-# Global reduction
+# Global reduction using MPI directly
 local_max = maximum(field.data_g)
 global_max = MPI.Allreduce(local_max, MPI.MAX, MPI.COMM_WORLD)
 
-# Using Tarang's reducer
-reducer = GlobalArrayReducer(MPI.COMM_WORLD)
-global_max = reduce_scalar(reducer, local_max, MPI.MAX)
+# Global sum
+local_sum = sum(field.data_g)
+global_sum = MPI.Allreduce(local_sum, MPI.SUM, MPI.COMM_WORLD)
 ```
 
 ## Output Strategies

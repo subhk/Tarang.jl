@@ -168,8 +168,8 @@ local_data = field.data_g
 # Local array size
 local_size = size(local_data)
 
-# Global index range for this process
-start_idx, end_idx = local_indices(dist, axis, global_size)
+# Global index range for this process (internal function)
+start_idx, end_idx = Tarang.local_indices(dist, axis, global_size)
 ```
 
 ## Coordinate Systems
