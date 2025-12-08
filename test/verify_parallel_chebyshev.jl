@@ -29,9 +29,9 @@ fftw_loaded = false
 try
     @eval using FFTW
     global fftw_loaded = true
-    println("✓ FFTW loaded successfully")
+    println("FFTW loaded successfully")
 catch e
-    println("⚠ FFTW not available, skipping DCT tests")
+    println("WARNING: FFTW not available, skipping DCT tests")
 end
 
 # ============================================================================
@@ -74,7 +74,7 @@ if fftw_loaded
             @test abs(coeffs[k]) < 1e-10
         end
 
-        println("✓ DCT correctly identifies T_2(x) = 2x² - 1")
+        println("DCT correctly identifies T_2(x) = 2x^2 - 1")
     end
 
     # ============================================================================
@@ -116,7 +116,7 @@ if fftw_loaded
         error = norm(recovered - original) / norm(original)
         @test error < 1e-12
 
-        println("✓ 1D Round-trip error: $error (should be < 1e-12)")
+        println("1D Round-trip error: $error (should be < 1e-12)")
     end
 
     # ============================================================================
@@ -201,7 +201,7 @@ if fftw_loaded
         error = norm(data - original) / norm(original)
         @test error < 1e-12
 
-        println("✓ 2D round-trip error: $error")
+        println("2D round-trip error: $error")
     end
 end
 
@@ -219,7 +219,7 @@ end
     @test insert_index_test((2, 3), 2, 5) == (2, 5, 3)
     @test insert_index_test((2, 3), 3, 5) == (2, 3, 5)
 
-    println("✓ insert_index helper works correctly")
+    println("insert_index helper works correctly")
 end
 
 # ============================================================================
@@ -263,7 +263,7 @@ end
         end
     end
 
-    println("✓ Transpose packing logic verified")
+    println("Transpose packing logic verified")
 end
 
 # ============================================================================
@@ -296,7 +296,7 @@ try
         @test Tarang.is_pencil_compatible((xb, yb)) == true
 
         if rank == 0
-            println("✓ is_pencil_compatible returns true for Chebyshev-Chebyshev")
+            println("is_pencil_compatible returns true for Chebyshev-Chebyshev")
         end
 
         # Create domain (this should set up parallel transforms)
@@ -308,13 +308,13 @@ try
             @test has_parallel
 
             if rank == 0
-                println("✓ ParallelChebyshevTransform created for multi-process run")
+                println("ParallelChebyshevTransform created for multi-process run")
             end
         end
     end
 
     if rank == 0
-        println("\n✓ All Tarang integration tests passed!")
+        println("\nAll Tarang integration tests passed!")
     end
 
     MPI.Finalize()

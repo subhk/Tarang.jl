@@ -121,7 +121,7 @@ if nprocs > 1
     end
 
     if rank == 0
-        println("\n✓ All parallel Chebyshev-Chebyshev tests passed!")
+        println("\nAll parallel Chebyshev-Chebyshev tests passed!")
     end
 
 else
