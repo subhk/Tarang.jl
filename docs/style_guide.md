@@ -21,7 +21,7 @@ This guide provides an overview of the Tarang framework. Each section describes 
 
 ## Solvers & Timesteppers
 - Solvers: `InitialValueSolver(problem, timestepper)`, `BoundaryValueSolver(problem)`, `EigenvalueSolver(problem)`.
-- Timesteppers: `RK111`, `RK222`, `RK443`, `CNAB1`, `CNAB2`, `SBDF1`-`SBDF4` (IMEX family). Pick explicit vs IMEX per stiffness.
+- Timesteppers: `RK111`, `RK222`, `RK443` (IMEX Runge-Kutta), `CNAB1`, `CNAB2`, `SBDF1`-`SBDF4` (IMEX multistep). All methods treat linear terms implicitly and nonlinear terms explicitly.
 - CFL helper: `CFL(problem; ...)` then `add_velocity!(cfl, u)` and `compute_timestep(cfl)`.
 
 ## Analysis & Output

@@ -97,7 +97,7 @@ Key edits for your problem:
 - Pick bases per coordinate (Fourier for periodic; Chebyshev/Legendre for bounded).
 - Add/remove fields in the `IVP` list.
 - Modify equations and boundary conditions to match your PDEs.
-- Choose a timestepper that fits stiffness: `RK222`/`RK443` (explicit), `CNAB2`/`SBDFk` (IMEX).
+- Choose a timestepper: `RK222`/`RK443` (IMEX Runge-Kutta), `CNAB2`/`SBDFk` (IMEX multistep).
 
 ## 5. Running with MPI
 Save your script (e.g., `rbc.jl`) and launch:

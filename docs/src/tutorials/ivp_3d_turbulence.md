@@ -160,8 +160,8 @@ end
 
 ```julia
 # Timestepper selection
-# - RK443 for explicit integration
-# - SBDF2/SBDF3 for stiff problems at high Re
+# - RK443 for IMEX Runge-Kutta integration
+# - SBDF2/SBDF3 for very stiff problems at high Re
 timestepper = RK443()
 
 # Create solver

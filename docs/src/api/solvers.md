@@ -27,7 +27,7 @@ InitialValueSolver(
 **Examples**:
 
 ```julia
-# Explicit Runge-Kutta
+# IMEX Runge-Kutta
 solver = InitialValueSolver(problem, RK222(), dt=0.001)
 
 # IMEX timestepper

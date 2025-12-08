@@ -12,11 +12,11 @@ abstract type TimeStepper end
 
 All timesteppers inherit from this abstract type.
 
-## Explicit Runge-Kutta
+## IMEX Runge-Kutta
 
 ### RK111
 
-Forward Euler method (1st order).
+1st-order IMEX Runge-Kutta.
 
 ```julia
 RK111()
@@ -25,12 +25,13 @@ RK111()
 **Properties**:
 - Order: 1
 - Stages: 1
-- Stability: CFL limited
+- Implicit part: Backward Euler for linear terms
+- Explicit part: Forward Euler for nonlinear terms
 - Memory: Minimal
 
 ### RK222
 
-2nd-order, 2-stage Runge-Kutta.
+2nd-order, 2-stage IMEX Runge-Kutta.
 
 ```julia
 RK222()
@@ -39,28 +40,30 @@ RK222()
 **Properties**:
 - Order: 2
 - Stages: 2
-- Stability: Good
+- Implicit part: 2-stage DIRK for linear terms
+- Explicit part: 2-stage explicit RK for nonlinear terms
 - Memory: 2 state copies
 
-**Recommended for**: General purpose non-stiff problems.
+**Recommended for**: General purpose problems.
 
 ### RK443
 
-4th-order, 4-stage Runge-Kutta.
+3rd-order, 4-stage IMEX Runge-Kutta.
 
 ```julia
 RK443()
 ```
 
 **Properties**:
-- Order: 4
+- Order: 3
 - Stages: 4
-- Stability: Excellent
+- Implicit part: 4-stage DIRK for linear terms
+- Explicit part: 4-stage explicit RK for nonlinear terms
 - Memory: 4 state copies
 
 **Recommended for**: High accuracy requirements.
 
-## IMEX Methods
+## IMEX Multistep Methods
 
 ### CNAB (Crank-Nicolson Adams-Bashforth)
 
@@ -157,10 +160,10 @@ Only advective CFL, not diffusive.
 
 | Problem Type | Method | Reason |
 |--------------|--------|--------|
-| Pure advection | RK443 | High accuracy |
+| General purpose | RK222 | Balance of cost/accuracy |
+| High accuracy | RK443 | More stages, higher order |
 | Diffusion-dominated | SBDF2 | Implicit diffusion |
-| High Re convection | RK222 | Balance of cost/accuracy |
-| Stiff reactions | SBDF3/SBDF4 | Strong stability |
+| Very stiff | SBDF3/SBDF4 | Strong stability |
 
 ## Performance
 

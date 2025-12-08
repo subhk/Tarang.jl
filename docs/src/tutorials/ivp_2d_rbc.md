@@ -200,8 +200,8 @@ solver = InitialValueSolver(problem, timestepper, dt=1e-4)
 ```
 
 **Timestepper selection**:
-- Ra < 10⁵: RK222 or RK443 (explicit)
-- Ra > 10⁵: CNAB2 or SBDF2 (IMEX methods)
+- Ra < 10⁵: RK222 or RK443 (IMEX Runge-Kutta)
+- Ra > 10⁵: CNAB2 or SBDF2 (IMEX multistep)
 - Very high Ra: SBDF3 or SBDF4
 
 ### Adaptive Time Stepping (CFL)
