@@ -91,12 +91,12 @@ function plan_transforms!(dist::Distributor, domain::Domain)
 
     gshape = global_shape(domain)
     ndim = length(domain.bases)
-    
+
     # Analyze basis types
     fourier_axes = Int[]
     chebyshev_axes = Int[]
     legendre_axes = Int[]
-    
+
     for (i, basis) in enumerate(domain.bases)
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
             push!(fourier_axes, i)
@@ -106,7 +106,7 @@ function plan_transforms!(dist::Distributor, domain::Domain)
             push!(legendre_axes, i)
         end
     end
-    
+
     # Use PencilFFTs for multi-dimensional problems with Fourier components
     if ndim >= 2 && length(fourier_axes) >= 1
         if ndim == 2
@@ -117,8 +117,27 @@ function plan_transforms!(dist::Distributor, domain::Domain)
             @warn "PencilFFTs not configured for $(ndim)D, falling back to FFTW"
             setup_fftw_transforms_nd!(dist, domain, fourier_axes)
         end
+
+    # Use parallel Chebyshev transforms for multi-D Chebyshev-only domains
+    elseif ndim >= 2 && length(chebyshev_axes) >= 2 && dist.size > 1
+        # Pure Chebyshev multi-dimensional domain with MPI
+        setup_parallel_chebyshev_transforms!(dist, domain, chebyshev_axes)
+
+        # Also setup any non-Chebyshev transforms
+        for (i, basis) in enumerate(domain.bases)
+            if isa(basis, Legendre)
+                setup_legendre_transform!(dist, basis, i)
+            end
+        end
+
+        if dist.rank == 0
+            @info "Using parallel Chebyshev-Chebyshev transforms"
+            @info "  Chebyshev axes: $chebyshev_axes"
+            @info "  Process mesh: $(dist.mesh)"
+        end
+
     else
-        # 1D case or no Fourier components - use regular FFTW/matrices
+        # 1D case, serial, or mixed non-Fourier - use regular transforms
         for (i, basis) in enumerate(domain.bases)
             if isa(basis, RealFourier) || isa(basis, ComplexFourier)
                 setup_fftw_transform!(dist, basis, i)
@@ -460,18 +479,29 @@ end
 # Transform execution functions
 function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
     """Apply forward transform to field"""
-    
+
     if field.domain === nothing
         return
     end
-    
+
     ensure_layout!(field, :g)  # Start in grid space
-    
+
     # Find appropriate transform
     for transform in field.dist.transforms
         if isa(transform, PencilFFTs.PencilFFTPlan)
             # Use PencilFFT for parallel 2D FFT
             field.data_c = transform * field.data_g
+            field.current_layout = :c
+            return
+        elseif isa(transform, ParallelChebyshevTransform)
+            # Use parallel Chebyshev transform
+            if field.data_c === nothing
+                field.data_c = similar(field.data_g, ComplexF64)
+            end
+            # Copy to temporary real array for transform
+            temp_data = copy(real.(field.data_g))
+            apply_parallel_chebyshev_forward!(temp_data, transform, field.dist)
+            field.data_c .= temp_data
             field.current_layout = :c
             return
         elseif isa(transform, FourierTransform)
@@ -491,7 +521,7 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
             return
         end
     end
-    
+
     # Fallback for other transforms
     field.data_c .= field.data_g
     field.current_layout = :c
@@ -512,18 +542,29 @@ end
 
 function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
     """Apply backward transform to field """
-    
+
     if field.domain === nothing
         return
     end
-    
+
     ensure_layout!(field, :c)  # Start in coefficient space
-    
+
     # Find appropriate transform
     for transform in field.dist.transforms
         if isa(transform, PencilFFTs.PencilFFTPlan)
             # Use PencilFFT for parallel 2D FFT
             field.data_g = inv(transform) * field.data_c
+            field.current_layout = :g
+            return
+        elseif isa(transform, ParallelChebyshevTransform)
+            # Use parallel Chebyshev transform
+            if field.data_g === nothing
+                field.data_g = similar(field.data_c, Float64)
+            end
+            # Copy to temporary real array for transform
+            temp_data = copy(real.(field.data_c))
+            apply_parallel_chebyshev_backward!(temp_data, transform, field.dist)
+            field.data_g .= temp_data
             field.current_layout = :g
             return
         elseif isa(transform, FourierTransform)
@@ -543,7 +584,7 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
             return
         end
     end
-    
+
     # Fallback for other transforms
     field.data_g .= field.data_c
     field.current_layout = :g
@@ -1390,23 +1431,28 @@ function synchronize_transforms!(transforms::Vector)
 end
 
 function is_pencil_compatible(bases::Tuple{Vararg{Basis}})
-    """Check if bases are compatible with PencilFFTs"""
+    """Check if bases are compatible with parallel transforms (PencilArrays)"""
     ndim = length(bases)
-    
+
     if ndim < 2
-        return false  # PencilFFTs is for multi-dimensional problems
+        return false  # Parallel transforms are for multi-dimensional problems
     end
-    
+
+    # Count different basis types
     fourier_count = 0
+    chebyshev_count = 0
     for basis in bases
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
             fourier_count += 1
+        elseif isa(basis, ChebyshevT)
+            chebyshev_count += 1
         end
     end
-    
-    # PencilFFTs is beneficial when we have at least one Fourier dimension
-    # and multi-dimensional domain
-    return fourier_count >= 1 && ndim >= 2
+
+    # Parallel transforms work for:
+    # 1. At least one Fourier dimension (uses PencilFFTs)
+    # 2. Pure Chebyshev multi-D (uses parallel DCT with transposes)
+    return (fourier_count >= 1 || chebyshev_count >= 2) && ndim >= 2
 end
 
 function is_3d_pencil_optimal(bases::Tuple{Vararg{Basis}})
@@ -1414,12 +1460,1054 @@ function is_3d_pencil_optimal(bases::Tuple{Vararg{Basis}})
     if length(bases) != 3
         return false
     end
-    
+
     fourier_count = count(b -> isa(b, Union{RealFourier, ComplexFourier}), bases)
-    
+
     # 3D PencilFFTs is optimal when:
     # - All 3 dimensions are Fourier (best case)
     # - 2 out of 3 dimensions are Fourier (good case)
     # - Even 1 Fourier dimension can benefit from 3D decomposition
     return fourier_count >= 1
+end
+
+# ============================================================================
+# Parallel Chebyshev-Chebyshev Transform Support
+# ============================================================================
+
+"""
+    ParallelChebyshevTransform
+
+Struct for managing parallel multi-dimensional Chebyshev transforms.
+
+For 2D Chebyshev-Chebyshev domains, the transform strategy is:
+1. Start with data decomposed in last dimension (first dim is local)
+2. Do DCT in first direction (local operation)
+3. Transpose to make second direction local
+4. Do DCT in second direction (local operation)
+
+This mirrors how PencilFFTs handles multi-dimensional FFTs but uses DCT.
+"""
+mutable struct ParallelChebyshevTransform <: Transform
+    ndim::Int
+    bases::Tuple{Vararg{ChebyshevT}}
+    axis_order::Vector{Int}  # Order of axes for transforms
+
+    # Per-axis DCT plans
+    forward_plans::Vector{Any}
+    backward_plans::Vector{Any}
+
+    # Scaling factors per axis
+    forward_rescale_zero::Vector{Float64}
+    forward_rescale_pos::Vector{Float64}
+    backward_rescale_zero::Vector{Float64}
+    backward_rescale_pos::Vector{Float64}
+
+    # Size information
+    grid_sizes::Vector{Int}
+    coeff_sizes::Vector{Int}
+
+    # Pencil configurations for different decompositions
+    pencils::Vector{Any}  # PencilArrays.Pencil objects for each transpose stage
+    transpose_buffers::Vector{Any}  # Pre-allocated buffers for transposes
+
+    # MPI info
+    comm::MPI.Comm
+    nprocs::Int
+    rank::Int
+
+    function ParallelChebyshevTransform(bases::Tuple{Vararg{ChebyshevT}}, comm::MPI.Comm)
+        ndim = length(bases)
+        new(
+            ndim,
+            bases,
+            collect(1:ndim),
+            Vector{Any}(undef, ndim),
+            Vector{Any}(undef, ndim),
+            zeros(ndim),
+            zeros(ndim),
+            zeros(ndim),
+            zeros(ndim),
+            [b.meta.size for b in bases],
+            [b.meta.size for b in bases],
+            Any[],
+            Any[],
+            comm,
+            MPI.Comm_size(comm),
+            MPI.Comm_rank(comm)
+        )
+    end
+end
+
+"""
+    setup_parallel_chebyshev_transforms!(dist::Distributor, domain::Domain, chebyshev_axes::Vector{Int})
+
+Setup parallel transforms for multi-dimensional Chebyshev domains.
+Uses pencil decomposition with transposes for efficient parallel DCT.
+"""
+function setup_parallel_chebyshev_transforms!(dist::Distributor, domain::Domain, chebyshev_axes::Vector{Int})
+    ndim = length(domain.bases)
+
+    if ndim < 2
+        @warn "Parallel Chebyshev transforms require at least 2D domain"
+        return
+    end
+
+    # Extract Chebyshev bases
+    cheb_bases = Tuple(domain.bases[i] for i in chebyshev_axes)
+
+    # Create parallel transform object
+    transform = ParallelChebyshevTransform(cheb_bases, dist.comm)
+
+    # Setup global shape
+    global_shape = tuple([b.meta.size for b in domain.bases]...)
+
+    # Setup pencil decomposition for parallel operation
+    if dist.size > 1
+        setup_chebyshev_pencil_decomposition!(transform, dist, global_shape, chebyshev_axes)
+    end
+
+    # Setup DCT plans for each axis
+    for (local_idx, global_idx) in enumerate(chebyshev_axes)
+        basis = domain.bases[global_idx]
+        grid_size = basis.meta.size
+
+        # Create DCT plans
+        try
+            transform.forward_plans[local_idx] = FFTW.plan_r2r(
+                zeros(grid_size), FFTW.REDFT10, flags=FFTW.MEASURE
+            )
+            transform.backward_plans[local_idx] = FFTW.plan_r2r(
+                zeros(grid_size), FFTW.REDFT01, flags=FFTW.MEASURE
+            )
+        catch e
+            @warn "FFTW DCT plan failed for axis $global_idx: $e"
+            transform.forward_plans[local_idx] = nothing
+            transform.backward_plans[local_idx] = nothing
+        end
+
+        # Set scaling factors (same as serial Chebyshev)
+        transform.forward_rescale_zero[local_idx] = 1.0 / grid_size / 2.0
+        transform.forward_rescale_pos[local_idx] = 1.0 / grid_size
+        transform.backward_rescale_zero[local_idx] = 1.0
+        transform.backward_rescale_pos[local_idx] = 0.5
+
+        transform.grid_sizes[local_idx] = grid_size
+        transform.coeff_sizes[local_idx] = grid_size
+    end
+
+    push!(dist.transforms, transform)
+
+    if dist.rank == 0
+        @info "Setup parallel Chebyshev transform for $(ndim)D domain"
+        @info "  Global shape: $global_shape"
+        @info "  Process mesh: $(dist.mesh)"
+        @info "  Chebyshev axes: $chebyshev_axes"
+    end
+end
+
+"""
+    setup_chebyshev_pencil_decomposition!(transform::ParallelChebyshevTransform,
+                                           dist::Distributor, global_shape::Tuple,
+                                           chebyshev_axes::Vector{Int})
+
+Setup pencil decomposition for parallel Chebyshev transforms.
+Creates pencil configurations for each transpose stage.
+"""
+function setup_chebyshev_pencil_decomposition!(transform::ParallelChebyshevTransform,
+                                                dist::Distributor, global_shape::Tuple,
+                                                chebyshev_axes::Vector{Int})
+    ndim = length(global_shape)
+
+    # For 2D: we need two pencil configurations
+    # Pencil 1: decompose in dim 2, local in dim 1 (for x-transform)
+    # Pencil 2: decompose in dim 1, local in dim 2 (for y-transform)
+
+    if ndim == 2
+        # Initialize MPI topology if not done
+        if dist.mpi_topology === nothing
+            try
+                dist.mpi_topology = PencilArrays.MPITopology(dist.comm, (dist.size,))
+            catch e
+                @warn "Failed to create MPI topology: $e"
+            end
+        end
+
+        if dist.mpi_topology !== nothing
+            try
+                # Pencil 1: decompose last dimension (y), x is local
+                pencil1 = PencilArrays.Pencil(dist.mpi_topology, global_shape, (2,))
+                push!(transform.pencils, pencil1)
+
+                # Pencil 2: decompose first dimension (x), y is local
+                pencil2 = PencilArrays.Pencil(pencil1; decomp_dims=(1,))
+                push!(transform.pencils, pencil2)
+
+                # Pre-allocate transpose buffers
+                push!(transform.transpose_buffers, PencilArrays.PencilArray{Float64}(undef, pencil1))
+                push!(transform.transpose_buffers, PencilArrays.PencilArray{Float64}(undef, pencil2))
+
+                @debug "Created pencil decomposition for 2D Chebyshev"
+            catch e
+                @warn "Pencil decomposition setup failed: $e, using fallback"
+                setup_chebyshev_manual_decomposition!(transform, dist, global_shape)
+            end
+        else
+            setup_chebyshev_manual_decomposition!(transform, dist, global_shape)
+        end
+
+    elseif ndim == 3
+        # For 3D: need three pencil configurations
+        if dist.mpi_topology !== nothing
+            try
+                # Pencil 1: decompose dims (2,3), x is local
+                pencil1 = PencilArrays.Pencil(dist.mpi_topology, global_shape, (2, 3))
+                push!(transform.pencils, pencil1)
+
+                # Pencil 2: decompose dims (1,3), y is local
+                pencil2 = PencilArrays.Pencil(pencil1; decomp_dims=(1, 3))
+                push!(transform.pencils, pencil2)
+
+                # Pencil 3: decompose dims (1,2), z is local
+                pencil3 = PencilArrays.Pencil(pencil1; decomp_dims=(1, 2))
+                push!(transform.pencils, pencil3)
+
+                # Pre-allocate buffers
+                for pencil in [pencil1, pencil2, pencil3]
+                    push!(transform.transpose_buffers, PencilArrays.PencilArray{Float64}(undef, pencil))
+                end
+
+                @debug "Created pencil decomposition for 3D Chebyshev"
+            catch e
+                @warn "3D Pencil decomposition failed: $e"
+                setup_chebyshev_manual_decomposition!(transform, dist, global_shape)
+            end
+        else
+            setup_chebyshev_manual_decomposition!(transform, dist, global_shape)
+        end
+    end
+end
+
+"""
+    setup_chebyshev_manual_decomposition!(transform::ParallelChebyshevTransform,
+                                           dist::Distributor, global_shape::Tuple)
+
+Fallback manual decomposition when PencilArrays setup fails.
+Uses simple slab decomposition with MPI_Alltoall for transposes.
+"""
+function setup_chebyshev_manual_decomposition!(transform::ParallelChebyshevTransform,
+                                                dist::Distributor, global_shape::Tuple)
+    # Store global shape for manual transpose operations
+    transform.pencils = Any[global_shape]
+
+    # Allocate send/receive buffers for all-to-all
+    total_size = prod(global_shape)
+    local_size = div(total_size, dist.size)
+
+    push!(transform.transpose_buffers, zeros(Float64, local_size))
+    push!(transform.transpose_buffers, zeros(Float64, local_size))
+
+    @debug "Using manual slab decomposition for parallel Chebyshev"
+end
+
+"""
+    apply_parallel_chebyshev_forward!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                       dist::Distributor)
+
+Apply forward parallel Chebyshev transform (grid → coefficients).
+"""
+function apply_parallel_chebyshev_forward!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                            dist::Distributor)
+    ndim = transform.ndim
+
+    if dist.size == 1
+        # Serial: just apply DCT along each axis
+        return apply_serial_chebyshev_forward!(data, transform)
+    end
+
+    # Parallel transform with transposes
+    if ndim == 2
+        apply_parallel_chebyshev_forward_2d!(data, transform, dist)
+    elseif ndim == 3
+        apply_parallel_chebyshev_forward_3d!(data, transform, dist)
+    else
+        @warn "Parallel Chebyshev not implemented for $(ndim)D, using serial"
+        return apply_serial_chebyshev_forward!(data, transform)
+    end
+end
+
+"""
+    apply_parallel_chebyshev_forward_2d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                          dist::Distributor)
+
+Forward transform for 2D parallel Chebyshev.
+Strategy:
+1. Data starts decomposed in y (each proc has full x)
+2. DCT in x direction (local)
+3. Transpose (all-to-all) to decompose in x (each proc has full y)
+4. DCT in y direction (local)
+
+Optimized with:
+- Pre-allocated workspace buffers
+- Non-blocking MPI communication
+- SIMD-optimized loops
+"""
+function apply_parallel_chebyshev_forward_2d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                               dist::Distributor)
+    Nx, Ny_local = size(data)
+
+    # Pre-allocate workspace for DCT
+    temp_x = zeros(Nx)
+    temp_y = zeros(Ny_local * dist.size)  # Will hold full y after transpose
+
+    # Step 1: DCT in x direction (x is fully local)
+    if transform.forward_plans[1] !== nothing
+        plan = transform.forward_plans[1]
+        scale_zero = transform.forward_rescale_zero[1]
+        scale_pos = transform.forward_rescale_pos[1]
+
+        @inbounds for j in 1:Ny_local
+            # Extract x-line
+            x_line = view(data, :, j)
+
+            # Apply DCT
+            mul!(temp_x, plan, x_line)
+
+            # Apply scaling with SIMD
+            x_line[1] = temp_x[1] * scale_zero
+            @simd for i in 2:Nx
+                x_line[i] = temp_x[i] * scale_pos
+            end
+        end
+    end
+
+    # Step 2: Transpose (decompose x, make y local)
+    if length(transform.pencils) >= 2 && !isempty(transform.transpose_buffers)
+        try
+            # Use PencilArrays transpose
+            src = transform.transpose_buffers[1]
+            dest = transform.transpose_buffers[2]
+            copyto!(parent(src), data)
+            PencilArrays.transpose!(dest, src)
+            data_transposed = parent(dest)
+        catch e
+            @debug "PencilArrays transpose failed, using optimized MPI: $e"
+            data_transposed = optimized_manual_transpose_2d!(data, dist)
+        end
+    else
+        data_transposed = optimized_manual_transpose_2d!(data, dist)
+    end
+
+    Nx_local, Ny = size(data_transposed)
+
+    # Step 3: DCT in y direction (y is now fully local)
+    if transform.forward_plans[2] !== nothing
+        plan = transform.forward_plans[2]
+        scale_zero = transform.forward_rescale_zero[2]
+        scale_pos = transform.forward_rescale_pos[2]
+
+        # Resize temp buffer if needed
+        if length(temp_y) < Ny
+            resize!(temp_y, Ny)
+        end
+
+        @inbounds for i in 1:Nx_local
+            y_line = view(data_transposed, i, :)
+
+            # Apply DCT
+            mul!(temp_y, plan, y_line)
+
+            # Apply scaling with SIMD
+            y_line[1] = temp_y[1] * scale_zero
+            @simd for j in 2:Ny
+                y_line[j] = temp_y[j] * scale_pos
+            end
+        end
+    end
+
+    # Transpose back to original decomposition
+    if length(transform.pencils) >= 2 && !isempty(transform.transpose_buffers)
+        try
+            src = transform.transpose_buffers[2]
+            dest = transform.transpose_buffers[1]
+            copyto!(parent(src), data_transposed)
+            PencilArrays.transpose!(dest, src)
+            copyto!(data, parent(dest))
+        catch e
+            @debug "Transpose back failed, using optimized manual: $e"
+            result = optimized_manual_transpose_2d!(data_transposed, dist)
+            copyto!(data, result)
+        end
+    else
+        result = optimized_manual_transpose_2d!(data_transposed, dist)
+        copyto!(data, result)
+    end
+end
+
+"""
+    apply_parallel_chebyshev_backward_2d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                           dist::Distributor)
+
+Backward transform for 2D parallel Chebyshev.
+Reverse of forward transform.
+
+Optimized with:
+- Pre-allocated workspace buffers
+- Non-blocking MPI communication
+- SIMD-optimized loops
+"""
+function apply_parallel_chebyshev_backward_2d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                                dist::Distributor)
+    Nx, Ny_local = size(data)
+
+    # Pre-allocate workspace
+    temp_x = zeros(Nx)
+    result_x = zeros(Nx)
+
+    # Step 1: Transpose to make y local
+    if length(transform.pencils) >= 2 && !isempty(transform.transpose_buffers)
+        try
+            src = transform.transpose_buffers[1]
+            dest = transform.transpose_buffers[2]
+            copyto!(parent(src), data)
+            PencilArrays.transpose!(dest, src)
+            data_transposed = parent(dest)
+        catch e
+            data_transposed = optimized_manual_transpose_2d!(data, dist)
+        end
+    else
+        data_transposed = optimized_manual_transpose_2d!(data, dist)
+    end
+
+    Nx_local, Ny = size(data_transposed)
+
+    # Pre-allocate y workspace
+    temp_y = zeros(Ny)
+    result_y = zeros(Ny)
+
+    # Step 2: Inverse DCT in y direction
+    if transform.backward_plans[2] !== nothing
+        plan = transform.backward_plans[2]
+        scale_zero = transform.backward_rescale_zero[2]
+        scale_pos = transform.backward_rescale_pos[2]
+
+        @inbounds for i in 1:Nx_local
+            y_line = view(data_transposed, i, :)
+
+            # Apply scaling before transform
+            temp_y[1] = y_line[1] * scale_zero
+            @simd for j in 2:Ny
+                temp_y[j] = y_line[j] * scale_pos
+            end
+
+            # Apply inverse DCT
+            mul!(result_y, plan, temp_y)
+            copyto!(y_line, result_y)
+        end
+    end
+
+    # Step 3: Transpose back to make x local
+    if length(transform.pencils) >= 2 && !isempty(transform.transpose_buffers)
+        try
+            src = transform.transpose_buffers[2]
+            dest = transform.transpose_buffers[1]
+            copyto!(parent(src), data_transposed)
+            PencilArrays.transpose!(dest, src)
+            copyto!(data, parent(dest))
+        catch e
+            result = optimized_manual_transpose_2d!(data_transposed, dist)
+            copyto!(data, result)
+        end
+    else
+        result = optimized_manual_transpose_2d!(data_transposed, dist)
+        copyto!(data, result)
+    end
+
+    Nx, Ny_local = size(data)
+
+    # Step 4: Inverse DCT in x direction
+    if transform.backward_plans[1] !== nothing
+        plan = transform.backward_plans[1]
+        scale_zero = transform.backward_rescale_zero[1]
+        scale_pos = transform.backward_rescale_pos[1]
+
+        @inbounds for j in 1:Ny_local
+            x_line = view(data, :, j)
+
+            # Apply scaling before transform
+            temp_x[1] = x_line[1] * scale_zero
+            @simd for i in 2:Nx
+                temp_x[i] = x_line[i] * scale_pos
+            end
+
+            # Apply inverse DCT
+            mul!(result_x, plan, temp_x)
+            copyto!(x_line, result_x)
+        end
+    end
+end
+
+"""
+    manual_transpose_2d!(data::AbstractArray, dist::Distributor)
+
+Manual 2D transpose using MPI_Alltoall.
+Redistributes data from row-decomposition to column-decomposition or vice versa.
+"""
+function manual_transpose_2d!(data::AbstractArray, dist::Distributor)
+    Nx, Ny_local = size(data)
+    nprocs = dist.size
+
+    # Calculate global Ny
+    Ny_global = Ny_local * nprocs
+
+    # Pack data for all-to-all
+    # Each process sends a chunk of its data to every other process
+    chunk_x = div(Nx, nprocs)
+    send_buf = zeros(eltype(data), Nx * Ny_local)
+    recv_buf = zeros(eltype(data), Nx * Ny_local)
+
+    # Pack: reorder data so each block goes to correct destination
+    idx = 1
+    for dest in 0:(nprocs-1)
+        x_start = dest * chunk_x + 1
+        x_end = min((dest + 1) * chunk_x, Nx)
+        for j in 1:Ny_local
+            for i in x_start:x_end
+                send_buf[idx] = data[i, j]
+                idx += 1
+            end
+        end
+    end
+
+    # All-to-all exchange
+    MPI.Alltoall!(send_buf, recv_buf, dist.comm)
+
+    # Unpack into transposed layout
+    result = zeros(eltype(data), chunk_x, Ny_global)
+    idx = 1
+    for src in 0:(nprocs-1)
+        y_start = src * Ny_local + 1
+        y_end = (src + 1) * Ny_local
+        for j in y_start:y_end
+            for i in 1:chunk_x
+                result[i, j] = recv_buf[idx]
+                idx += 1
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    apply_serial_chebyshev_forward!(data::AbstractArray, transform::ParallelChebyshevTransform)
+
+Serial forward Chebyshev transform for all axes (no MPI).
+"""
+function apply_serial_chebyshev_forward!(data::AbstractArray, transform::ParallelChebyshevTransform)
+    ndim = ndims(data)
+
+    for axis in 1:ndim
+        if axis > length(transform.forward_plans) || transform.forward_plans[axis] === nothing
+            continue
+        end
+
+        N = size(data, axis)
+        plan = transform.forward_plans[axis]
+        scale_zero = transform.forward_rescale_zero[axis]
+        scale_pos = transform.forward_rescale_pos[axis]
+
+        # Apply DCT along this axis
+        for idx in CartesianIndices(selectdim(data, axis, 1))
+            # Extract line along axis
+            line = zeros(N)
+            for k in 1:N
+                line[k] = data[insert_index(idx, axis, k)...]
+            end
+
+            # Transform
+            temp = plan * line
+
+            # Scale and store back
+            data[insert_index(idx, axis, 1)...] = temp[1] * scale_zero
+            for k in 2:N
+                data[insert_index(idx, axis, k)...] = temp[k] * scale_pos
+            end
+        end
+    end
+
+    return data
+end
+
+"""
+    apply_serial_chebyshev_backward!(data::AbstractArray, transform::ParallelChebyshevTransform)
+
+Serial backward Chebyshev transform for all axes (no MPI).
+"""
+function apply_serial_chebyshev_backward!(data::AbstractArray, transform::ParallelChebyshevTransform)
+    ndim = ndims(data)
+
+    # Transform in reverse order
+    for axis in ndim:-1:1
+        if axis > length(transform.backward_plans) || transform.backward_plans[axis] === nothing
+            continue
+        end
+
+        N = size(data, axis)
+        plan = transform.backward_plans[axis]
+        scale_zero = transform.backward_rescale_zero[axis]
+        scale_pos = transform.backward_rescale_pos[axis]
+
+        # Apply inverse DCT along this axis
+        for idx in CartesianIndices(selectdim(data, axis, 1))
+            # Extract and scale line
+            temp = zeros(N)
+            temp[1] = data[insert_index(idx, axis, 1)...] * scale_zero
+            for k in 2:N
+                temp[k] = data[insert_index(idx, axis, k)...] * scale_pos
+            end
+
+            # Transform
+            line = plan * temp
+
+            # Store back
+            for k in 1:N
+                data[insert_index(idx, axis, k)...] = line[k]
+            end
+        end
+    end
+
+    return data
+end
+
+"""
+    insert_index(idx::CartesianIndex, axis::Int, k::Int)
+
+Helper to insert index k at position axis in a CartesianIndex.
+"""
+function insert_index(idx::CartesianIndex, axis::Int, k::Int)
+    t = Tuple(idx)
+    return tuple(t[1:axis-1]..., k, t[axis:end]...)
+end
+
+"""
+    apply_parallel_chebyshev_forward_3d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                          dist::Distributor)
+
+Forward transform for 3D parallel Chebyshev.
+Full parallelization with two transpose operations.
+
+Strategy:
+1. Data starts with x local (decomposed in y,z)
+2. DCT in x (local)
+3. Transpose to make y local (decomposed in x,z)
+4. DCT in y (local)
+5. Transpose to make z local (decomposed in x,y)
+6. DCT in z (local)
+7. Transpose back to original decomposition
+"""
+function apply_parallel_chebyshev_forward_3d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                               dist::Distributor)
+    Nx, Ny_local, Nz_local = size(data)
+
+    # Step 1: DCT in x direction (x is fully local in initial pencil)
+    apply_dct_along_axis!(data, 1, transform.forward_plans[1],
+                          transform.forward_rescale_zero[1],
+                          transform.forward_rescale_pos[1])
+
+    # Step 2: Transpose x↔y (make y local)
+    data_yz = transpose_3d_axis!(data, dist, 1, 2)  # swap decomposition from y to x
+
+    # Step 3: DCT in y direction
+    Nx_local, Ny, Nz_local2 = size(data_yz)
+    apply_dct_along_axis!(data_yz, 2, transform.forward_plans[2],
+                          transform.forward_rescale_zero[2],
+                          transform.forward_rescale_pos[2])
+
+    # Step 4: Transpose y↔z (make z local)
+    data_xz = transpose_3d_axis!(data_yz, dist, 2, 3)  # swap decomposition from z to y
+
+    # Step 5: DCT in z direction
+    Nx_local2, Ny_local2, Nz = size(data_xz)
+    apply_dct_along_axis!(data_xz, 3, transform.forward_plans[3],
+                          transform.forward_rescale_zero[3],
+                          transform.forward_rescale_pos[3])
+
+    # Step 6: Transpose back to original decomposition (z→y, then y→x)
+    data_yz2 = transpose_3d_axis!(data_xz, dist, 3, 2)
+    data_final = transpose_3d_axis!(data_yz2, dist, 2, 1)
+
+    # Copy result back to original array
+    copyto!(data, data_final)
+end
+
+"""
+    apply_parallel_chebyshev_backward_3d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                           dist::Distributor)
+
+Backward transform for 3D parallel Chebyshev.
+Reverse of forward transform.
+"""
+function apply_parallel_chebyshev_backward_3d!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                                dist::Distributor)
+    Nx, Ny_local, Nz_local = size(data)
+
+    # Transpose to make z local
+    data_xz = transpose_3d_axis!(data, dist, 1, 2)
+    data_xz = transpose_3d_axis!(data_xz, dist, 2, 3)
+
+    # Inverse DCT in z
+    apply_idct_along_axis!(data_xz, 3, transform.backward_plans[3],
+                           transform.backward_rescale_zero[3],
+                           transform.backward_rescale_pos[3])
+
+    # Transpose to make y local
+    data_yz = transpose_3d_axis!(data_xz, dist, 3, 2)
+
+    # Inverse DCT in y
+    apply_idct_along_axis!(data_yz, 2, transform.backward_plans[2],
+                           transform.backward_rescale_zero[2],
+                           transform.backward_rescale_pos[2])
+
+    # Transpose to make x local
+    data_final = transpose_3d_axis!(data_yz, dist, 2, 1)
+
+    # Inverse DCT in x
+    apply_idct_along_axis!(data_final, 1, transform.backward_plans[1],
+                           transform.backward_rescale_zero[1],
+                           transform.backward_rescale_pos[1])
+
+    copyto!(data, data_final)
+end
+
+"""
+    apply_dct_along_axis!(data::AbstractArray, axis::Int, plan, scale_zero::Float64, scale_pos::Float64)
+
+Apply forward DCT along specified axis with proper scaling.
+Optimized for in-place operation where possible.
+"""
+function apply_dct_along_axis!(data::AbstractArray, axis::Int, plan, scale_zero::Float64, scale_pos::Float64)
+    if plan === nothing
+        return
+    end
+
+    N = size(data, axis)
+    ndim = ndims(data)
+
+    # Create index iterators for the other dimensions
+    other_dims = [i for i in 1:ndim if i != axis]
+    other_sizes = [size(data, d) for d in other_dims]
+
+    # Pre-allocate workspace
+    line = zeros(N)
+    temp = zeros(N)
+
+    # Iterate over all lines along the specified axis
+    for idx in CartesianIndices(tuple(other_sizes...))
+        # Build full index
+        full_idx = Vector{Any}(undef, ndim)
+        other_idx = 1
+        for d in 1:ndim
+            if d == axis
+                full_idx[d] = Colon()
+            else
+                full_idx[d] = idx[other_idx]
+                other_idx += 1
+            end
+        end
+
+        # Extract line
+        line_view = view(data, full_idx...)
+        copyto!(line, line_view)
+
+        # Apply DCT
+        mul!(temp, plan, line)
+
+        # Apply scaling
+        line_view[1] = temp[1] * scale_zero
+        @inbounds @simd for i in 2:N
+            line_view[i] = temp[i] * scale_pos
+        end
+    end
+end
+
+"""
+    apply_idct_along_axis!(data::AbstractArray, axis::Int, plan, scale_zero::Float64, scale_pos::Float64)
+
+Apply inverse DCT along specified axis with proper scaling.
+"""
+function apply_idct_along_axis!(data::AbstractArray, axis::Int, plan, scale_zero::Float64, scale_pos::Float64)
+    if plan === nothing
+        return
+    end
+
+    N = size(data, axis)
+    ndim = ndims(data)
+
+    other_dims = [i for i in 1:ndim if i != axis]
+    other_sizes = [size(data, d) for d in other_dims]
+
+    # Pre-allocate workspace
+    temp = zeros(N)
+    result = zeros(N)
+
+    for idx in CartesianIndices(tuple(other_sizes...))
+        full_idx = Vector{Any}(undef, ndim)
+        other_idx = 1
+        for d in 1:ndim
+            if d == axis
+                full_idx[d] = Colon()
+            else
+                full_idx[d] = idx[other_idx]
+                other_idx += 1
+            end
+        end
+
+        line_view = view(data, full_idx...)
+
+        # Apply scaling before transform
+        temp[1] = line_view[1] * scale_zero
+        @inbounds @simd for i in 2:N
+            temp[i] = line_view[i] * scale_pos
+        end
+
+        # Apply inverse DCT
+        mul!(result, plan, temp)
+        copyto!(line_view, result)
+    end
+end
+
+"""
+    transpose_3d_axis!(data::AbstractArray, dist::Distributor, from_axis::Int, to_axis::Int)
+
+Transpose 3D data to change which axis is local.
+Uses non-blocking MPI for better performance.
+"""
+function transpose_3d_axis!(data::AbstractArray, dist::Distributor, from_axis::Int, to_axis::Int)
+    if dist.size == 1
+        return data  # No transpose needed for serial
+    end
+
+    dims = size(data)
+    nprocs = dist.size
+
+    # Calculate chunk sizes for the transpose
+    from_size = dims[from_axis]
+    to_size_local = dims[to_axis]
+    to_size_global = to_size_local * nprocs
+
+    chunk_from = div(from_size, nprocs)
+    chunk_to = to_size_local
+
+    # Calculate new dimensions after transpose
+    new_dims = collect(dims)
+    new_dims[from_axis] = chunk_from
+    new_dims[to_axis] = to_size_global
+
+    # Allocate send and receive buffers
+    total_elements = prod(dims)
+    send_buf = zeros(eltype(data), total_elements)
+    recv_buf = zeros(eltype(data), total_elements)
+
+    # Pack data for all-to-all
+    pack_for_transpose_3d!(send_buf, data, from_axis, to_axis, nprocs)
+
+    # Non-blocking all-to-all for overlap potential
+    req = MPI.Ialltoall!(send_buf, recv_buf, dist.comm)
+    MPI.Wait(req)
+
+    # Unpack into new layout
+    result = zeros(eltype(data), new_dims...)
+    unpack_from_transpose_3d!(result, recv_buf, from_axis, to_axis, nprocs, dims)
+
+    return result
+end
+
+"""
+    pack_for_transpose_3d!(buf::Vector, data::AbstractArray, from_axis::Int, to_axis::Int, nprocs::Int)
+
+Pack 3D data for MPI all-to-all transpose.
+"""
+function pack_for_transpose_3d!(buf::Vector, data::AbstractArray, from_axis::Int, to_axis::Int, nprocs::Int)
+    dims = size(data)
+    chunk_from = div(dims[from_axis], nprocs)
+
+    idx = 1
+    for dest in 0:(nprocs-1)
+        # Calculate range in from_axis going to this destination
+        from_start = dest * chunk_from + 1
+        from_end = (dest + 1) * chunk_from
+
+        # Pack all data in this chunk
+        for k in 1:dims[3]
+            for j in 1:dims[2]
+                for i in 1:dims[1]
+                    # Check if this index falls in the chunk for dest
+                    coord = (i, j, k)[from_axis]
+                    if from_start <= coord <= from_end
+                        buf[idx] = data[i, j, k]
+                        idx += 1
+                    end
+                end
+            end
+        end
+    end
+end
+
+"""
+    unpack_from_transpose_3d!(result::AbstractArray, buf::Vector, from_axis::Int, to_axis::Int, nprocs::Int, orig_dims::Tuple)
+
+Unpack 3D data after MPI all-to-all transpose.
+"""
+function unpack_from_transpose_3d!(result::AbstractArray, buf::Vector, from_axis::Int, to_axis::Int, nprocs::Int, orig_dims::Tuple)
+    new_dims = size(result)
+    chunk_to = div(orig_dims[to_axis] * nprocs, nprocs)  # to_size_local from original
+
+    idx = 1
+    for src in 0:(nprocs-1)
+        # Data from src covers a range in to_axis
+        to_start = src * chunk_to + 1
+        to_end = (src + 1) * chunk_to
+
+        for k in 1:new_dims[3]
+            for j in 1:new_dims[2]
+                for i in 1:new_dims[1]
+                    coord_to = (i, j, k)[to_axis]
+                    if to_start <= coord_to <= to_end
+                        result[i, j, k] = buf[idx]
+                        idx += 1
+                    end
+                end
+            end
+        end
+    end
+end
+
+"""
+    apply_parallel_chebyshev_backward!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                        dist::Distributor)
+
+Apply backward parallel Chebyshev transform (coefficients → grid).
+"""
+function apply_parallel_chebyshev_backward!(data::AbstractArray, transform::ParallelChebyshevTransform,
+                                             dist::Distributor)
+    ndim = transform.ndim
+
+    if dist.size == 1
+        return apply_serial_chebyshev_backward!(data, transform)
+    end
+
+    if ndim == 2
+        apply_parallel_chebyshev_backward_2d!(data, transform, dist)
+    elseif ndim == 3
+        apply_parallel_chebyshev_backward_3d!(data, transform, dist)
+    else
+        apply_serial_chebyshev_backward!(data, transform)
+    end
+end
+
+# ============================================================================
+# Optimized 2D Transforms with Buffer Reuse
+# ============================================================================
+
+"""
+    TransposeBuffers2D
+
+Pre-allocated buffers for 2D transpose operations to avoid repeated allocation.
+"""
+mutable struct TransposeBuffers2D
+    send_buf::Vector{Float64}
+    recv_buf::Vector{Float64}
+    temp_array::Union{Nothing, Array{Float64}}
+
+    function TransposeBuffers2D(size::Int)
+        new(zeros(Float64, size), zeros(Float64, size), nothing)
+    end
+end
+
+# Global buffer cache for transpose operations
+const _TRANSPOSE_BUFFERS_2D = Dict{Tuple{Int,Int}, TransposeBuffers2D}()
+
+"""
+    get_transpose_buffers_2d(Nx::Int, Ny_local::Int)
+
+Get or create pre-allocated buffers for 2D transpose.
+"""
+function get_transpose_buffers_2d(Nx::Int, Ny_local::Int)
+    key = (Nx, Ny_local)
+    if !haskey(_TRANSPOSE_BUFFERS_2D, key)
+        total_size = Nx * Ny_local
+        _TRANSPOSE_BUFFERS_2D[key] = TransposeBuffers2D(total_size)
+    end
+    return _TRANSPOSE_BUFFERS_2D[key]
+end
+
+"""
+    optimized_manual_transpose_2d!(data::AbstractArray, dist::Distributor, buffers::TransposeBuffers2D)
+
+Optimized 2D transpose using pre-allocated buffers and non-blocking MPI.
+"""
+function optimized_manual_transpose_2d!(data::AbstractArray, dist::Distributor)
+    Nx, Ny_local = size(data)
+    nprocs = dist.size
+
+    # Get pre-allocated buffers
+    buffers = get_transpose_buffers_2d(Nx, Ny_local)
+
+    # Calculate global Ny
+    Ny_global = Ny_local * nprocs
+    chunk_x = div(Nx, nprocs)
+
+    # Ensure buffer sizes are correct
+    total_size = Nx * Ny_local
+    if length(buffers.send_buf) < total_size
+        resize!(buffers.send_buf, total_size)
+        resize!(buffers.recv_buf, total_size)
+    end
+
+    # Pack data for all-to-all (optimized loop order)
+    send_buf = buffers.send_buf
+    recv_buf = buffers.recv_buf
+
+    idx = 1
+    @inbounds for dest in 0:(nprocs-1)
+        x_start = dest * chunk_x + 1
+        x_end = min((dest + 1) * chunk_x, Nx)
+        for j in 1:Ny_local
+            @simd for i in x_start:x_end
+                send_buf[idx] = data[i, j]
+                idx += 1
+            end
+        end
+    end
+
+    # Non-blocking all-to-all
+    req = MPI.Ialltoall!(send_buf, recv_buf, dist.comm)
+    MPI.Wait(req)
+
+    # Allocate result if needed
+    result = zeros(eltype(data), chunk_x, Ny_global)
+
+    # Unpack (optimized loop order)
+    idx = 1
+    @inbounds for src in 0:(nprocs-1)
+        y_start = src * Ny_local + 1
+        y_end = (src + 1) * Ny_local
+        for j in y_start:y_end
+            @simd for i in 1:chunk_x
+                result[i, j] = recv_buf[idx]
+                idx += 1
+            end
+        end
+    end
+
+    return result
+end
+
+"""
+    clear_transpose_buffers_2d!()
+
+Clear the 2D transpose buffer cache to free memory.
+"""
+function clear_transpose_buffers_2d!()
+    empty!(_TRANSPOSE_BUFFERS_2D)
 end
