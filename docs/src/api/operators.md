@@ -5,27 +5,53 @@ Operators compute derivatives and other mathematical operations on fields. Taran
 ## Overview
 
 Tarang.jl supports:
-- **Differential operators**: grad, div, curl, lap
+- **Differential operators**: grad (∇), div, curl, lap (Δ, ∇²)
 - **Coordinate derivatives**: dx, dy, dz, dr, etc.
 - **Time derivatives**: dt
-- **Field operations**: dot products, cross products
+- **Field operations**: dot (⋅), cross (×)
 - **Custom operators**: User-defined operations
+
+## Unicode Operators
+
+Tarang.jl supports Unicode mathematical symbols for more readable code:
+
+| ASCII | Unicode | Description |
+|-------|---------|-------------|
+| `grad(f)` | `∇(f)` | Gradient |
+| `lap(f)` | `Δ(f)` or `∇²(f)` | Laplacian |
+| `dot(u, v)` | `u ⋅ v` | Dot product |
+| `cross(u, v)` | `u × v` | Cross product |
+
+**Example** - Navier-Stokes with Unicode:
+```julia
+# Traditional ASCII
+add_equation!(problem, "dt(u) + dot(u, grad(u)) = -grad(p) + nu*lap(u)")
+
+# With Unicode (more readable)
+add_equation!(problem, "dt(u) + u⋅∇(u) = -∇(p) + nu*Δ(u)")
+```
+
+**Typing Unicode in Julia**:
+- `∇` : Type `\nabla` then press Tab
+- `Δ` : Type `\Delta` then press Tab
+- `⋅` : Type `\cdot` then press Tab
+- `×` : Type `\times` then press Tab
 
 ---
 
 ## Differential Operators
 
-### Gradient (grad)
+### Gradient (grad / ∇)
 
 Computes the gradient of a scalar field, returning a vector field.
 
 **Syntax**:
 ```julia
 # In equations
-add_equation!(problem, "grad(p)")
+add_equation!(problem, "∇(p)")  # or "grad(p)"
 
 # Programmatic
-∇p = grad(p)
+∇p = ∇(p)  # or grad(p)
 ```
 
 **Definitions**:
