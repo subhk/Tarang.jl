@@ -31,21 +31,18 @@ Tarang.add_equation!(problem, "∂t(T) = -ux*∂x(T) - uz*∂z(T)")
 # (requires registration)
 ```
 
-## Registering Operators
+## Using Operators in Equations
+
+The equation parser recognizes all built-in operators. Use them directly:
 
 ```julia
-# Register with problem
-function register_operator!(problem, name, func)
-    problem.operators[name] = func
-end
+# Built-in operators available in equations:
+# grad, div, curl, lap (or Δ), dt (or ∂t), d
+# integrate, average, interpolate, convert, lift
+# sin, cos, tan, exp, log, sqrt, abs, tanh
 
-# Define operator
-my_advect(u, f) = "ux*∂x($f) + uz*∂z($f)"
-
-register_operator!(problem, "advect", my_advect)
-
-# Use in equation
-Tarang.add_equation!(problem, "∂t(T) = advect(u, T)")
+# Use operators directly in equations
+Tarang.add_equation!(problem, "∂t(T) = -ux*∂x(T) - uz*∂z(T) + kappa*Δ(T)")
 ```
 
 ## Spectral Differentiation
@@ -208,7 +205,7 @@ end
 ```julia
 function lorentz_force(J, B)
     # J × B
-    return cross_product(J, B)
+    return cross(J, B)  # or: J × B
 end
 ```
 
