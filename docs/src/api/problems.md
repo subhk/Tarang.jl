@@ -52,13 +52,13 @@ LBVP(fields::Vector{<:AbstractField})
 ```julia
 # Poisson equation
 problem = LBVP([phi])
-add_equation!(problem, "lap(phi) = rho")
+add_equation!(problem, "Δ(phi) = rho")
 
 # Stokes flow
 problem = LBVP([u, v, p])
-add_equation!(problem, "-nu*lap(u) + dx(p) = fx")
-add_equation!(problem, "-nu*lap(v) + dz(p) = fz")
-add_equation!(problem, "dx(u) + dz(v) = 0")
+add_equation!(problem, "-nu*Δ(u) + ∂x(p) = fx")
+add_equation!(problem, "-nu*Δ(v) + ∂z(p) = fz")
+add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 ```
 
 **Use cases**:
@@ -86,9 +86,9 @@ NLBVP(fields::Vector{<:AbstractField})
 ```julia
 # Steady Navier-Stokes
 problem = NLBVP([u, v, p])
-add_equation!(problem, "u*dx(u) + v*dz(u) = -dx(p) + nu*lap(u)")
-add_equation!(problem, "u*dx(v) + v*dz(v) = -dz(p) + nu*lap(v)")
-add_equation!(problem, "dx(u) + dz(v) = 0")
+add_equation!(problem, "u*∂x(u) + v*∂z(u) = -∂x(p) + nu*Δ(u)")
+add_equation!(problem, "u*∂x(v) + v*∂z(v) = -∂z(p) + nu*Δ(v)")
+add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 ```
 
 **Use cases**:
@@ -118,10 +118,10 @@ EVP(fields::Vector{<:AbstractField}; eigenvalue::Symbol)
 ```julia
 # Rayleigh-Bénard stability
 problem = EVP([u, v, p, T], eigenvalue=:sigma)
-add_equation!(problem, "sigma*u = -u0*dx(u) - v*dx(u0) - dx(p) + Pr*lap(u) + Pr*Ra*T")
-add_equation!(problem, "sigma*v = -u0*dx(v) - v*dz(u0) - dz(p) + Pr*lap(v)")
-add_equation!(problem, "sigma*T = -u0*dx(T) - v + lap(T)")
-add_equation!(problem, "dx(u) + dz(v) = 0")
+add_equation!(problem, "sigma*u = -u0*∂x(u) - v*∂x(u0) - ∂x(p) + Pr*Δ(u) + Pr*Ra*T")
+add_equation!(problem, "sigma*v = -u0*∂x(v) - v*∂z(u0) - ∂z(p) + Pr*Δ(v)")
+add_equation!(problem, "sigma*T = -u0*∂x(T) - v + Δ(T)")
+add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 ```
 
 **Use cases**:
@@ -153,38 +153,38 @@ add_equation!(problem, equation_string::String)
 
 ```julia
 # Diffusion
-add_equation!(problem, "dt(T) = kappa*lap(T)")
+add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 
 # Wave equation
-add_equation!(problem, "dt(dt(u)) = c^2*lap(u)")
+add_equation!(problem, "∂ₜ(∂ₜ(u)) = c^2*Δ(u)")
 
 # Poisson
-add_equation!(problem, "lap(phi) = rho")
+add_equation!(problem, "Δ(phi) = rho")
 ```
 
 #### Complex Equations
 
 ```julia
 # Navier-Stokes momentum
-add_equation!(problem, "dt(u) + u*dx(u) + w*dz(u) = -dx(p) + nu*lap(u)")
+add_equation!(problem, "∂ₜ(u) + u*∂x(u) + w*∂z(u) = -∂x(p) + nu*Δ(u)")
 
 # Energy equation with dissipation
-add_equation!(problem, "dt(T) + u*dx(T) + w*dz(T) = kappa*lap(T) + Q")
+add_equation!(problem, "∂ₜ(T) + u*∂x(T) + w*∂z(T) = kappa*Δ(T) + Q")
 
 # With parameters
-add_equation!(problem, "dt(T) = kappa*lap(T) + Ra*Pr*w")
+add_equation!(problem, "∂ₜ(T) = kappa*Δ(T) + Ra*Pr*w")
 ```
 
 #### Using Fields and Parameters
 
 ```julia
 # Fields are referenced by name
-add_equation!(problem, "dt(u) = -u*dx(u)")  # u is a field
+add_equation!(problem, "∂ₜ(u) = -u*∂x(u)")  # u is a field
 
 # Parameters from problem.parameters
 problem.parameters["nu"] = 0.01
 problem.parameters["Ra"] = 1e6
-add_equation!(problem, "dt(u) = nu*lap(u) + Ra*T")
+add_equation!(problem, "∂ₜ(u) = nu*Δ(u) + Ra*T")
 ```
 
 ---
@@ -212,12 +212,12 @@ problem.parameters["g"] = 9.81         # Gravitational acceleration
 
 ```julia
 # Reference by name in equations
-add_equation!(problem, "dt(u) = -u*dx(u) + nu*lap(u)")
-add_equation!(problem, "dt(T) = -u*dx(T) + kappa*lap(T)")
+add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + nu*Δ(u)")
+add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)")
 
 # Dimensionless formulation
-add_equation!(problem, "dt(u) = -u*dx(u) + (1/Re)*lap(u)")
-add_equation!(problem, "dt(T) = -u*dx(T) + (1/(Re*Pr))*lap(T) + Ra*Pr*w")
+add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + (1/Re)*Δ(u)")
+add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + (1/(Re*Pr))*Δ(T) + Ra*Pr*w")
 ```
 
 ### Modifying Parameters
@@ -292,13 +292,13 @@ add_neumann_bc!(problem, "d<coord>(field)(coord=pos) = value")
 
 ```julia
 # Insulating boundary (zero heat flux)
-add_neumann_bc!(problem, "dz(T)(z=0) = 0")  # dT/dz(z=0) = 0
+add_neumann_bc!(problem, "∂z(T)(z=0) = 0")  # ∂T/∂z(z=0) = 0
 
 # Fixed flux
-add_neumann_bc!(problem, "dz(T)(z=1) = -1")  # dT/dz(z=1) = -1
+add_neumann_bc!(problem, "∂z(T)(z=1) = -1")  # ∂T/∂z(z=1) = -1
 
 # Time-dependent flux
-add_neumann_bc!(problem, "dx(phi)(x=0) = sin(omega*t)")
+add_neumann_bc!(problem, "∂x(phi)(x=0) = sin(omega*t)")
 ```
 
 ---
@@ -320,13 +320,13 @@ add_robin_bc!(problem, "alpha*field(coord=pos) + beta*d<coord>(field)(coord=pos)
 **Examples**:
 
 ```julia
-# Convective heat transfer: h*T + k*dT/dn = h*T_ambient
+# Convective heat transfer: h*T + k*∂T/∂n = h*T_ambient
 h, k = 10.0, 1.0
 T_ambient = 300.0
-add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_ambient)")
+add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_ambient)")
 
-# Radiation boundary: T + ε*dT/dn = 0
-add_robin_bc!(problem, "1.0*T(x=0) + $(epsilon)*dx(T)(x=0) = 0")
+# Radiation boundary: T + ε*∂T/∂n = 0
+add_robin_bc!(problem, "1.0*T(x=0) + $(epsilon)*∂x(T)(x=0) = 0")
 ```
 
 ---
@@ -348,8 +348,8 @@ add_stress_free_bc!(problem, "u(z=0)")
 add_stress_free_bc!(problem, "u(z=1)")
 
 # Equivalent to:
-# w(z=0) = 0, du/dz(z=0) = 0, dv/dz(z=0) = 0
-# w(z=1) = 0, du/dz(z=1) = 0, dv/dz(z=1) = 0
+# w(z=0) = 0, ∂u/∂z(z=0) = 0, ∂v/∂z(z=0) = 0
+# w(z=1) = 0, ∂u/∂z(z=1) = 0, ∂v/∂z(z=1) = 0
 ```
 
 ---
@@ -390,13 +390,13 @@ add_bc!(problem, equation_string::String)
 
 ```julia
 # Custom combinations
-add_bc!(problem, "u(z=0) + 2*dz(u)(z=0) = 1")
+add_bc!(problem, "u(z=0) + 2*∂z(u)(z=0) = 1")
 
 # Coupling between fields
 add_bc!(problem, "T(x=0) = 2*S(x=0)")
 
 # Complex expressions
-add_bc!(problem, "dx(p)(z=0) + omega^2*u(z=0) = 0")
+add_bc!(problem, "∂x(p)(z=0) + omega^2*u(z=0) = 0")
 ```
 
 ---
@@ -472,9 +472,9 @@ validate_problem(problem)
 
 ```julia
 problem = IVP([u, v, p])
-add_equation!(problem, "dt(u) = -u*dx(u) - v*dz(u) - dx(p) + nu*lap(u)")
-add_equation!(problem, "dt(v) = -u*dx(v) - v*dz(v) - dz(p) + nu*lap(v)")
-add_equation!(problem, "dx(u) + dz(v) = 0")
+add_equation!(problem, "∂ₜ(u) = -u*∂x(u) - v*∂z(u) - ∂x(p) + nu*Δ(u)")
+add_equation!(problem, "∂ₜ(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)")
+add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 
 # Add boundary conditions
 add_dirichlet_bc!(problem, "u(z=0) = 0")
@@ -495,24 +495,24 @@ Define intermediate variables for readability:
 
 ```julia
 # Define substitution
-add_substitution!(problem, "omega", "dx(v) - dz(u)")
+add_substitution!(problem, "omega", "∂x(v) - ∂z(u)")
 
 # Use in equations
-add_equation!(problem, "dt(omega) = -u*dx(omega) - v*dz(omega) + nu*lap(omega)")
+add_equation!(problem, "∂ₜ(omega) = -u*∂x(omega) - v*∂z(omega) + nu*Δ(omega)")
 ```
 
 ### Common Substitutions
 
 ```julia
 # Vorticity
-add_substitution!(problem, "omega", "dx(v) - dz(u)")
+add_substitution!(problem, "omega", "∂x(v) - ∂z(u)")
 
 # Kinetic energy
 add_substitution!(problem, "KE", "0.5*(u^2 + v^2 + w^2)")
 
 # Strain rate
-add_substitution!(problem, "S11", "dx(u)")
-add_substitution!(problem, "S12", "0.5*(dx(v) + dz(u))")
+add_substitution!(problem, "S11", "∂x(u)")
+add_substitution!(problem, "S12", "0.5*(∂x(v) + ∂z(u))")
 ```
 
 ---
@@ -571,10 +571,10 @@ problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
 # Equations
-add_equation!(problem, "dt(u) + u*dx(u) + w*dz(u) + dx(p) = Pr*lap(u)")
-add_equation!(problem, "dt(w) + u*dx(w) + w*dz(w) + dz(p) = Pr*lap(w) + Ra*Pr*T")
-add_equation!(problem, "dx(u) + dz(w) = 0")
-add_equation!(problem, "dt(T) + u*dx(T) + w*dz(T) = lap(T)")
+add_equation!(problem, "∂ₜ(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)")
+add_equation!(problem, "∂ₜ(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T")
+add_equation!(problem, "∂x(u) + ∂z(w) = 0")
+add_equation!(problem, "∂ₜ(T) + u*∂x(T) + w*∂z(T) = Δ(T)")
 
 # Boundary conditions
 add_dirichlet_bc!(problem, "u(z=0) = 0")

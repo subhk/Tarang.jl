@@ -15,8 +15,8 @@ using Tarang
 problem = IVP([u, v, p, T])
 
 # Add evolution equations
-add_equation!(problem, "∂ₜ(u) = -u*dx(u) + nu*Δ(u)")
-add_equation!(problem, "∂ₜ(T) = -u*dx(T) + kappa*Δ(T)")
+add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + nu*Δ(u)")
+add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)")
 ```
 
 ### LBVP - Linear Boundary Value Problem
@@ -40,7 +40,7 @@ Steady-state nonlinear PDEs.
 problem = NLBVP([u, p])
 
 # Add nonlinear equations
-add_equation!(problem, "u*dx(u) + dx(p) = nu*Δ(u)")
+add_equation!(problem, "u*∂x(u) + ∂x(p) = nu*Δ(u)")
 ```
 
 ### EVP - Eigenvalue Problem
@@ -64,12 +64,12 @@ add_equation!(evp, "sigma*u_hat = Δ(u_hat)")
 add_equation!(problem, "∂ₜ(u) = rhs_expression")
 
 # Multiple terms
-add_equation!(problem, "∂ₜ(u) + u*dx(u) = nu*Δ(u) - dx(p)")
+add_equation!(problem, "∂ₜ(u) + u*∂x(u) = nu*Δ(u) - ∂x(p)")
 ```
 
 ### Supported Operations
 
-- Derivatives: `dx`, `dy`, `dz`, `dt`/`∂ₜ`, `lap`/`Δ`, `grad`/`∇`, `div`, `curl`
+- Derivatives: `∂x`, `∂y`, `∂z`, `∂ₜ`, `Δ`, `∇`, `div`, `curl`
 - Arithmetic: `+`, `-`, `*`, `/`
 - Functions: `sin`, `cos`, `exp`, `sqrt`
 - Parameters: Any name in `problem.parameters`
@@ -101,14 +101,14 @@ add_dirichlet_bc!(problem, "T(z=1) = 0")  # T=0 at z=1
 
 ```julia
 # du/dz = value at location
-add_neumann_bc!(problem, "dz(T)(z=1) = 0")  # dT/dz=0 at z=1
+add_neumann_bc!(problem, "∂z(T)(z=1) = 0")  # ∂T/∂z=0 at z=1
 ```
 
 ### Robin (Mixed)
 
 ```julia
 # α*u + β*du/dn = γ
-add_robin_bc!(problem, "1.0*T(z=0) + 1.0*dz(T)(z=0) = 0")
+add_robin_bc!(problem, "1.0*T(z=0) + 1.0*∂z(T)(z=0) = 0")
 ```
 
 ### Stress-Free
@@ -156,11 +156,11 @@ problem = IVP([ux, uz, p])
 problem.parameters["nu"] = 0.01
 
 # Momentum
-add_equation!(problem, "∂ₜ(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = nu*Δ(ux)")
-add_equation!(problem, "∂ₜ(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = nu*Δ(uz)")
+add_equation!(problem, "∂ₜ(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = nu*Δ(ux)")
+add_equation!(problem, "∂ₜ(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = nu*Δ(uz)")
 
 # Continuity
-add_equation!(problem, "dx(ux) + dz(uz) = 0")
+add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
 
 # No-slip walls
 for field in ["ux", "uz"]
@@ -176,10 +176,10 @@ problem = IVP([ux, uz, p, T])
 problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
-add_equation!(problem, "∂ₜ(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = Pr*Δ(ux)")
-add_equation!(problem, "∂ₜ(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = Pr*Δ(uz) + Ra*Pr*T")
-add_equation!(problem, "dx(ux) + dz(uz) = 0")
-add_equation!(problem, "∂ₜ(T) + ux*dx(T) + uz*dz(T) = Δ(T)")
+add_equation!(problem, "∂ₜ(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = Pr*Δ(ux)")
+add_equation!(problem, "∂ₜ(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
+add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
+add_equation!(problem, "∂ₜ(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
 
 # Boundary conditions
 add_dirichlet_bc!(problem, "ux(z=0) = 0")

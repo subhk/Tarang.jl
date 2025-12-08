@@ -1194,13 +1194,13 @@ end
 Return the basis for the derivative of fields in this basis.
 
 Derivative basis chain:
-- d/dx(ChebyshevT) -> ChebyshevU (Jacobi a,b: -1/2,-1/2 -> 1/2,1/2)
-- d/dx(ChebyshevU) -> ChebyshevV (Jacobi a,b: 1/2,1/2 -> 3/2,3/2)
-- d/dx(ChebyshevV) -> Jacobi(5/2, 5/2)
-- General: d/dx P_n^{(a,b)} is proportional to P_{n-1}^{(a+1,b+1)}
+- ∂/∂x(ChebyshevT) → ChebyshevU (Jacobi a,b: -1/2,-1/2 → 1/2,1/2)
+- ∂/∂x(ChebyshevU) → ChebyshevV (Jacobi a,b: 1/2,1/2 → 3/2,3/2)
+- ∂/∂x(ChebyshevV) → Jacobi(5/2, 5/2)
+- General: ∂/∂x P_n^{(a,b)} is proportional to P_{n-1}^{(a+1,b+1)}
 """
 function derivative_basis(basis::ChebyshevT, order::Int=1)
-    # d/dx(T_n) is proportional to U_{n-1}
+    # ∂/∂x(T_n) is proportional to U_{n-1}
     # After differentiation, output is in ChebyshevU
     # Create new ChebyshevU basis with same domain parameters
     if order == 0
@@ -1222,7 +1222,7 @@ function derivative_basis(basis::ChebyshevT, order::Int=1)
 end
 
 function derivative_basis(basis::ChebyshevU, order::Int=1)
-    # d/dx(U_n) is proportional to polynomials in ChebyshevV family
+    # ∂/∂x(U_n) is proportional to polynomials in ChebyshevV family
     # ChebyshevU = Jacobi(1/2, 1/2), derivative -> Jacobi(3/2, 3/2) = ChebyshevV
     if order == 0
         return basis
@@ -1242,7 +1242,7 @@ function derivative_basis(basis::ChebyshevU, order::Int=1)
 end
 
 function derivative_basis(basis::ChebyshevV, order::Int=1)
-    # d/dx(V_n) -> Jacobi(5/2, 5/2)
+    # ∂/∂x(V_n) → Jacobi(5/2, 5/2)
     # Continue the Jacobi parameter increment chain
     if order == 0
         return basis
@@ -1265,7 +1265,7 @@ function derivative_basis(basis::ChebyshevV, order::Int=1)
 end
 
 function derivative_basis(basis::Legendre, order::Int=1)
-    # d/dx(P_n) is proportional to Jacobi with a=1, b=1
+    # ∂/∂x(P_n) is proportional to Jacobi with a=1, b=1
     # Legendre = Jacobi(0,0), derivative -> Jacobi(1,1)
     if order == 0
         return basis
@@ -1287,7 +1287,7 @@ function derivative_basis(basis::Legendre, order::Int=1)
 end
 
 function derivative_basis(basis::Jacobi, order::Int=1)
-    # d/dx P_n^{(a,b)} is proportional to P_{n-1}^{(a+1,b+1)}
+    # ∂/∂x P_n^{(a,b)} is proportional to P_{n-1}^{(a+1,b+1)}
     if order == 0
         return basis
     end
@@ -1309,7 +1309,7 @@ end
 
 function derivative_basis(basis::FourierBasis, order::Int=1)
     # Fourier derivative stays in same basis
-    # d/dx(exp(ikx)) = ik*exp(ikx), still in Fourier space
+    # ∂/∂x(exp(ikx)) = ik·exp(ikx), still in Fourier space
     return basis
 end
 

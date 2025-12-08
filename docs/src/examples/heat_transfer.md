@@ -19,7 +19,7 @@ T = ScalarField(dist, "T", (basis,), Float64)
 problem = IVP([T])
 problem.parameters["kappa"] = 0.01
 
-Tarang.add_equation!(problem, "dt(T) = kappa*lap(T)")
+Tarang.add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 Tarang.add_dirichlet_bc!(problem, "T(x=0) = 1")  # Hot
 Tarang.add_dirichlet_bc!(problem, "T(x=1) = 0")  # Cold
 
@@ -53,7 +53,7 @@ T = ScalarField(dist, "T", (x_basis, z_basis), Float64)
 problem = IVP([T])
 problem.parameters["kappa"] = 0.1
 
-Tarang.add_equation!(problem, "dt(T) = kappa*lap(T)")
+Tarang.add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 
 # Dirichlet on all boundaries
 Tarang.add_dirichlet_bc!(problem, "T(x=0) = 0")
@@ -74,7 +74,7 @@ problem = IVP([T])
 problem.parameters["U"] = U
 problem.parameters["kappa"] = 0.01
 
-Tarang.add_equation!(problem, "dt(T) + U*dx(T) = kappa*lap(T)")
+Tarang.add_equation!(problem, "∂ₜ(T) + U*∂x(T) = kappa*Δ(T)")
 ```
 
 ### Natural Convection
@@ -86,10 +86,10 @@ problem = IVP([ux, uz, p, T])
 problem.parameters["Ra"] = 1e5
 problem.parameters["Pr"] = 0.7
 
-Tarang.add_equation!(problem, "dt(ux) + ... + dx(p) = Pr*lap(ux)")
-Tarang.add_equation!(problem, "dt(uz) + ... + dz(p) = Pr*lap(uz) + Ra*Pr*T")
-Tarang.add_equation!(problem, "dx(ux) + dz(uz) = 0")
-Tarang.add_equation!(problem, "dt(T) + ux*dx(T) + uz*dz(T) = lap(T)")
+Tarang.add_equation!(problem, "∂ₜ(ux) + ... + ∂x(p) = Pr*Δ(ux)")
+Tarang.add_equation!(problem, "∂ₜ(uz) + ... + ∂z(p) = Pr*Δ(uz) + Ra*Pr*T")
+Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
+Tarang.add_equation!(problem, "∂ₜ(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
 ```
 
 ## Boundary Conditions
@@ -99,12 +99,12 @@ Tarang.add_equation!(problem, "dt(T) + ux*dx(T) + uz*dz(T) = lap(T)")
 Heat transfer to environment.
 
 ```julia
-# h*T + k*dT/dn = h*T_ambient
+# h*T + k*∂T/∂n = h*T_ambient
 h = 10.0   # Heat transfer coefficient
 k = 1.0    # Thermal conductivity
 T_amb = 0.0
 
-Tarang.add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_amb)")
+Tarang.add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_amb)")
 ```
 
 ### Insulated (Neumann) BC
@@ -112,7 +112,7 @@ Tarang.add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_amb)")
 Zero heat flux.
 
 ```julia
-Tarang.add_neumann_bc!(problem, "dz(T)(z=1) = 0")  # dT/dz = 0
+Tarang.add_neumann_bc!(problem, "∂z(T)(z=1) = 0")  # ∂T/∂z = 0
 ```
 
 ### Time-Varying BC
@@ -133,13 +133,13 @@ Steady heat conduction.
 
 ```julia
 problem = LBVP([T])
-Tarang.add_equation!(problem, "lap(T) = 0")
+Tarang.add_equation!(problem, "Δ(T) = 0")
 
 # Boundary conditions define the solution
 Tarang.add_dirichlet_bc!(problem, "T(x=0) = 0")
 Tarang.add_dirichlet_bc!(problem, "T(x=1) = 1")
-Tarang.add_neumann_bc!(problem, "dz(T)(z=0) = 0")
-Tarang.add_neumann_bc!(problem, "dz(T)(z=1) = 0")
+Tarang.add_neumann_bc!(problem, "∂z(T)(z=0) = 0")
+Tarang.add_neumann_bc!(problem, "∂z(T)(z=1) = 0")
 
 solver = BoundaryValueSolver(problem)
 solve!(solver)
@@ -158,7 +158,7 @@ q.data_g .= sin.(π .* x) .* sin.(π .* z)
 
 problem = LBVP([T])
 problem.fields["q"] = q
-Tarang.add_equation!(problem, "lap(T) = -q")
+Tarang.add_equation!(problem, "Δ(T) = -q")
 ```
 
 ## Heat Transfer Analysis
@@ -206,7 +206,7 @@ T_fluid = ScalarField(dist_fluid, "T_f", bases_fluid, Float64)
 
 # Coupling at interface:
 # T_s = T_f (continuity)
-# k_s * dT_s/dn = k_f * dT_f/dn (flux balance)
+# k_s * ∂T_s/∂n = k_f * ∂T_f/∂n (flux balance)
 ```
 
 ### Melting/Solidification

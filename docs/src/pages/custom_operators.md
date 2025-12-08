@@ -13,7 +13,7 @@ Beyond built-in operators (grad, div, curl, lap), you can define custom operator
 ```julia
 # Advection operator: u·∇f
 function advection(u, f)
-    result = u.components[1].data .* dx(f).data
+    result = u.components[1].data .* ∂x(f).data
     for i in 2:length(u.components)
         result .+= u.components[i].data .* d_operators[i](f).data
     end
@@ -25,7 +25,7 @@ end
 
 ```julia
 # Option 1: Expand manually
-Tarang.add_equation!(problem, "dt(T) = -ux*dx(T) - uz*dz(T)")
+Tarang.add_equation!(problem, "∂ₜ(T) = -ux*∂x(T) - uz*∂z(T)")
 
 # Option 2: Use helper in equation string
 # (requires registration)
@@ -40,12 +40,12 @@ function register_operator!(problem, name, func)
 end
 
 # Define operator
-my_advect(u, f) = "ux*dx($f) + uz*dz($f)"
+my_advect(u, f) = "ux*∂x($f) + uz*∂z($f)"
 
 register_operator!(problem, "advect", my_advect)
 
 # Use in equation
-Tarang.add_equation!(problem, "dt(T) = advect(u, T)")
+Tarang.add_equation!(problem, "∂ₜ(T) = advect(u, T)")
 ```
 
 ## Spectral Differentiation
@@ -119,9 +119,9 @@ function strain_rate(u)
 
     ux, uz = u.components[1], u.components[2]
 
-    S[1,1] = dx(ux)
-    S[1,2] = 0.5 * (dx(uz) + dz(ux))
-    S[2,2] = dz(uz)
+    S[1,1] = ∂x(ux)
+    S[1,2] = 0.5 * (∂x(uz) + ∂z(ux))
+    S[2,2] = ∂z(uz)
 
     return S
 end
@@ -132,7 +132,7 @@ end
 ```julia
 function vorticity_2d(u)
     ux, uz = u.components[1], u.components[2]
-    return dx(uz) - dz(ux)
+    return ∂x(uz) - ∂z(ux)
 end
 ```
 
@@ -140,7 +140,7 @@ end
 
 ```julia
 function helicity(u)
-    omega = curl(u)
+    omega = ∇×(u)
 
     # H = u · ω
     H = u.components[1].data .* omega.components[1].data

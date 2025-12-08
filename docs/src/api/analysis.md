@@ -271,13 +271,13 @@ add_field_evaluator(
 
 ```julia
 # Vorticity
-add_field_evaluator(solver, "omega", "dx(v) - dz(u)")
+add_field_evaluator(solver, "omega", "∂x(v) - ∂z(u)")
 
 # Q-criterion
 add_field_evaluator(solver, "Q", "0.5*(Omega*Omega - S*S)")
 
 # Temperature gradient magnitude
-add_field_evaluator(solver, "grad_T_mag", "sqrt(dx(T)^2 + dz(T)^2)")
+add_field_evaluator(solver, "grad_T_mag", "sqrt(∂x(T)^2 + ∂z(T)^2)")
 
 # Access computed field
 omega = get_field(solver, "omega")
@@ -453,9 +453,9 @@ Stratification vs. shear:
 
 ```julia
 function compute_richardson_number(u, T, dz, g, T0)
-    # Ri = (g/T0) * (dT/dz) / (du/dz)^2
-    dTdz = dz(T)
-    dudz = dz(u)
+    # Ri = (g/T0) * (∂T/∂z) / (∂u/∂z)^2
+    dTdz = ∂z(T)
+    dudz = ∂z(u)
 
     to_grid!(dTdz)
     to_grid!(dudz)

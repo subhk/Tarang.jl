@@ -332,11 +332,11 @@ end
 function split_equation(equation::String)
     """
     Split equation string into LHS and RHS strings following Tarang patterns
-    
+
     Examples:
-    --------  
-    >>> split_equation("dt(u) = -dx(u)")
-    ("dt(u)", "-dx(u)")
+    --------
+    >>> split_equation("∂ₜ(u) = -∂x(u)")
+    ("∂ₜ(u)", "-∂x(u)")
     """
     
     # Find top-level equals signs by tracking parenthetical level

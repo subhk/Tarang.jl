@@ -56,14 +56,14 @@ problem.parameters["nu"] = nu
 
 # Momentum equations
 Tarang.add_equation!(problem,
-    "dt(ux) + ux*dx(ux) + uy*dy(ux) + uz*dz(ux) + dx(p) = nu*lap(ux)")
+    "∂ₜ(ux) + ux*∂x(ux) + uy*∂y(ux) + uz*∂z(ux) + ∂x(p) = nu*Δ(ux)")
 Tarang.add_equation!(problem,
-    "dt(uy) + ux*dx(uy) + uy*dy(uy) + uz*dz(uy) + dy(p) = nu*lap(uy)")
+    "∂ₜ(uy) + ux*∂x(uy) + uy*∂y(uy) + uz*∂z(uy) + ∂y(p) = nu*Δ(uy)")
 Tarang.add_equation!(problem,
-    "dt(uz) + ux*dx(uz) + uy*dy(uz) + uz*dz(uz) + dz(p) = nu*lap(uz)")
+    "∂ₜ(uz) + ux*∂x(uz) + uy*∂y(uz) + uz*∂z(uz) + ∂z(p) = nu*Δ(uz)")
 
 # Continuity
-Tarang.add_equation!(problem, "dx(ux) + dy(uy) + dz(uz) = 0")
+Tarang.add_equation!(problem, "∂x(ux) + ∂y(uy) + ∂z(uz) = 0")
 ```
 
 ## Analytical Solution

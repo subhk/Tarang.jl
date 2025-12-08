@@ -385,9 +385,9 @@ For Fourier bases, differentiation is multiplication by ik:
 **Example**:
 ```julia
 # Derivative operator created automatically
-# When you use dx(f) in equations
+# When you use ∂x(f) in equations
 
-add_equation!(problem, "dx(u) = f")
+add_equation!(problem, "∂x(u) = f")
 ```
 
 ### Chebyshev Differentiation
@@ -403,7 +403,7 @@ Implemented as sparse matrix multiplication in spectral space.
 **Example**:
 ```julia
 # Vertical derivative with Chebyshev basis
-add_equation!(problem, "dz(T) = 0")
+add_equation!(problem, "∂z(T) = 0")
 ```
 
 ---
@@ -427,7 +427,7 @@ basis = RealFourier(x, size=128, bounds=(0.0, 2π), dealias=2/3)
 
 ### When to Dealias
 
-- **Always**: For products of fields (e.g., u*dx(u))
+- **Always**: For products of fields (e.g., u*∂x(u))
 - **Optional**: For linear problems
 - **Recommend**: 3/2 rule for most problems
 - **Higher**: 2/1 padding for very nonlinear problems

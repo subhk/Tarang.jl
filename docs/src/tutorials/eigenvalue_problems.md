@@ -41,10 +41,10 @@ The EVP format is: $A \mathbf{x} = \sigma B \mathbf{x}$
 ```julia
 # Example: diffusion eigenvalue problem
 # σu = d²u/dz² (eigenvalues of Laplacian)
-Tarang.add_equation!(evp, "sigma*u_hat = dz(dz(u_hat))")
+Tarang.add_equation!(evp, "sigma*u_hat = ∂z(∂z(u_hat))")
 
 # Or equivalently
-Tarang.add_equation!(evp, "sigma*u_hat = lap(u_hat)")
+Tarang.add_equation!(evp, "sigma*u_hat = Δ(u_hat)")
 ```
 
 ### Boundary Conditions
@@ -124,14 +124,14 @@ evp.parameters["k"] = k
 evp.parameters["k2"] = k^2
 
 # Momentum equations (modified Laplacian: D² - k²)
-Tarang.add_equation!(evp, "sigma*u_hat + 1im*k*p_hat = Pr*(dz(dz(u_hat)) - k2*u_hat)")
-Tarang.add_equation!(evp, "sigma*w_hat + dz(p_hat) = Pr*(dz(dz(w_hat)) - k2*w_hat) + Ra*Pr*T_hat")
+Tarang.add_equation!(evp, "sigma*u_hat + 1im*k*p_hat = Pr*(∂z(∂z(u_hat)) - k2*u_hat)")
+Tarang.add_equation!(evp, "sigma*w_hat + ∂z(p_hat) = Pr*(∂z(∂z(w_hat)) - k2*w_hat) + Ra*Pr*T_hat")
 
 # Continuity
-Tarang.add_equation!(evp, "1im*k*u_hat + dz(w_hat) = 0")
+Tarang.add_equation!(evp, "1im*k*u_hat + ∂z(w_hat) = 0")
 
 # Temperature
-Tarang.add_equation!(evp, "sigma*T_hat + w_hat = dz(dz(T_hat)) - k2*T_hat")
+Tarang.add_equation!(evp, "sigma*T_hat + w_hat = ∂z(∂z(T_hat)) - k2*T_hat")
 
 # Boundary conditions (no-slip, fixed temperature)
 Tarang.add_dirichlet_bc!(evp, "u_hat(z=0) = 0")
@@ -180,16 +180,16 @@ evp = Tarang.EVP([psi_hat]; eigenvalue=:c)
 
 # Add equation (expanded form)
 Tarang.add_equation!(evp, """
-    c*(dz(dz(psi_hat)) - k2*psi_hat) =
-    U*(dz(dz(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
-    (1im/(Re*k))*(dz(dz(dz(dz(psi_hat)))) - 2*k2*dz(dz(psi_hat)) + k4*psi_hat)
+    c*(∂z(∂z(psi_hat)) - k2*psi_hat) =
+    U*(∂z(∂z(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
+    (1im/(Re*k))*(∂z(∂z(∂z(∂z(psi_hat)))) - 2*k2*∂z(∂z(psi_hat)) + k4*psi_hat)
 """)
 
-# No-slip: ψ = dψ/dz = 0 at walls
+# No-slip: ψ = ∂ψ/∂z = 0 at walls
 Tarang.add_dirichlet_bc!(evp, "psi_hat(z=0) = 0")
 Tarang.add_dirichlet_bc!(evp, "psi_hat(z=1) = 0")
-Tarang.add_neumann_bc!(evp, "dz(psi_hat)(z=0) = 0")
-Tarang.add_neumann_bc!(evp, "dz(psi_hat)(z=1) = 0")
+Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=0) = 0")
+Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=1) = 0")
 ```
 
 ## Parameter Studies

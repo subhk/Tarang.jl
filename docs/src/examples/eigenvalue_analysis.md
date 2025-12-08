@@ -80,16 +80,16 @@ k2 = k^2
 evp = Tarang.EVP([psi_hat]; eigenvalue=:c)
 
 Tarang.add_equation!(evp, """
-    c*(dz(dz(psi_hat)) - k2*psi_hat) =
-    U*(dz(dz(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
-    (1im/(Re*k))*(dz(dz(dz(dz(psi_hat)))) - 2*k2*dz(dz(psi_hat)) + k4*psi_hat)
+    c*(∂z(∂z(psi_hat)) - k2*psi_hat) =
+    U*(∂z(∂z(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
+    (1im/(Re*k))*(∂z(∂z(∂z(∂z(psi_hat)))) - 2*k2*∂z(∂z(psi_hat)) + k4*psi_hat)
 """)
 
-# No-slip: ψ = dψ/dz = 0 at walls
+# No-slip: ψ = ∂ψ/∂z = 0 at walls
 Tarang.add_dirichlet_bc!(evp, "psi_hat(z=0) = 0")
 Tarang.add_dirichlet_bc!(evp, "psi_hat(z=1) = 0")
-Tarang.add_neumann_bc!(evp, "dz(psi_hat)(z=0) = 0")
-Tarang.add_neumann_bc!(evp, "dz(psi_hat)(z=1) = 0")
+Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=0) = 0")
+Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=1) = 0")
 ```
 
 ## Neutral Curves

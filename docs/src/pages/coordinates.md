@@ -133,12 +133,12 @@ Tarang uses pencil (slab) decomposition for efficient parallel FFTs:
 Coordinate names determine derivative operators:
 
 ```julia
-# dx, dy, dz automatically available for Cartesian
-add_equation!(problem, "dt(u) = dx(T)")
+# ∂x, ∂y, ∂z automatically available for Cartesian
+add_equation!(problem, "∂ₜ(u) = ∂x(T)")
 
 # The operator name matches the coordinate name
-# coords["x"] → dx(field)
-# coords["z"] → dz(field)
+# coords["x"] → ∂x(field)
+# coords["z"] → ∂z(field)
 ```
 
 ### Grid Access

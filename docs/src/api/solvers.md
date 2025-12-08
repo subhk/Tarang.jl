@@ -139,7 +139,7 @@ solve!(solver)
 ```julia
 # Poisson equation
 problem = LBVP([phi])
-add_equation!(problem, "lap(phi) = rho")
+add_equation!(problem, "Δ(phi) = rho")
 add_dirichlet_bc!(problem, "phi(z=0) = 0")
 add_dirichlet_bc!(problem, "phi(z=1) = 0")
 
@@ -199,9 +199,9 @@ success = solve!(solver)
 ```julia
 # Steady Navier-Stokes
 problem = NLBVP([u, v, p])
-add_equation!(problem, "u*dx(u) + v*dz(u) + dx(p) = nu*lap(u)")
-add_equation!(problem, "u*dx(v) + v*dz(v) + dz(p) = nu*lap(v)")
-add_equation!(problem, "dx(u) + dz(v) = 0")
+add_equation!(problem, "u*∂x(u) + v*∂z(u) + ∂x(p) = nu*Δ(u)")
+add_equation!(problem, "u*∂x(v) + v*∂z(v) + ∂z(p) = nu*Δ(v)")
+add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 
 solver = NonlinearBoundaryValueSolver(problem)
 
@@ -577,10 +577,10 @@ problem = IVP([u.components[1], u.components[2], p, T])
 problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
-add_equation!(problem, "dt(u) + u*dx(u) + w*dz(u) + dx(p) = Pr*lap(u)")
-add_equation!(problem, "dt(w) + u*dx(w) + w*dz(w) + dz(p) = Pr*lap(w) + Ra*Pr*T")
-add_equation!(problem, "dx(u) + dz(w) = 0")
-add_equation!(problem, "dt(T) + u*dx(T) + w*dz(T) = lap(T)")
+add_equation!(problem, "∂ₜ(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)")
+add_equation!(problem, "∂ₜ(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T")
+add_equation!(problem, "∂x(u) + ∂z(w) = 0")
+add_equation!(problem, "∂ₜ(T) + u*∂x(T) + w*∂z(T) = Δ(T)")
 
 # Boundary conditions
 add_dirichlet_bc!(problem, "u(z=0) = 0")

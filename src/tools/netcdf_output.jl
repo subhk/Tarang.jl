@@ -231,7 +231,7 @@ Parse a field expression string into an operator tree or field.
 Supports expressions like:
 - Variable references: "u", "velocity"
 - Arithmetic: "u + v", "2*u", "u - v"
-- Derivatives: "dx(u)", "d(u,x)", "lap(u)"
+- Derivatives: "∂x(u)", "d(u,x)", "Δ(u)" (also supports ASCII: dx, lap)
 - Products: "u*v", "dot(u, v)"
 
 # Arguments

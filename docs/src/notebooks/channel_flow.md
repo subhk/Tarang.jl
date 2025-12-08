@@ -56,12 +56,12 @@ problem.parameters["dpdx"] = dpdx
 
 # Momentum equations
 Tarang.add_equation!(problem,
-    "dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = nu*lap(ux) - dpdx")
+    "∂ₜ(ux) + ux*∂x(ux) + uz*∂z(ux) + ∂x(p) = nu*Δ(ux) - dpdx")
 Tarang.add_equation!(problem,
-    "dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = nu*lap(uz)")
+    "∂ₜ(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(p) = nu*Δ(uz)")
 
 # Continuity
-Tarang.add_equation!(problem, "dx(ux) + dz(uz) = 0")
+Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
 ```
 
 ## Boundary Conditions
