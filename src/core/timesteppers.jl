@@ -218,37 +218,198 @@ function expv_krylov(t::Real, A::AbstractMatrix, b::AbstractVector; m::Int=30)
     return expv(t, A, b; m=min(m, length(b)))
 end
 
-# Explicit Runge-Kutta methods
+# =============================================================================
+# IMEX Runge-Kutta Methods (Dedalus-compatible)
+# =============================================================================
+# These are the default RK methods, following Dedalus convention where
+# linear terms (LHS) are treated implicitly and nonlinear terms (RHS) explicitly.
+#
+# Naming: RKabc where a=stages, b=explicit order, c=implicit order
+# - RK111: 1-stage, 1st order IMEX
+# - RK222: 2-stage, 2nd order IMEX
+# - RK443: 4-stage, 3rd order IMEX
+# =============================================================================
+
 struct RK111 <: TimeStepper
-    # Forward Euler
+    """
+    1-stage, 1st order IMEX Runge-Kutta (Backward Euler / Forward Euler).
+
+    Following Dedalus convention:
+    - Implicit: Backward Euler (treats linear terms)
+    - Explicit: Forward Euler (treats nonlinear terms)
+
+    Butcher tableaux:
+    Explicit:          Implicit:
+    0 |               1 | 1
+    --|--             --|--
+      | 1               | 1
+    """
+    stages::Int
+    A_explicit::Matrix{Float64}
+    b_explicit::Vector{Float64}
+    c_explicit::Vector{Float64}
+    A_implicit::Matrix{Float64}
+    b_implicit::Vector{Float64}
+    c_implicit::Vector{Float64}
+
+    function RK111()
+        stages = 1
+        # Explicit tableau (Forward Euler)
+        A_explicit = reshape([0.0], 1, 1)
+        b_explicit = [1.0]
+        c_explicit = [0.0]
+        # Implicit tableau (Backward Euler)
+        A_implicit = reshape([1.0], 1, 1)
+        b_implicit = [1.0]
+        c_implicit = [1.0]
+        new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
+    end
+end
+
+struct RK222 <: TimeStepper
+    """
+    2-stage, 2nd order IMEX Runge-Kutta.
+
+    Based on Ascher, Ruuth, Spiteri (1997) ARK2(2,2,2).
+    "Implicit-Explicit Runge-Kutta Methods for Time-Dependent PDEs"
+
+    γ = 1 - 1/√2 ≈ 0.29289321881345254
+
+    Properties:
+    - L-stable implicit part (stiff decay)
+    - 2nd order accuracy for both parts
+    - SDIRK structure (same diagonal)
+
+    Butcher tableaux:
+    Explicit:            Implicit:
+    0   | 0   0          γ   | γ   0
+    1   | 1   0          1   | 1-γ γ
+    ----|------          ----|------
+        | 1/2 1/2            | 1-γ γ
+    """
+    stages::Int
+    A_explicit::Matrix{Float64}
+    b_explicit::Vector{Float64}
+    c_explicit::Vector{Float64}
+    A_implicit::Matrix{Float64}
+    b_implicit::Vector{Float64}
+    c_implicit::Vector{Float64}
+
+    function RK222()
+        stages = 2
+        γ = 1 - 1/√2  # ≈ 0.29289321881345254
+
+        # Explicit tableau
+        A_explicit = [
+            0.0  0.0;
+            1.0  0.0
+        ]
+        b_explicit = [0.5, 0.5]
+        c_explicit = [0.0, 1.0]
+
+        # Implicit tableau (SDIRK)
+        A_implicit = [
+            γ      0.0;
+            1.0-γ  γ
+        ]
+        b_implicit = [1.0-γ, γ]
+        c_implicit = [γ, 1.0]
+
+        new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
+    end
+end
+
+struct RK443 <: TimeStepper
+    """
+    4-stage, 3rd order IMEX Runge-Kutta.
+
+    Based on Kennedy & Carpenter (2003) ARK3(2)4L[2]SA.
+    "Additive Runge-Kutta schemes for convection-diffusion-reaction equations"
+
+    Properties:
+    - L-stable implicit part (stiff decay)
+    - 3rd order accuracy for both parts
+    - 4 stages for improved stability region
+    - ESDIRK structure (explicit first stage, same diagonal thereafter)
+
+    This is the recommended timestepper for most problems with both
+    stiff linear terms (diffusion) and nonlinear advection.
+    """
+    stages::Int
+    A_explicit::Matrix{Float64}
+    b_explicit::Vector{Float64}
+    c_explicit::Vector{Float64}
+    A_implicit::Matrix{Float64}
+    b_implicit::Vector{Float64}
+    c_implicit::Vector{Float64}
+
+    function RK443()
+        stages = 4
+
+        # Kennedy & Carpenter ARK3(2)4L[2]SA coefficients
+        # γ is the SDIRK diagonal value
+        γ = 0.4358665215084590  # Root for L-stability
+
+        # Explicit tableau (ERK part)
+        A_explicit = [
+            0.0                  0.0                  0.0                  0.0;
+            0.4358665215084590   0.0                  0.0                  0.0;
+            0.3212788860285571   0.3966543747256624   0.0                  0.0;
+            -0.105858296071263   0.5529291479590279   0.5529291481122351   0.0
+        ]
+        b_explicit = [0.0, 1.208496649176010, -0.6443631706844688, 0.4358665215084590]
+        c_explicit = [0.0, γ, 0.7179332607542195, 1.0]
+
+        # Implicit tableau (ESDIRK part - same γ on diagonal after first stage)
+        A_implicit = [
+            0.0   0.0   0.0   0.0;
+            0.0   γ     0.0   0.0;
+            0.0   0.2820667392457805  γ     0.0;
+            0.0   1.208496649176010  -0.6443631706844688  γ
+        ]
+        b_implicit = [0.0, 1.208496649176010, -0.6443631706844688, γ]
+        c_implicit = [0.0, γ, 0.7179332607542195, 1.0]
+
+        new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
+    end
+end
+
+# =============================================================================
+# Explicit Runge-Kutta Methods (for reference/testing)
+# =============================================================================
+# These are purely explicit methods - use only for non-stiff problems
+# or when you explicitly want no implicit treatment of linear terms.
+
+struct RK111_Explicit <: TimeStepper
+    """Forward Euler (purely explicit, 1st order)"""
     stages::Int
     coefficients::Matrix{Float64}
-    
-    function RK111()
+
+    function RK111_Explicit()
         stages = 1
         coefficients = reshape([1.0], 1, 1)
         new(stages, coefficients)
     end
 end
 
-struct RK222 <: TimeStepper
-    # 2nd order Runge-Kutta (midpoint method)
+struct RK222_Explicit <: TimeStepper
+    """2nd order Runge-Kutta / Midpoint method (purely explicit)"""
     stages::Int
     coefficients::Matrix{Float64}
-    
-    function RK222()
+
+    function RK222_Explicit()
         stages = 2
         coefficients = [0.0 1.0; 0.5 0.0]
         new(stages, coefficients)
     end
 end
 
-struct RK443 <: TimeStepper
-    # 4th order Runge-Kutta
+struct RK443_Explicit <: TimeStepper
+    """Classical 4th order Runge-Kutta (purely explicit)"""
     stages::Int
     coefficients::Matrix{Float64}
-    
-    function RK443()
+
+    function RK443_Explicit()
         stages = 4
         # Classical RK4 coefficients
         coefficients = [
@@ -742,12 +903,21 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
     update_forcing!(state, solver.sim_time)
     state.current_substep = 1  # Reset substep counter
 
+    # IMEX Runge-Kutta methods (Dedalus-compatible)
     if isa(state.timestepper, RK111)
-        step_rk111!(state, solver)
+        step_rk_imex!(state, solver)
     elseif isa(state.timestepper, RK222)
-        step_rk222!(state, solver)
+        step_rk_imex!(state, solver)
     elseif isa(state.timestepper, RK443)
-        step_rk443!(state, solver)
+        step_rk_imex!(state, solver)
+    # Explicit RK methods (for non-stiff problems)
+    elseif isa(state.timestepper, RK111_Explicit)
+        step_rk111_explicit!(state, solver)
+    elseif isa(state.timestepper, RK222_Explicit)
+        step_rk222_explicit!(state, solver)
+    elseif isa(state.timestepper, RK443_Explicit)
+        step_rk443_explicit!(state, solver)
+    # Multistep IMEX methods
     elseif isa(state.timestepper, CNAB1)
         step_cnab1!(state, solver)
     elseif isa(state.timestepper, CNAB2)
@@ -784,9 +954,12 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
     reset_forcing_flag!(state)
 end
 
-# Explicit Runge-Kutta implementations
-function step_rk111!(state::TimestepperState, solver::InitialValueSolver)
-    """Forward Euler step - OPTIMIZED with workspace reuse"""
+# =============================================================================
+# Explicit Runge-Kutta implementations (for non-stiff problems)
+# =============================================================================
+
+function step_rk111_explicit!(state::TimestepperState, solver::InitialValueSolver)
+    """Forward Euler step (purely explicit) - OPTIMIZED with workspace reuse"""
     current_state = state.history[end]
     dt = state.dt
     n_fields = length(current_state)
