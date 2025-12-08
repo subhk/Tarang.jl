@@ -142,14 +142,14 @@ No-slip walls (velocity = 0) and fixed temperatures:
 
 ```julia
 # Bottom wall (z = 0)
-add_dirichlet_bc!(problem, "ux", "z", 0.0, 0.0)  # No-slip
-add_dirichlet_bc!(problem, "uz", "z", 0.0, 0.0)  # No penetration
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)   # Hot
+add_dirichlet_bc!(problem, "ux(z=0) = 0")  # No-slip
+add_dirichlet_bc!(problem, "uz(z=0) = 0")  # No penetration
+add_dirichlet_bc!(problem, "T(z=0) = 1")   # Hot
 
 # Top wall (z = 1)
-add_dirichlet_bc!(problem, "ux", "z", 1.0, 0.0)  # No-slip
-add_dirichlet_bc!(problem, "uz", "z", 1.0, 0.0)  # No penetration
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)   # Cold
+add_dirichlet_bc!(problem, "ux(z=1) = 0")  # No-slip
+add_dirichlet_bc!(problem, "uz(z=1) = 0")  # No penetration
+add_dirichlet_bc!(problem, "T(z=1) = 0")   # Cold
 ```
 
 !!! note "Pressure Boundary Conditions"

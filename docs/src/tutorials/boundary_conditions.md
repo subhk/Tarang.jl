@@ -19,13 +19,13 @@ Fix the value of a field at the boundary.
 ### Basic Usage
 
 ```julia
-# Syntax: add_dirichlet_bc!(problem, field_name, coord_name, location, value)
+# Syntax: add_dirichlet_bc!(problem, "field(coord=location) = value")
 
 # Temperature fixed at bottom wall
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)  # T = 1 at z = 0
+add_dirichlet_bc!(problem, "T(z=0) = 1")  # T = 1 at z = 0
 
 # Temperature fixed at top wall
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)  # T = 0 at z = 1
+add_dirichlet_bc!(problem, "T(z=1) = 0")  # T = 0 at z = 1
 ```
 
 ### No-Slip Velocity
@@ -34,10 +34,10 @@ For viscous flows at solid walls:
 
 ```julia
 # Velocity = 0 at both walls
-add_dirichlet_bc!(problem, "ux", "z", 0.0, 0.0)  # u = 0 at z = 0
-add_dirichlet_bc!(problem, "ux", "z", 1.0, 0.0)  # u = 0 at z = 1
-add_dirichlet_bc!(problem, "uz", "z", 0.0, 0.0)  # w = 0 at z = 0
-add_dirichlet_bc!(problem, "uz", "z", 1.0, 0.0)  # w = 0 at z = 1
+add_dirichlet_bc!(problem, "ux(z=0) = 0")  # u = 0 at z = 0
+add_dirichlet_bc!(problem, "ux(z=1) = 0")  # u = 0 at z = 1
+add_dirichlet_bc!(problem, "uz(z=0) = 0")  # w = 0 at z = 0
+add_dirichlet_bc!(problem, "uz(z=1) = 0")  # w = 0 at z = 1
 ```
 
 ### Time-Dependent Boundary Conditions
@@ -45,7 +45,7 @@ add_dirichlet_bc!(problem, "uz", "z", 1.0, 0.0)  # w = 0 at z = 1
 ```julia
 # Moving wall (Couette flow)
 U_wall = 1.0
-add_dirichlet_bc!(problem, "ux", "z", 1.0, U_wall)
+add_dirichlet_bc!(problem, "ux(z=1) = $U_wall")
 
 # Oscillating boundary
 function oscillating_bc(t)
@@ -62,14 +62,14 @@ Specify the derivative (flux) at the boundary.
 ### Basic Usage
 
 ```julia
-# Syntax: add_neumann_bc!(problem, field_name, coord_name, location, derivative_value)
+# Syntax: add_neumann_bc!(problem, "d<coord>(field)(coord=location) = value")
 
 # Zero heat flux (insulating wall)
-add_neumann_bc!(problem, "T", "z", 1.0, 0.0)  # dT/dz = 0 at z = 1
+add_neumann_bc!(problem, "dz(T)(z=1) = 0")  # dT/dz = 0 at z = 1
 
 # Specified heat flux
 q = 1.0  # Heat flux value
-add_neumann_bc!(problem, "T", "z", 0.0, q)   # dT/dz = q at z = 0
+add_neumann_bc!(problem, "dz(T)(z=0) = $q")  # dT/dz = q at z = 0
 ```
 
 ### Stress-Free Conditions
@@ -78,10 +78,10 @@ For free surfaces or slip boundaries:
 
 ```julia
 # Stress-free surface (du/dz = 0)
-add_neumann_bc!(problem, "ux", "z", 1.0, 0.0)
+add_neumann_bc!(problem, "dz(ux)(z=1) = 0")
 
 # Using the convenience function
-add_stress_free_bc!(problem, "ux", "z", 1.0)
+add_stress_free_bc!(problem, "ux(z=1) stress-free")
 ```
 
 ## Robin Boundary Conditions
@@ -93,13 +93,13 @@ $\alpha u + \beta \frac{\partial u}{\partial n} = \gamma$
 ### Basic Usage
 
 ```julia
-# Syntax: add_robin_bc!(problem, field, coord, location, alpha, beta, gamma)
+# Syntax: add_robin_bc!(problem, "alpha*field + beta*d<coord>(field)(coord=loc) = value")
 
 # Convective heat transfer: h*T + k*dT/dn = h*T_ambient
 h = 10.0   # Heat transfer coefficient
 k = 1.0    # Thermal conductivity
 T_amb = 0.0
-add_robin_bc!(problem, "T", "z", 1.0, h, k, h*T_amb)
+add_robin_bc!(problem, "$(h)*T + $(k)*dz(T)(z=1) = $(h*T_amb)")
 ```
 
 ### Impedance Boundary Conditions
@@ -109,7 +109,7 @@ For wave problems:
 ```julia
 # ∂u/∂n + Z*u = 0 (absorbing boundary)
 Z = 1.0  # Impedance
-add_robin_bc!(problem, "u", "z", 1.0, Z, 1.0, 0.0)
+add_robin_bc!(problem, "$(Z)*u + 1.0*dz(u)(z=1) = 0")
 ```
 
 ## Periodic Boundary Conditions
@@ -141,7 +141,7 @@ For a Chebyshev expansion with N modes:
 # The tau method is handled automatically
 # When you add BCs, Tarang modifies the operator matrices
 
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)
+add_dirichlet_bc!(problem, "T(z=0) = 1")
 # Internally: replaces one spectral equation with T(z=0) = 1
 ```
 
@@ -155,8 +155,8 @@ For well-posed problems:
 ```julia
 # Diffusion equation: lap(T) - 2nd order in z
 # Needs 2 BCs in z direction
-add_dirichlet_bc!(problem, "T", "z", 0.0, T_bottom)
-add_dirichlet_bc!(problem, "T", "z", 1.0, T_top)
+add_dirichlet_bc!(problem, "T(z=0) = $T_bottom")
+add_dirichlet_bc!(problem, "T(z=1) = $T_top")
 ```
 
 ## Common Patterns
@@ -168,10 +168,10 @@ add_dirichlet_bc!(problem, "T", "z", 1.0, T_top)
 coords = CartesianCoordinates("x", "z")
 
 # No-slip at walls
-add_dirichlet_bc!(problem, "ux", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "ux", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "uz", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "uz", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "ux(z=0) = 0")
+add_dirichlet_bc!(problem, "ux(z=1) = 0")
+add_dirichlet_bc!(problem, "uz(z=0) = 0")
+add_dirichlet_bc!(problem, "uz(z=1) = 0")
 
 # Pressure gradient as forcing (not a BC)
 problem.parameters["dpdx"] = -1.0
@@ -182,24 +182,24 @@ problem.parameters["dpdx"] = -1.0
 ```julia
 # Rayleigh-Bénard setup
 # Fixed temperatures at top and bottom
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)  # Hot bottom
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)  # Cold top
+add_dirichlet_bc!(problem, "T(z=0) = 1")  # Hot bottom
+add_dirichlet_bc!(problem, "T(z=1) = 0")  # Cold top
 
 # No-slip velocity
-add_dirichlet_bc!(problem, "ux", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "ux", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "uz", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "uz", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "ux(z=0) = 0")
+add_dirichlet_bc!(problem, "ux(z=1) = 0")
+add_dirichlet_bc!(problem, "uz(z=0) = 0")
+add_dirichlet_bc!(problem, "uz(z=1) = 0")
 ```
 
 ### Free-Slip Boundaries
 
 ```julia
 # Free-slip (stress-free) at top, no-slip at bottom
-add_dirichlet_bc!(problem, "ux", "z", 0.0, 0.0)      # No-slip
-add_stress_free_bc!(problem, "ux", "z", 1.0)         # Stress-free
-add_dirichlet_bc!(problem, "uz", "z", 0.0, 0.0)      # No penetration
-add_dirichlet_bc!(problem, "uz", "z", 1.0, 0.0)      # No penetration
+add_dirichlet_bc!(problem, "ux(z=0) = 0")              # No-slip
+add_stress_free_bc!(problem, "ux(z=1) stress-free")   # Stress-free
+add_dirichlet_bc!(problem, "uz(z=0) = 0")              # No penetration
+add_dirichlet_bc!(problem, "uz(z=1) = 0")              # No penetration
 ```
 
 ## Validation
