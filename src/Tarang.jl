@@ -69,6 +69,7 @@ include("core/subsystems.jl")
 include("core/system.jl")
 include("tools/matsolvers.jl")
 include("core/solvers.jl")
+include("core/stochastic_forcing.jl")
 include("core/timesteppers.jl")
 
 # NetCDF output must be included before evaluator (evaluator uses NetCDFFileHandler)
@@ -146,6 +147,14 @@ export
     
     # Timesteppers
     RK111, RK222, RK443, CNAB1, CNAB2, SBDF1, SBDF2, SBDF3, SBDF4,
+
+    # Stochastic Forcing
+    Forcing, StochasticForcingType, DeterministicForcingType,
+    StochasticForcing, DeterministicForcing,
+    generate_forcing!, reset_forcing!, set_dt!,
+    apply_forcing!, get_forcing_real,
+    energy_injection_rate, instantaneous_power,
+    compute_forcing_spectrum,
     
     # Analysis
     GlobalFlowProperty, CFL,

@@ -577,7 +577,15 @@ mutable struct TimestepperState
     workspace_fields::Vector{ScalarField}  # Reusable scratch fields
     workspace_allocated::Bool
 
-    function TimestepperState(timestepper::TimeStepper, dt::Float64, initial_state::Vector{ScalarField})
+    # Stochastic forcing support (following GeophysicalFlows.jl pattern)
+    # Forcing is computed ONCE at the beginning of each timestep and stays constant
+    # across all substeps (important for Stratonovich calculus correctness)
+    forcing::Union{Nothing, Any}  # StochasticForcing or nothing
+    current_substep::Int  # Track which substep we're in (1-indexed)
+    forcing_generated::Bool  # Flag to track if forcing was generated this timestep
+
+    function TimestepperState(timestepper::TimeStepper, dt::Float64, initial_state::Vector{ScalarField};
+                              forcing=nothing)
         history = [copy.(initial_state)]
         dt_history = [dt]  # Initialize with current timestep
         timestepper_data = Dict{String, Any}()
@@ -595,8 +603,65 @@ mutable struct TimestepperState
             end
         end
 
-        new(timestepper, dt, history, dt_history, 0, timestepper_data, workspace_fields, true)
+        new(timestepper, dt, history, dt_history, 0, timestepper_data, workspace_fields, true,
+            forcing, 1, false)
     end
+end
+
+"""
+    set_forcing!(state::TimestepperState, forcing)
+
+Set the stochastic forcing configuration for the timestepper.
+The forcing will be generated once per timestep and held constant across substeps.
+"""
+function set_forcing!(state::TimestepperState, forcing)
+    state.forcing = forcing
+    state.forcing_generated = false
+end
+
+"""
+    update_forcing!(state::TimestepperState, sim_time::Float64)
+
+Generate new forcing realization at the beginning of a timestep.
+This should be called ONCE at the start of step!, not at each substep.
+
+Following GeophysicalFlows.jl pattern:
+- Forcing is white in time but spatially correlated
+- For Stratonovich calculus, forcing must be constant within each timestep
+"""
+function update_forcing!(state::TimestepperState, sim_time::Float64)
+    if state.forcing !== nothing && !state.forcing_generated
+        # Update dt in forcing if it changed
+        if hasfield(typeof(state.forcing), :dt) && state.forcing.dt != state.dt
+            state.forcing.dt = state.dt
+        end
+        # Generate new forcing realization
+        generate_forcing!(state.forcing, sim_time)
+        state.forcing_generated = true
+    end
+end
+
+"""
+    reset_forcing_flag!(state::TimestepperState)
+
+Reset the forcing generation flag. Call this at the END of each timestep
+to prepare for the next forcing generation.
+"""
+function reset_forcing_flag!(state::TimestepperState)
+    state.forcing_generated = false
+    state.current_substep = 1
+end
+
+"""
+    get_cached_forcing(state::TimestepperState)
+
+Get the cached forcing array. Returns nothing if no forcing is configured.
+"""
+function get_cached_forcing(state::TimestepperState)
+    if state.forcing !== nothing
+        return state.forcing.cached_forcing
+    end
+    return nothing
 end
 
 """
@@ -663,8 +728,20 @@ end
 
 # Timestepping implementation
 function step!(state::TimestepperState, solver::InitialValueSolver)
-    """Advance solution by one timestep"""
-    
+    """
+    Advance solution by one timestep.
+
+    IMPORTANT for stochastic forcing (following GeophysicalFlows.jl pattern):
+    - Forcing is generated ONCE at the beginning of the timestep
+    - Forcing stays CONSTANT across all substeps (RK stages)
+    - This is essential for correct Stratonovich calculus interpretation
+    """
+
+    # Generate stochastic forcing ONCE at the beginning of the timestep
+    # This ensures forcing is constant across all substeps (critical for Stratonovich)
+    update_forcing!(state, solver.sim_time)
+    state.current_substep = 1  # Reset substep counter
+
     if isa(state.timestepper, RK111)
         step_rk111!(state, solver)
     elseif isa(state.timestepper, RK222)
@@ -702,6 +779,9 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
     else
         throw(ArgumentError("Unknown timestepper type: $(typeof(state.timestepper))"))
     end
+
+    # Reset forcing flag at the end of timestep (prepare for next forcing generation)
+    reset_forcing_flag!(state)
 end
 
 # Explicit Runge-Kutta implementations
