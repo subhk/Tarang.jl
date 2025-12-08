@@ -374,54 +374,6 @@ struct RK443 <: TimeStepper
     end
 end
 
-# =============================================================================
-# Explicit Runge-Kutta Methods (for reference/testing)
-# =============================================================================
-# These are purely explicit methods - use only for non-stiff problems
-# or when you explicitly want no implicit treatment of linear terms.
-
-struct RK111_Explicit <: TimeStepper
-    """Forward Euler (purely explicit, 1st order)"""
-    stages::Int
-    coefficients::Matrix{Float64}
-
-    function RK111_Explicit()
-        stages = 1
-        coefficients = reshape([1.0], 1, 1)
-        new(stages, coefficients)
-    end
-end
-
-struct RK222_Explicit <: TimeStepper
-    """2nd order Runge-Kutta / Midpoint method (purely explicit)"""
-    stages::Int
-    coefficients::Matrix{Float64}
-
-    function RK222_Explicit()
-        stages = 2
-        coefficients = [0.0 1.0; 0.5 0.0]
-        new(stages, coefficients)
-    end
-end
-
-struct RK443_Explicit <: TimeStepper
-    """Classical 4th order Runge-Kutta (purely explicit)"""
-    stages::Int
-    coefficients::Matrix{Float64}
-
-    function RK443_Explicit()
-        stages = 4
-        # Classical RK4 coefficients
-        coefficients = [
-            0.0  1.0  0.0  0.0;
-            0.5  0.0  1.0  0.0;
-            0.5  0.0  0.0  1.0;
-            1.0  0.0  0.0  0.0
-        ]
-        new(stages, coefficients)
-    end
-end
-
 # Implicit-explicit methods
 struct CNAB1 <: TimeStepper
     # Crank-Nicolson Adams-Bashforth 1st order
@@ -843,19 +795,6 @@ function _workspace_count(::RK443)
     return 12  # 4 stages: 4 * (X_stages, F_exp, F_imp)
 end
 
-# Explicit RK methods (fewer workspace requirements)
-function _workspace_count(::RK111_Explicit)
-    return 1  # 1 for RHS evaluation
-end
-
-function _workspace_count(::RK222_Explicit)
-    return 2  # k1, temp_state
-end
-
-function _workspace_count(::RK443_Explicit)
-    return 5  # k1, k2, k3, k4, temp
-end
-
 function _workspace_count(::Union{CNAB1, CNAB2})
     return 2
 end
@@ -924,13 +863,6 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
         step_rk_imex!(state, solver)
     elseif isa(state.timestepper, RK443)
         step_rk_imex!(state, solver)
-    # Explicit RK methods (for non-stiff problems)
-    elseif isa(state.timestepper, RK111_Explicit)
-        step_rk111_explicit!(state, solver)
-    elseif isa(state.timestepper, RK222_Explicit)
-        step_rk222_explicit!(state, solver)
-    elseif isa(state.timestepper, RK443_Explicit)
-        step_rk443_explicit!(state, solver)
     # Multistep IMEX methods
     elseif isa(state.timestepper, CNAB1)
         step_cnab1!(state, solver)
@@ -966,152 +898,6 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
 
     # Reset forcing flag at the end of timestep (prepare for next forcing generation)
     reset_forcing_flag!(state)
-end
-
-# =============================================================================
-# Explicit Runge-Kutta implementations (for non-stiff problems)
-# =============================================================================
-
-function step_rk111_explicit!(state::TimestepperState, solver::InitialValueSolver)
-    """Forward Euler step (purely explicit) - OPTIMIZED with workspace reuse"""
-    current_state = state.history[end]
-    dt = state.dt
-    n_fields = length(current_state)
-
-    # Evaluate RHS: du/dt = F(u)
-    rhs = evaluate_rhs(solver, current_state, solver.sim_time)
-
-    # Forward Euler: u^{n+1} = u^n + dt * F(u^n)
-    # OPTIMIZATION: Reuse workspace fields instead of allocating new ones
-    new_state = ScalarField[]
-
-    for (i, field) in enumerate(current_state)
-        # Get pre-allocated workspace field
-        new_field = get_workspace_field!(state, field, i)
-
-        ensure_layout!(field, :g)
-        ensure_layout!(rhs[i], :g)
-        ensure_layout!(new_field, :g)
-
-        # Forward Euler: u^{n+1} = u^n + dt * F(u^n)
-        # In-place update using multi-tier implementation
-        n = length(field.data_g)
-
-        # Copy initial state in-place
-        copyto!(new_field.data_g, field.data_g)
-
-        if n > 2000
-            # BLAS for very large arrays (most efficient)
-            BLAS.axpy!(dt, rhs[i].data_g, new_field.data_g)
-        elseif n > 100
-            # LoopVectorization for medium arrays
-            dt_local = dt  # Local variable for @turbo
-            @turbo for j in eachindex(new_field.data_g, rhs[i].data_g)
-                new_field.data_g[j] += dt_local * rhs[i].data_g[j]
-            end
-        else
-            # Broadcasting for small arrays
-            new_field.data_g .+= dt .* rhs[i].data_g
-        end
-
-        # Copy back to a persistent field for history
-        result_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
-        copyto!(result_field.data_g, new_field.data_g)
-        result_field.current_layout = :g
-        push!(new_state, result_field)
-    end
-
-    push!(state.history, new_state)
-
-    # Keep only necessary history
-    if length(state.history) > 1
-        popfirst!(state.history)
-    end
-end
-
-function step_rk222_explicit!(state::TimestepperState, solver::InitialValueSolver)
-    """2nd order explicit Runge-Kutta (midpoint method)"""
-    current_state = state.history[end]
-    dt = state.dt
-    
-    # Stage 1: k1 = F(t, u^n)
-    k1 = evaluate_rhs(solver, current_state, solver.sim_time)
-    
-    # Stage 2: u_temp = u^n + dt/2 * k1
-    temp_state = ScalarField[]
-    for (i, field) in enumerate(current_state)
-        temp_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
-        ensure_layout!(field, :g)
-        ensure_layout!(k1[i], :g)
-        ensure_layout!(temp_field, :g)
-        
-        temp_field.data_g .= field.data_g .+ (dt/2) .* k1[i].data_g
-        push!(temp_state, temp_field)
-    end
-    
-    # Stage 2: k2 = F(t + dt/2, u_temp)
-    k2 = evaluate_rhs(solver, temp_state, solver.sim_time + dt/2)
-    
-    # Final update: u^{n+1} = u^n + dt * k2
-    new_state = ScalarField[]
-    for (i, field) in enumerate(current_state)
-        new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
-        ensure_layout!(field, :g)
-        ensure_layout!(k2[i], :g)
-        ensure_layout!(new_field, :g)
-        
-        new_field.data_g .= field.data_g .+ dt .* k2[i].data_g
-        push!(new_state, new_field)
-    end
-    
-    push!(state.history, new_state)
-    
-    # Keep only necessary history
-    if length(state.history) > 1
-        popfirst!(state.history)
-    end
-end
-
-function step_rk443_explicit!(state::TimestepperState, solver::InitialValueSolver)
-    """4th order explicit Runge-Kutta"""
-    current_state = state.history[end]
-    dt = state.dt
-    t = solver.sim_time
-    
-    # Stage 1: k1 = F(t, u^n)
-    k1 = evaluate_rhs(solver, current_state, t)
-    
-    # Stage 2: u_temp = u^n + dt/2 * k1
-    temp_state1 = add_scaled_state(current_state, k1, dt/2)
-    k2 = evaluate_rhs(solver, temp_state1, t + dt/2)
-    
-    # Stage 3: u_temp = u^n + dt/2 * k2
-    temp_state2 = add_scaled_state(current_state, k2, dt/2)
-    k3 = evaluate_rhs(solver, temp_state2, t + dt/2)
-    
-    # Stage 4: u_temp = u^n + dt * k3
-    temp_state3 = add_scaled_state(current_state, k3, dt)
-    k4 = evaluate_rhs(solver, temp_state3, t + dt)
-    
-    # Final update: u^{n+1} = u^n + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
-    new_state = ScalarField[]
-    for (i, field) in enumerate(current_state)
-        new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
-        ensure_layout!(field, :g)
-        ensure_layout!(new_field, :g)
-        
-        # RK4 combination
-        rhs_combined = (k1[i].data_g .+ 2 .* k2[i].data_g .+ 2 .* k3[i].data_g .+ k4[i].data_g) ./ 6
-        new_field.data_g .= field.data_g .+ dt .* rhs_combined
-        push!(new_state, new_field)
-    end
-    
-    push!(state.history, new_state)
-    
-    # Keep only necessary history
-    if length(state.history) > 1
-        popfirst!(state.history)
-    end
 end
 
 # =============================================================================
