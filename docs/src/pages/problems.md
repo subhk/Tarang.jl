@@ -118,6 +118,13 @@ add_robin_bc!(problem, "1.0*T(z=0) + 1.0*dz(T)(z=0) = 0")
 add_stress_free_bc!(problem, "u(z=1)")
 ```
 
+### No-Slip
+
+```julia
+# u = 0 (solid wall)
+add_no_slip_bc!(problem, "u(z=0)")
+```
+
 ## Problem Validation
 
 ```julia

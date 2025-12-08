@@ -354,6 +354,29 @@ add_stress_free_bc!(problem, "u(z=1)")
 
 ---
 
+### add_no_slip_bc!
+
+Add no-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.
+
+**Syntax**:
+```julia
+add_no_slip_bc!(problem, "field(coord=pos)")
+```
+
+**Examples**:
+
+```julia
+# No-slip at walls
+add_no_slip_bc!(problem, "u(z=0)")
+add_no_slip_bc!(problem, "u(z=1)")
+
+# Equivalent to:
+# u(z=0) = 0, v(z=0) = 0, w(z=0) = 0
+# u(z=1) = 0, v(z=1) = 0, w(z=1) = 0
+```
+
+---
+
 ### add_bc!
 
 Add custom boundary condition using equation syntax.
