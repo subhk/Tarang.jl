@@ -444,7 +444,7 @@ Partial derivatives commute:
 
 ```julia
 # ∂²f/∂x∂z = ∂²f/∂z∂x
-dx(dz(f)) == dz(dx(f))
+∂x(∂z(f)) == ∂z(∂x(f))
 ```
 
 ### Product Rule
@@ -464,7 +464,7 @@ dx(dz(f)) == dz(dx(f))
 # Define helper function
 function my_operator(field, param)
     # Custom operation
-    result = dx(field) + param * Δ(field)
+    result = ∂x(field) + param * Δ(field)
     return result
 end
 
@@ -501,11 +501,11 @@ Tarang.jl parses equation strings into operator applications:
 
 ```julia
 # String equation
-add_equation!(problem, "∂ₜ(u) + u*dx(u) = nu*Δ(u) - dx(p)")
+add_equation!(problem, "∂ₜ(u) + u*∂x(u) = nu*Δ(u) - ∂x(p)")
 
 # Parsed as:
-# LHS: dt(u) + u*dx(u)
-# RHS: nu*lap(u) - dx(p)
+# LHS: ∂ₜ(u) + u*∂x(u)
+# RHS: nu*Δ(u) - ∂x(p)
 ```
 
 **Supported operations**:
@@ -521,7 +521,7 @@ add_equation!(problem, "∂ₜ(u) + u*dx(u) = nu*Δ(u) - dx(p)")
 Operators are evaluated in spectral space when possible:
 
 ```julia
-# dx(u): Multiply by ik in Fourier space
+# ∂x(u): Multiply by ik in Fourier space
 # Δ(u): Multiply by -k² in Fourier space
 # Nonlinear terms: Transform to grid space, evaluate, transform back
 ```
@@ -534,7 +534,7 @@ Operators are evaluated in spectral space when possible:
 
 ```julia
 # Bad: Multiple transforms
-add_equation!(problem, "∂ₜ(T) = -u*dx(T)")  # Transforms for each term
+add_equation!(problem, "∂ₜ(T) = -u*∂x(T)")  # Transforms for each term
 
 # Better: Group operations
 # Tarang automatically optimizes transform grouping
@@ -544,7 +544,7 @@ add_equation!(problem, "∂ₜ(T) = -u*dx(T)")  # Transforms for each term
 
 ```julia
 # If using same derivative multiple times
-dudx = dx(u)
+dudx = ∂x(u)
 
 add_equation!(problem, "term1 = dudx")
 add_equation!(problem, "term2 = w*dudx")
