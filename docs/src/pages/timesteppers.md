@@ -8,47 +8,93 @@ Tarang.jl provides several families of time integration schemes:
 
 | Family | Type | Best For |
 |--------|------|----------|
-| RK | Explicit | Non-stiff problems |
-| CNAB | IMEX | Moderately stiff |
-| SBDF | IMEX | Stiff problems |
+| RK (IMEX) | IMEX Runge-Kutta | General stiff problems |
+| RK (Explicit) | Explicit Runge-Kutta | Non-stiff problems |
+| CNAB | Multistep IMEX | Moderately stiff |
+| SBDF | Multistep IMEX | Stiff problems |
+
+## IMEX Runge-Kutta (Default)
+
+Following Dedalus convention, the RK methods use Additive Runge-Kutta (ARK) schemes:
+- Linear terms (LHS) are treated **implicitly**
+- Nonlinear terms (RHS) are treated **explicitly**
+
+This allows stable integration of stiff problems with larger timesteps.
+
+### RK111 (IMEX)
+
+First-order IMEX method (Backward Euler / Forward Euler).
+
+```julia
+timestepper = RK111()  # IMEX by default
+```
+
+- **Implicit part**: Backward Euler (linear terms)
+- **Explicit part**: Forward Euler (nonlinear terms)
+- **Accuracy**: O(Δt)
+- **Use case**: Testing, simple stiff problems
+
+### RK222 (IMEX)
+
+Second-order, 2-stage IMEX Runge-Kutta (Ascher, Ruuth, Spiteri 1997).
+
+```julia
+timestepper = RK222()  # IMEX by default
+```
+
+- **Implicit part**: 2-stage SDIRK (γ = 1 - 1/√2)
+- **Explicit part**: 2-stage explicit RK
+- **Accuracy**: O(Δt²)
+- **Stability**: L-stable
+- **Use case**: General purpose (recommended)
+
+### RK443 (IMEX)
+
+Third-order, 4-stage IMEX Runge-Kutta (Kennedy & Carpenter ARK3(2)4L[2]SA).
+
+```julia
+timestepper = RK443()  # IMEX by default
+```
+
+- **Implicit part**: 4-stage ESDIRK (γ ≈ 0.4359)
+- **Explicit part**: 4-stage explicit RK
+- **Accuracy**: O(Δt³)
+- **Stability**: L-stable
+- **Use case**: High accuracy requirements, stiff problems
 
 ## Explicit Runge-Kutta
 
-### RK111 (Forward Euler)
+For non-stiff problems or when you want purely explicit treatment:
 
-First-order explicit method.
+### RK111_Explicit (Forward Euler)
 
 ```julia
-timestepper = RK111()
+timestepper = RK111_Explicit()
 ```
 
 - **Stability**: CFL limited
 - **Accuracy**: O(Δt)
 - **Use case**: Testing, simple problems
 
-### RK222
-
-Second-order, 2-stage Runge-Kutta.
+### RK222_Explicit
 
 ```julia
-timestepper = RK222()
+timestepper = RK222_Explicit()
 ```
 
 - **Stability**: Better than RK111
 - **Accuracy**: O(Δt²)
-- **Use case**: General purpose (recommended)
+- **Use case**: Non-stiff problems
 
-### RK443
-
-Fourth-order, 4-stage Runge-Kutta.
+### RK443_Explicit
 
 ```julia
-timestepper = RK443()
+timestepper = RK443_Explicit()
 ```
 
 - **Stability**: Good
 - **Accuracy**: O(Δt⁴)
-- **Use case**: High accuracy requirements
+- **Use case**: High accuracy, non-stiff problems
 
 ## IMEX Methods
 
@@ -84,18 +130,19 @@ SBDF4()  # 4th order
 
 | Stiffness | Indicator | Recommended |
 |-----------|-----------|-------------|
-| Non-stiff | Low Re, large Δt stable | RK222, RK443 |
-| Mild | Moderate Re | CNAB2, SBDF2 |
+| Non-stiff | Low Re, large Δt stable | RK222_Explicit, RK443_Explicit |
+| Mild | Moderate Re | RK222, RK443 (IMEX) |
+| Moderate | Higher Re | CNAB2, SBDF2 |
 | Stiff | High Re, requires tiny Δt | SBDF3, SBDF4 |
 
 ### By Physics
 
 | Problem Type | Recommended |
 |--------------|-------------|
-| Advection-dominated | RK222, RK443 |
-| Diffusion-dominated | CNAB2, SBDF2 |
+| Advection-dominated | RK222_Explicit, RK443_Explicit |
+| Diffusion-dominated | RK222, RK443 (IMEX) or CNAB2, SBDF2 |
 | High Rayleigh number | SBDF2, SBDF3 |
-| Turbulence | RK443 (explicit) or SBDF2 |
+| Turbulence | RK443 (IMEX) or SBDF2 |
 
 ## Stability Analysis
 
@@ -161,15 +208,18 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 
 | Method | Evaluations/Step | Memory | Stability |
 |--------|------------------|--------|-----------|
-| RK111 | 1 | Low | Poor |
-| RK222 | 2 | Medium | Good |
-| RK443 | 4 | Higher | Best (explicit) |
+| RK111 (IMEX) | 1 + solve | Medium | Good (L-stable) |
+| RK222 (IMEX) | 2 + solve | Medium | Very good (L-stable) |
+| RK443 (IMEX) | 4 + solve | Higher | Best (L-stable) |
+| RK111_Explicit | 1 | Low | Poor |
+| RK222_Explicit | 2 | Medium | Good |
+| RK443_Explicit | 4 | Higher | Best (explicit) |
 | CNAB2 | 1 | Medium | Very good |
 | SBDF2 | 1 | Medium | Excellent |
 
 ## Example Usage
 
-### Explicit (RK)
+### IMEX RK (Recommended for stiff problems)
 
 ```julia
 using Tarang
@@ -178,19 +228,31 @@ using Tarang
 problem = IVP([u, p])
 # ... add equations ...
 
-# Explicit solver
-solver = InitialValueSolver(problem, RK443(); dt=1e-4)
+# IMEX RK solver - handles stiff diffusion implicitly
+solver = InitialValueSolver(problem, RK443(); dt=1e-3)
 
-# Small timestep required
+# Larger timestep possible due to implicit treatment of linear terms
 while solver.sim_time < t_end
     step!(solver)
 end
 ```
 
-### IMEX (SBDF)
+### Explicit RK (For non-stiff problems)
 
 ```julia
-# Same problem, IMEX solver
+# Same problem, purely explicit solver
+solver = InitialValueSolver(problem, RK443_Explicit(); dt=1e-4)
+
+# Smaller timestep required (CFL limited by diffusion)
+while solver.sim_time < t_end
+    step!(solver)
+end
+```
+
+### Multistep IMEX (SBDF)
+
+```julia
+# Same problem, multistep IMEX solver
 solver = InitialValueSolver(problem, SBDF2(); dt=1e-3)
 
 # Larger timestep possible
