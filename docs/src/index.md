@@ -55,10 +55,10 @@ problem.parameters["Pr"] = 1.0
 problem.parameters["Ra"] = 1e5
 
 # Add boundary conditions
-add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "u", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "u(z=0) = 0")
+add_dirichlet_bc!(problem, "u(z=1) = 0")
+add_dirichlet_bc!(problem, "T(z=0) = 1")
+add_dirichlet_bc!(problem, "T(z=1) = 0")
 
 # Create solver with timestepper
 solver = InitialValueSolver(problem, RK222(), dt=1e-3)
