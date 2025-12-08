@@ -109,80 +109,77 @@ T = ScalarField(dist, "T", (x_basis, z_basis))
 Tarang.jl follows the [Dedalus](https://dedalus-project.readthedocs.io/) approach: users must explicitly create tau fields and add them to equations using the `lift()` operator.
 
 ```julia
-# Tau fields for velocity BCs (2 per component for 2nd-order operator)
-tau_ux1 = ScalarField(dist, "tau_ux1", (x_basis,))  # ux at z=0
-tau_ux2 = ScalarField(dist, "tau_ux2", (x_basis,))  # ux at z=1
-tau_uz1 = ScalarField(dist, "tau_uz1", (x_basis,))  # uz at z=0
-tau_uz2 = ScalarField(dist, "tau_uz2", (x_basis,))  # uz at z=1
+# Tau fields for pressure gauge
+tau_p = ScalarField(dist, "tau_p", (), dtype)
 
-# Tau fields for temperature BCs
-tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))    # T at z=0
-tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))    # T at z=1
+# Tau fields for temperature/buoyancy BCs (one per boundary)
+tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), dtype)   # T at z=0
+tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), dtype)   # T at z=1
 
-# Tau for pressure gauge (1 for 1st-order equation)
-tau_p = ScalarField(dist, "tau_p", (x_basis,))
+# Vector tau fields for velocity BCs (uses VectorField for compact notation)
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,), dtype)  # Velocity at z=0
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), dtype)  # Velocity at z=1
 ```
 
-!!! tip "Tau Field Naming Convention"
-    Use descriptive names like `tau_ux1`, `tau_ux2` to indicate which field and boundary they correspond to.
+!!! tip "Vector Tau Fields"
+    Using `VectorField` for tau fields allows compact vector notation in equations. The components are accessed via `tau_u1.components[1]` (x) and `tau_u1.components[2]` (z).
 
 ### Problem Definition
 
 ```julia
-# Create Initial Value Problem with ALL fields including tau fields
-problem = IVP([ux, uz, p, T, tau_ux1, tau_ux2, tau_uz1, tau_uz2, tau_T1, tau_T2, tau_p])
+# Collect all state variables (including tau field components)
+variables = [p, T,
+             u.components[1], u.components[2],  # ux, uz
+             tau_p, tau_T1, tau_T2,
+             tau_u1.components[1], tau_u1.components[2],
+             tau_u2.components[1], tau_u2.components[2]]
 
-# Add dimensionless parameters
-problem.parameters["Ra"] = Ra
-problem.parameters["Pr"] = Pr
+problem = IVP(variables)
 
-# Momentum equation for ux: du/dt = -u·∇u - ∇p + Pr∇²u
-# Include lift() terms for tau fields at highest spectral modes
-add_equation!(
-    problem,
-    dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) - Pr*lap(ux)
-        + lift(tau_ux1, z_basis, -1) + lift(tau_ux2, z_basis, -2)
-)
+# Add substitutions for parameters (Dedalus-style)
+add_substitution!(problem, "Ra", Ra)
+add_substitution!(problem, "Pr", Pr)
+add_substitution!(problem, "Lz", H)
 
-# Momentum equation for uz: dw/dt = -u·∇w - ∂p/∂z + Pr∇²w + Ra·Pr·T
-add_equation!(
-    problem,
-    dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) - Pr*lap(uz) - Ra*Pr*T
-        + lift(tau_uz1, z_basis, -1) + lift(tau_uz2, z_basis, -2)
-)
+# Equations use string format with vector operators (Dedalus-style)
+# Continuity: div(u) = 0
+add_equation!(problem, "div(u) + tau_p = 0")
 
-# Continuity equation: ∇·u = 0
-add_equation!(problem, dx(ux) + dz(uz) + lift(tau_p, z_basis, -1))
+# Temperature equation: ∂T/∂t - ∇²T = -u·∇T
+add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u@∇(T)")
 
-# Temperature equation: dT/dt = -u·∇T + ∇²T
-add_equation!(
-    problem,
-    dt(T) + ux*dx(T) + uz*dz(T) - lap(T)
-        + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2)
-)
+# Momentum x: ∂ux/∂t - Pr∇²ux + ∂p/∂x = -u·∇ux
+add_equation!(problem, "∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)")
+
+# Momentum z: ∂uz/∂t - Pr∇²uz + ∂p/∂z - Ra*Pr*T = -u·∇uz
+add_equation!(problem, "∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u@∇(u_z)")
 ```
 
 ### Boundary Conditions
 
-No-slip walls (velocity = 0) and fixed temperatures, with explicit tau field linkage:
+No-slip walls (velocity = 0) and fixed temperatures, using Dedalus-style string format:
 
 ```julia
-# Bottom wall (z = 0)
-add_dirichlet_bc!(problem, ux, "z", :left, 0.0; tau_field="tau_ux1")   # No-slip
-add_dirichlet_bc!(problem, uz, "z", :left, 0.0; tau_field="tau_uz1")   # No penetration
-add_dirichlet_bc!(problem, T, "z", :left, 1.0; tau_field="tau_T1")     # Hot
+# Temperature BCs
+add_bc!(problem, "T(z=0) = 1")      # Hot bottom
+add_bc!(problem, "T(z=Lz) = 0")     # Cold top
 
-# Top wall (z = 1)
-add_dirichlet_bc!(problem, ux, "z", :right, 0.0; tau_field="tau_ux2")  # No-slip
-add_dirichlet_bc!(problem, uz, "z", :right, 0.0; tau_field="tau_uz2")  # No penetration
-add_dirichlet_bc!(problem, T, "z", :right, 0.0; tau_field="tau_T2")    # Cold
+# Velocity BCs (no-slip at both walls)
+add_bc!(problem, "u_x(z=0) = 0")    # No-slip bottom
+add_bc!(problem, "u_z(z=0) = 0")
+add_bc!(problem, "u_x(z=Lz) = 0")   # No-slip top
+add_bc!(problem, "u_z(z=Lz) = 0")
 
-# Pressure gauge (fixes arbitrary constant)
-add_dirichlet_bc!(problem, p, "z", :left, 0.0; tau_field="tau_p")
+# Pressure gauge (integral constraint)
+add_bc!(problem, "integ(p) = 0")
 ```
 
-!!! note "Pressure Gauge Condition"
-    For incompressible flow, pressure is only defined up to a constant. The gauge condition fixes p=0 at one point. This requires one tau field for the continuity equation.
+!!! note "Equation String Syntax"
+    Tarang.jl uses Dedalus-style string equations:
+    - Unicode operators: `∂ₜ` (time derivative), `Δ` (Laplacian), `∇` (gradient)
+    - Advection: `u@∇(T)` means u·∇T (dot product)
+    - Vector components: `u_x`, `u_z` access vector field components
+    - Lift operator: `lift(tau_u2_x)` for tau terms
 
 ### Initial Conditions
 

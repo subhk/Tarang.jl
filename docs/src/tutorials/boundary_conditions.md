@@ -41,12 +41,12 @@ using Tarang
 # Create coordinates and bases
 coords = CartesianCoordinates("x", "z")
 x_basis = RealFourier(coords["x"], size=64, bounds=(0.0, 2π))
-z_basis = Chebyshev(coords["z"], size=64, bounds=(0.0, 1.0))
+z_basis = ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))
 
 # Create distributor and fields
-dist = Distributor([x_basis, z_basis])
-u = ScalarField(dist, "u")
-f = ScalarField(dist, "f")  # Source term
+dist = Distributor(coords)
+u = ScalarField(dist, "u", (x_basis, z_basis))
+f = ScalarField(dist, "f", (x_basis, z_basis))  # Source term
 
 # Step 1: Create tau fields (one per BC)
 # These live on the x-basis only (boundary is a line in 2D)
@@ -56,18 +56,18 @@ tau_u2 = ScalarField(dist, "tau_u2", (x_basis,))  # For BC at z=1
 # Step 2: Add ALL fields to problem (including tau fields)
 problem = LBVP([u, tau_u1, tau_u2])
 
-# Step 3: Add equation with lift() operators
-# lift(tau, basis, mode) places tau contribution at specified spectral mode
-add_equation!(problem,
-    lap(u) + lift(tau_u1, z_basis, -1) + lift(tau_u2, z_basis, -2) - f
-)
+# Step 3: Add substitution for source term
+add_substitution!(problem, "f", f)
 
-# Step 4: Add boundary conditions with explicit tau_field parameter
-add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")   # u(z=0) = 0
-add_dirichlet_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u2")  # u(z=1) = 0
+# Step 4: Add equation with lift() operators (Dedalus-style string format)
+add_equation!(problem, "Δ(u) + lift(tau_u1) + lift(tau_u2) = f")
+
+# Step 5: Add boundary conditions
+add_bc!(problem, "u(z=0) = 0")   # u(z=0) = 0
+add_bc!(problem, "u(z=1) = 0")   # u(z=1) = 0
 
 # Solve
-solver = LinearBVPSolver(problem)
+solver = BoundaryValueSolver(problem)
 solve!(solver)
 ```
 
@@ -85,47 +85,47 @@ tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))
 # Add to problem
 problem = LBVP([T, tau_T1, tau_T2])
 
-# Add equation with lift terms
-add_equation!(problem,
-    lap(T) + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2) - source
-)
+# Add equation with lift terms (Dedalus-style string format)
+add_equation!(problem, "Δ(T) + lift(tau_T1) + lift(tau_T2) = source")
 
 # Boundary conditions
-add_dirichlet_bc!(problem, T, "z", :left, 1.0; tau_field="tau_T1")   # T(z=0) = 1
-add_dirichlet_bc!(problem, T, "z", :right, 0.0; tau_field="tau_T2")  # T(z=1) = 0
+add_bc!(problem, "T(z=0) = 1")   # T(z=0) = 1
+add_bc!(problem, "T(z=1) = 0")   # T(z=1) = 0
 ```
 
-### No-Slip Velocity (Multiple Components)
+### No-Slip Velocity (Vector Fields)
 
-For viscous flows at solid walls, each velocity component needs its own tau fields:
+For viscous flows at solid walls, use vector fields for compact notation:
 
 ```julia
-# Tau fields for ux
-tau_ux1 = ScalarField(dist, "tau_ux1", (x_basis,))
-tau_ux2 = ScalarField(dist, "tau_ux2", (x_basis,))
+# Vector field for velocity
+u = VectorField(dist, coords, "u", (x_basis, z_basis))
 
-# Tau fields for uz
-tau_uz1 = ScalarField(dist, "tau_uz1", (x_basis,))
-tau_uz2 = ScalarField(dist, "tau_uz2", (x_basis,))
+# Vector tau fields for BCs at each wall
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
 
-# Include all tau fields in problem
-problem = IVP([ux, uz, p, tau_ux1, tau_ux2, tau_uz1, tau_uz2])
+# Include all tau field components in problem
+variables = [u.components[1], u.components[2], p,
+             tau_u1.components[1], tau_u1.components[2],
+             tau_u2.components[1], tau_u2.components[2]]
+problem = IVP(variables)
 
-# Momentum equation for ux with lift terms
-add_equation!(problem,
-    dt(ux) - ν*lap(ux) + dx(p) + lift(tau_ux1, z_basis, -1) + lift(tau_ux2, z_basis, -2)
-)
+# Add substitutions
+add_substitution!(problem, "nu", nu)
 
-# Momentum equation for uz with lift terms
-add_equation!(problem,
-    dt(uz) - ν*lap(uz) + dz(p) + lift(tau_uz1, z_basis, -1) + lift(tau_uz2, z_basis, -2)
-)
+# Momentum equations using vector notation
+add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)")
+add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u@∇(u_z)")
+
+# Continuity with pressure gauge tau
+add_equation!(problem, "div(u) + tau_p = 0")
 
 # No-slip boundary conditions
-add_dirichlet_bc!(problem, ux, "z", :left, 0.0; tau_field="tau_ux1")
-add_dirichlet_bc!(problem, ux, "z", :right, 0.0; tau_field="tau_ux2")
-add_dirichlet_bc!(problem, uz, "z", :left, 0.0; tau_field="tau_uz1")
-add_dirichlet_bc!(problem, uz, "z", :right, 0.0; tau_field="tau_uz2")
+add_bc!(problem, "u_x(z=0) = 0")   # No-slip bottom
+add_bc!(problem, "u_z(z=0) = 0")
+add_bc!(problem, "u_x(z=1) = 0")   # No-slip top
+add_bc!(problem, "u_z(z=1) = 0")
 ```
 
 ## Neumann Boundary Conditions
@@ -141,13 +141,11 @@ tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))
 
 problem = LBVP([T, tau_T1, tau_T2])
 
-add_equation!(problem,
-    lap(T) + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2) - source
-)
+add_equation!(problem, "Δ(T) + lift(tau_T1) + lift(tau_T2) = source")
 
 # Neumann: specify derivative at boundary
-add_neumann_bc!(problem, T, "z", :left, 1.0; tau_field="tau_T1")   # dT/dz(z=0) = 1
-add_neumann_bc!(problem, T, "z", :right, 0.0; tau_field="tau_T2")  # dT/dz(z=1) = 0
+add_bc!(problem, "dz(T)(z=0) = 1")   # dT/dz(z=0) = 1
+add_bc!(problem, "dz(T)(z=1) = 0")   # dT/dz(z=1) = 0
 ```
 
 ### Stress-Free Conditions
@@ -156,8 +154,8 @@ For free surfaces or slip boundaries (∂u/∂z = 0):
 
 ```julia
 # Mixed: no-slip at bottom, stress-free at top
-add_dirichlet_bc!(problem, ux, "z", :left, 0.0; tau_field="tau_ux1")   # No-slip
-add_neumann_bc!(problem, ux, "z", :right, 0.0; tau_field="tau_ux2")    # Stress-free
+add_bc!(problem, "u_x(z=0) = 0")      # No-slip at bottom
+add_bc!(problem, "dz(u_x)(z=1) = 0")  # Stress-free at top (du/dz = 0)
 ```
 
 ## Robin Boundary Conditions
@@ -170,20 +168,18 @@ tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))
 
 problem = LBVP([T, tau_T1, tau_T2])
 
-add_equation!(problem,
-    lap(T) + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2) - source
-)
+# Add parameters
+add_substitution!(problem, "h", 10.0)   # Heat transfer coefficient
+add_substitution!(problem, "k", 1.0)    # Thermal conductivity
+add_substitution!(problem, "T_amb", 25.0)
 
-# Convective heat transfer: h*T + k*dT/dn = h*T_ambient
-h = 10.0   # Heat transfer coefficient
-k = 1.0    # Thermal conductivity
-T_amb = 25.0
+add_equation!(problem, "Δ(T) + lift(tau_T1) + lift(tau_T2) = source")
 
-# Robin BC at top: α=h, β=k, γ=h*T_amb
-add_robin_bc!(problem, T, "z", :right, h, k, h*T_amb; tau_field="tau_T2")
+# Convective heat transfer at top: h*T + k*dT/dn = h*T_ambient
+add_bc!(problem, "h*T(z=1) + k*dz(T)(z=1) = h*T_amb")
 
 # Dirichlet at bottom
-add_dirichlet_bc!(problem, T, "z", :left, 100.0; tau_field="tau_T1")
+add_bc!(problem, "T(z=0) = 100")
 ```
 
 ## Periodic Boundary Conditions
@@ -203,23 +199,21 @@ x_basis = RealFourier(coords["x"], size=128, bounds=(0.0, 2π))
 
 ## The lift() Operator
 
-The `lift()` operator places tau corrections at specific spectral modes:
+The `lift()` operator places tau corrections at specific spectral modes. In the string equation format:
 
 ```julia
-lift(tau_field, basis, mode_index)
+"Δ(u) + lift(tau_u1) + lift(tau_u2) = f"
 ```
 
-- `tau_field`: The tau field to lift
-- `basis`: The non-periodic basis (e.g., Chebyshev)
-- `mode_index`: Which spectral mode (-1 = last, -2 = second-to-last)
+The tau field name in the lift() operator should match the tau field name you created.
 
 ### Mode Selection Guidelines
 
-| Operator Order | Number of BCs | lift() modes |
-|---------------|---------------|--------------|
-| 1st (∂/∂z)    | 1             | -1           |
-| 2nd (∂²/∂z²)  | 2             | -1, -2       |
-| 4th (∇⁴)      | 4             | -1, -2, -3, -4 |
+| Operator Order | Number of BCs | Number of lift() terms |
+|---------------|---------------|------------------------|
+| 1st (∂/∂z)    | 1             | 1                      |
+| 2nd (∂²/∂z²)  | 2             | 2                      |
+| 4th (∇⁴)      | 4             | 4                      |
 
 ### Example: Fourth-Order Problem
 
@@ -234,16 +228,14 @@ tau_u4 = ScalarField(dist, "tau_u4", (x_basis,))
 
 problem = LBVP([u, tau_u1, tau_u2, tau_u3, tau_u4])
 
-add_equation!(problem,
-    lap(lap(u)) + lift(tau_u1, z_basis, -1) + lift(tau_u2, z_basis, -2)
-               + lift(tau_u3, z_basis, -3) + lift(tau_u4, z_basis, -4) - f
-)
+# Biharmonic equation with all four lift terms
+add_equation!(problem, "Δ(Δ(u)) + lift(tau_u1) + lift(tau_u2) + lift(tau_u3) + lift(tau_u4) = f")
 
 # Clamped beam: u = 0 and du/dz = 0 at both ends
-add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
-add_neumann_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u2")
-add_dirichlet_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u3")
-add_neumann_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u4")
+add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "dz(u)(z=0) = 0")
+add_bc!(problem, "u(z=1) = 0")
+add_bc!(problem, "dz(u)(z=1) = 0")
 ```
 
 ## Complete Examples
@@ -254,45 +246,47 @@ add_neumann_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u4")
 using Tarang
 
 coords = CartesianCoordinates("x", "z")
-x_basis = RealFourier(coords["x"], size=64, bounds=(0.0, 2π))
-z_basis = Chebyshev(coords["z"], size=64, bounds=(0.0, 1.0))
-dist = Distributor([x_basis, z_basis])
+x_basis = RealFourier(coords["x"]; size=64, bounds=(0.0, 2π))
+z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
+dist = Distributor(coords)
 
-# Fields
-ux = ScalarField(dist, "ux")
-uz = ScalarField(dist, "uz")
-p = ScalarField(dist, "p")
+# Vector velocity field
+u = VectorField(dist, coords, "u", (x_basis, z_basis))
+p = ScalarField(dist, "p", (x_basis, z_basis))
 
-# Tau fields for velocity BCs
-tau_ux1 = ScalarField(dist, "tau_ux1", (x_basis,))
-tau_ux2 = ScalarField(dist, "tau_ux2", (x_basis,))
-tau_uz1 = ScalarField(dist, "tau_uz1", (x_basis,))
-tau_uz2 = ScalarField(dist, "tau_uz2", (x_basis,))
+# Vector tau fields for velocity BCs at each wall
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
 
 # Tau for pressure gauge
-tau_p = ScalarField(dist, "tau_p", (x_basis,))
+tau_p = ScalarField(dist, "tau_p", ())
 
 # Parameters
-ν = 0.01
+nu = 0.01
 dpdx = -1.0
 
-problem = IVP([ux, uz, p, tau_ux1, tau_ux2, tau_uz1, tau_uz2, tau_p])
+# Create problem with all fields
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 
-# Equations with lift terms
-add_equation!(problem, dt(ux) - ν*lap(ux) + dx(p)
-    + lift(tau_ux1, z_basis, -1) + lift(tau_ux2, z_basis, -2) + dpdx)
-add_equation!(problem, dt(uz) - ν*lap(uz) + dz(p)
-    + lift(tau_uz1, z_basis, -1) + lift(tau_uz2, z_basis, -2))
-add_equation!(problem, dx(ux) + dz(uz) + lift(tau_p, z_basis, -1))
+# Add parameter substitutions
+add_substitution!(problem, "nu", nu)
+add_substitution!(problem, "dpdx", dpdx)
+
+# Momentum equations with lift terms (Dedalus-style string format)
+add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x) - dpdx")
+add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u@∇(u_z)")
+
+# Continuity with pressure gauge
+add_equation!(problem, "div(u) + tau_p = 0")
 
 # No-slip at both walls
-add_dirichlet_bc!(problem, ux, "z", :left, 0.0; tau_field="tau_ux1")
-add_dirichlet_bc!(problem, ux, "z", :right, 0.0; tau_field="tau_ux2")
-add_dirichlet_bc!(problem, uz, "z", :left, 0.0; tau_field="tau_uz1")
-add_dirichlet_bc!(problem, uz, "z", :right, 0.0; tau_field="tau_uz2")
+add_bc!(problem, "u_x(z=0) = 0")
+add_bc!(problem, "u_z(z=0) = 0")
+add_bc!(problem, "u_x(z=1) = 0")
+add_bc!(problem, "u_z(z=1) = 0")
 
-# Pressure gauge
-add_dirichlet_bc!(problem, p, "z", :left, 0.0; tau_field="tau_p")
+# Pressure gauge (integral constraint)
+add_bc!(problem, "integ(p) = 0")
 ```
 
 ### Rayleigh-Bénard Convection
