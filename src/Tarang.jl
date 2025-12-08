@@ -157,7 +157,14 @@ export
     # Full QG (Quasi-Geostrophic) with coupled surface-interior dynamics
     QGSystem, qg_system_setup, qg_invert!, qg_step!,
     qg_surface_velocity!, qg_advection_rhs, qg_energy, extract_surface,
-    
+
+    # General Boundary Advection-Diffusion Framework
+    BoundaryAdvectionDiffusion, BoundarySpec, DiffusionSpec,
+    VelocitySource, PrescribedVelocity, InteriorDerivedVelocity, SelfDerivedVelocity,
+    boundary_advection_diffusion_setup,
+    bad_step!, bad_compute_velocity!, bad_compute_rhs!, bad_add_source!,
+    bad_energy, bad_enstrophy, bad_max_velocity, bad_cfl_dt,
+
     # NetCDF Output
     NetCDFFileHandler, NetCDFEvaluator, UnifiedEvaluator, add_netcdf_handler, 
     merge_processor_files, get_netcdf_info,
