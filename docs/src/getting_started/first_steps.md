@@ -141,14 +141,14 @@ The x-direction is periodic (RealFourier basis), so no boundary conditions are n
 Choose a timestepper and create the solver:
 
 ```julia
-# RK222 is a good general-purpose explicit timestepper
+# RK222 is a good general-purpose IMEX timestepper
 timestepper = RK222()
 solver = InitialValueSolver(problem, timestepper, dt=0.001)
 ```
 
 Popular timesteppers:
-- **RK222, RK443**: Explicit Runge-Kutta (for non-stiff problems)
-- **CNAB2, SBDF2**: Implicit-explicit methods (for stiff problems)
+- **RK222, RK443**: IMEX Runge-Kutta (good for most problems)
+- **CNAB2, SBDF2**: IMEX multistep methods (for stiff problems)
 
 ### Step 9: Set Initial Conditions
 

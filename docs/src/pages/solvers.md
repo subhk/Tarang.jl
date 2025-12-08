@@ -100,17 +100,17 @@ eigenvalues, eigenvectors = solve!(solver)
 
 ## Time Steppers
 
-### Explicit Runge-Kutta
+### IMEX Runge-Kutta
 
 ```julia
-RK111()  # Forward Euler
+RK111()  # 1st order, 1 stage
 RK222()  # 2nd order, 2 stages (recommended)
-RK443()  # 4th order, 4 stages (higher accuracy)
+RK443()  # 3rd order, 4 stages (higher accuracy)
 ```
 
-### IMEX Methods
+### IMEX Multistep Methods
 
-For problems with stiff and non-stiff terms:
+For problems with stiff linear terms:
 
 ```julia
 CNAB1()  # Crank-Nicolson Adams-Bashforth, 1st order
@@ -126,7 +126,7 @@ SBDF4()  # Semi-implicit BDF, 4th order
 
 | Problem Type | Recommended |
 |--------------|-------------|
-| Non-stiff | RK222, RK443 |
+| General purpose | RK222, RK443 |
 | Mildly stiff | CNAB2, SBDF2 |
 | Very stiff | SBDF3, SBDF4 |
 
