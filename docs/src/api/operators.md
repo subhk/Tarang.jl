@@ -6,8 +6,8 @@ Operators compute derivatives and other mathematical operations on fields. Taran
 
 Tarang.jl supports:
 - **Differential operators**: grad (∇), div, curl, lap (Δ, ∇²)
-- **Coordinate derivatives**: dx, dy, dz, dr, etc.
-- **Time derivatives**: dt (∂ₜ)
+- **Coordinate derivatives**: ∂x, ∂y, ∂z, ∂r, etc.
+- **Time derivatives**: ∂ₜ
 - **Field operations**: dot (⋅), cross (×)
 - **Custom operators**: User-defined operations
 
@@ -20,6 +20,10 @@ Tarang.jl supports Unicode mathematical symbols for more readable code:
 | `grad(f)` | `∇(f)` | Gradient |
 | `lap(f)` | `Δ(f)` or `∇²(f)` | Laplacian |
 | `dt(f)` | `∂ₜ(f)` | Time derivative |
+| `dx(f)` | `∂x(f)` | x-derivative |
+| `dy(f)` | `∂y(f)` | y-derivative |
+| `dz(f)` | `∂z(f)` | z-derivative |
+| `dr(f)` | `∂r(f)` | r-derivative |
 | `dot(u, v)` | `u ⋅ v` | Dot product |
 | `cross(u, v)` | `u × v` | Cross product |
 
@@ -36,6 +40,7 @@ add_equation!(problem, "∂ₜ(u) + u⋅∇(u) = -∇(p) + nu*Δ(u)")
 - `∇` : Type `\nabla` then press Tab
 - `Δ` : Type `\Delta` then press Tab
 - `∂ₜ` : Type `\partial` Tab `\_t` Tab
+- `∂x` : Type `\partial` Tab `x`
 - `⋅` : Type `\cdot` then press Tab
 - `×` : Type `\times` then press Tab
 
@@ -79,14 +84,14 @@ problem = IVP([u, w, p])
 add_equation!(problem, "∂ₜ(u) = -∇(p)")
 
 # Expands to:
-# dt(u_x) = -dx(p)
-# dt(u_z) = -dz(p)
+# ∂ₜ(u_x) = -∂x(p)
+# ∂ₜ(u_z) = -∂z(p)
 ```
 
 ```julia
 # 3D gradient with custom usage
 ∇T = ∇(T)  # Returns VectorField
-# Components: ∇T.components[1] = dx(T), etc.
+# Components: ∇T.components[1] = ∂x(T), etc.
 ```
 
 **Return type**: VectorField
@@ -172,7 +177,7 @@ add_equation!(problem, "dt(omega) = curl(u × omega)")
 # 2D vorticity
 coords = CartesianCoordinates("x", "y")
 problem = IVP([u, v, omega])
-add_equation!(problem, "omega = dx(v) - dy(u)")
+add_equation!(problem, "omega = ∂x(v) - ∂y(u)")
 ```
 
 **Return type**: VectorField (3D) or ScalarField (2D)
@@ -234,29 +239,29 @@ Partial derivatives with respect to coordinate directions.
 
 **Syntax**:
 ```julia
-dx(field)   # ∂/∂x
-dy(field)   # ∂/∂y
-dz(field)   # ∂/∂z
-dr(field)   # ∂/∂r (spherical/polar)
-dtheta(field)  # ∂/∂θ
-dphi(field)    # ∂/∂φ
+∂x(field)   # ∂/∂x
+∂y(field)   # ∂/∂y
+∂z(field)   # ∂/∂z
+∂r(field)   # ∂/∂r (spherical/polar)
+∂θ(field)   # ∂/∂θ
+∂φ(field)   # ∂/∂φ
 ```
 
 **Examples**:
 
 ```julia
 # Advection term
-add_equation!(problem, "∂ₜ(T) = -u*dx(T) - w*dz(T)")
+add_equation!(problem, "∂ₜ(T) = -u*∂x(T) - w*∂z(T)")
 ```
 
 ```julia
 # Shear
-add_equation!(problem, "S = dx(u) + dz(w)")
+add_equation!(problem, "S = ∂x(u) + ∂z(w)")
 ```
 
 ```julia
 # Custom derivative
-dudz = dz(u)  # Returns field with ∂u/∂z
+dudz = ∂z(u)  # Returns field with ∂u/∂z
 ```
 
 **Implementation**:
@@ -272,24 +277,24 @@ Multiple derivatives can be composed:
 **Syntax**:
 ```julia
 # Second derivatives
-dx(dx(T))   # ∂²T/∂x²
-dz(dz(T))   # ∂²T/∂z²
+∂x(∂x(T))   # ∂²T/∂x²
+∂z(∂z(T))   # ∂²T/∂z²
 
 # Mixed derivatives
-dx(dz(T))   # ∂²T/∂x∂z
+∂x(∂z(T))   # ∂²T/∂x∂z
 
 # Higher order
-dx(dx(dx(T)))  # ∂³T/∂x³
+∂x(∂x(∂x(T)))  # ∂³T/∂x³
 ```
 
 **Examples**:
 
 ```julia
 # Biharmonic operator
-add_equation!(problem, "lap(lap(psi)) = omega")
+add_equation!(problem, "Δ(Δ(psi)) = omega")
 
 # Equivalent to:
-add_equation!(problem, "dx(dx(dx(dx(psi)))) + 2*dx(dx(dz(dz(psi)))) + dz(dz(dz(dz(psi)))) = omega")
+add_equation!(problem, "∂x(∂x(∂x(∂x(psi)))) + 2*∂x(∂x(∂z(∂z(psi)))) + ∂z(∂z(∂z(∂z(psi)))) = omega")
 ```
 
 ```julia
@@ -315,8 +320,8 @@ dt(field)   # ASCII
 
 ```julia
 # Evolution equations
-add_equation!(problem, "∂ₜ(u) = -u*dx(u) + nu*Δ(u)")
-add_equation!(problem, "∂ₜ(T) = -u*dx(T) + kappa*Δ(T)")
+add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + nu*Δ(u)")
+add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)")
 ```
 
 **Note**: Only use in IVP (Initial Value Problems). Not valid for BVP or EVP.
@@ -411,9 +416,9 @@ function strain_rate_tensor(u)
     # Returns TensorField
     S = TensorField(u.distributor, u.coords, "S", u.bases, symmetric=true)
 
-    S[1,1] = dx(u.components[1])
-    S[1,2] = 0.5 * (dx(u.components[2]) + dy(u.components[1]))
-    S[2,2] = dy(u.components[2])
+    S[1,1] = ∂x(u.components[1])
+    S[1,2] = 0.5 * (∂x(u.components[2]) + ∂y(u.components[1]))
+    S[2,2] = ∂y(u.components[2])
     # ... etc
 
     return S
