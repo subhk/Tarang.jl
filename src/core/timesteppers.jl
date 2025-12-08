@@ -1015,8 +1015,8 @@ function step_rk111_explicit!(state::TimestepperState, solver::InitialValueSolve
     end
 end
 
-function step_rk222!(state::TimestepperState, solver::InitialValueSolver)
-    """2nd order Runge-Kutta (midpoint method)"""
+function step_rk222_explicit!(state::TimestepperState, solver::InitialValueSolver)
+    """2nd order explicit Runge-Kutta (midpoint method)"""
     current_state = state.history[end]
     dt = state.dt
     
@@ -1058,8 +1058,8 @@ function step_rk222!(state::TimestepperState, solver::InitialValueSolver)
     end
 end
 
-function step_rk443!(state::TimestepperState, solver::InitialValueSolver)
-    """4th order Runge-Kutta"""
+function step_rk443_explicit!(state::TimestepperState, solver::InitialValueSolver)
+    """4th order explicit Runge-Kutta"""
     current_state = state.history[end]
     dt = state.dt
     t = solver.sim_time
