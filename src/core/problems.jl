@@ -1275,8 +1275,9 @@ function fallback_parse_expression(expr_str::AbstractString, namespace::Dict{Str
     end
     
     # Pattern-based parsing for common PDE operators (as fallback)
-    if startswith(expr_str, "dt(") && endswith(expr_str, ")")
-        field_name = expr_str[4:end-1]
+    # Unicode time derivative: ∂t(field)
+    if startswith(expr_str, "∂t(") && endswith(expr_str, ")")
+        field_name = expr_str[nextind(expr_str, 0, 3):end-1]  # Skip "∂t(" which is 3 chars
         if haskey(namespace, field_name)
             return TimeDerivative(namespace[field_name], 1)
         end
@@ -2431,10 +2432,10 @@ function expression_to_string(expr)
         return "($left_str * $right_str)"
     elseif isa(expr, TimeDerivative)
         operand_str = expression_to_string(expr.operand)
-        return "dt($operand_str)"
+        return "∂t($operand_str)"
     elseif isa(expr, Laplacian)
         operand_str = expression_to_string(expr.operand)
-        return "lap($operand_str)"
+        return "Δ($operand_str)"
     elseif hasfield(typeof(expr), :name)
         return expr.name
     else

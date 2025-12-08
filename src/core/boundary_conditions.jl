@@ -144,7 +144,7 @@ end
 function is_time_dependent(value)
     """Check if value depends on time"""
     if isa(value, String)
-        return occursin(r"\bt\b", value) || occursin("dt(", value)
+        return occursin(r"\bt\b", value) || occursin("∂t(", value)
     elseif isa(value, TimeDependentValue) || isa(value, TimeSpaceDependentValue)
         return true
     elseif isa(value, FieldReference)
