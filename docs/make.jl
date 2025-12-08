@@ -39,6 +39,7 @@ makedocs(
             "tutorials/boundary_conditions.md",
             "tutorials/analysis_and_output.md",
             "tutorials/eigenvalue_problems.md",
+            "tutorials/surface_dynamics.md",
         ],
         "Notebooks" => [
             "notebooks/rayleigh_benard.md",

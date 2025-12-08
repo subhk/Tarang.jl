@@ -46,7 +46,7 @@ Thank you for considering contributing to Tarang.jl! This document provides guid
 ### Reporting Bugs
 
 Before creating a bug report:
-1. Check existing [issues](https://github.com/subhajitkar/Tarang.jl/issues)
+1. Check existing [issues](https://github.com/subhk/Tarang.jl/issues)
 2. Try the latest version from main branch
 
 ### Suggesting Enhancements
@@ -364,8 +364,8 @@ Maintainers follow this process for releases:
 
 ## Questions?
 
-- Open an [issue](https://github.com/subhajitkar/Tarang.jl/issues)
-- Start a [discussion](https://github.com/subhajitkar/Tarang.jl/discussions)
+- Open an [issue](https://github.com/subhk/Tarang.jl/issues)
+- Start a [discussion](https://github.com/subhk/Tarang.jl/discussions)
 - Email: subhajitkar19@gmail.com
 
 ## Code of Conduct

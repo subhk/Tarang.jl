@@ -118,7 +118,7 @@ If you use Tarang.jl in your research, please cite:
   title = {Tarang.jl: A Spectral PDE Solver for Julia},
   author = {Subhajit Kar},
   year = {2024},
-  url = {https://github.com/subhajitkar/Tarang.jl},
+  url = {https://github.com/subhk/Tarang.jl},
   doi = {10.5281/zenodo.XXXXXXX}
 }
 ```
@@ -129,13 +129,13 @@ Tarang.jl builds upon excellent Julia packages including [PencilArrays.jl](https
 
 ## Support
 
-- **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/subhajitkar/Tarang.jl/issues)
-- **Discussions**: Ask questions on [GitHub Discussions](https://github.com/subhajitkar/Tarang.jl/discussions)
+- **Issues**: Report bugs and request features on [GitHub Issues](https://github.com/subhk/Tarang.jl/issues)
+- **Discussions**: Ask questions on [GitHub Discussions](https://github.com/subhk/Tarang.jl/discussions)
 - **Contributing**: See the [Contributing Guide](pages/contributing.md) for how to contribute
 
 ## License
 
-Tarang.jl is licensed under the GPL-3.0 license. See [LICENSE](https://github.com/subhajitkar/Tarang.jl/blob/main/LICENSE) for details.
+Tarang.jl is licensed under the GPL-3.0 license. See [LICENSE](https://github.com/subhk/Tarang.jl/blob/main/LICENSE) for details.
 
 ---
 

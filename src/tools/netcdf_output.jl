@@ -1258,7 +1258,7 @@ function create_current_file!(handler::NetCDFFileHandler)
         "Conventions" => "CF-1.8",
         "tarang_version" => "0.1.0",
         "software" => "Tarang",
-        "software_repository" => "https://github.com/subhajitkar/Tarang.jl",
+        "software_repository" => "https://github.com/subhk/Tarang.jl",
         "restart_compatible" => 0  # 0 = false, 1 = true (NetCDF doesn't support Bool)
     )
     

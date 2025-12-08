@@ -50,7 +50,7 @@ Contributors are expected to maintain a respectful and inclusive environment. Pl
 
 4. **Set up upstream remote**:
    ```bash
-   git remote add upstream https://github.com/subhajitkar/Tarang.jl.git
+   git remote add upstream https://github.com/subhk/Tarang.jl.git
    ```
 
 ---
@@ -362,7 +362,7 @@ Look for issues labeled `good-first-issue` for entry points:
 
 - **GitHub Issues**: Bug reports and feature requests
 - **GitHub Discussions**: Questions and community help
-- **Documentation**: [Tarang.jl Documentation](https://subhajitkar.github.io/Tarang.jl/)
+- **Documentation**: [Tarang.jl Documentation](https://subhk.github.io/Tarang.jl/)
 
 ---
 

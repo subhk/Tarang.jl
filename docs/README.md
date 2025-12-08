@@ -111,7 +111,7 @@ Documentation is automatically built and deployed using GitHub Actions:
 2. **Add Documenter Key**:
    ```bash
    # Generate SSH key
-   julia -e 'using DocumenterTools; DocumenterTools.genkeys(user="subhajitkar", repo="Tarang.jl")'
+   julia -e 'using DocumenterTools; DocumenterTools.genkeys(user="subhk", repo="Tarang.jl")'
    ```
 
    This creates:
@@ -137,7 +137,7 @@ The `.github/workflows/Documentation.yml` workflow:
 After successful deployment, documentation will be available at:
 
 ```
-https://subhajitkar.github.io/Tarang.jl/
+https://subhk.github.io/Tarang.jl/
 ```
 
 Or with custom domain (if configured):

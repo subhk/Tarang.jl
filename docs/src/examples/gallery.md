@@ -408,7 +408,7 @@ MPI.Finalize()
 
 ```bash
 # Clone repository
-git clone https://github.com/subhajitkar/Tarang.jl.git
+git clone https://github.com/subhk/Tarang.jl.git
 cd Tarang.jl
 
 # Install dependencies
@@ -490,4 +490,4 @@ See [Contributing Guide](../pages/contributing.md) for details.
 - **Learn the basics**: [Getting Started](../getting_started/installation.md)
 - **Detailed tutorials**: [Tutorials](../tutorials/overview.md)
 - **Understand the API**: [API Reference](../api/fields.md)
-- **Ask questions**: [GitHub Discussions](https://github.com/subhajitkar/Tarang.jl/discussions)
+- **Ask questions**: [GitHub Discussions](https://github.com/subhk/Tarang.jl/discussions)

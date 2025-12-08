@@ -22,7 +22,7 @@ This page is a concise newcomer guide. It walks you from a clean machine to a fi
 ## 2. Install Tarang
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/subhajitkar/Tarang.jl")
+Pkg.add(url="https://github.com/subhk/Tarang.jl")
 ```
 Quick check:
 ```bash

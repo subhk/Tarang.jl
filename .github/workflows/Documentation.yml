@@ -18,7 +18,7 @@ jobs:
 
       - uses: julia-actions/setup-julia@v1
         with:
-          version: '1.12'
+          version: '1.10'
 
       - name: Install system dependencies
         run: |
@@ -35,7 +35,7 @@ jobs:
           rm -f docs/Manifest.toml
 
           # Clear Julia compiled cache for this package
-          rm -rf ~/.julia/compiled/v1.12/Tarang* || true
+          rm -rf ~/.julia/compiled/v1.10/Tarang* || true
 
           # Fresh install
           julia --project=docs/ -e '

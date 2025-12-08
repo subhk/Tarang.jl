@@ -57,7 +57,7 @@ The package is currently hosted on GitHub and can be installed directly:
 
 ```julia
 using Pkg
-Pkg.add(url="https://github.com/subhajitkar/Tarang.jl")
+Pkg.add(url="https://github.com/subhk/Tarang.jl")
 ```
 
 ### Development Installation
@@ -65,7 +65,7 @@ Pkg.add(url="https://github.com/subhajitkar/Tarang.jl")
 For development or to get the latest features:
 
 ```bash
-git clone https://github.com/subhajitkar/Tarang.jl.git
+git clone https://github.com/subhk/Tarang.jl.git
 cd Tarang.jl
 julia --project=. -e 'using Pkg; Pkg.instantiate()'
 ```
@@ -262,7 +262,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 RUN julia -e 'using Pkg; \
-    Pkg.add(url="https://github.com/subhajitkar/Tarang.jl"); \
+    Pkg.add(url="https://github.com/subhk/Tarang.jl"); \
     Pkg.precompile()'
 
 WORKDIR /work
