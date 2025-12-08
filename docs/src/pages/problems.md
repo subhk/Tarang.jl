@@ -108,7 +108,7 @@ add_neumann_bc!(problem, "dz(T)(z=1) = 0")  # dT/dz=0 at z=1
 
 ```julia
 # α*u + β*du/dn = γ
-add_robin_bc!(problem, "1.0*T + 1.0*dz(T)(z=0) = 0")
+add_robin_bc!(problem, "1.0*T(z=0) + 1.0*dz(T)(z=0) = 0")
 ```
 
 ### Stress-Free
