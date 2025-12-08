@@ -331,7 +331,8 @@ function add_mhd_boundary_conditions!(problem, shell, sphere_inner, sphere_outer
         throw(ArgumentError("Unknown magnetic_bc: $magnetic_bc"))
     end
     
-    # Note: Pressure gauge is handled by τ_p in continuity equation (div(grad_u) + τ_p = 0)
+    # Pressure gauge: τ_p removes math degeneracy, integ(p)=0 fixes physical gauge
+    add_bc!(problem, "integ(p) = 0")
 
     # Magnetic potential gauge
     add_bc!(problem, "integ(A) = 0")

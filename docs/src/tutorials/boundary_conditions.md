@@ -277,7 +277,9 @@ add_equation!(problem, "div(u) + tau_p = 0")
 # No-slip at both walls (vector notation)
 add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
-# Note: Pressure gauge is handled by tau_p in continuity equation
+
+# Pressure gauge: tau_p removes math degeneracy, integ(p)=0 fixes physical gauge
+add_bc!(problem, "integ(p) = 0")
 ```
 
 ### Rayleigh-Bénard Convection
@@ -334,7 +336,9 @@ add_bc!(problem, "u(z=1) = 0")   # No-slip top
 # Fixed temperature
 add_bc!(problem, "T(z=0) = 1")   # Hot bottom
 add_bc!(problem, "T(z=1) = 0")   # Cold top
-# Note: Pressure gauge is handled by tau_p in continuity equation (div(u) + tau_p = 0)
+
+# Pressure gauge: tau_p removes math degeneracy, integ(p)=0 fixes physical gauge
+add_bc!(problem, "integ(p) = 0")
 ```
 
 ## Validation
