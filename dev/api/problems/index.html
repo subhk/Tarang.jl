@@ -90,9 +90,9 @@ T_ambient = 300.0
 add_robin_bc!(problem, &quot;$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_ambient)&quot;)
 
 # Radiation boundary: T + ε*dT/dn = 0
-add_robin_bc!(problem, &quot;1.0*T(x=0) + $(epsilon)*dx(T)(x=0) = 0&quot;)</code></pre><hr/><h3 id="add*stress*free_bc!"><a class="docs-heading-anchor" href="#add*stress*free_bc!">add<em>stress</em>free_bc!</a><a id="add*stress*free_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*stress*free_bc!" title="Permalink"></a></h3><p>Add stress-free boundary condition for fluid mechanics: u<em>normal = 0, ∂u</em>tangential/∂n = 0</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_stress_free_bc!(problem, &quot;field(coord=pos) stress-free&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Stress-free top and bottom (free-slip)
-add_stress_free_bc!(problem, &quot;u(z=0) stress-free&quot;)
-add_stress_free_bc!(problem, &quot;u(z=1) stress-free&quot;)
+add_robin_bc!(problem, &quot;1.0*T(x=0) + $(epsilon)*dx(T)(x=0) = 0&quot;)</code></pre><hr/><h3 id="add*stress*free_bc!"><a class="docs-heading-anchor" href="#add*stress*free_bc!">add<em>stress</em>free_bc!</a><a id="add*stress*free_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*stress*free_bc!" title="Permalink"></a></h3><p>Add stress-free boundary condition for fluid mechanics: u<em>normal = 0, ∂u</em>tangential/∂n = 0</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_stress_free_bc!(problem, &quot;field(coord=pos)&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Stress-free top and bottom (free-slip)
+add_stress_free_bc!(problem, &quot;u(z=0)&quot;)
+add_stress_free_bc!(problem, &quot;u(z=1)&quot;)
 
 # Equivalent to:
 # w(z=0) = 0, du/dz(z=0) = 0, dv/dz(z=0) = 0
