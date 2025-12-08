@@ -70,14 +70,15 @@ add_equation!(problem, &quot;∂t(u) = -u⋅∇(u)&quot;)</code></pre><p><strong
 add_equation!(problem, &quot;∂t(T) = -u⋅∇(T)&quot;)
 
 # Vector advection (Navier-Stokes nonlinear term)
-add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)&quot;)</code></pre><hr/><h3 id="Cross-Product"><a class="docs-heading-anchor" href="#Cross-Product">Cross Product</a><a id="Cross-Product-1"></a><a class="docs-heading-anchor-permalink" href="#Cross-Product" title="Permalink"></a></h3><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs"># Use helper function
-u_cross_omega = cross_product(u, omega)
-
-# Or component form for specific cases</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Vorticity equation: ∂ω/∂t = ∇×(u×ω)
+add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)&quot;)</code></pre><hr/><h3 id="Cross-Product"><a class="docs-heading-anchor" href="#Cross-Product">Cross Product</a><a id="Cross-Product-1"></a><a class="docs-heading-anchor-permalink" href="#Cross-Product" title="Permalink"></a></h3><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs"># Use cross function or × operator
+u_cross_omega = cross(u, omega)
+u_cross_omega = u × omega  # Unicode: \times Tab</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Vorticity equation: ∂ω/∂t = ∇×(u×ω)
 problem = IVP([ux, uy, uz, omega_x, omega_y, omega_z])
 
 # Compute u × ω
-u_cross_omega = cross_product(u, omega)
+u_cross_omega = cross(u, omega)
+# Or equivalently:
+u_cross_omega = u × omega
 
 # Then: ∇×(u×ω)
 add_equation!(problem, &quot;∂t(omega) = curl(u_cross_omega)&quot;)</code></pre><hr/><h2 id="Composite-Operators"><a class="docs-heading-anchor" href="#Composite-Operators">Composite Operators</a><a id="Composite-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Composite-Operators" title="Permalink"></a></h2><p>Combine operators for complex expressions.</p><h3 id="Vector-Laplacian"><a class="docs-heading-anchor" href="#Vector-Laplacian">Vector Laplacian</a><a id="Vector-Laplacian-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Laplacian" title="Permalink"></a></h3><pre><code class="language-julia hljs"># For vector field u
@@ -108,26 +109,27 @@ function strain_rate_tensor(u)
 end</code></pre><hr/><h2 id="Operator-Properties"><a class="docs-heading-anchor" href="#Operator-Properties">Operator Properties</a><a id="Operator-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Operator-Properties" title="Permalink"></a></h2><h3 id="Linearity"><a class="docs-heading-anchor" href="#Linearity">Linearity</a><a id="Linearity-1"></a><a class="docs-heading-anchor-permalink" href="#Linearity" title="Permalink"></a></h3><p>All operators are linear:</p><pre><code class="language-julia hljs"># ∇(αf + βg) = α∇f + β∇g
 ∇(alpha*f + beta*g) == alpha*∇(f) + beta*∇(g)</code></pre><h3 id="Commutativity"><a class="docs-heading-anchor" href="#Commutativity">Commutativity</a><a id="Commutativity-1"></a><a class="docs-heading-anchor-permalink" href="#Commutativity" title="Permalink"></a></h3><p>Partial derivatives commute:</p><pre><code class="language-julia hljs"># ∂²f/∂x∂z = ∂²f/∂z∂x
 ∂x(∂z(f)) == ∂z(∂x(f))</code></pre><h3 id="Product-Rule"><a class="docs-heading-anchor" href="#Product-Rule">Product Rule</a><a id="Product-Rule-1"></a><a class="docs-heading-anchor-permalink" href="#Product-Rule" title="Permalink"></a></h3><pre><code class="language-julia hljs"># ∇(fg) = f∇g + g∇f
-∇(f*g) == f*∇(g) + g*∇(f)</code></pre><hr/><h2 id="Custom-Operators"><a class="docs-heading-anchor" href="#Custom-Operators">Custom Operators</a><a id="Custom-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Operators" title="Permalink"></a></h2><h3 id="Defining-Custom-Operators"><a class="docs-heading-anchor" href="#Defining-Custom-Operators">Defining Custom Operators</a><a id="Defining-Custom-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Defining-Custom-Operators" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Define helper function
-function my_operator(field, param)
-    # Custom operation
-    result = ∂x(field) + param * Δ(field)
-    return result
+∇(f*g) == f*∇(g) + g*∇(f)</code></pre><hr/><h2 id="Custom-Operators"><a class="docs-heading-anchor" href="#Custom-Operators">Custom Operators</a><a id="Custom-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Operators" title="Permalink"></a></h2><h3 id="Defining-Helper-Functions"><a class="docs-heading-anchor" href="#Defining-Helper-Functions">Defining Helper Functions</a><a id="Defining-Helper-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Defining-Helper-Functions" title="Permalink"></a></h3><p>You can define helper functions that compose built-in operators:</p><pre><code class="language-julia hljs"># Define helper function
+function my_diffusion(field, kappa)
+    # Custom operation combining derivatives
+    return kappa * Δ(field)
 end
 
-# Use in equations
-add_equation!(problem, &quot;∂t(T) = my_operator(T, kappa)&quot;)</code></pre><h3 id="Registered-Custom-Operators"><a class="docs-heading-anchor" href="#Registered-Custom-Operators">Registered Custom Operators</a><a id="Registered-Custom-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Registered-Custom-Operators" title="Permalink"></a></h3><p>For operators used frequently in equations:</p><pre><code class="language-julia hljs"># Register with problem
-function register_operator!(problem, name, func)
-    problem.operators[name] = func
-end
+# Use programmatically
+diffusion_term = my_diffusion(T, kappa)</code></pre><h3 id="Using-Built-in-Operators-in-Equations"><a class="docs-heading-anchor" href="#Using-Built-in-Operators-in-Equations">Using Built-in Operators in Equations</a><a id="Using-Built-in-Operators-in-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Built-in-Operators-in-Equations" title="Permalink"></a></h3><p>The equation parser recognizes all registered operators. Use them directly in equation strings:</p><pre><code class="language-julia hljs"># Available operators in equations:
+# grad, div, curl, lap (or Δ), dt (or ∂t), d
+# integrate, average, interpolate, convert, lift
+# sin, cos, tan, exp, log, sqrt, abs, tanh
 
-# Example: Stokes operator
-stokes(u, nu) = -nu*Δ(u) + ∇(p)
+# Example: diffusion equation
+add_equation!(problem, &quot;∂t(T) = kappa*Δ(T)&quot;)
 
-register_operator!(problem, &quot;stokes&quot;, stokes)
+# Example: advection-diffusion
+add_equation!(problem, &quot;∂t(T) + u⋅∇(T) = kappa*Δ(T)&quot;)</code></pre><p>For complex expressions, compute terms programmatically and use the result:</p><pre><code class="language-julia hljs"># Compute complex term
+rhs_term = kappa * Δ(T) - u * ∂x(T)
 
-# Use in equations
-add_equation!(problem, &quot;∂t(u) = stokes(u, nu)&quot;)</code></pre><hr/><h2 id="Equation-Parsing"><a class="docs-heading-anchor" href="#Equation-Parsing">Equation Parsing</a><a id="Equation-Parsing-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Parsing" title="Permalink"></a></h2><h3 id="Symbolic-Syntax"><a class="docs-heading-anchor" href="#Symbolic-Syntax">Symbolic Syntax</a><a id="Symbolic-Syntax-1"></a><a class="docs-heading-anchor-permalink" href="#Symbolic-Syntax" title="Permalink"></a></h3><p>Tarang.jl parses equation strings into operator applications:</p><pre><code class="language-julia hljs"># String equation
+# Add to field&#39;s RHS
+T.rhs .+= rhs_term.data</code></pre><hr/><h2 id="Equation-Parsing"><a class="docs-heading-anchor" href="#Equation-Parsing">Equation Parsing</a><a id="Equation-Parsing-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Parsing" title="Permalink"></a></h2><h3 id="Symbolic-Syntax"><a class="docs-heading-anchor" href="#Symbolic-Syntax">Symbolic Syntax</a><a id="Symbolic-Syntax-1"></a><a class="docs-heading-anchor-permalink" href="#Symbolic-Syntax" title="Permalink"></a></h3><p>Tarang.jl parses equation strings into operator applications:</p><pre><code class="language-julia hljs"># String equation
 add_equation!(problem, &quot;∂t(u) + u*∂x(u) = nu*Δ(u) - ∂x(p)&quot;)
 
 # Parsed as:
@@ -142,4 +144,4 @@ add_equation!(problem, &quot;∂t(T) = -u*∂x(T)&quot;)  # Transforms for each 
 dudx = ∂x(u)
 
 add_equation!(problem, &quot;term1 = dudx&quot;)
-add_equation!(problem, &quot;term2 = w*dudx&quot;)</code></pre><h3 id="Use-Sparse-Differentiation"><a class="docs-heading-anchor" href="#Use-Sparse-Differentiation">Use Sparse Differentiation</a><a id="Use-Sparse-Differentiation-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Sparse-Differentiation" title="Permalink"></a></h3><p>Chebyshev/Legendre derivatives are sparse matrix operations - very efficient.</p><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../fields/">Fields</a>: Field types that operators act on</li><li><a href="../problems/">Problems</a>: Using operators in equations</li><li><a href="../domains/">Domains</a>: Spatial discretization for operators</li><li><a href="../bases/">Bases</a>: Spectral bases for differentiation</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../fields/">« Fields API</a><a class="docs-footer-nextpage" href="../problems/">Problems API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:20">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+add_equation!(problem, &quot;term2 = w*dudx&quot;)</code></pre><h3 id="Use-Sparse-Differentiation"><a class="docs-heading-anchor" href="#Use-Sparse-Differentiation">Use Sparse Differentiation</a><a id="Use-Sparse-Differentiation-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Sparse-Differentiation" title="Permalink"></a></h3><p>Chebyshev/Legendre derivatives are sparse matrix operations - very efficient.</p><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../fields/">Fields</a>: Field types that operators act on</li><li><a href="../problems/">Problems</a>: Using operators in equations</li><li><a href="../domains/">Domains</a>: Spatial discretization for operators</li><li><a href="../bases/">Bases</a>: Spectral bases for differentiation</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../fields/">« Fields API</a><a class="docs-footer-nextpage" href="../problems/">Problems API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:28">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
