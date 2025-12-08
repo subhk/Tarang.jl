@@ -507,15 +507,15 @@ mesh=(4, 4)  # instead of (2, 2)
 
 The full script is available in `examples/rayleigh_benard_2d.jl`. Key points:
 
-1. ✅ Proper MPI initialization and finalization
-2. ✅ Appropriate bases for boundary conditions
-3. ✅ Explicit tau fields for each boundary condition
-4. ✅ lift() operators in all equations with non-periodic BCs
-5. ✅ Complete equation system with nonlinear terms
-6. ✅ All boundary conditions linked to tau fields
-7. ✅ Adaptive time stepping with CFL
-8. ✅ Output and analysis
-9. ✅ Performance monitoring
+1. Proper MPI initialization and finalization
+2. Appropriate bases for boundary conditions
+3. Explicit tau fields for each boundary condition
+4. lift() operators in all equations with non-periodic BCs
+5. Complete equation system with nonlinear terms
+6. All boundary conditions linked to tau fields
+7. Adaptive time stepping with CFL
+8. Output and analysis
+9. Performance monitoring
 
 !!! info "Dedalus-Style Approach"
     This tutorial follows the Dedalus approach for boundary conditions. Users must explicitly:

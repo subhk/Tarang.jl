@@ -163,7 +163,7 @@ z = ChebyshevT(coords["z"], size=32, bounds=(0.0, 1.0))
 domain = Domain(dist, (x, z))
 
 if rank == 0
-    println("✓ Successfully created domain!")
+    println("Successfully created domain!")
 end
 
 MPI.Finalize()
