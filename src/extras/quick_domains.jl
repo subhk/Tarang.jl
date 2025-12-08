@@ -328,7 +328,7 @@ function create_navier_stokes_3d_fields(domain::Domain)
 
     # For incompressible flow with tau method (simplified)
     tau_u = VectorField(dist, coordsys, "tau_u", bases, dtype)    # Velocity tau terms
-    tau_p = ScalarField(dist, "tau_p", (), dtype)                 # Pressure gauge
+    tau_p = ScalarField(dist, "tau_p", (), dtype)                 # Pressure tau (removes degeneracy)
     
     for comp in tau_u.components
         comp.data_g = comp.data_g
