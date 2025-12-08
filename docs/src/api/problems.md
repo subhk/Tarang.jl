@@ -337,15 +337,15 @@ Add stress-free boundary condition for fluid mechanics: u_normal = 0, ∂u_tange
 
 **Syntax**:
 ```julia
-add_stress_free_bc!(problem, "field(coord=pos) stress-free")
+add_stress_free_bc!(problem, "field(coord=pos)")
 ```
 
 **Examples**:
 
 ```julia
 # Stress-free top and bottom (free-slip)
-add_stress_free_bc!(problem, "u(z=0) stress-free")
-add_stress_free_bc!(problem, "u(z=1) stress-free")
+add_stress_free_bc!(problem, "u(z=0)")
+add_stress_free_bc!(problem, "u(z=1)")
 
 # Equivalent to:
 # w(z=0) = 0, du/dz(z=0) = 0, dv/dz(z=0) = 0

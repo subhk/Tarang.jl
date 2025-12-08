@@ -526,6 +526,34 @@ function add_stress_free_bc!(problem::Problem, bc_string::String)
     return bc
 end
 
+"""
+    add_no_slip_bc!(problem::Problem, bc_string::String)
+
+Add no-slip boundary condition (velocity = 0) using string syntax.
+
+# Format:
+- `"field(coord=pos)"` - simple and clean
+
+# Examples:
+```julia
+add_no_slip_bc!(problem, "u(z=0)")
+add_no_slip_bc!(problem, "u(z=1)")
+```
+"""
+function add_no_slip_bc!(problem::Problem, bc_string::String)
+    # Reuse the same parser as stress-free (same format: field(coord=pos))
+    velocity_field, coordinate, position = parse_stress_free_bc_string(bc_string)
+
+    # No-slip means velocity = 0 at the boundary (Dirichlet BC)
+    bc = add_dirichlet!(problem.bc_manager, velocity_field, coordinate, position, 0.0)
+
+    # Add to legacy string list
+    eq = bc_to_equation(problem.bc_manager, bc)
+    push!(problem.boundary_conditions, eq)
+
+    return bc
+end
+
 function register_tau_field!(problem::Problem, name::String, field)
     """Register tau field for boundary condition enforcement"""
     register_tau_field!(problem.bc_manager, name, field)

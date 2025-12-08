@@ -154,7 +154,7 @@ export
     
     # Boundary Conditions
     BoundaryConditionManager, DirichletBC, NeumannBC, RobinBC, PeriodicBC, StressFreeBC, CustomBC,
-    add_dirichlet_bc!, add_neumann_bc!, add_robin_bc!, add_stress_free_bc!,
+    add_dirichlet_bc!, add_neumann_bc!, add_robin_bc!, add_stress_free_bc!, add_no_slip_bc!,
     dirichlet_bc, neumann_bc, robin_bc, periodic_bc, stress_free_bc, custom_bc,
     # Time/Space Dependent BCs
     TimeDependentValue, SpaceDependentValue, TimeSpaceDependentValue, FieldReference,
