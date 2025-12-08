@@ -205,6 +205,9 @@ const Δ = lap
 # ∇² as alternate notation for Laplacian
 const ∇² = lap
 
+# ∂ₜ for time derivative
+const ∂ₜ = dt
+
 function trace(operand::Operand)
     """Trace operator"""
     return multiclass_new(Trace, operand)
