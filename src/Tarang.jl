@@ -127,7 +127,7 @@ export
 
     # Matrix operation methods for implicit solvers
     matrix_dependence, matrix_coupling, subproblem_matrix,
-    check_conditions, enforce_conditions,
+    check_conditions, enforce_conditions, is_linear, operator_order,
     
     # Nonlinear operators
     advection, nonlinear_momentum, convection, AdvectionOperator, NonlinearAdvectionOperator, ConvectiveOperator,

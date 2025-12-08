@@ -3405,6 +3405,141 @@ function add_wavenumber_squared_contribution!(k_squared::Array{Float64}, k_axis:
 end
 
 # ============================================================================
+# Fractional Laplacian - Matrix methods for implicit/LHS treatment
+# ============================================================================
+
+"""
+    matrix_dependence(op::FractionalLaplacian, vars...)
+
+Determine which variables this fractional Laplacian operator depends on.
+Returns a boolean vector indicating dependence on each variable.
+"""
+function matrix_dependence(op::FractionalLaplacian, vars...)
+    result = falses(length(vars))
+    for (i, var) in enumerate(vars)
+        if op.operand === var || (hasfield(typeof(op.operand), :name) &&
+                                   hasfield(typeof(var), :name) &&
+                                   op.operand.name == var.name)
+            result[i] = true
+        end
+    end
+    return result
+end
+
+"""
+    matrix_coupling(op::FractionalLaplacian, vars...)
+
+Determine variable coupling for fractional Laplacian.
+The fractional Laplacian is diagonal in spectral space - no coupling between variables.
+"""
+function matrix_coupling(op::FractionalLaplacian, vars...)
+    # Fractional Laplacian only couples a variable to itself
+    return matrix_dependence(op, vars...)
+end
+
+"""
+    subproblem_matrix(op::FractionalLaplacian, subproblem)
+
+Build the sparse matrix representation of fractional Laplacian for implicit solvers.
+
+In spectral space, (-Δ)^α is diagonal with entries |k|^(2α) on the diagonal.
+This makes it very efficient for implicit treatment.
+"""
+function subproblem_matrix(op::FractionalLaplacian, subproblem)
+    operand = op.operand
+    α = op.α
+
+    # Get the spectral size from the subproblem or operand
+    if isa(operand, ScalarField)
+        n = prod(size(operand.data_c))
+    else
+        throw(ArgumentError("subproblem_matrix for FractionalLaplacian only implemented for ScalarField"))
+    end
+
+    # Compute wavenumber squared grid
+    k_squared = compute_wavenumber_squared_grid(operand)
+    k_squared_flat = vec(k_squared)
+
+    # Compute |k|^(2α) diagonal entries
+    if α >= 0
+        diag_entries = k_squared_flat .^ α
+    else
+        # For negative α, handle k=0 specially
+        diag_entries = similar(k_squared_flat)
+        for i in eachindex(k_squared_flat)
+            if k_squared_flat[i] > 1e-14
+                diag_entries[i] = k_squared_flat[i] ^ α
+            else
+                diag_entries[i] = 0.0  # k=0 mode gets zeroed
+            end
+        end
+    end
+
+    # Return sparse diagonal matrix
+    return spdiagm(0 => diag_entries)
+end
+
+"""
+    check_conditions(op::FractionalLaplacian)
+
+Check that operand is in proper layout for fractional Laplacian.
+"""
+function check_conditions(op::FractionalLaplacian)
+    operand = op.operand
+
+    if isa(operand, ScalarField)
+        if hasfield(typeof(operand), :current_layout)
+            layout = operand.current_layout
+            if layout == :c
+                return hasfield(typeof(operand), :data_c) && operand.data_c !== nothing
+            elseif layout == :g
+                return hasfield(typeof(operand), :data_g) && operand.data_g !== nothing
+            end
+        end
+    elseif isa(operand, VectorField)
+        for comp in operand.components
+            if !check_conditions(FractionalLaplacian(comp, op.α))
+                return false
+            end
+        end
+    end
+
+    return true
+end
+
+"""
+    enforce_conditions(op::FractionalLaplacian)
+
+Ensure operand is in coefficient layout for spectral fractional Laplacian.
+"""
+function enforce_conditions(op::FractionalLaplacian)
+    operand = op.operand
+
+    if isa(operand, ScalarField)
+        ensure_layout!(operand, :c)
+    elseif isa(operand, VectorField)
+        for comp in operand.components
+            ensure_layout!(comp, :c)
+        end
+    end
+end
+
+"""
+    is_linear(op::FractionalLaplacian)
+
+Fractional Laplacian is a linear operator.
+"""
+is_linear(op::FractionalLaplacian) = true
+
+"""
+    operator_order(op::FractionalLaplacian)
+
+Return the effective derivative order of the fractional Laplacian.
+For (-Δ)^α, the effective order is 2α.
+"""
+operator_order(op::FractionalLaplacian) = 2 * op.α
+
+# ============================================================================
 # Outer Product (Tensor Product) evaluation
 # ============================================================================
 
