@@ -128,10 +128,10 @@ Specify boundary conditions at the domain edges:
 
 ```julia
 # Bottom wall (z=0): hot, T=1
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)
+add_dirichlet_bc!(problem, "T(z=0) = 1")
 
 # Top wall (z=1): cold, T=0
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "T(z=1) = 0")
 ```
 
 The x-direction is periodic (RealFourier basis), so no boundary conditions are needed there.
@@ -221,8 +221,8 @@ add_equation!(problem, "dt(T) = kappa*lap(T)")
 problem.parameters["kappa"] = 0.01
 
 # Boundary conditions
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "T(z=0) = 1")
+add_dirichlet_bc!(problem, "T(z=1) = 0")
 
 # Solver
 solver = InitialValueSolver(problem, RK222(), dt=0.001)

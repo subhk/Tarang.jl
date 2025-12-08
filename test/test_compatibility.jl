@@ -15,10 +15,10 @@ end
 
     lbvp = Tarang.LBVP([u_lbvp])
     Tarang.add_equation!(lbvp, "lap(u) = 0")
-    Tarang.add_dirichlet_bc!(lbvp, "u", "z", 0.0, 0.0)
-    Tarang.add_neumann_bc!(lbvp, "u", "z", 1.0, 1.0)
-    Tarang.add_robin_bc!(lbvp, "u", "z", 0.0, 1.0, 2.0, 0.5)
-    Tarang.add_stress_free_bc!(lbvp, "u", "z", 1.0)
+    Tarang.add_dirichlet_bc!(lbvp, "u(z=0) = 0")
+    Tarang.add_neumann_bc!(lbvp, "dz(u)(z=1) = 1")
+    Tarang.add_robin_bc!(lbvp, "1.0*u + 2.0*dz(u)(z=0) = 0.5")
+    Tarang.add_stress_free_bc!(lbvp, "u(z=1) stress-free")
 
     @test Tarang.validate_problem(lbvp)
     @test length(lbvp.boundary_conditions) >= 4
@@ -26,7 +26,7 @@ end
     u_nlbvp = ScalarField(dist, "u_nl", (basis,), Float64)
     nlbvp = Tarang.NLBVP([u_nlbvp])
     Tarang.add_equation!(nlbvp, "u = 1 - u")
-    Tarang.add_dirichlet_bc!(nlbvp, "u_nl", "z", 0.0, 0.0)
+    Tarang.add_dirichlet_bc!(nlbvp, "u_nl(z=0) = 0")
     @test Tarang.validate_problem(nlbvp)
 
     u_evp = ScalarField(dist, "u_evp", (basis,), Float64)
