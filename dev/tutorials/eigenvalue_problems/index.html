@@ -15,10 +15,10 @@ u_hat = ScalarField(dist, &quot;u_hat&quot;, (z_basis,), Float64)
 # Create eigenvalue problem
 evp = Tarang.EVP([u_hat]; eigenvalue=:sigma)</code></pre><h3 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h3><p>The EVP format is: <span>$A \mathbf{x} = \sigma B \mathbf{x}$</span></p><pre><code class="language-julia hljs"># Example: diffusion eigenvalue problem
 # σu = d²u/dz² (eigenvalues of Laplacian)
-Tarang.add_equation!(evp, &quot;sigma*u_hat = dz(dz(u_hat))&quot;)
+Tarang.add_equation!(evp, &quot;sigma*u_hat = ∂z(∂z(u_hat))&quot;)
 
 # Or equivalently
-Tarang.add_equation!(evp, &quot;sigma*u_hat = lap(u_hat)&quot;)</code></pre><h3 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Dirichlet BCs: u = 0 at boundaries
+Tarang.add_equation!(evp, &quot;sigma*u_hat = Δ(u_hat)&quot;)</code></pre><h3 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Dirichlet BCs: u = 0 at boundaries
 Tarang.add_dirichlet_bc!(evp, &quot;u_hat(z=0) = 0&quot;)
 Tarang.add_dirichlet_bc!(evp, &quot;u_hat(z=1) = 0&quot;)</code></pre><h3 id="Solving"><a class="docs-heading-anchor" href="#Solving">Solving</a><a id="Solving-1"></a><a class="docs-heading-anchor-permalink" href="#Solving" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Validate problem setup
 @assert Tarang.validate_problem(evp)
@@ -66,14 +66,14 @@ evp.parameters[&quot;k&quot;] = k
 evp.parameters[&quot;k2&quot;] = k^2
 
 # Momentum equations (modified Laplacian: D² - k²)
-Tarang.add_equation!(evp, &quot;sigma*u_hat + 1im*k*p_hat = Pr*(dz(dz(u_hat)) - k2*u_hat)&quot;)
-Tarang.add_equation!(evp, &quot;sigma*w_hat + dz(p_hat) = Pr*(dz(dz(w_hat)) - k2*w_hat) + Ra*Pr*T_hat&quot;)
+Tarang.add_equation!(evp, &quot;sigma*u_hat + 1im*k*p_hat = Pr*(∂z(∂z(u_hat)) - k2*u_hat)&quot;)
+Tarang.add_equation!(evp, &quot;sigma*w_hat + ∂z(p_hat) = Pr*(∂z(∂z(w_hat)) - k2*w_hat) + Ra*Pr*T_hat&quot;)
 
 # Continuity
-Tarang.add_equation!(evp, &quot;1im*k*u_hat + dz(w_hat) = 0&quot;)
+Tarang.add_equation!(evp, &quot;1im*k*u_hat + ∂z(w_hat) = 0&quot;)
 
 # Temperature
-Tarang.add_equation!(evp, &quot;sigma*T_hat + w_hat = dz(dz(T_hat)) - k2*T_hat&quot;)
+Tarang.add_equation!(evp, &quot;sigma*T_hat + w_hat = ∂z(∂z(T_hat)) - k2*T_hat&quot;)
 
 # Boundary conditions (no-slip, fixed temperature)
 Tarang.add_dirichlet_bc!(evp, &quot;u_hat(z=0) = 0&quot;)
@@ -104,16 +104,16 @@ evp = Tarang.EVP([psi_hat]; eigenvalue=:c)
 
 # Add equation (expanded form)
 Tarang.add_equation!(evp, &quot;&quot;&quot;
-    c*(dz(dz(psi_hat)) - k2*psi_hat) =
-    U*(dz(dz(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
-    (1im/(Re*k))*(dz(dz(dz(dz(psi_hat)))) - 2*k2*dz(dz(psi_hat)) + k4*psi_hat)
+    c*(∂z(∂z(psi_hat)) - k2*psi_hat) =
+    U*(∂z(∂z(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
+    (1im/(Re*k))*(∂z(∂z(∂z(∂z(psi_hat)))) - 2*k2*∂z(∂z(psi_hat)) + k4*psi_hat)
 &quot;&quot;&quot;)
 
-# No-slip: ψ = dψ/dz = 0 at walls
+# No-slip: ψ = ∂ψ/∂z = 0 at walls
 Tarang.add_dirichlet_bc!(evp, &quot;psi_hat(z=0) = 0&quot;)
 Tarang.add_dirichlet_bc!(evp, &quot;psi_hat(z=1) = 0&quot;)
-Tarang.add_neumann_bc!(evp, &quot;dz(psi_hat)(z=0) = 0&quot;)
-Tarang.add_neumann_bc!(evp, &quot;dz(psi_hat)(z=1) = 0&quot;)</code></pre><h2 id="Parameter-Studies"><a class="docs-heading-anchor" href="#Parameter-Studies">Parameter Studies</a><a id="Parameter-Studies-1"></a><a class="docs-heading-anchor-permalink" href="#Parameter-Studies" title="Permalink"></a></h2><h3 id="Scanning-Rayleigh-Number"><a class="docs-heading-anchor" href="#Scanning-Rayleigh-Number">Scanning Rayleigh Number</a><a id="Scanning-Rayleigh-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Scanning-Rayleigh-Number" title="Permalink"></a></h3><pre><code class="language-julia hljs">Ra_values = 10 .^ range(3, 5, length=20)
+Tarang.add_neumann_bc!(evp, &quot;∂z(psi_hat)(z=0) = 0&quot;)
+Tarang.add_neumann_bc!(evp, &quot;∂z(psi_hat)(z=1) = 0&quot;)</code></pre><h2 id="Parameter-Studies"><a class="docs-heading-anchor" href="#Parameter-Studies">Parameter Studies</a><a id="Parameter-Studies-1"></a><a class="docs-heading-anchor-permalink" href="#Parameter-Studies" title="Permalink"></a></h2><h3 id="Scanning-Rayleigh-Number"><a class="docs-heading-anchor" href="#Scanning-Rayleigh-Number">Scanning Rayleigh Number</a><a id="Scanning-Rayleigh-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Scanning-Rayleigh-Number" title="Permalink"></a></h3><pre><code class="language-julia hljs">Ra_values = 10 .^ range(3, 5, length=20)
 growth_rates = Float64[]
 
 for Ra in Ra_values
@@ -219,4 +219,4 @@ solver = Tarang.EigenvalueSolver(evp;
     which=&quot;LR&quot;,
     tolerance=1e-10,
     max_iterations=1000
-)</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../api/problems/">Problems API</a>: EVP problem definition</li><li><a href="../../api/solvers/">Solvers API</a>: Eigenvalue solver details</li><li><a href="../ivp_2d_rbc/">Rayleigh-Bénard Tutorial</a>: Time-dependent version</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../analysis_and_output/">« Tutorial: Analysis and Output</a><a class="docs-footer-nextpage" href="../surface_dynamics/">Surface and Boundary Dynamics »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:01">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+)</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../api/problems/">Problems API</a>: EVP problem definition</li><li><a href="../../api/solvers/">Solvers API</a>: Eigenvalue solver details</li><li><a href="../ivp_2d_rbc/">Rayleigh-Bénard Tutorial</a>: Time-dependent version</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../analysis_and_output/">« Tutorial: Analysis and Output</a><a class="docs-footer-nextpage" href="../surface_dynamics/">Surface and Boundary Dynamics »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:09">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

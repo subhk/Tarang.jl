@@ -47,7 +47,7 @@ solver = BoundaryValueSolver(problem, solver_type=&quot;direct&quot;)
 # Iterative solver (for large problems)
 solver = BoundaryValueSolver(problem, solver_type=&quot;iterative&quot;, tolerance=1e-8)</code></pre><p><strong>Methods</strong>:</p><h4 id="solve!"><a class="docs-heading-anchor" href="#solve!">solve!</a><a id="solve!-1"></a><a class="docs-heading-anchor-permalink" href="#solve!" title="Permalink"></a></h4><p>Solve the boundary value problem.</p><pre><code class="language-julia hljs">solve!(solver)</code></pre><p><strong>Returns</strong>: Solution fields are updated in place</p><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Poisson equation
 problem = LBVP([phi])
-add_equation!(problem, &quot;lap(phi) = rho&quot;)
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)
 add_dirichlet_bc!(problem, &quot;phi(z=0) = 0&quot;)
 add_dirichlet_bc!(problem, &quot;phi(z=1) = 0&quot;)
 
@@ -66,9 +66,9 @@ solver = NonlinearBoundaryValueSolver(problem, tolerance=1e-8)
 # With damping for stability
 solver = NonlinearBoundaryValueSolver(problem, damping=0.5, max_iterations=50)</code></pre><p><strong>Methods</strong>:</p><h4 id="solve!-2"><a class="docs-heading-anchor" href="#solve!-2">solve!</a><a class="docs-heading-anchor-permalink" href="#solve!-2" title="Permalink"></a></h4><p>Solve using Newton-Raphson iteration.</p><pre><code class="language-julia hljs">success = solve!(solver)</code></pre><p><strong>Returns</strong>: <code>true</code> if converged, <code>false</code> otherwise</p><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Steady Navier-Stokes
 problem = NLBVP([u, v, p])
-add_equation!(problem, &quot;u*dx(u) + v*dz(u) + dx(p) = nu*lap(u)&quot;)
-add_equation!(problem, &quot;u*dx(v) + v*dz(v) + dz(p) = nu*lap(v)&quot;)
-add_equation!(problem, &quot;dx(u) + dz(v) = 0&quot;)
+add_equation!(problem, &quot;u*∂x(u) + v*∂z(u) + ∂x(p) = nu*Δ(u)&quot;)
+add_equation!(problem, &quot;u*∂x(v) + v*∂z(v) + ∂z(p) = nu*Δ(v)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)
 
 solver = NonlinearBoundaryValueSolver(problem)
 
@@ -258,10 +258,10 @@ problem = IVP([u.components[1], u.components[2], p, T])
 problem.parameters[&quot;Ra&quot;] = 1e6
 problem.parameters[&quot;Pr&quot;] = 1.0
 
-add_equation!(problem, &quot;dt(u) + u*dx(u) + w*dz(u) + dx(p) = Pr*lap(u)&quot;)
-add_equation!(problem, &quot;dt(w) + u*dx(w) + w*dz(w) + dz(p) = Pr*lap(w) + Ra*Pr*T&quot;)
-add_equation!(problem, &quot;dx(u) + dz(w) = 0&quot;)
-add_equation!(problem, &quot;dt(T) + u*dx(T) + w*dz(T) = lap(T)&quot;)
+add_equation!(problem, &quot;∂ₜ(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(w) = 0&quot;)
+add_equation!(problem, &quot;∂ₜ(T) + u*∂x(T) + w*∂z(T) = Δ(T)&quot;)
 
 # Boundary conditions
 add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
@@ -295,4 +295,4 @@ while solver.sim_time &lt; t_end
     end
 end
 
-MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../problems/">Problems</a>: Problem definition</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li><li><a href="../analysis/">Analysis</a>: CFL conditions and diagnostics</li><li><a href="../../tutorials/ivp_2d_rbc/">Tutorial: IVP</a>: Complete example</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../problems/">« Problems API</a><a class="docs-footer-nextpage" href="../timesteppers/">Timesteppers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:01">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../problems/">Problems</a>: Problem definition</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li><li><a href="../analysis/">Analysis</a>: CFL conditions and diagnostics</li><li><a href="../../tutorials/ivp_2d_rbc/">Tutorial: IVP</a>: Complete example</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../problems/">« Problems API</a><a class="docs-footer-nextpage" href="../timesteppers/">Timesteppers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:09">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

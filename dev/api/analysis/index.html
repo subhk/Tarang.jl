@@ -88,13 +88,13 @@ KE = get_scalar(solver, &quot;KE&quot;)</code></pre><hr/><h3 id="Field-Evaluator
     name::String,
     expression::String
 )</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Vorticity
-add_field_evaluator(solver, &quot;omega&quot;, &quot;dx(v) - dz(u)&quot;)
+add_field_evaluator(solver, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
 
 # Q-criterion
 add_field_evaluator(solver, &quot;Q&quot;, &quot;0.5*(Omega*Omega - S*S)&quot;)
 
 # Temperature gradient magnitude
-add_field_evaluator(solver, &quot;grad_T_mag&quot;, &quot;sqrt(dx(T)^2 + dz(T)^2)&quot;)
+add_field_evaluator(solver, &quot;grad_T_mag&quot;, &quot;sqrt(∂x(T)^2 + ∂z(T)^2)&quot;)
 
 # Access computed field
 omega = get_field(solver, &quot;omega&quot;)</code></pre><hr/><h2 id="Analysis-Tasks"><a class="docs-heading-anchor" href="#Analysis-Tasks">Analysis Tasks</a><a id="Analysis-Tasks-1"></a><a class="docs-heading-anchor-permalink" href="#Analysis-Tasks" title="Permalink"></a></h2><h3 id="Unified-Evaluator"><a class="docs-heading-anchor" href="#Unified-Evaluator">Unified Evaluator</a><a id="Unified-Evaluator-1"></a><a class="docs-heading-anchor-permalink" href="#Unified-Evaluator" title="Permalink"></a></h3><p>Combine multiple analysis operations.</p><pre><code class="language-julia hljs">evaluator = UnifiedEvaluator(solver)
@@ -192,9 +192,9 @@ end</code></pre><h3 id="Reynolds-Number"><a class="docs-heading-anchor" href="#R
     Re = U * L / nu
     return Re
 end</code></pre><h3 id="Richardson-Number"><a class="docs-heading-anchor" href="#Richardson-Number">Richardson Number</a><a id="Richardson-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Richardson-Number" title="Permalink"></a></h3><p>Stratification vs. shear:</p><pre><code class="language-julia hljs">function compute_richardson_number(u, T, dz, g, T0)
-    # Ri = (g/T0) * (dT/dz) / (du/dz)^2
-    dTdz = dz(T)
-    dudz = dz(u)
+    # Ri = (g/T0) * (∂T/∂z) / (∂u/∂z)^2
+    dTdz = ∂z(T)
+    dudz = ∂z(u)
 
     to_grid!(dTdz)
     to_grid!(dudz)
@@ -313,4 +313,4 @@ if MPI.Comm_rank(MPI.COMM_WORLD) == 0
     merge_netcdf_files(&quot;snapshots&quot;, output_file=&quot;snapshots.nc&quot;, cleanup=true)
 end
 
-MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Integration methods</li><li><a href="../fields/">Fields</a>: Field operations for analysis</li><li><a href="../../tutorials/analysis_and_output/">Tutorial: Analysis</a>: Detailed examples</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../stochastic_forcing/">« Stochastic Forcing API</a><a class="docs-footer-nextpage" href="../io/">I/O API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:01">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Integration methods</li><li><a href="../fields/">Fields</a>: Field operations for analysis</li><li><a href="../../tutorials/analysis_and_output/">Tutorial: Analysis</a>: Detailed examples</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../stochastic_forcing/">« Stochastic Forcing API</a><a class="docs-footer-nextpage" href="../io/">I/O API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:09">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

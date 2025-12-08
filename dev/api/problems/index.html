@@ -5,42 +5,42 @@ problem = IVP([ux, uz, p])
 # With additional scalars
 problem = IVP([ux, uz, p, T, S])</code></pre><p><strong>Use cases</strong>:</p><ul><li>Fluid dynamics (Navier-Stokes)</li><li>Heat/mass diffusion</li><li>Wave propagation</li><li>Reaction-diffusion systems</li><li>Turbulence simulations</li></ul><hr/><h3 id="Linear-Boundary-Value-Problems-(LBVP)"><a class="docs-heading-anchor" href="#Linear-Boundary-Value-Problems-(LBVP)">Linear Boundary Value Problems (LBVP)</a><a id="Linear-Boundary-Value-Problems-(LBVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Linear-Boundary-Value-Problems-(LBVP)" title="Permalink"></a></h3><p>Steady-state linear problems with boundary conditions.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">LBVP(fields::Vector{&lt;:AbstractField})</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Poisson equation
 problem = LBVP([phi])
-add_equation!(problem, &quot;lap(phi) = rho&quot;)
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)
 
 # Stokes flow
 problem = LBVP([u, v, p])
-add_equation!(problem, &quot;-nu*lap(u) + dx(p) = fx&quot;)
-add_equation!(problem, &quot;-nu*lap(v) + dz(p) = fz&quot;)
-add_equation!(problem, &quot;dx(u) + dz(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Steady heat conduction</li><li>Poisson/Laplace equations</li><li>Stokes flow</li><li>Electrostatics</li></ul><hr/><h3 id="Nonlinear-Boundary-Value-Problems-(NLBVP)"><a class="docs-heading-anchor" href="#Nonlinear-Boundary-Value-Problems-(NLBVP)">Nonlinear Boundary Value Problems (NLBVP)</a><a id="Nonlinear-Boundary-Value-Problems-(NLBVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Nonlinear-Boundary-Value-Problems-(NLBVP)" title="Permalink"></a></h3><p>Steady-state nonlinear problems with boundary conditions.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">NLBVP(fields::Vector{&lt;:AbstractField})</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Steady Navier-Stokes
+add_equation!(problem, &quot;-nu*Δ(u) + ∂x(p) = fx&quot;)
+add_equation!(problem, &quot;-nu*Δ(v) + ∂z(p) = fz&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Steady heat conduction</li><li>Poisson/Laplace equations</li><li>Stokes flow</li><li>Electrostatics</li></ul><hr/><h3 id="Nonlinear-Boundary-Value-Problems-(NLBVP)"><a class="docs-heading-anchor" href="#Nonlinear-Boundary-Value-Problems-(NLBVP)">Nonlinear Boundary Value Problems (NLBVP)</a><a id="Nonlinear-Boundary-Value-Problems-(NLBVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Nonlinear-Boundary-Value-Problems-(NLBVP)" title="Permalink"></a></h3><p>Steady-state nonlinear problems with boundary conditions.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">NLBVP(fields::Vector{&lt;:AbstractField})</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Steady Navier-Stokes
 problem = NLBVP([u, v, p])
-add_equation!(problem, &quot;u*dx(u) + v*dz(u) = -dx(p) + nu*lap(u)&quot;)
-add_equation!(problem, &quot;u*dx(v) + v*dz(v) = -dz(p) + nu*lap(v)&quot;)
-add_equation!(problem, &quot;dx(u) + dz(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Steady nonlinear flows</li><li>Bifurcation analysis</li><li>Multiple steady states</li></ul><p><strong>Solution method</strong>: Newton iteration or similar nonlinear solvers</p><hr/><h3 id="Eigenvalue-Problems-(EVP)"><a class="docs-heading-anchor" href="#Eigenvalue-Problems-(EVP)">Eigenvalue Problems (EVP)</a><a id="Eigenvalue-Problems-(EVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Eigenvalue-Problems-(EVP)" title="Permalink"></a></h3><p>Linear eigenvalue problems for stability analysis and normal modes.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">EVP(fields::Vector{&lt;:AbstractField}; eigenvalue::Symbol)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li><li><code>eigenvalue</code>: Symbol for eigenvalue (e.g., <code>:sigma</code>, <code>:lambda</code>, <code>:omega</code>)</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Rayleigh-Bénard stability
+add_equation!(problem, &quot;u*∂x(u) + v*∂z(u) = -∂x(p) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;u*∂x(v) + v*∂z(v) = -∂z(p) + nu*Δ(v)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Steady nonlinear flows</li><li>Bifurcation analysis</li><li>Multiple steady states</li></ul><p><strong>Solution method</strong>: Newton iteration or similar nonlinear solvers</p><hr/><h3 id="Eigenvalue-Problems-(EVP)"><a class="docs-heading-anchor" href="#Eigenvalue-Problems-(EVP)">Eigenvalue Problems (EVP)</a><a id="Eigenvalue-Problems-(EVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Eigenvalue-Problems-(EVP)" title="Permalink"></a></h3><p>Linear eigenvalue problems for stability analysis and normal modes.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">EVP(fields::Vector{&lt;:AbstractField}; eigenvalue::Symbol)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li><li><code>eigenvalue</code>: Symbol for eigenvalue (e.g., <code>:sigma</code>, <code>:lambda</code>, <code>:omega</code>)</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Rayleigh-Bénard stability
 problem = EVP([u, v, p, T], eigenvalue=:sigma)
-add_equation!(problem, &quot;sigma*u = -u0*dx(u) - v*dx(u0) - dx(p) + Pr*lap(u) + Pr*Ra*T&quot;)
-add_equation!(problem, &quot;sigma*v = -u0*dx(v) - v*dz(u0) - dz(p) + Pr*lap(v)&quot;)
-add_equation!(problem, &quot;sigma*T = -u0*dx(T) - v + lap(T)&quot;)
-add_equation!(problem, &quot;dx(u) + dz(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Linear stability analysis</li><li>Growth rates and frequencies</li><li>Normal mode decomposition</li><li>Critical parameter values</li></ul><hr/><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="add_equation!"><a class="docs-heading-anchor" href="#add_equation!">add_equation!</a><a id="add_equation!-1"></a><a class="docs-heading-anchor-permalink" href="#add_equation!" title="Permalink"></a></h3><p>Add a PDE to the problem.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_equation!(problem, equation_string::String)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: Problem object (IVP, LBVP, NLBVP, or EVP)</li><li><code>equation_string</code>: String equation using symbolic syntax</li></ul><p><strong>Examples</strong>:</p><h4 id="Simple-Equations"><a class="docs-heading-anchor" href="#Simple-Equations">Simple Equations</a><a id="Simple-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Diffusion
-add_equation!(problem, &quot;dt(T) = kappa*lap(T)&quot;)
+add_equation!(problem, &quot;sigma*u = -u0*∂x(u) - v*∂x(u0) - ∂x(p) + Pr*Δ(u) + Pr*Ra*T&quot;)
+add_equation!(problem, &quot;sigma*v = -u0*∂x(v) - v*∂z(u0) - ∂z(p) + Pr*Δ(v)&quot;)
+add_equation!(problem, &quot;sigma*T = -u0*∂x(T) - v + Δ(T)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Linear stability analysis</li><li>Growth rates and frequencies</li><li>Normal mode decomposition</li><li>Critical parameter values</li></ul><hr/><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="add_equation!"><a class="docs-heading-anchor" href="#add_equation!">add_equation!</a><a id="add_equation!-1"></a><a class="docs-heading-anchor-permalink" href="#add_equation!" title="Permalink"></a></h3><p>Add a PDE to the problem.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_equation!(problem, equation_string::String)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: Problem object (IVP, LBVP, NLBVP, or EVP)</li><li><code>equation_string</code>: String equation using symbolic syntax</li></ul><p><strong>Examples</strong>:</p><h4 id="Simple-Equations"><a class="docs-heading-anchor" href="#Simple-Equations">Simple Equations</a><a id="Simple-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Diffusion
+add_equation!(problem, &quot;∂ₜ(T) = kappa*Δ(T)&quot;)
 
 # Wave equation
-add_equation!(problem, &quot;dt(dt(u)) = c^2*lap(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(∂ₜ(u)) = c^2*Δ(u)&quot;)
 
 # Poisson
-add_equation!(problem, &quot;lap(phi) = rho&quot;)</code></pre><h4 id="Complex-Equations"><a class="docs-heading-anchor" href="#Complex-Equations">Complex Equations</a><a id="Complex-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Navier-Stokes momentum
-add_equation!(problem, &quot;dt(u) + u*dx(u) + w*dz(u) = -dx(p) + nu*lap(u)&quot;)
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)</code></pre><h4 id="Complex-Equations"><a class="docs-heading-anchor" href="#Complex-Equations">Complex Equations</a><a id="Complex-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Navier-Stokes momentum
+add_equation!(problem, &quot;∂ₜ(u) + u*∂x(u) + w*∂z(u) = -∂x(p) + nu*Δ(u)&quot;)
 
 # Energy equation with dissipation
-add_equation!(problem, &quot;dt(T) + u*dx(T) + w*dz(T) = kappa*lap(T) + Q&quot;)
+add_equation!(problem, &quot;∂ₜ(T) + u*∂x(T) + w*∂z(T) = kappa*Δ(T) + Q&quot;)
 
 # With parameters
-add_equation!(problem, &quot;dt(T) = kappa*lap(T) + Ra*Pr*w&quot;)</code></pre><h4 id="Using-Fields-and-Parameters"><a class="docs-heading-anchor" href="#Using-Fields-and-Parameters">Using Fields and Parameters</a><a id="Using-Fields-and-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Fields-and-Parameters" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Fields are referenced by name
-add_equation!(problem, &quot;dt(u) = -u*dx(u)&quot;)  # u is a field
+add_equation!(problem, &quot;∂ₜ(T) = kappa*Δ(T) + Ra*Pr*w&quot;)</code></pre><h4 id="Using-Fields-and-Parameters"><a class="docs-heading-anchor" href="#Using-Fields-and-Parameters">Using Fields and Parameters</a><a id="Using-Fields-and-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Fields-and-Parameters" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Fields are referenced by name
+add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u)&quot;)  # u is a field
 
 # Parameters from problem.parameters
 problem.parameters[&quot;nu&quot;] = 0.01
 problem.parameters[&quot;Ra&quot;] = 1e6
-add_equation!(problem, &quot;dt(u) = nu*lap(u) + Ra*T&quot;)</code></pre><hr/><h2 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h2><h3 id="Setting-Parameters"><a class="docs-heading-anchor" href="#Setting-Parameters">Setting Parameters</a><a id="Setting-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Setting-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create problem
+add_equation!(problem, &quot;∂ₜ(u) = nu*Δ(u) + Ra*T&quot;)</code></pre><hr/><h2 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h2><h3 id="Setting-Parameters"><a class="docs-heading-anchor" href="#Setting-Parameters">Setting Parameters</a><a id="Setting-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Setting-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create problem
 problem = IVP([u, p, T])
 
 # Set dimensionless parameters
@@ -52,12 +52,12 @@ problem.parameters[&quot;Ra&quot;] = 1e6         # Rayleigh number
 problem.parameters[&quot;nu&quot;] = 1e-3        # Kinematic viscosity
 problem.parameters[&quot;kappa&quot;] = 1e-3     # Thermal diffusivity
 problem.parameters[&quot;g&quot;] = 9.81         # Gravitational acceleration</code></pre><h3 id="Using-Parameters-in-Equations"><a class="docs-heading-anchor" href="#Using-Parameters-in-Equations">Using Parameters in Equations</a><a id="Using-Parameters-in-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Parameters-in-Equations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Reference by name in equations
-add_equation!(problem, &quot;dt(u) = -u*dx(u) + nu*lap(u)&quot;)
-add_equation!(problem, &quot;dt(T) = -u*dx(T) + kappa*lap(T)&quot;)
+add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)&quot;)
 
 # Dimensionless formulation
-add_equation!(problem, &quot;dt(u) = -u*dx(u) + (1/Re)*lap(u)&quot;)
-add_equation!(problem, &quot;dt(T) = -u*dx(T) + (1/(Re*Pr))*lap(T) + Ra*Pr*w&quot;)</code></pre><h3 id="Modifying-Parameters"><a class="docs-heading-anchor" href="#Modifying-Parameters">Modifying Parameters</a><a id="Modifying-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Modifying-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Change parameter value
+add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u) + (1/Re)*Δ(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(T) = -u*∂x(T) + (1/(Re*Pr))*Δ(T) + Ra*Pr*w&quot;)</code></pre><h3 id="Modifying-Parameters"><a class="docs-heading-anchor" href="#Modifying-Parameters">Modifying Parameters</a><a id="Modifying-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Modifying-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Change parameter value
 problem.parameters[&quot;Ra&quot;] = 1e7
 
 # Access parameter
@@ -78,38 +78,38 @@ add_dirichlet_bc!(problem, &quot;u(x=0) = sin(omega*t)&quot;)
 
 # Space-dependent
 add_dirichlet_bc!(problem, &quot;T(z=0) = 1.0 - x^2&quot;)</code></pre><hr/><h3 id="add*neumann*bc!"><a class="docs-heading-anchor" href="#add*neumann*bc!">add<em>neumann</em>bc!</a><a id="add*neumann*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*neumann*bc!" title="Permalink"></a></h3><p>Add Neumann (fixed derivative) boundary condition.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, field_name, coord_name, position, value)</code></pre><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, &quot;d&lt;coord&gt;(field)(coord=pos) = value&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Insulating boundary (zero heat flux)
-add_neumann_bc!(problem, &quot;dz(T)(z=0) = 0&quot;)  # dT/dz(z=0) = 0
+add_neumann_bc!(problem, &quot;∂z(T)(z=0) = 0&quot;)  # ∂T/∂z(z=0) = 0
 
 # Fixed flux
-add_neumann_bc!(problem, &quot;dz(T)(z=1) = -1&quot;)  # dT/dz(z=1) = -1
+add_neumann_bc!(problem, &quot;∂z(T)(z=1) = -1&quot;)  # ∂T/∂z(z=1) = -1
 
 # Time-dependent flux
-add_neumann_bc!(problem, &quot;dx(phi)(x=0) = sin(omega*t)&quot;)</code></pre><hr/><h3 id="add*robin*bc!"><a class="docs-heading-anchor" href="#add*robin*bc!">add<em>robin</em>bc!</a><a id="add*robin*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*robin*bc!" title="Permalink"></a></h3><p>Add Robin (mixed) boundary condition: α<em>f + β</em>df/dn = value</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_robin_bc!(problem, &quot;alpha*field(coord=pos) + beta*d&lt;coord&gt;(field)(coord=pos) = value&quot;)</code></pre><p><strong>Arguments</strong> (via string):</p><ul><li><code>alpha</code>: Coefficient for field value</li><li><code>beta</code>: Coefficient for derivative</li><li><code>value</code>: Right-hand side value</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Convective heat transfer: h*T + k*dT/dn = h*T_ambient
+add_neumann_bc!(problem, &quot;∂x(phi)(x=0) = sin(omega*t)&quot;)</code></pre><hr/><h3 id="add*robin*bc!"><a class="docs-heading-anchor" href="#add*robin*bc!">add<em>robin</em>bc!</a><a id="add*robin*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*robin*bc!" title="Permalink"></a></h3><p>Add Robin (mixed) boundary condition: α<em>f + β</em>df/dn = value</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_robin_bc!(problem, &quot;alpha*field(coord=pos) + beta*d&lt;coord&gt;(field)(coord=pos) = value&quot;)</code></pre><p><strong>Arguments</strong> (via string):</p><ul><li><code>alpha</code>: Coefficient for field value</li><li><code>beta</code>: Coefficient for derivative</li><li><code>value</code>: Right-hand side value</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Convective heat transfer: h*T + k*∂T/∂n = h*T_ambient
 h, k = 10.0, 1.0
 T_ambient = 300.0
-add_robin_bc!(problem, &quot;$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_ambient)&quot;)
+add_robin_bc!(problem, &quot;$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_ambient)&quot;)
 
-# Radiation boundary: T + ε*dT/dn = 0
-add_robin_bc!(problem, &quot;1.0*T(x=0) + $(epsilon)*dx(T)(x=0) = 0&quot;)</code></pre><hr/><h3 id="add*stress*free_bc!"><a class="docs-heading-anchor" href="#add*stress*free_bc!">add<em>stress</em>free_bc!</a><a id="add*stress*free_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*stress*free_bc!" title="Permalink"></a></h3><p>Add stress-free boundary condition for fluid mechanics: u<em>normal = 0, ∂u</em>tangential/∂n = 0</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_stress_free_bc!(problem, &quot;field(coord=pos)&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Stress-free top and bottom (free-slip)
+# Radiation boundary: T + ε*∂T/∂n = 0
+add_robin_bc!(problem, &quot;1.0*T(x=0) + $(epsilon)*∂x(T)(x=0) = 0&quot;)</code></pre><hr/><h3 id="add*stress*free_bc!"><a class="docs-heading-anchor" href="#add*stress*free_bc!">add<em>stress</em>free_bc!</a><a id="add*stress*free_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*stress*free_bc!" title="Permalink"></a></h3><p>Add stress-free boundary condition for fluid mechanics: u<em>normal = 0, ∂u</em>tangential/∂n = 0</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_stress_free_bc!(problem, &quot;field(coord=pos)&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Stress-free top and bottom (free-slip)
 add_stress_free_bc!(problem, &quot;u(z=0)&quot;)
 add_stress_free_bc!(problem, &quot;u(z=1)&quot;)
 
 # Equivalent to:
-# w(z=0) = 0, du/dz(z=0) = 0, dv/dz(z=0) = 0
-# w(z=1) = 0, du/dz(z=1) = 0, dv/dz(z=1) = 0</code></pre><hr/><h3 id="add*no*slip_bc!"><a class="docs-heading-anchor" href="#add*no*slip_bc!">add<em>no</em>slip_bc!</a><a id="add*no*slip_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*no*slip_bc!" title="Permalink"></a></h3><p>Add no-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_no_slip_bc!(problem, &quot;field(coord=pos)&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># No-slip at walls
+# w(z=0) = 0, ∂u/∂z(z=0) = 0, ∂v/∂z(z=0) = 0
+# w(z=1) = 0, ∂u/∂z(z=1) = 0, ∂v/∂z(z=1) = 0</code></pre><hr/><h3 id="add*no*slip_bc!"><a class="docs-heading-anchor" href="#add*no*slip_bc!">add<em>no</em>slip_bc!</a><a id="add*no*slip_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*no*slip_bc!" title="Permalink"></a></h3><p>Add no-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_no_slip_bc!(problem, &quot;field(coord=pos)&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># No-slip at walls
 add_no_slip_bc!(problem, &quot;u(z=0)&quot;)
 add_no_slip_bc!(problem, &quot;u(z=1)&quot;)
 
 # Equivalent to:
 # u(z=0) = 0, v(z=0) = 0, w(z=0) = 0
 # u(z=1) = 0, v(z=1) = 0, w(z=1) = 0</code></pre><hr/><h3 id="add_bc!"><a class="docs-heading-anchor" href="#add_bc!">add_bc!</a><a id="add_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add_bc!" title="Permalink"></a></h3><p>Add custom boundary condition using equation syntax.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_bc!(problem, equation_string::String)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Custom combinations
-add_bc!(problem, &quot;u(z=0) + 2*dz(u)(z=0) = 1&quot;)
+add_bc!(problem, &quot;u(z=0) + 2*∂z(u)(z=0) = 1&quot;)
 
 # Coupling between fields
 add_bc!(problem, &quot;T(x=0) = 2*S(x=0)&quot;)
 
 # Complex expressions
-add_bc!(problem, &quot;dx(p)(z=0) + omega^2*u(z=0) = 0&quot;)</code></pre><hr/><h2 id="Problem-Properties"><a class="docs-heading-anchor" href="#Problem-Properties">Problem Properties</a><a id="Problem-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Properties" title="Permalink"></a></h2><h3 id="Accessing-Fields"><a class="docs-heading-anchor" href="#Accessing-Fields">Accessing Fields</a><a id="Accessing-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get list of fields
+add_bc!(problem, &quot;∂x(p)(z=0) + omega^2*u(z=0) = 0&quot;)</code></pre><hr/><h2 id="Problem-Properties"><a class="docs-heading-anchor" href="#Problem-Properties">Problem Properties</a><a id="Problem-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Properties" title="Permalink"></a></h2><h3 id="Accessing-Fields"><a class="docs-heading-anchor" href="#Accessing-Fields">Accessing Fields</a><a id="Accessing-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get list of fields
 fields = problem.fields
 
 # Iterate over fields
@@ -137,9 +137,9 @@ n_bcs = length(problem.boundary_conditions)
 for bc in problem.boundary_conditions
     println(&quot;$(bc.field) at $(bc.coord)=$(bc.position): $(bc.type)&quot;)
 end</code></pre><hr/><h2 id="Problem-Validation"><a class="docs-heading-anchor" href="#Problem-Validation">Problem Validation</a><a id="Problem-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Validation" title="Permalink"></a></h2><h3 id="validate_problem"><a class="docs-heading-anchor" href="#validate_problem">validate_problem</a><a id="validate_problem-1"></a><a class="docs-heading-anchor-permalink" href="#validate_problem" title="Permalink"></a></h3><p>Check problem for consistency and completeness.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">validate_problem(problem)</code></pre><p><strong>Checks</strong>:</p><ul><li>Number of equations matches number of unknowns</li><li>Boundary conditions are sufficient</li><li>Parameters are defined</li><li>Field dimensions match</li><li>Operator applications are valid</li></ul><p><strong>Example</strong>:</p><pre><code class="language-julia hljs">problem = IVP([u, v, p])
-add_equation!(problem, &quot;dt(u) = -u*dx(u) - v*dz(u) - dx(p) + nu*lap(u)&quot;)
-add_equation!(problem, &quot;dt(v) = -u*dx(v) - v*dz(v) - dz(p) + nu*lap(v)&quot;)
-add_equation!(problem, &quot;dx(u) + dz(v) = 0&quot;)
+add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u) - v*∂z(u) - ∂x(p) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)
 
 # Add boundary conditions
 add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
@@ -148,18 +148,18 @@ add_dirichlet_bc!(problem, &quot;v(z=0) = 0&quot;)
 
 # Validate
 validate_problem(problem)  # Throws error if invalid</code></pre><hr/><h2 id="Problem-Substitutions"><a class="docs-heading-anchor" href="#Problem-Substitutions">Problem Substitutions</a><a id="Problem-Substitutions-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Substitutions" title="Permalink"></a></h2><h3 id="Substitution-Variables"><a class="docs-heading-anchor" href="#Substitution-Variables">Substitution Variables</a><a id="Substitution-Variables-1"></a><a class="docs-heading-anchor-permalink" href="#Substitution-Variables" title="Permalink"></a></h3><p>Define intermediate variables for readability:</p><pre><code class="language-julia hljs"># Define substitution
-add_substitution!(problem, &quot;omega&quot;, &quot;dx(v) - dz(u)&quot;)
+add_substitution!(problem, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
 
 # Use in equations
-add_equation!(problem, &quot;dt(omega) = -u*dx(omega) - v*dz(omega) + nu*lap(omega)&quot;)</code></pre><h3 id="Common-Substitutions"><a class="docs-heading-anchor" href="#Common-Substitutions">Common Substitutions</a><a id="Common-Substitutions-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Substitutions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Vorticity
-add_substitution!(problem, &quot;omega&quot;, &quot;dx(v) - dz(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(omega) = -u*∂x(omega) - v*∂z(omega) + nu*Δ(omega)&quot;)</code></pre><h3 id="Common-Substitutions"><a class="docs-heading-anchor" href="#Common-Substitutions">Common Substitutions</a><a id="Common-Substitutions-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Substitutions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Vorticity
+add_substitution!(problem, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
 
 # Kinetic energy
 add_substitution!(problem, &quot;KE&quot;, &quot;0.5*(u^2 + v^2 + w^2)&quot;)
 
 # Strain rate
-add_substitution!(problem, &quot;S11&quot;, &quot;dx(u)&quot;)
-add_substitution!(problem, &quot;S12&quot;, &quot;0.5*(dx(v) + dz(u))&quot;)</code></pre><hr/><h2 id="Advanced-Features"><a class="docs-heading-anchor" href="#Advanced-Features">Advanced Features</a><a id="Advanced-Features-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Features" title="Permalink"></a></h2><h3 id="Tau-Method-for-Boundary-Conditions"><a class="docs-heading-anchor" href="#Tau-Method-for-Boundary-Conditions">Tau Method for Boundary Conditions</a><a id="Tau-Method-for-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Method-for-Boundary-Conditions" title="Permalink"></a></h3><p>Tarang.jl uses the tau method for enforcing boundary conditions in spectral methods:</p><pre><code class="language-julia hljs"># Tau fields are created automatically
+add_substitution!(problem, &quot;S11&quot;, &quot;∂x(u)&quot;)
+add_substitution!(problem, &quot;S12&quot;, &quot;0.5*(∂x(v) + ∂z(u))&quot;)</code></pre><hr/><h2 id="Advanced-Features"><a class="docs-heading-anchor" href="#Advanced-Features">Advanced Features</a><a id="Advanced-Features-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Features" title="Permalink"></a></h2><h3 id="Tau-Method-for-Boundary-Conditions"><a class="docs-heading-anchor" href="#Tau-Method-for-Boundary-Conditions">Tau Method for Boundary Conditions</a><a id="Tau-Method-for-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Method-for-Boundary-Conditions" title="Permalink"></a></h3><p>Tarang.jl uses the tau method for enforcing boundary conditions in spectral methods:</p><pre><code class="language-julia hljs"># Tau fields are created automatically
 # Lift operations handle boundary condition enforcement
 
 # User typically doesn&#39;t interact with tau fields directly
@@ -188,10 +188,10 @@ problem.parameters[&quot;Ra&quot;] = 1e6
 problem.parameters[&quot;Pr&quot;] = 1.0
 
 # Equations
-add_equation!(problem, &quot;dt(u) + u*dx(u) + w*dz(u) + dx(p) = Pr*lap(u)&quot;)
-add_equation!(problem, &quot;dt(w) + u*dx(w) + w*dz(w) + dz(p) = Pr*lap(w) + Ra*Pr*T&quot;)
-add_equation!(problem, &quot;dx(u) + dz(w) = 0&quot;)
-add_equation!(problem, &quot;dt(T) + u*dx(T) + w*dz(T) = lap(T)&quot;)
+add_equation!(problem, &quot;∂ₜ(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(w) = 0&quot;)
+add_equation!(problem, &quot;∂ₜ(T) + u*∂x(T) + w*∂z(T) = Δ(T)&quot;)
 
 # Boundary conditions
 add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
@@ -203,4 +203,4 @@ add_dirichlet_bc!(problem, &quot;w(z=1) = 0&quot;)
 add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)
 
 # Validate
-validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:01">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:09">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
