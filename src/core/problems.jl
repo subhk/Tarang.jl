@@ -191,7 +191,111 @@ function invoke_constructor(::Type{T}, args::Tuple, kwargs::NamedTuple) where {T
     return builder(variables; kwargs...)
 end
 
+# ============================================================================
+# Boundary condition string parsing
+# ============================================================================
+
+"""
+    parse_bc_string(bc_string::String)
+
+Parse Dedalus-style boundary condition string into components.
+
+# Supported formats:
+- `"u(z=0) = 0"` → ("u", "z", 0.0, 0.0)
+- `"T(z=1.0) = 1"` → ("T", "z", 1.0, 1.0)
+- `"u(x=-1) = sin(y)"` → ("u", "x", -1.0, "sin(y)")
+
+Returns: (field_name, coordinate, position, value)
+"""
+function parse_bc_string(bc_string::String)
+    # Remove whitespace
+    s = replace(bc_string, " " => "")
+
+    # Match pattern: field(coord=pos)=value
+    # e.g., "u(z=0)=0" or "T(z=1.0)=sin(x)"
+    pattern = r"^([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+    m = match(pattern, s)
+
+    if m === nothing
+        throw(ArgumentError("Invalid BC string format: '$bc_string'. Expected format: 'field(coord=pos) = value'"))
+    end
+
+    field_name = String(m.captures[1])
+    coordinate = String(m.captures[2])
+    pos_str = String(m.captures[3])
+    val_str = String(m.captures[4])
+
+    # Parse position as number
+    position = try
+        parse(Float64, pos_str)
+    catch
+        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+    end
+
+    # Parse value - could be number or expression string
+    value = try
+        parse(Float64, val_str)
+    catch
+        # Keep as string expression for space/time dependent BCs
+        val_str
+    end
+
+    return (field_name, coordinate, position, value)
+end
+
+"""
+    parse_neumann_bc_string(bc_string::String)
+
+Parse Neumann BC string like "dz(u)(z=0) = 0" into components.
+
+Returns: (field_name, coordinate, position, value)
+"""
+function parse_neumann_bc_string(bc_string::String)
+    # Remove whitespace
+    s = replace(bc_string, " " => "")
+
+    # Match pattern: d<coord>(<field>)(<coord>=<pos>)=<value>
+    # e.g., "dz(u)(z=0)=0"
+    pattern = r"^d([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+    m = match(pattern, s)
+
+    if m === nothing
+        # Try simpler format: field(coord=pos) = value (same as Dirichlet but caller knows it's Neumann)
+        return parse_bc_string(bc_string)
+    end
+
+    deriv_coord = String(m.captures[1])
+    field_name = String(m.captures[2])
+    bc_coord = String(m.captures[3])
+    pos_str = String(m.captures[4])
+    val_str = String(m.captures[5])
+
+    # Verify derivative coordinate matches BC coordinate
+    if deriv_coord != bc_coord
+        @warn "Derivative coordinate '$deriv_coord' differs from BC coordinate '$bc_coord'"
+    end
+
+    # Parse position
+    position = try
+        parse(Float64, pos_str)
+    catch
+        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+    end
+
+    # Parse value
+    value = try
+        parse(Float64, val_str)
+    catch
+        val_str
+    end
+
+    return (field_name, bc_coord, position, value)
+end
+
+# ============================================================================
 # Problem building and manipulation
+# ============================================================================
+
 function add_equation!(problem::Problem, equation::String)
     """Add equation to problem"""
     push!(problem.equations, equation)
@@ -218,28 +322,70 @@ function add_bc!(problem::Problem, bc::AbstractBoundaryCondition)
     return bc
 end
 
-function add_dirichlet_bc!(problem::Problem, field::String, coordinate::String, 
+function add_dirichlet_bc!(problem::Problem, field::String, coordinate::String,
                           position, value; kwargs...)
     """Add Dirichlet boundary condition: u(coord=pos) = value"""
     bc = add_dirichlet!(problem.bc_manager, field, coordinate, position, value; kwargs...)
-    
+
     # Add to legacy string list
     eq = bc_to_equation(problem.bc_manager, bc)
     push!(problem.boundary_conditions, eq)
-    
+
     return bc
+end
+
+"""
+    add_dirichlet_bc!(problem::Problem, bc_string::String)
+
+Add Dirichlet boundary condition using Dedalus-style string syntax.
+
+# Supported formats:
+- `"u(z=0) = 0"` - field u at z=0 equals 0
+- `"u(z=1.0) = sin(x)"` - field u at z=1.0 equals sin(x)
+- `"T(z=-1) = 1.0"` - field T at z=-1 equals 1.0
+
+# Examples:
+```julia
+add_dirichlet_bc!(problem, "u(z=0) = 0")
+add_dirichlet_bc!(problem, "T(z=1) = 0")
+add_dirichlet_bc!(problem, "p(x=0) = 1.0")
+```
+"""
+function add_dirichlet_bc!(problem::Problem, bc_string::String)
+    field, coordinate, position, value = parse_bc_string(bc_string)
+    return add_dirichlet_bc!(problem, field, coordinate, position, value)
 end
 
 function add_neumann_bc!(problem::Problem, field::String, coordinate::String,
                         position, value; kwargs...)
     """Add Neumann boundary condition: du/dcoord(coord=pos) = value"""
     bc = add_neumann!(problem.bc_manager, field, coordinate, position, value; kwargs...)
-    
+
     # Add to legacy string list
     eq = bc_to_equation(problem.bc_manager, bc)
     push!(problem.boundary_conditions, eq)
-    
+
     return bc
+end
+
+"""
+    add_neumann_bc!(problem::Problem, bc_string::String)
+
+Add Neumann boundary condition using Dedalus-style string syntax.
+
+# Supported formats:
+- `"dz(u)(z=0) = 0"` - derivative of u at z=0 equals 0
+- `"dx(T)(x=1) = 0"` - derivative of T at x=1 equals 0
+
+# Examples:
+```julia
+add_neumann_bc!(problem, "dz(u)(z=0) = 0")
+add_neumann_bc!(problem, "dz(T)(z=1) = 0")
+```
+"""
+function add_neumann_bc!(problem::Problem, bc_string::String)
+    field, coordinate, position, value = parse_neumann_bc_string(bc_string)
+    return add_neumann_bc!(problem, field, coordinate, position, value)
 end
 
 function add_robin_bc!(problem::Problem, field::String, coordinate::String,
