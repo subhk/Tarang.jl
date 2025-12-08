@@ -279,10 +279,9 @@ Used in SQG to compute streamfunction from buoyancy: ψ = (-Δ)^(-1/2)θ
 """
 invsqrtlap(operand::Operand) = fraclap(operand, -0.5)
 
-# Unicode aliases for common fractional Laplacians
-const √Δ = sqrtlap       # Type: \\sqrt Tab \\Delta Tab
-const Δ½ = sqrtlap       # Type: \\Delta Tab \\^1 Tab / Tab 2 Tab (or just copy)
-const Δ⁻½ = invsqrtlap   # Inverse square root
+# Note: Unicode aliases like √Δ, Δ½, Δ⁻½ are not valid Julia identifiers
+# (√ is a prefix operator, superscripts cause parsing issues)
+# Use sqrtlap, invsqrtlap, or Δᵅ(f, α) instead
 
 function trace(operand::Operand)
     """Trace operator"""

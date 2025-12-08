@@ -148,8 +148,6 @@ Tarang supports Unicode mathematical notation for cleaner, more readable code:
 | `×` | `cross` | Cross product |
 | `∇⊥` | `perp_grad` | Perpendicular gradient |
 | `Δᵅ` | `fraclap` | Fractional Laplacian |
-| `√Δ` / `Δ½` | `sqrtlap` | Square root Laplacian |
-| `Δ⁻½` | `invsqrtlap` | Inverse square root Laplacian |
 
 ### In Equations
 
