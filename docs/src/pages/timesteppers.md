@@ -95,8 +95,7 @@ SBDF4()  # 4th order
 
 | Stiffness | Indicator | Recommended |
 |-----------|-----------|-------------|
-| Non-stiff | Low Re, large Δt stable | RK222_Explicit, RK443_Explicit |
-| Mild | Moderate Re | RK222, RK443 (IMEX) |
+| Mild | Moderate Re | RK222, RK443 |
 | Moderate | Higher Re | CNAB2, SBDF2 |
 | Stiff | High Re, requires tiny Δt | SBDF3, SBDF4 |
 
@@ -104,10 +103,10 @@ SBDF4()  # 4th order
 
 | Problem Type | Recommended |
 |--------------|-------------|
-| Advection-dominated | RK222_Explicit, RK443_Explicit |
-| Diffusion-dominated | RK222, RK443 (IMEX) or CNAB2, SBDF2 |
+| General purpose | RK222, RK443 |
+| Diffusion-dominated | CNAB2, SBDF2 |
 | High Rayleigh number | SBDF2, SBDF3 |
-| Turbulence | RK443 (IMEX) or SBDF2 |
+| Turbulence | RK443 or SBDF2 |
 
 ## Stability Analysis
 
@@ -173,18 +172,15 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 
 | Method | Evaluations/Step | Memory | Stability |
 |--------|------------------|--------|-----------|
-| RK111 (IMEX) | 1 + solve | Medium | Good (L-stable) |
-| RK222 (IMEX) | 2 + solve | Medium | Very good (L-stable) |
-| RK443 (IMEX) | 4 + solve | Higher | Best (L-stable) |
-| RK111_Explicit | 1 | Low | Poor |
-| RK222_Explicit | 2 | Medium | Good |
-| RK443_Explicit | 4 | Higher | Best (explicit) |
-| CNAB2 | 1 | Medium | Very good |
-| SBDF2 | 1 | Medium | Excellent |
+| RK111 | 1 + solve | Medium | Good (L-stable) |
+| RK222 | 2 + solve | Medium | Very good (L-stable) |
+| RK443 | 4 + solve | Higher | Best (L-stable) |
+| CNAB2 | 1 + solve | Medium | Very good |
+| SBDF2 | 1 + solve | Medium | Excellent |
 
 ## Example Usage
 
-### IMEX RK (Recommended for stiff problems)
+### Runge-Kutta IMEX
 
 ```julia
 using Tarang
@@ -197,18 +193,6 @@ problem = IVP([u, p])
 solver = InitialValueSolver(problem, RK443(); dt=1e-3)
 
 # Larger timestep possible due to implicit treatment of linear terms
-while solver.sim_time < t_end
-    step!(solver)
-end
-```
-
-### Explicit RK (For non-stiff problems)
-
-```julia
-# Same problem, purely explicit solver
-solver = InitialValueSolver(problem, RK443_Explicit(); dt=1e-4)
-
-# Smaller timestep required (CFL limited by diffusion)
 while solver.sim_time < t_end
     step!(solver)
 end
