@@ -282,6 +282,96 @@ invsqrtlap(operand::Operand) = fraclap(operand, -0.5)
 # (√ is a prefix operator, superscripts cause parsing issues)
 # Use sqrtlap, invsqrtlap, or Δᵅ(f, α) instead
 
+# ============================================================================
+# Hyperviscosity / Higher-Order Laplacian Operators
+# ============================================================================
+
+"""
+    hyperlap(operand, n::Integer)
+
+Higher-order Laplacian (hyperviscosity) operator: (-Δ)^n
+
+In Fourier space: (-Δ)^n f̂(k) = |k|^(2n) f̂(k)
+
+Common use cases:
+- `hyperlap(u, 2)` or `Δ²(u)`: Biharmonic operator for 4th-order hyperviscosity
+- `hyperlap(u, 4)` or `Δ⁴(u)`: 8th-order hyperviscosity
+- `hyperlap(u, 8)` or `Δ⁸(u)`: 16th-order hyperviscosity
+
+For turbulence simulations with hyperviscosity dissipation:
+```julia
+# 4th-order hyperviscosity (biharmonic)
+add_equation!(problem, "∂t(u) = -u⋅∇(u) - ν₄*Δ²(u)")
+
+# 8th-order hyperviscosity
+add_equation!(problem, "∂t(u) = -u⋅∇(u) - ν₈*Δ⁴(u)")
+```
+
+Note: For Fourier-based spectral methods, hyperviscosity is efficient because
+it's just multiplication by |k|^(2n) in spectral space. For non-periodic
+bases (Chebyshev), higher-order operators require more tau corrections.
+"""
+function hyperlap(operand::Operand, n::Integer)
+    n >= 1 || throw(ArgumentError("hyperlap order n must be >= 1, got $n"))
+    return FractionalLaplacian(operand, Float64(n))
+end
+
+# Unicode shortcuts for common hyperviscosity orders
+# In spectral space: Δⁿ computes |k|^(2n) (same as (-Δ)^n for integer n≥1)
+
+"""
+    Δ²(operand)
+
+Biharmonic operator: (-Δ)² = |k|⁴ in Fourier space.
+
+Commonly used for 4th-order hyperviscosity in turbulence simulations:
+```julia
+add_equation!(problem, "∂t(ω) = -u⋅∇(ω) - ν₄*Δ²(ω)")
+```
+
+Type: \\Delta Tab \\^2 Tab
+"""
+Δ²(operand::Operand) = hyperlap(operand, 2)
+
+"""
+    Δ⁴(operand)
+
+4th power Laplacian: (-Δ)⁴ = |k|⁸ in Fourier space.
+
+Used for 8th-order hyperviscosity:
+```julia
+add_equation!(problem, "∂t(ω) = -u⋅∇(ω) - ν₈*Δ⁴(ω)")
+```
+
+Type: \\Delta Tab \\^4 Tab
+"""
+Δ⁴(operand::Operand) = hyperlap(operand, 4)
+
+"""
+    Δ⁶(operand)
+
+6th power Laplacian: (-Δ)⁶ = |k|¹² in Fourier space.
+
+Used for 12th-order hyperviscosity.
+
+Type: \\Delta Tab \\^6 Tab
+"""
+Δ⁶(operand::Operand) = hyperlap(operand, 6)
+
+"""
+    Δ⁸(operand)
+
+8th power Laplacian: (-Δ)⁸ = |k|¹⁶ in Fourier space.
+
+Used for 16th-order hyperviscosity for very high Reynolds number simulations.
+
+Type: \\Delta Tab \\^8 Tab
+"""
+Δ⁸(operand::Operand) = hyperlap(operand, 8)
+
+# Register hyperviscosity operators for equation parsing
+register_operator_parseable!(hyperlap, "hyperlap")
+
 function trace(operand::Operand)
     """Trace operator"""
     return multiclass_new(Trace, operand)

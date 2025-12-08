@@ -66,6 +66,58 @@ add_equation!(problem, "∂t(θ) = -u⋅∇(θ) + κ*fraclap(θ, 0.5)")
 add_equation!(problem, "∂t(θ) + κ*fraclap(θ, 0.5) = -u⋅∇(θ)")
 ```
 
+### Hyperviscosity (Higher-Order Laplacian)
+
+For turbulence simulations, hyperviscosity provides selective dissipation at small scales while preserving large-scale dynamics:
+
+```julia
+# General form: hyperlap(f, n) = (-Δ)^n = |k|^(2n) in Fourier space
+hyperlap(field, 2)   # Biharmonic: (-Δ)² = |k|⁴
+hyperlap(field, 4)   # 8th-order: (-Δ)⁴ = |k|⁸
+hyperlap(field, 8)   # 16th-order: (-Δ)⁸ = |k|¹⁶
+
+# Unicode shortcuts (preferred)
+Δ²(field)   # Biharmonic (4th-order derivative)
+Δ⁴(field)   # 8th-order derivative
+Δ⁶(field)   # 12th-order derivative
+Δ⁸(field)   # 16th-order derivative
+```
+
+**In spectral space**: Multiplication by `|k|^(2n)` - very efficient for Fourier bases.
+
+**Usage in equations**:
+
+```julia
+# 2D turbulence with biharmonic hyperviscosity
+add_equation!(problem, "∂t(ω) = -u⋅∇(ω) - ν₄*Δ²(ω)")
+
+# 3D turbulence with 8th-order hyperviscosity
+add_equation!(problem, "∂t(u) = -u⋅∇(u) - ∇(p) - ν₈*Δ⁴(u)")
+
+# General n-th order using hyperlap
+add_equation!(problem, "∂t(u) = -u⋅∇(u) - ν*hyperlap(u, 4)")
+```
+
+**Why use hyperviscosity?**
+
+| Order | Operator | Spectral | Use Case |
+|-------|----------|----------|----------|
+| 2 | `Δ` | `-k²` | Standard viscosity |
+| 4 | `Δ²` | `k⁴` | Mild scale separation |
+| 8 | `Δ⁴` | `k⁸` | Strong scale separation |
+| 16 | `Δ⁸` | `k¹⁶` | Extreme Reynolds numbers |
+
+Higher orders concentrate dissipation at the smallest resolved scales, extending the inertial range.
+
+**Typing Unicode**:
+
+| Symbol | Type |
+|--------|------|
+| `Δ²` | `\Delta` + Tab, `\^2` + Tab |
+| `Δ⁴` | `\Delta` + Tab, `\^4` + Tab |
+| `Δ⁶` | `\Delta` + Tab, `\^6` + Tab |
+| `Δ⁸` | `\Delta` + Tab, `\^8` + Tab |
+
 ## Vector Calculus
 
 ### Gradient

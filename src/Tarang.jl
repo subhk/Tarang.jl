@@ -116,6 +116,9 @@ export
     fraclap, sqrtlap, invsqrtlap,  # fraclap(f,α), sqrtlap=(-Δ)^(1/2), invsqrtlap=(-Δ)^(-1/2)
     Δᵅ,  # Unicode alias: Δᵅ(f, α) = fraclap(f, α)
     FractionalLaplacian,  # Type export
+    # Hyperviscosity operators (higher-order Laplacian)
+    hyperlap,  # hyperlap(f, n) = (-Δ)^n = |k|^(2n) in Fourier space
+    Δ², Δ⁴, Δ⁶, Δ⁸,  # Unicode shortcuts: Δ²=biharmonic, Δ⁴, Δ⁶, Δ⁸
     dot, cross, ⋅, ×,  # Vector operations with Unicode: ⋅=dot, ×=cross
     outer, advective_cfl, cfl,
     interpolate, integrate, average, convert, lift, d, dt,
