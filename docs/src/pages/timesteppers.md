@@ -350,6 +350,9 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 | RK443 | 4 + solve | Higher | Best (L-stable) |
 | CNAB2 | 1 + solve | Medium | Very good |
 | SBDF2 | 1 + solve | Medium | Excellent |
+| ETD_RK222 | 2 + exp(hL) | Medium | Exact (linear) |
+| ETD_CNAB2 | 1 + exp(hL) | Medium | Exact (linear) |
+| ETD_SBDF2 | 1 + exp(hL) | Medium | Exact (linear) |
 
 ## Example Usage
 
