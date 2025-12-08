@@ -116,7 +116,7 @@ add_substitution!(problem, "nu", nu)
 # Momentum equation (single vector equation)
 add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)")
 
-# Continuity with pressure gauge tau
+# Continuity with tau_p (removes degeneracy)
 add_equation!(problem, "div(u) + tau_p = 0")
 
 # No-slip boundary conditions (vector notation)
@@ -254,7 +254,7 @@ p = ScalarField(dist, "p", (x_basis, z_basis))
 tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
 tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
 
-# Tau for pressure gauge
+# Tau for pressure (removes degeneracy)
 tau_p = ScalarField(dist, "tau_p", ())
 
 # Parameters
@@ -271,15 +271,12 @@ add_substitution!(problem, "dpdx", dpdx)
 # Momentum equation (vector form) - dpdx is the driving pressure gradient
 add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) - dpdx*ex")
 
-# Continuity with pressure gauge
+# Continuity with tau_p (removes degeneracy)
 add_equation!(problem, "div(u) + tau_p = 0")
 
 # No-slip at both walls (vector notation)
 add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
-
-# Pressure gauge: tau_p removes math degeneracy, integ(p)=0 fixes physical gauge
-add_bc!(problem, "integ(p) = 0")
 ```
 
 ### Rayleigh-Bénard Convection
@@ -305,7 +302,7 @@ tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
 tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))  # BC at z=0
 tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))  # BC at z=1
 
-# Pressure gauge tau
+# Tau for pressure (removes degeneracy)
 tau_p = ScalarField(dist, "tau_p", ())
 
 # Parameters
@@ -323,7 +320,7 @@ add_substitution!(problem, "Pr", Pr)
 # ez is the unit vector in z-direction
 add_equation!(problem, "∂t(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez")
 
-# Continuity with pressure gauge
+# Continuity with tau_p (removes degeneracy)
 add_equation!(problem, "div(u) + tau_p = 0")
 
 # Temperature equation
@@ -336,9 +333,6 @@ add_bc!(problem, "u(z=1) = 0")   # No-slip top
 # Fixed temperature
 add_bc!(problem, "T(z=0) = 1")   # Hot bottom
 add_bc!(problem, "T(z=1) = 0")   # Cold top
-
-# Pressure gauge: tau_p removes math degeneracy, integ(p)=0 fixes physical gauge
-add_bc!(problem, "integ(p) = 0")
 ```
 
 ## Validation
