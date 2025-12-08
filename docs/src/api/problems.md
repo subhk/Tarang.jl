@@ -259,21 +259,17 @@ add_dirichlet_bc!(problem, field_name, coord_name, position, value)
 
 ```julia
 # Constant value
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)  # T(z=0) = 1
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)  # T(z=1) = 0
+add_dirichlet_bc!(problem, "T(z=0) = 1")
+add_dirichlet_bc!(problem, "T(z=1) = 0")
 
 # No-slip velocity
-add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)  # u(z=0) = 0
+add_dirichlet_bc!(problem, "u(z=0) = 0")
 
 # Time-dependent
-add_dirichlet_bc!(problem, "u", "x", 0.0, "sin(omega*t)")
+add_dirichlet_bc!(problem, "u(x=0) = sin(omega*t)")
 
 # Space-dependent
-add_dirichlet_bc!(problem, "T", "z", 0.0, "1.0 - x^2")
-
-# Function
-bc_func(x, y, t) = sin(2π*x) * cos(omega*t)
-add_dirichlet_bc!(problem, "u", "z", 0.0, bc_func)
+add_dirichlet_bc!(problem, "T(z=0) = 1.0 - x^2")
 ```
 
 ---
@@ -458,8 +454,8 @@ add_equation!(problem, "dt(v) = -u*dx(v) - v*dz(v) - dz(p) + nu*lap(v)")
 add_equation!(problem, "dx(u) + dz(v) = 0")
 
 # Add boundary conditions
-add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "v", "z", 0.0, 0.0)
+add_dirichlet_bc!(problem, "u(z=0) = 0")
+add_dirichlet_bc!(problem, "v(z=0) = 0")
 # ... more BCs
 
 # Validate
@@ -558,13 +554,13 @@ add_equation!(problem, "dx(u) + dz(w) = 0")
 add_equation!(problem, "dt(T) + u*dx(T) + w*dz(T) = lap(T)")
 
 # Boundary conditions
-add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "w", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)
+add_dirichlet_bc!(problem, "u(z=0) = 0")
+add_dirichlet_bc!(problem, "w(z=0) = 0")
+add_dirichlet_bc!(problem, "T(z=0) = 1")
 
-add_dirichlet_bc!(problem, "u", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "w", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "u(z=1) = 0")
+add_dirichlet_bc!(problem, "w(z=1) = 0")
+add_dirichlet_bc!(problem, "T(z=1) = 0")
 
 # Validate
 validate_problem(problem)

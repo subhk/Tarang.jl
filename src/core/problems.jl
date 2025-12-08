@@ -295,7 +295,7 @@ end
 """
     parse_robin_bc_string(bc_string::String)
 
-Parse Robin BC string like "1.0*T + 0.5*dz(T)(z=0) = 1.0" into components.
+Parse Robin BC string like "1.0*T(z=0) + 0.5*dz(T)(z=0) = 1.0" into components.
 
 Returns: (field_name, coordinate, position, alpha, beta, value)
 """
@@ -303,27 +303,37 @@ function parse_robin_bc_string(bc_string::String)
     # Remove whitespace
     s = replace(bc_string, " " => "")
 
-    # Match pattern: alpha*field+beta*d<coord>(field)(<coord>=pos)=value
-    # e.g., "1.0*T+0.5*dz(T)(z=0)=1.0"
-    pattern = r"^([0-9.eE+-]+)\*([a-zA-Z_][a-zA-Z0-9_]*)\+([0-9.eE+-]+)\*d([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+    # Match pattern: alpha*field(coord=pos)+beta*d<coord>(field)(<coord>=pos)=value
+    # e.g., "1.0*T(z=0)+0.5*dz(T)(z=0)=1.0"
+    pattern = r"^([0-9.eE+-]+)\*([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)\+([0-9.eE+-]+)\*d([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
     m = match(pattern, s)
 
     if m === nothing
-        throw(ArgumentError("Invalid Robin BC format: '$bc_string'. Expected: 'alpha*field + beta*d<coord>(field)(coord=pos) = value'"))
+        throw(ArgumentError("Invalid Robin BC format: '$bc_string'. Expected: 'alpha*field(coord=pos) + beta*d<coord>(field)(coord=pos) = value'"))
     end
 
     alpha_str = String(m.captures[1])
     field_name1 = String(m.captures[2])
-    beta_str = String(m.captures[3])
-    deriv_coord = String(m.captures[4])
-    field_name2 = String(m.captures[5])
-    bc_coord = String(m.captures[6])
-    pos_str = String(m.captures[7])
-    val_str = String(m.captures[8])
+    field_coord = String(m.captures[3])
+    field_pos_str = String(m.captures[4])
+    beta_str = String(m.captures[5])
+    deriv_coord = String(m.captures[6])
+    field_name2 = String(m.captures[7])
+    deriv_bc_coord = String(m.captures[8])
+    deriv_pos_str = String(m.captures[9])
+    val_str = String(m.captures[10])
 
     # Verify field names match
     if field_name1 != field_name2
         throw(ArgumentError("Field names must match in Robin BC: '$field_name1' vs '$field_name2'"))
+    end
+
+    # Verify coordinates and positions match
+    if field_coord != deriv_bc_coord
+        throw(ArgumentError("Coordinates must match in Robin BC: '$field_coord' vs '$deriv_bc_coord'"))
+    end
+    if field_pos_str != deriv_pos_str
+        throw(ArgumentError("Positions must match in Robin BC: '$field_pos_str' vs '$deriv_pos_str'"))
     end
 
     # Parse coefficients
@@ -332,9 +342,9 @@ function parse_robin_bc_string(bc_string::String)
 
     # Parse position
     position = try
-        parse(Float64, pos_str)
+        parse(Float64, field_pos_str)
     catch
-        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+        throw(ArgumentError("Cannot parse position '$field_pos_str' as number in BC: '$bc_string'"))
     end
 
     # Parse value
@@ -344,7 +354,7 @@ function parse_robin_bc_string(bc_string::String)
         val_str
     end
 
-    return (field_name1, bc_coord, position, alpha, beta, value)
+    return (field_name1, field_coord, position, alpha, beta, value)
 end
 
 """
