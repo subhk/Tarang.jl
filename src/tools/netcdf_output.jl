@@ -1411,13 +1411,13 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         # Build dimension arguments for nccreate: dim1, size1, dim2, size2, ...
         # Use Inf for unlimited time dimension, actual sizes for spatial dims
 
-        # Note: NetCDF.jl doesn't support Bool attributes, so we use Int (0/1)
+        # Note: NetCDF.jl doesn't support Bool or Symbol attributes, so we convert
         var_atts = Dict(
             "long_name" => task_name,
             "standard_name" => task_name,
             "_FillValue" => handler.precision(NaN),
             "grid_space" => 1,  # 1 = true (NetCDF doesn't support Bool)
-            "layout" => task["layout"]
+            "layout" => string(task["layout"])  # Convert Symbol to String
         )
         if task["scales"] !== nothing
             var_atts["scales"] = string(task["scales"])
