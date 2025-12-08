@@ -61,7 +61,7 @@ add_substitution!(problem, &quot;nu&quot;, nu)
 # Momentum equation (single vector equation)
 add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)&quot;)
 
-# Continuity with pressure gauge tau
+# Continuity with tau_p (removes degeneracy)
 add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
 
 # No-slip boundary conditions (vector notation)
@@ -128,7 +128,7 @@ p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
 tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,))  # Wall at z=0
 tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,))  # Wall at z=1
 
-# Tau for pressure gauge
+# Tau for pressure (removes degeneracy)
 tau_p = ScalarField(dist, &quot;tau_p&quot;, ())
 
 # Parameters
@@ -145,15 +145,12 @@ add_substitution!(problem, &quot;dpdx&quot;, dpdx)
 # Momentum equation (vector form) - dpdx is the driving pressure gradient
 add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) - dpdx*ex&quot;)
 
-# Continuity with pressure gauge
+# Continuity with tau_p (removes degeneracy)
 add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
 
 # No-slip at both walls (vector notation)
 add_bc!(problem, &quot;u(z=0) = 0&quot;)
-add_bc!(problem, &quot;u(z=1) = 0&quot;)
-
-# Pressure gauge: tau_p removes math degeneracy, integ(p)=0 fixes physical gauge
-add_bc!(problem, &quot;integ(p) = 0&quot;)</code></pre><h3 id="Rayleigh-Bénard-Convection"><a class="docs-heading-anchor" href="#Rayleigh-Bénard-Convection">Rayleigh-Bénard Convection</a><a id="Rayleigh-Bénard-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard-Convection" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+add_bc!(problem, &quot;u(z=1) = 0&quot;)</code></pre><h3 id="Rayleigh-Bénard-Convection"><a class="docs-heading-anchor" href="#Rayleigh-Bénard-Convection">Rayleigh-Bénard Convection</a><a id="Rayleigh-Bénard-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard-Convection" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
 
 coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
 x_basis = RealFourier(coords[&quot;x&quot;]; size=128, bounds=(0.0, 4.0))
@@ -173,7 +170,7 @@ tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,))  # Wall at z=
 tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))  # BC at z=0
 tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))  # BC at z=1
 
-# Pressure gauge tau
+# Tau for pressure (removes degeneracy)
 tau_p = ScalarField(dist, &quot;tau_p&quot;, ())
 
 # Parameters
@@ -191,7 +188,7 @@ add_substitution!(problem, &quot;Pr&quot;, Pr)
 # ez is the unit vector in z-direction
 add_equation!(problem, &quot;∂t(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez&quot;)
 
-# Continuity with pressure gauge
+# Continuity with tau_p (removes degeneracy)
 add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
 
 # Temperature equation
@@ -203,10 +200,7 @@ add_bc!(problem, &quot;u(z=1) = 0&quot;)   # No-slip top
 
 # Fixed temperature
 add_bc!(problem, &quot;T(z=0) = 1&quot;)   # Hot bottom
-add_bc!(problem, &quot;T(z=1) = 0&quot;)   # Cold top
-
-# Pressure gauge: tau_p removes math degeneracy, integ(p)=0 fixes physical gauge
-add_bc!(problem, &quot;integ(p) = 0&quot;)</code></pre><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><h3 id="Checking-BC-Satisfaction"><a class="docs-heading-anchor" href="#Checking-BC-Satisfaction">Checking BC Satisfaction</a><a id="Checking-BC-Satisfaction-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-BC-Satisfaction" title="Permalink"></a></h3><pre><code class="language-julia hljs"># After solving, verify BCs are satisfied
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # Cold top</code></pre><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><h3 id="Checking-BC-Satisfaction"><a class="docs-heading-anchor" href="#Checking-BC-Satisfaction">Checking BC Satisfaction</a><a id="Checking-BC-Satisfaction-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-BC-Satisfaction" title="Permalink"></a></h3><pre><code class="language-julia hljs"># After solving, verify BCs are satisfied
 function check_dirichlet_bc(field, coord, location, expected_value; tol=1e-10)
     to_grid!(field)
     data = get_grid_data(field)
