@@ -163,57 +163,60 @@ add_bc!(problem, &quot;u_z(z=1) = 0&quot;)
 add_bc!(problem, &quot;integ(p) = 0&quot;)</code></pre><h3 id="Rayleigh-Bénard-Convection"><a class="docs-heading-anchor" href="#Rayleigh-Bénard-Convection">Rayleigh-Bénard Convection</a><a id="Rayleigh-Bénard-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard-Convection" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
 
 coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
-x_basis = RealFourier(coords[&quot;x&quot;], size=128, bounds=(0.0, 4.0))
-z_basis = Chebyshev(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))
-dist = Distributor([x_basis, z_basis])
+x_basis = RealFourier(coords[&quot;x&quot;]; size=128, bounds=(0.0, 4.0))
+z_basis = ChebyshevT(coords[&quot;z&quot;]; size=64, bounds=(0.0, 1.0))
+dist = Distributor(coords)
 
-# Fields
-u = ScalarField(dist, &quot;u&quot;)    # Horizontal velocity
-w = ScalarField(dist, &quot;w&quot;)    # Vertical velocity
-p = ScalarField(dist, &quot;p&quot;)    # Pressure
-T = ScalarField(dist, &quot;T&quot;)    # Temperature
+# Vector velocity field and scalar fields
+u = VectorField(dist, coords, &quot;u&quot;, (x_basis, z_basis))
+p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
+T = ScalarField(dist, &quot;T&quot;, (x_basis, z_basis))
 
-# Tau fields (2 per field with 2nd-order z-derivative)
-tau_u1 = ScalarField(dist, &quot;tau_u1&quot;, (x_basis,))
-tau_u2 = ScalarField(dist, &quot;tau_u2&quot;, (x_basis,))
-tau_w1 = ScalarField(dist, &quot;tau_w1&quot;, (x_basis,))
-tau_w2 = ScalarField(dist, &quot;tau_w2&quot;, (x_basis,))
-tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))
-tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))
-tau_p = ScalarField(dist, &quot;tau_p&quot;, (x_basis,))
+# Vector tau fields for velocity BCs
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,))  # Wall at z=0
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,))  # Wall at z=1
+
+# Scalar tau fields for temperature BCs
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))  # BC at z=0
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))  # BC at z=1
+
+# Pressure gauge tau
+tau_p = ScalarField(dist, &quot;tau_p&quot;, ())
 
 # Parameters
 Ra = 1e6   # Rayleigh number
 Pr = 1.0   # Prandtl number
 
-problem = IVP([u, w, p, T, tau_u1, tau_u2, tau_w1, tau_w2, tau_T1, tau_T2, tau_p])
+# Create problem with all fields
+problem = IVP([u, p, T, tau_u1, tau_u2, tau_T1, tau_T2, tau_p])
 
-# Momentum equations
-add_equation!(problem, dt(u) - Pr*lap(u) + dx(p)
-    + lift(tau_u1, z_basis, -1) + lift(tau_u2, z_basis, -2))
-add_equation!(problem, dt(w) - Pr*lap(w) + dz(p) - Ra*Pr*T
-    + lift(tau_w1, z_basis, -1) + lift(tau_w2, z_basis, -2))
+# Add parameter substitutions
+add_substitution!(problem, &quot;Ra&quot;, Ra)
+add_substitution!(problem, &quot;Pr&quot;, Pr)
 
-# Continuity
-add_equation!(problem, dx(u) + dz(w) + lift(tau_p, z_basis, -1))
+# Momentum equations (Dedalus-style string format)
+add_equation!(problem, &quot;∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)&quot;)
+add_equation!(problem, &quot;∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u@∇(u_z)&quot;)
+
+# Continuity with pressure gauge
+add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
 
 # Temperature equation
-add_equation!(problem, dt(T) - lap(T)
-    + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2))
+add_equation!(problem, &quot;∂ₜ(T) - Δ(T) + lift(tau_T2) = -u@∇(T)&quot;)
 
 # Boundary conditions
 # No-slip walls
-add_dirichlet_bc!(problem, u, &quot;z&quot;, :left, 0.0; tau_field=&quot;tau_u1&quot;)
-add_dirichlet_bc!(problem, u, &quot;z&quot;, :right, 0.0; tau_field=&quot;tau_u2&quot;)
-add_dirichlet_bc!(problem, w, &quot;z&quot;, :left, 0.0; tau_field=&quot;tau_w1&quot;)
-add_dirichlet_bc!(problem, w, &quot;z&quot;, :right, 0.0; tau_field=&quot;tau_w2&quot;)
+add_bc!(problem, &quot;u_x(z=0) = 0&quot;)
+add_bc!(problem, &quot;u_z(z=0) = 0&quot;)
+add_bc!(problem, &quot;u_x(z=1) = 0&quot;)
+add_bc!(problem, &quot;u_z(z=1) = 0&quot;)
 
 # Fixed temperature
-add_dirichlet_bc!(problem, T, &quot;z&quot;, :left, 1.0; tau_field=&quot;tau_T1&quot;)   # Hot bottom
-add_dirichlet_bc!(problem, T, &quot;z&quot;, :right, 0.0; tau_field=&quot;tau_T2&quot;)  # Cold top
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # Hot bottom
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # Cold top
 
-# Pressure gauge
-add_dirichlet_bc!(problem, p, &quot;z&quot;, :left, 0.0; tau_field=&quot;tau_p&quot;)</code></pre><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><h3 id="Checking-BC-Satisfaction"><a class="docs-heading-anchor" href="#Checking-BC-Satisfaction">Checking BC Satisfaction</a><a id="Checking-BC-Satisfaction-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-BC-Satisfaction" title="Permalink"></a></h3><pre><code class="language-julia hljs"># After solving, verify BCs are satisfied
+# Pressure gauge (integral constraint)
+add_bc!(problem, &quot;integ(p) = 0&quot;)</code></pre><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><h3 id="Checking-BC-Satisfaction"><a class="docs-heading-anchor" href="#Checking-BC-Satisfaction">Checking BC Satisfaction</a><a id="Checking-BC-Satisfaction-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-BC-Satisfaction" title="Permalink"></a></h3><pre><code class="language-julia hljs"># After solving, verify BCs are satisfied
 function check_dirichlet_bc(field, coord, location, expected_value; tol=1e-10)
     to_grid!(field)
     data = get_grid_data(field)
@@ -233,12 +236,16 @@ end
 
 # Usage
 check_dirichlet_bc(T, &quot;z&quot;, :left, 1.0)
-check_dirichlet_bc(T, &quot;z&quot;, :right, 0.0)</code></pre><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><h3 id="Missing-Tau-Fields"><a class="docs-heading-anchor" href="#Missing-Tau-Fields">Missing Tau Fields</a><a id="Missing-Tau-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Missing-Tau-Fields" title="Permalink"></a></h3><p><strong>Error</strong>: <code>ArgumentError: Missing tau field specifications for boundary conditions</code></p><p><strong>Solution</strong>: Create tau fields and pass them via the <code>tau_field</code> parameter:</p><pre><code class="language-julia hljs"># Wrong:
-add_dirichlet_bc!(problem, u, &quot;z&quot;, :left, 0.0)  # Missing tau_field!
+check_dirichlet_bc(T, &quot;z&quot;, :right, 0.0)</code></pre><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><h3 id="Missing-Tau-Fields"><a class="docs-heading-anchor" href="#Missing-Tau-Fields">Missing Tau Fields</a><a id="Missing-Tau-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Missing-Tau-Fields" title="Permalink"></a></h3><p><strong>Error</strong>: <code>ArgumentError: Missing tau field specifications for boundary conditions</code></p><p><strong>Solution</strong>: Create tau fields and include lift() terms in your equations:</p><pre><code class="language-julia hljs"># Wrong: No tau fields or lift terms
+add_equation!(problem, &quot;Δ(u) = f&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
 
-# Correct:
+# Correct: Create tau fields and add lift terms
 tau_u1 = ScalarField(dist, &quot;tau_u1&quot;, (x_basis,))
-add_dirichlet_bc!(problem, u, &quot;z&quot;, :left, 0.0; tau_field=&quot;tau_u1&quot;)</code></pre><h3 id="Over-Specified-System"><a class="docs-heading-anchor" href="#Over-Specified-System">Over-Specified System</a><a id="Over-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Over-Specified-System" title="Permalink"></a></h3><p><strong>Problem</strong>: Too many boundary conditions cause singular matrices.</p><p><strong>Solution</strong>: Match the number of BCs (and tau fields) to the operator order in each direction.</p><h3 id="Under-Specified-System"><a class="docs-heading-anchor" href="#Under-Specified-System">Under-Specified System</a><a id="Under-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Under-Specified-System" title="Permalink"></a></h3><p><strong>Problem</strong>: Not enough BCs lead to non-unique solutions.</p><p><strong>Solution</strong>: Add appropriate boundary conditions for the problem physics.</p><h3 id="Tau-Field-Dimension-Mismatch"><a class="docs-heading-anchor" href="#Tau-Field-Dimension-Mismatch">Tau Field Dimension Mismatch</a><a id="Tau-Field-Dimension-Mismatch-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Field-Dimension-Mismatch" title="Permalink"></a></h3><p><strong>Problem</strong>: Tau field has wrong dimensionality.</p><p><strong>Solution</strong>: Tau fields should live on the <em>boundary</em>, not the full domain:</p><pre><code class="language-julia hljs"># For a 2D problem with x-basis (periodic) and z-basis (non-periodic):
+tau_u2 = ScalarField(dist, &quot;tau_u2&quot;, (x_basis,))
+add_equation!(problem, &quot;Δ(u) + lift(tau_u1) + lift(tau_u2) = f&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)</code></pre><h3 id="Over-Specified-System"><a class="docs-heading-anchor" href="#Over-Specified-System">Over-Specified System</a><a id="Over-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Over-Specified-System" title="Permalink"></a></h3><p><strong>Problem</strong>: Too many boundary conditions cause singular matrices.</p><p><strong>Solution</strong>: Match the number of BCs (and tau fields) to the operator order in each direction.</p><h3 id="Under-Specified-System"><a class="docs-heading-anchor" href="#Under-Specified-System">Under-Specified System</a><a id="Under-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Under-Specified-System" title="Permalink"></a></h3><p><strong>Problem</strong>: Not enough BCs lead to non-unique solutions.</p><p><strong>Solution</strong>: Add appropriate boundary conditions for the problem physics.</p><h3 id="Tau-Field-Dimension-Mismatch"><a class="docs-heading-anchor" href="#Tau-Field-Dimension-Mismatch">Tau Field Dimension Mismatch</a><a id="Tau-Field-Dimension-Mismatch-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Field-Dimension-Mismatch" title="Permalink"></a></h3><p><strong>Problem</strong>: Tau field has wrong dimensionality.</p><p><strong>Solution</strong>: Tau fields should live on the <em>boundary</em>, not the full domain:</p><pre><code class="language-julia hljs"># For a 2D problem with x-basis (periodic) and z-basis (non-periodic):
 # Boundaries are at constant z, so tau fields live on x-basis only
 tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis,))  # Correct: 1D on x
 
