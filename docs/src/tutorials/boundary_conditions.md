@@ -295,57 +295,60 @@ add_bc!(problem, "integ(p) = 0")
 using Tarang
 
 coords = CartesianCoordinates("x", "z")
-x_basis = RealFourier(coords["x"], size=128, bounds=(0.0, 4.0))
-z_basis = Chebyshev(coords["z"], size=64, bounds=(0.0, 1.0))
-dist = Distributor([x_basis, z_basis])
+x_basis = RealFourier(coords["x"]; size=128, bounds=(0.0, 4.0))
+z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
+dist = Distributor(coords)
 
-# Fields
-u = ScalarField(dist, "u")    # Horizontal velocity
-w = ScalarField(dist, "w")    # Vertical velocity
-p = ScalarField(dist, "p")    # Pressure
-T = ScalarField(dist, "T")    # Temperature
+# Vector velocity field and scalar fields
+u = VectorField(dist, coords, "u", (x_basis, z_basis))
+p = ScalarField(dist, "p", (x_basis, z_basis))
+T = ScalarField(dist, "T", (x_basis, z_basis))
 
-# Tau fields (2 per field with 2nd-order z-derivative)
-tau_u1 = ScalarField(dist, "tau_u1", (x_basis,))
-tau_u2 = ScalarField(dist, "tau_u2", (x_basis,))
-tau_w1 = ScalarField(dist, "tau_w1", (x_basis,))
-tau_w2 = ScalarField(dist, "tau_w2", (x_basis,))
-tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))
-tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))
-tau_p = ScalarField(dist, "tau_p", (x_basis,))
+# Vector tau fields for velocity BCs
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
+
+# Scalar tau fields for temperature BCs
+tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))  # BC at z=0
+tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))  # BC at z=1
+
+# Pressure gauge tau
+tau_p = ScalarField(dist, "tau_p", ())
 
 # Parameters
 Ra = 1e6   # Rayleigh number
 Pr = 1.0   # Prandtl number
 
-problem = IVP([u, w, p, T, tau_u1, tau_u2, tau_w1, tau_w2, tau_T1, tau_T2, tau_p])
+# Create problem with all fields
+problem = IVP([u, p, T, tau_u1, tau_u2, tau_T1, tau_T2, tau_p])
 
-# Momentum equations
-add_equation!(problem, dt(u) - Pr*lap(u) + dx(p)
-    + lift(tau_u1, z_basis, -1) + lift(tau_u2, z_basis, -2))
-add_equation!(problem, dt(w) - Pr*lap(w) + dz(p) - Ra*Pr*T
-    + lift(tau_w1, z_basis, -1) + lift(tau_w2, z_basis, -2))
+# Add parameter substitutions
+add_substitution!(problem, "Ra", Ra)
+add_substitution!(problem, "Pr", Pr)
 
-# Continuity
-add_equation!(problem, dx(u) + dz(w) + lift(tau_p, z_basis, -1))
+# Momentum equations (Dedalus-style string format)
+add_equation!(problem, "∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)")
+add_equation!(problem, "∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u@∇(u_z)")
+
+# Continuity with pressure gauge
+add_equation!(problem, "div(u) + tau_p = 0")
 
 # Temperature equation
-add_equation!(problem, dt(T) - lap(T)
-    + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2))
+add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u@∇(T)")
 
 # Boundary conditions
 # No-slip walls
-add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
-add_dirichlet_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u2")
-add_dirichlet_bc!(problem, w, "z", :left, 0.0; tau_field="tau_w1")
-add_dirichlet_bc!(problem, w, "z", :right, 0.0; tau_field="tau_w2")
+add_bc!(problem, "u_x(z=0) = 0")
+add_bc!(problem, "u_z(z=0) = 0")
+add_bc!(problem, "u_x(z=1) = 0")
+add_bc!(problem, "u_z(z=1) = 0")
 
 # Fixed temperature
-add_dirichlet_bc!(problem, T, "z", :left, 1.0; tau_field="tau_T1")   # Hot bottom
-add_dirichlet_bc!(problem, T, "z", :right, 0.0; tau_field="tau_T2")  # Cold top
+add_bc!(problem, "T(z=0) = 1")   # Hot bottom
+add_bc!(problem, "T(z=1) = 0")   # Cold top
 
-# Pressure gauge
-add_dirichlet_bc!(problem, p, "z", :left, 0.0; tau_field="tau_p")
+# Pressure gauge (integral constraint)
+add_bc!(problem, "integ(p) = 0")
 ```
 
 ## Validation
@@ -382,15 +385,19 @@ check_dirichlet_bc(T, "z", :right, 0.0)
 
 **Error**: `ArgumentError: Missing tau field specifications for boundary conditions`
 
-**Solution**: Create tau fields and pass them via the `tau_field` parameter:
+**Solution**: Create tau fields and include lift() terms in your equations:
 
 ```julia
-# Wrong:
-add_dirichlet_bc!(problem, u, "z", :left, 0.0)  # Missing tau_field!
+# Wrong: No tau fields or lift terms
+add_equation!(problem, "Δ(u) = f")
+add_bc!(problem, "u(z=0) = 0")
 
-# Correct:
+# Correct: Create tau fields and add lift terms
 tau_u1 = ScalarField(dist, "tau_u1", (x_basis,))
-add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
+tau_u2 = ScalarField(dist, "tau_u2", (x_basis,))
+add_equation!(problem, "Δ(u) + lift(tau_u1) + lift(tau_u2) = f")
+add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "u(z=1) = 0")
 ```
 
 ### Over-Specified System
