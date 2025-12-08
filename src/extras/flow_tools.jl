@@ -1008,7 +1008,183 @@ end
 
 function velocity_divergence(velocity::VectorField)
     """Calculate velocity divergence ∇·u"""
-    
+
     divergence_op = div(velocity)
     return evaluate_operator(divergence_op)
+end
+
+# ============================================================================
+# Surface Quasi-Geostrophic (SQG) Flow Tools
+# ============================================================================
+
+"""
+    perp_grad(ψ::ScalarField)
+
+Perpendicular gradient: ∇⊥ψ = (-∂ψ/∂y, ∂ψ/∂x)
+
+Used in 2D flows to compute velocity from streamfunction: u = ∇⊥ψ
+
+This gives a divergence-free velocity field: ∇·u = ∇·(∇⊥ψ) = 0
+
+# Example
+```julia
+ψ = ScalarField(dist, "psi", bases, Float64)
+u = perp_grad(ψ)  # Returns VectorField with u_x = -∂ψ/∂y, u_y = ∂ψ/∂x
+```
+"""
+function perp_grad(ψ::ScalarField)
+    # Get coordinates
+    coords = ψ.dist.coordsys
+
+    if length(ψ.bases) != 2
+        throw(ArgumentError("perp_grad requires a 2D field"))
+    end
+
+    # Get coordinate names
+    coord_names = coords.names
+    coord1 = Coordinate(coords, coord_names[1])  # x
+    coord2 = Coordinate(coords, coord_names[2])  # y
+
+    # Create result vector field
+    result = VectorField(ψ.dist, coords, "perp_grad_$(ψ.name)", ψ.bases, ψ.dtype)
+
+    # u_x = -∂ψ/∂y (second coordinate)
+    dpsi_dy = evaluate_differentiate(Differentiate(ψ, coord2, 1), :g)
+    ensure_layout!(result.components[1], :g)
+    result.components[1].data_g .= -dpsi_dy.data_g
+
+    # u_y = ∂ψ/∂x (first coordinate)
+    dpsi_dx = evaluate_differentiate(Differentiate(ψ, coord1, 1), :g)
+    ensure_layout!(result.components[2], :g)
+    result.components[2].data_g .= dpsi_dx.data_g
+
+    return result
+end
+
+# Unicode alias for perpendicular gradient
+const ∇⊥ = perp_grad
+
+"""
+    sqg_streamfunction(θ::ScalarField)
+
+Compute SQG streamfunction from surface buoyancy:
+
+    ψ = (-Δ)^(-1/2) θ
+
+In spectral space: ψ̂(k) = θ̂(k) / |k|
+
+This is the fundamental relation for Surface Quasi-Geostrophic dynamics.
+
+# Example
+```julia
+θ = ScalarField(dist, "buoyancy", bases, Float64)
+ψ = sqg_streamfunction(θ)
+u = perp_grad(ψ)  # or u = ∇⊥(ψ)
+```
+"""
+function sqg_streamfunction(θ::ScalarField)
+    return evaluate_fractional_laplacian(FractionalLaplacian(θ, -0.5), :g)
+end
+
+"""
+    sqg_velocity(θ::ScalarField)
+
+Compute SQG velocity directly from surface buoyancy:
+
+    u = ∇⊥ψ = ∇⊥(-Δ)^(-1/2) θ
+
+This combines streamfunction inversion and perpendicular gradient in one step.
+
+# Example
+```julia
+θ = ScalarField(dist, "buoyancy", bases, Float64)
+u = sqg_velocity(θ)  # Directly get velocity from buoyancy
+```
+"""
+function sqg_velocity(θ::ScalarField)
+    ψ = sqg_streamfunction(θ)
+    return perp_grad(ψ)
+end
+
+"""
+    sqg_problem_setup(dist::Distributor, bases::Tuple; κ::Real=0.0, α::Real=0.5)
+
+Set up an SQG initial value problem.
+
+The SQG equation is:
+    ∂θ/∂t + u·∇θ = κ(-Δ)^α θ
+
+where:
+- θ is the surface buoyancy/temperature
+- u = ∇⊥(-Δ)^(-1/2)θ is the velocity
+- κ is the dissipation coefficient
+- α is the dissipation exponent (typically 1/2 for physical SQG)
+
+# Arguments
+- `dist`: Distributor for field allocation
+- `bases`: Tuple of bases (should be 2D Fourier bases for SQG)
+- `κ`: Dissipation coefficient (default: 0 for inviscid)
+- `α`: Dissipation exponent (default: 0.5 for physical dissipation)
+
+# Returns
+Named tuple with:
+- `problem`: IVP problem object
+- `θ`: Buoyancy field
+- `u`: Velocity field (computed from θ)
+- `ψ`: Streamfunction field (computed from θ)
+
+# Example
+```julia
+coords = CartesianCoordinates("x", "y")
+dist = Distributor(coords; mesh=(2, 2))
+x_basis = RealFourier(coords["x"]; size=256, bounds=(0.0, 2π))
+y_basis = RealFourier(coords["y"]; size=256, bounds=(0.0, 2π))
+
+sqg = sqg_problem_setup(dist, (x_basis, y_basis); κ=1e-4, α=0.5)
+
+# Set initial condition
+sqg.θ.data_g .= initial_buoyancy_field
+
+# Solve with timestepper
+solver = InitialValueSolver(sqg.problem, RK443())
+```
+"""
+function sqg_problem_setup(dist::Distributor, bases::Tuple; κ::Real=0.0, α::Real=0.5)
+    coords = dist.coordsys
+
+    # Create fields
+    θ = ScalarField(dist, "θ", bases, Float64)  # Buoyancy
+
+    # Create IVP
+    problem = IVP([θ])
+
+    # Add parameters
+    problem.parameters["κ"] = Float64(κ)
+    problem.parameters["α"] = Float64(α)
+
+    # The SQG equation: ∂θ/∂t + u·∇θ = κ(-Δ)^α θ
+    # where u = ∇⊥(-Δ)^(-1/2)θ
+    #
+    # Note: The nonlinear term u·∇θ needs special handling because
+    # u depends on θ through the streamfunction inversion.
+    # This is typically handled in the timestepper's nonlinear evaluation.
+
+    if κ > 0
+        add_equation!(problem, "∂ₜ(θ) = κ*fraclap(θ, α)")
+    else
+        add_equation!(problem, "∂ₜ(θ) = 0")
+    end
+
+    # Note: The advection term -u·∇θ should be added to the RHS
+    # as a nonlinear term evaluated at each timestep
+
+    @info "SQG problem setup" κ=κ α=α bases=length(bases)
+    @info "Use sqg_velocity(θ) to compute velocity from buoyancy at each timestep"
+
+    return (
+        problem = problem,
+        θ = θ,
+        compute_velocity = () -> sqg_velocity(θ),
+        compute_streamfunction = () -> sqg_streamfunction(θ)
+    )
 end

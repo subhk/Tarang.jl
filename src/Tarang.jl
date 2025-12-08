@@ -111,6 +111,10 @@ export
     # Operators
     grad, div, curl, lap, trace, skew, transpose_components,
     ∇, Δ, ∇², ∂ₜ,  # Unicode aliases: ∇=grad, Δ=lap, ∇²=lap, ∂ₜ=dt
+    # Fractional Laplacian for SQG and other applications
+    fraclap, sqrtlap, invsqrtlap,  # fraclap(f,α), sqrtlap=(-Δ)^(1/2), invsqrtlap=(-Δ)^(-1/2)
+    Δᵅ, √Δ, Δ½, Δ⁻½,  # Unicode aliases for fractional Laplacian
+    FractionalLaplacian,  # Type export
     dot, cross, ⋅, ×,  # Vector operations with Unicode: ⋅=dot, ×=cross
     outer, advective_cfl, cfl,
     interpolate, integrate, average, convert, lift, d, dt,
@@ -145,6 +149,10 @@ export
     
     # Analysis
     GlobalFlowProperty, CFL,
+
+    # SQG (Surface Quasi-Geostrophic) tools
+    perp_grad, ∇⊥,  # Perpendicular gradient: ∇⊥ψ = (-∂ψ/∂y, ∂ψ/∂x)
+    sqg_streamfunction, sqg_velocity, sqg_problem_setup,
     
     # NetCDF Output
     NetCDFFileHandler, NetCDFEvaluator, UnifiedEvaluator, add_netcdf_handler, 
