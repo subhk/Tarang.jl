@@ -21,26 +21,26 @@ add_equation!(problem, &quot;sigma*u = -u0*∂x(u) - v*∂x(u0) - ∂x(p) + Pr*�
 add_equation!(problem, &quot;sigma*v = -u0*∂x(v) - v*∂z(u0) - ∂z(p) + Pr*Δ(v)&quot;)
 add_equation!(problem, &quot;sigma*T = -u0*∂x(T) - v + Δ(T)&quot;)
 add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Linear stability analysis</li><li>Growth rates and frequencies</li><li>Normal mode decomposition</li><li>Critical parameter values</li></ul><hr/><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="add_equation!"><a class="docs-heading-anchor" href="#add_equation!">add_equation!</a><a id="add_equation!-1"></a><a class="docs-heading-anchor-permalink" href="#add_equation!" title="Permalink"></a></h3><p>Add a PDE to the problem.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_equation!(problem, equation_string::String)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: Problem object (IVP, LBVP, NLBVP, or EVP)</li><li><code>equation_string</code>: String equation using symbolic syntax</li></ul><p><strong>Examples</strong>:</p><h4 id="Simple-Equations"><a class="docs-heading-anchor" href="#Simple-Equations">Simple Equations</a><a id="Simple-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Diffusion
-add_equation!(problem, &quot;∂ₜ(T) = kappa*Δ(T)&quot;)
+add_equation!(problem, &quot;∂t(T) = kappa*Δ(T)&quot;)
 
 # Wave equation
-add_equation!(problem, &quot;∂ₜ(∂ₜ(u)) = c^2*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(∂t(u)) = c^2*Δ(u)&quot;)
 
 # Poisson
 add_equation!(problem, &quot;Δ(phi) = rho&quot;)</code></pre><h4 id="Complex-Equations"><a class="docs-heading-anchor" href="#Complex-Equations">Complex Equations</a><a id="Complex-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Navier-Stokes momentum
-add_equation!(problem, &quot;∂ₜ(u) + u*∂x(u) + w*∂z(u) = -∂x(p) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(u) + u*∂x(u) + w*∂z(u) = -∂x(p) + nu*Δ(u)&quot;)
 
 # Energy equation with dissipation
-add_equation!(problem, &quot;∂ₜ(T) + u*∂x(T) + w*∂z(T) = kappa*Δ(T) + Q&quot;)
+add_equation!(problem, &quot;∂t(T) + u*∂x(T) + w*∂z(T) = kappa*Δ(T) + Q&quot;)
 
 # With parameters
-add_equation!(problem, &quot;∂ₜ(T) = kappa*Δ(T) + Ra*Pr*w&quot;)</code></pre><h4 id="Using-Fields-and-Parameters"><a class="docs-heading-anchor" href="#Using-Fields-and-Parameters">Using Fields and Parameters</a><a id="Using-Fields-and-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Fields-and-Parameters" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Fields are referenced by name
-add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u)&quot;)  # u is a field
+add_equation!(problem, &quot;∂t(T) = kappa*Δ(T) + Ra*Pr*w&quot;)</code></pre><h4 id="Using-Fields-and-Parameters"><a class="docs-heading-anchor" href="#Using-Fields-and-Parameters">Using Fields and Parameters</a><a id="Using-Fields-and-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Fields-and-Parameters" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Fields are referenced by name
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u)&quot;)  # u is a field
 
 # Parameters from problem.parameters
 problem.parameters[&quot;nu&quot;] = 0.01
 problem.parameters[&quot;Ra&quot;] = 1e6
-add_equation!(problem, &quot;∂ₜ(u) = nu*Δ(u) + Ra*T&quot;)</code></pre><hr/><h2 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h2><h3 id="Setting-Parameters"><a class="docs-heading-anchor" href="#Setting-Parameters">Setting Parameters</a><a id="Setting-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Setting-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create problem
+add_equation!(problem, &quot;∂t(u) = nu*Δ(u) + Ra*T&quot;)</code></pre><hr/><h2 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h2><h3 id="Setting-Parameters"><a class="docs-heading-anchor" href="#Setting-Parameters">Setting Parameters</a><a id="Setting-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Setting-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create problem
 problem = IVP([u, p, T])
 
 # Set dimensionless parameters
@@ -52,12 +52,12 @@ problem.parameters[&quot;Ra&quot;] = 1e6         # Rayleigh number
 problem.parameters[&quot;nu&quot;] = 1e-3        # Kinematic viscosity
 problem.parameters[&quot;kappa&quot;] = 1e-3     # Thermal diffusivity
 problem.parameters[&quot;g&quot;] = 9.81         # Gravitational acceleration</code></pre><h3 id="Using-Parameters-in-Equations"><a class="docs-heading-anchor" href="#Using-Parameters-in-Equations">Using Parameters in Equations</a><a id="Using-Parameters-in-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Parameters-in-Equations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Reference by name in equations
-add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u) + nu*Δ(u)&quot;)
-add_equation!(problem, &quot;∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)&quot;)
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(T) = -u*∂x(T) + kappa*Δ(T)&quot;)
 
 # Dimensionless formulation
-add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u) + (1/Re)*Δ(u)&quot;)
-add_equation!(problem, &quot;∂ₜ(T) = -u*∂x(T) + (1/(Re*Pr))*Δ(T) + Ra*Pr*w&quot;)</code></pre><h3 id="Modifying-Parameters"><a class="docs-heading-anchor" href="#Modifying-Parameters">Modifying Parameters</a><a id="Modifying-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Modifying-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Change parameter value
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u) + (1/Re)*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(T) = -u*∂x(T) + (1/(Re*Pr))*Δ(T) + Ra*Pr*w&quot;)</code></pre><h3 id="Modifying-Parameters"><a class="docs-heading-anchor" href="#Modifying-Parameters">Modifying Parameters</a><a id="Modifying-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Modifying-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Change parameter value
 problem.parameters[&quot;Ra&quot;] = 1e7
 
 # Access parameter
@@ -137,8 +137,8 @@ n_bcs = length(problem.boundary_conditions)
 for bc in problem.boundary_conditions
     println(&quot;$(bc.field) at $(bc.coord)=$(bc.position): $(bc.type)&quot;)
 end</code></pre><hr/><h2 id="Problem-Validation"><a class="docs-heading-anchor" href="#Problem-Validation">Problem Validation</a><a id="Problem-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Validation" title="Permalink"></a></h2><h3 id="validate_problem"><a class="docs-heading-anchor" href="#validate_problem">validate_problem</a><a id="validate_problem-1"></a><a class="docs-heading-anchor-permalink" href="#validate_problem" title="Permalink"></a></h3><p>Check problem for consistency and completeness.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">validate_problem(problem)</code></pre><p><strong>Checks</strong>:</p><ul><li>Number of equations matches number of unknowns</li><li>Boundary conditions are sufficient</li><li>Parameters are defined</li><li>Field dimensions match</li><li>Operator applications are valid</li></ul><p><strong>Example</strong>:</p><pre><code class="language-julia hljs">problem = IVP([u, v, p])
-add_equation!(problem, &quot;∂ₜ(u) = -u*∂x(u) - v*∂z(u) - ∂x(p) + nu*Δ(u)&quot;)
-add_equation!(problem, &quot;∂ₜ(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)&quot;)
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u) - v*∂z(u) - ∂x(p) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)&quot;)
 add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)
 
 # Add boundary conditions
@@ -151,7 +151,7 @@ validate_problem(problem)  # Throws error if invalid</code></pre><hr/><h2 id="Pr
 add_substitution!(problem, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
 
 # Use in equations
-add_equation!(problem, &quot;∂ₜ(omega) = -u*∂x(omega) - v*∂z(omega) + nu*Δ(omega)&quot;)</code></pre><h3 id="Common-Substitutions"><a class="docs-heading-anchor" href="#Common-Substitutions">Common Substitutions</a><a id="Common-Substitutions-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Substitutions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Vorticity
+add_equation!(problem, &quot;∂t(omega) = -u*∂x(omega) - v*∂z(omega) + nu*Δ(omega)&quot;)</code></pre><h3 id="Common-Substitutions"><a class="docs-heading-anchor" href="#Common-Substitutions">Common Substitutions</a><a id="Common-Substitutions-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Substitutions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Vorticity
 add_substitution!(problem, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
 
 # Kinetic energy
@@ -188,10 +188,10 @@ problem.parameters[&quot;Ra&quot;] = 1e6
 problem.parameters[&quot;Pr&quot;] = 1.0
 
 # Equations
-add_equation!(problem, &quot;∂ₜ(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)&quot;)
-add_equation!(problem, &quot;∂ₜ(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T&quot;)
+add_equation!(problem, &quot;∂t(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T&quot;)
 add_equation!(problem, &quot;∂x(u) + ∂z(w) = 0&quot;)
-add_equation!(problem, &quot;∂ₜ(T) + u*∂x(T) + w*∂z(T) = Δ(T)&quot;)
+add_equation!(problem, &quot;∂t(T) + u*∂x(T) + w*∂z(T) = Δ(T)&quot;)
 
 # Boundary conditions
 add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
@@ -203,4 +203,4 @@ add_dirichlet_bc!(problem, &quot;w(z=1) = 0&quot;)
 add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)
 
 # Validate
-validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:11">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:12">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
