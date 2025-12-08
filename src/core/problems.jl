@@ -588,7 +588,7 @@ function parse_equation(equation::String, namespace::Dict{String, Any})
     Requires:
     - LHS: Linear terms only (first-order in time derivatives, linear in variables)
     - RHS: Nonlinear terms, time-dependent terms, non-constant coefficients
-    - Form: M·∂ₜX + L·X = F(X,t)
+    - Form: M·∂tX + L·X = F(X,t)
     
     Following problems:add_equation pattern (problems:65-80).
     """
@@ -744,17 +744,17 @@ end
 function is_proper_lhs_structure(expr)
     """
     Check if LHS has proper structure for matrix formulation.
-    Should be of the form: M·∂ₜX + L·X where M and L are linear operators.
+    Should be of the form: M·∂tX + L·X where M and L are linear operators.
 
     The LHS of a equation must satisfy:
     1. All terms must be linear in the state variables
-    2. Time derivatives must be first-order only (∂ₜ, not ∂ₜ²)
+    2. Time derivatives must be first-order only (∂t, not ∂t²)
     3. Spatial operators must be linear (derivatives, Laplacian, etc.)
     4. Coefficients must be constant (not space/time-dependent)
     5. No products of state variables (those go to RHS as nonlinear terms)
 
     Returns a tuple (is_valid::Bool, info::Dict) where info contains:
-    - :has_time_derivative => whether the expression contains ∂ₜ terms
+    - :has_time_derivative => whether the expression contains ∂t terms
     - :has_spatial_operators => whether spatial operators are present
     - :is_linear => whether all terms are linear
     - :error_message => description of any structural issues
@@ -1139,9 +1139,9 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
             func_expr = expr.args[1]
             arg_exprs = expr.args[2:end]
             if func_expr isa Symbol
-                if func_expr == :dt || func_expr == :∂ₜ
+                if func_expr == :dt || func_expr == :∂t
                     if isempty(arg_exprs)
-                        throw(ArgumentError("dt/∂ₜ requires at least one argument"))
+                        throw(ArgumentError("dt/∂t requires at least one argument"))
                     end
                     field = evaluate_parsed_expression(arg_exprs[1], namespace)
                     order = if length(arg_exprs) >= 2

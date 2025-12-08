@@ -46,9 +46,9 @@ T = ScalarField(dist, "T", (x_basis, z_basis))
 
 # Set up initial value problem
 problem = IVP([u.components[1], u.components[2], p, T])
-add_equation!(problem, "∂ₜ(u) - Pr*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*Pr*T*ez")
+add_equation!(problem, "∂t(u) - Pr*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*Pr*T*ez")
 add_equation!(problem, "div(u) = 0")
-add_equation!(problem, "∂ₜ(T) - Δ(T) = -u⋅∇(T)")
+add_equation!(problem, "∂t(T) - Δ(T) = -u⋅∇(T)")
 
 # Add parameters
 problem.parameters["Pr"] = 1.0

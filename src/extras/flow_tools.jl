@@ -1170,9 +1170,9 @@ function sqg_problem_setup(dist::Distributor, bases::Tuple; κ::Real=0.0, α::Re
     # This is typically handled in the timestepper's nonlinear evaluation.
 
     if κ > 0
-        add_equation!(problem, "∂ₜ(θ) = κ*fraclap(θ, α)")
+        add_equation!(problem, "∂t(θ) = κ*fraclap(θ, α)")
     else
-        add_equation!(problem, "∂ₜ(θ) = 0")
+        add_equation!(problem, "∂t(θ) = 0")
     end
 
     # Note: The advection term -u·∇θ should be added to the RHS
@@ -1353,11 +1353,11 @@ function qg_system_setup(;
     surface_ivp_top.parameters["α"] = Float64(α)
 
     if κ > 0
-        add_equation!(surface_ivp_bot, "∂ₜ(θ_bot) - κ*fraclap(θ_bot, α) = 0")
-        add_equation!(surface_ivp_top, "∂ₜ(θ_top) - κ*fraclap(θ_top, α) = 0")
+        add_equation!(surface_ivp_bot, "∂t(θ_bot) - κ*fraclap(θ_bot, α) = 0")
+        add_equation!(surface_ivp_top, "∂t(θ_top) - κ*fraclap(θ_top, α) = 0")
     else
-        add_equation!(surface_ivp_bot, "∂ₜ(θ_bot) = 0")
-        add_equation!(surface_ivp_top, "∂ₜ(θ_top) = 0")
+        add_equation!(surface_ivp_bot, "∂t(θ_bot) = 0")
+        add_equation!(surface_ivp_top, "∂t(θ_top) = 0")
     end
 
     @info "QG system setup complete" Nx=Nx Ny=Ny Nz=Nz f0=f0 N=N H=H κ=κ α=α

@@ -84,7 +84,7 @@ nu = 1.0 / Re
 add_substitution!(problem, "nu", nu)
 
 # Momentum equation (single vector equation)
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
 
 # Continuity equation
 add_equation!(problem, "div(u) = 0")
@@ -92,7 +92,7 @@ add_equation!(problem, "div(u) = 0")
 
 !!! note "Vector Equation Syntax"
     Tarang.jl uses Dedalus-style string equations with full vector support:
-    - `∂ₜ(u)` - time derivative of vector field
+    - `∂t(u)` - time derivative of vector field
     - `Δ(u)` - Laplacian of vector field (component-wise)
     - `∇(p)` - gradient of scalar (returns vector)
     - `div(u)` - divergence of vector (returns scalar)

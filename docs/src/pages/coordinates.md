@@ -134,7 +134,7 @@ Coordinate names determine derivative operators:
 
 ```julia
 # ∂x, ∂y, ∂z automatically available for Cartesian
-add_equation!(problem, "∂ₜ(u) = ∂x(T)")
+add_equation!(problem, "∂t(u) = ∂x(T)")
 
 # The operator name matches the coordinate name
 # coords["x"] → ∂x(field)

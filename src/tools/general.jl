@@ -335,8 +335,8 @@ function split_equation(equation::String)
 
     Examples:
     --------
-    >>> split_equation("∂ₜ(u) = -∂x(u)")
-    ("∂ₜ(u)", "-∂x(u)")
+    >>> split_equation("∂t(u) = -∂x(u)")
+    ("∂t(u)", "-∂x(u)")
     """
     
     # Find top-level equals signs by tracking parenthetical level

@@ -11,14 +11,14 @@ Tarang.jl implements nonlinear term handling using PencilArrays and PencilFFTs f
 ### Correct Format:
 ```julia
 # ✅ CORRECT: Nonlinear terms on RHS
-add_equation!(problem, "∂ₜ(u) + ∇(p) - nu*Δ(u) = -(u⋅∇(u))")
-add_equation!(problem, "∂ₜ(b) - kappa*Δ(b) = -u⋅∇(b)")
+add_equation!(problem, "∂t(u) + ∇(p) - nu*Δ(u) = -(u⋅∇(u))")
+add_equation!(problem, "∂t(b) - kappa*Δ(b) = -u⋅∇(b)")
 ```
 
 ### Incorrect Format:
 ```julia
 # ❌ WRONG: Nonlinear terms on LHS
-add_equation!(problem, "∂ₜ(u) + (u⋅∇(u)) + ∇(p) = nu*Δ(u)")
+add_equation!(problem, "∂t(u) + (u⋅∇(u)) + ∇(p) = nu*Δ(u)")
 ```
 
 ## Why This Convention?
@@ -75,8 +75,8 @@ nl_advection = advection(u, b)
 problem = IVP([u, b, p])
 
 # Linear terms on LHS, nonlinear terms on RHS
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
-add_equation!(problem, "∂ₜ(b) - kappa*Δ(b) = -u⋅∇(b)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
+add_equation!(problem, "∂t(b) - kappa*Δ(b) = -u⋅∇(b)")
 add_equation!(problem, "div(u) = 0")
 ```
 
@@ -166,7 +166,7 @@ end
 # ∇·u = 0
 
 problem = IVP([u, p])
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
 add_equation!(problem, "div(u) = 0")
 ```
 
@@ -177,8 +177,8 @@ add_equation!(problem, "div(u) = 0")
 # ∇·u = 0
 
 problem = IVP([u, b, p])
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) - b*ez = -(u⋅∇(u))")
-add_equation!(problem, "∂ₜ(b) - kappa*Δ(b) = -u⋅∇(b)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) - b*ez = -(u⋅∇(u))")
+add_equation!(problem, "∂t(b) - kappa*Δ(b) = -u⋅∇(b)")
 add_equation!(problem, "div(u) = 0")
 ```
 
@@ -191,7 +191,7 @@ u = VectorField(dist, coords, "velocity", (x_basis, y_basis, z_basis), Float64)
 mesh = (2, 2, 2)  # 8 processes: 2×2×2 decomposition
 
 # Equations remain the same form
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
 ```
 
 ## Performance Considerations

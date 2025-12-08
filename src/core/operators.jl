@@ -218,7 +218,7 @@ const Δ = lap
 # ∇² as alternate notation for Laplacian
 const ∇² = lap
 
-# Note: ∂ₜ = dt alias is defined after the dt() function below
+# Note: ∂t = dt alias is defined after the dt() function below
 
 # Fractional Laplacian constructor
 """
@@ -236,7 +236,7 @@ In spectral space, this multiplies by |k|^(2α) where k is the wavenumber magnit
 # Example - SQG equation:
 ```julia
 # ∂θ/∂t + u⋅∇θ = κ(-Δ)^(1/2)θ
-add_equation!(problem, "∂ₜ(θ) = -u⋅∇(θ) + κ*fraclap(θ, 0.5)")
+add_equation!(problem, "∂t(θ) = -u⋅∇(θ) + κ*fraclap(θ, 0.5)")
 
 # Streamfunction from buoyancy: ψ = (-Δ)^(-1/2)θ
 ψ = fraclap(θ, -0.5)
@@ -322,8 +322,8 @@ function dt(operand::Operand, order::Int=1)
     return TimeDerivative(operand, order)
 end
 
-# ∂ₜ for time derivative (Unicode alias)
-const ∂ₜ = dt
+# ∂t for time derivative (Unicode alias)
+const ∂t = dt
 
 # Differentiation functions
 function d(operand::Operand, coord::Coordinate, order::Int=1)

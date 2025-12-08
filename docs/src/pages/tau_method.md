@@ -418,7 +418,7 @@ problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 
 # Equations
 add_equation!(problem, "div(u) + tau_p = 0")  # tau_p removes math degeneracy
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)")
 
 # Boundary conditions
 add_bc!(problem, "u(z=0) = 0")
@@ -471,7 +471,7 @@ add_substitution!(problem, "grad_u", "∇(u) + ez*lift(tau_u1)")
 add_equation!(problem, "trace(grad_u) + tau_p = 0")
 
 # Momentum using div(grad_u) instead of Δ(u)
-add_equation!(problem, "∂ₜ(u) - nu*div(grad_u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)")
 ```
 
 ### Why First-Order is Better

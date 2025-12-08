@@ -25,7 +25,7 @@ end
 
 ```julia
 # Option 1: Expand manually
-Tarang.add_equation!(problem, "∂ₜ(T) = -ux*∂x(T) - uz*∂z(T)")
+Tarang.add_equation!(problem, "∂t(T) = -ux*∂x(T) - uz*∂z(T)")
 
 # Option 2: Use helper in equation string
 # (requires registration)
@@ -45,7 +45,7 @@ my_advect(u, f) = "ux*∂x($f) + uz*∂z($f)"
 register_operator!(problem, "advect", my_advect)
 
 # Use in equation
-Tarang.add_equation!(problem, "∂ₜ(T) = advect(u, T)")
+Tarang.add_equation!(problem, "∂t(T) = advect(u, T)")
 ```
 
 ## Spectral Differentiation

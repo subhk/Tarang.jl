@@ -7,7 +7,7 @@ Operators compute derivatives and other mathematical operations on fields. Taran
 Tarang.jl supports:
 - **Differential operators**: grad (∇), div, curl, lap (Δ, ∇²)
 - **Coordinate derivatives**: ∂x, ∂y, ∂z, ∂r, etc.
-- **Time derivatives**: ∂ₜ
+- **Time derivatives**: ∂t
 - **Field operations**: dot (⋅), cross (×)
 - **Custom operators**: User-defined operations
 
@@ -19,7 +19,7 @@ Tarang.jl supports Unicode mathematical symbols for more readable code:
 |-------|---------|-------------|
 | `grad(f)` | `∇(f)` | Gradient |
 | `lap(f)` | `Δ(f)` or `∇²(f)` | Laplacian |
-| `dt(f)` | `∂ₜ(f)` | Time derivative |
+| `dt(f)` | `∂t(f)` | Time derivative |
 | `dx(f)` | `∂x(f)` | x-derivative |
 | `dy(f)` | `∂y(f)` | y-derivative |
 | `dz(f)` | `∂z(f)` | z-derivative |
@@ -33,13 +33,13 @@ Tarang.jl supports Unicode mathematical symbols for more readable code:
 add_equation!(problem, "dt(u) + dot(u, grad(u)) = -grad(p) + nu*lap(u)")
 
 # With Unicode (more readable)
-add_equation!(problem, "∂ₜ(u) + u⋅∇(u) = -∇(p) + nu*Δ(u)")
+add_equation!(problem, "∂t(u) + u⋅∇(u) = -∇(p) + nu*Δ(u)")
 ```
 
 **Typing Unicode in Julia**:
 - `∇` : Type `\nabla` then press Tab
 - `Δ` : Type `\Delta` then press Tab
-- `∂ₜ` : Type `\partial` Tab `\_t` Tab
+- `∂t` : Type `\partial` Tab `\_t` Tab
 - `∂x` : Type `\partial` Tab `x`
 - `⋅` : Type `\cdot` then press Tab
 - `×` : Type `\times` then press Tab
@@ -81,11 +81,11 @@ coords = CartesianCoordinates("x", "z")
 problem = IVP([u, w, p])
 
 # Pressure gradient in momentum equation
-add_equation!(problem, "∂ₜ(u) = -∇(p)")
+add_equation!(problem, "∂t(u) = -∇(p)")
 
 # Expands to:
-# ∂ₜ(u_x) = -∂x(p)
-# ∂ₜ(u_z) = -∂z(p)
+# ∂t(u_x) = -∂x(p)
+# ∂t(u_z) = -∂z(p)
 ```
 
 ```julia
@@ -191,7 +191,7 @@ Computes the Laplacian (second derivative) of a field.
 **Syntax**:
 ```julia
 # In equations
-add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
+add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 
 # Programmatic
 ∇²T = Δ(T)
@@ -213,12 +213,12 @@ add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 
 ```julia
 # Diffusion equation
-add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
+add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 ```
 
 ```julia
 # Viscous term in Navier-Stokes
-add_equation!(problem, "∂ₜ(u) = nu*Δ(u) - ∇(p)")
+add_equation!(problem, "∂t(u) = nu*Δ(u) - ∇(p)")
 ```
 
 ```julia
@@ -251,7 +251,7 @@ Partial derivatives with respect to coordinate directions.
 
 ```julia
 # Advection term
-add_equation!(problem, "∂ₜ(T) = -u*∂x(T) - w*∂z(T)")
+add_equation!(problem, "∂t(T) = -u*∂x(T) - w*∂z(T)")
 ```
 
 ```julia
@@ -299,29 +299,29 @@ add_equation!(problem, "∂x(∂x(∂x(∂x(psi)))) + 2*∂x(∂x(∂z(∂z(psi)
 
 ```julia
 # Hyperdiffusion (for numerical stability)
-add_equation!(problem, "∂ₜ(T) = -nu4*Δ(Δ(T))")
+add_equation!(problem, "∂t(T) = -nu4*Δ(Δ(T))")
 ```
 
 ---
 
 ## Time Derivatives
 
-### dt / ∂ₜ Operator
+### dt / ∂t Operator
 
 Time derivative for initial value problems.
 
 **Syntax**:
 ```julia
 dt(field)   # ASCII
-∂ₜ(field)   # Unicode (type \partial Tab \_t Tab)
+∂t(field)   # Unicode (type \partial Tab \_t Tab)
 ```
 
 **Examples**:
 
 ```julia
 # Evolution equations
-add_equation!(problem, "∂ₜ(u) = -u*∂x(u) + nu*Δ(u)")
-add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)")
+add_equation!(problem, "∂t(u) = -u*∂x(u) + nu*Δ(u)")
+add_equation!(problem, "∂t(T) = -u*∂x(T) + kappa*Δ(T)")
 ```
 
 **Note**: Only use in IVP (Initial Value Problems). Not valid for BVP or EVP.
@@ -335,20 +335,20 @@ add_equation!(problem, "∂ₜ(T) = -u*∂x(T) + kappa*Δ(T)")
 **Syntax**:
 ```julia
 # In equations - use vector notation directly
-add_equation!(problem, "∂ₜ(T) = -u⋅∇(T)")
+add_equation!(problem, "∂t(T) = -u⋅∇(T)")
 
 # For vector advection (nonlinear term)
-add_equation!(problem, "∂ₜ(u) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) = -u⋅∇(u)")
 ```
 
 **Example**:
 
 ```julia
 # Scalar advection: -u·∇T
-add_equation!(problem, "∂ₜ(T) = -u⋅∇(T)")
+add_equation!(problem, "∂t(T) = -u⋅∇(T)")
 
 # Vector advection (Navier-Stokes nonlinear term)
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
 ```
 
 ---
@@ -388,7 +388,7 @@ Combine operators for complex expressions.
 # For vector field u
 # ∇²u = (∇²u_x, ∇²u_y, ∇²u_z)
 
-add_equation!(problem, "∂ₜ(u) = nu*Δ(u)")
+add_equation!(problem, "∂t(u) = nu*Δ(u)")
 # Automatically applies componentwise
 ```
 
@@ -398,13 +398,13 @@ add_equation!(problem, "∂ₜ(u) = nu*Δ(u)")
 # u·∇u (nonlinear advection) - use vector notation directly
 
 # Navier-Stokes momentum equation:
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
 
 # Scalar advection:
-add_equation!(problem, "∂ₜ(T) - kappa*Δ(T) = -u⋅∇(T)")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 
 # With buoyancy (Boussinesq):
-add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*T*ez")
+add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*T*ez")
 ```
 
 ### Strain Rate Tensor
@@ -469,7 +469,7 @@ function my_operator(field, param)
 end
 
 # Use in equations
-add_equation!(problem, "∂ₜ(T) = my_operator(T, kappa)")
+add_equation!(problem, "∂t(T) = my_operator(T, kappa)")
 ```
 
 ### Registered Custom Operators
@@ -488,7 +488,7 @@ stokes(u, nu) = -nu*Δ(u) + ∇(p)
 register_operator!(problem, "stokes", stokes)
 
 # Use in equations
-add_equation!(problem, "∂ₜ(u) = stokes(u, nu)")
+add_equation!(problem, "∂t(u) = stokes(u, nu)")
 ```
 
 ---
@@ -501,10 +501,10 @@ Tarang.jl parses equation strings into operator applications:
 
 ```julia
 # String equation
-add_equation!(problem, "∂ₜ(u) + u*∂x(u) = nu*Δ(u) - ∂x(p)")
+add_equation!(problem, "∂t(u) + u*∂x(u) = nu*Δ(u) - ∂x(p)")
 
 # Parsed as:
-# LHS: ∂ₜ(u) + u*∂x(u)
+# LHS: ∂t(u) + u*∂x(u)
 # RHS: nu*Δ(u) - ∂x(p)
 ```
 
@@ -534,7 +534,7 @@ Operators are evaluated in spectral space when possible:
 
 ```julia
 # Bad: Multiple transforms
-add_equation!(problem, "∂ₜ(T) = -u*∂x(T)")  # Transforms for each term
+add_equation!(problem, "∂t(T) = -u*∂x(T)")  # Transforms for each term
 
 # Better: Group operations
 # Tarang automatically optimizes transform grouping

@@ -111,7 +111,7 @@ export
 
     # Operators
     grad, div, curl, lap, trace, skew, transpose_components,
-    ∇, Δ, ∇², ∂ₜ,  # Unicode aliases: ∇=grad, Δ=lap, ∇²=lap, ∂ₜ=dt
+    ∇, Δ, ∇², ∂t,  # Unicode aliases: ∇=grad, Δ=lap, ∇²=lap, ∂t=dt
     # Fractional Laplacian for SQG and other applications
     fraclap, sqrtlap, invsqrtlap,  # fraclap(f,α), sqrtlap=(-Δ)^(1/2), invsqrtlap=(-Δ)^(-1/2)
     Δᵅ,  # Unicode alias: Δᵅ(f, α) = fraclap(f, α)

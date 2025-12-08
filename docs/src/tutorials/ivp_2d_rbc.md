@@ -140,11 +140,11 @@ add_substitution!(problem, "Lz", H)
 add_equation!(problem, "div(u) + tau_p = 0")
 
 # Temperature equation: ∂T/∂t - ∇²T = -u·∇T
-add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)")
+add_equation!(problem, "∂t(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)")
 
 # Momentum (vector equation): ∂u/∂t - Pr∇²u + ∇p = -u·∇u + Ra*Pr*T*ez
 # ez is the unit vector in z-direction (buoyancy acts vertically)
-add_equation!(problem, "∂ₜ(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez")
+add_equation!(problem, "∂t(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez")
 ```
 
 ### Boundary Conditions
@@ -166,7 +166,7 @@ add_bc!(problem, "integ(p) = 0")
 
 !!! note "Equation String Syntax"
     Tarang.jl uses Dedalus-style string equations:
-    - Unicode operators: `∂ₜ` (time derivative), `Δ` (Laplacian), `∇` (gradient)
+    - Unicode operators: `∂t` (time derivative), `Δ` (Laplacian), `∇` (gradient)
     - Vector advection: `u⋅∇(u)` for nonlinear term
     - Scalar advection: `u⋅∇(T)` for temperature advection
     - Unit vectors: `ex`, `ey`, `ez` for directions (e.g., `Ra*Pr*T*ez` for buoyancy)
