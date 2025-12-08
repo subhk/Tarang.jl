@@ -66,16 +66,15 @@ add_equation!(problem, &quot;dx(dx(dx(dx(psi)))) + 2*dx(dx(dz(dz(psi)))) + dz(dz
 add_equation!(problem, &quot;∂ₜ(T) = -nu4*Δ(Δ(T))&quot;)</code></pre><hr/><h2 id="Time-Derivatives"><a class="docs-heading-anchor" href="#Time-Derivatives">Time Derivatives</a><a id="Time-Derivatives-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Derivatives" title="Permalink"></a></h2><h3 id="dt-/-ₜ-Operator"><a class="docs-heading-anchor" href="#dt-/-ₜ-Operator">dt / ∂ₜ Operator</a><a id="dt-/-ₜ-Operator-1"></a><a class="docs-heading-anchor-permalink" href="#dt-/-ₜ-Operator" title="Permalink"></a></h3><p>Time derivative for initial value problems.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">dt(field)   # ASCII
 ∂ₜ(field)   # Unicode (type \partial Tab \_t Tab)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Evolution equations
 add_equation!(problem, &quot;∂ₜ(u) = -u*dx(u) + nu*Δ(u)&quot;)
-add_equation!(problem, &quot;∂ₜ(T) = -u*dx(T) + kappa*Δ(T)&quot;)</code></pre><p><strong>Note</strong>: Only use in IVP (Initial Value Problems). Not valid for BVP or EVP.</p><hr/><h2 id="Vector-Operations"><a class="docs-heading-anchor" href="#Vector-Operations">Vector Operations</a><a id="Vector-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Operations" title="Permalink"></a></h2><h3 id="Dot-Product"><a class="docs-heading-anchor" href="#Dot-Product">Dot Product</a><a id="Dot-Product-1"></a><a class="docs-heading-anchor-permalink" href="#Dot-Product" title="Permalink"></a></h3><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs"># In equations (use component form)
-add_equation!(problem, &quot;dt(T) = -(u*dx(T) + v*dy(T) + w*dz(T))&quot;)
+add_equation!(problem, &quot;∂ₜ(T) = -u*dx(T) + kappa*Δ(T)&quot;)</code></pre><p><strong>Note</strong>: Only use in IVP (Initial Value Problems). Not valid for BVP or EVP.</p><hr/><h2 id="Vector-Operations"><a class="docs-heading-anchor" href="#Vector-Operations">Vector Operations</a><a id="Vector-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Operations" title="Permalink"></a></h2><h3 id="Dot-Product-/-Advection"><a class="docs-heading-anchor" href="#Dot-Product-/-Advection">Dot Product / Advection</a><a id="Dot-Product-/-Advection-1"></a><a class="docs-heading-anchor-permalink" href="#Dot-Product-/-Advection" title="Permalink"></a></h3><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs"># In equations - use vector notation directly
+add_equation!(problem, &quot;∂ₜ(T) = -u⋅∇(T)&quot;)
 
-# Or use helper
-dot_product(u, grad(T))</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Advection: -u·∇T
-# 2D:
-add_equation!(problem, &quot;∂ₜ(T) = -u*dx(T) - w*dz(T)&quot;)
+# For vector advection (nonlinear term)
+add_equation!(problem, &quot;∂ₜ(u) = -u⋅∇(u)&quot;)</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Scalar advection: -u·∇T
+add_equation!(problem, &quot;∂ₜ(T) = -u⋅∇(T)&quot;)
 
-# 3D:
-add_equation!(problem, &quot;∂ₜ(T) = -u*dx(T) - v*dy(T) - w*dz(T)&quot;)</code></pre><hr/><h3 id="Cross-Product"><a class="docs-heading-anchor" href="#Cross-Product">Cross Product</a><a id="Cross-Product-1"></a><a class="docs-heading-anchor-permalink" href="#Cross-Product" title="Permalink"></a></h3><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs"># Use helper function
+# Vector advection (Navier-Stokes nonlinear term)
+add_equation!(problem, &quot;∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)&quot;)</code></pre><hr/><h3 id="Cross-Product"><a class="docs-heading-anchor" href="#Cross-Product">Cross Product</a><a id="Cross-Product-1"></a><a class="docs-heading-anchor-permalink" href="#Cross-Product" title="Permalink"></a></h3><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs"># Use helper function
 u_cross_omega = cross_product(u, omega)
 
 # Or component form for specific cases</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Vorticity equation: ∂ω/∂t = ∇×(u×ω)
@@ -89,21 +88,16 @@ add_equation!(problem, &quot;dt(omega) = curl(u_cross_omega)&quot;)</code></pre>
 # ∇²u = (∇²u_x, ∇²u_y, ∇²u_z)
 
 add_equation!(problem, &quot;∂ₜ(u) = nu*Δ(u)&quot;)
-# Automatically applies componentwise</code></pre><h3 id="Advection-Operator"><a class="docs-heading-anchor" href="#Advection-Operator">Advection Operator</a><a id="Advection-Operator-1"></a><a class="docs-heading-anchor-permalink" href="#Advection-Operator" title="Permalink"></a></h3><pre><code class="language-julia hljs"># u·∇u (nonlinear advection)
+# Automatically applies componentwise</code></pre><h3 id="Advection-Operator"><a class="docs-heading-anchor" href="#Advection-Operator">Advection Operator</a><a id="Advection-Operator-1"></a><a class="docs-heading-anchor-permalink" href="#Advection-Operator" title="Permalink"></a></h3><pre><code class="language-julia hljs"># u·∇u (nonlinear advection) - use vector notation directly
 
-# 2D:
-add_equation!(problem, &quot;∂ₜ(u) = -u*dx(u) - w*dz(u)&quot;)
-add_equation!(problem, &quot;∂ₜ(w) = -u*dx(w) - w*dz(w)&quot;)
+# Navier-Stokes momentum equation:
+add_equation!(problem, &quot;∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)&quot;)
 
-# Helper function
-function advection_term(u, field)
-    # Returns u·∇field
-    result = u.components[1] * dx(field)
-    for i in 2:length(u.components)
-        result += u.components[i] * d[i](field)
-    end
-    return result
-end</code></pre><h3 id="Strain-Rate-Tensor"><a class="docs-heading-anchor" href="#Strain-Rate-Tensor">Strain Rate Tensor</a><a id="Strain-Rate-Tensor-1"></a><a class="docs-heading-anchor-permalink" href="#Strain-Rate-Tensor" title="Permalink"></a></h3><pre><code class="language-julia hljs"># S_ij = 1/2 (∂u_i/∂x_j + ∂u_j/∂x_i)
+# Scalar advection:
+add_equation!(problem, &quot;∂ₜ(T) - kappa*Δ(T) = -u⋅∇(T)&quot;)
+
+# With buoyancy (Boussinesq):
+add_equation!(problem, &quot;∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*T*ez&quot;)</code></pre><h3 id="Strain-Rate-Tensor"><a class="docs-heading-anchor" href="#Strain-Rate-Tensor">Strain Rate Tensor</a><a id="Strain-Rate-Tensor-1"></a><a class="docs-heading-anchor-permalink" href="#Strain-Rate-Tensor" title="Permalink"></a></h3><pre><code class="language-julia hljs"># S_ij = 1/2 (∂u_i/∂x_j + ∂u_j/∂x_i)
 
 function strain_rate_tensor(u)
     # Returns TensorField
@@ -152,4 +146,4 @@ add_equation!(problem, &quot;∂ₜ(T) = -u*dx(T)&quot;)  # Transforms for each 
 dudx = dx(u)
 
 add_equation!(problem, &quot;term1 = dudx&quot;)
-add_equation!(problem, &quot;term2 = w*dudx&quot;)</code></pre><h3 id="Use-Sparse-Differentiation"><a class="docs-heading-anchor" href="#Use-Sparse-Differentiation">Use Sparse Differentiation</a><a id="Use-Sparse-Differentiation-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Sparse-Differentiation" title="Permalink"></a></h3><p>Chebyshev/Legendre derivatives are sparse matrix operations - very efficient.</p><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../fields/">Fields</a>: Field types that operators act on</li><li><a href="../problems/">Problems</a>: Using operators in equations</li><li><a href="../domains/">Domains</a>: Spatial discretization for operators</li><li><a href="../bases/">Bases</a>: Spectral bases for differentiation</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../fields/">« Fields API</a><a class="docs-footer-nextpage" href="../problems/">Problems API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 17:38">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+add_equation!(problem, &quot;term2 = w*dudx&quot;)</code></pre><h3 id="Use-Sparse-Differentiation"><a class="docs-heading-anchor" href="#Use-Sparse-Differentiation">Use Sparse Differentiation</a><a id="Use-Sparse-Differentiation-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Sparse-Differentiation" title="Permalink"></a></h3><p>Chebyshev/Legendre derivatives are sparse matrix operations - very efficient.</p><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../fields/">Fields</a>: Field types that operators act on</li><li><a href="../problems/">Problems</a>: Using operators in equations</li><li><a href="../domains/">Domains</a>: Spatial discretization for operators</li><li><a href="../bases/">Bases</a>: Spectral bases for differentiation</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../fields/">« Fields API</a><a class="docs-footer-nextpage" href="../problems/">Problems API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 17:39">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
