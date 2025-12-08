@@ -353,10 +353,9 @@ add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
 
 **Syntax**:
 ```julia
-# Use helper function
-u_cross_omega = cross_product(u, omega)
-
-# Or component form for specific cases
+# Use cross function or × operator
+u_cross_omega = cross(u, omega)
+u_cross_omega = u × omega  # Unicode: \times Tab
 ```
 
 **Example**:
@@ -366,7 +365,9 @@ u_cross_omega = cross_product(u, omega)
 problem = IVP([ux, uy, uz, omega_x, omega_y, omega_z])
 
 # Compute u × ω
-u_cross_omega = cross_product(u, omega)
+u_cross_omega = cross(u, omega)
+# Or equivalently:
+u_cross_omega = u × omega
 
 # Then: ∇×(u×ω)
 add_equation!(problem, "∂t(omega) = curl(u_cross_omega)")
@@ -454,37 +455,46 @@ Partial derivatives commute:
 
 ## Custom Operators
 
-### Defining Custom Operators
+### Defining Helper Functions
+
+You can define helper functions that compose built-in operators:
 
 ```julia
 # Define helper function
-function my_operator(field, param)
-    # Custom operation
-    result = ∂x(field) + param * Δ(field)
-    return result
+function my_diffusion(field, kappa)
+    # Custom operation combining derivatives
+    return kappa * Δ(field)
 end
 
-# Use in equations
-add_equation!(problem, "∂t(T) = my_operator(T, kappa)")
+# Use programmatically
+diffusion_term = my_diffusion(T, kappa)
 ```
 
-### Registered Custom Operators
+### Using Built-in Operators in Equations
 
-For operators used frequently in equations:
+The equation parser recognizes all registered operators. Use them directly in equation strings:
 
 ```julia
-# Register with problem
-function register_operator!(problem, name, func)
-    problem.operators[name] = func
-end
+# Available operators in equations:
+# grad, div, curl, lap (or Δ), dt (or ∂t), d
+# integrate, average, interpolate, convert, lift
+# sin, cos, tan, exp, log, sqrt, abs, tanh
 
-# Example: Stokes operator
-stokes(u, nu) = -nu*Δ(u) + ∇(p)
+# Example: diffusion equation
+add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 
-register_operator!(problem, "stokes", stokes)
+# Example: advection-diffusion
+add_equation!(problem, "∂t(T) + u⋅∇(T) = kappa*Δ(T)")
+```
 
-# Use in equations
-add_equation!(problem, "∂t(u) = stokes(u, nu)")
+For complex expressions, compute terms programmatically and use the result:
+
+```julia
+# Compute complex term
+rhs_term = kappa * Δ(T) - u * ∂x(T)
+
+# Add to field's RHS
+T.rhs .+= rhs_term.data
 ```
 
 ---
