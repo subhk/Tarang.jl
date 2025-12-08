@@ -155,8 +155,8 @@ problem = IVP([T])
 add_equation!(problem, "dt(T) = kappa*lap(T)")
 problem.parameters["kappa"] = 0.01
 
-add_dirichlet_bc!(problem, "T", "x", 0.0, 1.0)
-add_dirichlet_bc!(problem, "T", "x", 1.0, 0.0)
+add_dirichlet_bc!(problem, "T(x=0) = 1")
+add_dirichlet_bc!(problem, "T(x=1) = 0")
 
 solver = InitialValueSolver(problem, RK222(), dt=0.001)
 

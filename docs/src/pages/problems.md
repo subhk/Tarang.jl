@@ -93,29 +93,29 @@ add_equation!(problem, "dt(T) = Ra*Pr*w + lap(T)")
 
 ```julia
 # u = value at location
-add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)  # u=0 at z=0
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)  # T=0 at z=1
+add_dirichlet_bc!(problem, "u(z=0) = 0")  # u=0 at z=0
+add_dirichlet_bc!(problem, "T(z=1) = 0")  # T=0 at z=1
 ```
 
 ### Neumann (Derivative)
 
 ```julia
 # du/dz = value at location
-add_neumann_bc!(problem, "T", "z", 1.0, 0.0)  # dT/dz=0 at z=1
+add_neumann_bc!(problem, "dz(T)(z=1) = 0")  # dT/dz=0 at z=1
 ```
 
 ### Robin (Mixed)
 
 ```julia
 # α*u + β*du/dn = γ
-add_robin_bc!(problem, "T", "z", 0.0, 1.0, 1.0, 0.0)
+add_robin_bc!(problem, "1.0*T + 1.0*dz(T)(z=0) = 0")
 ```
 
 ### Stress-Free
 
 ```julia
 # du/dz = 0 (free surface)
-add_stress_free_bc!(problem, "u", "z", 1.0)
+add_stress_free_bc!(problem, "u(z=1) stress-free")
 ```
 
 ## Problem Validation
@@ -138,8 +138,8 @@ is_valid = validate_problem(problem)
 problem = IVP([T])
 problem.parameters["kappa"] = 0.01
 add_equation!(problem, "dt(T) = kappa*lap(T)")
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "T(z=0) = 1")
+add_dirichlet_bc!(problem, "T(z=1) = 0")
 ```
 
 ### Incompressible Navier-Stokes
@@ -157,8 +157,8 @@ add_equation!(problem, "dx(ux) + dz(uz) = 0")
 
 # No-slip walls
 for field in ["ux", "uz"]
-    add_dirichlet_bc!(problem, field, "z", 0.0, 0.0)
-    add_dirichlet_bc!(problem, field, "z", 1.0, 0.0)
+    add_dirichlet_bc!(problem, "$(field)(z=0) = 0")
+    add_dirichlet_bc!(problem, "$(field)(z=1) = 0")
 end
 ```
 
@@ -175,12 +175,12 @@ add_equation!(problem, "dx(ux) + dz(uz) = 0")
 add_equation!(problem, "dt(T) + ux*dx(T) + uz*dz(T) = lap(T)")
 
 # Boundary conditions
-add_dirichlet_bc!(problem, "ux", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "ux", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "uz", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "uz", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)  # Hot bottom
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)  # Cold top
+add_dirichlet_bc!(problem, "ux(z=0) = 0")
+add_dirichlet_bc!(problem, "ux(z=1) = 0")
+add_dirichlet_bc!(problem, "uz(z=0) = 0")
+add_dirichlet_bc!(problem, "uz(z=1) = 0")
+add_dirichlet_bc!(problem, "T(z=0) = 1")  # Hot bottom
+add_dirichlet_bc!(problem, "T(z=1) = 0")  # Cold top
 ```
 
 ### Poisson Equation (BVP)
@@ -188,8 +188,8 @@ add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)  # Cold top
 ```julia
 problem = LBVP([phi])
 add_equation!(problem, "lap(phi) = rho")
-add_dirichlet_bc!(problem, "phi", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "phi", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "phi(z=0) = 0")
+add_dirichlet_bc!(problem, "phi(z=1) = 0")
 ```
 
 ## See Also

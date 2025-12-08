@@ -35,8 +35,8 @@ Tarang automatically applies the tau method when you add boundary conditions:
 
 ```julia
 # Creates tau terms internally
-Tarang.add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)
-Tarang.add_dirichlet_bc!(problem, "u", "z", 1.0, 0.0)
+Tarang.add_dirichlet_bc!(problem, "u(z=0) = 0")
+Tarang.add_dirichlet_bc!(problem, "u(z=1) = 0")
 ```
 
 ### Number of Tau Terms
