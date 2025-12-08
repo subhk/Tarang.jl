@@ -218,8 +218,7 @@ const Δ = lap
 # ∇² as alternate notation for Laplacian
 const ∇² = lap
 
-# ∂ₜ for time derivative
-const ∂ₜ = dt
+# Note: ∂ₜ = dt alias is defined after the dt() function below
 
 # Fractional Laplacian constructor
 """
@@ -322,6 +321,9 @@ function dt(operand::Operand, order::Int=1)
     """Time derivative"""
     return TimeDerivative(operand, order)
 end
+
+# ∂ₜ for time derivative (Unicode alias)
+const ∂ₜ = dt
 
 # Differentiation functions
 function d(operand::Operand, coord::Coordinate, order::Int=1)
