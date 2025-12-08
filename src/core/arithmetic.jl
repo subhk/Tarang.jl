@@ -532,9 +532,22 @@ Base.:/(a::Future, b) = Divide(a, b)
 Base.:/(a, b::Future) = Divide(a, b)
 Base.:^(a::Future, p::Real) = Power(a, p)
 
-import LinearAlgebra: dot, cross
+import LinearAlgebra: dot, cross, ⋅, ×
 dot(a::Operand, b::Operand) = DotProduct(a, b)
 cross(a::Operand, b::Operand) = CrossProduct(a, b)
+
+# Unicode operators for dot and cross products
+# ⋅ (\cdot) for dot product - allows u⋅∇(u) syntax
+⋅(a::Operand, b::Operand) = DotProduct(a, b)
+⋅(a::Operand, b::Future) = DotProduct(a, b)
+⋅(a::Future, b::Operand) = DotProduct(a, b)
+⋅(a::Future, b::Future) = DotProduct(a, b)
+
+# × (\times) for cross product - allows u×v syntax
+×(a::Operand, b::Operand) = CrossProduct(a, b)
+×(a::Operand, b::Future) = CrossProduct(a, b)
+×(a::Future, b::Operand) = CrossProduct(a, b)
+×(a::Future, b::Future) = CrossProduct(a, b)
 
 # ---------------------------------------------------------------------------
 # Dispatch integration

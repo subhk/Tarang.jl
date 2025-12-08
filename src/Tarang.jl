@@ -110,6 +110,7 @@ export
 
     # Operators
     grad, div, curl, lap, trace, skew, transpose_components,
+    ∇, Δ, ∇²,  # Unicode aliases: ∇=grad, Δ=lap, ∇²=lap
     outer, advective_cfl, cfl,
     interpolate, integrate, average, convert, lift, d, dt,
 

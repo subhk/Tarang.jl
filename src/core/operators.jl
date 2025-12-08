@@ -195,6 +195,16 @@ function lap(operand::Operand)
     return multiclass_new(Laplacian, operand)
 end
 
+# Unicode aliases for differential operators
+# ∇ (nabla) for gradient
+const ∇ = grad
+
+# Δ (Delta) for Laplacian
+const Δ = lap
+
+# ∇² as alternate notation for Laplacian
+const ∇² = lap
+
 function trace(operand::Operand)
     """Trace operator"""
     return multiclass_new(Trace, operand)
