@@ -109,14 +109,101 @@ mutable struct TensorField <: Operand
     end
 end
 
+"""
+    LockedField <: Operand
+
+A field wrapper that restricts layout and scale changes to specific allowed values.
+Following Dedalus field:LockedField pattern.
+
+This is useful for:
+- Output handlers that need fields in specific layouts
+- Preventing accidental layout changes during evaluation
+- Enforcing coefficient-space or grid-space operations
+
+# Example
+```julia
+locked = LockedField(u, :g)          # Lock to grid space
+locked = LockedField(u, :c)          # Lock to coefficient space
+locked = LockedField(u, :g, (1,))    # Lock layout and scales
+```
+"""
 struct LockedField <: Operand
     field::ScalarField
     layout::Symbol
+    scales::Union{Nothing, Tuple}
 
-    function LockedField(field::ScalarField, layout::Symbol)
-        new(field, layout)
+    function LockedField(field::ScalarField, layout::Symbol, scales::Union{Nothing, Tuple}=nothing)
+        # Ensure field is in the locked layout
+        ensure_layout!(field, layout)
+        new(field, layout, scales)
     end
 end
+
+# LockedField convenience constructors
+LockedField(field::ScalarField) = LockedField(field, field.current_layout, field.scales)
+
+# Forward field access methods to underlying field
+Base.getindex(lf::LockedField, key) = getindex(lf.field, key)
+Base.size(lf::LockedField) = size(lf.field.data_g !== nothing ? lf.field.data_g : lf.field.data_c)
+
+# Property forwarding
+function Base.getproperty(lf::LockedField, s::Symbol)
+    if s in (:field, :layout, :scales)
+        return getfield(lf, s)
+    elseif s == :name
+        return lf.field.name
+    elseif s == :dist
+        return lf.field.dist
+    elseif s == :bases
+        return lf.field.bases
+    elseif s == :dtype
+        return lf.field.dtype
+    elseif s == :domain
+        return lf.field.domain
+    elseif s == :data_g
+        return lf.field.data_g
+    elseif s == :data_c
+        return lf.field.data_c
+    elseif s == :current_layout
+        return lf.layout  # Return locked layout, not field's current
+    else
+        return getfield(lf, s)
+    end
+end
+
+"""
+    change_scales!(lf::LockedField, new_scales)
+
+Attempt to change scales on a locked field.
+Only succeeds if new_scales matches locked scales or locked scales is nothing.
+"""
+function change_scales!(lf::LockedField, new_scales)
+    if lf.scales !== nothing && new_scales != lf.scales
+        throw(ArgumentError("Cannot change scales on LockedField from $(lf.scales) to $new_scales"))
+    end
+    change_scales!(lf.field, new_scales)
+    return lf
+end
+
+"""
+    ensure_layout!(lf::LockedField, layout::Symbol)
+
+Attempt to change layout on a locked field.
+Only succeeds if layout matches the locked layout.
+"""
+function ensure_layout!(lf::LockedField, layout::Symbol)
+    if layout != lf.layout
+        throw(ArgumentError("Cannot change layout on LockedField from $(lf.layout) to $layout"))
+    end
+    return lf
+end
+
+"""
+    unlock(lf::LockedField)
+
+Get the underlying unlocked field.
+"""
+unlock(lf::LockedField) = lf.field
 
 # Copy methods for ScalarField
 function Base.copy(field::ScalarField)

@@ -239,6 +239,266 @@ function add_vector_fields(a::VectorField, b::VectorField)
 end
 
 # ---------------------------------------------------------------------------
+# Power (deferred exponentiation)
+# ---------------------------------------------------------------------------
+
+"""
+    Power <: Future
+
+Deferred power operation for field exponentiation.
+Following Dedalus arithmetic:Power pattern.
+
+# Example
+```julia
+u_squared = Power(u, 2)      # u^2
+u_sqrt = Power(u, 0.5)       # sqrt(u)
+u_inv = Power(u, -1)         # 1/u
+```
+"""
+mutable struct Power <: Future
+    state::FutureState
+    function Power(state::FutureState)
+        new(state)
+    end
+end
+
+function Power(operand, exponent::Real)
+    return multiclass_new(Power, operand, exponent)
+end
+
+function operate(::Power, evaluated_args::Vector{Any})
+    if length(evaluated_args) != 2
+        throw(ArgumentError("Power expects exactly two arguments (operand, exponent)"))
+    end
+    return power_operands(evaluated_args[1], evaluated_args[2])
+end
+
+function power_operands(a::ScalarField, p::Real)
+    # Work in grid space for nonlinear operation
+    ensure_layout!(a, :g)
+    result = ScalarField(a.dist, "$(a.name)_pow_$p", a.bases, a.dtype)
+    ensure_layout!(result, :g)
+    result.data_g .= a.data_g .^ p
+    return result
+end
+
+function power_operands(a::Number, p::Real)
+    return a^p
+end
+
+function power_operands(a::VectorField, p::Real)
+    # Apply power to each component
+    result = VectorField(a.dist, a.coordsys, "$(a.name)_pow_$p", a.bases, a.dtype)
+    for i in 1:length(a.components)
+        result.components[i] = power_operands(a.components[i], p)
+    end
+    return result
+end
+
+function power_operands(a, p)
+    throw(ArgumentError("Power not implemented for operand of type $(typeof(a))"))
+end
+
+# ---------------------------------------------------------------------------
+# Negate (unary minus)
+# ---------------------------------------------------------------------------
+
+"""
+    Negate <: Future
+
+Deferred negation operation.
+Following Dedalus arithmetic pattern for unary minus.
+
+# Example
+```julia
+neg_u = Negate(u)    # -u
+neg_u = -u           # Same via operator overload
+```
+"""
+mutable struct Negate <: Future
+    state::FutureState
+    function Negate(state::FutureState)
+        new(state)
+    end
+end
+
+function Negate(operand)
+    return multiclass_new(Negate, operand)
+end
+
+function operate(::Negate, evaluated_args::Vector{Any})
+    if length(evaluated_args) != 1
+        throw(ArgumentError("Negate expects exactly one argument"))
+    end
+    return negate_operand(evaluated_args[1])
+end
+
+function negate_operand(a::ScalarField)
+    result = ScalarField(a.dist, "neg_$(a.name)", a.bases, a.dtype)
+    if a.current_layout == :g && a.data_g !== nothing
+        ensure_layout!(result, :g)
+        result.data_g .= .-a.data_g
+    elseif a.data_c !== nothing
+        ensure_layout!(result, :c)
+        result.data_c .= .-a.data_c
+    end
+    return result
+end
+
+function negate_operand(a::VectorField)
+    result = VectorField(a.dist, a.coordsys, "neg_$(a.name)", a.bases, a.dtype)
+    for i in 1:length(a.components)
+        result.components[i] = negate_operand(a.components[i])
+    end
+    return result
+end
+
+function negate_operand(a::Number)
+    return -a
+end
+
+function negate_operand(a)
+    throw(ArgumentError("Negate not implemented for operand of type $(typeof(a))"))
+end
+
+# ---------------------------------------------------------------------------
+# Subtract (a - b = a + (-b))
+# ---------------------------------------------------------------------------
+
+"""
+    Subtract <: Future
+
+Deferred subtraction operation.
+Implemented as Add(a, Negate(b)) for consistency.
+
+# Example
+```julia
+diff = Subtract(u, v)    # u - v
+diff = u - v             # Same via operator overload
+```
+"""
+mutable struct Subtract <: Future
+    state::FutureState
+    function Subtract(state::FutureState)
+        new(state)
+    end
+end
+
+function Subtract(a, b)
+    return multiclass_new(Subtract, a, b)
+end
+
+function operate(::Subtract, evaluated_args::Vector{Any})
+    if length(evaluated_args) != 2
+        throw(ArgumentError("Subtract expects exactly two arguments"))
+    end
+    return subtract_operands(evaluated_args[1], evaluated_args[2])
+end
+
+function subtract_operands(a::ScalarField, b::ScalarField)
+    result = ScalarField(a.dist, "$(a.name)_minus_$(b.name)", a.bases, a.dtype)
+    if a.current_layout == :g && b.current_layout == :g
+        ensure_layout!(result, :g)
+        result.data_g .= a.data_g .- b.data_g
+    else
+        ensure_layout!(a, :c)
+        ensure_layout!(b, :c)
+        ensure_layout!(result, :c)
+        result.data_c .= a.data_c .- b.data_c
+    end
+    return result
+end
+
+function subtract_operands(a::VectorField, b::VectorField)
+    if length(a.components) != length(b.components)
+        throw(ArgumentError("VectorField component mismatch for subtraction"))
+    end
+    result = VectorField(a.dist, a.coordsys, "$(a.name)_minus_$(b.name)", a.bases, a.dtype)
+    for i in 1:length(a.components)
+        result.components[i] = subtract_operands(a.components[i], b.components[i])
+    end
+    return result
+end
+
+function subtract_operands(a::Number, b::Number)
+    return a - b
+end
+
+function subtract_operands(a::ScalarField, b::Number)
+    return combine_add(a, -b)
+end
+
+function subtract_operands(a::Number, b::ScalarField)
+    return combine_add(a, negate_operand(b))
+end
+
+function subtract_operands(a, b)
+    throw(ArgumentError("Subtract not implemented for $(typeof(a)) and $(typeof(b))"))
+end
+
+# ---------------------------------------------------------------------------
+# Divide (a / b)
+# ---------------------------------------------------------------------------
+
+"""
+    Divide <: Future
+
+Deferred division operation.
+For field / scalar, this is efficient multiplication by 1/scalar.
+For field / field, requires grid-space evaluation.
+
+# Example
+```julia
+half_u = Divide(u, 2)    # u / 2
+ratio = Divide(u, v)     # u / v (pointwise)
+```
+"""
+mutable struct Divide <: Future
+    state::FutureState
+    function Divide(state::FutureState)
+        new(state)
+    end
+end
+
+function Divide(a, b)
+    return multiclass_new(Divide, a, b)
+end
+
+function operate(::Divide, evaluated_args::Vector{Any})
+    if length(evaluated_args) != 2
+        throw(ArgumentError("Divide expects exactly two arguments"))
+    end
+    return divide_operands(evaluated_args[1], evaluated_args[2])
+end
+
+function divide_operands(a::ScalarField, b::Number)
+    return power_operands(combine_multiply(a, 1/b), 1)
+end
+
+function divide_operands(a::ScalarField, b::ScalarField)
+    # Pointwise division in grid space
+    ensure_layout!(a, :g)
+    ensure_layout!(b, :g)
+    result = ScalarField(a.dist, "$(a.name)_div_$(b.name)", a.bases, a.dtype)
+    ensure_layout!(result, :g)
+    result.data_g .= a.data_g ./ b.data_g
+    return result
+end
+
+function divide_operands(a::Number, b::ScalarField)
+    # a / field = a * field^(-1)
+    return combine_multiply(a, power_operands(b, -1))
+end
+
+function divide_operands(a::Number, b::Number)
+    return a / b
+end
+
+function divide_operands(a, b)
+    throw(ArgumentError("Divide not implemented for $(typeof(a)) and $(typeof(b))"))
+end
+
+# ---------------------------------------------------------------------------
 # Fallback arithmetic overloads (deferred by default)
 # ---------------------------------------------------------------------------
 
@@ -246,14 +506,31 @@ Base.:+(a::Operand, b::Operand) = multiclass_new(Add, a, b)
 Base.:+(a::Operand, b::Number) = multiclass_new(Add, a, b)
 Base.:+(a::Number, b::Operand) = multiclass_new(Add, a, b)
 
+Base.:-(a::Operand) = Negate(a)
+Base.:-(a::Operand, b::Operand) = Subtract(a, b)
+Base.:-(a::Operand, b::Number) = Subtract(a, b)
+Base.:-(a::Number, b::Operand) = Subtract(a, b)
+
 Base.:*(a::Operand, b::Operand) = multiclass_new(Multiply, a, b)
 Base.:*(a::Operand, b::Number) = multiclass_new(Multiply, a, b)
 Base.:*(a::Number, b::Operand) = multiclass_new(Multiply, a, b)
+
+Base.:/(a::Operand, b::Operand) = Divide(a, b)
+Base.:/(a::Operand, b::Number) = Divide(a, b)
+Base.:/(a::Number, b::Operand) = Divide(a, b)
+
+Base.:^(a::Operand, p::Real) = Power(a, p)
 
 Base.:*(a::Future, b) = multiclass_new(Multiply, a, b)
 Base.:*(a, b::Future) = multiclass_new(Multiply, a, b)
 Base.:+(a::Future, b) = multiclass_new(Add, a, b)
 Base.:+(a, b::Future) = multiclass_new(Add, a, b)
+Base.:-(a::Future) = Negate(a)
+Base.:-(a::Future, b) = Subtract(a, b)
+Base.:-(a, b::Future) = Subtract(a, b)
+Base.:/(a::Future, b) = Divide(a, b)
+Base.:/(a, b::Future) = Divide(a, b)
+Base.:^(a::Future, p::Real) = Power(a, p)
 
 import LinearAlgebra: dot, cross
 dot(a::Operand, b::Operand) = DotProduct(a, b)
@@ -313,4 +590,44 @@ end
 function invoke_constructor(::Type{CrossProduct}, args::Tuple, kwargs::NamedTuple)
     state = build_future_state(Vector{Any}(args); name=:CrossProduct)
     return CrossProduct(state)
+end
+
+# Power dispatch
+function dispatch_check(::Type{Power}, args::Tuple, kwargs::NamedTuple)
+    return length(args) == 2 && isa(args[2], Real)
+end
+
+function invoke_constructor(::Type{Power}, args::Tuple, kwargs::NamedTuple)
+    state = build_future_state(Vector{Any}(args); name=:Power)
+    return Power(state)
+end
+
+# Negate dispatch
+function dispatch_check(::Type{Negate}, args::Tuple, kwargs::NamedTuple)
+    return length(args) == 1
+end
+
+function invoke_constructor(::Type{Negate}, args::Tuple, kwargs::NamedTuple)
+    state = build_future_state(Vector{Any}(args); name=:Negate)
+    return Negate(state)
+end
+
+# Subtract dispatch
+function dispatch_check(::Type{Subtract}, args::Tuple, kwargs::NamedTuple)
+    return length(args) == 2
+end
+
+function invoke_constructor(::Type{Subtract}, args::Tuple, kwargs::NamedTuple)
+    state = build_future_state(Vector{Any}(args); name=:Subtract)
+    return Subtract(state)
+end
+
+# Divide dispatch
+function dispatch_check(::Type{Divide}, args::Tuple, kwargs::NamedTuple)
+    return length(args) == 2
+end
+
+function invoke_constructor(::Type{Divide}, args::Tuple, kwargs::NamedTuple)
+    state = build_future_state(Vector{Any}(args); name=:Divide)
+    return Divide(state)
 end
