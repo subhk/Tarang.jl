@@ -45,32 +45,28 @@ add_equation!(problem, &quot;Δ(T) + lift(tau_T1) + lift(tau_T2) = source&quot;)
 add_bc!(problem, &quot;T(z=0) = 1&quot;)   # T(z=0) = 1
 add_bc!(problem, &quot;T(z=1) = 0&quot;)   # T(z=1) = 0</code></pre><h3 id="No-Slip-Velocity-(Vector-Fields)"><a class="docs-heading-anchor" href="#No-Slip-Velocity-(Vector-Fields)">No-Slip Velocity (Vector Fields)</a><a id="No-Slip-Velocity-(Vector-Fields)-1"></a><a class="docs-heading-anchor-permalink" href="#No-Slip-Velocity-(Vector-Fields)" title="Permalink"></a></h3><p>For viscous flows at solid walls, use vector fields for compact notation:</p><pre><code class="language-julia hljs"># Vector field for velocity
 u = VectorField(dist, coords, &quot;u&quot;, (x_basis, z_basis))
+p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
 
 # Vector tau fields for BCs at each wall
 tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,))  # Wall at z=0
 tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,))  # Wall at z=1
+tau_p = ScalarField(dist, &quot;tau_p&quot;, ())
 
-# Include all tau field components in problem
-variables = [u.components[1], u.components[2], p,
-             tau_u1.components[1], tau_u1.components[2],
-             tau_u2.components[1], tau_u2.components[2]]
-problem = IVP(variables)
+# Pass vector fields directly to problem
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 
 # Add substitutions
 add_substitution!(problem, &quot;nu&quot;, nu)
 
-# Momentum equations using vector notation
-add_equation!(problem, &quot;∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x)&quot;)
-add_equation!(problem, &quot;∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u⋅∇(u_z)&quot;)
+# Momentum equation (single vector equation)
+add_equation!(problem, &quot;∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)&quot;)
 
 # Continuity with pressure gauge tau
 add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
 
-# No-slip boundary conditions
-add_bc!(problem, &quot;u_x(z=0) = 0&quot;)   # No-slip bottom
-add_bc!(problem, &quot;u_z(z=0) = 0&quot;)
-add_bc!(problem, &quot;u_x(z=1) = 0&quot;)   # No-slip top
-add_bc!(problem, &quot;u_z(z=1) = 0&quot;)</code></pre><h2 id="Neumann-Boundary-Conditions"><a class="docs-heading-anchor" href="#Neumann-Boundary-Conditions">Neumann Boundary Conditions</a><a id="Neumann-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-Boundary-Conditions" title="Permalink"></a></h2><p>Specify the derivative (flux) at the boundary.</p><h3 id="Basic-Setup-2"><a class="docs-heading-anchor" href="#Basic-Setup-2">Basic Setup</a><a class="docs-heading-anchor-permalink" href="#Basic-Setup-2" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Tau fields for Neumann BCs
+# No-slip boundary conditions (vector notation)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)   # No-slip bottom (all components)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)   # No-slip top (all components)</code></pre><h2 id="Neumann-Boundary-Conditions"><a class="docs-heading-anchor" href="#Neumann-Boundary-Conditions">Neumann Boundary Conditions</a><a id="Neumann-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-Boundary-Conditions" title="Permalink"></a></h2><p>Specify the derivative (flux) at the boundary.</p><h3 id="Basic-Setup-2"><a class="docs-heading-anchor" href="#Basic-Setup-2">Basic Setup</a><a class="docs-heading-anchor-permalink" href="#Basic-Setup-2" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Tau fields for Neumann BCs
 tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))
 tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))
 
