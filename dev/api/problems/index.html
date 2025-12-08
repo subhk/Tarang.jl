@@ -67,21 +67,17 @@ Ra = problem.parameters[&quot;Ra&quot;]
 for (name, value) in problem.parameters
     println(&quot;$name = $value&quot;)
 end</code></pre><hr/><h2 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h2><h3 id="add*dirichlet*bc!"><a class="docs-heading-anchor" href="#add*dirichlet*bc!">add<em>dirichlet</em>bc!</a><a id="add*dirichlet*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*dirichlet*bc!" title="Permalink"></a></h3><p>Add Dirichlet (fixed value) boundary condition.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_dirichlet_bc!(problem, field_name, coord_name, position, value)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: Problem object</li><li><code>field_name</code>: Name of field (String)</li><li><code>coord_name</code>: Coordinate direction (String)</li><li><code>position</code>: Location (Float64)</li><li><code>value</code>: Boundary value (Float64, String expression, or Function)</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Constant value
-add_dirichlet_bc!(problem, &quot;T&quot;, &quot;z&quot;, 0.0, 1.0)  # T(z=0) = 1
-add_dirichlet_bc!(problem, &quot;T&quot;, &quot;z&quot;, 1.0, 0.0)  # T(z=1) = 0
+add_dirichlet_bc!(problem, &quot;T(z=0) = 1&quot;)
+add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)
 
 # No-slip velocity
-add_dirichlet_bc!(problem, &quot;u&quot;, &quot;z&quot;, 0.0, 0.0)  # u(z=0) = 0
+add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
 
 # Time-dependent
-add_dirichlet_bc!(problem, &quot;u&quot;, &quot;x&quot;, 0.0, &quot;sin(omega*t)&quot;)
+add_dirichlet_bc!(problem, &quot;u(x=0) = sin(omega*t)&quot;)
 
 # Space-dependent
-add_dirichlet_bc!(problem, &quot;T&quot;, &quot;z&quot;, 0.0, &quot;1.0 - x^2&quot;)
-
-# Function
-bc_func(x, y, t) = sin(2π*x) * cos(omega*t)
-add_dirichlet_bc!(problem, &quot;u&quot;, &quot;z&quot;, 0.0, bc_func)</code></pre><hr/><h3 id="add*neumann*bc!"><a class="docs-heading-anchor" href="#add*neumann*bc!">add<em>neumann</em>bc!</a><a id="add*neumann*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*neumann*bc!" title="Permalink"></a></h3><p>Add Neumann (fixed derivative) boundary condition.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, field_name, coord_name, position, value)</code></pre><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, &quot;d&lt;coord&gt;(field)(coord=pos) = value&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Insulating boundary (zero heat flux)
+add_dirichlet_bc!(problem, &quot;T(z=0) = 1.0 - x^2&quot;)</code></pre><hr/><h3 id="add*neumann*bc!"><a class="docs-heading-anchor" href="#add*neumann*bc!">add<em>neumann</em>bc!</a><a id="add*neumann*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*neumann*bc!" title="Permalink"></a></h3><p>Add Neumann (fixed derivative) boundary condition.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, field_name, coord_name, position, value)</code></pre><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, &quot;d&lt;coord&gt;(field)(coord=pos) = value&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Insulating boundary (zero heat flux)
 add_neumann_bc!(problem, &quot;dz(T)(z=0) = 0&quot;)  # dT/dz(z=0) = 0
 
 # Fixed flux
@@ -140,8 +136,8 @@ add_equation!(problem, &quot;dt(v) = -u*dx(v) - v*dz(v) - dz(p) + nu*lap(v)&quot
 add_equation!(problem, &quot;dx(u) + dz(v) = 0&quot;)
 
 # Add boundary conditions
-add_dirichlet_bc!(problem, &quot;u&quot;, &quot;z&quot;, 0.0, 0.0)
-add_dirichlet_bc!(problem, &quot;v&quot;, &quot;z&quot;, 0.0, 0.0)
+add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_dirichlet_bc!(problem, &quot;v(z=0) = 0&quot;)
 # ... more BCs
 
 # Validate
@@ -192,13 +188,13 @@ add_equation!(problem, &quot;dx(u) + dz(w) = 0&quot;)
 add_equation!(problem, &quot;dt(T) + u*dx(T) + w*dz(T) = lap(T)&quot;)
 
 # Boundary conditions
-add_dirichlet_bc!(problem, &quot;u&quot;, &quot;z&quot;, 0.0, 0.0)
-add_dirichlet_bc!(problem, &quot;w&quot;, &quot;z&quot;, 0.0, 0.0)
-add_dirichlet_bc!(problem, &quot;T&quot;, &quot;z&quot;, 0.0, 1.0)
+add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_dirichlet_bc!(problem, &quot;w(z=0) = 0&quot;)
+add_dirichlet_bc!(problem, &quot;T(z=0) = 1&quot;)
 
-add_dirichlet_bc!(problem, &quot;u&quot;, &quot;z&quot;, 1.0, 0.0)
-add_dirichlet_bc!(problem, &quot;w&quot;, &quot;z&quot;, 1.0, 0.0)
-add_dirichlet_bc!(problem, &quot;T&quot;, &quot;z&quot;, 1.0, 0.0)
+add_dirichlet_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_dirichlet_bc!(problem, &quot;w(z=1) = 0&quot;)
+add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)
 
 # Validate
-validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 07:18">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 07:19">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
