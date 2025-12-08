@@ -94,14 +94,14 @@ function main()
     # Continuity: div(u) + tau_p = 0
     Tarang.add_equation!(problem, "div(u) + tau_p = 0")
 
-    # Buoyancy: dt(b) - kappa*lap(b) + lift(tau_b2) = -u.grad(b)
-    Tarang.add_equation!(problem, "dt(b) - kappa*lap(b) + lift(tau_b2) = -u@grad(b)")
+    # Buoyancy: ∂ₜ(b) - κ∇²(b) + lift(τ_b2) = -u⋅∇(b)
+    Tarang.add_equation!(problem, "∂ₜ(b) - kappa*Δ(b) + lift(tau_b2) = -u@∇(b)")
 
-    # Momentum x: dt(ux) - nu*lap(ux) + dx(p) + lift(tau_u2_x) = -u.grad(ux)
-    Tarang.add_equation!(problem, "dt(u_x) - nu*lap(u_x) + dx(p) + lift(tau_u2_x) = -u@grad(u_x)")
+    # Momentum x: ∂ₜ(ux) - ν∇²(ux) + ∂x(p) + lift(τ_u2_x) = -u⋅∇(ux)
+    Tarang.add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)")
 
-    # Momentum z: dt(uz) - nu*lap(uz) + dz(p) - b + lift(tau_u2_z) = -u.grad(uz)
-    Tarang.add_equation!(problem, "dt(u_z) - nu*lap(u_z) + dz(p) - b + lift(tau_u2_z) = -u@grad(u_z)")
+    # Momentum z: ∂ₜ(uz) - ν∇²(uz) + ∂z(p) - b + lift(τ_u2_z) = -u⋅∇(uz)
+    Tarang.add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) - b + lift(tau_u2_z) = -u@∇(u_z)")
 
     # Boundary conditions
     Tarang.add_bc!(problem, "b(z=0) = Lz")      # Hot bottom

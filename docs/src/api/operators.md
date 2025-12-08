@@ -7,7 +7,7 @@ Operators compute derivatives and other mathematical operations on fields. Taran
 Tarang.jl supports:
 - **Differential operators**: grad (∇), div, curl, lap (Δ, ∇²)
 - **Coordinate derivatives**: dx, dy, dz, dr, etc.
-- **Time derivatives**: dt
+- **Time derivatives**: dt (∂ₜ)
 - **Field operations**: dot (⋅), cross (×)
 - **Custom operators**: User-defined operations
 
@@ -19,6 +19,7 @@ Tarang.jl supports Unicode mathematical symbols for more readable code:
 |-------|---------|-------------|
 | `grad(f)` | `∇(f)` | Gradient |
 | `lap(f)` | `Δ(f)` or `∇²(f)` | Laplacian |
+| `dt(f)` | `∂ₜ(f)` | Time derivative |
 | `dot(u, v)` | `u ⋅ v` | Dot product |
 | `cross(u, v)` | `u × v` | Cross product |
 
@@ -28,12 +29,13 @@ Tarang.jl supports Unicode mathematical symbols for more readable code:
 add_equation!(problem, "dt(u) + dot(u, grad(u)) = -grad(p) + nu*lap(u)")
 
 # With Unicode (more readable)
-add_equation!(problem, "dt(u) + u⋅∇(u) = -∇(p) + nu*Δ(u)")
+add_equation!(problem, "∂ₜ(u) + u⋅∇(u) = -∇(p) + nu*Δ(u)")
 ```
 
 **Typing Unicode in Julia**:
 - `∇` : Type `\nabla` then press Tab
 - `Δ` : Type `\Delta` then press Tab
+- `∂ₜ` : Type `\partial` Tab `\_t` Tab
 - `⋅` : Type `\cdot` then press Tab
 - `×` : Type `\times` then press Tab
 
@@ -74,7 +76,7 @@ coords = CartesianCoordinates("x", "z")
 problem = IVP([u, w, p])
 
 # Pressure gradient in momentum equation
-add_equation!(problem, "dt(u) = -grad(p)")
+add_equation!(problem, "∂ₜ(u) = -∇(p)")
 
 # Expands to:
 # dt(u_x) = -dx(p)
@@ -83,7 +85,7 @@ add_equation!(problem, "dt(u) = -grad(p)")
 
 ```julia
 # 3D gradient with custom usage
-∇T = grad(T)  # Returns VectorField
+∇T = ∇(T)  # Returns VectorField
 # Components: ∇T.components[1] = dx(T), etc.
 ```
 
@@ -184,10 +186,10 @@ Computes the Laplacian (second derivative) of a field.
 **Syntax**:
 ```julia
 # In equations
-add_equation!(problem, "dt(T) = kappa*lap(T)")
+add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 
 # Programmatic
-∇²T = lap(T)
+∇²T = Δ(T)
 ```
 
 **Definitions**:
@@ -206,18 +208,18 @@ add_equation!(problem, "dt(T) = kappa*lap(T)")
 
 ```julia
 # Diffusion equation
-add_equation!(problem, "dt(T) = kappa*lap(T)")
+add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 ```
 
 ```julia
 # Viscous term in Navier-Stokes
-add_equation!(problem, "dt(u) = nu*lap(u) - grad(p)")
+add_equation!(problem, "∂ₜ(u) = nu*Δ(u) - ∇(p)")
 ```
 
 ```julia
 # Poisson equation (BVP)
 problem = LBVP([phi])
-add_equation!(problem, "lap(phi) = rho")
+add_equation!(problem, "Δ(phi) = rho")
 ```
 
 **Works on**: ScalarField, VectorField (applies componentwise)
@@ -244,7 +246,7 @@ dphi(field)    # ∂/∂φ
 
 ```julia
 # Advection term
-add_equation!(problem, "dt(T) = -u*dx(T) - w*dz(T)")
+add_equation!(problem, "∂ₜ(T) = -u*dx(T) - w*dz(T)")
 ```
 
 ```julia
@@ -292,28 +294,29 @@ add_equation!(problem, "dx(dx(dx(dx(psi)))) + 2*dx(dx(dz(dz(psi)))) + dz(dz(dz(d
 
 ```julia
 # Hyperdiffusion (for numerical stability)
-add_equation!(problem, "dt(T) = -nu4*lap(lap(T))")
+add_equation!(problem, "∂ₜ(T) = -nu4*Δ(Δ(T))")
 ```
 
 ---
 
 ## Time Derivatives
 
-### dt Operator
+### dt / ∂ₜ Operator
 
 Time derivative for initial value problems.
 
 **Syntax**:
 ```julia
-dt(field)
+dt(field)   # ASCII
+∂ₜ(field)   # Unicode (type \partial Tab \_t Tab)
 ```
 
 **Examples**:
 
 ```julia
 # Evolution equations
-add_equation!(problem, "dt(u) = -u*dx(u) + nu*lap(u)")
-add_equation!(problem, "dt(T) = -u*dx(T) + kappa*lap(T)")
+add_equation!(problem, "∂ₜ(u) = -u*dx(u) + nu*Δ(u)")
+add_equation!(problem, "∂ₜ(T) = -u*dx(T) + kappa*Δ(T)")
 ```
 
 **Note**: Only use in IVP (Initial Value Problems). Not valid for BVP or EVP.
@@ -338,10 +341,10 @@ dot_product(u, grad(T))
 ```julia
 # Advection: -u·∇T
 # 2D:
-add_equation!(problem, "dt(T) = -u*dx(T) - w*dz(T)")
+add_equation!(problem, "∂ₜ(T) = -u*dx(T) - w*dz(T)")
 
 # 3D:
-add_equation!(problem, "dt(T) = -u*dx(T) - v*dy(T) - w*dz(T)")
+add_equation!(problem, "∂ₜ(T) = -u*dx(T) - v*dy(T) - w*dz(T)")
 ```
 
 ---
@@ -381,7 +384,7 @@ Combine operators for complex expressions.
 # For vector field u
 # ∇²u = (∇²u_x, ∇²u_y, ∇²u_z)
 
-add_equation!(problem, "dt(u) = nu*lap(u)")
+add_equation!(problem, "∂ₜ(u) = nu*Δ(u)")
 # Automatically applies componentwise
 ```
 
@@ -391,8 +394,8 @@ add_equation!(problem, "dt(u) = nu*lap(u)")
 # u·∇u (nonlinear advection)
 
 # 2D:
-add_equation!(problem, "dt(u) = -u*dx(u) - w*dz(u)")
-add_equation!(problem, "dt(w) = -u*dx(w) - w*dz(w)")
+add_equation!(problem, "∂ₜ(u) = -u*dx(u) - w*dz(u)")
+add_equation!(problem, "∂ₜ(w) = -u*dx(w) - w*dz(w)")
 
 # Helper function
 function advection_term(u, field)
@@ -433,7 +436,7 @@ All operators are linear:
 
 ```julia
 # ∇(αf + βg) = α∇f + β∇g
-grad(alpha*f + beta*g) == alpha*grad(f) + beta*grad(g)
+∇(alpha*f + beta*g) == alpha*∇(f) + beta*∇(g)
 ```
 
 ### Commutativity
@@ -449,7 +452,7 @@ dx(dz(f)) == dz(dx(f))
 
 ```julia
 # ∇(fg) = f∇g + g∇f
-grad(f*g) == f*grad(g) + g*grad(f)
+∇(f*g) == f*∇(g) + g*∇(f)
 ```
 
 ---
@@ -462,12 +465,12 @@ grad(f*g) == f*grad(g) + g*grad(f)
 # Define helper function
 function my_operator(field, param)
     # Custom operation
-    result = dx(field) + param * lap(field)
+    result = dx(field) + param * Δ(field)
     return result
 end
 
 # Use in equations
-add_equation!(problem, "dt(T) = my_operator(T, kappa)")
+add_equation!(problem, "∂ₜ(T) = my_operator(T, kappa)")
 ```
 
 ### Registered Custom Operators
@@ -481,12 +484,12 @@ function register_operator!(problem, name, func)
 end
 
 # Example: Stokes operator
-stokes(u, nu) = -nu*lap(u) + grad(p)
+stokes(u, nu) = -nu*Δ(u) + ∇(p)
 
 register_operator!(problem, "stokes", stokes)
 
 # Use in equations
-add_equation!(problem, "dt(u) = stokes(u, nu)")
+add_equation!(problem, "∂ₜ(u) = stokes(u, nu)")
 ```
 
 ---
@@ -499,7 +502,7 @@ Tarang.jl parses equation strings into operator applications:
 
 ```julia
 # String equation
-add_equation!(problem, "dt(u) + u*dx(u) = nu*lap(u) - dx(p)")
+add_equation!(problem, "∂ₜ(u) + u*dx(u) = nu*Δ(u) - dx(p)")
 
 # Parsed as:
 # LHS: dt(u) + u*dx(u)
@@ -520,7 +523,7 @@ Operators are evaluated in spectral space when possible:
 
 ```julia
 # dx(u): Multiply by ik in Fourier space
-# lap(u): Multiply by -k² in Fourier space
+# Δ(u): Multiply by -k² in Fourier space
 # Nonlinear terms: Transform to grid space, evaluate, transform back
 ```
 
@@ -532,7 +535,7 @@ Operators are evaluated in spectral space when possible:
 
 ```julia
 # Bad: Multiple transforms
-add_equation!(problem, "dt(T) = -u*dx(T)")  # Transforms for each term
+add_equation!(problem, "∂ₜ(T) = -u*dx(T)")  # Transforms for each term
 
 # Better: Group operations
 # Tarang automatically optimizes transform grouping

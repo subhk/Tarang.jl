@@ -64,9 +64,9 @@ T = ScalarField(dist, "T", (x, z))          # temperature
 
 # 4) Problem definition (IVP)
 problem = IVP([u.components[1], u.components[2], p, T])
-add_equation!(problem, "dt(u) - Pr*lap(u) + grad(p) = -u*grad(u) + Ra*Pr*T*ez")
+add_equation!(problem, "∂ₜ(u) - Pr*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*Pr*T*ez")
 add_equation!(problem, "div(u) = 0")
-add_equation!(problem, "dt(T) - lap(T) = -u*grad(T)")
+add_equation!(problem, "∂ₜ(T) - Δ(T) = -u⋅∇(T)")
 problem.parameters["Pr"] = 1.0
 problem.parameters["Ra"] = 1e5
 

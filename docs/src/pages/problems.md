@@ -15,8 +15,8 @@ using Tarang
 problem = IVP([u, v, p, T])
 
 # Add evolution equations
-add_equation!(problem, "dt(u) = -u*dx(u) + nu*lap(u)")
-add_equation!(problem, "dt(T) = -u*dx(T) + kappa*lap(T)")
+add_equation!(problem, "∂ₜ(u) = -u*dx(u) + nu*Δ(u)")
+add_equation!(problem, "∂ₜ(T) = -u*dx(T) + kappa*Δ(T)")
 ```
 
 ### LBVP - Linear Boundary Value Problem
@@ -28,7 +28,7 @@ Steady-state linear PDEs.
 problem = LBVP([phi])
 
 # Add equations
-add_equation!(problem, "lap(phi) = rho")
+add_equation!(problem, "Δ(phi) = rho")
 ```
 
 ### NLBVP - Nonlinear Boundary Value Problem
@@ -40,7 +40,7 @@ Steady-state nonlinear PDEs.
 problem = NLBVP([u, p])
 
 # Add nonlinear equations
-add_equation!(problem, "u*dx(u) + dx(p) = nu*lap(u)")
+add_equation!(problem, "u*dx(u) + dx(p) = nu*Δ(u)")
 ```
 
 ### EVP - Eigenvalue Problem
@@ -52,7 +52,7 @@ Linear stability and eigenvalue analysis.
 evp = EVP([u_hat, p_hat]; eigenvalue=:sigma)
 
 # Add eigenvalue equations
-add_equation!(evp, "sigma*u_hat = lap(u_hat)")
+add_equation!(evp, "sigma*u_hat = Δ(u_hat)")
 ```
 
 ## Adding Equations
@@ -61,15 +61,15 @@ add_equation!(evp, "sigma*u_hat = lap(u_hat)")
 
 ```julia
 # Format: "LHS = RHS"
-add_equation!(problem, "dt(u) = rhs_expression")
+add_equation!(problem, "∂ₜ(u) = rhs_expression")
 
 # Multiple terms
-add_equation!(problem, "dt(u) + u*dx(u) = nu*lap(u) - dx(p)")
+add_equation!(problem, "∂ₜ(u) + u*dx(u) = nu*Δ(u) - dx(p)")
 ```
 
 ### Supported Operations
 
-- Derivatives: `dx`, `dy`, `dz`, `dt`, `lap`, `grad`, `div`, `curl`
+- Derivatives: `dx`, `dy`, `dz`, `dt`/`∂ₜ`, `lap`/`Δ`, `grad`/`∇`, `div`, `curl`
 - Arithmetic: `+`, `-`, `*`, `/`
 - Functions: `sin`, `cos`, `exp`, `sqrt`
 - Parameters: Any name in `problem.parameters`
@@ -83,8 +83,8 @@ problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
 # Use in equations
-add_equation!(problem, "dt(u) = nu*lap(u)")
-add_equation!(problem, "dt(T) = Ra*Pr*w + lap(T)")
+add_equation!(problem, "∂ₜ(u) = nu*Δ(u)")
+add_equation!(problem, "∂ₜ(T) = Ra*Pr*w + Δ(T)")
 ```
 
 ## Boundary Conditions
@@ -144,7 +144,7 @@ is_valid = validate_problem(problem)
 ```julia
 problem = IVP([T])
 problem.parameters["kappa"] = 0.01
-add_equation!(problem, "dt(T) = kappa*lap(T)")
+add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 add_dirichlet_bc!(problem, "T(z=0) = 1")
 add_dirichlet_bc!(problem, "T(z=1) = 0")
 ```
@@ -156,8 +156,8 @@ problem = IVP([ux, uz, p])
 problem.parameters["nu"] = 0.01
 
 # Momentum
-add_equation!(problem, "dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = nu*lap(ux)")
-add_equation!(problem, "dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = nu*lap(uz)")
+add_equation!(problem, "∂ₜ(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = nu*Δ(ux)")
+add_equation!(problem, "∂ₜ(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = nu*Δ(uz)")
 
 # Continuity
 add_equation!(problem, "dx(ux) + dz(uz) = 0")
@@ -176,10 +176,10 @@ problem = IVP([ux, uz, p, T])
 problem.parameters["Ra"] = 1e6
 problem.parameters["Pr"] = 1.0
 
-add_equation!(problem, "dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = Pr*lap(ux)")
-add_equation!(problem, "dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = Pr*lap(uz) + Ra*Pr*T")
+add_equation!(problem, "∂ₜ(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = Pr*Δ(ux)")
+add_equation!(problem, "∂ₜ(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = Pr*Δ(uz) + Ra*Pr*T")
 add_equation!(problem, "dx(ux) + dz(uz) = 0")
-add_equation!(problem, "dt(T) + ux*dx(T) + uz*dz(T) = lap(T)")
+add_equation!(problem, "∂ₜ(T) + ux*dx(T) + uz*dz(T) = Δ(T)")
 
 # Boundary conditions
 add_dirichlet_bc!(problem, "ux(z=0) = 0")
@@ -194,7 +194,7 @@ add_dirichlet_bc!(problem, "T(z=1) = 0")  # Cold top
 
 ```julia
 problem = LBVP([phi])
-add_equation!(problem, "lap(phi) = rho")
+add_equation!(problem, "Δ(phi) = rho")
 add_dirichlet_bc!(problem, "phi(z=0) = 0")
 add_dirichlet_bc!(problem, "phi(z=1) = 0")
 ```

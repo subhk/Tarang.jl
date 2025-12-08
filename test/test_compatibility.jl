@@ -14,7 +14,7 @@ end
     u_lbvp = ScalarField(dist, "u", (basis,), Float64)
 
     lbvp = Tarang.LBVP([u_lbvp])
-    Tarang.add_equation!(lbvp, "lap(u) = 0")
+    Tarang.add_equation!(lbvp, "Δ(u) = 0")
     Tarang.add_dirichlet_bc!(lbvp, "u(z=0) = 0")
     Tarang.add_neumann_bc!(lbvp, "dz(u)(z=1) = 1")
     Tarang.add_robin_bc!(lbvp, "1.0*u(z=0) + 2.0*dz(u)(z=0) = 0.5")
@@ -31,7 +31,7 @@ end
 
     u_evp = ScalarField(dist, "u_evp", (basis,), Float64)
     evp = Tarang.EVP([u_evp]; eigenvalue=:sigma)
-    Tarang.add_equation!(evp, "sigma*u_evp = lap(u_evp)")
+    Tarang.add_equation!(evp, "sigma*u_evp = Δ(u_evp)")
     @test Tarang.validate_problem(evp)
 end
 
