@@ -386,6 +386,25 @@ while solver.sim_time < t_end
 end
 ```
 
+### Exponential Time Differencing (ETD)
+
+```julia
+using LinearAlgebra
+
+# For Fourier-based problems with diagonal L
+# Build the linear operator matrix
+L_matrix = build_diffusion_operator(domain)  # Diagonal in spectral space
+problem.parameters["L_matrix"] = L_matrix
+
+# ETD solver - no stability limit from stiff linear terms!
+solver = InitialValueSolver(problem, ETD_RK222(); dt=0.1)
+
+# Can use much larger timesteps when L is very stiff
+while solver.sim_time < t_end
+    step!(solver)
+end
+```
+
 ## Stochastic Forcing
 
 For turbulence simulations requiring external energy injection, see [Stochastic Forcing](stochastic_forcing.md).
