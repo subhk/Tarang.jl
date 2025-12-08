@@ -325,26 +325,25 @@ add_equation!(problem, "∂ₜ(T) = -u*dx(T) + kappa*Δ(T)")
 
 ## Vector Operations
 
-### Dot Product
+### Dot Product / Advection
 
 **Syntax**:
 ```julia
-# In equations (use component form)
-add_equation!(problem, "dt(T) = -(u*dx(T) + v*dy(T) + w*dz(T))")
+# In equations - use vector notation directly
+add_equation!(problem, "∂ₜ(T) = -u⋅∇(T)")
 
-# Or use helper
-dot_product(u, grad(T))
+# For vector advection (nonlinear term)
+add_equation!(problem, "∂ₜ(u) = -u⋅∇(u)")
 ```
 
 **Example**:
 
 ```julia
-# Advection: -u·∇T
-# 2D:
-add_equation!(problem, "∂ₜ(T) = -u*dx(T) - w*dz(T)")
+# Scalar advection: -u·∇T
+add_equation!(problem, "∂ₜ(T) = -u⋅∇(T)")
 
-# 3D:
-add_equation!(problem, "∂ₜ(T) = -u*dx(T) - v*dy(T) - w*dz(T)")
+# Vector advection (Navier-Stokes nonlinear term)
+add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
 ```
 
 ---
@@ -391,21 +390,16 @@ add_equation!(problem, "∂ₜ(u) = nu*Δ(u)")
 ### Advection Operator
 
 ```julia
-# u·∇u (nonlinear advection)
+# u·∇u (nonlinear advection) - use vector notation directly
 
-# 2D:
-add_equation!(problem, "∂ₜ(u) = -u*dx(u) - w*dz(u)")
-add_equation!(problem, "∂ₜ(w) = -u*dx(w) - w*dz(w)")
+# Navier-Stokes momentum equation:
+add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
 
-# Helper function
-function advection_term(u, field)
-    # Returns u·∇field
-    result = u.components[1] * dx(field)
-    for i in 2:length(u.components)
-        result += u.components[i] * d[i](field)
-    end
-    return result
-end
+# Scalar advection:
+add_equation!(problem, "∂ₜ(T) - kappa*Δ(T) = -u⋅∇(T)")
+
+# With buoyancy (Boussinesq):
+add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*T*ez")
 ```
 
 ### Strain Rate Tensor

@@ -90,26 +90,22 @@ function main()
     Tarang.add_substitution!(problem, "nu", nu)
     Tarang.add_substitution!(problem, "Lz", Lz)
 
-    # Equations (following first-order formulation)
-    # Continuity: div(u) + tau_p = 0
+    # Equations (following first-order formulation with vector notation)
+    # Continuity: ∇⋅u = 0
     Tarang.add_equation!(problem, "div(u) + tau_p = 0")
 
-    # Buoyancy: ∂ₜ(b) - κ∇²(b) + lift(τ_b2) = -u⋅∇(b)
+    # Buoyancy: ∂b/∂t - κ∇²b = -u⋅∇b
     Tarang.add_equation!(problem, "∂ₜ(b) - kappa*Δ(b) + lift(tau_b2) = -u⋅∇(b)")
 
-    # Momentum x: ∂ₜ(ux) - ν∇²(ux) + ∂x(p) + lift(τ_u2_x) = -u⋅∇(ux)
-    Tarang.add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x)")
-
-    # Momentum z: ∂ₜ(uz) - ν∇²(uz) + ∂z(p) - b + lift(τ_u2_z) = -u⋅∇(uz)
-    Tarang.add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) - b + lift(tau_u2_z) = -u⋅∇(u_z)")
+    # Momentum (vector form): ∂u/∂t - ν∇²u + ∇p = -u⋅∇u + b*ez
+    # ez is the unit vector in z-direction (buoyancy acts vertically)
+    Tarang.add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + b*ez")
 
     # Boundary conditions
     Tarang.add_bc!(problem, "b(z=0) = Lz")      # Hot bottom
     Tarang.add_bc!(problem, "b(z=Lz) = 0")      # Cold top
-    Tarang.add_bc!(problem, "u_x(z=0) = 0")     # No-slip bottom
-    Tarang.add_bc!(problem, "u_z(z=0) = 0")
-    Tarang.add_bc!(problem, "u_x(z=Lz) = 0")    # No-slip top
-    Tarang.add_bc!(problem, "u_z(z=Lz) = 0")
+    Tarang.add_bc!(problem, "u(z=0) = 0")       # No-slip bottom (vector notation)
+    Tarang.add_bc!(problem, "u(z=Lz) = 0")      # No-slip top (vector notation)
     Tarang.add_bc!(problem, "integ(p) = 0")     # Pressure gauge
 
     # Solver

@@ -268,18 +268,15 @@ problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 add_substitution!(problem, "nu", nu)
 add_substitution!(problem, "dpdx", dpdx)
 
-# Momentum equations with lift terms (Dedalus-style string format)
-add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x) - dpdx")
-add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u⋅∇(u_z)")
+# Momentum equation (vector form) - dpdx is the driving pressure gradient
+add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) - dpdx*ex")
 
 # Continuity with pressure gauge
 add_equation!(problem, "div(u) + tau_p = 0")
 
-# No-slip at both walls
-add_bc!(problem, "u_x(z=0) = 0")
-add_bc!(problem, "u_z(z=0) = 0")
-add_bc!(problem, "u_x(z=1) = 0")
-add_bc!(problem, "u_z(z=1) = 0")
+# No-slip at both walls (vector notation)
+add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "u(z=1) = 0")
 
 # Pressure gauge (integral constraint)
 add_bc!(problem, "integ(p) = 0")
@@ -322,9 +319,9 @@ problem = IVP([u, p, T, tau_u1, tau_u2, tau_T1, tau_T2, tau_p])
 add_substitution!(problem, "Ra", Ra)
 add_substitution!(problem, "Pr", Pr)
 
-# Momentum equations (Dedalus-style string format)
-add_equation!(problem, "∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x)")
-add_equation!(problem, "∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u⋅∇(u_z)")
+# Momentum equation (vector form with buoyancy)
+# ez is the unit vector in z-direction
+add_equation!(problem, "∂ₜ(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez")
 
 # Continuity with pressure gauge
 add_equation!(problem, "div(u) + tau_p = 0")
@@ -332,12 +329,9 @@ add_equation!(problem, "div(u) + tau_p = 0")
 # Temperature equation
 add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)")
 
-# Boundary conditions
-# No-slip walls
-add_bc!(problem, "u_x(z=0) = 0")
-add_bc!(problem, "u_z(z=0) = 0")
-add_bc!(problem, "u_x(z=1) = 0")
-add_bc!(problem, "u_z(z=1) = 0")
+# Boundary conditions (vector notation for velocity)
+add_bc!(problem, "u(z=0) = 0")   # No-slip bottom
+add_bc!(problem, "u(z=1) = 0")   # No-slip top
 
 # Fixed temperature
 add_bc!(problem, "T(z=0) = 1")   # Hot bottom
