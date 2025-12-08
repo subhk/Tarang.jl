@@ -51,9 +51,9 @@ L = 2π
 N = 128  # 128^3 grid points
 
 # Fourier bases for all directions
-x_basis = RealFourier(coords["x"], size=N, bounds=(0.0, L), dealias=2/3)
-y_basis = RealFourier(coords["y"], size=N, bounds=(0.0, L), dealias=2/3)
-z_basis = RealFourier(coords["z"], size=N, bounds=(0.0, L), dealias=2/3)
+x_basis = RealFourier(coords["x"]; size=N, bounds=(0.0, L), dealias=2/3)
+y_basis = RealFourier(coords["y"]; size=N, bounds=(0.0, L), dealias=2/3)
+z_basis = RealFourier(coords["z"]; size=N, bounds=(0.0, L), dealias=2/3)
 
 domain = Domain(dist, (x_basis, y_basis, z_basis))
 ```
@@ -69,30 +69,34 @@ domain = Domain(dist, (x_basis, y_basis, z_basis))
 ```julia
 # Velocity field (3 components)
 u = VectorField(dist, coords, "u", (x_basis, y_basis, z_basis))
-ux, uy, uz = u.components
 
 # Pressure field
 p = ScalarField(dist, "p", (x_basis, y_basis, z_basis))
 
-# Problem definition
-problem = IVP([ux, uy, uz, p])
+# Problem definition (use the vector field directly)
+problem = IVP([u, p])
 
 # Parameters
 Re = 1000.0  # Reynolds number (based on domain scale)
 nu = 1.0 / Re
-problem.parameters["nu"] = nu
 
-# Momentum equations (x, y, z components)
-add_equation!(problem,
-    "dt(ux) + ux*dx(ux) + uy*dy(ux) + uz*dz(ux) + dx(p) = nu*lap(ux)")
-add_equation!(problem,
-    "dt(uy) + ux*dx(uy) + uy*dy(uy) + uz*dz(uy) + dy(p) = nu*lap(uy)")
-add_equation!(problem,
-    "dt(uz) + ux*dx(uz) + uy*dy(uz) + uz*dz(uz) + dz(p) = nu*lap(uz)")
+# Add parameter substitutions (Dedalus-style)
+add_substitution!(problem, "nu", nu)
+
+# Momentum equation (single vector equation)
+add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
 
 # Continuity equation
-add_equation!(problem, "dx(ux) + dy(uy) + dz(uz) = 0")
+add_equation!(problem, "div(u) = 0")
 ```
+
+!!! note "Vector Equation Syntax"
+    Tarang.jl uses Dedalus-style string equations with full vector support:
+    - `∂ₜ(u)` - time derivative of vector field
+    - `Δ(u)` - Laplacian of vector field (component-wise)
+    - `∇(p)` - gradient of scalar (returns vector)
+    - `div(u)` - divergence of vector (returns scalar)
+    - `u⋅∇(u)` - advection term (u·∇)u
 
 ## Initial Conditions
 

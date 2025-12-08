@@ -46,10 +46,10 @@ The Boussinesq equations for thermal convection:
 
 ```julia
 # Periodic horizontal direction → Fourier
-x_basis = RealFourier(coords["x"], size=256, bounds=(0.0, 4.0))
+x_basis = RealFourier(coords["x"]; size=256, bounds=(0.0, 4.0))
 
 # Bounded vertical direction → Chebyshev
-z_basis = ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))
+z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
 ```
 
 **Resolution guidelines**:
@@ -83,8 +83,8 @@ dist = Distributor(coords, mesh=(2, 2))
 
 # Spectral bases
 Nx, Nz = 256, 64
-x_basis = RealFourier(coords["x"], size=Nx, bounds=(0.0, Lx))
-z_basis = ChebyshevT(coords["z"], size=Nz, bounds=(0.0, H))
+x_basis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx))
+z_basis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, H))
 
 domain = Domain(dist, (x_basis, z_basis))
 ```
@@ -127,32 +127,24 @@ tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), dtype)  # Velocity at z
 ### Problem Definition
 
 ```julia
-# Collect all state variables (including tau field components)
-variables = [p, T,
-             u.components[1], u.components[2],  # ux, uz
-             tau_p, tau_T1, tau_T2,
-             tau_u1.components[1], tau_u1.components[2],
-             tau_u2.components[1], tau_u2.components[2]]
-
-problem = IVP(variables)
+# Collect all state variables (vector fields passed directly)
+problem = IVP([u, p, T, tau_u1, tau_u2, tau_p, tau_T1, tau_T2])
 
 # Add substitutions for parameters (Dedalus-style)
 add_substitution!(problem, "Ra", Ra)
 add_substitution!(problem, "Pr", Pr)
 add_substitution!(problem, "Lz", H)
 
-# Equations use string format with vector operators (Dedalus-style)
-# Continuity: div(u) = 0
+# Equations use vector notation (Dedalus-style)
+# Continuity: ∇·u = 0
 add_equation!(problem, "div(u) + tau_p = 0")
 
 # Temperature equation: ∂T/∂t - ∇²T = -u·∇T
-add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u@∇(T)")
+add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)")
 
-# Momentum x: ∂ux/∂t - Pr∇²ux + ∂p/∂x = -u·∇ux
-add_equation!(problem, "∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)")
-
-# Momentum z: ∂uz/∂t - Pr∇²uz + ∂p/∂z - Ra*Pr*T = -u·∇uz
-add_equation!(problem, "∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u@∇(u_z)")
+# Momentum (vector equation): ∂u/∂t - Pr∇²u + ∇p = -u·∇u + Ra*Pr*T*ez
+# ez is the unit vector in z-direction (buoyancy acts vertically)
+add_equation!(problem, "∂ₜ(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez")
 ```
 
 ### Boundary Conditions
@@ -164,11 +156,9 @@ No-slip walls (velocity = 0) and fixed temperatures, using Dedalus-style string 
 add_bc!(problem, "T(z=0) = 1")      # Hot bottom
 add_bc!(problem, "T(z=Lz) = 0")     # Cold top
 
-# Velocity BCs (no-slip at both walls)
-add_bc!(problem, "u_x(z=0) = 0")    # No-slip bottom
-add_bc!(problem, "u_z(z=0) = 0")
-add_bc!(problem, "u_x(z=Lz) = 0")   # No-slip top
-add_bc!(problem, "u_z(z=Lz) = 0")
+# Velocity BCs (no-slip at both walls) - vector notation
+add_bc!(problem, "u(z=0) = 0")      # No-slip bottom (sets all components)
+add_bc!(problem, "u(z=Lz) = 0")     # No-slip top
 
 # Pressure gauge (integral constraint)
 add_bc!(problem, "integ(p) = 0")
@@ -177,9 +167,10 @@ add_bc!(problem, "integ(p) = 0")
 !!! note "Equation String Syntax"
     Tarang.jl uses Dedalus-style string equations:
     - Unicode operators: `∂ₜ` (time derivative), `Δ` (Laplacian), `∇` (gradient)
-    - Advection: `u@∇(T)` means u·∇T (dot product)
-    - Vector components: `u_x`, `u_z` access vector field components
-    - Lift operator: `lift(tau_u2_x)` for tau terms
+    - Vector advection: `u⋅∇(u)` for nonlinear term
+    - Scalar advection: `u⋅∇(T)` for temperature advection
+    - Unit vectors: `ex`, `ey`, `ez` for directions (e.g., `Ra*Pr*T*ez` for buoyancy)
+    - Vector BCs: `u(z=0) = 0` sets all velocity components at the boundary
 
 ### Initial Conditions
 
@@ -426,7 +417,7 @@ aspect_ratios = [1.0, 2.0, 4.0, 8.0]
 
 for ar in aspect_ratios
     Lx = ar * H
-    x_basis = RealFourier(coords["x"], size=Int(128*ar), bounds=(0.0, Lx))
+    x_basis = RealFourier(coords["x"]; size=Int(128*ar), bounds=(0.0, Lx))
     # ... run simulation
 end
 ```

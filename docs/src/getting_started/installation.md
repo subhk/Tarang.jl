@@ -157,8 +157,8 @@ end
 coords = CartesianCoordinates("x", "z")
 dist = Distributor(coords, mesh=(2, 2))
 
-x = RealFourier(coords["x"], size=64, bounds=(0.0, 2π))
-z = ChebyshevT(coords["z"], size=32, bounds=(0.0, 1.0))
+x = RealFourier(coords["x"]; size=64, bounds=(0.0, 2π))
+z = ChebyshevT(coords["z"]; size=32, bounds=(0.0, 1.0))
 
 domain = Domain(dist, (x, z))
 

@@ -115,8 +115,8 @@ problem = IVP(variables)
 add_substitution!(problem, "nu", nu)
 
 # Momentum equations using vector notation
-add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)")
-add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u@∇(u_z)")
+add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x)")
+add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u⋅∇(u_z)")
 
 # Continuity with pressure gauge tau
 add_equation!(problem, "div(u) + tau_p = 0")
@@ -273,8 +273,8 @@ add_substitution!(problem, "nu", nu)
 add_substitution!(problem, "dpdx", dpdx)
 
 # Momentum equations with lift terms (Dedalus-style string format)
-add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x) - dpdx")
-add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u@∇(u_z)")
+add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x) - dpdx")
+add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u⋅∇(u_z)")
 
 # Continuity with pressure gauge
 add_equation!(problem, "div(u) + tau_p = 0")
@@ -327,14 +327,14 @@ add_substitution!(problem, "Ra", Ra)
 add_substitution!(problem, "Pr", Pr)
 
 # Momentum equations (Dedalus-style string format)
-add_equation!(problem, "∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)")
-add_equation!(problem, "∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u@∇(u_z)")
+add_equation!(problem, "∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x)")
+add_equation!(problem, "∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u⋅∇(u_z)")
 
 # Continuity with pressure gauge
 add_equation!(problem, "div(u) + tau_p = 0")
 
 # Temperature equation
-add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u@∇(T)")
+add_equation!(problem, "∂ₜ(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)")
 
 # Boundary conditions
 # No-slip walls
