@@ -1810,16 +1810,22 @@ function apply_parallel_chebyshev_forward_2d!(data::AbstractArray, transform::Pa
             resize!(temp_y, Ny)
         end
 
+        # Pre-allocate contiguous buffer for row data (FFTW requires contiguous arrays)
+        y_line_buf = zeros(Ny)
+
         @inbounds for i in 1:Nx_local
-            y_line = view(data_transposed, i, :)
+            # Copy row to contiguous buffer (row views are strided in column-major Julia)
+            for j in 1:Ny
+                y_line_buf[j] = data_transposed[i, j]
+            end
 
-            # Apply DCT
-            mul!(temp_y, plan, y_line)
+            # Apply DCT (requires contiguous input)
+            mul!(temp_y, plan, y_line_buf)
 
-            # Apply scaling with SIMD
-            y_line[1] = temp_y[1] * scale_zero
+            # Apply scaling with SIMD and write back
+            data_transposed[i, 1] = temp_y[1] * scale_zero
             @simd for j in 2:Ny
-                y_line[j] = temp_y[j] * scale_pos
+                data_transposed[i, j] = temp_y[j] * scale_pos
             end
         end
     end
