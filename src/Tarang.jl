@@ -110,7 +110,7 @@ export
 
     # Operators
     grad, div, curl, lap, trace, skew, transpose_components,
-    ∇, Δ, ∇²,  # Unicode aliases: ∇=grad, Δ=lap, ∇²=lap
+    ∇, Δ, ∇², ∂ₜ,  # Unicode aliases: ∇=grad, Δ=lap, ∇²=lap, ∂ₜ=dt
     dot, cross, ⋅, ×,  # Vector operations with Unicode: ⋅=dot, ×=cross
     outer, advective_cfl, cfl,
     interpolate, integrate, average, convert, lift, d, dt,

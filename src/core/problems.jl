@@ -1135,9 +1135,9 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
             func_expr = expr.args[1]
             arg_exprs = expr.args[2:end]
             if func_expr isa Symbol
-                if func_expr == :dt
+                if func_expr == :dt || func_expr == :∂ₜ
                     if isempty(arg_exprs)
-                        throw(ArgumentError("dt requires at least one argument"))
+                        throw(ArgumentError("dt/∂ₜ requires at least one argument"))
                     end
                     field = evaluate_parsed_expression(arg_exprs[1], namespace)
                     order = if length(arg_exprs) >= 2

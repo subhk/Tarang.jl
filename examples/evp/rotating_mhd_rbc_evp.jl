@@ -192,10 +192,10 @@ function setup_mhd_operators_and_equations(
     lift = A -> Lift(A, lift_basis, -1)
     
     # Gradient operators with lifting for first-order formulation
-    grad_u = grad(u) + r_vec ⊗ lift(τ_u1)  # First-order velocity gradient
-    grad_Θ = grad(Θ) + r_vec ⊗ lift(τ_Θ1)  # First-order temperature gradient
-    grad_B = grad(B) + r_vec ⊗ lift(τ_B1)  # First-order magnetic gradient
-    grad_A = grad(A) + r_vec ⊗ lift(τ_A1)  # First-order potential gradient
+    grad_u = ∇(u) + r_vec ⊗ lift(τ_u1)  # First-order velocity gradient
+    grad_Θ = ∇(Θ) + r_vec ⊗ lift(τ_Θ1)  # First-order temperature gradient
+    grad_B = ∇(B) + r_vec ⊗ lift(τ_B1)  # First-order magnetic gradient
+    grad_A = ∇(A) + r_vec ⊗ lift(τ_A1)  # First-order potential gradient
     
     @info "Created first-order differential operators with lifting"
     
@@ -221,7 +221,7 @@ function setup_mhd_operators_and_equations(
     
     # Mean flow advection: U₀·∇u + u·∇U₀ (linearized convection)
     # For azimuthal mean flow U₀ = U₀_φ(r,θ) ê_φ:
-    mean_flow_advection = U0_phi * (1/r) * ∂(u, φ) + u · grad(U0_phi * ê_φ)
+    mean_flow_advection = U0_phi * (1/r) * ∂(u, φ) + u ⋅ ∇(U0_phi * ê_φ)
     
     @info "Created rotation and mean flow operators"
     
@@ -258,24 +258,24 @@ function create_mhd_eigenvalue_problem(
     # 2. Linearized momentum equation:
     #    ∂u/∂t + U₀·∇u + u·∇U₀ = -∇p + Ra*Θ*ê_r + (1/Ek)*coriolis + (1/Ha²)*(∇×B)×B₀ + ν∇²u
     momentum_eq = """
-    dt(u) + mean_flow_advection = 
-        -grad(p) + Rayleigh*Θ*ê_r + coriolis + 
+    ∂ₜ(u) + mean_flow_advection =
+        -∇(p) + Rayleigh*Θ*ê_r + coriolis +
         (1/Hartmann^2)*lorentz_force - div(grad_u) + lift(τ_u2)
     """
     add_equation!(problem, momentum_eq)
     
-    # 3. Linearized temperature equation: 
+    # 3. Linearized temperature equation:
     #    ∂Θ/∂t + U₀·∇Θ + u·∇T₀ = κ∇²Θ
     temperature_eq = """
-    dt(Θ) + U0_phi*(1/r)*∂(Θ,φ) + dot(u, grad(T0)) = 
+    ∂ₜ(Θ) + U0_phi*(1/r)*∂(Θ,φ) + u⋅∇(T0) =
         (1/Prandtl)*div(grad_Θ) + (1/Prandtl)*lift(τ_Θ2)
     """
     add_equation!(problem, temperature_eq)
     
     # 4. Linearized magnetic induction equation:
-    #    ∂B/∂t = ∇×(u×B₀) + ∇×(U₀×B) + η∇²B  
+    #    ∂B/∂t = ∇×(u×B₀) + ∇×(U₀×B) + η∇²B
     induction_eq = """
-    dt(B) = induction_rhs + (1/Pm)*div(grad_B) + (1/Pm)*lift(τ_B2)
+    ∂ₜ(B) = induction_rhs + (1/Pm)*div(grad_B) + (1/Pm)*lift(τ_B2)
     """
     add_equation!(problem, induction_eq)
     
