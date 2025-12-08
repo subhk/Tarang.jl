@@ -106,7 +106,7 @@ function main()
     Tarang.add_bc!(problem, "b(z=Lz) = 0")      # Cold top
     Tarang.add_bc!(problem, "u(z=0) = 0")       # No-slip bottom (vector notation)
     Tarang.add_bc!(problem, "u(z=Lz) = 0")      # No-slip top (vector notation)
-    Tarang.add_bc!(problem, "integ(p) = 0")     # Pressure gauge
+    # Note: Pressure gauge is handled by tau_p in continuity equation
 
     # Solver
     timestepper = RK222()
