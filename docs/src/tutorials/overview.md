@@ -57,6 +57,14 @@ Linear stability analysis and normal modes.
 |----------|-------------|------------|--------------|
 | [Stability Analysis](eigenvalue_problems.md) | Eigenvalue problem setup | Advanced | EVP, eigensolvers |
 
+### Surface and Boundary Dynamics
+
+Problems with dynamics confined to surfaces or boundaries.
+
+| Tutorial | Description | Complexity | Key Features |
+|----------|-------------|------------|--------------|
+| [Surface Dynamics](surface_dynamics.md) | SQG, QG, boundary advection-diffusion | Advanced | Fractional Laplacian, coupled systems |
+
 ### Special Topics
 
 | Tutorial | Description | Complexity | Key Features |
@@ -137,6 +145,10 @@ eigenvalues = solve!(solver, nev=10)
 **Fluid Dynamics**:
 - Start: [2D Rayleigh-Bénard](ivp_2d_rbc.md)
 - Advanced: [3D Turbulence](ivp_3d_turbulence.md), [Channel Flow](../notebooks/channel_flow.md)
+
+**Geophysical Flows**:
+- Start: [Surface Dynamics](surface_dynamics.md) (SQG, QG)
+- Advanced: Coupled surface-interior dynamics
 
 **Heat Transfer**:
 - Start: [First Steps](../getting_started/first_steps.md) (diffusion)

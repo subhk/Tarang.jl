@@ -35,6 +35,37 @@ lap(field)
 add_equation!(problem, "dt(T) = kappa*lap(T)")
 ```
 
+### Fractional Laplacian
+
+The fractional Laplacian `(-Δ)^α` generalizes the Laplacian to non-integer powers:
+
+```julia
+# fraclap(f, α) = (-Δ)^α f
+fraclap(field, 0.5)    # Square root: (-Δ)^(1/2)
+fraclap(field, -0.5)   # Inverse square root: (-Δ)^(-1/2)
+fraclap(field, 1.0)    # Standard Laplacian: (-Δ)^1 = -Δ
+fraclap(field, 2.0)    # Biharmonic: (-Δ)^2 = Δ²
+
+# Convenience functions
+sqrtlap(field)         # Same as fraclap(f, 0.5)
+invsqrtlap(field)      # Same as fraclap(f, -0.5)
+```
+
+**In spectral space**: Multiplication by `|k|^(2α)` where `k` is the wavenumber.
+
+**Applications**:
+- **SQG dynamics**: `ψ = (-Δ)^(-1/2) θ` for streamfunction from buoyancy
+- **Fractional diffusion**: `∂θ/∂t = -κ(-Δ)^α θ` for anomalous diffusion
+- **Hyperviscosity**: `(-Δ)^n` for numerical dissipation at small scales
+
+```julia
+# SQG buoyancy equation with fractional dissipation
+add_equation!(problem, "∂ₜ(θ) = -u⋅∇(θ) + κ*fraclap(θ, 0.5)")
+
+# Can also be used on LHS (implicit treatment)
+add_equation!(problem, "∂ₜ(θ) + κ*fraclap(θ, 0.5) = -u⋅∇(θ)")
+```
+
 ## Vector Calculus
 
 ### Gradient
