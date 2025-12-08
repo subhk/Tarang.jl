@@ -17,7 +17,7 @@ end
     Tarang.add_equation!(lbvp, "lap(u) = 0")
     Tarang.add_dirichlet_bc!(lbvp, "u(z=0) = 0")
     Tarang.add_neumann_bc!(lbvp, "dz(u)(z=1) = 1")
-    Tarang.add_robin_bc!(lbvp, "1.0*u + 2.0*dz(u)(z=0) = 0.5")
+    Tarang.add_robin_bc!(lbvp, "1.0*u(z=0) + 2.0*dz(u)(z=0) = 0.5")
     Tarang.add_stress_free_bc!(lbvp, "u(z=1) stress-free")
 
     @test Tarang.validate_problem(lbvp)

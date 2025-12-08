@@ -488,11 +488,11 @@ end
 Add Robin boundary condition using string syntax.
 
 # Format:
-- `"alpha*u + beta*dz(u)(z=0) = value"`
+- `"alpha*field(coord=pos) + beta*d<coord>(field)(coord=pos) = value"`
 
 # Examples:
 ```julia
-add_robin_bc!(problem, "1.0*T + 0.5*dz(T)(z=0) = 1.0")
+add_robin_bc!(problem, "1.0*T(z=0) + 0.5*dz(T)(z=0) = 1.0")
 ```
 """
 function add_robin_bc!(problem::Problem, bc_string::String)
