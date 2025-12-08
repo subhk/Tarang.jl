@@ -2665,77 +2665,11 @@ function evaluate_convert(conv_op::Convert, layout::Symbol=:g)
 end
 
 # ============================================================================
-# Power and General Function Operators
+# General Function Operators
 # ============================================================================
 
-"""
-    Power <: Operator
-
-Nonlinear power operator: f^p
-"""
-struct Power <: Operator
-    operand::Operand
-    power::Real
-end
-const _Power_constructor = Power
-
-"""
-    power(operand::Operand, p::Real)
-
-Raise operand to power p.
-"""
-function power(operand::Operand, p::Real)
-    return multiclass_new(Power, operand, p)
-end
-
-register_operator_alias!(power, "power", "pow")
-register_operator_parseable!(power, "power", "pow")
-
-"""
-    evaluate_power(pow_op::Power, layout::Symbol=:g)
-
-Evaluate power operator in grid space.
-"""
-function evaluate_power(pow_op::Power, layout::Symbol=:g)
-    operand = pow_op.operand
-    p = pow_op.power
-
-    if !isa(operand, ScalarField)
-        throw(ArgumentError("Power currently only supports scalar fields"))
-    end
-
-    # Work in grid space for nonlinear operations
-    ensure_layout!(operand, :g)
-
-    # Create result field
-    result = ScalarField(operand.dist, "pow_$(operand.name)_$p", operand.bases, operand.dtype)
-    ensure_layout!(result, :g)
-
-    # Apply power operation
-    result.data_g .= operand.data_g .^ p
-
-    if layout == :c
-        forward_transform!(result)
-    end
-
-    return result
-end
-
-function dispatch_check(::Type{Power}, args::Tuple, kwargs::NamedTuple)
-    operand, p = args
-    if !isa(operand, Operand)
-        throw(ArgumentError("Power requires an Operand"))
-    end
-    if !isa(p, Real)
-        throw(ArgumentError("Power exponent must be real"))
-    end
-    return true
-end
-
-function invoke_constructor(::Type{Power}, args::Tuple, kwargs::NamedTuple)
-    operand, p = args
-    return _Power_constructor(operand, p)
-end
+# Note: Power operator is defined in arithmetic.jl as Power <: Future
+# Use field^p syntax for exponentiation (e.g., u^2, T^0.5)
 
 """
     GeneralFunction <: Operator
@@ -3772,8 +3706,6 @@ function evaluate(op::Operator, layout::Symbol=:g)
         return evaluate_lift(op, layout)
     elseif isa(op, Convert)
         return evaluate_convert(op, layout)
-    elseif isa(op, Power)
-        return evaluate_power(op, layout)
     elseif isa(op, GeneralFunction)
         return evaluate_general_function(op, layout)
     elseif isa(op, UnaryGridFunction)
