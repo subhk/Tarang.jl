@@ -39,7 +39,7 @@ z = ChebyshevT(coords[&quot;z&quot;], size=32, bounds=(0.0, 1.0))
 domain = Domain(dist, (x, z))
 
 if rank == 0
-    println(&quot;Successfully created domain!&quot;)
+    println(&quot;✓ Successfully created domain!&quot;)
 end
 
 MPI.Finalize()</code></pre><p>Run with MPI:</p><pre><code class="language-bash hljs">mpiexec -n 4 julia test_tarang.jl</code></pre><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><h3 id="MPI-Issues"><a class="docs-heading-anchor" href="#MPI-Issues">MPI Issues</a><a id="MPI-Issues-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Issues" title="Permalink"></a></h3><p><strong>Problem</strong>: <code>ERROR: MPI has not been built</code></p><p><strong>Solution</strong>: Build MPI.jl manually:</p><pre><code class="language-julia hljs">using Pkg
