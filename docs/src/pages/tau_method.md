@@ -449,7 +449,7 @@ z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
 lift_basis = derivative_basis(z_basis)  # Returns ChebyshevU
 ```
 
-This is mathematically rigorous: d/dz(T_n) is proportional to U_{n-1}.
+This is mathematically rigorous: ∂/∂z(T_n) is proportional to U_{n-1}.
 
 ### First-Order Formulation (Dedalus Style)
 

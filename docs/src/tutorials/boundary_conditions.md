@@ -140,8 +140,8 @@ problem = LBVP([T, tau_T1, tau_T2])
 add_equation!(problem, "Δ(T) + lift(tau_T1) + lift(tau_T2) = source")
 
 # Neumann: specify derivative at boundary
-add_bc!(problem, "dz(T)(z=0) = 1")   # dT/dz(z=0) = 1
-add_bc!(problem, "dz(T)(z=1) = 0")   # dT/dz(z=1) = 0
+add_bc!(problem, "∂z(T)(z=0) = 1")   # ∂T/∂z(z=0) = 1
+add_bc!(problem, "∂z(T)(z=1) = 0")   # ∂T/∂z(z=1) = 0
 ```
 
 ### Stress-Free Conditions
@@ -151,7 +151,7 @@ For free surfaces or slip boundaries (∂u/∂z = 0):
 ```julia
 # Mixed: no-slip at bottom, stress-free at top
 add_bc!(problem, "u_x(z=0) = 0")      # No-slip at bottom
-add_bc!(problem, "dz(u_x)(z=1) = 0")  # Stress-free at top (du/dz = 0)
+add_bc!(problem, "∂z(u_x)(z=1) = 0")  # Stress-free at top (∂u/∂z = 0)
 ```
 
 ## Robin Boundary Conditions
@@ -172,7 +172,7 @@ add_substitution!(problem, "T_amb", 25.0)
 add_equation!(problem, "Δ(T) + lift(tau_T1) + lift(tau_T2) = source")
 
 # Convective heat transfer at top: h*T + k*dT/dn = h*T_ambient
-add_bc!(problem, "h*T(z=1) + k*dz(T)(z=1) = h*T_amb")
+add_bc!(problem, "h*T(z=1) + k*∂z(T)(z=1) = h*T_amb")
 
 # Dirichlet at bottom
 add_bc!(problem, "T(z=0) = 100")
@@ -229,9 +229,9 @@ add_equation!(problem, "Δ(Δ(u)) + lift(tau_u1) + lift(tau_u2) + lift(tau_u3) +
 
 # Clamped beam: u = 0 and du/dz = 0 at both ends
 add_bc!(problem, "u(z=0) = 0")
-add_bc!(problem, "dz(u)(z=0) = 0")
+add_bc!(problem, "∂z(u)(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
-add_bc!(problem, "dz(u)(z=1) = 0")
+add_bc!(problem, "∂z(u)(z=1) = 0")
 ```
 
 ## Complete Examples
