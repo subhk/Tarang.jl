@@ -140,8 +140,8 @@ solve!(solver)
 # Poisson equation
 problem = LBVP([phi])
 add_equation!(problem, "lap(phi) = rho")
-add_dirichlet_bc!(problem, "phi", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "phi", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "phi(z=0) = 0")
+add_dirichlet_bc!(problem, "phi(z=1) = 0")
 
 solver = BoundaryValueSolver(problem)
 solve!(solver)
@@ -583,12 +583,12 @@ add_equation!(problem, "dx(u) + dz(w) = 0")
 add_equation!(problem, "dt(T) + u*dx(T) + w*dz(T) = lap(T)")
 
 # Boundary conditions
-add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "w", "z", 0.0, 0.0)
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)
-add_dirichlet_bc!(problem, "u", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "w", "z", 1.0, 0.0)
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)
+add_dirichlet_bc!(problem, "u(z=0) = 0")
+add_dirichlet_bc!(problem, "w(z=0) = 0")
+add_dirichlet_bc!(problem, "T(z=0) = 1")
+add_dirichlet_bc!(problem, "u(z=1) = 0")
+add_dirichlet_bc!(problem, "w(z=1) = 0")
+add_dirichlet_bc!(problem, "T(z=1) = 0")
 
 # Initialize fields
 # ... set initial conditions ...

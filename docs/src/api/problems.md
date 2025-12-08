@@ -287,19 +287,22 @@ Add Neumann (fixed derivative) boundary condition.
 add_neumann_bc!(problem, field_name, coord_name, position, value)
 ```
 
-**Arguments**: Same as Dirichlet
+**Syntax**:
+```julia
+add_neumann_bc!(problem, "d<coord>(field)(coord=pos) = value")
+```
 
 **Examples**:
 
 ```julia
 # Insulating boundary (zero heat flux)
-add_neumann_bc!(problem, "T", "z", 0.0, 0.0)  # dT/dz(z=0) = 0
+add_neumann_bc!(problem, "dz(T)(z=0) = 0")  # dT/dz(z=0) = 0
 
 # Fixed flux
-add_neumann_bc!(problem, "T", "z", 1.0, -1.0)  # dT/dz(z=1) = -1
+add_neumann_bc!(problem, "dz(T)(z=1) = -1")  # dT/dz(z=1) = -1
 
 # Time-dependent flux
-add_neumann_bc!(problem, "phi", "x", 0.0, "sin(omega*t)")
+add_neumann_bc!(problem, "dx(phi)(x=0) = sin(omega*t)")
 ```
 
 ---
@@ -310,10 +313,10 @@ Add Robin (mixed) boundary condition: α*f + β*df/dn = value
 
 **Syntax**:
 ```julia
-add_robin_bc!(problem, field_name, coord_name, position, alpha, beta, value)
+add_robin_bc!(problem, "alpha*field + beta*d<coord>(field)(coord=pos) = value")
 ```
 
-**Arguments**:
+**Arguments** (via string):
 - `alpha`: Coefficient for field value
 - `beta`: Coefficient for derivative
 - `value`: Right-hand side value
@@ -324,10 +327,10 @@ add_robin_bc!(problem, field_name, coord_name, position, alpha, beta, value)
 # Convective heat transfer: h*T + k*dT/dn = h*T_ambient
 h, k = 10.0, 1.0
 T_ambient = 300.0
-add_robin_bc!(problem, "T", "z", 1.0, h, k, h*T_ambient)
+add_robin_bc!(problem, "$(h)*T + $(k)*dz(T)(z=1) = $(h*T_ambient)")
 
 # Radiation boundary: T + ε*dT/dn = 0
-add_robin_bc!(problem, "T", "x", 0.0, 1.0, epsilon, 0.0)
+add_robin_bc!(problem, "1.0*T + $(epsilon)*dx(T)(x=0) = 0")
 ```
 
 ---
@@ -338,15 +341,15 @@ Add stress-free boundary condition for fluid mechanics: u_normal = 0, ∂u_tange
 
 **Syntax**:
 ```julia
-add_stress_free_bc!(problem, field_name, coord_name, position)
+add_stress_free_bc!(problem, "field(coord=pos) stress-free")
 ```
 
 **Examples**:
 
 ```julia
 # Stress-free top and bottom (free-slip)
-add_stress_free_bc!(problem, "u", "z", 0.0)
-add_stress_free_bc!(problem, "u", "z", 1.0)
+add_stress_free_bc!(problem, "u(z=0) stress-free")
+add_stress_free_bc!(problem, "u(z=1) stress-free")
 
 # Equivalent to:
 # w(z=0) = 0, du/dz(z=0) = 0, dv/dz(z=0) = 0
