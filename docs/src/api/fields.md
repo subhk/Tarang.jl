@@ -152,7 +152,7 @@ function dot_product(a::VectorField, b::VectorField)
 end
 
 # Cross product (3D only): a × b
-c = cross_product(a, b)
+c = cross(a, b)  # or: c = a × b
 ```
 
 ### Properties
