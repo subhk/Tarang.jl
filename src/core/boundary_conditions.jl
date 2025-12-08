@@ -317,85 +317,75 @@ function get_tau_field(manager::BoundaryConditionManager, name::String)
     return get(manager.tau_fields, name, nothing)
 end
 
-function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, dist)
-    """Automatically generate tau fields for boundary conditions that need them"""
-    
-    tau_counter = 1
-    
+"""
+    validate_tau_fields!(manager::BoundaryConditionManager)
+
+Validate that all boundary conditions on non-periodic bases have explicit tau fields.
+Following the Dedalus approach, users must explicitly create tau fields and add them
+to equations using the lift() operator.
+
+Throws an error if any BC is missing a tau field specification.
+"""
+function validate_tau_fields!(manager::BoundaryConditionManager)
+    missing_tau = String[]
+
     for bc in manager.conditions
-        tau_name = nothing
-        
         if isa(bc, DirichletBC) && bc.tau_field === nothing
-            tau_name = "tau_$(bc.field)_dirichlet_$tau_counter"
-            tau_counter += 1
-            
-            # Create scalar tau field on boundary basis
-            coord_basis = get_boundary_basis(manager, bc.coordinate)
-            if coord_basis !== nothing
-                tau_field = ScalarField(dist, tau_name, (coord_basis,))
-                # Ensure tau field is on correct device
-                tau_field.data_g = tau_field.data_g
-                tau_field.data_c = tau_field.data_c
-                
-                register_tau_field!(manager, tau_name, tau_field)
-                bc = DirichletBC(bc.field, bc.coordinate, bc.position, bc.value, tau_name, bc.is_time_dependent, bc.is_space_dependent)
-                # Update the BC in the list
-                for (i, existing_bc) in enumerate(manager.conditions)
-                    if existing_bc === bc
-                        manager.conditions[i] = bc
-                        break
-                    end
-                end
-            end
-            
+            push!(missing_tau, "DirichletBC on $(bc.field) at $(bc.coordinate)=$(bc.position)")
         elseif isa(bc, NeumannBC) && bc.tau_field === nothing
-            tau_name = "tau_$(bc.field)_neumann_$tau_counter"
-            tau_counter += 1
-            
-            coord_basis = get_boundary_basis(manager, bc.coordinate)
-            if coord_basis !== nothing
-                tau_field = ScalarField(dist, tau_name, (coord_basis,))
-                # Ensure tau field is on correct device
-                tau_field.data_g = tau_field.data_g
-                tau_field.data_c = tau_field.data_c
-                
-                register_tau_field!(manager, tau_name, tau_field)
-                bc = NeumannBC(bc.field, bc.coordinate, bc.position, 
-                              bc.derivative_order, bc.value, tau_name, bc.is_time_dependent, bc.is_space_dependent)
-                # Update the BC in the list
-                for (i, existing_bc) in enumerate(manager.conditions)
-                    if existing_bc === bc
-                        manager.conditions[i] = bc
-                        break
-                    end
-                end
-            end
-            
+            push!(missing_tau, "NeumannBC on $(bc.field) at $(bc.coordinate)=$(bc.position)")
         elseif isa(bc, RobinBC) && bc.tau_field === nothing
-            tau_name = "tau_$(bc.field)_robin_$tau_counter"
-            tau_counter += 1
-            
-            coord_basis = get_boundary_basis(manager, bc.coordinate)
-            if coord_basis !== nothing
-                tau_field = ScalarField(dist, tau_name, (coord_basis,))
-                # Ensure tau field is on correct device
-                tau_field.data_g = tau_field.data_g
-                tau_field.data_c = tau_field.data_c
-                
-                register_tau_field!(manager, tau_name, tau_field)
-                bc = RobinBC(bc.field, bc.coordinate, bc.position,
-                            bc.alpha, bc.beta, bc.value, tau_name, bc.is_time_dependent, bc.is_space_dependent)
-                # Update the BC in the list
-                for (i, existing_bc) in enumerate(manager.conditions)
-                    if existing_bc === bc
-                        manager.conditions[i] = bc
-                        break
-                    end
-                end
-            end
+            push!(missing_tau, "RobinBC on $(bc.field) at $(bc.coordinate)=$(bc.position)")
         end
     end
-    
+
+    if !isempty(missing_tau)
+        error_msg = """
+        Missing tau field specifications for boundary conditions.
+
+        Tarang.jl follows the Dedalus approach: you must explicitly create tau fields
+        and add them to your equations using the lift() operator.
+
+        Missing tau fields for:
+        $(join(["  - " * m for m in missing_tau], "\n"))
+
+        Example fix:
+        ```julia
+        # 1. Create tau field
+        tau_u1 = ScalarField(dist, "tau_u1", (horizontal_basis,))
+
+        # 2. Add tau to problem variables
+        problem = IVP([u, tau_u1])
+
+        # 3. Add lift(tau) to equation
+        add_equation!(problem, dt(u) - lap(u) + lift(tau_u1, zbasis, -1))
+
+        # 4. Specify tau_field in BC
+        add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
+        ```
+
+        See documentation: https://subhk.github.io/Tarang.jl/pages/tau_method/
+        """
+        throw(ArgumentError(error_msg))
+    end
+
+    return manager
+end
+
+# Deprecated: auto_generate_tau_fields! is no longer supported
+# Users must explicitly create tau fields following the Dedalus approach
+function auto_generate_tau_fields!(manager::BoundaryConditionManager, problem, dist)
+    @warn """
+    auto_generate_tau_fields! is deprecated and will be removed in a future version.
+
+    Tarang.jl now follows the Dedalus approach: you must explicitly create tau fields
+    and add them to your equations using the lift() operator.
+
+    See documentation: https://subhk.github.io/Tarang.jl/pages/tau_method/
+    """ maxlog=1
+
+    # Call validation instead - this will error if tau fields are missing
+    validate_tau_fields!(manager)
     return manager
 end
 

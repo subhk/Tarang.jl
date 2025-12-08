@@ -104,56 +104,85 @@ p = ScalarField(dist, "p", (x_basis, z_basis))
 T = ScalarField(dist, "T", (x_basis, z_basis))
 ```
 
+### Tau Fields (for Boundary Conditions)
+
+Tarang.jl follows the [Dedalus](https://dedalus-project.readthedocs.io/) approach: users must explicitly create tau fields and add them to equations using the `lift()` operator.
+
+```julia
+# Tau fields for velocity BCs (2 per component for 2nd-order operator)
+tau_ux1 = ScalarField(dist, "tau_ux1", (x_basis,))  # ux at z=0
+tau_ux2 = ScalarField(dist, "tau_ux2", (x_basis,))  # ux at z=1
+tau_uz1 = ScalarField(dist, "tau_uz1", (x_basis,))  # uz at z=0
+tau_uz2 = ScalarField(dist, "tau_uz2", (x_basis,))  # uz at z=1
+
+# Tau fields for temperature BCs
+tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))    # T at z=0
+tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))    # T at z=1
+
+# Tau for pressure gauge (1 for 1st-order equation)
+tau_p = ScalarField(dist, "tau_p", (x_basis,))
+```
+
+!!! tip "Tau Field Naming Convention"
+    Use descriptive names like `tau_ux1`, `tau_ux2` to indicate which field and boundary they correspond to.
+
 ### Problem Definition
 
 ```julia
-# Create Initial Value Problem
-problem = IVP([ux, uz, p, T])
+# Create Initial Value Problem with ALL fields including tau fields
+problem = IVP([ux, uz, p, T, tau_ux1, tau_ux2, tau_uz1, tau_uz2, tau_T1, tau_T2, tau_p])
 
 # Add dimensionless parameters
 problem.parameters["Ra"] = Ra
 problem.parameters["Pr"] = Pr
 
-# Momentum equation: du/dt = -u·∇u - ∇p + Pr∇²u + Ra·Pr·T·ez
-# (we write the viscous and pressure terms separately)
+# Momentum equation for ux: du/dt = -u·∇u - ∇p + Pr∇²u
+# Include lift() terms for tau fields at highest spectral modes
 add_equation!(
     problem,
-    "dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = Pr*lap(ux)"
+    dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) - Pr*lap(ux)
+        + lift(tau_ux1, z_basis, -1) + lift(tau_ux2, z_basis, -2)
 )
 
+# Momentum equation for uz: dw/dt = -u·∇w - ∂p/∂z + Pr∇²w + Ra·Pr·T
 add_equation!(
     problem,
-    "dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = Pr*lap(uz) + Ra*Pr*T"
+    dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) - Pr*lap(uz) - Ra*Pr*T
+        + lift(tau_uz1, z_basis, -1) + lift(tau_uz2, z_basis, -2)
 )
 
 # Continuity equation: ∇·u = 0
-add_equation!(problem, "dx(ux) + dz(uz) = 0")
+add_equation!(problem, dx(ux) + dz(uz) + lift(tau_p, z_basis, -1))
 
 # Temperature equation: dT/dt = -u·∇T + ∇²T
 add_equation!(
     problem,
-    "dt(T) + ux*dx(T) + uz*dz(T) = lap(T)"
+    dt(T) + ux*dx(T) + uz*dz(T) - lap(T)
+        + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2)
 )
 ```
 
 ### Boundary Conditions
 
-No-slip walls (velocity = 0) and fixed temperatures:
+No-slip walls (velocity = 0) and fixed temperatures, with explicit tau field linkage:
 
 ```julia
 # Bottom wall (z = 0)
-add_dirichlet_bc!(problem, "ux(z=0) = 0")  # No-slip
-add_dirichlet_bc!(problem, "uz(z=0) = 0")  # No penetration
-add_dirichlet_bc!(problem, "T(z=0) = 1")   # Hot
+add_dirichlet_bc!(problem, ux, "z", :left, 0.0; tau_field="tau_ux1")   # No-slip
+add_dirichlet_bc!(problem, uz, "z", :left, 0.0; tau_field="tau_uz1")   # No penetration
+add_dirichlet_bc!(problem, T, "z", :left, 1.0; tau_field="tau_T1")     # Hot
 
 # Top wall (z = 1)
-add_dirichlet_bc!(problem, "ux(z=1) = 0")  # No-slip
-add_dirichlet_bc!(problem, "uz(z=1) = 0")  # No penetration
-add_dirichlet_bc!(problem, "T(z=1) = 0")   # Cold
+add_dirichlet_bc!(problem, ux, "z", :right, 0.0; tau_field="tau_ux2")  # No-slip
+add_dirichlet_bc!(problem, uz, "z", :right, 0.0; tau_field="tau_uz2")  # No penetration
+add_dirichlet_bc!(problem, T, "z", :right, 0.0; tau_field="tau_T2")    # Cold
+
+# Pressure gauge (fixes arbitrary constant)
+add_dirichlet_bc!(problem, p, "z", :left, 0.0; tau_field="tau_p")
 ```
 
-!!! note "Pressure Boundary Conditions"
-    Pressure boundary conditions are not needed for incompressible flow. The pressure is determined by the continuity equation (∇·u = 0).
+!!! note "Pressure Gauge Condition"
+    For incompressible flow, pressure is only defined up to a constant. The gauge condition fixes p=0 at one point. This requires one tau field for the continuity equation.
 
 ### Initial Conditions
 
@@ -480,11 +509,22 @@ The full script is available in `examples/rayleigh_benard_2d.jl`. Key points:
 
 1. ✅ Proper MPI initialization and finalization
 2. ✅ Appropriate bases for boundary conditions
-3. ✅ Complete equation system with nonlinear terms
-4. ✅ All boundary conditions specified
-5. ✅ Adaptive time stepping with CFL
-6. ✅ Output and analysis
-7. ✅ Performance monitoring
+3. ✅ Explicit tau fields for each boundary condition
+4. ✅ lift() operators in all equations with non-periodic BCs
+5. ✅ Complete equation system with nonlinear terms
+6. ✅ All boundary conditions linked to tau fields
+7. ✅ Adaptive time stepping with CFL
+8. ✅ Output and analysis
+9. ✅ Performance monitoring
+
+!!! info "Dedalus-Style Approach"
+    This tutorial follows the Dedalus approach for boundary conditions. Users must explicitly:
+    - Create tau fields (one per BC)
+    - Add tau fields to the problem
+    - Include lift() terms in equations
+    - Link each BC to its tau field
+
+    See [Boundary Conditions Tutorial](boundary_conditions.md) for more details.
 
 ## Next Steps
 

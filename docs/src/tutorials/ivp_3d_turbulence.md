@@ -61,6 +61,9 @@ domain = Domain(dist, (x_basis, y_basis, z_basis))
 !!! note "Dealiasing"
     The `dealias=2/3` parameter enables the 3/2 rule for dealiasing nonlinear terms, essential for accurate turbulence simulations.
 
+!!! info "No Tau Fields Needed"
+    Since all directions use periodic Fourier bases, **no tau fields or boundary conditions are required**. The Fourier representation automatically enforces periodicity. Tau fields and the `lift()` operator are only needed for non-periodic directions (e.g., Chebyshev bases with walls). See [Boundary Conditions Tutorial](boundary_conditions.md) for problems with walls.
+
 ## Fields and Problem Definition
 
 ```julia

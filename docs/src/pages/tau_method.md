@@ -218,35 +218,127 @@ Tau equation:
 
 ## Implementation in Tarang.jl
 
-### Automatic Tau Method
+Tarang.jl follows the **Dedalus approach**: users must explicitly create tau fields and add them to equations using the `lift()` operator. This design provides full transparency and control over how boundary conditions interact with your equations.
 
-Tarang.jl handles the tau method automatically when you specify boundary conditions:
+### Required Steps
+
+To apply boundary conditions in Tarang.jl, you must:
+
+1. **Create tau fields** - One for each boundary condition
+2. **Add tau fields to the problem** - Include them as variables
+3. **Add lift(tau) terms to equations** - Use the `lift()` operator
+4. **Specify tau_field in boundary conditions** - Link BCs to their tau fields
+
+### Complete Example
 
 ```julia
 using Tarang
 
-# Define problem
-problem = LBVP([u])
+# Create domain
+coords = CartesianCoordinates("x", "z")
+dist = Distributor(coords)
 
-# Add PDE
-add_equation!(problem, lap(u) - f)
+xbasis = RealFourier(coords["x"]; size=64, bounds=(0, 2π))
+zbasis = ChebyshevT(coords["z"]; size=64, bounds=(0, 1))
 
-# Add boundary conditions - tau method applied automatically
-add_dirichlet_bc!(problem, u, "z", :left, 0.0)   # u(z=0) = 0
-add_dirichlet_bc!(problem, u, "z", :right, 0.0)  # u(z=1) = 0
+# Main field
+u = ScalarField(dist, "u", (xbasis, zbasis))
+
+# Step 1: Create tau fields (one per boundary condition)
+# Tau fields live on the "other" bases (here: xbasis only, not zbasis)
+tau_u1 = ScalarField(dist, "tau_u1", (xbasis,))  # For BC at z=0
+tau_u2 = ScalarField(dist, "tau_u2", (xbasis,))  # For BC at z=1
+
+# Step 2: Add all fields (including tau) to problem
+problem = LBVP([u, tau_u1, tau_u2])
+
+# Step 3: Add equation with lift() operators
+# The lift() terms place tau values at specific spectral modes
+add_equation!(problem,
+    lap(u) + lift(tau_u1, zbasis, -1) + lift(tau_u2, zbasis, -2) - f
+)
+
+# Step 4: Add boundary conditions with explicit tau_field
+add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
+add_dirichlet_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u2")
 
 # Solve
 solver = BoundaryValueSolver(problem)
 solve!(solver)
 ```
 
+### The `lift()` Operator
+
+The `lift()` operator "lifts" a lower-dimensional tau field into the full domain by placing its values at specific spectral modes:
+
+```julia
+lift(tau_field, basis, n)
+```
+
+**Arguments:**
+- `tau_field` - The tau field (lives on reduced bases)
+- `basis` - The basis along which to lift (typically the non-periodic direction)
+- `n` - Which spectral mode to modify
+
+**Mode indexing (`n`):**
+- `n = 0` → First mode (mode 0)
+- `n = -1` → Last mode (N-1)
+- `n = -2` → Second-to-last mode (N-2)
+
+**Why specific modes?** The tau method works by replacing the highest-order spectral equations with boundary conditions. The `lift()` operator places tau contributions at these modes.
+
+### Comparison: Tarang vs. Dedalus
+
+Tarang.jl closely follows the Dedalus design pattern:
+
+| Feature | Dedalus (Python) | Tarang.jl (Julia) |
+|---------|------------------|-------------------|
+| Create tau field | `tau_p = dist.Field(name='tau_p', bases=xbasis)` | `tau_p = ScalarField(dist, "tau_p", (xbasis,))` |
+| Lift operator | `lift(tau_p, -1)` | `lift(tau_p, zbasis, -1)` |
+| Add to equation | `"lap(u) + lift(tau_p, -1) = f"` | `lap(u) + lift(tau_p, zbasis, -1) - f` |
+| Add BC | `problem.add_bc("u(z=0) = 0")` | `add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_p")` |
+
+**Dedalus example:**
+```python
+# Dedalus (Python)
+tau_u1 = dist.Field(name='tau_u1', bases=xbasis)
+tau_u2 = dist.Field(name='tau_u2', bases=xbasis)
+
+problem.add_equation("lap(u) + lift(tau_u1, -1) + lift(tau_u2, -2) = f")
+problem.add_bc("u(z=0) = 0")
+problem.add_bc("u(z=1) = 0")
+```
+
+**Tarang.jl equivalent:**
+```julia
+# Tarang.jl (Julia)
+tau_u1 = ScalarField(dist, "tau_u1", (xbasis,))
+tau_u2 = ScalarField(dist, "tau_u2", (xbasis,))
+
+problem = LBVP([u, tau_u1, tau_u2])
+add_equation!(problem, lap(u) + lift(tau_u1, zbasis, -1) + lift(tau_u2, zbasis, -2) - f)
+add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
+add_dirichlet_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u2")
+```
+
+### Why Explicit Tau Fields?
+
+The Dedalus approach (explicit tau fields) has several advantages:
+
+1. **Transparency**: You see exactly how BCs interact with equations
+2. **Debugging**: Easy to inspect tau field values after solving
+3. **Flexibility**: Custom tau arrangements for coupled systems
+4. **Consistency**: Same pattern for all problem types (IVP, BVP, EVP)
+5. **Documentation**: Code is self-documenting about BC structure
+
 ### What Happens Internally
 
-1. **Build PDE matrix**: Constructs the differentiation matrices
-2. **Identify tau rows**: Determines which rows to replace based on BC count
-3. **Build BC rows**: Constructs boundary condition equations
-4. **Replace rows**: Substitutes tau rows with BC rows
+1. **Build PDE matrix**: Constructs differentiation matrices for all operators
+2. **Process lift operators**: Inserts tau contributions at specified spectral modes
+3. **Build BC equations**: Constructs boundary condition rows linking to tau fields
+4. **Assemble system**: Combines PDE + lift + BC into linear system
 5. **Solve**: Standard linear algebra solve
+6. **Extract solution**: Both u and tau values are solved simultaneously
 
 ### Checking Boundary Condition Satisfaction
 
@@ -257,6 +349,10 @@ u_at_right = evaluate(u, z=1.0)
 
 @assert abs(u_at_left - 0.0) < 1e-10 "Left BC not satisfied"
 @assert abs(u_at_right - 0.0) < 1e-10 "Right BC not satisfied"
+
+# You can also inspect tau field values
+println("tau_u1 values: ", tau_u1.data_c)
+println("tau_u2 values: ", tau_u2.data_c)
 ```
 
 ## Number of Tau Terms Required
