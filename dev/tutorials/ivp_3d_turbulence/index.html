@@ -21,35 +21,31 @@ L = 2π
 N = 128  # 128^3 grid points
 
 # Fourier bases for all directions
-x_basis = RealFourier(coords[&quot;x&quot;], size=N, bounds=(0.0, L), dealias=2/3)
-y_basis = RealFourier(coords[&quot;y&quot;], size=N, bounds=(0.0, L), dealias=2/3)
-z_basis = RealFourier(coords[&quot;z&quot;], size=N, bounds=(0.0, L), dealias=2/3)
+x_basis = RealFourier(coords[&quot;x&quot;]; size=N, bounds=(0.0, L), dealias=2/3)
+y_basis = RealFourier(coords[&quot;y&quot;]; size=N, bounds=(0.0, L), dealias=2/3)
+z_basis = RealFourier(coords[&quot;z&quot;]; size=N, bounds=(0.0, L), dealias=2/3)
 
 domain = Domain(dist, (x_basis, y_basis, z_basis))</code></pre><div class="admonition is-info" id="Dealiasing-87b09c929e3cadd0"><header class="admonition-header">Dealiasing<a class="admonition-anchor" href="#Dealiasing-87b09c929e3cadd0" title="Permalink"></a></header><div class="admonition-body"><p>The <code>dealias=2/3</code> parameter enables the 3/2 rule for dealiasing nonlinear terms, essential for accurate turbulence simulations.</p></div></div><div class="admonition is-info" id="No-Tau-Fields-Needed-69597f73870025a5"><header class="admonition-header">No Tau Fields Needed<a class="admonition-anchor" href="#No-Tau-Fields-Needed-69597f73870025a5" title="Permalink"></a></header><div class="admonition-body"><p>Since all directions use periodic Fourier bases, <strong>no tau fields or boundary conditions are required</strong>. The Fourier representation automatically enforces periodicity. Tau fields and the <code>lift()</code> operator are only needed for non-periodic directions (e.g., Chebyshev bases with walls). See <a href="../boundary_conditions/">Boundary Conditions Tutorial</a> for problems with walls.</p></div></div><h2 id="Fields-and-Problem-Definition"><a class="docs-heading-anchor" href="#Fields-and-Problem-Definition">Fields and Problem Definition</a><a id="Fields-and-Problem-Definition-1"></a><a class="docs-heading-anchor-permalink" href="#Fields-and-Problem-Definition" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Velocity field (3 components)
 u = VectorField(dist, coords, &quot;u&quot;, (x_basis, y_basis, z_basis))
-ux, uy, uz = u.components
 
 # Pressure field
 p = ScalarField(dist, &quot;p&quot;, (x_basis, y_basis, z_basis))
 
-# Problem definition
-problem = IVP([ux, uy, uz, p])
+# Problem definition (use the vector field directly)
+problem = IVP([u, p])
 
 # Parameters
 Re = 1000.0  # Reynolds number (based on domain scale)
 nu = 1.0 / Re
-problem.parameters[&quot;nu&quot;] = nu
 
-# Momentum equations (x, y, z components)
-add_equation!(problem,
-    &quot;dt(ux) + ux*dx(ux) + uy*dy(ux) + uz*dz(ux) + dx(p) = nu*lap(ux)&quot;)
-add_equation!(problem,
-    &quot;dt(uy) + ux*dx(uy) + uy*dy(uy) + uz*dz(uy) + dy(p) = nu*lap(uy)&quot;)
-add_equation!(problem,
-    &quot;dt(uz) + ux*dx(uz) + uy*dy(uz) + uz*dz(uz) + dz(p) = nu*lap(uz)&quot;)
+# Add parameter substitutions (Dedalus-style)
+add_substitution!(problem, &quot;nu&quot;, nu)
+
+# Momentum equation (single vector equation)
+add_equation!(problem, &quot;∂ₜ(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)&quot;)
 
 # Continuity equation
-add_equation!(problem, &quot;dx(ux) + dy(uy) + dz(uz) = 0&quot;)</code></pre><h2 id="Initial-Conditions"><a class="docs-heading-anchor" href="#Initial-Conditions">Initial Conditions</a><a id="Initial-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Initial-Conditions" title="Permalink"></a></h2><h3 id="Taylor-Green-Vortex"><a class="docs-heading-anchor" href="#Taylor-Green-Vortex">Taylor-Green Vortex</a><a id="Taylor-Green-Vortex-1"></a><a class="docs-heading-anchor-permalink" href="#Taylor-Green-Vortex" title="Permalink"></a></h3><p>A classic test case for turbulence codes:</p><pre><code class="language-julia hljs">function initialize_taylor_green!(u, L)
+add_equation!(problem, &quot;div(u) = 0&quot;)</code></pre><div class="admonition is-info" id="Vector-Equation-Syntax-3f8768d1f4296e75"><header class="admonition-header">Vector Equation Syntax<a class="admonition-anchor" href="#Vector-Equation-Syntax-3f8768d1f4296e75" title="Permalink"></a></header><div class="admonition-body"><p>Tarang.jl uses Dedalus-style string equations with full vector support:</p><ul><li><code>∂ₜ(u)</code> - time derivative of vector field</li><li><code>Δ(u)</code> - Laplacian of vector field (component-wise)</li><li><code>∇(p)</code> - gradient of scalar (returns vector)</li><li><code>div(u)</code> - divergence of vector (returns scalar)</li><li><code>u⋅∇(u)</code> - advection term (u·∇)u</li></ul></div></div><h2 id="Initial-Conditions"><a class="docs-heading-anchor" href="#Initial-Conditions">Initial Conditions</a><a id="Initial-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Initial-Conditions" title="Permalink"></a></h2><h3 id="Taylor-Green-Vortex"><a class="docs-heading-anchor" href="#Taylor-Green-Vortex">Taylor-Green Vortex</a><a id="Taylor-Green-Vortex-1"></a><a class="docs-heading-anchor-permalink" href="#Taylor-Green-Vortex" title="Permalink"></a></h3><p>A classic test case for turbulence codes:</p><pre><code class="language-julia hljs">function initialize_taylor_green!(u, L)
     ux, uy, uz = u.components
 
     # Get grid data
@@ -195,4 +191,4 @@ function visualize_slice(u, plane=&quot;xy&quot;, position=0.5)
     data = get_grid_data(u.components[1])
     # ... slice extraction ...
     heatmap(slice_data)
-end</code></pre><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li>Taylor, G. I., &amp; Green, A. E. (1937). Mechanism of the production of small eddies from large ones.</li><li>Pope, S. B. (2000). Turbulent Flows. Cambridge University Press.</li><li>Canuto, C., et al. (2007). Spectral Methods: Fundamentals in Single Domains.</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_2d_rbc/">« Tutorial: 2D Rayleigh-Bénard Convection</a><a class="docs-footer-nextpage" href="../boundary_conditions/">Tutorial: Boundary Conditions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 17:27">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+end</code></pre><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li>Taylor, G. I., &amp; Green, A. E. (1937). Mechanism of the production of small eddies from large ones.</li><li>Pope, S. B. (2000). Turbulent Flows. Cambridge University Press.</li><li>Canuto, C., et al. (2007). Spectral Methods: Fundamentals in Single Domains.</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_2d_rbc/">« Tutorial: 2D Rayleigh-Bénard Convection</a><a class="docs-footer-nextpage" href="../boundary_conditions/">Tutorial: Boundary Conditions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 17:33">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
