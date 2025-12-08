@@ -5,31 +5,31 @@
 problem = IVP([u, v, p, T])
 
 # Add evolution equations
-add_equation!(problem, &quot;dt(u) = -u*dx(u) + nu*lap(u)&quot;)
-add_equation!(problem, &quot;dt(T) = -u*dx(T) + kappa*lap(T)&quot;)</code></pre><h3 id="LBVP-Linear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#LBVP-Linear-Boundary-Value-Problem">LBVP - Linear Boundary Value Problem</a><a id="LBVP-Linear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#LBVP-Linear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state linear PDEs.</p><pre><code class="language-julia hljs"># Create LBVP
+add_equation!(problem, &quot;∂ₜ(u) = -u*dx(u) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(T) = -u*dx(T) + kappa*Δ(T)&quot;)</code></pre><h3 id="LBVP-Linear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#LBVP-Linear-Boundary-Value-Problem">LBVP - Linear Boundary Value Problem</a><a id="LBVP-Linear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#LBVP-Linear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state linear PDEs.</p><pre><code class="language-julia hljs"># Create LBVP
 problem = LBVP([phi])
 
 # Add equations
-add_equation!(problem, &quot;lap(phi) = rho&quot;)</code></pre><h3 id="NLBVP-Nonlinear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#NLBVP-Nonlinear-Boundary-Value-Problem">NLBVP - Nonlinear Boundary Value Problem</a><a id="NLBVP-Nonlinear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#NLBVP-Nonlinear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state nonlinear PDEs.</p><pre><code class="language-julia hljs"># Create NLBVP
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)</code></pre><h3 id="NLBVP-Nonlinear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#NLBVP-Nonlinear-Boundary-Value-Problem">NLBVP - Nonlinear Boundary Value Problem</a><a id="NLBVP-Nonlinear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#NLBVP-Nonlinear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state nonlinear PDEs.</p><pre><code class="language-julia hljs"># Create NLBVP
 problem = NLBVP([u, p])
 
 # Add nonlinear equations
-add_equation!(problem, &quot;u*dx(u) + dx(p) = nu*lap(u)&quot;)</code></pre><h3 id="EVP-Eigenvalue-Problem"><a class="docs-heading-anchor" href="#EVP-Eigenvalue-Problem">EVP - Eigenvalue Problem</a><a id="EVP-Eigenvalue-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#EVP-Eigenvalue-Problem" title="Permalink"></a></h3><p>Linear stability and eigenvalue analysis.</p><pre><code class="language-julia hljs"># Create EVP with eigenvalue name
+add_equation!(problem, &quot;u*dx(u) + dx(p) = nu*Δ(u)&quot;)</code></pre><h3 id="EVP-Eigenvalue-Problem"><a class="docs-heading-anchor" href="#EVP-Eigenvalue-Problem">EVP - Eigenvalue Problem</a><a id="EVP-Eigenvalue-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#EVP-Eigenvalue-Problem" title="Permalink"></a></h3><p>Linear stability and eigenvalue analysis.</p><pre><code class="language-julia hljs"># Create EVP with eigenvalue name
 evp = EVP([u_hat, p_hat]; eigenvalue=:sigma)
 
 # Add eigenvalue equations
-add_equation!(evp, &quot;sigma*u_hat = lap(u_hat)&quot;)</code></pre><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="Equation-Syntax"><a class="docs-heading-anchor" href="#Equation-Syntax">Equation Syntax</a><a id="Equation-Syntax-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Syntax" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Format: &quot;LHS = RHS&quot;
-add_equation!(problem, &quot;dt(u) = rhs_expression&quot;)
+add_equation!(evp, &quot;sigma*u_hat = Δ(u_hat)&quot;)</code></pre><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="Equation-Syntax"><a class="docs-heading-anchor" href="#Equation-Syntax">Equation Syntax</a><a id="Equation-Syntax-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Syntax" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Format: &quot;LHS = RHS&quot;
+add_equation!(problem, &quot;∂ₜ(u) = rhs_expression&quot;)
 
 # Multiple terms
-add_equation!(problem, &quot;dt(u) + u*dx(u) = nu*lap(u) - dx(p)&quot;)</code></pre><h3 id="Supported-Operations"><a class="docs-heading-anchor" href="#Supported-Operations">Supported Operations</a><a id="Supported-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Supported-Operations" title="Permalink"></a></h3><ul><li>Derivatives: <code>dx</code>, <code>dy</code>, <code>dz</code>, <code>dt</code>, <code>lap</code>, <code>grad</code>, <code>div</code>, <code>curl</code></li><li>Arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></li><li>Functions: <code>sin</code>, <code>cos</code>, <code>exp</code>, <code>sqrt</code></li><li>Parameters: Any name in <code>problem.parameters</code></li></ul><h3 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Define parameters
+add_equation!(problem, &quot;∂ₜ(u) + u*dx(u) = nu*Δ(u) - dx(p)&quot;)</code></pre><h3 id="Supported-Operations"><a class="docs-heading-anchor" href="#Supported-Operations">Supported Operations</a><a id="Supported-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Supported-Operations" title="Permalink"></a></h3><ul><li>Derivatives: <code>dx</code>, <code>dy</code>, <code>dz</code>, <code>dt</code>/<code>∂ₜ</code>, <code>lap</code>/<code>Δ</code>, <code>grad</code>/<code>∇</code>, <code>div</code>, <code>curl</code></li><li>Arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code></li><li>Functions: <code>sin</code>, <code>cos</code>, <code>exp</code>, <code>sqrt</code></li><li>Parameters: Any name in <code>problem.parameters</code></li></ul><h3 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Define parameters
 problem.parameters[&quot;nu&quot;] = 0.01
 problem.parameters[&quot;Ra&quot;] = 1e6
 problem.parameters[&quot;Pr&quot;] = 1.0
 
 # Use in equations
-add_equation!(problem, &quot;dt(u) = nu*lap(u)&quot;)
-add_equation!(problem, &quot;dt(T) = Ra*Pr*w + lap(T)&quot;)</code></pre><h2 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h2><h3 id="Dirichlet-(Value)"><a class="docs-heading-anchor" href="#Dirichlet-(Value)">Dirichlet (Value)</a><a id="Dirichlet-(Value)-1"></a><a class="docs-heading-anchor-permalink" href="#Dirichlet-(Value)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># u = value at location
+add_equation!(problem, &quot;∂ₜ(u) = nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂ₜ(T) = Ra*Pr*w + Δ(T)&quot;)</code></pre><h2 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h2><h3 id="Dirichlet-(Value)"><a class="docs-heading-anchor" href="#Dirichlet-(Value)">Dirichlet (Value)</a><a id="Dirichlet-(Value)-1"></a><a class="docs-heading-anchor-permalink" href="#Dirichlet-(Value)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># u = value at location
 add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)  # u=0 at z=0
 add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)  # T=0 at z=1</code></pre><h3 id="Neumann-(Derivative)"><a class="docs-heading-anchor" href="#Neumann-(Derivative)">Neumann (Derivative)</a><a id="Neumann-(Derivative)-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-(Derivative)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># du/dz = value at location
 add_neumann_bc!(problem, &quot;dz(T)(z=1) = 0&quot;)  # dT/dz=0 at z=1</code></pre><h3 id="Robin-(Mixed)"><a class="docs-heading-anchor" href="#Robin-(Mixed)">Robin (Mixed)</a><a id="Robin-(Mixed)-1"></a><a class="docs-heading-anchor-permalink" href="#Robin-(Mixed)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># α*u + β*du/dn = γ
@@ -43,14 +43,14 @@ is_valid = validate_problem(problem)
 # - Incompatible equation counts
 # - Parameter issues</code></pre><h2 id="Common-Problem-Patterns"><a class="docs-heading-anchor" href="#Common-Problem-Patterns">Common Problem Patterns</a><a id="Common-Problem-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Problem-Patterns" title="Permalink"></a></h2><h3 id="Heat-Equation"><a class="docs-heading-anchor" href="#Heat-Equation">Heat Equation</a><a id="Heat-Equation-1"></a><a class="docs-heading-anchor-permalink" href="#Heat-Equation" title="Permalink"></a></h3><pre><code class="language-julia hljs">problem = IVP([T])
 problem.parameters[&quot;kappa&quot;] = 0.01
-add_equation!(problem, &quot;dt(T) = kappa*lap(T)&quot;)
+add_equation!(problem, &quot;∂ₜ(T) = kappa*Δ(T)&quot;)
 add_dirichlet_bc!(problem, &quot;T(z=0) = 1&quot;)
 add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)</code></pre><h3 id="Incompressible-Navier-Stokes"><a class="docs-heading-anchor" href="#Incompressible-Navier-Stokes">Incompressible Navier-Stokes</a><a id="Incompressible-Navier-Stokes-1"></a><a class="docs-heading-anchor-permalink" href="#Incompressible-Navier-Stokes" title="Permalink"></a></h3><pre><code class="language-julia hljs">problem = IVP([ux, uz, p])
 problem.parameters[&quot;nu&quot;] = 0.01
 
 # Momentum
-add_equation!(problem, &quot;dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = nu*lap(ux)&quot;)
-add_equation!(problem, &quot;dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = nu*lap(uz)&quot;)
+add_equation!(problem, &quot;∂ₜ(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = nu*Δ(ux)&quot;)
+add_equation!(problem, &quot;∂ₜ(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = nu*Δ(uz)&quot;)
 
 # Continuity
 add_equation!(problem, &quot;dx(ux) + dz(uz) = 0&quot;)
@@ -63,10 +63,10 @@ end</code></pre><h3 id="Rayleigh-Bénard"><a class="docs-heading-anchor" href="#
 problem.parameters[&quot;Ra&quot;] = 1e6
 problem.parameters[&quot;Pr&quot;] = 1.0
 
-add_equation!(problem, &quot;dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = Pr*lap(ux)&quot;)
-add_equation!(problem, &quot;dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = Pr*lap(uz) + Ra*Pr*T&quot;)
+add_equation!(problem, &quot;∂ₜ(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) = Pr*Δ(ux)&quot;)
+add_equation!(problem, &quot;∂ₜ(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) = Pr*Δ(uz) + Ra*Pr*T&quot;)
 add_equation!(problem, &quot;dx(ux) + dz(uz) = 0&quot;)
-add_equation!(problem, &quot;dt(T) + ux*dx(T) + uz*dz(T) = lap(T)&quot;)
+add_equation!(problem, &quot;∂ₜ(T) + ux*dx(T) + uz*dz(T) = Δ(T)&quot;)
 
 # Boundary conditions
 add_dirichlet_bc!(problem, &quot;ux(z=0) = 0&quot;)
@@ -75,6 +75,6 @@ add_dirichlet_bc!(problem, &quot;uz(z=0) = 0&quot;)
 add_dirichlet_bc!(problem, &quot;uz(z=1) = 0&quot;)
 add_dirichlet_bc!(problem, &quot;T(z=0) = 1&quot;)  # Hot bottom
 add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)  # Cold top</code></pre><h3 id="Poisson-Equation-(BVP)"><a class="docs-heading-anchor" href="#Poisson-Equation-(BVP)">Poisson Equation (BVP)</a><a id="Poisson-Equation-(BVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Poisson-Equation-(BVP)" title="Permalink"></a></h3><pre><code class="language-julia hljs">problem = LBVP([phi])
-add_equation!(problem, &quot;lap(phi) = rho&quot;)
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)
 add_dirichlet_bc!(problem, &quot;phi(z=0) = 0&quot;)
-add_dirichlet_bc!(problem, &quot;phi(z=1) = 0&quot;)</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems</li><li><a href="../../tutorials/boundary_conditions/">Boundary Conditions Tutorial</a>: Detailed BC guide</li><li><a href="../../api/problems/">API: Problems</a>: Complete reference</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators</a><a class="docs-footer-nextpage" href="../solvers/">Solvers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 07:44">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+add_dirichlet_bc!(problem, &quot;phi(z=1) = 0&quot;)</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems</li><li><a href="../../tutorials/boundary_conditions/">Boundary Conditions Tutorial</a>: Detailed BC guide</li><li><a href="../../api/problems/">API: Problems</a>: Complete reference</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators</a><a class="docs-footer-nextpage" href="../solvers/">Solvers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 08:49">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
