@@ -33,11 +33,15 @@ add_dirichlet_bc!(problem, "T(z=1) = 0")  # T = 0 at z = 1
 For viscous flows at solid walls:
 
 ```julia
-# Velocity = 0 at both walls
-add_dirichlet_bc!(problem, "ux(z=0) = 0")  # u = 0 at z = 0
-add_dirichlet_bc!(problem, "ux(z=1) = 0")  # u = 0 at z = 1
-add_dirichlet_bc!(problem, "uz(z=0) = 0")  # w = 0 at z = 0
-add_dirichlet_bc!(problem, "uz(z=1) = 0")  # w = 0 at z = 1
+# Using the convenience function (recommended)
+add_no_slip_bc!(problem, "ux(z=0)")
+add_no_slip_bc!(problem, "ux(z=1)")
+add_no_slip_bc!(problem, "uz(z=0)")
+add_no_slip_bc!(problem, "uz(z=1)")
+
+# Or using Dirichlet BC directly
+add_dirichlet_bc!(problem, "ux(z=0) = 0")
+add_dirichlet_bc!(problem, "uz(z=0) = 0")
 ```
 
 ### Time-Dependent Boundary Conditions
