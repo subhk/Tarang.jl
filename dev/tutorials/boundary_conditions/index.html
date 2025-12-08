@@ -59,7 +59,7 @@ problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 add_substitution!(problem, &quot;nu&quot;, nu)
 
 # Momentum equation (single vector equation)
-add_equation!(problem, &quot;∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)&quot;)
 
 # Continuity with pressure gauge tau
 add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
@@ -143,7 +143,7 @@ add_substitution!(problem, &quot;nu&quot;, nu)
 add_substitution!(problem, &quot;dpdx&quot;, dpdx)
 
 # Momentum equation (vector form) - dpdx is the driving pressure gradient
-add_equation!(problem, &quot;∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) - dpdx*ex&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) - dpdx*ex&quot;)
 
 # Continuity with pressure gauge
 add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
@@ -189,13 +189,13 @@ add_substitution!(problem, &quot;Pr&quot;, Pr)
 
 # Momentum equation (vector form with buoyancy)
 # ez is the unit vector in z-direction
-add_equation!(problem, &quot;∂ₜ(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez&quot;)
+add_equation!(problem, &quot;∂t(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez&quot;)
 
 # Continuity with pressure gauge
 add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
 
 # Temperature equation
-add_equation!(problem, &quot;∂ₜ(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)&quot;)
+add_equation!(problem, &quot;∂t(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)&quot;)
 
 # Boundary conditions (vector notation for velocity)
 add_bc!(problem, &quot;u(z=0) = 0&quot;)   # No-slip bottom
@@ -240,4 +240,4 @@ add_bc!(problem, &quot;u(z=1) = 0&quot;)</code></pre><h3 id="Over-Specified-Syst
 tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis,))  # Correct: 1D on x
 
 # NOT:
-tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis, z_basis))  # Wrong: 2D</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../pages/tau_method/">Tau Method (Advanced)</a>: Mathematical details</li><li><a href="../../api/problems/">Problems API</a>: Problem definition</li><li><a href="../../api/bases/">Bases API</a>: Spectral basis selection</li><li><a href="../ivp_2d_rbc/">2D Rayleigh-Bénard Tutorial</a>: Complete example with BCs</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_3d_turbulence/">« Tutorial: 3D Turbulence Simulation</a><a class="docs-footer-nextpage" href="../analysis_and_output/">Tutorial: Analysis and Output »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:12">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis, z_basis))  # Wrong: 2D</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../pages/tau_method/">Tau Method (Advanced)</a>: Mathematical details</li><li><a href="../../api/problems/">Problems API</a>: Problem definition</li><li><a href="../../api/bases/">Bases API</a>: Spectral basis selection</li><li><a href="../ivp_2d_rbc/">2D Rayleigh-Bénard Tutorial</a>: Complete example with BCs</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_3d_turbulence/">« Tutorial: 3D Turbulence Simulation</a><a class="docs-footer-nextpage" href="../analysis_and_output/">Tutorial: Analysis and Output »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 21:13">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
