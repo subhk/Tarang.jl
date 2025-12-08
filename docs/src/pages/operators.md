@@ -8,31 +8,31 @@ Operators perform mathematical operations on fields, including differentiation a
 
 ```julia
 # Syntax in equations
-dx(field)   # ∂/∂x
-dy(field)   # ∂/∂y
-dz(field)   # ∂/∂z
+∂x(field)   # ∂/∂x
+∂y(field)   # ∂/∂y
+∂z(field)   # ∂/∂z
 
 # Example
-add_equation!(problem, "dt(T) = -u*dx(T) - w*dz(T)")
+add_equation!(problem, "∂ₜ(T) = -u*∂x(T) - w*∂z(T)")
 ```
 
 ### Second Derivatives
 
 ```julia
 # Composed derivatives
-dx(dx(field))   # ∂²/∂x²
-dz(dz(field))   # ∂²/∂z²
-dx(dz(field))   # ∂²/∂x∂z
+∂x(∂x(field))   # ∂²/∂x²
+∂z(∂z(field))   # ∂²/∂z²
+∂x(∂z(field))   # ∂²/∂x∂z
 ```
 
 ### Laplacian
 
 ```julia
-# lap(f) = ∇²f
-lap(field)
+# Δ(f) = ∇²f
+Δ(field)
 
 # Example: Diffusion equation
-add_equation!(problem, "dt(T) = kappa*lap(T)")
+add_equation!(problem, "∂ₜ(T) = kappa*Δ(T)")
 ```
 
 ### Fractional Laplacian
@@ -105,7 +105,7 @@ For 2D (returns scalar vorticity):
 
 ```julia
 # ω = ∂v/∂x - ∂u/∂y
-add_equation!(problem, "omega = dx(v) - dy(u)")
+add_equation!(problem, "omega = ∂x(v) - ∂y(u)")
 ```
 
 ### Perpendicular Gradient
@@ -128,8 +128,8 @@ u = perp_grad(psi)
 ## Time Derivatives
 
 ```julia
-# dt(field) for IVP equations
-add_equation!(problem, "dt(u) = rhs")
+# ∂ₜ(field) for IVP equations
+add_equation!(problem, "∂ₜ(u) = rhs")
 
 # Only valid in Initial Value Problems
 ```
@@ -152,11 +152,11 @@ Tarang supports Unicode mathematical notation for cleaner, more readable code:
 ### In Equations
 
 ```julia
-# Traditional ASCII syntax
-add_equation!(problem, "dt(u) + u*dx(u) = nu*lap(u) - grad(p)")
-
-# Unicode syntax (equivalent)
+# Unicode syntax (preferred)
 add_equation!(problem, "∂ₜ(u) + u⋅∇(u) = nu*Δ(u) - ∇(p)")
+
+# Traditional ASCII syntax (also supported)
+add_equation!(problem, "dt(u) + u*dx(u) = nu*lap(u) - grad(p)")
 ```
 
 ### In Code
@@ -196,7 +196,7 @@ In Julia REPL or editors with Julia support:
 
 ```julia
 # Equations are strings parsed symbolically
-add_equation!(problem, "dt(T) + u*dx(T) = kappa*lap(T)")
+add_equation!(problem, "∂ₜ(T) + u*∂x(T) = kappa*Δ(T)")
 
 # Supports:
 # - Addition/subtraction: +, -
@@ -210,18 +210,18 @@ add_equation!(problem, "dt(T) + u*dx(T) = kappa*lap(T)")
 
 ```julia
 # Advection
-"u*dx(f) + w*dz(f)"
+"u*∂x(f) + w*∂z(f)"
 
 # Diffusion
-"nu*lap(u)"
+"nu*Δ(u)"
 
 # Pressure gradient
-"dx(p)"  # or "grad(p)" for vector
+"∂x(p)"  # or "∇(p)" for vector
 
 # Navier-Stokes viscous term
-"nu*(dx(dx(u)) + dz(dz(u)))"
+"nu*(∂x(∂x(u)) + ∂z(∂z(u)))"
 # or simply:
-"nu*lap(u)"
+"nu*Δ(u)"
 ```
 
 ## Implementation Details
@@ -259,7 +259,7 @@ Implemented as sparse matrix operations.
 ```julia
 function advection(u, field)
     # u·∇f
-    result = u.components[1] * dx(field)
+    result = u.components[1] * ∂x(field)
     for i in 2:length(u.components)
         result += u.components[i] * d[i](field)
     end
@@ -280,7 +280,7 @@ add_equation!(problem, "dt(T) = -advect(u, T)")
 ## Performance Tips
 
 1. **Minimize transforms**: Group operations in same space
-2. **Use Laplacian**: `lap(f)` is optimized vs `dx(dx(f)) + dz(dz(f))`
+2. **Use Laplacian**: `Δ(f)` is optimized vs `∂x(∂x(f)) + ∂z(∂z(f))`
 3. **Spectral derivatives**: Free in Fourier, cheap in Chebyshev
 4. **Nonlinear terms**: Require transform to grid space
 

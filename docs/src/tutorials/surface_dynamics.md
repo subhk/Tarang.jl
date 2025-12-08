@@ -80,7 +80,7 @@ bad = boundary_advection_diffusion_setup(
     interior_coupling=(
         Nz=32,
         H=1.0,
-        equation="Δ(ψ) + S*dz(dz(ψ)) = q",  # QG elliptic operator
+        equation="Δ(ψ) + S*∂z(∂z(ψ)) = q",  # QG elliptic operator
         params=Dict("S" => 0.01, "q" => 0.0)
     )
 )
@@ -208,7 +208,7 @@ qg = boundary_advection_diffusion_setup(
     interior_coupling=(
         Nz=32,
         H=1.0,
-        equation="Δ(ψ) + S*dz(dz(ψ)) = 0",
+        equation="Δ(ψ) + S*∂z(∂z(ψ)) = 0",
         params=Dict("S" => (1.0/10.0)^2)  # (f₀/N)²
     )
 )
