@@ -360,7 +360,8 @@ end
 """
     parse_stress_free_bc_string(bc_string::String)
 
-Parse stress-free BC string like "u(z=0) stress-free" into components.
+Parse stress-free BC string like "u(z=0)" into components.
+The "stress-free" part is implied by the function name and optional in the string.
 
 Returns: (velocity_field, coordinate, position)
 """
@@ -368,19 +369,13 @@ function parse_stress_free_bc_string(bc_string::String)
     # Remove extra whitespace but keep single spaces
     s = strip(bc_string)
 
-    # Match pattern: field(coord=pos) stress-free
-    # e.g., "u(z=0) stress-free" or "u(z=0)stress-free"
-    pattern = r"^([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)\s*stress[-_]?free$"i
+    # Primary format: field(coord=pos) - simple and clean
+    # e.g., "u(z=0)" or "u(z=1)"
+    pattern = r"^([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)$"
     m = match(pattern, s)
 
     if m === nothing
-        # Try alternate format: stress_free(field, coord=pos)
-        pattern2 = r"^stress[-_]?free\(([a-zA-Z_][a-zA-Z0-9_]*),\s*([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)$"i
-        m = match(pattern2, s)
-
-        if m === nothing
-            throw(ArgumentError("Invalid stress-free BC format: '$bc_string'. Expected: 'field(coord=pos) stress-free'"))
-        end
+        throw(ArgumentError("Invalid stress-free BC format: '$bc_string'. Expected: 'field(coord=pos)', e.g., 'u(z=0)'"))
     end
 
     velocity_field = String(m.captures[1])
@@ -512,12 +507,12 @@ end
 Add stress-free boundary condition using string syntax.
 
 # Format:
-- `"u(z=0) stress-free"` or `"stress_free(u, z=0)"`
+- `"field(coord=pos)"` - simple and clean
 
 # Examples:
 ```julia
-add_stress_free_bc!(problem, "u(z=0) stress-free")
-add_stress_free_bc!(problem, "u(z=1) stress-free")
+add_stress_free_bc!(problem, "u(z=0)")
+add_stress_free_bc!(problem, "u(z=1)")
 ```
 """
 function add_stress_free_bc!(problem::Problem, bc_string::String)

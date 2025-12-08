@@ -81,7 +81,7 @@ For free surfaces or slip boundaries:
 add_neumann_bc!(problem, "dz(ux)(z=1) = 0")
 
 # Using the convenience function
-add_stress_free_bc!(problem, "ux(z=1) stress-free")
+add_stress_free_bc!(problem, "ux(z=1)")
 ```
 
 ## Robin Boundary Conditions
@@ -197,7 +197,7 @@ add_dirichlet_bc!(problem, "uz(z=1) = 0")
 ```julia
 # Free-slip (stress-free) at top, no-slip at bottom
 add_dirichlet_bc!(problem, "ux(z=0) = 0")              # No-slip
-add_stress_free_bc!(problem, "ux(z=1) stress-free")   # Stress-free
+add_stress_free_bc!(problem, "ux(z=1)")   # Stress-free
 add_dirichlet_bc!(problem, "uz(z=0) = 0")              # No penetration
 add_dirichlet_bc!(problem, "uz(z=1) = 0")              # No penetration
 ```

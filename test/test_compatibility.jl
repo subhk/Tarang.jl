@@ -18,7 +18,7 @@ end
     Tarang.add_dirichlet_bc!(lbvp, "u(z=0) = 0")
     Tarang.add_neumann_bc!(lbvp, "dz(u)(z=1) = 1")
     Tarang.add_robin_bc!(lbvp, "1.0*u(z=0) + 2.0*dz(u)(z=0) = 0.5")
-    Tarang.add_stress_free_bc!(lbvp, "u(z=1) stress-free")
+    Tarang.add_stress_free_bc!(lbvp, "u(z=1)")
 
     @test Tarang.validate_problem(lbvp)
     @test length(lbvp.boundary_conditions) >= 4
