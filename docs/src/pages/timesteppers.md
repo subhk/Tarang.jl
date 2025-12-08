@@ -8,38 +8,37 @@ Tarang.jl provides several families of time integration schemes:
 
 | Family | Type | Best For |
 |--------|------|----------|
-| RK (IMEX) | IMEX Runge-Kutta | General stiff problems |
-| RK (Explicit) | Explicit Runge-Kutta | Non-stiff problems |
+| RK | IMEX Runge-Kutta | General problems |
 | CNAB | Multistep IMEX | Moderately stiff |
 | SBDF | Multistep IMEX | Stiff problems |
 
-## IMEX Runge-Kutta (Default)
+## IMEX Runge-Kutta
 
-Following Dedalus convention, the RK methods use Additive Runge-Kutta (ARK) schemes:
+Following Dedalus convention, all RK methods use Additive Runge-Kutta (ARK) schemes:
 - Linear terms (LHS) are treated **implicitly**
 - Nonlinear terms (RHS) are treated **explicitly**
 
 This allows stable integration of stiff problems with larger timesteps.
 
-### RK111 (IMEX)
+### RK111
 
 First-order IMEX method (Backward Euler / Forward Euler).
 
 ```julia
-timestepper = RK111()  # IMEX by default
+timestepper = RK111()
 ```
 
 - **Implicit part**: Backward Euler (linear terms)
 - **Explicit part**: Forward Euler (nonlinear terms)
 - **Accuracy**: O(Δt)
-- **Use case**: Testing, simple stiff problems
+- **Use case**: Testing, simple problems
 
-### RK222 (IMEX)
+### RK222
 
 Second-order, 2-stage IMEX Runge-Kutta (Ascher, Ruuth, Spiteri 1997).
 
 ```julia
-timestepper = RK222()  # IMEX by default
+timestepper = RK222()
 ```
 
 - **Implicit part**: 2-stage SDIRK (γ = 1 - 1/√2)
@@ -48,12 +47,12 @@ timestepper = RK222()  # IMEX by default
 - **Stability**: L-stable
 - **Use case**: General purpose (recommended)
 
-### RK443 (IMEX)
+### RK443
 
 Third-order, 4-stage IMEX Runge-Kutta (Kennedy & Carpenter ARK3(2)4L[2]SA).
 
 ```julia
-timestepper = RK443()  # IMEX by default
+timestepper = RK443()
 ```
 
 - **Implicit part**: 4-stage ESDIRK (γ ≈ 0.4359)
@@ -62,41 +61,7 @@ timestepper = RK443()  # IMEX by default
 - **Stability**: L-stable
 - **Use case**: High accuracy requirements, stiff problems
 
-## Explicit Runge-Kutta
-
-For non-stiff problems or when you want purely explicit treatment:
-
-### RK111_Explicit (Forward Euler)
-
-```julia
-timestepper = RK111_Explicit()
-```
-
-- **Stability**: CFL limited
-- **Accuracy**: O(Δt)
-- **Use case**: Testing, simple problems
-
-### RK222_Explicit
-
-```julia
-timestepper = RK222_Explicit()
-```
-
-- **Stability**: Better than RK111
-- **Accuracy**: O(Δt²)
-- **Use case**: Non-stiff problems
-
-### RK443_Explicit
-
-```julia
-timestepper = RK443_Explicit()
-```
-
-- **Stability**: Good
-- **Accuracy**: O(Δt⁴)
-- **Use case**: High accuracy, non-stiff problems
-
-## IMEX Methods
+## Multistep IMEX Methods
 
 Implicit-Explicit methods treat stiff (linear) terms implicitly and non-stiff (nonlinear) terms explicitly.
 
