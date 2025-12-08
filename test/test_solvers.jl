@@ -8,7 +8,7 @@ using Tarang
     field = ScalarField(dist, "u", (basis,), Float64)
 
     problem = IVP([field])
-    Tarang.add_equation!(problem, "dt(u) = 0")
+    Tarang.add_equation!(problem, "∂t(u) = 0")
 
     solver = InitialValueSolver(problem, RK111(); device="cpu")
 

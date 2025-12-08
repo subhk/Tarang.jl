@@ -111,14 +111,14 @@ Create an Initial Value Problem (IVP):
 problem = IVP([T])
 
 # Add the heat equation
-add_equation!(problem, "dt(T) = kappa*lap(T)")
+add_equation!(problem, "∂t(T) = kappa*lap(T)")
 
 # Set diffusion coefficient
 problem.parameters["kappa"] = 1.0
 ```
 
 The equation uses symbolic notation:
-- `dt(T)`: time derivative ∂T/∂t
+- `∂t(T)`: time derivative ∂T/∂t
 - `lap(T)`: Laplacian ∇²T
 - `kappa`: a parameter we can easily modify
 
@@ -217,7 +217,7 @@ T = ScalarField(dist, "T", (x_basis, z_basis))
 
 # Problem
 problem = IVP([T])
-add_equation!(problem, "dt(T) = kappa*lap(T)")
+add_equation!(problem, "∂t(T) = kappa*lap(T)")
 problem.parameters["kappa"] = 0.01
 
 # Boundary conditions

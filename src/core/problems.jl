@@ -247,7 +247,6 @@ end
     parse_neumann_bc_string(bc_string::String)
 
 Parse Neumann BC string like "∂z(u)(z=0) = 0" into components.
-Also supports ASCII format "dz(u)(z=0) = 0" for backwards compatibility.
 
 Returns: (field_name, coordinate, position, value)
 """
@@ -255,9 +254,9 @@ function parse_neumann_bc_string(bc_string::String)
     # Remove whitespace
     s = replace(bc_string, " " => "")
 
-    # Match pattern: d<coord>(<field>)(<coord>=<pos>)=<value>
-    # e.g., "∂z(u)(z=0)=0" or "dz(u)(z=0)=0"
-    pattern = r"^d([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+    # Match pattern: ∂<coord>(<field>)(<coord>=<pos>)=<value>
+    # e.g., "∂z(u)(z=0)=0"
+    pattern = r"^∂([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
     m = match(pattern, s)
 
     if m === nothing
@@ -297,7 +296,6 @@ end
     parse_robin_bc_string(bc_string::String)
 
 Parse Robin BC string like "1.0*T(z=0) + 0.5*∂z(T)(z=0) = 1.0" into components.
-Also supports ASCII format "dz(T)" for backwards compatibility.
 
 Returns: (field_name, coordinate, position, alpha, beta, value)
 """
@@ -305,13 +303,13 @@ function parse_robin_bc_string(bc_string::String)
     # Remove whitespace
     s = replace(bc_string, " " => "")
 
-    # Match pattern: alpha*field(coord=pos)+beta*d<coord>(field)(<coord>=pos)=value
-    # e.g., "1.0*T(z=0)+0.5*∂z(T)(z=0)=1.0" or "1.0*T(z=0)+0.5*dz(T)(z=0)=1.0"
-    pattern = r"^([0-9.eE+-]+)\*([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)\+([0-9.eE+-]+)\*d([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+    # Match pattern: alpha*field(coord=pos)+beta*∂<coord>(field)(<coord>=pos)=value
+    # e.g., "1.0*T(z=0)+0.5*∂z(T)(z=0)=1.0"
+    pattern = r"^([0-9.eE+-]+)\*([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)\+([0-9.eE+-]+)\*∂([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
     m = match(pattern, s)
 
     if m === nothing
-        throw(ArgumentError("Invalid Robin BC format: '$bc_string'. Expected: 'alpha*field(coord=pos) + beta*d<coord>(field)(coord=pos) = value'"))
+        throw(ArgumentError("Invalid Robin BC format: '$bc_string'. Expected: 'alpha*field(coord=pos) + beta*∂<coord>(field)(coord=pos) = value'"))
     end
 
     alpha_str = String(m.captures[1])
@@ -461,7 +459,6 @@ Add Neumann boundary condition using Dedalus-style string syntax.
 - `"∂z(u)(z=0) = 0"` - derivative of u at z=0 equals 0
 - `"∂x(T)(x=1) = 0"` - derivative of T at x=1 equals 0
 - `"T(z=0) = 0"` - simple format (same as Dirichlet syntax)
-- ASCII formats `dz`, `dx` also supported for backwards compatibility
 
 # Examples:
 ```julia

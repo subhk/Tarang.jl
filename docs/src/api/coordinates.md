@@ -70,7 +70,7 @@ ez = unit_vector(coords, "z")
 
 # Use in equations
 # Example: buoyancy force in z-direction
-add_equation!(problem, "dt(u) = ... + Ra*Pr*T*ez")
+add_equation!(problem, "∂t(u) = ... + Ra*Pr*T*ez")
 ```
 
 ---

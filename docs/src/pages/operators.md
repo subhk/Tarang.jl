@@ -74,7 +74,7 @@ Converts scalar to vector field.
 
 ```julia
 # grad(p) = ∇p
-add_equation!(problem, "dt(u) = -grad(p)")
+add_equation!(problem, "∂t(u) = -grad(p)")
 
 # Components:
 # ∂p/∂x, ∂p/∂y, ∂p/∂z
@@ -152,11 +152,8 @@ Tarang supports Unicode mathematical notation for cleaner, more readable code:
 ### In Equations
 
 ```julia
-# Unicode syntax (preferred)
+# Unicode syntax
 add_equation!(problem, "∂t(u) + u⋅∇(u) = nu*Δ(u) - ∇(p)")
-
-# Traditional ASCII syntax (also supported)
-add_equation!(problem, "dt(u) + u*dx(u) = nu*lap(u) - grad(p)")
 ```
 
 ### In Code
@@ -274,7 +271,7 @@ end
 problem.operators["advect"] = advection
 
 # Use in equations
-add_equation!(problem, "dt(T) = -advect(u, T)")
+add_equation!(problem, "∂t(T) = -advect(u, T)")
 ```
 
 ## Performance Tips

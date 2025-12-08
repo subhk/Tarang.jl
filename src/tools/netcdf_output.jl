@@ -231,7 +231,7 @@ Parse a field expression string into an operator tree or field.
 Supports expressions like:
 - Variable references: "u", "velocity"
 - Arithmetic: "u + v", "2*u", "u - v"
-- Derivatives: "∂x(u)", "d(u,x)", "Δ(u)" (also supports ASCII: dx, lap)
+- Derivatives: "∂x(u)", "d(u,x)", "Δ(u)"
 - Products: "u*v", "dot(u, v)"
 
 # Arguments
@@ -396,12 +396,7 @@ function evaluate_field_call(ast::Expr, namespace::Dict{String,Any}, dist)
         end
         return nothing
 
-    # Handle differential operators
-    elseif func_name in ["dx", "dy", "dz"] && length(eval_args) >= 1
-        coord_name = func_name[2:end]  # "x", "y", or "z"
-        operand = eval_args[1]
-        order = length(eval_args) >= 2 && isa(eval_args[2], ConstantOperator) ? Int(eval_args[2].value) : 1
-        return create_differentiate_operator(operand, coord_name, order, namespace)
+    # Handle differential operators (Unicode only: ∂x, ∂y, ∂z)
 
     elseif func_name == "d" && length(eval_args) >= 2
         # d(field, coord) or d(field, coord, order)
@@ -437,8 +432,8 @@ Parse common field expression patterns using regex matching.
 Fallback for when AST parsing fails.
 """
 function parse_field_expression_patterns(expr_str::String, namespace::Dict, dist)
-    # Pattern: dx(var), dy(var), dz(var)
-    m = match(r"^d([xyz])\((\w+)\)$", expr_str)
+    # Pattern: ∂x(var), ∂y(var), ∂z(var) - Unicode only
+    m = match(r"^∂([xyz])\((\w+)\)$", expr_str)
     if m !== nothing
         coord_name = m.captures[1]
         var_name = m.captures[2]

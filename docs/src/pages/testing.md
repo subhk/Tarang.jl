@@ -104,7 +104,7 @@ end
 @testset "IVP Solver" begin
     # Setup problem
     problem = IVP([field])
-    Tarang.add_equation!(problem, "dt(f) = -f")
+    Tarang.add_equation!(problem, "∂t(f) = -f")
 
     # Create solver
     solver = InitialValueSolver(problem, RK222(); dt=0.01)

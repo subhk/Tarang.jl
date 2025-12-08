@@ -1336,12 +1336,12 @@ function qg_system_setup(;
     interior_bvp.parameters["S"] = (f0/N)^2  # Burger number squared
 
     # QG elliptic operator: ∇_h²ψ + S·∂²ψ/∂z² = q
-    add_equation!(interior_bvp, "Δ(ψ) + S*dz(dz(ψ)) = q")
+    add_equation!(interior_bvp, "Δ(ψ) + S*∂z(∂z(ψ)) = q")
 
     # Boundary conditions: ∂ψ/∂z = (N/f₀)θ at surfaces
     # These will be updated at each timestep with current θ values
-    add_neumann_bc!(interior_bvp, "dz(ψ)(z=0) = (N/f0)*θ_bot")
-    add_neumann_bc!(interior_bvp, "dz(ψ)(z=$H) = (N/f0)*θ_top")
+    add_neumann_bc!(interior_bvp, "∂z(ψ)(z=0) = (N/f0)*θ_bot")
+    add_neumann_bc!(interior_bvp, "∂z(ψ)(z=$H) = (N/f0)*θ_top")
 
     # Surface IVPs: ∂θ/∂t + u·∇θ = κ(-Δ)^α θ
     surface_ivp_bot = IVP([θ_bot])
@@ -1852,7 +1852,7 @@ bad = boundary_advection_diffusion_setup(
     interior_coupling=(
         Nz=32,
         H=1.0,
-        equation="Δ(ψ) + S*dz(dz(ψ)) = q",
+        equation="Δ(ψ) + S*∂z(∂z(ψ)) = q",
         params=Dict("S" => 0.01)
     )
 )

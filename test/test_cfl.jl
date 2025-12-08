@@ -14,7 +14,7 @@ using Tarang
         fill!(u.components[1].data_g, velocity_mag)
 
         problem = IVP([u]; namespace=Dict("u" => u))
-        Tarang.add_equation!(problem, "dt(u) = 0")
+        Tarang.add_equation!(problem, "∂t(u) = 0")
 
         solver = InitialValueSolver(problem, RK111(); device="cpu")
         cfl = CFL(solver; initial_dt=1.0, safety=safety, cadence=1)

@@ -13,26 +13,22 @@ Tarang.jl supports:
 
 ## Unicode Operators
 
-Tarang.jl supports Unicode mathematical symbols for more readable code:
+Tarang.jl uses Unicode mathematical symbols for readable, publication-quality code:
 
-| ASCII | Unicode | Description |
-|-------|---------|-------------|
-| `grad(f)` | `∇(f)` | Gradient |
-| `lap(f)` | `Δ(f)` or `∇²(f)` | Laplacian |
-| `dt(f)` | `∂t(f)` | Time derivative |
-| `dx(f)` | `∂x(f)` | x-derivative |
-| `dy(f)` | `∂y(f)` | y-derivative |
-| `dz(f)` | `∂z(f)` | z-derivative |
-| `dr(f)` | `∂r(f)` | r-derivative |
-| `dot(u, v)` | `u ⋅ v` | Dot product |
-| `cross(u, v)` | `u × v` | Cross product |
+| Syntax | Description | Typing |
+|--------|-------------|--------|
+| `∇(f)` | Gradient | `\nabla` Tab |
+| `Δ(f)` or `∇²(f)` | Laplacian | `\Delta` Tab |
+| `∂t(f)` | Time derivative | `\partial` Tab `t` |
+| `∂x(f)` | x-derivative | `\partial` Tab `x` |
+| `∂y(f)` | y-derivative | `\partial` Tab `y` |
+| `∂z(f)` | z-derivative | `\partial` Tab `z` |
+| `∂r(f)` | r-derivative | `\partial` Tab `r` |
+| `u ⋅ v` | Dot product | `\cdot` Tab |
+| `u × v` | Cross product | `\times` Tab |
 
-**Example** - Navier-Stokes with Unicode:
+**Example** - Navier-Stokes equation:
 ```julia
-# Traditional ASCII
-add_equation!(problem, "dt(u) + dot(u, grad(u)) = -grad(p) + nu*lap(u)")
-
-# With Unicode (more readable)
 add_equation!(problem, "∂t(u) + u⋅∇(u) = -∇(p) + nu*Δ(u)")
 ```
 
@@ -170,7 +166,7 @@ add_equation!(problem, "omega = curl(u)")
 ```julia
 # Vorticity equation (3D)
 problem = IVP([u, omega])
-add_equation!(problem, "dt(omega) = curl(u × omega)")
+add_equation!(problem, "∂t(omega) = curl(u × omega)")
 ```
 
 ```julia
@@ -373,7 +369,7 @@ problem = IVP([ux, uy, uz, omega_x, omega_y, omega_z])
 u_cross_omega = cross_product(u, omega)
 
 # Then: ∇×(u×ω)
-add_equation!(problem, "dt(omega) = curl(u_cross_omega)")
+add_equation!(problem, "∂t(omega) = curl(u_cross_omega)")
 ```
 
 ---
