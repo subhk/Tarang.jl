@@ -149,6 +149,8 @@ export
     RK111, RK222, RK443,
     # Timesteppers (Multistep IMEX)
     CNAB1, CNAB2, SBDF1, SBDF2, SBDF3, SBDF4,
+    # Timesteppers (Exponential Time Differencing)
+    ETD_RK222, ETD_CNAB2, ETD_SBDF2,
 
     # Stochastic Forcing
     Forcing, StochasticForcingType, DeterministicForcingType,

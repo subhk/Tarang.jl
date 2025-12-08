@@ -366,16 +366,13 @@ The number of tau terms equals the number of boundary conditions, which depends 
 | ∂⁴u/∂z⁴ | 4th | 4 | 4 |
 | ∇² (2D) | 2nd in each | 2 per direction | 2 per direction |
 
-## Pressure Gauge in Incompressible Flows
+## Pressure in Incompressible Flows
 
-When solving incompressible Navier-Stokes equations, the pressure requires special treatment because it appears only as a gradient. This means any constant can be added to the pressure without affecting the physics.
+When solving incompressible Navier-Stokes equations, the pressure requires special treatment because it appears only as a gradient. The divergence equation `div(u) = 0` becomes degenerate at the mean Fourier mode (k=0).
 
-### The Two-Part Solution
+### The Tau Solution
 
-Following the Dedalus approach, Tarang.jl requires **both** of the following:
-
-1. **`tau_p` in the divergence equation**: Removes mathematical degeneracy
-2. **`integ(p) = 0`**: Fixes the physical gauge (pins pressure level)
+Add a `tau_p` term to the continuity equation to remove the mathematical degeneracy:
 
 ```julia
 # Continuity equation with tau_p
@@ -384,22 +381,12 @@ add_equation!(problem, "div(u) + tau_p = 0")
 # Boundary conditions
 add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
-
-# Pressure gauge constraint
-add_bc!(problem, "integ(p) = 0")
 ```
 
-### Why Both Are Needed
-
-**`tau_p` (Mathematical Fix)**:
-- The divergence equation `div(u) = 0` becomes degenerate at the mean Fourier mode (k=0)
-- `tau_p` adds a degree of freedom that "absorbs this degeneracy"
+**Why `tau_p` is needed:**
+- The divergence equation `div(u) = 0` has a null space at k=0
+- `tau_p` is a scalar constant that absorbs this degeneracy
 - Without it, the system matrix becomes singular
-
-**`integ(p) = 0` (Physical Fix)**:
-- Pressure is only defined up to a constant in incompressible flows
-- `integ(p) = 0` pins the spatial mean of pressure to zero
-- This removes the physical gauge freedom and ensures a unique solution
 
 ### Complete Example
 
@@ -411,29 +398,21 @@ p = ScalarField(dist, "p", (x_basis, z_basis))
 # Tau fields
 tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))
 tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))
-tau_p = ScalarField(dist, "tau_p", ())
+tau_p = ScalarField(dist, "tau_p", ())  # Scalar constant
 
 # Problem with all fields
 problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 
 # Equations
-add_equation!(problem, "div(u) + tau_p = 0")  # tau_p removes math degeneracy
+add_equation!(problem, "div(u) + tau_p = 0")  # tau_p removes degeneracy
 add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)")
 
 # Boundary conditions
 add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
-add_bc!(problem, "integ(p) = 0")  # fixes physical gauge
 ```
 
-### Summary
-
-| Component | Purpose | What It Fixes |
-|-----------|---------|---------------|
-| `tau_p` in `div(u) + tau_p = 0` | Removes null space in discretization | Mathematical degeneracy |
-| `integ(p) = 0` | Pins pressure level | Physical gauge freedom |
-
-Both are required for a well-posed, unique solution. This follows the Dedalus design exactly.
+**Note:** The pressure is determined up to an arbitrary constant. For most simulations, only the pressure gradient matters, so this ambiguity doesn't affect the physics. If you need absolute pressure values, you can manually subtract the mean after solving.
 
 ## First-Order Formulation with Derivative Basis
 

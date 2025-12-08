@@ -109,7 +109,7 @@ T = ScalarField(dist, "T", (x_basis, z_basis))
 Tarang.jl follows the [Dedalus](https://dedalus-project.readthedocs.io/) approach: users must explicitly create tau fields and add them to equations using the `lift()` operator.
 
 ```julia
-# Tau fields for pressure gauge
+# Tau field for pressure (removes degeneracy in continuity equation)
 tau_p = ScalarField(dist, "tau_p", (), dtype)
 
 # Tau fields for temperature/buoyancy BCs (one per boundary)
@@ -159,9 +159,6 @@ add_bc!(problem, "T(z=Lz) = 0")     # Cold top
 # Velocity BCs (no-slip at both walls) - vector notation
 add_bc!(problem, "u(z=0) = 0")      # No-slip bottom (sets all components)
 add_bc!(problem, "u(z=Lz) = 0")     # No-slip top
-
-# Pressure gauge: tau_p removes math degeneracy, integ(p)=0 fixes physical gauge
-add_bc!(problem, "integ(p) = 0")
 ```
 
 !!! note "Equation String Syntax"
