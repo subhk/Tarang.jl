@@ -29,7 +29,7 @@ bad = boundary_advection_diffusion_setup(
     interior_coupling=(
         Nz=32,
         H=1.0,
-        equation=&quot;Δ(ψ) + S*dz(dz(ψ)) = q&quot;,  # QG elliptic operator
+        equation=&quot;Δ(ψ) + S*∂z(∂z(ψ)) = q&quot;,  # QG elliptic operator
         params=Dict(&quot;S&quot; =&gt; 0.01, &quot;q&quot; =&gt; 0.0)
     )
 )</code></pre><h3 id="3.-Prescribed-Velocity-(Passive-Tracer)"><a class="docs-heading-anchor" href="#3.-Prescribed-Velocity-(Passive-Tracer)">3. Prescribed Velocity (Passive Tracer)</a><a id="3.-Prescribed-Velocity-(Passive-Tracer)-1"></a><a class="docs-heading-anchor-permalink" href="#3.-Prescribed-Velocity-(Passive-Tracer)" title="Permalink"></a></h3><p>Velocity set externally by the user each timestep:</p><pre><code class="language-julia hljs"># Passive tracer in prescribed flow
@@ -104,7 +104,7 @@ qg = boundary_advection_diffusion_setup(
     interior_coupling=(
         Nz=32,
         H=1.0,
-        equation=&quot;Δ(ψ) + S*dz(dz(ψ)) = 0&quot;,
+        equation=&quot;Δ(ψ) + S*∂z(∂z(ψ)) = 0&quot;,
         params=Dict(&quot;S&quot; =&gt; (1.0/10.0)^2)  # (f₀/N)²
     )
 )
