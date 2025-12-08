@@ -135,9 +135,12 @@ println("=" ^ 60)
         @test F1[1, 1] == 0.0 + 0.0im
         println("  Zero mean forcing OK")
 
+        # Copy F1 before generating F2 (generate_forcing! returns a reference to cached_forcing)
+        F1_copy = copy(F1)
+
         # Forcing should change at different times
         F2 = generate_forcing!(forcing, 1.0)
-        @test F1 != F2
+        @test F1_copy != F2  # Compare copy, not the reference
         println("  Forcing varies between timesteps OK")
     end
 
