@@ -108,6 +108,23 @@ For 2D (returns scalar vorticity):
 add_equation!(problem, "omega = dx(v) - dy(u)")
 ```
 
+### Perpendicular Gradient
+
+For 2D flows, the perpendicular gradient creates a divergence-free velocity from a streamfunction:
+
+```julia
+# perp_grad(ψ) = ∇⊥ψ = (-∂ψ/∂y, ∂ψ/∂x)
+u = perp_grad(psi)
+
+# This gives: u_x = -∂ψ/∂y, u_y = ∂ψ/∂x
+# Automatically satisfies: ∇·u = 0
+```
+
+**Applications**:
+- **2D incompressible flow**: `u = ∇⊥ψ` from streamfunction
+- **SQG velocity**: `u = ∇⊥((-Δ)^(-1/2) θ)`
+- **QG geostrophic flow**: `u = ∇⊥ψ`
+
 ## Time Derivatives
 
 ```julia
@@ -116,6 +133,64 @@ add_equation!(problem, "dt(u) = rhs")
 
 # Only valid in Initial Value Problems
 ```
+
+## Unicode Operators
+
+Tarang supports Unicode mathematical notation for cleaner, more readable code:
+
+| Unicode | ASCII Equivalent | Description |
+|---------|------------------|-------------|
+| `∇` | `grad` | Gradient |
+| `Δ` | `lap` | Laplacian |
+| `∇²` | `lap` | Laplacian (alternative) |
+| `∂ₜ` | `dt` | Time derivative |
+| `⋅` | `dot` | Dot product |
+| `×` | `cross` | Cross product |
+| `∇⊥` | `perp_grad` | Perpendicular gradient |
+| `Δᵅ` | `fraclap` | Fractional Laplacian |
+| `√Δ` / `Δ½` | `sqrtlap` | Square root Laplacian |
+| `Δ⁻½` | `invsqrtlap` | Inverse square root Laplacian |
+
+### In Equations
+
+```julia
+# Traditional ASCII syntax
+add_equation!(problem, "dt(u) + u*dx(u) = nu*lap(u) - grad(p)")
+
+# Unicode syntax (equivalent)
+add_equation!(problem, "∂ₜ(u) + u⋅∇(u) = nu*Δ(u) - ∇(p)")
+```
+
+### In Code
+
+```julia
+# ASCII
+velocity = grad(pressure)
+vorticity = curl(velocity)
+
+# Unicode (equivalent)
+velocity = ∇(pressure)
+vorticity = curl(velocity)
+
+# Mixed - use what's clearest
+u = ∇⊥(ψ)        # Perpendicular gradient
+dissipation = Δ(T)  # Laplacian
+```
+
+### Typing Unicode in Julia
+
+In Julia REPL or editors with Julia support:
+
+| Symbol | Type |
+|--------|------|
+| `∇` | `\nabla` + Tab |
+| `Δ` | `\Delta` + Tab |
+| `∂` | `\partial` + Tab |
+| `⋅` | `\cdot` + Tab |
+| `×` | `\times` + Tab |
+| `⊥` | `\perp` + Tab |
+| `α` | `\alpha` + Tab |
+| `½` | `\^1` + Tab, then type `/2` |
 
 ## Using Operators in Equations
 
@@ -215,4 +290,5 @@ add_equation!(problem, "dt(T) = -advect(u, T)")
 
 - [Fields](fields.md): What operators act on
 - [Problems](problems.md): Using operators in PDEs
+- [Surface Dynamics](../tutorials/surface_dynamics.md): SQG, QG, and boundary advection-diffusion
 - [API: Operators](../api/operators.md): Complete reference
