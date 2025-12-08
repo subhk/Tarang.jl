@@ -40,59 +40,52 @@ uz = u.components[2]  # Vertical velocity
 p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
 
 # Temperature field
-T = ScalarField(dist, &quot;T&quot;, (x_basis, z_basis))</code></pre><h3 id="Tau-Fields-(for-Boundary-Conditions)"><a class="docs-heading-anchor" href="#Tau-Fields-(for-Boundary-Conditions)">Tau Fields (for Boundary Conditions)</a><a id="Tau-Fields-(for-Boundary-Conditions)-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Fields-(for-Boundary-Conditions)" title="Permalink"></a></h3><p>Tarang.jl follows the <a href="https://dedalus-project.readthedocs.io/">Dedalus</a> approach: users must explicitly create tau fields and add them to equations using the <code>lift()</code> operator.</p><pre><code class="language-julia hljs"># Tau fields for velocity BCs (2 per component for 2nd-order operator)
-tau_ux1 = ScalarField(dist, &quot;tau_ux1&quot;, (x_basis,))  # ux at z=0
-tau_ux2 = ScalarField(dist, &quot;tau_ux2&quot;, (x_basis,))  # ux at z=1
-tau_uz1 = ScalarField(dist, &quot;tau_uz1&quot;, (x_basis,))  # uz at z=0
-tau_uz2 = ScalarField(dist, &quot;tau_uz2&quot;, (x_basis,))  # uz at z=1
+T = ScalarField(dist, &quot;T&quot;, (x_basis, z_basis))</code></pre><h3 id="Tau-Fields-(for-Boundary-Conditions)"><a class="docs-heading-anchor" href="#Tau-Fields-(for-Boundary-Conditions)">Tau Fields (for Boundary Conditions)</a><a id="Tau-Fields-(for-Boundary-Conditions)-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Fields-(for-Boundary-Conditions)" title="Permalink"></a></h3><p>Tarang.jl follows the <a href="https://dedalus-project.readthedocs.io/">Dedalus</a> approach: users must explicitly create tau fields and add them to equations using the <code>lift()</code> operator.</p><pre><code class="language-julia hljs"># Tau fields for pressure gauge
+tau_p = ScalarField(dist, &quot;tau_p&quot;, (), dtype)
 
-# Tau fields for temperature BCs
-tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))    # T at z=0
-tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))    # T at z=1
+# Tau fields for temperature/buoyancy BCs (one per boundary)
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,), dtype)   # T at z=0
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,), dtype)   # T at z=1
 
-# Tau for pressure gauge (1 for 1st-order equation)
-tau_p = ScalarField(dist, &quot;tau_p&quot;, (x_basis,))</code></pre><div class="admonition is-success" id="Tau-Field-Naming-Convention-1f927c305063e53b"><header class="admonition-header">Tau Field Naming Convention<a class="admonition-anchor" href="#Tau-Field-Naming-Convention-1f927c305063e53b" title="Permalink"></a></header><div class="admonition-body"><p>Use descriptive names like <code>tau_ux1</code>, <code>tau_ux2</code> to indicate which field and boundary they correspond to.</p></div></div><h3 id="Problem-Definition"><a class="docs-heading-anchor" href="#Problem-Definition">Problem Definition</a><a id="Problem-Definition-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Definition" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create Initial Value Problem with ALL fields including tau fields
-problem = IVP([ux, uz, p, T, tau_ux1, tau_ux2, tau_uz1, tau_uz2, tau_T1, tau_T2, tau_p])
+# Vector tau fields for velocity BCs (uses VectorField for compact notation)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,), dtype)  # Velocity at z=0
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,), dtype)  # Velocity at z=1</code></pre><div class="admonition is-success" id="Vector-Tau-Fields-cda3ab0699da820d"><header class="admonition-header">Vector Tau Fields<a class="admonition-anchor" href="#Vector-Tau-Fields-cda3ab0699da820d" title="Permalink"></a></header><div class="admonition-body"><p>Using <code>VectorField</code> for tau fields allows compact vector notation in equations. The components are accessed via <code>tau_u1.components[1]</code> (x) and <code>tau_u1.components[2]</code> (z).</p></div></div><h3 id="Problem-Definition"><a class="docs-heading-anchor" href="#Problem-Definition">Problem Definition</a><a id="Problem-Definition-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Definition" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Collect all state variables (including tau field components)
+variables = [p, T,
+             u.components[1], u.components[2],  # ux, uz
+             tau_p, tau_T1, tau_T2,
+             tau_u1.components[1], tau_u1.components[2],
+             tau_u2.components[1], tau_u2.components[2]]
 
-# Add dimensionless parameters
-problem.parameters[&quot;Ra&quot;] = Ra
-problem.parameters[&quot;Pr&quot;] = Pr
+problem = IVP(variables)
 
-# Momentum equation for ux: du/dt = -u·∇u - ∇p + Pr∇²u
-# Include lift() terms for tau fields at highest spectral modes
-add_equation!(
-    problem,
-    dt(ux) + ux*dx(ux) + uz*dz(ux) + dx(p) - Pr*lap(ux)
-        + lift(tau_ux1, z_basis, -1) + lift(tau_ux2, z_basis, -2)
-)
+# Add substitutions for parameters (Dedalus-style)
+add_substitution!(problem, &quot;Ra&quot;, Ra)
+add_substitution!(problem, &quot;Pr&quot;, Pr)
+add_substitution!(problem, &quot;Lz&quot;, H)
 
-# Momentum equation for uz: dw/dt = -u·∇w - ∂p/∂z + Pr∇²w + Ra·Pr·T
-add_equation!(
-    problem,
-    dt(uz) + ux*dx(uz) + uz*dz(uz) + dz(p) - Pr*lap(uz) - Ra*Pr*T
-        + lift(tau_uz1, z_basis, -1) + lift(tau_uz2, z_basis, -2)
-)
+# Equations use string format with vector operators (Dedalus-style)
+# Continuity: div(u) = 0
+add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
 
-# Continuity equation: ∇·u = 0
-add_equation!(problem, dx(ux) + dz(uz) + lift(tau_p, z_basis, -1))
+# Temperature equation: ∂T/∂t - ∇²T = -u·∇T
+add_equation!(problem, &quot;∂ₜ(T) - Δ(T) + lift(tau_T2) = -u@∇(T)&quot;)
 
-# Temperature equation: dT/dt = -u·∇T + ∇²T
-add_equation!(
-    problem,
-    dt(T) + ux*dx(T) + uz*dz(T) - lap(T)
-        + lift(tau_T1, z_basis, -1) + lift(tau_T2, z_basis, -2)
-)</code></pre><h3 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h3><p>No-slip walls (velocity = 0) and fixed temperatures, with explicit tau field linkage:</p><pre><code class="language-julia hljs"># Bottom wall (z = 0)
-add_dirichlet_bc!(problem, ux, &quot;z&quot;, :left, 0.0; tau_field=&quot;tau_ux1&quot;)   # No-slip
-add_dirichlet_bc!(problem, uz, &quot;z&quot;, :left, 0.0; tau_field=&quot;tau_uz1&quot;)   # No penetration
-add_dirichlet_bc!(problem, T, &quot;z&quot;, :left, 1.0; tau_field=&quot;tau_T1&quot;)     # Hot
+# Momentum x: ∂ux/∂t - Pr∇²ux + ∂p/∂x = -u·∇ux
+add_equation!(problem, &quot;∂ₜ(u_x) - Pr*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u@∇(u_x)&quot;)
 
-# Top wall (z = 1)
-add_dirichlet_bc!(problem, ux, &quot;z&quot;, :right, 0.0; tau_field=&quot;tau_ux2&quot;)  # No-slip
-add_dirichlet_bc!(problem, uz, &quot;z&quot;, :right, 0.0; tau_field=&quot;tau_uz2&quot;)  # No penetration
-add_dirichlet_bc!(problem, T, &quot;z&quot;, :right, 0.0; tau_field=&quot;tau_T2&quot;)    # Cold
+# Momentum z: ∂uz/∂t - Pr∇²uz + ∂p/∂z - Ra*Pr*T = -u·∇uz
+add_equation!(problem, &quot;∂ₜ(u_z) - Pr*Δ(u_z) + dz(p) - Ra*Pr*T + lift(tau_u2_z) = -u@∇(u_z)&quot;)</code></pre><h3 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h3><p>No-slip walls (velocity = 0) and fixed temperatures, using Dedalus-style string format:</p><pre><code class="language-julia hljs"># Temperature BCs
+add_bc!(problem, &quot;T(z=0) = 1&quot;)      # Hot bottom
+add_bc!(problem, &quot;T(z=Lz) = 0&quot;)     # Cold top
 
-# Pressure gauge (fixes arbitrary constant)
-add_dirichlet_bc!(problem, p, &quot;z&quot;, :left, 0.0; tau_field=&quot;tau_p&quot;)</code></pre><div class="admonition is-info" id="Pressure-Gauge-Condition-6aedcc7cff0e7afd"><header class="admonition-header">Pressure Gauge Condition<a class="admonition-anchor" href="#Pressure-Gauge-Condition-6aedcc7cff0e7afd" title="Permalink"></a></header><div class="admonition-body"><p>For incompressible flow, pressure is only defined up to a constant. The gauge condition fixes p=0 at one point. This requires one tau field for the continuity equation.</p></div></div><h3 id="Initial-Conditions"><a class="docs-heading-anchor" href="#Initial-Conditions">Initial Conditions</a><a id="Initial-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Initial-Conditions" title="Permalink"></a></h3><p>Add random perturbations to trigger convection:</p><pre><code class="language-julia hljs"># Get grid-space data
+# Velocity BCs (no-slip at both walls)
+add_bc!(problem, &quot;u_x(z=0) = 0&quot;)    # No-slip bottom
+add_bc!(problem, &quot;u_z(z=0) = 0&quot;)
+add_bc!(problem, &quot;u_x(z=Lz) = 0&quot;)   # No-slip top
+add_bc!(problem, &quot;u_z(z=Lz) = 0&quot;)
+
+# Pressure gauge (integral constraint)
+add_bc!(problem, &quot;integ(p) = 0&quot;)</code></pre><div class="admonition is-info" id="Equation-String-Syntax-1a99c86f91fccb24"><header class="admonition-header">Equation String Syntax<a class="admonition-anchor" href="#Equation-String-Syntax-1a99c86f91fccb24" title="Permalink"></a></header><div class="admonition-body"><p>Tarang.jl uses Dedalus-style string equations:</p><ul><li>Unicode operators: <code>∂ₜ</code> (time derivative), <code>Δ</code> (Laplacian), <code>∇</code> (gradient)</li><li>Advection: <code>u@∇(T)</code> means u·∇T (dot product)</li><li>Vector components: <code>u_x</code>, <code>u_z</code> access vector field components</li><li>Lift operator: <code>lift(tau_u2_x)</code> for tau terms</li></ul></div></div><h3 id="Initial-Conditions"><a class="docs-heading-anchor" href="#Initial-Conditions">Initial Conditions</a><a id="Initial-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Initial-Conditions" title="Permalink"></a></h3><p>Add random perturbations to trigger convection:</p><pre><code class="language-julia hljs"># Get grid-space data
 T_grid = get_grid_data(T)
 
 # Add small random perturbations
@@ -242,4 +235,4 @@ Nz = 128  # instead of 64</code></pre><h3 id="Simulation-Not-Converging"><a clas
 Nx, Nz = 128, 32
 
 # Use more MPI processes
-mesh=(4, 4)  # instead of (2, 2)</code></pre><h2 id="Complete-Script"><a class="docs-heading-anchor" href="#Complete-Script">Complete Script</a><a id="Complete-Script-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Script" title="Permalink"></a></h2><p>The full script is available in <code>examples/rayleigh_benard_2d.jl</code>. Key points:</p><ol><li>Proper MPI initialization and finalization</li><li>Appropriate bases for boundary conditions</li><li>Explicit tau fields for each boundary condition</li><li>lift() operators in all equations with non-periodic BCs</li><li>Complete equation system with nonlinear terms</li><li>All boundary conditions linked to tau fields</li><li>Adaptive time stepping with CFL</li><li>Output and analysis</li><li>Performance monitoring</li></ol><div class="admonition is-info" id="Dedalus-Style-Approach-d32dda610610577"><header class="admonition-header">Dedalus-Style Approach<a class="admonition-anchor" href="#Dedalus-Style-Approach-d32dda610610577" title="Permalink"></a></header><div class="admonition-body"><p>This tutorial follows the Dedalus approach for boundary conditions. Users must explicitly:</p><ul><li>Create tau fields (one per BC)</li><li>Add tau fields to the problem</li><li>Include lift() terms in equations</li><li>Link each BC to its tau field</li></ul><p>See <a href="../boundary_conditions/">Boundary Conditions Tutorial</a> for more details.</p></div></div><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><strong><a href="../ivp_3d_turbulence/">3D Extension</a></strong>: Add third dimension</li><li><strong><a href="../eigenvalue_problems/">Eigenvalue Analysis</a></strong>: Compute stability</li><li><strong><a href="../analysis_and_output/">Custom Analysis</a></strong>: Advanced diagnostics</li><li><strong><a href="../../pages/gpu_computing/">GPU Acceleration</a></strong>: Speed up with GPUs</li></ul><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li>Chandrasekhar, S. (1961). <em>Hydrodynamic and Hydromagnetic Stability</em></li><li>Tritton, D. J. (1988). <em>Physical Fluid Dynamics</em></li><li>Spectral Methods Resources</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../overview/">« Tutorials Overview</a><a class="docs-footer-nextpage" href="../ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 17:18">Monday 8 December 2025</span>. Using Julia version 1.12.2.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+mesh=(4, 4)  # instead of (2, 2)</code></pre><h2 id="Complete-Script"><a class="docs-heading-anchor" href="#Complete-Script">Complete Script</a><a id="Complete-Script-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Script" title="Permalink"></a></h2><p>The full script is available in <code>examples/rayleigh_benard_2d.jl</code>. Key points:</p><ol><li>Proper MPI initialization and finalization</li><li>Appropriate bases for boundary conditions</li><li>Explicit tau fields for each boundary condition</li><li>lift() operators in all equations with non-periodic BCs</li><li>Complete equation system with nonlinear terms</li><li>All boundary conditions linked to tau fields</li><li>Adaptive time stepping with CFL</li><li>Output and analysis</li><li>Performance monitoring</li></ol><div class="admonition is-info" id="Dedalus-Style-Approach-d32dda610610577"><header class="admonition-header">Dedalus-Style Approach<a class="admonition-anchor" href="#Dedalus-Style-Approach-d32dda610610577" title="Permalink"></a></header><div class="admonition-body"><p>This tutorial follows the Dedalus approach for boundary conditions. Users must explicitly:</p><ul><li>Create tau fields (one per BC)</li><li>Add tau fields to the problem</li><li>Include lift() terms in equations</li><li>Link each BC to its tau field</li></ul><p>See <a href="../boundary_conditions/">Boundary Conditions Tutorial</a> for more details.</p></div></div><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><strong><a href="../ivp_3d_turbulence/">3D Extension</a></strong>: Add third dimension</li><li><strong><a href="../eigenvalue_problems/">Eigenvalue Analysis</a></strong>: Compute stability</li><li><strong><a href="../analysis_and_output/">Custom Analysis</a></strong>: Advanced diagnostics</li><li><strong><a href="../../pages/gpu_computing/">GPU Acceleration</a></strong>: Speed up with GPUs</li></ul><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li>Chandrasekhar, S. (1961). <em>Hydrodynamic and Hydromagnetic Stability</em></li><li>Tritton, D. J. (1988). <em>Physical Fluid Dynamics</em></li><li>Spectral Methods Resources</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../overview/">« Tutorials Overview</a><a class="docs-footer-nextpage" href="../ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Monday 8 December 2025 17:25">Monday 8 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
