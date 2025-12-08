@@ -153,6 +153,10 @@ export
     # SQG (Surface Quasi-Geostrophic) tools
     perp_grad, ∇⊥,  # Perpendicular gradient: ∇⊥ψ = (-∂ψ/∂y, ∂ψ/∂x)
     sqg_streamfunction, sqg_velocity, sqg_problem_setup,
+
+    # Full QG (Quasi-Geostrophic) with coupled surface-interior dynamics
+    QGSystem, qg_system_setup, qg_invert!, qg_step!,
+    qg_surface_velocity!, qg_advection_rhs, qg_energy, extract_surface,
     
     # NetCDF Output
     NetCDFFileHandler, NetCDFEvaluator, UnifiedEvaluator, add_netcdf_handler, 
