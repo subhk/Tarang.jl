@@ -145,8 +145,12 @@ export
     vectorized_add!, vectorized_sub!, vectorized_mul!, vectorized_scale!,
     vectorized_axpy!, vectorized_linear_combination!,
     
-    # Timesteppers
-    RK111, RK222, RK443, CNAB1, CNAB2, SBDF1, SBDF2, SBDF3, SBDF4,
+    # Timesteppers (IMEX RK - default, Dedalus-compatible)
+    RK111, RK222, RK443,
+    # Timesteppers (Explicit RK - for non-stiff problems)
+    RK111_Explicit, RK222_Explicit, RK443_Explicit,
+    # Timesteppers (Multistep IMEX)
+    CNAB1, CNAB2, SBDF1, SBDF2, SBDF3, SBDF4,
 
     # Stochastic Forcing
     Forcing, StochasticForcingType, DeterministicForcingType,
