@@ -292,6 +292,101 @@ function parse_neumann_bc_string(bc_string::String)
     return (field_name, bc_coord, position, value)
 end
 
+"""
+    parse_robin_bc_string(bc_string::String)
+
+Parse Robin BC string like "1.0*T + 0.5*dz(T)(z=0) = 1.0" into components.
+
+Returns: (field_name, coordinate, position, alpha, beta, value)
+"""
+function parse_robin_bc_string(bc_string::String)
+    # Remove whitespace
+    s = replace(bc_string, " " => "")
+
+    # Match pattern: alpha*field+beta*d<coord>(field)(<coord>=pos)=value
+    # e.g., "1.0*T+0.5*dz(T)(z=0)=1.0"
+    pattern = r"^([0-9.eE+-]+)\*([a-zA-Z_][a-zA-Z0-9_]*)\+([0-9.eE+-]+)\*d([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+    m = match(pattern, s)
+
+    if m === nothing
+        throw(ArgumentError("Invalid Robin BC format: '$bc_string'. Expected: 'alpha*field + beta*d<coord>(field)(coord=pos) = value'"))
+    end
+
+    alpha_str = String(m.captures[1])
+    field_name1 = String(m.captures[2])
+    beta_str = String(m.captures[3])
+    deriv_coord = String(m.captures[4])
+    field_name2 = String(m.captures[5])
+    bc_coord = String(m.captures[6])
+    pos_str = String(m.captures[7])
+    val_str = String(m.captures[8])
+
+    # Verify field names match
+    if field_name1 != field_name2
+        throw(ArgumentError("Field names must match in Robin BC: '$field_name1' vs '$field_name2'"))
+    end
+
+    # Parse coefficients
+    alpha = parse(Float64, alpha_str)
+    beta = parse(Float64, beta_str)
+
+    # Parse position
+    position = try
+        parse(Float64, pos_str)
+    catch
+        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+    end
+
+    # Parse value
+    value = try
+        parse(Float64, val_str)
+    catch
+        val_str
+    end
+
+    return (field_name1, bc_coord, position, alpha, beta, value)
+end
+
+"""
+    parse_stress_free_bc_string(bc_string::String)
+
+Parse stress-free BC string like "u(z=0) stress-free" into components.
+
+Returns: (velocity_field, coordinate, position)
+"""
+function parse_stress_free_bc_string(bc_string::String)
+    # Remove extra whitespace but keep single spaces
+    s = strip(bc_string)
+
+    # Match pattern: field(coord=pos) stress-free
+    # e.g., "u(z=0) stress-free" or "u(z=0)stress-free"
+    pattern = r"^([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)\s*stress[-_]?free$"i
+    m = match(pattern, s)
+
+    if m === nothing
+        # Try alternate format: stress_free(field, coord=pos)
+        pattern2 = r"^stress[-_]?free\(([a-zA-Z_][a-zA-Z0-9_]*),\s*([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)$"i
+        m = match(pattern2, s)
+
+        if m === nothing
+            throw(ArgumentError("Invalid stress-free BC format: '$bc_string'. Expected: 'field(coord=pos) stress-free'"))
+        end
+    end
+
+    velocity_field = String(m.captures[1])
+    coordinate = String(m.captures[2])
+    pos_str = String(m.captures[3])
+
+    # Parse position
+    position = try
+        parse(Float64, pos_str)
+    catch
+        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+    end
+
+    return (velocity_field, coordinate, position)
+end
+
 # ============================================================================
 # Problem building and manipulation
 # ============================================================================
@@ -322,18 +417,6 @@ function add_bc!(problem::Problem, bc::AbstractBoundaryCondition)
     return bc
 end
 
-function add_dirichlet_bc!(problem::Problem, field::String, coordinate::String,
-                          position, value; kwargs...)
-    """Add Dirichlet boundary condition: u(coord=pos) = value"""
-    bc = add_dirichlet!(problem.bc_manager, field, coordinate, position, value; kwargs...)
-
-    # Add to legacy string list
-    eq = bc_to_equation(problem.bc_manager, bc)
-    push!(problem.boundary_conditions, eq)
-
-    return bc
-end
-
 """
     add_dirichlet_bc!(problem::Problem, bc_string::String)
 
@@ -353,13 +436,7 @@ add_dirichlet_bc!(problem, "p(x=0) = 1.0")
 """
 function add_dirichlet_bc!(problem::Problem, bc_string::String)
     field, coordinate, position, value = parse_bc_string(bc_string)
-    return add_dirichlet_bc!(problem, field, coordinate, position, value)
-end
-
-function add_neumann_bc!(problem::Problem, field::String, coordinate::String,
-                        position, value; kwargs...)
-    """Add Neumann boundary condition: du/dcoord(coord=pos) = value"""
-    bc = add_neumann!(problem.bc_manager, field, coordinate, position, value; kwargs...)
+    bc = add_dirichlet!(problem.bc_manager, field, coordinate, position, value)
 
     # Add to legacy string list
     eq = bc_to_equation(problem.bc_manager, bc)
@@ -376,6 +453,7 @@ Add Neumann boundary condition using Dedalus-style string syntax.
 # Supported formats:
 - `"dz(u)(z=0) = 0"` - derivative of u at z=0 equals 0
 - `"dx(T)(x=1) = 0"` - derivative of T at x=1 equals 0
+- `"T(z=0) = 0"` - simple format (same as Dirichlet syntax)
 
 # Examples:
 ```julia
@@ -385,30 +463,61 @@ add_neumann_bc!(problem, "dz(T)(z=1) = 0")
 """
 function add_neumann_bc!(problem::Problem, bc_string::String)
     field, coordinate, position, value = parse_neumann_bc_string(bc_string)
-    return add_neumann_bc!(problem, field, coordinate, position, value)
-end
+    bc = add_neumann!(problem.bc_manager, field, coordinate, position, value)
 
-function add_robin_bc!(problem::Problem, field::String, coordinate::String,
-                      position, alpha, beta, value; kwargs...)
-    """Add Robin boundary condition: alpha*u + beta*du/dcoord = value"""
-    bc = add_robin!(problem.bc_manager, field, coordinate, position, alpha, beta, value; kwargs...)
-    
-    # Add to legacy string list  
+    # Add to legacy string list
     eq = bc_to_equation(problem.bc_manager, bc)
     push!(problem.boundary_conditions, eq)
-    
+
     return bc
 end
 
-function add_stress_free_bc!(problem::Problem, velocity_field::String, 
-                            coordinate::String, position; kwargs...)
-    """Add stress-free boundary condition for velocity field"""
-    bc = add_stress_free!(problem.bc_manager, velocity_field, coordinate, position; kwargs...)
-    
+"""
+    add_robin_bc!(problem::Problem, bc_string::String)
+
+Add Robin boundary condition using string syntax.
+
+# Format:
+- `"alpha*u + beta*dz(u)(z=0) = value"`
+
+# Examples:
+```julia
+add_robin_bc!(problem, "1.0*T + 0.5*dz(T)(z=0) = 1.0")
+```
+"""
+function add_robin_bc!(problem::Problem, bc_string::String)
+    field, coordinate, position, alpha, beta, value = parse_robin_bc_string(bc_string)
+    bc = add_robin!(problem.bc_manager, field, coordinate, position, alpha, beta, value)
+
+    # Add to legacy string list
+    eq = bc_to_equation(problem.bc_manager, bc)
+    push!(problem.boundary_conditions, eq)
+
+    return bc
+end
+
+"""
+    add_stress_free_bc!(problem::Problem, bc_string::String)
+
+Add stress-free boundary condition using string syntax.
+
+# Format:
+- `"u(z=0) stress-free"` or `"stress_free(u, z=0)"`
+
+# Examples:
+```julia
+add_stress_free_bc!(problem, "u(z=0) stress-free")
+add_stress_free_bc!(problem, "u(z=1) stress-free")
+```
+"""
+function add_stress_free_bc!(problem::Problem, bc_string::String)
+    velocity_field, coordinate, position = parse_stress_free_bc_string(bc_string)
+    bc = add_stress_free!(problem.bc_manager, velocity_field, coordinate, position)
+
     # Add to legacy string list
     eqs = bc_to_equation(problem.bc_manager, bc)
     append!(problem.boundary_conditions, eqs)
-    
+
     return bc
 end
 
