@@ -11,6 +11,7 @@ Tarang.jl provides several families of time integration schemes:
 | RK | IMEX Runge-Kutta | General problems |
 | CNAB | Multistep IMEX | Moderately stiff |
 | SBDF | Multistep IMEX | Stiff problems |
+| ETD | Exponential Time Differencing | Very stiff linear terms |
 
 ## IMEX Runge-Kutta
 
@@ -89,6 +90,175 @@ SBDF4()  # 4th order
 - **Nonlinear terms**: Extrapolation (explicit)
 - **Use case**: Stiff problems, high Re flows
 
+## Exponential Time Differencing (ETD)
+
+Exponential integrators solve the linear part of the ODE **exactly** using matrix exponentials, while treating nonlinear terms explicitly. This is fundamentally different from IMEX methods.
+
+### How ETD Works
+
+For the semi-linear ODE:
+
+```math
+\frac{du}{dt} = Lu + N(u)
+```
+
+where L is the linear operator and N(u) is the nonlinear term, ETD methods use the variation of constants formula:
+
+```math
+u(t_{n+1}) = e^{h L} u(t_n) + \int_0^h e^{(h-\tau)L} N(u(t_n + \tau)) d\tau
+```
+
+The key insight is that `exp(hL)` propagates the linear part **exactly**, eliminating stability constraints from stiff linear terms entirely.
+
+### ETD vs IMEX
+
+| Aspect | IMEX | ETD |
+|--------|------|-----|
+| Linear terms | Implicit (approximate) | Exponential (exact) |
+| Linear solve | Yes, every step | No (but needs exp(hL)) |
+| Stiffness | Limited by approximation | No limit from L |
+| Best for | General stiff problems | Diagonal L (Fourier) |
+
+### ETD_RK222
+
+Second-order exponential Runge-Kutta method (Cox-Matthews 2002).
+
+```julia
+timestepper = ETD_RK222()
+```
+
+**Algorithm:**
+```
+Stage 1 (predictor): a_n = exp(hL) * u_n
+                     c = a_n + h * phi_1(hL) * N(u_n)
+Stage 2 (corrector): u_{n+1} = a_n + h * phi_1(hL) * N(c)
+```
+
+where phi_1(z) = (exp(z) - 1) / z
+
+- **Linear part**: Exact via exp(hL) and phi functions
+- **Nonlinear part**: Explicit 2-stage Runge-Kutta
+- **Accuracy**: O(dt^2)
+- **Stability**: Unconditionally stable for linear terms
+- **Use case**: Very stiff diffusion, reaction-diffusion
+
+### ETD_CNAB2
+
+Second-order exponential Adams-Bashforth method.
+
+```julia
+timestepper = ETD_CNAB2()
+```
+
+**Algorithm:**
+```
+u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_AB2
+N_AB2 = (3/2) * N(u_n) - (1/2) * N(u_{n-1})
+```
+
+- **Linear part**: Exact via exponential propagator
+- **Nonlinear part**: Adams-Bashforth extrapolation
+- **Accuracy**: O(dt^2)
+- **Startup**: Uses ETD_RK222 for first step
+- **Use case**: Long time integrations with stiff diffusion
+
+### ETD_SBDF2
+
+Second-order exponential multistep method.
+
+```julia
+timestepper = ETD_SBDF2()
+```
+
+**Algorithm:**
+Uses proper 2-step exponential integration with phi_1 and phi_2 functions:
+```
+u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_n + h^2 * phi_2(hL) * (N_n - N_{n-1}) / h
+```
+
+- **Linear part**: Exact via exponential + phi functions
+- **Nonlinear part**: BDF-style extrapolation
+- **Accuracy**: O(dt^2)
+- **Startup**: Uses ETD_RK222 for first step
+- **Use case**: Stiff problems requiring multistep efficiency
+
+### Phi Functions
+
+ETD methods use phi functions defined as:
+
+```math
+\phi_0(z) = e^z
+```
+```math
+\phi_1(z) = \frac{e^z - 1}{z}
+```
+```math
+\phi_2(z) = \frac{e^z - 1 - z}{z^2}
+```
+
+These are computed stably even for small z using Taylor series or Krylov methods.
+
+### When to Use ETD
+
+**Ideal for:**
+- Fourier-based spectral methods (L is diagonal)
+- Very stiff diffusion (high viscosity/diffusivity)
+- Reaction-diffusion equations
+- Problems where IMEX requires very small dt
+
+**Less suitable for:**
+- Non-diagonal L (Chebyshev with BCs) - use IMEX instead
+- Large dense systems (exp(hL) is expensive)
+- Problems with complex boundary conditions
+
+### Requirements
+
+ETD methods require:
+1. The linear operator L stored as `"L_matrix"` in problem parameters
+2. Optionally, mass matrix M as `"M_matrix"`
+
+```julia
+# Setup L matrix for ETD
+problem.parameters["L_matrix"] = build_linear_operator(domain)
+
+# Use ETD solver
+solver = InitialValueSolver(problem, ETD_RK222(); dt=1e-2)
+```
+
+### Example: 1D Heat Equation with ETD
+
+```julia
+using Tarang
+
+# Setup Fourier domain (L is diagonal)
+coords = CartesianCoordinates("x")
+dist = Distributor(coords; mesh=(1,))
+x_basis = RealFourier(coords["x"]; size=128, bounds=(0.0, 2*pi))
+domain = Domain(dist, (x_basis,))
+
+# Temperature field
+T = ScalarField(dist, "T", domain.bases, Float64)
+
+# Build diagonal diffusion operator in Fourier space
+# For Fourier: d^2/dx^2 -> -k^2
+kx = wavenumbers(x_basis)
+L_diag = -nu * kx.^2  # Diagonal in spectral space
+problem.parameters["L_matrix"] = Diagonal(L_diag)
+
+# ETD solver - no stability limit from diffusion!
+solver = InitialValueSolver(problem, ETD_RK222(); dt=0.1)
+
+while solver.sim_time < t_end
+    step!(solver)
+end
+```
+
+### References
+
+- Cox, S. M., & Matthews, P. C. (2002). "Exponential Time Differencing for Stiff Systems". J. Comput. Phys. 176, 430-455.
+- Hochbruck, M., & Ostermann, A. (2010). "Exponential integrators". Acta Numerica 19, 209-286.
+- Kassam, A.-K., & Trefethen, L. N. (2005). "Fourth-Order Time Stepping for Stiff PDEs". SIAM J. Sci. Comput. 26(4), 1214-1233.
+
 ## Choosing a Timestepper
 
 ### By Problem Stiffness
@@ -98,6 +268,7 @@ SBDF4()  # 4th order
 | Mild | Moderate Re | RK222, RK443 |
 | Moderate | Higher Re | CNAB2, SBDF2 |
 | Stiff | High Re, requires tiny Δt | SBDF3, SBDF4 |
+| Very stiff (diagonal L) | Extreme diffusion | ETD_RK222, ETD_SBDF2 |
 
 ### By Physics
 
@@ -107,6 +278,8 @@ SBDF4()  # 4th order
 | Diffusion-dominated | CNAB2, SBDF2 |
 | High Rayleigh number | SBDF2, SBDF3 |
 | Turbulence | RK443 or SBDF2 |
+| Reaction-diffusion (Fourier) | ETD_RK222 |
+| Very stiff diffusion (Fourier) | ETD_SBDF2 |
 
 ## Stability Analysis
 
