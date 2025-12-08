@@ -75,7 +75,7 @@ function dot_product(a::VectorField, b::VectorField)
 end
 
 # Cross product (3D only): a × b
-c = cross(a, b)  # or: c = a × b</code></pre><h3 id="Properties-2"><a class="docs-heading-anchor" href="#Properties-2">Properties</a><a class="docs-heading-anchor-permalink" href="#Properties-2" title="Permalink"></a></h3><pre><code class="language-julia hljs">u.name          # String: Base name
+c = cross_product(a, b)</code></pre><h3 id="Properties-2"><a class="docs-heading-anchor" href="#Properties-2">Properties</a><a class="docs-heading-anchor-permalink" href="#Properties-2" title="Permalink"></a></h3><pre><code class="language-julia hljs">u.name          # String: Base name
 u.components    # Vector{ScalarField}: Vector components
 u.coords        # Coordinates: Coordinate system
 u.ndim          # Int: Number of dimensions</code></pre><h2 id="TensorField"><a class="docs-heading-anchor" href="#TensorField">TensorField</a><a id="TensorField-1"></a><a class="docs-heading-anchor-permalink" href="#TensorField" title="Permalink"></a></h2><h3 id="Constructor-3"><a class="docs-heading-anchor" href="#Constructor-3">Constructor</a><a class="docs-heading-anchor-permalink" href="#Constructor-3" title="Permalink"></a></h3><pre><code class="language-julia hljs">TensorField(
