@@ -93,13 +93,13 @@ $\alpha u + \beta \frac{\partial u}{\partial n} = \gamma$
 ### Basic Usage
 
 ```julia
-# Syntax: add_robin_bc!(problem, "alpha*field + beta*d<coord>(field)(coord=loc) = value")
+# Syntax: add_robin_bc!(problem, "alpha*field(coord=loc) + beta*d<coord>(field)(coord=loc) = value")
 
 # Convective heat transfer: h*T + k*dT/dn = h*T_ambient
 h = 10.0   # Heat transfer coefficient
 k = 1.0    # Thermal conductivity
 T_amb = 0.0
-add_robin_bc!(problem, "$(h)*T + $(k)*dz(T)(z=1) = $(h*T_amb)")
+add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_amb)")
 ```
 
 ### Impedance Boundary Conditions
@@ -109,7 +109,7 @@ For wave problems:
 ```julia
 # ∂u/∂n + Z*u = 0 (absorbing boundary)
 Z = 1.0  # Impedance
-add_robin_bc!(problem, "$(Z)*u + 1.0*dz(u)(z=1) = 0")
+add_robin_bc!(problem, "$(Z)*u(z=1) + 1.0*dz(u)(z=1) = 0")
 ```
 
 ## Periodic Boundary Conditions

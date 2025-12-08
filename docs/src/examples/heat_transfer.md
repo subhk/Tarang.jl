@@ -104,7 +104,7 @@ h = 10.0   # Heat transfer coefficient
 k = 1.0    # Thermal conductivity
 T_amb = 0.0
 
-Tarang.add_robin_bc!(problem, "$(h)*T + $(k)*dz(T)(z=1) = $(h*T_amb)")
+Tarang.add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_amb)")
 ```
 
 ### Insulated (Neumann) BC

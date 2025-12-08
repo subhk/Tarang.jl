@@ -309,7 +309,7 @@ Add Robin (mixed) boundary condition: α*f + β*df/dn = value
 
 **Syntax**:
 ```julia
-add_robin_bc!(problem, "alpha*field + beta*d<coord>(field)(coord=pos) = value")
+add_robin_bc!(problem, "alpha*field(coord=pos) + beta*d<coord>(field)(coord=pos) = value")
 ```
 
 **Arguments** (via string):
@@ -323,10 +323,10 @@ add_robin_bc!(problem, "alpha*field + beta*d<coord>(field)(coord=pos) = value")
 # Convective heat transfer: h*T + k*dT/dn = h*T_ambient
 h, k = 10.0, 1.0
 T_ambient = 300.0
-add_robin_bc!(problem, "$(h)*T + $(k)*dz(T)(z=1) = $(h*T_ambient)")
+add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*dz(T)(z=1) = $(h*T_ambient)")
 
 # Radiation boundary: T + ε*dT/dn = 0
-add_robin_bc!(problem, "1.0*T + $(epsilon)*dx(T)(x=0) = 0")
+add_robin_bc!(problem, "1.0*T(x=0) + $(epsilon)*dx(T)(x=0) = 0")
 ```
 
 ---
