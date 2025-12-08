@@ -199,8 +199,29 @@ while solver.sim_time < t_end
 end
 ```
 
+## Stochastic Forcing
+
+For turbulence simulations requiring external energy injection, see [Stochastic Forcing](stochastic_forcing.md).
+
+Key points:
+- Forcing is generated once per timestep, constant across substeps
+- Required for proper Stratonovich calculus treatment
+- Supports ring, isotropic, and custom forcing spectra
+
+```julia
+# Quick example
+forcing = StochasticForcing(
+    field_size = (64, 64),
+    forcing_rate = 0.1,
+    k_forcing = 4.0,
+    dt = solver.dt
+)
+set_forcing!(solver.timestepper_state, forcing)
+```
+
 ## See Also
 
 - [Solvers](solvers.md): Using time steppers with solvers
 - [CFL and Analysis](analysis.md): Adaptive time stepping
+- [Stochastic Forcing](stochastic_forcing.md): External forcing for turbulence
 - [API: Timesteppers](../api/timesteppers.md): Complete reference
