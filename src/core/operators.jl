@@ -60,6 +60,19 @@ struct Laplacian <: Operator
 end
 const _Laplacian_constructor = Laplacian
 
+# Fractional Laplacian: (-Δ)^α where α can be any real number
+# In spectral space: (-Δ)^α f̂(k) = |k|^(2α) f̂(k)
+# Common values: α=1/2 for SQG dissipation, α=-1/2 for SQG streamfunction inversion
+struct FractionalLaplacian <: Operator
+    operand::Operand
+    α::Float64  # Fractional exponent
+
+    function FractionalLaplacian(operand::Operand, α::Real)
+        new(operand, Float64(α))
+    end
+end
+const _FractionalLaplacian_constructor = FractionalLaplacian
+
 struct Trace <: Operator
     operand::Operand
 end
@@ -207,6 +220,69 @@ const ∇² = lap
 
 # ∂ₜ for time derivative
 const ∂ₜ = dt
+
+# Fractional Laplacian constructor
+"""
+    fraclap(operand, α)
+
+Fractional Laplacian operator: (-Δ)^α
+
+In spectral space, this multiplies by |k|^(2α) where k is the wavenumber magnitude.
+
+# Common use cases:
+- `fraclap(θ, 0.5)` or `(-Δ)^(1/2)`: SQG dissipation
+- `fraclap(θ, -0.5)` or `(-Δ)^(-1/2)`: SQG streamfunction inversion (ψ = (-Δ)^(-1/2) θ)
+- `fraclap(f, 1.0)`: Standard Laplacian (equivalent to `lap(f)`)
+
+# Example - SQG equation:
+```julia
+# ∂θ/∂t + u⋅∇θ = κ(-Δ)^(1/2)θ
+add_equation!(problem, "∂ₜ(θ) = -u⋅∇(θ) + κ*fraclap(θ, 0.5)")
+
+# Streamfunction from buoyancy: ψ = (-Δ)^(-1/2)θ
+ψ = fraclap(θ, -0.5)
+```
+"""
+function fraclap(operand::Operand, α::Real)
+    return FractionalLaplacian(operand, α)
+end
+
+# Unicode alias for fractional Laplacian with specific exponents
+# Note: For general α, use fraclap(f, α) or Δᵅ(f, α)
+"""
+    Δᵅ(operand, α)
+
+Unicode alias for fractional Laplacian. Equivalent to `fraclap(operand, α)`.
+Type: \\Delta Tab \\_\\alpha Tab
+"""
+const Δᵅ = fraclap
+
+# Square root Laplacian: (-Δ)^(1/2), common in SQG
+"""
+    sqrtlap(operand)
+
+Square root Laplacian: (-Δ)^(1/2)
+
+Equivalent to `fraclap(operand, 0.5)`.
+Common in Surface Quasi-Geostrophic (SQG) equations for dissipation.
+"""
+sqrtlap(operand::Operand) = fraclap(operand, 0.5)
+
+# Inverse square root Laplacian: (-Δ)^(-1/2), for SQG streamfunction
+"""
+    invsqrtlap(operand)
+
+Inverse square root Laplacian: (-Δ)^(-1/2)
+
+Equivalent to `fraclap(operand, -0.5)`.
+Used in SQG to compute streamfunction from buoyancy: ψ = (-Δ)^(-1/2)θ
+"""
+invsqrtlap(operand::Operand) = fraclap(operand, -0.5)
+
+# Unicode aliases for common fractional Laplacians
+const √Δ = sqrtlap       # Type: \\sqrt Tab \\Delta Tab
+const Δ½ = sqrtlap       # Type: \\Delta Tab \\^1 Tab / Tab 2 Tab (or just copy)
+const Δ⁻½ = invsqrtlap   # Inverse square root
 
 function trace(operand::Operand)
     """Trace operator"""
@@ -3189,6 +3265,143 @@ function evaluate_vector_laplacian(operand::VectorField, layout::Symbol)
     end
 
     return result
+end
+
+# ============================================================================
+# Fractional Laplacian evaluation
+# ============================================================================
+
+"""
+    evaluate_fractional_laplacian(frac_lap::FractionalLaplacian, layout::Symbol=:g)
+
+Evaluate fractional Laplacian operator: (-Δ)^α
+
+In spectral space, this multiplies each Fourier coefficient by |k|^(2α),
+where k = √(k₁² + k₂² + ...) is the wavenumber magnitude.
+
+For α > 0: High-order dissipation (smoothing)
+For α < 0: Inverse operation (integration/smoothing)
+For α = 1: Standard Laplacian
+For α = 1/2: Square root Laplacian (SQG dissipation)
+For α = -1/2: Inverse square root (SQG streamfunction from buoyancy)
+
+Note: For α < 0, the k=0 mode is handled specially to avoid division by zero.
+The k=0 mode is set to zero (removes mean).
+"""
+function evaluate_fractional_laplacian(frac_lap::FractionalLaplacian, layout::Symbol=:g)
+    operand = frac_lap.operand
+    α = frac_lap.α
+
+    if isa(operand, ScalarField)
+        return evaluate_scalar_fractional_laplacian(operand, α, layout)
+    elseif isa(operand, VectorField)
+        return evaluate_vector_fractional_laplacian(operand, α, layout)
+    else
+        throw(ArgumentError("Fractional Laplacian not implemented for $(typeof(operand))"))
+    end
+end
+
+function evaluate_scalar_fractional_laplacian(operand::ScalarField, α::Float64, layout::Symbol)
+    # Create result field
+    α_str = α >= 0 ? "$(α)" : "m$(abs(α))"  # Handle negative exponents in name
+    result = ScalarField(operand.dist, "fraclap$(α_str)_$(operand.name)", operand.bases, operand.dtype)
+
+    # Ensure operand is in coefficient space for spectral operation
+    ensure_layout!(operand, :c)
+    ensure_layout!(result, :c)
+
+    # Get wavenumber grids for each Fourier basis
+    k_squared_total = compute_wavenumber_squared_grid(operand)
+
+    # Compute |k|^(2α) factor
+    # For α < 0, we need to handle k=0 specially to avoid division by zero
+    if α >= 0
+        k_factor = k_squared_total .^ α
+    else
+        # For inverse operations, set k=0 mode to zero
+        k_factor = similar(k_squared_total)
+        for i in eachindex(k_squared_total)
+            if k_squared_total[i] > 1e-14
+                k_factor[i] = k_squared_total[i] ^ α
+            else
+                k_factor[i] = 0.0  # Zero out the mean mode
+            end
+        end
+    end
+
+    # Apply the fractional Laplacian in spectral space
+    # Note: We use |k|^(2α) not (-k²)^α to ensure real output for real input
+    result.data_c .= operand.data_c .* k_factor
+
+    # Transform to requested layout if needed
+    if layout == :g
+        ensure_layout!(result, :g)
+    end
+
+    return result
+end
+
+function evaluate_vector_fractional_laplacian(operand::VectorField, α::Float64, layout::Symbol)
+    α_str = α >= 0 ? "$(α)" : "m$(abs(α))"
+    result = VectorField(operand.dist, operand.coordsys, "fraclap$(α_str)_$(operand.name)",
+                        operand.bases, operand.dtype)
+
+    for (i, comp) in enumerate(operand.components)
+        frac_lap_comp = evaluate_scalar_fractional_laplacian(comp, α, layout)
+
+        data_field = layout == :g ? :data_g : :data_c
+        ensure_layout!(result.components[i], layout)
+        copyto!(getfield(result.components[i], data_field), getfield(frac_lap_comp, data_field))
+    end
+
+    return result
+end
+
+"""
+    compute_wavenumber_squared_grid(field::ScalarField)
+
+Compute |k|² = k₁² + k₂² + ... for each point in spectral space.
+
+Returns an array with the same shape as field.data_c containing
+the squared wavenumber magnitude at each spectral coefficient location.
+"""
+function compute_wavenumber_squared_grid(field::ScalarField)
+    bases = field.bases
+    data_shape = size(field.data_c)
+
+    # Initialize with zeros
+    k_squared = zeros(Float64, data_shape)
+
+    # Add contribution from each basis
+    for (axis, basis) in enumerate(bases)
+        if isa(basis, RealFourier) || isa(basis, ComplexFourier)
+            # Get wavenumbers for this Fourier basis
+            k_axis = wavenumbers(basis)
+
+            # Add k² contribution to each point
+            # Need to broadcast along the correct axis
+            add_wavenumber_squared_contribution!(k_squared, k_axis, axis, length(bases))
+        end
+        # For Chebyshev/Legendre bases, no wavenumber contribution (they're not Fourier)
+        # This means fractional Laplacian only applies to Fourier directions
+    end
+
+    return k_squared
+end
+
+"""
+Add k² contribution from one axis to the total wavenumber grid.
+"""
+function add_wavenumber_squared_contribution!(k_squared::Array{Float64}, k_axis::Vector{Float64}, axis::Int, ndims::Int)
+    # Create shape for broadcasting: all 1s except for the current axis
+    shape = ones(Int, ndims)
+    shape[axis] = length(k_axis)
+
+    # Reshape k_axis for broadcasting
+    k_reshaped = reshape(k_axis, Tuple(shape))
+
+    # Add k² contribution
+    k_squared .+= k_reshaped.^2
 end
 
 # ============================================================================

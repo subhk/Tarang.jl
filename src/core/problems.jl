@@ -1168,6 +1168,28 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
                     basis = evaluate_parsed_expression(arg_exprs[2], namespace)
                     n_val = coerce_constant_value(evaluate_parsed_expression(arg_exprs[3], namespace))
                     return lift(operand, basis, Int(round(n_val)))
+                elseif func_expr == :fraclap || func_expr == :Δᵅ
+                    # Fractional Laplacian: fraclap(f, α) or Δᵅ(f, α)
+                    if length(arg_exprs) < 2
+                        throw(ArgumentError("fraclap requires operand and exponent α"))
+                    end
+                    operand = evaluate_parsed_expression(arg_exprs[1], namespace)
+                    α_val = coerce_constant_value(evaluate_parsed_expression(arg_exprs[2], namespace))
+                    return fraclap(operand, Float64(α_val))
+                elseif func_expr == :sqrtlap || func_expr == :√Δ || func_expr == :Δ½
+                    # Square root Laplacian: (-Δ)^(1/2)
+                    if isempty(arg_exprs)
+                        throw(ArgumentError("sqrtlap requires an operand"))
+                    end
+                    operand = evaluate_parsed_expression(arg_exprs[1], namespace)
+                    return sqrtlap(operand)
+                elseif func_expr == :invsqrtlap || func_expr == :Δ⁻½
+                    # Inverse square root Laplacian: (-Δ)^(-1/2)
+                    if isempty(arg_exprs)
+                        throw(ArgumentError("invsqrtlap requires an operand"))
+                    end
+                    operand = evaluate_parsed_expression(arg_exprs[1], namespace)
+                    return invsqrtlap(operand)
                 end
             end
             
