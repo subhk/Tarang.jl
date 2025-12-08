@@ -71,10 +71,10 @@ problem.parameters["Pr"] = 1.0
 problem.parameters["Ra"] = 1e5
 
 # 5) Boundary conditions (no-slip, fixed temperature)
-add_dirichlet_bc!(problem, "u", "z", 0.0, 0.0)   # bottom
-add_dirichlet_bc!(problem, "u", "z", 1.0, 0.0)   # top
-add_dirichlet_bc!(problem, "T", "z", 0.0, 1.0)   # hot bottom
-add_dirichlet_bc!(problem, "T", "z", 1.0, 0.0)   # cold top
+add_dirichlet_bc!(problem, "u(z=0) = 0")   # bottom
+add_dirichlet_bc!(problem, "u(z=1) = 0")   # top
+add_dirichlet_bc!(problem, "T(z=0) = 1")   # hot bottom
+add_dirichlet_bc!(problem, "T(z=1) = 0")   # cold top
 
 # 6) Solver and timestepper
 solver = InitialValueSolver(problem, RK222(); dt=1e-3, device="cpu")
