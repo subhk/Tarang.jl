@@ -100,32 +100,28 @@ For viscous flows at solid walls, use vector fields for compact notation:
 ```julia
 # Vector field for velocity
 u = VectorField(dist, coords, "u", (x_basis, z_basis))
+p = ScalarField(dist, "p", (x_basis, z_basis))
 
 # Vector tau fields for BCs at each wall
 tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
 tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
+tau_p = ScalarField(dist, "tau_p", ())
 
-# Include all tau field components in problem
-variables = [u.components[1], u.components[2], p,
-             tau_u1.components[1], tau_u1.components[2],
-             tau_u2.components[1], tau_u2.components[2]]
-problem = IVP(variables)
+# Pass vector fields directly to problem
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 
 # Add substitutions
 add_substitution!(problem, "nu", nu)
 
-# Momentum equations using vector notation
-add_equation!(problem, "∂ₜ(u_x) - nu*Δ(u_x) + dx(p) + lift(tau_u2_x) = -u⋅∇(u_x)")
-add_equation!(problem, "∂ₜ(u_z) - nu*Δ(u_z) + dz(p) + lift(tau_u2_z) = -u⋅∇(u_z)")
+# Momentum equation (single vector equation)
+add_equation!(problem, "∂ₜ(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)")
 
 # Continuity with pressure gauge tau
 add_equation!(problem, "div(u) + tau_p = 0")
 
-# No-slip boundary conditions
-add_bc!(problem, "u_x(z=0) = 0")   # No-slip bottom
-add_bc!(problem, "u_z(z=0) = 0")
-add_bc!(problem, "u_x(z=1) = 0")   # No-slip top
-add_bc!(problem, "u_z(z=1) = 0")
+# No-slip boundary conditions (vector notation)
+add_bc!(problem, "u(z=0) = 0")   # No-slip bottom (all components)
+add_bc!(problem, "u(z=1) = 0")   # No-slip top (all components)
 ```
 
 ## Neumann Boundary Conditions
