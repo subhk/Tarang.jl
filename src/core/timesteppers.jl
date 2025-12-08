@@ -830,15 +830,29 @@ end
 
 Return the number of workspace field sets needed for a timestepper.
 """
+# IMEX RK methods (stages * 3 for X_stages, F_exp, F_imp)
 function _workspace_count(::RK111)
-    return 1  # 1 for RHS evaluation
+    return 3  # 1 stage: X_stages, F_exp, F_imp
 end
 
 function _workspace_count(::RK222)
-    return 2  # k1, temp_state
+    return 6  # 2 stages: 2 * (X_stages, F_exp, F_imp)
 end
 
 function _workspace_count(::RK443)
+    return 12  # 4 stages: 4 * (X_stages, F_exp, F_imp)
+end
+
+# Explicit RK methods (fewer workspace requirements)
+function _workspace_count(::RK111_Explicit)
+    return 1  # 1 for RHS evaluation
+end
+
+function _workspace_count(::RK222_Explicit)
+    return 2  # k1, temp_state
+end
+
+function _workspace_count(::RK443_Explicit)
     return 5  # k1, k2, k3, k4, temp
 end
 
@@ -1095,6 +1109,268 @@ function step_rk443_explicit!(state::TimestepperState, solver::InitialValueSolve
     push!(state.history, new_state)
     
     # Keep only necessary history
+    if length(state.history) > 1
+        popfirst!(state.history)
+    end
+end
+
+# =============================================================================
+# IMEX Runge-Kutta Step Function (Dedalus-compatible ARK scheme)
+# =============================================================================
+
+"""
+    step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
+
+Generic IMEX Runge-Kutta timestep following Dedalus's Additive Runge-Kutta (ARK) scheme.
+
+This implements the standard IMEX-RK algorithm:
+- Explicit tableau treats nonlinear terms (RHS from equations)
+- Implicit tableau treats linear terms (LHS operators, typically diffusion)
+
+For each stage s:
+    X_s = X_n + dt * sum_{j<s} A_exp[s,j] * F_exp[j]
+              + dt * sum_{j<s} A_imp[s,j] * F_imp[j]
+              + dt * A_imp[s,s] * F_imp[s]
+
+Where the last term leads to an implicit solve:
+    (I - dt * A_imp[s,s] * L) * X_s = RHS
+
+For ESDIRK methods, A_exp[s,s] = 0 (explicitly), and A_imp is lower triangular
+with constant diagonal γ, making it "singly diagonally implicit".
+
+References:
+- Kennedy & Carpenter (2003): "Additive Runge-Kutta schemes for CDR equations"
+- Ascher, Ruuth, Spiteri (1997): IMEX RK methods for convection-diffusion
+- Dedalus source: timestepping.py, RungeKuttaIMEX class
+"""
+function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
+    ts = state.timestepper
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+    stages = ts.stages
+
+    # Extract Butcher tableaux
+    A_exp = ts.A_explicit
+    A_imp = ts.A_implicit
+    b_exp = ts.b_explicit
+    b_imp = ts.b_implicit
+    c = ts.c_explicit  # Stage times (same for both tableaux)
+
+    # Check if L_matrix is available for implicit treatment
+    has_implicit = haskey(solver.problem.parameters, "L_matrix")
+    L_matrix = has_implicit ? solver.problem.parameters["L_matrix"] : nothing
+    M_matrix = haskey(solver.problem.parameters, "M_matrix") ?
+               solver.problem.parameters["M_matrix"] : nothing
+
+    # If no linear operator provided, fall back to explicit-only treatment
+    if !has_implicit
+        @debug "IMEX RK: No L_matrix found, treating all terms explicitly"
+        _step_rk_imex_explicit_fallback!(state, solver)
+        return
+    end
+
+    # Stage values and derivatives storage
+    # X_stages[s] = solution at stage s
+    # F_exp[s] = explicit RHS (nonlinear terms) at stage s
+    # F_imp[s] = implicit RHS (L * X_s) at stage s
+    X_stages = Vector{Vector{ScalarField}}(undef, stages)
+    F_exp = Vector{Vector{ScalarField}}(undef, stages)
+    F_imp = Vector{Vector{ScalarField}}(undef, stages)
+
+    # Initialize stage 0 (current solution)
+    X_stages[1] = current_state  # Stage 1 starts from current state for ESDIRK
+
+    # Get diagonal coefficient (γ) for implicit solve
+    # For ESDIRK methods, all diagonal entries are the same
+    γ = A_imp[1, 1]  # First diagonal entry
+
+    # Precompute LU factorization for implicit solve: (M - dt*γ*L)
+    # This assumes a single linear operator for all fields
+    if M_matrix !== nothing
+        LHS_matrix = M_matrix - dt * γ * L_matrix
+    else
+        n = size(L_matrix, 1)
+        I_mat = Matrix{Float64}(I, n, n)
+        LHS_matrix = I_mat - dt * γ * L_matrix
+    end
+    lhs_factorization = lu(LHS_matrix)
+
+    # Loop over stages
+    for s in 1:stages
+        state.current_substep = s
+
+        # Compute explicit contribution from previous stages
+        # sum_{j<s} A_exp[s,j] * F_exp[j]
+        if s == 1
+            # First stage: evaluate RHS at current state
+            F_exp[1] = evaluate_rhs(solver, current_state, t + c[1] * dt)
+
+            # For ESDIRK, first stage may be explicit (A_imp[1,1] = 0 or γ)
+            if abs(γ) < 1e-14
+                # Fully explicit first stage
+                X_stages[1] = current_state
+                F_imp[1] = _apply_linear_operator(L_matrix, current_state)
+            else
+                # Implicit first stage - need to solve
+                rhs_vector = fields_to_vector(current_state)
+
+                # Add explicit contribution: dt * A_exp[1,1] * F_exp[1] (usually 0 for ESDIRK)
+                if abs(A_exp[1, 1]) > 1e-14
+                    F_exp_vec = fields_to_vector(F_exp[1])
+                    rhs_vector .+= dt * A_exp[1, 1] .* F_exp_vec
+                end
+
+                # Solve: (M - dt*γ*L) * X_1 = M * X_n + dt * explicit_terms
+                if M_matrix !== nothing
+                    rhs_vector = M_matrix * rhs_vector
+                end
+                X1_vector = lhs_factorization \ rhs_vector
+                X_stages[1] = vector_to_fields(X1_vector, current_state)
+                F_imp[1] = _apply_linear_operator(L_matrix, X_stages[1])
+            end
+        else
+            # Stages s > 1: build RHS from previous stages
+            rhs_vector = fields_to_vector(current_state)
+
+            # Add explicit contributions: sum_{j=1}^{s-1} A_exp[s,j] * F_exp[j]
+            for j in 1:(s-1)
+                if abs(A_exp[s, j]) > 1e-14
+                    F_exp_vec = fields_to_vector(F_exp[j])
+                    rhs_vector .+= dt * A_exp[s, j] .* F_exp_vec
+                end
+            end
+
+            # Add implicit contributions from previous stages: sum_{j=1}^{s-1} A_imp[s,j] * F_imp[j]
+            for j in 1:(s-1)
+                if abs(A_imp[s, j]) > 1e-14
+                    F_imp_vec = fields_to_vector(F_imp[j])
+                    rhs_vector .+= dt * A_imp[s, j] .* F_imp_vec
+                end
+            end
+
+            # Apply mass matrix if present
+            if M_matrix !== nothing
+                X_n_vec = fields_to_vector(current_state)
+                rhs_vector = M_matrix * X_n_vec + rhs_vector - M_matrix * X_n_vec
+                # Actually: RHS = M * (X_n + dt * sums) for general M
+                # For M=I this simplifies
+            end
+
+            # Solve implicit system: (M - dt*γ*L) * X_s = RHS
+            Xs_vector = lhs_factorization \ rhs_vector
+            X_stages[s] = vector_to_fields(Xs_vector, current_state)
+
+            # Evaluate RHS at new stage
+            F_exp[s] = evaluate_rhs(solver, X_stages[s], t + c[s] * dt)
+            F_imp[s] = _apply_linear_operator(L_matrix, X_stages[s])
+        end
+    end
+
+    # Final update using b weights
+    # X_{n+1} = X_n + dt * sum_s (b_exp[s] * F_exp[s] + b_imp[s] * F_imp[s])
+    final_vector = fields_to_vector(current_state)
+    for s in 1:stages
+        if abs(b_exp[s]) > 1e-14
+            F_exp_vec = fields_to_vector(F_exp[s])
+            final_vector .+= dt * b_exp[s] .* F_exp_vec
+        end
+        if abs(b_imp[s]) > 1e-14
+            F_imp_vec = fields_to_vector(F_imp[s])
+            final_vector .+= dt * b_imp[s] .* F_imp_vec
+        end
+    end
+
+    new_state = vector_to_fields(final_vector, current_state)
+
+    push!(state.history, new_state)
+
+    # Keep only necessary history
+    if length(state.history) > 1
+        popfirst!(state.history)
+    end
+end
+
+"""
+    _apply_linear_operator(L_matrix, state)
+
+Apply the linear operator L to a state (collection of fields).
+Returns F_imp = L * X as a vector of fields.
+"""
+function _apply_linear_operator(L_matrix::AbstractMatrix, state::Vector{ScalarField})
+    X_vector = fields_to_vector(state)
+    LX_vector = L_matrix * X_vector
+    return vector_to_fields(LX_vector, state)
+end
+
+"""
+    _step_rk_imex_explicit_fallback!(state, solver)
+
+Fallback to fully explicit RK when no L_matrix is provided.
+Uses only the explicit tableau coefficients.
+"""
+function _step_rk_imex_explicit_fallback!(state::TimestepperState, solver::InitialValueSolver)
+    ts = state.timestepper
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+    stages = ts.stages
+
+    A = ts.A_explicit
+    b = ts.b_explicit
+    c = ts.c_explicit
+
+    # Stage derivatives storage
+    k = Vector{Vector{ScalarField}}(undef, stages)
+
+    # Compute stages
+    for s in 1:stages
+        state.current_substep = s
+
+        if s == 1
+            # First stage at current state
+            k[1] = evaluate_rhs(solver, current_state, t + c[1] * dt)
+        else
+            # Build intermediate state
+            temp_state = ScalarField[]
+            for (i, field) in enumerate(current_state)
+                temp_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
+                ensure_layout!(field, :g)
+                ensure_layout!(temp_field, :g)
+
+                # X_temp = X_n + dt * sum_{j<s} A[s,j] * k[j]
+                temp_field.data_g .= field.data_g
+                for j in 1:(s-1)
+                    if abs(A[s, j]) > 1e-14
+                        ensure_layout!(k[j][i], :g)
+                        temp_field.data_g .+= dt * A[s, j] .* k[j][i].data_g
+                    end
+                end
+                push!(temp_state, temp_field)
+            end
+            k[s] = evaluate_rhs(solver, temp_state, t + c[s] * dt)
+        end
+    end
+
+    # Final update: X_{n+1} = X_n + dt * sum_s b[s] * k[s]
+    new_state = ScalarField[]
+    for (i, field) in enumerate(current_state)
+        new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
+        ensure_layout!(field, :g)
+        ensure_layout!(new_field, :g)
+
+        new_field.data_g .= field.data_g
+        for s in 1:stages
+            if abs(b[s]) > 1e-14
+                ensure_layout!(k[s][i], :g)
+                new_field.data_g .+= dt * b[s] .* k[s][i].data_g
+            end
+        end
+        push!(new_state, new_field)
+    end
+
+    push!(state.history, new_state)
+
     if length(state.history) > 1
         popfirst!(state.history)
     end
