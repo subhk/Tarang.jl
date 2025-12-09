@@ -86,6 +86,7 @@ include("tools/logging.jl")
 include("tools/progress.jl")
 include("tools/random_arrays.jl")
 include("tools/netcdf_merge.jl")
+include("tools/temporal_filters.jl")
 
 # Extras
 include("extras/flow_tools.jl")
@@ -205,7 +206,13 @@ export
     rng_elements,
     IndexArray,
     ChunkedRandomArray,
-    MatSolvers
+    MatSolvers,
+
+    # Temporal Filters for Lagrangian Averaging
+    TemporalFilter, ExponentialMean, ButterworthFilter, LagrangianFilter,
+    get_mean, get_auxiliary, set_α!,
+    update_displacement!, lagrangian_mean!, get_mean_velocity, get_displacement,
+    filter_response, effective_averaging_time
 
 # Initialize MPI if not already initialized
 function __init__()
