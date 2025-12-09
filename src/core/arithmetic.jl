@@ -533,8 +533,6 @@ Base.:/(a, b::Future) = Divide(a, b)
 Base.:^(a::Future, p::Real) = Power(a, p)
 
 import LinearAlgebra: dot, cross, ⋅, ×
-dot(a::Operand, b::Operand) = DotProduct(a, b)
-cross(a::Operand, b::Operand) = CrossProduct(a, b)
 
 # Unicode operators for dot and cross products
 # ⋅ (\cdot) for dot product - allows u⋅∇(u) syntax

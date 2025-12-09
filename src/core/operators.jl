@@ -565,16 +565,8 @@ register_operator_parseable!(outer, "outer", "tensor_product")
 register_operator_alias!(advective_cfl, "advective_cfl", "cfl")
 register_operator_parseable!(advective_cfl, "advective_cfl", "cfl")
 
-# Helper functions for creating common operators
-function ∇(operand::Operand, coordsys::CoordinateSystem=operand.dist.coordsys)
-    """Unicode gradient operator"""
-    return grad(operand, coordsys)
-end
-
-function ∇²(operand::Operand)
-    """Unicode Laplacian operator"""
-    return lap(operand)
-end
+# Note: ∇ and ∇² are defined as const aliases to grad and lap above (lines ~213-216)
+# Do not redefine here to avoid method overwrite warnings
 
 # Include nonlinear terms for integration
 # This will be included after nonlinear_terms.jl is loaded

@@ -1091,7 +1091,7 @@ function parse_expression(expr_str::AbstractString, namespace::Dict{String, Any}
         return result
         
     catch e
-        if isa(e, ParseError)
+        if isa(e, Meta.ParseError)
             @warn "Parse error in expression '$expr_str': $(e.msg)"
             return UnknownOperator(expr_str)
         else

@@ -944,12 +944,8 @@ end
 expression_matrices(::Nothing, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 expression_matrices(::Number, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 
-"""
-    is_zero_expression(expr)
-
-Check if expression is zero.
-"""
-is_zero_expression(expr) = false
+# Note: is_zero_expression is defined in problems.jl
+# Add additional methods here for type dispatch
 is_zero_expression(::Nothing) = true
 is_zero_expression(x::Number) = x == 0
 

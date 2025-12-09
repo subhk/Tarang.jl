@@ -72,8 +72,10 @@ function apply_dense(matrix::AbstractMatrix, array::AbstractArray)
     return reshape(result_flat, size(array))
 end
 
-function apply_sparse(matrix::SparseMatrixCSC, array::AbstractArray, axis::Int=1)
-    """Apply sparse matrix along specified axis"""
+# Note: apply_sparse is defined in subsystems.jl
+# This wrapper provides a simplified interface using apply_matrix
+function apply_sparse_via_matrix(matrix::SparseMatrixCSC, array::AbstractArray, axis::Int=1)
+    """Apply sparse matrix along specified axis (alternative implementation)"""
     return apply_matrix(matrix, array, axis)
 end
 
@@ -139,9 +141,10 @@ function add_sparse(A::SparseMatrixCSC, B::SparseMatrixCSC)
     return A + B
 end
 
-# Permutation matrices
-function perm_matrix(permutation::Vector{Int}, n::Int=length(permutation))
-    """Create permutation matrix from permutation vector"""
+# Note: perm_matrix is defined in subsystems.jl
+# This is an alternative implementation for square permutation matrices
+function perm_matrix_square(permutation::Vector{Int}, n::Int=length(permutation))
+    """Create square permutation matrix from permutation vector"""
     P = spzeros(n, n)
     for (i, j) in enumerate(permutation)
         P[i, j] = 1
