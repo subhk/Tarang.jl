@@ -25,9 +25,9 @@ In **spectral methods**, we represent the solution as a sum of basis functions:
 u(z) = \sum_{n=0}^{N-1} a_n T_n(z)
 ```
 
-where T_n(z) are Chebyshev polynomials and a_n are the spectral coefficients we need to find.
+where $T_n(z)$ are Chebyshev polynomials and $a_n$ are the spectral coefficients we need to find.
 
-**The challenge**: The spectral coefficients a_n are global—they affect the solution everywhere, not just at specific points. We cannot simply "set" boundary values; instead, we must find coefficients that simultaneously:
+**The challenge**: The spectral coefficients $a_n$ are global—they affect the solution everywhere, not just at specific points. We cannot simply "set" boundary values; instead, we must find coefficients that simultaneously:
 1. Satisfy the PDE in the interior
 2. Satisfy the boundary conditions at the edges
 
@@ -35,7 +35,7 @@ where T_n(z) are Chebyshev polynomials and a_n are the spectral coefficients we 
 
 The tau method solves this by a clever trade-off:
 
-> **Key Insight**: We have N unknowns (spectral coefficients a₀, a₁, ..., a_{N-1}) and need N equations. Instead of using N equations from the PDE, we use (N-k) equations from the PDE and k equations from the boundary conditions.
+> **Key Insight**: We have N unknowns (spectral coefficients $a_0$, $a_1$, ..., $a_{N-1}$) and need N equations. Instead of using N equations from the PDE, we use (N-k) equations from the PDE and k equations from the boundary conditions.
 
 For a second-order equation with 2 boundary conditions (k=2):
 - Equations 0 through N-3: Come from the PDE
@@ -52,15 +52,15 @@ Solve the steady diffusion equation:
 
 ### Step 2: Spectral Representation
 
-Expand u(z) in Chebyshev polynomials:
+Expand $u(z)$ in Chebyshev polynomials:
 ```math
 u(z) = \sum_{n=0}^{N-1} a_n T_n(z)
 ```
 
 Recall key properties of Chebyshev polynomials:
-- T_n(z) = cos(n · arccos(z)) for z ∈ [-1, 1]
-- T_n(1) = 1 for all n
-- T_n(-1) = (-1)^n
+- $T_n(z) = cos(n · arccos(z))$ for $z$ ∈ [-1, 1]
+- $T_n(1) = 1$ for all $n$
+- $T_n(-1) = (-1)^n$
 
 ### Step 3: The Differentiation Matrix
 
@@ -69,19 +69,19 @@ Taking derivatives in spectral space:
 \frac{d^2 u}{dz^2} = \sum_{n=0}^{N-1} a_n \frac{d^2 T_n}{dz^2} = \sum_{n=0}^{N-1} b_n T_n(z)
 ```
 
-The coefficients b_n are related to a_n through the **differentiation matrix** D²:
+The coefficients $b_n$ are related to a_n through the **differentiation matrix** D²:
 ```math
 \mathbf{b} = D^{(2)} \mathbf{a}
 ```
 
 ### Step 4: The PDE in Spectral Space (Without Tau)
 
-Matching coefficients of T_n(z) on both sides of the PDE gives N equations:
+Matching coefficients of $T_n(z)$ on both sides of the PDE gives N equations:
 ```math
 \sum_{m=0}^{N-1} D^{(2)}_{nm} a_m = f_n, \quad n = 0, 1, ..., N-1
 ```
 
-where f_n are the spectral coefficients of f(z).
+where $f_n$ are the spectral coefficients of $f(z)$.
 
 **Problem**: These N equations determine all N coefficients, leaving no freedom to satisfy boundary conditions!
 
@@ -109,7 +109,7 @@ Row N-2: T₀(-1)·a₀ + T₁(-1)·a₁ + ... = 0  ← BC at z=0
 Row N-1: T₀(1)·a₀ + T₁(1)·a₁ + ... = 0   ← BC at z=1
 ```
 
-Since T_n(1) = 1 and T_n(-1) = (-1)^n:
+Since $T_n(1)$ = 1 and $T_n(-1) = (-1)^n$:
 ```
 Row N-2: a₀ - a₁ + a₂ - a₃ + ... = 0     ← u(-1) = 0
 Row N-1: a₀ + a₁ + a₂ + a₃ + ... = 0     ← u(+1) = 0
@@ -146,7 +146,7 @@ Row N-1: a₀ + a₁ + a₂ + a₃ + ... = 0     ← u(+1) = 0
 
 ## Why Replace the *Highest* Order Equations?
 
-The spectral coefficients a_n for large n correspond to fine-scale (high-frequency) features of the solution. By modifying these high-order equations:
+The spectral coefficients $a_n$ for large $n$ correspond to fine-scale (high-frequency) features of the solution. By modifying these high-order equations:
 
 1. **Smooth solutions are preserved**: Low-order coefficients (capturing the main shape) are determined by the PDE
 2. **Boundary conditions are enforced**: High-order coefficients adjust to match boundaries
@@ -177,7 +177,7 @@ This is related to the concept of **tau error**: the residual in the original PD
 | Flexibility | Any BC type | Requires basis construction |
 | Common use | General purpose | Specific BC types |
 
-**Galerkin** uses basis functions that inherently satisfy the boundary conditions. For example, using sin(nπz) automatically satisfies u(0) = u(1) = 0. This is elegant but requires constructing appropriate bases for each BC type.
+**Galerkin** uses basis functions that inherently satisfy the boundary conditions. For example, using sin(nπz) automatically satisfies $u(0) = u(1) = 0$. This is elegant but requires constructing appropriate bases for each BC type.
 
 ## Types of Boundary Conditions
 
@@ -203,7 +203,7 @@ Tau equation:
 \sum_{n=0}^{N-1} a_n T'_n(z_{boundary}) = g
 ```
 
-where T'_n(z) is the derivative of the Chebyshev polynomial.
+where $T'_n(z)$ is the derivative of the Chebyshev polynomial.
 
 ### Robin (Mixed)
 
