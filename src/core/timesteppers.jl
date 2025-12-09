@@ -981,13 +981,13 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                 (norm(L_matrix, Inf) < 1e-14)
 
     if L_is_zero
-        # No linear terms - LHS is just identity (or M if provided)
-        if M_matrix !== nothing
-            LHS_matrix = Matrix(M_matrix)
-        else
-            LHS_matrix = Matrix{elem_type}(I, n, n)
-        end
-    elseif M_matrix !== nothing
+        # No linear terms - fall back to explicit treatment
+        @debug "IMEX RK: L_matrix is zero, falling back to explicit treatment"
+        _step_rk_imex_explicit_fallback!(state, solver)
+        return
+    end
+
+    if M_matrix !== nothing
         LHS_matrix = M_matrix - dt * γ * L_matrix
     else
         # Create identity matrix matching L_matrix element type
