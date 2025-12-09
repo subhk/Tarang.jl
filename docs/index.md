@@ -138,4 +138,4 @@ mpiexec -n 4 julia scripts/merge_netcdf.jl --auto --cleanup
 
 ### Add More Pages
 - Keep authoring Markdown in `docs/` (e.g., `docs/problems/navier_stokes.md`) and link to them from this index.
-- Link out to deeper docs already in this repo: [nonlinear terms](nonlinear_terms.md), [optimized linear algebra](optimized_linear_algebra.md), [GPU roadmap](gpu_compatibility_roadmap.md), [NetCDF merging](netcdf_merging.md).
+- Link out to deeper docs already in this repo: [nonlinear terms](nonlinear_terms.md), [optimized linear algebra](optimized_linear_algebra.md), [GPU roadmap](gpu_compatibility_roadmap.md), [NetCDF merging](netcdf_merging.md), [temporal filters for Lagrangian averaging](temporal_filters.md).

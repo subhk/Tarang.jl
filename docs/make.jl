@@ -56,6 +56,7 @@ makedocs(
             "pages/solvers.md",
             "pages/timesteppers.md",
             "pages/stochastic_forcing.md",
+            "pages/temporal_filters.md",
             "pages/analysis.md",
             "pages/parallelism.md",
             "pages/configuration.md",
