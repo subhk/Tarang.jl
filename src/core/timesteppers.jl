@@ -973,13 +973,33 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
 
     # Precompute LU factorization for implicit solve: (M - dt*γ*L)
     # This assumes a single linear operator for all fields
-    if M_matrix !== nothing
+    n = size(L_matrix, 1)
+    elem_type = eltype(L_matrix)
+
+    # Check if L_matrix is effectively zero (no linear terms)
+    L_is_zero = (L_matrix isa SparseMatrixCSC && nnz(L_matrix) == 0) ||
+                (norm(L_matrix, Inf) < 1e-14)
+
+    if L_is_zero
+        # No linear terms - LHS is just identity (or M if provided)
+        if M_matrix !== nothing
+            LHS_matrix = Matrix(M_matrix)
+        else
+            LHS_matrix = Matrix{elem_type}(I, n, n)
+        end
+    elseif M_matrix !== nothing
         LHS_matrix = M_matrix - dt * γ * L_matrix
     else
-        n = size(L_matrix, 1)
-        I_mat = Matrix{Float64}(I, n, n)
+        # Create identity matrix matching L_matrix element type
+        I_mat = Matrix{elem_type}(I, n, n)
         LHS_matrix = I_mat - dt * γ * L_matrix
     end
+
+    # Convert to dense if sparse has too few entries (helps with LU stability)
+    if LHS_matrix isa SparseMatrixCSC && nnz(LHS_matrix) < n
+        LHS_matrix = Matrix(LHS_matrix)
+    end
+
     lhs_factorization = lu(LHS_matrix)
 
     # Loop over stages
