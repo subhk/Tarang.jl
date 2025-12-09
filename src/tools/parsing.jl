@@ -14,16 +14,20 @@ Throws `SymbolicParsingError` if there is not exactly one top-level equals sign.
 """
 function split_equation(equation::AbstractString)
     parentheses = 0
-    top_level_equals = Int[]
+    top_level_equals = Int[]  # Store byte indices for proper Unicode handling
 
-    for (i, character) in enumerate(equation)
+    # Use eachindex to get proper byte indices for Unicode strings
+    idx = firstindex(equation)
+    while idx <= lastindex(equation)
+        character = equation[idx]
         if character == '('
             parentheses += 1
         elseif character == ')'
             parentheses -= 1
         elseif character == '=' && parentheses == 0
-            push!(top_level_equals, i)
+            push!(top_level_equals, idx)
         end
+        idx = nextind(equation, idx)
     end
 
     if isempty(top_level_equals)
@@ -33,8 +37,8 @@ function split_equation(equation::AbstractString)
     end
 
     i = top_level_equals[1]
-    lhs = strip(equation[1:i-1])
-    rhs = strip(equation[i+1:end])
+    lhs = strip(equation[1:prevind(equation, i)])
+    rhs = strip(equation[nextind(equation, i):end])
     return lhs, rhs
 end
 

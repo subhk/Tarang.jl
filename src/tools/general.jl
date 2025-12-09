@@ -338,34 +338,38 @@ function split_equation(equation::String)
     >>> split_equation("∂t(u) = -∂x(u)")
     ("∂t(u)", "-∂x(u)")
     """
-    
+
     # Find top-level equals signs by tracking parenthetical level
     # This avoids capturing equals signs in function calls or keyword arguments
     parentheses = 0
-    top_level_equals = Int[]
-    
-    for (i, char) in enumerate(equation)
+    top_level_equals = Int[]  # Store byte indices for proper Unicode handling
+
+    # Use proper byte indexing for Unicode strings
+    idx = firstindex(equation)
+    while idx <= lastindex(equation)
+        char = equation[idx]
         if char == '('
             parentheses += 1
         elseif char == ')'
             parentheses -= 1
         elseif char == '=' && parentheses == 0
-            push!(top_level_equals, i)
+            push!(top_level_equals, idx)
         end
+        idx = nextind(equation, idx)
     end
-    
+
     # Validate equation format
     if length(top_level_equals) == 0
         throw(ArgumentError("Equation contains no top-level equals signs: $equation"))
     elseif length(top_level_equals) > 1
         throw(ArgumentError("Equation contains multiple top-level equals signs: $equation"))
     end
-    
-    # Split at the equals sign
+
+    # Split at the equals sign using proper Unicode indexing
     eq_pos = top_level_equals[1]
-    lhs = strip(equation[1:eq_pos-1])
-    rhs = strip(equation[eq_pos+1:end])
-    
+    lhs = strip(equation[1:prevind(equation, eq_pos)])
+    rhs = strip(equation[nextind(equation, eq_pos):end])
+
     return (lhs, rhs)
 end
 
