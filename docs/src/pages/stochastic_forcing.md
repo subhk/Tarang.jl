@@ -1,41 +1,329 @@
 # Stochastic Forcing
 
-> **TL;DR**: Stochastic forcing injects energy at a controlled rate into your simulation. Create it with `StochasticForcing(field_size=(Nx, Ny), energy_injection_rate=ε, k_forcing=k_f)`, then let the timestepper handle it automatically.
+This example demonstrates how to set up a forced-dissipative 2D turbulence simulation, following the approach from [GeophysicalFlows.jl](https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/stochastic_forcing/).
 
 ---
 
-## Quick Start
+## Complete Example: Forced 2D Turbulence
+
+We simulate the 2D vorticity equation with stochastic forcing and linear drag:
+
+```math
+\frac{\partial \omega}{\partial t} + J(\psi, \omega) = -\mu \omega + \nu \nabla^2 \omega + \xi
+```
+
+where ξ is white-in-time, spatially-correlated stochastic forcing.
 
 ```julia
 using Tarang
+using Random
+using Printf
 
-# 1. Create stochastic forcing
+# ============================================================
+# 1. Physical and Numerical Parameters
+# ============================================================
+
+# Grid
+n = 256                     # Resolution
+L = 2π                      # Domain size
+dt = 0.005                  # Timestep
+nsteps = 4000               # Total steps
+
+# Dissipation
+ν = 2e-7                    # Viscosity (hyperviscosity coefficient)
+μ = 1e-1                    # Linear drag coefficient
+
+# Forcing parameters
+forcing_wavenumber = 14.0 * 2π/L    # k_f: force at this scale
+forcing_bandwidth = 1.5 * 2π/L      # δ_f: width of forcing ring
+ε = 0.1                              # Energy injection rate
+
+# ============================================================
+# 2. Set Up Domain and Fields
+# ============================================================
+
+coords = CartesianCoordinates("x", "y")
+dist = Distributor(coords; mesh=(1, 1))
+
+xbasis = RealFourier(coords["x"]; size=n, bounds=(0.0, L))
+ybasis = RealFourier(coords["y"]; size=n, bounds=(0.0, L))
+domain = Domain(dist, (xbasis, ybasis))
+
+# Vorticity field
+ω = ScalarField(dist, "omega", (xbasis, ybasis))
+
+# ============================================================
+# 3. Create Stochastic Forcing
+# ============================================================
+
+# The forcing is concentrated in a ring around |k| = k_f
+# with Gaussian profile: exp(-(|k| - k_f)² / 2δ_f²)
+
 forcing = StochasticForcing(
-    field_size = (256, 256),        # Grid dimensions
-    energy_injection_rate = 0.1,    # Target ε
-    k_forcing = 10.0,               # Force at |k| ≈ 10
-    dk_forcing = 2.0,               # Bandwidth
-    dt = 0.001                      # Timestep
+    field_size = (n, n),
+    domain_size = (L, L),
+    energy_injection_rate = ε,
+    k_forcing = forcing_wavenumber,
+    dk_forcing = forcing_bandwidth,
+    dt = dt,
+    spectrum_type = :ring,
+    rng = MersenneTwister(1234)     # For reproducibility
 )
 
-# 2. In your time loop
-store_prevsol!(forcing, ψ_hat)         # Store ψⁿ
-generate_forcing!(forcing, t, 1)        # Generate F̂
-apply_forcing!(rhs_hat, forcing, t, 1)  # Add to RHS
-# ... advance solution ...
-W = work_stratonovich(forcing, ψ_hat)   # Compute work done
+println("Forcing setup:")
+println("  k_forcing = $(forcing_wavenumber) (mode ≈ $(forcing_wavenumber * L / 2π))")
+println("  bandwidth = $(forcing_bandwidth)")
+println("  ε = $(ε)")
+
+# ============================================================
+# 4. Set Up Problem and Solver
+# ============================================================
+
+problem = IVP([ω])
+
+# Vorticity equation: ∂ω/∂t = -μω + ν∇²ω - J(ψ,ω) + ξ
+# (Forcing ξ is added separately via the forcing mechanism)
+add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
+problem.parameters["ν"] = ν
+problem.parameters["μ"] = μ
+
+solver = InitialValueSolver(problem, RK443(); dt=dt, device="cpu")
+
+# ============================================================
+# 5. Diagnostics: Energy and Enstrophy
+# ============================================================
+
+function compute_energy(ω_hat, grid)
+    # E = ½⟨|∇ψ|²⟩ = ½ ∑_k |ω̂_k|² / |k|²
+    E = 0.0
+    for j in 1:size(ω_hat, 2), i in 1:size(ω_hat, 1)
+        k2 = grid.kx[i]^2 + grid.ky[j]^2
+        if k2 > 0
+            E += abs2(ω_hat[i,j]) / k2
+        end
+    end
+    return 0.5 * E / prod(size(ω_hat))
+end
+
+function compute_enstrophy(ω_hat)
+    # Z = ½⟨ω²⟩ = ½ ∑_k |ω̂_k|²
+    return 0.5 * sum(abs2, ω_hat) / prod(size(ω_hat))
+end
+
+# ============================================================
+# 6. Time Integration Loop
+# ============================================================
+
+# Storage for diagnostics
+t_save = Float64[]
+E_save = Float64[]
+Z_save = Float64[]
+work_save = Float64[]
+
+println("\nStarting simulation...")
+println("=" ^ 60)
+
+for step in 1:nsteps
+    # Store previous solution for Stratonovich work calculation
+    store_prevsol!(forcing, ω.data_c)
+
+    # Generate forcing (only regenerates on substep 1)
+    F_hat = generate_forcing!(forcing, solver.sim_time, 1)
+
+    # Apply forcing to RHS
+    # (In actual implementation, this is done inside the timestepper)
+    apply_forcing!(ω.data_c, forcing, solver.sim_time, 1)
+
+    # Advance one timestep
+    step!(solver)
+
+    # Compute work done by forcing (Stratonovich)
+    W = work_stratonovich(forcing, ω.data_c)
+
+    # Periodic diagnostics
+    if step % 100 == 0 || step == 1
+        E = compute_energy(ω.data_c, domain.grid)
+        Z = compute_enstrophy(ω.data_c)
+
+        push!(t_save, solver.sim_time)
+        push!(E_save, E)
+        push!(Z_save, Z)
+        push!(work_save, W)
+
+        @printf("step %4d, t = %6.3f, E = %.2e, Z = %.2e, W = %+.2e\n",
+                step, solver.sim_time, E, Z, W)
+    end
+end
+
+println("=" ^ 60)
+println("Simulation complete!")
+println("Final time: $(solver.sim_time)")
+println("Mean energy injection rate: $(mean(work_save ./ dt))")
 ```
 
 ---
 
-## Why Stochastic Forcing?
+## Understanding the Example
 
-In turbulence simulations, energy cascades from large to small scales (3D) or from injection to both ends (2D). Without continuous energy input, the flow dies out. Stochastic forcing:
+### Forcing Spectrum
 
-- Maintains a **statistically steady state**
-- Provides a **controlled energy injection rate** ε
-- Creates **physically realistic** turbulent fluctuations
-- Is **white in time** (decorrelated between timesteps)
+The forcing concentrates energy input around a specific wavenumber:
+
+```
+          │
+    Q̂(k)  │      ╱╲
+          │    ╱    ╲
+          │  ╱        ╲
+          │╱            ╲
+          └──────────────────► |k|
+                k_f
+               ←─────→
+              2*δ_f (width)
+```
+
+Modes with `|k| ≈ k_f` receive most of the energy. This creates a **dual cascade**:
+- Energy cascades to large scales (inverse cascade)
+- Enstrophy cascades to small scales (forward cascade)
+
+### Energy Balance
+
+In steady state:
+
+```math
+\varepsilon_{\text{forcing}} = \varepsilon_{\text{drag}} + \varepsilon_{\text{viscous}}
+```
+
+The linear drag μ removes energy at large scales, preventing condensation.
+
+---
+
+## Step-by-Step Breakdown
+
+### Step 1: Choose Forcing Parameters
+
+```julia
+# Where to inject energy (wavenumber)
+forcing_wavenumber = 14.0 * 2π/L  # Mode k ≈ 14
+
+# How spread out the forcing is
+forcing_bandwidth = 1.5 * 2π/L    # A few modes wide
+
+# How much energy to inject per unit time
+ε = 0.1
+```
+
+**Guidelines:**
+- `k_forcing`: Set to intermediate scales (not too large, not too small)
+- `dk_forcing`: Usually 1-3 in mode units; too narrow causes intermittency
+- `ε`: Balance with dissipation; if energy grows unbounded, increase μ or ν
+
+### Step 2: Create the Forcing Object
+
+```julia
+forcing = StochasticForcing(
+    field_size = (n, n),              # Match your grid
+    domain_size = (L, L),             # Match your domain
+    energy_injection_rate = ε,        # Normalized automatically
+    k_forcing = forcing_wavenumber,
+    dk_forcing = forcing_bandwidth,
+    dt = dt,                          # For √dt scaling
+    spectrum_type = :ring,            # Isotropic ring
+    rng = MersenneTwister(1234)       # Reproducibility
+)
+```
+
+### Step 3: Apply Forcing in Time Loop
+
+```julia
+for step in 1:nsteps
+    # 1. Store ψⁿ for Stratonovich work
+    store_prevsol!(forcing, ω.data_c)
+
+    # 2. Generate F̂ (new forcing each timestep)
+    F_hat = generate_forcing!(forcing, t, 1)
+
+    # 3. Add to your RHS: rhs .+= F_hat
+    apply_forcing!(rhs, forcing, t, 1)
+
+    # 4. Advance your solution
+    step!(solver)
+
+    # 5. Compute work done
+    W = work_stratonovich(forcing, ω.data_c)
+end
+```
+
+### Step 4: Verify Energy Budget
+
+```julia
+# Average over many timesteps in steady state
+ε_measured = mean(work_array) / dt
+
+# Should match target
+@assert abs(ε_measured - ε) / ε < 0.1  "Energy budget not balanced!"
+```
+
+---
+
+## Spectrum Types
+
+### Ring Forcing (`:ring`) - Default
+
+Forces modes in a Gaussian ring around `|k| = k_f`:
+
+```julia
+forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 10.0,
+    dk_forcing = 2.0,
+    spectrum_type = :ring
+)
+```
+
+Best for: Standard 2D/3D turbulence, dual cascade studies
+
+### Band Forcing (`:band`)
+
+Sharp cutoff band `|k| ∈ [k_f - δ_f, k_f + δ_f]`:
+
+```julia
+forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 10.0,
+    dk_forcing = 2.0,
+    spectrum_type = :band
+)
+```
+
+Best for: Controlled experiments with exact spectral support
+
+### Low-k Forcing (`:lowk`)
+
+Force all modes with `|k| < k_f`:
+
+```julia
+forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 5.0,
+    spectrum_type = :lowk
+)
+```
+
+Best for: Large-scale forcing, simple turbulence setups
+
+### Kolmogorov Forcing (`:kolmogorov`)
+
+Smooth large-scale forcing for Kolmogorov cascade:
+
+```julia
+forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 4.0,
+    spectrum_type = :kolmogorov
+)
+```
+
+Best for: Kolmogorov-Obukhov theory verification
 
 ---
 
@@ -43,295 +331,82 @@ In turbulence simulations, energy cascades from large to small scales (3D) or fr
 
 ### Forcing Statistics
 
-The forcing ξ(x,t) satisfies:
+The forcing ξ(x,t) is a random field with:
 
 | Property | Formula |
 |----------|---------|
 | Zero mean | ⟨ξ(x,t)⟩ = 0 |
 | White in time | ⟨ξ(x,t) ξ(x',t')⟩ = Q(x-x') δ(t-t') |
-| Power spectrum | ⟨ξ̂(k,t) ξ̂*(k',t')⟩ = Q̂(k) δ(k-k') δ(t-t') |
-
-The **forcing spectrum** Q̂(k) controls which scales receive energy.
-
-### Energy Injection Rate
-
-The mean energy injection rate is:
-
-```math
-\varepsilon = \int \frac{d^d k}{(2\pi)^d} \, \frac{\hat{Q}(k)}{2|k|^2}
-```
-
-Tarang normalizes the spectrum to match your specified `energy_injection_rate`.
-
-### Ring Forcing Spectrum
-
-The default "ring" forcing concentrates energy around a central wavenumber k_f:
-
-```math
-\hat{Q}(k) \propto \exp\left(-\frac{(|k| - k_f)^2}{2\delta_f^2}\right)
-```
-
-where δ_f is the bandwidth (`dk_forcing`).
+| Power spectrum | ⟨ξ̂(k) ξ̂*(k')⟩ = Q̂(k) δ(k-k') |
 
 ### Numerical Implementation
 
 For discrete time with step dt:
 
 ```math
-\hat{F}(k) = \frac{\sqrt{\hat{Q}(k)}}{\sqrt{dt}} \cdot e^{2\pi i \cdot \text{rand}()}
+\hat{F}(k) = \sqrt{\frac{\hat{Q}(k)}{dt}} \cdot e^{2\pi i \cdot \text{rand}()}
 ```
 
-The √dt scaling ensures correct variance for the Wiener process.
+The √dt scaling gives correct variance: ⟨|F̂|²⟩ · dt = Q̂(k)
 
----
+### Energy Injection Rate
 
-## Choosing a Spectrum Type
-
-| Type | Use Case | Formula |
-|------|----------|---------|
-| `:ring` | 2D/3D turbulence at specific scale | Gaussian around \|k\| = k_f |
-| `:band` | Sharp wavenumber band | \|k\| ∈ [k_f - δ_f, k_f + δ_f] |
-| `:lowk` | Large-scale forcing | \|k\| < k_f |
-| `:kolmogorov` | Kolmogorov cascade studies | Large-scale, smooth |
-
-**Decision flowchart:**
-
-```
-Want specific injection scale?
-├── Yes → :ring (default, most common)
-│          └── Need sharp cutoff? → :band
-└── No  → :lowk (force all large scales)
-          └── Studying Kolmogorov cascade? → :kolmogorov
-```
-
----
-
-## API Reference
-
-### Constructor
-
-```julia
-StochasticForcing(;
-    field_size,                              # Required: (Nx,) or (Nx, Ny) or (Nx, Ny, Nz)
-    domain_size = ntuple(i -> 2π, N),       # Domain extent
-    energy_injection_rate = 1.0,             # Target ε
-    k_forcing = 4.0,                         # Central wavenumber
-    dk_forcing = 1.0,                        # Bandwidth
-    dt = 0.01,                               # Timestep
-    spectrum_type = :ring,                   # Spectrum shape
-    rng = Random.GLOBAL_RNG,                 # RNG for reproducibility
-    dtype = Float64                          # Precision
-)
-```
-
-### Forcing Generation
-
-| Function | Purpose |
-|----------|---------|
-| `generate_forcing!(forcing, t, substep)` | Generate/cache forcing at time t |
-| `apply_forcing!(rhs, forcing, t, substep)` | Add forcing to RHS array |
-| `reset_forcing!(forcing)` | Clear cache, force regeneration |
-| `set_dt!(forcing, dt)` | Update timestep (for adaptive dt) |
-
-### Work Calculation
-
-| Function | Calculus | Formula |
-|----------|----------|---------|
-| `work_stratonovich(forcing, sol)` | Stratonovich | -⟨(ψⁿ + ψⁿ⁺¹)/2 · F̂*⟩ |
-| `work_ito(forcing, sol_prev)` | Itô | -⟨ψⁿ · F̂*⟩ + ε·dt |
-| `store_prevsol!(forcing, sol)` | Helper | Store ψⁿ for Stratonovich |
-
-### Diagnostics
-
-| Function | Returns |
-|----------|---------|
-| `mean_energy_injection_rate(forcing)` | Target ε |
-| `instantaneous_power(forcing, sol)` | Current power P(t) |
-| `forcing_enstrophy_injection_rate(forcing)` | η (2D only) |
-| `get_forcing_spectrum(forcing)` | √Q̂(k) array |
-| `get_cached_forcing(forcing)` | Current F̂(k) |
-
----
-
-## Stratonovich vs Itô Calculus
-
-### Why Stratonovich?
-
-Tarang uses **Stratonovich calculus** because:
-
-1. **Chain rule works normally** - d(f(X)) = f'(X) dX, just like regular calculus
-2. **Physical systems converge to it** - colored noise with τ→0 gives Stratonovich
-3. **Same formulas for stochastic and deterministic** - easier to verify
-
-### Work Calculation
-
-The work done by forcing over one timestep differs between interpretations:
-
-**Stratonovich** (uses midpoint):
 ```math
-W = -\left\langle \frac{\psi^n + \psi^{n+1}}{2} \cdot \hat{F}^* \right\rangle \cdot dt
+\varepsilon = \int \frac{d^2 k}{(2\pi)^2} \, \frac{\hat{Q}(k)}{2|k|^2}
 ```
 
-**Itô** (uses initial value + drift):
-```math
-W = -\left\langle \psi^n \cdot \hat{F}^* \right\rangle \cdot dt + \varepsilon \cdot dt
-```
+Tarang normalizes the spectrum to achieve the requested `energy_injection_rate`.
 
-Both give the same ensemble average ⟨W⟩ = ε·dt.
+### Stratonovich vs Itô
+
+**Why Stratonovich?**
+- Chain rule works normally: d(f(X)) = f'(X) dX
+- Physical limit of colored noise with τ→0
+- Same formulas for stochastic and deterministic forcing
+
+**Work calculation:**
+
+| Calculus | Formula |
+|----------|---------|
+| Stratonovich | W = -⟨(ψⁿ + ψⁿ⁺¹)/2 · F̂*⟩ |
+| Itô | W = -⟨ψⁿ · F̂*⟩ + ε·dt |
 
 ---
 
 ## Multi-Stage Timesteppers
 
-**Critical**: Forcing must stay constant across all substeps within a timestep.
+For RK4, SBDF, and other multi-stage methods, forcing must stay constant within a timestep:
 
 ```
 Timestep n:     [stage 1] → [stage 2] → [stage 3] → [stage 4]
-                     ↑           ↑           ↑           ↑
-Forcing:           F_n         F_n         F_n         F_n   ← SAME!
+Forcing:           F_n         F_n         F_n         F_n
 
 Timestep n+1:   [stage 1] → [stage 2] → [stage 3] → [stage 4]
-                     ↑           ↑           ↑           ↑
-Forcing:         F_{n+1}     F_{n+1}     F_{n+1}     F_{n+1} ← NEW
+Forcing:         F_{n+1}     F_{n+1}     F_{n+1}     F_{n+1}
 ```
 
-Tarang handles this automatically via the `substep` argument:
+Tarang handles this via the `substep` argument:
 
 ```julia
-# Stage 1: generates NEW forcing
+# Substep 1: generates NEW forcing
 generate_forcing!(forcing, t, 1)
 
-# Stages 2, 3, 4: returns CACHED forcing
-generate_forcing!(forcing, t, 2)  # same as stage 1
-generate_forcing!(forcing, t, 3)  # same as stage 1
-generate_forcing!(forcing, t, 4)  # same as stage 1
-
-# Next timestep: generates NEW forcing
-generate_forcing!(forcing, t + dt, 1)  # different!
-```
-
----
-
-## Complete Example: 2D Forced Turbulence
-
-```julia
-using Tarang
-using Random
-
-# Reproducibility
-Random.seed!(42)
-rng = MersenneTwister(42)
-
-# Domain setup
-Nx, Ny = 256, 256
-Lx, Ly = 2π, 2π
-dt = 1e-3
-
-# Create stochastic forcing
-forcing = StochasticForcing(
-    field_size = (Nx, Ny),
-    domain_size = (Lx, Ly),
-    energy_injection_rate = 0.1,    # ε = 0.1
-    k_forcing = 10.0,               # Force at |k| ≈ 10
-    dk_forcing = 2.0,               # Bandwidth
-    dt = dt,
-    spectrum_type = :ring,
-    rng = rng
-)
-
-# Initialize vorticity (in spectral space)
-ω_hat = zeros(ComplexF64, Nx, Ny)
-
-# Time integration
-t_end = 10.0
-t = 0.0
-total_work = 0.0
-
-while t < t_end
-    # Store previous solution (for Stratonovich work)
-    store_prevsol!(forcing, ω_hat)
-
-    # Generate forcing for this timestep
-    F_hat = generate_forcing!(forcing, t, 1)
-
-    # Your time integration here...
-    # rhs = compute_rhs(ω_hat)
-    # rhs .+= F_hat
-    # ω_hat_new = advance(ω_hat, rhs, dt)
-
-    # Compute work done (Stratonovich)
-    W = work_stratonovich(forcing, ω_hat)
-    total_work += W
-
-    # Diagnostics
-    if mod(round(Int, t/dt), 1000) == 0
-        ε_mean = mean_energy_injection_rate(forcing)
-        P = instantaneous_power(forcing, ω_hat)
-        println("t = $t, ε = $ε_mean, P = $P, ∫W = $total_work")
-    end
-
-    t += dt
-end
+# Substeps 2-4: returns CACHED forcing
+generate_forcing!(forcing, t, 2)  # Same as substep 1
+generate_forcing!(forcing, t, 3)  # Same as substep 1
+generate_forcing!(forcing, t, 4)  # Same as substep 1
 ```
 
 ---
 
 ## Adaptive Timestepping
 
-When using adaptive dt, update the forcing:
+When dt changes, update the forcing:
 
 ```julia
-# CFL gives new timestep
 dt_new = compute_timestep(cfl)
-
-# Update forcing scaling
 set_dt!(forcing, dt_new)
-
-# Continue normally
 generate_forcing!(forcing, t, 1)
-```
-
-The `set_dt!` call rescales the cached spectrum for the new dt.
-
----
-
-## Reproducibility
-
-For reproducible results, seed the RNG:
-
-```julia
-using Random
-
-# Option 1: Global seed
-Random.seed!(12345)
-forcing = StochasticForcing(field_size = (64, 64), ...)
-
-# Option 2: Dedicated RNG (recommended for parallel)
-rng = MersenneTwister(12345)
-forcing = StochasticForcing(field_size = (64, 64), ..., rng = rng)
-```
-
----
-
-## Energy Budget Verification
-
-Verify energy balance in your simulation:
-
-```julia
-# Theoretical injection rate
-ε_target = forcing.energy_injection_rate
-
-# Measured from work
-W_total = 0.0
-for step in 1:n_steps
-    store_prevsol!(forcing, ψ_hat)
-    # ... advance ...
-    W_total += work_stratonovich(forcing, ψ_hat)
-end
-ε_measured = W_total / (n_steps * dt)
-
-# These should match (within statistical fluctuations)
-@assert abs(ε_measured - ε_target) / ε_target < 0.1
 ```
 
 ---
@@ -340,11 +415,43 @@ end
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| Energy grows unbounded | ε too high or dissipation too low | Reduce `energy_injection_rate` or increase viscosity |
-| Forcing has no effect | Wrong spectrum normalization | Check `energy_injection_rate > 0` |
-| Noise at all scales | `k_forcing` too high | Reduce `k_forcing` to target larger scales |
-| Results not reproducible | RNG not seeded | Pass seeded RNG to constructor |
-| Wrong energy injection rate | dt changed without `set_dt!` | Call `set_dt!(forcing, dt_new)` |
+| Energy grows unbounded | ε too high or dissipation too low | Increase μ or ν, or decrease ε |
+| No turbulence develops | ε too low | Increase `energy_injection_rate` |
+| Forcing at wrong scales | k_f mismatched | Check units: k_f should be in radians, not mode number |
+| Results not reproducible | RNG not seeded | Pass `rng = MersenneTwister(seed)` |
+| Jerky dynamics | dt too large | Reduce timestep or forcing bandwidth |
+
+---
+
+## API Reference Summary
+
+### Constructor
+
+```julia
+StochasticForcing(;
+    field_size,                          # (Nx, Ny) or (Nx, Ny, Nz)
+    domain_size = (2π, 2π, ...),        # (Lx, Ly, ...)
+    energy_injection_rate = 1.0,         # ε
+    k_forcing = 4.0,                     # k_f
+    dk_forcing = 1.0,                    # δ_f
+    dt = 0.01,
+    spectrum_type = :ring,               # :ring, :band, :lowk, :kolmogorov
+    rng = Random.GLOBAL_RNG,
+    dtype = Float64
+)
+```
+
+### Key Functions
+
+| Function | Purpose |
+|----------|---------|
+| `generate_forcing!(f, t, substep)` | Generate/cache forcing |
+| `apply_forcing!(rhs, f, t, substep)` | Add forcing to RHS |
+| `store_prevsol!(f, sol)` | Store ψⁿ for work calculation |
+| `work_stratonovich(f, sol)` | Compute Stratonovich work |
+| `set_dt!(f, dt)` | Update timestep |
+| `mean_energy_injection_rate(f)` | Get target ε |
+| `instantaneous_power(f, sol)` | Get current P(t) |
 
 ---
 
@@ -357,5 +464,5 @@ end
 ## References
 
 1. [GeophysicalFlows.jl Stochastic Forcing](https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/stochastic_forcing/)
-2. [FourierFlows.jl](https://github.com/FourierFlows/FourierFlows.jl)
+2. [GeophysicalFlows.jl 2D NS Example](https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/literated/twodnavierstokes_stochasticforcing/)
 3. Constantinou, N. C., & Hogg, A. M. (2021). "Intrinsic oceanic decadal variability"
