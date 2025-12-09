@@ -96,8 +96,8 @@ mean_field = get_mean(filter)
 function ExponentialMean(
     field_size::NTuple{N, Int};
     α::Real = 0.5,
-    dtype::Type{T} = Float64
-) where {T<:AbstractFloat, N}
+    dtype::Type{T} = Float64) where {T<:AbstractFloat, N}
+
     h̄ = zeros(T, field_size)
     ExponentialMean{T, N}(T(α), h̄, field_size)
 end
@@ -247,8 +247,8 @@ mean_field = get_mean(filter)
 function ButterworthFilter(
     field_size::NTuple{N, Int};
     α::Real = 0.5,
-    dtype::Type{T} = Float64
-) where {T<:AbstractFloat, N}
+    dtype::Type{T} = Float64) where {T<:AbstractFloat, N}
+
     # Allocate arrays
     h̃ = zeros(T, field_size)
     h̄ = zeros(T, field_size)
@@ -452,8 +452,7 @@ function LagrangianFilter(
     field_size::NTuple{N, Int};
     α::Real = 0.5,
     filter_type::Symbol = :butterworth,
-    dtype::Type{T} = Float64
-) where {T<:AbstractFloat, N}
+    dtype::Type{T} = Float64) where {T<:AbstractFloat, N}
 
     ndim = N
 
@@ -475,8 +474,8 @@ function LagrangianFilter(
     end
 
     LagrangianFilter{T, N, typeof(temporal_filter)}(
-        temporal_filter, ξ, ξ̃, ū, T(α), field_size, ndim
-    )
+        temporal_filter, ξ, ξ̃, ū, T(α), field_size, ndim)
+
 end
 
 """
@@ -506,8 +505,7 @@ function update_displacement!(
     filter::LagrangianFilter{T, N, F},
     u::AbstractArray{T},
     dt::Real;
-    interpolate_fn = nothing
-) where {T, N, F<:ExponentialMean}
+    interpolate_fn = nothing) where {T, N, F<:ExponentialMean}
 
     α = filter.α
 
@@ -537,8 +535,7 @@ function update_displacement!(
     filter::LagrangianFilter{T, N, F},
     u::AbstractArray{T},
     dt::Real;
-    interpolate_fn = nothing
-) where {T, N, F<:ButterworthFilter}
+    interpolate_fn = nothing) where {T, N, F<:ButterworthFilter}
 
     α = filter.α
     sqrt2 = sqrt(T(2))
@@ -604,8 +601,7 @@ function lagrangian_mean!(
     gᴸ::AbstractArray{T, N},
     g::AbstractArray{T, N},
     dt::Real;
-    interpolate_fn = nothing
-) where {T, N, F<:ExponentialMean}
+    interpolate_fn = nothing) where {T, N, F<:ExponentialMean}
 
     α = filter.α
 
@@ -628,8 +624,7 @@ function lagrangian_mean!(
     g̃::AbstractArray{T, N},
     g::AbstractArray{T, N},
     dt::Real;
-    interpolate_fn = nothing
-) where {T, N, F<:ButterworthFilter}
+    interpolate_fn = nothing) where {T, N, F<:ButterworthFilter}
 
     α = filter.α
     sqrt2 = sqrt(T(2))
