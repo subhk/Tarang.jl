@@ -485,6 +485,287 @@ end
 end
 
 # ============================================================================
+# TransposeComponents operator tests
+# Following test_cartesian_operators transpose tests
+# ============================================================================
+
+@testset "Cartesian TransposeComponents Operator" begin
+    @testset "Transpose explicit evaluation 2D - $basis_name" for (basis_name, basis_builder) in [
+        ("FF", build_FF), ("FC", build_FC), ("CC", build_CC)
+    ]
+        for N in N_range
+            for dealias in dealias_range
+                for dtype in [Float64]
+                    for layout in [:c, :g]
+                        @testset "N=$N, dealias=$dealias, dtype=$dtype, layout=$layout" begin
+                            coords, dist, bases, r = basis_builder(N, dealias, dtype)
+
+                            # Create random tensor field
+                            f = TensorField(dist, (coords, coords), "f", bases, dtype)
+                            fill_random!(f)
+
+                            # Evaluate transpose
+                            ensure_layout!(f, layout)
+                            g = evaluate(TransposeComponents(f))
+                            ensure_layout!(g, layout)
+
+                            # Check: transpose(T)_ij = T_ji
+                            data_field = layout == :g ? :data_g : :data_c
+                            for i in 1:2
+                                for j in 1:2
+                                    @test isapprox(
+                                        getfield(g.components[i, j], data_field),
+                                        getfield(f.components[j, i], data_field),
+                                        rtol=1e-10
+                                    )
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    @testset "Transpose explicit evaluation 3D - $basis_name" for (basis_name, basis_builder) in [
+        ("FFF", build_FFF), ("FFC", build_FFC)
+    ]
+        for N in N_range
+            for dealias in dealias_range
+                for dtype in [Float64]
+                    for layout in [:c, :g]
+                        @testset "N=$N, dealias=$dealias, dtype=$dtype, layout=$layout" begin
+                            coords, dist, bases, r = basis_builder(N, dealias, dtype)
+
+                            # Create random tensor field
+                            f = TensorField(dist, (coords, coords), "f", bases, dtype)
+                            fill_random!(f)
+
+                            # Evaluate transpose
+                            ensure_layout!(f, layout)
+                            g = evaluate(TransposeComponents(f))
+                            ensure_layout!(g, layout)
+
+                            # Check: transpose(T)_ij = T_ji
+                            data_field = layout == :g ? :data_g : :data_c
+                            dim = 3
+                            for i in 1:dim
+                                for j in 1:dim
+                                    @test isapprox(
+                                        getfield(g.components[i, j], data_field),
+                                        getfield(f.components[j, i], data_field),
+                                        rtol=1e-10
+                                    )
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
+# Dot product tests
+# ============================================================================
+
+@testset "Dot Product Operator" begin
+    @testset "Dot product 2D - $basis_name" for (basis_name, basis_builder) in [
+        ("FF", build_FF), ("FC", build_FC), ("CC", build_CC)
+    ]
+        for N in N_range
+            for dealias in dealias_range
+                @testset "N=$N, dealias=$dealias" begin
+                    coords, dist, bases, r = basis_builder(N, dealias, Float64)
+                    x, y = r
+
+                    # Create two vector fields
+                    u = VectorField(dist, coords, "u", bases, Float64)
+                    v = VectorField(dist, coords, "v", bases, Float64)
+
+                    # Set test values: u = (sin(x), cos(y)), v = (cos(x), sin(y))
+                    kx = 2π / Lx
+                    ky = 2π / Ly
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            u.components[1].data_g[i, j] = sin(kx * x[i])
+                            u.components[2].data_g[i, j] = cos(ky * y[j])
+                            v.components[1].data_g[i, j] = cos(kx * x[i])
+                            v.components[2].data_g[i, j] = sin(ky * y[j])
+                        end
+                    end
+                    for comp in u.components
+                        comp.current_layout = :g
+                    end
+                    for comp in v.components
+                        comp.current_layout = :g
+                    end
+
+                    # Evaluate dot product
+                    dot_result = DotProduct(u, v)
+                    result = evaluate(dot_result, :g)
+
+                    # Expected: u·v = sin(x)*cos(x) + cos(y)*sin(y)
+                    expected = zeros(length(x), length(y))
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            expected[i, j] = sin(kx * x[i]) * cos(kx * x[i]) + cos(ky * y[j]) * sin(ky * y[j])
+                        end
+                    end
+
+                    @test isapprox(result.data_g, expected, rtol=1e-10)
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
+# Cross product tests (3D)
+# ============================================================================
+
+@testset "Cross Product Operator" begin
+    @testset "Cross product 3D - $basis_name" for (basis_name, basis_builder) in [
+        ("FFF", build_FFF), ("FFC", build_FFC)
+    ]
+        for N in N_range
+            for dealias in dealias_range
+                @testset "N=$N, dealias=$dealias" begin
+                    coords, dist, bases, r = basis_builder(N, dealias, Float64)
+                    x, y, z = r
+
+                    # Create two vector fields
+                    u = VectorField(dist, coords, "u", bases, Float64)
+                    v = VectorField(dist, coords, "v", bases, Float64)
+
+                    # Set test values: u = (1, 0, 0), v = (0, 1, 0)
+                    # Expected: u × v = (0, 0, 1)
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            for k in eachindex(z)
+                                u.components[1].data_g[i, j, k] = 1.0
+                                u.components[2].data_g[i, j, k] = 0.0
+                                u.components[3].data_g[i, j, k] = 0.0
+                                v.components[1].data_g[i, j, k] = 0.0
+                                v.components[2].data_g[i, j, k] = 1.0
+                                v.components[3].data_g[i, j, k] = 0.0
+                            end
+                        end
+                    end
+                    for comp in u.components
+                        comp.current_layout = :g
+                    end
+                    for comp in v.components
+                        comp.current_layout = :g
+                    end
+
+                    # Evaluate cross product
+                    cross_result = CrossProduct(u, v)
+                    result = evaluate(cross_result, :g)
+
+                    # Expected: u × v = (0, 0, 1)
+                    @test isapprox(result.components[1].data_g, zeros(length(x), length(y), length(z)), atol=1e-10)
+                    @test isapprox(result.components[2].data_g, zeros(length(x), length(y), length(z)), atol=1e-10)
+                    @test isapprox(result.components[3].data_g, ones(length(x), length(y), length(z)), atol=1e-10)
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
+# 2D Curl operator tests (scalar result)
+# ============================================================================
+
+@testset "Cartesian Curl Operator (2D)" begin
+    @testset "Curl explicit evaluation 2D - $basis_name" for (basis_name, basis_builder) in [
+        ("FF", build_FF), ("FC", build_FC), ("CC", build_CC)
+    ]
+        for N in N_range
+            for dealias in dealias_range
+                @testset "N=$N, dealias=$dealias" begin
+                    coords, dist, bases, r = basis_builder(N, dealias, Float64)
+                    x, y = r
+
+                    # Create test vector field: u = (sin(ky*y), sin(kx*x))
+                    u = VectorField(dist, coords, "u", bases, Float64)
+                    kx = 2π / Lx
+                    ky = 2π / Ly
+
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            u.components[1].data_g[i, j] = sin(ky * y[j])
+                            u.components[2].data_g[i, j] = sin(kx * x[i])
+                        end
+                    end
+                    u.components[1].current_layout = :g
+                    u.components[2].current_layout = :g
+
+                    # Evaluate 2D curl (using generic Curl, not CartesianCurl which is 3D only)
+                    curl_u = evaluate(Curl(u, coords), :g)
+
+                    # Expected: curl(u) = ∂u_y/∂x - ∂u_x/∂y = kx*cos(kx*x) - ky*cos(ky*y)
+                    expected = zeros(length(x), length(y))
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            expected[i, j] = kx * cos(kx * x[i]) - ky * cos(ky * y[j])
+                        end
+                    end
+
+                    @test isapprox(curl_u.data_g, expected, rtol=1e-5)
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
+# div(skew(f)) = -curl(f) identity test (2D)
+# Following Dedalus test pattern
+# ============================================================================
+
+@testset "div(skew(f)) = -curl(f) Identity (2D)" begin
+    @testset "Identity test - $basis_name" for (basis_name, basis_builder) in [
+        ("FF", build_FF), ("FC", build_FC), ("CC", build_CC)
+    ]
+        for N in N_range
+            for dealias in dealias_range
+                @testset "N=$N, dealias=$dealias" begin
+                    coords, dist, bases, r = basis_builder(N, dealias, Float64)
+                    x, y = r
+
+                    # Create test vector field
+                    u = VectorField(dist, coords, "u", bases, Float64)
+                    kx = 2π / Lx
+                    ky = 2π / Ly
+
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            u.components[1].data_g[i, j] = sin(kx * x[i]) * cos(ky * y[j])
+                            u.components[2].data_g[i, j] = cos(kx * x[i]) * sin(ky * y[j])
+                        end
+                    end
+                    u.components[1].current_layout = :g
+                    u.components[2].current_layout = :g
+
+                    # Compute div(skew(u))
+                    skew_u = evaluate(CartesianSkew(u), :g)
+                    div_skew_u = evaluate(CartesianDivergence(skew_u), :g)
+
+                    # Compute -curl(u)
+                    curl_u = evaluate(Curl(u, coords), :g)
+
+                    # They should be equal (with sign convention)
+                    # div(skew(u)) = -curl(u) in 2D
+                    @test isapprox(div_skew_u.data_g, -curl_u.data_g, rtol=1e-5)
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
 # Matrix operation tests
 # ============================================================================
 
