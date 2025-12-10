@@ -1665,6 +1665,1359 @@ end
 
 
 # ============================================================================
+# Horizontal Mean (k=0 mode) Extraction
+# ============================================================================
+
+"""
+    HorizontalMean{T, N, M}
+
+Extracts and stores the horizontal mean (k=0 mode) of a field. The horizontal
+mean is computed by averaging over specified dimensions, leaving a profile
+that varies only in the remaining (typically vertical) dimension.
+
+# Fields
+- `mean_profile::Array{T, M}`: The horizontally-averaged profile
+- `horizontal_dims::NTuple{H, Int}`: Dimensions to average over (e.g., (1,2) for x,y)
+- `vertical_dim::Int`: The remaining dimension (e.g., 3 for z)
+- `field_size::NTuple{N, Int}`: Original field size
+
+# Example
+```julia
+# For a 3D field (Nx, Ny, Nz), extract the horizontal mean (average over x,y)
+hmean = HorizontalMean((64, 64, 32); horizontal_dims=(1, 2))
+
+# Update with current field
+update!(hmean, velocity_field)
+
+# Get the k=0 profile (varies only in z)
+profile = get_profile(hmean)  # size (32,)
+
+# Broadcast back to full field for subtraction
+field_k0 = broadcast_profile(hmean)  # size (64, 64, 32)
+fluctuation = velocity_field - field_k0
+```
+"""
+mutable struct HorizontalMean{T<:AbstractFloat, N, M}
+    mean_profile::Array{T, M}           # Reduced-dimension mean
+    horizontal_dims::NTuple{M, Int}     # Dims to average (where M = N - 1 typically)
+    vertical_dim::Int                   # Remaining dimension
+    field_size::NTuple{N, Int}
+    broadcast_buffer::Array{T, N}       # Preallocated for broadcasting back
+end
+
+"""
+    HorizontalMean(field_size::NTuple{N, Int}; horizontal_dims, dtype=Float64)
+
+Create a HorizontalMean extractor for fields of the given size.
+
+# Arguments
+- `field_size`: Size of the input field, e.g., `(Nx, Ny, Nz)`
+- `horizontal_dims`: Tuple of dimensions to average over, e.g., `(1, 2)` for x,y
+- `dtype`: Element type (default: Float64)
+
+# Examples
+```julia
+# 3D: average over x,y to get z-profile
+hmean_3d = HorizontalMean((64, 64, 32); horizontal_dims=(1, 2))
+
+# 2D: average over x to get y-profile
+hmean_2d = HorizontalMean((128, 64); horizontal_dims=(1,))
+
+# 3D: average over x,z to get y-profile (e.g., channel flow)
+hmean_channel = HorizontalMean((64, 32, 64); horizontal_dims=(1, 3))
+```
+"""
+function HorizontalMean(
+    field_size::NTuple{N, Int};
+    horizontal_dims::NTuple{M, Int},
+    dtype::Type{T} = Float64
+) where {T<:AbstractFloat, N, M}
+
+    # Validate dimensions
+    all_dims = Set(1:N)
+    hdims_set = Set(horizontal_dims)
+    @assert hdims_set ⊆ all_dims "horizontal_dims must be valid dimensions"
+    @assert length(hdims_set) == M "horizontal_dims must have unique elements"
+    @assert M < N "Must have at least one non-horizontal dimension"
+
+    # Find vertical dimension(s)
+    remaining_dims = setdiff(all_dims, hdims_set)
+    @assert length(remaining_dims) == 1 "Expected exactly one vertical dimension, got $(length(remaining_dims))"
+    vertical_dim = first(remaining_dims)
+
+    # Profile size (only vertical dimension)
+    profile_size = field_size[vertical_dim]
+    mean_profile = zeros(T, profile_size)
+
+    # Preallocate broadcast buffer
+    broadcast_buffer = zeros(T, field_size...)
+
+    HorizontalMean{T, N, M}(
+        mean_profile,
+        horizontal_dims,
+        vertical_dim,
+        field_size,
+        broadcast_buffer
+    )
+end
+
+# Convenience constructors for common cases
+"""
+    HorizontalMean(Nx, Ny, Nz; dtype=Float64)
+
+Create a HorizontalMean for 3D fields, averaging over x,y (dims 1,2).
+"""
+function HorizontalMean(Nx::Int, Ny::Int, Nz::Int; dtype::Type{T}=Float64) where T
+    HorizontalMean((Nx, Ny, Nz); horizontal_dims=(1, 2), dtype=dtype)
+end
+
+"""
+    HorizontalMean(Nx, Ny; dtype=Float64)
+
+Create a HorizontalMean for 2D fields, averaging over x (dim 1).
+"""
+function HorizontalMean(Nx::Int, Ny::Int; dtype::Type{T}=Float64) where T
+    HorizontalMean((Nx, Ny); horizontal_dims=(1,), dtype=dtype)
+end
+
+"""
+    update!(hmean::HorizontalMean, field)
+
+Compute the horizontal mean of `field` and store in `hmean`.
+"""
+function update!(
+    hmean::HorizontalMean{T, N, M},
+    field::AbstractArray{T, N}
+) where {T, N, M}
+
+    @assert size(field) == hmean.field_size "Field size mismatch"
+
+    # Compute mean over horizontal dimensions
+    profile = hmean.mean_profile
+    vdim = hmean.vertical_dim
+    hdims = hmean.horizontal_dims
+
+    # Number of horizontal points for normalization
+    n_horizontal = prod(hmean.field_size[d] for d in hdims)
+
+    # Sum over horizontal dimensions
+    fill!(profile, zero(T))
+
+    if N == 2 && hdims == (1,)
+        # 2D case: average over x (dim 1), profile in y (dim 2)
+        Nx, Ny = hmean.field_size
+        @inbounds for j in 1:Ny
+            s = zero(T)
+            @simd for i in 1:Nx
+                s += field[i, j]
+            end
+            profile[j] = s / n_horizontal
+        end
+
+    elseif N == 3 && hdims == (1, 2)
+        # 3D case: average over x,y (dims 1,2), profile in z (dim 3)
+        Nx, Ny, Nz = hmean.field_size
+        @inbounds for k in 1:Nz
+            s = zero(T)
+            for j in 1:Ny
+                @simd for i in 1:Nx
+                    s += field[i, j, k]
+                end
+            end
+            profile[k] = s / n_horizontal
+        end
+
+    elseif N == 3 && hdims == (1, 3)
+        # 3D channel: average over x,z (dims 1,3), profile in y (dim 2)
+        Nx, Ny, Nz = hmean.field_size
+        @inbounds for j in 1:Ny
+            s = zero(T)
+            for k in 1:Nz
+                @simd for i in 1:Nx
+                    s += field[i, j, k]
+                end
+            end
+            profile[j] = s / n_horizontal
+        end
+
+    else
+        # General case using dropdims and mean
+        profile .= dropdims(sum(field; dims=hdims); dims=hdims) ./ n_horizontal
+    end
+
+    return profile
+end
+
+"""
+    get_profile(hmean::HorizontalMean)
+
+Return the current horizontal mean profile (1D array).
+"""
+get_profile(hmean::HorizontalMean) = hmean.mean_profile
+
+"""
+    broadcast_profile(hmean::HorizontalMean)
+
+Broadcast the 1D profile back to the full field size.
+Returns a preallocated array with the profile repeated along horizontal dimensions.
+"""
+function broadcast_profile(hmean::HorizontalMean{T, N, M}) where {T, N, M}
+
+    buf = hmean.broadcast_buffer
+    profile = hmean.mean_profile
+    vdim = hmean.vertical_dim
+
+    if N == 2 && hmean.horizontal_dims == (1,)
+        # 2D: profile in y (dim 2)
+        Nx, Ny = hmean.field_size
+        @inbounds for j in 1:Ny
+            pj = profile[j]
+            @simd for i in 1:Nx
+                buf[i, j] = pj
+            end
+        end
+
+    elseif N == 3 && hmean.horizontal_dims == (1, 2)
+        # 3D: profile in z (dim 3)
+        Nx, Ny, Nz = hmean.field_size
+        @inbounds for k in 1:Nz
+            pk = profile[k]
+            for j in 1:Ny
+                @simd for i in 1:Nx
+                    buf[i, j, k] = pk
+                end
+            end
+        end
+
+    elseif N == 3 && hmean.horizontal_dims == (1, 3)
+        # 3D channel: profile in y (dim 2)
+        Nx, Ny, Nz = hmean.field_size
+        @inbounds for k in 1:Nz
+            for j in 1:Ny
+                pj = profile[j]
+                @simd for i in 1:Nx
+                    buf[i, j, k] = pj
+                end
+            end
+        end
+
+    else
+        # General case
+        # Reshape profile to broadcast correctly
+        new_shape = ntuple(i -> i == vdim ? length(profile) : 1, N)
+        buf .= reshape(profile, new_shape)
+    end
+
+    return buf
+end
+
+"""
+    extract_fluctuation!(fluctuation, hmean, field)
+
+Compute `fluctuation = field - horizontal_mean(field)` in-place.
+Updates hmean and stores result in fluctuation.
+"""
+function extract_fluctuation!(
+    fluctuation::AbstractArray{T, N},
+    hmean::HorizontalMean{T, N, M},
+    field::AbstractArray{T, N}
+) where {T, N, M}
+
+    update!(hmean, field)
+    k0_field = broadcast_profile(hmean)
+    @. fluctuation = field - k0_field
+    return fluctuation
+end
+
+"""
+    extract_k0_and_fluctuation(hmean, field)
+
+Return both the k=0 profile and the fluctuation field.
+"""
+function extract_k0_and_fluctuation(
+    hmean::HorizontalMean{T, N, M},
+    field::AbstractArray{T, N}
+) where {T, N, M}
+
+    update!(hmean, field)
+    profile = copy(hmean.mean_profile)
+    k0_field = broadcast_profile(hmean)
+    fluctuation = field .- k0_field
+    return profile, fluctuation
+end
+
+
+# ============================================================================
+# Combined Temporal + Horizontal Mean for Wave-Mean QL
+# ============================================================================
+
+"""
+    WaveMeanDecomposition{T, N}
+
+Combined temporal and horizontal averaging for quasi-linear wave-mean flow.
+
+The mean flow is defined as: ⟨·⟩ = temporal_filter(horizontal_mean(·))
+
+This provides:
+1. `k=0` extraction (horizontal mean → profile)
+2. Temporal filtering of the profile
+3. Wave flux computation and filtering
+
+# Example: Quasi-Linear Boussinesq
+```julia
+# Setup decomposition
+decomp = WaveMeanDecomposition((64, 64, 32); α=0.1, horizontal_dims=(1,2))
+
+# In time loop:
+for step in 1:nsteps
+    # Get mean profile and wave fluctuation
+    u_mean_profile, u_wave = decompose!(decomp, :u, u_field, dt)
+
+    # u_mean_profile is 1D (Nz,) - the temporally-filtered horizontal mean
+    # u_wave is 3D (Nx, Ny, Nz) - the fluctuation
+
+    # Compute and filter Reynolds stress
+    update_flux!(decomp, :uw, u_wave .* w_wave, dt)
+    R_uw = get_filtered_flux(decomp, :uw)  # ⟨u'w'⟩ as 1D profile
+
+    # Use in mean equation
+    # ∂ū/∂t = ... - ∂⟨u'w'⟩/∂z
+end
+```
+"""
+mutable struct WaveMeanDecomposition{T<:AbstractFloat, N, M}
+    # Horizontal mean extractors
+    hmean::HorizontalMean{T, N, M}
+
+    # Temporal filters for mean profiles
+    mean_filters::Dict{Symbol, ButterworthFilter{T, 1}}
+
+    # Temporal filters for wave flux products (horizontally averaged)
+    flux_filters::Dict{Symbol, ButterworthFilter{T, 1}}
+
+    # ETD coefficients
+    etd_coeffs::Union{ETDFilterCoefficients{T}, Nothing}
+
+    # Parameters
+    α::T
+    field_size::NTuple{N, Int}
+    profile_size::Int
+
+    # Work arrays
+    fluctuation::Array{T, N}
+    flux_profile::Vector{T}
+end
+
+"""
+    WaveMeanDecomposition(field_size; α, horizontal_dims=(1,2), dtype=Float64)
+
+Create a wave-mean decomposition system.
+
+# Arguments
+- `field_size`: Size of 3D fields, e.g., `(Nx, Ny, Nz)`
+- `α`: Temporal filter parameter (inverse averaging time)
+- `horizontal_dims`: Dimensions to average over (default: `(1,2)` for x,y)
+- `dtype`: Element type
+"""
+function WaveMeanDecomposition(
+    field_size::NTuple{N, Int};
+    α::Real,
+    horizontal_dims::NTuple{M, Int} = N == 3 ? (1, 2) : (1,),
+    dtype::Type{T} = Float64
+) where {T<:AbstractFloat, N, M}
+
+    # Create horizontal mean extractor
+    hmean = HorizontalMean(field_size; horizontal_dims=horizontal_dims, dtype=dtype)
+    profile_size = length(hmean.mean_profile)
+
+    # Initialize empty filter dictionaries
+    mean_filters = Dict{Symbol, ButterworthFilter{T, 1}}()
+    flux_filters = Dict{Symbol, ButterworthFilter{T, 1}}()
+
+    # Work arrays
+    fluctuation = zeros(T, field_size...)
+    flux_profile = zeros(T, profile_size)
+
+    WaveMeanDecomposition{T, N, M}(
+        hmean,
+        mean_filters,
+        flux_filters,
+        nothing,  # ETD coefficients set later
+        T(α),
+        field_size,
+        profile_size,
+        fluctuation,
+        flux_profile
+    )
+end
+
+"""
+    setup_etd!(decomp::WaveMeanDecomposition, dt)
+
+Precompute ETD coefficients for the given timestep.
+"""
+function setup_etd!(decomp::WaveMeanDecomposition{T}, dt::Real) where T
+    # Create a dummy filter to compute coefficients
+    dummy_filter = ButterworthFilter((decomp.profile_size,); α=decomp.α, dtype=T)
+    decomp.etd_coeffs = precompute_etd_coefficients(dummy_filter, dt)
+    return decomp
+end
+
+"""
+    add_mean_field!(decomp, name::Symbol)
+
+Register a field for mean flow tracking.
+"""
+function add_mean_field!(decomp::WaveMeanDecomposition{T}, name::Symbol) where T
+    if !haskey(decomp.mean_filters, name)
+        decomp.mean_filters[name] = ButterworthFilter(
+            (decomp.profile_size,); α=decomp.α, dtype=T
+        )
+    end
+    return decomp
+end
+
+"""
+    add_flux_field!(decomp, name::Symbol)
+
+Register a wave flux product for filtering (e.g., :uw for ⟨u'w'⟩).
+"""
+function add_flux_field!(decomp::WaveMeanDecomposition{T}, name::Symbol) where T
+    if !haskey(decomp.flux_filters, name)
+        decomp.flux_filters[name] = ButterworthFilter(
+            (decomp.profile_size,); α=decomp.α, dtype=T
+        )
+    end
+    return decomp
+end
+
+"""
+    decompose!(decomp, name, field, dt) -> (mean_profile, fluctuation)
+
+Decompose field into temporally-filtered horizontal mean and fluctuation.
+
+Returns:
+- `mean_profile`: 1D profile of ⟨field⟩ (temporally + horizontally averaged)
+- `fluctuation`: Full field minus the k=0 temporal mean
+"""
+function decompose!(
+    decomp::WaveMeanDecomposition{T, N, M},
+    name::Symbol,
+    field::AbstractArray{T, N},
+    dt::Real
+) where {T, N, M}
+
+    # Ensure field is registered
+    add_mean_field!(decomp, name)
+
+    # Ensure ETD coefficients are computed
+    if decomp.etd_coeffs === nothing
+        setup_etd!(decomp, dt)
+    end
+
+    # Step 1: Extract horizontal mean profile
+    profile = update!(decomp.hmean, field)
+
+    # Step 2: Temporally filter the profile
+    filter = decomp.mean_filters[name]
+    update_etd!(filter, profile, decomp.etd_coeffs)
+    mean_profile = get_mean(filter)
+
+    # Step 3: Compute fluctuation = field - broadcast(mean_profile)
+    # Note: we use the FILTERED mean for the fluctuation
+    decomp.hmean.mean_profile .= mean_profile
+    k0_field = broadcast_profile(decomp.hmean)
+    @. decomp.fluctuation = field - k0_field
+
+    return mean_profile, decomp.fluctuation
+end
+
+"""
+    update_flux!(decomp, name, flux_field, dt)
+
+Update the temporal filter for a wave flux product.
+The flux_field should be the PRODUCT of wave fields (e.g., u'*w').
+"""
+function update_flux!(
+    decomp::WaveMeanDecomposition{T, N, M},
+    name::Symbol,
+    flux_field::AbstractArray{T, N},
+    dt::Real
+) where {T, N, M}
+
+    # Ensure flux is registered
+    add_flux_field!(decomp, name)
+
+    # Ensure ETD coefficients are computed
+    if decomp.etd_coeffs === nothing
+        setup_etd!(decomp, dt)
+    end
+
+    # Step 1: Horizontal average of flux product
+    flux_profile = update!(decomp.hmean, flux_field)
+
+    # Step 2: Temporal filter
+    filter = decomp.flux_filters[name]
+    update_etd!(filter, flux_profile, decomp.etd_coeffs)
+
+    return get_mean(filter)
+end
+
+"""
+    get_mean_profile(decomp, name) -> Vector
+
+Get the current temporally-filtered mean profile for field `name`.
+"""
+function get_mean_profile(decomp::WaveMeanDecomposition, name::Symbol)
+    @assert haskey(decomp.mean_filters, name) "Field $name not registered"
+    return get_mean(decomp.mean_filters[name])
+end
+
+"""
+    get_filtered_flux(decomp, name) -> Vector
+
+Get the current temporally-filtered flux profile.
+"""
+function get_filtered_flux(decomp::WaveMeanDecomposition, name::Symbol)
+    @assert haskey(decomp.flux_filters, name) "Flux $name not registered"
+    return get_mean(decomp.flux_filters[name])
+end
+
+"""
+    broadcast_mean(decomp, name) -> Array
+
+Broadcast the mean profile back to full field dimensions.
+"""
+function broadcast_mean(decomp::WaveMeanDecomposition, name::Symbol)
+    profile = get_mean_profile(decomp, name)
+    decomp.hmean.mean_profile .= profile
+    return broadcast_profile(decomp.hmean)
+end
+
+
+# ============================================================================
+# Wave-Induced Forcing for PDE RHS
+# ============================================================================
+
+"""
+    WaveInducedForcing{T, N}
+
+Compute wave-mean decomposition and filtered wave fluxes that can be used
+in the RHS of mean flow equations. User applies their own differentiation.
+
+This provides a clean interface for quasi-linear wave-mean flow coupling:
+
+```julia
+# Setup
+forcing = WaveInducedForcing((Nx, Ny, Nz); α=0.1)
+
+# Register which fields to decompose and which fluxes to compute
+add_field!(forcing, :u)
+add_field!(forcing, :v)
+add_field!(forcing, :w)
+add_field!(forcing, :b)
+add_flux!(forcing, :uw)  # ⟨u'w'⟩ for ∂ū/∂t equation
+add_flux!(forcing, :vw)  # ⟨v'w'⟩ for ∂v̄/∂t equation
+add_flux!(forcing, :wb)  # ⟨w'b'⟩ for ∂b̄/∂t equation
+
+# In time loop - update with current fields
+update!(forcing, Dict(:u => u, :v => v, :w => w, :b => b), dt)
+
+# Get filtered flux profile (1D)
+R_uw = get_flux(forcing, :uw)   # Returns 1D profile ⟨u'w'⟩(z)
+
+# Get flux as 3D field (broadcast profile)
+R_uw_3d = get_flux_3d(forcing, :uw)  # Returns 3D array
+
+# User applies their own derivative for forcing term:
+# F_u = -∂⟨u'w'⟩/∂z  (use your spectral/FD derivative)
+```
+
+The module provides:
+- Horizontal averaging (k=0 extraction)
+- Temporal filtering (Butterworth with ETD)
+- User applies differentiation externally
+"""
+mutable struct WaveInducedForcing{T<:AbstractFloat, N, M}
+    # Wave-mean decomposition system
+    decomp::WaveMeanDecomposition{T, N, M}
+
+    # Registered field names
+    field_names::Vector{Symbol}
+
+    # Flux specifications: Dict(:uw => (:u, :w)) means ⟨u'w'⟩
+    flux_specs::Dict{Symbol, Tuple{Symbol, Symbol}}
+
+    # Cached wave fluctuations for computing products
+    wave_fields::Dict{Symbol, Array{T, N}}
+
+    # Parameters
+    field_size::NTuple{N, Int}
+    profile_size::Int
+end
+
+"""
+    WaveInducedForcing(field_size; α, horizontal_dims=(1,2), dtype=Float64)
+
+Create a wave-induced forcing calculator.
+
+# Arguments
+- `field_size`: Size of 3D fields, e.g., `(Nx, Ny, Nz)`
+- `α`: Temporal filter parameter (inverse averaging time)
+- `horizontal_dims`: Dimensions to average over (default: `(1,2)` for x,y)
+- `dtype`: Element type
+
+# Example
+```julia
+forcing = WaveInducedForcing((64, 64, 32); α=0.1)
+```
+"""
+function WaveInducedForcing(
+    field_size::NTuple{N, Int};
+    α::Real,
+    horizontal_dims::NTuple{M, Int} = N == 3 ? (1, 2) : (1,),
+    dtype::Type{T} = Float64
+) where {T<:AbstractFloat, N, M}
+
+    decomp = WaveMeanDecomposition(field_size; α=α, horizontal_dims=horizontal_dims, dtype=dtype)
+    profile_size = decomp.profile_size
+
+    WaveInducedForcing{T, N, M}(
+        decomp,
+        Symbol[],
+        Dict{Symbol, Tuple{Symbol, Symbol}}(),
+        Dict{Symbol, Array{T, N}}(),
+        field_size,
+        profile_size
+    )
+end
+
+"""
+    add_field!(forcing::WaveInducedForcing, name::Symbol)
+
+Register a field for wave-mean decomposition.
+"""
+function add_field!(forcing::WaveInducedForcing{T, N}, name::Symbol) where {T, N}
+    if !(name in forcing.field_names)
+        push!(forcing.field_names, name)
+        forcing.wave_fields[name] = zeros(T, forcing.field_size...)
+        add_mean_field!(forcing.decomp, name)
+    end
+    return forcing
+end
+
+"""
+    add_flux!(forcing::WaveInducedForcing, flux_name::Symbol, field1::Symbol, field2::Symbol)
+
+Register a wave flux product ⟨field1' * field2'⟩.
+
+# Example
+```julia
+add_flux!(forcing, :uw, :u, :w)  # ⟨u'w'⟩
+add_flux!(forcing, :wb, :w, :b)  # ⟨w'b'⟩
+```
+"""
+function add_flux!(
+    forcing::WaveInducedForcing{T, N},
+    flux_name::Symbol,
+    field1::Symbol,
+    field2::Symbol
+) where {T, N}
+
+    forcing.flux_specs[flux_name] = (field1, field2)
+    add_flux_field!(forcing.decomp, flux_name)
+    return forcing
+end
+
+# Convenience: infer fields from flux name like :uw -> (:u, :w)
+function add_flux!(forcing::WaveInducedForcing, flux_name::Symbol)
+    name_str = string(flux_name)
+    if length(name_str) == 2
+        field1 = Symbol(name_str[1])
+        field2 = Symbol(name_str[2])
+        return add_flux!(forcing, flux_name, field1, field2)
+    else
+        throw(ArgumentError("Cannot infer fields from flux name :$flux_name. Use add_flux!(forcing, :name, :field1, :field2)"))
+    end
+end
+
+"""
+    setup!(forcing::WaveInducedForcing, dt)
+
+Initialize ETD coefficients. Called automatically on first update.
+"""
+function setup!(forcing::WaveInducedForcing, dt::Real)
+    setup_etd!(forcing.decomp, dt)
+    return forcing
+end
+
+"""
+    update!(forcing::WaveInducedForcing, fields::Dict{Symbol, AbstractArray}, dt)
+
+Update all filters with current field values.
+
+# Arguments
+- `fields`: Dictionary mapping field names to their current values
+- `dt`: Timestep
+
+# Example
+```julia
+update!(forcing, Dict(:u => u_field, :v => v_field, :w => w_field, :b => b_field), dt)
+```
+"""
+function update!(
+    forcing::WaveInducedForcing{T, N, M},
+    fields::Dict{Symbol, <:AbstractArray{T, N}},
+    dt::Real
+) where {T, N, M}
+
+    # Ensure setup is done
+    if forcing.decomp.etd_coeffs === nothing
+        setup!(forcing, dt)
+    end
+
+    # Step 1: Decompose all registered fields into mean + wave
+    for name in forcing.field_names
+        if haskey(fields, name)
+            _, wave = decompose!(forcing.decomp, name, fields[name], dt)
+            forcing.wave_fields[name] .= wave
+        end
+    end
+
+    # Step 2: Compute and filter all flux products
+    for (flux_name, (f1, f2)) in forcing.flux_specs
+        if haskey(forcing.wave_fields, f1) && haskey(forcing.wave_fields, f2)
+            wave1 = forcing.wave_fields[f1]
+            wave2 = forcing.wave_fields[f2]
+            # Compute horizontally-averaged, temporally-filtered flux
+            update_flux!(forcing.decomp, flux_name, wave1 .* wave2, dt)
+        end
+    end
+
+    return forcing
+end
+
+"""
+    get_flux(forcing::WaveInducedForcing, flux_name::Symbol) -> Vector
+
+Get the filtered wave flux profile (1D array).
+"""
+function get_flux(forcing::WaveInducedForcing, flux_name::Symbol)
+    return get_filtered_flux(forcing.decomp, flux_name)
+end
+
+"""
+    get_flux_3d(forcing::WaveInducedForcing, flux_name::Symbol) -> Array
+
+Get the filtered wave flux broadcast to full 3D field size.
+"""
+function get_flux_3d(forcing::WaveInducedForcing, flux_name::Symbol)
+    flux_profile = get_filtered_flux(forcing.decomp, flux_name)
+    forcing.decomp.hmean.mean_profile .= flux_profile
+    return broadcast_profile(forcing.decomp.hmean)
+end
+
+"""
+    get_mean(forcing::WaveInducedForcing, field_name::Symbol) -> Vector
+
+Get the temporally-filtered horizontal mean profile (1D array).
+"""
+function get_mean(forcing::WaveInducedForcing, field_name::Symbol)
+    return get_mean_profile(forcing.decomp, field_name)
+end
+
+"""
+    get_mean_3d(forcing::WaveInducedForcing, field_name::Symbol) -> Array
+
+Get the temporally-filtered horizontal mean broadcast to full 3D field size.
+"""
+function get_mean_3d(forcing::WaveInducedForcing, field_name::Symbol)
+    mean_profile = get_mean_profile(forcing.decomp, field_name)
+    forcing.decomp.hmean.mean_profile .= mean_profile
+    return broadcast_profile(forcing.decomp.hmean)
+end
+
+"""
+    get_wave(forcing::WaveInducedForcing, field_name::Symbol) -> Array
+
+Get the wave (fluctuation) field (3D array).
+"""
+function get_wave(forcing::WaveInducedForcing, field_name::Symbol)
+    if haskey(forcing.wave_fields, field_name)
+        return forcing.wave_fields[field_name]
+    else
+        throw(KeyError("Field :$field_name not registered. Use add_field!() first."))
+    end
+end
+
+
+# ============================================================================
+# Generalized Quasi-Linear (GQL) Wavenumber Decomposition
+# ============================================================================
+
+"""
+    GQLDecomposition{T, N}
+
+Generalized Quasi-Linear (GQL) decomposition using Fourier wavenumber cutoff.
+
+Splits a field into "large-scale" (low wavenumber, |k| ≤ Λ) and "small-scale"
+(high wavenumber, |k| > Λ) components in spectral space.
+
+This follows the GQL approximation of Marston, Chini & Tobias (2016):
+- **QL (Quasi-Linear)**: Λ = 0, only k=0 mode is "large scale"
+- **GQL**: 0 < Λ < k_max, intermediate cutoff
+- **Full NL**: Λ = k_max, all modes are "large scale" (no approximation)
+
+```julia
+# Setup for 3D field with cutoff at |k| = 4
+gql = GQLDecomposition((Nx, Ny, Nz), (Lx, Ly); Λ=4)
+
+# Decompose field (requires FFT of field)
+f_hat = fft(f)  # User performs FFT
+f_large, f_small = decompose!(gql, f_hat)
+
+# f_large: modes with |k| ≤ Λ (includes k=0)
+# f_small: modes with |k| > Λ
+
+# For GQL dynamics:
+# - Large-scale eqn: ∂f_L/∂t = NL(f_L, f_L) + NL(f_S, f_S)|_L
+# - Small-scale eqn: ∂f_S/∂t = NL(f_L, f_S) + NL(f_S, f_L)  [no NL(f_S, f_S)]
+```
+
+Reference: Marston, Chini & Tobias (2016), Phys. Rev. Lett. 116, 214501
+"""
+mutable struct GQLDecomposition{T<:AbstractFloat, N}
+    # Cutoff wavenumber
+    Λ::T
+
+    # Wavenumber arrays
+    kx::Vector{T}
+    ky::Vector{T}
+
+    # Precomputed mask: true for |k| ≤ Λ (large scale)
+    large_scale_mask::Array{Bool, N}
+
+    # Work arrays for decomposition (spectral space, complex)
+    f_large::Array{Complex{T}, N}
+    f_small::Array{Complex{T}, N}
+
+    # Grid info
+    field_size::NTuple{N, Int}
+    spectral_size::NTuple{N, Int}  # Size after rfft
+end
+
+"""
+    GQLDecomposition(field_size, domain_size; Λ, dtype=Float64)
+
+Create a GQL decomposition with wavenumber cutoff Λ.
+
+# Arguments
+- `field_size`: Size of physical space field, e.g., `(Nx, Ny)` or `(Nx, Ny, Nz)`
+- `domain_size`: Physical domain size, e.g., `(Lx, Ly)` for horizontal directions
+- `Λ`: Cutoff wavenumber. Modes with |k| ≤ Λ are "large scale"
+- `dtype`: Element type
+
+# Wavenumber computation
+For a periodic domain of size L with N points:
+- kx = 2π/L * [0, 1, 2, ..., N/2, -N/2+1, ..., -1] (for full FFT)
+- For rfft, only non-negative kx are stored
+
+# Example
+```julia
+# 2D field 64×64, domain 2π×2π, cutoff at |k|=4
+gql = GQLDecomposition((64, 64), (2π, 2π); Λ=4.0)
+
+# 3D field with horizontal cutoff only
+gql = GQLDecomposition((64, 64, 32), (2π, 2π); Λ=8.0)
+```
+"""
+function GQLDecomposition(
+    field_size::NTuple{N, Int},
+    domain_size::NTuple{M, Real};
+    Λ::Real,
+    dtype::Type{T} = Float64
+) where {T<:AbstractFloat, N, M}
+
+    # Compute wavenumber arrays for horizontal dimensions
+    # Assuming rfft along first dimension
+    Nx = field_size[1]
+    Lx = T(domain_size[1])
+
+    # For rfft: kx = [0, 1, 2, ..., Nx/2] * 2π/Lx
+    nkx = Nx ÷ 2 + 1
+    kx = T[(2π / Lx) * i for i in 0:nkx-1]
+
+    # For second dimension (if exists): full FFT wavenumbers
+    if N >= 2 && M >= 2
+        Ny = field_size[2]
+        Ly = T(domain_size[2])
+        # ky = [0, 1, ..., Ny/2, -Ny/2+1, ..., -1] * 2π/Ly
+        ky = zeros(T, Ny)
+        for j in 0:Ny-1
+            if j <= Ny ÷ 2
+                ky[j+1] = (2π / Ly) * j
+            else
+                ky[j+1] = (2π / Ly) * (j - Ny)
+            end
+        end
+    else
+        ky = T[0]
+    end
+
+    # Spectral size (after rfft along first dim)
+    spectral_size = if N == 2
+        (nkx, field_size[2])
+    elseif N == 3
+        (nkx, field_size[2], field_size[3])
+    else
+        (nkx,)
+    end
+
+    # Build large-scale mask: |k| ≤ Λ
+    Λ_T = T(Λ)
+    large_scale_mask = zeros(Bool, spectral_size...)
+
+    if N == 1
+        for i in 1:nkx
+            k_mag = abs(kx[i])
+            large_scale_mask[i] = (k_mag <= Λ_T)
+        end
+    elseif N == 2
+        Ny = field_size[2]
+        for j in 1:Ny, i in 1:nkx
+            k_mag = sqrt(kx[i]^2 + ky[j]^2)
+            large_scale_mask[i, j] = (k_mag <= Λ_T)
+        end
+    elseif N == 3
+        Ny = field_size[2]
+        Nz = field_size[3]
+        # For 3D, cutoff is in horizontal (kx, ky) only
+        for k in 1:Nz, j in 1:Ny, i in 1:nkx
+            k_mag = sqrt(kx[i]^2 + ky[j]^2)
+            large_scale_mask[i, j, k] = (k_mag <= Λ_T)
+        end
+    end
+
+    # Allocate work arrays
+    f_large = zeros(Complex{T}, spectral_size...)
+    f_small = zeros(Complex{T}, spectral_size...)
+
+    GQLDecomposition{T, N}(
+        Λ_T,
+        kx, ky,
+        large_scale_mask,
+        f_large, f_small,
+        field_size,
+        spectral_size
+    )
+end
+
+"""
+    decompose!(gql::GQLDecomposition, f_hat) -> (f_large, f_small)
+
+Decompose spectral field into large-scale (|k| ≤ Λ) and small-scale (|k| > Λ) parts.
+
+# Arguments
+- `f_hat`: Field in spectral space (after rfft)
+
+# Returns
+- `f_large`: Large-scale (low-k) component
+- `f_small`: Small-scale (high-k) component
+
+Note: Returns references to internal arrays. Copy if you need to store.
+"""
+function decompose!(gql::GQLDecomposition{T, N}, f_hat::AbstractArray{Complex{T}, N}) where {T, N}
+    mask = gql.large_scale_mask
+
+    @inbounds @simd for i in eachindex(f_hat)
+        if mask[i]
+            gql.f_large[i] = f_hat[i]
+            gql.f_small[i] = zero(Complex{T})
+        else
+            gql.f_large[i] = zero(Complex{T})
+            gql.f_small[i] = f_hat[i]
+        end
+    end
+
+    return gql.f_large, gql.f_small
+end
+
+"""
+    project_large!(gql::GQLDecomposition, f_hat) -> f_large
+
+Project field onto large-scale modes (|k| ≤ Λ). Modifies f_hat in-place.
+"""
+function project_large!(gql::GQLDecomposition{T, N}, f_hat::AbstractArray{Complex{T}, N}) where {T, N}
+    mask = gql.large_scale_mask
+
+    @inbounds @simd for i in eachindex(f_hat)
+        if !mask[i]
+            f_hat[i] = zero(Complex{T})
+        end
+    end
+
+    return f_hat
+end
+
+"""
+    project_small!(gql::GQLDecomposition, f_hat) -> f_small
+
+Project field onto small-scale modes (|k| > Λ). Modifies f_hat in-place.
+"""
+function project_small!(gql::GQLDecomposition{T, N}, f_hat::AbstractArray{Complex{T}, N}) where {T, N}
+    mask = gql.large_scale_mask
+
+    @inbounds @simd for i in eachindex(f_hat)
+        if mask[i]
+            f_hat[i] = zero(Complex{T})
+        end
+    end
+
+    return f_hat
+end
+
+"""
+    get_cutoff(gql::GQLDecomposition) -> Λ
+
+Get the wavenumber cutoff.
+"""
+get_cutoff(gql::GQLDecomposition) = gql.Λ
+
+"""
+    set_cutoff!(gql::GQLDecomposition, Λ_new)
+
+Update the wavenumber cutoff and rebuild the mask.
+"""
+function set_cutoff!(gql::GQLDecomposition{T, N}, Λ_new::Real) where {T, N}
+    gql.Λ = T(Λ_new)
+
+    kx, ky = gql.kx, gql.ky
+    mask = gql.large_scale_mask
+    Λ_T = gql.Λ
+
+    if N == 1
+        for i in eachindex(kx)
+            mask[i] = (abs(kx[i]) <= Λ_T)
+        end
+    elseif N == 2
+        Ny = size(mask, 2)
+        for j in 1:Ny, i in eachindex(kx)
+            k_mag = sqrt(kx[i]^2 + ky[j]^2)
+            mask[i, j] = (k_mag <= Λ_T)
+        end
+    elseif N == 3
+        Ny, Nz = size(mask, 2), size(mask, 3)
+        for k in 1:Nz, j in 1:Ny, i in eachindex(kx)
+            k_mag = sqrt(kx[i]^2 + ky[j]^2)
+            mask[i, j, k] = (k_mag <= Λ_T)
+        end
+    end
+
+    return gql
+end
+
+"""
+    count_large_modes(gql::GQLDecomposition) -> Int
+
+Count number of large-scale (|k| ≤ Λ) modes.
+"""
+count_large_modes(gql::GQLDecomposition) = sum(gql.large_scale_mask)
+
+"""
+    count_small_modes(gql::GQLDecomposition) -> Int
+
+Count number of small-scale (|k| > Λ) modes.
+"""
+count_small_modes(gql::GQLDecomposition) = sum(.!gql.large_scale_mask)
+
+
+# ============================================================================
+# GQL + Temporal Filter Combined System
+# ============================================================================
+
+"""
+    GQLWaveMeanSystem{T, N}
+
+Combined GQL wavenumber decomposition with temporal filtering for wave-mean
+flow interactions. This is the full Generalized Quasi-Linear system.
+
+Decomposes fields into:
+1. **Large-scale (L)**: |k| ≤ Λ, includes mean flow
+2. **Small-scale (S)**: |k| > Λ, wave/eddy field
+
+And applies temporal filtering to extract slowly-varying mean from large-scale.
+
+```julia
+# Setup
+sys = GQLWaveMeanSystem((Nx, Ny, Nz), (Lx, Ly); Λ=4.0, α=0.1)
+
+# Register fields
+add_field!(sys, :u)
+add_field!(sys, :w)
+add_flux!(sys, :uw)
+
+# In time loop (user provides FFT'd fields)
+update!(sys, Dict(:u => u_hat, :w => w_hat), dt)
+
+# Get decomposition
+u_L = get_large(sys, :u)      # Large-scale (spectral)
+u_S = get_small(sys, :u)      # Small-scale (spectral)
+u_mean = get_mean(sys, :u)    # Temporally-filtered mean profile (1D)
+
+# Get filtered Reynolds stress
+R_uw = get_flux(sys, :uw)     # ⟨u'w'⟩(z) profile
+```
+
+Reference: Marston, Chini & Tobias (2016), Phys. Rev. Lett. 116, 214501
+"""
+mutable struct GQLWaveMeanSystem{T<:AbstractFloat, N, M}
+    # GQL spectral decomposition
+    gql::GQLDecomposition{T, N}
+
+    # Temporal filter for mean extraction
+    decomp::WaveMeanDecomposition{T, N, M}
+
+    # Registered fields
+    field_names::Vector{Symbol}
+
+    # Flux specifications
+    flux_specs::Dict{Symbol, Tuple{Symbol, Symbol}}
+
+    # Cached spectral decompositions
+    large_fields::Dict{Symbol, Array{Complex{T}, N}}
+    small_fields::Dict{Symbol, Array{Complex{T}, N}}
+
+    # Physical space wave fields (for flux computation)
+    wave_fields_phys::Dict{Symbol, Array{T, N}}
+
+    # Parameters
+    field_size::NTuple{N, Int}
+    spectral_size::NTuple{N, Int}
+end
+
+"""
+    GQLWaveMeanSystem(field_size, domain_size; Λ, α, horizontal_dims=(1,2), dtype=Float64)
+
+Create a combined GQL + temporal filtering system.
+
+# Arguments
+- `field_size`: Physical space size, e.g., `(Nx, Ny, Nz)`
+- `domain_size`: Horizontal domain size, e.g., `(Lx, Ly)`
+- `Λ`: GQL wavenumber cutoff
+- `α`: Temporal filter parameter (inverse averaging time)
+- `horizontal_dims`: Dimensions for horizontal averaging
+- `dtype`: Element type
+"""
+function GQLWaveMeanSystem(
+    field_size::NTuple{N, Int},
+    domain_size::NTuple{M, Real};
+    Λ::Real,
+    α::Real,
+    horizontal_dims::NTuple{P, Int} = N == 3 ? (1, 2) : (1,),
+    dtype::Type{T} = Float64
+) where {T<:AbstractFloat, N, M, P}
+
+    gql = GQLDecomposition(field_size, domain_size; Λ=Λ, dtype=dtype)
+    decomp = WaveMeanDecomposition(field_size; α=α, horizontal_dims=horizontal_dims, dtype=dtype)
+
+    GQLWaveMeanSystem{T, N, P}(
+        gql,
+        decomp,
+        Symbol[],
+        Dict{Symbol, Tuple{Symbol, Symbol}}(),
+        Dict{Symbol, Array{Complex{T}, N}}(),
+        Dict{Symbol, Array{Complex{T}, N}}(),
+        Dict{Symbol, Array{T, N}}(),
+        field_size,
+        gql.spectral_size
+    )
+end
+
+"""
+    add_field!(sys::GQLWaveMeanSystem, name::Symbol)
+
+Register a field for GQL decomposition.
+"""
+function add_field!(sys::GQLWaveMeanSystem{T, N}, name::Symbol) where {T, N}
+    if !(name in sys.field_names)
+        push!(sys.field_names, name)
+        sys.large_fields[name] = zeros(Complex{T}, sys.spectral_size...)
+        sys.small_fields[name] = zeros(Complex{T}, sys.spectral_size...)
+        sys.wave_fields_phys[name] = zeros(T, sys.field_size...)
+        add_mean_field!(sys.decomp, name)
+    end
+    return sys
+end
+
+"""
+    add_flux!(sys::GQLWaveMeanSystem, flux_name::Symbol, field1::Symbol, field2::Symbol)
+
+Register a wave flux product.
+"""
+function add_flux!(sys::GQLWaveMeanSystem, flux_name::Symbol, field1::Symbol, field2::Symbol)
+    sys.flux_specs[flux_name] = (field1, field2)
+    add_flux_field!(sys.decomp, flux_name)
+    return sys
+end
+
+function add_flux!(sys::GQLWaveMeanSystem, flux_name::Symbol)
+    name_str = string(flux_name)
+    if length(name_str) == 2
+        return add_flux!(sys, flux_name, Symbol(name_str[1]), Symbol(name_str[2]))
+    else
+        throw(ArgumentError("Cannot infer fields from flux name :$flux_name"))
+    end
+end
+
+"""
+    setup!(sys::GQLWaveMeanSystem, dt)
+
+Initialize ETD coefficients.
+"""
+function setup!(sys::GQLWaveMeanSystem, dt::Real)
+    setup_etd!(sys.decomp, dt)
+    return sys
+end
+
+"""
+    update!(sys::GQLWaveMeanSystem, fields_hat::Dict, fields_phys::Dict, dt)
+
+Update GQL decomposition and temporal filters.
+
+# Arguments
+- `fields_hat`: Dict of spectral fields (after rfft)
+- `fields_phys`: Dict of physical space fields (for flux computation)
+- `dt`: Timestep
+"""
+function update!(
+    sys::GQLWaveMeanSystem{T, N, M},
+    fields_hat::Dict{Symbol, <:AbstractArray{Complex{T}, N}},
+    fields_phys::Dict{Symbol, <:AbstractArray{T, N}},
+    dt::Real
+) where {T, N, M}
+
+    # Ensure setup
+    if sys.decomp.etd_coeffs === nothing
+        setup!(sys, dt)
+    end
+
+    # Step 1: GQL decomposition in spectral space
+    for name in sys.field_names
+        if haskey(fields_hat, name)
+            f_L, f_S = decompose!(sys.gql, fields_hat[name])
+            sys.large_fields[name] .= f_L
+            sys.small_fields[name] .= f_S
+        end
+
+        # Store physical space field for flux computation
+        if haskey(fields_phys, name)
+            sys.wave_fields_phys[name] .= fields_phys[name]
+        end
+    end
+
+    # Step 2: Temporal filtering for mean profiles
+    for name in sys.field_names
+        if haskey(fields_phys, name)
+            decompose!(sys.decomp, name, fields_phys[name], dt)
+        end
+    end
+
+    # Step 3: Filter flux products (using physical space small-scale)
+    for (flux_name, (f1, f2)) in sys.flux_specs
+        if haskey(sys.wave_fields_phys, f1) && haskey(sys.wave_fields_phys, f2)
+            # For GQL, compute flux from SMALL-scale fields
+            # User should pass irfft(small_fields) as wave_fields_phys
+            w1 = sys.wave_fields_phys[f1]
+            w2 = sys.wave_fields_phys[f2]
+            update_flux!(sys.decomp, flux_name, w1 .* w2, dt)
+        end
+    end
+
+    return sys
+end
+
+# Simplified update for when user handles FFT externally
+function update!(
+    sys::GQLWaveMeanSystem{T, N, M},
+    fields_phys::Dict{Symbol, <:AbstractArray{T, N}},
+    dt::Real
+) where {T, N, M}
+
+    if sys.decomp.etd_coeffs === nothing
+        setup!(sys, dt)
+    end
+
+    # Only temporal filtering (no spectral decomposition)
+    for name in sys.field_names
+        if haskey(fields_phys, name)
+            _, wave = decompose!(sys.decomp, name, fields_phys[name], dt)
+            sys.wave_fields_phys[name] .= wave
+        end
+    end
+
+    for (flux_name, (f1, f2)) in sys.flux_specs
+        if haskey(sys.wave_fields_phys, f1) && haskey(sys.wave_fields_phys, f2)
+            w1 = sys.wave_fields_phys[f1]
+            w2 = sys.wave_fields_phys[f2]
+            update_flux!(sys.decomp, flux_name, w1 .* w2, dt)
+        end
+    end
+
+    return sys
+end
+
+"""
+    get_large(sys::GQLWaveMeanSystem, name::Symbol) -> Array{Complex}
+
+Get large-scale (|k| ≤ Λ) spectral component.
+"""
+function get_large(sys::GQLWaveMeanSystem, name::Symbol)
+    return sys.large_fields[name]
+end
+
+"""
+    get_small(sys::GQLWaveMeanSystem, name::Symbol) -> Array{Complex}
+
+Get small-scale (|k| > Λ) spectral component.
+"""
+function get_small(sys::GQLWaveMeanSystem, name::Symbol)
+    return sys.small_fields[name]
+end
+
+"""
+    get_mean(sys::GQLWaveMeanSystem, name::Symbol) -> Vector
+
+Get temporally-filtered horizontal mean profile.
+"""
+function get_mean(sys::GQLWaveMeanSystem, name::Symbol)
+    return get_mean_profile(sys.decomp, name)
+end
+
+"""
+    get_flux(sys::GQLWaveMeanSystem, flux_name::Symbol) -> Vector
+
+Get filtered wave flux profile.
+"""
+function get_flux(sys::GQLWaveMeanSystem, flux_name::Symbol)
+    return get_filtered_flux(sys.decomp, flux_name)
+end
+
+"""
+    get_cutoff(sys::GQLWaveMeanSystem) -> Real
+
+Get the GQL wavenumber cutoff Λ.
+"""
+get_cutoff(sys::GQLWaveMeanSystem) = get_cutoff(sys.gql)
+
+"""
+    set_cutoff!(sys::GQLWaveMeanSystem, Λ_new)
+
+Update the GQL wavenumber cutoff.
+"""
+set_cutoff!(sys::GQLWaveMeanSystem, Λ_new::Real) = set_cutoff!(sys.gql, Λ_new)
+
+
+# ============================================================================
 # Exports
 # ============================================================================
 
@@ -1676,3 +3029,28 @@ export filter_response, effective_averaging_time, max_stable_timestep
 export IMEXFilterCoefficients, precompute_imex_coefficients, update_imex!
 export ETDFilterCoefficients, precompute_etd_coefficients, update_etd!
 export linear_operator_coefficients
+
+# Horizontal mean exports
+export HorizontalMean, get_profile, broadcast_profile
+export extract_fluctuation!, extract_k0_and_fluctuation
+
+# Wave-mean decomposition exports
+export WaveMeanDecomposition, setup_etd!
+export add_mean_field!, add_flux_field!
+export decompose!, update_flux!
+export get_mean_profile, get_filtered_flux, broadcast_mean
+
+# Wave-induced forcing exports (for PDE RHS)
+export WaveInducedForcing
+export add_field!, add_flux!, setup!
+export get_flux, get_flux_3d, get_mean, get_mean_3d, get_wave
+
+# GQL decomposition exports
+export GQLDecomposition
+export project_large!, project_small!
+export get_cutoff, set_cutoff!
+export count_large_modes, count_small_modes
+
+# GQL + Wave-Mean combined system exports
+export GQLWaveMeanSystem
+export get_large, get_small
