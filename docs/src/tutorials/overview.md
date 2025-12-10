@@ -70,6 +70,7 @@ Problems with dynamics confined to surfaces or boundaries.
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
 | [Rotating Shallow Water](rotating_shallow_water.md) | Inertia-gravity wave filtering | Intermediate | Temporal filters, wave-mean separation |
+| [GQL Approximation](../pages/gql_approximation.md) | Generalized Quasi-Linear methods | Advanced | Wavenumber cutoff, zonal jets |
 
 ### Special Topics
 
@@ -155,7 +156,7 @@ eigenvalues = solve!(solver, nev=10)
 **Geophysical Flows**:
 - Start: [Surface Dynamics](surface_dynamics.md) (SQG, QG)
 - Intermediate: [Rotating Shallow Water](rotating_shallow_water.md) (wave-mean separation)
-- Advanced: Coupled surface-interior dynamics
+- Advanced: [GQL Approximation](../pages/gql_approximation.md) (zonal jets, turbulence closure)
 
 **Heat Transfer**:
 - Start: [First Steps](../getting_started/first_steps.md) (diffusion)

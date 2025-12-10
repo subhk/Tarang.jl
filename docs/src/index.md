@@ -103,6 +103,7 @@ Tarang.jl can solve a wide range of problems in fluid dynamics, heat transfer, a
 
 - **[Rotating Shallow Water](tutorials/rotating_shallow_water.md)**: Wave-mean flow separation using temporal filters
 - **[Temporal Filters](pages/temporal_filters.md)**: Lagrangian averaging for geophysical flows
+- **[GQL Approximation](pages/gql_approximation.md)**: Generalized Quasi-Linear methods for turbulence
 - **[LES Models](pages/les_models.md)**: Subgrid-scale modeling for turbulence
 
 ## Documentation Structure
