@@ -85,13 +85,15 @@ println("f ≈ f_L + f_S: ", maximum(abs.(f - f_large - f_small)))  # ≈ 0
 
 ### Scale Separation in Fourier Space
 
-The GQL approximation splits any field $f$ into two parts based on wavenumber magnitude:
+The GQL approximation splits any field `f` into two parts based on wavenumber magnitude:
 
-$$f = f_L + f_S$$
+```
+f = f_L + f_S
+```
 
 where:
-- $f_L$ = **Large-scale** (low wavenumber): modes with $|k| \leq \Lambda$
-- $f_S$ = **Small-scale** (high wavenumber): modes with $|k| > \Lambda$
+- **f_L** = Large-scale (low wavenumber): modes with |k| ≤ Λ
+- **f_S** = Small-scale (high wavenumber): modes with |k| > Λ
 
 ```
 Wavenumber space (2D example):
@@ -116,25 +118,33 @@ Wavenumber space (2D example):
 
 ### The GQL Hierarchy
 
-By varying the cutoff $\Lambda$, you get different approximations:
+By varying the cutoff Λ, you get different approximations:
 
-| $\Lambda$ | Name | Nonlinear Terms | Cost | Accuracy |
-|-----------|------|-----------------|------|----------|
-| $\Lambda = 0$ | **QL** (Quasi-Linear) | Only $NL(f_L, f_L)$ | Cheapest | Lowest |
-| $0 < \Lambda < k_{max}$ | **GQL** | $NL(f_L, f_L) + NL(f_S, f_S)\|_L$ | Intermediate | Better |
-| $\Lambda = k_{max}$ | **Full NL** | All terms | Most expensive | Exact |
+| Λ Value | Name | Nonlinear Terms | Cost | Accuracy |
+|---------|------|-----------------|------|----------|
+| Λ = 0 | **QL** (Quasi-Linear) | Only NL(f_L, f_L) | Cheapest | Lowest |
+| 0 < Λ < k_max | **GQL** | NL(f_L, f_L) + NL(f_S, f_S) projected to L | Intermediate | Better |
+| Λ = k_max | **Full NL** | All terms | Most expensive | Exact |
 
 ### GQL Equations
 
-For a generic nonlinear PDE $\partial_t f = NL(f, f) + L(f)$:
+For a generic nonlinear PDE `∂f/∂t = NL(f, f) + L(f)`:
 
 **Large-scale equation:**
-$$\partial_t f_L = NL(f_L, f_L) + \underbrace{NL(f_S, f_S)\big|_L}_{\text{eddy feedback}} + L(f_L)$$
+
+```
+∂f_L/∂t = NL(f_L, f_L) + P_L[NL(f_S, f_S)] + L(f_L)
+                         ↑ eddy feedback
+```
 
 **Small-scale equation:**
-$$\partial_t f_S = \underbrace{NL(f_L, f_S) + NL(f_S, f_L)}_{\text{linear in } f_S} + L(f_S)$$
 
-**Key simplification:** The $NL(f_S, f_S)$ term is **dropped** from the small-scale equation!
+```
+∂f_S/∂t = NL(f_L, f_S) + NL(f_S, f_L) + L(f_S)
+          ↑ linear in f_S (no f_S self-interaction!)
+```
+
+**Key simplification:** The NL(f_S, f_S) term is **dropped** from the small-scale equation!
 
 ---
 
@@ -160,8 +170,8 @@ gql = GQLDecomposition(field_size, domain_size; Λ, dtype=Float64)
 | Function | Description |
 |----------|-------------|
 | `decompose!(gql, f_hat)` | Split into (f_large, f_small) |
-| `project_large!(gql, f_hat)` | Zero out \|k\| > Λ (in-place) |
-| `project_small!(gql, f_hat)` | Zero out \|k\| ≤ Λ (in-place) |
+| `project_large!(gql, f_hat)` | Zero out k > Λ (in-place) |
+| `project_small!(gql, f_hat)` | Zero out k ≤ Λ (in-place) |
 | `get_cutoff(gql)` | Get current Λ |
 | `set_cutoff!(gql, Λ_new)` | Change Λ (rebuilds mask) |
 | `count_large_modes(gql)` | Number of large-scale modes |
@@ -178,7 +188,7 @@ f_L, f_S = decompose!(gql, f_hat)
 
 # Option 2: Project in-place (modifies f_hat)
 f_hat_copy = copy(f_hat)
-project_large!(gql, f_hat_copy)  # Now contains only |k| ≤ Λ
+project_large!(gql, f_hat_copy)  # Now contains only modes with k ≤ Λ
 ```
 
 ---
@@ -482,17 +492,17 @@ end
 
 ### The Eddy-Mean Decomposition
 
-Traditional Reynolds decomposition: $f = \bar{f} + f'$
+Traditional Reynolds decomposition: `f = f̄ + f'`
 
 GQL generalizes this to spectral space:
-- $f_L$ contains the "mean" (but can include some wave structure)
-- $f_S$ contains the "eddies" (high-k fluctuations)
+- **f_L** contains the "mean" (but can include some wave structure)
+- **f_S** contains the "eddies" (high-k fluctuations)
 
 ### Scale Interactions
 
-The nonlinear term $NL(f, f)$ produces wavenumber triads $(k_1, k_2, k_3)$ where $k_1 + k_2 = k_3$.
+The nonlinear term `NL(f, f)` produces wavenumber triads (k₁, k₂, k₃) where k₁ + k₂ = k₃.
 
-GQL assumption: **Small-scale self-interactions** $NL(f_S, f_S)$ that stay in the small scales can be neglected.
+GQL assumption: **Small-scale self-interactions** `NL(f_S, f_S)` that stay in the small scales can be neglected.
 
 This is valid when:
 1. Small scales are "slaved" to large scales
