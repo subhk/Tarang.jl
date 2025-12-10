@@ -25,6 +25,30 @@ const Ly = 2.4
 const Lz = 1.9
 
 # ============================================================================
+# Helper functions for tests (defined first so they're available to all tests)
+# ============================================================================
+
+"""Fill field with random values."""
+function fill_random!(f::ScalarField)
+    ensure_layout!(f, :g)
+    rand!(f.data_g)
+end
+
+function fill_random!(f::VectorField)
+    for comp in f.components
+        fill_random!(comp)
+    end
+end
+
+function fill_random!(f::TensorField)
+    for row in f.components
+        for comp in row
+            fill_random!(comp)
+        end
+    end
+end
+
+# ============================================================================
 # Domain builders
 # ============================================================================
 
@@ -806,30 +830,6 @@ end
 
         div_op = CartesianDivergence(u)
         @test check_conditions(div_op) == true
-    end
-end
-
-# ============================================================================
-# Helper functions for tests
-# ============================================================================
-
-"""Fill field with random values."""
-function fill_random!(f::ScalarField)
-    ensure_layout!(f, :g)
-    rand!(f.data_g)
-end
-
-function fill_random!(f::VectorField)
-    for comp in f.components
-        fill_random!(comp)
-    end
-end
-
-function fill_random!(f::TensorField)
-    for row in f.components
-        for comp in row
-            fill_random!(comp)
-        end
     end
 end
 

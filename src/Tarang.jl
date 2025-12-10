@@ -110,6 +110,7 @@ export
 
     # Operators
     grad, div, curl, lap, trace, skew, transpose_components,
+    Gradient, Divergence, Curl, Laplacian, Trace, Skew, TransposeComponents,  # Operator types
     ∇, Δ, ∇², ∂t,  # Unicode aliases: ∇=grad, Δ=lap, ∇²=lap, ∂t=dt
     # Fractional Laplacian for SQG and other applications
     fraclap, sqrtlap, invsqrtlap,  # fraclap(f,α), sqrtlap=(-Δ)^(1/2), invsqrtlap=(-Δ)^(-1/2)
@@ -119,8 +120,11 @@ export
     hyperlap,  # hyperlap(f, n) = (-Δ)^n = |k|^(2n) in Fourier space
     Δ², Δ⁴, Δ⁶, Δ⁸,  # Unicode shortcuts: Δ²=biharmonic, Δ⁴, Δ⁶, Δ⁸
     dot, cross, ⋅, ×,  # Vector operations with Unicode: ⋅=dot, ×=cross
+    DotProduct, CrossProduct,  # Arithmetic types
     outer, advective_cfl, cfl,
     interpolate, integrate, average, convert, lift, d, dt,
+    # Evaluation function
+    evaluate,
 
     # Cartesian-specific operators (multiclass dispatch)
     CartesianComponent, CartesianGradient, CartesianDivergence, CartesianCurl,
@@ -146,6 +150,7 @@ export
     has_spectral_bases, apply_dealiasing_to_product!, fast_axpy!,
     vectorized_add!, vectorized_sub!, vectorized_mul!, vectorized_scale!,
     vectorized_axpy!, vectorized_linear_combination!,
+    ensure_layout!, forward_transform!, backward_transform!,
     
     # Timesteppers (IMEX RK - Dedalus-compatible)
     RK111, RK222, RK443,
@@ -197,6 +202,9 @@ export
     set_time_variable!, add_coordinate_field!, update_time_dependent_bcs!,
     has_time_dependent_bcs, has_space_dependent_bcs, requires_bc_update,
     
+    # Grid functions
+    local_grid, local_grids,
+
     # Utility
     Lift,
     chunked_rng,
