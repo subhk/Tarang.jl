@@ -1,9 +1,6 @@
 """
 Tarang.jl - Spectral PDE framework for Julia
-Copyright (c) 2024, Subhajit Kar
 
-This file is part of Tarang, which is free software distributed
-under the terms of the GPLv3 license.
 """
 
 module Tarang
