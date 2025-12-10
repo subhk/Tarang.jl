@@ -177,24 +177,29 @@ function compute_eddy_viscosity!(
     ∂v∂x::AbstractArray{T}, ∂v∂y::AbstractArray{T}
 ) where T
 
-    Δ = model.effective_delta
-    C_s = model.C_s
+    # Pre-compute constant factor outside loop for efficiency
+    CΔ_sq = (model.C_s * model.effective_delta)^2
+    half = T(0.5)
+    two = T(2)
 
-    @inbounds for i in eachindex(model.strain_magnitude)
+    strain_mag = model.strain_magnitude
+    eddy_visc = model.eddy_viscosity
+
+    @inbounds @simd for i in eachindex(strain_mag)
         # Strain rate tensor components
         S11 = ∂u∂x[i]
         S22 = ∂v∂y[i]
-        S12 = T(0.5) * (∂u∂y[i] + ∂v∂x[i])
+        S12 = half * (∂u∂y[i] + ∂v∂x[i])
 
         # |S̄| = √(2 Sᵢⱼ Sᵢⱼ)
-        S_mag = sqrt(2 * (S11^2 + S22^2 + 2*S12^2))
-        model.strain_magnitude[i] = S_mag
+        S_mag = sqrt(two * (S11^2 + S22^2 + two*S12^2))
+        strain_mag[i] = S_mag
 
         # νₑ = (Cₛ Δ)² |S̄|
-        model.eddy_viscosity[i] = (C_s * Δ)^2 * S_mag
+        eddy_visc[i] = CΔ_sq * S_mag
     end
 
-    return model.eddy_viscosity
+    return eddy_visc
 end
 
 function compute_eddy_viscosity!(
@@ -204,27 +209,32 @@ function compute_eddy_viscosity!(
     ∂w∂x::AbstractArray{T}, ∂w∂y::AbstractArray{T}, ∂w∂z::AbstractArray{T}
 ) where T
 
-    Δ = model.effective_delta
-    C_s = model.C_s
+    # Pre-compute constant factor outside loop for efficiency
+    CΔ_sq = (model.C_s * model.effective_delta)^2
+    half = T(0.5)
+    two = T(2)
 
-    @inbounds for i in eachindex(model.strain_magnitude)
+    strain_mag = model.strain_magnitude
+    eddy_visc = model.eddy_viscosity
+
+    @inbounds @simd for i in eachindex(strain_mag)
         # Strain rate tensor components
         S11 = ∂u∂x[i]
         S22 = ∂v∂y[i]
         S33 = ∂w∂z[i]
-        S12 = T(0.5) * (∂u∂y[i] + ∂v∂x[i])
-        S13 = T(0.5) * (∂u∂z[i] + ∂w∂x[i])
-        S23 = T(0.5) * (∂v∂z[i] + ∂w∂y[i])
+        S12 = half * (∂u∂y[i] + ∂v∂x[i])
+        S13 = half * (∂u∂z[i] + ∂w∂x[i])
+        S23 = half * (∂v∂z[i] + ∂w∂y[i])
 
         # |S̄| = √(2 Sᵢⱼ Sᵢⱼ)
-        S_mag = sqrt(2 * (S11^2 + S22^2 + S33^2 + 2*(S12^2 + S13^2 + S23^2)))
-        model.strain_magnitude[i] = S_mag
+        S_mag = sqrt(two * (S11^2 + S22^2 + S33^2 + two*(S12^2 + S13^2 + S23^2)))
+        strain_mag[i] = S_mag
 
         # νₑ = (Cₛ Δ)² |S̄|
-        model.eddy_viscosity[i] = (C_s * Δ)^2 * S_mag
+        eddy_visc[i] = CΔ_sq * S_mag
     end
 
-    return model.eddy_viscosity
+    return eddy_visc
 end
 
 # ============================================================================
@@ -367,8 +377,13 @@ function compute_eddy_viscosity!(
 
     C = model.C
     Δx², Δy² = model.filter_width_sq
+    half = T(0.5)
+    two = T(2)
+    eps_T = eps(T)
+    clip = model.clip_negative
+    eddy_visc = model.eddy_viscosity
 
-    @inbounds for i in eachindex(model.eddy_viscosity)
+    @inbounds @simd for i in eachindex(eddy_visc)
         # Velocity gradient tensor components
         u_x = ∂u∂x[i]; u_y = ∂u∂y[i]
         v_x = ∂v∂x[i]; v_y = ∂v∂y[i]
@@ -376,39 +391,29 @@ function compute_eddy_viscosity!(
         # Strain rate tensor
         S11 = u_x
         S22 = v_y
-        S12 = T(0.5) * (u_y + v_x)
+        S12 = half * (u_y + v_x)
 
         # Denominator: ∂uₘ/∂xₙ ∂uₘ/∂xₙ (trace of gradient tensor squared)
         denom = u_x^2 + u_y^2 + v_x^2 + v_y^2
 
         # Numerator: -Δₖ² ∂uᵢ/∂xₖ ∂uⱼ/∂xₖ Sᵢⱼ
-        # For k=1 (x-direction): Δx² (∂uᵢ/∂x ∂uⱼ/∂x Sᵢⱼ)
-        # For k=2 (y-direction): Δy² (∂uᵢ/∂y ∂uⱼ/∂y Sᵢⱼ)
-
-        # k=1: Δx² * (u_x*u_x*S11 + u_x*v_x*S12 + v_x*u_x*S12 + v_x*v_x*S22)
-        numer_x = Δx² * (u_x^2 * S11 + 2*u_x*v_x*S12 + v_x^2 * S22)
-
-        # k=2: Δy² * (u_y*u_y*S11 + u_y*v_y*S12 + v_y*u_y*S12 + v_y*v_y*S22)
-        numer_y = Δy² * (u_y^2 * S11 + 2*u_y*v_y*S12 + v_y^2 * S22)
+        # k=1: Δx² * (u_x*u_x*S11 + 2*u_x*v_x*S12 + v_x*v_x*S22)
+        numer_x = Δx² * (u_x^2 * S11 + two*u_x*v_x*S12 + v_x^2 * S22)
+        # k=2: Δy² * (u_y*u_y*S11 + 2*u_y*v_y*S12 + v_y*v_y*S22)
+        numer_y = Δy² * (u_y^2 * S11 + two*u_y*v_y*S12 + v_y^2 * S22)
 
         numer = -(numer_x + numer_y)
 
-        # Compute eddy viscosity
-        if denom > eps(T)
-            νₑ = C * numer / denom
-        else
-            νₑ = zero(T)
-        end
+        # Compute eddy viscosity (branchless where possible)
+        νₑ = ifelse(denom > eps_T, C * numer / denom, zero(T))
 
-        # Clip negative values if requested
-        if model.clip_negative
-            νₑ = max(zero(T), νₑ)
-        end
+        # Clip negative values if requested (branchless)
+        νₑ = ifelse(clip, max(zero(T), νₑ), νₑ)
 
-        model.eddy_viscosity[i] = νₑ
+        eddy_visc[i] = νₑ
     end
 
-    return model.eddy_viscosity
+    return eddy_visc
 end
 
 function compute_eddy_viscosity!(
@@ -420,8 +425,13 @@ function compute_eddy_viscosity!(
 
     C = model.C
     Δx², Δy², Δz² = model.filter_width_sq
+    half = T(0.5)
+    two = T(2)
+    eps_T = eps(T)
+    clip = model.clip_negative
+    eddy_visc = model.eddy_viscosity
 
-    @inbounds for i in eachindex(model.eddy_viscosity)
+    @inbounds @simd for i in eachindex(eddy_visc)
         # Velocity gradient tensor components
         u_x = ∂u∂x[i]; u_y = ∂u∂y[i]; u_z = ∂u∂z[i]
         v_x = ∂v∂x[i]; v_y = ∂v∂y[i]; v_z = ∂v∂z[i]
@@ -431,52 +441,42 @@ function compute_eddy_viscosity!(
         S11 = u_x
         S22 = v_y
         S33 = w_z
-        S12 = T(0.5) * (u_y + v_x)
-        S13 = T(0.5) * (u_z + w_x)
-        S23 = T(0.5) * (v_z + w_y)
+        S12 = half * (u_y + v_x)
+        S13 = half * (u_z + w_x)
+        S23 = half * (v_z + w_y)
 
         # Denominator: tr(∇u · ∇uᵀ)
         denom = u_x^2 + u_y^2 + u_z^2 + v_x^2 + v_y^2 + v_z^2 + w_x^2 + w_y^2 + w_z^2
 
-        # Numerator: -Δₖ² ∂uᵢ/∂xₖ ∂uⱼ/∂xₖ Sᵢⱼ
-        # This is the key AMD term that uses anisotropic filter widths
-
-        # k=1 (x-direction): Δx² * (∂uᵢ/∂x ∂uⱼ/∂x Sᵢⱼ)
+        # Numerator: -Δₖ² ∂uᵢ/∂xₖ ∂uⱼ/∂xₖ Sᵢⱼ (anisotropic filter widths)
+        # k=1 (x-direction)
         numer_x = Δx² * (
             u_x^2 * S11 + v_x^2 * S22 + w_x^2 * S33 +
-            2 * (u_x*v_x*S12 + u_x*w_x*S13 + v_x*w_x*S23)
+            two * (u_x*v_x*S12 + u_x*w_x*S13 + v_x*w_x*S23)
         )
-
-        # k=2 (y-direction): Δy² * (∂uᵢ/∂y ∂uⱼ/∂y Sᵢⱼ)
+        # k=2 (y-direction)
         numer_y = Δy² * (
             u_y^2 * S11 + v_y^2 * S22 + w_y^2 * S33 +
-            2 * (u_y*v_y*S12 + u_y*w_y*S13 + v_y*w_y*S23)
+            two * (u_y*v_y*S12 + u_y*w_y*S13 + v_y*w_y*S23)
         )
-
-        # k=3 (z-direction): Δz² * (∂uᵢ/∂z ∂uⱼ/∂z Sᵢⱼ)
+        # k=3 (z-direction)
         numer_z = Δz² * (
             u_z^2 * S11 + v_z^2 * S22 + w_z^2 * S33 +
-            2 * (u_z*v_z*S12 + u_z*w_z*S13 + v_z*w_z*S23)
+            two * (u_z*v_z*S12 + u_z*w_z*S13 + v_z*w_z*S23)
         )
 
         numer = -(numer_x + numer_y + numer_z)
 
-        # Compute eddy viscosity
-        if denom > eps(T)
-            νₑ = C * numer / denom
-        else
-            νₑ = zero(T)
-        end
+        # Compute eddy viscosity (branchless where possible)
+        νₑ = ifelse(denom > eps_T, C * numer / denom, zero(T))
 
-        # Clip negative values if requested
-        if model.clip_negative
-            νₑ = max(zero(T), νₑ)
-        end
+        # Clip negative values if requested (branchless)
+        νₑ = ifelse(clip, max(zero(T), νₑ), νₑ)
 
-        model.eddy_viscosity[i] = νₑ
+        eddy_visc[i] = νₑ
     end
 
-    return model.eddy_viscosity
+    return eddy_visc
 end
 
 # ============================================================================
@@ -505,8 +505,11 @@ function compute_eddy_diffusivity!(
 
     C = model.C
     Δx², Δy², Δz² = model.filter_width_sq
+    eps_T = eps(T)
+    clip = model.clip_negative
+    eddy_diff = model.eddy_diffusivity
 
-    @inbounds for i in eachindex(model.eddy_diffusivity)
+    @inbounds @simd for i in eachindex(eddy_diff)
         # Scalar gradient magnitude squared
         denom = ∂b∂x[i]^2 + ∂b∂y[i]^2 + ∂b∂z[i]^2
 
@@ -517,22 +520,16 @@ function compute_eddy_diffusivity!(
             Δz² * ∂w∂z[i] * ∂b∂z[i]
         )
 
-        # Compute eddy diffusivity
-        if denom > eps(T)
-            κₑ = C * numer / denom
-        else
-            κₑ = zero(T)
-        end
+        # Compute eddy diffusivity (branchless)
+        κₑ = ifelse(denom > eps_T, C * numer / denom, zero(T))
 
-        # Clip negative values
-        if model.clip_negative
-            κₑ = max(zero(T), κₑ)
-        end
+        # Clip negative values (branchless)
+        κₑ = ifelse(clip, max(zero(T), κₑ), κₑ)
 
-        model.eddy_diffusivity[i] = κₑ
+        eddy_diff[i] = κₑ
     end
 
-    return model.eddy_diffusivity
+    return eddy_diff
 end
 
 # ============================================================================
@@ -558,15 +555,17 @@ function compute_sgs_stress(
 ) where T
 
     νₑ = model.eddy_viscosity
+    neg_two = T(-2)
 
     τ11 = similar(S11)
     τ12 = similar(S12)
     τ22 = similar(S22)
 
-    @inbounds for i in eachindex(νₑ)
-        τ11[i] = -2 * νₑ[i] * S11[i]
-        τ12[i] = -2 * νₑ[i] * S12[i]
-        τ22[i] = -2 * νₑ[i] * S22[i]
+    @inbounds @simd for i in eachindex(νₑ)
+        ν_i = νₑ[i]
+        τ11[i] = neg_two * ν_i * S11[i]
+        τ12[i] = neg_two * ν_i * S12[i]
+        τ22[i] = neg_two * ν_i * S22[i]
     end
 
     return (τ11, τ12, τ22)
@@ -579,17 +578,19 @@ function compute_sgs_stress(
 ) where T
 
     νₑ = model.eddy_viscosity
+    neg_two = T(-2)
 
     τ11 = similar(S11); τ12 = similar(S12); τ13 = similar(S13)
     τ22 = similar(S22); τ23 = similar(S23); τ33 = similar(S33)
 
-    @inbounds for i in eachindex(νₑ)
-        τ11[i] = -2 * νₑ[i] * S11[i]
-        τ12[i] = -2 * νₑ[i] * S12[i]
-        τ13[i] = -2 * νₑ[i] * S13[i]
-        τ22[i] = -2 * νₑ[i] * S22[i]
-        τ23[i] = -2 * νₑ[i] * S23[i]
-        τ33[i] = -2 * νₑ[i] * S33[i]
+    @inbounds @simd for i in eachindex(νₑ)
+        ν_i = νₑ[i]
+        τ11[i] = neg_two * ν_i * S11[i]
+        τ12[i] = neg_two * ν_i * S12[i]
+        τ13[i] = neg_two * ν_i * S13[i]
+        τ22[i] = neg_two * ν_i * S22[i]
+        τ23[i] = neg_two * ν_i * S23[i]
+        τ33[i] = neg_two * ν_i * S33[i]
     end
 
     return (τ11, τ12, τ13, τ22, τ23, τ33)
