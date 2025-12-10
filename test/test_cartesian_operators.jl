@@ -12,6 +12,7 @@ This test module provides comprehensive tests for:
 
 using Test
 using LinearAlgebra
+using Random: rand!
 
 # Include Tarang.jl module
 include(joinpath(@__DIR__, "..", "src", "Tarang.jl"))
@@ -44,6 +45,22 @@ function fill_random!(f::TensorField)
     for row in f.components
         for comp in row
             fill_random!(comp)
+        end
+    end
+end
+
+"""Ensure layout for VectorField (calls ensure_layout! on each component)"""
+function ensure_layout_vec!(f::VectorField, layout::Symbol)
+    for comp in f.components
+        ensure_layout!(comp, layout)
+    end
+end
+
+"""Ensure layout for TensorField (calls ensure_layout! on each component)"""
+function ensure_layout_tensor!(f::TensorField, layout::Symbol)
+    for row in f.components
+        for comp in row
+            ensure_layout!(comp, layout)
         end
     end
 end

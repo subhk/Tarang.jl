@@ -1037,7 +1037,7 @@ function ensure_layout!(field::ScalarField, target_layout::Symbol)
     if field.current_layout == target_layout
         return
     end
-    
+
     if target_layout == :g && field.current_layout == :c
         # Transform from coefficient to grid space
         backward_transform!(field)
@@ -1045,8 +1045,24 @@ function ensure_layout!(field::ScalarField, target_layout::Symbol)
         # Transform from grid to coefficient space
         forward_transform!(field)
     end
-    
+
     field.current_layout = target_layout
+end
+
+function ensure_layout!(field::VectorField, target_layout::Symbol)
+    """Ensure all components of VectorField are in the target layout"""
+    for comp in field.components
+        ensure_layout!(comp, target_layout)
+    end
+end
+
+function ensure_layout!(field::TensorField, target_layout::Symbol)
+    """Ensure all components of TensorField are in the target layout"""
+    for row in field.components
+        for comp in row
+            ensure_layout!(comp, target_layout)
+        end
+    end
 end
 
 function require_grid_space!(field::ScalarField, axis::Union{Int, Nothing}=nothing)
