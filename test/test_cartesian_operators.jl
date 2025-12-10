@@ -42,10 +42,8 @@ function fill_random!(f::VectorField)
 end
 
 function fill_random!(f::TensorField)
-    for row in f.components
-        for comp in row
-            fill_random!(comp)
-        end
+    for comp in f.components  # Matrix iteration goes element-by-element
+        fill_random!(comp)
     end
 end
 

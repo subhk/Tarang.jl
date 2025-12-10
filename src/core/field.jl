@@ -1058,10 +1058,8 @@ end
 
 function ensure_layout!(field::TensorField, target_layout::Symbol)
     """Ensure all components of TensorField are in the target layout"""
-    for row in field.components
-        for comp in row
-            ensure_layout!(comp, target_layout)
-        end
+    for comp in field.components  # Matrix iteration goes element-by-element
+        ensure_layout!(comp, target_layout)
     end
 end
 
