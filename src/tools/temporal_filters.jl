@@ -7,6 +7,177 @@ enabling efficient wave-mean flow decomposition. Based on the paper:
     Minz, Baker, Kafiabad, Vanneste (2025) "Efficient Lagrangian averaging with
     exponential filters", Phys. Rev. Fluids 10, 074902.
 
+## Quick Start Example: Rotating Shallow Water with Inertia-Gravity Waves
+
+```julia
+using Tarang
+
+# =============================================================================
+# ROTATING SHALLOW WATER MODEL WITH LAGRANGIAN MEAN COMPUTATION
+# =============================================================================
+#
+# Governing equations (on f-plane):
+#   ∂u/∂t - f·v = -g·∂η/∂x
+#   ∂v/∂t + f·u = -g·∂η/∂y
+#   ∂η/∂t + H·(∂u/∂x + ∂v/∂y) = 0
+#
+# where:
+#   u, v = velocity components
+#   η = surface elevation
+#   f = Coriolis parameter
+#   g = gravity
+#   H = mean depth
+
+# Domain and grid
+Nx, Ny = 128, 128
+Lx, Ly = 2π, 2π
+dx, dy = Lx/Nx, Ly/Ny
+
+# Physical parameters
+f = 1.0      # Coriolis parameter
+g = 10.0     # Gravity
+H = 1.0      # Mean depth
+c = sqrt(g*H) # Gravity wave speed ≈ 3.16
+
+# Inertia-gravity wave frequency: ω² = f² + c²(kx² + ky²)
+# For k = 1: ω ≈ √(1 + 10) ≈ 3.3
+# Wave period: T_wave ≈ 2π/3.3 ≈ 1.9
+
+# Time stepping
+dt = 0.01                    # Timestep (CFL limited)
+T_wave = 2π / sqrt(f^2 + g*H)  # Typical wave period
+α = 1 / (10 * T_wave)        # Filter timescale = 10 wave periods
+
+println("Wave period: T_wave = \$T_wave")
+println("Filter timescale: 1/α = \$(1/α)")
+println("α·dt = \$(α*dt)")
+
+# =============================================================================
+# METHOD 1: Simple Explicit Update (for small α·dt)
+# =============================================================================
+
+# Create Butterworth filter for velocity components
+u_filter = ButterworthFilter((Nx, Ny); α=α)
+v_filter = ButterworthFilter((Nx, Ny); α=α)
+η_filter = ButterworthFilter((Nx, Ny); α=α)
+
+# Initialize fields
+u = zeros(Nx, Ny)
+v = zeros(Nx, Ny)
+η = zeros(Nx, Ny)
+
+# Add initial wave perturbation
+for i in 1:Nx, j in 1:Ny
+    x, y = (i-1)*dx, (j-1)*dy
+    η[i,j] = 0.1 * cos(x) * cos(y)  # Initial surface perturbation
+end
+
+# Time loop with explicit filter update
+nsteps = 1000
+for step in 1:nsteps
+    # ... (your shallow water time stepping here) ...
+    # rhs_u = f*v - g*∂η/∂x
+    # rhs_v = -f*u - g*∂η/∂y
+    # rhs_η = -H*(∂u/∂x + ∂v/∂y)
+    # u, v, η = time_step(u, v, η, rhs_u, rhs_v, rhs_η, dt)
+
+    # Update Lagrangian mean filters (runs alongside dynamics)
+    update!(u_filter, u, dt)
+    update!(v_filter, v, dt)
+    update!(η_filter, η, dt)
+
+    if step % 100 == 0
+        ū = get_mean(u_filter)
+        v̄ = get_mean(v_filter)
+        η̄ = get_mean(η_filter)
+        println("Step \$step: max|ū| = \$(maximum(abs.(ū)))")
+    end
+end
+
+# =============================================================================
+# METHOD 2: ETD Integration (unconditionally stable, recommended)
+# =============================================================================
+
+# Precompute ETD coefficients once
+u_filter_etd = ButterworthFilter((Nx, Ny); α=α)
+etd_coeffs = precompute_etd_coefficients(u_filter_etd, dt)
+
+# In time loop - no stability restriction from filter!
+for step in 1:nsteps
+    # ... (your shallow water time stepping) ...
+    update_etd!(u_filter_etd, u, etd_coeffs)
+end
+
+# =============================================================================
+# METHOD 3: IMEX/SBDF Integration (for coupling with implicit PDE solver)
+# =============================================================================
+
+# If your PDE solver uses SBDF2:
+u_filter_imex = ButterworthFilter((Nx, Ny); α=α)
+imex_coeffs = precompute_imex_coefficients(u_filter_imex, dt; scheme=:SBDF2)
+
+# Store history for SBDF2
+u_prev = copy(u)
+u_curr = copy(u)
+
+for step in 1:nsteps
+    # ... (your SBDF2 shallow water time stepping) ...
+    u_new = # ... compute new u ...
+
+    # Update filter with SBDF2 (needs current and previous field values)
+    update_imex!(u_filter_imex, (u_curr, u_prev), imex_coeffs)
+
+    u_prev .= u_curr
+    u_curr .= u_new
+end
+
+# =============================================================================
+# EXTRACTING WAVE AND MEAN COMPONENTS
+# =============================================================================
+
+# After filtering:
+ū = get_mean(u_filter)      # Lagrangian mean velocity
+v̄ = get_mean(v_filter)
+η̄ = get_mean(η_filter)      # Mean surface elevation
+
+# Wave (fluctuation) components:
+u_wave = u - ū
+v_wave = v - v̄
+η_wave = η - η̄
+
+# Compute wave energy:
+KE_wave = 0.5 * mean(u_wave.^2 + v_wave.^2)
+PE_wave = 0.5 * g/H * mean(η_wave.^2)
+
+println("Wave kinetic energy: \$KE_wave")
+println("Wave potential energy: \$PE_wave")
+```
+
+## Choosing the Filter Parameter α
+
+The key parameter is **α = 1/T_avg** where T_avg is the averaging timescale.
+
+**Rule of thumb**: Choose T_avg ≈ 10-100 × T_wave where T_wave is the period
+of the fastest waves you want to filter out.
+
+| Application | Wave Period | Recommended α |
+|-------------|------------|---------------|
+| Internal gravity waves (ocean) | 1-24 hours | α = 1/(10-100 hours) |
+| Inertia-gravity waves | 2π/f | α = f/20 to f/100 |
+| Acoustic waves (compressible) | L/c_s | α = c_s/(100L) |
+
+## Stability and Timestep Considerations
+
+| Method | Stability Limit | When to Use |
+|--------|----------------|-------------|
+| `update!(filter, h, dt)` | dt ≤ √2/α | Small α·dt < 1 |
+| `update!(filter, h, dt, Val(:RK2))` | dt ≤ 2√2/α | Moderate α·dt |
+| `update_etd!(filter, h, coeffs)` | **None** | Any α·dt (recommended) |
+| `update_imex!(filter, h_hist, coeffs)` | **None** | Coupling with SBDF solver |
+
+**Recommendation**: Use `update_etd!` for most applications - it's unconditionally
+stable and accurate for any timestep size.
+
 ## 1. What is Wave-Mean Flow Interaction?
 
 In fluid dynamics, flows often contain both **slow mean motions** and **fast oscillations**
@@ -1394,6 +1565,243 @@ end
 
 
 # ============================================================================
+# Exponential Time Differencing (ETD) Support
+# ============================================================================
+
+"""
+    ETDFilterCoefficients{T}
+
+Precomputed coefficients for Exponential Time Differencing (ETD) integration.
+
+For the ODE: dy/dt = L·y + f(t)
+The exact solution is: y(t+dt) = exp(L·dt)·y(t) + ∫₀^dt exp(L·(dt-τ))·f(t+τ) dτ
+
+ETD methods approximate the integral while treating exp(L·dt) exactly.
+This provides **unconditional stability** for any timestep size.
+
+# Fields
+- `exp_scalar::T`: exp(-α·dt) for ExponentialMean
+- `phi1_scalar::T`: φ₁(-α·dt)·dt = (1 - exp(-α·dt))/α for ExponentialMean
+- `exp_matrix::SMatrix{2,2,T}`: exp(L·dt) for Butterworth
+- `phi1_matrix::SMatrix{2,2,T}`: φ₁(L·dt)·dt for Butterworth
+"""
+struct ETDFilterCoefficients{T<:AbstractFloat}
+    exp_scalar::T                       # exp(-α·dt)
+    phi1_scalar::T                      # (1 - exp(-α·dt))/α = φ₁(-α·dt)·dt/α
+    exp_matrix::SMatrix{2, 2, T, 4}     # exp(L·dt) for Butterworth
+    phi1_matrix::SMatrix{2, 2, T, 4}    # φ₁(L·dt)·dt for Butterworth
+    α::T
+    dt::T
+end
+
+"""
+    precompute_etd_coefficients(filter::ExponentialMean, dt::Real)
+
+Precompute ETD coefficients for the exponential mean filter.
+
+# ETD1 (Exponential Euler) Formula
+For dh̄/dt = -α·h̄ + α·h:
+
+    h̄ⁿ⁺¹ = exp(-α·dt)·h̄ⁿ + (1 - exp(-α·dt))·hⁿ
+
+This is **exact** if h is constant over the timestep, and unconditionally stable!
+
+# Example
+```julia
+filter = ExponentialMean((64, 64); α=0.5)
+coeffs = precompute_etd_coefficients(filter, dt)
+
+# In time loop - unconditionally stable for ANY dt!
+update_etd!(filter, h, coeffs)
+```
+"""
+function precompute_etd_coefficients(
+    filter::ExponentialMean{T, N},
+    dt::Real
+) where {T, N}
+
+    α = filter.α
+    dt_T = T(dt)
+    z = -α * dt_T  # z = L·dt for scalar case
+
+    # exp(-α·dt)
+    exp_scalar = exp(z)
+
+    # φ₁(z)·dt = (exp(z) - 1)/z · dt = (exp(-α·dt) - 1)/(-α) = (1 - exp(-α·dt))/α
+    # For numerical stability when z → 0, use: φ₁(z) = (exp(z)-1)/z ≈ 1 + z/2 + z²/6 + ...
+    if abs(z) < 1e-4
+        phi1_scalar = dt_T * (one(T) + z/2 + z^2/6 + z^3/24)
+    else
+        phi1_scalar = (exp_scalar - one(T)) / (-α)
+    end
+
+    # Dummy Butterworth matrices
+    sqrt2 = sqrt(T(2))
+    A = SMatrix{2, 2, T}(sqrt2 - 1, -one(T), 2 - sqrt2, one(T))
+    L = -α * A
+    Ldt = L * dt_T
+
+    # Matrix exponential and φ₁ for Butterworth (computed even for ExponentialMean for type stability)
+    exp_matrix = _matrix_exp_2x2(Ldt)
+    phi1_matrix = _matrix_phi1_2x2(Ldt) * dt_T
+
+    ETDFilterCoefficients{T}(exp_scalar, phi1_scalar, exp_matrix, phi1_matrix, α, dt_T)
+end
+
+"""
+    precompute_etd_coefficients(filter::ButterworthFilter, dt::Real)
+
+Precompute ETD coefficients for the Butterworth filter.
+
+The 2×2 matrix exponential and φ₁ functions are computed exactly.
+"""
+function precompute_etd_coefficients(
+    filter::ButterworthFilter{T, N},
+    dt::Real
+) where {T, N}
+
+    α = filter.α
+    dt_T = T(dt)
+
+    # Scalar coefficients (for completeness)
+    z = -α * dt_T
+    exp_scalar = exp(z)
+    phi1_scalar = abs(z) < 1e-4 ? dt_T * (one(T) + z/2) : (exp_scalar - one(T)) / (-α)
+
+    # Butterworth linear operator L = -α·A
+    sqrt2 = sqrt(T(2))
+    A = SMatrix{2, 2, T}(sqrt2 - 1, -one(T), 2 - sqrt2, one(T))
+    L = -α * A
+    Ldt = L * dt_T
+
+    # Matrix exponential and φ₁
+    exp_matrix = _matrix_exp_2x2(Ldt)
+    phi1_matrix = _matrix_phi1_2x2(Ldt) * dt_T
+
+    ETDFilterCoefficients{T}(exp_scalar, phi1_scalar, exp_matrix, phi1_matrix, α, dt_T)
+end
+
+# Helper: 2×2 matrix exponential using eigendecomposition
+function _matrix_exp_2x2(M::SMatrix{2, 2, T, 4}) where T
+    # For a 2×2 matrix, use the formula based on trace and determinant
+    # exp(M) = exp(tr(M)/2) * [cosh(Δ)·I + sinh(Δ)/Δ · (M - tr(M)/2·I)]
+    # where Δ = sqrt((tr(M)/2)² - det(M))
+
+    tr_M = M[1,1] + M[2,2]
+    det_M = M[1,1]*M[2,2] - M[1,2]*M[2,1]
+
+    half_tr = tr_M / 2
+    discriminant = half_tr^2 - det_M
+
+    exp_half_tr = exp(half_tr)
+
+    if discriminant >= 0
+        # Real eigenvalues
+        Δ = sqrt(discriminant)
+        if abs(Δ) < 1e-10
+            # Repeated eigenvalue
+            return exp_half_tr * (SMatrix{2,2,T}(1,0,0,1) + (M - half_tr * SMatrix{2,2,T}(1,0,0,1)))
+        else
+            cosh_Δ = cosh(Δ)
+            sinh_Δ_over_Δ = sinh(Δ) / Δ
+            M_shifted = M - half_tr * SMatrix{2,2,T}(1,0,0,1)
+            return exp_half_tr * (cosh_Δ * SMatrix{2,2,T}(1,0,0,1) + sinh_Δ_over_Δ * M_shifted)
+        end
+    else
+        # Complex eigenvalues (this is the Butterworth case!)
+        ω = sqrt(-discriminant)
+        cos_ω = cos(ω)
+        sin_ω_over_ω = sin(ω) / ω
+        M_shifted = M - half_tr * SMatrix{2,2,T}(1,0,0,1)
+        return exp_half_tr * (cos_ω * SMatrix{2,2,T}(1,0,0,1) + sin_ω_over_ω * M_shifted)
+    end
+end
+
+# Helper: 2×2 matrix φ₁ function: φ₁(M) = (exp(M) - I) * M⁻¹
+function _matrix_phi1_2x2(M::SMatrix{2, 2, T, 4}) where T
+    exp_M = _matrix_exp_2x2(M)
+    I2 = SMatrix{2,2,T}(1,0,0,1)
+
+    # φ₁(M) = (exp(M) - I) * M⁻¹
+    # For numerical stability, check if M is nearly singular
+    det_M = M[1,1]*M[2,2] - M[1,2]*M[2,1]
+
+    if abs(det_M) < 1e-10
+        # M nearly singular, use Taylor series: φ₁(M) ≈ I + M/2 + M²/6 + ...
+        M2 = M * M
+        return I2 + M/2 + M2/6
+    else
+        M_inv = inv(M)
+        return (exp_M - I2) * M_inv
+    end
+end
+
+"""
+    update_etd!(filter::ExponentialMean, h::AbstractArray, coeffs::ETDFilterCoefficients)
+
+Update exponential mean filter using ETD1 (Exponential Euler).
+
+# Formula
+    h̄ⁿ⁺¹ = exp(-α·dt)·h̄ⁿ + (1 - exp(-α·dt))·hⁿ
+
+This is **unconditionally stable** for any timestep size!
+"""
+function update_etd!(
+    filter::ExponentialMean{T, N},
+    h::AbstractArray{T, N},
+    coeffs::ETDFilterCoefficients{T}
+) where {T, N}
+
+    exp_factor = coeffs.exp_scalar
+    phi1_factor = coeffs.phi1_scalar * coeffs.α  # (1 - exp(-α·dt))
+    h̄ = filter.h̄
+
+    @inbounds @simd for i in eachindex(h̄)
+        h̄[i] = exp_factor * h̄[i] + phi1_factor * h[i]
+    end
+
+    return h̄
+end
+
+"""
+    update_etd!(filter::ButterworthFilter, h::AbstractArray, coeffs::ETDFilterCoefficients)
+
+Update Butterworth filter using ETD1 (Exponential Euler).
+
+# Formula
+    [h̃; h̄]ⁿ⁺¹ = exp(L·dt)·[h̃; h̄]ⁿ + φ₁(L·dt)·dt·α·[hⁿ; 0]
+
+The matrix exponential handles the complex eigenvalues exactly,
+making this **unconditionally stable** for any timestep!
+"""
+function update_etd!(
+    filter::ButterworthFilter{T, N},
+    h::AbstractArray{T, N},
+    coeffs::ETDFilterCoefficients{T}
+) where {T, N}
+
+    exp_M = coeffs.exp_matrix
+    phi1_M = coeffs.phi1_matrix
+    α = coeffs.α
+    h̃ = filter.h̃
+    h̄ = filter.h̄
+
+    @inbounds @simd for i in eachindex(h̄)
+        h̃_i = h̃[i]
+        h̄_i = h̄[i]
+        f1 = α * h[i]  # Forcing: α·[h; 0]
+        f2 = zero(T)
+
+        # yⁿ⁺¹ = exp(L·dt)·yⁿ + φ₁(L·dt)·dt·f
+        h̃[i] = exp_M[1,1]*h̃_i + exp_M[1,2]*h̄_i + phi1_M[1,1]*f1 + phi1_M[1,2]*f2
+        h̄[i] = exp_M[2,1]*h̃_i + exp_M[2,2]*h̄_i + phi1_M[2,1]*f1 + phi1_M[2,2]*f2
+    end
+
+    return h̄
+end
+
+
+# ============================================================================
 # Exports
 # ============================================================================
 
@@ -1403,4 +1811,5 @@ export update!, get_mean, get_auxiliary, reset!, set_α!
 export update_displacement!, lagrangian_mean!, get_mean_velocity, get_displacement
 export filter_response, effective_averaging_time, max_stable_timestep
 export IMEXFilterCoefficients, precompute_imex_coefficients, update_imex!
+export ETDFilterCoefficients, precompute_etd_coefficients, update_etd!
 export linear_operator_coefficients
