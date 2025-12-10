@@ -212,8 +212,8 @@ end
                         @testset "N=$N, dealias=$dealias, dtype=$dtype, layout=$layout" begin
                             coords, dist, bases, r = basis_builder(N, dealias, dtype)
 
-                            # Create random tensor field
-                            f = TensorField(dist, (coords, coords), "f", bases, dtype)
+                            # Create random tensor field (use coords not (coords, coords))
+                            f = TensorField(dist, coords, "f", bases, dtype)
                             fill_random!(f)
 
                             # Evaluate trace
@@ -223,10 +223,10 @@ end
 
                             # Check: trace(T) = T_xx + T_yy
                             if layout == :g
-                                expected = f.components[1][1].data_g .+ f.components[2][2].data_g
+                                expected = f.components[1, 1].data_g .+ f.components[2, 2].data_g
                                 @test isapprox(g.data_g, expected, rtol=1e-10)
                             else
-                                expected = f.components[1][1].data_c .+ f.components[2][2].data_c
+                                expected = f.components[1, 1].data_c .+ f.components[2, 2].data_c
                                 @test isapprox(g.data_c, expected, rtol=1e-10)
                             end
                         end
@@ -247,7 +247,7 @@ end
                             coords, dist, bases, r = basis_builder(N, dealias, dtype)
 
                             # Create random tensor field
-                            f = TensorField(dist, (coords, coords), "f", bases, dtype)
+                            f = TensorField(dist, coords, "f", bases, dtype)
                             fill_random!(f)
 
                             # Evaluate trace
@@ -257,10 +257,10 @@ end
 
                             # Check: trace(T) = T_xx + T_yy + T_zz
                             if layout == :g
-                                expected = f.components[1][1].data_g .+ f.components[2][2].data_g .+ f.components[3][3].data_g
+                                expected = f.components[1, 1].data_g .+ f.components[2, 2].data_g .+ f.components[3, 3].data_g
                                 @test isapprox(g.data_g, expected, rtol=1e-10)
                             else
-                                expected = f.components[1][1].data_c .+ f.components[2][2].data_c .+ f.components[3][3].data_c
+                                expected = f.components[1, 1].data_c .+ f.components[2, 2].data_c .+ f.components[3, 3].data_c
                                 @test isapprox(g.data_c, expected, rtol=1e-10)
                             end
                         end
@@ -542,7 +542,7 @@ end
                             coords, dist, bases, r = basis_builder(N, dealias, dtype)
 
                             # Create random tensor field
-                            f = TensorField(dist, (coords, coords), "f", bases, dtype)
+                            f = TensorField(dist, coords, "f", bases, dtype)
                             fill_random!(f)
 
                             # Evaluate transpose
@@ -579,7 +579,7 @@ end
                             coords, dist, bases, r = basis_builder(N, dealias, dtype)
 
                             # Create random tensor field
-                            f = TensorField(dist, (coords, coords), "f", bases, dtype)
+                            f = TensorField(dist, coords, "f", bases, dtype)
                             fill_random!(f)
 
                             # Evaluate transpose
