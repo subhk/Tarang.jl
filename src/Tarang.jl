@@ -87,6 +87,7 @@ include("tools/progress.jl")
 include("tools/random_arrays.jl")
 include("tools/netcdf_merge.jl")
 include("tools/temporal_filters.jl")
+include("core/les_models.jl")
 
 # Extras
 include("extras/flow_tools.jl")
@@ -212,7 +213,17 @@ export
     TemporalFilter, ExponentialMean, ButterworthFilter, LagrangianFilter,
     get_mean, get_auxiliary, set_α!,
     update_displacement!, lagrangian_mean!, get_mean_velocity, get_displacement,
-    filter_response, effective_averaging_time
+    filter_response, effective_averaging_time,
+
+    # LES Models (Large Eddy Simulation)
+    SGSModel, EddyViscosityModel,
+    SmagorinskyModel, AMDModel,
+    compute_eddy_viscosity!, compute_eddy_diffusivity!,
+    compute_sgs_stress,
+    get_eddy_viscosity, get_eddy_diffusivity, get_filter_width,
+    mean_eddy_viscosity, max_eddy_viscosity,
+    sgs_dissipation, mean_sgs_dissipation,
+    set_constant!
 
 # Initialize MPI if not already initialized
 function __init__()
