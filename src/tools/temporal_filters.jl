@@ -400,7 +400,14 @@ Integrates the ODE: dh̄/dt = α(h - h̄) using forward Euler.
 """
 function update!(filter::ExponentialMean{T, N}, h::AbstractArray{T, N}, dt::Real) where {T, N}
     # Pre-compute factor for efficiency
-    αdt = filter.α * T(dt)
+    α = filter.α
+    αdt = α * T(dt)
+
+    # Stability check: Forward Euler requires α·dt ≤ 2
+    if αdt > 2
+        @warn "Unstable timestep for ExponentialMean: α·dt = $αdt > 2. Consider using smaller dt or RK2 method." maxlog=1
+    end
+
     h̄ = filter.h̄
     # Forward Euler: h̄_{n+1} = h̄_n + dt·α·(h_n - h̄_n) = (1 - αdt)h̄_n + αdt·h_n
     @inbounds @simd for i in eachindex(h̄)
@@ -577,6 +584,12 @@ function update!(filter::ButterworthFilter{T, N}, h::AbstractArray{T, N}, dt::Re
     A = filter.A
     dt_T = T(dt)
     αdt = α * dt_T
+
+    # Stability check: Forward Euler for Butterworth requires α·dt ≤ √2 ≈ 1.414
+    sqrt2 = sqrt(T(2))
+    if αdt > sqrt2
+        @warn "Unstable timestep for ButterworthFilter: α·dt = $αdt > √2 ≈ 1.414. Consider using smaller dt or RK2 method." maxlog=1
+    end
 
     # Extract matrix elements
     A11, A12 = A[1,1], A[1,2]
@@ -1040,6 +1053,58 @@ effective_averaging_time(filter::ExponentialMean) = 1 / filter.α
 effective_averaging_time(filter::ButterworthFilter) = 1 / filter.α
 effective_averaging_time(filter::LagrangianFilter) = 1 / filter.α
 
+"""
+    max_stable_timestep(filter::TemporalFilter; method::Symbol=:euler)
+
+Return the maximum stable timestep for the given filter and time integration method.
+
+# Arguments
+- `filter`: The temporal filter
+- `method`: Time integration method, either `:euler` (Forward Euler) or `:RK2`
+
+# Returns
+Maximum stable timestep `dt_max`. For stability, use `dt ≤ dt_max`.
+
+# Stability Limits (Forward Euler)
+- ExponentialMean: `dt ≤ 2/α`
+- ButterworthFilter: `dt ≤ √2/α ≈ 1.414/α` (more restrictive due to complex eigenvalues)
+
+# Example
+```julia
+filter = ButterworthFilter((64, 64); α=0.5)
+dt_max = max_stable_timestep(filter)  # Returns √2/0.5 ≈ 2.83
+
+# Use a safe timestep
+dt = 0.8 * dt_max  # 80% of maximum for safety margin
+```
+"""
+function max_stable_timestep(filter::ExponentialMean; method::Symbol=:euler)
+    if method == :euler
+        return 2 / filter.α
+    elseif method == :RK2
+        # RK2 has better stability, approximately 2× larger stable region
+        return 4 / filter.α
+    else
+        throw(ArgumentError("Unknown method: $method. Use :euler or :RK2"))
+    end
+end
+
+function max_stable_timestep(filter::ButterworthFilter; method::Symbol=:euler)
+    if method == :euler
+        return sqrt(2) / filter.α
+    elseif method == :RK2
+        # RK2 has better stability
+        return 2 * sqrt(2) / filter.α
+    else
+        throw(ArgumentError("Unknown method: $method. Use :euler or :RK2"))
+    end
+end
+
+function max_stable_timestep(filter::LagrangianFilter; method::Symbol=:euler)
+    # Use the more restrictive Butterworth limit for safety
+    return max_stable_timestep(filter.temporal_filter; method=method)
+end
+
 
 # ============================================================================
 # Exports
@@ -1049,4 +1114,4 @@ export TemporalFilter
 export ExponentialMean, ButterworthFilter, LagrangianFilter
 export update!, get_mean, get_auxiliary, reset!, set_α!
 export update_displacement!, lagrangian_mean!, get_mean_velocity, get_displacement
-export filter_response, effective_averaging_time
+export filter_response, effective_averaging_time, max_stable_timestep
