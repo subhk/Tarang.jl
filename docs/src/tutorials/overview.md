@@ -65,6 +65,12 @@ Problems with dynamics confined to surfaces or boundaries.
 |----------|-------------|------------|--------------|
 | [Surface Dynamics](surface_dynamics.md) | SQG, QG, boundary advection-diffusion | Advanced | Fractional Laplacian, coupled systems |
 
+### Wave-Mean Flow Analysis
+
+| Tutorial | Description | Complexity | Key Features |
+|----------|-------------|------------|--------------|
+| [Rotating Shallow Water](rotating_shallow_water.md) | Inertia-gravity wave filtering | Intermediate | Temporal filters, wave-mean separation |
+
 ### Special Topics
 
 | Tutorial | Description | Complexity | Key Features |
@@ -148,6 +154,7 @@ eigenvalues = solve!(solver, nev=10)
 
 **Geophysical Flows**:
 - Start: [Surface Dynamics](surface_dynamics.md) (SQG, QG)
+- Intermediate: [Rotating Shallow Water](rotating_shallow_water.md) (wave-mean separation)
 - Advanced: Coupled surface-interior dynamics
 
 **Heat Transfer**:

@@ -464,6 +464,89 @@ $$\frac{\partial g^L}{\partial t} + \bar{\mathbf{u}}\cdot\nabla g^L = \alpha(\ti
 
 ---
 
+## Advanced Time Integration Methods
+
+The basic `update!` function uses Forward Euler, which has a stability limit. For larger timesteps or coupling with implicit PDE solvers, use these advanced methods.
+
+### Stability Limits (Explicit Methods)
+
+| Filter | Forward Euler | RK2 |
+|--------|---------------|-----|
+| ExponentialMean | $\Delta t \leq 2/\alpha$ | $\Delta t \leq 4/\alpha$ |
+| ButterworthFilter | $\Delta t \leq \sqrt{2}/\alpha$ | $\Delta t \leq 2\sqrt{2}/\alpha$ |
+
+```julia
+# Check maximum stable timestep
+dt_max = max_stable_timestep(filter)           # Forward Euler
+dt_max_rk2 = max_stable_timestep(filter; method=:RK2)  # RK2
+```
+
+### ETD (Exponential Time Differencing) - Recommended
+
+**Unconditionally stable** for any timestep. Treats the linear decay term exactly.
+
+```julia
+# Precompute coefficients once (per α, dt pair)
+coeffs = precompute_etd_coefficients(filter, dt)
+
+# In time loop - no stability limit!
+for step in 1:nsteps
+    # ... your PDE timestepping ...
+    update_etd!(filter, field_data, coeffs)
+end
+```
+
+**How it works:**
+
+For the filter ODE $d\bar{h}/dt = -\alpha\bar{h} + \alpha h$, ETD computes:
+
+$$\bar{h}^{n+1} = e^{-\alpha\Delta t}\bar{h}^n + (1 - e^{-\alpha\Delta t})h^n$$
+
+This is **exact** when $h$ is constant over the timestep, and unconditionally stable otherwise.
+
+### IMEX/SBDF Integration
+
+For coupling with implicit PDE solvers using SBDF2 or SBDF3 timestepping.
+
+```julia
+# Precompute IMEX coefficients
+coeffs = precompute_imex_coefficients(filter, dt; scheme=:SBDF2)
+
+# Store field history for multistep method
+h_prev = copy(h)
+h_curr = copy(h)
+
+# In time loop - unconditionally stable!
+for step in 1:nsteps
+    # ... your SBDF2 PDE timestepping ...
+    h_new = # ... compute new field value ...
+
+    # Update filter with field history
+    update_imex!(filter, (h_curr, h_prev), coeffs)
+
+    h_prev .= h_curr
+    h_curr .= h_new
+end
+```
+
+**Available schemes:**
+- `:SBDF1` (Backward Euler): First-order, most stable
+- `:SBDF2`: Second-order, recommended
+- `:SBDF3`: Third-order, highest accuracy
+
+### Accessing Linear Operator for External Solvers
+
+If you're using your own IMEX framework:
+
+```julia
+# Get the linear operator coefficient
+L = linear_operator_coefficients(filter)
+# Returns -α (scalar) for ExponentialMean
+# Returns -α·A (2×2 matrix) for ButterworthFilter
+```
+
+---
+
 ## Troubleshooting
 
 ### Common Issues
@@ -481,9 +564,15 @@ T_spinup = 5 / α  # Minimum spinup time
 
 *Cause:* Timestep too large for stability.
 
-*Solution:* Ensure $\Delta t < 2/\alpha$, or use RK2:
+*Solution:* Use ETD integration (unconditionally stable):
 ```julia
-update!(filter, h, dt, Val(:RK2))  # More stable
+coeffs = precompute_etd_coefficients(filter, dt)
+update_etd!(filter, h, coeffs)  # Always stable!
+```
+
+Or use RK2 for explicit methods:
+```julia
+update!(filter, h, dt, Val(:RK2))  # 2× larger stability region
 ```
 
 **3. High frequencies leaking through**
@@ -502,6 +591,20 @@ update!(filter, h, dt, Val(:RK2))  # More stable
 # ExponentialMean: 1 array (half the memory)
 filter = ExponentialMean((Nx, Ny, Nz); α=α)
 ```
+
+**5. Need to couple with implicit timestepper**
+
+*Solution:* Use IMEX integration:
+```julia
+coeffs = precompute_imex_coefficients(filter, dt; scheme=:SBDF2)
+update_imex!(filter, (h_n, h_nm1), coeffs)
+```
+
+---
+
+## Tutorials
+
+- **[Rotating Shallow Water with Lagrangian Averaging](../tutorials/rotating_shallow_water.md)** - Complete example of wave-mean separation in a rotating flow
 
 ---
 

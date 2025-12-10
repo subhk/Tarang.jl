@@ -96,7 +96,14 @@ Tarang.jl can solve a wide range of problems in fluid dynamics, heat transfer, a
 - **Heat Transfer**: Thermal convection, diffusion problems
 - **Linear Stability**: Eigenvalue analysis of fluid flows
 - **Magnetohydrodynamics**: MHD equations with magnetic fields
-- **Atmospheric Dynamics**: Stratified flows, gravity waves
+- **Atmospheric/Oceanic Dynamics**: Stratified flows, gravity waves, wave-mean separation
+- **Turbulence Modeling**: Large Eddy Simulation (LES) with Smagorinsky and AMD models
+
+### Featured Tutorials
+
+- **[Rotating Shallow Water](tutorials/rotating_shallow_water.md)**: Wave-mean flow separation using temporal filters
+- **[Temporal Filters](pages/temporal_filters.md)**: Lagrangian averaging for geophysical flows
+- **[LES Models](pages/les_models.md)**: Subgrid-scale modeling for turbulence
 
 ## Documentation Structure
 

@@ -7,176 +7,39 @@ enabling efficient wave-mean flow decomposition. Based on the paper:
     Minz, Baker, Kafiabad, Vanneste (2025) "Efficient Lagrangian averaging with
     exponential filters", Phys. Rev. Fluids 10, 074902.
 
-## Quick Start Example: Rotating Shallow Water with Inertia-Gravity Waves
+## Quick Start
 
 ```julia
-using Tarang
+# Create a Butterworth filter (sharper rolloff than exponential)
+filter = ButterworthFilter((Nx, Ny); α=0.1)  # α = 1/averaging_time
 
-# =============================================================================
-# ROTATING SHALLOW WATER MODEL WITH LAGRANGIAN MEAN COMPUTATION
-# =============================================================================
-#
-# Governing equations (on f-plane):
-#   ∂u/∂t - f·v = -g·∂η/∂x
-#   ∂v/∂t + f·u = -g·∂η/∂y
-#   ∂η/∂t + H·(∂u/∂x + ∂v/∂y) = 0
-#
-# where:
-#   u, v = velocity components
-#   η = surface elevation
-#   f = Coriolis parameter
-#   g = gravity
-#   H = mean depth
+# Precompute ETD coefficients for unconditional stability
+coeffs = precompute_etd_coefficients(filter, dt)
 
-# Domain and grid
-Nx, Ny = 128, 128
-Lx, Ly = 2π, 2π
-dx, dy = Lx/Nx, Ly/Ny
-
-# Physical parameters
-f = 1.0      # Coriolis parameter
-g = 10.0     # Gravity
-H = 1.0      # Mean depth
-c = sqrt(g*H) # Gravity wave speed ≈ 3.16
-
-# Inertia-gravity wave frequency: ω² = f² + c²(kx² + ky²)
-# For k = 1: ω ≈ √(1 + 10) ≈ 3.3
-# Wave period: T_wave ≈ 2π/3.3 ≈ 1.9
-
-# Time stepping
-dt = 0.01                    # Timestep (CFL limited)
-T_wave = 2π / sqrt(f^2 + g*H)  # Typical wave period
-α = 1 / (10 * T_wave)        # Filter timescale = 10 wave periods
-
-println("Wave period: T_wave = \$T_wave")
-println("Filter timescale: 1/α = \$(1/α)")
-println("α·dt = \$(α*dt)")
-
-# =============================================================================
-# METHOD 1: Simple Explicit Update (for small α·dt)
-# =============================================================================
-
-# Create Butterworth filter for velocity components
-u_filter = ButterworthFilter((Nx, Ny); α=α)
-v_filter = ButterworthFilter((Nx, Ny); α=α)
-η_filter = ButterworthFilter((Nx, Ny); α=α)
-
-# Initialize fields
-u = zeros(Nx, Ny)
-v = zeros(Nx, Ny)
-η = zeros(Nx, Ny)
-
-# Add initial wave perturbation
-for i in 1:Nx, j in 1:Ny
-    x, y = (i-1)*dx, (j-1)*dy
-    η[i,j] = 0.1 * cos(x) * cos(y)  # Initial surface perturbation
-end
-
-# Time loop with explicit filter update
-nsteps = 1000
+# In time loop:
 for step in 1:nsteps
-    # ... (your shallow water time stepping here) ...
-    # rhs_u = f*v - g*∂η/∂x
-    # rhs_v = -f*u - g*∂η/∂y
-    # rhs_η = -H*(∂u/∂x + ∂v/∂y)
-    # u, v, η = time_step(u, v, η, rhs_u, rhs_v, rhs_η, dt)
-
-    # Update Lagrangian mean filters (runs alongside dynamics)
-    update!(u_filter, u, dt)
-    update!(v_filter, v, dt)
-    update!(η_filter, η, dt)
-
-    if step % 100 == 0
-        ū = get_mean(u_filter)
-        v̄ = get_mean(v_filter)
-        η̄ = get_mean(η_filter)
-        println("Step \$step: max|ū| = \$(maximum(abs.(ū)))")
-    end
+    # ... your PDE timestepping ...
+    update_etd!(filter, field, coeffs)  # No stability limit!
 end
 
-# =============================================================================
-# METHOD 2: ETD Integration (unconditionally stable, recommended)
-# =============================================================================
-
-# Precompute ETD coefficients once
-u_filter_etd = ButterworthFilter((Nx, Ny); α=α)
-etd_coeffs = precompute_etd_coefficients(u_filter_etd, dt)
-
-# In time loop - no stability restriction from filter!
-for step in 1:nsteps
-    # ... (your shallow water time stepping) ...
-    update_etd!(u_filter_etd, u, etd_coeffs)
-end
-
-# =============================================================================
-# METHOD 3: IMEX/SBDF Integration (for coupling with implicit PDE solver)
-# =============================================================================
-
-# If your PDE solver uses SBDF2:
-u_filter_imex = ButterworthFilter((Nx, Ny); α=α)
-imex_coeffs = precompute_imex_coefficients(u_filter_imex, dt; scheme=:SBDF2)
-
-# Store history for SBDF2
-u_prev = copy(u)
-u_curr = copy(u)
-
-for step in 1:nsteps
-    # ... (your SBDF2 shallow water time stepping) ...
-    u_new = # ... compute new u ...
-
-    # Update filter with SBDF2 (needs current and previous field values)
-    update_imex!(u_filter_imex, (u_curr, u_prev), imex_coeffs)
-
-    u_prev .= u_curr
-    u_curr .= u_new
-end
-
-# =============================================================================
-# EXTRACTING WAVE AND MEAN COMPONENTS
-# =============================================================================
-
-# After filtering:
-ū = get_mean(u_filter)      # Lagrangian mean velocity
-v̄ = get_mean(v_filter)
-η̄ = get_mean(η_filter)      # Mean surface elevation
-
-# Wave (fluctuation) components:
-u_wave = u - ū
-v_wave = v - v̄
-η_wave = η - η̄
-
-# Compute wave energy:
-KE_wave = 0.5 * mean(u_wave.^2 + v_wave.^2)
-PE_wave = 0.5 * g/H * mean(η_wave.^2)
-
-println("Wave kinetic energy: \$KE_wave")
-println("Wave potential energy: \$PE_wave")
+# Get filtered mean
+mean_field = get_mean(filter)
 ```
 
-## Choosing the Filter Parameter α
+## Time Integration Methods
 
-The key parameter is **α = 1/T_avg** where T_avg is the averaging timescale.
-
-**Rule of thumb**: Choose T_avg ≈ 10-100 × T_wave where T_wave is the period
-of the fastest waves you want to filter out.
-
-| Application | Wave Period | Recommended α |
-|-------------|------------|---------------|
-| Internal gravity waves (ocean) | 1-24 hours | α = 1/(10-100 hours) |
-| Inertia-gravity waves | 2π/f | α = f/20 to f/100 |
-| Acoustic waves (compressible) | L/c_s | α = c_s/(100L) |
-
-## Stability and Timestep Considerations
-
-| Method | Stability Limit | When to Use |
-|--------|----------------|-------------|
-| `update!(filter, h, dt)` | dt ≤ √2/α | Small α·dt < 1 |
+| Method | Stability | Use Case |
+|--------|-----------|----------|
+| `update!(filter, h, dt)` | dt ≤ √2/α | Simple, small α·dt |
 | `update!(filter, h, dt, Val(:RK2))` | dt ≤ 2√2/α | Moderate α·dt |
-| `update_etd!(filter, h, coeffs)` | **None** | Any α·dt (recommended) |
-| `update_imex!(filter, h_hist, coeffs)` | **None** | Coupling with SBDF solver |
+| `update_etd!(filter, h, coeffs)` | **Unconditional** | Recommended |
+| `update_imex!(filter, h_hist, coeffs)` | **Unconditional** | SBDF solvers |
 
-**Recommendation**: Use `update_etd!` for most applications - it's unconditionally
-stable and accurate for any timestep size.
+## Documentation
+
+For complete documentation with tutorials and examples, see:
+- docs/src/pages/temporal_filters.md - Full API reference
+- docs/src/tutorials/rotating_shallow_water.md - Complete example
 
 ## 1. What is Wave-Mean Flow Interaction?
 
