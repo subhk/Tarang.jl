@@ -135,7 +135,7 @@ Tarang.jl builds upon excellent Julia packages including [PencilArrays.jl](https
 
 ## License
 
-Tarang.jl is licensed under the GPL-3.0 license. See [LICENSE](https://github.com/subhk/Tarang.jl/blob/main/LICENSE) for details.
+Tarang.jl is licensed under the MIT license. See [LICENSE](https://github.com/subhk/Tarang.jl/blob/main/LICENSE) for details.
 
 ---
 
