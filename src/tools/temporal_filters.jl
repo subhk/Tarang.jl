@@ -399,10 +399,14 @@ Integrates the ODE: dh̄/dt = α(h - h̄) using forward Euler.
 - `dt`: Timestep
 """
 function update!(filter::ExponentialMean{T, N}, h::AbstractArray{T, N}, dt::Real) where {T, N}
-    α = filter.α
-    # Forward Euler: h̄_{n+1} = h̄_n + dt·α·(h_n - h̄_n)
-    @. filter.h̄ = filter.h̄ + dt * α * (h - filter.h̄)
-    return filter.h̄
+    # Pre-compute factor for efficiency
+    αdt = filter.α * T(dt)
+    h̄ = filter.h̄
+    # Forward Euler: h̄_{n+1} = h̄_n + dt·α·(h_n - h̄_n) = (1 - αdt)h̄_n + αdt·h_n
+    @inbounds @simd for i in eachindex(h̄)
+        h̄[i] = h̄[i] + αdt * (h[i] - h̄[i])
+    end
+    return h̄
 end
 
 """
@@ -412,15 +416,17 @@ Update using second-order Runge-Kutta (midpoint method) for improved accuracy.
 """
 function update!(filter::ExponentialMean{T, N}, h::AbstractArray{T, N}, dt::Real, ::Val{:RK2}) where {T, N}
     α = filter.α
-    # RK2 midpoint method
-    # k1 = α(h - h̄)
-    # k2 = α(h - (h̄ + dt/2·k1))
-    # h̄_{n+1} = h̄_n + dt·k2
-    k1 = α .* (h .- filter.h̄)
-    h̄_mid = filter.h̄ .+ (dt/2) .* k1
-    k2 = α .* (h .- h̄_mid)
-    @. filter.h̄ = filter.h̄ + dt * k2
-    return filter.h̄
+    dt_T = T(dt)
+    dt_half = dt_T / 2
+    h̄ = filter.h̄
+    # RK2 midpoint method - fused loop to avoid allocations
+    @inbounds @simd for i in eachindex(h̄)
+        k1 = α * (h[i] - h̄[i])
+        h̄_mid = h̄[i] + dt_half * k1
+        k2 = α * (h[i] - h̄_mid)
+        h̄[i] = h̄[i] + dt_T * k2
+    end
+    return h̄
 end
 
 """
@@ -569,28 +575,29 @@ using forward Euler.
 function update!(filter::ButterworthFilter{T, N}, h::AbstractArray{T, N}, dt::Real) where {T, N}
     α = filter.α
     A = filter.A
+    dt_T = T(dt)
+    αdt = α * dt_T
 
     # Extract matrix elements
-    A11, A21, A12, A22 = A[1,1], A[2,1], A[1,2], A[2,2]
+    A11, A12 = A[1,1], A[1,2]
 
-    # Forward Euler for coupled system
-    # From Eq. (37a): dh̃/dt = -α[(√2-1)h̃ + (2-√2)h̄ - h]
-    # From Eq. (37b): dh̄/dt = -α(-h̃ + h̄) = α(h̃ - h̄)
+    h̃ = filter.h̃
+    h̄ = filter.h̄
 
-    # Compute derivatives
-    # dh̃ = -α·(A11·h̃ + A12·h̄) + α·h = α·(h - A11·h̃ - A12·h̄)
-    # dh̄ = -α·(A21·h̃ + A22·h̄) = α·(h̃ - h̄)  [since A21=-1, A22=1]
+    # Forward Euler for coupled system - fused loop to avoid allocations
+    # dh̃ = α·(h - A11·h̃ - A12·h̄)
+    # dh̄ = α·(h̃ - h̄)  [since A21=-1, A22=1]
+    @inbounds @simd for i in eachindex(h̃)
+        h̃_i = h̃[i]
+        h̄_i = h̄[i]
+        # Update using old values (compute both derivatives first)
+        dh̃ = h[i] - A11 * h̃_i - A12 * h̄_i
+        dh̄ = h̃_i - h̄_i
+        h̃[i] = h̃_i + αdt * dh̃
+        h̄[i] = h̄_i + αdt * dh̄
+    end
 
-    h̃_old = copy(filter.h̃)
-    h̄_old = copy(filter.h̄)
-
-    # Update h̃
-    @. filter.h̃ = h̃_old + dt * α * (h - A11 * h̃_old - A12 * h̄_old)
-
-    # Update h̄
-    @. filter.h̄ = h̄_old + dt * α * (h̃_old - h̄_old)
-
-    return filter.h̄
+    return h̄
 end
 
 """
@@ -601,26 +608,37 @@ Update using second-order Runge-Kutta (midpoint method) for improved accuracy.
 function update!(filter::ButterworthFilter{T, N}, h::AbstractArray{T, N}, dt::Real, ::Val{:RK2}) where {T, N}
     α = filter.α
     A = filter.A
-    A11, A21, A12, A22 = A[1,1], A[2,1], A[1,2], A[2,2]
+    dt_T = T(dt)
+    dt_half = dt_T / 2
+    A11, A12 = A[1,1], A[1,2]
 
-    # RK2 midpoint method
-    # Stage 1: compute k1 for both variables
-    k1_h̃ = α .* (h .- A11 .* filter.h̃ .- A12 .* filter.h̄)
-    k1_h̄ = α .* (filter.h̃ .- filter.h̄)
+    h̃ = filter.h̃
+    h̄ = filter.h̄
 
-    # Midpoint values
-    h̃_mid = filter.h̃ .+ (dt/2) .* k1_h̃
-    h̄_mid = filter.h̄ .+ (dt/2) .* k1_h̄
+    # RK2 midpoint method - fused loop to avoid allocations
+    @inbounds @simd for i in eachindex(h̃)
+        h̃_i = h̃[i]
+        h̄_i = h̄[i]
+        h_i = h[i]
 
-    # Stage 2: compute k2 at midpoint
-    k2_h̃ = α .* (h .- A11 .* h̃_mid .- A12 .* h̄_mid)
-    k2_h̄ = α .* (h̃_mid .- h̄_mid)
+        # Stage 1: compute k1
+        k1_h̃ = α * (h_i - A11 * h̃_i - A12 * h̄_i)
+        k1_h̄ = α * (h̃_i - h̄_i)
 
-    # Update
-    @. filter.h̃ = filter.h̃ + dt * k2_h̃
-    @. filter.h̄ = filter.h̄ + dt * k2_h̄
+        # Midpoint values
+        h̃_mid = h̃_i + dt_half * k1_h̃
+        h̄_mid = h̄_i + dt_half * k1_h̄
 
-    return filter.h̄
+        # Stage 2: compute k2 at midpoint
+        k2_h̃ = α * (h_i - A11 * h̃_mid - A12 * h̄_mid)
+        k2_h̄ = α * (h̃_mid - h̄_mid)
+
+        # Update
+        h̃[i] = h̃_i + dt_T * k2_h̃
+        h̄[i] = h̄_i + dt_T * k2_h̄
+    end
+
+    return h̄
 end
 
 """
@@ -822,40 +840,45 @@ function update_displacement!(
     interpolate_fn = nothing) where {T, N, F<:ButterworthFilter}
 
     α = filter.α
-    sqrt2 = sqrt(T(2))
+    dt_T = T(dt)
+    sqrt2_m1 = sqrt(T(2)) - one(T)  # √2 - 1
+
+    ξ = filter.ξ
+    ξ̃ = filter.ξ̃
+    ū = filter.ū
 
     # For Butterworth: Eq. (38a)
     # ũ = α·[ξ - (√2-1)·ξ̃]
     # ū = α·ξ̃
 
-    @. filter.ū = α * filter.ξ̃
-
-    # Compute auxiliary velocity ũ
-    ũ = α .* (filter.ξ .- (sqrt2 - 1) .* filter.ξ̃)
-
-    # Simplified update (neglecting advection terms)
-    # Full PDEs (Eq. 38b):
-    #   ∂ₜξ̃ + ū·∇ξ̃ = ũ - ū
-    #   ∂ₜξ + ū·∇ξ = u∘(id + ξ) - ū
-
-    ξ̃_old = copy(filter.ξ̃)
-    ξ_old = copy(filter.ξ)
-
     if interpolate_fn === nothing
-        # Without interpolation, approximate u∘(id+ξ) ≈ u
-        @. filter.ξ̃ = ξ̃_old + dt * (ũ - filter.ū)
-        @. filter.ξ = ξ_old + dt * (u - filter.ū)
+        # Without interpolation - fused loop to avoid allocations
+        @inbounds @simd for i in eachindex(ξ)
+            ξ̃_i = ξ̃[i]
+            ξ_i = ξ[i]
+            ū_i = α * ξ̃_i
+            ũ_i = α * (ξ_i - sqrt2_m1 * ξ̃_i)
+            # Simplified PDEs (neglecting advection):
+            # ∂ₜξ̃ = ũ - ū, ∂ₜξ = u - ū
+            ξ̃[i] = ξ̃_i + dt_T * (ũ_i - ū_i)
+            ξ[i] = ξ_i + dt_T * (u[i] - ū_i)
+            ū[i] = α * ξ̃[i]  # Update mean velocity
+        end
     else
-        # With interpolation
-        u_displaced = interpolate_fn(u, filter.ξ)
-        @. filter.ξ̃ = ξ̃_old + dt * (ũ - filter.ū)
-        @. filter.ξ = ξ_old + dt * (u_displaced - filter.ū)
+        # With interpolation - need to compute displaced u first
+        u_displaced = interpolate_fn(u, ξ)
+        @inbounds @simd for i in eachindex(ξ)
+            ξ̃_i = ξ̃[i]
+            ξ_i = ξ[i]
+            ū_i = α * ξ̃_i
+            ũ_i = α * (ξ_i - sqrt2_m1 * ξ̃_i)
+            ξ̃[i] = ξ̃_i + dt_T * (ũ_i - ū_i)
+            ξ[i] = ξ_i + dt_T * (u_displaced[i] - ū_i)
+            ū[i] = α * ξ̃[i]
+        end
     end
 
-    # Update mean velocity
-    @. filter.ū = α * filter.ξ̃
-
-    return filter.ū
+    return ū
 end
 
 """
@@ -888,16 +911,20 @@ function lagrangian_mean!(
     interpolate_fn = nothing) where {T, N, F<:ExponentialMean}
 
     α = filter.α
-
-    # g∘Ξ = g∘(id + ξ)
-    if interpolate_fn === nothing
-        g_composed = g  # Approximate
-    else
-        g_composed = interpolate_fn(g, filter.ξ)
-    end
+    αdt = α * T(dt)
 
     # Simplified (neglecting advection): ∂ₜgᴸ = α(g∘Ξ - gᴸ)
-    @. gᴸ = gᴸ + dt * α * (g_composed - gᴸ)
+    if interpolate_fn === nothing
+        # g∘Ξ ≈ g (approximate)
+        @inbounds @simd for i in eachindex(gᴸ)
+            gᴸ[i] = gᴸ[i] + αdt * (g[i] - gᴸ[i])
+        end
+    else
+        g_composed = interpolate_fn(g, filter.ξ)
+        @inbounds @simd for i in eachindex(gᴸ)
+            gᴸ[i] = gᴸ[i] + αdt * (g_composed[i] - gᴸ[i])
+        end
+    end
 
     return gᴸ
 end
@@ -911,26 +938,35 @@ function lagrangian_mean!(
     interpolate_fn = nothing) where {T, N, F<:ButterworthFilter}
 
     α = filter.α
+    αdt = α * T(dt)
     sqrt2 = sqrt(T(2))
     A11 = sqrt2 - 1
     A12 = 2 - sqrt2
 
-    # g∘Ξ = g∘(id + ξ)
+    # From Eq. (37) - fused loop to avoid allocations:
+    # ∂ₜg̃ = α(g∘Ξ - A11·g̃ - A12·gᴸ)
+    # ∂ₜgᴸ = α(g̃ - gᴸ)
     if interpolate_fn === nothing
-        g_composed = g  # Approximate
+        @inbounds @simd for i in eachindex(gᴸ)
+            g̃_i = g̃[i]
+            gᴸ_i = gᴸ[i]
+            # Compute both derivatives using old values
+            dg̃ = g[i] - A11 * g̃_i - A12 * gᴸ_i
+            dgᴸ = g̃_i - gᴸ_i
+            g̃[i] = g̃_i + αdt * dg̃
+            gᴸ[i] = gᴸ_i + αdt * dgᴸ
+        end
     else
         g_composed = interpolate_fn(g, filter.ξ)
+        @inbounds @simd for i in eachindex(gᴸ)
+            g̃_i = g̃[i]
+            gᴸ_i = gᴸ[i]
+            dg̃ = g_composed[i] - A11 * g̃_i - A12 * gᴸ_i
+            dgᴸ = g̃_i - gᴸ_i
+            g̃[i] = g̃_i + αdt * dg̃
+            gᴸ[i] = gᴸ_i + αdt * dgᴸ
+        end
     end
-
-    g̃_old = copy(g̃)
-    gᴸ_old = copy(gᴸ)
-
-    # From Eq. (37):
-    # ∂ₜg̃ = -α[(√2-1)g̃ + (2-√2)gᴸ - g∘Ξ]
-    # ∂ₜgᴸ = α(g̃ - gᴸ)
-
-    @. g̃ = g̃_old + dt * α * (g_composed - A11 * g̃_old - A12 * gᴸ_old)
-    @. gᴸ = gᴸ_old + dt * α * (g̃_old - gᴸ_old)
 
     return gᴸ
 end
