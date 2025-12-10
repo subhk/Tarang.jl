@@ -264,14 +264,11 @@ set_constant!(model::AMDModel, C::Real)
 
 ### reset!
 
-```@docs
-reset!
-```
-
 Reset eddy viscosity (and diffusivity for AMD) to zero.
 
 ```julia
 reset!(model::EddyViscosityModel)
+reset!(model::AMDModel)  # Also resets eddy_diffusivity
 ```
 
 ---
