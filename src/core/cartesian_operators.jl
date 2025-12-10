@@ -1269,10 +1269,10 @@ function evaluate_cartesian_trace(op::CartesianTrace, layout::Symbol=:g)
     ensure_layout!(operand, layout)
 
     # Sum diagonal elements
-    dim = length(operand.components)  # Assumes square tensor
+    dim = size(operand.components, 1)  # Get dimension from matrix size
 
     # Get first component to create result
-    first_comp = operand.components[1][1]
+    first_comp = operand.components[1, 1]
     result = ScalarField(first_comp.dist, "trace_$(operand.name)", first_comp.bases, first_comp.dtype)
     ensure_layout!(result, layout)
 
@@ -1280,12 +1280,12 @@ function evaluate_cartesian_trace(op::CartesianTrace, layout::Symbol=:g)
     if layout == :g
         fill!(result.data_g, 0.0)
         for i in 1:dim
-            result.data_g .+= operand.components[i][i].data_g
+            result.data_g .+= operand.components[i, i].data_g
         end
     else
         fill!(result.data_c, 0.0)
         for i in 1:dim
-            result.data_c .+= operand.components[i][i].data_c
+            result.data_c .+= operand.components[i, i].data_c
         end
     end
 
