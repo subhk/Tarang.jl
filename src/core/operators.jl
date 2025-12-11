@@ -690,62 +690,185 @@ end
 
 
 function evaluate_real_fourier_derivative_groups!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
-    """Real Fourier derivative following 2x2 group matrix approach """
-    
-    # Stores RealFourier as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
-    # Each wavenumber k>0 has a 2x2 group matrix:
-    # dx [cos(kx)]   [0  -k] [cos(kx)]   [-k*sin(kx)]
-    #    [sin(kx)] = [k   0] [sin(kx)] = [ k*cos(kx)]
-    
+    """Real Fourier derivative following 2x2 group matrix approach for multi-dimensional arrays.
+
+    Applies the derivative along the specified axis only.
+    For RealFourier, coefficients along axis are stored as [cos_0, cos_1, sin_1, cos_2, sin_2, ..., cos_nyq]
+    Each wavenumber k>0 has a 2x2 group matrix:
+    dx [cos(kx)]   [0  -k] [cos(kx)]   [-k*sin(kx)]
+       [sin(kx)] = [k   0] [sin(kx)] = [ k*cos(kx)]
+    """
+
     # Initialize result to zero
     fill!(result.data_c, 0.0)
-    
-    # DC component (k=0): derivative is always 0
-    result.data_c[1] = 0.0
-    
+
     # Process each wavenumber group
     k_max = N ÷ 2
     is_even = (N % 2 == 0)
-    
-    # Choose implementation based on size
-    if true  # CPU-only && order == 1 && length(operand.data_c) > 100
-        # CPU path without LoopVectorization to avoid macro issues during precompilation
-        for k in 1:k_max-(is_even ? 1 : 0)  # k=1 to k_max-1 (excluding Nyquist)
-            # Physical wavenumber
+
+    # Get array dimensions
+    dims = ndims(operand.data_c)
+    data_shape = size(operand.data_c)
+
+    if dims == 1
+        # 1D case: original implementation
+        for k in 1:k_max-(is_even ? 1 : 0)
             k_phys = 2π * k / L
-            
-            # Indices in coefficient array
-            cos_idx = 2*k        # cos(kx) coefficient
-            sin_idx = 2*k + 1    # sin(kx) coefficient
-            
-            if cos_idx <= length(operand.data_c) && sin_idx <= length(operand.data_c)
+            cos_idx = 2*k
+            sin_idx = 2*k + 1
+
+            if cos_idx <= N && sin_idx <= N
                 cos_coeff = operand.data_c[cos_idx]
                 sin_coeff = operand.data_c[sin_idx]
-                
-                # Apply 2x2 matrix: [0 -k; k 0]
-                result.data_c[cos_idx] = -k_phys * sin_coeff   # d/dx[cos] = -k*sin
-                result.data_c[sin_idx] =  k_phys * cos_coeff   # d/dx[sin] =  k*cos
+                result.data_c[cos_idx] = -k_phys * sin_coeff
+                result.data_c[sin_idx] =  k_phys * cos_coeff
             end
         end
-    elseif false  # Not used; legacy GPU path removed
-        # Vectorized implementation using broadcasting
-        evaluate_real_fourier_derivative_vectorized!(result, operand, N, L, k_max, is_even)
-    else
-        # Fallback implementation for higher orders or other cases
-        evaluate_real_fourier_derivative_fallback!(result, operand, N, L, k_max, is_even, order)
-    end
-    
-    # Handle Nyquist frequency for even N (real-valued, derivative = 0)  
-    if is_even
-        nyquist_idx = N  # Last coefficient is Nyquist
-        if nyquist_idx <= length(result.data_c)
+
+        # Handle Nyquist
+        if is_even && N <= length(result.data_c)
             if order % 2 == 1
-                result.data_c[nyquist_idx] = 0.0  # Odd derivatives of cos(π*x/L) = 0 at boundaries
+                result.data_c[N] = 0.0
             else
                 k_nyquist = 2π * k_max / L
-                result.data_c[nyquist_idx] = ((-1)^(order÷2)) * (k_nyquist^order) * operand.data_c[nyquist_idx]
+                result.data_c[N] = ((-1)^(order÷2)) * (k_nyquist^order) * operand.data_c[N]
             end
         end
+    elseif dims == 2
+        # 2D case: apply derivative along specified axis
+        if axis == 1
+            # Derivative along first axis (x): loop over second axis
+            for j in 1:data_shape[2]
+                # DC component (k=0): derivative is always 0
+                result.data_c[1, j] = 0.0
+
+                for k in 1:k_max-(is_even ? 1 : 0)
+                    k_phys = 2π * k / L
+                    cos_idx = 2*k
+                    sin_idx = 2*k + 1
+
+                    if cos_idx <= data_shape[1] && sin_idx <= data_shape[1]
+                        cos_coeff = operand.data_c[cos_idx, j]
+                        sin_coeff = operand.data_c[sin_idx, j]
+                        result.data_c[cos_idx, j] = -k_phys * sin_coeff
+                        result.data_c[sin_idx, j] =  k_phys * cos_coeff
+                    end
+                end
+
+                # Handle Nyquist
+                if is_even && N <= data_shape[1]
+                    if order % 2 == 1
+                        result.data_c[N, j] = 0.0
+                    else
+                        k_nyquist = 2π * k_max / L
+                        result.data_c[N, j] = ((-1)^(order÷2)) * (k_nyquist^order) * operand.data_c[N, j]
+                    end
+                end
+            end
+        else  # axis == 2
+            # Derivative along second axis (y): loop over first axis
+            for i in 1:data_shape[1]
+                # DC component (k=0): derivative is always 0
+                result.data_c[i, 1] = 0.0
+
+                for k in 1:k_max-(is_even ? 1 : 0)
+                    k_phys = 2π * k / L
+                    cos_idx = 2*k
+                    sin_idx = 2*k + 1
+
+                    if cos_idx <= data_shape[2] && sin_idx <= data_shape[2]
+                        cos_coeff = operand.data_c[i, cos_idx]
+                        sin_coeff = operand.data_c[i, sin_idx]
+                        result.data_c[i, cos_idx] = -k_phys * sin_coeff
+                        result.data_c[i, sin_idx] =  k_phys * cos_coeff
+                    end
+                end
+
+                # Handle Nyquist
+                if is_even && N <= data_shape[2]
+                    if order % 2 == 1
+                        result.data_c[i, N] = 0.0
+                    else
+                        k_nyquist = 2π * k_max / L
+                        result.data_c[i, N] = ((-1)^(order÷2)) * (k_nyquist^order) * operand.data_c[i, N]
+                    end
+                end
+            end
+        end
+    elseif dims == 3
+        # 3D case: apply derivative along specified axis
+        if axis == 1
+            for j in 1:data_shape[2], k3 in 1:data_shape[3]
+                result.data_c[1, j, k3] = 0.0
+                for k in 1:k_max-(is_even ? 1 : 0)
+                    k_phys = 2π * k / L
+                    cos_idx = 2*k
+                    sin_idx = 2*k + 1
+                    if cos_idx <= data_shape[1] && sin_idx <= data_shape[1]
+                        cos_coeff = operand.data_c[cos_idx, j, k3]
+                        sin_coeff = operand.data_c[sin_idx, j, k3]
+                        result.data_c[cos_idx, j, k3] = -k_phys * sin_coeff
+                        result.data_c[sin_idx, j, k3] =  k_phys * cos_coeff
+                    end
+                end
+                if is_even && N <= data_shape[1]
+                    if order % 2 == 1
+                        result.data_c[N, j, k3] = 0.0
+                    else
+                        k_nyquist = 2π * k_max / L
+                        result.data_c[N, j, k3] = ((-1)^(order÷2)) * (k_nyquist^order) * operand.data_c[N, j, k3]
+                    end
+                end
+            end
+        elseif axis == 2
+            for i in 1:data_shape[1], k3 in 1:data_shape[3]
+                result.data_c[i, 1, k3] = 0.0
+                for k in 1:k_max-(is_even ? 1 : 0)
+                    k_phys = 2π * k / L
+                    cos_idx = 2*k
+                    sin_idx = 2*k + 1
+                    if cos_idx <= data_shape[2] && sin_idx <= data_shape[2]
+                        cos_coeff = operand.data_c[i, cos_idx, k3]
+                        sin_coeff = operand.data_c[i, sin_idx, k3]
+                        result.data_c[i, cos_idx, k3] = -k_phys * sin_coeff
+                        result.data_c[i, sin_idx, k3] =  k_phys * cos_coeff
+                    end
+                end
+                if is_even && N <= data_shape[2]
+                    if order % 2 == 1
+                        result.data_c[i, N, k3] = 0.0
+                    else
+                        k_nyquist = 2π * k_max / L
+                        result.data_c[i, N, k3] = ((-1)^(order÷2)) * (k_nyquist^order) * operand.data_c[i, N, k3]
+                    end
+                end
+            end
+        else  # axis == 3
+            for i in 1:data_shape[1], j in 1:data_shape[2]
+                result.data_c[i, j, 1] = 0.0
+                for k in 1:k_max-(is_even ? 1 : 0)
+                    k_phys = 2π * k / L
+                    cos_idx = 2*k
+                    sin_idx = 2*k + 1
+                    if cos_idx <= data_shape[3] && sin_idx <= data_shape[3]
+                        cos_coeff = operand.data_c[i, j, cos_idx]
+                        sin_coeff = operand.data_c[i, j, sin_idx]
+                        result.data_c[i, j, cos_idx] = -k_phys * sin_coeff
+                        result.data_c[i, j, sin_idx] =  k_phys * cos_coeff
+                    end
+                end
+                if is_even && N <= data_shape[3]
+                    if order % 2 == 1
+                        result.data_c[i, j, N] = 0.0
+                    else
+                        k_nyquist = 2π * k_max / L
+                        result.data_c[i, j, N] = ((-1)^(order÷2)) * (k_nyquist^order) * operand.data_c[i, j, N]
+                    end
+                end
+            end
+        end
+    else
+        throw(ArgumentError("Real Fourier derivative not implemented for $(dims)D arrays"))
     end
 end
 
@@ -804,25 +927,74 @@ function evaluate_real_fourier_derivative_fallback!(result::ScalarField, operand
 end
 
 function evaluate_complex_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, N::Int, L::Float64)
-    """Complex Fourier derivative: simple multiplication by (ik)^order """
-    
-    # Complex FFT wavenumbers: [0, 1, ..., N/2-1, -N/2, -(N/2-1), ..., -1]
-    k_cpu = 2π/L * [0:(N÷2-1); -(N÷2):(-1)]
-    
-    # Move wavenumbers to appropriate device
-    k = k_cpu
-    
-    if true  # CPU-only && length(operand.data_c) > 100 && order <= 3
-        # CPU path without LoopVectorization to avoid macro errors
-        for i in eachindex(result.data_c, operand.data_c)
-            k_val = k[i]
+    """Complex Fourier derivative: multiplication by (ik)^order along specified axis.
+
+    For multi-dimensional arrays, applies the derivative only along the specified axis.
+    Complex FFT wavenumbers: [0, 1, ..., N/2-1, -N/2, -(N/2-1), ..., -1]
+    """
+
+    # Build wavenumber array for this axis
+    k_vals = 2π/L * [0:(N÷2-1); -(N÷2):(-1)]
+
+    # Get array dimensions
+    dims = ndims(operand.data_c)
+    data_shape = size(operand.data_c)
+
+    if dims == 1
+        # 1D case: original implementation
+        for i in 1:length(operand.data_c)
+            k_val = k_vals[i]
             factor = (im * k_val)^order
             result.data_c[i] = operand.data_c[i] * factor
         end
+    elseif dims == 2
+        # 2D case: apply derivative along specified axis
+        if axis == 1
+            for i in 1:data_shape[1]
+                k_val = k_vals[i]
+                factor = (im * k_val)^order
+                for j in 1:data_shape[2]
+                    result.data_c[i, j] = operand.data_c[i, j] * factor
+                end
+            end
+        else  # axis == 2
+            for j in 1:data_shape[2]
+                k_val = k_vals[j]
+                factor = (im * k_val)^order
+                for i in 1:data_shape[1]
+                    result.data_c[i, j] = operand.data_c[i, j] * factor
+                end
+            end
+        end
+    elseif dims == 3
+        # 3D case: apply derivative along specified axis
+        if axis == 1
+            for i in 1:data_shape[1]
+                k_val = k_vals[i]
+                factor = (im * k_val)^order
+                for j in 1:data_shape[2], k3 in 1:data_shape[3]
+                    result.data_c[i, j, k3] = operand.data_c[i, j, k3] * factor
+                end
+            end
+        elseif axis == 2
+            for j in 1:data_shape[2]
+                k_val = k_vals[j]
+                factor = (im * k_val)^order
+                for i in 1:data_shape[1], k3 in 1:data_shape[3]
+                    result.data_c[i, j, k3] = operand.data_c[i, j, k3] * factor
+                end
+            end
+        else  # axis == 3
+            for k3 in 1:data_shape[3]
+                k_val = k_vals[k3]
+                factor = (im * k_val)^order
+                for i in 1:data_shape[1], j in 1:data_shape[2]
+                    result.data_c[i, j, k3] = operand.data_c[i, j, k3] * factor
+                end
+            end
+        end
     else
-        # Vectorized or standard version using broadcasting
-        factors = (im .* k).^order
-        result.data_c .= operand.data_c .* factors
+        throw(ArgumentError("Complex Fourier derivative not implemented for $(dims)D arrays"))
     end
 end
 
