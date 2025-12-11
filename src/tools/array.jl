@@ -154,10 +154,11 @@ end
 
 function permute_axis(array::AbstractArray, axis::Int, permutation::Vector{Int})
     """Permute array along specified axis"""
-    
-    # Create permutation matrix
-    P = perm_matrix(permutation)
-    
+
+    # Create permutation matrix (uses perm_matrix from subsystems.jl or local perm_matrix_square)
+    n = length(permutation)
+    P = perm_matrix_square(permutation, n)
+
     # Apply permutation
     return apply_matrix(P, array, axis)
 end

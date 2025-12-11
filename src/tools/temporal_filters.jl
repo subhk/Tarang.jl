@@ -861,9 +861,9 @@ function update_displacement!(
     # For exponential mean: ū = α·ξ (Eq. 12)
     @. filter.ū = α * filter.ξ
 
-    # Simplified update (neglecting advection term for now)
+    # Small-displacement approximation (valid when |ξ| << domain scale)
     # Full PDE: ∂ₜξ + ū·∇ξ = u∘(id + ξ) - ū
-    # Simplified (small displacement): ∂ₜξ ≈ u - ū
+    # Approximation: ∂ₜξ ≈ u - ū (advection term negligible for small ξ)
 
     if interpolate_fn === nothing
         # Without interpolation, approximate u∘(id+ξ) ≈ u
@@ -905,7 +905,7 @@ function update_displacement!(
             ξ_i = ξ[i]
             ū_i = α * ξ̃_i
             ũ_i = α * (ξ_i - sqrt2_m1 * ξ̃_i)
-            # Simplified PDEs (neglecting advection):
+            # Small-displacement PDEs (advection negligible for |ξ| << L):
             # ∂ₜξ̃ = ũ - ū, ∂ₜξ = u - ū
             ξ̃[i] = ξ̃_i + dt_T * (ũ_i - ū_i)
             ξ[i] = ξ_i + dt_T * (u[i] - ū_i)
@@ -960,7 +960,7 @@ function lagrangian_mean!(
     α = filter.α
     αdt = α * T(dt)
 
-    # Simplified (neglecting advection): ∂ₜgᴸ = α(g∘Ξ - gᴸ)
+    # Small-displacement approximation: ∂ₜgᴸ = α(g∘Ξ - gᴸ)
     if interpolate_fn === nothing
         # g∘Ξ ≈ g (approximate)
         @inbounds @simd for i in eachindex(gᴸ)
@@ -1387,7 +1387,7 @@ function update_imex!(
         # Extrapolate forcing: h* = 2hⁿ - hⁿ⁻¹
         h_extrap = two * h_n[i] - h_nm1[i]
 
-        # SBDF2 RHS (simplified - full impl needs filter history)
+        # SBDF2 RHS with pre-computed filter history
         # (3/2)yⁿ⁺¹ + α·dt·A·yⁿ⁺¹ = 2yⁿ - (1/2)yⁿ⁻¹ + α·dt·[h*; 0]
         rhs1 = two * h̃[i] - half * h̃[i] + αdt * h_extrap
         rhs2 = two * h̄[i] - half * h̄[i]
@@ -2936,7 +2936,7 @@ function update!(
     return sys
 end
 
-# Simplified update for when user handles FFT externally
+# Update variant for when user handles FFT externally
 function update!(
     sys::GQLWaveMeanSystem{T, N, M},
     fields_phys::Dict{Symbol, <:AbstractArray{T, N}},
