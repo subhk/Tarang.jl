@@ -5,6 +5,69 @@ Domain class definition
 using LinearAlgebra
 using OrderedCollections: OrderedDict
 
+"""
+    gauss_legendre_weights(N)
+
+Compute Gauss-Legendre quadrature weights for N points on [-1, 1].
+Uses the Newton-Raphson method to find roots of the Legendre polynomial,
+then computes weights from the derivative formula.
+"""
+function gauss_legendre_weights(N::Int)
+    # Compute Gauss-Legendre nodes and weights on [-1, 1]
+    # Using Newton-Raphson iteration
+    x = zeros(N)
+    w = zeros(N)
+
+    # Use symmetry: only need to compute first half
+    m = div(N + 1, 2)
+
+    for i in 1:m
+        # Initial guess using Chebyshev approximation
+        z = cos(π * (i - 0.25) / (N + 0.5))
+
+        # Newton-Raphson iteration
+        for _ in 1:100
+            p1 = 1.0
+            p2 = 0.0
+
+            # Recurrence for Legendre polynomial P_N(z)
+            for j in 1:N
+                p3 = p2
+                p2 = p1
+                p1 = ((2j - 1) * z * p2 - (j - 1) * p3) / j
+            end
+
+            # Derivative: P'_N(z) = N * (z*P_N - P_{N-1}) / (z² - 1)
+            pp = N * (z * p1 - p2) / (z^2 - 1)
+
+            z_old = z
+            z = z_old - p1 / pp
+
+            if abs(z - z_old) < 1e-15
+                break
+            end
+        end
+
+        x[i] = -z
+        x[N + 1 - i] = z
+        w[i] = 2.0 / ((1 - z^2) * (N * (z * 1 - 1 / z) / (z^2 - 1))^2)
+
+        # Correct weight computation: w_i = 2 / ((1 - x_i²) * [P'_N(x_i)]²)
+        p1 = 1.0
+        p2 = 0.0
+        for j in 1:N
+            p3 = p2
+            p2 = p1
+            p1 = ((2j - 1) * z * p2 - (j - 1) * p3) / j
+        end
+        pp = N * (z * p1 - p2) / (z^2 - 1)
+        w[i] = 2.0 / ((1 - z^2) * pp^2)
+        w[N + 1 - i] = w[i]
+    end
+
+    return w
+end
+
 mutable struct DomainPerformanceStats
     total_time::Float64
     coordinate_generations::Int
@@ -346,10 +409,14 @@ function integration_weights(domain::Domain)
             w_cpu .*= L / (N - 1)
             w_cpu
         elseif isa(basis, Legendre)
-            # Gauss-Legendre weights
+            # Gauss-Legendre quadrature weights
+            # For Legendre polynomials on [-1, 1], weights are w_i = 2 / ((1 - x_i²) [P'_n(x_i)]²)
+            # For a general interval [a, b], we scale by (b-a)/2
             N = basis.meta.size
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
-            device_fill(L/N, (N,), domain)  # Placeholder - uniform weights
+            # Compute Gauss-Legendre weights using standard quadrature formula
+            w_cpu = gauss_legendre_weights(N) .* (L / 2)
+            w_cpu
         else
             # Default uniform weights
             L = basis.meta.bounds[2] - basis.meta.bounds[1]
@@ -488,14 +555,32 @@ function log_domain_performance(domain::Domain)
 end
 
 function get_domain_memory_info(domain::Domain)
-    """Return placeholder memory info (CPU-only)."""
+    """
+    Return memory information for CPU-based domains.
+
+    For CPU-only builds, returns system memory info using Sys.free_memory()
+    and Sys.total_memory(). GPU memory tracking would require CUDA.jl extensions.
+    """
     mem = default_memory_info()
+
+    # Estimate domain memory usage from cached arrays
+    domain_mem = 0
+    for (_, arr) in domain.grid_coordinates
+        domain_mem += sizeof(arr)
+    end
+    for (_, arr) in domain.integration_weights_cache
+        domain_mem += sizeof(arr)
+    end
+
+    total_mem = mem.total
+    used_mem = mem.used
+
     return (
-        total_memory = mem.total,
+        total_memory = total_mem,
         available_memory = mem.available,
-        used_memory = mem.used,
-        domain_memory = 0,
-        memory_utilization = 0.0
+        used_memory = used_mem,
+        domain_memory = domain_mem,
+        memory_utilization = total_mem > 0 ? used_mem / total_mem : 0.0
     )
 end
 
