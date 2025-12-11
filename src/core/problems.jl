@@ -406,7 +406,7 @@ function add_equation!(problem::Problem, equation::String)
 end
 
 """
-    add_stochastic_forcing!(problem::IVP, variable, forcing::StochasticForcing)
+    add_stochastic_forcing!(problem::IVP, variable, forcing)
 
 Add stochastic forcing to a variable in the IVP. The forcing will be automatically
 applied to the RHS during timestepping.
@@ -426,8 +426,8 @@ or `apply_forcing!` in your time loop.
 
 - `problem::IVP`: The initial value problem
 - `variable`: Either a field name (String/Symbol) or index (Int) identifying which
-              equation's RHS receives the forcing
-- `forcing::StochasticForcing`: The stochastic forcing configuration
+              variable's RHS receives the forcing
+- `forcing`: The stochastic forcing configuration
 
 ## Example
 
@@ -445,7 +445,7 @@ forcing = StochasticForcing(
 )
 add_stochastic_forcing!(problem, :ω, forcing)
 # or: add_stochastic_forcing!(problem, "ω", forcing)
-# or: add_stochastic_forcing!(problem, 1, forcing)  # first equation
+# or: add_stochastic_forcing!(problem, 1, forcing)  # first variable
 
 # Create solver and run - forcing is handled automatically
 solver = InitialValueSolver(problem, RK443(); dt=dt)
@@ -460,10 +460,10 @@ function add_stochastic_forcing!(problem::IVP, variable, forcing)
     # Resolve variable to index
     var_key = _resolve_variable_key(problem, variable)
 
-    # Store in stochastic_forcings dict
+    # Store in stochastic_forcings dict keyed by variable index
     problem.stochastic_forcings[var_key] = forcing
 
-    @info "Registered stochastic forcing for variable '$variable' (key: $var_key)"
+    @info "Registered stochastic forcing for variable '$variable' (index: $var_key)"
     return problem
 end
 
