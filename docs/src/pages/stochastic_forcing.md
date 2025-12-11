@@ -17,7 +17,7 @@ forcing = StochasticForcing(
     dt = dt
 )
 
-# 2. Register with problem - forcing is handled automatically!
+# 2. Register with problem by variable symbol - forcing is handled automatically!
 add_stochastic_forcing!(problem, :ω, forcing)
 
 # 3. Just call step! - no manual forcing management needed

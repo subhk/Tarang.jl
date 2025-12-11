@@ -406,7 +406,7 @@ function add_equation!(problem::Problem, equation::String)
 end
 
 """
-    add_stochastic_forcing!(problem::IVP, variable, forcing)
+    add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing)
 
 Add stochastic forcing to a variable in the IVP. The forcing will be automatically
 applied to the RHS during timestepping.
@@ -425,8 +425,7 @@ or `apply_forcing!` in your time loop.
 ## Arguments
 
 - `problem::IVP`: The initial value problem
-- `variable`: Either a field name (String/Symbol) or index (Int) identifying which
-              variable's RHS receives the forcing
+- `variable::Symbol`: The variable name (as Symbol) whose RHS receives the forcing
 - `forcing`: The stochastic forcing configuration
 
 ## Example
@@ -444,8 +443,6 @@ forcing = StochasticForcing(
     dt = dt
 )
 add_stochastic_forcing!(problem, :ω, forcing)
-# or: add_stochastic_forcing!(problem, "ω", forcing)
-# or: add_stochastic_forcing!(problem, 1, forcing)  # first variable
 
 # Create solver and run - forcing is handled automatically
 solver = InitialValueSolver(problem, RK443(); dt=dt)
@@ -456,41 +453,26 @@ end
 
 See also: [`StochasticForcing`](@ref), [`generate_forcing!`](@ref)
 """
-function add_stochastic_forcing!(problem::IVP, variable, forcing)
-    # Resolve variable to index
-    var_key = _resolve_variable_key(problem, variable)
+function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing)
+    # Find variable index by name
+    var_name = String(variable)
+    var_idx = nothing
+    for (i, var) in enumerate(problem.variables)
+        if hasproperty(var, :name) && getfield(var, :name) == var_name
+            var_idx = i
+            break
+        end
+    end
+
+    if var_idx === nothing
+        throw(ArgumentError("Variable ':$variable' not found in problem variables"))
+    end
 
     # Store in stochastic_forcings dict keyed by variable index
-    problem.stochastic_forcings[var_key] = forcing
+    problem.stochastic_forcings[var_idx] = forcing
 
-    @info "Registered stochastic forcing for variable '$variable' (index: $var_key)"
+    @info "Registered stochastic forcing for variable :$variable (index: $var_idx)"
     return problem
-end
-
-"""
-    _resolve_variable_key(problem::IVP, variable) -> Int
-
-Resolve a variable identifier (name, symbol, or index) to an integer index.
-"""
-function _resolve_variable_key(problem::IVP, variable)
-    if variable isa Integer
-        if variable < 1 || variable > length(problem.variables)
-            throw(ArgumentError("Variable index $variable out of range [1, $(length(problem.variables))]"))
-        end
-        return Int(variable)
-    elseif variable isa Symbol
-        return _resolve_variable_key(problem, String(variable))
-    elseif variable isa String
-        # Find variable by name
-        for (i, var) in enumerate(problem.variables)
-            if hasproperty(var, :name) && getfield(var, :name) == variable
-                return i
-            end
-        end
-        throw(ArgumentError("Variable '$variable' not found in problem variables"))
-    else
-        throw(ArgumentError("Variable identifier must be String, Symbol, or Integer, got $(typeof(variable))"))
-    end
 end
 
 """
