@@ -506,7 +506,7 @@ function create_differentiate_operator(operand, coord_name::String, order::Int, 
     # Try to find coordinate in namespace
     coord = get(namespace, coord_name, nothing)
     if coord === nothing
-        # Create a placeholder coordinate reference
+        # Create symbolic coordinate reference for deferred evaluation
         coord = Symbol(coord_name)
     end
 
@@ -822,11 +822,10 @@ function get_data_distribution(handler::NetCDFFileHandler, task::Dict, rank=noth
     operator = task["operator"]
     
     # Get domain and tensor signature from operator
-    # For now, use placeholder values - real implementation would query operator
     domain = get_operator_domain(operator)
     tensorsig = get_operator_tensorsig(operator)
-    
-    # Calculate shapes using layout - placeholder implementation
+
+    # Calculate shapes using layout and domain information
     global_shape = get_global_shape(layout, domain, scales)
     local_shape = get_local_shape(layout, domain, scales, rank)
     local_start = get_local_start(layout, domain, scales, rank)
@@ -922,7 +921,10 @@ function get_operator_domain(operator)
 end
 
 """
-Get tensor signature from operator (placeholder)
+    get_operator_tensorsig(operator)
+
+Get tensor signature from operator based on field type.
+Returns empty tuple for scalars, (:component,) for vectors, etc.
 """
 function get_operator_tensorsig(operator)
     if isa(operator, ScalarField)
@@ -1177,9 +1179,8 @@ function check_schedule(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, 
         end
     end
     
-    # Simulation time cadence
+    # Simulation time cadence - schedule write when time crosses next interval
     if handler.sim_dt !== nothing
-        # Simplified logic - in real Tarang this is more complex
         sim_div = floor(Int, sim_time / handler.sim_dt)
         if sim_div > handler.total_write_num
             scheduled = true

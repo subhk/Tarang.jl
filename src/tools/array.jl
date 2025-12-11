@@ -73,7 +73,7 @@ function apply_dense(matrix::AbstractMatrix, array::AbstractArray)
 end
 
 # Note: apply_sparse is defined in subsystems.jl
-# This wrapper provides a simplified interface using apply_matrix
+# This wrapper delegates sparse matrix application to the general apply_matrix function
 function apply_sparse_via_matrix(matrix::SparseMatrixCSC, array::AbstractArray, axis::Int=1)
     """Apply sparse matrix along specified axis (alternative implementation)"""
     return apply_matrix(matrix, array, axis)

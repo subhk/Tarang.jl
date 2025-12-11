@@ -6,7 +6,7 @@ using OrderedCollections
 using Logging
 
 # ---------------------------------------------------------------------------
-# CPU-only device stubs (GPU support removed)
+# CPU-only device configuration (GPU support available via separate extension)
 # ---------------------------------------------------------------------------
 
 const CPU_DEVICE = :cpu

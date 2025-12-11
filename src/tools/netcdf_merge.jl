@@ -225,7 +225,7 @@ function merge_spatial_coordinates!(merger::NetCDFMerger, output_file::String, f
         for file in merger.processor_files
             try
                 coord_data = ncread(file, coord_var)
-                # Try to read attributes (simplified)
+                # Set standard NetCDF coordinate attributes
                 coord_attrs["long_name"] = coord_var
                 coord_attrs["axis"] = occursin("dim1", coord_var) ? "X" : (occursin("dim2", coord_var) ? "Y" : "Z")
                 break
