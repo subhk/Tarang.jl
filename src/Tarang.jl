@@ -168,7 +168,9 @@ export
     compute_forcing_spectrum,
     # Automatic stochastic forcing integration
     add_stochastic_forcing!, has_stochastic_forcing, get_stochastic_forcing,
-    
+    # Automatic temporal filter integration
+    add_temporal_filter!, has_temporal_filters, get_temporal_filter, get_all_temporal_filters,
+
     # Analysis
     GlobalFlowProperty, CFL,
 

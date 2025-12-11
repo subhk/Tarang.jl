@@ -17,9 +17,12 @@ mutable struct IVP <: Problem
     domain::Union{Nothing, Domain}
     bc_manager::BoundaryConditionManager
     equation_data::Vector{Dict{String, Any}}
-    # Stochastic forcing: Dict mapping variable name/index to StochasticForcing
+    # Stochastic forcing: Dict mapping variable index to StochasticForcing
     # Forcing is automatically added to RHS during timestepping
     stochastic_forcings::Dict{Any, Any}
+    # Temporal filters: Dict mapping variable symbol to (filter, source_symbol)
+    # Filters are updated each timestep with the source variable's data
+    temporal_filters::Dict{Symbol, Any}
 end
 
 mutable struct LBVP <: Problem
@@ -92,7 +95,8 @@ function _build_ivp(variables::Vector{<:Operand}; namespace::Union{Nothing, Abst
     ns = build_problem_namespace(vars, namespace)
     return IVP(vars, String[], String[], Dict{String, Any}(), ns,
                nothing, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}(),
-               Dict{Any, Any}())  # Empty stochastic_forcings dict
+               Dict{Any, Any}(),      # Empty stochastic_forcings dict
+               Dict{Symbol, Any}())   # Empty temporal_filters dict
 end
 
 function _build_lbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
@@ -490,6 +494,104 @@ Get the stochastic forcing for a variable (by index), or nothing if none registe
 function get_stochastic_forcing(problem::IVP, var_index::Int)
     return get(problem.stochastic_forcings, var_index, nothing)
 end
+
+# ============================================================================
+# Temporal Filter Integration
+# ============================================================================
+
+"""
+    add_temporal_filter!(problem::IVP, :filter_name, filter, :source_variable)
+
+Register a temporal filter with the problem. The filter will be automatically
+updated each timestep with data from the source variable.
+
+## Arguments
+
+- `problem::IVP`: The initial value problem
+- `filter_name::Symbol`: Name to identify this filter (used to access the mean)
+- `filter::TemporalFilter`: The temporal filter (ExponentialMean, ButterworthFilter, etc.)
+- `source_variable::Symbol`: The variable whose data feeds into the filter
+
+## How It Works
+
+At each timestep, the timestepper automatically:
+1. Gets the current data from the source variable
+2. Calls `update!(filter, data, dt)` to advance the filter state
+3. The filtered mean is available via `get_mean(filter)`
+
+The filtered mean can be accessed in your equations or post-processing via
+`get_temporal_filter(problem, :filter_name)`.
+
+## Example
+
+```julia
+# Create a problem with vorticity
+problem = IVP([ω])
+add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
+
+# Create a Butterworth filter for computing Lagrangian mean
+filter = ButterworthFilter((n, n); α=0.1)  # α = 1/averaging_time
+
+# Register filter to track the filtered mean of ω
+add_temporal_filter!(problem, :ω_mean, filter, :ω)
+
+# Create solver and run
+solver = InitialValueSolver(problem, RK443(); dt=dt)
+for step in 1:nsteps
+    step!(solver)  # Filter is updated automatically!
+
+    # Access the filtered mean
+    ω_bar = get_mean(get_temporal_filter(problem, :ω_mean))
+end
+```
+
+See also: [`ExponentialMean`](@ref), [`ButterworthFilter`](@ref), [`get_mean`](@ref)
+"""
+function add_temporal_filter!(problem::IVP, filter_name::Symbol, filter, source_variable::Symbol)
+    # Validate source variable exists
+    var_name = String(source_variable)
+    found = false
+    for var in problem.variables
+        if hasproperty(var, :name) && getfield(var, :name) == var_name
+            found = true
+            break
+        end
+    end
+
+    if !found
+        throw(ArgumentError("Source variable ':$source_variable' not found in problem variables"))
+    end
+
+    # Store as (filter, source_symbol)
+    problem.temporal_filters[filter_name] = (filter=filter, source=source_variable)
+
+    @info "Registered temporal filter :$filter_name tracking :$source_variable"
+    return problem
+end
+
+"""
+    has_temporal_filters(problem::IVP) -> Bool
+
+Check if the problem has any registered temporal filters.
+"""
+has_temporal_filters(problem::IVP) = !isempty(problem.temporal_filters)
+
+"""
+    get_temporal_filter(problem::IVP, filter_name::Symbol)
+
+Get the temporal filter by name, or nothing if not registered.
+Returns a NamedTuple with fields `filter` and `source`.
+"""
+function get_temporal_filter(problem::IVP, filter_name::Symbol)
+    return get(problem.temporal_filters, filter_name, nothing)
+end
+
+"""
+    get_all_temporal_filters(problem::IVP)
+
+Get all registered temporal filters as a Dict.
+"""
+get_all_temporal_filters(problem::IVP) = problem.temporal_filters
 
 function add_bc!(problem::Problem, bc::String)
     """Add boundary condition to problem (legacy string interface)"""

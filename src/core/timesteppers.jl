@@ -805,6 +805,62 @@ function _update_registered_forcings!(solver::InitialValueSolver, sim_time::Floa
 end
 
 """
+    _update_temporal_filters!(solver::InitialValueSolver, dt::Float64)
+
+Update all temporal filters registered via `add_temporal_filter!`.
+Called at the END of each timestep after the solution has been advanced.
+"""
+function _update_temporal_filters!(solver::InitialValueSolver, dt::Float64)
+    problem = solver.problem
+
+    # Check if problem has temporal_filters field (only IVP does)
+    if !hasfield(typeof(problem), :temporal_filters)
+        return
+    end
+
+    # Skip if no filters registered
+    if isempty(problem.temporal_filters)
+        return
+    end
+
+    # Get variable name to field mapping
+    var_map = Dict{String, Any}()
+    for var in problem.variables
+        if hasproperty(var, :name)
+            var_map[getfield(var, :name)] = var
+        end
+    end
+
+    # Update each registered filter
+    for (filter_name, filter_info) in problem.temporal_filters
+        filter = filter_info.filter
+        source_sym = filter_info.source
+        source_name = String(source_sym)
+
+        if haskey(var_map, source_name)
+            source_var = var_map[source_name]
+            # Get the physical space data from the variable
+            if hasproperty(source_var, :data_g)
+                data = getfield(source_var, :data_g)
+            elseif hasproperty(source_var, :data)
+                data = getfield(source_var, :data)
+            else
+                @warn "Cannot find data for variable $source_name"
+                continue
+            end
+
+            # Update the filter with current data
+            # Use try-catch in case filter types differ
+            try
+                update!(filter, data, dt)
+            catch e
+                @warn "Failed to update temporal filter :$filter_name: $e"
+            end
+        end
+    end
+end
+
+"""
     _workspace_count(timestepper)
 
 Return the number of workspace field sets needed for a timestepper.
@@ -927,6 +983,9 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
     else
         throw(ArgumentError("Unknown timestepper type: $(typeof(state.timestepper))"))
     end
+
+    # Update temporal filters with the new solution
+    _update_temporal_filters!(solver, state.dt)
 
     # Reset forcing flag at the end of timestep (prepare for next forcing generation)
     reset_forcing_flag!(state)
