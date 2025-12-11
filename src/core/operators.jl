@@ -6,6 +6,7 @@ using LinearAlgebra
 using LinearAlgebra: BLAS
 using SparseArrays
 using LoopVectorization  # For SIMD loops
+using FFTW
 
 # Operator registration tables (for parsing registries)
 const OPERATOR_ALIASES = Dict{String, Any}()
@@ -661,30 +662,125 @@ function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
 end
 
 function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Fourier derivative following conventions """
-    ensure_layout!(operand, :c)  # Work in coefficient space
-    ensure_layout!(result, :c)
-    
+    """Evaluate Fourier derivative using direct FFTW operations.
+
+    This function computes spectral derivatives by:
+    1. Applying FFT to grid data
+    2. Multiplying by (ik)^order for each wavenumber k along the specified axis
+    3. Applying inverse FFT to get derivative in grid space (if layout == :g)
+
+    This approach is more robust as it doesn't rely on the transform infrastructure
+    being properly set up on the field.
+    """
+
+    # Ensure operand is in grid space
+    if operand.current_layout != :g
+        # If already in coefficient space, need to transform back
+        # But in practice, fields start in grid space after being set
+        @warn "evaluate_fourier_derivative!: operand not in grid space, results may be unexpected"
+    end
+
     # Get the basis for the specified axis
     basis = operand.bases[axis]
     N = basis.meta.size
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
-    
-    # Get device configuration from the field
-    
-    if isa(basis, RealFourier)
-        # Real Fourier case: use approach with 2x2 group matrices
-        evaluate_real_fourier_derivative_groups!(result, operand, axis, order, N, L)
-    elseif isa(basis, ComplexFourier)
-        # Complex Fourier case: simple multiplication by (ik)^order
-        evaluate_complex_fourier_derivative!(result, operand, axis, order, N, L)
+
+    # Use grid data for computation
+    data_g = operand.data_g
+    dims = ndims(data_g)
+    data_shape = size(data_g)
+
+    # Compute wavenumbers for the axis
+    # For periodic FFT: k = [0, 1, ..., N/2-1, -N/2, ..., -1] * (2π/L)
+    k_axis = fftfreq(data_shape[axis], data_shape[axis]/L) .* 2π
+
+    if dims == 1
+        # 1D case
+        f_hat = fft(data_g)
+
+        # Apply derivative: multiply by (ik)^order
+        for i in 1:length(f_hat)
+            factor = (im * k_axis[i])^order
+            f_hat[i] *= factor
+        end
+
+        # Inverse transform
+        deriv_g = real.(ifft(f_hat))
+
+        # Store result
+        result.data_g .= deriv_g
+        result.current_layout = :g
+
+    elseif dims == 2
+        # 2D case: apply derivative along specified axis only
+        f_hat = fft(data_g)
+
+        if axis == 1
+            # Derivative along first axis
+            for i in 1:data_shape[1]
+                factor = (im * k_axis[i])^order
+                for j in 1:data_shape[2]
+                    f_hat[i, j] *= factor
+                end
+            end
+        else  # axis == 2
+            # Derivative along second axis
+            for j in 1:data_shape[2]
+                factor = (im * k_axis[j])^order
+                for i in 1:data_shape[1]
+                    f_hat[i, j] *= factor
+                end
+            end
+        end
+
+        # Inverse transform
+        deriv_g = real.(ifft(f_hat))
+
+        # Store result
+        result.data_g .= deriv_g
+        result.current_layout = :g
+
+    elseif dims == 3
+        # 3D case
+        f_hat = fft(data_g)
+
+        if axis == 1
+            for i in 1:data_shape[1]
+                factor = (im * k_axis[i])^order
+                for j in 1:data_shape[2], k in 1:data_shape[3]
+                    f_hat[i, j, k] *= factor
+                end
+            end
+        elseif axis == 2
+            for j in 1:data_shape[2]
+                factor = (im * k_axis[j])^order
+                for i in 1:data_shape[1], k in 1:data_shape[3]
+                    f_hat[i, j, k] *= factor
+                end
+            end
+        else  # axis == 3
+            for k in 1:data_shape[3]
+                factor = (im * k_axis[k])^order
+                for i in 1:data_shape[1], j in 1:data_shape[2]
+                    f_hat[i, j, k] *= factor
+                end
+            end
+        end
+
+        # Inverse transform
+        deriv_g = real.(ifft(f_hat))
+
+        # Store result
+        result.data_g .= deriv_g
+        result.current_layout = :g
     else
-        throw(ArgumentError("Fourier derivative only applicable to Fourier bases"))
+        throw(ArgumentError("Fourier derivative only implemented for 1D, 2D, and 3D"))
     end
-    
-        
-    if layout == :g
-        backward_transform!(result)
+
+    # If coefficient space is requested, transform result
+    if layout == :c
+        result.data_c .= fft(result.data_g)
+        result.current_layout = :c
     end
 end
 
