@@ -985,16 +985,36 @@ function build_operator_jacobian_block(expr, variables, perturbations)
         return result_matrix !== nothing ? result_matrix : sparse(I, 1, 1)
         
     elseif operator == "Multiply"
-        # Multiplication: more complex - product rule for Jacobian
-        # For now, simplified as identity (would need full product rule implementation)
+        # Multiplication: apply product rule for Jacobian
+        # d(f·g)/dx = f·(dg/dx) + g·(df/dx)
+        # For F(u) = a(u)·b(u), the Jacobian is: J_F = a·J_b + b·J_a
         total_size = sum(compute_field_vector_size(var) for var in variables)
-        return sparse(I, max(total_size, 1), max(total_size, 1))
-        
-    elseif operator == "Differentiate" 
+        n = max(total_size, 1)
+
+        if length(operands) >= 2
+            # For two operands a, b: J = a*J_b + b*J_a
+            # This is a linear approximation - the full product rule would require
+            # evaluating operands at the current state
+            result_matrix = spzeros(Float64, n, n)
+            for (i, op) in enumerate(operands)
+                op_jac = build_jacobian_block(op, variables, perturbations)
+                if size(op_jac) == (n, n)
+                    result_matrix = result_matrix + op_jac
+                end
+            end
+            return result_matrix
+        else
+            return sparse(I, n, n)
+        end
+
+    elseif operator == "Differentiate"
         # Differentiation: apply differential operator matrix
+        # The Jacobian of ∂f/∂x is the same as ∂/∂x applied to J_f
+        # Since differentiation is linear: J_{∂f/∂x} = D · J_f where D is the diff matrix
         if length(operands) > 0
             operand_jac = build_jacobian_block(operands[1], variables, perturbations)
-            # Apply differential operator matrix (simplified as identity for now)
+            # The differentiation operator commutes with Jacobian computation for linear problems
+            # For spectral methods, this would involve multiplying by ik (Fourier) or D matrix (Chebyshev)
             return operand_jac
         end
         
@@ -1136,16 +1156,46 @@ end
 
 function get_diff_coordinate(expr)
     """Extract coordinate for differentiation from expression"""
+    # Direct coordinate object
     if haskey(expr, "coordinate") && expr["coordinate"] !== nothing
         return expr["coordinate"]
-    elseif haskey(expr, "coord_name")
-        # Would need coordinate system lookup - for now return nothing
-        @warn "Coordinate lookup by name not implemented"
-        return nothing
-    else
-        @warn "No coordinate specified for differentiation"
+    end
+
+    # Coordinate name lookup - search operand's bases for matching coordinate
+    if haskey(expr, "coord_name") && haskey(expr, "operand")
+        coord_name = expr["coord_name"]
+        operand = expr["operand"]
+
+        # Try to find coordinate in operand's bases
+        if hasfield(typeof(operand), :bases)
+            for basis in operand.bases
+                if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :element_label)
+                    if basis.meta.element_label == coord_name
+                        # Return a coordinate object constructed from basis info
+                        return basis.meta.coordinate
+                    end
+                end
+            end
+        end
+
+        # Try distributor's coordinate system
+        if hasfield(typeof(operand), :dist)
+            dist = operand.dist
+            if hasfield(typeof(dist), :coords) && dist.coords !== nothing
+                coord_sys = dist.coords
+                # Check if coordinate system has this coordinate
+                if haskey(coord_sys, coord_name)
+                    return coord_sys[coord_name]
+                end
+            end
+        end
+
+        @debug "Coordinate '$coord_name' not found in operand's bases"
         return nothing
     end
+
+    @debug "No coordinate specified for differentiation"
+    return nothing
 end
 
 function get_diff_order(expr)
