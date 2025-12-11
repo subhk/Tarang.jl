@@ -1188,16 +1188,92 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
 
     # If coefficient space is requested, transform result
     if layout == :c
-        # Apply forward DCT to result
-        N_result = size(result.data_g, 1)
+        # Apply forward DCT to transform grid values to Chebyshev coefficients
+        # This must be done for each Chebyshev axis in the domain
         if dims == 1
+            N_result = size(result.data_g, 1)
             coeffs = FFTW.r2r(result.data_g, FFTW.REDFT00)
             coeffs ./= (N_result - 1)
             coeffs[1] /= 2
             coeffs[end] /= 2
             result.data_c .= coeffs
-        else
-            result.data_c .= result.data_g  # Simplified for now
+        elseif dims == 2
+            # Apply DCT-I along each Chebyshev axis
+            coeffs = copy(result.data_g)
+            data_shape = size(coeffs)
+
+            # Transform along axis 1 if it's a Chebyshev basis
+            if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+                N1 = data_shape[1]
+                for j in 1:data_shape[2]
+                    col = coeffs[:, j]
+                    col_dct = FFTW.r2r(col, FFTW.REDFT00)
+                    col_dct ./= (N1 - 1)
+                    col_dct[1] /= 2
+                    col_dct[end] /= 2
+                    coeffs[:, j] .= col_dct
+                end
+            end
+
+            # Transform along axis 2 if it's a Chebyshev basis
+            if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+                N2 = data_shape[2]
+                for i in 1:data_shape[1]
+                    row = coeffs[i, :]
+                    row_dct = FFTW.r2r(row, FFTW.REDFT00)
+                    row_dct ./= (N2 - 1)
+                    row_dct[1] /= 2
+                    row_dct[end] /= 2
+                    coeffs[i, :] .= row_dct
+                end
+            end
+
+            result.data_c .= coeffs
+        elseif dims == 3
+            # Apply DCT-I along each Chebyshev axis
+            coeffs = copy(result.data_g)
+            data_shape = size(coeffs)
+
+            # Transform along axis 1 if it's a Chebyshev basis
+            if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+                N1 = data_shape[1]
+                for j in 1:data_shape[2], k in 1:data_shape[3]
+                    col = coeffs[:, j, k]
+                    col_dct = FFTW.r2r(col, FFTW.REDFT00)
+                    col_dct ./= (N1 - 1)
+                    col_dct[1] /= 2
+                    col_dct[end] /= 2
+                    coeffs[:, j, k] .= col_dct
+                end
+            end
+
+            # Transform along axis 2 if it's a Chebyshev basis
+            if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+                N2 = data_shape[2]
+                for i in 1:data_shape[1], k in 1:data_shape[3]
+                    slice = coeffs[i, :, k]
+                    slice_dct = FFTW.r2r(slice, FFTW.REDFT00)
+                    slice_dct ./= (N2 - 1)
+                    slice_dct[1] /= 2
+                    slice_dct[end] /= 2
+                    coeffs[i, :, k] .= slice_dct
+                end
+            end
+
+            # Transform along axis 3 if it's a Chebyshev basis
+            if operand.bases[3] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+                N3 = data_shape[3]
+                for i in 1:data_shape[1], j in 1:data_shape[2]
+                    slice = coeffs[i, j, :]
+                    slice_dct = FFTW.r2r(slice, FFTW.REDFT00)
+                    slice_dct ./= (N3 - 1)
+                    slice_dct[1] /= 2
+                    slice_dct[end] /= 2
+                    coeffs[i, j, :] .= slice_dct
+                end
+            end
+
+            result.data_c .= coeffs
         end
         result.current_layout = :c
     end
