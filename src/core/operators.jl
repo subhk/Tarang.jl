@@ -1225,12 +1225,32 @@ Arguments:
 - scale: Domain scaling factor (2/(b-a) for domain [a,b])
 
 Returns the derivative at the same grid points.
+
+Note: The native grid for Chebyshev uses x_k = -cos(πk/(N-1)) which gives points
+in ascending order (from -1 to +1). However, the standard DCT-I assumes points
+cos(πk/(N-1)) in descending order (+1 to -1). To handle this, we reverse the
+data before the DCT-I transform and reverse the result back.
 """
 function chebyshev_derivative_1d(f::AbstractVector, scale::Float64)
     N = length(f)
 
+    # Tarang uses ascending grid: x_k = -cos(πk/(N-1)) for k = 0, 1, ..., N-1
+    # This goes from x_0 = -1 to x_{N-1} = +1
+    #
+    # Standard DCT-I convention uses descending grid: x_k = cos(πk/(N-1))
+    # This goes from x_0 = +1 to x_{N-1} = -1
+    #
+    # To use DCT-I correctly with our ascending grid, we need to:
+    # 1. Reverse f to get function values at standard descending grid points
+    # 2. Compute derivative using standard algorithm
+    # 3. Negate and reverse result to get derivative at ascending grid points
+    #
+    # The negation comes from: if g(y) = f(-y), then g'(y) = -f'(-y)
+
+    f_std = reverse(f)  # Function values at standard (descending) grid points
+
     # Forward DCT-I to get Chebyshev coefficients
-    coeffs_raw = FFTW.r2r(f, FFTW.REDFT00)
+    coeffs_raw = FFTW.r2r(f_std, FFTW.REDFT00)
 
     # Normalize: DCT-I on N points needs (N-1) normalization
     # with boundary coefficients halved
@@ -1255,17 +1275,20 @@ function chebyshev_derivative_1d(f::AbstractVector, scale::Float64)
     # First coefficient has factor of 1/2 due to Chebyshev series normalization
     deriv_coeffs[1] /= 2
 
-    # Apply domain scaling
+    # Apply domain scaling (on standard [-1, 1] domain, scale = 2/(b-a))
     deriv_coeffs .*= scale
 
     # Un-normalize for inverse DCT-I (multiply boundary coefficients by 2)
     deriv_coeffs[1] *= 2
     deriv_coeffs[end] *= 2
 
-    # Inverse DCT-I and normalize
-    deriv_g = FFTW.r2r(deriv_coeffs, FFTW.REDFT00) ./ 2
+    # Inverse DCT-I and normalize to get derivative at standard (descending) grid
+    deriv_std = FFTW.r2r(deriv_coeffs, FFTW.REDFT00) ./ 2
 
-    return deriv_g
+    # Convert derivative back to our ascending grid:
+    # Reverse to reorder points, then negate because df/dx_ascending = -df/dx_descending
+    # when the x coordinates are related by x_ascending = -x_descending
+    return .-reverse(deriv_std)
 end
 
 """
