@@ -662,21 +662,19 @@ function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
 end
 
 function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    """Evaluate Fourier derivative using direct FFTW operations.
+    """Evaluate Fourier derivative using direct FFTW operations along a single axis.
 
     This function computes spectral derivatives by:
-    1. Applying FFT to grid data
-    2. Multiplying by (ik)^order for each wavenumber k along the specified axis
-    3. Applying inverse FFT to get derivative in grid space (if layout == :g)
+    1. Applying FFT along the specified axis only (not full N-D FFT)
+    2. Multiplying by (ik)^order for each wavenumber k along that axis
+    3. Applying inverse FFT along the same axis to get derivative in grid space
 
-    This approach is more robust as it doesn't rely on the transform infrastructure
-    being properly set up on the field.
+    This correctly handles multi-dimensional derivatives where we want d/dx
+    to only apply FFT along the x-axis, not all axes.
     """
 
     # Ensure operand is in grid space
     if operand.current_layout != :g
-        # If already in coefficient space, need to transform back
-        # But in practice, fields start in grid space after being set
         @warn "evaluate_fourier_derivative!: operand not in grid space, results may be unexpected"
     end
 
@@ -686,7 +684,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
 
     # Use grid data for computation
-    data_g = operand.data_g
+    data_g = copy(operand.data_g)  # Make a copy to avoid modifying original
     dims = ndims(data_g)
     data_shape = size(data_g)
 
@@ -695,7 +693,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
     k_axis = fftfreq(data_shape[axis], data_shape[axis]/L) .* 2π
 
     if dims == 1
-        # 1D case
+        # 1D case - FFT along only dimension
         f_hat = fft(data_g)
 
         # Apply derivative: multiply by (ik)^order
@@ -712,11 +710,12 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
         result.current_layout = :g
 
     elseif dims == 2
-        # 2D case: apply derivative along specified axis only
-        f_hat = fft(data_g)
+        # 2D case: apply FFT only along the specified axis
+        # fft(data, axis) does FFT along that axis only
+        f_hat = fft(data_g, axis)
 
         if axis == 1
-            # Derivative along first axis
+            # Derivative along first axis - wavenumbers vary with first index
             for i in 1:data_shape[1]
                 factor = (im * k_axis[i])^order
                 for j in 1:data_shape[2]
@@ -724,7 +723,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
                 end
             end
         else  # axis == 2
-            # Derivative along second axis
+            # Derivative along second axis - wavenumbers vary with second index
             for j in 1:data_shape[2]
                 factor = (im * k_axis[j])^order
                 for i in 1:data_shape[1]
@@ -733,16 +732,16 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
             end
         end
 
-        # Inverse transform
-        deriv_g = real.(ifft(f_hat))
+        # Inverse transform along same axis
+        deriv_g = real.(ifft(f_hat, axis))
 
         # Store result
         result.data_g .= deriv_g
         result.current_layout = :g
 
     elseif dims == 3
-        # 3D case
-        f_hat = fft(data_g)
+        # 3D case: apply FFT only along the specified axis
+        f_hat = fft(data_g, axis)
 
         if axis == 1
             for i in 1:data_shape[1]
@@ -767,8 +766,8 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
             end
         end
 
-        # Inverse transform
-        deriv_g = real.(ifft(f_hat))
+        # Inverse transform along same axis
+        deriv_g = real.(ifft(f_hat, axis))
 
         # Store result
         result.data_g .= deriv_g
@@ -777,7 +776,7 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
         throw(ArgumentError("Fourier derivative only implemented for 1D, 2D, and 3D"))
     end
 
-    # If coefficient space is requested, transform result
+    # If coefficient space is requested, do full FFT on result
     if layout == :c
         result.data_c .= fft(result.data_g)
         result.current_layout = :c
