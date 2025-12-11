@@ -836,34 +836,88 @@ end
 function is_linear_expression(expr, namespace::Dict{String, Any})
     """
     Check if expression contains only linear terms suitable for LHS.
-    
-    This is a simplified check - full implementation would need to:
-    1. Verify all terms are linear in the dependent variables
-    2. Check that time derivatives are first-order only
-    3. Ensure coefficients are constant (non-constant coefficients go to RHS)
+
+    Linear terms are those that can be represented as matrix operations on the
+    solution vector. This includes:
+    1. Terms linear in dependent variables (∂t(u), ∇²u, ν·u, etc.)
+    2. First-order time derivatives only
+    3. Constant coefficients (spatially-varying coefficients require NCC treatment)
+
+    Non-linear terms (u·∇u, u², etc.) must go to RHS.
     """
-    
-    # Simple heuristic checks
+
+    # Zero and constant expressions are trivially linear
     if isa(expr, ZeroOperator) || isa(expr, ConstantOperator)
         return true
-    elseif isa(expr, TimeDerivative)
-        # Time derivatives are linear if the field is linear
-        return expr.order == 1  # First-order time derivatives only
-    elseif isa(expr, Differentiate) || isa(expr, Laplacian) || isa(expr, Gradient)
-        # Spatial derivatives are linear
+    end
+
+    # Time derivatives
+    if isa(expr, TimeDerivative)
+        # First-order time derivatives are linear, higher orders need special treatment
+        if hasfield(typeof(expr), :order)
+            return expr.order == 1
+        end
         return true
-    elseif isa(expr, AddOperator) || isa(expr, SubtractOperator)
-        # Linear combinations are okay
-        return is_linear_expression(expr.left, namespace) && is_linear_expression(expr.right, namespace)
-    elseif isa(expr, MultiplyOperator)
-        # Multiplication is linear if one factor is constant
+    end
+
+    # Spatial differential operators are linear
+    if isa(expr, Differentiate) || isa(expr, Laplacian) || isa(expr, Gradient) ||
+       isa(expr, Divergence) || isa(expr, Curl)
+        # The operator itself is linear; check if operand is a variable or linear expr
+        if hasfield(typeof(expr), :operand)
+            operand = expr.operand
+            # Direct variable reference is linear
+            if is_variable_reference(operand, namespace)
+                return true
+            end
+            # Linear combination of variables is also linear
+            return is_linear_expression(operand, namespace)
+        end
+        return true
+    end
+
+    # Addition/subtraction preserves linearity
+    if isa(expr, AddOperator) || isa(expr, SubtractOperator)
+        left_linear = is_linear_expression(expr.left, namespace)
+        right_linear = is_linear_expression(expr.right, namespace)
+        return left_linear && right_linear
+    end
+
+    # Multiplication is linear only if one factor is a constant coefficient
+    if isa(expr, MultiplyOperator)
         left_constant = is_constant_coefficient(expr.left, namespace)
         right_constant = is_constant_coefficient(expr.right, namespace)
-        return left_constant || right_constant
-    else
-        # Other operations (powers, products of variables, etc.) are nonlinear
-        return false
+        # At least one factor must be constant for linearity
+        if left_constant
+            return is_linear_expression(expr.right, namespace)
+        elseif right_constant
+            return is_linear_expression(expr.left, namespace)
+        else
+            # Product of two non-constant terms is nonlinear
+            return false
+        end
     end
+
+    # Direct variable references are linear
+    if is_variable_reference(expr, namespace)
+        return true
+    end
+
+    # Other operations (powers, products of variables, nonlinear functions) are nonlinear
+    return false
+end
+
+function is_variable_reference(expr, namespace::Dict{String, Any})
+    """Check if expression is a direct reference to a problem variable."""
+    if hasfield(typeof(expr), :name) && isa(getfield(expr, :name), String)
+        var_name = getfield(expr, :name)
+        # Check if this name corresponds to a variable in the namespace
+        if haskey(namespace, var_name)
+            val = namespace[var_name]
+            return isa(val, ScalarField) || isa(val, VectorField) || isa(val, TensorField)
+        end
+    end
+    return false
 end
 
 function is_constant_coefficient(expr, namespace::Dict{String, Any})
@@ -1708,14 +1762,22 @@ function split_time_spatial_operators(operator)
         append!(L_terms, right_L)
         
     elseif isa(operator, SubtractOperator)
-        # Split subtraction terms recursively (with sign handling)
+        # Split subtraction terms recursively
+        # For A - B, we split both and negate the right side terms
         left_M, left_L = split_time_spatial_operators(operator.left)
         right_M, right_L = split_time_spatial_operators(operator.right)
+
+        # Add left terms directly
         append!(M_terms, left_M)
         append!(L_terms, left_L)
-        # Right terms get negative sign (simplified)
-        append!(M_terms, right_M)
-        append!(L_terms, right_L)
+
+        # Right terms need negation - wrap in NegateOperator or multiply by -1
+        for term in right_M
+            push!(M_terms, NegateOperator(term))
+        end
+        for term in right_L
+            push!(L_terms, NegateOperator(term))
+        end
         
     elseif hasfield(typeof(operator), :name)
         # Direct variable reference -> identity in L
