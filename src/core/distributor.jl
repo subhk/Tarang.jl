@@ -494,10 +494,9 @@ function local_indices(dist::Distributor, axis::Int)
     end
 
     # Get process position in mesh for this axis
-    procs_per_axis = dist.mesh[axis]
-    proc_idx = dist.rank % procs_per_axis
-
-    # Return a placeholder - actual indices need global size
+    # Without knowing the global size, we cannot compute the exact local range.
+    # Return Colon() which indicates "all indices" - the caller should use
+    # local_indices(dist, axis, global_size) when the global size is known.
     return Colon()
 end
 
