@@ -1,6 +1,49 @@
 # Stochastic Forcing
 
-This example demonstrates how to set up a forced-dissipative 2D turbulence simulation, following the approach from [GeophysicalFlows.jl](https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/stochastic_forcing/).
+This page demonstrates how to set up a forced-dissipative 2D turbulence simulation, following the approach from [GeophysicalFlows.jl](https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/stochastic_forcing/).
+
+---
+
+## TL;DR - Automatic Forcing (Recommended)
+
+The simplest way to add stochastic forcing is using `add_stochastic_forcing!`:
+
+```julia
+# 1. Create forcing
+forcing = StochasticForcing(
+    field_size = (256, 256),
+    energy_injection_rate = 0.1,
+    k_forcing = 10.0,
+    dt = dt
+)
+
+# 2. Register with problem - forcing is handled automatically!
+add_stochastic_forcing!(problem, :ω, forcing)
+
+# 3. Just call step! - no manual forcing management needed
+for step in 1:nsteps
+    step!(solver)  # Forcing generated & applied internally
+end
+```
+
+The timestepper automatically:
+- Generates forcing ONCE at the start of each timestep
+- Uses the SAME forcing value across all RK substeps
+- Adds forcing to the RHS of the specified equation
+
+This ensures correct **Stratonovich calculus** without any manual intervention.
+
+---
+
+## Why Stochastic Forcing Needs Special Handling
+
+White-in-time noise requires careful handling for correct statistics:
+
+1. **Stratonovich vs Itô**: Physical systems use Stratonovich calculus where the chain rule works normally
+2. **Constant within timestep**: For Stratonovich correctness, forcing must be constant across all RK substeps
+3. **√dt scaling**: Discrete forcing needs `F = √(Q̂/dt) · noise` to give correct variance
+
+If you wrote forcing as a regular RHS term, it would be evaluated at each RK stage with different random values - this gives **wrong statistics** (Itô instead of Stratonovich).
 
 ---
 
@@ -82,10 +125,13 @@ println("  ε = $(ε)")
 problem = IVP([ω])
 
 # Vorticity equation: ∂ω/∂t = -μω + ν∇²ω - J(ψ,ω) + ξ
-# (Forcing ξ is added separately via the forcing mechanism)
+# Note: Forcing ξ is NOT in the equation string - it's added automatically!
 add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
 problem.parameters["ν"] = ν
 problem.parameters["μ"] = μ
+
+# Register stochastic forcing - it will be added to ω's RHS automatically
+add_stochastic_forcing!(problem, :ω, forcing)
 
 solver = InitialValueSolver(problem, RK443(); dt=dt, device="cpu")
 
@@ -124,20 +170,13 @@ println("\nStarting simulation...")
 println("=" ^ 60)
 
 for step in 1:nsteps
-    # Store previous solution for Stratonovich work calculation
+    # Store previous solution for Stratonovich work calculation (optional diagnostic)
     store_prevsol!(forcing, ω.data_c)
 
-    # Generate forcing (only regenerates on substep 1)
-    F_hat = generate_forcing!(forcing, solver.sim_time, 1)
-
-    # Apply forcing to RHS
-    # (In actual implementation, this is done inside the timestepper)
-    apply_forcing!(ω.data_c, forcing, solver.sim_time, 1)
-
-    # Advance one timestep
+    # Advance one timestep - forcing is generated and applied automatically!
     step!(solver)
 
-    # Compute work done by forcing (Stratonovich)
+    # Compute work done by forcing (Stratonovich) - optional diagnostic
     W = work_stratonovich(forcing, ω.data_c)
 
     # Periodic diagnostics

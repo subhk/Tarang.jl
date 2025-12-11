@@ -17,6 +17,9 @@ mutable struct IVP <: Problem
     domain::Union{Nothing, Domain}
     bc_manager::BoundaryConditionManager
     equation_data::Vector{Dict{String, Any}}
+    # Stochastic forcing: Dict mapping variable name/index to StochasticForcing
+    # Forcing is automatically added to RHS during timestepping
+    stochastic_forcings::Dict{Any, Any}
 end
 
 mutable struct LBVP <: Problem
@@ -88,7 +91,8 @@ function _build_ivp(variables::Vector{<:Operand}; namespace::Union{Nothing, Abst
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return IVP(vars, String[], String[], Dict{String, Any}(), ns,
-               nothing, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
+               nothing, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}(),
+               Dict{Any, Any}())  # Empty stochastic_forcings dict
 end
 
 function _build_lbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
@@ -399,6 +403,110 @@ end
 function add_equation!(problem::Problem, equation::String)
     """Add equation to problem"""
     push!(problem.equations, equation)
+end
+
+"""
+    add_stochastic_forcing!(problem::IVP, variable, forcing::StochasticForcing)
+
+Add stochastic forcing to a variable in the IVP. The forcing will be automatically
+applied to the RHS during timestepping.
+
+## Why This Exists
+
+Stochastic forcing requires special handling for correct Stratonovich calculus:
+- Forcing must be generated ONCE at the beginning of each timestep
+- The SAME forcing value must be used across all RK substeps
+- This ensures correct statistical properties for white-in-time noise
+
+By registering forcing with `add_stochastic_forcing!`, the timestepper handles
+all of this automatically - you don't need to manually call `generate_forcing!`
+or `apply_forcing!` in your time loop.
+
+## Arguments
+
+- `problem::IVP`: The initial value problem
+- `variable`: Either a field name (String/Symbol) or index (Int) identifying which
+              equation's RHS receives the forcing
+- `forcing::StochasticForcing`: The stochastic forcing configuration
+
+## Example
+
+```julia
+# Create problem
+problem = IVP([ω])
+add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
+
+# Create and register forcing - it will be added to RHS automatically!
+forcing = StochasticForcing(
+    field_size = (256, 256),
+    energy_injection_rate = 0.1,
+    k_forcing = 10.0,
+    dt = dt
+)
+add_stochastic_forcing!(problem, :ω, forcing)
+# or: add_stochastic_forcing!(problem, "ω", forcing)
+# or: add_stochastic_forcing!(problem, 1, forcing)  # first equation
+
+# Create solver and run - forcing is handled automatically
+solver = InitialValueSolver(problem, RK443(); dt=dt)
+for step in 1:nsteps
+    step!(solver)  # Forcing is generated and applied internally!
+end
+```
+
+See also: [`StochasticForcing`](@ref), [`generate_forcing!`](@ref)
+"""
+function add_stochastic_forcing!(problem::IVP, variable, forcing)
+    # Resolve variable to index
+    var_key = _resolve_variable_key(problem, variable)
+
+    # Store in stochastic_forcings dict
+    problem.stochastic_forcings[var_key] = forcing
+
+    @info "Registered stochastic forcing for variable '$variable' (key: $var_key)"
+    return problem
+end
+
+"""
+    _resolve_variable_key(problem::IVP, variable) -> Int
+
+Resolve a variable identifier (name, symbol, or index) to an integer index.
+"""
+function _resolve_variable_key(problem::IVP, variable)
+    if variable isa Integer
+        if variable < 1 || variable > length(problem.variables)
+            throw(ArgumentError("Variable index $variable out of range [1, $(length(problem.variables))]"))
+        end
+        return Int(variable)
+    elseif variable isa Symbol
+        return _resolve_variable_key(problem, String(variable))
+    elseif variable isa String
+        # Find variable by name
+        for (i, var) in enumerate(problem.variables)
+            if hasproperty(var, :name) && getfield(var, :name) == variable
+                return i
+            end
+        end
+        throw(ArgumentError("Variable '$variable' not found in problem variables"))
+    else
+        throw(ArgumentError("Variable identifier must be String, Symbol, or Integer, got $(typeof(variable))"))
+    end
+end
+
+"""
+    has_stochastic_forcing(problem::IVP) -> Bool
+
+Check if the problem has any registered stochastic forcings.
+"""
+has_stochastic_forcing(problem::IVP) = !isempty(problem.stochastic_forcings)
+
+"""
+    get_stochastic_forcing(problem::IVP, var_index::Int)
+
+Get the stochastic forcing for a variable (by index), or nothing if none registered.
+"""
+function get_stochastic_forcing(problem::IVP, var_index::Int)
+    return get(problem.stochastic_forcings, var_index, nothing)
 end
 
 function add_bc!(problem::Problem, bc::String)

@@ -166,6 +166,8 @@ export
     apply_forcing!, get_forcing_real,
     energy_injection_rate, instantaneous_power,
     compute_forcing_spectrum,
+    # Automatic stochastic forcing integration
+    add_stochastic_forcing!, has_stochastic_forcing, get_stochastic_forcing,
     
     # Analysis
     GlobalFlowProperty, CFL,

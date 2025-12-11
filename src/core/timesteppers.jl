@@ -778,6 +778,33 @@ function get_cached_forcing(state::TimestepperState)
 end
 
 """
+    _update_registered_forcings!(solver::InitialValueSolver, sim_time::Float64, dt::Float64)
+
+Generate new forcing realizations for all forcings registered via `add_stochastic_forcing!`.
+Called ONCE at the beginning of each timestep to ensure Stratonovich calculus correctness.
+"""
+function _update_registered_forcings!(solver::InitialValueSolver, sim_time::Float64, dt::Float64)
+    problem = solver.problem
+
+    # Check if problem has stochastic_forcings field (only IVP does)
+    if !hasfield(typeof(problem), :stochastic_forcings)
+        return
+    end
+
+    # Generate forcing for each registered forcing
+    for (var_idx, forcing) in problem.stochastic_forcings
+        # Update dt if it changed
+        if hasfield(typeof(forcing), :dt) && forcing.dt != dt
+            forcing.dt = dt
+        end
+
+        # Generate new forcing realization
+        # Substep=1 ensures forcing is actually regenerated (not just cached)
+        generate_forcing!(forcing, sim_time, 1)
+    end
+end
+
+"""
     _workspace_count(timestepper)
 
 Return the number of workspace field sets needed for a timestepper.
@@ -854,6 +881,11 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
     # Generate stochastic forcing ONCE at the beginning of the timestep
     # This ensures forcing is constant across all substeps (critical for Stratonovich)
     update_forcing!(state, solver.sim_time)
+
+    # Also generate forcing for any forcings registered via add_stochastic_forcing!
+    # These are stored in problem.stochastic_forcings Dict
+    _update_registered_forcings!(solver, solver.sim_time, state.dt)
+
     state.current_substep = 1  # Reset substep counter
 
     # IMEX Runge-Kutta methods (Dedalus-compatible)
@@ -2799,16 +2831,38 @@ function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, ti
         end
         
         @debug "Evaluated RHS for $(length(rhs)) equations at time $time"
-        
+
+        # Add stochastic forcing if registered (automatic handling)
+        # Forcing was already generated once at the start of the timestep by step!()
+        # The same cached forcing is reused for all RK substeps (Stratonovich correct)
+        if hasfield(typeof(problem), :stochastic_forcings) && !isempty(problem.stochastic_forcings)
+            for (var_idx, forcing) in problem.stochastic_forcings
+                if var_idx <= length(rhs)
+                    rhs_field = rhs[var_idx]
+                    # Get cached forcing (already generated at timestep start)
+                    F = forcing.cached_forcing
+
+                    # Add forcing to RHS in coefficient space
+                    ensure_layout!(rhs_field, :c)
+                    if size(rhs_field.data_c) == size(F)
+                        rhs_field.data_c .+= F
+                        @debug "Added stochastic forcing to equation $var_idx"
+                    else
+                        @warn "Forcing size $(size(F)) doesn't match RHS size $(size(rhs_field.data_c)) for equation $var_idx"
+                    end
+                end
+            end
+        end
+
     catch e
         @error "RHS evaluation failed: $e"
         # Fallback: create zero fields
         for field in state
-            rhs_field = create_zero_field(field)  
+            rhs_field = create_zero_field(field)
             push!(rhs, rhs_field)
         end
     end
-    
+
     return rhs
 end
 
