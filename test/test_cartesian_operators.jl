@@ -274,13 +274,12 @@ end
 # ============================================================================
 
 @testset "Cartesian Gradient Operator" begin
-    @testset "Gradient explicit evaluation 2D - $basis_name" for (basis_name, basis_builder) in [
-        ("FF", build_FF), ("FC", build_FC), ("CC", build_CC)
-    ]
+    # Test Fourier-Fourier with trigonometric function (exact for periodic)
+    @testset "Gradient explicit evaluation 2D - FF" begin
         for N in N_range
             for dealias in dealias_range
                 @testset "N=$N, dealias=$dealias" begin
-                    coords, dist, bases, r = basis_builder(N, dealias, Float64)
+                    coords, dist, bases, r = build_FF(N, dealias, Float64)
                     x, y = r
 
                     # Create test scalar field: f = sin(2π*x/Lx) * cos(2π*y/Ly)
@@ -309,6 +308,91 @@ end
                         for j in eachindex(y)
                             expected_gx[i, j] = kx * cos(kx * x[i]) * cos(ky * y[j])
                             expected_gy[i, j] = -ky * sin(kx * x[i]) * sin(ky * y[j])
+                        end
+                    end
+
+                    @test isapprox(g.components[1].data_g, expected_gx, rtol=1e-6)
+                    @test isapprox(g.components[2].data_g, expected_gy, rtol=1e-6)
+                end
+            end
+        end
+    end
+
+    # Test Fourier-Chebyshev with mixed function:
+    # - Fourier (x): use sin(kx*x) which Fourier can represent exactly
+    # - Chebyshev (y): use polynomial y^2 which Chebyshev can represent exactly
+    # f = sin(kx*x) * y^2, ∂f/∂x = kx*cos(kx*x)*y^2, ∂f/∂y = sin(kx*x)*2*y
+    @testset "Gradient explicit evaluation 2D - FC" begin
+        for N in N_range
+            for dealias in dealias_range
+                @testset "N=$N, dealias=$dealias" begin
+                    coords, dist, bases, r = build_FC(N, dealias, Float64)
+                    x, y = r
+
+                    f = ScalarField(dist, "f", bases, Float64)
+                    kx = 2π / Lx  # Fourier direction
+
+                    # Set field: f = sin(kx*x) * y^2
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            f.data_g[i, j] = sin(kx * x[i]) * y[j]^2
+                        end
+                    end
+                    f.current_layout = :g
+
+                    # Evaluate gradient
+                    grad_op = CartesianGradient(f, coords)
+                    g = evaluate(grad_op, :g)
+
+                    # Expected: ∂f/∂x = kx*cos(kx*x)*y^2, ∂f/∂y = sin(kx*x)*2*y
+                    expected_gx = zeros(length(x), length(y))
+                    expected_gy = zeros(length(x), length(y))
+
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            expected_gx[i, j] = kx * cos(kx * x[i]) * y[j]^2
+                            expected_gy[i, j] = sin(kx * x[i]) * 2 * y[j]
+                        end
+                    end
+
+                    @test isapprox(g.components[1].data_g, expected_gx, rtol=1e-6)
+                    @test isapprox(g.components[2].data_g, expected_gy, rtol=1e-6)
+                end
+            end
+        end
+    end
+
+    # Test Chebyshev-Chebyshev with polynomial function (exact for Chebyshev)
+    # f = x^2 * y^2, ∂f/∂x = 2*x*y^2, ∂f/∂y = x^2*2*y
+    @testset "Gradient explicit evaluation 2D - CC" begin
+        for N in N_range
+            for dealias in dealias_range
+                @testset "N=$N, dealias=$dealias" begin
+                    coords, dist, bases, r = build_CC(N, dealias, Float64)
+                    x, y = r
+
+                    f = ScalarField(dist, "f", bases, Float64)
+
+                    # Set field: f = x^2 * y^2 (polynomial - exact for Chebyshev)
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            f.data_g[i, j] = x[i]^2 * y[j]^2
+                        end
+                    end
+                    f.current_layout = :g
+
+                    # Evaluate gradient
+                    grad_op = CartesianGradient(f, coords)
+                    g = evaluate(grad_op, :g)
+
+                    # Expected: ∂f/∂x = 2*x*y^2, ∂f/∂y = x^2*2*y
+                    expected_gx = zeros(length(x), length(y))
+                    expected_gy = zeros(length(x), length(y))
+
+                    for i in eachindex(x)
+                        for j in eachindex(y)
+                            expected_gx[i, j] = 2 * x[i] * y[j]^2
+                            expected_gy[i, j] = x[i]^2 * 2 * y[j]
                         end
                     end
 

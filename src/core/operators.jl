@@ -1106,8 +1106,7 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     where U_n are Chebyshev polynomials of the second kind.
 
     Using the recurrence relation for derivatives in terms of T_n:
-    c'_k = (2/c_k) * sum_{j>k, j-k odd} j * c_j
-    where c_0 uses 1 instead of 2 in the normalization.
+    c'_{n-1} = 2*n*c_n + c'_{n+1}  (backward recurrence)
     """
 
     # Get the basis for the specified axis
@@ -1125,18 +1124,8 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
 
     if dims == 1
         # 1D case: use DCT directly
-        # Forward transform: use DCT-I to get Chebyshev coefficients
-        coeffs = FFTW.r2r(data_g, FFTW.REDFT00)
-
-        # Normalize DCT-I output
-        coeffs ./= (2 * (N - 1))
-
-        # Apply Chebyshev derivative recurrence
-        deriv_coeffs = zeros(eltype(coeffs), N)
-        chebyshev_derivative_recurrence!(deriv_coeffs, coeffs, scale)
-
-        # Inverse transform: DCT-I is its own inverse (up to normalization)
-        result.data_g .= FFTW.r2r(deriv_coeffs, FFTW.REDFT00)
+        deriv_g = chebyshev_derivative_1d(data_g, scale)
+        result.data_g .= deriv_g
         result.current_layout = :g
 
     elseif dims == 2
@@ -1147,35 +1136,17 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
             # Derivative along first axis: process each column
             for j in 1:data_shape[2]
                 col = data_g[:, j]
-                N_axis = length(col)
-
-                # Forward DCT-I
-                coeffs = FFTW.r2r(col, FFTW.REDFT00)
-                coeffs ./= (2 * (N_axis - 1))
-
-                # Apply derivative recurrence
-                deriv_coeffs = zeros(eltype(coeffs), N_axis)
-                chebyshev_derivative_recurrence!(deriv_coeffs, coeffs, scale)
-
-                # Inverse DCT-I
-                deriv_g[:, j] .= FFTW.r2r(deriv_coeffs, FFTW.REDFT00)
+                deriv_g[:, j] .= chebyshev_derivative_1d(col, scale)
             end
         else  # axis == 2
             # Derivative along second axis: process each row
+            # Get scale factor for axis 2
+            basis2 = operand.bases[2]
+            a2, b2 = basis2.meta.bounds
+            scale2 = 2.0 / (b2 - a2)
             for i in 1:data_shape[1]
                 row = data_g[i, :]
-                N_axis = length(row)
-
-                # Forward DCT-I
-                coeffs = FFTW.r2r(row, FFTW.REDFT00)
-                coeffs ./= (2 * (N_axis - 1))
-
-                # Apply derivative recurrence
-                deriv_coeffs = zeros(eltype(coeffs), N_axis)
-                chebyshev_derivative_recurrence!(deriv_coeffs, coeffs, scale)
-
-                # Inverse DCT-I
-                deriv_g[i, :] .= FFTW.r2r(deriv_coeffs, FFTW.REDFT00)
+                deriv_g[i, :] .= chebyshev_derivative_1d(row, scale2)
             end
         end
 
@@ -1189,32 +1160,23 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
         if axis == 1
             for j in 1:data_shape[2], k in 1:data_shape[3]
                 col = data_g[:, j, k]
-                N_axis = length(col)
-                coeffs = FFTW.r2r(col, FFTW.REDFT00)
-                coeffs ./= (2 * (N_axis - 1))
-                deriv_coeffs = zeros(eltype(coeffs), N_axis)
-                chebyshev_derivative_recurrence!(deriv_coeffs, coeffs, scale)
-                deriv_g[:, j, k] .= FFTW.r2r(deriv_coeffs, FFTW.REDFT00)
+                deriv_g[:, j, k] .= chebyshev_derivative_1d(col, scale)
             end
         elseif axis == 2
+            basis2 = operand.bases[2]
+            a2, b2 = basis2.meta.bounds
+            scale2 = 2.0 / (b2 - a2)
             for i in 1:data_shape[1], k in 1:data_shape[3]
                 slice = data_g[i, :, k]
-                N_axis = length(slice)
-                coeffs = FFTW.r2r(slice, FFTW.REDFT00)
-                coeffs ./= (2 * (N_axis - 1))
-                deriv_coeffs = zeros(eltype(coeffs), N_axis)
-                chebyshev_derivative_recurrence!(deriv_coeffs, coeffs, scale)
-                deriv_g[i, :, k] .= FFTW.r2r(deriv_coeffs, FFTW.REDFT00)
+                deriv_g[i, :, k] .= chebyshev_derivative_1d(slice, scale2)
             end
         else  # axis == 3
+            basis3 = operand.bases[3]
+            a3, b3 = basis3.meta.bounds
+            scale3 = 2.0 / (b3 - a3)
             for i in 1:data_shape[1], j in 1:data_shape[2]
                 slice = data_g[i, j, :]
-                N_axis = length(slice)
-                coeffs = FFTW.r2r(slice, FFTW.REDFT00)
-                coeffs ./= (2 * (N_axis - 1))
-                deriv_coeffs = zeros(eltype(coeffs), N_axis)
-                chebyshev_derivative_recurrence!(deriv_coeffs, coeffs, scale)
-                deriv_g[i, j, :] .= FFTW.r2r(deriv_coeffs, FFTW.REDFT00)
+                deriv_g[i, j, :] .= chebyshev_derivative_1d(slice, scale3)
             end
         end
 
@@ -1227,8 +1189,13 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     # If coefficient space is requested, transform result
     if layout == :c
         # Apply forward DCT to result
+        N_result = size(result.data_g, 1)
         if dims == 1
-            result.data_c .= FFTW.r2r(result.data_g, FFTW.REDFT00) ./ (2 * (N - 1))
+            coeffs = FFTW.r2r(result.data_g, FFTW.REDFT00)
+            coeffs ./= (N_result - 1)
+            coeffs[1] /= 2
+            coeffs[end] /= 2
+            result.data_c .= coeffs
         else
             result.data_c .= result.data_g  # Simplified for now
         end
@@ -1246,6 +1213,59 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
             temp = copy(result.data_g)
         end
     end
+end
+
+"""
+    chebyshev_derivative_1d(f, scale)
+
+Compute the Chebyshev spectral derivative of a 1D array using DCT-I.
+
+Arguments:
+- f: Function values at Chebyshev-Gauss-Lobatto points
+- scale: Domain scaling factor (2/(b-a) for domain [a,b])
+
+Returns the derivative at the same grid points.
+"""
+function chebyshev_derivative_1d(f::AbstractVector, scale::Float64)
+    N = length(f)
+
+    # Forward DCT-I to get Chebyshev coefficients
+    coeffs_raw = FFTW.r2r(f, FFTW.REDFT00)
+
+    # Normalize: DCT-I on N points needs (N-1) normalization
+    # with boundary coefficients halved
+    coeffs = copy(coeffs_raw)
+    coeffs ./= (N - 1)
+    coeffs[1] /= 2
+    coeffs[end] /= 2
+
+    # Apply Chebyshev derivative recurrence: c'_{k-1} = 2k * c_k + c'_{k+1}
+    # In Julia's 1-indexing: c'[k] = 2*k * c[k+1] + c'[k+2]
+    deriv_coeffs = zeros(eltype(coeffs), N)
+    deriv_coeffs[N] = 0.0
+
+    for k in (N-1):-1:1
+        if k + 2 <= N
+            deriv_coeffs[k] = 2 * k * coeffs[k + 1] + deriv_coeffs[k + 2]
+        else
+            deriv_coeffs[k] = 2 * k * coeffs[k + 1]
+        end
+    end
+
+    # First coefficient has factor of 1/2 due to Chebyshev series normalization
+    deriv_coeffs[1] /= 2
+
+    # Apply domain scaling
+    deriv_coeffs .*= scale
+
+    # Un-normalize for inverse DCT-I (multiply boundary coefficients by 2)
+    deriv_coeffs[1] *= 2
+    deriv_coeffs[end] *= 2
+
+    # Inverse DCT-I and normalize
+    deriv_g = FFTW.r2r(deriv_coeffs, FFTW.REDFT00) ./ 2
+
+    return deriv_g
 end
 
 """
