@@ -1286,9 +1286,10 @@ function chebyshev_derivative_1d(f::AbstractVector, scale::Float64)
     deriv_std = FFTW.r2r(deriv_coeffs, FFTW.REDFT00) ./ 2
 
     # Convert derivative back to our ascending grid:
-    # Reverse to reorder points, then negate because df/dx_ascending = -df/dx_descending
-    # when the x coordinates are related by x_ascending = -x_descending
-    return .-reverse(deriv_std)
+    # Just reverse to reorder points from ascending to match our grid ordering.
+    # The derivative values are the same regardless of point ordering convention,
+    # we just need to reorder them to match Tarang's ascending point convention.
+    return reverse(deriv_std)
 end
 
 """
