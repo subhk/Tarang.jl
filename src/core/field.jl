@@ -1075,7 +1075,7 @@ function require_grid_space!(field::ScalarField, axis::Union{Int, Nothing}=nothi
         end
     else
         # For specific axis: ensure field is in grid space
-        # Note: Tarang uses a simplified two-state layout model (:c and :g)
+        # Tarang uses a two-state layout model (:c for coefficient, :g for grid)
         # rather than per-axis tracking. For single-axis requirements,
         # we transform the entire field to grid space, which ensures the
         # requested axis is in grid space along with all others.
@@ -1099,7 +1099,7 @@ function require_coeff_space!(field::ScalarField, axis::Union{Int, Nothing}=noth
         end
     else
         # For specific axis: ensure field is in coefficient space
-        # Note: Tarang uses a simplified two-state layout model (:c and :g)
+        # Tarang uses a two-state layout model (:c for coefficient, :g for grid)
         # rather than per-axis tracking. For single-axis requirements,
         # we transform the entire field to coefficient space, which ensures
         # the requested axis is in coefficient space along with all others.

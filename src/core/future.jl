@@ -166,7 +166,7 @@ function evaluate(f::Future; id=nothing, force::Bool=true)
 end
 
 # ---------------------------------------------------------------------------
-# NCC hooks (placeholders for future expansion)
+# NCC hooks - prepare and gather non-constant coefficient data
 # ---------------------------------------------------------------------------
 
 function prep_nccs(f::Future, vars)

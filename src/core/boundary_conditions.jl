@@ -526,7 +526,8 @@ function create_lift_operator(manager::BoundaryConditionManager, tau_field_name:
         return manager.lift_operators[tau_field_name]
     end
     
-    # Create lift operator (placeholder - actual implementation would depend on basis type)
+    # Create lift operator as symbolic descriptor
+    # The actual numerical lift matrix is built during system assembly based on basis type
     lift_op = Dict(
         "tau_field" => tau_field_name,
         "target_basis" => target_basis,

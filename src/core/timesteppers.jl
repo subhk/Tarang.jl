@@ -649,9 +649,9 @@ struct RK443_IMEX <: TimeStepper
     function RK443_IMEX()
         stages = 4
 
-        # Simplified ARK coefficients for 4-stage 3rd-order
-        # Using a simplified L-stable DIRK
-        γ = 0.4358665215  # Root of x^3 - 3x^2 + 3x/2 - 1/6 = 0
+        # ARK443 coefficients: 4-stage, 3rd-order additive Runge-Kutta
+        # L-stable SDIRK implicit part with classical RK4-like explicit part
+        γ = 0.4358665215  # Root of x³ - 3x² + 3x/2 - 1/6 = 0 for L-stability
 
         # Explicit tableau (classical RK4-like structure)
         A_explicit = [

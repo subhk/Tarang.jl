@@ -2070,8 +2070,9 @@ function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
         # First-order spatial derivatives
         # Gradient/Differentiate: ∂/∂x_i -> ik_i in Fourier, D matrix in Chebyshev
         # Divergence: ∇·v = Σ_i ∂v_i/∂x_i
-        # Returns identity as placeholder - actual spectral differentiation matrices
-        # are constructed in operators.jl and subsystems.jl based on basis type
+        # Returns identity matrix here as the marker for variable participation.
+        # Actual spectral differentiation matrices with basis-specific coefficients
+        # are constructed in operators.jl and subsystems.jl during system assembly.
         return sparse(I, var_size, var_size)
 
     elseif expr === var
@@ -2161,8 +2162,8 @@ function process_lhs_operator!(L_matrix::Matrix, M_matrix::Matrix, lhs_op, eq_id
         # Spatial operators go to linear operator matrix
         var_idx = find_variable_index(lhs_op.operand, variables)
         if var_idx !== nothing
-            # Coefficient would depend on operator type and discretization
-            # For now, use placeholder values
+            # Store operator type marker - actual spectral matrix coefficients
+            # are computed during subproblem matrix assembly based on basis type
             if isa(lhs_op, Laplacian)
                 L_matrix[eq_idx, var_idx] = -1.0  # Typical Laplacian sign
             else

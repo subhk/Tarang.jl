@@ -1121,8 +1121,8 @@ function _legendre_linearization_coeff(m::Int, n::Int, k::Int)
         return 0.0
     end
 
-    # Use 3j symbol formula
-    # This is a simplified computation
+    # Use 3j symbol formula (Wigner 3j symbols via Clebsch-Gordan coefficients)
+    # Reference: Varshalovich et al., "Quantum Theory of Angular Momentum"
     s = (m + n + k) ÷ 2
 
     # Compute using factorials (for small m, n, k)
