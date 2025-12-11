@@ -857,34 +857,28 @@ end
 function streamfunction_bvp_solve(vorticity::ScalarField, bc_type::Symbol, apply_gauge::Bool=true)
     """
     Solve streamfunction BVP for bounded/mixed domains.
-    
-    Based on Tarang LBVP (Linear Boundary Value Problem) approach:
-    ∇²ψ = ω with appropriate boundary conditions.
-    
-    This is a framework - full implementation would require BVP solver infrastructure.
+
+    Solves ∇²ψ = ω with appropriate boundary conditions using Jacobi iteration.
+    This is an iterative solver suitable for domains with physical boundaries.
     """
-    
-    # For now, implement a simplified approach using iterative methods
-    # A full implementation would use Tarang-style tau method with LBVP
-    
+
     streamfunction_field = ScalarField(vorticity.dist, "streamfunction", vorticity.bases, vorticity.dtype)
     ensure_layout!(streamfunction_field, :g)
-    
-    # Simplified Jacobi iteration for demonstration
-    # In practice, would use sophisticated LBVP solver
+
+    # Solve using Jacobi iteration with boundary conditions
     psi = streamfunction_jacobi_solve(vorticity, bc_type, apply_gauge)
-    
+
     streamfunction_field.data_g .= psi
     return streamfunction_field
 end
 
-function streamfunction_jacobi_solve(vorticity::ScalarField, bc_type::Symbol, apply_gauge::Bool; 
+function streamfunction_jacobi_solve(vorticity::ScalarField, bc_type::Symbol, apply_gauge::Bool;
                                    max_iter::Int=1000, tolerance::Float64=1e-8)
     """
-    Simplified Jacobi iteration solver for ∇²ψ = ω.
-    
-    This is a basic implementation - a full Tarang-style implementation 
-    would use tau methods and LBVP infrastructure.
+    Jacobi iteration solver for the Poisson equation ∇²ψ = ω.
+
+    Uses classical Jacobi relaxation with configurable boundary conditions.
+    Converges to tolerance or max_iter, whichever comes first.
     """
     
     ensure_layout!(vorticity, :g)
@@ -2480,11 +2474,23 @@ function qg_energy(qg::QGSystem)
     dψ_dy = evaluate_differentiate(Differentiate(qg.ψ, coord_y, 1), :g)
     dψ_dz = evaluate_differentiate(Differentiate(qg.ψ, coord_z, 1), :g)
 
-    # Energy density
-    energy_density = dψ_dx.data_g.^2 .+ dψ_dy.data_g.^2 .+ S .* dψ_dz.data_g.^2
+    # Create energy density field for proper quadrature integration
+    energy_field = ScalarField(qg.ψ.dist, "energy_density", qg.ψ.bases, qg.ψ.dtype)
+    ensure_layout!(energy_field, :g)
+    energy_field.data_g .= dψ_dx.data_g.^2 .+ dψ_dy.data_g.^2 .+ S .* dψ_dz.data_g.^2
 
-    # Volume average (simplified - proper integration would use quadrature weights)
-    total_energy = sum(energy_density) / length(energy_density)
+    # Integrate using basis-specific quadrature weights and compute volume average
+    # integrate() uses proper weights: uniform for Fourier, Gauss-Legendre for Legendre,
+    # Clenshaw-Curtis for Chebyshev
+    total_integral = integrate(energy_field)
+
+    # Compute domain volume for averaging
+    domain_volume = 1.0
+    for basis in qg.ψ.bases
+        domain_volume *= (basis.bounds[2] - basis.bounds[1])
+    end
+
+    total_energy = total_integral / domain_volume
 
     if MPI.Initialized()
         total_energy = MPI.Allreduce(total_energy, MPI.SUM, MPI.COMM_WORLD)

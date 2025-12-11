@@ -41,13 +41,30 @@ function extract_plot_data(field::ScalarField; layout::Symbol=:g)
         x = collect(grids[1])
         y = collect(grids[2])
         data = Array(field[string(layout)])
-        
+
         return PlotData(x, y, Float64[], data,
                        Dict("x" => field.bases[1].meta.element_label,
                             "y" => field.bases[2].meta.element_label),
                        field.name)
+    elseif length(grids) == 3
+        # 3D field - extract middle z-slice for 2D visualization
+        x = collect(grids[1])
+        y = collect(grids[2])
+        z = collect(grids[3])
+        full_data = Array(field[string(layout)])
+
+        # Take middle slice along z-axis
+        z_mid = div(length(z), 2) + 1
+        data = full_data[:, :, z_mid]
+
+        return PlotData(x, y, z, data,
+                       Dict("x" => field.bases[1].meta.element_label,
+                            "y" => field.bases[2].meta.element_label,
+                            "z" => field.bases[3].meta.element_label,
+                            "slice" => "z = $(z[z_mid])"),
+                       "$(field.name) (z-slice)")
     else
-        throw(ArgumentError("Plotting not implemented for $(length(grids))D fields"))
+        throw(ArgumentError("Plotting supports 1D, 2D, and 3D fields only"))
     end
 end
 
@@ -56,7 +73,7 @@ function extract_plot_data(field::VectorField; component::Int=1, layout::Symbol=
     return extract_plot_data(field.components[component], layout=layout)
 end
 
-# Placeholder plotting functions - would integrate with actual plotting backend
+# Plotting functions - return PlotData for integration with plotting backends (Plots.jl, Makie.jl, etc.)
 
 function plot_1d(field::ScalarField; layout::Symbol=:g, kwargs...)
     """Create 1D line plot"""
