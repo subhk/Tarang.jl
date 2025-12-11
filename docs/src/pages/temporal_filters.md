@@ -6,7 +6,7 @@ Efficient computation of Lagrangian means using exponential time filters.
 
 ---
 
-## TL;DR - Quick Summary
+## Quick Summary
 
 > **What:** Temporal filters that separate fast waves from slow mean flows
 >
