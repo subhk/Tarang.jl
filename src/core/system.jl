@@ -2,8 +2,8 @@
 Coefficient/field system helpers.
 
 This module manages large contiguous coefficient buffers to
-streamline pencil manipulations with a simplified version that stores
-contiguous views for each subproblem/subsystem pair.
+streamline pencil manipulations by storing contiguous views
+for each subproblem/subsystem pair.
 """
 
 struct CoeffSystem

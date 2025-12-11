@@ -1033,8 +1033,7 @@ function evaluate_legendre_single_derivative!(result::ScalarField, operand::Scal
     end
 end
 
-# Helper functions - the build_chebyshev_differentiation_matrix function above 
-# replaces the old simplified chebyshev_derivative_matrix implementation
+# Helper functions for matrix application along array axes
 
 function apply_matrix_along_axis(matrix::AbstractMatrix, array::AbstractArray, axis::Int; out=nothing)
     """
