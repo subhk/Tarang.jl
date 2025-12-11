@@ -1957,7 +1957,11 @@ function local_grid(basis::Basis, dist, scale)
     local_grid_data = native_grid[local_elements]
 
     # Map to problem coordinates
-    if basis.meta.COV !== nothing
+    # For FourierBasis, _native_grid already returns grid in problem coordinates
+    # so we skip the COV transformation (which would incorrectly rescale)
+    if isa(basis, FourierBasis)
+        return local_grid_data
+    elseif basis.meta.COV !== nothing
         return problem_coord(basis.meta.COV, local_grid_data)
     else
         return _problem_coord_fallback(basis, local_grid_data)
