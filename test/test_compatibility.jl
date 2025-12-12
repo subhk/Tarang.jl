@@ -14,19 +14,21 @@ end
     u_lbvp = ScalarField(dist, "u", (basis,), Float64)
 
     lbvp = Tarang.LBVP([u_lbvp])
+    # PDE equation
     Tarang.add_equation!(lbvp, "Δ(u) = 0")
-    Tarang.add_dirichlet_bc!(lbvp, "u(z=0) = 0")
-    Tarang.add_neumann_bc!(lbvp, "∂z(u)(z=1) = 1")
-    Tarang.add_robin_bc!(lbvp, "1.0*u(z=0) + 2.0*∂z(u)(z=0) = 0.5")
-    Tarang.add_stress_free_bc!(lbvp, "u(z=1)")
+    # Boundary conditions (Dedalus-style - auto-detected by add_equation!)
+    Tarang.add_equation!(lbvp, "u(z=0) = 0")                           # Dirichlet
+    Tarang.add_equation!(lbvp, "∂z(u)(z=1) = 1")                       # Neumann
+    Tarang.add_equation!(lbvp, "1.0*u(z=0) + 2.0*∂z(u)(z=0) = 0.5")   # Robin
+    Tarang.add_equation!(lbvp, "u(z=1) = 0")                           # Another Dirichlet
 
     @test Tarang.validate_problem(lbvp)
-    @test length(lbvp.boundary_conditions) >= 4
+    @test length(lbvp.equations) >= 5
 
     u_nlbvp = ScalarField(dist, "u_nl", (basis,), Float64)
     nlbvp = Tarang.NLBVP([u_nlbvp])
     Tarang.add_equation!(nlbvp, "u = 1 - u")
-    Tarang.add_dirichlet_bc!(nlbvp, "u_nl(z=0) = 0")
+    Tarang.add_equation!(nlbvp, "u_nl(z=0) = 0")  # Dirichlet BC
     @test Tarang.validate_problem(nlbvp)
 
     u_evp = ScalarField(dist, "u_evp", (basis,), Float64)

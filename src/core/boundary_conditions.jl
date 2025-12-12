@@ -357,11 +357,11 @@ function validate_tau_fields!(manager::BoundaryConditionManager)
         # 2. Add tau to problem variables
         problem = IVP([u, tau_u1])
 
-        # 3. Add lift(tau) to equation
-        add_equation!(problem, dt(u) - lap(u) + lift(tau_u1, zbasis, -1))
+        # 3. Add equation with lift(tau) term
+        add_equation!(problem, "dt(u) - lap(u) + lift(tau_u1, zbasis, -1) = 0")
 
-        # 4. Specify tau_field in BC
-        add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
+        # 4. Add boundary condition (auto-detected from syntax)
+        add_equation!(problem, "u(z=0) = 0")
         ```
 
         See documentation: https://subhk.github.io/Tarang.jl/pages/tau_method/
