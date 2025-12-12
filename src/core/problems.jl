@@ -1381,6 +1381,53 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
         if expr.head == :call
             func_expr = expr.args[1]
             arg_exprs = expr.args[2:end]
+
+            # Check for Dedalus-style BC syntax: field(coord=value) → Interpolate
+            # This handles expressions like u(y=0), T(z=1.0), dy(u)(y=0), etc.
+            # In Julia's AST, keyword arguments appear as Expr(:kw, coord, value)
+            # Following Dedalus operators.interpolate pattern (operators.py:1053-1062)
+            if length(arg_exprs) == 1 && isa(arg_exprs[1], Expr) && arg_exprs[1].head == :kw
+                kw_expr = arg_exprs[1]
+                coord_name = string(kw_expr.args[1])
+                position_expr = kw_expr.args[2]
+
+                # Evaluate the function expression - this could be:
+                # 1. A Symbol (field name like :u)
+                # 2. An Expr (derivative expression like dy(u))
+                operand = nothing
+                if func_expr isa Symbol
+                    field_name = string(func_expr)
+                    if haskey(namespace, field_name)
+                        operand = namespace[field_name]
+                    end
+                elseif func_expr isa Expr
+                    # Recursively evaluate - handles dy(u)(y=0), lap(u)(y=0), etc.
+                    operand = evaluate_parsed_expression(func_expr, namespace)
+                end
+
+                # Check if this is a valid operand for interpolation
+                if operand !== nothing && isa(operand, Operand)
+                    # Try to find the coordinate
+                    coord = _find_coordinate_for_field(operand, coord_name, namespace)
+
+                    # If not found in field, check namespace directly
+                    if coord === nothing && haskey(namespace, coord_name)
+                        coord_obj = namespace[coord_name]
+                        if isa(coord_obj, Coordinate)
+                            coord = coord_obj
+                        end
+                    end
+
+                    if coord !== nothing
+                        # Evaluate position value
+                        position = coerce_constant_value(evaluate_parsed_expression(position_expr, namespace))
+
+                        @debug "Detected BC syntax: $func_expr($coord_name=$position) → Interpolate"
+                        return interpolate(operand, coord, Float64(position))
+                    end
+                end
+            end
+
             if func_expr isa Symbol
                 if func_expr == :dt || func_expr == :∂t
                     if isempty(arg_exprs)
@@ -1572,6 +1619,77 @@ end
 struct IndexOperator <: Operator
     array::Any
     indices::Vector{Any}
+end
+
+"""
+    _find_coordinate_for_field(field, coord_name, namespace)
+
+Find a Coordinate object for the given coordinate name that is associated with the field.
+Used for automatic BC syntax parsing: field(coord=value) → Interpolate(field, coord, value)
+
+Following Dedalus operators.interpolate pattern (operators.py:1053-1059):
+- If coord is already a Coordinate, use it directly
+- If coord is a string, look it up in the field's domain or namespace
+"""
+function _find_coordinate_for_field(field::Operand, coord_name::String, namespace::Dict{String, Any})
+    # First check namespace for coordinate objects
+    if haskey(namespace, coord_name)
+        coord = namespace[coord_name]
+        if isa(coord, Coordinate)
+            return coord
+        end
+    end
+
+    # Try to find coordinate from field's domain/bases
+    if isa(field, ScalarField) && hasfield(typeof(field), :dist)
+        dist = field.dist
+        if dist !== nothing && hasfield(typeof(dist), :coords)
+            coordsys = dist.coords
+            if hasfield(typeof(coordsys), :coords)
+                for c in coordsys.coords
+                    if c.name == coord_name
+                        return c
+                    end
+                end
+            end
+            # Try subscript access
+            try
+                return coordsys[coord_name]
+            catch
+                # Coordinate not found in coordsys
+            end
+        end
+    end
+
+    # Try to construct coordinate from field's bases
+    if hasfield(typeof(field), :bases)
+        for basis in field.bases
+            if basis !== nothing && hasfield(typeof(basis), :meta)
+                if basis.meta.element_label == coord_name
+                    # Create coordinate from basis metadata
+                    if hasfield(typeof(basis.meta), :coordsys) && basis.meta.coordsys !== nothing
+                        coordsys = basis.meta.coordsys
+                        if hasfield(typeof(coordsys), :coords)
+                            for c in coordsys.coords
+                                if c.name == coord_name
+                                    return c
+                                end
+                            end
+                        end
+                        # Try subscript access
+                        try
+                            return coordsys[coord_name]
+                        catch
+                            # Not found
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    @debug "Could not find coordinate '$coord_name' for field"
+    return nothing
 end
 
 function build_matrices(problem::Problem)

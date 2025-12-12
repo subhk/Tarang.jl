@@ -136,11 +136,13 @@ struct Coeff <: Operator
 end
 const _Coeff_constructor = Coeff
 
-# Lifting operator for boundary conditions
+# Lifting operator for tau method boundary conditions
+# Following Dedalus Lift operator (operators.py:4264-4309, basis.py:790-814)
+# Creates polynomial P with coefficient 1 at mode n, returns P * operand
 struct Lift <: Operator
-    operand::Operand
-    basis::Basis
-    n::Int
+    operand::Operand  # Field to lift (typically tau variable)
+    basis::Basis       # Output basis (where to place lifted field)
+    n::Int            # Mode index (negative recommended: -1=last, -2=second-last)
 end
 const _Lift_constructor = Lift
 
@@ -422,8 +424,37 @@ function d(operand::Operand, coord::Coordinate, order::Int=1)
     return multiclass_new(Differentiate, operand, coord, order)
 end
 
+"""
+    lift(operand, basis, n)
+
+Apply lifting operator for tau method boundary conditions.
+Following Dedalus Lift operator (operators.py:4264-4309, basis.py:790-814).
+
+Creates a polynomial P on the output basis with coefficient 1 at mode n,
+then returns P * operand. This "lifts" the operand (typically a tau variable)
+into spectral space at the specified mode.
+
+Arguments:
+- operand: The field to lift (typically a tau variable)
+- basis: The output basis (where to place the lifted field)
+- n: Mode index. Convention:
+  - n < 0: Negative indexing from end (recommended for tau method)
+    - n = -1: last mode (N)
+    - n = -2: second-to-last mode (N-1)
+  - n >= 0: Direct 0-indexed mode (less common)
+
+Note: Dedalus only allows n < 0. We allow positive n for flexibility,
+but negative indices are recommended for tau method boundary conditions.
+
+Example:
+```julia
+# Typical tau method usage: lift tau to highest modes
+tau = ScalarField(dist, "tau", ())  # Tau variable (no spectral basis)
+lift_term = lift(tau, chebyshev_basis, -1)  # Lift to last Chebyshev mode
+lift_term2 = lift(tau, chebyshev_basis, -2)  # Lift to second-to-last mode
+```
+"""
 function lift(operand::Operand, basis::Basis, n::Int)
-    """Apply lifting operator for boundary conditions"""
     return multiclass_new(Lift, operand, basis, n)
 end
 
