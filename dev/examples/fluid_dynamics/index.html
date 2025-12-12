@@ -24,16 +24,16 @@ Tarang.add_equation!(problem, &quot;∂t(uz) + ux*∂x(uz) + uz*∂z(uz) + ∂z(
 Tarang.add_equation!(problem, &quot;∂x(ux) + ∂z(uz) = 0&quot;)
 
 # Bottom, left, right walls: no-slip
-Tarang.add_dirichlet_bc!(problem, &quot;ux(z=0) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;ux(x=0) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;ux(x=$Lx) = 0&quot;)
+Tarang.add_equation!(problem, &quot;ux(z=0) = 0&quot;)
+Tarang.add_equation!(problem, &quot;ux(x=0) = 0&quot;)
+Tarang.add_equation!(problem, &quot;ux(x=$Lx) = 0&quot;)
 # Top wall: moving lid
-Tarang.add_dirichlet_bc!(problem, &quot;ux(z=$Lz) = 1&quot;)
+Tarang.add_equation!(problem, &quot;ux(z=$Lz) = 1&quot;)
 # All walls: no penetration
-Tarang.add_dirichlet_bc!(problem, &quot;uz(z=0) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;uz(z=$Lz) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;uz(x=0) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;uz(x=$Lx) = 0&quot;)
+Tarang.add_equation!(problem, &quot;uz(z=0) = 0&quot;)
+Tarang.add_equation!(problem, &quot;uz(z=$Lz) = 0&quot;)
+Tarang.add_equation!(problem, &quot;uz(x=0) = 0&quot;)
+Tarang.add_equation!(problem, &quot;uz(x=$Lx) = 0&quot;)
 
 solver = InitialValueSolver(problem, SBDF2(); dt=1e-3)
 # ... time integration ...

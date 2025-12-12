@@ -27,14 +27,14 @@ Tarang.add_equation!(problem,
 Tarang.add_equation!(problem, &quot;∂x(ux) + ∂z(uz) = 0&quot;)
 Tarang.add_equation!(problem,
     &quot;∂t(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)&quot;)</code></pre><h3 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># No-slip walls
-Tarang.add_dirichlet_bc!(problem, &quot;ux(z=0) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;ux(z=1) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;uz(z=0) = 0&quot;)
-Tarang.add_dirichlet_bc!(problem, &quot;uz(z=1) = 0&quot;)
+Tarang.add_equation!(problem, &quot;ux(z=0) = 0&quot;)
+Tarang.add_equation!(problem, &quot;ux(z=1) = 0&quot;)
+Tarang.add_equation!(problem, &quot;uz(z=0) = 0&quot;)
+Tarang.add_equation!(problem, &quot;uz(z=1) = 0&quot;)
 
 # Fixed temperatures
-Tarang.add_dirichlet_bc!(problem, &quot;T(z=0) = 1&quot;)  # Hot
-Tarang.add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)  # Cold</code></pre><h2 id="Initial-Conditions"><a class="docs-heading-anchor" href="#Initial-Conditions">Initial Conditions</a><a id="Initial-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Initial-Conditions" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Random perturbations to trigger instability
+Tarang.add_equation!(problem, &quot;T(z=0) = 1&quot;)  # Hot
+Tarang.add_equation!(problem, &quot;T(z=1) = 0&quot;)  # Cold</code></pre><h2 id="Initial-Conditions"><a class="docs-heading-anchor" href="#Initial-Conditions">Initial Conditions</a><a id="Initial-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Initial-Conditions" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Random perturbations to trigger instability
 Tarang.ensure_layout!(T, :g)
 T.data_g .= 0.5 .+ 0.01 .* randn(size(T.data_g))
 Tarang.ensure_layout!(T, :c)</code></pre><h2 id="Solver"><a class="docs-heading-anchor" href="#Solver">Solver</a><a id="Solver-1"></a><a class="docs-heading-anchor-permalink" href="#Solver" title="Permalink"></a></h2><pre><code class="language-julia hljs">solver = InitialValueSolver(problem, RK222(); dt=1e-4)
