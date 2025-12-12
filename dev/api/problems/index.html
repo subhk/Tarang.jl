@@ -66,50 +66,50 @@ Ra = problem.parameters[&quot;Ra&quot;]
 # Iterate over parameters
 for (name, value) in problem.parameters
     println(&quot;$name = $value&quot;)
-end</code></pre><hr/><h2 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h2><h3 id="add*dirichlet*bc!"><a class="docs-heading-anchor" href="#add*dirichlet*bc!">add<em>dirichlet</em>bc!</a><a id="add*dirichlet*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*dirichlet*bc!" title="Permalink"></a></h3><p>Add Dirichlet (fixed value) boundary condition.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_dirichlet_bc!(problem, field_name, coord_name, position, value)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: Problem object</li><li><code>field_name</code>: Name of field (String)</li><li><code>coord_name</code>: Coordinate direction (String)</li><li><code>position</code>: Location (Float64)</li><li><code>value</code>: Boundary value (Float64, String expression, or Function)</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Constant value
-add_dirichlet_bc!(problem, &quot;T(z=0) = 1&quot;)
-add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)
+end</code></pre><hr/><h2 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h2><p>Boundary conditions in Tarang.jl use the same <code>add_equation!</code> function as PDEs. The Dedalus-style syntax <code>field(coord=value)</code> is auto-detected and converted to the appropriate <code>Interpolate</code> operator.</p><h3 id="Dirichlet-(Fixed-Value)"><a class="docs-heading-anchor" href="#Dirichlet-(Fixed-Value)">Dirichlet (Fixed Value)</a><a id="Dirichlet-(Fixed-Value)-1"></a><a class="docs-heading-anchor-permalink" href="#Dirichlet-(Fixed-Value)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Constant value
+add_equation!(problem, &quot;T(z=0) = 1&quot;)
+add_equation!(problem, &quot;T(z=1) = 0&quot;)
 
 # No-slip velocity
-add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
 
 # Time-dependent
-add_dirichlet_bc!(problem, &quot;u(x=0) = sin(omega*t)&quot;)
+add_equation!(problem, &quot;u(x=0) = sin(omega*t)&quot;)
 
 # Space-dependent
-add_dirichlet_bc!(problem, &quot;T(z=0) = 1.0 - x^2&quot;)</code></pre><hr/><h3 id="add*neumann*bc!"><a class="docs-heading-anchor" href="#add*neumann*bc!">add<em>neumann</em>bc!</a><a id="add*neumann*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*neumann*bc!" title="Permalink"></a></h3><p>Add Neumann (fixed derivative) boundary condition.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, field_name, coord_name, position, value)</code></pre><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_neumann_bc!(problem, &quot;d&lt;coord&gt;(field)(coord=pos) = value&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Insulating boundary (zero heat flux)
-add_neumann_bc!(problem, &quot;∂z(T)(z=0) = 0&quot;)  # ∂T/∂z(z=0) = 0
+add_equation!(problem, &quot;T(z=0) = 1.0 - x^2&quot;)</code></pre><hr/><h3 id="Neumann-(Fixed-Derivative)"><a class="docs-heading-anchor" href="#Neumann-(Fixed-Derivative)">Neumann (Fixed Derivative)</a><a id="Neumann-(Fixed-Derivative)-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-(Fixed-Derivative)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Insulating boundary (zero heat flux)
+add_equation!(problem, &quot;∂z(T)(z=0) = 0&quot;)  # ∂T/∂z(z=0) = 0
 
 # Fixed flux
-add_neumann_bc!(problem, &quot;∂z(T)(z=1) = -1&quot;)  # ∂T/∂z(z=1) = -1
+add_equation!(problem, &quot;∂z(T)(z=1) = -1&quot;)  # ∂T/∂z(z=1) = -1
 
 # Time-dependent flux
-add_neumann_bc!(problem, &quot;∂x(phi)(x=0) = sin(omega*t)&quot;)</code></pre><hr/><h3 id="add*robin*bc!"><a class="docs-heading-anchor" href="#add*robin*bc!">add<em>robin</em>bc!</a><a id="add*robin*bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*robin*bc!" title="Permalink"></a></h3><p>Add Robin (mixed) boundary condition: α<em>f + β</em>df/dn = value</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_robin_bc!(problem, &quot;alpha*field(coord=pos) + beta*d&lt;coord&gt;(field)(coord=pos) = value&quot;)</code></pre><p><strong>Arguments</strong> (via string):</p><ul><li><code>alpha</code>: Coefficient for field value</li><li><code>beta</code>: Coefficient for derivative</li><li><code>value</code>: Right-hand side value</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Convective heat transfer: h*T + k*∂T/∂n = h*T_ambient
+add_equation!(problem, &quot;∂x(phi)(x=0) = sin(omega*t)&quot;)</code></pre><hr/><h3 id="Robin-(Mixed)"><a class="docs-heading-anchor" href="#Robin-(Mixed)">Robin (Mixed)</a><a id="Robin-(Mixed)-1"></a><a class="docs-heading-anchor-permalink" href="#Robin-(Mixed)" title="Permalink"></a></h3><p>Robin boundary condition: α<em>f + β</em>df/dn = value</p><pre><code class="language-julia hljs"># Convective heat transfer: h*T + k*∂T/∂n = h*T_ambient
 h, k = 10.0, 1.0
 T_ambient = 300.0
-add_robin_bc!(problem, &quot;$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_ambient)&quot;)
+add_equation!(problem, &quot;$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_ambient)&quot;)
 
 # Radiation boundary: T + ε*∂T/∂n = 0
-add_robin_bc!(problem, &quot;1.0*T(x=0) + $(epsilon)*∂x(T)(x=0) = 0&quot;)</code></pre><hr/><h3 id="add*stress*free_bc!"><a class="docs-heading-anchor" href="#add*stress*free_bc!">add<em>stress</em>free_bc!</a><a id="add*stress*free_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*stress*free_bc!" title="Permalink"></a></h3><p>Add stress-free boundary condition for fluid mechanics: u<em>normal = 0, ∂u</em>tangential/∂n = 0</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_stress_free_bc!(problem, &quot;field(coord=pos)&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Stress-free top and bottom (free-slip)
-add_stress_free_bc!(problem, &quot;u(z=0)&quot;)
-add_stress_free_bc!(problem, &quot;u(z=1)&quot;)
-
-# Equivalent to:
-# w(z=0) = 0, ∂u/∂z(z=0) = 0, ∂v/∂z(z=0) = 0
-# w(z=1) = 0, ∂u/∂z(z=1) = 0, ∂v/∂z(z=1) = 0</code></pre><hr/><h3 id="add*no*slip_bc!"><a class="docs-heading-anchor" href="#add*no*slip_bc!">add<em>no</em>slip_bc!</a><a id="add*no*slip_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add*no*slip_bc!" title="Permalink"></a></h3><p>Add no-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_no_slip_bc!(problem, &quot;field(coord=pos)&quot;)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># No-slip at walls
-add_no_slip_bc!(problem, &quot;u(z=0)&quot;)
-add_no_slip_bc!(problem, &quot;u(z=1)&quot;)
-
-# Equivalent to:
-# u(z=0) = 0, v(z=0) = 0, w(z=0) = 0
-# u(z=1) = 0, v(z=1) = 0, w(z=1) = 0</code></pre><hr/><h3 id="add_bc!"><a class="docs-heading-anchor" href="#add_bc!">add_bc!</a><a id="add_bc!-1"></a><a class="docs-heading-anchor-permalink" href="#add_bc!" title="Permalink"></a></h3><p>Add custom boundary condition using equation syntax.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_bc!(problem, equation_string::String)</code></pre><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Custom combinations
-add_bc!(problem, &quot;u(z=0) + 2*∂z(u)(z=0) = 1&quot;)
+add_equation!(problem, &quot;1.0*T(x=0) + $(epsilon)*∂x(T)(x=0) = 0&quot;)</code></pre><hr/><h3 id="Stress-Free"><a class="docs-heading-anchor" href="#Stress-Free">Stress-Free</a><a id="Stress-Free-1"></a><a class="docs-heading-anchor-permalink" href="#Stress-Free" title="Permalink"></a></h3><p>Stress-free boundary condition for fluid mechanics: u<em>normal = 0, ∂u</em>tangential/∂n = 0</p><pre><code class="language-julia hljs"># Stress-free top and bottom (free-slip)
+add_equation!(problem, &quot;w(z=0) = 0&quot;)
+add_equation!(problem, &quot;∂z(u)(z=0) = 0&quot;)
+add_equation!(problem, &quot;∂z(v)(z=0) = 0&quot;)
+add_equation!(problem, &quot;w(z=1) = 0&quot;)
+add_equation!(problem, &quot;∂z(u)(z=1) = 0&quot;)
+add_equation!(problem, &quot;∂z(v)(z=1) = 0&quot;)</code></pre><hr/><h3 id="No-Slip"><a class="docs-heading-anchor" href="#No-Slip">No-Slip</a><a id="No-Slip-1"></a><a class="docs-heading-anchor-permalink" href="#No-Slip" title="Permalink"></a></h3><p>No-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.</p><pre><code class="language-julia hljs"># No-slip at walls
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;v(z=0) = 0&quot;)
+add_equation!(problem, &quot;w(z=0) = 0&quot;)
+add_equation!(problem, &quot;u(z=1) = 0&quot;)
+add_equation!(problem, &quot;v(z=1) = 0&quot;)
+add_equation!(problem, &quot;w(z=1) = 0&quot;)</code></pre><hr/><h3 id="Custom-Boundary-Conditions"><a class="docs-heading-anchor" href="#Custom-Boundary-Conditions">Custom Boundary Conditions</a><a id="Custom-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Boundary-Conditions" title="Permalink"></a></h3><p>Use <code>add_equation!</code> for any custom boundary condition:</p><pre><code class="language-julia hljs"># Custom combinations
+add_equation!(problem, &quot;u(z=0) + 2*∂z(u)(z=0) = 1&quot;)
 
 # Coupling between fields
-add_bc!(problem, &quot;T(x=0) = 2*S(x=0)&quot;)
+add_equation!(problem, &quot;T(x=0) = 2*S(x=0)&quot;)
 
 # Complex expressions
-add_bc!(problem, &quot;∂x(p)(z=0) + omega^2*u(z=0) = 0&quot;)</code></pre><hr/><h2 id="Problem-Properties"><a class="docs-heading-anchor" href="#Problem-Properties">Problem Properties</a><a id="Problem-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Properties" title="Permalink"></a></h2><h3 id="Accessing-Fields"><a class="docs-heading-anchor" href="#Accessing-Fields">Accessing Fields</a><a id="Accessing-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get list of fields
+add_equation!(problem, &quot;∂x(p)(z=0) + omega^2*u(z=0) = 0&quot;)</code></pre><hr/><h2 id="Problem-Properties"><a class="docs-heading-anchor" href="#Problem-Properties">Problem Properties</a><a id="Problem-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Properties" title="Permalink"></a></h2><h3 id="Accessing-Fields"><a class="docs-heading-anchor" href="#Accessing-Fields">Accessing Fields</a><a id="Accessing-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get list of fields
 fields = problem.fields
 
 # Iterate over fields
@@ -142,8 +142,8 @@ add_equation!(problem, &quot;∂t(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(
 add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)
 
 # Add boundary conditions
-add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
-add_dirichlet_bc!(problem, &quot;v(z=0) = 0&quot;)
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;v(z=0) = 0&quot;)
 # ... more BCs
 
 # Validate
@@ -194,13 +194,13 @@ add_equation!(problem, &quot;∂x(u) + ∂z(w) = 0&quot;)
 add_equation!(problem, &quot;∂t(T) + u*∂x(T) + w*∂z(T) = Δ(T)&quot;)
 
 # Boundary conditions
-add_dirichlet_bc!(problem, &quot;u(z=0) = 0&quot;)
-add_dirichlet_bc!(problem, &quot;w(z=0) = 0&quot;)
-add_dirichlet_bc!(problem, &quot;T(z=0) = 1&quot;)
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;w(z=0) = 0&quot;)
+add_equation!(problem, &quot;T(z=0) = 1&quot;)
 
-add_dirichlet_bc!(problem, &quot;u(z=1) = 0&quot;)
-add_dirichlet_bc!(problem, &quot;w(z=1) = 0&quot;)
-add_dirichlet_bc!(problem, &quot;T(z=1) = 0&quot;)
+add_equation!(problem, &quot;u(z=1) = 0&quot;)
+add_equation!(problem, &quot;w(z=1) = 0&quot;)
+add_equation!(problem, &quot;T(z=1) = 0&quot;)
 
 # Validate
-validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 13:04">Friday 12 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Friday 12 December 2025 13:07">Friday 12 December 2025</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
