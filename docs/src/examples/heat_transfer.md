@@ -20,8 +20,8 @@ problem = IVP([T])
 problem.parameters["kappa"] = 0.01
 
 Tarang.add_equation!(problem, "∂t(T) = kappa*Δ(T)")
-Tarang.add_dirichlet_bc!(problem, "T(x=0) = 1")  # Hot
-Tarang.add_dirichlet_bc!(problem, "T(x=1) = 0")  # Cold
+Tarang.add_equation!(problem, "T(x=0) = 1")  # Hot
+Tarang.add_equation!(problem, "T(x=1) = 0")  # Cold
 
 solver = InitialValueSolver(problem, CNAB2(); dt=0.01)
 
@@ -56,10 +56,10 @@ problem.parameters["kappa"] = 0.1
 Tarang.add_equation!(problem, "∂t(T) = kappa*Δ(T)")
 
 # Dirichlet on all boundaries
-Tarang.add_dirichlet_bc!(problem, "T(x=0) = 0")
-Tarang.add_dirichlet_bc!(problem, "T(x=1) = 0")
-Tarang.add_dirichlet_bc!(problem, "T(z=0) = 1")
-Tarang.add_dirichlet_bc!(problem, "T(z=1) = 0")
+Tarang.add_equation!(problem, "T(x=0) = 0")
+Tarang.add_equation!(problem, "T(x=1) = 0")
+Tarang.add_equation!(problem, "T(z=0) = 1")
+Tarang.add_equation!(problem, "T(z=1) = 0")
 ```
 
 ## Convection-Diffusion
@@ -104,7 +104,7 @@ h = 10.0   # Heat transfer coefficient
 k = 1.0    # Thermal conductivity
 T_amb = 0.0
 
-Tarang.add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_amb)")
+Tarang.add_equation!(problem, "$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_amb)")
 ```
 
 ### Insulated (Neumann) BC
@@ -112,7 +112,7 @@ Tarang.add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_amb)")
 Zero heat flux.
 
 ```julia
-Tarang.add_neumann_bc!(problem, "∂z(T)(z=1) = 0")  # ∂T/∂z = 0
+Tarang.add_equation!(problem, "∂z(T)(z=1) = 0")  # ∂T/∂z = 0
 ```
 
 ### Time-Varying BC
@@ -136,10 +136,10 @@ problem = LBVP([T])
 Tarang.add_equation!(problem, "Δ(T) = 0")
 
 # Boundary conditions define the solution
-Tarang.add_dirichlet_bc!(problem, "T(x=0) = 0")
-Tarang.add_dirichlet_bc!(problem, "T(x=1) = 1")
-Tarang.add_neumann_bc!(problem, "∂z(T)(z=0) = 0")
-Tarang.add_neumann_bc!(problem, "∂z(T)(z=1) = 0")
+Tarang.add_equation!(problem, "T(x=0) = 0")
+Tarang.add_equation!(problem, "T(x=1) = 1")
+Tarang.add_equation!(problem, "∂z(T)(z=0) = 0")
+Tarang.add_equation!(problem, "∂z(T)(z=1) = 0")
 
 solver = BoundaryValueSolver(problem)
 solve!(solver)
