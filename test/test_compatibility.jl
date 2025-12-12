@@ -27,8 +27,8 @@ end
 
     u_nlbvp = ScalarField(dist, "u_nl", (basis,), Float64)
     nlbvp = Tarang.NLBVP([u_nlbvp])
-    Tarang.add_equation!(nlbvp, "u = 1 - u")
-    Tarang.add_equation!(nlbvp, "u_nl(z=0) = 0")  # Dirichlet BC
+    Tarang.add_equation!(nlbvp, "u_nl = 1 - u_nl")  # Use correct variable name
+    Tarang.add_equation!(nlbvp, "u_nl(z=0) = 0")    # Dirichlet BC
     @test Tarang.validate_problem(nlbvp)
 
     u_evp = ScalarField(dist, "u_evp", (basis,), Float64)

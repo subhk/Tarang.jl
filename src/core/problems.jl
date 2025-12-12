@@ -2389,24 +2389,38 @@ end
 # Problem validation
 function validate_problem(problem::Problem)
     """Validate problem formulation"""
-    
+
     errors = String[]
-    
+
     if length(problem.variables) == 0
         push!(errors, "No variables specified")
     end
-    
+
     if length(problem.equations) == 0
         push!(errors, "No equations specified")
     end
-    
-    if length(problem.equations) != length(problem.variables)
-        push!(errors, "Number of equations ($(length(problem.equations))) does not match number of variables ($(length(problem.variables)))")
-    end
-    
-    # Check for required boundary conditions in boundary value problems
+
+    # For IVPs/EVPs: equations should match variables exactly
+    # For BVPs: equations should be >= variables (includes BCs)
     if isa(problem, LBVP) || isa(problem, NLBVP)
-        if length(problem.boundary_conditions) == 0 && length(problem.bc_manager.conditions) == 0
+        # BVPs can have extra equations for boundary conditions
+        if length(problem.equations) < length(problem.variables)
+            push!(errors, "Number of equations ($(length(problem.equations))) is less than number of variables ($(length(problem.variables)))")
+        end
+    else
+        # IVP/EVP: strict match
+        if length(problem.equations) != length(problem.variables)
+            push!(errors, "Number of equations ($(length(problem.equations))) does not match number of variables ($(length(problem.variables)))")
+        end
+    end
+
+    # Check for required boundary conditions in boundary value problems
+    # Note: BCs can be embedded in equations via field(coord=value) syntax
+    if isa(problem, LBVP) || isa(problem, NLBVP)
+        # For BVPs, we either need explicit BCs or equations > variables (implicit BCs)
+        has_explicit_bcs = length(problem.boundary_conditions) > 0 || length(problem.bc_manager.conditions) > 0
+        has_implicit_bcs = length(problem.equations) > length(problem.variables)
+        if !has_explicit_bcs && !has_implicit_bcs
             push!(errors, "Boundary value problem requires boundary conditions")
         end
     end
