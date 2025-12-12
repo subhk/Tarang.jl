@@ -2440,6 +2440,11 @@ Example: For N=10 modes
 - Lift(tau, basis, 0) → sets mode 1 (Julia 1-indexed)
 - Lift(tau, basis, -1) → sets mode N (last mode)
 - Lift(tau, basis, -2) → sets mode N-1 (second-to-last mode)
+
+Following Dedalus LiftJacobi pattern (basis.py:790-814):
+The matrix places the tau variable's coefficient at mode n in the solution.
+For LBVP solvers, this creates the "tau polynomial" that adds boundary
+condition enforcement terms to the highest modes.
 """
 function build_lift_matrix(var, basis, n::Int; kwargs...)
     if !hasfield(typeof(var), :bases)
@@ -3131,65 +3136,94 @@ end
     evaluate_lift(lift_op::Lift, layout::Symbol=:g)
 
 Evaluate lifting operator for tau method boundary conditions.
-Following the standard basis LiftJacobi implementation (lines 790-814).
+Following the Dedalus LiftJacobi implementation (basis.py:790-814).
 
-the standard convention:
-- n >= 0: sets mode n directly (0-indexed convention, 1-indexed in Julia)
+The Lift operator creates a polynomial field P on the output basis with coefficient
+at mode n set to 1, then returns P * operand. This "lifts" the operand (typically
+a tau variable) into spectral space at the specified mode.
+
+Convention (following Dedalus):
 - n < 0: wraps around (n = -1 means last mode, n = -2 means second-to-last, etc.)
+- n >= 0: sets mode n directly (0-indexed convention, 1-indexed in Julia)
 
-This creates a polynomial field P with coefficient n set to 1, then returns P * operand.
+The Dedalus implementation:
+```python
+def build_polynomial(dist, basis, n):
+    if n < 0:
+        n += basis.size
+    P = dist.Field(bases=basis)
+    axis = dist.get_basis_axis(basis)
+    P['c'][axslice(axis, n, n+1)] = 1
+    return P
+# Then returns P * operand
+```
+
+Arguments:
+- lift_op: Lift operator containing operand, output basis, and mode index n
+- layout: Output layout (:g for grid, :c for coefficient)
+
+Returns:
+- ScalarField representing P * operand where P has coefficient 1 at mode n
 """
 function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
     operand = lift_op.operand
-    basis = lift_op.basis
+    output_basis = lift_op.basis  # The output basis (like Dedalus output_basis)
     n = lift_op.n
 
     if !isa(operand, ScalarField)
         throw(ArgumentError("Lift currently only supports scalar fields"))
     end
 
-    # Find the basis index
-    basis_index = nothing
-    for (i, b) in enumerate(operand.bases)
-        if b === basis || b.meta.element_label == basis.meta.element_label
-            basis_index = i
-            break
-        end
-    end
+    # Get basis size
+    N = output_basis.meta.size
 
-    if basis_index === nothing
-        throw(ArgumentError("Basis not found in operand"))
-    end
-
-    # Create result field with same structure
-    result = ScalarField(operand.dist, "lift_$(operand.name)", operand.bases, operand.dtype)
-
-    # Work in coefficient space
-    ensure_layout!(operand, :c)
-    ensure_layout!(result, :c)
-
-    N = basis.meta.size
-
-    # Zero out result
-    fill!(result.data_c, 0.0)
-
-    # Following the standard convention: direct indexing with negative wrap-around
-    # In the standard (0-indexed) convention: P['c'][axslice(axis, n, n+1)] = 1
-    # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
+    # Handle negative index wrap-around (Dedalus convention)
+    # In Dedalus: if n < 0: n += basis.size
     lift_mode = n
     if lift_mode < 0
-        lift_mode = N + lift_mode  # Wrap negative indices (e.g., -1 → N-1 in 0-indexed → N in 1-indexed)
+        lift_mode = N + lift_mode  # e.g., -1 → N-1 (0-indexed), then +1 for Julia
     end
-    lift_mode += 1  # Convert from 0-indexed to 1-indexed
+    lift_mode += 1  # Convert from 0-indexed to 1-indexed Julia convention
 
-    if lift_mode >= 1 && lift_mode <= N
-        if ndims(operand.data_c) == 1
-            result.data_c[lift_mode] = operand.data_c[1]
-        else
-            # For multi-dimensional fields, apply along the appropriate axis
-            apply_lift_nd!(result.data_c, operand.data_c, basis_index, lift_mode)
-        end
+    # Validate mode index
+    if lift_mode < 1 || lift_mode > N
+        throw(ArgumentError("Lift mode index $n (resolved to $lift_mode) out of bounds for basis size $N"))
     end
+
+    # Find or create the output bases tuple
+    # The output domain substitutes the input basis with output_basis
+    output_bases = _get_lift_output_bases(operand, output_basis)
+
+    # Step 1: Build polynomial P with coefficient 1 at mode n
+    # Following Dedalus: P = dist.Field(bases=basis); P['c'][axslice(axis, n, n+1)] = 1
+    P = ScalarField(operand.dist, "lift_poly", output_bases, operand.dtype)
+    ensure_layout!(P, :c)
+    fill!(P.data_c, 0.0)
+
+    # Find which axis corresponds to the output basis
+    basis_axis = _find_basis_axis(output_bases, output_basis)
+
+    # Set coefficient at mode n to 1
+    if ndims(P.data_c) == 1
+        P.data_c[lift_mode] = 1.0
+    else
+        # For multi-dimensional: set P['c'][..., n:n+1, ...] = 1
+        _set_lift_coefficient!(P.data_c, basis_axis, lift_mode, 1.0)
+    end
+
+    # Step 2: Compute result = P * operand
+    # This is the key difference from the old implementation
+    # The operand is typically a tau variable (scalar or low-dimensional)
+    ensure_layout!(operand, :c)
+
+    # Create result field
+    result = ScalarField(operand.dist, "lift_$(operand.name)", output_bases, operand.dtype)
+    ensure_layout!(result, :c)
+
+    # Multiply P * operand
+    # For tau method: operand is usually constant or low-mode, P has single mode
+    # Result: coefficient at mode n gets operand's value
+    _multiply_lift_polynomial!(result.data_c, P.data_c, operand.data_c, basis_axis, lift_mode)
 
     if layout == :g
         backward_transform!(result)
@@ -3199,9 +3233,115 @@ function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
 end
 
 """
+    _get_lift_output_bases(operand, output_basis)
+
+Get output bases for lift operation, substituting input basis with output basis.
+Following Dedalus: domain.substitute_basis(input_basis, output_basis)
+"""
+function _get_lift_output_bases(operand::ScalarField, output_basis::Basis)
+    # If operand has no bases on the output coordinate, use output_basis
+    output_coord = output_basis.meta.element_label
+
+    new_bases = Vector{Any}(undef, length(operand.bases))
+    found = false
+
+    for (i, b) in enumerate(operand.bases)
+        if b === nothing
+            new_bases[i] = nothing
+        elseif b.meta.element_label == output_coord
+            new_bases[i] = output_basis
+            found = true
+        else
+            new_bases[i] = b
+        end
+    end
+
+    # If no matching basis found, this is a lift from no-basis to output_basis
+    # In this case, we need to expand the field
+    if !found
+        # Add output_basis to the bases
+        push!(new_bases, output_basis)
+    end
+
+    return tuple(new_bases...)
+end
+
+"""
+    _find_basis_axis(bases, target_basis)
+
+Find which axis (1-indexed) corresponds to the target basis.
+"""
+function _find_basis_axis(bases::Tuple, target_basis::Basis)
+    for (i, b) in enumerate(bases)
+        if b === target_basis ||
+           (b !== nothing && b.meta.element_label == target_basis.meta.element_label)
+            return i
+        end
+    end
+    return 1  # Default to first axis
+end
+
+"""
+    _set_lift_coefficient!(data, axis, mode, value)
+
+Set coefficient at specified mode along axis to given value.
+Equivalent to P['c'][axslice(axis, n, n+1)] = value
+"""
+function _set_lift_coefficient!(data::AbstractArray, axis::Int, mode::Int, value::Real)
+    # Use selectdim to get view and set
+    view = selectdim(data, axis, mode)
+    fill!(view, value)
+end
+
+"""
+    _multiply_lift_polynomial!(result, P_data, operand_data, basis_axis, lift_mode)
+
+Multiply lift polynomial P by operand.
+P has a single non-zero coefficient at lift_mode.
+Result = P * operand places operand's values at mode lift_mode.
+"""
+function _multiply_lift_polynomial!(result::AbstractArray, P_data::AbstractArray,
+                                    operand_data::AbstractArray, basis_axis::Int, lift_mode::Int)
+    # Zero out result
+    fill!(result, 0.0)
+
+    # For tau method: operand is typically constant or has fewer dimensions
+    # P is a polynomial with single coefficient at lift_mode
+    # Result: place operand's data at mode lift_mode along basis_axis
+
+    if ndims(result) == 1
+        # 1D case: result[lift_mode] = operand[1] * P[lift_mode] = operand[1] * 1
+        if length(operand_data) >= 1
+            result[lift_mode] = operand_data[1]
+        end
+    else
+        # Multi-dimensional case
+        # P[lift_mode] = 1 along basis_axis, 0 elsewhere
+        # result = P * operand → result[..., lift_mode, ...] = operand[..., :, ...]
+
+        result_slice = selectdim(result, basis_axis, lift_mode)
+
+        if ndims(operand_data) == ndims(result)
+            # Same dimensions: take corresponding slice from operand
+            # This handles case where operand also has the basis
+            operand_slice = selectdim(operand_data, basis_axis, 1)
+            result_slice .= operand_slice
+        elseif ndims(operand_data) < ndims(result)
+            # Operand has fewer dimensions (typical tau variable case)
+            # Broadcast operand across the result slice
+            result_slice .= operand_data
+        else
+            # Operand has more dimensions - take first slice
+            result_slice .= selectdim(operand_data, basis_axis, 1)
+        end
+    end
+end
+
+"""
     apply_lift_nd!(result, operand, axis, lift_mode)
 
 Apply lift operation along specified axis for multi-dimensional arrays.
+(Legacy helper - kept for compatibility)
 """
 function apply_lift_nd!(result::AbstractArray, operand::AbstractArray, axis::Int, lift_mode::Int)
     nd = ndims(result)
