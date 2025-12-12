@@ -86,10 +86,10 @@ Tarang.add_equation!(evp, """
 """)
 
 # No-slip: ψ = ∂ψ/∂z = 0 at walls
-Tarang.add_dirichlet_bc!(evp, "psi_hat(z=0) = 0")
-Tarang.add_dirichlet_bc!(evp, "psi_hat(z=1) = 0")
-Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=0) = 0")
-Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=1) = 0")
+Tarang.add_equation!(evp, "psi_hat(z=0) = 0")
+Tarang.add_equation!(evp, "psi_hat(z=1) = 0")
+Tarang.add_equation!(evp, "∂z(psi_hat)(z=0) = 0")
+Tarang.add_equation!(evp, "∂z(psi_hat)(z=1) = 0")
 ```
 
 ## Neutral Curves

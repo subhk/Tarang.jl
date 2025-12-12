@@ -68,10 +68,10 @@ Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
 
 ```julia
 # No-slip at walls
-Tarang.add_dirichlet_bc!(problem, "ux(z=0) = 0")    # Bottom
-Tarang.add_dirichlet_bc!(problem, "ux(z=$Lz) = 0")  # Top
-Tarang.add_dirichlet_bc!(problem, "uz(z=0) = 0")
-Tarang.add_dirichlet_bc!(problem, "uz(z=$Lz) = 0")
+Tarang.add_equation!(problem, "ux(z=0) = 0")    # Bottom
+Tarang.add_equation!(problem, "ux(z=$Lz) = 0")  # Top
+Tarang.add_equation!(problem, "uz(z=0) = 0")
+Tarang.add_equation!(problem, "uz(z=$Lz) = 0")
 ```
 
 ## Analytical Solution

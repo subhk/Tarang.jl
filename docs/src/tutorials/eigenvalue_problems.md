@@ -51,8 +51,8 @@ Tarang.add_equation!(evp, "sigma*u_hat = Δ(u_hat)")
 
 ```julia
 # Dirichlet BCs: u = 0 at boundaries
-Tarang.add_dirichlet_bc!(evp, "u_hat(z=0) = 0")
-Tarang.add_dirichlet_bc!(evp, "u_hat(z=1) = 0")
+Tarang.add_equation!(evp, "u_hat(z=0) = 0")
+Tarang.add_equation!(evp, "u_hat(z=1) = 0")
 ```
 
 ### Solving
@@ -134,12 +134,12 @@ Tarang.add_equation!(evp, "1im*k*u_hat + ∂z(w_hat) = 0")
 Tarang.add_equation!(evp, "sigma*T_hat + w_hat = ∂z(∂z(T_hat)) - k2*T_hat")
 
 # Boundary conditions (no-slip, fixed temperature)
-Tarang.add_dirichlet_bc!(evp, "u_hat(z=0) = 0")
-Tarang.add_dirichlet_bc!(evp, "u_hat(z=1) = 0")
-Tarang.add_dirichlet_bc!(evp, "w_hat(z=0) = 0")
-Tarang.add_dirichlet_bc!(evp, "w_hat(z=1) = 0")
-Tarang.add_dirichlet_bc!(evp, "T_hat(z=0) = 0")
-Tarang.add_dirichlet_bc!(evp, "T_hat(z=1) = 0")
+Tarang.add_equation!(evp, "u_hat(z=0) = 0")
+Tarang.add_equation!(evp, "u_hat(z=1) = 0")
+Tarang.add_equation!(evp, "w_hat(z=0) = 0")
+Tarang.add_equation!(evp, "w_hat(z=1) = 0")
+Tarang.add_equation!(evp, "T_hat(z=0) = 0")
+Tarang.add_equation!(evp, "T_hat(z=1) = 0")
 
 # Solve
 solver = Tarang.EigenvalueSolver(evp; nev=10, which="LR")
@@ -186,10 +186,10 @@ Tarang.add_equation!(evp, """
 """)
 
 # No-slip: ψ = ∂ψ/∂z = 0 at walls
-Tarang.add_dirichlet_bc!(evp, "psi_hat(z=0) = 0")
-Tarang.add_dirichlet_bc!(evp, "psi_hat(z=1) = 0")
-Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=0) = 0")
-Tarang.add_neumann_bc!(evp, "∂z(psi_hat)(z=1) = 0")
+Tarang.add_equation!(evp, "psi_hat(z=0) = 0")
+Tarang.add_equation!(evp, "psi_hat(z=1) = 0")
+Tarang.add_equation!(evp, "∂z(psi_hat)(z=0) = 0")
+Tarang.add_equation!(evp, "∂z(psi_hat)(z=1) = 0")
 ```
 
 ## Parameter Studies
