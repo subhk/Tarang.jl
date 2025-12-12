@@ -549,8 +549,8 @@ register_operator_parseable!(trace, "trace")
 register_operator_alias!(skew, "skew")
 register_operator_parseable!(skew, "skew")
 
-register_operator_alias!(transpose_components, "transpose_components", "transpose")
-register_operator_parseable!(transpose_components, "transpose_components", "transpose")
+register_operator_alias!(transpose_components, "transpose_components", "transpose", "trans")
+register_operator_parseable!(transpose_components, "transpose_components", "transpose", "trans")
 
 register_operator_alias!(interpolate, "interpolate")
 register_operator_parseable!(interpolate, "interpolate")
@@ -573,8 +573,8 @@ register_operator_parseable!(d, "d", "differentiate")
 register_operator_alias!(lift, "lift")
 register_operator_parseable!(lift, "lift")
 
-register_operator_alias!(component, "component")
-register_operator_parseable!(component, "component")
+register_operator_alias!(component, "component", "comp")
+register_operator_parseable!(component, "component", "comp")
 
 register_operator_alias!(radial, "radial")
 register_operator_parseable!(radial, "radial")
