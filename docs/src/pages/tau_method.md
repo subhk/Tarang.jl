@@ -258,9 +258,9 @@ add_equation!(problem,
     lap(u) + lift(tau_u1, zbasis, -1) + lift(tau_u2, zbasis, -2) - f
 )
 
-# Step 4: Add boundary conditions with explicit tau_field
-add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
-add_dirichlet_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u2")
+# Step 4: Add boundary conditions
+add_equation!(problem, "u(z=0) = 0")
+add_equation!(problem, "u(z=1) = 0")
 
 # Solve
 solver = BoundaryValueSolver(problem)
@@ -296,7 +296,7 @@ Tarang.jl closely follows the Dedalus design pattern:
 | Create tau field | `tau_p = dist.Field(name='tau_p', bases=xbasis)` | `tau_p = ScalarField(dist, "tau_p", (xbasis,))` |
 | Lift operator | `lift(tau_p, -1)` | `lift(tau_p, zbasis, -1)` |
 | Add to equation | `"lap(u) + lift(tau_p, -1) = f"` | `lap(u) + lift(tau_p, zbasis, -1) - f` |
-| Add BC | `problem.add_bc("u(z=0) = 0")` | `add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_p")` |
+| Add BC | `problem.add_bc("u(z=0) = 0")` | `add_equation!(problem, "u(z=0) = 0")` |
 
 **Dedalus example:**
 ```python
@@ -317,8 +317,8 @@ tau_u2 = ScalarField(dist, "tau_u2", (xbasis,))
 
 problem = LBVP([u, tau_u1, tau_u2])
 add_equation!(problem, lap(u) + lift(tau_u1, zbasis, -1) + lift(tau_u2, zbasis, -2) - f)
-add_dirichlet_bc!(problem, u, "z", :left, 0.0; tau_field="tau_u1")
-add_dirichlet_bc!(problem, u, "z", :right, 0.0; tau_field="tau_u2")
+add_equation!(problem, "u(z=0) = 0")
+add_equation!(problem, "u(z=1) = 0")
 ```
 
 ### Why Explicit Tau Fields?

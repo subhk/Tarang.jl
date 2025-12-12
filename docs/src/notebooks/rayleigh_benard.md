@@ -67,14 +67,14 @@ Tarang.add_equation!(problem,
 
 ```julia
 # No-slip walls
-Tarang.add_dirichlet_bc!(problem, "ux(z=0) = 0")
-Tarang.add_dirichlet_bc!(problem, "ux(z=1) = 0")
-Tarang.add_dirichlet_bc!(problem, "uz(z=0) = 0")
-Tarang.add_dirichlet_bc!(problem, "uz(z=1) = 0")
+Tarang.add_equation!(problem, "ux(z=0) = 0")
+Tarang.add_equation!(problem, "ux(z=1) = 0")
+Tarang.add_equation!(problem, "uz(z=0) = 0")
+Tarang.add_equation!(problem, "uz(z=1) = 0")
 
 # Fixed temperatures
-Tarang.add_dirichlet_bc!(problem, "T(z=0) = 1")  # Hot
-Tarang.add_dirichlet_bc!(problem, "T(z=1) = 0")  # Cold
+Tarang.add_equation!(problem, "T(z=0) = 1")  # Hot
+Tarang.add_equation!(problem, "T(z=1) = 0")  # Cold
 ```
 
 ## Initial Conditions

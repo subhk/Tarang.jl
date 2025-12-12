@@ -155,8 +155,8 @@ problem = IVP([T])
 add_equation!(problem, "∂t(T) = kappa*lap(T)")
 problem.parameters["kappa"] = 0.01
 
-add_dirichlet_bc!(problem, "T(x=0) = 1")
-add_dirichlet_bc!(problem, "T(x=1) = 0")
+add_equation!(problem, "T(x=0) = 1")
+add_equation!(problem, "T(x=1) = 0")
 
 solver = InitialValueSolver(problem, RK222(), dt=0.001)
 
@@ -377,7 +377,7 @@ add_equation!(problem, "...")
 problem.parameters[...] = ...
 
 # 7. Boundary conditions
-add_dirichlet_bc!(...)
+add_equation!(problem, "...")
 
 # 8. Initial conditions
 # ... initialize fields ...
