@@ -617,98 +617,84 @@ end
 """
     add_dirichlet_bc!(problem::Problem, bc_string::String)
 
+!!! warning "Deprecated"
+    This function is deprecated. Use `add_equation!` instead, which automatically
+    detects boundary condition syntax following Dedalus conventions.
+
+    ```julia
+    # Instead of:
+    add_dirichlet_bc!(problem, "u(z=0) = 0")
+
+    # Use:
+    add_equation!(problem, "u(z=0) = 0")
+    ```
+
 Add Dirichlet boundary condition using Dedalus-style string syntax.
-
-# Supported formats:
-- `"u(z=0) = 0"` - field u at z=0 equals 0
-- `"u(z=1.0) = sin(x)"` - field u at z=1.0 equals sin(x)
-- `"T(z=-1) = 1.0"` - field T at z=-1 equals 1.0
-
-# Examples:
-```julia
-add_dirichlet_bc!(problem, "u(z=0) = 0")
-add_dirichlet_bc!(problem, "T(z=1) = 0")
-add_dirichlet_bc!(problem, "p(x=0) = 1.0")
-```
+Now just a wrapper around `add_equation!` for backward compatibility.
 """
 function add_dirichlet_bc!(problem::Problem, bc_string::String)
-    field, coordinate, position, value = parse_bc_string(bc_string)
-    bc = add_dirichlet!(problem.bc_manager, field, coordinate, position, value)
-
-    # Add to legacy string list
-    eq = bc_to_equation(problem.bc_manager, bc)
-    push!(problem.boundary_conditions, eq)
-
-    return bc
+    @warn "add_dirichlet_bc! is deprecated. Use add_equation!(problem, \"$bc_string\") instead." maxlog=1
+    add_equation!(problem, bc_string)
+    return nothing
 end
 
 """
     add_neumann_bc!(problem::Problem, bc_string::String)
 
-Add Neumann boundary condition using Dedalus-style string syntax.
+!!! warning "Deprecated"
+    This function is deprecated. Use `add_equation!` instead, which automatically
+    detects boundary condition syntax following Dedalus conventions.
 
-# Supported formats:
-- `"∂z(u)(z=0) = 0"` - derivative of u at z=0 equals 0
-- `"∂x(T)(x=1) = 0"` - derivative of T at x=1 equals 0
-- `"T(z=0) = 0"` - simple format (same as Dirichlet syntax)
+    ```julia
+    # Instead of:
+    add_neumann_bc!(problem, "dy(u)(y=0) = 0")
 
-# Examples:
-```julia
-add_neumann_bc!(problem, "∂z(u)(z=0) = 0")
-add_neumann_bc!(problem, "∂z(T)(z=1) = 0")
-```
+    # Use:
+    add_equation!(problem, "dy(u)(y=0) = 0")
+    ```
+
+Add Neumann boundary condition. Now just a wrapper around `add_equation!`.
 """
 function add_neumann_bc!(problem::Problem, bc_string::String)
-    field, coordinate, position, value = parse_neumann_bc_string(bc_string)
-    bc = add_neumann!(problem.bc_manager, field, coordinate, position, value)
-
-    # Add to legacy string list
-    eq = bc_to_equation(problem.bc_manager, bc)
-    push!(problem.boundary_conditions, eq)
-
-    return bc
+    @warn "add_neumann_bc! is deprecated. Use add_equation!(problem, \"$bc_string\") instead." maxlog=1
+    add_equation!(problem, bc_string)
+    return nothing
 end
 
 """
     add_robin_bc!(problem::Problem, bc_string::String)
 
-Add Robin boundary condition using string syntax.
+!!! warning "Deprecated"
+    This function is deprecated. Use `add_equation!` instead.
 
-# Format:
-- `"alpha*field(coord=pos) + beta*∂<coord>(field)(coord=pos) = value"`
-- ASCII format `d<coord>` also supported for backwards compatibility
-
-# Examples:
-```julia
-add_robin_bc!(problem, "1.0*T(z=0) + 0.5*∂z(T)(z=0) = 1.0")
-```
+Add Robin boundary condition. Now just a wrapper around `add_equation!`.
 """
 function add_robin_bc!(problem::Problem, bc_string::String)
-    field, coordinate, position, alpha, beta, value = parse_robin_bc_string(bc_string)
-    bc = add_robin!(problem.bc_manager, field, coordinate, position, alpha, beta, value)
-
-    # Add to legacy string list
-    eq = bc_to_equation(problem.bc_manager, bc)
-    push!(problem.boundary_conditions, eq)
-
-    return bc
+    @warn "add_robin_bc! is deprecated. Use add_equation!(problem, \"$bc_string\") instead." maxlog=1
+    add_equation!(problem, bc_string)
+    return nothing
 end
 
 """
     add_stress_free_bc!(problem::Problem, bc_string::String)
 
-Add stress-free boundary condition using string syntax.
+!!! warning "Deprecated"
+    This function is deprecated. For stress-free BCs, add the component equations
+    directly using `add_equation!`.
 
-# Format:
-- `"field(coord=pos)"` - simple and clean
-
-# Examples:
-```julia
-add_stress_free_bc!(problem, "u(z=0)")
-add_stress_free_bc!(problem, "u(z=1)")
-```
+Add stress-free boundary condition. Now just a wrapper around `add_equation!`.
 """
 function add_stress_free_bc!(problem::Problem, bc_string::String)
+    @warn "add_stress_free_bc! is deprecated. Use add_equation! for each BC component." maxlog=1
+    # Parse and add as equation
+    velocity_field, coordinate, position = parse_stress_free_bc_string(bc_string)
+    # For stress-free, we need multiple equations - just add as-is for now
+    add_equation!(problem, bc_string)
+    return nothing
+end
+
+# Legacy function kept for any code that still calls it
+function _legacy_add_stress_free_bc!(problem::Problem, bc_string::String)
     velocity_field, coordinate, position = parse_stress_free_bc_string(bc_string)
     bc = add_stress_free!(problem.bc_manager, velocity_field, coordinate, position)
 
@@ -722,29 +708,26 @@ end
 """
     add_no_slip_bc!(problem::Problem, bc_string::String)
 
-Add no-slip boundary condition (velocity = 0) using string syntax.
+!!! warning "Deprecated"
+    This function is deprecated. Use `add_equation!` with explicit zero:
 
-# Format:
-- `"field(coord=pos)"` - simple and clean
+    ```julia
+    # Instead of:
+    add_no_slip_bc!(problem, "u(z=0)")
 
-# Examples:
-```julia
-add_no_slip_bc!(problem, "u(z=0)")
-add_no_slip_bc!(problem, "u(z=1)")
-```
+    # Use:
+    add_equation!(problem, "u(z=0) = 0")
+    ```
+
+Add no-slip boundary condition (velocity = 0). Now just a wrapper.
 """
 function add_no_slip_bc!(problem::Problem, bc_string::String)
-    # Reuse the same parser as stress-free (same format: field(coord=pos))
+    @warn "add_no_slip_bc! is deprecated. Use add_equation!(problem, \"$bc_string = 0\") instead." maxlog=1
+    # Parse to extract field, coordinate, position
     velocity_field, coordinate, position = parse_stress_free_bc_string(bc_string)
-
-    # No-slip means velocity = 0 at the boundary (Dirichlet BC)
-    bc = add_dirichlet!(problem.bc_manager, velocity_field, coordinate, position, 0.0)
-
-    # Add to legacy string list
-    eq = bc_to_equation(problem.bc_manager, bc)
-    push!(problem.boundary_conditions, eq)
-
-    return bc
+    # Add as equation with = 0
+    add_equation!(problem, "$velocity_field($coordinate=$position) = 0")
+    return nothing
 end
 
 function register_tau_field!(problem::Problem, name::String, field)

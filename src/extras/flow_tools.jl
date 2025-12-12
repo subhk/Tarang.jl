@@ -1334,8 +1334,8 @@ function qg_system_setup(;
 
     # Boundary conditions: ∂ψ/∂z = (N/f₀)θ at surfaces
     # These will be updated at each timestep with current θ values
-    add_neumann_bc!(interior_bvp, "∂z(ψ)(z=0) = (N/f0)*θ_bot")
-    add_neumann_bc!(interior_bvp, "∂z(ψ)(z=$H) = (N/f0)*θ_top")
+    add_equation!(interior_bvp, "∂z(ψ)(z=0) = (N/f0)*θ_bot")
+    add_equation!(interior_bvp, "∂z(ψ)(z=$H) = (N/f0)*θ_top")
 
     # Surface IVPs: ∂θ/∂t + u·∇θ = κ(-Δ)^α θ
     surface_ivp_bot = IVP([θ_bot])
