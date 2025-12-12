@@ -239,164 +239,103 @@ end
 
 ## Boundary Conditions
 
-### add_dirichlet_bc!
+Boundary conditions in Tarang.jl use the same `add_equation!` function as PDEs. The Dedalus-style syntax `field(coord=value)` is auto-detected and converted to the appropriate `Interpolate` operator.
 
-Add Dirichlet (fixed value) boundary condition.
-
-**Syntax**:
-```julia
-add_dirichlet_bc!(problem, field_name, coord_name, position, value)
-```
-
-**Arguments**:
-- `problem`: Problem object
-- `field_name`: Name of field (String)
-- `coord_name`: Coordinate direction (String)
-- `position`: Location (Float64)
-- `value`: Boundary value (Float64, String expression, or Function)
-
-**Examples**:
+### Dirichlet (Fixed Value)
 
 ```julia
 # Constant value
-add_dirichlet_bc!(problem, "T(z=0) = 1")
-add_dirichlet_bc!(problem, "T(z=1) = 0")
+add_equation!(problem, "T(z=0) = 1")
+add_equation!(problem, "T(z=1) = 0")
 
 # No-slip velocity
-add_dirichlet_bc!(problem, "u(z=0) = 0")
+add_equation!(problem, "u(z=0) = 0")
 
 # Time-dependent
-add_dirichlet_bc!(problem, "u(x=0) = sin(omega*t)")
+add_equation!(problem, "u(x=0) = sin(omega*t)")
 
 # Space-dependent
-add_dirichlet_bc!(problem, "T(z=0) = 1.0 - x^2")
+add_equation!(problem, "T(z=0) = 1.0 - x^2")
 ```
 
 ---
 
-### add_neumann_bc!
-
-Add Neumann (fixed derivative) boundary condition.
-
-**Syntax**:
-```julia
-add_neumann_bc!(problem, field_name, coord_name, position, value)
-```
-
-**Syntax**:
-```julia
-add_neumann_bc!(problem, "d<coord>(field)(coord=pos) = value")
-```
-
-**Examples**:
+### Neumann (Fixed Derivative)
 
 ```julia
 # Insulating boundary (zero heat flux)
-add_neumann_bc!(problem, "∂z(T)(z=0) = 0")  # ∂T/∂z(z=0) = 0
+add_equation!(problem, "∂z(T)(z=0) = 0")  # ∂T/∂z(z=0) = 0
 
 # Fixed flux
-add_neumann_bc!(problem, "∂z(T)(z=1) = -1")  # ∂T/∂z(z=1) = -1
+add_equation!(problem, "∂z(T)(z=1) = -1")  # ∂T/∂z(z=1) = -1
 
 # Time-dependent flux
-add_neumann_bc!(problem, "∂x(phi)(x=0) = sin(omega*t)")
+add_equation!(problem, "∂x(phi)(x=0) = sin(omega*t)")
 ```
 
 ---
 
-### add_robin_bc!
+### Robin (Mixed)
 
-Add Robin (mixed) boundary condition: α*f + β*df/dn = value
-
-**Syntax**:
-```julia
-add_robin_bc!(problem, "alpha*field(coord=pos) + beta*d<coord>(field)(coord=pos) = value")
-```
-
-**Arguments** (via string):
-- `alpha`: Coefficient for field value
-- `beta`: Coefficient for derivative
-- `value`: Right-hand side value
-
-**Examples**:
+Robin boundary condition: α*f + β*df/dn = value
 
 ```julia
 # Convective heat transfer: h*T + k*∂T/∂n = h*T_ambient
 h, k = 10.0, 1.0
 T_ambient = 300.0
-add_robin_bc!(problem, "$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_ambient)")
+add_equation!(problem, "$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_ambient)")
 
 # Radiation boundary: T + ε*∂T/∂n = 0
-add_robin_bc!(problem, "1.0*T(x=0) + $(epsilon)*∂x(T)(x=0) = 0")
+add_equation!(problem, "1.0*T(x=0) + $(epsilon)*∂x(T)(x=0) = 0")
 ```
 
 ---
 
-### add_stress_free_bc!
+### Stress-Free
 
-Add stress-free boundary condition for fluid mechanics: u_normal = 0, ∂u_tangential/∂n = 0
-
-**Syntax**:
-```julia
-add_stress_free_bc!(problem, "field(coord=pos)")
-```
-
-**Examples**:
+Stress-free boundary condition for fluid mechanics: u_normal = 0, ∂u_tangential/∂n = 0
 
 ```julia
 # Stress-free top and bottom (free-slip)
-add_stress_free_bc!(problem, "u(z=0)")
-add_stress_free_bc!(problem, "u(z=1)")
-
-# Equivalent to:
-# w(z=0) = 0, ∂u/∂z(z=0) = 0, ∂v/∂z(z=0) = 0
-# w(z=1) = 0, ∂u/∂z(z=1) = 0, ∂v/∂z(z=1) = 0
+add_equation!(problem, "w(z=0) = 0")
+add_equation!(problem, "∂z(u)(z=0) = 0")
+add_equation!(problem, "∂z(v)(z=0) = 0")
+add_equation!(problem, "w(z=1) = 0")
+add_equation!(problem, "∂z(u)(z=1) = 0")
+add_equation!(problem, "∂z(v)(z=1) = 0")
 ```
 
 ---
 
-### add_no_slip_bc!
+### No-Slip
 
-Add no-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.
-
-**Syntax**:
-```julia
-add_no_slip_bc!(problem, "field(coord=pos)")
-```
-
-**Examples**:
+No-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.
 
 ```julia
 # No-slip at walls
-add_no_slip_bc!(problem, "u(z=0)")
-add_no_slip_bc!(problem, "u(z=1)")
-
-# Equivalent to:
-# u(z=0) = 0, v(z=0) = 0, w(z=0) = 0
-# u(z=1) = 0, v(z=1) = 0, w(z=1) = 0
+add_equation!(problem, "u(z=0) = 0")
+add_equation!(problem, "v(z=0) = 0")
+add_equation!(problem, "w(z=0) = 0")
+add_equation!(problem, "u(z=1) = 0")
+add_equation!(problem, "v(z=1) = 0")
+add_equation!(problem, "w(z=1) = 0")
 ```
 
 ---
 
-### add_bc!
+### Custom Boundary Conditions
 
-Add custom boundary condition using equation syntax.
-
-**Syntax**:
-```julia
-add_bc!(problem, equation_string::String)
-```
-
-**Examples**:
+Use `add_equation!` for any custom boundary condition:
 
 ```julia
 # Custom combinations
-add_bc!(problem, "u(z=0) + 2*∂z(u)(z=0) = 1")
+add_equation!(problem, "u(z=0) + 2*∂z(u)(z=0) = 1")
 
 # Coupling between fields
-add_bc!(problem, "T(x=0) = 2*S(x=0)")
+add_equation!(problem, "T(x=0) = 2*S(x=0)")
 
 # Complex expressions
-add_bc!(problem, "∂x(p)(z=0) + omega^2*u(z=0) = 0")
+add_equation!(problem, "∂x(p)(z=0) + omega^2*u(z=0) = 0")
 ```
 
 ---
@@ -477,8 +416,8 @@ add_equation!(problem, "∂t(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)")
 add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 
 # Add boundary conditions
-add_dirichlet_bc!(problem, "u(z=0) = 0")
-add_dirichlet_bc!(problem, "v(z=0) = 0")
+add_equation!(problem, "u(z=0) = 0")
+add_equation!(problem, "v(z=0) = 0")
 # ... more BCs
 
 # Validate
@@ -577,13 +516,13 @@ add_equation!(problem, "∂x(u) + ∂z(w) = 0")
 add_equation!(problem, "∂t(T) + u*∂x(T) + w*∂z(T) = Δ(T)")
 
 # Boundary conditions
-add_dirichlet_bc!(problem, "u(z=0) = 0")
-add_dirichlet_bc!(problem, "w(z=0) = 0")
-add_dirichlet_bc!(problem, "T(z=0) = 1")
+add_equation!(problem, "u(z=0) = 0")
+add_equation!(problem, "w(z=0) = 0")
+add_equation!(problem, "T(z=0) = 1")
 
-add_dirichlet_bc!(problem, "u(z=1) = 0")
-add_dirichlet_bc!(problem, "w(z=1) = 0")
-add_dirichlet_bc!(problem, "T(z=1) = 0")
+add_equation!(problem, "u(z=1) = 0")
+add_equation!(problem, "w(z=1) = 0")
+add_equation!(problem, "T(z=1) = 0")
 
 # Validate
 validate_problem(problem)

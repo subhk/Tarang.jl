@@ -10,8 +10,8 @@ This guide provides an overview of the Tarang framework. Each section describes 
 
 ## Problems & Boundary Conditions
 - Problems: `IVP`, `LBVP`, `NLBVP`, `EVP`.
-- Equations: `add_equation!(problem, "∂t(u) = ...")` or `add_bc!` / structured BC helpers.
-- BC helpers: `add_dirichlet_bc!`, `add_neumann_bc!`, `add_robin_bc!`, `add_stress_free_bc!`, `add_no_slip_bc!`, `add_custom_bc!`. Time/space-dependent values via string expressions (t, x, y, z) or `TimeDependentValue`/`SpaceDependentValue`.
+- Equations & BCs: Use `add_equation!(problem, "...")` for both PDEs and boundary conditions. Dedalus-style BC syntax `field(coord=value)` is auto-detected and converted to `Interpolate` operators.
+- Time/space-dependent values via string expressions (t, x, y, z) or `TimeDependentValue`/`SpaceDependentValue`.
 - Tau/lift: automatic through `BoundaryConditionManager`; `register_tau_field!` for custom tau fields.
 
 ## Operators & Nonlinear Terms

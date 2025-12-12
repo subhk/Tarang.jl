@@ -54,11 +54,11 @@ add_equation!(problem, "∂t(T) - Δ(T) = -u⋅∇(T)")
 problem.parameters["Pr"] = 1.0
 problem.parameters["Ra"] = 1e5
 
-# Add boundary conditions
-add_dirichlet_bc!(problem, "u(z=0) = 0")
-add_dirichlet_bc!(problem, "u(z=1) = 0")
-add_dirichlet_bc!(problem, "T(z=0) = 1")
-add_dirichlet_bc!(problem, "T(z=1) = 0")
+# Add boundary conditions (Dedalus-style syntax auto-detected)
+add_equation!(problem, "u(z=0) = 0")
+add_equation!(problem, "u(z=1) = 0")
+add_equation!(problem, "T(z=0) = 1")
+add_equation!(problem, "T(z=1) = 0")
 
 # Create solver with timestepper
 solver = InitialValueSolver(problem, RK222(), dt=1e-3)

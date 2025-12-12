@@ -89,40 +89,42 @@ add_equation!(problem, "∂t(T) = Ra*Pr*w + Δ(T)")
 
 ## Boundary Conditions
 
+Boundary conditions use the same `add_equation!` function as PDEs. The Dedalus-style syntax `field(coord=value)` is auto-detected and converted to the appropriate boundary condition.
+
 ### Dirichlet (Value)
 
 ```julia
 # u = value at location
-add_dirichlet_bc!(problem, "u(z=0) = 0")  # u=0 at z=0
-add_dirichlet_bc!(problem, "T(z=1) = 0")  # T=0 at z=1
+add_equation!(problem, "u(z=0) = 0")  # u=0 at z=0
+add_equation!(problem, "T(z=1) = 0")  # T=0 at z=1
 ```
 
 ### Neumann (Derivative)
 
 ```julia
 # du/dz = value at location
-add_neumann_bc!(problem, "∂z(T)(z=1) = 0")  # ∂T/∂z=0 at z=1
+add_equation!(problem, "∂z(T)(z=1) = 0")  # ∂T/∂z=0 at z=1
 ```
 
 ### Robin (Mixed)
 
 ```julia
 # α*u + β*du/dn = γ
-add_robin_bc!(problem, "1.0*T(z=0) + 1.0*∂z(T)(z=0) = 0")
+add_equation!(problem, "1.0*T(z=0) + 1.0*∂z(T)(z=0) = 0")
 ```
 
 ### Stress-Free
 
 ```julia
 # du/dz = 0 (free surface)
-add_stress_free_bc!(problem, "u(z=1)")
+add_equation!(problem, "∂z(u)(z=1) = 0")
 ```
 
 ### No-Slip
 
 ```julia
 # u = 0 (solid wall)
-add_no_slip_bc!(problem, "u(z=0)")
+add_equation!(problem, "u(z=0) = 0")
 ```
 
 ## Problem Validation
@@ -145,8 +147,8 @@ is_valid = validate_problem(problem)
 problem = IVP([T])
 problem.parameters["kappa"] = 0.01
 add_equation!(problem, "∂t(T) = kappa*Δ(T)")
-add_dirichlet_bc!(problem, "T(z=0) = 1")
-add_dirichlet_bc!(problem, "T(z=1) = 0")
+add_equation!(problem, "T(z=0) = 1")
+add_equation!(problem, "T(z=1) = 0")
 ```
 
 ### Incompressible Navier-Stokes
@@ -164,8 +166,8 @@ add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
 
 # No-slip walls
 for field in ["ux", "uz"]
-    add_dirichlet_bc!(problem, "$(field)(z=0) = 0")
-    add_dirichlet_bc!(problem, "$(field)(z=1) = 0")
+    add_equation!(problem, "$(field)(z=0) = 0")
+    add_equation!(problem, "$(field)(z=1) = 0")
 end
 ```
 
@@ -182,12 +184,12 @@ add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
 add_equation!(problem, "∂t(T) + ux*∂x(T) + uz*∂z(T) = Δ(T)")
 
 # Boundary conditions
-add_dirichlet_bc!(problem, "ux(z=0) = 0")
-add_dirichlet_bc!(problem, "ux(z=1) = 0")
-add_dirichlet_bc!(problem, "uz(z=0) = 0")
-add_dirichlet_bc!(problem, "uz(z=1) = 0")
-add_dirichlet_bc!(problem, "T(z=0) = 1")  # Hot bottom
-add_dirichlet_bc!(problem, "T(z=1) = 0")  # Cold top
+add_equation!(problem, "ux(z=0) = 0")
+add_equation!(problem, "ux(z=1) = 0")
+add_equation!(problem, "uz(z=0) = 0")
+add_equation!(problem, "uz(z=1) = 0")
+add_equation!(problem, "T(z=0) = 1")  # Hot bottom
+add_equation!(problem, "T(z=1) = 0")  # Cold top
 ```
 
 ### Poisson Equation (BVP)
@@ -195,8 +197,8 @@ add_dirichlet_bc!(problem, "T(z=1) = 0")  # Cold top
 ```julia
 problem = LBVP([phi])
 add_equation!(problem, "Δ(phi) = rho")
-add_dirichlet_bc!(problem, "phi(z=0) = 0")
-add_dirichlet_bc!(problem, "phi(z=1) = 0")
+add_equation!(problem, "phi(z=0) = 0")
+add_equation!(problem, "phi(z=1) = 0")
 ```
 
 ## See Also
