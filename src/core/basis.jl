@@ -557,6 +557,17 @@ end
 # Alias
 const Fourier = RealFourier
 
+# Convenience constructors for test compatibility: Fourier(coords, name, size)
+function RealFourier(coords::CoordinateSystem, name::String, size::Int; bounds::Tuple=(0.0, 2π), kwargs...)
+    coord = coords[name]
+    return RealFourier(coord; size=size, bounds=bounds, kwargs...)
+end
+
+function ComplexFourier(coords::CoordinateSystem, name::String, size::Int; bounds::Tuple=(0.0, 2π), kwargs...)
+    coord = coords[name]
+    return ComplexFourier(coord; size=size, bounds=bounds, kwargs...)
+end
+
 # ============================================================================
 # Wavenumber computation
 # ============================================================================
