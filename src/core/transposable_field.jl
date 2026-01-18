@@ -1580,17 +1580,31 @@ end
 """
     _do_ialltoallv!(send_buf, recv_buf, send_counts, recv_counts, comm, arch, buffers)
 
-Perform non-blocking MPI.Ialltoallv (async).
-Returns MPI.Request for later waiting.
+Perform non-blocking MPI.Ialltoallv (async) if available.
+Returns MPI.Request for later waiting, or nothing if using blocking fallback.
 """
 function _do_ialltoallv!(send_buf, recv_buf, send_counts, recv_counts,
                          comm::MPI.Comm, arch::CPU, buffers=nothing)
-    request = MPI.Ialltoallv!(send_buf, recv_buf, send_counts, recv_counts, comm)
-    return request
+    # Check if non-blocking Ialltoallv! is available (not in all MPI.jl versions)
+    if isdefined(MPI, :Ialltoallv!)
+        request = MPI.Ialltoallv!(send_buf, recv_buf, send_counts, recv_counts, comm)
+        return request
+    else
+        # Fallback to blocking version
+        _do_alltoallv!(send_buf, recv_buf, send_counts, recv_counts, comm, arch, buffers)
+        return nothing
+    end
 end
 
 function _do_ialltoallv!(send_buf, recv_buf, send_counts, recv_counts,
                          comm::MPI.Comm, arch::AbstractArchitecture, buffers=nothing)
+    # Check if non-blocking Ialltoallv! is available (not in all MPI.jl versions)
+    if !isdefined(MPI, :Ialltoallv!)
+        # Fallback to blocking version
+        _do_alltoallv!(send_buf, recv_buf, send_counts, recv_counts, comm, arch, buffers)
+        return nothing
+    end
+
     if is_gpu(arch) && check_cuda_aware_mpi()
         # Direct GPU buffer transfer (non-blocking)
         request = MPI.Ialltoallv!(send_buf, recv_buf, send_counts, recv_counts, comm)
