@@ -1,0 +1,689 @@
+/* ============================================================================
+   Tarang.jl Documentation - Custom Theme
+   ============================================================================ */
+
+/* Color scheme - Blue logo area, Black sidebar with white links */
+:root {
+    /* Primary colors */
+    --primary-orange: #e67e22;
+    --primary-orange-dark: #d35400;
+    --primary-orange-light: #f39c12;
+
+    /* Logo area (blue) */
+    --logo-bg: #2980b9;
+    --logo-bg-dark: #1a5276;
+
+    /* Sidebar colors (black with white links) */
+    --sidebar-bg: #1a1a1a;
+    --sidebar-bg-dark: #0d0d0d;
+    --sidebar-text: #ffffff;
+    --sidebar-text-hover: #ffffff;
+    --sidebar-active: #ffffff;
+    --sidebar-accent: #2980b9;
+
+    /* Header/Navbar (orange) */
+    --header-bg: #e67e22;
+    --header-text: #ffffff;
+
+    /* Content area */
+    --content-bg: #fcfcfc;
+    --text-color: #333333;
+    --heading-color: #1a1a1a;
+    --link-color: #d35400;
+    --link-hover: #e67e22;
+    --code-bg: #f5f5f5;
+    --border-color: #e0e0e0;
+
+    /* Status colors */
+    --success-color: #27ae60;
+    --warning-color: #f39c12;
+    --danger-color: #e74c3c;
+    --info-color: #3498db;
+}
+
+/* ============================================================================
+   Sidebar Navigation (Black)
+   ============================================================================ */
+
+.docs-sidebar {
+    background-color: var(--sidebar-bg) !important;
+    color: var(--sidebar-text);
+    border-right: none !important;
+}
+
+.docs-sidebar .docs-logo {
+    padding: 1.5rem;
+    text-align: center;
+    background-color: var(--logo-bg);
+    border-bottom: none;
+}
+
+.docs-sidebar .docs-logo img {
+    max-width: 200px;
+    height: auto;
+}
+
+/* Sidebar navigation items */
+.docs-sidebar .docs-menu {
+    padding: 1rem 0;
+}
+
+.docs-sidebar .docs-menu a {
+    color: var(--sidebar-text) !important;
+    padding: 0.5rem 1.5rem;
+    display: block;
+    font-size: 0.95rem;
+    transition: all 0.2s ease;
+    border-left: 3px solid transparent;
+}
+
+.docs-sidebar .docs-menu a:hover {
+    color: var(--sidebar-text-hover) !important;
+    background-color: rgba(255, 255, 255, 0.1);
+    text-decoration: none;
+}
+
+.docs-sidebar .docs-menu a.is-active {
+    color: var(--sidebar-active) !important;
+    background-color: rgba(41, 128, 185, 0.25);
+    border-left: 3px solid var(--sidebar-accent);
+    font-weight: 600;
+}
+
+/* Sidebar section headers */
+.docs-sidebar .menu-label {
+    color: #6cb4e4 !important;
+    font-size: 0.85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    padding: 1rem 1.5rem 0.5rem;
+    margin-top: 0.5rem;
+}
+
+/* Nested menu items */
+.docs-sidebar .menu-list ul {
+    margin-left: 0;
+    padding-left: 0;
+}
+
+.docs-sidebar .menu-list ul a {
+    padding-left: 2.5rem;
+    font-size: 0.9rem;
+}
+
+/* ============================================================================
+   Main Content Area
+   ============================================================================ */
+
+.docs-main {
+    background-color: var(--content-bg);
+}
+
+.content {
+    max-width: 900px;
+    padding: 2rem 3rem;
+    color: var(--text-color);
+    line-height: 1.7;
+}
+
+/* Typography */
+h1, h2, h3, h4, h5, h6 {
+    color: var(--heading-color);
+    font-weight: 700;
+    margin-top: 1.5em;
+    margin-bottom: 0.5em;
+}
+
+h1 {
+    font-size: 2.2rem;
+    border-bottom: 2px solid var(--primary-orange);
+    padding-bottom: 0.5rem;
+}
+
+h2 {
+    font-size: 1.75rem;
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 0.3rem;
+}
+
+h3 {
+    font-size: 1.4rem;
+}
+
+h4 {
+    font-size: 1.2rem;
+}
+
+p {
+    margin-bottom: 1rem;
+}
+
+/* Links */
+a {
+    color: var(--link-color);
+    text-decoration: none;
+}
+
+a:hover {
+    color: var(--link-hover);
+    text-decoration: underline;
+}
+
+/* ============================================================================
+   Code Blocks
+   ============================================================================ */
+
+pre {
+    background-color: var(--code-bg);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid var(--primary-orange);
+    border-radius: 0 3px 3px 0;
+    padding: 1rem;
+    overflow-x: auto;
+    font-size: 0.875rem;
+    line-height: 1.5;
+    margin: 1rem 0;
+}
+
+code {
+    background-color: #fff8f0;
+    border: 1px solid var(--border-color);
+    border-radius: 3px;
+    padding: 0.1em 0.4em;
+    font-size: 0.9em;
+    color: var(--primary-orange-dark);
+}
+
+pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    color: inherit;
+}
+
+/* Syntax highlighting adjustments */
+.hljs {
+    background: var(--code-bg) !important;
+}
+
+/* ============================================================================
+   Admonitions (RTD Style)
+   ============================================================================ */
+
+.admonition {
+    padding: 1rem;
+    margin: 1.5rem 0;
+    border-radius: 0;
+    border: 1px solid;
+    border-left-width: 4px;
+}
+
+.admonition-title {
+    font-weight: 700;
+    margin-bottom: 0.5rem;
+    text-transform: uppercase;
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+}
+
+.admonition.is-info,
+.admonition.info,
+.admonition.note {
+    border-color: var(--info-color);
+    background-color: #e7f2fa;
+}
+
+.admonition.is-info .admonition-title,
+.admonition.info .admonition-title,
+.admonition.note .admonition-title {
+    color: var(--info-color);
+}
+
+.admonition.is-success,
+.admonition.tip,
+.admonition.hint {
+    border-color: var(--success-color);
+    background-color: #dbfaf4;
+}
+
+.admonition.is-success .admonition-title,
+.admonition.tip .admonition-title,
+.admonition.hint .admonition-title {
+    color: var(--success-color);
+}
+
+.admonition.is-warning,
+.admonition.warning,
+.admonition.caution {
+    border-color: var(--warning-color);
+    background-color: #ffedcc;
+}
+
+.admonition.is-warning .admonition-title,
+.admonition.warning .admonition-title,
+.admonition.caution .admonition-title {
+    color: var(--warning-color);
+}
+
+.admonition.is-danger,
+.admonition.danger,
+.admonition.error {
+    border-color: var(--danger-color);
+    background-color: #fdf3f2;
+}
+
+.admonition.is-danger .admonition-title,
+.admonition.danger .admonition-title,
+.admonition.error .admonition-title {
+    color: var(--danger-color);
+}
+
+/* ============================================================================
+   Tables
+   ============================================================================ */
+
+table {
+    width: 100%;
+    margin: 1.5rem 0;
+    border-collapse: collapse;
+    font-size: 0.95rem;
+}
+
+table th {
+    background-color: var(--primary-orange);
+    color: white;
+    padding: 0.75rem 1rem;
+    text-align: left;
+    font-weight: 600;
+    border: 1px solid var(--primary-orange-dark);
+}
+
+table td {
+    padding: 0.75rem 1rem;
+    border: 1px solid var(--border-color);
+    vertical-align: top;
+}
+
+table tr:nth-child(even) {
+    background-color: #faf8f5;
+}
+
+table tr:hover {
+    background-color: #fff5eb;
+}
+
+/* ============================================================================
+   API Documentation
+   ============================================================================ */
+
+.docstring {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    border-left: 3px solid var(--primary-orange);
+    background-color: #fafafa;
+}
+
+.docstring header {
+    font-family: monospace;
+    font-size: 1rem;
+    color: var(--primary-orange-dark);
+    margin-bottom: 0.75rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.docstring > section {
+    margin-top: 0.75rem;
+}
+
+/* Function signatures */
+.documenter-source-link {
+    float: right;
+    font-size: 0.8rem;
+    color: var(--link-color);
+}
+
+/* ============================================================================
+   Top Navbar (Orange)
+   ============================================================================ */
+
+.docs-navbar {
+    background-color: var(--header-bg) !important;
+    border-bottom: none;
+    padding: 0.75rem 1.5rem;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.docs-navbar .breadcrumb {
+    font-size: 0.9rem;
+}
+
+.docs-navbar .breadcrumb a,
+.docs-navbar .breadcrumb li,
+.docs-navbar a {
+    color: var(--header-text) !important;
+}
+
+.docs-navbar .breadcrumb a:hover {
+    color: #fff !important;
+    text-decoration: underline;
+}
+
+.docs-navbar .breadcrumb .is-active {
+    color: rgba(255, 255, 255, 0.8) !important;
+}
+
+/* Navbar burger menu icon */
+.docs-navbar .navbar-burger span {
+    background-color: var(--header-text) !important;
+}
+
+/* ============================================================================
+   Search Box
+   ============================================================================ */
+
+.docs-search {
+    padding: 1rem 1.5rem;
+    background-color: var(--logo-bg);
+}
+
+.docs-search input {
+    width: 100%;
+    padding: 0.5rem 1rem;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 3px;
+    background-color: rgba(255, 255, 255, 0.1);
+    color: white;
+    font-size: 0.9rem;
+}
+
+.docs-search input::placeholder {
+    color: rgba(255, 255, 255, 0.6);
+}
+
+.docs-search input:focus {
+    outline: none;
+    border-color: #ffffff;
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* ============================================================================
+   Footer
+   ============================================================================ */
+
+footer.footer {
+    background-color: var(--sidebar-bg);
+    border-top: 3px solid var(--logo-bg);
+    padding: 2rem;
+    margin-top: 3rem;
+    font-size: 0.85rem;
+    color: #cccccc;
+    text-align: center;
+}
+
+footer a {
+    color: #6cb4e4;
+}
+
+footer a:hover {
+    color: var(--logo-bg);
+}
+
+/* ============================================================================
+   Math Rendering
+   ============================================================================ */
+
+.MathJax {
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+.math-container {
+    margin: 1rem 0;
+    padding: 0.5rem;
+    background-color: #fafafa;
+    border-radius: 3px;
+}
+
+/* ============================================================================
+   Version Selector (if applicable)
+   ============================================================================ */
+
+.version-selector {
+    padding: 0.5rem 1.5rem;
+    background-color: var(--logo-bg-dark);
+    border-bottom: none;
+}
+
+.version-selector select {
+    width: 100%;
+    padding: 0.5rem;
+    background-color: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    color: white;
+    border-radius: 3px;
+    font-size: 0.9rem;
+}
+
+/* ============================================================================
+   Responsive Design
+   ============================================================================ */
+
+@media (max-width: 1024px) {
+    .content {
+        padding: 1.5rem 2rem;
+    }
+}
+
+@media (max-width: 768px) {
+    .docs-sidebar {
+        position: fixed;
+        left: -300px;
+        width: 300px;
+        height: 100%;
+        z-index: 1000;
+        transition: left 0.3s ease;
+    }
+
+    .docs-sidebar.is-active {
+        left: 0;
+    }
+
+    .content {
+        padding: 1rem;
+    }
+
+    h1 {
+        font-size: 1.8rem;
+    }
+
+    h2 {
+        font-size: 1.5rem;
+    }
+
+    table {
+        display: block;
+        overflow-x: auto;
+    }
+}
+
+/* ============================================================================
+   Print Styles
+   ============================================================================ */
+
+@media print {
+    .docs-sidebar,
+    .docs-navbar {
+        display: none;
+    }
+
+    .docs-main {
+        margin-left: 0;
+        width: 100%;
+    }
+
+    a[href]:after {
+        content: " (" attr(href) ")";
+    }
+}
+
+/* ============================================================================
+   Feature Cards (Homepage)
+   ============================================================================ */
+
+.feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin: 2rem 0;
+}
+
+.feature-card {
+    padding: 1.5rem;
+    border: 1px solid var(--border-color);
+    border-top: 3px solid var(--primary-orange);
+    border-radius: 0 0 4px 4px;
+    background-color: white;
+    transition: all 0.2s ease;
+}
+
+.feature-card:hover {
+    box-shadow: 0 4px 12px rgba(230, 126, 34, 0.15);
+    border-top-color: var(--primary-orange-dark);
+}
+
+.feature-card h3 {
+    margin-top: 0;
+    color: var(--primary-orange-dark);
+    font-size: 1.1rem;
+}
+
+.feature-card h3 a {
+    color: var(--primary-orange-dark);
+}
+
+.feature-card h3 a:hover {
+    color: var(--primary-orange);
+}
+
+.feature-card p {
+    margin-bottom: 0;
+    color: #555;
+    font-size: 0.95rem;
+}
+
+/* ============================================================================
+   Quick Start Section
+   ============================================================================ */
+
+.quickstart-box {
+    background: linear-gradient(135deg, var(--primary-orange) 0%, var(--primary-orange-dark) 100%);
+    color: white;
+    padding: 2rem;
+    border-radius: 4px;
+    margin: 2rem 0;
+}
+
+.quickstart-box h2 {
+    color: white;
+    border-bottom: none;
+    margin-top: 0;
+}
+
+.quickstart-box code {
+    background-color: rgba(255, 255, 255, 0.2);
+    border: none;
+    color: white;
+}
+
+.quickstart-box pre {
+    background-color: rgba(0, 0, 0, 0.3);
+    border: none;
+    border-left: 3px solid rgba(255, 255, 255, 0.5);
+}
+
+.quickstart-box pre code {
+    color: #f8f8f8;
+}
+
+/* ============================================================================
+   Badges
+   ============================================================================ */
+
+.badge {
+    display: inline-block;
+    padding: 0.2em 0.6em;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: 3px;
+    margin-right: 0.5rem;
+}
+
+.badge-new {
+    background-color: var(--success-color);
+    color: white;
+}
+
+.badge-beta {
+    background-color: var(--primary-orange);
+    color: white;
+}
+
+.badge-experimental {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.badge-gpu {
+    background-color: var(--sidebar-bg);
+    color: var(--logo-bg);
+    border: 1px solid var(--logo-bg);
+}
+
+/* ============================================================================
+   Additional Orange/Black Theme Elements
+   ============================================================================ */
+
+/* Highlighted sections */
+.highlight-box {
+    background-color: #fff5eb;
+    border: 1px solid var(--primary-orange);
+    border-radius: 4px;
+    padding: 1.5rem;
+    margin: 1.5rem 0;
+}
+
+/* Orange accent for important elements */
+.accent {
+    color: var(--primary-orange);
+}
+
+/* Dark section */
+.dark-section {
+    background-color: var(--sidebar-bg);
+    color: #ffffff;
+    padding: 2rem;
+    border-radius: 4px;
+    margin: 1.5rem 0;
+}
+
+.dark-section h3 {
+    color: #6cb4e4;
+}
+
+.dark-section a {
+    color: #6cb4e4;
+}
+
+/* Version badge in sidebar */
+.version-badge {
+    display: inline-block;
+    background-color: var(--logo-bg);
+    color: white;
+    padding: 0.2em 0.5em;
+    border-radius: 3px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-left: 0.5rem;
+}
