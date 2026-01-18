@@ -183,7 +183,8 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     push!(dist.transforms, fft_plan)
 
     @info "Set up PencilFFT transform for axes $fourier_axes with global shape $global_shape"
-    @info "Parallel decomposition: vertical=$(dist.mesh[1]) × horizontal=$(dist.mesh[2]) processes"
+    mesh_str = length(dist.mesh) >= 2 ? "$(dist.mesh[1]) × $(dist.mesh[2])" : "$(dist.mesh[1])"
+    @info "Parallel decomposition: $mesh_str processes"
 end
 
 function setup_fftw_transform!(dist::Distributor, basis::Union{RealFourier, ComplexFourier}, axis::Int)
@@ -1528,7 +1529,7 @@ function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
     push!(dist.transforms, fft_plan)
     
     @info "Set up 3D PencilFFT transform for axes $fourier_axes with global shape $global_shape"
-    @info "3D parallel decomposition: $(dist.mesh[1]) × $(dist.mesh[2]) × $(dist.mesh[3]) processes"
+    @info "3D parallel decomposition: $(join(dist.mesh, " × ")) processes"
 end
 
 function setup_fftw_transforms_nd!(dist::Distributor, domain::Domain, fourier_axes::Vector{Int})
