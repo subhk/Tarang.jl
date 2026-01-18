@@ -1,0 +1,230 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - dev
+    tags: ['*']
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  # Skip intermediate builds: always.
+  # Cancel intermediate builds: only if it is a pull request build.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ startsWith(github.ref, 'refs/pull/') }}
+
+jobs:
+  test:
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }} - ${{ matrix.arch }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1.10'
+          - '1.11'
+          - '1.12'
+        os:
+          - ubuntu-latest
+          - macOS-latest
+          - windows-latest
+        arch:
+          - x64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ matrix.version }}
+          arch: ${{ matrix.arch }}
+
+      - name: Install MPI (Ubuntu)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - name: Install MPI (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install open-mpi
+
+      - name: Install MPI (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          (new-object net.webclient).DownloadFile("https://download.microsoft.com/download/a/5/2/a5207ca5-1203-491a-8fb8-906fd68ae623/msmpisetup.exe", "msmpisetup.exe")
+          .\msmpisetup.exe -unattend -minimal
+        shell: pwsh
+
+      - uses: julia-actions/cache@v1
+
+      - name: Build package
+        uses: julia-actions/julia-buildpkg@v1
+
+      - name: Configure MPI (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          julia --project -e 'using Pkg; Pkg.add("MPIPreferences"); using MPIPreferences; MPIPreferences.use_system_binary(; mpiexec="C:\\Program Files\\Microsoft MPI\\Bin\\mpiexec")'
+        shell: pwsh
+
+      - name: Run tests
+        uses: julia-actions/julia-runtest@v1
+        env:
+          JULIA_NUM_THREADS: 2
+          OMP_NUM_THREADS: 1
+
+      - name: Process coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        if: matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
+        with:
+          files: lcov.info
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - uses: julia-actions/cache@v1
+
+      - name: Install dependencies
+        run: julia --project=docs/ -e 'using Pkg; Pkg.develop(PackageSpec(path=pwd())); Pkg.instantiate()'
+
+      - name: Build documentation
+        run: julia --project=docs/ docs/make.jl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+
+  code-quality:
+    name: Code Quality
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.12'
+
+      - uses: julia-actions/cache@v1
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - name: Install Julia dependencies
+        run: julia --project -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Check code formatting (JuliaFormatter)
+        run: |
+          julia -e 'using Pkg; Pkg.add("JuliaFormatter")'
+          julia -e 'using JuliaFormatter; format(".", verbose=true) || error("Formatting check failed")'
+        continue-on-error: true
+
+  mpi-tests:
+    name: MPI Tests - ${{ matrix.nprocs }} processes
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        nprocs: [2, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.12'
+
+      - uses: julia-actions/cache@v1
+
+      - name: Build package
+        uses: julia-actions/julia-buildpkg@v1
+
+      - name: Precompile
+        run: julia --project -e 'using Pkg; Pkg.precompile()'
+
+      - name: Verify MPI configuration
+        run: |
+          julia --project -e '
+            using MPI
+            println("MPI implementation: ", MPI.identify_implementation())
+            println("mpiexec: ", MPI.mpiexec())
+          '
+
+      - name: Run MPI Distributor tests
+        run: |
+          julia --project -e '
+            using MPI
+            mpiexec_cmd = MPI.mpiexec()
+            run(`$mpiexec_cmd -n ${{ matrix.nprocs }} $(Base.julia_cmd()) --project test/test_mpi_distributor.jl`)
+          '
+        env:
+          JULIA_NUM_THREADS: 1
+          OMP_NUM_THREADS: 1
+
+      - name: Run Distributed GPU Transpose tests
+        run: |
+          julia --project -e '
+            using MPI
+            mpiexec_cmd = MPI.mpiexec()
+            run(`$mpiexec_cmd -n ${{ matrix.nprocs }} $(Base.julia_cmd()) --project test/test_distributed_gpu_transpose.jl`)
+          '
+        env:
+          JULIA_NUM_THREADS: 1
+          OMP_NUM_THREADS: 1
+
+  performance:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.12'
+
+      - name: Install MPI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - uses: julia-actions/cache@v1
+
+      - name: Build package
+        uses: julia-actions/julia-buildpkg@v1
+
+      - name: Run benchmarks
+        run: |
+          julia --project -e 'using Pkg; Pkg.add("BenchmarkTools")'
+          julia --project benchmarks/run_benchmarks.jl
+        continue-on-error: true
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmarks/results/
+        if: always()
