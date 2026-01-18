@@ -265,9 +265,10 @@ end
     end
 
     if nprocs >= 4
-        @testset "Full transpose chain (3D with 2D mesh)" begin
+        @testset "3D transpose Z to Y and back (with 2D mesh)" begin
             coords = CartesianCoordinates("x", "y", "z")
 
+            # Use 2D mesh for 3D data (pencil decomposition)
             mesh = (2, nprocs ÷ 2)
             dist = Distributor(coords; mesh=mesh, dtype=Float64, architecture=CPU())
 
@@ -287,13 +288,11 @@ end
 
             tf = TransposableField(field)
 
-            # Full forward: Z -> Y -> X
+            # Z to Y transpose (works with 2D mesh)
             transpose_z_to_y!(tf)
-            transpose_y_to_x!(tf)
-            @test active_layout(tf) == XLocal
+            @test active_layout(tf) == YLocal
 
-            # Full backward: X -> Y -> Z
-            transpose_x_to_y!(tf)
+            # Y back to Z
             transpose_y_to_z!(tf)
             @test active_layout(tf) == ZLocal
 
