@@ -753,21 +753,29 @@ function compute_yx_counts_2d!(tf::TransposableField{F,T,N}) where {F,T,N}
         y_shape = tf.local_shapes[YLocal]
         x_shape = tf.local_shapes[XLocal]
 
-        # Y→X: redistribute x-dimension among column communicator
-        local_nz = y_shape[3]
+        # Y→X transpose: redistribute y→partial, x→full
+        # - We have YLocal: (Nx/Rx, Ny, Nz/Ry) with full y
+        # - We want XLocal: (Nx, Ny/Rx, Nz/Ry) with full x
+        # - Communication is along col_comm (size = Rx)
+        # - Send: partition our y dimension among col_comm processes
+        # - Recv: gather x dimension from col_comm processes
+        local_nx = y_shape[1]   # Our x portion (Nx/Rx)
+        local_ny = x_shape[2]   # Our y portion after transpose (Ny/Rx)
+        local_nz = y_shape[3]   # z portion (same in both layouts)
 
         send_offset = 0
         recv_offset = 0
 
         for p in 0:(nprocs-1)
-            # Chunks of x we send to process p
-            Nx_p = divide_evenly(Nx, nprocs, p)
-            local_ny_send = y_shape[2]
-            send_count = Nx_p * local_ny_send * local_nz
-
-            # Chunks of y we receive from process p
+            # Send: chunks of our y dimension to process p
+            # Process p will own y indices: local_range(Ny, nprocs, p)
             Ny_p = divide_evenly(Ny, nprocs, p)
-            recv_count = x_shape[1] * Ny_p * local_nz
+            send_count = local_nx * Ny_p * local_nz
+
+            # Recv: chunks of x dimension from process p
+            # Process p owns x indices: local_range(Nx, nprocs, p)
+            Nx_p = divide_evenly(Nx, nprocs, p)
+            recv_count = Nx_p * local_ny * local_nz
 
             tf.counts.yx_send_counts[p+1] = send_count
             tf.counts.yx_recv_counts[p+1] = recv_count
@@ -948,10 +956,11 @@ function transpose_y_to_x!(tf::TransposableField{F,T,N}) where {F,T,N}
 
     send_buf, recv_buf = get_active_buffers(tf)
 
+    # Y→X: pack by Y dimension (dim=2), unpack by X dimension (dim=1)
     pack_start = time()
     pack_for_transpose!(send_buf, tf.buffers.y_local_data,
                         tf.counts.yx_send_counts, tf.counts.yx_send_displs,
-                        1, topo.col_size, arch)
+                        2, topo.col_size, arch)
     tf.total_pack_time += time() - pack_start
 
     _do_alltoallv!(send_buf, recv_buf,
@@ -992,6 +1001,7 @@ function transpose_x_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
 
     send_buf, recv_buf = get_active_buffers(tf)
 
+    # X→Y: pack by X dimension (dim=1), unpack by Y dimension (dim=2)
     pack_start = time()
     pack_for_transpose!(send_buf, tf.buffers.x_local_data,
                         tf.counts.yx_recv_counts, tf.counts.yx_recv_displs,
@@ -1005,7 +1015,7 @@ function transpose_x_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
     unpack_start = time()
     unpack_from_transpose!(tf.buffers.y_local_data, recv_buf,
                           tf.counts.yx_send_counts, tf.counts.yx_send_displs,
-                          1, topo.col_size, arch)
+                          2, topo.col_size, arch)
     tf.total_unpack_time += time() - unpack_start
 
     tf.buffers.active_layout[] = YLocal
@@ -1106,10 +1116,11 @@ function async_transpose_y_to_x!(tf::TransposableField{F,T,N}) where {F,T,N}
     send_buf = tf.buffers.send_buffer_2
     recv_buf = tf.buffers.recv_buffer_2
 
+    # Y→X: pack by Y dimension (dim=2)
     pack_start = time()
     pack_for_transpose!(send_buf, tf.buffers.y_local_data,
                         tf.counts.yx_send_counts, tf.counts.yx_send_displs,
-                        1, topo.col_size, arch)
+                        2, topo.col_size, arch)
     tf.async_state.pack_time = time() - pack_start
 
     request = _do_ialltoallv!(send_buf, recv_buf,
