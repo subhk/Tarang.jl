@@ -178,8 +178,13 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     transforms = Tuple(transform_list)
 
     # Create the PencilFFT plan (only for parallel execution)
-    # RFFT expects Float64 input, FFT expects ComplexF64 input
-    pencil_dtype = uses_rfft ? dist.dtype : Complex{dist.dtype}
+    # RFFT expects real input, FFT expects complex input
+    # If dtype is already complex, use it directly; otherwise wrap in Complex{}
+    pencil_dtype = if uses_rfft
+        dist.dtype
+    else
+        dist.dtype <: Complex ? dist.dtype : Complex{dist.dtype}
+    end
     pencil = create_pencil(dist, global_shape, 1, dtype=pencil_dtype)
     fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
 
@@ -1528,8 +1533,13 @@ function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
     @info "Setting up $(length(fourier_axes))D FFT for axes: $fourier_axes"
 
     # Create the PencilFFT plan with 3D pencil decomposition (only for parallel execution)
-    # RFFT expects Float64 input, FFT expects ComplexF64 input
-    pencil_dtype = uses_rfft ? dist.dtype : Complex{dist.dtype}
+    # RFFT expects real input, FFT expects complex input
+    # If dtype is already complex, use it directly; otherwise wrap in Complex{}
+    pencil_dtype = if uses_rfft
+        dist.dtype
+    else
+        dist.dtype <: Complex ? dist.dtype : Complex{dist.dtype}
+    end
     pencil = create_pencil(dist, global_shape, 1, dtype=pencil_dtype)
     fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
     
