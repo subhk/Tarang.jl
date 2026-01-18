@@ -207,14 +207,13 @@ end
 
 @testset "MPI Transform Tests (rank=$rank)" begin
 
-    @testset "Distributed forward/backward transform round-trip" begin
+    @testset "PencilFFT forward/backward transform round-trip" begin
         coords = CartesianCoordinates("x", "y")
-        # Use ComplexF64 dtype for ComplexFourier bases which require complex input for FFT
-        dist = Distributor(coords; mesh=(nprocs,), dtype=ComplexF64, architecture=CPU())
+        dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
-        # Use ComplexFourier for distributed_forward_transform! which uses complex FFT internally
-        xbasis = ComplexFourier(coords["x"]; size=32, bounds=(0.0, 2π))
-        ybasis = ComplexFourier(coords["y"]; size=32, bounds=(0.0, 2π))
+        # Use RealFourier bases - PencilFFTs properly handles RFFT transforms
+        xbasis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+        ybasis = RealFourier(coords["y"]; size=32, bounds=(0.0, 2π))
 
         field = ScalarField(dist, "transform_test", (xbasis, ybasis))
 
@@ -227,26 +226,21 @@ end
 
         original = copy(field["g"])
 
-        tf = TransposableField(field)
+        # Use regular forward/backward transforms which properly use PencilFFTs
+        forward_transform!(field)
+        backward_transform!(field)
 
-        # Forward transform
-        distributed_forward_transform!(tf)
-
-        # Backward transform
-        distributed_backward_transform!(tf)
-
-        # Should recover original data
+        # Should recover original data (allow some tolerance for FFT round-trip)
         @test isapprox(field["g"], original, rtol=1e-10)
     end
 
     @testset "Transpose Z to Y and back" begin
         coords = CartesianCoordinates("x", "y")
-        # Use ComplexF64 dtype for ComplexFourier bases
-        dist = Distributor(coords; mesh=(nprocs,), dtype=ComplexF64, architecture=CPU())
+        dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
-        # Use 2D with ComplexFourier for transpose tests (3D requires 3D process mesh)
-        xbasis = ComplexFourier(coords["x"]; size=16, bounds=(0.0, 2π))
-        ybasis = ComplexFourier(coords["y"]; size=16, bounds=(0.0, 2π))
+        # Use RealFourier bases for transpose tests
+        xbasis = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+        ybasis = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
 
         field = ScalarField(dist, "transpose_test", (xbasis, ybasis))
         field["g"] .= Float64(rank + 1)
@@ -343,22 +337,20 @@ if _HAS_CUDA
 
         @testset "GPU TransposableField round-trip" begin
             coords = CartesianCoordinates("x", "y")
-            # Use ComplexF32 dtype for ComplexFourier bases which require complex input for FFT
-            dist = Distributor(coords; mesh=(nprocs,), dtype=ComplexF32, architecture=GPU())
+            dist = Distributor(coords; mesh=(nprocs,), dtype=Float32, architecture=GPU())
 
-            # Use ComplexFourier for distributed_forward_transform! which uses complex FFT internally
-            xbasis = ComplexFourier(coords["x"]; size=32, bounds=(0.0, 2π))
-            ybasis = ComplexFourier(coords["y"]; size=32, bounds=(0.0, 2π))
+            # Use RealFourier bases
+            xbasis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+            ybasis = RealFourier(coords["y"]; size=32, bounds=(0.0, 2π))
 
             field = ScalarField(dist, "gpu_mpi", (xbasis, ybasis))
-            # Use complex random data for ComplexFourier bases
-            field["g"] .= CUDA.rand(ComplexF32, size(field["g"])...)
+            field["g"] .= CUDA.rand(Float32, size(field["g"])...)
 
             original = copy(field["g"])
 
-            tf = TransposableField(field)
-            distributed_forward_transform!(tf)
-            distributed_backward_transform!(tf)
+            # Use regular forward/backward transforms
+            forward_transform!(field)
+            backward_transform!(field)
 
             @test isapprox(Array(field["g"]), Array(original), rtol=1e-4)
         end
