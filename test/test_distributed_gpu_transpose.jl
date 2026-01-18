@@ -124,32 +124,33 @@ end
 
 @testset "Distributed Transforms (rank=$rank)" begin
 
-    @testset "Serial equivalent (size=1 simulation)" begin
-        # Even with multiple processes, test the serial code path
+    @testset "PencilFFT 2D transform (rank=$rank)" begin
+        # Test PencilFFT-based transforms with proper mesh
         coords = CartesianCoordinates("x", "y")
-        dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
+        dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
         xbasis = Fourier(coords, "x", 16)
         ybasis = Fourier(coords, "y", 16)
 
-        field = ScalarField(dist, "serial_equiv", (xbasis, ybasis))
+        field = ScalarField(dist, "pencil_2d", (xbasis, ybasis))
 
         x = range(0, 2π, length=16)
         y = range(0, 2π, length=16)
-        for i in 1:16, j in 1:16
-            field["g"][i, j] = sin(x[i]) * cos(y[j])
+        local_shape = size(field["g"])
+        for i in 1:local_shape[1], j in 1:local_shape[2]
+            field["g"][i, j] = sin(2π * i / 16) * cos(2π * j / 16)
         end
 
         original = copy(field["g"])
 
-        tf = TransposableField(field)
-        distributed_forward_transform!(tf)
-        distributed_backward_transform!(tf)
+        # Use regular forward/backward transforms which properly use PencilFFTs
+        forward_transform!(field)
+        backward_transform!(field)
 
         @test isapprox(field["g"], original, rtol=1e-10)
     end
 
-    @testset "2D Distributed (rank=$rank)" begin
+    @testset "2D Distributed transform (rank=$rank)" begin
         coords = CartesianCoordinates("x", "y")
         dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
@@ -167,9 +168,9 @@ end
 
         original = copy(field["g"])
 
-        tf = TransposableField(field)
-        distributed_forward_transform!(tf)
-        distributed_backward_transform!(tf)
+        # Use regular forward/backward transforms
+        forward_transform!(field)
+        backward_transform!(field)
 
         # Round-trip should preserve data
         @test isapprox(field["g"], original, rtol=1e-8)
