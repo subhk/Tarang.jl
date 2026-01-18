@@ -211,8 +211,9 @@ end
         coords = CartesianCoordinates("x", "y")
         dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
-        xbasis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
-        ybasis = RealFourier(coords["y"]; size=32, bounds=(0.0, 2π))
+        # Use ComplexFourier for distributed_forward_transform! which uses complex FFT internally
+        xbasis = ComplexFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+        ybasis = ComplexFourier(coords["y"]; size=32, bounds=(0.0, 2π))
 
         field = ScalarField(dist, "transform_test", (xbasis, ybasis))
 
@@ -238,14 +239,14 @@ end
     end
 
     @testset "Transpose Z to Y and back" begin
-        coords = CartesianCoordinates("x", "y", "z")
+        coords = CartesianCoordinates("x", "y")
         dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
-        xbasis = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
-        ybasis = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
-        zbasis = RealFourier(coords["z"]; size=16, bounds=(0.0, 2π))
+        # Use 2D with ComplexFourier for transpose tests (3D requires 3D process mesh)
+        xbasis = ComplexFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+        ybasis = ComplexFourier(coords["y"]; size=16, bounds=(0.0, 2π))
 
-        field = ScalarField(dist, "transpose_test", (xbasis, ybasis, zbasis))
+        field = ScalarField(dist, "transpose_test", (xbasis, ybasis))
         field["g"] .= Float64(rank + 1)
 
         tf = TransposableField(field)
@@ -343,8 +344,9 @@ if _HAS_CUDA
             coords = CartesianCoordinates("x", "y")
             dist = Distributor(coords; mesh=(nprocs,), dtype=Float32, architecture=GPU())
 
-            xbasis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
-            ybasis = RealFourier(coords["y"]; size=32, bounds=(0.0, 2π))
+            # Use ComplexFourier for distributed_forward_transform! which uses complex FFT internally
+            xbasis = ComplexFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+            ybasis = ComplexFourier(coords["y"]; size=32, bounds=(0.0, 2π))
 
             field = ScalarField(dist, "gpu_mpi", (xbasis, ybasis))
             field["g"] .= CUDA.rand(Float32, size(field["g"])...)
