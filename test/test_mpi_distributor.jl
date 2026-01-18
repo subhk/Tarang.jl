@@ -209,7 +209,8 @@ end
 
     @testset "Distributed forward/backward transform round-trip" begin
         coords = CartesianCoordinates("x", "y")
-        dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
+        # Use ComplexF64 dtype for ComplexFourier bases which require complex input for FFT
+        dist = Distributor(coords; mesh=(nprocs,), dtype=ComplexF64, architecture=CPU())
 
         # Use ComplexFourier for distributed_forward_transform! which uses complex FFT internally
         xbasis = ComplexFourier(coords["x"]; size=32, bounds=(0.0, 2π))
@@ -240,7 +241,8 @@ end
 
     @testset "Transpose Z to Y and back" begin
         coords = CartesianCoordinates("x", "y")
-        dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
+        # Use ComplexF64 dtype for ComplexFourier bases
+        dist = Distributor(coords; mesh=(nprocs,), dtype=ComplexF64, architecture=CPU())
 
         # Use 2D with ComplexFourier for transpose tests (3D requires 3D process mesh)
         xbasis = ComplexFourier(coords["x"]; size=16, bounds=(0.0, 2π))
@@ -342,14 +344,16 @@ if _HAS_CUDA
 
         @testset "GPU TransposableField round-trip" begin
             coords = CartesianCoordinates("x", "y")
-            dist = Distributor(coords; mesh=(nprocs,), dtype=Float32, architecture=GPU())
+            # Use ComplexF32 dtype for ComplexFourier bases which require complex input for FFT
+            dist = Distributor(coords; mesh=(nprocs,), dtype=ComplexF32, architecture=GPU())
 
             # Use ComplexFourier for distributed_forward_transform! which uses complex FFT internally
             xbasis = ComplexFourier(coords["x"]; size=32, bounds=(0.0, 2π))
             ybasis = ComplexFourier(coords["y"]; size=32, bounds=(0.0, 2π))
 
             field = ScalarField(dist, "gpu_mpi", (xbasis, ybasis))
-            field["g"] .= CUDA.rand(Float32, size(field["g"])...)
+            # Use complex random data for ComplexFourier bases
+            field["g"] .= CUDA.rand(ComplexF32, size(field["g"])...)
 
             original = copy(field["g"])
 

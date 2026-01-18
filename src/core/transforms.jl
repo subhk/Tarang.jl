@@ -163,11 +163,13 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
 
     # Build transforms tuple based on basis types
     transform_list = []
+    uses_rfft = false
     for (i, axis) in enumerate(fourier_axes)
         basis = domain.bases[axis]
         if isa(basis, RealFourier) && i == 1
             # First RealFourier axis uses RFFT (real-to-complex)
             push!(transform_list, PencilFFTs.Transforms.RFFT())
+            uses_rfft = true
         else
             # ComplexFourier or subsequent axes use FFT (complex-to-complex)
             push!(transform_list, PencilFFTs.Transforms.FFT())
@@ -176,7 +178,9 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     transforms = Tuple(transform_list)
 
     # Create the PencilFFT plan (only for parallel execution)
-    pencil = create_pencil(dist, global_shape, 1)
+    # RFFT expects Float64 input, FFT expects ComplexF64 input
+    pencil_dtype = uses_rfft ? dist.dtype : Complex{dist.dtype}
+    pencil = create_pencil(dist, global_shape, 1, dtype=pencil_dtype)
     fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
 
     # Store the plan in the distributor
@@ -1507,11 +1511,13 @@ function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
 
     # Build transforms tuple based on basis types
     transform_list = []
+    uses_rfft = false
     for (i, axis) in enumerate(fourier_axes)
         basis = domain.bases[axis]
         if isa(basis, RealFourier) && i == 1
             # First RealFourier axis uses RFFT (real-to-complex)
             push!(transform_list, PencilFFTs.Transforms.RFFT())
+            uses_rfft = true
         else
             # ComplexFourier or subsequent axes use FFT (complex-to-complex)
             push!(transform_list, PencilFFTs.Transforms.FFT())
@@ -1522,7 +1528,9 @@ function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
     @info "Setting up $(length(fourier_axes))D FFT for axes: $fourier_axes"
 
     # Create the PencilFFT plan with 3D pencil decomposition (only for parallel execution)
-    pencil = create_pencil(dist, global_shape, 1)
+    # RFFT expects Float64 input, FFT expects ComplexF64 input
+    pencil_dtype = uses_rfft ? dist.dtype : Complex{dist.dtype}
+    pencil = create_pencil(dist, global_shape, 1, dtype=pencil_dtype)
     fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
     
     # Store the plan in the distributor
