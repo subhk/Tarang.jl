@@ -361,7 +361,8 @@ function TransposableField(field::ScalarField; topology=nothing)
     end
 
     N = length(gshape)
-    T = Complex{dist.dtype}  # Spectral transforms use complex
+    # Spectral transforms use complex; if dtype is already complex, use it directly
+    T = dist.dtype <: Complex ? dist.dtype : Complex{dist.dtype}
 
     # Create 2D topology
     topo = if topology !== nothing

@@ -1564,32 +1564,38 @@ end
 
 function setup_pencil_arrays_3d(dist::Distributor, global_shape::Tuple{Vararg{Int}})
     """Setup 3D PencilArrays configuration"""
-    
+
     if length(global_shape) != 3
         throw(ArgumentError("3D setup requires 3D global shape, got $(length(global_shape))D"))
     end
-    
-    if length(dist.mesh) != 3
-        throw(ArgumentError("3D setup requires 3D process mesh, got $(length(dist.mesh))D"))
+
+    mesh_len = length(dist.mesh)
+    if mesh_len < 2 || mesh_len > 3
+        throw(ArgumentError("3D setup requires 2D or 3D process mesh, got $(mesh_len)D"))
     end
-    
+
     # Validate mesh
     if prod(dist.mesh) != dist.size
-        throw(ArgumentError("3D process mesh $(dist.mesh) incompatible with $(dist.size) processes"))
+        throw(ArgumentError("Process mesh $(dist.mesh) incompatible with $(dist.size) processes"))
     end
-    
-    # Create 3D PencilArrays configuration with full 3D decomposition
+
+    # Create PencilArrays configuration
+    # For 2D mesh with 3D data (pencil decomposition), only decompose last 2 dimensions
+    # For 3D mesh with 3D data, decompose all 3 dimensions
+    decomp_dims = mesh_len == 3 ? (true, true, true) : (false, true, true)
+
     dist.pencil_config = PencilConfig(
-        global_shape, 
-        dist.mesh, 
+        global_shape,
+        dist.mesh,
         comm=dist.comm,
-        decomp_dims=(true, true, true)  # Enable decomposition along all 3 axes
+        decomp_dims=decomp_dims
     )
     
+    decomp_str = mesh_len == 3 ? "3D (all axes)" : "2D pencil (last 2 axes)"
     @info "Created 3D PencilArrays configuration:"
     @info "  Global shape: $global_shape"
     @info "  Process mesh: $(dist.mesh)"
-    @info "  Decomposition: 3D (all axes)"
+    @info "  Decomposition: $decomp_str"
     
     return dist.pencil_config
 end
