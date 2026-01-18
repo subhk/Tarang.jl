@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Solvers API · Tarang.jl</title><meta name="title" content="Solvers API · Tarang.jl"/><meta property="og:title" content="Solvers API · Tarang.jl"/><meta property="twitter:title" content="Solvers API · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/api/solvers/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/api/solvers/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/api/solvers/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox"/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../tutorials/overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Tutorial: Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Spectral Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../../pages/les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../../pages/custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox" checked/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../bases/">Bases API</a></li><li><a class="tocitem" href="../domains/">Domains API</a></li><li><a class="tocitem" href="../fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox" checked/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../operators/">Operators API</a></li><li><a class="tocitem" href="../problems/">Problems API</a></li><li class="is-active"><a class="tocitem" href>Solvers API</a><ul class="internal"><li><a class="tocitem" href="#Solver-Types"><span>Solver Types</span></a></li><li><a class="tocitem" href="#Solver-State-Management"><span>Solver State Management</span></a></li><li><a class="tocitem" href="#Time-Integration"><span>Time Integration</span></a></li><li><a class="tocitem" href="#Solver-Options"><span>Solver Options</span></a></li><li><a class="tocitem" href="#Advanced-Solver-Features"><span>Advanced Solver Features</span></a></li><li><a class="tocitem" href="#Solver-Diagnostics"><span>Solver Diagnostics</span></a></li><li><a class="tocitem" href="#Error-Handling"><span>Error Handling</span></a></li><li><a class="tocitem" href="#Complete-Example"><span>Complete Example</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../les_models/">LES Models API</a></li><li><a class="tocitem" href="../analysis/">Analysis API</a></li><li><a class="tocitem" href="../io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">API Reference</a></li><li><a class="is-disabled">Operators &amp; Problems</a></li><li class="is-active"><a href>Solvers API</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Solvers API</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/api/solvers.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Solvers-API"><a class="docs-heading-anchor" href="#Solvers-API">Solvers API</a><a id="Solvers-API-1"></a><a class="docs-heading-anchor-permalink" href="#Solvers-API" title="Permalink"></a></h1><p>Solvers integrate PDEs in time or solve for steady states. Tarang.jl provides specialized solvers for different problem types.</p><h2 id="Solver-Types"><a class="docs-heading-anchor" href="#Solver-Types">Solver Types</a><a id="Solver-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-Types" title="Permalink"></a></h2><h3 id="InitialValueSolver"><a class="docs-heading-anchor" href="#InitialValueSolver">InitialValueSolver</a><a id="InitialValueSolver-1"></a><a class="docs-heading-anchor-permalink" href="#InitialValueSolver" title="Permalink"></a></h3><p>Time-stepping solver for Initial Value Problems (IVP).</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">InitialValueSolver(
+    problem::IVP,
+    timestepper::TimeStepper;
+    dt::Float64=0.001,
+    device::String=&quot;cpu&quot;
+)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: IVP problem definition</li><li><code>timestepper</code>: Time integration scheme (RK222, CNAB2, etc.)</li><li><code>dt</code>: Initial timestep</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># IMEX Runge-Kutta
+solver = InitialValueSolver(problem, RK222(), dt=0.001)
+
+# IMEX timestepper
+solver = InitialValueSolver(problem, CNAB2(), dt=0.01)
+
+# Higher-order timestepper
+solver = InitialValueSolver(problem, RK443(), dt=0.001)</code></pre><p><strong>Properties</strong>:</p><pre><code class="language-julia hljs">solver.problem          # IVP problem
+solver.timestepper      # Time integration scheme
+solver.dt               # Current timestep
+solver.sim_time         # Current simulation time
+solver.iteration        # Current iteration number
+solver.wall_time        # Elapsed wall clock time
+solver.state            # Current state vector</code></pre><p><strong>Methods</strong>:</p><h4 id="step!"><a class="docs-heading-anchor" href="#step!">step!</a><a id="step!-1"></a><a class="docs-heading-anchor-permalink" href="#step!" title="Permalink"></a></h4><p>Advance solution by one timestep.</p><pre><code class="language-julia hljs">step!(solver)           # Use solver.dt
+step!(solver, dt)       # Use specified dt</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Fixed timestep
+while solver.sim_time &lt; t_end
+    step!(solver, 0.001)
+end
+
+# Adaptive timestep (with CFL)
+cfl = CFL(problem, safety=0.5)
+add_velocity!(cfl, u)
+
+while solver.sim_time &lt; t_end
+    dt = compute_timestep(cfl)
+    step!(solver, dt)
+end</code></pre><h4 id="proceed"><a class="docs-heading-anchor" href="#proceed">proceed</a><a id="proceed-1"></a><a class="docs-heading-anchor-permalink" href="#proceed" title="Permalink"></a></h4><p>Check if simulation should continue.</p><pre><code class="language-julia hljs"># Set stop conditions
+solver.stop_sim_time = 10.0
+solver.stop_wall_time = 3600.0  # 1 hour
+solver.stop_iteration = 10000
+
+while proceed(solver)
+    step!(solver)
+end</code></pre><hr/><h3 id="BoundaryValueSolver"><a class="docs-heading-anchor" href="#BoundaryValueSolver">BoundaryValueSolver</a><a id="BoundaryValueSolver-1"></a><a class="docs-heading-anchor-permalink" href="#BoundaryValueSolver" title="Permalink"></a></h3><p>Solver for Linear Boundary Value Problems (LBVP).</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">BoundaryValueSolver(
+    problem::LBVP;
+    solver_type::String=&quot;direct&quot;,
+    tolerance::Float64=1e-10
+)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: LBVP problem definition</li><li><code>solver_type</code>: Solution method (&quot;direct&quot;, &quot;iterative&quot;, &quot;multigrid&quot;)</li><li><code>tolerance</code>: Convergence tolerance for iterative solvers</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Direct solver (for small problems)
+solver = BoundaryValueSolver(problem, solver_type=&quot;direct&quot;)
+
+# Iterative solver (for large problems)
+solver = BoundaryValueSolver(problem, solver_type=&quot;iterative&quot;, tolerance=1e-8)</code></pre><p><strong>Methods</strong>:</p><h4 id="solve!"><a class="docs-heading-anchor" href="#solve!">solve!</a><a id="solve!-1"></a><a class="docs-heading-anchor-permalink" href="#solve!" title="Permalink"></a></h4><p>Solve the boundary value problem.</p><pre><code class="language-julia hljs">solve!(solver)</code></pre><p><strong>Returns</strong>: Solution fields are updated in place</p><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Poisson equation
+problem = LBVP([phi])
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)
+add_equation!(problem, &quot;phi(z=0) = 0&quot;)
+add_equation!(problem, &quot;phi(z=1) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+
+# Solution is now in phi field
+phi_grid = get_grid_data(phi)</code></pre><hr/><h3 id="NonlinearBoundaryValueSolver"><a class="docs-heading-anchor" href="#NonlinearBoundaryValueSolver">NonlinearBoundaryValueSolver</a><a id="NonlinearBoundaryValueSolver-1"></a><a class="docs-heading-anchor-permalink" href="#NonlinearBoundaryValueSolver" title="Permalink"></a></h3><p>Newton-Raphson solver for Nonlinear Boundary Value Problems (NLBVP).</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">NonlinearBoundaryValueSolver(
+    problem::NLBVP;
+    tolerance::Float64=1e-8,
+    max_iterations::Int=100,
+    damping::Float64=1.0
+)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: NLBVP problem definition</li><li><code>tolerance</code>: Convergence tolerance</li><li><code>max_iterations</code>: Maximum Newton iterations</li><li><code>damping</code>: Damping factor for Newton steps (0 &lt; damping ≤ 1)</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Standard Newton solver
+solver = NonlinearBoundaryValueSolver(problem, tolerance=1e-8)
+
+# With damping for stability
+solver = NonlinearBoundaryValueSolver(problem, damping=0.5, max_iterations=50)</code></pre><p><strong>Methods</strong>:</p><h4 id="solve!-2"><a class="docs-heading-anchor" href="#solve!-2">solve!</a><a class="docs-heading-anchor-permalink" href="#solve!-2" title="Permalink"></a></h4><p>Solve using Newton-Raphson iteration.</p><pre><code class="language-julia hljs">success = solve!(solver)</code></pre><p><strong>Returns</strong>: <code>true</code> if converged, <code>false</code> otherwise</p><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Steady Navier-Stokes
+problem = NLBVP([u, v, p])
+add_equation!(problem, &quot;u*∂x(u) + v*∂z(u) + ∂x(p) = nu*Δ(u)&quot;)
+add_equation!(problem, &quot;u*∂x(v) + v*∂z(v) + ∂z(p) = nu*Δ(v)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)
+
+solver = NonlinearBoundaryValueSolver(problem)
+
+if solve!(solver)
+    println(&quot;Converged in $(solver.iterations) iterations&quot;)
+else
+    println(&quot;Failed to converge&quot;)
+end</code></pre><p><strong>Properties</strong>:</p><pre><code class="language-julia hljs">solver.iterations       # Number of iterations performed
+solver.residual         # Final residual norm
+solver.converged        # Convergence status</code></pre><hr/><h3 id="EigenvalueSolver"><a class="docs-heading-anchor" href="#EigenvalueSolver">EigenvalueSolver</a><a id="EigenvalueSolver-1"></a><a class="docs-heading-anchor-permalink" href="#EigenvalueSolver" title="Permalink"></a></h3><p>Solver for Eigenvalue Problems (EVP).</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">EigenvalueSolver(
+    problem::EVP;
+    nev::Int=10,
+    target::Complex{Float64}=0.0+0.0im,
+    which::String=&quot;LM&quot;
+)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: EVP problem definition</li><li><code>nev</code>: Number of eigenvalues to compute</li><li><code>target</code>: Target eigenvalue for shift-invert</li><li><code>which</code>: Which eigenvalues to find (&quot;LM&quot;, &quot;SM&quot;, &quot;LR&quot;, &quot;SR&quot;, &quot;LI&quot;, &quot;SI&quot;)</li></ul><p><strong>Which options</strong>:</p><ul><li>&quot;LM&quot;: Largest magnitude</li><li>&quot;SM&quot;: Smallest magnitude</li><li>&quot;LR&quot;: Largest real part</li><li>&quot;SR&quot;: Smallest real part</li><li>&quot;LI&quot;: Largest imaginary part</li><li>&quot;SI&quot;: Smallest imaginary part</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Find 10 eigenvalues with largest growth rate
+solver = EigenvalueSolver(problem, nev=10, which=&quot;LR&quot;)
+
+# Find eigenvalues near target
+solver = EigenvalueSolver(problem, nev=5, target=0.1+1.5im)
+
+# Most unstable modes
+solver = EigenvalueSolver(problem, nev=20, which=&quot;LR&quot;)</code></pre><p><strong>Methods</strong>:</p><h4 id="solve!-3"><a class="docs-heading-anchor" href="#solve!-3">solve!</a><a class="docs-heading-anchor-permalink" href="#solve!-3" title="Permalink"></a></h4><p>Compute eigenvalues and eigenvectors.</p><pre><code class="language-julia hljs">eigenvalues, eigenvectors = solve!(solver)</code></pre><p><strong>Returns</strong>:</p><ul><li><code>eigenvalues</code>: Array of complex eigenvalues</li><li><code>eigenvectors</code>: Array of eigenvector fields</li></ul><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Rayleigh-Bénard stability
+problem = EVP([u, v, p, T], eigenvalue=:sigma)
+# ... add equations and BCs ...
+
+solver = EigenvalueSolver(problem, nev=10, which=&quot;LR&quot;)
+eigenvalues, eigenvectors = solve!(solver)
+
+# Find critical mode
+max_idx = argmax(real.(eigenvalues))
+growth_rate = real(eigenvalues[max_idx])
+frequency = imag(eigenvalues[max_idx])
+
+println(&quot;Maximum growth rate: $growth_rate&quot;)
+println(&quot;Frequency: $frequency&quot;)
+
+# Extract critical mode
+critical_mode = eigenvectors[max_idx]</code></pre><hr/><h2 id="Solver-State-Management"><a class="docs-heading-anchor" href="#Solver-State-Management">Solver State Management</a><a id="Solver-State-Management-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-State-Management" title="Permalink"></a></h2><h3 id="Saving-and-Loading-State"><a class="docs-heading-anchor" href="#Saving-and-Loading-State">Saving and Loading State</a><a id="Saving-and-Loading-State-1"></a><a class="docs-heading-anchor-permalink" href="#Saving-and-Loading-State" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Save solver state
+save_state(solver, &quot;checkpoint.h5&quot;)
+
+# Load solver state
+load_state!(solver, &quot;checkpoint.h5&quot;)
+
+# Resume simulation
+while proceed(solver)
+    step!(solver)
+end</code></pre><h3 id="State-Vector-Access"><a class="docs-heading-anchor" href="#State-Vector-Access">State Vector Access</a><a id="State-Vector-Access-1"></a><a class="docs-heading-anchor-permalink" href="#State-Vector-Access" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get state vector
+state = get_state(solver)
+
+# Set state vector
+set_state!(solver, new_state)
+
+# Useful for custom initialization or analysis</code></pre><hr/><h2 id="Time-Integration"><a class="docs-heading-anchor" href="#Time-Integration">Time Integration</a><a id="Time-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Integration" title="Permalink"></a></h2><h3 id="Time-Stepping-Loop"><a class="docs-heading-anchor" href="#Time-Stepping-Loop">Time Stepping Loop</a><a id="Time-Stepping-Loop-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Stepping-Loop" title="Permalink"></a></h3><p>Basic pattern for time integration:</p><pre><code class="language-julia hljs"># Create solver
+solver = InitialValueSolver(problem, RK222(), dt=0.001)
+
+# Set stop conditions
+t_end = 10.0
+
+# Time loop
+while solver.sim_time &lt; t_end
+    step!(solver)
+
+    # Optional: output and diagnostics
+    if solver.iteration % 100 == 0
+        println(&quot;t = $(solver.sim_time), iteration = $(solver.iteration)&quot;)
+    end
+end</code></pre><h3 id="Adaptive-Time-Stepping"><a class="docs-heading-anchor" href="#Adaptive-Time-Stepping">Adaptive Time Stepping</a><a id="Adaptive-Time-Stepping-1"></a><a class="docs-heading-anchor-permalink" href="#Adaptive-Time-Stepping" title="Permalink"></a></h3><p>With CFL condition:</p><pre><code class="language-julia hljs"># Create CFL calculator
+cfl = CFL(problem, safety=0.5, max_change=1.5, min_change=0.5)
+add_velocity!(cfl, u)
+
+# Adaptive loop
+while solver.sim_time &lt; t_end
+    # Compute adaptive timestep
+    dt = compute_timestep(cfl)
+
+    # Take step
+    step!(solver, dt)
+end</code></pre><h3 id="Output-During-Integration"><a class="docs-heading-anchor" href="#Output-During-Integration">Output During Integration</a><a id="Output-During-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Output-During-Integration" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Setup output handler
+output = add_netcdf_handler(
+    solver,
+    &quot;output&quot;,
+    fields=[u, p, T],
+    write_interval=0.1
+)
+
+# Time loop with automatic output
+while solver.sim_time &lt; t_end
+    dt = compute_timestep(cfl)
+    step!(solver, dt)
+    # Output written automatically when t &gt; next_write_time
+end</code></pre><hr/><h2 id="Solver-Options"><a class="docs-heading-anchor" href="#Solver-Options">Solver Options</a><a id="Solver-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-Options" title="Permalink"></a></h2><h3 id="Convergence-Criteria"><a class="docs-heading-anchor" href="#Convergence-Criteria">Convergence Criteria</a><a id="Convergence-Criteria-1"></a><a class="docs-heading-anchor-permalink" href="#Convergence-Criteria" title="Permalink"></a></h3><p>For iterative and nonlinear solvers:</p><pre><code class="language-julia hljs">solver.tolerance = 1e-10           # Residual tolerance
+solver.max_iterations = 1000       # Maximum iterations
+solver.relative_tolerance = 1e-8   # Relative change tolerance</code></pre><h3 id="Performance-Options"><a class="docs-heading-anchor" href="#Performance-Options">Performance Options</a><a id="Performance-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Options" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Parallel options
+solver.use_threading = true
+solver.num_threads = 4
+
+# Memory options
+solver.preallocate_work = true
+solver.work_array_count = 5</code></pre><hr/><h2 id="Advanced-Solver-Features"><a class="docs-heading-anchor" href="#Advanced-Solver-Features">Advanced Solver Features</a><a id="Advanced-Solver-Features-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Solver-Features" title="Permalink"></a></h2><h3 id="Preconditioners"><a class="docs-heading-anchor" href="#Preconditioners">Preconditioners</a><a id="Preconditioners-1"></a><a class="docs-heading-anchor-permalink" href="#Preconditioners" title="Permalink"></a></h3><p>For iterative solvers:</p><pre><code class="language-julia hljs"># Set preconditioner type
+solver.preconditioner = &quot;jacobi&quot;  # or &quot;ilu&quot;, &quot;multigrid&quot;
+
+# Custom preconditioner
+function my_preconditioner(A, b)
+    # Custom preconditioning operation
+    return P \ b
+end
+
+solver.preconditioner = my_preconditioner</code></pre><h3 id="Matrix-Free-Methods"><a class="docs-heading-anchor" href="#Matrix-Free-Methods">Matrix-Free Methods</a><a id="Matrix-Free-Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Matrix-Free-Methods" title="Permalink"></a></h3><p>For large problems:</p><pre><code class="language-julia hljs"># Use matrix-free Krylov methods
+solver.matrix_free = true
+solver.krylov_method = &quot;gmres&quot;  # or &quot;bicgstab&quot;, &quot;cg&quot;</code></pre><h3 id="Continuation-Methods"><a class="docs-heading-anchor" href="#Continuation-Methods">Continuation Methods</a><a id="Continuation-Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Continuation-Methods" title="Permalink"></a></h3><p>For nonlinear problems:</p><pre><code class="language-julia hljs"># Parameter continuation
+Ra_values = [1e4, 5e4, 1e5, 5e5, 1e6]
+
+solution = nothing
+for Ra in Ra_values
+    problem.parameters[&quot;Ra&quot;] = Ra
+
+    if solution !== nothing
+        # Use previous solution as initial guess
+        set_state!(solver, solution)
+    end
+
+    solve!(solver)
+    solution = get_state(solver)
+
+    println(&quot;Solved for Ra = $Ra&quot;)
+end</code></pre><hr/><h2 id="Solver-Diagnostics"><a class="docs-heading-anchor" href="#Solver-Diagnostics">Solver Diagnostics</a><a id="Solver-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-Diagnostics" title="Permalink"></a></h2><h3 id="Convergence-Monitoring"><a class="docs-heading-anchor" href="#Convergence-Monitoring">Convergence Monitoring</a><a id="Convergence-Monitoring-1"></a><a class="docs-heading-anchor-permalink" href="#Convergence-Monitoring" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Enable convergence monitoring
+solver.verbose = true
+solver.print_interval = 10
+
+# Custom convergence callback
+function convergence_callback(solver, iteration, residual)
+    if iteration % 10 == 0
+        println(&quot;Iteration $iteration: residual = $residual&quot;)
+    end
+end
+
+solver.convergence_callback = convergence_callback</code></pre><h3 id="Performance-Profiling"><a class="docs-heading-anchor" href="#Performance-Profiling">Performance Profiling</a><a id="Performance-Profiling-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Profiling" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Enable profiling
+solver.profile = true
+
+# After solving
+print_performance_summary(solver)
+# Outputs:
+# - Time per iteration
+# - Time in different solver phases
+# - Memory usage
+# - Communication time (MPI)</code></pre><hr/><h2 id="Error-Handling"><a class="docs-heading-anchor" href="#Error-Handling">Error Handling</a><a id="Error-Handling-1"></a><a class="docs-heading-anchor-permalink" href="#Error-Handling" title="Permalink"></a></h2><h3 id="Solver-Failures"><a class="docs-heading-anchor" href="#Solver-Failures">Solver Failures</a><a id="Solver-Failures-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-Failures" title="Permalink"></a></h3><pre><code class="language-julia hljs">try
+    solve!(solver)
+catch e
+    if isa(e, ConvergenceError)
+        println(&quot;Failed to converge: $(e.message)&quot;)
+        println(&quot;Residual: $(e.residual)&quot;)
+    elseif isa(e, LinearAlgebraError)
+        println(&quot;Linear algebra error: $(e.message)&quot;)
+    else
+        rethrow(e)
+    end
+end</code></pre><h3 id="Recovery-Strategies"><a class="docs-heading-anchor" href="#Recovery-Strategies">Recovery Strategies</a><a id="Recovery-Strategies-1"></a><a class="docs-heading-anchor-permalink" href="#Recovery-Strategies" title="Permalink"></a></h3><pre><code class="language-julia hljs"># For nonlinear solvers
+if !solver.converged
+    # Try with damping
+    solver.damping = 0.5
+    solve!(solver)
+
+    if !solver.converged
+        # Try with better initial guess
+        # ... provide better initialization
+        solve!(solver)
+    end
+end</code></pre><hr/><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><h3 id="Time-Dependent-Simulation"><a class="docs-heading-anchor" href="#Time-Dependent-Simulation">Time-Dependent Simulation</a><a id="Time-Dependent-Simulation-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Dependent-Simulation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang, MPI
+
+MPI.Init()
+
+# Setup problem (2D Rayleigh-Bénard)
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(2, 2))
+
+x_basis = RealFourier(coords[&quot;x&quot;], size=256, bounds=(0.0, 4.0))
+z_basis = ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))
+
+domain = Domain(dist, (x_basis, z_basis))
+
+u = VectorField(dist, coords, &quot;u&quot;, (x_basis, z_basis))
+p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
+T = ScalarField(dist, &quot;T&quot;, (x_basis, z_basis))
+
+# Define problem
+problem = IVP([u.components[1], u.components[2], p, T])
+problem.parameters[&quot;Ra&quot;] = 1e6
+problem.parameters[&quot;Pr&quot;] = 1.0
+
+add_equation!(problem, &quot;∂t(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(w) = 0&quot;)
+add_equation!(problem, &quot;∂t(T) + u*∂x(T) + w*∂z(T) = Δ(T)&quot;)
+
+# Boundary conditions
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;w(z=0) = 0&quot;)
+add_equation!(problem, &quot;T(z=0) = 1&quot;)
+add_equation!(problem, &quot;u(z=1) = 0&quot;)
+add_equation!(problem, &quot;w(z=1) = 0&quot;)
+add_equation!(problem, &quot;T(z=1) = 0&quot;)
+
+# Initialize fields
+# ... set initial conditions ...
+
+# Create solver
+solver = InitialValueSolver(problem, RK222(), dt=1e-4)
+
+# CFL condition
+cfl = CFL(problem, safety=0.5)
+add_velocity!(cfl, u)
+
+# Output
+output = add_netcdf_handler(solver, &quot;output&quot;, fields=[u, p, T], write_interval=0.1)
+
+# Time integration
+t_end = 10.0
+while solver.sim_time &lt; t_end
+    dt = compute_timestep(cfl)
+    step!(solver, dt)
+
+    if solver.iteration % 100 == 0 &amp;&amp; MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        println(&quot;t = $(solver.sim_time), dt = $dt&quot;)
+    end
+end
+
+MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../problems/">Problems</a>: Problem definition</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li><li><a href="../analysis/">Analysis</a>: CFL conditions and diagnostics</li><li><a href="../../tutorials/ivp_2d_rbc/">Tutorial: IVP</a>: Complete example</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../problems/">« Problems API</a><a class="docs-footer-nextpage" href="../timesteppers/">Timesteppers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

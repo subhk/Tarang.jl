@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Stochastic Forcing · Tarang.jl</title><meta name="title" content="Stochastic Forcing · Tarang.jl"/><meta property="og:title" content="Stochastic Forcing · Tarang.jl"/><meta property="twitter:title" content="Stochastic Forcing · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/pages/stochastic_forcing/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/pages/stochastic_forcing/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/pages/stochastic_forcing/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox"/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../tutorials/overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Tutorial: Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox" checked/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates</a></li><li><a class="tocitem" href="../bases/">Spectral Bases</a></li><li><a class="tocitem" href="../domains/">Domains</a></li><li><a class="tocitem" href="../fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../operators/">Operators</a></li><li><a class="tocitem" href="../problems/">Problems</a></li><li><a class="tocitem" href="../solvers/">Solvers</a></li><li><a class="tocitem" href="../timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox" checked/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li class="is-active"><a class="tocitem" href>Stochastic Forcing</a><ul class="internal"><li><a class="tocitem" href="#TL;DR-Automatic-Forcing-(Recommended)"><span>TL;DR - Automatic Forcing (Recommended)</span></a></li><li><a class="tocitem" href="#Why-Stochastic-Forcing-Needs-Special-Handling"><span>Why Stochastic Forcing Needs Special Handling</span></a></li><li><a class="tocitem" href="#Complete-Example:-Forced-2D-Turbulence"><span>Complete Example: Forced 2D Turbulence</span></a></li><li><a class="tocitem" href="#Understanding-the-Example"><span>Understanding the Example</span></a></li><li><a class="tocitem" href="#Step-by-Step-Breakdown"><span>Step-by-Step Breakdown</span></a></li><li><a class="tocitem" href="#Spectrum-Types"><span>Spectrum Types</span></a></li><li><a class="tocitem" href="#Mathematical-Background"><span>Mathematical Background</span></a></li><li><a class="tocitem" href="#Multi-Stage-Timesteppers"><span>Multi-Stage Timesteppers</span></a></li><li><a class="tocitem" href="#Adaptive-Timestepping"><span>Adaptive Timestepping</span></a></li><li><a class="tocitem" href="#Troubleshooting"><span>Troubleshooting</span></a></li><li><a class="tocitem" href="#API-Reference-Summary"><span>API Reference Summary</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li><li><a class="tocitem" href="#References"><span>References</span></a></li></ul></li><li><a class="tocitem" href="../temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../parallelism/">Parallelism</a></li><li><a class="tocitem" href="../optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../../api/bases/">Bases API</a></li><li><a class="tocitem" href="../../api/domains/">Domains API</a></li><li><a class="tocitem" href="../../api/fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/operators/">Operators API</a></li><li><a class="tocitem" href="../../api/problems/">Problems API</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers API</a></li><li><a class="tocitem" href="../../api/timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models API</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis API</a></li><li><a class="tocitem" href="../../api/io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../contributing/">Contributing</a></li><li><a class="tocitem" href="../architecture/">Architecture</a></li><li><a class="tocitem" href="../testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li><a class="is-disabled">Physics &amp; Modeling</a></li><li class="is-active"><a href>Stochastic Forcing</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Stochastic Forcing</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/pages/stochastic_forcing.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Stochastic-Forcing"><a class="docs-heading-anchor" href="#Stochastic-Forcing">Stochastic Forcing</a><a id="Stochastic-Forcing-1"></a><a class="docs-heading-anchor-permalink" href="#Stochastic-Forcing" title="Permalink"></a></h1><p>This page demonstrates how to set up a forced-dissipative 2D turbulence simulation, following the approach from <a href="https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/stochastic_forcing/">GeophysicalFlows.jl</a>.</p><hr/><h2 id="TL;DR-Automatic-Forcing-(Recommended)"><a class="docs-heading-anchor" href="#TL;DR-Automatic-Forcing-(Recommended)">TL;DR - Automatic Forcing (Recommended)</a><a id="TL;DR-Automatic-Forcing-(Recommended)-1"></a><a class="docs-heading-anchor-permalink" href="#TL;DR-Automatic-Forcing-(Recommended)" title="Permalink"></a></h2><p>The simplest way to add stochastic forcing is using <code>add_stochastic_forcing!</code>:</p><pre><code class="language-julia hljs"># 1. Create forcing
+forcing = StochasticForcing(
+    field_size = (256, 256),
+    energy_injection_rate = 0.1,
+    k_forcing = 10.0,
+    dt = dt
+)
+
+# 2. Register with problem by variable symbol - forcing is handled automatically!
+add_stochastic_forcing!(problem, :ω, forcing)
+
+# 3. Just call step! - no manual forcing management needed
+for step in 1:nsteps
+    step!(solver)  # Forcing generated &amp; applied internally
+end</code></pre><p>The timestepper automatically:</p><ul><li>Generates forcing ONCE at the start of each timestep</li><li>Uses the SAME forcing value across all RK substeps</li><li>Adds forcing to the RHS of the specified equation</li></ul><p>This ensures correct <strong>Stratonovich calculus</strong> without any manual intervention.</p><hr/><h2 id="Why-Stochastic-Forcing-Needs-Special-Handling"><a class="docs-heading-anchor" href="#Why-Stochastic-Forcing-Needs-Special-Handling">Why Stochastic Forcing Needs Special Handling</a><a id="Why-Stochastic-Forcing-Needs-Special-Handling-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Stochastic-Forcing-Needs-Special-Handling" title="Permalink"></a></h2><p>White-in-time noise requires careful handling for correct statistics:</p><ol><li><strong>Stratonovich vs Itô</strong>: Physical systems use Stratonovich calculus where the chain rule works normally</li><li><strong>Constant within timestep</strong>: For Stratonovich correctness, forcing must be constant across all RK substeps</li><li><strong>√dt scaling</strong>: Discrete forcing needs <code>F = √(Q̂/dt) · noise</code> to give correct variance</li></ol><p>If you wrote forcing as a regular RHS term, it would be evaluated at each RK stage with different random values - this gives <strong>wrong statistics</strong> (Itô instead of Stratonovich).</p><hr/><h2 id="Complete-Example:-Forced-2D-Turbulence"><a class="docs-heading-anchor" href="#Complete-Example:-Forced-2D-Turbulence">Complete Example: Forced 2D Turbulence</a><a id="Complete-Example:-Forced-2D-Turbulence-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example:-Forced-2D-Turbulence" title="Permalink"></a></h2><p>We simulate the 2D vorticity equation with stochastic forcing and linear drag:</p><p class="math-container">\[\frac{\partial \omega}{\partial t} + J(\psi, \omega) = -\mu \omega + \nu \nabla^2 \omega + \xi\]</p><p>where ξ is white-in-time, spatially-correlated stochastic forcing.</p><pre><code class="language-julia hljs">using Tarang
+using Random
+using Printf
+
+# ============================================================
+# 1. Physical and Numerical Parameters
+# ============================================================
+
+# Grid
+n = 256                     # Resolution
+L = 2π                      # Domain size
+dt = 0.005                  # Timestep
+nsteps = 4000               # Total steps
+
+# Dissipation
+ν = 2e-7                    # Viscosity (hyperviscosity coefficient)
+μ = 1e-1                    # Linear drag coefficient
+
+# Forcing parameters
+forcing_wavenumber = 14.0 * 2π/L    # k_f: force at this scale
+forcing_bandwidth = 1.5 * 2π/L      # δ_f: width of forcing ring
+ε = 0.1                              # Energy injection rate
+
+# ============================================================
+# 2. Set Up Domain and Fields
+# ============================================================
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+dist = Distributor(coords; mesh=(1, 1))
+
+xbasis = RealFourier(coords[&quot;x&quot;]; size=n, bounds=(0.0, L))
+ybasis = RealFourier(coords[&quot;y&quot;]; size=n, bounds=(0.0, L))
+domain = Domain(dist, (xbasis, ybasis))
+
+# Vorticity field
+ω = ScalarField(dist, &quot;omega&quot;, (xbasis, ybasis))
+
+# ============================================================
+# 3. Create Stochastic Forcing
+# ============================================================
+
+# The forcing is concentrated in a ring around |k| = k_f
+# with Gaussian profile: exp(-(|k| - k_f)² / 2δ_f²)
+
+forcing = StochasticForcing(
+    field_size = (n, n),
+    domain_size = (L, L),
+    energy_injection_rate = ε,
+    k_forcing = forcing_wavenumber,
+    dk_forcing = forcing_bandwidth,
+    dt = dt,
+    spectrum_type = :ring,
+    rng = MersenneTwister(1234)     # For reproducibility
+)
+
+println(&quot;Forcing setup:&quot;)
+println(&quot;  k_forcing = $(forcing_wavenumber) (mode ≈ $(forcing_wavenumber * L / 2π))&quot;)
+println(&quot;  bandwidth = $(forcing_bandwidth)&quot;)
+println(&quot;  ε = $(ε)&quot;)
+
+# ============================================================
+# 4. Set Up Problem and Solver
+# ============================================================
+
+problem = IVP([ω])
+
+# Vorticity equation: ∂ω/∂t = -μω + ν∇²ω - J(ψ,ω) + ξ
+# Note: Forcing ξ is NOT in the equation string - it&#39;s added automatically!
+add_equation!(problem, &quot;∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)&quot;)
+problem.parameters[&quot;ν&quot;] = ν
+problem.parameters[&quot;μ&quot;] = μ
+
+# Register stochastic forcing - it will be added to ω&#39;s RHS automatically
+add_stochastic_forcing!(problem, :ω, forcing)
+
+solver = InitialValueSolver(problem, RK443(); dt=dt, device=&quot;cpu&quot;)
+
+# ============================================================
+# 5. Diagnostics: Energy and Enstrophy
+# ============================================================
+
+function compute_energy(ω_hat, grid)
+    # E = ½⟨|∇ψ|²⟩ = ½ ∑_k |ω̂_k|² / |k|²
+    E = 0.0
+    for j in 1:size(ω_hat, 2), i in 1:size(ω_hat, 1)
+        k2 = grid.kx[i]^2 + grid.ky[j]^2
+        if k2 &gt; 0
+            E += abs2(ω_hat[i,j]) / k2
+        end
+    end
+    return 0.5 * E / prod(size(ω_hat))
+end
+
+function compute_enstrophy(ω_hat)
+    # Z = ½⟨ω²⟩ = ½ ∑_k |ω̂_k|²
+    return 0.5 * sum(abs2, ω_hat) / prod(size(ω_hat))
+end
+
+# ============================================================
+# 6. Time Integration Loop
+# ============================================================
+
+# Storage for diagnostics
+t_save = Float64[]
+E_save = Float64[]
+Z_save = Float64[]
+work_save = Float64[]
+
+println(&quot;\nStarting simulation...&quot;)
+println(&quot;=&quot; ^ 60)
+
+for step in 1:nsteps
+    # Store previous solution for Stratonovich work calculation (optional diagnostic)
+    store_prevsol!(forcing, ω.data_c)
+
+    # Advance one timestep - forcing is generated and applied automatically!
+    step!(solver)
+
+    # Compute work done by forcing (Stratonovich) - optional diagnostic
+    W = work_stratonovich(forcing, ω.data_c)
+
+    # Periodic diagnostics
+    if step % 100 == 0 || step == 1
+        E = compute_energy(ω.data_c, domain.grid)
+        Z = compute_enstrophy(ω.data_c)
+
+        push!(t_save, solver.sim_time)
+        push!(E_save, E)
+        push!(Z_save, Z)
+        push!(work_save, W)
+
+        @printf(&quot;step %4d, t = %6.3f, E = %.2e, Z = %.2e, W = %+.2e\n&quot;,
+                step, solver.sim_time, E, Z, W)
+    end
+end
+
+println(&quot;=&quot; ^ 60)
+println(&quot;Simulation complete!&quot;)
+println(&quot;Final time: $(solver.sim_time)&quot;)
+println(&quot;Mean energy injection rate: $(mean(work_save ./ dt))&quot;)</code></pre><hr/><h2 id="Understanding-the-Example"><a class="docs-heading-anchor" href="#Understanding-the-Example">Understanding the Example</a><a id="Understanding-the-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-the-Example" title="Permalink"></a></h2><h3 id="Forcing-Spectrum"><a class="docs-heading-anchor" href="#Forcing-Spectrum">Forcing Spectrum</a><a id="Forcing-Spectrum-1"></a><a class="docs-heading-anchor-permalink" href="#Forcing-Spectrum" title="Permalink"></a></h3><p>The forcing concentrates energy input around a specific wavenumber:</p><pre><code class="nohighlight hljs">          │
+    Q̂(k)  │      ╱╲
+          │    ╱    ╲
+          │  ╱        ╲
+          │╱            ╲
+          └──────────────────► |k|
+                k_f
+               ←─────→
+              2*δ_f (width)</code></pre><p>Modes with <code>|k| ≈ k_f</code> receive most of the energy. This creates a <strong>dual cascade</strong>:</p><ul><li>Energy cascades to large scales (inverse cascade)</li><li>Enstrophy cascades to small scales (forward cascade)</li></ul><h3 id="Energy-Balance"><a class="docs-heading-anchor" href="#Energy-Balance">Energy Balance</a><a id="Energy-Balance-1"></a><a class="docs-heading-anchor-permalink" href="#Energy-Balance" title="Permalink"></a></h3><p>In steady state:</p><p class="math-container">\[\varepsilon_{\text{forcing}} = \varepsilon_{\text{drag}} + \varepsilon_{\text{viscous}}\]</p><p>The linear drag μ removes energy at large scales, preventing condensation.</p><hr/><h2 id="Step-by-Step-Breakdown"><a class="docs-heading-anchor" href="#Step-by-Step-Breakdown">Step-by-Step Breakdown</a><a id="Step-by-Step-Breakdown-1"></a><a class="docs-heading-anchor-permalink" href="#Step-by-Step-Breakdown" title="Permalink"></a></h2><h3 id="Step-1:-Choose-Forcing-Parameters"><a class="docs-heading-anchor" href="#Step-1:-Choose-Forcing-Parameters">Step 1: Choose Forcing Parameters</a><a id="Step-1:-Choose-Forcing-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Step-1:-Choose-Forcing-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Where to inject energy (wavenumber)
+forcing_wavenumber = 14.0 * 2π/L  # Mode k ≈ 14
+
+# How spread out the forcing is
+forcing_bandwidth = 1.5 * 2π/L    # A few modes wide
+
+# How much energy to inject per unit time
+ε = 0.1</code></pre><p><strong>Guidelines:</strong></p><ul><li><code>k_forcing</code>: Set to intermediate scales (not too large, not too small)</li><li><code>dk_forcing</code>: Usually 1-3 in mode units; too narrow causes intermittency</li><li><code>ε</code>: Balance with dissipation; if energy grows unbounded, increase μ or ν</li></ul><h3 id="Step-2:-Create-the-Forcing-Object"><a class="docs-heading-anchor" href="#Step-2:-Create-the-Forcing-Object">Step 2: Create the Forcing Object</a><a id="Step-2:-Create-the-Forcing-Object-1"></a><a class="docs-heading-anchor-permalink" href="#Step-2:-Create-the-Forcing-Object" title="Permalink"></a></h3><pre><code class="language-julia hljs">forcing = StochasticForcing(
+    field_size = (n, n),              # Match your grid
+    domain_size = (L, L),             # Match your domain
+    energy_injection_rate = ε,        # Normalized automatically
+    k_forcing = forcing_wavenumber,
+    dk_forcing = forcing_bandwidth,
+    dt = dt,                          # For √dt scaling
+    spectrum_type = :ring,            # Isotropic ring
+    rng = MersenneTwister(1234)       # Reproducibility
+)</code></pre><h3 id="Step-3:-Apply-Forcing-in-Time-Loop"><a class="docs-heading-anchor" href="#Step-3:-Apply-Forcing-in-Time-Loop">Step 3: Apply Forcing in Time Loop</a><a id="Step-3:-Apply-Forcing-in-Time-Loop-1"></a><a class="docs-heading-anchor-permalink" href="#Step-3:-Apply-Forcing-in-Time-Loop" title="Permalink"></a></h3><pre><code class="language-julia hljs">for step in 1:nsteps
+    # 1. Store ψⁿ for Stratonovich work
+    store_prevsol!(forcing, ω.data_c)
+
+    # 2. Generate F̂ (new forcing each timestep)
+    F_hat = generate_forcing!(forcing, t, 1)
+
+    # 3. Add to your RHS: rhs .+= F_hat
+    apply_forcing!(rhs, forcing, t, 1)
+
+    # 4. Advance your solution
+    step!(solver)
+
+    # 5. Compute work done
+    W = work_stratonovich(forcing, ω.data_c)
+end</code></pre><h3 id="Step-4:-Verify-Energy-Budget"><a class="docs-heading-anchor" href="#Step-4:-Verify-Energy-Budget">Step 4: Verify Energy Budget</a><a id="Step-4:-Verify-Energy-Budget-1"></a><a class="docs-heading-anchor-permalink" href="#Step-4:-Verify-Energy-Budget" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Average over many timesteps in steady state
+ε_measured = mean(work_array) / dt
+
+# Should match target
+@assert abs(ε_measured - ε) / ε &lt; 0.1  &quot;Energy budget not balanced!&quot;</code></pre><hr/><h2 id="Spectrum-Types"><a class="docs-heading-anchor" href="#Spectrum-Types">Spectrum Types</a><a id="Spectrum-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Spectrum-Types" title="Permalink"></a></h2><h3 id="Ring-Forcing-(:ring)-Default"><a class="docs-heading-anchor" href="#Ring-Forcing-(:ring)-Default">Ring Forcing (<code>:ring</code>) - Default</a><a id="Ring-Forcing-(:ring)-Default-1"></a><a class="docs-heading-anchor-permalink" href="#Ring-Forcing-(:ring)-Default" title="Permalink"></a></h3><p>Forces modes in a Gaussian ring around <code>|k| = k_f</code>:</p><pre><code class="language-julia hljs">forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 10.0,
+    dk_forcing = 2.0,
+    spectrum_type = :ring
+)</code></pre><p>Best for: Standard 2D/3D turbulence, dual cascade studies</p><h3 id="Band-Forcing-(:band)"><a class="docs-heading-anchor" href="#Band-Forcing-(:band)">Band Forcing (<code>:band</code>)</a><a id="Band-Forcing-(:band)-1"></a><a class="docs-heading-anchor-permalink" href="#Band-Forcing-(:band)" title="Permalink"></a></h3><p>Sharp cutoff band <code>|k| ∈ [k_f - δ_f, k_f + δ_f]</code>:</p><pre><code class="language-julia hljs">forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 10.0,
+    dk_forcing = 2.0,
+    spectrum_type = :band
+)</code></pre><p>Best for: Controlled experiments with exact spectral support</p><h3 id="Low-k-Forcing-(:lowk)"><a class="docs-heading-anchor" href="#Low-k-Forcing-(:lowk)">Low-k Forcing (<code>:lowk</code>)</a><a id="Low-k-Forcing-(:lowk)-1"></a><a class="docs-heading-anchor-permalink" href="#Low-k-Forcing-(:lowk)" title="Permalink"></a></h3><p>Force all modes with <code>|k| &lt; k_f</code>:</p><pre><code class="language-julia hljs">forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 5.0,
+    spectrum_type = :lowk
+)</code></pre><p>Best for: Large-scale forcing, simple turbulence setups</p><h3 id="Kolmogorov-Forcing-(:kolmogorov)"><a class="docs-heading-anchor" href="#Kolmogorov-Forcing-(:kolmogorov)">Kolmogorov Forcing (<code>:kolmogorov</code>)</a><a id="Kolmogorov-Forcing-(:kolmogorov)-1"></a><a class="docs-heading-anchor-permalink" href="#Kolmogorov-Forcing-(:kolmogorov)" title="Permalink"></a></h3><p>Smooth large-scale forcing for Kolmogorov cascade:</p><pre><code class="language-julia hljs">forcing = StochasticForcing(
+    field_size = (256, 256),
+    k_forcing = 4.0,
+    spectrum_type = :kolmogorov
+)</code></pre><p>Best for: Kolmogorov-Obukhov theory verification</p><hr/><h2 id="Mathematical-Background"><a class="docs-heading-anchor" href="#Mathematical-Background">Mathematical Background</a><a id="Mathematical-Background-1"></a><a class="docs-heading-anchor-permalink" href="#Mathematical-Background" title="Permalink"></a></h2><h3 id="Forcing-Statistics"><a class="docs-heading-anchor" href="#Forcing-Statistics">Forcing Statistics</a><a id="Forcing-Statistics-1"></a><a class="docs-heading-anchor-permalink" href="#Forcing-Statistics" title="Permalink"></a></h3><p>The forcing ξ(x,t) is a random field with:</p><table><tr><th style="text-align: right">Property</th><th style="text-align: right">Formula</th></tr><tr><td style="text-align: right">Zero mean</td><td style="text-align: right">⟨ξ(x,t)⟩ = 0</td></tr><tr><td style="text-align: right">White in time</td><td style="text-align: right">⟨ξ(x,t) ξ(x&#39;,t&#39;)⟩ = Q(x-x&#39;) δ(t-t&#39;)</td></tr><tr><td style="text-align: right">Power spectrum</td><td style="text-align: right">⟨ξ̂(k) ξ̂*(k&#39;)⟩ = Q̂(k) δ(k-k&#39;)</td></tr></table><h3 id="Numerical-Implementation"><a class="docs-heading-anchor" href="#Numerical-Implementation">Numerical Implementation</a><a id="Numerical-Implementation-1"></a><a class="docs-heading-anchor-permalink" href="#Numerical-Implementation" title="Permalink"></a></h3><p>For discrete time with step dt:</p><p class="math-container">\[\hat{F}(k) = \sqrt{\frac{\hat{Q}(k)}{dt}} \cdot e^{2\pi i \cdot \text{rand}()}\]</p><p>The √dt scaling gives correct variance: ⟨|F̂|²⟩ · dt = Q̂(k)</p><h3 id="Energy-Injection-Rate"><a class="docs-heading-anchor" href="#Energy-Injection-Rate">Energy Injection Rate</a><a id="Energy-Injection-Rate-1"></a><a class="docs-heading-anchor-permalink" href="#Energy-Injection-Rate" title="Permalink"></a></h3><p class="math-container">\[\varepsilon = \int \frac{d^2 k}{(2\pi)^2} \, \frac{\hat{Q}(k)}{2|k|^2}\]</p><p>Tarang normalizes the spectrum to achieve the requested <code>energy_injection_rate</code>.</p><h3 id="Stratonovich-vs-Itô"><a class="docs-heading-anchor" href="#Stratonovich-vs-Itô">Stratonovich vs Itô</a><a id="Stratonovich-vs-Itô-1"></a><a class="docs-heading-anchor-permalink" href="#Stratonovich-vs-Itô" title="Permalink"></a></h3><p><strong>Why Stratonovich?</strong></p><ul><li>Chain rule works normally: d(f(X)) = f&#39;(X) dX</li><li>Physical limit of colored noise with τ→0</li><li>Same formulas for stochastic and deterministic forcing</li></ul><p><strong>Work calculation:</strong></p><table><tr><th style="text-align: right">Calculus</th><th style="text-align: right">Formula</th></tr><tr><td style="text-align: right">Stratonovich</td><td style="text-align: right">W = -⟨(ψⁿ + ψⁿ⁺¹)/2 · F̂*⟩</td></tr><tr><td style="text-align: right">Itô</td><td style="text-align: right">W = -⟨ψⁿ · F̂*⟩ + ε·dt</td></tr></table><hr/><h2 id="Multi-Stage-Timesteppers"><a class="docs-heading-anchor" href="#Multi-Stage-Timesteppers">Multi-Stage Timesteppers</a><a id="Multi-Stage-Timesteppers-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Stage-Timesteppers" title="Permalink"></a></h2><p>For RK4, SBDF, and other multi-stage methods, forcing must stay constant within a timestep:</p><pre><code class="nohighlight hljs">Timestep n:     [stage 1] → [stage 2] → [stage 3] → [stage 4]
+Forcing:           F_n         F_n         F_n         F_n
+
+Timestep n+1:   [stage 1] → [stage 2] → [stage 3] → [stage 4]
+Forcing:         F_{n+1}     F_{n+1}     F_{n+1}     F_{n+1}</code></pre><p>Tarang handles this via the <code>substep</code> argument:</p><pre><code class="language-julia hljs"># Substep 1: generates NEW forcing
+generate_forcing!(forcing, t, 1)
+
+# Substeps 2-4: returns CACHED forcing
+generate_forcing!(forcing, t, 2)  # Same as substep 1
+generate_forcing!(forcing, t, 3)  # Same as substep 1
+generate_forcing!(forcing, t, 4)  # Same as substep 1</code></pre><hr/><h2 id="Adaptive-Timestepping"><a class="docs-heading-anchor" href="#Adaptive-Timestepping">Adaptive Timestepping</a><a id="Adaptive-Timestepping-1"></a><a class="docs-heading-anchor-permalink" href="#Adaptive-Timestepping" title="Permalink"></a></h2><p>When dt changes, update the forcing:</p><pre><code class="language-julia hljs">dt_new = compute_timestep(cfl)
+set_dt!(forcing, dt_new)
+generate_forcing!(forcing, t, 1)</code></pre><hr/><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><table><tr><th style="text-align: right">Problem</th><th style="text-align: right">Cause</th><th style="text-align: right">Solution</th></tr><tr><td style="text-align: right">Energy grows unbounded</td><td style="text-align: right">ε too high or dissipation too low</td><td style="text-align: right">Increase μ or ν, or decrease ε</td></tr><tr><td style="text-align: right">No turbulence develops</td><td style="text-align: right">ε too low</td><td style="text-align: right">Increase <code>energy_injection_rate</code></td></tr><tr><td style="text-align: right">Forcing at wrong scales</td><td style="text-align: right">k_f mismatched</td><td style="text-align: right">Check units: k_f should be in radians, not mode number</td></tr><tr><td style="text-align: right">Results not reproducible</td><td style="text-align: right">RNG not seeded</td><td style="text-align: right">Pass <code>rng = MersenneTwister(seed)</code></td></tr><tr><td style="text-align: right">Jerky dynamics</td><td style="text-align: right">dt too large</td><td style="text-align: right">Reduce timestep or forcing bandwidth</td></tr></table><hr/><h2 id="API-Reference-Summary"><a class="docs-heading-anchor" href="#API-Reference-Summary">API Reference Summary</a><a id="API-Reference-Summary-1"></a><a class="docs-heading-anchor-permalink" href="#API-Reference-Summary" title="Permalink"></a></h2><h3 id="Constructor"><a class="docs-heading-anchor" href="#Constructor">Constructor</a><a id="Constructor-1"></a><a class="docs-heading-anchor-permalink" href="#Constructor" title="Permalink"></a></h3><pre><code class="language-julia hljs">StochasticForcing(;
+    field_size,                          # (Nx, Ny) or (Nx, Ny, Nz)
+    domain_size = (2π, 2π, ...),        # (Lx, Ly, ...)
+    energy_injection_rate = 1.0,         # ε
+    k_forcing = 4.0,                     # k_f
+    dk_forcing = 1.0,                    # δ_f
+    dt = 0.01,
+    spectrum_type = :ring,               # :ring, :band, :lowk, :kolmogorov
+    rng = Random.GLOBAL_RNG,
+    dtype = Float64
+)</code></pre><h3 id="Key-Functions"><a class="docs-heading-anchor" href="#Key-Functions">Key Functions</a><a id="Key-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Key-Functions" title="Permalink"></a></h3><table><tr><th style="text-align: right">Function</th><th style="text-align: right">Purpose</th></tr><tr><td style="text-align: right"><code>generate_forcing!(f, t, substep)</code></td><td style="text-align: right">Generate/cache forcing</td></tr><tr><td style="text-align: right"><code>apply_forcing!(rhs, f, t, substep)</code></td><td style="text-align: right">Add forcing to RHS</td></tr><tr><td style="text-align: right"><code>store_prevsol!(f, sol)</code></td><td style="text-align: right">Store ψⁿ for work calculation</td></tr><tr><td style="text-align: right"><code>work_stratonovich(f, sol)</code></td><td style="text-align: right">Compute Stratonovich work</td></tr><tr><td style="text-align: right"><code>set_dt!(f, dt)</code></td><td style="text-align: right">Update timestep</td></tr><tr><td style="text-align: right"><code>mean_energy_injection_rate(f)</code></td><td style="text-align: right">Get target ε</td></tr><tr><td style="text-align: right"><code>instantaneous_power(f, sol)</code></td><td style="text-align: right">Get current P(t)</td></tr></table><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../timesteppers/">Timesteppers</a> - Time integration methods</li><li><a href="../solvers/">Solvers</a> - Using forcing with IVP solvers</li><li><a href="../../api/stochastic_forcing/">API: Stochastic Forcing</a> - Complete API reference</li></ul><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li><a href="https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/stochastic_forcing/">GeophysicalFlows.jl Stochastic Forcing</a></li><li><a href="https://fourierflows.github.io/GeophysicalFlowsDocumentation/stable/literated/twodnavierstokes_stochasticforcing/">GeophysicalFlows.jl 2D NS Example</a></li><li>Constantinou, N. C., &amp; Hogg, A. M. (2021). &quot;Intrinsic oceanic decadal variability&quot;</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../timesteppers/">« Time Steppers</a><a class="docs-footer-nextpage" href="../temporal_filters/">Temporal Filters for Lagrangian Averaging »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

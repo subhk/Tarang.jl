@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tutorial: Analysis and Output · Tarang.jl</title><meta name="title" content="Tutorial: Analysis and Output · Tarang.jl"/><meta property="og:title" content="Tutorial: Analysis and Output · Tarang.jl"/><meta property="twitter:title" content="Tutorial: Analysis and Output · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/tutorials/analysis_and_output/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/tutorials/analysis_and_output/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/tutorials/analysis_and_output/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox" checked/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox" checked/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../boundary_conditions/">Tutorial: Boundary Conditions</a></li><li class="is-active"><a class="tocitem" href>Tutorial: Analysis and Output</a><ul class="internal"><li><a class="tocitem" href="#File-Output"><span>File Output</span></a></li><li><a class="tocitem" href="#Analysis-Tasks"><span>Analysis Tasks</span></a></li><li><a class="tocitem" href="#Global-Diagnostics"><span>Global Diagnostics</span></a></li><li><a class="tocitem" href="#Energy-Spectra"><span>Energy Spectra</span></a></li><li><a class="tocitem" href="#Time-Series"><span>Time Series</span></a></li><li><a class="tocitem" href="#Visualization-Integration"><span>Visualization Integration</span></a></li><li><a class="tocitem" href="#Checkpointing"><span>Checkpointing</span></a></li><li><a class="tocitem" href="#Complete-Example"><span>Complete Example</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Spectral Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../../pages/les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../../pages/custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../../api/bases/">Bases API</a></li><li><a class="tocitem" href="../../api/domains/">Domains API</a></li><li><a class="tocitem" href="../../api/fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/operators/">Operators API</a></li><li><a class="tocitem" href="../../api/problems/">Problems API</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers API</a></li><li><a class="tocitem" href="../../api/timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models API</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis API</a></li><li><a class="tocitem" href="../../api/io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials &amp; Examples</a></li><li><a class="is-disabled">Tutorial Notebooks</a></li><li class="is-active"><a href>Tutorial: Analysis and Output</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial: Analysis and Output</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/tutorials/analysis_and_output.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial:-Analysis-and-Output"><a class="docs-heading-anchor" href="#Tutorial:-Analysis-and-Output">Tutorial: Analysis and Output</a><a id="Tutorial:-Analysis-and-Output-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial:-Analysis-and-Output" title="Permalink"></a></h1><p>This tutorial covers saving simulation data and computing diagnostics in Tarang.jl.</p><h2 id="File-Output"><a class="docs-heading-anchor" href="#File-Output">File Output</a><a id="File-Output-1"></a><a class="docs-heading-anchor-permalink" href="#File-Output" title="Permalink"></a></h2><p>Tarang.jl supports multiple output formats for saving simulation data.</p><h3 id="NetCDF-Output"><a class="docs-heading-anchor" href="#NetCDF-Output">NetCDF Output</a><a id="NetCDF-Output-1"></a><a class="docs-heading-anchor-permalink" href="#NetCDF-Output" title="Permalink"></a></h3><p>NetCDF is the recommended format for parallel simulations.</p><pre><code class="language-julia hljs">using Tarang
+
+# Create output handler
+handler = add_file_handler(
+    &quot;simulation_output&quot;,   # Base filename
+    dist,                  # Distributor
+    Dict(&quot;u&quot; =&gt; u, &quot;T&quot; =&gt; T);  # Fields to track
+    parallel=&quot;gather&quot;,     # Parallel I/O mode
+    max_writes=100         # Files per handler
+)
+
+# Add field outputs
+add_task(handler, u; name=&quot;velocity&quot;)
+add_task(handler, T; name=&quot;temperature&quot;)
+
+# Process output at each timestep
+process!(handler;
+    iteration=solver.iteration,
+    wall_time=solver.wall_time,
+    sim_time=solver.sim_time,
+    timestep=solver.dt
+)</code></pre><h3 id="Output-Modes"><a class="docs-heading-anchor" href="#Output-Modes">Output Modes</a><a id="Output-Modes-1"></a><a class="docs-heading-anchor-permalink" href="#Output-Modes" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Gather mode: All data collected to root process
+handler = add_file_handler(path, dist, fields; parallel=&quot;gather&quot;)
+
+# Virtual mode: Each process writes its own file
+handler = add_file_handler(path, dist, fields; parallel=&quot;virtual&quot;)</code></pre><h3 id="Output-Frequency"><a class="docs-heading-anchor" href="#Output-Frequency">Output Frequency</a><a id="Output-Frequency-1"></a><a class="docs-heading-anchor-permalink" href="#Output-Frequency" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Write every N iterations
+if solver.iteration % output_cadence == 0
+    process!(handler; iteration=solver.iteration, ...)
+end
+
+# Write at specific simulation times
+if solver.sim_time &gt;= next_output_time
+    process!(handler; sim_time=solver.sim_time, ...)
+    next_output_time += output_interval
+end</code></pre><h2 id="Analysis-Tasks"><a class="docs-heading-anchor" href="#Analysis-Tasks">Analysis Tasks</a><a id="Analysis-Tasks-1"></a><a class="docs-heading-anchor-permalink" href="#Analysis-Tasks" title="Permalink"></a></h2><h3 id="Computing-Means"><a class="docs-heading-anchor" href="#Computing-Means">Computing Means</a><a id="Computing-Means-1"></a><a class="docs-heading-anchor-permalink" href="#Computing-Means" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Horizontal average
+add_mean_task!(handler, T; dims=1, name=&quot;T_mean_x&quot;)
+
+# Vertical average
+add_mean_task!(handler, T; dims=2, name=&quot;T_mean_z&quot;)
+
+# Full spatial average (scalar)
+add_mean_task!(handler, T; dims=(1,2), name=&quot;T_avg&quot;)</code></pre><h3 id="Extracting-Slices"><a class="docs-heading-anchor" href="#Extracting-Slices">Extracting Slices</a><a id="Extracting-Slices-1"></a><a class="docs-heading-anchor-permalink" href="#Extracting-Slices" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Slice at specific index
+add_slice_task!(handler, T; dim=1, idx=64, name=&quot;T_slice_x&quot;)
+
+# Multiple slices
+add_slice_task!(handler, T; dim=2, idx=1, name=&quot;T_bottom&quot;)
+add_slice_task!(handler, T; dim=2, idx=Nz, name=&quot;T_top&quot;)</code></pre><h3 id="Custom-Analysis"><a class="docs-heading-anchor" href="#Custom-Analysis">Custom Analysis</a><a id="Custom-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Analysis" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Define custom postprocessing function
+function kinetic_energy(u_data)
+    return 0.5 * sum(u_data.^2)
+end
+
+# Add custom task
+add_task(handler, u;
+    name=&quot;kinetic_energy&quot;,
+    postprocess=kinetic_energy
+)</code></pre><h2 id="Global-Diagnostics"><a class="docs-heading-anchor" href="#Global-Diagnostics">Global Diagnostics</a><a id="Global-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Global-Diagnostics" title="Permalink"></a></h2><h3 id="CFL-Condition"><a class="docs-heading-anchor" href="#CFL-Condition">CFL Condition</a><a id="CFL-Condition-1"></a><a class="docs-heading-anchor-permalink" href="#CFL-Condition" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+
+# Create CFL calculator
+cfl = CFL(problem; safety=0.5, max_change=1.5, min_change=0.5)
+
+# Register velocity field
+add_velocity!(cfl, u)
+
+# Compute adaptive timestep
+dt = compute_timestep(cfl)</code></pre><h3 id="Flow-Statistics"><a class="docs-heading-anchor" href="#Flow-Statistics">Flow Statistics</a><a id="Flow-Statistics-1"></a><a class="docs-heading-anchor-permalink" href="#Flow-Statistics" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+
+# Create global reducer for MPI operations
+reducer = GlobalArrayReducer(dist.comm)
+
+# Compute global max
+u_max = reduce_scalar(reducer, maximum(abs.(u.data_g)), MPI.MAX)
+
+# Compute global mean
+u_mean = reduce_scalar(reducer, mean(u.data_g), MPI.SUM) / dist.size
+
+# Compute global energy
+function global_energy(u, reducer)
+    local_energy = sum(u.data_g.^2) / 2
+    return reduce_scalar(reducer, local_energy, MPI.SUM)
+end</code></pre><h3 id="Reynolds-Number"><a class="docs-heading-anchor" href="#Reynolds-Number">Reynolds Number</a><a id="Reynolds-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Reynolds-Number" title="Permalink"></a></h3><pre><code class="language-julia hljs">function compute_reynolds_number(u, nu, L)
+    ensure_layout!(u, :g)
+
+    # RMS velocity
+    u_rms = sqrt(mean(u.data_g.^2))
+
+    # Reynolds number
+    Re = u_rms * L / nu
+
+    return Re
+end</code></pre><h3 id="Nusselt-Number"><a class="docs-heading-anchor" href="#Nusselt-Number">Nusselt Number</a><a id="Nusselt-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Nusselt-Number" title="Permalink"></a></h3><p>For thermal convection:</p><pre><code class="language-julia hljs">function compute_nusselt(T, uz, L, kappa)
+    ensure_layout!(T, :g)
+    ensure_layout!(uz, :g)
+
+    # Convective heat flux
+    flux_conv = mean(T.data_g .* uz.data_g)
+
+    # Conductive flux (from temperature gradient)
+    dT = 1.0  # Temperature difference
+
+    # Nusselt = total flux / conductive flux
+    Nu = 1.0 + flux_conv * L / (kappa * dT)
+
+    return Nu
+end</code></pre><h2 id="Energy-Spectra"><a class="docs-heading-anchor" href="#Energy-Spectra">Energy Spectra</a><a id="Energy-Spectra-1"></a><a class="docs-heading-anchor-permalink" href="#Energy-Spectra" title="Permalink"></a></h2><h3 id="1D-Spectrum"><a class="docs-heading-anchor" href="#1D-Spectrum">1D Spectrum</a><a id="1D-Spectrum-1"></a><a class="docs-heading-anchor-permalink" href="#1D-Spectrum" title="Permalink"></a></h3><pre><code class="language-julia hljs">function compute_1d_spectrum(u, axis)
+    ensure_layout!(u, :c)  # Spectral space
+
+    data = u.data_c
+    N = size(data, axis)
+
+    # Sum over other dimensions
+    spectrum = zeros(N÷2)
+    for k in 1:N÷2
+        spectrum[k] = sum(abs2.(selectdim(data, axis, k)))
+    end
+
+    return spectrum
+end</code></pre><h3 id="Shell-Averaged-Spectrum"><a class="docs-heading-anchor" href="#Shell-Averaged-Spectrum">Shell-Averaged Spectrum</a><a id="Shell-Averaged-Spectrum-1"></a><a class="docs-heading-anchor-permalink" href="#Shell-Averaged-Spectrum" title="Permalink"></a></h3><pre><code class="language-julia hljs">function compute_shell_spectrum(u, kmax)
+    ensure_layout!(u, :c)
+
+    # Initialize spectrum bins
+    E_k = zeros(kmax)
+    counts = zeros(Int, kmax)
+
+    # Get wavenumbers
+    kx = get_wavenumbers(u.bases[1])
+    ky = get_wavenumbers(u.bases[2])
+    kz = get_wavenumbers(u.bases[3])
+
+    # Bin energy by wavenumber magnitude
+    for i in eachindex(kx), j in eachindex(ky), k in eachindex(kz)
+        k_mag = sqrt(kx[i]^2 + ky[j]^2 + kz[k]^2)
+        k_bin = round(Int, k_mag)
+
+        if 1 &lt;= k_bin &lt;= kmax
+            E_k[k_bin] += abs2(u.data_c[i,j,k])
+            counts[k_bin] += 1
+        end
+    end
+
+    return E_k
+end</code></pre><h2 id="Time-Series"><a class="docs-heading-anchor" href="#Time-Series">Time Series</a><a id="Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Series" title="Permalink"></a></h2><h3 id="Storing-Scalar-Time-Series"><a class="docs-heading-anchor" href="#Storing-Scalar-Time-Series">Storing Scalar Time Series</a><a id="Storing-Scalar-Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Storing-Scalar-Time-Series" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Initialize storage
+times = Float64[]
+energies = Float64[]
+nusselts = Float64[]
+
+# During simulation
+while solver.sim_time &lt; t_end
+    step!(solver, dt)
+
+    # Record diagnostics
+    push!(times, solver.sim_time)
+    push!(energies, compute_kinetic_energy(u))
+    push!(nusselts, compute_nusselt(T, uz, L, kappa))
+end
+
+# Save to file
+if rank == 0
+    using JLD2
+    @save &quot;diagnostics.jld2&quot; times energies nusselts
+end</code></pre><h2 id="Visualization-Integration"><a class="docs-heading-anchor" href="#Visualization-Integration">Visualization Integration</a><a id="Visualization-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Visualization-Integration" title="Permalink"></a></h2><h3 id="Plots.jl"><a class="docs-heading-anchor" href="#Plots.jl">Plots.jl</a><a id="Plots.jl-1"></a><a class="docs-heading-anchor-permalink" href="#Plots.jl" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Plots
+
+function plot_field(field, title=&quot;&quot;)
+    ensure_layout!(field, :g)
+    data = field.data_g
+
+    heatmap(data&#39;,
+        xlabel=&quot;x&quot;, ylabel=&quot;z&quot;,
+        title=title,
+        colorbar=true
+    )
+end
+
+# Save figure
+plot_field(T, &quot;Temperature&quot;)
+savefig(&quot;temperature.png&quot;)</code></pre><h3 id="Makie.jl"><a class="docs-heading-anchor" href="#Makie.jl">Makie.jl</a><a id="Makie.jl-1"></a><a class="docs-heading-anchor-permalink" href="#Makie.jl" title="Permalink"></a></h3><pre><code class="language-julia hljs">using CairoMakie
+
+function plot_field_makie(field)
+    ensure_layout!(field, :g)
+    data = field.data_g
+
+    fig = Figure()
+    ax = Axis(fig[1,1], xlabel=&quot;x&quot;, ylabel=&quot;z&quot;)
+    hm = heatmap!(ax, data&#39;)
+    Colorbar(fig[1,2], hm)
+
+    return fig
+end</code></pre><h2 id="Checkpointing"><a class="docs-heading-anchor" href="#Checkpointing">Checkpointing</a><a id="Checkpointing-1"></a><a class="docs-heading-anchor-permalink" href="#Checkpointing" title="Permalink"></a></h2><h3 id="Saving-State"><a class="docs-heading-anchor" href="#Saving-State">Saving State</a><a id="Saving-State-1"></a><a class="docs-heading-anchor-permalink" href="#Saving-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">function save_checkpoint(solver, filename)
+    state = Dict(
+        &quot;sim_time&quot; =&gt; solver.sim_time,
+        &quot;iteration&quot; =&gt; solver.iteration,
+        &quot;dt&quot; =&gt; solver.dt,
+        &quot;fields&quot; =&gt; Dict()
+    )
+
+    for (name, field) in solver.problem.fields
+        ensure_layout!(field, :c)
+        state[&quot;fields&quot;][name] = copy(field.data_c)
+    end
+
+    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        using JLD2
+        @save filename state
+    end
+end</code></pre><h3 id="Loading-State"><a class="docs-heading-anchor" href="#Loading-State">Loading State</a><a id="Loading-State-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">function load_checkpoint!(solver, filename)
+    using JLD2
+    @load filename state
+
+    solver.sim_time = state[&quot;sim_time&quot;]
+    solver.iteration = state[&quot;iteration&quot;]
+    solver.dt = state[&quot;dt&quot;]
+
+    for (name, data) in state[&quot;fields&quot;]
+        field = solver.problem.fields[name]
+        field.data_c .= data
+        field.current_layout = :c
+    end
+end</code></pre><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang
+using MPI
+using Printf
+
+MPI.Init()
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+
+# Setup (abbreviated)
+# ... create domain, fields, problem ...
+
+# Output handler
+handler = add_file_handler(&quot;output&quot;, dist, Dict(&quot;T&quot; =&gt; T);
+    parallel=&quot;gather&quot;, max_writes=100)
+add_task(handler, T; name=&quot;temperature&quot;)
+add_mean_task!(handler, T; dims=1, name=&quot;T_mean&quot;)
+
+# Create solver
+solver = InitialValueSolver(problem, RK222(), dt=1e-3)
+
+# CFL
+cfl = CFL(problem, safety=0.5)
+add_velocity!(cfl, u)
+
+# Diagnostics storage
+times, energies = Float64[], Float64[]
+
+# Main loop
+output_interval = 0.1
+next_output = output_interval
+
+while solver.sim_time &lt; 10.0
+    dt = compute_timestep(cfl)
+    step!(solver, dt)
+
+    # Store diagnostics
+    push!(times, solver.sim_time)
+    push!(energies, compute_kinetic_energy(u))
+
+    # Periodic output
+    if solver.sim_time &gt;= next_output
+        process!(handler;
+            iteration=solver.iteration,
+            sim_time=solver.sim_time,
+            wall_time=0.0,
+            timestep=dt
+        )
+
+        if rank == 0
+            @printf(&quot;t = %.3f, E = %.6e\n&quot;, solver.sim_time, energies[end])
+        end
+
+        next_output += output_interval
+    end
+end
+
+MPI.Finalize()</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../api/analysis/">Analysis API</a>: Full API reference</li><li><a href="../../api/io/">I/O API</a>: NetCDF output documentation</li><li><a href="../../pages/parallelism/">Parallelism</a>: Parallel I/O configuration</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../boundary_conditions/">« Tutorial: Boundary Conditions</a><a class="docs-footer-nextpage" href="../eigenvalue_problems/">Tutorial: Eigenvalue Problems »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

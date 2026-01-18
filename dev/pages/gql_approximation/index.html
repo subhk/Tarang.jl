@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Generalized Quasi-Linear (GQL) Approximation · Tarang.jl</title><meta name="title" content="Generalized Quasi-Linear (GQL) Approximation · Tarang.jl"/><meta property="og:title" content="Generalized Quasi-Linear (GQL) Approximation · Tarang.jl"/><meta property="twitter:title" content="Generalized Quasi-Linear (GQL) Approximation · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/pages/gql_approximation/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/pages/gql_approximation/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/pages/gql_approximation/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox"/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../tutorials/overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Tutorial: Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox" checked/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates</a></li><li><a class="tocitem" href="../bases/">Spectral Bases</a></li><li><a class="tocitem" href="../domains/">Domains</a></li><li><a class="tocitem" href="../fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../operators/">Operators</a></li><li><a class="tocitem" href="../problems/">Problems</a></li><li><a class="tocitem" href="../solvers/">Solvers</a></li><li><a class="tocitem" href="../timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox" checked/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../les_models/">Large Eddy Simulation (LES) Models</a></li><li class="is-active"><a class="tocitem" href>Generalized Quasi-Linear (GQL) Approximation</a><ul class="internal"><li><a class="tocitem" href="#TL;DR-Quick-Summary"><span>TL;DR - Quick Summary</span></a></li><li><a class="tocitem" href="#Quick-Start"><span>Quick Start</span></a></li><li><a class="tocitem" href="#Understanding-the-GQL-Approximation"><span>Understanding the GQL Approximation</span></a></li><li><a class="tocitem" href="#API-Reference"><span>API Reference</span></a></li><li><a class="tocitem" href="#Complete-GQL-Simulation-Example"><span>Complete GQL Simulation Example</span></a></li><li><a class="tocitem" href="#Combining-GQL-with-Wave-Mean-Decomposition"><span>Combining GQL with Wave-Mean Decomposition</span></a></li><li><a class="tocitem" href="#Choosing-the-Cutoff-Λ"><span>Choosing the Cutoff Λ</span></a></li><li><a class="tocitem" href="#Performance-Considerations"><span>Performance Considerations</span></a></li><li><a class="tocitem" href="#Theory:-Why-GQL-Works"><span>Theory: Why GQL Works</span></a></li><li><a class="tocitem" href="#References"><span>References</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../parallelism/">Parallelism</a></li><li><a class="tocitem" href="../optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../../api/bases/">Bases API</a></li><li><a class="tocitem" href="../../api/domains/">Domains API</a></li><li><a class="tocitem" href="../../api/fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/operators/">Operators API</a></li><li><a class="tocitem" href="../../api/problems/">Problems API</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers API</a></li><li><a class="tocitem" href="../../api/timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models API</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis API</a></li><li><a class="tocitem" href="../../api/io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../contributing/">Contributing</a></li><li><a class="tocitem" href="../architecture/">Architecture</a></li><li><a class="tocitem" href="../testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li><a class="is-disabled">Physics &amp; Modeling</a></li><li class="is-active"><a href>Generalized Quasi-Linear (GQL) Approximation</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Generalized Quasi-Linear (GQL) Approximation</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/pages/gql_approximation.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Generalized-Quasi-Linear-(GQL)-Approximation"><a class="docs-heading-anchor" href="#Generalized-Quasi-Linear-(GQL)-Approximation">Generalized Quasi-Linear (GQL) Approximation</a><a id="Generalized-Quasi-Linear-(GQL)-Approximation-1"></a><a class="docs-heading-anchor-permalink" href="#Generalized-Quasi-Linear-(GQL)-Approximation" title="Permalink"></a></h1><p>Wavenumber-based scale separation for turbulence modeling and wave-mean flow interactions.</p><p><strong>Reference:</strong> Marston, Chini &amp; Tobias (2016). <a href="https://doi.org/10.1103/PhysRevLett.116.214501">&quot;Generalized Quasilinear Approximation: Application to Zonal Jets&quot;</a>. <em>Phys. Rev. Lett.</em> 116, 214501.</p><hr/><h2 id="TL;DR-Quick-Summary"><a class="docs-heading-anchor" href="#TL;DR-Quick-Summary">TL;DR - Quick Summary</a><a id="TL;DR-Quick-Summary-1"></a><a class="docs-heading-anchor-permalink" href="#TL;DR-Quick-Summary" title="Permalink"></a></h2><blockquote><p><strong>What:</strong> Splits fields into large-scale (|k| ≤ Λ) and small-scale (|k| &gt; Λ) components in Fourier space</p><p><strong>Why:</strong> Enables systematic approximations between full nonlinear (NL) and quasi-linear (QL) dynamics</p><p><strong>Key insight:</strong> By varying Λ from 0 to k_max, you interpolate between QL (cheap) and NL (expensive)</p><p><strong>Which system to use:</strong></p><ul><li><code>GQLDecomposition</code> - Pure spectral decomposition (you handle FFTs)</li><li><code>GQLWaveMeanSystem</code> - Combined GQL + temporal filtering for complete wave-mean analysis</li></ul></blockquote><hr/><h2 id="Quick-Start"><a class="docs-heading-anchor" href="#Quick-Start">Quick Start</a><a id="Quick-Start-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Start" title="Permalink"></a></h2><h3 id="Basic-GQL-Decomposition-(4-lines-of-code)"><a class="docs-heading-anchor" href="#Basic-GQL-Decomposition-(4-lines-of-code)">Basic GQL Decomposition (4 lines of code)</a><a id="Basic-GQL-Decomposition-(4-lines-of-code)-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-GQL-Decomposition-(4-lines-of-code)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+using FFTW
+
+# 1. Create GQL decomposition: 64×64 grid, domain 2π×2π, cutoff |k| ≤ 4
+gql = GQLDecomposition((64, 64), (2π, 2π); Λ=4.0)
+
+# 2. Decompose your spectral field
+f_hat = rfft(f)  # Your field in spectral space
+f_large, f_small = decompose!(gql, f_hat)
+
+# 3. Use in your simulation
+# f_large: large-scale modes (|k| ≤ Λ)
+# f_small: small-scale modes (|k| &gt; Λ)</code></pre><h3 id="Complete-Working-Example"><a class="docs-heading-anchor" href="#Complete-Working-Example">Complete Working Example</a><a id="Complete-Working-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Working-Example" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+using FFTW
+
+# Domain setup
+Nx, Ny = 64, 64
+Lx, Ly = 2π, 2π
+x = range(0, Lx, length=Nx+1)[1:end-1]
+y = range(0, Ly, length=Ny+1)[1:end-1]
+
+# Create test field: large-scale + small-scale
+f = zeros(Nx, Ny)
+for j in 1:Ny, i in 1:Nx
+    # Large scale: k = 2
+    f[i,j] += sin(2*x[i]) * cos(2*y[j])
+    # Small scale: k = 10
+    f[i,j] += 0.3 * sin(10*x[i]) * cos(10*y[j])
+end
+
+# Create GQL decomposition with cutoff Λ = 5
+# This will separate k ≤ 5 (large) from k &gt; 5 (small)
+gql = GQLDecomposition((Nx, Ny), (Lx, Ly); Λ=5.0)
+
+# Decompose
+f_hat = rfft(f)
+f_L_hat, f_S_hat = decompose!(gql, f_hat)
+
+# Transform back to physical space
+f_large = irfft(f_L_hat, Nx)  # Contains only k=2 mode
+f_small = irfft(f_S_hat, Nx)  # Contains only k=10 mode
+
+# Verify
+println(&quot;Large-scale max: &quot;, maximum(abs.(f_large)))  # ≈ 1.0
+println(&quot;Small-scale max: &quot;, maximum(abs.(f_small)))  # ≈ 0.3
+println(&quot;f ≈ f_L + f_S: &quot;, maximum(abs.(f - f_large - f_small)))  # ≈ 0</code></pre><hr/><h2 id="Understanding-the-GQL-Approximation"><a class="docs-heading-anchor" href="#Understanding-the-GQL-Approximation">Understanding the GQL Approximation</a><a id="Understanding-the-GQL-Approximation-1"></a><a class="docs-heading-anchor-permalink" href="#Understanding-the-GQL-Approximation" title="Permalink"></a></h2><h3 id="Scale-Separation-in-Fourier-Space"><a class="docs-heading-anchor" href="#Scale-Separation-in-Fourier-Space">Scale Separation in Fourier Space</a><a id="Scale-Separation-in-Fourier-Space-1"></a><a class="docs-heading-anchor-permalink" href="#Scale-Separation-in-Fourier-Space" title="Permalink"></a></h3><p>The GQL approximation splits any field <code>f</code> into two parts based on wavenumber magnitude:</p><pre><code class="nohighlight hljs">f = f_L + f_S</code></pre><p>where:</p><ul><li><strong>f_L</strong> = Large-scale (low wavenumber): modes with |k| ≤ Λ</li><li><strong>f_S</strong> = Small-scale (high wavenumber): modes with |k| &gt; Λ</li></ul><pre><code class="nohighlight hljs">Wavenumber space (2D example):
+                    ky
+                    ↑
+                    │    Small-scale
+                    │      (|k| &gt; Λ)
+            ────────┼────────
+           /        │        \
+          /    ┌────┼────┐    \
+         │     │    │    │     │
+    ─────┼─────┼────┼────┼─────┼───→ kx
+         │     │ Large   │     │
+          \    │ scale  │    /
+           \   └────────┘   /
+            ────────────────
+                    │
+
+    Inner circle: |k| ≤ Λ (Large-scale)
+    Outer region: |k| &gt; Λ (Small-scale)</code></pre><h3 id="The-GQL-Hierarchy"><a class="docs-heading-anchor" href="#The-GQL-Hierarchy">The GQL Hierarchy</a><a id="The-GQL-Hierarchy-1"></a><a class="docs-heading-anchor-permalink" href="#The-GQL-Hierarchy" title="Permalink"></a></h3><p>By varying the cutoff Λ, you get different approximations:</p><table><tr><th style="text-align: right">Λ Value</th><th style="text-align: right">Name</th><th style="text-align: right">Nonlinear Terms</th><th style="text-align: right">Cost</th><th style="text-align: right">Accuracy</th></tr><tr><td style="text-align: right">Λ = 0</td><td style="text-align: right"><strong>QL</strong> (Quasi-Linear)</td><td style="text-align: right">Only NL(f<em>L, f</em>L)</td><td style="text-align: right">Cheapest</td><td style="text-align: right">Lowest</td></tr><tr><td style="text-align: right">0 &lt; Λ &lt; k_max</td><td style="text-align: right"><strong>GQL</strong></td><td style="text-align: right">NL(f<em>L, f</em>L) + NL(f<em>S, f</em>S) projected to L</td><td style="text-align: right">Intermediate</td><td style="text-align: right">Better</td></tr><tr><td style="text-align: right">Λ = k_max</td><td style="text-align: right"><strong>Full NL</strong></td><td style="text-align: right">All terms</td><td style="text-align: right">Most expensive</td><td style="text-align: right">Exact</td></tr></table><h3 id="GQL-Equations"><a class="docs-heading-anchor" href="#GQL-Equations">GQL Equations</a><a id="GQL-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#GQL-Equations" title="Permalink"></a></h3><p>For a generic nonlinear PDE <code>∂f/∂t = NL(f, f) + L(f)</code>:</p><p><strong>Large-scale equation:</strong></p><pre><code class="nohighlight hljs">∂f_L/∂t = NL(f_L, f_L) + P_L[NL(f_S, f_S)] + L(f_L)
+                         ↑ eddy feedback</code></pre><p><strong>Small-scale equation:</strong></p><pre><code class="nohighlight hljs">∂f_S/∂t = NL(f_L, f_S) + NL(f_S, f_L) + L(f_S)
+          ↑ linear in f_S (no f_S self-interaction!)</code></pre><p><strong>Key simplification:</strong> The NL(f<em>S, f</em>S) term is <strong>dropped</strong> from the small-scale equation!</p><hr/><h2 id="API-Reference"><a class="docs-heading-anchor" href="#API-Reference">API Reference</a><a id="API-Reference-1"></a><a class="docs-heading-anchor-permalink" href="#API-Reference" title="Permalink"></a></h2><h3 id="GQLDecomposition"><a class="docs-heading-anchor" href="#GQLDecomposition">GQLDecomposition</a><a id="GQLDecomposition-1"></a><a class="docs-heading-anchor-permalink" href="#GQLDecomposition" title="Permalink"></a></h3><p>Pure wavenumber decomposition without temporal filtering.</p><pre><code class="language-julia hljs"># Constructor
+gql = GQLDecomposition(field_size, domain_size; Λ, dtype=Float64)
+
+# Arguments:
+#   field_size  - Physical space size, e.g., (Nx, Ny) or (Nx, Ny, Nz)
+#   domain_size - Horizontal domain size, e.g., (Lx, Ly)
+#   Λ           - Cutoff wavenumber
+#   dtype       - Element type (default: Float64)</code></pre><h4 id="Methods"><a class="docs-heading-anchor" href="#Methods">Methods</a><a id="Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Methods" title="Permalink"></a></h4><table><tr><th style="text-align: right">Function</th><th style="text-align: right">Description</th></tr><tr><td style="text-align: right"><code>decompose!(gql, f_hat)</code></td><td style="text-align: right">Split into (f<em>large, f</em>small)</td></tr><tr><td style="text-align: right"><code>project_large!(gql, f_hat)</code></td><td style="text-align: right">Zero out k &gt; Λ (in-place)</td></tr><tr><td style="text-align: right"><code>project_small!(gql, f_hat)</code></td><td style="text-align: right">Zero out k ≤ Λ (in-place)</td></tr><tr><td style="text-align: right"><code>get_cutoff(gql)</code></td><td style="text-align: right">Get current Λ</td></tr><tr><td style="text-align: right"><code>set_cutoff!(gql, Λ_new)</code></td><td style="text-align: right">Change Λ (rebuilds mask)</td></tr><tr><td style="text-align: right"><code>count_large_modes(gql)</code></td><td style="text-align: right">Number of large-scale modes</td></tr><tr><td style="text-align: right"><code>count_small_modes(gql)</code></td><td style="text-align: right">Number of small-scale modes</td></tr></table><h4 id="Example:-In-place-Projection"><a class="docs-heading-anchor" href="#Example:-In-place-Projection">Example: In-place Projection</a><a id="Example:-In-place-Projection-1"></a><a class="docs-heading-anchor-permalink" href="#Example:-In-place-Projection" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Instead of decompose!, you can project in-place
+f_hat = rfft(f)
+
+# Option 1: Get both components
+f_L, f_S = decompose!(gql, f_hat)
+
+# Option 2: Project in-place (modifies f_hat)
+f_hat_copy = copy(f_hat)
+project_large!(gql, f_hat_copy)  # Now contains only modes with k ≤ Λ</code></pre><hr/><h3 id="GQLWaveMeanSystem"><a class="docs-heading-anchor" href="#GQLWaveMeanSystem">GQLWaveMeanSystem</a><a id="GQLWaveMeanSystem-1"></a><a class="docs-heading-anchor-permalink" href="#GQLWaveMeanSystem" title="Permalink"></a></h3><p>Combined GQL decomposition with temporal filtering for wave-mean flow analysis.</p><pre><code class="language-julia hljs"># Constructor
+sys = GQLWaveMeanSystem(field_size, domain_size; Λ, α, horizontal_dims=(1,2), dtype=Float64)
+
+# Arguments:
+#   field_size      - Physical space size
+#   domain_size     - Horizontal domain size
+#   Λ               - GQL wavenumber cutoff
+#   α               - Temporal filter parameter (1/averaging_time)
+#   horizontal_dims - Dimensions for horizontal averaging</code></pre><h4 id="Methods-2"><a class="docs-heading-anchor" href="#Methods-2">Methods</a><a class="docs-heading-anchor-permalink" href="#Methods-2" title="Permalink"></a></h4><table><tr><th style="text-align: right">Function</th><th style="text-align: right">Description</th></tr><tr><td style="text-align: right"><code>add_field!(sys, :u)</code></td><td style="text-align: right">Register field for decomposition</td></tr><tr><td style="text-align: right"><code>add_flux!(sys, :uw)</code></td><td style="text-align: right">Register flux product ⟨u&#39;w&#39;⟩</td></tr><tr><td style="text-align: right"><code>update!(sys, fields_hat, fields_phys, dt)</code></td><td style="text-align: right">Update decomposition and filters</td></tr><tr><td style="text-align: right"><code>get_large(sys, :u)</code></td><td style="text-align: right">Large-scale spectral component</td></tr><tr><td style="text-align: right"><code>get_small(sys, :u)</code></td><td style="text-align: right">Small-scale spectral component</td></tr><tr><td style="text-align: right"><code>get_mean(sys, :u)</code></td><td style="text-align: right">Time-filtered mean profile (1D)</td></tr><tr><td style="text-align: right"><code>get_flux(sys, :uw)</code></td><td style="text-align: right">Filtered wave flux profile</td></tr><tr><td style="text-align: right"><code>get_cutoff(sys)</code></td><td style="text-align: right">Get Λ</td></tr><tr><td style="text-align: right"><code>set_cutoff!(sys, Λ_new)</code></td><td style="text-align: right">Change Λ</td></tr></table><hr/><h2 id="Complete-GQL-Simulation-Example"><a class="docs-heading-anchor" href="#Complete-GQL-Simulation-Example">Complete GQL Simulation Example</a><a id="Complete-GQL-Simulation-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-GQL-Simulation-Example" title="Permalink"></a></h2><h3 id="2D-Barotropic-Vorticity-(β-plane)"><a class="docs-heading-anchor" href="#2D-Barotropic-Vorticity-(β-plane)">2D Barotropic Vorticity (β-plane)</a><a id="2D-Barotropic-Vorticity-(β-plane)-1"></a><a class="docs-heading-anchor-permalink" href="#2D-Barotropic-Vorticity-(β-plane)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+using FFTW
+using LinearAlgebra
+
+# ============================================================================
+# GQL simulation of 2D turbulence with β-effect (zonal jet formation)
+# ============================================================================
+
+# Grid
+Nx, Ny = 128, 128
+Lx, Ly = 2π, 2π
+dx, dy = Lx/Nx, Ly/Ny
+
+# Wavenumbers
+kx = rfftfreq(Nx, 2π/dx)
+ky = fftfreq(Ny, 2π/dy)
+KX = [kx[i] for i in 1:length(kx), j in 1:Ny]
+KY = [ky[j] for i in 1:length(kx), j in 1:Ny]
+K2 = KX.^2 .+ KY.^2
+K2[1,1] = 1  # Avoid division by zero
+
+# Physical parameters
+β = 10.0     # β-effect (planetary vorticity gradient)
+ν = 1e-4     # Viscosity
+dt = 0.001
+nsteps = 10000
+
+# GQL setup: cutoff at Λ = 4 (only large scales interact nonlinearly)
+Λ = 4.0
+gql = GQLDecomposition((Nx, Ny), (Lx, Ly); Λ=Λ)
+
+println(&quot;GQL cutoff Λ = &quot;, Λ)
+println(&quot;Large-scale modes: &quot;, count_large_modes(gql))
+println(&quot;Small-scale modes: &quot;, count_small_modes(gql))
+
+# Initial condition: small random perturbation
+ζ = 0.1 * randn(Nx, Ny)
+ζ_hat = rfft(ζ)
+
+# Preallocate
+ψ_hat = similar(ζ_hat)
+u_hat = similar(ζ_hat)
+v_hat = similar(ζ_hat)
+NL_hat = similar(ζ_hat)
+
+# Time stepping (RK4)
+function compute_rhs!(rhs, ζ_hat, gql, K2, KX, KY, β, ν)
+    # Stream function: ψ = -ζ/k²
+    @. ψ_hat = -ζ_hat / K2
+
+    # Velocity: u = -∂ψ/∂y, v = ∂ψ/∂x
+    @. u_hat = -im * KY * ψ_hat
+    @. v_hat =  im * KX * ψ_hat
+
+    # Transform to physical space
+    ζ = irfft(ζ_hat, Nx)
+    u = irfft(u_hat, Nx)
+    v = irfft(v_hat, Nx)
+
+    # ========================================
+    # GQL APPROXIMATION: Decompose velocity
+    # ========================================
+    u_hat_full = rfft(u)
+    v_hat_full = rfft(v)
+
+    # Large-scale velocity
+    u_L_hat, u_S_hat = decompose!(gql, u_hat_full)
+    u_L = irfft(copy(u_L_hat), Nx)
+
+    v_L_hat, v_S_hat = decompose!(gql, v_hat_full)
+    v_L = irfft(copy(v_L_hat), Nx)
+
+    # Small-scale velocity
+    u_S = irfft(copy(u_S_hat), Nx)
+    v_S = irfft(copy(v_S_hat), Nx)
+
+    # Vorticity decomposition
+    ζ_L_hat, ζ_S_hat = decompose!(gql, copy(ζ_hat))
+    ζ_L = irfft(copy(ζ_L_hat), Nx)
+    ζ_S = irfft(copy(ζ_S_hat), Nx)
+
+    # ========================================
+    # GQL Nonlinear terms
+    # ========================================
+    # Large-scale: NL(u_L, ζ_L) + project_L(NL(u_S, ζ_S))
+    NL_LL = u_L .* irfft(im * KX .* ζ_L_hat, Nx) .+
+            v_L .* irfft(im * KY .* ζ_L_hat, Nx)
+
+    NL_SS = u_S .* irfft(im * KX .* ζ_S_hat, Nx) .+
+            v_S .* irfft(im * KY .* ζ_S_hat, Nx)
+    NL_SS_hat = rfft(NL_SS)
+    project_large!(gql, NL_SS_hat)  # Keep only |k| ≤ Λ
+
+    # Small-scale: NL(u_L, ζ_S) + NL(u_S, ζ_L)  [NO NL(u_S, ζ_S)]
+    NL_LS = u_L .* irfft(im * KX .* ζ_S_hat, Nx) .+
+            v_L .* irfft(im * KY .* ζ_S_hat, Nx)
+    NL_SL = u_S .* irfft(im * KX .* ζ_L_hat, Nx) .+
+            v_S .* irfft(im * KY .* ζ_L_hat, Nx)
+
+    # Combine
+    NL_large = rfft(NL_LL) .+ NL_SS_hat
+    NL_small = rfft(NL_LS .+ NL_SL)
+
+    # Total advection (GQL)
+    @. NL_hat = NL_large + NL_small
+
+    # RHS: -u·∇ζ - βv + ν∇²ζ
+    @. rhs = -NL_hat - β * im * KX * ψ_hat - ν * K2 * ζ_hat
+end
+
+# Main time loop
+k1, k2, k3, k4 = similar(ζ_hat), similar(ζ_hat), similar(ζ_hat), similar(ζ_hat)
+ζ_tmp = similar(ζ_hat)
+
+for step in 1:nsteps
+    # RK4 stages
+    compute_rhs!(k1, ζ_hat, gql, K2, KX, KY, β, ν)
+    @. ζ_tmp = ζ_hat + 0.5*dt*k1
+    compute_rhs!(k2, ζ_tmp, gql, K2, KX, KY, β, ν)
+    @. ζ_tmp = ζ_hat + 0.5*dt*k2
+    compute_rhs!(k3, ζ_tmp, gql, K2, KX, KY, β, ν)
+    @. ζ_tmp = ζ_hat + dt*k3
+    compute_rhs!(k4, ζ_tmp, gql, K2, KX, KY, β, ν)
+
+    @. ζ_hat = ζ_hat + (dt/6) * (k1 + 2*k2 + 2*k3 + k4)
+
+    # Diagnostics
+    if step % 1000 == 0
+        ζ = irfft(ζ_hat, Nx)
+        enstrophy = sum(ζ.^2) * dx * dy / (Lx * Ly)
+
+        # Zonal mean (x-average)
+        u = irfft(-im * KY .* (-ζ_hat ./ K2), Nx)
+        u_zonal = vec(mean(u, dims=1))
+
+        println(&quot;Step $step: Enstrophy = $(round(enstrophy, digits=4)), max|u_zonal| = $(round(maximum(abs.(u_zonal)), digits=4))&quot;)
+    end
+end</code></pre><hr/><h2 id="Combining-GQL-with-Wave-Mean-Decomposition"><a class="docs-heading-anchor" href="#Combining-GQL-with-Wave-Mean-Decomposition">Combining GQL with Wave-Mean Decomposition</a><a id="Combining-GQL-with-Wave-Mean-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Combining-GQL-with-Wave-Mean-Decomposition" title="Permalink"></a></h2><p>For problems with clear wave-mean separation (e.g., internal waves + zonal flow):</p><pre><code class="language-julia hljs">using Tarang
+using FFTW
+
+# Domain
+Nx, Ny, Nz = 64, 64, 32
+Lx, Ly = 2π, 2π
+dt = 0.01
+
+# Combined system: GQL (Λ=4) + temporal filter (α=0.1)
+sys = GQLWaveMeanSystem((Nx, Ny, Nz), (Lx, Ly); Λ=4.0, α=0.1)
+
+# Register fields
+add_field!(sys, :u)
+add_field!(sys, :v)
+add_field!(sys, :w)
+add_field!(sys, :b)
+
+# Register fluxes for Reynolds stress
+add_flux!(sys, :uw)  # ⟨u&#39;w&#39;⟩
+add_flux!(sys, :vw)  # ⟨v&#39;w&#39;⟩
+add_flux!(sys, :wb)  # ⟨w&#39;b&#39;⟩
+
+# Time loop
+for step in 1:nsteps
+    # Your PDE solver advances u, v, w, b
+    # ...
+
+    # Update GQL + temporal filtering
+    update!(sys, Dict(:u =&gt; u, :v =&gt; v, :w =&gt; w, :b =&gt; b), dt)
+
+    # Access decomposed fields
+    u_L = get_large(sys, :u)      # Large-scale (|k| ≤ Λ) in spectral space
+    u_S = get_small(sys, :u)      # Small-scale (|k| &gt; Λ) in spectral space
+    u_mean = get_mean(sys, :u)    # Time-filtered horizontal mean ū(z)
+
+    # Access filtered Reynolds stress
+    R_uw = get_flux(sys, :uw)     # ⟨u&#39;w&#39;⟩(z) profile
+    R_wb = get_flux(sys, :wb)     # ⟨w&#39;b&#39;⟩(z) profile
+
+    # Use for forcing in mean equations:
+    # ∂ū/∂t = ... - ∂⟨u&#39;w&#39;⟩/∂z
+    # ∂b̄/∂t = ... - ∂⟨w&#39;b&#39;⟩/∂z
+end</code></pre><hr/><h2 id="Choosing-the-Cutoff-Λ"><a class="docs-heading-anchor" href="#Choosing-the-Cutoff-Λ">Choosing the Cutoff Λ</a><a id="Choosing-the-Cutoff-Λ-1"></a><a class="docs-heading-anchor-permalink" href="#Choosing-the-Cutoff-Λ" title="Permalink"></a></h2><h3 id="Guidelines"><a class="docs-heading-anchor" href="#Guidelines">Guidelines</a><a id="Guidelines-1"></a><a class="docs-heading-anchor-permalink" href="#Guidelines" title="Permalink"></a></h3><table><tr><th style="text-align: right">Application</th><th style="text-align: right">Suggested Λ</th><th style="text-align: right">Rationale</th></tr><tr><td style="text-align: right">Zonal jets (β-plane)</td><td style="text-align: right">2-6</td><td style="text-align: right">Capture jet scale, parameterize eddies</td></tr><tr><td style="text-align: right">Convection</td><td style="text-align: right">4-10</td><td style="text-align: right">Large convective cells are &quot;mean&quot;</td></tr><tr><td style="text-align: right">Shear flow</td><td style="text-align: right">1-4</td><td style="text-align: right">Mean shear + harmonics</td></tr><tr><td style="text-align: right">Testing QL validity</td><td style="text-align: right">0 then increase</td><td style="text-align: right">Compare QL → GQL → NL</td></tr></table><h3 id="Diagnostic:-Mode-Count"><a class="docs-heading-anchor" href="#Diagnostic:-Mode-Count">Diagnostic: Mode Count</a><a id="Diagnostic:-Mode-Count-1"></a><a class="docs-heading-anchor-permalink" href="#Diagnostic:-Mode-Count" title="Permalink"></a></h3><pre><code class="language-julia hljs">gql = GQLDecomposition((128, 128), (2π, 2π); Λ=4.0)
+
+n_large = count_large_modes(gql)
+n_small = count_small_modes(gql)
+n_total = n_large + n_small
+
+println(&quot;Large-scale modes: $n_large ($(round(100*n_large/n_total, digits=1))%)&quot;)
+println(&quot;Small-scale modes: $n_small ($(round(100*n_small/n_total, digits=1))%)&quot;)
+
+# Typical output for Λ=4:
+# Large-scale modes: 49 (0.6%)
+# Small-scale modes: 8143 (99.4%)</code></pre><h3 id="Sweeping-Λ-to-Test-Convergence"><a class="docs-heading-anchor" href="#Sweeping-Λ-to-Test-Convergence">Sweeping Λ to Test Convergence</a><a id="Sweeping-Λ-to-Test-Convergence-1"></a><a class="docs-heading-anchor-permalink" href="#Sweeping-Λ-to-Test-Convergence" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Test GQL accuracy by varying Λ
+for Λ in [0, 2, 4, 8, 16, Inf]
+    gql = GQLDecomposition((64, 64), (2π, 2π); Λ=Λ)
+    # Run simulation...
+    # Compare statistics (energy, enstrophy, mean profiles)
+end</code></pre><hr/><h2 id="Performance-Considerations"><a class="docs-heading-anchor" href="#Performance-Considerations">Performance Considerations</a><a id="Performance-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Considerations" title="Permalink"></a></h2><h3 id="Memory"><a class="docs-heading-anchor" href="#Memory">Memory</a><a id="Memory-1"></a><a class="docs-heading-anchor-permalink" href="#Memory" title="Permalink"></a></h3><table><tr><th style="text-align: right">System</th><th style="text-align: right">Arrays per Field</th><th style="text-align: right">Notes</th></tr><tr><td style="text-align: right"><code>GQLDecomposition</code></td><td style="text-align: right">2 complex</td><td style="text-align: right">f<em>large, f</em>small work arrays</td></tr><tr><td style="text-align: right"><code>GQLWaveMeanSystem</code></td><td style="text-align: right">2 complex + 3 real</td><td style="text-align: right">Plus temporal filter storage</td></tr></table><h3 id="Computational-Cost"><a class="docs-heading-anchor" href="#Computational-Cost">Computational Cost</a><a id="Computational-Cost-1"></a><a class="docs-heading-anchor-permalink" href="#Computational-Cost" title="Permalink"></a></h3><ul><li><strong>Mask application</strong>: O(N) per field, very fast</li><li><strong>FFT/IFFT</strong>: O(N log N), dominates cost</li><li><strong>GQL vs NL</strong>: Similar cost per step, but GQL may allow larger Λ (fewer modes in expensive nonlinear terms)</li></ul><h3 id="Optimization-Tips"><a class="docs-heading-anchor" href="#Optimization-Tips">Optimization Tips</a><a id="Optimization-Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Optimization-Tips" title="Permalink"></a></h3><ol><li><strong>Reuse FFT plans</strong>: Pre-compute <code>plan_rfft</code> and <code>plan_irfft</code></li><li><strong>In-place operations</strong>: Use <code>project_large!</code> instead of <code>decompose!</code> when possible</li><li><strong>Batch updates</strong>: Update all fields before computing fluxes</li></ol><hr/><h2 id="Theory:-Why-GQL-Works"><a class="docs-heading-anchor" href="#Theory:-Why-GQL-Works">Theory: Why GQL Works</a><a id="Theory:-Why-GQL-Works-1"></a><a class="docs-heading-anchor-permalink" href="#Theory:-Why-GQL-Works" title="Permalink"></a></h2><h3 id="The-Eddy-Mean-Decomposition"><a class="docs-heading-anchor" href="#The-Eddy-Mean-Decomposition">The Eddy-Mean Decomposition</a><a id="The-Eddy-Mean-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#The-Eddy-Mean-Decomposition" title="Permalink"></a></h3><p>Traditional Reynolds decomposition: <code>f = f̄ + f&#39;</code></p><p>GQL generalizes this to spectral space:</p><ul><li><strong>f_L</strong> contains the &quot;mean&quot; (but can include some wave structure)</li><li><strong>f_S</strong> contains the &quot;eddies&quot; (high-k fluctuations)</li></ul><h3 id="Scale-Interactions"><a class="docs-heading-anchor" href="#Scale-Interactions">Scale Interactions</a><a id="Scale-Interactions-1"></a><a class="docs-heading-anchor-permalink" href="#Scale-Interactions" title="Permalink"></a></h3><p>The nonlinear term <code>NL(f, f)</code> produces wavenumber triads (k₁, k₂, k₃) where k₁ + k₂ = k₃.</p><p>GQL assumption: <strong>Small-scale self-interactions</strong> <code>NL(f_S, f_S)</code> that stay in the small scales can be neglected.</p><p>This is valid when:</p><ol><li>Small scales are &quot;slaved&quot; to large scales</li><li>Energy cascade is local (not inverse cascade dominated)</li><li>Scale separation exists</li></ol><h3 id="When-GQL-Fails"><a class="docs-heading-anchor" href="#When-GQL-Fails">When GQL Fails</a><a id="When-GQL-Fails-1"></a><a class="docs-heading-anchor-permalink" href="#When-GQL-Fails" title="Permalink"></a></h3><p>GQL may not capture:</p><ul><li>Strong inverse cascades (2D turbulence without β)</li><li>Intermittency and extreme events</li><li>Small-scale instabilities</li></ul><p>Always validate against full NL for your specific problem!</p><hr/><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li><p>Marston, Chini &amp; Tobias (2016). &quot;Generalized Quasilinear Approximation: Application to Zonal Jets&quot;. <em>Phys. Rev. Lett.</em> 116, 214501.</p></li><li><p>Tobias &amp; Marston (2017). &quot;Three-dimensional rotating Couette flow via the generalised quasilinear approximation&quot;. <em>J. Fluid Mech.</em> 810, 412-428.</p></li><li><p>Marston, Chini &amp; Tobias (2019). &quot;Generalized Quasilinear Approximation of the Interaction of Convection and Mean Flows&quot;. <em>Proc. R. Soc. A</em> 474, 20180422.</p></li><li><p>Constantinou &amp; Parker (2018). &quot;Magnetic suppression of zonal flows on a beta plane&quot;. <em>Astrophys. J.</em> 863, 46.</p></li></ol><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../temporal_filters/">Temporal Filters</a> - Time-domain filtering for wave-mean separation</li><li><a href="../les_models/">LES Models</a> - Subgrid-scale modeling (alternative to GQL)</li><li><a href="../stochastic_forcing/">Stochastic Forcing</a> - Adding stochastic terms to equations</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../les_models/">« Large Eddy Simulation (LES) Models</a><a class="docs-footer-nextpage" href="../gpu_computing/">GPU Computing »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

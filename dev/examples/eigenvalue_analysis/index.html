@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Eigenvalue Analysis Examples · Tarang.jl</title><meta name="title" content="Eigenvalue Analysis Examples · Tarang.jl"/><meta property="og:title" content="Eigenvalue Analysis Examples · Tarang.jl"/><meta property="twitter:title" content="Eigenvalue Analysis Examples · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/examples/eigenvalue_analysis/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/examples/eigenvalue_analysis/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/examples/eigenvalue_analysis/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox" checked/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox"/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../tutorials/overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Tutorial: Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox" checked/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gallery/">Example Gallery</a></li><li><a class="tocitem" href="../fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../heat_transfer/">Heat Transfer Examples</a></li><li class="is-active"><a class="tocitem" href>Eigenvalue Analysis Examples</a><ul class="internal"><li><a class="tocitem" href="#Linear-Stability-Overview"><span>Linear Stability Overview</span></a></li><li><a class="tocitem" href="#Rayleigh-Bénard-Stability"><span>Rayleigh-Bénard Stability</span></a></li><li><a class="tocitem" href="#Orr-Sommerfeld-(Plane-Poiseuille)"><span>Orr-Sommerfeld (Plane Poiseuille)</span></a></li><li><a class="tocitem" href="#Neutral-Curves"><span>Neutral Curves</span></a></li><li><a class="tocitem" href="#Taylor-Couette-Stability"><span>Taylor-Couette Stability</span></a></li><li><a class="tocitem" href="#Thermal-Instabilities"><span>Thermal Instabilities</span></a></li><li><a class="tocitem" href="#Visualizing-Eigenmodes"><span>Visualizing Eigenmodes</span></a></li><li><a class="tocitem" href="#Solver-Options"><span>Solver Options</span></a></li><li><a class="tocitem" href="#Tips"><span>Tips</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Spectral Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../../pages/les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../../pages/custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../../api/bases/">Bases API</a></li><li><a class="tocitem" href="../../api/domains/">Domains API</a></li><li><a class="tocitem" href="../../api/fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/operators/">Operators API</a></li><li><a class="tocitem" href="../../api/problems/">Problems API</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers API</a></li><li><a class="tocitem" href="../../api/timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models API</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis API</a></li><li><a class="tocitem" href="../../api/io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials &amp; Examples</a></li><li><a class="is-disabled">Example Scripts</a></li><li class="is-active"><a href>Eigenvalue Analysis Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Eigenvalue Analysis Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/examples/eigenvalue_analysis.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Eigenvalue-Analysis-Examples"><a class="docs-heading-anchor" href="#Eigenvalue-Analysis-Examples">Eigenvalue Analysis Examples</a><a id="Eigenvalue-Analysis-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Eigenvalue-Analysis-Examples" title="Permalink"></a></h1><p>Collection of linear stability and eigenvalue problem examples with Tarang.jl.</p><h2 id="Linear-Stability-Overview"><a class="docs-heading-anchor" href="#Linear-Stability-Overview">Linear Stability Overview</a><a id="Linear-Stability-Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Linear-Stability-Overview" title="Permalink"></a></h2><p>Eigenvalue problems determine the stability of base states by solving:</p><p class="math-container">\[A \mathbf{x} = \sigma B \mathbf{x}\]</p><p>where σ is the eigenvalue (growth rate + frequency).</p><h2 id="Rayleigh-Bénard-Stability"><a class="docs-heading-anchor" href="#Rayleigh-Bénard-Stability">Rayleigh-Bénard Stability</a><a id="Rayleigh-Bénard-Stability-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard-Stability" title="Permalink"></a></h2><p>Critical Rayleigh number for convection onset.</p><pre><code class="language-julia hljs">using Tarang, MPI
+MPI.Init()
+
+# Parameters
+Pr = 1.0
+k = 3.117  # Critical wavenumber
+
+# Domain
+coords = CartesianCoordinates(&quot;z&quot;)
+dist = Distributor(coords; mesh=(1,), dtype=Float64)
+z_basis = ChebyshevT(coords[&quot;z&quot;]; size=64, bounds=(0.0, 1.0))
+
+# Fields (complex amplitudes)
+u_hat = ScalarField(dist, &quot;u_hat&quot;, (z_basis,), ComplexF64)
+w_hat = ScalarField(dist, &quot;w_hat&quot;, (z_basis,), ComplexF64)
+p_hat = ScalarField(dist, &quot;p_hat&quot;, (z_basis,), ComplexF64)
+T_hat = ScalarField(dist, &quot;T_hat&quot;, (z_basis,), ComplexF64)
+
+# EVP
+evp = Tarang.EVP([u_hat, w_hat, p_hat, T_hat]; eigenvalue=:sigma)
+evp.parameters[&quot;Pr&quot;] = Pr
+evp.parameters[&quot;k2&quot;] = k^2
+
+# Scan Ra to find critical value
+function find_critical_Ra(evp, Ra_range)
+    for Ra in Ra_range
+        evp.parameters[&quot;Ra&quot;] = Ra
+        solver = Tarang.EigenvalueSolver(evp; nev=5, which=&quot;LR&quot;)
+        eigenvalues, _ = Tarang.solve!(solver)
+        max_growth = maximum(real.(eigenvalues))
+
+        println(&quot;Ra = $Ra, σ_max = $max_growth&quot;)
+
+        if max_growth &gt; 0
+            return Ra  # Found critical Ra
+        end
+    end
+end
+
+Ra_crit = find_critical_Ra(evp, 1000:100:2000)
+println(&quot;Critical Ra ≈ $Ra_crit&quot;)
+
+MPI.Finalize()</code></pre><h2 id="Orr-Sommerfeld-(Plane-Poiseuille)"><a class="docs-heading-anchor" href="#Orr-Sommerfeld-(Plane-Poiseuille)">Orr-Sommerfeld (Plane Poiseuille)</a><a id="Orr-Sommerfeld-(Plane-Poiseuille)-1"></a><a class="docs-heading-anchor-permalink" href="#Orr-Sommerfeld-(Plane-Poiseuille)" title="Permalink"></a></h2><p>Stability of channel flow.</p><pre><code class="language-julia hljs"># Base flow
+U(z) = 1 - (2z - 1)^2  # Parabolic profile
+U_pp(z) = -8.0          # U&#39;&#39;
+
+# Parameters
+Re = 5000
+k = 1.0
+k2 = k^2
+
+# EVP for complex wave speed c
+evp = Tarang.EVP([psi_hat]; eigenvalue=:c)
+
+Tarang.add_equation!(evp, &quot;&quot;&quot;
+    c*(∂z(∂z(psi_hat)) - k2*psi_hat) =
+    U*(∂z(∂z(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
+    (1im/(Re*k))*(∂z(∂z(∂z(∂z(psi_hat)))) - 2*k2*∂z(∂z(psi_hat)) + k4*psi_hat)
+&quot;&quot;&quot;)
+
+# No-slip: ψ = ∂ψ/∂z = 0 at walls
+Tarang.add_equation!(evp, &quot;psi_hat(z=0) = 0&quot;)
+Tarang.add_equation!(evp, &quot;psi_hat(z=1) = 0&quot;)
+Tarang.add_equation!(evp, &quot;∂z(psi_hat)(z=0) = 0&quot;)
+Tarang.add_equation!(evp, &quot;∂z(psi_hat)(z=1) = 0&quot;)</code></pre><h2 id="Neutral-Curves"><a class="docs-heading-anchor" href="#Neutral-Curves">Neutral Curves</a><a id="Neutral-Curves-1"></a><a class="docs-heading-anchor-permalink" href="#Neutral-Curves" title="Permalink"></a></h2><p>Compute stability boundary in parameter space.</p><pre><code class="language-julia hljs">function compute_neutral_curve(evp, k_range, Ra_range)
+    k_neutral = Float64[]
+    Ra_neutral = Float64[]
+
+    for k in k_range
+        evp.parameters[&quot;k&quot;] = k
+        evp.parameters[&quot;k2&quot;] = k^2
+
+        # Binary search for neutral Ra
+        Ra_lo, Ra_hi = Ra_range
+        while Ra_hi - Ra_lo &gt; 10
+            Ra_mid = (Ra_lo + Ra_hi) / 2
+            evp.parameters[&quot;Ra&quot;] = Ra_mid
+
+            solver = Tarang.EigenvalueSolver(evp; nev=3, which=&quot;LR&quot;)
+            eigenvalues, _ = Tarang.solve!(solver)
+            growth = maximum(real.(eigenvalues))
+
+            if growth &gt; 0
+                Ra_hi = Ra_mid
+            else
+                Ra_lo = Ra_mid
+            end
+        end
+
+        push!(k_neutral, k)
+        push!(Ra_neutral, (Ra_lo + Ra_hi) / 2)
+    end
+
+    return k_neutral, Ra_neutral
+end
+
+k_range = range(2.0, 4.5, length=20)
+k_n, Ra_n = compute_neutral_curve(evp, k_range, (1000, 3000))
+
+# Find minimum (critical point)
+idx = argmin(Ra_n)
+k_crit, Ra_crit = k_n[idx], Ra_n[idx]</code></pre><h2 id="Taylor-Couette-Stability"><a class="docs-heading-anchor" href="#Taylor-Couette-Stability">Taylor-Couette Stability</a><a id="Taylor-Couette-Stability-1"></a><a class="docs-heading-anchor-permalink" href="#Taylor-Couette-Stability" title="Permalink"></a></h2><p>Rotating cylinder flow stability.</p><pre><code class="language-julia hljs"># Parameters
+eta = 0.5  # Radius ratio
+Omega_i = 1.0  # Inner cylinder rotation
+Omega_o = 0.0  # Outer cylinder rotation
+Re = 100
+
+# Cylindrical coordinates (simplified to 1D)
+evp = Tarang.EVP([u_r, u_theta, u_z, p]; eigenvalue=:sigma)
+
+# Base flow: Couette profile
+# Add perturbation equations with centrifugal effects</code></pre><h2 id="Thermal-Instabilities"><a class="docs-heading-anchor" href="#Thermal-Instabilities">Thermal Instabilities</a><a id="Thermal-Instabilities-1"></a><a class="docs-heading-anchor-permalink" href="#Thermal-Instabilities" title="Permalink"></a></h2><h3 id="Marangoni-Convection"><a class="docs-heading-anchor" href="#Marangoni-Convection">Marangoni Convection</a><a id="Marangoni-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Marangoni-Convection" title="Permalink"></a></h3><p>Surface tension driven flow.</p><pre><code class="language-julia hljs">evp.parameters[&quot;Ma&quot;] = 1000  # Marangoni number
+evp.parameters[&quot;Bi&quot;] = 1.0   # Biot number
+
+# Free surface boundary conditions
+# Include surface tension gradient terms</code></pre><h3 id="Double-Diffusive-Convection"><a class="docs-heading-anchor" href="#Double-Diffusive-Convection">Double-Diffusive Convection</a><a id="Double-Diffusive-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Double-Diffusive-Convection" title="Permalink"></a></h3><p>Two buoyancy sources (temperature and salinity).</p><pre><code class="language-julia hljs">evp.parameters[&quot;Ra_T&quot;] = 1e6   # Thermal Rayleigh
+evp.parameters[&quot;Ra_S&quot;] = 5e5   # Solutal Rayleigh
+evp.parameters[&quot;tau&quot;] = 0.01   # Diffusivity ratio
+
+# Additional equation for salinity perturbation</code></pre><h2 id="Visualizing-Eigenmodes"><a class="docs-heading-anchor" href="#Visualizing-Eigenmodes">Visualizing Eigenmodes</a><a id="Visualizing-Eigenmodes-1"></a><a class="docs-heading-anchor-permalink" href="#Visualizing-Eigenmodes" title="Permalink"></a></h2><pre><code class="language-julia hljs">function plot_eigenmode(eigenvector, z_grid)
+    using Plots
+
+    u = real.(eigenvector[&quot;u_hat&quot;])
+    w = real.(eigenvector[&quot;w_hat&quot;])
+    T = real.(eigenvector[&quot;T_hat&quot;])
+
+    # Normalize
+    max_val = maximum(abs.([u; w; T]))
+    u ./= max_val
+    w ./= max_val
+    T ./= max_val
+
+    p = plot(layout=(1,3), size=(900,300))
+    plot!(p[1], u, z_grid, xlabel=&quot;û&quot;, ylabel=&quot;z&quot;)
+    plot!(p[2], w, z_grid, xlabel=&quot;ŵ&quot;)
+    plot!(p[3], T, z_grid, xlabel=&quot;T̂&quot;)
+
+    return p
+end</code></pre><h2 id="Solver-Options"><a class="docs-heading-anchor" href="#Solver-Options">Solver Options</a><a id="Solver-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-Options" title="Permalink"></a></h2><h3 id="Finding-Specific-Eigenvalues"><a class="docs-heading-anchor" href="#Finding-Specific-Eigenvalues">Finding Specific Eigenvalues</a><a id="Finding-Specific-Eigenvalues-1"></a><a class="docs-heading-anchor-permalink" href="#Finding-Specific-Eigenvalues" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Most unstable (largest real part)
+solver = Tarang.EigenvalueSolver(evp; nev=10, which=&quot;LR&quot;)
+
+# Largest magnitude
+solver = Tarang.EigenvalueSolver(evp; nev=10, which=&quot;LM&quot;)
+
+# Near a target value
+solver = Tarang.EigenvalueSolver(evp; nev=5, target=0.1+1.5im)
+
+# Most oscillatory (largest imaginary)
+solver = Tarang.EigenvalueSolver(evp; nev=10, which=&quot;LI&quot;)</code></pre><h3 id="Convergence"><a class="docs-heading-anchor" href="#Convergence">Convergence</a><a id="Convergence-1"></a><a class="docs-heading-anchor-permalink" href="#Convergence" title="Permalink"></a></h3><pre><code class="language-julia hljs">solver = Tarang.EigenvalueSolver(evp;
+    nev=20,
+    which=&quot;LR&quot;,
+    tolerance=1e-12,
+    max_iterations=2000
+)</code></pre><h2 id="Tips"><a class="docs-heading-anchor" href="#Tips">Tips</a><a id="Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Tips" title="Permalink"></a></h2><h3 id="Resolution"><a class="docs-heading-anchor" href="#Resolution">Resolution</a><a id="Resolution-1"></a><a class="docs-heading-anchor-permalink" href="#Resolution" title="Permalink"></a></h3><ul><li>Start coarse (N=32), refine until eigenvalues converge</li><li>Chebyshev provides exponential convergence</li><li>Boundary layer modes need more resolution</li></ul><h3 id="Spurious-Modes"><a class="docs-heading-anchor" href="#Spurious-Modes">Spurious Modes</a><a id="Spurious-Modes-1"></a><a class="docs-heading-anchor-permalink" href="#Spurious-Modes" title="Permalink"></a></h3><ul><li>Check mode structure (spurious modes often oscillate wildly)</li><li>Verify with different N</li><li>Check energy balance</li></ul><h3 id="Physical-Validation"><a class="docs-heading-anchor" href="#Physical-Validation">Physical Validation</a><a id="Physical-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Physical-Validation" title="Permalink"></a></h3><ul><li>Compare with known analytical results</li><li>Check limiting cases</li><li>Verify neutral curve shape</li></ul><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems Tutorial</a></li><li><a href="../../api/solvers/">API: Solvers</a></li><li><a href="../gallery/">Example Gallery</a></li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../heat_transfer/">« Heat Transfer Examples</a><a class="docs-footer-nextpage" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

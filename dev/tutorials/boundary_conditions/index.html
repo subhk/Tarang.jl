@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Tutorial: Boundary Conditions · Tarang.jl</title><meta name="title" content="Tutorial: Boundary Conditions · Tarang.jl"/><meta property="og:title" content="Tutorial: Boundary Conditions · Tarang.jl"/><meta property="twitter:title" content="Tutorial: Boundary Conditions · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/tutorials/boundary_conditions/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/tutorials/boundary_conditions/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/tutorials/boundary_conditions/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox" checked/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox" checked/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li class="is-active"><a class="tocitem" href>Tutorial: Boundary Conditions</a><ul class="internal"><li><a class="tocitem" href="#Overview"><span>Overview</span></a></li><li><a class="tocitem" href="#The-Tau-Method-Approach"><span>The Tau Method Approach</span></a></li><li><a class="tocitem" href="#Complete-Example:-Poisson-Equation"><span>Complete Example: Poisson Equation</span></a></li><li><a class="tocitem" href="#Dirichlet-Boundary-Conditions"><span>Dirichlet Boundary Conditions</span></a></li><li><a class="tocitem" href="#Neumann-Boundary-Conditions"><span>Neumann Boundary Conditions</span></a></li><li><a class="tocitem" href="#Robin-Boundary-Conditions"><span>Robin Boundary Conditions</span></a></li><li><a class="tocitem" href="#Periodic-Boundary-Conditions"><span>Periodic Boundary Conditions</span></a></li><li><a class="tocitem" href="#The-lift()-Operator"><span>The lift() Operator</span></a></li><li><a class="tocitem" href="#Complete-Examples"><span>Complete Examples</span></a></li><li><a class="tocitem" href="#Validation"><span>Validation</span></a></li><li><a class="tocitem" href="#Troubleshooting"><span>Troubleshooting</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Spectral Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../../pages/les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../../pages/custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox"/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../../api/bases/">Bases API</a></li><li><a class="tocitem" href="../../api/domains/">Domains API</a></li><li><a class="tocitem" href="../../api/fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/operators/">Operators API</a></li><li><a class="tocitem" href="../../api/problems/">Problems API</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers API</a></li><li><a class="tocitem" href="../../api/timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models API</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis API</a></li><li><a class="tocitem" href="../../api/io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials &amp; Examples</a></li><li><a class="is-disabled">Tutorial Notebooks</a></li><li class="is-active"><a href>Tutorial: Boundary Conditions</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Tutorial: Boundary Conditions</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/tutorials/boundary_conditions.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial:-Boundary-Conditions"><a class="docs-heading-anchor" href="#Tutorial:-Boundary-Conditions">Tutorial: Boundary Conditions</a><a id="Tutorial:-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial:-Boundary-Conditions" title="Permalink"></a></h1><p>This tutorial covers the different types of boundary conditions available in Tarang.jl and how to apply them effectively using the tau method with explicit tau fields.</p><h2 id="Overview"><a class="docs-heading-anchor" href="#Overview">Overview</a><a id="Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Overview" title="Permalink"></a></h2><p>Boundary conditions (BCs) are essential for well-posed PDE problems. Tarang.jl supports:</p><ul><li><strong>Dirichlet</strong>: Specify field value at boundary</li><li><strong>Neumann</strong>: Specify derivative at boundary</li><li><strong>Robin</strong>: Linear combination of value and derivative</li><li><strong>Periodic</strong>: Automatic for Fourier bases</li></ul><h2 id="The-Tau-Method-Approach"><a class="docs-heading-anchor" href="#The-Tau-Method-Approach">The Tau Method Approach</a><a id="The-Tau-Method-Approach-1"></a><a class="docs-heading-anchor-permalink" href="#The-Tau-Method-Approach" title="Permalink"></a></h2><p>Tarang.jl follows the <a href="https://dedalus-project.readthedocs.io/">Dedalus</a> approach for handling boundary conditions. Users must <strong>explicitly create tau fields</strong> and add them to equations using the <code>lift()</code> operator.</p><h3 id="Why-Explicit-Tau-Fields?"><a class="docs-heading-anchor" href="#Why-Explicit-Tau-Fields?">Why Explicit Tau Fields?</a><a id="Why-Explicit-Tau-Fields?-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Explicit-Tau-Fields?" title="Permalink"></a></h3><ol><li><strong>Clarity</strong>: The mathematical structure is visible in your code</li><li><strong>Flexibility</strong>: Full control over tau placement</li><li><strong>Debugging</strong>: Easy to inspect tau field values</li><li><strong>Consistency</strong>: Matches the mathematical formulation</li></ol><h3 id="Required-Steps"><a class="docs-heading-anchor" href="#Required-Steps">Required Steps</a><a id="Required-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Required-Steps" title="Permalink"></a></h3><p>For any problem with non-periodic boundary conditions:</p><ol><li><strong>Create tau fields</strong> - One per boundary condition</li><li><strong>Add tau fields to the problem</strong> - Include them in the field list</li><li><strong>Add lift() terms to equations</strong> - Place tau contributions at specific modes</li><li><strong>Specify boundary conditions</strong> - Link each BC to its tau field</li></ol><h2 id="Complete-Example:-Poisson-Equation"><a class="docs-heading-anchor" href="#Complete-Example:-Poisson-Equation">Complete Example: Poisson Equation</a><a id="Complete-Example:-Poisson-Equation-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example:-Poisson-Equation" title="Permalink"></a></h2><p>Let&#39;s solve the Poisson equation <span>$\nabla^2 u = f$</span> with Dirichlet BCs:</p><pre><code class="language-julia hljs">using Tarang
+
+# Create coordinates and bases
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+x_basis = RealFourier(coords[&quot;x&quot;], size=64, bounds=(0.0, 2π))
+z_basis = ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))
+
+# Create distributor and fields
+dist = Distributor(coords)
+u = ScalarField(dist, &quot;u&quot;, (x_basis, z_basis))
+f = ScalarField(dist, &quot;f&quot;, (x_basis, z_basis))  # Source term
+
+# Step 1: Create tau fields (one per BC)
+# These live on the x-basis only (boundary is a line in 2D)
+tau_u1 = ScalarField(dist, &quot;tau_u1&quot;, (x_basis,))  # For BC at z=0
+tau_u2 = ScalarField(dist, &quot;tau_u2&quot;, (x_basis,))  # For BC at z=1
+
+# Step 2: Add ALL fields to problem (including tau fields)
+problem = LBVP([u, tau_u1, tau_u2])
+
+# Step 3: Add substitution for source term
+add_substitution!(problem, &quot;f&quot;, f)
+
+# Step 4: Add equation with lift() operators (Dedalus-style string format)
+add_equation!(problem, &quot;Δ(u) + lift(tau_u1) + lift(tau_u2) = f&quot;)
+
+# Step 5: Add boundary conditions
+add_bc!(problem, &quot;u(z=0) = 0&quot;)   # u(z=0) = 0
+add_bc!(problem, &quot;u(z=1) = 0&quot;)   # u(z=1) = 0
+
+# Solve
+solver = BoundaryValueSolver(problem)
+solve!(solver)</code></pre><h2 id="Dirichlet-Boundary-Conditions"><a class="docs-heading-anchor" href="#Dirichlet-Boundary-Conditions">Dirichlet Boundary Conditions</a><a id="Dirichlet-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Dirichlet-Boundary-Conditions" title="Permalink"></a></h2><p>Fix the value of a field at the boundary.</p><h3 id="Basic-Setup"><a class="docs-heading-anchor" href="#Basic-Setup">Basic Setup</a><a id="Basic-Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Setup" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create tau fields for each Dirichlet BC
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))
+
+# Add to problem
+problem = LBVP([T, tau_T1, tau_T2])
+
+# Add equation with lift terms (Dedalus-style string format)
+add_equation!(problem, &quot;Δ(T) + lift(tau_T1) + lift(tau_T2) = source&quot;)
+
+# Boundary conditions
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # T(z=0) = 1
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # T(z=1) = 0</code></pre><h3 id="No-Slip-Velocity-(Vector-Fields)"><a class="docs-heading-anchor" href="#No-Slip-Velocity-(Vector-Fields)">No-Slip Velocity (Vector Fields)</a><a id="No-Slip-Velocity-(Vector-Fields)-1"></a><a class="docs-heading-anchor-permalink" href="#No-Slip-Velocity-(Vector-Fields)" title="Permalink"></a></h3><p>For viscous flows at solid walls, use vector fields for compact notation:</p><pre><code class="language-julia hljs"># Vector field for velocity
+u = VectorField(dist, coords, &quot;u&quot;, (x_basis, z_basis))
+p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
+
+# Vector tau fields for BCs at each wall
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,))  # Wall at z=0
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,))  # Wall at z=1
+tau_p = ScalarField(dist, &quot;tau_p&quot;, ())
+
+# Pass vector fields directly to problem
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+
+# Add substitutions
+add_substitution!(problem, &quot;nu&quot;, nu)
+
+# Momentum equation (single vector equation)
+add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u)&quot;)
+
+# Continuity with tau_p (removes degeneracy)
+add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
+
+# No-slip boundary conditions (vector notation)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)   # No-slip bottom (all components)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)   # No-slip top (all components)</code></pre><h2 id="Neumann-Boundary-Conditions"><a class="docs-heading-anchor" href="#Neumann-Boundary-Conditions">Neumann Boundary Conditions</a><a id="Neumann-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-Boundary-Conditions" title="Permalink"></a></h2><p>Specify the derivative (flux) at the boundary.</p><h3 id="Basic-Setup-2"><a class="docs-heading-anchor" href="#Basic-Setup-2">Basic Setup</a><a class="docs-heading-anchor-permalink" href="#Basic-Setup-2" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Tau fields for Neumann BCs
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))
+
+problem = LBVP([T, tau_T1, tau_T2])
+
+add_equation!(problem, &quot;Δ(T) + lift(tau_T1) + lift(tau_T2) = source&quot;)
+
+# Neumann: specify derivative at boundary
+add_bc!(problem, &quot;∂z(T)(z=0) = 1&quot;)   # ∂T/∂z(z=0) = 1
+add_bc!(problem, &quot;∂z(T)(z=1) = 0&quot;)   # ∂T/∂z(z=1) = 0</code></pre><h3 id="Stress-Free-Conditions"><a class="docs-heading-anchor" href="#Stress-Free-Conditions">Stress-Free Conditions</a><a id="Stress-Free-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Stress-Free-Conditions" title="Permalink"></a></h3><p>For free surfaces or slip boundaries (∂u/∂z = 0):</p><pre><code class="language-julia hljs"># Mixed: no-slip at bottom, stress-free at top
+add_bc!(problem, &quot;u_x(z=0) = 0&quot;)      # No-slip at bottom
+add_bc!(problem, &quot;∂z(u_x)(z=1) = 0&quot;)  # Stress-free at top (∂u/∂z = 0)</code></pre><h2 id="Robin-Boundary-Conditions"><a class="docs-heading-anchor" href="#Robin-Boundary-Conditions">Robin Boundary Conditions</a><a id="Robin-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Robin-Boundary-Conditions" title="Permalink"></a></h2><p>Linear combination: <span>$\alpha u + \beta \frac{\partial u}{\partial n} = \gamma$</span></p><pre><code class="language-julia hljs">tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))
+
+problem = LBVP([T, tau_T1, tau_T2])
+
+# Add parameters
+add_substitution!(problem, &quot;h&quot;, 10.0)   # Heat transfer coefficient
+add_substitution!(problem, &quot;k&quot;, 1.0)    # Thermal conductivity
+add_substitution!(problem, &quot;T_amb&quot;, 25.0)
+
+add_equation!(problem, &quot;Δ(T) + lift(tau_T1) + lift(tau_T2) = source&quot;)
+
+# Convective heat transfer at top: h*T + k*dT/dn = h*T_ambient
+add_bc!(problem, &quot;h*T(z=1) + k*∂z(T)(z=1) = h*T_amb&quot;)
+
+# Dirichlet at bottom
+add_bc!(problem, &quot;T(z=0) = 100&quot;)</code></pre><h2 id="Periodic-Boundary-Conditions"><a class="docs-heading-anchor" href="#Periodic-Boundary-Conditions">Periodic Boundary Conditions</a><a id="Periodic-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Periodic-Boundary-Conditions" title="Permalink"></a></h2><p>Periodic boundaries are automatically handled by Fourier bases - no tau fields needed!</p><pre><code class="language-julia hljs"># Fourier basis implies periodicity
+x_basis = RealFourier(coords[&quot;x&quot;], size=128, bounds=(0.0, 2π))
+
+# No boundary conditions or tau fields needed for x-direction
+# The Fourier representation automatically enforces u(x=0) = u(x=2π)</code></pre><div class="admonition is-warning" id="Mixing-Periodic-and-Non-Periodic-b7ce6b520a677dde"><header class="admonition-header">Mixing Periodic and Non-Periodic<a class="admonition-anchor" href="#Mixing-Periodic-and-Non-Periodic-b7ce6b520a677dde" title="Permalink"></a></header><div class="admonition-body"><p>When using Fourier (periodic) and Chebyshev (non-periodic) bases together, only create tau fields and boundary conditions for the non-periodic directions.</p></div></div><h2 id="The-lift()-Operator"><a class="docs-heading-anchor" href="#The-lift()-Operator">The lift() Operator</a><a id="The-lift()-Operator-1"></a><a class="docs-heading-anchor-permalink" href="#The-lift()-Operator" title="Permalink"></a></h2><p>The <code>lift()</code> operator places tau corrections at specific spectral modes. In the string equation format:</p><pre><code class="language-julia hljs">&quot;Δ(u) + lift(tau_u1) + lift(tau_u2) = f&quot;</code></pre><p>The tau field name in the lift() operator should match the tau field name you created.</p><h3 id="Mode-Selection-Guidelines"><a class="docs-heading-anchor" href="#Mode-Selection-Guidelines">Mode Selection Guidelines</a><a id="Mode-Selection-Guidelines-1"></a><a class="docs-heading-anchor-permalink" href="#Mode-Selection-Guidelines" title="Permalink"></a></h3><table><tr><th style="text-align: right">Operator Order</th><th style="text-align: right">Number of BCs</th><th style="text-align: right">Number of lift() terms</th></tr><tr><td style="text-align: right">1st (∂/∂z)</td><td style="text-align: right">1</td><td style="text-align: right">1</td></tr><tr><td style="text-align: right">2nd (∂²/∂z²)</td><td style="text-align: right">2</td><td style="text-align: right">2</td></tr><tr><td style="text-align: right">4th (∇⁴)</td><td style="text-align: right">4</td><td style="text-align: right">4</td></tr></table><h3 id="Example:-Fourth-Order-Problem"><a class="docs-heading-anchor" href="#Example:-Fourth-Order-Problem">Example: Fourth-Order Problem</a><a id="Example:-Fourth-Order-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#Example:-Fourth-Order-Problem" title="Permalink"></a></h3><p>For a biharmonic equation (∇⁴u = f) with 4 boundary conditions:</p><pre><code class="language-julia hljs"># Four tau fields needed
+tau_u1 = ScalarField(dist, &quot;tau_u1&quot;, (x_basis,))
+tau_u2 = ScalarField(dist, &quot;tau_u2&quot;, (x_basis,))
+tau_u3 = ScalarField(dist, &quot;tau_u3&quot;, (x_basis,))
+tau_u4 = ScalarField(dist, &quot;tau_u4&quot;, (x_basis,))
+
+problem = LBVP([u, tau_u1, tau_u2, tau_u3, tau_u4])
+
+# Biharmonic equation with all four lift terms
+add_equation!(problem, &quot;Δ(Δ(u)) + lift(tau_u1) + lift(tau_u2) + lift(tau_u3) + lift(tau_u4) = f&quot;)
+
+# Clamped beam: u = 0 and du/dz = 0 at both ends
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;∂z(u)(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_bc!(problem, &quot;∂z(u)(z=1) = 0&quot;)</code></pre><h2 id="Complete-Examples"><a class="docs-heading-anchor" href="#Complete-Examples">Complete Examples</a><a id="Complete-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Examples" title="Permalink"></a></h2><h3 id="Channel-Flow-(Poiseuille-Flow)"><a class="docs-heading-anchor" href="#Channel-Flow-(Poiseuille-Flow)">Channel Flow (Poiseuille Flow)</a><a id="Channel-Flow-(Poiseuille-Flow)-1"></a><a class="docs-heading-anchor-permalink" href="#Channel-Flow-(Poiseuille-Flow)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+x_basis = RealFourier(coords[&quot;x&quot;]; size=64, bounds=(0.0, 2π))
+z_basis = ChebyshevT(coords[&quot;z&quot;]; size=64, bounds=(0.0, 1.0))
+dist = Distributor(coords)
+
+# Vector velocity field
+u = VectorField(dist, coords, &quot;u&quot;, (x_basis, z_basis))
+p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
+
+# Vector tau fields for velocity BCs at each wall
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,))  # Wall at z=0
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,))  # Wall at z=1
+
+# Tau for pressure (removes degeneracy)
+tau_p = ScalarField(dist, &quot;tau_p&quot;, ())
+
+# Parameters
+nu = 0.01
+dpdx = -1.0
+
+# Create problem with all fields
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+
+# Add parameter substitutions
+add_substitution!(problem, &quot;nu&quot;, nu)
+add_substitution!(problem, &quot;dpdx&quot;, dpdx)
+
+# Momentum equation (vector form) - dpdx is the driving pressure gradient
+add_equation!(problem, &quot;∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) - dpdx*ex&quot;)
+
+# Continuity with tau_p (removes degeneracy)
+add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
+
+# No-slip at both walls (vector notation)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)</code></pre><h3 id="Rayleigh-Bénard-Convection"><a class="docs-heading-anchor" href="#Rayleigh-Bénard-Convection">Rayleigh-Bénard Convection</a><a id="Rayleigh-Bénard-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard-Convection" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+x_basis = RealFourier(coords[&quot;x&quot;]; size=128, bounds=(0.0, 4.0))
+z_basis = ChebyshevT(coords[&quot;z&quot;]; size=64, bounds=(0.0, 1.0))
+dist = Distributor(coords)
+
+# Vector velocity field and scalar fields
+u = VectorField(dist, coords, &quot;u&quot;, (x_basis, z_basis))
+p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
+T = ScalarField(dist, &quot;T&quot;, (x_basis, z_basis))
+
+# Vector tau fields for velocity BCs
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,))  # Wall at z=0
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,))  # Wall at z=1
+
+# Scalar tau fields for temperature BCs
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,))  # BC at z=0
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,))  # BC at z=1
+
+# Tau for pressure (removes degeneracy)
+tau_p = ScalarField(dist, &quot;tau_p&quot;, ())
+
+# Parameters
+Ra = 1e6   # Rayleigh number
+Pr = 1.0   # Prandtl number
+
+# Create problem with all fields
+problem = IVP([u, p, T, tau_u1, tau_u2, tau_T1, tau_T2, tau_p])
+
+# Add parameter substitutions
+add_substitution!(problem, &quot;Ra&quot;, Ra)
+add_substitution!(problem, &quot;Pr&quot;, Pr)
+
+# Momentum equation (vector form with buoyancy)
+# ez is the unit vector in z-direction
+add_equation!(problem, &quot;∂t(u) - Pr*Δ(u) + ∇(p) + lift(tau_u2) = -u⋅∇(u) + Ra*Pr*T*ez&quot;)
+
+# Continuity with tau_p (removes degeneracy)
+add_equation!(problem, &quot;div(u) + tau_p = 0&quot;)
+
+# Temperature equation
+add_equation!(problem, &quot;∂t(T) - Δ(T) + lift(tau_T2) = -u⋅∇(T)&quot;)
+
+# Boundary conditions (vector notation for velocity)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)   # No-slip bottom
+add_bc!(problem, &quot;u(z=1) = 0&quot;)   # No-slip top
+
+# Fixed temperature
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # Hot bottom
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # Cold top</code></pre><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><h3 id="Checking-BC-Satisfaction"><a class="docs-heading-anchor" href="#Checking-BC-Satisfaction">Checking BC Satisfaction</a><a id="Checking-BC-Satisfaction-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-BC-Satisfaction" title="Permalink"></a></h3><pre><code class="language-julia hljs"># After solving, verify BCs are satisfied
+function check_dirichlet_bc(field, coord, location, expected_value; tol=1e-10)
+    to_grid!(field)
+    data = get_grid_data(field)
+
+    # Get boundary values
+    if coord == &quot;z&quot; &amp;&amp; location == :left
+        bc_values = data[:, 1]
+    elseif coord == &quot;z&quot; &amp;&amp; location == :right
+        bc_values = data[:, end]
+    end
+
+    error = maximum(abs.(bc_values .- expected_value))
+    @assert error &lt; tol &quot;BC error: $error&quot;
+
+    return error
+end
+
+# Usage
+check_dirichlet_bc(T, &quot;z&quot;, :left, 1.0)
+check_dirichlet_bc(T, &quot;z&quot;, :right, 0.0)</code></pre><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><h3 id="Missing-Tau-Fields"><a class="docs-heading-anchor" href="#Missing-Tau-Fields">Missing Tau Fields</a><a id="Missing-Tau-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Missing-Tau-Fields" title="Permalink"></a></h3><p><strong>Error</strong>: <code>ArgumentError: Missing tau field specifications for boundary conditions</code></p><p><strong>Solution</strong>: Create tau fields and include lift() terms in your equations:</p><pre><code class="language-julia hljs"># Wrong: No tau fields or lift terms
+add_equation!(problem, &quot;Δ(u) = f&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+
+# Correct: Create tau fields and add lift terms
+tau_u1 = ScalarField(dist, &quot;tau_u1&quot;, (x_basis,))
+tau_u2 = ScalarField(dist, &quot;tau_u2&quot;, (x_basis,))
+add_equation!(problem, &quot;Δ(u) + lift(tau_u1) + lift(tau_u2) = f&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)</code></pre><h3 id="Over-Specified-System"><a class="docs-heading-anchor" href="#Over-Specified-System">Over-Specified System</a><a id="Over-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Over-Specified-System" title="Permalink"></a></h3><p><strong>Problem</strong>: Too many boundary conditions cause singular matrices.</p><p><strong>Solution</strong>: Match the number of BCs (and tau fields) to the operator order in each direction.</p><h3 id="Under-Specified-System"><a class="docs-heading-anchor" href="#Under-Specified-System">Under-Specified System</a><a id="Under-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Under-Specified-System" title="Permalink"></a></h3><p><strong>Problem</strong>: Not enough BCs lead to non-unique solutions.</p><p><strong>Solution</strong>: Add appropriate boundary conditions for the problem physics.</p><h3 id="Tau-Field-Dimension-Mismatch"><a class="docs-heading-anchor" href="#Tau-Field-Dimension-Mismatch">Tau Field Dimension Mismatch</a><a id="Tau-Field-Dimension-Mismatch-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Field-Dimension-Mismatch" title="Permalink"></a></h3><p><strong>Problem</strong>: Tau field has wrong dimensionality.</p><p><strong>Solution</strong>: Tau fields should live on the <em>boundary</em>, not the full domain:</p><pre><code class="language-julia hljs"># For a 2D problem with x-basis (periodic) and z-basis (non-periodic):
+# Boundaries are at constant z, so tau fields live on x-basis only
+tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis,))  # Correct: 1D on x
+
+# NOT:
+tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis, z_basis))  # Wrong: 2D</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../pages/tau_method/">Tau Method (Advanced)</a>: Mathematical details</li><li><a href="../../api/problems/">Problems API</a>: Problem definition</li><li><a href="../../api/bases/">Bases API</a>: Spectral basis selection</li><li><a href="../ivp_2d_rbc/">2D Rayleigh-Bénard Tutorial</a>: Complete example with BCs</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_3d_turbulence/">« Tutorial: 3D Turbulence Simulation</a><a class="docs-footer-nextpage" href="../analysis_and_output/">Tutorial: Analysis and Output »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Domains API · Tarang.jl</title><meta name="title" content="Domains API · Tarang.jl"/><meta property="og:title" content="Domains API · Tarang.jl"/><meta property="twitter:title" content="Domains API · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/api/domains/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/api/domains/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/api/domains/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox"/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../tutorials/overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Tutorial: Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Spectral Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../../pages/les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../../pages/custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox" checked/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox" checked/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../bases/">Bases API</a></li><li class="is-active"><a class="tocitem" href>Domains API</a><ul class="internal"><li><a class="tocitem" href="#Domain"><span>Domain</span></a></li><li><a class="tocitem" href="#Properties"><span>Properties</span></a></li><li><a class="tocitem" href="#Methods"><span>Methods</span></a></li><li><a class="tocitem" href="#Domain-Types-and-Examples"><span>Domain Types and Examples</span></a></li><li><a class="tocitem" href="#Multi-Domain-Problems"><span>Multi-Domain Problems</span></a></li><li><a class="tocitem" href="#Domain-Utilities"><span>Domain Utilities</span></a></li><li><a class="tocitem" href="#Domain-Transformations"><span>Domain Transformations</span></a></li><li><a class="tocitem" href="#Advanced-Topics"><span>Advanced Topics</span></a></li><li><a class="tocitem" href="#Performance-Considerations"><span>Performance Considerations</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../operators/">Operators API</a></li><li><a class="tocitem" href="../problems/">Problems API</a></li><li><a class="tocitem" href="../solvers/">Solvers API</a></li><li><a class="tocitem" href="../timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../les_models/">LES Models API</a></li><li><a class="tocitem" href="../analysis/">Analysis API</a></li><li><a class="tocitem" href="../io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">API Reference</a></li><li><a class="is-disabled">Core</a></li><li class="is-active"><a href>Domains API</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Domains API</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/api/domains.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Domains-API"><a class="docs-heading-anchor" href="#Domains-API">Domains API</a><a id="Domains-API-1"></a><a class="docs-heading-anchor-permalink" href="#Domains-API" title="Permalink"></a></h1><p>A domain represents the spatial discretization of your problem, combining coordinate systems, spectral bases, and MPI distribution.</p><h2 id="Domain"><a class="docs-heading-anchor" href="#Domain">Domain</a><a id="Domain-1"></a><a class="docs-heading-anchor-permalink" href="#Domain" title="Permalink"></a></h2><p>The domain class combines multiple spectral bases and manages the spatial discretization.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">Domain(
+    distributor::Distributor,
+    bases::Tuple{Vararg{Basis}}
+)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>distributor</code>: MPI distributor managing process distribution</li><li><code>bases</code>: Tuple of spectral bases, one per coordinate dimension</li></ul><p><strong>Examples</strong>:</p><h3 id="1D-Domain"><a class="docs-heading-anchor" href="#1D-Domain">1D Domain</a><a id="1D-Domain-1"></a><a class="docs-heading-anchor-permalink" href="#1D-Domain" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang, MPI
+
+MPI.Init()
+
+# Setup coordinates and distributor
+coords = CartesianCoordinates(&quot;x&quot;)
+dist = Distributor(coords, mesh=(4,))
+
+# Create basis
+x_basis = RealFourier(coords[&quot;x&quot;], size=128, bounds=(0.0, 2π))
+
+# Create domain
+domain = Domain(dist, (x_basis,))</code></pre><h3 id="2D-Domain"><a class="docs-heading-anchor" href="#2D-Domain">2D Domain</a><a id="2D-Domain-1"></a><a class="docs-heading-anchor-permalink" href="#2D-Domain" title="Permalink"></a></h3><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(2, 2))
+
+# Periodic horizontal, bounded vertical
+x_basis = RealFourier(coords[&quot;x&quot;], size=256, bounds=(0.0, 4.0))
+z_basis = ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))
+
+domain = Domain(dist, (x_basis, z_basis))</code></pre><h3 id="3D-Domain"><a class="docs-heading-anchor" href="#3D-Domain">3D Domain</a><a id="3D-Domain-1"></a><a class="docs-heading-anchor-permalink" href="#3D-Domain" title="Permalink"></a></h3><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(4, 4, 2))
+
+# All periodic (e.g., turbulence)
+x_basis = RealFourier(coords[&quot;x&quot;], size=256, bounds=(0.0, 2π))
+y_basis = RealFourier(coords[&quot;y&quot;], size=256, bounds=(0.0, 2π))
+z_basis = RealFourier(coords[&quot;z&quot;], size=256, bounds=(0.0, 2π))
+
+domain = Domain(dist, (x_basis, y_basis, z_basis))</code></pre><hr/><h2 id="Properties"><a class="docs-heading-anchor" href="#Properties">Properties</a><a id="Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Properties" title="Permalink"></a></h2><h3 id="Basic-Properties"><a class="docs-heading-anchor" href="#Basic-Properties">Basic Properties</a><a id="Basic-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">domain.distributor      # Distributor: MPI distribution
+domain.bases            # Tuple: Spectral bases
+domain.dim              # Int: Number of dimensions
+domain.coords           # CoordinateSystem: Coordinate system</code></pre><h3 id="Size-Information"><a class="docs-heading-anchor" href="#Size-Information">Size Information</a><a id="Size-Information-1"></a><a class="docs-heading-anchor-permalink" href="#Size-Information" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Global domain size (spectral modes)
+domain.global_size      # Tuple: (Nx, Ny, Nz)
+
+# Global grid size (grid points)
+domain.global_grid_size # Tuple: Grid dimensions
+
+# Local size on this MPI rank
+domain.local_size       # Tuple: Local array size
+
+# Domain bounds
+domain.bounds           # Tuple of tuples: ((xmin,xmax), (ymin,ymax), ...)
+
+# Domain lengths
+domain.lengths          # Tuple: (Lx, Ly, Lz)</code></pre><hr/><h2 id="Methods"><a class="docs-heading-anchor" href="#Methods">Methods</a><a id="Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Methods" title="Permalink"></a></h2><h3 id="Grid-Access"><a class="docs-heading-anchor" href="#Grid-Access">Grid Access</a><a id="Grid-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Access" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get grid points for each dimension
+x_grid = get_grid(domain, 1)  # First dimension
+y_grid = get_grid(domain, 2)  # Second dimension
+z_grid = get_grid(domain, 3)  # Third dimension
+
+# Or access via basis
+x_grid = get_grid(domain.bases[1])</code></pre><h3 id="Meshgrid-Creation"><a class="docs-heading-anchor" href="#Meshgrid-Creation">Meshgrid Creation</a><a id="Meshgrid-Creation-1"></a><a class="docs-heading-anchor-permalink" href="#Meshgrid-Creation" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create 2D meshgrid
+X, Z = meshgrid(domain)
+
+# For 3D
+X, Y, Z = meshgrid(domain)
+
+# Example: Initialize field on grid
+function init_temperature!(T, domain)
+    X, Z = meshgrid(domain)
+    T_grid = get_grid_data(T)
+
+    T_grid .= @. sin(2π * X / domain.lengths[1]) * cos(π * Z / domain.lengths[2])
+
+    to_spectral!(T)
+end</code></pre><h3 id="Wavenumber-Arrays"><a class="docs-heading-anchor" href="#Wavenumber-Arrays">Wavenumber Arrays</a><a id="Wavenumber-Arrays-1"></a><a class="docs-heading-anchor-permalink" href="#Wavenumber-Arrays" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get wavenumber arrays
+kx = get_wavenumbers(domain, 1)
+ky = get_wavenumbers(domain, 2)
+kz = get_wavenumbers(domain, 3)
+
+# Wavenumber magnitude
+function get_k_magnitude(domain)
+    kx = get_wavenumbers(domain, 1)
+    ky = get_wavenumbers(domain, 2)
+    kz = get_wavenumbers(domain, 3)
+
+    # 3D meshgrid of wavenumbers
+    KX = reshape(kx, :, 1, 1)
+    KY = reshape(ky, 1, :, 1)
+    KZ = reshape(kz, 1, 1, :)
+
+    K = @. sqrt(KX^2 + KY^2 + KZ^2)
+    return K
+end</code></pre><hr/><h2 id="Domain-Types-and-Examples"><a class="docs-heading-anchor" href="#Domain-Types-and-Examples">Domain Types and Examples</a><a id="Domain-Types-and-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Types-and-Examples" title="Permalink"></a></h2><h3 id="Periodic-Domains"><a class="docs-heading-anchor" href="#Periodic-Domains">Periodic Domains</a><a id="Periodic-Domains-1"></a><a class="docs-heading-anchor-permalink" href="#Periodic-Domains" title="Permalink"></a></h3><p>All directions periodic (e.g., homogeneous turbulence):</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(4, 4, 4))
+
+bases = (
+    RealFourier(coords[&quot;x&quot;], size=128, bounds=(0.0, 2π)),
+    RealFourier(coords[&quot;y&quot;], size=128, bounds=(0.0, 2π)),
+    RealFourier(coords[&quot;z&quot;], size=128, bounds=(0.0, 2π))
+)
+
+domain = Domain(dist, bases)</code></pre><p><strong>Use cases</strong>: Turbulence, Taylor-Green vortex, forced isotropic flow</p><hr/><h3 id="Channel-Domains"><a class="docs-heading-anchor" href="#Channel-Domains">Channel Domains</a><a id="Channel-Domains-1"></a><a class="docs-heading-anchor-permalink" href="#Channel-Domains" title="Permalink"></a></h3><p>Periodic in streamwise/spanwise, bounded in wall-normal:</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(8, 4, 2))
+
+bases = (
+    RealFourier(coords[&quot;x&quot;], size=256, bounds=(0.0, 2π)),  # Streamwise
+    RealFourier(coords[&quot;y&quot;], size=128, bounds=(0.0, π)),   # Spanwise
+    ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))    # Wall-normal
+)
+
+domain = Domain(dist, bases)</code></pre><p><strong>Use cases</strong>: Channel flow, pipe flow, boundary layers</p><hr/><h3 id="Convection-Domains"><a class="docs-heading-anchor" href="#Convection-Domains">Convection Domains</a><a id="Convection-Domains-1"></a><a class="docs-heading-anchor-permalink" href="#Convection-Domains" title="Permalink"></a></h3><p>Periodic horizontal, bounded vertical:</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(4, 2))
+
+bases = (
+    RealFourier(coords[&quot;x&quot;], size=256, bounds=(0.0, 4.0)),  # Horizontal
+    ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))     # Vertical
+)
+
+domain = Domain(dist, bases)</code></pre><p><strong>Use cases</strong>: Rayleigh-Bénard convection, atmospheric convection</p><hr/><h3 id="Spherical-Domains"><a class="docs-heading-anchor" href="#Spherical-Domains">Spherical Domains</a><a id="Spherical-Domains-1"></a><a class="docs-heading-anchor-permalink" href="#Spherical-Domains" title="Permalink"></a></h3><p>For problems in spherical geometry:</p><pre><code class="language-julia hljs">coords = SphericalCoordinates()
+dist = Distributor(coords, mesh=(2, 2, 2))
+
+bases = (
+    ChebyshevT(coords[&quot;r&quot;], size=64, bounds=(0.5, 1.0)),      # Radius
+    RealFourier(coords[&quot;theta&quot;], size=128, bounds=(0.0, π)),  # Polar
+    RealFourier(coords[&quot;phi&quot;], size=256, bounds=(0.0, 2π))    # Azimuthal
+)
+
+domain = Domain(dist, bases)</code></pre><p><strong>Use cases</strong>: Spherical shells, planetary cores, stellar interiors</p><hr/><h2 id="Multi-Domain-Problems"><a class="docs-heading-anchor" href="#Multi-Domain-Problems">Multi-Domain Problems</a><a id="Multi-Domain-Problems-1"></a><a class="docs-heading-anchor-permalink" href="#Multi-Domain-Problems" title="Permalink"></a></h2><p>Some problems require multiple domains (e.g., domain decomposition, multi-scale):</p><pre><code class="language-julia hljs"># Coarse domain for large scales
+coords_coarse = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist_coarse = Distributor(coords_coarse, mesh=(2, 2))
+bases_coarse = (
+    RealFourier(coords_coarse[&quot;x&quot;], size=64, bounds=(0.0, 4.0)),
+    ChebyshevT(coords_coarse[&quot;z&quot;], size=32, bounds=(0.0, 1.0))
+)
+domain_coarse = Domain(dist_coarse, bases_coarse)
+
+# Fine domain for small scales
+dist_fine = Distributor(coords_coarse, mesh=(4, 4))
+bases_fine = (
+    RealFourier(coords_coarse[&quot;x&quot;], size=256, bounds=(0.0, 4.0)),
+    ChebyshevT(coords_coarse[&quot;z&quot;], size=128, bounds=(0.0, 1.0))
+)
+domain_fine = Domain(dist_fine, bases_fine)</code></pre><hr/><h2 id="Domain-Utilities"><a class="docs-heading-anchor" href="#Domain-Utilities">Domain Utilities</a><a id="Domain-Utilities-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Utilities" title="Permalink"></a></h2><h3 id="Volume-Element"><a class="docs-heading-anchor" href="#Volume-Element">Volume Element</a><a id="Volume-Element-1"></a><a class="docs-heading-anchor-permalink" href="#Volume-Element" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get volume element (dV)
+dV = get_volume_element(domain)
+
+# Useful for integrals
+function integrate(field, domain)
+    to_grid!(field)
+    data = get_grid_data(field)
+    dV = get_volume_element(domain)
+    return sum(data .* dV)
+end</code></pre><h3 id="Domain-Information"><a class="docs-heading-anchor" href="#Domain-Information">Domain Information</a><a id="Domain-Information-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Information" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Print domain information
+function print_domain_info(domain)
+    println(&quot;Domain Information:&quot;)
+    println(&quot;  Dimensions: $(domain.dim)&quot;)
+    println(&quot;  Global size: $(domain.global_size)&quot;)
+    println(&quot;  Grid size: $(domain.global_grid_size)&quot;)
+    println(&quot;  Bounds: $(domain.bounds)&quot;)
+    println(&quot;  Lengths: $(domain.lengths)&quot;)
+
+    for (i, basis) in enumerate(domain.bases)
+        println(&quot;  Basis $i: $(typeof(basis))&quot;)
+        println(&quot;    Size: $(basis.size)&quot;)
+        println(&quot;    Bounds: $(basis.bounds)&quot;)
+    end
+end</code></pre><h3 id="Domain-Validation"><a class="docs-heading-anchor" href="#Domain-Validation">Domain Validation</a><a id="Domain-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Validation" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Check domain validity
+function validate_domain(domain)
+    # Check dimensions match
+    @assert length(domain.bases) == domain.dim
+    @assert length(domain.distributor.mesh) == domain.dim
+
+    # Check process mesh matches
+    @assert prod(domain.distributor.mesh) == MPI.Comm_size(domain.distributor.comm)
+
+    # Check bases match coordinates
+    for (i, basis) in enumerate(domain.bases)
+        @assert basis.coord.index == i
+    end
+
+    println(&quot;Domain validation passed!&quot;)
+end</code></pre><hr/><h2 id="Domain-Transformations"><a class="docs-heading-anchor" href="#Domain-Transformations">Domain Transformations</a><a id="Domain-Transformations-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Transformations" title="Permalink"></a></h2><h3 id="Coordinate-Transformations"><a class="docs-heading-anchor" href="#Coordinate-Transformations">Coordinate Transformations</a><a id="Coordinate-Transformations-1"></a><a class="docs-heading-anchor-permalink" href="#Coordinate-Transformations" title="Permalink"></a></h3><p>For non-Cartesian geometries, coordinate transformations are handled automatically:</p><pre><code class="language-julia hljs"># Spherical coordinates example
+coords = SphericalCoordinates()
+# Metric tensor and Jacobian computed automatically
+# Operators (grad, div, curl) use correct forms</code></pre><h3 id="Grid-Refinement"><a class="docs-heading-anchor" href="#Grid-Refinement">Grid Refinement</a><a id="Grid-Refinement-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Refinement" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create refined domain (double resolution)
+function refine_domain(domain_coarse)
+    bases_fine = map(domain_coarse.bases) do basis
+        if typeof(basis) &lt;: RealFourier
+            RealFourier(basis.coord,
+                       size=2*basis.size,
+                       bounds=basis.bounds,
+                       dealias=basis.dealias)
+        elseif typeof(basis) &lt;: ChebyshevT
+            ChebyshevT(basis.coord,
+                      size=2*basis.size,
+                      bounds=basis.bounds)
+        end
+    end
+
+    return Domain(domain_coarse.distributor, bases_fine)
+end</code></pre><hr/><h2 id="Advanced-Topics"><a class="docs-heading-anchor" href="#Advanced-Topics">Advanced Topics</a><a id="Advanced-Topics-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Topics" title="Permalink"></a></h2><h3 id="Custom-Domains"><a class="docs-heading-anchor" href="#Custom-Domains">Custom Domains</a><a id="Custom-Domains-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Domains" title="Permalink"></a></h3><p>For specialized geometries:</p><pre><code class="language-julia hljs"># Define custom domain with mixed basis types
+coords = CartesianCoordinates(&quot;r&quot;, &quot;theta&quot;)
+dist = Distributor(coords, mesh=(2, 2))
+
+bases = (
+    ChebyshevT(coords[&quot;r&quot;], size=64, bounds=(0.0, 1.0)),  # Radial
+    RealFourier(coords[&quot;theta&quot;], size=128, bounds=(0.0, 2π))  # Angular
+)
+
+domain = Domain(dist, bases)</code></pre><h3 id="Domain-Decomposition"><a class="docs-heading-anchor" href="#Domain-Decomposition">Domain Decomposition</a><a id="Domain-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Decomposition" title="Permalink"></a></h3><p>For large problems, decompose into subdomains:</p><pre><code class="language-julia hljs"># Create subdomain for specific region
+function create_subdomain(domain, bounds_x, bounds_z)
+    # Extract relevant portions
+    # ... implementation depends on specific needs
+end</code></pre><h3 id="Adaptive-Mesh-Refinement"><a class="docs-heading-anchor" href="#Adaptive-Mesh-Refinement">Adaptive Mesh Refinement</a><a id="Adaptive-Mesh-Refinement-1"></a><a class="docs-heading-anchor-permalink" href="#Adaptive-Mesh-Refinement" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Refine in specific regions (advanced)
+# Would require custom basis implementation
+# Not currently built-in</code></pre><hr/><h2 id="Performance-Considerations"><a class="docs-heading-anchor" href="#Performance-Considerations">Performance Considerations</a><a id="Performance-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Considerations" title="Permalink"></a></h2><h3 id="Memory-Usage"><a class="docs-heading-anchor" href="#Memory-Usage">Memory Usage</a><a id="Memory-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Usage" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Estimate memory usage
+function estimate_memory(domain)
+    bytes_per_point = 16  # Complex128
+    points = prod(domain.global_grid_size)
+    total_gb = bytes_per_point * points / 1e9
+
+    per_rank_gb = total_gb / MPI.Comm_size(domain.distributor.comm)
+
+    println(&quot;Total memory: $(total_gb) GB&quot;)
+    println(&quot;Per rank: $(per_rank_gb) GB&quot;)
+end</code></pre><h3 id="Optimal-Domain-Decomposition"><a class="docs-heading-anchor" href="#Optimal-Domain-Decomposition">Optimal Domain Decomposition</a><a id="Optimal-Domain-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Optimal-Domain-Decomposition" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Choose mesh based on domain aspect ratio
+function optimal_mesh(Nx, Ny, Nz, total_procs)
+    # Aim for cubic subdomains
+    ratio = (Nx, Ny, Nz) ./ sum([Nx, Ny, Nz])
+
+    # Distribute processes proportionally
+    # ... heuristic for choosing mesh
+
+    return (Px, Py, Pz)
+end</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../coordinates/">Coordinates</a>: Coordinate system setup</li><li><a href="../bases/">Bases</a>: Spectral basis selection</li><li><a href="../fields/">Fields</a>: Creating fields on domains</li><li><a href="../operators/">Operators</a>: Differential operators</li><li><a href="../../pages/parallelism/">Parallelism Guide</a>: MPI configuration</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../bases/">« Bases API</a><a class="docs-footer-nextpage" href="../fields/">Fields API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

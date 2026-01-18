@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Problems API · Tarang.jl</title><meta name="title" content="Problems API · Tarang.jl"/><meta property="og:title" content="Problems API · Tarang.jl"/><meta property="twitter:title" content="Problems API · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/api/problems/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/api/problems/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/api/problems/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox"/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../tutorials/overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Tutorial: Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Spectral Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../../pages/les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../../pages/custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox" checked/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../bases/">Bases API</a></li><li><a class="tocitem" href="../domains/">Domains API</a></li><li><a class="tocitem" href="../fields/">Fields API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox" checked/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../operators/">Operators API</a></li><li class="is-active"><a class="tocitem" href>Problems API</a><ul class="internal"><li><a class="tocitem" href="#Problem-Types"><span>Problem Types</span></a></li><li><a class="tocitem" href="#Adding-Equations"><span>Adding Equations</span></a></li><li><a class="tocitem" href="#Parameters"><span>Parameters</span></a></li><li><a class="tocitem" href="#Boundary-Conditions"><span>Boundary Conditions</span></a></li><li><a class="tocitem" href="#Problem-Properties"><span>Problem Properties</span></a></li><li><a class="tocitem" href="#Problem-Validation"><span>Problem Validation</span></a></li><li><a class="tocitem" href="#Problem-Substitutions"><span>Problem Substitutions</span></a></li><li><a class="tocitem" href="#Advanced-Features"><span>Advanced Features</span></a></li><li><a class="tocitem" href="#Complete-Examples"><span>Complete Examples</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../solvers/">Solvers API</a></li><li><a class="tocitem" href="../timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../les_models/">LES Models API</a></li><li><a class="tocitem" href="../analysis/">Analysis API</a></li><li><a class="tocitem" href="../io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">API Reference</a></li><li><a class="is-disabled">Operators &amp; Problems</a></li><li class="is-active"><a href>Problems API</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Problems API</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/api/problems.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Problems-API"><a class="docs-heading-anchor" href="#Problems-API">Problems API</a><a id="Problems-API-1"></a><a class="docs-heading-anchor-permalink" href="#Problems-API" title="Permalink"></a></h1><p>Problems define the PDE systems to be solved, including equations, parameters, and boundary conditions. Tarang.jl supports Initial Value Problems (IVP), Boundary Value Problems (LBVP/NLBVP), and Eigenvalue Problems (EVP).</p><h2 id="Problem-Types"><a class="docs-heading-anchor" href="#Problem-Types">Problem Types</a><a id="Problem-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Types" title="Permalink"></a></h2><h3 id="Initial-Value-Problems-(IVP)"><a class="docs-heading-anchor" href="#Initial-Value-Problems-(IVP)">Initial Value Problems (IVP)</a><a id="Initial-Value-Problems-(IVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Initial-Value-Problems-(IVP)" title="Permalink"></a></h3><p>Time-evolution problems where PDEs are integrated forward in time from initial conditions.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">IVP(fields::Vector{&lt;:AbstractField})</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># 2D Navier-Stokes
+problem = IVP([ux, uz, p])
+
+# With additional scalars
+problem = IVP([ux, uz, p, T, S])</code></pre><p><strong>Use cases</strong>:</p><ul><li>Fluid dynamics (Navier-Stokes)</li><li>Heat/mass diffusion</li><li>Wave propagation</li><li>Reaction-diffusion systems</li><li>Turbulence simulations</li></ul><hr/><h3 id="Linear-Boundary-Value-Problems-(LBVP)"><a class="docs-heading-anchor" href="#Linear-Boundary-Value-Problems-(LBVP)">Linear Boundary Value Problems (LBVP)</a><a id="Linear-Boundary-Value-Problems-(LBVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Linear-Boundary-Value-Problems-(LBVP)" title="Permalink"></a></h3><p>Steady-state linear problems with boundary conditions.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">LBVP(fields::Vector{&lt;:AbstractField})</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Poisson equation
+problem = LBVP([phi])
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)
+
+# Stokes flow
+problem = LBVP([u, v, p])
+add_equation!(problem, &quot;-nu*Δ(u) + ∂x(p) = fx&quot;)
+add_equation!(problem, &quot;-nu*Δ(v) + ∂z(p) = fz&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Steady heat conduction</li><li>Poisson/Laplace equations</li><li>Stokes flow</li><li>Electrostatics</li></ul><hr/><h3 id="Nonlinear-Boundary-Value-Problems-(NLBVP)"><a class="docs-heading-anchor" href="#Nonlinear-Boundary-Value-Problems-(NLBVP)">Nonlinear Boundary Value Problems (NLBVP)</a><a id="Nonlinear-Boundary-Value-Problems-(NLBVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Nonlinear-Boundary-Value-Problems-(NLBVP)" title="Permalink"></a></h3><p>Steady-state nonlinear problems with boundary conditions.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">NLBVP(fields::Vector{&lt;:AbstractField})</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Steady Navier-Stokes
+problem = NLBVP([u, v, p])
+add_equation!(problem, &quot;u*∂x(u) + v*∂z(u) = -∂x(p) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;u*∂x(v) + v*∂z(v) = -∂z(p) + nu*Δ(v)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Steady nonlinear flows</li><li>Bifurcation analysis</li><li>Multiple steady states</li></ul><p><strong>Solution method</strong>: Newton iteration or similar nonlinear solvers</p><hr/><h3 id="Eigenvalue-Problems-(EVP)"><a class="docs-heading-anchor" href="#Eigenvalue-Problems-(EVP)">Eigenvalue Problems (EVP)</a><a id="Eigenvalue-Problems-(EVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Eigenvalue-Problems-(EVP)" title="Permalink"></a></h3><p>Linear eigenvalue problems for stability analysis and normal modes.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">EVP(fields::Vector{&lt;:AbstractField}; eigenvalue::Symbol)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>fields</code>: Vector of fields to solve for</li><li><code>eigenvalue</code>: Symbol for eigenvalue (e.g., <code>:sigma</code>, <code>:lambda</code>, <code>:omega</code>)</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Rayleigh-Bénard stability
+problem = EVP([u, v, p, T], eigenvalue=:sigma)
+add_equation!(problem, &quot;sigma*u = -u0*∂x(u) - v*∂x(u0) - ∂x(p) + Pr*Δ(u) + Pr*Ra*T&quot;)
+add_equation!(problem, &quot;sigma*v = -u0*∂x(v) - v*∂z(u0) - ∂z(p) + Pr*Δ(v)&quot;)
+add_equation!(problem, &quot;sigma*T = -u0*∂x(T) - v + Δ(T)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)</code></pre><p><strong>Use cases</strong>:</p><ul><li>Linear stability analysis</li><li>Growth rates and frequencies</li><li>Normal mode decomposition</li><li>Critical parameter values</li></ul><hr/><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="add_equation!"><a class="docs-heading-anchor" href="#add_equation!">add_equation!</a><a id="add_equation!-1"></a><a class="docs-heading-anchor-permalink" href="#add_equation!" title="Permalink"></a></h3><p>Add a PDE to the problem.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_equation!(problem, equation_string::String)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>problem</code>: Problem object (IVP, LBVP, NLBVP, or EVP)</li><li><code>equation_string</code>: String equation using symbolic syntax</li></ul><p><strong>Examples</strong>:</p><h4 id="Simple-Equations"><a class="docs-heading-anchor" href="#Simple-Equations">Simple Equations</a><a id="Simple-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Diffusion
+add_equation!(problem, &quot;∂t(T) = kappa*Δ(T)&quot;)
+
+# Wave equation
+add_equation!(problem, &quot;∂t(∂t(u)) = c^2*Δ(u)&quot;)
+
+# Poisson
+add_equation!(problem, &quot;Δ(phi) = rho&quot;)</code></pre><h4 id="Complex-Equations"><a class="docs-heading-anchor" href="#Complex-Equations">Complex Equations</a><a id="Complex-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Complex-Equations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Navier-Stokes momentum
+add_equation!(problem, &quot;∂t(u) + u*∂x(u) + w*∂z(u) = -∂x(p) + nu*Δ(u)&quot;)
+
+# Energy equation with dissipation
+add_equation!(problem, &quot;∂t(T) + u*∂x(T) + w*∂z(T) = kappa*Δ(T) + Q&quot;)
+
+# With parameters
+add_equation!(problem, &quot;∂t(T) = kappa*Δ(T) + Ra*Pr*w&quot;)</code></pre><h4 id="Using-Fields-and-Parameters"><a class="docs-heading-anchor" href="#Using-Fields-and-Parameters">Using Fields and Parameters</a><a id="Using-Fields-and-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Fields-and-Parameters" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Fields are referenced by name
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u)&quot;)  # u is a field
+
+# Parameters from problem.parameters
+problem.parameters[&quot;nu&quot;] = 0.01
+problem.parameters[&quot;Ra&quot;] = 1e6
+add_equation!(problem, &quot;∂t(u) = nu*Δ(u) + Ra*T&quot;)</code></pre><hr/><h2 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h2><h3 id="Setting-Parameters"><a class="docs-heading-anchor" href="#Setting-Parameters">Setting Parameters</a><a id="Setting-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Setting-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create problem
+problem = IVP([u, p, T])
+
+# Set dimensionless parameters
+problem.parameters[&quot;Re&quot;] = 1000.0      # Reynolds number
+problem.parameters[&quot;Pr&quot;] = 0.7         # Prandtl number
+problem.parameters[&quot;Ra&quot;] = 1e6         # Rayleigh number
+
+# Set physical parameters
+problem.parameters[&quot;nu&quot;] = 1e-3        # Kinematic viscosity
+problem.parameters[&quot;kappa&quot;] = 1e-3     # Thermal diffusivity
+problem.parameters[&quot;g&quot;] = 9.81         # Gravitational acceleration</code></pre><h3 id="Using-Parameters-in-Equations"><a class="docs-heading-anchor" href="#Using-Parameters-in-Equations">Using Parameters in Equations</a><a id="Using-Parameters-in-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Parameters-in-Equations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Reference by name in equations
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(T) = -u*∂x(T) + kappa*Δ(T)&quot;)
+
+# Dimensionless formulation
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u) + (1/Re)*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(T) = -u*∂x(T) + (1/(Re*Pr))*Δ(T) + Ra*Pr*w&quot;)</code></pre><h3 id="Modifying-Parameters"><a class="docs-heading-anchor" href="#Modifying-Parameters">Modifying Parameters</a><a id="Modifying-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Modifying-Parameters" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Change parameter value
+problem.parameters[&quot;Ra&quot;] = 1e7
+
+# Access parameter
+Ra = problem.parameters[&quot;Ra&quot;]
+
+# Iterate over parameters
+for (name, value) in problem.parameters
+    println(&quot;$name = $value&quot;)
+end</code></pre><hr/><h2 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h2><p>Boundary conditions in Tarang.jl use the same <code>add_equation!</code> function as PDEs. The Dedalus-style syntax <code>field(coord=value)</code> is auto-detected and converted to the appropriate <code>Interpolate</code> operator.</p><h3 id="Dirichlet-(Fixed-Value)"><a class="docs-heading-anchor" href="#Dirichlet-(Fixed-Value)">Dirichlet (Fixed Value)</a><a id="Dirichlet-(Fixed-Value)-1"></a><a class="docs-heading-anchor-permalink" href="#Dirichlet-(Fixed-Value)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Constant value
+add_equation!(problem, &quot;T(z=0) = 1&quot;)
+add_equation!(problem, &quot;T(z=1) = 0&quot;)
+
+# No-slip velocity
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+
+# Time-dependent
+add_equation!(problem, &quot;u(x=0) = sin(omega*t)&quot;)
+
+# Space-dependent
+add_equation!(problem, &quot;T(z=0) = 1.0 - x^2&quot;)</code></pre><hr/><h3 id="Neumann-(Fixed-Derivative)"><a class="docs-heading-anchor" href="#Neumann-(Fixed-Derivative)">Neumann (Fixed Derivative)</a><a id="Neumann-(Fixed-Derivative)-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-(Fixed-Derivative)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Insulating boundary (zero heat flux)
+add_equation!(problem, &quot;∂z(T)(z=0) = 0&quot;)  # ∂T/∂z(z=0) = 0
+
+# Fixed flux
+add_equation!(problem, &quot;∂z(T)(z=1) = -1&quot;)  # ∂T/∂z(z=1) = -1
+
+# Time-dependent flux
+add_equation!(problem, &quot;∂x(phi)(x=0) = sin(omega*t)&quot;)</code></pre><hr/><h3 id="Robin-(Mixed)"><a class="docs-heading-anchor" href="#Robin-(Mixed)">Robin (Mixed)</a><a id="Robin-(Mixed)-1"></a><a class="docs-heading-anchor-permalink" href="#Robin-(Mixed)" title="Permalink"></a></h3><p>Robin boundary condition: α<em>f + β</em>df/dn = value</p><pre><code class="language-julia hljs"># Convective heat transfer: h*T + k*∂T/∂n = h*T_ambient
+h, k = 10.0, 1.0
+T_ambient = 300.0
+add_equation!(problem, &quot;$(h)*T(z=1) + $(k)*∂z(T)(z=1) = $(h*T_ambient)&quot;)
+
+# Radiation boundary: T + ε*∂T/∂n = 0
+add_equation!(problem, &quot;1.0*T(x=0) + $(epsilon)*∂x(T)(x=0) = 0&quot;)</code></pre><hr/><h3 id="Stress-Free"><a class="docs-heading-anchor" href="#Stress-Free">Stress-Free</a><a id="Stress-Free-1"></a><a class="docs-heading-anchor-permalink" href="#Stress-Free" title="Permalink"></a></h3><p>Stress-free boundary condition for fluid mechanics: u<em>normal = 0, ∂u</em>tangential/∂n = 0</p><pre><code class="language-julia hljs"># Stress-free top and bottom (free-slip)
+add_equation!(problem, &quot;w(z=0) = 0&quot;)
+add_equation!(problem, &quot;∂z(u)(z=0) = 0&quot;)
+add_equation!(problem, &quot;∂z(v)(z=0) = 0&quot;)
+add_equation!(problem, &quot;w(z=1) = 0&quot;)
+add_equation!(problem, &quot;∂z(u)(z=1) = 0&quot;)
+add_equation!(problem, &quot;∂z(v)(z=1) = 0&quot;)</code></pre><hr/><h3 id="No-Slip"><a class="docs-heading-anchor" href="#No-Slip">No-Slip</a><a id="No-Slip-1"></a><a class="docs-heading-anchor-permalink" href="#No-Slip" title="Permalink"></a></h3><p>No-slip boundary condition for fluid mechanics: all velocity components = 0 at the boundary.</p><pre><code class="language-julia hljs"># No-slip at walls
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;v(z=0) = 0&quot;)
+add_equation!(problem, &quot;w(z=0) = 0&quot;)
+add_equation!(problem, &quot;u(z=1) = 0&quot;)
+add_equation!(problem, &quot;v(z=1) = 0&quot;)
+add_equation!(problem, &quot;w(z=1) = 0&quot;)</code></pre><hr/><h3 id="Custom-Boundary-Conditions"><a class="docs-heading-anchor" href="#Custom-Boundary-Conditions">Custom Boundary Conditions</a><a id="Custom-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Boundary-Conditions" title="Permalink"></a></h3><p>Use <code>add_equation!</code> for any custom boundary condition:</p><pre><code class="language-julia hljs"># Custom combinations
+add_equation!(problem, &quot;u(z=0) + 2*∂z(u)(z=0) = 1&quot;)
+
+# Coupling between fields
+add_equation!(problem, &quot;T(x=0) = 2*S(x=0)&quot;)
+
+# Complex expressions
+add_equation!(problem, &quot;∂x(p)(z=0) + omega^2*u(z=0) = 0&quot;)</code></pre><hr/><h2 id="Problem-Properties"><a class="docs-heading-anchor" href="#Problem-Properties">Problem Properties</a><a id="Problem-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Properties" title="Permalink"></a></h2><h3 id="Accessing-Fields"><a class="docs-heading-anchor" href="#Accessing-Fields">Accessing Fields</a><a id="Accessing-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get list of fields
+fields = problem.fields
+
+# Iterate over fields
+for field in problem.fields
+    println(field.name)
+end
+
+# Find field by name
+u = find_field(problem, &quot;u&quot;)</code></pre><h3 id="Accessing-Equations"><a class="docs-heading-anchor" href="#Accessing-Equations">Accessing Equations</a><a id="Accessing-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Equations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get equations
+equations = problem.equations
+
+# Number of equations
+n_eqs = length(problem.equations)
+
+# Print equations
+for (i, eq) in enumerate(problem.equations)
+    println(&quot;Equation $i: $eq&quot;)
+end</code></pre><h3 id="Accessing-Boundary-Conditions"><a class="docs-heading-anchor" href="#Accessing-Boundary-Conditions">Accessing Boundary Conditions</a><a id="Accessing-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Boundary-Conditions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get boundary conditions
+bcs = problem.boundary_conditions
+
+# Number of BCs
+n_bcs = length(problem.boundary_conditions)
+
+# Print BCs
+for bc in problem.boundary_conditions
+    println(&quot;$(bc.field) at $(bc.coord)=$(bc.position): $(bc.type)&quot;)
+end</code></pre><hr/><h2 id="Problem-Validation"><a class="docs-heading-anchor" href="#Problem-Validation">Problem Validation</a><a id="Problem-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Validation" title="Permalink"></a></h2><h3 id="validate_problem"><a class="docs-heading-anchor" href="#validate_problem">validate_problem</a><a id="validate_problem-1"></a><a class="docs-heading-anchor-permalink" href="#validate_problem" title="Permalink"></a></h3><p>Check problem for consistency and completeness.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">validate_problem(problem)</code></pre><p><strong>Checks</strong>:</p><ul><li>Number of equations matches number of unknowns</li><li>Boundary conditions are sufficient</li><li>Parameters are defined</li><li>Field dimensions match</li><li>Operator applications are valid</li></ul><p><strong>Example</strong>:</p><pre><code class="language-julia hljs">problem = IVP([u, v, p])
+add_equation!(problem, &quot;∂t(u) = -u*∂x(u) - v*∂z(u) - ∂x(p) + nu*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(v) = -u*∂x(v) - v*∂z(v) - ∂z(p) + nu*Δ(v)&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(v) = 0&quot;)
+
+# Add boundary conditions
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;v(z=0) = 0&quot;)
+# ... more BCs
+
+# Validate
+validate_problem(problem)  # Throws error if invalid</code></pre><hr/><h2 id="Problem-Substitutions"><a class="docs-heading-anchor" href="#Problem-Substitutions">Problem Substitutions</a><a id="Problem-Substitutions-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Substitutions" title="Permalink"></a></h2><h3 id="Substitution-Variables"><a class="docs-heading-anchor" href="#Substitution-Variables">Substitution Variables</a><a id="Substitution-Variables-1"></a><a class="docs-heading-anchor-permalink" href="#Substitution-Variables" title="Permalink"></a></h3><p>Define intermediate variables for readability:</p><pre><code class="language-julia hljs"># Define substitution
+add_substitution!(problem, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
+
+# Use in equations
+add_equation!(problem, &quot;∂t(omega) = -u*∂x(omega) - v*∂z(omega) + nu*Δ(omega)&quot;)</code></pre><h3 id="Common-Substitutions"><a class="docs-heading-anchor" href="#Common-Substitutions">Common Substitutions</a><a id="Common-Substitutions-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Substitutions" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Vorticity
+add_substitution!(problem, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
+
+# Kinetic energy
+add_substitution!(problem, &quot;KE&quot;, &quot;0.5*(u^2 + v^2 + w^2)&quot;)
+
+# Strain rate
+add_substitution!(problem, &quot;S11&quot;, &quot;∂x(u)&quot;)
+add_substitution!(problem, &quot;S12&quot;, &quot;0.5*(∂x(v) + ∂z(u))&quot;)</code></pre><hr/><h2 id="Advanced-Features"><a class="docs-heading-anchor" href="#Advanced-Features">Advanced Features</a><a id="Advanced-Features-1"></a><a class="docs-heading-anchor-permalink" href="#Advanced-Features" title="Permalink"></a></h2><h3 id="Tau-Method-for-Boundary-Conditions"><a class="docs-heading-anchor" href="#Tau-Method-for-Boundary-Conditions">Tau Method for Boundary Conditions</a><a id="Tau-Method-for-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Method-for-Boundary-Conditions" title="Permalink"></a></h3><p>Tarang.jl uses the tau method for enforcing boundary conditions in spectral methods:</p><pre><code class="language-julia hljs"># Tau fields are created automatically
+# Lift operations handle boundary condition enforcement
+
+# User typically doesn&#39;t interact with tau fields directly
+# But they appear in the linear operator for non-periodic bases</code></pre><h3 id="Constraints"><a class="docs-heading-anchor" href="#Constraints">Constraints</a><a id="Constraints-1"></a><a class="docs-heading-anchor-permalink" href="#Constraints" title="Permalink"></a></h3><p>Add algebraic constraints to the system:</p><pre><code class="language-julia hljs"># Mean value constraint
+add_constraint!(problem, &quot;mean(p) = 0&quot;)
+
+# Integral constraint
+add_constraint!(problem, &quot;integral(T) = 1.0&quot;)</code></pre><hr/><h2 id="Complete-Examples"><a class="docs-heading-anchor" href="#Complete-Examples">Complete Examples</a><a id="Complete-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Examples" title="Permalink"></a></h2><h3 id="2D-Rayleigh-Bénard-Convection"><a class="docs-heading-anchor" href="#2D-Rayleigh-Bénard-Convection">2D Rayleigh-Bénard Convection</a><a id="2D-Rayleigh-Bénard-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#2D-Rayleigh-Bénard-Convection" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create fields
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(2, 2))
+
+x_basis = RealFourier(coords[&quot;x&quot;], size=256, bounds=(0.0, 4.0))
+z_basis = ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))
+
+domain = Domain(dist, (x_basis, z_basis))
+
+u = VectorField(dist, coords, &quot;u&quot;, (x_basis, z_basis))
+p = ScalarField(dist, &quot;p&quot;, (x_basis, z_basis))
+T = ScalarField(dist, &quot;T&quot;, (x_basis, z_basis))
+
+# Create problem
+problem = IVP([u.components[1], u.components[2], p, T])
+
+# Parameters
+problem.parameters[&quot;Ra&quot;] = 1e6
+problem.parameters[&quot;Pr&quot;] = 1.0
+
+# Equations
+add_equation!(problem, &quot;∂t(u) + u*∂x(u) + w*∂z(u) + ∂x(p) = Pr*Δ(u)&quot;)
+add_equation!(problem, &quot;∂t(w) + u*∂x(w) + w*∂z(w) + ∂z(p) = Pr*Δ(w) + Ra*Pr*T&quot;)
+add_equation!(problem, &quot;∂x(u) + ∂z(w) = 0&quot;)
+add_equation!(problem, &quot;∂t(T) + u*∂x(T) + w*∂z(T) = Δ(T)&quot;)
+
+# Boundary conditions
+add_equation!(problem, &quot;u(z=0) = 0&quot;)
+add_equation!(problem, &quot;w(z=0) = 0&quot;)
+add_equation!(problem, &quot;T(z=0) = 1&quot;)
+
+add_equation!(problem, &quot;u(z=1) = 0&quot;)
+add_equation!(problem, &quot;w(z=1) = 0&quot;)
+add_equation!(problem, &quot;T(z=1) = 0&quot;)
+
+# Validate
+validate_problem(problem)</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems with different algorithms</li><li><a href="../operators/">Operators</a>: Mathematical operators for equations</li><li><a href="../fields/">Fields</a>: Field types used in problems</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators API</a><a class="docs-footer-nextpage" href="../solvers/">Solvers API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

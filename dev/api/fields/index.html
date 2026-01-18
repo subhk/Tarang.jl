@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Fields API · Tarang.jl</title><meta name="title" content="Fields API · Tarang.jl"/><meta property="og:title" content="Fields API · Tarang.jl"/><meta property="twitter:title" content="Fields API · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/api/fields/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/api/fields/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/api/fields/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><input class="collapse-toggle" id="menuitem-2" type="checkbox"/><label class="tocitem" for="menuitem-2"><span class="docs-label">Installing Tarang</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps with Tarang.jl</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3" type="checkbox"/><label class="tocitem" for="menuitem-3"><span class="docs-label">Tutorials &amp; Examples</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-3-1" type="checkbox"/><label class="tocitem" for="menuitem-3-1"><span class="docs-label">Tutorial Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../tutorials/overview/">Tutorials Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">Tutorial: 2D Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">Tutorial: 3D Turbulence Simulation</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Tutorial: Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Tutorial: Analysis and Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Tutorial: Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface and Boundary Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water with Lagrangian Averaging</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-2" type="checkbox"/><label class="tocitem" for="menuitem-3-2"><span class="docs-label">Example Scripts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../examples/gallery/">Example Gallery</a></li><li><a class="tocitem" href="../../examples/fluid_dynamics/">Fluid Dynamics Examples</a></li><li><a class="tocitem" href="../../examples/heat_transfer/">Heat Transfer Examples</a></li><li><a class="tocitem" href="../../examples/eigenvalue_analysis/">Eigenvalue Analysis Examples</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-3-3" type="checkbox"/><label class="tocitem" for="menuitem-3-3"><span class="docs-label">Jupyter Notebooks</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../notebooks/rayleigh_benard/">Notebook: Rayleigh-Bénard Convection</a></li><li><a class="tocitem" href="../../notebooks/channel_flow/">Notebook: Channel Flow</a></li><li><a class="tocitem" href="../../notebooks/taylor_green/">Notebook: Taylor-Green Vortex</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-4" type="checkbox"/><label class="tocitem" for="menuitem-4"><span class="docs-label">User Guide</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-4-1" type="checkbox"/><label class="tocitem" for="menuitem-4-1"><span class="docs-label">Core Concepts</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Spectral Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-2" type="checkbox"/><label class="tocitem" for="menuitem-4-2"><span class="docs-label">Problem Setup</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-3" type="checkbox"/><label class="tocitem" for="menuitem-4-3"><span class="docs-label">Physics &amp; Modeling</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/temporal_filters/">Temporal Filters for Lagrangian Averaging</a></li><li><a class="tocitem" href="../../pages/les_models/">Large Eddy Simulation (LES) Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">Generalized Quasi-Linear (GQL) Approximation</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-4" type="checkbox"/><label class="tocitem" for="menuitem-4-4"><span class="docs-label">Performance &amp; Parallelism</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/optimization/">Performance Optimization</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-5" type="checkbox"/><label class="tocitem" for="menuitem-4-5"><span class="docs-label">Analysis &amp; Output</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/analysis/">Analysis</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-4-6" type="checkbox"/><label class="tocitem" for="menuitem-4-6"><span class="docs-label">Advanced Topics</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/tau_method/">The Tau Method for Boundary Conditions</a></li><li><a class="tocitem" href="../../pages/custom_operators/">Custom Operators</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5" type="checkbox" checked/><label class="tocitem" for="menuitem-5"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox" checked/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">Core</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates API</a></li><li><a class="tocitem" href="../bases/">Bases API</a></li><li><a class="tocitem" href="../domains/">Domains API</a></li><li class="is-active"><a class="tocitem" href>Fields API</a><ul class="internal"><li><a class="tocitem" href="#ScalarField"><span>ScalarField</span></a></li><li><a class="tocitem" href="#VectorField"><span>VectorField</span></a></li><li><a class="tocitem" href="#TensorField"><span>TensorField</span></a></li><li><a class="tocitem" href="#Field-Initialization"><span>Field Initialization</span></a></li><li><a class="tocitem" href="#Field-I/O"><span>Field I/O</span></a></li><li><a class="tocitem" href="#Memory-Layout"><span>Memory Layout</span></a></li><li><a class="tocitem" href="#Type-Hierarchy"><span>Type Hierarchy</span></a></li><li><a class="tocitem" href="#Performance-Tips"><span>Performance Tips</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-2" type="checkbox"/><label class="tocitem" for="menuitem-5-2"><span class="docs-label">Operators &amp; Problems</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../operators/">Operators API</a></li><li><a class="tocitem" href="../problems/">Problems API</a></li><li><a class="tocitem" href="../solvers/">Solvers API</a></li><li><a class="tocitem" href="../timesteppers/">Timesteppers API</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-3" type="checkbox"/><label class="tocitem" for="menuitem-5-3"><span class="docs-label">GPU &amp; Performance</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../gpu/">GPU API Reference</a></li></ul></li><li><input class="collapse-toggle" id="menuitem-5-4" type="checkbox"/><label class="tocitem" for="menuitem-5-4"><span class="docs-label">Extras</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing API</a></li><li><a class="tocitem" href="../les_models/">LES Models API</a></li><li><a class="tocitem" href="../analysis/">Analysis API</a></li><li><a class="tocitem" href="../io/">I/O API</a></li></ul></li></ul></li><li><input class="collapse-toggle" id="menuitem-6" type="checkbox"/><label class="tocitem" for="menuitem-6"><span class="docs-label">Development</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">API Reference</a></li><li><a class="is-disabled">Core</a></li><li class="is-active"><a href>Fields API</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Fields API</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/api/fields.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Fields-API"><a class="docs-heading-anchor" href="#Fields-API">Fields API</a><a id="Fields-API-1"></a><a class="docs-heading-anchor-permalink" href="#Fields-API" title="Permalink"></a></h1><p>Fields represent variables in your PDE system. Tarang.jl provides scalar, vector, and tensor fields distributed across MPI processes.</p><h2 id="ScalarField"><a class="docs-heading-anchor" href="#ScalarField">ScalarField</a><a id="ScalarField-1"></a><a class="docs-heading-anchor-permalink" href="#ScalarField" title="Permalink"></a></h2><h3 id="Constructor"><a class="docs-heading-anchor" href="#Constructor">Constructor</a><a id="Constructor-1"></a><a class="docs-heading-anchor-permalink" href="#Constructor" title="Permalink"></a></h3><pre><code class="language-julia hljs">ScalarField(
+    distributor::Distributor,
+    name::String,
+    bases::Tuple
+) -&gt; ScalarField</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>distributor</code>: MPI distributor managing parallel decomposition</li><li><code>name</code>: Field name (used in equations and output)</li><li><code>bases</code>: Tuple of spectral bases, one per dimension</li></ul><p><strong>Example</strong>:</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(2, 2))
+
+x_basis = RealFourier(coords[&quot;x&quot;], size=128, bounds=(0.0, 2π))
+z_basis = ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))
+
+T = ScalarField(dist, &quot;temperature&quot;, (x_basis, z_basis))</code></pre><h3 id="Methods"><a class="docs-heading-anchor" href="#Methods">Methods</a><a id="Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Methods" title="Permalink"></a></h3><h4 id="Data-Access"><a class="docs-heading-anchor" href="#Data-Access">Data Access</a><a id="Data-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Data-Access" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Get spectral-space data (distributed PencilArray)
+spectral_data = get_spectral_data(field)
+
+# Get grid-space data (for evaluation/initial conditions)
+grid_data = get_grid_data(field)
+
+# Get local portion of data on this MPI rank
+local_data = field.data</code></pre><h4 id="Space-Transforms"><a class="docs-heading-anchor" href="#Space-Transforms">Space Transforms</a><a id="Space-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Space-Transforms" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Transform from grid to spectral space
+to_spectral!(field)
+
+# Transform from spectral to grid space
+to_grid!(field)
+
+# Check current space
+is_in_spectral_space(field)  # returns Bool
+is_in_grid_space(field)      # returns Bool</code></pre><h4 id="Field-Operations"><a class="docs-heading-anchor" href="#Field-Operations">Field Operations</a><a id="Field-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Operations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Set all values
+fill!(field, value)
+
+# Copy between fields
+copy!(dest_field, src_field)
+
+# Scale field
+scale!(field, factor)
+
+# Add fields: field1 = field1 + alpha * field2
+axpy!(alpha, field2, field1)</code></pre><h3 id="Properties"><a class="docs-heading-anchor" href="#Properties">Properties</a><a id="Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">field.name          # String: Field name
+field.bases         # Tuple: Spectral bases
+field.data          # PencilArray: Distributed data
+field.space         # Symbol: :spectral or :grid
+field.distributor   # Distributor: MPI distribution</code></pre><h2 id="VectorField"><a class="docs-heading-anchor" href="#VectorField">VectorField</a><a id="VectorField-1"></a><a class="docs-heading-anchor-permalink" href="#VectorField" title="Permalink"></a></h2><h3 id="Constructor-2"><a class="docs-heading-anchor" href="#Constructor-2">Constructor</a><a class="docs-heading-anchor-permalink" href="#Constructor-2" title="Permalink"></a></h3><pre><code class="language-julia hljs">VectorField(
+    distributor::Distributor,
+    coords::Coordinates,
+    name::String,
+    bases::Tuple
+) -&gt; VectorField</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>distributor</code>: MPI distributor</li><li><code>coords</code>: Coordinate system (determines vector dimensionality)</li><li><code>name</code>: Base name for vector components</li><li><code>bases</code>: Spectral bases tuple</li></ul><p><strong>Example</strong>:</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)
+dist = Distributor(coords, mesh=(2, 2, 2))
+
+bases = (
+    RealFourier(coords[&quot;x&quot;], size=128, bounds=(0.0, 2π)),
+    RealFourier(coords[&quot;y&quot;], size=128, bounds=(0.0, 2π)),
+    ChebyshevT(coords[&quot;z&quot;], size=64, bounds=(0.0, 1.0))
+)
+
+# Creates velocity vector u = (u_x, u_y, u_z)
+u = VectorField(dist, coords, &quot;u&quot;, bases)
+
+# Access components
+ux = u.components[1]  # x-component
+uy = u.components[2]  # y-component
+uz = u.components[3]  # z-component</code></pre><h3 id="Methods-2"><a class="docs-heading-anchor" href="#Methods-2">Methods</a><a class="docs-heading-anchor-permalink" href="#Methods-2" title="Permalink"></a></h3><h4 id="Component-Access"><a class="docs-heading-anchor" href="#Component-Access">Component Access</a><a id="Component-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Component-Access" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Get specific component
+ux = u.components[1]
+uy = u[2]  # Alternative indexing
+
+# Iterate over components
+for component in u.components
+    # ... operate on each component
+end</code></pre><h4 id="Vector-Operations"><a class="docs-heading-anchor" href="#Vector-Operations">Vector Operations</a><a id="Vector-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Operations" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Magnitude (in grid space)
+to_grid!(u)
+mag = sqrt.(sum(c.data.^2 for c in u.components))
+
+# Dot product: a · b
+function dot_product(a::VectorField, b::VectorField)
+    sum(ac.data .* bc.data for (ac, bc) in zip(a.components, b.components))
+end
+
+# Cross product (3D only): a × b
+c = cross(a, b)  # or: c = a × b</code></pre><h3 id="Properties-2"><a class="docs-heading-anchor" href="#Properties-2">Properties</a><a class="docs-heading-anchor-permalink" href="#Properties-2" title="Permalink"></a></h3><pre><code class="language-julia hljs">u.name          # String: Base name
+u.components    # Vector{ScalarField}: Vector components
+u.coords        # Coordinates: Coordinate system
+u.ndim          # Int: Number of dimensions</code></pre><h2 id="TensorField"><a class="docs-heading-anchor" href="#TensorField">TensorField</a><a id="TensorField-1"></a><a class="docs-heading-anchor-permalink" href="#TensorField" title="Permalink"></a></h2><h3 id="Constructor-3"><a class="docs-heading-anchor" href="#Constructor-3">Constructor</a><a class="docs-heading-anchor-permalink" href="#Constructor-3" title="Permalink"></a></h3><pre><code class="language-julia hljs">TensorField(
+    distributor::Distributor,
+    coords::Coordinates,
+    name::String,
+    bases::Tuple;
+    symmetric=false
+) -&gt; TensorField</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>distributor</code>: MPI distributor</li><li><code>coords</code>: Coordinate system</li><li><code>name</code>: Base name for tensor components</li><li><code>bases</code>: Spectral bases tuple</li><li><code>symmetric</code>: If true, only store upper triangular part</li></ul><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Stress tensor τ (symmetric)
+tau = TensorField(dist, coords, &quot;tau&quot;, bases, symmetric=true)
+
+# Velocity gradient tensor ∇u (not symmetric)
+grad_u = TensorField(dist, coords, &quot;grad_u&quot;, bases, symmetric=false)</code></pre><h3 id="Methods-3"><a class="docs-heading-anchor" href="#Methods-3">Methods</a><a class="docs-heading-anchor-permalink" href="#Methods-3" title="Permalink"></a></h3><h4 id="Component-Access-2"><a class="docs-heading-anchor" href="#Component-Access-2">Component Access</a><a class="docs-heading-anchor-permalink" href="#Component-Access-2" title="Permalink"></a></h4><pre><code class="language-julia hljs"># Get component (i,j)
+tau_xx = tensor[1, 1]
+tau_xy = tensor[1, 2]
+
+# For symmetric tensors, tau[i,j] == tau[j,i]</code></pre><h2 id="Field-Initialization"><a class="docs-heading-anchor" href="#Field-Initialization">Field Initialization</a><a id="Field-Initialization-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Initialization" title="Permalink"></a></h2><h3 id="From-Function"><a class="docs-heading-anchor" href="#From-Function">From Function</a><a id="From-Function-1"></a><a class="docs-heading-anchor-permalink" href="#From-Function" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Initialize scalar field
+function init_temperature!(T, Lx, Lz)
+    T_grid = get_grid_data(T)
+
+    for i in 1:size(T_grid, 1), j in 1:size(T_grid, 2)
+        x = (i-1) * Lx / size(T_grid, 1)
+        z = (j-1) * Lz / size(T_grid, 2)
+
+        T_grid[i, j] = sin(2π * x / Lx) * cos(π * z / Lz)
+    end
+
+    to_spectral!(T)
+end
+
+init_temperature!(T, 2π, 1.0)</code></pre><h3 id="Random-Perturbations"><a class="docs-heading-anchor" href="#Random-Perturbations">Random Perturbations</a><a id="Random-Perturbations-1"></a><a class="docs-heading-anchor-permalink" href="#Random-Perturbations" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Random
+
+function add_random_perturbation!(field, amplitude=0.01)
+    data = get_grid_data(field)
+
+    # Different seed per MPI rank
+    Random.seed!(42 + MPI.Comm_rank(MPI.COMM_WORLD))
+
+    data .+= amplitude .* (rand(size(data)...) .- 0.5)
+
+    to_spectral!(field)
+end
+
+add_random_perturbation!(T, 0.01)</code></pre><h3 id="From-Array"><a class="docs-heading-anchor" href="#From-Array">From Array</a><a id="From-Array-1"></a><a class="docs-heading-anchor-permalink" href="#From-Array" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Set from existing array
+T_grid = get_grid_data(T)
+T_grid .= my_data_array
+
+to_spectral!(T)</code></pre><h2 id="Field-I/O"><a class="docs-heading-anchor" href="#Field-I/O">Field I/O</a><a id="Field-I/O-1"></a><a class="docs-heading-anchor-permalink" href="#Field-I/O" title="Permalink"></a></h2><h3 id="Saving-Fields"><a class="docs-heading-anchor" href="#Saving-Fields">Saving Fields</a><a id="Saving-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Saving-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs">using HDF5
+
+function save_field(field, filename)
+    # Ensure in grid space
+    to_grid!(field)
+
+    # Gather to root process
+    data = get_grid_data(field)
+
+    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        h5write(filename, field.name, data)
+    end
+end
+
+save_field(T, &quot;temperature.h5&quot;)</code></pre><h3 id="Loading-Fields"><a class="docs-heading-anchor" href="#Loading-Fields">Loading Fields</a><a id="Loading-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-Fields" title="Permalink"></a></h3><pre><code class="language-julia hljs">function load_field!(field, filename)
+    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
+        data = h5read(filename, field.name)
+    else
+        data = nothing
+    end
+
+    # Broadcast to all ranks
+    # ... (distribute according to pencil decomposition)
+
+    to_spectral!(field)
+end
+
+load_field!(T, &quot;temperature.h5&quot;)</code></pre><h2 id="Memory-Layout"><a class="docs-heading-anchor" href="#Memory-Layout">Memory Layout</a><a id="Memory-Layout-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Layout" title="Permalink"></a></h2><h3 id="Spectral-Space"><a class="docs-heading-anchor" href="#Spectral-Space">Spectral Space</a><a id="Spectral-Space-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Space" title="Permalink"></a></h3><p>In spectral space, fields are stored as arrays of spectral coefficients:</p><ul><li><strong>Fourier</strong>: Complex coefficients (or real for RealFourier)</li><li><strong>Chebyshev</strong>: Coefficients in Chebyshev polynomial basis</li><li><strong>Legendre</strong>: Coefficients in Legendre polynomial basis</li></ul><h3 id="Grid-Space"><a class="docs-heading-anchor" href="#Grid-Space">Grid Space</a><a id="Grid-Space-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Space" title="Permalink"></a></h3><p>In grid space, fields are pointwise values on the collocation grid:</p><ul><li><strong>Fourier</strong>: Uniform grid</li><li><strong>Chebyshev</strong>: Chebyshev-Gauss-Lobatto points</li><li><strong>Legendre</strong>: Legendre-Gauss-Lobatto points</li></ul><h3 id="Distributed-Layout"><a class="docs-heading-anchor" href="#Distributed-Layout">Distributed Layout</a><a id="Distributed-Layout-1"></a><a class="docs-heading-anchor-permalink" href="#Distributed-Layout" title="Permalink"></a></h3><p>Fields use PencilArrays for distribution:</p><pre><code class="language-julia hljs"># Local size on this MPI rank
+local_size = size(field.data)
+
+# Global size
+global_size = field.data.global_size
+
+# Rank in process mesh
+rank = field.distributor.rank</code></pre><h2 id="Type-Hierarchy"><a class="docs-heading-anchor" href="#Type-Hierarchy">Type Hierarchy</a><a id="Type-Hierarchy-1"></a><a class="docs-heading-anchor-permalink" href="#Type-Hierarchy" title="Permalink"></a></h2><pre><code class="nohighlight hljs">AbstractField
+├── ScalarField
+├── VectorField
+│   └── components::Vector{ScalarField}
+└── TensorField
+    └── components::Array{ScalarField, 2}</code></pre><h2 id="Performance-Tips"><a class="docs-heading-anchor" href="#Performance-Tips">Performance Tips</a><a id="Performance-Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Tips" title="Permalink"></a></h2><h3 id="Minimize-Transforms"><a class="docs-heading-anchor" href="#Minimize-Transforms">Minimize Transforms</a><a id="Minimize-Transforms-1"></a><a class="docs-heading-anchor-permalink" href="#Minimize-Transforms" title="Permalink"></a></h3><p>Transforms are expensive. Group operations:</p><pre><code class="language-julia hljs"># Bad: Multiple transforms
+to_grid!(u)
+to_grid!(v)
+result = u.data .* v.data
+to_spectral!(result_field)
+
+# Good: One transform per field
+to_grid!(u)
+to_grid!(v)
+result = u.data .* v.data
+result_field.data .= result
+result_field.space = :grid
+to_spectral!(result_field)</code></pre><h3 id="Reuse-Work-Arrays"><a class="docs-heading-anchor" href="#Reuse-Work-Arrays">Reuse Work Arrays</a><a id="Reuse-Work-Arrays-1"></a><a class="docs-heading-anchor-permalink" href="#Reuse-Work-Arrays" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create work array once
+work = similar(field.data)
+
+# Reuse in loop
+for i in 1:nsteps
+    work .= compute_something(field)
+    field.data .+= dt .* work
+end</code></pre><h3 id="In-Place-Operations"><a class="docs-heading-anchor" href="#In-Place-Operations">In-Place Operations</a><a id="In-Place-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#In-Place-Operations" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Bad: Allocates new arrays
+field.data = field.data .+ alpha .* other.data
+
+# Good: In-place operation
+field.data .+= alpha .* other.data</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../operators/">Operators</a>: Differential operators on fields</li><li><a href="../domains/">Domains</a>: Spatial domains and bases</li><li><a href="../problems/">Problems</a>: Setting up PDE problems with fields</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../domains/">« Domains API</a><a class="docs-footer-nextpage" href="../operators/">Operators API »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and <a href="https://julialang.org">Julia</a>. Tarang.jl © 2024 Subhajit Kar.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.16.1 on <span class="colophon-date" title="Sunday 18 January 2026 08:40">Sunday 18 January 2026</span>. Using Julia version 1.10.10.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
