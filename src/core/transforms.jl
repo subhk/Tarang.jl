@@ -1503,9 +1503,10 @@ function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
 
     """Setup PencilFFTs transforms for parallel 3D FFT"""
 
-    # For serial execution, use regular FFTW transforms instead of PencilFFTs
-    if dist.size == 1
-        @info "Serial execution detected, using FFTW transforms instead of PencilFFTs for 3D"
+    # For serial execution or 1D mesh, use regular FFTW transforms instead of PencilFFTs
+    # (PencilFFT 3D requires at least 2D mesh)
+    if dist.size == 1 || length(dist.mesh) < 2
+        @info "Using FFTW transforms for 3D (serial or 1D mesh)"
         for axis in fourier_axes
             basis = domain.bases[axis]
             if isa(basis, RealFourier) || isa(basis, ComplexFourier)
