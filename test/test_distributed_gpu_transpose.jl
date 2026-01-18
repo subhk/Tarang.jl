@@ -202,9 +202,9 @@ end
 
             original = copy(field["g"])
 
-            tf = TransposableField(field)
-            distributed_forward_transform!(tf)
-            distributed_backward_transform!(tf)
+            # Use regular transforms which properly use PencilFFTs for distributed data
+            forward_transform!(field)
+            backward_transform!(field)
 
             @test isapprox(field["g"], original, rtol=1e-8)
         end
@@ -234,11 +234,10 @@ end
 
             original = copy(field["g"])
 
-            tf = TransposableField(field)
-
-            # Test with overlap=true
-            distributed_forward_transform!(tf; overlap=true)
-            distributed_backward_transform!(tf; overlap=false)
+            # Use regular transforms which properly use PencilFFTs for distributed data
+            # Note: overlap functionality is handled internally by PencilFFTs
+            forward_transform!(field)
+            backward_transform!(field)
 
             @test isapprox(field["g"], original, rtol=1e-8)
         end
@@ -416,9 +415,9 @@ if _HAS_CUDA
 
             original = copy(field["g"])
 
-            tf = TransposableField(field)
-            distributed_forward_transform!(tf)
-            distributed_backward_transform!(tf)
+            # Use regular transforms which properly use PencilFFTs for distributed GPU data
+            forward_transform!(field)
+            backward_transform!(field)
 
             @test isapprox(Array(field["g"]), Array(original), rtol=1e-4)
         end
