@@ -186,10 +186,19 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
         dist.dtype <: Complex ? dist.dtype : Complex{dist.dtype}
     end
     pencil = create_pencil(dist, global_shape, 1, dtype=pencil_dtype)
-    fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
 
-    # Store the plan in the distributor
-    push!(dist.transforms, fft_plan)
+    # Try to create PencilFFT plan, fall back to FFTW if it fails
+    try
+        fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
+        push!(dist.transforms, fft_plan)
+    catch e
+        @warn "PencilFFT plan creation failed, falling back to FFTW transforms" exception=e
+        for axis in fourier_axes
+            basis = domain.bases[axis]
+            setup_fftw_transform!(dist, basis, axis)
+        end
+        return
+    end
 
     @info "Set up PencilFFT transform for axes $fourier_axes with global shape $global_shape"
     mesh_str = length(dist.mesh) >= 2 ? "$(dist.mesh[1]) × $(dist.mesh[2])" : "$(dist.mesh[1])"
@@ -738,8 +747,8 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
     # Find appropriate transform
     for transform in field.dist.transforms
         if isa(transform, PencilFFTs.PencilFFTPlan)
-            # Use PencilFFT for parallel 2D FFT
-            set_grid_data!(field, inv(transform) * get_coeff_data(field))
+            # Use PencilFFT for parallel 2D FFT (use \ for inverse transform)
+            set_grid_data!(field, transform \ get_coeff_data(field))
             field.current_layout = :g
             return
         elseif isa(transform, ParallelChebyshevTransform)
@@ -1541,13 +1550,22 @@ function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
         dist.dtype <: Complex ? dist.dtype : Complex{dist.dtype}
     end
     pencil = create_pencil(dist, global_shape, 1, dtype=pencil_dtype)
-    fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
-    
-    # Store the plan in the distributor
-    push!(dist.transforms, fft_plan)
-    
-    @info "Set up 3D PencilFFT transform for axes $fourier_axes with global shape $global_shape"
-    @info "3D parallel decomposition: $(join(dist.mesh, " × ")) processes"
+
+    # Try to create PencilFFT plan, fall back to FFTW if it fails
+    try
+        fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
+        push!(dist.transforms, fft_plan)
+        @info "Set up 3D PencilFFT transform for axes $fourier_axes with global shape $global_shape"
+        @info "3D parallel decomposition: $(join(dist.mesh, " × ")) processes"
+    catch e
+        @warn "PencilFFT plan creation failed, falling back to FFTW transforms" exception=e
+        for axis in fourier_axes
+            basis = domain.bases[axis]
+            if isa(basis, RealFourier) || isa(basis, ComplexFourier)
+                setup_fftw_transform!(dist, basis, axis)
+            end
+        end
+    end
 end
 
 function setup_fftw_transforms_nd!(dist::Distributor, domain::Domain, fourier_axes::Vector{Int})
@@ -1648,9 +1666,9 @@ function backward_transform_3d!(field::ScalarField, target_layout::Symbol=:g)
     # Find appropriate 3D transform
     for transform in field.dist.transforms
         if isa(transform, PencilFFTs.PencilFFTPlan)
-            # Check if this is a 3D transform
+            # Check if this is a 3D transform (use \ for inverse transform)
             if hasfield(typeof(transform), :dims) && length(transform.dims) <= 3
-                set_grid_data!(field, inv(transform) * get_coeff_data(field))
+                set_grid_data!(field, transform \ get_coeff_data(field))
                 field.current_layout = :g
                 @debug "Applied 3D PencilFFT backward transform"
                 return
