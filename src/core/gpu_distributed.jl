@@ -355,13 +355,13 @@ function distributed_fft_cuda_aware!(data, dim::Int, dfft::DistributedGPUFFT, di
     send_counts, recv_counts, send_displs, recv_displs = _compute_alltoall_counts(dims, dim, config)
 
     # Step 3: Direct GPU all-to-all via CUDA-aware MPI
-    send_view = view(dfft.transpose_send, 1:send_elements)
-    recv_view = view(dfft.transpose_recv, 1:recv_elements)
-    MPI.Alltoallv!(send_view, recv_view, send_counts, recv_counts, comm)
+    # Pass full CuArray buffers (not views/SubArrays) so CUDA extension dispatch works.
+    # MPI.Alltoallv! uses counts to bound reads/writes, so oversized buffers are safe.
+    MPI.Alltoallv!(dfft.transpose_send, dfft.transpose_recv, send_counts, recv_counts, comm)
 
     # Step 4: Unpack into transposed layout using GPU kernels
     gpu_transposed = similar(data, transposed_dims...)
-    _gpu_unpack_from_transpose!(gpu_transposed, recv_view, dim, config)
+    _gpu_unpack_from_transpose!(gpu_transposed, dfft.transpose_recv, dim, config)
 
     # Step 5: Local FFT on now-local dimension
     if direction == :forward
@@ -374,13 +374,11 @@ function distributed_fft_cuda_aware!(data, dim::Int, dfft::DistributedGPUFFT, di
     _gpu_pack_for_transpose!(dfft.transpose_send, result, dim, config)
 
     # Step 7: Reverse all-to-all (swap send/recv counts)
-    send_view_rev = view(dfft.transpose_send, 1:recv_elements)
-    recv_view_rev = view(dfft.transpose_recv, 1:send_elements)
-    MPI.Alltoallv!(send_view_rev, recv_view_rev, recv_counts, send_counts, comm)
+    MPI.Alltoallv!(dfft.transpose_send, dfft.transpose_recv, recv_counts, send_counts, comm)
 
     # Step 8: Unpack back to original layout using GPU kernels
     output = similar(data, dims...)
-    _gpu_unpack_from_transpose!(output, recv_view_rev, dim, config)
+    _gpu_unpack_from_transpose!(output, dfft.transpose_recv, dim, config)
 
     return output
 end
