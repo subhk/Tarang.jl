@@ -258,12 +258,21 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             if existing_grid isa CuArray
                 local_grid_shape = size(existing_grid)
             else
-                # Estimate from coeff shape: only the first RealFourier dim (in order) was R2C'd
+                # Use basis metadata for true grid sizes instead of assuming R2C halving.
+                # The mixed plan sorts RealFourier dims first; only the first RealFourier dim
+                # (in sorted order) gets R2C if data_is_real (i.e., field.dtype is real).
                 first_real_found = false
                 local_grid_shape = ntuple(length(bases)) do dim
                     if isa(bases[dim], RealFourier) && !first_real_found
-                        first_real_found = true
-                        return 2 * (local_coeff_shape[dim] - 1)
+                        grid_n = bases[dim].meta.size
+                        if local_coeff_shape[dim] == div(grid_n, 2) + 1
+                            # R2C was used for this dim
+                            first_real_found = true
+                            return grid_n
+                        else
+                            # C2C was used (complex input or not the first processed dim)
+                            return local_coeff_shape[dim]
+                        end
                     else
                         return local_coeff_shape[dim]
                     end
@@ -426,18 +435,24 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
 
         # Determine grid shape: use existing grid data if available,
-        # otherwise estimate (only the FIRST RealFourier dim uses R2C).
+        # otherwise use basis metadata for robust detection of R2C vs C2C.
         existing_grid = get_grid_data(field)
         if existing_grid isa CuArray
             local_grid_shape = size(existing_grid)
         else
-            # Estimate: only the first RealFourier dimension was R2C'd
             first_real_found = false
             local_grid_shape = ntuple(length(bases)) do dim
                 basis = bases[dim]
                 if isa(basis, RealFourier) && !first_real_found
-                    first_real_found = true
-                    return 2 * (local_coeff_shape[dim] - 1)
+                    grid_n = basis.meta.size
+                    if local_coeff_shape[dim] == div(grid_n, 2) + 1
+                        # R2C was used for this dim
+                        first_real_found = true
+                        return grid_n
+                    else
+                        # C2C was used (complex input)
+                        return local_coeff_shape[dim]
+                    end
                 else
                     return local_coeff_shape[dim]
                 end
