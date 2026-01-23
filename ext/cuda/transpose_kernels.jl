@@ -532,12 +532,12 @@ Override fft_in_dim! for GPU arrays using CUFFT.
 """
 function Tarang.fft_in_dim!(data::CuArray, dim::Int, direction::Symbol, arch::Tarang.GPU)
     if direction == :forward
-        # Use CUFFT for forward FFT
-        plan = CUFFT.plan_fft(data, dim)
+        # Use CUFFT for forward FFT along specified dimension
+        plan = CUFFT.plan_fft(data, (dim,))
         data .= plan * data
     else
-        # Use CUFFT for inverse FFT
-        plan = CUFFT.plan_ifft(data, dim)
+        # Use CUFFT for inverse FFT along specified dimension
+        plan = CUFFT.plan_ifft(data, (dim,))
         data .= plan * data
     end
     CUDA.synchronize()

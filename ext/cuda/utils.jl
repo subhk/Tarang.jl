@@ -12,13 +12,16 @@ end
 
 const FFT_1D_PLAN_CACHE = FFT1DPlanCache()
 
-function get_fft_1d_plan(size::Tuple, dim::Int, T::Type; inverse::Bool=false)
+function get_fft_1d_plan(size::Tuple, dim::Int, T::Type; inverse::Bool=false, device_id::Int=CUDA.deviceid())
     # Include device ID in cache key for multi-GPU correctness
-    device_id = CUDA.deviceid()
     key = (device_id, size, dim, T, inverse)
     if !haskey(FFT_1D_PLAN_CACHE.plans, key)
+        # Ensure plan is created on the correct device
+        prev_device = CUDA.device()
+        CUDA.device!(CuDevice(device_id))
         dummy = CUDA.zeros(T, size...)
         FFT_1D_PLAN_CACHE.plans[key] = inverse ? CUFFT.plan_ifft(dummy, (dim,)) : CUFFT.plan_fft(dummy, (dim,))
+        CUDA.device!(prev_device)
     end
     return FFT_1D_PLAN_CACHE.plans[key]
 end
@@ -322,7 +325,7 @@ Perform local FFT along dimension `dim` using CUFFT.
 """
 function Tarang.local_fft_dim!(data::CuArray, dim::Int, dfft::DistributedGPUFFT)
     # Use CUFFT for local FFT along specified dimension
-    return CUFFT.fft(data, dim)
+    return CUFFT.fft(data, (dim,))
 end
 
 """
@@ -332,7 +335,7 @@ Perform local inverse FFT along dimension `dim` using CUFFT.
 """
 function Tarang.local_ifft_dim!(data::CuArray, dim::Int, dfft::DistributedGPUFFT)
     # Use CUFFT for local inverse FFT along specified dimension
-    return CUFFT.ifft(data, dim)
+    return CUFFT.ifft(data, (dim,))
 end
 
 """
@@ -341,8 +344,14 @@ end
 1D FFT along specified dimension on GPU.
 """
 function gpu_fft_1d!(output::CuArray, input::CuArray, dim::Int)
-    plan = get_fft_1d_plan(size(input), dim, eltype(input); inverse=false)
+    # Derive device from input array for multi-GPU correctness
+    input_device = CUDA.device(input)
+    device_id = CUDA.deviceid(input_device)
+    prev_device = CUDA.device()
+    CUDA.device!(input_device)
+    plan = get_fft_1d_plan(size(input), dim, eltype(input); inverse=false, device_id=device_id)
     mul!(output, plan, input)
+    CUDA.device!(prev_device)
     return output
 end
 
@@ -352,8 +361,14 @@ end
 1D inverse FFT along specified dimension on GPU.
 """
 function gpu_ifft_1d!(output::CuArray, input::CuArray, dim::Int)
-    plan = get_fft_1d_plan(size(input), dim, eltype(input); inverse=true)
+    # Derive device from input array for multi-GPU correctness
+    input_device = CUDA.device(input)
+    device_id = CUDA.deviceid(input_device)
+    prev_device = CUDA.device()
+    CUDA.device!(input_device)
+    plan = get_fft_1d_plan(size(input), dim, eltype(input); inverse=true, device_id=device_id)
     mul!(output, plan, input)
+    CUDA.device!(prev_device)
     return output
 end
 

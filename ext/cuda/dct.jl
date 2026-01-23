@@ -233,19 +233,19 @@ function plan_gpu_fft_dim(arch::GPU{CuDevice}, full_size::Tuple, T::Type, dim::I
     if real_input
         # Real-to-complex FFT along specified dimension
         dummy_in = CUDA.zeros(T, full_size...)
-        plan = CUFFT.plan_rfft(dummy_in, dim)
+        plan = CUFFT.plan_rfft(dummy_in, (dim,))
 
         # Output size: dimension `dim` becomes N/2 + 1
         out_size = ntuple(i -> i == dim ? div(full_size[i], 2) + 1 : full_size[i], ndims)
         dummy_out = CUDA.zeros(complex_T, out_size...)
-        iplan = CUFFT.plan_irfft(dummy_out, full_size[dim], dim)
+        iplan = CUFFT.plan_irfft(dummy_out, full_size[dim], (dim,))
 
         return GPUFFTPlanDim(plan, iplan, full_size, dim, true)
     else
         # Complex-to-complex FFT along specified dimension
         dummy = CUDA.zeros(complex_T, full_size...)
-        plan = CUFFT.plan_fft(dummy, dim)
-        iplan = CUFFT.plan_ifft(dummy, dim)
+        plan = CUFFT.plan_fft(dummy, (dim,))
+        iplan = CUFFT.plan_ifft(dummy, (dim,))
 
         return GPUFFTPlanDim(plan, iplan, full_size, dim, false)
     end
