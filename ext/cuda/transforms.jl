@@ -122,8 +122,21 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
             set_coeff_data!(field, CUDA.zeros(input_T, local_coeff_shape...))
         end
 
-        dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
-        gpu_forward_dct_1d!(get_coeff_data(field), data_g, dct_plan)
+        if input_T <: Complex
+            # Complex Chebyshev: apply DCT to real and imaginary parts separately
+            real_T = real(input_T)
+            dct_plan = plan_gpu_dct(gpu_arch, n, real_T, 1)
+            real_part = real.(data_g)
+            imag_part = imag.(data_g)
+            real_out = similar(real_part)
+            imag_out = similar(imag_part)
+            gpu_forward_dct_1d!(real_out, real_part, dct_plan)
+            gpu_forward_dct_1d!(imag_out, imag_part, dct_plan)
+            get_coeff_data(field) .= complex.(real_out, imag_out)
+        else
+            dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+            gpu_forward_dct_1d!(get_coeff_data(field), data_g, dct_plan)
+        end
         return true
 
     elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
@@ -319,8 +332,21 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
         end
 
-        dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
-        gpu_backward_dct_1d!(get_grid_data(field), data_c, dct_plan)
+        if input_T <: Complex
+            # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
+            real_T = real(input_T)
+            dct_plan = plan_gpu_dct(gpu_arch, n, real_T, 1)
+            real_part = real.(data_c)
+            imag_part = imag.(data_c)
+            real_out = similar(real_part)
+            imag_out = similar(imag_part)
+            gpu_backward_dct_1d!(real_out, real_part, dct_plan)
+            gpu_backward_dct_1d!(imag_out, imag_part, dct_plan)
+            get_grid_data(field) .= complex.(real_out, imag_out)
+        else
+            dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+            gpu_backward_dct_1d!(get_grid_data(field), data_c, dct_plan)
+        end
         return true
 
     elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)

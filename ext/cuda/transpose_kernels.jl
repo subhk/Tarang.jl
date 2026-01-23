@@ -682,18 +682,29 @@ function Tarang.dct_in_dim!(data::CuArray{T,N}, dim::Int, direction::Symbol, arc
         return data
     end
 
-    # Real data path - create DCT plan
+    # Real data path
     real_T = T <: Complex ? real(T) : T
     full_size = size(data)
-    plan = plan_gpu_dct_dim(arch, full_size, real_T, dim)
 
-    # Create output array (can be same as input for in-place)
-    output = similar(data)
-
-    if direction == :forward
-        gpu_dct_dim!(output, data, plan, Val(:forward))
+    if N == 1
+        # 1D case: use GPUDCTPlan + gpu_forward/backward_dct_1d!
+        n = full_size[1]
+        plan_1d = plan_gpu_dct(arch, n, real_T, 1)
+        output = similar(data)
+        if direction == :forward
+            gpu_forward_dct_1d!(output, data, plan_1d)
+        else
+            gpu_backward_dct_1d!(output, data, plan_1d)
+        end
     else
-        gpu_dct_dim!(output, data, plan, Val(:backward))
+        # 2D/3D case: use GPUDCTPlanDim + gpu_dct_dim!
+        plan = plan_gpu_dct_dim(arch, full_size, real_T, dim)
+        output = similar(data)
+        if direction == :forward
+            gpu_dct_dim!(output, data, plan, Val(:forward))
+        else
+            gpu_dct_dim!(output, data, plan, Val(:backward))
+        end
     end
 
     # Copy result back to data
