@@ -58,9 +58,28 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
 
     if all_fourier
         # Pure Fourier case - use optimized multi-dimensional FFT
-        is_real = any(b -> isa(b, RealFourier), bases)
+        # CUFFT's plan_rfft convention: R2C on first dimension, C2C on rest.
+        # Only valid when bases[1] is RealFourier.
+        has_real = any(b -> isa(b, RealFourier), bases)
+        first_is_real = isa(bases[1], RealFourier)
 
-        if is_real
+        if has_real && !first_is_real
+            # RealFourier on a non-first dimension: can't use multi-dim rfft.
+            # Fall through to dimension-by-dimension approach (mixed transform handles this).
+            plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+            local_coeff_shape = plan.coeff_shape
+
+            existing_coeff = get_coeff_data(field)
+            needs_alloc = !(existing_coeff isa CuArray) ||
+                          eltype(existing_coeff) != coeff_T ||
+                          size(existing_coeff) != local_coeff_shape
+            if needs_alloc
+                set_coeff_data!(field, CUDA.zeros(coeff_T, local_coeff_shape...))
+            end
+
+            gpu_mixed_forward_transform!(get_coeff_data(field), data_g, plan)
+        elseif first_is_real
+            # First dim is RealFourier: use multi-dim rfft (R2C on dim 1, C2C on rest)
             plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=true)
             local_coeff_shape = (div(local_grid_shape[1], 2) + 1, local_grid_shape[2:end]...)
 
@@ -74,6 +93,7 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
 
             gpu_forward_fft!(get_coeff_data(field), data_g, plan)
         else
+            # All ComplexFourier: use multi-dim cfft
             plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=false)
 
             existing_coeff = get_coeff_data(field)
@@ -182,15 +202,47 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     has_chebyshev = any(b -> isa(b, ChebyshevT), bases)
 
     if all_fourier
-        is_real = any(b -> isa(b, RealFourier), bases)
+        # Pure Fourier case - same logic as forward:
+        # Only use multi-dim irfft when bases[1] is RealFourier.
+        has_real = any(b -> isa(b, RealFourier), bases)
+        first_is_real = isa(bases[1], RealFourier)
 
-        if is_real
-            # Complex-to-real inverse FFT
+        if has_real && !first_is_real
+            # RealFourier on non-first dimension: use dimension-by-dimension approach
             existing_grid = get_grid_data(field)
             if existing_grid isa CuArray
                 local_grid_shape = size(existing_grid)
             else
-                # Estimate grid shape from coefficient shape
+                # Estimate from coeff shape: only the first RealFourier dim (in order) was R2C'd
+                first_real_found = false
+                local_grid_shape = ntuple(length(bases)) do dim
+                    if isa(bases[dim], RealFourier) && !first_real_found
+                        first_real_found = true
+                        return 2 * (local_coeff_shape[dim] - 1)
+                    else
+                        return local_coeff_shape[dim]
+                    end
+                end
+            end
+
+            real_T = field.dtype
+            needs_alloc = existing_grid === nothing ||
+                          !(existing_grid isa CuArray) ||
+                          eltype(existing_grid) != real_T ||
+                          size(existing_grid) != local_grid_shape
+            if needs_alloc
+                set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
+            end
+
+            plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, real_T)
+            gpu_mixed_backward_transform!(get_grid_data(field), data_c, plan)
+
+        elseif first_is_real
+            # First dim is RealFourier: use multi-dim irfft (C2R on dim 1, C2C on rest)
+            existing_grid = get_grid_data(field)
+            if existing_grid isa CuArray
+                local_grid_shape = size(existing_grid)
+            else
                 local_grid_shape = (2 * (local_coeff_shape[1] - 1), local_coeff_shape[2:end]...)
             end
 
@@ -211,6 +263,7 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
 
             gpu_backward_fft!(get_grid_data(field), data_c, plan)
         else
+            # All ComplexFourier: use multi-dim icfft
             local_grid_shape = local_coeff_shape
 
             if !Tarang.should_use_gpu_fft(field, local_grid_shape)
@@ -361,24 +414,10 @@ function plan_gpu_fft(arch::GPU{CuDevice}, local_size::Tuple, T::Type; real_inpu
     end
 end
 
-# Fallback for generic GPU (uses current device)
-function plan_gpu_fft(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
-    complex_T = T <: Complex ? T : Complex{T}
-
-    if real_input
-        dummy_in = CUDA.zeros(T, local_size...)
-        plan = CUFFT.plan_rfft(dummy_in)
-        out_size = (div(local_size[1], 2) + 1, local_size[2:end]...)
-        dummy_out = CUDA.zeros(complex_T, out_size...)
-        iplan = CUFFT.plan_irfft(dummy_out, local_size[1])
-        return GPUFFTPlan(plan, iplan, local_size, true)
-    else
-        dummy = CUDA.zeros(complex_T, local_size...)
-        plan = CUFFT.plan_fft(dummy)
-        iplan = CUFFT.plan_ifft(dummy)
-        return GPUFFTPlan(plan, iplan, local_size, false)
-    end
-end
+# Fallback for generic GPU: delegates to device-specific version using current device,
+# ensuring proper device context via ensure_device!
+plan_gpu_fft(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false) =
+    plan_gpu_fft(GPU{CuDevice}(CUDA.device()), local_size, T; real_input=real_input)
 
 """
     gpu_forward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)

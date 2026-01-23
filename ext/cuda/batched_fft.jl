@@ -42,10 +42,10 @@ function plan_batched_gpu_fft(arch::GPU{CuDevice}, field_size::Tuple, T::Type, b
     _create_batched_fft_plan(field_size, T, batch_size, real_input)
 end
 
-# Fallback for generic GPU
-function plan_batched_gpu_fft(arch::GPU, field_size::Tuple, T::Type, batch_size::Int; real_input::Bool=false)
-    _create_batched_fft_plan(field_size, T, batch_size, real_input)
-end
+# Fallback for generic GPU: delegates to device-specific version using current device,
+# ensuring proper device context via ensure_device!
+plan_batched_gpu_fft(arch::GPU, field_size::Tuple, T::Type, batch_size::Int; real_input::Bool=false) =
+    plan_batched_gpu_fft(GPU{CuDevice}(CUDA.device()), field_size, T, batch_size; real_input=real_input)
 
 # Internal helper to create batched FFT plan
 function _create_batched_fft_plan(field_size::Tuple, T::Type, batch_size::Int, real_input::Bool)

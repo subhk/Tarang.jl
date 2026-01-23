@@ -128,7 +128,8 @@ function gpu_forward_dct_1d!(output::CuVector{T}, input::CuVector{T}, plan::GPUD
 
     # Step 1: Create symmetric extension (vectorized, no scalar indexing)
     copyto!(view(work, 1:n), Complex{T}.(input))
-    copyto!(view(work, n+1:2*n), Complex{T}.(reverse(input)))
+    # Use explicit reversed indexing instead of reverse() for GPU safety
+    copyto!(view(work, n+1:2*n), Complex{T}.(input[n:-1:1]))
 
     # Step 2: FFT of extended array
     mul!(work, plan.fft_plan, work)
@@ -174,7 +175,8 @@ function gpu_backward_dct_1d!(output::CuVector{T}, input::CuVector{T}, plan::GPU
     # work[N+1] = 0 (Nyquist)
     # work[N+2:2N] = conj(work[N:-1:2])
     fill!(view(work, n+1:n+1), zero(Complex{T}))
-    copyto!(view(work, n+2:2*n), conj.(reverse(view(work, 2:n))))
+    # Use explicit reversed indexing instead of reverse() for GPU safety
+    copyto!(view(work, n+2:2*n), conj.(work[n:-1:2]))
 
     # Step 4: IFFT
     mul!(work, plan.ifft_plan, work)

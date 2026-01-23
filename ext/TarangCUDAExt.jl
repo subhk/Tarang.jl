@@ -75,7 +75,8 @@ export pool_allocate, pool_release!, clear_memory_pool!, memory_pool_stats
 
 # Pinned memory
 export PinnedBufferPool, PINNED_BUFFER_POOL
-export get_pinned_buffer, async_copy_to_gpu!, async_copy_to_cpu!
+export get_pinned_buffer, release_pinned_buffer!, clear_pinned_buffer_pool!
+export async_copy_to_gpu!, async_copy_to_cpu!
 
 # FFT plans and transforms
 export GPUFFTPlan, GPUTransformCache

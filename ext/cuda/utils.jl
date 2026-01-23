@@ -13,7 +13,9 @@ end
 const FFT_1D_PLAN_CACHE = FFT1DPlanCache()
 
 function get_fft_1d_plan(size::Tuple, dim::Int, T::Type; inverse::Bool=false)
-    key = (size, dim, T, inverse)
+    # Include device ID in cache key for multi-GPU correctness
+    device_id = CUDA.deviceid()
+    key = (device_id, size, dim, T, inverse)
     if !haskey(FFT_1D_PLAN_CACHE.plans, key)
         dummy = CUDA.zeros(T, size...)
         FFT_1D_PLAN_CACHE.plans[key] = inverse ? CUFFT.plan_ifft(dummy; dims=(dim,)) : CUFFT.plan_fft(dummy; dims=(dim,))
@@ -445,9 +447,14 @@ function Tarang.copy_to_device(a::CuArray, target::CuArray)
         # Same device, just copy
         return copy(a)
     else
-        # Cross-device copy: switch to target device and copy
+        # Cross-device copy: explicitly go through host memory to avoid
+        # requiring P2P access between devices.
+        # 1. Set source device context and download to host
+        CUDA.device!(src_device)
+        host_data = Array(a)
+        # 2. Set destination device context and upload from host
         CUDA.device!(dst_device)
-        return CuArray(a)
+        return CuArray(host_data)
     end
 end
 

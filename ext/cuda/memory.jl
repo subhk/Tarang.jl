@@ -153,13 +153,20 @@ end
     PinnedBufferPool
 
 Pool of pinned (page-locked) CPU memory for fast GPU transfers.
+Uses checkout/return semantics to prevent concurrent access to the same buffer.
+Tracks total pooled bytes and caps growth to prevent pinned memory leaks.
 """
 mutable struct PinnedBufferPool
-    buffers::Dict{Tuple{DataType, Tuple}, Vector{UInt8}}  # Pinned byte arrays
-    max_buffers_per_size::Int
+    # Available (not in-use) buffers per (type, shape) key
+    available::Dict{Tuple{DataType, Tuple}, Vector{Vector{UInt8}}}
+    max_buffers_per_key::Int
+    # Track total pinned bytes to cap memory growth
+    total_pooled_bytes::Int
+    max_total_bytes::Int  # Cap total pinned memory (default 1 GB)
 
-    function PinnedBufferPool(; max_buffers::Int=5)
-        new(Dict{Tuple{DataType, Tuple}, Vector{UInt8}}(), max_buffers)
+    function PinnedBufferPool(; max_buffers::Int=5, max_total_mb::Int=1024)
+        new(Dict{Tuple{DataType, Tuple}, Vector{Vector{UInt8}}}(),
+            max_buffers, 0, max_total_mb * 1_000_000)
     end
 end
 
@@ -168,23 +175,76 @@ const PINNED_BUFFER_POOL = PinnedBufferPool()
 """
     get_pinned_buffer(T::Type, shape::Tuple)
 
-Get a pinned memory buffer for fast GPU transfers.
+Check out a pinned memory buffer for fast GPU transfers.
+Each call returns a unique buffer (not shared with other callers).
+Call `release_pinned_buffer!` when done to return it to the pool.
+
+If no buffer is available in the pool, a new one is allocated.
 """
 function get_pinned_buffer(T::Type, shape::Tuple)
     key = (T, shape)
 
-    if haskey(PINNED_BUFFER_POOL.buffers, key)
-        # Return existing pinned buffer wrapped as array
-        buf = PINNED_BUFFER_POOL.buffers[key]
+    if haskey(PINNED_BUFFER_POOL.available, key) && !isempty(PINNED_BUFFER_POOL.available[key])
+        # Check out an available buffer from the pool
+        buf = pop!(PINNED_BUFFER_POOL.available[key])
+        total_bytes = sizeof(T) * prod(shape)
+        PINNED_BUFFER_POOL.total_pooled_bytes -= total_bytes
         return unsafe_wrap(Array{T}, Ptr{T}(pointer(buf)), shape)
     else
-        # Create new pinned buffer
+        # Allocate a new pinned buffer
         total_bytes = sizeof(T) * prod(shape)
         pinned_ptr = CUDA.Mem.alloc(CUDA.Mem.Host, total_bytes)
         buf = unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pinned_ptr), total_bytes)
-        PINNED_BUFFER_POOL.buffers[key] = buf
         return unsafe_wrap(Array{T}, Ptr{T}(pointer(buf)), shape)
     end
+end
+
+"""
+    release_pinned_buffer!(arr::Array{T}, shape::Tuple) where T
+
+Return a pinned buffer to the pool for reuse.
+The caller must ensure all async operations using this buffer have completed
+(e.g., by calling `CUDA.synchronize(stream)`) before releasing.
+
+If the pool is full or at its memory cap, the pinned memory is explicitly freed.
+"""
+function release_pinned_buffer!(arr::Array{T}, shape::Tuple) where T
+    key = (T, shape)
+    total_bytes = sizeof(T) * prod(shape)
+
+    if !haskey(PINNED_BUFFER_POOL.available, key)
+        PINNED_BUFFER_POOL.available[key] = Vector{Vector{UInt8}}()
+    end
+
+    # Only pool if under both per-key limit and total memory cap
+    can_pool = length(PINNED_BUFFER_POOL.available[key]) < PINNED_BUFFER_POOL.max_buffers_per_key &&
+               PINNED_BUFFER_POOL.total_pooled_bytes + total_bytes <= PINNED_BUFFER_POOL.max_total_bytes
+
+    if can_pool
+        buf = unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pointer(arr)), total_bytes)
+        push!(PINNED_BUFFER_POOL.available[key], buf)
+        PINNED_BUFFER_POOL.total_pooled_bytes += total_bytes
+    else
+        # Explicitly free the pinned memory to prevent leaks
+        CUDA.Mem.free(CUDA.Mem.Host, pointer(arr), total_bytes)
+    end
+end
+
+"""
+    clear_pinned_buffer_pool!()
+
+Free all pinned memory in the pool. Call this to reclaim host memory.
+"""
+function clear_pinned_buffer_pool!()
+    for (key, buffers) in PINNED_BUFFER_POOL.available
+        for buf in buffers
+            total_bytes = length(buf)
+            CUDA.Mem.free(CUDA.Mem.Host, pointer(buf), total_bytes)
+        end
+        empty!(buffers)
+    end
+    empty!(PINNED_BUFFER_POOL.available)
+    PINNED_BUFFER_POOL.total_pooled_bytes = 0
 end
 
 """
@@ -196,19 +256,19 @@ The copy is truly asynchronous - call CUDA.synchronize(stream) to wait for compl
 For best performance, use pinned (page-locked) memory for `src` via `get_pinned_buffer`.
 """
 function async_copy_to_gpu!(dst::CuArray{T}, src::Array{T}; stream=nothing, synchronize::Bool=false) where T
-    s = stream !== nothing ? stream : get_transfer_stream()
+    # Use the device of the destination array for stream selection
+    device_id = CUDA.deviceid(CUDA.device(dst))
+    s = stream !== nothing ? stream : get_transfer_stream(; device_id=device_id)
 
     if s !== nothing
-        # Execute copy on the specified stream using stream context
+        CUDA.device!(CUDA.device(dst))
         CUDA.stream!(s) do
             copyto!(dst, src)
         end
-        # Optionally wait for completion
         if synchronize
             CUDA.synchronize(s)
         end
     else
-        # No stream specified, use default (synchronous)
         copyto!(dst, src)
     end
     return dst
@@ -223,19 +283,19 @@ The copy is truly asynchronous - call CUDA.synchronize(stream) to wait for compl
 For best performance, use pinned (page-locked) memory for `dst` via `get_pinned_buffer`.
 """
 function async_copy_to_cpu!(dst::Array{T}, src::CuArray{T}; stream=nothing, synchronize::Bool=false) where T
-    s = stream !== nothing ? stream : get_transfer_stream()
+    # Use the device of the source array for stream selection
+    device_id = CUDA.deviceid(CUDA.device(src))
+    s = stream !== nothing ? stream : get_transfer_stream(; device_id=device_id)
 
     if s !== nothing
-        # Execute copy on the specified stream using stream context
+        CUDA.device!(CUDA.device(src))
         CUDA.stream!(s) do
             copyto!(dst, src)
         end
-        # Optionally wait for completion
         if synchronize
             CUDA.synchronize(s)
         end
     else
-        # No stream specified, use default (synchronous)
         copyto!(dst, src)
     end
     return dst

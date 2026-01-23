@@ -544,8 +544,9 @@ Uses the GPUDCTPlanDim from dct.jl for efficient GPU-based DCT.
 function Tarang.dct_in_dim!(data::CuArray{T,N}, dim::Int, direction::Symbol, arch::Tarang.GPU) where {T,N}
     # Handle complex data by transforming real and imaginary parts separately
     if T <: Complex
-        real_part = CuArray(real.(Array(data)))
-        imag_part = CuArray(imag.(Array(data)))
+        # Use GPU-native real/imag extraction (no host round-trip)
+        real_part = real.(data)
+        imag_part = imag.(data)
 
         Tarang.dct_in_dim!(real_part, dim, direction, arch)
         Tarang.dct_in_dim!(imag_part, dim, direction, arch)

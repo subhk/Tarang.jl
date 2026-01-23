@@ -6,12 +6,13 @@
     GPUConfig
 
 Global GPU configuration for performance tuning.
+Streams are stored per-device to ensure multi-GPU correctness.
 """
 mutable struct GPUConfig
-    # Stream management
-    default_stream::Union{Nothing, CuStream}
-    compute_stream::Union{Nothing, CuStream}
-    transfer_stream::Union{Nothing, CuStream}
+    # Stream management - per device ID for multi-GPU correctness
+    compute_streams::Dict{Int, CuStream}
+    transfer_streams::Dict{Int, CuStream}
+    streams_enabled::Bool
 
     # Memory pool settings
     use_memory_pool::Bool
@@ -26,7 +27,7 @@ mutable struct GPUConfig
     default_workgroup_3d::Tuple{Int, Int, Int}
 
     function GPUConfig()
-        new(nothing, nothing, nothing,
+        new(Dict{Int, CuStream}(), Dict{Int, CuStream}(), false,
             true, false, nothing,
             256, (16, 16), (8, 8, 4))
     end
@@ -39,6 +40,7 @@ const GPU_CONFIG = GPUConfig()
                       use_memory_pool::Bool=true)
 
 Initialize GPU configuration with performance options.
+Creates streams on the current device. Call once per device in multi-GPU setups.
 
 # Arguments
 - `use_streams`: Enable CUDA streams for async operations (default: true)
@@ -53,11 +55,13 @@ init_gpu_config!(use_streams=true, use_tensor_cores=true)
 function init_gpu_config!(; use_streams::Bool=true,
                            use_tensor_cores::Bool=false,
                            use_memory_pool::Bool=true)
+    GPU_CONFIG.streams_enabled = use_streams
     if use_streams
-        GPU_CONFIG.default_stream = CuStream()
-        GPU_CONFIG.compute_stream = CuStream()
-        GPU_CONFIG.transfer_stream = CuStream()
-        @info "GPU streams initialized"
+        # Create streams on the current device
+        device_id = CUDA.deviceid()
+        GPU_CONFIG.compute_streams[device_id] = CuStream()
+        GPU_CONFIG.transfer_streams[device_id] = CuStream()
+        @info "GPU streams initialized for device $device_id"
     end
 
     GPU_CONFIG.use_memory_pool = use_memory_pool
@@ -70,34 +74,62 @@ function init_gpu_config!(; use_streams::Bool=true,
 end
 
 """
-    get_compute_stream()
+    get_compute_stream(; device_id::Int=CUDA.deviceid())
 
-Get the compute stream for kernel execution.
+Get the compute stream for kernel execution on the specified device.
+Creates a new stream on-demand if one doesn't exist for this device.
 """
-function get_compute_stream()
-    return GPU_CONFIG.compute_stream !== nothing ? GPU_CONFIG.compute_stream : CUDA.stream()
-end
-
-"""
-    get_transfer_stream()
-
-Get the transfer stream for CPU-GPU data movement.
-"""
-function get_transfer_stream()
-    return GPU_CONFIG.transfer_stream !== nothing ? GPU_CONFIG.transfer_stream : CUDA.stream()
-end
-
-"""
-    sync_streams!()
-
-Synchronize all GPU streams.
-"""
-function sync_streams!()
-    if GPU_CONFIG.compute_stream !== nothing
-        CUDA.synchronize(GPU_CONFIG.compute_stream)
+function get_compute_stream(; device_id::Int=CUDA.deviceid())
+    if !GPU_CONFIG.streams_enabled
+        return CUDA.stream()
     end
-    if GPU_CONFIG.transfer_stream !== nothing
-        CUDA.synchronize(GPU_CONFIG.transfer_stream)
+    if !haskey(GPU_CONFIG.compute_streams, device_id)
+        # Create stream on-demand for this device
+        GPU_CONFIG.compute_streams[device_id] = CuStream()
+    end
+    return GPU_CONFIG.compute_streams[device_id]
+end
+
+"""
+    get_transfer_stream(; device_id::Int=CUDA.deviceid())
+
+Get the transfer stream for CPU-GPU data movement on the specified device.
+Creates a new stream on-demand if one doesn't exist for this device.
+"""
+function get_transfer_stream(; device_id::Int=CUDA.deviceid())
+    if !GPU_CONFIG.streams_enabled
+        return CUDA.stream()
+    end
+    if !haskey(GPU_CONFIG.transfer_streams, device_id)
+        # Create stream on-demand for this device
+        GPU_CONFIG.transfer_streams[device_id] = CuStream()
+    end
+    return GPU_CONFIG.transfer_streams[device_id]
+end
+
+"""
+    sync_streams!(; device_id::Union{Nothing, Int}=nothing)
+
+Synchronize GPU streams. If `device_id` is specified, only sync that device's streams.
+Otherwise, sync all devices' streams.
+"""
+function sync_streams!(; device_id::Union{Nothing, Int}=nothing)
+    if device_id !== nothing
+        # Sync specific device
+        if haskey(GPU_CONFIG.compute_streams, device_id)
+            CUDA.synchronize(GPU_CONFIG.compute_streams[device_id])
+        end
+        if haskey(GPU_CONFIG.transfer_streams, device_id)
+            CUDA.synchronize(GPU_CONFIG.transfer_streams[device_id])
+        end
+    else
+        # Sync all devices
+        for (_, stream) in GPU_CONFIG.compute_streams
+            CUDA.synchronize(stream)
+        end
+        for (_, stream) in GPU_CONFIG.transfer_streams
+            CUDA.synchronize(stream)
+        end
     end
 end
 
