@@ -276,6 +276,10 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
                 end
             end
 
+            if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+                return false
+            end
+
             real_T = field.dtype
             needs_alloc = existing_grid === nothing ||
                           !(existing_grid isa CuArray) ||
@@ -372,6 +376,11 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     elseif all_chebyshev && length(bases) == 1
         # Pure Chebyshev 1D case - use GPU inverse DCT
         local_grid_shape = local_coeff_shape  # Chebyshev: same shape
+
+        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+            return false
+        end
+
         input_T = eltype(data_c)
         n = local_coeff_shape[1]
 
@@ -404,6 +413,11 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
         # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions (in reverse order)
         local_grid_shape = local_coeff_shape  # For Chebyshev, shapes are equal
+
+        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+            return false
+        end
+
         input_T = eltype(data_c)
 
         existing_grid = get_grid_data(field)
@@ -454,6 +468,10 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
                     return local_coeff_shape[dim]
                 end
             end
+        end
+
+        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+            return false
         end
 
         real_T = field.dtype
