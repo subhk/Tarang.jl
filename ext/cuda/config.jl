@@ -77,11 +77,13 @@ end
     get_compute_stream(; device_id::Int=CUDA.deviceid())
 
 Get the compute stream for kernel execution on the specified device.
-Creates a new stream on-demand if one doesn't exist for this device.
+Returns `nothing` when streams are disabled; callers should use the plain
+(non-stream) code path in that case. Creates a new stream on-demand if one
+doesn't exist for this device.
 """
 function get_compute_stream(; device_id::Int=CUDA.deviceid())
     if !GPU_CONFIG.streams_enabled
-        return CUDA.stream()
+        return nothing
     end
     if !haskey(GPU_CONFIG.compute_streams, device_id)
         # Create stream on the target device (streams are device-specific in CUDA)
@@ -97,11 +99,13 @@ end
     get_transfer_stream(; device_id::Int=CUDA.deviceid())
 
 Get the transfer stream for CPU-GPU data movement on the specified device.
-Creates a new stream on-demand if one doesn't exist for this device.
+Returns `nothing` when streams are disabled; callers should use the plain
+(non-stream) code path in that case. Creates a new stream on-demand if one
+doesn't exist for this device.
 """
 function get_transfer_stream(; device_id::Int=CUDA.deviceid())
     if !GPU_CONFIG.streams_enabled
-        return CUDA.stream()
+        return nothing
     end
     if !haskey(GPU_CONFIG.transfer_streams, device_id)
         # Create stream on the target device (streams are device-specific in CUDA)
