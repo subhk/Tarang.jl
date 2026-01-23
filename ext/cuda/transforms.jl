@@ -2,11 +2,8 @@
 # GPU Transform Implementations
 # ============================================================================
 
-# Field data accessors (internal helpers)
-get_grid_data(field::ScalarField) = field.grid_data
-get_coeff_data(field::ScalarField) = field.coeff_data
-set_grid_data!(field::ScalarField, data) = (field.grid_data = data)
-set_coeff_data!(field::ScalarField, data) = (field.coeff_data = data)
+# Field data accessors: imported from Tarang (get_grid_data, get_coeff_data,
+# set_grid_data!, set_coeff_data!) — use field.buffers.grid/coeff internally.
 
 """
     gpu_forward_transform!(field::ScalarField)

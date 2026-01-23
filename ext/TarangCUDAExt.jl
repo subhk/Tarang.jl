@@ -29,6 +29,7 @@ using Tarang: device, array_type, architecture, on_architecture, workgroup_size,
 using Tarang: synchronize, unsafe_free!, has_cuda
 using Tarang: ScalarField, VectorField, Distributor, Domain, Basis
 using Tarang: get_local_data, set_local_data!
+using Tarang: get_grid_data, get_coeff_data, set_grid_data!, set_coeff_data!
 using Tarang: is_gpu_array, gpu_forward_transform!, gpu_backward_transform!, should_use_gpu_fft
 using Tarang: RealFourier, ComplexFourier, ChebyshevT, Legendre
 using Tarang: DistributedGPUFFT
