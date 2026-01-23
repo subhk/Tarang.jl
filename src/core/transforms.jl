@@ -663,19 +663,36 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
     # Find appropriate transform
     for transform in field.dist.transforms
         if isa(transform, PencilFFTs.PencilFFTPlan)
-            # Use PencilFFT for parallel 2D FFT
-            set_coeff_data!(field, transform * get_grid_data(field))
+            # PencilFFTs is CPU-only; if data is on GPU, move to CPU first
+            grid_data = get_grid_data(field)
+            if is_gpu_array(grid_data)
+                host_data = Array(grid_data)
+                host_result = transform * host_data
+                set_coeff_data!(field, copy_to_device(host_result, grid_data))
+            else
+                set_coeff_data!(field, transform * grid_data)
+            end
             field.current_layout = :c
             return
         elseif isa(transform, ParallelChebyshevTransform)
             # Use parallel Chebyshev transform
+            grid_data = get_grid_data(field)
+            if is_gpu_array(grid_data)
+                host_data = Array(grid_data)
+            else
+                host_data = grid_data
+            end
             if get_coeff_data(field) === nothing
-                set_coeff_data!(field, similar(get_grid_data(field), ComplexF64))
+                set_coeff_data!(field, similar(grid_data, ComplexF64))
             end
             # Copy to temporary real array for transform
-            temp_data = copy(real.(get_grid_data(field)))
+            temp_data = copy(real.(host_data))
             apply_parallel_chebyshev_forward!(temp_data, transform, field.dist)
-            get_coeff_data(field) .= temp_data
+            if is_gpu_array(grid_data)
+                set_coeff_data!(field, copy_to_device(ComplexF64.(temp_data), grid_data))
+            else
+                get_coeff_data(field) .= temp_data
+            end
             field.current_layout = :c
             return
         end
@@ -747,19 +764,36 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
     # Find appropriate transform
     for transform in field.dist.transforms
         if isa(transform, PencilFFTs.PencilFFTPlan)
-            # Use PencilFFT for parallel 2D FFT (use \ for inverse transform)
-            set_grid_data!(field, transform \ get_coeff_data(field))
+            # PencilFFTs is CPU-only; if data is on GPU, move to CPU first
+            coeff_data = get_coeff_data(field)
+            if is_gpu_array(coeff_data)
+                host_data = Array(coeff_data)
+                host_result = transform \ host_data
+                set_grid_data!(field, copy_to_device(host_result, coeff_data))
+            else
+                set_grid_data!(field, transform \ coeff_data)
+            end
             field.current_layout = :g
             return
         elseif isa(transform, ParallelChebyshevTransform)
             # Use parallel Chebyshev transform
+            coeff_data = get_coeff_data(field)
+            if is_gpu_array(coeff_data)
+                host_data = Array(coeff_data)
+            else
+                host_data = coeff_data
+            end
             if get_grid_data(field) === nothing
-                set_grid_data!(field, similar(get_coeff_data(field), Float64))
+                set_grid_data!(field, similar(coeff_data, Float64))
             end
             # Copy to temporary real array for transform
-            temp_data = copy(real.(get_coeff_data(field)))
+            temp_data = copy(real.(host_data))
             apply_parallel_chebyshev_backward!(temp_data, transform, field.dist)
-            get_grid_data(field) .= temp_data
+            if is_gpu_array(coeff_data)
+                set_grid_data!(field, copy_to_device(Float64.(temp_data), coeff_data))
+            else
+                get_grid_data(field) .= temp_data
+            end
             field.current_layout = :g
             return
         end
