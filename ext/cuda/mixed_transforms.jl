@@ -67,11 +67,11 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     transform_order = vcat(fourier_dims, chebyshev_dims)
 
     # Create FFT plans for Fourier dimensions
-    # Only the FIRST RealFourier dimension uses R2C (real_input=true).
+    # Only the FIRST RealFourier dimension uses R2C (real_input=true), and only if T is real.
     # After that, data is complex, so subsequent Fourier dimensions use C2C.
     fft_plans = Dict{Int, GPUFFTPlanDim}()
     current_shape = local_grid_shape
-    data_is_real = true  # Track whether current data is still real-valued
+    data_is_real = !(T <: Complex)  # Track whether current data is still real-valued
 
     for dim in fourier_dims
         use_real = data_is_real && (basis_types[dim] == :fourier_real)
@@ -177,15 +177,18 @@ function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuAr
             fft_plan = plan.fft_plans[dim]
 
             if fft_plan.is_real
-                # R2C transform changes size along this dimension
+                # R2C transform: requires real input, changes size along this dimension.
+                # With correct plan creation (data_is_real tracking), input should always be real here.
                 out_shape = ntuple(i -> i == dim ? div(size(current_data, i), 2) + 1 : size(current_data, i), N)
                 output = CUDA.zeros(complex_T, out_shape...)
+                gpu_fft_dim!(output, current_data, fft_plan)
             else
-                # C2C transform preserves size
-                output = CUDA.zeros(complex_T, size(current_data)...)
+                # C2C transform preserves size; promote real input to complex if needed
+                fft_input = eltype(current_data) <: Real ? complex_T.(current_data) : current_data
+                output = CUDA.zeros(complex_T, size(fft_input)...)
+                gpu_fft_dim!(output, fft_input, fft_plan)
             end
 
-            gpu_fft_dim!(output, current_data, fft_plan)
             current_data = output
 
         elseif basis_type == :chebyshev
@@ -264,15 +267,18 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
             fft_plan = plan.fft_plans[dim]
 
             if fft_plan.is_real
-                # C2R transform: expand only this dimension back to grid size
+                # C2R transform: requires complex input, expands this dimension back to grid size
                 out_shape = ntuple(i -> i == dim ? plan.grid_shape[i] : size(current_data, i), N)
                 output = CUDA.zeros(T, out_shape...)
+                gpu_ifft_dim!(output, current_data, fft_plan)
             else
-                # C2C inverse: preserve size
-                output = CUDA.zeros(eltype(current_data), size(current_data)...)
+                # C2C inverse: requires complex input; promote real if needed
+                ifft_input = eltype(current_data) <: Real ?
+                    (T <: Complex ? T : Complex{real(T)}).(current_data) : current_data
+                output = CUDA.zeros(eltype(ifft_input), size(ifft_input)...)
+                gpu_ifft_dim!(output, ifft_input, fft_plan)
             end
 
-            gpu_ifft_dim!(output, current_data, fft_plan)
             current_data = output
         end
     end

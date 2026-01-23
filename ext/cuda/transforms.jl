@@ -80,8 +80,15 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
             gpu_mixed_forward_transform!(get_coeff_data(field), data_g, plan)
         elseif first_is_real
             # First dim is RealFourier: use multi-dim rfft (R2C on dim 1, C2C on rest)
-            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=true)
-            local_coeff_shape = (div(local_grid_shape[1], 2) + 1, local_grid_shape[2:end]...)
+            # BUT if input is already complex, rfft is invalid — use C2C instead
+            # (matches CPU path which falls back to fft when data is complex)
+            if input_T <: Complex
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=false)
+                local_coeff_shape = local_grid_shape  # C2C preserves shape
+            else
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=true)
+                local_coeff_shape = (div(local_grid_shape[1], 2) + 1, local_grid_shape[2:end]...)
+            end
 
             existing_coeff = get_coeff_data(field)
             needs_alloc = !(existing_coeff isa CuArray) ||
@@ -94,17 +101,25 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
             gpu_forward_fft!(get_coeff_data(field), data_g, plan)
         else
             # All ComplexFourier: use multi-dim cfft
-            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=false)
+            # C2C requires complex input; promote real data if needed
+            if input_T <: Real
+                fft_input = Complex{input_T}.(data_g)
+                plan_T = Complex{input_T}
+            else
+                fft_input = data_g
+                plan_T = input_T
+            end
+            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
 
             existing_coeff = get_coeff_data(field)
             needs_alloc = !(existing_coeff isa CuArray) ||
-                          eltype(existing_coeff) != input_T ||
+                          eltype(existing_coeff) != plan_T ||
                           size(existing_coeff) != local_grid_shape
             if needs_alloc
-                set_coeff_data!(field, CUDA.zeros(input_T, local_grid_shape...))
+                set_coeff_data!(field, CUDA.zeros(plan_T, local_grid_shape...))
             end
 
-            gpu_forward_fft!(get_coeff_data(field), data_g, plan)
+            gpu_forward_fft!(get_coeff_data(field), fft_input, plan)
         end
 
         return true
@@ -268,7 +283,9 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             gpu_mixed_backward_transform!(get_grid_data(field), data_c, plan)
 
         elseif first_is_real
-            # First dim is RealFourier: use multi-dim irfft (C2R on dim 1, C2C on rest)
+            # First dim is RealFourier: normally use irfft (C2R on dim 1, C2C on rest).
+            # BUT if forward used C2C (complex input), coeff shape == grid shape (no halving),
+            # so we must detect this and use C2C inverse instead.
             existing_grid = get_grid_data(field)
             if existing_grid isa CuArray
                 local_grid_shape = size(existing_grid)
@@ -276,8 +293,19 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
                 local_grid_shape = (2 * (local_coeff_shape[1] - 1), local_coeff_shape[2:end]...)
             end
 
+            # Determine if R2C or C2C was used: if coeff dim 1 == grid dim 1, C2C was used
+            used_r2c = (local_coeff_shape[1] != local_grid_shape[1])
             real_T = field.dtype
-            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, real_T; real_input=true)
+
+            if used_r2c
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, real_T; real_input=true)
+                output_T = real_T
+            else
+                # C2C inverse: coeff and grid have same shape
+                coeff_T_bk = eltype(data_c)
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, coeff_T_bk; real_input=false)
+                output_T = coeff_T_bk
+            end
 
             if !Tarang.should_use_gpu_fft(field, local_grid_shape)
                 return false
@@ -285,10 +313,10 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
 
             needs_alloc = existing_grid === nothing ||
                           !(existing_grid isa CuArray) ||
-                          eltype(existing_grid) != real_T ||
+                          eltype(existing_grid) != output_T ||
                           size(existing_grid) != local_grid_shape
             if needs_alloc
-                set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
+                set_grid_data!(field, CUDA.zeros(output_T, local_grid_shape...))
             end
 
             gpu_backward_fft!(get_grid_data(field), data_c, plan)
@@ -301,18 +329,26 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             end
 
             coeff_T = eltype(data_c)
-            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, coeff_T; real_input=false)
+            # C2C inverse requires complex input; promote if needed (shouldn't normally happen)
+            if coeff_T <: Real
+                fft_input = Complex{coeff_T}.(data_c)
+                plan_T = Complex{coeff_T}
+            else
+                fft_input = data_c
+                plan_T = coeff_T
+            end
+            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
 
             existing_grid = get_grid_data(field)
             needs_alloc = existing_grid === nothing ||
                           !(existing_grid isa CuArray) ||
-                          eltype(existing_grid) != coeff_T ||
+                          eltype(existing_grid) != plan_T ||
                           size(existing_grid) != local_grid_shape
             if needs_alloc
-                set_grid_data!(field, CUDA.zeros(coeff_T, local_grid_shape...))
+                set_grid_data!(field, CUDA.zeros(plan_T, local_grid_shape...))
             end
 
-            gpu_backward_fft!(get_grid_data(field), data_c, plan)
+            gpu_backward_fft!(get_grid_data(field), fft_input, plan)
         end
 
         return true
