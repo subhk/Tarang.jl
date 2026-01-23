@@ -176,10 +176,14 @@ mutable struct PinnedBufferPool
     # Track total pinned bytes to cap memory growth
     total_pooled_bytes::Int
     max_total_bytes::Int  # Cap total pinned memory (default 1 GB)
+    # Track checked-out buffers by pointer address → (backing buffer, byte size)
+    # This prevents permanent leaks if callers forget release_pinned_buffer!
+    in_use::Dict{UInt, Tuple{Vector{UInt8}, Int}}
 
     function PinnedBufferPool(; max_buffers::Int=5, max_total_mb::Int=1024)
         new(Dict{Tuple{DataType, Tuple}, Vector{Vector{UInt8}}}(),
-            max_buffers, 0, max_total_mb * 1_000_000)
+            max_buffers, 0, max_total_mb * 1_000_000,
+            Dict{UInt, Tuple{Vector{UInt8}, Int}}())
     end
 end
 
@@ -196,20 +200,23 @@ If no buffer is available in the pool, a new one is allocated.
 """
 function get_pinned_buffer(T::Type, shape::Tuple)
     key = (T, shape)
+    total_bytes = sizeof(T) * prod(shape)
 
     if haskey(PINNED_BUFFER_POOL.available, key) && !isempty(PINNED_BUFFER_POOL.available[key])
         # Check out an available buffer from the pool
         buf = pop!(PINNED_BUFFER_POOL.available[key])
-        total_bytes = sizeof(T) * prod(shape)
         PINNED_BUFFER_POOL.total_pooled_bytes -= total_bytes
-        return unsafe_wrap(Array{T}, Ptr{T}(pointer(buf)), shape)
     else
         # Allocate a new pinned buffer
-        total_bytes = sizeof(T) * prod(shape)
         pinned_ptr = CUDA.Mem.alloc(CUDA.Mem.Host, total_bytes)
         buf = unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pinned_ptr), total_bytes)
-        return unsafe_wrap(Array{T}, Ptr{T}(pointer(buf)), shape)
     end
+
+    # Track the checked-out buffer so it can be reclaimed if caller forgets release
+    ptr_addr = UInt(pointer(buf))
+    PINNED_BUFFER_POOL.in_use[ptr_addr] = (buf, total_bytes)
+
+    return unsafe_wrap(Array{T}, Ptr{T}(pointer(buf)), shape)
 end
 
 """
@@ -224,6 +231,10 @@ If the pool is full or at its memory cap, the pinned memory is explicitly freed.
 function release_pinned_buffer!(arr::Array{T}, shape::Tuple) where T
     key = (T, shape)
     total_bytes = sizeof(T) * prod(shape)
+    ptr_addr = UInt(pointer(arr))
+
+    # Remove from in-use tracking; retrieve the backing buffer
+    tracked = pop!(PINNED_BUFFER_POOL.in_use, ptr_addr, nothing)
 
     if !haskey(PINNED_BUFFER_POOL.available, key)
         PINNED_BUFFER_POOL.available[key] = Vector{Vector{UInt8}}()
@@ -234,7 +245,9 @@ function release_pinned_buffer!(arr::Array{T}, shape::Tuple) where T
                PINNED_BUFFER_POOL.total_pooled_bytes + total_bytes <= PINNED_BUFFER_POOL.max_total_bytes
 
     if can_pool
-        buf = unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pointer(arr)), total_bytes)
+        # Use the tracked buffer if available (preserves the reference), otherwise rewrap
+        buf = tracked !== nothing ? tracked[1] :
+              unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pointer(arr)), total_bytes)
         push!(PINNED_BUFFER_POOL.available[key], buf)
         PINNED_BUFFER_POOL.total_pooled_bytes += total_bytes
     else
@@ -249,6 +262,7 @@ end
 Free all pinned memory in the pool. Call this to reclaim host memory.
 """
 function clear_pinned_buffer_pool!()
+    # Free available (pooled) buffers
     for (key, buffers) in PINNED_BUFFER_POOL.available
         for buf in buffers
             total_bytes = length(buf)
@@ -258,6 +272,29 @@ function clear_pinned_buffer_pool!()
     end
     empty!(PINNED_BUFFER_POOL.available)
     PINNED_BUFFER_POOL.total_pooled_bytes = 0
+
+    # Also free any in-use (leaked) buffers
+    reclaim_leaked_pinned_buffers!()
+end
+
+"""
+    reclaim_leaked_pinned_buffers!()
+
+Free all pinned buffers that were checked out but never released.
+Call this to reclaim host memory leaked by callers who forgot `release_pinned_buffer!`.
+
+Returns the number of leaked buffers that were freed.
+"""
+function reclaim_leaked_pinned_buffers!()
+    n_leaked = length(PINNED_BUFFER_POOL.in_use)
+    if n_leaked > 0
+        for (ptr_addr, (buf, total_bytes)) in PINNED_BUFFER_POOL.in_use
+            CUDA.Mem.free(CUDA.Mem.Host, pointer(buf), total_bytes)
+        end
+        @warn "Freed $n_leaked leaked pinned buffer(s)" maxlog=1
+    end
+    empty!(PINNED_BUFFER_POOL.in_use)
+    return n_leaked
 end
 
 """

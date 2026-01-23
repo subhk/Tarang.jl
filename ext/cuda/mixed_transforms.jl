@@ -59,7 +59,11 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
         end
     end
 
-    # Transform order: Fourier first (they may change array size), then Chebyshev
+    # Transform order: Fourier first (they may change array size), then Chebyshev.
+    # Within Fourier dims, put RealFourier dims first so R2C optimization can be used
+    # (R2C halves the output along that dimension, saving memory).
+    # After the first R2C, data is complex so subsequent dims must use C2C regardless.
+    sort!(fourier_dims, by = d -> basis_types[d] == :fourier_real ? 0 : 1)
     transform_order = vcat(fourier_dims, chebyshev_dims)
 
     # Create FFT plans for Fourier dimensions
