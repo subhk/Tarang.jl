@@ -119,15 +119,9 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
         # Use the mixed transform plan for dimension-by-dimension transforms
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
 
-        # Compute coefficient shape based on basis types
-        local_coeff_shape = ntuple(length(bases)) do dim
-            basis = bases[dim]
-            if isa(basis, RealFourier)
-                div(local_grid_shape[dim], 2) + 1
-            else
-                local_grid_shape[dim]
-            end
-        end
+        # Get or create mixed transform plan (determines correct coeff_shape)
+        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+        local_coeff_shape = plan.coeff_shape
 
         existing_coeff = get_coeff_data(field)
         needs_alloc = !(existing_coeff isa CuArray) ||
@@ -136,9 +130,6 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
         if needs_alloc
             set_coeff_data!(field, CUDA.zeros(coeff_T, local_coeff_shape...))
         end
-
-        # Get or create mixed transform plan
-        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
 
         # Execute mixed transform
         gpu_mixed_forward_transform!(get_coeff_data(field), data_g, plan)
@@ -272,25 +263,27 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
         # Mixed Fourier-Chebyshev 2D/3D case
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
-        # Compute grid shape from coefficient shape and basis types
-        local_grid_shape = ntuple(length(bases)) do dim
-            basis = bases[dim]
-            if isa(basis, RealFourier)
-                # For real FFT: grid_size = 2 * (coeff_size - 1)
-                # But we need the actual grid size, use existing or estimate
-                existing_grid = get_grid_data(field)
-                if existing_grid isa CuArray
-                    return size(existing_grid, dim)
-                else
+
+        # Determine grid shape: use existing grid data if available,
+        # otherwise estimate (only the FIRST RealFourier dim uses R2C).
+        existing_grid = get_grid_data(field)
+        if existing_grid isa CuArray
+            local_grid_shape = size(existing_grid)
+        else
+            # Estimate: only the first RealFourier dimension was R2C'd
+            first_real_found = false
+            local_grid_shape = ntuple(length(bases)) do dim
+                basis = bases[dim]
+                if isa(basis, RealFourier) && !first_real_found
+                    first_real_found = true
                     return 2 * (local_coeff_shape[dim] - 1)
+                else
+                    return local_coeff_shape[dim]
                 end
-            else
-                return local_coeff_shape[dim]
             end
         end
 
         real_T = field.dtype
-        existing_grid = get_grid_data(field)
         needs_alloc = existing_grid === nothing ||
                       !(existing_grid isa CuArray) ||
                       eltype(existing_grid) != real_T ||
@@ -299,7 +292,7 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
         end
 
-        # Get or create mixed transform plan
+        # Get or create mixed transform plan (uses grid_shape as canonical reference)
         input_T = real_T <: Complex ? real_T : real_T
         plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
 

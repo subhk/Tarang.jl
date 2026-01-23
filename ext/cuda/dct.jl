@@ -48,10 +48,10 @@ function plan_gpu_dct(arch::GPU{CuDevice}, n::Int, T::Type, axis::Int)
 
     # Twiddle factors for FFT-based DCT
     # Forward: exp(-i*π*k/(2N)) for k = 0..N-1
-    twiddle_forward = CuArray([exp(-im * π * k / (2 * n)) for k in 0:n-1])
+    twiddle_forward = CuArray(complex_T[exp(complex_T(-im * π * k / (2 * n))) for k in 0:n-1])
 
     # Backward: exp(i*π*k/(2N)) for k = 0..N-1
-    twiddle_backward = CuArray([exp(im * π * k / (2 * n)) for k in 0:n-1])
+    twiddle_backward = CuArray(complex_T[exp(complex_T(im * π * k / (2 * n))) for k in 0:n-1])
 
     # Scaling factors following Tarang FastCosineTransform convention
     forward_scale_zero = real_T(1.0 / n / 2.0)   # DC component
@@ -126,32 +126,19 @@ function gpu_forward_dct_1d!(output::CuVector{T}, input::CuVector{T}, plan::GPUD
 
     work = plan.work_complex
 
-    # Step 1: Create symmetric extension (even symmetry around endpoints)
-    # work[1:N] = input[1:N]
-    # work[N+1:2N] = input[N:-1:1] (reversed)
-    @views begin
-        copyto!(work[1:n], Complex{T}.(input))
-        # Reverse copy for symmetric extension
-        for i in 1:n
-            work[n + i] = Complex{T}(input[n - i + 1])
-        end
-    end
+    # Step 1: Create symmetric extension (vectorized, no scalar indexing)
+    copyto!(view(work, 1:n), Complex{T}.(input))
+    copyto!(view(work, n+1:2*n), Complex{T}.(reverse(input)))
 
     # Step 2: FFT of extended array
     mul!(work, plan.fft_plan, work)
 
-    # Step 3: Extract and apply twiddle factors, then scale
-    # The DCT coefficients are: real(work[1:N] .* twiddle_forward) with scaling
-    @views begin
-        for i in 1:n
-            val = real(work[i] * plan.twiddle_forward[i])
-            if i == 1
-                output[i] = val * plan.forward_scale_zero
-            else
-                output[i] = val * plan.forward_scale_pos
-            end
-        end
-    end
+    # Step 3: Extract and apply twiddle factors, then scale (vectorized)
+    # Compute real part of (work[1:N] .* twiddle_forward)
+    raw_coeffs = real.(view(work, 1:n) .* plan.twiddle_forward)
+    # Apply scaling: first element uses scale_zero, rest use scale_pos
+    output .= raw_coeffs .* plan.forward_scale_pos
+    view(output, 1:1) .= view(raw_coeffs, 1:1) .* plan.forward_scale_zero
 
     return output
 end
@@ -176,34 +163,24 @@ function gpu_backward_dct_1d!(output::CuVector{T}, input::CuVector{T}, plan::GPU
 
     work = plan.work_complex
 
-    # Step 1 & 2: Pre-scale and apply inverse twiddle
-    @views begin
-        for i in 1:n
-            if i == 1
-                work[i] = Complex{T}(input[i] * plan.backward_scale_zero) * plan.twiddle_backward[i]
-            else
-                work[i] = Complex{T}(input[i] * plan.backward_scale_pos) * plan.twiddle_backward[i]
-            end
-        end
-
-        # Step 3: Create Hermitian-symmetric extension for real output
-        # work[N+1] = 0 (Nyquist)
-        # work[N+2:2N] = conj(work[N:-1:2])
-        work[n + 1] = zero(Complex{T})
-        for i in 2:n
-            work[2*n - i + 2] = conj(work[i])
-        end
+    # Step 1 & 2: Pre-scale and apply inverse twiddle (vectorized)
+    # First element: scale_zero, rest: scale_pos
+    view(work, 1:1) .= Complex{T}.(view(input, 1:1)) .* view(plan.twiddle_backward, 1:1) .* plan.backward_scale_zero
+    if n > 1
+        view(work, 2:n) .= Complex{T}.(view(input, 2:n)) .* view(plan.twiddle_backward, 2:n) .* plan.backward_scale_pos
     end
+
+    # Step 3: Create Hermitian-symmetric extension for real output (vectorized)
+    # work[N+1] = 0 (Nyquist)
+    # work[N+2:2N] = conj(work[N:-1:2])
+    fill!(view(work, n+1:n+1), zero(Complex{T}))
+    copyto!(view(work, n+2:2*n), conj.(reverse(view(work, 2:n))))
 
     # Step 4: IFFT
     mul!(work, plan.ifft_plan, work)
 
-    # Step 5: Extract real values (first N elements)
-    @views begin
-        for i in 1:n
-            output[i] = real(work[i])
-        end
-    end
+    # Step 5: Extract real values (first N elements, vectorized)
+    output .= real.(view(work, 1:n))
 
     return output
 end
@@ -327,9 +304,10 @@ function plan_gpu_dct_dim(arch::GPU{CuDevice}, full_size::Tuple, T::Type, dim::I
     real_T = T <: Complex ? real(T) : T
     n = full_size[dim]
 
-    # Twiddle factors
-    twiddle_forward = CuArray([exp(-im * π * k / (2 * n)) for k in 0:n-1])
-    twiddle_backward = CuArray([exp(im * π * k / (2 * n)) for k in 0:n-1])
+    # Twiddle factors (use correct precision Complex{real_T})
+    complex_T = Complex{real_T}
+    twiddle_forward = CuArray(complex_T[exp(complex_T(-im * π * k / (2 * n))) for k in 0:n-1])
+    twiddle_backward = CuArray(complex_T[exp(complex_T(im * π * k / (2 * n))) for k in 0:n-1])
 
     # Scaling factors (Tarang convention)
     forward_scale_zero = real_T(1.0 / n / 2.0)

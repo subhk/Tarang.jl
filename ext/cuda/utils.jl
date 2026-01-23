@@ -2,14 +2,7 @@
 # GPU Transform Functions
 # ============================================================================
 
-# Mutable struct to hold GPU FFT plans (cached)
-mutable struct GPUTransformCache
-    plans::Dict{Tuple, GPUFFTPlan}
-
-    GPUTransformCache() = new(Dict{Tuple, GPUFFTPlan}())
-end
-
-const GPU_TRANSFORM_CACHE = GPUTransformCache()
+# GPUTransformCache and GPU_TRANSFORM_CACHE are defined in transforms.jl
 
 mutable struct FFT1DPlanCache
     plans::Dict{Tuple, Any}
@@ -28,45 +21,7 @@ function get_fft_1d_plan(size::Tuple, dim::Int, T::Type; inverse::Bool=false)
     return FFT_1D_PLAN_CACHE.plans[key]
 end
 
-"""
-    _gpu_plan_key(arch, local_size, T, real_input)
-
-Generate a cache key for GPU FFT plans.
-Includes device ID for multi-GPU support to avoid returning plans from wrong device.
-"""
-_gpu_plan_key(arch::GPU{CuDevice}, local_size::Tuple, T::Type, real_input::Bool) =
-    (CUDA.deviceid(arch.device), local_size, T, real_input)
-
-# Fallback for generic GPU - use current device ID
-_gpu_plan_key(arch::GPU, local_size::Tuple, T::Type, real_input::Bool) =
-    (CUDA.deviceid(), local_size, T, real_input)
-
-"""
-    get_gpu_fft_plan(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
-
-Get or create a cached GPU FFT plan for the given architecture, local size, and dtype.
-
-**Important:** `local_size` should be the LOCAL array shape (what this process owns),
-not the global domain size. Plans are cached per (device, size, type, real_input).
-
-For multi-GPU: plans are cached separately for each device to avoid cross-device issues.
-"""
-function get_gpu_fft_plan(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
-    key = _gpu_plan_key(arch, local_size, T, real_input)
-    if !haskey(GPU_TRANSFORM_CACHE.plans, key)
-        GPU_TRANSFORM_CACHE.plans[key] = plan_gpu_fft(arch, local_size, T; real_input=real_input)
-    end
-    return GPU_TRANSFORM_CACHE.plans[key]
-end
-
-"""
-    clear_gpu_transform_cache!()
-
-Clear all cached GPU FFT plans.
-"""
-function clear_gpu_transform_cache!()
-    empty!(GPU_TRANSFORM_CACHE.plans)
-end
+# get_gpu_fft_plan and clear_gpu_transform_cache! are defined in transforms.jl
 
 # ============================================================================
 # GPU-aware Field Operations
@@ -233,27 +188,98 @@ end
 # ============================================================================
 
 """
-Create dealiasing mask on GPU for 2/3 rule
+Dealiasing kernel for 2D arrays: zero out modes beyond cutoff in each dimension.
+For spectral truncation (2/3 rule), modes with index > cutoff_dim are zeroed.
+"""
+@kernel function dealiasing_2d_kernel!(data, cutoff_x::Int, cutoff_y::Int, nx::Int, ny::Int)
+    idx = @index(Global)
+    j = ((idx - 1) ÷ nx) + 1
+    i = ((idx - 1) % nx) + 1
+    @inbounds if i > cutoff_x || j > cutoff_y
+        data[i, j] = zero(eltype(data))
+    end
+end
+
+"""
+Dealiasing kernel for 3D arrays: zero out modes beyond cutoff in each dimension.
+"""
+@kernel function dealiasing_3d_kernel!(data, cutoff_x::Int, cutoff_y::Int, cutoff_z::Int,
+                                        nx::Int, ny::Int, nz::Int)
+    idx = @index(Global)
+    i = ((idx - 1) % nx) + 1
+    j = (((idx - 1) ÷ nx) % ny) + 1
+    k = ((idx - 1) ÷ (nx * ny)) + 1
+    @inbounds if i > cutoff_x || j > cutoff_y || k > cutoff_z
+        data[i, j, k] = zero(eltype(data))
+    end
+end
+
+"""
+    create_dealiasing_mask_gpu(shape::Tuple, cutoff::Float64=2.0/3.0)
+
+Create dealiasing mask on GPU for the 2/3 rule.
+Returns a CuArray where entries within the cutoff are 1.0 and entries
+beyond the cutoff in any dimension are 0.0.
 """
 function create_dealiasing_mask_gpu(shape::Tuple, cutoff::Float64=2.0/3.0)
     mask = CUDA.ones(Float64, shape...)
+    cutoffs = map(n -> floor(Int, n * cutoff), shape)
 
-    # Apply 2/3 rule cutoff in each dimension
-    for (dim, n) in enumerate(shape)
-        cutoff_idx = ceil(Int, n * cutoff)
-        # Zero out high frequencies
-        # This is dimension-dependent and needs proper indexing
+    if length(shape) == 2
+        nx, ny = shape
+        arch = Tarang.architecture(mask)
+        launch!(arch, dealiasing_2d_kernel!, mask, cutoffs[1], cutoffs[2], nx, ny;
+                ndrange=nx*ny)
+    elseif length(shape) == 3
+        nx, ny, nz = shape
+        arch = Tarang.architecture(mask)
+        launch!(arch, dealiasing_3d_kernel!, mask, cutoffs[1], cutoffs[2], cutoffs[3],
+                nx, ny, nz; ndrange=nx*ny*nz)
+    else
+        # 1D fallback
+        n = shape[1]
+        cutoff_idx = floor(Int, n * cutoff)
+        if cutoff_idx < n
+            fill!(view(mask, cutoff_idx+1:n), 0.0)
+        end
     end
 
     return mask
 end
 
 """
-Apply dealiasing on GPU using spectral cutoff
+    apply_dealiasing_gpu!(data::CuArray, cutoff::Float64=2.0/3.0)
+
+Apply 2/3-rule dealiasing on GPU by zeroing spectral modes beyond the cutoff
+in each dimension. Modifies `data` in-place.
 """
-function apply_dealiasing_gpu!(data::CuArray, cutoff::Float64=2.0/3.0)
-    # For now, use simple truncation approach
-    # More sophisticated dealiasing would use the mask kernel
+function apply_dealiasing_gpu!(data::CuArray{T, 2}, cutoff::Float64=2.0/3.0) where T
+    nx, ny = size(data)
+    cutoff_x = floor(Int, nx * cutoff)
+    cutoff_y = floor(Int, ny * cutoff)
+    arch = Tarang.architecture(data)
+    launch!(arch, dealiasing_2d_kernel!, data, cutoff_x, cutoff_y, nx, ny;
+            ndrange=nx*ny)
+    return data
+end
+
+function apply_dealiasing_gpu!(data::CuArray{T, 3}, cutoff::Float64=2.0/3.0) where T
+    nx, ny, nz = size(data)
+    cutoff_x = floor(Int, nx * cutoff)
+    cutoff_y = floor(Int, ny * cutoff)
+    cutoff_z = floor(Int, nz * cutoff)
+    arch = Tarang.architecture(data)
+    launch!(arch, dealiasing_3d_kernel!, data, cutoff_x, cutoff_y, cutoff_z,
+            nx, ny, nz; ndrange=nx*ny*nz)
+    return data
+end
+
+function apply_dealiasing_gpu!(data::CuArray{T, 1}, cutoff::Float64=2.0/3.0) where T
+    n = length(data)
+    cutoff_idx = floor(Int, n * cutoff)
+    if cutoff_idx < n
+        fill!(view(data, cutoff_idx+1:n), zero(T))
+    end
     return data
 end
 
