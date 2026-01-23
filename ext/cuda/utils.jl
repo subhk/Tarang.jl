@@ -324,8 +324,12 @@ end
 Perform local FFT along dimension `dim` using CUFFT.
 """
 function Tarang.local_fft_dim!(data::CuArray, dim::Int, dfft::DistributedGPUFFT)
-    # Use CUFFT for local FFT along specified dimension
-    return CUFFT.fft(data, (dim,))
+    # Ensure correct device context for multi-GPU (CUFFT plans are device-specific)
+    prev_device = CUDA.device()
+    CUDA.device!(CuDevice(dfft.config.device_id))
+    result = CUFFT.fft(data, (dim,))
+    CUDA.device!(prev_device)
+    return result
 end
 
 """
@@ -334,8 +338,12 @@ end
 Perform local inverse FFT along dimension `dim` using CUFFT.
 """
 function Tarang.local_ifft_dim!(data::CuArray, dim::Int, dfft::DistributedGPUFFT)
-    # Use CUFFT for local inverse FFT along specified dimension
-    return CUFFT.ifft(data, (dim,))
+    # Ensure correct device context for multi-GPU (CUFFT plans are device-specific)
+    prev_device = CUDA.device()
+    CUDA.device!(CuDevice(dfft.config.device_id))
+    result = CUFFT.ifft(data, (dim,))
+    CUDA.device!(prev_device)
+    return result
 end
 
 """

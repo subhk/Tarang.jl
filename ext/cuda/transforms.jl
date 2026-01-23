@@ -164,16 +164,33 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
             set_coeff_data!(field, CUDA.zeros(input_T, local_coeff_shape...))
         end
 
-        # Apply DCT along each dimension
-        temp_data = copy(data_g)
-        for dim in 1:length(bases)
-            dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
-            output = CUDA.zeros(input_T, size(temp_data)...)
-            gpu_dct_dim!(output, temp_data, dct_plan, Val(:forward))
-            temp_data = output
+        if input_T <: Complex
+            # Complex Chebyshev: apply DCT to real and imaginary parts separately
+            # (DCT kernels use cos() which requires real-valued inputs on GPU)
+            real_T = real(input_T)
+            temp_real = real.(data_g)
+            temp_imag = imag.(data_g)
+            for dim in 1:length(bases)
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_real), real_T, dim)
+                out_real = CUDA.zeros(real_T, size(temp_real)...)
+                out_imag = CUDA.zeros(real_T, size(temp_imag)...)
+                gpu_dct_dim!(out_real, temp_real, dct_plan, Val(:forward))
+                gpu_dct_dim!(out_imag, temp_imag, dct_plan, Val(:forward))
+                temp_real = out_real
+                temp_imag = out_imag
+            end
+            get_coeff_data(field) .= complex.(temp_real, temp_imag)
+        else
+            # Apply DCT along each dimension
+            temp_data = copy(data_g)
+            for dim in 1:length(bases)
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
+                output = CUDA.zeros(input_T, size(temp_data)...)
+                gpu_dct_dim!(output, temp_data, dct_plan, Val(:forward))
+                temp_data = output
+            end
+            copyto!(get_coeff_data(field), temp_data)
         end
-
-        copyto!(get_coeff_data(field), temp_data)
         return true
 
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
@@ -429,16 +446,33 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
         end
 
-        # Apply inverse DCT along each dimension (reverse order for consistency)
-        temp_data = copy(data_c)
-        for dim in reverse(1:length(bases))
-            dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
-            output = CUDA.zeros(input_T, size(temp_data)...)
-            gpu_dct_dim!(output, temp_data, dct_plan, Val(:backward))
-            temp_data = output
+        if input_T <: Complex
+            # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
+            # (DCT kernels use cos() which requires real-valued inputs on GPU)
+            real_T = real(input_T)
+            temp_real = real.(data_c)
+            temp_imag = imag.(data_c)
+            for dim in reverse(1:length(bases))
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_real), real_T, dim)
+                out_real = CUDA.zeros(real_T, size(temp_real)...)
+                out_imag = CUDA.zeros(real_T, size(temp_imag)...)
+                gpu_dct_dim!(out_real, temp_real, dct_plan, Val(:backward))
+                gpu_dct_dim!(out_imag, temp_imag, dct_plan, Val(:backward))
+                temp_real = out_real
+                temp_imag = out_imag
+            end
+            get_grid_data(field) .= complex.(temp_real, temp_imag)
+        else
+            # Apply inverse DCT along each dimension (reverse order for consistency)
+            temp_data = copy(data_c)
+            for dim in reverse(1:length(bases))
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
+                output = CUDA.zeros(input_T, size(temp_data)...)
+                gpu_dct_dim!(output, temp_data, dct_plan, Val(:backward))
+                temp_data = output
+            end
+            copyto!(get_grid_data(field), temp_data)
         end
-
-        copyto!(get_grid_data(field), temp_data)
         return true
 
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
