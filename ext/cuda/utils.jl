@@ -18,7 +18,7 @@ function get_fft_1d_plan(size::Tuple, dim::Int, T::Type; inverse::Bool=false)
     key = (device_id, size, dim, T, inverse)
     if !haskey(FFT_1D_PLAN_CACHE.plans, key)
         dummy = CUDA.zeros(T, size...)
-        FFT_1D_PLAN_CACHE.plans[key] = inverse ? CUFFT.plan_ifft(dummy; dims=(dim,)) : CUFFT.plan_fft(dummy; dims=(dim,))
+        FFT_1D_PLAN_CACHE.plans[key] = inverse ? CUFFT.plan_ifft(dummy, (dim,)) : CUFFT.plan_fft(dummy, (dim,))
     end
     return FFT_1D_PLAN_CACHE.plans[key]
 end
@@ -59,8 +59,11 @@ end
 _gpu_zeros(::GPU, T::Type, dims...) = CUDA.zeros(T, dims...)
 
 function _gpu_zeros(arr::CuArray, T::Type, dims...)
+    prev_device = CUDA.device()
     CUDA.device!(CUDA.device(arr))
-    return CUDA.zeros(T, dims...)
+    result = CUDA.zeros(T, dims...)
+    CUDA.device!(prev_device)
+    return result
 end
 
 _gpu_zeros(arr::CuArray, dims...) = _gpu_zeros(arr, eltype(arr), dims...)
@@ -73,15 +76,21 @@ end
 _gpu_ones(::GPU, T::Type, dims...) = CUDA.ones(T, dims...)
 
 function _gpu_ones(arr::CuArray, T::Type, dims...)
+    prev_device = CUDA.device()
     CUDA.device!(CUDA.device(arr))
-    return CUDA.ones(T, dims...)
+    result = CUDA.ones(T, dims...)
+    CUDA.device!(prev_device)
+    return result
 end
 
 _gpu_ones(arr::CuArray, dims...) = _gpu_ones(arr, eltype(arr), dims...)
 
 function _gpu_similar(arr::CuArray, T::Type, dims...)
+    prev_device = CUDA.device()
     CUDA.device!(CUDA.device(arr))
-    return CuArray{T}(undef, dims...)
+    result = CuArray{T}(undef, dims...)
+    CUDA.device!(prev_device)
+    return result
 end
 
 _gpu_similar(arr::CuArray, dims...) = _gpu_similar(arr, eltype(arr), dims...)
@@ -95,8 +104,11 @@ end
 _gpu_fill(::GPU, val, dims...) = CUDA.fill(val, dims...)
 
 function _gpu_fill(arr::CuArray, val, dims...)
+    prev_device = CUDA.device()
     CUDA.device!(CUDA.device(arr))
-    return CUDA.fill(val, dims...)
+    result = CUDA.fill(val, dims...)
+    CUDA.device!(prev_device)
+    return result
 end
 
 # ============================================================================
@@ -330,7 +342,7 @@ end
 """
 function gpu_fft_1d!(output::CuArray, input::CuArray, dim::Int)
     plan = get_fft_1d_plan(size(input), dim, eltype(input); inverse=false)
-    CUFFT.fft!(plan, input, output)
+    mul!(output, plan, input)
     return output
 end
 
@@ -341,7 +353,7 @@ end
 """
 function gpu_ifft_1d!(output::CuArray, input::CuArray, dim::Int)
     plan = get_fft_1d_plan(size(input), dim, eltype(input); inverse=true)
-    CUFFT.ifft!(plan, input, output)
+    mul!(output, plan, input)
     return output
 end
 
@@ -417,14 +429,20 @@ Allocate a zeros CuArray on the same device as the input CuArray.
 Ensures correct device context for multi-GPU support.
 """
 function Tarang.allocate_like(a::CuArray, T::Type, dims...)
-    # Switch to the device where 'a' resides before allocating
+    # Switch to the device where 'a' resides before allocating, then restore
+    prev_device = CUDA.device()
     CUDA.device!(CUDA.device(a))
-    return CUDA.zeros(T, dims...)
+    result = CUDA.zeros(T, dims...)
+    CUDA.device!(prev_device)
+    return result
 end
 
 function Tarang.allocate_like(a::CuArray, dims...)
+    prev_device = CUDA.device()
     CUDA.device!(CUDA.device(a))
-    return CUDA.zeros(eltype(a), dims...)
+    result = CUDA.zeros(eltype(a), dims...)
+    CUDA.device!(prev_device)
+    return result
 end
 
 """
@@ -434,9 +452,12 @@ Copy array `a` to GPU on the same device as target CuArray.
 Ensures correct device context for multi-GPU support.
 """
 function Tarang.copy_to_device(a::AbstractArray, target::CuArray)
-    # Switch to the device where 'target' resides before copying
+    # Switch to the device where 'target' resides before copying, then restore
+    prev_device = CUDA.device()
     CUDA.device!(CUDA.device(target))
-    return CuArray(a)
+    result = CuArray(a)
+    CUDA.device!(prev_device)
+    return result
 end
 
 function Tarang.copy_to_device(a::CuArray, target::CuArray)
@@ -449,12 +470,16 @@ function Tarang.copy_to_device(a::CuArray, target::CuArray)
     else
         # Cross-device copy: explicitly go through host memory to avoid
         # requiring P2P access between devices.
+        prev_device = CUDA.device()
         # 1. Set source device context and download to host
         CUDA.device!(src_device)
         host_data = Array(a)
         # 2. Set destination device context and upload from host
         CUDA.device!(dst_device)
-        return CuArray(host_data)
+        result = CuArray(host_data)
+        # 3. Restore caller's device context
+        CUDA.device!(prev_device)
+        return result
     end
 end
 

@@ -109,6 +109,23 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
 
         return true
 
+    elseif all_chebyshev && length(bases) == 1
+        # Pure Chebyshev 1D case - use GPU DCT
+        n = local_grid_shape[1]
+        local_coeff_shape = local_grid_shape  # Chebyshev: same shape
+
+        existing_coeff = get_coeff_data(field)
+        needs_alloc = !(existing_coeff isa CuArray) ||
+                      eltype(existing_coeff) != input_T ||
+                      size(existing_coeff) != local_coeff_shape
+        if needs_alloc
+            set_coeff_data!(field, CUDA.zeros(input_T, local_coeff_shape...))
+        end
+
+        dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+        gpu_forward_dct_1d!(get_coeff_data(field), data_g, dct_plan)
+        return true
+
     elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
         # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions
         # Coefficient shape equals grid shape for Chebyshev
@@ -285,6 +302,25 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             gpu_backward_fft!(get_grid_data(field), data_c, plan)
         end
 
+        return true
+
+    elseif all_chebyshev && length(bases) == 1
+        # Pure Chebyshev 1D case - use GPU inverse DCT
+        local_grid_shape = local_coeff_shape  # Chebyshev: same shape
+        input_T = eltype(data_c)
+        n = local_coeff_shape[1]
+
+        existing_grid = get_grid_data(field)
+        needs_alloc = existing_grid === nothing ||
+                      !(existing_grid isa CuArray) ||
+                      eltype(existing_grid) != input_T ||
+                      size(existing_grid) != local_grid_shape
+        if needs_alloc
+            set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
+        end
+
+        dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+        gpu_backward_dct_1d!(get_grid_data(field), data_c, dct_plan)
         return true
 
     elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)

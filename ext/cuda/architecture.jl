@@ -189,16 +189,22 @@ Tarang.on_architecture(::GPU, a::Array) = CuArray(a)
 
 GPU to GPU: handle potential cross-device transfers.
 If the array is already on the target device, return as-is.
-Otherwise, copy to the target device.
+Otherwise, copy to the target device via host memory (does not require P2P access).
 """
 function Tarang.on_architecture(gpu::GPU{CuDevice}, a::CuArray)
     arr_device = CUDA.device(a)
     if arr_device == gpu.device
         return a  # Already on correct device
     else
-        # Cross-device copy: switch to target device and copy
-        ensure_device!(gpu)
-        return CuArray(a)  # This copies to current device
+        # Cross-device copy: go through host memory to avoid requiring
+        # P2P access between devices (not all GPU pairs support it).
+        prev_device = CUDA.device()
+        CUDA.device!(arr_device)
+        host_data = Array(a)
+        CUDA.device!(gpu.device)
+        result = CuArray(host_data)
+        CUDA.device!(prev_device)
+        return result
     end
 end
 
