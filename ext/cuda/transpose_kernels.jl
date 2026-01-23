@@ -537,9 +537,9 @@ incorrect when the dimension being redistributed is not the last (column-major)
 dimension. This override uses GPU pack kernels to correctly rearrange data so
 that each rank's portion is contiguous in the send buffer.
 
-`dim` here is the currently-distributed dimension (to be gathered/made local).
-The pack splits along `other_dim` (the dimension that will become distributed
-after the transpose).
+Handles both forward and reverse transpose directions:
+- Forward: `dims[dim] < global_n` → dim is distributed, pack splits along other_dim
+- Reverse: `dims[dim] == global_n` → dim is local (full), pack splits along dim
 """
 function Tarang._gpu_pack_for_transpose!(send_buf::CuArray, data::CuArray,
                                           dim::Int, config::Tarang.DistributedGPUConfig)
@@ -548,34 +548,93 @@ function Tarang._gpu_pack_for_transpose!(send_buf::CuArray, data::CuArray,
     dims = size(data)
 
     if nprocs == 1
-        # Single rank: flat copy is fine
         copyto!(send_buf, vec(data))
         return send_buf
     end
 
-    # Determine which dimension will be split after transpose
-    # (same logic as _compute_transposed_dims)
+    global_n = config.global_shape[dim]
     other_dim = dim == ndims_data ? 1 : ndims_data
 
-    # Compute chunk sizes along other_dim for each rank.
-    # Use even division to match _compute_alltoall_counts which produces
-    # equal send_counts of prod(dims) ÷ nprocs for all ranks.
-    other_n = dims[other_dim]
-    chunk_per_rank = div(other_n, nprocs)
-
-    # Compute element counts and displacements per rank
-    slice_elements = div(prod(dims), other_n)
-    count_per_rank = chunk_per_rank * slice_elements
-    counts = Vector{Int}(undef, nprocs)
-    displs = Vector{Int}(undef, nprocs)
-    for r in 1:nprocs
-        counts[r] = count_per_rank
-        displs[r] = (r - 1) * count_per_rank
+    # Determine pack direction from data shape:
+    # Forward: dim is distributed (small), split other_dim among ranks
+    # Reverse: dim is local (global_n), split dim among ranks
+    if dims[dim] < global_n
+        # Forward: split along other_dim
+        split_dim = other_dim
+        split_n = dims[split_dim]
+    else
+        # Reverse: split along dim (now fully local)
+        split_dim = dim
+        split_n = dims[split_dim]
     end
 
-    # Use the GPU pack kernel with other_dim as the dimension being redistributed
-    gpu_pack_for_transpose!(send_buf, data, counts, displs, other_dim, nprocs)
+    # Compute per-rank chunk sizes along split_dim
+    remaining = div(prod(dims), split_n)
+    counts = Vector{Int}(undef, nprocs)
+    displs = Vector{Int}(undef, nprocs)
+    offset = 0
+    for r in 1:nprocs
+        chunk_r = div(split_n, nprocs) + (r - 1 < mod(split_n, nprocs) ? 1 : 0)
+        counts[r] = chunk_r * remaining
+        displs[r] = offset
+        offset += counts[r]
+    end
+
+    gpu_pack_for_transpose!(send_buf, data, counts, displs, split_dim, nprocs)
     return send_buf
+end
+
+"""
+    Tarang._gpu_unpack_from_transpose!(output::CuArray, recv_buf::CuArray, dim::Int, config::Tarang.DistributedGPUConfig)
+
+Override for CuArray arguments. Unpacks the received MPI buffer into the
+correctly-shaped output array using GPU kernels.
+
+Handles both directions:
+- Forward: output has `dim` of size global_n → assemble along dim
+- Reverse: output has `dim` of size local_n → assemble along other_dim
+"""
+function Tarang._gpu_unpack_from_transpose!(output::CuArray, recv_buf::CuArray,
+                                             dim::Int, config::Tarang.DistributedGPUConfig)
+    nprocs = config.size
+    ndims_data = ndims(output)
+    out_dims = size(output)
+
+    if nprocs == 1
+        copyto!(vec(output), recv_buf)
+        return output
+    end
+
+    global_n = config.global_shape[dim]
+    other_dim = dim == ndims_data ? 1 : ndims_data
+
+    # Determine unpack direction from output shape:
+    # Forward: output[dim] == global_n → assemble along dim from per-rank chunks
+    # Reverse: output[dim] < global_n → assemble along other_dim
+    if out_dims[dim] == global_n
+        # Forward unpack: assemble along dim
+        assemble_dim = dim
+        assemble_n = global_n
+    else
+        # Reverse unpack: assemble along other_dim (restoring original layout)
+        assemble_dim = other_dim
+        assemble_n = out_dims[other_dim]
+    end
+
+    # Compute per-rank chunk sizes along assemble_dim
+    remaining = div(prod(out_dims), assemble_n)
+    counts = Vector{Int}(undef, nprocs)
+    displs = Vector{Int}(undef, nprocs)
+    offset = 0
+    for r in 1:nprocs
+        chunk_r = div(assemble_n, nprocs) + (r - 1 < mod(assemble_n, nprocs) ? 1 : 0)
+        counts[r] = chunk_r * remaining
+        displs[r] = offset
+        offset += counts[r]
+    end
+
+    gpu_unpack_from_transpose!(output, recv_buf, counts, displs, assemble_dim, nprocs)
+    return output
 end
 
 # ============================================================================

@@ -336,26 +336,32 @@ function distributed_fft_cuda_aware!(data, dim::Int, dfft::DistributedGPUFFT, di
     dims = size(data)
     global_n = config.global_shape[dim]
 
-    # Ensure transpose buffers are allocated on GPU
-    total_elements = prod(dims)
-    if dfft.transpose_send === nothing || length(dfft.transpose_send) != total_elements
-        dfft.transpose_send = similar(data, total_elements)
-        dfft.transpose_recv = similar(data, total_elements)
+    # Compute transposed dimensions and buffer sizes
+    transposed_dims = _compute_transposed_dims(dims, dim, config)
+    send_elements = prod(dims)
+    recv_elements = prod(transposed_dims)
+    buf_size = max(send_elements, recv_elements)
+
+    # Ensure transpose buffers are large enough for both directions
+    if dfft.transpose_send === nothing || length(dfft.transpose_send) < buf_size
+        dfft.transpose_send = similar(data, buf_size)
+        dfft.transpose_recv = similar(data, buf_size)
     end
 
-    # Step 1: Pack data into send buffer (already on GPU)
+    # Step 1: Pack data into send buffer
     _gpu_pack_for_transpose!(dfft.transpose_send, data, dim, config)
 
     # Step 2: Compute send/recv counts for all-to-all
     send_counts, recv_counts, send_displs, recv_displs = _compute_alltoall_counts(dims, dim, config)
 
     # Step 3: Direct GPU all-to-all via CUDA-aware MPI
-    # MPI.Alltoallv! should work directly on CuArrays with CUDA-aware MPI
-    MPI.Alltoallv!(dfft.transpose_send, dfft.transpose_recv, send_counts, recv_counts, comm)
+    send_view = view(dfft.transpose_send, 1:send_elements)
+    recv_view = view(dfft.transpose_recv, 1:recv_elements)
+    MPI.Alltoallv!(send_view, recv_view, send_counts, recv_counts, comm)
 
-    # Step 4: Unpack into transposed layout
-    transposed_dims = _compute_transposed_dims(dims, dim, config)
-    gpu_transposed = reshape(dfft.transpose_recv, transposed_dims...)
+    # Step 4: Unpack into transposed layout using GPU kernels
+    gpu_transposed = similar(data, transposed_dims...)
+    _gpu_unpack_from_transpose!(gpu_transposed, recv_view, dim, config)
 
     # Step 5: Local FFT on now-local dimension
     if direction == :forward
@@ -364,14 +370,19 @@ function distributed_fft_cuda_aware!(data, dim::Int, dfft::DistributedGPUFFT, di
         result = local_ifft_dim!(gpu_transposed, dim, dfft)
     end
 
-    # Step 6: Pack for reverse transpose
+    # Step 6: Pack for reverse transpose (result has transposed_dims shape)
     _gpu_pack_for_transpose!(dfft.transpose_send, result, dim, config)
 
-    # Step 7: Reverse all-to-all
-    MPI.Alltoallv!(dfft.transpose_send, dfft.transpose_recv, recv_counts, send_counts, comm)
+    # Step 7: Reverse all-to-all (swap send/recv counts)
+    send_view_rev = view(dfft.transpose_send, 1:recv_elements)
+    recv_view_rev = view(dfft.transpose_recv, 1:send_elements)
+    MPI.Alltoallv!(send_view_rev, recv_view_rev, recv_counts, send_counts, comm)
 
-    # Step 8: Unpack back to original layout
-    return reshape(dfft.transpose_recv, dims...)
+    # Step 8: Unpack back to original layout using GPU kernels
+    output = similar(data, dims...)
+    _gpu_unpack_from_transpose!(output, recv_view_rev, dim, config)
+
+    return output
 end
 
 """
@@ -387,16 +398,17 @@ function _verify_cuda_aware_mpi()
         return _CUDA_AWARE_MPI_VERIFIED[]
     end
 
-    # Try a small test transfer
     try
         if !has_cuda()
+            @debug "CUDA-aware MPI disabled: CUDA not available"
             _CUDA_AWARE_MPI_VERIFIED[] = false
             return false
         end
 
-        # This check requires the CUDA extension to be loaded
-        # For now, rely on environment variable detection
         result = check_cuda_aware_mpi()
+        if !result
+            @debug "CUDA-aware MPI not detected. Set TARANG_CUDA_AWARE_MPI=1 to force-enable if your MPI supports GPU buffers."
+        end
         _CUDA_AWARE_MPI_VERIFIED[] = result
         return result
     catch e
@@ -418,17 +430,46 @@ function _gpu_pack_for_transpose!(send_buf, data, dim::Int, config::DistributedG
 end
 
 """
+    _gpu_unpack_from_transpose!(output, recv_buf, dim, config)
+
+Unpack received buffer into correctly-shaped output array after MPI all-to-all.
+Default implementation - overridden by CUDA extension for GPU data.
+
+For forward transpose: `dim` is the dimension being assembled (now fully local).
+For reverse transpose: `dim` is passed as-is from the caller context.
+The function determines direction from the output shape vs config.
+"""
+function _gpu_unpack_from_transpose!(output, recv_buf, dim::Int, config::DistributedGPUConfig)
+    # Default CPU implementation: copy from flat buffer
+    copyto!(vec(output), recv_buf)
+end
+
+"""
     _compute_alltoall_counts(dims, dim, config)
 
 Compute send/recv counts and displacements for all-to-all transpose.
+
+The transpose makes `dim` fully local (assembling from all ranks) and splits
+`other_dim` among ranks. Send counts reflect how much of our local data goes
+to each rank (split along other_dim). Recv counts reflect how much each rank
+contributes to our transposed array (their portion along dim).
 """
 function _compute_alltoall_counts(dims::Tuple, dim::Int, config::DistributedGPUConfig)
     nprocs = config.size
+    rank = config.rank
+    ndims_data = length(dims)
     global_n = config.global_shape[dim]
     local_n = dims[dim]
 
-    # Elements per slice (excluding the transposed dimension)
-    slice_elements = div(prod(dims), local_n)
+    # Determine the dimension that will become distributed after transpose
+    other_dim = dim == ndims_data ? 1 : ndims_data
+    other_n = dims[other_dim]
+
+    # Product of all dimensions except dim and other_dim
+    remaining = div(prod(dims), other_n * local_n)
+
+    # Our chunk of other_dim after transpose
+    chunk_other_me = div(other_n, nprocs) + (rank < mod(other_n, nprocs) ? 1 : 0)
 
     send_counts = Vector{Int}(undef, nprocs)
     recv_counts = Vector{Int}(undef, nprocs)
@@ -439,12 +480,17 @@ function _compute_alltoall_counts(dims::Tuple, dim::Int, config::DistributedGPUC
     recv_offset = 0
 
     for p in 0:(nprocs-1)
-        # Size that process p owns along dim
-        p_size = div(global_n, nprocs) + (p < mod(global_n, nprocs) ? 1 : 0)
+        # Chunk of other_dim that rank p will own after transpose
+        chunk_other_p = div(other_n, nprocs) + (p < mod(other_n, nprocs) ? 1 : 0)
 
-        # We send our local_n elements to each process, they send their p_size to us
-        send_counts[p+1] = slice_elements * local_n ÷ nprocs
-        recv_counts[p+1] = slice_elements * p_size ÷ nprocs
+        # Chunk of dim that rank p currently owns
+        local_n_p = div(global_n, nprocs) + (p < mod(global_n, nprocs) ? 1 : 0)
+
+        # We send chunk_other_p indices of other_dim (with all our local_n and remaining)
+        send_counts[p+1] = chunk_other_p * local_n * remaining
+
+        # We receive local_n_p indices of dim from rank p (with our chunk_other_me and remaining)
+        recv_counts[p+1] = local_n_p * chunk_other_me * remaining
 
         send_displs[p+1] = send_offset
         recv_displs[p+1] = recv_offset
@@ -463,14 +509,16 @@ Compute dimensions after transpose operation.
 """
 function _compute_transposed_dims(dims::Tuple, dim::Int, config::DistributedGPUConfig)
     nprocs = config.size
+    rank = config.rank
     global_n = config.global_shape[dim]
 
     new_dims = collect(dims)
     new_dims[dim] = global_n  # Now fully local
 
-    # Another dimension becomes distributed
+    # Another dimension becomes distributed — use this rank's actual chunk size
     other_dim = dim == length(dims) ? 1 : length(dims)
-    new_dims[other_dim] = div(new_dims[other_dim], nprocs)
+    other_n = dims[other_dim]
+    new_dims[other_dim] = div(other_n, nprocs) + (rank < mod(other_n, nprocs) ? 1 : 0)
 
     return Tuple(new_dims)
 end
@@ -550,27 +598,50 @@ end
     check_cuda_aware_mpi()
 
 Check if MPI implementation is CUDA-aware.
+
+Detection priority:
+1. Explicit user override via `TARANG_CUDA_AWARE_MPI` env var ("1"=enabled, "0"=disabled)
+2. OpenMPI CUDA support indicator
+3. MVAPICH2 CUDA indicator
+4. MPICH GPU indicator
+
+Returns false by default if no positive indicator is found.
 """
 function check_cuda_aware_mpi()
-    # This is a heuristic check
-    # Proper detection requires runtime testing
-    cuda_aware = false
+    # Priority 1: Explicit user override
+    if haskey(ENV, "TARANG_CUDA_AWARE_MPI")
+        val = uppercase(strip(ENV["TARANG_CUDA_AWARE_MPI"]))
+        if val in ("1", "TRUE", "YES")
+            @info "CUDA-aware MPI enabled via TARANG_CUDA_AWARE_MPI environment variable"
+            return true
+        elseif val in ("0", "FALSE", "NO")
+            return false
+        end
+    end
 
-    # Check for common CUDA-aware MPI indicators
+    # Priority 2-4: Library-specific indicators
     try
         # OpenMPI with CUDA support
         if haskey(ENV, "OMPI_MCA_opal_cuda_support") && ENV["OMPI_MCA_opal_cuda_support"] == "true"
-            cuda_aware = true
+            return true
         end
         # MVAPICH2 with CUDA
         if haskey(ENV, "MV2_USE_CUDA") && ENV["MV2_USE_CUDA"] == "1"
-            cuda_aware = true
+            return true
+        end
+        # MPICH with GPU support
+        if haskey(ENV, "MPIR_CVAR_ENABLE_GPU") && ENV["MPIR_CVAR_ENABLE_GPU"] == "1"
+            return true
+        end
+        # Cray MPI with GPU support
+        if haskey(ENV, "MPICH_GPU_SUPPORT_ENABLED") && ENV["MPICH_GPU_SUPPORT_ENABLED"] == "1"
+            return true
         end
     catch
-        cuda_aware = false
+        # Env access failed, treat as not detected
     end
 
-    return cuda_aware
+    return false
 end
 
 """
