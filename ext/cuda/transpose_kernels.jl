@@ -524,6 +524,61 @@ function Tarang.unpack_from_transpose!(data::CuArray, buffer::CuArray,
 end
 
 # ============================================================================
+# Override _gpu_pack_for_transpose! for CUDA-aware MPI path
+# ============================================================================
+
+"""
+    Tarang._gpu_pack_for_transpose!(send_buf::CuArray, data::CuArray, dim::Int, config::Tarang.DistributedGPUConfig)
+
+Override for CuArray arguments in the CUDA-aware MPI distributed FFT path.
+
+The default implementation in gpu_distributed.jl does a flat `copyto!` which is
+incorrect when the dimension being redistributed is not the last (column-major)
+dimension. This override uses GPU pack kernels to correctly rearrange data so
+that each rank's portion is contiguous in the send buffer.
+
+`dim` here is the currently-distributed dimension (to be gathered/made local).
+The pack splits along `other_dim` (the dimension that will become distributed
+after the transpose).
+"""
+function Tarang._gpu_pack_for_transpose!(send_buf::CuArray, data::CuArray,
+                                          dim::Int, config::Tarang.DistributedGPUConfig)
+    nprocs = config.size
+    ndims_data = ndims(data)
+    dims = size(data)
+
+    if nprocs == 1
+        # Single rank: flat copy is fine
+        copyto!(send_buf, vec(data))
+        return send_buf
+    end
+
+    # Determine which dimension will be split after transpose
+    # (same logic as _compute_transposed_dims)
+    other_dim = dim == ndims_data ? 1 : ndims_data
+
+    # Compute chunk sizes along other_dim for each rank.
+    # Use even division to match _compute_alltoall_counts which produces
+    # equal send_counts of prod(dims) ÷ nprocs for all ranks.
+    other_n = dims[other_dim]
+    chunk_per_rank = div(other_n, nprocs)
+
+    # Compute element counts and displacements per rank
+    slice_elements = div(prod(dims), other_n)
+    count_per_rank = chunk_per_rank * slice_elements
+    counts = Vector{Int}(undef, nprocs)
+    displs = Vector{Int}(undef, nprocs)
+    for r in 1:nprocs
+        counts[r] = count_per_rank
+        displs[r] = (r - 1) * count_per_rank
+    end
+
+    # Use the GPU pack kernel with other_dim as the dimension being redistributed
+    gpu_pack_for_transpose!(send_buf, data, counts, displs, other_dim, nprocs)
+    return send_buf
+end
+
+# ============================================================================
 # GPU FFT in dimension
 # ============================================================================
 
