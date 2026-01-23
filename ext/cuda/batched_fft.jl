@@ -181,23 +181,29 @@ internal stream management (update_stream) so the plan correctly tracks
 which stream it's executing on.
 """
 function gpu_fft_async!(output::CuArray, input::CuArray, plan::GPUFFTPlan; stream=nothing, synchronize::Bool=false)
-    s = stream !== nothing ? stream : get_compute_stream()
+    # Derive device from input array to ensure stream matches plan/data device
+    input_device = CUDA.device(input)
+    device_id = CUDA.deviceid(input_device)
+    s = stream !== nothing ? stream : get_compute_stream(; device_id=device_id)
 
     if s !== nothing
+        # Ensure we're on the correct device for the FFT plan
+        prev_device = CUDA.device()
+        CUDA.device!(input_device)
         # Use stream context - this properly sets the task-local stream
         # so CUFFT's update_stream() will detect it and set the plan's stream
         CUDA.stream!(s) do
             mul!(output, plan.plan, input)
         end
+        if synchronize
+            CUDA.synchronize(s)
+        end
+        CUDA.device!(prev_device)
     else
         # No stream specified, use default stream
         mul!(output, plan.plan, input)
     end
 
-    # Optionally synchronize the stream
-    if synchronize && s !== nothing
-        CUDA.synchronize(s)
-    end
     return output
 end
 
@@ -212,23 +218,29 @@ internal stream management (update_stream) so the plan correctly tracks
 which stream it's executing on.
 """
 function gpu_ifft_async!(output::CuArray, input::CuArray, plan::GPUFFTPlan; stream=nothing, synchronize::Bool=false)
-    s = stream !== nothing ? stream : get_compute_stream()
+    # Derive device from input array to ensure stream matches plan/data device
+    input_device = CUDA.device(input)
+    device_id = CUDA.deviceid(input_device)
+    s = stream !== nothing ? stream : get_compute_stream(; device_id=device_id)
 
     if s !== nothing
+        # Ensure we're on the correct device for the FFT plan
+        prev_device = CUDA.device()
+        CUDA.device!(input_device)
         # Use stream context - this properly sets the task-local stream
         # so CUFFT's update_stream() will detect it and set the plan's stream
         CUDA.stream!(s) do
             mul!(output, plan.iplan, input)
         end
+        if synchronize
+            CUDA.synchronize(s)
+        end
+        CUDA.device!(prev_device)
     else
         # No stream specified, use default stream
         mul!(output, plan.iplan, input)
     end
 
-    # Optionally synchronize the stream
-    if synchronize && s !== nothing
-        CUDA.synchronize(s)
-    end
     return output
 end
 

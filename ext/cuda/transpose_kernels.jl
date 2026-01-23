@@ -364,6 +364,11 @@ function gpu_pack_for_transpose!(buffer::CuArray, data::CuArray,
                                  dim::Int, nranks::Int)
     ndims_data = ndims(data)
 
+    # Ensure we're on the device where data lives for allocations, kernel launch, and sync
+    data_device = CUDA.device(data)
+    prev_device = CUDA.device()
+    CUDA.device!(data_device)
+
     if ndims_data == 3
         Nx, Ny, Nz = size(data)
         n_elements = Nx * Ny * Nz
@@ -419,6 +424,7 @@ function gpu_pack_for_transpose!(buffer::CuArray, data::CuArray,
     end
 
     CUDA.synchronize()
+    CUDA.device!(prev_device)
     return buffer
 end
 
@@ -431,6 +437,11 @@ function gpu_unpack_from_transpose!(data::CuArray, buffer::CuArray,
                                     counts::Vector{Int}, displs::Vector{Int},
                                     dim::Int, nranks::Int)
     ndims_data = ndims(data)
+
+    # Ensure we're on the device where data lives for allocations, kernel launch, and sync
+    data_device = CUDA.device(data)
+    prev_device = CUDA.device()
+    CUDA.device!(data_device)
 
     if ndims_data == 3
         Nx, Ny, Nz = size(data)
@@ -486,6 +497,7 @@ function gpu_unpack_from_transpose!(data::CuArray, buffer::CuArray,
     end
 
     CUDA.synchronize()
+    CUDA.device!(prev_device)
     return data
 end
 

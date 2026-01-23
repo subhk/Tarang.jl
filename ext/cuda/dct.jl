@@ -53,11 +53,15 @@ function plan_gpu_dct(arch::GPU{CuDevice}, n::Int, T::Type, axis::Int)
     # Backward: exp(i*π*k/(2N)) for k = 0..N-1
     twiddle_backward = CuArray(complex_T[exp(complex_T(im * π * k / (2 * n))) for k in 0:n-1])
 
-    # Scaling factors following Tarang FastCosineTransform convention
-    forward_scale_zero = real_T(1.0 / n / 2.0)   # DC component
-    forward_scale_pos = real_T(1.0 / n)          # AC components
-    backward_scale_zero = real_T(1.0)            # DC component
-    backward_scale_pos = real_T(0.5)             # AC components
+    # Scaling factors following Tarang FastCosineTransform convention.
+    # Forward: DC gets 1/(2N), AC gets 1/N.
+    # Backward: DCT-III formula has an explicit factor of 2 on AC terms (see kernels),
+    # so backward_scale_pos=0.5 cancels it, giving effective weight 1.0 on AC terms.
+    # This makes backward(forward(x)) == x (the pair forms an exact inverse).
+    forward_scale_zero = real_T(1.0 / n / 2.0)   # DC component: 1/(2N)
+    forward_scale_pos = real_T(1.0 / n)          # AC components: 1/N
+    backward_scale_zero = real_T(1.0)            # DC component: 1.0
+    backward_scale_pos = real_T(0.5)             # AC components: 0.5 (×2 in kernel = 1.0)
 
     # Work array for 2N-point FFT
     work_complex = CUDA.zeros(complex_T, 2 * n)
@@ -311,7 +315,8 @@ function plan_gpu_dct_dim(arch::GPU{CuDevice}, full_size::Tuple, T::Type, dim::I
     twiddle_forward = CuArray(complex_T[exp(complex_T(-im * π * k / (2 * n))) for k in 0:n-1])
     twiddle_backward = CuArray(complex_T[exp(complex_T(im * π * k / (2 * n))) for k in 0:n-1])
 
-    # Scaling factors (Tarang convention)
+    # Scaling factors (Tarang convention, see plan_gpu_dct for detailed explanation).
+    # backward_scale_pos=0.5 cancels the ×2 in the DCT-III kernel formula.
     forward_scale_zero = real_T(1.0 / n / 2.0)
     forward_scale_pos = real_T(1.0 / n)
     backward_scale_zero = real_T(1.0)
@@ -331,9 +336,10 @@ plan_gpu_dct_dim(arch::GPU, full_size::Tuple, T::Type, dim::Int) =
 """
 DCT forward kernel for 2D arrays along dimension 2 (columns).
 Each thread handles one column.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
 """
 @kernel function dct_forward_2d_dim2_kernel!(output, @Const(input), @Const(twiddle),
-                                              scale_zero, scale_pos, nx, ny)
+                                              scale_zero, scale_pos, pi_val, nx, ny)
     i = @index(Global)  # Column index
     if i <= nx
         # Process column i: apply DCT along dimension 2
@@ -342,7 +348,7 @@ Each thread handles one column.
             sum_val = zero(eltype(output))
             for j in 1:ny
                 # DCT-II: cos(π * (k-1) * (2*(j-1) + 1) / (2*ny))
-                angle = π * (k - 1) * (2 * (j - 1) + 1) / (2 * ny)
+                angle = pi_val * (k - 1) * (2 * (j - 1) + 1) / (2 * ny)
                 sum_val += input[i, j] * cos(angle)
             end
             # Apply scaling
@@ -358,16 +364,17 @@ end
 """
 DCT forward kernel for 2D arrays along dimension 1 (rows).
 Each thread handles one row.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
 """
 @kernel function dct_forward_2d_dim1_kernel!(output, @Const(input), @Const(twiddle),
-                                              scale_zero, scale_pos, nx, ny)
+                                              scale_zero, scale_pos, pi_val, nx, ny)
     j = @index(Global)  # Row index
     if j <= ny
         # Process row j: apply DCT along dimension 1
         @inbounds for k in 1:nx
             sum_val = zero(eltype(output))
             for i in 1:nx
-                angle = π * (k - 1) * (2 * (i - 1) + 1) / (2 * nx)
+                angle = pi_val * (k - 1) * (2 * (i - 1) + 1) / (2 * nx)
                 sum_val += input[i, j] * cos(angle)
             end
             if k == 1
@@ -381,17 +388,23 @@ end
 
 """
 DCT backward kernel for 2D arrays along dimension 2 (columns).
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
+
+Scaling convention (Tarang): `scale_zero=1.0` for DC, `scale_pos=0.5` for AC.
+The factor of 2 in `scale_pos * 2` comes from the DCT-III formula and cancels with
+scale_pos=0.5, yielding an effective weight of 1.0 for AC terms. This ensures the
+backward transform is the exact inverse of the forward (which uses 1/(2N) for DC, 1/N for AC).
 """
 @kernel function dct_backward_2d_dim2_kernel!(output, @Const(input), @Const(twiddle),
-                                               scale_zero, scale_pos, nx, ny)
+                                               scale_zero, scale_pos, pi_val, nx, ny)
     i = @index(Global)  # Column index
     if i <= nx
         # Process column i: apply DCT-III (inverse) along dimension 2
         @inbounds for j in 1:ny
-            # DCT-III: x_j = c_0 + 2*Σ_{k=1}^{N-1} c_k * cos(π*k*(2j+1)/(2N))
+            # DCT-III: x_j = c_0*scale_zero + Σ_{k=1}^{N-1} c_k * (2*scale_pos) * cos(...)
             sum_val = input[i, 1] * scale_zero  # DC component
             for k in 2:ny
-                angle = π * (k - 1) * (2 * (j - 1) + 1) / (2 * ny)
+                angle = pi_val * (k - 1) * (2 * (j - 1) + 1) / (2 * ny)
                 sum_val += input[i, k] * scale_pos * 2 * cos(angle)
             end
             output[i, j] = sum_val
@@ -401,15 +414,17 @@ end
 
 """
 DCT backward kernel for 2D arrays along dimension 1 (rows).
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
+See `dct_backward_2d_dim2_kernel!` for scaling convention explanation.
 """
 @kernel function dct_backward_2d_dim1_kernel!(output, @Const(input), @Const(twiddle),
-                                               scale_zero, scale_pos, nx, ny)
+                                               scale_zero, scale_pos, pi_val, nx, ny)
     j = @index(Global)  # Row index
     if j <= ny
         @inbounds for i in 1:nx
             sum_val = input[1, j] * scale_zero
             for k in 2:nx
-                angle = π * (k - 1) * (2 * (i - 1) + 1) / (2 * nx)
+                angle = pi_val * (k - 1) * (2 * (i - 1) + 1) / (2 * nx)
                 sum_val += input[k, j] * scale_pos * 2 * cos(angle)
             end
             output[i, j] = sum_val
@@ -426,16 +441,17 @@ function gpu_dct_dim!(output::CuArray{T, 2}, input::CuArray{T, 2},
                       plan::GPUDCTPlanDim, ::Val{:forward}) where T
     nx, ny = size(input)
     arch = Tarang.architecture(input)
+    pi_val = T(π)
 
     if plan.transform_dim == 1
         # DCT along rows (dimension 1)
         launch!(arch, dct_forward_2d_dim1_kernel!, output, input, plan.twiddle_forward,
-                plan.forward_scale_zero, plan.forward_scale_pos, nx, ny;
+                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny;
                 ndrange=ny)
     else
         # DCT along columns (dimension 2)
         launch!(arch, dct_forward_2d_dim2_kernel!, output, input, plan.twiddle_forward,
-                plan.forward_scale_zero, plan.forward_scale_pos, nx, ny;
+                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny;
                 ndrange=nx)
     end
     return output
@@ -450,14 +466,15 @@ function gpu_dct_dim!(output::CuArray{T, 2}, input::CuArray{T, 2},
                       plan::GPUDCTPlanDim, ::Val{:backward}) where T
     nx, ny = size(input)
     arch = Tarang.architecture(input)
+    pi_val = T(π)
 
     if plan.transform_dim == 1
         launch!(arch, dct_backward_2d_dim1_kernel!, output, input, plan.twiddle_backward,
-                plan.backward_scale_zero, plan.backward_scale_pos, nx, ny;
+                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny;
                 ndrange=ny)
     else
         launch!(arch, dct_backward_2d_dim2_kernel!, output, input, plan.twiddle_backward,
-                plan.backward_scale_zero, plan.backward_scale_pos, nx, ny;
+                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny;
                 ndrange=nx)
     end
     return output
@@ -470,9 +487,10 @@ end
 """
 DCT forward kernel for 3D arrays along dimension 1.
 Each thread handles one (j, k) pair - a "fiber" along dimension 1.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
 """
 @kernel function dct_forward_3d_dim1_kernel!(output, @Const(input),
-                                              scale_zero, scale_pos, nx, ny, nz)
+                                              scale_zero, scale_pos, pi_val, nx, ny, nz)
     idx = @index(Global)
     # Map linear index to (j, k) pair
     j = ((idx - 1) % ny) + 1
@@ -482,7 +500,7 @@ Each thread handles one (j, k) pair - a "fiber" along dimension 1.
         @inbounds for m in 1:nx  # output index along dim 1
             sum_val = zero(eltype(output))
             for i in 1:nx  # input index along dim 1
-                angle = π * (m - 1) * (2 * (i - 1) + 1) / (2 * nx)
+                angle = pi_val * (m - 1) * (2 * (i - 1) + 1) / (2 * nx)
                 sum_val += input[i, j, k] * cos(angle)
             end
             if m == 1
@@ -497,9 +515,10 @@ end
 """
 DCT forward kernel for 3D arrays along dimension 2.
 Each thread handles one (i, k) pair - a "fiber" along dimension 2.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
 """
 @kernel function dct_forward_3d_dim2_kernel!(output, @Const(input),
-                                              scale_zero, scale_pos, nx, ny, nz)
+                                              scale_zero, scale_pos, pi_val, nx, ny, nz)
     idx = @index(Global)
     i = ((idx - 1) % nx) + 1
     k = ((idx - 1) ÷ nx) + 1
@@ -508,7 +527,7 @@ Each thread handles one (i, k) pair - a "fiber" along dimension 2.
         @inbounds for m in 1:ny  # output index along dim 2
             sum_val = zero(eltype(output))
             for j in 1:ny  # input index along dim 2
-                angle = π * (m - 1) * (2 * (j - 1) + 1) / (2 * ny)
+                angle = pi_val * (m - 1) * (2 * (j - 1) + 1) / (2 * ny)
                 sum_val += input[i, j, k] * cos(angle)
             end
             if m == 1
@@ -523,9 +542,10 @@ end
 """
 DCT forward kernel for 3D arrays along dimension 3.
 Each thread handles one (i, j) pair - a "fiber" along dimension 3.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
 """
 @kernel function dct_forward_3d_dim3_kernel!(output, @Const(input),
-                                              scale_zero, scale_pos, nx, ny, nz)
+                                              scale_zero, scale_pos, pi_val, nx, ny, nz)
     idx = @index(Global)
     i = ((idx - 1) % nx) + 1
     j = ((idx - 1) ÷ nx) + 1
@@ -534,7 +554,7 @@ Each thread handles one (i, j) pair - a "fiber" along dimension 3.
         @inbounds for m in 1:nz  # output index along dim 3
             sum_val = zero(eltype(output))
             for k in 1:nz  # input index along dim 3
-                angle = π * (m - 1) * (2 * (k - 1) + 1) / (2 * nz)
+                angle = pi_val * (m - 1) * (2 * (k - 1) + 1) / (2 * nz)
                 sum_val += input[i, j, k] * cos(angle)
             end
             if m == 1
@@ -548,9 +568,11 @@ end
 
 """
 DCT backward kernel for 3D arrays along dimension 1.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
+See `dct_backward_2d_dim2_kernel!` for scaling convention explanation.
 """
 @kernel function dct_backward_3d_dim1_kernel!(output, @Const(input),
-                                               scale_zero, scale_pos, nx, ny, nz)
+                                               scale_zero, scale_pos, pi_val, nx, ny, nz)
     idx = @index(Global)
     j = ((idx - 1) % ny) + 1
     k = ((idx - 1) ÷ ny) + 1
@@ -559,7 +581,7 @@ DCT backward kernel for 3D arrays along dimension 1.
         @inbounds for i in 1:nx  # output index along dim 1
             sum_val = input[1, j, k] * scale_zero
             for m in 2:nx  # input index along dim 1
-                angle = π * (m - 1) * (2 * (i - 1) + 1) / (2 * nx)
+                angle = pi_val * (m - 1) * (2 * (i - 1) + 1) / (2 * nx)
                 sum_val += input[m, j, k] * scale_pos * 2 * cos(angle)
             end
             output[i, j, k] = sum_val
@@ -569,9 +591,11 @@ end
 
 """
 DCT backward kernel for 3D arrays along dimension 2.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
+See `dct_backward_2d_dim2_kernel!` for scaling convention explanation.
 """
 @kernel function dct_backward_3d_dim2_kernel!(output, @Const(input),
-                                               scale_zero, scale_pos, nx, ny, nz)
+                                               scale_zero, scale_pos, pi_val, nx, ny, nz)
     idx = @index(Global)
     i = ((idx - 1) % nx) + 1
     k = ((idx - 1) ÷ nx) + 1
@@ -580,7 +604,7 @@ DCT backward kernel for 3D arrays along dimension 2.
         @inbounds for j in 1:ny  # output index along dim 2
             sum_val = input[i, 1, k] * scale_zero
             for m in 2:ny  # input index along dim 2
-                angle = π * (m - 1) * (2 * (j - 1) + 1) / (2 * ny)
+                angle = pi_val * (m - 1) * (2 * (j - 1) + 1) / (2 * ny)
                 sum_val += input[i, m, k] * scale_pos * 2 * cos(angle)
             end
             output[i, j, k] = sum_val
@@ -590,9 +614,11 @@ end
 
 """
 DCT backward kernel for 3D arrays along dimension 3.
+`pi_val` must be passed as `T(π)` to avoid Float64 promotion on GPU.
+See `dct_backward_2d_dim2_kernel!` for scaling convention explanation.
 """
 @kernel function dct_backward_3d_dim3_kernel!(output, @Const(input),
-                                               scale_zero, scale_pos, nx, ny, nz)
+                                               scale_zero, scale_pos, pi_val, nx, ny, nz)
     idx = @index(Global)
     i = ((idx - 1) % nx) + 1
     j = ((idx - 1) ÷ nx) + 1
@@ -601,7 +627,7 @@ DCT backward kernel for 3D arrays along dimension 3.
         @inbounds for k in 1:nz  # output index along dim 3
             sum_val = input[i, j, 1] * scale_zero
             for m in 2:nz  # input index along dim 3
-                angle = π * (m - 1) * (2 * (k - 1) + 1) / (2 * nz)
+                angle = pi_val * (m - 1) * (2 * (k - 1) + 1) / (2 * nz)
                 sum_val += input[i, j, m] * scale_pos * 2 * cos(angle)
             end
             output[i, j, k] = sum_val
@@ -618,24 +644,25 @@ function gpu_dct_dim!(output::CuArray{T, 3}, input::CuArray{T, 3},
                       plan::GPUDCTPlanDim, ::Val{:forward}) where T
     nx, ny, nz = size(input)
     arch = Tarang.architecture(input)
+    pi_val = T(π)
 
     if plan.transform_dim == 1
         # DCT along dimension 1: each thread handles one (j,k) fiber
         ndrange = ny * nz
         launch!(arch, dct_forward_3d_dim1_kernel!, output, input,
-                plan.forward_scale_zero, plan.forward_scale_pos, nx, ny, nz;
+                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny, nz;
                 ndrange=ndrange)
     elseif plan.transform_dim == 2
         # DCT along dimension 2: each thread handles one (i,k) fiber
         ndrange = nx * nz
         launch!(arch, dct_forward_3d_dim2_kernel!, output, input,
-                plan.forward_scale_zero, plan.forward_scale_pos, nx, ny, nz;
+                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny, nz;
                 ndrange=ndrange)
     else
         # DCT along dimension 3: each thread handles one (i,j) fiber
         ndrange = nx * ny
         launch!(arch, dct_forward_3d_dim3_kernel!, output, input,
-                plan.forward_scale_zero, plan.forward_scale_pos, nx, ny, nz;
+                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny, nz;
                 ndrange=ndrange)
     end
     return output
@@ -650,21 +677,22 @@ function gpu_dct_dim!(output::CuArray{T, 3}, input::CuArray{T, 3},
                       plan::GPUDCTPlanDim, ::Val{:backward}) where T
     nx, ny, nz = size(input)
     arch = Tarang.architecture(input)
+    pi_val = T(π)
 
     if plan.transform_dim == 1
         ndrange = ny * nz
         launch!(arch, dct_backward_3d_dim1_kernel!, output, input,
-                plan.backward_scale_zero, plan.backward_scale_pos, nx, ny, nz;
+                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny, nz;
                 ndrange=ndrange)
     elseif plan.transform_dim == 2
         ndrange = nx * nz
         launch!(arch, dct_backward_3d_dim2_kernel!, output, input,
-                plan.backward_scale_zero, plan.backward_scale_pos, nx, ny, nz;
+                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny, nz;
                 ndrange=ndrange)
     else
         ndrange = nx * ny
         launch!(arch, dct_backward_3d_dim3_kernel!, output, input,
-                plan.backward_scale_zero, plan.backward_scale_pos, nx, ny, nz;
+                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny, nz;
                 ndrange=ndrange)
     end
     return output

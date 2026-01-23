@@ -41,7 +41,12 @@ Uses current device by default; specify device_id for multi-GPU.
 """
 function pool_allocate(T::Type, dims...; device_id::Int=CUDA.deviceid())
     if !GPU_CONFIG.use_memory_pool
-        return CUDA.zeros(T, dims...)
+        # Ensure allocation on correct device
+        prev_device = CUDA.device()
+        CUDA.device!(CuDevice(device_id))
+        arr = CUDA.zeros(T, dims...)
+        CUDA.device!(prev_device)
+        return arr
     end
 
     total_size = prod(dims)
@@ -53,10 +58,14 @@ function pool_allocate(T::Type, dims...; device_id::Int=CUDA.deviceid())
 
         # Safety check: ensure array is on expected device
         if CUDA.deviceid(CUDA.device(arr)) != device_id
-            # Wrong device - don't use, allocate new
+            # Wrong device - don't use, allocate new on correct device
             push!(GPU_MEMORY_POOL.pools[key], arr)  # Return to pool
             GPU_MEMORY_POOL.misses += 1
-            return CUDA.zeros(T, dims...)
+            prev_device = CUDA.device()
+            CUDA.device!(CuDevice(device_id))
+            new_arr = CUDA.zeros(T, dims...)
+            CUDA.device!(prev_device)
+            return new_arr
         end
 
         GPU_MEMORY_POOL.hits += 1
@@ -69,9 +78,13 @@ function pool_allocate(T::Type, dims...; device_id::Int=CUDA.deviceid())
         fill!(arr, zero(T))
         return arr
     else
-        # Allocate new
+        # Allocate new on correct device
         GPU_MEMORY_POOL.misses += 1
-        return CUDA.zeros(T, dims...)
+        prev_device = CUDA.device()
+        CUDA.device!(CuDevice(device_id))
+        arr = CUDA.zeros(T, dims...)
+        CUDA.device!(prev_device)
+        return arr
     end
 end
 
@@ -257,17 +270,20 @@ For best performance, use pinned (page-locked) memory for `src` via `get_pinned_
 """
 function async_copy_to_gpu!(dst::CuArray{T}, src::Array{T}; stream=nothing, synchronize::Bool=false) where T
     # Use the device of the destination array for stream selection
-    device_id = CUDA.deviceid(CUDA.device(dst))
+    dst_device = CUDA.device(dst)
+    device_id = CUDA.deviceid(dst_device)
     s = stream !== nothing ? stream : get_transfer_stream(; device_id=device_id)
 
     if s !== nothing
-        CUDA.device!(CUDA.device(dst))
+        prev_device = CUDA.device()
+        CUDA.device!(dst_device)
         CUDA.stream!(s) do
             copyto!(dst, src)
         end
         if synchronize
             CUDA.synchronize(s)
         end
+        CUDA.device!(prev_device)
     else
         copyto!(dst, src)
     end
@@ -284,17 +300,20 @@ For best performance, use pinned (page-locked) memory for `dst` via `get_pinned_
 """
 function async_copy_to_cpu!(dst::Array{T}, src::CuArray{T}; stream=nothing, synchronize::Bool=false) where T
     # Use the device of the source array for stream selection
-    device_id = CUDA.deviceid(CUDA.device(src))
+    src_device = CUDA.device(src)
+    device_id = CUDA.deviceid(src_device)
     s = stream !== nothing ? stream : get_transfer_stream(; device_id=device_id)
 
     if s !== nothing
-        CUDA.device!(CUDA.device(src))
+        prev_device = CUDA.device()
+        CUDA.device!(src_device)
         CUDA.stream!(s) do
             copyto!(dst, src)
         end
         if synchronize
             CUDA.synchronize(s)
         end
+        CUDA.device!(prev_device)
     else
         copyto!(dst, src)
     end

@@ -84,8 +84,11 @@ function get_compute_stream(; device_id::Int=CUDA.deviceid())
         return CUDA.stream()
     end
     if !haskey(GPU_CONFIG.compute_streams, device_id)
-        # Create stream on-demand for this device
+        # Create stream on the target device (streams are device-specific in CUDA)
+        prev_device = CUDA.device()
+        CUDA.device!(CuDevice(device_id))
         GPU_CONFIG.compute_streams[device_id] = CuStream()
+        CUDA.device!(prev_device)
     end
     return GPU_CONFIG.compute_streams[device_id]
 end
@@ -101,8 +104,11 @@ function get_transfer_stream(; device_id::Int=CUDA.deviceid())
         return CUDA.stream()
     end
     if !haskey(GPU_CONFIG.transfer_streams, device_id)
-        # Create stream on-demand for this device
+        # Create stream on the target device (streams are device-specific in CUDA)
+        prev_device = CUDA.device()
+        CUDA.device!(CuDevice(device_id))
         GPU_CONFIG.transfer_streams[device_id] = CuStream()
+        CUDA.device!(prev_device)
     end
     return GPU_CONFIG.transfer_streams[device_id]
 end
