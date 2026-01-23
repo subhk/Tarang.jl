@@ -290,7 +290,17 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             if existing_grid isa CuArray
                 local_grid_shape = size(existing_grid)
             else
-                local_grid_shape = (2 * (local_coeff_shape[1] - 1), local_coeff_shape[2:end]...)
+                # Use basis metadata for true grid size instead of assuming R2C halving.
+                # bases[1].meta.size is the global grid resolution for dim 1 (== local for
+                # slab decomposition along last dim). Compare with coeff shape to detect R2C vs C2C.
+                grid_n1 = bases[1].meta.size
+                if local_coeff_shape[1] == div(grid_n1, 2) + 1
+                    # R2C was used: coeff dim 1 is halved
+                    local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
+                else
+                    # C2C was used: coeff shape == grid shape
+                    local_grid_shape = local_coeff_shape
+                end
             end
 
             # Determine if R2C or C2C was used: if coeff dim 1 == grid dim 1, C2C was used

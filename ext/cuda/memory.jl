@@ -71,11 +71,17 @@ function pool_allocate(T::Type, dims...; device_id::Int=CUDA.deviceid())
         GPU_MEMORY_POOL.hits += 1
         GPU_MEMORY_POOL.total_pooled_bytes -= sizeof(T) * total_size
 
+        # Switch to the array's device for reshape/fill! in multi-GPU setups
+        prev_device = CUDA.device()
+        CUDA.device!(CuDevice(device_id))
+
         # Reshape if needed and zero out
         if size(arr) != dims
             arr = reshape(arr, dims...)
         end
         fill!(arr, zero(T))
+
+        CUDA.device!(prev_device)
         return arr
     else
         # Allocate new on correct device
@@ -236,6 +242,13 @@ function release_pinned_buffer!(arr::Array{T}, shape::Tuple) where T
     # Remove from in-use tracking; retrieve the backing buffer
     tracked = pop!(PINNED_BUFFER_POOL.in_use, ptr_addr, nothing)
 
+    if tracked === nothing
+        # Not allocated by get_pinned_buffer, or already released (double-release).
+        # Do NOT free — the pointer may be a regular Array or already-freed memory.
+        @warn "release_pinned_buffer! called on untracked pointer (not from get_pinned_buffer, or double-release)" maxlog=1
+        return
+    end
+
     if !haskey(PINNED_BUFFER_POOL.available, key)
         PINNED_BUFFER_POOL.available[key] = Vector{Vector{UInt8}}()
     end
@@ -245,14 +258,11 @@ function release_pinned_buffer!(arr::Array{T}, shape::Tuple) where T
                PINNED_BUFFER_POOL.total_pooled_bytes + total_bytes <= PINNED_BUFFER_POOL.max_total_bytes
 
     if can_pool
-        # Use the tracked buffer if available (preserves the reference), otherwise rewrap
-        buf = tracked !== nothing ? tracked[1] :
-              unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pointer(arr)), total_bytes)
-        push!(PINNED_BUFFER_POOL.available[key], buf)
+        push!(PINNED_BUFFER_POOL.available[key], tracked[1])
         PINNED_BUFFER_POOL.total_pooled_bytes += total_bytes
     else
         # Explicitly free the pinned memory to prevent leaks
-        CUDA.Mem.free(CUDA.Mem.Host, pointer(arr), total_bytes)
+        CUDA.Mem.free(CUDA.Mem.Host, pointer(tracked[1]), total_bytes)
     end
 end
 
