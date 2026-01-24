@@ -1,14 +1,17 @@
 using Documenter
 
+# Set up documentation generation
+println("Building Tarang.jl documentation...")
+
 # Try to load Tarang, but don't fail if it errors
 tarang_loaded = false
 try
     @eval using Tarang
     global tarang_loaded = true
-    @info "Successfully loaded Tarang from: $(pathof(Tarang))"
+    println("  Tarang.jl loaded from: $(pathof(Tarang))")
 catch e
-    @warn "Failed to load Tarang module: $e"
-    @warn "Building docs without module - API docs will be incomplete"
+    println("  Failed to load Tarang module: $e")
+    println("  Building docs without module - API docs will be incomplete")
 end
 
 # Set up documentation metadata only if Tarang loaded
@@ -16,128 +19,124 @@ if tarang_loaded
     DocMeta.setdocmeta!(Tarang, :DocTestSetup, :(using Tarang); recursive=true)
 end
 
-makedocs(
-    sitename = "Tarang.jl",
-    format = Documenter.HTML(
-        prettyurls = get(ENV, "CI", nothing) == "true",
-        canonical = "https://subhk.github.io/Tarang.jl",
-        assets = ["assets/custom.css"],
-        mathengine = MathJax3(),
-        collapselevel = 2,
-        sidebar_sitename = true,
-        footer = "Tarang.jl -- A spectral PDE solver for Julia. [Source](https://github.com/subhk/Tarang.jl)",
-    ),
-    modules = tarang_loaded ? [Tarang] : Module[],
-    # Dedalus-inspired navigation structure
-    pages = [
-        "Home" => "index.md",
+#####
+##### Documentation configuration
+#####
 
-        # Section 1: Installing Tarang (like Dedalus)
-        "Installing Tarang" => [
-            "getting_started/installation.md",
-            "getting_started/first_steps.md",
-            "getting_started/running_with_mpi.md",
-            "pages/configuration.md",
-        ],
+# HTML format configuration
+format = Documenter.HTML(
+    prettyurls = get(ENV, "CI", "false") == "true",
+    canonical = "https://subhk.github.io/Tarang.jl/stable",
+    assets = [
+        "assets/custom.css",
+    ],
+    mathengine = MathJax3(),
+    collapselevel = 2,
+    sidebar_sitename = true,
+    edit_link = "main",
+    repolink = "https://github.com/subhk/Tarang.jl",
+    size_threshold = 200 * 1024^2,  # 200 MiB
+    size_threshold_warn = 10 * 1024^2   # 10 MiB warning
+)
 
-        # Section 2: Tutorials & Examples (like Dedalus)
-        "Tutorials & Examples" => [
-            "Tutorial Notebooks" => [
-                "tutorials/overview.md",
-                "tutorials/ivp_2d_rbc.md",
-                "tutorials/ivp_3d_turbulence.md",
-                "tutorials/boundary_conditions.md",
-                "tutorials/analysis_and_output.md",
-                "tutorials/eigenvalue_problems.md",
-                "tutorials/surface_dynamics.md",
-                "tutorials/rotating_shallow_water.md",
-            ],
-            "Example Scripts" => [
-                "examples/gallery.md",
-                "examples/fluid_dynamics.md",
-                "examples/heat_transfer.md",
-                "examples/eigenvalue_analysis.md",
-            ],
-            "Jupyter Notebooks" => [
-                "notebooks/rayleigh_benard.md",
-                "notebooks/channel_flow.md",
-                "notebooks/taylor_green.md",
-            ],
-        ],
-
-        # Section 3: User Guide & How-To's (like Dedalus)
-        "User Guide" => [
-            "Core Concepts" => [
-                "pages/coordinates.md",
-                "pages/bases.md",
-                "pages/domains.md",
-                "pages/fields.md",
-            ],
-            "Problem Setup" => [
-                "pages/operators.md",
-                "pages/problems.md",
-                "pages/solvers.md",
-                "pages/timesteppers.md",
-            ],
-            "Physics & Modeling" => [
-                "pages/stochastic_forcing.md",
-                "pages/temporal_filters.md",
-                "pages/les_models.md",
-                "pages/gql_approximation.md",
-            ],
-            "Performance & Parallelism" => [
-                "pages/gpu_computing.md",
-                "pages/parallelism.md",
-                "pages/optimization.md",
-            ],
-            "Analysis & Output" => [
-                "pages/analysis.md",
-            ],
-            "Advanced Topics" => [
-                "pages/tau_method.md",
-                "pages/custom_operators.md",
-            ],
-        ],
-
-        # Section 4: API Reference (like Dedalus)
-        "API Reference" => [
-            "Core" => [
-                "api/coordinates.md",
-                "api/bases.md",
-                "api/domains.md",
-                "api/fields.md",
-            ],
-            "Operators & Problems" => [
-                "api/operators.md",
-                "api/problems.md",
-                "api/solvers.md",
-                "api/timesteppers.md",
-            ],
-            "GPU & Performance" => [
-                "api/gpu.md",
-            ],
-            "Extras" => [
-                "api/stochastic_forcing.md",
-                "api/les_models.md",
-                "api/analysis.md",
-                "api/io.md",
-            ],
-        ],
-
-        # Development section
-        "Development" => [
-            "pages/contributing.md",
-            "pages/architecture.md",
-            "pages/testing.md",
+# Documentation pages structure
+pages = Any[
+    "Home" => "index.md",
+    "Getting Started" => Any[
+        "Installation" => "getting_started/installation.md",
+        "First Steps" => "getting_started/first_steps.md",
+        "Running with MPI" => "getting_started/running_with_mpi.md",
+        "Configuration" => "pages/configuration.md",
+    ],
+    "Tutorials & Examples" => Any[
+        "Overview" => "tutorials/overview.md",
+        "2D Rayleigh-Benard" => "tutorials/ivp_2d_rbc.md",
+        "3D Turbulence" => "tutorials/ivp_3d_turbulence.md",
+        "Boundary Conditions" => "tutorials/boundary_conditions.md",
+        "Analysis & Output" => "tutorials/analysis_and_output.md",
+        "Eigenvalue Problems" => "tutorials/eigenvalue_problems.md",
+        "Surface Dynamics" => "tutorials/surface_dynamics.md",
+        "Rotating Shallow Water" => "tutorials/rotating_shallow_water.md",
+        "Examples Gallery" => "examples/gallery.md",
+    ],
+    "User Guide" => Any[
+        "Coordinates" => "pages/coordinates.md",
+        "Bases" => "pages/bases.md",
+        "Domains" => "pages/domains.md",
+        "Fields" => "pages/fields.md",
+        "Operators" => "pages/operators.md",
+        "Problems" => "pages/problems.md",
+        "Solvers" => "pages/solvers.md",
+        "Time Steppers" => "pages/timesteppers.md",
+        "GPU Computing" => "pages/gpu_computing.md",
+        "Parallelism" => "pages/parallelism.md",
+        "Stochastic Forcing" => "pages/stochastic_forcing.md",
+        "LES Models" => "pages/les_models.md",
+        "GQL Approximation" => "pages/gql_approximation.md",
+        "Tau Method" => "pages/tau_method.md",
+    ],
+    "Reference" => Any[
+        "API Reference" => Any[
+            "Coordinates" => "api/coordinates.md",
+            "Bases" => "api/bases.md",
+            "Domains" => "api/domains.md",
+            "Fields" => "api/fields.md",
+            "Operators" => "api/operators.md",
+            "Problems" => "api/problems.md",
+            "Solvers" => "api/solvers.md",
+            "Time Steppers" => "api/timesteppers.md",
+            "GPU" => "api/gpu.md",
+            "Stochastic Forcing" => "api/stochastic_forcing.md",
+            "LES Models" => "api/les_models.md",
+            "Analysis" => "api/analysis.md",
+            "I/O" => "api/io.md",
         ],
     ],
-    repo = "https://github.com/subhk/Tarang.jl/blob/{commit}{path}#{line}",
+]
+
+#####
+##### Build documentation
+#####
+
+println("Generating documentation with Documenter.jl...")
+
+makedocs(;
+    modules = tarang_loaded ? [Tarang] : Module[],
     authors = "Subhajit Kar",
-    checkdocs = :none,  # Temporarily disabled until all docstrings are documented
+    repo = "https://github.com/subhk/Tarang.jl/blob/{commit}{path}#{line}",
+    sitename = "Tarang.jl",
+    format = format,
+    pages = pages,
+    clean = true,
+    doctest = tarang_loaded,
+    linkcheck = false,
+    checkdocs = :none,
+    warnonly = [:cross_references, :missing_docs, :docs_block],
+    draft = false
 )
 
-deploydocs(
-    repo = "github.com/subhk/Tarang.jl.git",
-    devbranch = "main",
-    push_preview = true,
-)
+#####
+##### Deploy documentation
+#####
+
+if get(ENV, "CI", "false") == "true"
+    println("Deploying documentation...")
+
+    deploydocs(;
+        repo = "github.com/subhk/Tarang.jl.git",
+        devbranch = "main",
+        target = "build",
+        deps = nothing,
+        make = nothing,
+        versions = ["stable" => "v^", "v#.#", "dev" => "dev"],
+        forcepush = false,
+        deploy_config = Documenter.GitHubActions(),
+        push_preview = true
+    )
+else
+    println("Skipping deployment (not running in CI)")
+    println("Documentation built successfully!")
+    println("Open docs/build/index.html to view locally")
+end
+
+println("Documentation build complete!")

@@ -1,59 +1,102 @@
 # Tarang.jl
 
 ```@raw html
-<div class="hero-section">
-  <img src="assets/logo_light.svg" alt="Tarang.jl" width="420" style="max-width: 90%;" />
-  <p class="hero-tagline">A high-performance spectral PDE solver for Julia with GPU acceleration and MPI parallelization.</p>
+<div style="background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%); color: white; padding: 2.5rem; border-radius: 16px; margin-bottom: 2rem; text-align: center;">
+    <h1 style="font-size: 2.5rem; margin: 0 0 0.5rem 0; color: white; border: none;">Tarang.jl</h1>
+    <p style="font-size: 1.25rem; margin: 0; opacity: 0.95;">A High-Performance Spectral PDE Solver for Julia</p>
+    <p style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">CPU | GPU | MPI Distributed | Symbolic Equations</p>
 </div>
 ```
 
+[![Build Status](https://github.com/subhk/Tarang.jl/workflows/CI/badge.svg)](https://github.com/subhk/Tarang.jl/actions)
+[![Documentation](https://img.shields.io/badge/docs-stable-blue.svg)](https://subhk.github.io/Tarang.jl/stable)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
+
+---
+
+## Features
+
 ```@raw html
-<div class="feature-grid">
-  <div class="feature-card">
-    <h3>Spectral Methods</h3>
-    <p>Fourier, Chebyshev, and Legendre bases with spectral accuracy and automatic differentiation.</p>
-  </div>
-  <div class="feature-card">
-    <h3>GPU Acceleration</h3>
-    <p>Native CUDA support with cuFFT, GPU kernels via KernelAbstractions.jl, and automatic dispatch.</p>
-  </div>
-  <div class="feature-card">
-    <h3>MPI Parallelization</h3>
-    <p>Scalable pencil decomposition using PencilArrays.jl for distributed HPC simulations.</p>
-  </div>
-  <div class="feature-card">
-    <h3>Symbolic Equations</h3>
-    <p>Natural mathematical syntax for PDEs with automatic parsing and operator construction.</p>
-  </div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin: 2rem 0;">
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; transition: transform 0.2s, box-shadow 0.2s;">
+    <h3 style="color: #2563eb; margin-top: 0;">Spectral Methods</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Fourier, Chebyshev, and Legendre bases</li>
+        <li>Spectral accuracy for smooth solutions</li>
+        <li>Automatic differentiation operators</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #7c3aed; margin-top: 0;">GPU Acceleration</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Native CUDA support with cuFFT</li>
+        <li>KernelAbstractions.jl backend</li>
+        <li>Automatic CPU/GPU dispatch</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #059669; margin-top: 0;">MPI Parallelization</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>PencilArrays pencil decomposition</li>
+        <li>Scalable to thousands of cores</li>
+        <li>Efficient distributed FFTs</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #dc2626; margin-top: 0;">Symbolic Equations</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Natural mathematical syntax for PDEs</li>
+        <li>Automatic operator construction</li>
+        <li>Flexible boundary conditions</li>
+    </ul>
+</div>
+
 </div>
 ```
 
 ---
 
-## Getting Started
+## Quick Start
 
-Install Tarang.jl and run your first simulation in three steps:
+### Installation
 
 ```julia
-# 1. Install the package
 using Pkg
+
+# Basic installation
 Pkg.add(url="https://github.com/subhk/Tarang.jl")
 
-# 2. Set up a 2D convection problem
+# With GPU support
+Pkg.add(["CUDA", "KernelAbstractions"])
+
+# With MPI support
+Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
+```
+
+### Hello World: 2D Rayleigh-Benard Convection
+
+```julia
 using Tarang, MPI
 MPI.Init()
 
+# Set up coordinate system and parallel distribution
 coords = CartesianCoordinates("x", "z")
 dist = Distributor(coords, mesh=(2, 2))
 
+# Define spectral bases
 x_basis = RealFourier(coords["x"], size=256, bounds=(0.0, 4.0))
 z_basis = ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))
 
+# Create fields
 u = VectorField(dist, coords, "u", (x_basis, z_basis))
 T = ScalarField(dist, "T", (x_basis, z_basis))
 p = ScalarField(dist, "p", (x_basis, z_basis))
 
-# 3. Define equations and solve
+# Define equations and solve
 problem = IVP([u.components[1], u.components[2], p, T])
 add_equation!(problem, "dt(ux) - Pr*lap(ux) + dx(p) = -u@grad(ux) + Ra*Pr*T*ez")
 add_equation!(problem, "dt(uz) - Pr*lap(uz) + dz(p) = -u@grad(uz)")
@@ -63,14 +106,67 @@ add_equation!(problem, "dt(T) - lap(T) = -u@grad(T)")
 solver = InitialValueSolver(problem, RK222(), dt=1e-3)
 ```
 
-See the [Installation Guide](getting_started/installation.md) for detailed setup instructions,
-or jump to the [Tutorials](tutorials/overview.md) for worked examples.
+!!! tip "Pro Tip"
+    For large simulations, use GPU acceleration by setting `architecture=GPU()` in the Distributor for significant speedup on NVIDIA hardware.
 
 ---
 
-## Capabilities
+## GPU Example
 
-### Problem Types
+```julia
+using Tarang, CUDA
+
+coords = CartesianCoordinates("x", "y")
+dist = Distributor(coords; architecture=GPU(), dtype=Float32)
+
+xbasis = RealFourier(coords["x"], size=512, bounds=(0.0, 2pi))
+ybasis = RealFourier(coords["y"], size=512, bounds=(0.0, 2pi))
+
+field = ScalarField(dist, "u", (xbasis, ybasis))
+forward_transform!(field)   # Uses cuFFT automatically
+```
+
+---
+
+## Scientific Applications
+
+```@raw html
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+<div style="background: #eff6ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #2563eb;">
+    <strong style="color: #1e40af;">Fluid Dynamics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Navier-Stokes, Rayleigh-Benard convection, channel flow, jets
+    </p>
+</div>
+
+<div style="background: #fef3c7; border-radius: 8px; padding: 1rem; border-left: 4px solid #f59e0b;">
+    <strong style="color: #92400e;">Turbulence</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        LES models (Smagorinsky, AMD), stochastic forcing, GQL approximation
+    </p>
+</div>
+
+<div style="background: #f3e8ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #7c3aed;">
+    <strong style="color: #5b21b6;">Magnetohydrodynamics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        MHD with magnetic fields, dynamo problems, magnetic dissipation
+    </p>
+</div>
+
+<div style="background: #ecfdf5; border-radius: 8px; padding: 1rem; border-left: 4px solid #10b981;">
+    <strong style="color: #065f46;">Geophysical Flows</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Rotating shallow water, stratified turbulence, surface dynamics
+    </p>
+</div>
+
+</div>
+```
+
+---
+
+## Problem Types
 
 | Type | Description | Example |
 |------|-------------|---------|
@@ -80,7 +176,7 @@ or jump to the [Tutorials](tutorials/overview.md) for worked examples.
 | **LBVP** | Linear BVPs | Poisson equation |
 | **NLBVP** | Nonlinear BVPs | Steady nonlinear systems |
 
-### Spectral Bases
+## Spectral Bases
 
 | Basis | Domain | Usage |
 |-------|--------|-------|
@@ -89,118 +185,106 @@ or jump to the [Tutorials](tutorials/overview.md) for worked examples.
 | `ChebyshevT` | Bounded | Wall-bounded domains, boundary conditions |
 | `Legendre` | Bounded | Alternative to Chebyshev |
 
-### Physics Applications
-
-- **Fluid Dynamics** -- Navier-Stokes, Rayleigh-Benard convection, channel flow
-- **Turbulence** -- LES with Smagorinsky and AMD models, stochastic forcing
-- **Heat Transfer** -- Diffusion, advection-diffusion
-- **Magnetohydrodynamics** -- MHD with magnetic fields
-- **Geophysical Flows** -- Rotating shallow water, stratified turbulence
-
----
-
-## GPU Computing
-
-Tarang.jl provides transparent GPU acceleration through CUDA.jl. Fields and transforms automatically dispatch to GPU when the architecture is set:
-
-```julia
-using Tarang, CUDA
-
-coords = CartesianCoordinates("x", "y")
-dist = Distributor(coords; architecture=GPU(), dtype=Float32)
-
-xbasis = Fourier(coords, "x", 512)
-ybasis = Fourier(coords, "y", 512)
-
-field = ScalarField(dist, "u", (xbasis, ybasis))
-forward_transform!(field)   # Uses cuFFT automatically
-```
-
-```@raw html
-<div class="feature-grid">
-  <div class="feature-card">
-    <h3>cuFFT Integration</h3>
-    <p>Automatic FFT acceleration using NVIDIA's optimized cuFFT library.</p>
-  </div>
-  <div class="feature-card">
-    <h3>Portable Kernels</h3>
-    <p>CPU/GPU kernels via KernelAbstractions.jl for element-wise operations.</p>
-  </div>
-  <div class="feature-card">
-    <h3>Multi-GPU MPI</h3>
-    <p>CUDA-aware MPI for distributed GPU computing at scale.</p>
-  </div>
-  <div class="feature-card">
-    <h3>Memory Management</h3>
-    <p>GPU memory pools, pinned buffers, and automatic data movement.</p>
-  </div>
-</div>
-```
-
-See the [GPU Computing Guide](pages/gpu_computing.md) for details.
-
 ---
 
 ## Documentation
 
 ```@raw html
-<div class="feature-grid">
-  <div class="feature-card">
-    <h3><a href="getting_started/installation/">Installing Tarang</a></h3>
-    <p>System requirements, installation, and configuration.</p>
-  </div>
-  <div class="feature-card">
-    <h3><a href="tutorials/overview/">Tutorials</a></h3>
-    <p>Step-by-step guides for convection, turbulence, and stability analysis.</p>
-  </div>
-  <div class="feature-card">
-    <h3><a href="pages/coordinates/">User Guide</a></h3>
-    <p>Core concepts: coordinates, bases, fields, operators, and solvers.</p>
-  </div>
-  <div class="feature-card">
-    <h3><a href="api/coordinates/">API Reference</a></h3>
-    <p>Complete API documentation for all public types and functions.</p>
-  </div>
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+<a href="getting_started/installation/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Installation</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Setup and configuration</p>
+    </div>
+</a>
+
+<a href="tutorials/overview/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Tutorials</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Step-by-step guides</p>
+    </div>
+</a>
+
+<a href="pages/gpu_computing/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>GPU Guide</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">CUDA acceleration</p>
+    </div>
+</a>
+
+<a href="api/coordinates/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>API Reference</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Complete documentation</p>
+    </div>
+</a>
+
 </div>
+```
+
+```@contents
+Pages = [
+    "getting_started/installation.md",
+    "tutorials/overview.md",
+    "pages/gpu_computing.md",
+    "pages/parallelism.md",
+    "api/coordinates.md",
+    "examples/gallery.md"
+]
+Depth = 1
 ```
 
 ---
 
-## Performance
+## Installation Options
 
-- **Native Julia** -- Compiled to machine code with zero interpreter overhead
-- **GPU Acceleration** -- CUDA-optimized kernels with automatic memory management
-- **Scalable MPI** -- Pencil decomposition scales to thousands of cores
-- **Memory Efficient** -- Zero-copy operations and optimized memory layouts
+| Setup | Command | Use Case |
+|-------|---------|----------|
+| **Basic** | `Pkg.add(url="...")` | Single CPU, getting started |
+| **GPU** | `+ CUDA, KernelAbstractions` | NVIDIA GPU acceleration |
+| **MPI** | `+ MPI, PencilArrays, PencilFFTs` | Cluster computing |
+| **Full** | All of the above | Maximum flexibility |
+
+!!! note "Requirements"
+    - Julia 1.10 or later
+    - For GPU: NVIDIA GPU with CUDA support
+    - For MPI: OpenMPI or MPICH installed
 
 ---
 
-## Citing Tarang.jl
+## Contributing
+
+We welcome contributions! See our [GitHub repository](https://github.com/subhk/Tarang.jl) for:
+- Bug reports and feature requests
+- Documentation improvements
+- Pull requests
+
+---
+
+## Citation
 
 If you use Tarang.jl in your research, please cite:
 
 ```bibtex
 @software{tarang_jl,
+  author = {Kar, Subhajit},
   title  = {Tarang.jl: A Spectral PDE Solver for Julia},
-  author = {Subhajit Kar},
-  year   = {2024},
-  url    = {https://github.com/subhk/Tarang.jl}
+  url    = {https://github.com/subhk/Tarang.jl},
+  year   = {2024}
 }
 ```
 
-## Acknowledgments
+---
 
-Tarang.jl builds upon:
+## License
 
-- [PencilArrays.jl](https://github.com/jipolanco/PencilArrays.jl) and [PencilFFTs.jl](https://github.com/jipolanco/PencilFFTs.jl) -- Distributed FFT infrastructure
-- [MPI.jl](https://github.com/JuliaParallel/MPI.jl) -- MPI bindings for Julia
-- [CUDA.jl](https://github.com/JuliaGPU/CUDA.jl) -- GPU computing support
-- [FFTW.jl](https://github.com/JuliaMath/FFTW.jl) -- Fast Fourier Transforms
+Tarang.jl is released under the **MIT License**.
 
-## Getting Help
-
-- **Issues**: [GitHub Issues](https://github.com/subhk/Tarang.jl/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/subhk/Tarang.jl/discussions)
-- **Contributing**: [Contributing Guide](pages/contributing.md)
-
-Tarang.jl is licensed under the MIT License.
+```@raw html
+<div style="text-align: center; margin-top: 2rem; padding: 1.5rem; background: #f8fafc; border-radius: 8px;">
+    <p style="margin: 0; color: #64748b;">
+        Made for the scientific computing community
+    </p>
+</div>
+```
