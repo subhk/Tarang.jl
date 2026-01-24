@@ -130,6 +130,9 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
     space_dependent_bcs::Vector{Int}  # Indices of space-dependent BCs
     bc_update_required::Bool  # Flag indicating if BC values need updating
 
+    # Equation index tracking
+    bc_equation_indices::Dict{Int, Int}  # bc_index => equation_index in problem.equations
+
     # Workspace and caching
     workspace::Dict{String, AbstractArray}
     bc_cache::Dict{String, Any}  # Stores both scalar and array BC values
@@ -146,6 +149,7 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
         new{Arch}(AbstractBoundaryCondition[], Dict{String, Any}(),
             Dict{String, Any}(), Dict{String, Any}(), nothing,
             Dict{String, Any}(), Int[], Int[], false,
+            Dict{Int, Int}(),
             workspace, bc_cache, perf_stats, architecture)
     end
 end
@@ -1239,6 +1243,21 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
     return manager
 end
 
+function get_current_bc_value(manager::BoundaryConditionManager, bc_index::Int, current_time)
+    """Retrieve the most recently cached value for a time-dependent BC."""
+    cache_key = "bc_$(bc_index)_t_$(current_time)"
+    bc = manager.conditions[bc_index]
+
+    if isa(bc, RobinBC)
+        alpha = get(manager.bc_cache, "$(cache_key)_alpha", nothing)
+        beta = get(manager.bc_cache, "$(cache_key)_beta", nothing)
+        value = get(manager.bc_cache, "$(cache_key)_value", nothing)
+        return (alpha, beta, value)
+    else
+        return get(manager.bc_cache, cache_key, nothing)
+    end
+end
+
 function requires_bc_update(manager::BoundaryConditionManager)
     """Check if boundary conditions need updating"""
     return manager.bc_update_required || !isempty(manager.time_dependent_bcs)
@@ -1261,6 +1280,7 @@ function clear_boundary_conditions!(manager::BoundaryConditionManager)
     empty!(manager.lift_operators)
     empty!(manager.time_dependent_bcs)
     empty!(manager.space_dependent_bcs)
+    empty!(manager.bc_equation_indices)
     empty!(manager.bc_cache)
     empty!(manager.workspace)
     manager.bc_update_required = false
@@ -1348,6 +1368,6 @@ export AbstractBoundaryCondition, DirichletBC, NeumannBC, RobinBC, PeriodicBC,
        TimeDependentValue, SpaceDependentValue, TimeSpaceDependentValue, FieldReference,
        set_time_variable!, add_coordinate_field!, evaluate_bc_value, evaluate_expression,
        update_time_dependent_bcs!, requires_bc_update, has_time_dependent_bcs, has_space_dependent_bcs,
-       is_time_dependent, is_space_dependent,
+       is_time_dependent, is_space_dependent, get_current_bc_value,
        register_coordinate_info!, register_domain_info!,
        log_bc_performance, evaluate_space_dependent_bcs!, clear_bc_cache!

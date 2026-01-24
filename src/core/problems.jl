@@ -2341,7 +2341,12 @@ function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
     elseif isa(expr, ZeroOperator)
         # Zero expression -> zero block
         return _zero_block(eqn_size, var_size)
-        
+
+    elseif isa(expr, Interpolate) && _operand_matches_variable(expr.operand, var)
+        # BC interpolation constraint: field evaluated at boundary
+        # Return identity block to mark variable participation in this BC equation
+        return _identity_block(eqn_size, var_size)
+
     else
         # Unknown expression -> zero block
         @debug "Unknown expression type for matrix block: $(typeof(expr))"

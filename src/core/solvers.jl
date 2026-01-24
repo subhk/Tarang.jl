@@ -225,6 +225,10 @@ end
 
 function _build_initial_value_solver(problem::IVP, timestepper; dt::Real=1e-3, device::String="cpu")
     setup_domain!(problem)
+
+    # Merge boundary conditions into equation system
+    _merge_boundary_conditions!(problem)
+
     validate_problem(problem)
 
     base = SolverBaseData(problem)
@@ -246,6 +250,76 @@ function _build_initial_value_solver(problem::IVP, timestepper; dt::Real=1e-3, d
 
     build_solver_matrices!(solver)
     return solver
+end
+
+function _merge_boundary_conditions!(problem::Problem)
+    """Merge boundary_conditions strings into equations and track indices."""
+    if isempty(problem.boundary_conditions)
+        return
+    end
+
+    bc_manager = problem.bc_manager
+    base_eq_count = length(problem.equations)
+
+    for (i, bc_str) in enumerate(problem.boundary_conditions)
+        push!(problem.equations, bc_str)
+        eq_idx = base_eq_count + i
+
+        # Find which BC condition (in bc_manager.conditions) this string corresponds to
+        for (bc_idx, bc) in enumerate(bc_manager.conditions)
+            if isa(bc, PeriodicBC)
+                continue
+            end
+            eq = bc_to_equation(bc_manager, bc)
+            if isa(eq, Vector)
+                for eq_str in eq
+                    if eq_str == bc_str
+                        bc_manager.bc_equation_indices[bc_idx] = eq_idx
+                        break
+                    end
+                end
+            elseif eq == bc_str
+                bc_manager.bc_equation_indices[bc_idx] = eq_idx
+                break
+            end
+        end
+    end
+
+    @debug "Merged $(length(problem.boundary_conditions)) BCs into equations (total: $(length(problem.equations)))"
+end
+
+function _apply_bc_values_to_equations!(solver::InitialValueSolver, current_time)
+    """Inject cached BC values into equation_data F expressions."""
+    bc_manager = solver.problem.bc_manager
+    equation_data = solver.problem.equation_data
+
+    isempty(equation_data) && return
+
+    for bc_idx in bc_manager.time_dependent_bcs
+        eq_idx = get(bc_manager.bc_equation_indices, bc_idx, 0)
+        if eq_idx > 0 && eq_idx <= length(equation_data)
+            value = get_current_bc_value(bc_manager, bc_idx, current_time)
+            if value !== nothing
+                if isa(value, Number)
+                    equation_data[eq_idx]["F"] = ConstantOperator(Float64(value))
+                    equation_data[eq_idx]["F_expr"] = ConstantOperator(Float64(value))
+                elseif isa(value, Tuple)
+                    # Robin BC tuple (alpha, beta, value) - use the value component
+                    robin_val = value[3]
+                    if robin_val !== nothing && isa(robin_val, Number)
+                        equation_data[eq_idx]["F"] = ConstantOperator(Float64(robin_val))
+                        equation_data[eq_idx]["F_expr"] = ConstantOperator(Float64(robin_val))
+                    end
+                elseif isa(value, AbstractArray)
+                    # For array-valued BCs, store in workspace and use placeholder
+                    ws_key = "bc_$(bc_idx)_value"
+                    bc_manager.workspace[ws_key] = value
+                    equation_data[eq_idx]["F"] = ConstantOperator(1.0)
+                    equation_data[eq_idx]["F_expr"] = ConstantOperator(1.0)
+                end
+            end
+        end
+    end
 end
 
 const _InitialValueSolver_constructor = _build_initial_value_solver
@@ -493,8 +567,10 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
 
     # Update time-dependent boundary conditions BEFORE taking the step
     if has_time_dependent_bcs(solver.problem.bc_manager)
-        update_time_dependent_bcs!(solver.problem.bc_manager, solver.sim_time + dt)
-        @debug "Updated time-dependent BCs for t=$(solver.sim_time + dt)"
+        target_time = solver.sim_time + dt
+        update_time_dependent_bcs!(solver.problem.bc_manager, target_time)
+        _apply_bc_values_to_equations!(solver, target_time)
+        @debug "Updated time-dependent BCs for t=$target_time"
     end
 
     # Use existing timestepper infrastructure from timesteppers.jl
