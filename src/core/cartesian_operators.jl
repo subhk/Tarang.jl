@@ -511,7 +511,7 @@ For scalar field f, gradient is a vector field:
 ∇f = (∂f/∂x, ∂f/∂y, ∂f/∂z)
 
 For vector field u, gradient is a tensor field:
-(∇u)_ij = ∂u_i/∂x_j
+(∇u)_ij = ∂u_j/∂x_i  (first index = derivative direction)
 """
 struct CartesianGradient <: AbstractLinearOperator
     operand::Operand
@@ -1176,11 +1176,11 @@ function evaluate_cartesian_gradient(op::CartesianGradient, layout::Symbol=:g)
         return result
 
     elseif isa(operand, VectorField)
-        # Vector → Tensor: (∇u)_ij = ∂u_i/∂x_j
+        # Vector → Tensor: (∇u)_ij = ∂u_j/∂x_i (first index = derivative direction)
         result = TensorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
 
-        for (i, comp) in enumerate(operand.components)
-            for (j, coord) in enumerate(coordsys.coords)
+        for (i, coord) in enumerate(coordsys.coords)
+            for (j, comp) in enumerate(operand.components)
                 deriv_op = Differentiate(comp, coord, 1)
                 result.components[i, j] = evaluate_differentiate(deriv_op, layout)
             end
