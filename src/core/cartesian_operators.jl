@@ -509,11 +509,11 @@ Gradient operator specialized for Cartesian coordinates.
 
 Following operators:2340-2412 CartesianGradient implementation.
 
-For scalar field f, gradient is:
+For scalar field f, gradient is a vector field:
 ∇f = (∂f/∂x, ∂f/∂y, ∂f/∂z)
 
-For vector field u, gradient is tensor:
-(∇u)_ij = ∂u_i/∂x_j
+Note: Only scalar field operands are currently supported.
+Vector field gradients (tensor output) are not yet implemented.
 """
 struct CartesianGradient <: AbstractLinearOperator
     operand::Operand
@@ -1589,6 +1589,24 @@ function matrix_dependence(operand::Operand, vars...)
     for (i, var) in enumerate(vars)
         if operand === var ||
            (hasfield(typeof(operand), :name) && hasfield(typeof(var), :name) && operand.name == var.name)
+            result[i] = true
+        end
+    end
+    return result
+end
+
+"""
+    matrix_coupling(op::Differentiate, vars...)
+
+Matrix coupling for Differentiate operator.
+A linear operator that couples its operand variable into the equation.
+"""
+function matrix_coupling(op::Differentiate, vars...)
+    result = falses(length(vars))
+    for (i, var) in enumerate(vars)
+        if op.operand === var ||
+           (hasfield(typeof(op.operand), :name) && hasfield(typeof(var), :name) &&
+            op.operand.name == var.name)
             result[i] = true
         end
     end
