@@ -31,7 +31,7 @@ mean_field = get_mean(filter)
 | Method | Stability | Use Case |
 |--------|-----------|----------|
 | `update!(filter, h, dt)` | dt ≤ √2/α | Simple, small α·dt |
-| `update!(filter, h, dt, Val(:RK2))` | dt ≤ 2√2/α | Moderate α·dt |
+| `update!(filter, h, dt, Val(:RK2))` | dt ≤ 2/α (exp), dt ≈ 2.18/α (butterworth) | Moderate α·dt |
 | `update_etd!(filter, h, coeffs)` | **Unconditional** | Recommended |
 | `update_imex!(filter, h_hist, coeffs)` | **Unconditional** | SBDF solvers |
 
@@ -1179,6 +1179,10 @@ Maximum stable timestep `dt_max`. For stability, use `dt ≤ dt_max`.
 # Stability Limits (Forward Euler)
 - ExponentialMean: `dt ≤ 2/α`
 - ButterworthFilter: `dt ≤ √2/α ≈ 1.414/α` (more restrictive due to complex eigenvalues)
+#
+# RK2 (midpoint) approximate limits:
+- ExponentialMean: `dt ≤ 2/α`
+- ButterworthFilter: `dt ≈ 2.18/α`
 
 # Example
 ```julia
@@ -1193,8 +1197,8 @@ function max_stable_timestep(filter::ExponentialMean; method::Symbol=:euler)
     if method == :euler
         return 2 / filter.α
     elseif method == :RK2
-        # RK2 has better stability, approximately 2× larger stable region
-        return 4 / filter.α
+        # Midpoint RK2 has the same linear stability limit as Euler for real negative eigenvalues.
+        return 2 / filter.α
     else
         throw(ArgumentError("Unknown method: $method. Use :euler or :RK2"))
     end
@@ -1204,8 +1208,8 @@ function max_stable_timestep(filter::ButterworthFilter; method::Symbol=:euler)
     if method == :euler
         return sqrt(2) / filter.α
     elseif method == :RK2
-        # RK2 has better stability
-        return 2 * sqrt(2) / filter.α
+        # Midpoint RK2 stability limit for eigenvalues -α/√2 (1 ± i).
+        return 2.183 / filter.α
     else
         throw(ArgumentError("Unknown method: $method. Use :euler or :RK2"))
     end
@@ -1955,7 +1959,8 @@ function broadcast_profile(hmean::HorizontalMean{T, N, M, A}) where {T, N, M, A}
     # GPU-compatible: use reshape + broadcast for all cases
     # Reshape profile to broadcast correctly along vertical dimension
     new_shape = ntuple(i -> i == vdim ? length(profile) : 1, N)
-    buf .= reshape(profile, new_shape)
+    profile_dev = on_architecture(architecture(buf), profile)
+    buf .= reshape(profile_dev, new_shape)
 
     return buf
 end
