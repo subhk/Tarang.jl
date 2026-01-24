@@ -132,7 +132,7 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
 
     # Workspace and caching
     workspace::Dict{String, AbstractArray}
-    bc_cache::Dict{String, AbstractArray}
+    bc_cache::Dict{String, Any}  # Stores both scalar and array BC values
     performance_stats::BCPerformanceStats
 
     # Architecture for CPU/GPU support
@@ -140,7 +140,7 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
 
     function BoundaryConditionManager(; architecture::Arch=CPU()) where {Arch<:AbstractArchitecture}
         workspace = Dict{String, AbstractArray}()
-        bc_cache = Dict{String, AbstractArray}()
+        bc_cache = Dict{String, Any}()
         perf_stats = BCPerformanceStats()
 
         new{Arch}(AbstractBoundaryCondition[], Dict{String, Any}(),
@@ -682,7 +682,11 @@ function apply_boundary_conditions!(manager::BoundaryConditionManager, problem)
     equations_added = String[]
     
     for bc in manager.conditions
-        if isa(bc, StressFreeBC)
+        if isa(bc, PeriodicBC)
+            # Periodic BCs are enforced by the Fourier basis (inherently periodic
+            # spectral representation) — no equation needed.
+            continue
+        elseif isa(bc, StressFreeBC)
             # Stress-free BCs generate multiple equations
             eqs = bc_to_equation(manager, bc)
             for eq in eqs
@@ -943,8 +947,7 @@ function _evaluate_string_expression(expr::String, current_time, coords)
         result = _safe_eval_math_expr(expr, vars)
         return result
     catch e
-        @debug "Expression evaluation failed for '$expr': $e"
-        # Return the original string if parsing fails
+        @warn "BC expression evaluation failed for '$expr': $e" maxlog=5
         return expr
     end
 end
@@ -1190,28 +1193,27 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
     start_time = time()
     @debug "Updating $(length(manager.time_dependent_bcs)) time-dependent BCs at t=$current_time"
     
+    # Use coordinate fields for BCs that are both time and space dependent
+    coords = manager.coordinate_fields
+
     for bc_index in manager.time_dependent_bcs
         bc = manager.conditions[bc_index]
-        
+
         # Update the BC value based on current time
         # Cache evaluated values for repeated use
         cache_key = "bc_$(bc_index)_t_$(current_time)"
-        
+
         if isa(bc, DirichletBC) && bc.is_time_dependent
             if !haskey(manager.bc_cache, cache_key)
-                new_value = evaluate_bc_value(manager, bc, current_time)
-                if isa(new_value, AbstractArray)
-                    manager.bc_cache[cache_key] = new_value
-                end
+                new_value = evaluate_bc_value(manager, bc, current_time, coords)
+                manager.bc_cache[cache_key] = new_value
             end
             @debug "Updated Dirichlet BC for $(bc.field)"
 
         elseif isa(bc, NeumannBC) && bc.is_time_dependent
             if !haskey(manager.bc_cache, cache_key)
-                new_value = evaluate_bc_value(manager, bc, current_time)
-                if isa(new_value, AbstractArray)
-                    manager.bc_cache[cache_key] = new_value
-                end
+                new_value = evaluate_bc_value(manager, bc, current_time, coords)
+                manager.bc_cache[cache_key] = new_value
             end
             @debug "Updated Neumann BC for $(bc.field)"
 
@@ -1219,11 +1221,9 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
             # For Robin BCs, check component keys since we store alpha, beta, value separately
             robin_cache_key = "$(cache_key)_value"
             if !haskey(manager.bc_cache, robin_cache_key)
-                alpha, beta, value = evaluate_bc_value(manager, bc, current_time)
+                alpha, beta, value = evaluate_bc_value(manager, bc, current_time, coords)
                 for (comp_name, comp_value) in [("alpha", alpha), ("beta", beta), ("value", value)]
-                    if isa(comp_value, AbstractArray)
-                        manager.bc_cache["$(cache_key)_$(comp_name)"] = comp_value
-                    end
+                    manager.bc_cache["$(cache_key)_$(comp_name)"] = comp_value
                 end
             end
             @debug "Updated Robin BC for $(bc.field)"
@@ -1282,8 +1282,9 @@ function log_bc_performance(manager::BoundaryConditionManager)
     @info "  Cache performance: $(stats.cache_hits) hits / $(stats.cache_misses) misses ($(round(100*stats.cache_hits/max(stats.cache_hits+stats.cache_misses, 1), digits=1))% hit rate)"
 end
 
-function evaluate_space_dependent_bcs!(manager::BoundaryConditionManager, coordinates::Dict)
-    """Evaluate space-dependent boundary conditions"""
+function evaluate_space_dependent_bcs!(manager::BoundaryConditionManager, coordinates::Dict,
+                                      current_time::Real=0.0)
+    """Evaluate space-dependent boundary conditions at the given time and coordinates"""
 
     if isempty(manager.space_dependent_bcs)
         return manager
@@ -1291,12 +1292,12 @@ function evaluate_space_dependent_bcs!(manager::BoundaryConditionManager, coordi
 
     start_time = time()
 
-    @debug "Evaluating $(length(manager.space_dependent_bcs)) space-dependent BCs"
+    @debug "Evaluating $(length(manager.space_dependent_bcs)) space-dependent BCs at t=$current_time"
 
     for bc_index in manager.space_dependent_bcs
         bc = manager.conditions[bc_index]
 
-        coord_hash = hash(coordinates)
+        coord_hash = hash((coordinates, current_time))
         cache_key = "bc_$(bc_index)_spatial_$(coord_hash)"
 
         # For Robin BCs, use component key for cache check since they store at component keys
@@ -1304,23 +1305,17 @@ function evaluate_space_dependent_bcs!(manager::BoundaryConditionManager, coordi
 
         if !haskey(manager.bc_cache, check_key)
             if isa(bc, DirichletBC) && bc.is_space_dependent
-                new_value = evaluate_bc_value(manager, bc, 0.0, coordinates)
-                if isa(new_value, AbstractArray)
-                    manager.bc_cache[cache_key] = new_value
-                end
+                new_value = evaluate_bc_value(manager, bc, current_time, coordinates)
+                manager.bc_cache[cache_key] = new_value
                 manager.performance_stats.cache_misses += 1
             elseif isa(bc, NeumannBC) && bc.is_space_dependent
-                new_value = evaluate_bc_value(manager, bc, 0.0, coordinates)
-                if isa(new_value, AbstractArray)
-                    manager.bc_cache[cache_key] = new_value
-                end
+                new_value = evaluate_bc_value(manager, bc, current_time, coordinates)
+                manager.bc_cache[cache_key] = new_value
                 manager.performance_stats.cache_misses += 1
             elseif isa(bc, RobinBC) && bc.is_space_dependent
-                alpha, beta, value = evaluate_bc_value(manager, bc, 0.0, coordinates)
+                alpha, beta, value = evaluate_bc_value(manager, bc, current_time, coordinates)
                 for (comp_name, comp_value) in [("alpha", alpha), ("beta", beta), ("value", value)]
-                    if isa(comp_value, AbstractArray)
-                        manager.bc_cache["$(cache_key)_$(comp_name)"] = comp_value
-                    end
+                    manager.bc_cache["$(cache_key)_$(comp_name)"] = comp_value
                 end
                 manager.performance_stats.cache_misses += 1
             end
