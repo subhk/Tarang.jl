@@ -26,9 +26,10 @@ mutable struct FourierTransform <: Transform
     plan_backward::Union{Nothing, Any}
     basis::Basis
     axis::Int
+    plan_dtype::Type  # Real element type used for plan creation (e.g., Float64, Float32)
 
     function FourierTransform(basis::Basis, axis::Int)
-        new(nothing, nothing, basis, axis)
+        new(nothing, nothing, basis, axis, Float64)
     end
 end
 
@@ -208,26 +209,30 @@ end
 function setup_fftw_transform!(dist::Distributor, basis::Union{RealFourier, ComplexFourier}, axis::Int)
     """Setup FFTW transforms for 1D case (CPU only)."""
     transform = FourierTransform(basis, axis)
-    setup_cpu_fft_transform!(transform, basis)
+    setup_cpu_fft_transform!(transform, basis, dist.dtype)
     push!(dist.transforms, transform)
 end
 
-function setup_cpu_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier})
-    """Setup CPU FFTW transforms"""
-    
-    # Create dummy arrays for planning
+function setup_cpu_fft_transform!(transform::FourierTransform, basis::Union{RealFourier, ComplexFourier},
+                                  dtype::Type=Float64)
+    """Setup CPU FFTW transforms with the specified precision."""
+    real_T = dtype <: Complex ? real(dtype) : dtype
+    complex_T = Complex{real_T}
+
+    # Create dummy arrays for planning with the correct precision
     if isa(basis, RealFourier)
-        dummy_in = zeros(Float64, basis.meta.size)
-        dummy_out = zeros(ComplexF64, div(basis.meta.size, 2) + 1)
-        
+        dummy_in = zeros(real_T, basis.meta.size)
+        dummy_out = zeros(complex_T, div(basis.meta.size, 2) + 1)
+
         transform.plan_forward = FFTW.plan_rfft(dummy_in)
         transform.plan_backward = FFTW.plan_irfft(dummy_out, basis.meta.size)
     else # ComplexFourier
-        dummy = zeros(ComplexF64, basis.meta.size)
-        
+        dummy = zeros(complex_T, basis.meta.size)
+
         transform.plan_forward = FFTW.plan_fft(dummy)
         transform.plan_backward = FFTW.plan_ifft(dummy)
     end
+    transform.plan_dtype = real_T
 end
 
 
@@ -682,14 +687,15 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
             else
                 host_data = grid_data
             end
+            coeff_T = coefficient_eltype(field.dtype)
             if get_coeff_data(field) === nothing
-                set_coeff_data!(field, similar(grid_data, ComplexF64))
+                set_coeff_data!(field, similar(grid_data, coeff_T))
             end
             # Copy to temporary real array for transform
             temp_data = copy(real.(host_data))
             apply_parallel_chebyshev_forward!(temp_data, transform, field.dist)
             if is_gpu_array(grid_data)
-                set_coeff_data!(field, copy_to_device(ComplexF64.(temp_data), grid_data))
+                set_coeff_data!(field, copy_to_device(coeff_T.(temp_data), grid_data))
             else
                 get_coeff_data(field) .= temp_data
             end
@@ -720,10 +726,11 @@ end
 
 function _fourier_forward(data::AbstractArray, transform::FourierTransform)
     return _execute_on_cpu(data) do host_data
-        # Use precomputed plan only if data size matches the plan's expected size
-        # and data is real (plans are type-specific)
+        # Use precomputed plan only if data size and element type match the plan
+        # (FFTW plans are type-specific: a Float64 plan cannot be applied to Float32 data)
         if ndims(host_data) == 1 && transform.plan_forward !== nothing &&
-           length(host_data) == transform.basis.meta.size && eltype(host_data) <: Real
+           length(host_data) == transform.basis.meta.size &&
+           eltype(host_data) === transform.plan_dtype
             return transform.plan_forward * host_data
         end
 
@@ -783,14 +790,15 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
             else
                 host_data = coeff_data
             end
+            grid_T = real(field.dtype)
             if get_grid_data(field) === nothing
-                set_grid_data!(field, similar(coeff_data, Float64))
+                set_grid_data!(field, similar(coeff_data, grid_T))
             end
             # Copy to temporary real array for transform
             temp_data = copy(real.(host_data))
             apply_parallel_chebyshev_backward!(temp_data, transform, field.dist)
             if is_gpu_array(coeff_data)
-                set_grid_data!(field, copy_to_device(Float64.(temp_data), coeff_data))
+                set_grid_data!(field, copy_to_device(grid_T.(temp_data), coeff_data))
             else
                 get_grid_data(field) .= temp_data
             end
@@ -821,10 +829,12 @@ end
 
 function _fourier_backward(data::AbstractArray, transform::FourierTransform)
     return _execute_on_cpu(data) do host_data
-        # Use precomputed plan only if data size matches the plan's expected size
-        # For RealFourier, coefficient size is div(N, 2) + 1 where N is the real array size
+        # Use precomputed plan only if data size and element type match the plan
+        # (FFTW plans are type-specific; backward plans expect Complex{plan_dtype} input)
         expected_rfft_size = isa(transform.basis, RealFourier) ? div(transform.basis.meta.size, 2) + 1 : transform.basis.meta.size
-        if ndims(host_data) == 1 && transform.plan_backward !== nothing && length(host_data) == expected_rfft_size
+        if ndims(host_data) == 1 && transform.plan_backward !== nothing &&
+           length(host_data) == expected_rfft_size &&
+           eltype(host_data) === Complex{transform.plan_dtype}
             return transform.plan_backward * host_data
         end
 

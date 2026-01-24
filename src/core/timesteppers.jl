@@ -1785,10 +1785,11 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
         c[4] = w1*w1*w2*(1 + w2) / (1 + w1)
         
         # Evaluate RHS terms at current and previous times
+        # k1 = dt used to step from t_{n-1} to t_n, k0 = dt from t_{n-2} to t_{n-1}
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_prev1 = evaluate_rhs(solver, state.history[end-1], solver.sim_time - k2)
-        F_prev2 = evaluate_rhs(solver, state.history[end-2], solver.sim_time - k2 - k1)
-        
+        F_prev1 = evaluate_rhs(solver, state.history[end-1], solver.sim_time - k1)
+        F_prev2 = evaluate_rhs(solver, state.history[end-2], solver.sim_time - k1 - k0)
+
         # Convert states to vectors
         X_current = fields_to_vector(current_state)
         X_prev1 = fields_to_vector(state.history[end-1])
@@ -1898,10 +1899,11 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
         c[5] = -w1^3 * w2^2 * w3 * (1 + w3) / (1 + w1) * A2 / A1
         
         # Evaluate RHS terms at current and previous times
+        # k2 = dt from t_{n-1} to t_n, k1 = dt from t_{n-2} to t_{n-1}, k0 = dt from t_{n-3} to t_{n-2}
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_prev1 = evaluate_rhs(solver, state.history[end-1], solver.sim_time - k3)
-        F_prev2 = evaluate_rhs(solver, state.history[end-2], solver.sim_time - k3 - k2)
-        F_prev3 = evaluate_rhs(solver, state.history[end-3], solver.sim_time - k3 - k2 - k1)
+        F_prev1 = evaluate_rhs(solver, state.history[end-1], solver.sim_time - k2)
+        F_prev2 = evaluate_rhs(solver, state.history[end-2], solver.sim_time - k2 - k1)
+        F_prev3 = evaluate_rhs(solver, state.history[end-3], solver.sim_time - k2 - k1 - k0)
         
         # Convert states to vectors
         X_current = fields_to_vector(current_state)
@@ -2520,6 +2522,15 @@ function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
     t = solver.sim_time
+
+    # RKSMR is fully explicit and assumes M = I (identity mass matrix).
+    # Warn if the problem defines a non-trivial M_matrix.
+    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
+    if M_matrix !== nothing
+        @warn "RKSMR (SSP-RK3) is a fully explicit method that assumes M = I. " *
+              "The problem defines M_matrix which will be ignored. " *
+              "Use an IMEX method (SBDF, CNAB) for problems with non-identity mass matrix." maxlog=1
+    end
 
     alpha = state.timestepper.alpha
     beta = state.timestepper.beta

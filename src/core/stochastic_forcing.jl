@@ -546,7 +546,7 @@ end
     _enforce_hermitian_symmetry!(data, arch)
 
 Enforce Hermitian symmetry F̂(-k) = F̂(k)* for real physical fields.
-For GPU, uses a CPU-based approach with data transfer.
+GPU uses a kernel-based implementation to avoid device-host transfers.
 """
 function _enforce_hermitian_symmetry!(data::AbstractArray{Complex{T}, N}, arch::CPU) where {T, N}
     # CPU implementation using scalar indexing
@@ -559,21 +559,60 @@ function _enforce_hermitian_symmetry!(data::AbstractArray{Complex{T}, N}, arch::
     end
 end
 
-function _enforce_hermitian_symmetry!(data::AbstractArray{Complex{T}, N}, arch::GPU) where {T, N}
-    # For GPU: transfer to CPU, enforce symmetry, transfer back
-    # This is acceptable because forcing is only generated once per timestep
-    data_cpu = Array(data)
-
-    if N == 1
-        _enforce_hermitian_1d!(data_cpu)
-    elseif N == 2
-        _enforce_hermitian_2d!(data_cpu)
-    elseif N == 3
-        _enforce_hermitian_3d!(data_cpu)
+@kernel function _enforce_hermitian_1d_kernel!(data::AbstractVector{Complex{T}}, n::Int) where {T}
+    i = @index(Global, Linear)
+    ci = i == 1 ? 1 : n + 2 - i
+    if i < ci
+        data[ci] = conj(data[i])
+    elseif i == ci
+        data[i] = Complex{T}(real(data[i]), zero(T))
     end
+end
 
-    # Copy back to GPU
-    copyto!(data, on_architecture(arch, data_cpu))
+@kernel function _enforce_hermitian_2d_kernel!(data::AbstractMatrix{Complex{T}}, nx::Int, ny::Int) where {T}
+    I = @index(Global, Cartesian)
+    i = I[1]
+    j = I[2]
+    ci = i == 1 ? 1 : nx + 2 - i
+    cj = j == 1 ? 1 : ny + 2 - j
+
+    if (i < ci) || (i == ci && j < cj)
+        data[ci, cj] = conj(data[i, j])
+    elseif i == ci && j == cj
+        data[i, j] = Complex{T}(real(data[i, j]), zero(T))
+    end
+end
+
+@kernel function _enforce_hermitian_3d_kernel!(data::AbstractArray{Complex{T}, 3}, nx::Int, ny::Int, nz::Int) where {T}
+    I = @index(Global, Cartesian)
+    i = I[1]
+    j = I[2]
+    k = I[3]
+    ci = i == 1 ? 1 : nx + 2 - i
+    cj = j == 1 ? 1 : ny + 2 - j
+    ck = k == 1 ? 1 : nz + 2 - k
+
+    lin_idx = i + (j - 1) * nx + (k - 1) * nx * ny
+    conj_lin_idx = ci + (cj - 1) * nx + (ck - 1) * nx * ny
+
+    if lin_idx < conj_lin_idx
+        data[ci, cj, ck] = conj(data[i, j, k])
+    elseif lin_idx == conj_lin_idx
+        data[i, j, k] = Complex{T}(real(data[i, j, k]), zero(T))
+    end
+end
+
+function _enforce_hermitian_symmetry!(data::AbstractArray{Complex{T}, N}, arch::GPU) where {T, N}
+    if N == 1
+        n = size(data, 1)
+        launch!(arch, _enforce_hermitian_1d_kernel!, data, n; ndrange=n)
+    elseif N == 2
+        nx, ny = size(data)
+        launch!(arch, _enforce_hermitian_2d_kernel!, data, nx, ny; ndrange=size(data))
+    elseif N == 3
+        nx, ny, nz = size(data)
+        launch!(arch, _enforce_hermitian_3d_kernel!, data, nx, ny, nz; ndrange=size(data))
+    end
 end
 
 """
@@ -617,10 +656,8 @@ function _enforce_hermitian_2d!(data::AbstractMatrix{Complex{T}}) where T
 
             # Only process if we haven't visited this pair yet
             if (i < ci) || (i == ci && j < cj)
-                # Average the value and its conjugate for consistency
-                avg = (data[i, j] + conj(data[ci, cj])) / 2
-                data[i, j] = avg
-                data[ci, cj] = conj(avg)
+                # Keep the primary value so unit-magnitude phases are preserved.
+                data[ci, cj] = conj(data[i, j])
             elseif i == ci && j == cj
                 # Self-conjugate modes must be real
                 data[i, j] = Complex{T}(real(data[i, j]), zero(T))
@@ -650,9 +687,8 @@ function _enforce_hermitian_3d!(data::AbstractArray{Complex{T}, 3}) where T
                 conj_lin_idx = ci + (cj-1)*nx + (ck-1)*nx*ny
 
                 if lin_idx < conj_lin_idx
-                    avg = (data[i, j, k] + conj(data[ci, cj, ck])) / 2
-                    data[i, j, k] = avg
-                    data[ci, cj, ck] = conj(avg)
+                    # Keep the primary value so unit-magnitude phases are preserved.
+                    data[ci, cj, ck] = conj(data[i, j, k])
                 elseif lin_idx == conj_lin_idx
                     # Self-conjugate modes must be real
                     data[i, j, k] = Complex{T}(real(data[i, j, k]), zero(T))
