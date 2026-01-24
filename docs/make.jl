@@ -23,10 +23,9 @@ makedocs(
         canonical = "https://subhk.github.io/Tarang.jl",
         assets = ["assets/custom.css"],
         mathengine = MathJax3(),
-        collapselevel = 1,
+        collapselevel = 2,
         sidebar_sitename = true,
-        # RTD-like footer
-        footer = "Powered by [Documenter.jl](https://github.com/JuliaDocs/Documenter.jl) and [Julia](https://julialang.org). Tarang.jl © 2024 Subhajit Kar.",
+        footer = "Tarang.jl -- A spectral PDE solver for Julia. [Source](https://github.com/subhk/Tarang.jl)",
     ),
     modules = tarang_loaded ? [Tarang] : Module[],
     # Dedalus-inspired navigation structure
