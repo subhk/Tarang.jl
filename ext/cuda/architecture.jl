@@ -266,3 +266,18 @@ Tarang.unsafe_free!(::GPU, a::CuArray) = CUDA.unsafe_free!(a)
 CuArray is a GPU array.
 """
 Tarang.is_gpu_array(::CuArray) = true
+
+# ============================================================================
+# Random Utilities
+# ============================================================================
+
+function Tarang._fill_random_phases!(arch::GPU{CuDevice}, phases::CuArray{T}, rng::Random.AbstractRNG) where {T}
+    ensure_device!(arch)
+    if applicable(CUDA.rand!, rng, phases)
+        CUDA.rand!(rng, phases)
+    else
+        CUDA.rand!(phases)
+    end
+    phases .*= T(2π)
+    return phases
+end

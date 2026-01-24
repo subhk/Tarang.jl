@@ -130,10 +130,11 @@ where ξ(k) is complex white noise with |ξ| = 1 and random phase.
 - `wavenumbers::NTuple{N,Vector{T}}`: Wavenumber arrays (kx, ky, ...)
 - `cached_forcing::AbstractArray{Complex{T},N}`: Cached forcing (constant within timestep)
 - `prevsol::Union{Nothing,AbstractArray{Complex{T},N}}`: Previous solution (for Stratonovich work)
-- `rng::AbstractRNG`: Random number generator (CPU-side)
-- `random_phases::AbstractArray{T,N}`: Pre-allocated random phase buffer
+- `rng::AbstractRNG`: Random number generator (CPU-side; GPU uses device RNG when available)
+- `random_phases::AbstractArray{T,N}`: Pre-allocated random phase buffer (on target architecture)
 - `last_update_time::T`: Time of last forcing update
 - `spectrum_type::Symbol`: Type of forcing spectrum
+- `enforce_hermitian::Bool`: Enforce Hermitian symmetry for real-valued fields
 - `architecture::AbstractArchitecture`: CPU() or GPU() architecture
 """
 mutable struct StochasticForcing{T<:AbstractFloat, N, A<:AbstractArray{T,N}, CA<:AbstractArray{Complex{T},N}} <: StochasticForcingType
@@ -151,6 +152,7 @@ mutable struct StochasticForcing{T<:AbstractFloat, N, A<:AbstractArray{T,N}, CA<
     random_phases::A                        # Pre-allocated random phase buffer
     last_update_time::T
     spectrum_type::Symbol
+    enforce_hermitian::Bool                 # Enforce Hermitian symmetry for real fields
     architecture::AbstractArchitecture
 end
 
@@ -178,6 +180,7 @@ end
         spectrum_type = :ring,
         rng = Random.GLOBAL_RNG,
         dtype = Float64,
+        enforce_hermitian = true,
         architecture = CPU()
     )
 
@@ -196,8 +199,9 @@ Create a stochastic forcing configuration that works on CPU or GPU.
     - `:band` - Sharp band |k| ∈ [k_f - δ_f, k_f + δ_f]
     - `:lowk` - Low wavenumber forcing |k| < k_f
     - `:kolmogorov` - Forcing at large scales
-- `rng::AbstractRNG`: Random number generator (CPU-side, phases transferred to GPU)
+- `rng::AbstractRNG`: Random number generator (CPU-side; GPU uses device RNG when available)
 - `dtype::Type`: Floating point type (default: Float64)
+- `enforce_hermitian::Bool`: Enforce Hermitian symmetry (set false for complex-valued fields)
 - `architecture::AbstractArchitecture`: CPU() or GPU() (default: CPU())
 
 ## Example
@@ -237,6 +241,7 @@ function StochasticForcing(;
     spectrum_type::Symbol = :ring,
     rng::AbstractRNG = Random.GLOBAL_RNG,
     dtype::Type{T} = Float64,
+    enforce_hermitian::Bool = true,
     architecture::AbstractArchitecture = CPU()
 ) where {T<:AbstractFloat, N}
 
@@ -293,6 +298,7 @@ function StochasticForcing(;
         random_phases,
         T(-Inf),  # Initialize to -Inf so first call always updates
         spectrum_type,
+        enforce_hermitian,
         architecture
     )
 end
@@ -479,9 +485,9 @@ Generate stochastic forcing at time t. Works on both CPU and GPU.
 
 3. **Zero mean**: The k=0 mode is always set to zero.
 
-4. **Hermitian symmetry**: F̂(-k) = F̂(k)* so that ifft produces real fields.
+4. **Hermitian symmetry** (optional): F̂(-k) = F̂(k)* so that ifft produces real fields.
 
-5. **GPU support**: Random phases are generated on CPU and transferred to GPU,
+5. **GPU support**: Random phases are generated on the target architecture when possible,
    then combined with the spectrum using broadcasted operations.
 
 ## Arguments
@@ -516,25 +522,23 @@ end
     _generate_forcing_gpu_compatible!(forcing)
 
 GPU-compatible forcing generation using broadcasted operations.
-Random phases are generated on CPU and transferred to GPU.
-Hermitian symmetry is enforced using array operations.
+Random phases are generated on the target architecture.
+Hermitian symmetry is enforced using array operations when enabled.
 """
 function _generate_forcing_gpu_compatible!(forcing::StochasticForcing{T, N, A, CA}) where {T, N, A, CA}
     sqrt_dt = sqrt(forcing.dt)
-    field_size = forcing.field_size
 
-    # Generate random phases on CPU
-    phases_cpu = 2 * T(π) * rand(forcing.rng, T, field_size...)
-
-    # Transfer to target architecture
-    phases = on_architecture(forcing.architecture, phases_cpu)
+    phases = forcing.random_phases
+    _fill_random_phases!(forcing.architecture, phases, forcing.rng)
 
     # Compute forcing: F = spectrum * exp(i*phase) / sqrt(dt)
     # Using broadcasting for GPU compatibility
     forcing.cached_forcing .= forcing.forcing_spectrum .* exp.(im .* phases) ./ sqrt_dt
 
-    # Enforce Hermitian symmetry for real physical fields
-    _enforce_hermitian_symmetry!(forcing.cached_forcing, forcing.architecture)
+    # Enforce Hermitian symmetry for real physical fields (optional)
+    if forcing.enforce_hermitian
+        _enforce_hermitian_symmetry!(forcing.cached_forcing, forcing.architecture)
+    end
 
     # Enforce zero mean (k=0 mode)
     _set_zero_mode!(forcing.cached_forcing, forcing.architecture)
@@ -1011,6 +1015,19 @@ function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
 
     # view() works on both CPU and GPU arrays
     return view(forcing.cached_forcing, Tuple(ranges)...)
+end
+
+function _fill_random_phases!(arch::AbstractArchitecture, phases::AbstractArray{T}, rng::AbstractRNG) where {T}
+    if is_gpu_array(phases)
+        phases_cpu = rand(rng, T, size(phases)...)
+        phases_cpu .*= T(2π)
+        copyto!(phases, phases_cpu)
+        return phases
+    end
+
+    rand!(rng, phases)
+    phases .*= T(2π)
+    return phases
 end
 
 # ============================================================================

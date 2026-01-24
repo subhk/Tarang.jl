@@ -38,6 +38,7 @@ using Tarang: DistributedGPUFFT
 # Note: coefficient_eltype, gpu_multiply_fields!, local_fft_dim!, local_ifft_dim!
 # are not exported from Tarang - access them via Tarang.function_name prefix
 
+using Random
 using CUDA
 using CUDA: CuArray, CuDevice, device!, synchronize as cuda_sync
 using CUDA: CuStream, default_stream, @sync
