@@ -161,7 +161,7 @@ Check if the domain is configured for GPU.
 """
 is_gpu(domain::Domain) = is_gpu(domain.dist.architecture)
 
-@inline function _domain_cached_get!(domain::Domain, key::Symbol, builder::Function)
+@inline function _domain_cached_get!(builder::Function, domain::Domain, key::Symbol)
     cache = domain.attribute_cache
     return get!(cache, key) do
         builder()
