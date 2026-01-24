@@ -507,13 +507,11 @@ end
 
 Gradient operator specialized for Cartesian coordinates.
 
-Following operators:2340-2412 CartesianGradient implementation.
-
 For scalar field f, gradient is a vector field:
 ∇f = (∂f/∂x, ∂f/∂y, ∂f/∂z)
 
-Note: Only scalar field operands are currently supported.
-Vector field gradients (tensor output) are not yet implemented.
+For vector field u, gradient is a tensor field:
+(∇u)_ij = ∂u_i/∂x_j
 """
 struct CartesianGradient <: AbstractLinearOperator
     operand::Operand
@@ -1167,18 +1165,31 @@ function evaluate_cartesian_gradient(op::CartesianGradient, layout::Symbol=:g)
     coordsys = op.coordsys
 
     if isa(operand, ScalarField)
-        # Create vector field for result
+        # Scalar → Vector: (∇f)_i = ∂f/∂x_i
         result = VectorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
 
-        # Compute partial derivatives for each component
         for (i, coord) in enumerate(coordsys.coords)
             deriv_op = Differentiate(operand, coord, 1)
             result.components[i] = evaluate_differentiate(deriv_op, layout)
         end
 
         return result
+
+    elseif isa(operand, VectorField)
+        # Vector → Tensor: (∇u)_ij = ∂u_i/∂x_j
+        result = TensorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
+
+        for (i, comp) in enumerate(operand.components)
+            for (j, coord) in enumerate(coordsys.coords)
+                deriv_op = Differentiate(comp, coord, 1)
+                result.components[i, j] = evaluate_differentiate(deriv_op, layout)
+            end
+        end
+
+        return result
+
     else
-        throw(ArgumentError("CartesianGradient evaluation only implemented for scalar fields"))
+        throw(ArgumentError("CartesianGradient requires ScalarField or VectorField operand, got $(typeof(operand))"))
     end
 end
 
