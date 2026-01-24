@@ -215,7 +215,7 @@ function Base.setproperty!(field::ScalarField, s::Symbol, value)
 end
 
 function Base.propertynames(::ScalarField, private::Bool=false)
-    names = propertynames(ScalarField, private)
+    names = fieldnames(ScalarField)
     return filter(n -> n ∉ (:data_g, :data_c), names)
 end
 
@@ -977,7 +977,8 @@ function preset_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tu
         else
             # For serial: create new array
             local_shape = get_local_array_size(field.dist, new_grid_shape)
-            set_grid_data!(field, zeros(field.dtype, local_shape...))
+            arch = field.buffers.architecture
+            set_grid_data!(field, zeros(arch, field.dtype, local_shape...))
         end
 
         # Coefficient data size typically doesn't change with scales
@@ -1158,6 +1159,18 @@ function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple
     return field
 end
 
+"""
+    gpu_resample_grid_data!(new_data, old_data, old_shape, new_shape)
+
+GPU-native spectral resampling using cuFFT.
+Returns true if GPU resample was applied, false otherwise.
+Override provided by TarangCUDAExt when CUDA is loaded.
+"""
+function gpu_resample_grid_data!(new_data::AbstractArray, old_data::AbstractArray,
+                                 old_shape::Tuple, new_shape::Tuple)
+    return false  # No GPU support without CUDA extension
+end
+
 function resample_grid_data!(new_data::AbstractArray, old_data::AbstractArray,
                              old_shape::Tuple, new_shape::Tuple)
     """
@@ -1170,6 +1183,18 @@ function resample_grid_data!(new_data::AbstractArray, old_data::AbstractArray,
 
     For simple cases, uses linear interpolation as fallback.
     """
+    if is_gpu_array(new_data) || is_gpu_array(old_data)
+        if gpu_resample_grid_data!(new_data, old_data, old_shape, new_shape)
+            return
+        end
+        # Fallback: CPU round-trip if GPU-native resample unavailable
+        old_cpu = on_architecture(CPU(), old_data)
+        new_cpu = similar(old_cpu, eltype(old_cpu), size(new_data)...)
+        resample_grid_data!(new_cpu, old_cpu, old_shape, new_shape)
+        copyto!(new_data, on_architecture(architecture(new_data), new_cpu))
+        return
+    end
+
     old_size = size(old_data)
     new_size = size(new_data)
 
@@ -1204,6 +1229,11 @@ function resample_1d!(new_data::AbstractVector, old_data::AbstractVector)
     """Resample 1D data using spectral interpolation."""
     n_old = length(old_data)
     n_new = length(new_data)
+
+    if n_old == 1 || n_new == 1
+        fill!(new_data, old_data[1])
+        return
+    end
 
     if n_old == n_new
         copyto!(new_data, old_data)
@@ -1251,8 +1281,12 @@ function resample_1d!(new_data::AbstractVector, old_data::AbstractVector)
         end
 
         # Inverse FFT
-        result = real(FFTW.ifft(new_fft))
-        copyto!(new_data, result)
+        result = FFTW.ifft(new_fft)
+        if eltype(new_data) <: Real
+            copyto!(new_data, real(result))
+        else
+            copyto!(new_data, result)
+        end
 
     catch e
         @warn "FFT resampling failed, using linear interpolation: $e"
@@ -1264,6 +1298,11 @@ function resample_linear_1d!(new_data::AbstractVector, old_data::AbstractVector)
     """Fallback linear interpolation for 1D resampling."""
     n_old = length(old_data)
     n_new = length(new_data)
+
+    if n_old == 1 || n_new == 1
+        fill!(new_data, old_data[1])
+        return
+    end
 
     for i in 1:n_new
         # Map new index to old index (0-based for interpolation)
@@ -1369,6 +1408,9 @@ function resample_nearest!(new_data::AbstractArray, old_data::AbstractArray)
         old_indices = ntuple(ndims_data) do d
             # Scale index from new to old grid
             new_idx = I[d]
+            if new_size[d] <= 1 || old_size[d] <= 1
+                return 1
+            end
             old_idx = round(Int, (new_idx - 1) / (new_size[d] - 1) * (old_size[d] - 1)) + 1
             clamp(old_idx, 1, old_size[d])
         end
@@ -1496,7 +1538,17 @@ end
 Check if a field's data is on GPU.
 """
 function is_gpu_field(field::ScalarField)
-    return is_gpu(field.dist.architecture)
+    # Check actual array storage rather than architecture metadata
+    gd = field.buffers.grid
+    if gd isa AbstractArray
+        return is_gpu_array(gd)
+    end
+    cd = field.buffers.coeff
+    if cd isa AbstractArray
+        return is_gpu_array(cd)
+    end
+    # Fallback to architecture if no data allocated yet (or Pencil arrays = CPU)
+    return is_gpu(field.buffers.architecture)
 end
 
 is_gpu_field(field::VectorField) = is_gpu_field(field.components[1])
@@ -2290,7 +2342,9 @@ end
 # LoopVectorization functions
 @inline function vectorized_add!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
     """Vectorized addition: result = a + b"""
-    if length(result) > 100
+    if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
+        result .= a .+ b
+    elseif length(result) > 100
         @turbo for i in eachindex(result, a, b)
             result[i] = a[i] + b[i]
         end
@@ -2301,7 +2355,9 @@ end
 
 @inline function vectorized_sub!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
     """Vectorized subtraction: result = a - b"""
-    if length(result) > 100
+    if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
+        result .= a .- b
+    elseif length(result) > 100
         @turbo for i in eachindex(result, a, b)
             result[i] = a[i] - b[i]
         end
@@ -2312,7 +2368,9 @@ end
 
 @inline function vectorized_mul!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
     """Vectorized multiplication: result = a * b (element-wise)"""
-    if length(result) > 100
+    if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
+        result .= a .* b
+    elseif length(result) > 100
         @turbo for i in eachindex(result, a, b)
             result[i] = a[i] * b[i]
         end
@@ -2323,7 +2381,9 @@ end
 
 @inline function vectorized_scale!(result::AbstractArray, a::AbstractArray, α::Real)
     """Vectorized scaling: result = α * a"""
-    if length(result) > 100
+    if is_gpu_array(result) || is_gpu_array(a)
+        result .= α .* a
+    elseif length(result) > 100
         @turbo for i in eachindex(result, a)
             result[i] = α * a[i]
         end
@@ -2334,7 +2394,9 @@ end
 
 @inline function vectorized_axpy!(result::AbstractArray, α::Real, x::AbstractArray, y::AbstractArray)
     """Vectorized AXPY: result = α*x + y"""
-    if length(result) > 100
+    if is_gpu_array(result) || is_gpu_array(x) || is_gpu_array(y)
+        result .= α .* x .+ y
+    elseif length(result) > 100
         @turbo for i in eachindex(result, x, y)
             result[i] = α * x[i] + y[i]
         end
@@ -2345,7 +2407,9 @@ end
 
 @inline function vectorized_linear_combination!(result::AbstractArray, α::Real, a::AbstractArray, β::Real, b::AbstractArray)
     """Vectorized linear combination: result = α*a + β*b"""
-    if length(result) > 100
+    if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
+        result .= α .* a .+ β .* b
+    elseif length(result) > 100
         @turbo for i in eachindex(result, a, b)
             result[i] = α * a[i] + β * b[i]
         end
@@ -2363,7 +2427,9 @@ function fast_axpy!(α::Real, x::ScalarField, y::ScalarField)
     x_data = get_grid_data(x)
     y_data = get_grid_data(y)
     n = length(x_data)
-    if n > 2000  # Use BLAS for very large arrays
+    if is_gpu_array(x_data) || is_gpu_array(y_data)
+        y_data .+= α .* x_data
+    elseif n > 2000  # Use BLAS for very large arrays
         BLAS.axpy!(α, x_data, y_data)
     elseif n > 100  # Use LoopVectorization for medium arrays
         @turbo for i in eachindex(y_data, x_data)

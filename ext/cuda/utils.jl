@@ -301,6 +301,147 @@ function apply_dealiasing_gpu!(data::CuArray{T, 1}, cutoff::Float64=2.0/3.0) whe
 end
 
 # ============================================================================
+# GPU-Native Spectral Resampling
+# ============================================================================
+
+"""
+    gpu_resample_grid_data!(new_data::CuArray, old_data::CuArray, old_shape, new_shape)
+
+GPU-native spectral resampling using cuFFT: FFT → pad/truncate → IFFT entirely on GPU.
+Avoids CPU round-trip for scale changes and dealiasing.
+"""
+function Tarang.gpu_resample_grid_data!(new_data::CuArray, old_data::CuArray,
+                                        old_shape::Tuple, new_shape::Tuple)
+    old_size = size(old_data)
+    new_size = size(new_data)
+
+    if old_size == new_size
+        copyto!(new_data, old_data)
+        return true
+    end
+
+    ndims_data = length(old_size)
+    if length(new_size) != ndims_data
+        return false  # Dimension mismatch, fall back to CPU
+    end
+
+    gpu_spectral_resample!(new_data, old_data)
+    return true
+end
+
+"""
+    gpu_spectral_resample!(new_data::CuArray{T}, old_data::CuArray{T})
+
+Perform spectral interpolation on GPU: forward FFT, pad/truncate coefficients,
+inverse FFT. Handles real and complex element types.
+"""
+function gpu_spectral_resample!(new_data::CuArray{T}, old_data::CuArray{T}) where T
+    CT = T <: Real ? Complex{T} : T
+    RT = T <: Real ? T : real(T)
+
+    # Convert to complex for FFT if needed
+    old_complex = T <: Real ? CuArray{CT}(old_data) : old_data
+
+    # Forward FFT on GPU
+    old_fft = CUFFT.fft(old_complex)
+
+    # Create new spectral array and copy appropriate frequency components
+    new_fft = CUDA.zeros(CT, size(new_data)...)
+    spectral_pad_truncate_gpu!(new_fft, old_fft)
+
+    # Scale for energy conservation
+    scale_factor = RT(prod(size(new_data))) / RT(prod(size(old_data)))
+    new_fft .*= scale_factor
+
+    # Inverse FFT on GPU
+    result = CUFFT.ifft(new_fft)
+    if T <: Real
+        new_data .= real.(result)
+    else
+        copyto!(new_data, result)
+    end
+end
+
+"""
+    spectral_pad_truncate_gpu!(new_fft::CuArray, old_fft::CuArray)
+
+Copy FFT coefficients from old_fft to new_fft, handling the standard FFT frequency
+layout (DC, positive freqs, Nyquist, negative freqs) in each dimension.
+Pads with zeros for upsampling, truncates for downsampling.
+"""
+function spectral_pad_truncate_gpu!(new_fft::CuArray{T,1}, old_fft::CuArray{T,1}) where T
+    n_old = size(old_fft, 1)
+    n_new = size(new_fft, 1)
+
+    n_pos = min(div(n_old, 2), div(n_new, 2))
+    n_neg = min(n_old - div(n_old, 2) - 1, n_new - div(n_new, 2) - 1)
+
+    # DC + positive frequencies
+    copyto!(view(new_fft, 1:n_pos+1), view(old_fft, 1:n_pos+1))
+    # Negative frequencies
+    if n_neg > 0
+        copyto!(view(new_fft, n_new-n_neg+1:n_new), view(old_fft, n_old-n_neg+1:n_old))
+    end
+end
+
+function spectral_pad_truncate_gpu!(new_fft::CuArray{T,2}, old_fft::CuArray{T,2}) where T
+    nx_old, ny_old = size(old_fft)
+    nx_new, ny_new = size(new_fft)
+
+    px = min(div(nx_old, 2), div(nx_new, 2))
+    py = min(div(ny_old, 2), div(ny_new, 2))
+    nx_neg = min(nx_old - div(nx_old, 2) - 1, nx_new - div(nx_new, 2) - 1)
+    ny_neg = min(ny_old - div(ny_old, 2) - 1, ny_new - div(ny_new, 2) - 1)
+
+    # Four corners: (pos_x, pos_y), (pos_x, neg_y), (neg_x, pos_y), (neg_x, neg_y)
+    xp_old = 1:px+1;       xp_new = 1:px+1
+    yp_old = 1:py+1;       yp_new = 1:py+1
+    xn_old = nx_old-nx_neg+1:nx_old;  xn_new = nx_new-nx_neg+1:nx_new
+    yn_old = ny_old-ny_neg+1:ny_old;  yn_new = ny_new-ny_neg+1:ny_new
+
+    copyto!(view(new_fft, xp_new, yp_new), view(old_fft, xp_old, yp_old))
+    if ny_neg > 0
+        copyto!(view(new_fft, xp_new, yn_new), view(old_fft, xp_old, yn_old))
+    end
+    if nx_neg > 0
+        copyto!(view(new_fft, xn_new, yp_new), view(old_fft, xn_old, yp_old))
+    end
+    if nx_neg > 0 && ny_neg > 0
+        copyto!(view(new_fft, xn_new, yn_new), view(old_fft, xn_old, yn_old))
+    end
+end
+
+function spectral_pad_truncate_gpu!(new_fft::CuArray{T,3}, old_fft::CuArray{T,3}) where T
+    nx_old, ny_old, nz_old = size(old_fft)
+    nx_new, ny_new, nz_new = size(new_fft)
+
+    px = min(div(nx_old, 2), div(nx_new, 2))
+    py = min(div(ny_old, 2), div(ny_new, 2))
+    pz = min(div(nz_old, 2), div(nz_new, 2))
+    nx_neg = min(nx_old - div(nx_old, 2) - 1, nx_new - div(nx_new, 2) - 1)
+    ny_neg = min(ny_old - div(ny_old, 2) - 1, ny_new - div(ny_new, 2) - 1)
+    nz_neg = min(nz_old - div(nz_old, 2) - 1, nz_new - div(nz_new, 2) - 1)
+
+    xp_old = 1:px+1;       xp_new = 1:px+1
+    yp_old = 1:py+1;       yp_new = 1:py+1
+    zp_old = 1:pz+1;       zp_new = 1:pz+1
+    xn_old = nx_old-nx_neg+1:nx_old;  xn_new = nx_new-nx_neg+1:nx_new
+    yn_old = ny_old-ny_neg+1:ny_old;  yn_new = ny_new-ny_neg+1:ny_new
+    zn_old = nz_old-nz_neg+1:nz_old;  zn_new = nz_new-nz_neg+1:nz_new
+
+    # Eight corners of the 3D frequency cube
+    for (xo, xn) in ((xp_old, xp_new), nx_neg > 0 ? (xn_old, xn_new) : (1:0, 1:0))
+        for (yo, yn) in ((yp_old, yp_new), ny_neg > 0 ? (yn_old, yn_new) : (1:0, 1:0))
+            for (zo, zn) in ((zp_old, zp_new), nz_neg > 0 ? (zn_old, zn_new) : (1:0, 1:0))
+                if length(xo) > 0 && length(yo) > 0 && length(zo) > 0
+                    copyto!(view(new_fft, xn, yn, zn), view(old_fft, xo, yo, zo))
+                end
+            end
+        end
+    end
+end
+
+# ============================================================================
 # GPU Field Multiplication (Override for nonlinear terms)
 # ============================================================================
 
