@@ -1486,13 +1486,24 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     # Ensure plain CPU array for NetCDF - handle scalars by wrapping in 1-element array
     # Use get_cpu_data() to handle any remaining GPU arrays
     if isa(data, Number)
-        data = [data]
+        data = isa(data, Complex) ? [real(data), imag(data)] : [data]
     elseif isa(data, AbstractArray)
         # Use get_cpu_data() for GPU-safe conversion to CPU Array
         data = get_cpu_data(data)
     else
         data = [data]  # Fallback for other types
     end
+    # NetCDF doesn't support complex types: split into real/imag along a leading dimension
+    is_complex_data = eltype(data) <: Complex
+    if is_complex_data
+        RT = real(eltype(data))
+        real_part = Array{RT}(real.(data))
+        imag_part = Array{RT}(imag.(data))
+        data = cat(reshape(real_part, 1, size(real_part)...),
+                   reshape(imag_part, 1, size(imag_part)...); dims=1)
+    end
+    # Ensure contiguous Array (not ReshapedArray/SubArray) for NetCDF.jl
+    data = Array(data)
     # Use Julia types directly for NetCDF.jl (NC_FLOAT/NC_DOUBLE are C constants)
     nc_type = eltype(data) <: Float32 ? Float32 : Float64
     
@@ -1550,6 +1561,9 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         )
         if task["scales"] !== nothing
             var_atts["scales"] = string(task["scales"])
+        end
+        if is_complex_data
+            var_atts["complex_split"] = 1  # dim1 is [real, imag]
         end
 
         layout_meta = build_layout_metadata(task, operator, data)
