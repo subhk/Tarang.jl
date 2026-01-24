@@ -123,21 +123,21 @@ using Test
 
     @testset "Dealiasing Functions" begin
         @testset "get_dealiasing_cutoffs" begin
-            # Test 1D cutoff
+            # Test 1D cutoff: keep |k| <= N/(2*factor) = 64/3 = 21
             cutoffs = Tarang.get_dealiasing_cutoffs((64,), 1.5)
-            @test cutoffs == (42,)  # floor(64/1.5) = 42
+            @test cutoffs == (21,)
 
-            # Test 2D cutoffs
+            # Test 2D cutoffs: (128/3, 64/3) = (42, 21)
             cutoffs = Tarang.get_dealiasing_cutoffs((128, 64), 1.5)
-            @test cutoffs == (85, 42)
+            @test cutoffs == (42, 21)
 
-            # Test 3D cutoffs
+            # Test 3D cutoffs: (64/3, 64/3, 32/3) = (21, 21, 10)
             cutoffs = Tarang.get_dealiasing_cutoffs((64, 64, 32), 1.5)
-            @test cutoffs == (42, 42, 21)
+            @test cutoffs == (21, 21, 10)
 
-            # Test with different dealiasing factor
+            # Test with different dealiasing factor: 64/(2*2) = 16
             cutoffs = Tarang.get_dealiasing_cutoffs((64,), 2.0)
-            @test cutoffs == (32,)
+            @test cutoffs == (16,)
         end
 
         @testset "apply_1d_spectral_cutoff! (vector)" begin
