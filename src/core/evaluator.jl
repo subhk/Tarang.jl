@@ -259,22 +259,9 @@ function _stack_tensor_components(components::AbstractMatrix{<:ScalarField})
 
     return result
 end
-function evaluate_operator(op::Operator)
-    """Evaluate operator and return result field"""
-    
-    if isa(op, Gradient)
-        return evaluate_gradient(op)
-    elseif isa(op, Divergence)
-        return evaluate_divergence(op)
-    elseif isa(op, Curl)
-        return evaluate_curl(op)
-    elseif isa(op, Laplacian)
-        return evaluate_laplacian(op)
-    elseif isa(op, Differentiate)
-        return evaluate_differentiate(op)
-    else
-        throw(ArgumentError("Operator evaluation not implemented for $(typeof(op))"))
-    end
+function evaluate_operator(op::Operator, layout::Symbol=:g)
+    """Evaluate operator and return result field."""
+    return evaluate(op, layout)
 end
 
 
