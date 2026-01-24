@@ -161,7 +161,7 @@ Check if the domain is configured for GPU.
 """
 is_gpu(domain::Domain) = is_gpu(domain.dist.architecture)
 
-@inline function _domain_cached_get!(builder::Function, domain::Domain, key::Symbol)
+@inline function _domain_cached_get!(domain::Domain, key::Symbol, builder::Function)
     cache = domain.attribute_cache
     return get!(cache, key) do
         builder()
@@ -446,7 +446,7 @@ function grid_spacing(domain::Domain)
         elseif isa(basis, ChebyshevT)
             # Non-uniform spacing for Chebyshev (approximate average)
             # For size == 1, spacing is the full interval
-            dx = size > 1 ? 2.0 / (size - 1) : 2.0
+            dx = size > 1 ? L / (size - 1) : L
             push!(spacings, dx)
         else
             # Uniform spacing: dx = L / N
