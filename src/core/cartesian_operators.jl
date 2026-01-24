@@ -546,44 +546,127 @@ end
 
 function matrix_coupling(op::CartesianGradient, vars...)
     result = falses(length(vars))
-    for arg in op.args
-        arg_coupling = matrix_coupling(arg, vars...)
-        result .|= arg_coupling
+    operand = op.operand
+
+    if isa(operand, VectorField)
+        # For vector operand, check coupling of each component against vars
+        for comp in operand.components
+            for (i, var) in enumerate(vars)
+                if comp === var ||
+                   (hasfield(typeof(comp), :name) && hasfield(typeof(var), :name) &&
+                    comp.name == var.name)
+                    result[i] = true
+                end
+            end
+        end
+        # Also check the VectorField itself
+        for (i, var) in enumerate(vars)
+            if operand === var ||
+               (hasfield(typeof(operand), :name) && hasfield(typeof(var), :name) &&
+                operand.name == var.name)
+                result[i] = true
+            end
+        end
+    else
+        # Scalar operand: delegate to derivative args
+        for arg in op.args
+            arg_coupling = matrix_coupling(arg, vars...)
+            result .|= arg_coupling
+        end
     end
+
     return result
 end
 
 function subproblem_matrix(op::CartesianGradient, subproblem)
     """Build operator matrix for a specific subproblem."""
-    # Stack differentiation matrices vertically for vector output
-    matrices = SparseMatrixCSC[]
-    for arg in op.args
-        mat = expression_matrices(arg, subproblem, [op.operand])
-        if haskey(mat, op.operand)
-            push!(matrices, mat[op.operand])
-        end
-    end
+    operand = op.operand
+    coordsys = op.coordsys
 
-    if isempty(matrices)
+    if isa(operand, ScalarField)
+        # Scalar → Vector: stack differentiation matrices vertically
+        matrices = SparseMatrixCSC[]
+        for arg in op.args
+            mat = expression_matrices(arg, subproblem, [operand])
+            if haskey(mat, operand)
+                push!(matrices, mat[operand])
+            end
+        end
+
+        if isempty(matrices)
+            return spzeros(Float64, 0, 0)
+        end
+
+        return vcat(matrices...)
+
+    elseif isa(operand, VectorField)
+        # Vector → Tensor: T[i,j] = ∂u_j/∂x_i
+        # Build block matrix with dim² row blocks and dim column blocks
+        dim = coordsys.dim
+        comps = operand.components
+        n_per = field_dofs(comps[1])
+        zero_block = spzeros(Float64, n_per, n_per)
+
+        rows = SparseMatrixCSC[]
+        for i in 1:dim  # derivative direction
+            for j in 1:dim  # vector component
+                blocks = SparseMatrixCSC[]
+                for k in 1:dim
+                    if k == j
+                        D = build_operator_differentiation_matrix(comps[j], coordsys.coords[i], 1)
+                        push!(blocks, D === nothing ? zero_block : D)
+                    else
+                        push!(blocks, zero_block)
+                    end
+                end
+                push!(rows, hcat(blocks...))
+            end
+        end
+
+        return vcat(rows...)
+
+    else
         return spzeros(Float64, 0, 0)
     end
-
-    return vcat(matrices...)
 end
 
 function check_conditions(op::CartesianGradient)
     """Check that operands are in a proper layout."""
-    # Require all args to be in same layout
-    layouts = [arg.operand.current_layout for arg in op.args
-               if hasfield(typeof(arg.operand), :current_layout)]
-    return length(Set(layouts)) <= 1
+    operand = op.operand
+
+    if isa(operand, VectorField)
+        # For vector operand, check that all components are in a consistent layout
+        layouts = Symbol[]
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+                push!(layouts, comp.current_layout)
+            end
+        end
+        return length(Set(layouts)) <= 1
+    else
+        # Scalar operand: check layout consistency across derivative args
+        layouts = [arg.operand.current_layout for arg in op.args
+                   if hasfield(typeof(arg.operand), :current_layout)]
+        return length(Set(layouts)) <= 1
+    end
 end
 
 function enforce_conditions(op::CartesianGradient)
     """Require operands to be in coefficient layout."""
-    for arg in op.args
-        if hasfield(typeof(arg), :operand) && hasfield(typeof(arg.operand), :current_layout)
-            ensure_layout!(arg.operand, :c)
+    operand = op.operand
+
+    if isa(operand, VectorField)
+        # For vector operand, ensure all components are in coefficient layout
+        for comp in operand.components
+            if hasfield(typeof(comp), :current_layout)
+                ensure_layout!(comp, :c)
+            end
+        end
+    else
+        for arg in op.args
+            if hasfield(typeof(arg), :operand) && hasfield(typeof(arg.operand), :current_layout)
+                ensure_layout!(arg.operand, :c)
+            end
         end
     end
 end
