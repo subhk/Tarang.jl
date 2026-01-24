@@ -920,17 +920,6 @@ function forcing_enstrophy_injection_rate(forcing::StochasticForcing{T, N, A, CA
     domain_area = prod(forcing.domain_size)
     kx, ky = forcing.wavenumbers
 
-    # Build k² array on CPU (wavenumbers are always on CPU)
-    k2_array = zeros(T, forcing.field_size)
-    for j in eachindex(ky)
-        for i in eachindex(kx)
-            k2_array[i, j] = kx[i]^2 + ky[j]^2
-        end
-    end
-
-    # Move to target architecture and compute
-    k2_on_arch = on_architecture(forcing.architecture, k2_array)
-
     # Get spectrum on CPU for computation (spectrum might be on GPU)
     spectrum_cpu = Array(forcing.forcing_spectrum)
 
