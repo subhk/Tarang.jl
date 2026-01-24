@@ -1374,10 +1374,25 @@ Remove empty rows from sparse matrix.
 Following tools/array drop_empty_rows.
 """
 function drop_empty_rows(A::SparseMatrixCSC)
-    row_sums = vec(sum(abs.(A), dims=2))
-    non_empty = findall(row_sums .> 0)
+    m, n = size(A)
+    if nnz(A) == 0
+        return spzeros(eltype(A), 0, n)
+    end
+    # Use sparse structure directly instead of dense sum(abs.(A), dims=2)
+    rows = SparseArrays.rowvals(A)
+    vals = SparseArrays.nonzeros(A)
+    has_nonzero = falses(m)
+    @inbounds for i in eachindex(rows)
+        if vals[i] != zero(eltype(A))
+            has_nonzero[rows[i]] = true
+        end
+    end
+    non_empty = findall(has_nonzero)
     if isempty(non_empty)
-        return spzeros(eltype(A), 0, size(A, 2))
+        return spzeros(eltype(A), 0, n)
+    end
+    if length(non_empty) == m
+        return A  # All rows non-empty, no slicing needed
     end
     return A[non_empty, :]
 end

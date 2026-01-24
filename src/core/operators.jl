@@ -2694,59 +2694,112 @@ For LBVP solvers, this creates the "tau polynomial" that adds boundary
 condition enforcement terms to the highest modes.
 """
 function build_lift_matrix(var, basis, n::Int; kwargs...)
-    if !hasfield(typeof(var), :bases)
-        return nothing
+    N = basis.meta.size
+
+    # Resolve mode index: negative wrap-around (Dedalus convention)
+    # n < 0: index from end (e.g., -1 → N-1 in 0-indexed → N in 1-indexed)
+    lift_mode = n
+    if lift_mode < 0
+        lift_mode = N + lift_mode
+    end
+    lift_mode += 1  # Convert 0-indexed to 1-indexed Julia convention
+
+    if lift_mode < 1 || lift_mode > N
+        n_total = hasfield(typeof(var), :bases) ? max(1, field_dofs(var)) : 1
+        return spzeros(Float64, N * (n_total ÷ max(1, n_total)), n_total)
     end
 
-    # Find the basis index
+    # Build the 1D lift column vector: e_{lift_mode} of size (N, 1)
+    e_lift = sparse([lift_mode], [1], [1.0], N, 1)
+
+    # If var has no bases or only the lift basis, return 1D lift vector
+    if !hasfield(typeof(var), :bases) || isempty(var.bases) || all(b -> b === nothing, var.bases)
+        return e_lift
+    end
+
+    # Find which var basis (if any) matches the lift basis coordinate
+    lift_coord = basis.meta.element_label
     basis_idx = nothing
     for (i, b) in enumerate(var.bases)
-        if b === basis
+        if b !== nothing && b.meta.element_label == lift_coord
             basis_idx = i
             break
         end
     end
 
-    if basis_idx === nothing
-        # Try matching by name
+    # Multi-dimensional case: build Kronecker product
+    # Following the same convention as build_operator_differentiation_matrix:
+    # result = kron(matrices[end], kron(matrices[end-1], ...kron(matrices[2], matrices[1])))
+    #
+    # For each dimension of the EQUATION space:
+    # - If it's the lift dimension and tau doesn't have it: use e_lift (N×1)
+    # - If it's the lift dimension and tau has it: use e_lift (N × N_var_basis)
+    # - If tau has this basis: use identity I(basis_size)
+    #
+    # The resulting matrix maps from tau DOFs to equation DOFs.
+
+    if basis_idx !== nothing
+        # Tau variable already has the lift basis — rare case
+        # Matrix is (N, var_basis_size) with 1 at row lift_mode for each col
+        # This zeroes everything except the lift_mode row
+        var_basis_size = var.bases[basis_idx].meta.size
+        lift_1d = sparse([lift_mode], [lift_mode], [1.0], N, var_basis_size)
+
+        if length(var.bases) == 1
+            return lift_1d
+        end
+
+        # Kronecker product for multi-dimensional
+        matrices = AbstractMatrix[]
         for (i, b) in enumerate(var.bases)
-            if b !== nothing && basis.meta.element_label == b.meta.element_label
-                basis_idx = i
-                break
+            if b === nothing
+                continue
+            end
+            if i == basis_idx
+                push!(matrices, lift_1d)
+            else
+                push!(matrices, sparse(LinearAlgebra.I, b.meta.size, b.meta.size))
             end
         end
+
+        result = matrices[end]
+        for i in (length(matrices)-1):-1:1
+            result = kron(result, matrices[i])
+        end
+        return result
+    else
+        # Tau variable does NOT have the lift basis — standard tau method case
+        # The lift basis is an extra dimension added to the tau variable
+        # Matrix maps from tau DOFs to (tau_tangential × lift_basis) DOFs
+        #
+        # We need to determine WHERE the lift basis goes in the equation's
+        # dimension ordering. We use the basis coordinate to infer position.
+
+        # Collect the tau variable's existing basis sizes
+        tangential_bases = [(i, b) for (i, b) in enumerate(var.bases) if b !== nothing]
+
+        if isempty(tangential_bases)
+            # Scalar tau (no bases) — just the lift vector
+            return e_lift
+        end
+
+        # Determine insertion position for lift basis among existing bases
+        # Convention: bases are ordered by coordinate, lift basis goes at its
+        # natural position. For simplicity, we append it at the end (last dim).
+        # This matches Dedalus where the bounded direction is typically last.
+        matrices = AbstractMatrix[]
+        for (i, b) in tangential_bases
+            push!(matrices, sparse(LinearAlgebra.I, b.meta.size, b.meta.size))
+        end
+        push!(matrices, e_lift)
+
+        # Kronecker product: result = kron(matrices[end], ...kron(matrices[2], matrices[1]))
+        result = matrices[end]
+        for i in (length(matrices)-1):-1:1
+            result = kron(result, matrices[i])
+        end
+        return result
     end
-
-    if basis_idx === nothing
-        return nothing
-    end
-
-    N = basis.meta.size
-
-    # Following the standard convention: direct indexing with negative wrap-around
-    # In the standard (0-indexed) convention: P['c'][axslice(axis, n, n+1)] = 1
-    # In Julia (1-indexed): we add 1 to convert from 0-indexed to 1-indexed
-    lift_mode = n
-    if lift_mode < 0
-        lift_mode = N + lift_mode  # Wrap negative indices (e.g., -1 → N-1 in 0-indexed → N in 1-indexed)
-    end
-    lift_mode += 1  # Convert from 0-indexed to 1-indexed
-
-    I_list = Int[]
-    J_list = Int[]
-    V_list = Float64[]
-
-    if lift_mode >= 1 && lift_mode <= N
-        push!(I_list, lift_mode)
-        push!(J_list, 1)
-        push!(V_list, 1.0)
-    end
-
-    if isempty(I_list)
-        return spzeros(Float64, N, 1)
-    end
-
-    return sparse(I_list, J_list, V_list, N, 1)
 end
 
 """
@@ -3453,39 +3506,47 @@ function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
     end
 
     # Find or create the output bases tuple
-    # The output domain substitutes the input basis with output_basis
     output_bases = _get_lift_output_bases(operand, output_basis)
 
     # Step 1: Build polynomial P with coefficient 1 at mode n
     # Following Dedalus: P = dist.Field(bases=basis); P['c'][axslice(axis, n, n+1)] = 1
     P = ScalarField(operand.dist, "lift_poly", output_bases, operand.dtype)
     ensure_layout!(P, :c)
-    fill!(get_coeff_data(P), 0.0)
 
     # Find which axis corresponds to the output basis
     basis_axis = _find_basis_axis(output_bases, output_basis)
 
-    # Set coefficient at mode n to 1
-    if ndims(get_coeff_data(P)) == 1
-        get_coeff_data(P)[lift_mode] = 1.0
+    # Build P coefficients on CPU, then transfer to GPU if needed
+    p_data = get_coeff_data(P)
+    arch = operand.dist.architecture
+    if is_gpu_array(p_data)
+        # Build on CPU first, then copy to GPU
+        cpu_p = zeros(eltype(p_data), size(p_data))
+        if ndims(cpu_p) == 1
+            cpu_p[lift_mode] = one(eltype(cpu_p))
+        else
+            selectdim(cpu_p, basis_axis, lift_mode) .= one(eltype(cpu_p))
+        end
+        copyto!(p_data, on_architecture(arch, cpu_p))
     else
-        # For multi-dimensional: set P['c'][..., n:n+1, ...] = 1
-        _set_lift_coefficient!(get_coeff_data(P), basis_axis, lift_mode, 1.0)
+        fill!(p_data, zero(eltype(p_data)))
+        if ndims(p_data) == 1
+            p_data[lift_mode] = one(eltype(p_data))
+        else
+            selectdim(p_data, basis_axis, lift_mode) .= one(eltype(p_data))
+        end
     end
 
     # Step 2: Compute result = P * operand
-    # This is the key difference from the old implementation
-    # The operand is typically a tau variable (scalar or low-dimensional)
     ensure_layout!(operand, :c)
 
     # Create result field
     result = ScalarField(operand.dist, "lift_$(operand.name)", output_bases, operand.dtype)
     ensure_layout!(result, :c)
 
-    # Multiply P * operand
-    # For tau method: operand is usually constant or low-mode, P has single mode
-    # Result: coefficient at mode n gets operand's value
-    _multiply_lift_polynomial!(get_coeff_data(result), get_coeff_data(P), get_coeff_data(operand), basis_axis, lift_mode)
+    # Multiply P * operand: place operand's data at mode lift_mode
+    _multiply_lift_polynomial!(get_coeff_data(result), get_coeff_data(P),
+                               get_coeff_data(operand), basis_axis, lift_mode, arch)
 
     if layout == :g
         backward_transform!(result)
@@ -3556,45 +3617,63 @@ function _set_lift_coefficient!(data::AbstractArray, axis::Int, mode::Int, value
 end
 
 """
-    _multiply_lift_polynomial!(result, P_data, operand_data, basis_axis, lift_mode)
+    _multiply_lift_polynomial!(result, P_data, operand_data, basis_axis, lift_mode, arch)
 
 Multiply lift polynomial P by operand.
 P has a single non-zero coefficient at lift_mode.
 Result = P * operand places operand's values at mode lift_mode.
+
+GPU-compatible: avoids scalar indexing by building on CPU and copying,
+or using broadcasting operations that work on GPU arrays.
 """
 function _multiply_lift_polynomial!(result::AbstractArray, P_data::AbstractArray,
-                                    operand_data::AbstractArray, basis_axis::Int, lift_mode::Int)
-    # Zero out result
-    fill!(result, 0.0)
+                                    operand_data::AbstractArray, basis_axis::Int,
+                                    lift_mode::Int, arch=nothing)
+    if is_gpu_array(result)
+        # GPU path: build result on CPU, then copy to GPU
+        cpu_result = zeros(eltype(result), size(result))
+        cpu_operand = is_gpu_array(operand_data) ? Array(operand_data) : operand_data
 
-    # For tau method: operand is typically constant or has fewer dimensions
-    # P is a polynomial with single coefficient at lift_mode
-    # Result: place operand's data at mode lift_mode along basis_axis
+        if ndims(cpu_result) == 1
+            if length(cpu_operand) >= 1
+                cpu_result[lift_mode] = cpu_operand[1]
+            end
+        else
+            result_slice = selectdim(cpu_result, basis_axis, lift_mode)
+            if ndims(cpu_operand) == ndims(cpu_result)
+                operand_slice = selectdim(cpu_operand, basis_axis, 1)
+                result_slice .= operand_slice
+            elseif ndims(cpu_operand) < ndims(cpu_result)
+                result_slice .= cpu_operand
+            else
+                result_slice .= selectdim(cpu_operand, basis_axis, 1)
+            end
+        end
 
-    if ndims(result) == 1
-        # 1D case: result[lift_mode] = operand[1] * P[lift_mode] = operand[1] * 1
-        if length(operand_data) >= 1
-            result[lift_mode] = operand_data[1]
+        # Transfer to GPU
+        if arch !== nothing
+            copyto!(result, on_architecture(arch, cpu_result))
+        else
+            copyto!(result, cpu_result)
         end
     else
-        # Multi-dimensional case
-        # P[lift_mode] = 1 along basis_axis, 0 elsewhere
-        # result = P * operand → result[..., lift_mode, ...] = operand[..., :, ...]
+        # CPU path: direct operations
+        fill!(result, zero(eltype(result)))
 
-        result_slice = selectdim(result, basis_axis, lift_mode)
-
-        if ndims(operand_data) == ndims(result)
-            # Same dimensions: take corresponding slice from operand
-            # This handles case where operand also has the basis
-            operand_slice = selectdim(operand_data, basis_axis, 1)
-            result_slice .= operand_slice
-        elseif ndims(operand_data) < ndims(result)
-            # Operand has fewer dimensions (typical tau variable case)
-            # Broadcast operand across the result slice
-            result_slice .= operand_data
+        if ndims(result) == 1
+            if length(operand_data) >= 1
+                result[lift_mode] = operand_data[1]
+            end
         else
-            # Operand has more dimensions - take first slice
-            result_slice .= selectdim(operand_data, basis_axis, 1)
+            result_slice = selectdim(result, basis_axis, lift_mode)
+            if ndims(operand_data) == ndims(result)
+                operand_slice = selectdim(operand_data, basis_axis, 1)
+                result_slice .= operand_slice
+            elseif ndims(operand_data) < ndims(result)
+                result_slice .= operand_data
+            else
+                result_slice .= selectdim(operand_data, basis_axis, 1)
+            end
         end
     end
 end
