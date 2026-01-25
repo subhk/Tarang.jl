@@ -78,8 +78,17 @@ function _create_batched_fft_plan(field_size::Tuple, T::Type, batch_size::Int, r
     end
 end
 
-# Batched FFT plan cache
-const BATCHED_FFT_CACHE = Dict{Tuple, BatchedGPUFFTPlan}()
+# Batched FFT plan cache (Thread-Safe)
+"""
+Thread-safe cache for batched GPU FFT plans.
+Uses a ReentrantLock to protect concurrent access from multiple Julia threads.
+"""
+struct BatchedFFTCache
+    plans::Dict{Tuple, BatchedGPUFFTPlan}
+    lock::ReentrantLock
+end
+
+const BATCHED_FFT_CACHE = BatchedFFTCache(Dict{Tuple, BatchedGPUFFTPlan}(), ReentrantLock())
 
 """
     _batched_plan_key(arch, field_size, T, batch_size, real_input)
@@ -96,17 +105,19 @@ _batched_plan_key(arch::GPU, field_size::Tuple, T::Type, batch_size::Int, real_i
 """
     get_batched_fft_plan(arch::GPU, field_size::Tuple, T::Type, batch_size::Int; real_input::Bool=false)
 
-Get or create a cached batched FFT plan.
+Get or create a cached batched FFT plan (thread-safe).
 
 **Important:** `field_size` should be the LOCAL field shape (what this process owns),
 not the global domain size. Plans are cached per (device, size, type, batch_size, real_input).
 """
 function get_batched_fft_plan(arch::GPU, field_size::Tuple, T::Type, batch_size::Int; real_input::Bool=false)
     key = _batched_plan_key(arch, field_size, T, batch_size, real_input)
-    if !haskey(BATCHED_FFT_CACHE, key)
-        BATCHED_FFT_CACHE[key] = plan_batched_gpu_fft(arch, field_size, T, batch_size; real_input=real_input)
+    lock(BATCHED_FFT_CACHE.lock) do
+        if !haskey(BATCHED_FFT_CACHE.plans, key)
+            BATCHED_FFT_CACHE.plans[key] = plan_batched_gpu_fft(arch, field_size, T, batch_size; real_input=real_input)
+        end
+        return BATCHED_FFT_CACHE.plans[key]
     end
-    return BATCHED_FFT_CACHE[key]
 end
 
 """
@@ -160,10 +171,12 @@ end
 """
     clear_batched_fft_cache!()
 
-Clear all cached batched FFT plans.
+Clear all cached batched FFT plans (thread-safe).
 """
 function clear_batched_fft_cache!()
-    empty!(BATCHED_FFT_CACHE)
+    lock(BATCHED_FFT_CACHE.lock) do
+        empty!(BATCHED_FFT_CACHE.plans)
+    end
 end
 
 # ============================================================================

@@ -107,10 +107,19 @@ plan_gpu_mixed_transform(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Ty
     plan_gpu_mixed_transform(GPU{CuDevice}(CUDA.device()), bases, local_grid_shape, T)
 
 # ============================================================================
-# Mixed Transform Caching
+# Mixed Transform Caching (Thread-Safe)
 # ============================================================================
 
-const GPU_MIXED_TRANSFORM_CACHE = Dict{Tuple, GPUMixedTransformPlan}()
+"""
+Thread-safe cache for GPU mixed transform plans.
+Uses a ReentrantLock to protect concurrent access from multiple Julia threads.
+"""
+struct GPUMixedTransformCache
+    plans::Dict{Tuple, GPUMixedTransformPlan}
+    lock::ReentrantLock
+end
+
+const GPU_MIXED_TRANSFORM_CACHE = GPUMixedTransformCache(Dict{Tuple, GPUMixedTransformPlan}(), ReentrantLock())
 
 """
     _mixed_plan_key(arch, bases, local_grid_shape, T)
@@ -128,23 +137,27 @@ _mixed_plan_key(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Type) =
 """
     get_gpu_mixed_transform_plan(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Type)
 
-Get or create a cached GPU mixed transform plan.
+Get or create a cached GPU mixed transform plan (thread-safe).
 """
 function get_gpu_mixed_transform_plan(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Type)
     key = _mixed_plan_key(arch, bases, local_grid_shape, T)
-    if !haskey(GPU_MIXED_TRANSFORM_CACHE, key)
-        GPU_MIXED_TRANSFORM_CACHE[key] = plan_gpu_mixed_transform(arch, bases, local_grid_shape, T)
+    lock(GPU_MIXED_TRANSFORM_CACHE.lock) do
+        if !haskey(GPU_MIXED_TRANSFORM_CACHE.plans, key)
+            GPU_MIXED_TRANSFORM_CACHE.plans[key] = plan_gpu_mixed_transform(arch, bases, local_grid_shape, T)
+        end
+        return GPU_MIXED_TRANSFORM_CACHE.plans[key]
     end
-    return GPU_MIXED_TRANSFORM_CACHE[key]
 end
 
 """
     clear_gpu_mixed_transform_cache!()
 
-Clear all cached GPU mixed transform plans.
+Clear all cached GPU mixed transform plans (thread-safe).
 """
 function clear_gpu_mixed_transform_cache!()
-    empty!(GPU_MIXED_TRANSFORM_CACHE)
+    lock(GPU_MIXED_TRANSFORM_CACHE.lock) do
+        empty!(GPU_MIXED_TRANSFORM_CACHE.plans)
+    end
 end
 
 # ============================================================================

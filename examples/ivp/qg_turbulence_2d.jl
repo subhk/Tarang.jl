@@ -48,27 +48,27 @@ xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=dealias)
 ybasis = RealFourier(coords["y"]; size=Ny, bounds=(0.0, Ly), dealias=dealias)
 
 # Fields
-q       = ScalarField(dist, "q",         (xbasis, ybasis), dtype)        # Potential vorticity
-psi     = ScalarField(dist, "psi",       (xbasis, ybasis), dtype)    # Streamfunction
-u       = VectorField(dist, coords, "u", (xbasis, ybasis), dtype) # Velocity
-tau_psi = ScalarField(dist, "tau_psi", (), dtype)          # Tau for k=0 gauge
+q     = ScalarField(dist, "q",         (xbasis, ybasis), dtype)        # Potential vorticity
+ψ     = ScalarField(dist, "ψ",         (xbasis, ybasis), dtype)         # Streamfunction
+u     = VectorField(dist, coords, "u", (xbasis, ybasis), dtype)         # Velocity
+tau_ψ = ScalarField(dist, "tau_ψ", (), dtype)          # Tau for k=0 gauge
 
 # Problem
-problem = IVP([q, psi, u, tau_psi])
+problem = IVP([q, ψ, u, tau_ψ])
 Tarang.add_substitution!(problem, "nu", nu)
 
 # Equations
 # Streamfunction Poisson equation with tau for k=0 mode
-Tarang.add_equation!(problem, "Δ(psi) + tau_psi - q = 0")
+Tarang.add_equation!(problem, "Δ(ψ) + tau_ψ - q = 0")
 
 # Velocity from streamfunction: u = skew(grad(psi)) = (-dy(psi), dx(psi))
-Tarang.add_equation!(problem, "u - skew(grad(psi)) = 0")
+Tarang.add_equation!(problem, "u - skew(grad(ψ)) = 0")
 
 # Vorticity evolution with 8th-order hyperviscosity
 Tarang.add_equation!(problem, "∂t(q) + nu*Δ⁴(q) = -u⋅∇(q)")
 
 # Gauge condition: zero mean streamfunction
-Tarang.add_bc!(problem, "integ(psi) = 0")
+Tarang.add_bc!(problem, "integ(ψ) = 0")
 
 # Solver
 solver = InitialValueSolver(problem, timestepper(); device="cpu")
@@ -77,16 +77,17 @@ solver.stop_sim_time = stop_sim_time
 # Initial conditions: random vorticity filtered to wavenumber band k ∈ [3, 6]
 Tarang.fill_random!(q, "g"; seed=42+rank, distribution="normal", scale=1.0)
 Tarang.ensure_layout!(q, :c)
-kx, ky = Tarang.wavenumbers(xbasis), Tarang.wavenumbers(ybasis)
-for (iy, ky_val) in enumerate(ky), (ix, kx_val) in enumerate(kx)
-    k_mag = sqrt(kx_val^2 + ky_val^2)
-    q.data_c[ix, iy] *= (3 <= k_mag <= 6) / (1 + k_mag^2)  # Band-pass filter
-end
-Tarang.ensure_layout!(q, :g)
+
+# kx, ky = Tarang.wavenumbers(xbasis), Tarang.wavenumbers(ybasis)
+# for (iy, ky_val) in enumerate(ky), (ix, kx_val) in enumerate(kx)
+#     k_mag = sqrt(kx_val^2 + ky_val^2)
+#     q.data_c[ix, iy] *= (3 <= k_mag <= 6) / (1 + k_mag^2)  # Band-pass filter
+# end
+# Tarang.ensure_layout!(q, :g)
 
 # Analysis
 snapshots = Tarang.add_file_handler("qg_output/snapshots", dist,
-                Dict("q" => q, "psi" => psi, "u" => u);
+                Dict("q" => q, "psi" => ψ, "u" => u);
                 sim_dt=0.25, max_writes=50)
 Tarang.add_task(snapshots, q; name="vorticity")
 Tarang.add_task(snapshots, psi; name="streamfunction")

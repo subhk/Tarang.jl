@@ -617,35 +617,39 @@ function gpu_backward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
 end
 
 # ============================================================================
-# GPU Transform Plan Cache
+# GPU Transform Plan Cache (Thread-Safe)
 # ============================================================================
 
 """
     GPUTransformCache
 
-Cache for GPU FFT plans to avoid recreation overhead.
+Thread-safe cache for GPU FFT plans to avoid recreation overhead.
 Keys include device ID for multi-GPU safety.
+Uses a ReentrantLock to protect concurrent access from multiple Julia threads.
 """
 struct GPUTransformCache
     plans::Dict{Tuple, GPUFFTPlan}
+    lock::ReentrantLock
 end
 
-const GPU_TRANSFORM_CACHE = GPUTransformCache(Dict{Tuple, GPUFFTPlan}())
+const GPU_TRANSFORM_CACHE = GPUTransformCache(Dict{Tuple, GPUFFTPlan}(), ReentrantLock())
 
 """
     get_gpu_fft_plan(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
 
-Get or create a cached GPU FFT plan.
+Get or create a cached GPU FFT plan (thread-safe).
 Plans are cached by (device_id, size, element_type, real_input).
 """
 function get_gpu_fft_plan(arch::GPU{CuDevice}, local_size::Tuple, T::Type; real_input::Bool=false)
     device_id = CUDA.deviceid(arch.device)
     key = (device_id, local_size, T, real_input)
 
-    if !haskey(GPU_TRANSFORM_CACHE.plans, key)
-        GPU_TRANSFORM_CACHE.plans[key] = plan_gpu_fft(arch, local_size, T; real_input=real_input)
+    lock(GPU_TRANSFORM_CACHE.lock) do
+        if !haskey(GPU_TRANSFORM_CACHE.plans, key)
+            GPU_TRANSFORM_CACHE.plans[key] = plan_gpu_fft(arch, local_size, T; real_input=real_input)
+        end
+        return GPU_TRANSFORM_CACHE.plans[key]
     end
-    return GPU_TRANSFORM_CACHE.plans[key]
 end
 
 # Fallback for generic GPU
@@ -653,17 +657,21 @@ function get_gpu_fft_plan(arch::GPU, local_size::Tuple, T::Type; real_input::Boo
     device_id = CUDA.deviceid()
     key = (device_id, local_size, T, real_input)
 
-    if !haskey(GPU_TRANSFORM_CACHE.plans, key)
-        GPU_TRANSFORM_CACHE.plans[key] = plan_gpu_fft(arch, local_size, T; real_input=real_input)
+    lock(GPU_TRANSFORM_CACHE.lock) do
+        if !haskey(GPU_TRANSFORM_CACHE.plans, key)
+            GPU_TRANSFORM_CACHE.plans[key] = plan_gpu_fft(arch, local_size, T; real_input=real_input)
+        end
+        return GPU_TRANSFORM_CACHE.plans[key]
     end
-    return GPU_TRANSFORM_CACHE.plans[key]
 end
 
 """
     clear_gpu_transform_cache!()
 
-Clear all cached GPU transform plans.
+Clear all cached GPU transform plans (thread-safe).
 """
 function clear_gpu_transform_cache!()
-    empty!(GPU_TRANSFORM_CACHE.plans)
+    lock(GPU_TRANSFORM_CACHE.lock) do
+        empty!(GPU_TRANSFORM_CACHE.plans)
+    end
 end
