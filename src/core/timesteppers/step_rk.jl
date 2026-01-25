@@ -144,8 +144,11 @@ function _step_explicit_rk!(state::TimestepperState, solver::InitialValueSolver,
 
     # Check if we can use GPU-optimized path (no mass matrix inversion needed)
     # This is the common case for pseudospectral methods
-    arch = solver.dist.architecture
-    use_gpu_path = M_matrix === nothing && is_gpu(arch)
+    use_gpu_path = false
+    if M_matrix === nothing && !isempty(current_state)
+        arch = field_architecture(current_state[1])
+        use_gpu_path = is_gpu(arch)
+    end
 
     if use_gpu_path
         _step_explicit_rk_gpu!(state, solver, A, b, c)
