@@ -765,8 +765,23 @@ function SpectralLinearOperator(
     arch = dist.architecture
     N = length(bases)
 
-    # Get coefficient space shape from distributor
-    coeff_shape = dist.local_coeff_shape
+    # Get coefficient space shape from bases
+    # For Fourier bases, coefficient size equals grid size
+    coeff_shape = ntuple(N) do d
+        basis = bases[d]
+        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :size)
+            basis.meta.size
+        elseif hasfield(typeof(basis), :N)
+            basis.N
+        else
+            # Fallback: try to get from wavenumbers
+            try
+                length(wavenumbers(basis))
+            catch
+                error("Cannot determine coefficient size for basis $d: $(typeof(basis))")
+            end
+        end
+    end
 
     if operator_type == :custom && coefficients !== nothing
         # Use provided coefficients
@@ -783,6 +798,25 @@ function SpectralLinearOperator(
     SpectralLinearOperator{T, N, typeof(L_coeffs)}(
         L_coeffs, arch, operator_type, params
     )
+end
+
+"""
+    SpectralLinearOperator(field::ScalarField, operator_type::Symbol; kwargs...)
+
+Convenience constructor that extracts distributor and bases from a ScalarField.
+
+# Example
+```julia
+q = ScalarField(dist, "q", bases, ComplexF64)
+L = SpectralLinearOperator(q, :hyperviscosity; ν=1e-10, order=4)
+```
+"""
+function SpectralLinearOperator(
+    field::ScalarField,
+    operator_type::Symbol;
+    kwargs...
+)
+    SpectralLinearOperator(field.dist, field.bases, operator_type; kwargs...)
 end
 
 """
@@ -3045,10 +3079,14 @@ end
 
 2nd-order diagonal IMEX RK step with GPU-native implicit treatment.
 
-The implicit step uses element-wise division in spectral space:
-    û_new = û_rhs / (1 + dt*γ*L̂)
+Uses the standard IMEX-RK formulation where:
+- Explicit tableau handles nonlinear terms F(u)
+- Implicit diagonal operator L handles linear terms (viscosity/hyperviscosity)
 
-where L̂ is the diagonal spectral operator (e.g., viscosity: L̂ = ν*k²).
+For each stage s, we solve:
+    (1 + dt*γ*L̂) * Ŷ_s = X̂_n + dt * Σ_{j<s} a_j * F̂_j
+
+where L̂ is the diagonal spectral operator.
 
 This avoids sparse matrix solves and stays 100% on GPU.
 """
@@ -3074,46 +3112,48 @@ function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValue
     c = ts.c_explicit
     stages = ts.stages
 
-    # Stage storage
-    k_stages = Vector{Vector{ScalarField}}(undef, stages)
+    # Stage storage for RHS evaluations
+    F_stages = Vector{Vector{ScalarField}}(undef, stages)
+    # Stage values
+    Y_stages = Vector{Vector{ScalarField}}(undef, stages)
 
     for s in 1:stages
         state.current_substep = s
 
-        # Compute explicit stage value: Y_s = X_n + dt * sum_{j<s} A[s,j] * k_j
-        if s == 1
-            stage_state = copy_state(current_state)
-        else
-            stage_state = copy_state(current_state)
-            for j in 1:(s-1)
-                if abs(A[s, j]) > 1e-14
-                    axpy_state!(dt * A[s, j], k_stages[j], stage_state)
-                end
+        # Build RHS: RHS = X_n + dt * sum_{j<s} A[s,j] * F_j
+        rhs_state = copy_state(current_state)
+        for j in 1:(s-1)
+            if abs(A[s, j]) > 1e-14
+                axpy_state!(dt * A[s, j], F_stages[j], rhs_state)
             end
         end
 
-        # Apply implicit step: Y_s = Y_s / (1 + dt*γ*L)
-        # This is the key GPU-native operation
-        for field in stage_state
-            apply_implicit_diagonal_inplace!(field, L_spectral, dt, γ)
+        # Solve implicit system: (1 + dt*γ*L) * Y_s = RHS
+        # In spectral space: Ŷ_s = RHS / (1 + dt*γ*L̂)
+        Y_s = rhs_state  # Reuse allocation
+        for field in Y_s
+            ensure_layout!(field, :c)
+            get_coeff_data(field) ./= (1 .+ dt .* γ .* L_spectral.coefficients)
         end
+        Y_stages[s] = Y_s
 
-        # Evaluate RHS: k_s = F(t + c[s]*dt, Y_s)
-        F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
-        k_stages[s] = F_stage
+        # Evaluate nonlinear RHS: F_s = F(t + c[s]*dt, Y_s)
+        F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
     end
 
-    # Final update: X_{n+1} = X_n + dt * sum_s b[s] * k_s
+    # Final update: X_{n+1} = X_n + dt * sum_s b[s] * F_s
+    # Then apply implicit: X_{n+1} = X_{n+1} / (1 + dt*γ*L)
     new_state = copy_state(current_state)
     for s in 1:stages
         if abs(b[s]) > 1e-14
-            axpy_state!(dt * b[s], k_stages[s], new_state)
+            axpy_state!(dt * b[s], F_stages[s], new_state)
         end
     end
 
-    # Apply final implicit step
+    # Apply final implicit factor
     for field in new_state
-        apply_implicit_diagonal_inplace!(field, L_spectral, dt, γ)
+        ensure_layout!(field, :c)
+        get_coeff_data(field) ./= (1 .+ dt .* γ .* L_spectral.coefficients)
     end
 
     push!(state.history, new_state)
@@ -3127,6 +3167,9 @@ end
     step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValueSolver)
 
 3rd-order diagonal IMEX RK step with GPU-native implicit treatment.
+
+Uses classical RK4 explicit tableau for nonlinear terms, with implicit
+treatment of linear operator at each stage and final update.
 """
 function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
@@ -3149,42 +3192,48 @@ function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValue
     γ_diag = ts.A_implicit_diag
     stages = ts.stages
 
-    k_stages = Vector{Vector{ScalarField}}(undef, stages)
+    F_stages = Vector{Vector{ScalarField}}(undef, stages)
+    Y_stages = Vector{Vector{ScalarField}}(undef, stages)
 
     for s in 1:stages
         state.current_substep = s
 
-        # Explicit stage value
-        if s == 1
-            stage_state = copy_state(current_state)
-        else
-            stage_state = copy_state(current_state)
-            for j in 1:(s-1)
-                if abs(A[s, j]) > 1e-14
-                    axpy_state!(dt * A[s, j], k_stages[j], stage_state)
-                end
+        # Build RHS from explicit contributions
+        rhs_state = copy_state(current_state)
+        for j in 1:(s-1)
+            if abs(A[s, j]) > 1e-14
+                axpy_state!(dt * A[s, j], F_stages[j], rhs_state)
             end
         end
 
-        # Implicit step with stage-specific γ
+        # Solve implicit: Y_s = RHS / (1 + dt*γ*L)
         γ = γ_diag[s]
+        Y_s = rhs_state
         if abs(γ) > 1e-14
-            for field in stage_state
-                apply_implicit_diagonal_inplace!(field, L_spectral, dt, γ)
+            for field in Y_s
+                ensure_layout!(field, :c)
+                get_coeff_data(field) ./= (1 .+ dt .* γ .* L_spectral.coefficients)
             end
         end
+        Y_stages[s] = Y_s
 
         # Evaluate RHS
-        F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
-        k_stages[s] = F_stage
+        F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
     end
 
-    # Final update
+    # Final update with implicit treatment
     new_state = copy_state(current_state)
     for s in 1:stages
         if abs(b[s]) > 1e-14
-            axpy_state!(dt * b[s], k_stages[s], new_state)
+            axpy_state!(dt * b[s], F_stages[s], new_state)
         end
+    end
+
+    # Apply final implicit factor (average of stage γ values)
+    γ_final = sum(γ_diag) / stages
+    for field in new_state
+        ensure_layout!(field, :c)
+        get_coeff_data(field) ./= (1 .+ dt .* γ_final .* L_spectral.coefficients)
     end
 
     push!(state.history, new_state)
