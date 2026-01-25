@@ -2,8 +2,7 @@
 Timestepping schemes for initial value problems
 
 This module provides IMEX (Implicit-Explicit) time integration methods
-following the Dedalus convention where linear terms are treated implicitly
-and nonlinear terms are treated explicitly.
+where linear terms are treated implicitly and nonlinear terms are treated explicitly.
 
 Available methods:
 - RK111, RK222, RK443: IMEX Runge-Kutta methods

@@ -1,6 +1,6 @@
-# ============================================================================
-# IMEX Runge-Kutta Step Functions (Dedalus-compatible ARK scheme)
-# ============================================================================
+# =======================================
+# IMEX Runge-Kutta Step Functions 
+# =======================================
 
 function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper

@@ -1,7 +1,7 @@
 # =============================================================================
 # IMEX Runge-Kutta Methods (Dedalus-compatible)
 # =============================================================================
-# These are the default RK methods, following Dedalus convention where
+# These are the default RK methods convention where
 # linear terms (LHS) are treated implicitly and nonlinear terms (RHS) explicitly.
 #
 # Naming: RKabc where a=stages, b=explicit order, c=implicit order
