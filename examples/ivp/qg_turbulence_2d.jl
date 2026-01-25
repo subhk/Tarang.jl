@@ -55,28 +55,28 @@ tau_ψ = ScalarField(dist, "tau_ψ", (), dtype)          # Tau for k=0 gauge
 
 # Problem
 problem = IVP([q, ψ, u, tau_ψ])
-Tarang.add_substitution!(problem, "nu", nu)
+add_substitution!(problem, "nu", nu)
 
 # Equations
 # Streamfunction Poisson equation with tau for k=0 mode
-Tarang.add_equation!(problem, "Δ(ψ) + tau_ψ - q = 0")
+add_equation!(problem, "Δ(ψ) + tau_ψ - q = 0")
 
 # Velocity from streamfunction: u = skew(grad(psi)) = (-dy(psi), dx(psi))
-Tarang.add_equation!(problem, "u - skew(grad(ψ)) = 0")
+add_equation!(problem, "u - skew(grad(ψ)) = 0")
 
 # Vorticity evolution with 8th-order hyperviscosity
-Tarang.add_equation!(problem, "∂t(q) + nu*Δ⁴(q) = -u⋅∇(q)")
+add_equation!(problem, "∂t(q) + nu*Δ⁴(q) = -u⋅∇(q)")
 
 # Gauge condition: zero mean streamfunction
-Tarang.add_bc!(problem, "integ(ψ) = 0")
+add_bc!(problem, "integ(ψ) = 0")
 
 # Solver
 solver = InitialValueSolver(problem, timestepper(); device="cpu")
 solver.stop_sim_time = stop_sim_time
 
 # Initial conditions: random vorticity filtered to wavenumber band k ∈ [3, 6]
-Tarang.fill_random!(q, "g"; seed=42+rank, distribution="normal", scale=1.0)
-Tarang.ensure_layout!(q, :c)
+fill_random!(q, "g"; seed=42+rank, distribution="normal", scale=1.0)
+ensure_layout!(q, :c)
 
 # kx, ky = Tarang.wavenumbers(xbasis), Tarang.wavenumbers(ybasis)
 # for (iy, ky_val) in enumerate(ky), (ix, kx_val) in enumerate(kx)
@@ -89,14 +89,14 @@ Tarang.ensure_layout!(q, :c)
 snapshots = Tarang.add_file_handler("qg_output/snapshots", dist,
                 Dict("q" => q, "psi" => ψ, "u" => u);
                 sim_dt=0.25, max_writes=50)
-Tarang.add_task(snapshots, q; name="vorticity")
-Tarang.add_task(snapshots, psi; name="streamfunction")
+add_task(snapshots, q; name="vorticity")
+add_task(snapshots, psi; name="streamfunction")
 
 # CFL
 cfl = CFL(solver; initial_dt=max_timestep, cadence=10, safety=0.5,
           threshold=0.05, max_change=1.5, min_change=0.5, max_dt=max_timestep)
 
-Tarang.add_velocity!(cfl, u)
+add_velocity!(cfl, u)
 
 # Flow properties
 flow = GlobalFlowProperty(solver; cadence=10)
@@ -104,20 +104,20 @@ flow = GlobalFlowProperty(solver; cadence=10)
 # Main loop
 rank == 0 && @info "Starting main loop"
 try
-    while Tarang.proceed(solver)
-        timestep = Tarang.compute_timestep(cfl)
-        Tarang.step!(solver, timestep)
+    while proceed(solver)
+        timestep = compute_timestep(cfl)
+        step!(solver, timestep)
 
         if (solver.iteration - 1) % 10 == 0
-            Tarang.ensure_layout!(q, :g)
+            ensure_layout!(q, :g)
             max_q = maximum(abs.(q.data_g))
             rank == 0 && @info "Iteration=$(solver.iteration), Time=$(solver.sim_time), dt=$timestep, max|q|=$max_q"
         end
 
         # Write snapshots
         wall_time = time()
-        if Tarang.should_write(snapshots, wall_time, solver.sim_time, solver.iteration)
-            Tarang.process!(snapshots; iteration=solver.iteration,
+        if should_write(snapshots, wall_time, solver.sim_time, solver.iteration)
+            process!(snapshots; iteration=solver.iteration,
                            wall_time=wall_time, sim_time=solver.sim_time, timestep=timestep)
         end
     end
@@ -126,7 +126,7 @@ catch e
     @error "Exception raised, triggering end of main loop." exception=e
     rethrow(e)
 finally
-    Tarang.log_stats(solver)
+    log_stats(solver)
 end
 
 # Finalize MPI
