@@ -678,6 +678,340 @@ struct RK443_IMEX <: TimeStepper
     end
 end
 
+# ============================================================================
+# Spectral Linear Operator for Diagonal IMEX Methods (GPU-native)
+# ============================================================================
+
+"""
+    SpectralLinearOperator{T, N, A<:AbstractArray{T,N}}
+
+Diagonal linear operator in spectral space for GPU-native IMEX timestepping.
+
+For pseudospectral methods, linear operators like viscosity and hyperviscosity
+are diagonal in Fourier space:
+- Viscosity `-ν∇²`:     L̂(k) = ν(kx² + ky²)
+- Hyperviscosity `-ν∇⁴`: L̂(k) = ν(kx² + ky²)²
+- Hyper⁸ `-ν∇⁸`:        L̂(k) = ν(kx² + ky²)⁴
+
+The implicit step `(I + dt*γ*L)⁻¹ * RHS` becomes element-wise division:
+    û_new = RHS ./ (1 .+ dt * γ .* L_diagonal)
+
+This avoids sparse matrix solves and stays 100% on GPU.
+
+# Fields
+- `coefficients::A`: Diagonal operator values L̂(k) for each wavenumber
+- `architecture::AbstractArchitecture`: CPU() or GPU()
+
+# Example
+```julia
+# Create Laplacian operator for 2D field
+L = SpectralLinearOperator(dist, bases, :laplacian; ν=1e-3)
+
+# Create hyperviscosity operator
+L = SpectralLinearOperator(dist, bases, :hyperviscosity; ν=1e-10, order=4)
+
+# Apply implicit step: û_new = û_old / (1 + dt*γ*L)
+apply_implicit_diagonal!(u_new, u_old, L, dt, γ)
+```
+"""
+struct SpectralLinearOperator{T<:AbstractFloat, N, A<:AbstractArray{T,N}}
+    coefficients::A                          # L̂(k) diagonal values
+    architecture::AbstractArchitecture
+    operator_type::Symbol                    # :laplacian, :hyperviscosity, :custom
+    parameters::Dict{Symbol, Any}            # ν, order, etc.
+end
+
+"""
+    SpectralLinearOperator(dist::Distributor, bases::Tuple, operator_type::Symbol; kwargs...)
+
+Create a spectral linear operator for diagonal IMEX methods.
+
+# Arguments
+- `dist`: Distributor (determines architecture and local grid)
+- `bases`: Tuple of basis objects (e.g., `(ComplexFourier, ComplexFourier)`)
+- `operator_type`: Type of operator
+  - `:laplacian` - `-ν∇²` with coefficient `ν`
+  - `:hyperviscosity` - `-ν∇^(2p)` with coefficient `ν` and `order=p`
+  - `:custom` - provide `coefficients` directly
+
+# Keyword Arguments
+- `ν::Real=1.0`: Viscosity/diffusion coefficient
+- `order::Int=1`: Power of Laplacian (1 for ∇², 2 for ∇⁴, 4 for ∇⁸)
+- `coefficients::AbstractArray`: Custom diagonal coefficients (for :custom)
+- `dtype::Type=Float64`: Element type
+
+# Example
+```julia
+# Laplacian: L = ν(kx² + ky²)
+L_visc = SpectralLinearOperator(dist, bases, :laplacian; ν=1e-3)
+
+# Hyperviscosity: L = ν(kx² + ky²)²
+L_hyper4 = SpectralLinearOperator(dist, bases, :hyperviscosity; ν=1e-10, order=2)
+
+# Hyper-8: L = ν(kx² + ky²)⁴
+L_hyper8 = SpectralLinearOperator(dist, bases, :hyperviscosity; ν=1e-16, order=4)
+```
+"""
+function SpectralLinearOperator(
+    dist::Distributor,
+    bases::Tuple,
+    operator_type::Symbol;
+    ν::Real=1.0,
+    order::Int=1,
+    coefficients::Union{Nothing, AbstractArray}=nothing,
+    dtype::Type{T}=Float64
+) where {T<:AbstractFloat}
+
+    arch = dist.architecture
+    N = length(bases)
+
+    # Get coefficient space shape from distributor
+    coeff_shape = dist.local_coeff_shape
+
+    if operator_type == :custom && coefficients !== nothing
+        # Use provided coefficients
+        L_coeffs = on_architecture(arch, T.(coefficients))
+    else
+        # Build wavenumber-based operator on CPU first
+        L_coeffs_cpu = _build_spectral_operator(bases, coeff_shape, operator_type, ν, order, T)
+        # Move to target architecture
+        L_coeffs = on_architecture(arch, L_coeffs_cpu)
+    end
+
+    params = Dict{Symbol, Any}(:ν => ν, :order => order)
+
+    SpectralLinearOperator{T, N, typeof(L_coeffs)}(
+        L_coeffs, arch, operator_type, params
+    )
+end
+
+"""
+Build spectral operator coefficients on CPU.
+"""
+function _build_spectral_operator(
+    bases::Tuple,
+    coeff_shape::Tuple,
+    operator_type::Symbol,
+    ν::Real,
+    order::Int,
+    dtype::Type{T}
+) where {T}
+
+    N = length(bases)
+
+    # Get wavenumbers for each dimension
+    k_arrays = ntuple(N) do d
+        basis = bases[d]
+        if hasmethod(wavenumbers, Tuple{typeof(basis)})
+            k = wavenumbers(basis)
+            # Truncate or pad to match coefficient shape
+            n_coeff = coeff_shape[d]
+            if length(k) >= n_coeff
+                k[1:n_coeff]
+            else
+                vcat(k, zeros(T, n_coeff - length(k)))
+            end
+        else
+            # Non-spectral basis (e.g., Chebyshev) - use zeros
+            zeros(T, coeff_shape[d])
+        end
+    end
+
+    # Compute k² = sum of kᵢ² over all dimensions
+    L_coeffs = zeros(T, coeff_shape)
+
+    if N == 1
+        for i in 1:coeff_shape[1]
+            k2 = k_arrays[1][i]^2
+            L_coeffs[i] = _spectral_operator_value(k2, operator_type, ν, order, T)
+        end
+    elseif N == 2
+        for j in 1:coeff_shape[2]
+            for i in 1:coeff_shape[1]
+                k2 = k_arrays[1][i]^2 + k_arrays[2][j]^2
+                L_coeffs[i, j] = _spectral_operator_value(k2, operator_type, ν, order, T)
+            end
+        end
+    elseif N == 3
+        for k in 1:coeff_shape[3]
+            for j in 1:coeff_shape[2]
+                for i in 1:coeff_shape[1]
+                    k2 = k_arrays[1][i]^2 + k_arrays[2][j]^2 + k_arrays[3][k]^2
+                    L_coeffs[i, j, k] = _spectral_operator_value(k2, operator_type, ν, order, T)
+                end
+            end
+        end
+    else
+        error("SpectralLinearOperator: dimension $N not supported")
+    end
+
+    return L_coeffs
+end
+
+"""
+Compute operator value L(k²) for a given k².
+"""
+function _spectral_operator_value(k2::T, operator_type::Symbol, ν::Real, order::Int, ::Type{T}) where T
+    if operator_type == :laplacian
+        # L = ν * k²
+        return T(ν * k2)
+    elseif operator_type == :hyperviscosity
+        # L = ν * (k²)^order
+        return T(ν * k2^order)
+    elseif operator_type == :biharmonic
+        # L = ν * k⁴
+        return T(ν * k2^2)
+    else
+        return zero(T)
+    end
+end
+
+"""
+    apply_implicit_diagonal!(u_new, u_old, L::SpectralLinearOperator, dt, γ)
+
+Apply implicit step using diagonal spectral operator (GPU-compatible).
+
+Computes: û_new = û_old ./ (1 .+ dt * γ .* L)
+
+This is the key operation that replaces sparse matrix solves with
+element-wise division in spectral space.
+"""
+function apply_implicit_diagonal!(
+    u_new::ScalarField,
+    u_old::ScalarField,
+    L::SpectralLinearOperator,
+    dt::Real,
+    γ::Real
+)
+    ensure_layout!(u_old, :c)
+    ensure_layout!(u_new, :c)
+
+    # û_new = û_old / (1 + dt*γ*L)
+    # Broadcasting works on both CPU and GPU arrays
+    get_coeff_data(u_new) .= get_coeff_data(u_old) ./ (1 .+ dt .* γ .* L.coefficients)
+
+    return u_new
+end
+
+"""
+    apply_implicit_diagonal_inplace!(u::ScalarField, L::SpectralLinearOperator, dt, γ)
+
+In-place implicit step: û = û ./ (1 .+ dt * γ .* L)
+"""
+function apply_implicit_diagonal_inplace!(
+    u::ScalarField,
+    L::SpectralLinearOperator,
+    dt::Real,
+    γ::Real
+)
+    ensure_layout!(u, :c)
+    get_coeff_data(u) ./= (1 .+ dt .* γ .* L.coefficients)
+    return u
+end
+
+# ============================================================================
+# Diagonal IMEX Timesteppers (GPU-native)
+# ============================================================================
+
+"""
+    DiagonalIMEX_RK222 <: TimeStepper
+
+2nd-order IMEX Runge-Kutta with diagonal spectral implicit treatment.
+
+This is a GPU-native IMEX method that:
+- Treats nonlinear terms explicitly (advection)
+- Treats linear terms implicitly via element-wise ops in Fourier space
+- Stays 100% on GPU (no sparse matrix solves)
+
+Perfect for pseudospectral turbulence simulations with viscosity/hyperviscosity.
+
+# Usage
+```julia
+# Create spectral linear operator for viscosity
+L = SpectralLinearOperator(dist, bases, :laplacian; ν=1e-3)
+
+# Create timestepper
+ts = DiagonalIMEX_RK222()
+
+# Set up solver with spectral operator
+solver = InitialValueSolver(problem, ts)
+set_spectral_linear_operator!(solver, L)
+```
+"""
+struct DiagonalIMEX_RK222 <: TimeStepper
+    stages::Int
+    A_explicit::Matrix{Float64}
+    b_explicit::Vector{Float64}
+    c_explicit::Vector{Float64}
+    γ::Float64  # Implicit diagonal coefficient
+
+    function DiagonalIMEX_RK222()
+        # Same as RK222 explicit tableau
+        stages = 3
+        γ = 1 - 1/√2  # ≈ 0.2929 for L-stability
+
+        A_explicit = [
+            0.0  0.0  0.0;
+            1.0  0.0  0.0;
+            0.5  0.5  0.0
+        ]
+        b_explicit = [0.5, 0.5, 0.0]
+        c_explicit = [0.0, 1.0, 0.5]
+
+        new(stages, A_explicit, b_explicit, c_explicit, γ)
+    end
+end
+
+"""
+    DiagonalIMEX_RK443 <: TimeStepper
+
+3rd-order IMEX Runge-Kutta with diagonal spectral implicit treatment.
+
+Higher-order version for better accuracy with larger timesteps.
+"""
+struct DiagonalIMEX_RK443 <: TimeStepper
+    stages::Int
+    A_explicit::Matrix{Float64}
+    b_explicit::Vector{Float64}
+    c_explicit::Vector{Float64}
+    A_implicit_diag::Vector{Float64}  # Diagonal implicit coefficients
+
+    function DiagonalIMEX_RK443()
+        stages = 4
+        γ = 0.4358665215  # L-stable coefficient
+
+        # Classical RK4-like explicit tableau
+        A_explicit = [
+            0.0    0.0    0.0    0.0;
+            0.5    0.0    0.0    0.0;
+            0.0    0.5    0.0    0.0;
+            0.0    0.0    1.0    0.0
+        ]
+        b_explicit = [1/6, 1/3, 1/3, 1/6]
+        c_explicit = [0.0, 0.5, 0.5, 1.0]
+
+        # Diagonal coefficients for implicit part (SDIRK structure)
+        A_implicit_diag = [γ, γ, γ, γ]
+
+        new(stages, A_explicit, b_explicit, c_explicit, A_implicit_diag)
+    end
+end
+
+"""
+    DiagonalIMEX_SBDF2 <: TimeStepper
+
+2nd-order SBDF with diagonal spectral implicit treatment.
+
+Multi-step method that's efficient for steady-state problems.
+"""
+struct DiagonalIMEX_SBDF2 <: TimeStepper
+    order::Int
+
+    function DiagonalIMEX_SBDF2()
+        new(2)
+    end
+end
+
 # Timestepper state management with workspace optimization
 mutable struct TimestepperState
     timestepper::TimeStepper
@@ -1046,6 +1380,13 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
         step_rkgfy!(state, solver)
     elseif isa(state.timestepper, RK443_IMEX)
         step_rk443_imex!(state, solver)
+    # Diagonal IMEX methods (GPU-native)
+    elseif isa(state.timestepper, DiagonalIMEX_RK222)
+        step_diagonal_imex_rk222!(state, solver)
+    elseif isa(state.timestepper, DiagonalIMEX_RK443)
+        step_diagonal_imex_rk443!(state, solver)
+    elseif isa(state.timestepper, DiagonalIMEX_SBDF2)
+        step_diagonal_imex_sbdf2!(state, solver)
     else
         throw(ArgumentError("Unknown timestepper type: $(typeof(state.timestepper))"))
     end
@@ -1212,6 +1553,10 @@ end
     _step_explicit_rk!(state, solver, A, b, c)
 
 Generic explicit Runge-Kutta step for X' = M^-1 F(X).
+
+GPU-aware: When no mass matrix is present (M_matrix === nothing), uses a
+GPU-optimized path that keeps all field data on the GPU and avoids CPU transfers.
+When a mass matrix is present, falls back to CPU-based linear solve.
 """
 function _step_explicit_rk!(state::TimestepperState, solver::InitialValueSolver,
                             A::AbstractMatrix, b::AbstractVector, c::AbstractVector)
@@ -1221,6 +1566,86 @@ function _step_explicit_rk!(state::TimestepperState, solver::InitialValueSolver,
     stages = length(b)
 
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
+
+    # Check if we can use GPU-optimized path (no mass matrix inversion needed)
+    # This is the common case for pseudospectral methods
+    arch = solver.dist.architecture
+    use_gpu_path = M_matrix === nothing && is_gpu(arch)
+
+    if use_gpu_path
+        _step_explicit_rk_gpu!(state, solver, A, b, c)
+    else
+        _step_explicit_rk_cpu!(state, solver, A, b, c, M_matrix)
+    end
+end
+
+"""
+    _step_explicit_rk_gpu!(state, solver, A, b, c)
+
+GPU-optimized explicit RK step. Keeps all data on GPU, no CPU transfers.
+Only used when M_matrix === nothing (no mass matrix inversion needed).
+"""
+function _step_explicit_rk_gpu!(state::TimestepperState, solver::InitialValueSolver,
+                                A::AbstractMatrix, b::AbstractVector, c::AbstractVector)
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+    stages = length(b)
+
+    # Store stage derivatives (k values) as field vectors
+    k_stages = Vector{Vector{ScalarField}}(undef, stages)
+
+    for s in 1:stages
+        state.current_substep = s
+
+        # Compute stage value: Y_s = X_n + dt * sum_{j<s} A[s,j] * k_j
+        if s == 1
+            # First stage: Y_1 = X_n
+            stage_state = copy_state(current_state)
+        else
+            # Start with X_n
+            stage_state = copy_state(current_state)
+            # Add contributions from previous stages
+            for j in 1:(s-1)
+                if abs(A[s, j]) > 1e-14
+                    axpy_state!(dt * A[s, j], k_stages[j], stage_state)
+                end
+            end
+        end
+
+        # Evaluate RHS: k_s = F(t + c[s]*dt, Y_s)
+        F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
+        k_stages[s] = F_stage
+    end
+
+    # Compute final update: X_{n+1} = X_n + dt * sum_s b[s] * k_s
+    new_state = copy_state(current_state)
+    for s in 1:stages
+        if abs(b[s]) > 1e-14
+            axpy_state!(dt * b[s], k_stages[s], new_state)
+        end
+    end
+
+    push!(state.history, new_state)
+
+    if length(state.history) > 1
+        popfirst!(state.history)
+    end
+end
+
+"""
+    _step_explicit_rk_cpu!(state, solver, A, b, c, M_matrix)
+
+CPU-based explicit RK step. Used when mass matrix inversion is needed,
+which requires sparse linear solves on CPU.
+"""
+function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSolver,
+                                A::AbstractMatrix, b::AbstractVector, c::AbstractVector,
+                                M_matrix)
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+    stages = length(b)
 
     X_n_vec = fields_to_vector(current_state)
     k_vecs = Vector{Vector{eltype(X_n_vec)}}(undef, stages)
@@ -2611,6 +3036,311 @@ function step_rk443_imex!(state::TimestepperState, solver::InitialValueSolver)
     end
 end
 
+# =============================================================================
+# Diagonal IMEX Step Functions (GPU-native)
+# =============================================================================
+
+"""
+    step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValueSolver)
+
+2nd-order diagonal IMEX RK step with GPU-native implicit treatment.
+
+The implicit step uses element-wise division in spectral space:
+    û_new = û_rhs / (1 + dt*γ*L̂)
+
+where L̂ is the diagonal spectral operator (e.g., viscosity: L̂ = ν*k²).
+
+This avoids sparse matrix solves and stays 100% on GPU.
+"""
+function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValueSolver)
+    ts = state.timestepper
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+
+    # Get spectral linear operator from solver/problem
+    L_spectral = _get_spectral_linear_operator(solver)
+
+    if L_spectral === nothing
+        # No spectral operator: fall back to explicit RK
+        @debug "DiagonalIMEX_RK222: No spectral operator, using explicit RK"
+        _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
+        return
+    end
+
+    γ = ts.γ
+    A = ts.A_explicit
+    b = ts.b_explicit
+    c = ts.c_explicit
+    stages = ts.stages
+
+    # Stage storage
+    k_stages = Vector{Vector{ScalarField}}(undef, stages)
+
+    for s in 1:stages
+        state.current_substep = s
+
+        # Compute explicit stage value: Y_s = X_n + dt * sum_{j<s} A[s,j] * k_j
+        if s == 1
+            stage_state = copy_state(current_state)
+        else
+            stage_state = copy_state(current_state)
+            for j in 1:(s-1)
+                if abs(A[s, j]) > 1e-14
+                    axpy_state!(dt * A[s, j], k_stages[j], stage_state)
+                end
+            end
+        end
+
+        # Apply implicit step: Y_s = Y_s / (1 + dt*γ*L)
+        # This is the key GPU-native operation
+        for field in stage_state
+            apply_implicit_diagonal_inplace!(field, L_spectral, dt, γ)
+        end
+
+        # Evaluate RHS: k_s = F(t + c[s]*dt, Y_s)
+        F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
+        k_stages[s] = F_stage
+    end
+
+    # Final update: X_{n+1} = X_n + dt * sum_s b[s] * k_s
+    new_state = copy_state(current_state)
+    for s in 1:stages
+        if abs(b[s]) > 1e-14
+            axpy_state!(dt * b[s], k_stages[s], new_state)
+        end
+    end
+
+    # Apply final implicit step
+    for field in new_state
+        apply_implicit_diagonal_inplace!(field, L_spectral, dt, γ)
+    end
+
+    push!(state.history, new_state)
+
+    if length(state.history) > 1
+        popfirst!(state.history)
+    end
+end
+
+"""
+    step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValueSolver)
+
+3rd-order diagonal IMEX RK step with GPU-native implicit treatment.
+"""
+function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValueSolver)
+    ts = state.timestepper
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+
+    # Get spectral linear operator from solver/problem
+    L_spectral = _get_spectral_linear_operator(solver)
+
+    if L_spectral === nothing
+        @debug "DiagonalIMEX_RK443: No spectral operator, using explicit RK"
+        _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
+        return
+    end
+
+    A = ts.A_explicit
+    b = ts.b_explicit
+    c = ts.c_explicit
+    γ_diag = ts.A_implicit_diag
+    stages = ts.stages
+
+    k_stages = Vector{Vector{ScalarField}}(undef, stages)
+
+    for s in 1:stages
+        state.current_substep = s
+
+        # Explicit stage value
+        if s == 1
+            stage_state = copy_state(current_state)
+        else
+            stage_state = copy_state(current_state)
+            for j in 1:(s-1)
+                if abs(A[s, j]) > 1e-14
+                    axpy_state!(dt * A[s, j], k_stages[j], stage_state)
+                end
+            end
+        end
+
+        # Implicit step with stage-specific γ
+        γ = γ_diag[s]
+        if abs(γ) > 1e-14
+            for field in stage_state
+                apply_implicit_diagonal_inplace!(field, L_spectral, dt, γ)
+            end
+        end
+
+        # Evaluate RHS
+        F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
+        k_stages[s] = F_stage
+    end
+
+    # Final update
+    new_state = copy_state(current_state)
+    for s in 1:stages
+        if abs(b[s]) > 1e-14
+            axpy_state!(dt * b[s], k_stages[s], new_state)
+        end
+    end
+
+    push!(state.history, new_state)
+
+    if length(state.history) > 1
+        popfirst!(state.history)
+    end
+end
+
+"""
+    step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
+
+2nd-order SBDF with diagonal spectral implicit treatment.
+
+SBDF2 scheme:
+    (3/2)X_{n+1} - 2X_n + (1/2)X_{n-1} = dt * (2F_n - F_{n-1}) - dt*L*X_{n+1}
+
+Rearranged:
+    (3/2 + dt*L) X_{n+1} = 2X_n - (1/2)X_{n-1} + dt*(2F_n - F_{n-1})
+
+With diagonal spectral operator:
+    X̂_{n+1} = RHS / (3/2 + dt*L̂)
+"""
+function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+
+    L_spectral = _get_spectral_linear_operator(solver)
+
+    # Initialize history if needed
+    if !haskey(state.timestepper_data, "F_history")
+        state.timestepper_data["F_history"] = Vector{ScalarField}[]
+        state.timestepper_data["iteration"] = 0
+    end
+
+    iteration = state.timestepper_data["iteration"]
+    F_history = state.timestepper_data["F_history"]
+
+    # Evaluate current RHS
+    F_n = evaluate_rhs(solver, current_state, t)
+
+    if iteration == 0 || length(state.history) < 2
+        # First step: use backward Euler (SBDF1)
+        # (1 + dt*L) X_{n+1} = X_n + dt*F_n
+        new_state = copy_state(current_state)
+        axpy_state!(dt, F_n, new_state)
+
+        if L_spectral !== nothing
+            for field in new_state
+                # X̂ = RHS / (1 + dt*L̂)
+                ensure_layout!(field, :c)
+                get_coeff_data(field) ./= (1 .+ dt .* L_spectral.coefficients)
+            end
+        end
+
+        push!(state.history, new_state)
+        if length(state.history) > 2
+            popfirst!(state.history)
+        end
+
+        # Store F history
+        push!(F_history, F_n)
+        if length(F_history) > 2
+            popfirst!(F_history)
+        end
+    else
+        # SBDF2 step
+        X_n = current_state
+        X_nm1 = state.history[end-1]
+        F_nm1 = F_history[end]
+
+        # RHS = 2*X_n - (1/2)*X_{n-1} + dt*(2*F_n - F_{n-1})
+        new_state = ScalarField[]
+        for (i, field_n) in enumerate(X_n)
+            field_nm1 = X_nm1[i]
+            f_n = F_n[i]
+            f_nm1 = F_nm1[i]
+
+            result = ScalarField(field_n.dist, field_n.name, field_n.bases, field_n.dtype)
+
+            ensure_layout!(field_n, :c)
+            ensure_layout!(field_nm1, :c)
+            ensure_layout!(f_n, :c)
+            ensure_layout!(f_nm1, :c)
+            ensure_layout!(result, :c)
+
+            # RHS = 2*X_n - 0.5*X_{n-1} + dt*(2*F_n - F_{n-1})
+            get_coeff_data(result) .= 2 .* get_coeff_data(field_n) .-
+                                       0.5 .* get_coeff_data(field_nm1) .+
+                                       dt .* (2 .* get_coeff_data(f_n) .- get_coeff_data(f_nm1))
+
+            # Implicit step: X̂ = RHS / (1.5 + dt*L̂)
+            if L_spectral !== nothing
+                get_coeff_data(result) ./= (1.5 .+ dt .* L_spectral.coefficients)
+            else
+                get_coeff_data(result) ./= 1.5
+            end
+
+            push!(new_state, result)
+        end
+
+        push!(state.history, new_state)
+        if length(state.history) > 2
+            popfirst!(state.history)
+        end
+
+        # Update F history
+        push!(F_history, F_n)
+        if length(F_history) > 2
+            popfirst!(F_history)
+        end
+    end
+
+    state.timestepper_data["iteration"] = iteration + 1
+end
+
+"""
+    _get_spectral_linear_operator(solver::InitialValueSolver)
+
+Get the spectral linear operator from the solver or problem.
+Returns nothing if not configured.
+"""
+function _get_spectral_linear_operator(solver::InitialValueSolver)
+    # Check solver's timestepper_state first
+    if solver.timestepper_state !== nothing &&
+       haskey(solver.timestepper_state.timestepper_data, "spectral_linear_operator")
+        return solver.timestepper_state.timestepper_data["spectral_linear_operator"]
+    end
+
+    # Check problem parameters
+    if haskey(solver.problem.parameters, "spectral_linear_operator")
+        return solver.problem.parameters["spectral_linear_operator"]
+    end
+
+    return nothing
+end
+
+"""
+    set_spectral_linear_operator!(solver::InitialValueSolver, L::SpectralLinearOperator)
+
+Set the spectral linear operator for diagonal IMEX methods.
+
+# Example
+```julia
+L = SpectralLinearOperator(dist, bases, :hyperviscosity; ν=1e-10, order=4)
+set_spectral_linear_operator!(solver, L)
+```
+"""
+function set_spectral_linear_operator!(solver::InitialValueSolver, L::SpectralLinearOperator)
+    if solver.timestepper_state !== nothing
+        solver.timestepper_state.timestepper_data["spectral_linear_operator"] = L
+    end
+    solver.problem.parameters["spectral_linear_operator"] = L
+end
+
 # Helper functions
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{ScalarField}, time::Float64)
     """
@@ -2979,6 +3709,13 @@ export ETD_RK222, ETD_CNAB2, ETD_SBDF2
 # Export specialized schemes
 export RKSMR  # Runge-Kutta for stiff problems
 export RKGFY  # Runge-Kutta Guo-Feng-Yang
+
+# Export diagonal IMEX schemes (GPU-native)
+export DiagonalIMEX_RK222, DiagonalIMEX_RK443, DiagonalIMEX_SBDF2
+export SpectralLinearOperator
+export apply_implicit_diagonal!, apply_implicit_diagonal_inplace!
+export set_spectral_linear_operator!
+export step_diagonal_imex_rk222!, step_diagonal_imex_rk443!, step_diagonal_imex_sbdf2!
 
 # Export timestepper state management
 export TimestepperState
