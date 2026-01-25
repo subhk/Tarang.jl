@@ -1065,14 +1065,14 @@ function _eval_safe_ast(node, vars::Dict{String, T}, allowed_funcs::Dict{String,
     end
 end
 
-function _apply_safe_function(func::Function, args::Vector{Any})
+function _apply_safe_function(func::Function, args::AbstractVector)
     if any(arg -> arg isa AbstractArray, args)
         return broadcast(func, args...)
     end
     return func(args...)
 end
 
-function _apply_safe_operator(op::Function, args::Vector{Any})
+function _apply_safe_operator(op::Function, args::AbstractVector)
     if any(arg -> arg isa AbstractArray, args)
         return broadcast(op, args...)
     end
