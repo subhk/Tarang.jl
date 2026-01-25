@@ -647,3 +647,24 @@ function Tarang.copy_to_device(a::CuArray, target::CuArray)
     end
 end
 
+# ============================================================================
+# GPU-native Random Number Generation for Stochastic Forcing
+# ============================================================================
+
+"""
+    Tarang._try_gpu_rand!(phases::CuArray{T}) -> Bool
+
+Fill CuArray with random numbers in [0, 1) using CUDA's native RNG.
+Returns true to indicate success (GPU path was used).
+
+This is much faster than generating on CPU and copying to GPU,
+especially for large arrays.
+
+Note: Uses CUDA's default RNG (CURAND). For reproducible results,
+use `CUDA.seed!(seed)` before simulation.
+"""
+function Tarang._try_gpu_rand!(phases::CuArray{T}) where {T<:AbstractFloat}
+    CUDA.rand!(phases)
+    return true
+end
+

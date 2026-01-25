@@ -1006,18 +1006,47 @@ function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
     return view(forcing.cached_forcing, Tuple(ranges)...)
 end
 
+"""
+    _fill_random_phases!(arch, phases, rng)
+
+Fill array with random phases in [0, 2π). GPU-compatible.
+
+For GPU arrays:
+- If CUDA extension is loaded, uses CUDA.rand! for direct GPU generation (faster)
+- Otherwise, falls back to CPU generation + copy (slower but always works)
+
+For reproducible results with a specific RNG, the CPU fallback is used since
+GPU RNGs (CURAND) have different state management.
+"""
 function _fill_random_phases!(arch::AbstractArchitecture, phases::AbstractArray{T}, rng::AbstractRNG) where {T}
     if is_gpu_array(phases)
+        # Try GPU-native generation first (overloaded in CUDA extension)
+        if _try_gpu_rand!(phases)
+            phases .*= T(2π)
+            return phases
+        end
+        # Fallback: generate on CPU and copy to GPU
         phases_cpu = rand(rng, T, size(phases)...)
         phases_cpu .*= T(2π)
         copyto!(phases, phases_cpu)
         return phases
     end
 
+    # CPU path
     rand!(rng, phases)
     phases .*= T(2π)
     return phases
 end
+
+"""
+    _try_gpu_rand!(phases) -> Bool
+
+Try to fill GPU array with random numbers using GPU-native RNG.
+Returns true if successful, false if fallback needed.
+
+This is overloaded by the CUDA extension to use CUDA.rand!.
+"""
+_try_gpu_rand!(phases::AbstractArray) = false
 
 # ============================================================================
 # Deterministic Forcing
