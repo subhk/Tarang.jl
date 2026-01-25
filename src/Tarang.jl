@@ -216,7 +216,9 @@ export
     add_temporal_filter!, has_temporal_filters, get_temporal_filter, get_all_temporal_filters,
 
     # Analysis
-    GlobalFlowProperty, CFL,
+    GlobalFlowProperty, GlobalArrayReducer, CFL,
+    # Global reduction functions (for parallel simulations)
+    global_max, global_min, global_mean, global_sum, reduce_scalar,
 
     # SQG (Surface Quasi-Geostrophic) tools
     perp_grad, ∇⊥,  # Perpendicular gradient: ∇⊥ψ = (-∂ψ/∂y, ∂ψ/∂x)

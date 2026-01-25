@@ -336,14 +336,38 @@ function reduce_scalar(reducer::GlobalArrayReducer, local_scalar::Real, mpi_op)
 end
 
 function global_min(reducer::GlobalArrayReducer, data::AbstractArray; empty::Float64=Inf)
-    """Compute global min of all array data."""
-    local_min = isempty(data) ? empty : Float64(minimum(data))
+    """
+    Compute global min of all array data.
+
+    GPU-compatible: Works with both CPU arrays and GPU arrays (CuArray).
+    For GPU arrays, the local reduction is performed on GPU, then the scalar
+    is transferred to CPU for MPI reduction across ranks.
+    """
+    if isempty(data)
+        local_min = empty
+    else
+        # minimum() works on both CPU and GPU arrays
+        # For GPU arrays, CUDA.jl performs the reduction on GPU and returns a scalar
+        local_min = Float64(minimum(data))
+    end
     return reduce_scalar(reducer, local_min, MPI.MIN)
 end
 
 function global_max(reducer::GlobalArrayReducer, data::AbstractArray; empty::Float64=-Inf)
-    """Compute global max of all array data."""
-    local_max = isempty(data) ? empty : Float64(maximum(data))
+    """
+    Compute global max of all array data.
+
+    GPU-compatible: Works with both CPU arrays and GPU arrays (CuArray).
+    For GPU arrays, the local reduction is performed on GPU, then the scalar
+    is transferred to CPU for MPI reduction across ranks.
+    """
+    if isempty(data)
+        local_max = empty
+    else
+        # maximum() works on both CPU and GPU arrays
+        # For GPU arrays, CUDA.jl performs the reduction on GPU and returns a scalar
+        local_max = Float64(maximum(data))
+    end
     return reduce_scalar(reducer, local_max, MPI.MAX)
 end
 
@@ -352,7 +376,14 @@ global_min(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, Fl
 global_max(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, Float64(value), MPI.MAX)
 
 function global_mean(reducer::GlobalArrayReducer, data::AbstractArray)
-    """Compute global mean of all array data."""
+    """
+    Compute global mean of all array data.
+
+    GPU-compatible: Works with both CPU arrays and GPU arrays (CuArray).
+    For GPU arrays, the local sum is computed on GPU, then the scalar
+    is transferred to CPU for MPI reduction across ranks.
+    """
+    # sum() and length() work on both CPU and GPU arrays
     local_sum = Float64(sum(data))
     local_size = Float64(length(data))
     global_sum = reduce_scalar(reducer, local_sum, MPI.SUM)
@@ -561,9 +592,16 @@ function compute_weighted_integral(data::AbstractArray, weights::Vector)
 end
 
 function global_sum(reducer::GlobalArrayReducer, data::AbstractArray)
-    """Compute global sum of all array data across MPI processes."""
-    local_sum = sum(data)
-    return reduce_scalar(reducer, Float64(local_sum), MPI.SUM)
+    """
+    Compute global sum of all array data across MPI processes.
+
+    GPU-compatible: Works with both CPU arrays and GPU arrays (CuArray).
+    For GPU arrays, the local sum is computed on GPU, then the scalar
+    is transferred to CPU for MPI reduction across ranks.
+    """
+    # sum() works on both CPU and GPU arrays
+    local_sum = Float64(sum(data))
+    return reduce_scalar(reducer, local_sum, MPI.SUM)
 end
 
 function get_solver_domain(solver::InitialValueSolver)
@@ -1057,6 +1095,150 @@ function log_evaluator_performance(evaluator::Union{Evaluator, UnifiedEvaluator,
     end
 
     return nothing
+end
+
+# ============================================================================
+# Convenience functions for global reductions on fields
+# ============================================================================
+# These functions automatically handle MPI reductions across all ranks,
+# similar to Dedalus's GlobalArrayReducer pattern.
+#
+# GPU + Multi-GPU Support:
+# - Works transparently with CPU arrays and GPU arrays (CuArray)
+# - For multi-GPU (one GPU per MPI rank): local GPU reduction → scalar → MPI reduction
+# - No explicit data transfer needed; CUDA.jl handles scalar transfer automatically
+
+"""
+    global_max(field::ScalarField)
+
+Compute the global maximum of a scalar field across all MPI ranks.
+This is the correct way to compute maximum values in parallel simulations.
+
+GPU-compatible: Works with fields on CPU or GPU. For GPU fields, the local
+reduction is performed on GPU, then the scalar is transferred to CPU for
+MPI reduction across ranks.
+
+# Example
+```julia
+ensure_layout!(q, :g)
+max_q = global_max(q)  # Returns same value on all ranks
+```
+
+# Multi-GPU Example
+```julia
+# Each MPI rank has its own GPU
+# global_max automatically:
+# 1. Computes local max on each GPU
+# 2. Transfers scalar to CPU
+# 3. MPI.Allreduce across all ranks
+max_q = global_max(q)
+```
+"""
+function global_max(field::ScalarField)
+    ensure_layout!(field, :g)
+    reducer = GlobalArrayReducer(field.dist.comm)
+    return global_max(reducer, get_grid_data(field))
+end
+
+"""
+    global_min(field::ScalarField)
+
+Compute the global minimum of a scalar field across all MPI ranks.
+
+# Example
+```julia
+ensure_layout!(T, :g)
+min_T = global_min(T)  # Returns same value on all ranks
+```
+"""
+function global_min(field::ScalarField)
+    ensure_layout!(field, :g)
+    reducer = GlobalArrayReducer(field.dist.comm)
+    return global_min(reducer, get_grid_data(field))
+end
+
+"""
+    global_mean(field::ScalarField)
+
+Compute the global mean of a scalar field across all MPI ranks.
+
+# Example
+```julia
+ensure_layout!(rho, :g)
+mean_rho = global_mean(rho)  # Returns same value on all ranks
+```
+"""
+function global_mean(field::ScalarField)
+    ensure_layout!(field, :g)
+    reducer = GlobalArrayReducer(field.dist.comm)
+    return global_mean(reducer, get_grid_data(field))
+end
+
+"""
+    global_sum(field::ScalarField)
+
+Compute the global sum of a scalar field across all MPI ranks.
+
+# Example
+```julia
+ensure_layout!(mass, :g)
+total_mass = global_sum(mass)  # Returns same value on all ranks
+```
+"""
+function global_sum(field::ScalarField)
+    ensure_layout!(field, :g)
+    reducer = GlobalArrayReducer(field.dist.comm)
+    return global_sum(reducer, get_grid_data(field))
+end
+
+"""
+    global_max(dist::Distributor, data::AbstractArray)
+
+Compute the global maximum of array data across all MPI ranks using the
+communicator from the given distributor.
+
+# Example
+```julia
+local_data = abs.(q.data_g)
+max_val = global_max(q.dist, local_data)
+```
+"""
+function global_max(dist::Distributor, data::AbstractArray)
+    reducer = GlobalArrayReducer(dist.comm)
+    return global_max(reducer, data)
+end
+
+"""
+    global_min(dist::Distributor, data::AbstractArray)
+
+Compute the global minimum of array data across all MPI ranks using the
+communicator from the given distributor.
+"""
+function global_min(dist::Distributor, data::AbstractArray)
+    reducer = GlobalArrayReducer(dist.comm)
+    return global_min(reducer, data)
+end
+
+"""
+    global_mean(dist::Distributor, data::AbstractArray)
+
+Compute the global mean of array data across all MPI ranks using the
+communicator from the given distributor.
+"""
+function global_mean(dist::Distributor, data::AbstractArray)
+    reducer = GlobalArrayReducer(dist.comm)
+    return global_mean(reducer, data)
+end
+
+"""
+    global_sum(dist::Distributor, data::AbstractArray)
+
+Compute the global sum of array data across all MPI ranks using the
+communicator from the given distributor.
+"""
+function global_sum(dist::Distributor, data::AbstractArray)
+    reducer = GlobalArrayReducer(dist.comm)
+    return global_sum(reducer, data)
 end
 
 # ============================================================================

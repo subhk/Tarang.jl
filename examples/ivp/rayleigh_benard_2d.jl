@@ -147,9 +147,12 @@ function main()
         end
     end
 
+    # Compute global min/max across all MPI ranks
+    b_min = global_min(dist, b.data_g)
+    b_max = global_max(dist, b.data_g)
     if rank == 0
         println("Initial conditions set")
-        @printf("  Buoyancy range: [%.4f, %.4f]\n", minimum(b.data_g), maximum(b.data_g))
+        @printf("  Buoyancy range: [%.4f, %.4f]\n", b_min, b_max)
         println()
     end
 

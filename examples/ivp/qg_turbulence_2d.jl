@@ -111,7 +111,8 @@ try
 
         if (solver.iteration - 1) % 10 == 0
             ensure_layout!(q, :g)
-            max_q = maximum(abs.(q.data_g))
+            # Use global_max to properly reduce across all MPI ranks
+            max_q = global_max(dist, abs.(q.data_g))
             rank == 0 && @info "Iteration=$(solver.iteration), Time=$(solver.sim_time), dt=$timestep, max|q|=$max_q"
         end
 
