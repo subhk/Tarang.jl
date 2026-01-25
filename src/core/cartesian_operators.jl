@@ -1516,6 +1516,17 @@ function evaluate_cartesian_skew(op::CartesianSkew, layout::Symbol=:g)
     return result
 end
 
+"""
+    _evaluate_skew_vector(operand::VectorField, layout::Symbol)
+
+Implementation of skew for VectorField, called from operators.jl's evaluate_skew.
+Computes 2D vector rotation: skew(u_x, u_y) = (-u_y, u_x).
+Used for 2D QG turbulence: u = skew(grad(ψ)) gives divergence-free velocity.
+"""
+function _evaluate_skew_vector(operand::VectorField, layout::Symbol)
+    return evaluate_cartesian_skew(CartesianSkew(operand), layout)
+end
+
 # ============================================================================
 # DirectProduct operator variants
 # ============================================================================

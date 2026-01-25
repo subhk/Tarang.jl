@@ -3262,6 +3262,146 @@ function get_variable_count(problem::Problem)
 end
 
 # ============================================================================
+# Convenience Macros
+# ============================================================================
+
+"""
+    @equations problem begin
+        "equation1"
+        "equation2"
+        ...
+    end
+
+Add multiple equations to a problem with cleaner syntax.
+
+# Example
+```julia
+problem = IVP([u, v, p])
+
+@equations problem begin
+    "∂t(u) - ν*Δ(u) + ∇(p) = -u⋅∇(u)"
+    "∂t(v) - ν*Δ(v) + ∇(p) = -u⋅∇(v)"
+    "div(u) = 0"
+end
+```
+
+Equivalent to:
+```julia
+add_equation!(problem, "∂t(u) - ν*Δ(u) + ∇(p) = -u⋅∇(u)")
+add_equation!(problem, "∂t(v) - ν*Δ(v) + ∇(p) = -u⋅∇(v)")
+add_equation!(problem, "div(u) = 0")
+```
+"""
+macro equations(problem, block)
+    if block.head != :block
+        error("@equations requires a begin...end block")
+    end
+
+    calls = Expr[]
+    for arg in block.args
+        # Skip LineNumberNodes
+        if arg isa LineNumberNode
+            continue
+        end
+        # Each argument should be a string (equation)
+        push!(calls, :(add_equation!($(esc(problem)), $(esc(arg)))))
+    end
+
+    return Expr(:block, calls...)
+end
+
+"""
+    @bcs problem begin
+        "bc1"
+        "bc2"
+        ...
+    end
+
+Add multiple boundary conditions to a problem with cleaner syntax.
+
+# Example
+```julia
+@bcs problem begin
+    "u(z=0) = 0"
+    "u(z=Lz) = 0"
+    "integ(p) = 0"
+end
+```
+
+Equivalent to:
+```julia
+add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "u(z=Lz) = 0")
+add_bc!(problem, "integ(p) = 0")
+```
+"""
+macro bcs(problem, block)
+    if block.head != :block
+        error("@bcs requires a begin...end block")
+    end
+
+    calls = Expr[]
+    for arg in block.args
+        # Skip LineNumberNodes
+        if arg isa LineNumberNode
+            continue
+        end
+        push!(calls, :(add_bc!($(esc(problem)), $(esc(arg)))))
+    end
+
+    return Expr(:block, calls...)
+end
+
+"""
+    @substitutions problem begin
+        "name1" => value1
+        "name2" => value2
+        ...
+    end
+
+Add multiple substitutions to a problem with cleaner syntax.
+
+# Example
+```julia
+@substitutions problem begin
+    "nu" => 1e-3
+    "kappa" => 1e-4
+    "Ra" => 1e6
+end
+```
+
+Equivalent to:
+```julia
+add_substitution!(problem, "nu", 1e-3)
+add_substitution!(problem, "kappa", 1e-4)
+add_substitution!(problem, "Ra", 1e6)
+```
+"""
+macro substitutions(problem, block)
+    if block.head != :block
+        error("@substitutions requires a begin...end block")
+    end
+
+    calls = Expr[]
+    for arg in block.args
+        # Skip LineNumberNodes
+        if arg isa LineNumberNode
+            continue
+        end
+        # Expect pair syntax: "name" => value
+        if arg isa Expr && arg.head == :call && arg.args[1] == :(=>)
+            name = arg.args[2]
+            value = arg.args[3]
+            push!(calls, :(add_substitution!($(esc(problem)), $(esc(name)), $(esc(value)))))
+        else
+            error("@substitutions expects \"name\" => value pairs")
+        end
+    end
+
+    return Expr(:block, calls...)
+end
+
+# ============================================================================
 # Exports
 # ============================================================================
 
@@ -3270,6 +3410,7 @@ export Problem, IVP, LBVP, NLBVP, EVP
 
 # Export core API functions
 export add_equation!, add_bc!, add_substitution!
+export @equations, @bcs, @substitutions
 export set_parameter!, get_parameter, register_tau_field!
 
 # Export stochastic forcing integration

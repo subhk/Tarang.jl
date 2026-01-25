@@ -121,6 +121,32 @@ mutable struct VectorField <: Operand
     end
 end
 
+# Convenience constructor: uses dist.coordsys as default coordinate system
+"""
+    VectorField(dist, name, bases, dtype=dist.dtype)
+
+Create a VectorField using the distributor's coordinate system.
+
+This is a convenience constructor equivalent to:
+    VectorField(dist, dist.coordsys, name, bases, dtype)
+
+# Example
+```julia
+coords = CartesianCoordinates("x", "y")
+dist = Distributor(coords; dtype=Float64)
+xb = RealFourier(coords["x"]; size=64, bounds=(0.0, 2π))
+yb = RealFourier(coords["y"]; size=64, bounds=(0.0, 2π))
+
+# Simple form (recommended):
+u = VectorField(dist, "u", (xb, yb), Float64)
+
+# Explicit form (when you need a different coordinate system):
+u = VectorField(dist, coords, "u", (xb, yb), Float64)
+```
+"""
+VectorField(dist::Distributor, name::String, bases::Tuple{Vararg{Basis}}, dtype::Type=dist.dtype) =
+    VectorField(dist, dist.coordsys, name, bases, dtype)
+
 mutable struct TensorField <: Operand
     dist::Distributor
     coordsys::CoordinateSystem
@@ -152,6 +178,18 @@ mutable struct TensorField <: Operand
         new(dist, coordsys, name, bases, domain, dtype, components, nothing, nothing, buffer_architecture)
     end
 end
+
+# Convenience constructor: uses dist.coordsys as default coordinate system
+"""
+    TensorField(dist, name, bases, dtype=dist.dtype)
+
+Create a TensorField using the distributor's coordinate system.
+
+This is a convenience constructor equivalent to:
+    TensorField(dist, dist.coordsys, name, bases, dtype)
+"""
+TensorField(dist::Distributor, name::String, bases::Tuple{Vararg{Basis}}, dtype::Type=dist.dtype) =
+    TensorField(dist, dist.coordsys, name, bases, dtype)
 
 # storage_mode methods for field types (defined here after the types exist)
 storage_mode(field::ScalarField) = storage_mode(field.dist)

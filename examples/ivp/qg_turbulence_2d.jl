@@ -48,27 +48,27 @@ xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=dealias)
 ybasis = RealFourier(coords["y"]; size=Ny, bounds=(0.0, Ly), dealias=dealias)
 
 # Fields
-q     = ScalarField(dist, "q",         (xbasis, ybasis), dtype)        # Potential vorticity
-ψ     = ScalarField(dist, "ψ",         (xbasis, ybasis), dtype)         # Streamfunction
-u     = VectorField(dist, coords, "u", (xbasis, ybasis), dtype)         # Velocity
+q     = ScalarField(dist, "q",     (xbasis, ybasis), dtype)        # Potential vorticity
+ψ     = ScalarField(dist, "ψ",     (xbasis, ybasis), dtype)        # Streamfunction
+u     = VectorField(dist, "u",     (xbasis, ybasis), dtype)        # Velocity
 tau_ψ = ScalarField(dist, "tau_ψ", (), dtype)          # Tau for k=0 gauge
 
 # Problem
 problem = IVP([q, ψ, u, tau_ψ])
-add_substitution!(problem, "nu", nu)
 
-# Equations
-# Streamfunction Poisson equation with tau for k=0 mode
-add_equation!(problem, "Δ(ψ) + tau_ψ - q = 0")
+@substitutions problem begin
+    "nu" => nu
+end
 
-# Velocity from streamfunction: u = skew(grad(psi)) = (-dy(psi), dx(psi))
-add_equation!(problem, "u - skew(grad(ψ)) = 0")
+@equations problem begin
+    "Δ(ψ) + tau_ψ - q = 0"             # Streamfunction Poisson equation
+    "u - skew(grad(ψ)) = 0"            # Velocity from streamfunction
+    "∂t(q) + nu*Δ⁴(q) = -u⋅∇(q)"       # Vorticity evolution (8th-order hyperviscosity)
+end
 
-# Vorticity evolution with 8th-order hyperviscosity
-add_equation!(problem, "∂t(q) + nu*Δ⁴(q) = -u⋅∇(q)")
-
-# Gauge condition: zero mean streamfunction
-add_bc!(problem, "integ(ψ) = 0")
+@bcs problem begin
+    "integ(ψ) = 0"                     # Gauge: zero mean streamfunction
+end
 
 # Solver
 solver = InitialValueSolver(problem, timestepper(); device="cpu")
@@ -86,11 +86,12 @@ ensure_layout!(q, :c)
 # Tarang.ensure_layout!(q, :g)
 
 # Analysis
-snapshots = Tarang.add_file_handler("qg_output/snapshots", dist,
+snapshots = add_file_handler("snapshots/snapshots", dist,
                 Dict("q" => q, "psi" => ψ, "u" => u);
                 sim_dt=0.25, max_writes=50)
+
 add_task(snapshots, q; name="vorticity")
-add_task(snapshots, psi; name="streamfunction")
+add_task(snapshots, ψ; name="streamfunction")
 
 # CFL
 cfl = CFL(solver; initial_dt=max_timestep, cadence=10, safety=0.5,

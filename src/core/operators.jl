@@ -2152,8 +2152,11 @@ end
 
 function dispatch_check(::Type{Skew}, args::Tuple, kwargs::NamedTuple)
     operand = args[1]
-    if !isa(operand, TensorField)
-        throw(ArgumentError("Skew requires a TensorField"))
+    # Accept any Operand - type checking happens at evaluation time
+    # Supports: TensorField (skew-symmetric part), VectorField (2D rotation),
+    # and operators that produce these types (e.g., Gradient)
+    if !isa(operand, Operand)
+        throw(ArgumentError("Skew requires an Operand"))
     end
     return true
 end
@@ -4073,16 +4076,41 @@ end
 """
     evaluate_skew(skew_op::Skew, layout::Symbol=:g)
 
-Evaluate skew-symmetric part of a tensor field.
-skew(T) = (T - T^T) / 2
+Evaluate skew operator. Behavior depends on operand type:
+- TensorField: Returns skew-symmetric part, skew(T) = (T - T^T) / 2
+- VectorField (2D): Returns 90° rotation, skew(u_x, u_y) = (-u_y, u_x)
+  This is used for 2D QG: u = skew(grad(ψ)) gives divergence-free velocity.
 """
 function evaluate_skew(skew_op::Skew, layout::Symbol=:g)
     operand = skew_op.operand
 
-    if !isa(operand, TensorField)
-        throw(ArgumentError("Skew requires a TensorField"))
+    # If operand is an operator, evaluate it first
+    if isa(operand, Operator)
+        operand = evaluate(operand, layout)
     end
 
+    # Dispatch based on evaluated operand type
+    if isa(operand, VectorField)
+        # 2D vector rotation: skew(u_x, u_y) = (-u_y, u_x)
+        # Delegate to _evaluate_skew_vector which is defined in cartesian_operators.jl
+        return _evaluate_skew_vector(operand, layout)
+    elseif isa(operand, TensorField)
+        # Tensor skew-symmetric part: skew(T) = (T - T^T) / 2
+        return _evaluate_tensor_skew(operand, layout)
+    else
+        throw(ArgumentError("Skew requires a TensorField or VectorField, got $(typeof(operand))"))
+    end
+end
+
+# Forward declaration - actual implementation in cartesian_operators.jl
+function _evaluate_skew_vector end
+
+"""
+    _evaluate_tensor_skew(operand::TensorField, layout::Symbol)
+
+Internal: Evaluate skew-symmetric part of a tensor field.
+"""
+function _evaluate_tensor_skew(operand::TensorField, layout::Symbol)
     coordsys = operand.coordsys
     result = TensorField(operand.dist, coordsys, "skew_$(operand.name)", operand.bases, operand.dtype)
 
