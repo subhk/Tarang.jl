@@ -74,7 +74,7 @@ include("tools/matsolvers.jl")
 include("tools/gpu_matsolvers.jl")
 include("core/solvers.jl")
 include("core/stochastic_forcing.jl")
-include("core/timesteppers.jl")
+include("core/timesteppers/timesteppers.jl")
 include("core/gpu_distributed.jl")  # Distributed GPU computing (GPU + MPI)
 include("core/transposable_field.jl")  # TransposableField for 2D pencil decomposition
 

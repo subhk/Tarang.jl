@@ -3117,32 +3117,27 @@ function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValue
     # Stage values
     Y_stages = Vector{Vector{ScalarField}}(undef, stages)
 
+    # Semi-implicit approach: evaluate nonlinear terms explicitly at each stage,
+    # then apply implicit damping only at the final update.
+    # This is the standard approach for pseudospectral turbulence codes.
+
     for s in 1:stages
         state.current_substep = s
 
-        # Build RHS: RHS = X_n + dt * sum_{j<s} A[s,j] * F_j
-        rhs_state = copy_state(current_state)
+        # Build stage value: Y_s = X_n + dt * sum_{j<s} A[s,j] * F_j
+        Y_s = copy_state(current_state)
         for j in 1:(s-1)
             if abs(A[s, j]) > 1e-14
-                axpy_state!(dt * A[s, j], F_stages[j], rhs_state)
+                axpy_state!(dt * A[s, j], F_stages[j], Y_s)
             end
-        end
-
-        # Solve implicit system: (1 + dt*γ*L) * Y_s = RHS
-        # In spectral space: Ŷ_s = RHS / (1 + dt*γ*L̂)
-        Y_s = rhs_state  # Reuse allocation
-        for field in Y_s
-            ensure_layout!(field, :c)
-            get_coeff_data(field) ./= (1 .+ dt .* γ .* L_spectral.coefficients)
         end
         Y_stages[s] = Y_s
 
-        # Evaluate nonlinear RHS: F_s = F(t + c[s]*dt, Y_s)
+        # Evaluate nonlinear RHS: F_s = N(Y_s, t + c[s]*dt)
         F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
     end
 
     # Final update: X_{n+1} = X_n + dt * sum_s b[s] * F_s
-    # Then apply implicit: X_{n+1} = X_{n+1} / (1 + dt*γ*L)
     new_state = copy_state(current_state)
     for s in 1:stages
         if abs(b[s]) > 1e-14
@@ -3150,7 +3145,8 @@ function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValue
         end
     end
 
-    # Apply final implicit factor
+    # Apply implicit factor for linear operator: X̂_{n+1} = X̂_{n+1} / (1 + dt*γ*L̂)
+    # This treats the linear term with backward Euler stability
     for field in new_state
         ensure_layout!(field, :c)
         get_coeff_data(field) ./= (1 .+ dt .* γ .* L_spectral.coefficients)
@@ -3192,36 +3188,28 @@ function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValue
     γ_diag = ts.A_implicit_diag
     stages = ts.stages
 
+    # Semi-implicit approach: evaluate nonlinear terms explicitly at each stage,
+    # then apply implicit damping only at the final update.
     F_stages = Vector{Vector{ScalarField}}(undef, stages)
     Y_stages = Vector{Vector{ScalarField}}(undef, stages)
 
     for s in 1:stages
         state.current_substep = s
 
-        # Build RHS from explicit contributions
-        rhs_state = copy_state(current_state)
+        # Build stage value: Y_s = X_n + dt * sum_{j<s} A[s,j] * F_j
+        Y_s = copy_state(current_state)
         for j in 1:(s-1)
             if abs(A[s, j]) > 1e-14
-                axpy_state!(dt * A[s, j], F_stages[j], rhs_state)
-            end
-        end
-
-        # Solve implicit: Y_s = RHS / (1 + dt*γ*L)
-        γ = γ_diag[s]
-        Y_s = rhs_state
-        if abs(γ) > 1e-14
-            for field in Y_s
-                ensure_layout!(field, :c)
-                get_coeff_data(field) ./= (1 .+ dt .* γ .* L_spectral.coefficients)
+                axpy_state!(dt * A[s, j], F_stages[j], Y_s)
             end
         end
         Y_stages[s] = Y_s
 
-        # Evaluate RHS
+        # Evaluate nonlinear RHS: F_s = N(Y_s, t + c[s]*dt)
         F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
     end
 
-    # Final update with implicit treatment
+    # Final update: X_{n+1} = X_n + dt * sum_s b[s] * F_s
     new_state = copy_state(current_state)
     for s in 1:stages
         if abs(b[s]) > 1e-14
@@ -3229,8 +3217,9 @@ function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValue
         end
     end
 
-    # Apply final implicit factor (average of stage γ values)
-    γ_final = sum(γ_diag) / stages
+    # Apply implicit factor for linear operator: X̂_{n+1} = X̂_{n+1} / (1 + dt*γ*L̂)
+    # Use the primary implicit coefficient (same as RK222 for consistency)
+    γ_final = γ_diag[1]  # Use first stage coefficient (constant for SDIRK)
     for field in new_state
         ensure_layout!(field, :c)
         get_coeff_data(field) ./= (1 .+ dt .* γ_final .* L_spectral.coefficients)
