@@ -308,14 +308,34 @@ function reclaim_leaked_pinned_buffers!()
 end
 
 """
-    async_copy_to_gpu!(dst::CuArray, src::Array; stream=nothing, synchronize=false)
+    async_copy_to_gpu!(dst::CuArray, src::Array; stream=nothing)
 
-Asynchronously copy data from CPU to GPU on the specified stream.
-The copy is truly asynchronous - call CUDA.synchronize(stream) to wait for completion.
+Copy data from CPU to GPU using the specified stream, with automatic synchronization.
+
+This function always synchronizes after the copy to ensure data integrity.
+The copy uses a dedicated transfer stream (separate from compute) to enable
+overlap with GPU computation when properly orchestrated.
 
 For best performance, use pinned (page-locked) memory for `src` via `get_pinned_buffer`.
+
+# Arguments
+- `dst`: Destination GPU array
+- `src`: Source CPU array
+- `stream`: Optional CUDA stream (defaults to the transfer stream for dst's device)
+
+# Example
+```julia
+# Basic usage - always safe
+async_copy_to_gpu!(gpu_array, cpu_array)
+
+# With pinned memory for better performance
+pinned_src = get_pinned_buffer(Float64, size(cpu_array))
+copyto!(pinned_src, cpu_array)
+async_copy_to_gpu!(gpu_array, pinned_src)
+release_pinned_buffer!(pinned_src, size(cpu_array))
+```
 """
-function async_copy_to_gpu!(dst::CuArray{T}, src::Array{T}; stream=nothing, synchronize::Bool=false) where T
+function async_copy_to_gpu!(dst::CuArray{T}, src::Array{T}; stream=nothing) where T
     # Use the device of the destination array for stream selection
     dst_device = CUDA.device(dst)
     device_id = CUDA.deviceid(dst_device)
@@ -327,9 +347,8 @@ function async_copy_to_gpu!(dst::CuArray{T}, src::Array{T}; stream=nothing, sync
         CUDA.stream!(s) do
             copyto!(dst, src)
         end
-        if synchronize
-            CUDA.synchronize(s)
-        end
+        # Always synchronize for safety - prevents race conditions
+        CUDA.synchronize(s)
         CUDA.device!(prev_device)
     else
         copyto!(dst, src)
@@ -338,14 +357,34 @@ function async_copy_to_gpu!(dst::CuArray{T}, src::Array{T}; stream=nothing, sync
 end
 
 """
-    async_copy_to_cpu!(dst::Array, src::CuArray; stream=nothing, synchronize=false)
+    async_copy_to_cpu!(dst::Array, src::CuArray; stream=nothing)
 
-Asynchronously copy data from GPU to CPU on the specified stream.
-The copy is truly asynchronous - call CUDA.synchronize(stream) to wait for completion.
+Copy data from GPU to CPU using the specified stream, with automatic synchronization.
+
+This function always synchronizes after the copy to ensure data integrity.
+The copy uses a dedicated transfer stream (separate from compute) to enable
+overlap with GPU computation when properly orchestrated.
 
 For best performance, use pinned (page-locked) memory for `dst` via `get_pinned_buffer`.
+
+# Arguments
+- `dst`: Destination CPU array
+- `src`: Source GPU array
+- `stream`: Optional CUDA stream (defaults to the transfer stream for src's device)
+
+# Example
+```julia
+# Basic usage - always safe
+async_copy_to_cpu!(cpu_array, gpu_array)
+
+# With pinned memory for better performance
+pinned_dst = get_pinned_buffer(Float64, size(gpu_array))
+async_copy_to_cpu!(pinned_dst, gpu_array)
+copyto!(cpu_array, pinned_dst)
+release_pinned_buffer!(pinned_dst, size(gpu_array))
+```
 """
-function async_copy_to_cpu!(dst::Array{T}, src::CuArray{T}; stream=nothing, synchronize::Bool=false) where T
+function async_copy_to_cpu!(dst::Array{T}, src::CuArray{T}; stream=nothing) where T
     # Use the device of the source array for stream selection
     src_device = CUDA.device(src)
     device_id = CUDA.deviceid(src_device)
@@ -357,9 +396,8 @@ function async_copy_to_cpu!(dst::Array{T}, src::CuArray{T}; stream=nothing, sync
         CUDA.stream!(s) do
             copyto!(dst, src)
         end
-        if synchronize
-            CUDA.synchronize(s)
-        end
+        # Always synchronize for safety - prevents race conditions
+        CUDA.synchronize(s)
         CUDA.device!(prev_device)
     else
         copyto!(dst, src)
