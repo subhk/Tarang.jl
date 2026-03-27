@@ -35,12 +35,12 @@ Generate memory pool key including device ID for multi-GPU safety.
 _pool_key(device_id::Int, T::Type, total_size::Int) = (device_id, T, total_size)
 
 """
-    pool_allocate(T::Type, dims...; device_id::Int=CUDA.deviceid())
+    pool_allocate(T::Type, dims...; device_id::Int=_current_device_id())
 
 Allocate from memory pool or create new array if pool is empty.
 Uses current device by default; specify device_id for multi-GPU.
 """
-function pool_allocate(T::Type, dims...; device_id::Int=CUDA.deviceid())
+function pool_allocate(T::Type, dims...; device_id::Int=_current_device_id())
     if !GPU_CONFIG.use_memory_pool
         # Ensure allocation on correct device
         prev_device = CUDA.device()
@@ -157,11 +157,13 @@ end
 Clear all pooled GPU memory.
 """
 function clear_memory_pool!()
-    for (key, arrays) in GPU_MEMORY_POOL.pools
-        empty!(arrays)
+    lock(GPU_MEMORY_POOL.lock) do
+        for (key, arrays) in GPU_MEMORY_POOL.pools
+            empty!(arrays)
+        end
+        empty!(GPU_MEMORY_POOL.pools)
+        GPU_MEMORY_POOL.total_pooled_bytes = 0
     end
-    empty!(GPU_MEMORY_POOL.pools)
-    GPU_MEMORY_POOL.total_pooled_bytes = 0
     CUDA.reclaim()
     @info "GPU memory pool cleared"
 end
@@ -206,11 +208,13 @@ mutable struct PinnedBufferPool
     # Track checked-out buffers by pointer address → (backing buffer, byte size)
     # This prevents permanent leaks if callers forget release_pinned_buffer!
     in_use::Dict{UInt, Tuple{Vector{UInt8}, Int}}
+    lock::ReentrantLock
 
     function PinnedBufferPool(; max_buffers::Int=5, max_total_mb::Int=1024)
         new(Dict{Tuple{DataType, Tuple}, Vector{Vector{UInt8}}}(),
             max_buffers, 0, max_total_mb * 1_000_000,
-            Dict{UInt, Tuple{Vector{UInt8}, Int}}())
+            Dict{UInt, Tuple{Vector{UInt8}, Int}}(),
+            ReentrantLock())
     end
 end
 
@@ -226,24 +230,26 @@ Call `release_pinned_buffer!` when done to return it to the pool.
 If no buffer is available in the pool, a new one is allocated.
 """
 function get_pinned_buffer(T::Type, shape::Tuple)
-    key = (T, shape)
-    total_bytes = sizeof(T) * prod(shape)
+    lock(PINNED_BUFFER_POOL.lock) do
+        key = (T, shape)
+        total_bytes = sizeof(T) * prod(shape)
 
-    if haskey(PINNED_BUFFER_POOL.available, key) && !isempty(PINNED_BUFFER_POOL.available[key])
-        # Check out an available buffer from the pool
-        buf = pop!(PINNED_BUFFER_POOL.available[key])
-        PINNED_BUFFER_POOL.total_pooled_bytes -= total_bytes
-    else
-        # Allocate a new pinned buffer
-        pinned_ptr = CUDA.Mem.alloc(CUDA.Mem.Host, total_bytes)
-        buf = unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pinned_ptr), total_bytes)
+        if haskey(PINNED_BUFFER_POOL.available, key) && !isempty(PINNED_BUFFER_POOL.available[key])
+            # Check out an available buffer from the pool
+            buf = pop!(PINNED_BUFFER_POOL.available[key])
+            PINNED_BUFFER_POOL.total_pooled_bytes -= total_bytes
+        else
+            # Allocate a new pinned buffer
+            pinned_ptr = CUDA.Mem.alloc(CUDA.Mem.Host, total_bytes)
+            buf = unsafe_wrap(Vector{UInt8}, Ptr{UInt8}(pinned_ptr), total_bytes)
+        end
+
+        # Track the checked-out buffer so it can be reclaimed if caller forgets release
+        ptr_addr = UInt(pointer(buf))
+        PINNED_BUFFER_POOL.in_use[ptr_addr] = (buf, total_bytes)
+
+        return unsafe_wrap(Array{T}, Ptr{T}(pointer(buf)), shape)
     end
-
-    # Track the checked-out buffer so it can be reclaimed if caller forgets release
-    ptr_addr = UInt(pointer(buf))
-    PINNED_BUFFER_POOL.in_use[ptr_addr] = (buf, total_bytes)
-
-    return unsafe_wrap(Array{T}, Ptr{T}(pointer(buf)), shape)
 end
 
 """
@@ -256,34 +262,36 @@ The caller must ensure all async operations using this buffer have completed
 If the pool is full or at its memory cap, the pinned memory is explicitly freed.
 """
 function release_pinned_buffer!(arr::Array{T}, shape::Tuple) where T
-    key = (T, shape)
-    total_bytes = sizeof(T) * prod(shape)
-    ptr_addr = UInt(pointer(arr))
+    lock(PINNED_BUFFER_POOL.lock) do
+        key = (T, shape)
+        total_bytes = sizeof(T) * prod(shape)
+        ptr_addr = UInt(pointer(arr))
 
-    # Remove from in-use tracking; retrieve the backing buffer
-    tracked = pop!(PINNED_BUFFER_POOL.in_use, ptr_addr, nothing)
+        # Remove from in-use tracking; retrieve the backing buffer
+        tracked = pop!(PINNED_BUFFER_POOL.in_use, ptr_addr, nothing)
 
-    if tracked === nothing
-        # Not allocated by get_pinned_buffer, or already released (double-release).
-        # Do NOT free — the pointer may be a regular Array or already-freed memory.
-        @warn "release_pinned_buffer! called on untracked pointer (not from get_pinned_buffer, or double-release)" maxlog=1
-        return
-    end
+        if tracked === nothing
+            # Not allocated by get_pinned_buffer, or already released (double-release).
+            # Do NOT free — the pointer may be a regular Array or already-freed memory.
+            @warn "release_pinned_buffer! called on untracked pointer (not from get_pinned_buffer, or double-release)" maxlog=1
+            return
+        end
 
-    if !haskey(PINNED_BUFFER_POOL.available, key)
-        PINNED_BUFFER_POOL.available[key] = Vector{Vector{UInt8}}()
-    end
+        if !haskey(PINNED_BUFFER_POOL.available, key)
+            PINNED_BUFFER_POOL.available[key] = Vector{Vector{UInt8}}()
+        end
 
-    # Only pool if under both per-key limit and total memory cap
-    can_pool = length(PINNED_BUFFER_POOL.available[key]) < PINNED_BUFFER_POOL.max_buffers_per_key &&
-               PINNED_BUFFER_POOL.total_pooled_bytes + total_bytes <= PINNED_BUFFER_POOL.max_total_bytes
+        # Only pool if under both per-key limit and total memory cap
+        can_pool = length(PINNED_BUFFER_POOL.available[key]) < PINNED_BUFFER_POOL.max_buffers_per_key &&
+                   PINNED_BUFFER_POOL.total_pooled_bytes + total_bytes <= PINNED_BUFFER_POOL.max_total_bytes
 
-    if can_pool
-        push!(PINNED_BUFFER_POOL.available[key], tracked[1])
-        PINNED_BUFFER_POOL.total_pooled_bytes += total_bytes
-    else
-        # Explicitly free the pinned memory to prevent leaks
-        CUDA.Mem.free(CUDA.Mem.Host, pointer(tracked[1]), total_bytes)
+        if can_pool
+            push!(PINNED_BUFFER_POOL.available[key], tracked[1])
+            PINNED_BUFFER_POOL.total_pooled_bytes += total_bytes
+        else
+            # Explicitly free the pinned memory to prevent leaks
+            CUDA.Mem.free(CUDA.Mem.Host, pointer(tracked[1]), total_bytes)
+        end
     end
 end
 
