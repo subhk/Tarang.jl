@@ -472,11 +472,21 @@ Oceananigans-style helper to launch KernelAbstractions kernels on CPU or GPU.
 Returns the KernelAbstractions event, even when `wait=true`, so callers can
 chain launches using `dependencies` similar to Oceananigans.
 """
+
+"""
+    ensure_device!(::AbstractArchitecture)
+
+No-op for CPU. GPU extension overrides to activate the correct CUDA device
+before kernel launches and allocations.
+"""
+ensure_device!(::AbstractArchitecture) = nothing
+
 function launch!(arch::AbstractArchitecture, kernel, args...;
                  ndrange,
                  dependencies=nothing,
                  wait::Bool=true,
                  kwargs...)
+    ensure_device!(arch)
     backend = device(arch)
     workgroup = workgroup_size(arch, ndrange)
     ka_kernel = kernel(backend, workgroup)
@@ -513,7 +523,7 @@ export on_architecture
 export is_gpu, has_cuda, synchronize, unsafe_free!
 export is_gpu_array, create_array
 export allocate_like, similar_zeros, copy_to_device
-export launch_config, workgroup_size, launch!, KernelOperation
+export launch_config, workgroup_size, launch!, KernelOperation, ensure_device!
 
 """
     KernelOperation(kernel; ndrange_fn=args -> length(args[1]))
@@ -530,6 +540,10 @@ end
 default_ndrange_fn(args...) = length(args[1])
 
 KernelOperation(kernel::K; ndrange_fn=default_ndrange_fn) where {K} = KernelOperation{K, typeof(ndrange_fn)}(kernel, ndrange_fn)
+
+# Two-positional-arg constructor for do-block syntax:
+#   KernelOperation(kernel) do args... end  desugars to  KernelOperation(lambda, kernel)
+KernelOperation(ndrange_fn::F, kernel::K) where {K,F} = KernelOperation{K, typeof(ndrange_fn)}(kernel, ndrange_fn)
 
 function (op::KernelOperation)(arch_or_data, args...; ndrange=nothing, dependencies=nothing, wait::Bool=true, kwargs...)
     effective_ndrange = isnothing(ndrange) ? op.ndrange_fn(args...) : ndrange
