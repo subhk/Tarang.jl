@@ -170,10 +170,22 @@ TensorField(domain::Domain, name::String; dtype::Type=domain.dist.dtype) =
 # ============================================================================
 
 """
-    grid_data(field::ScalarField)
+    grid_data(field)
 
 Return grid-space data, automatically transforming if needed.
-Equivalent to `ensure_layout!(field, :g); get_grid_data(field)`.
+
+This is the recommended way to access field data in grid space.
+For raw access without transforming, use `get_grid_data(field)`.
+For MPI-local data, use `field["g"]`.
+
+# Examples
+```julia
+T = ScalarField(domain, "T")
+data = grid_data(T)           # auto-transforms to grid space
+
+u = VectorField(domain, "u")
+ux, uz = grid_data(u)         # returns array of component data
+```
 """
 function grid_data(field::ScalarField)
     ensure_layout!(field, :g)
@@ -187,11 +199,28 @@ function grid_data(field::VectorField)
     return [get_grid_data(c) for c in field.components]
 end
 
+function grid_data(field::TensorField)
+    for i in axes(field.components, 1), j in axes(field.components, 2)
+        ensure_layout!(field.components[i,j], :g)
+    end
+    return [get_grid_data(field.components[i,j])
+            for i in axes(field.components, 1), j in axes(field.components, 2)]
+end
+
 """
-    coeff_data(field::ScalarField)
+    coeff_data(field)
 
 Return coefficient-space data, automatically transforming if needed.
-Equivalent to `ensure_layout!(field, :c); get_coeff_data(field)`.
+
+This is the recommended way to access field data in coefficient space.
+For raw access without transforming, use `get_coeff_data(field)`.
+For MPI-local data, use `field["c"]`.
+
+# Examples
+```julia
+T = ScalarField(domain, "T")
+coeffs = coeff_data(T)        # auto-transforms to coefficient space
+```
 """
 function coeff_data(field::ScalarField)
     ensure_layout!(field, :c)
@@ -203,6 +232,14 @@ function coeff_data(field::VectorField)
         ensure_layout!(c, :c)
     end
     return [get_coeff_data(c) for c in field.components]
+end
+
+function coeff_data(field::TensorField)
+    for i in axes(field.components, 1), j in axes(field.components, 2)
+        ensure_layout!(field.components[i,j], :c)
+    end
+    return [get_coeff_data(field.components[i,j])
+            for i in axes(field.components, 1), j in axes(field.components, 2)]
 end
 
 # ============================================================================
@@ -355,25 +392,31 @@ add_parameters!(problem, nu=1e-3, kappa=1e-4, Ra=1e6)
 """
 function add_parameters!(problem::Problem; kwargs...)
     for (name, value) in kwargs
-        add_substitution!(problem, String(name), value)
+        add_substitution!(problem, String(name), value; _internal=true)
     end
     return problem
 end
 
 # ============================================================================
-# Structured boundary condition helpers
+# Boundary condition helpers
+#
+# These are the recommended high-level API for common boundary conditions.
+# For custom BCs, use add_bc!(problem, bc) with a BC object, or Dedalus-style
+# string syntax via add_bc!(problem, "u(z=0) = 0").
 # ============================================================================
 
 """
     no_slip!(problem, field_name, coord, position)
 
-Add no-slip (zero Dirichlet) boundary condition for a velocity field.
+No-slip wall: sets velocity to zero (Dirichlet BC).
 
 # Example
 ```julia
-no_slip!(problem, "u", "z", 0.0)  # u = 0 at z = 0
-no_slip!(problem, "u", "z", 1.0)  # u = 0 at z = 1
+no_slip!(problem, "u", "z", 0.0)   # u = 0 at z = 0
+no_slip!(problem, "u", "z", Lz)    # u = 0 at z = Lz
 ```
+
+See also: [`fixed_value!`](@ref), [`free_slip!`](@ref), [`add_bc!`](@ref)
 """
 function no_slip!(problem::Problem, field_name::String, coord::String, position::Real)
     bc = dirichlet_bc(field_name, coord, Float64(position), 0.0)
@@ -384,13 +427,15 @@ end
 """
     fixed_value!(problem, field_name, coord, position, value)
 
-Add a Dirichlet boundary condition with a fixed value.
+Fixed-value (Dirichlet) boundary condition.
 
 # Example
 ```julia
-fixed_value!(problem, "T", "z", 0.0, 1.0)   # T = 1 at z = 0
-fixed_value!(problem, "T", "z", 1.0, 0.0)   # T = 0 at z = 1
+fixed_value!(problem, "T", "z", 0.0, 1.0)   # T = 1 at z = 0 (hot)
+fixed_value!(problem, "T", "z", Lz, 0.0)    # T = 0 at z = Lz (cold)
 ```
+
+See also: [`no_slip!`](@ref), [`free_slip!`](@ref), [`insulating!`](@ref)
 """
 function fixed_value!(problem::Problem, field_name::String, coord::String,
                       position::Real, value)
@@ -402,12 +447,15 @@ end
 """
     free_slip!(problem, field_name, coord, position)
 
-Add free-slip (zero Neumann) boundary condition.
+Free-slip wall: zero normal derivative (Neumann BC).
 
 # Example
 ```julia
 free_slip!(problem, "u", "z", 0.0)  # ∂u/∂z = 0 at z = 0
+free_slip!(problem, "u", "z", Lz)   # ∂u/∂z = 0 at z = Lz
 ```
+
+See also: [`no_slip!`](@ref), [`insulating!`](@ref), [`add_bc!`](@ref)
 """
 function free_slip!(problem::Problem, field_name::String, coord::String, position::Real)
     bc = neumann_bc(field_name, coord, Float64(position), 0.0)
@@ -418,12 +466,15 @@ end
 """
     insulating!(problem, field_name, coord, position)
 
-Add insulating (zero Neumann) boundary condition for a scalar field.
+Insulating wall: zero normal flux (Neumann BC) for a scalar field.
 
 # Example
 ```julia
-insulating!(problem, "T", "z", 1.0)  # ∂T/∂z = 0 at z = 1
+insulating!(problem, "T", "z", 0.0)  # ∂T/∂z = 0 at z = 0
+insulating!(problem, "T", "z", Lz)   # ∂T/∂z = 0 at z = Lz
 ```
+
+See also: [`fixed_value!`](@ref), [`free_slip!`](@ref), [`add_bc!`](@ref)
 """
 function insulating!(problem::Problem, field_name::String, coord::String, position::Real)
     bc = neumann_bc(field_name, coord, Float64(position), 0.0)

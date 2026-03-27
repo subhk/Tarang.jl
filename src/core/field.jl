@@ -807,15 +807,22 @@ end
 """
     get_grid_data(field::ScalarField)
 
-Return the grid-space data array. Prefer this over accessing `field.buffers.grid`
-directly so that future instrumentation/hooks apply uniformly.
+Return the raw grid-space data array **without** transforming.
+Does not check or change the current layout — use only when you know
+the field is already in grid space.
+
+For auto-transforming access, use `grid_data(field)` or `field["g"]` instead.
 """
 get_grid_data(field::ScalarField) = field.buffers.grid
 
 """
     get_coeff_data(field::ScalarField)
 
-Return the coefficient-space data array.
+Return the raw coefficient-space data array **without** transforming.
+Does not check or change the current layout — use only when you know
+the field is already in coefficient space.
+
+For auto-transforming access, use `coeff_data(field)` or `field["c"]` instead.
 """
 get_coeff_data(field::ScalarField) = field.buffers.coeff
 

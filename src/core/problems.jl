@@ -593,16 +593,45 @@ Get all registered temporal filters as a Dict.
 """
 get_all_temporal_filters(problem::IVP) = problem.temporal_filters
 
+"""
+    add_bc!(problem, bc::String)
+
+Add a boundary condition using Dedalus-style string syntax.
+
+# Examples
+```julia
+add_bc!(problem, "u(z=0) = 0")           # Dirichlet
+add_bc!(problem, "integ(p) = 0")          # Integral constraint
+```
+
+For common physical BCs, prefer the named helpers:
+```julia
+no_slip!(problem, "u", "z", 0.0)         # u = 0 (Dirichlet)
+fixed_value!(problem, "T", "z", 0.0, 1.0) # T = 1 (Dirichlet)
+free_slip!(problem, "u", "z", 0.0)        # du/dz = 0 (Neumann)
+insulating!(problem, "T", "z", 1.0)       # dT/dz = 0 (Neumann)
+```
+
+For structured BC objects, pass an `AbstractBoundaryCondition` directly:
+```julia
+add_bc!(problem, dirichlet_bc("u", "z", 0.0, 0.0))
+```
+"""
 function add_bc!(problem::Problem, bc::String)
-    """Add boundary condition to problem (legacy string interface)"""
     push!(problem.boundary_conditions, bc)
 end
 
-# Enhanced boundary condition functions
+"""
+    add_bc!(problem, bc::AbstractBoundaryCondition)
+
+Add a structured boundary condition object to the problem.
+
+See also: [`no_slip!`](@ref), [`fixed_value!`](@ref), [`free_slip!`](@ref),
+[`insulating!`](@ref), [`dirichlet_bc`](@ref), [`neumann_bc`](@ref)
+"""
 function add_bc!(problem::Problem, bc::AbstractBoundaryCondition)
-    """Add structured boundary condition to problem"""
     add_bc!(problem.bc_manager, bc)
-    
+
     # Also add to legacy string list for compatibility
     eq = bc_to_equation(problem.bc_manager, bc)
     if isa(eq, Vector)
@@ -610,15 +639,13 @@ function add_bc!(problem::Problem, bc::AbstractBoundaryCondition)
     else
         push!(problem.boundary_conditions, eq)
     end
-    
+
     return bc
 end
 
-# Note: add_dirichlet_bc!, add_neumann_bc!, add_robin_bc!, add_stress_free_bc!, add_no_slip_bc!
-# have been removed. Use add_equation!() for all equations including boundary conditions.
-# Example: add_equation!(problem, "u(z=0) = 0")  # Dirichlet BC
-# Example: add_equation!(problem, "dz(u)(z=1) = 0")  # Neumann BC
-# This matches Dedalus behavior where add_equation() handles everything.
+# Boundary conditions can also be passed to add_equation!() following Dedalus v3 convention:
+#   add_equation!(problem, "u(z=0) = 0")  # Dirichlet BC
+#   add_equation!(problem, "dz(u)(z=1) = 0")  # Neumann BC
 
 function register_tau_field!(problem::Problem, name::String, field)
     """Register tau field for boundary condition enforcement"""
@@ -2669,8 +2696,25 @@ function validate_problem(problem::Problem)
 end
 
 # Substitutions and namespace management
-function add_substitution!(problem::Problem, name::String, expression)
-    """Add substitution to problem namespace"""
+
+"""
+    add_substitution!(problem, name, expression)
+
+Add a named parameter to the problem namespace. Prefer `add_parameters!` for
+setting multiple parameters at once:
+
+```julia
+add_parameters!(problem, nu=1e-3, kappa=1e-4)
+```
+"""
+function add_substitution!(problem::Problem, name::String, expression;
+                           _internal::Bool=false)
+    if !_internal
+        Base.depwarn(
+            "`add_substitution!(problem, name, value)` is deprecated, " *
+            "use `add_parameters!(problem, $name=$expression)` instead.",
+            :add_substitution!)
+    end
     problem.namespace[name] = expression
 end
 
