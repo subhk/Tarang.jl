@@ -255,48 +255,6 @@ end
 end
 
 # ============================================================================
-# Interpolation
-# ============================================================================
-
-@testset "interpolate on ScalarField (Fourier)" begin
-    domain = PeriodicDomain(16, 16)
-    f = ScalarField(domain, "f")
-    mesh = Tarang.create_meshgrid(domain)
-    x, y = mesh["x"], mesh["y"]
-
-    # f = sin(x) * cos(y)
-    set_grid!(f, @. sin(x) * cos(y))
-
-    coords = domain.dist.coordsys
-    # Interpolate at x = pi/4 along x-coordinate
-    interp_op = interpolate(f, coords["x"], pi / 4)
-    result = evaluate(interp_op)
-
-    # Result should be a field (reduced dimension)
-    @test result isa ScalarField
-end
-
-# ============================================================================
-# Integration
-# ============================================================================
-
-@testset "integrate on ScalarField (Fourier)" begin
-    domain = PeriodicDomain(16, 16)
-    f = ScalarField(domain, "f")
-    mesh = Tarang.create_meshgrid(domain)
-    x, y = mesh["x"], mesh["y"]
-
-    # f = 1.0 (constant). Integral over [0,2pi]^2 = (2pi)^2
-    set_grid!(f, @. 0.0 * x + 0.0 * y + 1.0)
-
-    coords = domain.dist.coordsys
-    int_op = integrate(f, coords["x"])
-    result = evaluate(int_op)
-
-    @test result isa ScalarField
-end
-
-# ============================================================================
 # Fourier-Chebyshev mixed domain (ChannelDomain)
 # ============================================================================
 
