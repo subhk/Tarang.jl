@@ -194,7 +194,7 @@ end
 
             # Call alltoall with nothing comm (single-rank fallback)
             nccl_alltoall!(send_buf, recv_buf, send_counts, recv_counts,
-                           send_displs, recv_displs, nothing)
+                           send_displs, recv_displs, nothing; my_rank=rank)
 
             # With nothing comm, should just copy
             @test Array(recv_buf) ≈ Array(send_buf) rtol=1e-14
