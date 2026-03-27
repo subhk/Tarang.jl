@@ -1,0 +1,892 @@
+# ============================================================================
+# GPU Transform Implementations
+# ============================================================================
+
+# Field data accessors: imported from Tarang (get_grid_data, get_coeff_data,
+# set_grid_data!, set_coeff_data!) — use field.buffers.grid/coeff internally.
+
+# ============================================================================
+# Distributed GPU Detection
+# ============================================================================
+
+"""
+    is_distributed_gpu(arch, nprocs::Int)
+
+Check if we should use distributed GPU transforms.
+Returns true if GPU architecture + multiple processes + NCCL available.
+"""
+function is_distributed_gpu(arch::GPU, nprocs::Int)
+    return nprocs > 1 && Tarang.nccl_available()
+end
+
+is_distributed_gpu(arch::CPU, nprocs::Int) = false
+is_distributed_gpu(arch, nprocs::Int) = false
+
+"""
+    needs_distributed_dct(field)
+
+Check if the field requires distributed DCT (has Chebyshev basis in any dimension).
+Returns true only for 3D fields with at least one Chebyshev basis.
+"""
+function needs_distributed_dct(field)
+    bases = field.bases
+    if length(bases) != 3
+        return false  # Only support 3D distributed DCT for now
+    end
+    for b in bases
+        if b isa ChebyshevT
+            return true
+        end
+    end
+    return false
+end
+
+# ============================================================================
+# Distributed DCT Plan Cache
+# ============================================================================
+
+# Global cache for distributed DCT plans (thread-safe)
+const DISTRIBUTED_DCT_PLAN_CACHE = Dict{UInt64, DistributedDCTPlan}()
+const DISTRIBUTED_DCT_PLAN_LOCK = ReentrantLock()
+
+"""
+    get_or_create_distributed_dct_plan(field)
+
+Get or create a cached distributed DCT plan for the given field.
+Thread-safe caching by field properties (global shape, proc grid, element type).
+"""
+function get_or_create_distributed_dct_plan(field)
+    dist = field.dist
+
+    # Create cache key from field properties
+    global_shape_tuple = Tuple(Tarang.global_shape(field.domain))
+    proc_grid = _compute_proc_grid(dist.size)
+    T = real(eltype(get_grid_data(field)))
+
+    key = hash((global_shape_tuple, proc_grid, T))
+
+    lock(DISTRIBUTED_DCT_PLAN_LOCK) do
+        if haskey(DISTRIBUTED_DCT_PLAN_CACHE, key)
+            return DISTRIBUTED_DCT_PLAN_CACHE[key]
+        end
+
+        # Create pencil decomposition from field's distributor
+        pencil = get_or_create_pencil(dist, global_shape_tuple)
+
+        # Create plan
+        plan = DistributedDCTPlan(pencil, T)
+
+        DISTRIBUTED_DCT_PLAN_CACHE[key] = plan
+        return plan
+    end
+end
+
+"""
+    _compute_proc_grid(nprocs::Int)
+
+Compute a 2D process grid (P1, P2) for the given number of processes.
+Prefers a square-ish distribution.
+"""
+function _compute_proc_grid(nprocs::Int)
+    P1 = isqrt(nprocs)
+    while nprocs % P1 != 0
+        P1 -= 1
+    end
+    P2 = nprocs ÷ P1
+    return (P1, P2)
+end
+
+"""
+    get_or_create_pencil(dist, global_shape::NTuple{3, Int})
+
+Get or create PencilDecomposition from a Distributor.
+"""
+function get_or_create_pencil(dist, global_shape::NTuple{3, Int})
+    nprocs = dist.size
+    rank = dist.rank
+    comm = dist.comm
+
+    # Determine process grid (prefer square-ish)
+    proc_grid = _compute_proc_grid(nprocs)
+
+    return PencilDecomposition(global_shape, proc_grid, rank, comm)
+end
+
+"""
+    clear_distributed_dct_plan_cache!()
+
+Clear all cached distributed DCT plans (thread-safe).
+"""
+function clear_distributed_dct_plan_cache!()
+    lock(DISTRIBUTED_DCT_PLAN_LOCK) do
+        # Finalize all plans before clearing
+        for plan in values(DISTRIBUTED_DCT_PLAN_CACHE)
+            finalize_distributed_dct_plan!(plan)
+        end
+        empty!(DISTRIBUTED_DCT_PLAN_CACHE)
+    end
+end
+
+# ============================================================================
+# Distributed GPU Transform Functions
+# ============================================================================
+
+"""
+    distributed_gpu_forward_transform!(field::ScalarField)
+
+Forward transform using distributed GPU DCT for Chebyshev fields.
+Transforms from grid space (Z-pencil layout) to spectral space (X-pencil layout).
+"""
+function distributed_gpu_forward_transform!(field::ScalarField)
+    # Get or create distributed DCT plan
+    plan = get_or_create_distributed_dct_plan(field)
+
+    # Get local grid data
+    data = get_grid_data(field)
+
+    # Ensure we're in Z-pencil orientation (grid space)
+    set_orientation!(plan.pencil, :z_pencil)
+
+    # Allocate output if needed (X-pencil shape for spectral coefficients)
+    coeffs = similar(data, plan.pencil.x_pencil_shape...)
+
+    # Perform distributed DCT
+    distributed_forward_dct!(coeffs, data, plan)
+
+    # Update pencil orientation to reflect new layout
+    set_orientation!(plan.pencil, :x_pencil)
+
+    # Store coefficients
+    set_coeff_data!(field, coeffs)
+
+    return true
+end
+
+"""
+    distributed_gpu_backward_transform!(field::ScalarField)
+
+Backward transform using distributed GPU DCT for Chebyshev fields.
+Transforms from spectral space (X-pencil layout) to grid space (Z-pencil layout).
+"""
+function distributed_gpu_backward_transform!(field::ScalarField)
+    plan = get_or_create_distributed_dct_plan(field)
+
+    # Get local coefficient data
+    coeffs = get_coeff_data(field)
+
+    # Ensure we're in X-pencil orientation (spectral space)
+    set_orientation!(plan.pencil, :x_pencil)
+
+    # Allocate output (Z-pencil shape for grid values)
+    data = similar(coeffs, plan.pencil.z_pencil_shape...)
+
+    # Perform distributed inverse DCT
+    distributed_backward_dct!(data, coeffs, plan)
+
+    # Update pencil orientation to reflect new layout
+    set_orientation!(plan.pencil, :z_pencil)
+
+    # Store grid data
+    set_grid_data!(field, data)
+
+    return true
+end
+
+"""
+    gpu_forward_transform!(field::ScalarField)
+
+GPU-specific forward transform using CUFFT.
+Supports:
+- Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT
+- Pure Chebyshev - uses GPU DCT
+- Mixed Fourier-Chebyshev - dimension-by-dimension transforms
+"""
+function Tarang.gpu_forward_transform!(field::ScalarField)
+    arch = field.dist.architecture
+    if !Tarang.is_gpu(arch)
+        return false
+    end
+
+    data_g = get_grid_data(field)
+    if !isa(data_g, CuArray)
+        return false
+    end
+
+    gpu_arch = arch::GPU
+
+    # Ensure correct device is active for multi-GPU support
+    ensure_device!(gpu_arch)
+
+    # Determine transform type based on bases
+    bases = field.bases
+    if isempty(bases)
+        return false
+    end
+
+    # Check if distributed GPU transform should be used
+    # This is checked early because distributed transforms have different data layouts
+    nprocs = field.dist.size
+    if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
+        return distributed_gpu_forward_transform!(field)
+    end
+
+    # CRITICAL: GPU+MPI for Fourier transforms requires TransposableField/distributed paths
+    # A local-only cuFFT in MPI mode produces INCORRECT results (each rank FFTs its local slab)
+    # If we reach here with nprocs > 1 and have Fourier bases, error out explicitly
+    if nprocs > 1
+        has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
+        if has_fourier
+            error("GPU+MPI Fourier transforms require using TransposableField or the distributed " *
+                  "transform path (distributed_forward_transform!). Direct forward_transform! on " *
+                  "GPU with $(nprocs) MPI processes would produce incorrect results (local FFT only). " *
+                  "Either: (1) use TransposableField for distributed transforms, " *
+                  "(2) use distributed_forward_transform!, or (3) run with a single GPU.")
+        end
+    end
+
+    # Use LOCAL array size from actual data (not global domain size)
+    # This is critical for distributed computing where each rank owns a portion
+    local_grid_shape = size(data_g)
+
+    if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+        return false
+    end
+
+    # Classify bases
+    all_fourier = all(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
+    all_chebyshev = all(b -> isa(b, ChebyshevT), bases)
+    has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
+    has_chebyshev = any(b -> isa(b, ChebyshevT), bases)
+
+    input_T = eltype(data_g)
+    coeff_T = Tarang.coefficient_eltype(field.dtype)
+
+    if all_fourier
+        # Pure Fourier case - use optimized multi-dimensional FFT
+        # CUFFT's plan_rfft convention: R2C on first dimension, C2C on rest.
+        # Only valid when bases[1] is RealFourier.
+        has_real = any(b -> isa(b, RealFourier), bases)
+        first_is_real = isa(bases[1], RealFourier)
+
+        if has_real && !first_is_real
+            # RealFourier on a non-first dimension: can't use multi-dim rfft.
+            # Fall through to dimension-by-dimension approach (mixed transform handles this).
+            plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+            local_coeff_shape = plan.coeff_shape
+
+            existing_coeff = get_coeff_data(field)
+            needs_alloc = !(existing_coeff isa CuArray) ||
+                          eltype(existing_coeff) != coeff_T ||
+                          size(existing_coeff) != local_coeff_shape
+            if needs_alloc
+                set_coeff_data!(field, CUDA.zeros(coeff_T, local_coeff_shape...))
+            end
+
+            gpu_mixed_forward_transform!(get_coeff_data(field), data_g, plan)
+        elseif first_is_real
+            # First dim is RealFourier: use multi-dim rfft (R2C on dim 1, C2C on rest)
+            # BUT if input is already complex, rfft is invalid — use C2C instead
+            # (matches CPU path which falls back to fft when data is complex)
+            if input_T <: Complex
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=false)
+                local_coeff_shape = local_grid_shape  # C2C preserves shape
+            else
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=true)
+                local_coeff_shape = (div(local_grid_shape[1], 2) + 1, local_grid_shape[2:end]...)
+            end
+
+            existing_coeff = get_coeff_data(field)
+            needs_alloc = !(existing_coeff isa CuArray) ||
+                          eltype(existing_coeff) != coeff_T ||
+                          size(existing_coeff) != local_coeff_shape
+            if needs_alloc
+                set_coeff_data!(field, CUDA.zeros(coeff_T, local_coeff_shape...))
+            end
+
+            gpu_forward_fft!(get_coeff_data(field), data_g, plan)
+        else
+            # All ComplexFourier: use multi-dim cfft
+            # C2C requires complex input; promote real data if needed
+            if input_T <: Real
+                fft_input = Complex{input_T}.(data_g)
+                plan_T = Complex{input_T}
+            else
+                fft_input = data_g
+                plan_T = input_T
+            end
+            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
+
+            existing_coeff = get_coeff_data(field)
+            needs_alloc = !(existing_coeff isa CuArray) ||
+                          eltype(existing_coeff) != plan_T ||
+                          size(existing_coeff) != local_grid_shape
+            if needs_alloc
+                set_coeff_data!(field, CUDA.zeros(plan_T, local_grid_shape...))
+            end
+
+            gpu_forward_fft!(get_coeff_data(field), fft_input, plan)
+        end
+
+        return true
+
+    elseif all_chebyshev && length(bases) == 1
+        # Pure Chebyshev 1D case - use GPU DCT
+        n = local_grid_shape[1]
+        local_coeff_shape = local_grid_shape  # Chebyshev: same shape
+
+        existing_coeff = get_coeff_data(field)
+        needs_alloc = !(existing_coeff isa CuArray) ||
+                      eltype(existing_coeff) != input_T ||
+                      size(existing_coeff) != local_coeff_shape
+        if needs_alloc
+            set_coeff_data!(field, CUDA.zeros(input_T, local_coeff_shape...))
+        end
+
+        if input_T <: Complex
+            # Complex Chebyshev: apply DCT to real and imaginary parts separately
+            real_T = real(input_T)
+            dct_plan = plan_gpu_dct(gpu_arch, n, real_T, 1)
+            real_part = real.(data_g)
+            imag_part = imag.(data_g)
+            real_out = similar(real_part)
+            imag_out = similar(imag_part)
+            gpu_forward_dct_1d!(real_out, real_part, dct_plan)
+            gpu_forward_dct_1d!(imag_out, imag_part, dct_plan)
+            get_coeff_data(field) .= complex.(real_out, imag_out)
+        else
+            dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+            gpu_forward_dct_1d!(get_coeff_data(field), data_g, dct_plan)
+        end
+        return true
+
+    elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions
+        # Coefficient shape equals grid shape for Chebyshev
+        local_coeff_shape = local_grid_shape
+
+        existing_coeff = get_coeff_data(field)
+        needs_alloc = !(existing_coeff isa CuArray) ||
+                      eltype(existing_coeff) != input_T ||
+                      size(existing_coeff) != local_coeff_shape
+        if needs_alloc
+            set_coeff_data!(field, CUDA.zeros(input_T, local_coeff_shape...))
+        end
+
+        if input_T <: Complex
+            # Complex Chebyshev: apply DCT to real and imaginary parts separately
+            # (DCT kernels use cos() which requires real-valued inputs on GPU)
+            real_T = real(input_T)
+            temp_real = real.(data_g)
+            temp_imag = imag.(data_g)
+            for dim in 1:length(bases)
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_real), real_T, dim)
+                out_real = CUDA.zeros(real_T, size(temp_real)...)
+                out_imag = CUDA.zeros(real_T, size(temp_imag)...)
+                gpu_dct_dim!(out_real, temp_real, dct_plan, Val(:forward))
+                gpu_dct_dim!(out_imag, temp_imag, dct_plan, Val(:forward))
+                temp_real = out_real
+                temp_imag = out_imag
+            end
+            get_coeff_data(field) .= complex.(temp_real, temp_imag)
+        else
+            # Apply DCT along each dimension
+            temp_data = copy(data_g)
+            for dim in 1:length(bases)
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
+                output = CUDA.zeros(input_T, size(temp_data)...)
+                gpu_dct_dim!(output, temp_data, dct_plan, Val(:forward))
+                temp_data = output
+            end
+            copyto!(get_coeff_data(field), temp_data)
+        end
+        return true
+
+    elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # Mixed Fourier-Chebyshev 2D/3D case
+        # Use the mixed transform plan for dimension-by-dimension transforms
+        # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
+
+        # Get or create mixed transform plan (determines correct coeff_shape)
+        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+        local_coeff_shape = plan.coeff_shape
+
+        existing_coeff = get_coeff_data(field)
+        needs_alloc = !(existing_coeff isa CuArray) ||
+                      eltype(existing_coeff) != coeff_T ||
+                      size(existing_coeff) != local_coeff_shape
+        if needs_alloc
+            set_coeff_data!(field, CUDA.zeros(coeff_T, local_coeff_shape...))
+        end
+
+        # Execute mixed transform
+        gpu_mixed_forward_transform!(get_coeff_data(field), data_g, plan)
+
+        return true
+    end
+
+    # For unsupported combinations (e.g., Legendre), fall back to CPU
+    return false
+end
+
+"""
+    gpu_backward_transform!(field::ScalarField)
+
+GPU-specific backward transform using CUFFT.
+Supports:
+- Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT
+- Pure Chebyshev - uses GPU DCT
+- Mixed Fourier-Chebyshev - dimension-by-dimension transforms
+"""
+function Tarang.gpu_backward_transform!(field::ScalarField)
+    arch = field.dist.architecture
+    if !Tarang.is_gpu(arch)
+        return false
+    end
+
+    data_c = get_coeff_data(field)
+    if !isa(data_c, CuArray)
+        return false
+    end
+
+    gpu_arch = arch::GPU
+
+    # Ensure correct device is active for multi-GPU support
+    ensure_device!(gpu_arch)
+
+    bases = field.bases
+    if isempty(bases)
+        return false
+    end
+
+    # Check if distributed GPU transform should be used
+    # This is checked early because distributed transforms have different data layouts
+    nprocs = field.dist.size
+    if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
+        return distributed_gpu_backward_transform!(field)
+    end
+
+    # Use LOCAL coefficient array size to determine grid shape
+    # This is critical for distributed computing where each rank owns a portion
+    local_coeff_shape = size(data_c)
+
+    # Classify bases
+    all_fourier = all(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
+    all_chebyshev = all(b -> isa(b, ChebyshevT), bases)
+    has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
+    has_chebyshev = any(b -> isa(b, ChebyshevT), bases)
+
+    if all_fourier
+        # Pure Fourier case - same logic as forward:
+        # Only use multi-dim irfft when bases[1] is RealFourier.
+        has_real = any(b -> isa(b, RealFourier), bases)
+        first_is_real = isa(bases[1], RealFourier)
+
+        if has_real && !first_is_real
+            # RealFourier on non-first dimension: use dimension-by-dimension approach
+            existing_grid = get_grid_data(field)
+            if existing_grid isa CuArray
+                local_grid_shape = size(existing_grid)
+            else
+                # Use basis metadata for true grid sizes instead of assuming R2C halving.
+                # The mixed plan sorts RealFourier dims first; only the first RealFourier dim
+                # (in sorted order) gets R2C if data_is_real (i.e., field.dtype is real).
+                first_real_found = false
+                local_grid_shape = ntuple(length(bases)) do dim
+                    if isa(bases[dim], RealFourier) && !first_real_found
+                        grid_n = bases[dim].meta.size
+                        if local_coeff_shape[dim] == div(grid_n, 2) + 1
+                            # R2C was used for this dim
+                            first_real_found = true
+                            return grid_n
+                        else
+                            # C2C was used (complex input or not the first processed dim)
+                            return local_coeff_shape[dim]
+                        end
+                    else
+                        return local_coeff_shape[dim]
+                    end
+                end
+            end
+
+            if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+                return false
+            end
+
+            real_T = field.dtype
+            needs_alloc = existing_grid === nothing ||
+                          !(existing_grid isa CuArray) ||
+                          eltype(existing_grid) != real_T ||
+                          size(existing_grid) != local_grid_shape
+            if needs_alloc
+                set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
+            end
+
+            plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, real_T)
+            gpu_mixed_backward_transform!(get_grid_data(field), data_c, plan)
+
+        elseif first_is_real
+            # First dim is RealFourier: normally use irfft (C2R on dim 1, C2C on rest).
+            # BUT if forward used C2C (complex input), coeff shape == grid shape (no halving),
+            # so we must detect this and use C2C inverse instead.
+            existing_grid = get_grid_data(field)
+            if existing_grid isa CuArray
+                local_grid_shape = size(existing_grid)
+            else
+                # Use basis metadata for true grid size instead of assuming R2C halving.
+                # bases[1].meta.size is the global grid resolution for dim 1 (== local for
+                # slab decomposition along last dim). Compare with coeff shape to detect R2C vs C2C.
+                grid_n1 = bases[1].meta.size
+                if local_coeff_shape[1] == div(grid_n1, 2) + 1
+                    # R2C was used: coeff dim 1 is halved
+                    local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
+                else
+                    # C2C was used: coeff shape == grid shape
+                    local_grid_shape = local_coeff_shape
+                end
+            end
+
+            # Determine if R2C or C2C was used: if coeff dim 1 == grid dim 1, C2C was used
+            used_r2c = (local_coeff_shape[1] != local_grid_shape[1])
+            real_T = field.dtype
+
+            if used_r2c
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, real_T; real_input=true)
+                output_T = real_T
+            else
+                # C2C inverse: coeff and grid have same shape
+                coeff_T_bk = eltype(data_c)
+                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, coeff_T_bk; real_input=false)
+                output_T = coeff_T_bk
+            end
+
+            if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+                return false
+            end
+
+            needs_alloc = existing_grid === nothing ||
+                          !(existing_grid isa CuArray) ||
+                          eltype(existing_grid) != output_T ||
+                          size(existing_grid) != local_grid_shape
+            if needs_alloc
+                set_grid_data!(field, CUDA.zeros(output_T, local_grid_shape...))
+            end
+
+            gpu_backward_fft!(get_grid_data(field), data_c, plan)
+        else
+            # All ComplexFourier: use multi-dim icfft
+            local_grid_shape = local_coeff_shape
+
+            if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+                return false
+            end
+
+            coeff_T = eltype(data_c)
+            # C2C inverse requires complex input; promote if needed (shouldn't normally happen)
+            if coeff_T <: Real
+                fft_input = Complex{coeff_T}.(data_c)
+                plan_T = Complex{coeff_T}
+            else
+                fft_input = data_c
+                plan_T = coeff_T
+            end
+            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
+
+            existing_grid = get_grid_data(field)
+            needs_alloc = existing_grid === nothing ||
+                          !(existing_grid isa CuArray) ||
+                          eltype(existing_grid) != plan_T ||
+                          size(existing_grid) != local_grid_shape
+            if needs_alloc
+                set_grid_data!(field, CUDA.zeros(plan_T, local_grid_shape...))
+            end
+
+            gpu_backward_fft!(get_grid_data(field), fft_input, plan)
+        end
+
+        return true
+
+    elseif all_chebyshev && length(bases) == 1
+        # Pure Chebyshev 1D case - use GPU inverse DCT
+        local_grid_shape = local_coeff_shape  # Chebyshev: same shape
+
+        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+            return false
+        end
+
+        input_T = eltype(data_c)
+        n = local_coeff_shape[1]
+
+        existing_grid = get_grid_data(field)
+        needs_alloc = existing_grid === nothing ||
+                      !(existing_grid isa CuArray) ||
+                      eltype(existing_grid) != input_T ||
+                      size(existing_grid) != local_grid_shape
+        if needs_alloc
+            set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
+        end
+
+        if input_T <: Complex
+            # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
+            real_T = real(input_T)
+            dct_plan = plan_gpu_dct(gpu_arch, n, real_T, 1)
+            real_part = real.(data_c)
+            imag_part = imag.(data_c)
+            real_out = similar(real_part)
+            imag_out = similar(imag_part)
+            gpu_backward_dct_1d!(real_out, real_part, dct_plan)
+            gpu_backward_dct_1d!(imag_out, imag_part, dct_plan)
+            get_grid_data(field) .= complex.(real_out, imag_out)
+        else
+            dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+            gpu_backward_dct_1d!(get_grid_data(field), data_c, dct_plan)
+        end
+        return true
+
+    elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions (in reverse order)
+        local_grid_shape = local_coeff_shape  # For Chebyshev, shapes are equal
+
+        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+            return false
+        end
+
+        input_T = eltype(data_c)
+
+        existing_grid = get_grid_data(field)
+        needs_alloc = existing_grid === nothing ||
+                      !(existing_grid isa CuArray) ||
+                      eltype(existing_grid) != input_T ||
+                      size(existing_grid) != local_grid_shape
+        if needs_alloc
+            set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
+        end
+
+        if input_T <: Complex
+            # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
+            # (DCT kernels use cos() which requires real-valued inputs on GPU)
+            real_T = real(input_T)
+            temp_real = real.(data_c)
+            temp_imag = imag.(data_c)
+            for dim in reverse(1:length(bases))
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_real), real_T, dim)
+                out_real = CUDA.zeros(real_T, size(temp_real)...)
+                out_imag = CUDA.zeros(real_T, size(temp_imag)...)
+                gpu_dct_dim!(out_real, temp_real, dct_plan, Val(:backward))
+                gpu_dct_dim!(out_imag, temp_imag, dct_plan, Val(:backward))
+                temp_real = out_real
+                temp_imag = out_imag
+            end
+            get_grid_data(field) .= complex.(temp_real, temp_imag)
+        else
+            # Apply inverse DCT along each dimension (reverse order for consistency)
+            temp_data = copy(data_c)
+            for dim in reverse(1:length(bases))
+                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
+                output = CUDA.zeros(input_T, size(temp_data)...)
+                gpu_dct_dim!(output, temp_data, dct_plan, Val(:backward))
+                temp_data = output
+            end
+            copyto!(get_grid_data(field), temp_data)
+        end
+        return true
+
+    elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # Mixed Fourier-Chebyshev 2D/3D case
+        # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
+
+        # Determine grid shape: use existing grid data if available,
+        # otherwise use basis metadata for robust detection of R2C vs C2C.
+        existing_grid = get_grid_data(field)
+        if existing_grid isa CuArray
+            local_grid_shape = size(existing_grid)
+        else
+            first_real_found = false
+            local_grid_shape = ntuple(length(bases)) do dim
+                basis = bases[dim]
+                if isa(basis, RealFourier) && !first_real_found
+                    grid_n = basis.meta.size
+                    if local_coeff_shape[dim] == div(grid_n, 2) + 1
+                        # R2C was used for this dim
+                        first_real_found = true
+                        return grid_n
+                    else
+                        # C2C was used (complex input)
+                        return local_coeff_shape[dim]
+                    end
+                else
+                    return local_coeff_shape[dim]
+                end
+            end
+        end
+
+        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
+            return false
+        end
+
+        real_T = field.dtype
+        needs_alloc = existing_grid === nothing ||
+                      !(existing_grid isa CuArray) ||
+                      eltype(existing_grid) != real_T ||
+                      size(existing_grid) != local_grid_shape
+        if needs_alloc
+            set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
+        end
+
+        # Get or create mixed transform plan (uses grid_shape as canonical reference)
+        input_T = real_T <: Complex ? real_T : real_T
+        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+
+        # Execute mixed backward transform
+        gpu_mixed_backward_transform!(get_grid_data(field), data_c, plan)
+
+        return true
+    end
+
+    # For unsupported combinations (e.g., Legendre), fall back to CPU
+    return false
+end
+
+# ============================================================================
+# GPU FFT Transforms using CUFFT
+# ============================================================================
+
+"""
+    GPUFFTPlan
+
+Wrapper for CUFFT plans that work with CuArrays.
+"""
+struct GPUFFTPlan{P, IP}
+    plan::P
+    iplan::IP
+    size::Tuple{Vararg{Int}}
+    is_real::Bool
+end
+
+"""
+    plan_gpu_fft(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
+
+Create a GPU FFT plan using CUFFT for element type `T`.
+
+**Important:** `local_size` should be the LOCAL array shape (what this process owns),
+not the global domain size. In distributed computing, each rank creates plans
+for its local data portion.
+
+For multi-GPU: ensures the plan is created on the correct device.
+"""
+function plan_gpu_fft(arch::GPU{CuDevice}, local_size::Tuple, T::Type; real_input::Bool=false)
+    # Ensure we're on the correct device for plan creation
+    ensure_device!(arch)
+
+    complex_T = T <: Complex ? T : Complex{T}
+
+    if real_input
+        # Real-to-complex FFT (like rfft)
+        # Plan is created based on local array dimensions
+        dummy_in = CUDA.zeros(T, local_size...)
+        plan = CUFFT.plan_rfft(dummy_in)
+
+        # Complex-to-real inverse FFT (like irfft)
+        out_size = (div(local_size[1], 2) + 1, local_size[2:end]...)
+        dummy_out = CUDA.zeros(complex_T, out_size...)
+        iplan = CUFFT.plan_irfft(dummy_out, local_size[1])
+
+        return GPUFFTPlan(plan, iplan, local_size, true)
+    else
+        # Complex-to-complex FFT
+        dummy = CUDA.zeros(complex_T, local_size...)
+        plan = CUFFT.plan_fft(dummy)
+        iplan = CUFFT.plan_ifft(dummy)
+
+        return GPUFFTPlan(plan, iplan, local_size, false)
+    end
+end
+
+# Fallback for generic GPU: delegates to device-specific version using current device,
+# ensuring proper device context via ensure_device!
+plan_gpu_fft(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false) =
+    plan_gpu_fft(GPU{CuDevice}(CUDA.device()), local_size, T; real_input=real_input)
+
+"""
+    gpu_forward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
+
+Execute forward FFT on GPU.
+"""
+function gpu_forward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
+    mul!(output, plan.plan, input)
+    return output
+end
+
+"""
+    gpu_backward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
+
+Execute backward (inverse) FFT on GPU.
+"""
+function gpu_backward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
+    if plan.is_real
+        # irfft returns real output
+        mul!(output, plan.iplan, input)
+    else
+        mul!(output, plan.iplan, input)
+    end
+    return output
+end
+
+# ============================================================================
+# GPU Transform Plan Cache (Thread-Safe)
+# ============================================================================
+
+"""
+    GPUTransformCache
+
+Thread-safe cache for GPU FFT plans to avoid recreation overhead.
+Keys include device ID for multi-GPU safety.
+Uses a ReentrantLock to protect concurrent access from multiple Julia threads.
+"""
+struct GPUTransformCache
+    plans::Dict{Tuple, GPUFFTPlan}
+    lock::ReentrantLock
+end
+
+const GPU_TRANSFORM_CACHE = GPUTransformCache(Dict{Tuple, GPUFFTPlan}(), ReentrantLock())
+
+"""
+    get_gpu_fft_plan(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
+
+Get or create a cached GPU FFT plan (thread-safe).
+Plans are cached by (device_id, size, element_type, real_input).
+"""
+function get_gpu_fft_plan(arch::GPU{CuDevice}, local_size::Tuple, T::Type; real_input::Bool=false)
+    device_id = CUDA.deviceid(arch.device)
+    key = (device_id, local_size, T, real_input)
+
+    lock(GPU_TRANSFORM_CACHE.lock) do
+        if !haskey(GPU_TRANSFORM_CACHE.plans, key)
+            GPU_TRANSFORM_CACHE.plans[key] = plan_gpu_fft(arch, local_size, T; real_input=real_input)
+        end
+        return GPU_TRANSFORM_CACHE.plans[key]
+    end
+end
+
+# Fallback for generic GPU
+function get_gpu_fft_plan(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
+    device_id = CUDA.deviceid()
+    key = (device_id, local_size, T, real_input)
+
+    lock(GPU_TRANSFORM_CACHE.lock) do
+        if !haskey(GPU_TRANSFORM_CACHE.plans, key)
+            GPU_TRANSFORM_CACHE.plans[key] = plan_gpu_fft(arch, local_size, T; real_input=real_input)
+        end
+        return GPU_TRANSFORM_CACHE.plans[key]
+    end
+end
+
+"""
+    clear_gpu_transform_cache!()
+
+Clear all cached GPU transform plans (thread-safe).
+"""
+function clear_gpu_transform_cache!()
+    lock(GPU_TRANSFORM_CACHE.lock) do
+        empty!(GPU_TRANSFORM_CACHE.plans)
+    end
+end
