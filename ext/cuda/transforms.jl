@@ -46,7 +46,7 @@ end
 # ============================================================================
 
 # Global cache for distributed DCT plans (thread-safe)
-const DISTRIBUTED_DCT_PLAN_CACHE = Dict{UInt64, DistributedDCTPlan}()
+const DISTRIBUTED_DCT_PLAN_CACHE = Dict{Tuple, DistributedDCTPlan}()
 const DISTRIBUTED_DCT_PLAN_LOCK = ReentrantLock()
 
 """
@@ -63,7 +63,7 @@ function get_or_create_distributed_dct_plan(field)
     proc_grid = _compute_proc_grid(dist.size)
     T = real(eltype(get_grid_data(field)))
 
-    key = hash((global_shape_tuple, proc_grid, T))
+    key = (global_shape_tuple, proc_grid, T)
 
     lock(DISTRIBUTED_DCT_PLAN_LOCK) do
         if haskey(DISTRIBUTED_DCT_PLAN_CACHE, key)
@@ -869,7 +869,7 @@ end
 
 # Fallback for generic GPU
 function get_gpu_fft_plan(arch::GPU, local_size::Tuple, T::Type; real_input::Bool=false)
-    device_id = CUDA.deviceid()
+    device_id = _current_device_id()
     key = (device_id, local_size, T, real_input)
 
     lock(GPU_TRANSFORM_CACHE.lock) do
