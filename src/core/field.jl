@@ -2347,6 +2347,43 @@ function Base.getindex(field::VectorField, layout::String)
     return [comp[layout] for comp in field.components]
 end
 
+"""
+    Base.getproperty(field::VectorField, name::Symbol)
+
+Access vector field components by coordinate name.
+
+# Examples
+```julia
+u = VectorField(domain, "u")   # 2D field with coordinates (x, z)
+u.x                             # first component (same as u[1] or u.components[1])
+u.z                             # second component
+```
+"""
+function Base.getproperty(field::VectorField, name::Symbol)
+    if hasfield(typeof(field), name)
+        return getfield(field, name)
+    end
+    # Look up coordinate name in coordsys
+    cs = getfield(field, :coordsys)
+    for (i, cname) in enumerate(cs.names)
+        if Symbol(cname) == name
+            return getfield(field, :components)[i]
+        end
+    end
+    throw(ArgumentError(
+        "VectorField '$(getfield(field, :name))' has no component '$name'. " *
+        "Available components: $(join(cs.names, ", "))"))
+end
+
+function Base.propertynames(field::VectorField, private::Bool=false)
+    coord_syms = Symbol.(getfield(field, :coordsys).names)
+    if private
+        return (fieldnames(typeof(field))..., coord_syms...)
+    else
+        return (fieldnames(typeof(field))..., coord_syms...)
+    end
+end
+
 # Tensor field operations  
 function Base.getindex(field::TensorField, i::Int, j::Int)
     """Get tensor component"""
