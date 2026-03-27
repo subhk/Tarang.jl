@@ -132,7 +132,7 @@ function _mixed_plan_key(arch::GPU{CuDevice}, bases::Tuple, local_grid_shape::Tu
 end
 
 _mixed_plan_key(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Type) =
-    (CUDA.deviceid(), tuple([typeof(b) for b in bases]...), local_grid_shape, T)
+    (_current_device_id(), tuple([typeof(b) for b in bases]...), local_grid_shape, T)
 
 """
     get_gpu_mixed_transform_plan(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Type)
