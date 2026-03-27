@@ -52,7 +52,7 @@ plan = DistributedDCTPlan(pencil, Float64)
 """
 function DistributedDCTPlan(pencil::PencilDecomposition, ::Type{T}) where T
     # Preserve current device instead of resetting to device 0
-    arch = GPU(device_id = CUDA.deviceid())
+    arch = GPU(device_id = _current_device_id())
 
     # Create local DCT plans for each dimension
     Nx, Ny, Nz = pencil.global_shape
@@ -89,7 +89,7 @@ const _BATCHED_IRFFT_CACHE = Dict{Tuple{Int, Tuple, Int, Int}, Any}()
 const _BATCHED_DCT_CACHE_LOCK = ReentrantLock()
 
 function _get_batched_rfft_plan(shape::Tuple, dim::Int, ::Type{T}) where T
-    device_id = CUDA.deviceid()
+    device_id = _current_device_id()
     key = (device_id, shape, dim)
     lock(_BATCHED_DCT_CACHE_LOCK)
     try
@@ -104,7 +104,7 @@ function _get_batched_rfft_plan(shape::Tuple, dim::Int, ::Type{T}) where T
 end
 
 function _get_batched_irfft_plan(shape::Tuple, dim::Int, n_out::Int, ::Type{T}) where T
-    device_id = CUDA.deviceid()
+    device_id = _current_device_id()
     key = (device_id, shape, dim, n_out)
     lock(_BATCHED_DCT_CACHE_LOCK)
     try
