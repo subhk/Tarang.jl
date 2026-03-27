@@ -6,6 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/subhk/Tarang.jl/actions"><img src="https://github.com/subhk/Tarang.jl/workflows/CI/badge.svg" alt="Build Status"></a>
+  <a href="https://codecov.io/gh/subhk/Tarang.jl"><img src="https://codecov.io/gh/subhk/Tarang.jl/branch/main/graph/badge.svg" alt="Coverage"></a>
   <a href="https://subhk.github.io/Tarang.jl/stable"><img src="https://img.shields.io/badge/docs-stable-blue.svg" alt="Documentation"></a>
   <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"></a>
 </p>
