@@ -475,7 +475,7 @@ grouped point-to-point send!/recv! operations wrapped in group_start/group_end.
 function nccl_alltoall!(send_buf::CuArray, recv_buf::CuArray,
                          send_counts::Vector{Int}, recv_counts::Vector{Int},
                          send_displs::Vector{Int}, recv_displs::Vector{Int},
-                         nccl_comm; my_rank::Int=-1)
+                         nccl_comm; my_rank::Int)
     # CRITICAL: Use error() instead of @assert for production safety
     total_send = sum(send_counts)
     total_recv = sum(recv_counts)
@@ -503,7 +503,7 @@ function nccl_alltoall!(send_buf::CuArray, recv_buf::CuArray,
     end
 
     # Handle self-communication with direct copyto! (NCCL P2P does not support self-send/recv)
-    if my_rank >= 0 && send_counts[my_rank+1] > 0 && recv_counts[my_rank+1] > 0
+    if my_rank >= 0 && send_counts[my_rank+1] > 0
         self_send_start = send_displs[my_rank+1] + 1
         self_send_end = self_send_start + send_counts[my_rank+1] - 1
         self_recv_start = recv_displs[my_rank+1] + 1
@@ -972,7 +972,7 @@ function compute_transpose_counts!(buffer::NCCLTransposeBuffer, direction::Symbo
             chunk_x = div(Nx, comm_size) + ((i-1) < mod(Nx, comm_size) ? 1 : 0)
             chunk_y = div(Ny, comm_size) + ((i-1) < mod(Ny, comm_size) ? 1 : 0)
             buffer.send_counts[i] = chunk_x * local_shape[2] * local_shape[3]
-            buffer.recv_counts[i] = Nx * chunk_y * local_shape[3]
+            buffer.recv_counts[i] = pencil.x_pencil_shape[1] * chunk_y * pencil.x_pencil_shape[3]
         end
     end
 
