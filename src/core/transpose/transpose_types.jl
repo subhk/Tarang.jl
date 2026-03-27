@@ -269,6 +269,20 @@ struct TransposeBuffers{T,N}
 
     # Architecture (CPU or GPU)
     architecture::AbstractArchitecture
+
+    # Inner constructor requires explicit {T,N} to avoid unbound type parameter issues
+    function TransposeBuffers{T,N}(
+            x_local_data, y_local_data, z_local_data,
+            send_buffer, recv_buffer, send_buffer_2, recv_buffer_2,
+            send_staging, recv_staging,
+            active_layout, active_buffer, staging_locked,
+            architecture) where {T,N}
+        new{T,N}(x_local_data, y_local_data, z_local_data,
+                 send_buffer, recv_buffer, send_buffer_2, recv_buffer_2,
+                 send_staging, recv_staging,
+                 active_layout, active_buffer, staging_locked,
+                 architecture)
+    end
 end
 
 function TransposeBuffers{T,N}(arch::AbstractArchitecture) where {T,N}

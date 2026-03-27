@@ -270,7 +270,6 @@ export
     # I/O — NetCDF output & merging
     # ═══════════════════════════════════════════════════════════════
     NetCDFFileHandler, NetCDFEvaluator, UnifiedEvaluator, add_netcdf_handler,
-    merge_processor_files, get_netcdf_info,
     DictionaryHandler, VirtualFileHandler,
     add_dictionary_handler, add_virtual_file_handler, merge_virtual!,
     NetCDFMerger, merge_netcdf_files, batch_merge_netcdf, find_mergeable_handlers,
