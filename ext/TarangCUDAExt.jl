@@ -25,7 +25,7 @@ module TarangCUDAExt
 
 using Tarang
 using Tarang: AbstractArchitecture, AbstractSerialArchitecture, GPU, CPU
-using Tarang: device, array_type, architecture, on_architecture, workgroup_size, launch!, KernelOperation
+using Tarang: device, array_type, architecture, on_architecture, workgroup_size, launch!, KernelOperation, ensure_device!
 using Tarang: synchronize, unsafe_free!, has_cuda
 using Tarang: ScalarField, VectorField, Distributor, Domain, Basis
 using Tarang: get_local_data, set_local_data!
