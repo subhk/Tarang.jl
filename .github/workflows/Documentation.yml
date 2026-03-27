@@ -1,0 +1,64 @@
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+    tags: '*'
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.10'
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      # Disable Julia cache to ensure fresh builds every time
+      # - uses: julia-actions/cache@v1
+
+      - name: Clean and install fresh
+        run: |
+          # Remove any cached/old files
+          rm -rf docs/build
+          rm -f docs/Manifest.toml
+
+          # Clear Julia compiled cache for this package
+          rm -rf ~/.julia/compiled/v1.10/Tarang* || true
+
+          # Fresh install
+          julia --project=docs/ -e '
+            using Pkg
+            # Remove old entry if exists
+            try
+              Pkg.rm("Tarang")
+            catch e
+              @info "No existing Tarang to remove"
+            end
+            # Develop from current directory
+            Pkg.develop(PackageSpec(path=pwd()))
+            Pkg.instantiate()
+            # Force recompilation
+            Pkg.precompile()
+
+            # Verify we have the right version
+            using Tarang
+            @info "Building docs with Tarang from: $(pathof(Tarang))"
+          '
+
+      - name: Build and deploy
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DOCUMENTER_KEY: ${{ secrets.DOCUMENTER_KEY }}
+        run: julia --project=docs docs/make.jl
