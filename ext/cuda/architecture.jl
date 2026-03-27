@@ -46,17 +46,12 @@ end
 """
     device(gpu::GPU{CuDevice})
 
-Return the KernelAbstractions CUDA backend after switching to the correct device.
+Return the KernelAbstractions CUDA backend for GPU execution.
 
-**Important for multi-GPU:** This function sets the current CUDA device to the one
-stored in the GPU architecture before returning the backend. This ensures that
-kernel launches and FFT operations target the correct GPU, even when multiple
-GPUs are in use.
+Note: device selection is handled by `ensure_device!`, which `launch!` calls
+before invoking `device()`. This keeps `device()` free of side effects.
 """
 function Tarang.device(gpu::GPU{CuDevice})
-    # Switch to the device stored in this architecture
-    # This is critical for multi-GPU correctness
-    CUDA.device!(gpu.device)
     return CUDABackend()
 end
 
