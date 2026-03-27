@@ -13,7 +13,7 @@ end
 
 const FFT_1D_PLAN_CACHE = FFT1DPlanCache()
 
-function get_fft_1d_plan(size::Tuple, dim::Int, T::Type; inverse::Bool=false, device_id::Int=CUDA.deviceid())
+function get_fft_1d_plan(size::Tuple, dim::Int, T::Type; inverse::Bool=false, device_id::Int=_current_device_id())
     # Include device ID in cache key for multi-GPU correctness
     key = (device_id, size, dim, T, inverse)
     lock(FFT_1D_PLAN_CACHE.lock)
@@ -221,7 +221,11 @@ For spectral truncation (2/3 rule), modes with index > cutoff_dim are zeroed.
     idx = @index(Global)
     j = ((idx - 1) ÷ nx) + 1
     i = ((idx - 1) % nx) + 1
-    @inbounds if i > cutoff_x || j > cutoff_y
+    # Zero modes beyond cutoff in positive OR negative frequency range
+    # For complex FFT: index 1 = DC, indices 2..N/2+1 = positive, N/2+2..N = negative
+    kill_x = i > cutoff_x || (i > 1 && nx - i + 1 > cutoff_x)
+    kill_y = j > cutoff_y || (j > 1 && ny - j + 1 > cutoff_y)
+    @inbounds if kill_x || kill_y
         data[i, j] = zero(eltype(data))
     end
 end
@@ -235,7 +239,10 @@ Dealiasing kernel for 3D arrays: zero out modes beyond cutoff in each dimension.
     i = ((idx - 1) % nx) + 1
     j = (((idx - 1) ÷ nx) % ny) + 1
     k = ((idx - 1) ÷ (nx * ny)) + 1
-    @inbounds if i > cutoff_x || j > cutoff_y || k > cutoff_z
+    kill_x = i > cutoff_x || (i > 1 && nx - i + 1 > cutoff_x)
+    kill_y = j > cutoff_y || (j > 1 && ny - j + 1 > cutoff_y)
+    kill_z = k > cutoff_z || (k > 1 && nz - k + 1 > cutoff_z)
+    @inbounds if kill_x || kill_y || kill_z
         data[i, j, k] = zero(eltype(data))
     end
 end
