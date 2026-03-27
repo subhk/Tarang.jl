@@ -22,8 +22,9 @@ struct GPUDCTPlan{T}
     forward_scale_pos::T
     backward_scale_zero::T
     backward_scale_pos::T
-    # Work arrays
+    # Work arrays (shared across calls — NOT thread-safe; see OptimizedGPUDCTPlan for a locked variant)
     work_complex::CuVector{Complex{T}}
+    work_complex_out::CuVector{Complex{T}}
     # FFT plan for the extended array
     fft_plan::Any
     ifft_plan::Any
@@ -63,8 +64,9 @@ function plan_gpu_dct(arch::GPU{CuDevice}, n::Int, T::Type, axis::Int)
     backward_scale_zero = real_T(1.0)            # DC component: 1.0
     backward_scale_pos = real_T(0.5)             # AC components: 0.5 (×2 in kernel = 1.0)
 
-    # Work array for 2N-point FFT
+    # Work arrays for 2N-point FFT (pre-allocated to avoid per-call GPU allocation)
     work_complex = CUDA.zeros(complex_T, 2 * n)
+    work_complex_out = CuVector{complex_T}(undef, 2 * n)
 
     # FFT plans for the extended array
     fft_plan = CUFFT.plan_fft(work_complex)
@@ -75,7 +77,7 @@ function plan_gpu_dct(arch::GPU{CuDevice}, n::Int, T::Type, axis::Int)
         twiddle_forward, twiddle_backward,
         forward_scale_zero, forward_scale_pos,
         backward_scale_zero, backward_scale_pos,
-        work_complex,
+        work_complex, work_complex_out,
         fft_plan, ifft_plan
     )
 end
@@ -706,10 +708,14 @@ function gpu_forward_dct_1d!(output::CuVector{T}, input::CuVector{T}, plan::GPUD
     # 3. Extract first N elements and apply twiddle factors
     # 4. Take real part and scale
 
-    # Use local work buffers to avoid shared-state races between concurrent calls
+    # Reuse plan-owned work buffers to avoid per-call GPU allocation.
+    # WARNING: NOT thread-safe — concurrent calls on the same plan will race on
+    # these shared buffers. Use OptimizedGPUDCTPlan (which holds a lock) if you
+    # need concurrency.
     # Separate input/output buffers required: CUFFT out-of-place plans do not support aliased mul!
-    work_in = CUDA.zeros(Complex{T}, 2 * n)
-    work_out = CUDA.zeros(Complex{T}, 2 * n)
+    work_in = plan.work_complex
+    work_out = plan.work_complex_out
+    fill!(work_in, zero(Complex{T}))
 
     # Step 1: Create symmetric extension (vectorized, no scalar indexing)
     copyto!(view(work_in, 1:n), Complex{T}.(input))
@@ -747,10 +753,14 @@ function gpu_backward_dct_1d!(output::CuVector{T}, input::CuVector{T}, plan::GPU
     # 4. Compute IFFT
     # 5. Extract first N real values
 
-    # Use local work buffers to avoid shared-state races between concurrent calls
+    # Reuse plan-owned work buffers to avoid per-call GPU allocation.
+    # WARNING: NOT thread-safe — concurrent calls on the same plan will race on
+    # these shared buffers. Use OptimizedGPUDCTPlan (which holds a lock) if you
+    # need concurrency.
     # Separate input/output buffers required: CUFFT out-of-place plans do not support aliased mul!
-    work_in = CUDA.zeros(Complex{T}, 2 * n)
-    work_out = CUDA.zeros(Complex{T}, 2 * n)
+    work_in = plan.work_complex
+    work_out = plan.work_complex_out
+    fill!(work_in, zero(Complex{T}))
 
     # Step 1 & 2: Pre-scale and apply inverse twiddle (vectorized)
     # First element: scale_zero, rest: scale_pos
