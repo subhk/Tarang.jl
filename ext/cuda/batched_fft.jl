@@ -62,9 +62,10 @@ function _create_batched_fft_plan(field_size::Tuple, T::Type, batch_size::Int, r
         plan = CUFFT.plan_rfft(dummy_in, fft_dims)
 
         # Inverse plan
-        out_size = (div(field_size[1], 2) + 1, field_size[2:end]..., batch_size)
+        last_field_dim = length(field_size)
+        out_size = (field_size[1:end-1]..., div(field_size[end], 2) + 1, batch_size)
         dummy_out = CUDA.zeros(complex_T, out_size...)
-        iplan = CUFFT.plan_irfft(dummy_out, field_size[1], fft_dims)
+        iplan = CUFFT.plan_irfft(dummy_out, field_size[last_field_dim], fft_dims)
 
         return BatchedGPUFFTPlan(plan, iplan, field_size, batch_size, true)
     else
@@ -100,7 +101,7 @@ _batched_plan_key(arch::GPU{CuDevice}, field_size::Tuple, T::Type, batch_size::I
     (CUDA.deviceid(arch.device), field_size, T, batch_size, real_input)
 
 _batched_plan_key(arch::GPU, field_size::Tuple, T::Type, batch_size::Int, real_input::Bool) =
-    (CUDA.deviceid(), field_size, T, batch_size, real_input)
+    (_current_device_id(), field_size, T, batch_size, real_input)
 
 """
     get_batched_fft_plan(arch::GPU, field_size::Tuple, T::Type, batch_size::Int; real_input::Bool=false)
