@@ -2,6 +2,9 @@
 # GPU Configuration and Global State
 # ============================================================================
 
+# CUDA.jl does not export deviceid() — use device().handle for the integer ordinal
+_current_device_id() = Int(CUDA.device().handle)
+
 """
     GPUConfig
 
@@ -26,10 +29,14 @@ mutable struct GPUConfig
     default_workgroup_2d::Tuple{Int, Int}
     default_workgroup_3d::Tuple{Int, Int, Int}
 
+    # Thread safety
+    lock::ReentrantLock
+
     function GPUConfig()
         new(Dict{Int, CuStream}(), Dict{Int, CuStream}(), false,
             true, false, nothing,
-            256, (16, 16), (8, 8, 4))
+            256, (16, 16), (8, 8, 4),
+            ReentrantLock())
     end
 end
 
@@ -58,7 +65,7 @@ function init_gpu_config!(; use_streams::Bool=true,
     GPU_CONFIG.streams_enabled = use_streams
     if use_streams
         # Create streams on the current device
-        device_id = CUDA.deviceid()
+        device_id = _current_device_id()
         GPU_CONFIG.compute_streams[device_id] = CuStream()
         GPU_CONFIG.transfer_streams[device_id] = CuStream()
         @info "GPU streams initialized for device $device_id"
@@ -74,47 +81,51 @@ function init_gpu_config!(; use_streams::Bool=true,
 end
 
 """
-    get_compute_stream(; device_id::Int=CUDA.deviceid())
+    get_compute_stream(; device_id::Int=_current_device_id())
 
 Get the compute stream for kernel execution on the specified device.
 Returns `nothing` when streams are disabled; callers should use the plain
 (non-stream) code path in that case. Creates a new stream on-demand if one
 doesn't exist for this device.
 """
-function get_compute_stream(; device_id::Int=CUDA.deviceid())
+function get_compute_stream(; device_id::Int=_current_device_id())
     if !GPU_CONFIG.streams_enabled
         return nothing
     end
-    if !haskey(GPU_CONFIG.compute_streams, device_id)
-        # Create stream on the target device (streams are device-specific in CUDA)
-        prev_device = CUDA.device()
-        CUDA.device!(CuDevice(device_id))
-        GPU_CONFIG.compute_streams[device_id] = CuStream()
-        CUDA.device!(prev_device)
+    lock(GPU_CONFIG.lock) do
+        if !haskey(GPU_CONFIG.compute_streams, device_id)
+            # Create stream on the target device (streams are device-specific in CUDA)
+            prev_device = CUDA.device()
+            CUDA.device!(CuDevice(device_id))
+            GPU_CONFIG.compute_streams[device_id] = CuStream()
+            CUDA.device!(prev_device)
+        end
+        return GPU_CONFIG.compute_streams[device_id]
     end
-    return GPU_CONFIG.compute_streams[device_id]
 end
 
 """
-    get_transfer_stream(; device_id::Int=CUDA.deviceid())
+    get_transfer_stream(; device_id::Int=_current_device_id())
 
 Get the transfer stream for CPU-GPU data movement on the specified device.
 Returns `nothing` when streams are disabled; callers should use the plain
 (non-stream) code path in that case. Creates a new stream on-demand if one
 doesn't exist for this device.
 """
-function get_transfer_stream(; device_id::Int=CUDA.deviceid())
+function get_transfer_stream(; device_id::Int=_current_device_id())
     if !GPU_CONFIG.streams_enabled
         return nothing
     end
-    if !haskey(GPU_CONFIG.transfer_streams, device_id)
-        # Create stream on the target device (streams are device-specific in CUDA)
-        prev_device = CUDA.device()
-        CUDA.device!(CuDevice(device_id))
-        GPU_CONFIG.transfer_streams[device_id] = CuStream()
-        CUDA.device!(prev_device)
+    lock(GPU_CONFIG.lock) do
+        if !haskey(GPU_CONFIG.transfer_streams, device_id)
+            # Create stream on the target device (streams are device-specific in CUDA)
+            prev_device = CUDA.device()
+            CUDA.device!(CuDevice(device_id))
+            GPU_CONFIG.transfer_streams[device_id] = CuStream()
+            CUDA.device!(prev_device)
+        end
+        return GPU_CONFIG.transfer_streams[device_id]
     end
-    return GPU_CONFIG.transfer_streams[device_id]
 end
 
 """
@@ -124,21 +135,23 @@ Synchronize GPU streams. If `device_id` is specified, only sync that device's st
 Otherwise, sync all devices' streams.
 """
 function sync_streams!(; device_id::Union{Nothing, Int}=nothing)
-    if device_id !== nothing
-        # Sync specific device
-        if haskey(GPU_CONFIG.compute_streams, device_id)
-            CUDA.synchronize(GPU_CONFIG.compute_streams[device_id])
-        end
-        if haskey(GPU_CONFIG.transfer_streams, device_id)
-            CUDA.synchronize(GPU_CONFIG.transfer_streams[device_id])
-        end
-    else
-        # Sync all devices
-        for (_, stream) in GPU_CONFIG.compute_streams
-            CUDA.synchronize(stream)
-        end
-        for (_, stream) in GPU_CONFIG.transfer_streams
-            CUDA.synchronize(stream)
+    lock(GPU_CONFIG.lock) do
+        if device_id !== nothing
+            # Sync specific device
+            if haskey(GPU_CONFIG.compute_streams, device_id)
+                CUDA.synchronize(GPU_CONFIG.compute_streams[device_id])
+            end
+            if haskey(GPU_CONFIG.transfer_streams, device_id)
+                CUDA.synchronize(GPU_CONFIG.transfer_streams[device_id])
+            end
+        else
+            # Sync all devices
+            for (_, stream) in GPU_CONFIG.compute_streams
+                CUDA.synchronize(stream)
+            end
+            for (_, stream) in GPU_CONFIG.transfer_streams
+                CUDA.synchronize(stream)
+            end
         end
     end
 end
