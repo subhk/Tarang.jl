@@ -599,7 +599,7 @@ function MatSolvers.solve(s::CuIterativeGMRES{T}, rhs::AbstractVector) where T
 
         # Arnoldi process
         V = [r / beta]  # Krylov basis vectors
-        H = _gpu_zeros(T, m + 1, m)  # Hessenberg matrix
+        H = zeros(T, m + 1, m)  # Hessenberg matrix — CPU to avoid scalar indexing in Arnoldi
 
         for j in 1:m
             # w = A * v_j
@@ -629,7 +629,7 @@ function MatSolvers.solve(s::CuIterativeGMRES{T}, rhs::AbstractVector) where T
         e1_cpu[1] = beta
 
         # Use QR factorization (small system, already on CPU)
-        H_cpu = Array(H)
+        H_cpu = H  # Already on CPU
         y_cpu = H_cpu \ e1_cpu
         y_vals = y_cpu[1:length(V)-1]
 
