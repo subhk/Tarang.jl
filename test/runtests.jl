@@ -2,6 +2,8 @@ using Test
 using Tarang
 
 const TEST_FILES = [
+    "test_aqua.jl",
+    "test_jet.jl",
     "test_cfl.jl",
     "test_domain_metadata.jl",
     "test_subsystems.jl",
