@@ -462,6 +462,25 @@ end
 
 Evaluate Fourier derivative on a local axis (no MPI needed).
 """
+"""
+    _get_cached_deriv_mult(basis::FourierBasis, N::Int, L::Float64, order::Int)
+
+Get or compute cached derivative multiplier `(ik)^order` for Fourier derivatives.
+The multiplier depends only on the basis parameters and derivative order, so it
+is computed once and cached in the basis's transforms dict.
+"""
+function _get_cached_deriv_mult(basis::Union{RealFourier, ComplexFourier}, N::Int, L::Float64, order::Int)
+    cache_key = "deriv_mult_$(N)_$(order)"
+    cached = get(basis.transforms, cache_key, nothing)
+    if cached !== nothing
+        return cached::Vector{ComplexF64}
+    end
+    k_axis = fftfreq(N, L/N) .* 2π
+    deriv_mult = (im .* k_axis) .^ order
+    basis.transforms[cache_key] = deriv_mult
+    return deriv_mult
+end
+
 function _evaluate_local_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
     # Get the basis for the specified axis
     basis = operand.bases[axis]
@@ -483,13 +502,8 @@ function _evaluate_local_fourier_derivative!(result::ScalarField, operand::Scala
     # Check if we're on GPU
     use_gpu = is_gpu_array(data_g)
 
-    # Compute wavenumbers for the axis
-    # For periodic FFT: k = [0, 1, ..., N/2-1, -N/2, ..., -1] * (2*pi/L)
-    # Note: Tarang's fftfreq uses sample spacing (d = L/N), not sample rate (fs = N/L)
-    k_axis_cpu = fftfreq(data_shape[axis], L/data_shape[axis]) .* 2π
-
-    # Build derivative multiplier array (ik)^order
-    deriv_mult_cpu = (im .* k_axis_cpu) .^ order
+    # Get cached derivative multiplier (avoids re-allocating wavenumber arrays every call)
+    deriv_mult_cpu = _get_cached_deriv_mult(basis, data_shape[axis], Float64(L), order)
 
     if use_gpu
         # GPU path: use broadcasting for all operations

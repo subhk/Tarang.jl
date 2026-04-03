@@ -1,115 +1,71 @@
 """
     Main evaluate dispatch
 
-This file contains the unified evaluate() function that dispatches to
-specific operator evaluators, plus arithmetic operator evaluation functions.
+This file contains evaluate() method definitions that use Julia's multiple dispatch
+instead of runtime isa checks. Each operator type gets its own method, enabling
+the compiler to inline and optimize at compile time.
+
+Note: Cartesian operator evaluate() methods are defined in cartesian_operators.jl.
 """
 
 # ============================================================================
-# Unified Operator Evaluation Dispatcher
+# Operator Evaluation via Multiple Dispatch
 # ============================================================================
 
-"""
-    evaluate(op::Operator, layout::Symbol=:g)
-
-Unified evaluation function that dispatches to specific operator evaluators.
-"""
+# Fallback for unknown operator types
 function evaluate(op::Operator, layout::Symbol=:g)
-    # Cartesian-specific operators (defined in cartesian_operators.jl)
-    if isa(op, CartesianGradient)
-        return evaluate_cartesian_gradient(op, layout)
-    elseif isa(op, CartesianDivergence)
-        return evaluate_cartesian_divergence(op, layout)
-    elseif isa(op, CartesianCurl)
-        return evaluate_cartesian_curl(op, layout)
-    elseif isa(op, CartesianLaplacian)
-        return evaluate_cartesian_laplacian(op, layout)
-    elseif isa(op, CartesianTrace)
-        return evaluate_cartesian_trace(op, layout)
-    elseif isa(op, CartesianSkew)
-        return evaluate_cartesian_skew(op, layout)
-    elseif isa(op, CartesianComponent)
-        return evaluate_cartesian_component(op, layout)
-    # Generic operators
-    elseif isa(op, Gradient)
-        return evaluate_gradient(op, layout)
-    elseif isa(op, Divergence)
-        return evaluate_divergence(op, layout)
-    elseif isa(op, Curl)
-        return evaluate_curl(op, layout)
-    elseif isa(op, Laplacian)
-        return evaluate_laplacian(op, layout)
-    elseif isa(op, FractionalLaplacian)
-        return evaluate_fractional_laplacian(op, layout)
-    elseif isa(op, Differentiate)
-        return evaluate_differentiate(op, layout)
-    elseif isa(op, Interpolate)
-        return evaluate_interpolate(op, layout)
-    elseif isa(op, Integrate)
-        return evaluate_integrate(op, layout)
-    elseif isa(op, Average)
-        return evaluate_average(op, layout)
-    elseif isa(op, Lift)
-        return evaluate_lift(op, layout)
-    elseif isa(op, Convert)
-        return evaluate_convert(op, layout)
-    elseif isa(op, GeneralFunction)
-        return evaluate_general_function(op, layout)
-    elseif isa(op, UnaryGridFunction)
-        return evaluate_unary_grid_function(op, layout)
-    elseif isa(op, Grid)
-        return evaluate_grid(op)
-    elseif isa(op, Coeff)
-        return evaluate_coeff(op)
-    elseif isa(op, Component)
-        return evaluate_component(op)
-    elseif isa(op, RadialComponent)
-        return evaluate_radial_component(op)
-    elseif isa(op, AngularComponent)
-        return evaluate_angular_component(op)
-    elseif isa(op, AzimuthalComponent)
-        return evaluate_azimuthal_component(op)
-    elseif isa(op, Trace)
-        return evaluate_trace(op, layout)
-    elseif isa(op, Skew)
-        return evaluate_skew(op, layout)
-    elseif isa(op, TransposeComponents)
-        return evaluate_transpose_components(op, layout)
-    elseif isa(op, Outer)
-        return evaluate_outer(op, layout)
-    elseif isa(op, AdvectiveCFL)
-        return evaluate_advective_cfl(op, layout)
-    elseif isa(op, Copy)
-        return evaluate_copy(op, layout)
-    elseif isa(op, HilbertTransform)
-        return evaluate_hilbert_transform(op, layout)
-    elseif isa(op, TimeDerivative)
-        # TimeDerivative is handled by solvers, not direct evaluation
-        throw(ArgumentError(
-            "TimeDerivative (∂t) cannot be directly evaluated outside a solver. " *
-            "Use `InitialValueSolver(problem, timestepper; dt=...)` to solve time-dependent problems. " *
-            "The solver handles ∂t terms automatically via the timestepping algorithm."))
-    elseif isa(op, NegateOperator)
-        return evaluate_negate(op, layout)
-    elseif isa(op, MultiplyOperator)
-        return evaluate_multiply(op, layout)
-    elseif isa(op, AddOperator)
-        return evaluate_add(op, layout)
-    elseif isa(op, SubtractOperator)
-        return evaluate_subtract(op, layout)
-    elseif isa(op, DivideOperator)
-        return evaluate_divide(op, layout)
-    elseif isa(op, PowerOperator)
-        return evaluate_power(op, layout)
-    elseif isa(op, IndexOperator)
-        return evaluate_index(op, layout)
-    else
-        throw(ArgumentError(
-            "Evaluation not implemented for operator type $(typeof(op)). " *
-            "This operator may need to be wrapped in a solver (for ∂t terms) or " *
-            "may require a custom evaluate() method. " *
-            "Built-in operators: Add, Multiply, Differentiate, Gradient, Divergence, Curl, Laplacian."))
-    end
+    throw(ArgumentError(
+        "Evaluation not implemented for operator type $(typeof(op)). " *
+        "This operator may need to be wrapped in a solver (for ∂t terms) or " *
+        "may require a custom evaluate() method. " *
+        "Built-in operators: Add, Multiply, Differentiate, Gradient, Divergence, Curl, Laplacian."))
+end
+
+# Generic operators
+evaluate(op::Gradient, layout::Symbol=:g) = evaluate_gradient(op, layout)
+evaluate(op::Divergence, layout::Symbol=:g) = evaluate_divergence(op, layout)
+evaluate(op::Curl, layout::Symbol=:g) = evaluate_curl(op, layout)
+evaluate(op::Laplacian, layout::Symbol=:g) = evaluate_laplacian(op, layout)
+evaluate(op::FractionalLaplacian, layout::Symbol=:g) = evaluate_fractional_laplacian(op, layout)
+evaluate(op::Differentiate, layout::Symbol=:g) = evaluate_differentiate(op, layout)
+evaluate(op::Interpolate, layout::Symbol=:g) = evaluate_interpolate(op, layout)
+evaluate(op::Integrate, layout::Symbol=:g) = evaluate_integrate(op, layout)
+evaluate(op::Average, layout::Symbol=:g) = evaluate_average(op, layout)
+evaluate(op::Lift, layout::Symbol=:g) = evaluate_lift(op, layout)
+evaluate(op::Convert, layout::Symbol=:g) = evaluate_convert(op, layout)
+evaluate(op::GeneralFunction, layout::Symbol=:g) = evaluate_general_function(op, layout)
+evaluate(op::UnaryGridFunction, layout::Symbol=:g) = evaluate_unary_grid_function(op, layout)
+evaluate(op::Trace, layout::Symbol=:g) = evaluate_trace(op, layout)
+evaluate(op::Skew, layout::Symbol=:g) = evaluate_skew(op, layout)
+evaluate(op::TransposeComponents, layout::Symbol=:g) = evaluate_transpose_components(op, layout)
+evaluate(op::Outer, layout::Symbol=:g) = evaluate_outer(op, layout)
+evaluate(op::AdvectiveCFL, layout::Symbol=:g) = evaluate_advective_cfl(op, layout)
+evaluate(op::Copy, layout::Symbol=:g) = evaluate_copy(op, layout)
+evaluate(op::HilbertTransform, layout::Symbol=:g) = evaluate_hilbert_transform(op, layout)
+
+# Component extraction (no layout needed, but accept it for uniform API)
+evaluate(op::Grid, ::Symbol=:g) = evaluate_grid(op)
+evaluate(op::Coeff, ::Symbol=:g) = evaluate_coeff(op)
+evaluate(op::Component, ::Symbol=:g) = evaluate_component(op)
+evaluate(op::RadialComponent, ::Symbol=:g) = evaluate_radial_component(op)
+evaluate(op::AngularComponent, ::Symbol=:g) = evaluate_angular_component(op)
+evaluate(op::AzimuthalComponent, ::Symbol=:g) = evaluate_azimuthal_component(op)
+
+# Arithmetic operators
+evaluate(op::NegateOperator, layout::Symbol=:g) = evaluate_negate(op, layout)
+evaluate(op::MultiplyOperator, layout::Symbol=:g) = evaluate_multiply(op, layout)
+evaluate(op::AddOperator, layout::Symbol=:g) = evaluate_add(op, layout)
+evaluate(op::SubtractOperator, layout::Symbol=:g) = evaluate_subtract(op, layout)
+evaluate(op::DivideOperator, layout::Symbol=:g) = evaluate_divide(op, layout)
+evaluate(op::PowerOperator, layout::Symbol=:g) = evaluate_power(op, layout)
+evaluate(op::IndexOperator, layout::Symbol=:g) = evaluate_index(op, layout)
+
+# TimeDerivative cannot be directly evaluated
+function evaluate(op::TimeDerivative, ::Symbol=:g)
+    throw(ArgumentError(
+        "TimeDerivative (∂t) cannot be directly evaluated outside a solver. " *
+        "Use `InitialValueSolver(problem, timestepper; dt=...)` to solve time-dependent problems. " *
+        "The solver handles ∂t terms automatically via the timestepping algorithm."))
 end
 
 # ============================================================================

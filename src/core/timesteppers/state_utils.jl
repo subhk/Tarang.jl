@@ -237,75 +237,75 @@ function _find_state_index_for_operand(operand, state::Vector{<:ScalarField}, va
     return nothing
 end
 
+"""
+    _zero_array!(a)
+
+Fill an array with zeros, handling PencilArray wrappers.
+"""
+@inline function _zero_array!(a::AbstractArray)
+    if isa(a, PencilArrays.PencilArray)
+        fill!(parent(a), zero(eltype(a)))
+    else
+        fill!(a, zero(eltype(a)))
+    end
+end
+
+"""
+    _zero_like(a)
+
+Create a zero-filled array with the same type, size, and structure as `a`.
+Uses `similar` + `fill!` instead of `copy` + `fill!` to avoid copying data
+that will be immediately overwritten with zeros.
+"""
+@inline function _zero_like(a::AbstractArray)
+    z = similar(a)
+    _zero_array!(z)
+    return z
+end
+
 function create_rhs_zero_field(template_field::ScalarField)
     """Create a zero RHS field matching the template field properties.
 
-    IMPORTANT: In MPI mode, we must use copy() to preserve the PencilArray structure.
-    Creating a new ScalarField from scratch may result in arrays with different
-    local sizes, causing DimensionMismatch errors in vector operations.
+    IMPORTANT: In MPI mode, we use similar() to preserve the PencilArray structure
+    (same pencil decomposition) without copying data that would be immediately zeroed.
     """
 
     # Skip 0D fields (tau variables) which have no spatial data
     if isempty(template_field.bases)
-        # For 0D fields, create a simple new field (no array allocation needed)
         return ScalarField(template_field.dist, "rhs_$(template_field.name)", template_field.bases, template_field.dtype)
     end
 
-    # Check if template has data - if so, copy to preserve array structure
-    has_data = get_grid_data(template_field) !== nothing || get_coeff_data(template_field) !== nothing
+    template_grid = get_grid_data(template_field)
+    template_coeff = get_coeff_data(template_field)
+    has_data = template_grid !== nothing || template_coeff !== nothing
+
+    # Build skeleton field without allocating data (empty bases → no allocate_data!)
+    rhs_field = ScalarField(template_field.dist, "rhs_$(template_field.name)", (), template_field.dtype)
+    rhs_field.bases = template_field.bases
+    rhs_field.domain = template_field.domain
+    rhs_field.layout = template_field.layout
+    rhs_field.scales = template_field.scales
+    rhs_field.fft_mode = template_field.fft_mode
+    rhs_field.buffers.architecture = template_field.buffers.architecture
 
     if has_data
-        # Use copy() to preserve PencilArray structure in MPI mode
-        rhs_field = copy(template_field)
-        rhs_field.name = "rhs_$(template_field.name)"
-
-        # Zero out the data
-        if get_coeff_data(rhs_field) !== nothing
-            ensure_layout!(rhs_field, :c)
-            coeff_data = get_coeff_data(rhs_field)
-            if isa(coeff_data, PencilArrays.PencilArray)
-                fill!(parent(coeff_data), zero(eltype(coeff_data)))
-            else
-                fill!(coeff_data, zero(eltype(coeff_data)))
-            end
-        elseif get_grid_data(rhs_field) !== nothing
-            ensure_layout!(rhs_field, :g)
-            grid_data = get_grid_data(rhs_field)
-            if isa(grid_data, PencilArrays.PencilArray)
-                fill!(parent(grid_data), zero(eltype(grid_data)))
-            else
-                fill!(grid_data, zero(eltype(grid_data)))
+        # Allocate zero-filled arrays matching template structure (preserves PencilArray decomposition)
+        if template_coeff !== nothing
+            set_coeff_data!(rhs_field, _zero_like(template_coeff))
+            rhs_field.current_layout = :c
+        end
+        if template_grid !== nothing
+            set_grid_data!(rhs_field, _zero_like(template_grid))
+            if template_coeff === nothing
+                rhs_field.current_layout = :g
             end
         end
     else
-        # Template has no data - create new field and allocate
-        rhs_field = ScalarField(template_field.dist, "rhs_$(template_field.name)", template_field.bases, template_field.dtype)
+        # Template has no data — allocate from scratch (zeros by default)
         if rhs_field.domain !== nothing
             allocate_data!(rhs_field)
         end
-
-        # Zero out newly allocated data
-        if get_coeff_data(rhs_field) !== nothing
-            ensure_layout!(rhs_field, :c)
-            coeff_data = get_coeff_data(rhs_field)
-            if coeff_data !== nothing
-                if isa(coeff_data, PencilArrays.PencilArray)
-                    fill!(parent(coeff_data), zero(eltype(coeff_data)))
-                else
-                    fill!(coeff_data, zero(eltype(coeff_data)))
-                end
-            end
-        elseif get_grid_data(rhs_field) !== nothing
-            ensure_layout!(rhs_field, :g)
-            grid_data = get_grid_data(rhs_field)
-            if grid_data !== nothing
-                if isa(grid_data, PencilArrays.PencilArray)
-                    fill!(parent(grid_data), zero(eltype(grid_data)))
-                else
-                    fill!(grid_data, zero(eltype(grid_data)))
-                end
-            end
-        end
+        rhs_field.current_layout = :c
     end
 
     return rhs_field
