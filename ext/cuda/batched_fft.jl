@@ -61,11 +61,10 @@ function _create_batched_fft_plan(field_size::Tuple, T::Type, batch_size::Int, r
         fft_dims = ntuple(i -> i, length(field_size))
         plan = CUFFT.plan_rfft(dummy_in, fft_dims)
 
-        # Inverse plan
-        last_field_dim = length(field_size)
-        out_size = (field_size[1:end-1]..., div(field_size[end], 2) + 1, batch_size)
+        # Inverse plan — rfft reduces the first dimension (FFTW/CUFFT convention)
+        out_size = (div(field_size[1], 2) + 1, field_size[2:end]..., batch_size)
         dummy_out = CUDA.zeros(complex_T, out_size...)
-        iplan = CUFFT.plan_irfft(dummy_out, field_size[last_field_dim], fft_dims)
+        iplan = CUFFT.plan_irfft(dummy_out, field_size[1], fft_dims)
 
         return BatchedGPUFFTPlan(plan, iplan, field_size, batch_size, true)
     else

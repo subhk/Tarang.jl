@@ -225,9 +225,10 @@ function _freq_ranges(N::Int, M::Int, is_fourier::Bool)
     Nh = N ÷ 2
     pos_orig = 1:Nh+1
     pos_pad = 1:Nh+1
-    if N > 2
-        neg_orig = N-Nh+2:N
-        neg_pad = M-Nh+2:M
+    n_neg = N - Nh - 1  # number of negative frequencies
+    if n_neg > 0
+        neg_orig = N-n_neg+1:N
+        neg_pad = M-n_neg+1:M
     else
         neg_orig = 1:0  # empty
         neg_pad = 1:0
