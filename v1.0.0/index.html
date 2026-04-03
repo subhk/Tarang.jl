@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Home · Tarang.jl</title><meta name="title" content="Home · Tarang.jl"/><meta property="og:title" content="Home · Tarang.jl"/><meta property="twitter:title" content="Home · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/"/><script data-outdated-warner src="assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="assets/documenter.js"></script><script src="search_index.js"></script><script src="siteinfo.js"></script><script src="../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="assets/themeswap.js"></script><link href="assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href><img src="assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href>Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li class="is-active"><a class="tocitem" href>Home</a><ul class="internal"><li><a class="tocitem" href="#Features"><span>Features</span></a></li><li><a class="tocitem" href="#Quick-Start"><span>Quick Start</span></a></li><li><a class="tocitem" href="#GPU-Example"><span>GPU Example</span></a></li><li><a class="tocitem" href="#Scientific-Applications"><span>Scientific Applications</span></a></li><li><a class="tocitem" href="#Problem-Types"><span>Problem Types</span></a></li><li><a class="tocitem" href="#Spectral-Bases"><span>Spectral Bases</span></a></li><li><a class="tocitem" href="#Documentation"><span>Documentation</span></a></li><li><a class="tocitem" href="#Installation-Options"><span>Installation Options</span></a></li><li><a class="tocitem" href="#Contributing"><span>Contributing</span></a></li><li><a class="tocitem" href="#Citation"><span>Citation</span></a></li><li><a class="tocitem" href="#License"><span>License</span></a></li></ul></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="getting_started/installation/">Installation</a></li><li><a class="tocitem" href="getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="pages/configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="tutorials/overview/">Overview</a></li><li><a class="tocitem" href="tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="pages/bases/">Bases</a></li><li><a class="tocitem" href="pages/domains/">Domains</a></li><li><a class="tocitem" href="pages/fields/">Fields</a></li><li><a class="tocitem" href="pages/operators/">Operators</a></li><li><a class="tocitem" href="pages/problems/">Problems</a></li><li><a class="tocitem" href="pages/solvers/">Solvers</a></li><li><a class="tocitem" href="pages/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="pages/les_models/">LES Models</a></li><li><a class="tocitem" href="pages/gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="pages/tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-5-1" type="checkbox"/><label class="tocitem" for="menuitem-5-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="api/bases/">Bases</a></li><li><a class="tocitem" href="api/domains/">Domains</a></li><li><a class="tocitem" href="api/fields/">Fields</a></li><li><a class="tocitem" href="api/operators/">Operators</a></li><li><a class="tocitem" href="api/problems/">Problems</a></li><li><a class="tocitem" href="api/solvers/">Solvers</a></li><li><a class="tocitem" href="api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="api/gpu/">GPU</a></li><li><a class="tocitem" href="api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="api/les_models/">LES Models</a></li><li><a class="tocitem" href="api/analysis/">Analysis</a></li><li><a class="tocitem" href="api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Home</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Home</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/index.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tarang.jl"><a class="docs-heading-anchor" href="#Tarang.jl">Tarang.jl</a><a id="Tarang.jl-1"></a><a class="docs-heading-anchor-permalink" href="#Tarang.jl" title="Permalink"></a></h1><div style="background: linear-gradient(135deg, #2563eb 0%, #7c3aed 100%); color: white; padding: 2.5rem; border-radius: 16px; margin-bottom: 2rem; text-align: center;">
+    <h1 style="font-size: 2.5rem; margin: 0 0 0.5rem 0; color: white; border: none;">Tarang.jl</h1>
+    <p style="font-size: 1.25rem; margin: 0; opacity: 0.95;">A High-Performance Spectral PDE Solver for Julia</p>
+    <p style="margin-top: 1rem; font-size: 0.9rem; opacity: 0.8;">CPU | GPU | MPI Distributed | Symbolic Equations</p>
+</div><p><a href="https://github.com/subhk/Tarang.jl/actions"><img src="https://github.com/subhk/Tarang.jl/workflows/CI/badge.svg" alt="Build Status"/></a> <a href="https://subhk.github.io/Tarang.jl/stable"><img src="https://img.shields.io/badge/docs-stable-blue.svg" alt="Documentation"/></a> <a href="https://opensource.org/licenses/MIT"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License: MIT"/></a></p><hr/><h2 id="Features"><a class="docs-heading-anchor" href="#Features">Features</a><a id="Features-1"></a><a class="docs-heading-anchor-permalink" href="#Features" title="Permalink"></a></h2><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 1.5rem; margin: 2rem 0;">
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem; transition: transform 0.2s, box-shadow 0.2s;">
+    <h3 style="color: #2563eb; margin-top: 0;">Spectral Methods</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Fourier, Chebyshev, and Legendre bases</li>
+        <li>Spectral accuracy for smooth solutions</li>
+        <li>Automatic differentiation operators</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #7c3aed; margin-top: 0;">GPU Acceleration</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Native CUDA support with cuFFT</li>
+        <li>KernelAbstractions.jl backend</li>
+        <li>Automatic CPU/GPU dispatch</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #059669; margin-top: 0;">MPI Parallelization</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>PencilArrays pencil decomposition</li>
+        <li>Scalable to thousands of cores</li>
+        <li>Efficient distributed FFTs</li>
+    </ul>
+</div>
+
+<div style="background: white; border: 1px solid #e2e8f0; border-radius: 12px; padding: 1.5rem;">
+    <h3 style="color: #dc2626; margin-top: 0;">Symbolic Equations</h3>
+    <ul style="margin: 0; padding-left: 1.25rem; color: #475569;">
+        <li>Natural mathematical syntax for PDEs</li>
+        <li>Automatic operator construction</li>
+        <li>Flexible boundary conditions</li>
+    </ul>
+</div>
+
+</div><hr/><h2 id="Quick-Start"><a class="docs-heading-anchor" href="#Quick-Start">Quick Start</a><a id="Quick-Start-1"></a><a class="docs-heading-anchor-permalink" href="#Quick-Start" title="Permalink"></a></h2><h3 id="Installation"><a class="docs-heading-anchor" href="#Installation">Installation</a><a id="Installation-1"></a><a class="docs-heading-anchor-permalink" href="#Installation" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Pkg
+
+# Basic installation
+Pkg.add(url=&quot;https://github.com/subhk/Tarang.jl&quot;)
+
+# With GPU support
+Pkg.add([&quot;CUDA&quot;, &quot;KernelAbstractions&quot;])
+
+# With MPI support
+Pkg.add([&quot;MPI&quot;, &quot;PencilArrays&quot;, &quot;PencilFFTs&quot;])</code></pre><h3 id="Hello-World:-1D-Diffusion-(5-lines)"><a class="docs-heading-anchor" href="#Hello-World:-1D-Diffusion-(5-lines)">Hello World: 1D Diffusion (5 lines)</a><a id="Hello-World:-1D-Diffusion-(5-lines)-1"></a><a class="docs-heading-anchor-permalink" href="#Hello-World:-1D-Diffusion-(5-lines)" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+
+domain = PeriodicDomain(64)                     # 64-point periodic [0, 2π]
+T = ScalarField(domain, &quot;T&quot;)                    # Temperature field
+
+problem = IVP([T])
+add_substitution!(problem, &quot;kappa&quot;, 0.01)
+add_equation!(problem, &quot;∂t(T) - kappa*Δ(T) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=0.01)
+run!(solver; stop_time=1.0)                     # That&#39;s it!</code></pre><h3 id="2D-Rayleigh-Benard-Convection"><a class="docs-heading-anchor" href="#2D-Rayleigh-Benard-Convection">2D Rayleigh-Benard Convection</a><a id="2D-Rayleigh-Benard-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#2D-Rayleigh-Benard-Convection" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
+
+# Channel domain: periodic in x (Fourier), bounded in z (Chebyshev)
+domain = ChannelDomain(256, 64; Lx=4.0, Lz=1.0)
+
+u = VectorField(domain, &quot;u&quot;)                   # Velocity
+T = ScalarField(domain, &quot;T&quot;)                   # Temperature
+p = ScalarField(domain, &quot;p&quot;)                   # Pressure
+
+problem = IVP([u, p, T])
+add_substitution!(problem, &quot;Pr&quot;, 1.0)
+add_substitution!(problem, &quot;Ra&quot;, 2e6)
+add_equation!(problem, &quot;∂t(u) - Pr*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*Pr*T*ez&quot;)
+add_equation!(problem, &quot;div(u) = 0&quot;)
+add_equation!(problem, &quot;∂t(T) - Δ(T) = -u⋅∇(T)&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_bc!(problem, &quot;T(z=0) = 1&quot;)
+add_bc!(problem, &quot;T(z=1) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+diagnose(solver)                                # Print solver summary
+run!(solver; stop_time=10.0, log_interval=100)  # Run with progress</code></pre><div class="admonition is-success" id="Pro-Tip-aa8a314e95d3bb07"><header class="admonition-header">Pro Tip<a class="admonition-anchor" href="#Pro-Tip-aa8a314e95d3bb07" title="Permalink"></a></header><div class="admonition-body"><p>Use <code>diagnose(solver)</code> at any time to inspect field layout, compiled RHS status, dealiasing mode, and memory usage.</p></div></div><hr/><h2 id="GPU-Example"><a class="docs-heading-anchor" href="#GPU-Example">GPU Example</a><a id="GPU-Example-1"></a><a class="docs-heading-anchor-permalink" href="#GPU-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang, CUDA
+
+# Just add arch=GPU() — everything else stays the same
+domain = PeriodicDomain(512, 512; arch=GPU(), dtype=Float32)
+field = ScalarField(domain, &quot;u&quot;)
+forward_transform!(field)   # Uses cuFFT automatically</code></pre><hr/><h2 id="Scientific-Applications"><a class="docs-heading-anchor" href="#Scientific-Applications">Scientific Applications</a><a id="Scientific-Applications-1"></a><a class="docs-heading-anchor-permalink" href="#Scientific-Applications" title="Permalink"></a></h2><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+<div style="background: #eff6ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #2563eb;">
+    <strong style="color: #1e40af;">Fluid Dynamics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Navier-Stokes, Rayleigh-Benard convection, channel flow, jets
+    </p>
+</div>
+
+<div style="background: #fef3c7; border-radius: 8px; padding: 1rem; border-left: 4px solid #f59e0b;">
+    <strong style="color: #92400e;">Turbulence</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        LES models (Smagorinsky, AMD), stochastic forcing, GQL approximation
+    </p>
+</div>
+
+<div style="background: #f3e8ff; border-radius: 8px; padding: 1rem; border-left: 4px solid #7c3aed;">
+    <strong style="color: #5b21b6;">Magnetohydrodynamics</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        MHD with magnetic fields, dynamo problems, magnetic dissipation
+    </p>
+</div>
+
+<div style="background: #ecfdf5; border-radius: 8px; padding: 1rem; border-left: 4px solid #10b981;">
+    <strong style="color: #065f46;">Geophysical Flows</strong>
+    <p style="margin: 0.5rem 0 0 0; font-size: 0.9rem; color: #475569;">
+        Rotating shallow water, stratified turbulence, surface dynamics
+    </p>
+</div>
+
+</div><hr/><h2 id="Problem-Types"><a class="docs-heading-anchor" href="#Problem-Types">Problem Types</a><a id="Problem-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Types" title="Permalink"></a></h2><table><tr><th style="text-align: right">Type</th><th style="text-align: right">Description</th><th style="text-align: right">Example</th></tr><tr><td style="text-align: right"><strong>IVP</strong></td><td style="text-align: right">Initial Value Problems</td><td style="text-align: right">Time-dependent Navier-Stokes</td></tr><tr><td style="text-align: right"><strong>BVP</strong></td><td style="text-align: right">Boundary Value Problems</td><td style="text-align: right">Steady-state solutions</td></tr><tr><td style="text-align: right"><strong>EVP</strong></td><td style="text-align: right">Eigenvalue Problems</td><td style="text-align: right">Linear stability analysis</td></tr><tr><td style="text-align: right"><strong>LBVP</strong></td><td style="text-align: right">Linear BVPs</td><td style="text-align: right">Poisson equation</td></tr><tr><td style="text-align: right"><strong>NLBVP</strong></td><td style="text-align: right">Nonlinear BVPs</td><td style="text-align: right">Steady nonlinear systems</td></tr></table><h2 id="Spectral-Bases"><a class="docs-heading-anchor" href="#Spectral-Bases">Spectral Bases</a><a id="Spectral-Bases-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Bases" title="Permalink"></a></h2><table><tr><th style="text-align: right">Basis</th><th style="text-align: right">Domain</th><th style="text-align: right">Usage</th></tr><tr><td style="text-align: right"><code>RealFourier</code></td><td style="text-align: right">Periodic</td><td style="text-align: right">Horizontal directions, real-valued fields</td></tr><tr><td style="text-align: right"><code>ComplexFourier</code></td><td style="text-align: right">Periodic</td><td style="text-align: right">Complex-valued fields</td></tr><tr><td style="text-align: right"><code>ChebyshevT</code></td><td style="text-align: right">Bounded</td><td style="text-align: right">Wall-bounded domains, boundary conditions</td></tr><tr><td style="text-align: right"><code>Legendre</code></td><td style="text-align: right">Bounded</td><td style="text-align: right">Alternative to Chebyshev</td></tr></table><hr/><h2 id="Documentation"><a class="docs-heading-anchor" href="#Documentation">Documentation</a><a id="Documentation-1"></a><a class="docs-heading-anchor-permalink" href="#Documentation" title="Permalink"></a></h2><div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin: 1.5rem 0;">
+
+<a href="getting_started/installation/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Installation</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Setup and configuration</p>
+    </div>
+</a>
+
+<a href="tutorials/overview/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>Tutorials</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Step-by-step guides</p>
+    </div>
+</a>
+
+<a href="pages/gpu_computing/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>GPU Guide</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">CUDA acceleration</p>
+    </div>
+</a>
+
+<a href="api/coordinates/" style="display: flex; align-items: center; gap: 0.75rem; padding: 1rem; background: white; border: 1px solid #e2e8f0; border-radius: 8px; text-decoration: none; color: #1e293b; transition: all 0.2s;">
+    <div>
+        <strong>API Reference</strong>
+        <p style="margin: 0; font-size: 0.85rem; color: #64748b;">Complete documentation</p>
+    </div>
+</a>
+
+</div><ul><li><a href="getting_started/installation/#Installation">Installation</a></li><li><a href="tutorials/overview/#Tutorials-Overview">Tutorials Overview</a></li><li><a href="pages/gpu_computing/#GPU-Computing">GPU Computing</a></li><li><a href="pages/parallelism/#Parallelism">Parallelism</a></li><li><a href="api/coordinates/#Coordinates-API">Coordinates API</a></li><li><a href="examples/gallery/#Example-Gallery">Example Gallery</a></li></ul><hr/><h2 id="Installation-Options"><a class="docs-heading-anchor" href="#Installation-Options">Installation Options</a><a id="Installation-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Installation-Options" title="Permalink"></a></h2><table><tr><th style="text-align: right">Setup</th><th style="text-align: right">Command</th><th style="text-align: right">Use Case</th></tr><tr><td style="text-align: right"><strong>Basic</strong></td><td style="text-align: right"><code>Pkg.add(url=&quot;...&quot;)</code></td><td style="text-align: right">Single CPU, getting started</td></tr><tr><td style="text-align: right"><strong>GPU</strong></td><td style="text-align: right"><code>+ CUDA, KernelAbstractions</code></td><td style="text-align: right">NVIDIA GPU acceleration</td></tr><tr><td style="text-align: right"><strong>MPI</strong></td><td style="text-align: right"><code>+ MPI, PencilArrays, PencilFFTs</code></td><td style="text-align: right">Cluster computing</td></tr><tr><td style="text-align: right"><strong>Full</strong></td><td style="text-align: right">All of the above</td><td style="text-align: right">Maximum flexibility</td></tr></table><div class="admonition is-info" id="Requirements-3cc501b17fdcba04"><header class="admonition-header">Requirements<a class="admonition-anchor" href="#Requirements-3cc501b17fdcba04" title="Permalink"></a></header><div class="admonition-body"><ul><li>Julia 1.10 or later</li><li>For GPU: NVIDIA GPU with CUDA support</li><li>For MPI: OpenMPI or MPICH installed</li></ul></div></div><hr/><h2 id="Contributing"><a class="docs-heading-anchor" href="#Contributing">Contributing</a><a id="Contributing-1"></a><a class="docs-heading-anchor-permalink" href="#Contributing" title="Permalink"></a></h2><p>We welcome contributions! See our <a href="https://github.com/subhk/Tarang.jl">GitHub repository</a> for:</p><ul><li>Bug reports and feature requests</li><li>Documentation improvements</li><li>Pull requests</li></ul><hr/><h2 id="Citation"><a class="docs-heading-anchor" href="#Citation">Citation</a><a id="Citation-1"></a><a class="docs-heading-anchor-permalink" href="#Citation" title="Permalink"></a></h2><p>If you use Tarang.jl in your research, please cite:</p><pre><code class="language-bibtex hljs">@software{tarang_jl,
+  author = {Kar, Subhajit},
+  title  = {Tarang.jl: A Spectral PDE Solver for Julia},
+  url    = {https://github.com/subhk/Tarang.jl},
+  year   = {2024}
+}</code></pre><hr/><h2 id="License"><a class="docs-heading-anchor" href="#License">License</a><a id="License-1"></a><a class="docs-heading-anchor-permalink" href="#License" title="Permalink"></a></h2><p>Tarang.jl is released under the <strong>MIT License</strong>.</p><div style="text-align: center; margin-top: 2rem; padding: 1.5rem; background: #f8fafc; border-radius: 8px;">
+    <p style="margin: 0; color: #64748b;">
+        Made for the scientific computing community
+    </p>
+</div></article><nav class="docs-footer"><a class="docs-footer-nextpage" href="getting_started/installation/">Installation »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 3 April 2026 17:17">Friday 3 April 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
