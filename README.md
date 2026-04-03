@@ -19,16 +19,6 @@
 
 ---
 
-## Features
-
-- **Spectral Methods** -- Fourier, Chebyshev, and Legendre bases with spectral accuracy for smooth solutions
-- **GPU Acceleration** -- Native CUDA support via cuFFT with automatic CPU/GPU dispatch
-- **MPI Parallelization** -- Pencil decomposition via PencilArrays, scalable to thousands of cores
-- **Symbolic Equations** -- Write PDEs in natural math notation (`"dt(T) - kappa*lap(T) = 0"`)
-- **Multiple Problem Types** -- Initial value (IVP), eigenvalue (EVP), linear & nonlinear boundary value problems (LBVP, NLBVP)
-- **Advanced Physics** -- LES models, stochastic forcing, temporal filters, surface quasi-geostrophic dynamics
-- **13 Time Integrators** -- IMEX Runge-Kutta, multistep, exponential time differencing, diagonal IMEX schemes
-- **NetCDF I/O** -- Automatic field output with distributed file merging
 
 ## Installation
 
@@ -138,32 +128,3 @@ mpiexec -n 4 julia --project=. examples/ivp/rayleigh_benard_2d.jl
 | **Multistep IMEX** | `CNAB1`, `CNAB2`, `SBDF1`--`SBDF4` |
 | **Exponential** | `ETD_RK222`, `ETD_CNAB2`, `ETD_SBDF2` |
 | **Diagonal IMEX** | `DiagonalIMEX_RK222`, `DiagonalIMEX_RK443`, `DiagonalIMEX_SBDF2` |
-
-## Scientific Applications
-
-- **Fluid Dynamics** -- Navier-Stokes, Rayleigh-Benard convection, channel flows
-- **Turbulence** -- LES (Smagorinsky, AMD), stochastic forcing
-- **Geophysical Flows** -- Rotating shallow water, stratified turbulence, SQG dynamics
-- **Magnetohydrodynamics** -- MHD with magnetic fields, dynamo problems
-- **Stability Analysis** -- Eigenvalue problems for linear stability
-
-## Documentation
-
-Full documentation is available at [subhk.github.io/Tarang.jl](https://subhk.github.io/Tarang.jl/stable).
-
-## Citation
-
-If you use Tarang.jl in your research, please cite:
-
-```bibtex
-@software{tarang_jl,
-  author = {Kar, Subhajit},
-  title  = {Tarang.jl: A Spectral PDE Solver for Julia},
-  url    = {https://github.com/subhk/Tarang.jl},
-  year   = {2025}
-}
-```
-
-## License
-
-MIT License. See [LICENSE](LICENSE) for details.
