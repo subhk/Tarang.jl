@@ -490,8 +490,12 @@ function launch!(arch::AbstractArchitecture, kernel, args...;
     backend = device(arch)
     workgroup = workgroup_size(arch, ndrange)
     ka_kernel = kernel(backend, workgroup)
-    event = ka_kernel(args...; ndrange=ndrange, dependencies=dependencies, kwargs...)
-    if wait
+    if dependencies === nothing
+        event = ka_kernel(args...; ndrange=ndrange, kwargs...)
+    else
+        event = ka_kernel(args...; ndrange=ndrange, dependencies=dependencies, kwargs...)
+    end
+    if wait && event !== nothing
         Base.wait(event)
     end
     return event
@@ -535,15 +539,22 @@ logic always flows through the architecture abstraction.
 struct KernelOperation{K,F}
     kernel::K
     ndrange_fn::F  # Computes default ndrange from kernel arguments
+
+    # Explicit inner constructor to prevent auto-generated (K, F) constructor
+    # from conflicting with the do-block outer constructor (F, K)
+    function KernelOperation{K,F}(kernel::K, ndrange_fn::F) where {K,F}
+        new{K,F}(kernel, ndrange_fn)
+    end
 end
 
 default_ndrange_fn(args...) = length(args[1])
 
-KernelOperation(kernel::K; ndrange_fn=default_ndrange_fn) where {K} = KernelOperation{K, typeof(ndrange_fn)}(kernel, ndrange_fn)
+# Keyword constructor: KernelOperation(kernel; ndrange_fn=default_ndrange_fn)
+KernelOperation(kernel::K; ndrange_fn::F=default_ndrange_fn) where {K,F} = KernelOperation{K,F}(kernel, ndrange_fn)
 
 # Two-positional-arg constructor for do-block syntax:
 #   KernelOperation(kernel) do args... end  desugars to  KernelOperation(lambda, kernel)
-KernelOperation(ndrange_fn::F, kernel::K) where {K,F} = KernelOperation{K, typeof(ndrange_fn)}(kernel, ndrange_fn)
+KernelOperation(ndrange_fn::F, kernel::K) where {K,F} = KernelOperation{K,F}(kernel, ndrange_fn)
 
 function (op::KernelOperation)(arch_or_data, args...; ndrange=nothing, dependencies=nothing, wait::Bool=true, kwargs...)
     effective_ndrange = isnothing(ndrange) ? op.ndrange_fn(args...) : ndrange

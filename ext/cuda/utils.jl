@@ -739,9 +739,10 @@ function Tarang._pad_spectral!(padded::CuArray{Complex{T}}, spec_data::CuArray{C
         N = original_shape[1]
         Nh = N ÷ 2
         M = padded_shape[1]
+        n_neg = N - Nh - 1
         padded[1:Nh+1] .= spec_data[1:Nh+1]
-        if N > 2
-            padded[M-Nh+2:M] .= spec_data[N-Nh+2:N]
+        if n_neg > 0
+            padded[M-n_neg+1:M] .= spec_data[N-n_neg+1:N]
         end
     end
 end
@@ -776,9 +777,10 @@ function Tarang._truncate_spectral!(result::CuArray{Complex{T}}, padded_spec::Cu
         N = original_shape[1]
         Nh = N ÷ 2
         M = padded_shape[1]
+        n_neg = N - Nh - 1
         result[1:Nh+1] .= padded_spec[1:Nh+1]
-        if N > 2
-            result[N-Nh+2:N] .= padded_spec[M-Nh+2:M]
+        if n_neg > 0
+            result[N-n_neg+1:N] .= padded_spec[M-n_neg+1:M]
         end
     end
 end

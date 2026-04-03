@@ -122,11 +122,9 @@ Indices in the padding gap map to 0 (zero-fill).
     end
     Nh = N ÷ 2
     if i <= Nh + 1
-        return i  # Positive frequencies
-    elseif i > N - Nh + 1
-        return M - (N - i)  # Negative frequencies
+        return i  # Positive frequencies (DC through Nyquist)
     else
-        return 0  # Padding gap (zero-fill)
+        return M - (N - i)  # Negative frequencies (mapped to end of padded array)
     end
 end
 
