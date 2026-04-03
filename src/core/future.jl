@@ -26,20 +26,23 @@ mutable struct FutureState
     store_last::Bool
     last_id::Union{Nothing, Int}
     last_out::Any
-    metadata::Dict{Symbol, Any}
+    name::Symbol
+    _eval_buffer::Vector{Any}  # pre-allocated buffer reused by evaluate()
 end
 
-function FutureState(args::Vector{Any}; out=nothing, store_last::Bool=true, metadata=Dict{Symbol, Any}())
+function FutureState(args::Vector{Any}; out=nothing, store_last::Bool=true,
+                     metadata=Dict{Symbol, Any}(), name::Symbol=:unknown)
     dist = unify_attributes(args, "dist")
     dtype = unify_attributes(args, "dtype")
-    # Copy metadata to prevent shared state issues
-    metadata_copy = copy(metadata)
-    return FutureState(copy(args), copy(args), out, dist, dtype, store_last, nothing, nothing, metadata_copy)
+    # Support legacy metadata dict: extract :name if present
+    effective_name = haskey(metadata, :name) ? metadata[:name]::Symbol : name
+    n = length(args)
+    return FutureState(copy(args), copy(args), out, dist, dtype, store_last,
+                       nothing, nothing, effective_name, Vector{Any}(undef, n))
 end
 
 function build_future_state(args; name::Symbol, out=nothing, store_last::Bool=true)
-    metadata = Dict{Symbol, Any}(:name => name)
-    return FutureState(collect(Any, args); out=out, store_last=store_last, metadata=metadata)
+    return FutureState(collect(Any, args); out=out, store_last=store_last, name=name)
 end
 
 # ---------------------------------------------------------------------------
@@ -55,12 +58,24 @@ end
 
 future_args(f::Future) = future_state(f).args
 original_args(f::Future) = future_state(f).original_args
-future_metadata(f::Future) = future_state(f).metadata
+
+"""
+    future_metadata(f::Future)
+
+Return metadata as a Dict for backward compatibility.
+Internally, only the :name field is stored.
+"""
+function future_metadata(f::Future)
+    state = future_state(f)
+    return Dict{Symbol, Any}(:name => state.name)
+end
 
 function set_future_args!(f::Future, args::Vector{Any})
     state = future_state(f)
     empty!(state.args)
     append!(state.args, args)
+    # Resize eval buffer to match new arg count
+    resize!(state._eval_buffer, length(args))
     state.last_id = nothing
     state.last_out = nothing
     return f
@@ -70,6 +85,8 @@ function reset!(f::Future)
     state = future_state(f)
     empty!(state.args)
     append!(state.args, state.original_args)
+    # Resize eval buffer to match restored arg count
+    resize!(state._eval_buffer, length(state.original_args))
     state.last_id = nothing
     state.last_out = nothing
     return f
@@ -205,8 +222,17 @@ function evaluate(f::Future; id=nothing, force::Bool=true)
         return state.last_out
     end
 
-    evaluated_args = Any[evaluate_operand(arg; id=id, force=force) for arg in state.args]
-    result = operate(f, evaluated_args)
+    # Evaluate args into pre-allocated buffer (avoids allocating a new Any[] per call)
+    buf = state._eval_buffer
+    args = state.args
+    n = length(args)
+    if length(buf) != n
+        resize!(buf, n)
+    end
+    @inbounds for i in 1:n
+        buf[i] = evaluate_operand(args[i]; id=id, force=force)
+    end
+    result = operate(f, buf)
 
     if state.store_last && id !== nothing
         state.last_id = id

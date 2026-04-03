@@ -13,7 +13,7 @@ mutable struct TimestepperState
     history::Vector{Vector{<:ScalarField}}
     dt_history::Vector{Float64}  # Track timestep history for variable timesteps
     stage::Int
-    timestepper_data::Dict{String, Any}  # Additional data for specific timesteppers
+    timestepper_data::Dict{Symbol, Any}  # Additional data for specific timesteppers
 
     # Pre-allocated workspace fields for zero-allocation time-stepping
     workspace_fields::Vector{<:ScalarField}  # Reusable scratch fields
@@ -30,7 +30,7 @@ mutable struct TimestepperState
                               forcing=nothing)
         history = [copy.(initial_state)]
         dt_history = [dt]  # Initialize with current timestep
-        timestepper_data = Dict{String, Any}()
+        timestepper_data = Dict{Symbol, Any}()
 
         # Pre-allocate workspace fields based on timestepper requirements
         n_fields = length(initial_state)
@@ -125,13 +125,13 @@ end
 
 function _get_mass_factor!(state::TimestepperState, M_matrix::AbstractMatrix)
     cache = state.timestepper_data
-    if !haskey(cache, "M_factor") || get(cache, "M_factor_source", nothing) !== M_matrix
-        cache["M_factor"] = factorize(M_matrix)
-        cache["M_factor_source"] = M_matrix
-        cache["L_eff"] = nothing
-        cache["L_eff_source"] = nothing
+    if !haskey(cache, :M_factor) || get(cache, :M_factor_source, nothing) !== M_matrix
+        cache[:M_factor] = factorize(M_matrix)
+        cache[:M_factor_source] = M_matrix
+        cache[:L_eff] = nothing
+        cache[:L_eff_source] = nothing
     end
-    return cache["M_factor"]
+    return cache[:M_factor]
 end
 
 """
@@ -162,14 +162,14 @@ function _get_linear_operator_eff!(state::TimestepperState, L_matrix::AbstractMa
 
     M_factor = _get_mass_factor!(state, M_matrix)
     cache = state.timestepper_data
-    if !haskey(cache, "L_eff") || get(cache, "L_eff_source", nothing) !== L_matrix
-        cache["L_eff"] = M_factor \ L_matrix   # M^{-1} * L (cached, positive)
-        cache["L_eff_source"] = L_matrix
+    if !haskey(cache, :L_eff) || get(cache, :L_eff_source, nothing) !== L_matrix
+        cache[:L_eff] = M_factor \ L_matrix   # M^{-1} * L (cached, positive)
+        cache[:L_eff_source] = L_matrix
     end
 
     # Negate to convert from LHS form (M*dX/dt + L*X = F)
     # to RHS form (dX/dt = -M^{-1}*L*X + M^{-1}*F)
-    return -cache["L_eff"], M_factor
+    return -cache[:L_eff], M_factor
 end
 
 """
@@ -201,13 +201,13 @@ function _get_linear_operator_lhs!(state::TimestepperState, L_matrix::AbstractMa
 
     M_factor = _get_mass_factor!(state, M_matrix)
     cache = state.timestepper_data
-    if !haskey(cache, "L_eff") || get(cache, "L_eff_source", nothing) !== L_matrix
-        cache["L_eff"] = M_factor \ L_matrix   # M^{-1} * L (cached, positive)
-        cache["L_eff_source"] = L_matrix
+    if !haskey(cache, :L_eff) || get(cache, :L_eff_source, nothing) !== L_matrix
+        cache[:L_eff] = M_factor \ L_matrix   # M^{-1} * L (cached, positive)
+        cache[:L_eff_source] = L_matrix
     end
 
     # Return positive M^{-1}*L (LHS convention)
-    return cache["L_eff"], M_factor
+    return cache[:L_eff], M_factor
 end
 
 function _apply_mass_inverse(M_factor, vec::AbstractVector)

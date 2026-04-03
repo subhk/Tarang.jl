@@ -229,13 +229,13 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
     L_spectral = _get_spectral_linear_operator(solver)
 
     # Initialize history if needed
-    if !haskey(state.timestepper_data, "F_history")
-        state.timestepper_data["F_history"] = Vector{ScalarField}[]
-        state.timestepper_data["iteration"] = 0
+    if !haskey(state.timestepper_data, :F_history)
+        state.timestepper_data[:F_history] = Vector{ScalarField}[]
+        state.timestepper_data[:iteration] = 0
     end
 
-    iteration = state.timestepper_data["iteration"]
-    F_history = state.timestepper_data["F_history"]
+    iteration = state.timestepper_data[:iteration]
+    F_history = state.timestepper_data[:F_history]
 
     # Evaluate current RHS
     F_n = evaluate_rhs(solver, current_state, t)
@@ -318,7 +318,7 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         end
     end
 
-    state.timestepper_data["iteration"] = iteration + 1
+    state.timestepper_data[:iteration] = iteration + 1
 end
 
 # Note: _get_spectral_linear_operator and set_spectral_linear_operator! are

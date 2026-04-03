@@ -8,6 +8,9 @@ These types create deferred-operation nodes that integrate with the
 export Add, Multiply, DotProduct, CrossProduct, Power, Negate, Subtract, Divide
 export dot, cross, ⋅, ×
 
+# Static name for temporary arithmetic fields — avoids string allocation per operation
+const _ARITH_TMP_NAME = "_arith_tmp"
+
 # ---------------------------------------------------------------------------
 # Add
 # ---------------------------------------------------------------------------
@@ -20,7 +23,14 @@ mutable struct Add <: Future
 end
 
 function Add(args...)
-    return multiclass_new(Add, args...)
+    processed = preprocess_add(args)
+    if isempty(processed)
+        return 0
+    elseif length(processed) == 1
+        return processed[1]
+    end
+    state = build_future_state(collect(Any, processed); name=:Add)
+    return Add(state)
 end
 
 function preprocess_add(args)
@@ -76,7 +86,7 @@ end
 
 function add_scalar_to_vector_field(field::VectorField, value::Number)
     """Add a scalar to each component of a VectorField"""
-    result = VectorField(field.dist, field.coordsys, "$(field.name)_plus_$(value)", field.bases, field.dtype)
+    result = VectorField(field.dist, field.coordsys, _ARITH_TMP_NAME, field.bases, field.dtype)
     for i in 1:length(field.components)
         result[i] = add_scalar_to_field(field.components[i], value)
     end
@@ -95,7 +105,14 @@ mutable struct Multiply <: Future
 end
 
 function Multiply(args...)
-    return multiclass_new(Multiply, args...)
+    processed = preprocess_multiply(args)
+    if isempty(processed)
+        return 1
+    elseif length(processed) == 1
+        return processed[1]
+    end
+    state = build_future_state(collect(Any, processed); name=:Multiply)
+    return Multiply(state)
 end
 
 function preprocess_multiply(args)
@@ -179,7 +196,8 @@ mutable struct DotProduct <: Future
 end
 
 function DotProduct(a, b)
-    return multiclass_new(DotProduct, a, b)
+    state = build_future_state(Any[a, b]; name=:DotProduct)
+    return DotProduct(state)
 end
 
 function operate(::DotProduct, evaluated_args::Vector{Any})
@@ -228,7 +246,8 @@ mutable struct CrossProduct <: Future
 end
 
 function CrossProduct(a, b)
-    return multiclass_new(CrossProduct, a, b)
+    state = build_future_state(Any[a, b]; name=:CrossProduct)
+    return CrossProduct(state)
 end
 
 function operate(::CrossProduct, evaluated_args::Vector{Any})
@@ -250,7 +269,7 @@ function cross_operands(a::VectorField, b::VectorField)
     end
     dist = a.dist
     coordsys = a.coordsys
-    result = VectorField(dist, coordsys, "$(a.name)_cross_$(b.name)", a.bases, a.dtype)
+    result = VectorField(dist, coordsys, _ARITH_TMP_NAME, a.bases, a.dtype)
 
     handedness = (hasproperty(coordsys, :right_handed) && coordsys.right_handed === false) ? -1 : 1
 
@@ -292,7 +311,7 @@ function add_scalar_to_field(field::ScalarField, value::Number)
 end
 
 function constant_field_like(field::ScalarField, value::Number)
-    const_field = ScalarField(field.dist, "$(field.name)_const", field.bases, field.dtype)
+    const_field = ScalarField(field.dist, _ARITH_TMP_NAME, field.bases, field.dtype)
     if field.scales !== nothing
         preset_scales!(const_field, field.scales)
     end
@@ -310,7 +329,7 @@ function add_vector_fields(a::VectorField, b::VectorField)
     if a.bases != b.bases
         throw(ArgumentError("Cannot add VectorFields with different bases"))
     end
-    result = VectorField(a.dist, a.coordsys, "$(a.name)_plus_$(b.name)", a.bases, a.dtype)
+    result = VectorField(a.dist, a.coordsys, _ARITH_TMP_NAME, a.bases, a.dtype)
     for i in 1:length(a.components)
         result[i] = a.components[i] + b.components[i]
     end
@@ -318,8 +337,7 @@ function add_vector_fields(a::VectorField, b::VectorField)
 end
 
 function scale_vector_field(field::VectorField, scalar)
-    scalar_label = scalar isa ScalarField ? scalar.name : scalar
-    result = VectorField(field.dist, field.coordsys, "$(field.name)_times_$(scalar_label)", field.bases, field.dtype)
+    result = VectorField(field.dist, field.coordsys, _ARITH_TMP_NAME, field.bases, field.dtype)
     for i in 1:length(field.components)
         result[i] = field.components[i] * scalar
     end
@@ -351,7 +369,8 @@ mutable struct Power <: Future
 end
 
 function Power(operand, exponent::Real)
-    return multiclass_new(Power, operand, exponent)
+    state = build_future_state(Any[operand, exponent]; name=:Power)
+    return Power(state)
 end
 
 function operate(::Power, evaluated_args::Vector{Any})
@@ -364,7 +383,7 @@ end
 function power_operands(a::ScalarField, p::Real)
     # Work in grid space for nonlinear operation
     ensure_layout!(a, :g)
-    result = ScalarField(a.dist, "$(a.name)_pow_$p", a.bases, a.dtype)
+    result = ScalarField(a.dist, _ARITH_TMP_NAME, a.bases, a.dtype)
     ensure_layout!(result, :g)
     get_grid_data(result) .= get_grid_data(a) .^ p
     return result
@@ -376,7 +395,7 @@ end
 
 function power_operands(a::VectorField, p::Real)
     # Apply power to each component
-    result = VectorField(a.dist, a.coordsys, "$(a.name)_pow_$p", a.bases, a.dtype)
+    result = VectorField(a.dist, a.coordsys, _ARITH_TMP_NAME, a.bases, a.dtype)
     for i in 1:length(a.components)
         result.components[i] = power_operands(a.components[i], p)
     end
@@ -411,7 +430,8 @@ mutable struct Negate <: Future
 end
 
 function Negate(operand)
-    return multiclass_new(Negate, operand)
+    state = build_future_state(Any[operand]; name=:Negate)
+    return Negate(state)
 end
 
 function operate(::Negate, evaluated_args::Vector{Any})
@@ -422,7 +442,7 @@ function operate(::Negate, evaluated_args::Vector{Any})
 end
 
 function negate_operand(a::ScalarField)
-    result = ScalarField(a.dist, "neg_$(a.name)", a.bases, a.dtype)
+    result = ScalarField(a.dist, _ARITH_TMP_NAME, a.bases, a.dtype)
     # Use the field's current layout to determine which data to negate
     if a.current_layout == :c
         ensure_layout!(result, :c)
@@ -436,7 +456,7 @@ function negate_operand(a::ScalarField)
 end
 
 function negate_operand(a::VectorField)
-    result = VectorField(a.dist, a.coordsys, "neg_$(a.name)", a.bases, a.dtype)
+    result = VectorField(a.dist, a.coordsys, _ARITH_TMP_NAME, a.bases, a.dtype)
     for i in 1:length(a.components)
         result.components[i] = negate_operand(a.components[i])
     end
@@ -475,7 +495,8 @@ mutable struct Subtract <: Future
 end
 
 function Subtract(a, b)
-    return multiclass_new(Subtract, a, b)
+    state = build_future_state(Any[a, b]; name=:Subtract)
+    return Subtract(state)
 end
 
 function operate(::Subtract, evaluated_args::Vector{Any})
@@ -489,7 +510,7 @@ function subtract_operands(a::ScalarField, b::ScalarField)
     if a.bases != b.bases
         throw(ArgumentError("Cannot subtract fields with different bases"))
     end
-    result = ScalarField(a.dist, "$(a.name)_minus_$(b.name)", a.bases, a.dtype)
+    result = ScalarField(a.dist, _ARITH_TMP_NAME, a.bases, a.dtype)
     if a.current_layout == :g && b.current_layout == :g
         ensure_layout!(result, :g)
         get_grid_data(result) .= get_grid_data(a) .- get_grid_data(b)
@@ -509,7 +530,7 @@ function subtract_operands(a::VectorField, b::VectorField)
     if a.bases != b.bases
         throw(ArgumentError("Cannot subtract VectorFields with different bases"))
     end
-    result = VectorField(a.dist, a.coordsys, "$(a.name)_minus_$(b.name)", a.bases, a.dtype)
+    result = VectorField(a.dist, a.coordsys, _ARITH_TMP_NAME, a.bases, a.dtype)
     for i in 1:length(a.components)
         result.components[i] = subtract_operands(a.components[i], b.components[i])
     end
@@ -575,7 +596,8 @@ mutable struct Divide <: Future
 end
 
 function Divide(a, b)
-    return multiclass_new(Divide, a, b)
+    state = build_future_state(Any[a, b]; name=:Divide)
+    return Divide(state)
 end
 
 function operate(::Divide, evaluated_args::Vector{Any})
@@ -597,7 +619,7 @@ function divide_operands(a::ScalarField, b::ScalarField)
     # Pointwise division in grid space
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
-    result = ScalarField(a.dist, "$(a.name)_div_$(b.name)", a.bases, a.dtype)
+    result = ScalarField(a.dist, _ARITH_TMP_NAME, a.bases, a.dtype)
     ensure_layout!(result, :g)
     get_grid_data(result) .= get_grid_data(a) ./ get_grid_data(b)
     return result
@@ -608,7 +630,7 @@ function divide_operands(a::VectorField, b::Number)
 end
 
 function divide_operands(a::VectorField, b::ScalarField)
-    result = VectorField(a.dist, a.coordsys, "$(a.name)_div_$(b.name)", a.bases, a.dtype)
+    result = VectorField(a.dist, a.coordsys, _ARITH_TMP_NAME, a.bases, a.dtype)
     for i in 1:length(a.components)
         result[i] = divide_operands(a.components[i], b)
     end
@@ -632,18 +654,18 @@ end
 # Fallback arithmetic overloads (deferred by default)
 # ---------------------------------------------------------------------------
 
-Base.:+(a::Operand, b::Operand) = multiclass_new(Add, a, b)
-Base.:+(a::Operand, b::Number) = multiclass_new(Add, a, b)
-Base.:+(a::Number, b::Operand) = multiclass_new(Add, a, b)
+Base.:+(a::Operand, b::Operand) = Add(a, b)
+Base.:+(a::Operand, b::Number) = Add(a, b)
+Base.:+(a::Number, b::Operand) = Add(a, b)
 
 Base.:-(a::Operand) = Negate(a)
 Base.:-(a::Operand, b::Operand) = Subtract(a, b)
 Base.:-(a::Operand, b::Number) = Subtract(a, b)
 Base.:-(a::Number, b::Operand) = Subtract(a, b)
 
-Base.:*(a::Operand, b::Operand) = multiclass_new(Multiply, a, b)
-Base.:*(a::Operand, b::Number) = multiclass_new(Multiply, a, b)
-Base.:*(a::Number, b::Operand) = multiclass_new(Multiply, a, b)
+Base.:*(a::Operand, b::Operand) = Multiply(a, b)
+Base.:*(a::Operand, b::Number) = Multiply(a, b)
+Base.:*(a::Number, b::Operand) = Multiply(a, b)
 
 Base.:/(a::Operand, b::Operand) = Divide(a, b)
 Base.:/(a::Operand, b::Number) = Divide(a, b)
@@ -654,11 +676,11 @@ Base.:^(a::Operand, p::Real) = Power(a, p)
 # Disambiguating methods for Future-Operand combinations
 # These are needed because Future <: Operand, so (Future, Operand) could match
 # either (Operand, Operand) or (Future, Any), causing ambiguity.
-Base.:+(a::Future, b::Operand) = multiclass_new(Add, a, b)
-Base.:+(a::Operand, b::Future) = multiclass_new(Add, a, b)
-Base.:+(a::Future, b::Future) = multiclass_new(Add, a, b)
-Base.:+(a::Future, b::Number) = multiclass_new(Add, a, b)
-Base.:+(a::Number, b::Future) = multiclass_new(Add, a, b)
+Base.:+(a::Future, b::Operand) = Add(a, b)
+Base.:+(a::Operand, b::Future) = Add(a, b)
+Base.:+(a::Future, b::Future) = Add(a, b)
+Base.:+(a::Future, b::Number) = Add(a, b)
+Base.:+(a::Number, b::Future) = Add(a, b)
 
 Base.:-(a::Future, b::Operand) = Subtract(a, b)
 Base.:-(a::Operand, b::Future) = Subtract(a, b)
@@ -667,11 +689,11 @@ Base.:-(a::Future, b::Number) = Subtract(a, b)
 Base.:-(a::Number, b::Future) = Subtract(a, b)
 Base.:-(a::Future) = Negate(a)
 
-Base.:*(a::Future, b::Operand) = multiclass_new(Multiply, a, b)
-Base.:*(a::Operand, b::Future) = multiclass_new(Multiply, a, b)
-Base.:*(a::Future, b::Future) = multiclass_new(Multiply, a, b)
-Base.:*(a::Future, b::Number) = multiclass_new(Multiply, a, b)
-Base.:*(a::Number, b::Future) = multiclass_new(Multiply, a, b)
+Base.:*(a::Future, b::Operand) = Multiply(a, b)
+Base.:*(a::Operand, b::Future) = Multiply(a, b)
+Base.:*(a::Future, b::Future) = Multiply(a, b)
+Base.:*(a::Future, b::Number) = Multiply(a, b)
+Base.:*(a::Number, b::Future) = Multiply(a, b)
 
 Base.:/(a::Future, b::Operand) = Divide(a, b)
 Base.:/(a::Operand, b::Future) = Divide(a, b)

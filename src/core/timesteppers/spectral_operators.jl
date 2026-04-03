@@ -272,8 +272,8 @@ Returns nothing if not configured.
 function _get_spectral_linear_operator(solver::InitialValueSolver)
     # Check solver's timestepper_state first
     if solver.timestepper_state !== nothing &&
-       haskey(solver.timestepper_state.timestepper_data, "spectral_linear_operator")
-        return solver.timestepper_state.timestepper_data["spectral_linear_operator"]
+       haskey(solver.timestepper_state.timestepper_data, :spectral_linear_operator)
+        return solver.timestepper_state.timestepper_data[:spectral_linear_operator]
     end
 
     # Check problem parameters
@@ -297,7 +297,7 @@ set_spectral_linear_operator!(solver, L)
 """
 function set_spectral_linear_operator!(solver::InitialValueSolver, L::SpectralLinearOperator)
     if solver.timestepper_state !== nothing
-        solver.timestepper_state.timestepper_data["spectral_linear_operator"] = L
+        solver.timestepper_state.timestepper_data[:spectral_linear_operator] = L
     else
         solver.problem.parameters["spectral_linear_operator"] = L
     end

@@ -458,11 +458,6 @@ function _apply_spectral_derivative_distributed!(coeff_data::AbstractArray,
 end
 
 """
-    _evaluate_local_fourier_derivative!(result, operand, axis, order, layout)
-
-Evaluate Fourier derivative on a local axis (no MPI needed).
-"""
-"""
     _get_cached_deriv_mult(basis::FourierBasis, N::Int, L::Float64, order::Int)
 
 Get or compute cached derivative multiplier `(ik)^order` for Fourier derivatives.
@@ -481,6 +476,11 @@ function _get_cached_deriv_mult(basis::Union{RealFourier, ComplexFourier}, N::In
     return deriv_mult
 end
 
+"""
+    _evaluate_local_fourier_derivative!(result, operand, axis, order, layout)
+
+Evaluate Fourier derivative on a local axis (no MPI needed).
+"""
 function _evaluate_local_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
     # Get the basis for the specified axis
     basis = operand.bases[axis]

@@ -67,7 +67,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     F_imp_vecs = Vector{Vector{eltype(X_n_vec)}}(undef, stages)
     # Cache LHS factorizations across timesteps. Key is (dt, a_ii) so the cache
     # automatically invalidates when dt changes (adaptive stepping).
-    lhs_cache = get!(state.timestepper_data, "imex_rk_lhs_cache") do
+    lhs_cache = get!(state.timestepper_data, :imex_rk_lhs_cache) do
         Dict{Tuple{Float64, Float64}, Any}()
     end
 

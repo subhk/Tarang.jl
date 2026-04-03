@@ -105,7 +105,11 @@ Note: f is the first argument to support do-block syntax:
         ...
     end
 """
-function _execute_on_cpu(f::Function, data::AbstractArray)
+# Fast path for CPU arrays — avoids is_gpu_array check and enables inlining
+@inline _execute_on_cpu(f, data::Array) = f(data)
+
+# Fallback for other array types (GPU arrays, wrapped arrays)
+function _execute_on_cpu(f, data::AbstractArray)
     if is_gpu_array(data)
         host_data = Array(data)
         host_result = f(host_data)
