@@ -120,6 +120,16 @@ function _record_matvec!(elapsed::Float64; sparse::Bool=false, dense::Bool=false
     end
 end
 
+function _record_matmat!(elapsed::Float64; sparse::Bool=false, dense::Bool=false, blas::Bool=false)
+    lock(GLOBAL_LINALG_STATS.lock) do
+        GLOBAL_LINALG_STATS.matmat_calls += 1
+        GLOBAL_LINALG_STATS.matmat_time += elapsed
+        sparse && (GLOBAL_LINALG_STATS.sparse_ops += 1)
+        dense && (GLOBAL_LINALG_STATS.dense_ops += 1)
+        blas && (GLOBAL_LINALG_STATS.blas_ops += 1)
+    end
+end
+
 const BlasTypes = Union{Float32, Float64, ComplexF32, ComplexF64}
 
 @inline function scale_vector!(y::AbstractVector, α::Real)
@@ -187,11 +197,8 @@ function fast_matvec!(y::AbstractVector, op::SparseMatVec, x::AbstractVector, α
         axpy_vector!(α, op.workspace, y)
     end
     
-    # Update statistics
-    GLOBAL_LINALG_STATS.matvec_calls += 1
-    GLOBAL_LINALG_STATS.matvec_time += time() - start_time
-    GLOBAL_LINALG_STATS.sparse_ops += 1
-    
+    _record_matvec!(time() - start_time; sparse=true)
+
     return y
 end
 
@@ -229,9 +236,7 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             copyto!(y, Array(y_dev))
         end
 
-        GLOBAL_LINALG_STATS.matvec_calls += 1
-        GLOBAL_LINALG_STATS.matvec_time += time() - start_time
-        GLOBAL_LINALG_STATS.dense_ops += 1
+        _record_matvec!(time() - start_time; dense=true)
         return y
     elseif matrix_gpu
         matrix = Array(matrix)
@@ -249,7 +254,7 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             # y = α*A*x + β*y
             gemv!('N', eltype(y)(α), matrix, x, eltype(y)(β), y)
         end
-        GLOBAL_LINALG_STATS.blas_ops += 1
+        _record_matvec!(time() - start_time; blas=true)
     else
         # Generic fallback - works for both CPU and GPU arrays
         A = op.transposed ? transpose(matrix) : matrix
@@ -263,12 +268,8 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             mul!(tmp, A, x)
             @. y = α * tmp + β * y
         end
-        GLOBAL_LINALG_STATS.dense_ops += 1
+        _record_matvec!(time() - start_time; dense=true)
     end
-
-    # Update statistics
-    GLOBAL_LINALG_STATS.matvec_calls += 1
-    GLOBAL_LINALG_STATS.matvec_time += time() - start_time
 
     return y
 end
@@ -332,11 +333,8 @@ function fast_matvec!(y::AbstractVector, op::BlockSparseMatVec, x::AbstractVecto
         end
     end
     
-    # Update statistics
-    GLOBAL_LINALG_STATS.matvec_calls += 1
-    GLOBAL_LINALG_STATS.matvec_time += time() - start_time
-    GLOBAL_LINALG_STATS.sparse_ops += 1
-    
+    _record_matvec!(time() - start_time; sparse=true)
+
     return y
 end
 
@@ -379,11 +377,8 @@ function fast_matmat!(C::AbstractMatrix, op::SparseDenseMatMat, A_is_sparse::Boo
         end
     end
     
-    # Update statistics
-    GLOBAL_LINALG_STATS.matmat_calls += 1
-    GLOBAL_LINALG_STATS.matmat_time += time() - start_time
-    GLOBAL_LINALG_STATS.sparse_ops += 1
-    
+    _record_matmat!(time() - start_time; sparse=true)
+
     return C
 end
 
@@ -414,9 +409,7 @@ function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix
             copyto!(C, Array(C_dev))
         end
 
-        GLOBAL_LINALG_STATS.matmat_calls += 1
-        GLOBAL_LINALG_STATS.matmat_time += time() - start_time
-        GLOBAL_LINALG_STATS.dense_ops += 1
+        _record_matmat!(time() - start_time; dense=true)
         return C
     end
 
@@ -425,11 +418,12 @@ function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix
     if use_blas && size(A, 1) * size(B, 2) * size(A, 2) > 1000  # Use BLAS for large matrices
         # Use BLAS GEMM: C = α*A*B + β*C
         gemm!('N', 'N', eltype(C)(α), A, B, eltype(C)(β), C)
-        GLOBAL_LINALG_STATS.blas_ops += 1
+        _record_matmat!(time() - start_time; blas=true)
 
     elseif !is_gpu && op.use_threads && use_blas && size(A, 1) > op.block_size
         # Use threaded block multiplication for medium matrices (CPU only)
         threaded_block_matmat!(C, A, B, α, β, op.block_size)
+        _record_matmat!(time() - start_time; dense=true)
 
     else
         # Generic fallback - works for both CPU and GPU arrays
@@ -443,14 +437,7 @@ function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix
             mul!(tmp, A, B)
             @. C = α * tmp + β * C
         end
-    end
-
-    # Update statistics (lock protects against concurrent updates from multiple threads)
-    elapsed = time() - start_time
-    lock(GLOBAL_LINALG_STATS.lock) do
-        GLOBAL_LINALG_STATS.matmat_calls += 1
-        GLOBAL_LINALG_STATS.matmat_time += elapsed
-        GLOBAL_LINALG_STATS.dense_ops += 1
+        _record_matmat!(time() - start_time; dense=true)
     end
 
     return C
@@ -522,10 +509,7 @@ function fast_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector
         error("General Kronecker products with >2 factors not yet implemented")
     end
 
-    # Update statistics
-    GLOBAL_LINALG_STATS.matmat_calls += 1
-    GLOBAL_LINALG_STATS.matmat_time += time() - start_time
-    GLOBAL_LINALG_STATS.dense_ops += 1
+    _record_matmat!(time() - start_time; dense=true)
 
     return C
 end
