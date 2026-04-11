@@ -658,19 +658,58 @@ end
 """
     subproblem_matrix(op::Lift, sp; kwargs...)
 
-Lift matrix for tau method boundary conditions.
-Delegates to existing build_lift_matrix, converts to ComplexF64.
+Per-subproblem lift matrix for tau method boundary conditions.
+
+For a tau variable with `n_tau` DOFs per subproblem, the lift places each
+tau DOF at a specific Chebyshev mode. The result is a `(n_comp * Nz) × n_tau`
+matrix (block-diagonal of Nz×1 lift columns for each component).
+
+The lift mode index follows the convention:
+- n >= 0: sets mode n (0-indexed → Julia 1-indexed)
+- n < 0: wraps around (n = -1 → last mode, n = -2 → second-to-last)
 """
 function subproblem_matrix(op::Lift, sp; kwargs...)
+    cheb_basis = _subproblem_cheb_basis(sp)
+    if cheb_basis === nothing
+        return nothing
+    end
+    Nz = cheb_basis.meta.size
+
+    # Resolve lift mode index
+    lift_mode = op.n
+    if lift_mode < 0
+        lift_mode = Nz + lift_mode  # -1 → Nz-1 (0-indexed)
+    end
+    lift_mode += 1  # 0-indexed → 1-indexed
+
+    if lift_mode < 1 || lift_mode > Nz
+        @warn "Lift mode $(op.n) resolved to $lift_mode, out of range [1, $Nz]" maxlog=1
+        return nothing
+    end
+
+    # Build Nz×1 lift column: e_{lift_mode}
+    e_lift = spzeros(ComplexF64, Nz, 1)
+    e_lift[lift_mode, 1] = ComplexF64(1)
+
+    # Determine number of components in the tau operand
     field = _resolve_operand_field(op.operand)
     if field === nothing
-        return nothing
+        return e_lift
     end
-    lift_mat = build_lift_matrix(field, op.basis, op.n; kwargs...)
-    if lift_mat === nothing
-        return nothing
+
+    n_comp = 1
+    if isa(field, VectorField)
+        n_comp = length(field.components)
     end
-    return sparse(ComplexF64.(lift_mat))
+
+    if n_comp == 1
+        return e_lift  # (Nz × 1)
+    else
+        # Block-diagonal: one lift column per component
+        # Result: (n_comp * Nz) × n_comp
+        blocks = [e_lift for _ in 1:n_comp]
+        return blockdiag(blocks...)
+    end
 end
 
 # ============================================================================
