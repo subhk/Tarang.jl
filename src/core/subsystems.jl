@@ -265,9 +265,31 @@ function build_subsystems(solver)
         return (Subsystem(solver),)
     end
 
-    # Generate all mode group combinations for separable dimensions
-    # Each combination forms a separate subsystem
+    # Generate mode group combinations for separable dimensions.
+    # For MPI: only build groups for locally-owned modes.
     mode_groups = generate_mode_groups(separable_dims, separable_sizes, dist.dim)
+
+    # Filter to local modes when using MPI
+    if dist.size > 1
+        local_mode_groups = Tuple[]
+        for group in mode_groups
+            is_local = true
+            for (i, dim) in enumerate(separable_dims)
+                if dim <= dist.dim && group[dim] !== nothing
+                    local_range = local_indices(dist, dim, separable_sizes[i])
+                    # group[dim] is 0-based; local_range is 1-based
+                    if (group[dim] + 1) ∉ local_range
+                        is_local = false
+                        break
+                    end
+                end
+            end
+            if is_local
+                push!(local_mode_groups, group)
+            end
+        end
+        mode_groups = local_mode_groups
+    end
 
     for group in mode_groups
         subsystem = Subsystem(solver, group)
@@ -802,8 +824,8 @@ subproblem_field_size(sp::Subproblem, field::TensorField) =
 # Per-subproblem gather/scatter
 # ---------------------------------------------------------------------------
 
-"""Return 1-based Fourier mode index for this subproblem."""
-function _kx_index_for_subproblem(sp::Subproblem)
+"""Return the global 1-based Fourier mode index for this subproblem."""
+function _kx_index_global(sp::Subproblem)
     for g in sp.group
         if g isa Integer
             return g + 1  # 0-based → 1-based
@@ -812,83 +834,130 @@ function _kx_index_for_subproblem(sp::Subproblem)
     return 1
 end
 
+"""
+Convert a global 1-based Fourier mode index to a local index within the
+coefficient data array. For serial runs, local == global. For MPI with
+PencilArrays, the local buffer only holds this rank's modes.
+"""
+function _global_to_local_kx(kx_global::Int, field::ScalarField, sp::Subproblem)
+    dist = sp.dist
+    if dist === nothing || dist.size <= 1
+        return kx_global
+    end
+    # Find the separable (Fourier) axis and its global size
+    for (axis, g) in enumerate(sp.group)
+        if g isa Integer && axis <= length(field.bases) && field.bases[axis] !== nothing
+            basis = field.bases[axis]
+            if isa(basis, FourierBasis)
+                global_size = isa(basis, RealFourier) ? div(basis.meta.size, 2) + 1 : basis.meta.size
+                local_range = local_indices(dist, axis, global_size)
+                return kx_global - first(local_range) + 1
+            end
+        end
+    end
+    return kx_global
+end
+
+"""
+Get the local coefficient data array. For PencilArrays (MPI), returns the
+underlying local buffer via `parent()`. For regular arrays, returns as-is.
+"""
+_local_coeff_data(cd::AbstractArray) = get_local_data(cd)
+_local_coeff_data(::Nothing) = nothing
+
 """Extract per-mode coefficients from all fields into a flat vector (no permutation)."""
 function _gather_subproblem_raw(sp::Subproblem, fields::Vector)
-    kx_idx = _kx_index_for_subproblem(sp)
+    kx_global = _kx_index_global(sp)
     buffer = ComplexF64[]
     for field in fields
-        _gather_field_raw!(buffer, field, kx_idx, sp)
+        _gather_field_raw!(buffer, field, kx_global, sp)
     end
     return buffer
 end
 
-function _gather_field_raw!(buffer, field::ScalarField, kx_idx::Int, sp::Subproblem)
+function _gather_field_raw!(buffer, field::ScalarField, kx_global::Int, sp::Subproblem)
     ensure_layout!(field, :c)
-    cd = get_coeff_data(field)
-    if cd === nothing
+    cd_raw = get_coeff_data(field)
+    if cd_raw === nothing
         push!(buffer, ComplexF64(0))
         return
     end
+    cd = _local_coeff_data(cd_raw)
+
     if isempty(field.bases) || all(b -> b === nothing, field.bases)
         # 0D tau: single scalar
         push!(buffer, ComplexF64(cd[1]))
     elseif ndims(cd) == 1
-        # 1D field (tau with Fourier basis): single element at kx_idx
-        if kx_idx <= length(cd)
-            push!(buffer, ComplexF64(cd[kx_idx]))
+        # 1D field (tau with Fourier basis): convert to local index
+        kx_local = _global_to_local_kx(kx_global, field, sp)
+        if kx_local >= 1 && kx_local <= length(cd)
+            push!(buffer, ComplexF64(cd[kx_local]))
         else
             push!(buffer, ComplexF64(0))
         end
     else
-        # 2D field: extract row kx_idx across all Chebyshev modes
+        # 2D field: extract local row across all Chebyshev modes
+        kx_local = _global_to_local_kx(kx_global, field, sp)
         Nz = size(cd, 2)
-        for iz in 1:Nz
-            push!(buffer, ComplexF64(cd[kx_idx, iz]))
+        if kx_local >= 1 && kx_local <= size(cd, 1)
+            for iz in 1:Nz
+                push!(buffer, ComplexF64(cd[kx_local, iz]))
+            end
+        else
+            for iz in 1:Nz
+                push!(buffer, ComplexF64(0))
+            end
         end
     end
 end
 
-function _gather_field_raw!(buffer, field::VectorField, kx_idx::Int, sp::Subproblem)
+function _gather_field_raw!(buffer, field::VectorField, kx_global::Int, sp::Subproblem)
     for comp in field.components
-        _gather_field_raw!(buffer, comp, kx_idx, sp)
+        _gather_field_raw!(buffer, comp, kx_global, sp)
     end
 end
 
 """Write per-mode coefficients back to fields from a flat vector (no permutation)."""
 function _scatter_subproblem_raw(sp::Subproblem, data::AbstractVector, fields::Vector)
-    kx_idx = _kx_index_for_subproblem(sp)
+    kx_global = _kx_index_global(sp)
     offset = 0
     for field in fields
-        offset = _scatter_field_raw!(field, data, offset, kx_idx, sp)
+        offset = _scatter_field_raw!(field, data, offset, kx_global, sp)
     end
 end
 
-function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::Int, kx_idx::Int, sp::Subproblem)
+function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::Int, kx_global::Int, sp::Subproblem)
     ensure_layout!(field, :c)
-    cd = get_coeff_data(field)
-    if cd === nothing
+    cd_raw = get_coeff_data(field)
+    if cd_raw === nothing
         return offset + subproblem_field_size(sp, field)
     end
+    cd = _local_coeff_data(cd_raw)
+
     if isempty(field.bases) || all(b -> b === nothing, field.bases)
         cd[1] = eltype(cd) <: Real ? real(data[offset+1]) : data[offset+1]
         return offset + 1
     elseif ndims(cd) == 1
-        if kx_idx <= length(cd)
-            cd[kx_idx] = eltype(cd) <: Real ? real(data[offset+1]) : data[offset+1]
+        kx_local = _global_to_local_kx(kx_global, field, sp)
+        if kx_local >= 1 && kx_local <= length(cd)
+            cd[kx_local] = eltype(cd) <: Real ? real(data[offset+1]) : data[offset+1]
         end
         return offset + 1
     else
+        kx_local = _global_to_local_kx(kx_global, field, sp)
         Nz = size(cd, 2)
-        for iz in 1:Nz
-            cd[kx_idx, iz] = eltype(cd) <: Real ? real(data[offset+iz]) : data[offset+iz]
+        if kx_local >= 1 && kx_local <= size(cd, 1)
+            for iz in 1:Nz
+                cd[kx_local, iz] = eltype(cd) <: Real ? real(data[offset+iz]) : data[offset+iz]
+            end
         end
         return offset + Nz
     end
 end
 
-function _scatter_field_raw!(field::VectorField, data::AbstractVector, offset::Int, kx_idx::Int, sp::Subproblem)
+function _scatter_field_raw!(field::VectorField, data::AbstractVector, offset::Int, kx_global::Int, sp::Subproblem)
     for comp in field.components
-        offset = _scatter_field_raw!(comp, data, offset, kx_idx, sp)
+        offset = _scatter_field_raw!(comp, data, offset, kx_global, sp)
     end
     return offset
 end
@@ -1290,6 +1359,7 @@ Build expression matrices for each variable.
 # in matrices.jl, causing Julia MethodError for Operator+Subproblem calls.
 expression_matrices(::Nothing, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 expression_matrices(::Number, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
+expression_matrices(::Future, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 function expression_matrices(field::ScalarField, sp::Subproblem, vars; kwargs...)
     if _field_in_vars(field, vars)
         n = subproblem_field_size(sp, field)

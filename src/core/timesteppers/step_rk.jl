@@ -29,28 +29,34 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
-    # Fall back to explicit treatment when matrix-vector operations are incompatible:
-    # - GPU: SparseMatrixCSC is CPU-only, cannot multiply with CuArray
-    # - MPI+PencilArrays: gather/scatter assumes local data access
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if is_gpu(dist.architecture)
-            @debug "IMEX RK: GPU detected, falling back to explicit treatment (CPU sparse matrices incompatible with CuArray)"
-            _step_rk_imex_explicit_fallback!(state, solver)
-            return
-        end
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            @debug "IMEX RK: MPI mode detected, falling back to explicit treatment"
-            _step_rk_imex_explicit_fallback!(state, solver)
+    # Subproblem-based IMEX: use sparse subproblems if available.
+    # Works for both serial and MPI (each rank solves its local subproblems).
+    # GPU still falls back to explicit treatment (SparseMatrixCSC is CPU-only).
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            # GPU guard: sparse matrices are CPU-only
+            if !isempty(current_state) && is_gpu(current_state[1].dist.architecture)
+                @debug "IMEX RK: GPU detected, falling back to explicit treatment"
+                _step_rk_imex_explicit_fallback!(state, solver)
+                return
+            end
+            step_subproblem_rk!(state, solver, sps)
             return
         end
     end
 
-    # Subproblem-based IMEX: use sparse subproblems if available (serial CPU only)
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            step_subproblem_rk!(state, solver, sps)
+    # Fall back to explicit treatment for GPU or MPI without subproblems
+    if !isempty(current_state)
+        dist = current_state[1].dist
+        if is_gpu(dist.architecture)
+            @debug "IMEX RK: GPU detected, falling back to explicit treatment"
+            _step_rk_imex_explicit_fallback!(state, solver)
+            return
+        end
+        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
+            @debug "IMEX RK: MPI without subproblems, falling back to explicit treatment"
+            _step_rk_imex_explicit_fallback!(state, solver)
             return
         end
     end
