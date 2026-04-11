@@ -1410,32 +1410,46 @@ function build_matrices!(sp::Subproblem, names, solver)
     end
 
     # ── Tau regularization ──────────────────────────────────────────────
-    # For per-subproblem matrices, equations like integ(p)=0 may produce
-    # zero rows for non-DC modes. The corresponding tau variable (tau_p)
-    # is then a free parameter, making the system underdetermined.
-    # Fix: detect zero equation rows in L and replace with identity
-    # constraints on the corresponding variable (tau_i = 0).
+    # For per-subproblem matrices, some equations (like integ(p)=0 for
+    # non-DC modes) produce zero rows. The corresponding free variable
+    # makes the system rank-deficient.
+    #
+    # Fix: for each zero row, find the LEAST CONSTRAINED column (smallest
+    # combined L+M column norm) and pin it. This correctly identifies
+    # tau_p (1 entry, from continuity) as the free variable rather than
+    # blindly pinning the diagonal.
     if haskey(matrices, "L") && I == J
         L_raw = matrices["L"]
-        # Find zero equation rows
-        i0 = 0
-        for (eq_idx, eqn_size) in enumerate(eqn_sizes)
-            for local_row in 1:eqn_size
-                row_idx = i0 + local_row
-                if row_idx <= I
-                    # Check if this row is all zeros in L (and M if present)
-                    row_nnz = count(!iszero, L_raw[row_idx, :])
-                    m_nnz = haskey(matrices, "M") ? count(!iszero, matrices["M"][row_idx, :]) : 0
-                    if row_nnz == 0 && m_nnz == 0
-                        # Zero row: pin the corresponding variable DOF
-                        # The diagonal entry (row_idx, row_idx) pins the variable
-                        L_raw[row_idx, row_idx] = ComplexF64(1)
-                    end
+        M_raw = get(matrices, "M", nothing)
+
+        # Find zero rows (no entries in either L or M)
+        zero_rows = Int[]
+        for row in 1:I
+            L_nnz = count(!iszero, L_raw[row, :])
+            M_nnz = M_raw !== nothing ? count(!iszero, M_raw[row, :]) : 0
+            if L_nnz == 0 && M_nnz == 0
+                push!(zero_rows, row)
+            end
+        end
+
+        if !isempty(zero_rows)
+            # Compute column norms (combined L + M) to find least-constrained columns
+            col_norms = zeros(Float64, J)
+            for col in 1:J
+                col_norms[col] = sum(abs.(L_raw[:, col]))
+                if M_raw !== nothing
+                    col_norms[col] += sum(abs.(M_raw[:, col]))
                 end
             end
-            i0 += eqn_size
+
+            for row in zero_rows
+                # Find the column with minimum norm (least constrained variable)
+                min_col = argmin(col_norms)
+                L_raw[row, min_col] = ComplexF64(1)
+                col_norms[min_col] = Inf  # don't reuse this column
+            end
+            matrices["L"] = L_raw
         end
-        matrices["L"] = L_raw
     end
 
     # For per-subproblem matrices, use identity permutations.
