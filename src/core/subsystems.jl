@@ -1504,7 +1504,8 @@ Build expression matrices for each variable.
 # in matrices.jl, causing Julia MethodError for Operator+Subproblem calls.
 expression_matrices(::Nothing, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 expression_matrices(::Number, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
-expression_matrices(::Future, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
+expression_matrices(expr::Future, sp::Subproblem, vars; kwargs...) =
+    _expression_matrices_future(expr, sp, vars; kwargs...)
 function expression_matrices(field::ScalarField, sp::Subproblem, vars; kwargs...)
     if _field_in_vars(field, vars)
         n = subproblem_field_size(sp, field)
