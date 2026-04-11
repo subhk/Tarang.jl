@@ -484,6 +484,80 @@ end
 field_size(subsystem::Subsystem, field::VectorField) = sum(field_size(subsystem, comp) for comp in field.components)
 field_size(subsystem::Subsystem, field::TensorField) = sum(field_size(subsystem, comp) for comp in vec(field.components))
 
+# ---------------------------------------------------------------------------
+# Per-subproblem field sizing
+# ---------------------------------------------------------------------------
+
+"""
+    _basis_coeff_size(basis::Basis) -> Int
+
+Return the number of coefficient-space modes for a single basis.
+RealFourier uses N/2+1 (rfft convention); all others use basis.meta.size.
+"""
+function _basis_coeff_size(basis::Basis)
+    if isa(basis, RealFourier)
+        return div(basis.meta.size, 2) + 1
+    else
+        return basis.meta.size
+    end
+end
+
+"""
+    subproblem_field_size(sp::Subproblem, field::ScalarField) -> Int
+
+Return the number of DOFs that `field` contributes to this subproblem's
+local matrix system.
+
+For each basis dimension of the field:
+- If the corresponding group entry is an `Int` (separable / single Fourier
+  mode), that dimension contributes **1** DOF.
+- If the corresponding group entry is `nothing` (coupled), that dimension
+  contributes the full basis coefficient size.
+
+Fields with no bases (0-D taus) return 1.
+"""
+function subproblem_field_size(sp::Subproblem, field::ScalarField)
+    bases = field.bases
+    # 0-D tau fields (no bases) contribute 1 DOF
+    if isempty(bases)
+        return 1
+    end
+
+    group = sp.group
+    dofs = 1
+    for (i, basis) in enumerate(bases)
+        if basis === nothing
+            # No basis in this dimension — contributes nothing extra
+            continue
+        end
+        if i <= length(group) && group[i] isa Int
+            # Separable dimension: single Fourier mode => 1 DOF
+            dofs *= 1
+        else
+            # Coupled dimension: full basis coefficient size
+            dofs *= _basis_coeff_size(basis)
+        end
+    end
+    return dofs
+end
+
+"""
+    subproblem_field_size(sp::Subproblem, field::VectorField) -> Int
+
+Sum of per-component subproblem sizes (n_components * scalar size when all
+components share the same bases).
+"""
+subproblem_field_size(sp::Subproblem, field::VectorField) =
+    sum(subproblem_field_size(sp, comp) for comp in field.components)
+
+"""
+    subproblem_field_size(sp::Subproblem, field::TensorField) -> Int
+
+Sum of per-component subproblem sizes over all tensor entries.
+"""
+subproblem_field_size(sp::Subproblem, field::TensorField) =
+    sum(subproblem_field_size(sp, comp) for comp in vec(field.components))
+
 function field_domain(field::ScalarField)
     if hasfield(typeof(field), :domain) && field.domain !== nothing
         return field.domain
@@ -1671,7 +1745,7 @@ export compute_variable_ranges, compute_equation_ranges, compute_matrix_group
 
 # Export subsystem methods
 export coeff_slices, coeff_shape, coeff_size
-export field_slices, field_shape, field_size, field_domain
+export field_slices, field_shape, field_size, field_domain, subproblem_field_size
 export gather, scatter
 
 # Export subproblem methods
