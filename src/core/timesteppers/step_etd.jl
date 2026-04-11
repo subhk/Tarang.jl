@@ -240,8 +240,12 @@ end
     with exact linear propagation.
 
     For variable timesteps (w = hₙ/hₙ₋₁):
-        b₁(z) = φ₁(z) + (1/w)φ₂(z)
-        b₀(z) = -(1/w)φ₂(z)
+        b₁(z) = φ₁(z) + w·φ₂(z)
+        b₀(z) = -w·φ₂(z)
+
+    Derivation: the interpolation slope is (Nₙ - Nₙ₋₁)/hₙ₋₁, so
+    ∫₀^{hₙ} τ·exp((hₙ-τ)L) dτ · (Nₙ-Nₙ₋₁)/hₙ₋₁ = hₙ²·φ₂·(Nₙ-Nₙ₋₁)/hₙ₋₁
+    = hₙ·(hₙ/hₙ₋₁)·φ₂·(Nₙ-Nₙ₋₁) = hₙ·w·φ₂·(Nₙ-Nₙ₋₁)
 
     References:
     - Hochbruck & Ostermann (2010), "Exponential integrators", Acta Numerica 19, 209-286
@@ -324,23 +328,23 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         Nₙ₋₁ = F_history[2]    # N(uₙ₋₁)
 
         # Compute ETD multistep coefficients (variable timestep version)
-        # b₁(z) = φ₁(z) + (1/w)φ₂(z)  -- coefficient for Nₙ
-        # b₀(z) = -(1/w)φ₂(z)         -- coefficient for Nₙ₋₁
-        inv_w = 1.0 / w
+        # The interpolation slope is (Nₙ - Nₙ₋₁)/hₙ₋₁, giving:
+        # b₁(z) = φ₁(z) + w·φ₂(z)  -- coefficient for Nₙ
+        # b₀(z) = -w·φ₂(z)         -- coefficient for Nₙ₋₁
 
         # Linear propagation: exp(hL)uₙ
         X_propagated = exp_hL * X_current
 
         # Nonlinear contribution using ETD coefficients:
-        # h[b₁(hL)Nₙ + b₀(hL)Nₙ₋₁] = h[(φ₁ + φ₂/w)Nₙ - (φ₂/w)Nₙ₋₁]
-        #                          = h[φ₁Nₙ + (φ₂/w)(Nₙ - Nₙ₋₁)]
+        # h[b₁(hL)Nₙ + b₀(hL)Nₙ₋₁] = h[(φ₁ + w·φ₂)Nₙ - w·φ₂·Nₙ₋₁]
+        #                             = h[φ₁·Nₙ + w·φ₂·(Nₙ - Nₙ₋₁)]
 
         # Compute the nonlinear contributions
         φ₁_Nₙ = φ₁_hL * Nₙ
         φ₂_diff = φ₂_hL * (Nₙ - Nₙ₋₁)
 
-        # Full update: u_{n+1} = exp(hL)uₙ + h[φ₁Nₙ + (φ₂/w)(Nₙ - Nₙ₋₁)]
-        X_new = X_propagated + dt_current * (φ₁_Nₙ + inv_w * φ₂_diff)
+        # Full update: u_{n+1} = exp(hL)uₙ + h[φ₁·Nₙ + w·φ₂·(Nₙ - Nₙ₋₁)]
+        X_new = X_propagated + dt_current * (φ₁_Nₙ + w * φ₂_diff)
 
         # Update state
         new_state = vector_to_fields(X_new, current_state)
