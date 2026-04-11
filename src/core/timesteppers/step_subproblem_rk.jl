@@ -1,6 +1,6 @@
 # ── Per-subproblem IMEX Runge-Kutta step ──────────────────────────────────────
 #
-# Dedalus-style IMEX RK stepper that operates on per-Fourier-mode subproblems.
+# IMEX RK stepper that operates on per-Fourier-mode subproblems.
 #
 # For each Fourier mode (subproblem), we solve a sparse system of size
 # ~(n_vars * Nz) at each IMEX stage.  LHS factorizations are cached per
@@ -8,23 +8,27 @@
 #
 # Sign convention (same as step_rk.jl):
 #   LHS form:   M * dX/dt + L * X = F
-#   Stage solve: (M + k*H[i,i]*L) * X(n,i) = M*X(n,0) + k*Sigma(A*F - H*L*X)
+#   Stage solve: (M + dt*a_ii*L) * X_i = M*X_n + dt*Σ_{j<i}(A^E_{ij}*F_j - A^I_{ij}*L*X_j)
+#
+# F_j and L*X_j are evaluated AFTER solving for X_j (at the stage solution),
+# matching step_rk_imex! and the standard IMEX RK formulation.
 # ──────────────────────────────────────────────────────────────────────────────
 
 """
     step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
                          subproblems::Tuple)
 
-Dedalus-style IMEX RK step using per-Fourier-mode subproblems.
+IMEX RK step using per-Fourier-mode subproblems.
 
 For each subproblem (Fourier mode), assembles and solves:
 
-    (M_min + dt*H[i,i]*L_min) * X(n,i) = M_min*X(n,0)
-        + dt * sum_{j<i}( A[i,j]*F[j] - H[i,j]*L_min*X(n,j) )
+    (M_min + dt*A^I_{ii}*L_min) * X_i = M_min*X_n
+        + dt * Σ_{j<i}( A^E_{ij}*F_j - A^I_{ij}*L_min*X_j )
 
-where `A` is the explicit Butcher tableau, `H` is the implicit Butcher tableau,
+where `A^E` is the explicit Butcher tableau, `A^I` is the implicit Butcher tableau,
 `M_min` and `L_min` are the preconditioned sparse matrices from `build_matrices!`,
-and `F[j]` is the explicit RHS gathered through the subproblem's output permutation.
+`F_j = F(X_j, t+c_j*dt)` is the explicit RHS evaluated at stage solution `X_j`,
+and `L*X_j` is the implicit contribution at stage solution `X_j`.
 
 LHS factorizations are cached in `sp.LHS_solvers[stage_index]` and invalidated
 when `dt` changes.
@@ -37,9 +41,9 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     problem = solver.problem
     stages = ts.stages
 
-    # Butcher tableaux (1-indexed; row s in Julia = stage s in pseudocode)
-    A_exp = ts.A_explicit   # explicit tableau  ("A" in Dedalus)
-    A_imp = ts.A_implicit   # implicit tableau  ("H" in Dedalus)
+    # Butcher tableaux (1-indexed)
+    A_exp = ts.A_explicit   # explicit tableau
+    A_imp = ts.A_implicit   # implicit tableau
     c     = ts.c_explicit   # stage times
 
     # Collect the flat list of ScalarFields that represent the state
@@ -63,58 +67,35 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         state.timestepper_data[:_sp_rk_dt] = dt
     end
 
-    # ── Pre-stage: compute M*X(n,0) and L*X(n,0) per subproblem ──────────
+    # ── Pre-stage: compute M*X_n per subproblem ──────────────────────────
     n_sp = length(subproblems)
 
-    # Storage: MX0[sp_idx] and LX[stage_idx][sp_idx]
     MX0 = Vector{Vector{ComplexF64}}(undef, n_sp)
-    # LX is indexed 0..stages-1 in Dedalus; here we use 1..stages (Julia 1-based)
-    # LX[j] holds L_min * X(n,j-1)  (j=1 is the initial state)
-    LX  = [Vector{Vector{ComplexF64}}(undef, n_sp) for _ in 1:stages]
-    # F[j] holds the explicit RHS gathered at stage j (j=1..stages)
+    # F[j][sp_idx] = F(X_j) gathered per subproblem (evaluated AFTER stage j solve)
     F   = [Vector{Vector{ComplexF64}}(undef, n_sp) for _ in 1:stages]
+    # LX[j][sp_idx] = L*X_j per subproblem (evaluated AFTER stage j solve)
+    LX  = [Vector{Vector{ComplexF64}}(undef, n_sp) for _ in 1:stages]
 
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
-            # Skip subproblems with no mass matrix
             MX0[sp_idx] = ComplexF64[]
-            LX[1][sp_idx] = ComplexF64[]
             continue
         end
         x0_pre = gather_inputs(sp, state_fields)
         MX0[sp_idx] = sp.M_min * x0_pre
-        LX[1][sp_idx] = sp.L_min !== nothing ? sp.L_min * x0_pre : zeros(ComplexF64, length(x0_pre))
     end
 
     # ── Stage loop ────────────────────────────────────────────────────────
+    # Each stage: build RHS → solve → scatter → evaluate F and L*X at solution
     for i in 1:stages
         state.current_substep = i
-
-        # Recompute L*X(n,i-1) if i > 1 (state_fields were updated by scatter)
-        if i > 1
-            for (sp_idx, sp) in enumerate(subproblems)
-                sp.M_min === nothing && continue
-                x_pre = gather_inputs(sp, state_fields)
-                LX[i][sp_idx] = sp.L_min !== nothing ? sp.L_min * x_pre : zeros(ComplexF64, length(x_pre))
-            end
-        end
-
-        # Evaluate explicit RHS F(n,i-1) at time t + dt*c[i]
-        # (state_fields currently hold X(n,i-1))
-        F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
-
-        # Gather F into per-subproblem vectors
-        for (sp_idx, sp) in enumerate(subproblems)
-            sp.M_min === nothing && continue
-            F[i][sp_idx] = gather_outputs(sp, F_fields)
-        end
 
         # Build RHS and solve per subproblem
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
 
-            # RHS = MX0 + k * sum_{j=1}^{i} ( A_exp[i,j]*F[j] - A_imp[i,j]*LX[j] )
-            # Note: j runs from 1..i-1 for off-diagonal, A_imp[i,i] goes into LHS
+            # RHS = M*X_n + dt * Σ_{j<i}( A^E_{ij}*F_j - A^I_{ij}*L*X_j )
+            # F[j] and LX[j] contain values at stage j SOLUTION (set after stage j)
             rhs = copy(MX0[sp_idx])
 
             for j in 1:(i - 1)
@@ -128,17 +109,11 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
                 end
             end
 
-            # Also add explicit contribution from current stage if A_exp has it
-            # (for ESDIRK the first column of A_exp row i may have a_exp[i,i]=0,
-            #  but we still need to add F[i] if A_exp[i,i] != 0 -- typically it is 0
-            #  for standard IMEX RK since explicit is strictly lower triangular)
-            # The loop above already handles j < i; A_exp[i,i] = 0 for standard methods.
-
-            # Solve: (M_min + dt*H[i,i]*L_min) * x_sol = rhs
+            # Solve: (M_min + dt*a_ii*L_min) * x_sol = rhs
             a_ii = A_imp[i, i]
 
             if abs(a_ii) < 1e-14
-                # No implicit diagonal -- just invert M
+                # No implicit diagonal — just invert M
                 if sp.M_min !== nothing
                     M_lu = _get_or_compute_mass_lu!(sp)
                     if M_lu !== nothing
@@ -150,7 +125,6 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
                     x_sol = rhs
                 end
             else
-                # stage_idx for LHS_solvers: use i (1-based stage index)
                 lhs_solver = _get_or_build_lhs!(sp, i, dt, a_ii)
                 if lhs_solver !== nothing
                     x_sol = lhs_solver \ rhs
@@ -163,52 +137,53 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             # Scatter solution back to state fields
             scatter_inputs(sp, x_sol, state_fields)
         end
-    end
 
-    # ── Final update ──────────────────────────────────────────────────────
-    # Stiffly accurate check: if the last row of A_imp equals b_imp,
-    # the last stage IS the new state (no separate weighted update needed).
-    b_imp = ts.b_implicit
-    b_exp = ts.b_explicit
-    is_stiffly_accurate = b_imp ≈ A_imp[end, :]
-
-    if !is_stiffly_accurate
-        # Full weighted update: M*X_new = M*X_n + dt*sum(b_exp*F - b_imp*L*X)
-        # Recompute L*X for the last stage
+        # Evaluate F[i] and LX[i] AFTER the solve, at the stage i solution.
+        # This matches step_rk_imex! where F_exp_vecs[s] and F_imp_vecs[s]
+        # are computed after the stage solve (step_rk.jl lines 176-179).
+        F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
-
-            rhs = copy(MX0[sp_idx])
-            for s in 1:stages
-                be = dt * b_exp[s]
-                bi = dt * b_imp[s]
-                if abs(be) > 1e-14
-                    rhs .+= be .* F[s][sp_idx]
-                end
-                if abs(bi) > 1e-14
-                    # Need LX for stage s; for s < stages it is already computed.
-                    # For the last stage we need to gather again.
-                    if s == stages
-                        x_pre = gather_inputs(sp, state_fields)
-                        lx_s = sp.L_min !== nothing ? sp.L_min * x_pre : zeros(ComplexF64, length(x_pre))
-                    else
-                        lx_s = LX[s][sp_idx]
-                    end
-                    rhs .-= bi .* lx_s
-                end
-            end
-
-            # Solve M * X_new = rhs
-            M_lu = _get_or_compute_mass_lu!(sp)
-            if M_lu !== nothing
-                x_sol = M_lu \ rhs
-            else
-                x_sol = rhs
-            end
-            scatter_inputs(sp, x_sol, state_fields)
+            F[i][sp_idx] = gather_outputs(sp, F_fields)
+            x_pre = gather_inputs(sp, state_fields)
+            LX[i][sp_idx] = sp.L_min !== nothing ? sp.L_min * x_pre : zeros(ComplexF64, length(x_pre))
         end
     end
-    # If stiffly accurate, state_fields already hold the last stage solution.
+
+    # ── Final update: M*X_{n+1} = M*X_n + dt*Σ(b^E*F - b^I*L*X) ────────
+    # Always perform the full weighted update. The "stiffly accurate" shortcut
+    # (skipping this when b_imp = A_imp[end,:]) is only valid when BOTH tableaux
+    # are SA (b_exp = A_exp[end,:] AND b_imp = A_imp[end,:]). Neither RK222 nor
+    # RK443 is explicitly SA, so the shortcut cannot be used.
+    # This matches step_rk_imex! which always does the weighted update (lines 191-203).
+    b_imp = ts.b_implicit
+    b_exp = ts.b_explicit
+    for (sp_idx, sp) in enumerate(subproblems)
+        sp.M_min === nothing && continue
+
+        rhs = copy(MX0[sp_idx])
+        for s in 1:stages
+            be = dt * b_exp[s]
+            bi = dt * b_imp[s]
+            if abs(be) > 1e-14
+                rhs .+= be .* F[s][sp_idx]
+            end
+            if abs(bi) > 1e-14
+                rhs .-= bi .* LX[s][sp_idx]
+            end
+        end
+
+        # Solve M * X_new = rhs
+        M_lu = _get_or_compute_mass_lu!(sp)
+        if M_lu !== nothing
+            x_sol = M_lu \ rhs
+        else
+            # Singular M (DAE): last stage already satisfies constraints
+            # via the implicit SA property. Keep the last stage value.
+            continue
+        end
+        scatter_inputs(sp, x_sol, state_fields)
+    end
 
     # ── Push new state to history ─────────────────────────────────────────
     new_state = collect_state_fields(problem.variables)
