@@ -821,6 +821,111 @@ subproblem_field_size(sp::Subproblem, field::TensorField) =
     sum(subproblem_field_size(sp, comp) for comp in vec(field.components))
 
 # ---------------------------------------------------------------------------
+# Per-subproblem equation sizing (following Dedalus subsystems.py:504)
+# ---------------------------------------------------------------------------
+
+"""Get Chebyshev basis from subproblem problem variables."""
+function _subproblem_cheb_basis_from_sp(sp::Subproblem)
+    for var in sp.problem.variables
+        for comp in scalar_components(var)
+            for basis in comp.bases
+                if basis !== nothing && isa(basis, JacobiBasis)
+                    return basis
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+"""Get coordinate system from an expression tree."""
+function _get_expr_coordsys(expr)
+    hasfield(typeof(expr), :coordsys) && return expr.coordsys
+    if hasfield(typeof(expr), :operand)
+        cs = _get_expr_coordsys(expr.operand)
+        cs !== nothing && return cs
+    end
+    if hasfield(typeof(expr), :left)
+        cs = _get_expr_coordsys(expr.left)
+        cs !== nothing && return cs
+    end
+    hasfield(typeof(expr), :right) && return _get_expr_coordsys(expr.right)
+    return nothing
+end
+
+"""
+    _expression_subproblem_dofs(sp, expr) -> Int
+
+Compute the per-subproblem output DOFs of an expression by walking the tree.
+Each operator type transforms the dimensionality:
+- Interpolate/Integrate: removes the Chebyshev dimension (÷ Nz)
+- Gradient: adds a vector dimension (× ndim)
+- Divergence: removes a vector dimension (÷ ndim)
+- Trace: removes two tensor dimensions (÷ ndim²)
+- TimeDerivative, Laplacian, Lift, Negate: unchanged
+- Add, Subtract, Multiply: max of children
+"""
+function _expression_subproblem_dofs(sp::Subproblem, expr)
+    isa(expr, ScalarField) && return subproblem_field_size(sp, expr)
+    isa(expr, VectorField) && return subproblem_field_size(sp, expr)
+    isa(expr, TensorField) && return subproblem_field_size(sp, expr)
+
+    if isa(expr, Interpolate)
+        inner = _expression_subproblem_dofs(sp, expr.operand)
+        cheb = _subproblem_cheb_basis_from_sp(sp)
+        cheb !== nothing && return max(1, div(inner, cheb.meta.size))
+        return 1
+    end
+    if isa(expr, Integrate)
+        inner = _expression_subproblem_dofs(sp, expr.operand)
+        cheb = _subproblem_cheb_basis_from_sp(sp)
+        cheb !== nothing && return max(1, div(inner, cheb.meta.size))
+        return 1
+    end
+    if isa(expr, Gradient)
+        return _expression_subproblem_dofs(sp, expr.operand) * expr.coordsys.dim
+    end
+    if isa(expr, Divergence)
+        inner = _expression_subproblem_dofs(sp, expr.operand)
+        cs = _get_expr_coordsys(expr)
+        return cs !== nothing ? max(1, div(inner, cs.dim)) : inner
+    end
+    if isa(expr, Trace)
+        inner = _expression_subproblem_dofs(sp, expr.operand)
+        cs = _get_expr_coordsys(expr)
+        return cs !== nothing ? max(1, div(inner, cs.dim^2)) : inner
+    end
+    # Single-operand operators: same size as operand
+    if hasfield(typeof(expr), :operand)
+        return _expression_subproblem_dofs(sp, expr.operand)
+    end
+    # Binary operators: max of children
+    if hasfield(typeof(expr), :left) && hasfield(typeof(expr), :right)
+        return max(_expression_subproblem_dofs(sp, expr.left),
+                   _expression_subproblem_dofs(sp, expr.right))
+    end
+    # Constants, ZeroOperator, numbers
+    return 0
+end
+
+"""
+    _subproblem_eqn_size(sp::Subproblem, eq_data::Dict) -> Int
+
+Compute per-subproblem output DOFs for an equation from its expression tree.
+Tries lhs first, then L, then M expressions.
+"""
+function _subproblem_eqn_size(sp::Subproblem, eq_data::Dict)
+    for key in ("lhs", "L", "M")
+        expr = get(eq_data, key, nothing)
+        if expr !== nothing
+            sz = _expression_subproblem_dofs(sp, expr)
+            sz > 0 && return sz
+        end
+    end
+    return 0
+end
+
+# ---------------------------------------------------------------------------
 # Per-subproblem gather/scatter
 # ---------------------------------------------------------------------------
 
