@@ -1409,49 +1409,6 @@ function build_matrices!(sp::Subproblem, names, solver)
         matrices[name_str] = sparse(rows, cols, ComplexF64.(data), I, J)
     end
 
-    # ── Tau regularization ──────────────────────────────────────────────
-    # For per-subproblem matrices, some equations (like integ(p)=0 for
-    # non-DC modes) produce zero rows. The corresponding free variable
-    # makes the system rank-deficient.
-    #
-    # Fix: for each zero row, find the LEAST CONSTRAINED column (smallest
-    # combined L+M column norm) and pin it. This correctly identifies
-    # tau_p (1 entry, from continuity) as the free variable rather than
-    # blindly pinning the diagonal.
-    if haskey(matrices, "L") && I == J
-        L_raw = matrices["L"]
-        M_raw = get(matrices, "M", nothing)
-
-        # Find zero rows (no entries in either L or M)
-        zero_rows = Int[]
-        for row in 1:I
-            L_nnz = count(!iszero, L_raw[row, :])
-            M_nnz = M_raw !== nothing ? count(!iszero, M_raw[row, :]) : 0
-            if L_nnz == 0 && M_nnz == 0
-                push!(zero_rows, row)
-            end
-        end
-
-        if !isempty(zero_rows)
-            # Compute column norms (combined L + M) to find least-constrained columns
-            col_norms = zeros(Float64, J)
-            for col in 1:J
-                col_norms[col] = sum(abs.(L_raw[:, col]))
-                if M_raw !== nothing
-                    col_norms[col] += sum(abs.(M_raw[:, col]))
-                end
-            end
-
-            for row in zero_rows
-                # Find the column with minimum norm (least constrained variable)
-                min_col = argmin(col_norms)
-                L_raw[row, min_col] = ComplexF64(1)
-                col_norms[min_col] = Inf  # don't reuse this column
-            end
-            matrices["L"] = L_raw
-        end
-    end
-
     # ── Per-subproblem valid mode filtering (Dedalus subsystems.py:539-563) ──
     # Some equations/variables are invalid for certain subproblems:
     # - integ(p)=0 is only valid for DC mode (kx=0)
