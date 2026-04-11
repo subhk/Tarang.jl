@@ -977,11 +977,16 @@ function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector)
     _scatter_subproblem_raw(sp, raw, fields)
 end
 
-"""Gather per-mode coefficients and apply pre_left (equation permutation)."""
+"""
+Gather per-mode RHS coefficients in state/variable ordering.
+
+`evaluate_rhs` returns one field per state variable, so the explicit RHS must be
+compressed with the variable-side preconditioner, not the equation-side one.
+"""
 function gather_outputs(sp::Subproblem, fields::Vector)
     raw = _gather_subproblem_raw(sp, fields)
-    if sp.pre_left !== nothing
-        return sp.pre_left * raw
+    if sp.pre_right_pinv !== nothing
+        return sp.pre_right_pinv * raw
     end
     return raw
 end
