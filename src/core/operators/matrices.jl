@@ -797,19 +797,30 @@ function subproblem_matrix(op::Divergence, sp; kwargs...)
         return nothing
     end
 
-    # Get scalar block size: for a VectorField, it's the size per component;
-    # for a scalar field, it's the full size
-    if isa(field, VectorField) && !isempty(field.components)
-        Nz = subproblem_field_size(sp, field.components[1])
-    else
-        Nz = subproblem_field_size(sp, field)
+    ndim = coordsys.dim
+    field_size = subproblem_field_size(sp, field)
+    input_size = try
+        _subproblem_expr_dofs(sp, op.operand)
+    catch
+        field_size
     end
 
-    ndim = coordsys.dim
+    # Vector divergence: div(u) maps (dim * Nz) -> Nz.
+    # Tensor divergence: div(grad(u)) maps (dim * Nu) -> Nu where Nu = dim * Nz.
+    if isa(field, VectorField) && input_size == field_size
+        block_size = isempty(field.components) ? field_size : subproblem_field_size(sp, field.components[1])
+    elseif input_size == ndim * field_size
+        block_size = field_size
+    elseif isa(field, VectorField) && !isempty(field.components)
+        block_size = subproblem_field_size(sp, field.components[1])
+    else
+        block_size = field_size
+    end
+
     blocks = SparseMatrixCSC{ComplexF64, Int64}[]
     for coord in coordsys.coords
         coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
-        D = _subproblem_diff_matrix(sp, coord_name, 1, Nz)
+        D = _subproblem_diff_matrix(sp, coord_name, 1, block_size)
         push!(blocks, D)
     end
 
