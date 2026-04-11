@@ -1671,7 +1671,7 @@ function left_permutation(sp::Subproblem, equations, eqn_sizes::AbstractVector{<
 end
 
 function left_permutation(sp::Subproblem, equations, bc_top::Bool, interleave_components::Bool)
-    eqn_sizes = [get(eq, "equation_size", 0) for eq in equations]
+    eqn_sizes = [_subproblem_expr_dofs(sp, get(eq, "lhs", nothing)) for eq in equations]
     return left_permutation(sp, equations, eqn_sizes, bc_top, interleave_components)
 end
 
@@ -1942,44 +1942,6 @@ function apply_sparse(A::SparseMatrixCSC, x::AbstractArray; axis::Int=1, out::Un
         return out
     end
     return result
-end
-
-# ---------------------------------------------------------------------------
-# Gather/scatter for subproblems
-# ---------------------------------------------------------------------------
-
-"""
-    gather_inputs(sp::Subproblem, fields)
-
-Gather and precondition subproblem data from input-like field list.
-Following subsystems:340-350.
-"""
-function gather_inputs(sp::Subproblem, fields::Vector{<:ScalarField})
-    # Gather per-subproblem coefficient slices, including 0D tau variables.
-    data = _gather_subproblem_raw(sp, fields)
-
-    # Apply right preconditioner inverse to compress inputs
-    if sp.pre_right_pinv !== nothing
-        data = Vector(sp.pre_right_pinv * data)
-    end
-
-    return data
-end
-
-"""
-    scatter_inputs(sp::Subproblem, data, fields)
-
-Precondition and scatter subproblem data out to input-like field list.
-Following subsystems:364-371.
-"""
-function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector{<:ScalarField})
-    # Undo right preconditioner inverse to expand inputs
-    if sp.pre_right !== nothing
-        data = Vector(sp.pre_right * data)
-    end
-
-    # Scatter back into the owning subproblem slices.
-    _scatter_subproblem_raw(sp, data, fields)
 end
 
 # ---------------------------------------------------------------------------
