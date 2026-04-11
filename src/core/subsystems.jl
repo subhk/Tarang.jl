@@ -1240,6 +1240,16 @@ function build_matrices!(sp::Subproblem, names, solver)
                             block = eqn_blocks[var]
                             if isa(block, SparseMatrixCSC) && nnz(block) > 0
                                 block_rows, block_cols, block_vals = findnz(block)
+                                # Validate block dimensions
+                                if !isempty(block_rows) && (maximum(block_rows) > eqn_size || maximum(block_cols) > var_size)
+                                    var_name = hasfield(typeof(var), :name) ? var.name : "?"
+                                    eq_str = get(eq_data, "equation_string", "?")
+                                    @error "Block size mismatch in eq$eq_idx($name_str) × var$var_idx($var_name): " *
+                                           "block=$(size(block)), expected rows≤$eqn_size cols≤$var_size, " *
+                                           "actual max_row=$(maximum(block_rows)) max_col=$(maximum(block_cols)). " *
+                                           "Equation: $eq_str"
+                                    continue  # skip this block to avoid crash
+                                end
                                 append!(data, block_vals)
                                 append!(rows, i0 .+ block_rows)
                                 append!(cols, j0 .+ block_cols)
