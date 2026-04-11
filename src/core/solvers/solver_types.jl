@@ -354,6 +354,21 @@ function _try_build_subproblems!(solver::InitialValueSolver)
     # Only build for mixed Fourier + non-periodic (Chebyshev/Jacobi)
     (fourier_basis === nothing || cheb_basis === nothing) && return
 
+    # Set matrix coupling: Fourier dimensions are separable (each mode independent),
+    # Chebyshev/Jacobi dimensions are coupled (modes interact via differentiation).
+    # This determines how build_subsystems creates per-mode subproblems.
+    coupling = Bool[]
+    for basis in field.bases
+        if basis === nothing
+            push!(coupling, true)
+        elseif isa(basis, FourierBasis)
+            push!(coupling, false)  # Separable
+        else
+            push!(coupling, true)   # Coupled (Chebyshev, Jacobi, etc.)
+        end
+    end
+    solver.base.matrix_coupling = coupling
+
     @info "Building subproblem matrix system"
     subsystems = build_subsystems(solver)
     subproblems = build_subproblems(solver, subsystems; build_matrices=["M", "L"])
