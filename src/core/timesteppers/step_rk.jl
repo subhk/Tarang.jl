@@ -29,7 +29,24 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
-    # Subproblem-based IMEX: use sparse subproblems if available
+    # Fall back to explicit treatment when matrix-vector operations are incompatible:
+    # - GPU: SparseMatrixCSC is CPU-only, cannot multiply with CuArray
+    # - MPI+PencilArrays: gather/scatter assumes local data access
+    if !isempty(current_state)
+        dist = current_state[1].dist
+        if is_gpu(dist.architecture)
+            @debug "IMEX RK: GPU detected, falling back to explicit treatment (CPU sparse matrices incompatible with CuArray)"
+            _step_rk_imex_explicit_fallback!(state, solver)
+            return
+        end
+        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
+            @debug "IMEX RK: MPI mode detected, falling back to explicit treatment"
+            _step_rk_imex_explicit_fallback!(state, solver)
+            return
+        end
+    end
+
+    # Subproblem-based IMEX: use sparse subproblems if available (serial CPU only)
     if haskey(solver.problem.parameters, "subproblems")
         sps = solver.problem.parameters["subproblems"]
         if sps isa Tuple
@@ -43,23 +60,6 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
         @debug "IMEX RK: No L_matrix found, treating all terms explicitly"
         _step_rk_imex_explicit_fallback!(state, solver)
         return
-    end
-
-    # Fall back to explicit treatment when matrix-vector operations are incompatible:
-    # - GPU: SparseMatrixCSC is CPU-only, cannot multiply with CuArray
-    # - MPI+PencilArrays: matrix-vector doesn't work with distributed data
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if is_gpu(dist.architecture)
-            @debug "IMEX RK: GPU detected, falling back to explicit treatment (CPU sparse matrices incompatible with CuArray)"
-            _step_rk_imex_explicit_fallback!(state, solver)
-            return
-        end
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            @debug "IMEX RK: MPI mode detected, falling back to explicit treatment"
-            _step_rk_imex_explicit_fallback!(state, solver)
-            return
-        end
     end
 
     # Check if L_matrix is effectively zero (no linear terms)
