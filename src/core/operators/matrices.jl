@@ -516,6 +516,42 @@ function _subproblem_group_index(sp, coord_name::String)
     return nothing
 end
 
+function _integration_step_matrix(basis, coord_name::String, sp, nrows::Int)
+    if basis isa FourierBasis
+        group_entry = _subproblem_group_index(sp, coord_name)
+        if !(group_entry isa Integer) || group_entry != 0
+            return spzeros(ComplexF64, nrows, nrows)
+        end
+
+        L = basis.meta.bounds[2] - basis.meta.bounds[1]
+        return sparse(ComplexF64(L) * I, nrows, nrows)
+    elseif basis isa JacobiBasis
+        Nz = basis.meta.size
+        z_min, z_max = basis.meta.bounds[1], basis.meta.bounds[2]
+        L = z_max - z_min
+
+        w = zeros(ComplexF64, 1, Nz)
+        for n in 0:(Nz-1)
+            if n % 2 == 0
+                w[1, n+1] = ComplexF64(L / 2.0 * 2.0 / (1.0 - n^2))
+            end
+        end
+
+        if nrows == 0
+            return spzeros(ComplexF64, 0, 0)
+        elseif nrows == Nz
+            return sparse(w)
+        elseif nrows % Nz == 0
+            n_comp = div(nrows, Nz)
+            return kron(sparse(ComplexF64(1) * I, n_comp, n_comp), sparse(w))
+        else
+            return nothing
+        end
+    end
+
+    return nothing
+end
+
 # ============================================================================
 # subproblem_matrix implementations for linear operators
 # ============================================================================
@@ -796,57 +832,24 @@ end
 
 # ── Integrate: integration over a coordinate (constraints like integ(p)=0) ──
 function subproblem_matrix(op::Integrate, sp; kwargs...)
-    coord = isa(op.coord, Tuple) ? op.coord[1] : op.coord
-    coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
-    basis = _operand_basis_for_coord(op.operand, coord_name)
     field = _resolve_operand_field(op.operand)
+    coords = isa(op.coord, Tuple) ? op.coord : (op.coord,)
 
-    if basis isa FourierBasis
-        field === nothing && return nothing
-        n = subproblem_field_size(sp, field)
-        n == 0 && return spzeros(ComplexF64, 0, 0)
+    field === nothing && return nothing
+    n = subproblem_field_size(sp, field)
+    mat = sparse(ComplexF64(1) * I, n, n)
 
-        group_entry = _subproblem_group_index(sp, coord_name)
-        if !(group_entry isa Integer) || group_entry != 0
-            return spzeros(ComplexF64, n, n)
-        end
+    for coord in coords
+        coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+        basis = _operand_basis_for_coord(op.operand, coord_name)
+        basis === nothing && return nothing
 
-        L = basis.meta.bounds[2] - basis.meta.bounds[1]
-        return sparse(ComplexF64(L) * I, n, n)
+        step = _integration_step_matrix(basis, coord_name, sp, size(mat, 1))
+        step === nothing && return nothing
+        mat = step * mat
     end
 
-    cheb_basis = _subproblem_cheb_basis(sp)
-    if cheb_basis === nothing
-        return nothing
-    end
-    cheb_label = String(cheb_basis.meta.element_label)
-
-    if coord_name != cheb_label
-        return nothing
-    end
-
-    Nz = cheb_basis.meta.size
-    z_min, z_max = cheb_basis.meta.bounds[1], cheb_basis.meta.bounds[2]
-    L = z_max - z_min
-
-    # Chebyshev integration weights: ∫_{-1}^{1} T_n(x) dx = 2/(1-n²) for even n, 0 for odd n
-    # Scaled by L/2 for physical domain [z_min, z_max]
-    w = zeros(ComplexF64, 1, Nz)
-    for n in 0:(Nz-1)
-        if n % 2 == 0
-            w[1, n+1] = ComplexF64(L / 2.0 * 2.0 / (1.0 - n^2))
-        end
-    end
-
-    # For vector operands
-    n_comp = 1
-    if field !== nothing && isa(field, VectorField)
-        n_comp = length(field.components)
-    end
-    if n_comp > 1
-        return kron(sparse(ComplexF64(1)*I, n_comp, n_comp), sparse(w))
-    end
-    return sparse(w)  # (1 × Nz) for scalar
+    return sparse(mat)
 end
 
 # ============================================================================
