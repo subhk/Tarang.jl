@@ -1409,68 +1409,63 @@ function build_matrices!(sp::Subproblem, names, solver)
         matrices[name_str] = sparse(rows, cols, ComplexF64.(data), I, J)
     end
 
-    # ── Per-subproblem valid mode filtering (Dedalus subsystems.py:539-563) ──
-    # Some equations/variables are invalid for certain subproblems:
-    # - integ(p)=0 is only valid for DC mode (kx=0)
-    # - tau_p is only needed for DC mode
-    # Detect zero equation rows (after matrix assembly) and mark them invalid.
-    # Mark corresponding variable DOFs invalid when their only constraint is invalid.
-    valid_eqn = ones(Bool, I)
-    valid_var = ones(Bool, J)
+    # ── Gauge regularization for zero rows ──────────────────────────────
+    # For non-DC modes, gauge constraints like integ(p)=0 produce zero rows
+    # (the integral of a non-DC Fourier mode over x is zero). The system is
+    # 39×39 but rank 38 without fixing.
+    #
+    # Fix: for each zero row, find the 0D tau variable that this equation
+    # is meant to constrain and pin it to 0 by setting L[row, tau_col] = 1.
+    # This makes the system full-rank while keeping it square.
+    #
+    # Identification: the zero row corresponds to an equation whose associated
+    # variable (in the 1:1 equation-variable mapping) doesn't match the actual
+    # target. For gauge constraints, the target is typically a 0D tau field.
+    # We find it by looking for columns whose ONLY non-zero entries come from
+    # equations where they appear as a single isolated term (like tau_p in
+    # trace(grad_u) + tau_p = 0).
+    if haskey(matrices, "L")
+        L_raw = matrices["L"]
+        M_raw = get(matrices, "M", nothing)
 
-    # Detect equation rows that are all-zero in BOTH L and M
-    L_raw = get(matrices, "L", nothing)
-    M_raw = get(matrices, "M", nothing)
-    for row in 1:I
-        L_nnz = L_raw !== nothing ? count(!iszero, L_raw[row, :]) : 0
-        M_nnz = M_raw !== nothing ? count(!iszero, M_raw[row, :]) : 0
-        if L_nnz == 0 && M_nnz == 0
-            valid_eqn[row] = false
-        end
-    end
-
-    # For each invalid equation row, find variable columns that are ONLY
-    # referenced by invalid equations → mark those columns invalid too.
-    # This pairs the integ(p) row removal with tau_p column removal.
-    if any(.!valid_eqn)
-        for col in 1:J
-            # Count valid-equation references to this column
-            valid_refs = 0
-            for row in 1:I
-                if valid_eqn[row]
-                    if (L_raw !== nothing && L_raw[row, col] != 0) ||
-                       (M_raw !== nothing && M_raw[row, col] != 0)
-                        valid_refs += 1
+        for row in 1:I
+            L_nnz = count(!iszero, L_raw[row, :])
+            M_nnz = M_raw !== nothing ? count(!iszero, M_raw[row, :]) : 0
+            if L_nnz == 0 && M_nnz == 0
+                # Zero row. Find the least-constrained 0D tau variable.
+                # Compute column norms to identify the weakest column.
+                best_col = 0
+                best_norm = Inf
+                j0 = 0
+                for (vi, (var, vsz)) in enumerate(zip(vars, var_sizes))
+                    if vsz == 1  # Only consider 1-DOF variables (0D taus)
+                        col = j0 + 1
+                        col_norm = sum(abs.(L_raw[:, col]))
+                        if M_raw !== nothing
+                            col_norm += sum(abs.(M_raw[:, col]))
+                        end
+                        if col_norm < best_norm
+                            best_norm = col_norm
+                            best_col = col
+                        end
                     end
+                    j0 += vsz
+                end
+                if best_col > 0
+                    L_raw[row, best_col] = ComplexF64(1)
                 end
             end
-            if valid_refs == 0
-                # This column is only referenced by invalid equations → mark invalid
-                valid_var[col] = false
-            end
         end
+        matrices["L"] = L_raw
     end
 
-    n_valid_eqn = sum(valid_eqn)
-    n_valid_var = sum(valid_var)
-    if n_valid_eqn != n_valid_var
-        @warn "Non-square filtered system: group=$(sp.group), valid_eqn=$n_valid_eqn, valid_var=$n_valid_var"
-    end
-
-    # Build filter matrices (identity with zeros for invalid modes)
-    valid_eqn_mat = spdiagm(0 => ComplexF64.(valid_eqn))
-    valid_var_mat = spdiagm(0 => ComplexF64.(valid_var))
-
-    # Preconditioners: drop invalid rows/columns
-    sp.pre_left = drop_empty_rows(valid_eqn_mat)
-    sp.pre_left_pinv = sparse(sp.pre_left')
-    sp.pre_right_pinv = drop_empty_rows(valid_var_mat)
-    sp.pre_right = sparse(sp.pre_right_pinv')
-
-    # Apply preconditioners to matrices
-    for (name, matrix) in matrices
-        matrices[name] = sp.pre_left * matrix * sp.pre_right
-    end
+    # Identity permutations — the per-subproblem matrices are already the
+    # correct size. Gather/scatter handles mode extraction.
+    n = I
+    sp.pre_left = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    sp.pre_left_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    sp.pre_right_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    sp.pre_right = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
 
     # Store minimal CSR matrices (following subsystems:573-575)
     sp.matrices = matrices
