@@ -60,6 +60,7 @@ const OPTIONAL_TEST_FILES = [
     "test_dct_reorder.jl",
     "test_optimized_dct.jl",
     "test_ilu0_preconditioner.jl",
+    "test_subproblem_rk.jl",       # Subproblem RK integration test (RBC 2D)
 ]
 
 # MPI tests that must be run separately with mpiexec
