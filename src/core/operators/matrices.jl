@@ -519,8 +519,10 @@ end
 function _integration_step_matrix(basis, coord_name::String, sp, nrows::Int)
     if basis isa FourierBasis
         group_entry = _subproblem_group_index(sp, coord_name)
-        if !(group_entry isa Integer) || group_entry != 0
-            return spzeros(ComplexF64, nrows, nrows)
+        if !(group_entry isa Integer)
+            return nothing
+        elseif group_entry != 0
+            return spzeros(ComplexF64, 0, nrows)
         end
 
         L = basis.meta.bounds[2] - basis.meta.bounds[1]
