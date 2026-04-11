@@ -229,8 +229,18 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
     if issuccess(lhs_lu)
         sp.LHS_solvers[stage_idx] = lhs_lu
         return lhs_lu
-    else
-        @warn "step_subproblem_rk!: LU factorization failed for group=$(sp.group), stage=$stage_idx" maxlog=1
+    end
+
+    # Some gauge-constrained subproblems remain rank-deficient in the current
+    # coefficient-space formulation. Sparse QR provides a consistent least-
+    # squares solve and is strictly better than the previous rhs passthrough.
+    try
+        lhs_qr = qr(LHS)
+        sp.LHS_solvers[stage_idx] = lhs_qr
+        @info "step_subproblem_rk!: using sparse QR fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
+        return lhs_qr
+    catch
+        @warn "step_subproblem_rk!: LU/QR factorization failed for group=$(sp.group), stage=$stage_idx" maxlog=1
         return nothing
     end
 end
