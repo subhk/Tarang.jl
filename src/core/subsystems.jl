@@ -1452,16 +1452,68 @@ function build_matrices!(sp::Subproblem, names, solver)
         end
     end
 
-    # For per-subproblem matrices, use identity permutations.
-    # The per-subproblem matrices are already small (DOFs per Fourier mode),
-    # and the global-DOF-based permutation/valid_mode code isn't compatible
-    # with per-subproblem sizing. The gather/scatter functions handle the
-    # mode extraction; no reordering is needed at the matrix level.
-    n = I  # == J since eqn_sizes == var_sizes
-    sp.pre_left = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
-    sp.pre_left_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
-    sp.pre_right_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
-    sp.pre_right = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    # ── Per-subproblem valid mode filtering (Dedalus subsystems.py:539-563) ──
+    # Some equations/variables are invalid for certain subproblems:
+    # - integ(p)=0 is only valid for DC mode (kx=0)
+    # - tau_p is only needed for DC mode
+    # Detect zero equation rows (after matrix assembly) and mark them invalid.
+    # Mark corresponding variable DOFs invalid when their only constraint is invalid.
+    valid_eqn = ones(Bool, I)
+    valid_var = ones(Bool, J)
+
+    # Detect equation rows that are all-zero in BOTH L and M
+    L_raw = get(matrices, "L", nothing)
+    M_raw = get(matrices, "M", nothing)
+    for row in 1:I
+        L_nnz = L_raw !== nothing ? count(!iszero, L_raw[row, :]) : 0
+        M_nnz = M_raw !== nothing ? count(!iszero, M_raw[row, :]) : 0
+        if L_nnz == 0 && M_nnz == 0
+            valid_eqn[row] = false
+        end
+    end
+
+    # For each invalid equation row, find variable columns that are ONLY
+    # referenced by invalid equations → mark those columns invalid too.
+    # This pairs the integ(p) row removal with tau_p column removal.
+    if any(.!valid_eqn)
+        for col in 1:J
+            # Count valid-equation references to this column
+            valid_refs = 0
+            for row in 1:I
+                if valid_eqn[row]
+                    if (L_raw !== nothing && L_raw[row, col] != 0) ||
+                       (M_raw !== nothing && M_raw[row, col] != 0)
+                        valid_refs += 1
+                    end
+                end
+            end
+            if valid_refs == 0
+                # This column is only referenced by invalid equations → mark invalid
+                valid_var[col] = false
+            end
+        end
+    end
+
+    n_valid_eqn = sum(valid_eqn)
+    n_valid_var = sum(valid_var)
+    if n_valid_eqn != n_valid_var
+        @warn "Non-square filtered system: group=$(sp.group), valid_eqn=$n_valid_eqn, valid_var=$n_valid_var"
+    end
+
+    # Build filter matrices (identity with zeros for invalid modes)
+    valid_eqn_mat = spdiagm(0 => ComplexF64.(valid_eqn))
+    valid_var_mat = spdiagm(0 => ComplexF64.(valid_var))
+
+    # Preconditioners: drop invalid rows/columns
+    sp.pre_left = drop_empty_rows(valid_eqn_mat)
+    sp.pre_left_pinv = sparse(sp.pre_left')
+    sp.pre_right_pinv = drop_empty_rows(valid_var_mat)
+    sp.pre_right = sparse(sp.pre_right_pinv')
+
+    # Apply preconditioners to matrices
+    for (name, matrix) in matrices
+        matrices[name] = sp.pre_left * matrix * sp.pre_right
+    end
 
     # Store minimal CSR matrices (following subsystems:573-575)
     sp.matrices = matrices
