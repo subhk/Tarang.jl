@@ -868,53 +868,62 @@ _local_coeff_data(::Nothing) = nothing
 """Extract per-mode coefficients from all fields into a flat vector (no permutation)."""
 function _gather_subproblem_raw(sp::Subproblem, fields::Vector)
     kx_global = _kx_index_global(sp)
-    buffer = ComplexF64[]
+    total = sum(subproblem_field_size(sp, field) for field in fields)
+    buffer = Vector{ComplexF64}(undef, total)
+    offset = 0
     for field in fields
-        _gather_field_raw!(buffer, field, kx_global, sp)
+        offset = _gather_field_raw!(buffer, offset, field, kx_global, sp)
     end
     return buffer
 end
 
-function _gather_field_raw!(buffer, field::ScalarField, kx_global::Int, sp::Subproblem)
+function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
     ensure_layout!(field, :c)
     cd_raw = get_coeff_data(field)
     if cd_raw === nothing
-        push!(buffer, ComplexF64(0))
-        return
+        n = subproblem_field_size(sp, field)
+        for i in 1:n
+            buffer[offset + i] = ComplexF64(0)
+        end
+        return offset + n
     end
     cd = _local_coeff_data(cd_raw)
 
     if isempty(field.bases) || all(b -> b === nothing, field.bases)
         # 0D tau: single scalar
-        push!(buffer, ComplexF64(cd[1]))
+        buffer[offset + 1] = ComplexF64(cd[1])
+        return offset + 1
     elseif ndims(cd) == 1
         # 1D field (tau with Fourier basis): convert to local index
         kx_local = _global_to_local_kx(kx_global, field, sp)
         if kx_local >= 1 && kx_local <= length(cd)
-            push!(buffer, ComplexF64(cd[kx_local]))
+            buffer[offset + 1] = ComplexF64(cd[kx_local])
         else
-            push!(buffer, ComplexF64(0))
+            buffer[offset + 1] = ComplexF64(0)
         end
+        return offset + 1
     else
         # 2D field: extract local row across all Chebyshev modes
         kx_local = _global_to_local_kx(kx_global, field, sp)
         Nz = size(cd, 2)
         if kx_local >= 1 && kx_local <= size(cd, 1)
             for iz in 1:Nz
-                push!(buffer, ComplexF64(cd[kx_local, iz]))
+                buffer[offset + iz] = ComplexF64(cd[kx_local, iz])
             end
         else
             for iz in 1:Nz
-                push!(buffer, ComplexF64(0))
+                buffer[offset + iz] = ComplexF64(0)
             end
         end
+        return offset + Nz
     end
 end
 
-function _gather_field_raw!(buffer, field::VectorField, kx_global::Int, sp::Subproblem)
+function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::VectorField, kx_global::Int, sp::Subproblem)
     for comp in field.components
-        _gather_field_raw!(buffer, comp, kx_global, sp)
+        offset = _gather_field_raw!(buffer, offset, comp, kx_global, sp)
     end
+    return offset
 end
 
 """Write per-mode coefficients back to fields from a flat vector (no permutation)."""
@@ -962,19 +971,23 @@ function _scatter_field_raw!(field::VectorField, data::AbstractVector, offset::I
     return offset
 end
 
-"""Gather per-mode coefficients and apply pre_right_pinv (variable permutation)."""
+compress_variable_space(sp::Subproblem, raw::AbstractVector) =
+    sp.pre_right_pinv !== nothing ? Vector(sp.pre_right_pinv * raw) : Vector(raw)
+
+expand_variable_space(sp::Subproblem, data::AbstractVector) =
+    sp.pre_right !== nothing ? Vector(sp.pre_right * data) : Vector(data)
+
+compress_equation_space(sp::Subproblem, raw::AbstractVector) =
+    sp.pre_left !== nothing ? Vector(sp.pre_left * raw) : Vector(raw)
+
+"""Gather per-mode coefficients and compress them into variable space."""
 function gather_inputs(sp::Subproblem, fields::Vector)
-    raw = _gather_subproblem_raw(sp, fields)
-    if sp.pre_right_pinv !== nothing
-        return sp.pre_right_pinv * raw
-    end
-    return raw
+    return compress_variable_space(sp, _gather_subproblem_raw(sp, fields))
 end
 
-"""Apply pre_right and scatter back to fields."""
+"""Expand from variable space and scatter back to fields."""
 function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector)
-    raw = sp.pre_right !== nothing ? sp.pre_right * data : data
-    _scatter_subproblem_raw(sp, raw, fields)
+    _scatter_subproblem_raw(sp, expand_variable_space(sp, data), fields)
 end
 
 """
@@ -984,11 +997,7 @@ Gather per-mode RHS coefficients in state/variable ordering.
 compressed with the variable-side preconditioner, not the equation-side one.
 """
 function gather_outputs(sp::Subproblem, fields::Vector)
-    raw = _gather_subproblem_raw(sp, fields)
-    if sp.pre_right_pinv !== nothing
-        return sp.pre_right_pinv * raw
-    end
-    return raw
+    return compress_variable_space(sp, _gather_subproblem_raw(sp, fields))
 end
 
 """
