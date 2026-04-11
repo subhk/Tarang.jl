@@ -85,7 +85,6 @@ include("core/transforms.jl")
 include("core/boundary_conditions.jl")
 include("core/problems.jl")
 include("core/subsystems.jl")
-include("core/pencil_system.jl")    # variable-centric PencilSystem for per-pencil IMEX
 include("core/system.jl")
 include("core/linalg.jl")
 include("tools/matsolvers.jl")
@@ -93,7 +92,6 @@ include("tools/gpu_matsolvers.jl")
 include("core/solvers.jl")
 include("core/stochastic_forcing.jl")
 include("core/timesteppers/timesteppers.jl")
-include("core/timesteppers/step_pencil_rk.jl")  # per-pencil IMEX step (needs TimestepperState + PencilSystem)
 include("core/timesteppers/step_subproblem_rk.jl")  # per-subproblem IMEX step (Dedalus-style)
 include("core/gpu_distributed.jl")  # Distributed GPU computing (GPU + MPI)
 include("core/transposable_field.jl")  # TransposableField for 2D pencil decomposition
@@ -248,7 +246,6 @@ export
     DiagonalIMEX_RK222, DiagonalIMEX_RK443, DiagonalIMEX_SBDF2,
     SpectralLinearOperator, set_spectral_linear_operator!,
     # Pencil IMEX (Chebyshev-Fourier MPI)
-    PencilSystem,
     PencilLinearOperator, set_pencil_linear_operator!,
     is_pencil_imex_compatible, has_chebyshev_basis,
 

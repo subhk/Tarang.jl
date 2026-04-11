@@ -318,14 +318,18 @@ function attach_evaluator!(solver::InitialValueSolver)
 end
 
 """
-Auto-detect mixed Fourier+Chebyshev domains and build per-pencil matrices.
-Stores the PencilSystem in problem.parameters["pencil_system"].
+Auto-detect mixed Fourier+Chebyshev domains and build subproblem matrices.
+Stores the subproblems tuple in problem.parameters["subproblems"].
 """
-function _try_build_pencil_system!(solver::InitialValueSolver)
+function _try_build_subproblems!(solver::InitialValueSolver)
+    problem = solver.problem
     state = solver.state
-    isempty(state) && return
 
-    # Need a field with bases to detect domain type
+    if isempty(state)
+        return
+    end
+
+    # Find a field with bases
     field = nothing
     for f in state
         if !isempty(f.bases)
@@ -350,11 +354,14 @@ function _try_build_pencil_system!(solver::InitialValueSolver)
     # Only build for mixed Fourier + non-periodic (Chebyshev/Jacobi)
     (fourier_basis === nothing || cheb_basis === nothing) && return
 
-    @info "Building per-pencil matrix system"
-    ps = PencilSystem(solver.problem, fourier_basis, cheb_basis)
-    build_pencil_system_matrices!(ps, solver.problem, cheb_basis)
-    solver.problem.parameters["pencil_system"] = ps
-    @info "  $(ps.n_pencils) pencils × $(ps.pencil_size) DOFs each"
+    @info "Building subproblem matrix system"
+    subsystems = build_subsystems(solver)
+    subproblems = build_subproblems(solver, subsystems; build_matrices=["M", "L"])
+    problem.parameters["subproblems"] = subproblems
+
+    n_total = length(subproblems)
+    n_with_mats = count(sp -> sp.M_min !== nothing && sp.L_min !== nothing, subproblems)
+    @info "  $n_total subproblems built ($n_with_mats with matrices)"
 end
 
 function _build_initial_value_solver(problem::IVP, timestepper; dt::Real=1e-3, device::String="cpu")
@@ -383,7 +390,7 @@ function _build_initial_value_solver(problem::IVP, timestepper; dt::Real=1e-3, d
     end
 
     build_solver_matrices!(solver)
-    _try_build_pencil_system!(solver)
+    _try_build_subproblems!(solver)
 
     # Attempt to compile the RHS expression tree for zero-dispatch evaluation.
     # If compilation fails (unsupported expression types), falls back silently

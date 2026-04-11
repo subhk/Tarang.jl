@@ -29,11 +29,11 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
-    # Per-pencil IMEX: use PencilSystem if available (mixed Fourier-Chebyshev)
-    if haskey(solver.problem.parameters, "pencil_system")
-        ps = solver.problem.parameters["pencil_system"]
-        if ps isa PencilSystem
-            step_pencil_system_rk!(state, solver, ps)
+    # Subproblem-based IMEX: use sparse subproblems if available
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            step_subproblem_rk!(state, solver, sps)
             return
         end
     end
