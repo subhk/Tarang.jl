@@ -295,200 +295,387 @@ function expression_matrices(op::MultiplyOperator, sp, vars; kwargs...)
     return Dict{Any, SparseMatrixCSC}()
 end
 
-"""
-    expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
+# ============================================================================
+# Subproblem helper functions for compositional operator matrices
+# ============================================================================
 
-Time derivative matrices: returns M matrix contribution.
-Following operators TimeDerivative.expression_matrices.
 """
-function expression_matrices(op::TimeDerivative, sp, vars; kwargs...)
-    operand = op.operand
-    result = Dict{Any, SparseMatrixCSC}()
+    _subproblem_kx(sp) -> Float64
 
-    for var in vars
-        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
-            # Identity matrix for time derivative term
-            n = field_dofs(var)
-            # Mass matrix for time derivative is always identity regardless of order.
-            # The derivative order is handled by the timestepping scheme, not the mass matrix.
-            result[var] = sparse(I, n, n) * 1.0
+Get the Fourier wavenumber kx for a subproblem.
+Looks up the Fourier mode index from sp.group_dict and computes kx = nx * 2π/Lx
+using the domain length from the first FourierBasis found in problem variables.
+"""
+function _subproblem_kx(sp)
+    # Find the Fourier coordinate name and mode index from group_dict
+    fourier_basis = nothing
+    nx = nothing
+    for var in sp.problem.variables
+        if !hasfield(typeof(var), :bases)
+            continue
+        end
+        for (i, basis) in enumerate(var.bases)
+            if basis !== nothing && isa(basis, FourierBasis)
+                coord_name = basis.meta.element_label
+                key = "n" * coord_name
+                if haskey(sp.group_dict, key)
+                    fourier_basis = basis
+                    nx = sp.group_dict[key]
+                    break
+                end
+            end
+        end
+        if fourier_basis !== nothing
+            break
         end
     end
 
-    return result
+    if fourier_basis === nothing || nx === nothing
+        return 0.0
+    end
+
+    Lx = fourier_basis.meta.bounds[2] - fourier_basis.meta.bounds[1]
+    return nx * 2π / Lx
 end
 
 """
-    expression_matrices(op::Differentiate, sp, vars; kwargs...)
+    _subproblem_cheb_basis(sp) -> Union{JacobiBasis, Nothing}
 
-Spatial differentiation matrices.
-Following operators Differentiate.expression_matrices.
+Get the ChebyshevT (or JacobiBasis) from a subproblem's problem variables.
+Returns the first JacobiBasis found.
 """
-function expression_matrices(op::Differentiate, sp, vars; kwargs...)
-    operand = op.operand
-    coord = op.coord
-    order = op.order
-    result = Dict{Any, SparseMatrixCSC}()
-
-    for var in vars
-        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
-            # Build differentiation matrix for this variable
-            D = build_operator_differentiation_matrix(var, coord, order; kwargs...)
-            if D !== nothing
-                result[var] = D
+function _subproblem_cheb_basis(sp)
+    for var in sp.problem.variables
+        if !hasfield(typeof(var), :bases)
+            continue
+        end
+        for basis in var.bases
+            if basis !== nothing && isa(basis, JacobiBasis)
+                return basis
+            end
+        end
+        # Also check components for VectorField
+        if isa(var, VectorField)
+            for comp in var.components
+                for basis in comp.bases
+                    if basis !== nothing && isa(basis, JacobiBasis)
+                        return basis
+                    end
+                end
             end
         end
     end
-
-    return result
+    return nothing
 end
 
 """
-    expression_matrices(op::Laplacian, sp, vars; kwargs...)
+    _subproblem_diff_matrix(sp, coord_name::String, order::Int, Nz::Int) -> SparseMatrixCSC{ComplexF64, Int64}
 
-Laplacian matrices: sum of second derivatives.
-Following operators Laplacian.expression_matrices.
+Get per-subproblem differentiation matrix for a coordinate.
+- If coord is Chebyshev (JacobiBasis): returns ComplexF64.(differentiation_matrix(cheb_basis, order))
+- If coord is Fourier: returns (im*kx)^order * I_Nz
 """
-function expression_matrices(op::Laplacian, sp, vars; kwargs...)
-    operand = op.operand
-    result = Dict{Any, SparseMatrixCSC}()
-
-    for var in vars
-        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
-            # Build Laplacian matrix = sum of D_i^2 for each coordinate
-            lap_mat = nothing
-
-            if hasfield(typeof(var), :bases)
-                for basis in var.bases
-                    if basis !== nothing
-                        coord = get_coord_for_basis(basis)
-                        D2 = build_operator_differentiation_matrix(var, coord, 2; kwargs...)
-                        if D2 !== nothing
-                            if lap_mat === nothing
-                                lap_mat = D2
+function _subproblem_diff_matrix(sp, coord_name::String, order::Int, Nz::Int)
+    # Check if this coordinate corresponds to a Fourier basis
+    for var in sp.problem.variables
+        if !hasfield(typeof(var), :bases)
+            continue
+        end
+        for basis in var.bases
+            if basis === nothing
+                continue
+            end
+            if basis.meta.element_label == coord_name
+                if isa(basis, FourierBasis)
+                    # Fourier coordinate: use (im*kx)^order * I
+                    kx = _subproblem_kx(sp)
+                    coeff = (im * kx)^order
+                    return sparse(ComplexF64(coeff) * I, Nz, Nz)
+                elseif isa(basis, JacobiBasis)
+                    # Chebyshev/Jacobi coordinate: use differentiation matrix
+                    D = sparse(ComplexF64.(differentiation_matrix(basis, order)))
+                    n_basis = size(D, 1)
+                    if n_basis == Nz
+                        return D
+                    else
+                        # Multi-component: block-diagonal kron(I_ncomp, D)
+                        n_comp = div(Nz, n_basis)
+                        return kron(sparse(ComplexF64(1) * I, n_comp, n_comp), D)
+                    end
+                end
+            end
+        end
+        # Also check VectorField components
+        if isa(var, VectorField)
+            for comp in var.components
+                for basis in comp.bases
+                    if basis === nothing
+                        continue
+                    end
+                    if basis.meta.element_label == coord_name
+                        if isa(basis, FourierBasis)
+                            kx = _subproblem_kx(sp)
+                            coeff = (im * kx)^order
+                            return sparse(ComplexF64(coeff) * I, Nz, Nz)
+                        elseif isa(basis, JacobiBasis)
+                            D = sparse(ComplexF64.(differentiation_matrix(basis, order)))
+                            n_basis = size(D, 1)
+                            if n_basis == Nz
+                                return D
                             else
-                                lap_mat = lap_mat + D2
+                                n_comp = div(Nz, n_basis)
+                                return kron(sparse(ComplexF64(1) * I, n_comp, n_comp), D)
                             end
                         end
                     end
                 end
             end
-
-            if lap_mat !== nothing
-                result[var] = lap_mat
-            end
         end
     end
-
-    return result
+    # Fallback: zero matrix
+    return spzeros(ComplexF64, Nz, Nz)
 end
 
 """
-    expression_matrices(op::Gradient, sp, vars; kwargs...)
+    _get_operand_coordsys(operand) -> Union{CoordinateSystem, Nothing}
 
-Gradient matrices for scalar -> vector.
-Following operators Gradient.expression_matrices.
+Extract coordinate system from an operand (field or operator).
 """
-function expression_matrices(op::Gradient, sp, vars; kwargs...)
-    operand = op.operand
+function _get_operand_coordsys(operand)
+    # VectorField has coordsys directly
+    if isa(operand, VectorField)
+        return operand.coordsys
+    end
+    # Gradient has coordsys
+    if hasfield(typeof(operand), :coordsys)
+        return operand.coordsys
+    end
+    # ScalarField: get from dist
+    if hasfield(typeof(operand), :dist)
+        dist = operand.dist
+        if hasfield(typeof(dist), :coordsys)
+            return dist.coordsys
+        end
+    end
+    return nothing
+end
+
+"""
+    _resolve_operand_field(operand) -> Union{ScalarField, VectorField, Nothing}
+
+Walk the operator tree to find the leaf field.
+"""
+function _resolve_operand_field(operand)
+    if isa(operand, ScalarField) || isa(operand, VectorField) || isa(operand, TensorField)
+        return operand
+    end
+    if hasfield(typeof(operand), :operand)
+        return _resolve_operand_field(operand.operand)
+    end
+    return nothing
+end
+
+# ============================================================================
+# subproblem_matrix implementations for linear operators
+# ============================================================================
+
+"""
+    subproblem_matrix(op::TimeDerivative, sp; kwargs...)
+
+Time derivative: identity matrix. The derivative order is handled by the
+timestepping scheme, not the mass matrix.
+"""
+function subproblem_matrix(op::TimeDerivative, sp; kwargs...)
+    field = _resolve_operand_field(op.operand)
+    if field === nothing
+        return nothing
+    end
+    n = subproblem_field_size(sp, field)
+    return sparse(ComplexF64(1) * I, n, n)
+end
+
+"""
+    subproblem_matrix(op::Differentiate, sp; kwargs...)
+
+Spatial differentiation: returns the per-subproblem differentiation matrix
+for the specified coordinate and order.
+"""
+function subproblem_matrix(op::Differentiate, sp; kwargs...)
+    field = _resolve_operand_field(op.operand)
+    if field === nothing
+        return nothing
+    end
+    n = subproblem_field_size(sp, field)
+    coord_name = isa(op.coord.name, Symbol) ? String(op.coord.name) : op.coord.name
+    return _subproblem_diff_matrix(sp, coord_name, op.order, n)
+end
+
+"""
+    subproblem_matrix(op::Laplacian, sp; kwargs...)
+
+Laplacian: sum of second derivatives across all coordinates.
+For 2D Fourier-Chebyshev: -kx² * I_Nz + D_z²
+"""
+function subproblem_matrix(op::Laplacian, sp; kwargs...)
+    field = _resolve_operand_field(op.operand)
+    if field === nothing
+        return nothing
+    end
+    n = subproblem_field_size(sp, field)
+    lap_mat = spzeros(ComplexF64, n, n)
+
+    # Sum second derivatives over all coordinates in the distributor
+    if hasfield(typeof(sp), :dist) && sp.dist !== nothing && hasfield(typeof(sp.dist), :coords)
+        for coord in sp.dist.coords
+            coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+            D2 = _subproblem_diff_matrix(sp, coord_name, 2, n)
+            lap_mat = lap_mat + D2
+        end
+    end
+    return lap_mat
+end
+
+"""
+    subproblem_matrix(op::Gradient, sp; kwargs...)
+
+Gradient: stacks per-coordinate differentiation matrices vertically.
+For scalar operand: (ndim*Nz × Nz).
+For vector operand: (ndim*n_vec × n_vec).
+"""
+function subproblem_matrix(op::Gradient, sp; kwargs...)
+    field = _resolve_operand_field(op.operand)
+    if field === nothing
+        return nothing
+    end
+    n = subproblem_field_size(sp, field)
     coordsys = op.coordsys
-    result = Dict{Any, SparseMatrixCSC}()
 
-    for var in vars
-        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
-            # For Cartesian: gradient is vector of partial derivatives
-            # Build block diagonal matrix with D_i for each component
-            n = field_dofs(var)
-            ndim = coordsys.dim
-
-            blocks = SparseMatrixCSC[]
-            for coord in coordsys.coords
-                D = build_operator_differentiation_matrix(var, coord, 1; kwargs...)
-                if D !== nothing
-                    push!(blocks, D)
-                else
-                    push!(blocks, spzeros(Float64, n, n))
-                end
-            end
-
-            # Stack blocks vertically for vector output
-            if !isempty(blocks)
-                result[var] = vcat(blocks...)
-            end
-        end
+    blocks = SparseMatrixCSC{ComplexF64, Int64}[]
+    for coord in coordsys.coords
+        coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+        D = _subproblem_diff_matrix(sp, coord_name, 1, n)
+        push!(blocks, D)
     end
 
-    return result
+    if isempty(blocks)
+        return nothing
+    end
+    return vcat(blocks...)
 end
 
 """
-    expression_matrices(op::Divergence, sp, vars; kwargs...)
+    subproblem_matrix(op::Divergence, sp; kwargs...)
 
-Divergence matrices for vector -> scalar.
-Following operators Divergence.expression_matrices.
+Divergence: concatenates per-coordinate differentiation matrices horizontally.
+Size: (Nz × ndim*Nz) for vector operand.
 """
-function expression_matrices(op::Divergence, sp, vars; kwargs...)
-    operand = op.operand
-    result = Dict{Any, SparseMatrixCSC}()
-
-    if !isa(operand, VectorField)
-        return result
+function subproblem_matrix(op::Divergence, sp; kwargs...)
+    # Get coordinate system from operand or from dist
+    coordsys = _get_operand_coordsys(op.operand)
+    if coordsys === nothing && hasfield(typeof(sp), :dist) && sp.dist !== nothing
+        coordsys = sp.dist.coordsys
+    end
+    if coordsys === nothing
+        return nothing
     end
 
-    coordsys = operand.coordsys
-
-    for var in vars
-        if var === operand || (hasfield(typeof(var), :name) && var.name == operand.name)
-            # For Cartesian: divergence is sum of partial derivatives of components
-            # Build row of blocks [D_x, D_y, D_z]
-            n_comp = length(operand.components)
-            n_per_comp = n_comp > 0 ? field_dofs(operand.components[1]) : 0
-
-            blocks = SparseMatrixCSC[]
-            for (i, coord) in enumerate(coordsys.coords)
-                comp = operand.components[i]
-                D = build_operator_differentiation_matrix(comp, coord, 1; kwargs...)
-                if D !== nothing
-                    push!(blocks, D)
-                else
-                    push!(blocks, spzeros(Float64, n_per_comp, n_per_comp))
-                end
-            end
-
-            # Concatenate blocks horizontally for scalar output
-            if !isempty(blocks)
-                result[var] = hcat(blocks...)
-            end
-        end
+    # For divergence, we need the scalar component size (Nz), not the full vector size
+    field = _resolve_operand_field(op.operand)
+    if field === nothing
+        return nothing
     end
 
-    return result
+    # Get scalar block size: for a VectorField, it's the size per component;
+    # for a scalar field, it's the full size
+    if isa(field, VectorField) && !isempty(field.components)
+        Nz = subproblem_field_size(sp, field.components[1])
+    else
+        Nz = subproblem_field_size(sp, field)
+    end
+
+    ndim = coordsys.dim
+    blocks = SparseMatrixCSC{ComplexF64, Int64}[]
+    for coord in coordsys.coords
+        coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+        D = _subproblem_diff_matrix(sp, coord_name, 1, Nz)
+        push!(blocks, D)
+    end
+
+    if isempty(blocks)
+        return nothing
+    end
+    return hcat(blocks...)
 end
 
 """
-    expression_matrices(op::Lift, sp, vars; kwargs...)
+    subproblem_matrix(op::Trace, sp; kwargs...)
 
-Lift matrices for boundary conditions (tau method).
-Following operators Lift.expression_matrices.
+Trace of a tensor: contracts diagonal components.
+For 2D: trace_vec = [1, 0, 0, 1] (from ravel(eye(dim))).
+Size: (Nz × dim²*Nz).
 """
-function expression_matrices(op::Lift, sp, vars; kwargs...)
-    operand = op.operand
-    basis = op.basis
-    n = op.n
-    result = Dict{Any, SparseMatrixCSC}()
+function subproblem_matrix(op::Trace, sp; kwargs...)
+    # Determine dimensionality from the operand or from dist
+    coordsys = _get_operand_coordsys(op.operand)
+    if coordsys === nothing && hasfield(typeof(sp), :dist) && sp.dist !== nothing
+        coordsys = sp.dist.coordsys
+    end
+    if coordsys === nothing
+        return nothing
+    end
+    dim = coordsys.dim
 
-    for var in vars
-        if var === operand || (hasfield(typeof(var), :name) && hasfield(typeof(operand), :name) && var.name == operand.name)
-            # Lift matrix places tau values at specific spectral modes
-            lift_mat = build_lift_matrix(var, basis, n; kwargs...)
-            if lift_mat !== nothing
-                result[var] = lift_mat
-            end
-        end
+    # Get scalar block size from the operand
+    field = _resolve_operand_field(op.operand)
+    if field === nothing
+        return nothing
     end
 
-    return result
+    # For Trace, the operand is typically a tensor or a composed expression
+    # that produces dim²*Nz rows. We need the scalar Nz.
+    if isa(field, VectorField) && !isempty(field.components)
+        Nz = subproblem_field_size(sp, field.components[1])
+    elseif isa(field, ScalarField)
+        Nz = subproblem_field_size(sp, field)
+    else
+        # TensorField or other
+        Nz_total = subproblem_field_size(sp, field)
+        Nz = div(Nz_total, dim * dim)
+    end
+
+    # Build trace vector: ravel(eye(dim)) — e.g., [1,0,0,1] for dim=2
+    eye_flat = zeros(ComplexF64, dim * dim)
+    for i in 1:dim
+        eye_flat[(i-1)*dim + i] = ComplexF64(1.0)
+    end
+
+    # Trace matrix: kron(transpose(trace_vec), I_Nz)
+    # This selects and sums diagonal blocks: (Nz × dim²*Nz)
+    trace_vec = sparse(reshape(eye_flat, dim*dim, 1))
+    return kron(sparse(transpose(trace_vec)), sparse(ComplexF64(1) * I, Nz, Nz))
 end
+
+"""
+    subproblem_matrix(op::Lift, sp; kwargs...)
+
+Lift matrix for tau method boundary conditions.
+Delegates to existing build_lift_matrix, converts to ComplexF64.
+"""
+function subproblem_matrix(op::Lift, sp; kwargs...)
+    field = _resolve_operand_field(op.operand)
+    if field === nothing
+        return nothing
+    end
+    lift_mat = build_lift_matrix(field, op.basis, op.n; kwargs...)
+    if lift_mat === nothing
+        return nothing
+    end
+    return sparse(ComplexF64.(lift_mat))
+end
+
+# ============================================================================
+# expression_matrices for operators not yet migrated to subproblem_matrix
+# ============================================================================
 
 """
     expression_matrices(op::Convert, sp, vars; kwargs...)

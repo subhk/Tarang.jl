@@ -639,6 +639,9 @@ mutable struct Subproblem
     # Input/output buffers
     _input_buffer::Union{Nothing, Matrix{ComplexF64}}
     _output_buffer::Union{Nothing, Matrix{ComplexF64}}
+
+    # Per-stage LHS factorizations for IMEX RK
+    LHS_solvers::Vector{Any}
 end
 
 function combined_range(ranges)
@@ -701,7 +704,8 @@ function Subproblem(solver, subsystems::Tuple{Vararg{Subsystem}}, group::Tuple=S
         nothing, nothing,  # Minimal matrices
         nothing, nothing, nothing,  # Expanded matrices
         0,  # update_rank
-        nothing, nothing  # Buffers
+        nothing, nothing,  # Buffers
+        Any[]  # LHS_solvers
     )
 
     # Set back-reference
@@ -793,6 +797,125 @@ Sum of per-component subproblem sizes over all tensor entries.
 """
 subproblem_field_size(sp::Subproblem, field::TensorField) =
     sum(subproblem_field_size(sp, comp) for comp in vec(field.components))
+
+# ---------------------------------------------------------------------------
+# Per-subproblem gather/scatter
+# ---------------------------------------------------------------------------
+
+"""Return 1-based Fourier mode index for this subproblem."""
+function _kx_index_for_subproblem(sp::Subproblem)
+    for g in sp.group
+        if g isa Integer
+            return g + 1  # 0-based → 1-based
+        end
+    end
+    return 1
+end
+
+"""Extract per-mode coefficients from all fields into a flat vector (no permutation)."""
+function _gather_subproblem_raw(sp::Subproblem, fields::Vector)
+    kx_idx = _kx_index_for_subproblem(sp)
+    buffer = ComplexF64[]
+    for field in fields
+        _gather_field_raw!(buffer, field, kx_idx, sp)
+    end
+    return buffer
+end
+
+function _gather_field_raw!(buffer, field::ScalarField, kx_idx::Int, sp::Subproblem)
+    ensure_layout!(field, :c)
+    cd = get_coeff_data(field)
+    if cd === nothing
+        push!(buffer, ComplexF64(0))
+        return
+    end
+    if isempty(field.bases) || all(b -> b === nothing, field.bases)
+        # 0D tau: single scalar
+        push!(buffer, ComplexF64(cd[1]))
+    elseif ndims(cd) == 1
+        # 1D field (tau with Fourier basis): single element at kx_idx
+        if kx_idx <= length(cd)
+            push!(buffer, ComplexF64(cd[kx_idx]))
+        else
+            push!(buffer, ComplexF64(0))
+        end
+    else
+        # 2D field: extract row kx_idx across all Chebyshev modes
+        Nz = size(cd, 2)
+        for iz in 1:Nz
+            push!(buffer, ComplexF64(cd[kx_idx, iz]))
+        end
+    end
+end
+
+function _gather_field_raw!(buffer, field::VectorField, kx_idx::Int, sp::Subproblem)
+    for comp in field.components
+        _gather_field_raw!(buffer, comp, kx_idx, sp)
+    end
+end
+
+"""Write per-mode coefficients back to fields from a flat vector (no permutation)."""
+function _scatter_subproblem_raw(sp::Subproblem, data::AbstractVector, fields::Vector)
+    kx_idx = _kx_index_for_subproblem(sp)
+    offset = 0
+    for field in fields
+        offset = _scatter_field_raw!(field, data, offset, kx_idx, sp)
+    end
+end
+
+function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::Int, kx_idx::Int, sp::Subproblem)
+    ensure_layout!(field, :c)
+    cd = get_coeff_data(field)
+    if cd === nothing
+        return offset + subproblem_field_size(sp, field)
+    end
+    if isempty(field.bases) || all(b -> b === nothing, field.bases)
+        cd[1] = eltype(cd) <: Real ? real(data[offset+1]) : data[offset+1]
+        return offset + 1
+    elseif ndims(cd) == 1
+        if kx_idx <= length(cd)
+            cd[kx_idx] = eltype(cd) <: Real ? real(data[offset+1]) : data[offset+1]
+        end
+        return offset + 1
+    else
+        Nz = size(cd, 2)
+        for iz in 1:Nz
+            cd[kx_idx, iz] = eltype(cd) <: Real ? real(data[offset+iz]) : data[offset+iz]
+        end
+        return offset + Nz
+    end
+end
+
+function _scatter_field_raw!(field::VectorField, data::AbstractVector, offset::Int, kx_idx::Int, sp::Subproblem)
+    for comp in field.components
+        offset = _scatter_field_raw!(comp, data, offset, kx_idx, sp)
+    end
+    return offset
+end
+
+"""Gather per-mode coefficients and apply pre_right_pinv (variable permutation)."""
+function gather_inputs(sp::Subproblem, fields::Vector)
+    raw = _gather_subproblem_raw(sp, fields)
+    if sp.pre_right_pinv !== nothing
+        return sp.pre_right_pinv * raw
+    end
+    return raw
+end
+
+"""Apply pre_right and scatter back to fields."""
+function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector)
+    raw = sp.pre_right !== nothing ? sp.pre_right * data : data
+    _scatter_subproblem_raw(sp, raw, fields)
+end
+
+"""Gather per-mode coefficients and apply pre_left (equation permutation)."""
+function gather_outputs(sp::Subproblem, fields::Vector)
+    raw = _gather_subproblem_raw(sp, fields)
+    if sp.pre_left !== nothing
+        return sp.pre_left * raw
+    end
+    return raw
+end
 
 """
     check_condition(sp::Subproblem, eq_data)
