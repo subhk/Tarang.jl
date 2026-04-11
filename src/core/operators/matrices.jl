@@ -215,7 +215,10 @@ end
 Handle Future hierarchy types (Add, Subtract, Multiply, Negate, Divide).
 These have args accessed via future_args(expr), not left/right fields.
 """
-expression_matrices(expr::Future, sp, vars; kwargs...) = _expression_matrices_future(expr, sp, vars; kwargs...)
+function expression_matrices(expr::Future, sp, vars; kwargs...)
+    @debug "expression_matrices(::Future) called for $(typeof(expr)) with $(length(future_args(expr))) args"
+    return _expression_matrices_future(expr, sp, vars; kwargs...)
+end
 
 function _expression_matrices_future(expr::Future, sp, vars; kwargs...)
     args = collect(Any, future_args(expr))
