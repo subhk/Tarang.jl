@@ -114,7 +114,7 @@ x, z = local_grids(dist, xbasis, zbasis)
 fill_random!(b, "g"; seed=42, distribution="normal", scale=1e-3)
 get_grid_data(b) .*= z' .* (Lz .- z')       # Damp noise at walls
 get_grid_data(b) .+= Lz .- z'               # Add linear background
-ensure_layout!(b, :c)                        # Pre-compute coefficients for timestepper
+ensure_layout!(b, :c)                       # Pre-compute coefficients for timestepper
 
 # ─── CFL ─────────────────────────────────────────────────────
 cfl = CFL(solver; initial_dt=max_dt, cadence=10, safety=0.5,
