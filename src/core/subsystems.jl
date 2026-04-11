@@ -1238,6 +1238,10 @@ function build_matrices!(sp::Subproblem, names, solver)
 
     eqn_sizes = Int[]
     for (i, eq) in enumerate(eqns)
+        if _drops_on_nonzero_fourier_group(get(eq, "lhs", nothing), sp)
+            push!(eqn_sizes, 0)
+            continue
+        end
         global_sz = get(eq, "equation_size", 0)
         if global_sz <= 0
             # No size info: use variable size
@@ -1324,7 +1328,7 @@ function build_matrices!(sp::Subproblem, names, solver)
     end
 
     # Build permutation matrices (following subsystems:554-556)
-    left_perm = left_permutation(sp, eqns, bc_top, interleave_components)
+    left_perm = left_permutation(sp, eqns, eqn_sizes, bc_top, interleave_components)
     right_perm = right_permutation(sp, vars, tau_left, interleave_components)
 
     # Build preconditioners (following subsystems:559-563)
@@ -1370,6 +1374,48 @@ function build_matrices!(sp::Subproblem, names, solver)
     return nothing
 end
 
+function _coord_name(coord)
+    isa(coord, Tuple) && !isempty(coord) && return _coord_name(coord[1])
+    return isa(coord.name, Symbol) ? String(coord.name) : String(coord.name)
+end
+
+function _drops_on_nonzero_fourier_group(expr, sp::Subproblem)
+    expr === nothing && return false
+
+    if isa(expr, Integrate) || isa(expr, Average)
+        coord_name = _coord_name(expr.coord)
+        basis = _operand_basis_for_coord(expr.operand, coord_name)
+        group_entry = _subproblem_group_index(sp, coord_name)
+        if basis isa FourierBasis && group_entry isa Integer && group_entry != 0
+            return true
+        end
+        return _drops_on_nonzero_fourier_group(expr.operand, sp)
+    end
+
+    for field_name in (:operand, :left, :right, :base, :exponent)
+        hasfield(typeof(expr), field_name) || continue
+        child = getfield(expr, field_name)
+        _drops_on_nonzero_fourier_group(child, sp) && return true
+    end
+
+    if hasfield(typeof(expr), :operands)
+        operands = getfield(expr, :operands)
+        if operands !== nothing
+            for operand in operands
+                _drops_on_nonzero_fourier_group(operand, sp) && return true
+            end
+        end
+    end
+
+    if isa(expr, Future)
+        for arg in future_args(expr)
+            _drops_on_nonzero_fourier_group(arg, sp) && return true
+        end
+    end
+
+    return false
+end
+
 """
     get_valid_modes(eq_data, sp, num_modes)
 
@@ -1389,10 +1435,14 @@ end
 Get valid modes array for variable.
 """
 function get_valid_modes_var(var, sp::Subproblem)
+    local_size = subproblem_field_size(sp, var)
     if hasfield(typeof(var), :valid_modes) && var.valid_modes !== nothing
-        return vec(var.valid_modes)
+        valid = vec(var.valid_modes)
+        if length(valid) == local_size
+            return valid
+        end
     end
-    return ones(Bool, field_dofs(var))
+    return ones(Bool, local_size)
 end
 
 """
@@ -1486,14 +1536,13 @@ Input ordering: Equations > Components > Modes
 Output ordering with interleave_components=true: Modes > Components > Equations
 Output ordering with interleave_components=false: Modes > Equations > Components
 """
-function left_permutation(sp::Subproblem, equations, bc_top::Bool, interleave_components::Bool)
+function left_permutation(sp::Subproblem, equations, eqn_sizes::AbstractVector{<:Integer}, bc_top::Bool, interleave_components::Bool)
     # Compute hierarchy of input equation indices
     i = 0
     L0 = Vector{Vector{Vector{Int}}}()
 
-    for eq_data in equations
+    for (eq_data, eq_size) in zip(equations, eqn_sizes)
         L1 = Vector{Vector{Int}}()
-        eq_size = get(eq_data, "equation_size", 0)
 
         if eq_size == 0
             push!(L1, Int[])
@@ -1573,6 +1622,11 @@ function left_permutation(sp::Subproblem, equations, bc_top::Bool, interleave_co
     return perm_matrix(indices .+ 1, i)  # +1 for 1-based indexing
 end
 
+function left_permutation(sp::Subproblem, equations, bc_top::Bool, interleave_components::Bool)
+    eqn_sizes = [get(eq, "equation_size", 0) for eq in equations]
+    return left_permutation(sp, equations, eqn_sizes, bc_top, interleave_components)
+end
+
 """
     right_permutation(sp, variables, tau_left, interleave_components)
 
@@ -1592,7 +1646,7 @@ function right_permutation(sp::Subproblem, variables, tau_left::Bool, interleave
 
     for var in variables
         L1 = Vector{Vector{Int}}()
-        var_size = field_dofs(var)
+        var_size = subproblem_field_size(sp, var)
 
         if var_size == 0
             push!(L1, Int[])

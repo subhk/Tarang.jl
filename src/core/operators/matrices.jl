@@ -475,6 +475,47 @@ function _resolve_operand_field(operand)
     return nothing
 end
 
+function _operand_basis_for_coord(operand, coord_name::String)
+    field = _resolve_operand_field(operand)
+    field === nothing && return nothing
+
+    if hasfield(typeof(field), :bases)
+        for basis in field.bases
+            basis === nothing && continue
+            label = isa(basis.meta.element_label, Symbol) ? String(basis.meta.element_label) : String(basis.meta.element_label)
+            label == coord_name && return basis
+        end
+    end
+
+    if isa(field, VectorField)
+        for comp in field.components
+            for basis in comp.bases
+                basis === nothing && continue
+                label = isa(basis.meta.element_label, Symbol) ? String(basis.meta.element_label) : String(basis.meta.element_label)
+                label == coord_name && return basis
+            end
+        end
+    end
+
+    return nothing
+end
+
+function _subproblem_group_index(sp, coord_name::String)
+    if !(hasfield(typeof(sp), :dist) && sp.dist !== nothing && hasfield(typeof(sp.dist), :coords))
+        return nothing
+    end
+
+    for (axis, group_entry) in enumerate(sp.group)
+        axis > length(sp.dist.coords) && continue
+        dist_coord = sp.dist.coords[axis]
+        label = isa(dist_coord.name, Symbol) ? String(dist_coord.name) : String(dist_coord.name)
+        if label == coord_name
+            return group_entry
+        end
+    end
+    return nothing
+end
+
 # ============================================================================
 # subproblem_matrix implementations for linear operators
 # ============================================================================
@@ -755,17 +796,33 @@ end
 
 # ── Integrate: integration over a coordinate (constraints like integ(p)=0) ──
 function subproblem_matrix(op::Integrate, sp; kwargs...)
+    coord = isa(op.coord, Tuple) ? op.coord[1] : op.coord
+    coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+    basis = _operand_basis_for_coord(op.operand, coord_name)
+    field = _resolve_operand_field(op.operand)
+
+    if basis isa FourierBasis
+        field === nothing && return nothing
+        n = subproblem_field_size(sp, field)
+        n == 0 && return spzeros(ComplexF64, 0, 0)
+
+        group_entry = _subproblem_group_index(sp, coord_name)
+        if !(group_entry isa Integer) || group_entry != 0
+            return spzeros(ComplexF64, n, n)
+        end
+
+        L = basis.meta.bounds[2] - basis.meta.bounds[1]
+        return sparse(ComplexF64(L) * I, n, n)
+    end
+
     cheb_basis = _subproblem_cheb_basis(sp)
     if cheb_basis === nothing
         return nothing
     end
-
-    coord = isa(op.coord, Tuple) ? op.coord[1] : op.coord
-    coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
     cheb_label = String(cheb_basis.meta.element_label)
 
     if coord_name != cheb_label
-        return nothing  # Fourier integration: handled differently
+        return nothing
     end
 
     Nz = cheb_basis.meta.size
@@ -782,7 +839,6 @@ function subproblem_matrix(op::Integrate, sp; kwargs...)
     end
 
     # For vector operands
-    field = _resolve_operand_field(op.operand)
     n_comp = 1
     if field !== nothing && isa(field, VectorField)
         n_comp = length(field.components)
