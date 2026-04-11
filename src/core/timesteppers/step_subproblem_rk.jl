@@ -231,18 +231,14 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         return lhs_lu
     end
 
-    # Some gauge-constrained subproblems remain rank-deficient in the current
-    # coefficient-space formulation. Sparse QR provides a consistent least-
-    # squares solve and is strictly better than the previous rhs passthrough.
-    try
-        lhs_qr = qr(LHS)
-        sp.LHS_solvers[stage_idx] = lhs_qr
-        @info "step_subproblem_rk!: using sparse QR fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
-        return lhs_qr
-    catch
-        @warn "step_subproblem_rk!: LU/QR factorization failed for group=$(sp.group), stage=$stage_idx" maxlog=1
-        return nothing
-    end
+    # Gauge-constrained subproblems (e.g., pressure with integ(p)=0 for non-DC
+    # modes) may be rank-deficient by 1. Use dense matrix with backslash which
+    # employs pivoted LU — more robust for near-singular systems than sparse LU.
+    # For small subproblem sizes (39×39 for RBC 2D), the cost is negligible.
+    LHS_dense = Matrix(LHS)
+    sp.LHS_solvers[stage_idx] = LHS_dense
+    @info "step_subproblem_rk!: using dense fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
+    return LHS_dense
 end
 
 """
