@@ -1219,47 +1219,8 @@ function build_matrices!(sp::Subproblem, names, solver)
     eqn_conditions = [check_condition(sp, eq) for eq in eqns]
     var_sizes = [subproblem_field_size(sp, var) for var in vars]
 
-    # Equation sizes: derive from global equation_size by dividing out the separable
-    # dimension factor. For PDEs on a 2D domain, global_size = N_fourier * per_mode_size.
-    # For BCs (lower-dimensional), global_size = N_fourier * 1 or N_fourier * ndim.
-    # For global constraints (integ), global_size = 1.
-    N_sep = 1  # product of separable dimension sizes
-    for (axis, g) in enumerate(sp.group)
-        if g isa Integer
-            # Find this basis's coefficient space size
-            for var in vars
-                for comp in scalar_components(var)
-                    if axis <= length(comp.bases) && comp.bases[axis] !== nothing
-                        basis = comp.bases[axis]
-                        N_sep = isa(basis, RealFourier) ? div(basis.meta.size, 2) + 1 : basis.meta.size
-                        break
-                    end
-                end
-                N_sep > 1 && break
-            end
-            break
-        end
-    end
-
-    eqn_sizes = Int[]
-    for (i, eq) in enumerate(eqns)
-        if _drops_on_nonzero_fourier_group(get(eq, "lhs", nothing), sp)
-            push!(eqn_sizes, 0)
-            continue
-        end
-        global_sz = get(eq, "equation_size", 0)
-        if global_sz <= 0
-            # No size info: use variable size
-            push!(eqn_sizes, i <= length(var_sizes) ? var_sizes[i] : 0)
-        elseif N_sep > 1 && global_sz >= N_sep
-            # Per-subproblem: divide global size by separable factor
-            push!(eqn_sizes, div(global_sz, N_sep))
-        else
-            # Global constraint (e.g., integ(p)=0): size 1 for DC, 0 for others
-            # Or just use the global size as-is if it's small
-            push!(eqn_sizes, global_sz)
-        end
-    end
+    # Equation sizes come directly from the subproblem-local LHS operator shape.
+    eqn_sizes = [_subproblem_expr_dofs(sp, get(eq, "lhs", nothing)) for eq in eqns]
     I = sum(eqn_sizes)
     J = sum(var_sizes)
 
@@ -1384,41 +1345,89 @@ function _coord_name(coord)
     return isa(coord.name, Symbol) ? String(coord.name) : String(coord.name)
 end
 
-function _drops_on_nonzero_fourier_group(expr, sp::Subproblem)
-    expr === nothing && return false
+function _subproblem_reduce_dofs(sp::Subproblem, inner::Int, operand, coord; interpolate::Bool=false)
+    coord_name = _coord_name(coord)
+    basis = _operand_basis_for_coord(operand, coord_name)
+    basis === nothing && return inner
 
-    if isa(expr, Integrate) || isa(expr, Average)
-        coord_name = _coord_name(expr.coord)
-        basis = _operand_basis_for_coord(expr.operand, coord_name)
+    if basis isa FourierBasis
+        if interpolate
+            return inner
+        end
         group_entry = _subproblem_group_index(sp, coord_name)
-        if basis isa FourierBasis && group_entry isa Integer && group_entry != 0
-            return true
-        end
-        return _drops_on_nonzero_fourier_group(expr.operand, sp)
+        return (group_entry isa Integer && group_entry == 0) ? inner : 0
     end
 
-    for field_name in (:operand, :left, :right, :base, :exponent)
-        hasfield(typeof(expr), field_name) || continue
-        child = getfield(expr, field_name)
-        _drops_on_nonzero_fourier_group(child, sp) && return true
+    bsize = _basis_coeff_size(basis)
+    if bsize <= 0 || inner == 0
+        return inner
     end
+    return inner % bsize == 0 ? div(inner, bsize) : inner
+end
 
-    if hasfield(typeof(expr), :operands)
-        operands = getfield(expr, :operands)
-        if operands !== nothing
-            for operand in operands
-                _drops_on_nonzero_fourier_group(operand, sp) && return true
-            end
-        end
+function _subproblem_expr_dofs(sp::Subproblem, expr)
+    expr === nothing && return 0
+    (isa(expr, Number) || isa(expr, ZeroOperator) || isa(expr, ConstantOperator)) && return 0
+    isa(expr, ScalarField) && return subproblem_field_size(sp, expr)
+    isa(expr, VectorField) && return subproblem_field_size(sp, expr)
+    isa(expr, TensorField) && return subproblem_field_size(sp, expr)
+
+    if isa(expr, AddOperator) || isa(expr, SubtractOperator)
+        return max(_subproblem_expr_dofs(sp, expr.left), _subproblem_expr_dofs(sp, expr.right))
     end
+    if isa(expr, MultiplyOperator) || isa(expr, DivideOperator)
+        return max(_subproblem_expr_dofs(sp, expr.left), _subproblem_expr_dofs(sp, expr.right))
+    end
+    isa(expr, NegateOperator) && return _subproblem_expr_dofs(sp, expr.operand)
 
     if isa(expr, Future)
-        for arg in future_args(expr)
-            _drops_on_nonzero_fourier_group(arg, sp) && return true
-        end
+        args = future_args(expr)
+        return isempty(args) ? 0 : maximum(_subproblem_expr_dofs(sp, arg) for arg in args)
     end
 
-    return false
+    if isa(expr, Integrate) || isa(expr, Average)
+        inner = _subproblem_expr_dofs(sp, expr.operand)
+        coords = isa(expr.coord, Tuple) ? expr.coord : (expr.coord,)
+        for coord in coords
+            inner = _subproblem_reduce_dofs(sp, inner, expr.operand, coord; interpolate=false)
+        end
+        return inner
+    end
+
+    if isa(expr, Interpolate)
+        return _subproblem_reduce_dofs(sp, _subproblem_expr_dofs(sp, expr.operand),
+                                       expr.operand, expr.coord; interpolate=true)
+    end
+
+    if isa(expr, Trace)
+        field = _resolve_operand_field(expr.operand)
+        if isa(field, VectorField) && !isempty(field.components)
+            return subproblem_field_size(sp, field.components[1])
+        elseif isa(field, ScalarField)
+            return subproblem_field_size(sp, field)
+        end
+
+        inner = _subproblem_expr_dofs(sp, expr.operand)
+        ndim = _infer_ndim(expr.operand)
+        if ndim > 0 && inner % (ndim * ndim) == 0
+            return div(inner, ndim * ndim)
+        elseif ndim > 0 && inner % ndim == 0
+            return div(inner, ndim)
+        end
+        return inner
+    end
+
+    if hasfield(typeof(expr), :operand)
+        mat = subproblem_matrix(expr, sp)
+        if mat !== nothing
+            return size(mat, 1)
+        end
+        return _subproblem_expr_dofs(sp, getfield(expr, :operand))
+    end
+
+    field = _resolve_operand_field(expr)
+    field !== nothing && return subproblem_field_size(sp, field)
+    return 0
 end
 
 function _has_only_zero_dim_bases(field::ScalarField)
