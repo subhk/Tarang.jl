@@ -1225,11 +1225,12 @@ function build_matrices!(sp::Subproblem, names, solver)
     store_expanded = config.store_expanded_matrices
 
     # Compute per-subproblem sizes.
-    # In the 1:1 equation-variable mapping (Dedalus convention), equation i maps to
-    # variable i, so eqn_sizes == var_sizes. This keeps the matrix square.
+    # Following Dedalus (subsystems.py:504): eqn_sizes = [sp.field_size(eqn['eqn']) for eqn in eqns]
+    # Each equation's output size is determined by the LHS expression's structure,
+    # not by the corresponding variable's size.
     eqn_conditions = [check_condition(sp, eq) for eq in eqns]
     var_sizes = [subproblem_field_size(sp, var) for var in vars]
-    eqn_sizes = copy(var_sizes)
+    eqn_sizes = [_subproblem_eqn_size(sp, eq) for eq in eqns]
     I = sum(eqn_sizes)
     J = sum(var_sizes)
 
@@ -1349,7 +1350,7 @@ function build_matrices!(sp::Subproblem, names, solver)
     else
         # Initialize LHS as sparse zero matrix for shape access and solver compatibility
         # This is the standard case when expanded matrices are not requested
-        sp.LHS = spzeros(dtype, n_valid_eqn, n_valid_var)
+        sp.LHS = spzeros(dtype, I, J)
     end
 
     # Compute update rank for Woodbury formula
