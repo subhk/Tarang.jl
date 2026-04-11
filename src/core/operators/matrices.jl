@@ -209,6 +209,14 @@ function _expand_constant_vector_product(vec_expr, child_mats::Dict, sp)
     return result
 end
 
+"""
+    expression_matrices(expr::Future, sp, vars; kwargs...)
+
+Handle Future hierarchy types (Add, Subtract, Multiply, Negate, Divide).
+These have args accessed via future_args(expr), not left/right fields.
+"""
+expression_matrices(expr::Future, sp, vars; kwargs...) = _expression_matrices_future(expr, sp, vars; kwargs...)
+
 function _expression_matrices_future(expr::Future, sp, vars; kwargs...)
     args = collect(Any, future_args(expr))
 
@@ -829,6 +837,8 @@ function subproblem_matrix(op::Divergence, sp; kwargs...)
         D = _subproblem_diff_matrix(sp, coord_name, 1, block_size)
         push!(blocks, D)
     end
+
+    @debug "Divergence subproblem_matrix: field_size=$field_size, input_size=$input_size, block_size=$block_size, ndim=$ndim, result=$(size(hcat(blocks...)))"
 
     if isempty(blocks)
         return nothing
