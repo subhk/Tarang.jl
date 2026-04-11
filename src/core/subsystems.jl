@@ -1211,11 +1211,46 @@ function build_matrices!(sp::Subproblem, names, solver)
     store_expanded = config.store_expanded_matrices
 
     # Compute per-subproblem sizes.
-    # In the Dedalus convention, equation i maps 1:1 to variable i, so
-    # eqn_sizes == var_sizes for well-posed problems.
     eqn_conditions = [check_condition(sp, eq) for eq in eqns]
     var_sizes = [subproblem_field_size(sp, var) for var in vars]
-    eqn_sizes = copy(var_sizes)  # 1:1 equation-variable mapping
+
+    # Equation sizes: derive from global equation_size by dividing out the separable
+    # dimension factor. For PDEs on a 2D domain, global_size = N_fourier * per_mode_size.
+    # For BCs (lower-dimensional), global_size = N_fourier * 1 or N_fourier * ndim.
+    # For global constraints (integ), global_size = 1.
+    N_sep = 1  # product of separable dimension sizes
+    for (axis, g) in enumerate(sp.group)
+        if g isa Integer
+            # Find this basis's coefficient space size
+            for var in vars
+                for comp in scalar_components(var)
+                    if axis <= length(comp.bases) && comp.bases[axis] !== nothing
+                        basis = comp.bases[axis]
+                        N_sep = isa(basis, RealFourier) ? div(basis.meta.size, 2) + 1 : basis.meta.size
+                        break
+                    end
+                end
+                N_sep > 1 && break
+            end
+            break
+        end
+    end
+
+    eqn_sizes = Int[]
+    for (i, eq) in enumerate(eqns)
+        global_sz = get(eq, "equation_size", 0)
+        if global_sz <= 0
+            # No size info: use variable size
+            push!(eqn_sizes, i <= length(var_sizes) ? var_sizes[i] : 0)
+        elseif N_sep > 1 && global_sz >= N_sep
+            # Per-subproblem: divide global size by separable factor
+            push!(eqn_sizes, div(global_sz, N_sep))
+        else
+            # Global constraint (e.g., integ(p)=0): size 1 for DC, 0 for others
+            # Or just use the global size as-is if it's small
+            push!(eqn_sizes, global_sz)
+        end
+    end
     I = sum(eqn_sizes)
     J = sum(var_sizes)
 

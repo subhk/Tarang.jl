@@ -712,6 +712,87 @@ function subproblem_matrix(op::Lift, sp; kwargs...)
     end
 end
 
+# ── Interpolate: evaluation at a point (BC constraints) ──
+function subproblem_matrix(op::Interpolate, sp; kwargs...)
+    cheb_basis = _subproblem_cheb_basis(sp)
+    if cheb_basis === nothing
+        return nothing
+    end
+    coord_name = isa(op.coord.name, Symbol) ? String(op.coord.name) : op.coord.name
+    cheb_label = String(cheb_basis.meta.element_label)
+
+    if coord_name != cheb_label
+        # Interpolation in Fourier direction: handled by mode selection, just identity
+        return nothing
+    end
+
+    Nz = cheb_basis.meta.size
+    z0 = Float64(op.position)
+    z_min, z_max = cheb_basis.meta.bounds[1], cheb_basis.meta.bounds[2]
+
+    # Map physical position to canonical [-1, 1]
+    xi = 2.0 * (z0 - z_min) / (z_max - z_min) - 1.0
+
+    # Chebyshev evaluation: T_n(xi) row vector
+    T = zeros(ComplexF64, 1, Nz)
+    if Nz >= 1; T[1, 1] = 1.0; end
+    if Nz >= 2; T[1, 2] = xi; end
+    for n in 3:Nz
+        T[1, n] = 2.0 * xi * T[1, n-1] - T[1, n-2]
+    end
+
+    # For vector operands, apply to each component: kron(I_ncomp, T_row)
+    field = _resolve_operand_field(op.operand)
+    n_comp = 1
+    if field !== nothing && isa(field, VectorField)
+        n_comp = length(field.components)
+    end
+    if n_comp > 1
+        return kron(sparse(ComplexF64(1)*I, n_comp, n_comp), sparse(T))
+    end
+    return sparse(T)  # (1 × Nz) for scalar
+end
+
+# ── Integrate: integration over a coordinate (constraints like integ(p)=0) ──
+function subproblem_matrix(op::Integrate, sp; kwargs...)
+    cheb_basis = _subproblem_cheb_basis(sp)
+    if cheb_basis === nothing
+        return nothing
+    end
+
+    coord = isa(op.coord, Tuple) ? op.coord[1] : op.coord
+    coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+    cheb_label = String(cheb_basis.meta.element_label)
+
+    if coord_name != cheb_label
+        return nothing  # Fourier integration: handled differently
+    end
+
+    Nz = cheb_basis.meta.size
+    z_min, z_max = cheb_basis.meta.bounds[1], cheb_basis.meta.bounds[2]
+    L = z_max - z_min
+
+    # Chebyshev integration weights: ∫_{-1}^{1} T_n(x) dx = 2/(1-n²) for even n, 0 for odd n
+    # Scaled by L/2 for physical domain [z_min, z_max]
+    w = zeros(ComplexF64, 1, Nz)
+    for n in 0:(Nz-1)
+        if n % 2 == 0
+            w[1, n+1] = ComplexF64(L / 2.0 * 2.0 / (1.0 - n^2))
+        end
+    end
+
+    # For vector operands
+    field = _resolve_operand_field(op.operand)
+    n_comp = 1
+    if field !== nothing && isa(field, VectorField)
+        n_comp = length(field.components)
+    end
+    if n_comp > 1
+        return kron(sparse(ComplexF64(1)*I, n_comp, n_comp), sparse(w))
+    end
+    return sparse(w)  # (1 × Nz) for scalar
+end
+
 # ============================================================================
 # expression_matrices for operators not yet migrated to subproblem_matrix
 # ============================================================================
