@@ -55,6 +55,19 @@ function _depends_on_vars(expr, vars)
         child === nothing && continue
         _depends_on_vars(child, vars) && return true
     end
+    if hasfield(typeof(expr), :operands)
+        ops = getfield(expr, :operands)
+        if ops !== nothing
+            for child in ops
+                _depends_on_vars(child, vars) && return true
+            end
+        end
+    end
+    if isa(expr, Future)
+        for child in future_args(expr)
+            _depends_on_vars(child, vars) && return true
+        end
+    end
     return false
 end
 
@@ -130,6 +143,105 @@ function _build_constant_field_matrix(expr, sp)
         end
     end
     return vals  # Return component values; caller builds the block matrix
+end
+
+function _merge_expression_mats(left_mats::Dict, right_mats::Dict; right_scale::ComplexF64=ComplexF64(1))
+    result = Dict{Any, SparseMatrixCSC}()
+    for (var, mat) in left_mats
+        result[var] = mat
+    end
+    for (var, mat) in right_mats
+        scaled = right_scale * mat
+        if haskey(result, var)
+            result[var] = result[var] + scaled
+        else
+            result[var] = scaled
+        end
+    end
+    return result
+end
+
+_scale_expression_mats(mats::Dict, coeff::ComplexF64) =
+    Dict{Any, SparseMatrixCSC}(var => coeff * mat for (var, mat) in mats)
+
+function _expand_constant_vector_product(vec_expr, child_mats::Dict, sp)
+    comp_vals = _build_constant_field_matrix(vec_expr, sp)
+    comp_vals === nothing && return Dict{Any, SparseMatrixCSC}()
+    isempty(child_mats) && return Dict{Any, SparseMatrixCSC}()
+
+    result = Dict{Any, SparseMatrixCSC}()
+    for (var, mat) in child_mats
+        n = size(mat, 1)
+        ndim = length(comp_vals)
+        blocks = [comp_vals[i] * sparse(ComplexF64(1) * I, n, n) for i in 1:ndim]
+        expansion = vcat(blocks...)
+        result[var] = expansion * mat
+    end
+    return result
+end
+
+function _expression_matrices_future(expr::Future, sp, vars; kwargs...)
+    args = collect(Any, future_args(expr))
+
+    if isa(expr, Add)
+        result = Dict{Any, SparseMatrixCSC}()
+        for arg in args
+            result = _merge_expression_mats(result, expression_matrices(arg, sp, vars; kwargs...))
+        end
+        return result
+    end
+
+    if isa(expr, Subtract)
+        isempty(args) && return Dict{Any, SparseMatrixCSC}()
+        result = expression_matrices(args[1], sp, vars; kwargs...)
+        for arg in args[2:end]
+            result = _merge_expression_mats(result, expression_matrices(arg, sp, vars; kwargs...);
+                                            right_scale=ComplexF64(-1))
+        end
+        return result
+    end
+
+    if isa(expr, Negate)
+        isempty(args) && return Dict{Any, SparseMatrixCSC}()
+        return _scale_expression_mats(expression_matrices(args[1], sp, vars; kwargs...), ComplexF64(-1))
+    end
+
+    if isa(expr, Divide)
+        length(args) < 2 && return Dict{Any, SparseMatrixCSC}()
+        denom = args[2]
+        (_is_const_or_param_local(denom) || isa(denom, Number)) || return Dict{Any, SparseMatrixCSC}()
+        coeff = ComplexF64(1) / ComplexF64(_extract_scalar_local(denom))
+        return _scale_expression_mats(expression_matrices(args[1], sp, vars; kwargs...), coeff)
+    end
+
+    if isa(expr, Multiply)
+        vec_idx = findfirst(arg -> isa(arg, VectorField) && !_depends_on_vars(arg, vars), args)
+        if vec_idx !== nothing
+            other_args = Any[arg for (idx, arg) in enumerate(args) if idx != vec_idx]
+            child = isempty(other_args) ? nothing : (length(other_args) == 1 ? other_args[1] : Multiply(other_args...))
+            child_mats = child === nothing ? Dict{Any, SparseMatrixCSC}() :
+                         expression_matrices(child, sp, vars; kwargs...)
+            return _expand_constant_vector_product(args[vec_idx], child_mats, sp)
+        end
+
+        scalar_coeff = ComplexF64(1)
+        dependent = Any[]
+        for arg in args
+            if _is_const_or_param_local(arg) || isa(arg, Number)
+                scalar_coeff *= ComplexF64(_extract_scalar_local(arg))
+            elseif _depends_on_vars(arg, vars)
+                push!(dependent, arg)
+            else
+                return Dict{Any, SparseMatrixCSC}()
+            end
+        end
+
+        length(dependent) == 1 || return Dict{Any, SparseMatrixCSC}()
+        child_mats = expression_matrices(only(dependent), sp, vars; kwargs...)
+        return _scale_expression_mats(child_mats, scalar_coeff)
+    end
+
+    return Dict{Any, SparseMatrixCSC}()
 end
 
 # ============================================================================
