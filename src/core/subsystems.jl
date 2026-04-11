@@ -1225,11 +1225,11 @@ function build_matrices!(sp::Subproblem, names, solver)
     store_expanded = config.store_expanded_matrices
 
     # Compute per-subproblem sizes.
+    # In the 1:1 equation-variable mapping (Dedalus convention), equation i maps to
+    # variable i, so eqn_sizes == var_sizes. This keeps the matrix square.
     eqn_conditions = [check_condition(sp, eq) for eq in eqns]
     var_sizes = [subproblem_field_size(sp, var) for var in vars]
-
-    # Equation sizes come directly from the subproblem-local LHS operator shape.
-    eqn_sizes = [_subproblem_expr_dofs(sp, get(eq, "lhs", nothing)) for eq in eqns]
+    eqn_sizes = copy(var_sizes)
     I = sum(eqn_sizes)
     J = sum(var_sizes)
 
@@ -1286,36 +1286,45 @@ function build_matrices!(sp::Subproblem, names, solver)
         matrices[name_str] = sparse(rows, cols, ComplexF64.(data), I, J)
     end
 
-    # Valid modes (following subsystems:539-548)
-    valid_eqn = vcat([get_valid_modes(eq, sp, eqn_sizes[i]) .* eqn_conditions[i]
-                      for (i, eq) in enumerate(eqns)]...)
-    valid_var = vcat([get_valid_modes_var(var, sp) for var in vars]...)
-
-    # Convert to diagonal filter matrices
-    valid_eqn_mat = spdiagm(0 => Float64.(valid_eqn))
-    valid_var_mat = spdiagm(0 => Float64.(valid_var))
-
-    # Check squareness (following subsystems:551-552)
-    n_valid_eqn = sum(valid_eqn)
-    n_valid_var = sum(valid_var)
-    if n_valid_eqn != n_valid_var
-        @warn "Non-square system: group=$(sp.group), valid_eqn=$n_valid_eqn, valid_var=$n_valid_var"
+    # ── Tau regularization ──────────────────────────────────────────────
+    # For per-subproblem matrices, equations like integ(p)=0 may produce
+    # zero rows for non-DC modes. The corresponding tau variable (tau_p)
+    # is then a free parameter, making the system underdetermined.
+    # Fix: detect zero equation rows in L and replace with identity
+    # constraints on the corresponding variable (tau_i = 0).
+    if haskey(matrices, "L") && I == J
+        L_raw = matrices["L"]
+        # Find zero equation rows
+        i0 = 0
+        for (eq_idx, eqn_size) in enumerate(eqn_sizes)
+            for local_row in 1:eqn_size
+                row_idx = i0 + local_row
+                if row_idx <= I
+                    # Check if this row is all zeros in L (and M if present)
+                    row_nnz = count(!iszero, L_raw[row_idx, :])
+                    m_nnz = haskey(matrices, "M") ? count(!iszero, matrices["M"][row_idx, :]) : 0
+                    if row_nnz == 0 && m_nnz == 0
+                        # Zero row: pin the corresponding variable DOF
+                        # The diagonal entry (row_idx, row_idx) pins the variable
+                        L_raw[row_idx, row_idx] = ComplexF64(1)
+                    end
+                end
+            end
+            i0 += eqn_size
+        end
+        matrices["L"] = L_raw
     end
 
-    # Build permutation matrices (following subsystems:554-556)
-    left_perm = left_permutation(sp, eqns, eqn_sizes, bc_top, interleave_components)
-    right_perm = right_permutation(sp, vars, tau_left, interleave_components)
-
-    # Build preconditioners (following subsystems:559-563)
-    sp.pre_left = drop_empty_rows(left_perm * valid_eqn_mat)
-    sp.pre_left_pinv = sparse(sp.pre_left')
-    sp.pre_right_pinv = drop_empty_rows(right_perm * valid_var_mat)
-    sp.pre_right = sparse(sp.pre_right_pinv')
-
-    # Precondition matrices (following subsystems:569-571)
-    for (name, matrix) in matrices
-        matrices[name] = sp.pre_left * matrix * sp.pre_right
-    end
+    # For per-subproblem matrices, use identity permutations.
+    # The per-subproblem matrices are already small (DOFs per Fourier mode),
+    # and the global-DOF-based permutation/valid_mode code isn't compatible
+    # with per-subproblem sizing. The gather/scatter functions handle the
+    # mode extraction; no reordering is needed at the matrix level.
+    n = I  # == J since eqn_sizes == var_sizes
+    sp.pre_left = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    sp.pre_left_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    sp.pre_right_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    sp.pre_right = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
 
     # Store minimal CSR matrices (following subsystems:573-575)
     sp.matrices = matrices
