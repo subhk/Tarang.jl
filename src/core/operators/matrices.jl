@@ -985,23 +985,74 @@ end
 # ── Integrate: integration over a coordinate (constraints like integ(p)=0) ──
 function subproblem_matrix(op::Integrate, sp; kwargs...)
     field = _resolve_operand_field(op.operand)
-    coords = isa(op.coord, Tuple) ? op.coord : (op.coord,)
-
     field === nothing && return nothing
     n = subproblem_field_size(sp, field)
-    mat = sparse(ComplexF64(1) * I, n, n)
+    coords = isa(op.coord, Tuple) ? collect(op.coord) : [op.coord]
 
+    # For multi-coordinate integration (integ over full domain):
+    # Check if any separable (Fourier) coordinate gives zero for this mode.
+    # If so, the entire integral is zero — return a zero row.
     for coord in coords
         coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
         basis = _operand_basis_for_coord(op.operand, coord_name)
-        basis === nothing && return nothing
-
-        step = _integration_step_matrix(basis, coord_name, sp, size(mat, 1))
-        step === nothing && return nothing
-        mat = step * mat
+        if basis !== nothing && basis isa FourierBasis
+            group_entry = _subproblem_group_index(sp, coord_name)
+            if group_entry isa Integer && group_entry != 0
+                # Non-DC Fourier mode: integral over x is zero
+                # Return a zero row to keep the system square; valid mode
+                # filtering will detect and remove it.
+                return spzeros(ComplexF64, 1, n)
+            end
+        end
     end
 
-    return sparse(mat)
+    # All Fourier coordinates are DC (or none are Fourier) — compute integration weights.
+    # For Chebyshev direction, build the integration weight row vector.
+    cheb_basis = nothing
+    for coord in coords
+        coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+        basis = _operand_basis_for_coord(op.operand, coord_name)
+        if basis !== nothing && basis isa JacobiBasis
+            cheb_basis = basis
+            break
+        end
+    end
+
+    if cheb_basis === nothing
+        return sparse(ComplexF64(1) * I, 1, n)  # No Chebyshev: scalar identity
+    end
+
+    Nz = cheb_basis.meta.size
+    z_min, z_max = cheb_basis.meta.bounds[1], cheb_basis.meta.bounds[2]
+    L = z_max - z_min
+
+    # Chebyshev integration weights: ∫_{-1}^{1} T_n(x) dx = 2/(1-n²) for even n
+    w = zeros(ComplexF64, 1, Nz)
+    for k in 0:(Nz-1)
+        if k % 2 == 0
+            w[1, k+1] = ComplexF64(L / 2.0 * 2.0 / (1.0 - k^2))
+        end
+    end
+
+    # Scale by Fourier domain length for DC mode (x-integration gives Lx)
+    for coord in coords
+        coord_name = isa(coord.name, Symbol) ? String(coord.name) : coord.name
+        basis = _operand_basis_for_coord(op.operand, coord_name)
+        if basis !== nothing && basis isa FourierBasis
+            Lx = basis.meta.bounds[2] - basis.meta.bounds[1]
+            w .*= Lx
+        end
+    end
+
+    # For vector operands
+    n_comp = 1
+    if field !== nothing && isa(field, VectorField)
+        n_comp = length(field.components)
+    end
+    if n_comp > 1
+        return kron(sparse(ComplexF64(1)*I, n_comp, n_comp), sparse(w))
+    end
+    return sparse(w)  # (1 × Nz)
 end
 
 # ============================================================================
