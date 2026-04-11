@@ -470,7 +470,28 @@ function _resolve_operand_field(operand)
         return operand
     end
     if hasfield(typeof(operand), :operand)
-        return _resolve_operand_field(operand.operand)
+        field = _resolve_operand_field(operand.operand)
+        field !== nothing && return field
+    end
+    for field_name in (:left, :right, :base, :exponent)
+        hasfield(typeof(operand), field_name) || continue
+        field = _resolve_operand_field(getfield(operand, field_name))
+        field !== nothing && return field
+    end
+    if hasfield(typeof(operand), :operands)
+        ops = getfield(operand, :operands)
+        if ops !== nothing
+            for op in ops
+                field = _resolve_operand_field(op)
+                field !== nothing && return field
+            end
+        end
+    end
+    if isa(operand, Future)
+        for op in future_args(operand)
+            field = _resolve_operand_field(op)
+            field !== nothing && return field
+        end
     end
     return nothing
 end
