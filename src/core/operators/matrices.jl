@@ -658,7 +658,10 @@ function _integration_step_matrix(basis, coord_name::String, sp, nrows::Int)
         if !(group_entry isa Integer)
             return nothing
         elseif group_entry != 0
-            return spzeros(ComplexF64, 0, nrows)
+            # Non-DC mode: Fourier integral is zero. Return zero row(s) to keep
+            # the matrix square — valid mode filtering will remove these rows
+            # along with the corresponding tau variable columns.
+            return spzeros(ComplexF64, 1, nrows)
         end
 
         L = basis.meta.bounds[2] - basis.meta.bounds[1]
