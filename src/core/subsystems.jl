@@ -1552,7 +1552,7 @@ function left_permutation(sp::Subproblem, equations, eqn_sizes::AbstractVector{<
 
         # Get shape info
         tensorsig = get(eq_data, "tensorsig", ())
-        n_comps = max(1, prod(cs isa CoordinateSystem ? cs.dim : 1 for cs in tensorsig))
+        n_comps = max(1, prod((cs isa CoordinateSystem ? cs.dim : 1 for cs in tensorsig); init=1))
         n_coeffs = eq_size ÷ n_comps
 
         for comp in 1:n_comps
