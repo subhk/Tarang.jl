@@ -1907,8 +1907,8 @@ Gather and precondition subproblem data from input-like field list.
 Following subsystems:340-350.
 """
 function gather_inputs(sp::Subproblem, fields::Vector{<:ScalarField})
-    # Gather from subsystems
-    data = gather(sp.subsystems[1], fields)
+    # Gather per-subproblem coefficient slices, including 0D tau variables.
+    data = _gather_subproblem_raw(sp, fields)
 
     # Apply right preconditioner inverse to compress inputs
     if sp.pre_right_pinv !== nothing
@@ -1930,8 +1930,8 @@ function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector{<:S
         data = Vector(sp.pre_right * data)
     end
 
-    # Scatter to fields
-    scatter(sp.subsystems[1], data, fields)
+    # Scatter back into the owning subproblem slices.
+    _scatter_subproblem_raw(sp, data, fields)
 end
 
 # ---------------------------------------------------------------------------
