@@ -1167,8 +1167,36 @@ Build expression matrices for each variable.
 # in matrices.jl, causing Julia MethodError for Operator+Subproblem calls.
 expression_matrices(::Nothing, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 expression_matrices(::Number, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
-expression_matrices(::ScalarField, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
-expression_matrices(::VectorField, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
+function expression_matrices(field::ScalarField, sp::Subproblem, vars; kwargs...)
+    if _field_in_vars(field, vars)
+        n = subproblem_field_size(sp, field)
+        return Dict{Any, SparseMatrixCSC}(field => sparse(ComplexF64(1)*I, n, n))
+    end
+    return Dict{Any, SparseMatrixCSC}()
+end
+
+function expression_matrices(field::VectorField, sp::Subproblem, vars; kwargs...)
+    if _field_in_vars(field, vars)
+        n = subproblem_field_size(sp, field)
+        return Dict{Any, SparseMatrixCSC}(field => sparse(ComplexF64(1)*I, n, n))
+    end
+    return Dict{Any, SparseMatrixCSC}()
+end
+
+"""
+    _field_in_vars(field, vars) -> Bool
+
+Check if `field` is in `vars` by object identity or name matching.
+"""
+function _field_in_vars(field, vars)
+    for v in vars
+        v === field && return true
+        if hasfield(typeof(v), :name) && hasfield(typeof(field), :name) && v.name == field.name
+            return true
+        end
+    end
+    return false
+end
 expression_matrices(::String, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 expression_matrices(::Symbol, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 

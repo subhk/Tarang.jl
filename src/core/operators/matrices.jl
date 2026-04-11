@@ -13,15 +13,285 @@ for differentiation matrices and lift matrices.
 # ============================================================================
 
 """
+    subproblem_matrix(op::Operator, sp; kwargs...) -> Union{SparseMatrixCSC, Nothing}
+
+Default fallback: returns `nothing` (no operator matrix).
+Specific operators override this to return their sparse matrix representation.
+"""
+subproblem_matrix(op::Operator, sp; kwargs...) = nothing
+
+# ============================================================================
+# Helper functions for compositional expression_matrices
+# ============================================================================
+
+"""
+    _depends_on_vars(expr, vars) -> Bool
+
+Recursively check if `expr` references any variable in `vars`.
+Used for linearity analysis in MultiplyOperator.
+"""
+function _depends_on_vars(expr, vars)
+    # Direct field match
+    if hasfield(typeof(expr), :name)
+        for v in vars
+            if v === expr
+                return true
+            end
+            if hasfield(typeof(v), :name) && v.name == expr.name
+                return true
+            end
+        end
+    end
+    # VectorField: check components
+    if isa(expr, VectorField)
+        for comp in expr.components
+            _depends_on_vars(comp, vars) && return true
+        end
+    end
+    # Recurse into operator children
+    for f in (:operand, :left, :right)
+        hasfield(typeof(expr), f) || continue
+        child = getfield(expr, f)
+        child === nothing && continue
+        _depends_on_vars(child, vars) && return true
+    end
+    return false
+end
+
+"""
+    _is_const_or_param_local(expr) -> Bool
+
+Check if an expression is a constant (number, parameter, ConstantOperator,
+or a ScalarField with fixed data). Local version for matrices.jl.
+"""
+function _is_const_or_param_local(expr)
+    isa(expr, Number) && return true
+    isa(expr, ConstantOperator) && return true
+    isa(expr, ZeroOperator) && return true
+    isa(expr, NegateOperator) && return _is_const_or_param_local(expr.operand)
+    # Constant ScalarField: 0D or single-element data (unit vectors, tau vars)
+    if isa(expr, ScalarField)
+        isempty(expr.bases) && return true
+        gdata = get_grid_data(expr)
+        gdata !== nothing && length(gdata) == 1 && return true
+        cdata = get_coeff_data(expr)
+        cdata !== nothing && length(cdata) == 1 && return true
+    end
+    return false
+end
+
+"""
+    _extract_scalar_local(expr) -> Number
+
+Extract scalar value from a constant expression. Local version for matrices.jl.
+"""
+function _extract_scalar_local(expr)
+    isa(expr, Number) && return expr
+    isa(expr, ConstantOperator) && return expr.value
+    isa(expr, ZeroOperator) && return 0.0
+    isa(expr, NegateOperator) && return -_extract_scalar_local(expr.operand)
+    if isa(expr, ScalarField)
+        gdata = get_grid_data(expr)
+        gdata !== nothing && length(gdata) >= 1 && return real(gdata[1])
+        cdata = get_coeff_data(expr)
+        cdata !== nothing && length(cdata) >= 1 && return real(cdata[1])
+        return 0.0  # uninitialized constant -> zero
+    end
+    return 1.0  # fallback
+end
+
+"""
+    _build_constant_field_matrix(expr, sp) -> Union{SparseMatrixCSC, Nothing}
+
+For a constant VectorField like `ez = [0; 1]`, build a `(ndim*Nz x Nz)` block
+expansion matrix from component values. Each component's scalar value becomes
+a scaled identity block, stacked vertically.
+"""
+function _build_constant_field_matrix(expr, sp)
+    if !isa(expr, VectorField)
+        return nothing
+    end
+    components = expr.components
+    ndim = length(components)
+    if ndim == 0
+        return nothing
+    end
+    # Get the per-component block size from the first scalar component
+    # For a constant VectorField, each component is a constant ScalarField
+    # The block size is determined by what this VectorField would multiply
+    # We need to infer the block size from the subproblem
+    # Each component should have a single scalar value
+    vals = ComplexF64[]
+    for comp in components
+        if _is_const_or_param_local(comp)
+            push!(vals, ComplexF64(_extract_scalar_local(comp)))
+        else
+            return nothing  # Not all components are constant
+        end
+    end
+    return vals  # Return component values; caller builds the block matrix
+end
+
+# ============================================================================
+# Compositional expression_matrices methods
+# ============================================================================
+
+"""
     expression_matrices(op::Operator, sp, vars; kwargs...)
 
-Build expression matrices for operator applied to each variable.
-Following operators expression_matrices method.
+Generic Operator fallback for compositional expression_matrices.
+For single-operand operators, recurse into operand then left-multiply by
+the operator's subproblem_matrix.
 
 Returns Dict mapping variables to sparse matrices.
 """
 function expression_matrices(op::Operator, sp, vars; kwargs...)
-    # Default: return empty dict (override for specific operators)
+    if hasfield(typeof(op), :operand)
+        operand_mats = expression_matrices(op.operand, sp, vars; kwargs...)
+        if isempty(operand_mats); return operand_mats; end
+        op_mat = subproblem_matrix(op, sp; kwargs...)
+        if op_mat === nothing; return operand_mats; end
+        return Dict(var => op_mat * mat for (var, mat) in operand_mats)
+    end
+    return Dict{Any, SparseMatrixCSC}()
+end
+
+"""
+    expression_matrices(op::AddOperator, sp, vars; kwargs...)
+
+Merge child dicts, summing matrices for shared keys.
+"""
+function expression_matrices(op::AddOperator, sp, vars; kwargs...)
+    left_mats = expression_matrices(op.left, sp, vars; kwargs...)
+    right_mats = expression_matrices(op.right, sp, vars; kwargs...)
+    result = Dict{Any, SparseMatrixCSC}()
+    # Copy left side
+    for (var, mat) in left_mats
+        result[var] = mat
+    end
+    # Add right side
+    for (var, mat) in right_mats
+        if haskey(result, var)
+            result[var] = result[var] + mat
+        else
+            result[var] = mat
+        end
+    end
+    return result
+end
+
+"""
+    expression_matrices(op::SubtractOperator, sp, vars; kwargs...)
+
+Merge child dicts, subtracting right from left.
+"""
+function expression_matrices(op::SubtractOperator, sp, vars; kwargs...)
+    left_mats = expression_matrices(op.left, sp, vars; kwargs...)
+    right_mats = expression_matrices(op.right, sp, vars; kwargs...)
+    result = Dict{Any, SparseMatrixCSC}()
+    # Copy left side
+    for (var, mat) in left_mats
+        result[var] = mat
+    end
+    # Subtract right side
+    for (var, mat) in right_mats
+        if haskey(result, var)
+            result[var] = result[var] - mat
+        else
+            result[var] = -mat
+        end
+    end
+    return result
+end
+
+"""
+    expression_matrices(op::NegateOperator, sp, vars; kwargs...)
+
+Negate all matrices in child's dict.
+"""
+function expression_matrices(op::NegateOperator, sp, vars; kwargs...)
+    child_mats = expression_matrices(op.operand, sp, vars; kwargs...)
+    return Dict(var => -mat for (var, mat) in child_mats)
+end
+
+"""
+    expression_matrices(op::MultiplyOperator, sp, vars; kwargs...)
+
+Handle three cases:
+1. Scalar constant x expression -> scalar multiply all matrices
+2. Constant VectorField x expression (e.g., b * ez) -> block-expansion
+3. One side depends on vars, other doesn't -> extract var-dependent side's matrices
+"""
+function expression_matrices(op::MultiplyOperator, sp, vars; kwargs...)
+    left = op.left
+    right = op.right
+
+    left_const = _is_const_or_param_local(left)
+    right_const = _is_const_or_param_local(right)
+
+    # Case 1: Scalar constant on the left
+    if left_const && !isa(left, VectorField)
+        coeff = ComplexF64(_extract_scalar_local(left))
+        child_mats = expression_matrices(right, sp, vars; kwargs...)
+        return Dict(var => coeff * mat for (var, mat) in child_mats)
+    end
+
+    # Case 1: Scalar constant on the right
+    if right_const && !isa(right, VectorField)
+        coeff = ComplexF64(_extract_scalar_local(right))
+        child_mats = expression_matrices(left, sp, vars; kwargs...)
+        return Dict(var => coeff * mat for (var, mat) in child_mats)
+    end
+
+    # Case 2: Constant VectorField on the left (e.g., ez * b)
+    if isa(left, VectorField) && !_depends_on_vars(left, vars)
+        comp_vals = _build_constant_field_matrix(left, sp)
+        if comp_vals !== nothing
+            child_mats = expression_matrices(right, sp, vars; kwargs...)
+            if isempty(child_mats); return child_mats; end
+            result = Dict{Any, SparseMatrixCSC}()
+            for (var, mat) in child_mats
+                n = size(mat, 1)
+                ndim = length(comp_vals)
+                # Build block expansion matrix: stack ndim blocks of (val_i * I_n)
+                blocks = [comp_vals[i] * sparse(ComplexF64(1)*I, n, n) for i in 1:ndim]
+                expansion = vcat(blocks...)
+                result[var] = expansion * mat
+            end
+            return result
+        end
+    end
+
+    # Case 2: Constant VectorField on the right (e.g., b * ez)
+    if isa(right, VectorField) && !_depends_on_vars(right, vars)
+        comp_vals = _build_constant_field_matrix(right, sp)
+        if comp_vals !== nothing
+            child_mats = expression_matrices(left, sp, vars; kwargs...)
+            if isempty(child_mats); return child_mats; end
+            result = Dict{Any, SparseMatrixCSC}()
+            for (var, mat) in child_mats
+                n = size(mat, 1)
+                ndim = length(comp_vals)
+                # Build block expansion matrix: stack ndim blocks of (val_i * I_n)
+                blocks = [comp_vals[i] * sparse(ComplexF64(1)*I, n, n) for i in 1:ndim]
+                expansion = vcat(blocks...)
+                result[var] = expansion * mat
+            end
+            return result
+        end
+    end
+
+    # Case 3: One side depends on vars, other doesn't -> linearity
+    left_dep = _depends_on_vars(left, vars)
+    right_dep = _depends_on_vars(right, vars)
+
+    if left_dep && !right_dep
+        return expression_matrices(left, sp, vars; kwargs...)
+    elseif right_dep && !left_dep
+        return expression_matrices(right, sp, vars; kwargs...)
+    end
+
+    # Both depend on vars (nonlinear) or neither depends -> empty
     return Dict{Any, SparseMatrixCSC}()
 end
 
