@@ -895,6 +895,15 @@ function _expression_subproblem_dofs(sp::Subproblem, expr)
         cs = _get_expr_coordsys(expr)
         return cs !== nothing ? max(1, div(inner, cs.dim^2)) : inner
     end
+    # Future hierarchy types (Add, Subtract, Multiply, Negate)
+    # These have args accessed via future_args(f), not left/right fields.
+    if isa(expr, Future)
+        args = future_args(expr)
+        if isempty(args)
+            return 0
+        end
+        return maximum(_expression_subproblem_dofs(sp, a) for a in args)
+    end
     # Single-operand operators: same size as operand
     if hasfield(typeof(expr), :operand)
         return _expression_subproblem_dofs(sp, expr.operand)
