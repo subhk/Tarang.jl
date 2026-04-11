@@ -1416,6 +1416,28 @@ function _drops_on_nonzero_fourier_group(expr, sp::Subproblem)
     return false
 end
 
+function _has_only_zero_dim_bases(field::ScalarField)
+    isempty(field.bases) && return true
+    return all(b -> b === nothing, field.bases)
+end
+
+function _has_only_zero_dim_bases(field::VectorField)
+    return all(_has_only_zero_dim_bases, field.components)
+end
+
+function _has_only_zero_dim_bases(field::TensorField)
+    return all(_has_only_zero_dim_bases, vec(field.components))
+end
+
+function _is_zero_separable_group(sp::Subproblem)
+    for group_entry in sp.group
+        if group_entry isa Integer && group_entry != 0
+            return false
+        end
+    end
+    return true
+end
+
 """
     get_valid_modes(eq_data, sp, num_modes)
 
@@ -1436,6 +1458,9 @@ Get valid modes array for variable.
 """
 function get_valid_modes_var(var, sp::Subproblem)
     local_size = subproblem_field_size(sp, var)
+    if local_size > 0 && _has_only_zero_dim_bases(var) && !_is_zero_separable_group(sp)
+        return zeros(Bool, local_size)
+    end
     if hasfield(typeof(var), :valid_modes) && var.valid_modes !== nothing
         valid = vec(var.valid_modes)
         if length(valid) == local_size
