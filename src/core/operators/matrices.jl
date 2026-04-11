@@ -153,7 +153,13 @@ function _merge_expression_mats(left_mats::Dict, right_mats::Dict; right_scale::
     for (var, mat) in right_mats
         scaled = right_scale * mat
         if haskey(result, var)
-            result[var] = result[var] + scaled
+            left = result[var]
+            if size(left, 1) != size(scaled, 1)
+                nrows = max(size(left, 1), size(scaled, 1))
+                left = _promote_expression_rows(left, nrows)
+                scaled = _promote_expression_rows(scaled, nrows)
+            end
+            result[var] = left + scaled
         else
             result[var] = scaled
         end
@@ -163,6 +169,19 @@ end
 
 _scale_expression_mats(mats::Dict, coeff::ComplexF64) =
     Dict{Any, SparseMatrixCSC}(var => coeff * mat for (var, mat) in mats)
+
+function _promote_expression_rows(mat::SparseMatrixCSC, target_rows::Int)
+    size(mat, 1) == target_rows && return mat
+    nrows, _ = size(mat)
+    nrows == 0 && return spzeros(ComplexF64, target_rows, size(mat, 2))
+    target_rows % nrows == 0 || return mat
+
+    block = div(target_rows, nrows)
+    rows = [i * block for i in 1:nrows]
+    cols = collect(1:nrows)
+    P = sparse(rows, cols, ones(ComplexF64, nrows), target_rows, nrows)
+    return P * mat
+end
 
 function _expand_constant_vector_product(vec_expr, child_mats::Dict, sp)
     comp_vals = _build_constant_field_matrix(vec_expr, sp)
@@ -276,20 +295,7 @@ Merge child dicts, summing matrices for shared keys.
 function expression_matrices(op::AddOperator, sp, vars; kwargs...)
     left_mats = expression_matrices(op.left, sp, vars; kwargs...)
     right_mats = expression_matrices(op.right, sp, vars; kwargs...)
-    result = Dict{Any, SparseMatrixCSC}()
-    # Copy left side
-    for (var, mat) in left_mats
-        result[var] = mat
-    end
-    # Add right side
-    for (var, mat) in right_mats
-        if haskey(result, var)
-            result[var] = result[var] + mat
-        else
-            result[var] = mat
-        end
-    end
-    return result
+    return _merge_expression_mats(left_mats, right_mats)
 end
 
 """
@@ -300,20 +306,7 @@ Merge child dicts, subtracting right from left.
 function expression_matrices(op::SubtractOperator, sp, vars; kwargs...)
     left_mats = expression_matrices(op.left, sp, vars; kwargs...)
     right_mats = expression_matrices(op.right, sp, vars; kwargs...)
-    result = Dict{Any, SparseMatrixCSC}()
-    # Copy left side
-    for (var, mat) in left_mats
-        result[var] = mat
-    end
-    # Subtract right side
-    for (var, mat) in right_mats
-        if haskey(result, var)
-            result[var] = result[var] - mat
-        else
-            result[var] = -mat
-        end
-    end
-    return result
+    return _merge_expression_mats(left_mats, right_mats; right_scale=ComplexF64(-1))
 end
 
 """
