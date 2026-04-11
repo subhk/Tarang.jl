@@ -838,12 +838,19 @@ function _subproblem_cheb_basis_from_sp(sp::Subproblem)
     return nothing
 end
 
-"""Get coordinate system from an expression tree."""
+"""Get coordinate system from an expression tree (traverses Future args too)."""
 function _get_expr_coordsys(expr)
     hasfield(typeof(expr), :coordsys) && return expr.coordsys
     if hasfield(typeof(expr), :operand)
         cs = _get_expr_coordsys(expr.operand)
         cs !== nothing && return cs
+    end
+    # Future types (Add, Subtract, etc.) have args via future_args
+    if isa(expr, Future)
+        for arg in future_args(expr)
+            cs = _get_expr_coordsys(arg)
+            cs !== nothing && return cs
+        end
     end
     if hasfield(typeof(expr), :left)
         cs = _get_expr_coordsys(expr.left)
@@ -1345,6 +1352,7 @@ function build_matrices!(sp::Subproblem, names, solver)
     eqn_conditions = [check_condition(sp, eq) for eq in eqns]
     var_sizes = [subproblem_field_size(sp, var) for var in vars]
     eqn_sizes = [_subproblem_eqn_size(sp, eq) for eq in eqns]
+    @debug "build_matrices! group=$(sp.group): eqn_sizes=$eqn_sizes, var_sizes=$var_sizes, I=$(sum(eqn_sizes)), J=$(sum(var_sizes))"
     I = sum(eqn_sizes)
     J = sum(var_sizes)
 
