@@ -1210,25 +1210,12 @@ function build_matrices!(sp::Subproblem, names, solver)
     interleave_components = config.interleave_components
     store_expanded = config.store_expanded_matrices
 
-    # Compute sizes — use per-subproblem sizing for separable domains
+    # Compute per-subproblem sizes.
+    # In the Dedalus convention, equation i maps 1:1 to variable i, so
+    # eqn_sizes == var_sizes for well-posed problems.
     eqn_conditions = [check_condition(sp, eq) for eq in eqns]
     var_sizes = [subproblem_field_size(sp, var) for var in vars]
-    # Equation sizes match variable sizes for well-posed problems.
-    # Use equation_size from eq_data if available, otherwise infer from variables.
-    eqn_sizes = Int[]
-    for (i, eq) in enumerate(eqns)
-        eq_sz = get(eq, "equation_size", 0)
-        if eq_sz > 0 && length(sp.group) > 0 && any(g -> g isa Integer, sp.group)
-            # Per-subproblem: equation size matches the corresponding variable's per-mode DOFs
-            if i <= length(vars)
-                push!(eqn_sizes, subproblem_field_size(sp, vars[i]))
-            else
-                push!(eqn_sizes, var_sizes[end])  # fallback: use last var size
-            end
-        else
-            push!(eqn_sizes, eq_sz)
-        end
-    end
+    eqn_sizes = copy(var_sizes)  # 1:1 equation-variable mapping
     I = sum(eqn_sizes)
     J = sum(var_sizes)
 
