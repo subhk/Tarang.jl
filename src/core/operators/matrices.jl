@@ -164,7 +164,7 @@ function _merge_expression_mats(left_mats::Dict, right_mats::Dict; right_scale::
             result[var] = scaled
         end
     end
-    return result
+    return _normalize_expression_rows(result)
 end
 
 _scale_expression_mats(mats::Dict, coeff::ComplexF64) =
@@ -181,6 +181,16 @@ function _promote_expression_rows(mat::SparseMatrixCSC, target_rows::Int)
     cols = collect(1:nrows)
     P = sparse(rows, cols, ones(ComplexF64, nrows), target_rows, nrows)
     return P * mat
+end
+
+function _normalize_expression_rows(mats::Dict)
+    isempty(mats) && return Dict{Any, SparseMatrixCSC}()
+    target_rows = maximum(size(mat, 1) for mat in values(mats))
+    result = Dict{Any, SparseMatrixCSC}()
+    for (var, mat) in mats
+        result[var] = _promote_expression_rows(mat, target_rows)
+    end
+    return result
 end
 
 function _expand_constant_vector_product(vec_expr, child_mats::Dict, sp)
