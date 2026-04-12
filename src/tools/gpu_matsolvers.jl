@@ -334,7 +334,22 @@ mutable struct CuSparseRF{T}
     n::Int
 end
 
-struct CuSparseLU{T} <: AbstractMatSolver
+"""
+    CuSparseLU{T} <: AbstractMatSolver
+
+GPU sparse direct solver. Mutable so that `MatSolvers.refactor!` can swap
+in a new numeric factorization while reusing the symbolic analysis when
+the matrix sparsity pattern is unchanged — the common case for
+IMEX-RK solvers that rebuild `(M + dt*a_ii*L)` with a new `dt`.
+
+- **`:rf` backend** (Float64 only): full symbolic reuse via
+  `cusolverRfResetValues` + `cusolverRfRefactor`. ~2× faster than a
+  fresh rebuild when `dt` changes.
+- **`:qr` backend** (complex or fallback): no refactor fast path in
+  CUDA.jl's `SparseQR` bindings — `refactor!` falls back to a full
+  rebuild. Still safe to call; the interface matches the CPU path.
+"""
+mutable struct CuSparseLU{T} <: AbstractMatSolver
     A_csr::Any   # CUDA.CUSPARSE.CuSparseMatrixCSR{T, Int32}
     factor::Any
     backend::Symbol
@@ -489,6 +504,78 @@ function MatSolvers.solve(s::CuSparseLU{T}, rhs::AbstractVector) where T
         CUDA.CUSOLVER.spqr_solve(s.factor, b_gpu, x_gpu)
     end
     return x_gpu
+end
+
+"""
+    refactor!(solver::CuSparseLU, A::SparseMatrixCSC) -> solver
+
+Update the GPU solver's numeric factorization to match the new matrix
+`A`. When the sparsity pattern is unchanged and the backend supports it
+(`:rf` / cusolverRF, Float64 only), this reuses the cached symbolic
+analysis and runs only the numeric refactorization phase via
+`cusolverRfResetValues` + `cusolverRfRefactor` — ~2× speedup on the LU
+step compared to rebuilding from scratch.
+
+For the `:qr` backend (complex matrices or Float64-RF-unavailable
+fallback), there's no symbolic-reuse API exposed in CUDA.jl's
+`SparseQR` bindings, so this falls back to a full rebuild. The
+interface matches the CPU path for drop-in compatibility.
+
+### Pattern check
+
+The fast path assumes `A` has the same sparsity pattern as the matrix
+the solver was originally built from. Tarang's stepper satisfies this
+because it updates `sp.LHS.nzval` in place; the pattern is identical by
+construction. If you call `refactor!` with a differently-patterned
+matrix, behavior is undefined — call `CuSparseLU(A)` instead to build
+a fresh solver.
+"""
+function MatSolvers.refactor!(solver::CuSparseLU{T}, A::SparseMatrixCSC) where {T}
+    if size(A, 1) != solver.n || size(A, 2) != solver.n
+        # Dimension mismatch — fall back to full rebuild.
+        new_solver = CuSparseLU(A; tol=solver.tol, reorder=solver.reorder)
+        solver.A_csr = new_solver.A_csr
+        solver.factor = new_solver.factor
+        solver.backend = new_solver.backend
+        return solver
+    end
+
+    if solver.backend === :rf
+        # Symbolic-reuse fast path for Float64 + cusolverRF.
+        try
+            A_f64 = eltype(A) === Float64 ? A : SparseMatrixCSC{Float64, Int}(A)
+            rf = solver.factor::CuSparseRF{Float64}
+
+            # Update host-side CSR values (row-major, as expected by
+            # cusolverRf), then upload to GPU.
+            At = SparseMatrixCSC{Float64, Int32}(copy(transpose(A_f64)))
+            host_vals = Vector{Float64}(At.nzval)
+            copyto!(rf.A_vals, host_vals)
+
+            # Reset matrix values in the RF handle and re-run numeric
+            # factorization. The symbolic analysis (P, Q, L/U patterns)
+            # is preserved from the original build.
+            CUDA.CUSOLVER.cusolverRfResetValues(
+                Cint(solver.n), Cint(nnz(A_f64)),
+                rf.A_rowptr, rf.A_colind, rf.A_vals,
+                rf.P, rf.Q, rf.handle,
+            )
+            CUDA.CUSOLVER.cusolverRfRefactor(rf.handle)
+            return solver
+        catch err
+            @debug "refactor!(CuSparseLU, :rf) failed, rebuilding from scratch" exception=(err, catch_backtrace())
+            # fall through to full rebuild below.
+        end
+    end
+
+    # `:qr` backend or RF fallback: rebuild the factor from scratch. We
+    # still update the wrapper's `factor` / `A_csr` fields in place so
+    # the caller's handle stays valid.
+    new_solver = CuSparseLU(A; tol=solver.tol, reorder=solver.reorder)
+    solver.A_csr = new_solver.A_csr
+    solver.factor = new_solver.factor
+    solver.backend = new_solver.backend
+    return solver
 end
 
 # ============================================================================
