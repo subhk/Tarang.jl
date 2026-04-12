@@ -426,8 +426,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     end
 
     # ── Push new state to history ─────────────────────────────────────────
-    new_state = collect_state_fields(problem.variables)
-    _push_trim!(state.history, new_state, 1)
+    _push_trim!(state.history, state_fields, 1)
 end
 
 # ── Helper: get or build LHS factorization for a stage ────────────────────────
