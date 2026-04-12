@@ -298,12 +298,18 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # Evaluate F[i] and LX[i] AFTER the solve, at the stage i solution.
         # This matches step_rk_imex! where F_exp_vecs[s] and F_imp_vecs[s]
         # are computed after the stage solve (step_rk.jl lines 176-179).
+        #
+        # `evaluate_rhs` returns per-STATE-FIELD F values (PDE targets only).
+        # `gather_eqn_F!` then packs them into equation-space rows and — for BC
+        # equations without a time derivative — evaluates the BC's own F
+        # expression. Without this second path, inhomogeneous BCs like
+        # `T(z=0) = 1` silently become `T(z=0) = 0` and max|T| decays to zero.
         F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
             f_stage = _sp_stage_vector!(sp, "_sp_rk_F_stage_$i", size(sp.M_min, 1), MX0[sp_idx])
             x_pre = RHS[sp_idx]
-            gather_outputs!(f_stage, sp, F_fields)
+            gather_eqn_F!(f_stage, sp, solver, F_fields, state_fields)
             gather_inputs!(x_pre, sp, state_fields)
             L_op = _subproblem_operator(sp, :L, x_pre)
             lx_stage = _sp_stage_vector!(sp, "_sp_rk_LX_stage_$i", length(x_pre), x_pre)
