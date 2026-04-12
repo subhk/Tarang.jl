@@ -83,16 +83,40 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
         end
     end
 
+    # ── Zero-allocation in-place backward transform chain ─────────────────
+    # Mirror of the forward path in transform_gpu.jl. Walk transforms in
+    # reverse order. For intermediate stages, write into a cached scratch;
+    # for the FINAL stage, write directly into the field's pre-allocated
+    # grid buffer.
     current = get_coeff_data(field)
-    for transform in reverse(field.dist.transforms)
-        current = _apply_backward(current, transform)
+    transforms = collect(reverse(field.dist.transforms))
+    n_transforms = length(transforms)
+    if n_transforms == 0
+        grid = get_grid_data(field)
+        if grid !== nothing && size(grid) == size(current) && eltype(grid) == eltype(current)
+            copyto!(grid, current)
+        else
+            set_grid_data!(field, copy(current))
+        end
+        field.current_layout = :g
+        return
     end
 
-    # Fallback for other transforms
-    if current === get_coeff_data(field)
-        set_grid_data!(field, copy(get_coeff_data(field)))
-    else
-        set_grid_data!(field, current)
+    for (idx, transform) in enumerate(transforms)
+        out_shape, out_eltype = _backward_output_spec(current, transform)
+        if idx == n_transforms
+            grid = get_grid_data(field)
+            if grid === nothing || size(grid) != out_shape || eltype(grid) != out_eltype
+                grid = zeros(out_eltype, out_shape...)
+                set_grid_data!(field, grid)
+            end
+            _apply_backward!(grid, current, transform)
+            current = grid
+        else
+            out = _get_scratch_for_transform!(transform, :bwd_inter, out_shape, out_eltype)
+            _apply_backward!(out, current, transform)
+            current = out
+        end
     end
     field.current_layout = :g
 end
