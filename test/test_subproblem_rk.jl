@@ -67,13 +67,26 @@ using Printf
 
     # ── Check subproblems have non-trivial matrices ───────────────────────
     n_with_matrices = 0
+    n_with_bc_rows = 0
     for sp in subproblems
         if sp.M_min !== nothing && sp.L_min !== nothing
             @test nnz(sp.M_min) > 0 || nnz(sp.L_min) > 0
             n_with_matrices += 1
+
+            # RBC still has lower-dimensional BC rows, but the filtered
+            # subproblem matrices are rectangular here, so the Woodbury
+            # partition must remain inactive.
+            if !isempty(sp.bc_rows)
+                has_woodbury_partition = !isempty(sp.bulk_rows) && !isempty(sp.bc_rows) &&
+                                         length(sp.bulk_rows) == length(sp.bulk_cols) &&
+                                         length(sp.bc_rows) == length(sp.bc_cols)
+                @test !has_woodbury_partition
+                n_with_bc_rows += 1
+            end
         end
     end
     @test n_with_matrices > 0
+    @test n_with_bc_rows > 0
 
     # ── Set initial conditions ────────────────────────────────────────────
     x, z = local_grids(dist, xbasis, zbasis)
