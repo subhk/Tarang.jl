@@ -66,15 +66,18 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
             # the forward branch's `mul!(coeff_data, plan, grid_data)`
             # fast path. Falls back to the allocating `\` if ldiv! raises
             # (e.g. on PencilFFTs versions that don't support it on this
-            # plan type).
+            # plan type). The fallback is logged once so an MPI run will
+            # make it obvious if the fast path isn't firing.
             grid_data = get_grid_data(field)
             if grid_data !== nothing && isa(grid_data, PencilArrays.PencilArray)
                 try
                     ldiv!(grid_data, pencil_plan, coeff_data)
-                catch
+                catch err
+                    @warn "backward_transform!: PencilFFTs ldiv! fast path failed, falling back to allocating `\\`. This costs one PencilArray per transform — consider upgrading PencilFFTs or checking the field buffer layout." exception=(err, catch_backtrace()) maxlog=1
                     set_grid_data!(field, pencil_plan \ coeff_data)
                 end
             else
+                @warn "backward_transform!: grid buffer is not a PencilArray; using allocating `\\` fallback. Expected `allocate_data!` to pre-allocate via PencilFFTs.allocate_input." maxlog=1
                 set_grid_data!(field, pencil_plan \ coeff_data)
             end
         end
