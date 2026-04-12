@@ -1397,15 +1397,6 @@ end
 """
     gather_eqn_F!(dest, sp, solver, pde_F_fields, state_fields)
 
-Pack per-equation F values into the equation-space vector matching L_min's
-rows. PDE equations (those with a time derivative) pull their F from the
-state-field-indexed `pde_F_fields`. BC / constraint equations evaluate their
-own F expression. After assembly, `pre_left` is applied to reach the filtered
-equation space that `L_min` lives in.
-"""
-"""
-    gather_eqn_F!(dest, sp, solver, pde_F_fields, state_fields)
-
 Pack PDE-equation F values into equation-space. For each equation with a time
 derivative (`M` term), pull F from `pde_F_fields` at the equation's target
 state-field indices. Algebraic/BC equations (no `M` term) contribute ZERO to
