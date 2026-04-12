@@ -288,12 +288,10 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             # accumulated history. `sp.bc_rows` lists the L_min row indices that
             # correspond to algebraic (BC-like) equations, computed in
             # build_matrices! from the Woodbury block classification.
-            if !isempty(sp.bc_rows) && abs(a_ii) > 1e-14
-                alg_f = ALG_F[sp_idx]
-                dt_aii = ComplexF64(dt * a_ii)
-                @inbounds for r in sp.bc_rows
-                    rhs[r] = dt_aii * alg_f[r]
-                end
+            # Vectorized (CUDA.allowscalar(false)-safe) override via
+            # `apply_bc_override!`.
+            if abs(a_ii) > 1e-14
+                apply_bc_override!(rhs, ALG_F[sp_idx], sp, dt * a_ii)
             end
 
             if abs(a_ii) < 1e-14
