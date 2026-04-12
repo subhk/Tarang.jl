@@ -664,6 +664,13 @@ mutable struct Subproblem
 
     # Per-stage LHS factorizations for IMEX RK
     LHS_solvers::Vector{Any}
+
+    # Woodbury block decomposition: bulk vs BC row/col indices (post-filtering,
+    # into L_min/M_min). Used for efficient block-LU solving.
+    bulk_rows::Vector{Int}
+    bc_rows::Vector{Int}
+    bulk_cols::Vector{Int}
+    bc_cols::Vector{Int}
 end
 
 function combined_range(ranges)
@@ -727,7 +734,8 @@ function Subproblem(solver, subsystems::Tuple{Vararg{Subsystem}}, group::Tuple=S
         nothing, nothing, nothing,  # Expanded matrices
         0,  # update_rank
         nothing, nothing,  # Buffers
-        Any[]  # LHS_solvers
+        Any[],  # LHS_solvers
+        Int[], Int[], Int[], Int[]  # bulk_rows, bc_rows, bulk_cols, bc_cols
     )
 
     # Set back-reference
@@ -1503,6 +1511,80 @@ function build_matrices!(sp::Subproblem, names, solver)
     end
     if haskey(matrices, "M")
         sp.M_min = matrices["M"]
+    end
+
+    # ── Woodbury block classification ───────────────────────────────────
+    # Classify rows and columns as "bulk" (high-dim PDE equations/variables)
+    # or "BC" (low-dim boundary conditions/tau variables).
+    #
+    # A row is BULK if it comes from an equation whose per-subproblem size
+    # matches the largest equation size (typically Nz for scalar PDE or
+    # ndim*Nz for vector PDE). Otherwise it's BC.
+    #
+    # Variables use the same classification: bulk if var_size equals max
+    # (Nz or ndim*Nz), BC otherwise.
+    #
+    # Uses the ORIGINAL (pre-filter) indices then maps through the
+    # permutation to post-filter indices.
+    if haskey(matrices, "L") && !isempty(eqn_sizes) && !isempty(var_sizes)
+        max_eqn_size = maximum(eqn_sizes)
+        max_var_size = maximum(var_sizes)
+
+        # Identify original (pre-filter) row indices for bulk/BC
+        orig_bulk_rows = Int[]
+        orig_bc_rows = Int[]
+        row_offset = 0
+        for (i, esize) in enumerate(eqn_sizes)
+            is_bulk = (esize == max_eqn_size)
+            for k in 1:esize
+                if is_bulk
+                    push!(orig_bulk_rows, row_offset + k)
+                else
+                    push!(orig_bc_rows, row_offset + k)
+                end
+            end
+            row_offset += esize
+        end
+
+        orig_bulk_cols = Int[]
+        orig_bc_cols = Int[]
+        col_offset = 0
+        for (i, vsize) in enumerate(var_sizes)
+            is_bulk = (vsize == max_var_size)
+            for k in 1:vsize
+                if is_bulk
+                    push!(orig_bulk_cols, col_offset + k)
+                else
+                    push!(orig_bc_cols, col_offset + k)
+                end
+            end
+            col_offset += vsize
+        end
+
+        # Map through the filtering permutation:
+        # post-filter index = position in valid subset of original indices
+        # valid_eqn has length I; build a mapping orig → post-filter
+        orig_to_post_row = zeros(Int, I)
+        pp = 0
+        for orig in 1:I
+            if valid_eqn[orig]
+                pp += 1
+                orig_to_post_row[orig] = pp
+            end
+        end
+        orig_to_post_col = zeros(Int, J)
+        pp = 0
+        for orig in 1:J
+            if valid_var[orig]
+                pp += 1
+                orig_to_post_col[orig] = pp
+            end
+        end
+
+        sp.bulk_rows = [orig_to_post_row[r] for r in orig_bulk_rows if orig_to_post_row[r] > 0]
+        sp.bc_rows   = [orig_to_post_row[r] for r in orig_bc_rows   if orig_to_post_row[r] > 0]
+        sp.bulk_cols = [orig_to_post_col[c] for c in orig_bulk_cols if orig_to_post_col[c] > 0]
+        sp.bc_cols   = [orig_to_post_col[c] for c in orig_bc_cols   if orig_to_post_col[c] > 0]
     end
 
     # Store expanded matrices for IMEX in-place LHS updates (Dedalus pattern).
