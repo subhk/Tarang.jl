@@ -1415,6 +1415,29 @@ _extract_F_constant(x::Number) = Float64(x)
 _extract_F_constant(::Any) = nothing
 
 """
+    _evaluate_alg_F(F_expr, sp) -> ComplexF64
+
+Dispatch-based evaluation of an algebraic-equation F expression for a given
+subproblem. Returns the complex value to write into the BC row of the raw
+equation-space vector.
+
+Currently supports:
+- `ZeroOperator` / `nothing` → 0
+- `ConstantOperator` / `Number` → `v * Nx` at DC, 0 elsewhere
+- `ArrayOperator` → unnormalized RFFT of the grid-space array, picked at the
+  subproblem's Fourier mode (for space-dependent BCs)
+"""
+_evaluate_alg_F(::Nothing, ::Subproblem) = ComplexF64(0)
+_evaluate_alg_F(::ZeroOperator, ::Subproblem) = ComplexF64(0)
+_evaluate_alg_F(c::ConstantOperator, sp::Subproblem) = _bc_constant_projection(Float64(c.value), sp)
+_evaluate_alg_F(x::Number, sp::Subproblem) = _bc_constant_projection(Float64(x), sp)
+_evaluate_alg_F(a::ArrayOperator, sp::Subproblem) = _bc_array_projection(a.value, sp)
+function _evaluate_alg_F(expr, sp::Subproblem)
+    @debug "gather_alg_F!: unsupported F expression type" expr_type=typeof(expr)
+    return ComplexF64(0)
+end
+
+"""
 Project a constant value onto the current subproblem's Fourier mode.
 
 Tarang uses unnormalized `FFTW.rfft` on the Fourier axis, so the DC
@@ -1444,6 +1467,114 @@ function _find_bc_fourier_basis(sp::Subproblem)
         end
     end
     return nothing
+end
+
+"""
+    _bc_array_projection(arr, sp)
+
+Project a grid-space array `arr` (from a space-dependent BC) onto the current
+subproblem's Fourier mode. Returns a `ComplexF64` value suitable for writing
+into the BC row of the raw equation-space vector.
+
+The BC array lives in grid space along the separable (Fourier) axis. We take
+an unnormalized `FFTW.rfft` (matching Tarang's Fourier convention) and
+extract the coefficient at the subproblem's `kx_global` index.
+
+The transformed array is cached by identity on `sp.problem.parameters` so
+all subproblems that project the same `arr` in the same step share one FFT.
+The cache is keyed via `IdDict` to avoid hashing large arrays; it is
+invalidated whenever the caller swaps in a new `ArrayOperator` (which
+happens per step, or per stage for time-dependent BCs).
+"""
+function _bc_array_projection(arr::AbstractArray, sp::Subproblem)
+    # Empty or trivial arrays → zero contribution.
+    (arr === nothing || length(arr) == 0) && return ComplexF64(0)
+
+    xbasis = _find_bc_fourier_basis(sp)
+    if xbasis === nothing
+        # No Fourier axis in the problem: BC output lives in a coupled space
+        # only (e.g., a BVP column). The array has one entry per subproblem
+        # row; we use arr[1] which is the DC-mode value. For more complex
+        # coupled-space shapes, users need to provide a coefficient-space
+        # representation directly — not yet supported.
+        return ComplexF64(first(arr))
+    end
+
+    # Take the RFFT once per array; cache on the problem via IdDict keyed by
+    # the grid array's object identity so repeated subproblems reuse it.
+    coeffs = _get_or_compute_bc_array_coeffs!(arr, sp)
+    coeffs === nothing && return ComplexF64(0)
+
+    kx_global = _kx_index_global(sp)
+    if ndims(coeffs) == 1
+        if kx_global >= 1 && kx_global <= length(coeffs)
+            return ComplexF64(coeffs[kx_global])
+        end
+        return ComplexF64(0)
+    elseif ndims(coeffs) == 2
+        # Two-Fourier-axis case: look up (kx_global, ky_global).
+        # For this, we need the second integer in sp.group.
+        kys = Int[]
+        for g in sp.group
+            g isa Integer || continue
+            push!(kys, g + 1)
+        end
+        if length(kys) >= 2
+            kx, ky = kys[1], kys[2]
+            if 1 <= kx <= size(coeffs, 1) && 1 <= ky <= size(coeffs, 2)
+                return ComplexF64(coeffs[kx, ky])
+            end
+        end
+        return ComplexF64(0)
+    else
+        @warn "BC array has ndims=$(ndims(coeffs)); only 1D and 2D supported" maxlog=3
+        return ComplexF64(0)
+    end
+end
+
+"""Compute or fetch the cached unnormalized Fourier transform of a BC array."""
+function _get_or_compute_bc_array_coeffs!(arr::AbstractArray, sp::Subproblem)
+    cache = get(sp.problem.parameters, "_bc_rfft_cache", nothing)
+    if cache === nothing
+        cache = IdDict{Any, Any}()
+        sp.problem.parameters["_bc_rfft_cache"] = cache
+    end
+    cached = get(cache, arr, nothing)
+    cached !== nothing && return cached
+
+    # Promote to real Float64 if needed. BC arrays from user expressions are
+    # typically Vector{Float64}; complex arrays are rarer but handled too.
+    coeffs = try
+        if eltype(arr) <: Real
+            FFTW.rfft(collect(Float64.(arr)))
+        elseif eltype(arr) <: Complex
+            FFTW.fft(collect(ComplexF64.(arr)))
+        else
+            FFTW.rfft(collect(Float64.(arr)))
+        end
+    catch err
+        @warn "BC array FFT failed: $err" maxlog=1
+        return nothing
+    end
+
+    cache[arr] = coeffs
+    return coeffs
+end
+
+"""
+    invalidate_bc_array_cache!(problem)
+
+Clear the per-problem BC-array FFT cache. Call when BC arrays change (e.g.
+at the start of each step, or after evaluating new time-dependent array
+values via `_apply_bc_values_to_equations!`).
+"""
+function invalidate_bc_array_cache!(problem)
+    cache = get(problem.parameters, "_bc_rfft_cache", nothing)
+    cache === nothing && return
+    if cache isa IdDict
+        empty!(cache)
+    end
+    return
 end
 
 """
@@ -1559,14 +1690,9 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
                 F_expr = get(eq_data, "F", nothing)
             end
             if !_is_zero_F_expr(F_expr)
-                v = _extract_F_constant(F_expr)
-                if v !== nothing && v != 0
-                    coeff = _bc_constant_projection(Float64(v), sp)
-                    if coeff != 0
-                        @inbounds raw_cpu[i0 + 1] = coeff
-                    end
-                elseif v === nothing
-                    @debug "gather_alg_F!: non-constant algebraic F not supported" eq_idx=eq_idx F_expr=F_expr
+                coeff = _evaluate_alg_F(F_expr, sp)
+                if coeff != 0
+                    @inbounds raw_cpu[i0 + 1] = coeff
                 end
             end
         end
