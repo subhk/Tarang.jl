@@ -120,24 +120,23 @@ end
 """
     _refresh_bcs_for_stage!(solver, stage_time) -> Bool
 
-Re-evaluate time- / space-dependent BCs at `stage_time` and rewrite the
+Re-evaluate time-dependent BCs at `stage_time` and rewrite the
 `equation_data["F"]` / `["F_expr"]` slots. Returns `true` if any BC was
 actually refreshed (so the caller can re-gather the algebraic F vector),
 `false` otherwise.
 
-For pure constant-in-time BCs this short-circuits — `ALG_F` only needs to
-be built once per step. For time-varying BCs we call this at every RK stage
-with `t + c[i]*dt` so multi-stage methods keep their formal order of
-accuracy on rapidly-varying BCs.
+Only runs for time-dependent (including space+time) BCs. Pure
+space-dependent BCs are already populated at solver-build time and don't
+change between stages, so we skip them to avoid redundant FFT work.
+
+For time-varying BCs this is called at every RK stage with `t + c[i]*dt`
+so multi-stage methods keep their formal order of accuracy on rapidly
+varying BCs.
 """
 function _refresh_bcs_for_stage!(solver::InitialValueSolver, stage_time::Real)
     bcm = solver.problem.bc_manager
-    has_td = has_time_dependent_bcs(bcm)
-    has_sd = has_space_dependent_bcs(bcm)
-    (has_td || has_sd) || return false
-    if has_td
-        update_time_dependent_bcs!(bcm, stage_time)
-    end
+    has_time_dependent_bcs(bcm) || return false
+    update_time_dependent_bcs!(bcm, stage_time)
     _apply_bc_values_to_equations!(solver, stage_time)
     return true
 end
@@ -279,12 +278,12 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         ALG_F[sp_idx] = alg_f
     end
 
-    # Whether this problem has any time/space-dependent BCs. If so, the
-    # stage loop below refreshes `ALG_F` at each stage time `t + c[i]*dt`
-    # to retain full stage-order accuracy on rapidly-varying BCs. For pure
-    # constant BCs this stays false and `ALG_F` is reused across stages.
-    bc_dynamic = has_time_dependent_bcs(problem.bc_manager) ||
-                 has_space_dependent_bcs(problem.bc_manager)
+    # Whether this problem has any time-dependent BCs. If so, the stage
+    # loop below refreshes `ALG_F` at each stage time `t + c[i]*dt` to
+    # retain full stage-order accuracy on rapidly-varying BCs. Pure
+    # space-dependent (non-time) BCs are already populated at solver build
+    # time — they don't need per-stage refreshes.
+    bc_dynamic = has_time_dependent_bcs(problem.bc_manager)
 
     # ── Stage loop ────────────────────────────────────────────────────────
     # Each stage: build RHS → solve → scatter → evaluate F and L*X at solution
