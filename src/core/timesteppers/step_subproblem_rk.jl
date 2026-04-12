@@ -428,7 +428,11 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
 
-        rhs = copy(MX0[sp_idx])
+        # Cached scratch buffer for the final-update rhs (size n_eq). Reusing
+        # a persistent vector instead of `copy(MX0[sp_idx])` eliminates one
+        # ComplexF64 allocation per subproblem per step.
+        rhs = _sp_stage_vector!(sp, "_sp_rk_final_rhs", size(sp.M_min, 1), MX0[sp_idx])
+        copyto!(rhs, MX0[sp_idx])
         for s in 1:stages
             be = dt * b_exp[s]
             bi = dt * b_imp[s]
