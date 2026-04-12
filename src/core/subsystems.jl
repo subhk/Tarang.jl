@@ -1006,6 +1006,57 @@ function _subproblem_backend_matrix!(sp::Subproblem, matrix, cache_key::String, 
     return backend
 end
 
+"""
+    _bc_rows_device(sp, reference)
+
+Return `sp.bc_rows` as an index vector on the same device as `reference`.
+
+For CPU `reference`, returns the CPU `Vector{Int}` as-is. For a GPU
+`reference`, returns (and caches) a device-side `Int` array so that vectorized
+`rhs[bc_rows] .= coeff .* alg_f[bc_rows]` stays on-device and does not trigger
+scalar indexing when `CUDA.allowscalar(false)` is set.
+"""
+function _bc_rows_device(sp::Subproblem, reference::AbstractVector)
+    if isempty(sp.bc_rows) || !is_gpu_array(reference)
+        return sp.bc_rows
+    end
+    cached = get(sp.matrices, "_bc_rows_device", nothing)
+    if cached !== nothing && length(cached) == length(sp.bc_rows)
+        return cached
+    end
+    device_rows = similar(reference, Int, length(sp.bc_rows))
+    copyto!(device_rows, sp.bc_rows)
+    sp.matrices["_bc_rows_device"] = device_rows
+    return device_rows
+end
+
+"""
+    apply_bc_override!(rhs, alg_f, sp, coeff)
+
+Override the algebraic-constraint rows of `rhs` with `coeff * alg_f[bc_rows]`.
+
+Uses an explicit gather → scale → scatter pipeline:
+
+    tmp = alg_f[bc_rows]      # gather
+    tmp *= coeff              # in-place scale
+    rhs[bc_rows] = tmp        # scatter
+
+All three operations are vectorized and stay on the same device as `rhs`, so
+this is safe under `CUDA.allowscalar(false)`. The `bc_rows` index vector is
+materialized on the correct device by `_bc_rows_device` and cached on the
+subproblem to avoid per-step host→device transfers.
+"""
+function apply_bc_override!(rhs::AbstractVector, alg_f::AbstractVector,
+                            sp::Subproblem, coeff)
+    isempty(sp.bc_rows) && return rhs
+    bc_rows = _bc_rows_device(sp, rhs)
+    c = ComplexF64(coeff)
+    tmp = alg_f[bc_rows]      # gather (CPU: allocated, GPU: CuArray)
+    tmp .*= c                 # in-place scale, vectorized on both devices
+    rhs[bc_rows] = tmp        # scatter (setindex! with index array)
+    return rhs
+end
+
 function _subproblem_selection_indices!(sp::Subproblem, matrix::Union{Nothing, SparseMatrixCSC},
                                         cache_key::String)
     matrix === nothing && return nothing
@@ -1117,8 +1168,9 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
     cd_raw = get_coeff_data(field)
     if cd_raw === nothing
         n = subproblem_field_size(sp, field)
-        for i in 1:n
-            buffer[offset + i] = ComplexF64(0)
+        # Vectorized zero-fill: works on CPU and GPU without scalar indexing.
+        if n > 0
+            fill!(view(buffer, offset + 1 : offset + n), ComplexF64(0))
         end
         return offset + n
     end
@@ -1477,8 +1529,19 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
     eqn_sizes = [_subproblem_eqn_size(sp, eq) for eq in eqns]
     I_raw = sum(eqn_sizes; init=0)
 
-    raw = _subproblem_cached_vector!(sp, "_gather_alg_F_raw", I_raw; like=dest)
-    fill!(raw, zero(eltype(raw)))
+    # Build the sparse BC F vector on the HOST via scalar writes (a few nonzero
+    # entries at BC row offsets, the rest zero). Then upload once into the
+    # device-resident `raw` buffer via `_assign_to_buffer!` — this keeps
+    # scalar indexing off of GPU arrays so the helper is safe under
+    # `CUDA.allowscalar(false)`.
+    raw_cpu_key = "_gather_alg_F_raw_cpu"
+    raw_cpu = get(sp.matrices, raw_cpu_key, nothing)
+    if raw_cpu === nothing || length(raw_cpu) != I_raw
+        raw_cpu = zeros(ComplexF64, I_raw)
+        sp.matrices[raw_cpu_key] = raw_cpu
+    else
+        fill!(raw_cpu, zero(ComplexF64))
+    end
 
     i0 = 0
     for (eq_idx, eq_data) in enumerate(eqns)
@@ -1500,7 +1563,7 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
                 if v !== nothing && v != 0
                     coeff = _bc_constant_projection(Float64(v), sp)
                     if coeff != 0
-                        @inbounds raw[i0 + 1] = coeff
+                        @inbounds raw_cpu[i0 + 1] = coeff
                     end
                 elseif v === nothing
                     @debug "gather_alg_F!: non-constant algebraic F not supported" eq_idx=eq_idx F_expr=F_expr
@@ -1510,6 +1573,10 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
 
         i0 += eq_size
     end
+
+    # Upload the CPU-built raw vector into the device-resident raw buffer.
+    raw = _subproblem_cached_vector!(sp, "_gather_alg_F_raw", I_raw; like=dest)
+    _assign_to_buffer!(raw, raw_cpu)
 
     compress_equation_space!(dest, sp, raw)
     return dest
@@ -2809,7 +2876,7 @@ export gather, scatter
 
 # Export subproblem methods
 export check_condition, valid_modes
-export gather_inputs, scatter_inputs, gather_eqn_F!, gather_alg_F!
+export gather_inputs, scatter_inputs, gather_eqn_F!, gather_alg_F!, apply_bc_override!
 
 # Export matrix building
 export build_matrices!, build_subproblem_matrices
