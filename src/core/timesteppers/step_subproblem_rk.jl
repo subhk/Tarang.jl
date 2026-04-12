@@ -117,6 +117,31 @@ function _woodbury_solve(w::WoodburySolver, rhs::AbstractVector{ComplexF64})
 end
 # ──────────────────────────────────────────────────────────────────────────────
 
+_subproblem_solver_type(choice) = choice isa Tuple ? choice[1] : choice
+
+function _subproblem_solver_kwargs(choice)
+    choice isa Tuple || return Pair{Symbol, Any}[]
+    kwargs = Pair{Symbol, Any}[]
+    for item in choice[2:end]
+        item isa Pair || continue
+        key = item.first
+        key isa Symbol || continue
+        push!(kwargs, key => item.second)
+    end
+    return kwargs
+end
+
+function _solve_cached_system(lhs_solver, rhs::AbstractVector{ComplexF64})
+    result = if isa(lhs_solver, WoodburySolver)
+        _woodbury_solve(lhs_solver, rhs)
+    elseif lhs_solver isa MatSolvers.AbstractMatSolver
+        MatSolvers.solve(lhs_solver, rhs)
+    else
+        lhs_solver \ rhs
+    end
+    return is_gpu_array(result) ? Array(result) : result
+end
+
 """
     step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
                          subproblems::Tuple)
@@ -220,7 +245,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
                 if sp.M_min !== nothing
                     M_lu = _get_or_compute_mass_lu!(sp)
                     if M_lu !== nothing
-                        x_sol = M_lu \ rhs
+                        x_sol = _solve_cached_system(M_lu, rhs)
                     else
                         x_sol = rhs  # fallback
                     end
@@ -230,11 +255,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             else
                 lhs_solver = _get_or_build_lhs!(sp, i, dt, a_ii)
                 if lhs_solver !== nothing
-                    x_sol = if isa(lhs_solver, WoodburySolver)
-                        _woodbury_solve(lhs_solver, rhs)
-                    else
-                        lhs_solver \ rhs
-                    end
+                    x_sol = _solve_cached_system(lhs_solver, rhs)
                 else
                     @warn "step_subproblem_rk!: LHS factorization failed for sp group=$(sp.group), stage=$i; using rhs as fallback" maxlog=1
                     x_sol = rhs
@@ -283,7 +304,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # Solve M * X_new = rhs
         M_lu = _get_or_compute_mass_lu!(sp)
         if M_lu !== nothing
-            x_sol = M_lu \ rhs
+            x_sol = _solve_cached_system(M_lu, rhs)
         else
             # Singular M (DAE): last stage already satisfies constraints
             # via the implicit SA property. Keep the last stage value.
@@ -324,6 +345,8 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
     if M === nothing
         return nothing
     end
+    solver_type = _subproblem_solver_type(sp.solver.base.matsolver)
+    solver_kwargs = _subproblem_solver_kwargs(sp.solver.base.matsolver)
 
     # Fast path: use expanded pattern for in-place LHS update.
     LHS = if sp.M_exp !== nothing && sp.L_exp !== nothing && sp.LHS !== nothing
@@ -345,7 +368,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
     has_woodbury_partition = !isempty(sp.bulk_rows) && !isempty(sp.bc_rows) &&
                               length(sp.bulk_rows) == length(sp.bulk_cols) &&
                               length(sp.bc_rows) == length(sp.bc_cols)
-    if has_woodbury_partition
+    if has_woodbury_partition && solver_type == MatSolvers.SparseLUSolver
         w = _build_woodbury(LHS, sp)
         if w !== nothing
             sp.LHS_solvers[stage_idx] = w
@@ -353,14 +376,24 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         end
     end
 
-    # Standard sparse LU on the full matrix
-    lhs_lu = lu(LHS; check=false)
-    if issuccess(lhs_lu)
-        sp.LHS_solvers[stage_idx] = lhs_lu
-        return lhs_lu
+    try
+        lhs_solver = MatSolvers.solver_instance(solver_type, LHS; solver_kwargs...)
+        sp.LHS_solvers[stage_idx] = lhs_solver
+        return lhs_solver
+    catch err
+        if solver_type != MatSolvers.SPQRSolver
+            try
+                qr_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, LHS)
+                sp.LHS_solvers[stage_idx] = qr_solver
+                @info "step_subproblem_rk!: using sparse QR fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
+                return qr_solver
+            catch
+            end
+        end
+        @debug "step_subproblem_rk!: solver build failed for group=$(sp.group), stage=$stage_idx" exception=(err, catch_backtrace())
     end
 
-    # Fallback for rank-deficient matrices
+    # Final fallback for rank-deficient or unsupported matrices
     LHS_dense = Matrix(LHS)
     sp.LHS_solvers[stage_idx] = LHS_dense
     @info "step_subproblem_rk!: using dense fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
@@ -381,18 +414,25 @@ and for the non-stiffly-accurate final update.
 function _get_or_compute_mass_lu!(sp::Subproblem)
     M = sp.M_min
     M === nothing && return nothing
+    cached = get(sp.matrices, "_mass_solver", nothing)
+    cached !== nothing && return cached
 
-    # Use the last+1 slot convention: stages occupy 1..stages, mass uses stages+1.
-    # But since we don't know stages here, just use a tagged approach:
-    # Check if the very last slot is tagged as mass-only (we store a Tuple).
-    # Simpler: just factorize -- this is only called for a_ii=0 stages (rare).
-    # For ESDIRK first stage this is once per step (O(1) per step, not per mode).
-    # Cache in a separate field would be better, but sp has no such field.
-    # Since LHS_solvers is already invalidated per-dt, just compute and return.
-    lhs_lu = lu(M; check=false)
-    if issuccess(lhs_lu)
-        return lhs_lu
-    else
+    solver_type = _subproblem_solver_type(sp.solver.base.matsolver)
+    solver_kwargs = _subproblem_solver_kwargs(sp.solver.base.matsolver)
+    try
+        mass_solver = MatSolvers.solver_instance(solver_type, M; solver_kwargs...)
+        sp.matrices["_mass_solver"] = mass_solver
+        return mass_solver
+    catch err
+        if solver_type != MatSolvers.SPQRSolver
+            try
+                mass_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, M)
+                sp.matrices["_mass_solver"] = mass_solver
+                return mass_solver
+            catch
+            end
+        end
+        @debug "step_subproblem_rk!: mass solver build failed for group=$(sp.group)" exception=(err, catch_backtrace())
         return nothing
     end
 end
