@@ -94,9 +94,10 @@ function diagnose(solver::InitialValueSolver)
     println("└── stop: time=$(solver.stop_sim_time), iteration=$(solver.stop_iteration)")
 end
 
-function Base.show(io::IO, plan::CompiledRHSPlan)
+function Base.show(io::IO, plan::LazyRHSPlan)
     status = plan.is_compiled ? "compiled" : "failed"
-    print(io, "CompiledRHSPlan($status, $(length(plan.instructions)) instructions, $(length(plan.workspace)) workspace)")
+    n_eqs = count(!isnothing, plan.exprs)
+    print(io, "LazyRHSPlan($status, $n_eqs equations)")
 end
 
 # Export core solver API
