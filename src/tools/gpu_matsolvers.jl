@@ -573,11 +573,44 @@ function MatSolvers.refactor!(solver::CuSparseLU{T}, A::SparseMatrixCSC) where {
             @debug "refactor!(CuSparseLU, :rf) failed, rebuilding from scratch" exception=(err, catch_backtrace())
             # fall through to full rebuild below.
         end
+    elseif solver.backend === :qr
+        # Symbolic-reuse fast path for SparseQR.
+        #
+        # CUDA.jl's `SparseQR` struct caches its info handle and scratch
+        # buffer; the symbolic analysis (row/col pattern and associated
+        # internal state) is tied to that struct, not to the values. So
+        # we can update `A_csr.nzVal` in place and re-call
+        # `spqr_factorise`, which runs the Setup + numeric Factor phases
+        # against the new values while reusing the cached analysis.
+        try
+            Tq = eltype(solver.A_csr.nzVal)
+            A_typed = eltype(A) === Tq ? A : SparseMatrixCSC{Tq, Int}(A)
+
+            # Transpose-then-convert trick: the nzval of
+            # `transpose(A_typed)` as a CSC is exactly the row-major
+            # value ordering that CSR expects (same permutation as the
+            # original CSR build).
+            At = SparseMatrixCSC{Tq, Int32}(copy(transpose(A_typed)))
+            host_vals = Vector{Tq}(At.nzval)
+            # Upload new values into the existing GPU CSR buffer in
+            # place. `A_csr.nzVal` is a `CuVector{Tq}`; `copyto!` with a
+            # host Vector uses the asynchronous H2D path.
+            copyto!(solver.A_csr.nzVal, host_vals)
+
+            # Re-run the numeric factorization on the existing
+            # `SparseQR` handle, which preserves its cached info +
+            # scratch buffer.
+            CUDA.CUSOLVER.spqr_factorise(solver.factor, solver.A_csr, Float64(solver.tol))
+            return solver
+        catch err
+            @debug "refactor!(CuSparseLU, :qr) failed, rebuilding from scratch" exception=(err, catch_backtrace())
+            # fall through to full rebuild below.
+        end
     end
 
-    # `:qr` backend or RF fallback: rebuild the factor from scratch. We
-    # still update the wrapper's `factor` / `A_csr` fields in place so
-    # the caller's handle stays valid.
+    # Full rebuild fallback (dimension change, or either fast path
+    # raised). Swap the wrapper's fields in place so the caller's
+    # handle stays valid.
     new_solver = CuSparseLU(A; tol=solver.tol, reorder=solver.reorder)
     solver.A_csr = new_solver.A_csr
     solver.factor = new_solver.factor
