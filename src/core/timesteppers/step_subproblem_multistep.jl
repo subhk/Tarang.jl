@@ -366,6 +366,20 @@ multistep method has enough history to advance, or whether to fall back to a
 lower-order startup scheme.
 """
 function _sp_multistep_history_depth(state::TimestepperState)
+    # Prefer the ring-buffer storage (new path). Fall back to the old
+    # Vector{Vector} storage if a legacy cache is still present (e.g.,
+    # mid-session after a code reload).
+    F_rings = get(state.timestepper_data, :sp_multistep_F_rings, nothing)
+    if F_rings !== nothing
+        depth = typemax(Int)
+        any_counted = false
+        for ring in F_rings
+            ring.count == 0 && continue
+            depth = min(depth, ring.count)
+            any_counted = true
+        end
+        return any_counted ? depth : 0
+    end
     F_hist = get(state.timestepper_data, :sp_multistep_F_hist, nothing)
     F_hist === nothing && return 0
     depth = typemax(Int)
