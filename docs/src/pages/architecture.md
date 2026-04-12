@@ -1,69 +1,154 @@
 # Architecture
 
-Overview of Tarang.jl's internal architecture.
+Overview of Tarang.jl's internal architecture. This page describes how the pieces fit together — from coordinate/basis setup through problem assembly, subproblem decomposition, RHS evaluation, and time stepping. It's aimed at contributors and power users who want to understand (or extend) what happens under the hood.
 
 ## Package Structure
 
 ```
 Tarang.jl/
 ├── src/
-│   ├── Tarang.jl              # Main module
-│   ├── core/                  # Core functionality
-│   │   ├── architectures.jl     # CPU/GPU abstraction
-│   │   ├── coords.jl           # Coordinate systems
-│   │   ├── basis.jl            # Spectral bases (Fourier, Chebyshev, Legendre)
-│   │   ├── distributor.jl      # MPI distribution
-│   │   ├── domain.jl           # Domain construction
-│   │   ├── field.jl            # Hub: includes field/ sub-files
-│   │   ├── field/
-│   │   │   ├── field_types.jl     # ScalarField, VectorField, TensorField
-│   │   │   ├── field_data.jl      # Data access, allocation, components
-│   │   │   ├── field_layout.jl    # Layout transitions, transforms
-│   │   │   └── field_exports.jl   # Export declarations
-│   │   ├── operators/           # Differential operators (hub + sub-files)
-│   │   ├── transforms/          # Spectral transforms (hub + sub-files)
-│   │   ├── problems.jl         # Hub: includes problems/ sub-files
-│   │   ├── problems/
-│   │   │   ├── problem_types.jl   # IVP, LBVP, NLBVP, EVP
-│   │   │   ├── problem_parsing.jl # Expression parsing
-│   │   │   ├── problem_matrices.jl# Matrix building for solvers
-│   │   │   └── problem_utils.jl   # Validation, introspection
-│   │   ├── solvers.jl           # Hub: includes solvers/ sub-files
-│   │   ├── solvers/
-│   │   │   ├── solver_types.jl       # Solver definitions
-│   │   │   ├── solver_stepping.jl    # Time stepping, BVP/EVP solve
-│   │   │   ├── solver_compiled_rhs.jl# RHS compilation & execution
-│   │   │   └── solver_utils.jl       # Diagnostics, exports
-│   │   ├── timesteppers/        # Time integration (hub + sub-files)
-│   │   ├── boundary_conditions.jl
-│   │   ├── evaluator.jl
-│   │   └── nonlinear.jl
-│   ├── tools/                 # Utilities and I/O
-│   │   ├── config.jl            # Configuration management
-│   │   ├── netcdf_output.jl     # NetCDF output handlers
-│   │   ├── netcdf_merge.jl      # NetCDF file merging
-│   │   ├── matsolvers.jl        # CPU matrix solvers
-│   │   ├── gpu_matsolvers.jl    # GPU matrix solvers
-│   │   └── ...                  # logging, parsing, progress, etc.
-│   └── extras/                # Convenience functions
-│       ├── quick_domains.jl     # PeriodicDomain, ChannelDomain, etc.
-│       ├── flow_tools.jl        # Energy, enstrophy, CFL diagnostics
-│       └── plot_tools.jl        # Plotting utilities (experimental)
-├── ext/                       # CUDA extension (loaded when CUDA.jl available)
-│   ├── TarangCUDAExt.jl         # Extension entry point
-│   └── cuda/                    # GPU implementations
-│       ├── config.jl              # Device ID, tensor cores
-│       ├── memory.jl              # CPU↔GPU data transfer
-│       ├── architecture.jl        # GPU type methods
-│       ├── transforms.jl          # CUFFT plans
-│       ├── kernels.jl             # KernelAbstractions GPU kernels
-│       ├── dct.jl                 # DCT for Chebyshev basis
-│       └── ...                    # batched FFT, NCCL, pencil, etc.
-├── test/                      # Tests
-└── docs/                      # Documentation
+│   ├── Tarang.jl                   # Main module
+│   ├── core/                       # Core functionality
+│   │   ├── architectures.jl           # CPU / GPU architecture abstraction
+│   │   ├── coords.jl                  # Coordinate systems (Cartesian, ...)
+│   │   ├── basis.jl                   # Spectral bases (Fourier, Chebyshev, Legendre, Jacobi)
+│   │   ├── distributor.jl             # MPI distributor + pencil layouts
+│   │   ├── domain.jl                  # Domain construction
+│   │   ├── field/                     # Field types, storage, layout
+│   │   │   ├── field_types.jl           # ScalarField, VectorField, TensorField
+│   │   │   ├── field_data.jl            # Data access, allocation
+│   │   │   ├── field_layout.jl          # Grid ↔ coefficient transitions
+│   │   │   └── ...
+│   │   ├── operators/                 # Differential operators + expression matrices
+│   │   ├── transforms/                # Forward / inverse FFT, DCT, conversion
+│   │   ├── problems/                  # Problem assembly
+│   │   │   ├── problem_types.jl         # IVP, LBVP, NLBVP, EVP
+│   │   │   ├── problem_parsing.jl       # Equation-string parsing
+│   │   │   ├── problem_matrices.jl      # Global matrix assembly
+│   │   │   └── problem_utils.jl         # Validation, introspection
+│   │   ├── boundary_conditions.jl     # BC types, time/space dependency, evaluator
+│   │   ├── subsystems.jl              # *** Subproblem decomposition & filtering ***
+│   │   ├── solvers/                   # Solver types, stepping, lazy RHS
+│   │   │   ├── solver_types.jl          # InitialValueSolver, BVP/NLBVP/EVP solvers
+│   │   │   ├── solver_stepping.jl       # step! loop + time-dependent BC refresh
+│   │   │   ├── lazy_rhs.jl              # JIT-specialized RHS evaluation plan
+│   │   │   └── solver_utils.jl          # diagnose(), exports
+│   │   ├── timesteppers/              # Time-integration schemes
+│   │   │   ├── types.jl                   # RK111, RK222, RK443, CNAB*, SBDF*, ETD*
+│   │   │   ├── state_utils.jl             # evaluate_rhs, history
+│   │   │   ├── step_rk.jl                 # Top-level IMEX-RK dispatch
+│   │   │   ├── step_subproblem_rk.jl      # *** Per-Fourier-mode IMEX-RK ***
+│   │   │   ├── step_subproblem_multistep.jl  # *** Per-Fourier-mode CNAB/SBDF ***
+│   │   │   ├── step_multistep.jl          # Global-matrix multistep (legacy fallback)
+│   │   │   ├── step_diagonal_imex.jl      # Diagonal IMEX RK variants
+│   │   │   ├── step_etd.jl                # ETD RK / CNAB / SBDF
+│   │   │   └── dispatch.jl                # Stepper → function dispatch
+│   │   ├── evaluator.jl               # File handler + callback orchestration
+│   │   └── nonlinear.jl               # Nonlinear ops (u⋅∇u)
+│   ├── tools/                      # Utilities and I/O
+│   │   ├── matsolvers.jl              # CPU sparse / dense solvers (UMFPACK, QR, ...)
+│   │   ├── gpu_matsolvers.jl          # GPU solvers (CuSparseLU, ...)
+│   │   ├── netcdf_output.jl           # NetCDF file handlers
+│   │   └── ...                        # config, logging, progress, etc.
+│   └── extras/                     # Convenience helpers
+│       ├── quick_domains.jl
+│       ├── flow_tools.jl
+│       └── plot_tools.jl
+├── ext/                            # CUDA extension (loaded when CUDA.jl is available)
+│   ├── TarangCUDAExt.jl               # Extension entry point
+│   └── cuda/                          # GPU implementations
+│       ├── architecture.jl              # GPU() type methods
+│       ├── memory.jl                    # H2D / D2H transfers
+│       ├── transforms.jl                # CUFFT plans
+│       ├── kernels.jl                   # KernelAbstractions kernels
+│       └── ...
+├── examples/                       # Shipped examples (RBC, shear flow, ...)
+├── test/                           # Tests
+└── docs/                           # Documentation
 ```
 
-## Core Components
+The entries marked with `***` are the core of the solver path introduced in the subproblem refactor; everything else supports or orchestrates them.
+
+## How the Solver Actually Works
+
+This section walks through the life of a step! call end-to-end, so you can see where each file fits.
+
+### 1. Setup phase
+
+```
+CartesianCoordinates ─► Distributor ─► Bases ─► Domain ─► Fields ─► Problem
+```
+
+- **`CartesianCoordinates("x", "z")`** names the axes.
+- **`Distributor(coords; dtype, device)`** owns the MPI communicator, architecture (CPU / GPU), and cached layout plans for different basis tuples.
+- **`RealFourier(...)`**, **`ChebyshevT(...)`** define the spectral bases.
+- **`Domain(dist, (xbasis, zbasis))`** ties a distributor to an ordered tuple of bases and allocates per-rank grids.
+- **`ScalarField`**, **`VectorField`**, **`TensorField`** hold data in either grid space (real values on Gauss-Lobatto / uniform grids) or coefficient space (Fourier + Chebyshev coefficients). The active layout is tracked by `current_layout::Symbol` and switched via `ensure_layout!(field, :c)` / `(:g)`.
+- **`IVP([vars...])`**, **`LBVP`**, **`NLBVP`**, **`EVP`** group state variables into a `Problem` and build a parser namespace from the variables' names.
+
+### 2. Equation and BC assembly
+
+Users add equations via string syntax:
+
+```julia
+add_equation!(problem, "∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)")
+add_bc!(problem, "T(z=0) = 1")
+```
+
+`add_equation!` pushes the string to `problem.equations`. `add_bc!(problem, bc::String)` pushes the string to `problem.boundary_conditions` **and** auto-parses it into a `DirichletBC` / `NeumannBC` object registered in `problem.bc_manager.conditions`, with `is_time_dependent` / `is_space_dependent` flags auto-detected from the value expression. This is what enables the per-step refresh path for `T(z=0) = sin(t)` or `T(z=0) = sin(2·π·x/Lx)`.
+
+At solver build time, `_merge_boundary_conditions!` pushes each BC string into `problem.equations` (so the equation parser sees it) and links the parsed `DirichletBC` back to its equation index via `bc_manager.bc_equation_indices`.
+
+### 3. Global matrix build
+
+`build_solver_matrices!` → `build_matrices(problem)` → `build_matrix_expressions!(problem)`.
+
+For each equation (including merged BCs), the equation-string parser splits LHS and RHS:
+
+- LHS is parsed into an operator tree with `M` (time-derivative) and `L` (spatial) parts
+- RHS is parsed into an `F` expression (handled specially per equation)
+
+The result is a `Vector{Dict}` — `problem.equation_data` — where each entry holds `"M"`, `"L"`, `"F"`, `"lhs"`, and `"equation_size"` keys.
+
+For the global-matrix path (used by legacy steppers and BVPs), `build_matrices` walks `equation_data` and assembles sparse `L_matrix`, `M_matrix`, and a dense `F_vector`. The result is stored in `problem.parameters["L_matrix"]`, `["M_matrix"]`, `["F_vector"]`.
+
+### 4. Subproblem decomposition
+
+This is the core of the modern solver path. `_try_build_subproblems!(solver)` calls `build_subproblems` in `subsystems.jl`, which:
+
+1. **Enumerates Fourier-mode groups.** For each separable (Fourier) axis, each mode is a "subproblem group". In a 2D problem with `Nx = 256` RealFourier modes and one Chebyshev direction, there are `Nx/2 + 1 = 129` subproblems.
+2. **Builds per-subproblem matrices.** For each subproblem, `build_matrices!(sp, ...)` walks the problem's equation list and calls `expression_matrices(expr, sp, vars)` to construct small sparse `L` and `M` matrices — typically of shape `(n_eqs_rows, n_var_cols)` where the sizes are the per-Fourier-mode DOF counts (e.g. `263 × 263` for 2D RBC at `Nz = 64`).
+3. **Applies left / right permutations** (`left_permutation`, `right_permutation`) to group equations and variables by their domain dimension, matching the Dedalus subsystem ordering convention.
+4. **Applies valid-mode filtering.** Rows that are identically zero in both `L` and `M` — typically trivially-satisfied gauge constraints like `integ(p) = 0` at non-DC Fourier modes — are paired with the "least-used" 1-DOF tau column (by smallest `|L| + |M|` norm) and both are dropped from the filtered system. This yields a smaller square sparse system (`L_min`, `M_min`) that a sparse LU can factor cleanly.
+5. **Classifies rows by equation size.** `sp.bulk_rows` holds row indices where `eq_size ≥ Nz` (PDE rows and Nz-sized algebraic rows like continuity); `sp.bc_rows` holds row indices where `eq_size < Nz` (BC rows and gauge rows). The IMEX stepper uses `sp.bc_rows` to target algebraic-constraint rows for the per-stage `apply_bc_override!` path.
+
+The output — a `Tuple{Vararg{Subproblem}}` stored in `problem.parameters["subproblems"]` — is what the stepper consumes.
+
+### 5. Lazy RHS plan
+
+`build_lazy_rhs_plan!(solver)` walks each equation's `F` expression and translates it into a type-parameterized `LazyFuture` tree (see `src/core/solvers/lazy_rhs.jl`). Each node (`LazyAdd`, `LazyMul`, `LazyDiff`, `LazyStateField`, `LazyParamField`, `LazyConst`) has a specialized `evaluate_lazy!` method. At first call, Julia's JIT specializes the entire `evaluate_lazy!` chain — eliminating dynamic dispatch and enabling broadcast fusion across arithmetic combinators.
+
+If translation fails for any equation (unsupported operator type), the plan's `is_compiled` stays false and `evaluate_rhs` falls back to the interpreted expression path (slower but universally functional).
+
+The plan is stored as `solver.rhs_plan::LazyRHSPlan` and used by `evaluate_rhs(solver, state, time)` during every stage of every step.
+
+### 6. Time step
+
+A single `step!(solver, dt)` call does:
+
+1. **Refresh dynamic BCs** (`solver_stepping.jl:23`). If `has_time_dependent_bcs(bcm)` is true, call `update_time_dependent_bcs!(bcm, t+dt)` and `_apply_bc_values_to_equations!(solver, t+dt)`, which rewrites `equation_data[eq_idx]["F"]` with a fresh `ConstantOperator` or `ArrayOperator` for every time/space-dependent BC.
+2. **Dispatch by timestepper type** (`timesteppers/dispatch.jl`). `RK222()` → `step_rk_imex!` → if `problem.parameters["subproblems"]` exists, call `step_subproblem_rk!(state, solver, sps)`. For `CNAB2`/`SBDF2` the dispatch is similar via `step_subproblem_multistep!`.
+3. **Per-stage subproblem solve** (`step_subproblem_rk.jl`). For each RK stage:
+   - Refresh `ALG_F` per stage (re-run `gather_alg_F!` after re-calling `update_time_dependent_bcs!` at `t + c[i]·dt`). This recovers full stage-order accuracy for rapidly-varying BCs.
+   - Per subproblem: gather inputs, build stage RHS via `dt·Σ(Aᴱ·F − Aⁱ·L·X)`, then `apply_bc_override!` to overwrite the `sp.bc_rows` entries with `dt·a_ii · F_BC` so the BC row enforces `L_row·X = F_BC` instead of the 1/γ-scaled value that the raw accumulated formula would give.
+   - Solve `(M_min + dt·a_ii·L_min) · X_stage = rhs` using the cached LHS solver (sparse LU for CPU, `CuSparseLU` for GPU).
+   - `scatter_inputs` writes `X_stage` back to the state fields.
+   - Evaluate `F_stage` and `L·X_stage` for use in the next stage.
+4. **Final update**. For singular `M` (DAE system), the last stage value is kept. For non-singular `M`, the standard weighted-sum update solves `M · X_{n+1} = M · X_n + dt·Σ(bᴱ·F − bⁱ·L·X)` via the cached mass-matrix LU.
+
+The same pattern applies to the multistep stepper (`step_subproblem_multistep.jl`), except the per-stage loop is replaced by per-subproblem history accumulation and a single `(a[0]·M + b[0]·L) · X = rhs` solve per step.
+
+## Core Types
 
 ### Coordinates
 
@@ -79,185 +164,181 @@ end
 ### Bases
 
 ```julia
-abstract type SpectralBasis end
+abstract type Basis end
+abstract type FourierBasis <: Basis end
+abstract type JacobiBasis <: Basis end
 
-struct RealFourier <: SpectralBasis
-    coord::Coordinate
-    size::Int
-    bounds::Tuple{Float64, Float64}
-    dealias::Float64
-end
-
-struct ChebyshevT <: SpectralBasis
-    coord::Coordinate
-    size::Int
-    bounds::Tuple{Float64, Float64}
-end
+struct RealFourier   <: FourierBasis  end
+struct ComplexFourier <: FourierBasis end
+struct ChebyshevT    <: JacobiBasis   end
+struct ChebyshevU    <: JacobiBasis   end
+struct Legendre      <: JacobiBasis   end
 ```
+
+Every basis carries a `meta::BasisMeta` with `size`, `bounds`, `element_label`, `dealias`, and cached conversion matrices.
 
 ### Fields
 
 ```julia
-abstract type AbstractField end
-
-mutable struct ScalarField <: AbstractField
+mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
     dist::Distributor
     name::String
-    bases::Tuple
-    dtype::Type
-    data_g::Union{Array, Nothing}
-    data_c::Union{Array, Nothing}
-    current_layout::Symbol
+    bases::Tuple{Vararg{Basis}}
+    domain::Union{Nothing, Domain}
+    dtype::Type{T}
+    storage::S
+    layout::Union{Nothing, Layout}
+    current_layout::Symbol           # :g (grid) or :c (coefficient)
+    scales::Union{Nothing, Tuple}
+    # ...
 end
 ```
 
-### Distributor
+`VectorField` and `TensorField` hold `components::Vector{ScalarField}` / `Matrix{ScalarField}`.
+
+### Subproblem
 
 ```julia
-struct Distributor
-    coords::Coordinates
-    comm::MPI.Comm
-    rank::Int
-    size::Int
-    mesh::Tuple
+mutable struct Subproblem
+    solver::Any
+    problem::Problem
+    group::Tuple                # e.g. (kx_mode, SUBSYSTEM_GROUP) for 2D
+    dist::Any
+    matrices::Dict{String, Any}
+
+    # Permutations + valid-mode filter
+    pre_left::Union{Nothing, SparseMatrixCSC}
+    pre_right::Union{Nothing, SparseMatrixCSC}
+
+    # Filtered minimal matrices
+    L_min::Union{Nothing, SparseMatrixCSC}
+    M_min::Union{Nothing, SparseMatrixCSC}
+
+    # Cached LHS factorizations per stage
+    LHS_solvers::Vector{Any}
+
+    # Row classification for DAE-style override
+    bulk_rows::Vector{Int}
+    bc_rows::Vector{Int}
+    bulk_cols::Vector{Int}
+    bc_cols::Vector{Int}
 end
 ```
 
-## Data Flow
-
-### Simulation Lifecycle
-
-```
-1. Setup
-   Coordinates → Distributor → Bases → Domain → Fields
-
-2. Problem Definition
-   Fields → Problem → Equations + BCs
-
-3. Solving
-   Problem → Solver → Time stepping loop
-
-4. Output
-   Fields → Handler → Files
-```
-
-### Transform Flow
-
-```
-Grid Space (physical)
-    ↓ forward transform
-Coefficient Space (spectral)
-    ↓ apply operators
-Coefficient Space
-    ↓ inverse transform
-Grid Space
-```
-
-## MPI Parallelism
-
-### Pencil Decomposition
-
-```
-Global Array         Local Arrays (4 processes)
-┌──────────┐        ┌────┬────┐
-│          │        │ P0 │ P1 │
-│          │   →    ├────┼────┤
-│          │        │ P2 │ P3 │
-└──────────┘        └────┴────┘
-```
-
-### Communication Patterns
-
-- **All-to-all**: Layout transforms
-- **Allreduce**: Global reductions
-- **Gather**: Output to single file
-
-## Transform Architecture
-
-### Layout Management
-
-```julia
-function ensure_layout!(field, target_layout)
-    if field.current_layout != target_layout
-        transform!(field, target_layout)
-    end
-end
-```
-
-### Transform Types
-
-- Forward: Grid → Spectral
-- Inverse: Spectral → Grid
-
-## Problem Architecture
-
-### Problem Types
-
-```julia
-abstract type Problem end
-
-struct IVP <: Problem
-    fields::Vector{ScalarField}
-    equations::Vector{Equation}
-    boundary_conditions::Vector{BC}
-    parameters::Dict{String, Any}
-end
-```
-
-### Equation Parsing
-
-```
-String → Tokenize → Parse → AST → Evaluation
-```
-
-## Solver Architecture
-
-### Time Steppers
+### Timestepper
 
 ```julia
 abstract type TimeStepper end
 
-struct RK222 <: TimeStepper end
-struct SBDF2 <: TimeStepper end
-```
-
-### Solver State
-
-```julia
-struct InitialValueSolver
-    problem::IVP
-    timestepper::TimeStepper
-    state::Vector
-    sim_time::Float64
-    iteration::Int
+struct RK222 <: TimeStepper
+    stages::Int
+    A_explicit::Matrix{Float64}
+    b_explicit::Vector{Float64}
+    c_explicit::Vector{Float64}
+    A_implicit::Matrix{Float64}
+    b_implicit::Vector{Float64}
+    c_implicit::Vector{Float64}
 end
 ```
 
+All RK variants carry their full Butcher tableau. Multistep variants (`CNAB1/2`, `SBDF1..4`) expose coefficient builders (`_cnab1_coefs(dt)`, `_sbdf2_coefs(dt)`, etc.) in `step_subproblem_multistep.jl`.
+
+### Solver
+
+```julia
+mutable struct InitialValueSolver
+    base::SolverBaseData
+    problem::Problem
+    timestepper::TimeStepper
+    sim_time::Float64
+    iteration::Int
+    stop_sim_time::Float64
+    stop_wall_time::Float64
+    stop_iteration::Int
+    state::Vector{<:ScalarField}
+    dt::Float64
+    timestepper_state::Union{Nothing, TimestepperState}
+    evaluator::Union{Nothing, Any}
+    start_time::Float64
+    workspace::Dict{String, AbstractArray}
+    performance_stats::SolverPerformanceStats
+    rhs_plan::Any                # Lazy RHS plan or nothing
+end
+```
+
+## Data Flow Diagrams
+
+### Simulation lifecycle
+
+```
+Setup       : Coordinates → Distributor → Bases → Domain → Fields
+Problem     : Fields → Problem → add_equation!, add_bc!, add_parameters!
+Build       : build_solver_matrices! → _try_build_subproblems! → build_lazy_rhs_plan!
+Time step   : step! → refresh BCs → dispatch → step_subproblem_rk! / multistep
+Output      : evaluator → add_task! → NetCDF / HDF5 / callback
+```
+
+### Layout transitions
+
+```
+Grid space (physical)
+    ↓ forward_transform! (FFTW.rfft + DCT-I, or CUFFT on GPU)
+Coefficient space (spectral)
+    ↓ apply operators (matrix-free in subproblem path)
+Coefficient space
+    ↓ backward_transform!
+Grid space
+```
+
+### MPI communication
+
+- **All-to-all** — layout transposes between pencils via `PencilFFTPlan`.
+- **Allreduce** — global reductions for energy, CFL, diagnostics.
+- **Allgatherv** — assembling subproblem-local data when a global view is needed (rare; most of the step is rank-local because subproblems are per-Fourier-mode).
+
+Under the subproblem architecture, each MPI rank owns a subset of Fourier modes. Every rank iterates its own subproblems independently — no inter-rank communication inside the stepper loop. The only rank-to-rank traffic is during the forward/backward FFTs and the optional global reductions in user callbacks.
+
 ## Extension Points
 
-### Custom Bases
+### Custom basis
 
-Implement `SpectralBasis` interface:
-- `size(basis)`
-- `get_grid(basis)`
-- `forward_transform(data, basis)`
-- `inverse_transform(data, basis)`
+Subtype `Basis` (typically `JacobiBasis` for bounded-interval bases). Implement:
 
-### Custom Timesteppers
+- `basis.meta::BasisMeta` with `size`, `bounds`, `element_label`, `dealias`
+- `_native_grid(basis, scale)` — Gauss-Lobatto or uniform collocation nodes
+- `derivative_basis(basis)` — the basis the derivative lives in
+- `differentiation_matrix(basis)`, `conversion_matrix(a, b)`, `_apply_forward` / `_apply_backward`
 
-Implement `TimeStepper` interface:
-- `step!(solver, dt)`
-- `stages(stepper)`
+Register with `register_operator_alias!` / `register_operator_parseable!` if it introduces new operators.
+
+### Custom timestepper
+
+Subtype `TimeStepper`. Implement:
+
+- Constructor that populates Butcher tableau fields (for RK variants) or coefficient builders (for multistep)
+- A new dispatch entry in `src/core/timesteppers/dispatch.jl` mapping the type to a stepping function
+- A stepping function — either reuse `step_subproblem_rk!` with a new tableau, or write a dedicated `step_<name>!` that takes a `TimestepperState` and `InitialValueSolver`
+
+### Custom operator
+
+Subtype `Operator`. Implement:
+
+- `subproblem_matrix(op::NewOp, sp; kwargs...)` — returns a sparse matrix column/block for per-subproblem assembly
+- `evaluate_lazy!` methods if the operator should participate in the lazy RHS plan
+- `expression_matrices(op::NewOp, sp, vars; kwargs...)` for arithmetic combinators (`Add`/`Subtract`/`Multiply` wrappers)
 
 ## Design Principles
 
-1. **Separation of concerns**: Coordinates, bases, fields, problems
-2. **Lazy transforms**: Transform only when needed
-3. **MPI transparency**: Users don't manage communication
-4. **Extensibility**: Abstract types for customization
-5. **Julia idioms**: Multiple dispatch, type stability
+1. **Per-subproblem decomposition**: the solver works one Fourier mode at a time, producing small sparse systems that an LU can crack efficiently. Gauge and BC rows are handled by valid-mode filtering and the `apply_bc_override!` DAE override.
+2. **Lazy / JIT-specialized RHS**: the RHS plan is a type-parametric tree; the JIT specializes it to avoid dynamic dispatch.
+3. **MPI transparency**: users never touch the communicator — `Distributor` does.
+4. **Device transparency**: `CPU()` vs `GPU()` is a constructor argument. The same code path runs on both.
+5. **Dedalus-style tau method**: BCs are enforced via explicit tau fields and `lift()` operators added to equations, not by row replacement.
 
 ## See Also
 
-- [Contributing](contributing.md): Development guidelines
-- [Testing](testing.md): Test architecture
+- [Tau Method](tau_method.md): full explanation of how BCs are enforced
+- [Time Steppers](timesteppers.md): available schemes and when to use them
+- [Solvers](solvers.md): the `InitialValueSolver` / BVP / EVP API
+- [Contributing](contributing.md): development guidelines
+- [Testing](testing.md): test architecture
