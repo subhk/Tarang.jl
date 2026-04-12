@@ -72,7 +72,7 @@ function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{No
     # Register coordinate names (e.g. "x", "y", "z") from every basis in
     # every variable's bases so that boundary-condition RHS strings like
     # `T(z=0) = 1 + 0.1*sin(2*pi*x/Lx)` parse without "Unknown variable: x"
-    # warnings. The placeholder is a `UnknownOperator` carrying the coord
+    # warnings. The placeholder is an `UnknownOperator` carrying the coord
     # name — the parser treats it as a generic opaque symbol, and at
     # solver-build time `_apply_bc_values_to_equations!` OVERWRITES the BC's
     # `equation_data["F"]` slot with an `ArrayOperator` evaluated by the
@@ -93,6 +93,23 @@ function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{No
                 end
             end
         end
+    end
+
+    # Register the default time variable name `"t"` as a placeholder so
+    # time-dependent BC expressions like `"T(z=0) = sin(2*pi*t)"` parse
+    # without "Unknown variable: t" warnings. The same precedence rules
+    # apply — user-supplied namespace entries and problem variables named
+    # `t` will override the placeholder. At solver-build time,
+    # `_apply_bc_values_to_equations!` evaluates the BC's original string
+    # against the current time via `evaluate_bc_value`, so the placeholder
+    # is never consulted at runtime.
+    #
+    # If you use a different time-variable name (via `set_time_variable!`
+    # with a custom string), pass it through your `namespace=Dict(...)`
+    # constructor argument or via `add_parameters!`, and it will override
+    # this default entry before any equation is parsed.
+    if !haskey(ns, "t")
+        ns["t"] = UnknownOperator("t")
     end
 
     # User-supplied namespace overrides registry entries
