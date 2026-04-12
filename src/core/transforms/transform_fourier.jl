@@ -306,13 +306,23 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Four
     end
 
     plan = _get_or_plan_backward!(transform, in)
-    # FFTW irfft plans are destructive: they scribble over the input array
-    # during application. The high-level `FFTW.irfft(x, n, dims)` protects
-    # callers by internally copying `x` into a workspace first, which is
-    # exactly the allocation we're trying to avoid. We replicate that
-    # protection with a cached scratch buffer reused across calls.
-    if plan isa FFTW.ScaledPlan && isa(transform.basis, RealFourier)
-        scratch = _get_or_alloc_scratch!(transform.bwd_scratch, (size(in), eltype(in), :irfft_scratch),
+
+    # FFTW irfft plans are destructive on the input array. The high-level
+    # `FFTW.irfft(x, n, dims)` protects callers by internally copying `x`
+    # into a workspace — exactly the allocation we're trying to avoid.
+    # Use a cached scratch that's reused across calls. Only irfft needs
+    # this; ifft (complex → complex) is non-destructive.
+    is_irfft_path = false
+    if isa(transform.basis, RealFourier)
+        expected_rfft_size = div(transform.basis.meta.size, 2) + 1
+        if size(in, transform.axis) == expected_rfft_size
+            is_irfft_path = true
+        end
+    end
+
+    if is_irfft_path
+        scratch_key = (size(in), eltype(in), :irfft_scratch)
+        scratch = _get_or_alloc_scratch!(transform.bwd_scratch, scratch_key,
                                          size(in), eltype(in))
         copyto!(scratch, in)
         mul!(out, plan, scratch)
