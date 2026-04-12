@@ -672,8 +672,21 @@ mutable struct Subproblem
     _input_buffer::Union{Nothing, Matrix{ComplexF64}}
     _output_buffer::Union{Nothing, Matrix{ComplexF64}}
 
-    # Per-stage LHS factorizations for IMEX RK
-    LHS_solvers::Vector{Any}
+    # Per-(a_ii) LHS factorizations for IMEX RK.
+    #
+    # Keyed by the implicit diagonal coefficient `a_ii` so that ESDIRK
+    # methods (RK222, RK443) — where every implicit stage shares the
+    # same γ on the diagonal — cache and reuse a SINGLE factorization
+    # across all stages. Previously this was a Vector{Any} indexed by
+    # stage, which rebuilt the same LHS matrix N times per step for
+    # N-stage ESDIRK methods.
+    #
+    # The key is `Float64` (the `a_ii` value). For RK222 there's only
+    # one key (γ); for RK443 also one key (γ for stages 2-4; stage 1
+    # has a_ii = 0 which hits the mass-only path and isn't cached
+    # here). For non-ESDIRK DIRKs with different a_ii per stage, each
+    # distinct a_ii gets its own cache entry.
+    LHS_solvers::Dict{Float64, Any}
 
     # Woodbury block decomposition: bulk vs BC row/col indices (post-filtering,
     # into L_min/M_min). Used for efficient block-LU solving.
@@ -744,7 +757,7 @@ function Subproblem(solver, subsystems::Tuple{Vararg{Subsystem}}, group::Tuple=S
         nothing, nothing, nothing,  # Expanded matrices
         0,  # update_rank
         nothing, nothing,  # Buffers
-        Any[],  # LHS_solvers
+        Dict{Float64, Any}(),  # LHS_solvers (keyed by a_ii for ESDIRK reuse)
         Int[], Int[], Int[], Int[]  # bulk_rows, bc_rows, bulk_cols, bc_cols
     )
 
