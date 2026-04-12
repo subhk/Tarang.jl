@@ -14,17 +14,20 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
 
         solver.dt = dt
 
-        # Update time-dependent boundary conditions BEFORE taking the step.
-        # NOTE: BCs are evaluated at t+dt and held fixed for all RK substeps.
-        # For multi-stage methods (RK443, etc.), this introduces O(dt) error at
-        # intermediate stages, potentially reducing the time integrator's formal
-        # order of accuracy for problems with rapidly varying BCs.
-        # TODO: Pass substep time into the timestepper loop for per-stage BC updates.
-        if has_time_dependent_bcs(solver.problem.bc_manager)
+        # Update time- / space-dependent boundary conditions BEFORE taking
+        # the step. For RK steppers, `step_subproblem_rk!` re-runs this at
+        # each stage time (see `_refresh_bcs_for_stage!`), which recovers
+        # full stage-order accuracy when the BC varies rapidly. For the
+        # multistep stepper a single per-step refresh is sufficient because
+        # the BC value is held fixed across the implicit update.
+        bcm = solver.problem.bc_manager
+        if has_time_dependent_bcs(bcm) || has_space_dependent_bcs(bcm)
             target_time = solver.sim_time + dt
-            update_time_dependent_bcs!(solver.problem.bc_manager, target_time)
+            if has_time_dependent_bcs(bcm)
+                update_time_dependent_bcs!(bcm, target_time)
+            end
             _apply_bc_values_to_equations!(solver, target_time)
-            @debug "Updated time-dependent BCs for t=$target_time"
+            @debug "Refreshed BCs at t=$target_time"
         end
 
         # Use existing timestepper infrastructure from timesteppers.jl
