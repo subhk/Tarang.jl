@@ -25,7 +25,11 @@ using Tarang
 
         @test subsystem.group == (nothing, nothing)
 
-        expected_shape = (div(xb.meta.size, 2) + 1, div(yb.meta.size, 2) + 1)
+        # Coefficient shape rule (unified serial + MPI): only the FIRST
+        # Fourier axis gets halved by rfft. Subsequent Fourier axes see
+        # complex input from the prior transform and use full-size fft.
+        # For (RealFourier(8), RealFourier(10)): (8/2+1, 10) = (5, 10).
+        expected_shape = (div(xb.meta.size, 2) + 1, yb.meta.size)
         @test coeff_shape(subsystem, field.domain) == expected_shape
         @test coeff_size(subsystem, field.domain) == prod(expected_shape)
     end
