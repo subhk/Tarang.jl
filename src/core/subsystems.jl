@@ -1948,32 +1948,6 @@ function compute_update_rank(sp::Subproblem, eqns, eqn_conditions, eqn_sizes)
     return total_dofs - get(eqn_dofs_by_dim, max_dim, 0)
 end
 
-function _equation_dof_dims(eqns, eqn_sizes::AbstractVector{<:Integer})
-    dims = Vector{Int}(undef, sum(eqn_sizes))
-    offset = 0
-    for (eq, sz) in zip(eqns, eqn_sizes)
-        dim = get(eq, "domain_dim", 0)
-        if sz > 0
-            dims[offset + 1:offset + sz] .= dim
-        end
-        offset += sz
-    end
-    return dims
-end
-
-function _variable_dof_dims(vars, var_sizes::AbstractVector{<:Integer})
-    dims = Vector{Int}(undef, sum(var_sizes))
-    offset = 0
-    for (var, sz) in zip(vars, var_sizes)
-        dim = get_var_dim(var)
-        if sz > 0
-            dims[offset + 1:offset + sz] .= dim
-        end
-        offset += sz
-    end
-    return dims
-end
-
 function _column_touches_rows(A::SparseMatrixCSC, col::Int, row_mask::AbstractVector{Bool})
     rows = rowvals(A)
     vals = nonzeros(A)
