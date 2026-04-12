@@ -125,20 +125,26 @@ Tarang produces a new equation row that looks like
 \sum_{n=0}^{N-1} a_n\, T_n(-1) \;=\; 0,
 ```
 
-i.e. a linear combination of `u`'s coefficients that equals the boundary value. **This row is added to the system, not substituted in.** It's an *algebraic* equation — there is no time derivative (no `M` term in the `M·dX/dt + L·X = F` formulation). In the linear-algebra picture:
+i.e. a linear combination of `u`'s coefficients that equals the boundary value. **This row is added to the system, not substituted in.** It's an *algebraic* equation — there is no time derivative, so it contributes nothing to the `M` matrix in the `M·dX/dt + L·X = F` formulation. In the linear-algebra picture:
 
 - `u` contributes `Nz` rows (PDE interior) + BC rows
 - `tau_u1`, `tau_u2` contribute columns (one each, at the lift modes)
-- BC rows have zero `M` entries → they're pure algebraic constraints
+- BC rows are zero in `M` (no time derivative) → they're pure algebraic constraints
 - The combined LHS matrix is square because `(PDE rows + BC rows) = (state cols + tau cols)`
 
 This square-system condition is enforced automatically when you declare the right number of tau fields to match the number of BCs. If you miss a BC you'll get a singular / non-square system at solver-build time.
 
 ### DAE-style handling in IVP steppers
 
-For **initial-value problems**, BC rows have `M_row = 0`, which makes the full system a **differential-algebraic equation** (DAE), not an ODE. Tarang's subproblem stepper handles this correctly: at each IMEX-RK stage (or each multistep update), the solver assembles the stage RHS from the accumulated `dt·Σ(AᴱF − Aⁱ·L·X)` formula for interior rows and **overrides** BC rows with `dt·a_ii·F_BC` so that after the solve they yield exactly `L_row·X = F_BC`.
+For **initial-value problems**, BC rows have `M_row = 0`, which makes the full system a **differential-algebraic equation** (DAE) rather than a pure ODE. Tarang's subproblem stepper handles this correctly via a **per-stage row override** on what it classifies as "BC rows".
 
-This override is important because the raw accumulated-RHS formula produces a wrong `1/γ` scaling factor for inhomogeneous algebraic constraints. Without it, a BC like `T(z=0) = 1` would be enforced as `T(z=0) = 1/γ ≈ 3.41` for RK222. You do not have to do anything to enable this — it's built into the `step_subproblem_rk!` and `step_subproblem_multistep!` steppers.
+A note on how this classification works: `sp.bc_rows` is not built by scanning `M` for zero rows directly. Instead, `build_matrices!` labels rows by **equation size** — any equation whose per-subproblem row count is smaller than the coupled-direction basis size `Nz` is classified as a BC row (pressure gauge `integ(p) = 0` → 1 row; wall BC `T(z=0) = 1` → 1 row; vector wall BC → 2 rows; etc.). Rows from equations with `eq_size ≥ Nz` — the PDE interior and any *Nz-sized algebraic* equation like the continuity equation — are classified as "bulk".
+
+At each IMEX-RK stage (or multistep update), the solver assembles the stage RHS from the accumulated `dt·Σ(AᴱF − Aⁱ·L·X)` formula for **every** row, then calls `apply_bc_override!` to **replace** the `sp.bc_rows` entries with `dt·a_ii·F_BC`. After the LHS solve, those rows yield exactly `L_row·X = F_BC`, which is the correct BC enforcement.
+
+**Why a size-based classifier is good enough**: the only algebraic rows that don't get overridden are Nz-sized, F-zero equations like continuity. For them, the accumulated-RHS formula naturally produces zero on the right-hand side (since their `F` is zero and `L*X = 0` is the target), so no override is needed. The override only matters for *small* algebraic rows whose `F` can be nonzero — i.e., BCs and gauge constraints — and those are exactly what `sp.bc_rows` captures.
+
+**Why the override is necessary**: without it, the raw accumulated-RHS formula produces a wrong `1/γ` scaling factor for inhomogeneous algebraic rows. For RK222 (γ = 1 - 1/√2, 1/γ = 2 + √2 ≈ 3.414), a BC like `T(z=0) = 1` would be enforced as `T(z=0) = 2+√2` instead of `1`. The override is built into `step_subproblem_rk!` and `step_subproblem_multistep!`, so you don't have to do anything to enable it — but it's worth knowing the mechanism exists if you're debugging a "BC value is off by a constant factor" symptom.
 
 ## First-Order Formulation (Recommended)
 
