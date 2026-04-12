@@ -1693,7 +1693,8 @@ Unnormalized forward Fourier transform matching Tarang's `RealFourier`
 convention: `FFTW.rfft` along the first dimension for real input, full
 `FFTW.fft` for complex input. Multi-dim real input transforms the first
 dim with `rfft` and remaining dims with `fft`, matching the shape that
-`_find_bc_fourier_basis` + subproblem mode indexing expects.
+`_bc_fourier_axis_sizes` + `_subproblem_fourier_group_indices` expect
+when looking up per-mode coefficients.
 """
 function _forward_fft_bc(arr::AbstractArray)
     if eltype(arr) <: Complex
