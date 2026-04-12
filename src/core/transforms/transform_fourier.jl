@@ -30,11 +30,6 @@ function _fourier_forward(data::AbstractArray, transform::FourierTransform)
     end
 end
 
-"""Apply forward Fourier transform"""
-function apply_fourier_forward!(field::ScalarField, transform::FourierTransform)
-    set_coeff_data!(field, _fourier_forward(get_grid_data(field), transform))
-end
-
 """Apply backward transform to field """
 function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
 
@@ -178,11 +173,6 @@ function _fourier_backward(data::AbstractArray, transform::FourierTransform)
     end
 end
 
-"""Apply backward Fourier transform"""
-function apply_fourier_backward!(field::ScalarField, transform::FourierTransform)
-    set_grid_data!(field, _fourier_backward(get_coeff_data(field), transform))
-end
-
 # Dispatch methods for transform loop (replaces isa() chains)
 _apply_forward(current, t::FourierTransform) = _fourier_forward(current, t)
 _apply_backward(current, t::FourierTransform) = _fourier_backward(current, t)
@@ -212,38 +202,21 @@ _apply_backward(current, t::FourierTransform) = _fourier_backward(current, t)
 # plan types have different output shapes and are cached under separate
 # keys (`(size, Float64)` vs `(size, ComplexF64)`).
 
-@inline function _fourier_forward_output_size(in_shape::Tuple, transform::FourierTransform, input_is_real::Bool)
-    if isa(transform.basis, RealFourier) && input_is_real
-        # rfft halves the transform axis: N → div(N, 2) + 1
-        ax = transform.axis
-        return ntuple(i -> i == ax ? div(in_shape[i], 2) + 1 : in_shape[i], length(in_shape))
-    end
-    # Full fft: output shape = input shape
-    return in_shape
-end
-
-@inline function _fourier_backward_output_size(in_shape::Tuple, transform::FourierTransform, rfft_path::Bool)
-    if rfft_path
-        # irfft expands the transform axis back to basis.meta.size
-        ax = transform.axis
-        return ntuple(i -> i == ax ? transform.basis.meta.size : in_shape[i], length(in_shape))
-    end
-    return in_shape
-end
-
 function _forward_output_spec(in::AbstractArray, transform::FourierTransform)
     in_shape = size(in)
     in_eltype = eltype(in)
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
     complex_T = Complex{real_T}
+    ax = transform.axis
 
     if isa(transform.basis, RealFourier)
         if in_eltype <: Complex
             # Already-complex input: full fft, shape unchanged
             return in_shape, complex_T
         end
-        # Real input: rfft halves the transform axis
-        out_shape = _fourier_forward_output_size(in_shape, transform, true)
+        # Real input: rfft halves the transform axis from N to div(N, 2) + 1
+        out_shape = ntuple(i -> i == ax ? div(in_shape[i], 2) + 1 : in_shape[i],
+                           length(in_shape))
         return out_shape, complex_T
     else  # ComplexFourier
         return in_shape, complex_T
@@ -254,13 +227,15 @@ function _backward_output_spec(in::AbstractArray, transform::FourierTransform)
     in_shape = size(in)
     in_eltype = eltype(in)
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
+    ax = transform.axis
 
     if isa(transform.basis, RealFourier)
         expected_rfft_size = div(transform.basis.meta.size, 2) + 1
-        axis_len = in_shape[transform.axis]
+        axis_len = in_shape[ax]
         if axis_len == expected_rfft_size
-            # irfft: axis expands back to basis.meta.size, output is real
-            out_shape = _fourier_backward_output_size(in_shape, transform, true)
+            # irfft: axis expands back from N/2+1 to basis.meta.size
+            out_shape = ntuple(i -> i == ax ? transform.basis.meta.size : in_shape[i],
+                               length(in_shape))
             return out_shape, real_T
         else
             # ifft fallback (complex input from a non-first-axis fft): same shape, still complex
