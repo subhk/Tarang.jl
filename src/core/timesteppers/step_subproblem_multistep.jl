@@ -328,9 +328,13 @@ function _get_or_build_multistep_lhs!(sp::Subproblem, a0::Float64, b0::Float64)
         ComplexF64(a0) * M
     end
 
-    # Symbolic-reuse fast path: if the cached solver is a SparseLUSolver
-    # and the key changed, refactor in place.
-    if cached isa MatSolvers.SparseLUSolver && cached_k !== nothing
+    # Symbolic-reuse fast path: if the cached solver supports
+    # `refactor!` (CPU SparseLUSolver, GPU CuSparseLU :rf backend, or
+    # any future solver that opts in), call it to reuse the symbolic
+    # factorization. Detected via `hasmethod` so the GPU path doesn't
+    # need a hard dependency on CUDA.jl being loaded.
+    if cached !== nothing && cached_k !== nothing &&
+       hasmethod(MatSolvers.refactor!, Tuple{typeof(cached), typeof(LHS)})
         try
             MatSolvers.refactor!(cached, LHS)
             sp.matrices[cache_key_k] = current_key
