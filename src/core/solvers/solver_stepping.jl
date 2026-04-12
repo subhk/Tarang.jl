@@ -14,18 +14,22 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
 
         solver.dt = dt
 
-        # Update time- / space-dependent boundary conditions BEFORE taking
-        # the step. For RK steppers, `step_subproblem_rk!` re-runs this at
-        # each stage time (see `_refresh_bcs_for_stage!`), which recovers
-        # full stage-order accuracy when the BC varies rapidly. For the
-        # multistep stepper a single per-step refresh is sufficient because
-        # the BC value is held fixed across the implicit update.
+        # Update time-dependent boundary conditions BEFORE taking the step.
+        # Pure space-only BCs are already populated at solver-build time and
+        # don't change between steps, so we skip the refresh for them to
+        # avoid redundant FFT recomputation. Space-AND-time dependent BCs
+        # live in `time_dependent_bcs` as well, so the guard below still
+        # catches them and both axes get refreshed inside
+        # `_apply_bc_values_to_equations!`.
+        #
+        # For RK steppers, `step_subproblem_rk!` re-runs the refresh at each
+        # stage time (see `_refresh_bcs_for_stage!`) to recover full
+        # stage-order accuracy on rapidly-varying BCs. For the multistep
+        # stepper a single per-step refresh is sufficient.
         bcm = solver.problem.bc_manager
-        if has_time_dependent_bcs(bcm) || has_space_dependent_bcs(bcm)
+        if has_time_dependent_bcs(bcm)
             target_time = solver.sim_time + dt
-            if has_time_dependent_bcs(bcm)
-                update_time_dependent_bcs!(bcm, target_time)
-            end
+            update_time_dependent_bcs!(bcm, target_time)
             _apply_bc_values_to_equations!(solver, target_time)
             @debug "Refreshed BCs at t=$target_time"
         end
