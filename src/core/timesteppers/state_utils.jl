@@ -216,6 +216,24 @@ function _collect_dt_targets!(targets::Vector{Int}, expr, state::Vector{<:Scalar
 end
 
 """
+    evaluate_rhs_buffered(solver::InitialValueSolver, state::Vector{<:ScalarField}, time::Float64)
+
+Evaluate the RHS using a reusable result buffer when the compiled lazy plan is
+available. Callers must consume the returned fields immediately and must not
+store the vector or its fields across later RHS evaluations.
+"""
+function evaluate_rhs_buffered(
+    solver::InitialValueSolver,
+    state::Vector{<:ScalarField},
+    time::Float64,
+)
+    if solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
+        return execute_lazy_rhs_buffered!(solver.rhs_plan, state, solver)
+    end
+    return evaluate_rhs(solver, state, time)
+end
+
+"""
     _find_state_index_for_operand(operand, state, variables)
 
 Find the state field index corresponding to an operand (variable or field).
