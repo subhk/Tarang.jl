@@ -184,98 +184,8 @@ function sync_state_to_problem!(problem::Problem, state::Vector{<:ScalarField})
     end
 end
 
-# ============================================================================
-# Compiled RHS Plan — zero-dispatch timestepping
-# (Defined before InitialValueSolver which references CompiledRHSPlan)
-# ============================================================================
-
-"""
-    RHSInstruction
-
-A single operation in a compiled RHS execution plan.
-Each instruction operates on pre-allocated workspace fields, eliminating
-runtime type dispatch and per-timestep allocation.
-"""
-abstract type RHSInstruction end
-
-struct CopyFieldInstr <: RHSInstruction
-    src_state_idx::Int   # Index into the state vector
-    dst_ws_idx::Int      # Index into workspace
-end
-
-struct EnsureLayoutInstr <: RHSInstruction
-    ws_idx::Int
-    layout::Symbol  # :g or :c
-end
-
-struct DifferentiateInstr <: RHSInstruction
-    src_ws_idx::Int
-    dst_ws_idx::Int
-    coord::Coordinate
-    order::Int
-end
-
-struct MultiplyFieldsInstr <: RHSInstruction
-    src1_ws_idx::Int
-    src2_ws_idx::Int
-    dst_ws_idx::Int
-end
-
-struct ScaleFieldInstr <: RHSInstruction
-    src_ws_idx::Int
-    dst_ws_idx::Int
-    scale::Float64
-end
-
-struct AddFieldsInstr <: RHSInstruction
-    src1_ws_idx::Int
-    src2_ws_idx::Int
-    dst_ws_idx::Int
-end
-
-struct SubtractFieldsInstr <: RHSInstruction
-    src1_ws_idx::Int
-    src2_ws_idx::Int
-    dst_ws_idx::Int
-end
-
-struct NegateFieldInstr <: RHSInstruction
-    src_ws_idx::Int
-    dst_ws_idx::Int
-end
-
-struct GradientComponentInstr <: RHSInstruction
-    src_ws_idx::Int
-    dst_ws_idx::Int
-    coord::Coordinate
-end
-
-struct NonlinearMultiplyInstr <: RHSInstruction
-    src1_ws_idx::Int
-    src2_ws_idx::Int
-    dst_ws_idx::Int
-end
-
-"""
-    CompiledRHSPlan
-
-A pre-compiled execution plan for RHS evaluation that eliminates
-runtime type dispatch and per-timestep allocation.
-
-Created once during solver setup by walking the expression tree.
-Executed on every `evaluate_rhs` call.
-"""
-mutable struct CompiledRHSPlan
-    instructions::Vector{RHSInstruction}
-    workspace::Vector{<:ScalarField}       # Pre-allocated intermediate buffers
-    result_ws_indices::Vector{Int}       # workspace indices that hold the final RHS per state field
-    n_state_fields::Int
-    is_compiled::Bool
-
-    function CompiledRHSPlan(n_state::Int)
-        new(RHSInstruction[], ScalarField[], zeros(Int, n_state), n_state, false)
-    end
-end
+# LazyRHSPlan is defined later in lazy_rhs.jl (included after this file).
+# Forward-declare as Any for the solver field below.
 
 mutable struct InitialValueSolver <: Solver
     base::SolverBaseData
@@ -304,8 +214,8 @@ mutable struct InitialValueSolver <: Solver
     workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
 
-    # Compiled RHS plan for zero-dispatch timestepping (lazily compiled)
-    compiled_rhs::Union{Nothing, CompiledRHSPlan}
+    # Type-specialized lazy RHS evaluation plan (LazyRHSPlan from lazy_rhs.jl)
+    rhs_plan::Any
 end
 
 function attach_evaluator!(solver::InitialValueSolver)
@@ -410,14 +320,14 @@ function _build_initial_value_solver(problem::IVP, timestepper;
     build_solver_matrices!(solver)
     _try_build_subproblems!(solver)
 
-    # Attempt to compile the RHS expression tree for zero-dispatch evaluation.
-    # If compilation fails (unsupported expression types), falls back silently
-    # to the interpreted evaluate_solver_expression path.
+    # Build the type-specialized lazy RHS plan. If translation fails for any
+    # equation (e.g., unsupported operator type), `is_compiled` stays false
+    # and `evaluate_rhs` falls back to interpreted evaluation.
     try
-        solver.compiled_rhs = compile_rhs_plan!(solver)
+        solver.rhs_plan = build_lazy_rhs_plan!(solver)
     catch e
-        @debug "RHS compilation skipped: $e — using interpreted evaluation"
-        solver.compiled_rhs = nothing
+        @debug "LazyRHS build skipped: $e — using interpreted evaluation"
+        solver.rhs_plan = nothing
     end
 
     return solver
