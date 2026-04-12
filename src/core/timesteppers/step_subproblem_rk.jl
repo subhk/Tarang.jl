@@ -244,24 +244,18 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # values but the same sparsity pattern (assuming the expanded-pattern
     # fast path is active — which it is by default). Rather than dumping
     # the cached LU and triggering a full symbolic + numeric rebuild, we
-    # mark each stage as "needs refactor" and `_get_or_build_lhs!` calls
-    # `MatSolvers.refactor!` which reuses the cached symbolic factor and
-    # runs only the numeric phase. Saves 30–60% of the LU cost under
-    # adaptive CFL.
+    # mark each cached `a_ii` entry as "needs refactor" and
+    # `_get_or_build_lhs!` calls `MatSolvers.refactor!` which reuses the
+    # cached symbolic factor and runs only the numeric phase. Saves
+    # 30–60% of the LU cost under adaptive CFL.
     prev_dt = get(state.timestepper_data, :_sp_rk_dt, NaN)
     if prev_dt != dt
         for sp in subproblems
             sp.M_min === nothing && continue
-            # Mark all cached stages dirty; _get_or_build_lhs! will
+            # Mark all cached entries dirty; _get_or_build_lhs! will
             # refactor in place on the next call.
-            if haskey(sp.matrices, "_lhs_cache_key")
-                # Per-stage dirty flags: key "_lhs_dirty_<stage>" → Bool.
-                # We set them to true and clear the (dt, a_ii) key so the
-                # coefficient mismatch path fires.
-                delete!(sp.matrices, "_lhs_cache_key")
-            end
-            for k in eachindex(sp.LHS_solvers)
-                sp.matrices["_lhs_dirty_$k"] = true
+            for a_ii_key in keys(sp.LHS_solvers)
+                sp.matrices["_lhs_dirty_$(a_ii_key)"] = true
             end
         end
         state.timestepper_data[:_sp_rk_dt] = dt
