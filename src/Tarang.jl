@@ -246,9 +246,6 @@ export
     # Diagonal IMEX (GPU-native)
     DiagonalIMEX_RK222, DiagonalIMEX_RK443, DiagonalIMEX_SBDF2,
     SpectralLinearOperator, set_spectral_linear_operator!,
-    # Pencil IMEX (Chebyshev-Fourier MPI)
-    PencilLinearOperator, set_pencil_linear_operator!,
-    is_pencil_imex_compatible, has_chebyshev_basis,
 
     # ═══════════════════════════════════════════════════════════════
     # Boundary conditions
