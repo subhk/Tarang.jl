@@ -108,9 +108,9 @@ add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(
 
 # Boundary conditions
 add_bc!(problem, "T(z=0) = 1")       # hot bottom
-add_bc!(problem, "T(z=Lz) = 0")      # cold top
+add_bc!(problem, "T(z=1) = 0")      # cold top
 add_bc!(problem, "u(z=0) = 0")       # no-slip bottom
-add_bc!(problem, "u(z=Lz) = 0")      # no-slip top
+add_bc!(problem, "u(z=1) = 0")      # no-slip top
 add_bc!(problem, "integ(p) = 0")     # pressure gauge
 
 # ─── Solver ───────────────────────────────────────────────────
