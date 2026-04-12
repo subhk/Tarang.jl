@@ -148,6 +148,21 @@ function _subproblem_operator(sp::Subproblem, which::Symbol, data::AbstractVecto
     return _subproblem_backend_matrix!(sp, matrix, cache_key, data)
 end
 
+function _apply_subproblem_operator!(dest::AbstractVector, op, x::AbstractVector)
+    if op === nothing
+        fill!(dest, zero(eltype(dest)))
+    elseif !is_gpu_array(dest) && !is_gpu_array(x) && op isa AbstractMatrix
+        mul!(dest, op, x)
+    else
+        _assign_to_buffer!(dest, op * x)
+    end
+    return dest
+end
+
+function _sp_stage_vector!(sp::Subproblem, key::String, n::Int, like::AbstractVector)
+    return _subproblem_cached_vector!(sp, key, n; like=like)
+end
+
 """
     step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
                          subproblems::Tuple)
@@ -209,14 +224,21 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     F   = [Vector{Any}(undef, n_sp) for _ in 1:stages]
     # LX[j][sp_idx] = L*X_j per subproblem (evaluated AFTER stage j solve)
     LX  = [Vector{Any}(undef, n_sp) for _ in 1:stages]
+    RHS = Vector{Any}(undef, n_sp)
 
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
             MX0[sp_idx] = ComplexF64[]
+            RHS[sp_idx] = ComplexF64[]
             continue
         end
-        x0_pre = gather_inputs(sp, state_fields)
-        MX0[sp_idx] = _subproblem_operator(sp, :M, x0_pre) * x0_pre
+        n = size(sp.M_min, 1)
+        mx0 = _sp_stage_vector!(sp, "_sp_rk_mx0", n, gather_inputs(sp, state_fields))
+        rhs = _sp_stage_vector!(sp, "_sp_rk_rhs", n, mx0)
+        x0_pre = gather_inputs!(rhs, sp, state_fields)
+        _apply_subproblem_operator!(mx0, _subproblem_operator(sp, :M, x0_pre), x0_pre)
+        MX0[sp_idx] = mx0
+        RHS[sp_idx] = rhs
     end
 
     # ── Stage loop ────────────────────────────────────────────────────────
@@ -230,7 +252,8 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
 
             # RHS = M*X_n + dt * Σ_{j<i}( A^E_{ij}*F_j - A^I_{ij}*L*X_j )
             # F[j] and LX[j] contain values at stage j SOLUTION (set after stage j)
-            rhs = copy(MX0[sp_idx])
+            rhs = RHS[sp_idx]
+            _assign_to_buffer!(rhs, MX0[sp_idx])
 
             for j in 1:(i - 1)
                 a_ej = dt * A_exp[i, j]
@@ -275,13 +298,18 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # Evaluate F[i] and LX[i] AFTER the solve, at the stage i solution.
         # This matches step_rk_imex! where F_exp_vecs[s] and F_imp_vecs[s]
         # are computed after the stage solve (step_rk.jl lines 176-179).
-            F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
+        F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
-            F[i][sp_idx] = gather_outputs(sp, F_fields)
-            x_pre = gather_inputs(sp, state_fields)
+            f_stage = _sp_stage_vector!(sp, "_sp_rk_F_stage_$i", size(sp.M_min, 1), MX0[sp_idx])
+            x_pre = RHS[sp_idx]
+            gather_outputs!(f_stage, sp, F_fields)
+            gather_inputs!(x_pre, sp, state_fields)
             L_op = _subproblem_operator(sp, :L, x_pre)
-            LX[i][sp_idx] = L_op !== nothing ? L_op * x_pre : similar_zeros(x_pre)
+            lx_stage = _sp_stage_vector!(sp, "_sp_rk_LX_stage_$i", length(x_pre), x_pre)
+            _apply_subproblem_operator!(lx_stage, L_op, x_pre)
+            F[i][sp_idx] = f_stage
+            LX[i][sp_idx] = lx_stage
         end
     end
 
