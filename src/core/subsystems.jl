@@ -3175,22 +3175,76 @@ function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_dom
     sp_shape = coeff_shape(sp, out_domain)
     ncc_shape = size(coeffs)
 
-    # Collect above-cutoff modes and sort by |coefficient| descending so the
-    # `max_ncc_terms` cap retains the MOST informative modes, not just the
-    # first-iterated ones. This improves NCC approximation quality for
-    # rapidly decaying coefficient fields.
+    # ─── Relative cutoff ─────────────────────────────────────────────
+    # Dedalus convention: interpret `ncc_cutoff` as a RELATIVE threshold
+    # against the L-infinity norm of the coefficient array, not as an
+    # absolute magnitude. This scales automatically with the problem's
+    # natural coefficient magnitude — a viscosity `ν ~ 1e-3` and a
+    # temperature `T ~ 1.0` both get truncated at the same relative
+    # precision without the user having to tune `ncc_cutoff` per field.
+    #
+    # Matches `dedalus.core.arithmetic.Multiply._ncc_matrices` where
+    # `cutoff` is divided by the coefficient L∞ norm before comparison.
+    coeff_max = 0.0
+    @inbounds for i in eachindex(coeffs)
+        ai = abs(coeffs[i])
+        ai > coeff_max && (coeff_max = ai)
+    end
+    # Absolute threshold: `ncc_cutoff × max|coefficient|`. For
+    # coeff_max == 0 (all-zero NCC), treat as zero — build_ncc_matrix
+    # returns an empty sparse matrix.
+    abs_cutoff = ncc_cutoff * coeff_max
+
+    # ─── Energy-weighted mode selection ──────────────────────────────
+    # Collect modes above the relative cutoff, along with their "energy"
+    # |coeff|² which is what determines the truncation error in an
+    # L²-sense approximation. Sort by energy descending so the
+    # `max_ncc_terms` cap keeps the modes that carry the most spectral
+    # power, not just the modes that are pointwise-largest.
+    #
+    # For smoothly-decaying coefficient fields (e.g. exponentially
+    # decaying Chebyshev coefficients) energy-sorted and magnitude-sorted
+    # orderings agree. For oscillatory fields or fields with fat tails,
+    # energy sorting gives a better approximation at the same
+    # `max_ncc_terms` budget.
     significant_modes = Tuple{Float64, CartesianIndex}[]
     @inbounds for ncc_mode in CartesianIndices(ncc_shape)
         mag = abs(coeffs[ncc_mode])
-        if mag > ncc_cutoff
-            push!(significant_modes, (mag, ncc_mode))
+        if mag >= abs_cutoff && mag > 0
+            push!(significant_modes, (mag * mag, ncc_mode))  # energy weight
         end
     end
     sort!(significant_modes; by = first, rev = true)
 
-    n_to_use = max_ncc_terms === nothing ? length(significant_modes) :
-               min(length(significant_modes), max_ncc_terms)
+    # Optional energy-retention cap: if max_ncc_terms is nothing, we can
+    # additionally cap by CUMULATIVE energy fraction — keep enough modes
+    # to capture 1 - ncc_cutoff² of the total power. This is another
+    # Dedalus-style truncation that's independent of the count cap.
+    total_energy = 0.0
+    @inbounds for k in 1:length(significant_modes)
+        total_energy += significant_modes[k][1]
+    end
 
+    n_to_use = length(significant_modes)
+    if max_ncc_terms !== nothing
+        n_to_use = min(n_to_use, max_ncc_terms)
+    else
+        # Cap by cumulative energy: retain enough modes to capture
+        # (1 - ncc_cutoff²) of the total L² energy. For ncc_cutoff = 1e-6
+        # this keeps essentially all significant modes; for ncc_cutoff =
+        # 0.01 it drops trailing modes that contribute < 1e-4 of energy.
+        target_energy = (1.0 - ncc_cutoff * ncc_cutoff) * total_energy
+        cumulative = 0.0
+        cap = 0
+        @inbounds for k in 1:length(significant_modes)
+            cumulative += significant_modes[k][1]
+            cap = k
+            cumulative >= target_energy && break
+        end
+        n_to_use = max(cap, 1)
+    end
+
+    # ─── Accumulate mode-shift contributions ─────────────────────────
     @inbounds for k in 1:n_to_use
         ncc_mode = significant_modes[k][2]
         ncc_coeff = coeffs[ncc_mode]
@@ -3203,12 +3257,14 @@ function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_dom
         matrix = matrix + ncc_coeff * mode_mat
     end
 
-    # Post-accumulation truncation: drop residual small entries from the
-    # summed matrix. Use droptol! which prunes entries by absolute value.
-    if ncc_cutoff > 0 && nnz(matrix) > 0
-        droptol!(matrix, ncc_cutoff)
+    # ─── Post-accumulation sparsification ────────────────────────────
+    # After summing all contributions, drop residual small entries. Use
+    # the absolute cutoff (scaled by max coefficient) to match the
+    # per-mode threshold, and then dropzeros! to clean up structural
+    # cancellations.
+    if abs_cutoff > 0 && nnz(matrix) > 0
+        droptol!(matrix, abs_cutoff)
     end
-    # dropzeros! removes structural zeros introduced by cancellation.
     if nnz(matrix) > 0
         dropzeros!(matrix)
     end
