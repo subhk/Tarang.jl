@@ -212,14 +212,22 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         return cached
     end
 
-    # Build LHS = M_min + dt * a_ii * L_min
     M = sp.M_min
     L = sp.L_min
     if M === nothing
         return nothing
     end
 
-    LHS = if L !== nothing && abs(a_ii) > 1e-14
+    # Fast path: use expanded pattern for in-place LHS update.
+    # sp.LHS has the union sparsity pattern of M and L, and sp.M_exp, sp.L_exp
+    # have values from M and L mapped onto that pattern. This lets us compute
+    #   LHS.nzval = 1 * M_exp.nzval + (dt*a_ii) * L_exp.nzval
+    # without allocating a new sparse matrix or re-analyzing the sparsity.
+    LHS = if sp.M_exp !== nothing && sp.L_exp !== nothing && sp.LHS !== nothing
+        coeff = ComplexF64(dt * a_ii)
+        sp.LHS.nzval .= sp.M_exp.nzval .+ coeff .* sp.L_exp.nzval
+        sp.LHS
+    elseif L !== nothing && abs(a_ii) > 1e-14
         M + dt * a_ii * L
     else
         copy(M)
@@ -231,10 +239,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         return lhs_lu
     end
 
-    # Gauge-constrained subproblems (e.g., pressure with integ(p)=0 for non-DC
-    # modes) may be rank-deficient by 1. Use dense matrix with backslash which
-    # employs pivoted LU — more robust for near-singular systems than sparse LU.
-    # For small subproblem sizes (39×39 for RBC 2D), the cost is negligible.
+    # Fallback for rank-deficient matrices (e.g., DC mode gauge issues)
     LHS_dense = Matrix(LHS)
     sp.LHS_solvers[stage_idx] = LHS_dense
     @info "step_subproblem_rk!: using dense fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
