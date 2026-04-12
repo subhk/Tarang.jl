@@ -1100,6 +1100,43 @@ function _expand_advection(u, f)
     return result
 end
 
+"""
+    _expression_contains_unknown(expr) -> Bool
+
+Return `true` if an expression tree (either an `Operator` subtype or a
+`Future` node) contains an `UnknownOperator` placeholder anywhere in its
+subtree. Used by the equation parser's function-call path to decide
+whether to short-circuit `func(args...)` into a symbolic
+`UnknownOperator(string(expr))` — which it does when an argument carries
+an unbound coordinate / time placeholder — versus proceeding with the
+call, which is correct for normal operator expressions built from
+concrete fields.
+
+The walk handles:
+- `UnknownOperator` directly
+- Operator subtypes via `operand` / `left` / `right` fields
+- `Future` subtypes via `future_args`
+- `Number` and literal values (short-circuit false)
+"""
+function _expression_contains_unknown(expr)
+    isa(expr, UnknownOperator) && return true
+    (isa(expr, Number) || isa(expr, Symbol) || isa(expr, AbstractString)) && return false
+    # Operator subtypes commonly store children in :operand / :left / :right.
+    for f in (:operand, :left, :right)
+        if hasfield(typeof(expr), f)
+            child = getfield(expr, f)
+            _expression_contains_unknown(child) && return true
+        end
+    end
+    # Future subtypes store children via `future_args`.
+    if isa(expr, Future)
+        for arg in future_args(expr)
+            _expression_contains_unknown(arg) && return true
+        end
+    end
+    return false
+end
+
 # Helper operator types for parsing (following operator structure)
 struct ZeroOperator <: Operator end
 struct ConstantOperator <: Operator
