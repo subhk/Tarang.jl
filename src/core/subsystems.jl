@@ -1597,25 +1597,44 @@ function build_matrices!(sp::Subproblem, names, solver)
         row_order = [idx for idx in _left_permutation_indices(sp, eqns, eqn_sizes, bc_top, interleave_components) if valid_eqn[idx]]
         col_order = [idx for idx in _right_permutation_indices(sp, vars, tau_left, interleave_components) if valid_var[idx]]
 
-        row_dims = _equation_dof_dims(eqns, eqn_sizes)
-        col_dims = _variable_dof_dims(vars, var_sizes)
+        cheb_basis = _subproblem_cheb_basis_from_sp(sp)
+        Nz = cheb_basis !== nothing ? cheb_basis.meta.size : 1
+        is_bulk_size(sz) = Nz > 1 ? (sz >= Nz && sz % Nz == 0) : sz > 1
+
+        row_is_bulk = Vector{Bool}(undef, I)
+        offset = 0
+        for sz in eqn_sizes
+            if sz > 0
+                row_is_bulk[offset + 1:offset + sz] .= is_bulk_size(sz)
+            end
+            offset += sz
+        end
+
+        col_is_bulk = Vector{Bool}(undef, J)
+        offset = 0
+        for sz in var_sizes
+            if sz > 0
+                col_is_bulk[offset + 1:offset + sz] .= is_bulk_size(sz)
+            end
+            offset += sz
+        end
+
         if !isempty(row_order) && !isempty(col_order)
-            max_dim = maximum(view(row_dims, row_order))
-            post_row_dims = row_dims[row_order]
-            post_col_dims = col_dims[col_order]
+            post_row_is_bulk = row_is_bulk[row_order]
+            post_col_is_bulk = col_is_bulk[col_order]
 
-            sp.bulk_rows = findall(==(max_dim), post_row_dims)
-            sp.bc_rows = findall(!=(max_dim), post_row_dims)
+            sp.bulk_rows = findall(identity, post_row_is_bulk)
+            sp.bc_rows = findall(!, post_row_is_bulk)
 
-            bulk_row_mask = falses(length(post_row_dims))
+            bulk_row_mask = falses(length(post_row_is_bulk))
             bulk_row_mask[sp.bulk_rows] .= true
 
             bulk_cols = Int[]
             bc_cols = Int[]
             L_min = matrices["L"]
             M_min = get(matrices, "M", nothing)
-            for col in eachindex(post_col_dims)
-                if post_col_dims[col] == max_dim
+            for col in eachindex(post_col_is_bulk)
+                if post_col_is_bulk[col]
                     push!(bulk_cols, col)
                     continue
                 end
