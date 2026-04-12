@@ -221,7 +221,20 @@ function bases_by_coord(domain::Domain)
     end
 end
 
-"""Tuple of dealiasing factors per axis."""
+"""
+    dealias(domain::Domain) -> Tuple
+
+Tuple of per-axis dealiasing factors read from `basis.meta.dealias`.
+
+⚠ CURRENTLY UNUSED: this function aggregates per-basis dealias metadata
+but `NonlinearEvaluator` uses its own global `dealiasing_factor`
+(default 3/2) for the padded multiply path, not this per-basis value.
+The per-basis `dealias=...` argument on basis constructors is inert —
+it's stored and displayed but does not drive the padding factor.
+See docs/src/pages/dealiasing.md for details.
+
+Kept for metadata/display purposes; delete if no future use emerges.
+"""
 function dealias(domain::Domain)
     _domain_cached_get!(domain, :dealias) do
         factors = ones(Float64, domain.dist.dim)
