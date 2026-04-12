@@ -120,12 +120,17 @@ end
 # ── Translation from existing expression trees ──────────────────────────────
 
 """
-    translate_to_lazy(expr, state) -> LazyFuture or nothing
+    translate_to_lazy(expr, state; target=nothing) -> LazyFuture or nothing
 
 Recursively translate an existing operator expression tree into a LazyFuture.
 Returns `nothing` if any sub-expression contains an unsupported operator type.
+
+`target` is the per-component target field (e.g. `u_x` for the u_x equation).
+When set, VectorField references are resolved to the matching component —
+this handles vector advection `u⋅∇(u)` which expands to `Differentiate(u, x)`
+with a VectorField operand.
 """
-function translate_to_lazy(expr, state)
+function translate_to_lazy(expr, state; target=nothing)
     # Leaf: state field
     if isa(expr, ScalarField)
         idx = _lazy_find_state_index(expr, state)
@@ -135,8 +140,14 @@ function translate_to_lazy(expr, state)
         return LazyParamField(expr)
     end
 
-    # Leaf: VectorField → can't directly translate (user must pick component)
+    # VectorField → resolve to matching component when a target is given
     if isa(expr, VectorField)
+        if target !== nothing
+            comp = _vector_component_for_target(expr, target)
+            if comp !== nothing
+                return translate_to_lazy(comp, state; target=target)
+            end
+        end
         return LazyParamField(expr)
     end
 
@@ -153,22 +164,21 @@ function translate_to_lazy(expr, state)
 
     # Binary ops
     if isa(expr, AddOperator)
-        l = translate_to_lazy(expr.left, state)
-        r = translate_to_lazy(expr.right, state)
+        l = translate_to_lazy(expr.left, state; target=target)
+        r = translate_to_lazy(expr.right, state; target=target)
         (l === nothing || r === nothing) && return nothing
         return LazyAdd(l, r)
     end
     if isa(expr, SubtractOperator)
-        l = translate_to_lazy(expr.left, state)
-        r = translate_to_lazy(expr.right, state)
+        l = translate_to_lazy(expr.left, state; target=target)
+        r = translate_to_lazy(expr.right, state; target=target)
         (l === nothing || r === nothing) && return nothing
         return LazySub(l, r)
     end
     if isa(expr, MultiplyOperator)
-        l = translate_to_lazy(expr.left, state)
-        r = translate_to_lazy(expr.right, state)
+        l = translate_to_lazy(expr.left, state; target=target)
+        r = translate_to_lazy(expr.right, state; target=target)
         (l === nothing || r === nothing) && return nothing
-        # Fold constant multiplications into LazyScale
         if isa(l, LazyConst)
             return LazyScale(r, l.value)
         elseif isa(r, LazyConst)
@@ -179,7 +189,7 @@ function translate_to_lazy(expr, state)
 
     # Unary ops
     if isa(expr, NegateOperator)
-        op = translate_to_lazy(expr.operand, state)
+        op = translate_to_lazy(expr.operand, state; target=target)
         op === nothing && return nothing
         return LazyNegate(op)
     end
@@ -187,22 +197,48 @@ function translate_to_lazy(expr, state)
     # Differentiation
     if isa(expr, Differentiate)
         op_expr = expr.operand
-        # VectorField operand: the Differentiate comes from vector advection
-        # (u⋅∇u). We can't translate it as-is — caller (or user) must expand
-        # to component form first. Return nothing to trigger fallback.
-        if isa(op_expr, VectorField)
-            return nothing
+        # Resolve VectorField operand to target component
+        if isa(op_expr, VectorField) && target !== nothing
+            comp = _vector_component_for_target(op_expr, target)
+            if comp !== nothing
+                op_expr = comp
+            end
         end
-        op = translate_to_lazy(op_expr, state)
+        op = translate_to_lazy(op_expr, state; target=target)
         op === nothing && return nothing
         return LazyDiff(op, expr.coord, expr.order)
     end
 
     # Future hierarchy
     if isa(expr, Future)
-        return _translate_future_to_lazy(expr, state)
+        return _translate_future_to_lazy(expr, state; target=target)
     end
 
+    return nothing
+end
+
+"""Find the VectorField component matching `target` by identity or name."""
+function _vector_component_for_target(vf::VectorField, target::ScalarField)
+    for comp in vf.components
+        if comp === target
+            return comp
+        end
+        if hasfield(typeof(comp), :name) && comp.name == target.name
+            return comp
+        end
+    end
+    # Fall back to name-suffix matching (_x, _y, _z)
+    target_name = String(target.name)
+    for comp in vf.components
+        cname = String(comp.name)
+        if endswith(target_name, "_x") && endswith(cname, "_x")
+            return comp
+        elseif endswith(target_name, "_y") && endswith(cname, "_y")
+            return comp
+        elseif endswith(target_name, "_z") && endswith(cname, "_z")
+            return comp
+        end
+    end
     return nothing
 end
 
@@ -218,15 +254,15 @@ function _lazy_find_state_index(field::ScalarField, state)
     return nothing
 end
 
-function _translate_future_to_lazy(expr::Future, state)
+function _translate_future_to_lazy(expr::Future, state; target=nothing)
     args = future_args(expr)
     isempty(args) && return LazyConst(0.0)
 
     if isa(expr, Add)
-        result = translate_to_lazy(args[1], state)
+        result = translate_to_lazy(args[1], state; target=target)
         result === nothing && return nothing
         for a in args[2:end]
-            rhs = translate_to_lazy(a, state)
+            rhs = translate_to_lazy(a, state; target=target)
             rhs === nothing && return nothing
             result = LazyAdd(result, rhs)
         end
@@ -235,10 +271,10 @@ function _translate_future_to_lazy(expr::Future, state)
 
     if isa(expr, Subtract)
         length(args) < 2 && return nothing
-        result = translate_to_lazy(args[1], state)
+        result = translate_to_lazy(args[1], state; target=target)
         result === nothing && return nothing
         for a in args[2:end]
-            rhs = translate_to_lazy(a, state)
+            rhs = translate_to_lazy(a, state; target=target)
             rhs === nothing && return nothing
             result = LazySub(result, rhs)
         end
@@ -247,13 +283,12 @@ function _translate_future_to_lazy(expr::Future, state)
 
     if isa(expr, Negate)
         length(args) < 1 && return nothing
-        op = translate_to_lazy(args[1], state)
+        op = translate_to_lazy(args[1], state; target=target)
         op === nothing && return nothing
         return LazyNegate(op)
     end
 
     if isa(expr, Multiply)
-        # Fold scalar constants
         scalar_coeff = 1.0
         deps = Any[]
         for a in args
@@ -268,10 +303,10 @@ function _translate_future_to_lazy(expr::Future, state)
 
         isempty(deps) && return LazyConst(scalar_coeff)
 
-        result = translate_to_lazy(deps[1], state)
+        result = translate_to_lazy(deps[1], state; target=target)
         result === nothing && return nothing
         for a in deps[2:end]
-            rhs = translate_to_lazy(a, state)
+            rhs = translate_to_lazy(a, state; target=target)
             rhs === nothing && return nothing
             result = LazyMul(result, rhs)
         end
@@ -555,19 +590,21 @@ function build_lazy_rhs_plan!(solver)
         end
         expr === nothing && continue
 
-        lazy = translate_to_lazy(expr, state)
-        if lazy === nothing
-            @info "LazyRHS: cannot translate eq$eq_idx F expression ($(typeof(expr))); falling back" maxlog=3
-            return plan  # is_compiled stays false
-        end
-
+        # For vector equations with multiple targets, translate per-component:
+        # each component's RHS resolves VectorField references to its own target.
         for state_idx in target_indices
-            if state_idx <= length(state)
-                template = state[state_idx]
-                plan.exprs[state_idx] = lazy
-                plan.result_fields[state_idx] = _lazy_allocate_result(template)
-                plan.workspaces[state_idx].template = template
+            if state_idx > length(state)
+                continue
             end
+            template = state[state_idx]
+            lazy = translate_to_lazy(expr, state; target=template)
+            if lazy === nothing
+                @info "LazyRHS: cannot translate eq$eq_idx F for target $(template.name); falling back" maxlog=3
+                return plan  # is_compiled stays false
+            end
+            plan.exprs[state_idx] = lazy
+            plan.result_fields[state_idx] = _lazy_allocate_result(template)
+            plan.workspaces[state_idx].template = template
         end
     end
 
