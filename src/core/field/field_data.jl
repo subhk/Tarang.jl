@@ -491,9 +491,19 @@ function allocate_data!(field::ScalarField)
         return
     end
 
+    # IMPORTANT: Stored field buffers use `basis.meta.size` (the
+    # non-dealiased grid), NOT the 1.5× padded size suggested by a
+    # basis's `dealias` argument. The padded shape is a transient scratch
+    # used inside `NonlinearEvaluator.evaluate_padded_multiply` for
+    # quadratic product dealiasing (Orszag 1971 3/2-rule); storing every
+    # state field at the padded size would be 3-3.4× wasteful in memory
+    # and time for linear operators that don't need dealiasing.
+    # See docs/src/pages/dealiasing.md for the full story.
     gshape = global_shape(field.domain)
-    # Use context-aware coefficient shape: MPI+PencilFFTs has different rules
-    # (only first RealFourier axis uses RFFT, others use FFT with full size)
+    # Coefficient shape: halve the FIRST Fourier axis via rfft, leave
+    # subsequent Fourier axes at full size (subsequent transforms see
+    # complex input and use fft, not rfft). See `_coefficient_shape_impl`
+    # in domain.jl for the unified serial+MPI rule.
     cshape = get_coefficient_shape_for_context(field.domain, field.dist)
     arch = field.dist.architecture
 
