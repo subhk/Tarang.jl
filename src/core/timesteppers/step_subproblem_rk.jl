@@ -15,6 +15,101 @@
 # ──────────────────────────────────────────────────────────────────────────────
 
 """
+    WoodburySolver
+
+Block-LU solver using the Woodbury (Schur complement) approach.
+Partitions the LHS matrix as:
+    [A B]
+    [C D]
+where A is the large "bulk" block (PDE equations × PDE variables) and
+D is the small "BC" block (boundary conditions × tau variables).
+B and C are the off-diagonal couplings.
+
+Factorization:
+    A = bulk_lu (sparse LU)
+    AinvB = A⁻¹ · B (dense, n_bulk × n_bc)
+    S = D - C · AinvB (Schur complement, n_bc × n_bc dense)
+    S_lu = LU of S (dense)
+
+Block solve for (LHS · x = rhs):
+    1. y1 = A⁻¹ · rhs_bulk            (sparse solve)
+    2. r_bc = rhs_bc - C · y1          (sparse matvec)
+    3. x_bc = S⁻¹ · r_bc               (small dense solve)
+    4. x_bulk = y1 - AinvB · x_bc      (dense matvec)
+"""
+mutable struct WoodburySolver
+    bulk_lu::Any                             # sparse LU of bulk block A
+    C::SparseMatrixCSC{ComplexF64, Int64}    # BC rows × bulk cols
+    AinvB::Matrix{ComplexF64}                # precomputed A⁻¹ · B
+    S_lu::LinearAlgebra.LU{ComplexF64, Matrix{ComplexF64}, Vector{Int64}}  # dense LU of Schur complement
+    bulk_rows::Vector{Int}
+    bc_rows::Vector{Int}
+    bulk_cols::Vector{Int}
+    bc_cols::Vector{Int}
+end
+
+"""Build a Woodbury solver for `LHS = a0*M_exp + b0*L_exp` given bulk/BC partition."""
+function _build_woodbury(LHS::SparseMatrixCSC, sp::Subproblem)
+    bulk_rows = sp.bulk_rows
+    bc_rows = sp.bc_rows
+    bulk_cols = sp.bulk_cols
+    bc_cols = sp.bc_cols
+
+    A = LHS[bulk_rows, bulk_cols]
+    B = LHS[bulk_rows, bc_cols]
+    C = LHS[bc_rows, bulk_cols]
+    D = LHS[bc_rows, bc_cols]
+
+    bulk_lu = lu(A; check=false)
+    if !issuccess(bulk_lu)
+        return nothing
+    end
+
+    # Precompute A⁻¹ · B (dense, n_bulk × n_bc)
+    B_dense = Matrix(B)
+    AinvB = bulk_lu \ B_dense
+
+    # Schur complement: S = D - C · AinvB
+    S = Matrix(D) - Matrix(C) * AinvB
+    S_lu = lu(S; check=false)
+    if !issuccess(S_lu)
+        return nothing
+    end
+
+    return WoodburySolver(bulk_lu, C, AinvB, S_lu, bulk_rows, bc_rows, bulk_cols, bc_cols)
+end
+
+"""Solve `LHS · x = rhs` using a Woodbury block solver."""
+function _woodbury_solve(w::WoodburySolver, rhs::AbstractVector{ComplexF64})
+    rhs_bulk = rhs[w.bulk_rows]
+    rhs_bc   = rhs[w.bc_rows]
+
+    # 1. y1 = A⁻¹ · rhs_bulk
+    y1 = w.bulk_lu \ rhs_bulk
+
+    # 2. r_bc = rhs_bc - C · y1
+    r_bc = rhs_bc - w.C * y1
+
+    # 3. x_bc = S⁻¹ · r_bc
+    x_bc = w.S_lu \ r_bc
+
+    # 4. x_bulk = y1 - AinvB · x_bc
+    x_bulk = y1 - w.AinvB * x_bc
+
+    # Reassemble full solution vector using the original row ordering
+    n_total = length(w.bulk_cols) + length(w.bc_cols)
+    x = Vector{ComplexF64}(undef, n_total)
+    for (i, col) in enumerate(w.bulk_cols)
+        x[col] = x_bulk[i]
+    end
+    for (i, col) in enumerate(w.bc_cols)
+        x[col] = x_bc[i]
+    end
+    return x
+end
+# ──────────────────────────────────────────────────────────────────────────────
+
+"""
     step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
                          subproblems::Tuple)
 
@@ -127,7 +222,11 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             else
                 lhs_solver = _get_or_build_lhs!(sp, i, dt, a_ii)
                 if lhs_solver !== nothing
-                    x_sol = lhs_solver \ rhs
+                    x_sol = if isa(lhs_solver, WoodburySolver)
+                        _woodbury_solve(lhs_solver, rhs)
+                    else
+                        lhs_solver \ rhs
+                    end
                 else
                     @warn "step_subproblem_rk!: LHS factorization failed for sp group=$(sp.group), stage=$i; using rhs as fallback" maxlog=1
                     x_sol = rhs
@@ -219,10 +318,6 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
     end
 
     # Fast path: use expanded pattern for in-place LHS update.
-    # sp.LHS has the union sparsity pattern of M and L, and sp.M_exp, sp.L_exp
-    # have values from M and L mapped onto that pattern. This lets us compute
-    #   LHS.nzval = 1 * M_exp.nzval + (dt*a_ii) * L_exp.nzval
-    # without allocating a new sparse matrix or re-analyzing the sparsity.
     LHS = if sp.M_exp !== nothing && sp.L_exp !== nothing && sp.LHS !== nothing
         coeff = ComplexF64(dt * a_ii)
         sp.LHS.nzval .= sp.M_exp.nzval .+ coeff .* sp.L_exp.nzval
@@ -233,13 +328,31 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         copy(M)
     end
 
+    # Woodbury path: if bulk/BC classification is available and non-trivial,
+    # build a block-LU solver using the Schur complement.
+    # Benefits:
+    # - Only factor the bulk block (n_bulk × n_bulk) with sparse LU
+    # - BC corrections handled via a small dense Schur solve (n_bc × n_bc)
+    # - Scales better for large 3D systems where n_bulk >> n_bc
+    has_woodbury_partition = !isempty(sp.bulk_rows) && !isempty(sp.bc_rows) &&
+                              length(sp.bulk_rows) == length(sp.bulk_cols) &&
+                              length(sp.bc_rows) == length(sp.bc_cols)
+    if has_woodbury_partition
+        w = _build_woodbury(LHS, sp)
+        if w !== nothing
+            sp.LHS_solvers[stage_idx] = w
+            return w
+        end
+    end
+
+    # Standard sparse LU on the full matrix
     lhs_lu = lu(LHS; check=false)
     if issuccess(lhs_lu)
         sp.LHS_solvers[stage_idx] = lhs_lu
         return lhs_lu
     end
 
-    # Fallback for rank-deficient matrices (e.g., DC mode gauge issues)
+    # Fallback for rank-deficient matrices
     LHS_dense = Matrix(LHS)
     sp.LHS_solvers[stage_idx] = LHS_dense
     @info "step_subproblem_rk!: using dense fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
