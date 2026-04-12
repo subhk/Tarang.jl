@@ -89,37 +89,27 @@ lift(tau, n)          # short form: auto-detects the lift basis
 
 The short form `lift(tau, n)` inspects `tau.dist.layouts` to find a non-periodic basis that the tau field is missing compared to the full state, and uses that as the lift basis. This works in most situations, but being explicit is always safe.
 
-### What `lift(tau, basis, n)` actually computes
+### What `lift(tau, basis, n)` actually computes (solver view)
 
-`lift(tau, basis, n)` produces a term that, when added to the equation, contributes
-
-```math
-\tau \cdot \phi_n(z)
-```
-
-where ``\phi_n`` is the n-th basis function of `basis` (with negative indices counting from the end). For Chebyshev-T state fields, `basis = derivative_basis(zbasis)` is ChebyshevU, so
+At the solver level, `lift(tau, basis, n)` resolves to a **single-column sparse matrix** with a `1` at row `lift_mode` (where `lift_mode = n` is wraparound-resolved: `-1` → last, `-2` → second-to-last, etc.). This column is a discrete delta in the coupled direction's coefficient space.
 
 ```math
-\text{lift}(\tau, \text{lift\_basis}, -1) \;\longrightarrow\; \tau \cdot U_{N-1}(z)
+\text{lift}(\tau, \cdot, n) \;\longrightarrow\; \tau \cdot e_{\text{lift\_mode}}
 ```
 
-This is a rank-1 perturbation of the original equation: it adds a single basis function, scaled by the unknown ``\tau``, to the residual. When the linear system is solved, ``\tau`` takes whatever value is needed to satisfy the BC row, and the interior of the PDE is perturbed by at most that single high-order mode — spectrally small for smooth solutions.
+where ``e_{\text{lift\_mode}}`` is the unit vector with a `1` at the `lift_mode`-th Chebyshev-coefficient slot. When this is added to an equation's LHS, it contributes the unknown ``\tau`` to exactly one coefficient row, leaving every other interior row untouched. The linear solver then chooses ``\tau`` so that the BC rows hold — and because the perturbation is confined to one high-order coefficient, the interior PDE residual stays spectrally small for smooth solutions.
 
-### Why the derivative basis?
+> **Implementation detail worth knowing**: In Tarang's current solver, `subproblem_matrix(op::Lift, sp)` reads the dimension `N` from `_subproblem_cheb_basis(sp)` — the problem's own Chebyshev basis — and does **not** use `op.basis` to compute the matrix. That means `lift(tau, zbasis, -1)` and `lift(tau, derivative_basis(zbasis), -1)` produce **identical** delta columns at row `N-1`. The `basis` argument is a semantic hint inherited from Dedalus's type system; it's retained so that future refinements (e.g. different lift-basis behaviour for non-Jacobi bases, or explicit basis tracking through expression trees) can hook in without breaking user code.
 
-In principle you could lift into ChebyshevT directly (`lift(tau, zbasis, -1)` → ``\tau \cdot T_{N-1}(z)``), and this is mathematically valid. But the **derivative basis** (ChebyshevU for ChebyshevT) gives dramatically better conditioning.
+### Why still pass `derivative_basis(zbasis)`?
 
-Here's why. Differentiation maps ChebyshevT to ChebyshevU:
+Even though the two choices produce identical matrices in the current solver, **writing `lift(tau, derivative_basis(zbasis), -1)` is the recommended idiom**, for three reasons:
 
-```math
-\frac{d T_n}{dz} = n \, U_{n-1}(z).
-```
+1. **Forward-compatibility**: if Tarang later adopts Dedalus's fully basis-tracked lift semantics (where `op.basis` *does* determine the output coefficient space), your code will already be correct. Passing `zbasis` would silently start producing different matrices.
+2. **Semantic clarity**: in first-order formulations like `grad_u = grad(u) + ez * lift(tau_u1, -1)`, the lift lives alongside `grad(u)`, which naturally maps a ChebyshevT field into the derivative (ChebyshevU) space. Passing `derivative_basis(zbasis)` tells the reader what the lift is conceptually contributing, even if the linear algebra doesn't care.
+3. **Consistency with examples and tutorials**: all of Tarang's shipped examples use `derivative_basis(zbasis)`, so sticking with it makes your code pattern-match familiar code.
 
-In a first-order formulation (see below), the derivative `∂u/∂z` of a ChebyshevT state lives naturally in the ChebyshevU space. If you lift tau into that same ChebyshevU space, the tau correction is applied at the "right level" — no extra differentiation is needed to combine it with the rest of the equation. This avoids numerical cancellation and keeps the system well-conditioned even at high resolution.
-
-For the 2nd-order formulation `∂²u/∂z² + lift(tau, -1)`, the same reasoning works differently: `∂²/∂z²` takes T → U → U-shifted, and the ChebyshevU lift basis lines up with the result space.
-
-**Rule of thumb**: always use `derivative_basis(zbasis)` as the lift basis for Chebyshev-T state fields. The short form `lift(tau, -1)` auto-selects it anyway when it can.
+**Rule of thumb**: always write `lift_basis = derivative_basis(zbasis)` at the top of your setup block and use `lift(tau, lift_basis, -1)` (or the auto-form `lift(tau, -1)`) throughout. Don't invent your own lift basis.
 
 ## Boundary Conditions as Algebraic Constraint Rows
 
