@@ -394,46 +394,58 @@ function global_shape(domain::Domain, layout_name::Symbol=:g)
     end
 end
 
+# ---------------------------------------------------------------------------
+# Coefficient shape — shared rule for serial and MPI
+# ---------------------------------------------------------------------------
+#
+# The rule is the same in both modes, for subtly different reasons:
+#
+#   • MPI+PencilFFTs: `PencilFFTPlan` can only apply RFFT to the FIRST
+#     Fourier axis. Subsequent RealFourier axes must use FFT (full size N).
+#
+#   • Serial FFTW: `_fourier_forward` dispatches on input element type.
+#     The first transform produces complex output (rfft: real → complex);
+#     after that, any subsequent RealFourier transform sees complex input
+#     and falls through to `FFTW.fft` (full size N), not `FFTW.rfft`.
+#
+# So in both modes: halve the first Fourier axis only if it's RealFourier,
+# and leave every subsequent Fourier axis at full size. Non-Fourier bases
+# (Chebyshev, Legendre) don't change shape under their transforms and are
+# always at full size.
+#
+# This was previously wrong in serial mode — `coefficient_shape` halved
+# EVERY RealFourier axis, which produced a pre-allocated `coeff_data`
+# buffer of the wrong shape for multi-Fourier fields. The old allocating
+# forward_transform! path masked the issue by always replacing the
+# buffer; the in-place refactor made it visible (first call had to
+# reallocate, losing the pre-allocation). Unifying the logic closes this
+# gap and lets the in-place fast path fire from the very first call.
+
 """
-    Get coefficient space shape for domain (serial mode).
+    _fourier_output_size(basis, is_first_fourier)
 
-    For RealFourier bases, the coefficient array has size div(N, 2) + 1 (complex).
-    For other bases (ComplexFourier, Chebyshev, Legendre), size is the same as grid space.
-
-    NOTE: In MPI mode with PencilFFTs, use coefficient_shape_mpi() instead, because
-    PencilFFTs can only apply RFFT to the FIRST Fourier axis. Subsequent RealFourier
-    axes must use FFT (full size N, not N/2+1).
-    """
-function coefficient_shape(domain::Domain)
-    shape = Int[]
-    for basis in domain.bases
-        if isa(basis, RealFourier)
-            # RealFourier: rfft output has size N/2 + 1
-            push!(shape, div(basis.meta.size, 2) + 1)
-        else
-            # Other bases: same size in coefficient space
-            push!(shape, basis.meta.size)
-        end
+Return the size along this axis in coefficient space, given whether
+this is the first Fourier axis in the transform chain. See the comment
+block above for the rule.
+"""
+@inline function _fourier_output_size(basis::Basis, is_first_fourier::Bool)
+    if isa(basis, RealFourier) && is_first_fourier
+        return div(basis.meta.size, 2) + 1  # rfft halves the first Fourier axis
+    else
+        return basis.meta.size               # fft (or non-Fourier): full size
     end
-    return tuple(shape...)
 end
 
 """
-    Get coefficient space shape for domain in MPI mode with PencilFFTs.
+    _coefficient_shape_impl(domain::Domain) -> Tuple
 
-    CRITICAL: PencilFFTs can only apply RFFT to the FIRST Fourier axis.
-    Subsequent RealFourier axes must use FFT, which outputs full size N (not N/2+1).
-
-    This function correctly computes:
-    - First RealFourier axis: N/2+1 (RFFT output)
-    - Subsequent RealFourier axes: N (FFT output, since RFFT not available)
-    - ComplexFourier axes: N (FFT output)
-    - Non-Fourier axes: N (same as grid)
-    """
-function coefficient_shape_mpi(domain::Domain)
-    shape = Int[]
-
-    # Find the first Fourier axis (RealFourier or ComplexFourier)
+Compute the coefficient-space shape for a domain using the shared rule
+(see the comment block above). Callable from both serial and MPI wrappers.
+"""
+function _coefficient_shape_impl(domain::Domain)
+    # Find the first Fourier axis (RealFourier or ComplexFourier) — this
+    # is the only one that can use RFFT (or the only one whose shape can
+    # change under the transform).
     first_fourier_idx = nothing
     for (i, basis) in enumerate(domain.bases)
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
@@ -442,31 +454,41 @@ function coefficient_shape_mpi(domain::Domain)
         end
     end
 
+    shape = Int[]
     for (i, basis) in enumerate(domain.bases)
-        if isa(basis, RealFourier)
-            if first_fourier_idx !== nothing && i == first_fourier_idx
-                # First Fourier axis AND it's RealFourier: use RFFT (N/2+1)
-                push!(shape, div(basis.meta.size, 2) + 1)
-            else
-                # Subsequent RealFourier axis: must use FFT (full size N)
-                # PencilFFTs limitation: RFFT only on first transform dimension
-                push!(shape, basis.meta.size)
-            end
-        else
-            # ComplexFourier, Chebyshev, Legendre: same size in coefficient space
-            push!(shape, basis.meta.size)
-        end
+        is_first = (first_fourier_idx !== nothing && i == first_fourier_idx)
+        push!(shape, _fourier_output_size(basis, is_first))
     end
     return tuple(shape...)
 end
 
 """
-    Get the appropriate coefficient shape based on execution context.
+    coefficient_shape(domain::Domain) -> Tuple
 
-    - Serial mode (dist.size == 1): Use standard coefficient_shape (all RealFourier → N/2+1)
-    - MPI mode with PencilFFTs: Use coefficient_shape_mpi (only first RealFourier → N/2+1)
-    - MPI mode without PencilFFTs: Use standard coefficient_shape (local FFTs)
-    """
+Get the coefficient-space shape for a domain. In both serial and MPI
+modes, only the first Fourier axis is halved (and only if it's
+RealFourier). See the `_coefficient_shape_impl` comment block for the
+rationale.
+"""
+coefficient_shape(domain::Domain) = _coefficient_shape_impl(domain)
+
+"""
+    coefficient_shape_mpi(domain::Domain) -> Tuple
+
+Retained as a distinct public name for callers that want to express
+"I specifically mean the MPI-compatible shape." Returns the same result
+as `coefficient_shape` — the rule is identical in both modes.
+"""
+coefficient_shape_mpi(domain::Domain) = _coefficient_shape_impl(domain)
+
+"""
+    get_coefficient_shape_for_context(domain, dist) -> Tuple
+
+Return the coefficient-space shape for a domain. Both the serial and
+MPI wrappers compute the same result now (see `_coefficient_shape_impl`
+comment block), so this just dispatches to either — retained for
+call-site clarity.
+"""
 function get_coefficient_shape_for_context(domain::Domain, dist::Distributor)
     if dist.size > 1 && dist.use_pencil_arrays
         return coefficient_shape_mpi(domain)
