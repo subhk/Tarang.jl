@@ -942,9 +942,25 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
             
             func = evaluate_parsed_expression(func_expr, namespace)
             evaluated_args = [coerce_constant_value(evaluate_parsed_expression(arg, namespace)) for arg in arg_exprs]
-            
+
             if isa(func, Function)
-                return func(evaluated_args...)
+                # Only evaluate the function at parse time if EVERY argument
+                # is a concrete Julia `Number`. Otherwise one or more args
+                # carry symbolic `UnknownOperator` / `AddOperator` /
+                # `MultiplyOperator` / ... subtrees — typically a coordinate
+                # name like `x` appearing in a space-dependent BC RHS, either
+                # directly or wrapped in arithmetic like `2*pi*x/Lx`. The
+                # spatial BC evaluator in `_apply_bc_values_to_equations!`
+                # re-evaluates the original string against actual coordinate
+                # grid arrays and overwrites `equation_data[eq_idx]["F"]` at
+                # solver-build time, so the parser's output for this subtree
+                # is only a placeholder — safe to leave as an
+                # `UnknownOperator(string(expr))`.
+                if all(a -> isa(a, Number), evaluated_args)
+                    return func(evaluated_args...)
+                else
+                    return UnknownOperator(string(expr))
+                end
             else
                 @warn "Unknown function in expression: $(string(func_expr))"
                 return UnknownOperator(string(expr))
