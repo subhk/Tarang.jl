@@ -1176,7 +1176,39 @@ Recursively compile an expression into instructions. Returns the workspace index
 where the result will be stored.
 """
 function _compile_expr!(plan::CompiledRHSPlan, expr, template::ScalarField, state::Vector{<:ScalarField})
-    if expr isa ScalarField
+    if expr isa VectorField
+        # When compiling a per-component equation (template is a scalar component),
+        # replace the VectorField with its component matching the template's name.
+        # This handles cases like Differentiate(u, x) in vector advection where
+        # u is the full VectorField but we're compiling one component's equation.
+        for comp in expr.components
+            if comp === template || (hasfield(typeof(comp), :name) &&
+                                     hasfield(typeof(template), :name) &&
+                                     comp.name == template.name)
+                return _compile_expr!(plan, comp, template, state)
+            end
+        end
+        # Template name doesn't match any component — try matching by suffix
+        # (e.g., template "u_x" → find component ending in "_x")
+        if hasfield(typeof(template), :name)
+            tname = String(template.name)
+            for comp in expr.components
+                if hasfield(typeof(comp), :name)
+                    cname = String(comp.name)
+                    # Match if component name ends with same suffix as template
+                    if endswith(tname, "_x") && endswith(cname, "_x")
+                        return _compile_expr!(plan, comp, template, state)
+                    elseif endswith(tname, "_z") && endswith(cname, "_z")
+                        return _compile_expr!(plan, comp, template, state)
+                    elseif endswith(tname, "_y") && endswith(cname, "_y")
+                        return _compile_expr!(plan, comp, template, state)
+                    end
+                end
+            end
+        end
+        throw(ArgumentError("Cannot compile VectorField $(expr.name) with template $(template.name) — no matching component"))
+
+    elseif expr isa ScalarField
         # Check if it's a state field
         for (i, s) in enumerate(state)
             if expr === s || expr.name == s.name
