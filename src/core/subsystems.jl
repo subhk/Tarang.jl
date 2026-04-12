@@ -994,11 +994,61 @@ underlying local buffer via `parent()`. For regular arrays, returns as-is.
 _local_coeff_data(cd::AbstractArray) = get_local_data(cd)
 _local_coeff_data(::Nothing) = nothing
 
+function _subproblem_backend_matrix!(sp::Subproblem, matrix, cache_key::String, data::AbstractVector)
+    matrix === nothing && return nothing
+    if !is_gpu_array(data)
+        return matrix
+    end
+    cached = get(sp.matrices, cache_key, nothing)
+    cached !== nothing && return cached
+    backend = _gpu_sparse_csr(matrix, eltype(matrix))
+    sp.matrices[cache_key] = backend
+    return backend
+end
+
+function _assign_to_buffer!(dest::AbstractVector{ComplexF64}, src)
+    if is_gpu_array(dest)
+        src_dev = is_gpu_array(src) ? src : on_architecture(architecture(dest), Array(src))
+        if eltype(src_dev) <: Complex
+            dest .= src_dev
+        else
+            dest .= ComplexF64.(src_dev)
+        end
+    else
+        src_cpu = is_gpu_array(src) ? Array(src) : Array(src)
+        if eltype(src_cpu) <: Complex
+            copyto!(dest, src_cpu)
+        else
+            copyto!(dest, ComplexF64.(src_cpu))
+        end
+    end
+    return dest
+end
+
+function _assign_from_buffer!(dest, src)
+    if is_gpu_array(dest)
+        src_dev = is_gpu_array(src) ? src : on_architecture(architecture(dest), Array(src))
+        if eltype(dest) <: Real
+            dest .= real.(src_dev)
+        else
+            dest .= src_dev
+        end
+    else
+        src_cpu = is_gpu_array(src) ? Array(src) : Array(src)
+        if eltype(dest) <: Real
+            dest .= real.(src_cpu)
+        else
+            dest .= src_cpu
+        end
+    end
+    return dest
+end
+
 """Extract per-mode coefficients from all fields into a flat vector (no permutation)."""
 function _gather_subproblem_raw(sp::Subproblem, fields::Vector)
     kx_global = _kx_index_global(sp)
     total = sum(subproblem_field_size(sp, field) for field in fields)
-    buffer = Vector{ComplexF64}(undef, total)
+    buffer = zeros(sp.dist.architecture, ComplexF64, total)
     offset = 0
     for field in fields
         offset = _gather_field_raw!(buffer, offset, field, kx_global, sp)
@@ -1017,33 +1067,30 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
         return offset + n
     end
     cd = _local_coeff_data(cd_raw)
-    cd_cpu = is_gpu_array(cd) ? get_cpu_data(cd) : cd
 
     if isempty(field.bases) || all(b -> b === nothing, field.bases)
-        # 0D tau: single scalar
-        buffer[offset + 1] = ComplexF64(cd_cpu[1])
+        dest = view(buffer, offset + 1:offset + 1)
+        _assign_to_buffer!(dest, view(cd, 1:1))
         return offset + 1
-    elseif ndims(cd_cpu) == 1
+    elseif ndims(cd) == 1
         # 1D field (tau with Fourier basis): convert to local index
         kx_local = _global_to_local_kx(kx_global, field, sp)
-        if kx_local >= 1 && kx_local <= length(cd_cpu)
-            buffer[offset + 1] = ComplexF64(cd_cpu[kx_local])
+        dest = view(buffer, offset + 1:offset + 1)
+        if kx_local >= 1 && kx_local <= length(cd)
+            _assign_to_buffer!(dest, view(cd, kx_local:kx_local))
         else
-            buffer[offset + 1] = ComplexF64(0)
+            fill!(dest, ComplexF64(0))
         end
         return offset + 1
     else
         # 2D field: extract local row across all Chebyshev modes
         kx_local = _global_to_local_kx(kx_global, field, sp)
-        Nz = size(cd_cpu, 2)
-        if kx_local >= 1 && kx_local <= size(cd_cpu, 1)
-            for iz in 1:Nz
-                buffer[offset + iz] = ComplexF64(cd_cpu[kx_local, iz])
-            end
+        Nz = size(cd, 2)
+        dest = view(buffer, offset + 1:offset + Nz)
+        if kx_local >= 1 && kx_local <= size(cd, 1)
+            _assign_to_buffer!(dest, selectdim(cd, 1, kx_local))
         else
-            for iz in 1:Nz
-                buffer[offset + iz] = ComplexF64(0)
-            end
+            fill!(dest, ComplexF64(0))
         end
         return offset + Nz
     end
@@ -1074,40 +1121,19 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
     cd = _local_coeff_data(cd_raw)
 
     if isempty(field.bases) || all(b -> b === nothing, field.bases)
-        value = eltype(cd) <: Real ? real(data[offset+1]) : convert(eltype(cd), data[offset+1])
-        if is_gpu_array(cd)
-            copyto!(view(cd, 1:1), on_architecture(architecture(cd), [value]))
-        else
-            cd[1] = value
-        end
+        _assign_from_buffer!(view(cd, 1:1), view(data, offset + 1:offset + 1))
         return offset + 1
     elseif ndims(cd) == 1
         kx_local = _global_to_local_kx(kx_global, field, sp)
         if kx_local >= 1 && kx_local <= length(cd)
-            value = eltype(cd) <: Real ? real(data[offset+1]) : convert(eltype(cd), data[offset+1])
-            if is_gpu_array(cd)
-                copyto!(view(cd, kx_local:kx_local), on_architecture(architecture(cd), [value]))
-            else
-                cd[kx_local] = value
-            end
+            _assign_from_buffer!(view(cd, kx_local:kx_local), view(data, offset + 1:offset + 1))
         end
         return offset + 1
     else
         kx_local = _global_to_local_kx(kx_global, field, sp)
         Nz = size(cd, 2)
         if kx_local >= 1 && kx_local <= size(cd, 1)
-            row_values = if eltype(cd) <: Real
-                real.(data[offset+1:offset+Nz])
-            else
-                convert.(eltype(cd), data[offset+1:offset+Nz])
-            end
-            if is_gpu_array(cd)
-                copyto!(selectdim(cd, 1, kx_local), on_architecture(architecture(cd), row_values))
-            else
-                for iz in 1:Nz
-                    cd[kx_local, iz] = row_values[iz]
-                end
-            end
+            _assign_from_buffer!(selectdim(cd, 1, kx_local), view(data, offset + 1:offset + Nz))
         end
         return offset + Nz
     end
@@ -1120,14 +1146,29 @@ function _scatter_field_raw!(field::VectorField, data::AbstractVector, offset::I
     return offset
 end
 
-compress_variable_space(sp::Subproblem, raw::AbstractVector) =
-    sp.pre_right_pinv !== nothing ? Vector(sp.pre_right_pinv * raw) : Vector(raw)
+function compress_variable_space(sp::Subproblem, raw::AbstractVector)
+    if sp.pre_right_pinv !== nothing
+        pre = _subproblem_backend_matrix!(sp, sp.pre_right_pinv, "_pre_right_pinv_backend", raw)
+        return pre * raw
+    end
+    return copy(raw)
+end
 
-expand_variable_space(sp::Subproblem, data::AbstractVector) =
-    sp.pre_right !== nothing ? Vector(sp.pre_right * data) : Vector(data)
+function expand_variable_space(sp::Subproblem, data::AbstractVector)
+    if sp.pre_right !== nothing
+        pre = _subproblem_backend_matrix!(sp, sp.pre_right, "_pre_right_backend", data)
+        return pre * data
+    end
+    return copy(data)
+end
 
-compress_equation_space(sp::Subproblem, raw::AbstractVector) =
-    sp.pre_left !== nothing ? Vector(sp.pre_left * raw) : Vector(raw)
+function compress_equation_space(sp::Subproblem, raw::AbstractVector)
+    if sp.pre_left !== nothing
+        pre = _subproblem_backend_matrix!(sp, sp.pre_left, "_pre_left_backend", raw)
+        return pre * raw
+    end
+    return copy(raw)
+end
 
 """Gather per-mode coefficients and compress them into variable space."""
 function gather_inputs(sp::Subproblem, fields::Vector)
