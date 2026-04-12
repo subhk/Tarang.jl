@@ -204,7 +204,8 @@ function step_subproblem_multistep!(
             @warn "step_subproblem_multistep!: LHS factorization failed for group=$(sp.group); skipping step" maxlog=1
             continue
         end
-        x_new = _solve_cached_system(lhs_solver, rhs)
+        x_new = _sp_stage_vector!(sp, "_sp_multistep_sol", size(sp.M_min, 2), F_hist[sp_idx][1])
+        _solve_cached_system!(x_new, lhs_solver, rhs)
         scatter_inputs(sp, x_new, state_fields)
     end
 
