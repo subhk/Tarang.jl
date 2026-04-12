@@ -7,7 +7,7 @@ other components can select a solver by name or by passing a constructor.
 
 module MatSolvers
 
-export AbstractMatSolver, register_solver, get_solver, solver_instance, solve,
+export AbstractMatSolver, register_solver, get_solver, solver_instance, solve, solve!,
        DummySolver, DenseLUSolver, SparseLUSolver, WoodburySolver,
        BandedLUSolver, BlockDiagonalSolver, SPQRSolver, SOLVER_REGISTRY
 
@@ -27,6 +27,10 @@ function DummySolver(matrix::AbstractMatrix; kwargs...)
 end
 
 solve(::DummySolver, rhs) = zero(eltype(rhs)) .* rhs
+function solve!(dest, ::DummySolver, rhs)
+    fill!(dest, zero(eltype(dest)))
+    return dest
+end
 
 struct DenseLUSolver{T} <: AbstractMatSolver
     lu::LinearAlgebra.LU{T, Matrix{T}}
@@ -38,6 +42,10 @@ function DenseLUSolver(matrix::AbstractMatrix; kwargs...)
 end
 
 solve(s::DenseLUSolver, rhs) = s.lu \ rhs
+function solve!(dest, s::DenseLUSolver, rhs)
+    ldiv!(dest, s.lu, rhs)
+    return dest
+end
 
 struct SparseLUSolver{T} <: AbstractMatSolver
     factor::Any  # Use a generic factorization type for compatibility across Julia versions
@@ -53,6 +61,15 @@ function SparseLUSolver(matrix::AbstractMatrix; kwargs...)
 end
 
 solve(s::SparseLUSolver, rhs) = s.factor \ rhs
+function solve!(dest, s::SparseLUSolver, rhs)
+    ldiv!(dest, s.factor, rhs)
+    return dest
+end
+
+function solve!(dest, s::AbstractMatSolver, rhs)
+    copyto!(dest, solve(s, rhs))
+    return dest
+end
 
 function register_solver(name::AbstractString, solver_type::Type)
     SOLVER_REGISTRY[lowercase(String(name))] = solver_type
