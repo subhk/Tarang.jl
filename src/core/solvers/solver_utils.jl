@@ -57,13 +57,14 @@ function diagnose(solver::InitialValueSolver)
         println("$prefix$eq")
     end
 
-    # RHS compilation
-    if solver.compiled_rhs !== nothing
-        plan = solver.compiled_rhs
+    # RHS evaluation
+    if solver.rhs_plan !== nothing
+        plan = solver.rhs_plan
         if plan.is_compiled
-            println("├── RHS: compiled ($(length(plan.instructions)) instructions)")
+            n_eqs = count(!isnothing, plan.exprs)
+            println("├── RHS: lazy (type-specialized, $n_eqs equations)")
         else
-            println("├── RHS: interpreted (compilation skipped)")
+            println("├── RHS: interpreted (lazy translation skipped)")
         end
     else
         println("├── RHS: interpreted")
