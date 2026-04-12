@@ -949,6 +949,43 @@ function _subproblem_eqn_size(sp::Subproblem, eq_data::Dict)
     return 0
 end
 
+function _subproblem_eqn_sizes(sp::Subproblem)
+    cached = get(sp.matrices, "_eqn_sizes", nothing)
+    cached !== nothing && return cached
+
+    eqns = sp.problem.equation_data
+    eqn_sizes = Int[_subproblem_eqn_size(sp, eq) for eq in eqns]
+    sp.matrices["_eqn_sizes"] = eqn_sizes
+    sp.matrices["_eqn_raw_size"] = sum(eqn_sizes; init=0)
+    return eqn_sizes
+end
+
+function _subproblem_raw_eqn_size(sp::Subproblem)
+    cached = get(sp.matrices, "_eqn_raw_size", nothing)
+    cached !== nothing && return cached
+    _subproblem_eqn_sizes(sp)
+    return sp.matrices["_eqn_raw_size"]
+end
+
+function _subproblem_eqn_targets(sp::Subproblem, state_fields::Vector)
+    cached = get(sp.matrices, "_eqn_targets", nothing)
+    cached !== nothing && return cached
+
+    problem = sp.problem
+    eqns = problem.equation_data
+    targets = Vector{Vector{Int}}(undef, length(eqns))
+    for (eq_idx, eq_data) in enumerate(eqns)
+        M_expr = get(eq_data, "M", nothing)
+        targets[eq_idx] = if M_expr !== nothing && !_is_zero_m_term(M_expr)
+            _find_time_derivative_targets(M_expr, state_fields, problem.variables)
+        else
+            Int[]
+        end
+    end
+    sp.matrices["_eqn_targets"] = targets
+    return targets
+end
+
 # ---------------------------------------------------------------------------
 # Per-subproblem gather/scatter
 # ---------------------------------------------------------------------------
@@ -1735,8 +1772,9 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
     problem = sp.problem
     eqns = problem.equation_data
 
-    eqn_sizes = [_subproblem_eqn_size(sp, eq) for eq in eqns]
-    I_raw = sum(eqn_sizes; init=0)
+    eqn_sizes = _subproblem_eqn_sizes(sp)
+    eqn_targets = _subproblem_eqn_targets(sp, state_fields)
+    I_raw = _subproblem_raw_eqn_size(sp)
 
     raw = _subproblem_cached_vector!(sp, "_gather_eqn_F_raw", I_raw; like=dest)
     fill!(raw, zero(eltype(raw)))
@@ -1750,24 +1788,19 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
             continue
         end
 
-        M_expr = get(eq_data, "M", nothing)
-        is_pde = M_expr !== nothing && !_is_zero_m_term(M_expr)
-
-        if is_pde
-            target_indices = _find_time_derivative_targets(M_expr, state_fields, problem.variables)
-            if !isempty(target_indices)
-                offset = i0
-                for tidx in target_indices
-                    if tidx >= 1 && tidx <= length(pde_F_fields)
-                        fld = pde_F_fields[tidx]
-                        if fld !== nothing
-                            offset = _gather_field_raw!(raw, offset, fld, kx_global, sp)
-                            continue
-                        end
+        target_indices = eqn_targets[eq_idx]
+        if !isempty(target_indices)
+            offset = i0
+            for tidx in target_indices
+                if tidx >= 1 && tidx <= length(pde_F_fields)
+                    fld = pde_F_fields[tidx]
+                    if fld !== nothing
+                        offset = _gather_field_raw!(raw, offset, fld, kx_global, sp)
+                        continue
                     end
-                    if tidx >= 1 && tidx <= length(state_fields)
-                        offset += subproblem_field_size(sp, state_fields[tidx])
-                    end
+                end
+                if tidx >= 1 && tidx <= length(state_fields)
+                    offset += subproblem_field_size(sp, state_fields[tidx])
                 end
             end
         end
@@ -1800,8 +1833,8 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
     problem = sp.problem
     eqns = problem.equation_data
 
-    eqn_sizes = [_subproblem_eqn_size(sp, eq) for eq in eqns]
-    I_raw = sum(eqn_sizes; init=0)
+    eqn_sizes = _subproblem_eqn_sizes(sp)
+    I_raw = _subproblem_raw_eqn_size(sp)
 
     # Build the sparse BC F vector on the HOST via scalar writes (a few nonzero
     # entries at BC row offsets, the rest zero). Then upload once into the
