@@ -90,6 +90,52 @@ SBDF4()  # 4th order
 - **Nonlinear terms**: Extrapolation (explicit)
 - **Use case**: Stiff problems, high Re flows
 
+## How Boundary Conditions Are Enforced During Time Stepping
+
+Tarang's stepper is aware of the fact that boundary-condition rows are *algebraic* (have no time derivative), which makes the full system a **differential-algebraic equation** (DAE) rather than a pure ODE. If you write a BC like `T(z=0) = 1`, the corresponding row of the combined `M·dX/dt + L·X = F` system has `M_row = 0`, and the raw accumulated IMEX-RK stage RHS formula produces the **wrong scaling factor** for that row.
+
+Concretely, for RK222 (`γ = 1 − 1/√2 ≈ 0.293`), the naive formula enforces `L_row·X = (1/γ)·F_BC = (2+√2)·F_BC ≈ 3.414·F_BC` instead of `F_BC`. A `T(z=0) = 1` BC would produce `T(z=0) ≈ 3.414` in grid space.
+
+### The `apply_bc_override!` fix
+
+`step_subproblem_rk!` handles this by **overriding** the BC-row entries of the stage RHS at each stage:
+
+```julia
+# After the normal accumulation:
+rhs = M*X_n + dt * Σ (A^E[i,j]*F_j − A^I[i,j]*L*X_j)
+
+# Override BC rows with the correct direct-enforcement value:
+for r in sp.bc_rows
+    rhs[r] = dt * a_ii * F_BC[r]
+end
+```
+
+After this override, the stage solve `(M + dt·a_ii·L)·X = rhs` gives `dt·a_ii·L_row·X = dt·a_ii·F_BC` → `L_row·X = F_BC` directly, at every stage. Since the singular-`M` final-update path keeps the last stage's value, this guarantees the BC is correctly enforced in the final solution.
+
+`sp.bc_rows` comes from the subproblem builder's equation-size classification (rows with `eq_size < Nz` — small algebraic rows like wall BCs and gauge constraints). The override only touches those rows; larger `Nz`-sized algebraic rows like `trace(grad_u) + tau_p = 0` (continuity) have `F = 0` and ride the normal accumulation path without issue.
+
+`step_subproblem_multistep!` does the same thing for CNAB / SBDF — the override coefficient there is `b[0]` (the implicit-diagonal coefficient of the multistep formula) instead of `dt·a_ii`, but the mechanism is identical.
+
+### Time- and space-dependent BCs
+
+For BCs that vary with time (`T(z=0) = sin(t)`) or space (`T(z=0) = sin(2πx/Lx)`) or both, the stepper refreshes the BC F value **before each stage solve**:
+
+1. `update_time_dependent_bcs!(bc_manager, t + c[i]·dt)` — evaluates the BC expression string at the stage time.
+2. `_apply_bc_values_to_equations!(solver, stage_time)` — writes the fresh value into `equation_data[eq_idx]["F"]` (as `ConstantOperator` for scalar values or `ArrayOperator` for spatially-varying ones).
+3. `gather_alg_F!` picks up the new F on the next read.
+
+This per-stage refresh (gated on `has_time_dependent_bcs`, so it's free when BCs are constant) preserves the stepper's formal order of accuracy for rapidly-varying BCs. Without it, a multi-stage RK method would freeze the BC at the `t+dt` value and see `O(dt)` error at intermediate stages, silently dropping the order from 2 to 1.
+
+### Multistep steppers fall through to the same code path
+
+RK dispatch via `step_rk_imex!` → `step_subproblem_rk!` is the obvious path, but `CNAB1`/`CNAB2`/`SBDF1..4` also dispatch through the subproblem path whenever subproblems are available (`problem.parameters["subproblems"] !== nothing`). The dispatch happens inside each `step_<scheme>!` function: it computes the scheme's `(a, b, c)` coefficient tuples and calls the generic `step_subproblem_multistep!(state, solver, sps, a, b, c)`.
+
+This means **every IMEX stepper in Tarang** that supports the subproblem path gets DAE-correct BC handling automatically. The legacy global-matrix path in the `step_multistep.jl` file still exists for pure-periodic problems without tau fields, but it's almost never exercised in practice.
+
+### Why not just always use the override
+
+The override path is only correct for algebraic rows with `F ≠ 0` that we want to enforce directly. Applying it to PDE rows (which have `M ≠ 0`) would break the time integration. The row classification is done once per subproblem at matrix-build time — `sp.bc_rows` lists exactly the rows where the override is needed, and nothing else.
+
 ## Exponential Time Differencing (ETD)
 
 Exponential integrators solve the linear part of the ODE **exactly** using matrix exponentials, while treating nonlinear terms explicitly. This is fundamentally different from IMEX methods.
