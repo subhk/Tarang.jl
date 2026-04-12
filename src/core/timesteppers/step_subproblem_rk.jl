@@ -215,8 +215,10 @@ where `A^E` is the explicit Butcher tableau, `A^I` is the implicit Butcher table
 `F_j = F(X_j, t+c_j*dt)` is the explicit RHS evaluated at stage solution `X_j`,
 and `L*X_j` is the implicit contribution at stage solution `X_j`.
 
-LHS factorizations are cached in `sp.LHS_solvers[stage_index]` and invalidated
-when `dt` changes.
+LHS factorizations are cached in `sp.LHS_solvers` keyed by `a_ii`
+(ESDIRK methods share a single factorization across all stages) and
+invalidated lazily when `dt` changes via the dirty-flag path in
+`_get_or_build_lhs!`.
 """
 function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
                               subproblems::Tuple)
@@ -460,18 +462,29 @@ end
 """
     _get_or_build_lhs!(sp, stage_idx, dt, a_ii)
 
-Return a cached solver for `(M_min + dt*a_ii*L_min)` for the given
-stage index, building and caching it if necessary.
+Return a cached solver for `(M_min + dt*a_ii*L_min)`, building it lazily.
 
-`sp.LHS_solvers` is a `Vector{Any}` of length >= stages, indexed by stage.
-Entry 0 is reserved for the mass-only factorization (used when a_ii = 0).
+### Cache structure
+
+`sp.LHS_solvers` is a `Dict{Float64, Any}` keyed by `a_ii` — NOT by
+stage index. For ESDIRK methods where every implicit stage shares the
+same `γ` on the diagonal (RK222, RK443), a single factorization is
+built once and reused across all stages, saving `(stages - 1)` LU
+factorizations per step. For non-ESDIRK DIRKs with distinct per-stage
+`a_ii` values, each distinct `a_ii` gets its own cache entry.
+
+### Dt changes
+
+When `dt` changes, the dt-change handler in `step_subproblem_rk!` marks
+each cached entry as dirty via `sp.matrices["_lhs_dirty_<a_ii>"]`. The
+next call to `_get_or_build_lhs!` detects the dirty flag and refactors
+in place via `MatSolvers.refactor!` — reusing the cached symbolic
+factorization and running only the numeric phase.
+
+The `stage_idx` parameter is kept for logging/diagnostic purposes only;
+the cache lookup uses `a_ii`.
 """
 function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::Float64)
-    # Ensure LHS_solvers is large enough
-    while length(sp.LHS_solvers) < stage_idx
-        push!(sp.LHS_solvers, nothing)
-    end
-
     M = sp.M_min
     L = sp.L_min
     if M === nothing
@@ -493,23 +506,22 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         copy(M)
     end
 
-    # Symbolic-reuse fast path: if a cached LU-type solver exists and
-    # was marked "dirty" (by the dt-change handler at the top of
-    # `step_subproblem_rk!`), call `refactor!` to reuse the cached
-    # symbolic factorization and run only the numeric phase.
-    #
-    # `refactor!` works for any `AbstractMatSolver` subtype that defines
-    # it — CPU `SparseLUSolver`, GPU `CuSparseLU` (Float64 only via the
-    # `:rf` backend), and any future solvers that opt in. We use
-    # `hasmethod` so the GPU path doesn't leak into the main module's
-    # `isa` check (CuSparseLU lives in the CUDA extension).
-    cached = sp.LHS_solvers[stage_idx]
-    dirty_key = "_lhs_dirty_$stage_idx"
+    # Look up cached entry by a_ii (shared across ESDIRK stages).
+    cached = get(sp.LHS_solvers, a_ii, nothing)
+    dirty_key = "_lhs_dirty_$(a_ii)"
     is_dirty = get(sp.matrices, dirty_key, false)::Bool
+
     if cached !== nothing && !is_dirty
-        # Matrix unchanged since last call at this stage — return as-is.
+        # Matrix unchanged since last dt — cache hit, zero work.
         return cached
     end
+
+    # Symbolic-reuse fast path: cached solver exists but dt has changed.
+    # Call `refactor!` to reuse the symbolic factorization and run only
+    # the numeric phase. Works for any `AbstractMatSolver` subtype that
+    # defines `refactor!` — CPU `SparseLUSolver`, GPU `CuSparseLU`
+    # (Float64 via cusolverRF). Detected via `hasmethod` so the check is
+    # independent of whether CUDA.jl is loaded.
     if cached !== nothing && is_dirty &&
        hasmethod(MatSolvers.refactor!, Tuple{typeof(cached), typeof(LHS)})
         try
@@ -521,7 +533,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
             # fall through to build-from-scratch
         end
     end
-    # Fresh build (first stage call of this run, or refactor failed).
+    # Fresh build (first call at this a_ii, or refactor failed).
     sp.matrices[dirty_key] = false
 
     # Woodbury block-LU is only safe when the bulk/BC metadata keeps coupling
@@ -534,20 +546,20 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
     if has_woodbury_partition && solver_type == MatSolvers.SparseLUSolver
         w = _build_woodbury(LHS, sp)
         if w !== nothing
-            sp.LHS_solvers[stage_idx] = w
+            sp.LHS_solvers[a_ii] = w
             return w
         end
     end
 
     try
         lhs_solver = MatSolvers.solver_instance(solver_type, LHS; solver_kwargs...)
-        sp.LHS_solvers[stage_idx] = lhs_solver
+        sp.LHS_solvers[a_ii] = lhs_solver
         return lhs_solver
     catch err
         if solver_type != MatSolvers.SPQRSolver
             try
                 qr_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, LHS)
-                sp.LHS_solvers[stage_idx] = qr_solver
+                sp.LHS_solvers[a_ii] = qr_solver
                 @info "step_subproblem_rk!: using sparse QR fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
                 return qr_solver
             catch
@@ -558,7 +570,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
 
     # Final fallback for rank-deficient or unsupported matrices
     LHS_dense = Matrix(LHS)
-    sp.LHS_solvers[stage_idx] = LHS_dense
+    sp.LHS_solvers[a_ii] = LHS_dense
     @info "step_subproblem_rk!: using dense fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
     return LHS_dense
 end
