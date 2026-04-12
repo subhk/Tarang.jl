@@ -191,13 +191,10 @@ function step_subproblem_multistep!(
 
         # Override BC rows: rhs[bc] = b[0] * F_alg[bc] so that
         # b[0]*L_row*X_new = b[0]*F_alg → L_row*X_new = F_alg.
+        # Vectorized (CUDA.allowscalar(false)-safe) via `apply_bc_override!`.
         b0 = b[1]
-        if !isempty(sp.bc_rows) && abs(b0) > 1e-14
-            alg_f = ALG_F[sp_idx]
-            b0c = ComplexF64(b0)
-            @inbounds for r in sp.bc_rows
-                rhs[r] = b0c * alg_f[r]
-            end
+        if abs(b0) > 1e-14
+            apply_bc_override!(rhs, ALG_F[sp_idx], sp, b0)
         end
 
         # Solve (a[0]*M + b[0]*L) * X_new = rhs
