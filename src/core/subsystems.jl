@@ -1548,10 +1548,16 @@ function build_matrices!(sp::Subproblem, names, solver)
     valid_eqn_mat = spdiagm(0 => ComplexF64.(valid_eqn))
     valid_var_mat = spdiagm(0 => ComplexF64.(valid_var))
 
-    # Preconditioners: drop invalid rows/columns (Dedalus subsystems.py:560-563)
-    sp.pre_left = drop_empty_rows(valid_eqn_mat)
+    # Dedalus-style permutations before dropping invalid rows/columns.
+    # This preserves the grouped equation/variable ordering needed by bordered
+    # formulations and keeps gather/scatter consistent with the compressed space.
+    left_perm = left_permutation(sp, eqns, eqn_sizes, bc_top, interleave_components)
+    right_perm = right_permutation(sp, vars, tau_left, interleave_components)
+
+    # Preconditioners: permutation + valid-mode filtering (Dedalus subsystems.py:560-563)
+    sp.pre_left = drop_empty_rows(left_perm * valid_eqn_mat)
     sp.pre_left_pinv = sparse(sp.pre_left')
-    sp.pre_right_pinv = drop_empty_rows(valid_var_mat)
+    sp.pre_right_pinv = drop_empty_rows(right_perm * valid_var_mat)
     sp.pre_right = sparse(sp.pre_right_pinv')
 
     # Apply permutations: L_min = pre_left * L * pre_right (Dedalus subsystems.py:569-571)
@@ -1575,76 +1581,65 @@ function build_matrices!(sp::Subproblem, names, solver)
     end
 
     # ── Woodbury block classification ───────────────────────────────────
-    # Classify rows and columns as "bulk" (high-dim PDE equations/variables)
-    # or "BC" (low-dim boundary conditions/tau variables).
+    # Classify rows/columns after permutation + valid-mode filtering.
     #
-    # Criterion: an equation/variable is BULK if its per-subproblem size is
-    # a multiple of the Chebyshev basis size Nz (scalar PDE = Nz, vector
-    # PDE = ndim*Nz, etc.). Otherwise it's BC (scalar BC = 1, vector BC
-    # = ndim, integral constraint = 1).
+    # Rows: all DOFs belonging to highest-dimensional equations are "bulk";
+    # lower-dimensional equations are the BC block.
+    #
+    # Columns: highest-dimensional variables are bulk by construction. For
+    # lower-dimensional variables (taus), keep any column that couples into a
+    # bulk row in the bulk block as well. Only "pure BC" taus, which have no
+    # support on bulk rows, stay in the BC block.
+    #
+    # This matches the Dedalus requirement that coupling taus stay in the bulk;
+    # a size-only split is incorrect for first-order/tau formulations.
     if haskey(matrices, "L") && !isempty(eqn_sizes) && !isempty(var_sizes)
-        # Determine Nz from the Chebyshev basis
-        cheb_basis = _subproblem_cheb_basis_from_sp(sp)
-        Nz = cheb_basis !== nothing ? cheb_basis.meta.size : 1
+        row_order = [idx for idx in _left_permutation_indices(sp, eqns, eqn_sizes, bc_top, interleave_components) if valid_eqn[idx]]
+        col_order = [idx for idx in _right_permutation_indices(sp, vars, tau_left, interleave_components) if valid_var[idx]]
 
-        # A size is "bulk" if it's >= Nz and a multiple of Nz
-        is_bulk_size(sz) = sz >= Nz && sz % Nz == 0
+        row_dims = _equation_dof_dims(eqns, eqn_sizes)
+        col_dims = _variable_dof_dims(vars, var_sizes)
+        if !isempty(row_order) && !isempty(col_order)
+            max_dim = maximum(view(row_dims, row_order))
+            post_row_dims = row_dims[row_order]
+            post_col_dims = col_dims[col_order]
 
-        # Identify original (pre-filter) row indices for bulk/BC
-        orig_bulk_rows = Int[]
-        orig_bc_rows = Int[]
-        row_offset = 0
-        for (i, esize) in enumerate(eqn_sizes)
-            is_bulk = is_bulk_size(esize)
-            for k in 1:esize
-                if is_bulk
-                    push!(orig_bulk_rows, row_offset + k)
+            sp.bulk_rows = findall(==(max_dim), post_row_dims)
+            sp.bc_rows = findall(!=(max_dim), post_row_dims)
+
+            bulk_row_mask = falses(length(post_row_dims))
+            bulk_row_mask[sp.bulk_rows] .= true
+
+            bulk_cols = Int[]
+            bc_cols = Int[]
+            L_min = matrices["L"]
+            M_min = get(matrices, "M", nothing)
+            for col in eachindex(post_col_dims)
+                if post_col_dims[col] == max_dim
+                    push!(bulk_cols, col)
+                    continue
+                end
+
+                touches_bulk = _column_touches_rows(L_min, col, bulk_row_mask)
+                if !touches_bulk && M_min !== nothing
+                    touches_bulk = _column_touches_rows(M_min, col, bulk_row_mask)
+                end
+
+                if touches_bulk
+                    push!(bulk_cols, col)
                 else
-                    push!(orig_bc_rows, row_offset + k)
+                    push!(bc_cols, col)
                 end
             end
-            row_offset += esize
-        end
 
-        orig_bulk_cols = Int[]
-        orig_bc_cols = Int[]
-        col_offset = 0
-        for (i, vsize) in enumerate(var_sizes)
-            is_bulk = is_bulk_size(vsize)
-            for k in 1:vsize
-                if is_bulk
-                    push!(orig_bulk_cols, col_offset + k)
-                else
-                    push!(orig_bc_cols, col_offset + k)
-                end
-            end
-            col_offset += vsize
+            sp.bulk_cols = bulk_cols
+            sp.bc_cols = bc_cols
+        else
+            empty!(sp.bulk_rows)
+            empty!(sp.bc_rows)
+            empty!(sp.bulk_cols)
+            empty!(sp.bc_cols)
         end
-
-        # Map through the filtering permutation:
-        # post-filter index = position in valid subset of original indices
-        # valid_eqn has length I; build a mapping orig → post-filter
-        orig_to_post_row = zeros(Int, I)
-        pp = 0
-        for orig in 1:I
-            if valid_eqn[orig]
-                pp += 1
-                orig_to_post_row[orig] = pp
-            end
-        end
-        orig_to_post_col = zeros(Int, J)
-        pp = 0
-        for orig in 1:J
-            if valid_var[orig]
-                pp += 1
-                orig_to_post_col[orig] = pp
-            end
-        end
-
-        sp.bulk_rows = [orig_to_post_row[r] for r in orig_bulk_rows if orig_to_post_row[r] > 0]
-        sp.bc_rows   = [orig_to_post_row[r] for r in orig_bc_rows   if orig_to_post_row[r] > 0]
-        sp.bulk_cols = [orig_to_post_col[c] for c in orig_bulk_cols if orig_to_post_col[c] > 0]
-        sp.bc_cols   = [orig_to_post_col[c] for c in orig_bc_cols   if orig_to_post_col[c] > 0]
     end
 
     # Store expanded matrices for IMEX in-place LHS updates (Dedalus pattern).
@@ -1934,6 +1929,44 @@ function compute_update_rank(sp::Subproblem, eqns, eqn_conditions, eqn_sizes)
     return total_dofs - get(eqn_dofs_by_dim, max_dim, 0)
 end
 
+function _equation_dof_dims(eqns, eqn_sizes::AbstractVector{<:Integer})
+    dims = Vector{Int}(undef, sum(eqn_sizes))
+    offset = 0
+    for (eq, sz) in zip(eqns, eqn_sizes)
+        dim = get(eq, "domain_dim", 0)
+        if sz > 0
+            dims[offset + 1:offset + sz] .= dim
+        end
+        offset += sz
+    end
+    return dims
+end
+
+function _variable_dof_dims(vars, var_sizes::AbstractVector{<:Integer})
+    dims = Vector{Int}(undef, sum(var_sizes))
+    offset = 0
+    for (var, sz) in zip(vars, var_sizes)
+        dim = get_var_dim(var)
+        if sz > 0
+            dims[offset + 1:offset + sz] .= dim
+        end
+        offset += sz
+    end
+    return dims
+end
+
+function _column_touches_rows(A::SparseMatrixCSC, col::Int, row_mask::AbstractVector{Bool})
+    rows = rowvals(A)
+    vals = nonzeros(A)
+    @inbounds for ptr in nzrange(A, col)
+        row = rows[ptr]
+        if row <= length(row_mask) && row_mask[row] && vals[ptr] != zero(eltype(A))
+            return true
+        end
+    end
+    return false
+end
+
 # ---------------------------------------------------------------------------
 # Permutation matrices
 # ---------------------------------------------------------------------------
@@ -1950,7 +1983,7 @@ Input ordering: Equations > Components > Modes
 Output ordering with interleave_components=true: Modes > Components > Equations
 Output ordering with interleave_components=false: Modes > Equations > Components
 """
-function left_permutation(sp::Subproblem, equations, eqn_sizes::AbstractVector{<:Integer}, bc_top::Bool, interleave_components::Bool)
+function _left_permutation_indices(sp::Subproblem, equations, eqn_sizes::AbstractVector{<:Integer}, bc_top::Bool, interleave_components::Bool)
     # Compute hierarchy of input equation indices
     i = 0
     L0 = Vector{Vector{Vector{Int}}}()
@@ -2033,7 +2066,12 @@ function left_permutation(sp::Subproblem, equations, eqn_sizes::AbstractVector{<
         append!(indices, indices_by_dim[dim])
     end
 
-    return perm_matrix(indices .+ 1, i)  # +1 for 1-based indexing
+    return indices .+ 1  # 1-based indexing
+end
+
+function left_permutation(sp::Subproblem, equations, eqn_sizes::AbstractVector{<:Integer}, bc_top::Bool, interleave_components::Bool)
+    indices = _left_permutation_indices(sp, equations, eqn_sizes, bc_top, interleave_components)
+    return perm_matrix(indices, length(indices))
 end
 
 function left_permutation(sp::Subproblem, equations, bc_top::Bool, interleave_components::Bool)
@@ -2053,7 +2091,7 @@ Input ordering: Variables > Components > Modes
 Output ordering with interleave_components=true: Modes > Components > Variables
 Output ordering with interleave_components=false: Modes > Variables > Components
 """
-function right_permutation(sp::Subproblem, variables, tau_left::Bool, interleave_components::Bool)
+function _right_permutation_indices(sp::Subproblem, variables, tau_left::Bool, interleave_components::Bool)
     # Compute hierarchy of input variable indices
     i = 0
     L0 = Vector{Vector{Vector{Int}}}()
@@ -2139,7 +2177,12 @@ function right_permutation(sp::Subproblem, variables, tau_left::Bool, interleave
         append!(indices, indices_by_dim[dim])
     end
 
-    return perm_matrix(indices .+ 1, i)  # +1 for 1-based indexing
+    return indices .+ 1  # 1-based indexing
+end
+
+function right_permutation(sp::Subproblem, variables, tau_left::Bool, interleave_components::Bool)
+    indices = _right_permutation_indices(sp, variables, tau_left, interleave_components)
+    return perm_matrix(indices, length(indices))
 end
 
 """
