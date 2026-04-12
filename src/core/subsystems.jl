@@ -1337,6 +1337,178 @@ function gather_outputs!(dest::AbstractVector, sp::Subproblem, fields::Vector)
     return compress_variable_space!(dest, sp, raw)
 end
 
+# ---------------------------------------------------------------------------
+# Per-equation F gather (equation space, matches L_min rows)
+#
+# The subproblem stepper needs F in equation space — the same row ordering
+# as `L_min`. Earlier `gather_outputs!` packed F in *variable* space, which
+# (a) misaligned PDE rows and (b) silently dropped BC F values because BC
+# equations have no time derivative.
+#
+# `gather_eqn_F!` walks the equations in the original order and packs:
+#   - PDE rows: from `pde_F_fields[tidx]` (one entry per state field target)
+#   - BC rows:  from the equation's own F expression (constants projected
+#               onto the current Fourier mode)
+# then applies `pre_left` to match L_min's filtered row space.
+# ---------------------------------------------------------------------------
+
+_is_zero_F_expr(::Nothing) = true
+_is_zero_F_expr(::ZeroOperator) = true
+_is_zero_F_expr(x::Number) = x == 0
+_is_zero_F_expr(c::ConstantOperator) = c.value == 0
+_is_zero_F_expr(::Any) = false
+
+_extract_F_constant(c::ConstantOperator) = Float64(c.value)
+_extract_F_constant(x::Number) = Float64(x)
+_extract_F_constant(::Any) = nothing
+
+"""
+Project a constant value onto the current subproblem's Fourier mode by
+transforming a 1D scratch field. Only the DC subproblem gets a nonzero
+contribution; non-DC subproblems project to zero.
+"""
+function _bc_constant_projection(v::Float64, sp::Subproblem)
+    v == 0 && return ComplexF64(0)
+    kx_global = _kx_index_global(sp)
+    if kx_global != 1
+        return ComplexF64(0)
+    end
+    # Cache the DC-mode normalization (it's the same for all calls with v=1
+    # — we just multiply by the actual constant).
+    norm = get(sp.matrices, "_bc_dc_norm", nothing)
+    if norm === nothing
+        xbasis = _find_bc_fourier_basis(sp)
+        if xbasis === nothing
+            norm = ComplexF64(1.0)
+        else
+            try
+                temp = ScalarField(sp.dist, "_bc_dc_scratch", (xbasis,), Float64)
+                ensure_layout!(temp, :g)
+                gd = get_grid_data(temp)
+                if gd !== nothing
+                    fill!(gd, 1.0)
+                end
+                temp.current_layout = :g
+                ensure_layout!(temp, :c)
+                cd_raw = get_coeff_data(temp)
+                if cd_raw === nothing
+                    norm = ComplexF64(1.0)
+                else
+                    cd = _local_coeff_data(cd_raw)
+                    if length(cd) >= 1
+                        norm = ComplexF64(cd[1])
+                    else
+                        norm = ComplexF64(1.0)
+                    end
+                end
+            catch
+                norm = ComplexF64(1.0)
+            end
+        end
+        sp.matrices["_bc_dc_norm"] = norm
+    end
+    return ComplexF64(v) * norm
+end
+
+function _find_bc_fourier_basis(sp::Subproblem)
+    for var in sp.problem.variables
+        for comp in scalar_components(var)
+            for basis in comp.bases
+                if basis !== nothing && isa(basis, FourierBasis)
+                    return basis
+                end
+            end
+        end
+    end
+    return nothing
+end
+
+"""
+    gather_eqn_F!(dest, sp, solver, pde_F_fields, state_fields)
+
+Pack per-equation F values into the equation-space vector matching L_min's
+rows. PDE equations (those with a time derivative) pull their F from the
+state-field-indexed `pde_F_fields`. BC / constraint equations evaluate their
+own F expression. After assembly, `pre_left` is applied to reach the filtered
+equation space that `L_min` lives in.
+"""
+function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
+                       pde_F_fields::Vector, state_fields::Vector)
+    problem = sp.problem
+    eqns = problem.equation_data
+
+    eqn_sizes = [_subproblem_eqn_size(sp, eq) for eq in eqns]
+    I_raw = sum(eqn_sizes; init=0)
+
+    raw = _subproblem_cached_vector!(sp, "_gather_eqn_F_raw", I_raw; like=dest)
+    fill!(raw, zero(eltype(raw)))
+
+    kx_global = _kx_index_global(sp)
+
+    i0 = 0
+    for (eq_idx, eq_data) in enumerate(eqns)
+        eq_size = eqn_sizes[eq_idx]
+        if eq_size == 0
+            continue
+        end
+
+        M_expr = get(eq_data, "M", nothing)
+        is_pde = M_expr !== nothing && !_is_zero_m_term(M_expr)
+
+        if is_pde
+            # Pull F from per-state-field results; concatenate across targets
+            # (scalar PDE → 1 target, vector PDE → ncomps targets).
+            target_indices = _find_time_derivative_targets(M_expr, state_fields, problem.variables)
+            if !isempty(target_indices)
+                offset = i0
+                for tidx in target_indices
+                    if tidx >= 1 && tidx <= length(pde_F_fields)
+                        fld = pde_F_fields[tidx]
+                        if fld !== nothing
+                            offset = _gather_field_raw!(raw, offset, fld, kx_global, sp)
+                            continue
+                        end
+                    end
+                    # No F field for this target → advance by target's own size
+                    if tidx >= 1 && tidx <= length(state_fields)
+                        offset += subproblem_field_size(sp, state_fields[tidx])
+                    end
+                end
+            end
+        else
+            # BC / constraint: evaluate F expression directly.
+            F_expr = get(eq_data, "F_expr", nothing)
+            if F_expr === nothing
+                F_expr = get(eq_data, "F", nothing)
+            end
+            if !_is_zero_F_expr(F_expr)
+                v = _extract_F_constant(F_expr)
+                if v !== nothing && v != 0
+                    coeff = _bc_constant_projection(Float64(v), sp)
+                    if coeff != 0
+                        # Write the constant to the first row of this equation's
+                        # block. For scalar BCs (eq_size == 1) this is the row;
+                        # for vector BCs with nonzero constants, each component
+                        # would need its own projection — we don't currently
+                        # encounter that case (vector BCs are all "= 0").
+                        @inbounds raw[i0 + 1] = coeff
+                    end
+                end
+                # Non-constant / unsupported F expressions are silently ignored;
+                # log via debug to aid future diagnosis.
+                if v === nothing
+                    @debug "gather_eqn_F!: non-constant BC F not supported" eq_idx=eq_idx F_expr=F_expr
+                end
+            end
+        end
+
+        i0 += eq_size
+    end
+
+    compress_equation_space!(dest, sp, raw)
+    return dest
+end
+
 """
     check_condition(sp::Subproblem, eq_data)
 
@@ -2631,7 +2803,7 @@ export gather, scatter
 
 # Export subproblem methods
 export check_condition, valid_modes
-export gather_inputs, scatter_inputs
+export gather_inputs, scatter_inputs, gather_eqn_F!
 
 # Export matrix building
 export build_matrices!, build_subproblem_matrices
