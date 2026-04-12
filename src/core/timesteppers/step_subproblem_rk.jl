@@ -359,15 +359,29 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         copy(M)
     end
 
-    # Woodbury path: if bulk/BC classification is available and non-trivial,
-    # build a block-LU solver using the Schur complement.
-    # Benefits:
-    # - Only factor the bulk block (n_bulk × n_bulk) with sparse LU
-    # - BC corrections handled via a small dense Schur solve (n_bc × n_bc)
-    # - Scales better for large 3D systems where n_bulk >> n_bc
-    has_woodbury_partition = !isempty(sp.bulk_rows) && !isempty(sp.bc_rows) &&
-                              length(sp.bulk_rows) == length(sp.bulk_cols) &&
-                              length(sp.bc_rows) == length(sp.bc_cols)
+    # Woodbury block-LU is DISABLED for first-order formulations.
+    #
+    # Problem: in first-order PDE reductions (e.g., writing -κ∇²b as
+    # -κ·div(grad_b + ez*lift(tau_b1))), tau variables are Lagrange
+    # multipliers that couple INTO PDE equation rows. A naive partition
+    # [A B; C D] where A = LHS[pde_rows, field_cols] strips out tau
+    # columns, making A rank-deficient because it removes the gauge
+    # multipliers that make the PDE well-posed.
+    #
+    # Concretely: the continuity row trace(grad_u) + tau_p = 0 has tau_p
+    # as a gauge. Stripping tau_p makes the block A not determine pressure.
+    # Similarly for tau_b1, tau_b2, tau_u1, tau_u2 which couple via lifts.
+    #
+    # Dedalus's Woodbury approach uses a more sophisticated bulk/BC
+    # partition that keeps coupling taus in the bulk. Our partition
+    # would need to distinguish "coupling taus" (stay in bulk) from
+    # "pure BC taus" (go to BC block) — this requires tracking the
+    # equation structure, not just dimensionality.
+    #
+    # Until we implement the proper partition, we fall through to the
+    # standard sparse LU path (still benefits from expanded-pattern
+    # in-place LHS update above).
+    has_woodbury_partition = false  # disabled
     if has_woodbury_partition && solver_type == MatSolvers.SparseLUSolver
         w = _build_woodbury(LHS, sp)
         if w !== nothing
