@@ -12,6 +12,7 @@ const TEST_FILES = [
     "test_problems.jl",
     "test_operators_basic.jl",
     "test_transforms_extended.jl",
+    "test_transform_inplace.jl",
     "test_cfl.jl",
     "test_domain_metadata.jl",
     "test_subsystems.jl",
