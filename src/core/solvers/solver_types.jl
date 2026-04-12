@@ -420,7 +420,21 @@ function _global_bc_grid(basis, scale::Real)
     return collect(Float64, mapped)
 end
 
-"""Merge boundary_conditions strings into equations and track indices."""
+"""Merge boundary_conditions strings into equations and track indices.
+
+For each raw BC string in `problem.boundary_conditions`, push it into
+`problem.equations` (so the equation parser sees it) and try to associate
+it with a concrete `AbstractBoundaryCondition` object in `bc_manager.conditions`
+via `bc_to_equation(manager, bc)`.
+
+**Matching is lenient**: we normalize whitespace and small number-formatting
+differences (e.g. `0` vs `0.0`) before comparing, because
+`add_bc!(problem::Problem, ::String)` auto-registers a `DirichletBC`/`NeumannBC`
+whose `bc_to_equation` output isn't byte-identical to the raw user string.
+Without lenient matching, space- and time-dependent BCs wouldn't get their
+`bc_equation_indices` populated, so `_apply_bc_values_to_equations!` would
+fail to refresh them and silently fall back to zero-F BC behavior.
+"""
 function _merge_boundary_conditions!(problem::Problem)
     if isempty(problem.boundary_conditions)
         return
@@ -428,33 +442,96 @@ function _merge_boundary_conditions!(problem::Problem)
 
     bc_manager = problem.bc_manager
     base_eq_count = length(problem.equations)
+    used_bc_idxs = Set{Int}()
 
     for (i, bc_str) in enumerate(problem.boundary_conditions)
         push!(problem.equations, bc_str)
         eq_idx = base_eq_count + i
 
-        # Find which BC condition (in bc_manager.conditions) this string corresponds to
+        # First pass: exact or lenient string match against every BC object
+        # the user (or our auto-registration) has already added.
+        matched_bc_idx = 0
         for (bc_idx, bc) in enumerate(bc_manager.conditions)
             if isa(bc, PeriodicBC)
                 continue
             end
+            bc_idx in used_bc_idxs && continue
             eq = bc_to_equation(bc_manager, bc)
             if isa(eq, Vector)
                 for eq_str in eq
-                    if eq_str == bc_str
-                        bc_manager.bc_equation_indices[bc_idx] = eq_idx
+                    if _bc_strings_equivalent(eq_str, bc_str)
+                        matched_bc_idx = bc_idx
                         break
                     end
                 end
-            elseif eq == bc_str
-                bc_manager.bc_equation_indices[bc_idx] = eq_idx
+                matched_bc_idx > 0 && break
+            elseif _bc_strings_equivalent(eq, bc_str)
+                matched_bc_idx = bc_idx
                 break
             end
+        end
+
+        if matched_bc_idx > 0
+            bc_manager.bc_equation_indices[matched_bc_idx] = eq_idx
+            push!(used_bc_idxs, matched_bc_idx)
         end
     end
 
     @debug "Merged $(length(problem.boundary_conditions)) BCs into equations (total: $(length(problem.equations)))"
 end
+
+"""
+    _bc_strings_equivalent(a, b) -> Bool
+
+Compare two BC equation strings for functional equivalence, allowing:
+- whitespace differences
+- number-formatting differences (`0` vs `0.0`, `1` vs `1.0`)
+
+Returns `true` if the strings represent the same BC. Used by
+`_merge_boundary_conditions!` to link an auto-registered `DirichletBC`
+(whose `bc_to_equation` re-stringifies positions via `string(0.0) = "0.0"`)
+back to the raw user string (`"T(z=0) = ..."`).
+
+Strategy:
+1. Fast path — exact equality.
+2. Fast path — whitespace-stripped equality.
+3. Try parsing both via `parse_bc_string` / `parse_neumann_bc_string` and
+   compare the structured `(field, coord, position, value)` tuples,
+   normalizing numeric positions via `Float64` equality. This handles the
+   `0` ↔ `0.0` round-trip issue transparently.
+"""
+function _bc_strings_equivalent(a::AbstractString, b::AbstractString)
+    a == b && return true
+    sa = replace(a, r"\s+" => "")
+    sb = replace(b, r"\s+" => "")
+    sa == sb && return true
+    # Structured comparison via the BC string parser.
+    pa = try
+        parse_bc_string(a)
+    catch
+        try; parse_neumann_bc_string(a); catch; nothing; end
+    end
+    pb = try
+        parse_bc_string(b)
+    catch
+        try; parse_neumann_bc_string(b); catch; nothing; end
+    end
+    (pa === nothing || pb === nothing) && return false
+    # Tuple layout: (field_name, coordinate, position, value)
+    pa[1] == pb[1] || return false
+    pa[2] == pb[2] || return false
+    Float64(pa[3]) == Float64(pb[3]) || return false
+    # Value: Numbers via ==, Strings via whitespace-stripped compare
+    va, vb = pa[4], pb[4]
+    if isa(va, Number) && isa(vb, Number)
+        return Float64(va) == Float64(vb)
+    elseif isa(va, AbstractString) && isa(vb, AbstractString)
+        return replace(va, r"\s+" => "") == replace(vb, r"\s+" => "")
+    else
+        return va == vb
+    end
+end
+_bc_strings_equivalent(a, b) = a == b
 
 """
     _apply_bc_values_to_equations!(solver, current_time)
