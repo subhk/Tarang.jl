@@ -35,12 +35,6 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     if haskey(solver.problem.parameters, "subproblems")
         sps = solver.problem.parameters["subproblems"]
         if sps isa Tuple
-            # GPU guard: sparse matrices are CPU-only
-            if !isempty(current_state) && is_gpu(current_state[1].dist.architecture)
-                @debug "IMEX RK: GPU detected, falling back to explicit treatment"
-                _step_rk_imex_explicit_fallback!(state, solver)
-                return
-            end
             step_subproblem_rk!(state, solver, sps)
             return
         end
@@ -399,5 +393,4 @@ function step_rk443!(state::TimestepperState, solver::InitialValueSolver)
     ts = _RK443_SINGLETON
     _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
 end
-
 
