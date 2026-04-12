@@ -1517,25 +1517,24 @@ function build_matrices!(sp::Subproblem, names, solver)
     # Classify rows and columns as "bulk" (high-dim PDE equations/variables)
     # or "BC" (low-dim boundary conditions/tau variables).
     #
-    # A row is BULK if it comes from an equation whose per-subproblem size
-    # matches the largest equation size (typically Nz for scalar PDE or
-    # ndim*Nz for vector PDE). Otherwise it's BC.
-    #
-    # Variables use the same classification: bulk if var_size equals max
-    # (Nz or ndim*Nz), BC otherwise.
-    #
-    # Uses the ORIGINAL (pre-filter) indices then maps through the
-    # permutation to post-filter indices.
+    # Criterion: an equation/variable is BULK if its per-subproblem size is
+    # a multiple of the Chebyshev basis size Nz (scalar PDE = Nz, vector
+    # PDE = ndim*Nz, etc.). Otherwise it's BC (scalar BC = 1, vector BC
+    # = ndim, integral constraint = 1).
     if haskey(matrices, "L") && !isempty(eqn_sizes) && !isempty(var_sizes)
-        max_eqn_size = maximum(eqn_sizes)
-        max_var_size = maximum(var_sizes)
+        # Determine Nz from the Chebyshev basis
+        cheb_basis = _subproblem_cheb_basis_from_sp(sp)
+        Nz = cheb_basis !== nothing ? cheb_basis.meta.size : 1
+
+        # A size is "bulk" if it's >= Nz and a multiple of Nz
+        is_bulk_size(sz) = sz >= Nz && sz % Nz == 0
 
         # Identify original (pre-filter) row indices for bulk/BC
         orig_bulk_rows = Int[]
         orig_bc_rows = Int[]
         row_offset = 0
         for (i, esize) in enumerate(eqn_sizes)
-            is_bulk = (esize == max_eqn_size)
+            is_bulk = is_bulk_size(esize)
             for k in 1:esize
                 if is_bulk
                     push!(orig_bulk_rows, row_offset + k)
@@ -1550,7 +1549,7 @@ function build_matrices!(sp::Subproblem, names, solver)
         orig_bc_cols = Int[]
         col_offset = 0
         for (i, vsize) in enumerate(var_sizes)
-            is_bulk = (vsize == max_var_size)
+            is_bulk = is_bulk_size(vsize)
             for k in 1:vsize
                 if is_bulk
                     push!(orig_bulk_cols, col_offset + k)
