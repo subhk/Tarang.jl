@@ -150,38 +150,46 @@ function step_subproblem_multistep!(
 
     n_sp = length(subproblems)
 
-    # ── Per-subproblem history storage (cached in timestepper_data) ──────────
-    # History entries are `AbstractVector{ComplexF64}` so they can hold either
-    # regular `Vector` (CPU, CPU+MPI) or `CuArray`/`ROCArray` (GPU) as produced
-    # by `similar_zeros` below. The outer shape is always `sp_idx → history
-    # vector` and each rank only touches its own local subproblems under MPI.
-    MX_hist = get!(state.timestepper_data, :sp_multistep_MX_hist) do
-        [Vector{AbstractVector{ComplexF64}}() for _ in 1:n_sp]
-    end::Vector{Vector{AbstractVector{ComplexF64}}}
-    LX_hist = get!(state.timestepper_data, :sp_multistep_LX_hist) do
-        [Vector{AbstractVector{ComplexF64}}() for _ in 1:n_sp]
-    end::Vector{Vector{AbstractVector{ComplexF64}}}
-    F_hist = get!(state.timestepper_data, :sp_multistep_F_hist) do
-        [Vector{AbstractVector{ComplexF64}}() for _ in 1:n_sp]
-    end::Vector{Vector{AbstractVector{ComplexF64}}}
+    # ── Per-subproblem ring-buffer history (cached in timestepper_data) ──────
+    # We pre-allocate `max_capacity` slots per ring on first use. Subsequent
+    # steps reuse those slots via `ring_push_newest!` (zero per-step
+    # allocation). If the user switches to a higher-order method mid-run
+    # (e.g. SBDF2 → SBDF4), we `ring_resize!` to grow capacity while
+    # preserving existing history.
+    max_capacity = max(a_hist_depth, b_hist_depth, c_hist_depth, 1)
+    MX_rings = get!(state.timestepper_data, :sp_multistep_MX_rings) do
+        [SPHistoryRing(max_capacity) for _ in 1:n_sp]
+    end::Vector{SPHistoryRing}
+    LX_rings = get!(state.timestepper_data, :sp_multistep_LX_rings) do
+        [SPHistoryRing(max_capacity) for _ in 1:n_sp]
+    end::Vector{SPHistoryRing}
+    F_rings = get!(state.timestepper_data, :sp_multistep_F_rings) do
+        [SPHistoryRing(max_capacity) for _ in 1:n_sp]
+    end::Vector{SPHistoryRing}
+
+    # Grow any ring whose capacity is now smaller than the current method's
+    # requirement (only happens on a timestepper-type switch).
+    @inbounds for i in 1:n_sp
+        MX_rings[i].capacity < max_capacity && ring_resize!(MX_rings[i], max_capacity)
+        LX_rings[i].capacity < max_capacity && ring_resize!(LX_rings[i], max_capacity)
+        F_rings[i].capacity  < max_capacity && ring_resize!(F_rings[i],  max_capacity)
+    end
 
     # ── Step 1: compute M*X_current, L*X_current, F_current per subproblem ──
+    # Write directly into ring slots — no per-step allocation.
     F_fields = evaluate_rhs_buffered(solver, state_fields, solver.sim_time)
 
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
         n = size(sp.M_min, 1)
 
-        # Gather X in variable space — returns CPU or GPU vector matching the
-        # state-field storage (handled by `_gather_field_raw!`).
+        # Gather X in variable space — CPU or GPU matching state-field storage.
         x_cur = gather_inputs(sp, state_fields)
 
-        # Allocate fresh history-bound vectors matching `x_cur`'s backend
-        # (CPU / GPU). We cannot reuse the step-scoped cached vectors here
-        # because the history keeps references across steps.
-        mx_cur = similar_zeros(x_cur, ComplexF64, n)
-        lx_cur = similar_zeros(x_cur, ComplexF64, n)
-        f_cur  = similar_zeros(x_cur, ComplexF64, n)
+        # Advance each ring and obtain the newest-slot buffer to write into.
+        mx_cur = ring_push_newest!(MX_rings[sp_idx], x_cur)
+        lx_cur = ring_push_newest!(LX_rings[sp_idx], x_cur)
+        f_cur  = ring_push_newest!(F_rings[sp_idx],  x_cur)
 
         # M*X_current and L*X_current in equation space
         M_op = _subproblem_operator(sp, :M, x_cur)
@@ -191,49 +199,31 @@ function step_subproblem_multistep!(
 
         # F_current in equation space (PDE rows only — BC rows handled below)
         gather_eqn_F!(f_cur, sp, solver, F_fields, state_fields)
-
-        # Prepend into history (newest at index 1)
-        pushfirst!(MX_hist[sp_idx], mx_cur)
-        pushfirst!(LX_hist[sp_idx], lx_cur)
-        pushfirst!(F_hist[sp_idx], f_cur)
-
-        # Trim to needed depth
-        while length(MX_hist[sp_idx]) > max(a_hist_depth, 1)
-            pop!(MX_hist[sp_idx])
-        end
-        while length(LX_hist[sp_idx]) > max(b_hist_depth, 1)
-            pop!(LX_hist[sp_idx])
-        end
-        while length(F_hist[sp_idx]) > max(c_hist_depth, 1)
-            pop!(F_hist[sp_idx])
-        end
     end
 
     # ── Step 2: check if we have enough history to advance ──────────────────
-    # Need at least one of each history type (we just prepended the current
-    # step, so depth 1 means "only the current step" which is enough for
-    # backward-Euler / CNAB1-type methods that only use k=0 and k=1).
+    # Need at least one of each history type (we just pushed current, so
+    # count ≥ 1). The `ring_get` calls in the RHS loop return `nothing` for
+    # missing entries, which the accumulator silently skips — giving a
+    # lower-order first step if the caller's startup dispatch didn't fall
+    # back. This is the same behavior as the old `Vector{Vector}` path.
     have_enough = true
     for sp_idx in 1:n_sp
         subproblems[sp_idx].M_min === nothing && continue
-        if length(F_hist[sp_idx]) < max(c_hist_depth, 1) ||
-           length(MX_hist[sp_idx]) < max(a_hist_depth, 1) ||
-           length(LX_hist[sp_idx]) < max(b_hist_depth, 1)
+        if F_rings[sp_idx].count  < max(c_hist_depth, 1) ||
+           MX_rings[sp_idx].count < max(a_hist_depth, 1) ||
+           LX_rings[sp_idx].count < max(b_hist_depth, 1)
             have_enough = false
             break
         end
     end
-
     if !have_enough
-        # Caller should have fallen back to startup scheme already; this is
-        # a safety net that silently uses zero contributions for missing
-        # history entries (giving a lower-order first step).
         @debug "step_subproblem_multistep!: insufficient history, using zero padding"
     end
 
     # ── Step 3: compute F_alg once per step for BC row override ─────────────
-    # Allocated to match the F_hist backend (CPU or GPU) so downstream
-    # broadcasts stay on a single device.
+    # Uses the cached `_sp_multistep_alg_f` vector from `sp.matrices` — no
+    # per-step allocation.
     ALG_F = Vector{Any}(undef, n_sp)
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
@@ -241,10 +231,9 @@ function step_subproblem_multistep!(
             continue
         end
         n = size(sp.M_min, 1)
-        # Use an existing history entry as the backend reference.
-        ref = isempty(F_hist[sp_idx]) ? nothing : F_hist[sp_idx][1]
+        ref = ring_get(F_rings[sp_idx], 1)  # always valid after step 1
         alg_f = ref === nothing ? zeros(ComplexF64, n) :
-                                  similar_zeros(ref, ComplexF64, n)
+                                  _subproblem_cached_vector!(sp, "_sp_multistep_alg_f", n; like=ref)
         gather_alg_F!(alg_f, sp)
         ALG_F[sp_idx] = alg_f
     end
@@ -254,38 +243,35 @@ function step_subproblem_multistep!(
         sp.M_min === nothing && continue
         n = size(sp.M_min, 1)
 
-        # rhs matches the history backend (CPU or GPU).
-        ref = isempty(F_hist[sp_idx]) ? nothing : F_hist[sp_idx][1]
+        # Use a cached rhs buffer; reused across steps, matches ring backend.
+        ref = ring_get(F_rings[sp_idx], 1)
         rhs = ref === nothing ? zeros(ComplexF64, n) :
-                                similar_zeros(ref, ComplexF64, n)
+                                _subproblem_cached_vector!(sp, "_sp_multistep_rhs", n; like=ref)
+        fill!(rhs, zero(ComplexF64))
 
         # Accumulate RHS = Σ_{k≥1} [c[k]*F_k - a[k]*MX_k - b[k]*LX_k]
-        # (k=1 in math maps to index 2 in the Julia 1-based tuple; our history
-        # vectors are 1-indexed with the newest entry at position 1, which
-        # corresponds to the "k=1 step back" — one call cycle behind us.)
+        # (k=1 in math maps to Julia tuple index 2; our rings are age-indexed
+        # with age 1 = current step, age 2 = one step back, etc.)
         for k in 2:length(c)
             ck = c[k]
             abs(ck) < 1e-14 && continue
-            hist_idx = k - 1  # newest history entry (step n) is at index 1
-            if hist_idx <= length(F_hist[sp_idx])
-                @. rhs += ck * F_hist[sp_idx][hist_idx]
-            end
+            entry = ring_get(F_rings[sp_idx], k - 1)
+            entry === nothing && continue
+            @. rhs += ck * entry
         end
         for k in 2:length(a)
             ak = a[k]
             abs(ak) < 1e-14 && continue
-            hist_idx = k - 1
-            if hist_idx <= length(MX_hist[sp_idx])
-                @. rhs -= ak * MX_hist[sp_idx][hist_idx]
-            end
+            entry = ring_get(MX_rings[sp_idx], k - 1)
+            entry === nothing && continue
+            @. rhs -= ak * entry
         end
         for k in 2:length(b)
             bk = b[k]
             abs(bk) < 1e-14 && continue
-            hist_idx = k - 1
-            if hist_idx <= length(LX_hist[sp_idx])
-                @. rhs -= bk * LX_hist[sp_idx][hist_idx]
-            end
+            entry = ring_get(LX_rings[sp_idx], k - 1)
+            entry === nothing && continue
+            @. rhs -= bk * entry
         end
 
         # Override BC rows: rhs[bc] = b[0] * F_alg[bc] so that
@@ -303,7 +289,7 @@ function step_subproblem_multistep!(
             @warn "step_subproblem_multistep!: LHS factorization failed for group=$(sp.group); skipping step" maxlog=1
             continue
         end
-        x_new = _sp_stage_vector!(sp, "_sp_multistep_sol", size(sp.M_min, 2), F_hist[sp_idx][1])
+        x_new = _sp_stage_vector!(sp, "_sp_multistep_sol", size(sp.M_min, 2), ref)
         _solve_cached_system!(x_new, lhs_solver, rhs)
         scatter_inputs(sp, x_new, state_fields)
     end
