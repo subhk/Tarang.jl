@@ -331,6 +331,86 @@ add_bc!(problem, "T(z=0) = 1")   # Hot bottom
 add_bc!(problem, "T(z=1) = 0")   # Cold top
 ```
 
+## Time- and Space-Dependent Boundary Conditions
+
+Tarang supports BCs whose value varies in time, space, or both. The BC expression string is re-evaluated at solver build time (for space-dependent) and at every time step / RK stage (for time-dependent), and the result is projected onto the appropriate Fourier mode for each per-subproblem solve.
+
+Nothing extra is required — no `add_coordinate_field!` call, no `set_time_variable!` — the solver auto-registers coordinate arrays from the problem's bases and uses `t` as the default time variable.
+
+### Time-dependent BC (scalar)
+
+```julia
+add_bc!(problem, "T(z=0) = 1.0 + 0.1 * cos(2*pi*t)")
+```
+
+The BC value is re-evaluated **at every RK stage time** `t + c[i]·dt`, so multi-stage methods retain full formal order of accuracy even for rapidly-varying BCs. Internally this goes through `update_time_dependent_bcs!(bc_manager, stage_time)` followed by `_apply_bc_values_to_equations!`, and the resulting `ConstantOperator(value)` is written into `equation_data[eq_idx]["F"]`.
+
+### Space-dependent BC (1D variation in 2D problem)
+
+```julia
+add_bc!(problem, "T(z=0) = 1.0 + 0.1 * sin(2*pi*x/4.0)")
+add_bc!(problem, "T(z=Lz) = 0")
+```
+
+At solver build, `_apply_bc_values_to_equations!(solver, 0.0)` evaluates `"1.0 + 0.1*sin(2*pi*x/4.0)"` against the auto-registered global `x` coordinate array, yielding an `Nx`-long grid-space array. This is wrapped in an `ArrayOperator` and stored in `equation_data[eq_idx]["F"]`. At each stepper call, `gather_alg_F!` runs `_bc_array_projection` on this array — taking an unnormalized `FFTW.rfft` and extracting each subproblem's own Fourier-mode coefficient.
+
+The bottom-wall temperature is thus enforced at `T(x, z=0) = 1 + 0.1·sin(2πx/Lx)` in grid space.
+
+### Space + time dependent BC
+
+```julia
+add_bc!(problem, "T(z=0) = 1.0 + 0.1 * sin(2*pi*x/4.0) * cos(2*pi*t)")
+```
+
+Combines both paths. The spatial pattern is re-projected at each stage time, so the stepper always sees the correct instantaneous BC. This is what enables oscillating boundary temperature patterns, traveling thermal waves at the wall, etc.
+
+### Two-axis spatial BCs in 3D
+
+For a 3D problem with two periodic axes `(x, y)`:
+
+```julia
+# 3D problem: x and y periodic, z coupled
+add_bc!(problem, "T(z=0) = sin(2*pi*x/Lx) * cos(2*pi*y/Ly)")
+```
+
+The array is evaluated as a 2D `(Nx, Ny)` grid-space array and transformed via 2D FFT. Each subproblem (one per `(kx, ky)` mode) extracts its `(kx_global, ky_global)` coefficient. This works out-of-the-box — no extra configuration required.
+
+### 1D BC expression in a higher-dimensional problem
+
+If you write a 1D expression like `sin(2*pi*x/Lx)` in a 3D problem with two periodic axes, Tarang auto-broadcasts the 1D array along the missing axis — so the BC is treated as "uniform in `y`":
+
+```julia
+# 3D problem; this is constant in y by design
+add_bc!(problem, "T(z=0) = sin(2*pi*x/Lx)")
+```
+
+The broadcast-and-FFT machinery places `rfft(sin(2π x/Lx))[k_x] · Ny` at the DC `y` mode and zero at non-DC `y` modes, matching the grid-space meaning exactly.
+
+### User parameters in BC expressions
+
+Expression strings can reference user parameters registered via `add_parameters!`:
+
+```julia
+add_parameters!(problem, Lx=4.0, Ly=2.0, amplitude=0.1)
+add_bc!(problem, "T(z=0) = 1.0 + amplitude * sin(2*pi*x/Lx)")
+```
+
+Or, more directly, bake the constant into the string via Julia interpolation:
+
+```julia
+Lx = 4.0
+amplitude = 0.1
+add_bc!(problem, "T(z=0) = 1.0 + $amplitude * sin(2*pi*x/$Lx)")
+```
+
+Both patterns work. The first is cleaner if you plan to sweep parameters; the second is simpler for one-off setups.
+
+### Common pitfalls
+
+- **Missing coordinate field** — for a BC to reference `x`, the problem must have a basis with `element_label == "x"`. This is automatic if you build bases with `coords["x"]`, but if you have multiple coordinate systems the auto-registration may pick the wrong `x`. A `"space-dependent BCs detected but no coordinate fields registered"` warning at solver build means the auto-registration didn't find a matching basis.
+- **Time variable other than `t`** — the parser and the runtime evaluator both hard-code `t` as the time symbol. Custom time variable names aren't fully supported; use `t` in your BC expressions.
+- **Non-constant custom function** — the BC string evaluator whitelists `sin`, `cos`, `tan`, `exp`, `log`, `sqrt`, `abs`, `sign`, `floor`, `ceil`, `round`, `rem`, `min`, `max`, and hyperbolic variants. Arbitrary Julia functions in BC strings are not supported; if you need a custom function, build it into the value at simulation-script level (outside the string) and register via `add_parameters!`.
+
 ## Validation
 
 ### Checking BC Satisfaction
