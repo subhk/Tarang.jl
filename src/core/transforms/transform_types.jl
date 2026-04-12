@@ -169,6 +169,83 @@ function _apply_backward end
 _apply_forward(current, ::Transform) = current
 _apply_backward(current, ::Transform) = current
 
+# ---------------------------------------------------------------------------
+# In-place transform protocol
+# ---------------------------------------------------------------------------
+#
+# The in-place variants (`_apply_forward!` / `_apply_backward!`) write the
+# transformed result into a caller-provided output buffer of the correct
+# shape and eltype. They use cached plans and scratch buffers on the
+# transform object so steady-state calls allocate zero bytes.
+#
+# Shape-spec helpers (`_forward_output_spec` / `_backward_output_spec`)
+# tell `forward_transform!` / `backward_transform!` the expected output
+# shape and eltype for a given input, so the caller can pick (or allocate)
+# the correct buffer BEFORE the transform runs. For the final transform
+# in a chain, the caller passes `field.coeff_data` / `field.grid_data`
+# directly; for intermediate transforms, the caller uses a cached scratch
+# buffer on the transform itself.
+
+"""
+    _apply_forward!(out, in, transform) → out
+
+Apply a single forward transform writing into pre-allocated `out`.
+Concrete methods must not allocate after their plan/scratch cache is warm.
+"""
+function _apply_forward! end
+
+"""
+    _apply_backward!(out, in, transform) → out
+
+Apply a single backward transform writing into pre-allocated `out`.
+"""
+function _apply_backward! end
+
+"""
+    _forward_output_spec(in, transform) → (out_shape::Tuple, out_eltype::DataType)
+
+Compute the output shape and eltype of a forward transform given an input
+array. Used by the top-level transform loop to size the output buffer
+before calling `_apply_forward!`.
+"""
+function _forward_output_spec end
+
+"""
+    _backward_output_spec(in, transform) → (out_shape::Tuple, out_eltype::DataType)
+
+Backward-transform counterpart of `_forward_output_spec`.
+"""
+function _backward_output_spec end
+
+# Fallbacks: transforms that don't implement the in-place protocol
+# (Legendre, stacked) pass data through unchanged.
+_apply_forward!(out, in, ::Transform) = (out === in ? out : copyto!(out, in))
+_apply_backward!(out, in, ::Transform) = (out === in ? out : copyto!(out, in))
+_forward_output_spec(in, ::Transform) = (size(in), eltype(in))
+_backward_output_spec(in, ::Transform) = (size(in), eltype(in))
+
+# ---------------------------------------------------------------------------
+# Scratch buffer helper — reused across transform types
+# ---------------------------------------------------------------------------
+
+"""
+    _get_or_alloc_scratch!(cache::Dict, key::Tuple, shape::Tuple, T::Type) → AbstractArray
+
+Look up a pre-allocated array in `cache[key]`. If the entry is missing or
+has the wrong shape/eltype, allocate a new `zeros(T, shape...)` and store
+it. Subsequent calls with the same key return the cached array without
+allocation.
+"""
+@inline function _get_or_alloc_scratch!(cache::Dict, key::Tuple, shape::Tuple, ::Type{T}) where {T}
+    buf = get(cache, key, nothing)
+    if buf !== nothing && size(buf) == shape && eltype(buf) === T
+        return buf::AbstractArray{T}
+    end
+    new_buf = zeros(T, shape...)
+    cache[key] = new_buf
+    return new_buf
+end
+
 """
     _find_pencil_plan(dist) → Union{Nothing, PencilFFTs.PencilFFTPlan}
 
