@@ -944,23 +944,28 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
             evaluated_args = [coerce_constant_value(evaluate_parsed_expression(arg, namespace)) for arg in arg_exprs]
 
             if isa(func, Function)
-                # Only evaluate the function at parse time if EVERY argument
-                # is a concrete Julia `Number`. Otherwise one or more args
-                # carry symbolic `UnknownOperator` / `AddOperator` /
-                # `MultiplyOperator` / ... subtrees — typically a coordinate
-                # name like `x` appearing in a space-dependent BC RHS, either
-                # directly or wrapped in arithmetic like `2*pi*x/Lx`. The
-                # spatial BC evaluator in `_apply_bc_values_to_equations!`
-                # re-evaluates the original string against actual coordinate
-                # grid arrays and overwrites `equation_data[eq_idx]["F"]` at
-                # solver-build time, so the parser's output for this subtree
-                # is only a placeholder — safe to leave as an
-                # `UnknownOperator(string(expr))`.
-                if all(a -> isa(a, Number), evaluated_args)
-                    return func(evaluated_args...)
-                else
+                # Short-circuit ONLY when an argument contains an
+                # `UnknownOperator` placeholder (typically a coordinate or
+                # time variable like `x` / `t` in a space- or time-dependent
+                # BC RHS that can't be bound at parse time). In that case
+                # the function call would fail at the Julia level (e.g.
+                # `sin(::UnknownOperator)` → MethodError). The spatial /
+                # temporal BC evaluator in `_apply_bc_values_to_equations!`
+                # re-evaluates the BC's original string at runtime against
+                # actual coordinate grid arrays / current time, and
+                # overwrites `equation_data[eq_idx]["F"]` with the result —
+                # so the parser's symbolic placeholder is never consulted.
+                #
+                # For normal field-operator expressions like `trace(grad_u)`
+                # where `grad_u` is a stored substitution (an `AddOperator`
+                # / `Future` tree of concrete fields), no `UnknownOperator`
+                # is present and the function call proceeds as normal,
+                # letting operators like `trace` algebraically simplify to
+                # `divergence(u) + lift(...)`.
+                if any(_expression_contains_unknown, evaluated_args)
                     return UnknownOperator(string(expr))
                 end
+                return func(evaluated_args...)
             else
                 @warn "Unknown function in expression: $(string(func_expr))"
                 return UnknownOperator(string(expr))
