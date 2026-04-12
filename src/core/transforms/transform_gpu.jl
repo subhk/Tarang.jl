@@ -182,17 +182,100 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
         end
     end
 
+    # ── Zero-allocation in-place transform chain ───────────────────────────
+    #
+    # Walk `field.dist.transforms` in order. Each transform has an in-place
+    # dispatch method `_apply_forward!(out, in, transform)` that uses cached
+    # plans and scratch buffers (see transform_fourier.jl / transform_chebyshev.jl).
+    #
+    # For intermediate transforms, the output is a cached scratch buffer on
+    # the transform object. For the FINAL transform, we write directly into
+    # `field.coeff_data`, which was already pre-allocated in `allocate_data!`
+    # with the correct shape and eltype. If the pre-allocated buffer has the
+    # wrong shape or eltype (shouldn't happen — shape is derived from the
+    # same basis metadata — but be defensive), reallocate on the field.
     current = get_grid_data(field)
-    for transform in field.dist.transforms
-        current = _apply_forward(current, transform)
+    transforms = field.dist.transforms
+    n_transforms = length(transforms)
+    if n_transforms == 0
+        # No transforms registered: copy grid into coeff buffer (also a fallback
+        # for fields with no spectral bases).
+        coeff = get_coeff_data(field)
+        if coeff !== nothing && size(coeff) == size(current) && eltype(coeff) == eltype(current)
+            copyto!(coeff, current)
+        else
+            set_coeff_data!(field, copy(current))
+        end
+        field.current_layout = :c
+        return
     end
 
-    # Fallback for other transforms or missing plans
-    if current === get_grid_data(field)
-        set_coeff_data!(field, copy(get_grid_data(field)))
-    else
-        set_coeff_data!(field, current)
+    for (idx, transform) in enumerate(transforms)
+        out_shape, out_eltype = _forward_output_spec(current, transform)
+        if idx == n_transforms
+            # Final stage: target is the field's coeff buffer. Reuse when
+            # shape/eltype match (the common case); otherwise allocate once.
+            coeff = get_coeff_data(field)
+            if coeff === nothing || size(coeff) != out_shape || eltype(coeff) != out_eltype
+                coeff = zeros(out_eltype, out_shape...)
+                set_coeff_data!(field, coeff)
+            end
+            _apply_forward!(coeff, current, transform)
+            current = coeff
+        else
+            # Intermediate stage: write into this transform's cached scratch.
+            # Key by (out_shape, out_eltype, :fwd_inter) so it doesn't collide
+            # with other scratch entries (e.g., the DCT real/imag buffers on
+            # ChebyshevTransform, which live in a differently-typed Dict).
+            # FourierTransform.fwd_scratch is Dict{Tuple, AbstractArray}; use
+            # the generic _get_or_alloc_scratch! helper.
+            out = _get_scratch_for_transform!(transform, :fwd_inter, out_shape, out_eltype)
+            _apply_forward!(out, current, transform)
+            current = out
+        end
     end
     field.current_layout = :c
+end
+
+# ---------------------------------------------------------------------------
+# Helper: fetch an intermediate-output scratch buffer from a transform.
+# ---------------------------------------------------------------------------
+# ChebyshevTransform's `fwd_scratch` / `bwd_scratch` fields are typed
+# `Dict{Tuple, ChebScratch}` (hold real/imag/plan scratch records, not raw
+# arrays), so we can't reuse them for the intermediate-output buffer.
+# For ChebyshevTransform we therefore fall back to a small per-transform
+# `matrices`-style Dict stored in a free-form field (`forward_matrix` etc.
+# are sparse matrices; we don't touch those). Instead, cache intermediate
+# scratch in a lazily-created Dict attached via `objectid`-keyed module-
+# level storage.
+#
+# Since Tarang is single-threaded in this hot path, a module-level
+# IdDict keyed on the transform object is both safe and cheap. The entries
+# live as long as the transform itself.
+const _TRANSFORM_INTER_SCRATCH = IdDict{Any, Dict{Tuple, AbstractArray}}()
+
+@inline function _get_inter_cache(transform)
+    cache = get(_TRANSFORM_INTER_SCRATCH, transform, nothing)
+    if cache === nothing
+        cache = Dict{Tuple, AbstractArray}()
+        _TRANSFORM_INTER_SCRATCH[transform] = cache
+    end
+    return cache
+end
+
+@inline function _get_scratch_for_transform!(transform::FourierTransform, tag::Symbol,
+                                             shape::Tuple, ::Type{T}) where {T}
+    # FourierTransform has a native fwd_scratch / bwd_scratch dict of the
+    # right type; use it directly.
+    dict = tag === :fwd_inter ? transform.fwd_scratch : transform.bwd_scratch
+    return _get_or_alloc_scratch!(dict, (shape, T, tag), shape, T)
+end
+
+@inline function _get_scratch_for_transform!(transform::Transform, tag::Symbol,
+                                             shape::Tuple, ::Type{T}) where {T}
+    # Generic fallback for other transform types (Chebyshev, Legendre, etc.):
+    # use the module-level IdDict cache keyed on the transform object.
+    dict = _get_inter_cache(transform)
+    return _get_or_alloc_scratch!(dict, (shape, T, tag), shape, T)
 end
 
