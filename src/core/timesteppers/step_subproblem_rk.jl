@@ -165,6 +165,18 @@ function _solve_cached_system(lhs_solver, rhs::AbstractVector{ComplexF64})
     end
 end
 
+function _solve_cached_system!(dest::AbstractVector{ComplexF64}, lhs_solver,
+                               rhs::AbstractVector{ComplexF64})
+    if isa(lhs_solver, WoodburySolver)
+        _assign_to_buffer!(dest, _woodbury_solve(lhs_solver, rhs))
+    elseif lhs_solver isa MatSolvers.AbstractMatSolver
+        MatSolvers.solve!(dest, lhs_solver, rhs)
+    else
+        _assign_to_buffer!(dest, lhs_solver \ rhs)
+    end
+    return dest
+end
+
 function _subproblem_operator(sp::Subproblem, which::Symbol, data::AbstractVector)
     matrix = which === :M ? sp.M_min : sp.L_min
     matrix === nothing && return nothing
@@ -344,23 +356,25 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
 
             if abs(a_ii) < 1e-14
                 # No implicit diagonal — just invert M
+                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), x0_pre)
                 if sp.M_min !== nothing
                     M_lu = _get_or_compute_mass_lu!(sp)
                     if M_lu !== nothing
-                        x_sol = _solve_cached_system(M_lu, rhs)
+                        _solve_cached_system!(x_sol, M_lu, rhs)
                     else
-                        x_sol = rhs  # fallback
+                        _assign_to_buffer!(x_sol, rhs)  # fallback
                     end
                 else
-                    x_sol = rhs
+                    _assign_to_buffer!(x_sol, rhs)
                 end
             else
+                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), x0_pre)
                 lhs_solver = _get_or_build_lhs!(sp, i, dt, a_ii)
                 if lhs_solver !== nothing
-                    x_sol = _solve_cached_system(lhs_solver, rhs)
+                    _solve_cached_system!(x_sol, lhs_solver, rhs)
                 else
                     @warn "step_subproblem_rk!: LHS factorization failed for sp group=$(sp.group), stage=$i; using rhs as fallback" maxlog=1
-                    x_sol = rhs
+                    _assign_to_buffer!(x_sol, rhs)
                 end
             end
 
@@ -418,7 +432,8 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # Solve M * X_new = rhs
         M_lu = _get_or_compute_mass_lu!(sp)
         if M_lu !== nothing
-            x_sol = _solve_cached_system(M_lu, rhs)
+            x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_final", size(sp.M_min, 2), RHS[sp_idx])
+            _solve_cached_system!(x_sol, M_lu, rhs)
         else
             # Singular M (DAE): last stage already satisfies constraints
             # via the implicit SA property. Keep the last stage value.
