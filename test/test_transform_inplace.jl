@@ -38,7 +38,11 @@ using Tarang
 
 @testset "In-place transform fast path" begin
 
-    @testset "Serial CPU: Fourier 2D buffer identity (steady state)" begin
+    @testset "Serial CPU: Fourier 2D buffer identity (first call)" begin
+        # With the unified `_coefficient_shape_impl` rule, pre-allocation
+        # from `allocate_data!` already matches the transform output shape,
+        # so the in-place fast path fires from the very first call — no
+        # warm-up reallocation. This asserts that invariant.
         coords = CartesianCoordinates("x", "y")
         dist   = Distributor(coords; dtype=Float64, device=CPU())
         xb     = RealFourier(coords["x"]; size=64, bounds=(0.0, 2π))
@@ -46,6 +50,10 @@ using Tarang
         domain = Domain(dist, (xb, yb))
 
         T = ScalarField(domain, "T")
+
+        # Verify the pre-allocated coeff shape matches the correct rule:
+        # first Fourier axis halved, second at full size.
+        @test size(Tarang.get_coeff_data(T)) == (33, 64)
 
         # Seed with a smooth pattern
         grid = Tarang.get_grid_data(T)
@@ -57,19 +65,7 @@ using Tarang
         T.current_layout = :g
         snapshot = copy(grid)
 
-        # Warm-up pass. The FIRST call may legitimately reallocate the coeff
-        # buffer: `coefficient_shape(domain)` (serial) pre-allocates assuming
-        # every RealFourier axis is halved, but only the FIRST gets rfft —
-        # subsequent RealFourier axes use fft (full size). On first call my
-        # in-place chain detects the mismatch and reallocates once; after
-        # that, the buffer is the right shape and subsequent calls reuse it
-        # without reallocation. That steady-state property is what we test.
-        # (MPI mode uses `coefficient_shape_mpi` which handles this correctly
-        # from the start.)
-        ensure_layout!(T, :c)
-        ensure_layout!(T, :g)
-
-        # Now check steady-state buffer identity — no reallocation from here.
+        # First-call buffer identity — no warm-up needed.
         coeff_before = Tarang.get_coeff_data(T)
         ensure_layout!(T, :c)
         coeff_after = Tarang.get_coeff_data(T)
