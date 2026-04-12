@@ -309,17 +309,145 @@ end
 """
     CuSparseLU <: AbstractMatSolver
 
-Sparse LU solve on GPU via cuSOLVER's QR-based sparse solver. Each `solve` call runs
-`csrlsvqr!` on the CSR matrix; this avoids dense fallbacks and works for general sparse
-systems. For matrices that change frequently, consider CuIterative* solvers instead.
+GPU sparse direct solver.
 
-Note: GPU sparse LU can be slower than CPU for small-medium matrices
-due to the irregular memory access patterns. Benchmark before using.
+- For `Float64` matrices, this uses a true sparse LU/refactorization path backed by
+  cuSOLVER's host CSR LU analysis plus device `cusolverRF`.
+- For other element types, it falls back to cuSOLVER's sparse QR solve path.
+
+The RF backend is currently limited by CUDA.jl's bindings to real double-precision
+matrices. Complex sparse systems therefore still use QR.
 """
+mutable struct CuSparseRF{T}
+    handle::Any
+    A_rowptr::Any
+    A_colind::Any
+    A_vals::Any
+    L_rowptr::Any
+    L_colind::Any
+    L_vals::Any
+    U_rowptr::Any
+    U_colind::Any
+    U_vals::Any
+    P::Any
+    Q::Any
+    n::Int
+end
+
 struct CuSparseLU{T} <: AbstractMatSolver
-    A_csr::Any  # CUDA.CUSPARSE.CuSparseMatrixCSR{T, Int32}
+    A_csr::Any   # CUDA.CUSPARSE.CuSparseMatrixCSR{T, Int32}
+    factor::Any
+    backend::Symbol
     tol::Float64
     reorder::Bool
+    n::Int
+end
+
+function _host_csr(A::SparseMatrixCSC{T,<:Integer}) where T
+    At = SparseMatrixCSC{T, Int32}(copy(transpose(A)))
+    rowptr = Vector{Int32}(At.colptr)
+    colind = Vector{Int32}(At.rowval)
+    vals = Vector{T}(At.nzval)
+    return rowptr, colind, vals
+end
+
+_supports_cusolver_rf(::Type{T}) where {T} = T == Float64
+
+function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e-12)
+    n = checksquare(matrix)
+    nnzA = Cint(nnz(matrix))
+    rowptrA, colindA, valsA = _host_csr(matrix)
+
+    sp_handle = CUDA.CUSOLVER.sparse_handle()
+    descA = CUDA.CUSPARSE.CuMatrixDescriptor('G', 'L', 'N', 'O')
+    info_ref = Ref{CUDA.CUSOLVER.csrluInfoHost_t}()
+    CUDA.CUSOLVER.cusolverSpCreateCsrluInfoHost(info_ref)
+    info = info_ref[]
+
+    CUDA.CUSOLVER.cusolverSpXcsrluAnalysisHost(sp_handle, Cint(n), nnzA, descA, rowptrA, colindA, info)
+
+    internal_bytes = Ref{Csize_t}(0)
+    workspace_bytes = Ref{Csize_t}(0)
+    CUDA.CUSOLVER.cusolverSpDcsrluBufferInfoHost(sp_handle, Cint(n), nnzA, descA,
+                                                 valsA, rowptrA, colindA, info,
+                                                 internal_bytes, workspace_bytes)
+    workspace = Vector{UInt8}(undef, Int(workspace_bytes[]))
+    CUDA.CUSOLVER.cusolverSpDcsrluFactorHost(sp_handle, Cint(n), nnzA, descA,
+                                             valsA, rowptrA, colindA, info,
+                                             Float64(tol), pointer(workspace))
+
+    singularity = Ref{Cint}(-1)
+    CUDA.CUSOLVER.cusolverSpDcsrluZeroPivotHost(sp_handle, info, Float64(tol), singularity)
+    singularity[] >= 0 && throw(SingularException(Int(singularity[])))
+
+    nnzL = Ref{Cint}(0)
+    nnzU = Ref{Cint}(0)
+    CUDA.CUSOLVER.cusolverSpXcsrluNnzHost(sp_handle, nnzL, nnzU, info)
+
+    P = Vector{Cint}(undef, n)
+    Q = Vector{Cint}(undef, n)
+    rowptrL = Vector{Cint}(undef, n + 1)
+    colindL = Vector{Cint}(undef, Int(nnzL[]))
+    valsL = Vector{Float64}(undef, Int(nnzL[]))
+    rowptrU = Vector{Cint}(undef, n + 1)
+    colindU = Vector{Cint}(undef, Int(nnzU[]))
+    valsU = Vector{Float64}(undef, Int(nnzU[]))
+    descL = CUDA.CUSPARSE.CuMatrixDescriptor('G', 'L', 'U', 'O')
+    descU = CUDA.CUSPARSE.CuMatrixDescriptor('G', 'U', 'N', 'O')
+
+    CUDA.CUSOLVER.cusolverSpDcsrluExtractHost(sp_handle, P, Q,
+                                              descL, valsL, rowptrL, colindL,
+                                              descU, valsU, rowptrU, colindU,
+                                              info, pointer(workspace))
+    CUDA.CUSOLVER.cusolverSpDestroyCsrluInfoHost(info)
+
+    handle_ref = Ref{CUDA.CUSOLVER.cusolverRfHandle_t}()
+    CUDA.CUSOLVER.cusolverRfCreate(handle_ref)
+    handle = handle_ref[]
+    CUDA.CUSOLVER.cusolverRfSetMatrixFormat(handle,
+        CUDA.CUSOLVER.CUSOLVERRF_MATRIX_FORMAT_CSR,
+        CUDA.CUSOLVER.CUSOLVERRF_UNIT_DIAGONAL_ASSUMED_L)
+    CUDA.CUSOLVER.cusolverRfSetResetValuesFastMode(handle,
+        CUDA.CUSOLVER.CUSOLVERRF_RESET_VALUES_FAST_MODE_ON)
+
+    A_rowptr_gpu = _gpu_array(rowptrA, Int32)
+    A_colind_gpu = _gpu_array(colindA, Int32)
+    A_vals_gpu = _gpu_array(valsA, Float64)
+    L_rowptr_gpu = _gpu_array(rowptrL, Int32)
+    L_colind_gpu = _gpu_array(colindL, Int32)
+    L_vals_gpu = _gpu_array(valsL, Float64)
+    U_rowptr_gpu = _gpu_array(rowptrU, Int32)
+    U_colind_gpu = _gpu_array(colindU, Int32)
+    U_vals_gpu = _gpu_array(valsU, Float64)
+    P_gpu = _gpu_array(P, Int32)
+    Q_gpu = _gpu_array(Q, Int32)
+
+    CUDA.CUSOLVER.cusolverRfSetupDevice(Cint(n), nnzA,
+                                        A_rowptr_gpu, A_colind_gpu, A_vals_gpu,
+                                        nnzL[], L_rowptr_gpu, L_colind_gpu, L_vals_gpu,
+                                        nnzU[], U_rowptr_gpu, U_colind_gpu, U_vals_gpu,
+                                        P_gpu, Q_gpu, handle)
+    CUDA.CUSOLVER.cusolverRfAnalyze(handle)
+    CUDA.CUSOLVER.cusolverRfRefactor(handle)
+
+    rf = CuSparseRF{Float64}(handle,
+                             A_rowptr_gpu, A_colind_gpu, A_vals_gpu,
+                             L_rowptr_gpu, L_colind_gpu, L_vals_gpu,
+                             U_rowptr_gpu, U_colind_gpu, U_vals_gpu,
+                             P_gpu, Q_gpu, n)
+    finalizer(rf) do _
+        try
+            CUDA.CUSOLVER.cusolverRfDestroy(handle)
+        catch
+        end
+    end
+    return rf
+end
+
+function _build_sparse_qr(A_csr, ::Type{T}, tol::Real) where {T}
+    factor = CUDA.CUSOLVER.SparseQR(A_csr)
+    CUDA.CUSOLVER.spqr_factorise(factor, A_csr, Float64(tol))
+    return factor
 end
 
 function CuSparseLU(matrix::SparseMatrixCSC; tol::Real=1e-12, reorder::Bool=true, kwargs...)
@@ -327,10 +455,22 @@ function CuSparseLU(matrix::SparseMatrixCSC; tol::Real=1e-12, reorder::Bool=true
         error("CUDA not available. Use CPU solver instead.")
     end
 
-    T = promote_type(eltype(matrix), ComplexF64)
-    # Convert to GPU CSR using helper
-    A_csr = _gpu_sparse_csr(matrix, T)
-    return CuSparseLU{T}(A_csr, Float64(tol), reorder)
+    T = eltype(matrix)
+    if _supports_cusolver_rf(T)
+        A = SparseMatrixCSC{Float64, Int32}(matrix)
+        A_csr = _gpu_sparse_csr(A, Float64)
+        try
+            rf = _build_cusolver_rf(A; tol=tol)
+            return CuSparseLU{Float64}(A_csr, rf, :rf, Float64(tol), reorder, size(A, 1))
+        catch err
+            @warn "CuSparseLU: RF setup failed, falling back to sparse QR" exception=(err, catch_backtrace()) maxlog=1
+        end
+    end
+
+    Tq = promote_type(T, ComplexF64)
+    A_csr = _gpu_sparse_csr(matrix, Tq)
+    qr_factor = _build_sparse_qr(A_csr, Tq, tol)
+    return CuSparseLU{Tq}(A_csr, qr_factor, :qr, Float64(tol), reorder, size(matrix, 1))
 end
 
 function CuSparseLU(matrix::AbstractMatrix; kwargs...)
@@ -338,14 +478,15 @@ function CuSparseLU(matrix::AbstractMatrix; kwargs...)
 end
 
 function MatSolvers.solve(s::CuSparseLU{T}, rhs::AbstractVector) where T
-    # Transfer RHS to GPU using helper
-    b_gpu = _gpu_array(rhs, T)
+    b_gpu = _is_gpu_array(rhs) && eltype(rhs) == T ? copy(rhs) : _gpu_array(rhs, T)
     x_gpu = similar(b_gpu)
-    singularity = Ref{Int32}(-1)
-    CUDA.CUSOLVER.csrlsvqr!(s.A_csr, b_gpu, x_gpu;
-                            tol=s.tol, reorder=s.reorder, singularity=singularity)
-    if singularity[] >= 0
-        @warn "CuSparseLU: matrix may be singular" row=singularity[]
+
+    if s.backend === :rf
+        rf = s.factor::CuSparseRF{Float64}
+        CUDA.CUSOLVER.cusolverRfSolve(rf.handle, rf.P, rf.Q, Cint(1),
+                                      b_gpu, Cint(rf.n), x_gpu, Cint(rf.n))
+    else
+        CUDA.CUSOLVER.spqr_solve(s.factor, b_gpu, x_gpu)
     end
     return x_gpu
 end
