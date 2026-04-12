@@ -84,10 +84,28 @@ lift(tau, n)          # short form: auto-detects the lift basis
 ```
 
 - **`tau`** is the tau field (a `ScalarField` or `VectorField` whose bases are a strict subset of the state field's bases — it's missing the coupled direction).
-- **`basis`** is the *lift basis*. For Chebyshev-T state fields, this is almost always `derivative_basis(zbasis)`, which returns ChebyshevU of the same size. See [Why the Derivative Basis?](#why-the-derivative-basis) below.
-- **`n`** is an integer mode index. `n = -1` is the last mode of `basis`, `n = -2` is the second-to-last, and so on. For ChebyshevU of size `N`, `-1` picks `U_{N-1}` and `-2` picks `U_{N-2}`.
+- **`basis`** is the *lift basis*. For Chebyshev-T state fields, this is almost always `derivative_basis(zbasis)`, which returns ChebyshevU of the same size. See [Why the Derivative Basis?](#why-still-pass-derivative_basiszbasis) below.
+- **`n`** is an integer mode index with wraparound semantics: `n = -1` is the last coefficient slot of the coupled direction (`lift_mode = N-1` → Julia index `N`), `n = -2` is the second-to-last, `n = 0` is the first, and so on. For a ChebyshevT state of size `N`, `-1` places the tau value at coefficient `N-1`.
 
-The short form `lift(tau, n)` inspects `tau.dist.layouts` to find a non-periodic basis that the tau field is missing compared to the full state, and uses that as the lift basis. This works in most situations, but being explicit is always safe.
+### Short form dependency ordering
+
+The short form `lift(tau, n)` searches `tau.dist.layouts` for a non-periodic basis that the tau field is missing — and `dist.layouts` is only populated once *other* fields have been created that use those bases. In practice this means:
+
+```julia
+# WORKS: state field is created first, which caches the full (xbasis, zbasis)
+# layout on dist.layouts. The short form can then find zbasis.
+u       = ScalarField(dist, "u",       (xbasis, zbasis))
+tau_u1  = ScalarField(dist, "tau_u1",  (xbasis,))
+grad_u  = grad(u) + ez * lift(tau_u1, -1)   # ← OK, zbasis discovered
+
+# BRITTLE: if you call lift() before creating any state field that uses
+# the coupled basis, `dist.layouts` may not yet know about it.
+tau_u1  = ScalarField(dist, "tau_u1",  (xbasis,))
+bad     = lift(tau_u1, -1)   # ← may throw ArgumentError: cannot auto-detect basis
+u       = ScalarField(dist, "u",       (xbasis, zbasis))
+```
+
+If you want to avoid depending on layout-cache ordering entirely, use the **explicit form** `lift(tau, derivative_basis(zbasis), -1)`. All of Tarang's shipped examples use the explicit form (via a local `lift_basis = derivative_basis(zbasis)` binding) for exactly this reason.
 
 ### What `lift(tau, basis, n)` actually computes (solver view)
 
@@ -261,13 +279,21 @@ add_equation!(problem, "trace(grad_u) + tau_p = 0")
 add_bc!(problem, "integ(p) = 0")
 ```
 
-`tau_p` is a single scalar per Fourier mode (or a single scalar total, depending on how you declare it). It absorbs the pressure-gauge degree of freedom, and the `integ(p) = 0` row fixes its value.
+`tau_p` is typically declared as a **0-D scalar** (`ScalarField(dist, "tau_p", (), Float64)`). In the raw, pre-filtered matrix this gives it 1 DOF per subproblem (because a 0-D field has `subproblem_field_size == 1` at every Fourier mode). After valid-mode filtering (see next section) `tau_p` is dropped from every non-DC subproblem — so in practice it's a **single gauge-fixing scalar at the DC Fourier mode only**. The non-DC subproblems don't carry it, and `scatter_inputs` on those modes is a no-op because the filter removed the column.
 
-**2. Valid-mode filtering (invisible, done by the solver)**. At the `(kx=0, ky=0, ...)` DC Fourier mode, the integral constraint `integ(p) = 0` produces a **zero row** in the raw LHS matrix (because `integ` of a non-DC Fourier mode is zero, and the DC mode's integ is well-defined). Similarly, `trace(grad_u) = 0` at DC is automatically satisfied by the no-slip BCs, producing another zero row.
+That's the picture you should hold in your head: `tau_p` fixes the pressure gauge at the DC mode; at every other mode, pressure is well-defined by the `trace(grad_u) = 0` constraint together with the wall BCs, with no gauge ambiguity.
 
-The solver detects these zero rows during matrix assembly (`subsystems.jl`'s `build_matrices!`) and pairs each with the least-used 0-D tau column, dropping both the row and the column. The result is a smaller square system that the sparse LU can factorize cleanly.
+**2. Valid-mode filtering (invisible, done by the solver)**. At the non-DC Fourier modes (and in some situations at the DC mode too), the integral constraint `integ(p) = 0` produces a **zero row** in the raw LHS matrix — the integral of a non-DC Fourier mode over the domain is identically zero, so the row just says `0 = 0`, which is trivially true and carries no information.
 
-**You do not have to do anything to enable this.** Just declare `tau_p` and the `integ(p) = 0` BC, and the valid-mode filter takes care of the rest. The take-away is: if you ever see a `"129 singular pencils"` or `"non-square filtered system"` warning, it usually means a BC is missing, a tau field is missing, or the eq_size and state_size don't match.
+The solver detects these zero rows during matrix assembly (`subsystems.jl`'s `build_matrices!`) and pairs each with a **1-DOF tau column** — any variable whose per-subproblem size equals 1. That includes:
+
+- `tau_p` (a 0-D gauge scalar, always vsz=1)
+- `tau_T1`, `tau_T2` (declared with `(xbasis,)` — at each Fourier mode, the xbasis contribution reduces to a single coefficient, so vsz=1 per subproblem)
+- Components of `tau_u1`, `tau_u2` (same story, per component)
+
+The pairing uses a **smallest-column-norm heuristic**: for each zero row, the filter picks the unused 1-DOF tau column with the smallest total `|L| + |M|` norm — i.e., the tau that appears in the fewest or smallest-magnitude entries elsewhere. That's typically `tau_p` at non-DC subproblems because `tau_p` only contributes to continuity (one nonzero entry from `+tau_p`), while `tau_T1`/`tau_T2` contribute through the full gradient substitution and so carry more weight. After pairing, both the row and the column are dropped from the filtered system, yielding a smaller square matrix that the sparse LU factorizes cleanly.
+
+**You do not have to do anything to enable this.** Just declare `tau_p` and the `integ(p) = 0` BC, and the valid-mode filter takes care of the rest. The take-away is: if you ever see a `"129 singular pencils"` or `"non-square filtered system"` warning, it usually means a BC is missing, a tau field is missing, or the number of small-eq-size algebraic rows doesn't match the number of 1-DOF tau columns.
 
 ## Number of Tau Terms
 
