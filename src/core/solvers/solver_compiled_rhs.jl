@@ -1155,7 +1155,8 @@ function compile_rhs_plan!(solver::InitialValueSolver)
                     ws_idx = _compile_expr!(plan, expr, template, state)
                     plan.result_ws_indices[state_idx] = ws_idx
                 catch e
-                    @debug "Failed to compile RHS expression for state field $state_idx: $e — falling back to interpreted evaluation"
+                    field_name = hasfield(typeof(template), :name) ? template.name : "field_$state_idx"
+                    @info "RHS compiler: cannot compile $(field_name) equation's F expression ($(typeof(expr))): $e. Using interpreted evaluation." maxlog=3
                     plan.is_compiled = false
                     return plan
                 end
