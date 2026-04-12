@@ -41,7 +41,7 @@ mutable struct WoodburySolver
     bulk_lu::Any                             # sparse LU of bulk block A
     C::SparseMatrixCSC{ComplexF64, Int64}    # BC rows × bulk cols
     AinvB::Matrix{ComplexF64}                # precomputed A⁻¹ · B
-    S_lu::LinearAlgebra.LU{ComplexF64, Matrix{ComplexF64}, Vector{Int64}}  # dense LU of Schur complement
+    S_lu::Any                                # LU of Schur complement (dense)
     bulk_rows::Vector{Int}
     bc_rows::Vector{Int}
     bulk_cols::Vector{Int}
