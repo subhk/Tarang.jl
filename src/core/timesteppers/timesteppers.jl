@@ -1,5 +1,5 @@
 """
-Timestepping schemes for initial value problems
+Timestepping schemes for initial value problems.
 
 This module provides IMEX (Implicit-Explicit) time integration methods
 where linear terms are treated implicitly and nonlinear terms are treated explicitly.
@@ -11,9 +11,18 @@ Available methods:
 - ETD_RK222, ETD_CNAB2, ETD_SBDF2: Exponential Time Differencing
 - DiagonalIMEX_RK222, DiagonalIMEX_RK443, DiagonalIMEX_SBDF2: GPU-native diagonal IMEX
 
-MPI-compatible IMEX support:
-- Pure Fourier domains: Use SpectralLinearOperator (diagonal in spectral space)
-- Chebyshev-Fourier domains: Use PencilLinearOperator (per-wavenumber 1D solves)
+All IMEX RK and multistep methods dispatch through the per-Fourier-mode
+subproblem path (`step_subproblem_rk!` / `step_subproblem_multistep!`) when
+subproblems are available, which is the recommended path for Chebyshev-tau
+problems. Pure-Fourier domains can optionally use `SpectralLinearOperator`
+for a diagonal-IMEX optimization.
+
+**Note**: earlier versions shipped a `PencilLinearOperator` + `step_pencil_*!`
+family that implemented per-wavenumber 1D solves directly via PencilFFTs
+layouts. Those files were removed after the subproblem refactor made them
+redundant — `step_subproblem_rk!` and `step_subproblem_multistep!` now
+handle Chebyshev-Fourier MPI runs through the unified subproblem path with
+correct DAE-style BC handling.
 """
 
 # LinearAlgebra, SparseArrays, LoopVectorization, ExponentialUtilities already in Tarang.jl
@@ -25,7 +34,6 @@ using SparseArrays: SparseMatrixCSC, nnz
 include("phi_functions.jl")      # ETD phi function utilities
 include("types.jl")              # Timestepper struct definitions
 include("spectral_operators.jl") # SpectralLinearOperator for diagonal IMEX
-include("pencil_operators.jl")   # PencilLinearOperator for Chebyshev-Fourier IMEX
 include("state.jl")              # TimestepperState and state management
 include("state_utils.jl")        # State manipulation utilities
 include("step_rk.jl")            # RK step functions
@@ -33,5 +41,4 @@ include("step_multistep.jl")     # CNAB, SBDF step functions
 include("step_etd.jl")           # ETD step functions
 include("step_diagonal_imex.jl") # GPU-native diagonal IMEX step functions
 include("step_advanced.jl")      # Advanced methods (MCNAB2, CNLF2, etc.)
-include("step_pencil_imex.jl")   # Pencil-based IMEX for Chebyshev-Fourier
 include("dispatch.jl")           # Main step! dispatch function
