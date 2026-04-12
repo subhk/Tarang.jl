@@ -1363,9 +1363,12 @@ _extract_F_constant(x::Number) = Float64(x)
 _extract_F_constant(::Any) = nothing
 
 """
-Project a constant value onto the current subproblem's Fourier mode by
-transforming a 1D scratch field. Only the DC subproblem gets a nonzero
-contribution; non-DC subproblems project to zero.
+Project a constant value onto the current subproblem's Fourier mode.
+
+Tarang uses unnormalized `FFTW.rfft` on the Fourier axis, so the DC
+coefficient of a constant `v` equals `v * Nx`. Non-DC modes project to zero.
+For problems without a Fourier axis (e.g., a BVP with a single coupled
+direction), the DC-mode value is `v` itself — no scaling.
 """
 function _bc_constant_projection(v::Float64, sp::Subproblem)
     v == 0 && return ComplexF64(0)
@@ -1373,41 +1376,9 @@ function _bc_constant_projection(v::Float64, sp::Subproblem)
     if kx_global != 1
         return ComplexF64(0)
     end
-    # Cache the DC-mode normalization (it's the same for all calls with v=1
-    # — we just multiply by the actual constant).
-    norm = get(sp.matrices, "_bc_dc_norm", nothing)
-    if norm === nothing
-        xbasis = _find_bc_fourier_basis(sp)
-        if xbasis === nothing
-            norm = ComplexF64(1.0)
-        else
-            try
-                temp = ScalarField(sp.dist, "_bc_dc_scratch", (xbasis,), Float64)
-                ensure_layout!(temp, :g)
-                gd = get_grid_data(temp)
-                if gd !== nothing
-                    fill!(gd, 1.0)
-                end
-                temp.current_layout = :g
-                ensure_layout!(temp, :c)
-                cd_raw = get_coeff_data(temp)
-                if cd_raw === nothing
-                    norm = ComplexF64(1.0)
-                else
-                    cd = _local_coeff_data(cd_raw)
-                    if length(cd) >= 1
-                        norm = ComplexF64(cd[1])
-                    else
-                        norm = ComplexF64(1.0)
-                    end
-                end
-            catch
-                norm = ComplexF64(1.0)
-            end
-        end
-        sp.matrices["_bc_dc_norm"] = norm
-    end
-    return ComplexF64(v) * norm
+    xbasis = _find_bc_fourier_basis(sp)
+    scale = xbasis === nothing ? 1.0 : Float64(xbasis.meta.size)
+    return ComplexF64(v * scale)
 end
 
 function _find_bc_fourier_basis(sp::Subproblem)
