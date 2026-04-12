@@ -60,7 +60,7 @@ end
 
 function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{Nothing, AbstractDict{String}})
     ns = Dict{String, Any}()
-    
+
     # Lowest priority: operator registries (parseables first, then aliases)
     for (name, value) in OPERATOR_PARSEABLES
         ns[name] = value
@@ -68,14 +68,40 @@ function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{No
     for (name, value) in OPERATOR_ALIASES
         ns[name] = value
     end
-    
+
+    # Register coordinate names (e.g. "x", "y", "z") from every basis in
+    # every variable's bases so that boundary-condition RHS strings like
+    # `T(z=0) = 1 + 0.1*sin(2*pi*x/Lx)` parse without "Unknown variable: x"
+    # warnings. The placeholder is a `UnknownOperator` carrying the coord
+    # name — the parser treats it as a generic opaque symbol, and at
+    # solver-build time `_apply_bc_values_to_equations!` OVERWRITES the BC's
+    # `equation_data["F"]` slot with an `ArrayOperator` evaluated by the
+    # dedicated spatial-BC evaluator against the coordinate grid arrays, so
+    # the placeholder value is never consulted by the solver at runtime.
+    for var in variables
+        if hasproperty(var, :bases)
+            bases = getfield(var, :bases)
+            if bases !== nothing
+                for basis in bases
+                    basis === nothing && continue
+                    if hasproperty(basis, :meta) && hasproperty(basis.meta, :element_label)
+                        label = String(basis.meta.element_label)
+                        if !isempty(label) && !haskey(ns, label)
+                            ns[label] = UnknownOperator(label)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
     # User-supplied namespace overrides registry entries
     if user_ns !== nothing
         for (name, value) in user_ns
             ns[string(name)] = value
         end
     end
-    
+
     # Highest priority: problem variables by name
     for var in variables
         if hasproperty(var, :name)
@@ -85,7 +111,7 @@ function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{No
             end
         end
     end
-    
+
     return ns
 end
 
