@@ -135,6 +135,38 @@ function Base.show(io::IO, plan::LazyRHSPlan)
 end
 
 """
+    estimate_subproblem_cost(sp) -> Float64
+
+Return a rough cost estimate for solving a single subproblem, in arbitrary
+units. Used by `subproblem_locality_report` to detect cost-weighted load
+imbalance across MPI ranks.
+
+The estimate combines:
+
+- **LU factorization cost**: `O(n²)` for sparse matrices with bandwidth
+  scaling ~`√n`, dominates for the large (bulk-row) subproblems.
+- **BC override cost**: linear in `length(sp.bc_rows)`, typically small.
+- **Sparse nnz**: linear in `nnz(L_min) + nnz(M_min)`, dominates for the
+  stage RHS accumulation and matrix-vector products.
+
+The absolute value isn't meaningful — only ratios between subproblems
+matter for load-balance analysis. For subproblems without matrices
+(`sp.M_min === nothing`), returns 0.
+"""
+function estimate_subproblem_cost(sp::Subproblem)
+    sp.M_min === nothing && return 0.0
+    n = size(sp.M_min, 1)
+    nnz_L = sp.L_min === nothing ? 0 : nnz(sp.L_min)
+    nnz_M = sp.M_min === nothing ? 0 : nnz(sp.M_min)
+    bc_cost = length(sp.bc_rows)
+    # Heuristic: LU ~ n²/sqrt(n), matvec ~ nnz, BC override ~ length(bc_rows).
+    # Empirically the LU term dominates for n ≥ 100.
+    return Float64(n)^2 / max(sqrt(Float64(n)), 1.0) +
+           Float64(nnz_L + nnz_M) +
+           Float64(bc_cost)
+end
+
+"""
     subproblem_locality_report(solver) -> NamedTuple
 
 Compute a structured report of the per-rank subproblem distribution for an
@@ -144,41 +176,43 @@ before or during a production run.
 Returns a `NamedTuple` with fields:
 
 - `total::Int` — total subproblem count across all MPI ranks
-- `per_rank::Vector{Int}` — subproblem count on each rank (rank 0 is index 1)
+- `per_rank::Vector{Int}` — subproblem count on each rank (rank 0 = index 1)
 - `local_count::Int` — subproblem count on this rank
-- `with_matrices::Int` — subproblems on this rank that have non-nothing `M_min`
+- `with_matrices::Int` — subproblems on this rank with non-nothing `M_min`
 - `min_per_rank::Int` / `max_per_rank::Int` / `mean_per_rank::Float64`
-- `imbalance_pct::Float64` — `(max - min) / max * 100`, zero means perfect balance
+- `imbalance_pct::Float64` — `(max - min) / max * 100` by count
+- `local_cost::Float64` — summed estimated cost on this rank
+- `per_rank_cost::Vector{Float64}` — estimated cost per rank
+- `cost_imbalance_pct::Float64` — `(max_cost - min_cost) / max_cost * 100`
 - `rank::Int` — this rank's id
 
-For serial runs (`dist.size == 1`) the report reflects a single rank with
-all subproblems local. Safe to call on any rank; the `per_rank` vector is
-filled via `MPI.Allgather` so every rank has the full view.
+### Count vs cost imbalance
+
+Two imbalance metrics are reported because they diagnose different issues:
+
+- **Count imbalance** (`imbalance_pct`): how many subproblems each rank
+  owns. Large count imbalance usually means `Nx_c` doesn't divide evenly
+  by `dist.size` — fixable by adjusting the MPI rank count to share a
+  factor with `Nx_c`.
+- **Cost imbalance** (`cost_imbalance_pct`): how much work each rank
+  does. Can be >0 even when counts are balanced, if different subproblems
+  have different sparsity or BC counts (e.g. the DC Fourier mode has an
+  extra gauge constraint column, making it cheaper/more-expensive).
+
+Cost imbalance > 20% is worth investigating; > 50% means one rank is
+bottlenecking the others and you should either adjust the rank count or
+(for advanced users) implement custom cost-based redistribution.
 
 ### Example
 
 ```julia
 solver = InitialValueSolver(problem, RK222(); dt=1e-3)
 report = subproblem_locality_report(solver)
-if report.rank == 0 && report.imbalance_pct > 20
-    @warn "Subproblem imbalance \$(report.imbalance_pct)% — consider adjusting MPI rank count to divide Nx_c evenly"
+if report.rank == 0 && report.cost_imbalance_pct > 20
+    @warn "Subproblem cost imbalance \$(report.cost_imbalance_pct)% — " *
+          "consider adjusting MPI rank count"
 end
 ```
-
-### When the imbalance is a problem
-
-For a 2D problem with `Nx = 256` → `Nx_c = 129` subproblems, running on 8
-ranks gives `floor(129/8) = 16` subproblems per rank plus a leftover of 1.
-One rank gets 17, seven get 16 — imbalance `1/17 ≈ 6%`. Manageable.
-
-Running the same problem on 16 ranks gives `129 = 16*8 + 1`, so most
-ranks get 8 while one gets 9. 12% imbalance. Still OK.
-
-Running on 7 ranks gives `129 = 18*7 + 3`, so 3 ranks get 19 and 4 get 18.
-5% imbalance, fine. But if rank count doesn't divide `Nx_c` cleanly, the
-overall throughput is limited by the slowest (most-loaded) rank, so
-significant imbalance (>20%) is worth fixing by adjusting the rank count
-to share a common factor with `Nx_c`.
 """
 function subproblem_locality_report(solver::InitialValueSolver)
     problem = solver.problem
@@ -186,11 +220,13 @@ function subproblem_locality_report(solver::InitialValueSolver)
 
     n_sp_local = 0
     with_matrices = 0
+    local_cost = 0.0
     if haskey(problem.parameters, "subproblems")
         sps = problem.parameters["subproblems"]
         if sps isa Tuple
             n_sp_local = length(sps)
             with_matrices = count(sp -> sp.M_min !== nothing, sps)
+            local_cost = sum(estimate_subproblem_cost(sp) for sp in sps; init=0.0)
         end
     end
 
@@ -204,11 +240,25 @@ function subproblem_locality_report(solver::InitialValueSolver)
         Int[n_sp_local]
     end
 
+    per_rank_cost = if dist.size > 1
+        try
+            Float64.(MPI.Allgather(Float64(local_cost), dist.comm))
+        catch
+            Float64[local_cost]
+        end
+    else
+        Float64[local_cost]
+    end
+
     total = sum(per_rank)
     min_pr = isempty(per_rank) ? 0 : minimum(per_rank)
     max_pr = isempty(per_rank) ? 0 : maximum(per_rank)
     mean_pr = isempty(per_rank) ? 0.0 : sum(per_rank) / length(per_rank)
     imbalance_pct = max_pr > 0 ? 100 * (max_pr - min_pr) / max_pr : 0.0
+
+    min_cost = isempty(per_rank_cost) ? 0.0 : minimum(per_rank_cost)
+    max_cost = isempty(per_rank_cost) ? 0.0 : maximum(per_rank_cost)
+    cost_imbalance_pct = max_cost > 0 ? 100 * (max_cost - min_cost) / max_cost : 0.0
 
     return (
         total = total,
@@ -219,9 +269,12 @@ function subproblem_locality_report(solver::InitialValueSolver)
         max_per_rank = max_pr,
         mean_per_rank = mean_pr,
         imbalance_pct = imbalance_pct,
+        local_cost = local_cost,
+        per_rank_cost = per_rank_cost,
+        cost_imbalance_pct = cost_imbalance_pct,
         rank = dist.rank,
     )
 end
 
 # Export core solver API
-export step!, solve!, proceed, run!, subproblem_locality_report
+export step!, solve!, proceed, run!, subproblem_locality_report, estimate_subproblem_cost
