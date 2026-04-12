@@ -323,7 +323,7 @@ end
 """
     _get_or_build_lhs!(sp, stage_idx, dt, a_ii)
 
-Return a cached LU factorization of `(M_min + dt*a_ii*L_min)` for the given
+Return a cached solver for `(M_min + dt*a_ii*L_min)` for the given
 stage index, building and caching it if necessary.
 
 `sp.LHS_solvers` is a `Vector{Any}` of length >= stages, indexed by stage.
@@ -417,10 +417,8 @@ end
 """
     _get_or_compute_mass_lu!(sp)
 
-Return a cached LU factorization of the mass matrix `sp.M_min`.
-The factorization is stored in `sp.LHS_solvers` at a dedicated slot
-(index `length(sp.LHS_solvers)` is used as a mass-only cache when we
-grow the vector by one).
+Return a cached solver for the mass matrix `sp.M_min`.
+The solver is cached in `sp.matrices["_mass_solver"]`.
 
 This is used for stages where `a_ii = 0` (e.g., ESDIRK first stage)
 and for the non-stiffly-accurate final update.
