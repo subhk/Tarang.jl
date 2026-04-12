@@ -1017,16 +1017,17 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
         return offset + n
     end
     cd = _local_coeff_data(cd_raw)
+    cd_cpu = is_gpu_array(cd) ? get_cpu_data(cd) : cd
 
     if isempty(field.bases) || all(b -> b === nothing, field.bases)
         # 0D tau: single scalar
-        buffer[offset + 1] = ComplexF64(cd[1])
+        buffer[offset + 1] = ComplexF64(cd_cpu[1])
         return offset + 1
-    elseif ndims(cd) == 1
+    elseif ndims(cd_cpu) == 1
         # 1D field (tau with Fourier basis): convert to local index
         kx_local = _global_to_local_kx(kx_global, field, sp)
-        if kx_local >= 1 && kx_local <= length(cd)
-            buffer[offset + 1] = ComplexF64(cd[kx_local])
+        if kx_local >= 1 && kx_local <= length(cd_cpu)
+            buffer[offset + 1] = ComplexF64(cd_cpu[kx_local])
         else
             buffer[offset + 1] = ComplexF64(0)
         end
@@ -1034,10 +1035,10 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
     else
         # 2D field: extract local row across all Chebyshev modes
         kx_local = _global_to_local_kx(kx_global, field, sp)
-        Nz = size(cd, 2)
-        if kx_local >= 1 && kx_local <= size(cd, 1)
+        Nz = size(cd_cpu, 2)
+        if kx_local >= 1 && kx_local <= size(cd_cpu, 1)
             for iz in 1:Nz
-                buffer[offset + iz] = ComplexF64(cd[kx_local, iz])
+                buffer[offset + iz] = ComplexF64(cd_cpu[kx_local, iz])
             end
         else
             for iz in 1:Nz
@@ -1073,20 +1074,39 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
     cd = _local_coeff_data(cd_raw)
 
     if isempty(field.bases) || all(b -> b === nothing, field.bases)
-        cd[1] = eltype(cd) <: Real ? real(data[offset+1]) : data[offset+1]
+        value = eltype(cd) <: Real ? real(data[offset+1]) : convert(eltype(cd), data[offset+1])
+        if is_gpu_array(cd)
+            copyto!(view(cd, 1:1), on_architecture(architecture(cd), [value]))
+        else
+            cd[1] = value
+        end
         return offset + 1
     elseif ndims(cd) == 1
         kx_local = _global_to_local_kx(kx_global, field, sp)
         if kx_local >= 1 && kx_local <= length(cd)
-            cd[kx_local] = eltype(cd) <: Real ? real(data[offset+1]) : data[offset+1]
+            value = eltype(cd) <: Real ? real(data[offset+1]) : convert(eltype(cd), data[offset+1])
+            if is_gpu_array(cd)
+                copyto!(view(cd, kx_local:kx_local), on_architecture(architecture(cd), [value]))
+            else
+                cd[kx_local] = value
+            end
         end
         return offset + 1
     else
         kx_local = _global_to_local_kx(kx_global, field, sp)
         Nz = size(cd, 2)
         if kx_local >= 1 && kx_local <= size(cd, 1)
-            for iz in 1:Nz
-                cd[kx_local, iz] = eltype(cd) <: Real ? real(data[offset+iz]) : data[offset+iz]
+            row_values = if eltype(cd) <: Real
+                real.(data[offset+1:offset+Nz])
+            else
+                convert.(eltype(cd), data[offset+1:offset+Nz])
+            end
+            if is_gpu_array(cd)
+                copyto!(selectdim(cd, 1, kx_local), on_architecture(architecture(cd), row_values))
+            else
+                for iz in 1:Nz
+                    cd[kx_local, iz] = row_values[iz]
+                end
             end
         end
         return offset + Nz
