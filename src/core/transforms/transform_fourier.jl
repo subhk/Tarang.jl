@@ -88,8 +88,12 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
     # reverse order. For intermediate stages, write into a cached scratch;
     # for the FINAL stage, write directly into the field's pre-allocated
     # grid buffer.
+    #
+    # We iterate via index arithmetic (`n_transforms:-1:1`) rather than
+    # `collect(reverse(...))` to avoid allocating a fresh reversed vector
+    # each call.
     current = get_coeff_data(field)
-    transforms = collect(reverse(field.dist.transforms))
+    transforms = field.dist.transforms
     n_transforms = length(transforms)
     if n_transforms == 0
         grid = get_grid_data(field)
@@ -102,9 +106,13 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
         return
     end
 
-    for (idx, transform) in enumerate(transforms)
+    # Walk transforms in reverse order. `step` counts 1..n_transforms so
+    # we can detect the final step (step == n_transforms) to write directly
+    # into the field's pre-allocated grid buffer.
+    for step in 1:n_transforms
+        transform = transforms[n_transforms - step + 1]
         out_shape, out_eltype = _backward_output_spec(current, transform)
-        if idx == n_transforms
+        if step == n_transforms
             grid = get_grid_data(field)
             if grid === nothing || size(grid) != out_shape || eltype(grid) != out_eltype
                 grid = zeros(out_eltype, out_shape...)
