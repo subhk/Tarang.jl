@@ -3086,8 +3086,40 @@ NCCData() = NCCData(nothing, 1e-6, nothing)
 """
     build_ncc_matrix(ncc_data, sp, arg_domain, out_domain; ncc_cutoff=1e-6, max_ncc_terms=nothing)
 
-Build NCC matrix for Cartesian coordinates.
-Following arithmetic:418-444.
+Build the NCC (non-constant coefficient) multiplication matrix for a single
+subproblem. An NCC is a spatially-varying coefficient appearing as a
+multiplicative factor in an equation, e.g. `ν(z) * ∇²u` where `ν` varies
+with the coupled coordinate.
+
+The matrix is built by summing mode-shift matrices (one per significant
+spectral coefficient of the NCC field), weighted by that coefficient's
+value:
+
+    M = Σ_k ν_k · S_k
+
+where `ν_k` is the k-th spectral coefficient of the NCC field and `S_k` is
+the shift matrix that implements spectral-space convolution by mode k.
+
+## Two-stage truncation
+
+To keep the resulting sparse matrix as small as possible (which directly
+reduces sparse LU factorization cost), we apply two levels of truncation:
+
+1. **Per-mode cutoff** (`ncc_cutoff`): skip contributions from NCC modes
+   whose absolute coefficient is below `ncc_cutoff`. Dedalus's default is
+   `1e-6`; tighter cutoffs give sparser matrices at some accuracy cost.
+2. **Max-terms cap** (`max_ncc_terms`): after sorting modes by coefficient
+   magnitude, retain at most `max_ncc_terms` dominant modes. Useful for
+   rapidly-decaying NCCs where a small number of modes capture most of the
+   information.
+
+After accumulation, the matrix is passed through `droptol!` to remove any
+entries whose absolute value is below `ncc_cutoff` — this catches residual
+entries that appear from cross-mode accumulation (e.g. two large opposite
+contributions that partially cancel) and shrinks the nnz count for the
+downstream sparse LU.
+
+Follows the spectral methods pattern from the Dedalus arithmetic module.
 """
 function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_domain;
                           ncc_cutoff::Float64=1e-6, max_ncc_terms::Union{Nothing, Int}=nothing)
@@ -3099,27 +3131,45 @@ function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_dom
     shape = (coeff_size(sp, out_domain), coeff_size(sp, arg_domain))
     matrix = spzeros(ComplexF64, shape...)
 
-    # Get subproblem shape
     sp_shape = coeff_shape(sp, out_domain)
-
-    # Loop over NCC modes
     ncc_shape = size(coeffs)
-    n_terms = 0
 
-    for ncc_mode in CartesianIndices(ncc_shape)
-        ncc_coeff = coeffs[ncc_mode]
-
-        # Apply cutoff
-        if abs(ncc_coeff) > ncc_cutoff
-            # Build mode matrix
-            mode_mat = cartesian_mode_matrix(sp_shape, arg_domain, out_domain, Tuple(ncc_mode))
-            matrix = matrix + ncc_coeff * mode_mat
-
-            n_terms += 1
-            if max_ncc_terms !== nothing && n_terms >= max_ncc_terms
-                break
-            end
+    # Collect above-cutoff modes and sort by |coefficient| descending so the
+    # `max_ncc_terms` cap retains the MOST informative modes, not just the
+    # first-iterated ones. This improves NCC approximation quality for
+    # rapidly decaying coefficient fields.
+    significant_modes = Tuple{Float64, CartesianIndex}[]
+    @inbounds for ncc_mode in CartesianIndices(ncc_shape)
+        mag = abs(coeffs[ncc_mode])
+        if mag > ncc_cutoff
+            push!(significant_modes, (mag, ncc_mode))
         end
+    end
+    sort!(significant_modes; by = first, rev = true)
+
+    n_to_use = max_ncc_terms === nothing ? length(significant_modes) :
+               min(length(significant_modes), max_ncc_terms)
+
+    @inbounds for k in 1:n_to_use
+        ncc_mode = significant_modes[k][2]
+        ncc_coeff = coeffs[ncc_mode]
+        mode_mat = cartesian_mode_matrix(sp_shape, arg_domain, out_domain, Tuple(ncc_mode))
+        # In-place accumulation into `matrix.nzval` would avoid the
+        # temporary sparse matrix on the RHS, but sparse-structure merging
+        # is awkward when new mode matrices introduce additional nonzero
+        # patterns. The current add-and-reassign is O(nnz) per iteration
+        # and dominated by the subsequent LU, so it's not the bottleneck.
+        matrix = matrix + ncc_coeff * mode_mat
+    end
+
+    # Post-accumulation truncation: drop residual small entries from the
+    # summed matrix. Use droptol! which prunes entries by absolute value.
+    if ncc_cutoff > 0 && nnz(matrix) > 0
+        droptol!(matrix, ncc_cutoff)
+    end
+    # dropzeros! removes structural zeros introduced by cancellation.
+    if nnz(matrix) > 0
+        dropzeros!(matrix)
     end
 
     return matrix
