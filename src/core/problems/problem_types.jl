@@ -741,5 +741,77 @@ add_bc!(problem, dirichlet_bc("u", "z", 0.0, 0.0))
 ```
 """
 function add_bc!(problem::Problem, bc::String)
+    # Always store the raw string so `_merge_boundary_conditions!` can push it
+    # into `problem.equations` during solver build.
     push!(problem.boundary_conditions, bc)
+
+    # ALSO register a concrete `DirichletBC` / `NeumannBC` / ... in the BC
+    # manager with auto-detected time / space dependency flags. Without this
+    # step, a string like `"T(z=0) = 1 + 0.0001*sin(2*pi*x/4)"` would never
+    # enter `bc_manager.space_dependent_bcs`, so `_apply_bc_values_to_equations!`
+    # would never fire and the equation_data["F"] slot would retain the
+    # parser's symbolic garbage — silently degrading to a zero-F BC and
+    # causing max|T| to decay from the conduction profile to zero even
+    # though a `T(z=0) = 1 + ε*sin(x)` BC was declared.
+    try
+        _register_string_bc!(problem, bc)
+    catch err
+        @debug "add_bc!: could not register string BC with bc_manager; string-only path may miss space/time-dependent handling" bc err
+    end
+end
+
+"""
+    _register_string_bc!(problem, bc_string)
+
+Parse a BC string like `"T(z=0) = <value>"` (Dirichlet) or
+`"∂z(T)(z=0) = <value>"` (Neumann), and register a concrete
+`DirichletBC` / `NeumannBC` in `problem.bc_manager` so that time- and
+space-dependency detection runs on the value expression. This lets
+`_apply_bc_values_to_equations!` find and refresh the BC at solver build
+and on every step.
+
+Gracefully returns without registering if the string doesn't match any
+known BC pattern (in which case the raw-string path in
+`_merge_boundary_conditions!` still pushes the BC equation into the
+system, but time/space dependency handling is disabled for it — the
+user would see wrong enforcement for non-constant values in that case).
+"""
+function _register_string_bc!(problem::Problem, bc_string::String)
+    # Detect Neumann first (has `∂coord(field)(...)` prefix). Fall back to
+    # Dirichlet for the usual `field(coord=pos) = value` form.
+    stripped = replace(bc_string, " " => "")
+    is_neumann = startswith(stripped, "∂") ||
+                 occursin(r"^d[a-zA-Z_][a-zA-Z0-9_]*\(", stripped)
+
+    if is_neumann
+        parts = try
+            parse_neumann_bc_string(bc_string)
+        catch
+            return  # unparseable — fall back to raw-string path
+        end
+        field_name, coord, position, value = parts
+        bc_obj = neumann_bc(field_name, coord, position, value)
+        add_bc!(problem.bc_manager, bc_obj)
+        return
+    end
+
+    # Dirichlet path.
+    parts = try
+        parse_bc_string(bc_string)
+    catch
+        return  # unparseable (e.g. `integ(p) = 0` — handled via raw string)
+    end
+    field_name, coord, position, value = parts
+
+    # Some "BC-like" strings (e.g. `integ(p) = 0`) slip through `parse_bc_string`
+    # with a bogus `field_name` / `coord`. Skip those — they're not actual
+    # Dirichlet BCs and the raw-string path handles them as plain algebraic
+    # constraint equations.
+    if field_name == "integ" || field_name == "average" || field_name == "avg"
+        return
+    end
+
+    bc_obj = dirichlet_bc(field_name, coord, position, value)
+    add_bc!(problem.bc_manager, bc_obj)
+    return
 end
