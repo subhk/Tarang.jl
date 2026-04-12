@@ -194,8 +194,10 @@ function _promote_expression_rows(mat::SparseMatrixCSC, target_rows::Int)
     nrows == 0 && return spzeros(ComplexF64, target_rows, size(mat, 2))
     target_rows % nrows == 0 || return mat
 
-    block = div(target_rows, nrows)
-    rows = [i * block for i in 1:nrows]
+    # Place scalar/low-rank contributions at the FIRST row block, not the last.
+    # Placing at the last row conflicts with Lift operators (which also target
+    # the highest Chebyshev mode), creating rank deficiencies.
+    rows = collect(1:nrows)
     cols = collect(1:nrows)
     P = sparse(rows, cols, ones(ComplexF64, nrows), target_rows, nrows)
     return P * mat
