@@ -223,14 +223,18 @@ using LinearAlgebra
             @test gs_grid == (16, 16)
 
             gs_coef = Tarang.global_shape(domain, :c)
-            # Both bases are RealFourier, so both get N/2+1 = 9
-            @test gs_coef == (9, 9)
+            # Coefficient shape rule: only the FIRST Fourier axis gets
+            # halved by rfft. The second axis sees complex input from
+            # the first transform and uses full-size fft. So for two
+            # RealFourier axes of size 16: (16/2+1, 16) = (9, 16).
+            @test gs_coef == (9, 16)
         end
 
         @testset "coefficient_shape" begin
             cs = Tarang.coefficient_shape(domain)
-            # Both RealFourier bases: N/2+1 = 9 for each
-            @test cs == (9, 9)
+            # First RealFourier axis: rfft → N/2+1 = 9
+            # Second RealFourier axis: fft (complex input) → full N = 16
+            @test cs == (9, 16)
         end
 
         @testset "grid_spacing" begin
