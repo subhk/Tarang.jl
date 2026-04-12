@@ -265,15 +265,17 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             ALG_F[sp_idx] = ComplexF64[]
             continue
         end
-        n = size(sp.M_min, 1)
-        mx0 = _sp_stage_vector!(sp, "_sp_rk_mx0", n, gather_inputs(sp, state_fields))
-        rhs = _sp_stage_vector!(sp, "_sp_rk_rhs", n, mx0)
+        n_eq = size(sp.M_min, 1)
+        n_var = size(sp.M_min, 2)
+        x_ref = gather_inputs(sp, state_fields)
+        mx0 = _sp_stage_vector!(sp, "_sp_rk_mx0", n_eq, x_ref)
+        rhs = _sp_stage_vector!(sp, "_sp_rk_rhs", n_var, x_ref)
         x0_pre = gather_inputs!(rhs, sp, state_fields)
         _apply_subproblem_operator!(mx0, _subproblem_operator(sp, :M, x0_pre), x0_pre)
         MX0[sp_idx] = mx0
         RHS[sp_idx] = rhs
 
-        alg_f = _sp_stage_vector!(sp, "_sp_rk_alg_f", n, mx0)
+        alg_f = _sp_stage_vector!(sp, "_sp_rk_alg_f", n_eq, mx0)
         gather_alg_F!(alg_f, sp)
         ALG_F[sp_idx] = alg_f
     end
