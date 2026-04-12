@@ -1006,6 +1006,40 @@ function _subproblem_backend_matrix!(sp::Subproblem, matrix, cache_key::String, 
     return backend
 end
 
+function _subproblem_selection_indices!(sp::Subproblem, matrix::Union{Nothing, SparseMatrixCSC},
+                                        cache_key::String)
+    matrix === nothing && return nothing
+    cached = get(sp.matrices, cache_key, nothing)
+    cached !== nothing && return cached
+
+    m, n = size(matrix)
+    if nnz(matrix) == 0
+        indices = Int[]
+        sp.matrices[cache_key] = indices
+        return indices
+    end
+
+    rows, cols, vals = findnz(matrix)
+    length(rows) == m || return nothing
+
+    indices = Vector{Int}(undef, m)
+    seen = falses(m)
+    oneval = one(eltype(matrix))
+    @inbounds for k in eachindex(rows)
+        r = rows[k]
+        c = cols[k]
+        if r < 1 || r > m || c < 1 || c > n || seen[r] || vals[k] != oneval
+            return nothing
+        end
+        seen[r] = true
+        indices[r] = c
+    end
+    all(seen) || return nothing
+
+    sp.matrices[cache_key] = indices
+    return indices
+end
+
 function _assign_to_buffer!(dest::AbstractVector{ComplexF64}, src)
     if is_gpu_array(dest)
         src_dev = is_gpu_array(src) ? src : on_architecture(architecture(dest), Array(src))
@@ -1170,11 +1204,20 @@ end
 
 function compress_variable_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)
     if sp.pre_right_pinv !== nothing
-        pre = _subproblem_backend_matrix!(sp, sp.pre_right_pinv, "_pre_right_pinv_backend", raw)
-        if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
-            mul!(dest, pre, raw)
+        indices = (!is_gpu_array(dest) && !is_gpu_array(raw)) ?
+                  _subproblem_selection_indices!(sp, sp.pre_right_pinv, "_pre_right_pinv_indices") :
+                  nothing
+        if indices !== nothing
+            @inbounds for i in eachindex(indices)
+                dest[i] = raw[indices[i]]
+            end
         else
-            _assign_to_buffer!(dest, pre * raw)
+            pre = _subproblem_backend_matrix!(sp, sp.pre_right_pinv, "_pre_right_pinv_backend", raw)
+            if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
+                mul!(dest, pre, raw)
+            else
+                _assign_to_buffer!(dest, pre * raw)
+            end
         end
     else
         _assign_to_buffer!(dest, raw)
@@ -1190,11 +1233,21 @@ end
 
 function expand_variable_space!(dest::AbstractVector, sp::Subproblem, data::AbstractVector)
     if sp.pre_right !== nothing
-        pre = _subproblem_backend_matrix!(sp, sp.pre_right, "_pre_right_backend", data)
-        if !is_gpu_array(dest) && !is_gpu_array(data) && pre isa AbstractMatrix
-            mul!(dest, pre, data)
+        indices = (!is_gpu_array(dest) && !is_gpu_array(data)) ?
+                  _subproblem_selection_indices!(sp, sp.pre_right_pinv, "_pre_right_pinv_indices") :
+                  nothing
+        if indices !== nothing
+            fill!(dest, zero(eltype(dest)))
+            @inbounds for i in eachindex(indices)
+                dest[indices[i]] = data[i]
+            end
         else
-            _assign_to_buffer!(dest, pre * data)
+            pre = _subproblem_backend_matrix!(sp, sp.pre_right, "_pre_right_backend", data)
+            if !is_gpu_array(dest) && !is_gpu_array(data) && pre isa AbstractMatrix
+                mul!(dest, pre, data)
+            else
+                _assign_to_buffer!(dest, pre * data)
+            end
         end
     else
         _assign_to_buffer!(dest, data)
@@ -1210,11 +1263,19 @@ end
 
 function compress_equation_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)
     if sp.pre_left !== nothing
-        pre = _subproblem_backend_matrix!(sp, sp.pre_left, "_pre_left_backend", raw)
-        if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
-            mul!(dest, pre, raw)
+        indices = (!is_gpu_array(dest) && !is_gpu_array(raw)) ?
+                  _subproblem_selection_indices!(sp, sp.pre_left, "_pre_left_indices") :
+                  nothing
+        if indices !== nothing
+            @inbounds for i in eachindex(indices)
+                dest[i] = raw[indices[i]]
         else
-            _assign_to_buffer!(dest, pre * raw)
+            pre = _subproblem_backend_matrix!(sp, sp.pre_left, "_pre_left_backend", raw)
+            if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
+                mul!(dest, pre, raw)
+            else
+                _assign_to_buffer!(dest, pre * raw)
+            end
         end
     else
         _assign_to_buffer!(dest, raw)
