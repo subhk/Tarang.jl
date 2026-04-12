@@ -17,7 +17,106 @@
 # scaling for F_BC (the previous-step L*X cancellation only works if prior
 # stages satisfied the constraint, which fails on the first call with a
 # history-free state).
+#
+# **Per-step allocation**: history is stored in fixed-capacity `SPHistoryRing`
+# circular buffers, pre-allocated on first use and reused thereafter. The only
+# allocations per step are the small cached vectors managed by
+# `_subproblem_cached_vector!`, which are also reused across steps. Expected
+# per-step allocation for steady-state runs: **zero**.
 # ──────────────────────────────────────────────────────────────────────────────
+
+"""
+    SPHistoryRing
+
+Fixed-capacity circular buffer for per-subproblem multistep history. Stores
+`capacity` pre-allocated `AbstractVector{ComplexF64}` slots and maintains a
+`head` index pointing at the newest entry. Allows O(1) replacement
+(`ring_push_newest!`) and O(1) age-indexed access (`ring_get`) without any
+per-step allocation after the initial slot allocation.
+
+Used by `step_subproblem_multistep!` to store `M*X`, `L*X`, and `F` history
+per subproblem across timesteps. Replaces the earlier `Vector{Vector}` +
+`pushfirst!` / `pop!` implementation which allocated three fresh vectors per
+subproblem per step.
+"""
+mutable struct SPHistoryRing
+    buffers::Vector{AbstractVector{ComplexF64}}  # Pre-allocated slots (length = capacity)
+    head::Int                                     # 1-based slot of newest entry, or 0 if empty
+    count::Int                                    # Number of valid entries, 0 ≤ count ≤ capacity
+    capacity::Int
+end
+
+SPHistoryRing(capacity::Int) = SPHistoryRing(
+    Vector{AbstractVector{ComplexF64}}(undef, 0),
+    0, 0, max(capacity, 1),
+)
+
+"""Return the k-th newest entry (k=1 is newest), or `nothing` if `k > count`.
+
+Mapping from age `k` to slot: with `head` pointing at the newest slot, age
+`k` lives at `mod1(head - k + 1, capacity)`.
+"""
+@inline function ring_get(ring::SPHistoryRing, k::Int)
+    (k < 1 || k > ring.count) && return nothing
+    slot = mod1(ring.head - k + 1, ring.capacity)
+    return ring.buffers[slot]
+end
+
+"""
+    ring_push_newest!(ring, reference) -> AbstractVector
+
+Advance the ring's head and return the underlying slot for the newest
+entry so the caller can **write into it directly** (zero-copy). The caller
+must not retain the returned reference after the next `ring_push_newest!`
+call — it may be overwritten when the ring wraps.
+
+On first use, allocates `capacity` slots of length `length(reference)`
+using `similar_zeros(reference, ComplexF64, length(reference))`, so the
+buffer backend (CPU / CuArray / ROCArray) matches the reference's backend.
+"""
+@inline function ring_push_newest!(ring::SPHistoryRing, reference::AbstractVector)
+    if isempty(ring.buffers)
+        n = length(reference)
+        ring.buffers = [similar_zeros(reference, ComplexF64, n) for _ in 1:ring.capacity]
+    end
+    ring.head = mod1(ring.head + 1, ring.capacity)
+    ring.count = min(ring.count + 1, ring.capacity)
+    return ring.buffers[ring.head]
+end
+
+"""Grow a ring's capacity (e.g. when the user switches from SBDF2 to SBDF4
+mid-run). The existing entries are preserved, with new empty slots added
+at the back. A no-op if the requested capacity is not larger than the
+current capacity."""
+function ring_resize!(ring::SPHistoryRing, new_capacity::Int)
+    new_capacity <= ring.capacity && return ring
+    if isempty(ring.buffers)
+        ring.capacity = new_capacity
+        return ring
+    end
+    # Copy entries age-sorted (newest first) into a new slot array.
+    old_cap = ring.capacity
+    old_count = ring.count
+    new_bufs = similar(ring.buffers, new_capacity)
+    for k in 1:old_count
+        old_slot = mod1(ring.head - k + 1, old_cap)
+        new_slot = mod1(new_capacity - k + 1, new_capacity)
+        new_bufs[new_slot] = ring.buffers[old_slot]
+    end
+    # Any remaining new slots point at scratch buffers we'll create on demand;
+    # mark them by reusing the first allocated buffer (shape reference).
+    ref = ring.buffers[1]
+    n = length(ref)
+    for i in 1:new_capacity
+        if !isassigned(new_bufs, i)
+            new_bufs[i] = similar_zeros(ref, ComplexF64, n)
+        end
+    end
+    ring.buffers = new_bufs
+    ring.capacity = new_capacity
+    ring.head = new_capacity  # newest entry ended up at slot `new_capacity`
+    return ring
+end
 
 """
     step_subproblem_multistep!(state, solver, subproblems, a, b, c)
