@@ -356,7 +356,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
 
             if abs(a_ii) < 1e-14
                 # No implicit diagonal — just invert M
-                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), x0_pre)
+                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), RHS[sp_idx])
                 if sp.M_min !== nothing
                     M_lu = _get_or_compute_mass_lu!(sp)
                     if M_lu !== nothing
@@ -368,7 +368,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
                     _assign_to_buffer!(x_sol, rhs)
                 end
             else
-                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), x0_pre)
+                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), RHS[sp_idx])
                 lhs_solver = _get_or_build_lhs!(sp, i, dt, a_ii)
                 if lhs_solver !== nothing
                     _solve_cached_system!(x_sol, lhs_solver, rhs)
