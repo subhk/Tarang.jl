@@ -49,7 +49,36 @@ function add_velocity!(cfl::CFL, velocity::VectorField)
     push!(cfl.velocities, velocity)
 end
 
-"""Compute adaptive timestep based on CFL condition"""
+"""
+    compute_timestep(cfl::CFL)
+
+Compute the adaptive timestep based on the CFL condition. Returns the new
+`dt` to be used by the solver for the next step.
+
+## Sticky-dt hysteresis
+
+Calling the implicit solver with a changed `dt` invalidates the cached LHS
+factorization in `step_subproblem_rk!` / `step_subproblem_multistep!` — the
+sparse LU has to be rebuilt. For adaptive timestepping, this rebuild can
+dominate wall-clock time if `dt` drifts by tiny amounts every CFL
+recomputation.
+
+To amortize this cost, we only commit a new `dt` when the proposed value
+differs from the current value by more than `cfl.threshold` (relative):
+
+    |proposed_dt − current_dt| / current_dt > threshold  →  commit
+    otherwise                                            →  keep current_dt
+
+This lets the simulation ride out several steps at a stable `dt`, reusing
+the same LU factorization, until the CFL signal drifts far enough to
+matter. Default `threshold = 0.1` (10%) gives a good balance of safety and
+throughput; set `threshold = 0.0` to disable hysteresis and commit every
+change.
+
+Note: the hysteresis only suppresses *upward* or small bidirectional drift.
+A sharp CFL violation (proposed drops by 50%, say) always passes through
+because it exceeds the threshold.
+"""
 function compute_timestep(cfl::CFL)
 
     cfl.iteration_count += 1
@@ -93,15 +122,25 @@ function compute_timestep(cfl::CFL)
         proposed_dt = cfl.safety * min_dt
     end
 
-    # Apply constraints
+    # Apply max_dt constraint
     proposed_dt = min(proposed_dt, cfl.max_dt)
 
     # Limit change rate (only after first real CFL computation)
-    # Skip rate limiting on first iteration to allow proper initialization
     if cfl.iteration_count > 1 && cfl.current_dt > 0 && cfl.current_dt != cfl.initial_dt
         max_allowed = cfl.current_dt * cfl.max_change
         min_allowed = cfl.current_dt * cfl.min_change
         proposed_dt = clamp(proposed_dt, min_allowed, max_allowed)
+    end
+
+    # Sticky-dt hysteresis: only commit changes larger than `threshold`
+    # (relative) to avoid invalidating the cached LU factorization on every
+    # CFL call. Default threshold = 0.1 (10%); set to 0.0 to disable.
+    if cfl.current_dt > 0 && cfl.threshold > 0
+        rel_change = abs(proposed_dt - cfl.current_dt) / cfl.current_dt
+        if rel_change <= cfl.threshold
+            # Change is inside the hysteresis band — stick with current dt.
+            return cfl.current_dt
+        end
     end
 
     cfl.current_dt = proposed_dt
