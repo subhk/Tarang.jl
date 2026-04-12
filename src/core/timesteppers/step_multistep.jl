@@ -12,6 +12,19 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
 
+    # Subproblem path: use the per-Fourier-mode multistep stepper when available.
+    # This is the only path that correctly handles inhomogeneous algebraic
+    # constraints (BCs like `T(z=0) = 1`), because the global-matrix path below
+    # packs F in variable space and silently drops BC F values.
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            a, b, c = _cnab1_coefs(dt)
+            step_subproblem_multistep!(state, solver, sps, a, b, c)
+            return
+        end
+    end
+
     # Check for MPI mode - multistep IMEX methods don't support distributed data
     if !isempty(current_state)
         dist = current_state[1].dist
@@ -110,6 +123,23 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt = state.dt
+
+    # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
+    # CNAB2 needs 1 prior F-history entry to start; fall back to CNAB1 when
+    # the history is empty (first call after solver build).
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            if _sp_multistep_history_depth(state) < 1
+                step_cnab1!(state, solver)
+                return
+            end
+            dt_prev = get_previous_timestep(state)
+            a, b, c = _cnab2_coefs(dt, dt_prev)
+            step_subproblem_multistep!(state, solver, sps, a, b, c)
+            return
+        end
+    end
 
     # Check for MPI mode - multistep IMEX methods don't support distributed data
     if !isempty(current_state)
@@ -228,10 +258,20 @@ end
     Explicit: 1st-order extrapolation (forward Euler)
     """
 function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
-    
+
     current_state = state.history[end]
     dt = state.dt
-    
+
+    # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            a, b, c = _sbdf1_coefs(dt)
+            step_subproblem_multistep!(state, solver, sps, a, b, c)
+            return
+        end
+    end
+
     # Initialize history arrays if needed
     if !haskey(state.timestepper_data, :MX_history)
         T = eltype(fields_to_vector(state.history[end]))
@@ -333,6 +373,20 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt = state.dt
+
+    # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            if _sp_multistep_history_depth(state) < 1
+                step_sbdf1!(state, solver)
+                return
+            end
+            a, b, c = _sbdf2_coefs(dt)
+            step_subproblem_multistep!(state, solver, sps, a, b, c)
+            return
+        end
+    end
 
     # Check for MPI mode - SBDF methods don't support distributed data
     if !isempty(current_state)
@@ -453,6 +507,21 @@ end
 function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
+    dt = state.dt
+
+    # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            if _sp_multistep_history_depth(state) < 2
+                step_sbdf2!(state, solver)
+                return
+            end
+            a, b, c = _sbdf3_coefs(dt)
+            step_subproblem_multistep!(state, solver, sps, a, b, c)
+            return
+        end
+    end
 
     # Check for MPI mode - SBDF methods don't support distributed data
     if !isempty(current_state)
@@ -587,6 +656,21 @@ end
 function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
+    dt = state.dt
+
+    # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
+    if haskey(solver.problem.parameters, "subproblems")
+        sps = solver.problem.parameters["subproblems"]
+        if sps isa Tuple
+            if _sp_multistep_history_depth(state) < 3
+                step_sbdf3!(state, solver)
+                return
+            end
+            a, b, c = _sbdf4_coefs(dt)
+            step_subproblem_multistep!(state, solver, sps, a, b, c)
+            return
+        end
+    end
 
     # Check for MPI mode - SBDF methods don't support distributed data
     if !isempty(current_state)
