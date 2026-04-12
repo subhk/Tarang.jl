@@ -33,7 +33,7 @@ Rayleigh    = 2e6
 Prandtl     = 1.0
 dealias     = 3/2
 stop_time   = 50.0
-max_dt      = 1e-3
+max_dt      = 1e-2
 
 kappa = (Rayleigh * Prandtl)^(-1/2)
 nu    = (Rayleigh / Prandtl)^(-1/2)
