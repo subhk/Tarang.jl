@@ -375,7 +375,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # at zero — those are handled by the `ALG_F` override above because
         # the IMEX-RK accumulation formula gives the wrong `1/γ` scaling for
         # inhomogeneous algebraic constraints like `T(z=0) = 1`.
-        F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
+        F_fields = evaluate_rhs_buffered(solver, state_fields, t + dt * c[i])
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
             f_stage = _sp_stage_vector!(sp, "_sp_rk_F_stage_$i", size(sp.M_min, 1), MX0[sp_idx])
