@@ -330,6 +330,16 @@ function _build_initial_value_solver(problem::IVP, timestepper;
         solver.rhs_plan = nothing
     end
 
+    # Populate equation_data F slots for any space-dependent BCs (including
+    # those that are space-only, not in `time_dependent_bcs`). Without this,
+    # the first call to `gather_alg_F!` wouldn't see the evaluated array
+    # values because `_apply_bc_values_to_equations!` is only otherwise
+    # invoked from the step loop when `has_time_dependent_bcs` is true.
+    if has_space_dependent_bcs(problem.bc_manager) ||
+       has_time_dependent_bcs(problem.bc_manager)
+        _apply_bc_values_to_equations!(solver, 0.0)
+    end
+
     return solver
 end
 
@@ -369,36 +379,146 @@ function _merge_boundary_conditions!(problem::Problem)
     @debug "Merged $(length(problem.boundary_conditions)) BCs into equations (total: $(length(problem.equations)))"
 end
 
-"""Inject cached BC values into equation_data F expressions."""
+"""
+    _apply_bc_values_to_equations!(solver, current_time)
+
+Inject the latest BC values into `equation_data["F"]` / `["F_expr"]` for
+every registered BC that is time-dependent, space-dependent, or both.
+
+Scalar/constant results are wrapped in `ConstantOperator`; array-valued
+results are wrapped in `ArrayOperator` — the subproblem-level
+`gather_alg_F!` then dispatches on the operator type (`_evaluate_alg_F`)
+to project the value onto each Fourier mode.
+
+Because BC arrays are swapped in fresh here, we also invalidate the
+per-problem BC-array FFT cache so the next gather call will re-transform.
+"""
 function _apply_bc_values_to_equations!(solver::InitialValueSolver, current_time)
     bc_manager = solver.problem.bc_manager
     equation_data = solver.problem.equation_data
 
     isempty(equation_data) && return
 
-    for bc_idx in bc_manager.time_dependent_bcs
-        eq_idx = get(bc_manager.bc_equation_indices, bc_idx, 0)
-        if eq_idx > 0 && eq_idx <= length(equation_data)
-            value = get_current_bc_value(bc_manager, bc_idx, current_time)
-            if value !== nothing
-                if isa(value, Number)
-                    equation_data[eq_idx]["F"] = ConstantOperator(Float64(value))
-                    equation_data[eq_idx]["F_expr"] = ConstantOperator(Float64(value))
-                elseif isa(value, Tuple)
-                    # Robin BC tuple (alpha, beta, value) - use the value component
-                    robin_val = value[3]
-                    if robin_val !== nothing && isa(robin_val, Number)
-                        equation_data[eq_idx]["F"] = ConstantOperator(Float64(robin_val))
-                        equation_data[eq_idx]["F_expr"] = ConstantOperator(Float64(robin_val))
-                    end
-                elseif isa(value, AbstractArray)
-                    # For array-valued BCs, wrap the array in an ArrayOperator
-                    equation_data[eq_idx]["F"] = ArrayOperator(value)
-                    equation_data[eq_idx]["F_expr"] = ArrayOperator(value)
-                end
-            end
+    # If this problem has space-dependent BCs, refresh their cached values
+    # against the current coordinate fields first. Pure time-dependent BCs
+    # are refreshed in `update_time_dependent_bcs!` which is called by the
+    # stepper before this function.
+    if !isempty(bc_manager.space_dependent_bcs) &&
+       !isempty(bc_manager.coordinate_fields)
+        # `evaluate_space_dependent_bcs!` uses a cache key that includes a
+        # hash of `(coordinates, time)`, so stale entries accumulate over
+        # steps. Drop any entries for the BCs we're about to refresh so the
+        # subsequent evaluation yields exactly one fresh entry each —
+        # `_latest_spatial_bc_value` can then pick it unambiguously.
+        _drop_spatial_cache_entries!(bc_manager)
+        try
+            evaluate_space_dependent_bcs!(bc_manager, bc_manager.coordinate_fields, current_time)
+        catch err
+            @warn "evaluate_space_dependent_bcs! failed: $err" maxlog=3
         end
     end
+
+    # Iterate over the union of time- and space-dependent BC indices so
+    # every non-constant BC gets its equation_data refreshed.
+    bc_indices = Int[]
+    append!(bc_indices, bc_manager.time_dependent_bcs)
+    append!(bc_indices, bc_manager.space_dependent_bcs)
+    unique!(bc_indices)
+
+    for bc_idx in bc_indices
+        eq_idx = get(bc_manager.bc_equation_indices, bc_idx, 0)
+        eq_idx <= 0 || eq_idx > length(equation_data) || _write_bc_value_to_eq!(
+            equation_data[eq_idx], bc_manager, bc_idx, current_time,
+        )
+        # Note: the `||` short-circuit above reads "if invalid eq_idx, skip".
+    end
+
+    # Any ArrayOperator we may have written is a new object: invalidate the
+    # RFFT cache so the next gather will recompute transforms on demand.
+    invalidate_bc_array_cache!(solver.problem)
+end
+
+"""
+    _write_bc_value_to_eq!(eq_data, bc_manager, bc_idx, current_time)
+
+Read the most recent cached BC value and store it as a `ConstantOperator`
+(scalar) or `ArrayOperator` (array) in the equation's `F` / `F_expr` slots.
+
+Handles:
+- Scalar Dirichlet/Neumann: `ConstantOperator(value)`
+- Scalar Robin: uses the value component; skips if it isn't numeric
+- Array Dirichlet/Neumann: `ArrayOperator(value)` (for space-dependent BCs)
+"""
+function _write_bc_value_to_eq!(eq_data::Dict, bc_manager, bc_idx::Int, current_time)
+    bc = bc_manager.conditions[bc_idx]
+
+    # Scalar time-dependent path (cache key `(bc_idx, current_time)`).
+    value = get_current_bc_value(bc_manager, bc_idx, current_time)
+
+    # Fall back to the space-dependent spatial cache if the time cache
+    # didn't yield a value. The cache_key format comes from
+    # `evaluate_space_dependent_bcs!` (`"bc_{idx}_spatial_{hash}"`).
+    if value === nothing && bc_idx in bc_manager.space_dependent_bcs
+        value = _latest_spatial_bc_value(bc_manager, bc_idx)
+    end
+
+    value === nothing && return
+
+    if isa(value, Number)
+        eq_data["F"] = ConstantOperator(Float64(value))
+        eq_data["F_expr"] = ConstantOperator(Float64(value))
+    elseif isa(value, Tuple)
+        # Robin BC tuple (alpha, beta, value) — we only lift the value
+        # component into the RHS; alpha/beta are already baked into the
+        # LHS operator structure at problem build time.
+        robin_val = length(value) >= 3 ? value[3] : nothing
+        if robin_val isa Number
+            eq_data["F"] = ConstantOperator(Float64(robin_val))
+            eq_data["F_expr"] = ConstantOperator(Float64(robin_val))
+        elseif robin_val isa AbstractArray
+            eq_data["F"] = ArrayOperator(robin_val)
+            eq_data["F_expr"] = ArrayOperator(robin_val)
+        end
+    elseif isa(value, AbstractArray)
+        eq_data["F"] = ArrayOperator(value)
+        eq_data["F_expr"] = ArrayOperator(value)
+    end
+    return
+end
+
+"""Clear all spatial (`"bc_{idx}_spatial_..."`) cache entries so that the
+next call to `evaluate_space_dependent_bcs!` leaves exactly one fresh
+entry per BC (which `_latest_spatial_bc_value` can then unambiguously
+pick)."""
+function _drop_spatial_cache_entries!(bc_manager)
+    stale = String[]
+    for (k, _) in bc_manager.bc_cache
+        if k isa String && occursin("_spatial_", k)
+            push!(stale, k)
+        end
+    end
+    for k in stale
+        delete!(bc_manager.bc_cache, k)
+    end
+    return
+end
+
+"""Pick the most recent spatial cache entry for a space-dependent BC."""
+function _latest_spatial_bc_value(bc_manager, bc_idx::Int)
+    # Spatial cache keys look like "bc_{idx}_spatial_{hash}"; scan them
+    # and return the first matching value. For non-Robin BCs this is a
+    # direct array lookup; for Robin BCs we look at the `_value` subkey.
+    prefix = "bc_$(bc_idx)_spatial_"
+    bc = bc_manager.conditions[bc_idx]
+    value_suffix = isa(bc, RobinBC) ? "_value" : ""
+    for (k, v) in bc_manager.bc_cache
+        k isa String || continue
+        startswith(k, prefix) || continue
+        if isempty(value_suffix) || endswith(k, value_suffix)
+            return v
+        end
+    end
+    return nothing
 end
 
 const _InitialValueSolver_constructor = _build_initial_value_solver
