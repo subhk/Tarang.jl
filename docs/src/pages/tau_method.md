@@ -1,579 +1,413 @@
 # The Tau Method for Boundary Conditions
 
-The tau method is a powerful spectral technique for enforcing boundary conditions in differential equations. This page provides a detailed explanation accessible to those new to spectral methods.
+Tarang enforces boundary conditions using the **tau method**, a spectral technique that lets you solve PDEs with non-periodic boundary conditions without modifying the spectral basis. This page explains what the tau method is, how Tarang's implementation works, and how to write code that uses it correctly.
+
+If you have used [Dedalus](https://dedalus-project.readthedocs.io/), the approach here is almost identical: tau fields are added to the state vector, and `lift()` operators inject them into the equations as extra degrees of freedom to match boundary conditions.
 
 ## Why Do We Need the Tau Method?
 
-### The Boundary Condition Problem in Spectral Methods
-
-Consider solving a differential equation like the heat equation:
+Consider the steady diffusion problem:
 
 ```math
-\frac{\partial u}{\partial t} = \kappa \frac{\partial^2 u}{\partial z^2}, \quad z \in [0, 1]
+\frac{d^2 u}{dz^2} = f(z), \quad z \in [-1, 1], \quad u(-1) = u(+1) = 0.
 ```
 
-with boundary conditions u(0,t) = 0 and u(1,t) = 0.
-
-In **finite difference methods**, applying boundary conditions is straightforward: you simply set the values at the boundary grid points:
-```
-u[1] = 0      # at z = 0
-u[N] = 0      # at z = 1
-```
-
-In **spectral methods**, we represent the solution as a sum of basis functions:
-```math
-u(z) = \sum_{n=0}^{N-1} a_n T_n(z)
-```
-
-where $T_n(z)$ are Chebyshev polynomials and $a_n$ are the spectral coefficients we need to find.
-
-**The challenge**: The spectral coefficients $a_n$ are global—they affect the solution everywhere, not just at specific points. We cannot simply "set" boundary values; instead, we must find coefficients that simultaneously:
-1. Satisfy the PDE in the interior
-2. Satisfy the boundary conditions at the edges
-
-### The Core Idea of the Tau Method
-
-The tau method solves this by a clever trade-off:
-
-> **Key Insight**: We have N unknowns (spectral coefficients $a_0$, $a_1$, ..., $a_{N-1}$) and need N equations. Instead of using N equations from the PDE, we use (N-k) equations from the PDE and k equations from the boundary conditions.
-
-For a second-order equation with 2 boundary conditions (k=2):
-- Equations 0 through N-3: Come from the PDE
-- Equations N-2 and N-1: Come from the boundary conditions
-
-## Understanding Through a Simple Example
-
-### Step 1: The Continuous Problem
-
-Solve the steady diffusion equation:
-```math
-\frac{d^2 u}{d z^2} = f(z), \quad u(0) = 0, \quad u(1) = 0
-```
-
-### Step 2: Spectral Representation
-
-Expand $u(z)$ in Chebyshev polynomials:
-```math
-u(z) = \sum_{n=0}^{N-1} a_n T_n(z)
-```
-
-Recall key properties of Chebyshev polynomials:
-- $T_n(z) = cos(n · arccos(z))$ for $z$ ∈ [-1, 1]
-- $T_n(1) = 1$ for all $n$
-- $T_n(-1) = (-1)^n$
-
-### Step 3: The Differentiation Matrix
-
-Taking derivatives in spectral space:
-```math
-\frac{d^2 u}{dz^2} = \sum_{n=0}^{N-1} a_n \frac{d^2 T_n}{dz^2} = \sum_{n=0}^{N-1} b_n T_n(z)
-```
-
-The coefficients $b_n$ are related to a_n through the **differentiation matrix** D²:
-```math
-\mathbf{b} = D^{(2)} \mathbf{a}
-```
-
-### Step 4: The PDE in Spectral Space (Without Tau)
-
-Matching coefficients of $T_n(z)$ on both sides of the PDE gives N equations:
-```math
-\sum_{m=0}^{N-1} D^{(2)}_{nm} a_m = f_n, \quad n = 0, 1, ..., N-1
-```
-
-where $f_n$ are the spectral coefficients of $f(z)$.
-
-**Problem**: These N equations determine all N coefficients, leaving no freedom to satisfy boundary conditions!
-
-### Step 5: The Tau Modification
-
-**Replace the last two equations** with boundary conditions:
-
-Original system:
-```
-Row 0:   D²₀₀·a₀ + D²₀₁·a₁ + ... = f₀    ← PDE
-Row 1:   D²₁₀·a₀ + D²₁₁·a₁ + ... = f₁    ← PDE
-  ⋮
-Row N-3: D²_{N-3,0}·a₀ + ... = f_{N-3}   ← PDE
-Row N-2: D²_{N-2,0}·a₀ + ... = f_{N-2}   ← PDE  ✗ REPLACE
-Row N-1: D²_{N-1,0}·a₀ + ... = f_{N-1}   ← PDE  ✗ REPLACE
-```
-
-Modified system (tau method):
-```
-Row 0:   D²₀₀·a₀ + D²₀₁·a₁ + ... = f₀    ← PDE
-Row 1:   D²₁₀·a₀ + D²₁₁·a₁ + ... = f₁    ← PDE
-  ⋮
-Row N-3: D²_{N-3,0}·a₀ + ... = f_{N-3}   ← PDE
-Row N-2: T₀(-1)·a₀ + T₁(-1)·a₁ + ... = 0  ← BC at z=0
-Row N-1: T₀(1)·a₀ + T₁(1)·a₁ + ... = 0   ← BC at z=1
-```
-
-Since $T_n(1)$ = 1 and $T_n(-1) = (-1)^n$:
-```
-Row N-2: a₀ - a₁ + a₂ - a₃ + ... = 0     ← u(-1) = 0
-Row N-1: a₀ + a₁ + a₂ + a₃ + ... = 0     ← u(+1) = 0
-```
-
-## Visual Representation
-
-```
-┌─────────────────────────────────────────┐
-│           Original System               │
-│  ┌─────────────────────────────────┐   │
-│  │  PDE Row 0                      │   │
-│  │  PDE Row 1                      │   │
-│  │  PDE Row 2                      │   │
-│  │       ⋮                         │   │
-│  │  PDE Row N-3                    │   │
-│  │  PDE Row N-2  ─────┐            │   │
-│  │  PDE Row N-1  ─────┤            │   │
-│  └────────────────────┼────────────┘   │
-│                       │                 │
-│                       ▼                 │
-│           Tau Modified System           │
-│  ┌─────────────────────────────────┐   │
-│  │  PDE Row 0                      │   │
-│  │  PDE Row 1                      │   │
-│  │  PDE Row 2                      │   │
-│  │       ⋮                         │   │
-│  │  PDE Row N-3                    │   │
-│  │  BC at z = 0  (replaces N-2)    │   │
-│  │  BC at z = 1  (replaces N-1)    │   │
-│  └─────────────────────────────────┘   │
-└─────────────────────────────────────────┘
-```
-
-## Why Replace the *Highest* Order Equations?
-
-The spectral coefficients $a_n$ for large $n$ correspond to fine-scale (high-frequency) features of the solution. By modifying these high-order equations:
-
-1. **Smooth solutions are preserved**: Low-order coefficients (capturing the main shape) are determined by the PDE
-2. **Boundary conditions are enforced**: High-order coefficients adjust to match boundaries
-3. **Spectral accuracy maintained**: For smooth solutions, high-order coefficients are already small
-
-This is related to the concept of **tau error**: the residual in the original PDE equations that we replaced. For smooth solutions, this error is spectrally small (decays faster than any polynomial).
-
-## Comparison with Other Methods
-
-### Tau Method vs. Collocation Method
-
-| Aspect | Tau Method | Collocation Method |
-|--------|------------|-------------------|
-| Where BCs applied | In spectral space | At physical grid points |
-| Matrix structure | Modified rows | Natural incorporation |
-| Implementation | Replace equations | Evaluate at boundaries |
-| Accuracy | Spectral | Spectral |
-| Conditioning | Can be challenging | Generally better |
-
-**Collocation** evaluates the PDE at specific grid points (e.g., Gauss-Lobatto points) and applies BCs directly at boundary points. It's often easier to implement but mathematically equivalent for many problems.
-
-### Tau Method vs. Galerkin Method
-
-| Aspect | Tau Method | Galerkin Method |
-|--------|------------|-----------------|
-| Basis functions | Standard (Chebyshev, etc.) | Modified to satisfy BCs |
-| BC handling | Via tau equations | Built into basis |
-| Flexibility | Any BC type | Requires basis construction |
-| Common use | General purpose | Specific BC types |
-
-**Galerkin** uses basis functions that inherently satisfy the boundary conditions. For example, using sin(nπz) automatically satisfies $u(0) = u(1) = 0$. This is elegant but requires constructing appropriate bases for each BC type.
-
-## Types of Boundary Conditions
-
-### Dirichlet (Value Specified)
+In a Chebyshev spectral method, `u` is expanded as
 
 ```math
-u(z_{boundary}) = g
+u(z) = \sum_{n=0}^{N-1} a_n\, T_n(z),
 ```
 
-Tau equation:
-```math
-\sum_{n=0}^{N-1} a_n T_n(z_{boundary}) = g
-```
+and the PDE is projected onto the basis to give an `N × N` linear system in the coefficients ``a_n``. The problem: **this system has no leftover degrees of freedom to enforce the boundary conditions**. All ``N`` unknowns are already determined by the interior equations, but we also need two boundary constraints.
 
-### Neumann (Derivative Specified)
+The tau method solves this by **adding extra unknowns** (the *tau fields*) that act as corrections designed to make the boundary conditions hold. The classical formulation, due to Lanczos (1938), replaces the highest-order rows of the spectral system with BC rows — but that makes the interior equation different at those rows, which is awkward for nonlinear and time-dependent problems.
 
-```math
-\frac{du}{dz}\bigg|_{z_{boundary}} = g
-```
-
-Tau equation:
-```math
-\sum_{n=0}^{N-1} a_n T'_n(z_{boundary}) = g
-```
-
-where $T'_n(z)$ is the derivative of the Chebyshev polynomial.
-
-### Robin (Mixed)
+Modern spectral codes (Dedalus, Tarang) use a cleaner variant: instead of *replacing* rows, they *add* a tau term to the equation itself:
 
 ```math
-\alpha u(z_{boundary}) + \beta \frac{du}{dz}\bigg|_{z_{boundary}} = g
+\mathcal{L}[u] \;+\; \tau_1\,\phi_1(z) \;+\; \tau_2\,\phi_2(z) \;=\; f(z),
 ```
 
-Tau equation:
-```math
-\alpha \sum_{n=0}^{N-1} a_n T_n(z_{boundary}) + \beta \sum_{n=0}^{N-1} a_n T'_n(z_{boundary}) = g
-```
+where ``\phi_1, \phi_2`` are chosen basis functions that live in a "lift basis". The tau scalars ``\tau_1, \tau_2`` become new unknowns in the system, and the boundary conditions become new equation rows that link them to the state. The interior of the PDE is untouched; the tau corrections only perturb the equation at a small number of high spectral modes, and for smooth solutions the required ``\tau_k`` are spectrally small.
 
-## Implementation in Tarang.jl
+That is exactly how Tarang implements BCs.
 
-Tarang.jl uses an **explicit tau-method approach**: users must explicitly create tau fields and add them to equations using the `lift()` operator. This design provides full transparency and control over how boundary conditions interact with your equations.
+## Quick-Start Example
 
-### Required Steps
-
-To apply boundary conditions in Tarang.jl, you must:
-
-1. **Create tau fields** - One for each boundary condition
-2. **Add tau fields to the problem** - Include them as variables
-3. **Add lift(tau) terms to equations** - Use the `lift()` operator
-4. **Specify tau_field in boundary conditions** - Link BCs to their tau fields
-
-### Complete Example
+Here's the smallest complete example — a 1D steady heat equation with homogeneous Dirichlet BCs:
 
 ```julia
 using Tarang
 
-# Create domain
-coords = CartesianCoordinates("x", "z")
-dist = Distributor(coords)
+coords = CartesianCoordinates("z")
+dist   = Distributor(coords; dtype=Float64)
 
-xbasis = RealFourier(coords["x"]; size=64, bounds=(0, 2π))
-zbasis = ChebyshevT(coords["z"]; size=64, bounds=(0, 1))
+zbasis = ChebyshevT(coords["z"]; size=64, bounds=(-1.0, 1.0))
+lift_basis = derivative_basis(zbasis)   # ChebyshevU of size 64
 
-# Main field
-u = ScalarField(dist, "u", (xbasis, zbasis))
+# State field
+u = ScalarField(dist, "u", (zbasis,))
 
-# Step 1: Create tau fields (one per boundary condition)
-# Tau fields live on the "other" bases (here: xbasis only, not zbasis)
-tau_u1 = ScalarField(dist, "tau_u1", (xbasis,))  # For BC at z=0
-tau_u2 = ScalarField(dist, "tau_u2", (xbasis,))  # For BC at z=1
+# Tau fields — one per boundary. They have NO bases here (the problem is
+# 1D and the coupled direction is z, so the tau drops z and has nothing left).
+tau_u1 = ScalarField(dist, "tau_u1", ())
+tau_u2 = ScalarField(dist, "tau_u2", ())
 
-# Step 2: Add all fields (including tau) to problem
 problem = LBVP([u, tau_u1, tau_u2])
 
-# Step 3: Add equation with lift() operators
-# The lift() terms place tau values at specific spectral modes
+# The equation carries its own tau corrections via lift():
 add_equation!(problem,
-    "lap(u) + lift(tau_u1, -1) + lift(tau_u2, -2) = f"
-)
+    "∂²(u)/∂z² + lift(tau_u1, -1) + lift(tau_u2, -2) = f")
 
-# Step 4: Add boundary conditions
-add_bc!(problem, "u(z=0) = 0")
-add_bc!(problem, "u(z=1) = 0")
+add_bc!(problem, "u(z=-1) = 0")
+add_bc!(problem, "u(z=1)  = 0")
 
-# Solve
 solver = BoundaryValueSolver(problem)
 solve!(solver)
 ```
 
-### The `lift()` Operator
+Notice that:
 
-The `lift()` operator "lifts" a lower-dimensional tau field into the full domain by placing its values at specific spectral modes:
+1. Tau fields (`tau_u1`, `tau_u2`) are **added to the state vector**, not computed from the state afterwards.
+2. The equation itself carries `lift(tau, -1)` and `lift(tau, -2)` terms.
+3. The BCs are plain-looking equations (`u(z=-1) = 0`) — Tarang converts each into an algebraic row that constrains the tau fields.
+
+The solver determines `u`, `tau_u1`, and `tau_u2` **simultaneously** in a single linear solve.
+
+## The `lift` Operator
+
+`lift` is how a tau field enters an equation:
 
 ```julia
-lift(tau_field, n)               # auto-detects basis (recommended)
-lift(tau_field, basis, n)        # explicit basis
+lift(tau, basis, n)   # full form:  explicit lift basis
+lift(tau, n)          # short form: auto-detects the lift basis
 ```
 
-The 2-argument form auto-detects the non-periodic basis (Chebyshev/Legendre) that the tau field is missing.
+- **`tau`** is the tau field (a `ScalarField` or `VectorField` whose bases are a strict subset of the state field's bases — it's missing the coupled direction).
+- **`basis`** is the *lift basis*. For Chebyshev-T state fields, this is almost always `derivative_basis(zbasis)`, which returns ChebyshevU of the same size. See [Why the Derivative Basis?](#why-the-derivative-basis) below.
+- **`n`** is an integer mode index. `n = -1` is the last mode of `basis`, `n = -2` is the second-to-last, and so on. For ChebyshevU of size `N`, `-1` picks `U_{N-1}` and `-2` picks `U_{N-2}`.
 
-**Mode indexing (`n`):**
-- `n = -1` → Last mode (N-1)
-- `n = -2` → Second-to-last mode (N-2)
+The short form `lift(tau, n)` inspects `tau.dist.layouts` to find a non-periodic basis that the tau field is missing compared to the full state, and uses that as the lift basis. This works in most situations, but being explicit is always safe.
 
-### Why Explicit Tau Fields?
+### What `lift(tau, basis, n)` actually computes
 
-Explicit tau fields have several advantages:
+`lift(tau, basis, n)` produces a term that, when added to the equation, contributes
 
-1. **Transparency**: You see exactly how BCs interact with equations
-2. **Debugging**: Easy to inspect tau field values after solving
-3. **Flexibility**: Custom tau arrangements for coupled systems
-4. **Consistency**: Same pattern for all problem types (IVP, BVP, EVP)
-5. **Documentation**: Code is self-documenting about BC structure
-
-### What Happens Internally
-
-1. **Build PDE matrix**: Constructs differentiation matrices for all operators
-2. **Process lift operators**: Inserts tau contributions at specified spectral modes
-3. **Build BC equations**: Constructs boundary condition rows linking to tau fields
-4. **Assemble system**: Combines PDE + lift + BC into linear system
-5. **Solve**: Standard linear algebra solve
-6. **Extract solution**: Both u and tau values are solved simultaneously
-
-### Checking Boundary Condition Satisfaction
-
-```julia
-# After solving, verify BCs are satisfied by checking boundary values
-ensure_layout!(u, :g)
-grid = local_grids(dist, xbasis, zbasis)
-u_data = get_grid_data(u)
-
-# Check values at z boundaries (first and last z-index on Chebyshev grid)
-@assert maximum(abs.(u_data[:, 1])) < 1e-10 "Left BC not satisfied"
-@assert maximum(abs.(u_data[:, end])) < 1e-10 "Right BC not satisfied"
-
-# You can also inspect tau field values
-println("tau_u1 values: ", get_coeff_data(tau_u1))
-println("tau_u2 values: ", get_coeff_data(tau_u2))
+```math
+\tau \cdot \phi_n(z)
 ```
 
-## Number of Tau Terms Required
+where ``\phi_n`` is the n-th basis function of `basis` (with negative indices counting from the end). For Chebyshev-T state fields, `basis = derivative_basis(zbasis)` is ChebyshevU, so
 
-The number of tau terms equals the number of boundary conditions, which depends on the order of the differential operator:
-
-| Operator | Order | BCs Needed | Tau Terms |
-|----------|-------|------------|-----------|
-| ∂u/∂z | 1st | 1 | 1 |
-| ∂²u/∂z² | 2nd | 2 | 2 |
-| ∂⁴u/∂z⁴ | 4th | 4 | 4 |
-| ∇² (2D) | 2nd in each | 2 per direction | 2 per direction |
-
-## Pressure in Incompressible Flows
-
-When solving incompressible Navier-Stokes equations, the pressure requires special treatment because it appears only as a gradient. The divergence equation `div(u) = 0` becomes degenerate at the mean Fourier mode (k=0).
-
-### The Tau Solution
-
-Add a `tau_p` term to the continuity equation to remove the mathematical degeneracy:
-
-```julia
-# Continuity equation with tau_p
-add_equation!(problem, "div(u) + tau_p = 0")
-
-# Boundary conditions
-add_bc!(problem, "u(z=0) = 0")
-add_bc!(problem, "u(z=1) = 0")
+```math
+\text{lift}(\tau, \text{lift\_basis}, -1) \;\longrightarrow\; \tau \cdot U_{N-1}(z)
 ```
 
-**Why `tau_p` is needed:**
-- The divergence equation `div(u) = 0` has a null space at k=0
-- `tau_p` is a scalar constant that absorbs this degeneracy
-- Without it, the system matrix becomes singular
+This is a rank-1 perturbation of the original equation: it adds a single basis function, scaled by the unknown ``\tau``, to the residual. When the linear system is solved, ``\tau`` takes whatever value is needed to satisfy the BC row, and the interior of the PDE is perturbed by at most that single high-order mode — spectrally small for smooth solutions.
 
-### Complete Example
+### Why the derivative basis?
+
+In principle you could lift into ChebyshevT directly (`lift(tau, zbasis, -1)` → ``\tau \cdot T_{N-1}(z)``), and this is mathematically valid. But the **derivative basis** (ChebyshevU for ChebyshevT) gives dramatically better conditioning.
+
+Here's why. Differentiation maps ChebyshevT to ChebyshevU:
+
+```math
+\frac{d T_n}{dz} = n \, U_{n-1}(z).
+```
+
+In a first-order formulation (see below), the derivative `∂u/∂z` of a ChebyshevT state lives naturally in the ChebyshevU space. If you lift tau into that same ChebyshevU space, the tau correction is applied at the "right level" — no extra differentiation is needed to combine it with the rest of the equation. This avoids numerical cancellation and keeps the system well-conditioned even at high resolution.
+
+For the 2nd-order formulation `∂²u/∂z² + lift(tau, -1)`, the same reasoning works differently: `∂²/∂z²` takes T → U → U-shifted, and the ChebyshevU lift basis lines up with the result space.
+
+**Rule of thumb**: always use `derivative_basis(zbasis)` as the lift basis for Chebyshev-T state fields. The short form `lift(tau, -1)` auto-selects it anyway when it can.
+
+## Boundary Conditions as Algebraic Constraint Rows
+
+When you write
 
 ```julia
-# Vector velocity field
-u = VectorField(dist, coords, "u", (x_basis, z_basis))
-p = ScalarField(dist, "p", (x_basis, z_basis))
+add_bc!(problem, "u(z=-1) = 0")
+```
 
-# Tau fields
-tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))
-tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))
-tau_p = ScalarField(dist, "tau_p", ())  # Scalar constant
+Tarang produces a new equation row that looks like
 
-# Problem with all fields
-problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+```math
+\sum_{n=0}^{N-1} a_n\, T_n(-1) \;=\; 0,
+```
+
+i.e. a linear combination of `u`'s coefficients that equals the boundary value. **This row is added to the system, not substituted in.** It's an *algebraic* equation — there is no time derivative (no `M` term in the `M·dX/dt + L·X = F` formulation). In the linear-algebra picture:
+
+- `u` contributes `Nz` rows (PDE interior) + BC rows
+- `tau_u1`, `tau_u2` contribute columns (one each, at the lift modes)
+- BC rows have zero `M` entries → they're pure algebraic constraints
+- The combined LHS matrix is square because `(PDE rows + BC rows) = (state cols + tau cols)`
+
+This square-system condition is enforced automatically when you declare the right number of tau fields to match the number of BCs. If you miss a BC you'll get a singular / non-square system at solver-build time.
+
+### DAE-style handling in IVP steppers
+
+For **initial-value problems**, BC rows have `M_row = 0`, which makes the full system a **differential-algebraic equation** (DAE), not an ODE. Tarang's subproblem stepper handles this correctly: at each IMEX-RK stage (or each multistep update), the solver assembles the stage RHS from the accumulated `dt·Σ(AᴱF − Aⁱ·L·X)` formula for interior rows and **overrides** BC rows with `dt·a_ii·F_BC` so that after the solve they yield exactly `L_row·X = F_BC`.
+
+This override is important because the raw accumulated-RHS formula produces a wrong `1/γ` scaling factor for inhomogeneous algebraic constraints. Without it, a BC like `T(z=0) = 1` would be enforced as `T(z=0) = 1/γ ≈ 3.41` for RK222. You do not have to do anything to enable this — it's built into the `step_subproblem_rk!` and `step_subproblem_multistep!` steppers.
+
+## First-Order Formulation (Recommended)
+
+For time-dependent problems and anything involving the Navier–Stokes equations, the **first-order formulation** is the right default. Instead of writing a 2nd-order operator like `Δ(u)` directly, introduce an auxiliary gradient field with a tau correction:
+
+```julia
+grad_u = grad(u) + ez * lift(tau_u1, -1)
+```
+
+Now `grad_u` is an "augmented gradient" that lives in the derivative (ChebyshevU) space and carries its own tau. Second derivatives become `div(grad_u)` rather than `Δ(u)`:
+
+```julia
+add_equation!(problem, "∂t(u) - ν*div(grad_u) + ∇(p) + lift(tau_u2, -1) = -u⋅∇(u)")
+```
+
+Why this is better than the 2nd-order form:
+
+| Aspect | 2nd-order (`Δ(u)`) | First-order (`div(grad_u)`) |
+|---|---|---|
+| Tau fields | 1 per equation | 2 per equation (one in grad, one in ∂t) |
+| Differentiation matrices | Powers of `D` (ill-conditioned) | Products of first-order `D` (better) |
+| Boundary enforcement | Via a single lift mode | Split: one tau in grad, one in the evolution |
+| High-resolution behavior | Conditioning degrades as `N²` | Conditioning degrades as `N` |
+| Recommended | Prototyping / low `N` | Production / any `N > 64` |
+
+The convention we use throughout Tarang's examples is:
+
+- `tau_u1` — correction added inside `grad_u`, one-dimensional (xbasis only)
+- `tau_u2` — correction added to the evolution equation directly, one-dimensional (xbasis only)
+
+For a vector field `u`, both `tau_u1` and `tau_u2` are VectorFields too (one component per velocity component).
+
+## Worked Example: 2D Rayleigh–Bénard Convection
+
+Here is the full first-order RBC setup, which is the `examples/ivp/rayleigh_benard_2d.jl` example in the repository. This is the **canonical pattern** to copy for any 2D channel-flow problem with non-periodic BCs.
+
+```julia
+using Tarang
+
+# Domain
+Lx, Lz = 4.0, 1.0
+Nx, Nz = 256, 64
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+zbasis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz), dealias=3/2)
+
+domain = Domain(dist, (xbasis, zbasis))
+
+# State variables: pressure, temperature, velocity
+p = ScalarField(domain, "p")
+T = ScalarField(domain, "T")
+u = VectorField(domain, "u")
+
+# Tau fields. Each lives on `(xbasis,)` only — the coupled direction (z)
+# is dropped because the tau correction lives at a single z mode.
+#
+# tau_p:  scalar, no bases — gauge for the pressure constraint
+# tau_T1: gradient-substitution correction for T
+# tau_T2: evolution-equation correction for T
+# tau_u1, tau_u2: ditto for each velocity component (so they are VectorFields)
+tau_p  = ScalarField(dist, "tau_p",  (),         Float64)
+tau_T1 = ScalarField(dist, "tau_T1", (xbasis,),  Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (xbasis,),  Float64)
+tau_u1 = VectorField(dist, coords, "tau_u1", (xbasis,), Float64)
+tau_u2 = VectorField(dist, coords, "tau_u2", (xbasis,), Float64)
+
+# First-order substitutions
+ex, ez = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zbasis, 1)
+τ_lift(A) = lift(A, lift_basis, -1)
+
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
+
+# Problem declaration includes ALL tau fields as state
+problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+
+add_parameters!(problem,
+    nu=Pr, buoy=Ra*Pr, ez=ez,
+    grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 
 # Equations
-add_equation!(problem, "div(u) + tau_p = 0")  # tau_p removes degeneracy
-add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2, -1) = -u⋅∇(u)")
-
-# Boundary conditions
-add_bc!(problem, "u(z=0) = 0")
-add_bc!(problem, "u(z=1) = 0")
-```
-
-**Note:** The pressure is determined up to an arbitrary constant. For most simulations, only the pressure gradient matters, so this ambiguity doesn't affect the physics. If you need absolute pressure values, you can manually subtract the mean after solving.
-
-## First-Order Formulation with Derivative Basis
-
-For better conditioning and stability, it is recommended to convert second-order equations to first-order form using auxiliary gradient variables with tau corrections.
-
-### The Derivative Basis
-
-When differentiating Chebyshev T polynomials, the result is expressed in terms of Chebyshev U polynomials (the "derivative basis"):
-
-```julia
-# Get the derivative basis for ChebyshevT
-z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
-lift_basis = derivative_basis(z_basis)  # Returns ChebyshevU
-```
-
-This is mathematically rigorous: ∂/∂z(T_n) is proportional to U_{n-1}.
-
-### First-Order Formulation
-
-Instead of directly using the Laplacian, introduce an auxiliary gradient variable with tau correction:
-
-```julia
-# Tau fields
-tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # For gradient substitution
-tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # For evolution equation
-
-# Lift basis from derivative basis
-lift_basis = derivative_basis(z_basis)
-
-# First-order gradient substitution with tau correction
-add_parameters!(problem, grad_u="∇(u) + ez*lift(tau_u1, -1)")
-
-# Continuity: trace(grad_u) + tau_p = 0
 add_equation!(problem, "trace(grad_u) + tau_p = 0")
+add_equation!(problem, "∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)")
+add_equation!(problem,
+    "∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)")
 
-# Momentum using div(grad_u) instead of Δ(u)
-add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) + lift(tau_u2, -1) = -u⋅∇(u)")
+# Boundary conditions (one per algebraic constraint row)
+add_bc!(problem, "T(z=0)  = 1")       # hot bottom wall
+add_bc!(problem, "T(z=Lz) = 0")       # cold top wall
+add_bc!(problem, "u(z=0)  = 0")       # no-slip
+add_bc!(problem, "u(z=Lz) = 0")       # no-slip
+add_bc!(problem, "integ(p) = 0")      # pressure gauge
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
 ```
 
-### Why First-Order is Better
+**Pattern summary**:
 
-| Aspect | Second-Order (Δ) | First-Order (div(grad)) |
-|--------|------------------|-------------------------|
-| Tau fields needed | 1 per equation | 2 per equation |
-| Matrix conditioning | Can be poor for high N | Better conditioning |
-| BC flexibility | Standard | More control |
-| Recommended for production | No | Yes |
+- **5 BCs** (2 for `T`, 2 for `u`, 1 gauge for `p`) → **5 tau scalars per Fourier mode** (`tau_T1`, `tau_T2`, two components each of `tau_u1` and `tau_u2`, and `tau_p`).
+- **Each tau field drops the coupled direction** (`xbasis` only, not `zbasis`).
+- **`tau_p` is a 0-D scalar** (no bases) — it's a single number per Fourier mode, used as a gauge constraint, not a per-x correction.
+- **The pressure gauge `integ(p) = 0`** is an algebraic constraint on the mean; it lives alongside the other BCs.
 
-### When to Use Each
+## Pressure Gauge and Valid-Mode Filtering
 
-**Second-Order (simpler)**:
-- Quick prototyping
-- Moderate resolution (N < 128)
-- Low-order problems (2nd order PDEs)
+In incompressible flow the pressure is only defined up to a constant, so continuity `trace(grad_u) = 0` is **rank-deficient** by one at every Fourier mode. Tarang handles this with two different mechanisms that are sometimes confused:
 
-**First-Order (recommended)**:
-- Production runs
-- High resolution (N > 128)
-- High-order problems (4th order, biharmonic)
-- When conditioning issues arise
+**1. Pressure gauge (a user-visible tau)**. You add `tau_p` to continuity and provide a gauge-fixing BC like `integ(p) = 0`:
 
-## Mathematical Details
-
-### The Tau Error
-
-By replacing PDE equations with BCs, we introduce a "tau error" in the original equations. The modified solution u_τ satisfies:
-
-```math
-\mathcal{L}[u_\tau] = f + \sum_{k=1}^{K} \tau_k \phi_k(z)
+```julia
+add_equation!(problem, "trace(grad_u) + tau_p = 0")
+add_bc!(problem, "integ(p) = 0")
 ```
 
-where:
-- L is the differential operator
-- τ_k are the tau corrections (unknown)
-- φ_k(z) are basis functions (typically highest-order Chebyshev polynomials)
+`tau_p` is a single scalar per Fourier mode (or a single scalar total, depending on how you declare it). It absorbs the pressure-gauge degree of freedom, and the `integ(p) = 0` row fixes its value.
 
-The key result: **For smooth solutions, the tau error is spectrally small**—it decays faster than any polynomial in N.
+**2. Valid-mode filtering (invisible, done by the solver)**. At the `(kx=0, ky=0, ...)` DC Fourier mode, the integral constraint `integ(p) = 0` produces a **zero row** in the raw LHS matrix (because `integ` of a non-DC Fourier mode is zero, and the DC mode's integ is well-defined). Similarly, `trace(grad_u) = 0` at DC is automatically satisfied by the no-slip BCs, producing another zero row.
 
-### Condition Number Considerations
+The solver detects these zero rows during matrix assembly (`subsystems.jl`'s `build_matrices!`) and pairs each with the least-used 0-D tau column, dropping both the row and the column. The result is a smaller square system that the sparse LU can factorize cleanly.
 
-The tau method can lead to ill-conditioned matrices, especially for:
-- High-order problems (4th order and above)
-- Large N (many spectral modes)
-- Stiff problems
+**You do not have to do anything to enable this.** Just declare `tau_p` and the `integ(p) = 0` BC, and the valid-mode filter takes care of the rest. The take-away is: if you ever see a `"129 singular pencils"` or `"non-square filtered system"` warning, it usually means a BC is missing, a tau field is missing, or the eq_size and state_size don't match.
 
-Strategies to improve conditioning:
-1. **Row scaling**: Scale tau rows to have similar magnitude to PDE rows
-2. **Preconditioning**: Use appropriate preconditioners
-3. **Alternative formulations**: Use integral formulations or different bases
+## Number of Tau Terms
 
-## Worked Example: Heat Equation
+The number of tau terms must match the total number of boundary conditions (including gauge conditions):
 
-### Problem Setup
+| PDE order in coupled direction | BCs needed | Tau terms per equation |
+|---|---|---|
+| 1st (∂u/∂z) | 1 | 1 |
+| 2nd (∂²u/∂z², via first-order form) | 2 | 2 (one in grad, one in evolution) |
+| 4th (biharmonic) | 4 | 4 |
 
-```math
-\frac{\partial u}{\partial t} = \nu \frac{\partial^2 u}{\partial z^2}, \quad z \in [-1, 1]
+**In a 2D problem (x-Fourier, z-coupled)** each equation carries tau corrections only in the `z` direction — **not "2 per direction"**. The Fourier `x` direction is periodic and needs no tau terms. Only the coupled `z` direction contributes.
+
+**Vector equations need vector tau fields.** In RBC, `u` is a 2-component velocity, so `tau_u1` and `tau_u2` are `VectorField`s (one scalar per component per Fourier mode).
+
+## Time- and Space-Dependent BCs
+
+Tarang supports boundary conditions whose value varies in time, space, or both. They are refreshed by the stepper:
+
+- **Time-dependent BCs** (e.g. `T(z=0) = sin(t)`): the RK stepper re-evaluates the BC value at each stage time `t + c[i]*dt`, so multi-stage methods retain their full formal order of accuracy for rapidly-varying BCs.
+- **Space-dependent BCs** (e.g. `T(z=0) = sin(2*pi*x/Lx)`): at solver-build time the BC expression is evaluated on the **global** coordinate grid, and the resulting array is projected onto the Fourier modes via an unnormalized `FFTW.rfft`. Each subproblem picks its own mode from the cached coefficient array.
+- **Space+time BCs** (e.g. `T(z=0) = sin(2*pi*x/Lx) * cos(2*pi*t)`): combined — re-projected on every stage.
+
+You don't need to register coordinate fields manually. The solver auto-registers global grid arrays for every Fourier/Chebyshev axis under its element label (`"x"`, `"y"`, `"z"`, ...), so BC string expressions can reference those coordinates directly:
+
+```julia
+add_bc!(problem, "T(z=0) = 1 + 0.1*sin(2*pi*x/Lx)")
 ```
 
-with:
-- u(-1, t) = 0 (left boundary)
-- u(+1, t) = 0 (right boundary)
-- u(z, 0) = sin(πz) (initial condition)
+Under MPI, every rank evaluates the BC expression on the full (global) grid and computes a local FFT — no inter-rank communication is needed because all ranks produce identical coefficient arrays.
 
-### Spectral Formulation
+## Inspecting BC Satisfaction
 
-1. Expand: u(z,t) = Σ aₙ(t) Tₙ(z)
+After a solve, you can verify that the BCs are actually being enforced:
 
-2. Galerkin projection of PDE:
-```math
-\frac{d a_n}{dt} = \nu \sum_m D^{(2)}_{nm} a_m, \quad n = 0, ..., N-3
+```julia
+# After solve!()
+ensure_layout!(u, :g)
+u_data = get_grid_data(u)
+
+# For Chebyshev-T, the Gauss-Lobatto grid includes the endpoints.
+# u_data[:, 1]    is the solution at z = z_min (first Cheb grid point)
+# u_data[:, end]  is the solution at z = z_max (last Cheb grid point)
+@assert maximum(abs.(u_data[:, 1]))   < 1e-10  "Bottom BC not satisfied"
+@assert maximum(abs.(u_data[:, end])) < 1e-10  "Top BC not satisfied"
+
+# The tau field values tell you how large the correction was. For smooth
+# solutions these should be "spectrally small" — decaying with N.
+tau_data = get_coeff_data(tau_u2)
+@info "tau_u2 magnitude: $(maximum(abs.(tau_data)))"
 ```
 
-3. Boundary conditions (tau):
-```math
-\sum_m a_m T_m(-1) = 0 \quad \text{(row N-2)}
-```
-```math
-\sum_m a_m T_m(+1) = 0 \quad \text{(row N-1)}
-```
+For time-dependent problems, check BC satisfaction inside a callback:
 
-### Matrix Form
-
-```math
-\frac{d\mathbf{a}}{dt} = \mathbf{M}^{-1} \mathbf{L} \mathbf{a}
+```julia
+run!(solver;
+     stop_time=25.0,
+     callbacks=[on_interval(10) do s
+         ensure_layout!(T, :g)
+         T_data = get_grid_data(T)
+         @info "T(z=0) residual: $(maximum(abs.(T_data[:, 1] .- 1.0)))"
+     end])
 ```
 
-where M is the tau-modified mass matrix and L is the tau-modified operator.
+## Common Pitfalls
 
-## Common Pitfalls and Solutions
+### 1. Wrong number of tau fields
 
-### Pitfall 1: Wrong Number of BCs
+If you have two wall BCs on `u` but only declare one tau field in the evolution equation, the matrix system is under-determined and you'll see `singular pencils` or `non-square filtered system` warnings at solver build time.
 
-**Problem**: Specifying too few or too many boundary conditions.
+**Fix**: count the BCs (including gauge conditions like `integ(p) = 0`), and declare one tau field (or tau component for vector fields) per BC.
 
-**Solution**: Match the number of BCs to the operator order in each direction.
+### 2. Missing `lift()` term in the equation
 
-### Pitfall 2: Incompatible BCs
+A tau field declared in `problem.variables` but never referenced in any equation contributes a zero column to the LHS matrix, making the system rank-deficient.
 
-**Problem**: Boundary conditions that are inconsistent with the PDE.
+**Fix**: every tau field must appear inside exactly one `lift()` (or `τ_lift()` substitution) somewhere in the equation RHS.
 
-**Solution**: Check physical consistency; ensure BCs don't over-constrain the problem.
+### 3. Wrong lift basis
 
-### Pitfall 3: Ill-Conditioning
+Using `lift(tau, zbasis, -1)` instead of `lift(tau, derivative_basis(zbasis), -1)` works mathematically but conditions the system poorly at high resolution. Symptoms: solutions look correct at `Nz=32` but diverge or develop noise at `Nz=128`.
 
-**Problem**: Matrix becomes nearly singular for large N.
+**Fix**: always use `derivative_basis(zbasis)` (or the short form `lift(tau, -1)` which auto-selects it).
 
-**Solution**: Use row scaling, consider alternative formulations, or reduce N.
+### 4. Tau field bases don't match
 
-### Pitfall 4: Tau Error Accumulation
+A tau field must live on the *complement* of the state field's bases — the state's bases **minus the coupled direction**. For a 2D state on `(xbasis, zbasis)`, the tau lives on `(xbasis,)`; for a 0-D gauge like `tau_p` it's `()`.
 
-**Problem**: In time-dependent problems, tau errors can accumulate.
+If you accidentally declare `tau_u1 = ScalarField(dist, "tau_u1", (xbasis, zbasis))` (same bases as `u`), `lift(tau_u1, -1)` will have nothing to lift into and will throw a construction error.
 
-**Solution**: Use appropriate time-stepping schemes; IMEX methods handle this well.
+**Fix**: drop the Chebyshev axis when declaring tau fields.
+
+### 5. Non-square system at DC mode
+
+Most non-square warnings at the DC Fourier mode come from a missing gauge BC like `integ(p) = 0`. The valid-mode filter can only drop a zero row if there's a paired 0-D tau column (like `tau_p`) to drop along with it.
+
+**Fix**: make sure every PDE with a gauge ambiguity has both a `tau_*` field and a corresponding `integ()` BC.
+
+### 6. BC F value not reaching the stepper
+
+For inhomogeneous BCs like `T(z=0) = 1`, the stepper has to carry the value `1` through the stage RHS assembly. This happens automatically through `gather_alg_F!` + the `apply_bc_override!` path in `step_subproblem_rk!`, but only if the BC equation has a non-zero `F` expression in `equation_data[eq_idx]["F"]`.
+
+**Symptom of the bug**: `max|T|` decays to zero over time even though `T(z=0) = 1` is declared, OR `max|T|` sticks at `1/γ = 2+√2 ≈ 3.414` (the classical 1/γ scaling factor from RK222's implicit coefficient).
+
+**If you see this**: confirm you're on a recent version — this was a regression fixed after the subproblem-architecture rewrite. The `apply_bc_override!` override is what enforces `L_row·X = F_BC` at every stage regardless of accumulation history.
 
 ## Historical Note
 
-The tau method was introduced by **Cornelius Lanczos** in 1938 as a way to obtain approximate solutions to differential equations using polynomial expansions. It was later refined and popularized in the context of spectral methods by researchers including **Steven Orszag** and **David Gottlieb** in the 1970s-80s.
+The tau method was introduced by **Cornelius Lanczos** in 1938 as an approximation technique: rather than solving a PDE exactly, he sought polynomial approximations that satisfied the PDE with a small residual (the "tau error"). It was refined for spectral methods by **Steven Orszag**, **David Gottlieb**, and others in the 1970s–80s, and adapted to modern lift-based formulations by **Keaton Burns et al.** in the Dedalus project in the 2010s.
 
-The name "tau" (τ) comes from Lanczos's notation for the error terms introduced by truncating the polynomial expansion and enforcing boundary conditions.
+The name "tau" (τ) comes from Lanczos's notation for the residual/correction terms introduced when truncating the polynomial expansion and enforcing boundary conditions.
 
 ## References
 
 ### Textbooks
 
-1. **Canuto, C., Hussaini, M.Y., Quarteroni, A., & Zang, T.A.** (2006). *Spectral Methods: Fundamentals in Single Domains*. Springer.
-   - Chapter 3: Tau and Galerkin methods in detail
-   - Excellent mathematical rigor
+1. **Canuto, C., Hussaini, M. Y., Quarteroni, A., & Zang, T. A.** (2006). *Spectral Methods: Fundamentals in Single Domains*. Springer. — Rigorous treatment of tau and Galerkin methods.
 
-2. **Boyd, J.P.** (2001). *Chebyshev and Fourier Spectral Methods* (2nd ed.). Dover.
-   - Chapter 6: Boundary conditions
-   - Freely available online, very accessible
+2. **Boyd, J. P.** (2001). *Chebyshev and Fourier Spectral Methods* (2nd ed.). Dover. — Very readable; freely available online.
 
-3. **Trefethen, L.N.** (2000). *Spectral Methods in MATLAB*. SIAM.
-   - Chapter 7: Boundary value problems
-   - Practical implementation focus
+3. **Trefethen, L. N.** (2000). *Spectral Methods in MATLAB*. SIAM. — Practical, code-oriented.
 
-4. **Peyret, R.** (2002). *Spectral Methods for Incompressible Viscous Flow*. Springer.
-   - Application to fluid dynamics
-   - Detailed treatment of Navier-Stokes
+4. **Peyret, R.** (2002). *Spectral Methods for Incompressible Viscous Flow*. Springer. — Detailed treatment of Navier–Stokes with spectral methods.
 
-### Key Papers
+### Key papers
 
-5. **Lanczos, C.** (1938). "Trigonometric interpolation of empirical and analytical functions." *Journal of Mathematics and Physics*, 17(1-4), 123-199.
-   - Original tau method paper
+5. **Lanczos, C.** (1938). "Trigonometric interpolation of empirical and analytical functions." *Journal of Mathematics and Physics*, 17(1–4), 123–199. — Original tau method paper.
 
-6. **Gottlieb, D., & Orszag, S.A.** (1977). *Numerical Analysis of Spectral Methods: Theory and Applications*. SIAM.
-   - Classic reference for spectral methods
+6. **Burns, K. J., Vasil, G. M., Oishi, J. S., Lecoanet, D., & Brown, B. P.** (2020). "Dedalus: A flexible framework for numerical simulations with spectral methods." *Physical Review Research*, 2, 023068. — Modern lift-based tau method as implemented in Tarang and Dedalus.
 
-7. **Orszag, S.A.** (1971). "Accurate solution of the Orr-Sommerfeld stability equation." *Journal of Fluid Mechanics*, 50(4), 689-703.
-   - Influential application to hydrodynamic stability
-
-### Online Resources
-
-8. **Lloyd N. Trefethen's Spectral Methods Course Notes**: Available at [https://people.maths.ox.ac.uk/trefethen/](https://people.maths.ox.ac.uk/trefethen/)
+7. **Orszag, S. A.** (1971). "Accurate solution of the Orr-Sommerfeld stability equation." *Journal of Fluid Mechanics*, 50(4), 689–703. — Classic application to hydrodynamic stability.
 
 ## See Also
 
-- [Boundary Conditions Tutorial](../tutorials/boundary_conditions.md): Practical BC examples
-- [Bases](bases.md): Spectral bases (Chebyshev, Fourier, etc.)
-- [Solvers](solvers.md): Using the tau method in solvers
-- [API: Problems](../api/problems.md): Adding boundary conditions programmatically
+- [Boundary Conditions Tutorial](../tutorials/boundary_conditions.md): step-by-step BC examples
+- [Bases](bases.md): spectral bases (Chebyshev, Fourier, Legendre, Jacobi)
+- [Solvers](solvers.md): using IVP / LBVP / NLBVP solvers
+- [API: Problems](../api/problems.md): programmatic API for adding equations and BCs
+- [2D RBC Tutorial](../tutorials/ivp_2d_rbc.md): complete Rayleigh–Bénard convection walkthrough
