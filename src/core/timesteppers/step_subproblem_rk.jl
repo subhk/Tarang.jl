@@ -499,19 +499,25 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         copy(M)
     end
 
-    # Symbolic-reuse fast path: if a cached `SparseLUSolver` exists and
+    # Symbolic-reuse fast path: if a cached LU-type solver exists and
     # was marked "dirty" (by the dt-change handler at the top of
     # `step_subproblem_rk!`), call `refactor!` to reuse the cached
-    # symbolic factorization and run only the numeric phase. This is a
-    # ~2× speedup on the LU step vs rebuilding from scratch.
+    # symbolic factorization and run only the numeric phase.
+    #
+    # `refactor!` works for any `AbstractMatSolver` subtype that defines
+    # it — CPU `SparseLUSolver`, GPU `CuSparseLU` (Float64 only via the
+    # `:rf` backend), and any future solvers that opt in. We use
+    # `hasmethod` so the GPU path doesn't leak into the main module's
+    # `isa` check (CuSparseLU lives in the CUDA extension).
     cached = sp.LHS_solvers[stage_idx]
     dirty_key = "_lhs_dirty_$stage_idx"
     is_dirty = get(sp.matrices, dirty_key, false)::Bool
     if cached !== nothing && !is_dirty
-        # Matrix unchanged since last call at this stage — return as is.
+        # Matrix unchanged since last call at this stage — return as-is.
         return cached
     end
-    if cached isa MatSolvers.SparseLUSolver && is_dirty
+    if cached !== nothing && is_dirty &&
+       hasmethod(MatSolvers.refactor!, Tuple{typeof(cached), typeof(LHS)})
         try
             MatSolvers.refactor!(cached, LHS)
             sp.matrices[dirty_key] = false
