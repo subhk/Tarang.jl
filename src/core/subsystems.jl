@@ -1415,6 +1415,7 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
     fill!(raw, zero(eltype(raw)))
 
     kx_global = _kx_index_global(sp)
+    debug_this = (kx_global == 1) && !get(sp.matrices, "_gather_eqn_F_debugged", false)
 
     i0 = 0
     for (eq_idx, eq_data) in enumerate(eqns)
@@ -1427,9 +1428,10 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
         is_pde = M_expr !== nothing && !_is_zero_m_term(M_expr)
 
         if is_pde
-            # Pull F from per-state-field results; concatenate across targets
-            # (scalar PDE → 1 target, vector PDE → ncomps targets).
             target_indices = _find_time_derivative_targets(M_expr, state_fields, problem.variables)
+            if debug_this
+                @info "gather_eqn_F!: PDE eq $eq_idx i0=$i0 size=$eq_size targets=$target_indices"
+            end
             if !isempty(target_indices)
                 offset = i0
                 for tidx in target_indices
@@ -1440,33 +1442,31 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
                             continue
                         end
                     end
-                    # No F field for this target → advance by target's own size
                     if tidx >= 1 && tidx <= length(state_fields)
                         offset += subproblem_field_size(sp, state_fields[tidx])
                     end
                 end
             end
         else
-            # BC / constraint: evaluate F expression directly.
             F_expr = get(eq_data, "F_expr", nothing)
             if F_expr === nothing
                 F_expr = get(eq_data, "F", nothing)
+            end
+            if debug_this
+                eq_str = get(eq_data, "equation_string", "?")
+                @info "gather_eqn_F!: BC eq $eq_idx i0=$i0 size=$eq_size \"$eq_str\" F=$F_expr"
             end
             if !_is_zero_F_expr(F_expr)
                 v = _extract_F_constant(F_expr)
                 if v !== nothing && v != 0
                     coeff = _bc_constant_projection(Float64(v), sp)
                     if coeff != 0
-                        # Write the constant to the first row of this equation's
-                        # block. For scalar BCs (eq_size == 1) this is the row;
-                        # for vector BCs with nonzero constants, each component
-                        # would need its own projection — we don't currently
-                        # encounter that case (vector BCs are all "= 0").
                         @inbounds raw[i0 + 1] = coeff
+                        if debug_this
+                            @info "  → wrote raw[$(i0+1)] = $coeff"
+                        end
                     end
                 end
-                # Non-constant / unsupported F expressions are silently ignored;
-                # log via debug to aid future diagnosis.
                 if v === nothing
                     @debug "gather_eqn_F!: non-constant BC F not supported" eq_idx=eq_idx F_expr=F_expr
                 end
@@ -1477,6 +1477,13 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
     end
 
     compress_equation_space!(dest, sp, raw)
+
+    if debug_this
+        nonzero_count = count(!iszero, dest)
+        max_val = isempty(dest) ? 0.0 : maximum(abs.(dest))
+        @info "gather_eqn_F!: I_raw=$I_raw, dest_len=$(length(dest)), nonzero=$nonzero_count, max|dest|=$max_val"
+        sp.matrices["_gather_eqn_F_debugged"] = true
+    end
     return dest
 end
 
