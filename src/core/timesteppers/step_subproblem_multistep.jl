@@ -67,7 +67,7 @@ function step_subproblem_multistep!(
     end::Vector{Vector{AbstractVector{ComplexF64}}}
 
     # ── Step 1: compute M*X_current, L*X_current, F_current per subproblem ──
-    F_fields = evaluate_rhs(solver, state_fields, solver.sim_time)
+    F_fields = evaluate_rhs_buffered(solver, state_fields, solver.sim_time)
 
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
