@@ -127,12 +127,12 @@ add_task!(snapshots, u.components[1]; name="ux")
 add_task!(snapshots, u.components[2]; name="uz")
 
 # ─── Initial Conditions ──────────────────────────────────────
-# Conduction profile: T(z) = 1 - z/Lz (linear from 1 at bottom to 0 at top),
+# Conduction profile: T(z) = 1 - z (linear from 1 at bottom to 0 at top),
 # plus a small random perturbation to trigger convection.
 x, z = local_grids(dist, xbasis, zbasis)
 fill_random!(T, "g"; seed=42, distribution="normal", scale=1e-3)
-get_grid_data(T) .*= z' .* (Lz .- z')        # damp noise at walls
-get_grid_data(T) .+= 1.0 .- z' ./ Lz          # add linear conduction profile
+get_grid_data(T) .*= z' .* (1.0 .- z')        # damp noise at walls
+get_grid_data(T) .+= 1.0 .- z'           # add linear conduction profile
 ensure_layout!(T, :c)                          # pre-compute coefficients for timestepper
 
 # ─── CFL ─────────────────────────────────────────────────────
