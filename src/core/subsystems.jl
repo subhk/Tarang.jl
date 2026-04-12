@@ -1661,6 +1661,22 @@ function expression_matrices(field::ScalarField, sp::Subproblem, vars; kwargs...
         n = subproblem_field_size(sp, field)
         return Dict{Any, SparseMatrixCSC}(field => sparse(ComplexF64(1)*I, n, n))
     end
+
+    # Check if this ScalarField is a component of a VectorField in vars
+    parent_info = _find_parent_vector(field, vars)
+    if parent_info !== nothing
+        parent, comp_idx = parent_info
+        n_parent = subproblem_field_size(sp, parent)
+        n_comp = length(parent.components)
+        comp_size = div(n_parent, n_comp)
+        # Build selector: (comp_size × n_parent) with identity block at comp_idx
+        rows = collect(1:comp_size)
+        cols = collect((comp_idx-1)*comp_size+1 : comp_idx*comp_size)
+        vals = ones(ComplexF64, comp_size)
+        selector = sparse(rows, cols, vals, comp_size, n_parent)
+        return Dict{Any, SparseMatrixCSC}(parent => selector)
+    end
+
     return Dict{Any, SparseMatrixCSC}()
 end
 
@@ -1685,6 +1701,32 @@ function _field_in_vars(field, vars)
         end
     end
     return false
+end
+
+"""
+    _find_parent_vector(field::ScalarField, vars) -> (parent::VectorField, comp_idx::Int) or nothing
+
+Find the parent VectorField in `vars` that contains this ScalarField as a component.
+Returns (parent, component_index) or nothing if no parent found.
+"""
+function _find_parent_vector(field::ScalarField, vars)
+    for v in vars
+        if isa(v, VectorField)
+            for (ci, comp) in enumerate(v.components)
+                if comp === field || (hasfield(typeof(comp), :name) && comp.name == field.name)
+                    return (v, ci)
+                end
+            end
+        end
+        if isa(v, TensorField)
+            for (ci, comp) in enumerate(v.components)
+                if comp === field || (hasfield(typeof(comp), :name) && comp.name == field.name)
+                    return (v, ci)
+                end
+            end
+        end
+    end
+    return nothing
 end
 expression_matrices(::String, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
 expression_matrices(::Symbol, sp::Subproblem, vars; kwargs...) = Dict{Any, SparseMatrixCSC}()
