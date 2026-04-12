@@ -13,7 +13,7 @@
 # the ScalarField's transform machinery (ensure_layout :c → apply D → :g).
 #
 # If translation fails (unsupported operator), the caller falls back to the
-# compiled_rhs path, then interpreted evaluation.
+# interpreted evaluate_solver_expression path in evaluate_rhs.
 
 # ── Abstract type hierarchy ──────────────────────────────────────────────────
 
@@ -482,22 +482,68 @@ function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int)
     coeff_data = get_local_data(get_coeff_data(field))
     coeff_data === nothing && return field
 
-    # Get the 1D differentiation matrix
-    D = if isa(target_basis, JacobiBasis)
-        differentiation_matrix(target_basis, order)
+    # Apply differentiation in coefficient space.
+    # Chebyshev/Jacobi: Nz×Nz differentiation matrix (applied via matmul)
+    # Fourier: diagonal scaling per mode (im*k*k0)^order — the RFFT
+    #          representation is complex, so matrix form doesn't apply
+    if isa(target_basis, JacobiBasis)
+        D = differentiation_matrix(target_basis, order)
+        _apply_1d_matrix!(coeff_data, D, axis)
     elseif isa(target_basis, FourierBasis)
-        fourier_differentiation_matrix(target_basis, order)
+        _apply_fourier_diff!(coeff_data, target_basis, axis, order)
     else
         return field
     end
-
-    # Apply D along the target axis
-    _apply_1d_matrix!(coeff_data, D, axis)
 
     field.current_layout = :c
     # Transform back to grid space for downstream operations
     ensure_layout!(field, :g)
     return field
+end
+
+"""
+Apply Fourier differentiation as a diagonal scaling in complex RFFT space.
+For each mode k, multiply coefficients by (i·k·k0)^order where k is the
+zero-indexed mode number and k0 = 2π/L is the fundamental wavenumber.
+"""
+function _apply_fourier_diff!(data::AbstractArray, basis::FourierBasis,
+                               axis::Int, order::Int)
+    L = basis.meta.bounds[2] - basis.meta.bounds[1]
+    k0 = 2π / L
+    n_coeff = size(data, axis)
+
+    # For complex RFFT, mode k (0-indexed) has wavenumber k*k0
+    # Differentiation: c[k] *= (i*k*k0)^order
+    if ndims(data) == 1
+        for k in 1:n_coeff
+            factor = ComplexF64((im * (k - 1) * k0)^order)
+            data[k] *= factor
+        end
+        return data
+    end
+
+    if ndims(data) == 2
+        if axis == 1
+            for k in 1:n_coeff
+                factor = ComplexF64((im * (k - 1) * k0)^order)
+                @views data[k, :] .*= factor
+            end
+        elseif axis == 2
+            for k in 1:n_coeff
+                factor = ComplexF64((im * (k - 1) * k0)^order)
+                @views data[:, k] .*= factor
+            end
+        end
+        return data
+    end
+
+    # Higher-dimensional: generic approach via indexing
+    for k in 1:n_coeff
+        factor = ComplexF64((im * (k - 1) * k0)^order)
+        slice = selectdim(data, axis, k)
+        slice .*= factor
+    end
+    return data
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place."""
@@ -658,3 +704,6 @@ function _lazy_zero_field(template::ScalarField)
     field.current_layout = :g
     return field
 end
+
+# Note: _is_zero_m_term and _find_time_derivative_targets are defined in
+# timesteppers/state_utils.jl (they were moved there to consolidate helpers).
