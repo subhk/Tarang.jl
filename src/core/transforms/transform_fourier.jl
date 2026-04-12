@@ -60,7 +60,23 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
             host_result = pencil_plan \ host_data
             set_grid_data!(field, copy_to_device(host_result, coeff_data))
         else
-            set_grid_data!(field, pencil_plan \ coeff_data)
+            # In-place backward via `ldiv!` when the grid buffer is a
+            # pre-allocated PencilArray (the common case — `allocate_data!`
+            # uses PencilFFTs.allocate_input which returns one). Mirrors
+            # the forward branch's `mul!(coeff_data, plan, grid_data)`
+            # fast path. Falls back to the allocating `\` if ldiv! raises
+            # (e.g. on PencilFFTs versions that don't support it on this
+            # plan type).
+            grid_data = get_grid_data(field)
+            if grid_data !== nothing && isa(grid_data, PencilArrays.PencilArray)
+                try
+                    ldiv!(grid_data, pencil_plan, coeff_data)
+                catch
+                    set_grid_data!(field, pencil_plan \ coeff_data)
+                end
+            else
+                set_grid_data!(field, pencil_plan \ coeff_data)
+            end
         end
         field.current_layout = :g
         return
