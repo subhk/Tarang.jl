@@ -319,10 +319,26 @@ function _get_or_build_multistep_lhs!(sp::Subproblem, a0::Float64, b0::Float64)
         return cached
     end
 
+    # Build the new LHS matrix. Under variable-dt multistep the sparsity
+    # pattern is unchanged — only `nzval` differs — so we can refactor the
+    # cached `SparseLUSolver` in place and reuse its symbolic analysis.
     LHS = if L !== nothing && abs(b0) > 1e-14
         ComplexF64(a0) * M + ComplexF64(b0) * L
     else
         ComplexF64(a0) * M
+    end
+
+    # Symbolic-reuse fast path: if the cached solver is a SparseLUSolver
+    # and the key changed, refactor in place.
+    if cached isa MatSolvers.SparseLUSolver && cached_k !== nothing
+        try
+            MatSolvers.refactor!(cached, LHS)
+            sp.matrices[cache_key_k] = current_key
+            return cached
+        catch err
+            @debug "multistep refactor! failed, rebuilding from scratch" exception=(err, catch_backtrace())
+            # fall through to the full-rebuild path below.
+        end
     end
 
     solver_type = _subproblem_solver_type(sp.solver.base.matsolver)
