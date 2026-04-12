@@ -117,6 +117,31 @@ function _woodbury_solve(w::WoodburySolver, rhs::AbstractVector{ComplexF64})
 end
 # ──────────────────────────────────────────────────────────────────────────────
 
+"""
+    _refresh_bcs_for_stage!(solver, stage_time) -> Bool
+
+Re-evaluate time- / space-dependent BCs at `stage_time` and rewrite the
+`equation_data["F"]` / `["F_expr"]` slots. Returns `true` if any BC was
+actually refreshed (so the caller can re-gather the algebraic F vector),
+`false` otherwise.
+
+For pure constant-in-time BCs this short-circuits — `ALG_F` only needs to
+be built once per step. For time-varying BCs we call this at every RK stage
+with `t + c[i]*dt` so multi-stage methods keep their formal order of
+accuracy on rapidly-varying BCs.
+"""
+function _refresh_bcs_for_stage!(solver::InitialValueSolver, stage_time::Real)
+    bcm = solver.problem.bc_manager
+    has_td = has_time_dependent_bcs(bcm)
+    has_sd = has_space_dependent_bcs(bcm)
+    (has_td || has_sd) || return false
+    if has_td
+        update_time_dependent_bcs!(bcm, stage_time)
+    end
+    _apply_bc_values_to_equations!(solver, stage_time)
+    return true
+end
+
 _subproblem_solver_type(choice) = choice isa Tuple ? choice[1] : choice
 
 function _subproblem_solver_kwargs(choice)
@@ -254,10 +279,32 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         ALG_F[sp_idx] = alg_f
     end
 
+    # Whether this problem has any time/space-dependent BCs. If so, the
+    # stage loop below refreshes `ALG_F` at each stage time `t + c[i]*dt`
+    # to retain full stage-order accuracy on rapidly-varying BCs. For pure
+    # constant BCs this stays false and `ALG_F` is reused across stages.
+    bc_dynamic = has_time_dependent_bcs(problem.bc_manager) ||
+                 has_space_dependent_bcs(problem.bc_manager)
+
     # ── Stage loop ────────────────────────────────────────────────────────
     # Each stage: build RHS → solve → scatter → evaluate F and L*X at solution
     for i in 1:stages
         state.current_substep = i
+
+        # Per-stage BC refresh + ALG_F re-gather (only for dynamic BCs).
+        # `update_time_dependent_bcs!` / `_apply_bc_values_to_equations!`
+        # rewrite `equation_data[eq_idx]["F"]`, which `gather_alg_F!` reads
+        # on each call, so we simply re-gather after refreshing.
+        if bc_dynamic
+            stage_time = t + dt * c[i]
+            if _refresh_bcs_for_stage!(solver, stage_time)
+                for (sp_idx, sp) in enumerate(subproblems)
+                    sp.M_min === nothing && continue
+                    alg_f = ALG_F[sp_idx]
+                    gather_alg_F!(alg_f, sp)
+                end
+            end
+        end
 
         # Build RHS and solve per subproblem
         for (sp_idx, sp) in enumerate(subproblems)
