@@ -136,6 +136,192 @@ end
 _apply_forward(current, t::FourierTransform) = _fourier_forward(current, t)
 _apply_backward(current, t::FourierTransform) = _fourier_backward(current, t)
 
+# ============================================================================
+# In-place Fourier transforms — zero-alloc once plan+scratch caches warm
+# ============================================================================
+#
+# The original out-of-place paths above (`_fourier_forward` /
+# `_fourier_backward`) are kept for rare callers and as a fallback. The
+# in-place entry points below are used by `forward_transform!` /
+# `backward_transform!` on the hot path.
+#
+# Per-call work for a warm cache:
+#   1. Dict lookup on `transform.fwd_plan_cache[(size, eltype)]` → plan
+#   2. `mul!(out, plan, in)` — pure FFTW call, no allocations
+#
+# Separate plan caches are needed because FFTW plans are parameterized
+# by input size, element type, AND strides. A plan built for a (192, 48)
+# Float64 array cannot be applied to a (192, 32) array or to a Float32
+# array. The `(size, eltype)` key captures the relevant dimensions.
+#
+# For RealFourier, the forward transform uses `plan_rfft` when the input
+# is real, but a full complex `plan_fft` when the input is already
+# complex (which happens when Fourier is NOT the first transform in the
+# chain and a previous transform produced complex output). These two
+# plan types have different output shapes and are cached under separate
+# keys (`(size, Float64)` vs `(size, ComplexF64)`).
+
+@inline function _fourier_forward_output_size(in_shape::Tuple, transform::FourierTransform, input_is_real::Bool)
+    if isa(transform.basis, RealFourier) && input_is_real
+        # rfft halves the transform axis: N → div(N, 2) + 1
+        ax = transform.axis
+        return ntuple(i -> i == ax ? div(in_shape[i], 2) + 1 : in_shape[i], length(in_shape))
+    end
+    # Full fft: output shape = input shape
+    return in_shape
+end
+
+@inline function _fourier_backward_output_size(in_shape::Tuple, transform::FourierTransform, rfft_path::Bool)
+    if rfft_path
+        # irfft expands the transform axis back to basis.meta.size
+        ax = transform.axis
+        return ntuple(i -> i == ax ? transform.basis.meta.size : in_shape[i], length(in_shape))
+    end
+    return in_shape
+end
+
+function _forward_output_spec(in::AbstractArray, transform::FourierTransform)
+    in_shape = size(in)
+    in_eltype = eltype(in)
+    real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
+    complex_T = Complex{real_T}
+
+    if isa(transform.basis, RealFourier)
+        if in_eltype <: Complex
+            # Already-complex input: full fft, shape unchanged
+            return in_shape, complex_T
+        end
+        # Real input: rfft halves the transform axis
+        out_shape = _fourier_forward_output_size(in_shape, transform, true)
+        return out_shape, complex_T
+    else  # ComplexFourier
+        return in_shape, complex_T
+    end
+end
+
+function _backward_output_spec(in::AbstractArray, transform::FourierTransform)
+    in_shape = size(in)
+    in_eltype = eltype(in)
+    real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
+
+    if isa(transform.basis, RealFourier)
+        expected_rfft_size = div(transform.basis.meta.size, 2) + 1
+        axis_len = in_shape[transform.axis]
+        if axis_len == expected_rfft_size
+            # irfft: axis expands back to basis.meta.size, output is real
+            out_shape = _fourier_backward_output_size(in_shape, transform, true)
+            return out_shape, real_T
+        else
+            # ifft fallback (complex input from a non-first-axis fft): same shape, still complex
+            return in_shape, Complex{real_T}
+        end
+    else  # ComplexFourier
+        return in_shape, Complex{real_T}
+    end
+end
+
+"""Get or create a cached forward plan for this (input_size, input_eltype)."""
+function _get_or_plan_forward!(transform::FourierTransform, in::AbstractArray)
+    in_shape = size(in)
+    in_eltype = eltype(in)
+    key = (in_shape, in_eltype)
+    cached = get(transform.fwd_plan_cache, key, nothing)
+    if cached !== nothing
+        return cached
+    end
+
+    dims = (transform.axis,)
+    plan = if isa(transform.basis, RealFourier) && !(in_eltype <: Complex)
+        FFTW.plan_rfft(in, dims)
+    else
+        FFTW.plan_fft(in, dims)
+    end
+    transform.fwd_plan_cache[key] = plan
+    return plan
+end
+
+"""Get or create a cached backward plan for this (input_size, input_eltype)."""
+function _get_or_plan_backward!(transform::FourierTransform, in::AbstractArray)
+    in_shape = size(in)
+    in_eltype = eltype(in)
+    key = (in_shape, in_eltype)
+    cached = get(transform.bwd_plan_cache, key, nothing)
+    if cached !== nothing
+        return cached
+    end
+
+    dims = (transform.axis,)
+    plan = if isa(transform.basis, RealFourier)
+        expected_rfft_size = div(transform.basis.meta.size, 2) + 1
+        axis_len = in_shape[transform.axis]
+        if axis_len == expected_rfft_size
+            # irfft path: plan_irfft needs a dummy input of the same shape
+            FFTW.plan_irfft(in, transform.basis.meta.size, dims)
+        else
+            FFTW.plan_ifft(in, dims)
+        end
+    else  # ComplexFourier
+        FFTW.plan_ifft(in, dims)
+    end
+    transform.bwd_plan_cache[key] = plan
+    return plan
+end
+
+"""
+    _apply_forward!(out, in, transform::FourierTransform) → out
+
+Zero-allocation forward Fourier transform into pre-allocated `out`.
+Caller must ensure `out` has the shape/eltype returned by
+`_forward_output_spec(in, transform)`.
+"""
+function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::FourierTransform)
+    # Only FFTW (CPU) arrays are handled here; GPU data is caught earlier.
+    if is_gpu_array(in) || is_gpu_array(out)
+        # Shouldn't happen on the new hot path — forward_transform! has
+        # already branched to the GPU path by now — but handle defensively.
+        result = _fourier_forward(in, transform)
+        if size(result) == size(out) && eltype(result) == eltype(out)
+            copyto!(out, result)
+        end
+        return out
+    end
+
+    plan = _get_or_plan_forward!(transform, in)
+    mul!(out, plan, in)
+    return out
+end
+
+"""
+    _apply_backward!(out, in, transform::FourierTransform) → out
+
+Zero-allocation backward Fourier transform into pre-allocated `out`.
+"""
+function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::FourierTransform)
+    if is_gpu_array(in) || is_gpu_array(out)
+        result = _fourier_backward(in, transform)
+        if size(result) == size(out) && eltype(result) == eltype(out)
+            copyto!(out, result)
+        end
+        return out
+    end
+
+    plan = _get_or_plan_backward!(transform, in)
+    # FFTW irfft plans are destructive: they scribble over the input array
+    # during application. The high-level `FFTW.irfft(x, n, dims)` protects
+    # callers by internally copying `x` into a workspace first, which is
+    # exactly the allocation we're trying to avoid. We replicate that
+    # protection with a cached scratch buffer reused across calls.
+    if plan isa FFTW.ScaledPlan && isa(transform.basis, RealFourier)
+        scratch = _get_or_alloc_scratch!(transform.bwd_scratch, (size(in), eltype(in), :irfft_scratch),
+                                         size(in), eltype(in))
+        copyto!(scratch, in)
+        mul!(out, plan, scratch)
+    else
+        mul!(out, plan, in)
+    end
+    return out
+end
+
 # Axis-aware Chebyshev helpers
 function _scale_along_axis!(data::AbstractArray, axis::Int, scale::AbstractVector{<:Real})
     if axis > ndims(data)
