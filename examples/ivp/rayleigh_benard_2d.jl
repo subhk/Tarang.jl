@@ -29,7 +29,7 @@ using Printf
 # ─── Parameters ───────────────────────────────────────────────
 Lx, Lz      = 4.0, 1.0
 Nx, Nz      = 256, 64
-Rayleigh    = 2e6
+Rayleigh    = 2e7
 Prandtl     = 1.0
 dealias     = 3/2
 stop_time   = 50.0
