@@ -39,7 +39,7 @@ Block solve for (LHS · x = rhs):
 """
 mutable struct WoodburySolver
     bulk_lu::Any                             # sparse LU of bulk block A
-    C::SparseMatrixCSC{ComplexF64, Int64}    # BC rows × bulk cols
+    C::SparseMatrixCSC                       # BC rows × bulk cols
     AinvB::Matrix{ComplexF64}                # precomputed A⁻¹ · B
     S_lu::Any                                # LU of Schur complement (dense)
     bulk_rows::Vector{Int}
@@ -55,6 +55,14 @@ function _build_woodbury(LHS::SparseMatrixCSC, sp::Subproblem)
     bulk_cols = sp.bulk_cols
     bc_cols = sp.bc_cols
 
+    # Require non-empty bulk AND bc, and square bulk/bc sub-blocks
+    if isempty(bulk_rows) || isempty(bc_rows)
+        return nothing
+    end
+    if length(bulk_rows) != length(bulk_cols) || length(bc_rows) != length(bc_cols)
+        return nothing
+    end
+
     A = LHS[bulk_rows, bulk_cols]
     B = LHS[bulk_rows, bc_cols]
     C = LHS[bc_rows, bulk_cols]
@@ -65,12 +73,12 @@ function _build_woodbury(LHS::SparseMatrixCSC, sp::Subproblem)
         return nothing
     end
 
-    # Precompute A⁻¹ · B (dense, n_bulk × n_bc)
-    B_dense = Matrix(B)
-    AinvB = bulk_lu \ B_dense
+    # Precompute A⁻¹ · B as a dense matrix (n_bulk × n_bc)
+    B_dense = Matrix{ComplexF64}(B)
+    AinvB = Matrix{ComplexF64}(bulk_lu \ B_dense)
 
-    # Schur complement: S = D - C · AinvB
-    S = Matrix(D) - Matrix(C) * AinvB
+    # Schur complement: S = D - C · AinvB (dense, n_bc × n_bc)
+    S = Matrix{ComplexF64}(D) - Matrix{ComplexF64}(C) * AinvB
     S_lu = lu(S; check=false)
     if !issuccess(S_lu)
         return nothing
