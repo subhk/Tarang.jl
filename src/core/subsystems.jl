@@ -1068,29 +1068,62 @@ function _bc_rows_device(sp::Subproblem, reference::AbstractVector)
 end
 
 """
+    _bc_override_scratch!(sp, reference) -> AbstractVector{ComplexF64}
+
+Return (and cache) a small scratch buffer of length `length(sp.bc_rows)` on
+the same device as `reference`. Used by `apply_bc_override!` as a reusable
+target for the gather-scale-scatter pipeline instead of allocating a fresh
+temporary via `alg_f[bc_rows]` on every call.
+
+The buffer is stored in `sp.matrices["_bc_override_scratch"]` and keyed by
+length + device type — if the reference's device changes (CPU ↔ GPU) we
+reallocate. This is extremely rare in practice (the device is fixed per
+subproblem) but the check is cheap.
+"""
+function _bc_override_scratch!(sp::Subproblem, reference::AbstractVector)
+    n = length(sp.bc_rows)
+    n == 0 && return reference  # unused
+    cached = get(sp.matrices, "_bc_override_scratch", nothing)
+    if cached !== nothing && length(cached) == n &&
+       is_gpu_array(cached) == is_gpu_array(reference)
+        return cached
+    end
+    buf = similar_zeros(reference, ComplexF64, n)
+    sp.matrices["_bc_override_scratch"] = buf
+    return buf
+end
+
+"""
     apply_bc_override!(rhs, alg_f, sp, coeff)
 
 Override the algebraic-constraint rows of `rhs` with `coeff * alg_f[bc_rows]`.
 
-Uses an explicit gather → scale → scatter pipeline:
+Pipeline:
 
-    tmp = alg_f[bc_rows]      # gather
-    tmp *= coeff              # in-place scale
+    tmp .= alg_f[bc_rows]     # gather into cached scratch buffer
+    tmp .*= coeff             # in-place scale
     rhs[bc_rows] = tmp        # scatter
 
 All three operations are vectorized and stay on the same device as `rhs`, so
 this is safe under `CUDA.allowscalar(false)`. The `bc_rows` index vector is
 materialized on the correct device by `_bc_rows_device` and cached on the
-subproblem to avoid per-step host→device transfers.
+subproblem to avoid per-step host→device transfers. The gather target
+`tmp` is also a cached scratch buffer (`_bc_override_scratch!`), so this
+function performs zero per-call allocation after the first call.
 """
 function apply_bc_override!(rhs::AbstractVector, alg_f::AbstractVector,
                             sp::Subproblem, coeff)
     isempty(sp.bc_rows) && return rhs
     bc_rows = _bc_rows_device(sp, rhs)
+    tmp     = _bc_override_scratch!(sp, rhs)
     c = ComplexF64(coeff)
-    tmp = alg_f[bc_rows]      # gather (CPU: allocated, GPU: CuArray)
-    tmp .*= c                 # in-place scale, vectorized on both devices
-    rhs[bc_rows] = tmp        # scatter (setindex! with index array)
+    # Gather alg_f[bc_rows] into the pre-allocated scratch. Using `copyto!`
+    # with index arrays (`CartesianIndices`) would be another option, but
+    # broadcast-assign via `tmp .= view(alg_f, bc_rows)` is clearest and
+    # works uniformly for CPU Vector + GPU CuArray with on-device indices.
+    @inbounds tmp .= view(alg_f, bc_rows)
+    tmp .*= c
+    rhs[bc_rows] = tmp
     return rhs
 end
 
