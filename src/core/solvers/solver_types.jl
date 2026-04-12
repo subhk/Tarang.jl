@@ -337,10 +337,61 @@ function _build_initial_value_solver(problem::IVP, timestepper;
     # invoked from the step loop when `has_time_dependent_bcs` is true.
     if has_space_dependent_bcs(problem.bc_manager) ||
        has_time_dependent_bcs(problem.bc_manager)
+        # Auto-populate coordinate fields from the problem's bases so the
+        # user doesn't have to call `add_coordinate_field!` manually for
+        # every separable axis. This is a no-op for axes that the user
+        # already registered (we never overwrite existing entries).
+        _auto_register_coordinate_fields!(problem)
         _apply_bc_values_to_equations!(solver, 0.0)
     end
 
     return solver
+end
+
+"""
+    _auto_register_coordinate_fields!(problem)
+
+Walk the problem's variables, collect the unique bases, and register their
+grid-coordinate arrays on `problem.bc_manager.coordinate_fields` under the
+basis's element label (typically `"x"`, `"y"`, `"z"`, etc.). This lets
+space-dependent BC expressions reference coordinates by name (e.g.
+`"sin(2*pi*x/Lx)"`) without the user having to set up coordinate fields
+manually.
+
+Skips axes that are already registered and skips bases with no grid (0-D
+tau variables). For non-separable (coupled) bases like `ChebyshevT`, we
+still register the Gauss-Lobatto grid because BC expressions may reference
+the coupled coordinate (e.g. `T(x=0) = sin(pi*z)`).
+"""
+function _auto_register_coordinate_fields!(problem::Problem)
+    bc_manager = problem.bc_manager
+
+    seen = Set{String}()
+    for var in problem.variables
+        for comp in scalar_components(var)
+            isempty(comp.bases) && continue
+            dist = comp.dist
+            scales = comp.scales === nothing ?
+                     ntuple(_ -> 1.0, max(length(comp.bases), 1)) :
+                     comp.scales
+            for basis in comp.bases
+                basis === nothing && continue
+                label = String(basis.meta.element_label)
+                (label in seen) && continue
+                haskey(bc_manager.coordinate_fields, label) && (push!(seen, label); continue)
+                try
+                    axis = get_basis_axis(dist, basis)
+                    scale = axis + 1 <= length(scales) ? scales[axis + 1] : 1.0
+                    grid = local_grid(basis, dist, scale; move_to_arch=false)
+                    bc_manager.coordinate_fields[label] = collect(grid)
+                    push!(seen, label)
+                catch err
+                    @debug "auto-register coordinate field for $label failed" err
+                end
+            end
+        end
+    end
+    return
 end
 
 """Merge boundary_conditions strings into equations and track indices."""
