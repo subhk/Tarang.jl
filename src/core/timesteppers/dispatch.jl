@@ -41,38 +41,15 @@ _dispatch_step!(::RK222, state, solver) = step_rk_imex!(state, solver)
 _dispatch_step!(::RK443, state, solver) = step_rk_imex!(state, solver)
 
 # --- Multistep IMEX methods ---
-# For Chebyshev-Fourier domains with PencilLinearOperator, use pencil-based methods
-function _dispatch_step!(::CNAB1, state, solver)
-    if _get_pencil_linear_operator(solver) !== nothing
-        step_pencil_cnab1!(state, solver)
-    else
-        step_cnab1!(state, solver)
-    end
-end
-
-function _dispatch_step!(::CNAB2, state, solver)
-    if _get_pencil_linear_operator(solver) !== nothing
-        step_pencil_cnab2!(state, solver)
-    else
-        step_cnab2!(state, solver)
-    end
-end
-
-function _dispatch_step!(::SBDF1, state, solver)
-    if _get_pencil_linear_operator(solver) !== nothing
-        step_pencil_sbdf1!(state, solver)
-    else
-        step_sbdf1!(state, solver)
-    end
-end
-
-function _dispatch_step!(::SBDF2, state, solver)
-    if _get_pencil_linear_operator(solver) !== nothing
-        step_pencil_sbdf2!(state, solver)
-    else
-        step_sbdf2!(state, solver)
-    end
-end
+# All multistep methods dispatch through `step_subproblem_multistep!` via
+# the subproblem-path branch inside each `step_<method>!` function (see
+# step_multistep.jl). The legacy `PencilLinearOperator` + `step_pencil_*!`
+# path has been removed — the subproblem path handles Chebyshev-Fourier
+# MPI correctly and with DAE-aware BC enforcement.
+_dispatch_step!(::CNAB1, state, solver) = step_cnab1!(state, solver)
+_dispatch_step!(::CNAB2, state, solver) = step_cnab2!(state, solver)
+_dispatch_step!(::SBDF1, state, solver) = step_sbdf1!(state, solver)
+_dispatch_step!(::SBDF2, state, solver) = step_sbdf2!(state, solver)
 
 function _dispatch_step!(::SBDF3, state, solver)
     _check_mpi_implicit_compat!(solver, "SBDF3")
@@ -125,24 +102,17 @@ end
 
 Check if a global-matrix implicit timestepper can run with MPI fields.
 These methods (SBDF3/4, MCNAB2, CNLF2) use global matrix solves that require
-all field data on a single rank.
+all field data on a single rank — a limitation of the legacy stepper path
+that hasn't been ported to the subproblem architecture.
 
 For MPI runs, the check either:
 1. Allows it if fields are small enough for gather/scatter (< 1M DOF)
-2. Errors with guidance to use a pencil-compatible method instead
+2. Errors with guidance to use a subproblem-compatible method instead
 """
 function _check_mpi_implicit_compat!(solver::InitialValueSolver, method_name::String)
     dist = solver.state[1].dist
     if dist.size <= 1
         return  # Serial — no issue
-    end
-
-    # Check if a PencilLinearOperator is available (pencil IMEX path)
-    if _get_pencil_linear_operator(solver) !== nothing
-        @warn "$method_name does not have a pencil-based variant. " *
-              "A PencilLinearOperator is configured but will NOT be used. " *
-              "Consider using CNAB1, CNAB2, SBDF1, or SBDF2 which have MPI-compatible pencil variants. " *
-              "Falling back to global matrix gather/scatter (all data collected to each rank)." maxlog=1
     end
 
     # Check if we can do gather/scatter (small enough problem)
@@ -153,9 +123,9 @@ function _check_mpi_implicit_compat!(solver::InitialValueSolver, method_name::St
         throw(ArgumentError(
             "$method_name with MPI requires global matrix solve (gather/scatter). " *
             "Total DOF=$total_dof exceeds 1M limit for gather/scatter approach. " *
-            "Use a pencil-compatible method instead: CNAB1, CNAB2, SBDF1, SBDF2 " *
-            "(with `set_pencil_linear_operator!`), or use DiagonalIMEX_RK222/RK443 " *
-            "for purely Fourier domains."))
+            "Use a subproblem-compatible method instead: RK111, RK222, RK443, " *
+            "CNAB1, CNAB2, SBDF1, SBDF2, or DiagonalIMEX_RK222/RK443 " *
+            "(for purely Fourier domains)."))
     end
 
     @debug "$method_name: using global gather/scatter for MPI with $total_dof DOF"
