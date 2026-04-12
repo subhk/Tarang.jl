@@ -30,7 +30,7 @@ Base.@kwdef mutable struct SolverConfig
     bc_top::Bool = true
     tau_left::Bool = true
     interleave_components::Bool = true
-    store_expanded_matrices::Bool = false
+    store_expanded_matrices::Bool = true  # Enable in-place LHS pattern updates
 end
 
 # ---------------------------------------------------------------------------
@@ -1505,21 +1505,23 @@ function build_matrices!(sp::Subproblem, names, solver)
         sp.M_min = matrices["M"]
     end
 
-    # Store expanded matrices for IMEX if requested (following subsystems:577-588)
-    if length(matrices) > 1 && store_expanded
-        sp.LHS = zeros_with_pattern(values(matrices)...)
-        for (name, matrix) in matrices
-            expanded = expand_pattern(matrix, sp.LHS)
-            if name == "L"
-                sp.L_exp = expanded
-            elseif name == "M"
-                sp.M_exp = expanded
-            end
-        end
+    # Store expanded matrices for IMEX in-place LHS updates (Dedalus pattern).
+    # Pre-allocate sp.LHS with the union of M and L sparsity patterns, then
+    # store M_exp and L_exp that have this same pattern. At timestep time,
+    # we can update sp.LHS in-place via:
+    #   sp.LHS.nzval .= a0 * M_exp.nzval + b0 * L_exp.nzval
+    # avoiding matrix allocation and sparsity re-analysis.
+    if length(matrices) > 1 && store_expanded && haskey(matrices, "L") && haskey(matrices, "M")
+        L_min = matrices["L"]
+        M_min = matrices["M"]
+        sp.LHS = zeros_with_pattern(L_min, M_min)
+        sp.L_exp = expand_pattern(L_min, sp.LHS)
+        sp.M_exp = expand_pattern(M_min, sp.LHS)
     else
-        # Initialize LHS as sparse zero matrix for shape access and solver compatibility
-        # This is the standard case when expanded matrices are not requested
-        sp.LHS = spzeros(dtype, I, J)
+        # Minimal init for shape access / solver compatibility
+        rows = haskey(matrices, "L") ? size(matrices["L"], 1) : 0
+        cols = haskey(matrices, "L") ? size(matrices["L"], 2) : 0
+        sp.LHS = spzeros(dtype, rows, cols)
     end
 
     # Compute update rank for Woodbury formula
