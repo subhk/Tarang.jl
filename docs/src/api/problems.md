@@ -239,24 +239,105 @@ end
 
 ## Boundary Conditions
 
-Boundary conditions in Tarang.jl use the same `add_equation!` function as PDEs. The spectral syntax `field(coord=value)` is auto-detected and converted to the appropriate `Interpolate` operator.
+Tarang has a dedicated `add_bc!` function for boundary conditions. It's the preferred API — use it instead of `add_equation!` for anything that's `field(coord=value) = ...`.
 
-### Dirichlet (Fixed Value)
+### `add_bc!`
+
+```julia
+add_bc!(problem::Problem, bc::String)
+```
+
+Adds a boundary condition to a problem. The BC string must match one of these forms:
+
+- **Dirichlet**: `"field(coord=position) = value"` (e.g. `"T(z=0) = 1"`)
+- **Neumann**: `"∂coord(field)(coord=position) = value"` (e.g. `"∂z(T)(z=0) = 0"`)
+- **Integral constraint**: `"integ(field) = value"` (e.g. `"integ(p) = 0"` as a pressure gauge)
+
+`add_bc!` does two things:
+
+1. Pushes the raw string into `problem.boundary_conditions` (so that `_merge_boundary_conditions!` adds it as an equation at solver-build time for the parser to see).
+2. Parses the string via `parse_bc_string` / `parse_neumann_bc_string` and registers a concrete `DirichletBC` or `NeumannBC` object in `problem.bc_manager.conditions`, with `is_time_dependent` / `is_space_dependent` flags auto-detected from the value expression. This second step is what enables time- and space-dependent BC refresh — without it, the BC is treated as a plain algebraic constraint with no runtime value updates.
+
+Integral constraints like `"integ(p) = 0"` don't match the `field(coord=pos)` pattern; they flow through as raw strings to the equation parser and are handled by valid-mode filtering in `subsystems.jl`.
+
+### Dirichlet (fixed value)
 
 ```julia
 # Constant value
-add_equation!(problem, "T(z=0) = 1")
-add_equation!(problem, "T(z=1) = 0")
+add_bc!(problem, "T(z=0) = 1")
+add_bc!(problem, "T(z=Lz) = 0")
 
-# No-slip velocity
-add_equation!(problem, "u(z=0) = 0")
-
-# Time-dependent
-add_equation!(problem, "u(x=0) = sin(omega*t)")
-
-# Space-dependent
-add_equation!(problem, "T(z=0) = 1.0 - x^2")
+# No-slip velocity (vector BC — applies to all components)
+add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "u(z=Lz) = 0")
 ```
+
+### Time-dependent BC
+
+```julia
+add_bc!(problem, "T(z=0) = 1.0 + 0.1*cos(2*pi*t)")
+```
+
+The BC value is re-evaluated at every RK stage time `t + c[i]·dt`, so multi-stage methods retain full formal order of accuracy. No extra configuration required — `t` is the default time variable and is recognized automatically.
+
+### Space-dependent BC
+
+```julia
+add_bc!(problem, "T(z=0) = 1.0 + 0.1*sin(2*pi*x/Lx)")
+```
+
+The BC expression is evaluated against the global `x` coordinate grid at solver-build time, producing a 1D array. At each stepper call, the array is projected onto each subproblem's Fourier mode via an unnormalized RFFT. Coordinate names (`x`, `y`, `z`, ...) are auto-registered from the problem's bases — no `add_coordinate_field!` call needed.
+
+For user parameters in the expression, register them via `add_parameters!`:
+
+```julia
+add_parameters!(problem, Lx=4.0, amplitude=0.1)
+add_bc!(problem, "T(z=0) = 1.0 + amplitude*sin(2*pi*x/Lx)")
+```
+
+Or bake the numeric value into the string via Julia interpolation:
+
+```julia
+Lx = 4.0
+add_bc!(problem, "T(z=0) = 1.0 + 0.1*sin(2*pi*x/$Lx)")
+```
+
+### Space + time dependent BC
+
+```julia
+add_bc!(problem, "T(z=0) = 1.0 + 0.1*sin(2*pi*x/Lx)*cos(2*pi*t)")
+```
+
+The spatial pattern is projected onto Fourier modes and re-evaluated at each stage time, combining both refresh paths.
+
+### Neumann (fixed derivative)
+
+```julia
+# Insulating boundary
+add_bc!(problem, "∂z(T)(z=0) = 0")
+
+# Fixed flux
+add_bc!(problem, "∂z(T)(z=Lz) = -1")
+```
+
+Neumann BCs detect space/time dependency in exactly the same way as Dirichlet. The `∂coord(field)` prefix is what tells `_register_string_bc!` to route through `parse_neumann_bc_string`.
+
+### Pressure gauge
+
+For incompressible flow, pressure is defined only up to a constant. Fix the gauge with an integral constraint:
+
+```julia
+tau_p = ScalarField(dist, "tau_p", (), Float64)
+# ... add to problem.variables ...
+add_equation!(problem, "trace(grad_u) + tau_p = 0")
+add_bc!(problem, "integ(p) = 0")
+```
+
+The `integ(p) = 0` constraint is trivially zero at non-DC Fourier modes and is filtered by valid-mode filtering in the subproblem builder — it's only active at the DC mode, where it fixes the pressure gauge.
+
+### Legacy: `add_equation!` for BCs
+
+`add_equation!(problem, "T(z=0) = 1")` still works — the equation parser detects the `field(coord=value)` syntax and converts it internally. However, this path **does not** register the BC in `bc_manager.conditions`, so time- and space-dependent BC refresh is disabled. For constant BCs it's equivalent to `add_bc!`; for anything else, prefer `add_bc!`.
 
 ---
 
