@@ -9,14 +9,13 @@ This module provides spectral transforms for various bases:
 ## File Organization
 
 This module is split into multiple files for maintainability:
-- transform_types.jl: Core type definitions
-- transform_planning.jl: Transform planning functions
-- transform_gpu.jl: GPU transform support
-- transform_fourier.jl: Fourier transform execution
-- transform_chebyshev.jl: Chebyshev transform execution
+- transform_types.jl: Core type definitions + in-place dispatch protocol
+- transform_planning.jl: Transform planning (builds 1D FFTW plans)
+- transform_gpu.jl: Serial CPU + GPU dispatch (`forward_transform!`)
+- transform_fourier.jl: Fourier transform execution (in-place and legacy)
+- transform_chebyshev.jl: Chebyshev transform execution (in-place and legacy)
 - transform_legendre.jl: Legendre transform execution
 - transform_transposable.jl: TransposableField transform planning
-- transform_grouped.jl: Grouped transform operations
 """
 
 # PencilFFTs, FFTW, LinearAlgebra, SparseArrays already in Tarang.jl
@@ -29,7 +28,6 @@ include("transforms/transform_fourier.jl")
 include("transforms/transform_chebyshev.jl")
 include("transforms/transform_legendre.jl")
 include("transforms/transform_transposable.jl")
-include("transforms/transform_grouped.jl")
 
 # ============================================================================
 # Exports
@@ -49,29 +47,14 @@ export plan_transposable_transforms!, setup_distributed_transforms!
 
 # Export forward/backward transform functions
 export forward_transform!, backward_transform!
-export forward_transform_3d!, backward_transform_3d!
-
-# Export grouped transform functions (GROUP_TRANSFORMS equivalent)
-export GroupedTransformConfig, set_group_transforms!
-export group_forward_transform!, group_backward_transform!
 
 # Export setup functions
 export setup_pencil_fft_transforms_2d!, setup_pencil_fft_transforms_3d!
-export setup_fftw_transform!, setup_fftw_transforms_nd!
+export setup_fftw_transform!
 export setup_chebyshev_transform!, setup_legendre_transform!
-export setup_pencil_arrays_3d, create_pencil_3d
-
-# Export dealiasing functions
-export dealias!, dealias_3d!, dealias_field!
-export apply_basis_dealiasing!
 
 # Export Legendre quadrature functions
 export compute_legendre_quadrature
 export evaluate_legendre_and_derivative
 export build_legendre_polynomials
-
-# Export utility functions
-export get_transform_for_basis
-export is_pencil_compatible, is_3d_pencil_optimal
-export synchronize_transforms!
 
