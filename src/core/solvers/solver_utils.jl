@@ -76,35 +76,39 @@ function diagnose(solver::InitialValueSolver)
     has_time_dep = has_time_dependent_bcs(bc)
     println("├── boundary conditions: $n_bcs (time-dependent: $has_time_dep)")
 
-    # Subproblem decomposition summary (per-rank locality report).
-    # This tells users how many per-Fourier-mode subproblems each rank
-    # owns, so they can spot load imbalance before a production run.
+    # Subproblem decomposition summary (per-rank locality + cost report).
+    # Shows count and cost imbalance so users can spot suboptimal MPI rank
+    # counts before a production run.
     if haskey(problem.parameters, "subproblems")
         sps = problem.parameters["subproblems"]
         if sps isa Tuple
-            n_sp_local = length(sps)
-            n_sp_with_matrices = count(sp -> sp.M_min !== nothing, sps)
             if dist.size > 1
-                # Collect counts from all ranks for load-balance reporting.
-                # (Rank-0 prints the summary; other ranks still compute it.)
                 try
-                    comm = dist.comm
-                    counts = MPI.Allgather(Int32(n_sp_local), comm)
+                    rpt = subproblem_locality_report(solver)
                     if dist.rank == 0
-                        total_sp = sum(Int.(counts))
-                        min_sp = minimum(counts)
-                        max_sp = maximum(counts)
-                        imbalance = max_sp - min_sp
-                        pct = imbalance > 0 ? round(100 * imbalance / max(max_sp, 1); digits=1) : 0.0
-                        println("├── subproblems: $total_sp total across $(dist.size) ranks")
-                        println("│   ├── local: $n_sp_local ($n_sp_with_matrices with matrices)")
-                        println("│   ├── min/max per rank: $min_sp / $max_sp")
-                        println("│   └── imbalance: $imbalance subproblems ($pct%)")
+                        pct_count = round(rpt.imbalance_pct; digits=1)
+                        pct_cost  = round(rpt.cost_imbalance_pct; digits=1)
+                        println("├── subproblems: $(rpt.total) total across $(dist.size) ranks")
+                        println("│   ├── local: $(rpt.local_count) ($(rpt.with_matrices) with matrices)")
+                        println("│   ├── count per rank: min=$(rpt.min_per_rank), max=$(rpt.max_per_rank), imbalance=$(pct_count)%")
+                        println("│   └── cost per rank : imbalance=$(pct_cost)% (rel. to max)")
+                        if rpt.cost_imbalance_pct > 20.0
+                            println("│")
+                            println("│   ⚠  Cost imbalance > 20%. Overall throughput is bounded by the")
+                            println("│      slowest rank. Suggestions:")
+                            println("│        • Pick an MPI rank count that shares a factor with Nx_c")
+                            println("│        • Run `subproblem_locality_report(solver)` for details")
+                        end
                     end
-                catch
+                catch err
+                    @debug "subproblem locality report failed" err
+                    n_sp_local = length(sps)
+                    n_sp_with_matrices = count(sp -> sp.M_min !== nothing, sps)
                     println("├── subproblems: $n_sp_local local ($n_sp_with_matrices with matrices)")
                 end
             else
+                n_sp_local = length(sps)
+                n_sp_with_matrices = count(sp -> sp.M_min !== nothing, sps)
                 println("├── subproblems: $n_sp_local ($n_sp_with_matrices with matrices)")
             end
         end
