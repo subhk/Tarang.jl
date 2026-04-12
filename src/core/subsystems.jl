@@ -1015,7 +1015,7 @@ function _assign_to_buffer!(dest::AbstractVector{ComplexF64}, src)
             dest .= ComplexF64.(src_dev)
         end
     else
-        src_cpu = is_gpu_array(src) ? Array(src) : Array(src)
+        src_cpu = is_gpu_array(src) ? Array(src) : src
         if eltype(src_cpu) <: Complex
             copyto!(dest, src_cpu)
         else
@@ -1034,7 +1034,7 @@ function _assign_from_buffer!(dest, src)
             dest .= src_dev
         end
     else
-        src_cpu = is_gpu_array(src) ? Array(src) : Array(src)
+        src_cpu = is_gpu_array(src) ? Array(src) : src
         if eltype(dest) <: Real
             dest .= real.(src_cpu)
         else
@@ -1044,16 +1044,38 @@ function _assign_from_buffer!(dest, src)
     return dest
 end
 
+function _subproblem_cached_vector!(sp::Subproblem, key::String, n::Int;
+                                    like::Union{Nothing, AbstractVector}=nothing)
+    cached = get(sp.matrices, key, nothing)
+    if cached !== nothing && length(cached) == n
+        if like === nothing || is_gpu_array(cached) == is_gpu_array(like)
+            return cached
+        end
+    end
+
+    buffer = if like === nothing
+        zeros(sp.dist.architecture, ComplexF64, n)
+    else
+        similar_zeros(like, ComplexF64, n)
+    end
+    sp.matrices[key] = buffer
+    return buffer
+end
+
 """Extract per-mode coefficients from all fields into a flat vector (no permutation)."""
-function _gather_subproblem_raw(sp::Subproblem, fields::Vector)
+function _gather_subproblem_raw!(buffer::AbstractVector{ComplexF64}, sp::Subproblem, fields::Vector)
     kx_global = _kx_index_global(sp)
-    total = sum(subproblem_field_size(sp, field) for field in fields)
-    buffer = zeros(sp.dist.architecture, ComplexF64, total)
     offset = 0
     for field in fields
         offset = _gather_field_raw!(buffer, offset, field, kx_global, sp)
     end
     return buffer
+end
+
+function _gather_subproblem_raw(sp::Subproblem, fields::Vector)
+    total = sum(subproblem_field_size(sp, field) for field in fields)
+    buffer = zeros(sp.dist.architecture, ComplexF64, total)
+    return _gather_subproblem_raw!(buffer, sp, fields)
 end
 
 function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
@@ -1146,38 +1168,89 @@ function _scatter_field_raw!(field::VectorField, data::AbstractVector, offset::I
     return offset
 end
 
-function compress_variable_space(sp::Subproblem, raw::AbstractVector)
+function compress_variable_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)
     if sp.pre_right_pinv !== nothing
         pre = _subproblem_backend_matrix!(sp, sp.pre_right_pinv, "_pre_right_pinv_backend", raw)
-        return pre * raw
+        if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
+            mul!(dest, pre, raw)
+        else
+            _assign_to_buffer!(dest, pre * raw)
+        end
+    else
+        _assign_to_buffer!(dest, raw)
     end
-    return copy(raw)
+    return dest
+end
+
+function compress_variable_space(sp::Subproblem, raw::AbstractVector)
+    n = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 1) : length(raw)
+    dest = _subproblem_cached_vector!(sp, "_compress_variable_space", n; like=raw)
+    return compress_variable_space!(dest, sp, raw)
+end
+
+function expand_variable_space!(dest::AbstractVector, sp::Subproblem, data::AbstractVector)
+    if sp.pre_right !== nothing
+        pre = _subproblem_backend_matrix!(sp, sp.pre_right, "_pre_right_backend", data)
+        if !is_gpu_array(dest) && !is_gpu_array(data) && pre isa AbstractMatrix
+            mul!(dest, pre, data)
+        else
+            _assign_to_buffer!(dest, pre * data)
+        end
+    else
+        _assign_to_buffer!(dest, data)
+    end
+    return dest
 end
 
 function expand_variable_space(sp::Subproblem, data::AbstractVector)
-    if sp.pre_right !== nothing
-        pre = _subproblem_backend_matrix!(sp, sp.pre_right, "_pre_right_backend", data)
-        return pre * data
+    n = sp.pre_right !== nothing ? size(sp.pre_right, 1) : length(data)
+    dest = _subproblem_cached_vector!(sp, "_expand_variable_space", n; like=data)
+    return expand_variable_space!(dest, sp, data)
+end
+
+function compress_equation_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)
+    if sp.pre_left !== nothing
+        pre = _subproblem_backend_matrix!(sp, sp.pre_left, "_pre_left_backend", raw)
+        if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
+            mul!(dest, pre, raw)
+        else
+            _assign_to_buffer!(dest, pre * raw)
+        end
+    else
+        _assign_to_buffer!(dest, raw)
     end
-    return copy(data)
+    return dest
 end
 
 function compress_equation_space(sp::Subproblem, raw::AbstractVector)
-    if sp.pre_left !== nothing
-        pre = _subproblem_backend_matrix!(sp, sp.pre_left, "_pre_left_backend", raw)
-        return pre * raw
-    end
-    return copy(raw)
+    n = sp.pre_left !== nothing ? size(sp.pre_left, 1) : length(raw)
+    dest = _subproblem_cached_vector!(sp, "_compress_equation_space", n; like=raw)
+    return compress_equation_space!(dest, sp, raw)
 end
 
 """Gather per-mode coefficients and compress them into variable space."""
 function gather_inputs(sp::Subproblem, fields::Vector)
-    return compress_variable_space(sp, _gather_subproblem_raw(sp, fields))
+    raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
+              sum(subproblem_field_size(sp, field) for field in fields)
+    raw = _subproblem_cached_vector!(sp, "_gather_inputs_raw", raw_len)
+    _gather_subproblem_raw!(raw, sp, fields)
+    return compress_variable_space(sp, raw)
+end
+
+function gather_inputs!(dest::AbstractVector, sp::Subproblem, fields::Vector)
+    raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
+              sum(subproblem_field_size(sp, field) for field in fields)
+    raw = _subproblem_cached_vector!(sp, "_gather_inputs_raw", raw_len; like=dest)
+    _gather_subproblem_raw!(raw, sp, fields)
+    return compress_variable_space!(dest, sp, raw)
 end
 
 """Expand from variable space and scatter back to fields."""
 function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector)
-    _scatter_subproblem_raw(sp, expand_variable_space(sp, data), fields)
+    expanded_len = sp.pre_right !== nothing ? size(sp.pre_right, 1) : length(data)
+    expanded = _subproblem_cached_vector!(sp, "_scatter_inputs_expanded", expanded_len; like=data)
+    expand_variable_space!(expanded, sp, data)
+    _scatter_subproblem_raw(sp, expanded, fields)
 end
 
 """
@@ -1187,7 +1260,19 @@ Gather per-mode RHS coefficients in state/variable ordering.
 compressed with the variable-side preconditioner, not the equation-side one.
 """
 function gather_outputs(sp::Subproblem, fields::Vector)
-    return compress_variable_space(sp, _gather_subproblem_raw(sp, fields))
+    raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
+              sum(subproblem_field_size(sp, field) for field in fields)
+    raw = _subproblem_cached_vector!(sp, "_gather_outputs_raw", raw_len)
+    _gather_subproblem_raw!(raw, sp, fields)
+    return compress_variable_space(sp, raw)
+end
+
+function gather_outputs!(dest::AbstractVector, sp::Subproblem, fields::Vector)
+    raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
+              sum(subproblem_field_size(sp, field) for field in fields)
+    raw = _subproblem_cached_vector!(sp, "_gather_outputs_raw", raw_len; like=dest)
+    _gather_subproblem_raw!(raw, sp, fields)
+    return compress_variable_space!(dest, sp, raw)
 end
 
 """
