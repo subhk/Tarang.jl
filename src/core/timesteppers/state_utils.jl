@@ -15,9 +15,10 @@ constraint equations (no dt) contribute zero.
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{<:ScalarField}, time::Float64)
     problem = solver.problem
 
-    # Use compiled RHS plan if available (zero-dispatch, pre-allocated)
-    if solver.compiled_rhs !== nothing && solver.compiled_rhs.is_compiled
-        return execute_compiled_rhs!(solver.compiled_rhs, state, solver)
+    # Use the type-specialized lazy RHS plan if available (JIT-specialized,
+    # zero-dispatch, broadcasting-fused).
+    if solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
+        return execute_lazy_rhs!(solver.rhs_plan, state, solver)
     end
 
     # Fallback: interpreted expression evaluation (original path)
