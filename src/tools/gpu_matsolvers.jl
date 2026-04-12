@@ -345,8 +345,11 @@ IMEX-RK solvers that rebuild `(M + dt*a_ii*L)` with a new `dt`.
 - **`:rf` backend** (Float64 only): full symbolic reuse via
   `cusolverRfResetValues` + `cusolverRfRefactor`. ~2× faster than a
   fresh rebuild when `dt` changes.
-- **`:qr` backend** (complex or fallback): no refactor fast path in
-  CUDA.jl's `SparseQR` bindings — `refactor!` falls back to a full
+- **`:qr` backend** (complex or fallback): refactor updates
+  `A_csr.nzVal` in place and re-calls `spqr_factorise` on the existing
+  `SparseQR` handle so the cached symbolic analysis (rowPtr/colVal
+  pattern, scratch buffer) is reused — only the Setup + numeric Factor
+  phases run. Falls back to a full
   rebuild. Still safe to call; the interface matches the CPU path.
 """
 mutable struct CuSparseLU{T} <: AbstractMatSolver
@@ -517,9 +520,13 @@ analysis and runs only the numeric refactorization phase via
 step compared to rebuilding from scratch.
 
 For the `:qr` backend (complex matrices or Float64-RF-unavailable
-fallback), there's no symbolic-reuse API exposed in CUDA.jl's
-`SparseQR` bindings, so this falls back to a full rebuild. The
-interface matches the CPU path for drop-in compatibility.
+fallback), the fast path updates `solver.A_csr.nzVal` in place (from
+the transposed CSC of `A`) and re-calls `CUDA.CUSOLVER.spqr_factorise`
+on the existing `SparseQR` handle. This reuses the cached symbolic
+analysis (row/column pattern and scratch buffer allocated inside the
+`SparseQR` info struct) and runs only the Setup + numeric Factor
+phases. Falls back to a full rebuild if the value update or refactor
+raises — the interface matches the CPU path for drop-in compatibility.
 
 ### Pattern check
 
