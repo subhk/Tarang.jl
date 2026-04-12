@@ -1440,19 +1440,30 @@ end
 """
 Project a constant value onto the current subproblem's Fourier mode.
 
-Tarang uses unnormalized `FFTW.rfft` on the Fourier axis, so the DC
-coefficient of a constant `v` equals `v * Nx`. Non-DC modes project to zero.
-For problems without a Fourier axis (e.g., a BVP with a single coupled
-direction), the DC-mode value is `v` itself — no scaling.
+Tarang uses unnormalized `FFTW.rfft` / `FFTW.fft` along each separable
+axis. For a constant `v` in grid space, the only nonzero Fourier
+coefficient is at the full-DC mode `(kx=0, ky=0, ...)`, with value
+`v * Nx * Ny * ...` (product of all Fourier-axis grid sizes). All
+non-DC Fourier modes project to zero.
+
+For problems without any Fourier axis (e.g. a pure-coupled BVP), the
+DC-mode value is `v` itself — no scaling applied.
 """
 function _bc_constant_projection(v::Float64, sp::Subproblem)
     v == 0 && return ComplexF64(0)
-    kx_global = _kx_index_global(sp)
-    if kx_global != 1
-        return ComplexF64(0)
+    # Every separable (Fourier) axis of this subproblem must be at its DC
+    # mode (global index 1) for a constant to have any contribution.
+    fourier_idx = _subproblem_fourier_group_indices(sp)
+    for k in fourier_idx
+        if k != 1
+            return ComplexF64(0)
+        end
     end
-    xbasis = _find_bc_fourier_basis(sp)
-    scale = xbasis === nothing ? 1.0 : Float64(xbasis.meta.size)
+    # DC on every Fourier axis → `v * ∏ N_k` via unnormalized FFTs.
+    scale = 1.0
+    for N in _bc_fourier_axis_sizes(sp)
+        scale *= Float64(N)
+    end
     return ComplexF64(v * scale)
 end
 
@@ -1470,70 +1481,119 @@ function _find_bc_fourier_basis(sp::Subproblem)
 end
 
 """
+    _bc_fourier_axis_sizes(sp) -> Vector{Int}
+
+Ordered list of grid sizes for the problem's separable (Fourier) axes. Used
+to determine the expected output shape of a BC array so that lower-rank
+user inputs (e.g. `sin(x)` in a 3D problem) can be broadcast to the full
+output before being transformed.
+"""
+function _bc_fourier_axis_sizes(sp::Subproblem)
+    sizes = Int[]
+    seen = Set{String}()
+    for var in sp.problem.variables
+        for comp in scalar_components(var)
+            for basis in comp.bases
+                basis === nothing && continue
+                isa(basis, FourierBasis) || continue
+                label = String(basis.meta.element_label)
+                label in seen && continue
+                push!(seen, label)
+                push!(sizes, basis.meta.size)
+            end
+        end
+    end
+    return sizes
+end
+
+"""
+    _subproblem_fourier_group_indices(sp) -> Vector{Int}
+
+Return the 1-based Fourier mode indices for every separable axis of this
+subproblem. For a 2D problem with one Fourier axis this is `[kx_global]`;
+for a 3D problem it's `[kx_global, ky_global]`.
+"""
+function _subproblem_fourier_group_indices(sp::Subproblem)
+    idx = Int[]
+    for g in sp.group
+        g isa Integer || continue
+        push!(idx, g + 1)
+    end
+    return idx
+end
+
+"""
     _bc_array_projection(arr, sp)
 
 Project a grid-space array `arr` (from a space-dependent BC) onto the current
 subproblem's Fourier mode. Returns a `ComplexF64` value suitable for writing
 into the BC row of the raw equation-space vector.
 
-The BC array lives in grid space along the separable (Fourier) axis. We take
-an unnormalized `FFTW.rfft` (matching Tarang's Fourier convention) and
-extract the coefficient at the subproblem's `kx_global` index.
+Handles several shape conventions for `arr`:
+- `arr` is already the full BC output shape (1D for 2D problems, 2D for
+  3D-with-two-periodic-axes problems, etc.) — FFT it directly.
+- `arr` is lower-dimensional than the output (e.g., a 1D `sin(x)` in a 3D
+  `(x, y, z)` problem) — broadcast it to the full Fourier output shape
+  under the assumption that axes beyond `ndims(arr)` are constant.
+- `arr` is a scalar-like 1-element array — treat as constant (DC only).
 
-The transformed array is cached by identity on `sp.problem.parameters` so
-all subproblems that project the same `arr` in the same step share one FFT.
-The cache is keyed via `IdDict` to avoid hashing large arrays; it is
-invalidated whenever the caller swaps in a new `ArrayOperator` (which
-happens per step, or per stage for time-dependent BCs).
+The broadcast/FFT result is cached by identity on `sp.problem.parameters`
+via an `IdDict`, so all subproblems sharing the same `ArrayOperator` reuse
+a single FFT per refresh.
 """
 function _bc_array_projection(arr::AbstractArray, sp::Subproblem)
-    # Empty or trivial arrays → zero contribution.
     (arr === nothing || length(arr) == 0) && return ComplexF64(0)
 
-    xbasis = _find_bc_fourier_basis(sp)
-    if xbasis === nothing
-        # No Fourier axis in the problem: BC output lives in a coupled space
-        # only (e.g., a BVP column). The array has one entry per subproblem
-        # row; we use arr[1] which is the DC-mode value. For more complex
-        # coupled-space shapes, users need to provide a coefficient-space
-        # representation directly — not yet supported.
+    fourier_sizes = _bc_fourier_axis_sizes(sp)
+    if isempty(fourier_sizes)
+        # No Fourier axes at all (pure-coupled / BVP-like). Use arr[1] as
+        # the DC-mode value.
         return ComplexF64(first(arr))
     end
 
-    # Take the RFFT once per array; cache on the problem via IdDict keyed by
-    # the grid array's object identity so repeated subproblems reuse it.
-    coeffs = _get_or_compute_bc_array_coeffs!(arr, sp)
+    coeffs = _get_or_compute_bc_array_coeffs!(arr, sp, fourier_sizes)
     coeffs === nothing && return ComplexF64(0)
 
-    kx_global = _kx_index_global(sp)
+    fourier_idx = _subproblem_fourier_group_indices(sp)
     if ndims(coeffs) == 1
-        if kx_global >= 1 && kx_global <= length(coeffs)
-            return ComplexF64(coeffs[kx_global])
-        end
-        return ComplexF64(0)
+        kx = isempty(fourier_idx) ? 1 : first(fourier_idx)
+        return (kx >= 1 && kx <= length(coeffs)) ?
+               ComplexF64(coeffs[kx]) : ComplexF64(0)
     elseif ndims(coeffs) == 2
-        # Two-Fourier-axis case: look up (kx_global, ky_global).
-        # For this, we need the second integer in sp.group.
-        kys = Int[]
-        for g in sp.group
-            g isa Integer || continue
-            push!(kys, g + 1)
-        end
-        if length(kys) >= 2
-            kx, ky = kys[1], kys[2]
-            if 1 <= kx <= size(coeffs, 1) && 1 <= ky <= size(coeffs, 2)
-                return ComplexF64(coeffs[kx, ky])
-            end
-        end
-        return ComplexF64(0)
+        length(fourier_idx) >= 2 || return ComplexF64(0)
+        kx, ky = fourier_idx[1], fourier_idx[2]
+        return (1 <= kx <= size(coeffs, 1) && 1 <= ky <= size(coeffs, 2)) ?
+               ComplexF64(coeffs[kx, ky]) : ComplexF64(0)
+    elseif ndims(coeffs) == 3
+        length(fourier_idx) >= 3 || return ComplexF64(0)
+        kx, ky, kz = fourier_idx[1], fourier_idx[2], fourier_idx[3]
+        return (1 <= kx <= size(coeffs, 1) &&
+                1 <= ky <= size(coeffs, 2) &&
+                1 <= kz <= size(coeffs, 3)) ?
+               ComplexF64(coeffs[kx, ky, kz]) : ComplexF64(0)
     else
-        @warn "BC array has ndims=$(ndims(coeffs)); only 1D and 2D supported" maxlog=3
+        @warn "BC array projection: unsupported coefficient rank $(ndims(coeffs))" maxlog=3
         return ComplexF64(0)
     end
 end
 
-"""Compute or fetch the cached unnormalized Fourier transform of a BC array."""
-function _get_or_compute_bc_array_coeffs!(arr::AbstractArray, sp::Subproblem)
+"""
+    _get_or_compute_bc_array_coeffs!(arr, sp, fourier_sizes) -> coefficients
+
+Cache-backed helper that:
+1. Reshapes/broadcasts `arr` to the full Fourier-output shape (derived from
+   `fourier_sizes`) so lower-rank inputs work in higher-dim problems.
+2. Takes an unnormalized forward FFT along the first axis (via `rfft` for
+   real input) and complex FFT along remaining axes.
+3. Returns the complex coefficient array for downstream indexing.
+
+The result is cached on `sp.problem.parameters["_bc_rfft_cache"]` by array
+object identity (`IdDict`) so all subproblems reusing the same `arr` share
+a single FFT per refresh.
+"""
+function _get_or_compute_bc_array_coeffs!(arr::AbstractArray,
+                                          sp::Subproblem,
+                                          fourier_sizes::Vector{Int})
     cache = get(sp.problem.parameters, "_bc_rfft_cache", nothing)
     if cache === nothing
         cache = IdDict{Any, Any}()
@@ -1542,16 +1602,9 @@ function _get_or_compute_bc_array_coeffs!(arr::AbstractArray, sp::Subproblem)
     cached = get(cache, arr, nothing)
     cached !== nothing && return cached
 
-    # Promote to real Float64 if needed. BC arrays from user expressions are
-    # typically Vector{Float64}; complex arrays are rarer but handled too.
     coeffs = try
-        if eltype(arr) <: Real
-            FFTW.rfft(collect(Float64.(arr)))
-        elseif eltype(arr) <: Complex
-            FFTW.fft(collect(ComplexF64.(arr)))
-        else
-            FFTW.rfft(collect(Float64.(arr)))
-        end
+        broadcast_arr = _broadcast_bc_array_to_output(arr, fourier_sizes)
+        _forward_fft_bc(broadcast_arr)
     catch err
         @warn "BC array FFT failed: $err" maxlog=1
         return nothing
@@ -1559,6 +1612,95 @@ function _get_or_compute_bc_array_coeffs!(arr::AbstractArray, sp::Subproblem)
 
     cache[arr] = coeffs
     return coeffs
+end
+
+"""
+    _broadcast_bc_array_to_output(arr, fourier_sizes) -> Array
+
+Broadcast a grid-space BC array to the full Fourier-output shape.
+
+- If `arr` already matches `fourier_sizes`, returns it (as a concrete array).
+- If `arr` has fewer dimensions, reshape it into a singleton-padded shape
+  and broadcast to the full shape. We assume the user supplies the array
+  in axis order matching the problem's Fourier axes, so a 1D `arr` of
+  length `fourier_sizes[k]` is broadcast along the matching dimension and
+  replicated along the rest.
+- A single-element `arr` becomes a uniform constant over the full shape.
+"""
+function _broadcast_bc_array_to_output(arr::AbstractArray, fourier_sizes::Vector{Int})
+    output_shape = Tuple(fourier_sizes)
+    ndout = length(fourier_sizes)
+
+    # Scalar-ish input (length 1) → constant over the output.
+    if length(arr) == 1
+        result = Array{Float64}(undef, output_shape...)
+        fill!(result, Float64(first(arr)))
+        return result
+    end
+
+    # Exact match (shape and rank) → collect to a concrete array to keep
+    # downstream FFT predictable.
+    if size(arr) == output_shape
+        return collect(Float64.(arr))
+    end
+
+    # Same rank, same total length but different dim ordering (unusual).
+    if length(arr) == prod(output_shape)
+        return reshape(collect(Float64.(arr)), output_shape...)
+    end
+
+    # Lower-dimensional input: pad its shape with trailing singletons so
+    # that Julia's `broadcast` can expand it along the missing axes.
+    nd_in = ndims(arr)
+    if nd_in < ndout
+        # Try to match each input dimension to an output dimension of the
+        # same size; fall back to leading-dim match.
+        dims_padded = ntuple(i -> i <= nd_in ? size(arr, i) : 1, ndout)
+        if dims_padded[1] == output_shape[1] || any(i -> dims_padded[i] == output_shape[i], 1:nd_in)
+            reshaped = reshape(collect(Float64.(arr)), dims_padded)
+            target = Array{Float64}(undef, output_shape...)
+            target .= reshaped
+            return target
+        end
+    end
+
+    # Length matches a single Fourier axis but rank is 1 — broadcast along
+    # the first axis with that size. (Covers 1D `sin(x)` in 3D problems.)
+    if nd_in == 1
+        for (axis, sz) in enumerate(output_shape)
+            if length(arr) == sz
+                # Reshape to have the Fourier length on `axis`, singletons elsewhere.
+                rshape = ntuple(i -> i == axis ? sz : 1, ndout)
+                reshaped = reshape(collect(Float64.(arr)), rshape)
+                target = Array{Float64}(undef, output_shape...)
+                target .= reshaped
+                return target
+            end
+        end
+    end
+
+    throw(ArgumentError(
+        "BC array shape $(size(arr)) incompatible with Fourier output " *
+        "shape $(output_shape); provide the array in either the full " *
+        "output shape or a 1-D/1-element form that can be broadcast."
+    ))
+end
+
+"""
+    _forward_fft_bc(arr) -> complex coefficient array
+
+Unnormalized forward Fourier transform matching Tarang's `RealFourier`
+convention: `FFTW.rfft` along the first dimension for real input, full
+`FFTW.fft` for complex input. Multi-dim real input transforms the first
+dim with `rfft` and remaining dims with `fft`, matching the shape that
+`_find_bc_fourier_basis` + subproblem mode indexing expects.
+"""
+function _forward_fft_bc(arr::AbstractArray)
+    if eltype(arr) <: Complex
+        return FFTW.fft(ComplexF64.(arr))
+    else
+        return FFTW.rfft(Float64.(arr))
+    end
 end
 
 """
@@ -1692,7 +1834,18 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
             if !_is_zero_F_expr(F_expr)
                 coeff = _evaluate_alg_F(F_expr, sp)
                 if coeff != 0
-                    @inbounds raw_cpu[i0 + 1] = coeff
+                    # Replicate the value across all rows of the BC
+                    # equation's block. For scalar BCs `eq_size == 1` and
+                    # this writes a single entry; for vector BCs (e.g.
+                    # `u(z=0) = c` with `u` a 2-component vector, `eq_size
+                    # == 2`) the same coefficient is written to every
+                    # component row. The Interpolate LHS for a vector
+                    # operand is `kron(I_ncomp, row)`, so replicating the
+                    # scalar F across rows enforces the same value on each
+                    # component — which is what "u = c" means.
+                    @inbounds for r in 1:eq_size
+                        raw_cpu[i0 + r] = coeff
+                    end
                 end
             end
         end
