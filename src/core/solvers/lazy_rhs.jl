@@ -591,6 +591,7 @@ A pre-built lazy RHS evaluation plan.
 mutable struct LazyRHSPlan
     exprs::Vector{Union{LazyFuture, Nothing}}
     result_fields::Vector{Union{ScalarField, Nothing}}
+    output_fields::Vector{ScalarField}
     workspaces::Vector{LazyWorkspace}
     is_compiled::Bool
 end
@@ -599,6 +600,7 @@ function LazyRHSPlan(n_state::Int)
     LazyRHSPlan(
         fill(nothing, n_state),
         fill(nothing, n_state),
+        Vector{ScalarField}(undef, n_state),
         [LazyWorkspace() for _ in 1:n_state],
         false,
     )
@@ -614,6 +616,13 @@ function build_lazy_rhs_plan!(solver)
     problem = solver.problem
     state = solver.state
     plan = LazyRHSPlan(length(state))
+
+    for (idx, template) in enumerate(state)
+        zero_field = _lazy_zero_field(template)
+        plan.result_fields[idx] = zero_field
+        plan.output_fields[idx] = zero_field
+        plan.workspaces[idx].template = template
+    end
 
     if !hasfield(typeof(problem), :equation_data) || isempty(problem.equation_data)
         plan.is_compiled = true
@@ -649,7 +658,9 @@ function build_lazy_rhs_plan!(solver)
                 return plan  # is_compiled stays false
             end
             plan.exprs[state_idx] = lazy
-            plan.result_fields[state_idx] = _lazy_allocate_result(template)
+            result_field = _lazy_allocate_result(template)
+            plan.result_fields[state_idx] = result_field
+            plan.output_fields[state_idx] = result_field
             plan.workspaces[state_idx].template = template
         end
     end
@@ -667,6 +678,20 @@ function _lazy_allocate_result(template::ScalarField)
                        template.dtype)
 end
 
+function execute_lazy_rhs_buffered!(plan::LazyRHSPlan, state, solver)
+    for idx in eachindex(plan.output_fields, state)
+        expr = plan.exprs[idx]
+        if expr === nothing
+            continue
+        end
+        result_field = plan.output_fields[idx]
+        ws = plan.workspaces[idx]
+        ws.next_idx = 1  # reset between equations
+        evaluate_lazy!(result_field, expr, state, ws)
+    end
+    return plan.output_fields
+end
+
 """
     execute_lazy_rhs!(plan::LazyRHSPlan, state, solver) -> Vector{ScalarField}
 
@@ -674,21 +699,8 @@ Execute the compiled lazy plan and return result fields (one per state).
 Fields without an RHS (no time derivative) return zero fields.
 """
 function execute_lazy_rhs!(plan::LazyRHSPlan, state, solver)
-    results = Vector{ScalarField}(undef, length(state))
-    for idx in 1:length(state)
-        expr = plan.exprs[idx]
-        if expr === nothing
-            # No RHS → zero field
-            results[idx] = _lazy_zero_field(state[idx])
-            continue
-        end
-        result_field = plan.result_fields[idx]
-        ws = plan.workspaces[idx]
-        ws.next_idx = 1  # reset between equations
-        evaluate_lazy!(result_field, expr, state, ws)
-        results[idx] = result_field
-    end
-    return results
+    buffered = execute_lazy_rhs_buffered!(plan, state, solver)
+    return copy(buffered)
 end
 
 function _lazy_zero_field(template::ScalarField)
@@ -696,12 +708,14 @@ function _lazy_zero_field(template::ScalarField)
                         "_lazy_zero_" * template.name,
                         template.bases,
                         template.dtype)
-    ensure_layout!(field, :g)
-    gd = get_local_data(get_grid_data(field))
-    if gd !== nothing
-        fill!(gd, zero(eltype(gd)))
+    layout = template.current_layout === :c ? :c : :g
+    ensure_layout!(field, layout)
+    data = layout === :c ? get_coeff_data(field) : get_grid_data(field)
+    local_data = data === nothing ? nothing : get_local_data(data)
+    if local_data !== nothing
+        fill!(local_data, zero(eltype(local_data)))
     end
-    field.current_layout = :g
+    field.current_layout = layout
     return field
 end
 
