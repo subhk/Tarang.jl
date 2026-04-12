@@ -1269,6 +1269,7 @@ function compress_equation_space!(dest::AbstractVector, sp::Subproblem, raw::Abs
         if indices !== nothing
             @inbounds for i in eachindex(indices)
                 dest[i] = raw[indices[i]]
+            end
         else
             pre = _subproblem_backend_matrix!(sp, sp.pre_left, "_pre_left_backend", raw)
             if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
