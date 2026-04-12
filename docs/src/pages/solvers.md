@@ -37,7 +37,21 @@ step!(solver, dt)       # Use specified dt
 
 # Check stopping conditions
 proceed(solver)         # Returns true if should continue
+
+# Print a tree-style summary of the solver configuration
+diagnose(solver)
 ```
+
+### Internal solver build path
+
+At solver construction, `InitialValueSolver(problem, timestepper; dt=...)` runs several build stages in order:
+
+1. **`build_solver_matrices!(solver)`** — parses the equation strings and assembles the **global** `L_matrix`, `M_matrix`, and `F_vector` for legacy fall-back paths. These are stored in `problem.parameters`.
+2. **`_try_build_subproblems!(solver)`** — this is the fast path. It decomposes the problem into per-Fourier-mode subproblems via `build_subproblems` in `src/core/subsystems.jl`, building small sparse `L_min` / `M_min` matrices per mode, applying left/right permutations, and running valid-mode filtering to drop trivially-satisfied constraint rows (like `integ(p) = 0` at non-DC modes). The resulting `Tuple{Vararg{Subproblem}}` is stored in `problem.parameters["subproblems"]` and drives the modern IMEX stepper.
+3. **`build_lazy_rhs_plan!(solver)`** — walks each equation's `F` expression and translates it into a type-parametric `LazyFuture` tree (in `src/core/solvers/lazy_rhs.jl`). Each node (`LazyAdd`, `LazyMul`, `LazyDiff`, `LazyStateField`, `LazyParamField`, `LazyConst`) has a specialized `evaluate_lazy!` method. Julia's JIT then specializes the whole `evaluate_lazy!` call chain on first use — eliminating dynamic dispatch and fusing broadcast operations. If translation fails for any equation (unsupported operator type), the plan's `is_compiled` flag stays `false` and `evaluate_rhs` transparently falls back to the interpreted expression path. You can check whether the plan compiled in the `diagnose(solver)` output.
+4. **`_apply_bc_values_to_equations!(solver, 0.0)`** — only runs if there are time- or space-dependent BCs. Populates the initial `equation_data[eq_idx]["F"]` slots with the BC values evaluated at `t=0`, and auto-registers global coordinate arrays in `problem.bc_manager.coordinate_fields` so user BC expressions referencing `x`, `y`, `z`, `t` can be resolved at runtime.
+
+All four steps are transparent to the user. You only interact with the resulting `solver` object.
 
 ## BoundaryValueSolver
 
