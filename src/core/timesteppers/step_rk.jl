@@ -30,8 +30,9 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
     # Subproblem-based IMEX: use sparse subproblems if available.
-    # Works for both serial and MPI (each rank solves its local subproblems).
-    # GPU still falls back to explicit treatment (SparseMatrixCSC is CPU-only).
+    # Works for serial, MPI, and GPU-resident fields. Subproblem matrices are
+    # still assembled on CPU today, but the solve backend may stage through a
+    # GPU matsolver when configured.
     if haskey(solver.problem.parameters, "subproblems")
         sps = solver.problem.parameters["subproblems"]
         if sps isa Tuple
@@ -393,4 +394,3 @@ function step_rk443!(state::TimestepperState, solver::InitialValueSolver)
     ts = _RK443_SINGLETON
     _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
 end
-
