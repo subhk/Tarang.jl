@@ -42,6 +42,24 @@ function _depends_on_vars(expr, vars)
             end
         end
     end
+    # ScalarField: check if it's a component of a VectorField/TensorField in vars
+    if isa(expr, ScalarField)
+        for v in vars
+            if isa(v, VectorField)
+                for comp in v.components
+                    if comp === expr || (hasfield(typeof(comp), :name) && comp.name == expr.name)
+                        return true
+                    end
+                end
+            elseif isa(v, TensorField)
+                for comp in v.components
+                    if comp === expr || (hasfield(typeof(comp), :name) && comp.name == expr.name)
+                        return true
+                    end
+                end
+            end
+        end
+    end
     # VectorField: check components
     if isa(expr, VectorField)
         for comp in expr.components
