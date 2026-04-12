@@ -424,12 +424,27 @@ function get_separable_dim_size(problem::Problem, dim::Int)
         end
     end
 
-    # Fallback: try to get from variables
+    # Fallback: reconstruct the per-axis size from variables.
+    # Applies the same rule as `_coefficient_shape_impl` — only the FIRST
+    # Fourier axis gets halved by rfft; subsequent Fourier axes see
+    # complex input and use fft (full size). Previously this branch
+    # hardcoded `div(N, 2) + 1` for every RealFourier, which was wrong
+    # for multi-Fourier layouts and only worked because the primary path
+    # through `coefficient_shape` was also wrong (both bugs cancelled).
     for var in problem.variables
         for comp in scalar_components(var)
             if dim <= length(comp.bases) && comp.bases[dim] !== nothing
                 basis = comp.bases[dim]
-                if isa(basis, RealFourier)
+                # Find the first Fourier axis in this component's basis list.
+                first_fourier_idx = nothing
+                for (i, b) in enumerate(comp.bases)
+                    if isa(b, RealFourier) || isa(b, ComplexFourier)
+                        first_fourier_idx = i
+                        break
+                    end
+                end
+                is_first = (first_fourier_idx !== nothing && dim == first_fourier_idx)
+                if isa(basis, RealFourier) && is_first
                     return div(basis.meta.size, 2) + 1
                 end
                 return basis.meta.size
