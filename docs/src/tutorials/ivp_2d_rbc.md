@@ -1,221 +1,227 @@
 # Tutorial: 2D Rayleigh-Bénard Convection
 
-This tutorial demonstrates solving a classic fluid dynamics problem: Rayleigh-Bénard convection. We'll set up a complete simulation including equations, boundary conditions, adaptive time stepping, and output.
+This tutorial walks through the canonical Tarang example: 2D Rayleigh-Bénard convection between two horizontal plates. The code shown here **mirrors `examples/ivp/rayleigh_benard_2d.jl` in the repository** — so you can copy-paste either and they produce the same simulation.
 
-## Physical Problem
+## Physical problem
 
-Rayleigh-Bénard convection occurs when a fluid layer is heated from below. The setup:
+Rayleigh-Bénard convection is driven by heating a fluid layer from below and cooling it from above. The setup:
 
-- Horizontal layer of fluid between two parallel plates
-- Bottom plate at high buoyancy (hot)
-- Top plate at zero buoyancy (cold)
+- Horizontally periodic layer of fluid between two rigid plates
+- Bottom plate held at temperature `T = 1` (hot)
+- Top plate held at temperature `T = 0` (cold)
 - Gravity acts downward
+- No-slip velocity on both plates
 
-When the buoyancy difference is large enough (high Rayleigh number), the fluid becomes unstable and convection cells form.
+Above a critical Rayleigh number (`Ra_c ≈ 1708`), conduction becomes unstable and convection cells form.
 
-### Governing Equations
+### Governing equations (thermal-diffusive non-dimensionalization)
 
-The Boussinesq equations for buoyancy-driven convection, non-dimensionalized using box height and freefall time:
+We non-dimensionalize using the box height `H` and the thermal diffusion time `τ_κ = H² / κ`:
+
+- length scale: `H`
+- time scale: `τ_κ = H² / κ`
+- velocity scale: `κ / H`
+- pressure scale: `ρ (κ/H)²`
+- temperature scale: `ΔT = T_bottom − T_top`
+
+Define `T̃ = (T − T_top) / ΔT ∈ [0, 1]`. The dimensionless equations become:
 
 ```math
 \begin{aligned}
-\partial_t \mathbf{u} - \nu \nabla^2 \mathbf{u} + \nabla p - b \hat{\mathbf{z}} &= -\mathbf{u} \cdot \nabla \mathbf{u} \\
-\nabla \cdot \mathbf{u} &= 0 \\
-\partial_t b - \kappa \nabla^2 b &= -\mathbf{u} \cdot \nabla b
+\partial_t \mathbf{u} + \mathbf{u} \cdot \nabla \mathbf{u}
+  &= -\nabla p + \mathrm{Pr}\, \nabla^2 \mathbf{u} + \mathrm{Ra}\cdot\mathrm{Pr}\, T\, \hat{\mathbf{z}} \\
+\partial_t T + \mathbf{u} \cdot \nabla T &= \nabla^2 T \\
+\nabla \cdot \mathbf{u} &= 0
 \end{aligned}
 ```
 
-where $\kappa = (\text{Ra} \cdot \text{Pr})^{-1/2}$ and $\nu = (\text{Ra} / \text{Pr})^{-1/2}$.
+Dimensionless parameters:
+- **`Pr = ν/κ`** — Prandtl number (the viscous coefficient in the momentum equation)
+- **`Ra = g α ΔT H³ / (ν κ)`** — Rayleigh number (buoyancy amplitude is `Ra·Pr`)
 
-**Dimensionless parameters**:
-- **Ra** (Rayleigh number): ratio of buoyancy to viscous forces
-- **Pr** (Prandtl number): $\text{Pr} = \nu / \kappa$, ratio of momentum to thermal diffusivity
+The defining feature of the thermal-diffusive time scale is that the temperature equation has **unit diffusivity** — one time unit equals one thermal diffusion time, so the onset of convection and Nusselt scaling read off naturally.
 
-**Variables**:
-- $\mathbf{u} = (u_x, u_z)$: velocity field
-- $p$: pressure
-- $b$: buoyancy (replaces temperature in freefall scaling)
+Boundary conditions:
+- `T(z=0) = 1`, `T(z=Lz) = 0` (fixed hot/cold)
+- `u(z=0) = u(z=Lz) = 0` (no-slip)
 
-## Domain and Discretization
+### First-order reformulation
 
-### Coordinate System
+For better spectral conditioning — especially at high resolution — we rewrite the second-order operators in **first-order form** using auxiliary gradient variables:
 
-2D Cartesian domain:
-- **x** (horizontal): periodic, length $L_x = 4$
-- **z** (vertical): bounded by plates, height $L_z = 1$
-
-### Spectral Bases
-
-```julia
-# Periodic horizontal direction → RealFourier
-xbasis = RealFourier(coords["x"]; size=256, bounds=(0.0, 4.0), dealias=3/2)
-
-# Bounded vertical direction → ChebyshevT
-zbasis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0), dealias=3/2)
+```math
+\begin{aligned}
+\nabla_T &= \nabla T + \hat{\mathbf{z}}\, \mathrm{Lift}(\tau_{T_1}) \\
+\nabla_u &= \nabla \mathbf{u} + \hat{\mathbf{z}}\, \mathrm{Lift}(\tau_{u_1})
+\end{aligned}
 ```
 
-**Resolution guidelines**:
-- Horizontal: 128–512 modes (depends on aspect ratio and Ra)
-- Vertical: 32–128 modes (more for higher Ra)
-- Aspect ratio $L_x / L_z$: typically 2–4 for 2D
+and replace `∇²T` with `∇·∇_T` and `∇²u` with `∇·∇_u`. The equations then become:
 
-## Complete Implementation
+```math
+\begin{aligned}
+\mathrm{tr}(\nabla_u) + \tau_p &= 0 \\
+\partial_t T - \nabla \cdot \nabla_T + \mathrm{Lift}(\tau_{T_2}) &= -\mathbf{u} \cdot \nabla T \\
+\partial_t \mathbf{u} - \mathrm{Pr}\, \nabla \cdot \nabla_u + \nabla p - \mathrm{Ra}\cdot\mathrm{Pr}\, T\, \hat{\mathbf{z}} + \mathrm{Lift}(\tau_{u_2}) &= -\mathbf{u} \cdot \nabla \mathbf{u}
+\end{aligned}
+```
 
-### Setup
+with five tau fields (`τ_p`, `τ_{T_1}`, `τ_{T_2}`, `τ_{u_1}`, `τ_{u_2}`) supplying the extra degrees of freedom needed to enforce the five algebraic constraints (2 T BCs, 2 u BCs, 1 pressure gauge). See the [Tau method](../pages/tau_method.md) page for why the first-order formulation is recommended.
+
+## Complete implementation
+
+### Setup and parameters
 
 ```julia
 using Tarang
 using Printf
 
-# Problem parameters
-Lx, Lz   = 4.0, 1.0
-Nx, Nz   = 256, 64
-Rayleigh = 2e6
-Prandtl  = 1.0
-dealias  = 3/2
-stop_time = 500.0
-max_dt   = 1e-5
+# ─── Parameters ───────────────────────────────────────────────
+Lx, Lz      = 4.0, 1.0
+Nx, Nz      = 256, 64
+Rayleigh    = 2e6
+Prandtl     = 1.0
+dealias     = 3/2
+stop_time   = 25.0    # thermal diffusion times
+max_dt      = 0.001   # small to resolve viscous/thermal transport
 
-kappa = (Rayleigh * Prandtl)^(-1/2)
-nu    = (Rayleigh / Prandtl)^(-1/2)
+# Coefficients in the diffusive-time formulation:
+#   ∂t(T) - ∇²T = -u⋅∇T              (unit diffusivity)
+#   ∂t(u) - Pr ∇²u + ∇p - Ra·Pr T ẑ = -u⋅∇u
+nu   = Prandtl                  # viscous coefficient (= Pr in diffusive units)
+buoy = Rayleigh * Prandtl       # buoyancy forcing Ra·Pr
 
 @root_only begin
-    println("2D Rayleigh-Benard Convection")
-    @printf("  Ra=%.2e, Pr=%.1f, κ=%.6e, ν=%.6e\n", Rayleigh, Prandtl, kappa, nu)
-    @printf("  Domain: %.1f × %.1f, Resolution: %d × %d\n\n", Lx, Lz, Nx, Nz)
+    println("2D Rayleigh-Benard Convection (thermal-diffusive scaling)")
+    @printf("  Ra=%.2e, Pr=%.1f\n", Rayleigh, Prandtl)
+    @printf("  Coefficients: Pr=%.4f, Ra·Pr=%.2e\n", Prandtl, buoy)
+    @printf("  Domain: %.1f × %.1f, Resolution: %d × %d\n", Lx, Lz, Nx, Nz)
+    @printf("  Stop time: %.1f thermal diffusion times\n\n", stop_time)
 end
+```
 
-# Domain setup
+### Bases and domain
+
+```julia
 coords = CartesianCoordinates("x", "z")
 dist   = Distributor(coords; dtype=Float64, device=CPU())
 
 xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=dealias)
 zbasis = ChebyshevT(coords["z"];  size=Nz, bounds=(0.0, Lz), dealias=dealias)
-
-domain = Domain(dist, (xbasis, zbasis))
 ```
 
 ### Fields
 
 ```julia
-p = ScalarField(domain, "p")   # Pressure
-b = ScalarField(domain, "b")   # Buoyancy
-u = VectorField(domain, "u")   # Velocity (2-component)
+domain = Domain(dist, (xbasis, zbasis))
+
+p = ScalarField(domain, "p")
+T = ScalarField(domain, "T")        # Dimensionless temperature in [0, 1]
+u = VectorField(domain, "u")
 ```
 
-### Tau Fields (for Boundary Conditions)
+### Tau fields
 
-Tarang.jl uses tau fields for imposing boundary conditions. Each boundary condition requires one tau field. The `lift()` operator injects these into the equations on the **derivative basis**, which is the key to the first-order formulation.
+Five tau fields for five algebraic constraints. Each "drops the coupled direction" — they live on `(xbasis,)` only, not on both axes, because the lift injects them at a single Chebyshev mode.
 
 ```julia
-tau_p  = ScalarField(dist, "tau_p",  (), Float64)                   # Pressure gauge
-tau_b1 = ScalarField(dist, "tau_b1", (xbasis,), Float64)           # Buoyancy at z=0
-tau_b2 = ScalarField(dist, "tau_b2", (xbasis,), Float64)           # Buoyancy at z=Lz
-tau_u1 = VectorField(dist, coords, "tau_u1", (xbasis,), Float64)   # Velocity at z=0
-tau_u2 = VectorField(dist, coords, "tau_u2", (xbasis,), Float64)   # Velocity at z=Lz
+tau_p  = ScalarField(dist, "tau_p",  (),         Float64)
+tau_T1 = ScalarField(dist, "tau_T1", (xbasis,),  Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (xbasis,),  Float64)
+tau_u1 = VectorField(dist, coords, "tau_u1", (xbasis,), Float64)
+tau_u2 = VectorField(dist, coords, "tau_u2", (xbasis,), Float64)
 ```
 
-!!! tip "Vector Tau Fields"
-    Using `VectorField` for tau fields allows compact vector notation in equations. The individual components are accessible via `tau_u1.components[1]` (x) and `tau_u1.components[2]` (z).
+- **`tau_p`** is 0-D (no bases) — a gauge-fixing scalar at the DC Fourier mode only. Valid-mode filtering drops it from non-DC subproblems automatically.
+- **`tau_T1`, `tau_T2`** are scalars on `(xbasis,)` — 1 DOF per Fourier mode.
+- **`tau_u1`, `tau_u2`** are vectors on `(xbasis,)` — 1 DOF per component per Fourier mode (= 2 DOFs per mode in 2D).
 
-### First-Order Substitutions
-
-The **first-order formulation** reduces second-order operators to products of first-order ones. This requires computing the gradient of each field and including the tau lift on the **derivative basis**:
+### First-order substitutions
 
 ```julia
-# Unit vectors (used for buoyancy forcing and lift direction)
 ex, ez = unit_vector_fields(coords, dist)
-
-# Derivative basis: one order lower than zbasis
 lift_basis = derivative_basis(zbasis, 1)
-
-# Lift closure: injects tau into the last Chebyshev mode
 τ_lift(A) = lift(A, lift_basis, -1)
 
-# First-order gradient substitutions (tau lifts enforce BCs on the gradient)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
-grad_b = grad(b) + ez * τ_lift(tau_b1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
 ```
 
-These substitutions replace `Δ(b)` with `div(grad_b)` and `div(u)` with `trace(grad_u)` in the equations.
+The `lift_basis = derivative_basis(zbasis)` is the idiomatic convention (see the [Tau method](../pages/tau_method.md) page for the reason). The closure `τ_lift(A)` injects the tau field at the last Chebyshev coefficient (`-1` = last mode, wraparound-indexed).
 
-### Problem Definition
+`grad_u` and `grad_T` are the augmented gradients — they carry the tau corrections that will enforce the bottom-wall BCs on the gradient itself.
+
+### Problem and equations
 
 ```julia
-problem = IVP([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
+problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 
 add_parameters!(problem,
-    kappa=kappa, nu=nu, Lz=Lz, ez=ez,
-    grad_u=grad_u, grad_b=grad_b,
-    τ_lift=τ_lift)
+    nu=nu, buoy=buoy, ez=ez,
+    grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 
-# Continuity: trace(grad_u) + tau_p = 0  (first-order div(u) = 0)
+# Continuity (first-order form)
 add_equation!(problem, "trace(grad_u) + tau_p = 0")
 
-# Buoyancy: ∂t(b) - κ div(grad_b) + τ_lift(tau_b2) = -u⋅∇(b)
-add_equation!(problem, "∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = -u⋅∇(b)")
+# Temperature: ∂t(T) - ∇²T = -u⋅∇T
+add_equation!(problem, "∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)")
 
-# Momentum: ∂t(u) - ν div(grad_u) + ∇(p) - b*ez + τ_lift(tau_u2) = -u⋅∇(u)
-add_equation!(problem, "∂t(u) - nu*div(grad_u) + grad(p) - b*ez + τ_lift(tau_u2) = -u⋅∇(u)")
+# Momentum: ∂t(u) - Pr∇²u + ∇p - Ra·Pr T ẑ = -u⋅∇u
+add_equation!(problem,
+    "∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)")
 ```
 
-**Key points**:
-- `trace(grad_u)` replaces `div(u)` in the continuity equation
-- `div(grad_b)` replaces `Δ(b)`, and `div(grad_u)` replaces `Δ(u)`
-- `τ_lift(tau_u2)` and `τ_lift(tau_b2)` enforce the top boundary conditions
-- `τ_lift(tau_u1)` and `τ_lift(tau_b1)` enter via the gradient substitutions (bottom BCs)
-- `b*ez` is the buoyancy force in the vertical direction
+Key substitutions:
+- `trace(grad_u)` replaces `div(u)` in the continuity equation and implicitly carries the `τ_{u_1}` lift.
+- `div(grad_T)` replaces `∇²T`; `div(grad_u)` replaces `∇²u`.
+- `τ_lift(tau_T2)` and `τ_lift(tau_u2)` are the tau corrections for the evolution-equation side (top-wall BCs).
 
-### Boundary Conditions
-
-No-slip walls (velocity = 0) and fixed buoyancy at each plate:
+### Boundary conditions
 
 ```julia
-add_bc!(problem, "b(z=0) = Lz")    # Hot bottom (b = Lz in freefall scaling)
-add_bc!(problem, "u(z=0) = 0")     # No-slip bottom
-add_bc!(problem, "b(z=Lz) = 0")    # Cold top
-add_bc!(problem, "u(z=Lz) = 0")    # No-slip top
-add_bc!(problem, "integ(p) = 0")   # Pressure gauge (removes degeneracy)
+add_bc!(problem, "T(z=0) = 1")       # hot bottom
+add_bc!(problem, "T(z=Lz) = 0")      # cold top
+add_bc!(problem, "u(z=0) = 0")       # no-slip bottom
+add_bc!(problem, "u(z=Lz) = 0")      # no-slip top
+add_bc!(problem, "integ(p) = 0")     # pressure gauge
 ```
 
-!!! note "Equation String Syntax"
-    Tarang.jl uses string equations with Unicode operators:
-    - `∂t` — time derivative
-    - `div`, `grad`, `trace` — first-order vector calculus operators
-    - `u⋅∇(b)` — scalar advection; `u⋅∇(u)` — vector advection
-    - `ez` — vertical unit vector (passed as parameter via `add_parameters!`)
-    - `u(z=0) = 0` — sets all velocity components at a boundary
+The BC count (5) equals the tau-DOF count (`tau_p` + `tau_T1` + `tau_T2` + 2 components of `tau_u1` = 5), which is what makes the filtered subproblem matrix square.
 
-### Initial Conditions
-
-Add random perturbations to the conductive background profile:
-
-```julia
-x, z = local_grids(dist, xbasis, zbasis)
-
-# Small random noise, damped at walls
-fill_random!(b, "g"; seed=42, distribution="normal", scale=1e-3)
-get_grid_data(b) .*= z' .* (Lz .- z')    # Damp noise at walls
-
-# Add linear conductive background: b = Lz - z
-get_grid_data(b) .+= Lz .- z'
-
-# Pre-compute spectral coefficients for the timestepper
-ensure_layout!(b, :c)
-```
-
-### Time Stepper and Solver
+### Solver
 
 ```julia
 solver = InitialValueSolver(problem, RK222(); dt=max_dt)
+
+@root_only diagnose(solver)
 ```
 
-**Timestepper selection**:
-- Ra < 10⁵: `RK222` or `RK443` (IMEX Runge-Kutta)
-- Ra > 10⁵: `CNAB2` or `SBDF2` (IMEX multistep, more stable for stiff problems)
-- Very high Ra: `SBDF3` or `SBDF4`
+`diagnose(solver)` prints a tree-style summary of the solver — domain, bases, state fields, equations, BC count, lazy RHS plan status. Useful for debugging setup problems.
 
-### Adaptive Time Stepping (CFL)
+### Output handler
+
+```julia
+snapshots = add_file_handler("snapshots", dist,
+    Dict("T" => T, "ux" => u.components[1], "uz" => u.components[2]);
+    sim_dt=0.1, max_writes=50)
+add_task!(snapshots, T;               name="temperature")
+add_task!(snapshots, u.components[1]; name="ux")
+add_task!(snapshots, u.components[2]; name="uz")
+```
+
+### Initial conditions
+
+Start from the conduction profile `T(z) = 1 − z/Lz` with a small random perturbation to trigger convection:
+
+```julia
+x, z = local_grids(dist, xbasis, zbasis)
+fill_random!(T, "g"; seed=42, distribution="normal", scale=1e-3)
+get_grid_data(T) .*= z' .* (Lz .- z')        # damp noise at walls
+get_grid_data(T) .+= 1.0 .- z' ./ Lz          # add linear conduction profile
+ensure_layout!(T, :c)                          # pre-compute coefficients for timestepper
+```
+
+### CFL-adaptive time stepping
 
 ```julia
 cfl = CFL(solver; initial_dt=max_dt, cadence=10, safety=0.5,
@@ -223,24 +229,18 @@ cfl = CFL(solver; initial_dt=max_dt, cadence=10, safety=0.5,
 add_velocity!(cfl, u)
 ```
 
-**CFL parameters**:
-- `safety`: Safety factor (0.2–0.5, lower is more conservative)
-- `max_change`: Maximum timestep growth factor per interval
-- `min_change`: Maximum timestep reduction factor per interval
-- `cadence`: Recompute CFL every N iterations
-
-### Output
+### Diagnostic callback
 
 ```julia
-snapshots = add_file_handler("snapshots", dist,
-    Dict("b" => b, "ux" => u.components[1], "uz" => u.components[2]);
-    sim_dt=0.25, max_writes=50)
-add_task!(snapshots, b;               name="b" )
-add_task!(snapshots, u.components[1]; name="ux")
-add_task!(snapshots, u.components[2]; name="uz")
+ensure_layout!(T, :g)
+T_data = get_grid_data(T)
+@root_only @printf("Initial T: max=%.4f, min=%.4f, mean=%.4f\n",
+                    maximum(T_data), minimum(T_data), sum(T_data)/length(T_data))
+@root_only @printf("  z at max|T|: %.4f\n", z[argmax(T_data)[2]])
+ensure_layout!(T, :c)
 ```
 
-### Time-Stepping Loop
+### Main loop
 
 ```julia
 @root_only println("Starting main loop")
@@ -249,92 +249,101 @@ run!(solver;
      stop_time=stop_time,
      log_interval=100,
      callbacks=[
-         on_interval(10) do s
-             ensure_layout!(b, :g)
-             max_b = global_max(dist, abs.(get_grid_data(b)))
-             @root_only @printf("  iter=%d, t=%.4e, dt=%.4e, max|b|=%.4f\n",
-                                 s.iteration, s.sim_time, s.dt, max_b)
+         on_interval(1) do s
+             if s.iteration <= 5 || s.iteration % 10 == 0
+                 ensure_layout!(T, :g)
+                 max_T = global_max(dist, abs.(get_grid_data(T)))
+                 ensure_layout!(u.components[2], :g)
+                 max_uz = global_max(dist, abs.(get_grid_data(u.components[2])))
+                 @root_only @printf("  iter=%d, t=%.4e, dt=%.4e, max|T|=%.4f, max|uz|=%.4e\n",
+                                     s.iteration, s.sim_time, s.dt, max_T, max_uz)
+             end
          end
      ])
 
 @root_only println("Done!")
 ```
 
-## Running the Simulation
+## Running the simulation
 
 ```bash
-# Single process
+# Serial
 julia --project=. examples/ivp/rayleigh_benard_2d.jl
 
-# Multiple MPI processes
+# MPI (4 ranks)
 mpiexec -n 4 julia --project=. examples/ivp/rayleigh_benard_2d.jl
 ```
 
-**Expected output**:
+Expected early output:
+
 ```
-2D Rayleigh-Benard Convection
-  Ra=2.00e+06, Pr=1.0, κ=7.07e-04, ν=7.07e-04
+2D Rayleigh-Benard Convection (thermal-diffusive scaling)
+  Ra=2.00e+06, Pr=1.0
+  Coefficients: Pr=1.0000, Ra·Pr=2.00e+06
   Domain: 4.0 × 1.0, Resolution: 256 × 64
 
+Initial T: max=1.0000, min=0.0000, mean=0.5000
+  z at max|T|: 0.0000
 Starting main loop
-  iter=10, t=1.0000e-04, dt=1.0000e-05, max|b|=1.0037
-  iter=20, t=2.0000e-04, dt=1.0000e-05, max|b|=1.0074
+  iter=1, t=1.0000e-03, dt=1.0000e-03, max|T|=1.0000, ...
+  iter=2, t=2.0000e-03, dt=1.0000e-03, max|T|=1.0000, ...
   ...
 ```
 
-## Physical Interpretation
+`max|T|` should stay at `≈ 1.0` throughout (pinned by the bottom-wall BC). If you see it decay to zero or stick at `2 + √2 ≈ 3.414`, that's a BC-enforcement bug — see the [Tau method](../pages/tau_method.md) troubleshooting section.
 
-### Flow Regimes
+## Physical interpretation
 
-Different Rayleigh numbers produce different behaviors:
+### Flow regimes
 
 | Ra | Regime | Characteristics |
-|----|--------|-----------------|
-| < 1708 | Conduction | No flow, pure diffusion |
-| 10³–10⁴ | Steady rolls | Regular convection cells |
-| 10⁵–10⁶ | Transitional | Time-dependent, irregular |
-| > 10⁶ | Turbulent | Chaotic, small-scale structures |
+|---|---|---|
+| < 1708 | Conduction | No flow, pure linear conduction profile |
+| 10³–10⁴ | Steady rolls | Stationary convection cells |
+| 10⁵–10⁶ | Transitional | Time-dependent, irregular rolls |
+| > 10⁶ | Turbulent | Chaotic small-scale structures |
 
-### Nusselt Number
+### Nusselt number
 
-The Nusselt number measures heat transfer enhancement:
+The Nusselt number measures the ratio of total heat flux to the conductive heat flux:
 
 ```math
-\text{Nu} = \frac{\text{Total heat flux}}{\text{Conductive heat flux}}
+\mathrm{Nu} = \frac{\langle u_z T \rangle_{xz} + \langle -\partial_z T \rangle_{xz}}{\langle -\partial_z T_\mathrm{cond} \rangle_{xz}}
 ```
 
-- Nu = 1: Pure conduction (no convection)
-- Nu > 1: Enhanced heat transfer due to convection
-- Nu ≈ 1.0 for Ra < 1708; Nu ∝ Ra^(1/3) approximately in the turbulent regime
+- `Nu = 1` → pure conduction (no convection)
+- `Nu > 1` → enhanced heat transfer from convection
+- Asymptotically, `Nu ~ Ra^(1/3)` in the turbulent regime
+
+You can compute it online via a callback that integrates over the full domain.
 
 ## Visualization
 
 ```julia
 using Plots
 
-# Extract grid data
-b_grid = get_grid_data(b)
-
-# Plot buoyancy field
-heatmap(b_grid', xlabel="x", ylabel="z", title="Buoyancy")
-savefig("buoyancy.png")
+ensure_layout!(T, :g)
+T_grid = Array(get_grid_data(T))
+heatmap(T_grid', xlabel="x", ylabel="z", aspect_ratio=:equal,
+        title="Temperature (Ra = $(Rayleigh))")
+savefig("temperature.png")
 ```
 
-## Parameter Studies
+## Parameter studies
 
-### Exploring Rayleigh Number
+### Exploring Ra
 
 ```julia
 Ra_values = [1e4, 1e5, 1e6, 2e6]
 
 for Ra in Ra_values
-    kappa = (Ra * Prandtl)^(-1/2)
-    nu    = (Ra / Prandtl)^(-1/2)
-    # ... rebuild problem and run
+    nu   = Prandtl
+    buoy = Ra * Prandtl
+    # ... rebuild problem with new `buoy` parameter and run
 end
 ```
 
-### Aspect Ratio Effects
+### Aspect ratio
 
 ```julia
 aspect_ratios = [2.0, 4.0, 8.0]
@@ -346,89 +355,75 @@ for ar in aspect_ratios
 end
 ```
 
-## Performance Optimization
+## Performance notes
 
-### Resolution Requirements
+### Resolution
 
-For Ra = 2×10⁶:
-- Minimum: 128 × 32
-- Recommended: 256 × 64
-- High-resolution: 512 × 128
+For `Ra = 2×10⁶` in 2D:
+- Minimum: `128 × 32` (under-resolved but stable)
+- Recommended: `256 × 64`
+- High-fidelity: `512 × 128`
 
-**Scaling**: For Ra × 10, increase resolution by ~1.5×.
+Scaling: roughly `Nx, Nz × 1.5` for each `Ra × 10`.
 
-### Timestep Control
+### Timestep control
 
 ```julia
-# For stability at high Ra, reduce safety factor
+# For high Ra, reduce safety factor to stay stable
 cfl = CFL(solver; safety=0.3, ...)
 
-# Smooth timestep evolution
+# Smooth dt evolution to avoid thrashing the LHS cache
 cfl = CFL(solver; max_change=1.2, min_change=0.5, ...)
 ```
 
+The LHS solver cache in `step_subproblem_rk!` is keyed by `(dt, a_ii)` — if `dt` changes every step, the sparse LU is rebuilt every step, which is wasteful. Keeping `max_change` modest lets CFL ride out for several steps at a fixed `dt` before re-factoring.
+
 ## Troubleshooting
 
-### NaN in Solution
+### `max|T|` decays to 0
 
-**Causes**:
-- Timestep too large
-- Ra too high for current resolution
-- Insufficient dissipation
+Symptom: `T(z=0) = 1` BC isn't being enforced; temperature drifts toward zero.
 
-**Solutions**:
-```julia
-# Reduce CFL safety factor
-cfl = CFL(solver; safety=0.2, ...)
+Most common cause: a missing or mis-declared tau field. Check that you have exactly one tau DOF per BC (counting vector components and gauge constraints). See the [Tau method → Common Pitfalls](../pages/tau_method.md) section.
 
-# Use more stable timestepper
-solver = InitialValueSolver(problem, CNAB2(); dt=max_dt)
+### `max|T|` sticks at `2 + √2 ≈ 3.414`
 
-# Increase resolution
-Nz = 128   # instead of 64
-```
+Symptom: RK222 is scaling the BC by `1/γ = 1/(1 − 1/√2) = 2 + √2`.
 
-### Simulation Not Converging
+Cause: the `apply_bc_override!` DAE path in `step_subproblem_rk!` isn't firing for this BC. Make sure the BC equation is classified into `sp.bc_rows` (it should be, for any `eq_size < Nz` algebraic equation). If you see this with a custom equation type, file an issue.
 
-**For steady state**:
-- Run longer (convection takes time to develop)
-- Check initial conditions have small perturbations
-- Verify Ra > 1708 (critical Rayleigh number)
+### NaN in the solution
 
-### Memory Issues
+Causes and fixes:
+- Timestep too large → reduce `cfl.safety` to 0.2–0.3
+- Insufficient resolution → bump `Nz` up
+- Missing dealiasing → make sure `dealias = 3/2` is set on both bases
 
-**Solutions**:
-```julia
-# Reduce resolution
-Nx, Nz = 128, 32
+### Simulation not converging to a steady state
 
-# Launch with more MPI processes
-# mpiexec -n 8 julia --project=. ...
-```
+- Run longer — thermal diffusion time is `τ_κ = H² / κ`, and steady state takes many diffusion times
+- Check that initial perturbation is large enough to grow above roundoff
+- Verify `Ra > 1708` (the critical Rayleigh number for onset)
 
-## Complete Script
+### Memory issues
 
-The full example is available at `examples/ivp/rayleigh_benard_2d.jl`. Key elements:
+- Reduce `Nx`, `Nz`
+- Switch to `CNAB2` or `SBDF2` (smaller LU cache than multi-stage RK443)
+- Run with more MPI ranks
 
-1. First-order formulation via `derivative_basis` and `τ_lift` closures
-2. `grad_u` and `grad_b` substitutions passed as parameters
-3. `trace(grad_u) + tau_p = 0` for continuity
-4. `div(grad_b)` and `div(grad_u)` in place of `Δ`
-5. `u⋅∇(b)` and `u⋅∇(u)` for advection
-6. `unit_vector_fields` for `ez`
-7. `add_bc!` with string format, e.g. `"b(z=0) = Lz"`
-8. `fill_random!` plus linear background for initial conditions
-9. `run!` with callbacks for diagnostics
+## Complete script
 
-## Next Steps
+The full example is at `examples/ivp/rayleigh_benard_2d.jl` in the repository. Copy-paste either from this tutorial or from that file — they're kept in sync.
 
-- **[3D Rotating RBC](ivp_3d_rbc.md)**: Add rotation (Ekman, Coriolis)
-- **[Forced 2D Turbulence](ivp_forced_2d_turbulence.md)**: Stochastic forcing, inverse cascade
-- **[Forced SQG Turbulence](ivp_forced_sqg_turbulence.md)**: Fractional Laplacian, surface dynamics
-- **[Eigenvalue Analysis](eigenvalue_problems.md)**: Compute linear stability
+## Next steps
+
+- **[3D Turbulence](ivp_3d_turbulence.md)** — extend to 3D with two Fourier axes
+- **[Boundary Conditions](boundary_conditions.md)** — more BC patterns, including time/space-dependent
+- **[Eigenvalue Problems](eigenvalue_problems.md)** — linear stability around the conduction profile
+- **[Tau method](../pages/tau_method.md)** — the full story on how BCs are enforced
 
 ## References
 
-1. Chandrasekhar, S. (1961). *Hydrodynamic and Hydromagnetic Stability*
-2. Tritton, D. J. (1988). *Physical Fluid Dynamics*
-3. Burns, K. J. et al. (2020). *Dedalus: A flexible framework for numerical simulations with spectral methods*
+1. Chandrasekhar, S. (1961). *Hydrodynamic and Hydromagnetic Stability*. Oxford.
+2. Tritton, D. J. (1988). *Physical Fluid Dynamics*. Oxford.
+3. Burns, K. J., Vasil, G. M., Oishi, J. S., Lecoanet, D., & Brown, B. P. (2020). "Dedalus: A flexible framework for numerical simulations with spectral methods." *Physical Review Research*, 2, 023068.
