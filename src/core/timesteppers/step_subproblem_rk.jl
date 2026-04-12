@@ -132,14 +132,20 @@ function _subproblem_solver_kwargs(choice)
 end
 
 function _solve_cached_system(lhs_solver, rhs::AbstractVector{ComplexF64})
-    result = if isa(lhs_solver, WoodburySolver)
+    return if isa(lhs_solver, WoodburySolver)
         _woodbury_solve(lhs_solver, rhs)
     elseif lhs_solver isa MatSolvers.AbstractMatSolver
         MatSolvers.solve(lhs_solver, rhs)
     else
         lhs_solver \ rhs
     end
-    return is_gpu_array(result) ? Array(result) : result
+end
+
+function _subproblem_operator(sp::Subproblem, which::Symbol, data::AbstractVector)
+    matrix = which === :M ? sp.M_min : sp.L_min
+    matrix === nothing && return nothing
+    cache_key = which === :M ? "_M_min_backend" : "_L_min_backend"
+    return _subproblem_backend_matrix!(sp, matrix, cache_key, data)
 end
 
 """
@@ -198,11 +204,11 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # ── Pre-stage: compute M*X_n per subproblem ──────────────────────────
     n_sp = length(subproblems)
 
-    MX0 = Vector{Vector{ComplexF64}}(undef, n_sp)
+    MX0 = Vector{Any}(undef, n_sp)
     # F[j][sp_idx] = F(X_j) gathered per subproblem (evaluated AFTER stage j solve)
-    F   = [Vector{Vector{ComplexF64}}(undef, n_sp) for _ in 1:stages]
+    F   = [Vector{Any}(undef, n_sp) for _ in 1:stages]
     # LX[j][sp_idx] = L*X_j per subproblem (evaluated AFTER stage j solve)
-    LX  = [Vector{Vector{ComplexF64}}(undef, n_sp) for _ in 1:stages]
+    LX  = [Vector{Any}(undef, n_sp) for _ in 1:stages]
 
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
@@ -210,7 +216,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             continue
         end
         x0_pre = gather_inputs(sp, state_fields)
-        MX0[sp_idx] = sp.M_min * x0_pre
+        MX0[sp_idx] = _subproblem_operator(sp, :M, x0_pre) * x0_pre
     end
 
     # ── Stage loop ────────────────────────────────────────────────────────
@@ -269,12 +275,13 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # Evaluate F[i] and LX[i] AFTER the solve, at the stage i solution.
         # This matches step_rk_imex! where F_exp_vecs[s] and F_imp_vecs[s]
         # are computed after the stage solve (step_rk.jl lines 176-179).
-        F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
+            F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
             F[i][sp_idx] = gather_outputs(sp, F_fields)
             x_pre = gather_inputs(sp, state_fields)
-            LX[i][sp_idx] = sp.L_min !== nothing ? sp.L_min * x_pre : zeros(ComplexF64, length(x_pre))
+            L_op = _subproblem_operator(sp, :L, x_pre)
+            LX[i][sp_idx] = L_op !== nothing ? L_op * x_pre : similar_zeros(x_pre)
         end
     end
 
