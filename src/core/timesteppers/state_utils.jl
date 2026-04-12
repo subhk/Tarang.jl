@@ -177,11 +177,25 @@ function _collect_dt_targets!(targets::Vector{Int}, expr, state::Vector{<:Scalar
     end
 
     if isa(expr, TimeDerivative)
-        # Found a time derivative - extract the operand variable
+        # Found a time derivative — extract the operand variable.
+        # For VectorField operands (e.g. ∂t(u)), expand to ALL component indices:
+        # each component has its own row block in the equation-space layout and
+        # its own F contribution. Returning only the first index would leave
+        # later components with zero F, matching the earlier silent-BC bug but
+        # for vector PDE equations.
         operand = expr.operand
-        state_idx = _find_state_index_for_operand(operand, state, variables)
-        if state_idx !== nothing
-            push!(targets, state_idx)
+        if isa(operand, VectorField)
+            first_idx = _find_state_index_for_operand(operand, state, variables)
+            if first_idx !== nothing
+                for c in 0:(length(operand.components) - 1)
+                    push!(targets, first_idx + c)
+                end
+            end
+        else
+            state_idx = _find_state_index_for_operand(operand, state, variables)
+            if state_idx !== nothing
+                push!(targets, state_idx)
+            end
         end
         return
     end
