@@ -1403,6 +1403,16 @@ state-field-indexed `pde_F_fields`. BC / constraint equations evaluate their
 own F expression. After assembly, `pre_left` is applied to reach the filtered
 equation space that `L_min` lives in.
 """
+"""
+    gather_eqn_F!(dest, sp, solver, pde_F_fields, state_fields)
+
+Pack PDE-equation F values into equation-space. For each equation with a time
+derivative (`M` term), pull F from `pde_F_fields` at the equation's target
+state-field indices. Algebraic/BC equations (no `M` term) contribute ZERO to
+this vector — they are handled separately via `gather_alg_F!` + a direct RHS
+override in the stepper, because the IMEX-RK accumulated formula gives the
+wrong `1/γ` scaling for inhomogeneous algebraic constraints.
+"""
 function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
                        pde_F_fields::Vector, state_fields::Vector)
     problem = sp.problem
@@ -1415,7 +1425,6 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
     fill!(raw, zero(eltype(raw)))
 
     kx_global = _kx_index_global(sp)
-    debug_this = (kx_global == 1) && !get(sp.matrices, "_gather_eqn_F_debugged", false)
 
     i0 = 0
     for (eq_idx, eq_data) in enumerate(eqns)
@@ -1429,9 +1438,6 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
 
         if is_pde
             target_indices = _find_time_derivative_targets(M_expr, state_fields, problem.variables)
-            if debug_this
-                @info "gather_eqn_F!: PDE eq $eq_idx i0=$i0 size=$eq_size targets=$target_indices"
-            end
             if !isempty(target_indices)
                 offset = i0
                 for tidx in target_indices
@@ -1447,14 +1453,56 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
                     end
                 end
             end
-        else
+        end
+        # Algebraic rows intentionally left zero — see gather_alg_F!.
+
+        i0 += eq_size
+    end
+
+    compress_equation_space!(dest, sp, raw)
+    return dest
+end
+
+"""
+    gather_alg_F!(dest, sp)
+
+Pack algebraic-constraint F values (from BC / constraint equations that have
+no time derivative) into equation-space, with zeros at PDE rows.
+
+For each equation without an `M` term, evaluate its stored `F` expression
+(typically a `ConstantOperator`) and project onto the current Fourier mode.
+The result is used by the stepper to OVERRIDE the BC rows of the RHS with
+`dt * a_ii * F_alg`, yielding `L_row * X = F_alg` at each stage — the correct
+enforcement of the algebraic constraint.
+
+This override is necessary because the standard IMEX-RK accumulated RHS
+formula gives `L_row * X = (A^E[i,j]/a_ii) * F_BC` which is wrong by a factor
+of `1/γ` for inhomogeneous algebraic constraints.
+"""
+function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
+    problem = sp.problem
+    eqns = problem.equation_data
+
+    eqn_sizes = [_subproblem_eqn_size(sp, eq) for eq in eqns]
+    I_raw = sum(eqn_sizes; init=0)
+
+    raw = _subproblem_cached_vector!(sp, "_gather_alg_F_raw", I_raw; like=dest)
+    fill!(raw, zero(eltype(raw)))
+
+    i0 = 0
+    for (eq_idx, eq_data) in enumerate(eqns)
+        eq_size = eqn_sizes[eq_idx]
+        if eq_size == 0
+            continue
+        end
+
+        M_expr = get(eq_data, "M", nothing)
+        is_alg = M_expr === nothing || _is_zero_m_term(M_expr)
+
+        if is_alg
             F_expr = get(eq_data, "F_expr", nothing)
             if F_expr === nothing
                 F_expr = get(eq_data, "F", nothing)
-            end
-            if debug_this
-                eq_str = get(eq_data, "equation_string", "?")
-                @info "gather_eqn_F!: BC eq $eq_idx i0=$i0 size=$eq_size \"$eq_str\" F=$F_expr"
             end
             if !_is_zero_F_expr(F_expr)
                 v = _extract_F_constant(F_expr)
@@ -1462,13 +1510,9 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
                     coeff = _bc_constant_projection(Float64(v), sp)
                     if coeff != 0
                         @inbounds raw[i0 + 1] = coeff
-                        if debug_this
-                            @info "  → wrote raw[$(i0+1)] = $coeff"
-                        end
                     end
-                end
-                if v === nothing
-                    @debug "gather_eqn_F!: non-constant BC F not supported" eq_idx=eq_idx F_expr=F_expr
+                elseif v === nothing
+                    @debug "gather_alg_F!: non-constant algebraic F not supported" eq_idx=eq_idx F_expr=F_expr
                 end
             end
         end
@@ -1477,13 +1521,6 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
     end
 
     compress_equation_space!(dest, sp, raw)
-
-    if debug_this
-        nonzero_count = count(!iszero, dest)
-        max_val = isempty(dest) ? 0.0 : maximum(abs.(dest))
-        @info "gather_eqn_F!: I_raw=$I_raw, dest_len=$(length(dest)), nonzero=$nonzero_count, max|dest|=$max_val"
-        sp.matrices["_gather_eqn_F_debugged"] = true
-    end
     return dest
 end
 
@@ -2781,7 +2818,7 @@ export gather, scatter
 
 # Export subproblem methods
 export check_condition, valid_modes
-export gather_inputs, scatter_inputs, gather_eqn_F!
+export gather_inputs, scatter_inputs, gather_eqn_F!, gather_alg_F!
 
 # Export matrix building
 export build_matrices!, build_subproblem_matrices
