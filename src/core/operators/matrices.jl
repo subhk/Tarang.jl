@@ -984,7 +984,17 @@ function subproblem_matrix(op::Interpolate, sp; kwargs...)
     cheb_label = String(cheb_basis.meta.element_label)
 
     if coord_name != cheb_label
-        # Interpolation in Fourier direction: handled by mode selection, just identity
+        # Interpolation in a Fourier (periodic) direction is mathematically
+        # ill-posed: any point `x=x0` in a periodic domain is indistinguishable
+        # from `x0 + n*L`, so `T(x=x0) = f(z)` does not define a unique BC.
+        # Returning `nothing` here skips the matrix row entirely; without
+        # this warning the BC would be silently dropped. Users should use
+        # `integ()` for spatial-average constraints or set BCs only on
+        # coupled (e.g. Chebyshev) directions.
+        @warn "BC at a fixed point in Fourier direction `$coord_name` " *
+              "is ill-posed for periodic domains and will be ignored. " *
+              "Use `integ($coord_name, ...)` for spatial-average constraints, " *
+              "or set BCs only on coupled directions (e.g. Chebyshev)." maxlog=2
         return nothing
     end
 
