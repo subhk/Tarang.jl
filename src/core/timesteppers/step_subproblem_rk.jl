@@ -225,11 +225,20 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # LX[j][sp_idx] = L*X_j per subproblem (evaluated AFTER stage j solve)
     LX  = [Vector{Any}(undef, n_sp) for _ in 1:stages]
     RHS = Vector{Any}(undef, n_sp)
+    # Algebraic-constraint F (from BC / no-M equations), packed in equation
+    # space with zeros at PDE rows. Computed ONCE per step because BC values
+    # are stage-independent. Used to override BC rows in the stage RHS with
+    # `dt*a_ii*F_alg`, yielding `L_row*X = F_alg` at each stage (correct DAE
+    # enforcement). Without this override, the accumulated IMEX-RK formula
+    # scales BC F by `A^E[i,j]/a_ii` (= 1/γ for RK222 stage 2 = 2+√2 ≈ 3.414)
+    # and inhomogeneous BCs would be enforced at the wrong value.
+    ALG_F = Vector{Any}(undef, n_sp)
 
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
             MX0[sp_idx] = ComplexF64[]
             RHS[sp_idx] = ComplexF64[]
+            ALG_F[sp_idx] = ComplexF64[]
             continue
         end
         n = size(sp.M_min, 1)
@@ -239,6 +248,10 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         _apply_subproblem_operator!(mx0, _subproblem_operator(sp, :M, x0_pre), x0_pre)
         MX0[sp_idx] = mx0
         RHS[sp_idx] = rhs
+
+        alg_f = _sp_stage_vector!(sp, "_sp_rk_alg_f", n, mx0)
+        gather_alg_F!(alg_f, sp)
+        ALG_F[sp_idx] = alg_f
     end
 
     # ── Stage loop ────────────────────────────────────────────────────────
@@ -268,6 +281,20 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
 
             # Solve: (M_min + dt*a_ii*L_min) * x_sol = rhs
             a_ii = A_imp[i, i]
+
+            # Override BC rows with `dt*a_ii*F_alg`. For algebraic rows (M=0),
+            # the stage LHS reduces to `dt*a_ii*L_row*X = dt*a_ii*F_alg`, i.e.,
+            # `L_row*X = F_alg`, enforcing the BC at every stage regardless of
+            # accumulated history. `sp.bc_rows` lists the L_min row indices that
+            # correspond to algebraic (BC-like) equations, computed in
+            # build_matrices! from the Woodbury block classification.
+            if !isempty(sp.bc_rows) && abs(a_ii) > 1e-14
+                alg_f = ALG_F[sp_idx]
+                dt_aii = ComplexF64(dt * a_ii)
+                @inbounds for r in sp.bc_rows
+                    rhs[r] = dt_aii * alg_f[r]
+                end
+            end
 
             if abs(a_ii) < 1e-14
                 # No implicit diagonal — just invert M
@@ -299,11 +326,11 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # This matches step_rk_imex! where F_exp_vecs[s] and F_imp_vecs[s]
         # are computed after the stage solve (step_rk.jl lines 176-179).
         #
-        # `evaluate_rhs` returns per-STATE-FIELD F values (PDE targets only).
-        # `gather_eqn_F!` then packs them into equation-space rows and — for BC
-        # equations without a time derivative — evaluates the BC's own F
-        # expression. Without this second path, inhomogeneous BCs like
-        # `T(z=0) = 1` silently become `T(z=0) = 0` and max|T| decays to zero.
+        # `evaluate_rhs` returns per-STATE-FIELD F values for PDE equations.
+        # `gather_eqn_F!` packs them into equation-space rows, leaving BC rows
+        # at zero — those are handled by the `ALG_F` override above because
+        # the IMEX-RK accumulation formula gives the wrong `1/γ` scaling for
+        # inhomogeneous algebraic constraints like `T(z=0) = 1`.
         F_fields = evaluate_rhs(solver, state_fields, t + dt * c[i])
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
