@@ -149,15 +149,20 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
             host_result = pencil_plan * host_data
             set_coeff_data!(field, copy_to_device(host_result, grid_data))
         else
-            # Use in-place mul! if coeff data is already allocated
+            # Use in-place mul! if coeff data is already allocated. The
+            # fallback catch path allocates a fresh PencilArray each call,
+            # so a single `@warn` the first time it fires makes it obvious
+            # whether the fast path is working under MPI.
             coeff_data = get_coeff_data(field)
             if coeff_data !== nothing && isa(coeff_data, PencilArrays.PencilArray)
                 try
                     mul!(coeff_data, pencil_plan, grid_data)
-                catch
+                catch err
+                    @warn "forward_transform!: PencilFFTs mul! fast path failed, falling back to allocating `*`. This costs one PencilArray per transform — consider upgrading PencilFFTs or checking the field buffer layout." exception=(err, catch_backtrace()) maxlog=1
                     set_coeff_data!(field, pencil_plan * grid_data)
                 end
             else
+                @warn "forward_transform!: coeff buffer is not a PencilArray; using allocating `*` fallback. Expected `allocate_data!` to pre-allocate via PencilFFTs.allocate_output." maxlog=1
                 set_coeff_data!(field, pencil_plan * grid_data)
             end
         end
