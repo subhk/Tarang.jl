@@ -379,7 +379,10 @@ function _try_build_subproblems!(solver::InitialValueSolver)
     @info "  $n_total subproblems built ($n_with_mats with matrices)"
 end
 
-function _build_initial_value_solver(problem::IVP, timestepper; dt::Real=1e-3, device::String="cpu")
+function _build_initial_value_solver(problem::IVP, timestepper;
+                                     dt::Real=1e-3,
+                                     device::String="cpu",
+                                     matsolver::Union{String,Symbol,Type,Tuple}=:sparse)
     setup_domain!(problem)
 
     # Merge boundary conditions into equation system
@@ -387,7 +390,7 @@ function _build_initial_value_solver(problem::IVP, timestepper; dt::Real=1e-3, d
 
     validate_problem(problem)
 
-    base = SolverBaseData(problem)
+    base = SolverBaseData(problem; matsolver=matsolver)
 
     state = collect_state_fields(problem.variables)
 
@@ -730,4 +733,3 @@ function apply_entry_cutoff!(v::AbstractVector, cutoff::Real)
     v[abs.(v) .< cutoff] .= 0
     return v
 end
-
