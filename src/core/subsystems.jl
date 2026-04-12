@@ -1409,63 +1409,92 @@ function build_matrices!(sp::Subproblem, names, solver)
         matrices[name_str] = sparse(rows, cols, ComplexF64.(data), I, J)
     end
 
-    # ── Gauge regularization for zero rows ──────────────────────────────
+    # ── Dedalus-style valid mode filtering ──────────────────────────────
     # For non-DC modes, gauge constraints like integ(p)=0 produce zero rows
-    # (the integral of a non-DC Fourier mode over x is zero). The system is
-    # 39×39 but rank 38 without fixing.
+    # (the integral of a non-DC Fourier mode over x is zero), leaving the
+    # paired tau variable (tau_p) as a free parameter — a genuine gauge
+    # degree of freedom that Dedalus excludes via valid_modes.
     #
-    # Fix: for each zero row, find the 0D tau variable that this equation
-    # is meant to constrain and pin it to 0 by setting L[row, tau_col] = 1.
-    # This makes the system full-rank while keeping it square.
-    #
-    # Identification: the zero row corresponds to an equation whose associated
-    # variable (in the 1:1 equation-variable mapping) doesn't match the actual
-    # target. For gauge constraints, the target is typically a 0D tau field.
-    # We find it by looking for columns whose ONLY non-zero entries come from
-    # equations where they appear as a single isolated term (like tau_p in
-    # trace(grad_u) + tau_p = 0).
+    # Approach (following Dedalus subsystems.py:539-563):
+    # 1. Detect equation rows that are all-zero in both L and M (trivially
+    #    satisfied, e.g., integ(p)=0 for non-DC).
+    # 2. For each zero row, find the paired 0D tau variable: the 1-DOF
+    #    variable whose total column norm is SMALLEST (the least-used tau
+    #    is the gauge Lagrange multiplier).
+    # 3. Mark both the row and column invalid.
+    # 4. Apply permutation matrices via drop_empty_rows to filter them out,
+    #    giving a smaller square sparse system that can use fast sparse LU.
+    valid_eqn = ones(Bool, I)
+    valid_var = ones(Bool, J)
+
     if haskey(matrices, "L")
         L_raw = matrices["L"]
         M_raw = get(matrices, "M", nothing)
 
+        # Compute column norms for all 0D/1D tau variables (candidates for removal)
+        tau_cols = Int[]
+        tau_norms = Float64[]
+        j0 = 0
+        for (vi, (var, vsz)) in enumerate(zip(vars, var_sizes))
+            if vsz == 1
+                col = j0 + 1
+                n = sum(abs.(L_raw[:, col]))
+                if M_raw !== nothing
+                    n += sum(abs.(M_raw[:, col]))
+                end
+                push!(tau_cols, col)
+                push!(tau_norms, n)
+            end
+            j0 += vsz
+        end
+
+        # For each zero row, pair it with the least-used tau column
+        used_cols = Set{Int}()
         for row in 1:I
             L_nnz = count(!iszero, L_raw[row, :])
             M_nnz = M_raw !== nothing ? count(!iszero, M_raw[row, :]) : 0
             if L_nnz == 0 && M_nnz == 0
-                # Zero row. Find the least-constrained 0D tau variable.
-                # Compute column norms to identify the weakest column.
+                # Find the smallest-norm unused tau column
                 best_col = 0
                 best_norm = Inf
-                j0 = 0
-                for (vi, (var, vsz)) in enumerate(zip(vars, var_sizes))
-                    if vsz == 1  # Only consider 1-DOF variables (0D taus)
-                        col = j0 + 1
-                        col_norm = sum(abs.(L_raw[:, col]))
-                        if M_raw !== nothing
-                            col_norm += sum(abs.(M_raw[:, col]))
-                        end
-                        if col_norm < best_norm
-                            best_norm = col_norm
-                            best_col = col
-                        end
+                for (ci, col) in enumerate(tau_cols)
+                    if col in used_cols
+                        continue
                     end
-                    j0 += vsz
+                    if tau_norms[ci] < best_norm
+                        best_norm = tau_norms[ci]
+                        best_col = col
+                    end
                 end
                 if best_col > 0
-                    L_raw[row, best_col] = ComplexF64(1)
+                    valid_eqn[row] = false
+                    valid_var[best_col] = false
+                    push!(used_cols, best_col)
                 end
             end
         end
-        matrices["L"] = L_raw
     end
 
-    # Identity permutations — the per-subproblem matrices are already the
-    # correct size. Gather/scatter handles mode extraction.
-    n = I
-    sp.pre_left = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
-    sp.pre_left_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
-    sp.pre_right_pinv = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
-    sp.pre_right = sparse(ComplexF64(1)*LinearAlgebra.I, n, n)
+    # Build filter matrices
+    valid_eqn_mat = spdiagm(0 => ComplexF64.(valid_eqn))
+    valid_var_mat = spdiagm(0 => ComplexF64.(valid_var))
+
+    # Preconditioners: drop invalid rows/columns (Dedalus subsystems.py:560-563)
+    sp.pre_left = drop_empty_rows(valid_eqn_mat)
+    sp.pre_left_pinv = sparse(sp.pre_left')
+    sp.pre_right_pinv = drop_empty_rows(valid_var_mat)
+    sp.pre_right = sparse(sp.pre_right_pinv')
+
+    # Apply permutations: L_min = pre_left * L * pre_right (Dedalus subsystems.py:569-571)
+    for (name, matrix) in matrices
+        matrices[name] = sp.pre_left * matrix * sp.pre_right
+    end
+
+    n_valid_eqn = sum(valid_eqn)
+    n_valid_var = sum(valid_var)
+    if n_valid_eqn != n_valid_var
+        @warn "Non-square filtered system: group=$(sp.group), valid_eqn=$n_valid_eqn, valid_var=$n_valid_var" maxlog=3
+    end
 
     # Store minimal CSR matrices (following subsystems:573-575)
     sp.matrices = matrices
