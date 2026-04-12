@@ -23,9 +23,59 @@ mutable struct FourierTransform <: Transform
     axis::Int
     plan_dtype::Type{<:AbstractFloat}  # Real element type used for plan creation (e.g., Float64, Float32)
 
+    # ── Per-shape plan / scratch caches for zero-alloc in-place transforms ──
+    #
+    # The original `plan_forward`/`plan_backward` fields above hold 1D plans
+    # created at solver setup time. They only fire for `ndims(data) == 1`
+    # inputs (tau fields), so 2D state fields used to fall through to
+    # `FFTW.rfft(data, dims)` which allocates a fresh array per call.
+    #
+    # `fwd_plan_cache` and `bwd_plan_cache` cache multi-dim plans keyed by
+    # `(size, eltype)` of the input array, so subsequent calls at the same
+    # shape reuse the cached plan via `mul!`. Separate caches for forward
+    # and backward because they have different plan types and dimensions.
+    #
+    # `fwd_scratch` / `bwd_scratch` cache intermediate output buffers keyed
+    # by `(size, eltype)` of the output array — used when a transform is
+    # in the middle of the chain and its output feeds the next transform.
+    # The final transform writes directly to the field's pre-allocated
+    # coeff/grid buffer, not into this scratch.
+    fwd_plan_cache::Dict{Tuple, Any}
+    bwd_plan_cache::Dict{Tuple, Any}
+    fwd_scratch::Dict{Tuple, AbstractArray}
+    bwd_scratch::Dict{Tuple, AbstractArray}
+
     function FourierTransform(basis::Basis, axis::Int)
-        new(nothing, nothing, basis, axis, Float64)
+        new(nothing, nothing, basis, axis, Float64,
+            Dict{Tuple, Any}(), Dict{Tuple, Any}(),
+            Dict{Tuple, AbstractArray}(), Dict{Tuple, AbstractArray}())
     end
+end
+
+"""
+    ChebScratch
+
+Pre-allocated scratch buffers for a single in-place Chebyshev transform
+at a given input shape / eltype. Cached on `ChebyshevTransform.fwd_scratch`
+/ `bwd_scratch` keyed by `(input_shape, input_eltype, coeff_size)` so that
+each distinct call shape pays the allocation cost exactly once.
+
+Fields:
+- `real_in` / `imag_in` — shape equal to the transform INPUT (real part and,
+  for complex input, imaginary part split out for the DCT-I which requires
+  real data).
+- `tmp_real` / `tmp_imag` — shape equal to the DCT-I OUTPUT before truncation.
+  For forward, same shape as input; for backward, equal to the zero-padded
+  grid shape along the transform axis.
+- `plan` — FFTW r2r REDFT00 plan. Created with `plan_r2r(tmp_real, REDFT00,
+  (axis,))` and reused via `mul!`.
+"""
+mutable struct ChebScratch
+    real_in::AbstractArray
+    imag_in::Union{Nothing, AbstractArray}
+    tmp_real::AbstractArray
+    tmp_imag::Union{Nothing, AbstractArray}
+    plan::Any
 end
 
 mutable struct ChebyshevTransform <: Transform
@@ -49,13 +99,22 @@ mutable struct ChebyshevTransform <: Transform
     Kmax::Int
     axis::Int
 
+    # ── Per-shape scratch caches for zero-alloc in-place transforms ────────
+    # Keyed by `(input_shape, input_eltype)`. Each entry holds a ChebScratch
+    # with pre-allocated real/imag split buffers, r2r scratch, and plan.
+    # See ChebScratch above for details.
+    fwd_scratch::Dict{Tuple, ChebScratch}
+    bwd_scratch::Dict{Tuple, ChebScratch}
+
     function ChebyshevTransform(basis::ChebyshevT)
         new(
             nothing, nothing,      # forward/backward matrices
             basis,
             nothing, nothing,      # FFTW plans
             0.0, 0.0, 0.0, 0.0,    # Scaling factors
-            0, 0, 0, 0             # Sizes and axis
+            0, 0, 0, 0,            # Sizes and axis
+            Dict{Tuple, ChebScratch}(),
+            Dict{Tuple, ChebScratch}(),
         )
     end
 end
