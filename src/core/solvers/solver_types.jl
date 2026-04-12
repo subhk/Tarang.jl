@@ -352,16 +352,21 @@ end
     _auto_register_coordinate_fields!(problem)
 
 Walk the problem's variables, collect the unique bases, and register their
-grid-coordinate arrays on `problem.bc_manager.coordinate_fields` under the
-basis's element label (typically `"x"`, `"y"`, `"z"`, etc.). This lets
-space-dependent BC expressions reference coordinates by name (e.g.
-`"sin(2*pi*x/Lx)"`) without the user having to set up coordinate fields
-manually.
+GLOBAL grid-coordinate arrays on `problem.bc_manager.coordinate_fields`
+under the basis's element label (typically `"x"`, `"y"`, `"z"`, etc.).
 
-Skips axes that are already registered and skips bases with no grid (0-D
-tau variables). For non-separable (coupled) bases like `ChebyshevT`, we
-still register the Gauss-Lobatto grid because BC expressions may reference
-the coupled coordinate (e.g. `T(x=0) = sin(pi*z)`).
+Using the global grid (not the per-rank local grid) means every MPI rank
+sees the same full coordinate array. BC expressions like `sin(2*pi*x/Lx)`
+therefore evaluate to the same full-size grid array on every rank, and
+the per-subproblem Fourier projection (which needs the full array to
+produce correct global coefficients) works without any inter-rank
+communication. The small per-rank FFT overhead is negligible compared to
+the volumetric work of the stepper.
+
+Skips axes already registered by the user and skips bases with no grid
+(0-D tau variables). Registered entries use CPU `Vector{Float64}` so the
+string-expression evaluator in `boundary_conditions.jl` (which uses
+scalar broadcasts) works uniformly.
 """
 function _auto_register_coordinate_fields!(problem::Problem)
     bc_manager = problem.bc_manager
@@ -370,20 +375,18 @@ function _auto_register_coordinate_fields!(problem::Problem)
     for var in problem.variables
         for comp in scalar_components(var)
             isempty(comp.bases) && continue
-            dist = comp.dist
             scales = comp.scales === nothing ?
                      ntuple(_ -> 1.0, max(length(comp.bases), 1)) :
                      comp.scales
-            for basis in comp.bases
+            for (axis_idx, basis) in enumerate(comp.bases)
                 basis === nothing && continue
                 label = String(basis.meta.element_label)
                 (label in seen) && continue
                 haskey(bc_manager.coordinate_fields, label) && (push!(seen, label); continue)
                 try
-                    axis = get_basis_axis(dist, basis)
-                    scale = axis + 1 <= length(scales) ? scales[axis + 1] : 1.0
-                    grid = local_grid(basis, dist, scale; move_to_arch=false)
-                    bc_manager.coordinate_fields[label] = collect(grid)
+                    scale = axis_idx <= length(scales) ? scales[axis_idx] : 1.0
+                    grid = _global_bc_grid(basis, scale)
+                    bc_manager.coordinate_fields[label] = grid
                     push!(seen, label)
                 catch err
                     @debug "auto-register coordinate field for $label failed" err
@@ -392,6 +395,29 @@ function _auto_register_coordinate_fields!(problem::Problem)
         end
     end
     return
+end
+
+"""
+    _global_bc_grid(basis, scale) -> Vector{Float64}
+
+Return the full (non-distributed) grid-coordinate array for a basis in
+problem coordinates (applies change-of-variables for bounded intervals).
+Used by `_auto_register_coordinate_fields!` so that BC expressions see
+the global grid regardless of MPI layout.
+"""
+function _global_bc_grid(basis, scale::Real)
+    native = _native_grid(basis, scale)
+    # Fourier bases: `_native_grid` already returns problem coordinates.
+    # Other bases (e.g. Chebyshev) return the canonical [-1, 1] grid, so
+    # apply the COV to map back to problem space.
+    mapped = if isa(basis, FourierBasis)
+        native
+    elseif basis.meta.COV !== nothing
+        problem_coord(basis.meta.COV, native)
+    else
+        _problem_coord_fallback(basis, native)
+    end
+    return collect(Float64, mapped)
 end
 
 """Merge boundary_conditions strings into equations and track indices."""
