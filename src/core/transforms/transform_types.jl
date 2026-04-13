@@ -70,11 +70,11 @@ Fields:
 - `plan` — FFTW r2r REDFT00 plan. Created with `plan_r2r(tmp_real, REDFT00,
   (axis,))` and reused via `mul!`.
 """
-mutable struct ChebScratch
-    real_in::AbstractArray
-    imag_in::Union{Nothing, AbstractArray}
-    tmp_real::AbstractArray
-    tmp_imag::Union{Nothing, AbstractArray}
+mutable struct ChebScratch{T<:AbstractFloat, N}
+    real_in::Array{T, N}
+    imag_in::Union{Nothing, Array{T, N}}
+    tmp_real::Array{T, N}
+    tmp_imag::Union{Nothing, Array{T, N}}
     plan::Any
 end
 
