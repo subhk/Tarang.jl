@@ -196,14 +196,19 @@ end
     # IC: T(x, z) = sin(π·z/Lz), independent of x
     seed_T!(T, (x, z) -> sin(π * z / Lz), T.dist)
 
+    # Chebyshev-Gauss-Lobatto grid points don't include z = Lz/2 exactly
+    # for even N, so the initial max of sin(π·z/Lz) is slightly below 1
+    # (≈ 0.997 for N = 32). We only need to know the initial profile was
+    # seeded correctly; we don't care about the exact value of max.
     initial_max = maximum(abs, grid_array(T))
-    @test isapprox(initial_max, 1.0; atol=1e-8)
+    @test 0.99 < initial_max < 1.0
 
     step_n!(solver, n_steps)
 
-    # Analytical decay factor
+    # Analytical decay factor — scale the INITIAL sampled max by the
+    # analytical decay exp(-κ·(π/Lz)²·t) to get the expected final max.
     decay = exp(-κ * (π / Lz)^2 * t_final)
-    expected_max = decay  # since original max was 1.0
+    expected_max = initial_max * decay
 
     numerical_max = maximum(abs, grid_array(T))
     @test isapprox(numerical_max, expected_max; rtol=5e-3)
