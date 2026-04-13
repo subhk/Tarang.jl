@@ -149,11 +149,19 @@ function _chebyshev_backward(data::AbstractArray, transform::ChebyshevTransform)
 
         real_type = real(eltype(host_data))
 
-        # Prepare coefficients for DCT-I backward (undo the endpoint halving)
-        # The forward transform halves the DC (first) and the physical last DCT-I mode
-        # (at index grid_size). Only undo the last-endpoint doubling if the stored last
-        # coefficient IS the physical last DCT-I mode (coeff_size == grid_size).
-        scaled_real = real.(host_data)  # already a new array, no copy needed
+        # Stored coefficients are in the STANDARD Chebyshev convention
+        # (as of the Tarang convention bridge — see
+        # `_flip_odd_indices_along_axis!` comment block). Reverse the bridge
+        # by flipping odd coefficients before feeding into the inverse DCT-I.
+        # Work on a copy so the caller's array is not mutated.
+        scaled_real = copy(real.(host_data))
+        _flip_odd_indices_along_axis!(scaled_real, axis)
+
+        # Undo the endpoint halving that the forward transform applied. The
+        # forward halved the DC (index 1) and the physical last DCT-I mode
+        # (at index grid_size). Only undo the last-endpoint doubling if the
+        # stored last coefficient IS the physical last DCT-I mode
+        # (coeff_size == grid_size).
         _scale_first_along_axis!(scaled_real, axis, real_type(2.0))
         if coeff_size > 1 && coeff_size == grid_size
             _scale_last_along_axis!(scaled_real, axis, real_type(2.0))
@@ -167,14 +175,12 @@ function _chebyshev_backward(data::AbstractArray, transform::ChebyshevTransform)
         padded_real[idx...] .= scaled_real[idx...]
 
         # DCT-I backward (REDFT00 is its own inverse up to normalization)
-        # The DCT-I is symmetric: applying it again with normalization gives the inverse
         temp_real = FFTW.r2r(padded_real, FFTW.REDFT00, (axis,))
-        # No additional normalization needed — the forward already divided by (N-1)
-        # and DCT-I(DCT-I(x)) = 2(N-1)*x, so we divide by 2
         temp_real ./= real_type(2.0)
 
         if eltype(host_data) <: Complex
-            scaled_imag = imag.(host_data)  # already a new array, no copy needed
+            scaled_imag = copy(imag.(host_data))
+            _flip_odd_indices_along_axis!(scaled_imag, axis)
             _scale_first_along_axis!(scaled_imag, axis, real_type(2.0))
             if coeff_size > 1 && coeff_size == grid_size
                 _scale_last_along_axis!(scaled_imag, axis, real_type(2.0))
@@ -360,6 +366,10 @@ function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::Cheby
     scratch.tmp_real .*= norm_factor
     _scale_first_along_axis!(scratch.tmp_real, ax, half)
     _scale_last_along_axis!(scratch.tmp_real, ax, half)
+    # Bridge from DCT-I output (coefficients of f(-x) in standard basis)
+    # to standard-convention coefficients of f(x). See the comment block
+    # on `_flip_odd_indices_along_axis!` for the full derivation.
+    _flip_odd_indices_along_axis!(scratch.tmp_real, ax)
 
     # ── Imaginary part (if complex) ───────────────────────────────
     if in_eltype <: Complex
@@ -368,6 +378,7 @@ function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::Cheby
         scratch.tmp_imag .*= norm_factor
         _scale_first_along_axis!(scratch.tmp_imag, ax, half)
         _scale_last_along_axis!(scratch.tmp_imag, ax, half)
+        _flip_odd_indices_along_axis!(scratch.tmp_imag, ax)
     end
 
     # ── Copy leading `coeff_size` slab into `out` (truncation) ────
@@ -447,6 +458,12 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Cheb
     else
         @inbounds @views copyto!(scratch.real_in[dst_idx...], in[src_idx...])
     end
+    # Reverse the Tarang convention bridge: flip odd-degree coefficients
+    # so the DCT-I IDCT sees what it expects (coefficients of f(-x) in
+    # the standard basis). See the comment block on
+    # `_flip_odd_indices_along_axis!`.
+    _flip_odd_indices_along_axis!(scratch.real_in, ax)
+
     _scale_first_along_axis!(scratch.real_in, ax, two)
     # Only undo the last-endpoint halving if the stored last coeff IS the
     # physical last DCT-I mode (coeff_size == grid_size). When the
@@ -464,6 +481,7 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Cheb
     if in_eltype <: Complex
         fill!(scratch.imag_in, zero(real_T))
         @inbounds @views @. scratch.imag_in[dst_idx...] = imag(in[src_idx...])
+        _flip_odd_indices_along_axis!(scratch.imag_in, ax)
         _scale_first_along_axis!(scratch.imag_in, ax, two)
         if coeff_size > 1 && coeff_size == grid_size
             _scale_last_along_axis!(scratch.imag_in, ax, two)
