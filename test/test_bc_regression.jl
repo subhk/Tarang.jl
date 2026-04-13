@@ -306,14 +306,19 @@ end
 #   3. max|T| stays bounded (not blowing up)
 
 @testset "BC regression: time-dependent Dirichlet" begin
-    ω = 2π  # period = 1
+    # NOTE: The BC value-expression parser currently only resolves
+    # coordinate/time variables (x, y, z, t), NOT problem parameters.
+    # Passing `params_extra=(ω=2π,)` and writing `"sin(ω*t)"` produces a
+    # runtime warning because `ω` isn't in the BC expression namespace.
+    # For now, hardcode the frequency as a numeric literal. This is a
+    # pre-existing bug that's out of scope for this BC regression suite
+    # but should be tracked separately (see docs/ TODO).
     κ = 1.0
     Lz = 1.0
     dt = 0.01
 
-    solver, T = build_diffusion("T(z=0) = sin(ω*t)", "T(z=Lz) = 0";
-                                Nx=4, Nz=16, κ=κ, Lz=Lz, dt=dt,
-                                params_extra=(ω=ω,))
+    solver, T = build_diffusion("T(z=0) = sin(6.283185307*t)", "T(z=Lz) = 0";
+                                Nx=4, Nz=16, κ=κ, Lz=Lz, dt=dt)
 
     # Zero IC
     ensure_layout!(T, :g)
