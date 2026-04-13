@@ -18,6 +18,73 @@ function _scale_last_along_axis!(data::AbstractArray, axis::Int, factor)
     data[idx...] .*= factor
 end
 
+"""
+    _flip_odd_indices_along_axis!(data, axis)
+
+Multiply every odd-indexed slice along `axis` by `-1`. "Odd-indexed" here
+means polynomial degree is odd, i.e., k = 1, 3, 5, ... (1-based indices
+k = 2, 4, 6, ...).
+
+### Why this exists — Chebyshev convention bridge
+
+Tarang's Chebyshev-Gauss-Lobatto grid is `x_j = -cos(πj/(N-1))` (see
+`_gauss_lobatto_nodes` in basis.jl:2334), running from -1 at j=0 to +1
+at j=N-1. But FFTW's REDFT00 (DCT-I) is defined on the standard grid
+`y_j = cos(πj/(N-1))`, which runs from +1 at j=0 to -1 at j=N-1 —
+the OPPOSITE orientation.
+
+If we feed Tarang-grid data `X[j] = f(x_j) = f(-cos(πj/(N-1)))` directly
+to the DCT-I, the output coefficients `Y[k]` represent the Chebyshev
+expansion of `g(y) = f(-y)` in the STANDARD Chebyshev T basis, NOT
+the expansion of `f(x)` itself.
+
+Using `T_k(-y) = (-1)^k T_k(y)`:
+    f(x) = g(-x) = Σ Y[k] T_k(-x) = Σ Y[k] (-1)^k T_k(x)
+
+So to convert the DCT-I output `Y[k]` into standard-convention
+coefficients of `f` (which downstream operators — interpolation,
+differentiation matrix, BC row assembly — all assume), we multiply
+every **odd**-degree coefficient by -1.
+
+### Downstream consequences of NOT doing this
+
+Before this fix was added, the `forward_transform!` / `backward_transform!`
+round-trip worked correctly (both transforms used the same inverted
+convention and cancelled), but EVERY operation that mixed Tarang-stored
+coefficients with "canonical" Chebyshev math was wrong:
+
+- `interpolate_jacobi` returned `f(-z)` instead of `f(z)` — endpoints
+  swapped.
+- `subproblem_matrix(::Interpolate, sp)` built BC row weights as
+  `[T_k(xi)]` instead of `[T_k(-xi)] = [(-1)^k T_k(xi)]`, so Dirichlet
+  BCs like `T(z=0) = 1` were enforced at `z=Lz` and vice versa. The
+  canonical RBC example had been running with **swapped boundaries**.
+- `_chebyshev_t_differentiation_matrix` introduced a global sign flip
+  on first derivatives (the diff matrix's nonzero stencil is odd-stride,
+  so applying standard D to Tarang coefficients is off by (-1)^{j-k} = -1
+  for each nonzero). Second derivatives (and therefore `div(grad(·))`)
+  were correct by accident (two sign flips cancelled).
+
+After this fix, stored coefficients match the standard convention used
+by all downstream operators, and each of the above behaviors is correct.
+
+### Implementation note
+
+This is applied as the LAST step of `_chebyshev_forward` (after the
+FFTW DCT-I and the endpoint halving) and as the FIRST step of
+`_chebyshev_backward` (before the endpoint doubling and FFTW IDCT-I).
+It's its own inverse — applying it twice is identity — so forward and
+backward are symmetric.
+"""
+@inline function _flip_odd_indices_along_axis!(data::AbstractArray, axis::Int)
+    n = size(data, axis)
+    for k in 2:2:n  # 1-based: k=2 is degree 1, k=4 is degree 3, etc.
+        idx = ntuple(i -> i == axis ? (k:k) : Colon(), ndims(data))
+        @inbounds @views data[idx...] .*= -one(eltype(data))
+    end
+    return data
+end
+
 function _chebyshev_forward(data::AbstractArray, transform::ChebyshevTransform)
     return _execute_on_cpu(data) do host_data
         axis = transform.axis
@@ -30,16 +97,22 @@ function _chebyshev_forward(data::AbstractArray, transform::ChebyshevTransform)
 
         real_type = real(eltype(host_data))
 
-        # Use DCT-I (REDFT00) to match the Gauss-Lobatto grid: x_k = -cos(πk/(N-1))
+        # DCT-I (REDFT00) on Tarang's `-cos(πk/(N-1))` grid. The raw output
+        # is the Chebyshev expansion of `g(y) = f(-y)` in the standard
+        # basis; we convert to standard-convention coefficients of `f(x)`
+        # via `_flip_odd_indices_along_axis!` below. See the comment block
+        # on `_flip_odd_indices_along_axis!` for the full derivation.
         real_data = real.(host_data)
         temp_real = FFTW.r2r(real_data, FFTW.REDFT00, (axis,))
 
         # DCT-I normalization: divide by (N-1), half-weight at endpoints
         norm_factor = real_type(grid_size > 1 ? 1.0 / (grid_size - 1) : 1.0)
         temp_real .*= norm_factor
-        # Half the first and last coefficients (DCT-I endpoint convention)
         _scale_first_along_axis!(temp_real, axis, real_type(0.5))
         _scale_last_along_axis!(temp_real, axis, real_type(0.5))
+
+        # Bridge to standard convention: flip every odd-degree coefficient.
+        _flip_odd_indices_along_axis!(temp_real, axis)
 
         out_shape = ntuple(i -> i == axis ? coeff_size : size(temp_real, i), ndims(temp_real))
         out_real = zeros(real_type, out_shape)
@@ -53,6 +126,7 @@ function _chebyshev_forward(data::AbstractArray, transform::ChebyshevTransform)
             temp_imag .*= norm_factor
             _scale_first_along_axis!(temp_imag, axis, real_type(0.5))
             _scale_last_along_axis!(temp_imag, axis, real_type(0.5))
+            _flip_odd_indices_along_axis!(temp_imag, axis)
 
             out_imag = zeros(real_type, out_shape)
             out_imag[idx...] .= temp_imag[idx...]
