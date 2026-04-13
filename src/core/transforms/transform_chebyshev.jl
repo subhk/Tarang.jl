@@ -76,11 +76,58 @@ FFTW DCT-I and the endpoint halving) and as the FIRST step of
 It's its own inverse — applying it twice is identity — so forward and
 backward are symmetric.
 """
+@inline function _flip_odd_indices_along_axis!(data::AbstractVector, ::Int)
+    neg = -one(eltype(data))
+    @inbounds for k in 2:2:length(data)
+        data[k] *= neg
+    end
+    return data
+end
+
+@inline function _flip_odd_indices_along_axis!(data::AbstractMatrix, axis::Int)
+    neg = -one(eltype(data))
+    if axis == 1
+        @inbounds for j in axes(data, 2)
+            for k in 2:2:size(data, 1)
+                data[k, j] *= neg
+            end
+        end
+    else  # axis == 2 (or anything else — treat as last axis)
+        @inbounds for k in 2:2:size(data, 2)
+            for i in axes(data, 1)
+                data[i, k] *= neg
+            end
+        end
+    end
+    return data
+end
+
+@inline function _flip_odd_indices_along_axis!(data::AbstractArray{T,3}, axis::Int) where T
+    neg = -one(T)
+    if axis == 1
+        @inbounds for m in axes(data, 3), j in axes(data, 2), k in 2:2:size(data, 1)
+            data[k, j, m] *= neg
+        end
+    elseif axis == 2
+        @inbounds for m in axes(data, 3), k in 2:2:size(data, 2), i in axes(data, 1)
+            data[i, k, m] *= neg
+        end
+    else  # axis == 3
+        @inbounds for k in 2:2:size(data, 3), j in axes(data, 2), i in axes(data, 1)
+            data[i, j, k] *= neg
+        end
+    end
+    return data
+end
+
+# Generic fallback for 4+D arrays — uses selectdim which is view-based
+# but type-stable. Only fires for ndims >= 4 which is an unusual case.
 @inline function _flip_odd_indices_along_axis!(data::AbstractArray, axis::Int)
     n = size(data, axis)
-    for k in 2:2:n  # 1-based: k=2 is degree 1, k=4 is degree 3, etc.
-        idx = ntuple(i -> i == axis ? (k:k) : Colon(), ndims(data))
-        @inbounds @views data[idx...] .*= -one(eltype(data))
+    neg = -one(eltype(data))
+    for k in 2:2:n
+        s = selectdim(data, axis, k)
+        @. s *= neg
     end
     return data
 end
