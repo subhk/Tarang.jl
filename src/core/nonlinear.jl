@@ -85,6 +85,30 @@ end
     return value
 end
 
+abstract type AbstractNonlinearTransformConfig end
+
+struct FFTWTransformConfig{FP, BP, RA<:AbstractArray, CA<:AbstractArray} <: AbstractNonlinearTransformConfig
+    kind::Symbol
+    shape::Tuple{Vararg{Int}}
+    dealiased_shape::Tuple{Vararg{Int}}
+    forward_plan::FP
+    backward_plan::BP
+    scratch_real::RA
+    scratch_complex::CA
+end
+
+struct PencilTransformConfig <: AbstractNonlinearTransformConfig
+    config::PencilConfig
+    forward_pencil_1::Any
+    forward_pencil_2::Any
+    fft_plan_1::Any
+    fft_plan_2::Any
+    shape::Tuple{Vararg{Int}}
+    serial::Bool
+    pencil::Any
+    decomp_dims::Any
+end
+
 # Nonlinear operator types
 abstract type NonlinearOperator <: Operator end
 
@@ -814,15 +838,19 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
             fft_plan_1 = FFTW.plan_fft(forward_data_1)
             fft_plan_2 = FFTW.plan_fft(forward_data_2)
 
-            _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key, Dict(
-                "config" => config,
-                "forward_pencil_1" => forward_data_1,
-                "forward_pencil_2" => forward_data_2,
-                "fft_plan_1" => fft_plan_1,
-                "fft_plan_2" => fft_plan_2,
-                "shape" => shape,
-                "serial" => true
-            ))
+            _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key,
+                PencilTransformConfig(
+                    config,
+                    forward_data_1,
+                    forward_data_2,
+                    fft_plan_1,
+                    fft_plan_2,
+                    shape,
+                    true,
+                    nothing,
+                    nothing,
+                ),
+            )
         else
             # Parallel execution - use PencilArrays/PencilFFTs with PROPER TOPOLOGY
             # CRITICAL: Must use same decomposition convention as Distributor
@@ -867,17 +895,19 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
                 fft_plan_1 = PencilFFTs.PencilFFTPlan(pencil, transforms)
                 fft_plan_2 = PencilFFTs.PencilFFTPlan(pencil, transforms)
 
-                _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key, Dict(
-                    "config" => config,
-                    "forward_pencil_1" => forward_data_1,
-                    "forward_pencil_2" => forward_data_2,
-                    "fft_plan_1" => fft_plan_1,
-                    "fft_plan_2" => fft_plan_2,
-                    "shape" => shape,
-                    "serial" => false,
-                    "pencil" => pencil,
-                    "decomp_dims" => decomp_dims
-                ))
+                _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key,
+                    PencilTransformConfig(
+                        config,
+                        forward_data_1,
+                        forward_data_2,
+                        fft_plan_1,
+                        fft_plan_2,
+                        shape,
+                        false,
+                        pencil,
+                        decomp_dims,
+                    ),
+                )
             catch pe
                 # CRITICAL: In MPI mode, falling back to serial FFTW produces incorrect results
                 if MPI.Comm_size(dist.comm) > 1
@@ -893,15 +923,19 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
                 fft_plan_1 = FFTW.plan_fft(forward_data_1)
                 fft_plan_2 = FFTW.plan_fft(forward_data_2)
 
-                _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key, Dict(
-                    "config" => config,
-                    "forward_pencil_1" => forward_data_1,
-                    "forward_pencil_2" => forward_data_2,
-                    "fft_plan_1" => fft_plan_1,
-                    "fft_plan_2" => fft_plan_2,
-                    "shape" => shape,
-                    "serial" => true
-                ))
+                _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key,
+                    PencilTransformConfig(
+                        config,
+                        forward_data_1,
+                        forward_data_2,
+                        fft_plan_1,
+                        fft_plan_2,
+                        shape,
+                        true,
+                        nothing,
+                        nothing,
+                    ),
+                )
             end
         end
 
@@ -988,15 +1022,17 @@ function setup_1d_fftw_plans!(evaluator::NonlinearEvaluator, n::Int)
         # Complex-to-real backward transform
         backward_plan = FFTW.plan_brfft(scratch_complex, n_dealias; flags=FFTW.MEASURE)
 
-        _cache_shape_transform!(evaluator.pencil_transforms, (n,), shape_key, Dict(
-            "type" => :fftw_1d,
-            "size" => n,
-            "dealiased_size" => n_dealias,
-            "forward_plan" => forward_plan,
-            "backward_plan" => backward_plan,
-            "scratch_real" => scratch_real,
-            "scratch_complex" => scratch_complex
-        ))
+        _cache_shape_transform!(evaluator.pencil_transforms, (n,), shape_key,
+            FFTWTransformConfig(
+                :fftw_1d,
+                (n,),
+                (n_dealias,),
+                forward_plan,
+                backward_plan,
+                scratch_real,
+                scratch_complex,
+            ),
+        )
 
         @debug "Created 1D FFTW plans for size $n (dealiased: $n_dealias)"
 
@@ -1028,15 +1064,17 @@ function setup_2d_fftw_plans!(evaluator::NonlinearEvaluator, shape::Tuple{Int, I
         forward_plan = FFTW.plan_rfft(scratch_real; flags=FFTW.MEASURE)
         backward_plan = FFTW.plan_brfft(scratch_complex, nx_dealias; flags=FFTW.MEASURE)
 
-        _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key, Dict(
-            "type" => :fftw_2d,
-            "shape" => shape,
-            "dealiased_shape" => dealias_shape,
-            "forward_plan" => forward_plan,
-            "backward_plan" => backward_plan,
-            "scratch_real" => scratch_real,
-            "scratch_complex" => scratch_complex
-        ))
+        _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key,
+            FFTWTransformConfig(
+                :fftw_2d,
+                shape,
+                dealias_shape,
+                forward_plan,
+                backward_plan,
+                scratch_real,
+                scratch_complex,
+            ),
+        )
 
         @debug "Created 2D FFTW plans for shape $shape (dealiased: $dealias_shape)"
 
@@ -1069,15 +1107,17 @@ function setup_3d_fftw_plans!(evaluator::NonlinearEvaluator, shape::Tuple{Int, I
         forward_plan = FFTW.plan_rfft(scratch_real; flags=FFTW.MEASURE)
         backward_plan = FFTW.plan_brfft(scratch_complex, nx_dealias; flags=FFTW.MEASURE)
 
-        _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key, Dict(
-            "type" => :fftw_3d,
-            "shape" => shape,
-            "dealiased_shape" => dealias_shape,
-            "forward_plan" => forward_plan,
-            "backward_plan" => backward_plan,
-            "scratch_real" => scratch_real,
-            "scratch_complex" => scratch_complex
-        ))
+        _cache_shape_transform!(evaluator.pencil_transforms, shape, shape_key,
+            FFTWTransformConfig(
+                :fftw_3d,
+                shape,
+                dealias_shape,
+                forward_plan,
+                backward_plan,
+                scratch_real,
+                scratch_complex,
+            ),
+        )
 
         @debug "Created 3D FFTW plans for shape $shape (dealiased: $dealias_shape)"
 
@@ -1343,24 +1383,27 @@ function evaluate_2d_transform_multiply(field1::ScalarField, field2::ScalarField
     shape_key = shape  # Use tuple directly as key (no string allocation)
     
     if haskey(evaluator.pencil_transforms, shape_key)
-        # Use precomputed PencilFFT transforms
+        # Use precomputed transform config. PencilFFT configs keep the old
+        # optimized path; FFTW configs fall back to direct multiply plus the
+        # standard spectral truncation pass.
         transform_info = evaluator.pencil_transforms[shape_key]
-        
-        # Get data in appropriate format for PencilArrays
-        data1 = get_pencil_compatible_data(field1, transform_info["config"])
-        data2 = get_pencil_compatible_data(field2, transform_info["config"])
-        
-        # Pointwise multiplication in grid space
-        # This is where the actual nonlinear interaction happens
-        result_data = data1 .* data2
-        
-        # Apply dealiasing by transforming to spectral space and back
-        if evaluator.dealiasing_factor > 1.0
-            result_data = apply_2d_dealiasing(result_data, transform_info, evaluator.dealiasing_factor)
+        if transform_info isa PencilTransformConfig
+            data1 = get_pencil_compatible_data(field1, transform_info.config)
+            data2 = get_pencil_compatible_data(field2, transform_info.config)
+            result_data = data1 .* data2
+
+            if evaluator.dealiasing_factor > 1.0
+                result_data = apply_2d_dealiasing(result_data, transform_info, evaluator.dealiasing_factor)
+            end
+
+            set_pencil_compatible_data!(result, result_data, transform_info.config)
+        else
+            result["g"] .= field1["g"] .* field2["g"]
+
+            if evaluator.dealiasing_factor > 1.0
+                apply_basic_dealiasing!(result, evaluator.dealiasing_factor)
+            end
         end
-        
-        # Set result data
-        set_pencil_compatible_data!(result, result_data, transform_info["config"])
         
     else
         # Fallback to direct multiplication without PencilFFT optimization
@@ -1429,14 +1472,14 @@ end
 
 # Dealiasing functions
 """Apply 2D dealiasing using PencilFFT transforms"""
-function apply_2d_dealiasing(data::AbstractArray, transform_info::Dict, dealiasing_factor::Float64)
+function apply_2d_dealiasing(data::AbstractArray, transform_info::PencilTransformConfig, dealiasing_factor::Float64)
 
     # Transform to spectral space
-    fft_plan = transform_info["fft_plan_1"]
+    fft_plan = transform_info.fft_plan_1
     spectral_data = fft_plan * data
 
     # Zero out high-frequency modes (2/3 rule: keep |k| <= N/(2*factor))
-    shape = transform_info["shape"]
+    shape = transform_info.shape
     cutoff_x = Int(floor(shape[1] / (2 * dealiasing_factor)))
     cutoff_y = Int(floor(shape[2] / (2 * dealiasing_factor)))
 
