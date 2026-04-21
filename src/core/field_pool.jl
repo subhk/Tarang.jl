@@ -63,6 +63,8 @@ mutable struct FieldPool
     end
 end
 
+const _FIELD_POOL_OWNERS = WeakKeyDict{Any, Any}()
+
 # ---------------------------------------------------------------------------
 # checkout!
 # ---------------------------------------------------------------------------
@@ -102,6 +104,7 @@ function checkout!(pool::FieldPool,
 
     field._from_pool = true
     field._pool_generation += 1
+    _FIELD_POOL_OWNERS[field] = pool
     pool.in_use += 1
     return field
 end
@@ -128,6 +131,21 @@ function return!(pool::FieldPool, field::ScalarField)
         throw(ArgumentError(
             "Cannot return a ScalarField to the pool that was not originally " *
             "checked out from a pool (field._from_pool == false)."))
+    end
+    owner = get(_FIELD_POOL_OWNERS, field, nothing)
+    if owner === nothing
+        throw(ArgumentError(
+            "Cannot return pooled ScalarField $(field.name) because its owning " *
+            "FieldPool is unknown. The field may have been deep-copied or " *
+            "constructed outside FieldPool bookkeeping."))
+    elseif !(owner isa FieldPool)
+        throw(ArgumentError(
+            "Cannot return pooled ScalarField $(field.name) because its owning " *
+            "pool metadata is corrupted."))
+    elseif owner !== pool
+        throw(ArgumentError(
+            "Cannot return ScalarField $(field.name) to a different FieldPool " *
+            "than the one that checked it out."))
     end
 
     # Reset layout so the next user always starts from a known state
@@ -193,6 +211,7 @@ function prewarm!(pool::FieldPool,
     for _ in 1:count
         field = ScalarField(pool.dist, "pool_field", bases, dtype)
         field._from_pool = true
+        _FIELD_POOL_OWNERS[field] = pool
         # _pool_generation stays 0 — it will be incremented on first checkout
         push!(stack, field)
     end
@@ -250,9 +269,10 @@ If `field` was obtained from a pool (`field._from_pool == true`) and a global
 pool is active, return it to the pool.  Otherwise this is a no-op.
 """
 function maybe_return!(field::ScalarField)
-    pool = get_field_pool()
-    if pool !== nothing && field._from_pool
-        return!(pool, field)
+    if field._from_pool
+        owner = get(_FIELD_POOL_OWNERS, field, nothing)
+        owner isa FieldPool || return nothing
+        return!(owner, field)
     end
     return nothing
 end

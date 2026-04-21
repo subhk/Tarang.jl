@@ -199,6 +199,10 @@ function _sp_stage_vector!(sp::Subproblem, key::String, n::Int, like::AbstractVe
     return _subproblem_cached_vector!(sp, key, n; like=like)
 end
 
+function _sp_stage_vector!(sp::Subproblem, key::String, n::Int)
+    return _subproblem_cached_vector!(sp, key, n)
+end
+
 """
     step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
                          subproblems::Tuple)
@@ -266,12 +270,12 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # ── Pre-stage: compute M*X_n per subproblem ──────────────────────────
     n_sp = length(subproblems)
 
-    MX0 = Vector{Any}(undef, n_sp)
+    MX0 = Vector{AbstractVector{ComplexF64}}(undef, n_sp)
     # F[j][sp_idx] = F(X_j) gathered per subproblem (evaluated AFTER stage j solve)
-    F   = [Vector{Any}(undef, n_sp) for _ in 1:stages]
+    F   = [Vector{AbstractVector{ComplexF64}}(undef, n_sp) for _ in 1:stages]
     # LX[j][sp_idx] = L*X_j per subproblem (evaluated AFTER stage j solve)
-    LX  = [Vector{Any}(undef, n_sp) for _ in 1:stages]
-    RHS = Vector{Any}(undef, n_sp)
+    LX  = [Vector{AbstractVector{ComplexF64}}(undef, n_sp) for _ in 1:stages]
+    RHS = Vector{AbstractVector{ComplexF64}}(undef, n_sp)
     # Algebraic-constraint F (from BC / no-M equations), packed in equation
     # space with zeros at PDE rows. Computed ONCE per step because BC values
     # are stage-independent. Used to override BC rows in the stage RHS with
@@ -279,7 +283,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # enforcement). Without this override, the accumulated IMEX-RK formula
     # scales BC F by `A^E[i,j]/a_ii` (= 1/γ for RK222 stage 2 = 2+√2 ≈ 3.414)
     # and inhomogeneous BCs would be enforced at the wrong value.
-    ALG_F = Vector{Any}(undef, n_sp)
+    ALG_F = Vector{AbstractVector{ComplexF64}}(undef, n_sp)
 
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
@@ -290,9 +294,8 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         end
         n_eq = size(sp.M_min, 1)
         n_var = size(sp.M_min, 2)
-        x_ref = gather_inputs(sp, state_fields)
-        mx0 = _sp_stage_vector!(sp, "_sp_rk_mx0", n_eq, x_ref)
-        rhs = _sp_stage_vector!(sp, "_sp_rk_rhs", n_var, x_ref)
+        mx0 = _sp_stage_vector!(sp, "_sp_rk_mx0", n_eq)
+        rhs = _sp_stage_vector!(sp, "_sp_rk_rhs", n_var)
         x0_pre = gather_inputs!(rhs, sp, state_fields)
         _apply_subproblem_operator!(mx0, _subproblem_operator(sp, :M, x0_pre), x0_pre)
         MX0[sp_idx] = mx0

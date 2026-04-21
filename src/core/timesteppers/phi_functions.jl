@@ -27,12 +27,22 @@ function phi_functions(z::Number)
 end
 
 # Cached workspace for phi_functions_matrix to avoid repeated identity matrix allocation
+# while preventing unbounded growth across many ETD problem sizes.
 const _phi_identity_cache = Dict{Tuple{Int, DataType}, Matrix}()
 const _phi_identity_lock = ReentrantLock()
+const _PHI_IDENTITY_CACHE_MAX_SIZE = 16
+
+@inline function _evict_phi_identity_cache_entry!()
+    isempty(_phi_identity_cache) && return nothing
+    delete!(_phi_identity_cache, first(keys(_phi_identity_cache)))
+    return nothing
+end
 
 @inline function _get_identity_matrix(n::Int, T::Type)
     lock(_phi_identity_lock) do
         get!(_phi_identity_cache, (n, T)) do
+            length(_phi_identity_cache) >= _PHI_IDENTITY_CACHE_MAX_SIZE &&
+                _evict_phi_identity_cache_entry!()
             Matrix{T}(LinearAlgebra.I, n, n)
         end
     end

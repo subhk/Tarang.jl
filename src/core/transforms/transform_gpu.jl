@@ -249,15 +249,13 @@ end
 # `Dict{Tuple, ChebScratch}` (hold real/imag/plan scratch records, not raw
 # arrays), so we can't reuse them for the intermediate-output buffer.
 # For ChebyshevTransform we therefore fall back to a small per-transform
-# `matrices`-style Dict stored in a free-form field (`forward_matrix` etc.
-# are sparse matrices; we don't touch those). Instead, cache intermediate
-# scratch in a lazily-created Dict attached via `objectid`-keyed module-
-# level storage.
+# scratch Dict stored in module-level weak-key storage.
 #
-# Since Tarang is single-threaded in this hot path, a module-level
-# IdDict keyed on the transform object is both safe and cheap. The entries
-# live as long as the transform itself.
-const _TRANSFORM_INTER_SCRATCH = IdDict{Any, Dict{Tuple, AbstractArray}}()
+# Since transform objects are mutable, a WeakKeyDict lets their scratch
+# buffers disappear automatically once the owning transform becomes
+# unreachable. This avoids retaining old transform plans and workspaces
+# across solver rebuilds.
+const _TRANSFORM_INTER_SCRATCH = WeakKeyDict{Any, Dict{Tuple, AbstractArray}}()
 
 @inline function _get_inter_cache(transform)
     cache = get(_TRANSFORM_INTER_SCRATCH, transform, nothing)
@@ -279,8 +277,7 @@ end
 @inline function _get_scratch_for_transform!(transform::Transform, tag::Symbol,
                                              shape::Tuple, ::Type{T}) where {T}
     # Generic fallback for other transform types (Chebyshev, Legendre, etc.):
-    # use the module-level IdDict cache keyed on the transform object.
+    # use the module-level weak-key cache keyed on the transform object.
     dict = _get_inter_cache(transform)
     return _get_or_alloc_scratch!(dict, (shape, T, tag), shape, T)
 end
-
