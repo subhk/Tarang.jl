@@ -1172,7 +1172,7 @@ function add_dictionary_handler(evaluator::UnifiedEvaluator; kwargs...)
     return handler
 end
 
-"""Evaluate NetCDF, dictionary, and virtual handlers."""
+"""Evaluate NetCDF and dictionary handlers."""
 function evaluate_unified_handlers!(evaluator::UnifiedEvaluator, wall_time::Float64, sim_time::Float64, iteration::Int)
 
     # Evaluate NetCDF handlers
@@ -1193,10 +1193,6 @@ function evaluate_unified_handlers!(evaluator::UnifiedEvaluator, wall_time::Floa
 
     # Evaluate dictionary handlers (in-memory)
     for handler in evaluator.dictionary_handlers
-        process!(handler, evaluator.solver, wall_time, sim_time, iteration)
-    end
-
-    for handler in evaluator.virtual_handlers
         process!(handler, evaluator.solver, wall_time, sim_time, iteration)
     end
 
