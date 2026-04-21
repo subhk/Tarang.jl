@@ -74,16 +74,44 @@ mutable struct FileHandler
     end
 end
 
+"""
+    DictionaryHandler
+
+In-memory analysis handler that stores evaluated field data in a dictionary
+instead of writing to disk. Useful for on-the-fly analysis, coupling to
+other solvers, or unit testing.
+
+Scheduling follows the same cadence/sim_dt/wall_dt/max_writes logic as FileHandler.
+"""
+mutable struct DictionaryHandler
+    datasets::Dict{String, Any}        # Tasks to evaluate (field/operator references)
+    fields::Dict{String, Any}          # Evaluated results (in-memory arrays)
+    cadence::Union{Int, Nothing}
+    sim_dt::Union{Float64, Nothing}
+    wall_dt::Union{Float64, Nothing}
+    max_writes::Union{Int, Nothing}
+    write_count::Int
+    last_write_time::Float64
+    last_write_sim_time::Float64
+
+    function DictionaryHandler(; cadence::Union{Int, Nothing}=nothing,
+                                sim_dt::Union{Float64, Nothing}=nothing,
+                                wall_dt::Union{Float64, Nothing}=nothing,
+                                max_writes::Union{Int, Nothing}=nothing)
+        new(Dict{String, Any}(), Dict{String, Any}(),
+            cadence, sim_dt, wall_dt, max_writes, 0, 0.0, 0.0)
+    end
+end
+
 mutable struct Evaluator
     solver::InitialValueSolver
-    handlers::Vector{FileHandler}
-    workspace::Dict{String, AbstractArray}
+    file_handlers::Vector{FileHandler}
+    dictionary_handlers::Vector{DictionaryHandler}
     performance_stats::EvaluatorPerformanceStats
 
     function Evaluator(solver::InitialValueSolver)
-        workspace = Dict{String, AbstractArray}()
         perf_stats = EvaluatorPerformanceStats()
-        new(solver, FileHandler[], workspace, perf_stats)
+        new(solver, FileHandler[], DictionaryHandler[], perf_stats)
     end
 end
 
@@ -91,7 +119,7 @@ end
 """Add file handler for output"""
 function add_file_handler(evaluator::Evaluator, filename::String; kwargs...)
     handler = FileHandler(filename; kwargs...)
-    push!(evaluator.handlers, handler)
+    push!(evaluator.file_handlers, handler)
     return handler
 end
 
@@ -117,7 +145,7 @@ end
 """Evaluate all handlers and write output if conditions are met"""
 function evaluate_handlers!(evaluator::Evaluator, wall_time::Float64, sim_time::Float64, iteration::Int)
 
-    for handler in evaluator.handlers
+    for handler in evaluator.file_handlers
         # Determine write decision on rank 0 and broadcast to all ranks,
         # so that MPI collective operations in evaluate_task are entered
         # consistently by all ranks (avoiding deadlock).
@@ -131,6 +159,10 @@ function evaluate_handlers!(evaluator::Evaluator, wall_time::Float64, sim_time::
         if do_write
             write_handler!(handler, evaluator.solver, wall_time, sim_time, iteration)
         end
+    end
+
+    for handler in evaluator.dictionary_handlers
+        process!(handler, evaluator.solver, wall_time, sim_time, iteration)
     end
 end
 
@@ -347,16 +379,13 @@ mutable struct GlobalFlowProperty
     cadence::Int
     properties::Dict{String, Any}
     reducer::GlobalArrayReducer
-    evaluator_handler::Union{Nothing, FileHandler}
-    workspace::Dict{String, AbstractArray}
     performance_stats::EvaluatorPerformanceStats
 
     function GlobalFlowProperty(solver::InitialValueSolver; cadence::Int=1)
         dist = get_solver_dist(solver)
         reducer = GlobalArrayReducer(dist.comm)
-        workspace = Dict{String, AbstractArray}()
         perf_stats = EvaluatorPerformanceStats()
-        new(solver, cadence, Dict{String, Any}(), reducer, nothing, workspace, perf_stats)
+        new(solver, cadence, Dict{String, Any}(), reducer, perf_stats)
     end
 end
 
@@ -758,35 +787,6 @@ end
 # DictionaryHandler — In-Memory Analysis Handler
 # ============================================================================
 
-"""
-    DictionaryHandler
-
-In-memory analysis handler that stores evaluated field data in a dictionary
-instead of writing to disk. Useful for on-the-fly analysis, coupling to
-other solvers, or unit testing.
-
-Scheduling follows the same cadence/sim_dt/wall_dt/max_writes logic as FileHandler.
-"""
-mutable struct DictionaryHandler
-    datasets::Dict{String, Any}        # Tasks to evaluate (field/operator references)
-    fields::Dict{String, Any}          # Evaluated results (in-memory arrays)
-    cadence::Union{Int, Nothing}
-    sim_dt::Union{Float64, Nothing}
-    wall_dt::Union{Float64, Nothing}
-    max_writes::Union{Int, Nothing}
-    write_count::Int
-    last_write_time::Float64
-    last_write_sim_time::Float64
-
-    function DictionaryHandler(; cadence::Union{Int, Nothing}=nothing,
-                                sim_dt::Union{Float64, Nothing}=nothing,
-                                wall_dt::Union{Float64, Nothing}=nothing,
-                                max_writes::Union{Int, Nothing}=nothing)
-        new(Dict{String, Any}(), Dict{String, Any}(),
-            cadence, sim_dt, wall_dt, max_writes, 0, 0.0, 0.0)
-    end
-end
-
 Base.getindex(dh::DictionaryHandler, key::String) = dh.fields[key]
 Base.haskey(dh::DictionaryHandler, key::String) = haskey(dh.fields, key)
 Base.keys(dh::DictionaryHandler) = keys(dh.fields)
@@ -848,14 +848,7 @@ Returns the handler so tasks can be added to it.
 """
 function add_dictionary_handler(evaluator::Evaluator; kwargs...)
     handler = DictionaryHandler(; kwargs...)
-    if !hasfield(typeof(evaluator), :dictionary_handlers)
-        # Evaluator doesn't have dictionary_handlers field,
-        # store in workspace as a convention
-        if !haskey(evaluator.workspace, "_dict_handlers")
-            evaluator.workspace["_dict_handlers"] = DictionaryHandler[]
-        end
-        push!(evaluator.workspace["_dict_handlers"], handler)
-    end
+    push!(evaluator.dictionary_handlers, handler)
     return handler
 end
 
@@ -1092,13 +1085,12 @@ mutable struct UnifiedEvaluator
     solver::InitialValueSolver
     netcdf_handlers::Vector{NetCDFFileHandler}
     dictionary_handlers::Vector{DictionaryHandler}
-    workspace::Dict{String, AbstractArray}
+    virtual_handlers::Vector{VirtualFileHandler}
     performance_stats::EvaluatorPerformanceStats
 
     function UnifiedEvaluator(solver::InitialValueSolver)
-        workspace = Dict{String, AbstractArray}()
         perf_stats = EvaluatorPerformanceStats()
-        new(solver, NetCDFFileHandler[], DictionaryHandler[], workspace, perf_stats)
+        new(solver, NetCDFFileHandler[], DictionaryHandler[], VirtualFileHandler[], perf_stats)
     end
 end
 
@@ -1109,12 +1101,7 @@ const NetCDFEvaluator = UnifiedEvaluator
 function add_virtual_file_handler(evaluator::UnifiedEvaluator, base_path::String, name::String; kwargs...)
     dist = get_solver_dist(evaluator.solver)
     handler = VirtualFileHandler(base_path, name; comm=dist.comm, kwargs...)
-    # Store in workspace since UnifiedEvaluator doesn't have a dedicated field
-    key = "_virtual_handlers"
-    if !haskey(evaluator.workspace, key)
-        evaluator.workspace[key] = VirtualFileHandler[]
-    end
-    push!(evaluator.workspace[key], handler)
+    push!(evaluator.virtual_handlers, handler)
     return handler
 end
 
@@ -1185,7 +1172,7 @@ function add_dictionary_handler(evaluator::UnifiedEvaluator; kwargs...)
     return handler
 end
 
-"""Evaluate NetCDF and dictionary handlers"""
+"""Evaluate NetCDF, dictionary, and virtual handlers."""
 function evaluate_unified_handlers!(evaluator::UnifiedEvaluator, wall_time::Float64, sim_time::Float64, iteration::Int)
 
     # Evaluate NetCDF handlers
@@ -1206,6 +1193,10 @@ function evaluate_unified_handlers!(evaluator::UnifiedEvaluator, wall_time::Floa
 
     # Evaluate dictionary handlers (in-memory)
     for handler in evaluator.dictionary_handlers
+        process!(handler, evaluator.solver, wall_time, sim_time, iteration)
+    end
+
+    for handler in evaluator.virtual_handlers
         process!(handler, evaluator.solver, wall_time, sim_time, iteration)
     end
 
