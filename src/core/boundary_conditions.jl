@@ -15,7 +15,7 @@ refreshes them again at each stage time to preserve stage-order accuracy.
 
 # GPU support: This module works with both CPU and GPU arrays.
 # - Expression evaluation uses broadcast() which handles GPU arrays automatically
-# - Workspace and cache dictionaries accept AbstractArray (works with CuArray)
+# - Cached BC values may be AbstractArray on either CPU or GPU
 # - When coordinate arrays (x, y, z grids) are on GPU, results are on GPU
 
 mutable struct BCPerformanceStats
@@ -28,6 +28,53 @@ mutable struct BCPerformanceStats
     function BCPerformanceStats()
         new(0.0, 0, 0, 0, 0)
     end
+end
+
+const _BCTimeKey = Tuple{Int, Float64}
+const _BCSpatialKey = Tuple{Int, Float64, UInt64}
+
+mutable struct BCRobinCacheValue
+    alpha::Any
+    beta::Any
+    value::Any
+end
+
+mutable struct BCScratchSpace
+    arrays::Vector{AbstractArray}
+end
+
+BCScratchSpace() = BCScratchSpace(AbstractArray[])
+
+Base.empty!(scratch::BCScratchSpace) = (empty!(scratch.arrays); scratch)
+Base.isempty(scratch::BCScratchSpace) = isempty(scratch.arrays)
+
+mutable struct BCCacheStore
+    time_values::Dict{_BCTimeKey, Any}
+    time_robin_values::Dict{_BCTimeKey, BCRobinCacheValue}
+    spatial_values::Dict{_BCSpatialKey, Any}
+    spatial_robin_values::Dict{_BCSpatialKey, BCRobinCacheValue}
+end
+
+BCCacheStore() = BCCacheStore(
+    Dict{_BCTimeKey, Any}(),
+    Dict{_BCTimeKey, BCRobinCacheValue}(),
+    Dict{_BCSpatialKey, Any}(),
+    Dict{_BCSpatialKey, BCRobinCacheValue}(),
+)
+
+function Base.empty!(cache::BCCacheStore)
+    empty!(cache.time_values)
+    empty!(cache.time_robin_values)
+    empty!(cache.spatial_values)
+    empty!(cache.spatial_robin_values)
+    return cache
+end
+
+function Base.isempty(cache::BCCacheStore)
+    return isempty(cache.time_values) &&
+           isempty(cache.time_robin_values) &&
+           isempty(cache.spatial_values) &&
+           isempty(cache.spatial_robin_values)
 end
 
 # Field reference for time/space dependent boundary conditions
@@ -133,16 +180,16 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
     bc_equation_indices::Dict{Int, Int}  # bc_index => equation_index in problem.equations
 
     # Workspace and caching
-    workspace::Dict{String, AbstractArray}
-    bc_cache::Dict{Any, Any}  # Keys: tuples (bc_index, time) or (bc_index, time, :component)
+    workspace::BCScratchSpace
+    bc_cache::BCCacheStore
     performance_stats::BCPerformanceStats
 
     # Architecture for CPU/GPU support
     architecture::Arch
 
     function BoundaryConditionManager(; architecture::Arch=CPU()) where {Arch<:AbstractArchitecture}
-        workspace = Dict{String, AbstractArray}()
-        bc_cache = Dict{Any, Any}()
+        workspace = BCScratchSpace()
+        bc_cache = BCCacheStore()
         perf_stats = BCPerformanceStats()
 
         new{Arch}(AbstractBoundaryCondition[], Dict{String, Any}(),
@@ -167,6 +214,69 @@ is_gpu(manager::BoundaryConditionManager) = is_gpu(manager.architecture)
 Get the architecture (CPU or GPU) of the boundary condition manager.
 """
 architecture(manager::BoundaryConditionManager) = manager.architecture
+
+@inline _bc_time_key(bc_index::Int, current_time::Real) = (bc_index, Float64(current_time))
+@inline _bc_spatial_key(bc_index::Int, current_time::Real, coordinates::Dict) =
+    (bc_index, Float64(current_time), hash((coordinates, Float64(current_time))))
+
+function _clear_time_bc_cache!(cache::BCCacheStore)
+    empty!(cache.time_values)
+    empty!(cache.time_robin_values)
+    return cache
+end
+
+function _clear_spatial_bc_cache!(cache::BCCacheStore)
+    empty!(cache.spatial_values)
+    empty!(cache.spatial_robin_values)
+    return cache
+end
+
+function _store_time_bc_value!(cache::BCCacheStore, bc_index::Int, current_time::Real, value)
+    cache.time_values[_bc_time_key(bc_index, current_time)] = value
+    return value
+end
+
+function _store_time_bc_value!(cache::BCCacheStore, bc_index::Int, current_time::Real,
+                               alpha, beta, value)
+    robin = BCRobinCacheValue(alpha, beta, value)
+    cache.time_robin_values[_bc_time_key(bc_index, current_time)] = robin
+    return robin
+end
+
+function _store_spatial_bc_value!(cache::BCCacheStore, bc_index::Int, current_time::Real,
+                                  coordinates::Dict, value)
+    cache.spatial_values[_bc_spatial_key(bc_index, current_time, coordinates)] = value
+    return value
+end
+
+function _store_spatial_bc_value!(cache::BCCacheStore, bc_index::Int, current_time::Real,
+                                  coordinates::Dict, alpha, beta, value)
+    robin = BCRobinCacheValue(alpha, beta, value)
+    cache.spatial_robin_values[_bc_spatial_key(bc_index, current_time, coordinates)] = robin
+    return robin
+end
+
+function _get_time_bc_value(cache::BCCacheStore, bc::AbstractBoundaryCondition,
+                            bc_index::Int, current_time::Real)
+    key = _bc_time_key(bc_index, current_time)
+    if isa(bc, RobinBC)
+        robin = get(cache.time_robin_values, key, nothing)
+        robin === nothing && return nothing
+        return (robin.alpha, robin.beta, robin.value)
+    end
+    return get(cache.time_values, key, nothing)
+end
+
+function _get_spatial_bc_value(cache::BCCacheStore, bc::AbstractBoundaryCondition,
+                               bc_index::Int, current_time::Real, coordinates::Dict)
+    key = _bc_spatial_key(bc_index, current_time, coordinates)
+    if isa(bc, RobinBC)
+        robin = get(cache.spatial_robin_values, key, nothing)
+        robin === nothing && return nothing
+        return (robin.alpha, robin.beta, robin.value)
+    end
+    return get(cache.spatial_values, key, nothing)
+end
 
 # Utility functions for time/space dependency detection
 """Check if value depends on time"""
@@ -1201,8 +1311,8 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
 
     # Clear stale cache entries from previous timesteps to prevent unbounded growth.
     # Each BC only needs its current-time value cached (for substep reuse within a step).
-    if !isempty(manager.bc_cache)
-        empty!(manager.bc_cache)
+    if !isempty(manager.bc_cache.time_values) || !isempty(manager.bc_cache.time_robin_values)
+        _clear_time_bc_cache!(manager.bc_cache)
         manager.performance_stats.cache_misses += 1
     end
 
@@ -1210,29 +1320,24 @@ function update_time_dependent_bcs!(manager::BoundaryConditionManager, current_t
         bc = manager.conditions[bc_index]
 
         # Tuple key avoids string allocation every timestep
-        cache_key = (bc_index, current_time)
-
         if isa(bc, DirichletBC) && bc.is_time_dependent
-            if !haskey(manager.bc_cache, cache_key)
+            if _get_time_bc_value(manager.bc_cache, bc, bc_index, current_time) === nothing
                 new_value = evaluate_bc_value(manager, bc, current_time, coords)
-                manager.bc_cache[cache_key] = new_value
+                _store_time_bc_value!(manager.bc_cache, bc_index, current_time, new_value)
             end
             @debug "Updated Dirichlet BC for $(bc.field)"
 
         elseif isa(bc, NeumannBC) && bc.is_time_dependent
-            if !haskey(manager.bc_cache, cache_key)
+            if _get_time_bc_value(manager.bc_cache, bc, bc_index, current_time) === nothing
                 new_value = evaluate_bc_value(manager, bc, current_time, coords)
-                manager.bc_cache[cache_key] = new_value
+                _store_time_bc_value!(manager.bc_cache, bc_index, current_time, new_value)
             end
             @debug "Updated Neumann BC for $(bc.field)"
 
         elseif isa(bc, RobinBC) && bc.is_time_dependent
-            robin_key = (bc_index, current_time, :value)
-            if !haskey(manager.bc_cache, robin_key)
+            if _get_time_bc_value(manager.bc_cache, bc, bc_index, current_time) === nothing
                 alpha, beta, value = evaluate_bc_value(manager, bc, current_time, coords)
-                manager.bc_cache[(bc_index, current_time, :alpha)] = alpha
-                manager.bc_cache[(bc_index, current_time, :beta)] = beta
-                manager.bc_cache[robin_key] = value
+                _store_time_bc_value!(manager.bc_cache, bc_index, current_time, alpha, beta, value)
             end
             @debug "Updated Robin BC for $(bc.field)"
         end
@@ -1250,15 +1355,7 @@ end
 """Retrieve the most recently cached value for a time-dependent BC."""
 function get_current_bc_value(manager::BoundaryConditionManager, bc_index::Int, current_time)
     bc = manager.conditions[bc_index]
-
-    if isa(bc, RobinBC)
-        alpha = get(manager.bc_cache, (bc_index, current_time, :alpha), nothing)
-        beta = get(manager.bc_cache, (bc_index, current_time, :beta), nothing)
-        value = get(manager.bc_cache, (bc_index, current_time, :value), nothing)
-        return (alpha, beta, value)
-    else
-        return get(manager.bc_cache, (bc_index, current_time), nothing)
-    end
+    return _get_time_bc_value(manager.bc_cache, bc, bc_index, current_time)
 end
 
 """Check if boundary conditions need updating"""
@@ -1320,26 +1417,18 @@ function evaluate_space_dependent_bcs!(manager::BoundaryConditionManager, coordi
     for bc_index in manager.space_dependent_bcs
         bc = manager.conditions[bc_index]
 
-        coord_hash = hash((coordinates, current_time))
-        cache_key = "bc_$(bc_index)_spatial_$(coord_hash)"
-
-        # For Robin BCs, use component key for cache check since they store at component keys
-        check_key = isa(bc, RobinBC) ? "$(cache_key)_value" : cache_key
-
-        if !haskey(manager.bc_cache, check_key)
+        if _get_spatial_bc_value(manager.bc_cache, bc, bc_index, current_time, coordinates) === nothing
             if isa(bc, DirichletBC) && bc.is_space_dependent
                 new_value = evaluate_bc_value(manager, bc, current_time, coordinates)
-                manager.bc_cache[cache_key] = new_value
+                _store_spatial_bc_value!(manager.bc_cache, bc_index, current_time, coordinates, new_value)
                 manager.performance_stats.cache_misses += 1
             elseif isa(bc, NeumannBC) && bc.is_space_dependent
                 new_value = evaluate_bc_value(manager, bc, current_time, coordinates)
-                manager.bc_cache[cache_key] = new_value
+                _store_spatial_bc_value!(manager.bc_cache, bc_index, current_time, coordinates, new_value)
                 manager.performance_stats.cache_misses += 1
             elseif isa(bc, RobinBC) && bc.is_space_dependent
                 alpha, beta, value = evaluate_bc_value(manager, bc, current_time, coordinates)
-                for (comp_name, comp_value) in [("alpha", alpha), ("beta", beta), ("value", value)]
-                    manager.bc_cache["$(cache_key)_$(comp_name)"] = comp_value
-                end
+                _store_spatial_bc_value!(manager.bc_cache, bc_index, current_time, coordinates, alpha, beta, value)
                 manager.performance_stats.cache_misses += 1
             end
         else

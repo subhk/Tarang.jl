@@ -559,11 +559,9 @@ function _apply_bc_values_to_equations!(solver::InitialValueSolver, current_time
     # stepper before this function.
     if !isempty(bc_manager.space_dependent_bcs) &&
        !isempty(bc_manager.coordinate_fields)
-        # `evaluate_space_dependent_bcs!` uses a cache key that includes a
-        # hash of `(coordinates, time)`, so stale entries accumulate over
-        # steps. Drop any entries for the BCs we're about to refresh so the
-        # subsequent evaluation yields exactly one fresh entry each —
-        # `_latest_spatial_bc_value` can then pick it unambiguously.
+        # Space-dependent BC values are cached by `(bc_idx, time, hash)` and
+        # recomputed against the current coordinate fields below. Drop stale
+        # entries first so the cache stays bounded across steps.
         _drop_spatial_cache_entries!(bc_manager)
         try
             evaluate_space_dependent_bcs!(bc_manager, bc_manager.coordinate_fields, current_time)
@@ -609,11 +607,12 @@ function _write_bc_value_to_eq!(eq_data::Dict, bc_manager, bc_idx::Int, current_
     # Scalar time-dependent path (cache key `(bc_idx, current_time)`).
     value = get_current_bc_value(bc_manager, bc_idx, current_time)
 
-    # Fall back to the space-dependent spatial cache if the time cache
-    # didn't yield a value. The cache_key format comes from
-    # `evaluate_space_dependent_bcs!` (`"bc_{idx}_spatial_{hash}"`).
+    # Fall back to the space-dependent cache if the time cache didn't yield
+    # a value. Space-dependent entries are keyed by `(bc_idx, time, hash)`.
     if value === nothing && bc_idx in bc_manager.space_dependent_bcs
-        value = _latest_spatial_bc_value(bc_manager, bc_idx)
+        value = _get_spatial_bc_value(
+            bc_manager.bc_cache, bc, bc_idx, current_time, bc_manager.coordinate_fields,
+        )
     end
 
     value === nothing && return
@@ -640,39 +639,10 @@ function _write_bc_value_to_eq!(eq_data::Dict, bc_manager, bc_idx::Int, current_
     return
 end
 
-"""Clear all spatial (`"bc_{idx}_spatial_..."`) cache entries so that the
-next call to `evaluate_space_dependent_bcs!` leaves exactly one fresh
-entry per BC (which `_latest_spatial_bc_value` can then unambiguously
-pick)."""
+"""Clear all cached space-dependent BC values before recomputing them."""
 function _drop_spatial_cache_entries!(bc_manager)
-    stale = String[]
-    for (k, _) in bc_manager.bc_cache
-        if k isa String && occursin("_spatial_", k)
-            push!(stale, k)
-        end
-    end
-    for k in stale
-        delete!(bc_manager.bc_cache, k)
-    end
+    _clear_spatial_bc_cache!(bc_manager.bc_cache)
     return
-end
-
-"""Pick the most recent spatial cache entry for a space-dependent BC."""
-function _latest_spatial_bc_value(bc_manager, bc_idx::Int)
-    # Spatial cache keys look like "bc_{idx}_spatial_{hash}"; scan them
-    # and return the first matching value. For non-Robin BCs this is a
-    # direct array lookup; for Robin BCs we look at the `_value` subkey.
-    prefix = "bc_$(bc_idx)_spatial_"
-    bc = bc_manager.conditions[bc_idx]
-    value_suffix = isa(bc, RobinBC) ? "_value" : ""
-    for (k, v) in bc_manager.bc_cache
-        k isa String || continue
-        startswith(k, prefix) || continue
-        if isempty(value_suffix) || endswith(k, value_suffix)
-            return v
-        end
-    end
-    return nothing
 end
 
 const _InitialValueSolver_constructor = _build_initial_value_solver
