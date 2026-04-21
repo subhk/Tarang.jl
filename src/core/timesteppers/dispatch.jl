@@ -1,5 +1,12 @@
 # ============================================================================
-# Main Step Function Dispatch
+# Timestepper dispatch table.
+#
+# This file answers one question only:
+# "given `state.timestepper`, which implementation should run?"
+#
+# Keep the heavy math out of this file. Scheme-specific logic belongs in the
+# corresponding `step_*.jl` implementation file so contributors can find the
+# real runtime path quickly.
 # ============================================================================
 
 """
@@ -32,7 +39,7 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
 end
 
 # ============================================================================
-# Type-stable dispatch methods (one per timestepper type)
+# One dispatch method per timestepper type
 # ============================================================================
 
 # --- IMEX Runge-Kutta methods  ---

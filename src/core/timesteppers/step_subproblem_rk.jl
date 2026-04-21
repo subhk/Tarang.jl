@@ -1,17 +1,23 @@
-# ── Per-subproblem IMEX Runge-Kutta step ──────────────────────────────────────
+# ── Per-subproblem IMEX Runge-Kutta hot path ─────────────────────────────────
 #
-# IMEX RK stepper that operates on per-Fourier-mode subproblems.
+# This is the main modern timestepper path for mixed Fourier / Chebyshev
+# problems. `step_rk.jl` lands here after it finds pre-built subproblems in
+# `problem.parameters["subproblems"]`.
 #
-# For each Fourier mode (subproblem), we solve a sparse system of size
-# ~(n_vars * Nz) at each IMEX stage.  LHS factorizations are cached per
-# stage index and invalidated when dt changes.
+# Runtime shape:
+# - gather one Fourier-mode-sized state vector per subproblem
+# - rebuild algebraic/BC forcing at each RK stage time when needed
+# - apply the BC-row override in equation space
+# - solve cached sparse stage systems
+# - scatter the stage solution back to fields and evaluate the next stage RHS
 #
-# Sign convention (same as step_rk.jl):
-#   LHS form:   M * dX/dt + L * X = F
-#   Stage solve: (M + dt*a_ii*L) * X_i = M*X_n + dt*Σ_{j<i}(A^E_{ij}*F_j - A^I_{ij}*L*X_j)
+# Sign convention (same as `step_rk.jl`):
+#   LHS form: `M * dX/dt + L * X = F`
+#   Stage solve: `(M + dt*a_ii*L) * X_i =
+#                 M*X_n + dt*Σ_{j<i}(A^E_{ij}*F_j - A^I_{ij}*L*X_j)`
 #
-# F_j and L*X_j are evaluated AFTER solving for X_j (at the stage solution),
-# matching step_rk_imex! and the standard IMEX RK formulation.
+# `F_j` and `L*X_j` are evaluated after solving for `X_j`, matching the
+# standard IMEX RK formulation.
 # ──────────────────────────────────────────────────────────────────────────────
 
 """

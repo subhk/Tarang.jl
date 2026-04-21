@@ -1,14 +1,14 @@
 """
-Advanced Boundary Condition Handling for Tarang.jl
+Boundary condition types and runtime refresh for Tarang.jl.
 
-This module implements comprehensive boundary condition support using
-the tau method approach, with support for:
-- Dirichlet boundary conditions
-- Neumann boundary conditions
-- Robin (mixed) boundary conditions
-- Periodic boundary conditions
-- Stress-free boundary conditions
-- Custom boundary condition expressions
+This file owns three related responsibilities:
+- parsed BC representations (`DirichletBC`, `NeumannBC`, ...)
+- the `BoundaryConditionManager` cache and dependency tracking
+- evaluation of time/space-dependent BC values back into `problem.equation_data`
+
+Read this file alongside `solver_stepping.jl` and `step_subproblem_rk.jl`:
+the solver refreshes dynamic BCs once per step, while the subproblem RK path
+refreshes them again at each stage time to preserve stage-order accuracy.
 """
 
 # LinearAlgebra, SparseArrays already in Tarang.jl

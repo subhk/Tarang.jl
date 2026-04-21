@@ -79,6 +79,23 @@ Tarang.jl/
 
 The entries marked with `***` are the core of the solver path introduced in the subproblem refactor; everything else supports or orchestrates them.
 
+## Runtime Map
+
+If you are reading the codebase for the first time, trace one IVP step in this order:
+
+1. `src/core/solvers/solver_stepping.jl`
+   Entry point for `step!(solver, dt)`. Refreshes dynamic BCs, owns `TimestepperState`, and hands off to the timestepper layer.
+2. `src/core/timesteppers/dispatch.jl`
+   Thin dispatch table from timestepper type to implementation file.
+3. `src/core/timesteppers/step_rk.jl` or `step_multistep.jl`
+   Top-level scheme logic. For IMEX RK, this is where the code chooses between subproblem stepping, explicit fallback, and legacy global-matrix solves.
+4. `src/core/timesteppers/step_subproblem_rk.jl` or `step_subproblem_multistep.jl`
+   Performance-critical per-subproblem path for mixed Fourier / Chebyshev problems.
+5. `src/core/solvers/lazy_rhs.jl`
+   Optional RHS acceleration layer used by `evaluate_rhs`.
+6. `src/core/boundary_conditions.jl`
+   BC manager, dynamic BC evaluation, and projection of refreshed BC values back into equation data.
+
 ## How the Solver Actually Works
 
 This section walks through the life of a step! call end-to-end, so you can see where each file fits.

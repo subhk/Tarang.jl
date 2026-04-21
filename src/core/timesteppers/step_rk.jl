@@ -1,15 +1,18 @@
-# =======================================
-# IMEX Runge-Kutta Step Functions
+# ============================================================================
+# Top-level IMEX Runge-Kutta stepping.
 #
-# Sign convention: L_matrix uses the LHS form  M*dX/dt + L*X = F
-# so L appears with a POSITIVE sign on the LHS of the implicit solve:
-#   (M + dt*a*L) * X_s = RHS
-# and the implicit RHS contribution (L*X) is SUBTRACTED.
+# This file decides which RK runtime path is taken:
+# - preferred path: per-subproblem sparse solves in `step_subproblem_rk.jl`
+# - fallback path: explicit treatment when GPU/MPI lacks subproblems
+# - legacy path: global-matrix factorization when no subproblems are present
 #
-# This is consistent with the multistep IMEX methods (CNAB, SBDF) which
-# also use L_matrix directly in LHS form.  ETD methods instead use
-# _get_linear_operator_eff!() which returns -M^{-1}*L (RHS form).
-# =======================================
+# Sign convention: `L_matrix` uses the LHS form `M*dX/dt + L*X = F`, so the
+# stage solve is `(M + dt*a*L) * X_s = RHS` and the implicit contribution
+# `L*X` is subtracted on the RHS accumulation.
+#
+# This matches the multistep IMEX methods. ETD methods instead work with the
+# RHS-form operator `-M^{-1}L`.
+# ============================================================================
 
 function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper

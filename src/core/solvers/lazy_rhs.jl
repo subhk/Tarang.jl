@@ -1,19 +1,19 @@
 # ═════════════════════════════════════════════════════════════════════════════
-# Lazy RHS evaluation — type-specialized Future expression trees
+# Lazy RHS runtime.
 # ═════════════════════════════════════════════════════════════════════════════
 #
-# Builds a type-parametric expression tree from equation RHS expressions, then
-# evaluates it via multiple-dispatch on concrete LazyFuture subtypes. The JIT
-# specializes the entire evaluate! call chain at first use, eliminating dynamic
-# dispatch overhead.
+# This file is an optimization layer for `evaluate_rhs`, not a separate solver
+# architecture. It tries to translate each equation RHS into a typed
+# `LazyFuture` tree once, then reuses that compiled tree on every stage.
 #
-# Workspace design: holds a pool of pre-allocated ScalarField objects. Each
-# binary operation (Add, Mul, etc.) borrows two scratch fields, evaluates its
-# children into them, and combines them into the output. Differentiation uses
-# the ScalarField's transform machinery (ensure_layout :c → apply D → :g).
+# If translation succeeds, Julia specializes the `evaluate_lazy!` call chain
+# and removes most dynamic dispatch from RHS evaluation. If translation fails
+# for any operator, runtime falls back to the interpreted
+# `evaluate_solver_expression` path and correctness is preserved.
 #
-# If translation fails (unsupported operator), the caller falls back to the
-# interpreted evaluate_solver_expression path in evaluate_rhs.
+# Workspace design: a pool of scratch `ScalarField`s reused while walking the
+# expression tree. Binary operators borrow scratch fields for their children,
+# then combine them into the caller-provided output field.
 
 # ── Abstract type hierarchy ──────────────────────────────────────────────────
 

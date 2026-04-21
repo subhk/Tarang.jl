@@ -1,4 +1,15 @@
-# Time stepping for IVP
+# -----------------------------------------------------------------------------
+# IVP runtime entry point.
+#
+# Read this file first when tracing one solver step:
+# 1. refresh time-dependent boundary conditions for the new step time
+# 2. create or update `TimestepperState`
+# 3. hand off to `timesteppers/dispatch.jl`
+# 4. sync the final state back into `problem.variables`
+#
+# Scheme-specific stage logic lives in `src/core/timesteppers/step_*.jl`.
+# -----------------------------------------------------------------------------
+
 """Advance solution by one time step using existing timestepper infrastructure"""
 function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
 
