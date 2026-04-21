@@ -27,7 +27,17 @@ Tarang.jl/
 │   │   │   ├── problem_matrices.jl      # Global matrix assembly
 │   │   │   └── problem_utils.jl         # Validation, introspection
 │   │   ├── boundary_conditions.jl     # BC types, time/space dependency, evaluator
-│   │   ├── subsystems.jl              # *** Subproblem decomposition & filtering ***
+│   │   ├── subsystems.jl              # Hub file for subproblem decomposition
+│   │   ├── subsystems/                # *** Subproblem decomposition & filtering ***
+│   │   │   ├── subsystem_types.jl       # Subsystem config, construction, coupling analysis
+│   │   │   ├── subsystem_methods.jl     # Subsystem field access and gather/scatter
+│   │   │   ├── subproblem_types.jl      # Subproblem definitions and sizing helpers
+│   │   │   ├── subproblem_runtime.jl    # Gather/scatter, caches, BC projection, F gather
+│   │   │   ├── subproblem_build.jl      # Matrix assembly and expression matrices
+│   │   │   ├── subproblem_permutations.jl  # Dedalus-style row/column permutations
+│   │   │   ├── subproblem_matrix_utils.jl  # Sparse matrix helpers
+│   │   │   ├── subproblem_ncc.jl        # Non-constant coefficient matrix builders
+│   │   │   └── subsystem_exports.jl     # Exports for subsystem API
 │   │   ├── solvers/                   # Solver types, stepping, lazy RHS
 │   │   │   ├── solver_types.jl          # InitialValueSolver, BVP/NLBVP/EVP solvers
 │   │   │   ├── solver_stepping.jl       # step! loop + time-dependent BC refresh
