@@ -275,7 +275,7 @@ All RK variants carry their full Butcher tableau. Multistep variants (`CNAB1/2`,
 ```julia
 mutable struct InitialValueSolver
     base::SolverBaseData
-    problem::Problem
+    problem::IVP
     timestepper::TimeStepper
     sim_time::Float64
     iteration::Int
@@ -284,10 +284,9 @@ mutable struct InitialValueSolver
     stop_iteration::Int
     state::Vector{<:ScalarField}
     dt::Float64
-    timestepper_state::Union{Nothing, TimestepperState}
-    evaluator::Union{Nothing, Any}
-    start_time::Float64
-    workspace::Dict{String, AbstractArray}
+    timestepper_state::Union{Nothing, AbstractTimestepperState}
+    evaluator::Any              # Evaluator or nothing
+    wall_time_start::Float64
     performance_stats::SolverPerformanceStats
     rhs_plan::Any                # Lazy RHS plan or nothing
 end

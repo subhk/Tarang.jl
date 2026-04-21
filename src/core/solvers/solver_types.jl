@@ -211,7 +211,6 @@ mutable struct InitialValueSolver <: Solver
 
     # Performance tracking
     wall_time_start::Float64
-    workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
 
     # Type-specialized lazy RHS evaluation plan (LazyRHSPlan from lazy_rhs.jl)
@@ -304,12 +303,11 @@ function _build_initial_value_solver(problem::IVP, timestepper;
 
     state = collect_state_fields(problem.variables)
 
-    workspace = Dict{String, AbstractArray}()
     perf_stats = SolverPerformanceStats()
 
     solver = InitialValueSolver(base, problem, timestepper, 0.0, 0, Inf, Inf, typemax(Int),
                                 state, Float64(dt), nothing, nothing, time(),
-                                workspace, perf_stats, nothing)
+                                perf_stats, nothing)
     attach_evaluator!(solver)
 
     if has_time_dependent_bcs(problem.bc_manager)
@@ -679,8 +677,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     global_solver = MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
 
     solver = BoundaryValueSolver(base, problem, state, L_sparse, M_sparse, F_vec, Float64(tolerance), max_iterations,
-                                 Dict{String, AbstractArray}(), nothing,
-                                 perf_stats, global_solver, (), (), nothing)
+                                 nothing, perf_stats, global_solver, (), (), nothing)
 
     subsystems = build_subsystems(solver)
     subproblems = build_subproblems(solver, subsystems; build_matrices=["L", "M", "F"])
@@ -716,7 +713,6 @@ mutable struct BoundaryValueSolver <: Solver
     tolerance::Float64
     max_iterations::Int
 
-    workspace::Dict{String, AbstractArray}
     factorization::Union{Nothing, Factorization}
     performance_stats::SolverPerformanceStats
     global_solver::Any
@@ -742,7 +738,6 @@ mutable struct EigenvalueSolver <: Solver
     which::Symbol
     target::Union{Nothing, ComplexF64}
 
-    workspace::Dict{String, AbstractArray}
     performance_stats::SolverPerformanceStats
     global_solver::Any
     subsystems::Tuple{Vararg{Subsystem}}
@@ -785,13 +780,12 @@ function _build_eigenvalue_solver(problem::EVP;
     problem.parameters["L_matrix"] = L_sparse
     problem.parameters["M_matrix"] = M_sparse
 
-    workspace = Dict{String, AbstractArray}()
     perf_stats = SolverPerformanceStats()
     global_solver = MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
     which_symbol = Symbol(uppercase(String(which)))
     solver = EigenvalueSolver(base, problem, ComplexF64[], zeros(ComplexF64, 0, 0),
                               L_sparse, M_sparse, nev, which_symbol, target,
-                              workspace, perf_stats, global_solver, (), (), nothing)
+                              perf_stats, global_solver, (), (), nothing)
 
     subsystems = build_subsystems(solver)
     subproblems = build_subproblems(solver, subsystems; build_matrices=["L", "M"])
