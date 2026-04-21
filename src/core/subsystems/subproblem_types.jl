@@ -11,6 +11,44 @@ Following subsystems:234-296.
 Subproblems are identified by their group multi-index, which identifies
 the corresponding group of each separable dimension of the problem.
 """
+const _SubproblemRKBufferKey = Tuple{Symbol, Int}
+
+mutable struct SubproblemRuntimeCache
+    M_backend::Any
+    L_backend::Any
+    pre_right_pinv_backend::Any
+    pre_right_backend::Any
+    pre_left_backend::Any
+    bc_rows_device::Union{Nothing, AbstractVector{Int}}
+    pre_right_pinv_indices::Union{Nothing, Vector{Int}}
+    pre_left_indices::Union{Nothing, Vector{Int}}
+    compress_variable_space::Union{Nothing, AbstractVector{ComplexF64}}
+    expand_variable_space::Union{Nothing, AbstractVector{ComplexF64}}
+    compress_equation_space::Union{Nothing, AbstractVector{ComplexF64}}
+    gather_inputs_raw::Union{Nothing, AbstractVector{ComplexF64}}
+    scatter_inputs_expanded::Union{Nothing, AbstractVector{ComplexF64}}
+    gather_outputs_raw::Union{Nothing, AbstractVector{ComplexF64}}
+    gather_eqn_F_raw::Union{Nothing, AbstractVector{ComplexF64}}
+    gather_alg_F_raw::Union{Nothing, AbstractVector{ComplexF64}}
+    gather_alg_F_raw_cpu::Union{Nothing, Vector{ComplexF64}}
+    eqn_sizes::Union{Nothing, Vector{Int}}
+    eqn_raw_size::Int
+    eqn_targets::Union{Nothing, Vector{Vector{Int}}}
+    mass_solver::Any
+    lhs_dirty::Dict{Float64, Bool}
+    rk_buffers::Dict{_SubproblemRKBufferKey, AbstractVector{ComplexF64}}
+end
+
+SubproblemRuntimeCache() = SubproblemRuntimeCache(
+    nothing, nothing, nothing, nothing, nothing,
+    nothing, nothing, nothing,
+    nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,
+    nothing, 0, nothing,
+    nothing,
+    Dict{Float64, Bool}(),
+    Dict{_SubproblemRKBufferKey, AbstractVector{ComplexF64}}(),
+)
+
 mutable struct Subproblem
     solver::Any
     problem::Problem
@@ -25,7 +63,8 @@ mutable struct Subproblem
     variable_range::UnitRange{Int}
     equation_range::UnitRange{Int}
 
-    # Matrices (built by build_matrices!)
+    # Minimal matrices built by `build_matrices!` (`"M"`, `"L"`, ...).
+    # Runtime scratch state lives in `runtime`, not here.
     matrices::Dict{String, Any}
 
     # Preconditioners (following subsystems:560-563)
@@ -49,6 +88,9 @@ mutable struct Subproblem
     # Input/output buffers
     _input_buffer::Union{Nothing, Matrix{ComplexF64}}
     _output_buffer::Union{Nothing, Matrix{ComplexF64}}
+
+    # Runtime scratch state for gather/scatter and stepping helpers.
+    runtime::SubproblemRuntimeCache
 
     # Per-(a_ii) LHS factorizations for IMEX RK.
     #
@@ -135,6 +177,7 @@ function Subproblem(solver, subsystems::Tuple{Vararg{Subsystem}}, group::Tuple=S
         nothing, nothing, nothing,  # Expanded matrices
         0,  # update_rank
         nothing, nothing,  # Buffers
+        SubproblemRuntimeCache(),
         Dict{Float64, Any}(),  # LHS_solvers (keyed by a_ii for ESDIRK reuse)
         Int[], Int[], Int[], Int[]  # bulk_rows, bc_rows, bulk_cols, bc_cols
     )
@@ -351,25 +394,24 @@ function _subproblem_eqn_size(sp::Subproblem, eq_data::Dict)
 end
 
 function _subproblem_eqn_sizes(sp::Subproblem)
-    cached = get(sp.matrices, "_eqn_sizes", nothing)
+    cached = sp.runtime.eqn_sizes
     cached !== nothing && return cached
 
     eqns = sp.problem.equation_data
     eqn_sizes = Int[_subproblem_eqn_size(sp, eq) for eq in eqns]
-    sp.matrices["_eqn_sizes"] = eqn_sizes
-    sp.matrices["_eqn_raw_size"] = sum(eqn_sizes; init=0)
+    sp.runtime.eqn_sizes = eqn_sizes
+    sp.runtime.eqn_raw_size = sum(eqn_sizes; init=0)
     return eqn_sizes
 end
 
 function _subproblem_raw_eqn_size(sp::Subproblem)
-    cached = get(sp.matrices, "_eqn_raw_size", nothing)
-    cached !== nothing && return cached
+    sp.runtime.eqn_sizes !== nothing && return sp.runtime.eqn_raw_size
     _subproblem_eqn_sizes(sp)
-    return sp.matrices["_eqn_raw_size"]
+    return sp.runtime.eqn_raw_size
 end
 
 function _subproblem_eqn_targets(sp::Subproblem, state_fields::Vector)
-    cached = get(sp.matrices, "_eqn_targets", nothing)
+    cached = sp.runtime.eqn_targets
     cached !== nothing && return cached
 
     problem = sp.problem
@@ -383,7 +425,7 @@ function _subproblem_eqn_targets(sp::Subproblem, state_fields::Vector)
             Int[]
         end
     end
-    sp.matrices["_eqn_targets"] = targets
+    sp.runtime.eqn_targets = targets
     return targets
 end
 

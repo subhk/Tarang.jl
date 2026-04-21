@@ -42,15 +42,61 @@ underlying local buffer via `parent()`. For regular arrays, returns as-is.
 _local_coeff_data(cd::AbstractArray) = get_local_data(cd)
 _local_coeff_data(::Nothing) = nothing
 
-function _subproblem_backend_matrix!(sp::Subproblem, matrix, cache_key::String, data::AbstractVector)
+@inline function _subproblem_backend_field(which::Symbol)
+    if which === :M
+        return :M_backend
+    elseif which === :L
+        return :L_backend
+    elseif which === :pre_right_pinv
+        return :pre_right_pinv_backend
+    elseif which === :pre_right
+        return :pre_right_backend
+    elseif which === :pre_left
+        return :pre_left_backend
+    end
+    throw(ArgumentError("Unknown backend cache key: $which"))
+end
+
+@inline function _subproblem_selection_field(which::Symbol)
+    if which === :pre_right_pinv
+        return :pre_right_pinv_indices
+    elseif which === :pre_left
+        return :pre_left_indices
+    end
+    throw(ArgumentError("Unknown selection-index cache key: $which"))
+end
+
+@inline function _subproblem_vector_field(which::Symbol)
+    if which === :compress_variable_space
+        return :compress_variable_space
+    elseif which === :expand_variable_space
+        return :expand_variable_space
+    elseif which === :compress_equation_space
+        return :compress_equation_space
+    elseif which === :gather_inputs_raw
+        return :gather_inputs_raw
+    elseif which === :scatter_inputs_expanded
+        return :scatter_inputs_expanded
+    elseif which === :gather_outputs_raw
+        return :gather_outputs_raw
+    elseif which === :gather_eqn_F_raw
+        return :gather_eqn_F_raw
+    elseif which === :gather_alg_F_raw
+        return :gather_alg_F_raw
+    end
+    throw(ArgumentError("Unknown vector cache key: $which"))
+end
+
+function _subproblem_backend_matrix!(sp::Subproblem, matrix, which::Symbol, data::AbstractVector)
     matrix === nothing && return nothing
     if !is_gpu_array(data)
         return matrix
     end
-    cached = get(sp.matrices, cache_key, nothing)
+    field = _subproblem_backend_field(which)
+    cached = getfield(sp.runtime, field)
     cached !== nothing && return cached
     backend = _gpu_sparse_csr(matrix, eltype(matrix))
-    sp.matrices[cache_key] = backend
+    setfield!(sp.runtime, field, backend)
     return backend
 end
 
@@ -68,13 +114,13 @@ function _bc_rows_device(sp::Subproblem, reference::AbstractVector)
     if isempty(sp.bc_rows) || !is_gpu_array(reference)
         return sp.bc_rows
     end
-    cached = get(sp.matrices, "_bc_rows_device", nothing)
+    cached = sp.runtime.bc_rows_device
     if cached !== nothing && length(cached) == length(sp.bc_rows)
         return cached
     end
     device_rows = similar(reference, Int, length(sp.bc_rows))
     copyto!(device_rows, sp.bc_rows)
-    sp.matrices["_bc_rows_device"] = device_rows
+    sp.runtime.bc_rows_device = device_rows
     return device_rows
 end
 
@@ -121,15 +167,16 @@ function apply_bc_override!(rhs::AbstractVector, alg_f::AbstractVector,
 end
 
 function _subproblem_selection_indices!(sp::Subproblem, matrix::Union{Nothing, SparseMatrixCSC},
-                                        cache_key::String)
+                                        which::Symbol)
     matrix === nothing && return nothing
-    cached = get(sp.matrices, cache_key, nothing)
+    field = _subproblem_selection_field(which)
+    cached = getfield(sp.runtime, field)
     cached !== nothing && return cached
 
     m, n = size(matrix)
     if nnz(matrix) == 0
         indices = Int[]
-        sp.matrices[cache_key] = indices
+        setfield!(sp.runtime, field, indices)
         return indices
     end
 
@@ -150,7 +197,7 @@ function _subproblem_selection_indices!(sp::Subproblem, matrix::Union{Nothing, S
     end
     all(seen) || return nothing
 
-    sp.matrices[cache_key] = indices
+    setfield!(sp.runtime, field, indices)
     return indices
 end
 
@@ -192,9 +239,10 @@ function _assign_from_buffer!(dest, src)
     return dest
 end
 
-function _subproblem_cached_vector!(sp::Subproblem, key::String, n::Int;
+function _subproblem_cached_vector!(sp::Subproblem, which::Symbol, n::Int;
                                     like::Union{Nothing, AbstractVector}=nothing)
-    cached = get(sp.matrices, key, nothing)
+    field = _subproblem_vector_field(which)
+    cached = getfield(sp.runtime, field)
     if cached !== nothing && length(cached) == n
         if like === nothing || is_gpu_array(cached) == is_gpu_array(like)
             return cached
@@ -206,7 +254,7 @@ function _subproblem_cached_vector!(sp::Subproblem, key::String, n::Int;
     else
         similar_zeros(like, ComplexF64, n)
     end
-    sp.matrices[key] = buffer
+    setfield!(sp.runtime, field, buffer)
     return buffer
 end
 
@@ -320,14 +368,14 @@ end
 function compress_variable_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)
     if sp.pre_right_pinv !== nothing
         indices = (!is_gpu_array(dest) && !is_gpu_array(raw)) ?
-                  _subproblem_selection_indices!(sp, sp.pre_right_pinv, "_pre_right_pinv_indices") :
+                  _subproblem_selection_indices!(sp, sp.pre_right_pinv, :pre_right_pinv) :
                   nothing
         if indices !== nothing
             @inbounds for i in eachindex(indices)
                 dest[i] = raw[indices[i]]
             end
         else
-            pre = _subproblem_backend_matrix!(sp, sp.pre_right_pinv, "_pre_right_pinv_backend", raw)
+            pre = _subproblem_backend_matrix!(sp, sp.pre_right_pinv, :pre_right_pinv, raw)
             if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
                 mul!(dest, pre, raw)
             else
@@ -342,14 +390,14 @@ end
 
 function compress_variable_space(sp::Subproblem, raw::AbstractVector)
     n = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 1) : length(raw)
-    dest = _subproblem_cached_vector!(sp, "_compress_variable_space", n; like=raw)
+    dest = _subproblem_cached_vector!(sp, :compress_variable_space, n; like=raw)
     return compress_variable_space!(dest, sp, raw)
 end
 
 function expand_variable_space!(dest::AbstractVector, sp::Subproblem, data::AbstractVector)
     if sp.pre_right !== nothing
         indices = (!is_gpu_array(dest) && !is_gpu_array(data)) ?
-                  _subproblem_selection_indices!(sp, sp.pre_right_pinv, "_pre_right_pinv_indices") :
+                  _subproblem_selection_indices!(sp, sp.pre_right_pinv, :pre_right_pinv) :
                   nothing
         if indices !== nothing
             fill!(dest, zero(eltype(dest)))
@@ -357,7 +405,7 @@ function expand_variable_space!(dest::AbstractVector, sp::Subproblem, data::Abst
                 dest[indices[i]] = data[i]
             end
         else
-            pre = _subproblem_backend_matrix!(sp, sp.pre_right, "_pre_right_backend", data)
+            pre = _subproblem_backend_matrix!(sp, sp.pre_right, :pre_right, data)
             if !is_gpu_array(dest) && !is_gpu_array(data) && pre isa AbstractMatrix
                 mul!(dest, pre, data)
             else
@@ -372,21 +420,21 @@ end
 
 function expand_variable_space(sp::Subproblem, data::AbstractVector)
     n = sp.pre_right !== nothing ? size(sp.pre_right, 1) : length(data)
-    dest = _subproblem_cached_vector!(sp, "_expand_variable_space", n; like=data)
+    dest = _subproblem_cached_vector!(sp, :expand_variable_space, n; like=data)
     return expand_variable_space!(dest, sp, data)
 end
 
 function compress_equation_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)
     if sp.pre_left !== nothing
         indices = (!is_gpu_array(dest) && !is_gpu_array(raw)) ?
-                  _subproblem_selection_indices!(sp, sp.pre_left, "_pre_left_indices") :
+                  _subproblem_selection_indices!(sp, sp.pre_left, :pre_left) :
                   nothing
         if indices !== nothing
             @inbounds for i in eachindex(indices)
                 dest[i] = raw[indices[i]]
             end
         else
-            pre = _subproblem_backend_matrix!(sp, sp.pre_left, "_pre_left_backend", raw)
+            pre = _subproblem_backend_matrix!(sp, sp.pre_left, :pre_left, raw)
             if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
                 mul!(dest, pre, raw)
             else
@@ -401,7 +449,7 @@ end
 
 function compress_equation_space(sp::Subproblem, raw::AbstractVector)
     n = sp.pre_left !== nothing ? size(sp.pre_left, 1) : length(raw)
-    dest = _subproblem_cached_vector!(sp, "_compress_equation_space", n; like=raw)
+    dest = _subproblem_cached_vector!(sp, :compress_equation_space, n; like=raw)
     return compress_equation_space!(dest, sp, raw)
 end
 
@@ -409,7 +457,7 @@ end
 function gather_inputs(sp::Subproblem, fields::Vector)
     raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
               sum(subproblem_field_size(sp, field) for field in fields)
-    raw = _subproblem_cached_vector!(sp, "_gather_inputs_raw", raw_len)
+    raw = _subproblem_cached_vector!(sp, :gather_inputs_raw, raw_len)
     _gather_subproblem_raw!(raw, sp, fields)
     return compress_variable_space(sp, raw)
 end
@@ -417,7 +465,7 @@ end
 function gather_inputs!(dest::AbstractVector, sp::Subproblem, fields::Vector)
     raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
               sum(subproblem_field_size(sp, field) for field in fields)
-    raw = _subproblem_cached_vector!(sp, "_gather_inputs_raw", raw_len; like=dest)
+    raw = _subproblem_cached_vector!(sp, :gather_inputs_raw, raw_len; like=dest)
     _gather_subproblem_raw!(raw, sp, fields)
     return compress_variable_space!(dest, sp, raw)
 end
@@ -425,7 +473,7 @@ end
 """Expand from variable space and scatter back to fields."""
 function scatter_inputs(sp::Subproblem, data::AbstractVector, fields::Vector)
     expanded_len = sp.pre_right !== nothing ? size(sp.pre_right, 1) : length(data)
-    expanded = _subproblem_cached_vector!(sp, "_scatter_inputs_expanded", expanded_len; like=data)
+    expanded = _subproblem_cached_vector!(sp, :scatter_inputs_expanded, expanded_len; like=data)
     expand_variable_space!(expanded, sp, data)
     _scatter_subproblem_raw(sp, expanded, fields)
 end
@@ -439,7 +487,7 @@ compressed with the variable-side preconditioner, not the equation-side one.
 function gather_outputs(sp::Subproblem, fields::Vector)
     raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
               sum(subproblem_field_size(sp, field) for field in fields)
-    raw = _subproblem_cached_vector!(sp, "_gather_outputs_raw", raw_len)
+    raw = _subproblem_cached_vector!(sp, :gather_outputs_raw, raw_len)
     _gather_subproblem_raw!(raw, sp, fields)
     return compress_variable_space(sp, raw)
 end
@@ -447,7 +495,7 @@ end
 function gather_outputs!(dest::AbstractVector, sp::Subproblem, fields::Vector)
     raw_len = sp.pre_right_pinv !== nothing ? size(sp.pre_right_pinv, 2) :
               sum(subproblem_field_size(sp, field) for field in fields)
-    raw = _subproblem_cached_vector!(sp, "_gather_outputs_raw", raw_len; like=dest)
+    raw = _subproblem_cached_vector!(sp, :gather_outputs_raw, raw_len; like=dest)
     _gather_subproblem_raw!(raw, sp, fields)
     return compress_variable_space!(dest, sp, raw)
 end
@@ -802,7 +850,7 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
     eqn_targets = _subproblem_eqn_targets(sp, state_fields)
     I_raw = _subproblem_raw_eqn_size(sp)
 
-    raw = _subproblem_cached_vector!(sp, "_gather_eqn_F_raw", I_raw; like=dest)
+    raw = _subproblem_cached_vector!(sp, :gather_eqn_F_raw, I_raw; like=dest)
     fill!(raw, zero(eltype(raw)))
 
     kx_global = _kx_index_global(sp)
@@ -867,11 +915,10 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
     # device-resident `raw` buffer via `_assign_to_buffer!` — this keeps
     # scalar indexing off of GPU arrays so the helper is safe under
     # `CUDA.allowscalar(false)`.
-    raw_cpu_key = "_gather_alg_F_raw_cpu"
-    raw_cpu = get(sp.matrices, raw_cpu_key, nothing)
+    raw_cpu = sp.runtime.gather_alg_F_raw_cpu
     if raw_cpu === nothing || length(raw_cpu) != I_raw
         raw_cpu = zeros(ComplexF64, I_raw)
-        sp.matrices[raw_cpu_key] = raw_cpu
+        sp.runtime.gather_alg_F_raw_cpu = raw_cpu
     else
         fill!(raw_cpu, zero(ComplexF64))
     end
@@ -914,7 +961,7 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
     end
 
     # Upload the CPU-built raw vector into the device-resident raw buffer.
-    raw = _subproblem_cached_vector!(sp, "_gather_alg_F_raw", I_raw; like=dest)
+    raw = _subproblem_cached_vector!(sp, :gather_alg_F_raw, I_raw; like=dest)
     _assign_to_buffer!(raw, raw_cpu)
 
     compress_equation_space!(dest, sp, raw)
@@ -1005,4 +1052,3 @@ function valid_modes(sp::Subproblem, field, valid_modes_array)
     slices = field_slices(sp, field)
     return valid_modes_array[slices...]
 end
-

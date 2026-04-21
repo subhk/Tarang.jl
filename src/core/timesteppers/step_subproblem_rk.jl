@@ -186,8 +186,7 @@ end
 function _subproblem_operator(sp::Subproblem, which::Symbol, data::AbstractVector)
     matrix = which === :M ? sp.M_min : sp.L_min
     matrix === nothing && return nothing
-    cache_key = which === :M ? "_M_min_backend" : "_L_min_backend"
-    return _subproblem_backend_matrix!(sp, matrix, cache_key, data)
+    return _subproblem_backend_matrix!(sp, matrix, which, data)
 end
 
 function _apply_subproblem_operator!(dest::AbstractVector, op, x::AbstractVector)
@@ -201,12 +200,35 @@ function _apply_subproblem_operator!(dest::AbstractVector, op, x::AbstractVector
     return dest
 end
 
-function _sp_stage_vector!(sp::Subproblem, key::String, n::Int, like::AbstractVector)
-    return _subproblem_cached_vector!(sp, key, n; like=like)
+function _sp_stage_vector!(sp::Subproblem, kind::Symbol, stage::Int, n::Int,
+                           like::AbstractVector)
+    key = (kind, stage)
+    cached = get(sp.runtime.rk_buffers, key, nothing)
+    if cached !== nothing && length(cached) == n && is_gpu_array(cached) == is_gpu_array(like)
+        return cached
+    end
+    buffer = similar_zeros(like, ComplexF64, n)
+    sp.runtime.rk_buffers[key] = buffer
+    return buffer
 end
 
-function _sp_stage_vector!(sp::Subproblem, key::String, n::Int)
-    return _subproblem_cached_vector!(sp, key, n)
+function _sp_stage_vector!(sp::Subproblem, kind::Symbol, stage::Int, n::Int)
+    key = (kind, stage)
+    cached = get(sp.runtime.rk_buffers, key, nothing)
+    if cached !== nothing && length(cached) == n
+        return cached
+    end
+    buffer = zeros(sp.dist.architecture, ComplexF64, n)
+    sp.runtime.rk_buffers[key] = buffer
+    return buffer
+end
+
+function _sp_stage_vector!(sp::Subproblem, kind::Symbol, n::Int, like::AbstractVector)
+    return _sp_stage_vector!(sp, kind, 0, n, like)
+end
+
+function _sp_stage_vector!(sp::Subproblem, kind::Symbol, n::Int)
+    return _sp_stage_vector!(sp, kind, 0, n)
 end
 
 """
@@ -267,7 +289,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             # Mark all cached entries dirty; _get_or_build_lhs! will
             # refactor in place on the next call.
             for a_ii_key in keys(sp.LHS_solvers)
-                sp.matrices["_lhs_dirty_$(a_ii_key)"] = true
+                sp.runtime.lhs_dirty[a_ii_key] = true
             end
         end
         state.timestepper_data[:_sp_rk_dt] = dt
@@ -300,14 +322,14 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         end
         n_eq = size(sp.M_min, 1)
         n_var = size(sp.M_min, 2)
-        mx0 = _sp_stage_vector!(sp, "_sp_rk_mx0", n_eq)
-        rhs = _sp_stage_vector!(sp, "_sp_rk_rhs", n_var)
+        mx0 = _sp_stage_vector!(sp, :mx0, n_eq)
+        rhs = _sp_stage_vector!(sp, :rhs, n_var)
         x0_pre = gather_inputs!(rhs, sp, state_fields)
         _apply_subproblem_operator!(mx0, _subproblem_operator(sp, :M, x0_pre), x0_pre)
         MX0[sp_idx] = mx0
         RHS[sp_idx] = rhs
 
-        alg_f = _sp_stage_vector!(sp, "_sp_rk_alg_f", n_eq, mx0)
+        alg_f = _sp_stage_vector!(sp, :alg_f, n_eq, mx0)
         gather_alg_F!(alg_f, sp)
         ALG_F[sp_idx] = alg_f
     end
@@ -376,7 +398,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
 
             if abs(a_ii) < 1e-14
                 # No implicit diagonal — just invert M
-                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), RHS[sp_idx])
+                x_sol = _sp_stage_vector!(sp, :sol_stage, i, size(sp.M_min, 2), RHS[sp_idx])
                 if sp.M_min !== nothing
                     M_lu = _get_or_compute_mass_lu!(sp)
                     if M_lu !== nothing
@@ -388,7 +410,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
                     _assign_to_buffer!(x_sol, rhs)
                 end
             else
-                x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_stage_$i", size(sp.M_min, 2), RHS[sp_idx])
+                x_sol = _sp_stage_vector!(sp, :sol_stage, i, size(sp.M_min, 2), RHS[sp_idx])
                 lhs_solver = _get_or_build_lhs!(sp, i, dt, a_ii)
                 if lhs_solver !== nothing
                     _solve_cached_system!(x_sol, lhs_solver, rhs)
@@ -414,12 +436,12 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         F_fields = evaluate_rhs_buffered(solver, state_fields, t + dt * c[i])
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
-            f_stage = _sp_stage_vector!(sp, "_sp_rk_F_stage_$i", size(sp.M_min, 1), MX0[sp_idx])
+            f_stage = _sp_stage_vector!(sp, :F_stage, i, size(sp.M_min, 1), MX0[sp_idx])
             x_pre = RHS[sp_idx]
             gather_eqn_F!(f_stage, sp, solver, F_fields, state_fields)
             gather_inputs!(x_pre, sp, state_fields)
             L_op = _subproblem_operator(sp, :L, x_pre)
-            lx_stage = _sp_stage_vector!(sp, "_sp_rk_LX_stage_$i", length(x_pre), x_pre)
+            lx_stage = _sp_stage_vector!(sp, :LX_stage, i, length(x_pre), x_pre)
             _apply_subproblem_operator!(lx_stage, L_op, x_pre)
             F[i][sp_idx] = f_stage
             LX[i][sp_idx] = lx_stage
@@ -440,7 +462,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # Cached scratch buffer for the final-update rhs (size n_eq). Reusing
         # a persistent vector instead of `copy(MX0[sp_idx])` eliminates one
         # ComplexF64 allocation per subproblem per step.
-        rhs = _sp_stage_vector!(sp, "_sp_rk_final_rhs", size(sp.M_min, 1), MX0[sp_idx])
+        rhs = _sp_stage_vector!(sp, :final_rhs, size(sp.M_min, 1), MX0[sp_idx])
         copyto!(rhs, MX0[sp_idx])
         for s in 1:stages
             be = dt * b_exp[s]
@@ -456,7 +478,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # Solve M * X_new = rhs
         M_lu = _get_or_compute_mass_lu!(sp)
         if M_lu !== nothing
-            x_sol = _sp_stage_vector!(sp, "_sp_rk_sol_final", size(sp.M_min, 2), RHS[sp_idx])
+            x_sol = _sp_stage_vector!(sp, :sol_final, size(sp.M_min, 2), RHS[sp_idx])
             _solve_cached_system!(x_sol, M_lu, rhs)
         else
             # Singular M (DAE): last stage already satisfies constraints
@@ -489,7 +511,7 @@ factorizations per step. For non-ESDIRK DIRKs with distinct per-stage
 ### Dt changes
 
 When `dt` changes, the dt-change handler in `step_subproblem_rk!` marks
-each cached entry as dirty via `sp.matrices["_lhs_dirty_<a_ii>"]`. The
+each cached entry as dirty via `sp.runtime.lhs_dirty[a_ii]`. The
 next call to `_get_or_build_lhs!` detects the dirty flag and refactors
 in place via `MatSolvers.refactor!` — reusing the cached symbolic
 factorization and running only the numeric phase.
@@ -521,8 +543,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
 
     # Look up cached entry by a_ii (shared across ESDIRK stages).
     cached = get(sp.LHS_solvers, a_ii, nothing)
-    dirty_key = "_lhs_dirty_$(a_ii)"
-    is_dirty = get(sp.matrices, dirty_key, false)::Bool
+    is_dirty = get(sp.runtime.lhs_dirty, a_ii, false)
 
     if cached !== nothing && !is_dirty
         # Matrix unchanged since last dt — cache hit, zero work.
@@ -539,7 +560,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
        hasmethod(MatSolvers.refactor!, Tuple{typeof(cached), typeof(LHS)})
         try
             MatSolvers.refactor!(cached, LHS)
-            sp.matrices[dirty_key] = false
+            sp.runtime.lhs_dirty[a_ii] = false
             return cached
         catch err
             @debug "refactor! failed, falling back to full rebuild" exception=(err, catch_backtrace())
@@ -547,7 +568,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         end
     end
     # Fresh build (first call at this a_ii, or refactor failed).
-    sp.matrices[dirty_key] = false
+    sp.runtime.lhs_dirty[a_ii] = false
 
     # Woodbury block-LU is only safe when the bulk/BC metadata keeps coupling
     # taus in the bulk block. The partition is built during matrix assembly
@@ -592,7 +613,7 @@ end
     _get_or_compute_mass_lu!(sp)
 
 Return a cached solver for the mass matrix `sp.M_min`.
-The solver is cached in `sp.matrices["_mass_solver"]`.
+The solver is cached in `sp.runtime.mass_solver`.
 
 This is used for stages where `a_ii = 0` (e.g., ESDIRK first stage)
 and for the non-stiffly-accurate final update.
@@ -600,20 +621,20 @@ and for the non-stiffly-accurate final update.
 function _get_or_compute_mass_lu!(sp::Subproblem)
     M = sp.M_min
     M === nothing && return nothing
-    cached = get(sp.matrices, "_mass_solver", nothing)
+    cached = sp.runtime.mass_solver
     cached !== nothing && return cached
 
     solver_type = _subproblem_solver_type(sp.solver.base.matsolver)
     solver_kwargs = _subproblem_solver_kwargs(sp.solver.base.matsolver)
     try
         mass_solver = MatSolvers.solver_instance(solver_type, M; solver_kwargs...)
-        sp.matrices["_mass_solver"] = mass_solver
+        sp.runtime.mass_solver = mass_solver
         return mass_solver
     catch err
         if solver_type != MatSolvers.SPQRSolver
             try
                 mass_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, M)
-                sp.matrices["_mass_solver"] = mass_solver
+                sp.runtime.mass_solver = mass_solver
                 return mass_solver
             catch
             end
