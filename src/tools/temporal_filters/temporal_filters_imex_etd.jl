@@ -1,3 +1,5 @@
+# IMEX/SBDF and ETD helpers for temporal filter state updates.
+
 # ============================================================================
 # IMEX / SBDF Integration Support
 # ============================================================================
@@ -545,5 +547,4 @@ function update_etd!(
 
     return h̄
 end
-
 

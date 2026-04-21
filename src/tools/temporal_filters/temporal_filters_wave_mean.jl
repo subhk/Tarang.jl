@@ -1,3 +1,5 @@
+# Horizontal-mean extraction plus wave-mean forcing utilities.
+
 # ============================================================================
 # Horizontal Mean (k=0 mode) Extraction
 # ============================================================================
@@ -742,5 +744,4 @@ function get_wave(forcing::WaveInducedForcing, field_name::Symbol)
         throw(KeyError("Field :$field_name not registered. Use add_field!() first."))
     end
 end
-
 

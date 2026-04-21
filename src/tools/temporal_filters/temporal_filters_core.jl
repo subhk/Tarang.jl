@@ -1,3 +1,8 @@
+# Core temporal filter types, state, and direct update paths.
+#
+# This file owns the filter objects themselves plus the non-IMEX/non-ETD update
+# methods that higher-level wave-mean tools build on.
+
 # ============================================================================
 # Abstract types
 # ============================================================================
@@ -913,4 +918,3 @@ function max_stable_timestep(filter::LagrangianFilter; method::Symbol=:euler)
     # Use the more restrictive Butterworth limit for safety
     return max_stable_timestep(filter.temporal_filter; method=method)
 end
-

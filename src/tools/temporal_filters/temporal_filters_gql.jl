@@ -1,3 +1,5 @@
+# GQL spectral decomposition and combined GQL + wave-mean helpers.
+
 # ============================================================================
 # Generalized Quasi-Linear (GQL) Wavenumber Decomposition
 # ============================================================================
@@ -594,5 +596,4 @@ get_cutoff(sys::GQLWaveMeanSystem) = get_cutoff(sys.gql)
 Update the GQL wavenumber cutoff.
 """
 set_cutoff!(sys::GQLWaveMeanSystem, Λ_new::Real) = set_cutoff!(sys.gql, Λ_new)
-
 

@@ -344,10 +344,10 @@ using LinearAlgebra: I
 #   temporal_filters_wave_mean.jl — horizontal means, wave-mean decomposition, forcing helpers
 #   temporal_filters_gql.jl       — GQL spectral decomposition and combined GQL+wave-mean system
 
-include("tools/temporal_filters/temporal_filters_core.jl")
-include("tools/temporal_filters/temporal_filters_imex_etd.jl")
-include("tools/temporal_filters/temporal_filters_wave_mean.jl")
-include("tools/temporal_filters/temporal_filters_gql.jl")
+include("temporal_filters/temporal_filters_core.jl")
+include("temporal_filters/temporal_filters_imex_etd.jl")
+include("temporal_filters/temporal_filters_wave_mean.jl")
+include("temporal_filters/temporal_filters_gql.jl")
 
 # ============================================================================
 # Exports
