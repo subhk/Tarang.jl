@@ -5,7 +5,7 @@ Split into focused sub-files:
 - subsystem_types.jl: subsystem configuration, construction, and coupling analysis
 - subsystem_methods.jl: subsystem field access and gather/scatter helpers
 - subproblem_types.jl: Subproblem definitions and sizing metadata
-- subproblem_runtime.jl: subproblem gather/scatter, caches, BC projection, equation-space F gather
+- subproblem_runtime.jl: runtime manifest for per-mode I/O, BC/RHS gather, and mode checks
 - subproblem_build.jl: subproblem assembly, matrix construction, and expression matrices
 - subproblem_permutations.jl: Dedalus-style row/column permutations
 - subproblem_matrix_utils.jl: sparse matrix utility helpers
