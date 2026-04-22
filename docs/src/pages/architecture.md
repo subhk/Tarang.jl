@@ -7,77 +7,88 @@ Overview of Tarang.jl's internal architecture. This page describes how the piece
 ```
 Tarang.jl/
 ├── src/
-│   ├── Tarang.jl                   # Main module
-│   ├── core/                       # Core functionality
-│   │   ├── architectures.jl           # CPU / GPU architecture abstraction
-│   │   ├── coords.jl                  # Coordinate systems (Cartesian, ...)
-│   │   ├── basis.jl                   # Spectral bases (Fourier, Chebyshev, Legendre, Jacobi)
-│   │   ├── distributor.jl             # MPI distributor + pencil layouts
-│   │   ├── domain.jl                  # Domain construction
-│   │   ├── field/                     # Field types, storage, layout
-│   │   │   ├── field_types.jl           # ScalarField, VectorField, TensorField
-│   │   │   ├── field_data.jl            # Data access, allocation
-│   │   │   ├── field_layout.jl          # Grid ↔ coefficient transitions
+│   ├── Tarang.jl                     # Main module
+│   ├── core/
+│   │   ├── architectures.jl            # CPU / GPU architecture abstraction
+│   │   ├── coords.jl                   # Coordinate systems
+│   │   ├── basis.jl                    # Manifest for basis/*
+│   │   ├── basis/
+│   │   │   ├── basis_core.jl
+│   │   │   ├── basis_wavenumbers.jl
+│   │   │   ├── basis_product_matrices.jl
+│   │   │   ├── basis_operators.jl
+│   │   │   └── basis_interface.jl
+│   │   ├── distributor.jl              # Manifest for distributor/*
+│   │   ├── distributor/
+│   │   │   ├── distributor_core.jl
+│   │   │   ├── distributor_mpi.jl
+│   │   │   ├── distributor_transpose.jl
+│   │   │   ├── distributor_exchange.jl
+│   │   │   └── distributor_grouped_transpose.jl
+│   │   ├── domain.jl
+│   │   ├── field/
+│   │   │   ├── field_types.jl
+│   │   │   ├── field_data.jl           # Manifest for field_data/*
+│   │   │   ├── field_data/
+│   │   │   ├── field_layout.jl         # Manifest for field_layout/*
+│   │   │   ├── field_layout/
+│   │   │   └── field_exports.jl
+│   │   ├── operators/
+│   │   │   ├── derivatives.jl          # Manifest for derivatives/*
+│   │   │   ├── operations.jl           # Manifest for operations/*
+│   │   │   ├── matrices.jl             # Manifest for matrices/*
+│   │   │   ├── tensor.jl               # Manifest for tensor/*
 │   │   │   └── ...
-│   │   ├── operators/                 # Differential operators + expression matrices
-│   │   ├── transforms/                # Forward / inverse FFT, DCT, conversion
-│   │   ├── problems/                  # Problem assembly
-│   │   │   ├── problem_types.jl         # IVP, LBVP, NLBVP, EVP
-│   │   │   ├── problem_parsing.jl       # Equation-string parsing
-│   │   │   ├── problem_matrices.jl      # Global matrix assembly
-│   │   │   └── problem_utils.jl         # Validation, introspection
-│   │   ├── boundary_conditions.jl     # BC types, time/space dependency, evaluator
-│   │   ├── subsystems.jl              # Hub file for subproblem decomposition
-│   │   ├── subsystems/                # *** Subproblem decomposition & filtering ***
-│   │   │   ├── subsystem_types.jl       # Subsystem config, construction, coupling analysis
-│   │   │   ├── subsystem_methods.jl     # Subsystem field access and gather/scatter
-│   │   │   ├── subproblem_types.jl      # Subproblem definitions and sizing helpers
-│   │   │   ├── subproblem_runtime.jl    # Gather/scatter, caches, BC projection, F gather
-│   │   │   ├── subproblem_build.jl      # Matrix assembly and expression matrices
-│   │   │   ├── subproblem_permutations.jl  # Dedalus-style row/column permutations
-│   │   │   ├── subproblem_matrix_utils.jl  # Sparse matrix helpers
-│   │   │   ├── subproblem_ncc.jl        # Non-constant coefficient matrix builders
-│   │   │   └── subsystem_exports.jl     # Exports for subsystem API
-│   │   ├── solvers/                   # Solver types, stepping, lazy RHS
-│   │   │   ├── solver_types.jl          # InitialValueSolver, BVP/NLBVP/EVP solvers
-│   │   │   ├── solver_stepping.jl       # step! loop + time-dependent BC refresh
-│   │   │   ├── lazy_rhs.jl              # JIT-specialized RHS evaluation plan
-│   │   │   └── solver_utils.jl          # diagnose(), exports
-│   │   ├── timesteppers/              # Time-integration schemes
-│   │   │   ├── types.jl                   # RK111, RK222, RK443, CNAB*, SBDF*, ETD*
-│   │   │   ├── state_utils.jl             # evaluate_rhs, history
-│   │   │   ├── step_rk.jl                 # Top-level IMEX-RK dispatch
-│   │   │   ├── step_subproblem_rk.jl      # *** Per-Fourier-mode IMEX-RK ***
-│   │   │   ├── step_subproblem_multistep.jl  # *** Per-Fourier-mode CNAB/SBDF ***
-│   │   │   ├── step_multistep.jl          # Global-matrix multistep (legacy fallback)
-│   │   │   ├── step_diagonal_imex.jl      # Diagonal IMEX RK variants
-│   │   │   ├── step_etd.jl                # ETD RK / CNAB / SBDF
-│   │   │   └── dispatch.jl                # Stepper → function dispatch
-│   │   ├── evaluator.jl               # File handler + callback orchestration
-│   │   └── nonlinear.jl               # Nonlinear ops (u⋅∇u)
-│   ├── tools/                      # Utilities and I/O
-│   │   ├── matsolvers.jl              # CPU sparse / dense solvers (UMFPACK, QR, ...)
-│   │   ├── gpu_matsolvers.jl          # GPU solvers (CuSparseLU, ...)
-│   │   ├── netcdf_output.jl           # NetCDF file handlers
-│   │   └── ...                        # config, logging, progress, etc.
-│   └── extras/                     # Convenience helpers
+│   │   ├── transforms/
+│   │   ├── problems/
+│   │   │   ├── problem_types.jl
+│   │   │   ├── problem_parsing.jl
+│   │   │   ├── problem_matrices.jl     # Manifest for problem_matrices/*
+│   │   │   ├── problem_matrices/
+│   │   │   └── problem_utils.jl
+│   │   ├── boundary_conditions.jl
+│   │   ├── subsystems.jl               # Manifest for subsystem/subproblem build + runtime
+│   │   ├── subsystems/
+│   │   │   ├── subsystem_types.jl
+│   │   │   ├── subsystem_methods.jl
+│   │   │   ├── subproblem_types.jl
+│   │   │   ├── subproblem_runtime.jl   # Manifest for I/O, BC/RHS gather, mode checks
+│   │   │   ├── subproblem_io.jl
+│   │   │   ├── subproblem_rhs.jl
+│   │   │   ├── subproblem_modes.jl
+│   │   │   ├── subproblem_build.jl     # Manifest for construction + matrix assembly
+│   │   │   ├── subproblem_build_orchestration.jl
+│   │   │   ├── subproblem_expr_helpers.jl
+│   │   │   ├── subproblem_matrix_build.jl
+│   │   │   ├── subproblem_permutations.jl
+│   │   │   ├── subproblem_matrix_utils.jl
+│   │   │   ├── subproblem_ncc.jl
+│   │   │   └── subsystem_exports.jl
+│   │   ├── solvers/
+│   │   ├── timesteppers/
+│   │   ├── evaluator.jl
+│   │   ├── nonlinear.jl               # Manifest for nonlinear/*
+│   │   └── nonlinear/
+│   ├── tools/
+│   │   ├── matsolvers.jl
+│   │   ├── gpu_matsolvers.jl
+│   │   ├── netcdf_output.jl
+│   │   ├── temporal_filters.jl        # Manifest for temporal_filters/*
+│   │   └── temporal_filters/
+│   └── extras/
 │       ├── quick_domains.jl
-│       ├── flow_tools.jl
+│       ├── flow_tools.jl              # Manifest for flow_tools/*
+│       ├── flow_tools/
 │       └── plot_tools.jl
-├── ext/                            # CUDA extension (loaded when CUDA.jl is available)
-│   ├── TarangCUDAExt.jl               # Extension entry point
-│   └── cuda/                          # GPU implementations
-│       ├── architecture.jl              # GPU() type methods
-│       ├── memory.jl                    # H2D / D2H transfers
-│       ├── transforms.jl                # CUFFT plans
-│       ├── kernels.jl                   # KernelAbstractions kernels
-│       └── ...
-├── examples/                       # Shipped examples (RBC, shear flow, ...)
-├── test/                           # Tests
-└── docs/                           # Documentation
+├── ext/
+│   ├── TarangCUDAExt.jl
+│   └── cuda/
+├── examples/
+├── test/
+└── docs/
 ```
 
-The entries marked with `***` are the core of the solver path introduced in the subproblem refactor; everything else supports or orchestrates them.
+Several top-level files are now thin manifest entry points. When a file and a same-named directory both exist, read the top-level file first; it tells you which focused implementation files to open next.
 
 ## Runtime Map
 
@@ -91,10 +102,27 @@ If you are reading the codebase for the first time, trace one IVP step in this o
    Top-level scheme logic. For IMEX RK, this is where the code chooses between subproblem stepping, explicit fallback, and legacy global-matrix solves.
 4. `src/core/timesteppers/step_subproblem_rk.jl` or `step_subproblem_multistep.jl`
    Performance-critical per-subproblem path for mixed Fourier / Chebyshev problems.
-5. `src/core/solvers/lazy_rhs.jl`
+5. `src/core/subsystems/subproblem_runtime.jl`
+   Manifest for the per-mode gather/scatter and BC/RHS plumbing. The concrete helpers live in `subproblem_io.jl`, `subproblem_rhs.jl`, and `subproblem_modes.jl`.
+6. `src/core/solvers/lazy_rhs.jl`
    Optional RHS acceleration layer used by `evaluate_rhs`.
-6. `src/core/boundary_conditions.jl`
+7. `src/core/boundary_conditions.jl`
    BC manager, dynamic BC evaluation, and projection of refreshed BC values back into equation data.
+
+## Contributor File Map
+
+The current tree is easier to navigate if you think in terms of focused directories rather than historic monolithic files:
+
+- `src/core/basis/`: basis types, wavenumbers, NCC product matrices, and derivative/conversion operators
+- `src/core/distributor/`: MPI layout setup, collectives, transpose helpers, and communication-buffer management
+- `src/core/field/field_data/`: raw field storage, copying/allocation, local/global sizing, and scaling
+- `src/core/field/field_layout/`: layout transitions, arithmetic, filtering, and vectorized field helpers
+- `src/core/operators/derivatives/`, `operations/`, `matrices/`, `tensor/`: evaluation operators separated from sparse matrix assembly
+- `src/core/problems/problem_matrices/`: solver-facing matrix construction, expression analysis, spectral block builders, and legacy forcing-vector helpers
+- `src/core/subsystems/`: subsystem grouping, per-mode subproblem construction, runtime I/O/BC helpers, and NCC assembly
+- `src/core/nonlinear/`: padding, transform setup, dealiasing, pencil compatibility helpers, and nonlinear evaluation
+- `src/extras/flow_tools/`: CFL control, diagnostics, spectra, streamfunction/SQG helpers, QG tools, and boundary-advection helpers
+- `src/tools/temporal_filters/`: temporal-filter core types, IMEX/ETD updates, wave-mean helpers, and GQL utilities
 
 ## How the Solver Actually Works
 
@@ -130,6 +158,13 @@ At solver build time, `_merge_boundary_conditions!` pushes each BC string into `
 
 `build_solver_matrices!` → `build_matrices(problem)` → `build_matrix_expressions!(problem)`.
 
+This logic now lives under `src/core/problems/problem_matrices/`. The entry file `problem_matrices.jl` is only a manifest; the actual work is split across:
+
+- `problem_matrices_build.jl` for top-level assembly
+- `problem_matrices_expr_analysis.jl` for equation-variable analysis and operator splitting
+- `problem_matrices_spectral.jl` for spectral block construction
+- `problem_matrices_support.jl` and `problem_matrices_legacy.jl` for helpers and compatibility shims
+
 For each equation (including merged BCs), the equation-string parser splits LHS and RHS:
 
 - LHS is parsed into an operator tree with `M` (time-derivative) and `L` (spatial) parts
@@ -141,7 +176,14 @@ For the global-matrix path (used by legacy steppers and BVPs), `build_matrices` 
 
 ### 4. Subproblem decomposition
 
-This is the core of the modern solver path. `_try_build_subproblems!(solver)` calls `build_subproblems` in `subsystems.jl`, which:
+This is the core of the modern solver path. `_try_build_subproblems!(solver)` calls `build_subproblems` in `subsystems.jl`. The implementation is now split by responsibility:
+
+- `subproblem_build_orchestration.jl` constructs subproblems and orchestrates per-group assembly
+- `subproblem_expr_helpers.jl` handles expression helpers, DOF sizing, and valid-mode checks used during build
+- `subproblem_matrix_build.jl` builds the small sparse `L` / `M` blocks
+- `subproblem_runtime.jl` delegates per-step I/O, BC projection, and mode checks to `subproblem_io.jl`, `subproblem_rhs.jl`, and `subproblem_modes.jl`
+
+At runtime, the build path does the following:
 
 1. **Enumerates Fourier-mode groups.** For each separable (Fourier) axis, each mode is a "subproblem group". In a 2D problem with `Nx = 256` RealFourier modes and one Chebyshev direction, there are `Nx/2 + 1 = 129` subproblems.
 2. **Builds per-subproblem matrices.** For each subproblem, `build_matrices!(sp, ...)` walks the problem's equation list and calls `expression_matrices(expr, sp, vars)` to construct small sparse `L` and `M` matrices — typically of shape `(n_eqs_rows, n_var_cols)` where the sizes are the per-Fourier-mode DOF counts (e.g. `263 × 263` for 2D RBC at `Nz = 64`).
@@ -229,28 +271,44 @@ end
 mutable struct Subproblem
     solver::Any
     problem::Problem
-    group::Tuple                # e.g. (kx_mode, SUBSYSTEM_GROUP) for 2D
+    subsystems::Tuple{Vararg{Subsystem}}
+    group::Tuple
     dist::Any
-    matrices::Dict{String, Any}
+    domain::Any
+    dtype::DataType
+    group_dict::Dict{String, Any}
 
-    # Permutations + valid-mode filter
+    variable_range::UnitRange{Int}
+    equation_range::UnitRange{Int}
+
+    matrices::Dict{String, Any}  # build-time matrices only
+
     pre_left::Union{Nothing, SparseMatrixCSC}
+    pre_left_pinv::Union{Nothing, SparseMatrixCSC}
     pre_right::Union{Nothing, SparseMatrixCSC}
+    pre_right_pinv::Union{Nothing, SparseMatrixCSC}
 
-    # Filtered minimal matrices
     L_min::Union{Nothing, SparseMatrixCSC}
     M_min::Union{Nothing, SparseMatrixCSC}
+    L_exp::Union{Nothing, SparseMatrixCSC}
+    M_exp::Union{Nothing, SparseMatrixCSC}
+    LHS::Union{Nothing, SparseMatrixCSC}
 
-    # Cached LHS factorizations per stage
-    LHS_solvers::Vector{Any}
+    update_rank::Int
+    _input_buffer::Union{Nothing, Matrix{ComplexF64}}
+    _output_buffer::Union{Nothing, Matrix{ComplexF64}}
 
-    # Row classification for DAE-style override
+    runtime::SubproblemRuntimeCache
+    LHS_solvers::Dict{Float64, Any}
+
     bulk_rows::Vector{Int}
     bc_rows::Vector{Int}
     bulk_cols::Vector{Int}
     bc_cols::Vector{Int}
 end
 ```
+
+`SubproblemRuntimeCache` holds the per-mode scratch vectors, backend-adapted matrices, BC gather buffers, and RK stage buffers that used to be mixed into generic dictionaries.
 
 ### Timestepper
 

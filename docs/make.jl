@@ -75,6 +75,11 @@ pages = Any[
         "GQL Approximation" => "pages/gql_approximation.md",
         "Tau Method" => "pages/tau_method.md",
     ],
+    "Developer Guide" => Any[
+        "Architecture" => "pages/architecture.md",
+        "Testing" => "pages/testing.md",
+        "Contributing" => "pages/contributing.md",
+    ],
     "Reference" => Any[
         "API Reference" => Any[
             "Coordinates" => "api/coordinates.md",
