@@ -1,8 +1,9 @@
 """
-    Build system matrices for problem following structure.
-    Following subsystems:build_subproblem_matrices (subsystems:72-81) and
-    Subproblem.build_matrices (subsystems:497-576).
-    """
+    Problem matrix assembly
+
+This file contains the top-level `build_matrices(problem)` path and the
+construction of equation-level matrix expressions from parsed equations.
+"""
 function build_matrices(problem::Problem)
     
     if length(problem.equations) == 0
@@ -102,8 +103,7 @@ end
 
 """
     Build matrix expressions from parsed equations.
-    Following problems:_build_matrix_expressions patterns.
-    """
+"""
 function build_matrix_expressions!(problem::Problem)
     
     problem.equation_data = Dict{String, Any}[]
@@ -159,8 +159,7 @@ end
 
 """
     Build matrix expressions from LHS and RHS operators.
-    Following _build_matrix_expressions patterns.
-    """
+"""
 function build_equation_expressions(lhs, rhs, variables::Vector)
     
     eq_data = Dict{String, Any}()
@@ -196,4 +195,3 @@ function build_equation_expressions(lhs, rhs, variables::Vector)
     
     return eq_data
 end
-
