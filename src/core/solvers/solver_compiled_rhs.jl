@@ -36,7 +36,7 @@ function fields_to_vector(fields::Vector{<:ScalarField})
             # Copy to vector buffer
             end_offset = offset + field_size - 1
             if end_offset <= length(vector) && length(field_data) == field_size
-                vector[offset:end_offset] .= field_data
+                copyto!(vector, offset, field_data, 1, field_size)
             else
                 error("Size mismatch in fields_to_vector for field '$(field.name)': " *
                       "expected $field_size elements, got $(length(field_data)). " *
@@ -129,7 +129,7 @@ function copy_solution_to_fields!(fields::Vector{<:ScalarField}, solution::Abstr
             actual_size = end_offset - offset + 1
 
             if actual_size > 0
-                field_data = solution[offset:end_offset]
+                field_data = @view solution[offset:end_offset]
                 set_field_data_from_vector!(field, field_data)
                 @debug "Scattered to field $(field.name): size=$actual_size"
             end
@@ -168,7 +168,7 @@ function vector_to_fields(vector::AbstractVector{<:Number}, template::Vector{<:S
 
         if field_size > 0 && offset <= length(vector)
             end_offset = min(offset + field_size - 1, length(vector))
-            data_slice = vector[offset:end_offset]
+            data_slice = @view vector[offset:end_offset]
             # Handles CPU→GPU transfer internally
             set_field_data_from_vector!(new_field, data_slice)
             offset += field_size
@@ -299,7 +299,7 @@ function set_field_data_from_vector!(field::ScalarField, data::AbstractVector{<:
             @debug "Padded field $(field.name) data: got $(length(data)), expected $expected_size"
         else
             # Truncate excess data
-            data_slice = data[1:expected_size]
+            data_slice = @view data[1:expected_size]
             @debug "Truncated field $(field.name) data: got $(length(data)), expected $expected_size"
         end
 
@@ -309,6 +309,8 @@ function set_field_data_from_vector!(field::ScalarField, data::AbstractVector{<:
                 @warn "Discarding imaginary part when setting real field $(field.name)"
             end
             reshaped_data = reshape(real.(data_slice), target_shape)
+        elseif eltype(data_slice) <: target_eltype
+            reshaped_data = reshape(data_slice, target_shape)
         else
             reshaped_data = reshape(convert.(target_eltype, data_slice), target_shape)
         end
@@ -339,6 +341,8 @@ function set_field_data_from_vector!(field::ScalarField, data::AbstractVector{<:
                     @warn "Discarding imaginary part when setting real grid field $(field.name)"
                 end
                 reshaped_data = reshape(real.(data), target_shape)
+            elseif eltype(data) <: target_eltype
+                reshaped_data = reshape(data, target_shape)
             else
                 reshaped_data = reshape(convert.(target_eltype, data), target_shape)
             end
@@ -1094,334 +1098,3 @@ function log_solver_performance(solver::Union{InitialValueSolver, BoundaryValueS
         @info "  Total time: $(round(stats.total_time, digits=3)) seconds"
     end
 end
-
-# ============================================================================
-"""
-    _alloc_workspace_field!(plan, template) -> Int
-
-Add a new pre-allocated workspace field modeled on `template`, return its index.
-"""
-function _alloc_workspace_field!(plan::CompiledRHSPlan, template::ScalarField)
-    ws_field = copy(template)
-    ws_field.name = "ws_$(length(plan.workspace)+1)"
-    push!(plan.workspace, ws_field)
-    return length(plan.workspace)
-end
-
-"""
-    compile_rhs_plan!(solver::InitialValueSolver) -> CompiledRHSPlan
-
-Walk the RHS expression tree and compile it into a sequence of typed instructions
-operating on pre-allocated workspace fields.
-
-This is called once during solver setup. The returned plan is reused for every
-`evaluate_rhs` call, eliminating runtime dispatch and allocation.
-"""
-function compile_rhs_plan!(solver::InitialValueSolver)
-    problem = solver.problem
-    state = solver.state
-    plan = CompiledRHSPlan(length(state))
-
-    if !hasfield(typeof(problem), :equation_data) || isempty(problem.equation_data)
-        plan.is_compiled = true
-        return plan
-    end
-
-    for (eq_idx, eq_data) in enumerate(problem.equation_data)
-        M_expr = get(eq_data, "M", nothing)
-        if M_expr === nothing || _is_zero_m_term(M_expr)
-            continue
-        end
-
-        target_indices = _find_time_derivative_targets(M_expr, state, problem.variables)
-        if isempty(target_indices)
-            continue
-        end
-
-        expr = if haskey(eq_data, "F_expr") && eq_data["F_expr"] !== nothing
-            eq_data["F_expr"]
-        else
-            get(eq_data, "F", nothing)
-        end
-
-        if expr === nothing
-            continue
-        end
-
-        for state_idx in target_indices
-            if state_idx <= length(state)
-                template = state[state_idx]
-                try
-                    ws_idx = _compile_expr!(plan, expr, template, state)
-                    plan.result_ws_indices[state_idx] = ws_idx
-                catch e
-                    field_name = hasfield(typeof(template), :name) ? template.name : "field_$state_idx"
-                    @info "RHS compiler: cannot compile $(field_name) equation's F expression ($(typeof(expr))): $e. Using interpreted evaluation." maxlog=3
-                    plan.is_compiled = false
-                    return plan
-                end
-            end
-        end
-    end
-
-    plan.is_compiled = true
-    @info "Compiled RHS plan: $(length(plan.instructions)) instructions, $(length(plan.workspace)) workspace fields"
-    return plan
-end
-
-"""
-    _compile_expr!(plan, expr, template, state) -> ws_idx
-
-Recursively compile an expression into instructions. Returns the workspace index
-where the result will be stored.
-"""
-function _compile_expr!(plan::CompiledRHSPlan, expr, template::ScalarField, state::Vector{<:ScalarField})
-    if expr isa VectorField
-        # When compiling a per-component equation (template is a scalar component),
-        # replace the VectorField with its component matching the template's name.
-        # This handles cases like Differentiate(u, x) in vector advection where
-        # u is the full VectorField but we're compiling one component's equation.
-        for comp in expr.components
-            if comp === template || (hasfield(typeof(comp), :name) &&
-                                     hasfield(typeof(template), :name) &&
-                                     comp.name == template.name)
-                return _compile_expr!(plan, comp, template, state)
-            end
-        end
-        # Template name doesn't match any component — try matching by suffix
-        # (e.g., template "u_x" → find component ending in "_x")
-        if hasfield(typeof(template), :name)
-            tname = String(template.name)
-            for comp in expr.components
-                if hasfield(typeof(comp), :name)
-                    cname = String(comp.name)
-                    # Match if component name ends with same suffix as template
-                    if endswith(tname, "_x") && endswith(cname, "_x")
-                        return _compile_expr!(plan, comp, template, state)
-                    elseif endswith(tname, "_z") && endswith(cname, "_z")
-                        return _compile_expr!(plan, comp, template, state)
-                    elseif endswith(tname, "_y") && endswith(cname, "_y")
-                        return _compile_expr!(plan, comp, template, state)
-                    end
-                end
-            end
-        end
-        throw(ArgumentError("Cannot compile VectorField $(expr.name) with template $(template.name) — no matching component"))
-
-    elseif expr isa ScalarField
-        # Check if it's a state field
-        for (i, s) in enumerate(state)
-            if expr === s || expr.name == s.name
-                ws_idx = _alloc_workspace_field!(plan, template)
-                push!(plan.instructions, CopyFieldInstr(i, ws_idx))
-                return ws_idx
-            end
-        end
-        # It's a non-state field (parameter, forcing term) — copy it
-        ws_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.workspace, expr)  # Store the actual field reference
-        pop!(plan.workspace)  # Remove the template copy
-        plan.workspace[ws_idx] = expr  # Replace with the actual field
-        return ws_idx
-
-    elseif expr isa Number
-        ws_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.instructions, ScaleFieldInstr(0, ws_idx, Float64(expr)))  # 0 = "fill constant"
-        return ws_idx
-
-    elseif expr isa AddOperator
-        left_idx = _compile_expr!(plan, expr.left, template, state)
-        right_idx = _compile_expr!(plan, expr.right, template, state)
-        dst_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.instructions, AddFieldsInstr(left_idx, right_idx, dst_idx))
-        return dst_idx
-
-    elseif expr isa SubtractOperator
-        left_idx = _compile_expr!(plan, expr.left, template, state)
-        right_idx = _compile_expr!(plan, expr.right, template, state)
-        dst_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.instructions, SubtractFieldsInstr(left_idx, right_idx, dst_idx))
-        return dst_idx
-
-    elseif expr isa MultiplyOperator
-        left_idx = _compile_expr!(plan, expr.left, template, state)
-        right_idx = _compile_expr!(plan, expr.right, template, state)
-        dst_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.instructions, MultiplyFieldsInstr(left_idx, right_idx, dst_idx))
-        return dst_idx
-
-    elseif expr isa NegateOperator
-        src_idx = _compile_expr!(plan, expr.operand, template, state)
-        dst_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.instructions, NegateFieldInstr(src_idx, dst_idx))
-        return dst_idx
-
-    elseif expr isa Differentiate
-        src_idx = _compile_expr!(plan, expr.operand, template, state)
-        dst_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.instructions, DifferentiateInstr(src_idx, dst_idx, expr.coord, expr.order))
-        return dst_idx
-
-    elseif expr isa Future
-        # Evaluate the Future's deferred arguments, then compile the result
-        # Futures wrap lazy operations — we need to resolve them
-        evaluated = evaluate(expr)
-        return _compile_expr!(plan, evaluated, template, state)
-
-    elseif expr isa ZeroOperator
-        ws_idx = _alloc_workspace_field!(plan, template)
-        push!(plan.instructions, ScaleFieldInstr(0, ws_idx, 0.0))
-        return ws_idx
-
-    else
-        # Unsupported expression type — signal fallback to interpreted evaluation
-        throw(ArgumentError("Cannot compile expression of type $(typeof(expr))"))
-    end
-end
-
-"""
-    execute_compiled_rhs!(plan::CompiledRHSPlan, state::Vector{<:ScalarField}, solver)
-
-Execute a pre-compiled RHS plan. Returns the RHS as a vector of ScalarFields
-from the pre-allocated workspace (no allocation).
-"""
-function execute_compiled_rhs!(plan::CompiledRHSPlan, state::Vector{<:ScalarField},
-                                solver::InitialValueSolver)
-    # Sync state into problem variables
-    sync_state_to_problem!(solver.problem, state)
-
-    # Execute instructions in order
-    for instr in plan.instructions
-        _execute_instr!(instr, plan.workspace, state, solver)
-    end
-
-    # Collect results
-    rhs = Vector{ScalarField}(undef, plan.n_state_fields)
-    for i in 1:plan.n_state_fields
-        ws_idx = plan.result_ws_indices[i]
-        if ws_idx > 0
-            rhs[i] = plan.workspace[ws_idx]
-        else
-            rhs[i] = create_rhs_zero_field(state[i])
-        end
-    end
-    return rhs
-end
-
-# Instruction execution — each method is statically dispatched (no isa checks)
-
-function _execute_instr!(instr::CopyFieldInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    src = state[instr.src_state_idx]
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(src, :g)
-    ensure_layout!(dst, :g)
-    src_data = get_grid_data(src)
-    dst_data = get_grid_data(dst)
-    if src_data !== nothing && dst_data !== nothing
-        copyto!(dst_data, src_data)
-    end
-    dst.current_layout = src.current_layout
-end
-
-function _execute_instr!(instr::EnsureLayoutInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    ensure_layout!(ws[instr.ws_idx], instr.layout)
-end
-
-function _execute_instr!(instr::DifferentiateInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    src = ws[instr.src_ws_idx]
-    result = evaluate_differentiate(Differentiate(src, instr.coord, instr.order), :g)
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(dst, :g)
-    ensure_layout!(result, :g)
-    dst_data = get_grid_data(dst)
-    res_data = get_grid_data(result)
-    if dst_data !== nothing && res_data !== nothing
-        copyto!(dst_data, res_data)
-    end
-    dst.current_layout = :g
-end
-
-function _execute_instr!(instr::MultiplyFieldsInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    f1 = ws[instr.src1_ws_idx]
-    f2 = ws[instr.src2_ws_idx]
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(f1, :g)
-    ensure_layout!(f2, :g)
-    ensure_layout!(dst, :g)
-    dst_data = get_grid_data(dst)
-    f1_data = get_grid_data(f1)
-    f2_data = get_grid_data(f2)
-    if dst_data !== nothing && f1_data !== nothing && f2_data !== nothing
-        dst_data .= f1_data .* f2_data
-    end
-end
-
-function _execute_instr!(instr::NonlinearMultiplyInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    f1 = ws[instr.src1_ws_idx]
-    f2 = ws[instr.src2_ws_idx]
-    dist = f1.dist
-    if dist.nonlinear_evaluator === nothing
-        dist.nonlinear_evaluator = NonlinearEvaluator(dist)
-    end
-    product = evaluate_transform_multiply(f1, f2, dist.nonlinear_evaluator)
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(product, :g)
-    ensure_layout!(dst, :g)
-    dst_data = get_grid_data(dst)
-    prod_data = get_grid_data(product)
-    if dst_data !== nothing && prod_data !== nothing
-        copyto!(dst_data, prod_data)
-    end
-    dst.current_layout = :g
-end
-
-function _execute_instr!(instr::AddFieldsInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    f1 = ws[instr.src1_ws_idx]
-    f2 = ws[instr.src2_ws_idx]
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(f1, :g)
-    ensure_layout!(f2, :g)
-    ensure_layout!(dst, :g)
-    get_grid_data(dst) .= get_grid_data(f1) .+ get_grid_data(f2)
-end
-
-function _execute_instr!(instr::SubtractFieldsInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    f1 = ws[instr.src1_ws_idx]
-    f2 = ws[instr.src2_ws_idx]
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(f1, :g)
-    ensure_layout!(f2, :g)
-    ensure_layout!(dst, :g)
-    get_grid_data(dst) .= get_grid_data(f1) .- get_grid_data(f2)
-end
-
-function _execute_instr!(instr::NegateFieldInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    src = ws[instr.src_ws_idx]
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(src, :g)
-    ensure_layout!(dst, :g)
-    get_grid_data(dst) .= .-get_grid_data(src)
-end
-
-function _execute_instr!(instr::ScaleFieldInstr, ws::Vector{<:ScalarField},
-                          state::Vector{<:ScalarField}, solver)
-    dst = ws[instr.dst_ws_idx]
-    ensure_layout!(dst, :g)
-    if instr.src_ws_idx == 0
-        # Fill with constant
-        fill!(get_grid_data(dst), instr.scale)
-    else
-        src = ws[instr.src_ws_idx]
-        ensure_layout!(src, :g)
-        get_grid_data(dst) .= instr.scale .* get_grid_data(src)
-    end
-end
-

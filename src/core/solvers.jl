@@ -9,6 +9,7 @@ Split into focused sub-files:
 """
 
 include("solvers/solver_types.jl")
+include("solvers/solver_compiled_rhs.jl")
 include("solvers/solver_stepping.jl")
 include("solvers/lazy_rhs.jl")
 include("solvers/solver_utils.jl")

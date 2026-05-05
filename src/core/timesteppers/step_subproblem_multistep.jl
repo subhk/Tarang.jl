@@ -222,8 +222,7 @@ function step_subproblem_multistep!(
     end
 
     # ── Step 3: compute F_alg once per step for BC row override ─────────────
-    # Uses the cached `_sp_multistep_alg_f` vector from `sp.matrices` — no
-    # per-step allocation.
+    # Uses cached per-subproblem stage vectors — no per-step allocation.
     ALG_F = Vector{Any}(undef, n_sp)
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
@@ -233,7 +232,7 @@ function step_subproblem_multistep!(
         n = size(sp.M_min, 1)
         ref = ring_get(F_rings[sp_idx], 1)  # always valid after step 1
         alg_f = ref === nothing ? zeros(ComplexF64, n) :
-                                  _subproblem_cached_vector!(sp, "_sp_multistep_alg_f", n; like=ref)
+                                  _sp_stage_vector!(sp, :multistep_alg_f, n, ref)
         gather_alg_F!(alg_f, sp)
         ALG_F[sp_idx] = alg_f
     end
@@ -246,7 +245,7 @@ function step_subproblem_multistep!(
         # Use a cached rhs buffer; reused across steps, matches ring backend.
         ref = ring_get(F_rings[sp_idx], 1)
         rhs = ref === nothing ? zeros(ComplexF64, n) :
-                                _subproblem_cached_vector!(sp, "_sp_multistep_rhs", n; like=ref)
+                                _sp_stage_vector!(sp, :multistep_rhs, n, ref)
         fill!(rhs, zero(ComplexF64))
 
         # Accumulate RHS = Σ_{k≥1} [c[k]*F_k - a[k]*MX_k - b[k]*LX_k]
@@ -289,7 +288,7 @@ function step_subproblem_multistep!(
             @warn "step_subproblem_multistep!: LHS factorization failed for group=$(sp.group); skipping step" maxlog=1
             continue
         end
-        x_new = _sp_stage_vector!(sp, "_sp_multistep_sol", size(sp.M_min, 2), ref)
+        x_new = _sp_stage_vector!(sp, :multistep_sol, size(sp.M_min, 2), ref)
         _solve_cached_system!(x_new, lhs_solver, rhs)
         scatter_inputs(sp, x_new, state_fields)
     end
