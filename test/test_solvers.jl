@@ -92,9 +92,17 @@ using Test
         @test solver.iteration == 0
         @test solver.sim_time == 0.0
 
+        if solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
+            Tarang.evaluate_rhs(solver, solver.state, solver.sim_time)
+            rhs_allocs = @allocated Tarang.evaluate_rhs(solver, solver.state, solver.sim_time)
+            @test rhs_allocs <= 64
+        end
+
         Tarang.step!(solver, 1e-3)
         @test solver.iteration == 1
         @test isapprox(solver.sim_time, 1e-3; atol=1e-6)
+        @test haskey(solver.timestepper_state.timestepper_data, :explicit_rk_X_n_vec)
+        @test solver.timestepper_state.timestepper_data[:explicit_rk_X_n_vec] isa Vector{ComplexF64}
 
         # Test performance stats updated
         @test solver.performance_stats.total_steps >= 1
@@ -580,6 +588,38 @@ using Test
         @testset "empty input" begin
             vec = Tarang.fields_to_vector(ScalarField[])
             @test isempty(vec)
+        end
+
+        @testset "in-place buffer reuse" begin
+            @test isdefined(Tarang, :fields_to_vector!)
+            if isdefined(Tarang, :fields_to_vector!)
+                expected = Tarang.fields_to_vector(state)
+                out = Vector{ComplexF64}(undef, length(expected))
+
+                returned = Tarang.fields_to_vector!(out, state)
+                @test returned === out
+                @test out ≈ expected
+
+                Tarang.fields_to_vector!(out, state) # warmup
+                allocs = @allocated Tarang.fields_to_vector!(out, state)
+                @test allocs <= 256
+            end
+        end
+
+        @testset "timestepper vector buffer reuse" begin
+            @test isdefined(Tarang, :_timestep_vector_buffer!)
+            if isdefined(Tarang, :_timestep_vector_buffer!)
+                ts_state = Tarang.TimestepperState(RK111(), 1e-3, state)
+                buf1 = Tarang._timestep_vector_buffer!(ts_state, :test_vec, 8)
+                buf2 = Tarang._timestep_vector_buffer!(ts_state, :test_vec, 8)
+                buf3 = Tarang._timestep_vector_buffer!(ts_state, :test_vec, 9)
+
+                @test buf1 isa Vector{ComplexF64}
+                @test buf2 === buf1
+                @test buf3 isa Vector{ComplexF64}
+                @test buf3 !== buf1
+                @test length(buf3) == 9
+            end
         end
     end
 end

@@ -85,14 +85,22 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     M_factor = has_mass ? _get_mass_factor!(state, M_matrix) : nothing
     M_is_singular = has_mass && M_factor === nothing
 
-    X_n_vec = copy(fields_to_vector(current_state))  # copy: cache is shared across calls
-    MX_n_vec = has_mass ? (M_matrix * X_n_vec) : X_n_vec
+    _ensure_coeff_layout!(current_state)
+    vector_size = _fields_vector_size(current_state)
+    X_n_vec = _timestep_vector_buffer!(state, :imex_rk_X_n_vec, vector_size)
+    fields_to_vector!(X_n_vec, current_state)
 
-    T_vec = eltype(X_n_vec)
-    F_exp_vecs = Vector{Vector{T_vec}}(undef, stages)
-    F_imp_vecs = Vector{Vector{T_vec}}(undef, stages)
-    rhs_vec = similar(MX_n_vec)  # Pre-allocate once, reuse across stages
-    Xs_vec = similar(X_n_vec)    # Will hold last stage value after loop
+    if has_mass
+        MX_n_vec = _timestep_vector_buffer!(state, :imex_rk_MX_n_vec, vector_size)
+        mul!(MX_n_vec, M_matrix, X_n_vec)
+    else
+        MX_n_vec = X_n_vec
+    end
+
+    F_exp_vecs = _timestep_stage_vectors!(state, :imex_rk_F_exp_vecs, stages, vector_size)
+    F_imp_vecs = _timestep_stage_vectors!(state, :imex_rk_F_imp_vecs, stages, vector_size)
+    rhs_vec = _timestep_vector_buffer!(state, :imex_rk_rhs_vec, vector_size)
+    Xs_vec = _timestep_vector_buffer!(state, :imex_rk_Xs_vec, vector_size)
     # Cache LHS factorizations across timesteps. Key is (dt, a_ii) so the cache
     # automatically invalidates when dt changes (adaptive stepping).
     lhs_cache = get!(state.timestepper_data, :imex_rk_lhs_cache) do
@@ -125,7 +133,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
         a_ii = A_imp[s, s]
         if !has_mass
             if abs(a_ii) < 1e-14
-                Xs_vec = copy(rhs_vec)
+                copyto!(Xs_vec, rhs_vec)
             else
                 lhs = get!(lhs_cache, (dt, a_ii)) do
                     try
@@ -140,17 +148,17 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                     _step_rk_imex_explicit_fallback!(state, solver)
                     return
                 end
-                Xs_vec = lhs \ rhs_vec
+                copyto!(Xs_vec, lhs \ rhs_vec)
             end
         else
             if abs(a_ii) < 1e-14
                 if M_factor !== nothing
-                    Xs_vec = M_factor \ rhs_vec
+                    copyto!(Xs_vec, M_factor \ rhs_vec)
                 else
                     # Singular M with a_ii=0 (ESDIRK first stage):
                     # M*X_s = M*X_n is under-determined for constraint rows (zero M rows).
                     # Use X_n directly so constraint variable values are preserved.
-                    Xs_vec = copy(X_n_vec)
+                    copyto!(Xs_vec, X_n_vec)
                 end
             else
                 # (M + dt*a*L) * X = rhs — works for both regular and singular M
@@ -167,14 +175,14 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                     _step_rk_imex_explicit_fallback!(state, solver)
                     return
                 end
-                Xs_vec = lhs \ rhs_vec
+                copyto!(Xs_vec, lhs \ rhs_vec)
             end
         end
 
         Xs_fields = vector_to_fields(Xs_vec, current_state)
         F_exp_fields = evaluate_rhs(solver, Xs_fields, t + c[s] * dt)
-        F_exp_vecs[s] = fields_to_vector(F_exp_fields)
-        F_imp_vecs[s] = L_matrix * Xs_vec
+        fields_to_vector!(F_exp_vecs[s], F_exp_fields)
+        mul!(F_imp_vecs[s], L_matrix, Xs_vec)
     end
 
     # Final update
@@ -333,9 +341,13 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
     # Get cached mass matrix factorization (returns nothing for singular M)
     M_factor = M_matrix === nothing ? nothing : _get_mass_factor!(state, M_matrix)
 
-    X_n_vec = copy(fields_to_vector(current_state))  # copy: cache is shared across calls
-    k_vecs = Vector{Vector{eltype(X_n_vec)}}(undef, stages)
-    Y_vec = similar(X_n_vec)  # Pre-allocate once, reuse across stages
+    _ensure_coeff_layout!(current_state)
+    vector_size = _fields_vector_size(current_state)
+    X_n_vec = _timestep_vector_buffer!(state, :explicit_rk_X_n_vec, vector_size)
+    fields_to_vector!(X_n_vec, current_state)
+    k_vecs = _timestep_stage_vectors!(state, :explicit_rk_k_vecs, stages, vector_size)
+    Y_vec = _timestep_vector_buffer!(state, :explicit_rk_Y_vec, vector_size)
+    F_vec = _timestep_vector_buffer!(state, :explicit_rk_F_vec, vector_size)
 
     @inbounds for s in 1:stages
         state.current_substep = s
@@ -349,8 +361,12 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
 
         stage_state = vector_to_fields(Y_vec, current_state)
         F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
-        F_vec = fields_to_vector(F_stage)
-        k_vecs[s] = _apply_mass_inverse(M_factor, F_vec)
+        fields_to_vector!(F_vec, F_stage)
+        if M_factor === nothing
+            copyto!(k_vecs[s], F_vec)
+        else
+            copyto!(k_vecs[s], M_factor \ F_vec)
+        end
     end
 
     # Compute final update (reuse Y_vec buffer)

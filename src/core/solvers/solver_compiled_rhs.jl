@@ -1,52 +1,119 @@
+function _fields_vector_size(fields::Vector{<:ScalarField})
+    total_size = 0
+    for field in fields
+        total_size += compute_field_vector_size(field)
+    end
+    return total_size
+end
+
+function _ensure_coeff_layout!(fields::Vector{<:ScalarField})
+    isempty(fields) && return nothing
+
+    arch = fields[1].dist.architecture
+    for field in fields
+        ensure_layout!(field, :c)
+    end
+    if is_gpu(arch)
+        synchronize(arch)
+    end
+    return arch
+end
+
+function _copy_field_data_to_vector!(vector::AbstractVector{ComplexF64}, offset::Int,
+                                     field::ScalarField, field_size::Int)
+    field_size == 0 && return offset
+
+    end_offset = offset + field_size - 1
+    end_offset <= length(vector) || error("Vector too small for field '$(field.name)'")
+
+    if isempty(field.bases)
+        vector[offset] = 0
+        return offset + field_size
+    end
+
+    if get_coeff_data(field) !== nothing
+        cpu_data = get_cpu_data(get_coeff_data(field))
+        data = vec(cpu_data)
+        length(data) == field_size || error("Size mismatch in fields_to_vector! for field '$(field.name)': " *
+                                            "expected $field_size elements, got $(length(data)).")
+        copyto!(vector, offset, data, 1, field_size)
+    elseif get_grid_data(field) !== nothing
+        @warn "Using grid space data for field $(field.name) - converting to coefficient space recommended"
+        cpu_data = get_cpu_data(get_grid_data(field))
+        data = vec(cpu_data)
+        length(data) == field_size || error("Size mismatch in fields_to_vector! for field '$(field.name)': " *
+                                            "expected $field_size elements, got $(length(data)).")
+        copyto!(vector, offset, data, 1, field_size)
+    else
+        @inbounds for i in offset:end_offset
+            vector[i] = 0
+        end
+    end
+
+    return offset + field_size
+end
+
+"""
+    fields_to_vector!(vector, fields)
+
+Write coefficient-space field data into a pre-allocated CPU vector.
+
+This is the allocation-free serial/local variant used by timestepper hot paths.
+For MPI PencilArray fields, use `fields_to_vector`, which performs the required
+global gather into a freshly allocated full vector.
+"""
+function fields_to_vector!(vector::AbstractVector{ComplexF64}, fields::Vector{<:ScalarField})
+
+    if isempty(fields)
+        isempty(vector) || throw(ArgumentError("fields_to_vector!: empty fields require an empty output vector"))
+        return vector
+    end
+
+    dist = fields[1].dist
+    if dist.size > 1 && dist.use_pencil_arrays
+        throw(ArgumentError("fields_to_vector! does not support MPI global gather; use fields_to_vector instead"))
+    end
+
+    # Ensure all fields are in coefficient space before computing sizes:
+    # Real-valued grid layouts and spectral layouts can have different lengths.
+    _ensure_coeff_layout!(fields)
+    expected_size = _fields_vector_size(fields)
+    length(vector) == expected_size ||
+        throw(DimensionMismatch("fields_to_vector!: output has length $(length(vector)), expected $expected_size"))
+
+    offset = 1
+    for field in fields
+        field_size = compute_field_vector_size(field)
+        offset = _copy_field_data_to_vector!(vector, offset, field, field_size)
+        @debug "Gathered field $(field.name): size=$field_size, offset=$(offset-field_size)"
+    end
+
+    @debug "Fields to vector completed: total_size=$expected_size, fields=$(length(fields))"
+    return vector
+end
+
 function fields_to_vector(fields::Vector{<:ScalarField})
 
     if isempty(fields)
         return Vector{ComplexF64}()
     end
 
-    # Determine architecture from first field for synchronization
-    arch = fields[1].dist.architecture
-
     # Ensure all fields are in coefficient space (following Tarang pattern)
-    # ensure_layout! handles any needed transforms (including GPU FFTs)
-    for field in fields
-        ensure_layout!(field, :c)
-    end
+    # before computing sizes: grid and spectral storage lengths can differ.
+    _ensure_coeff_layout!(fields)
 
-    # Single GPU sync after all layout changes are complete
-    if is_gpu(arch)
-        synchronize(arch)
-    end
+    # Calculate total local vector size
+    total_size = _fields_vector_size(fields)
 
-    # Calculate total vector size
-    total_size = sum(compute_field_vector_size(field) for field in fields)
-
-    # Allocate fresh vector each call to avoid shared-buffer aliasing bugs
+    # Allocate fresh vector each call to avoid shared-buffer aliasing bugs in
+    # callers that retain the returned vector.
     vector = Vector{ComplexF64}(undef, total_size)
 
-    # Gather field data into vector (following Tarang gather pattern)
+    # Gather local field data into vector (following Tarang gather pattern)
     offset = 1
     for field in fields
         field_size = compute_field_vector_size(field)
-        if field_size > 0
-            # Extract field data with proper handling of dimensions
-            # For GPU fields, this transfers to CPU via get_cpu_data
-            field_data = extract_field_data_for_vector(field)
-
-            # Copy to vector buffer
-            end_offset = offset + field_size - 1
-            if end_offset <= length(vector) && length(field_data) == field_size
-                copyto!(vector, offset, field_data, 1, field_size)
-            else
-                error("Size mismatch in fields_to_vector for field '$(field.name)': " *
-                      "expected $field_size elements, got $(length(field_data)). " *
-                      "Vector range: $offset:$end_offset of $(length(vector)). " *
-                      "This indicates a bug in field allocation or compute_field_vector_size.")
-            end
-
-            offset += field_size
-        end
-
+        offset = _copy_field_data_to_vector!(vector, offset, field, field_size)
         @debug "Gathered field $(field.name): size=$field_size, offset=$(offset-field_size)"
     end
 

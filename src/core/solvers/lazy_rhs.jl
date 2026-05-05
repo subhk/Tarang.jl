@@ -699,8 +699,7 @@ Execute the compiled lazy plan and return result fields (one per state).
 Fields without an RHS (no time derivative) return zero fields.
 """
 function execute_lazy_rhs!(plan::LazyRHSPlan, state, solver)
-    buffered = execute_lazy_rhs_buffered!(plan, state, solver)
-    return copy(buffered)
+    return execute_lazy_rhs_buffered!(plan, state, solver)
 end
 
 function _lazy_zero_field(template::ScalarField)

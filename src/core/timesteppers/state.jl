@@ -86,6 +86,50 @@ mutable struct TimestepperState <: AbstractTimestepperState
 end
 
 """
+    _timestep_vector_buffer!(state, key, n)
+
+Return a reusable `Vector{ComplexF64}` scratch buffer of length `n` from
+`state.timestepper_data`, replacing stale or incorrectly-sized entries.
+"""
+function _timestep_vector_buffer!(state::TimestepperState, key::Symbol, n::Integer)
+    cache = state.timestepper_data
+    cached = get(cache, key, nothing)
+    if cached isa Vector{ComplexF64} && length(cached) == n
+        return cached
+    end
+
+    buffer = Vector{ComplexF64}(undef, n)
+    cache[key] = buffer
+    return buffer
+end
+
+"""
+    _timestep_stage_vectors!(state, key, stages, n)
+
+Return `stages` reusable `Vector{ComplexF64}` buffers, each of length `n`.
+Used for RK stage data that must remain valid until the final update.
+"""
+function _timestep_stage_vectors!(state::TimestepperState, key::Symbol,
+                                  stages::Integer, n::Integer)
+    cache = state.timestepper_data
+    cached = get(cache, key, nothing)
+    if cached isa Vector{Vector{ComplexF64}} && length(cached) == stages
+        reusable = true
+        for buffer in cached
+            if length(buffer) != n
+                reusable = false
+                break
+            end
+        end
+        reusable && return cached
+    end
+
+    buffers = [Vector{ComplexF64}(undef, n) for _ in 1:stages]
+    cache[key] = buffers
+    return buffers
+end
+
+"""
     set_forcing!(state::TimestepperState, forcing)
 
 Set the stochastic forcing configuration for the timestepper.
