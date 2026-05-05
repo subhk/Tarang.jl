@@ -121,6 +121,23 @@ using Test
         @test solver.dt ≈ 0.01
     end
 
+    @testset "global multistep buffer reuse" begin
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+        field = ScalarField(dist, "u", (basis,), Float64)
+
+        problem = IVP([field])
+        Tarang.add_equation!(problem, "dt(u) = 0")
+
+        solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
+        @test Tarang.step!(solver) === solver
+        @test haskey(solver.timestepper_state.timestepper_data, :multistep_X_current_vec)
+        @test haskey(solver.timestepper_state.timestepper_data, :multistep_rhs_vec)
+        @test solver.timestepper_state.timestepper_data[:multistep_X_current_vec] isa Vector{ComplexF64}
+        @test solver.timestepper_state.timestepper_data[:multistep_rhs_vec] isa Vector{ComplexF64}
+    end
+
     @testset "proceed function" begin
         coords = CartesianCoordinates("x")
         dist = Distributor(coords; mesh=(1,), dtype=Float64)
@@ -619,6 +636,15 @@ using Test
                 @test buf3 isa Vector{ComplexF64}
                 @test buf3 !== buf1
                 @test length(buf3) == 9
+            end
+        end
+
+        @testset "subproblem vector slot containers" begin
+            @test isdefined(Tarang, :_subproblem_vector_slots)
+            if isdefined(Tarang, :_subproblem_vector_slots)
+                slots = Tarang._subproblem_vector_slots(2)
+                @test slots isa Vector{AbstractVector{ComplexF64}}
+                @test length(slots) == 2
             end
         end
     end

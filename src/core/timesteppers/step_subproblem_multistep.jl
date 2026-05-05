@@ -223,7 +223,7 @@ function step_subproblem_multistep!(
 
     # ── Step 3: compute F_alg once per step for BC row override ─────────────
     # Uses cached per-subproblem stage vectors — no per-step allocation.
-    ALG_F = Vector{Any}(undef, n_sp)
+    ALG_F = _subproblem_vector_slots(n_sp)
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
             ALG_F[sp_idx] = ComplexF64[]
