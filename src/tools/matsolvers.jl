@@ -207,6 +207,11 @@ struct WoodburySolver{T, S<:AbstractMatSolver} <: AbstractMatSolver
     V::Matrix{T}             # Right border (k×n)
     capacitance::Matrix{T}   # C^(-1) + V*A^(-1)*U (k×k)
     cap_lu::LinearAlgebra.LU{T, Matrix{T}}  # LU factorization of capacitance
+    y::Vector{T}
+    z::Vector{T}
+    w::Vector{T}
+    Uw::Vector{T}
+    u::Vector{T}
 end
 
 """
@@ -264,7 +269,12 @@ function WoodburySolver(A::AbstractMatrix, U::AbstractMatrix, V::AbstractMatrix;
     # Factorize capacitance matrix
     cap_lu = lu(cap)
 
-    return WoodburySolver{T, typeof(base)}(base, U_t, V_t, cap, cap_lu)
+    return WoodburySolver{T, typeof(base)}(base, U_t, V_t, cap, cap_lu,
+                                          Vector{T}(undef, n),
+                                          Vector{T}(undef, k),
+                                          Vector{T}(undef, k),
+                                          Vector{T}(undef, n),
+                                          Vector{T}(undef, n))
 end
 
 """
@@ -273,21 +283,28 @@ end
 Solve (A + UCV)x = b using the Woodbury formula.
 """
 function solve(ws::WoodburySolver, rhs::AbstractVector)
+    result = similar(rhs, eltype(ws.y))
+    solve!(result, ws, rhs)
+    return result
+end
+
+function solve!(dest, ws::WoodburySolver, rhs::AbstractVector)
     # Step 1: y = A^(-1)b
-    y = solve(ws.base_solver, rhs)
+    solve!(ws.y, ws.base_solver, rhs)
 
     # Step 2: z = V*y
-    z = ws.V * y
+    mul!(ws.z, ws.V, ws.y)
 
     # Step 3: w = cap^(-1) * z
-    w = ws.cap_lu \ z
+    ldiv!(ws.w, ws.cap_lu, ws.z)
 
     # Step 4: u = A^(-1)*U*w
-    Uw = ws.U * w
-    u = solve(ws.base_solver, Uw)
+    mul!(ws.Uw, ws.U, ws.w)
+    solve!(ws.u, ws.base_solver, ws.Uw)
 
     # Step 5: x = y - u
-    return y - u
+    @. dest = ws.y - ws.u
+    return dest
 end
 
 # Note: WoodburySolver is NOT registered in the solver registry because it requires
@@ -391,6 +408,12 @@ function solve(s::BandedLUSolver{T}, rhs::AbstractVector) where T
     return x
 end
 
+function solve!(dest, s::BandedLUSolver{T}, rhs::AbstractVector) where T
+    copyto!(dest, rhs)
+    LinearAlgebra.LAPACK.gbtrs!('N', s.kl, s.ku, s.n, s.AB, s.ipiv, dest)
+    return dest
+end
+
 register_solver("banded", BandedLUSolver)
 
 # ============================================================================
@@ -402,8 +425,8 @@ register_solver("banded", BandedLUSolver)
 
 Solver for block diagonal matrices where each block can be solved independently.
 """
-struct BlockDiagonalSolver{T} <: AbstractMatSolver
-    block_solvers::Vector{Any}
+struct BlockDiagonalSolver{T, F} <: AbstractMatSolver
+    block_solvers::Vector{F}
     block_sizes::Vector{Int}
 end
 
@@ -421,28 +444,37 @@ function BlockDiagonalSolver(matrix::AbstractMatrix;
     @assert sum(block_sizes) == n "Block sizes must sum to matrix dimension"
 
     # Extract and factorize each block
-    block_solvers = Any[]
+    block_solvers = [lu(Matrix{T}(matrix[1:block_sizes[1], 1:block_sizes[1]]))]
     offset = 0
-    for bs in block_sizes
+    for (block_idx, bs) in enumerate(block_sizes)
+        if block_idx == 1
+            offset += bs
+            continue
+        end
         block = matrix[offset+1:offset+bs, offset+1:offset+bs]
         push!(block_solvers, lu(Matrix{T}(block)))
         offset += bs
     end
 
-    return BlockDiagonalSolver{T}(block_solvers, block_sizes)
+    return BlockDiagonalSolver{T, eltype(block_solvers)}(block_solvers, block_sizes)
 end
 
 function solve(s::BlockDiagonalSolver{T}, rhs::AbstractVector) where T
     result = similar(rhs, T)
+    solve!(result, s, rhs)
+    return result
+end
+
+function solve!(dest, s::BlockDiagonalSolver{T}, rhs::AbstractVector) where T
     offset = 0
 
     for (i, bs) in enumerate(s.block_sizes)
-        rhs_block = rhs[offset+1:offset+bs]
-        result[offset+1:offset+bs] = s.block_solvers[i] \ rhs_block
+        block_range = offset+1:offset+bs
+        ldiv!(view(dest, block_range), s.block_solvers[i], view(rhs, block_range))
         offset += bs
     end
 
-    return result
+    return dest
 end
 
 register_solver("block", BlockDiagonalSolver)

@@ -564,6 +564,45 @@ function copy_state(state::Vector{<:ScalarField})
     return new_state
 end
 
+"""
+    _timestep_field_state!(state, key, template)
+
+Return a reusable field-state workspace matching `template`.
+"""
+function _timestep_field_state!(state::TimestepperState, key::Symbol,
+                                template::Vector{<:ScalarField})
+    cached = get(state.timestepper_data, key, nothing)
+    if cached isa Vector{ScalarField} && length(cached) == length(template)
+        return cached
+    end
+
+    fields = copy_state(template)
+    state.timestepper_data[key] = fields
+    return fields
+end
+
+"""
+    _push_vector_state!(history, vector, template, max_len)
+
+Write `vector` into a recycled state slot and append it to `history`.
+When the history is already at capacity, the oldest state is reused instead
+of allocating a fresh deep copy every step.
+"""
+function _push_vector_state!(history::Vector, vector::AbstractVector{<:Number},
+                             template::Vector{<:ScalarField}, max_len::Int)
+    max_len > 0 || throw(ArgumentError("max_len must be positive"))
+
+    new_state = if length(history) >= max_len
+        popfirst!(history)
+    else
+        copy_state(template)
+    end
+
+    vector_to_fields!(new_state, vector, template)
+    push!(history, new_state)
+    return new_state
+end
+
 # Helper for stochastic forcing matching
 function _matched_forcing_view(forcing, target_size)
     if forcing === nothing || forcing.cached_forcing === nothing

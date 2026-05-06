@@ -179,7 +179,8 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
             end
         end
 
-        Xs_fields = vector_to_fields(Xs_vec, current_state)
+        Xs_fields = _timestep_field_state!(state, :imex_rk_stage_state, current_state)
+        vector_to_fields!(Xs_fields, Xs_vec, current_state)
         F_exp_fields = evaluate_rhs(solver, Xs_fields, t + c[s] * dt)
         fields_to_vector!(F_exp_vecs[s], F_exp_fields)
         mul!(F_imp_vecs[s], L_matrix, Xs_vec)
@@ -206,13 +207,11 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                 @. rhs_vec -= bi * F_imp_vecs[s]
             end
         end
-        X_new_vec = _apply_mass_inverse(M_factor, rhs_vec)
+        X_new_vec = _timestep_vector_buffer!(state, :imex_rk_X_new_vec, vector_size)
+        _apply_mass_inverse!(X_new_vec, M_factor, rhs_vec)
     end
 
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, X_new_vec, current_state)
-
-    _push_trim!(state.history, new_state, 1)
+    _push_vector_state!(state.history, X_new_vec, current_state, 1)
 end
 
 """
@@ -348,6 +347,7 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
     k_vecs = _timestep_stage_vectors!(state, :explicit_rk_k_vecs, stages, vector_size)
     Y_vec = _timestep_vector_buffer!(state, :explicit_rk_Y_vec, vector_size)
     F_vec = _timestep_vector_buffer!(state, :explicit_rk_F_vec, vector_size)
+    stage_state = _timestep_field_state!(state, :explicit_rk_stage_state, current_state)
 
     @inbounds for s in 1:stages
         state.current_substep = s
@@ -359,13 +359,13 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
             end
         end
 
-        stage_state = vector_to_fields(Y_vec, current_state)
+        vector_to_fields!(stage_state, Y_vec, current_state)
         F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
         fields_to_vector!(F_vec, F_stage)
         if M_factor === nothing
             copyto!(k_vecs[s], F_vec)
         else
-            copyto!(k_vecs[s], M_factor \ F_vec)
+            _apply_mass_inverse!(k_vecs[s], M_factor, F_vec)
         end
     end
 
@@ -377,9 +377,7 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
         end
     end
 
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, Y_vec, current_state)
-    _push_trim!(state.history, new_state, 1)
+    _push_vector_state!(state.history, Y_vec, current_state, 1)
 end
 
 """

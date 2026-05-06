@@ -167,10 +167,7 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
 
     # Step 7: Update state
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, X_new, current_state)
-
-    _push_trim!(state.history, new_state, 3)
+    _push_vector_state!(state.history, X_new, current_state, 3)
     state.timestepper_data[:cnab1_iteration] += 1
 
     @debug "CNAB1 step completed: dt=$dt, iteration=$(state.timestepper_data[:cnab1_iteration]), |X_new|=$(norm(X_new))"
@@ -291,10 +288,7 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
 
     # Step 7: Update state
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, X_new, current_state)
-
-    _push_trim!(state.history, new_state, 4)
+    _push_vector_state!(state.history, X_new, current_state, 4)
     state.timestepper_data[:cnab2_iteration] += 1
 
     @debug "CNAB2 step completed: dt=$dt_current, w1=$w1, iteration=$(state.timestepper_data[:cnab2_iteration]), |X_new|=$(norm(X_new))"
@@ -390,10 +384,7 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
 
     # Step 7: Update state
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, X_new, current_state)
-
-    _push_trim!(state.history, new_state, 3)
+    _push_vector_state!(state.history, X_new, current_state, 3)
     state.timestepper_data[:sbdf1_iteration] += 1
 
     @debug "SBDF1 step completed: dt=$dt, iteration=$(state.timestepper_data[:sbdf1_iteration]), |X_new|=$(norm(X_new))"
@@ -518,10 +509,7 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
 
     # Step 7: Update state
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, X_new, current_state)
-
-    _push_trim!(state.history, new_state, 4)
+    _push_vector_state!(state.history, X_new, current_state, 4)
     state.timestepper_data[:sbdf2_iteration] += 1
 
     @debug "SBDF2 step completed: dt=$dt_current, w1=$w1, iteration=$(state.timestepper_data[:sbdf2_iteration]), |X_new|=$(norm(X_new))"
@@ -656,10 +644,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
 
     # Step 7: Update state
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, X_new, current_state)
-
-    _push_trim!(state.history, new_state, 4)
+    _push_vector_state!(state.history, X_new, current_state, 4)
     state.timestepper_data[:sbdf3_iteration] += 1
 
     @debug "SBDF3 step completed: dt=$k2, w2=$w2, w1=$w1, |X_new|=$(norm(X_new))"
@@ -809,10 +794,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
 
     # Step 7: Update state
-    new_state = copy_state(current_state)
-    vector_to_fields!(new_state, X_new, current_state)
-
-    _push_trim!(state.history, new_state, 5)
+    _push_vector_state!(state.history, X_new, current_state, 5)
     state.timestepper_data[:sbdf4_iteration] += 1
 
     @debug "SBDF4 step completed: dt=$k3, w3=$w3, w2=$w2, w1=$w1, |X_new|=$(norm(X_new))"

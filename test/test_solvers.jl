@@ -51,6 +51,56 @@ using Test
         @test Tarang._normalize_matsolver(:unknown) == :unknown
     end
 
+    @testset "matrix solver in-place allocations" begin
+        MS = Tarang.MatSolvers
+        A = spdiagm(0 => fill(4.0 + 0im, 8),
+                    1 => fill(-1.0 + 0im, 7),
+                   -1 => fill(-1.0 + 0im, 7))
+        b = ComplexF64.(1:8)
+
+        for solver in (MS.BandedLUSolver(A),
+                       MS.BlockDiagonalSolver(Matrix(A); block_sizes=[4, 4]))
+            dest = similar(b)
+            MS.solve!(dest, solver, b)
+            allocs = @allocated MS.solve!(dest, solver, b)
+            @test allocs <= 64
+            @test dest ≈ MS.solve(solver, b)
+        end
+    end
+
+    @testset "mass inverse in-place allocations" begin
+        M_factor = factorize(Matrix{ComplexF64}(I, 8, 8))
+        rhs = ComplexF64.(1:8)
+        dest = similar(rhs)
+
+        @test isdefined(Tarang, :_apply_mass_inverse!)
+        if isdefined(Tarang, :_apply_mass_inverse!)
+            Tarang._apply_mass_inverse!(dest, M_factor, rhs)
+            allocs = @allocated Tarang._apply_mass_inverse!(dest, M_factor, rhs)
+            @test allocs <= 64
+            @test dest ≈ rhs
+        end
+    end
+
+    @testset "subproblem Woodbury in-place allocations" begin
+        A = sparse(ComplexF64[4 -1; -1 4])
+        bulk_lu = lu(A)
+        C = sparse(ComplexF64[1 0])
+        AinvB = reshape(ComplexF64[0.1, 0.2], 2, 1)
+        S_lu = lu(ComplexF64[2;;])
+        woodbury = Tarang.WoodburySolver(bulk_lu, C, AinvB, S_lu,
+                                         [1, 2], [3], [1, 2], [3])
+        rhs = ComplexF64[1, 2, 3]
+        dest = similar(rhs)
+
+        Tarang._solve_cached_system!(dest, woodbury, rhs)
+        expected = Tarang._woodbury_solve(woodbury, rhs)
+        allocs = @allocated Tarang._solve_cached_system!(dest, woodbury, rhs)
+
+        @test allocs <= 64
+        @test dest ≈ expected
+    end
+
     @testset "collect_state_fields" begin
         coords = CartesianCoordinates("x")
         dist = Distributor(coords; mesh=(1,), dtype=Float64)
@@ -103,6 +153,13 @@ using Test
         @test isapprox(solver.sim_time, 1e-3; atol=1e-6)
         @test haskey(solver.timestepper_state.timestepper_data, :explicit_rk_X_n_vec)
         @test solver.timestepper_state.timestepper_data[:explicit_rk_X_n_vec] isa Vector{ComplexF64}
+        @test haskey(solver.timestepper_state.timestepper_data, :explicit_rk_stage_state)
+
+        recycled_state = solver.timestepper_state.history[end]
+        recycled_stage_state = solver.timestepper_state.timestepper_data[:explicit_rk_stage_state]
+        Tarang.step!(solver, 1e-3)
+        @test solver.timestepper_state.history[end] === recycled_state
+        @test solver.timestepper_state.timestepper_data[:explicit_rk_stage_state] === recycled_stage_state
 
         # Test performance stats updated
         @test solver.performance_stats.total_steps >= 1
@@ -136,6 +193,12 @@ using Test
         @test haskey(solver.timestepper_state.timestepper_data, :multistep_rhs_vec)
         @test solver.timestepper_state.timestepper_data[:multistep_X_current_vec] isa Vector{ComplexF64}
         @test solver.timestepper_state.timestepper_data[:multistep_rhs_vec] isa Vector{ComplexF64}
+
+        Tarang.step!(solver)
+        Tarang.step!(solver)
+        oldest_state = solver.timestepper_state.history[1]
+        Tarang.step!(solver)
+        @test solver.timestepper_state.history[end] === oldest_state
     end
 
     @testset "proceed function" begin

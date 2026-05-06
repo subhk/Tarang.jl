@@ -49,15 +49,38 @@ Block solve for (LHS · x = rhs):
     3. x_bc = S⁻¹ · r_bc               (small dense solve)
     4. x_bulk = y1 - AinvB · x_bc      (dense matvec)
 """
-mutable struct WoodburySolver
-    bulk_lu::Any                             # sparse LU of bulk block A
-    C::SparseMatrixCSC                       # BC rows × bulk cols
+mutable struct WoodburySolver{BulkLU, SchurLU}
+    bulk_lu::BulkLU                          # sparse LU of bulk block A
+    C::SparseMatrixCSC{ComplexF64, Int}      # BC rows × bulk cols
     AinvB::Matrix{ComplexF64}                # precomputed A⁻¹ · B
-    S_lu::Any                                # LU of Schur complement (dense)
+    S_lu::SchurLU                            # LU of Schur complement (dense)
     bulk_rows::Vector{Int}
     bc_rows::Vector{Int}
     bulk_cols::Vector{Int}
     bc_cols::Vector{Int}
+    rhs_bulk::Vector{ComplexF64}
+    rhs_bc::Vector{ComplexF64}
+    y1::Vector{ComplexF64}
+    r_bc::Vector{ComplexF64}
+    x_bc::Vector{ComplexF64}
+    x_bulk::Vector{ComplexF64}
+end
+
+function WoodburySolver(bulk_lu, C::SparseMatrixCSC, AinvB::Matrix{ComplexF64}, S_lu,
+                        bulk_rows::Vector{Int}, bc_rows::Vector{Int},
+                        bulk_cols::Vector{Int}, bc_cols::Vector{Int})
+    n_bulk = length(bulk_rows)
+    n_bc = length(bc_rows)
+    return WoodburySolver{typeof(bulk_lu), typeof(S_lu)}(
+        bulk_lu, SparseMatrixCSC{ComplexF64, Int}(C), AinvB, S_lu,
+        bulk_rows, bc_rows, bulk_cols, bc_cols,
+        Vector{ComplexF64}(undef, n_bulk),
+        Vector{ComplexF64}(undef, n_bc),
+        Vector{ComplexF64}(undef, n_bulk),
+        Vector{ComplexF64}(undef, n_bc),
+        Vector{ComplexF64}(undef, n_bc),
+        Vector{ComplexF64}(undef, n_bulk),
+    )
 end
 
 """Build a Woodbury solver for `LHS = a0*M_exp + b0*L_exp` given bulk/BC partition."""
@@ -101,31 +124,43 @@ end
 
 """Solve `LHS · x = rhs` using a Woodbury block solver."""
 function _woodbury_solve(w::WoodburySolver, rhs::AbstractVector{ComplexF64})
-    rhs_bulk = rhs[w.bulk_rows]
-    rhs_bc   = rhs[w.bc_rows]
-
-    # 1. y1 = A⁻¹ · rhs_bulk
-    y1 = w.bulk_lu \ rhs_bulk
-
-    # 2. r_bc = rhs_bc - C · y1
-    r_bc = rhs_bc - w.C * y1
-
-    # 3. x_bc = S⁻¹ · r_bc
-    x_bc = w.S_lu \ r_bc
-
-    # 4. x_bulk = y1 - AinvB · x_bc
-    x_bulk = y1 - w.AinvB * x_bc
-
-    # Reassemble full solution vector using the original row ordering
     n_total = length(w.bulk_cols) + length(w.bc_cols)
     x = Vector{ComplexF64}(undef, n_total)
+    return _woodbury_solve!(x, w, rhs)
+end
+
+"""In-place Woodbury solve using the solver's cached work vectors."""
+function _woodbury_solve!(dest::AbstractVector{ComplexF64}, w::WoodburySolver,
+                          rhs::AbstractVector{ComplexF64})
+    @inbounds for (i, row) in enumerate(w.bulk_rows)
+        w.rhs_bulk[i] = rhs[row]
+    end
+    @inbounds for (i, row) in enumerate(w.bc_rows)
+        w.rhs_bc[i] = rhs[row]
+    end
+
+    # 1. y1 = A⁻¹ · rhs_bulk
+    ldiv!(w.y1, w.bulk_lu, w.rhs_bulk)
+
+    # 2. r_bc = rhs_bc - C · y1
+    mul!(w.r_bc, w.C, w.y1)
+    @. w.r_bc = w.rhs_bc - w.r_bc
+
+    # 3. x_bc = S⁻¹ · r_bc
+    ldiv!(w.x_bc, w.S_lu, w.r_bc)
+
+    # 4. x_bulk = y1 - AinvB · x_bc
+    mul!(w.x_bulk, w.AinvB, w.x_bc)
+    @. w.x_bulk = w.y1 - w.x_bulk
+
+    # Reassemble full solution vector using the original row ordering
     for (i, col) in enumerate(w.bulk_cols)
-        x[col] = x_bulk[i]
+        dest[col] = w.x_bulk[i]
     end
     for (i, col) in enumerate(w.bc_cols)
-        x[col] = x_bc[i]
+        dest[col] = w.x_bc[i]
     end
-    return x
+    return dest
 end
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -180,7 +215,7 @@ end
 function _solve_cached_system!(dest::AbstractVector{ComplexF64}, lhs_solver,
                                rhs::AbstractVector{ComplexF64})
     if isa(lhs_solver, WoodburySolver)
-        _assign_to_buffer!(dest, _woodbury_solve(lhs_solver, rhs))
+        _woodbury_solve!(dest, lhs_solver, rhs)
     elseif lhs_solver isa MatSolvers.AbstractMatSolver
         MatSolvers.solve!(dest, lhs_solver, rhs)
     else
