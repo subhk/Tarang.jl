@@ -490,20 +490,93 @@ register_solver("blockdiagonal", BlockDiagonalSolver)
 QR-based sparse solver using SuiteSparse SPQR.
 Good for overdetermined or rank-deficient systems.
 """
-struct SPQRSolver{T} <: AbstractMatSolver
-    qr_factor::Any
+struct SPQRSolver{T, F, Q, R} <: AbstractMatSolver
+    qr_factor::F
+    q_adjoint::Q
+    r_factor::R
+    inv_cpiv::Vector{Int}
+    workspace::Vector{Vector{T}}
+    rank::Int
+    m::Int
+    n::Int
 end
 
 function SPQRSolver(matrix::SparseMatrixCSC; kwargs...)
     T = promote_type(eltype(matrix), ComplexF64)
-    return SPQRSolver{T}(qr(SparseMatrixCSC{T, Int}(matrix)))
+    A = SparseMatrixCSC{T, Int}(matrix)
+    qr_factor = qr(A)
+    rnk = rank(qr_factor)
+    r_factor = UpperTriangular(qr_factor.R[Base.OneTo(rnk), Base.OneTo(rnk)])
+    q_adjoint = adjoint(qr_factor.Q)
+    inv_cpiv = isempty(qr_factor.cpiv) ? Int[] : invperm(qr_factor.cpiv)
+
+    return SPQRSolver{T, typeof(qr_factor), typeof(q_adjoint), typeof(r_factor)}(
+        qr_factor, q_adjoint, r_factor, inv_cpiv,
+        [Vector{T}(undef, max(size(qr_factor, 1), size(qr_factor, 2)))
+         for _ in 1:Base.Threads.nthreads()],
+        Int(rnk), size(qr_factor, 1), size(qr_factor, 2))
 end
 
 function SPQRSolver(matrix::AbstractMatrix; kwargs...)
     return SPQRSolver(sparse(matrix); kwargs...)
 end
 
-solve(s::SPQRSolver, rhs) = s.qr_factor \ rhs
+function solve(s::SPQRSolver{T}, rhs::AbstractVector) where T
+    result = similar(rhs, T, s.n)
+    solve!(result, s, rhs)
+    return result
+end
+
+function solve(s::SPQRSolver{T}, rhs::AbstractMatrix) where T
+    result = similar(rhs, T, s.n, size(rhs, 2))
+    solve!(result, s, rhs)
+    return result
+end
+
+function solve!(dest::AbstractVector, s::SPQRSolver{T}, rhs::AbstractVector) where T
+    length(rhs) == s.m ||
+        throw(DimensionMismatch("SPQR rhs length $(length(rhs)) does not match matrix rows $(s.m)"))
+    length(dest) == s.n ||
+        throw(DimensionMismatch("SPQR destination length $(length(dest)) does not match matrix columns $(s.n)"))
+
+    x = s.workspace[Base.Threads.threadid()]
+    rpivinv = s.qr_factor.rpivinv
+
+    for i in eachindex(rpivinv)
+        @inbounds x[rpivinv[i]] = rhs[i]
+    end
+
+    lmul!(s.q_adjoint, view(x, 1:s.m))
+    if s.rank < length(x)
+        fill!(view(x, s.rank+1:length(x)), zero(T))
+    end
+    ldiv!(s.r_factor, view(x, 1:s.rank))
+
+    if isempty(s.inv_cpiv)
+        copyto!(dest, 1, x, 1, s.n)
+    else
+        for i in 1:s.n
+            @inbounds dest[i] = x[s.inv_cpiv[i]]
+        end
+    end
+
+    return dest
+end
+
+function solve!(dest::AbstractMatrix, s::SPQRSolver, rhs::AbstractMatrix)
+    size(rhs, 1) == s.m ||
+        throw(DimensionMismatch("SPQR rhs row count $(size(rhs, 1)) does not match matrix rows $(s.m)"))
+    size(dest, 1) == s.n ||
+        throw(DimensionMismatch("SPQR destination row count $(size(dest, 1)) does not match matrix columns $(s.n)"))
+    size(dest, 2) == size(rhs, 2) ||
+        throw(DimensionMismatch("SPQR destination columns $(size(dest, 2)) do not match rhs columns $(size(rhs, 2))"))
+
+    for j in axes(rhs, 2)
+        solve!(view(dest, :, j), s, view(rhs, :, j))
+    end
+
+    return dest
+end
 
 register_solver("spqr", SPQRSolver)
 register_solver("qr", SPQRSolver)

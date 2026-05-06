@@ -59,13 +59,26 @@ using Test
         b = ComplexF64.(1:8)
 
         for solver in (MS.BandedLUSolver(A),
-                       MS.BlockDiagonalSolver(Matrix(A); block_sizes=[4, 4]))
+                       MS.BlockDiagonalSolver(Matrix(A); block_sizes=[4, 4]),
+                       MS.SPQRSolver(A))
             dest = similar(b)
             MS.solve!(dest, solver, b)
             allocs = @allocated MS.solve!(dest, solver, b)
             @test allocs <= 64
             @test dest ≈ MS.solve(solver, b)
         end
+    end
+
+    @testset "SPQR solver uses per-thread workspaces" begin
+        MS = Tarang.MatSolvers
+        A = spdiagm(0 => fill(4.0 + 0im, 8),
+                    1 => fill(-1.0 + 0im, 7),
+                   -1 => fill(-1.0 + 0im, 7))
+        solver = MS.SPQRSolver(A)
+
+        @test solver.workspace isa Vector{Vector{ComplexF64}}
+        @test length(solver.workspace) == Threads.nthreads()
+        @test all(length(workspace) == maximum(size(A)) for workspace in solver.workspace)
     end
 
     @testset "mass inverse in-place allocations" begin
