@@ -240,14 +240,14 @@ function interpolate_jacobi(field::ScalarField, basis::JacobiBasis, axis::Int, p
 
     result_data = zeros(eltype(coeffs), other_sizes...)
 
+    # Allocate index buffer once; axis slot is a constant UnitRange, other slots are Int.
+    full_idx = Vector{Union{UnitRange{Int}, Int}}(undef, nd)
+    full_idx[axis] = 1:size(coeffs, axis)
+
     for idx in CartesianIndices(tuple(other_sizes...))
-        # Build slice ranges for the full array
-        full_idx = Vector{Any}(undef, nd)
         other_pos = 1
         for d in 1:nd
-            if d == axis
-                full_idx[d] = 1:size(coeffs, d)
-            else
+            if d != axis
                 full_idx[d] = idx[other_pos]
                 other_pos += 1
             end

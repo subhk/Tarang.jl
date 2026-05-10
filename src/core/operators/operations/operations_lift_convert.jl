@@ -99,7 +99,7 @@ Get output bases for lift operation, substituting input basis with output basis.
 function _get_lift_output_bases(operand::ScalarField, output_basis::Basis)
     output_coord = output_basis.meta.element_label
 
-    new_bases = Vector{Any}(undef, length(operand.bases))
+    new_bases = Vector{Union{Nothing, Basis}}(undef, length(operand.bases))
     found = false
 
     for (i, b) in enumerate(operand.bases)
