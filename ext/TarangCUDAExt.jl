@@ -31,6 +31,7 @@ using Tarang: ScalarField, VectorField, Distributor, Domain, Basis
 using Tarang: get_local_data, set_local_data!
 using Tarang: get_grid_data, get_coeff_data, set_grid_data!, set_coeff_data!
 using Tarang: is_gpu_array, gpu_forward_transform!, gpu_backward_transform!, should_use_gpu_fft
+using Tarang: _gpu_chebyshev_deriv!
 using Tarang: RealFourier, ComplexFourier, ChebyshevT, Legendre
 using Tarang: DistributedGPUFFT
 # Note: global_shape and coefficient_shape are NOT imported - transform functions
@@ -54,6 +55,7 @@ include("cuda/memory.jl")
 include("cuda/architecture.jl")
 include("cuda/transforms.jl")
 include("cuda/dct.jl")
+include("cuda/cheb_deriv.jl")
 include("cuda/mixed_transforms.jl")
 include("cuda/kernels.jl")
 include("cuda/batched_fft.jl")

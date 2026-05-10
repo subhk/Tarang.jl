@@ -45,6 +45,13 @@ where U_n are Chebyshev polynomials of the second kind.
 Using the recurrence relation for derivatives in terms of T_n:
 c'_{n-1} = 2*n*c_n + c'_{n+1}  (backward recurrence)
 """
+# Stub overridden by TarangCUDAExt when CUDA is loaded.
+# Returns true if GPU handled the derivative, false for CPU fallback.
+function _gpu_chebyshev_deriv!(result::ScalarField, operand::ScalarField,
+                                data_g::AbstractArray, axis::Int, order::Int, scale::Float64)
+    return false
+end
+
 function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
     if order < 0
         throw(ArgumentError("Chebyshev derivative order must be non-negative, got $order"))
@@ -76,6 +83,21 @@ function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::Sca
     data_shape = size(data_g)
 
     use_gpu = is_gpu_array(data_g)
+
+    if use_gpu
+        # Try GPU-native DCT-I derivative (overridden by TarangCUDAExt for CuArray)
+        if _gpu_chebyshev_deriv!(result, operand, data_g, axis, order, scale)
+            result.current_layout = :g
+            if layout == :c
+                result_g_cpu = Array(get_grid_data(result))
+                _cheb_coeff_convert!(result_g_cpu, operand, dims, eltype(result_g_cpu))
+                get_coeff_data(result) .= copy_to_device(result_g_cpu, get_coeff_data(result))
+                result.current_layout = :c
+            end
+            return
+        end
+    end
+
     data_g_cpu = use_gpu ? Array(data_g) : data_g
 
     eltype_data = eltype(data_g_cpu)
