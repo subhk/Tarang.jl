@@ -14,6 +14,13 @@
 # RHS-form operator `-M^{-1}L`.
 # ============================================================================
 
+# Function barrier: recover concrete factorization type F from Dict{...,Any} so
+# ldiv! inside is statically dispatched. Eliminates allocation from lhs \ rhs.
+@inline function _rk_ldiv!(dest::AbstractVector, lhs::F, rhs::AbstractVector) where {F}
+    ldiv!(dest, lhs, rhs)
+    return dest
+end
+
 function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
     current_state = state.history[end]
@@ -148,12 +155,12 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                     _step_rk_imex_explicit_fallback!(state, solver)
                     return
                 end
-                copyto!(Xs_vec, lhs \ rhs_vec)
+                _rk_ldiv!(Xs_vec, lhs, rhs_vec)
             end
         else
             if abs(a_ii) < 1e-14
                 if M_factor !== nothing
-                    copyto!(Xs_vec, M_factor \ rhs_vec)
+                    _apply_mass_inverse!(Xs_vec, M_factor, rhs_vec)
                 else
                     # Singular M with a_ii=0 (ESDIRK first stage):
                     # M*X_s = M*X_n is under-determined for constraint rows (zero M rows).
@@ -175,7 +182,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                     _step_rk_imex_explicit_fallback!(state, solver)
                     return
                 end
-                copyto!(Xs_vec, lhs \ rhs_vec)
+                _rk_ldiv!(Xs_vec, lhs, rhs_vec)
             end
         end
 

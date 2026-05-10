@@ -106,7 +106,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         current_layout = :g
 
         # Initialize scales: (1,) * dist.dim
-        initial_scales = length(bases) > 0 ? tuple(ones(Float64, dist.dim)...) : nothing
+        initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
 
         field = new{T, SerialFieldStorage}(dist, name, bases, domain, dtype, storage, layout, current_layout, initial_scales, :auto, false, 0)
 
@@ -123,7 +123,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
                          dtype::Type{T}, storage::S) where {T, S<:AbstractFieldStorage}
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
-        initial_scales = length(bases) > 0 ? tuple(ones(Float64, dist.dim)...) : nothing
+        initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
         new{T, S}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
     end
 end

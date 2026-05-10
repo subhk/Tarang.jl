@@ -343,12 +343,13 @@ function _apply_mass_inverse(M_factor, vec::AbstractVector)
     return M_factor === nothing ? vec : (M_factor \ vec)
 end
 
-function _apply_mass_inverse!(dest::AbstractVector, M_factor, vec::AbstractVector)
-    if M_factor === nothing
-        dest === vec || copyto!(dest, vec)
-    else
-        ldiv!(dest, M_factor, vec)
-    end
+function _apply_mass_inverse!(dest::AbstractVector, ::Nothing, vec::AbstractVector)
+    dest === vec || copyto!(dest, vec)
+    return dest
+end
+
+function _apply_mass_inverse!(dest::AbstractVector, M_factor::F, vec::AbstractVector) where {F}
+    ldiv!(dest, M_factor, vec)
     return dest
 end
 

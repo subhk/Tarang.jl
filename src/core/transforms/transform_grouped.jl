@@ -302,7 +302,12 @@ function _stacked_forward_transform!(fields::Vector{<:ScalarField})
     # Unstack results back to fields
     for (i, field) in enumerate(fields)
         coeff_data = selectdim(stacked, 1, i)
-        set_coeff_data!(field, collect(coeff_data))
+        existing = get_coeff_data(field)
+        if existing !== nothing && size(existing) == size(coeff_data) && eltype(existing) == eltype(coeff_data)
+            copyto!(existing, coeff_data)
+        else
+            set_coeff_data!(field, collect(coeff_data))
+        end
         field.current_layout = :c
     end
 end
@@ -344,8 +349,10 @@ function _stacked_backward_transform!(fields::Vector{<:ScalarField})
         selectdim(stacked, 1, i) .= data
     end
 
-    # Apply transforms in reverse order
-    for transform in reverse(dist.transforms)
+    # Apply transforms in reverse order (index arithmetic avoids reverse() allocation)
+    n_transforms = length(dist.transforms)
+    for i in n_transforms:-1:1
+        transform = dist.transforms[i]
         shifted_axis = transform.axis + 1
         stacked = _apply_stacked_backward(stacked, transform, shifted_axis)
     end
@@ -353,12 +360,19 @@ function _stacked_backward_transform!(fields::Vector{<:ScalarField})
     # Unstack results back to fields
     for (i, field) in enumerate(fields)
         grid_data = selectdim(stacked, 1, i)
-        collected = collect(grid_data)
-        # Only take real part for real-valued fields; preserve complex data for ComplexFourier
+        existing = get_grid_data(field)
         if field.dtype <: Complex
-            set_grid_data!(field, collected)
+            if existing !== nothing && size(existing) == size(grid_data) && eltype(existing) == eltype(grid_data)
+                copyto!(existing, grid_data)
+            else
+                set_grid_data!(field, collect(grid_data))
+            end
         else
-            set_grid_data!(field, real.(collected))
+            if existing !== nothing && size(existing) == size(grid_data)
+                map!(real, existing, grid_data)
+            else
+                set_grid_data!(field, real.(collect(grid_data)))
+            end
         end
         field.current_layout = :g
     end
