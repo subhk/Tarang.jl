@@ -1,3 +1,6 @@
+# Set true to collect wall-clock timing stats; false = zero overhead (dead-code eliminated).
+const _TRACK_NL_TIMING = false
+
 # Main nonlinear evaluation functions
 """Evaluate u·∇φ nonlinear term using transform method"""
 function evaluate_nonlinear_term(op::AdvectionOperator, layout::Symbol=:g)
@@ -92,7 +95,7 @@ end
     """
 function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, evaluator::NonlinearEvaluator)
 
-    start_time = time()
+    _TRACK_NL_TIMING && (start_time = time())
 
     ensure_layout!(field1, :g)
     ensure_layout!(field2, :g)
@@ -118,8 +121,11 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
             if pencil_ws !== nothing
                 result = evaluate_distributed_padded_multiply(field1, field2, evaluator, pencil_ws)
                 evaluator.performance_stats.total_evaluations += 1
-                evaluator.performance_stats.total_time += (time() - start_time)
-                evaluator.performance_stats.dealiasing_time += (time() - start_time)
+                if _TRACK_NL_TIMING
+                    elapsed = time() - start_time
+                    evaluator.performance_stats.total_time += elapsed
+                    evaluator.performance_stats.dealiasing_time += elapsed
+                end
                 return result
             end
 
@@ -134,8 +140,11 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
                 if ws !== nothing
                     result = evaluate_padded_multiply(field1, field2, evaluator, ws)
                     evaluator.performance_stats.total_evaluations += 1
-                    evaluator.performance_stats.total_time += (time() - start_time)
-                    evaluator.performance_stats.dealiasing_time += (time() - start_time)
+                    if _TRACK_NL_TIMING
+                        elapsed = time() - start_time
+                        evaluator.performance_stats.total_time += elapsed
+                        evaluator.performance_stats.dealiasing_time += elapsed
+                    end
                     return result
                 end
             end
@@ -145,8 +154,11 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
             if ws !== nothing
                 result = evaluate_padded_multiply(field1, field2, evaluator, ws)
                 evaluator.performance_stats.total_evaluations += 1
-                evaluator.performance_stats.total_time += (time() - start_time)
-                evaluator.performance_stats.dealiasing_time += (time() - start_time)
+                if _TRACK_NL_TIMING
+                    elapsed = time() - start_time
+                    evaluator.performance_stats.total_time += elapsed
+                    evaluator.performance_stats.dealiasing_time += elapsed
+                end
                 return result
             end
         end
@@ -178,7 +190,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
     end
 
     evaluator.performance_stats.total_evaluations += 1
-    evaluator.performance_stats.total_time += (time() - start_time)
+    _TRACK_NL_TIMING && (evaluator.performance_stats.total_time += time() - start_time)
 
     return result
 end
@@ -294,18 +306,11 @@ function evaluate_fallback_multiply(field1::ScalarField, field2::ScalarField, ev
 end
 
 # Integration with existing operator evaluation
-"""Evaluate nonlinear operator"""
+evaluate_operator(op::AdvectionOperator) = evaluate_nonlinear_term(op)
+evaluate_operator(op::NonlinearAdvectionOperator) = evaluate_nonlinear_term(op)
+evaluate_operator(op::ConvectiveOperator) = evaluate_convective_operator(op)
 function evaluate_operator(op::NonlinearOperator)
-
-    if isa(op, AdvectionOperator)
-        return evaluate_nonlinear_term(op)
-    elseif isa(op, NonlinearAdvectionOperator)
-        return evaluate_nonlinear_term(op)
-    elseif isa(op, ConvectiveOperator)
-        return evaluate_convective_operator(op)
-    else
-        throw(ArgumentError("Nonlinear operator evaluation not implemented for $(typeof(op))"))
-    end
+    throw(ArgumentError("Nonlinear operator evaluation not implemented for $(typeof(op))"))
 end
 
 """Get the cached NonlinearEvaluator for a distributor, creating one if needed."""

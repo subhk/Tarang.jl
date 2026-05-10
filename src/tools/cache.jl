@@ -152,21 +152,18 @@ Base.haskey(lru::LRUCache, key) = haskey(lru.cache, key)
 Base.keys(lru::LRUCache) = keys(lru.cache)
 Base.isempty(lru::LRUCache) = isempty(lru.cache)
 
-function _evict_lru!(lru::LRUCache)
-    if isempty(lru.cache)
-        return
-    end
-    min_key = nothing
-    min_ts = typemax(Int)
+function _evict_lru!(lru::LRUCache{K, V}) where {K, V}
+    isempty(lru.cache) && return
+    # Initialize from first entry to avoid Union{Nothing, K} type instability.
+    min_key = first(keys(lru.cache))
+    min_ts = lru.cache[min_key].timestamp
     for (k, entry) in lru.cache
         if entry.timestamp < min_ts
             min_ts = entry.timestamp
             min_key = k
         end
     end
-    if min_key !== nothing
-        delete!(lru.cache, min_key)
-    end
+    delete!(lru.cache, min_key)
 end
 
 function _renumber_timestamps!(lru::LRUCache)
@@ -417,17 +414,15 @@ Get or create the global workspace manager.
 """
 const _GLOBAL_WORKSPACE_LOCK = ReentrantLock()
 
-function get_global_workspace()
+function get_global_workspace()::WorkspaceManager
     ws = GLOBAL_WORKSPACE[]
-    if ws === nothing
-        lock(_GLOBAL_WORKSPACE_LOCK) do
-            # Double-check under lock
-            if GLOBAL_WORKSPACE[] === nothing
-                GLOBAL_WORKSPACE[] = WorkspaceManager()
-            end
+    ws === nothing || return ws
+    lock(_GLOBAL_WORKSPACE_LOCK) do
+        if GLOBAL_WORKSPACE[] === nothing
+            GLOBAL_WORKSPACE[] = WorkspaceManager()
         end
     end
-    return GLOBAL_WORKSPACE[]
+    return GLOBAL_WORKSPACE[]::WorkspaceManager
 end
 
 """

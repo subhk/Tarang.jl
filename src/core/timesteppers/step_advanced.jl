@@ -90,15 +90,13 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
         rhs .-= b[2] * LX_history[1]
 
         # Build and solve LHS: (a[0]*M + b[0]*L) X = RHS
-        # Cache the LU factorization keyed on (a[1], b[1]) to avoid recomputing
-        # when dt is constant.
+        # Cache single LU factorization; recompute only when (a[1],b[1]) changes.
         cache_key = (a[1], b[1])
-        lhs_cache = get!(state.timestepper_data, :mcnab2_lhs_cache) do
-            Dict{Tuple{Float64,Float64}, Any}()
+        if get(state.timestepper_data, :mcnab2_lhs_key, nothing) !== cache_key
+            state.timestepper_data[:mcnab2_lhs_key] = cache_key
+            state.timestepper_data[:mcnab2_lhs_factor] = factorize(a[1] * M_matrix + b[1] * L_matrix)
         end
-        lhs_factor = get!(lhs_cache, cache_key) do
-            factorize(a[1] * M_matrix + b[1] * L_matrix)
-        end
+        lhs_factor = state.timestepper_data[:mcnab2_lhs_factor]
         X_new = lhs_factor \ rhs
 
         # Update state
@@ -205,15 +203,13 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
         @. rhs -= b2 * LX_current
         @. rhs -= b3 * LX_previous
 
-        # Build and solve LHS: (a[1]*M + b[1]*L) X^{n+1} = RHS
-        # Cache factorization keyed on (a1, b1) for constant-dt reuse.
+        # Cache single LU factorization; recompute only when (a1,b1) changes.
         cache_key = (a1, b1)
-        lhs_cache = get!(state.timestepper_data, :cnlf2_lhs_cache) do
-            Dict{Tuple{Float64,Float64}, Any}()
+        if get(state.timestepper_data, :cnlf2_lhs_key, nothing) !== cache_key
+            state.timestepper_data[:cnlf2_lhs_key] = cache_key
+            state.timestepper_data[:cnlf2_lhs_factor] = factorize(a1 * M_matrix + b1 * L_matrix)
         end
-        lhs_factor = get!(lhs_cache, cache_key) do
-            factorize(a1 * M_matrix + b1 * L_matrix)
-        end
+        lhs_factor = state.timestepper_data[:cnlf2_lhs_factor]
         X_new = lhs_factor \ rhs
 
         # Update state

@@ -257,35 +257,31 @@ end
 
     GPU-aware: All results are returned on CPU for file I/O compatibility.
     """
+function evaluate_task(task::ScalarField, solver::InitialValueSolver)
+    ensure_layout!(task, :g)
+    return gather_array(task.dist, get_grid_data(task))
+end
+
+function evaluate_task(task::VectorField, solver::InitialValueSolver)
+    component_arrays = [_component_grid_array(component) for component in task.components]
+    return _stack_component_arrays(component_arrays)
+end
+
+function evaluate_task(task::TensorField, solver::InitialValueSolver)
+    return _stack_tensor_components(task.components)
+end
+
+function evaluate_task(task::Operator, solver::InitialValueSolver)
+    operator_result = evaluate_operator(task)
+    return evaluate_task(operator_result, solver)
+end
+
+function evaluate_task(task::AbstractArray, solver::InitialValueSolver)
+    return on_architecture(CPU(), task)
+end
+
 function evaluate_task(task, solver::InitialValueSolver)
-
-    if isa(task, ScalarField)
-        # gather_array handles GPU→CPU conversion
-        ensure_layout!(task, :g)
-        result = gather_array(task.dist, get_grid_data(task))
-
-    elseif isa(task, VectorField)
-        # _component_grid_array uses gather_array which handles GPU→CPU
-        component_arrays = [_component_grid_array(component) for component in task.components]
-        result = _stack_component_arrays(component_arrays)
-
-    elseif isa(task, TensorField)
-        # _stack_tensor_components uses _component_grid_array which handles GPU→CPU
-        result = _stack_tensor_components(task.components)
-
-    elseif isa(task, Operator)
-        operator_result = evaluate_operator(task)
-        result = evaluate_task(operator_result, solver)
-
-    elseif isa(task, AbstractArray)
-        # Ensure array is on CPU for file I/O
-        result = on_architecture(CPU(), task)
-
-    else
-        throw(ArgumentError("Unknown task type: $(typeof(task))"))
-    end
-
-    return result
+    throw(ArgumentError("Unknown task type: $(typeof(task))"))
 end
 
 function _component_grid_array(component::ScalarField)
