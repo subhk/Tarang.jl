@@ -2,6 +2,10 @@
 # Additional Timestepper Step Functions
 # ============================================================================
 
+# Function barrier: specializes on the concrete factorization type F so that
+# `lhs \ rhs` dispatches statically instead of through Any.
+@inline _advanced_ldiv(lhs::F, rhs) where {F} = lhs \ rhs
+
 """
     Modified Crank-Nicolson Adams-Bashforth 2nd order step.
 
@@ -73,9 +77,9 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
         F_current_vec = fields_to_vector(F_current)
 
         # Rotate and store history
-        MX_history = state.timestepper_data[:MX_history]
-        LX_history = state.timestepper_data[:LX_history]
-        F_history = state.timestepper_data[:F_history]
+        MX_history = state.timestepper_data[:MX_history]::Vector{Vector{Float64}}
+        LX_history = state.timestepper_data[:LX_history]::Vector{Vector{Float64}}
+        F_history  = state.timestepper_data[:F_history]::Vector{Vector{Float64}}
 
         _prepend_trim!(MX_history, MX_current, 2)
         _prepend_trim!(LX_history, LX_current, 2)
@@ -96,8 +100,7 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
             state.timestepper_data[:mcnab2_lhs_key] = cache_key
             state.timestepper_data[:mcnab2_lhs_factor] = factorize(a[1] * M_matrix + b[1] * L_matrix)
         end
-        lhs_factor = state.timestepper_data[:mcnab2_lhs_factor]
-        X_new = lhs_factor \ rhs
+        X_new = _advanced_ldiv(state.timestepper_data[:mcnab2_lhs_factor], rhs)
 
         # Update state
         new_state = vector_to_fields(X_new, current_state)
@@ -209,8 +212,7 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
             state.timestepper_data[:cnlf2_lhs_key] = cache_key
             state.timestepper_data[:cnlf2_lhs_factor] = factorize(a1 * M_matrix + b1 * L_matrix)
         end
-        lhs_factor = state.timestepper_data[:cnlf2_lhs_factor]
-        X_new = lhs_factor \ rhs
+        X_new = _advanced_ldiv(state.timestepper_data[:cnlf2_lhs_factor], rhs)
 
         # Update state
         new_state = vector_to_fields(X_new, current_state)

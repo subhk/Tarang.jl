@@ -1,3 +1,10 @@
+# Function barrier: lhs_cache is Any in Dict{Symbol,Any}; specializing on F
+# lets ldiv! dispatch statically to the concrete factorization type.
+@inline function _multistep_ldiv!(dest::AbstractVector, lhs::F, rhs::AbstractVector) where {F}
+    ldiv!(dest, lhs, rhs)
+    return dest
+end
+
 """
     Crank-Nicolson Adams-Bashforth 1st order following Tarang MultistepIMEX implementation.
 
@@ -73,14 +80,8 @@ function _global_multistep_solve!(state::TimestepperState, cache_key,
         state.timestepper_data[:lhs_cache_key] = cache_key
     end
 
-    lhs_solver = state.timestepper_data[:lhs_cache]
     solution = _timestep_vector_buffer!(state, :multistep_X_new_vec, length(rhs))
-    try
-        ldiv!(solution, lhs_solver, rhs)
-    catch e
-        isa(e, MethodError) || rethrow(e)
-        copyto!(solution, lhs_solver \ rhs)
-    end
+    _multistep_ldiv!(solution, state.timestepper_data[:lhs_cache], rhs)
     return solution
 end
 
