@@ -23,9 +23,9 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
 
     # Initialize history arrays if needed
     if !haskey(state.timestepper_data, :MX_history)
-        state.timestepper_data[:MX_history] = []
-        state.timestepper_data[:LX_history] = []
-        state.timestepper_data[:F_history] = []
+        state.timestepper_data[:MX_history] = Vector{Vector{Float64}}()
+        state.timestepper_data[:LX_history] = Vector{Vector{Float64}}()
+        state.timestepper_data[:F_history] = Vector{Vector{Float64}}()
         state.timestepper_data[:iteration] = 0
     end
 
@@ -142,9 +142,6 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
     # Initialize history tracking
     if !haskey(state.timestepper_data, :iteration)
         state.timestepper_data[:iteration] = 0
-        state.timestepper_data[:MX_history] = []
-        state.timestepper_data[:LX_history] = []
-        state.timestepper_data[:F_history] = []
     end
 
     iteration = state.timestepper_data[:iteration]
@@ -199,13 +196,14 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
         F_current_vec = fields_to_vector(F_current)
 
-        # Build RHS:
+        # Build RHS in-place (zero allocations):
         # RHS = c[2]*F^n - a[2]*M*X^n - a[3]*M*X^{n-1} - b[2]*L*X^n - b[3]*L*X^{n-1}
-        rhs = F_current_vec                       # c[2] = 1
-        rhs = rhs .- a2 .* MX_current
-        rhs = rhs .- a3 .* MX_previous
-        rhs = rhs .- b2 .* LX_current
-        rhs = rhs .- b3 .* LX_previous
+        rhs = _timestep_vector_buffer!(state, :cnlf2_rhs_vec, length(F_current_vec))
+        copyto!(rhs, F_current_vec)
+        @. rhs -= a2 * MX_current
+        @. rhs -= a3 * MX_previous
+        @. rhs -= b2 * LX_current
+        @. rhs -= b3 * LX_previous
 
         # Build and solve LHS: (a[1]*M + b[1]*L) X^{n+1} = RHS
         # Cache factorization keyed on (a1, b1) for constant-dt reuse.
@@ -281,42 +279,20 @@ function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
     try
         # Stage 1: u^(1) = u^n + dt*F(u^n)
         F0 = evaluate_rhs(solver, current_state, t)
-        u1 = add_scaled_state(current_state, F0, dt * beta[1])
+        u1 = _timestep_field_state!(state, :rksmr_u1, current_state)
+        linear_combination_state!(u1, 1.0, current_state, dt * beta[1], F0)
 
-        # Stage 2: u^(2) = 3/4*u^n + 1/4*u^(1) + 1/4*dt*F(u^(1))
+        # Stage 2: u^(2) = alpha[2,1]*u^n + alpha[2,2]*u^(1) + beta[2]*dt*F(u^(1))
         F1 = evaluate_rhs(solver, u1, t + dt)
-        # u^(2) = alpha[2,1]*u^n + alpha[2,2]*u^(1) + beta[2]*dt*F(u^(1))
-        u2 = ScalarField[]
-        for (i, field0) in enumerate(current_state)
-            field1 = u1[i]
-            new_field = ScalarField(field0.dist, field0.name, field0.bases, field0.dtype)
-            ensure_layout!(field0, :g)
-            ensure_layout!(field1, :g)
-            ensure_layout!(F1[i], :g)
-            ensure_layout!(new_field, :g)
+        u2 = _timestep_field_state!(state, :rksmr_u2, current_state)
+        linear_combination_state!(u2, alpha[2,1], current_state, alpha[2,2], u1)
+        axpy_state!(dt * beta[2], F1, u2)
 
-            get_grid_data(new_field) .= alpha[2,1] .* get_grid_data(field0) .+
-                                alpha[2,2] .* get_grid_data(field1) .+
-                                dt * beta[2] .* get_grid_data(F1[i])
-            push!(u2, new_field)
-        end
-
-        # Stage 3: u^{n+1} = 1/3*u^n + 2/3*u^(2) + 2/3*dt*F(u^(2))
+        # Stage 3: u^{n+1} = alpha[3,1]*u^n + alpha[3,3]*u^(2) + beta[3]*dt*F(u^(2))
         F2 = evaluate_rhs(solver, u2, t + 0.5*dt)  # SSP-RK3 Shu-Osher c₃ = 1/2
-        new_state = ScalarField[]
-        for (i, field0) in enumerate(current_state)
-            field2 = u2[i]
-            new_field = ScalarField(field0.dist, field0.name, field0.bases, field0.dtype)
-            ensure_layout!(field0, :g)
-            ensure_layout!(field2, :g)
-            ensure_layout!(F2[i], :g)
-            ensure_layout!(new_field, :g)
-
-            get_grid_data(new_field) .= alpha[3,1] .* get_grid_data(field0) .+
-                                alpha[3,3] .* get_grid_data(field2) .+
-                                dt * beta[3] .* get_grid_data(F2[i])
-            push!(new_state, new_field)
-        end
+        new_state = copy_state(current_state)
+        linear_combination_state!(new_state, alpha[3,1], current_state, alpha[3,3], u2)
+        axpy_state!(dt * beta[3], F2, new_state)
 
         _push_trim!(state.history, new_state, 2)
 
