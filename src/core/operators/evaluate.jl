@@ -350,8 +350,8 @@ Evaluate indexing operator: array[indices...].
 """
 function evaluate_index(op::IndexOperator, layout::Symbol=:g)
     array_val = _eval_operand(op.array, layout)
-    indices = [_eval_operand(idx, layout) for idx in op.indices]
-    indices = map(idx -> idx isa Number ? Int(idx) : idx, indices)
+    # Evaluate and coerce to Int in one pass (one allocation instead of two).
+    indices = [let v = _eval_operand(idx, layout); v isa Number ? Int(v) : v end for idx in op.indices]
 
     if array_val isa ScalarField
         ensure_layout!(array_val, layout)
