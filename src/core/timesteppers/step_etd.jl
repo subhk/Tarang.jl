@@ -50,7 +50,7 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
             cache[:etd_phi] = phi_functions_matrix(L_linear, dt)
             cache[:etd_phi_dt] = dt
         end
-        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_phi]
+        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_phi]::NTuple{3, Matrix{ComplexF64}}
 
         # Convert state to vector form
         X₀ = fields_to_vector(current_state)
@@ -63,31 +63,43 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
                   "\n  per-field: $field_sizes"
         end
 
+        n = length(X₀)
+        a_n   = _timestep_vector_buffer!(state, :etd_rk2_an,   n)
+        N_buf = _timestep_vector_buffer!(state, :etd_rk2_Nbuf, n)
+        c_vec = _timestep_vector_buffer!(state, :etd_rk2_c,    n)
+        diff  = _timestep_vector_buffer!(state, :etd_rk2_diff, n)
+        X_new = _timestep_vector_buffer!(state, :etd_rk2_Xnew, n)
+
         # Compute exponential propagator: a_n = exp(hL)*u_n
-        a_n = exp_hL * X₀
+        mul!(a_n, exp_hL, X₀)
 
         # Stage 1 (predictor): Evaluate nonlinear term N(u_n) at current state
         F₀ = evaluate_rhs(solver, current_state, solver.sim_time)
-        N_u_n = _apply_mass_inverse(M_factor, fields_to_vector(F₀))
+        F₀_vec = fields_to_vector(F₀)
+        _apply_mass_inverse!(N_buf, M_factor, F₀_vec)
 
-        # Predictor: c = a_n + h*φ₁(hL)*N(u_n)
-        c = a_n + dt * (φ₁_hL * N_u_n)
+        # Predictor: c = a_n + h*φ₁(hL)*N(u_n)  — reuse diff as φ₁*N_u_n scratch
+        mul!(diff, φ₁_hL, N_buf)
+        @. c_vec = a_n + dt * diff
 
         # Convert back to field form for nonlinear evaluation
-        temp_state = vector_to_fields(c, current_state)
+        temp_state = vector_to_fields(c_vec, current_state)
 
         # Stage 2 (corrector): Evaluate N(c) at predicted state
         F_c = evaluate_rhs(solver, temp_state, solver.sim_time + dt)
-        N_c = _apply_mass_inverse(M_factor, fields_to_vector(F_c))
+        F_c_vec = fields_to_vector(F_c)
+        # Reuse diff as N_c (mass-inverse applied in place); save N_u_n → N_buf
+        _apply_mass_inverse!(diff, M_factor, F_c_vec)
 
-        # Final update (Cox-Matthews Eq. 22):
-        # u_{n+1} = c + h*φ₂(hL)*(N(c) - N(u_n))
-        # Equivalently: a_n + h*(φ₁-φ₂)*N(u_n) + h*φ₂*N(c)
-        X_new = a_n + dt * ((φ₁_hL - φ₂_hL) * N_u_n) + dt * (φ₂_hL * N_c)
+        # X_new = c + dt*φ₂*(N_c - N_u_n)
+        # = c + dt*φ₂*diff - dt*φ₂*N_buf
+        # Use X_new as scratch: X_new = N_c - N_u_n
+        @. X_new = diff - N_buf
+        mul!(diff, φ₂_hL, X_new)
+        @. X_new = c_vec + dt * diff
 
         # Update state
-        X_new_cpu = X_new
-        new_state = vector_to_fields(X_new_cpu, current_state)
+        new_state = vector_to_fields(X_new, current_state)
 
         max_history = get_max_timestep_history(state.timestepper)
         _push_trim!(state.history, new_state, max_history)
@@ -128,18 +140,18 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     dt = state.dt
 
     # Initialize history arrays if needed
-    if !haskey(state.timestepper_data, :F_history)
-        state.timestepper_data[:F_history] = []
-        state.timestepper_data[:iteration] = 0
+    if !haskey(state.timestepper_data, :etd_cnab2_F_history)
+        state.timestepper_data[:etd_cnab2_F_history] = Vector{Vector{ComplexF64}}()
+        state.timestepper_data[:etd_cnab2_iteration] = 0
     end
 
-    iteration = state.timestepper_data[:iteration]
+    iteration = state.timestepper_data[:etd_cnab2_iteration]
 
     # Check if we have enough history for 2-step Adams-Bashforth
     if iteration < 1 || length(state.history) < 2
         @debug "ETD-CNAB2 requires iteration >= 1, falling back to ETDRK2 for startup"
         step_etd_rk222!(state, solver)
-        state.timestepper_data[:iteration] = get(state.timestepper_data, :iteration, 0) + 1
+        state.timestepper_data[:etd_cnab2_iteration] = get(state.timestepper_data, :etd_cnab2_iteration, 0) + 1
         return
     end
 
@@ -169,46 +181,52 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
             cache[:etd_cnab_phi] = phi_functions_matrix(L_linear, dt_current)
             cache[:etd_cnab_phi_dt] = dt_current
         end
-        exp_hL, φ₁_hL, _ = cache[:etd_cnab_phi]
+        exp_hL, φ₁_hL, _ = cache[:etd_cnab_phi]::NTuple{3, Matrix{ComplexF64}}
 
         # Convert current state to vector
         X_current = fields_to_vector(current_state)
 
-        # Evaluate nonlinear term N(u_n)
+        # Evaluate nonlinear term N(u_n) — in-place mass inverse
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_current_vec = _apply_mass_inverse(M_factor, fields_to_vector(F_current))
+        F_raw = fields_to_vector(F_current)
+        n = length(F_raw)
+        F_current_vec = _timestep_vector_buffer!(state, :etd_cnab2_Fcur, n)
+        _apply_mass_inverse!(F_current_vec, M_factor, F_raw)
 
         # Rotate and store history
-        F_history = state.timestepper_data[:F_history]
-        _prepend_trim!(F_history, F_current_vec, 2)
+        F_history = cache[:etd_cnab2_F_history]::Vector{Vector{ComplexF64}}
+        _prepend_history_buffer!(F_history, F_current_vec, 2)
         if length(F_history) < 2 && length(state.history) >= 2
             prev_state = state.history[end-1]
-            F_prev = evaluate_rhs(solver, prev_state, solver.sim_time - dt_previous)
-            push!(F_history, _apply_mass_inverse(M_factor, fields_to_vector(F_prev)))
+            F_prev_raw = fields_to_vector(evaluate_rhs(solver, prev_state, solver.sim_time - dt_previous))
+            F_prev_vec = _timestep_vector_buffer!(state, :etd_cnab2_Fprev, n)
+            _apply_mass_inverse!(F_prev_vec, M_factor, F_prev_raw)
+            push!(F_history, copy(F_prev_vec))
         end
 
-        # Adams-Bashforth 2nd-order extrapolation coefficients (variable timestep)
-        # N_AB2 = c₁*N(u_n) + c₂*N(u_{n-1})
-        c₁ = 1.0 + w1/2.0  # Current step weight
-        c₂ = -w1/2.0       # Previous step weight
-
-        # Build Adams-Bashforth extrapolated nonlinear term
-        F_extrap = c₁ * F_history[1]
+        # Adams-Bashforth 2nd-order extrapolation: N_AB2 = c₁*N(uₙ) + c₂*N(uₙ₋₁)
+        c₁ = 1.0 + w1/2.0
+        c₂ = -w1/2.0
+        F_extrap = _timestep_vector_buffer!(state, :etd_cnab2_extrap, n)
+        @. F_extrap = c₁ * F_history[1]
         if length(F_history) >= 2
-            F_extrap .+= c₂ * F_history[2]
+            axpy!(c₂, F_history[2], F_extrap)
         end
 
-        # Exponential time differencing step with Adams-Bashforth extrapolation:
-        # u_{n+1} = exp(hL)u_n + h*φ₁(hL)*N_AB2
-        X_new = exp_hL * X_current + dt_current * (φ₁_hL * F_extrap)
+        # u_{n+1} = exp(hL)u_n + h*φ₁(hL)*N_AB2  — zero-alloc via mul!/axpy!
+        X_new = _timestep_vector_buffer!(state, :etd_cnab2_Xnew, n)
+        mul!(X_new, exp_hL, X_current)
+        phi1_N = _timestep_vector_buffer!(state, :etd_cnab2_phi1N, n)
+        mul!(phi1_N, φ₁_hL, F_extrap)
+        axpy!(dt_current, phi1_N, X_new)
 
         # Update state
         new_state = vector_to_fields(X_new, current_state)
 
         _push_trim!(state.history, new_state, 4)
-        state.timestepper_data[:iteration] += 1
+        cache[:etd_cnab2_iteration] += 1
 
-        @debug "ETDAB2 step completed: dt=$dt_current, w1=$w1, iteration=$(state.timestepper_data[:iteration]), |X_new|=$(norm(X_new))"
+        @debug "ETDAB2 step completed: dt=$dt_current, w1=$w1, iteration=$(cache[:etd_cnab2_iteration]), |X_new|=$(norm(X_new))"
 
     catch e
         @warn "ETD-CNAB2 failed: $e, falling back to CNAB2"
@@ -258,18 +276,18 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     dt = state.dt
 
     # Initialize history arrays if needed
-    if !haskey(state.timestepper_data, :F_history)
-        state.timestepper_data[:F_history] = []
-        state.timestepper_data[:iteration] = 0
+    if !haskey(state.timestepper_data, :etd_sbdf2_F_history)
+        state.timestepper_data[:etd_sbdf2_F_history] = Vector{Vector{ComplexF64}}()
+        state.timestepper_data[:etd_sbdf2_iteration] = 0
     end
 
-    iteration = state.timestepper_data[:iteration]
+    iteration = state.timestepper_data[:etd_sbdf2_iteration]
 
     # Check if we have enough history for 2-step method
     if iteration < 1 || length(state.history) < 2
         @debug "ETD-SBDF2 requires iteration >= 1, falling back to ETDRK2 for startup"
         step_etd_rk222!(state, solver)
-        state.timestepper_data[:iteration] = get(state.timestepper_data, :iteration, 0) + 1
+        state.timestepper_data[:etd_sbdf2_iteration] = get(state.timestepper_data, :etd_sbdf2_iteration, 0) + 1
         return
     end
 
@@ -299,60 +317,58 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
             cache[:etd_sbdf_phi] = phi_functions_matrix(L_linear, dt_current)
             cache[:etd_sbdf_phi_dt] = dt_current
         end
-        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_sbdf_phi]
+        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_sbdf_phi]::NTuple{3, Matrix{ComplexF64}}
 
         # Convert current state to vector
         X_current = fields_to_vector(current_state)
+        n = length(X_current)
 
-        # Evaluate nonlinear term N(uₙ) at current state
+        # Evaluate nonlinear term N(uₙ) at current state — in-place mass inverse
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_current_vec = _apply_mass_inverse(M_factor, fields_to_vector(F_current))
+        F_raw = fields_to_vector(F_current)
+        F_current_vec = _timestep_vector_buffer!(state, :etd_sbdf2_Fcur, n)
+        _apply_mass_inverse!(F_current_vec, M_factor, F_raw)
 
         # Rotate and store history
-        F_history = state.timestepper_data[:F_history]
-        _prepend_trim!(F_history, F_current_vec, 2)
+        F_history = cache[:etd_sbdf2_F_history]::Vector{Vector{ComplexF64}}
+        _prepend_history_buffer!(F_history, F_current_vec, 2)
         if length(F_history) < 2 && length(state.history) >= 2
             prev_state = state.history[end-1]
-            F_prev = evaluate_rhs(solver, prev_state, solver.sim_time - dt_previous)
-            push!(F_history, _apply_mass_inverse(M_factor, fields_to_vector(F_prev)))
+            F_prev_raw = fields_to_vector(evaluate_rhs(solver, prev_state, solver.sim_time - dt_previous))
+            F_prev_vec = _timestep_vector_buffer!(state, :etd_sbdf2_Fprev, n)
+            _apply_mass_inverse!(F_prev_vec, M_factor, F_prev_raw)
+            push!(F_history, copy(F_prev_vec))
         end
         if length(F_history) < 2
             @debug "ETD-SBDF2 missing previous RHS, falling back to ETDRK2"
             step_etd_rk222!(state, solver)
-            state.timestepper_data[:iteration] = get(state.timestepper_data, :iteration, 0) + 1
+            cache[:etd_sbdf2_iteration] = get(cache, :etd_sbdf2_iteration, 0) + 1
             return
         end
 
-        # Get previous nonlinear term N(uₙ₋₁)
-        Nₙ = F_history[1]      # N(uₙ)
-        Nₙ₋₁ = F_history[2]    # N(uₙ₋₁)
+        # N(uₙ) and N(uₙ₋₁) from typed history
+        Nₙ   = F_history[1]
+        Nₙ₋₁ = F_history[2]
 
-        # Compute ETD multistep coefficients (variable timestep version)
-        # The interpolation slope is (Nₙ - Nₙ₋₁)/hₙ₋₁, giving:
-        # b₁(z) = φ₁(z) + w·φ₂(z)  -- coefficient for Nₙ
-        # b₀(z) = -w·φ₂(z)         -- coefficient for Nₙ₋₁
+        # Zero-alloc ETD update: u_{n+1} = exp(hL)uₙ + h[φ₁·Nₙ + w·φ₂·(Nₙ - Nₙ₋₁)]
+        X_new  = _timestep_vector_buffer!(state, :etd_sbdf2_Xnew, n)
+        buf1   = _timestep_vector_buffer!(state, :etd_sbdf2_buf1, n)
+        buf2   = _timestep_vector_buffer!(state, :etd_sbdf2_buf2, n)
 
-        # Linear propagation: exp(hL)uₙ
-        X_propagated = exp_hL * X_current
-
-        # Nonlinear contribution using ETD coefficients:
-        # h[b₁(hL)Nₙ + b₀(hL)Nₙ₋₁] = h[(φ₁ + w·φ₂)Nₙ - w·φ₂·Nₙ₋₁]
-        #                             = h[φ₁·Nₙ + w·φ₂·(Nₙ - Nₙ₋₁)]
-
-        # Compute the nonlinear contributions
-        φ₁_Nₙ = φ₁_hL * Nₙ
-        φ₂_diff = φ₂_hL * (Nₙ - Nₙ₋₁)
-
-        # Full update: u_{n+1} = exp(hL)uₙ + h[φ₁·Nₙ + w·φ₂·(Nₙ - Nₙ₋₁)]
-        X_new = X_propagated + dt_current * (φ₁_Nₙ + w * φ₂_diff)
+        mul!(X_new, exp_hL, X_current)      # X_new = exp(hL)*uₙ
+        mul!(buf1, φ₁_hL, Nₙ)              # buf1  = φ₁·Nₙ
+        axpy!(dt_current, buf1, X_new)      # X_new += h·φ₁·Nₙ
+        @. buf2 = Nₙ - Nₙ₋₁               # buf2  = Nₙ - Nₙ₋₁
+        mul!(buf1, φ₂_hL, buf2)             # buf1  = φ₂·(Nₙ - Nₙ₋₁)
+        axpy!(dt_current * w, buf1, X_new)  # X_new += h·w·φ₂·(Nₙ - Nₙ₋₁)
 
         # Update state
         new_state = vector_to_fields(X_new, current_state)
 
         _push_trim!(state.history, new_state, 4)
-        state.timestepper_data[:iteration] += 1
+        cache[:etd_sbdf2_iteration] += 1
 
-        @debug "ETD-MS2 step completed: dt=$dt_current, w=$w, iteration=$(state.timestepper_data[:iteration]), |X_new|=$(norm(X_new))"
+        @debug "ETD-MS2 step completed: dt=$dt_current, w=$w, iteration=$(cache[:etd_sbdf2_iteration]), |X_new|=$(norm(X_new))"
 
     catch e
         @warn "ETD-SBDF2 failed: $e, falling back to SBDF2"

@@ -614,12 +614,6 @@ end
 
 Return the maximum timestep history length needed for a timestepper.
 """
-function get_max_timestep_history(timestepper::TimeStepper)
-    if timestepper isa Union{SBDF3, SBDF4}
-        return 4
-    elseif timestepper isa Union{SBDF2, CNAB2, ETD_CNAB2, ETD_SBDF2, DiagonalIMEX_SBDF2}
-        return 3
-    else
-        return 2
-    end
-end
+get_max_timestep_history(::Union{SBDF3, SBDF4}) = 4
+get_max_timestep_history(::Union{SBDF2, CNAB2, ETD_CNAB2, ETD_SBDF2, DiagonalIMEX_SBDF2}) = 3
+get_max_timestep_history(::TimeStepper) = 2

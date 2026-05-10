@@ -172,14 +172,7 @@ function run!(solver::InitialValueSolver;
         # Execute callbacks
         for (idx, cb) in enumerate(callbacks)
             interval, func = cb
-            should_fire = if interval isa Integer
-                solver.iteration % interval == 0
-            elseif interval isa AbstractFloat
-                solver.sim_time - last_callback_times[idx] >= interval
-            else
-                false
-            end
-
+            should_fire = _callback_should_fire(interval, solver, last_callback_times[idx])
             if should_fire
                 func(solver)
                 last_callback_times[idx] = solver.sim_time
@@ -199,27 +192,21 @@ end
 # Boundary value solver
 """Solve boundary value problem"""
 function solve!(solver::BoundaryValueSolver)
-
     start_time = time()
-
-    if isa(solver.problem, LBVP)
-        # Linear boundary value problem
-        solution = solve_linear!(solver)
-
-        # Copy solution back to state fields
-        copy_solution_to_fields!(solver.state, solution)
-
-    elseif isa(solver.problem, NLBVP)
-        # Nonlinear boundary value problem - Newton iteration
-        solve_nonlinear!(solver)
-    end
-
-    # Update performance statistics
+    _solve_bvp!(solver, solver.problem)
     solve_time = time() - start_time
     solver.performance_stats.total_time += solve_time
     solver.performance_stats.total_solves += 1
-
     return solver
+end
+
+function _solve_bvp!(solver::BoundaryValueSolver, ::LBVP)
+    solution = solve_linear!(solver)
+    copy_solution_to_fields!(solver.state, solution)
+end
+
+function _solve_bvp!(solver::BoundaryValueSolver, ::NLBVP)
+    solve_nonlinear!(solver)
 end
 
 """Solve linear boundary value problem"""

@@ -285,34 +285,27 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         if !isapprox(dt, dt_prev, rtol=0.01)
             @warn "DiagonalIMEX_SBDF2 uses constant-dt coefficients but dt/dt_prev = $(dt/dt_prev). Use SBDF2 (step_multistep.jl) for variable timesteps." maxlog=1
         end
-        # RHS = 2*X_n - (1/2)*X_{n-1} + dt*(2*F_n - F_{n-1})
-        new_state = ScalarField[]
-        for (i, field_n) in enumerate(X_n)
-            field_nm1 = X_nm1[i]
-            f_n = F_n[i]
-            f_nm1 = F_nm1[i]
+        # RHS = 2*X_n - 0.5*X_{n-1} + dt*(2*F_n - F_{n-1}); then divide by (1.5 + dt*L̂)
+        new_state = copy_state(X_n)
+        for (i, result) in enumerate(new_state)
+            field_n   = X_n[i];   field_nm1 = X_nm1[i]
+            f_n       = F_n[i];   f_nm1     = F_nm1[i]
 
-            result = ScalarField(field_n.dist, field_n.name, field_n.bases, field_n.dtype)
-
-            ensure_layout!(field_n, :c)
-            ensure_layout!(field_nm1, :c)
-            ensure_layout!(f_n, :c)
-            ensure_layout!(f_nm1, :c)
+            ensure_layout!(field_n, :c);  ensure_layout!(field_nm1, :c)
+            ensure_layout!(f_n, :c);      ensure_layout!(f_nm1, :c)
             ensure_layout!(result, :c)
 
-            # RHS = 2*X_n - 0.5*X_{n-1} + dt*(2*F_n - F_{n-1})
-            get_coeff_data(result) .= 2 .* get_coeff_data(field_n) .-
-                                       0.5 .* get_coeff_data(field_nm1) .+
-                                       dt .* (2 .* get_coeff_data(f_n) .- get_coeff_data(f_nm1))
+            d = get_coeff_data(result)
+            dn = get_coeff_data(field_n);  dnm1 = get_coeff_data(field_nm1)
+            fn = get_coeff_data(f_n);      fnm1 = get_coeff_data(f_nm1)
 
-            # Implicit step: X̂ = RHS / (1.5 + dt*L̂)
+            @. d = 2*dn - 0.5*dnm1 + dt*(2*fn - fnm1)
+
             if L_spectral !== nothing
-                get_coeff_data(result) ./= (1.5 .+ dt .* L_spectral.coefficients)
+                @. d /= (1.5 + dt * L_spectral.coefficients)
             else
-                get_coeff_data(result) ./= 1.5
+                d ./= 1.5
             end
-
-            push!(new_state, result)
         end
 
         _push_trim!(state.history, new_state, 2)
