@@ -77,10 +77,15 @@ function SparseLUSolver(matrix::AbstractMatrix; kwargs...)
     return SparseLUSolver(sparse(matrix); kwargs...)
 end
 
-solve(s::SparseLUSolver, rhs) = s.factor \ rhs
+solve(s::SparseLUSolver, rhs) = _factor_div_barrier(s.factor, rhs)
+@inline _factor_div_barrier(factor::F, rhs) where {F} = factor \ rhs
+
 function solve!(dest, s::SparseLUSolver, rhs)
-    ldiv!(dest, s.factor, rhs)
+    _ldiv_barrier!(dest, s.factor, rhs)
     return dest
+end
+@inline function _ldiv_barrier!(dest, factor::F, rhs) where {F}
+    ldiv!(dest, factor, rhs)
 end
 
 """

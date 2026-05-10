@@ -313,6 +313,10 @@ function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::Fouri
     end
 
     plan = _get_or_plan_forward!(transform, in)
+    return _fourier_fwd_kernel!(out, in, plan)
+end
+
+@inline function _fourier_fwd_kernel!(out::AbstractArray, in::AbstractArray, plan::P) where {P}
     mul!(out, plan, in)
     return out
 end
@@ -351,10 +355,14 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Four
         scratch = _get_or_alloc_scratch!(transform.bwd_scratch, scratch_key,
                                          size(in), eltype(in))
         copyto!(scratch, in)
-        mul!(out, plan, scratch)
+        return _fourier_bwd_kernel!(out, scratch, plan)
     else
-        mul!(out, plan, in)
+        return _fourier_bwd_kernel!(out, in, plan)
     end
+end
+
+@inline function _fourier_bwd_kernel!(out::AbstractArray, in::AbstractArray, plan::P) where {P}
+    mul!(out, plan, in)
     return out
 end
 

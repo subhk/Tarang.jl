@@ -16,18 +16,20 @@ end
 
 const _PaddedDealiasKey = Tuple{UInt, DataType, UInt, Bool}
 
+abstract type AbstractNonlinearTransformConfig end
+
 mutable struct NonlinearTransformCache
-    shape_transforms::Dict{String, Any}
-    tuple_transforms::Dict{Tuple, Any}
-    padded_dealiasing::Dict{_PaddedDealiasKey, Any}
-    padded_pencil::Dict{String, Any}
+    shape_transforms::Dict{String, AbstractNonlinearTransformConfig}
+    tuple_transforms::Dict{Tuple, AbstractNonlinearTransformConfig}
+    padded_dealiasing::Dict{_PaddedDealiasKey, AbstractNonlinearTransformConfig}
+    padded_pencil::Dict{String, AbstractNonlinearTransformConfig}
 end
 
 NonlinearTransformCache() = NonlinearTransformCache(
-    Dict{String, Any}(),
-    Dict{Tuple, Any}(),
-    Dict{_PaddedDealiasKey, Any}(),
-    Dict{String, Any}(),
+    Dict{String, AbstractNonlinearTransformConfig}(),
+    Dict{Tuple, AbstractNonlinearTransformConfig}(),
+    Dict{_PaddedDealiasKey, AbstractNonlinearTransformConfig}(),
+    Dict{String, AbstractNonlinearTransformConfig}(),
 )
 
 @inline function _is_padded_dealias_key(key)
@@ -71,8 +73,6 @@ end
     cache.tuple_transforms[shape] = value
     return value
 end
-
-abstract type AbstractNonlinearTransformConfig end
 
 struct FFTWTransformConfig{FP, BP, RA<:AbstractArray, CA<:AbstractArray} <: AbstractNonlinearTransformConfig
     kind::Symbol
