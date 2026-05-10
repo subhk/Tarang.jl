@@ -83,6 +83,11 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
     end
 end
 
+_callback_should_fire(interval::Integer, solver::InitialValueSolver, _::Float64) =
+    solver.iteration % interval == 0
+_callback_should_fire(interval::AbstractFloat, solver::InitialValueSolver, last_time::Float64) =
+    solver.sim_time - last_time >= interval
+
 # Solver execution control
 """Check if solver should continue"""
 function proceed(solver::InitialValueSolver)
