@@ -202,25 +202,26 @@ function _subproblem_solver_kwargs(choice)
     return kwargs
 end
 
-function _solve_cached_system(lhs_solver, rhs::AbstractVector{ComplexF64})
-    return if isa(lhs_solver, WoodburySolver)
-        _woodbury_solve(lhs_solver, rhs)
-    elseif lhs_solver isa MatSolvers.AbstractMatSolver
-        MatSolvers.solve(lhs_solver, rhs)
-    else
-        lhs_solver \ rhs
-    end
-end
+_solve_cached_system(lhs_solver::WoodburySolver, rhs::AbstractVector{ComplexF64}) =
+    _woodbury_solve(lhs_solver, rhs)
+_solve_cached_system(lhs_solver::MatSolvers.AbstractMatSolver, rhs::AbstractVector{ComplexF64}) =
+    MatSolvers.solve(lhs_solver, rhs)
+_solve_cached_system(lhs_solver, rhs::AbstractVector{ComplexF64}) = lhs_solver \ rhs
 
+function _solve_cached_system!(dest::AbstractVector{ComplexF64}, lhs_solver::WoodburySolver,
+                               rhs::AbstractVector{ComplexF64})
+    _woodbury_solve!(dest, lhs_solver, rhs)
+    return dest
+end
+function _solve_cached_system!(dest::AbstractVector{ComplexF64},
+                               lhs_solver::MatSolvers.AbstractMatSolver,
+                               rhs::AbstractVector{ComplexF64})
+    MatSolvers.solve!(dest, lhs_solver, rhs)
+    return dest
+end
 function _solve_cached_system!(dest::AbstractVector{ComplexF64}, lhs_solver,
                                rhs::AbstractVector{ComplexF64})
-    if isa(lhs_solver, WoodburySolver)
-        _woodbury_solve!(dest, lhs_solver, rhs)
-    elseif lhs_solver isa MatSolvers.AbstractMatSolver
-        MatSolvers.solve!(dest, lhs_solver, rhs)
-    else
-        _assign_to_buffer!(dest, lhs_solver \ rhs)
-    end
+    _assign_to_buffer!(dest, lhs_solver \ rhs)
     return dest
 end
 
@@ -230,16 +231,19 @@ function _subproblem_operator(sp::Subproblem, which::Symbol, data::AbstractVecto
     return _subproblem_backend_matrix!(sp, matrix, which, data)
 end
 
-function _apply_subproblem_operator!(dest::AbstractVector, op, x::AbstractVector)
-    if op === nothing
-        fill!(dest, zero(eltype(dest)))
-    elseif !is_gpu_array(dest) && !is_gpu_array(x) && op isa AbstractMatrix
+_apply_subproblem_operator!(dest::AbstractVector, ::Nothing, x::AbstractVector) =
+    (fill!(dest, zero(eltype(dest))); dest)
+function _apply_subproblem_operator!(dest::AbstractVector, op::AbstractMatrix,
+                                     x::AbstractVector)
+    if !is_gpu_array(dest) && !is_gpu_array(x)
         mul!(dest, op, x)
     else
         _assign_to_buffer!(dest, op * x)
     end
     return dest
 end
+_apply_subproblem_operator!(dest::AbstractVector, op, x::AbstractVector) =
+    (_assign_to_buffer!(dest, op * x); dest)
 
 function _sp_stage_vector!(sp::Subproblem, kind::Symbol, stage::Int, n::Int,
                            like::AbstractVector)
