@@ -86,12 +86,13 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
     result_data = dropdims(sum(coeffs .* w_shaped, dims=axis), dims=axis)
 
     # Create reduced-dimension field
-    new_bases = [b for (i, b) in enumerate(field.bases) if i != axis]
-    if isempty(new_bases)
+    nb = length(field.bases)
+    new_bases = ntuple(i -> field.bases[i < axis ? i : i + 1], nb - 1)
+    if nb == 1
         return real(result_data isa AbstractArray ? sum(result_data) : result_data)
     end
 
-    result_field = ScalarField(field.dist, "interp_$(field.name)", tuple(new_bases...), field.dtype)
+    result_field = ScalarField(field.dist, "interp_$(field.name)", new_bases, field.dtype)
     ensure_layout!(result_field, :c)
     set_coeff_data!(result_field, real.(result_data))
     result_field.current_layout = :c
@@ -257,12 +258,13 @@ function interpolate_jacobi(field::ScalarField, basis::JacobiBasis, axis::Int, p
     end
 
     # Create reduced-dimension field
-    new_bases = [bs for (i, bs) in enumerate(field.bases) if i != axis]
-    if isempty(new_bases)
+    nb = length(field.bases)
+    new_bases = ntuple(i -> field.bases[i < axis ? i : i + 1], nb - 1)
+    if nb == 1
         return result_data isa AbstractArray ? result_data[] : result_data
     end
 
-    result_field = ScalarField(field.dist, "interp_$(field.name)", tuple(new_bases...), field.dtype)
+    result_field = ScalarField(field.dist, "interp_$(field.name)", new_bases, field.dtype)
     ensure_layout!(result_field, :c)
     set_coeff_data!(result_field, result_data)
     result_field.current_layout = :c

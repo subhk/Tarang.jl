@@ -266,9 +266,8 @@ function evaluate_convert(conv_op::Convert, layout::Symbol=:g)
     conv_mat = conversion_matrix(in_basis, out_basis)
 
     # Create result field
-    new_bases = collect(operand.bases)
-    new_bases[in_basis_index] = out_basis
-    result = ScalarField(operand.dist, "conv_$(operand.name)", tuple(new_bases...), operand.dtype)
+    new_bases = ntuple(i -> i == in_basis_index ? out_basis : operand.bases[i], length(operand.bases))
+    result = ScalarField(operand.dist, "conv_$(operand.name)", new_bases, operand.dtype)
     ensure_layout!(result, :c)
 
     # Apply conversion matrix

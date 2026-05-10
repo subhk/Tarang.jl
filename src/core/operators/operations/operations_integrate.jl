@@ -91,12 +91,13 @@ function integrate_along_coord(field::ScalarField, coord::Coordinate)
         return sum(data .* weights)
     else
         # Create new field without the integrated dimension
-        new_bases = [b for (i, b) in enumerate(field.bases) if i != basis_index]
-        if isempty(new_bases)
+        nb = length(field.bases)
+        new_bases = ntuple(i -> field.bases[i < basis_index ? i : i + 1], nb - 1)
+        if nb == 1
             return sum(data .* reshape(weights, size_for_axis(length(weights), basis_index, ndims(data))))
         end
 
-        result = ScalarField(field.dist, "int_$(field.name)", tuple(new_bases...), field.dtype)
+        result = ScalarField(field.dist, "int_$(field.name)", new_bases, field.dtype)
         set_grid_data!(result, result_data)
         result.current_layout = :g
         return result

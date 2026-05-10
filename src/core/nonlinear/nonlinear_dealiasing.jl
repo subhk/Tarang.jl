@@ -28,18 +28,17 @@ Apply 3D dealiasing.
 GPU-compatible: uses appropriate implementation based on field's architecture.
 """
 function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
+    nb = length(field.bases)
     # Compute cutoffs: keep modes with |k| <= N/(2*dealiasing_factor)
-    cutoffs_check = [begin
-        if isa(basis, Union{RealFourier, ComplexFourier})
-            Int(floor(basis.meta.size / (2 * dealiasing_factor)))
-        else
-            typemax(Int) >> 1
-        end
-    end for basis in field.bases]
+    cutoffs_check = ntuple(nb) do i
+        basis = field.bases[i]
+        isa(basis, Union{RealFourier, ComplexFourier}) ?
+            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : typemax(Int) >> 1
+    end
 
     # Skip if grid too small for meaningful dealiasing
-    any_zero_cutoff = any(c == 0 for (c, basis) in zip(cutoffs_check, field.bases)
-                          if isa(basis, Union{RealFourier, ComplexFourier}))
+    any_zero_cutoff = any(i -> isa(field.bases[i], Union{RealFourier, ComplexFourier}) &&
+                               cutoffs_check[i] == 0, 1:nb)
     if any_zero_cutoff
         return
     end
@@ -49,18 +48,16 @@ function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
 
     coeff_data = get_coeff_data(field)
 
-    cutoffs = tuple([begin
-        if isa(basis, Union{RealFourier, ComplexFourier})
-            Int(floor(basis.meta.size / (2 * dealiasing_factor)))
-        else
-            size(coeff_data, i)
-        end
-    end for (i, basis) in enumerate(field.bases)]...)
+    cutoffs = ntuple(nb) do i
+        basis = field.bases[i]
+        isa(basis, Union{RealFourier, ComplexFourier}) ?
+            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
+    end
 
-    # Detect rfft dimensions
-    rfft_dims = tuple([begin
+    rfft_dims = ntuple(nb) do i
+        basis = field.bases[i]
         isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
-    end for (i, basis) in enumerate(field.bases)]...)
+    end
 
     # Apply spectral cutoff - this function handles GPU arrays automatically
     apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
@@ -86,25 +83,18 @@ high modes but cannot undo aliasing contamination of low modes. For exact
 dealiasing, use the padding approach (pad to 3N/2, multiply, truncate).
 """
 function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
+    nb = length(field.bases)
     # Compute cutoff wavenumbers for each Fourier basis dimension.
     # For the 2/3 rule (dealiasing_factor=1.5): keep modes with |k| <= N/3.
-    # The maximum resolved wavenumber is N/2, and we keep the bottom 1/dealiasing_factor
-    # fraction: cutoff = (N/2) / dealiasing_factor = N / (2 * dealiasing_factor).
-    cutoffs = tuple([begin
-        if isa(basis, Union{RealFourier, ComplexFourier})
-            Int(floor(basis.meta.size / (2 * dealiasing_factor)))
-        else
-            # Non-Fourier bases (Chebyshev, Legendre): no dealiasing cutoff
-            # Use a large value so these dimensions are never filtered
-            typemax(Int) >> 1
-        end
-    end for (i, basis) in enumerate(field.bases)]...)
+    cutoffs_check = ntuple(nb) do i
+        basis = field.bases[i]
+        isa(basis, Union{RealFourier, ComplexFourier}) ?
+            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : typemax(Int) >> 1
+    end
 
     # Skip dealiasing if any Fourier cutoff is 0 (grid too small for meaningful dealiasing).
-    # A cutoff of 0 would zero ALL non-DC modes, destroying the field's spatial variation.
-    # This happens for grids with N <= 2*dealiasing_factor (e.g., N<=3 for 3/2 rule).
-    any_zero_cutoff = any(c == 0 for (c, basis) in zip(cutoffs, field.bases)
-                          if isa(basis, Union{RealFourier, ComplexFourier}))
+    any_zero_cutoff = any(i -> isa(field.bases[i], Union{RealFourier, ComplexFourier}) &&
+                               cutoffs_check[i] == 0, 1:nb)
     if any_zero_cutoff
         return
     end
@@ -115,18 +105,16 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     coeff_data = get_coeff_data(field)
 
     # Recompute cutoffs using actual coeff array sizes for non-Fourier bases
-    cutoffs = tuple([begin
-        if isa(basis, Union{RealFourier, ComplexFourier})
-            Int(floor(basis.meta.size / (2 * dealiasing_factor)))
-        else
-            size(coeff_data, i)
-        end
-    end for (i, basis) in enumerate(field.bases)]...)
+    cutoffs = ntuple(nb) do i
+        basis = field.bases[i]
+        isa(basis, Union{RealFourier, ComplexFourier}) ?
+            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
+    end
 
-    # Detect which dimensions are rfft output (positive frequencies only)
-    rfft_dims = tuple([begin
+    rfft_dims = ntuple(nb) do i
+        basis = field.bases[i]
         isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
-    end for (i, basis) in enumerate(field.bases)]...)
+    end
 
     # Apply spectral cutoff - this function handles GPU arrays automatically
     apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
