@@ -79,27 +79,19 @@ function get_scaled_shape(field::ScalarField, scales::Union{Tuple, Nothing})
 
     # Handle nothing scales (use 1.0 for all dimensions)
     if scales === nothing
-        scales = tuple(ones(Float64, length(field.bases))...)
+        scales = ntuple(_ -> 1.0, length(field.bases))
     end
 
-    scaled_shape = Int[]
-    for (i, basis) in enumerate(field.bases)
-        base_size = basis.meta.size
+    nb = length(field.bases)
+    return ntuple(nb) do i
         scale = i <= length(scales) ? scales[i] : 1.0
-        scaled_size = ceil(Int, base_size * scale)
-        push!(scaled_shape, scaled_size)
+        ceil(Int, field.bases[i].meta.size * scale)
     end
-
-    return tuple(scaled_shape...)
 end
 
 """Get the current scaled grid shape."""
 function get_scaled_shape(field::ScalarField)
-    if field.scales === nothing
-        scales = tuple(ones(Float64, length(field.bases))...)
-    else
-        scales = field.scales
-    end
+    scales = field.scales === nothing ? ntuple(_ -> 1.0, length(field.bases)) : field.scales
     return get_scaled_shape(field, scales)
 end
 
@@ -140,8 +132,7 @@ end
     Used for computing nonlinear terms without aliasing errors.
     """
 function dealias_scales(field::ScalarField)
-    ndims = length(field.bases)
-    return tuple(fill(1.5, ndims)...)
+    return ntuple(_ -> 1.5, length(field.bases))
 end
 
 """Apply 3/2 dealiasing scales to the field."""

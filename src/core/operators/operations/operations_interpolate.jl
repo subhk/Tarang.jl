@@ -231,28 +231,19 @@ function interpolate_jacobi(field::ScalarField, basis::JacobiBasis, axis::Int, p
     result_size = ntuple(d -> size(coeffs, d), nd)
 
     # Build result by iterating over all non-axis indices
-    other_dims = [d for d in 1:nd if d != axis]
-    other_sizes = [size(coeffs, d) for d in other_dims]
+    other_dims = ntuple(i -> i < axis ? i : i + 1, nd - 1)
+    other_sizes = ntuple(i -> size(coeffs, other_dims[i]), nd - 1)
 
-    if isempty(other_sizes)
+    if nd == 1
         # All dimensions are this axis — 1D case handled above
         return clenshaw_fn(vec(coeffs), x_native)
     end
 
     result_data = zeros(eltype(coeffs), other_sizes...)
 
-    # Allocate index buffer once; axis slot is a constant UnitRange, other slots are Int.
-    full_idx = Vector{Union{UnitRange{Int}, Int}}(undef, nd)
-    full_idx[axis] = 1:size(coeffs, axis)
-
-    for idx in CartesianIndices(tuple(other_sizes...))
-        other_pos = 1
-        for d in 1:nd
-            if d != axis
-                full_idx[d] = idx[other_pos]
-                other_pos += 1
-            end
-        end
+    axis_range = 1:size(coeffs, axis)
+    for idx in CartesianIndices(other_sizes)
+        full_idx = ntuple(d -> d == axis ? axis_range : idx[d < axis ? d : d - 1], nd)
         slice = vec(coeffs[full_idx...])
         result_data[idx] = clenshaw_fn(slice, x_native)
     end
