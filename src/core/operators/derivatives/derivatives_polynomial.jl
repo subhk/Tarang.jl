@@ -1,6 +1,29 @@
 # Polynomial-basis derivative implementations for Chebyshev and Legendre bases.
 
 # ============================================================================
+# DCT-I plan cache — zero-allocation Chebyshev transforms
+#
+# Keyed by (N::Int, T::DataType) → (plan, scratch::Vector{T}).
+# `plan` is an FFTW in-place REDFT00 plan created once per (N,T) pair.
+# `scratch` is the contiguous buffer the plan transforms in-place; callers
+# copyto! their input into scratch, apply `plan * scratch`, then read scratch.
+# Single-threaded assumption: scratch is reused across calls at the same (N,T).
+# ============================================================================
+const _CHEB_DERIV_PLANS = Dict{Tuple{Int, DataType}, Tuple{Any, Vector}}()
+
+function _get_cheb_deriv_plan(N::Int, ::Type{T}) where {T<:AbstractFloat}
+    key = (N, T)
+    entry = get(_CHEB_DERIV_PLANS, key, nothing)
+    entry !== nothing && return entry::Tuple{Any, Vector}
+    v = Vector{T}(undef, N)
+    plan = FFTW.plan_r2r!(v, FFTW.REDFT00)
+    scratch = Vector{T}(undef, N)
+    e = (plan, scratch)
+    _CHEB_DERIV_PLANS[key] = e
+    return e
+end
+
+# ============================================================================
 # Chebyshev Derivative Implementation
 # ============================================================================
 
@@ -35,9 +58,9 @@ end
     _evaluate_local_chebyshev_derivative!(result, operand, axis, order, layout)
 
 Evaluate Chebyshev derivative on a local axis (no MPI needed).
+Uses cached FFTW plans and @view slices to avoid per-call allocations.
 """
 function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    # Get the basis for the specified axis
     basis = operand.bases[axis]
     N = basis.meta.size
     a, b = basis.meta.bounds
@@ -46,212 +69,214 @@ function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::Sca
         throw(ArgumentError("Chebyshev basis bounds must satisfy a < b, got ($a, $b)"))
     end
 
-    # Domain transformation scale factor (for mapping [a,b] to [-1,1])
     scale = 2.0 / (b - a)
 
-    # Use grid data for computation
     data_g = get_grid_data(operand)
     dims = ndims(data_g)
     data_shape = size(data_g)
 
-    # Check if we're on GPU - DCT requires CPU computation
     use_gpu = is_gpu_array(data_g)
+    data_g_cpu = use_gpu ? Array(data_g) : data_g
+
+    eltype_data = eltype(data_g_cpu)
+
+    # For CPU path, write derivative result directly into the result field's
+    # pre-allocated grid buffer — avoids the intermediate zeros() allocation
+    # and the final copy. For GPU, compute on CPU then transfer.
     if use_gpu
-        # Copy to CPU for DCT operations (CUFFT doesn't support DCT)
-        data_g_cpu = Array(data_g)
+        deriv_g_cpu = zeros(eltype_data, data_shape)
     else
-        data_g_cpu = data_g
+        deriv_g_cpu = get_grid_data(result)
+        if deriv_g_cpu === nothing || size(deriv_g_cpu) != data_shape || eltype(deriv_g_cpu) != eltype_data
+            deriv_g_cpu = zeros(eltype_data, data_shape)
+            set_grid_data!(result, deriv_g_cpu)
+        end
     end
 
-    # Helper: apply chebyshev_derivative_1d `order` times to support higher-order derivatives
-    function _cheb_deriv_nth(vec, s, ord)
-        d = vec
-        for _ in 1:ord
-            d = chebyshev_derivative_1d(d, s)
-        end
-        return d
-    end
+    # Pre-allocate one temp vector for higher-order (≥2) derivatives.
+    # For order=1 this is allocated but never used; that's one small alloc
+    # per evaluate call, acceptable to keep the inner helpers uniform.
+    tmp_buf = Vector{eltype_data}(undef, data_shape[axis])
 
     if dims == 1
-        # 1D case: use DCT directly
-        deriv_g_cpu = _cheb_deriv_nth(data_g_cpu, scale, order)
-        if use_gpu
-            get_grid_data(result) .= copy_to_device(deriv_g_cpu, get_grid_data(result))
-        else
-            get_grid_data(result) .= deriv_g_cpu
-        end
-        result.current_layout = :g
+        _cheb_deriv_nth_inplace!(deriv_g_cpu, data_g_cpu, scale, order, tmp_buf)
 
     elseif dims == 2
-        # 2D case: apply derivative along specified axis only
-        deriv_g_cpu = zeros(eltype(data_g_cpu), data_shape)
-
         if axis == 1
-            # Derivative along first axis: process each column
             for j in 1:data_shape[2]
-                col = data_g_cpu[:, j]
-                deriv_g_cpu[:, j] .= _cheb_deriv_nth(col, scale, order)
+                _cheb_deriv_nth_inplace!(@view(deriv_g_cpu[:, j]),
+                                         @view(data_g_cpu[:, j]),
+                                         scale, order, tmp_buf)
             end
         else  # axis == 2
-            # Derivative along second axis: process each row
-            # Get scale factor for axis 2
             basis2 = operand.bases[2]
             a2, b2 = basis2.meta.bounds
             scale2 = 2.0 / (b2 - a2)
             for i in 1:data_shape[1]
-                row = data_g_cpu[i, :]
-                deriv_g_cpu[i, :] .= _cheb_deriv_nth(row, scale2, order)
+                _cheb_deriv_nth_inplace!(@view(deriv_g_cpu[i, :]),
+                                         @view(data_g_cpu[i, :]),
+                                         scale2, order, tmp_buf)
             end
         end
 
-        if use_gpu
-            get_grid_data(result) .= copy_to_device(deriv_g_cpu, get_grid_data(result))
-        else
-            get_grid_data(result) .= deriv_g_cpu
-        end
-        result.current_layout = :g
-
     elseif dims == 3
-        # 3D case
-        deriv_g_cpu = zeros(eltype(data_g_cpu), data_shape)
-
         if axis == 1
             for j in 1:data_shape[2], k in 1:data_shape[3]
-                col = data_g_cpu[:, j, k]
-                deriv_g_cpu[:, j, k] .= _cheb_deriv_nth(col, scale, order)
+                _cheb_deriv_nth_inplace!(@view(deriv_g_cpu[:, j, k]),
+                                         @view(data_g_cpu[:, j, k]),
+                                         scale, order, tmp_buf)
             end
         elseif axis == 2
             basis2 = operand.bases[2]
             a2, b2 = basis2.meta.bounds
             scale2 = 2.0 / (b2 - a2)
             for i in 1:data_shape[1], k in 1:data_shape[3]
-                slice = data_g_cpu[i, :, k]
-                deriv_g_cpu[i, :, k] .= _cheb_deriv_nth(slice, scale2, order)
+                _cheb_deriv_nth_inplace!(@view(deriv_g_cpu[i, :, k]),
+                                         @view(data_g_cpu[i, :, k]),
+                                         scale2, order, tmp_buf)
             end
         else  # axis == 3
             basis3 = operand.bases[3]
             a3, b3 = basis3.meta.bounds
             scale3 = 2.0 / (b3 - a3)
             for i in 1:data_shape[1], j in 1:data_shape[2]
-                slice = data_g_cpu[i, j, :]
-                deriv_g_cpu[i, j, :] .= _cheb_deriv_nth(slice, scale3, order)
+                _cheb_deriv_nth_inplace!(@view(deriv_g_cpu[i, j, :]),
+                                         @view(data_g_cpu[i, j, :]),
+                                         scale3, order, tmp_buf)
             end
         end
-
-        if use_gpu
-            get_grid_data(result) .= copy_to_device(deriv_g_cpu, get_grid_data(result))
-        else
-            get_grid_data(result) .= deriv_g_cpu
-        end
-        result.current_layout = :g
     else
         throw(ArgumentError("Chebyshev derivative only implemented for 1D, 2D, and 3D"))
     end
 
-    # If coefficient space is requested, transform result
+    if use_gpu
+        get_grid_data(result) .= copy_to_device(deriv_g_cpu, get_grid_data(result))
+    end
+    result.current_layout = :g
+
+    # If coefficient space is requested, apply forward DCT in-place
     if layout == :c
-        # Apply forward DCT to transform grid values to Chebyshev coefficients
         if use_gpu
             result_data_cpu = Array(get_grid_data(result))
         else
             result_data_cpu = get_grid_data(result)
         end
 
-        if dims == 1
-            N_result = size(result_data_cpu, 1)
-            coeffs = FFTW.r2r(result_data_cpu, FFTW.REDFT00)
-            coeffs ./= (N_result - 1)
-            coeffs[1] /= 2
-            coeffs[end] /= 2
-            if use_gpu
-                get_coeff_data(result) .= copy_to_device(coeffs, get_coeff_data(result))
-            else
-                get_coeff_data(result) .= coeffs
-            end
-        elseif dims == 2
-            coeffs = copy(result_data_cpu)
-            data_shape_coeff = size(coeffs)
+        _cheb_coeff_convert!(result_data_cpu, operand, dims, eltype_data)
 
-            if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
-                N1 = data_shape_coeff[1]
-                for j in 1:data_shape_coeff[2]
-                    col = coeffs[:, j]
-                    col_dct = FFTW.r2r(col, FFTW.REDFT00)
-                    col_dct ./= (N1 - 1)
-                    col_dct[1] /= 2
-                    col_dct[end] /= 2
-                    coeffs[:, j] .= col_dct
-                end
-            end
-
-            if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
-                N2 = data_shape_coeff[2]
-                for i in 1:data_shape_coeff[1]
-                    row = coeffs[i, :]
-                    row_dct = FFTW.r2r(row, FFTW.REDFT00)
-                    row_dct ./= (N2 - 1)
-                    row_dct[1] /= 2
-                    row_dct[end] /= 2
-                    coeffs[i, :] .= row_dct
-                end
-            end
-
-            if use_gpu
-                get_coeff_data(result) .= copy_to_device(coeffs, get_coeff_data(result))
-            else
-                get_coeff_data(result) .= coeffs
-            end
-        elseif dims == 3
-            coeffs = copy(result_data_cpu)
-            data_shape_coeff = size(coeffs)
-
-            if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
-                N1 = data_shape_coeff[1]
-                for j in 1:data_shape_coeff[2], k in 1:data_shape_coeff[3]
-                    col = coeffs[:, j, k]
-                    col_dct = FFTW.r2r(col, FFTW.REDFT00)
-                    col_dct ./= (N1 - 1)
-                    col_dct[1] /= 2
-                    col_dct[end] /= 2
-                    coeffs[:, j, k] .= col_dct
-                end
-            end
-
-            if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
-                N2 = data_shape_coeff[2]
-                for i in 1:data_shape_coeff[1], k in 1:data_shape_coeff[3]
-                    slice = coeffs[i, :, k]
-                    slice_dct = FFTW.r2r(slice, FFTW.REDFT00)
-                    slice_dct ./= (N2 - 1)
-                    slice_dct[1] /= 2
-                    slice_dct[end] /= 2
-                    coeffs[i, :, k] .= slice_dct
-                end
-            end
-
-            if operand.bases[3] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
-                N3 = data_shape_coeff[3]
-                for i in 1:data_shape_coeff[1], j in 1:data_shape_coeff[2]
-                    slice = coeffs[i, j, :]
-                    slice_dct = FFTW.r2r(slice, FFTW.REDFT00)
-                    slice_dct ./= (N3 - 1)
-                    slice_dct[1] /= 2
-                    slice_dct[end] /= 2
-                    coeffs[i, j, :] .= slice_dct
-                end
-            end
-
-            if use_gpu
-                get_coeff_data(result) .= copy_to_device(coeffs, get_coeff_data(result))
-            else
-                get_coeff_data(result) .= coeffs
-            end
+        if use_gpu
+            get_coeff_data(result) .= copy_to_device(result_data_cpu, get_coeff_data(result))
+        else
+            get_coeff_data(result) .= result_data_cpu
         end
         result.current_layout = :c
     end
+end
 
-    # NOTE: Higher-order derivatives are already handled by _cheb_deriv_nth
-    # which loops `order` times internally. No additional recursion needed here.
+"""
+    _cheb_coeff_convert!(data, operand, dims, eltype_data)
+
+Convert grid-space Chebyshev data to coefficient space in-place using cached
+DCT-I plans. Operates on `data` directly — no copy() of the input.
+"""
+function _cheb_coeff_convert!(data::AbstractArray, operand::ScalarField, dims::Int, ::Type{T}) where {T<:AbstractFloat}
+    data_shape = size(data)
+
+    if dims == 1
+        N1 = data_shape[1]
+        plan, scratch = _get_cheb_deriv_plan(N1, T)
+        copyto!(scratch, data)
+        plan * scratch
+        inv_n = 1.0 / (N1 - 1)
+        @inbounds for i in 1:N1; scratch[i] *= inv_n; end
+        scratch[1] /= 2; scratch[end] /= 2
+        data .= scratch
+
+    elseif dims == 2
+        if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+            N1 = data_shape[1]
+            plan, scratch = _get_cheb_deriv_plan(N1, T)
+            inv_n = 1.0 / (N1 - 1)
+            for j in 1:data_shape[2]
+                col = @view data[:, j]
+                copyto!(scratch, col)
+                plan * scratch
+                @inbounds for i in 1:N1; scratch[i] *= inv_n; end
+                scratch[1] /= 2; scratch[end] /= 2
+                col .= scratch
+            end
+        end
+        if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+            N2 = data_shape[2]
+            plan, scratch = _get_cheb_deriv_plan(N2, T)
+            inv_n = 1.0 / (N2 - 1)
+            for i in 1:data_shape[1]
+                row = @view data[i, :]
+                copyto!(scratch, row)
+                plan * scratch
+                @inbounds for k in 1:N2; scratch[k] *= inv_n; end
+                scratch[1] /= 2; scratch[end] /= 2
+                row .= scratch
+            end
+        end
+
+    elseif dims == 3
+        if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+            N1 = data_shape[1]
+            plan, scratch = _get_cheb_deriv_plan(N1, T)
+            inv_n = 1.0 / (N1 - 1)
+            for j in 1:data_shape[2], k in 1:data_shape[3]
+                col = @view data[:, j, k]
+                copyto!(scratch, col)
+                plan * scratch
+                @inbounds for i in 1:N1; scratch[i] *= inv_n; end
+                scratch[1] /= 2; scratch[end] /= 2
+                col .= scratch
+            end
+        end
+        if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+            N2 = data_shape[2]
+            plan, scratch = _get_cheb_deriv_plan(N2, T)
+            inv_n = 1.0 / (N2 - 1)
+            for i in 1:data_shape[1], k in 1:data_shape[3]
+                sl = @view data[i, :, k]
+                copyto!(scratch, sl)
+                plan * scratch
+                @inbounds for p in 1:N2; scratch[p] *= inv_n; end
+                scratch[1] /= 2; scratch[end] /= 2
+                sl .= scratch
+            end
+        end
+        if operand.bases[3] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
+            N3 = data_shape[3]
+            plan, scratch = _get_cheb_deriv_plan(N3, T)
+            inv_n = 1.0 / (N3 - 1)
+            for i in 1:data_shape[1], j in 1:data_shape[2]
+                sl = @view data[i, j, :]
+                copyto!(scratch, sl)
+                plan * scratch
+                @inbounds for p in 1:N3; scratch[p] *= inv_n; end
+                scratch[1] /= 2; scratch[end] /= 2
+                sl .= scratch
+            end
+        end
+    end
+end
+
+"""
+    _cheb_deriv_nth_inplace!(out, inp, scale, order, tmp)
+
+Apply Chebyshev derivative `order` times, writing into `out`.
+`tmp` is a pre-allocated buffer used as intermediate for order ≥ 2.
+Zero-allocation on warm FFTW plan cache.
+"""
+function _cheb_deriv_nth_inplace!(out::AbstractVector, inp::AbstractVector,
+                                   scale::Float64, order::Int, tmp::AbstractVector)
+    chebyshev_derivative_1d!(out, inp, scale)
+    for _ in 2:order
+        copyto!(tmp, out)
+        chebyshev_derivative_1d!(out, tmp, scale)
+    end
 end
 
 """
@@ -284,56 +309,66 @@ end
     chebyshev_derivative_1d!(result, f, scale)
 
 In-place Chebyshev derivative. Writes result into `result`.
+Uses cached FFTW in-place DCT-I plans — zero-allocation after first call
+for each (N, eltype) pair.
 """
-function chebyshev_derivative_1d!(result::AbstractVector, f::AbstractVector, scale::Float64)
+function chebyshev_derivative_1d!(result::AbstractVector{T}, f::AbstractVector{T}, scale::Float64) where {T<:AbstractFloat}
     N = length(f)
     if N <= 1
-        fill!(result, zero(eltype(f)))
+        fill!(result, zero(T))
         return result
     end
 
-    # Reverse f into result as workspace (ascending → descending grid)
+    plan, scratch = _get_cheb_deriv_plan(N, T)
+
+    # Reverse f into result (ascending → descending Chebyshev grid)
     @inbounds for i in 1:N
         result[i] = f[N - i + 1]
     end
 
-    # Forward DCT-I to get Chebyshev coefficients (allocates, but only once per call)
-    coeffs = FFTW.r2r(result, FFTW.REDFT00)
+    # Forward DCT-I via cached in-place plan (zero-allocation)
+    copyto!(scratch, result)
+    plan * scratch  # scratch ← DCT-I(reversed f) = Chebyshev coefficients
 
-    # Normalize: DCT-I on N points needs (N-1) normalization
+    # Normalize: DCT-I on N points needs 1/(N-1) factor
     inv_nm1 = 1.0 / (N - 1)
     @inbounds for i in 1:N
-        coeffs[i] *= inv_nm1
+        scratch[i] *= inv_nm1
     end
-    coeffs[1] /= 2
-    coeffs[end] /= 2
+    scratch[1] /= 2
+    scratch[end] /= 2
 
-    # Apply Chebyshev derivative recurrence in-place into result:
-    # c'_{k-1} = 2k * c_k + c'_{k+1}
-    fill!(result, zero(eltype(f)))
+    # Derivative recurrence: c'_{k-1} = 2k c_k + c'_{k+1}, write into result
+    fill!(result, zero(T))
     @inbounds for k in (N-1):-1:1
-        result[k] = 2 * k * coeffs[k + 1]
+        result[k] = 2 * k * scratch[k + 1]
         if k + 2 <= N
             result[k] += result[k + 2]
         end
     end
-
     result[1] /= 2
     @. result *= scale
 
-    # Un-normalize for inverse DCT-I
+    # Un-normalize endpoints for inverse DCT-I
     result[1] *= 2
     result[end] *= 2
 
-    # Inverse DCT-I to get derivative at descending grid
-    deriv_std = FFTW.r2r(result, FFTW.REDFT00)
+    # Inverse DCT-I via same cached plan (zero-allocation)
+    copyto!(scratch, result)
+    plan * scratch  # scratch ← DCT-I(derivative coeffs) = derivative at descending grid
 
-    # Reverse back to ascending grid and normalize, writing into result
+    # Reverse back to ascending grid and normalize
     @inbounds for i in 1:N
-        result[i] = deriv_std[N - i + 1] / 2
+        result[i] = scratch[N - i + 1] / 2
     end
 
     return result
+end
+
+# AbstractVector fallback for non-Float inputs (e.g. views of mixed type)
+function chebyshev_derivative_1d!(result::AbstractVector, f::AbstractVector, scale::Float64)
+    T = promote_type(eltype(result), eltype(f), Float64)
+    chebyshev_derivative_1d!(convert(Vector{T}, result), convert(Vector{T}, f), scale)
 end
 
 # ============================================================================

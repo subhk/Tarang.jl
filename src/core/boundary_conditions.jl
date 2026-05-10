@@ -175,6 +175,7 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
     time_dependent_bcs::Vector{Int}  # Indices of time-dependent BCs
     space_dependent_bcs::Vector{Int}  # Indices of space-dependent BCs
     bc_update_required::Bool  # Flag indicating if BC values need updating
+    nonconstant_bc_indices::Vector{Int}  # Cached sorted union of time+space dependent BC indices
 
     # Equation index tracking
     bc_equation_indices::Dict{Int, Int}  # bc_index => equation_index in problem.equations
@@ -195,6 +196,7 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
         new{Arch}(AbstractBoundaryCondition[], Dict{String, Any}(),
             Dict{String, Any}(), Dict{String, Any}(), nothing,
             Dict{String, Any}(), Int[], Int[], false,
+            Int[],
             Dict{Int, Int}(),
             workspace, bc_cache, perf_stats, architecture)
     end
@@ -390,10 +392,13 @@ function add_bc!(manager::BoundaryConditionManager, bc::AbstractBoundaryConditio
         push!(manager.time_dependent_bcs, bc_index)
         manager.bc_update_required = true
     end
-    
+
     if hasfield(typeof(bc), :is_space_dependent) && bc.is_space_dependent
         push!(manager.space_dependent_bcs, bc_index)
     end
+
+    # Invalidate cached union so _apply_bc_values_to_equations! rebuilds it
+    empty!(manager.nonconstant_bc_indices)
     
     return manager
 end

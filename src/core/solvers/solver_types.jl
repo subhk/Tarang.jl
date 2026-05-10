@@ -570,10 +570,14 @@ function _apply_bc_values_to_equations!(solver::InitialValueSolver, current_time
 
     # Iterate over the union of time- and space-dependent BC indices so
     # every non-constant BC gets its equation_data refreshed.
-    bc_indices = Int[]
-    append!(bc_indices, bc_manager.time_dependent_bcs)
-    append!(bc_indices, bc_manager.space_dependent_bcs)
-    unique!(bc_indices)
+    # Use the pre-computed cache on bc_manager; rebuild only when empty
+    # (invalidated by add_bc! at setup time, stable throughout the solve).
+    bc_indices = bc_manager.nonconstant_bc_indices
+    if isempty(bc_indices)
+        append!(bc_indices, bc_manager.time_dependent_bcs)
+        append!(bc_indices, bc_manager.space_dependent_bcs)
+        unique!(bc_indices)
+    end
 
     for bc_idx in bc_indices
         eq_idx = get(bc_manager.bc_equation_indices, bc_idx, 0)
