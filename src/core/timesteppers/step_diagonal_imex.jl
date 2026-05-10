@@ -249,8 +249,8 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         state.timestepper_data[:iteration] = 0
     end
 
-    iteration = state.timestepper_data[:iteration]
-    F_history = state.timestepper_data[:F_history]
+    iteration = state.timestepper_data[:iteration]::Int
+    F_history = state.timestepper_data[:F_history]::Vector{Vector{ScalarField}}
 
     # Evaluate current RHS
     F_n = evaluate_rhs(solver, current_state, t)
