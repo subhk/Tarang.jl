@@ -392,12 +392,20 @@ function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::Cheby
         return out
     end
 
-    in_shape = size(in)
-    in_eltype = eltype(in)
-    grid_size = in_shape[ax]
-    coeff_size = transform.coeff_size
+    scratch = _get_or_alloc_cheb_forward_scratch!(transform, size(in), eltype(in))
+    # Function barrier: scratch is Any from the Dict; dispatch here specializes
+    # _apply_forward_kernel! on the concrete ChebScratch{T,N,P} type so that
+    # mul!(tmp, plan, src) inside is statically dispatched.
+    return _apply_forward_kernel!(out, in, transform, scratch)
+end
 
-    scratch = _get_or_alloc_cheb_forward_scratch!(transform, in_shape, in_eltype)
+function _apply_forward_kernel!(out::AbstractArray, in::AbstractArray,
+                                transform::ChebyshevTransform,
+                                scratch::ChebScratch{FT, N, P}) where {FT, N, P}
+    ax = transform.axis
+    in_eltype = eltype(in)
+    grid_size = size(in, ax)
+    coeff_size = transform.coeff_size
 
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
     norm_factor = real_T(grid_size > 1 ? 1.0 / (grid_size - 1) : 1.0)
@@ -484,12 +492,20 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Cheb
         return out
     end
 
-    in_shape = size(in)
+    scratch = _get_or_alloc_cheb_backward_scratch!(transform, size(in), eltype(in))
+    # Function barrier: same pattern as _apply_forward! — dispatch here specializes
+    # _apply_backward_kernel! on the concrete ChebScratch{T,N,P} type.
+    return _apply_backward_kernel!(out, in, transform, scratch)
+end
+
+function _apply_backward_kernel!(out::AbstractArray, in::AbstractArray,
+                                 transform::ChebyshevTransform,
+                                 scratch::ChebScratch{FT, N, P}) where {FT, N, P}
+    ax = transform.axis
     in_eltype = eltype(in)
-    coeff_size = in_shape[ax]
+    coeff_size = size(in, ax)
     grid_size = transform.grid_size
 
-    scratch = _get_or_alloc_cheb_backward_scratch!(transform, in_shape, in_eltype)
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
     two = real_T(2.0)
     half = real_T(0.5)

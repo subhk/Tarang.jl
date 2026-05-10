@@ -70,12 +70,12 @@ Fields:
 - `plan` — FFTW r2r REDFT00 plan. Created with `plan_r2r(tmp_real, REDFT00,
   (axis,))` and reused via `mul!`.
 """
-mutable struct ChebScratch{T<:AbstractFloat, N}
+mutable struct ChebScratch{T<:AbstractFloat, N, P}
     real_in::Array{T, N}
     imag_in::Union{Nothing, Array{T, N}}
     tmp_real::Array{T, N}
     tmp_imag::Union{Nothing, Array{T, N}}
-    plan::Any
+    plan::P
 end
 
 mutable struct ChebyshevTransform <: Transform
@@ -100,11 +100,11 @@ mutable struct ChebyshevTransform <: Transform
     axis::Int
 
     # ── Per-shape scratch caches for zero-alloc in-place transforms ────────
-    # Keyed by `(input_shape, input_eltype)`. Each entry holds a ChebScratch
-    # with pre-allocated real/imag split buffers, r2r scratch, and plan.
-    # See ChebScratch above for details.
-    fwd_scratch::Dict{Tuple, ChebScratch}
-    bwd_scratch::Dict{Tuple, ChebScratch}
+    # Keyed by `(input_shape, input_eltype)`. Each entry holds a ChebScratch{T,N,P}
+    # stored as Any to allow heterogeneous plan types; function barriers in
+    # _apply_forward! and _apply_backward! recover the concrete type.
+    fwd_scratch::Dict{Tuple, Any}
+    bwd_scratch::Dict{Tuple, Any}
 
     function ChebyshevTransform(basis::ChebyshevT)
         new(
@@ -113,8 +113,8 @@ mutable struct ChebyshevTransform <: Transform
             nothing, nothing,      # FFTW plans
             0.0, 0.0, 0.0, 0.0,    # Scaling factors
             0, 0, 0, 0,            # Sizes and axis
-            Dict{Tuple, ChebScratch}(),
-            Dict{Tuple, ChebScratch}(),
+            Dict{Tuple, Any}(),
+            Dict{Tuple, Any}(),
         )
     end
 end
