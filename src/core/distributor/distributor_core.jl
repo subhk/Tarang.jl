@@ -865,7 +865,7 @@ function get_layout(dist::Distributor, bases::Tuple{Vararg{Basis}}, dtype::Type=
     dist.performance_stats.cache_misses += 1
 
     # Calculate global shape from bases
-    global_shape = tuple([basis.meta.size for basis in bases]...)
+    global_shape = ntuple(i -> bases[i].meta.size, length(bases))
 
     # Get or create Pencil object for this configuration
     pencil_obj = nothing

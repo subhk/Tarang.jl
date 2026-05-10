@@ -12,13 +12,20 @@ not the equation structure. Each state field gets a corresponding RHS field.
 Equations with time derivatives contribute their F_expr to the appropriate state field;
 constraint equations (no dt) contribute zero.
 """
+# Function barriers: specialize execute_lazy_rhs! on the concrete plan type P so
+# that all field accesses inside are type-stable despite rhs_plan::Any in the struct.
+@inline _exec_lazy_rhs!(plan::P, state, solver) where {P} =
+    execute_lazy_rhs!(plan, state, solver)
+@inline _exec_lazy_rhs_buffered!(plan::P, state, solver) where {P} =
+    execute_lazy_rhs_buffered!(plan, state, solver)
+
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{<:ScalarField}, time::Float64)
     problem = solver.problem
 
     # Use the type-specialized lazy RHS plan if available (JIT-specialized,
     # zero-dispatch, broadcasting-fused).
     if solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
-        return execute_lazy_rhs!(solver.rhs_plan, state, solver)
+        return _exec_lazy_rhs!(solver.rhs_plan, state, solver)
     end
 
     # Fallback: interpreted expression evaluation (original path)
@@ -228,7 +235,7 @@ function evaluate_rhs_buffered(
     time::Float64,
 )
     if solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
-        return execute_lazy_rhs_buffered!(solver.rhs_plan, state, solver)
+        return _exec_lazy_rhs_buffered!(solver.rhs_plan, state, solver)
     end
     return evaluate_rhs(solver, state, time)
 end

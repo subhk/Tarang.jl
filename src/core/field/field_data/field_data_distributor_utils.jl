@@ -245,5 +245,5 @@ Get all global sizes for a domain as a tuple.
 - Tuple of global sizes for each dimension
 """
 function get_global_sizes(dist::Distributor, domain::Domain)
-    return tuple([basis.meta.size for basis in domain.bases]...)
+    nb = length(domain.bases); return ntuple(i -> domain.bases[i].meta.size, nb)
 end

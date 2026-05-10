@@ -397,7 +397,7 @@ end
 """Get global shape for domain in specified layout"""
 function global_shape(domain::Domain, layout_name::Symbol=:g)
     if layout_name == :g  # Grid layout
-        return tuple([basis.meta.size for basis in domain.bases]...)
+        nb = length(domain.bases); return ntuple(i -> domain.bases[i].meta.size, nb)
     elseif layout_name == :c  # Coefficient layout
         # Use context-aware shape: in MPI+PencilFFTs mode, only the first
         # RealFourier axis uses RFFT (N/2+1), others use FFT (full N).

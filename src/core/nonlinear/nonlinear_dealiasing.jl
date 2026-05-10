@@ -611,5 +611,5 @@ end
     to suppress aliasing from quadratic nonlinear interactions.
     """
 function get_dealiasing_cutoffs(shape::Tuple, dealiasing_factor::Float64=1.5)
-    return tuple([floor(Int, n / (2 * dealiasing_factor)) for n in shape]...)
+    return ntuple(i -> floor(Int, shape[i] / (2 * dealiasing_factor)), length(shape))
 end
