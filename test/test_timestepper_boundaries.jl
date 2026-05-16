@@ -60,6 +60,21 @@ end
     @test solver.performance_stats.total_steps >= 1
 end
 
+@testset "Timestep history update reuses bounded storage" begin
+    domain = PeriodicDomain(8)
+    u = ScalarField(domain, "u")
+    set!(u, (x,) -> sin(x))
+
+    state = Tarang.TimestepperState(RK111(), 0.01, ScalarField[u])
+    Tarang.update_timestep_history!(state, 0.02)
+    @test state.dt_history == [0.01, 0.02]
+
+    alloc = @allocated Tarang.update_timestep_history!(state, 0.03)
+    @test alloc == 0
+    @test state.dt_history == [0.02, 0.03]
+    @test Tarang.get_previous_timestep(state) == 0.02
+end
+
 @testset "State Vector Transport Helpers" begin
     domain = PeriodicDomain(8)
     u = ScalarField(domain, "u")

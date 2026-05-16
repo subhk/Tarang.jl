@@ -610,12 +610,18 @@ Update the timestep history with the new timestep.
 function update_timestep_history!(state::TimestepperState, dt::Float64)
     # Update the current timestep so all step functions see the correct dt
     state.dt = dt
-    push!(state.dt_history, dt)
-    # Keep history bounded
+
     max_history = get_max_timestep_history(state.timestepper)
-    if length(state.dt_history) > max_history
-        popfirst!(state.dt_history)
+    history = state.dt_history
+    if length(history) < max_history
+        push!(history, dt)
+    else
+        @inbounds for i in 1:(length(history) - 1)
+            history[i] = history[i + 1]
+        end
+        history[end] = dt
     end
+    return nothing
 end
 
 """
