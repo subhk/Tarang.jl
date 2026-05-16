@@ -69,16 +69,23 @@ using Test
                 dest = similar(b)
                 MS.solve!(dest, solver, b)
                 MS.solve!(dest, solver, b)
-                # Average repeated solves so Julia 1.12's fixed @allocated
-                # measurement overhead inside testsets is not counted as
-                # per-call solver allocation.
-                repeats = 16
-                allocs = (@allocated begin
+                # Julia 1.12 can charge fixed @allocated bookkeeping inside
+                # testsets; subtract an empty-loop baseline and average so the
+                # assertion measures the solver call itself.
+                repeats = 128
+                baseline_allocs = @allocated begin
+                    for _ in 1:repeats
+                        nothing
+                    end
+                    nothing
+                end
+                solve_allocs = @allocated begin
                     for _ in 1:repeats
                         MS.solve!(dest, solver, b)
                     end
                     nothing
-                end) / repeats
+                end
+                allocs = max(0, solve_allocs - baseline_allocs) / repeats
                 @test allocs <= 64
                 @test dest ≈ MS.solve(solver, b)
             end
@@ -95,6 +102,19 @@ using Test
         @test solver.workspace isa Vector{Vector{ComplexF64}}
         @test length(solver.workspace) == Threads.nthreads()
         @test all(length(workspace) == maximum(size(A)) for workspace in solver.workspace)
+    end
+
+    @testset "SPQR solver handles rank-deficient systems" begin
+        MS = Tarang.MatSolvers
+        A = sparse(ComplexF64[1 0 0;
+                              0 0 0])
+        b = ComplexF64[2, 0]
+        solver = MS.SPQRSolver(A)
+        dest = fill(ComplexF64(NaN), 3)
+
+        @test solver.rank < solver.n
+        MS.solve!(dest, solver, b)
+        @test dest ≈ ComplexF64[2, 0, 0]
     end
 
     @testset "mass inverse in-place allocations" begin

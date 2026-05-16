@@ -590,7 +590,10 @@ function solve!(dest::AbstractVector, s::SPQRSolver{T}, rhs::AbstractVector) whe
         x[i] = rank_rhs[i]
     end
     if s.rank < s.n
-        fill!(x, zero(T), s.rank + 1, s.n)
+        z = zero(T)
+        @inbounds for i in (s.rank + 1):s.n
+            x[i] = z
+        end
     end
 
     if isempty(s.inv_cpiv)
