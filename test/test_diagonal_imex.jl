@@ -108,6 +108,46 @@ import Tarang: SpectralLinearOperator
         end
     end
 
+    @testset "RK222 explicit convergence with algebraic constraint" begin
+        # A decoupled algebraic equation makes the mass matrix singular, but
+        # it must not change the RK update order for the evolving variable.
+        # Solve du/dt = -u with u(0) = 1, exact solution: u(t) = exp(-t).
+        T_final = 1.0
+
+        function rk222_constrained_solve(dt)
+            domain = PeriodicDomain(4)
+            u = ScalarField(domain, "u")
+            lambda = ScalarField(domain, "lambda")
+            set!(u, (x,) -> 1.0)
+
+            problem = IVP([u, lambda])
+            add_equation!(problem, "∂t(u) = -u")
+            add_equation!(problem, "lambda = 0")
+            solver = InitialValueSolver(problem, RK222(); dt=dt)
+
+            nsteps = round(Int, T_final / dt)
+            for _ in 1:nsteps
+                step!(solver)
+            end
+
+            ensure_layout!(u, :g)
+            return Tarang.get_grid_data(u)[1]
+        end
+
+        dt1 = 0.05
+        dt2 = 0.025
+        u1 = rk222_constrained_solve(dt1)
+        u2 = rk222_constrained_solve(dt2)
+        exact = exp(-T_final)
+
+        err1 = abs(u1 - exact)
+        err2 = abs(u2 - exact)
+
+        @test err2 > 0
+        rate = log2(err1 / err2)
+        @test rate > 1.5
+    end
+
     @testset "RK111 explicit convergence" begin
         # 1st order Forward Euler: error ratio ~2 when dt halved
         T_final = 0.5

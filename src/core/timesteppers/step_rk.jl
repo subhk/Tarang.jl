@@ -171,33 +171,126 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
         mul!(F_imp_vecs[s], L_matrix, Xs_vec)
     end
 
-    # Final update
-    if M_is_singular
-        # DAE system: the last stage value from the (M + dt*a*L) solve already
-        # satisfies the algebraic constraints (div-free, BCs, gauge).
-        # For stiffly accurate SDIRK methods (b_imp = A_imp[end,:]),
-        # X_last is the correct implicit solution. Using it directly avoids
-        # the need for M^{-1} which doesn't exist for singular M.
-        X_new_vec = Xs_vec
-    else
-        # Standard update: M*X_{n+1} = M*X_n + dt*Σ(b_exp*F - b_imp*L*X)
-        copyto!(rhs_vec, MX_n_vec)
-        @inbounds for s in 1:stages
-            be = dt * b_exp[s]
-            bi = dt * b_imp[s]
-            if abs(be) > 1e-14
-                @. rhs_vec += be * F_exp_vecs[s]
-            end
-            if abs(bi) > 1e-14
-                @. rhs_vec -= bi * F_imp_vecs[s]
-            end
+    # Final update: M*X_{n+1} = M*X_n + dt*Σ(b_exp*F - b_imp*L*X)
+    copyto!(rhs_vec, MX_n_vec)
+    @inbounds for s in 1:stages
+        be = dt * b_exp[s]
+        bi = dt * b_imp[s]
+        if abs(be) > 1e-14
+            @. rhs_vec += be * F_exp_vecs[s]
         end
-        X_new_vec = _timestep_vector_buffer!(state, :imex_rk_X_new_vec, vector_size)
+        if abs(bi) > 1e-14
+            @. rhs_vec -= bi * F_imp_vecs[s]
+        end
+    end
+
+    X_new_vec = _timestep_vector_buffer!(state, :imex_rk_X_new_vec, vector_size)
+    if M_is_singular
+        _solve_constrained_mass_update!(X_new_vec, state, solver, M_matrix, L_matrix, rhs_vec)
+    else
         _apply_mass_inverse!(X_new_vec, M_factor, rhs_vec)
     end
 
     _push_vector_state!(state.history, X_new_vec, current_state, 1)
     return nothing
+end
+
+function _solve_constrained_mass_update!(dest::AbstractVector{ComplexF64},
+                                         state::TimestepperState,
+                                         solver::InitialValueSolver,
+                                         M_matrix::AbstractMatrix,
+                                         L_matrix::AbstractMatrix,
+                                         rhs::AbstractVector{ComplexF64})
+    lhs_solver, zero_rows = _get_constrained_mass_solver!(state, M_matrix, L_matrix)
+    constrained_rhs = _timestep_vector_buffer!(state, :imex_rk_constrained_rhs, length(rhs))
+    copyto!(constrained_rhs, rhs)
+    _apply_global_algebraic_rhs!(constrained_rhs, solver.problem, zero_rows)
+    _rk_ldiv!(dest, lhs_solver, constrained_rhs)
+    return dest
+end
+
+function _get_constrained_mass_solver!(state::TimestepperState,
+                                       M_matrix::AbstractMatrix,
+                                       L_matrix::AbstractMatrix)
+    cache = state.timestepper_data
+    if get(cache, :imex_rk_constrained_M_source, nothing) !== M_matrix ||
+       get(cache, :imex_rk_constrained_L_source, nothing) !== L_matrix
+        zero_rows = _zero_mass_rows(M_matrix)
+        constrained_mass = _constrained_mass_matrix(M_matrix, L_matrix, zero_rows)
+        cache[:imex_rk_constrained_mass_solver] = factorize(constrained_mass)
+        cache[:imex_rk_constrained_mass_rows] = zero_rows
+        cache[:imex_rk_constrained_M_source] = M_matrix
+        cache[:imex_rk_constrained_L_source] = L_matrix
+    end
+    return cache[:imex_rk_constrained_mass_solver], cache[:imex_rk_constrained_mass_rows]
+end
+
+function _zero_mass_rows(M::AbstractMatrix)
+    rows = Int[]
+    for i in axes(M, 1)
+        row_max = zero(real(eltype(M)))
+        for j in axes(M, 2)
+            row_max = max(row_max, abs(M[i, j]))
+            row_max > 1e-14 && break
+        end
+        row_max <= 1e-14 && push!(rows, i)
+    end
+    return rows
+end
+
+function _constrained_mass_matrix(M::AbstractMatrix, L::AbstractMatrix, zero_rows::Vector{Int})
+    constrained = sparse(M)
+    for row in zero_rows
+        constrained[row, :] = L[row, :]
+    end
+    return constrained
+end
+
+function _apply_global_algebraic_rhs!(rhs::AbstractVector{ComplexF64},
+                                      problem::Problem,
+                                      zero_rows::Vector{Int})
+    isempty(zero_rows) && return rhs
+    fill!(view(rhs, zero_rows), zero(ComplexF64))
+
+    hasfield(typeof(problem), :equation_data) || return rhs
+    isempty(problem.equation_data) && return rhs
+
+    zero_row_set = Set(zero_rows)
+    offset = 0
+    for eq_data in problem.equation_data
+        eq_size = compute_field_size(eq_data)
+        if eq_size <= 0
+            continue
+        end
+
+        M_expr = get(eq_data, "M", nothing)
+        is_alg = M_expr === nothing || _is_zero_m_term(M_expr)
+        if is_alg
+            value = _global_algebraic_rhs_value(eq_data)
+            if value != 0
+                @inbounds for local_row in 1:eq_size
+                    row = offset + local_row
+                    if row in zero_row_set
+                        rhs[row] = value
+                    end
+                end
+            end
+        end
+        offset += eq_size
+    end
+    return rhs
+end
+
+function _global_algebraic_rhs_value(eq_data)
+    F_expr = get(eq_data, "F_expr", nothing)
+    F_expr === nothing && (F_expr = get(eq_data, "F", nothing))
+    if F_expr isa ConstantOperator
+        return ComplexF64(F_expr.value)
+    elseif F_expr isa Number
+        return ComplexF64(F_expr)
+    else
+        return ComplexF64(0)
+    end
 end
 
 """
