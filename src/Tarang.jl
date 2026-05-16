@@ -32,7 +32,7 @@ include("core/architectures.jl")
 # TARGET SUBMODULE ARCHITECTURE (for future refactoring):
 #   Tarang.Core       — AbstractArchitecture, Coordinate, Basis, Domain, Distributor, Field
 #   Tarang.Operators  — Differentiate, Gradient, Divergence, Curl, operator evaluation
-#   Tarang.Transforms — FourierTransform, ChebyshevTransform, LegendreTransform, distributed
+#   Tarang.TransformOps — transform operations (Tarang.Transforms is PencilFFTs.Transforms)
 #   Tarang.Solvers    — IVP, EVP, LBVP, timesteppers, BCs
 #   Tarang.IO         — NetCDF, logging, progress, config
 #   Tarang.Extras     — flow_tools, plot_tools, quick_domains
@@ -321,6 +321,10 @@ export
     boundary_advection_diffusion_setup,
     bad_step!, bad_compute_velocity!, bad_compute_rhs!, bad_add_source!,
     bad_energy, bad_enstrophy, bad_max_velocity, bad_cfl_dt
+
+# Stable facade namespaces for architecture-oriented access without changing
+# existing top-level exports.
+include("namespaces.jl")
 
 # Initialize configuration, logging, and optionally MPI at runtime
 function __init__()

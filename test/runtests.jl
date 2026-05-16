@@ -23,6 +23,7 @@ const TEST_FILES = [
     "test_quick_domains.jl",
     "test_plot_tools.jl",
     "test_compatibility.jl",
+    "test_namespaces.jl",
     "test_cartesian_operators.jl",
     "test_stochastic_forcing.jl",
     "test_temporal_filters.jl",
