@@ -1038,6 +1038,35 @@ function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
     return view(forcing.cached_forcing, Tuple(ranges)...)
 end
 
+function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
+                               target::AbstractArray) where {T, N, A, CA}
+    return _matched_forcing_view(forcing, size(target))
+end
+
+function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
+                               target::PencilArrays.PencilArray) where {T, N, A, CA}
+    local_axes = PencilArrays.pencil(target).axes_local
+    perm = Tuple(PencilArrays.permutation(target))
+    length(local_axes) == N || return nothing
+    length(perm) == N || return nothing
+
+    forcing_shape = size(forcing.cached_forcing)
+    ranges = Vector{UnitRange{Int}}(undef, N)
+
+    for physical_dim in 1:N
+        storage_dim = findfirst(==(physical_dim), perm)
+        storage_dim === nothing && return nothing
+
+        local_range = local_axes[storage_dim]
+        if first(local_range) < 1 || last(local_range) > forcing_shape[physical_dim]
+            return nothing
+        end
+        ranges[physical_dim] = local_range
+    end
+
+    return view(forcing.cached_forcing, Tuple(ranges)...)
+end
+
 """
     _fill_random_phases!(arch, phases, rng)
 

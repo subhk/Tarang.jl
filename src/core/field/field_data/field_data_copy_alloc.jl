@@ -152,6 +152,9 @@ function allocate_data!(field::ScalarField)
             set_coeff_data!(field, create_pencil(field.dist, cshape, nothing, dtype=coeff_dtype))
         end
 
+        fill!(get_grid_data(field), zero(field.dtype))
+        fill!(get_coeff_data(field), zero(coeff_dtype))
+
         # For local computations on pencil.data
     else
         # Serial computation - use architecture-aware array creation

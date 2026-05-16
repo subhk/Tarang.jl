@@ -728,7 +728,7 @@ function _add_registered_forcings_to_lazy_rhs!(rhs_fields, problem::Problem)
         coeff_data = get_coeff_data(rhs_field)
         coeff_data === nothing && continue
 
-        F_view = _matched_forcing_view(forcing, size(coeff_data))
+        F_view = _matched_forcing_view(forcing, coeff_data)
         if F_view !== nothing
             coeff_data .+= F_view
         else

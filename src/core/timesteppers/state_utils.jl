@@ -122,7 +122,7 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
                     rhs_field = rhs[var_idx]
                     coeff_data = get_coeff_data(rhs_field)
                     if coeff_data !== nothing
-                        F_view = _matched_forcing_view(forcing, size(coeff_data))
+                        F_view = _matched_forcing_view(forcing, coeff_data)
                         ensure_layout!(rhs_field, :c)
                         if F_view !== nothing
                             coeff_data .+= F_view
