@@ -20,6 +20,8 @@
 end
 
 @inline function _gpu_find_rank_1based(idx::Int, prefix_sums, nranks::Int)
+    # Kernel pack/unpack code needs a 1-based rank for indexing Julia arrays
+    # such as `chunk_sizes` and `displs`.
     lo = 1
     hi = nranks
     @inbounds while lo < hi
@@ -88,7 +90,8 @@ communication groups.
 - `NCCLTransposeBuffer{T}`: Pre-allocated buffers ready for transpose operations
 """
 function NCCLTransposeBuffer(pencil::PencilDecomposition, T::Type)
-    # Calculate buffer size based on largest local pencil
+    # Allocate for the largest orientation so one buffer can serve every
+    # transpose direction without reallocating between stages.
     max_local = max(
         prod(pencil.x_pencil_shape),
         prod(pencil.y_pencil_shape),
@@ -139,6 +142,8 @@ Each element is placed contiguously for its destination rank.
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     k = ((idx - 1) ÷ (Nx * Ny)) + 1
 
+    # Z is the distributed dimension in this direction; use the prefix sums to
+    # map each global z-index to its destination rank and local offset.
     rank, z_offset = _gpu_find_rank_1based(k, prefix_sums, nranks)
     local_k = k - z_offset
     local_idx = (local_k - 1) * Nx * Ny + (j - 1) * Nx + i
@@ -165,6 +170,8 @@ Reorganizes received data into Y-pencil layout after all-to-all communication.
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     k = ((idx - 1) ÷ (Nx * Ny)) + 1
 
+    # Y is the distributed dimension after the transpose, so received chunks
+    # are unpacked according to the y-index owner.
     rank, y_offset = _gpu_find_rank_1based(j, prefix_sums, nranks)
     local_j = j - y_offset
     local_idx = (k - 1) * Nx * chunk_sizes[rank] + (local_j - 1) * Nx + i

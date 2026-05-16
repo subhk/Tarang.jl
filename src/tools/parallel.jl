@@ -24,6 +24,9 @@ function mpi_available()
 end
 
 function ensure_mpi_initialized()
+    # MPI.jl cannot be reinitialized after finalization in the same process.
+    # Fail early with a clear message instead of triggering lower-level MPI
+    # errors later in setup.
     if MPI.Finalized()
         error("Cannot initialize MPI: MPI has already been finalized. " *
               "MPI can only be initialized once per process.")
@@ -35,6 +38,8 @@ end
 
 function get_mpi_info()
     if mpi_available()
+        # Keep the common communicator metadata in one place so serial fallback
+        # paths can use the same tuple fields as MPI paths.
         comm = MPI.COMM_WORLD
         rank = MPI.Comm_rank(comm)
         size = MPI.Comm_size(comm)
@@ -64,6 +69,7 @@ function parallel_mkdir(path::String; mode::Integer=0o755)
     end
     info = get_mpi_info()
     local mkdir_success = true
+    # Only rank 0 touches the filesystem; all ranks learn the result below.
     if info.rank == 0 && !isdir(path)
         try
             mkpath(path; mode=mode)
@@ -95,6 +101,8 @@ function distribute_work(total_work::Int, num_workers::Int, worker_id::Int)
     if worker_id < 0 || worker_id >= num_workers
         throw(ArgumentError("Worker ID must be in range [0, $(num_workers-1)]"))
     end
+    # Remainder work is assigned to the lowest worker ids, producing contiguous
+    # 1-based ranges that are convenient for Julia array slicing.
     work_per_worker = div(total_work, num_workers)
     remainder = total_work % num_workers
     if worker_id < remainder
@@ -117,6 +125,8 @@ end
 # All accept an optional communicator (default: MPI.COMM_WORLD)
 function parallel_sum(value::Number; comm::Union{Nothing, MPI.Comm}=nothing)
     if mpi_available()
+        # Accept an explicit communicator for row/column reductions while
+        # defaulting to COMM_WORLD for existing serial-style call sites.
         c = comm !== nothing ? comm : MPI.COMM_WORLD
         return MPI.Allreduce(value, +, c)
     else
@@ -162,6 +172,8 @@ end
 
 # Lightweight performance timer
 mutable struct PerformanceTimer
+    # Minimal timer used in lightweight utilities where the full solver
+    # performance counters would be too heavy.
     name::String
     start_time::Float64
     total_time::Float64

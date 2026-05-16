@@ -18,6 +18,11 @@ const _PaddedDealiasKey = Tuple{UInt, DataType, UInt, Bool}
 
 abstract type AbstractNonlinearTransformConfig end
 
+# Nonlinear evaluation builds several kinds of transform plans:
+# ordinary grid-shape plans, tuple-keyed legacy plans, padded/dealiased
+# plans, and pencil-specific plans. Keeping them in separate dictionaries
+# makes cache invalidation and type assertions cheaper than a single
+# `Dict{Any, Any}`.
 mutable struct NonlinearTransformCache
     shape_transforms::Dict{String, AbstractNonlinearTransformConfig}
     tuple_transforms::Dict{Tuple, AbstractNonlinearTransformConfig}
@@ -42,6 +47,8 @@ NonlinearTransformCache() = NonlinearTransformCache(
 end
 
 @inline function _nonlinear_cache_store(cache::NonlinearTransformCache, key)
+    # Route keys to the same backing store that created them. This preserves
+    # older tuple/string call sites while giving padded dealiasing a typed key.
     if key isa String
         return startswith(key, "padded_pencil_") ? cache.padded_pencil : cache.shape_transforms
     elseif _is_padded_dealias_key(key)
@@ -75,6 +82,8 @@ end
 end
 
 struct FFTWTransformConfig{FP, BP, RA<:AbstractArray, CA<:AbstractArray} <: AbstractNonlinearTransformConfig
+    # `kind` distinguishes scalar FFT, real-to-complex, and dealiased plans
+    # without requiring separate wrapper structs for each plan family.
     kind::Symbol
     shape::Tuple{Vararg{Int}}
     dealiased_shape::Tuple{Vararg{Int}}
@@ -85,6 +94,8 @@ struct FFTWTransformConfig{FP, BP, RA<:AbstractArray, CA<:AbstractArray} <: Abst
 end
 
 struct PencilTransformConfig <: AbstractNonlinearTransformConfig
+    # Pencil transforms carry both the communication layout and the local FFT
+    # plans needed to move between grid/coefficient layouts under MPI.
     config::PencilConfig
     forward_pencil_1::Any
     forward_pencil_2::Any
@@ -134,6 +145,8 @@ mutable struct NonlinearEvaluator <: AbstractNonlinearEvaluator
     dist::Distributor
     pencil_transforms::NonlinearTransformCache
     dealiasing_factor::Float64
+    # Temporary fields and scratch arrays are owned by the evaluator so repeated
+    # nonlinear RHS calls can reuse memory instead of allocating every stage.
     temp_fields::Dict{String, ScalarField}
     memory_pool::Vector{PencilArrays.PencilArray}
     scratch_arrays::Vector{AbstractArray}

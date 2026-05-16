@@ -555,9 +555,29 @@ end
 
 Create a deep copy of state
 """
-function copy_state(state::Vector{<:ScalarField})
+function copy_state(state::Vector{F}) where {F<:ScalarField}
+    if F <: ScalarField{<:Any, SerialFieldStorage}
+        return _copy_serial_state(state)
+    end
+
     n = length(state)
     new_state = Vector{ScalarField}(undef, n)
+
+    @inbounds for i in 1:n
+        field = state[i]
+        if isempty(field.bases)
+            new_state[i] = ScalarField(field.dist, field.name, field.bases, field.dtype)
+        else
+            new_state[i] = copy(field)
+        end
+    end
+
+    return new_state
+end
+
+function _copy_serial_state(state::Vector{F}) where {F<:ScalarField{<:Any, SerialFieldStorage}}
+    n = length(state)
+    new_state = Vector{F}(undef, n)
 
     @inbounds for i in 1:n
         field = state[i]
@@ -577,9 +597,9 @@ end
 Return a reusable field-state workspace matching `template`.
 """
 function _timestep_field_state!(state::TimestepperState, key::Symbol,
-                                template::Vector{<:ScalarField})
+                                template::Vector{F}) where {F<:ScalarField}
     cached = get(state.timestepper_data, key, nothing)
-    if cached isa Vector{ScalarField} && length(cached) == length(template)
+    if cached isa Vector{F} && length(cached) == length(template)
         return cached
     end
 
@@ -595,8 +615,8 @@ Write `vector` into a recycled state slot and append it to `history`.
 When the history is already at capacity, the oldest state is reused instead
 of allocating a fresh deep copy every step.
 """
-function _push_vector_state!(history::Vector, vector::AbstractVector{<:Number},
-                             template::Vector{<:ScalarField}, max_len::Int)
+function _push_vector_state!(history::Vector{V}, vector::AbstractVector{<:Number},
+                             template::V, max_len::Int) where {V<:Vector{<:ScalarField}}
     max_len > 0 || throw(ArgumentError("max_len must be positive"))
 
     new_state = if length(history) >= max_len

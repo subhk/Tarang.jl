@@ -202,6 +202,25 @@ _apply_backward(current, t::FourierTransform) = _fourier_backward(current, t)
 # plan types have different output shapes and are cached under separate
 # keys (`(size, Float64)` vs `(size, ComplexF64)`).
 
+@inline _replace_axis_shape(shape::Tuple{Int}, axis::Int, value::Int) =
+    axis == 1 ? (value,) : throw(BoundsError(shape, axis))
+
+@inline function _replace_axis_shape(shape::Tuple{Int, Int}, axis::Int, value::Int)
+    axis == 1 && return (value, shape[2])
+    axis == 2 && return (shape[1], value)
+    throw(BoundsError(shape, axis))
+end
+
+@inline function _replace_axis_shape(shape::Tuple{Int, Int, Int}, axis::Int, value::Int)
+    axis == 1 && return (value, shape[2], shape[3])
+    axis == 2 && return (shape[1], value, shape[3])
+    axis == 3 && return (shape[1], shape[2], value)
+    throw(BoundsError(shape, axis))
+end
+
+@inline _replace_axis_shape(shape::Tuple, axis::Int, value::Int) =
+    ntuple(i -> i == axis ? value : shape[i], length(shape))
+
 function _forward_output_spec(in::AbstractArray, transform::FourierTransform)
     in_shape = size(in)
     in_eltype = eltype(in)
@@ -215,8 +234,7 @@ function _forward_output_spec(in::AbstractArray, transform::FourierTransform)
             return in_shape, complex_T
         end
         # Real input: rfft halves the transform axis from N to div(N, 2) + 1
-        out_shape = ntuple(i -> i == ax ? div(in_shape[i], 2) + 1 : in_shape[i],
-                           length(in_shape))
+        out_shape = _replace_axis_shape(in_shape, ax, div(in_shape[ax], 2) + 1)
         return out_shape, complex_T
     else  # ComplexFourier
         return in_shape, complex_T
@@ -234,8 +252,7 @@ function _backward_output_spec(in::AbstractArray, transform::FourierTransform)
         axis_len = in_shape[ax]
         if axis_len == expected_rfft_size
             # irfft: axis expands back from N/2+1 to basis.meta.size
-            out_shape = ntuple(i -> i == ax ? transform.basis.meta.size : in_shape[i],
-                               length(in_shape))
+            out_shape = _replace_axis_shape(in_shape, ax, transform.basis.meta.size)
             return out_shape, real_T
         else
             # ifft fallback (complex input from a non-first-axis fft): same shape, still complex
@@ -374,4 +391,3 @@ function _scale_along_axis!(data::AbstractArray, axis::Int, scale::AbstractVecto
     shape = ntuple(i -> i == axis ? length(scale) : 1, ndims(data))
     data .*= reshape(scale, shape...)
 end
-

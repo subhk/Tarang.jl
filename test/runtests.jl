@@ -47,6 +47,7 @@ const TEST_FILES = [
     "test_dealiasing_math.jl",
     "test_gpu_solver_cpu.jl",
     "test_type_stability.jl",
+    "test_timestepper_boundaries.jl",
     "test_field_pool.jl",
     "test_linalg.jl",
     "test_pretty_printing.jl",

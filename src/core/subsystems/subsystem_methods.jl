@@ -4,9 +4,13 @@
 
 function coeff_slices(subsystem::Subsystem, domain)
     if domain === nothing
+        # Zero-dimensional or algebraic quantities have no spectral axes, so
+        # callers should use scalar-style indexing rather than domain slices.
         return ntuple(_ -> Colon(), length(subsystem.group))
     end
 
+    # Subsystems currently consume the whole local coefficient block for each
+    # active field. Future block-local slicing should be centralized here.
     coeff_shape = coefficient_shape(domain)
     return ntuple(_ -> Colon(), length(coeff_shape))
 end
@@ -35,6 +39,8 @@ end
 function field_size(subsystem::Subsystem, field::ScalarField)
     range = get(subsystem.scalar_ranges, field, 1:0)
     if isempty(range)
+        # Most fields are not explicitly range-trimmed by subsystem assembly;
+        # in that case the full spectral degree count is the correct size.
         return scalar_field_dofs(field)
     else
         return length(range)
@@ -45,6 +51,8 @@ field_size(subsystem::Subsystem, field::VectorField) = sum(field_size(subsystem,
 field_size(subsystem::Subsystem, field::TensorField) = sum(field_size(subsystem, comp) for comp in vec(field.components))
 
 function field_domain(field::ScalarField)
+    # Some synthetic operands used during parsing do not carry a concrete
+    # domain. The callers below treat `nothing` as an algebraic/zero-dim value.
     if hasfield(typeof(field), :domain) && field.domain !== nothing
         return field.domain
     end
@@ -71,6 +79,8 @@ end
 field_domain(::Operand) = nothing
 
 function _coeff_data(field)
+    # Matrix assembly and subproblem I/O always work in coefficient space.
+    # Force the layout once here so gather/scatter callers share the invariant.
     ensure_layout!(field, :c)
     if get_coeff_data(field) === nothing
         throw(ArgumentError("Field $(field.name) has no coefficient data available."))
@@ -80,6 +90,8 @@ end
 
 function _field_coeff_vector(field::ScalarField)
     data = _coeff_data(field)
+    # Subproblem matrices live on the CPU. GPU fields are staged back before
+    # being flattened into solver vectors.
     cpu_data = is_gpu_array(data) ? get_cpu_data(data) : data
     return vec(cpu_data)
 end
@@ -94,6 +106,8 @@ function _assign_coefficients_from_slice!(field::ScalarField, coeffs::AbstractAr
 
     target_eltype = eltype(coeffs)
     data_array = if target_eltype <: Real
+        # Real-valued fields can receive complex solver vectors when a shared
+        # assembly path is used. Warn before dropping numerical imaginary noise.
         if any(!iszero(imag(val)) for val in slice)
             @warn "Discarding imaginary part when assigning real coefficients for field $(field.name)"
         end
@@ -106,6 +120,7 @@ function _assign_coefficients_from_slice!(field::ScalarField, coeffs::AbstractAr
 
     arch = field.dist.architecture
     if is_gpu(arch)
+        # Preserve the field's storage architecture after the CPU-side solve.
         copyto!(coeffs, on_architecture(arch, data_array))
     else
         copyto!(coeffs, data_array)
@@ -147,4 +162,3 @@ function scatter(subsystem::Subsystem, data::AbstractVector, fields::Vector{<:Sc
     end
     return nothing
 end
-

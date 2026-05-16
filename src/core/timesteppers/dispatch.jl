@@ -36,6 +36,7 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
 
     # Reset forcing flag at the end of timestep (prepare for next forcing generation)
     reset_forcing_flag!(state)
+    return nothing
 end
 
 # ============================================================================
@@ -98,42 +99,4 @@ function _dispatch_step!(ts::TimeStepper, state, solver)
         "No stepping method defined for timestepper type $(typeof(ts)). " *
         "Please add a `_dispatch_step!` method for this type in dispatch.jl."
     ))
-end
-
-# ============================================================================
-# MPI Compatibility Check for Global-Matrix Implicit Solvers
-# ============================================================================
-
-"""
-    _check_mpi_implicit_compat!(solver, method_name)
-
-Check if a global-matrix implicit timestepper can run with MPI fields.
-These methods (SBDF3/4, MCNAB2, CNLF2) use global matrix solves that require
-all field data on a single rank — a limitation of the legacy stepper path
-that hasn't been ported to the subproblem architecture.
-
-For MPI runs, the check either:
-1. Allows it if fields are small enough for gather/scatter (< 1M DOF)
-2. Errors with guidance to use a subproblem-compatible method instead
-"""
-function _check_mpi_implicit_compat!(solver::InitialValueSolver, method_name::String)
-    dist = solver.state[1].dist
-    if dist.size <= 1
-        return  # Serial — no issue
-    end
-
-    # Check if we can do gather/scatter (small enough problem)
-    total_dof = sum(length(get_coeff_data(f)) for f in solver.state
-                    if get_coeff_data(f) !== nothing; init=0)
-
-    if total_dof > 1_000_000
-        throw(ArgumentError(
-            "$method_name with MPI requires global matrix solve (gather/scatter). " *
-            "Total DOF=$total_dof exceeds 1M limit for gather/scatter approach. " *
-            "Use a subproblem-compatible method instead: RK111, RK222, RK443, " *
-            "CNAB1, CNAB2, SBDF1, SBDF2, or DiagonalIMEX_RK222/RK443 " *
-            "(for purely Fourier domains)."))
-    end
-
-    @debug "$method_name: using global gather/scatter for MPI with $total_dof DOF"
 end

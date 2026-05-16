@@ -241,4 +241,39 @@ using Tarang
         @test alloc < 131072  # less than 128 KB for 5 steps
     end
 
+    @testset "Trivial RK step has minimal steady-state allocation" begin
+        domain = PeriodicDomain(8)
+
+        u = ScalarField(domain, "u")
+        set!(u, (x,) -> sin(x))
+
+        problem = IVP([u])
+        add_equation!(problem, "∂t(u) = 0")
+        solver = InitialValueSolver(problem, RK111(); dt=0.01)
+
+        step!(solver, 0.01)
+        step!(solver, 0.01)
+
+        alloc = @allocated step!(solver, 0.01)
+        @test alloc <= 384
+    end
+
+    @testset "Trivial CNAB step has bounded steady-state allocation" begin
+        domain = PeriodicDomain(8)
+
+        u = ScalarField(domain, "u")
+        set!(u, (x,) -> sin(x))
+
+        problem = IVP([u])
+        add_equation!(problem, "∂t(u) = 0")
+        solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
+
+        step!(solver, 0.01)
+        step!(solver, 0.01)
+        step!(solver, 0.01)
+
+        alloc = @allocated step!(solver, 0.01)
+        @test alloc <= 8192
+    end
+
 end

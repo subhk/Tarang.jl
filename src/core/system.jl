@@ -7,6 +7,9 @@ for each subproblem/subsystem pair.
 """
 
 struct CoeffSystem{T}
+    # One contiguous coefficient vector backs all subproblem/subsystem pairs.
+    # `views` records the slice assigned to each pair so gather/scatter can
+    # avoid repeated allocations during implicit solves.
     data::Vector{T}
     views::Dict{Tuple{Subproblem, Subsystem}, UnitRange{Int}}
 end
@@ -16,6 +19,8 @@ function CoeffSystem(subproblems::Tuple{Vararg{Subproblem}}, dtype::DataType=Com
     views = Dict{Tuple{Subproblem, Subsystem}, UnitRange{Int}}()
     for sp in subproblems
         for ss in sp.subsystems
+            # Reserve enough room for every unknown carried by this subsystem.
+            # The actual field ordering is handled by `gather!`/`scatter!`.
             coeff_size = subsystem_coeff_size(ss, sp)
             range = (total + 1):(total + coeff_size)
             views[(sp, ss)] = range
@@ -30,6 +35,8 @@ subsystem_coeff_size(ss::Subsystem, sp::Subproblem) = ss.total_variable_size
 function flatten_scalar_fields(vars)
     result = ScalarField[]
     for var in vars
+        # Solvers operate on scalar coefficient arrays even when the public API
+        # exposes vector/tensor fields.
         if isa(var, ScalarField)
             push!(result, var)
         elseif isa(var, VectorField)
@@ -58,6 +65,7 @@ end
 
 function _resolve_subsystem(subproblem::Subproblem, subsystem::Union{Nothing, Subsystem})
     if subsystem === nothing
+        # Allow shorthand only when the subproblem has an unambiguous subsystem.
         if length(subproblem.subsystems) != 1
             throw(ArgumentError("Subproblem has $(length(subproblem.subsystems)) subsystems; pass a specific subsystem"))
         end
@@ -79,6 +87,8 @@ function gather!(system::FieldSystem, subproblem::Subproblem; subsystem::Union{N
     end
     offset = 0
     for field in system.fields
+        # Fields are copied sequentially into the preallocated subsystem view.
+        # This makes the vector layout deterministic for the matching scatter.
         data_vec = _field_coeff_vector(field)
         n = length(data_vec)
         copyto!(view, offset + 1, data_vec, 1, n)
@@ -104,6 +114,8 @@ function scatter!(system::FieldSystem, subproblem::Subproblem, data::AbstractVec
     for field in system.fields
         coeffs = _coeff_data(field)
         n = length(coeffs)
+        # Use a view so assignment can reshape/copy back to CPU or GPU storage
+        # without allocating another full coefficient vector.
         slice = @view view[offset+1:offset+n]
         _assign_coefficients_from_slice!(field, coeffs, slice)
         offset += n

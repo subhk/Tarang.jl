@@ -1,6 +1,7 @@
 using Test
 using Tarang
 using NetCDF
+using TOML
 
 function simple_1d_setup()
     coords = CartesianCoordinates("z")
@@ -102,4 +103,17 @@ end
         @test isapprox(mean_val[1], 2.5; atol=1e-12)
         @test isapprox(slice_val[1], 2.0; atol=1e-12)
     end
+end
+
+@testset "Script package boundaries" begin
+    project = TOML.parsefile(joinpath(dirname(@__DIR__), "Project.toml"))
+    deps = get(project, "deps", Dict{String, Any}())
+    @test haskey(deps, "ArgParse")
+
+    merge_script = read(joinpath(dirname(@__DIR__), "scripts", "merge_netcdf.jl"), String)
+    @test occursin("Pkg.activate", merge_script)
+    @test occursin(r"(?m)^\s*using\s+Tarang\b", merge_script)
+    @test occursin("pkgversion(Tarang)", merge_script)
+    @test !occursin("Tarang.__version__", merge_script)
+    @test !occursin(r"include\(joinpath\(dirname\(@__DIR__\), \"src\", \"tools\", \"netcdf_merge\.jl\"\)\)", merge_script)
 end

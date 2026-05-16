@@ -61,6 +61,9 @@ function _pack_3d_cpu!(buffer, data, counts, displs, dim::Int, nranks::Int,
                        Nx::Int, Ny::Int, Nz::Int)
     # Compute chunk sizes from counts
     chunk_sizes = zeros(Int, nranks)
+    # `counts` are element counts, while rank ownership is expressed as a
+    # length along the transposed dimension. Divide by the untouched plane size
+    # to recover per-rank chunk lengths.
     expected_dim_size = dim == 3 ? Nz : (dim == 2 ? Ny : Nx)
     divisor = dim == 3 ? (Nx * Ny) : (dim == 2 ? (Nx * Nz) : (Ny * Nz))
 
@@ -82,7 +85,9 @@ function _pack_3d_cpu!(buffer, data, counts, displs, dim::Int, nranks::Int,
 
     buf_len = length(buffer)
 
-    # Precompute rank lookup table: O(1) per element instead of O(nranks) linear scan
+    # Precompute rank lookup table: O(1) per element instead of O(nranks) linear scan.
+    # This matters for large local pencil blocks, where the packing loops are
+    # executed for every transpose.
     rank_for_idx = Vector{Int}(undef, expected_dim_size)
     offset_for_idx = Vector{Int}(undef, expected_dim_size)
     cumulative = 0
@@ -180,6 +185,8 @@ function pack_for_transpose!(buffer, data, counts, displs, dim::Int,
                              nranks::Int, arch::AbstractArchitecture)
     # Default implementation for GPU - use CPU version via staging
     # GPU version overrides this in TarangCUDAExt
+    # Keeping this fallback here lets non-CUDA architectures run correctly even
+    # before they grow specialized pack/unpack kernels.
     data_cpu = on_architecture(CPU(), data)
     buffer_cpu = on_architecture(CPU(), buffer)
 
@@ -356,4 +363,3 @@ function unpack_from_transpose!(data, buffer, counts, displs, dim::Int,
 
     return data
 end
-

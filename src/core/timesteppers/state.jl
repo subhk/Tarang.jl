@@ -39,16 +39,21 @@ Timestepper state management with workspace optimization.
 
 Holds the current state, history, and workspace fields for time-stepping.
 """
-mutable struct TimestepperState <: AbstractTimestepperState
-    timestepper::TimeStepper
+@inline _empty_workspace_fields(initial_state::Vector{F}) where {F<:ScalarField{<:Any, SerialFieldStorage}} =
+    similar(initial_state, 0)
+
+@inline _empty_workspace_fields(::Vector{<:ScalarField}) = ScalarField[]
+
+mutable struct TimestepperState{TS<:TimeStepper, V<:Vector{<:ScalarField}, W<:Vector{<:ScalarField}} <: AbstractTimestepperState
+    timestepper::TS
     dt::Float64
-    history::Vector{Vector{<:ScalarField}}
+    history::Vector{V}
     dt_history::Vector{Float64}  # Track timestep history for variable timesteps
     stage::Int
     timestepper_data::Dict{Symbol, Any}  # Additional data for specific timesteppers
 
     # Pre-allocated workspace fields for zero-allocation time-stepping
-    workspace_fields::Vector{<:ScalarField}  # Reusable scratch fields
+    workspace_fields::W  # Reusable scratch fields
     workspace_allocated::Bool
 
     # Stochastic forcing support (following GeophysicalFlows.jl pattern)
@@ -58,8 +63,8 @@ mutable struct TimestepperState <: AbstractTimestepperState
     current_substep::Int  # Track which substep we're in (1-indexed)
     forcing_generated::Bool  # Flag to track if forcing was generated this timestep
 
-    function TimestepperState(timestepper::TimeStepper, dt::Float64, initial_state::Vector{<:ScalarField};
-                              forcing=nothing)
+    function TimestepperState(timestepper::TS, dt::Float64, initial_state::V;
+                              forcing=nothing) where {TS<:TimeStepper, V<:Vector{<:ScalarField}}
         dt_history = [dt]
         timestepper_data = Dict{Symbol, Any}()
 
@@ -68,7 +73,7 @@ mutable struct TimestepperState <: AbstractTimestepperState
         # so it must happen before copying the initial state.
         n_fields = length(initial_state)
         n_workspace_sets = _workspace_count(timestepper)
-        workspace_fields = ScalarField[]
+        workspace_fields = _empty_workspace_fields(initial_state)
 
         for _ in 1:n_workspace_sets
             for field in initial_state
@@ -78,10 +83,13 @@ mutable struct TimestepperState <: AbstractTimestepperState
         end
 
         # Copy AFTER workspace allocation to avoid buffer aliasing
-        history = [copy.(initial_state)]
+        initial_history = copy_state(initial_state)
+        history = Vector{typeof(initial_history)}(undef, 1)
+        history[1] = initial_history
 
-        new(timestepper, dt, history, dt_history, 0, timestepper_data, workspace_fields, true,
-            forcing, 1, false)
+        new{TS, typeof(initial_history), typeof(workspace_fields)}(
+            timestepper, dt, history, dt_history, 0, timestepper_data,
+            workspace_fields, true, forcing, 1, false)
     end
 end
 

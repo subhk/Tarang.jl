@@ -15,6 +15,9 @@ the pattern in `transform_fourier.jl`.
 """
 
 function _legendre_forward(data::AbstractArray, transform::LegendreTransform)
+    # Legendre transforms are matrix-backed and CPU-only today. GPU inputs are
+    # staged through `_execute_on_cpu` and returned by the caller's transform
+    # orchestration path.
     return _execute_on_cpu(data) do host_data
         axis = transform.axis
         if axis > ndims(host_data)
@@ -34,11 +37,14 @@ function _legendre_forward(data::AbstractArray, transform::LegendreTransform)
 
         other_dims = Tuple(filter(i -> i != axis, 1:ndims(host_data)))
 
+        # Reuse global work buffers for each one-dimensional slice so repeated
+        # multi-dimensional transforms do not allocate scratch vectors.
         wm = get_global_workspace()
         temp_real = get_workspace!(wm, real_type, (coeff_size,))
         temp_imag = eltype(host_data) <: Complex ? get_workspace!(wm, real_type, (coeff_size,)) : nothing
 
         if isempty(other_dims)
+            # One-dimensional case: apply the quadrature matrix directly.
             mul!(temp_real, mat, real(host_data))
             if temp_imag === nothing
                 copyto!(out, temp_real)
@@ -47,6 +53,8 @@ function _legendre_forward(data::AbstractArray, transform::LegendreTransform)
                 out .= complex.(temp_real, temp_imag)
             end
         else
+            # Multi-dimensional case: transform along the selected axis by
+            # applying the same matrix to each orthogonal slice.
             for (slice_in, slice_out) in zip(eachslice(host_data, dims=other_dims), eachslice(out, dims=other_dims))
                 mul!(temp_real, mat, real(slice_in))
                 if temp_imag === nothing
@@ -68,6 +76,8 @@ function _legendre_forward(data::AbstractArray, transform::LegendreTransform)
 end
 
 function _legendre_backward(data::AbstractArray, transform::LegendreTransform)
+    # Backward transform mirrors `_legendre_forward`, using the grid-space
+    # reconstruction matrix built during planning.
     return _execute_on_cpu(data) do host_data
         axis = transform.axis
         if axis > ndims(host_data)
@@ -87,6 +97,8 @@ function _legendre_backward(data::AbstractArray, transform::LegendreTransform)
 
         other_dims = Tuple(filter(i -> i != axis, 1:ndims(host_data)))
 
+        # Separate real/imaginary scratch keeps real-valued Legendre matrices
+        # usable for complex coefficient arrays without complex matrix storage.
         wm = get_global_workspace()
         temp_real = get_workspace!(wm, real_type, (grid_size,))
         temp_imag = eltype(host_data) <: Complex ? get_workspace!(wm, real_type, (grid_size,)) : nothing

@@ -1,9 +1,21 @@
+"""
+Helpers for inferring per-subproblem expression sizes and matrix selectors.
+
+These routines sit between parsed equation trees and sparse matrix assembly.
+They intentionally avoid evaluating operators; instead they answer structural
+questions such as "how many rows will this expression contribute?" and "which
+parent variable owns this scalar component?"
+"""
+
 function _coord_name(coord)
     isa(coord, Tuple) && !isempty(coord) && return _coord_name(coord[1])
     return isa(coord.name, Symbol) ? String(coord.name) : String(coord.name)
 end
 
 function _subproblem_reduce_dofs(sp::Subproblem, inner::Int, operand, coord; interpolate::Bool=false)
+    # Integration/averaging removes the coefficient axis associated with
+    # `coord`. Interpolation on Fourier axes keeps the local mode count unless
+    # the current subproblem is not the zero mode for that separable direction.
     coord_name = _coord_name(coord)
     basis = _operand_basis_for_coord(operand, coord_name)
     basis === nothing && return inner
@@ -25,12 +37,15 @@ end
 
 function _subproblem_expr_dofs(sp::Subproblem, expr)
     expr === nothing && return 0
+    # Constants do not contribute unknown-dependent rows to the linear system.
     (isa(expr, Number) || isa(expr, ZeroOperator) || isa(expr, ConstantOperator)) && return 0
     isa(expr, ScalarField) && return subproblem_field_size(sp, expr)
     isa(expr, VectorField) && return subproblem_field_size(sp, expr)
     isa(expr, TensorField) && return subproblem_field_size(sp, expr)
 
     if isa(expr, AddOperator) || isa(expr, SubtractOperator)
+        # Binary arithmetic preserves the larger operand footprint. The actual
+        # compatibility checks happen during matrix construction.
         return max(_subproblem_expr_dofs(sp, expr.left), _subproblem_expr_dofs(sp, expr.right))
     end
     if isa(expr, MultiplyOperator) || isa(expr, DivideOperator)
@@ -39,11 +54,15 @@ function _subproblem_expr_dofs(sp::Subproblem, expr)
     isa(expr, NegateOperator) && return _subproblem_expr_dofs(sp, expr.operand)
 
     if isa(expr, Future)
+        # A Future is a symbolic deferred computation. Its matrix footprint is
+        # bounded by the largest captured argument.
         args = future_args(expr)
         return isempty(args) ? 0 : maximum(_subproblem_expr_dofs(sp, arg) for arg in args)
     end
 
     if isa(expr, Integrate) || isa(expr, Average)
+        # Reductions may collapse one or more axes; apply them sequentially so
+        # compound reductions such as integrate over (x, y) keep correct size.
         inner = _subproblem_expr_dofs(sp, expr.operand)
         coords = isa(expr.coord, Tuple) ? expr.coord : (expr.coord,)
         for coord in coords
@@ -58,6 +77,9 @@ function _subproblem_expr_dofs(sp::Subproblem, expr)
     end
 
     if isa(expr, Trace)
+        # Trace converts a tensor-like expression into a scalar footprint. When
+        # the concrete field is recoverable, prefer field metadata over shape
+        # inference because it carries subproblem-local truncation.
         field = _resolve_operand_field(expr.operand)
         if isa(field, VectorField) && !isempty(field.components)
             return subproblem_field_size(sp, field.components[1])
@@ -76,6 +98,8 @@ function _subproblem_expr_dofs(sp::Subproblem, expr)
     end
 
     if hasfield(typeof(expr), :operand)
+        # Operator wrappers that expose `operand` can often provide an explicit
+        # sparse matrix. Use that matrix size before falling back to the child.
         mat = subproblem_matrix(expr, sp)
         if mat !== nothing
             return size(mat, 1)
@@ -130,6 +154,8 @@ Get valid modes array for variable.
 """
 function get_valid_modes_var(var, sp::Subproblem)
     local_size = subproblem_field_size(sp, var)
+    # Zero-dimensional tau/gauge variables only exist in the zero separable
+    # group. They must be masked out in all other mode groups.
     if local_size > 0 && _has_only_zero_dim_bases(var) && !_is_zero_separable_group(sp)
         return zeros(Bool, local_size)
     end
@@ -168,7 +194,8 @@ function expression_matrices(field::ScalarField, sp::Subproblem, vars; kwargs...
         n_parent = subproblem_field_size(sp, parent)
         n_comp = length(parent.components)
         comp_size = div(n_parent, n_comp)
-        # Build selector: (comp_size × n_parent) with identity block at comp_idx
+        # Build a sparse selector that maps the parent vector unknown into the
+        # scalar component requested by the expression tree.
         rows = collect(1:comp_size)
         cols = collect((comp_idx - 1) * comp_size + 1 : comp_idx * comp_size)
         vals = ones(ComplexF64, comp_size)

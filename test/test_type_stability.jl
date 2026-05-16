@@ -120,4 +120,41 @@ end
         @test @inferred(invoke_constructor(CPU, (), (;))) isa CPU
     end
 
+    @testset "Lazy RHS preserves concrete state field vector type" begin
+        domain = PeriodicDomain(8)
+        u = ScalarField(domain, "u")
+        set!(u, (x,) -> sin(x))
+
+        problem = IVP([u])
+        add_equation!(problem, "dt(u) = 0")
+        solver = InitialValueSolver(problem, RK111(); dt=0.01)
+
+        step!(solver, 0.01)
+        rhs = Tarang.evaluate_rhs(solver, solver.state, solver.sim_time)
+
+        @test rhs isa typeof(solver.state)
+        @test eltype(rhs) === eltype(solver.state)
+
+        ts_state = solver.timestepper_state
+        @test only(Base.return_types(Tarang.step!, (typeof(ts_state), typeof(solver)))) === Nothing
+        @test only(Base.return_types(Tarang.step_rk_imex!, (typeof(ts_state), typeof(solver)))) === Nothing
+    end
+
+    @testset "Multistep history preserves concrete state field vector type" begin
+        domain = PeriodicDomain(8)
+        u = ScalarField(domain, "u")
+        set!(u, (x,) -> sin(x))
+
+        problem = IVP([u])
+        add_equation!(problem, "∂t(u) = 0")
+        solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
+        state_type = typeof(solver.state)
+
+        step!(solver, 0.01)
+
+        @test typeof(solver.state) === state_type
+        @test typeof(solver.timestepper_state.history[end]) === state_type
+        @test typeof(Tarang.copy_state(solver.state)) === state_type
+    end
+
 end # Type Stability

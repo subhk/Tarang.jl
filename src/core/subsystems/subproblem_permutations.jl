@@ -1,6 +1,11 @@
 # ---------------------------------------------------------------------------
 # Permutation matrices
 # ---------------------------------------------------------------------------
+#
+# Subproblem matrices are assembled in a natural parser order, but the solve
+# path expects Dedalus-style grouping by spectral mode, tensor component, and
+# equation/variable dimension. The helpers below produce sparse permutation
+# matrices instead of moving dense blocks by hand.
 
 """
     left_permutation(sp, equations, bc_top, interleave_components)
@@ -15,7 +20,9 @@ Output ordering with interleave_components=true: Modes > Components > Equations
 Output ordering with interleave_components=false: Modes > Equations > Components
 """
 function _left_permutation_indices(sp::Subproblem, equations, eqn_sizes::AbstractVector{<:Integer}, bc_top::Bool, interleave_components::Bool)
-    # Compute hierarchy of input equation indices
+    # Build a three-level hierarchy:
+    #   equation -> component -> coefficient/mode
+    # This mirrors the input order and lets the second pass invert the nesting.
     i = 0
     L0 = Vector{Vector{Vector{Int}}}()
 
@@ -28,7 +35,8 @@ function _left_permutation_indices(sp::Subproblem, equations, eqn_sizes::Abstrac
             continue
         end
 
-        # Get shape info
+        # Tensor signatures determine how many component blocks the equation
+        # contributes. Scalars are treated as one-component tensors.
         tensorsig = get(eq_data, "tensorsig", ())
         n_comps = max(1, prod((cs isa CoordinateSystem ? cs.dim : 1 for cs in tensorsig); init=1))
         n_coeffs = eq_size ÷ n_comps
@@ -44,7 +52,9 @@ function _left_permutation_indices(sp::Subproblem, equations, eqn_sizes::Abstrac
         push!(L0, L1)
     end
 
-    # Reverse list hierarchy, grouping by dimension
+    # Reverse list hierarchy, grouping by equation domain dimension. The
+    # `bc_top` flag controls whether lower-dimensional boundary rows appear
+    # before or after bulk rows.
     indices_by_dim = Dict{Int, Vector{Int}}()
     n1max = length(L0)
     n2max = maximum(length(L1) for L1 in L0; init=1)
@@ -123,7 +133,8 @@ Output ordering with interleave_components=true: Modes > Components > Variables
 Output ordering with interleave_components=false: Modes > Variables > Components
 """
 function _right_permutation_indices(sp::Subproblem, variables, tau_left::Bool, interleave_components::Bool)
-    # Compute hierarchy of input variable indices
+    # Mirror `_left_permutation_indices`, but for variable columns. Tau and
+    # lower-dimensional variables can be placed left or right of bulk columns.
     i = 0
     L0 = Vector{Vector{Vector{Int}}}()
 
@@ -137,7 +148,8 @@ function _right_permutation_indices(sp::Subproblem, variables, tau_left::Bool, i
             continue
         end
 
-        # Get shape info
+        # A ScalarField has one component; VectorField/TensorField components
+        # are flattened by `scalar_components`.
         components = scalar_components(var)
         n_comps = length(components)
         n_coeffs = var_size ÷ n_comps
@@ -153,7 +165,8 @@ function _right_permutation_indices(sp::Subproblem, variables, tau_left::Bool, i
         push!(L0, L1)
     end
 
-    # Reverse list hierarchy, grouping by dimension
+    # Reorder columns into mode-major order, optionally interleaving components
+    # inside each mode before moving to the next variable.
     indices_by_dim = Dict{Int, Vector{Int}}()
     n1max = length(L0)
     n2max = maximum(length(L1) for L1 in L0; init=1)
@@ -243,6 +256,9 @@ function perm_matrix(indices::Vector{Int}, n::Int)
         return spzeros(Float64, m, n)
     end
 
+    # Row i selects source column `indices[i]`. Invalid indices are filtered so
+    # partially masked mode lists produce a valid sparse matrix rather than an
+    # out-of-bounds construction error.
     rows = collect(1:m)
     cols = indices
     vals = ones(Float64, m)
@@ -255,4 +271,3 @@ function perm_matrix(indices::Vector{Int}, n::Int)
 
     return sparse(rows, cols, vals, m, n)
 end
-

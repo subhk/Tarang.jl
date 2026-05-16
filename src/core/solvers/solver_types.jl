@@ -155,7 +155,22 @@ function collect_state_fields(variables::Vector{Operand})
             append!(state, vec(var.components))
         end
     end
-    return state
+    return _concretize_state_fields(state)
+end
+
+function _concretize_state_fields(state::Vector{ScalarField})
+    isempty(state) && return state
+
+    T = typeof(state[1])
+    for field in state
+        if typeof(field) !== T
+            return state
+        end
+    end
+
+    concrete_state = Vector{T}(undef, length(state))
+    copyto!(concrete_state, state)
+    return concrete_state
 end
 
 function sync_state_to_problem!(problem::Problem, state::Vector{<:ScalarField})

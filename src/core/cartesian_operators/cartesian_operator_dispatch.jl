@@ -12,6 +12,8 @@ Dispatch to Cartesian-specific or DirectProduct-specific operator variant
 based on coordinate system type.
 """
 function dispatch_cartesian_operator(::Type{Gradient}, operand, coordsys; kwargs...)
+    # Cartesian coordinates use specialized fast paths; DirectProduct keeps the
+    # same public operator API for composed coordinate systems.
     if isa(coordsys, CartesianCoordinates) || isa(coordsys, Coordinate)
         return CartesianGradient(operand, coordsys)
     elseif isa(coordsys, DirectProduct)
@@ -27,6 +29,7 @@ function dispatch_cartesian_operator(::Type{Divergence}, operand; index::Int=0, 
         throw(ArgumentError("Divergence requires a tensor operand"))
     end
 
+    # `index` selects which tensor axis the divergence consumes.
     coordsys = tensorsig[index + 1]
 
     if isa(coordsys, CartesianCoordinates) || isa(coordsys, Coordinate)
@@ -153,6 +156,8 @@ function evaluate(op::DirectProductGradient, layout::Symbol=:g)
     coordsys = op.coordsys
 
     if isa(operand, ScalarField)
+        # A DirectProduct gradient is assembled component-by-component by
+        # differentiating along each coordinate of the product space.
         result = VectorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
         for (i, coord) in enumerate(coordsys.coords)
             result.components[i] = evaluate_differentiate(Differentiate(operand, coord, 1), layout)
@@ -177,6 +182,7 @@ function evaluate(op::DirectProductDivergence, layout::Symbol=:g)
     if layout == :g
         fill!(get_grid_data(result), 0.0)
         for (i, coord) in enumerate(coordsys.coords)
+            # Sum directional derivatives into the scalar divergence field.
             comp = operand.components[i]
             deriv = evaluate_differentiate(Differentiate(comp, coord, 1), layout)
             get_grid_data(result) .+= get_grid_data(deriv)
@@ -184,6 +190,8 @@ function evaluate(op::DirectProductDivergence, layout::Symbol=:g)
     else
         fill!(get_coeff_data(result), 0.0)
         for (i, coord) in enumerate(coordsys.coords)
+            # Coefficient-space divergence follows the same accumulation, but
+            # reads/writes spectral buffers.
             comp = operand.components[i]
             deriv = evaluate_differentiate(Differentiate(comp, coord, 1), layout)
             get_coeff_data(result) .+= get_coeff_data(deriv)

@@ -21,6 +21,15 @@
     return dest
 end
 
+@inline function _axpy_complex_vector!(y::AbstractVector{ComplexF64},
+                                       scale,
+                                       x::AbstractVector{ComplexF64})
+    @inbounds for i in eachindex(y, x)
+        y[i] += scale * x[i]
+    end
+    return y
+end
+
 function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
     current_state = state.history[end]
@@ -39,48 +48,17 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
-    # Subproblem-based IMEX: use sparse subproblems if available.
-    # Works for serial, MPI, and GPU-resident fields. Subproblem matrices are
-    # still assembled on CPU today, but the solve backend may stage through a
-    # GPU matsolver when configured.
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            step_subproblem_rk!(state, solver, sps)
-            return
-        end
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        step_subproblem_rk!(state, solver, sps)
+        return nothing
     end
 
-    # Fall back to explicit treatment for GPU or MPI without subproblems
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if is_gpu(dist.architecture)
-            @debug "IMEX RK: GPU detected, falling back to explicit treatment"
-            _step_rk_imex_explicit_fallback!(state, solver)
-            return
-        end
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            @debug "IMEX RK: MPI without subproblems, falling back to explicit treatment"
-            _step_rk_imex_explicit_fallback!(state, solver)
-            return
-        end
-    end
-
-    # If no linear operator provided, fall back to explicit-only treatment
-    if L_matrix === nothing
-        @debug "IMEX RK: No L_matrix found, treating all terms explicitly"
+    fallback_reason = _imex_rk_explicit_fallback_reason(state, solver, current_state, L_matrix)
+    if fallback_reason !== nothing
+        _log_imex_rk_explicit_fallback(fallback_reason)
         _step_rk_imex_explicit_fallback!(state, solver)
-        return
-    end
-
-    # Check if L_matrix is effectively zero (no linear terms)
-    L_is_zero = (L_matrix isa SparseMatrixCSC && nnz(L_matrix) == 0) ||
-                (norm(L_matrix, Inf) < 1e-14)
-
-    if L_is_zero
-        @debug "IMEX RK: L_matrix is zero, falling back to explicit treatment"
-        _step_rk_imex_explicit_fallback!(state, solver)
-        return
+        return nothing
     end
 
     # Mass matrix handling: distinguish "no M" from "singular M (DAE)".
@@ -153,7 +131,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                 end
                 if lhs === nothing
                     _step_rk_imex_explicit_fallback!(state, solver)
-                    return
+                    return nothing
                 end
                 _rk_ldiv!(Xs_vec, lhs, rhs_vec)
             end
@@ -180,7 +158,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
                 end
                 if lhs === nothing
                     _step_rk_imex_explicit_fallback!(state, solver)
-                    return
+                    return nothing
                 end
                 _rk_ldiv!(Xs_vec, lhs, rhs_vec)
             end
@@ -219,6 +197,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
     end
 
     _push_vector_state!(state.history, X_new_vec, current_state, 1)
+    return nothing
 end
 
 """
@@ -251,20 +230,7 @@ function _step_explicit_rk!(state::TimestepperState, solver::InitialValueSolver,
 
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
-    # Check if we should use field-based path
-    # Field-based path is required for: GPU, or MPI with PencilArrays (distributed data)
-    # because the vectorized matrix approach doesn't work with distributed data
-    use_field_path = false
-    is_mpi_mode = false
-    if !isempty(current_state)
-        arch = field_architecture(current_state[1])
-        dist = current_state[1].dist
-        is_mpi_mode = dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-        # Use field-based path for GPU or MPI mode
-        use_field_path = is_gpu(arch) || is_mpi_mode
-    end
-
-    if use_field_path
+    if _distributed_field_path_required(current_state)
         # Note: M_matrix is ignored in GPU/MPI mode. For Fourier bases M=I anyway.
         # Non-trivial M (e.g., Chebyshev) would require distributed sparse solvers.
         _step_explicit_rk_gpu!(state, solver, A, b, c)  # Works for both GPU and MPI
@@ -362,7 +328,7 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
         copyto!(Y_vec, X_n_vec)
         for j in 1:(s-1)
             if abs(A[s, j]) > 1e-14
-                @. Y_vec += dt * A[s, j] * k_vecs[j]
+                _axpy_complex_vector!(Y_vec, dt * A[s, j], k_vecs[j])
             end
         end
 
@@ -380,7 +346,7 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
     copyto!(Y_vec, X_n_vec)
     @inbounds for s in 1:stages
         if abs(b[s]) > 1e-14
-            @. Y_vec += dt * b[s] * k_vecs[s]
+            _axpy_complex_vector!(Y_vec, dt * b[s], k_vecs[s])
         end
     end
 

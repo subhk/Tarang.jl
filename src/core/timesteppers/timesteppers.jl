@@ -36,6 +36,7 @@ include("types.jl")              # Timestepper struct definitions
 include("spectral_operators.jl") # SpectralLinearOperator for diagonal IMEX
 include("state.jl")              # TimestepperState and state management
 include("state_utils.jl")        # State manipulation utilities
+include("step_selection.jl")     # Runtime path and compatibility decisions
 include("step_rk.jl")            # RK step functions
 include("step_multistep.jl")     # CNAB, SBDF step functions
 include("step_etd.jl")           # ETD step functions

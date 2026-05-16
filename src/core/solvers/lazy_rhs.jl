@@ -80,16 +80,17 @@ Pool of pre-allocated ScalarField objects used as scratch buffers during
 evaluation. Each `evaluate!` borrows fields from the pool (round-robin) and
 returns them via `ws.next_idx` rewinding between sibling calls.
 """
-mutable struct LazyWorkspace
-    fields::Vector{ScalarField}
+mutable struct LazyWorkspace{F<:ScalarField}
+    fields::Vector{F}
     next_idx::Int     # index of next free field (grows as needed)
-    template::Union{Nothing, ScalarField}
+    template::Union{Nothing, F}
 end
 
-LazyWorkspace() = LazyWorkspace(ScalarField[], 1, nothing)
+LazyWorkspace{F}() where {F<:ScalarField} = LazyWorkspace{F}(F[], 1, nothing)
+LazyWorkspace() = LazyWorkspace{ScalarField}()
 
 """Get a scratch ScalarField from the pool, allocating if needed."""
-function _borrow_scratch!(ws::LazyWorkspace)
+function _borrow_scratch!(ws::LazyWorkspace{F}) where {F<:ScalarField}
     if ws.next_idx > length(ws.fields)
         # Allocate a new scratch field matching the template
         template = ws.template
@@ -588,23 +589,30 @@ A pre-built lazy RHS evaluation plan.
 - `workspace`: shared scratch pool
 - `is_compiled`: true if all non-trivial equations translated successfully
 """
-mutable struct LazyRHSPlan
+mutable struct LazyRHSPlan{F<:ScalarField}
     exprs::Vector{Union{LazyFuture, Nothing}}
-    result_fields::Vector{Union{ScalarField, Nothing}}
-    output_fields::Vector{ScalarField}
-    workspaces::Vector{LazyWorkspace}
+    result_fields::Vector{Union{F, Nothing}}
+    output_fields::Vector{F}
+    workspaces::Vector{LazyWorkspace{F}}
     is_compiled::Bool
 end
 
-function LazyRHSPlan(n_state::Int)
-    LazyRHSPlan(
+function LazyRHSPlan{F}(n_state::Int) where {F<:ScalarField}
+    LazyRHSPlan{F}(
         fill(nothing, n_state),
         fill(nothing, n_state),
-        Vector{ScalarField}(undef, n_state),
-        [LazyWorkspace() for _ in 1:n_state],
+        Vector{F}(undef, n_state),
+        [LazyWorkspace{F}() for _ in 1:n_state],
         false,
     )
 end
+
+LazyRHSPlan(n_state::Int) = LazyRHSPlan{ScalarField}(n_state)
+
+_lazy_plan_field_type(state) = _lazy_plan_field_type(eltype(state))
+_lazy_plan_field_type(::Type{F}) where {F<:ScalarField{<:Any, SerialFieldStorage}} =
+    isconcretetype(F) ? F : ScalarField
+_lazy_plan_field_type(::Type) = ScalarField
 
 """
     build_lazy_rhs_plan!(solver) -> LazyRHSPlan
@@ -615,7 +623,8 @@ into a LazyFuture tree. Returns a plan with `is_compiled=true` if successful.
 function build_lazy_rhs_plan!(solver)
     problem = solver.problem
     state = solver.state
-    plan = LazyRHSPlan(length(state))
+    F = _lazy_plan_field_type(state)
+    plan = LazyRHSPlan{F}(length(state))
 
     for (idx, template) in enumerate(state)
         zero_field = _lazy_zero_field(template)

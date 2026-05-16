@@ -58,21 +58,27 @@ With --cleanup, original processor files are deleted after successful merge.
 """
 
 using Pkg
-# Ensure we can find the Tarang tools
-if !("." in LOAD_PATH)
-    push!(LOAD_PATH, dirname(@__DIR__))
+
+const PROJECT_ROOT = dirname(@__DIR__)
+
+# Use the package environment even when the script is invoked directly from a
+# checkout without `--project`.
+Pkg.activate(PROJECT_ROOT; io=devnull)
+if !(PROJECT_ROOT in LOAD_PATH)
+    push!(LOAD_PATH, PROJECT_ROOT)
 end
 
-# Load merging functionality
-include(joinpath(dirname(@__DIR__), "src", "tools", "netcdf_merge.jl"))
-
 using ArgParse
+using Tarang
 
-# Version info (sourced from main module)
-const VERSION = Tarang.__version__
+# Version info from package metadata; avoids depending on private module globals.
+const VERSION = string(pkgversion(Tarang))
 const SCRIPT_NAME = "merge_netcdf.jl"
 
 function parse_arguments()
+    # Keep the CLI surface here and the NetCDF merge mechanics in
+    # src/tools/netcdf_merge.jl so scripts stay thin wrappers around library
+    # functionality.
     s = ArgParseSettings(description="Merge per-processor NetCDF files from Tarang.jl",
                         version="$SCRIPT_NAME v$VERSION",
                         add_version=true)
@@ -115,6 +121,8 @@ end
 
 function str_to_merge_mode(mode_str::String)
     mode_lower = lowercase(mode_str)
+    # Convert user-facing strings into the internal merge-mode constants used by
+    # the library implementation.
     if mode_lower == "concat"
         return SIMPLE_CONCAT
     elseif mode_lower == "reconstruct"
@@ -141,6 +149,8 @@ function auto_discover_and_merge(args)
     
     verbose && println("Auto-discovering mergeable handlers...")
     
+    # Auto mode scans the current directory for handler/set folders that match
+    # Tarang's per-rank output naming convention.
     handlers = find_mergeable_handlers()
     
     if isempty(handlers)
@@ -205,6 +215,8 @@ function merge_specific_handlers(args)
     success_count = 0
     
     for handler in handlers
+        # Each requested handler is independent; continue through the list so a
+        # single failed merge does not hide results for later handlers.
         verbose && println("\n" * "="^60)
         verbose && println("Merging handler: $handler")
         verbose && println("="^60)
