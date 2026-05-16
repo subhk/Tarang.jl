@@ -517,7 +517,10 @@ struct SPQRSolver{T, F, Q, R} <: AbstractMatSolver
     q_adjoint::Q
     r_factor::R
     inv_cpiv::Vector{Int}
+    rpivinv::Vector{Int}
     workspace::Vector{Vector{T}}
+    q_workspace::Vector{Vector{T}}
+    rank_workspace::Vector{Vector{T}}
     rank::Int
     m::Int
     n::Int
@@ -531,10 +534,15 @@ function SPQRSolver(matrix::SparseMatrixCSC; kwargs...)
     r_factor = UpperTriangular(qr_factor.R[Base.OneTo(rnk), Base.OneTo(rnk)])
     q_adjoint = adjoint(qr_factor.Q)
     inv_cpiv = isempty(qr_factor.cpiv) ? Int[] : invperm(qr_factor.cpiv)
+    rpivinv = Vector{Int}(qr_factor.rpivinv)
 
     return SPQRSolver{T, typeof(qr_factor), typeof(q_adjoint), typeof(r_factor)}(
-        qr_factor, q_adjoint, r_factor, inv_cpiv,
+        qr_factor, q_adjoint, r_factor, inv_cpiv, rpivinv,
         [Vector{T}(undef, max(size(qr_factor, 1), size(qr_factor, 2)))
+         for _ in 1:Base.Threads.nthreads()],
+        [Vector{T}(undef, size(qr_factor, 1))
+         for _ in 1:Base.Threads.nthreads()],
+        [Vector{T}(undef, Int(rnk))
          for _ in 1:Base.Threads.nthreads()],
         Int(rnk), size(qr_factor, 1), size(qr_factor, 2))
 end
@@ -561,18 +569,29 @@ function solve!(dest::AbstractVector, s::SPQRSolver{T}, rhs::AbstractVector) whe
     length(dest) == s.n ||
         throw(DimensionMismatch("SPQR destination length $(length(dest)) does not match matrix columns $(s.n)"))
 
-    x = s.workspace[Base.Threads.threadid()]
-    rpivinv = s.qr_factor.rpivinv
+    thread_id = Base.Threads.threadid()
+    x = s.workspace[thread_id]
+    q_rhs = s.q_workspace[thread_id]
+    rank_rhs = s.rank_workspace[thread_id]
+    rpivinv = s.rpivinv
 
     for i in eachindex(rpivinv)
-        @inbounds x[rpivinv[i]] = rhs[i]
+        @inbounds q_rhs[rpivinv[i]] = rhs[i]
     end
 
-    lmul!(s.q_adjoint, view(x, 1:s.m))
-    if s.rank < length(x)
-        fill!(view(x, s.rank+1:length(x)), zero(T))
+    lmul!(s.q_adjoint, q_rhs)
+
+    @inbounds for i in 1:s.rank
+        rank_rhs[i] = q_rhs[i]
     end
-    ldiv!(s.r_factor, view(x, 1:s.rank))
+    ldiv!(s.r_factor, rank_rhs)
+
+    @inbounds for i in 1:s.rank
+        x[i] = rank_rhs[i]
+    end
+    if s.rank < s.n
+        fill!(x, zero(T), s.rank + 1, s.n)
+    end
 
     if isempty(s.inv_cpiv)
         copyto!(dest, 1, x, 1, s.n)

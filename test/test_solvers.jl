@@ -58,14 +58,30 @@ using Test
                    -1 => fill(-1.0 + 0im, 7))
         b = ComplexF64.(1:8)
 
-        for solver in (MS.BandedLUSolver(A),
-                       MS.BlockDiagonalSolver(Matrix(A); block_sizes=[4, 4]),
-                       MS.SPQRSolver(A))
-            dest = similar(b)
-            MS.solve!(dest, solver, b)
-            allocs = @allocated MS.solve!(dest, solver, b)
-            @test allocs <= 64
-            @test dest ≈ MS.solve(solver, b)
+        solvers = (
+            "banded" => MS.BandedLUSolver(A),
+            "block" => MS.BlockDiagonalSolver(Matrix(A); block_sizes=[4, 4]),
+            "spqr" => MS.SPQRSolver(A),
+        )
+
+        for (name, solver) in solvers
+            @testset "$name" begin
+                dest = similar(b)
+                MS.solve!(dest, solver, b)
+                MS.solve!(dest, solver, b)
+                # Average repeated solves so Julia 1.12's fixed @allocated
+                # measurement overhead inside testsets is not counted as
+                # per-call solver allocation.
+                repeats = 16
+                allocs = (@allocated begin
+                    for _ in 1:repeats
+                        MS.solve!(dest, solver, b)
+                    end
+                    nothing
+                end) / repeats
+                @test allocs <= 64
+                @test dest ≈ MS.solve(solver, b)
+            end
         end
     end
 
