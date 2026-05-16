@@ -43,7 +43,7 @@ using Test
         evaluator = NonlinearEvaluator(dist)
         @test isa(evaluator, NonlinearEvaluator)
         @test evaluator.dealiasing_factor == 1.5  # Default 3/2 rule
-        @test isa(evaluator.pencil_transforms, Dict{Any, Any})
+        @test evaluator.pencil_transforms isa Tarang.NonlinearTransformCache
         @test isa(evaluator.temp_fields, Dict{String, ScalarField})
         @test isa(evaluator.performance_stats, NonlinearPerformanceStats)
 
@@ -63,13 +63,14 @@ using Test
             @test haskey(evaluator.pencil_transforms, "1d_32")
 
             transform = evaluator.pencil_transforms["1d_32"]
-            @test transform["type"] == :fftw_1d
-            @test transform["size"] == 32
-            @test transform["dealiased_size"] == ceil(Int, 32 * 1.5)
-            @test haskey(transform, "forward_plan")
-            @test haskey(transform, "backward_plan")
-            @test haskey(transform, "scratch_real")
-            @test haskey(transform, "scratch_complex")
+            @test transform isa Tarang.FFTWTransformConfig
+            @test transform.kind == :fftw_1d
+            @test transform.shape == (32,)
+            @test transform.dealiased_shape == (ceil(Int, 32 * 1.5),)
+            @test transform.forward_plan !== nothing
+            @test transform.backward_plan !== nothing
+            @test transform.scratch_real isa AbstractArray
+            @test transform.scratch_complex isa AbstractArray
         end
 
         @testset "2D FFTW Plans" begin
@@ -77,9 +78,10 @@ using Test
             @test haskey(evaluator.pencil_transforms, "2d_64x32")
 
             transform = evaluator.pencil_transforms["2d_64x32"]
-            @test transform["type"] == :fftw_2d
-            @test transform["shape"] == (64, 32)
-            @test transform["dealiased_shape"] == (ceil(Int, 64 * 1.5), ceil(Int, 32 * 1.5))
+            @test transform isa Tarang.FFTWTransformConfig
+            @test transform.kind == :fftw_2d
+            @test transform.shape == (64, 32)
+            @test transform.dealiased_shape == (ceil(Int, 64 * 1.5), ceil(Int, 32 * 1.5))
         end
 
         @testset "3D FFTW Plans" begin
@@ -87,8 +89,9 @@ using Test
             @test haskey(evaluator.pencil_transforms, "3d_32x32x16")
 
             transform = evaluator.pencil_transforms["3d_32x32x16"]
-            @test transform["type"] == :fftw_3d
-            @test transform["shape"] == (32, 32, 16)
+            @test transform isa Tarang.FFTWTransformConfig
+            @test transform.kind == :fftw_3d
+            @test transform.shape == (32, 32, 16)
         end
     end
 
@@ -101,19 +104,19 @@ using Test
         Tarang.setup_1d_fftw_plans!(evaluator, 64)
         transform = Tarang.get_nonlinear_transform(evaluator, (64,))
         @test transform !== nothing
-        @test transform["size"] == 64
+        @test transform.shape == (64,)
 
         # Test 2D lookup
         Tarang.setup_2d_fftw_plans!(evaluator, (128, 64))
         transform = Tarang.get_nonlinear_transform(evaluator, (128, 64))
         @test transform !== nothing
-        @test transform["shape"] == (128, 64)
+        @test transform.shape == (128, 64)
 
         # Test 3D lookup
         Tarang.setup_3d_fftw_plans!(evaluator, (64, 64, 32))
         transform = Tarang.get_nonlinear_transform(evaluator, (64, 64, 32))
         @test transform !== nothing
-        @test transform["shape"] == (64, 64, 32)
+        @test transform.shape == (64, 64, 32)
 
         # Test on-the-fly creation for unknown shape
         transform = Tarang.get_nonlinear_transform(evaluator, (48,))
@@ -535,15 +538,17 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
 
         evaluator = NonlinearEvaluator(dist)
+        Tarang.setup_1d_fftw_plans!(evaluator, 8)
+        transform = evaluator.pencil_transforms["1d_8"]
 
         @testset "pencil_transforms accepts tuple keys" begin
-            evaluator.pencil_transforms[(:test, 1, 2)] = "test_value"
-            @test evaluator.pencil_transforms[(:test, 1, 2)] == "test_value"
+            evaluator.pencil_transforms[(:test, 1, 2)] = transform
+            @test evaluator.pencil_transforms[(:test, 1, 2)] === transform
         end
 
         @testset "pencil_transforms accepts string keys (backward compat)" begin
-            evaluator.pencil_transforms["string_key"] = "string_value"
-            @test evaluator.pencil_transforms["string_key"] == "string_value"
+            evaluator.pencil_transforms["string_key"] = transform
+            @test evaluator.pencil_transforms["string_key"] === transform
         end
     end
 end

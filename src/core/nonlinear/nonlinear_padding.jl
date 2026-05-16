@@ -17,7 +17,7 @@ Type parameters:
 For MPI-distributed data, the workspace operates on each rank's LOCAL array
 (parent of PencilArray), padding only non-decomposed Fourier dimensions.
 """
-mutable struct PaddedDealiasingWorkspace{T<:AbstractFloat, A<:AbstractArray{Complex{T}}}
+mutable struct PaddedDealiasingWorkspace{T<:AbstractFloat, A<:AbstractArray{Complex{T}}} <: AbstractNonlinearTransformConfig
     original_shape::Tuple{Vararg{Int}}
     padded_shape::Tuple{Vararg{Int}}
     fourier_dims::Vector{Int}
@@ -388,7 +388,7 @@ Creates a padded-size PencilFFT plan and intermediate PencilArrays.
 This enables correct dealiasing on ALL dimensions (including distributed ones),
 unlike the local-only approach which can only pad non-decomposed dimensions.
 """
-mutable struct PaddedPencilFFTWorkspace{P, GA<:AbstractArray, SA<:AbstractArray}
+mutable struct PaddedPencilFFTWorkspace{P, GA<:AbstractArray, SA<:AbstractArray} <: AbstractNonlinearTransformConfig
     original_shape::Tuple{Vararg{Int}}
     padded_shape::Tuple{Vararg{Int}}
     padded_plan::P       # PencilFFTs.PencilFFTPlan for padded size

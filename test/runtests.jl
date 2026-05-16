@@ -24,6 +24,7 @@ const TEST_FILES = [
     "test_plot_tools.jl",
     "test_compatibility.jl",
     "test_namespaces.jl",
+    "test_root_module_structure.jl",
     "test_cartesian_operators.jl",
     "test_stochastic_forcing.jl",
     "test_temporal_filters.jl",

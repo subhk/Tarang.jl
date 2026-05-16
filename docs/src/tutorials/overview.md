@@ -16,12 +16,11 @@ If you're new to spectral methods or Tarang.jl, start here:
 
 Once comfortable with basics:
 
-4. **[Forced 2D Turbulence](ivp_forced_2d_turbulence.md)** - Stochastic forcing, ring forcing, inverse energy cascade
-5. **[Forced SQG Turbulence](ivp_forced_sqg_turbulence.md)** - Fractional Laplacian, surface quasi-geostrophic dynamics
-6. **[3D Rotating RBC](ivp_3d_rbc.md)** - 3D convection with Ekman number and Coriolis force
-7. **[3D Turbulent Flow](ivp_3d_turbulence.md)** - 3D problems with advanced parallelization
-8. **[Analysis and Output](analysis_and_output.md)** - Data management and visualization
-9. **[Eigenvalue Problems](eigenvalue_problems.md)** - Linear stability analysis
+4. **[Fluid Dynamics Examples](../examples/fluid_dynamics.md)** - Navier-Stokes, rotating convection, and turbulence examples
+5. **[Surface Dynamics](surface_dynamics.md)** - Fractional Laplacian, surface quasi-geostrophic dynamics
+6. **[3D Turbulent Flow](ivp_3d_turbulence.md)** - 3D problems with advanced parallelization
+7. **[Analysis and Output](analysis_and_output.md)** - Data management and visualization
+8. **[Eigenvalue Problems](eigenvalue_problems.md)** - Linear stability analysis
 
 ### Advanced Topics
 
@@ -39,9 +38,8 @@ Time-evolution problems where you integrate PDEs forward in time.
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
 | [2D Rayleigh-Bénard](ivp_2d_rbc.md) | Thermal convection in 2D | Intermediate | Navier-Stokes, buoyancy, CFL |
-| [3D Rotating Rayleigh-Bénard](ivp_3d_rbc.md) | 3D convection with rotation | Advanced | Ekman number, Coriolis, ETD_RK222 |
-| [Forced 2D Turbulence](ivp_forced_2d_turbulence.md) | Stochastically forced 2D NS | Intermediate | Stochastic forcing, ring forcing, inverse cascade |
-| [Forced SQG Turbulence](ivp_forced_sqg_turbulence.md) | Surface quasi-geostrophic turbulence | Advanced | Fractional Laplacian, surface dynamics, SQG inversion |
+| [Fluid Dynamics Examples](../examples/fluid_dynamics.md) | Navier-Stokes and turbulence examples | Intermediate | Shear flows, rotating convection, turbulence |
+| [Surface Dynamics](surface_dynamics.md) | SQG and boundary-coupled dynamics | Advanced | Fractional Laplacian, surface dynamics, SQG inversion |
 | [3D Taylor-Green Vortex](ivp_3d_turbulence.md) | 3D turbulence simulation | Advanced | 3D FFTs, energy spectra |
 | [Channel Flow](../notebooks/channel_flow.md) | Turbulent channel flow | Advanced | Wall-bounded, statistics |
 
@@ -156,8 +154,8 @@ eigenvalues = solve!(solver, nev=10)
 
 **Fluid Dynamics**:
 - Start: [2D Rayleigh-Bénard](ivp_2d_rbc.md)
-- Intermediate: [Forced 2D Turbulence](ivp_forced_2d_turbulence.md), [Forced SQG Turbulence](ivp_forced_sqg_turbulence.md)
-- Advanced: [3D Rotating RBC](ivp_3d_rbc.md), [3D Turbulence](ivp_3d_turbulence.md), [Channel Flow](../notebooks/channel_flow.md)
+- Intermediate: [Fluid Dynamics Examples](../examples/fluid_dynamics.md), [Surface Dynamics](surface_dynamics.md)
+- Advanced: [3D Turbulence](ivp_3d_turbulence.md), [Channel Flow](../notebooks/channel_flow.md)
 
 **Geophysical Flows**:
 - Start: [Surface Dynamics](surface_dynamics.md) (SQG, QG)
@@ -186,13 +184,12 @@ eigenvalues = solve!(solver, nev=10)
 
 **Intermediate**: Multiple fields, coupled equations
 - [2D Rayleigh-Bénard](ivp_2d_rbc.md)
-- [Forced 2D Turbulence](ivp_forced_2d_turbulence.md)
-- [Forced SQG Turbulence](ivp_forced_sqg_turbulence.md)
+- [Fluid Dynamics Examples](../examples/fluid_dynamics.md)
+- [Surface Dynamics](surface_dynamics.md)
 - [Boundary Conditions](boundary_conditions.md)
 - [Analysis and Output](analysis_and_output.md)
 
 **Advanced**: 3D problems, advanced analysis
-- [3D Rotating RBC](ivp_3d_rbc.md)
 - [3D Turbulence](ivp_3d_turbulence.md)
 - [Eigenvalue Problems](eigenvalue_problems.md)
 
