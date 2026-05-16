@@ -79,10 +79,14 @@ const GPU_TEST_FILES = [
 
 # MPI tests that must be run separately with mpiexec
 # Run with: mpiexec -n 4 julia --project test/test_mpi_distributor.jl
+#           mpiexec -n 4 julia --project test/test_mpi_field_initialization.jl
+#           mpiexec -n 4 julia --project test/test_stochastic_forcing_mpi.jl
 #           mpiexec -n 4 julia --project test/test_distributed_gpu_transpose.jl
 # Or use:   ./test/run_mpi_tests.sh 4
 const MPI_TEST_FILES = [
     "test_mpi_distributor.jl",
+    "test_mpi_field_initialization.jl",
+    "test_stochastic_forcing_mpi.jl",
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
 ]
