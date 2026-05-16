@@ -101,6 +101,55 @@ function _global_matrix_implicit_total_dofs(solver::InitialValueSolver)
 end
 
 """
+    _global_matrix_implicit_matrices(solver) -> (L_matrix, M_matrix)
+
+Return the matrix pair used by legacy global-matrix implicit methods.
+Keeping this lookup centralized prevents every timestepper from knowing the
+problem-parameter keys directly.
+"""
+function _global_matrix_implicit_matrices(solver::InitialValueSolver)
+    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
+    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
+    return L_matrix, M_matrix
+end
+
+function _global_matrix_implicit_missing_matrix_reason(L_matrix, M_matrix)
+    L_matrix === nothing && return :missing_linear_operator
+    M_matrix === nothing && return :missing_mass_operator
+    return nothing
+end
+
+function _global_matrix_implicit_distributed_fallback_reason(fields::Vector{<:ScalarField})
+    isempty(fields) && return nothing
+    if _mpi_pencil_distribution_active(fields[1].dist)
+        return :mpi_pencil_without_subproblems
+    end
+    return nothing
+end
+
+function _log_global_matrix_implicit_distributed_fallback(method_name::String,
+                                                         reason::Symbol,
+                                                         fallback_name::String)
+    if reason === :mpi_pencil_without_subproblems
+        @debug "$method_name: MPI PencilArrays detected without subproblems, falling back to $fallback_name"
+    else
+        @debug "$method_name: global-matrix path unavailable, falling back to $fallback_name" reason
+    end
+end
+
+function _log_global_matrix_implicit_matrix_fallback(method_name::String,
+                                                    reason::Symbol,
+                                                    fallback_name::String)
+    if reason === :missing_linear_operator
+        @warn "$method_name requires L_matrix and M_matrix, falling back to $fallback_name" maxlog=1
+    elseif reason === :missing_mass_operator
+        @warn "$method_name requires L_matrix and M_matrix, falling back to $fallback_name" maxlog=1
+    else
+        @warn "$method_name global-matrix path unavailable, falling back to $fallback_name" maxlog=1
+    end
+end
+
+"""
     _check_mpi_implicit_compat!(solver, method_name)
 
 Check if a global-matrix implicit timestepper can run with MPI fields.

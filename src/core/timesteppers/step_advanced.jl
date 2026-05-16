@@ -6,6 +6,22 @@
 # `lhs \ rhs` dispatches statically instead of through Any.
 @inline _advanced_ldiv(lhs::F, rhs) where {F} = lhs \ rhs
 
+function _advanced_global_matrices_or_fallback!(state::TimestepperState,
+                                                solver::InitialValueSolver,
+                                                method_name::String,
+                                                fallback_name::String,
+                                                fallback_step!::F) where {F}
+    L_matrix, M_matrix = _global_matrix_implicit_matrices(solver)
+    reason = _global_matrix_implicit_missing_matrix_reason(L_matrix, M_matrix)
+    if reason !== nothing
+        _log_global_matrix_implicit_matrix_fallback(method_name, reason, fallback_name)
+        fallback_step!(state, solver)
+        return L_matrix, M_matrix, true
+    end
+
+    return L_matrix, M_matrix, false
+end
+
 """
     Modified Crank-Nicolson Adams-Bashforth 2nd order step.
 
@@ -42,14 +58,9 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "MCNAB2 requires L_matrix and M_matrix, falling back to CNAB2"
-        step_cnab2!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _advanced_global_matrices_or_fallback!(state, solver, "MCNAB2", "CNAB2", step_cnab2!)
+    fell_back && return
 
     # Get timestep history for variable timestep
     dt_current = dt
@@ -155,14 +166,9 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "CNLF2 requires L_matrix and M_matrix, falling back to RK222"
-        step_rk222!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _advanced_global_matrices_or_fallback!(state, solver, "CNLF2", "RK222", step_rk222!)
+    fell_back && return
 
     try
         # Compute variable-timestep ratio using the main dt_history (updated by solvers.jl)
@@ -322,4 +328,3 @@ function step_rk443_imex!(state::TimestepperState, solver::InitialValueSolver)
         step_rk443!(state, solver)
     end
 end
-

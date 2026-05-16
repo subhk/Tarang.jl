@@ -7,5 +7,6 @@ using Tarang
         ambiguities=false,       # skip due to broad operator dispatch
         piracies=false,          # skip due to Base method extensions
         persistent_tasks=false,  # skip due to MPI.Init() in __init__
+        stale_deps=(ignore=[:ArgParse],),  # ArgParse is used by scripts/merge_netcdf.jl
     )
 end

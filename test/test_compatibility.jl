@@ -47,6 +47,11 @@ end
     @test all(ts -> ts isa Tarang.TimeStepper, steppers)
 end
 
+@testset "Exported transform setup functions are defined" begin
+    @test isdefined(Tarang, :setup_pencil_fft_transforms_2d!)
+    @test isdefined(Tarang, :setup_pencil_fft_transforms_3d!)
+end
+
 @testset "NetCDF metadata" begin
     tmp = mktempdir()
     cd(tmp) do

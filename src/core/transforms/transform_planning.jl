@@ -289,6 +289,13 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     end
 end
 
+# The 2D implementation is dimension-generic; keep the 3D public entry point
+# so exports and 3D planning paths resolve to a defined method.
+function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
+                                    global_shape::Tuple, fourier_axes::Vector{Int})
+    return setup_pencil_fft_transforms_2d!(dist, domain, global_shape, fourier_axes)
+end
+
 """Setup FFTW transforms for 1D case (CPU only)."""
 function setup_fftw_transform!(dist::Distributor, basis::Union{RealFourier, ComplexFourier}, axis::Int)
     transform = FourierTransform(basis, axis)
@@ -607,4 +614,3 @@ function build_legendre_polynomials(M::Int, grid_points::Vector{Float64})
     
     return poly_matrix
 end
-

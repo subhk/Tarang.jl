@@ -88,3 +88,65 @@ end
     Tarang.copy_solution_to_fields!(copied, reusable)
     @test Tarang.fields_to_vector(copied) == reusable
 end
+
+@testset "RHS Runtime Strategy Helpers" begin
+    domain = PeriodicDomain(8)
+    u = ScalarField(domain, "u")
+    set!(u, (x,) -> sin(x))
+
+    problem = IVP([u])
+    add_equation!(problem, "∂t(u) = -u")
+    solver = InitialValueSolver(problem, RK111(); dt=0.01)
+
+    strategy = isdefined(Tarang, :_rhs_evaluation_strategy) ?
+               Tarang._rhs_evaluation_strategy : nothing
+
+    @test strategy !== nothing
+    @test solver.rhs_plan !== nothing
+    @test solver.rhs_plan.is_compiled
+
+    if strategy !== nothing
+        @test strategy(solver) === :lazy
+        @test strategy(solver; buffered=true) === :lazy_buffered
+
+        original_plan = solver.rhs_plan
+        solver.rhs_plan = nothing
+        @test strategy(solver) === :interpreted
+
+        solver.rhs_plan = original_plan
+        original_plan.is_compiled = false
+        @test strategy(solver) === :interpreted
+        original_plan.is_compiled = true
+    end
+end
+
+@testset "Legacy Global Matrix Path Helpers" begin
+    domain = PeriodicDomain(8)
+    u = ScalarField(domain, "u")
+    set!(u, (x,) -> sin(x))
+
+    problem = IVP([u])
+    add_equation!(problem, "∂t(u) = 0")
+    solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
+
+    matrices = isdefined(Tarang, :_global_matrix_implicit_matrices) ?
+               Tarang._global_matrix_implicit_matrices : nothing
+    missing_reason = isdefined(Tarang, :_global_matrix_implicit_missing_matrix_reason) ?
+                     Tarang._global_matrix_implicit_missing_matrix_reason : nothing
+    distributed_reason = isdefined(Tarang, :_global_matrix_implicit_distributed_fallback_reason) ?
+                         Tarang._global_matrix_implicit_distributed_fallback_reason : nothing
+
+    @test matrices !== nothing
+    @test missing_reason !== nothing
+    @test distributed_reason !== nothing
+
+    if matrices !== nothing && missing_reason !== nothing && distributed_reason !== nothing
+        L_matrix, M_matrix = matrices(solver)
+        @test L_matrix !== nothing
+        @test M_matrix !== nothing
+        @test missing_reason(L_matrix, M_matrix) === nothing
+        @test missing_reason(nothing, M_matrix) === :missing_linear_operator
+        @test missing_reason(L_matrix, nothing) === :missing_mass_operator
+        @test distributed_reason(solver.state) === nothing
+    end
+end

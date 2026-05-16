@@ -85,6 +85,34 @@ function _global_multistep_solve!(state::TimestepperState, cache_key,
     return solution
 end
 
+function _global_multistep_distributed_fallback!(state::TimestepperState,
+                                                 solver::InitialValueSolver,
+                                                 current_state::Vector{<:ScalarField},
+                                                 method_name::String)
+    reason = _global_matrix_implicit_distributed_fallback_reason(current_state)
+    reason === nothing && return false
+
+    _log_global_matrix_implicit_distributed_fallback(method_name, reason, "RK222")
+    step_rk222!(state, solver)
+    return true
+end
+
+function _global_multistep_matrices_or_fallback!(state::TimestepperState,
+                                                 solver::InitialValueSolver,
+                                                 method_name::String,
+                                                 fallback_name::String,
+                                                 fallback_step!::F) where {F}
+    L_matrix, M_matrix = _global_matrix_implicit_matrices(solver)
+    reason = _global_matrix_implicit_missing_matrix_reason(L_matrix, M_matrix)
+    if reason !== nothing
+        _log_global_matrix_implicit_matrix_fallback(method_name, reason, fallback_name)
+        fallback_step!(state, solver)
+        return L_matrix, M_matrix, true
+    end
+
+    return L_matrix, M_matrix, false
+end
+
 function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
@@ -94,36 +122,21 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     # This is the only path that correctly handles inhomogeneous algebraic
     # constraints (BCs like `T(z=0) = 1`), because the global-matrix path below
     # packs F in variable space and silently drops BC F values.
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            a, b, c = _cnab1_coefs(dt)
-            step_subproblem_multistep!(state, solver, sps, a, b, c)
-            return
-        end
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        a, b, c = _cnab1_coefs(dt)
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
     end
 
-    # Check for MPI mode - multistep IMEX methods don't support distributed data
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            # Multistep IMEX requires global matrix solves which don't work with distributed PencilArrays
-            step_rk222!(state, solver)
-            return
-        end
-    end
+    _global_multistep_distributed_fallback!(state, solver, current_state, "CNAB1") && return
 
     # Initialize history arrays if needed (following Tarang MultistepIMEX.__init__)
     _init_global_multistep_history!(state, :cnab1_iteration)
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "CNAB1 requires L_matrix and M_matrix, falling back to forward Euler" maxlog=1
-        step_rk111!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _global_multistep_matrices_or_fallback!(state, solver, "CNAB1", "forward Euler", step_rk111!)
+    fell_back && return
 
     # Get CNAB1 coefficients following Tarang (timesteppers:206-220)
     # Using tuples to avoid heap allocation every step
@@ -191,28 +204,19 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
     # CNAB2 needs 1 prior F-history entry to start; fall back to CNAB1 when
     # the history is empty (first call after solver build).
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            if _sp_multistep_history_depth(state) < 1
-                step_cnab1!(state, solver)
-                return
-            end
-            dt_prev = get_previous_timestep(state)
-            a, b, c = _cnab2_coefs(dt, dt_prev)
-            step_subproblem_multistep!(state, solver, sps, a, b, c)
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        if _sp_multistep_history_depth(state) < 1
+            step_cnab1!(state, solver)
             return
         end
+        dt_prev = get_previous_timestep(state)
+        a, b, c = _cnab2_coefs(dt, dt_prev)
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
     end
 
-    # Check for MPI mode - multistep IMEX methods don't support distributed data
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            step_rk222!(state, solver)
-            return
-        end
-    end
+    _global_multistep_distributed_fallback!(state, solver, current_state, "CNAB2") && return
 
     # Initialize history arrays if needed
     _init_global_multistep_history!(state, :cnab2_iteration)
@@ -226,14 +230,9 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "CNAB2 requires L_matrix and M_matrix, falling back to CNAB1" maxlog=1
-        step_cnab1!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _global_multistep_matrices_or_fallback!(state, solver, "CNAB2", "CNAB1", step_cnab1!)
+    fell_back && return
     
     # Get timestep history for variable timestep (following Tarang lines 280-281)
     dt_current = dt
@@ -313,37 +312,21 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     dt = state.dt
 
     # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            a, b, c = _sbdf1_coefs(dt)
-            step_subproblem_multistep!(state, solver, sps, a, b, c)
-            return
-        end
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        a, b, c = _sbdf1_coefs(dt)
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
     end
 
     # Initialize history arrays if needed
     _init_global_multistep_history!(state, :sbdf1_iteration)
 
-    # Check for MPI mode - SBDF methods don't support distributed data
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            # SBDF requires global matrix solves which don't work with distributed PencilArrays
-            # Fall back to explicit RK which works with distributed data
-            step_rk222!(state, solver)
-            return
-        end
-    end
+    _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF1") && return
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "SBDF1 requires L_matrix and M_matrix, falling back to forward Euler" maxlog=1
-        step_rk111!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _global_multistep_matrices_or_fallback!(state, solver, "SBDF1", "forward Euler", step_rk111!)
+    fell_back && return
     
     # Get SBDF1 coefficients following Tarang exactly (timesteppers:247-250)
     a = (1.0/dt, -1.0/dt)  # a[0], a[1] - BDF1 time derivative
@@ -411,28 +394,18 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     dt = state.dt
 
     # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            if _sp_multistep_history_depth(state) < 1
-                step_sbdf1!(state, solver)
-                return
-            end
-            a, b, c = _sbdf2_coefs(dt)
-            step_subproblem_multistep!(state, solver, sps, a, b, c)
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        if _sp_multistep_history_depth(state) < 1
+            step_sbdf1!(state, solver)
             return
         end
+        a, b, c = _sbdf2_coefs(dt)
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
     end
 
-    # Check for MPI mode - SBDF methods don't support distributed data
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            # SBDF requires global matrix solves which don't work with distributed PencilArrays
-            step_rk222!(state, solver)
-            return
-        end
-    end
+    _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF2") && return
 
     # Initialize history arrays if needed
     _init_global_multistep_history!(state, :sbdf2_iteration)
@@ -446,14 +419,9 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "SBDF2 requires L_matrix and M_matrix, falling back to SBDF1" maxlog=1
-        step_sbdf1!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _global_multistep_matrices_or_fallback!(state, solver, "SBDF2", "SBDF1", step_sbdf1!)
+    fell_back && return
     
     # Get timestep history for variable timestep (following Tarang lines 357-358)
     dt_current = dt
@@ -532,27 +500,18 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     dt = state.dt
 
     # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            if _sp_multistep_history_depth(state) < 2
-                step_sbdf2!(state, solver)
-                return
-            end
-            a, b, c = _sbdf3_coefs(dt)
-            step_subproblem_multistep!(state, solver, sps, a, b, c)
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        if _sp_multistep_history_depth(state) < 2
+            step_sbdf2!(state, solver)
             return
         end
+        a, b, c = _sbdf3_coefs(dt)
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
     end
 
-    # Check for MPI mode - SBDF methods don't support distributed data
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            step_rk222!(state, solver)
-            return
-        end
-    end
+    _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF3") && return
 
     # Initialize history arrays if needed
     _init_global_multistep_history!(state, :sbdf3_iteration)
@@ -583,14 +542,9 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     w2 = k2 / k1
     w1 = k1 / k0
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "SBDF3 requires L_matrix and M_matrix, falling back to SBDF2"
-        step_sbdf2!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _global_multistep_matrices_or_fallback!(state, solver, "SBDF3", "SBDF2", step_sbdf2!)
+    fell_back && return
 
     # Get SBDF3 coefficients following Tarang exactly (timesteppers:438-445)
     a = ((1 + w2/(1 + w2) + w1*w2/(1 + w1*(1 + w2))) / k2,
@@ -667,27 +621,18 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     dt = state.dt
 
     # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
-    if haskey(solver.problem.parameters, "subproblems")
-        sps = solver.problem.parameters["subproblems"]
-        if sps isa Tuple
-            if _sp_multistep_history_depth(state) < 3
-                step_sbdf3!(state, solver)
-                return
-            end
-            a, b, c = _sbdf4_coefs(dt)
-            step_subproblem_multistep!(state, solver, sps, a, b, c)
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        if _sp_multistep_history_depth(state) < 3
+            step_sbdf3!(state, solver)
             return
         end
+        a, b, c = _sbdf4_coefs(dt)
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
     end
 
-    # Check for MPI mode - SBDF methods don't support distributed data
-    if !isempty(current_state)
-        dist = current_state[1].dist
-        if dist.use_pencil_arrays && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            step_rk222!(state, solver)
-            return
-        end
-    end
+    _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF4") && return
 
     # Initialize history arrays if needed
     _init_global_multistep_history!(state, :sbdf4_iteration)
@@ -720,14 +665,9 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     w2 = k2 / k1
     w1 = k1 / k0
 
-    # Get matrices from solver
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix === nothing || M_matrix === nothing
-        @warn "SBDF4 requires L_matrix and M_matrix, falling back to SBDF3"
-        step_sbdf3!(state, solver)
-        return
-    end
+    L_matrix, M_matrix, fell_back =
+        _global_multistep_matrices_or_fallback!(state, solver, "SBDF4", "SBDF3", step_sbdf3!)
+    fell_back && return
 
     # Get SBDF4 coefficients following Tarang exactly (timesteppers:480-494)
     A1 = 1 + w1*(1 + w2)

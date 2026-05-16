@@ -12,22 +12,17 @@ not the equation structure. Each state field gets a corresponding RHS field.
 Equations with time derivatives contribute their F_expr to the appropriate state field;
 constraint equations (no dt) contribute zero.
 """
-# Function barriers: specialize execute_lazy_rhs! on the concrete plan type P so
-# that all field accesses inside are type-stable despite rhs_plan::Any in the struct.
-@inline _exec_lazy_rhs!(plan::P, state, solver) where {P} =
-    execute_lazy_rhs!(plan, state, solver)
-@inline _exec_lazy_rhs_buffered!(plan::P, state, solver) where {P} =
-    execute_lazy_rhs_buffered!(plan, state, solver)
-
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{<:ScalarField}, time::Float64)
+    strategy = _rhs_evaluation_strategy(solver)
+    rhs_fields = _evaluate_rhs_with_strategy(strategy, solver, state)
+    rhs_fields !== nothing && return rhs_fields
+    return _evaluate_rhs_interpreted(solver, state, time)
+end
+
+function _evaluate_rhs_interpreted(solver::InitialValueSolver,
+                                   state::Vector{<:ScalarField},
+                                   time::Float64)
     problem = solver.problem
-
-    # Use the type-specialized lazy RHS plan if available (JIT-specialized,
-    # zero-dispatch, broadcasting-fused).
-    if solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
-        return _exec_lazy_rhs!(solver.rhs_plan, state, solver)
-    end
-
     # Fallback: interpreted expression evaluation (original path)
     # Initialize RHS with zero fields for ALL state fields
     rhs = ScalarField[]
@@ -234,10 +229,10 @@ function evaluate_rhs_buffered(
     state::Vector{<:ScalarField},
     time::Float64,
 )
-    if solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
-        return _exec_lazy_rhs_buffered!(solver.rhs_plan, state, solver)
-    end
-    return evaluate_rhs(solver, state, time)
+    strategy = _rhs_evaluation_strategy(solver; buffered=true)
+    rhs_fields = _evaluate_rhs_with_strategy(strategy, solver, state)
+    rhs_fields !== nothing && return rhs_fields
+    return _evaluate_rhs_interpreted(solver, state, time)
 end
 
 """
