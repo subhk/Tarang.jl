@@ -433,6 +433,7 @@ Solver for block diagonal matrices where each block can be solved independently.
 struct BlockDiagonalSolver{T, F} <: AbstractMatSolver
     block_solvers::Vector{F}
     block_sizes::Vector{Int}
+    workspace::Vector{Vector{Vector{T}}}
 end
 
 function BlockDiagonalSolver(matrix::AbstractMatrix;
@@ -461,7 +462,10 @@ function BlockDiagonalSolver(matrix::AbstractMatrix;
         offset += bs
     end
 
-    return BlockDiagonalSolver{T, eltype(block_solvers)}(block_solvers, block_sizes)
+    workspace = [[Vector{T}(undef, bs) for bs in block_sizes]
+                 for _ in 1:Base.Threads.nthreads()]
+
+    return BlockDiagonalSolver{T, eltype(block_solvers)}(block_solvers, block_sizes, workspace)
 end
 
 function solve(s::BlockDiagonalSolver{T}, rhs::AbstractVector) where T
@@ -471,11 +475,24 @@ function solve(s::BlockDiagonalSolver{T}, rhs::AbstractVector) where T
 end
 
 function solve!(dest, s::BlockDiagonalSolver{T}, rhs::AbstractVector) where T
+    n = sum(s.block_sizes)
+    length(dest) == n ||
+        throw(DimensionMismatch("BlockDiagonal destination length $(length(dest)) does not match matrix rows $n"))
+    length(rhs) == n ||
+        throw(DimensionMismatch("BlockDiagonal rhs length $(length(rhs)) does not match matrix rows $n"))
+
+    workspace = s.workspace[Base.Threads.threadid()]
     offset = 0
 
     for (i, bs) in enumerate(s.block_sizes)
-        block_range = offset+1:offset+bs
-        ldiv!(view(dest, block_range), s.block_solvers[i], view(rhs, block_range))
+        block_rhs = workspace[i]
+        @inbounds for j in 1:bs
+            block_rhs[j] = rhs[offset + j]
+        end
+        ldiv!(s.block_solvers[i], block_rhs)
+        @inbounds for j in 1:bs
+            dest[offset + j] = block_rhs[j]
+        end
         offset += bs
     end
 
