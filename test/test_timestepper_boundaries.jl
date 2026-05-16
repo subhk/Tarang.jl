@@ -59,3 +59,32 @@ end
     @test solver.iteration == old_iter + 1
     @test solver.performance_stats.total_steps >= 1
 end
+
+@testset "State Vector Transport Helpers" begin
+    domain = PeriodicDomain(8)
+    u = ScalarField(domain, "u")
+    set!(u, (x,) -> cos(x))
+    fields = ScalarField[u]
+
+    mode = isdefined(Tarang, :_state_vector_transport_mode) ?
+           Tarang._state_vector_transport_mode : nothing
+
+    @test mode !== nothing
+    if mode !== nothing
+        @test mode(ScalarField[]) === :empty
+        @test mode(fields) === :local
+    end
+
+    vector = Tarang.fields_to_vector(fields)
+    reusable = similar(vector)
+
+    @test Tarang.fields_to_vector!(reusable, fields) === reusable
+    @test reusable == vector
+
+    copied = Tarang.vector_to_fields(vector, fields)
+    @test Tarang.fields_to_vector(copied) == vector
+
+    fill!(reusable, 2)
+    Tarang.copy_solution_to_fields!(copied, reusable)
+    @test Tarang.fields_to_vector(copied) == reusable
+end

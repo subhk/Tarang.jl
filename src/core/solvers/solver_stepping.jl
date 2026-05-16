@@ -23,57 +23,15 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
     try
         start_time = time()
 
-        solver.dt = dt
-
-        # Update time-dependent boundary conditions BEFORE taking the step.
-        # Pure space-only BCs are already populated at solver-build time and
-        # don't change between steps, so we skip the refresh for them to
-        # avoid redundant FFT recomputation. Space-AND-time dependent BCs
-        # live in `time_dependent_bcs` as well, so the guard below still
-        # catches them and both axes get refreshed inside
-        # `_apply_bc_values_to_equations!`.
-        #
-        # For RK steppers, `step_subproblem_rk!` re-runs the refresh at each
-        # stage time (see `_refresh_bcs_for_stage!`) to recover full
-        # stage-order accuracy on rapidly-varying BCs. For the multistep
-        # stepper a single per-step refresh is sufficient.
-        bcm = solver.problem.bc_manager
-        if has_time_dependent_bcs(bcm)
-            target_time = solver.sim_time + dt
-            update_time_dependent_bcs!(bcm, target_time)
-            _apply_bc_values_to_equations!(solver, target_time)
-            @debug "Refreshed BCs at t=$target_time"
-        end
-
-        # Use existing timestepper infrastructure from timesteppers.jl
-        # Create TimestepperState if needed
-        if solver.timestepper_state === nothing
-            solver.timestepper_state = TimestepperState(solver.timestepper, dt, solver.state)
-        else
-            # Update timestep history for variable timestep support
-            update_timestep_history!(solver.timestepper_state, dt)
-        end
+        _refresh_step_boundary_conditions!(solver, dt)
+        ts_state = _ensure_timestepper_state!(solver, dt)
 
         # Call existing timestepper step function from timesteppers.jl
-        step!(solver.timestepper_state, solver)
+        step!(ts_state, solver)
 
-        # Get the updated state from timestepper history
-        if length(solver.timestepper_state.history) > 0
-            solver.state = solver.timestepper_state.history[end]
-        end
-
-        # Sync the final state back to problem variables so users can read them directly
-        # (without this, problem variables hold stale intermediate stage data from evaluate_rhs)
-        sync_state_to_problem!(solver.problem, solver.state)
-
-        # Update time and iteration
-        solver.sim_time += dt
-        solver.iteration += 1
-
-        # Update performance statistics
         step_time = time() - start_time
-        solver.performance_stats.total_time += step_time
-        solver.performance_stats.total_steps += 1
+        _sync_solver_from_timestepper!(solver)
+        _advance_solver_clock!(solver, dt, step_time)
 
         return solver
     finally
