@@ -26,8 +26,8 @@ const Lz = 1.9
 # Helper functions for tests (defined first so they're available to all tests)
 # ============================================================================
 
-"""Fill field with random values."""
-function fill_random!(f::Tarang.ScalarField)
+"""Fill field with random values for these tests."""
+function fill_test_random!(f::Tarang.ScalarField)
     ensure_layout!(f, :g)
     rand!(Tarang.get_grid_data(f))
 end
@@ -41,15 +41,15 @@ function get_field_data(f::Tarang.ScalarField, layout::Symbol)
     end
 end
 
-function fill_random!(f::Tarang.VectorField)
+function fill_test_random!(f::Tarang.VectorField)
     for comp in f.components
-        fill_random!(comp)
+        fill_test_random!(comp)
     end
 end
 
-function fill_random!(f::Tarang.TensorField)
+function fill_test_random!(f::Tarang.TensorField)
     for comp in f.components  # Matrix iteration goes element-by-element
-        fill_random!(comp)
+        fill_test_random!(comp)
     end
 end
 
@@ -177,7 +177,7 @@ end
 
                             # Create random vector field
                             f = VectorField(dist, coords, "f", bases, dtype)
-                            fill_random!(f)
+                            fill_test_random!(f)
 
                             # Evaluate skew
                             ensure_layout!(f, layout)
@@ -213,7 +213,7 @@ end
 
                             # Create random tensor field (use coords not (coords, coords))
                             f = TensorField(dist, coords, "f", bases, dtype)
-                            fill_random!(f)
+                            fill_test_random!(f)
 
                             # Evaluate trace
                             ensure_layout!(f, layout)
@@ -242,7 +242,7 @@ end
 
                             # Create random tensor field
                             f = TensorField(dist, coords, "f", bases, dtype)
-                            fill_random!(f)
+                            fill_test_random!(f)
 
                             # Evaluate trace
                             ensure_layout!(f, layout)
@@ -619,7 +619,7 @@ end
 
                             # Create random tensor field
                             f = TensorField(dist, coords, "f", bases, dtype)
-                            fill_random!(f)
+                            fill_test_random!(f)
 
                             # Evaluate transpose
                             ensure_layout!(f, layout)
@@ -655,7 +655,7 @@ end
 
                             # Create random tensor field
                             f = TensorField(dist, coords, "f", bases, dtype)
-                            fill_random!(f)
+                            fill_test_random!(f)
 
                             # Evaluate transpose
                             ensure_layout!(f, layout)
@@ -913,7 +913,7 @@ end
         bases = (xb, yb)
 
         u = VectorField(dist, coords, "u", bases, Float64)
-        fill_random!(u)
+        fill_test_random!(u)
 
         # Test condition checking
         skew_op = CartesianSkew(u)
@@ -947,13 +947,5 @@ end
         @test all(isapprox.(gy, 0.0; atol=1e-12))
         @test any(abs.(gx) .> 1e-6)
         @test any(abs.(gz) .> 1e-6)
-    end
-end
-
-# Run tests if executed directly
-if abspath(PROGRAM_FILE) == @__FILE__
-    # Run all tests
-    @testset "All Cartesian Operator Tests" begin
-        include(@__FILE__)
     end
 end

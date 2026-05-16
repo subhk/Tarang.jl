@@ -395,16 +395,20 @@ end
 # enforcement.
 
 @testset "BC regression: Neumann BC (flux) + Dirichlet" begin
-    # KNOWN GAP: `add_bc!(problem, "∂z(T)(z=0) = 1")` string form isn't
-    # currently parsed — the parser emits "Unknown function: ∂z" and the
-    # resulting matrix is non-square (BC row has zero equation DoFs).
-    # There's a separate `neumann_bc("T", "z", 0.0, 1.0)` object-form
-    # constructor, but wiring it through `add_bc!(problem, bc_object)` is
-    # not fully plumbed through the BC manager / equation merge path.
-    #
-    # Skipping this test until the Neumann-BC parser + add_bc! path is
-    # completed. The Dirichlet tests above cover the BC enforcement
-    # machinery end-to-end, which was the main regression target for
-    # this session.
-    @test_skip false
+    solver, T = build_diffusion("∂z(T)(z=0) = 1", "T(z=Lz) = 0";
+                                Nx=4, Nz=16, κ=10.0, dt=0.01)
+
+    ensure_layout!(T, :g)
+    fill!(Tarang.get_grid_data(T), 0.0)
+    T.current_layout = :g
+    ensure_layout!(T, :c)
+
+    step_n!(solver, 150)
+    T_out = grid_array(T)
+
+    _, z = local_grids(T.dist, T.bases[1], T.bases[2])
+    expected = [zk - 1.0 for _ in 1:size(T_out, 1), zk in z]
+
+    max_err = maximum(abs, T_out .- expected)
+    @test max_err < 2e-3
 end

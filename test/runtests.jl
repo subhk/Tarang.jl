@@ -2,6 +2,7 @@ using Test
 using Tarang
 
 const TEST_FILES = [
+    "test_test_inventory.jl",
     "test_aqua.jl",
     "test_jet.jl",
     "test_coords.jl",
@@ -17,6 +18,9 @@ const TEST_FILES = [
     "test_cfl.jl",
     "test_domain_metadata.jl",
     "test_subsystems.jl",
+    "test_expression_matrices.jl",
+    "test_pencil_system.jl",
+    "test_pencil_matrices.jl",
     "test_transforms.jl",
     "test_solvers.jl",
     "test_flow_tools.jl",
@@ -76,6 +80,19 @@ const MPI_TEST_FILES = [
     "test_mpi_distributor.jl",
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
+]
+
+# Distributed CUDA/NCCL tests. These are intentionally excluded from the
+# default CPU suite because they require CUDA extension symbols, NCCL, or
+# multi-process GPU setup. Keep this list explicit so new CPU test files do
+# not silently sit outside the runner.
+const DISTRIBUTED_GPU_TEST_FILES = [
+    "test_distributed_dct.jl",
+    "test_distributed_dispatch.jl",
+    "test_distributed_parseval.jl",
+    "test_nccl_alltoall.jl",
+    "test_nccl_subcomm.jl",
+    "test_pencil_decomposition.jl",
 ]
 
 for file in TEST_FILES

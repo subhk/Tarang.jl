@@ -852,6 +852,18 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
                         1
                     end
                     return dt(field, order)
+                elseif startswith(string(func_expr), "∂")
+                    if isempty(arg_exprs)
+                        throw(ArgumentError("$(func_expr) requires an operand"))
+                    end
+                    coord_name = replace(string(func_expr), r"^∂" => "")
+                    field = evaluate_parsed_expression(arg_exprs[1], namespace)
+                    coord = field isa Operand ? _find_coordinate_for_field(field, coord_name, namespace) : nothing
+                    if coord === nothing && haskey(namespace, coord_name) && isa(namespace[coord_name], Coordinate)
+                        coord = namespace[coord_name]
+                    end
+                    coord === nothing && throw(ArgumentError("Unknown derivative coordinate '$coord_name' in $(func_expr)"))
+                    return d(field, coord, 1)
                 elseif func_expr == :d || func_expr == :diff
                     if length(arg_exprs) < 2
                         throw(ArgumentError("d requires at least an operand and a coordinate"))
@@ -1230,4 +1242,3 @@ function _find_coordinate_for_field(field::Operand, coord_name::String, namespac
     @debug "Could not find coordinate '$coord_name' for field"
     return nothing
 end
-

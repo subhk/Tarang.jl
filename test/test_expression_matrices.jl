@@ -169,20 +169,7 @@ using LinearAlgebra
 
     @testset "MultiplyOperator with constant VectorField (b * ez)" begin
         vars = [b]
-        # Create a constant unit vector ez = [0; 1] for 2D
-        # Unit vector components: ex = [1, 0], ez = [0, 1]
-        ez = VectorField(dist, coords, "ez", (), Float64)
-        # Set component values: ez_x = 0, ez_z = 1
-        # ez has 2 components (x, z) with no bases (0D constant)
-        # Component 1 (x): 0.0, Component 2 (z): 1.0
-        # For 0D fields, grid data is a 0-dim or 1-element array
-        # We need to initialize the data
-        if get_grid_data(ez.components[1]) !== nothing
-            get_grid_data(ez.components[1]) .= 0.0
-        end
-        if get_grid_data(ez.components[2]) !== nothing
-            get_grid_data(ez.components[2]) .= 1.0
-        end
+        _, ez = unit_vector_fields(coords, dist)
 
         mul_op = MultiplyOperator(b, ez)
         result = expression_matrices(mul_op, sp, vars)

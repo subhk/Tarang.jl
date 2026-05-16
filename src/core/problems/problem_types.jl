@@ -310,16 +310,57 @@ function parse_neumann_bc_string(bc_string::String)
     m = match(pattern, s)
 
     if m === nothing
+        # Match canonical operator syntax emitted by `bc_to_equation`:
+        # d(<field>,<coord>)(<coord>=<pos>)=<value>
+        # e.g., "d(u,z)(z=0)=0"
+        pattern = r"^d\(([a-zA-Z_][a-zA-Z0-9_]*),([a-zA-Z_][a-zA-Z0-9_]*)(?:,([0-9]+))?\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+        m = match(pattern, s)
+    end
+
+    if m === nothing
+        # Match compact derivative aliases used in some docs/comments:
+        # d<coord>(<field>)(<coord>=<pos>)=<value>
+        # e.g., "dz(u)(z=0)=0"
+        pattern = r"^d([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+        m = match(pattern, s)
+        if m !== nothing
+            deriv_coord = String(m.captures[1])
+            field_name = String(m.captures[2])
+            bc_coord = String(m.captures[3])
+            pos_str = String(m.captures[4])
+            val_str = String(m.captures[5])
+            return _finish_neumann_bc_parse(bc_string, deriv_coord, field_name, bc_coord, pos_str, val_str)
+        end
+    end
+
+    if m === nothing
         # Try simpler format: field(coord=pos) = value (same as Dirichlet but caller knows it's Neumann)
         return parse_bc_string(bc_string)
     end
 
-    deriv_coord = String(m.captures[1])
-    field_name = String(m.captures[2])
-    bc_coord = String(m.captures[3])
-    pos_str = String(m.captures[4])
-    val_str = String(m.captures[5])
+    if length(m.captures) == 6
+        field_name = String(m.captures[1])
+        deriv_coord = String(m.captures[2])
+        order_str = m.captures[3]
+        if order_str !== nothing && parse(Int, order_str) != 1
+            throw(ArgumentError("Only first-order Neumann BC strings are supported: '$bc_string'"))
+        end
+        bc_coord = String(m.captures[4])
+        pos_str = String(m.captures[5])
+        val_str = String(m.captures[6])
+    else
+        deriv_coord = String(m.captures[1])
+        field_name = String(m.captures[2])
+        bc_coord = String(m.captures[3])
+        pos_str = String(m.captures[4])
+        val_str = String(m.captures[5])
+    end
 
+    return _finish_neumann_bc_parse(bc_string, deriv_coord, field_name, bc_coord, pos_str, val_str)
+end
+
+function _finish_neumann_bc_parse(bc_string::String, deriv_coord::String, field_name::String,
+                                  bc_coord::String, pos_str::String, val_str::String)
     # Verify derivative coordinate matches BC coordinate
     if deriv_coord != bc_coord
         @warn "Derivative coordinate '$deriv_coord' differs from BC coordinate '$bc_coord'"
@@ -781,6 +822,7 @@ function _register_string_bc!(problem::Problem, bc_string::String)
     # Dirichlet for the usual `field(coord=pos) = value` form.
     stripped = replace(bc_string, " " => "")
     is_neumann = startswith(stripped, "∂") ||
+                 startswith(stripped, "d(") ||
                  occursin(r"^d[a-zA-Z_][a-zA-Z0-9_]*\(", stripped)
 
     if is_neumann

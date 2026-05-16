@@ -233,6 +233,8 @@ using Test
         eq_neu = Tarang.bc_to_equation(manager, bc_neu)
         @test occursin("d(u, z)", eq_neu)
         @test occursin("z=1", eq_neu)
+        @test Tarang.parse_neumann_bc_string(eq_neu) == ("u", "z", 1.0, 0.0)
+        @test Tarang._bc_strings_equivalent(eq_neu, "∂z(u)(z=1) = 0")
 
         # Robin BC
         bc_rob = robin_bc("u", "z", 0.0, 1.0, 2.0, 0.0)
