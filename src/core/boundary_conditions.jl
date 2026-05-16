@@ -163,14 +163,52 @@ end
 """Convert stress-free BC to equations"""
 function bc_to_equation(manager::BoundaryConditionManager, bc::StressFreeBC)
     pos_str = isa(bc.position, String) ? bc.position : string(bc.position)
-    
-    # Stress-free: u = 0 and du/dz = 0 at boundary (vanishing tangential stress)
-    equations = [
-        "$(bc.velocity_field)($(bc.coordinate)=$pos_str) = 0",
-        "$( _bc_derivative_str(bc.velocity_field, bc.coordinate, 1) )($(bc.coordinate)=$pos_str) = 0"
-    ]
-    
+
+    component_coordinates = _stress_free_component_coordinates(manager, bc)
+    normal_index = findfirst(==(bc.coordinate), component_coordinates)
+    normal_index === nothing && throw(ArgumentError(
+        "Stress-free normal coordinate '$(bc.coordinate)' not found in component coordinates " *
+        "$(component_coordinates)"
+    ))
+
+    equations = String[]
+    normal_component = "component($(bc.velocity_field), $normal_index)"
+    push!(equations, "$normal_component($(bc.coordinate)=$pos_str) = 0")
+
+    for (component_index, _) in enumerate(component_coordinates)
+        component_index == normal_index && continue
+        tangent_component = "component($(bc.velocity_field), $component_index)"
+        derivative = _bc_derivative_str(tangent_component, bc.coordinate, 1)
+        push!(equations, "$derivative($(bc.coordinate)=$pos_str) = 0")
+    end
+
     return equations
+end
+
+function _stress_free_component_coordinates(manager::BoundaryConditionManager, bc::StressFreeBC)
+    if !isempty(bc.component_coordinates)
+        return bc.component_coordinates
+    end
+
+    if haskey(manager.coordinate_info, "coordinates")
+        coordinates = manager.coordinate_info["coordinates"]
+        labels = [_bc_coordinate_label(coord) for coord in coordinates]
+        if bc.coordinate in labels
+            return labels
+        end
+    end
+
+    throw(ArgumentError(
+        "StressFreeBC for '$(bc.velocity_field)' requires component coordinates. " *
+        "Pass component_coordinates=[...] to stress_free_bc or register coordinate info on the manager."
+    ))
+end
+
+function _bc_coordinate_label(coord)
+    coord isa String && return coord
+    coord isa Symbol && return string(coord)
+    hasfield(typeof(coord), :name) && return string(getfield(coord, :name))
+    return string(coord)
 end
 
 """Convert custom BC to equation string"""

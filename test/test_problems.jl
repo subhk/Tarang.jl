@@ -136,6 +136,14 @@ end
 
     add_bc!(prob, "integ(p) = 0")
     @test length(prob.boundary_conditions) == 2
+
+    add_bc!(prob, "T(z=Lz) = sin(t)")
+    @test length(prob.boundary_conditions) == 3
+    @test length(prob.bc_manager.conditions) == 2
+    symbolic_bc = prob.bc_manager.conditions[end]
+    @test symbolic_bc isa DirichletBC
+    @test symbolic_bc.position == "Lz"
+    @test symbolic_bc.is_time_dependent
 end
 
 # ---- 8. add_bc! with BC objects (dirichlet_bc, neumann_bc) ----------------
@@ -222,6 +230,19 @@ end
     fname, coord, pos, val = Tarang.parse_bc_string("T(z=0) = sin(x)")
     @test val == "sin(x)"
 
+    # Symbolic positions are kept as strings for manager registration.
+    fname, coord, pos, val = Tarang.parse_bc_string("T(z=Lz) = sin(t)")
+    @test fname == "T"
+    @test coord == "z"
+    @test pos == "Lz"
+    @test val == "sin(t)"
+
+    fname, coord, pos, val = Tarang.parse_neumann_bc_string("∂z(T)(z=Lz) = -1")
+    @test fname == "T"
+    @test coord == "z"
+    @test pos == "Lz"
+    @test val == -1.0
+
     # Negative position
     fname, coord, pos, val = Tarang.parse_bc_string("u(z=-1) = 0")
     @test pos == -1.0
@@ -229,6 +250,22 @@ end
     # Invalid format throws
     @test_throws ArgumentError Tarang.parse_bc_string("nonsense string")
     @test_throws ArgumentError Tarang.parse_bc_string("u = 0")
+end
+
+# ---- 10b. Neumann BC expression shape -------------------------------------
+@testset "Neumann BC parser preserves boundary shape" begin
+    domain, _, T, _ = make_channel_fields()
+    prob = IVP([T])
+    add_parameters!(prob; Lz=1.0)
+
+    lhs, _ = Tarang.split_equation("∂z(T)(z=0) = 1")
+    expr = Tarang.parse_expression(strip(lhs), prob.namespace)
+
+    @test expr isa Tarang.Interpolate
+    @test getfield(expr, :operand) isa Tarang.Differentiate
+
+    expected_boundary_dofs = Tarang._coeff_space_dofs(T) ÷ T.bases[2].meta.size
+    @test Tarang._equation_output_dofs(expr) == expected_boundary_dofs
 end
 
 # ---- 11. Problem namespace management ------------------------------------

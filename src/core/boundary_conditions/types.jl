@@ -189,6 +189,7 @@ struct StressFreeBC <: AbstractBoundaryCondition
     coordinate::String
     position::Union{Real, String}
     tau_fields::Vector{String}
+    component_coordinates::Vector{String}
 end
 
 struct CustomBC <: AbstractBoundaryCondition

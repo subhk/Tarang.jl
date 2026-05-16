@@ -68,8 +68,18 @@ function robin_bc(field::String, coordinate::String, position, alpha, beta, valu
                  space_dependent::Union{Bool, Nothing}=nothing)
     """Create Robin boundary condition: alpha*u + beta*du/dcoord (coord=pos) = value
 
-    All parameters (alpha, beta, value) can be time/space dependent
+    The RHS value can be time/space dependent. Dynamic alpha/beta coefficients
+    are rejected because they change the LHS operator and require rebuilding
+    solver matrices.
     """
+
+    if is_time_dependent(alpha) || is_space_dependent(alpha) ||
+       is_time_dependent(beta) || is_space_dependent(beta)
+        throw(ArgumentError(
+            "Time- or space-dependent Robin alpha/beta coefficients are not supported; " *
+            "only the Robin RHS value may be dynamic."
+        ))
+    end
 
     any_time_dep = any(is_time_dependent(v) for v in [alpha, beta, value])
     any_space_dep = any(is_space_dependent(v) for v in [alpha, beta, value])
@@ -86,9 +96,11 @@ function periodic_bc(field::String, coordinate::String)
 end
 
 function stress_free_bc(velocity_field::String, coordinate::String, position;
-                       tau_fields::Vector{String}=String[])
+                       tau_fields::Vector{String}=String[],
+                       component_coordinates::Vector{String}=String[])
     """Create stress-free boundary condition for velocity field"""
-    return StressFreeBC(velocity_field, coordinate, position, tau_fields)
+    return StressFreeBC(velocity_field, coordinate, position, tau_fields,
+                        component_coordinates)
 end
 
 """Create custom boundary condition from expression"""

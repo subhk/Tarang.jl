@@ -275,11 +275,12 @@ function parse_bc_string(bc_string::String)
     pos_str = String(m.captures[3])
     val_str = String(m.captures[4])
 
-    # Parse position as number
+    # Parse numeric positions, but keep symbolic positions such as `Lz` as
+    # strings so the BC manager can still track dynamic values at named bounds.
     position = try
         parse(Float64, pos_str)
     catch
-        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+        pos_str
     end
 
     # Parse value - could be number or expression string
@@ -366,11 +367,12 @@ function _finish_neumann_bc_parse(bc_string::String, deriv_coord::String, field_
         @warn "Derivative coordinate '$deriv_coord' differs from BC coordinate '$bc_coord'"
     end
 
-    # Parse position
+    # Parse numeric positions, but keep symbolic positions such as `Lz` as
+    # strings so dynamic Neumann BCs can be registered and refreshed.
     position = try
         parse(Float64, pos_str)
     catch
-        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+        pos_str
     end
 
     # Parse value
@@ -431,11 +433,11 @@ function parse_robin_bc_string(bc_string::String)
     alpha = parse(Float64, alpha_str)
     beta = parse(Float64, beta_str)
 
-    # Parse position
+    # Parse numeric positions, but preserve symbolic bounds such as `Lz`.
     position = try
         parse(Float64, field_pos_str)
     catch
-        throw(ArgumentError("Cannot parse position '$field_pos_str' as number in BC: '$bc_string'"))
+        field_pos_str
     end
 
     # Parse value
@@ -473,11 +475,11 @@ function parse_stress_free_bc_string(bc_string::String)
     coordinate = String(m.captures[2])
     pos_str = String(m.captures[3])
 
-    # Parse position
+    # Parse numeric positions, but preserve symbolic bounds such as `Lz`.
     position = try
         parse(Float64, pos_str)
     catch
-        throw(ArgumentError("Cannot parse position '$pos_str' as number in BC: '$bc_string'"))
+        pos_str
     end
 
     return (velocity_field, coordinate, position)

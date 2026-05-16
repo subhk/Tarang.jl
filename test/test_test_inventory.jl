@@ -6,6 +6,7 @@ using Test
 
     known_test_files = Set(vcat(TEST_FILES,
                                 OPTIONAL_TEST_FILES,
+                                GPU_TEST_FILES,
                                 MPI_TEST_FILES,
                                 DISTRIBUTED_GPU_TEST_FILES))
 

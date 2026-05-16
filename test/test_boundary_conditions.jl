@@ -71,6 +71,13 @@ using Test
             @test bc.alpha == 1.0
             @test bc.beta == 1.0
             @test bc.value == 0.0
+
+            # Dynamic Robin RHS is supported, but dynamic coefficients would
+            # change the LHS operator and require matrix rebuilds.
+            bc_value_dynamic = robin_bc("u", "z", 0.0, 1.0, 1.0, "sin(t)")
+            @test bc_value_dynamic.is_time_dependent
+            @test_throws ArgumentError robin_bc("u", "z", 0.0, "1 + t", 1.0, 0.0)
+            @test_throws ArgumentError robin_bc("u", "z", 0.0, 1.0, "1 + x", 0.0)
         end
 
         # Test Periodic BC
@@ -87,6 +94,10 @@ using Test
             @test isa(bc, StressFreeBC)
             @test bc.velocity_field == "u"
             @test bc.position == 0.0
+
+            bc_with_components = stress_free_bc("u", "z", 0.0;
+                                                component_coordinates=["x", "z"])
+            @test bc_with_components.component_coordinates == ["x", "z"]
         end
 
         # Test Custom BC
@@ -241,6 +252,35 @@ using Test
         eq_rob = Tarang.bc_to_equation(manager, bc_rob)
         @test occursin("1", eq_rob)  # alpha
         @test occursin("2", eq_rob)  # beta
+
+        # Stress-free BC: no penetration plus zero normal derivative of tangential components
+        bc_sf_2d = stress_free_bc("u", "z", 0.0; component_coordinates=["x", "z"])
+        eq_sf_2d = Tarang.bc_to_equation(manager, bc_sf_2d)
+        @test eq_sf_2d == [
+            "component(u, 2)(z=0.0) = 0",
+            "d(component(u, 1), z)(z=0.0) = 0",
+        ]
+        coords = CartesianCoordinates("x", "z")
+        dist = Distributor(coords; dtype=Float64, device=CPU())
+        xbasis = RealFourier(coords["x"]; size=4, bounds=(0.0, 2π))
+        zbasis = ChebyshevT(coords["z"]; size=8, bounds=(0.0, 1.0))
+        u = VectorField(dist, coords, "u", (xbasis, zbasis), Float64)
+        namespace = Tarang.build_problem_namespace(Tarang.Operand[u], nothing)
+        for eq in eq_sf_2d
+            lhs, rhs = Tarang.parse_equation(eq, namespace)
+            @test !(lhs isa Tarang.UnknownOperator)
+            @test rhs isa Tarang.ZeroOperator
+        end
+
+        manager3 = BoundaryConditionManager()
+        register_coordinate_info!(manager3, ["x", "y", "z"], [nothing, nothing, nothing])
+        bc_sf_3d = stress_free_bc("u", "z", "Lz")
+        eq_sf_3d = Tarang.bc_to_equation(manager3, bc_sf_3d)
+        @test eq_sf_3d == [
+            "component(u, 3)(z=Lz) = 0",
+            "d(component(u, 1), z)(z=Lz) = 0",
+            "d(component(u, 2), z)(z=Lz) = 0",
+        ]
 
         # Custom BC
         bc_custom = custom_bc("u(z=0) + v(z=0) = 1")

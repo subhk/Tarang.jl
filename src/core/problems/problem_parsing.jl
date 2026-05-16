@@ -864,12 +864,25 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
                     end
                     coord === nothing && throw(ArgumentError("Unknown derivative coordinate '$coord_name' in $(func_expr)"))
                     return d(field, coord, 1)
+                elseif func_expr == :component || func_expr == :comp
+                    if length(arg_exprs) < 2
+                        throw(ArgumentError("component requires an operand and component index"))
+                    end
+                    operand = evaluate_parsed_expression(arg_exprs[1], namespace)
+                    index_val = coerce_constant_value(evaluate_parsed_expression(arg_exprs[2], namespace))
+                    return component(operand, Int(round(index_val)))
                 elseif func_expr == :d || func_expr == :diff
                     if length(arg_exprs) < 2
                         throw(ArgumentError("d requires at least an operand and a coordinate"))
                     end
                     field = evaluate_parsed_expression(arg_exprs[1], namespace)
-                    coord = evaluate_parsed_expression(arg_exprs[2], namespace)
+                    coord_expr = arg_exprs[2]
+                    coord = evaluate_parsed_expression(coord_expr, namespace)
+                    if !(coord isa Coordinate) && coord_expr isa Symbol && field isa Operand
+                        coord_name = string(coord_expr)
+                        resolved_coord = _find_coordinate_for_field(field, coord_name, namespace)
+                        resolved_coord !== nothing && (coord = resolved_coord)
+                    end
                     order = if length(arg_exprs) >= 3
                         val = coerce_constant_value(evaluate_parsed_expression(arg_exprs[3], namespace))
                         Int(round(val))
@@ -1189,6 +1202,16 @@ function _find_coordinate_for_field(field::Operand, coord_name::String, namespac
         coord = namespace[coord_name]
         if isa(coord, Coordinate)
             return coord
+        end
+    end
+
+    # Operators such as d(T, z) wrap the original field. Boundary interpolation
+    # on those operators still needs the wrapped field's coordinate metadata.
+    if hasfield(typeof(field), :operand)
+        operand = getfield(field, :operand)
+        if isa(operand, Operand)
+            coord = _find_coordinate_for_field(operand, coord_name, namespace)
+            coord !== nothing && return coord
         end
     end
 

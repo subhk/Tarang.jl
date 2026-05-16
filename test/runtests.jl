@@ -61,15 +61,20 @@ const TEST_FILES = [
     "test_convenience_api.jl",
 ]
 
-# Tests that may require special setup or longer runtime
+# CPU tests that are valid in ordinary CI but are kept out of the default
+# package test path because they are slower convergence/end-to-end checks.
 const OPTIONAL_TEST_FILES = [
     "test_etdrk2_convergence.jl",  # Convergence test - may be slow
     "test_end_to_end_pde.jl",      # Full PDE solve test
     "test_pencil_imex.jl",
+    "test_subproblem_rk.jl",       # Subproblem RK integration test (RBC 2D)
+]
+
+# CUDA tests that run in a single process when CUDA is available.
+const GPU_TEST_FILES = [
     "test_dct_reorder.jl",
     "test_optimized_dct.jl",
     "test_ilu0_preconditioner.jl",
-    "test_subproblem_rk.jl",       # Subproblem RK integration test (RBC 2D)
 ]
 
 # MPI tests that must be run separately with mpiexec
@@ -95,14 +100,20 @@ const DISTRIBUTED_GPU_TEST_FILES = [
     "test_pencil_decomposition.jl",
 ]
 
-for file in TEST_FILES
-    @testset "$file" begin
-        include(file)
+const RUN_OPTIONAL_TESTS = get(ENV, "TARANG_RUN_OPTIONAL_TESTS", "false") == "true"
+const ONLY_OPTIONAL_TESTS = get(ENV, "TARANG_ONLY_OPTIONAL_TESTS", "false") == "true"
+const RUN_GPU_TESTS = get(ENV, "TARANG_RUN_GPU_TESTS", "false") == "true"
+
+if !ONLY_OPTIONAL_TESTS
+    for file in TEST_FILES
+        @testset "$file" begin
+            include(file)
+        end
     end
 end
 
 # Run optional tests if explicitly requested
-if get(ENV, "TARANG_RUN_OPTIONAL_TESTS", "false") == "true"
+if RUN_OPTIONAL_TESTS || ONLY_OPTIONAL_TESTS
     for file in OPTIONAL_TEST_FILES
         @testset "$file" begin
             include(file)
@@ -110,15 +121,25 @@ if get(ENV, "TARANG_RUN_OPTIONAL_TESTS", "false") == "true"
     end
 end
 
+if RUN_GPU_TESTS
+    for file in GPU_TEST_FILES
+        @testset "$file" begin
+            include(file)
+        end
+    end
+end
+
 # Print reminder about MPI tests
-@info """
-MPI tests are not included in the standard test suite.
-To run MPI tests with multiple processes, use:
+if !ONLY_OPTIONAL_TESTS
+    @info """
+    MPI tests are not included in the standard test suite.
+    To run MPI tests with multiple processes, use:
 
-    mpiexec -n 4 julia --project test/test_mpi_distributor.jl
-    mpiexec -n 4 julia --project test/test_distributed_gpu_transpose.jl
+        mpiexec -n 4 julia --project test/test_mpi_distributor.jl
+        mpiexec -n 4 julia --project test/test_distributed_gpu_transpose.jl
 
-Or use the test runner script:
+    Or use the test runner script:
 
-    ./test/run_mpi_tests.sh 4
-"""
+        ./test/run_mpi_tests.sh 4
+    """
+end

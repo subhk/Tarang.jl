@@ -533,7 +533,7 @@ function _bc_strings_equivalent(a::AbstractString, b::AbstractString)
     # Tuple layout: (field_name, coordinate, position, value)
     pa[1] == pb[1] || return false
     pa[2] == pb[2] || return false
-    Float64(pa[3]) == Float64(pb[3]) || return false
+    _bc_positions_equivalent(pa[3], pb[3]) || return false
     # Value: Numbers via ==, Strings via whitespace-stripped compare
     va, vb = pa[4], pb[4]
     if isa(va, Number) && isa(vb, Number)
@@ -545,6 +545,15 @@ function _bc_strings_equivalent(a::AbstractString, b::AbstractString)
     end
 end
 _bc_strings_equivalent(a, b) = a == b
+
+function _bc_positions_equivalent(a, b)
+    anum = a isa Real ? Float64(a) : tryparse(Float64, string(a))
+    bnum = b isa Real ? Float64(b) : tryparse(Float64, string(b))
+    if anum !== nothing && bnum !== nothing
+        return anum == bnum
+    end
+    return replace(string(a), r"\s+" => "") == replace(string(b), r"\s+" => "")
+end
 
 """
     _apply_bc_values_to_equations!(solver, current_time)

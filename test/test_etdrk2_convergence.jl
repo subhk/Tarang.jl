@@ -1,17 +1,18 @@
 """
 ETDRK2 Convergence Test
 
-This test verifies the order of accuracy for different ETDRK2 variants by solving
-a problem with known analytical solution.
+This test verifies the order of accuracy for ETDRK2 formulas by solving a
+problem with a known analytical solution.
 
 Test Problem:
     du/dt = λu + g(t)
 
 where λ < 0 (stiff), with exact solution u(t) = exp(λt)
 
-We test two variants:
-1. Standard ETDRK2: u_{n+1} = exp(hL)u_n + h*φ₁(hL)*N(c)
-2. Richardson ETDRK2: u_{n+1} = exp(hL)u_n + h*φ₁(hL)*[2*N(c) - N(u_n)]
+We test two formulas:
+1. Standard Cox-Matthews ETDRK2, which is the production formula.
+2. A Richardson-style control formula, which is expected to be first order for
+   this nonlinear problem and guards against confusing it with ETDRK2.
 """
 
 using Test
@@ -47,6 +48,11 @@ end
 # Exact: u(t) = exp(λt)
 function exact_solution(t::Float64, λ::Float64)
     return exp(λ * t)
+end
+
+function exact_solution_nonlinear(t::Float64, λ::Float64, u0::Float64)
+    # For du/dt = λu + u^2, v = 1/u satisfies v' = -λv - 1.
+    return inv((inv(u0) + inv(λ)) * exp(-λ * t) - inv(λ))
 end
 
 function etdrk2_standard(u_n::Float64, λ::Float64, h::Float64, t_n::Float64)
@@ -145,22 +151,15 @@ function run_convergence_test()
 
     println("\nTest Problem: du/dt = λu + u²")
     println("Parameters: λ = $λ, u(0) = $u0, T = $T")
-    println("\nNote: No analytical solution available, using reference solution")
+    println("\nAnalytical Riccati solution is used as the reference")
     println()
 
-    # Get reference solution with very small timestep
-    h_ref = 1e-5
-    u_ref = u0
-    t = 0.0
-    while t < T
-        u_ref = etdrk2_standard_nonlinear(u_ref, λ, h_ref, t)
-        t += h_ref
-    end
-    println("Reference solution (h = $h_ref): u(T) = $u_ref")
+    u_ref = exact_solution_nonlinear(T, λ, u0)
+    println("Exact solution: u(T) = $u_ref")
     println()
 
     # Test different timesteps
-    timesteps = [0.1, 0.05, 0.025, 0.0125, 0.00625]
+    timesteps = [0.1, 0.05, 0.025, 0.0125, 0.00625, 0.003125]
 
     println("Standard ETDRK2 (Cox-Matthews):")
     println("-"^70)
@@ -191,7 +190,7 @@ function run_convergence_test()
     end
 
     println()
-    println("Richardson ETDRK2 (Our Implementation):")
+    println("Richardson-style control formula:")
     println("-"^70)
     @printf("%-12s %-20s %-15s %-15s\n", "h", "u(T)", "Error", "Rate")
     println("-"^70)
@@ -240,7 +239,7 @@ function run_convergence_test()
     end
 
     println()
-    println("Expected: Both methods should show O(h²) convergence (rate ≈ 2.0)")
+    println("Expected: standard ETDRK2 is O(h²); the control formula is O(h)")
     println()
 
     # Compare accuracy
@@ -267,17 +266,14 @@ end
 
     # Reproduce the convergence computation for assertions
     λ = -10.0; T = 1.0; u0 = 0.1
-    h_ref = 1e-5
-    u_ref = u0; t = 0.0
-    while t < T
-        u_ref = etdrk2_standard_nonlinear(u_ref, λ, h_ref, t)
-        t += h_ref
-    end
+    u_ref = exact_solution_nonlinear(T, λ, u0)
 
-    timesteps = [0.1, 0.05, 0.025, 0.0125, 0.00625]
+    timesteps = [0.1, 0.05, 0.025, 0.0125, 0.00625, 0.003125]
 
-    for (label, step_fn) in [("Standard", etdrk2_standard_nonlinear),
-                              ("Richardson", etdrk2_richardson_nonlinear)]
+    for (label, step_fn, expected_rate_range) in [
+        ("Standard", etdrk2_standard_nonlinear, (1.85, Inf)),
+        ("Richardson control", etdrk2_richardson_nonlinear, (0.80, 1.20)),
+    ]
         errors = Float64[]
         for h in timesteps
             u = u0; t = 0.0
@@ -293,10 +289,11 @@ end
             @test all(errors .> 0)
             @test issorted(errors, rev=true)
 
-            # Convergence rates should be approximately 2nd order
+            # The standard formula is second order. The control formula is
+            # intentionally first order for this problem.
             rates = [log(errors[i] / errors[i+1]) / log(2.0) for i in 1:length(errors)-1]
             avg_rate = sum(rates) / length(rates)
-            @test avg_rate > 1.8  # Should be ~2.0 for 2nd order
+            @test expected_rate_range[1] < avg_rate < expected_rate_range[2]
         end
     end
 end

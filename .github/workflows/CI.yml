@@ -145,6 +145,34 @@ jobs:
           julia -e 'using JuliaFormatter; format(".", verbose=true) || error("Formatting check failed")'
         continue-on-error: true
 
+  optional-cpu-tests:
+    name: Optional CPU Feature Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.12'
+
+      - name: Install MPI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - uses: julia-actions/cache@v1
+
+      - name: Build package
+        uses: julia-actions/julia-buildpkg@v1
+
+      - name: Run optional CPU feature tests
+        run: julia --project test/runtests.jl
+        env:
+          TARANG_ONLY_OPTIONAL_TESTS: "true"
+          JULIA_NUM_THREADS: 2
+          OMP_NUM_THREADS: 1
+
   mpi-tests:
     name: MPI Tests - ${{ matrix.nprocs }} processes
     runs-on: ubuntu-latest
