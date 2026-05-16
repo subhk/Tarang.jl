@@ -398,6 +398,42 @@ println("=" ^ 60)
         println("  apply_forcing! with substep works OK")
     end
 
+    @testset "registered forcing participates in lazy RHS" begin
+        N = 8
+        dt = 0.01
+        domain = PeriodicDomain(N, N)
+        q = ScalarField(domain, "q")
+
+        forcing = StochasticForcing(
+            field_size=(N, N),
+            forcing_rate=0.1,
+            k_forcing=3.0,
+            dk_forcing=1.0,
+            dt=dt,
+            rng=MersenneTwister(42)
+        )
+
+        problem = IVP([q])
+        add_equation!(problem, "∂t(q) = 0")
+        add_stochastic_forcing!(problem, :q, forcing)
+
+        solver = InitialValueSolver(problem, RK222(); dt=dt)
+        @test solver.rhs_plan !== nothing
+        @test solver.rhs_plan.is_compiled
+
+        Tarang._update_registered_forcings!(solver, 0.0, dt)
+        rhs = Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        ensure_layout!(rhs[1], :c)
+
+        rhs_data = get_coeff_data(rhs[1])
+        forcing_view = Tarang._matched_forcing_view(forcing, size(rhs_data))
+
+        @test forcing_view !== nothing
+        @test maximum(abs.(rhs_data)) > 0
+        @test rhs_data ≈ forcing_view
+        println("  Registered forcing is included in compiled lazy RHS")
+    end
+
     @testset "1D Forcing" begin
         forcing_1d = StochasticForcing(
             field_size=(64,),

@@ -691,6 +691,7 @@ function execute_lazy_rhs_buffered!(plan::LazyRHSPlan, state, solver)
     for idx in eachindex(plan.output_fields, state)
         expr = plan.exprs[idx]
         if expr === nothing
+            _reset_lazy_forced_rhs_field!(plan.output_fields[idx], solver.problem, idx)
             continue
         end
         result_field = plan.output_fields[idx]
@@ -698,7 +699,44 @@ function execute_lazy_rhs_buffered!(plan::LazyRHSPlan, state, solver)
         ws.next_idx = 1  # reset between equations
         evaluate_lazy!(result_field, expr, state, ws)
     end
+    _add_registered_forcings_to_lazy_rhs!(plan.output_fields, solver.problem)
     return plan.output_fields
+end
+
+function _reset_lazy_forced_rhs_field!(field::ScalarField, problem::Problem, var_idx::Int)
+    hasfield(typeof(problem), :stochastic_forcings) || return field
+    haskey(problem.stochastic_forcings, var_idx) || return field
+    isempty(field.bases) && return field
+
+    ensure_layout!(field, :c)
+    coeff_data = get_coeff_data(field)
+    coeff_data === nothing && return field
+    fill!(coeff_data, zero(eltype(coeff_data)))
+    return field
+end
+
+function _add_registered_forcings_to_lazy_rhs!(rhs_fields, problem::Problem)
+    hasfield(typeof(problem), :stochastic_forcings) || return rhs_fields
+    isempty(problem.stochastic_forcings) && return rhs_fields
+
+    for (var_idx, forcing) in problem.stochastic_forcings
+        var_idx <= length(rhs_fields) || continue
+        rhs_field = rhs_fields[var_idx]
+        isempty(rhs_field.bases) && continue
+
+        ensure_layout!(rhs_field, :c)
+        coeff_data = get_coeff_data(rhs_field)
+        coeff_data === nothing && continue
+
+        F_view = _matched_forcing_view(forcing, size(coeff_data))
+        if F_view !== nothing
+            coeff_data .+= F_view
+        else
+            @warn "Forcing size doesn't match RHS size for state field $var_idx"
+        end
+    end
+
+    return rhs_fields
 end
 
 """
