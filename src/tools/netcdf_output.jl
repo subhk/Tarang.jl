@@ -1454,7 +1454,8 @@ function check_schedule(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, 
         scheduled = true
     end
 
-    return scheduled
+    # No cadence means process! is being used as an explicit write request.
+    return has_schedule ? scheduled : true
 end
 
 """
@@ -1550,6 +1551,11 @@ end
 Process handler: write all tasks to NetCDF (matching Tarang process method)
 """
 function process!(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.0)
+    if !check_schedule(handler; iteration=iteration, wall_time=wall_time,
+                       sim_time=sim_time, timestep=timestep)
+        return false
+    end
+
     # Update write counts
     handler.total_write_num += 1
     handler.file_write_num += 1

@@ -81,6 +81,31 @@ end
     end
 end
 
+@testset "NetCDF direct process scheduling" begin
+    tmp = mktempdir()
+    cd(tmp) do
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        basis = RealFourier(coords["x"]; size=4, bounds=(0.0, 1.0))
+        u = ScalarField(dist, "u", (basis,), Float64)
+        fill!(Tarang.get_grid_data(u), 1.0)
+
+        handler = Tarang.add_file_handler(joinpath(tmp, "scheduled"), dist, Dict("u" => u);
+                                   parallel="gather", sim_dt=1.0, max_writes=50)
+        Tarang.add_task(handler, u; name="u")
+
+        @test Tarang.process!(handler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.1)
+        @test !Tarang.process!(handler; iteration=1, wall_time=0.1, sim_time=0.1, timestep=0.1)
+        @test !Tarang.process!(handler; iteration=2, wall_time=0.2, sim_time=0.2, timestep=0.1)
+        @test Tarang.process!(handler; iteration=10, wall_time=1.0, sim_time=1.0, timestep=0.1)
+
+        @test handler.total_write_num == 2
+        @test handler.file_write_num == 2
+        @test isdir(joinpath(tmp, "scheduled_s1"))
+        @test !isdir(joinpath(tmp, "scheduled_s2"))
+    end
+end
+
 @testset "NetCDF analysis helpers" begin
     tmp = mktempdir()
     cd(tmp) do
