@@ -21,7 +21,7 @@ mutable struct FutureState
     args::Vector{Any}
     original_args::Vector{Any}
     out::Any
-    dist::Any
+    dist::Union{Nothing, Distributor}
     dtype::Union{Nothing, DataType}
     store_last::Bool
     last_id::Union{Nothing, Int}
@@ -32,7 +32,7 @@ end
 
 function FutureState(args::Vector{Any}; out=nothing, store_last::Bool=true,
                      metadata=Dict{Symbol, Any}(), name::Symbol=:unknown)
-    dist = unify_attributes(args, "dist")
+    dist = unify_attributes(args, "dist")::Union{Nothing, Distributor}
     dtype = unify_attributes(args, "dtype")
     # Support legacy metadata dict: extract :name if present
     effective_name = haskey(metadata, :name) ? metadata[:name]::Symbol : name

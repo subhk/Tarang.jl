@@ -356,16 +356,14 @@ Returns an operator expression representing the linearized operator.
 function frechet_differential(F, vars::Vector, perts::Vector)
     length(vars) == length(perts) || error("vars and perts must have same length")
 
-    dF = nothing
+    terms = Any[]
     for (var, pert) in zip(vars, perts)
         dF_dvar = sym_diff(F, var)
-        if dF_dvar === 0 || dF_dvar == 0
-            continue
-        end
-        term = _simplify_mul(dF_dvar, pert)
-        dF = (dF === nothing) ? term : _simplify_add(dF, term)
+        (dF_dvar === 0 || dF_dvar == 0) && continue
+        push!(terms, _simplify_mul(dF_dvar, pert))
     end
-    return dF === nothing ? 0 : dF
+    isempty(terms) && return 0
+    return foldl(_simplify_add, terms)
 end
 
 """

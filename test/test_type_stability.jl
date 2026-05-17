@@ -157,4 +157,39 @@ end
         @test typeof(Tarang.copy_state(solver.state)) === state_type
     end
 
+    @testset "Parameterized operator types" begin
+        f, dist, basis = make_1d_scalar_field()
+
+        # Single-operand operators carry concrete operand type in type parameter
+        lap = Laplacian(f)
+        @test lap isa Laplacian{typeof(f)}
+        @test fieldtype(typeof(lap), :operand) === typeof(f)
+
+        copy_op = Copy(f)
+        @test copy_op isa Copy{typeof(f)}
+
+        hilbert = HilbertTransform(f)
+        @test hilbert isa HilbertTransform{typeof(f)}
+
+        # Nested operator carries fully concrete type
+        lap2 = Laplacian(Laplacian(f))
+        @test lap2 isa Laplacian{Laplacian{typeof(f)}}
+
+        # UnaryGridFunction carries concrete function type (enables inlining)
+        uf = UnaryGridFunction(f, sin, "sin")
+        @test uf isa UnaryGridFunction{typeof(sin), typeof(f)}
+        @test fieldtype(typeof(uf), :func) === typeof(sin)
+
+        # GeneralFunction carries concrete function type
+        gf = GeneralFunction(f, exp, "exp")
+        @test gf isa GeneralFunction{typeof(exp), typeof(f)}
+
+        # Arithmetic operators (already parameterized — confirm still work)
+        lap_add = Laplacian(f) + Laplacian(f)
+        @test lap_add isa Tarang.AddOperator{<:Laplacian, <:Laplacian}
+
+        # FutureState.dist is now typed (not Any)
+        @test fieldtype(Tarang.FutureState, :dist) == Union{Nothing, Tarang.Distributor}
+    end
+
 end # Type Stability

@@ -5,58 +5,54 @@ This file contains all abstract types and struct definitions for spectral operat
 These types form the foundation of the operator system in Tarang.jl.
 """
 
-# ============================================================================
-# Abstract Type
-# ============================================================================
-
 abstract type Operator <: Operand end
 
 # ============================================================================
 # Basic Differential Operators
 # ============================================================================
 
-struct Gradient <: Operator
-    operand::Operand
+struct Gradient{O<:Operand} <: Operator
+    operand::O
     coordsys::CoordinateSystem
 end
 const _Gradient_constructor = Gradient
 
-struct Divergence <: Operator
-    operand::Operand
+struct Divergence{O<:Operand} <: Operator
+    operand::O
 end
 const _Divergence_constructor = Divergence
 
-struct Curl <: Operator
-    operand::Operand
+struct Curl{O<:Operand} <: Operator
+    operand::O
     coordsys::CoordinateSystem
 end
 const _Curl_constructor = Curl
 
-struct Laplacian <: Operator
-    operand::Operand
+struct Laplacian{O<:Operand} <: Operator
+    operand::O
 end
 const _Laplacian_constructor = Laplacian
 
 # Fractional Laplacian: (-Delta)^alpha where alpha can be any real number
 # In spectral space: (-Delta)^alpha f_hat(k) = |k|^(2*alpha) f_hat(k)
 # Common values: alpha=1/2 for SQG dissipation, alpha=-1/2 for SQG streamfunction inversion
-struct FractionalLaplacian <: Operator
-    operand::Operand
+struct FractionalLaplacian{O<:Operand} <: Operator
+    operand::O
     α::Float64  # Fractional exponent
 
-    function FractionalLaplacian(operand::Operand, α::Real)
-        new(operand, Float64(α))
+    function FractionalLaplacian(operand::O, α::Real) where {O<:Operand}
+        new{O}(operand, Float64(α))
     end
 end
 const _FractionalLaplacian_constructor = FractionalLaplacian
 
-struct Trace <: Operator
-    operand::Operand
+struct Trace{O<:Operand} <: Operator
+    operand::O
 end
 const _Trace_constructor = Trace
 
-struct Skew <: Operator
-    operand::Operand
+struct Skew{O<:Operand} <: Operator
+    operand::O
 end
 const _Skew_constructor = Skew
 
@@ -73,12 +69,12 @@ Fields:
 
 Note: uses 0-indexed (0,1) default; we use 1-indexed (1,2) for Julia convention.
 """
-struct TransposeComponents <: Operator
-    operand::Operand
+struct TransposeComponents{O<:Operand} <: Operator
+    operand::O
     indices::Tuple{Int, Int}  # 1-indexed tensor indices to swap
     coordsys::Union{CoordinateSystem, Nothing}  # Coordinate system of swapped indices
 
-    function TransposeComponents(operand::Operand, indices::Tuple{Int, Int}=(1, 2))
+    function TransposeComponents(operand::O, indices::Tuple{Int, Int}=(1, 2)) where {O<:Operand}
         # Validate operand is a tensor
         if !isa(operand, TensorField)
             throw(ArgumentError("TransposeComponents requires a TensorField"))
@@ -100,7 +96,7 @@ struct TransposeComponents <: Operator
         # Get coordinate system from tensor (assumes square tensor with same coordsys)
         coordsys = operand.coordsys
 
-        new(operand, indices, coordsys)
+        new{O}(operand, indices, coordsys)
     end
 end
 const _TransposeComponents_constructor = TransposeComponents
@@ -109,12 +105,12 @@ const _TransposeComponents_constructor = TransposeComponents
 # Time Derivative
 # ============================================================================
 
-struct TimeDerivative <: Operator
-    operand::Operand
+struct TimeDerivative{O<:Operand} <: Operator
+    operand::O
     order::Int
 
-    function TimeDerivative(operand::Operand, order::Int=1)
-        new(operand, order)
+    function TimeDerivative(operand::O, order::Int=1) where {O<:Operand}
+        new{O}(operand, order)
     end
 end
 
@@ -122,21 +118,25 @@ end
 # Interpolation and Integration
 # ============================================================================
 
-struct Interpolate <: Operator
-    operand::Operand
+struct Interpolate{O<:Operand} <: Operator
+    operand::O
     coord::Coordinate
-    position::Real
+    position::Float64
+
+    function Interpolate(operand::O, coord::Coordinate, position::Real) where {O<:Operand}
+        new{O}(operand, coord, Float64(position))
+    end
 end
 const _Interpolate_constructor = Interpolate
 
-struct Integrate <: Operator
-    operand::Operand
+struct Integrate{O<:Operand} <: Operator
+    operand::O
     coord::Union{Coordinate, Tuple{Vararg{Coordinate}}}
 end
 const _Integrate_constructor = Integrate
 
-struct Average <: Operator
-    operand::Operand
+struct Average{O<:Operand} <: Operator
+    operand::O
     coord::Coordinate
 end
 const _Average_constructor = Average
@@ -145,29 +145,29 @@ const _Average_constructor = Average
 # Conversion Operators
 # ============================================================================
 
-struct Convert <: Operator
-    operand::Operand
+struct Convert{O<:Operand} <: Operator
+    operand::O
     basis::Basis
 end
 const _Convert_constructor = Convert
 
-struct Grid <: Operator
-    operand::Operand
+struct Grid{O<:Operand} <: Operator
+    operand::O
 end
 const _Grid_constructor = Grid
 
-struct Coeff <: Operator
-    operand::Operand
+struct Coeff{O<:Operand} <: Operator
+    operand::O
 end
 const _Coeff_constructor = Coeff
 
 # Lifting operator for tau method boundary conditions
 # Following spectral methods pattern, basis.py:790-814)
 # Creates polynomial P with coefficient 1 at mode n, returns P * operand
-struct Lift <: Operator
-    operand::Operand  # Field to lift (typically tau variable)
-    basis::Basis       # Output basis (where to place lifted field)
-    n::Int            # Mode index (negative recommended: -1=last, -2=second-last)
+struct Lift{O<:Operand} <: Operator
+    operand::O   # Field to lift (typically tau variable)
+    basis::Basis  # Output basis (where to place lifted field)
+    n::Int        # Mode index (negative recommended: -1=last, -2=second-last)
 end
 const _Lift_constructor = Lift
 
@@ -175,24 +175,24 @@ const _Lift_constructor = Lift
 # Component Extraction
 # ============================================================================
 
-struct Component <: Operator
-    operand::Operand
+struct Component{O<:Operand} <: Operator
+    operand::O
     index::Int
 end
 const _Component_constructor = Component
 
-struct RadialComponent <: Operator
-    operand::Operand
+struct RadialComponent{O<:Operand} <: Operator
+    operand::O
 end
 const _RadialComponent_constructor = RadialComponent
 
-struct AngularComponent <: Operator
-    operand::Operand
+struct AngularComponent{O<:Operand} <: Operator
+    operand::O
 end
 const _AngularComponent_constructor = AngularComponent
 
-struct AzimuthalComponent <: Operator
-    operand::Operand
+struct AzimuthalComponent{O<:Operand} <: Operator
+    operand::O
 end
 const _AzimuthalComponent_constructor = AzimuthalComponent
 
@@ -200,8 +200,8 @@ const _AzimuthalComponent_constructor = AzimuthalComponent
 # Spectral Differentiation
 # ============================================================================
 
-struct Differentiate <: Operator
-    operand::Operand
+struct Differentiate{O<:Operand} <: Operator
+    operand::O
     coord::Coordinate
     order::Int
 end
@@ -211,9 +211,9 @@ const _Differentiate_constructor = Differentiate
 # Outer Product (Tensor Product)
 # ============================================================================
 
-struct Outer <: Operator
-    left::Operand
-    right::Operand
+struct Outer{L<:Operand, R<:Operand} <: Operator
+    left::L
+    right::R
 end
 const _Outer_constructor = Outer
 
@@ -222,8 +222,8 @@ const _Outer_constructor = Outer
 # ============================================================================
 
 # AdvectiveCFL operator - computes grid-crossing frequency field
-struct AdvectiveCFL <: Operator
-    operand::Operand  # Velocity vector field
+struct AdvectiveCFL{O<:Operand} <: Operator
+    operand::O  # Velocity vector field
     coords::CoordinateSystem
 end
 const _AdvectiveCFL_constructor = AdvectiveCFL
@@ -237,9 +237,9 @@ const _AdvectiveCFL_constructor = AdvectiveCFL
 
 Apply general function to field in grid space.
 """
-struct GeneralFunction <: Operator
-    operand::Operand
-    func::Function
+struct GeneralFunction{F, O<:Operand} <: Operator
+    operand::O
+    func::F
     name::String
 end
 const _GeneralFunction_constructor = GeneralFunction
@@ -249,9 +249,9 @@ const _GeneralFunction_constructor = GeneralFunction
 
 Apply unary numpy-style function (sin, cos, exp, etc.) to field.
 """
-struct UnaryGridFunction <: Operator
-    operand::Operand
-    func::Function
+struct UnaryGridFunction{F, O<:Operand} <: Operator
+    operand::O
+    func::F
     name::String
 end
 const _UnaryGridFunction_constructor = UnaryGridFunction
@@ -266,8 +266,8 @@ const _UnaryGridFunction_constructor = UnaryGridFunction
 Deep-copy a field, producing an independent clone whose data can be
 modified without affecting the original.
 """
-struct Copy <: Operator
-    operand::Operand
+struct Copy{O<:Operand} <: Operator
+    operand::O
 end
 const _Copy_constructor = Copy
 
@@ -281,7 +281,7 @@ const _Copy_constructor = Copy
 Apply the Hilbert transform in spectral space.
 For Fourier modes: multiplies mode k by -i*sign(k) (k=0 maps to 0).
 """
-struct HilbertTransform <: Operator
-    operand::Operand
+struct HilbertTransform{O<:Operand} <: Operator
+    operand::O
 end
 const _HilbertTransform_constructor = HilbertTransform
