@@ -279,7 +279,7 @@ struct ETD_SBDF2 <: TimeStepper
 end
 
 # =============================================================================
-# Additional Timesteppers
+# Global-Matrix Timesteppers
 # =============================================================================
 
 struct MCNAB2 <: TimeStepper

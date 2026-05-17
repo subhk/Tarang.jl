@@ -1,27 +1,6 @@
 # ============================================================================
-# Additional Timestepper Step Functions
+# Global-Matrix Timestepper Step Functions
 # ============================================================================
-
-# Function barrier: specializes on the concrete factorization type F so that
-# ldiv! dispatches statically instead of through Any.
-@inline function _global_matrix_ldiv!(dest::AbstractVector, lhs::F, rhs::AbstractVector) where {F}
-    ldiv!(dest, lhs, rhs)
-    return dest
-end
-
-function _global_matrix_fields_vector!(state::TimestepperState, key::Symbol,
-                                       fields::Vector{<:ScalarField})
-    _ensure_coeff_layout!(fields)
-    vector = _timestep_vector_buffer!(state, key, _fields_vector_size(fields))
-    return fields_to_vector!(vector, fields)
-end
-
-function _global_matrix_matvec!(state::TimestepperState, key::Symbol,
-                                matrix::AbstractMatrix, vector::AbstractVector{ComplexF64})
-    dest = _timestep_vector_buffer!(state, key, size(matrix, 1))
-    mul!(dest, matrix, vector)
-    return dest
-end
 
 function _prepare_global_matrix_timestep!(state::TimestepperState,
                                           solver::InitialValueSolver,
@@ -91,13 +70,13 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
     c = (0.0, 1.0 + w1/2.0, -w1/2.0)
 
     try
-        X_current = _global_matrix_fields_vector!(state, :mcnab2_X_current_vec, current_state)
+        X_current = _timestep_fields_vector!(state, :mcnab2_X_current_vec, current_state)
 
-        MX_current = _global_matrix_matvec!(state, :mcnab2_MX_current_vec, M_matrix, X_current)
-        LX_current = _global_matrix_matvec!(state, :mcnab2_LX_current_vec, L_matrix, X_current)
+        MX_current = _timestep_matvec!(state, :mcnab2_MX_current_vec, M_matrix, X_current)
+        LX_current = _timestep_matvec!(state, :mcnab2_LX_current_vec, L_matrix, X_current)
 
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_current_vec = _global_matrix_fields_vector!(state, :mcnab2_F_current_vec, F_current)
+        F_current_vec = _timestep_fields_vector!(state, :mcnab2_F_current_vec, F_current)
 
         # Rotate and store history
         MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
@@ -125,7 +104,7 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
             state.timestepper_data[:mcnab2_lhs_factor] = factorize(a[1] * M_matrix + b[1] * L_matrix)
         end
         X_new = _timestep_vector_buffer!(state, :mcnab2_X_new_vec, length(rhs))
-        _global_matrix_ldiv!(X_new, state.timestepper_data[:mcnab2_lhs_factor], rhs)
+        _timestep_ldiv!(X_new, state.timestepper_data[:mcnab2_lhs_factor], rhs)
 
         # Update state
         _push_vector_state!(state.history, X_new, current_state, 4)
@@ -201,16 +180,16 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
         # c: leapfrog only uses F^n
         # c = [0, 1, 0]
 
-        X_current = _global_matrix_fields_vector!(state, :cnlf2_X_current_vec, current_state)
-        X_previous = _global_matrix_fields_vector!(state, :cnlf2_X_previous_vec, state.history[end-1])
+        X_current = _timestep_fields_vector!(state, :cnlf2_X_current_vec, current_state)
+        X_previous = _timestep_fields_vector!(state, :cnlf2_X_previous_vec, state.history[end-1])
 
-        MX_current = _global_matrix_matvec!(state, :cnlf2_MX_current_vec, M_matrix, X_current)
-        MX_previous = _global_matrix_matvec!(state, :cnlf2_MX_previous_vec, M_matrix, X_previous)
-        LX_current = _global_matrix_matvec!(state, :cnlf2_LX_current_vec, L_matrix, X_current)
-        LX_previous = _global_matrix_matvec!(state, :cnlf2_LX_previous_vec, L_matrix, X_previous)
+        MX_current = _timestep_matvec!(state, :cnlf2_MX_current_vec, M_matrix, X_current)
+        MX_previous = _timestep_matvec!(state, :cnlf2_MX_previous_vec, M_matrix, X_previous)
+        LX_current = _timestep_matvec!(state, :cnlf2_LX_current_vec, L_matrix, X_current)
+        LX_previous = _timestep_matvec!(state, :cnlf2_LX_previous_vec, L_matrix, X_previous)
 
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_current_vec = _global_matrix_fields_vector!(state, :cnlf2_F_current_vec, F_current)
+        F_current_vec = _timestep_fields_vector!(state, :cnlf2_F_current_vec, F_current)
 
         # Build RHS in-place (zero allocations):
         # RHS = c[2]*F^n - a[2]*M*X^n - a[3]*M*X^{n-1} - b[2]*L*X^n - b[3]*L*X^{n-1}
@@ -228,7 +207,7 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
             state.timestepper_data[:cnlf2_lhs_factor] = factorize(a1 * M_matrix + b1 * L_matrix)
         end
         X_new = _timestep_vector_buffer!(state, :cnlf2_X_new_vec, length(rhs))
-        _global_matrix_ldiv!(X_new, state.timestepper_data[:cnlf2_lhs_factor], rhs)
+        _timestep_ldiv!(X_new, state.timestepper_data[:cnlf2_lhs_factor], rhs)
 
         # Update state
         _push_vector_state!(state.history, X_new, current_state, 4)

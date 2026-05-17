@@ -1,10 +1,3 @@
-function _etd_fields_vector!(state::TimestepperState, key::Symbol,
-                             fields::Vector{<:ScalarField})
-    _ensure_coeff_layout!(fields)
-    vector = _timestep_vector_buffer!(state, key, _fields_vector_size(fields))
-    return fields_to_vector!(vector, fields)
-end
-
 """
     2nd-order exponential Runge-Kutta method (ETDRK2).
 
@@ -59,7 +52,7 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
         end
         exp_hL, φ₁_hL, φ₂_hL = cache[:etd_phi]::NTuple{3, Matrix{ComplexF64}}
 
-        X₀ = _etd_fields_vector!(state, :etd_rk2_X0, current_state)
+        X₀ = _timestep_fields_vector!(state, :etd_rk2_X0, current_state)
 
         # Diagnostic: check size match before multiply
         if size(exp_hL, 2) != length(X₀)
@@ -81,7 +74,7 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
 
         # Stage 1 (predictor): Evaluate nonlinear term N(u_n) at current state
         F₀ = evaluate_rhs(solver, current_state, solver.sim_time)
-        F₀_vec = _etd_fields_vector!(state, :etd_rk2_Fraw, F₀)
+        F₀_vec = _timestep_fields_vector!(state, :etd_rk2_Fraw, F₀)
         _apply_mass_inverse!(N_buf, M_factor, F₀_vec)
 
         # Predictor: c = a_n + h*φ₁(hL)*N(u_n)  — reuse diff as φ₁*N_u_n scratch
@@ -93,7 +86,7 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
 
         # Stage 2 (corrector): Evaluate N(c) at predicted state
         F_c = evaluate_rhs(solver, temp_state, solver.sim_time + dt)
-        F_c_vec = _etd_fields_vector!(state, :etd_rk2_Fraw, F_c)
+        F_c_vec = _timestep_fields_vector!(state, :etd_rk2_Fraw, F_c)
         # Reuse diff as N_c (mass-inverse applied in place); save N_u_n → N_buf
         _apply_mass_inverse!(diff, M_factor, F_c_vec)
 
@@ -186,11 +179,11 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
         end
         exp_hL, φ₁_hL, _ = cache[:etd_cnab_phi]::NTuple{3, Matrix{ComplexF64}}
 
-        X_current = _etd_fields_vector!(state, :etd_cnab2_X_current, current_state)
+        X_current = _timestep_fields_vector!(state, :etd_cnab2_X_current, current_state)
 
         # Evaluate nonlinear term N(u_n) — in-place mass inverse
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_raw = _etd_fields_vector!(state, :etd_cnab2_Fraw, F_current)
+        F_raw = _timestep_fields_vector!(state, :etd_cnab2_Fraw, F_current)
         n = length(F_raw)
         F_current_vec = _timestep_vector_buffer!(state, :etd_cnab2_Fcur, n)
         _apply_mass_inverse!(F_current_vec, M_factor, F_raw)
@@ -200,7 +193,7 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
         _prepend_history_buffer!(F_history, F_current_vec, 2)
         if length(F_history) < 2 && length(state.history) >= 2
             prev_state = state.history[end-1]
-            F_prev_raw = _etd_fields_vector!(state, :etd_cnab2_Fprev_raw,
+            F_prev_raw = _timestep_fields_vector!(state, :etd_cnab2_Fprev_raw,
                                              evaluate_rhs(solver, prev_state, solver.sim_time - dt_previous))
             F_prev_vec = _timestep_vector_buffer!(state, :etd_cnab2_Fprev, n)
             _apply_mass_inverse!(F_prev_vec, M_factor, F_prev_raw)
@@ -319,12 +312,12 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         end
         exp_hL, φ₁_hL, φ₂_hL = cache[:etd_sbdf_phi]::NTuple{3, Matrix{ComplexF64}}
 
-        X_current = _etd_fields_vector!(state, :etd_sbdf2_X_current, current_state)
+        X_current = _timestep_fields_vector!(state, :etd_sbdf2_X_current, current_state)
         n = length(X_current)
 
         # Evaluate nonlinear term N(uₙ) at current state — in-place mass inverse
         F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_raw = _etd_fields_vector!(state, :etd_sbdf2_Fraw, F_current)
+        F_raw = _timestep_fields_vector!(state, :etd_sbdf2_Fraw, F_current)
         F_current_vec = _timestep_vector_buffer!(state, :etd_sbdf2_Fcur, n)
         _apply_mass_inverse!(F_current_vec, M_factor, F_raw)
 
@@ -333,7 +326,7 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         _prepend_history_buffer!(F_history, F_current_vec, 2)
         if length(F_history) < 2 && length(state.history) >= 2
             prev_state = state.history[end-1]
-            F_prev_raw = _etd_fields_vector!(state, :etd_sbdf2_Fprev_raw,
+            F_prev_raw = _timestep_fields_vector!(state, :etd_sbdf2_Fprev_raw,
                                              evaluate_rhs(solver, prev_state, solver.sim_time - dt_previous))
             F_prev_vec = _timestep_vector_buffer!(state, :etd_sbdf2_Fprev, n)
             _apply_mass_inverse!(F_prev_vec, M_factor, F_prev_raw)

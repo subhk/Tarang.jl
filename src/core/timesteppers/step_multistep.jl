@@ -1,10 +1,3 @@
-# Function barrier: lhs_cache is Any in Dict{Symbol,Any}; specializing on F
-# lets ldiv! dispatch statically to the concrete factorization type.
-@inline function _multistep_ldiv!(dest::AbstractVector, lhs::F, rhs::AbstractVector) where {F}
-    ldiv!(dest, lhs, rhs)
-    return dest
-end
-
 """
     Crank-Nicolson Adams-Bashforth 1st order following Tarang MultistepIMEX implementation.
 
@@ -26,44 +19,6 @@ function _init_global_multistep_history!(state::TimestepperState, iteration_key:
     end
 end
 
-function _global_multistep_state_vector!(state::TimestepperState, fields::Vector{<:ScalarField})
-    _ensure_coeff_layout!(fields)
-    vector = _timestep_vector_buffer!(state, :multistep_X_current_vec, _fields_vector_size(fields))
-    return fields_to_vector!(vector, fields)
-end
-
-function _global_multistep_fields_vector!(state::TimestepperState, key::Symbol,
-                                          fields::Vector{<:ScalarField})
-    _ensure_coeff_layout!(fields)
-    vector = _timestep_vector_buffer!(state, key, _fields_vector_size(fields))
-    return fields_to_vector!(vector, fields)
-end
-
-function _global_multistep_matvec!(state::TimestepperState, key::Symbol,
-                                   matrix::AbstractMatrix, vector::AbstractVector{ComplexF64})
-    dest = _timestep_vector_buffer!(state, key, size(matrix, 1))
-    mul!(dest, matrix, vector)
-    return dest
-end
-
-function _prepend_history_buffer!(history::Vector{Vector{ComplexF64}},
-                                  scratch::Vector{ComplexF64}, max_len::Int)
-    max_len <= 0 && return history
-
-    if length(history) >= max_len
-        slot = pop!(history)
-        if length(slot) != length(scratch)
-            slot = Vector{ComplexF64}(undef, length(scratch))
-        end
-    else
-        slot = Vector{ComplexF64}(undef, length(scratch))
-    end
-
-    copyto!(slot, scratch)
-    pushfirst!(history, slot)
-    return history
-end
-
 function _global_multistep_zero_rhs!(state::TimestepperState, n::Int)
     rhs = _timestep_vector_buffer!(state, :multistep_rhs_vec, n)
     fill!(rhs, zero(ComplexF64))
@@ -81,7 +36,7 @@ function _global_multistep_solve!(state::TimestepperState, cache_key,
     end
 
     solution = _timestep_vector_buffer!(state, :multistep_X_new_vec, length(rhs))
-    _multistep_ldiv!(solution, state.timestepper_data[:lhs_cache], rhs)
+    _timestep_ldiv!(solution, state.timestepper_data[:lhs_cache], rhs)
     return solution
 end
 
@@ -145,15 +100,15 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     c = (0.0, 1.0)         # c[0], c[1]
     
     # Step 1: Convert current state to vector (following Tarang gather_inputs)
-    X_current = _global_multistep_state_vector!(state, current_state)
+    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
     # Step 2: Compute M.X[0] and L.X[0] (following Tarang lines 142-147)
-    MX_current = _global_multistep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _global_multistep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
+    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
 
     # Step 3: Evaluate F(X[0]) at current time step (following Tarang lines 149-153)
     F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _global_multistep_fields_vector!(state, :multistep_F_current_vec, F_current)
+    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
 
     # Step 4: Rotate and store history (following Tarang lines 124-126)
     MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
@@ -248,15 +203,15 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     @debug "CNAB2 variable timestep: dt_current=$dt_current, dt_previous=$dt_previous, w1=$w1"
     
     # Step 1: Convert current state to vector
-    X_current = _global_multistep_state_vector!(state, current_state)
+    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
     # Step 2: Compute M.X[0] and L.X[0] (following Tarang lines 142-147)
-    MX_current = _global_multistep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _global_multistep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
+    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
 
     # Step 3: Evaluate F(X[0]) at current time step (following Tarang lines 149-153)
     F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _global_multistep_fields_vector!(state, :multistep_F_current_vec, F_current)
+    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
 
     # Step 4: Rotate and store history (following Tarang lines 124-126)
     MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
@@ -335,15 +290,15 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     c = (0.0, 1.0)         # c[0], c[1] - forward Euler explicit
     
     # Step 1: Convert current state to vector
-    X_current = _global_multistep_state_vector!(state, current_state)
+    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
     # Step 2: Compute M.X[0] and L.X[0] (following Tarang MultistepIMEX pattern)
-    MX_current = _global_multistep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _global_multistep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
+    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
 
     # Step 3: Evaluate F(X[0]) at current time step
     F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _global_multistep_fields_vector!(state, :multistep_F_current_vec, F_current)
+    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
 
     # Step 4: Rotate and store history
     MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
@@ -441,15 +396,15 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     @debug "SBDF2 variable timestep: dt_current=$dt_current, dt_previous=$dt_previous, w1=$w1"
     
     # Step 1: Convert current state to vector
-    X_current = _global_multistep_state_vector!(state, current_state)
+    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
     # Step 2: Compute M.X[0] and L.X[0]
-    MX_current = _global_multistep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _global_multistep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
+    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
 
     # Step 3: Evaluate F(X[0]) at current time step
     F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _global_multistep_fields_vector!(state, :multistep_F_current_vec, F_current)
+    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
 
     # Step 4: Rotate and store history
     MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
@@ -570,14 +525,14 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
          w1*w1*w2*(1 + w2) / (1 + w1))
 
     # Step 1: Convert current state to vector
-    X_current = _global_multistep_state_vector!(state, current_state)
+    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
     # Step 2: Compute M.X[0]
-    MX_current = _global_multistep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
 
     # Step 3: Evaluate F(X[0]) at current time step (only 1 RHS eval, reuse history)
     F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _global_multistep_fields_vector!(state, :multistep_F_current_vec, F_current)
+    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
 
     # Step 4: Rotate and store history (following SBDF1/SBDF2 pattern)
     MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
@@ -709,14 +664,14 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
          -(w1^3 * w2^2 * w3 * (1 + w3) * A2) / ((1 + w1) * A1))
 
     # Step 1: Convert current state to vector
-    X_current = _global_multistep_state_vector!(state, current_state)
+    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
     # Step 2: Compute M.X[0]
-    MX_current = _global_multistep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
 
     # Step 3: Evaluate F(X[0]) at current time step (only 1 RHS eval, reuse history)
     F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _global_multistep_fields_vector!(state, :multistep_F_current_vec, F_current)
+    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
 
     # Step 4: Rotate and store history (following SBDF1/SBDF2/SBDF3 pattern)
     MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
