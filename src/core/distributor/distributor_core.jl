@@ -48,7 +48,7 @@ mutable struct Distributor
     mpi_topology::Union{Nothing, PencilArrays.MPITopology}  # MPI Cartesian topology
     pencil_cache::Dict{Tuple, PencilArrays.Pencil}  # Cache Pencil objects by (shape, decomp_dims)
     transforms::Vector{Any}
-    pencil_fft_plan::Any  # Cached PencilFFTs.PencilFFTPlan reference (avoids Vector{Any} scan)
+    pencil_fft_plan::Union{Nothing, PencilFFTs.PencilFFTPlan}  # Cached plan reference (avoids Vector{Any} scan)
 
     # PencilFFT plan pencils for field allocation (must match plan's expected input/output)
     pencil_fft_input::Union{Nothing, PencilArrays.Pencil}   # Input pencil from PencilFFT plan

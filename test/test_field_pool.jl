@@ -1,6 +1,16 @@
 using Test
 using Tarang
 
+function _trivial_1d_solver(timestepper)
+    domain = PeriodicDomain(8)
+    u = ScalarField(domain, "u")
+    set!(u, (x,) -> sin(x))
+
+    problem = IVP([u])
+    add_equation!(problem, "∂t(u) = 0")
+    return InitialValueSolver(problem, timestepper; dt=0.01)
+end
+
 @testset "FieldPool" begin
 
     # -------------------------------------------------------------------
@@ -261,14 +271,7 @@ using Tarang
     end
 
     @testset "Trivial CNAB step has bounded steady-state allocation" begin
-        domain = PeriodicDomain(8)
-
-        u = ScalarField(domain, "u")
-        set!(u, (x,) -> sin(x))
-
-        problem = IVP([u])
-        add_equation!(problem, "∂t(u) = 0")
-        solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
+        solver = _trivial_1d_solver(CNAB1())
 
         step!(solver, 0.01)
         step!(solver, 0.01)
@@ -276,6 +279,32 @@ using Tarang
 
         alloc = @allocated step!(solver, 0.01)
         @test alloc <= 8192
+    end
+
+    @testset "ETD and global-matrix timesteppers have bounded steady-state allocation" begin
+        for timestepper in (ETD_RK222(), ETD_CNAB2(), Tarang.CNLF2())
+            solver = _trivial_1d_solver(timestepper)
+            for _ in 1:5
+                step!(solver, 0.01)
+            end
+
+            alloc = @allocated step!(solver, 0.01)
+            @test alloc <= 4096
+        end
+    end
+
+    @testset "MCNAB2 uses complex-valued history buffers" begin
+        solver = _trivial_1d_solver(Tarang.MCNAB2())
+
+        for _ in 1:4
+            @test step!(solver, 0.01) === solver
+        end
+
+        cache = solver.timestepper_state.timestepper_data
+        @test cache[:MX_history] isa Vector{Vector{ComplexF64}}
+        @test cache[:LX_history] isa Vector{Vector{ComplexF64}}
+        @test cache[:F_history] isa Vector{Vector{ComplexF64}}
+        @test cache[:iteration] > 0
     end
 
 end

@@ -97,11 +97,11 @@ function _global_multistep_distributed_fallback!(state::TimestepperState,
     return true
 end
 
-function _global_multistep_matrices_or_fallback!(state::TimestepperState,
-                                                 solver::InitialValueSolver,
-                                                 method_name::String,
-                                                 fallback_name::String,
-                                                 fallback_step!::F) where {F}
+function _prepare_global_multistep_matrices!(state::TimestepperState,
+                                             solver::InitialValueSolver,
+                                             method_name::String,
+                                             fallback_name::String,
+                                             fallback_step!::F) where {F}
     L_matrix, M_matrix = _global_matrix_implicit_matrices(solver)
     reason = _global_matrix_implicit_missing_matrix_reason(L_matrix, M_matrix)
     if reason !== nothing
@@ -135,7 +135,7 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     _init_global_multistep_history!(state, :cnab1_iteration)
 
     L_matrix, M_matrix, fell_back =
-        _global_multistep_matrices_or_fallback!(state, solver, "CNAB1", "forward Euler", step_rk111!)
+        _prepare_global_multistep_matrices!(state, solver, "CNAB1", "forward Euler", step_rk111!)
     fell_back && return
 
     # Get CNAB1 coefficients following Tarang (timesteppers:206-220)
@@ -227,11 +227,12 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     if iteration < 1 || length(state.history) < 2
         @debug "CNAB2 requires iteration >= 1, falling back to CNAB1"
         step_cnab1!(state, solver)
+        state.timestepper_data[:cnab2_iteration] += 1
         return
     end
 
     L_matrix, M_matrix, fell_back =
-        _global_multistep_matrices_or_fallback!(state, solver, "CNAB2", "CNAB1", step_cnab1!)
+        _prepare_global_multistep_matrices!(state, solver, "CNAB2", "CNAB1", step_cnab1!)
     fell_back && return
     
     # Get timestep history for variable timestep (following Tarang lines 280-281)
@@ -325,7 +326,7 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF1") && return
 
     L_matrix, M_matrix, fell_back =
-        _global_multistep_matrices_or_fallback!(state, solver, "SBDF1", "forward Euler", step_rk111!)
+        _prepare_global_multistep_matrices!(state, solver, "SBDF1", "forward Euler", step_rk111!)
     fell_back && return
     
     # Get SBDF1 coefficients following Tarang exactly (timesteppers:247-250)
@@ -400,7 +401,8 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
             step_sbdf1!(state, solver)
             return
         end
-        a, b, c = _sbdf2_coefs(dt)
+        dt_prev = get_previous_timestep(state)
+        a, b, c = _sbdf2_coefs(dt, dt_prev)
         step_subproblem_multistep!(state, solver, sps, a, b, c)
         return
     end
@@ -416,11 +418,12 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     if iteration < 1 || length(state.history) < 2
         @debug "SBDF2 requires iteration >= 1, falling back to SBDF1"
         step_sbdf1!(state, solver)
+        state.timestepper_data[:sbdf2_iteration] += 1
         return
     end
 
     L_matrix, M_matrix, fell_back =
-        _global_multistep_matrices_or_fallback!(state, solver, "SBDF2", "SBDF1", step_sbdf1!)
+        _prepare_global_multistep_matrices!(state, solver, "SBDF2", "SBDF1", step_sbdf1!)
     fell_back && return
     
     # Get timestep history for variable timestep (following Tarang lines 357-358)
@@ -506,7 +509,14 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
             step_sbdf2!(state, solver)
             return
         end
-        a, b, c = _sbdf3_coefs(dt)
+        if length(state.dt_history) < 3
+            step_sbdf2!(state, solver)
+            return
+        end
+        k2 = state.dt_history[end]
+        k1 = state.dt_history[end-1]
+        k0 = state.dt_history[end-2]
+        a, b, c = _sbdf3_coefs(k2, k1, k0)
         step_subproblem_multistep!(state, solver, sps, a, b, c)
         return
     end
@@ -522,6 +532,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     if iteration < 2 || length(state.history) < 3
         @debug "SBDF3 requires iteration >= 2, falling back to SBDF2"
         step_sbdf2!(state, solver)
+        state.timestepper_data[:sbdf3_iteration] += 1
         return
     end
 
@@ -531,6 +542,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     if length(state.dt_history) < 3
         @warn "SBDF3 requires 3 timestep history, falling back to SBDF2"
         step_sbdf2!(state, solver)
+        state.timestepper_data[:sbdf3_iteration] += 1
         return
     end
 
@@ -543,7 +555,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     w1 = k1 / k0
 
     L_matrix, M_matrix, fell_back =
-        _global_multistep_matrices_or_fallback!(state, solver, "SBDF3", "SBDF2", step_sbdf2!)
+        _prepare_global_multistep_matrices!(state, solver, "SBDF3", "SBDF2", step_sbdf2!)
     fell_back && return
 
     # Get SBDF3 coefficients following Tarang exactly (timesteppers:438-445)
@@ -627,7 +639,15 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
             step_sbdf3!(state, solver)
             return
         end
-        a, b, c = _sbdf4_coefs(dt)
+        if length(state.dt_history) < 4
+            step_sbdf3!(state, solver)
+            return
+        end
+        k3 = state.dt_history[end]
+        k2 = state.dt_history[end-1]
+        k1 = state.dt_history[end-2]
+        k0 = state.dt_history[end-3]
+        a, b, c = _sbdf4_coefs(k3, k2, k1, k0)
         step_subproblem_multistep!(state, solver, sps, a, b, c)
         return
     end
@@ -643,6 +663,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     if iteration < 3 || length(state.history) < 4
         @debug "SBDF4 requires iteration >= 3, falling back to SBDF3"
         step_sbdf3!(state, solver)
+        state.timestepper_data[:sbdf4_iteration] += 1
         return
     end
 
@@ -652,6 +673,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     if length(state.dt_history) < 4
         @warn "SBDF4 requires 4 timestep history, falling back to SBDF3"
         step_sbdf3!(state, solver)
+        state.timestepper_data[:sbdf4_iteration] += 1
         return
     end
 
@@ -666,7 +688,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     w1 = k1 / k0
 
     L_matrix, M_matrix, fell_back =
-        _global_multistep_matrices_or_fallback!(state, solver, "SBDF4", "SBDF3", step_sbdf3!)
+        _prepare_global_multistep_matrices!(state, solver, "SBDF4", "SBDF3", step_sbdf3!)
     fell_back && return
 
     # Get SBDF4 coefficients following Tarang exactly (timesteppers:480-494)

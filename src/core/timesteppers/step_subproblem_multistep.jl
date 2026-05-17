@@ -420,10 +420,8 @@ end
 """CNAB2 coefficients for current/previous timestep (variable step)."""
 @inline function _cnab2_coefs(dt::Float64, dt_prev::Float64)
     w1 = dt / dt_prev
-    a = ((1.0 + 2.0*w1) / ((1.0 + w1) * dt),
-         -(1.0 + w1) / dt,
-         w1^2 / ((1.0 + w1) * dt))
-    b = (0.5, 0.5, 0.0)
+    a = (1.0/dt, -1.0/dt)
+    b = (0.5, 0.5)
     c = (0.0, 1.0 + w1/2.0, -w1/2.0)
     return a, b, c
 end
@@ -435,19 +433,53 @@ end
      (0.0, 1.0))
 
 """SBDF2 coefficients."""
-@inline _sbdf2_coefs(dt::Float64) =
-    ((1.5/dt, -2.0/dt, 0.5/dt),
-     (1.0,),
-     (0.0, 2.0, -1.0))
+@inline _sbdf2_coefs(dt::Float64) = _sbdf2_coefs(dt, dt)
+@inline function _sbdf2_coefs(dt::Float64, dt_prev::Float64)
+    w1 = dt / dt_prev
+    a = ((1.0 + 2.0*w1) / ((1.0 + w1) * dt),
+         -(1.0 + w1) / dt,
+         w1^2 / ((1.0 + w1) * dt))
+    b = (1.0,)
+    c = (0.0, 1.0 + w1, -w1)
+    return a, b, c
+end
 
 """SBDF3 coefficients."""
-@inline _sbdf3_coefs(dt::Float64) =
-    ((11.0/(6.0*dt), -3.0/dt, 1.5/dt, -1.0/(3.0*dt)),
-     (1.0,),
-     (0.0, 3.0, -3.0, 1.0))
+@inline _sbdf3_coefs(dt::Float64) = _sbdf3_coefs(dt, dt, dt)
+@inline function _sbdf3_coefs(k2::Float64, k1::Float64, k0::Float64)
+    w2 = k2 / k1
+    w1 = k1 / k0
+    a = ((1 + w2/(1 + w2) + w1*w2/(1 + w1*(1 + w2))) / k2,
+         (-1 - w2 - w1*w2*(1 + w2)/(1 + w1)) / k2,
+         w2^2 * (w1 + 1/(1 + w2)) / k2,
+         -w1^3 * w2^2 * (1 + w2) / (1 + w1) / (1 + w1 + w1*w2) / k2)
+    b = (1.0, 0.0, 0.0, 0.0)
+    c = (0.0,
+         (1 + w2)*(1 + w1*(1 + w2)) / (1 + w1),
+         -w2*(1 + w1*(1 + w2)),
+         w1*w1*w2*(1 + w2) / (1 + w1))
+    return a, b, c
+end
 
 """SBDF4 coefficients."""
-@inline _sbdf4_coefs(dt::Float64) =
-    ((25.0/(12.0*dt), -4.0/dt, 3.0/dt, -4.0/(3.0*dt), 0.25/dt),
-     (1.0,),
-     (0.0, 4.0, -6.0, 4.0, -1.0))
+@inline _sbdf4_coefs(dt::Float64) = _sbdf4_coefs(dt, dt, dt, dt)
+@inline function _sbdf4_coefs(k3::Float64, k2::Float64, k1::Float64, k0::Float64)
+    w3 = k3 / k2
+    w2 = k2 / k1
+    w1 = k1 / k0
+    A1 = 1 + w1*(1 + w2)
+    A2 = 1 + w2*(1 + w3)
+    A3 = 1 + w1*A2
+    a = ((1 + w3/(1 + w3) + w2*w3/A2 + w1*w2*w3/A3) / k3,
+         (-1 - w3*(1 + (w2*(1 + w3)/(1 + w2)) * (1 + w1*A2/A1))) / k3,
+         w3 * (w3/(1 + w3) + (w2*w3*(A3 + w1))/(1 + w1)) / k3,
+         -(w2^3 * w3^2 * (1 + w3) * A3) / ((1 + w2) * A2 * k3),
+         ((1 + w3) * A2 * w1^4 * w2^3 * w3^2) / ((1 + w1) * A1 * A3 * k3))
+    b = (1.0, 0.0, 0.0, 0.0, 0.0)
+    c = (0.0,
+         (w2 * (1 + w3) * ((1 + w3)*(A3 + w1) + (1 + w1)/w2)) / ((1 + w2) * A1),
+         -(A2 * A3 * w3) / (1 + w1),
+         (w2^2 * w3 * (1 + w3) * A3) / (1 + w2),
+         -(w1^3 * w2^2 * w3 * (1 + w3) * A2) / ((1 + w1) * A1))
+    return a, b, c
+end

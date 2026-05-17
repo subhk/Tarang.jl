@@ -8,6 +8,7 @@ preventing performance regressions from type instability.
 using Test
 using Tarang
 using LinearAlgebra
+using PencilFFTs
 
 import Tarang: _local_data, _FIELD_ARITH_TMP_NAME,
                combine_add, combine_multiply,
@@ -89,9 +90,8 @@ end
 
     @testset "Transform dispatch" begin
         _, dist, _ = make_1d_scalar_field()
-        # _find_pencil_plan returns Union{Nothing, ...}
-        result = _find_pencil_plan(dist)
-        @test result === nothing || result isa Any  # Just verify it runs without error
+        @test @inferred(Union{Nothing, PencilFFTs.PencilFFTPlan}, _find_pencil_plan(dist)) === nothing
+        @test only(Base.return_types(_find_pencil_plan, (typeof(dist),))) !== Any
 
         # Fallback dispatch: unknown transform type returns data unchanged
         data = randn(ComplexF64, 8)
