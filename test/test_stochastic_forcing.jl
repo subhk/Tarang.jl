@@ -288,9 +288,18 @@ println("=" ^ 60)
         )
 
         @test forcing.dt == 0.01
+        generate_forcing!(forcing, 0.0)
+        @test forcing.last_update_time == 0.0
+        @test any(!iszero, forcing.cached_forcing)
 
         set_dt!(forcing, 0.001)
         @test forcing.dt == 0.001
+        @test forcing.last_update_time == -Inf
+        @test all(iszero, forcing.cached_forcing)
+
+        generate_forcing!(forcing, 0.0)
+        @test forcing.last_update_time == 0.0
+        @test any(!iszero, forcing.cached_forcing)
         println("  set_dt! works OK")
     end
 

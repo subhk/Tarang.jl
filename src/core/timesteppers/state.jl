@@ -162,7 +162,7 @@ function update_forcing!(state::TimestepperState, sim_time::Float64)
     if state.forcing !== nothing && !state.forcing_generated
         # Update dt in forcing if it changed
         if hasfield(typeof(state.forcing), :dt) && state.forcing.dt != state.dt
-            state.forcing.dt = state.dt
+            set_dt!(state.forcing, state.dt)
         end
         # Generate new forcing realization
         generate_forcing!(state.forcing, sim_time)
@@ -418,7 +418,7 @@ function _update_registered_forcings!(solver::InitialValueSolver, sim_time::Floa
     for (var_idx, forcing) in problem.stochastic_forcings
         # Update dt if it changed
         if hasfield(typeof(forcing), :dt) && forcing.dt != dt
-            forcing.dt = dt
+            set_dt!(forcing, dt)
         end
 
         # Generate new forcing realization

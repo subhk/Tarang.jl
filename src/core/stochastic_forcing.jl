@@ -979,7 +979,13 @@ Update the timestep for Stratonovich scaling.
 Call this when dt changes (e.g., adaptive timestepping).
 """
 function set_dt!(forcing::StochasticForcing{T, N, A, CA}, dt::Real) where {T, N, A, CA}
-    forcing.dt = T(dt)
+    new_dt = T(dt)
+    if forcing.dt != new_dt
+        forcing.dt = new_dt
+        forcing.last_update_time = T(-Inf)
+        fill!(forcing.cached_forcing, zero(Complex{T}))
+    end
+    return forcing
 end
 
 """
