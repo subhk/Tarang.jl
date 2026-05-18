@@ -1633,6 +1633,76 @@ end
 """
 Write individual task data to NetCDF file
 """
+function fallback_coordinate_data(coord_length::Int)
+    return coord_length == 1 ? [0.0] : collect(range(0.0, 1.0, length=coord_length))
+end
+
+function physical_coordinate_data(task::Dict, operator, data_shape::Tuple, data_dim_index::Int, is_complex_data::Bool)
+    layout_symbol = normalize_layout_symbol(get(task, "layout_symbol", get(task, "layout", :g)))
+    if layout_symbol != :g || get(task, "postprocess", nothing) !== nothing
+        return nothing
+    end
+
+    comp_dims = isa(operator, ScalarField) ? 0 : (isa(operator, VectorField) ? 1 : (isa(operator, TensorField) ? 2 : 0))
+    prefix_dims = (is_complex_data ? 1 : 0) + comp_dims
+    spatial_index = data_dim_index - prefix_dims
+    spatial_index <= 0 && return nothing
+
+    domain_info = get_operator_domain(operator)
+    domain = get(domain_info, "domain", nothing)
+    domain === nothing && return nothing
+    spatial_index > length(domain.bases) && return nothing
+
+    coord_name = domain.bases[spatial_index].meta.element_label
+    coords = get_grid_coordinates(domain; on_device=false)
+    haskey(coords, coord_name) || return nothing
+
+    full_coord = collect(coords[coord_name])
+    coord_length = data_shape[data_dim_index]
+
+    local_start = get(task, "local_start", nothing)
+    local_shape = get(task, "local_shape", nothing)
+    if local_start !== nothing && local_shape !== nothing && spatial_index <= length(local_start)
+        first_index = Int(local_start[spatial_index]) + 1
+        last_index = first_index + Int(local_shape[spatial_index]) - 1
+        if 1 <= first_index <= last_index <= length(full_coord) && last_index - first_index + 1 == coord_length
+            return full_coord[first_index:last_index]
+        end
+    end
+
+    return length(full_coord) == coord_length ? full_coord : nothing
+end
+
+function coordinate_attributes(dim_name::String, task::Dict, operator, data_dim_index::Int, is_complex_data::Bool)
+    if is_complex_data && data_dim_index == 1
+        return Dict("long_name" => "complex_component", "units" => "0=real, 1=imag")
+    end
+
+    comp_dims = isa(operator, ScalarField) ? 0 : (isa(operator, VectorField) ? 1 : (isa(operator, TensorField) ? 2 : 0))
+    prefix_dims = (is_complex_data ? 1 : 0) + comp_dims
+    spatial_index = data_dim_index - prefix_dims
+
+    if spatial_index <= 0
+        return Dict("long_name" => dim_name)
+    end
+
+    axis = "XYZ"[min(spatial_index, 3):min(spatial_index, 3)]
+    attrs = Dict{String, Any}("long_name" => dim_name, "axis" => axis)
+
+    domain_info = get_operator_domain(operator)
+    domain = get(domain_info, "domain", nothing)
+    if domain !== nothing && spatial_index <= length(domain.bases)
+        basis = domain.bases[spatial_index]
+        coord_name = basis.meta.element_label
+        attrs["coordinate"] = coord_name
+        attrs["standard_name"] = coord_name
+        attrs["actual_grid"] = 1
+        attrs["bounds"] = collect(basis.meta.bounds)
+    end
+
+    return attrs
+end
+
 function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Dict, write_index::Int, stage_cache::NetCDFStagingCache)
     init_mpi!(handler)  # Ensure MPI info is available
     task_name = task["name"]
@@ -1739,16 +1809,9 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
             
             if !coord_exists
                 coord_length = data_shape[i]
-                # Handle single-element case where range() fails with different endpoints
-                coord_data = coord_length == 1 ? [0.0] : collect(range(0.0, 1.0, length=coord_length))
-                # For complex-split data, the first dim is real/imag — don't label as spatial axis
-                coord_atts = if is_complex_data && i == 1
-                    Dict("long_name" => "complex_component", "units" => "0=real, 1=imag")
-                else
-                    # Spatial axis index: offset by 1 if complex-split dim is present
-                    spatial_idx = is_complex_data ? i - 1 : i
-                    Dict("long_name" => dim_name, "axis" => "XYZ"[min(spatial_idx,3):min(spatial_idx,3)])
-                end
+                coord_data = physical_coordinate_data(task, operator, data_shape, i, is_complex_data)
+                coord_data = coord_data === nothing ? fallback_coordinate_data(coord_length) : coord_data
+                coord_atts = coordinate_attributes(dim_name, task, operator, i, is_complex_data)
                 nccreate(filename, dim_name, dim_name, coord_length, atts=coord_atts)
                 ncwrite(coord_data, filename, dim_name)
             end
