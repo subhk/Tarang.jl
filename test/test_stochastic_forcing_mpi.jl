@@ -54,6 +54,13 @@ rank == 0 && println("=" ^ 60)
     ensure_layout!(rhs[1], :c)
 
     coeff_data = get_coeff_data(rhs[1])
+    forcing_view = Tarang._matched_forcing_view(forcing, coeff_data)
+    @test forcing_view !== nothing
+
+    local_error = maximum(abs.(coeff_data .- forcing_view))
+    global_error = MPI.Allreduce(local_error, MPI.MAX, comm)
+    @test global_error < 1e-12
+
     coeff_storage = coeff_data isa PencilArrays.PencilArray ? parent(coeff_data) : coeff_data
     local_sum = sum(abs, coeff_storage)
     global_sum = MPI.Allreduce(local_sum, MPI.SUM, comm)

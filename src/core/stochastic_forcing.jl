@@ -838,8 +838,10 @@ function work_stratonovich(forcing::StochasticForcing{T, N, A, CA}, sol::Abstrac
     # Fused mapreduce: computes Re(ψ_mid · F̂*) without temporary arrays.
     # GPU-compatible: mapreduce dispatches to GPU kernel on CuArrays.
     ps = forcing.prevsol
-    cf = forcing.cached_forcing
-    work = mapreduce(+, eachindex(ps); init=zero(T)) do i
+    size(ps) == size(sol) || throw(ArgumentError("Previous solution size $(size(ps)) does not match current solution size $(size(sol))"))
+    cf = _matched_forcing_view(forcing, sol)
+    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
+    work = mapreduce(+, eachindex(ps, sol, cf); init=zero(T)) do i
         @inbounds real((ps[i] + sol[i]) / 2 * conj(cf[i]))
     end
 
@@ -870,8 +872,9 @@ function work_ito(forcing::StochasticForcing{T, N, A, CA}, sol_prev::AbstractArr
 
     # Itô work (uses previous solution, which is independent of current forcing)
     # Fused mapreduce avoids temporary arrays; GPU-compatible.
-    cf = forcing.cached_forcing
-    work = mapreduce(+, eachindex(sol_prev); init=zero(T)) do i
+    cf = _matched_forcing_view(forcing, sol_prev)
+    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol_prev))"))
+    work = mapreduce(+, eachindex(sol_prev, cf); init=zero(T)) do i
         @inbounds real(sol_prev[i] * conj(cf[i]))
     end
 
@@ -924,9 +927,12 @@ Instantaneous power (energy per unit time).
 function instantaneous_power(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
     domain_area = prod(forcing.domain_size)
 
-    # Use broadcasting for GPU compatibility
-    power_array = real.(sol .* conj.(forcing.cached_forcing))
-    power = sum(power_array)
+    cf = _matched_forcing_view(forcing, sol)
+    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
+
+    power = mapreduce(+, eachindex(sol, cf); init=zero(T)) do i
+        @inbounds real(sol[i] * conj(cf[i]))
+    end
 
     # P = (1/A) · Re Σ ψ · F̂* where F̂ = √Q̂ · ξ / √dt
     return T(power / domain_area)
