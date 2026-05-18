@@ -110,6 +110,127 @@ struct NetCDFMerger
     end
 end
 
+function netcdf_file_info(file::String)
+    NetCDF.open(file) do nc
+        dims = [
+            (name=dim.name, dimlen=Int(dim.dimlen), unlim=dim.unlim)
+            for dim in values(nc.dim)
+        ]
+        vars = [
+            (
+                name=var.name,
+                atts=Dict{Any, Any}(var.atts),
+                dim_names=[dim.name for dim in var.dim],
+                dim_lengths=[Int(dim.dimlen) for dim in var.dim],
+            )
+            for var in values(nc.vars)
+        ]
+
+        return (dim=dims, vars=vars, gatts=Dict{Any, Any}(nc.gatts))
+    end
+end
+
+function _int_vector_from_attr(value)
+    if value === nothing
+        return nothing
+    elseif value isa Number
+        return [Int(value)]
+    elseif value isa AbstractArray || value isa Tuple
+        return Int.(collect(value))
+    elseif value isa AbstractString
+        matches = collect(eachmatch(r"-?\d+", value))
+        return isempty(matches) ? nothing : [parse(Int, m.match) for m in matches]
+    else
+        return nothing
+    end
+end
+
+function normalize_global_shape(value, data_shape::Tuple)
+    shape = _int_vector_from_attr(value)
+    shape === nothing && return nothing
+
+    if length(shape) == length(data_shape)
+        return tuple(shape...)
+    elseif length(shape) == length(data_shape) - 1
+        return tuple(data_shape[1], shape...)
+    else
+        return tuple(shape...)
+    end
+end
+
+function spatial_dim_index(coord_var::String)
+    m = match(r"_dim(\d+)$", coord_var)
+    return m === nothing ? nothing : parse(Int, m.captures[1])
+end
+
+function metadata_for_variable(file::String, var_name::String)
+    info = netcdf_file_info(file)
+    for var_info in info.vars
+        if var_info.name == var_name
+            return var_info
+        end
+    end
+    return nothing
+end
+
+function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String, file_info::Dict)
+    coord_index = spatial_dim_index(coord_var)
+    coord_index === nothing && return nothing
+
+    prefix = replace(coord_var, r"_dim\d+$" => "")
+    source_var = prefix in file_info["data_vars"] ? prefix :
+                 (isempty(file_info["data_vars"]) ? "" : first(file_info["data_vars"]))
+    isempty(source_var) && return nothing
+
+    reconstructed = nothing
+    covered = falses(0)
+
+    for file in merger.processor_files
+        coord_data = try
+            ncread(file, coord_var)
+        catch
+            continue
+        end
+
+        var_info = metadata_for_variable(file, source_var)
+        var_info === nothing && continue
+
+        data_shape = try
+            size(ncread(file, source_var))
+        catch
+            continue
+        end
+        global_shape = normalize_global_shape(get(var_info.atts, "global_shape", nothing), data_shape)
+        global_shape === nothing && continue
+        coord_index + 1 <= length(global_shape) || continue
+
+        global_len = global_shape[coord_index + 1]
+        if length(coord_data) == global_len
+            return coord_data
+        end
+
+        start_indices = _int_vector_from_attr(get(var_info.atts, "start", nothing))
+        count_indices = _int_vector_from_attr(get(var_info.atts, "count", nothing))
+        start_indices === nothing && continue
+        count_indices === nothing && continue
+        coord_index <= length(start_indices) || continue
+        coord_index <= length(count_indices) || continue
+
+        if reconstructed === nothing
+            reconstructed = Vector{eltype(coord_data)}(undef, global_len)
+            covered = falses(global_len)
+        end
+
+        range = (start_indices[coord_index] + 1):(start_indices[coord_index] + count_indices[coord_index])
+        if length(range) == length(coord_data) && last(range) <= global_len
+            reconstructed[range] = coord_data
+            covered[range] .= true
+        end
+    end
+
+    return reconstructed !== nothing && all(covered) ? reconstructed : nothing
+end
+
 """
 Get metadata from all processor files to understand data structure
 """
@@ -124,7 +245,7 @@ function analyze_processor_files(merger::NetCDFMerger)
     
     # Analyze first file to get structure
     first_file = merger.processor_files[1]
-    info = ncinfo(first_file)
+    info = netcdf_file_info(first_file)
     
     if merger.verbose
         println("  Sample file: $(basename(first_file))")
@@ -163,7 +284,7 @@ function analyze_processor_files(merger::NetCDFMerger)
     
     for var_name in [v.name for v in info.vars]
         if var_name in time_coords
-            push!(coord_vars, var_name)
+            continue
         elseif startswith(var_name, "dim_") || occursin(r"_dim\d+$", var_name)
             push!(coord_vars, var_name)  
         else
@@ -218,7 +339,7 @@ function merge_spatial_coordinates!(merger::NetCDFMerger, output_file::String, f
     # Get all spatial coordinate variables from all files
     all_coord_vars = Set{String}()
     for file in merger.processor_files
-        info = ncinfo(file)
+        info = netcdf_file_info(file)
         for var in info.vars
             if var.name in file_info["coord_vars"]
                 push!(all_coord_vars, var.name)
@@ -232,22 +353,24 @@ function merge_spatial_coordinates!(merger::NetCDFMerger, output_file::String, f
         
         # Strategy: Take coordinate data from first file that has it
         # In a real domain decomposition, coordinates might need reconstruction
-        coord_data = nothing
+        coord_data = reconstruct_spatial_coordinate(merger, coord_var, file_info)
         coord_attrs = Dict{String, Any}()
         
-        for file in merger.processor_files
-            try
-                coord_data = ncread(file, coord_var)
-                # Set standard NetCDF coordinate attributes
-                coord_attrs["long_name"] = coord_var
-                coord_attrs["axis"] = occursin("dim1", coord_var) ? "X" : (occursin("dim2", coord_var) ? "Y" : "Z")
-                break
-            catch
-                continue
+        if coord_data === nothing
+            for file in merger.processor_files
+                try
+                    coord_data = ncread(file, coord_var)
+                    break
+                catch
+                    continue
+                end
             end
         end
         
         if coord_data !== nothing
+            coord_attrs["long_name"] = coord_var
+            coord_attrs["axis"] = occursin("dim1", coord_var) ? "X" : (occursin("dim2", coord_var) ? "Y" : "Z")
+
             # Create coordinate variable in output file
             nccreate(output_file, coord_var, coord_var, length(coord_data),
                     t=eltype(coord_data),
@@ -416,21 +539,21 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
             
             try
                 # Look for Tarang-style attributes: 'start' and 'count'
-                info = ncinfo(file)
+                info = netcdf_file_info(file)
                 for var_info in info.vars
                     if var_info.name == var_name
                         # Try different attribute name conventions
-                        start_indices = get(var_info.atts, "start", nothing)
-                        count_indices = get(var_info.atts, "count", nothing)
+                        start_indices = _int_vector_from_attr(get(var_info.atts, "start", nothing))
+                        count_indices = _int_vector_from_attr(get(var_info.atts, "count", nothing))
                         
                         if start_indices === nothing
-                            start_indices = get(var_info.atts, "domain_start", nothing)
-                            count_indices = get(var_info.atts, "domain_count", nothing)
+                            start_indices = _int_vector_from_attr(get(var_info.atts, "domain_start", nothing))
+                            count_indices = _int_vector_from_attr(get(var_info.atts, "domain_count", nothing))
                         end
                         
                         # If we have global shape info, use it
                         if haskey(var_info.atts, "global_shape")
-                            global_shape = var_info.atts["global_shape"]
+                            global_shape = normalize_global_shape(var_info.atts["global_shape"], size(data))
                         end
                         break
                     end
@@ -639,7 +762,7 @@ function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String
             # Read layout information (following Tarang post:281)
             layout_info = Dict{String, Any}()
             try
-                info = ncinfo(file)
+                info = netcdf_file_info(file)
                 for var_info in info.vars
                     if var_info.name == var_name
                         # Key Tarang attributes that determine merging strategy
@@ -647,9 +770,9 @@ function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String
                         layout_info["layout"] = get(var_info.atts, "layout", nothing)
                         layout_info["scales"] = get(var_info.atts, "scales", nothing)
                         layout_info["constant"] = get(var_info.atts, "constant", false)
-                        layout_info["start"] = get(var_info.atts, "start", nothing)
-                        layout_info["count"] = get(var_info.atts, "count", nothing)
-                        layout_info["global_shape"] = get(var_info.atts, "global_shape", nothing)
+                        layout_info["start"] = _int_vector_from_attr(get(var_info.atts, "start", nothing))
+                        layout_info["count"] = _int_vector_from_attr(get(var_info.atts, "count", nothing))
+                        layout_info["global_shape"] = normalize_global_shape(get(var_info.atts, "global_shape", nothing), size(data))
                         break
                     end
                 end

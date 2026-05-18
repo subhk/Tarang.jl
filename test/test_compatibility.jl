@@ -81,6 +81,45 @@ end
     end
 end
 
+@testset "NetCDF merge reconstructs distributed coordinates" begin
+    tmp = mktempdir()
+    cd(tmp) do
+        setdir = joinpath("snapshots_s1")
+        mkpath(setdir)
+
+        for rank in 0:1
+            file = joinpath(setdir, "snapshots_s1_p$(rank).nc")
+
+            nccreate(file, "sim_time", "sim_time", 2, t=Float64)
+            ncwrite([0.0, 1.0], file, "sim_time")
+
+            nccreate(file, "q_dim1", "q_dim1", 4, t=Float64)
+            ncwrite(collect(1.0:4.0), file, "q_dim1")
+
+            nccreate(file, "q_dim2", "q_dim2", 2, t=Float64)
+            ncwrite(collect(1.0:2.0) .+ 2rank, file, "q_dim2")
+
+            nccreate(file, "q", "sim_time", 2, "q_dim1", 4, "q_dim2", 2;
+                     t=Float64,
+                     atts=Dict(
+                         "global_shape" => [4, 4],
+                         "start" => [0, 2rank],
+                         "count" => [4, 2],
+                         "grid_space" => 1,
+                         "layout" => "g",
+                     ))
+            ncwrite(fill(float(rank), 2, 4, 2), file, "q")
+        end
+
+        @test Tarang.merge_netcdf_files("snapshots"; cleanup=false, verbose=false)
+
+        merged = joinpath(setdir, "snapshots_s1.nc")
+        @test isfile(merged)
+        @test size(ncread(merged, "q")) == (2, 4, 4)
+        @test ncread(merged, "q_dim2") == collect(1.0:4.0)
+    end
+end
+
 @testset "NetCDF direct process scheduling" begin
     tmp = mktempdir()
     cd(tmp) do
