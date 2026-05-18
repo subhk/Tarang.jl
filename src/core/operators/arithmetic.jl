@@ -38,9 +38,9 @@ struct NegateOperator{T} <: Operator
     operand::T
 end
 
-struct IndexOperator{A} <: Operator
+struct IndexOperator{A, I<:Tuple} <: Operator
     array::A
-    indices::Vector{Any}
+    indices::I
 end
 
 # ============================================================================

@@ -11,6 +11,7 @@
 #   Tarang.Extras       - flow tools, plotting, quick domains, analysis tasks
 
 abstract type AbstractNonlinearEvaluator end
+abstract type AbstractEvaluator end
 abstract type AbstractDistributedGPUConfig end
 abstract type AbstractTransposeComms end
 abstract type AbstractTransposeCounts end

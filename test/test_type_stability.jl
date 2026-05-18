@@ -192,4 +192,22 @@ end
         @test fieldtype(Tarang.FutureState, :dist) == Union{Nothing, Tarang.Distributor}
     end
 
+    @testset "Solver and operator field types" begin
+        # evaluator field narrowed from Any to Union{Nothing, AbstractEvaluator}
+        @test fieldtype(Tarang.InitialValueSolver, :evaluator) == Union{Nothing, Tarang.AbstractEvaluator}
+        @test fieldtype(Tarang.SolverBaseData, :evaluator) == Union{Nothing, Tarang.AbstractEvaluator}
+
+        # Evaluator <: AbstractEvaluator
+        @test Tarang.Evaluator <: Tarang.AbstractEvaluator
+
+        # IndexOperator indices stored as Tuple (not Vector{Any})
+        f, dist, basis = make_1d_scalar_field()
+        # Use a concrete Tuple of indices
+        indices_tuple = (1,)
+        op = Tarang.IndexOperator(f, indices_tuple)
+        @test op.indices isa Tuple
+        @test fieldtype(typeof(op), :indices) <: Tuple
+        @test !(fieldtype(typeof(op), :indices) <: Vector)
+    end
+
 end # Type Stability

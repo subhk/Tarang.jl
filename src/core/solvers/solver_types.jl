@@ -88,7 +88,7 @@ mutable struct SolverBaseData
     matrix_coupling::Vector{Bool}
     entry_cutoff::Float64
     matsolver::Any         # Solver choice (Symbol, Tuple, or concrete solver)
-    evaluator::Any  # Union{Nothing, Evaluator} — Evaluator loaded after solvers.jl
+    evaluator::Union{Nothing, AbstractEvaluator}
 end
 
 function _normalize_matsolver(choice)
@@ -222,7 +222,7 @@ mutable struct InitialValueSolver <: Solver
     timestepper_state::Union{Nothing, AbstractTimestepperState}
 
     # Evaluator for analysis
-    evaluator::Any  # Union{Nothing, Evaluator} — Evaluator loaded after solvers.jl
+    evaluator::Union{Nothing, AbstractEvaluator}
 
     # Performance tracking
     wall_time_start::Float64

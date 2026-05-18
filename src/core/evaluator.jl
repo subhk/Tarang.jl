@@ -103,7 +103,7 @@ mutable struct DictionaryHandler
     end
 end
 
-mutable struct Evaluator
+mutable struct Evaluator <: AbstractEvaluator
     solver::InitialValueSolver
     file_handlers::Vector{FileHandler}
     dictionary_handlers::Vector{DictionaryHandler}

@@ -1026,8 +1026,8 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
             
             array = evaluate_parsed_expression(array_expr, namespace)
             evaluated_indices = [evaluate_parsed_expression(idx, namespace) for idx in indices]
-            
-            return IndexOperator(array, evaluated_indices)
+
+            return IndexOperator(array, Tuple(evaluated_indices))
             
         elseif expr.head == :block
             # Block expressions - evaluate meaningful statements

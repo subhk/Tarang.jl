@@ -14,7 +14,8 @@
 
 function _compiled_lazy_rhs_available(solver::InitialValueSolver)
     plan = solver.rhs_plan
-    return plan !== nothing && plan.is_compiled
+    plan === nothing && return false
+    return (plan::LazyRHSPlan).is_compiled
 end
 
 """
@@ -36,9 +37,9 @@ function _evaluate_rhs_with_strategy(strategy::Symbol,
                                      solver::InitialValueSolver,
                                      state::Vector{<:ScalarField})
     if strategy === :lazy
-        return _exec_lazy_rhs!(solver.rhs_plan, state, solver)
+        return _exec_lazy_rhs!(solver.rhs_plan::LazyRHSPlan, state, solver)
     elseif strategy === :lazy_buffered
-        return _exec_lazy_rhs_buffered!(solver.rhs_plan, state, solver)
+        return _exec_lazy_rhs_buffered!(solver.rhs_plan::LazyRHSPlan, state, solver)
     end
     return nothing
 end

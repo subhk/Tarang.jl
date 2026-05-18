@@ -59,7 +59,7 @@ function diagnose(solver::InitialValueSolver)
 
     # RHS evaluation
     if solver.rhs_plan !== nothing
-        plan = solver.rhs_plan
+        plan = solver.rhs_plan::LazyRHSPlan
         if plan.is_compiled
             n_eqs = count(!isnothing, plan.exprs)
             println("├── RHS: lazy (type-specialized, $n_eqs equations)")
