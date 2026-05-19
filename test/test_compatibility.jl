@@ -132,6 +132,40 @@ end
         @test size(Tarang.group_ncread(merged, "vars", "q")) == (2, 4, 4)
         @test Tarang.group_ncread(merged, "grids", "q_dim2") == collect(1.0:4.0)
 
+        legacy_setdir = joinpath("legacy_s1")
+        mkpath(legacy_setdir)
+        for rank in 0:1
+            file = joinpath(legacy_setdir, "legacy_s1_p$(rank).nc")
+
+            nccreate(file, "sim_time", "sim_time", 1, t=Float64)
+            ncwrite([0.0], file, "sim_time")
+
+            nccreate(file, "x", "x", 4, t=Float64)
+            ncwrite(collect(1.0:4.0), file, "x")
+
+            nccreate(file, "y", "y", 2, t=Float64)
+            ncwrite(collect(1.0:2.0) .+ 2rank, file, "y")
+
+            nccreate(file, "q", "sim_time", 1, "x", 4, "y", 2;
+                     t=Float64,
+                     atts=Dict(
+                         "global_shape" => [4, 4],
+                         "start" => [0, 2rank],
+                         "count" => [4, 2],
+                         "grid_space" => 1,
+                         "layout" => "g",
+                     ))
+            ncwrite(fill(float(rank), 1, 4, 2), file, "q")
+        end
+
+        @test Tarang.merge_netcdf_files("legacy"; cleanup=false, verbose=false)
+        legacy_merged = joinpath(legacy_setdir, "legacy_s1.nc")
+        @test Tarang.group_ncread(legacy_merged, "grids", "x") == collect(1.0:4.0)
+        @test Tarang.group_ncread(legacy_merged, "grids", "y") == collect(1.0:4.0)
+        @test size(Tarang.group_ncread(legacy_merged, "vars", "q")) == (1, 4, 4)
+        @test !Tarang.group_var_exists(legacy_merged, "vars", "x")
+        @test !Tarang.group_var_exists(legacy_merged, "vars", "y")
+
         grouped_setdir = joinpath("grouped_s1")
         mkpath(grouped_setdir)
         for rank in 0:1

@@ -198,6 +198,17 @@ function spatial_dim_index(coord_var::String)
     return m === nothing ? nothing : parse(Int, m.captures[1])
 end
 
+function is_time_coordinate(var_name::String)
+    return var_name in ("sim_time", "wall_time", "timestep", "iteration", "write_number")
+end
+
+function is_coordinate_variable(var_info)
+    dim_names = getproperty(var_info, :dim_names)
+    return startswith(var_info.name, "dim_") ||
+           occursin(r"_dim\d+$", var_info.name) ||
+           (length(dim_names) == 1 && var_info.name == dim_names[1])
+end
+
 function metadata_for_variable(file::String, var_name::String)
     info = netcdf_file_info(file)
     for var_info in info.vars
@@ -208,15 +219,39 @@ function metadata_for_variable(file::String, var_name::String)
     return nothing
 end
 
-function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String, file_info::Dict)
+function coordinate_source_variable(file::String, coord_var::String, file_info::Dict)
+    prefix = replace(coord_var, r"_dim\d+$" => "")
+    if prefix != coord_var && prefix in file_info["data_vars"]
+        return prefix
+    end
+
+    for source_var in file_info["data_vars"]
+        var_info = metadata_for_variable(file, source_var)
+        var_info === nothing && continue
+        if coord_var in var_info.dim_names
+            return source_var
+        end
+    end
+
+    return isempty(file_info["data_vars"]) ? "" : first(file_info["data_vars"])
+end
+
+function coordinate_indices(var_info, coord_var::String)
+    dim_pos = findfirst(==(coord_var), var_info.dim_names)
+    if dim_pos !== nothing
+        has_time_dim = !isempty(var_info.dim_names) && is_time_coordinate(var_info.dim_names[1])
+        decomp_index = has_time_dim ? dim_pos - 1 : dim_pos
+        return decomp_index < 1 ? nothing : (decomp_index=decomp_index, global_dim_index=dim_pos)
+    end
+
     coord_index = spatial_dim_index(coord_var)
     coord_index === nothing && return nothing
+    has_time_dim = !isempty(var_info.dim_names) && is_time_coordinate(var_info.dim_names[1])
+    return (decomp_index=coord_index,
+            global_dim_index=has_time_dim ? coord_index + 1 : coord_index)
+end
 
-    prefix = replace(coord_var, r"_dim\d+$" => "")
-    source_var = prefix in file_info["data_vars"] ? prefix :
-                 (isempty(file_info["data_vars"]) ? "" : first(file_info["data_vars"]))
-    isempty(source_var) && return nothing
-
+function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String, file_info::Dict)
     reconstructed = nothing
     covered = falses(0)
 
@@ -227,8 +262,14 @@ function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String,
             continue
         end
 
+        source_var = coordinate_source_variable(file, coord_var, file_info)
+        isempty(source_var) && return nothing
+
         var_info = metadata_for_variable(file, source_var)
         var_info === nothing && continue
+
+        indices = coordinate_indices(var_info, coord_var)
+        indices === nothing && continue
 
         data_shape = try
             size(read_netcdf_variable(file, source_var))
@@ -237,9 +278,9 @@ function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String,
         end
         global_shape = normalize_global_shape(get(var_info.atts, "global_shape", nothing), data_shape)
         global_shape === nothing && continue
-        coord_index + 1 <= length(global_shape) || continue
+        indices.global_dim_index <= length(global_shape) || continue
 
-        global_len = global_shape[coord_index + 1]
+        global_len = global_shape[indices.global_dim_index]
         if length(coord_data) == global_len
             return coord_data
         end
@@ -248,15 +289,15 @@ function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String,
         count_indices = _int_vector_from_attr(get(var_info.atts, "count", nothing))
         start_indices === nothing && continue
         count_indices === nothing && continue
-        coord_index <= length(start_indices) || continue
-        coord_index <= length(count_indices) || continue
+        indices.decomp_index <= length(start_indices) || continue
+        indices.decomp_index <= length(count_indices) || continue
 
         if reconstructed === nothing
             reconstructed = Vector{eltype(coord_data)}(undef, global_len)
             covered = falses(global_len)
         end
 
-        range = (start_indices[coord_index] + 1):(start_indices[coord_index] + count_indices[coord_index])
+        range = (start_indices[indices.decomp_index] + 1):(start_indices[indices.decomp_index] + count_indices[indices.decomp_index])
         if length(range) == length(coord_data) && last(range) <= global_len
             reconstructed[range] = coord_data
             covered[range] .= true
@@ -317,10 +358,11 @@ function analyze_processor_files(merger::NetCDFMerger)
     data_vars = String[]
     coord_vars = String[]
     
-    for var_name in [v.name for v in info.vars]
-        if var_name in time_coords
+    for var_info in info.vars
+        var_name = var_info.name
+        if is_time_coordinate(var_name)
             continue
-        elseif startswith(var_name, "dim_") || occursin(r"_dim\d+$", var_name)
+        elseif is_coordinate_variable(var_info)
             push!(coord_vars, var_name)  
         else
             push!(data_vars, var_name)
@@ -571,12 +613,14 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
             # Try to read domain decomposition information (Tarang style)
             start_indices = nothing
             count_indices = nothing
+            source_dim_names = nothing
             
             try
                 # Look for Tarang-style attributes: 'start' and 'count'
                 info = netcdf_file_info(file)
                 for var_info in info.vars
                     if var_info.name == var_name
+                        source_dim_names = var_info.dim_names
                         # Try different attribute name conventions
                         start_indices = _int_vector_from_attr(get(var_info.atts, "start", nothing))
                         count_indices = _int_vector_from_attr(get(var_info.atts, "count", nothing))
@@ -615,9 +659,13 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
                 
                 # Create dimension names following NetCDF conventions
                 data_shape = size(data)
-                dim_names = ["sim_time"]  # First dimension is always time
-                for j in 2:length(data_shape)
-                    push!(dim_names, "$(var_name)_dim$(j-1)")
+                if source_dim_names !== nothing && length(source_dim_names) == length(data_shape)
+                    dim_names = String.(source_dim_names)
+                else
+                    dim_names = ["sim_time"]  # First dimension is usually time
+                    for j in 2:length(data_shape)
+                        push!(dim_names, "$(var_name)_dim$(j-1)")
+                    end
                 end
                 
                 # If no global shape found, warn and fall back to first processor's shape.
