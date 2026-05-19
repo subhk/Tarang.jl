@@ -24,14 +24,17 @@ using Logging
 global_logger(ConsoleLogger(stderr, Logging.Warn))
 
 # ─── Parameters ───────────────────────────────────────────────
-Nx       = 512
-Ny       = Nx
+Nx, Ny   = 512, 512
 Lx, Ly   = 2π, 2π
-nu       = 1e-20
-drag     = 1e-3
-stop_time = 10000.0
+nu       = 1e-16
+alpha    = 4.0
+stop_time = 50.0
 stop_iteration = typemax(Int)
-max_dt   = 1e-1
+max_dt   = 2e-3
+output_dt = 1.0
+initial_noise = 1e-3
+log_interval = 100
+max_writes = 100
 
 # Forcing parameters
 k_f      = 5.0
@@ -48,7 +51,7 @@ ybasis = RealFourier(coords["y"]; size=Ny, bounds=(0.0, Ly), dealias=3/2)
 domain = Domain(dist, (xbasis, ybasis))
 
 # ─── Fields ───────────────────────────────────────────────────
-b     = ScalarField(domain, "b")          # Surface buoyancy
+θ     = ScalarField(domain, "θ")          # Surface buoyancy
 ψ     = ScalarField(domain, "ψ")          # Streamfunction
 u     = VectorField(domain, "u")          # Velocity
 
@@ -66,29 +69,28 @@ forcing = StochasticForcing(
 
 # ─── Problem ─────────────────────────────────────────────────
 # SQG inversion: ψ = (-Δ)^(-1/2) θ. The inverse sets the mean mode to zero.
-problem = IVP([b, ψ, u])
+problem = IVP([θ, ψ, u])
 add_parameters!(problem, nu=nu, alpha=alpha)
 
-add_equation!(problem, "∂t(b) + nu*fraclap(b, alpha) = -u⋅∇(θb)")   # Buoyancy evolution
+add_equation!(problem, "∂t(θ) + nu*fraclap(θ, alpha) = -u⋅∇(θ)")    # Buoyancy evolution
 add_equation!(problem, "ψ - invsqrtlap(θ) = 0")                    # SQG inversion
 add_equation!(problem, "u - skew(grad(ψ)) = 0")                    # Velocity from ψ
 
 # Register forcing on the buoyancy variable
-add_stochastic_forcing!(problem, :b, forcing)
+add_stochastic_forcing!(problem, :θ, forcing)
 
 # ─── Solver ───────────────────────────────────────────────────
 solver = InitialValueSolver(problem, RK222(); dt=max_dt)
 
 # ─── Initial Conditions ──────────────────────────────────────
-fill_random!(b, "g"; seed=42, distribution="normal", scale=1e-3)
+fill_random!(θ, "g"; seed=42, distribution="normal", scale=initial_noise)
 
 # ─── Output ──────────────────────────────────────────────────
-output_path = "snapshots/sqg_snapshots"
-snapshots = add_file_handler(output_path, dist, 
-                             Dict("b" => b, "ψ" => ψ);
-                             sim_dt=50.0, max_writes=100)
+output_path = "sqg"
+snapshots = add_file_handler(output_path, solver, Dict("θ" => θ, "ψ" => ψ);
+                             sim_dt=output_dt, max_writes=max_writes)
 
-add_task!(snapshots, b; name="b")
+add_task!(snapshots, θ; name="theta")
 add_task!(snapshots, ψ; name="psi")
 
 # ─── CFL ─────────────────────────────────────────────────────
@@ -103,17 +105,14 @@ add_velocity!(cfl, u)
 @root_only @printf("  dt≤%.2e, output_dt=%.2e, initial_noise=%.1e\n",
                     max_dt, output_dt, initial_noise)
 
-wall_start = time()
-process!(snapshots; iteration=solver.iteration, wall_time=0.0,
-         sim_time=solver.sim_time, timestep=solver.dt)
+# write initial state, t = 0
+process!(snapshots)
 
 while solver.sim_time < stop_time && solver.iteration < stop_iteration
     dt = min(compute_timestep(cfl), stop_time - solver.sim_time)
     step!(solver, dt)
 
-    wall_time = time() - wall_start
-    process!(snapshots; iteration=solver.iteration, wall_time=wall_time,
-             sim_time=solver.sim_time, timestep=solver.dt)
+    process!(snapshots)
 
     if solver.iteration % log_interval == 0
         ensure_layout!(θ, :g)

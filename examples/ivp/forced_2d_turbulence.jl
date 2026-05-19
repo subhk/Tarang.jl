@@ -20,19 +20,23 @@ using Logging
 global_logger(ConsoleLogger(stderr, Logging.Warn))
 
 # ─── Parameters ───────────────────────────────────────────────
-Nx       = 512
-Ny       = Nx
+Nx       = parse(Int, get(ENV, "TARANG_FORCED_2D_NX", "512"))
+Ny       = parse(Int, get(ENV, "TARANG_FORCED_2D_NY", string(Nx)))
 Lx, Ly   = 2π, 2π
-nu       = 1e-20
-drag     = 1e-3
-stop_time = 20000.0
-stop_iteration = typemax(Int)
-max_dt   = 1e-1
+nu       = parse(Float64, get(ENV, "TARANG_FORCED_2D_NU", "1e-20"))
+drag     = parse(Float64, get(ENV, "TARANG_FORCED_2D_DRAG", "1e-3"))
+stop_time = parse(Float64, get(ENV, "TARANG_FORCED_2D_STOP_TIME", "20000.0"))
+stop_iteration = parse(Int, get(ENV, "TARANG_FORCED_2D_STOP_ITERATION", string(typemax(Int))))
+max_dt   = parse(Float64, get(ENV, "TARANG_FORCED_2D_MAX_DT", "1e-1"))
+output_dt = parse(Float64, get(ENV, "TARANG_FORCED_2D_OUTPUT_DT", "50.0"))
+initial_noise = parse(Float64, get(ENV, "TARANG_FORCED_2D_INITIAL_NOISE", "1e-2"))
+log_interval = parse(Int, get(ENV, "TARANG_FORCED_2D_LOG_INTERVAL", "200"))
+max_writes = parse(Int, get(ENV, "TARANG_FORCED_2D_MAX_WRITES", "100"))
 
 # Forcing parameters
-k_f      = 50.0 
-dk_f     = 2.0 
-ε        = 600.0
+k_f      = parse(Float64, get(ENV, "TARANG_FORCED_2D_KF", "50.0"))
+dk_f     = parse(Float64, get(ENV, "TARANG_FORCED_2D_DKF", "2.0"))
+ε        = parse(Float64, get(ENV, "TARANG_FORCED_2D_EPSILON", "600.0"))
 
 # ─── Domain & Fields ──────────────────────────────────────────
 coords = CartesianCoordinates("x", "y")
@@ -80,12 +84,13 @@ add_stochastic_forcing!(problem, :ζ, forcing)
 solver = InitialValueSolver(problem, RK222(); dt=max_dt)
 
 # ─── Initial Conditions ──────────────────────────────────────
-fill_random!(ζ, "g"; seed=42, distribution="normal", scale=1e-2)
+fill_random!(ζ, "g"; seed=42, distribution="normal", scale=initial_noise)
 
 # ─── Output ──────────────────────────────────────────────────
-snapshots = add_file_handler("2d_turb/2d_turb", dist,
+output_path = get(ENV, "TARANG_FORCED_2D_OUTPUT", "2d_turb/2d_turb")
+snapshots = add_file_handler(output_path, solver,
                             Dict("ζ" => ζ, "ψ" => ψ);
-                            sim_dt=50.0, max_writes=100)
+                            sim_dt=output_dt, max_writes=max_writes)
 
 add_task!(snapshots, ζ; name="ζ")
 add_task!(snapshots, ψ; name="ψ")
@@ -101,20 +106,18 @@ add_velocity!(cfl, u)
 # ─── Main Loop ────────────────────────────────────────────────
 @root_only println("Forced 2D Turbulence")
 @root_only @printf("  N=%d×%d, ε=%.2e, k_f=%.1f, ν=%.1e, μ=%.1e\n", Nx, Ny, ε, k_f, nu, drag)
+@root_only @printf("  dt≤%.2e, output_dt=%.2e, initial_noise=%.1e\n",
+                    max_dt, output_dt, initial_noise)
 
-wall_start = time()
-process!(snapshots; iteration=solver.iteration, wall_time=0.0,
-         sim_time=solver.sim_time, timestep=solver.dt)
+process!(snapshots)
 
 while solver.sim_time < stop_time && solver.iteration < stop_iteration
     dt = compute_timestep(cfl)
     step!(solver, dt)
 
-    wall_time = time() - wall_start
-    process!(snapshots; iteration=solver.iteration, wall_time=wall_time,
-             sim_time=solver.sim_time, timestep=solver.dt)
+    process!(snapshots)
 
-    if solver.iteration % 200 == 0
+    if solver.iteration % log_interval == 0
         ensure_layout!(ζ, :g)
         max_ζ = global_max(dist, abs.(get_grid_data(ζ)))
         if !isfinite(max_ζ)
