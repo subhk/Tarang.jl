@@ -2,9 +2,9 @@
 #
 # Stochastically forced 2D Navier-Stokes on a doubly-periodic domain:
 #
-#     ∂t(q) + u·∇(q) = -ν Δ⁴(q) - μq + F
+#     ∂t(ζ) + u·∇(ζ) = -ν Δ⁴(ζ) - μζ + F
 #
-# where q = Δ(ψ), u = skew(∇ψ)), and F is white-in-time ring forcing
+# where ζ = Δ(ψ), u = skew(∇ψ)), and F is white-in-time ring forcing
 # injecting energy at wavenumber k_f.
 #
 # The forcing drives an inverse energy cascade (energy → large scales)
@@ -20,19 +20,19 @@ using Logging
 global_logger(ConsoleLogger(stderr, Logging.Warn))
 
 # ─── Parameters ───────────────────────────────────────────────
-Nx       = parse(Int, get(ENV, "TARANG_FORCED_2D_NX", "256"))
-Ny       = parse(Int, get(ENV, "TARANG_FORCED_2D_NY", string(Nx)))
+Nx       = 512
+Ny       = Nx
 Lx, Ly   = 2π, 2π
-nu       = parse(Float64, get(ENV, "TARANG_FORCED_2D_NU", "1e-16"))
-drag     = parse(Float64, get(ENV, "TARANG_FORCED_2D_DRAG", "1e-2"))
-stop_time = parse(Float64, get(ENV, "TARANG_FORCED_2D_STOP_TIME", "100.0"))
-stop_iteration = parse(Int, get(ENV, "TARANG_FORCED_2D_STOP_ITERATION", string(typemax(Int))))
-max_dt   = parse(Float64, get(ENV, "TARANG_FORCED_2D_MAX_DT", "1e-6"))
+nu       = 1e-20
+drag     = 1e-3
+stop_time = 20000.0
+stop_iteration = typemax(Int)
+max_dt   = 1e-1
 
 # Forcing parameters
-k_f      = parse(Float64, get(ENV, "TARANG_FORCED_2D_KF", "50.0"))
-dk_f     = parse(Float64, get(ENV, "TARANG_FORCED_2D_DKF", "2.0"))
-ε        = parse(Float64, get(ENV, "TARANG_FORCED_2D_EPS", "1e-6"))
+k_f      = 50.0 
+dk_f     = 2.0 
+ε        = 600.0
 
 # ─── Domain & Fields ──────────────────────────────────────────
 coords = CartesianCoordinates("x", "y")
@@ -44,7 +44,7 @@ ybasis = RealFourier(coords["y"]; size=Ny, bounds=(0.0, Ly), dealias=3/2)
 domain = Domain(dist, (xbasis, ybasis))
 
 # ─── Fields ───────────────────────────────────────────────────
-q     = ScalarField(domain, "q")          # Vorticity
+ζ     = ScalarField(domain, "ζ")          # Vorticity
 ψ     = ScalarField(domain, "ψ")          # Streamfunction
 u     = VectorField(domain, "u")          # Velocity
 tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
@@ -64,28 +64,31 @@ forcing = StochasticForcing(
 )
 
 # ─── Problem ─────────────────────────────────────────────────
-problem = IVP([q, ψ, u, tau_ψ])
+problem = IVP([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu, drag=drag)
 
-add_equation!(problem, "∂t(q) + drag*q + nu*Δ⁴(q) = -u⋅∇(q)")  # PV evolution (forcing added below)
-add_equation!(problem, "Δ(ψ) + tau_ψ - q  = 0")            # Poisson equation
-add_equation!(problem, "u - skew(grad(ψ)) = 0")            # Velocity from ψ
+add_equation!(problem, "∂t(ζ) + drag*ζ + nu*Δ⁴(ζ) = -u⋅∇(ζ)")  # PV evolution (forcing added below)
+add_equation!(problem, "Δ(ψ) + tau_ψ - ζ  = 0")                # Poisson equation
+add_equation!(problem, "u - skew(grad(ψ)) = 0")                # Velocity from ψ
 
 add_bc!(problem, "integ(ψ) = 0")
 
 # Register forcing on the vorticity variable
-add_stochastic_forcing!(problem, :q, forcing)
+add_stochastic_forcing!(problem, :ζ, forcing)
 
 # ─── Solver ───────────────────────────────────────────────────
 solver = InitialValueSolver(problem, RK222(); dt=max_dt)
 
 # ─── Initial Conditions ──────────────────────────────────────
-fill_random!(q, "g"; seed=42, distribution="normal", scale=1e-3)
+fill_random!(ζ, "g"; seed=42, distribution="normal", scale=1e-2)
 
 # ─── Output ──────────────────────────────────────────────────
-output_path = get(ENV, "TARANG_FORCED_2D_OUTPUT", "snapshots")
-snapshots = add_file_handler(output_path, dist, Dict("q" => q); sim_dt=5.0, max_writes=50)
-add_task!(snapshots, q; name="q")
+snapshots = add_file_handler("2d_turb/2d_turb", dist,
+                            Dict("ζ" => ζ, "ψ" => ψ);
+                            sim_dt=50.0, max_writes=100)
+
+add_task!(snapshots, ζ; name="ζ")
+add_task!(snapshots, ψ; name="ψ")
 
 # add_task!(snapshots, u.components[1]; name="ux")
 # add_task!(snapshots, u.components[2]; name="uz")
@@ -104,21 +107,21 @@ process!(snapshots; iteration=solver.iteration, wall_time=0.0,
          sim_time=solver.sim_time, timestep=solver.dt)
 
 while solver.sim_time < stop_time && solver.iteration < stop_iteration
-    dt = min(compute_timestep(cfl), stop_time - solver.sim_time)
+    dt = compute_timestep(cfl)
     step!(solver, dt)
 
     wall_time = time() - wall_start
     process!(snapshots; iteration=solver.iteration, wall_time=wall_time,
              sim_time=solver.sim_time, timestep=solver.dt)
 
-    if solver.iteration % 20 == 0
-        ensure_layout!(q, :g)
-        max_q = global_max(dist, abs.(get_grid_data(q)))
-        if !isfinite(max_q)
+    if solver.iteration % 200 == 0
+        ensure_layout!(ζ, :g)
+        max_ζ = global_max(dist, abs.(get_grid_data(ζ)))
+        if !isfinite(max_ζ)
             error("Non-finite vorticity detected at iteration $(solver.iteration), t=$(solver.sim_time)")
         end
-        @root_only @printf("  iter=%d, t=%.6f, dt=%.2e, max|q|=%.4e\n",
-                            solver.iteration, solver.sim_time, solver.dt, max_q)
+        @root_only @printf("  iter=%d, t=%.6f, dt=%.2e, max|ζ|=%.4e\n",
+                            solver.iteration, solver.sim_time, solver.dt, max_ζ)
     end
 end
 

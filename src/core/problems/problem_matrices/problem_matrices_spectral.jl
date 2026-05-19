@@ -146,7 +146,12 @@ function _spectral_fractional_laplacian(field::ScalarField, α::Float64, eqn_siz
     # Laplacian is diagonal for Fourier: entries are -|k|²
     # (-Δ)^α = |k|^{2α}
     diag_vals = diag(lap)
-    frac_vals = [abs(v)^α for v in diag_vals]
+    if α >= 0
+        frac_vals = [abs(v)^α for v in diag_vals]
+    else
+        threshold = 1e-14
+        frac_vals = [abs(v) > threshold ? abs(v)^α : 0.0 for v in diag_vals]
+    end
     n = min(eqn_size, var_size, length(frac_vals))
     return spdiagm(eqn_size, var_size, 0 => ComplexF64.(frac_vals[1:n]))
 end

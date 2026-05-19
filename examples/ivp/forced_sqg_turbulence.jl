@@ -24,26 +24,33 @@ using Logging
 global_logger(ConsoleLogger(stderr, Logging.Warn))
 
 # ─── Parameters ───────────────────────────────────────────────
-Nx, Ny   = 512, 512
+Nx       = 512
+Ny       = Nx
 Lx, Ly   = 2π, 2π
-nu       = 1e-16             # Hyperdiffusion coefficient
-alpha    = 4.0               # Dissipation exponent: (-Δ)^α
-stop_time = 50.0
-max_dt   = 2e-3
+nu       = 1e-20
+drag     = 1e-3
+stop_time = 10000.0
+stop_iteration = typemax(Int)
+max_dt   = 1e-1
 
 # Forcing parameters
-k_f      = 10.0             # Central forcing wavenumber
-dk_f     = 2.0              # Forcing bandwidth
-ε        = 0.1              # Energy injection rate
+k_f      = 5.0
+dk_f     = 2.0
+ε        = 0.1
 
 # ─── Domain & Fields ──────────────────────────────────────────
-domain = PeriodicDomain(Nx, Ny; L=(Lx, Ly))
-dist   = domain.dist
+coords = CartesianCoordinates("x", "y")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
 
-θ     = ScalarField(domain, "θ")          # Surface buoyancy
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+ybasis = RealFourier(coords["y"]; size=Ny, bounds=(0.0, Ly), dealias=3/2)
+
+domain = Domain(dist, (xbasis, ybasis))
+
+# ─── Fields ───────────────────────────────────────────────────
+b     = ScalarField(domain, "b")          # Surface buoyancy
 ψ     = ScalarField(domain, "ψ")          # Streamfunction
 u     = VectorField(domain, "u")          # Velocity
-tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
 
 # ─── Stochastic Forcing ──────────────────────────────────────
 forcing = StochasticForcing(
@@ -58,28 +65,31 @@ forcing = StochasticForcing(
 )
 
 # ─── Problem ─────────────────────────────────────────────────
-# SQG inversion: ψ = (-Δ)^{-1/2} θ  →  (-Δ)^{1/2} ψ = θ
-# Using fraclap(ψ, 0.5) for (-Δ)^{1/2}
-problem = IVP([θ, ψ, u, tau_ψ])
+# SQG inversion: ψ = (-Δ)^(-1/2) θ. The inverse sets the mean mode to zero.
+problem = IVP([b, ψ, u])
 add_parameters!(problem, nu=nu, alpha=alpha)
 
-add_equation!(problem, "∂t(θ) + nu*fraclap(θ, alpha) = -u⋅∇(θ)")  # Buoyancy evolution
-add_equation!(problem, "fraclap(ψ, 0.5) + tau_ψ - θ = 0")         # SQG inversion
+add_equation!(problem, "∂t(b) + nu*fraclap(b, alpha) = -u⋅∇(θb)")   # Buoyancy evolution
+add_equation!(problem, "ψ - invsqrtlap(θ) = 0")                    # SQG inversion
 add_equation!(problem, "u - skew(grad(ψ)) = 0")                    # Velocity from ψ
 
-add_bc!(problem, "integ(ψ) = 0")
-
 # Register forcing on the buoyancy variable
-add_stochastic_forcing!(problem, :θ, forcing)
+add_stochastic_forcing!(problem, :b, forcing)
 
 # ─── Solver ───────────────────────────────────────────────────
 solver = InitialValueSolver(problem, RK222(); dt=max_dt)
 
 # ─── Initial Conditions ──────────────────────────────────────
-# Start from rest — forcing spins up the flow
-# Optionally seed with small perturbation:
-# fill_random!(θ, "g"; seed=42, distribution="normal", scale=0.01)
-# ensure_layout!(θ, :c)
+fill_random!(b, "g"; seed=42, distribution="normal", scale=1e-3)
+
+# ─── Output ──────────────────────────────────────────────────
+output_path = "snapshots/sqg_snapshots"
+snapshots = add_file_handler(output_path, dist, 
+                             Dict("b" => b, "ψ" => ψ);
+                             sim_dt=50.0, max_writes=100)
+
+add_task!(snapshots, b; name="b")
+add_task!(snapshots, ψ; name="psi")
 
 # ─── CFL ─────────────────────────────────────────────────────
 cfl = CFL(solver; initial_dt=max_dt, cadence=10, safety=0.5,
@@ -90,17 +100,32 @@ add_velocity!(cfl, u)
 @root_only println("Forced SQG Turbulence")
 @root_only @printf("  N=%d×%d, ε=%.2e, k_f=%.1f, ν=%.1e, α=%.1f\n",
                     Nx, Ny, ε, k_f, nu, alpha)
+@root_only @printf("  dt≤%.2e, output_dt=%.2e, initial_noise=%.1e\n",
+                    max_dt, output_dt, initial_noise)
 
-run!(solver;
-     stop_time=stop_time,
-     log_interval=100,
-     callbacks=[
-         on_interval(20) do s
-             ensure_layout!(θ, :g)
-             max_θ = global_max(dist, abs.(get_grid_data(θ)))
-             @root_only @printf("  iter=%d, t=%.2f, dt=%.2e, max|θ|=%.4f\n",
-                                 s.iteration, s.sim_time, s.dt, max_θ)
-         end
-     ])
+wall_start = time()
+process!(snapshots; iteration=solver.iteration, wall_time=0.0,
+         sim_time=solver.sim_time, timestep=solver.dt)
+
+while solver.sim_time < stop_time && solver.iteration < stop_iteration
+    dt = min(compute_timestep(cfl), stop_time - solver.sim_time)
+    step!(solver, dt)
+
+    wall_time = time() - wall_start
+    process!(snapshots; iteration=solver.iteration, wall_time=wall_time,
+             sim_time=solver.sim_time, timestep=solver.dt)
+
+    if solver.iteration % log_interval == 0
+        ensure_layout!(θ, :g)
+        max_θ = global_max(dist, abs.(get_grid_data(θ)))
+        if !isfinite(max_θ)
+            error("Non-finite surface buoyancy detected at iteration $(solver.iteration), t=$(solver.sim_time)")
+        end
+        @root_only @printf("  iter=%d, t=%.6f, dt=%.2e, max|θ|=%.4e\n",
+                            solver.iteration, solver.sim_time, solver.dt, max_θ)
+    end
+end
+
+close!(snapshots)
 
 @root_only println("Done!")

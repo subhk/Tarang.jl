@@ -328,6 +328,23 @@ end
         @test isapprox(Tarang.get_grid_data(roundtrip), expected; rtol=1e-8, atol=1e-10)
     end
 
+    @testset "invsqrtlap spectral matrix zeros mean mode" begin
+        N = 8
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
+
+        u = ScalarField(dist, "u", (xb,), Float64)
+        ensure_layout!(u, :c)
+        n = length(vec(Tarang.get_coeff_data(u)))
+
+        mat = Tarang._spectral_fractional_laplacian(u, -0.5, n, n)
+        d = diag(mat)
+
+        @test d[1] == 0
+        @test all(isfinite, d)
+    end
+
     @testset "operator_order returns 2*alpha" begin
         N = 8
         coords = CartesianCoordinates("x")
