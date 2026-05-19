@@ -116,7 +116,7 @@ function netcdf_file_info(file::String)
             (name=dim.name, dimlen=Int(dim.dimlen), unlim=dim.unlim)
             for dim in values(nc.dim)
         ]
-        vars = [
+        vars = Any[
             (
                 name=var.name,
                 atts=Dict{Any, Any}(var.atts),
@@ -126,7 +126,42 @@ function netcdf_file_info(file::String)
             for var in values(nc.vars)
         ]
 
+        known_names = Set(v.name for v in vars)
+        for group in (NETCDF_TIME_GROUP, NETCDF_GRIDS_GROUP, NETCDF_VARS_GROUP)
+            for var_name in group_variable_names(file, group)
+                var_name in known_names && continue
+                push!(vars, group_variable_metadata(file, group, var_name))
+                push!(known_names, var_name)
+            end
+        end
+
         return (dim=dims, vars=vars, gatts=Dict{Any, Any}(nc.gatts))
+    end
+end
+
+function read_netcdf_variable(file::String, var_name::String; start=nothing, count=nothing)
+    for group in (NETCDF_VARS_GROUP, NETCDF_GRIDS_GROUP, NETCDF_TIME_GROUP)
+        if group_var_exists(file, group, var_name)
+            if start === nothing && count === nothing
+                return group_ncread(file, group, var_name)
+            elseif count === nothing
+                return group_ncread(file, group, var_name; start=start)
+            elseif start === nothing
+                return group_ncread(file, group, var_name; count=count)
+            else
+                return group_ncread(file, group, var_name; start=start, count=count)
+            end
+        end
+    end
+
+    if start === nothing && count === nothing
+        return ncread(file, var_name)
+    elseif count === nothing
+        return ncread(file, var_name; start=start)
+    elseif start === nothing
+        return ncread(file, var_name; count=count)
+    else
+        return ncread(file, var_name; start=start, count=count)
     end
 end
 
@@ -187,7 +222,7 @@ function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String,
 
     for file in merger.processor_files
         coord_data = try
-            ncread(file, coord_var)
+            read_netcdf_variable(file, coord_var)
         catch
             continue
         end
@@ -196,7 +231,7 @@ function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String,
         var_info === nothing && continue
 
         data_shape = try
-            size(ncread(file, source_var))
+            size(read_netcdf_variable(file, source_var))
         catch
             continue
         end
@@ -270,7 +305,7 @@ function analyze_processor_files(merger::NetCDFMerger)
     
     for coord in time_coords
         try
-            data = ncread(first_file, coord)
+            data = read_netcdf_variable(first_file, coord)
             time_info[coord] = length(data)
         catch
             # Coordinate doesn't exist
@@ -315,17 +350,17 @@ function merge_time_coordinates!(merger::NetCDFMerger, output_file::String, file
     for coord_name in time_coords
         if get(file_info["time_info"], coord_name, 0) > 0
             # Read time data from first processor (should be identical across all)
-            time_data = ncread(merger.processor_files[1], coord_name)
+            time_data = read_netcdf_variable(merger.processor_files[1], coord_name)
 
             # Create time coordinate (nccreate must be called before ncwrite)
-            nccreate(output_file, coord_name, "sim_time", length(time_data),
-                    t=eltype(time_data),
-                    atts=Dict("long_name" => coord_name,
-                             "units" => coord_name == "sim_time" ? "dimensionless time" : "seconds",
-                             "axis" => "T"))
+            group_nccreate(output_file, NETCDF_TIME_GROUP, coord_name, "sim_time", length(time_data),
+                           t=eltype(time_data),
+                           atts=Dict("long_name" => coord_name,
+                                     "units" => coord_name == "sim_time" ? "dimensionless time" : "seconds",
+                                     "axis" => "T"))
 
             # Write time data
-            ncwrite(time_data, output_file, coord_name)
+            group_ncwrite(time_data, output_file, NETCDF_TIME_GROUP, coord_name)
         end
     end
 end
@@ -359,7 +394,7 @@ function merge_spatial_coordinates!(merger::NetCDFMerger, output_file::String, f
         if coord_data === nothing
             for file in merger.processor_files
                 try
-                    coord_data = ncread(file, coord_var)
+                    coord_data = read_netcdf_variable(file, coord_var)
                     break
                 catch
                     continue
@@ -372,10 +407,10 @@ function merge_spatial_coordinates!(merger::NetCDFMerger, output_file::String, f
             coord_attrs["axis"] = occursin("dim1", coord_var) ? "X" : (occursin("dim2", coord_var) ? "Y" : "Z")
 
             # Create coordinate variable in output file
-            nccreate(output_file, coord_var, coord_var, length(coord_data),
-                    t=eltype(coord_data),
-                    atts=coord_attrs)
-            ncwrite(coord_data, output_file, coord_var)
+            group_nccreate(output_file, NETCDF_GRIDS_GROUP, coord_var, coord_var, length(coord_data),
+                           t=eltype(coord_data),
+                           atts=coord_attrs)
+            group_ncwrite(coord_data, output_file, NETCDF_GRIDS_GROUP, coord_var)
         end
     end
 end
@@ -405,7 +440,7 @@ Simple concatenation merge: combine data along processor dimension
 function ensure_processor_coordinate!(output_file::String, n_procs::Int)
     exists = false
     try
-        ncread(output_file, "processor", start=[1], count=[1])
+        read_netcdf_variable(output_file, "processor", start=[1], count=[1])
         exists = true
     catch
         exists = false
@@ -413,10 +448,10 @@ function ensure_processor_coordinate!(output_file::String, n_procs::Int)
 
     if !exists
         proc_coord = collect(0:(n_procs - 1))
-        nccreate(output_file, "processor", "processor", length(proc_coord),
-                t=eltype(proc_coord),
-                atts=Dict("long_name" => "MPI processor rank"))
-        ncwrite(proc_coord, output_file, "processor")
+        group_nccreate(output_file, NETCDF_GRIDS_GROUP, "processor", "processor", length(proc_coord),
+                       t=eltype(proc_coord),
+                       atts=Dict("long_name" => "MPI processor rank"))
+        group_ncwrite(proc_coord, output_file, NETCDF_GRIDS_GROUP, "processor")
     end
 end
 
@@ -429,7 +464,7 @@ function merge_variable_concat!(merger::NetCDFMerger, output_file::String, var_n
     
     for (i, file) in enumerate(merger.processor_files)
         try
-            data = ncread(file, var_name)
+            data = read_netcdf_variable(file, var_name)
             push!(all_data, data)
             
             if i == 1
@@ -504,10 +539,10 @@ function merge_variable_concat!(merger::NetCDFMerger, output_file::String, var_n
         push!(dim_args, dn)
         push!(dim_args, ds)
     end
-    nccreate(output_file, var_name, dim_args..., t=data_type, atts=var_attrs)
+    group_nccreate(output_file, NETCDF_VARS_GROUP, var_name, dim_args..., t=data_type, atts=var_attrs)
     
     # Write combined data
-    ncwrite(combined_data, output_file, var_name)
+    group_ncwrite(combined_data, output_file, NETCDF_VARS_GROUP, var_name)
     
     merger.verbose && println("    Concatenated $(length(all_data)) processor datasets")
 end
@@ -531,7 +566,7 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
     for (i, file) in enumerate(merger.processor_files)
         try
             # Read variable data
-            data = ncread(file, var_name)
+            data = read_netcdf_variable(file, var_name)
             
             # Try to read domain decomposition information (Tarang style)
             start_indices = nothing
@@ -723,9 +758,9 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
         push!(dim_args, dn)
         push!(dim_args, ds)
     end
-    nccreate(output_file, var_name, dim_args..., t=data_type, atts=var_attrs)
+    group_nccreate(output_file, NETCDF_VARS_GROUP, var_name, dim_args..., t=data_type, atts=var_attrs)
     
-    ncwrite(reconstructed_data, output_file, var_name)
+    group_ncwrite(reconstructed_data, output_file, NETCDF_VARS_GROUP, var_name)
     
     merger.verbose && println("    Reconstructed global field from $(length(processor_data)) processors")
 end
@@ -757,7 +792,7 @@ function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String
     for (i, file) in enumerate(merger.processor_files)
         try
             # Read variable data
-            data = ncread(file, var_name)
+            data = read_netcdf_variable(file, var_name)
             
             # Read layout information (following Tarang post:281)
             layout_info = Dict{String, Any}()
@@ -1706,9 +1741,9 @@ function write_reconstructed_field(data, var_attrs, output_file, var_name, dim_n
         push!(dim_args, dn)
         push!(dim_args, ds)
     end
-    nccreate(output_file, var_name, dim_args..., t=data_type, atts=var_attrs)
+    group_nccreate(output_file, NETCDF_VARS_GROUP, var_name, dim_args..., t=data_type, atts=var_attrs)
 
-    ncwrite(data, output_file, var_name)
+    group_ncwrite(data, output_file, NETCDF_VARS_GROUP, var_name)
 end
 
 """
@@ -1739,6 +1774,7 @@ function merge_files!(merger::NetCDFMerger)
         if !isempty(output_dir) && !isdir(output_dir)
             mkpath(output_dir)
         end
+        create_empty_netcdf4_file!(merger.output_file)
         
         # Merge time coordinates
         merge_time_coordinates!(merger, merger.output_file, file_info)

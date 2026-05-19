@@ -17,6 +17,9 @@ using Printf
 
 # Precision types for user selection
 const NetCDFPrecision = Union{Type{Float32}, Type{Float64}}
+const NETCDF_TIME_GROUP = "time"
+const NETCDF_GRIDS_GROUP = "grids"
+const NETCDF_VARS_GROUP = "vars"
 
 """
 NetCDF File Handler matching Tarang H5FileHandler structure
@@ -33,6 +36,7 @@ mutable struct NetCDFFileHandler
     name::String
     dist::Any  # Domain distributor
     vars::Dict{String, Any}  # Variables for parsing
+    solver::Any  # Optional solver context for refreshing diagnostic constraints
     
     # Scheduling (matching Tarang Handler)
     group::Union{String, Nothing}
@@ -70,7 +74,7 @@ mutable struct NetCDFFileHandler
                               group=nothing, wall_dt=nothing, sim_dt=nothing, iter=nothing,
                               max_writes=nothing, mode="overwrite", 
                               precision::NetCDFPrecision=Float64,
-                              parallel="gather")
+                              parallel="gather", solver=nothing)
         
         # MPI setup - defer until MPI is initialized
         comm = nothing
@@ -92,7 +96,7 @@ mutable struct NetCDFFileHandler
         # Mode handling: only rank 0 cleans up to avoid MPI race conditions
         # on shared/network filesystems (Lustre, GPFS, NFS)
         is_root = !MPI.Initialized() || MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        output_dir = dirname(base_path)
+        output_dir = output_root_from_base_path(base_path)
         if is_root && !isempty(output_dir) && isdir(output_dir) && mode == "overwrite"
             for file in readdir(output_dir, join=true)
                 if startswith(basename(file), "$(name)_s") && (endswith(file, ".nc") || isdir(file))
@@ -113,7 +117,7 @@ mutable struct NetCDFFileHandler
             MPI.Barrier(MPI.COMM_WORLD)
         end
         
-        handler = new(base_path, name, dist, vars,
+        handler = new(base_path, name, dist, vars, solver,
                      group, wall_dt, sim_dt, iter, max_writes,
                      set_num, total_write_num, file_write_num, mode,
                      precision, parallel,
@@ -142,6 +146,284 @@ end
 
 Base.empty!(cache::NetCDFStagingCache) = (empty!(cache.cpu_cache); cache)
 
+function output_root_from_base_path(base_path::String)
+    parent = dirname(base_path)
+    return isempty(parent) ? base_path : parent
+end
+
+function output_root(handler::NetCDFFileHandler)
+    return output_root_from_base_path(handler.base_path)
+end
+
+function create_empty_netcdf4_file!(filename::String)
+    ncid = Int32[0]
+    NetCDF.nc_create(filename, NetCDF.NC_NETCDF4 | NetCDF.NC_CLOBBER, ncid)
+    NetCDF.nc_close(ncid[1])
+    return nothing
+end
+
+function with_netcdf_file(filename::String, mode::Integer, f::Function)
+    ncid = Int32[0]
+    NetCDF.nc_open(filename, mode, ncid)
+    try
+        return f(ncid[1])
+    finally
+        NetCDF.nc_close(ncid[1])
+    end
+end
+
+with_netcdf_file(f::Function, filename::String, mode::Integer) = with_netcdf_file(filename, mode, f)
+
+function enter_define_mode!(ncid::Integer)
+    try
+        NetCDF.nc_redef(ncid)
+    catch
+        # Already in define mode.
+    end
+    return nothing
+end
+
+function group_id(ncid::Integer, group::String; create::Bool=false)
+    isempty(group) && return Int32(ncid)
+
+    gid = Int32[0]
+    try
+        NetCDF.nc_inq_grp_ncid(ncid, group, gid)
+    catch
+        create || rethrow()
+        NetCDF.nc_def_grp(ncid, group, gid)
+    end
+    return gid[1]
+end
+
+function root_dim_id(ncid::Integer, dim_name::String, dim_len)
+    dimid = Int32[0]
+    try
+        NetCDF.nc_inq_dimid(ncid, dim_name, dimid)
+    catch
+        len = dim_len == Inf ? NetCDF.NC_UNLIMITED : Csize_t(dim_len)
+        NetCDF.nc_def_dim(ncid, dim_name, len, dimid)
+    end
+    return dimid[1]
+end
+
+function group_var_id(ncid::Integer, group::String, var_name::String)
+    gid = group_id(ncid, group; create=false)
+    varid = Int32[0]
+    NetCDF.nc_inq_varid(gid, var_name, varid)
+    return gid, varid[1]
+end
+
+function group_var_exists(filename::String, group::String, var_name::String)
+    isfile(filename) || return false
+    try
+        with_netcdf_file(filename, NetCDF.NC_NOWRITE) do ncid
+            group_var_id(ncid, group, var_name)
+        end
+        return true
+    catch
+        return false
+    end
+end
+
+function netcdf_type_code(::Type{Float64})
+    return NetCDF.NC_DOUBLE
+end
+
+function netcdf_type_code(::Type{Float32})
+    return NetCDF.NC_FLOAT
+end
+
+function netcdf_type_code(::Type{Int64})
+    return NetCDF.NC_INT64
+end
+
+function netcdf_type_code(::Type{Int32})
+    return NetCDF.NC_INT
+end
+
+function netcdf_type_code(T::Type)
+    return eltype(T) <: Float32 ? NetCDF.NC_FLOAT : NetCDF.NC_DOUBLE
+end
+
+function group_nccreate(filename::String, group::String, var_name::String, dims...;
+                        atts::Dict=Dict{Any, Any}(), t::Type=Float64)
+    iseven(length(dims)) || throw(ArgumentError("Dimensions must be name/length pairs"))
+
+    with_netcdf_file(filename, NetCDF.NC_WRITE) do ncid
+        enter_define_mode!(ncid)
+        gid = group_id(ncid, group; create=true)
+
+        dimids = Int32[]
+        for i in 1:2:length(dims)
+            dim_name = String(dims[i])
+            dim_len = dims[i + 1]
+            push!(dimids, root_dim_id(ncid, dim_name, dim_len))
+        end
+
+        exists = true
+        varid = Int32[0]
+        try
+            NetCDF.nc_inq_varid(gid, var_name, varid)
+        catch
+            exists = false
+        end
+
+        if !exists
+            c_dimids = reverse(dimids)
+            NetCDF.nc_def_var(gid, var_name, netcdf_type_code(t), length(c_dimids), c_dimids, varid)
+        end
+
+        if !isempty(atts)
+            for (att_name, att_value) in atts
+                NetCDF.nc_put_att(gid, varid[1], string(att_name), att_value)
+            end
+        end
+
+        NetCDF.nc_enddef(ncid)
+    end
+
+    return nothing
+end
+
+function _group_put_vara(gid::Integer, varid::Integer, start, count, data::Array{Float64})
+    NetCDF.nc_put_vara_double(gid, varid, start, count, data)
+end
+
+function _group_put_vara(gid::Integer, varid::Integer, start, count, data::Array{Float32})
+    NetCDF.nc_put_vara_float(gid, varid, start, count, data)
+end
+
+function _group_put_vara(gid::Integer, varid::Integer, start, count, data::Array{Int64})
+    NetCDF.nc_put_vara_longlong(gid, varid, start, count, data)
+end
+
+function _group_put_vara(gid::Integer, varid::Integer, start, count, data::Array{Int32})
+    NetCDF.nc_put_vara_int(gid, varid, start, count, data)
+end
+
+function group_ncwrite(data::AbstractArray, filename::String, group::String, var_name::String; start=nothing)
+    array = Array(data)
+    start_indices = start === nothing ? ones(Int, ndims(array)) : collect(Int, start)
+    length(start_indices) == ndims(array) || throw(DimensionMismatch("start must have one index per dimension"))
+
+    c_start = Csize_t.(reverse(start_indices .- 1))
+    c_count = Csize_t.(reverse(collect(size(array))))
+
+    with_netcdf_file(filename, NetCDF.NC_WRITE) do ncid
+        gid, varid = group_var_id(ncid, group, var_name)
+        _group_put_vara(gid, varid, c_start, c_count, array)
+    end
+
+    return nothing
+end
+
+function _group_var_type_and_shape(gid::Integer, varid::Integer)
+    typep = Int32[0]
+    ndimsp = Int32[0]
+    dimids = zeros(Int32, NetCDF.NC_MAX_VAR_DIMS)
+    natts = Int32[0]
+    NetCDF.nc_inq_var(gid, varid, C_NULL, typep, ndimsp, dimids, natts)
+
+    c_shape = Int[]
+    for dimid in dimids[1:ndimsp[1]]
+        len = Csize_t[0]
+        NetCDF.nc_inq_dimlen(gid, dimid, len)
+        push!(c_shape, Int(len[1]))
+    end
+
+    return typep[1], reverse(c_shape)
+end
+
+function group_variable_names(filename::String, group::String)
+    isfile(filename) || return String[]
+
+    try
+        with_netcdf_file(filename, NetCDF.NC_NOWRITE) do ncid
+            gid = group_id(ncid, group; create=false)
+            nvars = Int32[0]
+            NetCDF.nc_inq_varids(gid, nvars, C_NULL)
+            varids = zeros(Int32, nvars[1])
+            NetCDF.nc_inq_varids(gid, nvars, varids)
+
+            names = String[]
+            for varid in varids
+                name_buf = zeros(UInt8, NetCDF.NC_MAX_NAME + 1)
+                NetCDF.nc_inq_varname(gid, varid, name_buf)
+                push!(names, unsafe_string(pointer(name_buf)))
+            end
+            return names
+        end
+    catch
+        return String[]
+    end
+end
+
+function group_variable_metadata(filename::String, group::String, var_name::String)
+    with_netcdf_file(filename, NetCDF.NC_NOWRITE) do ncid
+        gid, varid = group_var_id(ncid, group, var_name)
+
+        typep = Int32[0]
+        ndimsp = Int32[0]
+        dimids = zeros(Int32, NetCDF.NC_MAX_VAR_DIMS)
+        natts = Int32[0]
+        NetCDF.nc_inq_var(gid, varid, C_NULL, typep, ndimsp, dimids, natts)
+
+        dim_names = String[]
+        dim_lengths = Int[]
+        for dimid in dimids[1:ndimsp[1]]
+            dim_name, dim_len = NetCDF.nc_inq_dim(gid, dimid)
+            push!(dim_names, dim_name)
+            push!(dim_lengths, Int(dim_len))
+        end
+
+        return (
+            name=var_name,
+            atts=Dict{Any, Any}(NetCDF.getatts_all(gid, varid, natts[1])),
+            dim_names=reverse(dim_names),
+            dim_lengths=reverse(dim_lengths),
+        )
+    end
+end
+
+function _group_get_vara!(gid::Integer, varid::Integer, start, count, data::Array{Float64})
+    NetCDF.nc_get_vara_double(gid, varid, start, count, data)
+end
+
+function _group_get_vara!(gid::Integer, varid::Integer, start, count, data::Array{Float32})
+    NetCDF.nc_get_vara_float(gid, varid, start, count, data)
+end
+
+function _group_get_vara!(gid::Integer, varid::Integer, start, count, data::Array{Int64})
+    NetCDF.nc_get_vara_longlong(gid, varid, start, count, data)
+end
+
+function _group_get_vara!(gid::Integer, varid::Integer, start, count, data::Array{Int32})
+    NetCDF.nc_get_vara_int(gid, varid, start, count, data)
+end
+
+function group_ncread(filename::String, group::String, var_name::String; start=nothing, count=nothing)
+    with_netcdf_file(filename, NetCDF.NC_NOWRITE) do ncid
+        gid, varid = group_var_id(ncid, group, var_name)
+        nctype, shape = _group_var_type_and_shape(gid, varid)
+        T = NetCDF.nctype2jltype[nctype]
+
+        start_indices = start === nothing ? ones(Int, length(shape)) : collect(Int, start)
+        count_indices = count === nothing ? collect(shape) : collect(Int, count)
+        for i in eachindex(count_indices)
+            if count_indices[i] == -1
+                count_indices[i] = shape[i] - start_indices[i] + 1
+            end
+        end
+
+        data = Array{T}(undef, count_indices...)
+        c_start = Csize_t.(reverse(start_indices .- 1))
+        c_count = Csize_t.(reverse(count_indices))
+        _group_get_vara!(gid, varid, c_start, c_count, data)
+        return data
+    end
+end
+
 """
 Initialize MPI information for handler
 """
@@ -158,7 +440,7 @@ Get current set path following Tarang naming: handler_name_s1/
 """
 function current_path(handler::NetCDFFileHandler)
     set_name = "$(handler.name)_s$(handler.set_num)"
-    return joinpath(dirname(handler.base_path), set_name)
+    return joinpath(output_root(handler), set_name)
 end
 
 """
@@ -1033,8 +1315,34 @@ function get_operator_domain(operator)
             "domain" => domain_obj,
             "dist" => dist_obj
         )
+    elseif isa(operator, Operator)
+        for child in _operator_domain_children(operator)
+            domain_info = get_operator_domain(child)
+            if get(domain_info, "dims", 0) > 0
+                return domain_info
+            end
+        end
     end
     return Dict("dims" => 0, "shape" => (), "domain" => nothing, "dist" => nothing)
+end
+
+function _operator_domain_children(operator)
+    children = Any[]
+    for name in fieldnames(typeof(operator))
+        value = getfield(operator, name)
+        if isa(value, ScalarField) || isa(value, VectorField) ||
+           isa(value, TensorField) || isa(value, Operator)
+            push!(children, value)
+        elseif isa(value, Tuple) || isa(value, AbstractVector)
+            for item in value
+                if isa(item, ScalarField) || isa(item, VectorField) ||
+                   isa(item, TensorField) || isa(item, Operator)
+                    push!(children, item)
+                end
+            end
+        end
+    end
+    return children
 end
 
 """
@@ -1483,31 +1791,22 @@ function create_current_file!(handler::NetCDFFileHandler)
         MPI.Barrier(handler.comm)
     end
 
-    # Create basic NetCDF structure
-    # Use a single nccreate call pattern that works with NetCDF.jl
-    # All variables share the same unlimited "sim_time" dimension
+    create_empty_netcdf4_file!(filename)
 
-    # Create sim_time variable (defines the dimension)
-    nccreate(filename, "sim_time", "sim_time", Inf,
-            atts=Dict("long_name" => "simulation time",
-                     "units" => "dimensionless time",
-                     "axis" => "T"))
-
-    # For other variables, we need to specify the dimension size as Inf again
-    # NetCDF.jl will recognize it's the same unlimited dimension
-    nccreate(filename, "wall_time", "sim_time", Inf,
-            atts=Dict("long_name" => "wall clock time",
-                     "units" => "seconds"))
-
-    nccreate(filename, "timestep", "sim_time", Inf,
-            atts=Dict("long_name" => "timestep",
-                     "units" => "dimensionless time"))
-
-    nccreate(filename, "iteration", "sim_time", Inf, t=Int64,
-            atts=Dict("long_name" => "iteration number"))
-
-    nccreate(filename, "write_number", "sim_time", Inf, t=Int64,
-            atts=Dict("long_name" => "write number"))
+    group_nccreate(filename, NETCDF_TIME_GROUP, "sim_time", "sim_time", Inf,
+                   atts=Dict("long_name" => "simulation time",
+                             "units" => "dimensionless time",
+                             "axis" => "T"))
+    group_nccreate(filename, NETCDF_TIME_GROUP, "wall_time", "sim_time", Inf,
+                   atts=Dict("long_name" => "wall clock time",
+                             "units" => "seconds"))
+    group_nccreate(filename, NETCDF_TIME_GROUP, "timestep", "sim_time", Inf,
+                   atts=Dict("long_name" => "timestep",
+                             "units" => "dimensionless time"))
+    group_nccreate(filename, NETCDF_TIME_GROUP, "iteration", "sim_time", Inf,
+                   t=Int64, atts=Dict("long_name" => "iteration number"))
+    group_nccreate(filename, NETCDF_TIME_GROUP, "write_number", "sim_time", Inf,
+                   t=Int64, atts=Dict("long_name" => "write number"))
     
     # Add global attributes (matching Tarang metadata)
     # Note: NetCDF.jl doesn't support Bool attributes, so we use Int (0/1)
@@ -1550,11 +1849,18 @@ end
 """
 Process handler: write all tasks to NetCDF (matching Tarang process method)
 """
-function process!(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, sim_time=0.0, timestep=0.0)
+function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothing, sim_time=nothing, timestep=nothing)
+    iteration, wall_time, sim_time, timestep = output_metadata(
+        handler; iteration=iteration, wall_time=wall_time,
+        sim_time=sim_time, timestep=timestep
+    )
+
     if !check_schedule(handler; iteration=iteration, wall_time=wall_time,
                        sim_time=sim_time, timestep=timestep)
         return false
     end
+
+    refresh_solver_diagnostics!(handler)
 
     # Update write counts
     handler.total_write_num += 1
@@ -1607,11 +1913,11 @@ function process!(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, sim_ti
     try
         # Write time metadata
         write_index = handler.file_write_num
-        ncwrite([sim_time], filename, "sim_time", start=[write_index])
-        ncwrite([wall_time], filename, "wall_time", start=[write_index])
-        ncwrite([timestep], filename, "timestep", start=[write_index])
-        ncwrite([iteration], filename, "iteration", start=[write_index])
-        ncwrite([handler.total_write_num], filename, "write_number", start=[write_index])
+        group_ncwrite([sim_time], filename, NETCDF_TIME_GROUP, "sim_time", start=[write_index])
+        group_ncwrite([wall_time], filename, NETCDF_TIME_GROUP, "wall_time", start=[write_index])
+        group_ncwrite([timestep], filename, NETCDF_TIME_GROUP, "timestep", start=[write_index])
+        group_ncwrite(Int64[iteration], filename, NETCDF_TIME_GROUP, "iteration", start=[write_index])
+        group_ncwrite(Int64[handler.total_write_num], filename, NETCDF_TIME_GROUP, "write_number", start=[write_index])
 
         # Staging cache for GPU data (per write)
         stage_cache = NetCDFStagingCache()
@@ -1628,6 +1934,53 @@ function process!(handler::NetCDFFileHandler; iteration=0, wall_time=0.0, sim_ti
     end
 
     return true
+end
+
+function process!(handler::NetCDFFileHandler, solver::InitialValueSolver; kwargs...)
+    handler.solver = solver
+    return process!(handler; kwargs...)
+end
+
+function output_metadata(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothing,
+                         sim_time=nothing, timestep=nothing)
+    solver = handler.solver
+
+    if solver !== nothing
+        iteration = iteration === nothing ? solver.iteration : iteration
+        wall_time = wall_time === nothing ? solver_wall_time(solver) : wall_time
+        sim_time = sim_time === nothing ? solver.sim_time : sim_time
+        timestep = timestep === nothing ? solver.dt : timestep
+    else
+        iteration = iteration === nothing ? 0 : iteration
+        wall_time = wall_time === nothing ? 0.0 : wall_time
+        sim_time = sim_time === nothing ? 0.0 : sim_time
+        timestep = timestep === nothing ? 0.0 : timestep
+    end
+
+    return iteration, wall_time, sim_time, timestep
+end
+
+function solver_wall_time(solver)
+    if hasfield(typeof(solver), :wall_time_start)
+        return max(0.0, time() - solver.wall_time_start)
+    end
+    return 0.0
+end
+
+function refresh_solver_diagnostics!(handler::NetCDFFileHandler)
+    solver = handler.solver
+    solver === nothing && return nothing
+
+    if hasfield(typeof(solver), :timestepper_state)
+        ts_state = solver.timestepper_state
+        if ts_state !== nothing && !isempty(ts_state.history)
+            solver.state = ts_state.history[end]
+        end
+    end
+
+    sync_state_to_problem!(solver.problem, solver.state)
+    _solve_algebraic_constraints!(solver.problem, solver.state)
+    return nothing
 end
 
 """
@@ -1703,12 +2056,36 @@ function coordinate_attributes(dim_name::String, task::Dict, operator, data_dim_
     return attrs
 end
 
+function physical_coordinate_name(task::Dict, operator, data_dim_index::Int, is_complex_data::Bool)
+    layout_symbol = normalize_layout_symbol(get(task, "layout_symbol", get(task, "layout", :g)))
+    if layout_symbol != :g || get(task, "postprocess", nothing) !== nothing
+        return nothing
+    end
+
+    comp_dims = isa(operator, ScalarField) ? 0 : (isa(operator, VectorField) ? 1 : (isa(operator, TensorField) ? 2 : 0))
+    prefix_dims = (is_complex_data ? 1 : 0) + comp_dims
+    spatial_index = data_dim_index - prefix_dims
+    spatial_index <= 0 && return nothing
+
+    domain_info = get_operator_domain(operator)
+    domain = get(domain_info, "domain", nothing)
+    domain === nothing && return nothing
+    spatial_index > length(domain.bases) && return nothing
+
+    return string(domain.bases[spatial_index].meta.element_label)
+end
+
+function output_dimension_name(task_name::String, task::Dict, operator, data_dim_index::Int, is_complex_data::Bool)
+    coord_name = physical_coordinate_name(task, operator, data_dim_index, is_complex_data)
+    return coord_name === nothing ? "$(task_name)_dim$(data_dim_index)" : coord_name
+end
+
 function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Dict, write_index::Int, stage_cache::NetCDFStagingCache)
     init_mpi!(handler)  # Ensure MPI info is available
     task_name = task["name"]
-    operator = task["operator"]
     layout_symbol = normalize_layout_symbol(get(task, "layout_symbol", get(task, "layout", :g)))
     is_coeff_layout = layout_symbol == :c
+    operator = materialize_output_operator(task["operator"], layout_symbol)
     
     # Generate data from operator/field when possible; otherwise fallback to zeros
     # NOTE: Uses get_cpu_data() to handle GPU arrays - automatically transfers to CPU for file I/O
@@ -1779,13 +2156,7 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     # Check cached set before opening the file (avoids repeated open/close per task)
     variable_exists = task_name in handler._created_vars
     if !variable_exists
-        try
-            NetCDF.open(filename) do nc
-                variable_exists = haskey(nc.vars, task_name)
-            end
-        catch
-            variable_exists = false
-        end
+        variable_exists = group_var_exists(filename, NETCDF_VARS_GROUP, task_name)
     end
 
     if !variable_exists
@@ -1794,26 +2165,20 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
         data_shape = size(data)
         dim_names = ["sim_time"]
         for i in 1:length(data_shape)
-            push!(dim_names, "$(task_name)_dim$i")  # Use task-specific dimension names
+            push!(dim_names, output_dimension_name(task_name, task, operator, i, is_complex_data))
         end
         
         # Create spatial coordinate variables if they don't exist
         for (i, dim_name) in enumerate(dim_names[2:end])
-            coord_exists = false
-            try
-                ncread(filename, dim_name, start=[1], count=[1])
-                coord_exists = true
-            catch
-                coord_exists = false
-            end
+            coord_exists = group_var_exists(filename, NETCDF_GRIDS_GROUP, dim_name)
             
             if !coord_exists
                 coord_length = data_shape[i]
                 coord_data = physical_coordinate_data(task, operator, data_shape, i, is_complex_data)
                 coord_data = coord_data === nothing ? fallback_coordinate_data(coord_length) : coord_data
                 coord_atts = coordinate_attributes(dim_name, task, operator, i, is_complex_data)
-                nccreate(filename, dim_name, dim_name, coord_length, atts=coord_atts)
-                ncwrite(coord_data, filename, dim_name)
+                group_nccreate(filename, NETCDF_GRIDS_GROUP, dim_name, dim_name, coord_length, atts=coord_atts)
+                group_ncwrite(coord_data, filename, NETCDF_GRIDS_GROUP, dim_name)
             end
         end
         
@@ -1855,7 +2220,7 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
             push!(dim_args, data_shape[i])
         end
 
-        nccreate(filename, task_name, dim_args..., t=nc_type, atts=var_atts)
+        group_nccreate(filename, NETCDF_VARS_GROUP, task_name, dim_args..., t=nc_type, atts=var_atts)
     end
     push!(handler._created_vars, task_name)
     
@@ -1863,9 +2228,18 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     # Reshape data to include time dimension: (x,) -> (1, x) for writing at time index
     data_with_time = reshape(data, 1, size(data)...)
     start_indices = [write_index; ones(Int, length(size(data)))]
-    ncwrite(data_with_time, filename, task_name, start=start_indices)
+    group_ncwrite(data_with_time, filename, NETCDF_VARS_GROUP, task_name, start=start_indices)
 
     return true
+end
+
+function materialize_output_operator(operator, layout_symbol::Symbol)
+    if isa(operator, Operator)
+        return evaluate(operator, layout_symbol)
+    elseif isa(operator, Future)
+        return evaluate(operator; force=true)
+    end
+    return operator
 end
 
 function _stage_scalar_field!(cache::Dict{Tuple{UInt, Symbol}, Any}, field::ScalarField, layout::Symbol)
@@ -1910,6 +2284,28 @@ Matches evaluator.add_file_handler(...) usage in Tarang.
 """
 function add_file_handler(base_path::String, dist, vars; kwargs...)
     return NetCDFFileHandler(base_path, dist, vars; kwargs...)
+end
+
+function add_file_handler(base_path::String, solver::InitialValueSolver, vars; kwargs...)
+    dist = if !isempty(solver.state)
+        solver.state[1].dist
+    else
+        _first_problem_dist(solver.problem)
+    end
+    return NetCDFFileHandler(base_path, dist, vars; solver=solver, kwargs...)
+end
+
+function _first_problem_dist(problem::Problem)
+    for var in problem.variables
+        if isa(var, ScalarField)
+            return var.dist
+        elseif isa(var, VectorField)
+            return var.components[1].dist
+        elseif isa(var, TensorField)
+            return var.components[1, 1].dist
+        end
+    end
+    throw(ArgumentError("Cannot infer a Distributor from a problem with no field variables"))
 end
 
 """
@@ -2285,7 +2681,7 @@ function get_output_files(handler::NetCDFFileHandler)
 
     for set_num in 1:handler.set_num
         set_name = "$(handler.name)_s$(set_num)"
-        set_path = joinpath(dirname(handler.base_path), set_name)
+        set_path = joinpath(output_root(handler), set_name)
 
         if isdir(set_path)
             for f in readdir(set_path, join=true)
@@ -2377,4 +2773,4 @@ export add_task!, check_schedule, process!, close!
 export current_path, current_file, create_current_file!
 export add_mean_task!, add_slice_task!, add_profile_task!
 export add_variance_task!, add_rms_task!, add_extrema_task!
-export get_output_files, get_handler_info, reset!
+export get_output_files, get_handler_info, reset!, group_ncread
