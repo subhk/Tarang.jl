@@ -390,6 +390,26 @@ end
         @test copied.current_layout == :c
     end
 
+    @testset "Backward transform lazily allocates grid PencilArray for copied coeff field" begin
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
+
+        xbasis = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+        ybasis = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
+
+        field = ScalarField(dist, "copy_inverse_source", (xbasis, ybasis))
+        forward_transform!(field)
+        copied = copy(field)
+
+        @test Tarang.get_grid_data(copied) === nothing
+        @test Tarang.get_coeff_data(copied) isa PencilArrays.PencilArray
+
+        @test_logs min_level=Logging.Warn backward_transform!(copied)
+
+        @test Tarang.get_grid_data(copied) isa PencilArrays.PencilArray
+        @test copied.current_layout == :g
+    end
+
 end
 
 @testset "Pencil Compatibility and Reallocation Tests (rank=$rank)" begin

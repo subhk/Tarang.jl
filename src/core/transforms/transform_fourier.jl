@@ -64,7 +64,11 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
             # plan type). The fallback is logged once so an MPI run will
             # make it obvious if the fast path isn't firing.
             grid_data = get_grid_data(field)
-            if grid_data !== nothing && isa(grid_data, PencilArrays.PencilArray)
+            if isa(coeff_data, PencilArrays.PencilArray)
+                if grid_data === nothing || !isa(grid_data, PencilArrays.PencilArray)
+                    grid_data = PencilFFTs.allocate_input(pencil_plan)
+                    set_grid_data!(field, grid_data)
+                end
                 try
                     ldiv!(grid_data, pencil_plan, coeff_data)
                 catch err
