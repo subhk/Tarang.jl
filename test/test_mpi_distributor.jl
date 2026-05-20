@@ -10,6 +10,7 @@ using Test
 using Tarang
 using MPI
 using PencilArrays
+using Logging
 
 # Initialize MPI
 if !MPI.Initialized()
@@ -368,6 +369,25 @@ end
 
         # Data should be recovered
         @test isapprox(Array(grid_data_after), original, rtol=1e-10)
+    end
+
+    @testset "Forward transform lazily allocates coeff PencilArray for copied grid field" begin
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
+
+        xbasis = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+        ybasis = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
+
+        field = ScalarField(dist, "copy_transform_source", (xbasis, ybasis))
+        copied = copy(field)
+
+        @test Tarang.get_grid_data(copied) isa PencilArrays.PencilArray
+        @test Tarang.get_coeff_data(copied) === nothing
+
+        @test_logs min_level=Logging.Warn forward_transform!(copied)
+
+        @test Tarang.get_coeff_data(copied) isa PencilArrays.PencilArray
+        @test copied.current_layout == :c
     end
 
 end

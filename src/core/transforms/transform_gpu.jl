@@ -154,7 +154,11 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
             # so a single `@warn` the first time it fires makes it obvious
             # whether the fast path is working under MPI.
             coeff_data = get_coeff_data(field)
-            if coeff_data !== nothing && isa(coeff_data, PencilArrays.PencilArray)
+            if isa(grid_data, PencilArrays.PencilArray)
+                if coeff_data === nothing || !isa(coeff_data, PencilArrays.PencilArray)
+                    coeff_data = PencilFFTs.allocate_output(pencil_plan)
+                    set_coeff_data!(field, coeff_data)
+                end
                 try
                     mul!(coeff_data, pencil_plan, grid_data)
                 catch err

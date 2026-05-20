@@ -360,6 +360,41 @@ println("=" ^ 60)
         println("  Instantaneous power = $P")
     end
 
+    @testset "Work diagnostics support half-spectrum targets" begin
+        dt = 0.01
+        forcing = StochasticForcing(
+            field_size=(8, 8),
+            forcing_rate=0.1,
+            k_forcing=3.0,
+            dk_forcing=1.0,
+            dt=dt,
+            rng=MersenneTwister(42)
+        )
+
+        generate_forcing!(forcing, 0.0)
+        forcing_view = Tarang._matched_forcing_view(forcing, (5, 8))
+        @test forcing_view !== nothing
+
+        rng = MersenneTwister(7)
+        sol_prev = randn(rng, ComplexF64, size(forcing_view))
+        sol_next = sol_prev .+ dt .* forcing_view
+        store_prevsol!(forcing, sol_prev)
+
+        domain_area = prod(forcing.domain_size)
+        expected_stratonovich =
+            sum(real.(((sol_prev .+ sol_next) ./ 2) .* conj.(forcing_view))) * dt / domain_area
+        expected_ito =
+            sum(real.(sol_prev .* conj.(forcing_view))) * dt / domain_area +
+            forcing.energy_injection_rate * dt
+        expected_power =
+            sum(real.(sol_prev .* conj.(forcing_view))) / domain_area
+
+        @test work_stratonovich(forcing, sol_next) ≈ expected_stratonovich
+        @test work_ito(forcing, sol_prev) ≈ expected_ito
+        @test instantaneous_power(forcing, sol_prev) ≈ expected_power
+        println("  Work diagnostics use matched forcing views OK")
+    end
+
     @testset "Deterministic Forcing" begin
         # Test deterministic forcing
         function my_forcing(x, y, t, params)
