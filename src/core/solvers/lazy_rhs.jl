@@ -401,8 +401,33 @@ end
         b = _borrow_scratch!(ws)
         evaluate_lazy!(a, expr.left, state, ws)
         evaluate_lazy!(b, expr.right, state, ws)
-        _fused_binary!(out, a, b, *)
+        # A LazyMul is a genuine field·field product (field·scalar becomes LazyScale),
+        # i.e. a nonlinear term. A raw grid multiply aliases; dealias it via the same
+        # 3/2-padded (serial) / 2/3-truncation (MPI) machinery used elsewhere, unless
+        # every Fourier axis has dealias ≤ 1 (dealiasing disabled).
+        if _any_axis_dealias(out.bases, 1.5)
+            _dealiased_lazy_product!(out, a, b)
+        else
+            _fused_binary!(out, a, b, *)
+        end
     end
+    return out
+end
+
+"""Dealiased field·field product for the lazy RHS, written into `out` (grid layout)."""
+function _dealiased_lazy_product!(out::ScalarField, a::ScalarField, b::ScalarField)
+    evaluator = _get_evaluator(out.dist)
+    product = evaluate_transform_multiply(a, b, evaluator)
+    ensure_layout!(product, :g)
+    ensure_layout!(out, :g)
+    out_data = get_local_data(get_grid_data(out))
+    prod_data = get_local_data(get_grid_data(product))
+    if out_data !== nothing && prod_data !== nothing && size(out_data) == size(prod_data)
+        copyto!(out_data, prod_data)
+    elseif out_data !== nothing
+        fill!(out_data, zero(eltype(out_data)))
+    end
+    out.current_layout = :g
     return out
 end
 
