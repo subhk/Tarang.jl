@@ -480,18 +480,20 @@ function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int)
 
     # Switch to coefficient space
     ensure_layout!(field, :c)
-    coeff_data = get_local_data(get_coeff_data(field))
-    coeff_data === nothing && return field
+    coeff_storage = get_coeff_data(field)
+    coeff_storage === nothing && return field
 
     # Apply differentiation in coefficient space.
     # Chebyshev/Jacobi: Nz×Nz differentiation matrix (applied via matmul)
     # Fourier: diagonal scaling per mode (im*k*k0)^order — the RFFT
     #          representation is complex, so matrix form doesn't apply
     if isa(target_basis, JacobiBasis)
+        coeff_data = get_local_data(coeff_storage)
+        coeff_data === nothing && return field
         D = differentiation_matrix(target_basis, order)
         _apply_1d_matrix!(coeff_data, D, axis)
     elseif isa(target_basis, FourierBasis)
-        _apply_fourier_diff!(coeff_data, target_basis, axis, order)
+        _apply_lazy_fourier_diff!(coeff_storage, field, target_basis, axis, order)
     else
         return field
     end
@@ -503,48 +505,39 @@ function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int)
 end
 
 """
-Apply Fourier differentiation as a diagonal scaling in complex RFFT space.
-For each mode k, multiply coefficients by (i·k·k0)^order where k is the
-zero-indexed mode number and k0 = 2π/L is the fundamental wavenumber.
+Apply Fourier differentiation as a diagonal scaling in coefficient space.
+For RealFourier transforms, only the first RealFourier axis is in RFFT layout;
+later RealFourier axes are full FFT axes and must use negative wavenumbers in
+FFT order.
 """
-function _apply_fourier_diff!(data::AbstractArray, basis::FourierBasis,
-                               axis::Int, order::Int)
-    L = basis.meta.bounds[2] - basis.meta.bounds[1]
-    k0 = 2π / L
-    n_coeff = size(data, axis)
+function _apply_lazy_fourier_diff!(coeff_storage, field::ScalarField,
+                                   basis::FourierBasis, axis::Int, order::Int)
+    uses_rfft = isa(basis, RealFourier) && _is_first_real_fourier_axis(field.bases, axis)
 
-    # For complex RFFT, mode k (0-indexed) has wavenumber k*k0
-    # Differentiation: c[k] *= (i*k*k0)^order
-    if ndims(data) == 1
-        for k in 1:n_coeff
-            factor = ComplexF64((im * (k - 1) * k0)^order)
-            data[k] *= factor
-        end
-        return data
+    if isa(coeff_storage, PencilArrays.PencilArray)
+        _apply_spectral_derivative_distributed!(coeff_storage, basis, axis, order,
+                                                field.dist; uses_rfft=uses_rfft)
+        return coeff_storage
     end
 
-    if ndims(data) == 2
-        if axis == 1
-            for k in 1:n_coeff
-                factor = ComplexF64((im * (k - 1) * k0)^order)
-                @views data[k, :] .*= factor
-            end
-        elseif axis == 2
-            for k in 1:n_coeff
-                factor = ComplexF64((im * (k - 1) * k0)^order)
-                @views data[:, k] .*= factor
-            end
-        end
-        return data
+    data = get_local_data(coeff_storage)
+    data === nothing && return coeff_storage
+
+    k_axis = if isa(basis, RealFourier)
+        uses_rfft ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
+    else
+        wavenumbers(basis)
+    end
+    if length(k_axis) != size(data, axis)
+        error("Lazy Fourier derivative coefficient size mismatch on axis $axis: " *
+              "local coefficient size is $(size(data, axis)) but expected $(length(k_axis)) " *
+              "(basis=$(typeof(basis)), uses_rfft=$uses_rfft).")
     end
 
-    # Higher-dimensional: generic approach via indexing
-    for k in 1:n_coeff
-        factor = ComplexF64((im * (k - 1) * k0)^order)
-        slice = selectdim(data, axis, k)
-        slice .*= factor
-    end
-    return data
+    deriv_mult = (im .* k_axis) .^ order
+    mult_shape = ntuple(i -> i == axis ? length(deriv_mult) : 1, ndims(data))
+    data .*= reshape(deriv_mult, mult_shape...)
+    return coeff_storage
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place."""
