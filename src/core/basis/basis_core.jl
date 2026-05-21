@@ -555,7 +555,7 @@ end
 function _build_real_fourier(coord::Coordinate;
                              size::Int=32,
                              bounds::Tuple{Float64,Float64}=(0.0,2π),
-                             dealias::Float64=1.0,
+                             dealias::Float64=3/2,
                              dtype=Float64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype;
                      native_bounds=FOURIER_NATIVE_BOUNDS, constant_mode_value=1.0)
@@ -586,7 +586,7 @@ end
 function _build_complex_fourier(coord::Coordinate;
                                 size::Int=32,
                                 bounds::Tuple{Float64,Float64}=(0.0,2π),
-                                dealias::Float64=1.0,
+                                dealias::Float64=3/2,
                                 dtype=ComplexF64)
     meta = BasisMeta(coord.coordsys, coord.name, 1, size, bounds, dealias, dtype;
                      native_bounds=FOURIER_NATIVE_BOUNDS, constant_mode_value=1.0)

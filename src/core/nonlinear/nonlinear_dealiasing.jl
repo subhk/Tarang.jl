@@ -48,19 +48,24 @@ function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
 
     coeff_data = get_coeff_data(field)
 
-    cutoffs = ntuple(nb) do i
-        basis = field.bases[i]
-        isa(basis, Union{RealFourier, ComplexFourier}) ?
-            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
-    end
+    if isa(coeff_data, PencilArrays.PencilArray)
+        # MPI-distributed: use per-rank global wavenumbers (local-index cutoff is wrong here)
+        _apply_spectral_cutoff_distributed!(coeff_data, field.bases, dealiasing_factor)
+    else
+        cutoffs = ntuple(nb) do i
+            basis = field.bases[i]
+            isa(basis, Union{RealFourier, ComplexFourier}) ?
+                Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
+        end
 
-    rfft_dims = ntuple(nb) do i
-        basis = field.bases[i]
-        isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
-    end
+        rfft_dims = ntuple(nb) do i
+            basis = field.bases[i]
+            isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
+        end
 
-    # Apply spectral cutoff - this function handles GPU arrays automatically
-    apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
+        # Apply spectral cutoff - this function handles GPU arrays automatically
+        apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
+    end
 
     # Transform back to grid space
     backward_transform!(field)
@@ -104,20 +109,25 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
 
     coeff_data = get_coeff_data(field)
 
-    # Recompute cutoffs using actual coeff array sizes for non-Fourier bases
-    cutoffs = ntuple(nb) do i
-        basis = field.bases[i]
-        isa(basis, Union{RealFourier, ComplexFourier}) ?
-            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
-    end
+    if isa(coeff_data, PencilArrays.PencilArray)
+        # MPI-distributed: use per-rank global wavenumbers (local-index cutoff is wrong here)
+        _apply_spectral_cutoff_distributed!(coeff_data, field.bases, dealiasing_factor)
+    else
+        # Recompute cutoffs using actual coeff array sizes for non-Fourier bases
+        cutoffs = ntuple(nb) do i
+            basis = field.bases[i]
+            isa(basis, Union{RealFourier, ComplexFourier}) ?
+                Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
+        end
 
-    rfft_dims = ntuple(nb) do i
-        basis = field.bases[i]
-        isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
-    end
+        rfft_dims = ntuple(nb) do i
+            basis = field.bases[i]
+            isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
+        end
 
-    # Apply spectral cutoff - this function handles GPU arrays automatically
-    apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
+        # Apply spectral cutoff - this function handles GPU arrays automatically
+        apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
+    end
 
     # Transform back to grid space
     backward_transform!(field)
@@ -196,6 +206,110 @@ function apply_spectral_cutoff_gpu!(data::AbstractArray, cutoffs::Tuple, rfft_di
 
     # Apply mask using broadcasting (GPU-compatible)
     data .*= mask_device
+end
+
+"""
+    _axis_dealias_factor(basis, fallback) -> Float64
+
+Per-axis dealiasing factor, read literally from the basis's `dealias` setting.
+The Fourier bases default to 3/2 (the standard 2/3-rule), so a basis left unset
+still dealiases. Setting `dealias=1` (or any value ≤ 1) disables dealiasing on
+that axis (all modes kept, aliasing accepted); larger values mean stronger
+dealiasing. Non-Fourier bases return the fallback unchanged.
+"""
+function _axis_dealias_factor(basis, fallback::Float64)
+    isa(basis, Union{RealFourier, ComplexFourier}) || return fallback
+    d = basis.meta.dealias
+    return d isa Number ? Float64(d) : Float64(first(d))
+end
+
+"""
+    _any_axis_dealias(bases, fallback) -> Bool
+
+True if any Fourier axis requests dealiasing (factor > 1). Used to gate the
+nonlinear-product dealiasing: when every Fourier axis has `dealias ≤ 1`, the
+product is computed without any dealiasing.
+"""
+function _any_axis_dealias(bases, fallback::Float64)
+    for basis in bases
+        isa(basis, Union{RealFourier, ComplexFourier}) || continue
+        _axis_dealias_factor(basis, fallback) > 1 && return true
+    end
+    return false
+end
+
+"""
+    _apply_spectral_cutoff_distributed!(coeff_data::PencilArray, bases, dealiasing_factor)
+
+Apply a 2/3-rule dealiasing cutoff to MPI-distributed coefficient data.
+
+Unlike `apply_spectral_cutoff!`, which derives wavenumbers from the LOCAL array
+size, this version uses each rank's GLOBAL wavenumber indices (via the pencil's
+`axes_local` range) so the correct modes are zeroed regardless of how the
+spectrum is decomposed across ranks. The mode-number layout per axis matches the
+PencilFFT coefficient layout:
+  - first RealFourier axis (RFFT): modes 0, 1, …, N/2
+  - later RealFourier / ComplexFourier axes (FFT): 0, 1, …, N/2-1, -N/2, …, -1
+
+Modes with |mode| > floor(N / (2·dealiasing_factor)) are zeroed on each Fourier axis.
+Mirrors the per-rank wavenumber handling in `_apply_spectral_derivative_distributed!`.
+"""
+function _apply_spectral_cutoff_distributed!(coeff_data::PencilArrays.PencilArray,
+                                             bases, dealiasing_factor::Float64)
+    local_data = parent(coeff_data)
+    pencil = PencilArrays.pencil(coeff_data)
+    local_axes = pencil.axes_local
+    perm = PencilArrays.permutation(coeff_data)
+    perm_tuple = Tuple(perm)
+
+    for axis in 1:length(bases)
+        basis = bases[axis]
+        (isa(basis, RealFourier) || isa(basis, ComplexFourier)) || continue
+
+        N = basis.meta.size
+        factor = _axis_dealias_factor(basis, dealiasing_factor)
+        factor <= 1 && continue   # dealias ≤ 1 → no truncation on this axis
+        # Quadratic-alias-safe cutoff: keep |mode| ≤ cutoff with 3·cutoff < N so the
+        # highest product mode (2·cutoff) cannot alias back into the retained band.
+        # Truncation can keep at most (N-1)÷3 modes alias-free regardless of factor, so
+        # a larger factor (stronger dealiasing) lowers the cutoff; a smaller one is
+        # capped at the alias-free limit.
+        cutoff = min(floor(Int, N / (2 * factor)), (N - 1) ÷ 3)
+
+        # Global integer mode numbers matching the coefficient layout on this axis.
+        if isa(basis, RealFourier) && _is_first_real_fourier_axis(bases, axis)
+            modes_global = collect(0:div(N, 2))                 # RFFT: 0 … N/2
+        else
+            modes_global = round.(Int, _fftfreq(N) .* N)        # FFT: 0…N/2-1, -N/2…-1
+        end
+
+        # Validate the coefficient global size matches the expected layout.
+        global_size_axis = PencilArrays.size_global(coeff_data)[axis]
+        if global_size_axis != length(modes_global)
+            error("Distributed spectral cutoff size mismatch on axis $axis: " *
+                  "global coefficient size is $global_size_axis but expected " *
+                  "$(length(modes_global)) (basis=$(typeof(basis)), N=$N).")
+        end
+
+        # Slice the global mode numbers to this rank's owned range on this axis.
+        if axis <= length(local_axes)
+            local_range = local_axes[axis]
+            modes_local = modes_global[local_range]
+        else
+            modes_local = modes_global
+        end
+
+        keep = abs.(modes_local) .<= cutoff
+        all(keep) && continue  # nothing to zero on this rank for this axis
+
+        # Broadcast the keep-mask along the PHYSICAL axis (accounting for permutation).
+        physical_axis = findfirst(==(axis), perm_tuple)
+        physical_axis === nothing && (physical_axis = axis)
+        mask_shape = ntuple(i -> i == physical_axis ? length(keep) : 1, ndims(local_data))
+        local_data .*= reshape(keep, mask_shape...)
+    end
+
+    return coeff_data
 end
 
 """

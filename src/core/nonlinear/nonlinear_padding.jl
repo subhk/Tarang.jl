@@ -91,10 +91,13 @@ function _get_padded_workspace!(evaluator::NonlinearEvaluator, bases::Tuple, dty
         return nothing
     end
 
-    # Compute padded shape: pad only Fourier dimensions
+    # Compute padded shape: pad only Fourier dimensions. Each axis uses its own
+    # basis `dealias` strength when set (>1), falling back to the global factor,
+    # so per-basis dealias=... controls the padding (3/2-rule) resolution.
     padded_shape = copy(original_shape)
     for d in fourier_dims
-        M = Int(ceil(factor * original_shape[d]))
+        axis_factor = d <= length(bases) ? _axis_dealias_factor(bases[d], factor) : factor
+        M = Int(ceil(axis_factor * original_shape[d]))
         if isodd(M); M += 1; end
         padded_shape[d] = M
     end
@@ -348,267 +351,79 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     return result
 end
 
+# ============================================================================
+# Distributed (MPI) dealiasing via 2/3-rule truncation
+# ============================================================================
+
 """
-    _get_local_fourier_dims(evaluator, bases)
+    _dealias_truncate_field!(field, dealiasing_factor)
 
-For MPI-distributed fields, return only the Fourier dimensions that are
-fully local (not decomposed across MPI ranks). These can be safely padded.
-Non-local Fourier dimensions fall back to truncation-after-multiply.
+Zero all Fourier modes with |k| > N/(2·dealiasing_factor) on `field`, in place.
+Forward-transforms, applies the per-rank global-wavenumber cutoff (distributed)
+or the standard cutoff (serial), then transforms back to grid space.
 """
-function _get_local_fourier_dims(evaluator::NonlinearEvaluator, bases::Tuple)
-    dist = evaluator.dist
-    ndim = length(bases)
-    fourier_dims = Int[]
+function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64)
+    forward_transform!(field)
+    coeff_data = get_coeff_data(field)
 
-    # Determine which dimensions are decomposed
-    # For PencilArrays with slab decomposition, the last ndims(mesh) dimensions are decomposed
-    mesh = dist.mesh
-    n_decomposed = mesh === nothing ? 0 : length(mesh)
-
-    for (i, basis) in enumerate(bases)
-        if isa(basis, Union{RealFourier, ComplexFourier})
-            # Dimension i is Fourier. Is it also decomposed?
-            # Convention: dimensions (ndim - n_decomposed + 1) : ndim are decomposed
-            is_decomposed = (n_decomposed > 0) && (i > ndim - n_decomposed)
-            if !is_decomposed
-                push!(fourier_dims, i)
-            end
+    if isa(coeff_data, PencilArrays.PencilArray)
+        _apply_spectral_cutoff_distributed!(coeff_data, field.bases, dealiasing_factor)
+    else
+        nb = length(field.bases)
+        cutoffs = ntuple(nb) do i
+            b = field.bases[i]
+            isa(b, Union{RealFourier, ComplexFourier}) ?
+                Int(floor(b.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
         end
+        rfft_dims = ntuple(nb) do i
+            b = field.bases[i]
+            isa(b, RealFourier) && size(coeff_data, i) == div(b.meta.size, 2) + 1
+        end
+        apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
     end
 
-    return fourier_dims
+    backward_transform!(field)
+    return field
 end
 
 """
-    PaddedPencilFFTWorkspace
+    evaluate_truncated_multiply_distributed(field1, field2, evaluator)
 
-Workspace for proper 3/2-rule dealiasing on MPI-distributed PencilArray data.
-Creates a padded-size PencilFFT plan and intermediate PencilArrays.
+Multiply two MPI-distributed fields with 2/3-rule dealiasing.
 
-This enables correct dealiasing on ALL dimensions (including distributed ones),
-unlike the local-only approach which can only pad non-decomposed dimensions.
+Exact 3/2 zero-padding is not used under MPI because embedding the N-mode
+spectrum into the 3N/2 padded spectrum requires cross-rank redistribution
+(the original and padded PencilArrays decompose differently). The 2/3 rule is
+purely local per rank: truncate both inputs to |k| ≤ N/3, multiply on the grid,
+then truncate the product to |k| ≤ N/3. The product of two N/3-band fields has
+support up to 2N/3; on the N grid those modes alias only into |k| ≥ N/3, so the
+retained |k| ≤ N/3 band is alias-free — i.e. quadratic terms are dealiased
+exactly within the retained band.
 """
-mutable struct PaddedPencilFFTWorkspace{P, GA<:AbstractArray, SA<:AbstractArray} <: AbstractNonlinearTransformConfig
-    original_shape::Tuple{Vararg{Int}}
-    padded_shape::Tuple{Vararg{Int}}
-    padded_plan::P       # PencilFFTs.PencilFFTPlan for padded size
-    # Pre-allocated PencilArrays on padded grid
-    padded_grid1::GA     # PencilArray for padded physical space
-    padded_grid2::GA
-    padded_product::GA
-    padded_spec1::SA     # PencilArray for padded spectral space
-    padded_spec2::SA
-    padded_spec_product::SA
-end
-
-"""
-    _get_padded_pencil_workspace!(evaluator, bases, dist) -> Union{PaddedPencilFFTWorkspace, Nothing}
-
-Create or retrieve a cached PaddedPencilFFTWorkspace for distributed padded dealiasing.
-Returns nothing if PencilFFTs cannot be created for the padded shape.
-"""
-function _get_padded_pencil_workspace!(evaluator::NonlinearEvaluator, bases::Tuple, dist::Distributor)
-    key = "padded_pencil_$(hash(bases))"
-    if haskey(evaluator.pencil_transforms, key)
-        return evaluator.pencil_transforms[key]::PaddedPencilFFTWorkspace
-    end
-
+function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::ScalarField,
+                                                  evaluator::NonlinearEvaluator)
     factor = evaluator.dealiasing_factor
 
-    # Compute padded global shape
-    original_shape = Int[]
-    padded_shape = Int[]
-    has_fourier = false
-    for basis in bases
-        N = basis.meta.size
-        push!(original_shape, N)
-        if isa(basis, Union{RealFourier, ComplexFourier})
-            M = Int(ceil(factor * N))
-            if isodd(M); M += 1; end
-            push!(padded_shape, M)
-            has_fourier = true
-        else
-            push!(padded_shape, N)
-        end
-    end
+    # Truncate copies of the inputs (must not mutate caller fields).
+    f1 = copy(field1)
+    f2 = copy(field2)
+    _dealias_truncate_field!(f1, factor)
+    _dealias_truncate_field!(f2, factor)
 
-    if !has_fourier
-        return nothing
-    end
-
-    orig_t = Tuple(original_shape)
-    pad_t = Tuple(padded_shape)
-
-    try
-        # Create PencilFFT plan for the padded global shape.
-        # This is a collective MPI operation — all ranks must call it.
-        # Use the same transform types as the original domain's plan.
-        original_plan = _find_pencil_plan(dist)
-
-        if original_plan === nothing
-            @warn "No existing PencilFFT plan found — cannot create padded plan for distributed dealiasing" maxlog=1
-            return nothing
-        end
-
-        # Create padded plan using the stored input pencil (avoids internal PencilFFTs API)
-        input_pencil = dist.pencil_fft_input
-        padded_pencil = PencilArrays.Pencil(dist.mpi_topology, pad_t, input_pencil.decomp_dims)
-
-        # Build transforms matching the original domain's basis types.
-        # RFFT on the first RealFourier axis produces half-spectrum (N/2+1);
-        # using FFT instead would create a full-spectrum (N) shape mismatch
-        # when copying spectral data between original and padded arrays.
-        transform_list = Any[]
-        first_real_fourier = true
-        for basis in bases
-            if isa(basis, RealFourier)
-                if first_real_fourier
-                    push!(transform_list, PencilFFTs.Transforms.RFFT())
-                    first_real_fourier = false
-                else
-                    push!(transform_list, PencilFFTs.Transforms.FFT())
-                end
-            elseif isa(basis, ComplexFourier)
-                push!(transform_list, PencilFFTs.Transforms.FFT())
-            else
-                push!(transform_list, PencilFFTs.Transforms.NoTransform())
-            end
-        end
-        transforms = Tuple(transform_list)
-        padded_plan = PencilFFTs.PencilFFTPlan(padded_pencil, transforms)
-
-        # Pre-allocate PencilArrays for both physical and spectral space
-        padded_grid1 = PencilFFTs.allocate_input(padded_plan)
-        padded_grid2 = PencilFFTs.allocate_input(padded_plan)
-        padded_product = PencilFFTs.allocate_input(padded_plan)
-        padded_spec1 = PencilFFTs.allocate_output(padded_plan)
-        padded_spec2 = PencilFFTs.allocate_output(padded_plan)
-        padded_spec_product = PencilFFTs.allocate_output(padded_plan)
-
-        ws = PaddedPencilFFTWorkspace(
-            orig_t, pad_t, padded_plan,
-            padded_grid1, padded_grid2, padded_product,
-            padded_spec1, padded_spec2, padded_spec_product
-        )
-        evaluator.pencil_transforms[key] = ws
-        @info "Created padded PencilFFT workspace: original=$orig_t, padded=$pad_t"
-        return ws
-    catch e
-        @warn "Failed to create padded PencilFFT workspace: $e — falling back to local-only padding" maxlog=1
-        return nothing
-    end
-end
-
-"""
-    evaluate_distributed_padded_multiply(field1, field2, evaluator, ws)
-
-Full 3/2-rule padded dealiasing for MPI-distributed PencilArray data.
-Uses a padded-size PencilFFT plan for correct dealiasing on ALL dimensions.
-
-Algorithm:
-1. Forward PencilFFT both fields (original size)
-2. Pad spectral data into padded-size PencilArrays (zero-fill high modes)
-3. Backward padded PencilFFT to padded physical grid
-4. Multiply pointwise on padded grid
-5. Forward padded PencilFFT
-6. Truncate padded spectral data back to original size
-7. Backward PencilFFT to original physical grid
-"""
-function evaluate_distributed_padded_multiply(field1::ScalarField, field2::ScalarField,
-                                               evaluator::NonlinearEvaluator,
-                                               ws::PaddedPencilFFTWorkspace)
-    # Step 1: Forward transform both fields to spectral space (original PencilFFT)
-    ensure_layout!(field1, :c)
-    ensure_layout!(field2, :c)
-
-    spec1 = get_coeff_data(field1)
-    spec2 = get_coeff_data(field2)
-
-    # Step 2: Pad spectral data into padded PencilArrays
-    # Zero the padded arrays first
-    fill!(parent(ws.padded_spec1), zero(eltype(ws.padded_spec1)))
-    fill!(parent(ws.padded_spec2), zero(eltype(ws.padded_spec2)))
-
-    # Copy low-frequency spectral data from original to padded pencils.
-    # Both are PencilArrays with different global shapes but the same MPI decomposition.
-    # The local portion of each rank holds a subset of the global spectral modes.
-    # We copy the modes that fit in the original grid (low frequencies) and
-    # leave the rest as zeros (high-frequency padding).
-    _copy_pencil_spectral_to_padded!(ws.padded_spec1, spec1, ws.original_shape, ws.padded_shape)
-    _copy_pencil_spectral_to_padded!(ws.padded_spec2, spec2, ws.original_shape, ws.padded_shape)
-
-    # Step 3: Backward padded PencilFFT → padded physical grid
-    ws.padded_grid1 .= ws.padded_plan \ ws.padded_spec1
-    ws.padded_grid2 .= ws.padded_plan \ ws.padded_spec2
-
-    # Step 4: Multiply on padded grid
-    parent(ws.padded_product) .= parent(ws.padded_grid1) .* parent(ws.padded_grid2)
-
-    # Step 5: Forward padded PencilFFT → padded spectral
-    ws.padded_spec_product .= ws.padded_plan * ws.padded_product
-
-    # Step 6: Truncate padded spectral data back to original spectral PencilArrays
+    # Multiply on the grid.
     result = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
-    ensure_layout!(result, :c)
-    result_spec = get_coeff_data(result)
-    fill!(parent(result_spec), zero(eltype(result_spec)))
-    _copy_padded_spectral_to_pencil!(result_spec, ws.padded_spec_product, ws.original_shape, ws.padded_shape)
-
-    # Step 7: Normalize — padded FFT/IFFT pair introduces M/N scale per dim
-    # Normalization: The padded FFT/IFFT roundtrip produces result scaled by N/M
-    # per padded dimension (because IFFT divides by M instead of N for the same
-    # spectral coefficients). Multiply by M/N to correct.
-    T = real(eltype(result_spec))
-    scale = one(T)
-    for (N, M) in zip(ws.original_shape, ws.padded_shape)
-        if N != M
-            scale *= T(M) / T(N)
-        end
-    end
-    if !isapprox(scale, 1)
-        parent(result_spec) .*= scale
-    end
-
-    # Transform back to grid space
     ensure_layout!(result, :g)
+    result_data = get_grid_data(result)
+    d1 = get_grid_data(f1)
+    d2 = get_grid_data(f2)
+    if isa(result_data, PencilArrays.PencilArray)
+        parent(result_data) .= parent(d1) .* parent(d2)
+    else
+        result_data .= d1 .* d2
+    end
+
+    # Truncate the product to remove the aliased high modes.
+    _dealias_truncate_field!(result, factor)
     return result
 end
 
-"""
-    _copy_pencil_spectral_to_padded!(padded_pencil, orig_pencil, orig_shape, pad_shape)
-
-Copy low-frequency spectral modes from original-size PencilArray to padded-size PencilArray.
-Works on local data only (each rank copies its own portion).
-"""
-function _copy_pencil_spectral_to_padded!(padded_pencil, orig_pencil, orig_shape, pad_shape)
-    # Get local data arrays
-    orig_local = parent(orig_pencil)
-    pad_local = parent(padded_pencil)
-
-    # For each local element, check if its global spectral index falls within
-    # the low-frequency region of the padded grid. If so, copy it.
-    # Since both PencilArrays share the same MPI decomposition pattern,
-    # the local indices correspond to the same global mode indices.
-    # The local shapes may differ (padded is larger), so we copy the
-    # overlapping region.
-    ndim = length(orig_shape)
-    copy_ranges = ntuple(ndim) do d
-        1:min(size(orig_local, d), size(pad_local, d))
-    end
-    pad_local[copy_ranges...] .= orig_local[copy_ranges...]
-end
-
-"""
-    _copy_padded_spectral_to_pencil!(orig_pencil, padded_pencil, orig_shape, pad_shape)
-
-Copy low-frequency spectral modes from padded PencilArray back to original-size PencilArray.
-"""
-function _copy_padded_spectral_to_pencil!(orig_pencil, padded_pencil, orig_shape, pad_shape)
-    orig_local = parent(orig_pencil)
-    pad_local = parent(padded_pencil)
-    ndim = length(orig_shape)
-    copy_ranges = ntuple(ndim) do d
-        1:min(size(orig_local, d), size(pad_local, d))
-    end
-    orig_local[copy_ranges...] .= pad_local[copy_ranges...]
-end

@@ -1,5 +1,6 @@
 using Test
 using FFTW
+using Random
 
 @testset "Dealiasing Math (CPU)" begin
     # ========================================================================
@@ -314,5 +315,81 @@ using FFTW
         @test isapprox(plan_dct * (alpha .* a .+ beta .* b),
                        alpha .* (plan_dct * a) .+ beta .* (plan_dct * b);
                        atol=1e-10)
+    end
+end
+
+@testset "2/3 truncation multiply (alias-free quadratic)" begin
+    # Validates the math behind the MPI nonlinear-product path
+    # (evaluate_truncated_multiply_distributed / _apply_spectral_cutoff_distributed!):
+    # truncate inputs to |k| ≤ cutoff, multiply on grid, truncate product to |k| ≤ cutoff.
+    # Tested on FULL-FFT axes (the layout that was mishandled by the old padded-copy path)
+    # across 1D/2D/3D, including a grid divisible by 3 to lock the boundary cutoff.
+
+    # Cutoff exactly as computed in _apply_spectral_cutoff_distributed! (factor = 3/2).
+    safe_cutoff(N) = min(floor(Int, N / (2 * (3 / 2))), (N - 1) ÷ 3)
+
+    # Integer FFT mode numbers matching FFTW layout (even N): 0,1,…,N/2,-(N/2-1),…,-1
+    fmodes(N) = [ i <= (N ÷ 2) + 1 ? i - 1 : i - 1 - N for i in 1:N ]
+
+    function combine(vecs)
+        nd = length(vecs)
+        nd == 1 && return vecs[1]
+        nd == 2 && return vecs[1] .* vecs[2]'
+        return reshape(vecs[1], :, 1, 1) .* reshape(vecs[2], 1, :, 1) .* reshape(vecs[3], 1, 1, :)
+    end
+    keepmask(dims, K) = combine([abs.(fmodes(N)) .<= K for N in dims])
+
+    function band_limited(dims, K, rng)
+        f = randn(rng, dims...)
+        real(ifft(fft(f) .* keepmask(dims, K)))
+    end
+
+    function trunc_multiply(a, b, km)
+        at = real(ifft(fft(a) .* km))
+        bt = real(ifft(fft(b) .* km))
+        real(ifft(fft(at .* bt) .* km))
+    end
+
+    rng = MersenneTwister(7)
+    @testset "dims=$dims" for dims in [(48,), (36, 36), (24, 18), (12, 12, 12), (16, 16, 16)]
+        c = minimum(safe_cutoff.(dims))
+        K1 = max(c ÷ 2, 1)                       # inputs s.t. product modes 2·K1 ≤ c (kept, alias-free)
+        a = band_limited(dims, K1, rng)
+        b = band_limited(dims, K1, rng)
+        km = combine([abs.(fmodes(N)) .<= safe_cutoff(N) for N in dims])
+        got = trunc_multiply(a, b, km)
+        # Product spectrum lies fully within the kept band and below Nyquist → equals pointwise product.
+        @test maximum(abs.(got .- a .* b)) < 1e-10
+    end
+
+    @testset "boundary cutoff for grids divisible by 3" begin
+        # The old floor(N/3) cutoff lets the top product mode 2·(N/3) alias onto -(N/3),
+        # contaminating the retained band edge. (N-1)÷3 fixes it.
+        N = 48
+        @test safe_cutoff(N) == 15
+        @test floor(Int, N / (2 * (3 / 2))) == 16   # naive (unsafe) cutoff
+
+        rng2 = MersenneTwister(11)
+        a = band_limited((N,), 15, rng2)
+        b = band_limited((N,), 15, rng2)
+        # Oversampled (alias-free) reference product, truncated to |k| ≤ 15.
+        P = 8N
+        function upsample(f, N, P)
+            F = fft(f); Fp = zeros(ComplexF64, P)
+            nh = N ÷ 2; nneg = N - nh - 1
+            Fp[1:nh+1] .= F[1:nh+1]; Fp[P-nneg+1:P] .= F[nh+2:N]
+            real(ifft(Fp)) .* (P / N)
+        end
+        Prodp = fft(upsample(a, N, P) .* upsample(b, N, P)) ./ (P / N)
+        mp = [ i <= (P ÷ 2) + 1 ? i - 1 : i - 1 - P for i in 1:P ]
+        truth = zeros(ComplexF64, N)
+        for i in 1:N
+            k = fmodes(N)[i]
+            abs(k) <= 15 && (truth[i] = Prodp[findfirst(==(k), mp)])
+        end
+        got_safe   = fft(trunc_multiply(a, b, abs.(fmodes(N)) .<= 15))
+        got_unsafe = fft(trunc_multiply(a, b, abs.(fmodes(N)) .<= 16))
+        @test maximum(abs.(got_safe   .- truth)) < 1e-10   # safe cutoff: exact
+        @test maximum(abs.(got_unsafe .- truth)) > 1e-6    # naive cutoff: contaminated
     end
 end

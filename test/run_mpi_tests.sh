@@ -90,6 +90,7 @@ MPI_TESTS=(
     "${SCRIPT_DIR}/test_mpi_field_initialization.jl"
     "${SCRIPT_DIR}/test_mpi_algebraic_constraints.jl"
     "${SCRIPT_DIR}/test_mpi_lazy_rhs_fourier.jl"
+    "${SCRIPT_DIR}/test_mpi_dealiasing_product.jl"
     "${SCRIPT_DIR}/test_stochastic_forcing_mpi.jl"
     "${SCRIPT_DIR}/test_distributed_gpu_transpose.jl"
 )

@@ -30,7 +30,7 @@ using LinearAlgebra
             @test xb isa RealFourier
             @test xb.meta.size == 32
             @test xb.meta.bounds == (0.0, 2π)
-            @test xb.meta.dealias == 1.0
+            @test xb.meta.dealias == 1.5   # Fourier bases default to the 2/3-rule (3/2)
             @test xb.meta.dtype == Float64
             @test xb.meta.dim == 1
         end

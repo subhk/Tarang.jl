@@ -108,46 +108,29 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
             "Both fields must be defined on the same domain."))
     end
 
-    # Try proper 3/2-rule padded dealiasing
-    if evaluator.dealiasing_factor > 1.0
+    # Try proper 3/2-rule padded dealiasing. Gate on the per-axis basis `dealias`
+    # settings (factor > 1 on any Fourier axis) rather than the evaluator's global
+    # default, so bases set to dealias ≤ 1 are computed without dealiasing.
+    if _any_axis_dealias(field1.bases, evaluator.dealiasing_factor)
         T = field1.dtype <: Complex ? real(field1.dtype) : field1.dtype
         data1 = get_grid_data(field1)
         is_pencil = isa(data1, PencilArrays.PencilArray)
 
         if is_pencil && evaluator.dist.size > 1
-            # MPI path: try full distributed padded dealiasing first (all dimensions),
-            # then fall back to local-only padding (non-decomposed dimensions only)
-            pencil_ws = _get_padded_pencil_workspace!(evaluator, field1.bases, evaluator.dist)
-            if pencil_ws !== nothing
-                result = evaluate_distributed_padded_multiply(field1, field2, evaluator, pencil_ws)
-                evaluator.performance_stats.total_evaluations += 1
-                if _TRACK_NL_TIMING
-                    elapsed = time() - start_time
-                    evaluator.performance_stats.total_time += elapsed
-                    evaluator.performance_stats.dealiasing_time += elapsed
-                end
-                return result
+            # MPI path: 2/3-rule truncation dealiasing using correct per-rank global
+            # wavenumbers. Exact 3/2 zero-padding is avoided here because, under MPI
+            # decomposition, embedding the N-mode spectrum into the 3N/2 padded spectrum
+            # would require cross-rank redistribution (the original and padded
+            # PencilArrays decompose differently). Truncation is purely local per rank
+            # and dealiases quadratic nonlinear terms within the retained |k| ≤ N/3 band.
+            result = evaluate_truncated_multiply_distributed(field1, field2, evaluator)
+            evaluator.performance_stats.total_evaluations += 1
+            if _TRACK_NL_TIMING
+                elapsed = time() - start_time
+                evaluator.performance_stats.total_time += elapsed
+                evaluator.performance_stats.dealiasing_time += elapsed
             end
-
-            # Fallback: pad only local (non-decomposed) Fourier dimensions
-            local_data = parent(data1)
-            local_fdims = _get_local_fourier_dims(evaluator, field1.bases)
-            if !isempty(local_fdims)
-                ws = _get_padded_workspace!(evaluator, field1.bases, T;
-                        local_shape=size(local_data),
-                        local_fourier_dims=local_fdims,
-                        arch=CPU())
-                if ws !== nothing
-                    result = evaluate_padded_multiply(field1, field2, evaluator, ws)
-                    evaluator.performance_stats.total_evaluations += 1
-                    if _TRACK_NL_TIMING
-                        elapsed = time() - start_time
-                        evaluator.performance_stats.total_time += elapsed
-                        evaluator.performance_stats.dealiasing_time += elapsed
-                    end
-                    return result
-                end
-            end
+            return result
         else
             # Serial path (CPU or GPU): pad all Fourier dimensions
             ws = _get_padded_workspace!(evaluator, field1.bases, T)
@@ -179,14 +162,11 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
         gpu_multiply_fields!(result["g"], field1["g"], field2["g"])
     end
 
-    # Only apply truncation-after-multiply dealiasing if the field has Fourier bases.
-    # For pure Chebyshev/Legendre fields, the forward/backward transform roundtrip
-    # in apply_basic_dealiasing! can introduce significant numerical errors.
-    if evaluator.dealiasing_factor > 1.0
-        has_fourier = any(isa(b, Union{RealFourier, ComplexFourier}) for b in field1.bases)
-        if has_fourier
-            apply_basic_dealiasing!(result, evaluator.dealiasing_factor)
-        end
+    # Only apply truncation-after-multiply dealiasing if a Fourier axis requests it
+    # (dealias > 1). For pure Chebyshev/Legendre fields, or bases with dealias ≤ 1,
+    # the forward/backward roundtrip in apply_basic_dealiasing! is skipped.
+    if _any_axis_dealias(field1.bases, evaluator.dealiasing_factor)
+        apply_basic_dealiasing!(result, evaluator.dealiasing_factor)
     end
 
     evaluator.performance_stats.total_evaluations += 1
