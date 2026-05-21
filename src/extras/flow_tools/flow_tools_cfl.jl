@@ -89,19 +89,25 @@ function compute_timestep(cfl::CFL)
         domain = velocity.domain
         spacings = grid_spacing(domain)
 
+        cfl_frequency = nothing
+
         for (i, component) in enumerate(velocity.components)
             ensure_layout!(component, :g)
 
-            # Get velocity magnitude in this direction
-            vel_data = abs.(get_grid_data(component))
-            max_vel = maximum(vel_data)
+            component_frequency = abs.(get_grid_data(component)) ./ spacings[i]
+            if cfl_frequency === nothing
+                cfl_frequency = component_frequency
+            else
+                cfl_frequency .+= component_frequency
+            end
+        end
 
-            max_vel = global_max(cfl.reducer, max_vel)
+        if cfl_frequency !== nothing
+            max_frequency = global_max(cfl.reducer, cfl_frequency; empty=0.0)
 
-            if max_vel > 0
-                # CFL condition: dt < dx / |u|
-                dt_limit = spacings[i] / max_vel
-                min_dt = min(min_dt, dt_limit)
+            if max_frequency > 0
+                # Multidimensional advective CFL: dt < 1 / max(sum_i |u_i| / dx_i)
+                min_dt = min(min_dt, inv(max_frequency))
             end
         end
     end

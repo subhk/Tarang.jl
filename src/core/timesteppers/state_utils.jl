@@ -14,6 +14,10 @@ constraint equations (no dt) contribute zero.
 """
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{<:ScalarField}, time::Float64)
     strategy = _rhs_evaluation_strategy(solver)
+    if strategy !== :interpreted && _distributed_field_path_required(state)
+        _refresh_algebraic_state!(solver.problem, state)
+    end
+
     rhs_fields = _evaluate_rhs_with_strategy(strategy, solver, state)
     rhs_fields !== nothing && return rhs_fields
     return _evaluate_rhs_interpreted(solver, state, time)
@@ -230,9 +234,62 @@ function evaluate_rhs_buffered(
     time::Float64,
 )
     strategy = _rhs_evaluation_strategy(solver; buffered=true)
+    if strategy !== :interpreted && _distributed_field_path_required(state)
+        _refresh_algebraic_state!(solver.problem, state)
+    end
+
     rhs_fields = _evaluate_rhs_with_strategy(strategy, solver, state)
     rhs_fields !== nothing && return rhs_fields
     return _evaluate_rhs_interpreted(solver, state, time)
+end
+
+function _refresh_algebraic_state!(problem::Problem, state::Vector{<:ScalarField})
+    _has_algebraic_constraints(problem) || return false
+
+    sync_state_to_problem!(problem, state)
+    _solve_algebraic_constraints!(problem, state)
+    _sync_problem_to_state!(problem, state)
+    return true
+end
+
+function _has_algebraic_constraints(problem::Problem)
+    hasfield(typeof(problem), :equation_data) || return false
+    isempty(problem.equation_data) && return false
+
+    for eq_data in problem.equation_data
+        M_expr = get(eq_data, "M", nothing)
+        if M_expr === nothing || _is_zero_m_term(M_expr)
+            return true
+        end
+    end
+    return false
+end
+
+function _sync_problem_to_state!(problem::Problem, state::Vector{<:ScalarField})
+    idx = 1
+    for var in problem.variables
+        if isa(var, ScalarField)
+            if idx <= length(state)
+                copy_field_data!(state[idx], var)
+            end
+            idx += 1
+        elseif isa(var, VectorField)
+            for comp in var.components
+                if idx <= length(state)
+                    copy_field_data!(state[idx], comp)
+                end
+                idx += 1
+            end
+        elseif isa(var, TensorField)
+            for comp in vec(var.components)
+                if idx <= length(state)
+                    copy_field_data!(state[idx], comp)
+                end
+                idx += 1
+            end
+        end
+    end
+    return state
 end
 
 """
@@ -1117,16 +1174,20 @@ function _get_wavenumber_array_for_poisson(field::ScalarField, dim::Int, local_s
     end
 
     basis = field.bases[dim]
-    N = basis.meta.size
-
-    # Get domain size from basis bounds
-    bounds = basis.meta.bounds
-    L = bounds[2] - bounds[1]
-
-    k_scale = 2π / L
-
     coeff_data = get_coeff_data(field)
     is_mpi = isa(coeff_data, PencilArrays.PencilArray)
+    global_shape = is_mpi ? PencilArrays.size_global(coeff_data) : size(coeff_data)
+    dim <= length(global_shape) || return zeros(local_shape)
+
+    if isa(basis, RealFourier)
+        rfft_size = basis.meta.size ÷ 2 + 1
+        k_global = global_shape[dim] == rfft_size ? wavenumbers_rfft(basis) :
+                   wavenumbers_fft(basis)
+    elseif isa(basis, ComplexFourier)
+        k_global = wavenumbers(basis)
+    else
+        return zeros(local_shape)
+    end
 
     # Initialize wavenumber array
     k_array = zeros(local_shape)
@@ -1136,50 +1197,26 @@ function _get_wavenumber_array_for_poisson(field::ScalarField, dim::Int, local_s
         local_axes = pencil.axes_local
         perm = PencilArrays.permutation(coeff_data)
         perm_tuple = Tuple(perm)
-        physical_dim = findfirst(==(dim), perm_tuple)
-        if physical_dim === nothing
-            physical_dim = dim
+        physical_axis = findfirst(==(dim), perm_tuple)
+        if physical_axis === nothing
+            physical_axis = dim
         end
 
-        if physical_dim > length(local_axes)
+        if dim > length(local_axes)
             return zeros(local_shape)
         end
 
-        global_start = first(local_axes[physical_dim])
-
-        is_rfft = isa(basis, RealFourier)
+        global_start = first(local_axes[dim])
 
         for idx in CartesianIndices(k_array)
-            local_idx = Tuple(idx)[physical_dim]
+            local_idx = Tuple(idx)[physical_axis]
             global_idx = global_start + local_idx - 1
-
-            if is_rfft
-                k = (global_idx - 1) * k_scale
-            else
-                if global_idx <= N÷2 + 1
-                    k = (global_idx - 1) * k_scale
-                else
-                    k = (global_idx - N - 1) * k_scale
-                end
-            end
-            k_array[idx] = k
+            k_array[idx] = k_global[global_idx]
         end
     else
-        is_rfft = isa(basis, RealFourier)
-
         for idx in CartesianIndices(k_array)
             global_idx = Tuple(idx)[dim]
-
-            if is_rfft
-                k = (global_idx - 1) * k_scale
-            else
-                if global_idx <= N÷2 + 1
-                    k = (global_idx - 1) * k_scale
-                else
-                    k = (global_idx - N - 1) * k_scale
-                end
-            end
-            k_array[idx] = k
+            k_array[idx] = k_global[global_idx]
         end
     end
 

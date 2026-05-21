@@ -384,6 +384,7 @@ function _step_explicit_rk_gpu!(state::TimestepperState, solver::InitialValueSol
         end
     end
 
+    _refresh_algebraic_state!(solver.problem, new_state)
     _push_trim!(state.history, new_state, 1)
 end
 

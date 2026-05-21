@@ -30,6 +30,8 @@ function _spectral_operator_matrix(expr, var, eqn_size::Int, var_size::Int)
         return _spectral_fractional_laplacian(field, expr.α, eqn_size, var_size)
     elseif isa(expr, Differentiate)
         return _spectral_differentiate(field, expr.coord, expr.order, eqn_size, var_size)
+    elseif isa(expr, Gradient)
+        return _spectral_gradient(expr, var, eqn_size, var_size)
     end
     return nothing
 end
@@ -281,6 +283,54 @@ function _spectral_differentiate(field::ScalarField, coord::Coordinate, order::I
     return size(result) == (eqn_size, var_size) ? result : nothing
 end
 
+"""Spectral gradient of a scalar field, stacked as [∂x f; ∂y f; ...]."""
+function _spectral_gradient(expr::Gradient, var, eqn_size::Int, var_size::Int)
+    field = expr.operand
+    isa(field, ScalarField) || return nothing
+    _operand_matches_variable(field, var) || return nothing
+
+    coordsys = expr.coordsys
+    coordsys === nothing && return nothing
+    ndim = length(coordsys.names)
+    eqn_size == ndim * var_size || return nothing
+
+    blocks = SparseMatrixCSC{ComplexF64, Int}[]
+    for coord_name in coordsys.names
+        coord = coordsys[coord_name]
+        block = _spectral_differentiate(field, coord, 1, var_size, var_size)
+        block === nothing && return nothing
+        push!(blocks, block)
+    end
+    return vcat(blocks...)
+end
+
+function _is_2d_vector_skew_operand(operand)
+    if isa(operand, VectorField)
+        return length(operand.components) == 2
+    elseif isa(operand, Gradient)
+        return isa(operand.operand, ScalarField) &&
+               operand.coordsys !== nothing &&
+               length(operand.coordsys.names) == 2
+    end
+    return false
+end
+
+"""Matrix block for 2D vector skew: skew(vx, vy) = (-vy, vx)."""
+function _spectral_skew_block(expr::Skew, var, eqn_size::Int, var_size::Int)
+    _is_2d_vector_skew_operand(expr.operand) || return nothing
+    iseven(eqn_size) || return nothing
+
+    operand_block = build_expression_matrix_block(expr.operand, var, eqn_size, var_size)
+    nnz(operand_block) == 0 && return operand_block
+
+    scalar_size = eqn_size ÷ 2
+    rotation = kron(
+        sparse(ComplexF64[0 -1; 1 0]),
+        sparse(ComplexF64(1) * I, scalar_size, scalar_size),
+    )
+    return rotation * operand_block
+end
+
 """
     Build matrix block for expression acting on variable.
     Following expression_matrices pattern.
@@ -399,6 +449,18 @@ function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
 
     if isa(expr, Differentiate)
         spec = _spectral_operator_matrix(expr, var, eqn_size, var_size)
+        spec !== nothing && return spec
+        return _recurse_operand(expr, var, eqn_size, var_size)
+    end
+
+    if isa(expr, Gradient)
+        spec = _spectral_operator_matrix(expr, var, eqn_size, var_size)
+        spec !== nothing && return spec
+        return _recurse_operand(expr, var, eqn_size, var_size)
+    end
+
+    if isa(expr, Skew)
+        spec = _spectral_skew_block(expr, var, eqn_size, var_size)
         spec !== nothing && return spec
         return _recurse_operand(expr, var, eqn_size, var_size)
     end
