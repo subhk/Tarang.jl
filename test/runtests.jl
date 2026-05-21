@@ -92,6 +92,7 @@ const MPI_TEST_FILES = [
     "test_mpi_field_initialization.jl",
     "test_mpi_algebraic_constraints.jl",
     "test_mpi_lazy_rhs_fourier.jl",
+    "test_mpi_dealiasing_product.jl",
     "test_stochastic_forcing_mpi.jl",
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
