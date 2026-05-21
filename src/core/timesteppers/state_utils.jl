@@ -14,7 +14,7 @@ constraint equations (no dt) contribute zero.
 """
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{<:ScalarField}, time::Float64)
     strategy = _rhs_evaluation_strategy(solver)
-    if strategy !== :interpreted && _distributed_field_path_required(state)
+    if strategy !== :interpreted
         _refresh_algebraic_state!(solver.problem, state)
     end
 
@@ -234,7 +234,7 @@ function evaluate_rhs_buffered(
     time::Float64,
 )
     strategy = _rhs_evaluation_strategy(solver; buffered=true)
-    if strategy !== :interpreted && _distributed_field_path_required(state)
+    if strategy !== :interpreted
         _refresh_algebraic_state!(solver.problem, state)
     end
 
