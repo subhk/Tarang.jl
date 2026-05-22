@@ -142,12 +142,25 @@ using Tarang
             end
         end
 
-        # Pre-refactor baseline was ~22 MiB here (11 MiB forward + 11 MiB
-        # backward, × 100). Set the threshold at 200 KiB which leaves
-        # plenty of room for Julia's internal Any-boxing overhead
-        # (~2 KiB/round-trip × 100) while still catching any regression
-        # that reintroduces per-call array allocation.
-        @test bytes < 200_000
+        # What this guards: reintroducing per-call array allocation. A single
+        # out-of-place transform output is ~130 KiB (65×128 ComplexF64 forward,
+        # 128×128 Float64 backward), so a regression shows up as ~13–26 MiB over
+        # 100 round-trips. THAT is the failure mode worth catching.
+        #
+        # The transform chain still walks `dist.transforms::Vector{Any}`, so each
+        # stage is a dynamic dispatch. On arm64 the steady-state path now measures
+        # 0 B/round-trip (the type-stability work in transform_{fourier,gpu,types}.jl
+        # made forward+backward fully concrete). On x86_64, however, Julia's codegen
+        # boxes that dynamic dispatch at ~4–6 KiB/round-trip regardless of Julia
+        # version — an architecture-dependent constant, not a regression. The
+        # original 200 KiB bound assumed ~2 KiB/round-trip of boxing, which holds on
+        # arm64 but underestimates x86_64; killing the last of it requires making
+        # `dist.transforms` concretely typed (a Distributor-level change).
+        #
+        # 2 MiB sits comfortably above the x86_64 boxing floor (~0.5 MiB) and an
+        # order of magnitude below the ~13 MiB realloc regression, so it still
+        # catches the real failure while staying green across architectures.
+        @test bytes < 2_000_000
     end
 
     # ------------------------------------------------------------------------
