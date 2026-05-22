@@ -31,14 +31,11 @@ function _fourier_forward(data::AbstractArray, transform::FourierTransform)
 end
 
 """Apply backward transform to field """
-const _XFORM_BWD = Ref(0)  # TEMP counter
-
 function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
 
     if field.domain === nothing
         return
     end
-    _XFORM_BWD[] += 1  # TEMP counter
 
     ensure_layout!(field, :c)  # Start in coefficient space
 

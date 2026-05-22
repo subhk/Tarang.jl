@@ -125,14 +125,11 @@ end
 
 # Transform execution functions
 """Apply forward transform to field"""
-const _XFORM_FWD = Ref(0)  # TEMP counter
-
 function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
 
     if field.domain === nothing
         return
     end
-    _XFORM_FWD[] += 1  # TEMP counter
 
     ensure_layout!(field, :g)  # Start in grid space
 

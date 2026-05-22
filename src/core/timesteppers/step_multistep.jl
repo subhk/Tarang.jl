@@ -378,32 +378,32 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 
     iteration = state.timestepper_data[:sbdf2_iteration]
 
-    # Check if we have enough history for SBDF2 (following Tarang line 350)
-    if iteration < 1 || length(state.history) < 2
-        @debug "SBDF2 requires iteration >= 1, falling back to SBDF1"
-        step_sbdf1!(state, solver)
-        state.timestepper_data[:sbdf2_iteration] += 1
-        return
-    end
-
     L_matrix, M_matrix, fell_back =
         _prepare_global_multistep_matrices!(state, solver, "SBDF2", "SBDF1", step_sbdf1!)
     fell_back && return
-    
-    # Get timestep history for variable timestep (following Tarang lines 357-358)
+
+    # Dedalus MultistepIMEX pattern: ONE unified step for every iteration. The
+    # first step (iteration 0, only one history entry) uses SBDF1 coefficients;
+    # iteration ≥ 1 uses full SBDF2. This avoids delegating the startup to a
+    # separate `step_sbdf1!` (which manages the MX/F history with a different
+    # depth and a separate iteration counter), the desync that previously
+    # degraded the explicit extrapolation to 1st order on nonlinear terms.
     dt_current = dt
-    dt_previous = get_previous_timestep(state)
-    w1 = dt_current / dt_previous
-    
-    # Get SBDF2 coefficients following Tarang exactly (timesteppers:360-365)
-    a = ((1.0 + 2.0*w1) / (1.0 + w1) / dt_current,  # a[0]
-         -(1.0 + w1) / dt_current,                    # a[1]
-         w1^2 / (1.0 + w1) / dt_current)              # a[2]
-    b = (1.0,)                                        # b[0] - fully implicit
-    c = (0.0, 1.0 + w1, -w1)                         # c[0], c[1], c[2]
-    
-    @debug "SBDF2 variable timestep: dt_current=$dt_current, dt_previous=$dt_previous, w1=$w1"
-    
+    if iteration < 1
+        # SBDF1 coefficients, padded to the SBDF2 stencil length.
+        a = (1.0/dt_current, -1.0/dt_current, 0.0)
+        b = (1.0,)
+        c = (0.0, 1.0, 0.0)
+    else
+        dt_previous = get_previous_timestep(state)
+        w1 = dt_current / dt_previous
+        a = ((1.0 + 2.0*w1) / (1.0 + w1) / dt_current,
+             -(1.0 + w1) / dt_current,
+             w1^2 / (1.0 + w1) / dt_current)
+        b = (1.0,)
+        c = (0.0, 1.0 + w1, -w1)
+    end
+
     # Step 1: Convert current state to vector
     X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 

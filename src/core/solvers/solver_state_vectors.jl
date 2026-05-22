@@ -249,7 +249,14 @@ function vector_to_fields!(output::Vector{<:ScalarField}, vector::AbstractVector
     for (i, _) in enumerate(template)
         coeff_data = get_coeff_data(output[i])
         if coeff_data === nothing
-            continue
+            # The output field may carry only grid data (e.g. a state produced by
+            # `copy_state` of a grid-layout field — `evaluate_rhs` leaves the
+            # multistep state in :g). Allocate its coefficient buffer so the
+            # solution vector is actually written; skipping here silently leaves
+            # the field frozen at its copied value (degrades multistep to 1st order).
+            ensure_layout!(output[i], :c)
+            coeff_data = get_coeff_data(output[i])
+            coeff_data === nothing && continue
         end
         local_data = get_local_data(coeff_data)
         n = length(local_data)
