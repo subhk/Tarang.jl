@@ -72,7 +72,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
     fallback_reason = _imex_rk_explicit_fallback_reason(state, solver, current_state, L_matrix)
     if fallback_reason !== nothing
         _log_imex_rk_explicit_fallback(fallback_reason)
-        _step_rk_imex_explicit_fallback!(state, solver)
+        _step_rk_imex_explicit_fallback!(state, solver, ts)
         return nothing
     end
 
@@ -145,7 +145,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
                     end
                 end
                 if lhs === nothing
-                    _step_rk_imex_explicit_fallback!(state, solver)
+                    _step_rk_imex_explicit_fallback!(state, solver, ts)
                     return nothing
                 end
                 _rk_ldiv!(Xs_vec, lhs, rhs_vec)
@@ -172,7 +172,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
                     end
                 end
                 if lhs === nothing
-                    _step_rk_imex_explicit_fallback!(state, solver)
+                    _step_rk_imex_explicit_fallback!(state, solver, ts)
                     return nothing
                 end
                 _rk_ldiv!(Xs_vec, lhs, rhs_vec)
@@ -484,13 +484,20 @@ function _step_explicit_rk_cpu!(state::TimestepperState, solver::InitialValueSol
 end
 
 """
-    _step_rk_imex_explicit_fallback!(state, solver)
+    _step_rk_imex_explicit_fallback!(state, solver, ts=state.timestepper)
 
-Fallback to fully explicit RK when no L_matrix is provided.
-Uses only the explicit tableau coefficients.
+Fallback to fully explicit RK when no L_matrix is provided. Uses only `ts`'s
+explicit tableau coefficients.
+
+`ts` MUST be the RK tableau actually in use, which is NOT always
+`state.timestepper`: during multistep startup (e.g. SBDF3) the bootstrap calls
+`step_rk_imex!(state, solver; ts=RK443())` while `state.timestepper` is the
+multistep method, which has no `A_explicit` field. Reading `state.timestepper`
+here instead of the passed `ts` therefore errors with `type SBDF3 has no field
+A_explicit`. The caller passes its `ts` through.
 """
-function _step_rk_imex_explicit_fallback!(state::TimestepperState, solver::InitialValueSolver)
-    ts = state.timestepper
+function _step_rk_imex_explicit_fallback!(state::TimestepperState, solver::InitialValueSolver,
+                                          ts::TimeStepper=state.timestepper)
     _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
 end
 
