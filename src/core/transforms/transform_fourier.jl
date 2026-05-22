@@ -126,25 +126,40 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
 
     # Walk transforms in reverse order. `step` counts 1..n_transforms so
     # we can detect the final step (step == n_transforms) to write directly
-    # into the field's pre-allocated grid buffer.
+    # into the field's pre-allocated grid buffer. Each stage runs behind
+    # `_backward_transform_stage!`, a function barrier — see its docstring.
     for step in 1:n_transforms
         transform = transforms[n_transforms - step + 1]
-        out_shape, out_eltype = _backward_output_spec(current, transform)
-        if step == n_transforms
-            grid = get_grid_data(field)
-            if grid === nothing || size(grid) != out_shape || eltype(grid) != out_eltype
-                grid = zeros(out_eltype, out_shape...)
-                set_grid_data!(field, grid)
-            end
-            _apply_backward!(grid, current, transform)
-            current = grid
-        else
-            out = _get_scratch_for_transform!(transform, :bwd_inter, out_shape, out_eltype)
-            _apply_backward!(out, current, transform)
-            current = out
-        end
+        current = _backward_transform_stage!(field, transform, current, step == n_transforms)
     end
     field.current_layout = :g
+end
+
+"""
+    _backward_transform_stage!(field, transform, in_arr, is_final) → out_arr
+
+Function barrier for one backward transform stage — the mirror of
+`_forward_transform_stage!`. `transform` arrives as `Any` (element of
+`dist.transforms::Vector{Any}`) and `in_arr` as an abstract `AbstractArray`;
+dispatching through this boundary makes Julia specialize the body on both
+concrete types so `_backward_output_spec`, scratch/plan lookup and the in-place
+`mul!` resolve statically and run allocation-free on a warm cache.
+"""
+function _backward_transform_stage!(field::ScalarField, transform, in_arr::AbstractArray,
+                                    is_final::Bool)
+    out_shape, out_eltype = _backward_output_spec(in_arr, transform)
+    if is_final
+        grid = get_grid_data(field)
+        if grid === nothing || size(grid) != out_shape || eltype(grid) != out_eltype
+            grid = zeros(out_eltype, out_shape...)
+            set_grid_data!(field, grid)
+        end
+        _apply_backward!(grid, in_arr, transform)
+        return grid
+    end
+    out = _get_scratch_for_transform!(transform, :bwd_inter, out_shape, out_eltype)
+    _apply_backward!(out, in_arr, transform)
+    return out
 end
 
 function _fourier_backward(data::AbstractArray, transform::FourierTransform)

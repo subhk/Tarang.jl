@@ -229,17 +229,22 @@ _backward_output_spec(in, ::Transform) = (size(in), eltype(in))
 # ---------------------------------------------------------------------------
 
 """
-    _get_or_alloc_scratch!(cache::Dict, key::Tuple, shape::Tuple, T::Type) → AbstractArray
+    _get_or_alloc_scratch!(cache::Dict, key::Tuple, shape::NTuple{N,Int}, T::Type) → Array{T,N}
 
 Look up a pre-allocated array in `cache[key]`. If the entry is missing or
 has the wrong shape/eltype, allocate a new `zeros(T, shape...)` and store
 it. Subsequent calls with the same key return the cached array without
 allocation.
 """
-@inline function _get_or_alloc_scratch!(cache::Dict, key::Tuple, shape::Tuple, ::Type{T}) where {T}
+@inline function _get_or_alloc_scratch!(cache::Dict, key::Tuple, shape::NTuple{N,Int}, ::Type{T}) where {N,T}
     buf = get(cache, key, nothing)
-    if buf !== nothing && size(buf) == shape && eltype(buf) === T
-        return buf::AbstractArray{T}
+    # `buf isa Array{T,N}` narrows the abstract `Dict`-value type to a concrete
+    # array, so `size(buf)` and the returned value are statically typed. Without
+    # the narrowing, `size(buf)`/`eltype(buf)` on an abstract `AbstractArray`
+    # dynamic-dispatch and box on every hot-path call. This function only ever
+    # stores `zeros(T, shape...)` (an `Array`), so the narrowing always hits.
+    if buf isa Array{T,N} && size(buf) == shape
+        return buf
     end
     new_buf = zeros(T, shape...)
     cache[key] = new_buf

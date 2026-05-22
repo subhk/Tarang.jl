@@ -76,24 +76,31 @@ struct RK222 <: TimeStepper
     c_implicit::Vector{Float64}
 
     function RK222()
-        stages = 2
+        # ARS(2,2,2) — Ascher, Ruuth, Spiteri (1997). 3-stage form. The explicit
+        # and implicit tableaux MUST share the abscissae c=[0,γ,1] for the IMEX
+        # combination to be 2nd order (the explicit and implicit stages have to be
+        # evaluated at the same stage times). The previous 2-stage form had
+        # c_explicit=[0,1] ≠ c_implicit=[γ,1], which silently dropped it to 1st order.
+        stages = 3
         γ = 1 - 1/√2  # ≈ 0.29289321881345254
 
-        # Explicit tableau
+        # Explicit tableau (ERK), c = [0, γ, 1]
         A_explicit = [
-            0.0  0.0;
-            1.0  0.0
+            0.0    0.0      0.0;
+            γ      0.0      0.0;
+            γ      1.0-γ    0.0
         ]
-        b_explicit = [0.5, 0.5]
-        c_explicit = [0.0, 1.0]
+        b_explicit = [0.0, 1.0-γ, γ]
+        c_explicit = [0.0, γ, 1.0]
 
-        # Implicit tableau (SDIRK)
+        # Implicit tableau (ESDIRK, explicit first stage, same γ diagonal), c = [0, γ, 1]
         A_implicit = [
-            γ      0.0;
-            1.0-γ  γ
+            0.0    0.0      0.0;
+            0.0    γ        0.0;
+            0.0    1.0-γ    γ
         ]
-        b_implicit = [1.0-γ, γ]
-        c_implicit = [γ, 1.0]
+        b_implicit = [0.0, 1.0-γ, γ]
+        c_implicit = [0.0, γ, 1.0]
 
         new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
     end

@@ -219,31 +219,49 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
         return
     end
 
-    for (idx, transform) in enumerate(transforms)
-        out_shape, out_eltype = _forward_output_spec(current, transform)
-        if idx == n_transforms
-            # Final stage: target is the field's coeff buffer. Reuse when
-            # shape/eltype match (the common case); otherwise allocate once.
-            coeff = get_coeff_data(field)
-            if coeff === nothing || size(coeff) != out_shape || eltype(coeff) != out_eltype
-                coeff = zeros(out_eltype, out_shape...)
-                set_coeff_data!(field, coeff)
-            end
-            _apply_forward!(coeff, current, transform)
-            current = coeff
-        else
-            # Intermediate stage: write into this transform's cached scratch.
-            # Key by (out_shape, out_eltype, :fwd_inter) so it doesn't collide
-            # with other scratch entries (e.g., the DCT real/imag buffers on
-            # ChebyshevTransform, which live in a differently-typed Dict).
-            # FourierTransform.fwd_scratch is Dict{Tuple, AbstractArray}; use
-            # the generic _get_or_alloc_scratch! helper.
-            out = _get_scratch_for_transform!(transform, :fwd_inter, out_shape, out_eltype)
-            _apply_forward!(out, current, transform)
-            current = out
-        end
+    # Index-based loop (not `enumerate`) avoids a `Tuple{Int, Any}` heap
+    # allocation per step when `transforms isa Vector{Any}`. Each stage runs
+    # behind `_forward_transform_stage!`, a function barrier — see its docstring.
+    for idx in 1:n_transforms
+        transform = transforms[idx]
+        current = _forward_transform_stage!(field, transform, current, idx == n_transforms)
     end
     field.current_layout = :c
+end
+
+"""
+    _forward_transform_stage!(field, transform, in_arr, is_final) → out_arr
+
+Function barrier for one forward transform stage. `transform` arrives as
+`Any` (element of `dist.transforms::Vector{Any}`) and `in_arr` as an abstract
+`AbstractArray`; calling through this boundary makes Julia dispatch on the
+concrete transform type AND specialize on `typeof(in_arr)` exactly once. Inside,
+`_forward_output_spec`, scratch lookup, plan lookup and `mul!` all resolve
+statically, so a warm cache runs allocation-free.
+
+Without the barrier this work runs inline in the type-unstable `forward_transform!`
+body, where per-stage dynamic dispatch + `Any`-tuple destructuring + shape
+splatting box heavily on Julia 1.10 (≈6.6 KiB/round-trip vs the 2 KiB test budget).
+"""
+function _forward_transform_stage!(field::ScalarField, transform, in_arr::AbstractArray,
+                                   is_final::Bool)
+    out_shape, out_eltype = _forward_output_spec(in_arr, transform)
+    if is_final
+        # Final stage: target is the field's coeff buffer. Reuse when
+        # shape/eltype match (the common case); otherwise allocate once.
+        coeff = get_coeff_data(field)
+        if coeff === nothing || size(coeff) != out_shape || eltype(coeff) != out_eltype
+            coeff = zeros(out_eltype, out_shape...)
+            set_coeff_data!(field, coeff)
+        end
+        _apply_forward!(coeff, in_arr, transform)
+        return coeff
+    end
+    # Intermediate stage: write into this transform's cached scratch, keyed by
+    # (out_shape, out_eltype, :fwd_inter) to avoid colliding with other scratch.
+    out = _get_scratch_for_transform!(transform, :fwd_inter, out_shape, out_eltype)
+    _apply_forward!(out, in_arr, transform)
+    return out
 end
 
 # ---------------------------------------------------------------------------
