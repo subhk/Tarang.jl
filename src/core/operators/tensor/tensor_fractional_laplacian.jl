@@ -112,10 +112,39 @@ the squared wavenumber magnitude at each spectral coefficient location.
 """
 function compute_wavenumber_squared_grid(field::ScalarField)
     bases = field.bases
-    data_shape = size(get_coeff_data(field))
+    cd = get_coeff_data(field)
+
+    # MPI-distributed (PencilArray): build |k|² on each rank's LOCAL coefficients
+    # using its GLOBAL wavenumber indices (axes_local), in rfft/fft layout. The
+    # serial path below uses the global wavenumber arrays directly.
+    if isa(cd, PencilArrays.PencilArray)
+        k_squared = similar_zeros(cd, Float64, size(cd)...)
+        kp = parent(k_squared)
+        pencil = PencilArrays.pencil(cd)
+        local_axes = pencil.axes_local
+        perm_tuple = Tuple(PencilArrays.permutation(cd))
+        for (axis, basis) in enumerate(bases)
+            k_axis = if isa(basis, RealFourier)
+                _is_first_real_fourier_axis(bases, axis) ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
+            elseif isa(basis, ComplexFourier)
+                wavenumbers(basis)
+            else
+                continue
+            end
+            local_range = axis <= length(local_axes) ? local_axes[axis] : (1:length(k_axis))
+            k_local = Float64.(k_axis[local_range])
+            physical_axis = findfirst(==(axis), perm_tuple)
+            physical_axis === nothing && (physical_axis = axis)
+            shp = ntuple(i -> i == physical_axis ? length(k_local) : 1, ndims(kp))
+            kp .+= reshape(k_local .^ 2, shp...)
+        end
+        return k_squared
+    end
+
+    data_shape = size(cd)
 
     # Initialize with zeros on the same device as get_coeff_data(field)
-    k_squared = similar_zeros(get_coeff_data(field), Float64, data_shape...)
+    k_squared = similar_zeros(cd, Float64, data_shape...)
 
     # Add contribution from each basis
     for (axis, basis) in enumerate(bases)

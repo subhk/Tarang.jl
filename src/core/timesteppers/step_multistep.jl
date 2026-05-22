@@ -362,6 +362,15 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
+    # MPI pure-Fourier: no subproblems are built (those are Fourier+Chebyshev
+    # only), and the global-matrix implicit solve can't run distributed. Use the
+    # distributed diagonal IMEX path instead of an explicit fallback that would
+    # mishandle stiff implicit linear terms (e.g. hyperviscosity).
+    if _distributed_diagonal_imex_applicable(solver)
+        step_distributed_diagonal_imex_sbdf2!(state, solver)
+        return
+    end
+
     _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF2") && return
 
     # Initialize history arrays if needed
