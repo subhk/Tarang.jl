@@ -1,9 +1,35 @@
 """
-    Multiclass dispatch functions
+    Operator dispatch — the `multiclass_new` construction pipeline
 
-This file contains the dispatch_preprocess, dispatch_check, and invoke_constructor
-functions for each operator type. These enable the multiclass_new pattern for
-operator construction.
+Every public operator (`Gradient`, `Laplacian`, `Differentiate`, …) is built
+through a uniform three-stage pipeline instead of by calling its struct
+constructor directly. The indirection lets one operator name accept several
+argument arrangements (e.g. `Gradient(u)` vs `Gradient(u, coordsys)`), validate
+inputs with clear error messages, and fill in defaults — all before the concrete
+struct is created.
+
+For each operator type `Op`, up to three methods are defined in this file:
+
+  1. `dispatch_preprocess(::Type{Op}, args, kwargs) -> (args′, kwargs′)`
+     Normalize the call: expand short forms and inject defaults (the coordinate
+     system, a derivative order of 1, …). OPTIONAL — omitted when the operator
+     takes one fixed argument list, in which case `args` passes through unchanged.
+
+  2. `dispatch_check(::Type{Op}, args, kwargs) -> true`
+     Validate argument types/values, throwing `ArgumentError` with a specific
+     message on bad input. Runs after preprocess, so it sees normalized args.
+
+  3. `invoke_constructor(::Type{Op}, args, kwargs) -> Op`
+     Call the operator's real inner constructor (`_Op_constructor`, aliased in
+     `types.jl`) with the validated, normalized arguments.
+
+The caller — `multiclass_new`, in the operator registration machinery — runs the
+three in order: preprocess → check → construct.
+
+`Gradient` below is the canonical example exercising all three stages. Operators
+that need no normalization (e.g. `Laplacian`, `Divergence`) define only
+`dispatch_check` + `invoke_constructor` and follow the same shape by analogy, so
+the per-operator methods are intentionally left without individual docstrings.
 """
 
 # ============================================================================
@@ -49,14 +75,21 @@ end
 # Operator Arithmetic (Basic operators for composition)
 # ============================================================================
 
+# Composing two operators with +, -, * does NOT compute anything — it builds an
+# expression-tree node (`AddOperator`, …) that defers evaluation until the tree
+# is later walked in grid/coefficient space. This is what lets users write
+# natural expressions like `lap(u) - grad(p)` and have them assembled lazily.
 Base.:+(op1::Operator, op2::Operator) = AddOperator(op1, op2)
 Base.:-(op1::Operator, op2::Operator) = SubtractOperator(op1, op2)
 Base.:*(op1::Operator, op2::Operator) = MultiplyOperator(op1, op2)
 
 # ============================================================================
-# Gradient Dispatch
+# Gradient Dispatch  — CANONICAL EXAMPLE of the three-stage pattern
 # ============================================================================
 
+# Preprocess: the 1-arg form `Gradient(u)` infers the coordinate system from the
+# operand so users needn't pass it explicitly; the 2-arg form is taken as-is.
+# After this, `dispatch_check` and `invoke_constructor` always see (operand, coordsys).
 function dispatch_preprocess(::Type{Gradient}, args::Tuple, kwargs::NamedTuple)
     if length(args) == 1
         operand = args[1]

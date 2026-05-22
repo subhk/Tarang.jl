@@ -1,7 +1,24 @@
 # ============================================================================
 # Global-Matrix Timestepper Step Functions
 # ============================================================================
+#
+# These steppers operate on ONE global `(M, L)` matrix pair spanning all
+# variables and modes, factorizing `(a*M + b*L)` once and reusing the LU across
+# steps. This is the legacy path taken when no per-subproblem decomposition is
+# available (see step_subproblem_rk.jl for the preferred per-Fourier-mode path).
+# Each `step_*!` here advances one step of a specific multistep/RK scheme and
+# falls back to a simpler scheme when its history or matrix prerequisites are
+# unmet. Sign convention matches the rest of the timesteppers: `M dX/dt + L X = F`.
 
+"""
+    _prepare_global_matrix_timestep!(state, solver, method_name, fallback_name, fallback_step!)
+        -> (L_matrix, M_matrix, used_fallback)
+
+Shared entry guard for the implicit global-matrix steppers. Fetches the global
+`L`/`M` matrices and, if either required matrix is missing, logs the reason and
+runs `fallback_step!` (an explicit scheme). `used_fallback === true` signals the
+caller to return immediately — the step has already been taken by the fallback.
+"""
 function _prepare_global_matrix_timestep!(state::TimestepperState,
                                           solver::InitialValueSolver,
                                           method_name::String,
@@ -296,8 +313,11 @@ function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
     end
 end
 
+# `step_rkgfy!` and `step_rk443_imex!` are named scheme entry points that carry
+# no bespoke logic — they delegate to the generic `step_rk_imex!` so every IMEX
+# RK variant shares one M/L-handling implementation, falling back to explicit
+# RK443 if the generic path throws.
 function step_rkgfy!(state::TimestepperState, solver::InitialValueSolver)
-    # Reuse the generic IMEX RK implementation for consistent M/L handling
     try
         step_rk_imex!(state, solver)
     catch e
@@ -307,7 +327,6 @@ function step_rkgfy!(state::TimestepperState, solver::InitialValueSolver)
 end
 
 function step_rk443_imex!(state::TimestepperState, solver::InitialValueSolver)
-    # Reuse the generic IMEX RK implementation for consistent M/L handling
     try
         step_rk_imex!(state, solver)
     catch e

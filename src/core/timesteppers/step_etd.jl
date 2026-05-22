@@ -144,6 +144,7 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     iteration = state.timestepper_data[:etd_cnab2_iteration]
 
     # Check if we have enough history for 2-step Adams-Bashforth
+    @warn "ETDPATH cnab2 iter=$iteration histlen=$(length(state.history))" maxlog=5
     if iteration < 1 || length(state.history) < 2
         @debug "ETD-CNAB2 requires iteration >= 1, falling back to ETDRK2 for startup"
         step_etd_rk222!(state, solver)

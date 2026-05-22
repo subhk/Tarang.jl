@@ -1,10 +1,24 @@
 # Derivative evaluator entry points for gradient, divergence, and Differentiate.
+#
+# These functions are the boundary between the symbolic operator tree and the
+# numerical spectral-differentiation kernels. They resolve the operand's field
+# rank and basis, allocate the correctly-typed result, and delegate the actual
+# per-basis math to `evaluate_fourier_derivative!`, `evaluate_chebyshev_derivative!`,
+# and `evaluate_legendre_derivative!` in the sibling `derivatives_*.jl` files.
 
 # ============================================================================
 # Gradient and Divergence Evaluation
 # ============================================================================
 
-"""Evaluate gradient operator."""
+"""
+    evaluate_gradient(grad_op, layout=:g) -> VectorField | TensorField
+
+Evaluate `∇` by differentiating along every coordinate of the operand's system.
+The result rank goes up by one: a `ScalarField` yields a `VectorField`
+(`∂f/∂xᵢ`); a `VectorField` yields a `TensorField` Jacobian (`Tᵢⱼ = ∂uⱼ/∂xᵢ`).
+`layout` selects whether components are returned in grid (`:g`) or coefficient
+(`:c`) space. Throws `ArgumentError` for unsupported operand ranks.
+"""
 function evaluate_gradient(grad_op::Gradient, layout::Symbol=:g)
     operand = grad_op.operand
     coordsys = grad_op.coordsys
@@ -36,7 +50,16 @@ function evaluate_gradient(grad_op::Gradient, layout::Symbol=:g)
     end
 end
 
-"""Evaluate divergence operator."""
+"""
+    evaluate_divergence(div_op, layout=:g) -> ScalarField
+
+Evaluate `∇·u` for a `VectorField`, lowering rank by one: sums `∂uᵢ/∂xᵢ` over
+all coordinates into a single scalar result. Accumulation is done directly on
+the result's field data (not via the symbolic `+` tree) to avoid building
+intermediate operator nodes. The result buffer is taken from the field pool and
+zero-initialized in the requested `layout`; PencilArray buffers are zeroed via
+their `parent`. Throws `ArgumentError` for non-vector operands.
+"""
 function evaluate_divergence(div_op::Divergence, layout::Symbol=:g)
     operand = div_op.operand
 
@@ -96,7 +119,20 @@ end
 # Differentiate Evaluation
 # ============================================================================
 
-"""Evaluate differentiation operator."""
+"""
+    evaluate_differentiate(diff_op, layout=:g) -> ScalarField | VectorField
+
+Evaluate `∂ⁿf/∂(coord)ⁿ` along a single coordinate. `VectorField` operands are
+differentiated component-wise; `ScalarField` operands are differentiated by
+locating the basis whose `element_label` matches `coord` and dispatching to the
+matching spectral kernel (Fourier / Chebyshev / Legendre).
+
+Handles two degenerate cases without touching a kernel: `order == 0` returns a
+copy (identity), and a coordinate absent from the operand's bases (a constant
+dimension) returns a zeroed field. Note the result basis can differ from the
+operand's — e.g. Chebyshev differentiation maps `ChebyshevT → ChebyshevU` — so
+the result is built from the differentiated component's bases, not the operand's.
+"""
 function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
     operand = diff_op.operand
     coord = diff_op.coord

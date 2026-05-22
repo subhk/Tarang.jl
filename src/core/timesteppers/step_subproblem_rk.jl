@@ -202,6 +202,11 @@ function _subproblem_solver_kwargs(choice)
     return kwargs
 end
 
+# Uniform solve interface over the three LHS-solver backends a subproblem may
+# hold: a `WoodburySolver` (block Schur), a `MatSolvers.AbstractMatSolver`
+# (sparse LU/QR, CPU or GPU), or a bare factorization object (`\`). Dispatch on
+# the solver type keeps the stage loop backend-agnostic. The `!` variants write
+# into a caller-provided buffer to avoid per-solve allocation.
 _solve_cached_system(lhs_solver::WoodburySolver, rhs::AbstractVector{ComplexF64}) =
     _woodbury_solve(lhs_solver, rhs)
 _solve_cached_system(lhs_solver::MatSolvers.AbstractMatSolver, rhs::AbstractVector{ComplexF64}) =
@@ -245,6 +250,17 @@ end
 _apply_subproblem_operator!(dest::AbstractVector, op, x::AbstractVector) =
     (_assign_to_buffer!(dest, op * x); dest)
 
+"""
+    _sp_stage_vector!(sp, kind, [stage,] n, [like]) -> Vector{ComplexF64}
+
+Fetch a reusable length-`n` work buffer cached on the subproblem under the key
+`(kind, stage)` (e.g. `:rhs`, `:F_stage`, `:sol_final`). Reusing these across
+timesteps is what keeps the RK hot path allocation-light. A cached buffer is
+reused only when its length matches AND its device matches `like` (so a GPU run
+never accidentally hands back a host buffer); otherwise a fresh zeroed buffer is
+allocated on the subproblem's architecture. The `stage`-less and `like`-less
+methods default to `stage = 0` and a CPU/arch-default allocation respectively.
+"""
 function _sp_stage_vector!(sp::Subproblem, kind::Symbol, stage::Int, n::Int,
                            like::AbstractVector)
     key = (kind, stage)

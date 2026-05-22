@@ -30,6 +30,22 @@ end
     return y
 end
 
+"""
+    step_rk_imex!(state, solver; ts=state.timestepper) -> nothing
+
+Advance the solution one step with an IMEX Runge-Kutta scheme: the explicit
+tableau `(A_explicit, b_explicit)` treats `F(X)` (advection, forcing) while the
+implicit tableau `(A_implicit, b_implicit)` treats `L*X` (stiff diffusion).
+
+Picks a runtime path in priority order (see the file header):
+per-subproblem sparse solves → explicit fallback (GPU/MPI without subproblems,
+or no `L_matrix`) → global-matrix factorization. Each stage `s` solves
+`(M + dt*a_ss*L) X_s = M*X_n + dt Σ_{j<s}(a^E_{sj} F_j - a^I_{sj} L X_j)`; the
+new state is then recovered from a final mass-matrix solve. Handles the three
+mass-matrix regimes — absent (`I + dt a L`), regular, and singular/DAE (where
+`L` fills the constraint rows). Mutates `state` in place (pushes the new state
+onto `state.history`).
+"""
 function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::TimeStepper=state.timestepper)
     current_state = state.history[end]
     dt = state.dt
@@ -194,6 +210,24 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
     return nothing
 end
 
+# ----------------------------------------------------------------------------
+# DAE / singular-mass final update.
+#
+# When M has all-zero rows, those rows are algebraic constraints (div(u)=0,
+# boundary conditions, gauge), not evolution equations, so `M X_{n+1} = rhs`
+# is singular and cannot be solved directly. The fix: replace each zero M row
+# with the corresponding L row, turning the constraint into an enforceable
+# linear equation, then solve the patched system. The patched matrix and its
+# factorization are cached and rebuilt only when M or L change identity.
+# ----------------------------------------------------------------------------
+
+"""
+    _solve_constrained_mass_update!(dest, state, solver, M_matrix, L_matrix, rhs) -> dest
+
+Final-stage update for DAE systems (singular `M`). Solves the row-patched system
+(zero `M` rows swapped for `L` rows) and writes the algebraic constraint targets
+into the corresponding RHS entries before solving. See the block comment above.
+"""
 function _solve_constrained_mass_update!(dest::AbstractVector{ComplexF64},
                                          state::TimestepperState,
                                          solver::InitialValueSolver,
@@ -245,6 +279,9 @@ function _constrained_mass_matrix(M::AbstractMatrix, L::AbstractMatrix, zero_row
     return constrained
 end
 
+# Write the target value of each algebraic constraint into its RHS slot. After
+# the row-swap, a zero-M row enforces `L_row * X = value`; this fills in `value`
+# from each equation's F term (constraints default to 0, e.g. div(u)=0).
 function _apply_global_algebraic_rhs!(rhs::AbstractVector{ComplexF64},
                                       problem::Problem,
                                       zero_rows::Vector{Int})

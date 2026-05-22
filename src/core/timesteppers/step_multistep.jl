@@ -513,9 +513,11 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
 
     iteration = state.timestepper_data[:sbdf3_iteration]
 
-    # Startup: seed the first 2 steps with order-3 IMEX RK so the multistep
-    # reaches its nominal 3rd order (SBDF1/SBDF2 startup would cap it at order 2).
-    if iteration < 2 || length(state.history) < 3 || length(state.dt_history) < 3
+    # Startup: seed the early steps with order-3 IMEX RK so the multistep reaches
+    # its nominal 3rd order (SBDF1/SBDF2 startup would cap it at order 2). The
+    # global path needs the MX/F deques (populated by the startup), NOT a deep
+    # state.history, so the switch is gated on iteration/timestep history only.
+    if iteration < 2 || length(state.dt_history) < 3
         _multistep_rk443_startup!(state, solver, 3, :sbdf3_iteration)
         return
     end
@@ -635,10 +637,10 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
 
     iteration = state.timestepper_data[:sbdf4_iteration]
 
-    # Startup: seed the first 3 steps with order-3 IMEX RK. (RK443 is order 3, so
-    # the startup error is O(dt⁴) — enough not to cap SBDF4's 4th order to leading
-    # order; SBDF1/SBDF2 startup would cap it at order 2.)
-    if iteration < 3 || length(state.history) < 4 || length(state.dt_history) < 4
+    # Startup: seed the early steps with order-3 IMEX RK (gated on iteration /
+    # timestep history; the global path needs the MX/F deques, not a deep
+    # state.history). SBDF1/SBDF2 startup would cap the order at 2.
+    if iteration < 3 || length(state.dt_history) < 4
         _multistep_rk443_startup!(state, solver, 4, :sbdf4_iteration)
         return
     end
