@@ -30,8 +30,7 @@ end
     return y
 end
 
-function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver)
-    ts = state.timestepper
+function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::TimeStepper=state.timestepper)
     current_state = state.history[end]
     dt = state.dt
     t = solver.sim_time

@@ -452,15 +452,36 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 end
 
 """
-    Semi-implicit BDF3 following Tarang implementation.
+RK443-seeded startup for the global (non-subproblem) multistep methods: record
+the M·X and F history at the current state, then advance the state with an
+order-3 IMEX RK step. A high-order self-start (instead of SBDF1/SBDF2) keeps the
+one-time startup error from capping the multistep's global convergence order.
+"""
+function _multistep_rk443_startup!(state::TimestepperState, solver::InitialValueSolver,
+                                   depth::Int, iter_key::Symbol)
+    current_state = state.history[end]
+    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
+    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
+    if L_matrix !== nothing && M_matrix !== nothing
+        X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
+        MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+        F_current = evaluate_rhs(solver, current_state, solver.sim_time)
+        F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
+        MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
+        F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
+        _prepend_history_buffer!(MX_history, MX_current, depth)
+        _prepend_history_buffer!(F_history, F_current_vec, depth)
+    end
+    # Advance the state with an order-3 IMEX RK step (RK443 tableau passed
+    # explicitly; `state.timestepper` is parametric on the multistep type and
+    # cannot be reassigned).
+    step_rk_imex!(state, solver; ts=_RK443_SINGLETON)
+    state.timestepper_data[iter_key] += 1
+    return
+end
 
-    Tarang coefficients (timesteppers:425-447):
-    For iteration >= 2: uses complex 3rd-order BDF coefficients
-    For iteration < 2: falls back to SBDF2
-
-    Implicit: 3rd-order BDF
-    Explicit: 3rd-order extrapolation
-    """
+"""Semi-implicit BDF3: 3rd-order BDF (implicit) + 3rd-order extrapolation (explicit).
+RK443-seeded startup for the first 2 steps; full SBDF3 thereafter."""
 function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
@@ -492,23 +513,14 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
 
     iteration = state.timestepper_data[:sbdf3_iteration]
 
-    # Check if we have enough history for SBDF3
-    if iteration < 2 || length(state.history) < 3
-        @debug "SBDF3 requires iteration >= 2, falling back to SBDF2"
-        step_sbdf2!(state, solver)
-        state.timestepper_data[:sbdf3_iteration] += 1
+    # Startup: seed the first 2 steps with order-3 IMEX RK so the multistep
+    # reaches its nominal 3rd order (SBDF1/SBDF2 startup would cap it at order 2).
+    if iteration < 2 || length(state.history) < 3 || length(state.dt_history) < 3
+        _multistep_rk443_startup!(state, solver, 3, :sbdf3_iteration)
         return
     end
 
     dt = state.dt
-
-    # Get timestep history for variable timestep ratios (Tarang pattern)
-    if length(state.dt_history) < 3
-        @warn "SBDF3 requires 3 timestep history, falling back to SBDF2"
-        step_sbdf2!(state, solver)
-        state.timestepper_data[:sbdf3_iteration] += 1
-        return
-    end
 
     k2 = state.dt_history[end]     # current timestep
     k1 = state.dt_history[end-1]   # previous timestep
@@ -623,23 +635,15 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
 
     iteration = state.timestepper_data[:sbdf4_iteration]
 
-    # Check if we have enough history for SBDF4
-    if iteration < 3 || length(state.history) < 4
-        @debug "SBDF4 requires iteration >= 3, falling back to SBDF3"
-        step_sbdf3!(state, solver)
-        state.timestepper_data[:sbdf4_iteration] += 1
+    # Startup: seed the first 3 steps with order-3 IMEX RK. (RK443 is order 3, so
+    # the startup error is O(dt⁴) — enough not to cap SBDF4's 4th order to leading
+    # order; SBDF1/SBDF2 startup would cap it at order 2.)
+    if iteration < 3 || length(state.history) < 4 || length(state.dt_history) < 4
+        _multistep_rk443_startup!(state, solver, 4, :sbdf4_iteration)
         return
     end
 
     dt = state.dt
-
-    # Get timestep history for variable timestep ratios
-    if length(state.dt_history) < 4
-        @warn "SBDF4 requires 4 timestep history, falling back to SBDF3"
-        step_sbdf3!(state, solver)
-        state.timestepper_data[:sbdf4_iteration] += 1
-        return
-    end
 
     k3 = state.dt_history[end]     # current timestep
     k2 = state.dt_history[end-1]   # previous timestep
