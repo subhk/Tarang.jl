@@ -125,7 +125,19 @@ using Test
         @test isdefined(Tarang, :_apply_mass_inverse!)
         if isdefined(Tarang, :_apply_mass_inverse!)
             Tarang._apply_mass_inverse!(dest, M_factor, rhs)
-            allocs = @allocated Tarang._apply_mass_inverse!(dest, M_factor, rhs)
+            # Baseline-subtract + average to remove the Julia 1.12 @allocated
+            # bookkeeping that can be charged inside testsets (mirrors the SPQR
+            # solver allocation test above), which otherwise rarely flakes this.
+            repeats = 128
+            baseline_allocs = @allocated begin
+                for _ in 1:repeats; nothing; end
+                nothing
+            end
+            solve_allocs = @allocated begin
+                for _ in 1:repeats; Tarang._apply_mass_inverse!(dest, M_factor, rhs); end
+                nothing
+            end
+            allocs = max(0, solve_allocs - baseline_allocs) / repeats
             @test allocs <= 64
             @test dest ≈ rhs
         end
@@ -144,7 +156,18 @@ using Test
 
         Tarang._solve_cached_system!(dest, woodbury, rhs)
         expected = Tarang._woodbury_solve(woodbury, rhs)
-        allocs = @allocated Tarang._solve_cached_system!(dest, woodbury, rhs)
+        # Baseline-subtract + average (see SPQR allocation test) to avoid the
+        # Julia 1.12 @allocated-inside-testset bookkeeping artifact.
+        repeats = 128
+        baseline_allocs = @allocated begin
+            for _ in 1:repeats; nothing; end
+            nothing
+        end
+        solve_allocs = @allocated begin
+            for _ in 1:repeats; Tarang._solve_cached_system!(dest, woodbury, rhs); end
+            nothing
+        end
+        allocs = max(0, solve_allocs - baseline_allocs) / repeats
 
         @test allocs <= 64
         @test dest ≈ expected
