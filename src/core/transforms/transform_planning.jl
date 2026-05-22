@@ -314,13 +314,13 @@ function setup_cpu_fft_transform!(transform::FourierTransform, basis::Union{Real
         dummy_in = zeros(real_T, basis.meta.size)
         dummy_out = zeros(complex_T, div(basis.meta.size, 2) + 1)
 
-        transform.plan_forward = FFTW.plan_rfft(dummy_in)
-        transform.plan_backward = FFTW.plan_irfft(dummy_out, basis.meta.size)
+        transform.plan_forward = FFTW.plan_rfft(dummy_in; flags=FFTW.MEASURE)
+        transform.plan_backward = FFTW.plan_irfft(dummy_out, basis.meta.size; flags=FFTW.MEASURE)
     else # ComplexFourier
         dummy = zeros(complex_T, basis.meta.size)
 
-        transform.plan_forward = FFTW.plan_fft(dummy)
-        transform.plan_backward = FFTW.plan_ifft(dummy)
+        transform.plan_forward = FFTW.plan_fft(dummy; flags=FFTW.MEASURE)
+        transform.plan_backward = FFTW.plan_ifft(dummy; flags=FFTW.MEASURE)
     end
     transform.plan_dtype = real_T
 end

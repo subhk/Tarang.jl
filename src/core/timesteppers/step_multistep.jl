@@ -388,6 +388,7 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 
     L_matrix, M_matrix, fell_back =
         _prepare_global_multistep_matrices!(state, solver, "SBDF2", "SBDF1", step_sbdf1!)
+    @warn "SBDF2DBG iter=$iteration hist=$(length(state.history)) fellback=$fell_back Lnz=$(L_matrix===nothing ? -1 : (L_matrix isa SparseMatrixCSC ? nnz(L_matrix) : -2))" maxlog=5
     fell_back && return
     
     # Get timestep history for variable timestep (following Tarang lines 357-358)
@@ -423,6 +424,7 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     _prepend_history_buffer!(MX_history, MX_current, 2)
     _prepend_history_buffer!(LX_history, LX_current, 2)
     _prepend_history_buffer!(F_history, F_current_vec, 2)
+    @warn "SBDF2DBG2 lenF=$(length(F_history)) Fnorm0=$(length(F_history)>=1 ? maximum(abs.(F_history[1])) : -1.0) Fdiff=$(length(F_history)>=2 ? maximum(abs.(F_history[1].-F_history[2])) : -1.0)" maxlog=5
 
     # Step 5: Build RHS following Tarang MultistepIMEX pattern
     # RHS = c[1]*F[0] + c[2]*F[1] - a[1]*MX[0] - a[2]*MX[1] - 0*LX terms (bmax=1)

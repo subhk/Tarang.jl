@@ -22,6 +22,7 @@ const TEST_FILES = [
     "test_pencil_system.jl",
     "test_pencil_matrices.jl",
     "test_transforms.jl",
+    "test_fftw_threads.jl",
     "test_solvers.jl",
     "test_flow_tools.jl",
     "test_quick_domains.jl",

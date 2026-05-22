@@ -36,6 +36,11 @@ mutable struct PaddedDealiasingWorkspace{T<:AbstractFloat, A<:AbstractArray{Comp
     plan_forward::AbstractFFTPlan
     plan_backward::AbstractFFTPlan
 
+    # In-place plans for the ORIGINAL-size spectral buffers (spec1/spec2/spec_result),
+    # so the per-call forward/inverse FFTs reuse buffers instead of allocating.
+    plan_spec_forward::AbstractFFTPlan
+    plan_spec_backward::AbstractFFTPlan
+
     # Architecture for dispatch
     arch::AbstractArchitecture
 end
@@ -115,21 +120,31 @@ function _get_padded_workspace!(evaluator::NonlinearEvaluator, bases::Tuple, dty
     spec2 = zeros(_arch, Complex{T}, orig_t...)
     spec_result = zeros(_arch, Complex{T}, orig_t...)
 
-    # Create FFT plans — CPU gets FFTW.MEASURE, GPU gets plain plan_fft
+    # Create FFT plans — CPU gets FFTW.MEASURE, GPU gets plain plan_fft.
+    # `plan_*!` are in-place (mutate their argument); the spec plans operate on the
+    # original-size buffers. The forward spec plan is built on spec1 and reused on
+    # spec2 (identical size/alignment).
     if is_gpu(_arch)
         # For GPU: AbstractFFTs.plan_fft dispatches to CUFFT (no flags arg)
         plan_forward = plan_fft(padded1, fourier_dims)
         plan_backward = plan_ifft(padded1, fourier_dims)
+        plan_spec_forward = plan_fft!(spec1, fourier_dims)
+        plan_spec_backward = plan_ifft!(spec_result, fourier_dims)
     else
         plan_forward = FFTW.plan_fft(padded1, fourier_dims; flags=FFTW.MEASURE)
         plan_backward = FFTW.plan_ifft(padded1, fourier_dims; flags=FFTW.MEASURE)
+        # UNALIGNED: the forward plan is built on spec1 but also applied to spec2,
+        # so it must not bake in a single buffer's memory alignment.
+        plan_spec_forward = FFTW.plan_fft!(spec1, fourier_dims; flags=FFTW.MEASURE | FFTW.UNALIGNED)
+        plan_spec_backward = FFTW.plan_ifft!(spec_result, fourier_dims; flags=FFTW.MEASURE | FFTW.UNALIGNED)
     end
 
     ws = PaddedDealiasingWorkspace{T, typeof(padded1)}(
         orig_t, pad_t, fourier_dims,
         padded1, padded2, padded_product,
         spec1, spec2, spec_result,
-        plan_forward, plan_backward, _arch
+        plan_forward, plan_backward,
+        plan_spec_forward, plan_spec_backward, _arch
     )
     evaluator.pencil_transforms[key] = ws
     return ws
@@ -295,12 +310,12 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     raw1_ws = on_architecture(ws.arch, raw1)
     raw2_ws = on_architecture(ws.arch, raw2)
 
-    # Step 1: FFT to spectral along Fourier dimensions
-    # fft/ifft dispatch to CUFFT for GPU arrays via AbstractFFTs
+    # Step 1: FFT to spectral along Fourier dimensions, in place via pre-built
+    # plans (no per-call allocation). Plans dispatch to CUFFT for GPU arrays.
     ws.spec1 .= Complex{T}.(raw1_ws)
-    ws.spec1 .= fft(ws.spec1, ws.fourier_dims)
+    ws.plan_spec_forward * ws.spec1
     ws.spec2 .= Complex{T}.(raw2_ws)
-    ws.spec2 .= fft(ws.spec2, ws.fourier_dims)
+    ws.plan_spec_forward * ws.spec2
 
     # Step 2: Pad spectral coefficients
     _pad_spectral!(ws.padded1, ws.spec1, ws.original_shape, ws.padded_shape, ws.fourier_dims)
@@ -327,7 +342,7 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     for d in ws.fourier_dims
         scale *= T(ws.padded_shape[d]) / T(ws.original_shape[d])
     end
-    ws.spec_result .= ifft(ws.spec_result, ws.fourier_dims)
+    ws.plan_spec_backward * ws.spec_result
 
     # Write result to output field
     result = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
@@ -386,6 +401,21 @@ function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64
     return field
 end
 
+"""Copy `src`'s grid data into `dst` (both in grid layout), reusing `dst`'s buffers."""
+function _copy_grid_into!(dst::ScalarField, src::ScalarField)
+    ensure_layout!(src, :g)
+    ensure_layout!(dst, :g)
+    sd = get_grid_data(src)
+    dd = get_grid_data(dst)
+    if isa(dd, PencilArrays.PencilArray) && isa(sd, PencilArrays.PencilArray)
+        copyto!(parent(dd), parent(sd))
+    else
+        copyto!(dd, sd)
+    end
+    dst.current_layout = :g
+    return dst
+end
+
 """
     evaluate_truncated_multiply_distributed(field1, field2, evaluator)
 
@@ -404,13 +434,22 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
                                                   evaluator::NonlinearEvaluator)
     factor = evaluator.dealiasing_factor
 
-    # Truncate copies of the inputs (must not mutate caller fields).
-    f1 = copy(field1)
-    f2 = copy(field2)
+    # Truncate the inputs into reusable scratch fields (consumed within this call,
+    # so sharing them across calls is safe — unlike `result`, which the caller may
+    # hold alongside a second product, e.g. CrossProduct). This avoids the two
+    # per-call `copy(field)` allocations.
+    bkey = string(hash(field1.bases))
+    f1 = get!(() -> ScalarField(field1.dist, "_nl_trunc_f1", field1.bases, field1.dtype),
+              evaluator.temp_fields, "_nl_trunc_f1_" * bkey)
+    f2 = get!(() -> ScalarField(field1.dist, "_nl_trunc_f2", field1.bases, field1.dtype),
+              evaluator.temp_fields, "_nl_trunc_f2_" * bkey)
+    _copy_grid_into!(f1, field1)
+    _copy_grid_into!(f2, field2)
     _dealias_truncate_field!(f1, factor)
     _dealias_truncate_field!(f2, factor)
 
-    # Multiply on the grid.
+    # Multiply on the grid. `result` is freshly allocated because callers may
+    # retain it while computing another product (e.g. cross product).
     result = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
     ensure_layout!(result, :g)
     result_data = get_grid_data(result)

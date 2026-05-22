@@ -430,6 +430,22 @@ function _get_distributed_diagonal_Lhats!(state::TimestepperState, solver::Initi
     return Lhats
 end
 
+# Function barriers: called with the concrete coefficient/operator array types
+# (resolved via dynamic dispatch at the call), so the broadcast bodies are fully
+# type-stable and allocation-free regardless of the abstract `_local_coeff`
+# return type or the `Dict` value type at the call site.
+@inline function _ddi_sbdf1_update!(d::AbstractArray, Lhat::AbstractArray, dt::Float64)
+    @inbounds @. d /= (1.0 + dt * Lhat)
+    return d
+end
+
+@inline function _ddi_sbdf2_update!(d::AbstractArray, dn::AbstractArray, dnm1::AbstractArray,
+                                    fn::AbstractArray, fnm1::AbstractArray,
+                                    Lhat::AbstractArray, dt::Float64)
+    @inbounds @. d = (2 * dn - 0.5 * dnm1 + dt * (2 * fn - fnm1)) / (1.5 + dt * Lhat)
+    return d
+end
+
 """
     step_distributed_diagonal_imex_sbdf2!(state, solver)
 
@@ -453,23 +469,20 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
 
     F_n = evaluate_rhs(solver, current_state, t)
 
-    _implicit_divide!(field, Lhat, denom_const) = begin
-        ensure_layout!(field, :c)
-        d = _local_coeff(get_coeff_data(field))
-        @inbounds @. d /= (denom_const + dt * Lhat)
-    end
-
     if iteration == 0 || length(state.history) < 2
         # SBDF1 startup: (1 + dt·L̂) X_new = X_n + dt·F_n
         new_state = copy_state(current_state)
         axpy_state!(dt, F_n, new_state)
         for (i, field) in enumerate(new_state)
             haskey(Lhats, i) || continue
-            _implicit_divide!(field, Lhats[i], 1.0)
+            ensure_layout!(field, :c)
+            _ddi_sbdf1_update!(_local_coeff(get_coeff_data(field)), Lhats[i], dt)
         end
         _refresh_algebraic_state!(solver.problem, new_state)
         _push_trim!(state.history, new_state, 2)
-        _push_trim!(Fhist, F_n, 2)
+        # evaluate_rhs may return reused buffer fields; store a copy so the next
+        # step's F evaluation cannot overwrite this history entry (else F_{n-1}≡F_n).
+        _push_trim!(Fhist, copy_state(F_n), 2)
     else
         dt_prev = length(state.dt_history) >= 2 ? state.dt_history[end-1] : dt
         if !isapprox(dt, dt_prev, rtol=0.01)
@@ -483,17 +496,16 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
             haskey(Lhats, i) || continue
             ensure_layout!(field, :c); ensure_layout!(X_n[i], :c); ensure_layout!(X_nm1[i], :c)
             ensure_layout!(F_n[i], :c); ensure_layout!(F_nm1[i], :c)
-            d    = _local_coeff(get_coeff_data(field))
-            dn   = _local_coeff(get_coeff_data(X_n[i]))
-            dnm1 = _local_coeff(get_coeff_data(X_nm1[i]))
-            fn   = _local_coeff(get_coeff_data(F_n[i]))
-            fnm1 = _local_coeff(get_coeff_data(F_nm1[i]))
-            Lhat = Lhats[i]
-            @inbounds @. d = (2*dn - 0.5*dnm1 + dt*(2*fn - fnm1)) / (1.5 + dt*Lhat)
+            _ddi_sbdf2_update!(_local_coeff(get_coeff_data(field)),
+                               _local_coeff(get_coeff_data(X_n[i])),
+                               _local_coeff(get_coeff_data(X_nm1[i])),
+                               _local_coeff(get_coeff_data(F_n[i])),
+                               _local_coeff(get_coeff_data(F_nm1[i])),
+                               Lhats[i], dt)
         end
         _refresh_algebraic_state!(solver.problem, new_state)
         _push_trim!(state.history, new_state, 2)
-        _push_trim!(Fhist, F_n, 2)
+        _push_trim!(Fhist, copy_state(F_n), 2)
     end
 
     state.timestepper_data[:dd_imex_iter] = iteration + 1
