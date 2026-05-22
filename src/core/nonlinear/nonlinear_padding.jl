@@ -401,18 +401,45 @@ function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64
     return field
 end
 
-"""Copy `src`'s grid data into `dst` (both in grid layout), reusing `dst`'s buffers."""
-function _copy_grid_into!(dst::ScalarField, src::ScalarField)
-    ensure_layout!(src, :g)
-    ensure_layout!(dst, :g)
-    sd = get_grid_data(src)
-    dd = get_grid_data(dst)
-    if isa(dd, PencilArrays.PencilArray) && isa(sd, PencilArrays.PencilArray)
-        copyto!(parent(dd), parent(sd))
+"""
+    _truncate_coeff_into_grid!(dst, src, dealiasing_factor)
+
+Copy `src` into scratch `dst` and band-limit it to |k| ≤ N/(2·factor), leaving
+`dst` in GRID layout ready to multiply. The cutoff is applied in COEFFICIENT
+space, so when `src` already lives in coefficient space (the usual case —
+operands come from spectral derivatives) only a single backward transform is
+needed. The old path forced `src` to grid, copied, then forward-transformed the
+copy just to truncate it and backward-transformed again — a redundant c→g→c
+round trip this avoids.
+"""
+function _truncate_coeff_into_grid!(dst::ScalarField, src::ScalarField, dealiasing_factor::Float64)
+    ensure_layout!(src, :c)   # forward only if src was in grid; no-op if already coeff
+    sc = get_coeff_data(src)
+    dc = get_coeff_data(dst)  # coeff buffer; contents overwritten below, so no transform needed
+    if isa(dc, PencilArrays.PencilArray) && isa(sc, PencilArrays.PencilArray)
+        copyto!(parent(dc), parent(sc))
     else
-        copyto!(dd, sd)
+        copyto!(dc, sc)
     end
-    dst.current_layout = :g
+    dst.current_layout = :c
+
+    if isa(dc, PencilArrays.PencilArray)
+        _apply_spectral_cutoff_distributed!(dc, dst.bases, dealiasing_factor)
+    else
+        nb = length(dst.bases)
+        cutoffs = ntuple(nb) do i
+            b = dst.bases[i]
+            isa(b, Union{RealFourier, ComplexFourier}) ?
+                Int(floor(b.meta.size / (2 * dealiasing_factor))) : size(dc, i)
+        end
+        rfft_dims = ntuple(nb) do i
+            b = dst.bases[i]
+            isa(b, RealFourier) && size(dc, i) == div(b.meta.size, 2) + 1
+        end
+        apply_spectral_cutoff!(dc, cutoffs, rfft_dims)
+    end
+
+    backward_transform!(dst)  # coeff → grid: the single required transform
     return dst
 end
 
@@ -443,10 +470,8 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
               evaluator.temp_fields, "_nl_trunc_f1_" * bkey)
     f2 = get!(() -> ScalarField(field1.dist, "_nl_trunc_f2", field1.bases, field1.dtype),
               evaluator.temp_fields, "_nl_trunc_f2_" * bkey)
-    _copy_grid_into!(f1, field1)
-    _copy_grid_into!(f2, field2)
-    _dealias_truncate_field!(f1, factor)
-    _dealias_truncate_field!(f2, factor)
+    _truncate_coeff_into_grid!(f1, field1, factor)
+    _truncate_coeff_into_grid!(f2, field2, factor)
 
     # Multiply on the grid. `result` is freshly allocated because callers may
     # retain it while computing another product (e.g. cross product).

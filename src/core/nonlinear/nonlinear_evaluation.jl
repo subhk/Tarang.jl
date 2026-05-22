@@ -97,9 +97,6 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
 
     _TRACK_NL_TIMING && (start_time = time())
 
-    ensure_layout!(field1, :g)
-    ensure_layout!(field2, :g)
-
     if field1.bases != field2.bases
         throw(ArgumentError(
             "Cannot multiply fields with different bases: " *
@@ -113,10 +110,10 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
     # default, so bases set to dealias ≤ 1 are computed without dealiasing.
     if _any_axis_dealias(field1.bases, evaluator.dealiasing_factor)
         T = field1.dtype <: Complex ? real(field1.dtype) : field1.dtype
-        data1 = get_grid_data(field1)
-        is_pencil = isa(data1, PencilArrays.PencilArray)
-
-        if is_pencil && evaluator.dist.size > 1
+        # Detect the MPI pencil path WITHOUT forcing a layout first, so the
+        # distributed routine can truncate inputs in coefficient space (avoids a
+        # c→g→c round trip when operands arrive in coeff space — the usual case).
+        if field1.dist.use_pencil_arrays && evaluator.dist.size > 1
             # MPI path: 2/3-rule truncation dealiasing using correct per-rank global
             # wavenumbers. Exact 3/2 zero-padding is avoided here because, under MPI
             # decomposition, embedding the N-mode spectrum into the 3N/2 padded spectrum
@@ -132,7 +129,9 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
             end
             return result
         else
-            # Serial path (CPU or GPU): pad all Fourier dimensions
+            # Serial path (CPU or GPU): pad all Fourier dimensions (needs grid inputs)
+            ensure_layout!(field1, :g)
+            ensure_layout!(field2, :g)
             ws = _get_padded_workspace!(evaluator, field1.bases, T)
             if ws !== nothing
                 result = evaluate_padded_multiply(field1, field2, evaluator, ws)
@@ -149,6 +148,8 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
 
     # Fallback: direct multiplication + truncation-after-multiply dealiasing
     # (only reached for fields with no Fourier bases, or dealiasing_factor <= 1)
+    ensure_layout!(field1, :g)
+    ensure_layout!(field2, :g)
     result = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
     ensure_layout!(result, :g)
 
