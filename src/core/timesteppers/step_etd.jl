@@ -29,6 +29,14 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
 
+    # MPI pure-Fourier: the global dense matrix exponential cannot run distributed
+    # (and `fields_to_vector!` has no MPI gather). The linear operator is diagonal
+    # in Fourier space, so use the per-mode distributed ETD instead.
+    if _distributed_diagonal_imex_applicable(solver)
+        step_distributed_diagonal_etd_rk222!(state, solver)
+        return
+    end
+
     # Get linear operator from solver
     L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
     if L_matrix === nothing
@@ -135,6 +143,13 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
 
+    # MPI pure-Fourier: use the per-mode distributed ETD (the global matrix path
+    # cannot run distributed). Uses the ETDRK2 scheme under MPI.
+    if _distributed_diagonal_imex_applicable(solver)
+        step_distributed_diagonal_etd_rk222!(state, solver)
+        return
+    end
+
     # Initialize history arrays if needed
     if !haskey(state.timestepper_data, :etd_cnab2_F_history)
         state.timestepper_data[:etd_cnab2_F_history] = Vector{Vector{ComplexF64}}()
@@ -144,7 +159,6 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     iteration = state.timestepper_data[:etd_cnab2_iteration]
 
     # Check if we have enough history for 2-step Adams-Bashforth
-    @warn "ETDPATH cnab2 iter=$iteration histlen=$(length(state.history))" maxlog=5
     if iteration < 1 || length(state.history) < 2
         @debug "ETD-CNAB2 requires iteration >= 1, falling back to ETDRK2 for startup"
         step_etd_rk222!(state, solver)
@@ -268,6 +282,13 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt = state.dt
+
+    # MPI pure-Fourier: use the per-mode distributed ETD (global matrix path
+    # cannot run distributed). Uses the ETDRK2 scheme under MPI.
+    if _distributed_diagonal_imex_applicable(solver)
+        step_distributed_diagonal_etd_rk222!(state, solver)
+        return
+    end
 
     # Initialize history arrays if needed
     if !haskey(state.timestepper_data, :etd_sbdf2_F_history)

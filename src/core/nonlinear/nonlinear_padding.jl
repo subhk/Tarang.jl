@@ -401,6 +401,111 @@ function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64
     return field
 end
 
+# ============================================================================
+# Batched distributed backward transform (MPI message coalescing)
+#
+# A per-field backward issues its own all-to-all transpose. Stacking `k`
+# same-shaped fields and transforming once issues ONE transpose for all of them.
+# We use PencilFFTs' `extra_dims`: the batch is a trailing LOCAL dimension that
+# rides through the SAME transpose/permutation sequence as the field's own plan,
+# so each slice's layout is identical to the field's coeff array (verified) and
+# stacking is a plain copy. Latency win that grows with rank count (transpose
+# count is otherwise independent of nprocs under slab decomposition).
+# ============================================================================
+
+const _BATCHED_PENCIL_PLAN_CACHE = Dict{Tuple, Any}()
+
+"""Transforms tuple matching `setup_pencil_fft_transforms!`: RFFT on the first
+Fourier axis, FFT on later Fourier axes, NoTransform on non-Fourier axes."""
+function _field_pencil_transforms(bases)
+    first_fourier = 0
+    for (i, b) in enumerate(bases)
+        isa(b, Union{RealFourier, ComplexFourier}) && first_fourier == 0 && (first_fourier = i)
+    end
+    tlist = Any[]
+    for (i, b) in enumerate(bases)
+        if isa(b, RealFourier)
+            push!(tlist, i == first_fourier ? PencilFFTs.Transforms.RFFT() : PencilFFTs.Transforms.FFT())
+        elseif isa(b, ComplexFourier)
+            push!(tlist, PencilFFTs.Transforms.FFT())
+        else
+            push!(tlist, PencilFFTs.Transforms.NoTransform())
+        end
+    end
+    return Tuple(tlist)
+end
+
+"""Get or build (cached) a batched PencilFFTPlan for `B` stacked fields. Uses the
+same global shape / transforms / process mesh as the per-field plan plus
+`extra_dims=(B,)`, so the per-slice layout matches each field's coeff array."""
+function _get_batched_backward_plan!(dist, bases, B::Int)
+    key = (objectid(dist), B, map(b -> (nameof(typeof(b)), b.meta.size), bases))
+    cached = get(_BATCHED_PENCIL_PLAN_CACHE, key, nothing)
+    cached !== nothing && return cached
+
+    transforms = _field_pencil_transforms(bases)
+    global_shape = Tuple(b.meta.size for b in bases)
+    plan = PencilFFTs.PencilFFTPlan(global_shape, transforms, dist.mesh, dist.comm; extra_dims=(B,))
+    # Reused scratch buffers (coeff-side input, grid-side output) — consumed within
+    # each call, so caching is safe and removes the two per-call allocations.
+    cstack = PencilFFTs.allocate_output(plan)
+    gstack = PencilFFTs.allocate_input(plan)
+    entry = (plan, cstack, gstack)
+    _BATCHED_PENCIL_PLAN_CACHE[key] = entry
+    return entry
+end
+
+"""
+    _pencil_batched_backward!(fields::Vector{<:ScalarField})
+
+Backward-transform `k` same-shaped distributed fields (currently coefficient
+layout) using ONE batched PencilFFTs transpose instead of `k` separate ones.
+Stacks each field's coeff PencilArray along the trailing batch (extra) axis,
+applies the single batched `\\`, and unstacks the grid result into each field.
+
+Fast path requires CPU-backed PencilArray coeff data sharing `dist`/`bases`;
+otherwise falls back to per-field `backward_transform!`.
+"""
+function _pencil_batched_backward!(fields::Vector{<:ScalarField})
+    k = length(fields)
+    k == 0 && return
+    f0 = fields[1]
+    ensure_layout!(f0, :c)
+    cd0 = get_coeff_data(f0)
+    if k == 1 || !isa(cd0, PencilArrays.PencilArray) || is_gpu_array(cd0)
+        for f in fields
+            backward_transform!(f)
+        end
+        return
+    end
+
+    plan, cstack, gstack = _get_batched_backward_plan!(f0.dist, f0.bases, k)
+    cp = parent(cstack)
+    nd = ndims(cp)
+    for (i, f) in enumerate(fields)
+        ensure_layout!(f, :c)
+        cf = parent(get_coeff_data(f))
+        dst = selectdim(cp, nd, i)
+        size(dst) == size(cf) ||
+            error("_pencil_batched_backward!: coeff slice $(size(dst)) != field coeff $(size(cf)) — batched-plan layout mismatch")
+        copyto!(dst, cf)
+    end
+
+    ldiv!(gstack, plan, cstack)                 # ONE transpose for all k slices, in place
+    gp = parent(gstack)
+    for (i, f) in enumerate(fields)
+        gdp = parent(get_grid_data(f))
+        slice = selectdim(gp, nd, i)
+        if eltype(gdp) <: Real && eltype(slice) <: Complex
+            gdp .= real.(slice)
+        else
+            gdp .= slice
+        end
+        f.current_layout = :g
+    end
+    return
+end
+
 """
     _truncate_coeff_into_grid!(dst, src, dealiasing_factor)
 
@@ -413,6 +518,21 @@ copy just to truncate it and backward-transformed again — a redundant c→g→
 round trip this avoids.
 """
 function _truncate_coeff_into_grid!(dst::ScalarField, src::ScalarField, dealiasing_factor::Float64)
+    _truncate_coeff_only!(dst, src, dealiasing_factor)
+    backward_transform!(dst)  # coeff → grid: the single required transform
+    return dst
+end
+
+"""
+    _truncate_coeff_only!(dst, src, dealiasing_factor)
+
+The coefficient-space half of `_truncate_coeff_into_grid!`: copy `src`'s coeff
+into `dst` and apply the spectral cutoff, leaving `dst` in COEFFICIENT layout
+(no backward transform). Split out so several inputs can be truncated, then
+backward-transformed together in one batched transpose (see
+`_pencil_batched_backward!`).
+"""
+function _truncate_coeff_only!(dst::ScalarField, src::ScalarField, dealiasing_factor::Float64)
     ensure_layout!(src, :c)   # forward only if src was in grid; no-op if already coeff
     sc = get_coeff_data(src)
     dc = get_coeff_data(dst)  # coeff buffer; contents overwritten below, so no transform needed
@@ -438,8 +558,6 @@ function _truncate_coeff_into_grid!(dst::ScalarField, src::ScalarField, dealiasi
         end
         apply_spectral_cutoff!(dc, cutoffs, rfft_dims)
     end
-
-    backward_transform!(dst)  # coeff → grid: the single required transform
     return dst
 end
 
@@ -470,8 +588,11 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
               evaluator.temp_fields, "_nl_trunc_f1_" * bkey)
     f2 = get!(() -> ScalarField(field1.dist, "_nl_trunc_f2", field1.bases, field1.dtype),
               evaluator.temp_fields, "_nl_trunc_f2_" * bkey)
-    _truncate_coeff_into_grid!(f1, field1, factor)
-    _truncate_coeff_into_grid!(f2, field2, factor)
+    # Band-limit both inputs in coeff space, then bring them back to grid with a
+    # SINGLE batched transpose instead of one per input (2 backwards → 1).
+    _truncate_coeff_only!(f1, field1, factor)
+    _truncate_coeff_only!(f2, field2, factor)
+    _pencil_batched_backward!([f1, f2])
 
     # Multiply on the grid. `result` is freshly allocated because callers may
     # retain it while computing another product (e.g. cross product).

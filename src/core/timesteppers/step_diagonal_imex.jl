@@ -510,3 +510,102 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
 
     state.timestepper_data[:dd_imex_iter] = iteration + 1
 end
+
+# ============================================================================
+# Distributed diagonal ETD (exponential time differencing) for MPI pure-Fourier.
+#
+# In a pure-Fourier basis the linear operator is diagonal in coefficient space,
+# so the matrix exponential and φ functions reduce to per-mode scalars. This
+# avoids the global dense matrix exponential + serial gather that the standard
+# ETD path uses (which cannot run distributed), letting ETD run under MPI.
+# ============================================================================
+
+"""Build (and cache, per dt) the per-field diagonal ETD operators
+(exp(z), φ₁(z), φ₂(z)) with z = -dt·L̂, evaluated element-wise over each rank's
+local wavenumber grid. The removable singularity at z=0 (e.g. the k=0 mode) is
+handled by the Taylor branch."""
+function _get_distributed_diagonal_phi!(state::TimestepperState, dt::Float64,
+                                        Lhats::Dict{Int, Array{Float64}})
+    cached = get(state.timestepper_data, :dd_etd_phi, nothing)
+    cached_dt = get(state.timestepper_data, :dd_etd_phi_dt, nothing)
+    if cached !== nothing && cached_dt == dt
+        return cached::Dict{Int, NTuple{3, Array{Float64}}}
+    end
+    phis = Dict{Int, NTuple{3, Array{Float64}}}()
+    for (i, Lhat) in Lhats
+        expz = similar(Lhat); ph1 = similar(Lhat); ph2 = similar(Lhat)
+        @inbounds for j in eachindex(Lhat)
+            z = -dt * Lhat[j]
+            ez = exp(z)
+            expz[j] = ez
+            if abs(z) < 1e-8
+                ph1[j] = 1.0 + z/2 + z*z/6
+                ph2[j] = 0.5 + z/6 + z*z/24
+            else
+                ph1[j] = (ez - 1.0) / z
+                ph2[j] = (ez - 1.0 - z) / (z*z)
+            end
+        end
+        phis[i] = (expz, ph1, ph2)
+    end
+    state.timestepper_data[:dd_etd_phi] = phis
+    state.timestepper_data[:dd_etd_phi_dt] = dt
+    return phis
+end
+
+# Function barriers (concrete array types resolved at the call → type-stable, alloc-free).
+@inline function _ddetd_predictor!(d::AbstractArray, xn::AbstractArray, expz::AbstractArray,
+                                   ph1::AbstractArray, Nn::AbstractArray, dt::Float64)
+    @inbounds @. d = expz * xn + dt * ph1 * Nn
+    return d
+end
+
+@inline function _ddetd_corrector!(d::AbstractArray, ph2::AbstractArray,
+                                   Nc::AbstractArray, Nn::AbstractArray, dt::Float64)
+    @inbounds @. d = d + dt * ph2 * (Nc - Nn)
+    return d
+end
+
+"""
+    step_distributed_diagonal_etd_rk222!(state, solver)
+
+ETDRK2 (Cox-Matthews 2002) with the linear operator treated diagonally per
+Fourier mode, for MPI pure-Fourier problems. Each time-stepped field is
+propagated as `Xₙ₊₁ = c + dt·φ₂⊙(N(c) − N(Xₙ))`, `c = exp(z)⊙Xₙ + dt·φ₁⊙N(Xₙ)`,
+with `z = -dt·L̂` element-wise. Algebraic variables are refreshed between stages.
+"""
+function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+    Lhats = _get_distributed_diagonal_Lhats!(state, solver)
+    phis = _get_distributed_diagonal_phi!(state, dt, Lhats)
+
+    # N(Xₙ). evaluate_rhs may return reused buffers, so copy before re-evaluating.
+    N_n = copy_state(evaluate_rhs(solver, current_state, t))
+
+    # Predictor: c = exp(z)⊙Xₙ + dt·φ₁⊙N(Xₙ)
+    pred = copy_state(current_state)
+    for (i, field) in enumerate(pred)
+        haskey(phis, i) || continue
+        ensure_layout!(field, :c); ensure_layout!(current_state[i], :c); ensure_layout!(N_n[i], :c)
+        expz, ph1, _ = phis[i]
+        _ddetd_predictor!(_local_coeff(get_coeff_data(field)),
+                          _local_coeff(get_coeff_data(current_state[i])),
+                          expz, ph1, _local_coeff(get_coeff_data(N_n[i])), dt)
+    end
+    _refresh_algebraic_state!(solver.problem, pred)
+
+    # Corrector: Xₙ₊₁ = c + dt·φ₂⊙(N(c) − N(Xₙ)), written in place into `pred`.
+    N_c = evaluate_rhs(solver, pred, t + dt)
+    for (i, field) in enumerate(pred)
+        haskey(phis, i) || continue
+        ensure_layout!(field, :c); ensure_layout!(N_c[i], :c); ensure_layout!(N_n[i], :c)
+        _, _, ph2 = phis[i]
+        _ddetd_corrector!(_local_coeff(get_coeff_data(field)), ph2,
+                          _local_coeff(get_coeff_data(N_c[i])),
+                          _local_coeff(get_coeff_data(N_n[i])), dt)
+    end
+    _refresh_algebraic_state!(solver.problem, pred)
+    _push_trim!(state.history, pred, 2)
+end

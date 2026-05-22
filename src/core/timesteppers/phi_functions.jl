@@ -98,6 +98,13 @@ function phi_functions_matrix(A::AbstractMatrix, dt::Float64)
             return exp_z, φ₁, φ₂
 
         catch e
+            # z is singular when the linear operator has a zero eigenvalue (e.g.
+            # the k=0 mode of a pure diffusion operator). The inversion-based φ
+            # computation fails there; fall back to the eigen-based evaluation,
+            # which handles the removable singularity at λ=0.
+            if e isa LinearAlgebra.SingularException
+                return _phi_via_eigen(z, I_mat)
+            end
             @warn "Matrix exponential failed: $e, using Padé approximation"
             return _phi_functions_pade(z)
         end
@@ -137,6 +144,37 @@ function _compute_phi2_stable(z, exp_z, I, φ₁)
         # Use left-division for robustness with near-singular z
         return z \ (φ₁ - I)
     end
+end
+
+"""
+    _phi_via_eigen(z, I) -> (exp_z, φ₁, φ₂)
+
+Compute φ functions via eigendecomposition, evaluating each scalar φ on the
+eigenvalues with the removable singularity handled at λ=0 (φ₁(0)=1, φ₂(0)=1/2).
+This works when `z` has a zero eigenvalue (e.g. the k=0 Fourier mode of a pure
+diffusion operator), where the inversion-based `z \\ (exp(z)-I)` is singular.
+"""
+function _phi_via_eigen(z::AbstractMatrix, I_mat)
+    F = eigen(Matrix(z))
+    λ = F.values
+    V = F.vectors
+    φ0 = exp.(λ)
+    φ1 = similar(λ)
+    φ2 = similar(λ)
+    @inbounds for i in eachindex(λ)
+        l = λ[i]
+        if abs(l) < 1e-8
+            φ1[i] = one(eltype(λ)) + l/2 + l^2/6
+            φ2[i] = one(eltype(λ))/2 + l/6 + l^2/24
+        else
+            φ1[i] = (exp(l) - 1) / l
+            φ2[i] = (exp(l) - 1 - l) / l^2
+        end
+    end
+    exp_z = V * Diagonal(φ0) / V
+    φ₁ = V * Diagonal(φ1) / V
+    φ₂ = V * Diagonal(φ2) / V
+    return exp_z, φ₁, φ₂
 end
 
 """Padé approximation fallback for φ functions.
