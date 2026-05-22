@@ -93,7 +93,8 @@ end
 
     Falls back to truncation-after-multiply only when no Fourier bases exist.
     """
-function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, evaluator::NonlinearEvaluator)
+function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, evaluator::NonlinearEvaluator;
+                                     result_layout::Symbol=:g)
 
     _TRACK_NL_TIMING && (start_time = time())
 
@@ -120,7 +121,8 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
             # would require cross-rank redistribution (the original and padded
             # PencilArrays decompose differently). Truncation is purely local per rank
             # and dealiases quadratic nonlinear terms within the retained |k| ≤ N/3 band.
-            result = evaluate_truncated_multiply_distributed(field1, field2, evaluator)
+            result = evaluate_truncated_multiply_distributed(field1, field2, evaluator;
+                                                             result_layout=result_layout)
             evaluator.performance_stats.total_evaluations += 1
             if _TRACK_NL_TIMING
                 elapsed = time() - start_time
@@ -135,6 +137,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
             ws = _get_padded_workspace!(evaluator, field1.bases, T)
             if ws !== nothing
                 result = evaluate_padded_multiply(field1, field2, evaluator, ws)
+                ensure_layout!(result, result_layout)  # serial: cheap FFT, no transpose
                 evaluator.performance_stats.total_evaluations += 1
                 if _TRACK_NL_TIMING
                     elapsed = time() - start_time
@@ -170,6 +173,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
         apply_basic_dealiasing!(result, evaluator.dealiasing_factor)
     end
 
+    ensure_layout!(result, result_layout)
     evaluator.performance_stats.total_evaluations += 1
     _TRACK_NL_TIMING && (evaluator.performance_stats.total_time += time() - start_time)
 
@@ -345,11 +349,35 @@ function evaluate_vector_dot_product(v1::VectorField, v2::VectorField)
     end
 
     evaluator = _get_evaluator(v1.dist)
+    n = length(v1.components)
+    c1 = v1.components[1]
 
-    # Sum products of components
+    # Distributed pure-Fourier: sum the component products in COEFFICIENT space so
+    # the `n` per-product backward transposes collapse into ONE (performed by the
+    # caller's `ensure_layout!(result, layout)`). Valid because the inverse
+    # transform is linear: Σ backward(pᵢ) == backward(Σ pᵢ). Each product is
+    # returned truncated-in-coeff via `result_layout=:c` (skips its own backward).
+    if n >= 2 && c1.dist.use_pencil_arrays && c1.dist.size > 1 &&
+       all(b -> isa(b, Union{RealFourier, ComplexFourier}), c1.bases)
+        result = evaluate_transform_multiply(v1.components[1], v2.components[1], evaluator; result_layout=:c)
+        ensure_layout!(result, :c)
+        rc = get_coeff_data(result)
+        for i in 2:n
+            product = evaluate_transform_multiply(v1.components[i], v2.components[i], evaluator; result_layout=:c)
+            ensure_layout!(product, :c)
+            pc = get_coeff_data(product)
+            if isa(rc, PencilArrays.PencilArray) && isa(pc, PencilArrays.PencilArray)
+                parent(rc) .+= parent(pc)
+            else
+                rc .+= pc
+            end
+        end
+        return result  # coeff; caller's ensure_layout! does the single backward
+    end
+
+    # Serial / non-Fourier: sum products in grid (original path).
     result = evaluate_transform_multiply(v1.components[1], v2.components[1], evaluator)
-
-    for i in 2:length(v1.components)
+    for i in 2:n
         product = evaluate_transform_multiply(v1.components[i], v2.components[i], evaluator)
         result = result + product
     end

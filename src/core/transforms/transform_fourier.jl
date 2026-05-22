@@ -148,16 +148,39 @@ concrete types so `_backward_output_spec`, scratch/plan lookup and the in-place
 function _backward_transform_stage!(field::ScalarField, transform, in_arr::AbstractArray,
                                     is_final::Bool)
     out_shape, out_eltype = _backward_output_spec(in_arr, transform)
+    # `out_eltype` is decided at runtime — real for the final irfft stage,
+    # complex for the ifft stages — so it is a type-UNSTABLE `DataType` value.
+    # Forward output is always complex (stable), but backward must union-split
+    # here: matching `out_eltype` against the concrete FFT element types pins it
+    # to a compile-time `T` inside `_backward_stage_typed!`, so the buffer match,
+    # scratch fetch and `mul!` specialize and run allocation-free. Without this,
+    # the unstable eltype boxes a `Tuple{Int,Int}` on every backward stage.
+    if out_eltype === ComplexF64
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF64)
+    elseif out_eltype === Float64
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float64)
+    elseif out_eltype === ComplexF32
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF32)
+    elseif out_eltype === Float32
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float32)
+    else
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, out_eltype)
+    end
+end
+
+@inline function _backward_stage_typed!(field::ScalarField, transform, in_arr::AbstractArray,
+                                        is_final::Bool, out_shape::NTuple{N,Int},
+                                        ::Type{T}) where {N,T}
     if is_final
         grid = get_grid_data(field)
-        if grid === nothing || size(grid) != out_shape || eltype(grid) != out_eltype
-            grid = zeros(out_eltype, out_shape...)
+        if !_buffer_matches(grid, out_shape, T)
+            grid = zeros(T, out_shape...)
             set_grid_data!(field, grid)
         end
         _apply_backward!(grid, in_arr, transform)
         return grid
     end
-    out = _get_scratch_for_transform!(transform, :bwd_inter, out_shape, out_eltype)
+    out = _get_scratch_for_transform!(transform, SLOT_BWD_INTER, out_shape, T)
     _apply_backward!(out, in_arr, transform)
     return out
 end
@@ -286,7 +309,7 @@ end
 function _get_or_plan_forward!(transform::FourierTransform, in::AbstractArray)
     in_shape = size(in)
     in_eltype = eltype(in)
-    key = (in_shape, in_eltype)
+    key = (in_shape, _fft_eltype_tag(in_eltype))
     cached = get(transform.fwd_plan_cache, key, nothing)
     if cached !== nothing
         return cached
@@ -306,7 +329,7 @@ end
 function _get_or_plan_backward!(transform::FourierTransform, in::AbstractArray)
     in_shape = size(in)
     in_eltype = eltype(in)
-    key = (in_shape, in_eltype)
+    key = (in_shape, _fft_eltype_tag(in_eltype))
     cached = get(transform.bwd_plan_cache, key, nothing)
     if cached !== nothing
         return cached
@@ -387,7 +410,7 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Four
     end
 
     if is_irfft_path
-        scratch_key = (size(in), eltype(in), :irfft_scratch)
+        scratch_key = (size(in), _fft_eltype_tag(eltype(in)), SLOT_IRFFT)
         scratch = _get_or_alloc_scratch!(transform.bwd_scratch, scratch_key,
                                          size(in), eltype(in))
         copyto!(scratch, in)

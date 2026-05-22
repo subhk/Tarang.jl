@@ -377,7 +377,7 @@ Zero all Fourier modes with |k| > N/(2·dealiasing_factor) on `field`, in place.
 Forward-transforms, applies the per-rank global-wavenumber cutoff (distributed)
 or the standard cutoff (serial), then transforms back to grid space.
 """
-function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64)
+function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64; final_layout::Symbol=:g)
     forward_transform!(field)
     coeff_data = get_coeff_data(field)
 
@@ -397,7 +397,9 @@ function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64
         apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
     end
 
-    backward_transform!(field)
+    # Leave in coeff when the caller will consume/sum in coeff (saves a backward
+    # transpose — e.g. dot-product terms summed in coeff with one final backward).
+    final_layout === :g && backward_transform!(field)
     return field
 end
 
@@ -576,7 +578,8 @@ retained |k| ≤ N/3 band is alias-free — i.e. quadratic terms are dealiased
 exactly within the retained band.
 """
 function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::ScalarField,
-                                                  evaluator::NonlinearEvaluator)
+                                                  evaluator::NonlinearEvaluator;
+                                                  result_layout::Symbol=:g)
     factor = evaluator.dealiasing_factor
 
     # Truncate the inputs into reusable scratch fields (consumed within this call,
@@ -607,8 +610,10 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
         result_data .= d1 .* d2
     end
 
-    # Truncate the product to remove the aliased high modes.
-    _dealias_truncate_field!(result, factor)
+    # Truncate the product to remove the aliased high modes. When the caller will
+    # sum products in coeff (dot-product terms), keep the result in coeff and skip
+    # the backward — the sum's single backward replaces the per-product ones.
+    _dealias_truncate_field!(result, factor; final_layout=result_layout)
     return result
 end
 

@@ -250,7 +250,7 @@ function _forward_transform_stage!(field::ScalarField, transform, in_arr::Abstra
         # Final stage: target is the field's coeff buffer. Reuse when
         # shape/eltype match (the common case); otherwise allocate once.
         coeff = get_coeff_data(field)
-        if coeff === nothing || size(coeff) != out_shape || eltype(coeff) != out_eltype
+        if !_buffer_matches(coeff, out_shape, out_eltype)
             coeff = zeros(out_eltype, out_shape...)
             set_coeff_data!(field, coeff)
         end
@@ -258,8 +258,8 @@ function _forward_transform_stage!(field::ScalarField, transform, in_arr::Abstra
         return coeff
     end
     # Intermediate stage: write into this transform's cached scratch, keyed by
-    # (out_shape, out_eltype, :fwd_inter) to avoid colliding with other scratch.
-    out = _get_scratch_for_transform!(transform, :fwd_inter, out_shape, out_eltype)
+    # (out_shape, eltype_tag, SLOT_FWD_INTER) to avoid colliding with other scratch.
+    out = _get_scratch_for_transform!(transform, SLOT_FWD_INTER, out_shape, out_eltype)
     _apply_forward!(out, in_arr, transform)
     return out
 end
@@ -288,18 +288,20 @@ const _TRANSFORM_INTER_SCRATCH = WeakKeyDict{Any, Dict{Tuple, AbstractArray}}()
     return cache
 end
 
-@inline function _get_scratch_for_transform!(transform::FourierTransform, tag::Symbol,
-                                             shape::Tuple, ::Type{T}) where {T}
+# `slot` is one of SLOT_FWD_INTER / SLOT_BWD_INTER (UInt8 literals) so the cache
+# key `(shape, eltype_tag, slot)` is isbits — no per-call key allocation.
+@inline function _get_scratch_for_transform!(transform::FourierTransform, slot::UInt8,
+                                             shape::NTuple{N,Int}, ::Type{T}) where {N,T}
     # FourierTransform has a native fwd_scratch / bwd_scratch dict of the
     # right type; use it directly.
-    dict = tag === :fwd_inter ? transform.fwd_scratch : transform.bwd_scratch
-    return _get_or_alloc_scratch!(dict, (shape, T, tag), shape, T)
+    dict = slot === SLOT_FWD_INTER ? transform.fwd_scratch : transform.bwd_scratch
+    return _get_or_alloc_scratch!(dict, (shape, _fft_eltype_tag(T), slot), shape, T)
 end
 
-@inline function _get_scratch_for_transform!(transform::Transform, tag::Symbol,
-                                             shape::Tuple, ::Type{T}) where {T}
+@inline function _get_scratch_for_transform!(transform::Transform, slot::UInt8,
+                                             shape::NTuple{N,Int}, ::Type{T}) where {N,T}
     # Generic fallback for other transform types (Chebyshev, Legendre, etc.):
     # use the module-level weak-key cache keyed on the transform object.
     dict = _get_inter_cache(transform)
-    return _get_or_alloc_scratch!(dict, (shape, T, tag), shape, T)
+    return _get_or_alloc_scratch!(dict, (shape, _fft_eltype_tag(T), slot), shape, T)
 end

@@ -16,10 +16,17 @@ struct PencilFFTTransform <: Transform
     end
 end
 
-mutable struct FourierTransform <: Transform
+# Parameterized on the concrete basis type `B` (RealFourier / ComplexFourier).
+# A concrete `basis::B` field is what makes `_forward_output_spec` /
+# `_backward_output_spec` type-stable: their `isa(transform.basis, RealFourier)`
+# branch resolves at compile time, so the returned output shape/eltype are
+# statically typed and the in-place transform path runs allocation-free. With an
+# abstract `basis::Basis` field those specs inferred `Tuple`/`DataType` and the
+# downstream `size()` checks heap-allocated a `Tuple{Int,Int}` on every call.
+mutable struct FourierTransform{B<:Basis} <: Transform
     plan_forward::Union{Nothing, AbstractFFTPlan}
     plan_backward::Union{Nothing, AbstractFFTPlan}
-    basis::Basis
+    basis::B
     axis::Int
     plan_dtype::Type{<:AbstractFloat}  # Real element type used for plan creation (e.g., Float64, Float32)
 
@@ -45,8 +52,8 @@ mutable struct FourierTransform <: Transform
     fwd_scratch::Dict{Tuple, AbstractArray}
     bwd_scratch::Dict{Tuple, AbstractArray}
 
-    function FourierTransform(basis::Basis, axis::Int)
-        new(nothing, nothing, basis, axis, Float64,
+    function FourierTransform(basis::B, axis::Int) where {B<:Basis}
+        new{B}(nothing, nothing, basis, axis, Float64,
             Dict{Tuple, Any}(), Dict{Tuple, Any}(),
             Dict{Tuple, AbstractArray}(), Dict{Tuple, AbstractArray}())
     end
@@ -236,6 +243,33 @@ has the wrong shape/eltype, allocate a new `zeros(T, shape...)` and store
 it. Subsequent calls with the same key return the cached array without
 allocation.
 """
+# ---------------------------------------------------------------------------
+# Allocation-free cache keys.
+#
+# Plan / scratch caches were keyed by tuples containing a `Type` (the element
+# type) and a `Symbol` (the scratch slot). Both are pointers, so the key tuple
+# is NOT isbits and Julia heap-allocates it on EVERY hot-path lookup (~tens of
+# bytes/call, and markedly worse on some platforms — e.g. x64 Linux CI). Encode
+# the element type and slot as `UInt8` tags instead: `(shape, eltype_tag,
+# slot_tag)` is fully isbits, so building and hashing it allocates nothing.
+#
+# FFTs only support the four element types below; an unsupported eltype throws
+# (it could not be transformed anyway), so the mapping is total and collision-free.
+# ---------------------------------------------------------------------------
+@inline _fft_eltype_tag(::Type{Float64})    = 0x00
+@inline _fft_eltype_tag(::Type{ComplexF64}) = 0x01
+@inline _fft_eltype_tag(::Type{Float32})    = 0x02
+@inline _fft_eltype_tag(::Type{ComplexF32}) = 0x03
+@inline _fft_eltype_tag(::Type{T}) where {T} =
+    throw(ArgumentError("Tarang transform cache: unsupported FFT element type $T"))
+
+# Scratch-slot discriminators (replace the previous `Symbol` slot component).
+# Plain `UInt8` constants — passed as literals at call sites so they stay
+# compile-time constants (a runtime `Val(symbol)` would itself allocate).
+const SLOT_FWD_INTER = 0x00
+const SLOT_BWD_INTER = 0x01
+const SLOT_IRFFT     = 0x02
+
 @inline function _get_or_alloc_scratch!(cache::Dict, key::Tuple, shape::NTuple{N,Int}, ::Type{T}) where {N,T}
     buf = get(cache, key, nothing)
     # `buf isa Array{T,N}` narrows the abstract `Dict`-value type to a concrete
@@ -250,6 +284,18 @@ allocation.
     cache[key] = new_buf
     return new_buf
 end
+
+"""
+    _buffer_matches(buf, shape, T) -> Bool
+
+True when `buf` is already a concrete `Array{T,N}` of exactly `shape`. The
+`buf isa Array{T,N}` test narrows `buf` (typically a `Union{Nothing,AbstractArray}`
+field value) to a concrete array BEFORE `size(buf)` runs, so the size tuple is
+not heap-allocated. Calling `size()` directly on the abstract field value boxes
+the returned `Tuple` on every transform call.
+"""
+@inline _buffer_matches(buf, shape::NTuple{N,Int}, ::Type{T}) where {N,T} =
+    buf isa Array{T,N} && size(buf) == shape
 
 """
     _find_pencil_plan(dist) → Union{Nothing, PencilFFTs.PencilFFTPlan}
