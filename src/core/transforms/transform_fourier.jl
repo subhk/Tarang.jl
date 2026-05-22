@@ -155,6 +155,12 @@ function _backward_transform_stage!(field::ScalarField, transform, in_arr::Abstr
     # to a compile-time `T` inside `_backward_stage_typed!`, so the buffer match,
     # scratch fetch and `mul!` specialize and run allocation-free. Without this,
     # the unstable eltype boxes a `Tuple{Int,Int}` on every backward stage.
+    # The branches must cover every FFT element type and the fallback must NOT
+    # forward the abstract `out_eltype` — an `error` returns `Union{}` so it drops
+    # out of the inferred return type, leaving a small concrete union
+    # (`Union{Matrix{Float64}, Matrix{ComplexF64}, …}`). Forwarding `out_eltype`
+    # instead widened the return to `Union{Nothing, AbstractArray}`, which x86_64
+    # codegen boxes on every backward stage.
     if out_eltype === ComplexF64
         return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF64)
     elseif out_eltype === Float64
@@ -164,7 +170,7 @@ function _backward_transform_stage!(field::ScalarField, transform, in_arr::Abstr
     elseif out_eltype === Float32
         return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float32)
     else
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, out_eltype)
+        error("Tarang backward transform: unsupported output element type $out_eltype")
     end
 end
 
@@ -172,17 +178,27 @@ end
                                         is_final::Bool, out_shape::NTuple{N,Int},
                                         ::Type{T}) where {N,T}
     if is_final
-        grid = get_grid_data(field)
-        if !_buffer_matches(grid, out_shape, T)
-            grid = zeros(T, out_shape...)
-            set_grid_data!(field, grid)
-        end
+        # Bind `grid` to a concrete `Array{T,N}` via the ternary: the `isa` test
+        # narrows the existing buffer in the true branch, and `_alloc_grid_buffer!`
+        # returns `Array{T,N}` in the false branch — so both arms are concrete and
+        # the function's return type is `Array{T,N}`, not `Union{Nothing,AbstractArray}`.
+        # The previous `if !_buffer_matches(...)` form left the return abstract,
+        # which Julia 1.10/1.11 boxes on x86_64 (≈5.5 KiB/round-trip; arm64 elides it).
+        existing = get_grid_data(field)
+        grid::Array{T,N} = (existing isa Array{T,N} && size(existing) == out_shape) ?
+            existing : _alloc_grid_buffer!(field, T, out_shape)
         _apply_backward!(grid, in_arr, transform)
         return grid
     end
-    out = _get_scratch_for_transform!(transform, SLOT_BWD_INTER, out_shape, T)
+    out::Array{T,N} = _get_scratch_for_transform!(transform, SLOT_BWD_INTER, out_shape, T)
     _apply_backward!(out, in_arr, transform)
     return out
+end
+
+@inline function _alloc_grid_buffer!(field::ScalarField, ::Type{T}, shape::NTuple{N,Int}) where {N,T}
+    g = zeros(T, shape...)
+    set_grid_data!(field, g)
+    return g
 end
 
 function _fourier_backward(data::AbstractArray, transform::FourierTransform)
