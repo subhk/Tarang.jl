@@ -650,10 +650,12 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
             Lhat = Lhats[i]
             for j in 1:s-1
                 if AE[s, j] != 0.0
+                    ensure_layout!(Fs[j][i], :c)
                     fj = _local_coeff(get_coeff_data(Fs[j][i]))
                     _ddirk_axpy!(d, dt * AE[s, j], fj)
                 end
                 if AI[s, j] != 0.0
+                    ensure_layout!(Ys[j][i], :c)
                     yj = _local_coeff(get_coeff_data(Ys[j][i]))
                     _ddirk_axpy_lhat!(d, -dt * AI[s, j], Lhat, yj)
                 end
@@ -675,10 +677,12 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
         Lhat = Lhats[i]
         for s in 1:S
             if bE[s] != 0.0
+                ensure_layout!(Fs[s][i], :c)
                 fs = _local_coeff(get_coeff_data(Fs[s][i]))
                 _ddirk_axpy!(d, dt * bE[s], fs)
             end
             if bI[s] != 0.0
+                ensure_layout!(Ys[s][i], :c)
                 ys = _local_coeff(get_coeff_data(Ys[s][i]))
                 _ddirk_axpy_lhat!(d, -dt * bI[s], Lhat, ys)
             end
