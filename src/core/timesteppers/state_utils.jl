@@ -1081,6 +1081,25 @@ function _collect_add_terms!(terms::Vector{Any}, expr)
     end
 end
 
+# Rotating pool of Poisson-result buffers (keyed by bases/dtype). The result is
+# consumed (copied into the solved variable) right after this returns, so a small
+# rotation avoids a fresh `copy(rhs)` allocation each solve without aliasing.
+const _POISSON_RESULT_POOL_SIZE = 4
+const _POISSON_RESULT_POOL = Dict{Tuple, Vector{ScalarField}}()
+const _POISSON_RESULT_IDX = Ref(0)
+
+function _checkout_poisson_result!(rhs::ScalarField)
+    key = (hash(rhs.bases), rhs.dtype)
+    bufs = get!(() -> Vector{ScalarField}(undef, _POISSON_RESULT_POOL_SIZE),
+                _POISSON_RESULT_POOL, key)
+    i = (_POISSON_RESULT_IDX[] % _POISSON_RESULT_POOL_SIZE) + 1
+    _POISSON_RESULT_IDX[] += 1
+    if !isassigned(bufs, i)
+        bufs[i] = ScalarField(rhs.dist, "poisson_solution", rhs.bases, rhs.dtype)
+    end
+    return bufs[i]
+end
+
 """
 Spectral Poisson solve: given rhs, compute var = -rhs/k²
 Works with MPI/PencilArrays.
@@ -1088,8 +1107,9 @@ Works with MPI/PencilArrays.
 function _spectral_poisson_solve(rhs::ScalarField, dist::Distributor)
     ensure_layout!(rhs, :c)
 
-    # Create result field
-    result = copy(rhs)
+    # Result from a small rotating buffer pool (consumed immediately by the caller).
+    result = _checkout_poisson_result!(rhs)
+    copy_field_data!(result, rhs)
     result.name = "poisson_solution"
     ensure_layout!(result, :c)
 

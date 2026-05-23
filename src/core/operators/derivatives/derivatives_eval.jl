@@ -133,6 +133,27 @@ dimension) returns a zeroed field. Note the result basis can differ from the
 operand's — e.g. Chebyshev differentiation maps `ChebyshevT → ChebyshevU` — so
 the result is built from the differentiated component's bases, not the operand's.
 """
+# Rotating pool of derivative-result buffers, keyed by (bases, dtype). Reuses
+# fields across calls instead of allocating a fresh ScalarField per derivative.
+# Uses N=8 distinct buffers (vs the global FieldPool's single-buffer reuse that
+# caused silent corruption — see step!), giving each of several simultaneously
+# live derivative results (e.g. the components of a gradient) its own buffer.
+const _DERIV_RESULT_POOL_SIZE = 8
+const _DERIV_RESULT_POOL = Dict{Tuple, Vector{ScalarField}}()
+const _DERIV_RESULT_IDX = Ref(0)
+
+function _checkout_deriv_result!(bases::Tuple, dtype::DataType, dist)
+    key = (hash(bases), dtype)
+    bufs = get!(() -> Vector{ScalarField}(undef, _DERIV_RESULT_POOL_SIZE),
+                _DERIV_RESULT_POOL, key)
+    i = (_DERIV_RESULT_IDX[] % _DERIV_RESULT_POOL_SIZE) + 1
+    _DERIV_RESULT_IDX[] += 1
+    if !isassigned(bufs, i)
+        bufs[i] = ScalarField(dist, "deriv_tmp", bases, dtype)
+    end
+    return bufs[i]
+end
+
 function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
     operand = diff_op.operand
     coord = diff_op.coord
@@ -211,7 +232,7 @@ function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
     end
 
     basis = operand.bases[basis_index]
-    result = checkout_or_alloc(operand.bases, operand.dtype, operand.dist)
+    result = _checkout_deriv_result!(operand.bases, operand.dtype, operand.dist)
     copy_field_data!(result, operand)
     result.current_layout = operand.current_layout
     result.name = "d$(order)_$(operand.name)_d$(coord.name)$(order)"
