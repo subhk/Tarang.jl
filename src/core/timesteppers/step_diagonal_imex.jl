@@ -594,9 +594,9 @@ function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::I
                           _local_coeff(get_coeff_data(current_state[i])),
                           expz, ph1, _local_coeff(get_coeff_data(N_n[i])), dt)
     end
-    _refresh_algebraic_state!(solver.problem, pred)
 
     # Corrector: Xₙ₊₁ = c + dt·φ₂⊙(N(c) − N(Xₙ)), written in place into `pred`.
+    # evaluate_rhs refreshes pred's algebraic state internally (no separate refresh).
     N_c = evaluate_rhs(solver, pred, t + dt)
     for (i, field) in enumerate(pred)
         haskey(phis, i) || continue
@@ -664,8 +664,10 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
                 _ddirk_implicit_divide!(d, Lhat, dt * AI[s, s])
             end
         end
-        _refresh_algebraic_state!(solver.problem, Y)
         Ys[s] = Y
+        # evaluate_rhs refreshes the algebraic state of Y internally, so no
+        # separate _refresh_algebraic_state! is needed here (avoids a redundant
+        # constraint solve + its transforms per stage).
         Fs[s] = copy_state(evaluate_rhs(solver, Y, t + cc[s] * dt))
     end
 
