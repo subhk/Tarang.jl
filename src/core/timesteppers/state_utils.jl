@@ -1134,7 +1134,13 @@ end
 
 """
 Build k² array for spectral Poisson inversion.
+
+The k² grid is a constant of the domain/decomposition, so it is cached (per rank,
+keyed by basis sizes + local coefficient shape + element type) and reused across
+solves. The caller (`_spectral_poisson_solve`) only reads it, so sharing is safe.
 """
+const _POISSON_K2_CACHE = Dict{Tuple, Any}()
+
 function _build_k_squared(field::ScalarField)
     ensure_layout!(field, :c)
     coeff_data = get_coeff_data(field)
@@ -1150,7 +1156,12 @@ function _build_k_squared(field::ScalarField)
         size(coeff_data)
     end
 
-    k_squared = zeros(real(eltype(coeff_data)), local_shape)
+    T = real(eltype(coeff_data))
+    key = (Tuple(b === nothing ? 0 : b.meta.size for b in field.bases), local_shape, T)
+    cached = get(_POISSON_K2_CACHE, key, nothing)
+    cached !== nothing && return cached::Array{T}
+
+    k_squared = zeros(T, local_shape)
 
     # Get wavenumber contributions from each basis
     for (dim, basis) in enumerate(field.bases)
@@ -1162,6 +1173,7 @@ function _build_k_squared(field::ScalarField)
         end
     end
 
+    _POISSON_K2_CACHE[key] = k_squared
     return k_squared
 end
 
