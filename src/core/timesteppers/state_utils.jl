@@ -1107,29 +1107,26 @@ function _spectral_poisson_solve(rhs::ScalarField, dist::Distributor)
         return nothing
     end
 
-    # Apply Poisson inversion: result = -rhs/k² (avoiding k=0)
+    # Apply Poisson inversion: result = -rhs/k² (avoiding k=0). The loop is run
+    # through a concretely-typed function barrier so the per-index work is not
+    # boxed/allocated (coeff_data / k_squared are abstractly typed here).
     if isa(coeff_data, PencilArrays.PencilArray)
-        local_data = parent(coeff_data)
-        for idx in CartesianIndices(local_data)
-            k2 = k_squared[idx]
-            if k2 > 1e-12
-                local_data[idx] = -local_data[idx] / k2
-            else
-                local_data[idx] = 0.0  # k=0: gauge condition
-            end
-        end
+        _poisson_invert!(parent(coeff_data), k_squared)
     else
-        for idx in CartesianIndices(coeff_data)
-            k2 = k_squared[idx]
-            if k2 > 1e-12
-                coeff_data[idx] = -coeff_data[idx] / k2
-            else
-                coeff_data[idx] = 0.0
-            end
-        end
+        _poisson_invert!(coeff_data, k_squared)
     end
 
     return result
+end
+
+"""Function barrier for the spectral Poisson inversion: `data .= -data / k²`
+(with the k=0 gauge mode zeroed). Concrete array types ⇒ no per-index boxing."""
+function _poisson_invert!(data::AbstractArray, k2::AbstractArray)
+    @inbounds for idx in eachindex(data, k2)
+        kk = k2[idx]
+        data[idx] = kk > 1e-12 ? -data[idx] / kk : zero(eltype(data))
+    end
+    return data
 end
 
 """

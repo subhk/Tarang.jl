@@ -402,83 +402,88 @@ function evaluate_fourier_derivative_gpu!(result::ScalarField, data_g::AbstractA
     end
 end
 
+# Cached FFT plans + complex/real buffers for the CPU Fourier derivative, keyed by
+# (local shape, axis, dims, complex eltype). Reused across calls so the per-call
+# fft/ifft outputs are not reallocated. Buffers are filled/consumed entirely within
+# one derivative call (not held across calls), so a single cached set per key is safe.
+const _DERIV_FFT_WS = Dict{Tuple, Any}()
+
+function _get_deriv_workspace!(data_g::AbstractArray, axis::Int, dims::Int)
+    CT = complex(float(real(eltype(data_g))))
+    RT = real(CT)
+    key = (size(data_g), axis, dims, CT)
+    return get!(_DERIV_FFT_WS, key) do
+        cin  = Array{CT}(undef, size(data_g))
+        fhat = Array{CT}(undef, size(data_g))
+        rout = Array{RT}(undef, size(data_g))
+        pf  = dims == 1 ? plan_fft(cin)   : plan_fft(cin, axis)
+        pin = dims == 1 ? plan_ifft(fhat) : plan_ifft(fhat, axis)
+        (cin, fhat, rout, pf, pin)
+    end
+end
+
+"""Multiply `fhat` by the derivative factor (ik)^order along `axis`, in place.
+Concrete `fhat` type ⇒ no per-element boxing (the caller's `fhat` is `Any`-typed)."""
+function _apply_deriv_mult!(fhat::AbstractArray, deriv_mult::AbstractVector, axis::Int, dims::Int, data_shape::Tuple)
+    if dims == 1
+        @inbounds for i in eachindex(fhat); fhat[i] *= deriv_mult[i]; end
+    elseif dims == 2
+        if axis == 1
+            @inbounds for i in 1:data_shape[1]
+                factor = deriv_mult[i]
+                for j in 1:data_shape[2]; fhat[i, j] *= factor; end
+            end
+        else
+            @inbounds for j in 1:data_shape[2]
+                factor = deriv_mult[j]
+                for i in 1:data_shape[1]; fhat[i, j] *= factor; end
+            end
+        end
+    else  # dims == 3
+        if axis == 1
+            @inbounds for i in 1:data_shape[1]
+                factor = deriv_mult[i]
+                for j in 1:data_shape[2], k in 1:data_shape[3]; fhat[i, j, k] *= factor; end
+            end
+        elseif axis == 2
+            @inbounds for j in 1:data_shape[2]
+                factor = deriv_mult[j]
+                for i in 1:data_shape[1], k in 1:data_shape[3]; fhat[i, j, k] *= factor; end
+            end
+        else
+            @inbounds for k in 1:data_shape[3]
+                factor = deriv_mult[k]
+                for i in 1:data_shape[1], j in 1:data_shape[2]; fhat[i, j, k] *= factor; end
+            end
+        end
+    end
+    return fhat
+end
+
 """
     evaluate_fourier_derivative_cpu!(result, data_g, deriv_mult, axis, dims, data_shape, layout)
 
 CPU-specific implementation using optimized loops.
 """
 function evaluate_fourier_derivative_cpu!(result::ScalarField, data_g::AbstractArray, deriv_mult::AbstractVector, axis::Int, dims::Int, data_shape::Tuple, layout::Symbol)
-    if dims == 1
-        # 1D case - FFT along only dimension
-        f_hat = fft(data_g)
-
-        # Apply derivative: multiply by (ik)^order
-        @inbounds for i in 1:length(f_hat)
-            f_hat[i] *= deriv_mult[i]
+    if dims in (1, 2, 3)
+        # Cached FFT plans + buffers (keyed by local shape/axis/eltype) reuse memory
+        # across calls instead of allocating fft/ifft outputs each time. Same
+        # semantics as fft(data_g, axis); for MPI the framework already orients the
+        # derivative axis locally before calling this, so per-rank caching is valid.
+        cin, fhat, rout, pf, pin = _get_deriv_workspace!(data_g, axis, dims)
+        copyto!(cin, data_g)
+        mul!(fhat, pf, cin)
+        # The deriv-multiplier loop runs through a function barrier so it is not
+        # boxed (cin/fhat come from an `Any`-typed cache here).
+        _apply_deriv_mult!(fhat, deriv_mult, axis, dims, data_shape)
+        mul!(cin, pin, fhat)   # cin = ifft(fhat) along axis (normalized)
+        if result.dtype <: Real
+            @inbounds @. rout = real(cin)
+            _write_to_grid_data!(result, rout)
+        else
+            _write_to_grid_data!(result, cin)
         end
-
-        # Inverse transform
-        deriv_g = result.dtype <: Real ? real.(ifft(f_hat)) : ifft(f_hat)
-        _write_to_grid_data!(result, deriv_g)
-        result.current_layout = :g
-
-    elseif dims == 2
-        # 2D case: apply FFT only along the specified axis
-        f_hat = fft(data_g, axis)
-
-        if axis == 1
-            # Derivative along first axis - wavenumbers vary with first index
-            @inbounds for i in 1:data_shape[1]
-                factor = deriv_mult[i]
-                for j in 1:data_shape[2]
-                    f_hat[i, j] *= factor
-                end
-            end
-        else  # axis == 2
-            # Derivative along second axis - wavenumbers vary with second index
-            @inbounds for j in 1:data_shape[2]
-                factor = deriv_mult[j]
-                for i in 1:data_shape[1]
-                    f_hat[i, j] *= factor
-                end
-            end
-        end
-
-        # Inverse transform along same axis
-        deriv_g = result.dtype <: Real ? real.(ifft(f_hat, axis)) : ifft(f_hat, axis)
-        _write_to_grid_data!(result, deriv_g)
-        result.current_layout = :g
-
-    elseif dims == 3
-        # 3D case: apply FFT only along the specified axis
-        f_hat = fft(data_g, axis)
-
-        if axis == 1
-            @inbounds for i in 1:data_shape[1]
-                factor = deriv_mult[i]
-                for j in 1:data_shape[2], k in 1:data_shape[3]
-                    f_hat[i, j, k] *= factor
-                end
-            end
-        elseif axis == 2
-            @inbounds for j in 1:data_shape[2]
-                factor = deriv_mult[j]
-                for i in 1:data_shape[1], k in 1:data_shape[3]
-                    f_hat[i, j, k] *= factor
-                end
-            end
-        else  # axis == 3
-            @inbounds for k in 1:data_shape[3]
-                factor = deriv_mult[k]
-                for i in 1:data_shape[1], j in 1:data_shape[2]
-                    f_hat[i, j, k] *= factor
-                end
-            end
-        end
-
-        # Inverse transform along same axis
-        deriv_g = result.dtype <: Real ? real.(ifft(f_hat, axis)) : ifft(f_hat, axis)
-        _write_to_grid_data!(result, deriv_g)
         result.current_layout = :g
     else
         throw(ArgumentError("Fourier derivative only implemented for 1D, 2D, and 3D"))

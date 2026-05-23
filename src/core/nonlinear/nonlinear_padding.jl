@@ -344,8 +344,9 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     end
     ws.plan_spec_backward * ws.spec_result
 
-    # Write result to output field
-    result = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
+    # Write result to a pooled output field (rotating buffers — distinct for
+    # consecutively-held products like cross product; no per-call allocation).
+    result = _checkout_nl_result!(evaluator, field1)
     ensure_layout!(result, :g)
     result_data = get_grid_data(result)
 
@@ -577,6 +578,21 @@ support up to 2N/3; on the N grid those modes alias only into |k| ≥ N/3, so th
 retained |k| ≤ N/3 band is alias-free — i.e. quadratic terms are dealiased
 exactly within the retained band.
 """
+# Rotating pool of product-result buffers: avoids a fresh ScalarField per product
+# while still handing distinct buffers to callers that hold several products at
+# once (e.g. cross product). 8 buffers ⇒ safe for realistic nested product depth;
+# each buffer is fully overwritten before reuse.
+const _NL_RESULT_POOL_SIZE = 8
+const _NL_RESULT_IDX = Ref(0)
+
+function _checkout_nl_result!(evaluator::NonlinearEvaluator, field1::ScalarField)
+    i = _NL_RESULT_IDX[] % _NL_RESULT_POOL_SIZE
+    _NL_RESULT_IDX[] += 1
+    key = string("_nl_result_", i, "_", hash(field1.bases), "_", field1.dtype)
+    return get!(() -> ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype),
+                evaluator.temp_fields, key)
+end
+
 function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::ScalarField,
                                                   evaluator::NonlinearEvaluator;
                                                   result_layout::Symbol=:g)
@@ -597,9 +613,9 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
     _truncate_coeff_only!(f2, field2, factor)
     _pencil_batched_backward!([f1, f2])
 
-    # Multiply on the grid. `result` is freshly allocated because callers may
-    # retain it while computing another product (e.g. cross product).
-    result = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
+    # Multiply on the grid. `result` comes from a rotating buffer pool — distinct
+    # buffers for consecutively-held products (e.g. cross product), no per-call alloc.
+    result = _checkout_nl_result!(evaluator, field1)
     ensure_layout!(result, :g)
     result_data = get_grid_data(result)
     d1 = get_grid_data(f1)
