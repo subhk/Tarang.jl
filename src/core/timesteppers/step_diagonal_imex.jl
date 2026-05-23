@@ -609,3 +609,95 @@ function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::I
     _refresh_algebraic_state!(solver.problem, pred)
     _push_trim!(state.history, pred, 2)
 end
+
+# ============================================================================
+# Distributed diagonal IMEX Runge-Kutta for MPI pure-Fourier problems.
+#
+# The global IMEX-RK path solves (M + dt·aᴵ_ss·L)·Yₛ = RHS per stage with a
+# global matrix; under MPI (no subproblems) it instead falls back to a fully
+# EXPLICIT RK, which cannot integrate stiff implicit linear terms (νΔ⁴, μ) and
+# produces high-wavenumber blowup. Here each stage's implicit solve is diagonal
+# in Fourier space: Yₛ = RHS / (1 + dt·aᴵ_ss·L̂(k)) per rank-local mode.
+# ============================================================================
+
+"""
+    step_distributed_diagonal_imex_rk!(state, solver, ts)
+
+IMEX Runge-Kutta (ARS-type tableau `ts`) with per-mode diagonal implicit
+treatment of each time-stepped field's linear operator, for MPI pure-Fourier
+problems. Stage solve: `(1 + dt·aᴵ_ss·L̂)·Yₛ = Xₙ + dt·Σ_{j<s}(aᴱ_sj·F_j − aᴵ_sj·L̂·Y_j)`;
+update `Xₙ₊₁ = Xₙ + dt·Σ_s(bᴱ_s·F_s − bᴵ_s·L̂·Y_s)`. Algebraic variables are
+refreshed per stage via `_refresh_algebraic_state!`.
+"""
+function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::InitialValueSolver, ts)
+    X_n = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
+    Lhats = _get_distributed_diagonal_Lhats!(state, solver)
+    S = ts.stages
+    AE = ts.A_explicit; AI = ts.A_implicit
+    bE = ts.b_explicit; bI = ts.b_implicit; cc = ts.c_explicit
+
+    Ys = Vector{Vector{ScalarField}}(undef, S)   # stage states
+    Fs = Vector{Vector{ScalarField}}(undef, S)    # F(Y_s), copied (evaluate_rhs reuses buffers)
+
+    for s in 1:S
+        Y = copy_state(X_n)
+        for (i, field) in enumerate(Y)
+            haskey(Lhats, i) || continue
+            ensure_layout!(field, :c)
+            d = _local_coeff(get_coeff_data(field))           # starts as X_n[i]
+            Lhat = Lhats[i]
+            for j in 1:s-1
+                if AE[s, j] != 0.0
+                    fj = _local_coeff(get_coeff_data(Fs[j][i]))
+                    _ddirk_axpy!(d, dt * AE[s, j], fj)
+                end
+                if AI[s, j] != 0.0
+                    yj = _local_coeff(get_coeff_data(Ys[j][i]))
+                    _ddirk_axpy_lhat!(d, -dt * AI[s, j], Lhat, yj)
+                end
+            end
+            if AI[s, s] != 0.0
+                _ddirk_implicit_divide!(d, Lhat, dt * AI[s, s])
+            end
+        end
+        _refresh_algebraic_state!(solver.problem, Y)
+        Ys[s] = Y
+        Fs[s] = copy_state(evaluate_rhs(solver, Y, t + cc[s] * dt))
+    end
+
+    X_new = copy_state(X_n)
+    for (i, field) in enumerate(X_new)
+        haskey(Lhats, i) || continue
+        ensure_layout!(field, :c)
+        d = _local_coeff(get_coeff_data(field))
+        Lhat = Lhats[i]
+        for s in 1:S
+            if bE[s] != 0.0
+                fs = _local_coeff(get_coeff_data(Fs[s][i]))
+                _ddirk_axpy!(d, dt * bE[s], fs)
+            end
+            if bI[s] != 0.0
+                ys = _local_coeff(get_coeff_data(Ys[s][i]))
+                _ddirk_axpy_lhat!(d, -dt * bI[s], Lhat, ys)
+            end
+        end
+    end
+    _refresh_algebraic_state!(solver.problem, X_new)
+    _push_trim!(state.history, X_new, 2)
+end
+
+# Function barriers (concrete array types resolved at the call → type-stable).
+@inline function _ddirk_axpy!(d::AbstractArray, a::Float64, x::AbstractArray)
+    @inbounds @. d += a * x
+    return d
+end
+@inline function _ddirk_axpy_lhat!(d::AbstractArray, a::Float64, Lhat::AbstractArray, x::AbstractArray)
+    @inbounds @. d += a * Lhat * x
+    return d
+end
+@inline function _ddirk_implicit_divide!(d::AbstractArray, Lhat::AbstractArray, c::Float64)
+    @inbounds @. d /= (1.0 + c * Lhat)
+    return d
+end

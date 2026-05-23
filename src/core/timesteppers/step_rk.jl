@@ -71,6 +71,14 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
 
     fallback_reason = _imex_rk_explicit_fallback_reason(state, solver, current_state, L_matrix)
     if fallback_reason !== nothing
+        # MPI pure-Fourier has no subproblems and no global L_matrix, so the IMEX
+        # solve can't run as a matrix solve — but the linear operator is diagonal
+        # in Fourier space, so treat it per-mode instead of degrading to a fully
+        # explicit step (which blows up on stiff νΔ⁴/μ → high-wavenumber noise).
+        if _distributed_diagonal_imex_applicable(solver)
+            step_distributed_diagonal_imex_rk!(state, solver, ts)
+            return nothing
+        end
         _log_imex_rk_explicit_fallback(fallback_reason)
         _step_rk_imex_explicit_fallback!(state, solver, ts)
         return nothing
