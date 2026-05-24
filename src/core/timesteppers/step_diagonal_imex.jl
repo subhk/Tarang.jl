@@ -441,8 +441,13 @@ end
 
 @inline function _ddi_sbdf2_update!(d::AbstractArray, dn::AbstractArray, dnm1::AbstractArray,
                                     fn::AbstractArray, fnm1::AbstractArray,
-                                    Lhat::AbstractArray, dt::Float64)
-    @inbounds @. d = (2 * dn - 0.5 * dnm1 + dt * (2 * fn - fnm1)) / (1.5 + dt * Lhat)
+                                    Lhat::AbstractArray, dt::Float64, w::Float64)
+    # Variable-dt SBDF2 (w = dtₙ/dtₙ₋₁): BDF2 implicit on the linear operator,
+    # AB2 extrapolation of the nonlinear term. Reduces to the constant-dt scheme
+    # (3/2, 2, -1/2, 2, -1) at w=1. Correct under CFL-adaptive timestepping.
+    a0 = (1.0 + 2.0 * w) / (1.0 + w)
+    a2 = w * w / (1.0 + w)
+    @inbounds @. d = ((1.0 + w) * dn - a2 * dnm1 + dt * ((1.0 + w) * fn - w * fnm1)) / (a0 + dt * Lhat)
     return d
 end
 
@@ -451,8 +456,8 @@ end
 
 SBDF2 with diagonal implicit treatment of each time-stepped field's linear
 operator, for MPI pure-Fourier problems. Algebraic variables are refreshed via
-`_refresh_algebraic_state!`. Uses constant-dt SBDF coefficients; warns on
-significantly varying dt.
+`_refresh_algebraic_state!`. Uses variable-dt SBDF2 coefficients (w = dtₙ/dtₙ₋₁),
+so CFL-adaptive timestepping is handled correctly.
 """
 function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
@@ -485,9 +490,7 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
         _push_trim!(Fhist, copy_state(F_n), 2)
     else
         dt_prev = length(state.dt_history) >= 2 ? state.dt_history[end-1] : dt
-        if !isapprox(dt, dt_prev, rtol=0.01)
-            @warn "Distributed diagonal IMEX SBDF2 uses constant-dt coefficients but dt/dt_prev=$(dt/dt_prev)." maxlog=1
-        end
+        w = dt / dt_prev   # variable-dt SBDF2 ratio (handles CFL-adaptive dt)
         X_n = current_state
         X_nm1 = state.history[end-1]
         F_nm1 = Fhist[end]
@@ -501,7 +504,7 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
                                _local_coeff(get_coeff_data(X_nm1[i])),
                                _local_coeff(get_coeff_data(F_n[i])),
                                _local_coeff(get_coeff_data(F_nm1[i])),
-                               Lhats[i], dt)
+                               Lhats[i], dt, w)
         end
         _refresh_algebraic_state!(solver.problem, new_state)
         _push_trim!(state.history, new_state, 2)
