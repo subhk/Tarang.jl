@@ -19,8 +19,13 @@ function evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
     operand = int_op.operand
     coord = int_op.coord
 
+    # Accept composite expressions (e.g. integrate(0.5*(u⋅u), coords)): reduce the
+    # operand tree to a scalar field first, then integrate (Dedalus-style).
     if !isa(operand, ScalarField)
-        throw(ArgumentError("Integrate currently only supports scalar fields"))
+        operand = evaluate(operand)
+    end
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("integrate: operand must reduce to a scalar field, got $(typeof(operand))"))
     end
 
     # Handle single coordinate or tuple of coordinates
@@ -281,8 +286,12 @@ function evaluate_average(avg_op::Average, layout::Symbol=:g)
     operand = avg_op.operand
     coord = avg_op.coord
 
+    # Accept composite expressions: reduce the operand tree to a scalar field first.
     if !isa(operand, ScalarField)
-        throw(ArgumentError("Average currently only supports scalar fields"))
+        operand = evaluate(operand)
+    end
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("average: operand must reduce to a scalar field, got $(typeof(operand))"))
     end
 
     # Find the basis for this coordinate

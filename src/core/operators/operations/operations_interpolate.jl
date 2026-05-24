@@ -18,8 +18,12 @@ function evaluate_interpolate(interp_op::Interpolate, layout::Symbol=:g)
     coord = interp_op.coord
     position = interp_op.position
 
+    # Accept composite expressions: reduce the operand tree to a scalar field first.
     if !isa(operand, ScalarField)
-        throw(ArgumentError("Interpolate currently only supports scalar fields"))
+        operand = evaluate(operand)
+    end
+    if !isa(operand, ScalarField)
+        throw(ArgumentError("interpolate: operand must reduce to a scalar field, got $(typeof(operand))"))
     end
 
     # Find which basis corresponds to this coordinate
