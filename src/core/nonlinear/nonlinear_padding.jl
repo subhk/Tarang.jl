@@ -131,8 +131,11 @@ function _get_padded_workspace!(evaluator::NonlinearEvaluator, bases::Tuple, dty
         plan_spec_forward = plan_fft!(spec1, fourier_dims)
         plan_spec_backward = plan_ifft!(spec_result, fourier_dims)
     else
-        plan_forward = FFTW.plan_fft(padded1, fourier_dims; flags=FFTW.MEASURE)
-        plan_backward = FFTW.plan_ifft(padded1, fourier_dims; flags=FFTW.MEASURE)
+        # In-place padded plans (UNALIGNED — applied to padded1/padded2/padded_product):
+        # the per-call `ws.padded .= plan * ws.padded` then transforms in place instead
+        # of allocating a fresh padded array each FFT/IFFT (~one padded array per call).
+        plan_forward = FFTW.plan_fft!(padded1, fourier_dims; flags=FFTW.MEASURE | FFTW.UNALIGNED)
+        plan_backward = FFTW.plan_ifft!(padded1, fourier_dims; flags=FFTW.MEASURE | FFTW.UNALIGNED)
         # UNALIGNED: the forward plan is built on spec1 but also applied to spec2,
         # so it must not bake in a single buffer's memory alignment.
         plan_spec_forward = FFTW.plan_fft!(spec1, fourier_dims; flags=FFTW.MEASURE | FFTW.UNALIGNED)
@@ -201,19 +204,16 @@ function _pad_spectral_sliced_2d!(padded, spec_data, original_shape, padded_shap
     r1 = _freq_ranges(original_shape[1], padded_shape[1], 1 in fourier_dims)
     r2 = _freq_ranges(original_shape[2], padded_shape[2], 2 in fourier_dims)
 
-    # Copy positive-positive block
-    padded[r1[2], r2[2]] .= spec_data[r1[1], r2[1]]
-    # Copy positive-negative block
+    # @views: range-indexed RHS slices are views, not materialized copies (no per-call alloc).
+    @views padded[r1[2], r2[2]] .= spec_data[r1[1], r2[1]]
     if length(r2[3]) > 0
-        padded[r1[2], r2[4]] .= spec_data[r1[1], r2[3]]
+        @views padded[r1[2], r2[4]] .= spec_data[r1[1], r2[3]]
     end
-    # Copy negative-positive block
     if length(r1[3]) > 0
-        padded[r1[4], r2[2]] .= spec_data[r1[3], r2[1]]
+        @views padded[r1[4], r2[2]] .= spec_data[r1[3], r2[1]]
     end
-    # Copy negative-negative block
     if length(r1[3]) > 0 && length(r2[3]) > 0
-        padded[r1[4], r2[4]] .= spec_data[r1[3], r2[3]]
+        @views padded[r1[4], r2[4]] .= spec_data[r1[3], r2[3]]
     end
 end
 
@@ -255,15 +255,15 @@ function _truncate_spectral!(result::AbstractArray{Complex{T}}, padded_spec::Abs
     elseif ndim == 2
         r1 = _freq_ranges(original_shape[1], padded_shape[1], 1 in fourier_dims)
         r2 = _freq_ranges(original_shape[2], padded_shape[2], 2 in fourier_dims)
-        result[r1[1], r2[1]] .= padded_spec[r1[2], r2[2]]
+        @views result[r1[1], r2[1]] .= padded_spec[r1[2], r2[2]]
         if length(r2[3]) > 0
-            result[r1[1], r2[3]] .= padded_spec[r1[2], r2[4]]
+            @views result[r1[1], r2[3]] .= padded_spec[r1[2], r2[4]]
         end
         if length(r1[3]) > 0
-            result[r1[3], r2[1]] .= padded_spec[r1[4], r2[2]]
+            @views result[r1[3], r2[1]] .= padded_spec[r1[4], r2[2]]
         end
         if length(r1[3]) > 0 && length(r2[3]) > 0
-            result[r1[3], r2[3]] .= padded_spec[r1[4], r2[4]]
+            @views result[r1[3], r2[3]] .= padded_spec[r1[4], r2[4]]
         end
     elseif ndim == 3
         r1 = _freq_ranges(original_shape[1], padded_shape[1], 1 in fourier_dims)
