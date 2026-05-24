@@ -350,18 +350,14 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     ensure_layout!(result, :g)
     result_data = get_grid_data(result)
 
-    # Extract the correctly-typed grid values
-    scaled_result = if field1.dtype <: Real
-        real.(ws.spec_result) .* scale
+    # Write the scaled result directly into the (preallocated) output grid via a
+    # fused broadcast — no intermediate `scaled_result` allocation. The workspace
+    # and the output field share an architecture, so no device transfer is needed.
+    dst = is_pencil ? parent(result_data) : result_data
+    if field1.dtype <: Real
+        @. dst = real(ws.spec_result) * scale
     else
-        ws.spec_result .* scale
-    end
-
-    # Write back — handle PencilArray wrapper
-    if is_pencil
-        parent(result_data) .= on_architecture(ws.arch, scaled_result)
-    else
-        result_data .= scaled_result
+        @. dst = ws.spec_result * scale
     end
 
     return result
