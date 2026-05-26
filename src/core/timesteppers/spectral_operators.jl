@@ -38,7 +38,8 @@ struct SpectralLinearOperator{T<:AbstractFloat, N, A<:AbstractArray{T,N}}
     coefficients::A                          # L̂(k) diagonal values
     architecture::AbstractArchitecture
     operator_type::Symbol                    # :laplacian, :hyperviscosity, :custom
-    parameters::Dict{Symbol, Any}            # ν, order, etc.
+    ν::Float64                               # viscosity/diffusion coefficient
+    order::Int                               # power of Laplacian (1 = ∇², 2 = ∇⁴, …)
 end
 
 """
@@ -113,10 +114,8 @@ function SpectralLinearOperator(
         L_coeffs = on_architecture(arch, L_coeffs_cpu)
     end
 
-    params = Dict{Symbol, Any}(:ν => ν, :order => order)
-
     SpectralLinearOperator{T, N, typeof(L_coeffs)}(
-        L_coeffs, arch, operator_type, params
+        L_coeffs, arch, operator_type, Float64(ν), order
     )
 end
 

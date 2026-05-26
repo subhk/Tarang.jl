@@ -113,7 +113,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
     # automatically invalidates when dt changes (adaptive stepping).
     lhs_cache = get!(state.timestepper_data, :imex_rk_lhs_cache) do
         Dict{Tuple{Float64, Float64}, Any}()
-    end
+    end::Dict{Tuple{Float64, Float64}, Any}
 
     # Loop over stages
     # Each stage solves: (M + dt*a_ss*L) * X_s = M*X_n + dt*Σ_{j<s}(a^E*F - a^I*L*X)
@@ -263,7 +263,7 @@ function _get_constrained_mass_solver!(state::TimestepperState,
         cache[:imex_rk_constrained_M_source] = M_matrix
         cache[:imex_rk_constrained_L_source] = L_matrix
     end
-    return cache[:imex_rk_constrained_mass_solver], cache[:imex_rk_constrained_mass_rows]
+    return cache[:imex_rk_constrained_mass_solver], cache[:imex_rk_constrained_mass_rows]::Vector{Int}
 end
 
 function _zero_mass_rows(M::AbstractMatrix)

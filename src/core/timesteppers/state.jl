@@ -347,10 +347,6 @@ function _get_linear_operator_lhs!(state::TimestepperState, L_matrix::AbstractMa
     return cache[:L_eff]::AbstractMatrix, M_factor
 end
 
-function _apply_mass_inverse(M_factor, vec::AbstractVector)
-    return M_factor === nothing ? vec : (M_factor \ vec)
-end
-
 function _apply_mass_inverse!(dest::AbstractVector, ::Nothing, vec::AbstractVector)
     dest === vec || copyto!(dest, vec)
     return dest

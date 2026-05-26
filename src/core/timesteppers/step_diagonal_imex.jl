@@ -26,20 +26,23 @@ This avoids sparse matrix solves and stays 100% on GPU.
 """
 function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
-    current_state = state.history[end]
-    dt = state.dt
-    t = solver.sim_time
-
-    # Get spectral linear operator from solver/problem
     L_spectral = _get_spectral_linear_operator(solver)
-
     if L_spectral === nothing
-        # No spectral operator: fall back to explicit RK
         @debug "DiagonalIMEX_RK222: No spectral operator, using explicit RK"
         _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
         return
     end
+    _step_diagonal_imex_rk222_impl!(state, solver, ts, L_spectral)
+    return nothing
+end
 
+# Function barrier: L is now a concrete SpectralLinearOperator{T,N,A}, so
+# L.coefficients has concrete type A and all broadcasts below are type-stable.
+function _step_diagonal_imex_rk222_impl!(state::TimestepperState, solver::InitialValueSolver,
+                                          ts::TimeStepper, L::SpectralLinearOperator)
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
     γ = ts.γ
     A = ts.A_explicit
     b_exp = ts.b_explicit
@@ -47,34 +50,19 @@ function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValue
     c = ts.c_explicit
     stages = ts.stages
 
-    # Stage storage for RHS evaluations
     F_stages = Vector{Vector{ScalarField}}(undef, stages)
-    # Stage values
-    Y_stages = Vector{Vector{ScalarField}}(undef, stages)
+    n_fields = length(current_state)
+    # Pre-allocate Y_s containers once; reuse across stages (each inner slot gets
+    # replaced by a workspace field reference, so no per-stage Vector allocation).
+    Y_stages = [Vector{ScalarField}(undef, n_fields) for _ in 1:stages]
 
-    # IMEX-RK with per-stage implicit solve, all in coefficient space:
-    # For each stage s, solve (I + dt*γ*L̂) Ŷ_s = X̂_n + dt * Σ_{j<s} a_{sj} F̂_j
-    # then evaluate the explicit RHS at the implicitly-solved stage value.
-    #
-    # WARNING: This implementation omits the off-diagonal implicit contributions
-    # (- dt * Σ_{j<s} A_imp[s,j] * L̂ * Ŷ_j) from the stage RHS. For stiffly
-    # accurate ESDIRK methods this means the method is only first-order accurate
-    # in the stiff limit (dt*|λ| >> 1). The full IMEX-RK formulation is in step_rk.jl.
-
-    # Ensure initial state is in coefficient space
     for field in current_state
         ensure_layout!(field, :c)
     end
 
-    n_fields = length(current_state)
-
     for s in 1:stages
         state.current_substep = s
-
-        # Build explicit contribution in coefficient space:
-        # Ŷ_s = X̂_n + dt * Σ_{j<s} A[s,j] * F̂_j
-        # Use workspace fields instead of copy_state to avoid allocation
-        Y_s = Vector{ScalarField}(undef, n_fields)
+        Y_s = Y_stages[s]
         for (k, src_field) in enumerate(current_state)
             ws_idx = (s - 1) * n_fields + k
             ws_field = get_workspace_field!(state, src_field, ws_idx)
@@ -88,32 +76,22 @@ function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValue
                     coeff_data .+= dt .* A[s, j] .* get_coeff_data(F_stages[j][k])
                 end
             end
-
-            # Apply per-stage implicit solve: Ŷ_s = RHS / (1 + dt*γ*L̂)
-            coeff_data ./= (1 .+ dt .* γ .* L_spectral.coefficients)
+            coeff_data ./= (1 .+ dt .* γ .* L.coefficients)
         end
-
-        Y_stages[s] = Y_s
-
-        # Evaluate nonlinear RHS at implicitly-solved stage value
         F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
     end
 
-    # Final update in coefficient space using separate explicit and implicit weights:
-    # X̂_{n+1} = X̂_n + dt * Σ b_exp[s] * F̂_s - dt * Σ b_imp[s] * L̂ * Ŷ_s
     new_state = copy_state(current_state)
     for (k, field) in enumerate(new_state)
         coeff_data = get_coeff_data(field)
         for s in 1:stages
-            # Explicit contribution: +dt * b_exp[s] * F̂_s
             if abs(b_exp[s]) > 1e-14
                 ensure_layout!(F_stages[s][k], :c)
                 coeff_data .+= dt .* b_exp[s] .* get_coeff_data(F_stages[s][k])
             end
-            # Implicit contribution: -dt * b_imp[s] * L̂ * Ŷ_s
             if abs(b_imp[s]) > 1e-14
                 ensure_layout!(Y_stages[s][k], :c)
-                coeff_data .-= dt .* b_imp[s] .* L_spectral.coefficients .* get_coeff_data(Y_stages[s][k])
+                coeff_data .-= dt .* b_imp[s] .* L.coefficients .* get_coeff_data(Y_stages[s][k])
             end
         end
     end
@@ -136,19 +114,22 @@ treatment of linear operator at each stage and final update.
 """
 function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
-    current_state = state.history[end]
-    dt = state.dt
-    t = solver.sim_time
-
-    # Get spectral linear operator from solver/problem
     L_spectral = _get_spectral_linear_operator(solver)
-
     if L_spectral === nothing
         @debug "DiagonalIMEX_RK443: No spectral operator, using explicit RK"
         _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
         return
     end
+    _step_diagonal_imex_rk443_impl!(state, solver, ts, L_spectral)
+    return nothing
+end
 
+# Function barrier: L has concrete SpectralLinearOperator{T,N,A} type here.
+function _step_diagonal_imex_rk443_impl!(state::TimestepperState, solver::InitialValueSolver,
+                                          ts::TimeStepper, L::SpectralLinearOperator)
+    current_state = state.history[end]
+    dt = state.dt
+    t = solver.sim_time
     A = ts.A_explicit
     b_exp = ts.b_explicit
     b_imp = ts.b_implicit
@@ -156,25 +137,17 @@ function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValue
     γ_diag = ts.A_implicit_diag
     stages = ts.stages
 
-    # IMEX-RK with per-stage implicit solve (SDIRK structure), all in coefficient space:
-    # For each stage s, solve (I + dt*γ_s*L̂) Ŷ_s = X̂_n + dt * Σ_{j<s} a_{sj} F̂_j
     F_stages = Vector{Vector{ScalarField}}(undef, stages)
-    Y_stages = Vector{Vector{ScalarField}}(undef, stages)
+    n_fields = length(current_state)
+    Y_stages = [Vector{ScalarField}(undef, n_fields) for _ in 1:stages]
 
-    # Ensure initial state is in coefficient space
     for field in current_state
         ensure_layout!(field, :c)
     end
 
-    n_fields = length(current_state)
-
     for s in 1:stages
         state.current_substep = s
-
-        # Build explicit contribution in coefficient space:
-        # Ŷ_s = X̂_n + dt * Σ_{j<s} A[s,j] * F̂_j
-        # Use workspace fields instead of copy_state to avoid allocation
-        Y_s = Vector{ScalarField}(undef, n_fields)
+        Y_s = Y_stages[s]
         γ_s = γ_diag[s]
         for (k, src_field) in enumerate(current_state)
             ws_idx = (s - 1) * n_fields + k
@@ -189,32 +162,22 @@ function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValue
                     coeff_data .+= dt .* A[s, j] .* get_coeff_data(F_stages[j][k])
                 end
             end
-
-            # Apply per-stage implicit solve: Ŷ_s = RHS / (1 + dt*γ_s*L̂)
-            coeff_data ./= (1 .+ dt .* γ_s .* L_spectral.coefficients)
+            coeff_data ./= (1 .+ dt .* γ_s .* L.coefficients)
         end
-
-        Y_stages[s] = Y_s
-
-        # Evaluate nonlinear RHS at implicitly-solved stage value
         F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
     end
 
-    # Final update in coefficient space using separate explicit and implicit weights:
-    # X̂_{n+1} = X̂_n + dt * Σ b_exp[s] * F̂_s - dt * Σ b_imp[s] * L̂ * Ŷ_s
     new_state = copy_state(current_state)
     for (k, field) in enumerate(new_state)
         coeff_data = get_coeff_data(field)
         for s in 1:stages
-            # Explicit contribution: +dt * b_exp[s] * F̂_s
             if abs(b_exp[s]) > 1e-14
                 ensure_layout!(F_stages[s][k], :c)
                 coeff_data .+= dt .* b_exp[s] .* get_coeff_data(F_stages[s][k])
             end
-            # Implicit contribution: -dt * b_imp[s] * L̂ * Ŷ_s
             if abs(b_imp[s]) > 1e-14
                 ensure_layout!(Y_stages[s][k], :c)
-                coeff_data .-= dt .* b_imp[s] .* L_spectral.coefficients .* get_coeff_data(Y_stages[s][k])
+                coeff_data .-= dt .* b_imp[s] .* L.coefficients .* get_coeff_data(Y_stages[s][k])
             end
         end
     end
@@ -243,7 +206,6 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
 
     L_spectral = _get_spectral_linear_operator(solver)
 
-    # Initialize history if needed
     if !haskey(state.timestepper_data, :F_history)
         state.timestepper_data[:F_history] = Vector{ScalarField}[]
         state.timestepper_data[:iteration] = 0
@@ -252,69 +214,74 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
     iteration = state.timestepper_data[:iteration]::Int
     F_history = state.timestepper_data[:F_history]::Vector{Vector{ScalarField}}
 
-    # Evaluate current RHS
     F_n = evaluate_rhs(solver, current_state, t)
 
     if iteration == 0 || length(state.history) < 2
-        # First step: use backward Euler (SBDF1)
-        # (1 + dt*L) X_{n+1} = X_n + dt*F_n
         new_state = copy_state(current_state)
         axpy_state!(dt, F_n, new_state)
-
         if L_spectral !== nothing
-            for field in new_state
-                # X̂ = RHS / (1 + dt*L̂)
-                ensure_layout!(field, :c)
-                get_coeff_data(field) ./= (1 .+ dt .* L_spectral.coefficients)
-            end
+            _sbdf2_apply_be_L!(new_state, L_spectral, dt)
         end
-
         _push_trim!(state.history, new_state, 2)
-
-        # Store F history
         _push_trim!(F_history, F_n, 2)
     else
-        # SBDF2 step
         X_n = current_state
         X_nm1 = state.history[end-1]
         F_nm1 = F_history[end]
 
-        # BDF2 + Adams-Bashforth extrapolation with constant-dt coefficients.
-        # For variable timestep, these should use w = dt/dt_prev ratios.
         dt_prev = length(state.dt_history) >= 2 ? state.dt_history[end-1] : dt
         if !isapprox(dt, dt_prev, rtol=0.01)
             @warn "DiagonalIMEX_SBDF2 uses constant-dt coefficients but dt/dt_prev = $(dt/dt_prev). Use SBDF2 (step_multistep.jl) for variable timesteps." maxlog=1
         end
-        # RHS = 2*X_n - 0.5*X_{n-1} + dt*(2*F_n - F_{n-1}); then divide by (1.5 + dt*L̂)
+
         new_state = copy_state(X_n)
-        for (i, result) in enumerate(new_state)
-            field_n   = X_n[i];   field_nm1 = X_nm1[i]
-            f_n       = F_n[i];   f_nm1     = F_nm1[i]
-
-            ensure_layout!(field_n, :c);  ensure_layout!(field_nm1, :c)
-            ensure_layout!(f_n, :c);      ensure_layout!(f_nm1, :c)
-            ensure_layout!(result, :c)
-
-            d = get_coeff_data(result)
-            dn = get_coeff_data(field_n);  dnm1 = get_coeff_data(field_nm1)
-            fn = get_coeff_data(f_n);      fnm1 = get_coeff_data(f_nm1)
-
-            @. d = 2*dn - 0.5*dnm1 + dt*(2*fn - fnm1)
-
-            if L_spectral !== nothing
-                @. d /= (1.5 + dt * L_spectral.coefficients)
-            else
-                d ./= 1.5
+        if L_spectral !== nothing
+            _sbdf2_apply_bdf2_L!(new_state, X_n, X_nm1, F_n, F_nm1, dt, dt_prev, L_spectral)
+        else
+            for (i, result) in enumerate(new_state)
+                field_n = X_n[i];  field_nm1 = X_nm1[i]
+                f_n = F_n[i];      f_nm1 = F_nm1[i]
+                ensure_layout!(field_n, :c);  ensure_layout!(field_nm1, :c)
+                ensure_layout!(f_n, :c);      ensure_layout!(f_nm1, :c)
+                ensure_layout!(result, :c)
+                d = get_coeff_data(result)
+                @. d = (2*get_coeff_data(field_n) - 0.5*get_coeff_data(field_nm1) +
+                        dt*(2*get_coeff_data(f_n) - get_coeff_data(f_nm1))) / 1.5
             end
         end
 
         _push_trim!(state.history, new_state, 2)
-
-        # Update F history
         _push_trim!(F_history, F_n, 2)
     end
 
     state.timestepper_data[:iteration] = iteration + 1
+end
+
+# Function barriers: L has concrete SpectralLinearOperator{T,N,A} type here,
+# so L.coefficients is concrete type A and broadcasts are type-stable.
+function _sbdf2_apply_be_L!(fields::Vector{<:ScalarField}, L::SpectralLinearOperator, dt::Float64)
+    for field in fields
+        ensure_layout!(field, :c)
+        _ddi_sbdf1_update!(get_coeff_data(field), L.coefficients, dt)
+    end
+end
+
+function _sbdf2_apply_bdf2_L!(new_state::Vector{<:ScalarField},
+                               X_n::Vector{<:ScalarField}, X_nm1::Vector{<:ScalarField},
+                               F_n::Vector{<:ScalarField}, F_nm1::Vector{<:ScalarField},
+                               dt::Float64, dt_prev::Float64, L::SpectralLinearOperator)
+    w = dt / dt_prev
+    for (i, result) in enumerate(new_state)
+        field_n = X_n[i];  field_nm1 = X_nm1[i]
+        f_n = F_n[i];      f_nm1 = F_nm1[i]
+        ensure_layout!(field_n, :c);  ensure_layout!(field_nm1, :c)
+        ensure_layout!(f_n, :c);      ensure_layout!(f_nm1, :c)
+        ensure_layout!(result, :c)
+        _ddi_sbdf2_update!(get_coeff_data(result),
+                           get_coeff_data(field_n), get_coeff_data(field_nm1),
+                           get_coeff_data(f_n), get_coeff_data(f_nm1),
+                           L.coefficients, dt, w)
+    end
 end
 
 # Note: _get_spectral_linear_operator and set_spectral_linear_operator! are
