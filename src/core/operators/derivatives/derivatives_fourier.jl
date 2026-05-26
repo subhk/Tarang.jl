@@ -192,34 +192,54 @@ function _apply_spectral_derivative_distributed!(coeff_data::PencilArrays.Pencil
         physical_axis = axis
     end
 
-    # Compute wavenumbers for the global axis
+    # The per-rank derivative multiplier (im*k)^order depends only on the basis,
+    # order, uses_rfft, and this rank's owned index range — all fixed across a run.
+    # Cache it so the wavenumber array isn't rebuilt and re-sliced every RHS eval.
+    local_range = axis <= length(local_axes) ? local_axes[axis] : nothing
+    deriv_mult = _get_cached_dist_deriv_mult!(coeff_data, basis, axis, order, uses_rfft, local_range)
+
+    # Apply to local data along the PHYSICAL axis in parent array (accounting for permutation)
+    mult_shape = ntuple(i -> i == physical_axis ? length(deriv_mult) : 1, ndims(local_data))
+    local_data .*= reshape(deriv_mult, mult_shape...)
+end
+
+"""
+Cached `(ik)^order` multiplier for this rank's owned slice of a distributed
+Fourier axis. Keyed by `(order, uses_rfft, axis, local_range_lo, local_range_hi)`
+in `basis.transforms`; the range bounds in the key guarantee a distinct entry if
+the decomposition ever differs, so cached values can never be misapplied. All
+size/bounds validation runs on the cache-miss path (config is fixed per run).
+"""
+function _get_cached_dist_deriv_mult!(coeff_data::PencilArrays.PencilArray,
+                                      basis::Union{RealFourier, ComplexFourier},
+                                      axis::Int, order::Int, uses_rfft::Bool, local_range)
+    lr_lo = local_range === nothing ? 0 : Int(first(local_range))
+    lr_hi = local_range === nothing ? 0 : Int(last(local_range))
+    cache_key = (:dist_deriv_mult, order, uses_rfft, axis, lr_lo, lr_hi)
+    cached = get(basis.transforms, cache_key, nothing)
+    cached !== nothing && return cached::Vector{ComplexF64}
+
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
     N_global = basis.meta.size
 
     # CRITICAL: In PencilFFTs, RFFT is only used on the FIRST RealFourier axis.
     # Subsequent RealFourier axes use FFT with full size N (not N/2+1).
-    # The `uses_rfft` parameter indicates whether this specific axis used RFFT.
     if isa(basis, RealFourier) && uses_rfft
-        # First RealFourier axis: coefficient size is div(N, 2) + 1
         N_coeff = div(N_global, 2) + 1
         k0 = 2π / L
-        # Wavenumbers for rfft: [0, 1, 2, ..., N/2]
-        k_global = collect(0:(N_coeff-1)) .* k0
+        k_global = collect(0:(N_coeff-1)) .* k0  # rfft: [0, 1, …, N/2]
     elseif isa(basis, RealFourier)
-        # Subsequent RealFourier axis: uses FFT with full size N
-        # Use fftfreq pattern for full complex spectrum
         N_coeff = N_global
         k0 = 2π / L
         k_global = _fftfreq(N_global) .* N_global .* k0
     else
-        # For ComplexFourier, use fftfreq pattern
         N_coeff = N_global
         k0 = 2π / L
         k_global = _fftfreq(N_global) .* N_global .* k0
     end
 
-    # CRITICAL: Validate that coefficient data global size matches expected N_coeff
-    # This catches mismatches between uses_rfft setting and actual data size
+    # CRITICAL: Validate coefficient global size matches expected N_coeff (catches
+    # uses_rfft / data-size mismatch).
     global_size_axis = PencilArrays.size_global(coeff_data)[axis]
     if global_size_axis != N_coeff
         error("Spectral derivative coefficient size mismatch on axis $axis: " *
@@ -228,10 +248,7 @@ function _apply_spectral_derivative_distributed!(coeff_data::PencilArrays.Pencil
               "Check that uses_rfft correctly identifies the first RealFourier axis.")
     end
 
-    # Get the range of global indices this process owns for the derivative axis
-    if axis <= length(local_axes)
-        local_range = local_axes[axis]
-        # Validate that local_range is within k_global bounds
+    if local_range !== nothing
         if last(local_range) > length(k_global)
             error("Spectral derivative index out of bounds: local_range=$local_range but k_global has $(length(k_global)) elements. " *
                   "This may indicate a mismatch between coefficient sizing and wavenumber computation. " *
@@ -239,16 +256,12 @@ function _apply_spectral_derivative_distributed!(coeff_data::PencilArrays.Pencil
         end
         k_local = k_global[local_range]
     else
-        # Axis is not distributed, use full wavenumber array
-        k_local = k_global
+        k_local = k_global  # Axis not distributed: use full wavenumber array
     end
 
-    # Compute derivative multiplier: (ik)^order
-    deriv_mult = (im .* k_local) .^ order
-
-    # Apply to local data along the PHYSICAL axis in parent array (accounting for permutation)
-    mult_shape = ntuple(i -> i == physical_axis ? length(deriv_mult) : 1, ndims(local_data))
-    local_data .*= reshape(deriv_mult, mult_shape...)
+    deriv_mult = ComplexF64.((im .* k_local) .^ order)
+    basis.transforms[cache_key] = deriv_mult
+    return deriv_mult
 end
 
 function _apply_spectral_derivative_distributed!(coeff_data::AbstractArray,

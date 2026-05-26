@@ -69,6 +69,7 @@ struct LazyDiff{T<:LazyFuture} <: LazyFuture
     operand::T
     coord::Coordinate
     order::Int
+    axis::Int   # basis axis resolved at translation time (0 = resolve at runtime)
 end
 
 # ── Workspace ────────────────────────────────────────────────────────────────
@@ -207,7 +208,8 @@ function translate_to_lazy(expr, state; target=nothing)
         end
         op = translate_to_lazy(op_expr, state; target=target)
         op === nothing && return nothing
-        return LazyDiff(op, expr.coord, expr.order)
+        axis = target !== nothing ? _resolve_diff_axis(expr.coord, target.bases) : 0
+        return LazyDiff(op, expr.coord, expr.order, axis)
     end
 
     # Future hierarchy
@@ -457,7 +459,7 @@ end
 function evaluate_lazy!(out::ScalarField, expr::LazyDiff, state, ws::LazyWorkspace)
     # Evaluate operand into out, then apply differentiation in-place
     evaluate_lazy!(out, expr.operand, state, ws)
-    _apply_lazy_diff!(out, expr.coord, expr.order)
+    _apply_lazy_diff!(out, expr.coord, expr.order, expr.axis)
     return out
 end
 
@@ -485,23 +487,25 @@ end
 
 # ── Differentiation using the field's transform machinery ───────────────────
 
-function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int)
-    coord_name = isa(coord.name, Symbol) ? String(coord.name) : String(coord.name)
-
-    # Find the axis matching this coordinate
-    axis = nothing
-    target_basis = nothing
-    for (i, basis) in enumerate(field.bases)
+"""Resolve which basis axis a coordinate maps to (0 if not present in `bases`)."""
+function _resolve_diff_axis(coord::Coordinate, bases)
+    coord_name = String(coord.name)
+    for (i, basis) in enumerate(bases)
         if basis !== nothing && String(basis.meta.element_label) == coord_name
-            axis = i
-            target_basis = basis
-            break
+            return i
         end
     end
+    return 0
+end
 
-    if target_basis === nothing || axis === nothing
-        return field  # Not in this field's bases — skip
-    end
+function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int, axis_hint::Int=0)
+    # Axis is precomputed at translation time; fall back to a runtime lookup only
+    # when the hint is absent (0), avoiding per-call string allocations otherwise.
+    axis = axis_hint == 0 ? _resolve_diff_axis(coord, field.bases) : axis_hint
+    axis == 0 && return field  # Not in this field's bases — skip
+
+    target_basis = field.bases[axis]
+    target_basis === nothing && return field
 
     # Switch to coefficient space
     ensure_layout!(field, :c)
@@ -548,21 +552,44 @@ function _apply_lazy_fourier_diff!(coeff_storage, field::ScalarField,
     data = get_local_data(coeff_storage)
     data === nothing && return coeff_storage
 
+    deriv_mult = _get_cached_lazy_deriv_mult(basis, order, uses_rfft)
+    if length(deriv_mult) != size(data, axis)
+        error("Lazy Fourier derivative coefficient size mismatch on axis $axis: " *
+              "local coefficient size is $(size(data, axis)) but expected $(length(deriv_mult)) " *
+              "(basis=$(typeof(basis)), uses_rfft=$uses_rfft).")
+    end
+
+    mult_shape = ntuple(i -> i == axis ? length(deriv_mult) : 1, ndims(data))
+    _lazy_scale_along_axis!(data, reshape(deriv_mult, mult_shape...))
+    return coeff_storage
+end
+
+"""
+Cache `(ik)^order` for the lazy Fourier derivative in `basis.transforms`.
+Keyed by `(order, uses_rfft)` since the basis (hence N and L) is fixed; this
+mirrors `_get_cached_deriv_mult` for the non-lazy path and avoids reallocating
+the wavenumber-multiplier array on every RHS evaluation.
+"""
+function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int, uses_rfft::Bool)
+    cache_key = (:lazy_deriv_mult, order, uses_rfft)
+    cached = get(basis.transforms, cache_key, nothing)
+    cached !== nothing && return cached::Vector{ComplexF64}
+
     k_axis = if isa(basis, RealFourier)
         uses_rfft ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
     else
         wavenumbers(basis)
     end
-    if length(k_axis) != size(data, axis)
-        error("Lazy Fourier derivative coefficient size mismatch on axis $axis: " *
-              "local coefficient size is $(size(data, axis)) but expected $(length(k_axis)) " *
-              "(basis=$(typeof(basis)), uses_rfft=$uses_rfft).")
-    end
+    deriv_mult = ComplexF64.((im .* k_axis) .^ order)
+    basis.transforms[cache_key] = deriv_mult
+    return deriv_mult
+end
 
-    deriv_mult = (im .* k_axis) .^ order
-    mult_shape = ntuple(i -> i == axis ? length(deriv_mult) : 1, ndims(data))
-    data .*= reshape(deriv_mult, mult_shape...)
-    return coeff_storage
+# Function barrier: `data` arrives `Any`-typed from `get_local_data`, so the
+# broadcast runs through a concrete-typed argument to stay allocation-free.
+@inline function _lazy_scale_along_axis!(data::AbstractArray, mult::AbstractArray)
+    data .*= mult
+    return data
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place."""
