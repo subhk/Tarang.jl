@@ -520,7 +520,7 @@ function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int, ax
         coeff_data = get_local_data(coeff_storage)
         coeff_data === nothing && return field
         D = differentiation_matrix(target_basis, order)
-        _apply_1d_matrix!(coeff_data, D, axis)
+        _apply_1d_matrix!(coeff_data, D, axis, target_basis)
     elseif isa(target_basis, FourierBasis)
         _apply_lazy_fourier_diff!(coeff_storage, field, target_basis, axis, order)
     else
@@ -592,27 +592,22 @@ end
     return data
 end
 
-"""Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place."""
-function _apply_1d_matrix!(data::AbstractArray, D::AbstractMatrix, axis::Int)
-    if ndims(data) == 1
-        data .= D * data
+"""Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place.
+
+The 1D/2D cases (the common Chebyshev/Jacobi spectral derivative) reuse a scratch
+buffer cached in `basis.transforms`, keyed by `(size, eltype)`, instead of
+allocating the matmul output every call. Safe because lazy RHS evaluation is
+sequential — the buffer is filled and consumed within a single call before any
+other derivative runs (same contract as the `_DERIV_FFT_WS` FFT buffers)."""
+function _apply_1d_matrix!(data::AbstractArray, D::AbstractMatrix, axis::Int, basis)
+    nd = ndims(data)
+    if nd == 1 || nd == 2
+        tmp = _diff_matmul_buffer(basis, data)
+        _matmul_axis_into!(data, D, tmp, axis)
         return data
     end
 
-    if ndims(data) == 2
-        if axis == 1
-            # result[i,j] = Σ_k D[i,k] * data[k,j]  →  D * data
-            tmp = D * data
-            copyto!(data, tmp)
-        elseif axis == 2
-            # result[i,j] = Σ_k data[i,k] * D[j,k]  →  data * D'
-            tmp = data * transpose(D)
-            copyto!(data, tmp)
-        end
-        return data
-    end
-
-    # Higher-dimensional: use permutedims to move axis to front
+    # Higher-dimensional (rare): permutedims path, left allocating.
     dims = [axis; [i for i in 1:ndims(data) if i != axis]]
     permuted = permutedims(data, dims)
     reshaped = reshape(permuted, size(permuted, 1), :)
@@ -620,6 +615,29 @@ function _apply_1d_matrix!(data::AbstractArray, D::AbstractMatrix, axis::Int)
     reshaped_back = reshape(transformed, size(permuted)...)
     unpermuted = permutedims(reshaped_back, invperm(dims))
     copyto!(data, unpermuted)
+    return data
+end
+
+"""Reusable matmul scratch for `_apply_1d_matrix!`, cached per basis by shape+eltype."""
+function _diff_matmul_buffer(basis, data::AbstractArray)
+    key = (:diff_matmul_tmp, size(data), eltype(data))
+    buf = get(basis.transforms, key, nothing)
+    if buf === nothing
+        buf = similar(data)
+        basis.transforms[key] = buf
+    end
+    return buf
+end
+
+# Function barrier: `data` and `tmp` arrive `Any`-typed (raw local array, Dict
+# value), so the `mul!`/`copyto!` run on concrete-typed arguments here.
+@inline function _matmul_axis_into!(data::AbstractArray, D::AbstractMatrix, tmp::AbstractArray, axis::Int)
+    if ndims(data) == 1 || axis == 1
+        mul!(tmp, D, data)            # (D * data) along first axis
+    else  # 2D, axis == 2
+        mul!(tmp, data, transpose(D)) # (data * Dᵀ) along second axis
+    end
+    copyto!(data, tmp)
     return data
 end
 
