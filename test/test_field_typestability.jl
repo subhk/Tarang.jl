@@ -21,6 +21,14 @@ using InteractiveUtils
         @test length(Tarang.get_coeff_data(tau)) == 0
     end
 
+    @testset "Phase 2: field array type fixed at construction" begin
+        u = ScalarField(dist, "u", (xb, yb), Float64)
+        ensure_layout!(u, :g)
+        gtype = typeof(Tarang.get_grid_data(u))
+        Tarang.synchronize_field_architecture!(u; arch=dist.architecture)
+        @test typeof(Tarang.get_grid_data(u)) === gtype
+    end
+
     @testset "Phase 3: get_grid_data is type-stable" begin
         u = ScalarField(dist, "u", (xb, yb), Float64)
         ensure_layout!(u, :g)

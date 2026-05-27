@@ -84,17 +84,12 @@ Moves grid (`data_g`) and coefficient (`data_c`) arrays via `on_architecture` wh
 """
 function synchronize_field_architecture!(field::ScalarField; arch::AbstractArchitecture=field.dist.architecture,
                                           move_grid::Bool=true, move_coefficients::Bool=true)
-    if move_grid && get_grid_data(field) !== nothing && !(field.dist.use_pencil_arrays)
-        if architecture(get_grid_data(field)) != arch
-            set_grid_data!(field, on_architecture(arch, get_grid_data(field)))
-        end
-    end
-    if move_coefficients && get_coeff_data(field) !== nothing && !(field.dist.use_pencil_arrays)
-        if architecture(get_coeff_data(field)) != arch
-            set_coeff_data!(field, on_architecture(arch, get_coeff_data(field)))
-        end
-    end
-    field.buffers.architecture = arch
+    # Fields are architecture-fixed: their array types are stable for life. A
+    # same-architecture call is a no-op; a cross-architecture request is a bug
+    # (build the field on the target architecture instead).
+    field.buffers.architecture == arch ||
+        throw(ArgumentError("synchronize_field_architecture!: in-place architecture moves are no longer supported " *
+                            "(field on $(field.buffers.architecture), requested $arch). Construct the field on the target architecture."))
     return field
 end
 
