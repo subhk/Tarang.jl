@@ -282,6 +282,8 @@ function allocate_field_data!(field::ScalarField, config::PencilConfig)
         # Serial execution: use global shapes with standard coefficient sizing
         coeff_global_shape = _compute_coeff_shape(config.global_shape, field.bases; use_pencil_fft=false)
         if is_gpu(arch)
+            arch == field.dist.architecture ||
+                throw(ArgumentError("pencil setup: array architecture $arch must match field architecture $(field.dist.architecture)"))
             set_grid_data!(field, create_array(arch, config.dtype, config.global_shape...))
             set_coeff_data!(field, create_array(arch, Complex{real(config.dtype)}, coeff_global_shape...))
         else
@@ -319,6 +321,8 @@ function allocate_field_data!(field::ScalarField, config::PencilConfig)
         local_coeff_shape = get_local_array_size(dist, coeff_global_shape)
 
         if is_gpu(arch)
+            arch == field.dist.architecture ||
+                throw(ArgumentError("pencil setup: array architecture $arch must match field architecture $(field.dist.architecture)"))
             set_grid_data!(field, create_array(arch, config.dtype, local_grid_shape...))
             set_coeff_data!(field, create_array(arch, Complex{real(config.dtype)}, local_coeff_shape...))
         else
