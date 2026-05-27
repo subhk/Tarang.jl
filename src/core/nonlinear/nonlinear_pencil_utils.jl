@@ -562,6 +562,7 @@ end
 """Clear temporary fields to free memory"""
 function clear_temp_fields!(evaluator::NonlinearEvaluator)
     empty!(evaluator.temp_fields)
+    empty!(evaluator.nl_result_pool)
     GC.gc()
 end
 

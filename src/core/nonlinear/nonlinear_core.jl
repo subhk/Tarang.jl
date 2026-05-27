@@ -148,12 +148,17 @@ mutable struct NonlinearEvaluator <: AbstractNonlinearEvaluator
     # Temporary fields and scratch arrays are owned by the evaluator so repeated
     # nonlinear RHS calls can reuse memory instead of allocating every stage.
     temp_fields::Dict{String, ScalarField}
+    # Rotating pool of nonlinear-product result buffers. Tuple key (pool slot,
+    # bases hash, dtype) avoids the per-product string-key allocation that a
+    # String-keyed dict would incur in `_checkout_nl_result!`.
+    nl_result_pool::Dict{Tuple{Int, UInt, DataType}, ScalarField}
     memory_pool::Vector{PencilArrays.PencilArray}
     scratch_arrays::Vector{AbstractArray}
     performance_stats::NonlinearPerformanceStats
 
     function NonlinearEvaluator(dist::Distributor; dealiasing_factor::Float64=3.0/2.0)
-        evaluator = new(dist, NonlinearTransformCache(), dealiasing_factor, Dict{String, ScalarField}(), PencilArrays.PencilArray[],
+        evaluator = new(dist, NonlinearTransformCache(), dealiasing_factor, Dict{String, ScalarField}(),
+                       Dict{Tuple{Int, UInt, DataType}, ScalarField}(), PencilArrays.PencilArray[],
                        AbstractArray[], NonlinearPerformanceStats())
         setup_nonlinear_transforms!(evaluator)
         return evaluator

@@ -286,6 +286,14 @@ end
 # Padded Multiply — architecture-aware
 # ============================================================================
 
+# Function barrier: `src` arrives `Any`-typed (from `on_architecture` on an
+# abstract-typed arch field). Dispatching here recovers its concrete type so the
+# convert-copy into `dst` is a specialized, allocation-free broadcast.
+@inline function _copy_convert_into!(dst::AbstractArray{Complex{T}}, src::AbstractArray) where {T}
+    dst .= Complex{T}.(src)
+    return dst
+end
+
 """
     evaluate_padded_multiply(field1, field2, evaluator, ws)
 
@@ -306,15 +314,18 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     raw1 = is_pencil ? parent(data1) : data1
     raw2 = is_pencil ? parent(data2) : data2
 
-    # Move to workspace architecture if needed
+    # Move to workspace architecture if needed. `ws.arch` is an abstract field,
+    # so `on_architecture` returns an `Any`-typed array; feed it through the
+    # `_copy_convert_into!` function barrier so the convert-copy specializes on
+    # the concrete array type instead of running a boxed, allocating broadcast.
     raw1_ws = on_architecture(ws.arch, raw1)
     raw2_ws = on_architecture(ws.arch, raw2)
 
     # Step 1: FFT to spectral along Fourier dimensions, in place via pre-built
     # plans (no per-call allocation). Plans dispatch to CUFFT for GPU arrays.
-    ws.spec1 .= Complex{T}.(raw1_ws)
+    _copy_convert_into!(ws.spec1, raw1_ws)
     ws.plan_spec_forward * ws.spec1
-    ws.spec2 .= Complex{T}.(raw2_ws)
+    _copy_convert_into!(ws.spec2, raw2_ws)
     ws.plan_spec_forward * ws.spec2
 
     # Step 2: Pad spectral coefficients
@@ -584,9 +595,15 @@ const _NL_RESULT_IDX = Ref(0)
 function _checkout_nl_result!(evaluator::NonlinearEvaluator, field1::ScalarField)
     i = _NL_RESULT_IDX[] % _NL_RESULT_POOL_SIZE
     _NL_RESULT_IDX[] += 1
-    key = string("_nl_result_", i, "_", hash(field1.bases), "_", field1.dtype)
-    return get!(() -> ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype),
-                evaluator.temp_fields, key)
+    # Tuple key (no per-call string allocation; matches the tuple-key convention
+    # used by `_get_padded_workspace!`).
+    key = (i, hash(field1.bases), field1.dtype)
+    pool = evaluator.nl_result_pool
+    cached = get(pool, key, nothing)
+    cached === nothing || return cached
+    field = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
+    pool[key] = field
+    return field
 end
 
 function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::ScalarField,
