@@ -51,11 +51,13 @@ Wraps the existing FieldBuffers structure.
 """
 mutable struct SerialFieldStorage <: AbstractFieldStorage
     architecture::AbstractArchitecture
-    grid::Union{Nothing, AbstractArray}   # PencilArray <: AbstractArray — no need for separate Pencil branch
-    coeff::Union{Nothing, AbstractArray}  # Reduced from 3-way to 2-way Union for better type inference
+    grid::AbstractArray
+    coeff::AbstractArray
 
     function SerialFieldStorage(arch::AbstractArchitecture)
-        new(arch, nothing, nothing)
+        # Transient empty sentinels; the ScalarField constructor overwrites these
+        # via set_grid_data!/set_coeff_data! before the field is observable.
+        new(arch, Array{Float64,1}(undef, 0), Array{ComplexF64,1}(undef, 0))
     end
 end
 
