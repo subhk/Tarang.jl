@@ -559,8 +559,11 @@ function _apply_lazy_fourier_diff!(coeff_storage, field::ScalarField,
               "(basis=$(typeof(basis)), uses_rfft=$uses_rfft).")
     end
 
+    # `data` is a concrete array (SerialFieldStorage is parametrized on the array
+    # type) and `deriv_mult` is a concrete Vector{ComplexF64}, so this broadcast is
+    # type-stable inline — no function barrier needed.
     mult_shape = ntuple(i -> i == axis ? length(deriv_mult) : 1, ndims(data))
-    _lazy_scale_along_axis!(data, reshape(deriv_mult, mult_shape...))
+    data .*= reshape(deriv_mult, mult_shape...)
     return coeff_storage
 end
 
@@ -583,13 +586,6 @@ function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int, uses_rfft:
     deriv_mult = ComplexF64.((im .* k_axis) .^ order)
     basis.transforms[cache_key] = deriv_mult
     return deriv_mult
-end
-
-# Function barrier: `data` arrives `Any`-typed from `get_local_data`, so the
-# broadcast runs through a concrete-typed argument to stay allocation-free.
-@inline function _lazy_scale_along_axis!(data::AbstractArray, mult::AbstractArray)
-    data .*= mult
-    return data
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place.
@@ -629,8 +625,9 @@ function _diff_matmul_buffer(basis, data::AbstractArray)
     return buf
 end
 
-# Function barrier: `data` and `tmp` arrive `Any`-typed (raw local array, Dict
-# value), so the `mul!`/`copyto!` run on concrete-typed arguments here.
+# Function barrier: `tmp` arrives `Any`-typed from the `Dict{Any,Any}` basis.transforms
+# cache (`data` is already concrete post storage parametrization), so dispatching here
+# recovers `tmp`'s concrete type and keeps `mul!`/`copyto!` allocation-free.
 @inline function _matmul_axis_into!(data::AbstractArray, D::AbstractMatrix, tmp::AbstractArray, axis::Int)
     if ndims(data) == 1 || axis == 1
         mul!(tmp, D, data)            # (D * data) along first axis
