@@ -37,9 +37,13 @@ end
     @testset "Field data access" begin
         f, _, _ = make_1d_scalar_field()
         ensure_layout!(f, :g)
-        # get_grid_data returns Union{Nothing, AbstractArray} — 2-way union is fine
-        @test get_grid_data(f) isa AbstractArray
-        @test get_coeff_data(f) === nothing || get_coeff_data(f) isa AbstractArray
+        # After the SerialFieldStorage{G,C} parametrization, get_grid_data/get_coeff_data
+        # return CONCRETE array types (not Union{Nothing, AbstractArray}). @inferred throws
+        # unless the inferred return type is concrete, so these assert the refactor's payoff.
+        @test @inferred(get_grid_data(f)) isa AbstractArray
+        @test @inferred(get_coeff_data(f)) isa AbstractArray
+        @test isconcretetype(typeof(get_grid_data(f)))
+        @test isconcretetype(typeof(get_coeff_data(f)))
 
         # _local_data is type-stable for plain arrays
         data = get_grid_data(f)
