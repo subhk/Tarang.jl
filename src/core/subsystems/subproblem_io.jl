@@ -277,7 +277,7 @@ end
 function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
     ensure_layout!(field, :c)
     cd_raw = get_coeff_data(field)
-    if cd_raw === nothing
+    if cd_raw === nothing || isempty(cd_raw)
         n = subproblem_field_size(sp, field)
         # Vectorized zero-fill: works on CPU and GPU without scalar indexing.
         if n > 0
@@ -334,7 +334,7 @@ end
 function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::Int, kx_global::Int, sp::Subproblem)
     ensure_layout!(field, :c)
     cd_raw = get_coeff_data(field)
-    if cd_raw === nothing
+    if cd_raw === nothing || isempty(cd_raw)
         return offset + subproblem_field_size(sp, field)
     end
     cd = _local_coeff_data(cd_raw)
