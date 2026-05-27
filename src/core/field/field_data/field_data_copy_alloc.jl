@@ -7,28 +7,23 @@ architecture synchronization, and initial data allocation.
 
 # Copy methods for ScalarField
 """Create a shallow copy of ScalarField with copied data arrays.
-Uses empty bases to construct a skeleton field without allocating data,
-then copies only the source field's arrays — avoids double allocation."""
+Constructs the skeleton with the source field's REAL bases so the parametric
+`SerialFieldStorage{G,C}` is allocated with matching concrete array types, then
+copies the live-layout array's values in place (the other array stays zeroed and
+is recomputed on the next layout change via `ensure_layout!`)."""
 function Base.copy(field::ScalarField)
-    new_field = ScalarField(field.dist, field.name, (), field.dtype)
-    # Restore metadata from source field
-    new_field.bases = field.bases
-    new_field.domain = field.domain
-    new_field.layout = field.layout
+    # Build with the real bases → correctly-typed (zeroed) storage arrays.
+    new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
+    # Restore state not derived from bases.
     new_field.current_layout = field.current_layout
-    new_field.scales = field.scales
     new_field.fft_mode = field.fft_mode
     new_field.buffers.architecture = field.buffers.architecture
     # Only copy the live data array — the other is stale and will be
     # recomputed on next layout change via ensure_layout!
     if field.current_layout == :c
-        if get_coeff_data(field) !== nothing
-            set_coeff_data!(new_field, copy(get_coeff_data(field)))
-        end
+        copyto!(get_coeff_data(new_field), get_coeff_data(field))
     else
-        if get_grid_data(field) !== nothing
-            set_grid_data!(new_field, copy(get_grid_data(field)))
-        end
+        copyto!(get_grid_data(new_field), get_grid_data(field))
     end
     return new_field
 end
@@ -37,31 +32,55 @@ function Base.deepcopy_internal(field::ScalarField, stackdict::IdDict)
     # Return existing copy if already visited (cycle detection)
     haskey(stackdict, field) && return stackdict[field]::ScalarField
 
-    # Construct skeleton field without data allocation
-    new_field = ScalarField(field.dist, field.name, (), field.dtype)
+    # Build with the real bases → correctly-typed (zeroed) storage arrays so the
+    # parametric SerialFieldStorage{G,C} matches the source's concrete types.
+    new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
     stackdict[field] = new_field  # Register before recursing to break cycles
 
-    # Deep-copy mutable metadata with cycle tracking
+    # Deep-copy mutable metadata (bases/domain) with cycle tracking — overwriting
+    # these struct fields does not change the already-locked storage array types.
     new_field.bases = Base.deepcopy_internal(field.bases, stackdict)
     new_field.domain = field.domain === nothing ? nothing : Base.deepcopy_internal(field.domain, stackdict)
-    # Layout is a struct with immutable fields — shallow copy is fine
-    new_field.layout = field.layout
+    # Restore remaining state not derived from bases.
     new_field.current_layout = field.current_layout
-    new_field.scales = field.scales
     new_field.fft_mode = field.fft_mode
     new_field.buffers.architecture = field.buffers.architecture
-    # Deep-copy only the data arrays that exist
-    if get_grid_data(field) !== nothing
-        set_grid_data!(new_field, Base.deepcopy_internal(get_grid_data(field), stackdict))
-    end
-    if get_coeff_data(field) !== nothing
-        set_coeff_data!(new_field, Base.deepcopy_internal(get_coeff_data(field), stackdict))
-    end
+    # Deep-copy both data arrays' values in place (the constructor already
+    # allocated correctly-typed arrays; deepcopy the contents so no aliasing).
+    copyto!(get_grid_data(new_field), Base.deepcopy_internal(get_grid_data(field), stackdict))
+    copyto!(get_coeff_data(new_field), Base.deepcopy_internal(get_coeff_data(field), stackdict))
     return new_field
 end
 
 # Data allocation and management
 coefficient_eltype(dtype::Type) = dtype <: Complex ? dtype : Complex{dtype}
+
+"""
+    coefficient_eltype(domain::Domain, ::Type{T})
+
+Basis-aware coefficient element type. Fourier transforms (RealFourier /
+ComplexFourier) map real grid data to COMPLEX coefficients, while Jacobi-family
+transforms (Chebyshev*, Legendre, Jacobi, Ultraspherical) preserve the element
+type (real grid data → real coefficients — see each transform's
+`_forward_output_spec`). So the coefficient array is complex iff the domain has
+at least one Fourier axis; otherwise it stays at the grid element type `T`.
+
+This mirrors the basis-aware coefficient *shape* rule in `domain.jl`
+(`_coefficient_shape_impl`): both are needed so the pre-allocated `coeff` buffer
+matches exactly what the transform chain produces — which the parametric
+`SerialFieldStorage{G,C}` now requires, since the coeff array type is frozen at
+construction (the old mutable-slot path silently swapped a complex buffer for a
+real one on the first transform of a pure-Jacobi field)."""
+function coefficient_eltype(domain::Domain, ::Type{T}) where {T}
+    has_fourier = any(b -> isa(b, FourierBasis), domain.bases)
+    return has_fourier ? coefficient_eltype(T) : T
+end
+
+# Typed length-0 placeholder so storage is never `nothing`. Grid uses the field
+# element type; coeff uses the complex coefficient type. The 1-D length-0 arrays
+# are never indexed (every 0-D-field consumer guards with isempty(field.bases)).
+_empty_grid(::Type{T}) where {T} = Array{T,1}(undef, 0)
+_empty_coeff(::Type{T}) where {T} = Array{coefficient_eltype(T),1}(undef, 0)
 
 """
     field_architecture(field::ScalarField)
@@ -78,18 +97,67 @@ Moves grid (`data_g`) and coefficient (`data_c`) arrays via `on_architecture` wh
 """
 function synchronize_field_architecture!(field::ScalarField; arch::AbstractArchitecture=field.dist.architecture,
                                           move_grid::Bool=true, move_coefficients::Bool=true)
-    if move_grid && get_grid_data(field) !== nothing && !(field.dist.use_pencil_arrays)
-        if architecture(get_grid_data(field)) != arch
-            set_grid_data!(field, on_architecture(arch, get_grid_data(field)))
-        end
-    end
-    if move_coefficients && get_coeff_data(field) !== nothing && !(field.dist.use_pencil_arrays)
-        if architecture(get_coeff_data(field)) != arch
-            set_coeff_data!(field, on_architecture(arch, get_coeff_data(field)))
-        end
-    end
-    field.buffers.architecture = arch
+    # Fields are architecture-fixed: their array types are stable for life. A
+    # same-architecture call is a no-op; a cross-architecture request is a bug
+    # (build the field on the target architecture instead).
+    field.buffers.architecture == arch ||
+        throw(ArgumentError("synchronize_field_architecture!: in-place architecture moves are no longer supported " *
+                            "(field on $(field.buffers.architecture), requested $arch). Construct the field on the target architecture."))
     return field
+end
+
+"""
+    _build_field_arrays(dist, domain, dtype)
+
+Value-returning allocator: builds and returns `(grid_array, coeff_array)` for
+a field with the given distributor, domain, and element type, without touching
+any field struct. Mirrors `allocate_data!` logic exactly so that Task 7 can
+parametrize `SerialFieldStorage{G,C}` by calling this helper before constructing
+the storage struct.
+
+Behavior:
+- MPI / pencil path: delegates to PencilFFTs.allocate_input/allocate_output
+  (preferred), then to stored pencil objects, then to `create_pencil` as last resort.
+  Arrays are zero-filled via `fill!` after allocation.
+- Serial path: uses `zeros(arch, T, ...)` which already returns zeroed arrays.
+"""
+function _build_field_arrays(dist::Distributor, domain::Domain, ::Type{T}) where {T}
+    # See allocate_data! for the rationale on shape choices (non-dealiased sizes).
+    gshape = global_shape(domain)
+    cshape = get_coefficient_shape_for_context(domain, dist)
+    arch = dist.architecture
+    # Basis-aware coeff eltype: complex for Fourier domains, real for pure-Jacobi
+    # (Chebyshev/Legendre) domains — matches what the transform chain produces so
+    # the parametric SerialFieldStorage{G,C} type is frozen correctly. The pencil
+    # path always has a Fourier axis (pure-Jacobi MPI is rejected in
+    # plan_transforms!), so this stays complex there as before.
+    coeff_dtype = coefficient_eltype(domain, T)
+
+    if dist.use_pencil_arrays
+        pencil_plan = _find_pencil_plan(dist)
+
+        if pencil_plan !== nothing
+            # PencilFFTs' official allocators — guaranteed compatible with mul!/ldiv!
+            g = PencilFFTs.allocate_input(pencil_plan)
+            c = PencilFFTs.allocate_output(pencil_plan)
+        elseif dist.pencil_fft_input !== nothing && dist.pencil_fft_output !== nothing
+            # Fallback to stored pencils (less safe but should work)
+            g = PencilArrays.PencilArray{T}(undef, dist.pencil_fft_input)
+            c = PencilArrays.PencilArray{coeff_dtype}(undef, dist.pencil_fft_output)
+        else
+            # Last resort: create new pencils (may not be compatible with PencilFFTs)
+            g = create_pencil(dist, gshape, nothing, dtype=T)
+            c = create_pencil(dist, cshape, nothing, dtype=coeff_dtype)
+        end
+
+        fill!(g, zero(T))
+        fill!(c, zero(coeff_dtype))
+        return (g, c)
+    else
+        local_gsize = get_local_array_size(dist, gshape)
+        local_csize = get_local_array_size(dist, cshape)
+        return (zeros(arch, T, local_gsize...), zeros(arch, coeff_dtype, local_csize...))
+    end
 end
 
 """
@@ -103,71 +171,11 @@ end
     5. For GPU architecture, allocate on GPU using CuArray (via architecture abstraction)
     """
 function allocate_data!(field::ScalarField)
-    if field.domain === nothing
-        return
-    end
-
-    # IMPORTANT: Stored field buffers use `basis.meta.size` (the
-    # non-dealiased grid), NOT the 1.5× padded size suggested by a
-    # basis's `dealias` argument. The padded shape is a transient scratch
-    # used inside `NonlinearEvaluator.evaluate_padded_multiply` for
-    # quadratic product dealiasing (Orszag 1971 3/2-rule); storing every
-    # state field at the padded size would be 3-3.4× wasteful in memory
-    # and time for linear operators that don't need dealiasing.
-    # See docs/src/pages/dealiasing.md for the full story.
-    gshape = global_shape(field.domain)
-    # Coefficient shape: halve the FIRST Fourier axis via rfft, leave
-    # subsequent Fourier axes at full size (subsequent transforms see
-    # complex input and use fft, not rfft). See `_coefficient_shape_impl`
-    # in domain.jl for the unified serial+MPI rule.
-    cshape = get_coefficient_shape_for_context(field.domain, field.dist)
-    arch = field.dist.architecture
-
-    if field.dist.use_pencil_arrays
-        # CORRECT: Store PencilArray objects directly for MPI parallelization
-        # The Pencil object maintains decomposition information needed for:
-        # - Transpose operations between decompositions
-        # - PencilFFT transforms
-        # - MPI communication patterns
-        # Note: PencilArrays currently only supports CPU. For GPU+MPI, use serial GPU per rank.
-
-        coeff_dtype = coefficient_eltype(field.dtype)
-
-        # CRITICAL: Use PencilFFTs.allocate_input/allocate_output for compatibility
-        # These functions are GUARANTEED to create arrays that work with the plan's mul!/ldiv!
-        # Using PencilArray{T}(undef, pencil) can fail if the pencil doesn't match exactly
-        pencil_plan = _find_pencil_plan(field.dist)
-
-        if pencil_plan !== nothing
-            # Use PencilFFTs' official allocators - guaranteed to be compatible
-            set_grid_data!(field, PencilFFTs.allocate_input(pencil_plan))
-            set_coeff_data!(field, PencilFFTs.allocate_output(pencil_plan))
-        elseif field.dist.pencil_fft_input !== nothing && field.dist.pencil_fft_output !== nothing
-            # Fallback to stored pencils (less safe but should work)
-            set_grid_data!(field, PencilArrays.PencilArray{field.dtype}(undef, field.dist.pencil_fft_input))
-            set_coeff_data!(field, PencilArrays.PencilArray{coeff_dtype}(undef, field.dist.pencil_fft_output))
-        else
-            # Last resort: create new pencils (may not be compatible with PencilFFTs)
-            set_grid_data!(field, create_pencil(field.dist, gshape, nothing, dtype=field.dtype))
-            set_coeff_data!(field, create_pencil(field.dist, cshape, nothing, dtype=coeff_dtype))
-        end
-
-        fill!(get_grid_data(field), zero(field.dtype))
-        fill!(get_coeff_data(field), zero(coeff_dtype))
-
-        # For local computations on pencil.data
-    else
-        # Serial computation - use architecture-aware array creation
-        local_gsize = get_local_array_size(field.dist, gshape)
-        local_csize = get_local_array_size(field.dist, cshape)
-        coeff_dtype = coefficient_eltype(field.dtype)
-
-        # Create arrays on the appropriate architecture (CPU or GPU)
-        set_grid_data!(field, zeros(arch, field.dtype, local_gsize...))
-        set_coeff_data!(field, zeros(arch, coeff_dtype, local_csize...))
-    end
-
-    field.buffers.architecture = arch
+    field.domain === nothing && return
+    g, c = _build_field_arrays(field.dist, field.domain, field.dtype)
+    set_grid_data!(field, g)
+    set_coeff_data!(field, c)
+    field.buffers.architecture = field.dist.architecture
 end
 
 const GPU_FFT_MODES = (:auto, :cpu, :gpu)

@@ -608,7 +608,7 @@ end
 Create a deep copy of state
 """
 function copy_state(state::Vector{F}) where {F<:ScalarField}
-    if F <: ScalarField{<:Any, SerialFieldStorage}
+    if F <: ScalarField{<:Any, <:SerialFieldStorage}
         return _copy_serial_state(state)
     end
 
@@ -627,7 +627,7 @@ function copy_state(state::Vector{F}) where {F<:ScalarField}
     return new_state
 end
 
-function _copy_serial_state(state::Vector{F}) where {F<:ScalarField{<:Any, SerialFieldStorage}}
+function _copy_serial_state(state::Vector{F}) where {F<:ScalarField{<:Any, <:SerialFieldStorage}}
     n = length(state)
     new_state = Vector{F}(undef, n)
 

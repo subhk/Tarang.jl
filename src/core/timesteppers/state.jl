@@ -39,7 +39,7 @@ Timestepper state management with workspace optimization.
 
 Holds the current state, history, and workspace fields for time-stepping.
 """
-@inline _empty_workspace_fields(initial_state::Vector{F}) where {F<:ScalarField{<:Any, SerialFieldStorage}} =
+@inline _empty_workspace_fields(initial_state::Vector{F}) where {F<:ScalarField{<:Any, <:SerialFieldStorage}} =
     similar(initial_state, 0)
 
 @inline _empty_workspace_fields(::Vector{<:ScalarField}) = ScalarField[]

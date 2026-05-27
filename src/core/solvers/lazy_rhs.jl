@@ -673,7 +673,7 @@ end
 LazyRHSPlan(n_state::Int) = LazyRHSPlan{ScalarField}(n_state)
 
 _lazy_plan_field_type(state) = _lazy_plan_field_type(eltype(state))
-_lazy_plan_field_type(::Type{F}) where {F<:ScalarField{<:Any, SerialFieldStorage}} =
+_lazy_plan_field_type(::Type{F}) where {F<:ScalarField{<:Any, <:SerialFieldStorage}} =
     isconcretetype(F) ? F : ScalarField
 _lazy_plan_field_type(::Type) = ScalarField
 

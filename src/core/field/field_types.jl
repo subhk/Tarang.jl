@@ -44,20 +44,27 @@ is_serial_storage(x) = storage_mode(x) isa SerialStorage
 is_transposable_storage(x) = storage_mode(x) isa TransposableStorage
 
 """
-    SerialFieldStorage <: AbstractFieldStorage
+    SerialFieldStorage{G,C} <: AbstractFieldStorage
 
 Storage for serial (single-process) or PencilArray-backed fields.
 Wraps the existing FieldBuffers structure.
-"""
-mutable struct SerialFieldStorage <: AbstractFieldStorage
-    architecture::AbstractArchitecture
-    grid::Union{Nothing, AbstractArray}   # PencilArray <: AbstractArray — no need for separate Pencil branch
-    coeff::Union{Nothing, AbstractArray}  # Reduced from 3-way to 2-way Union for better type inference
 
-    function SerialFieldStorage(arch::AbstractArchitecture)
-        new(arch, nothing, nothing)
-    end
+Parametrized on the CONCRETE grid (`G`) and coefficient (`C`) array types so
+that field-data access (`get_grid_data`/`get_coeff_data`) is type-stable. The
+arrays are built up-front by `_build_field_arrays` (or the typed length-0
+sentinels for 0-D fields) and the storage is constructed from them — fields are
+architecture-fixed, so these types are stable for the field's life.
+"""
+mutable struct SerialFieldStorage{G<:AbstractArray, C<:AbstractArray} <: AbstractFieldStorage
+    architecture::AbstractArchitecture
+    grid::G
+    coeff::C
 end
+
+# Julia auto-generates the inferring outer constructor
+# `SerialFieldStorage(arch, grid, coeff)` (binding G=typeof(grid), C=typeof(coeff))
+# from the struct definition above, so no explicit outer constructor is needed —
+# adding one would collide with the auto-generated method during precompilation.
 
 # TransposableFieldStorage is defined in transposable_field.jl (loaded later)
 # because it depends on TransposeBuffers, Topology2D, etc. from transpose_types.jl.
@@ -101,21 +108,14 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
                          dtype::Type{T}=dist.dtype) where T
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
-
-        storage = SerialFieldStorage(dist.architecture)
-        current_layout = :g
-
-        # Initialize scales: (1,) * dist.dim
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
 
-        field = new{T, SerialFieldStorage}(dist, name, bases, domain, dtype, storage, layout, current_layout, initial_scales, :auto, false, 0)
-
-        # Allocate data if we have a domain
-        if domain !== nothing
-            allocate_data!(field)
-        end
-
-        return field
+        # Build the concrete arrays BEFORE storage so SerialFieldStorage{G,C} is
+        # parametrized on their real types. 0-D fields get typed length-0
+        # sentinels so storage is never nothing (Phase 1 type-stability).
+        g, c = domain !== nothing ? _build_field_arrays(dist, domain, T) : (_empty_grid(T), _empty_coeff(T))
+        storage = SerialFieldStorage(dist.architecture, g, c)
+        return new{T, typeof(storage)}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
     end
 
     # Inner constructor for explicit storage type (e.g., TransposableFieldStorage)
@@ -124,7 +124,13 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
-        new{T, S}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
+        field = new{T, S}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
+        # Install typed length-0 sentinels for 0-D fields so storage is never nothing.
+        if domain === nothing
+            set_grid_data!(field, _empty_grid(T))
+            set_coeff_data!(field, _empty_coeff(T))
+        end
+        return field
     end
 end
 
@@ -151,18 +157,29 @@ mutable struct VectorField{T, S<:AbstractFieldStorage} <: Operand
                          bases::Tuple{Vararg{Basis}}=(), dtype::Type{T}=dist.dtype) where T
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
 
-        # Create component fields (SerialFieldStorage by default)
-        components = ScalarField{T, SerialFieldStorage}[]
+        # Create component fields. SerialFieldStorage is now parametric, so build
+        # into an abstractly-typed vector then narrow with identity.() — all
+        # components share bases/dtype/dist, hence one concrete storage type.
+        components = ScalarField[]
         for (i, coord_name) in enumerate(coordsys.names)
             component_name = "$(name)_$coord_name"
             component = ScalarField(dist, component_name, bases, dtype)
             push!(components, component)
         end
+        comps = identity.(components)
+        S = _component_storage_type(comps)
 
         buffer_architecture = dist.architecture
-        new{T, SerialFieldStorage}(dist, coordsys, name, bases, domain, dtype, components, nothing, nothing, buffer_architecture)
+        new{T, S}(dist, coordsys, name, bases, domain, dtype, comps, nothing, nothing, buffer_architecture)
     end
 end
+
+# Resolve the concrete storage type parameter from a realized component
+# container. After identity.() narrowing, every component shares one concrete
+# SerialFieldStorage{G,C}; an empty/abstract container (degenerate: no
+# coordinates) falls back to the abstract storage supertype.
+_component_storage_type(::AbstractArray{ScalarField{T, S}}) where {T, S} = S
+_component_storage_type(::AbstractArray) = SerialFieldStorage
 
 # Convenience constructor: uses dist.coordsys as default coordinate system
 """
@@ -210,14 +227,19 @@ mutable struct TensorField{T, S<:AbstractFieldStorage} <: Operand
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
 
         dim = coordsys.dim
-        components = Matrix{ScalarField{T, SerialFieldStorage}}(undef, dim, dim)
+        # SerialFieldStorage is now parametric: build an abstractly-typed matrix
+        # then narrow with identity.() — all components share one concrete
+        # storage type (same bases/dtype/dist).
+        components = Matrix{ScalarField}(undef, dim, dim)
         for i in 1:dim, j in 1:dim
             component_name = "$(name)_$(coordsys.names[i])$(coordsys.names[j])"
             components[i,j] = ScalarField(dist, component_name, bases, dtype)
         end
+        comps = identity.(components)
+        S = _component_storage_type(comps)
 
         buffer_architecture = dist.architecture
-        new{T, SerialFieldStorage}(dist, coordsys, name, bases, domain, dtype, components, nothing, nothing, buffer_architecture)
+        new{T, S}(dist, coordsys, name, bases, domain, dtype, comps, nothing, nothing, buffer_architecture)
     end
 end
 
@@ -234,7 +256,7 @@ TensorField(dist::Distributor, name::String, bases::Tuple{Vararg{Basis}}, dtype:
     TensorField(dist, dist.coordsys, name, bases, dtype)
 
 # storage_mode methods — dispatch on storage type parameter when available
-storage_mode(::ScalarField{T, SerialFieldStorage}) where T = SerialStorage()
+storage_mode(::ScalarField{T, <:SerialFieldStorage}) where T = SerialStorage()
 # TransposableFieldStorage dispatch is defined in transposable_field.jl (loaded later)
 storage_mode(field::ScalarField) = storage_mode(field.dist)  # fallback
 storage_mode(vf::VectorField) = storage_mode(vf.dist)

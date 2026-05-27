@@ -54,6 +54,7 @@ const TEST_FILES = [
     "test_dealiasing_math.jl",
     "test_gpu_solver_cpu.jl",
     "test_type_stability.jl",
+    "test_field_typestability.jl",
     "test_fourier_algebraic_constraints.jl",
     "test_lazy_rhs_fourier.jl",
     "test_timestepper_boundaries.jl",
