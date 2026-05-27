@@ -87,8 +87,8 @@ Absorbs the functionality previously in TransposableField wrapper.
 
 CT is the complex element type (Complex{T}), N is the number of dimensions.
 """
-mutable struct TransposableFieldStorage{CT, N} <: AbstractFieldStorage
-    base::SerialFieldStorage
+mutable struct TransposableFieldStorage{CT, N, B<:SerialFieldStorage} <: AbstractFieldStorage
+    base::B
     transpose_buffers::TransposeBuffers{CT, N}
     counts::TransposeCounts
     comms::TransposeComms
