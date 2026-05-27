@@ -126,12 +126,12 @@ function unit_vector_fields(coordsys::CoordinateSystem, dist)
         for j in 1:length(ec.components)
             comp = ec.components[j]
 
-            # Ensure data exists even when no bases are provided (0D fields)
-            # For 0D fields (constant unit vectors), use a single scalar value
-            if get_grid_data(comp) === nothing
+            # Ensure data exists even when no bases are provided (0D fields).
+            # For 0D fields (constant unit vectors), use a single scalar value.
+            # Guard on isempty(comp.bases) rather than data === nothing because
+            # 0-D fields now carry a typed length-0 sentinel instead of nothing.
+            if isempty(comp.bases)
                 set_grid_data!(comp, zeros(dist.architecture, comp.dtype, 1))
-            end
-            if get_coeff_data(comp) === nothing
                 coeff_dtype = coefficient_eltype(comp.dtype)
                 set_coeff_data!(comp, zeros(dist.architecture, coeff_dtype, 1))
             end

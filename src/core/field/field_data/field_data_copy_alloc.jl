@@ -63,6 +63,12 @@ end
 # Data allocation and management
 coefficient_eltype(dtype::Type) = dtype <: Complex ? dtype : Complex{dtype}
 
+# Typed length-0 placeholder so storage is never `nothing`. Grid uses the field
+# element type; coeff uses the complex coefficient type. The 1-D length-0 arrays
+# are never indexed (every 0-D-field consumer guards with isempty(field.bases)).
+_empty_grid(::Type{T}) where {T} = Array{T,1}(undef, 0)
+_empty_coeff(::Type{T}) where {T} = Array{coefficient_eltype(T),1}(undef, 0)
+
 """
     field_architecture(field::ScalarField)
 

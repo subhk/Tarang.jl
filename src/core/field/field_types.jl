@@ -110,9 +110,13 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
 
         field = new{T, SerialFieldStorage}(dist, name, bases, domain, dtype, storage, layout, current_layout, initial_scales, :auto, false, 0)
 
-        # Allocate data if we have a domain
+        # Allocate data if we have a domain; otherwise install typed length-0
+        # sentinels so storage is never nothing (Phase 1 type-stability).
         if domain !== nothing
             allocate_data!(field)
+        else
+            set_grid_data!(field, _empty_grid(T))
+            set_coeff_data!(field, _empty_coeff(T))
         end
 
         return field
@@ -124,7 +128,13 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         domain = length(bases) > 0 ? Domain(dist, bases) : nothing
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
-        new{T, S}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
+        field = new{T, S}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
+        # Install typed length-0 sentinels for 0-D fields so storage is never nothing.
+        if domain === nothing
+            set_grid_data!(field, _empty_grid(T))
+            set_coeff_data!(field, _empty_coeff(T))
+        end
+        return field
     end
 end
 
