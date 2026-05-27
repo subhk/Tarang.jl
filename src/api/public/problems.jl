@@ -1,3 +1,4 @@
+# Public exports: boundary conditions and time/space-dependent BC values.
 export
     BoundaryConditionManager,
     DirichletBC, NeumannBC, RobinBC, PeriodicBC, StressFreeBC, CustomBC,

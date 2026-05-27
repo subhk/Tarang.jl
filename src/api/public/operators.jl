@@ -1,3 +1,4 @@
+# Public exports: differential/algebraic operators and symbolic calculus.
 export
     grad, div, curl, lap, trace, skew, transpose_components,
     Gradient, Divergence, Curl, Laplacian, Trace, Skew, TransposeComponents,

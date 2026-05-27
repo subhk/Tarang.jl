@@ -1,3 +1,4 @@
+# Public exports: physics setups — SQG, QG, boundary advection-diffusion.
 export
     perp_grad, ∇⊥,
     sqg_streamfunction, sqg_velocity, sqg_problem_setup,

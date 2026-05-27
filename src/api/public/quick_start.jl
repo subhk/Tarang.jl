@@ -1,3 +1,4 @@
+# Public exports: high-level constructors for domains, fields, problems, solvers.
 export
     PeriodicDomain, ChebyshevDomain, ChannelDomain, ChannelDomain3D,
     ScalarField, VectorField, TensorField,

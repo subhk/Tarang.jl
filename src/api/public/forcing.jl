@@ -1,3 +1,4 @@
+# Public exports: stochastic and deterministic forcing.
 export
     Forcing, StochasticForcingType, DeterministicForcingType,
     StochasticForcing, DeterministicForcing,

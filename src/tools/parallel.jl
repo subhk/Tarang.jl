@@ -36,6 +36,13 @@ function ensure_mpi_initialized()
     end
 end
 
+"""
+    get_mpi_info() -> NamedTuple
+
+Return `(comm, rank, size)` for `MPI.COMM_WORLD`, or the serial fallback
+`(comm=nothing, rank=0, size=1)` when MPI is unavailable. Lets serial and MPI
+code paths read the same fields.
+"""
 function get_mpi_info()
     if mpi_available()
         # Keep the common communicator metadata in one place so serial fallback
@@ -63,6 +70,12 @@ function barrier()
 end
 
 # Filesystem helper
+"""
+    parallel_mkdir(path; mode=0o755) -> path
+
+Create `path` (and parents) from rank 0 only, then broadcast success to all ranks so
+every rank either returns `path` or throws together. Collective: all ranks must call it.
+"""
 function parallel_mkdir(path::String; mode::Integer=0o755)
     if isempty(path)
         throw(ArgumentError("parallel_mkdir: path cannot be empty"))
@@ -91,6 +104,13 @@ function parallel_mkdir(path::String; mode::Integer=0o755)
 end
 
 # Work distribution helpers
+"""
+    distribute_work(total_work, num_workers, worker_id) -> (start_idx, end_idx)
+
+Split `total_work` items into near-equal contiguous 1-based ranges, one per worker.
+The first `total_work % num_workers` workers each take one extra item, so the returned
+`start_idx:end_idx` ranges tile `1:total_work` without gaps or overlap.
+"""
 function distribute_work(total_work::Int, num_workers::Int, worker_id::Int)
     if total_work < 0
         throw(ArgumentError("Total work must be non-negative"))
@@ -122,7 +142,13 @@ function get_local_work(total_work::Int)
 end
 
 # Simple collective reductions
-# All accept an optional communicator (default: MPI.COMM_WORLD)
+"""
+    parallel_sum(value; comm=nothing) -> value
+
+Allreduce `value` across `comm` (default `MPI.COMM_WORLD`); every rank gets the result.
+Returns `value` unchanged when MPI is unavailable. `parallel_max`, `parallel_min`,
+`parallel_all`, and `parallel_any` follow the same contract with `max`/`min`/`&`/`|`.
+"""
 function parallel_sum(value::Number; comm::Union{Nothing, MPI.Comm}=nothing)
     if mpi_available()
         # Accept an explicit communicator for row/column reductions while
@@ -171,6 +197,14 @@ function parallel_any(value::Bool; comm::Union{Nothing, MPI.Comm}=nothing)
 end
 
 # Lightweight performance timer
+"""
+    PerformanceTimer(name)
+
+Minimal accumulating wall-clock timer for lightweight utilities (the full solver
+performance counters are heavier). Drive with `start_timer!` / `stop_timer!`; each
+stop adds the elapsed interval to `total_time` and bumps `count`. Query with
+`average_time`, `timer_stats`, `is_running`; clear with `reset_timer!`.
+"""
 mutable struct PerformanceTimer
     # Minimal timer used in lightweight utilities where the full solver
     # performance counters would be too heavy.

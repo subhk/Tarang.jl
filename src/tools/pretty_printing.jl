@@ -1,6 +1,18 @@
-# ============================================================================
-# Pretty Printing for Tarang.jl 
-# ============================================================================
+"""
+Pretty printing for Tarang.jl's user-facing types.
+
+Each type gets a uniform two-method `Base.show` pair:
+
+  - `show(io, x)`                      — compact one-line form (array/REPL inlining)
+  - `show(io, ::MIME"text/plain", x)`  — multi-line boxed summary (bare REPL display)
+
+The boxed form is drawn from the `BOX_*` Unicode constants through the
+`_box_line` / `_box_text` / `_box_text_centered` helpers. Those helpers pad with
+`textwidth` (not `length`) so columns stay aligned even with wide/Unicode glyphs.
+
+The pairs are deliberately uniform and repetitive — see the `Basis` pair below
+for the canonical template; every other type follows it field-for-field.
+"""
 
 using Printf
 
@@ -68,6 +80,9 @@ function _basis_type_name(basis::Basis)
     end
 end
 
+# Canonical template for the two-method show pattern: the plain `show` prints a
+# constructor-like one-liner; the `MIME"text/plain"` method prints the boxed panel.
+# All other types in this file mirror this pair.
 function Base.show(io::IO, basis::Basis)
     name = _basis_type_name(basis)
     coord = basis.meta.element_label

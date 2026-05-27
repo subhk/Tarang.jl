@@ -1,3 +1,4 @@
+# Public exports: compute architectures (CPU/GPU), device placement, kernel launch.
 export
     AbstractArchitecture, AbstractSerialArchitecture,
     CPU, GPU,

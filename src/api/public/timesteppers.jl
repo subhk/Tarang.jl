@@ -1,3 +1,4 @@
+# Public exports: timestepper schemes (RK / IMEX / multistep / ETD) + spectral linear operator.
 export
     RK111, RK222, RK443, RKSMR,
     CNAB1, CNAB2, SBDF1, SBDF2, SBDF3, SBDF4,

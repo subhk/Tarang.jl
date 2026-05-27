@@ -1,3 +1,4 @@
+# Public exports: coordinates, bases, domains, fields, and layout/data access.
 export
     CartesianCoordinates,
     coords, unit_vector_fields,

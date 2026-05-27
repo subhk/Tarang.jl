@@ -14,6 +14,13 @@ export ChunkedRNG, chunked_rng, rng_element, rng_elements,
 # Chunked RNG infrastructure
 # ---------------------------------------------------------------------------
 
+"""
+    ChunkedRNG{K}
+
+Iterable that yields successive `chunk_size`-length blocks of deterministic
+pseudo-random data as `(chunk_index, data)` tuples. Construct via [`chunked_rng`](@ref);
+iterating reseeds a `MersenneTwister` from `seed` so the sequence is reproducible.
+"""
 struct ChunkedRNG{K<:NamedTuple}
     seed::UInt64
     chunk_size::Int
@@ -102,6 +109,13 @@ end
 # Direct element access
 # ---------------------------------------------------------------------------
 
+"""
+    rng_element(index, seed, chunk_size, distribution; kwargs...)
+
+Return the single value at zero-based `index` of the reproducible stream defined by
+`(seed, distribution, kwargs)`, without materialising the whole stream — it iterates
+chunks only up to the one containing `index`. See [`rng_elements`](@ref) for many indices.
+"""
 function rng_element(index::Integer, seed, chunk_size, distribution; kwargs...)
     index = Int(index)
     if index < 0
@@ -119,6 +133,13 @@ function rng_element(index::Integer, seed, chunk_size, distribution; kwargs...)
     error("Failed to retrieve RNG element at index $index")
 end
 
+"""
+    rng_elements(indices, seed, chunk_size, distribution; kwargs...)
+
+Gather values at the given zero-based `indices` from the reproducible stream, returned
+in the shape of `indices`. Groups requested indices by chunk so each chunk is generated
+once, iterating only up to the highest required chunk.
+"""
 function rng_elements(indices, seed, chunk_size, distribution; kwargs...)
     output_shape = size(indices)
     idx = vec(Int.(indices))
@@ -166,6 +187,13 @@ end
 # Index helper types
 # ---------------------------------------------------------------------------
 
+"""
+    IndexArray(shape, order=:C)
+
+Virtual array whose `getindex` returns the *linear* (flattened) indices of the selected
+elements rather than data. `order` selects `:C` (row-major) or `:F` (column-major) linearisation.
+Used by [`ChunkedRandomArray`](@ref) to map multi-dim selections onto stream positions.
+"""
 struct IndexArray
     shape::Tuple{Vararg{Int}}
     order::Symbol
@@ -252,6 +280,13 @@ end
 # Chunked random array container
 # ---------------------------------------------------------------------------
 
+"""
+    ChunkedRandomArray(shape; seed=nothing, chunk_size=2^20, distribution=:uniform, order=:C, kwargs...)
+
+Lazy, fixed-shape random array: indexing computes the underlying stream values on demand
+(via [`IndexArray`](@ref) + [`rng_elements`](@ref)) instead of storing data. Two indexings with the
+same `seed` give identical results. `nothing` seed draws a fresh one from `RandomDevice`.
+"""
 struct ChunkedRandomArray{K<:NamedTuple}
     shape::Tuple{Vararg{Int}}
     seed::UInt64

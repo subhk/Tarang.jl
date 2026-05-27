@@ -1,3 +1,4 @@
+# Public exports: NetCDF/dictionary/virtual output handlers and file merging.
 export
     NetCDFFileHandler, NetCDFEvaluator, UnifiedEvaluator, add_netcdf_handler,
     DictionaryHandler, VirtualFileHandler,

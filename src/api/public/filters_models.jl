@@ -1,3 +1,4 @@
+# Public exports: temporal filters and subgrid-scale (LES) models.
 export
     TemporalFilter, ExponentialMean, ButterworthFilter, LagrangianFilter,
     get_mean, get_auxiliary, set_α!,

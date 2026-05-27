@@ -1,3 +1,4 @@
+# Public exports: distributed/GPU pencil transposes and distributed FFT transforms.
 export
     DistributedGPUConfig, DistributedGPUFFT,
     distributed_fft_forward!, distributed_fft_backward!,
