@@ -333,6 +333,11 @@ Set field data from vector storage, including CPU/GPU transfer and layout
 bookkeeping.
 """
 function set_field_data_from_vector!(field::ScalarField, data::AbstractVector{<:Number})
+    # 0-D tau fields have no spatial storage (length-0 sentinel); their DOF lives
+    # in the matrix system, not field data. Skip — matches the isempty(bases) guard
+    # in compute_field_vector_size / extract_field_data_for_vector, and avoids
+    # spuriously flipping the tau field's layout to :c.
+    isempty(field.bases) && return nothing
     if get_coeff_data(field) !== nothing
         target_shape = size(get_coeff_data(field))
         expected_size = prod(target_shape)

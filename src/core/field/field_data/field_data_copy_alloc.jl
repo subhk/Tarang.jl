@@ -14,19 +14,33 @@ is recomputed on the next layout change via `ensure_layout!`)."""
 function Base.copy(field::ScalarField)
     # Build with the real bases → correctly-typed (zeroed) storage arrays.
     new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
-    # Restore state not derived from bases.
+    # Restore state not derived from bases. Scales MUST be restored before
+    # adopting the source arrays: a non-default-scaled source has differently
+    # sized arrays, so the default-scale skeleton arrays won't match.
+    new_field.layout = field.layout
+    new_field.scales = field.scales
     new_field.current_layout = field.current_layout
     new_field.fft_mode = field.fft_mode
     new_field.buffers.architecture = field.buffers.architecture
-    # Only copy the live data array — the other is stale and will be
-    # recomputed on next layout change via ensure_layout!
+    # Adopt a copy of the live-layout array (sized to the source, incl. scales);
+    # shrink the off-layout array to a 0-sized buffer of the same concrete type so
+    # the copy stays lazy (the stale layout is recomputed on the next
+    # ensure_layout!). PencilArrays can't be resized to 0, so they stay allocated.
     if field.current_layout == :c
-        copyto!(get_coeff_data(new_field), get_coeff_data(field))
+        set_coeff_data!(new_field, copy(get_coeff_data(field)))
+        set_grid_data!(new_field, _shrink_off_layout(get_grid_data(new_field)))
     else
-        copyto!(get_grid_data(new_field), get_grid_data(field))
+        set_grid_data!(new_field, copy(get_grid_data(field)))
+        set_coeff_data!(new_field, _shrink_off_layout(get_coeff_data(new_field)))
     end
     return new_field
 end
+
+# Shrink an off-layout buffer to a 0-sized array of the SAME concrete type so the
+# parametric storage type is preserved while holding no data. Re-materialized on
+# the next ensure_layout!. PencilArrays are left as-is (can't be cleanly 0-sized).
+_shrink_off_layout(a::Array) = similar(a, ntuple(_ -> 0, ndims(a)))
+_shrink_off_layout(a) = a
 
 function Base.deepcopy_internal(field::ScalarField, stackdict::IdDict)
     # Return existing copy if already visited (cycle detection)
@@ -41,14 +55,22 @@ function Base.deepcopy_internal(field::ScalarField, stackdict::IdDict)
     # these struct fields does not change the already-locked storage array types.
     new_field.bases = Base.deepcopy_internal(field.bases, stackdict)
     new_field.domain = field.domain === nothing ? nothing : Base.deepcopy_internal(field.domain, stackdict)
-    # Restore remaining state not derived from bases.
+    # Restore remaining state not derived from bases (scales before adopting the
+    # source arrays — see Base.copy for why).
+    new_field.layout = field.layout
+    new_field.scales = field.scales
     new_field.current_layout = field.current_layout
     new_field.fft_mode = field.fft_mode
     new_field.buffers.architecture = field.buffers.architecture
-    # Deep-copy both data arrays' values in place (the constructor already
-    # allocated correctly-typed arrays; deepcopy the contents so no aliasing).
-    copyto!(get_grid_data(new_field), Base.deepcopy_internal(get_grid_data(field), stackdict))
-    copyto!(get_coeff_data(new_field), Base.deepcopy_internal(get_coeff_data(field), stackdict))
+    # Deep-copy the live-layout array; keep the off-layout array lazy (0-sized,
+    # same concrete type) — recomputed on the next ensure_layout!.
+    if field.current_layout == :c
+        set_coeff_data!(new_field, Base.deepcopy_internal(get_coeff_data(field), stackdict))
+        set_grid_data!(new_field, _shrink_off_layout(get_grid_data(new_field)))
+    else
+        set_grid_data!(new_field, Base.deepcopy_internal(get_grid_data(field), stackdict))
+        set_coeff_data!(new_field, _shrink_off_layout(get_coeff_data(new_field)))
+    end
     return new_field
 end
 
