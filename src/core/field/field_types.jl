@@ -66,6 +66,17 @@ end
 # from the struct definition above, so no explicit outer constructor is needed —
 # adding one would collide with the auto-generated method during precompilation.
 
+# Storage type-parameter selection. Local arrays (Array / CuArray) bind to their
+# CONCRETE type so serial/GPU field-data access is type-stable. MPI fields bind to
+# the abstract `PencilArray` UnionAll instead: a field's pencil decomposition and
+# permutation change under transposes (e.g. ensure_pencil_compatibility!,
+# group_transpose_fields!), producing a DIFFERENT concrete PencilArray type, so a
+# frozen exact type would make set_grid_data!/set_coeff_data! throw on the
+# re-decomposed array. MPI access stays abstract (as before parametrization);
+# the type-stability win targets the serial/single-node hot path.
+_field_storage_param(::PencilArrays.PencilArray) = PencilArrays.PencilArray
+_field_storage_param(a::AbstractArray) = typeof(a)
+
 # TransposableFieldStorage is defined in transposable_field.jl (loaded later)
 # because it depends on TransposeBuffers, Topology2D, etc. from transpose_types.jl.
 # It inherits from AbstractFieldStorage defined above.
@@ -114,7 +125,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         # parametrized on their real types. 0-D fields get typed length-0
         # sentinels so storage is never nothing (Phase 1 type-stability).
         g, c = domain !== nothing ? _build_field_arrays(dist, domain, T) : (_empty_grid(T), _empty_coeff(T))
-        storage = SerialFieldStorage(dist.architecture, g, c)
+        storage = SerialFieldStorage{_field_storage_param(g), _field_storage_param(c)}(dist.architecture, g, c)
         return new{T, typeof(storage)}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
     end
 
