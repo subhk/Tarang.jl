@@ -32,7 +32,25 @@ using InteractiveUtils
     @testset "Phase 3: get_grid_data is type-stable" begin
         u = ScalarField(dist, "u", (xb, yb), Float64)
         ensure_layout!(u, :g)
-        @test_skip (@inferred Tarang.get_grid_data(u); true)
-        @test_skip (@inferred Tarang.get_coeff_data(u); true)
+        # @inferred throws unless the inferred return type is concrete — asserts
+        # the SerialFieldStorage{G,C} parametrization payoff.
+        @test (@inferred Tarang.get_grid_data(u); true)
+        @test (@inferred Tarang.get_coeff_data(u); true)
+    end
+
+    @testset "copy preserves data, scales, and lazy off-layout buffer" begin
+        # Regression guard (review C2/C3): copy must (a) not crash on scaled
+        # fields and (b) keep the off-layout array un-materialized (empty) — lazy.
+        u = ScalarField(dist, "u", (xb, yb), Float64)
+        ensure_layout!(u, :c)
+        c = copy(u)
+        @test Tarang.get_coeff_data(c) == Tarang.get_coeff_data(u)  # live layout copied
+        @test isempty(Tarang.get_grid_data(c))                      # off-layout lazy
+
+        us = ScalarField(dist, "us", (xb, yb), Float64)
+        set_scales!(us, (1.5, 1.5))
+        ensure_layout!(us, :g)
+        cs = copy(us)                                               # must not BoundsError
+        @test size(Tarang.get_grid_data(cs)) == size(Tarang.get_grid_data(us))
     end
 end

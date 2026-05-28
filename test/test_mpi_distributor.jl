@@ -371,7 +371,7 @@ end
         @test isapprox(Array(grid_data_after), original, rtol=1e-10)
     end
 
-    @testset "Forward transform lazily allocates coeff PencilArray for copied grid field" begin
+    @testset "Forward transform reuses pre-allocated coeff PencilArray for copied grid field" begin
         coords = CartesianCoordinates("x", "y")
         dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
@@ -381,16 +381,22 @@ end
         field = ScalarField(dist, "copy_transform_source", (xbasis, ybasis))
         copied = copy(field)
 
+        # copy builds correctly-typed, zeroed storage for BOTH layouts up front:
+        # the parametric SerialFieldStorage{G,C} is never `nothing`, so the coeff
+        # array is pre-allocated and reused in place by the forward transform.
         @test Tarang.get_grid_data(copied) isa PencilArrays.PencilArray
-        @test Tarang.get_coeff_data(copied) === nothing
+        @test Tarang.get_coeff_data(copied) isa PencilArrays.PencilArray
+        @test all(Array(Tarang.get_coeff_data(copied)) .== 0)
 
+        coeff_before = Tarang.get_coeff_data(copied)
         @test_logs min_level=Logging.Warn forward_transform!(copied)
 
         @test Tarang.get_coeff_data(copied) isa PencilArrays.PencilArray
+        @test Tarang.get_coeff_data(copied) === coeff_before
         @test copied.current_layout == :c
     end
 
-    @testset "Backward transform lazily allocates grid PencilArray for copied coeff field" begin
+    @testset "Backward transform reuses pre-allocated grid PencilArray for copied coeff field" begin
         coords = CartesianCoordinates("x", "y")
         dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
 
@@ -401,12 +407,17 @@ end
         forward_transform!(field)
         copied = copy(field)
 
-        @test Tarang.get_grid_data(copied) === nothing
+        # Symmetric to the forward case: copy pre-allocates the grid array (zeroed)
+        # and the backward transform writes into it in place rather than reallocating.
         @test Tarang.get_coeff_data(copied) isa PencilArrays.PencilArray
+        @test Tarang.get_grid_data(copied) isa PencilArrays.PencilArray
+        @test all(Array(Tarang.get_grid_data(copied)) .== 0)
 
+        grid_before = Tarang.get_grid_data(copied)
         @test_logs min_level=Logging.Warn backward_transform!(copied)
 
         @test Tarang.get_grid_data(copied) isa PencilArrays.PencilArray
+        @test Tarang.get_grid_data(copied) === grid_before
         @test copied.current_layout == :g
     end
 
