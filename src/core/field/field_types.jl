@@ -69,8 +69,8 @@ end
 # Storage type-parameter selection. Local arrays (Array / CuArray) bind to their
 # CONCRETE type so serial/GPU field-data access is type-stable. MPI fields bind to
 # the abstract `PencilArray` UnionAll instead: a field's pencil decomposition and
-# permutation change under transposes (e.g. ensure_pencil_compatibility!,
-# group_transpose_fields!), producing a DIFFERENT concrete PencilArray type, so a
+# permutation change under transposes (e.g. group_transpose_fields!),
+# producing a DIFFERENT concrete PencilArray type, so a
 # frozen exact type would make set_grid_data!/set_coeff_data! throw on the
 # re-decomposed array. MPI access stays abstract (as before parametrization);
 # the type-stability win targets the serial/single-node hot path.
