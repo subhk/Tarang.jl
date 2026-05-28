@@ -179,7 +179,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        nprocs: [2, 4]
+        nprocs: [1, 2, 4]
     steps:
       - uses: actions/checkout@v4
 

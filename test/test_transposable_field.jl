@@ -9,6 +9,16 @@ using Test
 using Tarang
 using MPI
 
+# This file mixes rank-agnostic unit tests with rank-specific distributed
+# construction tests. Each distributed testset is guarded by the communicator
+# size so the file runs cleanly at 1, 2, or 4 ranks (CI exercises all three via
+# test/run_mpi_ci.jl):
+#   * serial / mesh=(1,)          → NPROCS == 1
+#   * 1D decomposition mesh=(2,)  → NPROCS == 2
+#   * 2D decomposition mesh=(2,2) → NPROCS == 4
+MPI.Initialized() || MPI.Init()
+const NPROCS = MPI.Comm_size(MPI.COMM_WORLD)
+
 @testset "TransposableField Basic" begin
 
     @testset "TransposeLayout enum" begin
@@ -103,6 +113,7 @@ using MPI
 
 end
 
+if NPROCS == 1
 @testset "TransposableField 2D" begin
 
     coords = CartesianCoordinates("x", "y")
@@ -183,7 +194,9 @@ end
     end
 
 end
+end  # if NPROCS == 1
 
+if NPROCS == 1
 @testset "TransposableField 3D" begin
 
     coords = CartesianCoordinates("x", "y", "z")
@@ -231,7 +244,9 @@ end
     end
 
 end
+end  # if NPROCS == 1
 
+if NPROCS == 1
 @testset "TransposableField Serial Transforms" begin
 
     coords = CartesianCoordinates("x", "y")
@@ -317,6 +332,7 @@ end
     end
 
 end
+end  # if NPROCS == 1
 
 @testset "TransposableField Pack/Unpack CPU" begin
 
@@ -349,27 +365,31 @@ end
 
 @testset "compute_local_shapes" begin
 
-    @testset "2D 1D decomposition" begin
-        coords = CartesianCoordinates("x", "y")
-        dist = Distributor(coords; mesh=(2,), dtype=Float64, architecture=CPU())
+    if NPROCS == 2
+        @testset "2D 1D decomposition" begin
+            coords = CartesianCoordinates("x", "y")
+            dist = Distributor(coords; mesh=(2,), dtype=Float64, architecture=CPU())
 
-        global_shape = (16, 16)
-        shapes = Tarang.compute_local_shapes(global_shape, dist)
+            global_shape = (16, 16)
+            shapes = Tarang.compute_local_shapes(global_shape, dist)
 
-        @test haskey(shapes, YLocal)
-        @test haskey(shapes, XLocal)
+            @test haskey(shapes, YLocal)
+            @test haskey(shapes, XLocal)
+        end
     end
 
-    @testset "3D 2D decomposition" begin
-        coords = CartesianCoordinates("x", "y", "z")
-        dist = Distributor(coords; mesh=(2, 2), dtype=Float64, architecture=CPU())
+    if NPROCS == 4
+        @testset "3D 2D decomposition" begin
+            coords = CartesianCoordinates("x", "y", "z")
+            dist = Distributor(coords; mesh=(2, 2), dtype=Float64, architecture=CPU())
 
-        global_shape = (16, 16, 16)
-        shapes = Tarang.compute_local_shapes(global_shape, dist)
+            global_shape = (16, 16, 16)
+            shapes = Tarang.compute_local_shapes(global_shape, dist)
 
-        @test haskey(shapes, ZLocal)
-        @test haskey(shapes, YLocal)
-        @test haskey(shapes, XLocal)
+            @test haskey(shapes, ZLocal)
+            @test haskey(shapes, YLocal)
+            @test haskey(shapes, XLocal)
+        end
     end
 
 end
@@ -384,7 +404,7 @@ catch
     false
 end
 
-if _HAS_CUDA
+if _HAS_CUDA && NPROCS == 1
     using CUDA
 
     @testset "TransposableField GPU" begin
@@ -422,6 +442,6 @@ if _HAS_CUDA
     end
 else
     @testset "TransposableField GPU" begin
-        @test_skip "CUDA not available"
+        @test_skip "GPU TransposableField requires CUDA at 1 rank"
     end
 end
