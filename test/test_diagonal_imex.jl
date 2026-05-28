@@ -204,4 +204,42 @@ import Tarang: SpectralLinearOperator
         @test SBDF3() isa Tarang.TimeStepper
         @test SBDF4() isa Tarang.TimeStepper
     end
+
+    @testset "DiagonalIMEX implicit stepping (attach SpectralLinearOperator)" begin
+        # The explicit-convergence tests above never engage the implicit path:
+        # step_diagonal_imex_*! only runs implicitly when a SpectralLinearOperator
+        # is attached to the solver (otherwise it falls back to explicit RK). This
+        # testset exercises the attach API and pins the implicit-stepping behavior.
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        xb = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+        u = ScalarField(dist, "u", (xb,), Float64)
+        ensure_layout!(u, :g)
+        Tarang.get_grid_data(u) .= cos.(2 .* collect(range(0, 2π, length=17))[1:16])
+
+        L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=0.5)
+        @test L.operator_type == :laplacian
+
+        # Operator attaches and is retrievable (this part works correctly).
+        problem = IVP([u])
+        add_equation!(problem, "dt(u) = 0")
+        solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.01)
+        Tarang.set_spectral_linear_operator!(solver, L)
+        @test Tarang._get_spectral_linear_operator(solver) !== nothing
+
+        # KNOWN BUG (xfail): SpectralLinearOperator sizes `coefficients` to the
+        # basis grid size (16) rather than the real-FFT coefficient-array size
+        # (N÷2+1 = 9), so it does not match the field's coefficient layout.
+        # Root cause: src/core/timesteppers/spectral_operators.jl `coeff_shape`
+        # uses basis.meta.size / basis.N instead of length(wavenumbers(basis)).
+        ensure_layout!(u, :c)
+        n_coeff = length(Tarang.get_coeff_data(u))
+        @test_broken length(L.coefficients) == n_coeff
+
+        # Consequently every implicit diagonal-IMEX step throws DimensionMismatch
+        # (L.coefficients length 16 vs coeff_data length 9). Pinned until the
+        # coefficient sizing above is fixed; then this should integrate
+        # dt(u) = -ν k² u toward exp(-ν k² t) and the marker flips to a failure.
+        @test_broken (step!(solver); true)
+    end
 end

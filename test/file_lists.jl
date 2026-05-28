@@ -35,6 +35,7 @@ const TEST_FILES = [
     "test_fftw_threads.jl",
     "test_solvers.jl",
     "test_flow_tools.jl",
+    "test_spectra.jl",
     "test_quick_domains.jl",
     "test_plot_tools.jl",
     "test_compatibility.jl",
