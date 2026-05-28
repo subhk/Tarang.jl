@@ -13,12 +13,14 @@
 # using the JuliaCI/julia-test plugin (which would test the CUDA-less target).
 # This keeps the CPU GitHub Actions CI lean (no CUDA artifacts there).
 #
-# ENABLEMENT (one-time, by a maintainer):
-#   1. Register this repository with the JuliaGPU Buildkite organization
-#      (https://github.com/JuliaGPU/buildkite — free for open-source packages),
-#      which provides the `juliagpu` agent queue with `cuda` / `multigpu` tags.
-#   2. Add the Buildkite webhook / GitHub App to the repo so pushes trigger it.
-# Until then this file is inert (no GitHub Actions runner consumes it).
+# ENABLEMENT (one-time, by a maintainer — free for open-source packages):
+#   1. On the Julia Slack #gpu channel, ask a JuliaGPU Buildkite admin (e.g.
+#      @maleadt, @vchuravy, @DilumAluthge) to add this repo. The GitHub account/org
+#      hosting Tarang.jl must have the Buildkite GitHub App installed.
+#   2. The admin creates a pipeline (named "Tarang") whose only configured step is
+#      `buildkite-agent pipeline upload` on the juliagpu queue. That bootstrap step
+#      reads THIS file and runs the GPU jobs below on JuliaGPU's GPU agents.
+# Until then this file is inert (no CI consumes it).
 
 steps:
   - label: ":julia: single-GPU — Julia {{matrix.julia}}"
@@ -26,6 +28,7 @@ steps:
       setup:
         julia:
           - "1.10"
+          - "1.11"
           - "1.12"
     plugins:
       - JuliaCI/julia#v1:
@@ -43,6 +46,7 @@ steps:
     env:
       JULIA_NUM_THREADS: "2"
       OMP_NUM_THREADS: "1"
+    if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 120
 
   - label: ":julia: multi-GPU NCCL — 2 ranks"
@@ -65,4 +69,5 @@ steps:
       TARANG_MPI_NPROCS: "2"
       JULIA_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
+    if: build.message !~ /\[skip tests\]/
     timeout_in_minutes: 120
