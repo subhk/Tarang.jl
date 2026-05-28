@@ -208,24 +208,8 @@ jobs:
             println("mpiexec: ", MPI.mpiexec())
           '
 
-      - name: Run MPI Distributor tests
-        run: |
-          julia --project -e '
-            using MPI
-            mpiexec_cmd = MPI.mpiexec()
-            run(`$mpiexec_cmd -n ${{ matrix.nprocs }} $(Base.julia_cmd()) --project test/test_mpi_distributor.jl`)
-          '
-        env:
-          JULIA_NUM_THREADS: 1
-          OMP_NUM_THREADS: 1
-
-      - name: Run Distributed GPU Transpose tests
-        run: |
-          julia --project -e '
-            using MPI
-            mpiexec_cmd = MPI.mpiexec()
-            run(`$mpiexec_cmd -n ${{ matrix.nprocs }} $(Base.julia_cmd()) --project test/test_distributed_gpu_transpose.jl`)
-          '
+      - name: Run MPI test suite (${{ matrix.nprocs }} ranks)
+        run: julia --project test/run_mpi_ci.jl ${{ matrix.nprocs }}
         env:
           JULIA_NUM_THREADS: 1
           OMP_NUM_THREADS: 1

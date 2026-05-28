@@ -1,0 +1,68 @@
+# JuliaGPU Buildkite pipeline for Tarang.jl
+#
+# Runs the GPU test suites that GitHub-hosted runners cannot (no NVIDIA GPU):
+#   * single-GPU : GPU_TEST_FILES            (CUDA DCT / preconditioner)
+#   * multi-GPU  : DISTRIBUTED_GPU_TEST_FILES (CUDA + NCCL distributed transpose)
+#
+# Test-file lists live in test/file_lists.jl and are driven by
+# test/run_gpu_ci.jl (single process) and test/run_mpi_ci.jl (mpiexec).
+#
+# CUDA is a *weak* dependency of Tarang and NCCL is loaded dynamically by
+# src/core/gpu_distributed.jl, so neither is in the package test target. The GPU
+# jobs therefore `Pkg.add` them into the checkout before running, instead of
+# using the JuliaCI/julia-test plugin (which would test the CUDA-less target).
+# This keeps the CPU GitHub Actions CI lean (no CUDA artifacts there).
+#
+# ENABLEMENT (one-time, by a maintainer):
+#   1. Register this repository with the JuliaGPU Buildkite organization
+#      (https://github.com/JuliaGPU/buildkite — free for open-source packages),
+#      which provides the `juliagpu` agent queue with `cuda` / `multigpu` tags.
+#   2. Add the Buildkite webhook / GitHub App to the repo so pushes trigger it.
+# Until then this file is inert (no GitHub Actions runner consumes it).
+
+steps:
+  - label: ":julia: single-GPU — Julia {{matrix.julia}}"
+    matrix:
+      setup:
+        julia:
+          - "1.10"
+          - "1.12"
+    plugins:
+      - JuliaCI/julia#v1:
+          version: "{{matrix.julia}}"
+    command: |
+      julia --project=. -e '
+        using Pkg
+        Pkg.add("CUDA")          # CUDA is a weakdep; promote it for GPU CI
+        Pkg.instantiate()
+        Pkg.precompile()'
+      julia --project=. test/run_gpu_ci.jl
+    agents:
+      queue: "juliagpu"
+      cuda: "*"
+    env:
+      JULIA_NUM_THREADS: "2"
+      OMP_NUM_THREADS: "1"
+    timeout_in_minutes: 120
+
+  - label: ":julia: multi-GPU NCCL — 2 ranks"
+    plugins:
+      - JuliaCI/julia#v1:
+          version: "1.12"
+    command: |
+      julia --project=. -e '
+        using Pkg
+        Pkg.add(["CUDA", "NCCL"]) # CUDA weakdep + NCCL (loaded dynamically by gpu_distributed.jl)
+        Pkg.instantiate()
+        Pkg.precompile()'
+      julia --project=. test/run_mpi_ci.jl
+    agents:
+      queue: "juliagpu"
+      cuda: "*"
+      multigpu: "*"
+    env:
+      TARANG_MPI_FILESET: "distributed_gpu"
+      TARANG_MPI_NPROCS: "2"
+      JULIA_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+    timeout_in_minutes: 120
