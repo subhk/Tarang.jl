@@ -21,8 +21,9 @@ abstract type Operand end
 #   S — storage backend (<: AbstractFieldStorage)
 #
 # Storage backends:
-#   SerialFieldStorage   — local arrays, FFTW/serial transforms
-#   PencilFieldStorage   — PencilArrays for MPI-distributed FFT
+#   SerialFieldStorage   — local Array/CuArray (serial/GPU), or PencilArray for
+#                          MPI-distributed FFT (no separate Pencil storage type;
+#                          MPI binds the storage param to abstract PencilArray)
 #   TransposableFieldStorage — 2D pencil decomposition with transposes (GPU+MPI)
 #
 # Adding S as a type parameter enables the compiler to specialize
