@@ -145,9 +145,21 @@ dispatching through this boundary makes Julia specialize the body on both
 concrete types so `_backward_output_spec`, scratch/plan lookup and the in-place
 `mul!` resolve statically and run allocation-free on a warm cache.
 """
+# Scaled grid size along a Fourier transform's axis (scale × base size). Threaded
+# into the backward path so the irfft targets the scaled grid, not the base. 0 for
+# non-Fourier / non-RealFourier axes (no scale context needed → base-size fallback).
+_bwd_rfft_target(field::ScalarField, transform) = 0
+function _bwd_rfft_target(field::ScalarField, transform::FourierTransform)
+    isa(transform.basis, RealFourier) || return 0
+    ax = transform.axis
+    scale = field.scales === nothing ? 1.0 : field.scales[ax]
+    return round(Int, scale * transform.basis.meta.size)
+end
+
 function _backward_transform_stage!(field::ScalarField, transform, in_arr::AbstractArray,
                                     is_final::Bool)
-    out_shape, out_eltype = _backward_output_spec(in_arr, transform)
+    out_n = _bwd_rfft_target(field, transform)
+    out_shape, out_eltype = _backward_output_spec(in_arr, transform, out_n)
     # `out_eltype` is decided at runtime — real for the final irfft stage,
     # complex for the ifft stages — so it is a type-UNSTABLE `DataType` value.
     # Forward output is always complex (stable), but backward must union-split
@@ -162,13 +174,13 @@ function _backward_transform_stage!(field::ScalarField, transform, in_arr::Abstr
     # instead widened the return to `Union{Nothing, AbstractArray}`, which x86_64
     # codegen boxes on every backward stage.
     if out_eltype === ComplexF64
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF64)
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF64, out_n)
     elseif out_eltype === Float64
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float64)
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float64, out_n)
     elseif out_eltype === ComplexF32
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF32)
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF32, out_n)
     elseif out_eltype === Float32
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float32)
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float32, out_n)
     else
         error("Tarang backward transform: unsupported output element type $out_eltype")
     end
@@ -176,7 +188,7 @@ end
 
 @inline function _backward_stage_typed!(field::ScalarField, transform, in_arr::AbstractArray,
                                         is_final::Bool, out_shape::NTuple{N,Int},
-                                        ::Type{T}) where {N,T}
+                                        ::Type{T}, out_n::Int) where {N,T}
     if is_final
         # Bind `grid` to a concrete `Array{T,N}` via the ternary: the `isa` test
         # narrows the existing buffer in the true branch, and `_alloc_grid_buffer!`
@@ -187,11 +199,11 @@ end
         existing = get_grid_data(field)
         grid::Array{T,N} = (existing isa Array{T,N} && size(existing) == out_shape) ?
             existing : _alloc_grid_buffer!(field, T, out_shape)
-        _apply_backward!(grid, in_arr, transform)
+        _apply_backward!(grid, in_arr, transform, out_n)
         return grid
     end
     out::Array{T,N} = _get_scratch_for_transform!(transform, SLOT_BWD_INTER, out_shape, T)
-    _apply_backward!(out, in_arr, transform)
+    _apply_backward!(out, in_arr, transform, out_n)
     return out
 end
 
@@ -201,26 +213,24 @@ end
     return g
 end
 
-function _fourier_backward(data::AbstractArray, transform::FourierTransform)
+function _fourier_backward(data::AbstractArray, transform::FourierTransform, out_n::Int=0)
+    grid_n = _bwd_grid_size(transform, out_n)
     return _execute_on_cpu(data) do host_data
-        # Use precomputed plan only if data size and element type match the plan
-        # (FFTW plans are type-specific; backward plans expect Complex{plan_dtype} input)
-        expected_rfft_size = isa(transform.basis, RealFourier) ? div(transform.basis.meta.size, 2) + 1 : transform.basis.meta.size
+        # Use the precomputed BASE 1D plan only if data matches it (it was built at
+        # setup for the base size; a scaled field's data won't match and falls through).
+        base_rfft_size = isa(transform.basis, RealFourier) ? div(transform.basis.meta.size, 2) + 1 : transform.basis.meta.size
         if ndims(host_data) == 1 && transform.plan_backward !== nothing &&
-           length(host_data) == expected_rfft_size &&
+           length(host_data) == base_rfft_size &&
            eltype(host_data) === Complex{transform.plan_dtype}
             return transform.plan_backward * host_data
         end
 
         dims = (transform.axis,)
         if isa(transform.basis, RealFourier)
-            # Check actual size along the transform axis to determine if rfft or fft was used
+            # Detect rfft vs fft against the SCALED grid size (irfft target = grid_n).
             actual_size = size(host_data, transform.axis)
-            expected_rfft_coeff_size = div(transform.basis.meta.size, 2) + 1
-
-            # If size matches rfft output, use irfft; otherwise use ifft (fft was used for complex input)
-            if actual_size == expected_rfft_coeff_size
-                return FFTW.irfft(host_data, transform.basis.meta.size, dims)
+            if actual_size == div(grid_n, 2) + 1
+                return FFTW.irfft(host_data, grid_n, dims)
             else
                 # fft was used (complex input case), use ifft
                 return FFTW.ifft(host_data, dims)
@@ -299,18 +309,30 @@ function _forward_output_spec(in::AbstractArray, transform::FourierTransform)
     end
 end
 
-function _backward_output_spec(in::AbstractArray, transform::FourierTransform)
+# `out_n` is the SCALED grid size along this transform's axis (scale × base),
+# threaded from the backward stage which has the field. Using it instead of the
+# base `basis.meta.size` makes rfft-axis detection and the irfft target size
+# correct for scaled fields. `out_n <= 0` means "no scale info" → fall back to the
+# base size (callers without a field, e.g. the out-of-place legacy path).
+_bwd_grid_size(transform::FourierTransform, out_n::Int) =
+    out_n > 0 ? out_n : transform.basis.meta.size
+
+# 3-arg dispatch: non-Fourier transforms ignore out_n (delegate to their 2-arg spec).
+_backward_output_spec(in::AbstractArray, transform, out_n::Int) = _backward_output_spec(in, transform)
+
+function _backward_output_spec(in::AbstractArray, transform::FourierTransform, out_n::Int)
     in_shape = size(in)
     in_eltype = eltype(in)
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
     ax = transform.axis
 
     if isa(transform.basis, RealFourier)
-        expected_rfft_size = div(transform.basis.meta.size, 2) + 1
+        grid_n = _bwd_grid_size(transform, out_n)
+        expected_rfft_size = div(grid_n, 2) + 1
         axis_len = in_shape[ax]
         if axis_len == expected_rfft_size
-            # irfft: axis expands back from N/2+1 to basis.meta.size
-            out_shape = _replace_axis_shape(in_shape, ax, transform.basis.meta.size)
+            # irfft: axis expands back from N/2+1 to the (scaled) grid size
+            out_shape = _replace_axis_shape(in_shape, ax, grid_n)
             return out_shape, real_T
         else
             # ifft fallback (complex input from a non-first-axis fft): same shape, still complex
@@ -319,6 +341,11 @@ function _backward_output_spec(in::AbstractArray, transform::FourierTransform)
     else  # ComplexFourier
         return in_shape, Complex{real_T}
     end
+end
+
+# Preserve the 2-arg form (base size) for any caller without scale context.
+function _backward_output_spec(in::AbstractArray, transform::FourierTransform)
+    return _backward_output_spec(in, transform, 0)
 end
 
 """Get or create a cached forward plan for this (input_size, input_eltype)."""
@@ -341,11 +368,15 @@ function _get_or_plan_forward!(transform::FourierTransform, in::AbstractArray)
     return plan
 end
 
-"""Get or create a cached backward plan for this (input_size, input_eltype)."""
-function _get_or_plan_backward!(transform::FourierTransform, in::AbstractArray)
+"""Get or create a cached backward plan for this (input_size, input_eltype).
+`out_n` is the scaled grid size along the axis (0 ⇒ use the base basis size)."""
+function _get_or_plan_backward!(transform::FourierTransform, in::AbstractArray, out_n::Int=0)
     in_shape = size(in)
     in_eltype = eltype(in)
-    key = (in_shape, _fft_eltype_tag(in_eltype))
+    grid_n = _bwd_grid_size(transform, out_n)
+    # Key includes grid_n: a scaled vs unscaled field of the same coeff shape needs
+    # distinct irfft plans (different output length).
+    key = (in_shape, _fft_eltype_tag(in_eltype), grid_n)
     cached = get(transform.bwd_plan_cache, key, nothing)
     if cached !== nothing
         return cached
@@ -353,11 +384,11 @@ function _get_or_plan_backward!(transform::FourierTransform, in::AbstractArray)
 
     dims = (transform.axis,)
     plan = if isa(transform.basis, RealFourier)
-        expected_rfft_size = div(transform.basis.meta.size, 2) + 1
+        expected_rfft_size = div(grid_n, 2) + 1
         axis_len = in_shape[transform.axis]
         if axis_len == expected_rfft_size
             # irfft path: plan_irfft needs a dummy input of the same shape
-            FFTW.plan_irfft(in, transform.basis.meta.size, dims)
+            FFTW.plan_irfft(in, grid_n, dims)
         else
             FFTW.plan_ifft(in, dims)
         end
@@ -401,16 +432,23 @@ end
 
 Zero-allocation backward Fourier transform into pre-allocated `out`.
 """
-function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::FourierTransform)
+# 4-arg dispatch: non-Fourier transforms ignore out_n (delegate to their 3-arg form).
+_apply_backward!(out::AbstractArray, in::AbstractArray, transform, out_n::Int) =
+    _apply_backward!(out, in, transform)
+# 3-arg Fourier form: no scale context → base size (out_n = 0).
+_apply_backward!(out::AbstractArray, in::AbstractArray, transform::FourierTransform) =
+    _apply_backward!(out, in, transform, 0)
+
+function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::FourierTransform, out_n::Int)
     if is_gpu_array(in) || is_gpu_array(out)
-        result = _fourier_backward(in, transform)
+        result = _fourier_backward(in, transform, out_n)
         if size(result) == size(out) && eltype(result) == eltype(out)
             copyto!(out, result)
         end
         return out
     end
 
-    plan = _get_or_plan_backward!(transform, in)
+    plan = _get_or_plan_backward!(transform, in, out_n)
 
     # FFTW irfft plans are destructive on the input array. The high-level
     # `FFTW.irfft(x, n, dims)` protects callers by internally copying `x`
@@ -419,8 +457,9 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Four
     # this; ifft (complex → complex) is non-destructive.
     is_irfft_path = false
     if isa(transform.basis, RealFourier)
-        expected_rfft_size = div(transform.basis.meta.size, 2) + 1
-        if size(in, transform.axis) == expected_rfft_size
+        # Detect against the SCALED grid size (grid_n), mirroring _get_or_plan_backward!.
+        grid_n = _bwd_grid_size(transform, out_n)
+        if size(in, transform.axis) == div(grid_n, 2) + 1
             is_irfft_path = true
         end
     end

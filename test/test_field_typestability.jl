@@ -59,28 +59,19 @@ using InteractiveUtils
         @test size(Tarang.get_grid_data(cs)) == size(Tarang.get_grid_data(us))
     end
 
-    @testset "scaled RealFourier round-trip (KNOWN BROKEN)" begin
-        # Latent transform-core bug surfaced by the storage parametrization: the
-        # backward transform detects the rfft axis and sizes the irfft from the
-        # BASE basis size (transform_fourier.jl _backward_output_spec:309,
-        # _get_or_plan_backward!:356, _fourier_backward:219), while forward uses the
-        # ACTUAL (scaled) array size. For a scaled field the scaled coeff axis
-        # (div(scaled_N,2)+1) != base div(N,2)+1, so backward wrongly picks ifft
-        # (complex out) and set_grid_data! rejects it against the frozen real grid.
-        # Pre-parametrization the mutable storage silently swapped the array type
-        # (and produced wrong results). Fixing needs the backward path to detect the
-        # rfft axis scale-independently (first RealFourier axis) and irfft to the
-        # scaled grid size. Marked broken until that transform-core fix lands.
+    @testset "scaled RealFourier round-trip" begin
+        # Backward transform must size the irfft from the SCALED grid (scale ×
+        # basis.meta.size), not the base size, mirroring the scale-correct forward.
+        # Regression for the rfft-axis detection / irfft-size bug surfaced by the
+        # storage parametrization (transform_fourier.jl backward path).
         u = ScalarField(dist, "u", (xb, yb), Float64)
         set_scales!(u, (1.5, 1.5))
         ensure_layout!(u, :g)
         orig = copy(Tarang.get_grid_data(u))
         orig .= rand(size(orig)...)
         Tarang.get_grid_data(u) .= orig
-        @test_broken begin
-            ensure_layout!(u, :c)
-            ensure_layout!(u, :g)
-            isapprox(Tarang.get_grid_data(u), orig; rtol=1e-10)
-        end
+        ensure_layout!(u, :c)
+        ensure_layout!(u, :g)
+        @test isapprox(Tarang.get_grid_data(u), orig; rtol=1e-10)
     end
 end
