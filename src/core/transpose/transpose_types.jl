@@ -182,7 +182,12 @@ end
 Automatically determine optimal 2D topology for given number of processes.
 """
 function auto_topology(nprocs::Int, ndims::Int)
-    if ndims == 1 || nprocs == 1
+    # 1D and 2D fields auto-decompose as a 1D slab (nprocs, 1): one dimension is
+    # fully distributed, the other stays local. This keeps async transposes
+    # available (a "2D true mesh" disables them — see TransposableField). Users
+    # can still request a 2D mesh explicitly via `mesh=`/`topology=`. Only 3D+
+    # fields auto-pick a near-square 2D process grid.
+    if ndims <= 2 || nprocs == 1
         return (nprocs, 1)
     end
 

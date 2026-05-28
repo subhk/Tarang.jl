@@ -324,40 +324,51 @@ function _diagonal_Lhat_from_expr(L_expr, field::ScalarField)
     ensure_layout!(field, :c)
     cd = get_coeff_data(field)
     cd === nothing && return nothing
-    (L_expr === nothing || is_zero_expression(L_expr)) && return zeros(Float64, size(_local_coeff(cd)))
+    # L̂ is ComplexF64: Laplacian/fractional/damping terms are real (−k², k²^α, const),
+    # but first-derivative terms contribute imaginary (ik)^order multipliers.
+    (L_expr === nothing || is_zero_expression(L_expr)) && return zeros(ComplexF64, size(_local_coeff(cd)))
 
     k2grid = compute_wavenumber_squared_grid(field)
     k2 = _local_coeff(k2grid)
-    Lhat = zeros(Float64, size(k2))
-    _accumulate_diagonal_L!(Lhat, k2, L_expr, 1.0) || return nothing
+    Lhat = zeros(ComplexF64, size(k2))
+    _accumulate_diagonal_L!(Lhat, k2, L_expr, 1.0, field) || return nothing
     return Lhat
 end
 
 """Accumulate the diagonal Fourier-space contribution of a linear operator
 expression into `Lhat` over the |k|² grid `k2`. Returns false on a term that is
 not diagonal in a pure-Fourier basis."""
-function _accumulate_diagonal_L!(Lhat, k2, expr, sgn::Float64)
+function _accumulate_diagonal_L!(Lhat, k2, expr, sgn::Float64, field::ScalarField)
     if isa(expr, AddOperator)
-        return _accumulate_diagonal_L!(Lhat, k2, expr.left, sgn) &&
-               _accumulate_diagonal_L!(Lhat, k2, expr.right, sgn)
+        return _accumulate_diagonal_L!(Lhat, k2, expr.left, sgn, field) &&
+               _accumulate_diagonal_L!(Lhat, k2, expr.right, sgn, field)
     elseif isa(expr, SubtractOperator)
-        return _accumulate_diagonal_L!(Lhat, k2, expr.left, sgn) &&
-               _accumulate_diagonal_L!(Lhat, k2, expr.right, -sgn)
+        return _accumulate_diagonal_L!(Lhat, k2, expr.left, sgn, field) &&
+               _accumulate_diagonal_L!(Lhat, k2, expr.right, -sgn, field)
     elseif isa(expr, NegateOperator)
-        return _accumulate_diagonal_L!(Lhat, k2, expr.operand, -sgn)
+        return _accumulate_diagonal_L!(Lhat, k2, expr.operand, -sgn, field)
     elseif isa(expr, MultiplyOperator)
-        if expr.left isa Number
-            return _accumulate_diagonal_term!(Lhat, k2, sgn * Float64(expr.left), expr.right)
-        elseif expr.right isa Number
-            return _accumulate_diagonal_term!(Lhat, k2, sgn * Float64(expr.right), expr.left)
+        # The scalar coefficient may be a raw Number (inlined parameter) or a
+        # ConstantOperator (parsed numeric literal, e.g. `0.3*d(q,x)`).
+        cl = _as_diagonal_scalar(expr.left)
+        if cl !== nothing
+            return _accumulate_diagonal_term!(Lhat, k2, sgn * cl, expr.right, field)
+        end
+        cr = _as_diagonal_scalar(expr.right)
+        if cr !== nothing
+            return _accumulate_diagonal_term!(Lhat, k2, sgn * cr, expr.left, field)
         end
         return false
     else
-        return _accumulate_diagonal_term!(Lhat, k2, sgn, expr)
+        return _accumulate_diagonal_term!(Lhat, k2, sgn, expr, field)
     end
 end
 
-function _accumulate_diagonal_term!(Lhat, k2, coeff::Float64, op)
+"""Extract a real scalar from a `Number` or `ConstantOperator`; `nothing` otherwise."""
+_as_diagonal_scalar(x) = x isa Number ? Float64(x) :
+                         (isa(x, ConstantOperator) ? Float64(x.value) : nothing)
+
+function _accumulate_diagonal_term!(Lhat, k2, coeff::Float64, op, field::ScalarField)
     if isa(op, FractionalLaplacian)
         α = op.α
         @. Lhat += coeff * k2 ^ α
@@ -369,18 +380,71 @@ function _accumulate_diagonal_term!(Lhat, k2, coeff::Float64, op)
     elseif isa(op, ScalarField)
         @. Lhat += coeff   # constant (e.g. linear damping μ·ζ)
         return true
+    elseif isa(op, Differentiate)
+        # First/higher derivative of the time-stepped field itself is diagonal in
+        # Fourier space: multiplier (i·k_axis)^order. Only diagonal when the
+        # derivative acts on THIS field (a derivative of another variable is a
+        # coupling term, not representable as a scalar diagonal L̂).
+        operand = op.operand
+        is_self = operand === field ||
+                  (isa(operand, ScalarField) && operand.name == field.name)
+        is_self || return false
+        ikgrid = _diagonal_deriv_grid(field, op.coord, op.order)
+        ikgrid === nothing && return false
+        @. Lhat += coeff * ikgrid
+        return true
     end
     return false
+end
+
+"""
+Diagonal Fourier multiplier `(i·k)^order` for a single-axis derivative, evaluated
+over `field`'s LOCAL coefficient grid (per-rank under MPI, rfft/fft layout, and
+PencilArrays permutation aware — mirrors `compute_wavenumber_squared_grid`).
+Returns `nothing` if `coord` maps to no Fourier axis of `field`.
+"""
+function _diagonal_deriv_grid(field::ScalarField, coord::Coordinate, order::Int)
+    bases = field.bases
+    cd = get_coeff_data(field)
+    cd === nothing && return nothing
+    axis = _resolve_diff_axis(coord, bases)
+    axis == 0 && return nothing
+    basis = bases[axis]
+    isa(basis, Union{RealFourier, ComplexFourier}) || return nothing
+
+    k_axis = if isa(basis, RealFourier)
+        _is_first_real_fourier_axis(bases, axis) ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
+    else
+        wavenumbers(basis)
+    end
+
+    lc = _local_coeff(cd)
+    out = zeros(ComplexF64, size(lc))
+    if isa(cd, PencilArrays.PencilArray)
+        local_axes = PencilArrays.pencil(cd).axes_local
+        perm_tuple = Tuple(PencilArrays.permutation(cd))
+        lr = axis <= length(local_axes) ? local_axes[axis] : (1:length(k_axis))
+        ik = ComplexF64.((im .* Float64.(k_axis[lr])) .^ order)
+        paxis = findfirst(==(axis), perm_tuple)
+        paxis === nothing && (paxis = axis)
+        shp = ntuple(i -> i == paxis ? length(ik) : 1, ndims(out))
+        out .+= reshape(ik, shp...)
+    else
+        ik = ComplexF64.((im .* Float64.(k_axis)) .^ order)
+        shp = ntuple(i -> i == axis ? length(ik) : 1, ndims(out))
+        out .+= reshape(ik, shp...)
+    end
+    return out
 end
 
 """Build (and cache) the per-time-stepped-field diagonal L̂ operators."""
 function _get_distributed_diagonal_Lhats!(state::TimestepperState, solver::InitialValueSolver)
     cached = get(state.timestepper_data, :dd_imex_Lhats, nothing)
-    cached !== nothing && return cached::Dict{Int, Array{Float64}}
+    cached !== nothing && return cached::Dict{Int, Array{ComplexF64}}
 
     problem = solver.problem
     sfields = solver.state
-    Lhats = Dict{Int, Array{Float64}}()
+    Lhats = Dict{Int, Array{ComplexF64}}()
     for eq_data in problem.equation_data
         M_expr = get(eq_data, "M", nothing)
         (M_expr === nothing || _is_zero_m_term(M_expr)) && continue
@@ -389,8 +453,17 @@ function _get_distributed_diagonal_Lhats!(state::TimestepperState, solver::Initi
         for idx in targets
             (idx isa Integer && 1 <= idx <= length(sfields)) || continue
             Lh = _diagonal_Lhat_from_expr(L_expr, sfields[idx])
-            Lh === nothing && continue
-            Lhats[Int(idx)] = Float64.(Lh)   # keep local-coeff shape for broadcasting
+            if Lh === nothing
+                # A non-zero implicit linear operator that is NOT diagonal in a
+                # pure-Fourier basis cannot be applied per-mode. Refuse loudly:
+                # the old behavior silently skipped (froze) the field — a correctness bug.
+                error("Distributed diagonal-IMEX: the implicit linear operator for field " *
+                      "'$(sfields[idx].name)' has a term that is not diagonal in a pure-Fourier " *
+                      "basis. Supported implicit terms: Laplacian, hyper/fractional Laplacian, " *
+                      "constant damping, and derivatives of the field itself. Move the offending " *
+                      "term to the explicit RHS, or run serially / via the Chebyshev subproblem path.")
+            end
+            Lhats[Int(idx)] = ComplexF64.(Lh)   # keep local-coeff shape for broadcasting
         end
     end
     state.timestepper_data[:dd_imex_Lhats] = Lhats
@@ -495,13 +568,13 @@ end
 local wavenumber grid. The removable singularity at z=0 (e.g. the k=0 mode) is
 handled by the Taylor branch."""
 function _get_distributed_diagonal_phi!(state::TimestepperState, dt::Float64,
-                                        Lhats::Dict{Int, Array{Float64}})
+                                        Lhats::Dict{Int, Array{ComplexF64}})
     cached = get(state.timestepper_data, :dd_etd_phi, nothing)
     cached_dt = get(state.timestepper_data, :dd_etd_phi_dt, nothing)
     if cached !== nothing && cached_dt == dt
-        return cached::Dict{Int, NTuple{3, Array{Float64}}}
+        return cached::Dict{Int, NTuple{3, Array{ComplexF64}}}
     end
-    phis = Dict{Int, NTuple{3, Array{Float64}}}()
+    phis = Dict{Int, NTuple{3, Array{ComplexF64}}}()
     for (i, Lhat) in Lhats
         expz = similar(Lhat); ph1 = similar(Lhat); ph2 = similar(Lhat)
         @inbounds for j in eachindex(Lhat)
