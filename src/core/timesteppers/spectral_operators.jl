@@ -86,23 +86,14 @@ function SpectralLinearOperator(
     arch = dist.architecture
     N = length(bases)
 
-    # Get coefficient space shape from bases
-    # For Fourier bases, coefficient size equals grid size
-    coeff_shape = ntuple(N) do d
-        basis = bases[d]
-        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :size)
-            basis.meta.size
-        elseif hasfield(typeof(basis), :N)
-            basis.N
-        else
-            # Fallback: try to get from wavenumbers
-            try
-                length(wavenumbers(basis))
-            catch
-                error("Cannot determine coefficient size for basis $d: $(typeof(basis))")
-            end
-        end
-    end
+    # Coefficient-space shape the operator must broadcast against — i.e. the
+    # field's local coefficient array. The first RealFourier/Fourier axis is
+    # rfft-reduced to N÷2+1; other axes keep full size N (and MPI yields the
+    # per-rank slice). Reuse the canonical domain logic rather than re-deriving
+    # the rfft layout: using the basis *grid* size here was the bug that made
+    # L.coefficients (e.g. 16) mismatch the field's coeff array (e.g. 9) and
+    # throw DimensionMismatch in the diagonal IMEX step.
+    coeff_shape = local_shape(Domain(dist, bases), :c)
 
     if operator_type == :custom && coefficients !== nothing
         # Use provided coefficients
@@ -152,20 +143,22 @@ function _build_spectral_operator(
 
     N = length(bases)
 
-    # Get wavenumbers for each dimension
+    # Wavenumbers must match the coefficient-array layout the field's spectral
+    # transforms/derivatives use — NOT the native cos/sin packing that
+    # `wavenumbers(basis)` returns ([0,1,1,2,2,…]), which is misaligned with the
+    # rfft coefficient array and was assigning each mode the wrong decay rate.
+    # The reduced axis (coeff length N÷2+1) uses the rfft layout [0,1,…,N/2];
+    # full-length Fourier axes use the fft layout [0,…,N/2-1,-N/2,…,-1].
     k_arrays = ntuple(N) do d
         basis = bases[d]
-        if hasmethod(wavenumbers, Tuple{typeof(basis)})
-            k = wavenumbers(basis)
-            # Truncate or pad to match coefficient shape
-            n_coeff = coeff_shape[d]
-            if length(k) >= n_coeff
-                k[1:n_coeff]
-            else
-                vcat(k, zeros(T, n_coeff - length(k)))
-            end
+        Nb = hasfield(typeof(basis), :meta) ? basis.meta.size : coeff_shape[d]
+        if basis isa RealFourier
+            coeff_shape[d] == (Nb ÷ 2 + 1) ? T.(wavenumbers_rfft(basis)) :
+                                             T.(wavenumbers_fft(basis))
+        elseif basis isa ComplexFourier
+            T.(wavenumbers(basis))
         else
-            # Non-spectral basis (e.g., Chebyshev) - use zeros
+            # Non-spectral basis (e.g., Chebyshev): no wavenumber damping.
             zeros(T, coeff_shape[d])
         end
     end

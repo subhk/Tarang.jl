@@ -223,23 +223,55 @@ import Tarang: SpectralLinearOperator
         # Operator attaches and is retrievable (this part works correctly).
         problem = IVP([u])
         add_equation!(problem, "dt(u) = 0")
-        solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.01)
+        solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.005)
         Tarang.set_spectral_linear_operator!(solver, L)
         @test Tarang._get_spectral_linear_operator(solver) !== nothing
 
-        # KNOWN BUG (xfail): SpectralLinearOperator sizes `coefficients` to the
-        # basis grid size (16) rather than the real-FFT coefficient-array size
-        # (N÷2+1 = 9), so it does not match the field's coefficient layout.
-        # Root cause: src/core/timesteppers/spectral_operators.jl `coeff_shape`
-        # uses basis.meta.size / basis.N instead of length(wavenumbers(basis)).
+        # FIXED: the operator now sizes `coefficients` to the field's coefficient
+        # array (rfft N÷2+1 = 9), not the basis grid size (16). spectral_operators.jl
+        # derives coeff_shape from local_shape(Domain(dist,bases), :c), so it matches
+        # the field layout and the implicit step no longer throws DimensionMismatch.
         ensure_layout!(u, :c)
         n_coeff = length(Tarang.get_coeff_data(u))
-        @test_broken length(L.coefficients) == n_coeff
+        @test length(L.coefficients) == n_coeff
 
-        # Consequently every implicit diagonal-IMEX step throws DimensionMismatch
-        # (L.coefficients length 16 vs coeff_data length 9). Pinned until the
-        # coefficient sizing above is fixed; then this should integrate
-        # dt(u) = -ν k² u toward exp(-ν k² t) and the marker flips to a failure.
-        @test_broken (step!(solver); true)
+        # The implicit diagonal-IMEX step integrates dt(u) = -ν k² u. With cos(2x),
+        # ν=0.5 the decay rate is λ = ν k² = 2, so after T = 200·dt = 1.0 the
+        # amplitude should be ≈ exp(-λ T) = exp(-2). This exercises the full
+        # implicit path (step_diagonal_imex_rk222!) and pins the viscous rate.
+        # (Made correct by the wavenumber alignment in spectral_operators.jl and
+        # the :c-layout fix in step_diagonal_imex.jl.)
+        ensure_layout!(u, :g)
+        u0 = maximum(abs, Tarang.get_grid_data(u))
+        for _ in 1:200
+            step!(solver)
+        end
+        ensure_layout!(u, :g)
+        uf = maximum(abs, Tarang.get_grid_data(u))
+        @test uf < u0                                       # the mode decays
+        @test isapprox(uf / u0, exp(-2.0); rtol=0.05)        # at the viscous rate λ = ν k² = 2
+    end
+
+    @testset "DiagonalIMEX implicit stepping — RK443 and SBDF2" begin
+        # Same viscous-decay check for the other diagonal-IMEX steppers; all share
+        # the implicit path fixed in step_diagonal_imex.jl / spectral_operators.jl.
+        for ts in (DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+            coords = CartesianCoordinates("x")
+            dist = Distributor(coords; mesh=(1,), dtype=Float64)
+            xb = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+            u = ScalarField(dist, "u", (xb,), Float64)
+            ensure_layout!(u, :g)
+            Tarang.get_grid_data(u) .= cos.(2 .* collect(range(0, 2π, length=17))[1:16])
+            L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=0.5)
+            problem = IVP([u]); add_equation!(problem, "dt(u) = 0")
+            solver = InitialValueSolver(problem, ts; dt=0.005)
+            Tarang.set_spectral_linear_operator!(solver, L)
+            for _ in 1:200
+                step!(solver)
+            end
+            ensure_layout!(u, :g)
+            uf = maximum(abs, Tarang.get_grid_data(u))
+            @test isapprox(uf, exp(-2.0); rtol=0.05)   # decays at λ = ν k² = 2
+        end
     end
 end

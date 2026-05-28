@@ -83,6 +83,11 @@ function _step_diagonal_imex_rk222_impl!(state::TimestepperState, solver::Initia
 
     new_state = copy_state(current_state)
     for (k, field) in enumerate(new_state)
+        # copy_state may return the field in grid layout with a stale coefficient
+        # buffer; normalize to :c so the implicit update below writes the
+        # authoritative data (otherwise the edits are discarded when the field is
+        # next read in :c from its grid, and the state never evolves).
+        ensure_layout!(field, :c)
         coeff_data = get_coeff_data(field)
         for s in 1:stages
             if abs(b_exp[s]) > 1e-14
@@ -169,6 +174,11 @@ function _step_diagonal_imex_rk443_impl!(state::TimestepperState, solver::Initia
 
     new_state = copy_state(current_state)
     for (k, field) in enumerate(new_state)
+        # copy_state may return the field in grid layout with a stale coefficient
+        # buffer; normalize to :c so the implicit update below writes the
+        # authoritative data (otherwise the edits are discarded when the field is
+        # next read in :c from its grid, and the state never evolves).
+        ensure_layout!(field, :c)
         coeff_data = get_coeff_data(field)
         for s in 1:stages
             if abs(b_exp[s]) > 1e-14
