@@ -18,8 +18,25 @@ julia --project=. test/test_specific.jl
 
 ### With MPI
 
+The multi-rank MPI tests each run in their own `mpiexec` world, via a driver
+(CI exercises 1, 2, and 4 ranks):
+
 ```bash
-mpiexec -n 4 julia --project=. test/runtests.jl
+julia --project=. test/run_mpi_ci.jl 4      # all MPI tests at 4 ranks
+./test/run_mpi_tests.sh 4                    # convenience wrapper
+```
+
+### GPU
+
+GPU tests need an NVIDIA GPU and run on JuliaGPU Buildkite CI (see
+[Continuous Integration](#continuous-integration)). To run them locally on a
+CUDA host:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.add("CUDA")'   # CUDA is a weak dependency
+julia --project=. test/run_gpu_ci.jl                # single-process GPU tests
+# distributed (NCCL) tests across, e.g., 2 GPUs:
+TARANG_MPI_FILESET=distributed_gpu julia --project=. test/run_mpi_ci.jl 2
 ```
 
 ## Test Structure
@@ -186,10 +203,28 @@ println(coverage)
 
 ## Continuous Integration
 
-Tests run automatically on:
-- Pull requests
-- Pushes to main
-- Scheduled (nightly)
+CPU tests run on **GitHub Actions** for every push and pull request:
+
+- the default suite on Julia 1.10/1.11/1.12 across Linux, macOS, and Windows;
+- the optional CPU feature tests (`TARANG_ONLY_OPTIONAL_TESTS=true`);
+- the MPI suite via `test/run_mpi_ci.jl` at 1, 2, and 4 ranks.
+
+GPU tests cannot run on GitHub-hosted runners (no NVIDIA GPU), so they run on the
+**JuliaGPU Buildkite** CI, defined in `.buildkite/pipeline.yml`:
+
+- a single-GPU job (`test/run_gpu_ci.jl`) on Julia 1.10/1.11/1.12;
+- a multi-GPU NCCL job (`test/run_mpi_ci.jl` with the `distributed_gpu` fileset, 2 ranks).
+
+Because CUDA is a *weak* dependency and NCCL is loaded dynamically — which keeps
+CPU installs lean — these jobs `Pkg.add` CUDA/NCCL before running instead of using
+the standard package test target.
+
+!!! note "Enabling GPU CI"
+    The Buildkite pipeline is inert until the repository is added to the JuliaGPU
+    Buildkite organization (free for open-source packages): ask on the Julia Slack
+    `#gpu` channel for a Buildkite admin to create the pipeline, with the Buildkite
+    GitHub App installed on the hosting account. The pipeline file is then run
+    automatically on each push/PR.
 
 ## See Also
 
