@@ -14,7 +14,7 @@ allocation-bound, write `_apply_forward!(::LegendreTransform)` following
 the pattern in `transform_fourier.jl`.
 """
 
-function _legendre_forward(data::AbstractArray, transform::LegendreTransform)
+function _legendre_forward(data::AbstractArray, transform::Union{LegendreTransform, JacobiTransform})
     # Legendre transforms are matrix-backed and CPU-only today. GPU inputs are
     # staged through `_execute_on_cpu` and returned by the caller's transform
     # orchestration path.
@@ -75,7 +75,7 @@ function _legendre_forward(data::AbstractArray, transform::LegendreTransform)
     end
 end
 
-function _legendre_backward(data::AbstractArray, transform::LegendreTransform)
+function _legendre_backward(data::AbstractArray, transform::Union{LegendreTransform, JacobiTransform})
     # Backward transform mirrors `_legendre_forward`, using the grid-space
     # reconstruction matrix built during planning.
     return _execute_on_cpu(data) do host_data
@@ -135,3 +135,46 @@ end
 # Dispatch for transform loop
 _apply_forward(current, t::LegendreTransform) = _legendre_forward(current, t)
 _apply_backward(current, t::LegendreTransform) = _legendre_backward(current, t)
+
+# JacobiTransform reuses the same dense matrix application (forward/backward
+# matrices are populated by setup_jacobi_transform! in transform_planning.jl).
+_apply_forward(current, t::JacobiTransform) = _legendre_forward(current, t)
+_apply_backward(current, t::JacobiTransform) = _legendre_backward(current, t)
+
+# ---------------------------------------------------------------------------
+# In-place hot-path methods for matrix-based transforms (Legendre + Jacobi).
+#
+# `forward_transform!`/`backward_transform!` drive the transform chain through
+# the in-place `_apply_forward!`/`_apply_backward!` + `_*_output_spec` methods,
+# NOT the out-of-place `_apply_forward`/`_apply_backward` above. The only generic
+# `_apply_*!(::Transform)` fallback (transform_types.jl) is an identity copy, and
+# there were no matrix-transform methods — so a Legendre / ChebyshevU / Jacobi
+# field silently no-op'd (grid == coeffs). These delegate to the out-of-place
+# matrix multiply and copy into the caller's pre-allocated buffer. (A future
+# zero-alloc version could `mul!` straight into `out`; correctness first.)
+# ---------------------------------------------------------------------------
+const MatrixTransform = Union{LegendreTransform, JacobiTransform}
+
+function _forward_output_spec(in::AbstractArray, transform::MatrixTransform)
+    axis = transform.axis
+    n = transform.coeff_size
+    out_shape = ntuple(i -> i == axis ? n : size(in, i), ndims(in))
+    return (out_shape, eltype(in))
+end
+
+function _backward_output_spec(in::AbstractArray, transform::MatrixTransform)
+    axis = transform.axis
+    n = transform.grid_size
+    out_shape = ntuple(i -> i == axis ? n : size(in, i), ndims(in))
+    return (out_shape, eltype(in))
+end
+
+function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::MatrixTransform)
+    copyto!(out, _legendre_forward(in, transform))
+    return out
+end
+
+function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::MatrixTransform)
+    copyto!(out, _legendre_backward(in, transform))
+    return out
+end

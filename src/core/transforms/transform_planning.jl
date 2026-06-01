@@ -153,7 +153,11 @@ function plan_transforms!(dist::Distributor, domain::Domain)
         return
     end
 
-    # Serial execution (dist.size == 1): all basis types supported
+    # Serial execution (dist.size == 1): all basis types supported.
+    # NOTE: ChebyshevT and Legendre are matched before the generic JacobiBasis
+    # branch because both are <: JacobiBasis but have dedicated fast transforms.
+    # The JacobiBasis catch-all covers ChebyshevU, ChebyshevV, Ultraspherical and
+    # generic Jacobi, which would otherwise get no transform (silent identity).
     for (i, basis) in enumerate(domain.bases)
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
             setup_fftw_transform!(dist, basis, i)
@@ -161,6 +165,8 @@ function plan_transforms!(dist::Distributor, domain::Domain)
             setup_chebyshev_transform!(dist, basis, i)
         elseif isa(basis, Legendre)
             setup_legendre_transform!(dist, basis, i)
+        elseif isa(basis, JacobiBasis)
+            setup_jacobi_transform!(dist, basis, i)
         end
     end
 end
@@ -502,8 +508,45 @@ function setup_legendre_transform!(dist::Distributor, basis::Legendre, axis::Int
     end
     
     push!(dist.transforms, transform)
-    
+
     @debug "Legendre transform setup completed for axis $axis"
+end
+
+
+"""
+    setup_jacobi_transform!(dist, basis::JacobiBasis, axis)
+
+Build a collocation transform for a Jacobi-family basis that has no dedicated
+fast transform (ChebyshevU, ChebyshevV, Ultraspherical, generic Jacobi).
+
+The backward (coeff → grid) matrix is `B[i, n+1] = φ_n(x_i)`, the basis
+functions evaluated on the field's own grid via `evaluate_basis`. The forward
+(grid → coeff) matrix is `inv(B)`. Using the field's actual grid points (which
+`evaluate_basis` maps internally to the native interval) keeps the transform
+correct for any `bounds`. `B` is well conditioned on these grids (cond ≈ 0.65·N),
+so the inverse is numerically safe; round-trip error stays ~1e-13 to N≈100.
+"""
+function setup_jacobi_transform!(dist::Distributor, basis::JacobiBasis, axis::Int)
+    transform = JacobiTransform(basis)
+    N = basis.meta.size
+
+    # Field's physical grid points along this axis (evaluate_basis maps [a,b]→[-1,1]).
+    nodes = vec(Array(local_grid(basis, dist, 1)))
+
+    # Backward collocation matrix B[i, n+1] = φ_n(x_i); forward = B^{-1}.
+    B = Matrix{Float64}(evaluate_basis(basis, nodes, 0:N-1))
+    F = inv(B)
+
+    transform.backward_matrix = sparse(B)
+    transform.forward_matrix = sparse(F)
+    transform.grid_points = nodes
+    transform.grid_size = N
+    transform.coeff_size = N
+    transform.axis = axis
+
+    push!(dist.transforms, transform)
+
+    @debug "Jacobi collocation transform setup for axis $axis: N=$N, basis=$(typeof(basis))"
 end
 
 

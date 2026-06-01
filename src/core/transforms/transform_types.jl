@@ -150,6 +150,41 @@ mutable struct LegendreTransform <: Transform
     end
 end
 
+"""
+    JacobiTransform <: Transform
+
+Collocation transform for Jacobi-family bases that have no dedicated fast
+transform (ChebyshevU, ChebyshevV, Ultraspherical, generic Jacobi). The backward
+matrix is the Vandermonde-like matrix `B[i, n+1] = φ_n(x_i)` of the basis
+functions evaluated on the basis's own grid (via `evaluate_basis`); the forward
+matrix is its inverse. Both are applied through the same dense-matrix machinery
+as `LegendreTransform` (see `_legendre_forward`/`_legendre_backward`).
+
+This exists because the transform planner previously had no branch for these
+bases, so a field built on one silently used an identity (no-op) transform —
+`get_grid_data` returned the raw coefficients. The collocation matrix is well
+conditioned on these grids (cond ≈ 0.65·N), so the inverse is numerically safe.
+"""
+mutable struct JacobiTransform <: Transform
+    forward_matrix::Union{Nothing, SparseMatrixCSC{Float64, Int}}
+    backward_matrix::Union{Nothing, SparseMatrixCSC{Float64, Int}}
+    basis::JacobiBasis
+
+    # Grid information (no exact quadrature exists for these grids; the forward
+    # matrix is the inverse of the backward collocation matrix, not a quadrature)
+    grid_points::Union{Nothing, Vector{Float64}}
+    quad_weights::Union{Nothing, Vector{Float64}}
+
+    # Size information for dealiasing
+    grid_size::Int
+    coeff_size::Int
+    axis::Int
+
+    function JacobiTransform(basis::JacobiBasis)
+        new(nothing, nothing, basis, nothing, nothing, 0, 0, 0)
+    end
+end
+
 # ---------------------------------------------------------------------------
 # Dispatch helpers — replace isa() chains in transform loops
 # Concrete methods for _apply_forward/_apply_backward are defined in

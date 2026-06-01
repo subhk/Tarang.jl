@@ -84,8 +84,10 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
     interp_weights = _fourier_interp_weights(basis, N, L, x)
 
     # Weighted sum along axis: result[...] = Σ_i weights[i] * coeffs[..., i, ...]
+    # The weight vector length matches the coefficient extent along this axis
+    # (a half-spectrum N÷2+1 for the rfft'd RealFourier axis, N otherwise).
     shape = ones(Int, ndims(coeffs))
-    shape[axis] = N
+    shape[axis] = length(interp_weights)
     w_shaped = reshape(interp_weights, shape...)
     result_data = dropdims(sum(coeffs .* w_shaped, dims=axis), dims=axis)
 
@@ -114,46 +116,30 @@ end
 Evaluate 1D Fourier spectral reconstruction at position x.
 """
 function _interpolate_fourier_1d(coeffs::AbstractVector, basis::FourierBasis, N::Int, L::Real, x::Real)
+    k0 = 2π / L
     if isa(basis, RealFourier)
-        # RealFourier uses msin convention: [a_0, a_1, b_1, a_2, b_2, ..., a_nyq]
-        # where b_k is the coefficient of -sin(kx), not +sin(kx)
-        result = coeffs[1]  # DC component
-
-        k_max = N ÷ 2
-        is_even = (N % 2 == 0)
-
-        for k in 1:(k_max - (is_even ? 1 : 0))
-            k_phys = 2π * k / L
-            cos_idx = 2*k
-            sin_idx = 2*k + 1
-
-            if cos_idx <= length(coeffs) && sin_idx <= length(coeffs)
-                result += coeffs[cos_idx] * cos(k_phys * x)
-                result += coeffs[sin_idx] * (-sin(k_phys * x))
-            end
+        # RealFourier coefficients are stored as an UNNORMALIZED complex
+        # half-spectrum (rfft): coeffs[i] holds mode k = i-1 for i = 1..N÷2+1.
+        # Reconstruction: s(x) = (1/N) [ Re(c_0)
+        #                                + Σ_{k=1}^{K} w_k Re(c_k e^{i k k0 x}) ]
+        # with weight w_k = 2 for interior modes and w_k = 1 for the (even-N)
+        # Nyquist mode. The DC term carries weight 1.
+        half = length(coeffs)
+        result = real(coeffs[1])  # DC component
+        nyquist = iseven(N)
+        for i in 2:half
+            k = i - 1
+            factor = (nyquist && i == half) ? 1.0 : 2.0
+            result += factor * real(coeffs[i] * cis(k0 * k * x))
         end
-
-        # Nyquist component for even N
-        if is_even && N <= length(coeffs)
-            k_nyq = 2π * k_max / L
-            result += coeffs[N] * cos(k_nyq * x)
-        end
-
-        return result
-    else  # ComplexFourier
+        return result / N
+    else  # ComplexFourier: full unnormalized spectrum, FFT-ordered wavenumbers
         result = complex(0.0, 0.0)
-
         for i in 1:N
-            if i <= N÷2 + 1
-                k = i - 1
-            else
-                k = i - N - 1
-            end
-            k_phys = 2π * k / L
-            result += coeffs[i] * exp(im * k_phys * x)
+            k = i <= N ÷ 2 + 1 ? i - 1 : i - N - 1
+            result += coeffs[i] * cis(k0 * k * x)
         end
-
-        return real(result)
+        return real(result) / N
     end
 end
 
@@ -163,29 +149,26 @@ end
 Build spectral interpolation weight vector for Fourier basis at position x.
 """
 function _fourier_interp_weights(basis::FourierBasis, N::Int, L::Real, x::Real)
+    k0 = 2π / L
     if isa(basis, RealFourier)
-        weights = zeros(N)
-        weights[1] = 1.0  # DC
-        k_max = N ÷ 2
-        is_even = (N % 2 == 0)
-        for k in 1:(k_max - (is_even ? 1 : 0))
-            k_phys = 2π * k / L
-            if 2*k <= N
-                weights[2*k] = cos(k_phys * x)
-            end
-            if 2*k + 1 <= N
-                weights[2*k + 1] = -sin(k_phys * x)  # msin convention
-            end
-        end
-        if is_even && N >= 2
-            weights[N] = cos(2π * k_max / L * x)
+        # Complex weights for the unnormalized rfft half-spectrum (length N÷2+1).
+        # Applied to the complex coefficient array; real() is taken afterwards.
+        # Encodes the 1/N normalization and the factor-2 on interior modes.
+        half = N ÷ 2 + 1
+        weights = zeros(ComplexF64, half)
+        weights[1] = 1.0 / N  # DC
+        nyquist = iseven(N)
+        for i in 2:half
+            k = i - 1
+            factor = (nyquist && i == half) ? 1.0 : 2.0
+            weights[i] = (factor / N) * cis(k0 * k * x)
         end
         return weights
     else  # ComplexFourier
         weights = zeros(ComplexF64, N)
         for i in 1:N
-            k = i <= N÷2 + 1 ? i - 1 : i - N - 1
-            weights[i] = exp(im * 2π * k / L * x)
+            k = i <= N ÷ 2 + 1 ? i - 1 : i - N - 1
+            weights[i] = cis(k0 * k * x) / N
         end
         return weights
     end
