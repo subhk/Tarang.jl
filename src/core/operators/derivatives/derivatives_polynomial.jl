@@ -201,6 +201,20 @@ end
 Convert grid-space Chebyshev data to coefficient space in-place using cached
 DCT-I plans. Operates on `data` directly — no copy() of the input.
 """
+# DCT-I of the (descending) Chebyshev grid yields the coefficients of g(y)=f(-y).
+# Undo the T_n(-x)=(-1)^n alternation (negate odd modes = even 1-based indices) so
+# the result matches the basis' native forward_transform! sign convention, and
+# apply the DCT-I normalization (1/(N-1), endpoints halved).
+@inline function _cheb_dct_to_coeffs!(scratch::AbstractVector, N::Int)
+    inv_n = 1.0 / (N - 1)
+    @inbounds for m in 1:N
+        scratch[m] *= inv_n * (isodd(m) ? 1.0 : -1.0)
+    end
+    scratch[1] /= 2
+    scratch[N] /= 2
+    return scratch
+end
+
 function _cheb_coeff_convert!(data::AbstractArray, operand::ScalarField, dims::Int, ::Type{T}) where {T<:AbstractFloat}
     data_shape = size(data)
 
@@ -209,35 +223,29 @@ function _cheb_coeff_convert!(data::AbstractArray, operand::ScalarField, dims::I
         plan, scratch = _get_cheb_deriv_plan(N1, T)
         copyto!(scratch, data)
         plan * scratch
-        inv_n = 1.0 / (N1 - 1)
-        @inbounds for i in 1:N1; scratch[i] *= inv_n; end
-        scratch[1] /= 2; scratch[end] /= 2
+        _cheb_dct_to_coeffs!(scratch, N1)
         data .= scratch
 
     elseif dims == 2
         if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
             N1 = data_shape[1]
             plan, scratch = _get_cheb_deriv_plan(N1, T)
-            inv_n = 1.0 / (N1 - 1)
             for j in 1:data_shape[2]
                 col = @view data[:, j]
                 copyto!(scratch, col)
                 plan * scratch
-                @inbounds for i in 1:N1; scratch[i] *= inv_n; end
-                scratch[1] /= 2; scratch[end] /= 2
+                _cheb_dct_to_coeffs!(scratch, N1)
                 col .= scratch
             end
         end
         if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
             N2 = data_shape[2]
             plan, scratch = _get_cheb_deriv_plan(N2, T)
-            inv_n = 1.0 / (N2 - 1)
             for i in 1:data_shape[1]
                 row = @view data[i, :]
                 copyto!(scratch, row)
                 plan * scratch
-                @inbounds for k in 1:N2; scratch[k] *= inv_n; end
-                scratch[1] /= 2; scratch[end] /= 2
+                _cheb_dct_to_coeffs!(scratch, N2)
                 row .= scratch
             end
         end
@@ -246,39 +254,33 @@ function _cheb_coeff_convert!(data::AbstractArray, operand::ScalarField, dims::I
         if operand.bases[1] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
             N1 = data_shape[1]
             plan, scratch = _get_cheb_deriv_plan(N1, T)
-            inv_n = 1.0 / (N1 - 1)
             for j in 1:data_shape[2], k in 1:data_shape[3]
                 col = @view data[:, j, k]
                 copyto!(scratch, col)
                 plan * scratch
-                @inbounds for i in 1:N1; scratch[i] *= inv_n; end
-                scratch[1] /= 2; scratch[end] /= 2
+                _cheb_dct_to_coeffs!(scratch, N1)
                 col .= scratch
             end
         end
         if operand.bases[2] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
             N2 = data_shape[2]
             plan, scratch = _get_cheb_deriv_plan(N2, T)
-            inv_n = 1.0 / (N2 - 1)
             for i in 1:data_shape[1], k in 1:data_shape[3]
                 sl = @view data[i, :, k]
                 copyto!(scratch, sl)
                 plan * scratch
-                @inbounds for p in 1:N2; scratch[p] *= inv_n; end
-                scratch[1] /= 2; scratch[end] /= 2
+                _cheb_dct_to_coeffs!(scratch, N2)
                 sl .= scratch
             end
         end
         if operand.bases[3] isa Union{ChebyshevT, ChebyshevU, ChebyshevV}
             N3 = data_shape[3]
             plan, scratch = _get_cheb_deriv_plan(N3, T)
-            inv_n = 1.0 / (N3 - 1)
             for i in 1:data_shape[1], j in 1:data_shape[2]
                 sl = @view data[i, j, :]
                 copyto!(scratch, sl)
                 plan * scratch
-                @inbounds for p in 1:N3; scratch[p] *= inv_n; end
-                scratch[1] /= 2; scratch[end] /= 2
+                _cheb_dct_to_coeffs!(scratch, N3)
                 sl .= scratch
             end
         end
@@ -462,20 +464,86 @@ function evaluate_legendre_single_derivative!(result::ScalarField, operand::Scal
         fill!(result_data_cpu, 0.0)
     end
 
-    # Legendre spectral derivative formula:
-    # c'[k] = (2k-1) * sum_{j: j>k, j-k odd} c[j]
+    # Legendre spectral derivative. The classic recurrence
+    #     c'[k] = (2k-1) * sum_{j>k, j-k odd} c[j]
+    # is for UNNORMALIZED P_n. This basis (and its transforms) use ORTHONORMAL
+    # P̃_n = γ_n P_n with γ_n = sqrt((2n+1)/2) (see setup_legendre_transform!),
+    # so coefficients must be de-normalized into the P_n basis, differentiated,
+    # then re-normalized: c̃'[k] = (1/γ_{k-1}) (2k-1) Σ γ_{j-1} c̃[j].
+    # Here the 1-based index i corresponds to mode m=i-1, so γ(i)=sqrt((2i-1)/2).
+    γ(i) = sqrt((2.0 * i - 1.0) / 2.0)
 
     @inbounds for k in 1:min(N, length(result_data_cpu))
         coeff_sum = 0.0
         for j in (k+1):min(N, length(operand_data_cpu))
             if (j - k) % 2 == 1
-                coeff_sum += operand_data_cpu[j]
+                coeff_sum += γ(j) * operand_data_cpu[j]
             end
         end
-        result_data_cpu[k] = (2.0 * k - 1.0) * coeff_sum * scale
+        result_data_cpu[k] = (2.0 * k - 1.0) * coeff_sum * scale / γ(k)
     end
 
     if use_gpu
         get_coeff_data(result) .= copy_to_device(result_data_cpu, get_coeff_data(result))
     end
+end
+
+"""
+    _nodal_diff_matrix(x) -> Matrix
+
+Barycentric nodal differentiation matrix `D` for distinct nodes `x`: `(D*f)[i]`
+is the derivative at `x[i]` of the degree-`<N` polynomial interpolating `f` on
+`x`. Exact for polynomials of degree `< length(x)`, independent of the basis —
+so it differentiates a field on ANY Jacobi-family collocation grid (ChebyshevU,
+ChebyshevV, Ultraspherical, generic Jacobi) whose `evaluate_basis` spans that
+polynomial space. Built on PHYSICAL nodes, so the domain scaling is already
+included (no extra 2/(b-a) factor).
+"""
+function _nodal_diff_matrix(x::AbstractVector{<:Real})
+    N = length(x)
+    w = ones(Float64, N)                      # barycentric weights
+    @inbounds for i in 1:N, j in 1:N
+        i != j && (w[i] /= (x[i] - x[j]))
+    end
+    D = zeros(Float64, N, N)
+    @inbounds for i in 1:N
+        for j in 1:N
+            i != j && (D[i, j] = (w[j] / w[i]) / (x[i] - x[j]))
+        end
+        D[i, i] = -sum(@view D[i, :])         # negative-sum-trick for the diagonal
+    end
+    return D
+end
+
+"""
+    evaluate_jacobi_collocation_derivative!(result, operand, axis, order, layout)
+
+Differentiate `operand` along `axis` for Jacobi-family bases that have no
+dedicated spectral derivative kernel (ChebyshevU, ChebyshevV, Ultraspherical,
+generic Jacobi). Applies the nodal differentiation matrix in grid space
+(`order`-th power for higher orders), which is exact for the degree-`<N`
+polynomial these bases represent. Result is left in `:g`; a `:c` request uses the
+basis' collocation forward transform.
+"""
+function evaluate_jacobi_collocation_derivative!(result::ScalarField, operand::ScalarField,
+                                                 axis::Int, order::Int, layout::Symbol)
+    ensure_layout!(operand, :g)
+    basis = operand.bases[axis]
+    nodes = vec(Array(local_grid(basis, operand.dist, 1)))
+    Dbase = _nodal_diff_matrix(nodes)
+    D = order == 1 ? Dbase : Dbase^order
+
+    data_g = get_grid_data(operand)
+    gpu = is_gpu_array(data_g)
+    data_cpu = gpu ? Array(data_g) : data_g
+    deriv = apply_matrix_along_axis(D, data_cpu, axis)
+
+    ensure_layout!(result, :g)
+    set_grid_data!(result, gpu ? copy_to_device(deriv, get_grid_data(result)) : deriv)
+    result.current_layout = :g
+
+    if layout == :c
+        forward_transform!(result)
+    end
+    return result
 end

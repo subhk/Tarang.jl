@@ -244,10 +244,16 @@ function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
         evaluate_chebyshev_derivative!(result, operand, basis_index, order, layout)
     elseif isa(basis, Legendre)
         evaluate_legendre_derivative!(result, operand, basis_index, order, layout)
+    elseif isa(basis, JacobiBasis)
+        # ChebyshevU/ChebyshevV/Ultraspherical/generic Jacobi: nodal collocation
+        # derivative (no dedicated spectral kernel). Matched after ChebyshevT and
+        # Legendre, which have their own faster kernels above.
+        evaluate_jacobi_collocation_derivative!(result, operand, basis_index, order, layout)
     else
         throw(ArgumentError(
             "Differentiation not implemented for basis type $(typeof(basis)). " *
-            "Supported basis types: RealFourier, ComplexFourier, ChebyshevT, Legendre. " *
+            "Supported: RealFourier, ComplexFourier, ChebyshevT, Legendre, and other " *
+            "JacobiBasis (ChebyshevU/ChebyshevV/Ultraspherical/Jacobi) via nodal collocation. " *
             "Check that the coordinate '$(coord.name)' has a valid basis assigned."))
     end
 

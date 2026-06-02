@@ -103,17 +103,11 @@ end
         @test isapprox(c[1], 1.0; atol=1e-7)        # even mode: sign correct
         @test isapprox(c[3], 0.0; atol=1e-7)
         @test all(abs.(c[5:end]) .< 1e-7)
-        # BUG: _cheb_coeff_convert! flips the sign of ODD Chebyshev modes
-        #   relative to the basis' native forward_transform! convention.
-        #   The kernel reverses the grid (ascending->descending) for the DCT but
-        #   does not undo the T_n(-x)=(-1)^n T_n(x) alternation when it leaves
-        #   the data in coefficient space, so odd modes come out negated.
-        #   Observed: c1=-5, c3=-3 (expected +5, +3). Consequence: a :c-layout
-        #   derivative does NOT round-trip through backward_transform!
-        #   (verified back-to-grid error ~16). The :g path is correct because it
-        #   reverses back to the ascending grid. Asserting CORRECT values:
-        @test_broken isapprox(c[2], 5.0; atol=1e-7)
-        @test_broken isapprox(c[4], 3.0; atol=1e-7)
+        # _cheb_coeff_convert! now undoes the T_n(-x)=(-1)^n alternation so the
+        # odd-mode signs match the basis' native forward_transform! convention
+        # (FIXED 2026-06-02; previously c1=-5, c3=-3 and :c did not round-trip).
+        @test isapprox(c[2], 5.0; atol=1e-7)
+        @test isapprox(c[4], 3.0; atol=1e-7)
     end
 
     @testset "ChebyshevT order=0 identity and negative-order error" begin
@@ -181,29 +175,30 @@ end
     #   [1.414214, 2.612789, 0, 2.565708, ...]; the orthonormal-correct recurrence
     #   reproduces this exactly, while the code yields
     #   [0.816497, 1.692552, 0, 2.262743, ...].
-    # Each test asserts the CORRECT analytic value and is marked @test_broken.
+    # FIXED 2026-06-02: evaluate_legendre_single_derivative! now de-/re-normalizes
+    # by γ_n=√((2n+1)/2) so the orthonormal-coefficient derivative is correct.
     # ========================================================================
-    @testset "Legendre first derivative (analytic oracle) [BROKEN: normalization]" begin
+    @testset "Legendre first derivative (analytic oracle)" begin
         coords = CartesianCoordinates("z")
         dist   = Distributor(coords; mesh=(1,), dtype=Float64)
         basis  = Legendre(coords["z"]; size=16, bounds=(-1.0, 1.0))
         f, z   = setup_field(basis, dist, fpoly)
 
         d = evaluate(Tarang.Differentiate(f, coords["z"], 1), :g)
-        @test_broken isapprox(vec(Array(get_grid_data(d))), dfpoly.(z); rtol=1e-7, atol=1e-7)
+        @test isapprox(vec(Array(get_grid_data(d))), dfpoly.(z); rtol=1e-7, atol=1e-7)
     end
 
-    @testset "Legendre second derivative (order>1 recurrence branch) [BROKEN]" begin
+    @testset "Legendre second derivative (order>1 recurrence branch)" begin
         coords = CartesianCoordinates("z")
         dist   = Distributor(coords; mesh=(1,), dtype=Float64)
         basis  = Legendre(coords["z"]; size=16, bounds=(-1.0, 1.0))
         f, z   = setup_field(basis, dist, fpoly)
 
         d = evaluate(Tarang.Differentiate(f, coords["z"], 2), :g)
-        @test_broken isapprox(vec(Array(get_grid_data(d))), d2fpoly.(z); rtol=1e-6, atol=1e-6)
+        @test isapprox(vec(Array(get_grid_data(d))), d2fpoly.(z); rtol=1e-6, atol=1e-6)
     end
 
-    @testset "Legendre third derivative (order>=3 aliasing copy branch) [BROKEN]" begin
+    @testset "Legendre third derivative (order>=3 aliasing copy branch)" begin
         # order>=3 reuses the temp field as operand AND result on the last step;
         # exercises the defensive copy() in evaluate_legendre_single_derivative!.
         # f'''(z) = 72z.
@@ -213,17 +208,17 @@ end
         f, z   = setup_field(basis, dist, fpoly)
 
         d = evaluate(Tarang.Differentiate(f, coords["z"], 3), :g)
-        @test_broken isapprox(vec(Array(get_grid_data(d))), (z -> 72z).(z); rtol=1e-6, atol=1e-6)
+        @test isapprox(vec(Array(get_grid_data(d))), (z -> 72z).(z); rtol=1e-6, atol=1e-6)
     end
 
-    @testset "Legendre derivative on shifted bounds (0,3) [BROKEN]" begin
+    @testset "Legendre derivative on shifted bounds (0,3)" begin
         coords = CartesianCoordinates("z")
         dist   = Distributor(coords; mesh=(1,), dtype=Float64)
         basis  = Legendre(coords["z"]; size=20, bounds=(0.0, 3.0))
         f, z   = setup_field(basis, dist, fpoly)
 
         d = evaluate(Tarang.Differentiate(f, coords["z"], 1), :g)
-        @test_broken isapprox(vec(Array(get_grid_data(d))), dfpoly.(z); rtol=1e-5, atol=1e-5)
+        @test isapprox(vec(Array(get_grid_data(d))), dfpoly.(z); rtol=1e-5, atol=1e-5)
     end
 
     @testset "Legendre coefficient layout (:c) + guard errors" begin
@@ -329,20 +324,22 @@ end
     end
 
     # ========================================================================
-    # Part E: bases NOT served by this module (documented limitation)
-    #   ChebyshevU, ChebyshevV, generic Jacobi are NOT routed by
-    #   evaluate_differentiate (only ChebyshevT and Legendre are). They hit the
-    #   else-branch and throw. We assert that contract here so the gap is explicit.
+    # Part E: ChebyshevU / ChebyshevV / generic Jacobi differentiation
+    #   FIXED 2026-06-02: now routed through a nodal collocation differentiation
+    #   matrix (evaluate_jacobi_collocation_derivative!), exact for degree < N.
+    #   Oracle = analytic derivative of fpoly.
     # ========================================================================
-    @testset "ChebyshevU / ChebyshevV / Jacobi differentiation is unsupported" begin
+    @testset "ChebyshevU / ChebyshevV / Jacobi differentiation (nodal collocation)" begin
         coords = CartesianCoordinates("z")
         dist   = Distributor(coords; mesh=(1,), dtype=Float64)
         for B in (ChebyshevU(coords["z"]; size=12, bounds=(-1.0, 1.0)),
                   ChebyshevV(coords["z"]; size=12, bounds=(-1.0, 1.0)),
                   Jacobi(coords["z"]; size=12, bounds=(-1.0, 1.0), a=0.3, b=0.7))
-            f = ScalarField(dist, "f", (B,), Float64)
-            ensure_layout!(f, :g)
-            @test_throws ArgumentError evaluate(Tarang.Differentiate(f, coords["z"], 1), :g)
+            f, z = setup_field(B, dist, fpoly)
+            d1 = evaluate(Tarang.Differentiate(f, coords["z"], 1), :g)
+            @test isapprox(vec(Array(get_grid_data(d1))), dfpoly.(z); rtol=1e-8, atol=1e-8)
+            d2 = evaluate(Tarang.Differentiate(f, coords["z"], 2), :g)
+            @test isapprox(vec(Array(get_grid_data(d2))), d2fpoly.(z); rtol=1e-7, atol=1e-7)
         end
     end
 end

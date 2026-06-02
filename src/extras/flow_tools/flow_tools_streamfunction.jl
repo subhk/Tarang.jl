@@ -38,8 +38,9 @@ function streamfunction(velocity::VectorField; boundary_condition::Symbol=:perio
     end
 end
 
-"""Extract information about Fourier vs non-Fourier bases"""
-function get_fourier_basis_info(bases::Vector)
+"""Extract information about Fourier vs non-Fourier bases.
+Accepts a Tuple (e.g. `field.bases`) or a Vector."""
+function get_fourier_basis_info(bases::Union{Tuple, AbstractVector})
     fourier_info = []
 
     for (i, basis) in enumerate(bases)
@@ -163,10 +164,14 @@ function get_2d_wavenumber_grids(field::ScalarField)
     end
 
     # Y-direction wavenumbers (with proper offset for MPI)
-    if isa(bases[2], RealFourier)
+    # Only the FIRST real-Fourier axis is stored as a half-spectrum rfft
+    # (monotonic 0..N/2). A RealFourier axis that is NOT the first real axis
+    # (e.g. y when x is also RealFourier) is a full complex FFT and must use
+    # fft-frequency ordering [0,1,…,N/2-1,-N/2,…,-1] — same as ComplexFourier.
+    if isa(bases[2], RealFourier) && _is_first_real_fourier_axis(bases, 2)
         ky_indices = offset_y:(offset_y + local_ny - 1)
         ky_1d = 2π / Ly * ky_indices
-    else  # ComplexFourier
+    else  # ComplexFourier, or a non-first RealFourier axis (full complex FFT)
         global_k_indices = fftshift(-global_ny ÷ 2:(global_ny ÷ 2 - 1))
         local_k_indices = global_k_indices[(offset_y + 1):(offset_y + local_ny)]
         ky_1d = 2π / Ly * local_k_indices

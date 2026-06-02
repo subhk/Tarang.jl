@@ -171,20 +171,11 @@ lap_psi(x, y)     = -2.0 * sin(x) * cos(y)
     # streamfunction_spectral_invert: solves ∇²ψ = ω  (ψ̂ = -ω̂/k²)
     # Independent oracle: feed ω = -2 sin(x)cos(y); ∇²ψ=ω => ψ = sin(x)cos(y).
     #
-    # BUG FOUND (CODE): get_2d_wavenumber_grids builds WRONG wavenumbers on the
-    # SECOND RealFourier axis. The second real-Fourier axis is stored in full
-    # complex FFT layout (size N), whose modes are 0,1,...,N/2,-(N/2-1),...,-1.
-    # But the module uses monotonic rfft-style indices 0,1,...,N-1 for it
-    # (flow_tools_streamfunction.jl:166-167). The Poisson divisor k² is thus
-    # grossly wrong for the negative-frequency half (e.g. the |ky|=1 mode at
-    # index N is divided by (N-1)² instead of 1²), corrupting ψ.
-    #
-    # PROOF: independently applying the Laplacian operator to the recovered ψ
-    # does NOT reproduce ω (max error ~0.99 vs ~1e-10 expected), and ψ does not
-    # equal the analytic sin(x)cos(y) (max error ~0.50). Compare to the correct
-    # helper compute_wavenumber_squared_grid which yields ky²=[0,1,4,...,64,49,
-    # ...,1] (fft layout) whereas get_2d_wavenumber_grids yields [0,1,...,225].
-    # The CORRECT assertions are written and wrapped @test_broken below.
+    # FIXED 2026-06-02: get_2d_wavenumber_grids now uses fft-frequency ordering
+    # (0,1,…,N/2,-(N/2-1),…,-1) for a non-first RealFourier axis (full complex FFT
+    # layout) instead of monotonic rfft indices, via _is_first_real_fourier_axis.
+    # The Poisson divisor k² is now correct, so the inversion and Laplacian
+    # self-consistency hold to ~1e-9.
     # =======================================================================
     @testset "streamfunction_spectral_invert solves ∇²ψ = ω" begin
         coords, dist, bases, x, y = build_periodic_2d()
@@ -196,17 +187,15 @@ lap_psi(x, y)     = -2.0 * sin(x) * cos(y)
         Tarang.ensure_layout!(ψ, :g)
         ψ_data = Tarang.get_grid_data(ψ)
 
-        # CORRECT value: ∇²ψ = ω with ω = -2 sin(x)cos(y) gives ψ = sin(x)cos(y)
-        # (k=0 mode gauged to 0). BROKEN by the wavenumber-layout bug above.
+        # ∇²ψ = ω with ω = -2 sin(x)cos(y) gives ψ = sin(x)cos(y) (k=0 gauged to 0).
         expected = grid_matrix(x, y, psi_fn)
-        @test_broken isapprox(ψ_data, expected; rtol=1e-8, atol=1e-9)
+        @test isapprox(ψ_data, expected; rtol=1e-8, atol=1e-9)
 
-        # CORRECT self-consistency: ∇²(recovered ψ) must reproduce ω.
-        # Independent oracle (Laplacian operator). Also BROKEN by the same bug.
+        # Self-consistency: ∇²(recovered ψ) must reproduce ω (Laplacian oracle).
         lapψ = Tarang.evaluate_operator(Tarang.lap(ψ))
         Tarang.ensure_layout!(lapψ, :g)
-        @test_broken isapprox(Tarang.get_grid_data(lapψ),
-                              grid_matrix(x, y, lap_psi); rtol=1e-7, atol=1e-9)
+        @test isapprox(Tarang.get_grid_data(lapψ),
+                       grid_matrix(x, y, lap_psi); rtol=1e-7, atol=1e-9)
     end
 
     @testset "streamfunction_spectral_invert gauge removes mean" begin
@@ -238,12 +227,10 @@ lap_psi(x, y)     = -2.0 * sin(x) * cos(y)
     # would round-trip to -ψ_target.)
     # =======================================================================
     #
-    # BUG FOUND (CODE): streamfunction(velocity::VectorField) is unconditionally
-    # broken. Line 30 calls get_fourier_basis_info(velocity.bases), but
-    # velocity.bases is a Tuple while get_fourier_basis_info is only defined for
-    # ::Vector (flow_tools_streamfunction.jl:42). Every call throws MethodError.
-    # Fix would be get_fourier_basis_info(collect(velocity.bases)). The two tests
-    # below assert the CORRECT behavior and are wrapped to tolerate the throw.
+    # FIXED 2026-06-02: streamfunction(velocity::VectorField) used to throw a
+    # MethodError because get_fourier_basis_info was ::Vector-only and velocity.bases
+    # is a Tuple. The method now accepts Union{Tuple, AbstractVector}, so the two
+    # tests below run the real round-trip.
     @testset "streamfunction(perp_grad(ψ)) round-trips to ψ" begin
         coords, dist, bases, x, y = build_periodic_2d()
         ψ_target = ScalarField(dist, "psi_target", bases, Float64)
@@ -253,18 +240,12 @@ lap_psi(x, y)     = -2.0 * sin(x) * cos(y)
         # and the ∇²ψ=ω inversion, this SHOULD round-trip to ψ_target.
         u = Tarang.perp_grad(ψ_target)
 
-        # CORRECT behavior: returns ψ ≈ ψ_target. BROKEN by the Tuple-vs-Vector
-        # MethodError (and would also be hit by the wavenumber bug above).
-        local round_trip_ok = false
-        try
-            ψ_rec = Tarang.streamfunction(u; boundary_condition=:periodic, gauge_condition=true)
-            Tarang.ensure_layout!(ψ_rec, :g)
-            ψ_rec_data = Tarang.get_grid_data(ψ_rec)
-            round_trip_ok = isapprox(ψ_rec_data, grid_matrix(x, y, psi_fn); rtol=1e-7, atol=1e-9)
-        catch err
-            @info "streamfunction(velocity) threw (known bug)" err
-        end
-        @test_broken round_trip_ok
+        # Returns ψ ≈ ψ_target (FIXED: get_fourier_basis_info now accepts a Tuple,
+        # and the wavenumber-layout fix makes the Poisson inversion correct).
+        ψ_rec = Tarang.streamfunction(u; boundary_condition=:periodic, gauge_condition=true)
+        Tarang.ensure_layout!(ψ_rec, :g)
+        ψ_rec_data = Tarang.get_grid_data(ψ_rec)
+        @test isapprox(ψ_rec_data, grid_matrix(x, y, psi_fn); rtol=1e-7, atol=1e-9)
     end
 
     @testset "streamfunction returns a ScalarField on periodic domain" begin
@@ -272,13 +253,7 @@ lap_psi(x, y)     = -2.0 * sin(x) * cos(y)
         ψ_target = ScalarField(dist, "psi_target", bases, Float64)
         fill_scalar!(ψ_target, x, y, psi_fn)
         u = Tarang.perp_grad(ψ_target)
-        # CORRECT behavior: returns a ScalarField. BROKEN by the MethodError.
-        local got_scalarfield = false
-        try
-            got_scalarfield = isa(Tarang.streamfunction(u), ScalarField)
-        catch
-        end
-        @test_broken got_scalarfield
+        @test isa(Tarang.streamfunction(u), ScalarField)
     end
 
     @testset "streamfunction requires 2D velocity" begin
@@ -321,10 +296,9 @@ lap_psi(x, y)     = -2.0 * sin(x) * cos(y)
         ky_vec = vec(ky_grid)
         @test length(ky_vec) == N
         @test ky_vec[1] == 0.0
-        # CORRECT (fft layout): max |k| == N/2 and negatives present.
-        # BROKEN: get_2d_wavenumber_grids emits monotonic 0..N-1 instead.
-        @test_broken maximum(abs.(ky_vec)) ≈ N / 2
-        @test_broken any(ky_vec .< 0.0)
+        # FIXED: fft layout — max |k| == N/2 and negative frequencies present.
+        @test maximum(abs.(ky_vec)) ≈ N / 2
+        @test any(ky_vec .< 0.0)
     end
 
     # =======================================================================
