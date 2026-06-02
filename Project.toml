@@ -1,7 +1,7 @@
 name = "Tarang"
 uuid = "3caadacf-3504-43fd-90cf-12adede613ab"
 authors = ["Subhajit Kar <subhajitkar19@gmail.com>"]
-version = "1.0.31"
+version = "1.0.32"
 
 [deps]
 AbstractFFTs = "621f4979-c628-5d54-868e-fcf4e3e8185c"
