@@ -518,6 +518,42 @@ end
     end
 end
 
+@testset "GQLWaveMeanSystem (combined orchestration)" begin
+    # The coupled GQL+ETD update has no clean closed-form oracle, but the GQL
+    # decomposition partitions the spectrum, so large+small must reconstruct the
+    # input spectral field EXACTLY. This smoke/structural test drives the whole
+    # orchestration (construct / add_field! / add_flux! / setup! / update! / getters).
+    sys = Tarang.GQLWaveMeanSystem((8, 8, 4), (2π, 2π); Λ = 3.0, α = 0.1)
+    Tarang.add_field!(sys, :u)
+    Tarang.add_field!(sys, :w)
+    Tarang.add_flux!(sys, :uw, :u, :w)
+    Tarang.setup!(sys, 0.01)
+
+    ssz = sys.spectral_size
+    @test ssz == (5, 8, 4)                       # rfft along dim 1: 8÷2+1
+    fh = Dict(:u => rand(ComplexF64, ssz...), :w => rand(ComplexF64, ssz...))
+    fp = Dict(:u => rand(8, 8, 4), :w => rand(8, 8, 4))
+    Tarang.update!(sys, fh, fp, 0.01)
+
+    # GQL partition reconstructs the input spectrum exactly (independent oracle).
+    @test isapprox(Tarang.get_large(sys, :u) .+ Tarang.get_small(sys, :u), fh[:u]; atol = 1e-12)
+    @test isapprox(Tarang.get_large(sys, :w) .+ Tarang.get_small(sys, :w), fh[:w]; atol = 1e-12)
+
+    # Mean profile and flux are vertical profiles (length Nz); finite-valued.
+    @test size(Tarang.get_mean(sys, :u)) == (4,)
+    @test all(isfinite, Tarang.get_mean(sys, :u))
+    @test size(Tarang.get_flux(sys, :uw)) == (4,)
+    @test all(isfinite, Tarang.get_flux(sys, :uw))
+
+    # Cutoff getter / setter.
+    @test Tarang.get_cutoff(sys) == 3.0
+    Tarang.set_cutoff!(sys, 5.0)
+    @test Tarang.get_cutoff(sys) == 5.0
+
+    # add_flux! name-inference error path (name length != 2).
+    @test_throws ArgumentError Tarang.add_flux!(sys, :toolongname)
+end
+
 end  # Temporal Filters Extended
 
 println("All extended temporal filter tests passed!")

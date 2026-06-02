@@ -157,7 +157,10 @@ end
 Build conversion matrix from input basis to output basis.
 """
 function conversion_matrix(input_basis::JacobiBasis, output_basis::JacobiBasis)
-    cache_key = (input_basis.a, input_basis.b, output_basis.a, output_basis.b)
+    # Key on output TYPE as well as (a,b): two bases can share Jacobi parameters
+    # but differ in normalization (e.g. ChebyshevU vs raw Jacobi(1/2,1/2)).
+    cache_key = (typeof(output_basis), input_basis.a, input_basis.b,
+                 output_basis.a, output_basis.b)
 
     if haskey(input_basis._conversion_matrix_cache, cache_key)
         return input_basis._conversion_matrix_cache[cache_key]
@@ -167,10 +170,49 @@ function conversion_matrix(input_basis::JacobiBasis, output_basis::JacobiBasis)
     a0, b0 = input_basis.a, input_basis.b
     a1, b1 = output_basis.a, output_basis.b
 
-    matrix = _jacobi_conversion_matrix(N, a0, b0, a1, b1)
+    if abs(a0 - a1) < 1e-10 && abs(b0 - b1) < 1e-10
+        # Identity (same parameters): exact, preserves solver sparsity.
+        matrix = sparse(I, N, N)
+    elseif isa(input_basis, ChebyshevT) && isa(output_basis, ChebyshevU)
+        # Exact bidiagonal T_n=(U_n-U_{n-2})/2. Kept as a clean sparse special
+        # case because it is on the implicit-solver hot path (expression_matrices
+        # for the Convert operator) and must stay banded.
+        matrix = _chebyshev_t_to_u_matrix(N)
+    else
+        # General case: collocation from the ACTUAL basis functions. Correct
+        # regardless of Chebyshev-vs-Jacobi normalization and shift direction —
+        # replaces the recurrence path (which mishandled both). See below.
+        matrix = _collocation_conversion_matrix(input_basis, output_basis, N)
+    end
 
     input_basis._conversion_matrix_cache[cache_key] = matrix
     return matrix
+end
+
+"""
+    _collocation_conversion_matrix(input_basis, output_basis, N) -> sparse matrix
+
+Build the basis-conversion matrix `M` (with `c_out = M * c_in`) by collocation:
+sample both bases' functions on N nodes and solve `B_out * c_out = B_in * c_in`,
+i.e. `M = B_out \\ B_in` where `B[i,n] = φ_n(x_i)` from `evaluate_basis`.
+
+Because it uses the actual basis functions, it is correct for ANY pair of
+Jacobi-family bases independent of their normalization (ChebyshevT/U/V, Legendre,
+generic Jacobi) and shift direction — unlike the parameter-only recurrence path,
+which mishandled the Chebyshev-vs-Jacobi normalization (e.g. T->V) and had a
+broken down-shift recurrence. The collocation matrix is exact for polynomials of
+degree < N (both bases span that space), so it preserves the represented function.
+"""
+function _collocation_conversion_matrix(input_basis::JacobiBasis,
+                                        output_basis::JacobiBasis, N::Int)
+    a, b = input_basis.meta.bounds
+    native = _native_grid(input_basis, 1.0)                  # N nodes in [-1, 1]
+    nodes = [a + (x + 1) * (b - a) / 2 for x in native]      # map to physical [a, b]
+    B_in  = Matrix{Float64}(evaluate_basis(input_basis, nodes, 0:(N - 1)))
+    B_out = Matrix{Float64}(evaluate_basis(output_basis, nodes, 0:(N - 1)))
+    M = sparse(B_out \ B_in)                                 # c_out = M c_in
+    droptol!(M, 1e-12)                                       # drop solver-noise fill
+    return M
 end
 
 """Build Jacobi conversion matrix."""
@@ -331,7 +373,10 @@ function _jacobi_a_shift_up_matrix(N::Int, a::Float64, b::Float64)
 
         if abs(denom) > 1e-14
             c1 = (n + a + b + 1) / denom
-            c2 = (n + b) / denom
+            # DLMF 18.9.5: P_n^{(a,b)} = c1 P_n^{(a+1,b)} - (n+b)/denom P_{n-1}^{(a+1,b)}.
+            # The subdiagonal term is NEGATIVE (the b-shift counterpart below is
+            # positive — the asymmetry follows from P_n^{(a,b)}(-x)=(-1)^n P_n^{(b,a)}(x)).
+            c2 = -(n + b) / denom
 
             # P_n^{(a,b)} contributes to P_n^{(a+1,b)} with coefficient c1
             push!(I_list, n + 1); push!(J_list, n + 1); push!(V_list, c1)

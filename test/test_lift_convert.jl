@@ -109,15 +109,12 @@ end
     end
 
     @testset "ChebyshevT -> ChebyshevV (two-step shift) preserves function" begin
-        # BUG (multi-step Jacobi conversion): T->V conversion does NOT preserve
-        # the function. The single-step T->U path is exact (see tests above and
-        # the matrix cross-check), but the two-parameter shift a,b: -1/2->3/2
-        # goes through _general_jacobi_conversion / _jacobi_conversion_positive_shift
-        # and produces a wrong connection matrix. Verified against independent
-        # least-squares connection coefficients on a 200-point grid: the code's
-        # T->V matrix differs by up to 1.2 in magnitude, and the reconstructed
-        # function diverges (see report). The CORRECT behaviour is preservation,
-        # asserted here and wrapped @test_broken until the conversion is fixed.
+        # FIXED. conversion_matrix now builds the general (non-identity, non-T->U)
+        # connection matrix by collocation from the actual basis functions
+        # (evaluate_basis), so it is correct regardless of the Chebyshev-vs-Jacobi
+        # normalization. Previously the parameter-only recurrence path applied a
+        # P^{(a,b)} conversion to Chebyshev-normalized coefficients and the function
+        # was not preserved (err ~10).
         N  = 8
         zt = ChebyshevT(coords["z"]; size=N, bounds=(-1.0, 1.0))
         zv = ChebyshevV(coords["z"]; size=N, bounds=(-1.0, 1.0))
@@ -130,7 +127,43 @@ end
         xs = collect(range(-0.9, 0.9; length=9))
         vT = reconstruct(zt, c_T, xs)
         vV = reconstruct(zv, c_V, xs)
-        @test_broken isapprox(vT, vV; rtol=1e-9, atol=1e-11)
+        @test isapprox(vT, vV; rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "Pure-Jacobi positive integer shifts preserve function" begin
+        # Regression guard for the a-shift-up sign fix (DLMF 18.9.5 subdiagonal is
+        # negative). These raw P^{(a,b)} conversions previously failed with err ~6.
+        N  = 8
+        xs = collect(range(-0.85, 0.85; length=7))
+        c  = [0.4, -0.3, 0.5, 0.2, -0.1, 0.15, 0.05, -0.2]
+        for (a0, b0, a1, b1) in ((0.5, 0.5, 1.5, 0.5),    # pure a-shift
+                                 (-0.5, -0.5, 1.5, 1.5),  # a and b shift (T->V params)
+                                 (0.0, 0.0, 2.0, 1.0))    # asymmetric multi-step
+            bin  = Tarang.Jacobi(coords["z"]; a = a0, b = b0, size = N, bounds = (-1.0, 1.0))
+            bout = Tarang.Jacobi(coords["z"]; a = a1, b = b1, size = N, bounds = (-1.0, 1.0))
+            res  = evaluate_convert(Convert(field_with_coeffs(dist, "u", bin, c), bout), :c)
+            cout = vec(Array(get_coeff_data(res)))
+            @test isapprox(reconstruct(bin, c, xs), reconstruct(bout, cout, xs);
+                           rtol = 1e-9, atol = 1e-11)
+        end
+    end
+
+    @testset "Negative integer shifts (down-shift) preserve function" begin
+        # FIXED by the collocation conversion (the old _jacobi_*_shift_down_matrix
+        # recurrence produced a wrong connection matrix, err ~4-20). Covers both a
+        # single down-shift and a two-parameter down-shift.
+        N   = 8
+        c   = [0.4, -0.3, 0.5, 0.2, -0.1, 0.15, 0.05, -0.2]
+        xs  = collect(range(-0.85, 0.85; length=7))
+        for (a0, b0, a1, b1) in ((1.5, 0.5, 0.5, 0.5),     # single a down-shift
+                                 (1.5, 1.5, -0.5, -0.5))   # both params down
+            bin  = Tarang.Jacobi(coords["z"]; a = a0, b = b0, size = N, bounds = (-1.0, 1.0))
+            bout = Tarang.Jacobi(coords["z"]; a = a1, b = b1, size = N, bounds = (-1.0, 1.0))
+            res  = evaluate_convert(Convert(field_with_coeffs(dist, "u", bin, c), bout), :c)
+            cout = vec(Array(get_coeff_data(res)))
+            @test isapprox(reconstruct(bin, c, xs), reconstruct(bout, cout, xs);
+                           rtol = 1e-9, atol = 1e-11)
+        end
     end
 
     @testset "Identity conversion (same basis) preserves coefficients" begin
