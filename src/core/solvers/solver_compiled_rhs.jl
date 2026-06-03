@@ -16,41 +16,38 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     state_fields = collect_state_fields(problem.variables)
     copy_solution_to_fields!(state_fields, x)
 
-    # Step 2: Evaluate residual expressions (lhs - rhs)
-    residual_fields = ScalarField[]
+    # Step 2: Residual R = L*x - RHS.
+    # The LHS (which contains tau `lift` terms living on a different output basis
+    # than `Δu` etc.) is evaluated via the assembled linear operator matrix `L`
+    # — this reconciles the term bases that a field-level `lhs_field - rhs_field`
+    # cannot (it throws "Cannot add fields with different bases"). The RHS
+    # (nonlinear terms + forcing, with NO lift) is evaluated cleanly as fields.
+    L_matrix = get(problem.parameters, "L_matrix", nothing)
 
-    if hasfield(typeof(problem), :equation_data) && problem.equation_data !== nothing
+    rhs_fields = ScalarField[]
+    if hasfield(typeof(problem), :equation_data) && problem.equation_data !== nothing &&
+       !isempty(problem.equation_data)
         for (i, eq_data) in enumerate(problem.equation_data)
             template = state_fields[min(i, length(state_fields))]
-            lhs_expr = get(eq_data, "lhs", nothing)
             rhs_expr = get(eq_data, "rhs", nothing)
-
-            if lhs_expr !== nothing || rhs_expr !== nothing
-                lhs_field = lhs_expr === nothing ? create_zero_field(template) :
-                           evaluate_solver_expression(lhs_expr, problem.variables; layout=:g, template=template)
-                rhs_field = rhs_expr === nothing ? create_zero_field(template) :
-                           evaluate_solver_expression(rhs_expr, problem.variables; layout=:g, template=template)
-                residual_field = lhs_field - rhs_field
-            else
-                # Fallback: use F expression if provided
-                expr = get(eq_data, "F", ZeroOperator())
-                residual_field = evaluate_solver_expression(expr, problem.variables; layout=:g, template=template)
-            end
-
-            ensure_layout!(residual_field, :c)
-            push!(residual_fields, residual_field)
-            @debug "Evaluated residual for equation $i"
+            rhs_field = rhs_expr === nothing ? create_zero_field(template) :
+                        evaluate_solver_expression(rhs_expr, problem.variables; layout=:g, template=template)
+            ensure_layout!(rhs_field, :c)
+            push!(rhs_fields, rhs_field)
         end
     else
-        @warn "No equation data available for residual evaluation - creating zero residuals"
-        for (i, field) in enumerate(state_fields)
-            residual_field = create_zero_field(field)
-            push!(residual_fields, residual_field)
+        for field in state_fields
+            push!(rhs_fields, create_zero_field(field))
         end
     end
 
-    # Step 3: Convert residual fields to vector
-    residual = fields_to_vector(residual_fields)
+    # Step 3: residual vector = L*x - RHS  (fall back to field lhs-rhs if no L).
+    rhs_vec = fields_to_vector(rhs_fields)
+    if L_matrix !== nothing && size(L_matrix, 2) == length(x) && size(L_matrix, 1) == length(rhs_vec)
+        residual = L_matrix * x - rhs_vec
+    else
+        residual = -rhs_vec
+    end
 
     # Step 4: Build Jacobian matrix
     # Try symbolic Jacobian first (Frechet differentiation), then fall back
