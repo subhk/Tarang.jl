@@ -673,6 +673,11 @@ end
 
 const _InitialValueSolver_constructor = _build_initial_value_solver
 
+# Extract the concrete matsolver choice. A `(type, kwargs)` Tuple carries the
+# solver type first (matching `_subproblem_solver_type` in the timestepper path);
+# otherwise the choice (Symbol/String/Type) is passed through to `get_solver`.
+_solver_type(choice) = choice isa Tuple ? choice[1] : choice
+
 function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
                                       device::String="cpu",
                                       matsolver::Union{String,Symbol,Type}=:sparse,
@@ -680,6 +685,10 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
                                       tolerance::Real=1e-10,
                                       max_iterations::Int=100)
     setup_domain!(problem)
+    # Merge add_bc! boundary conditions into the equation system (tau rows),
+    # mirroring the IVP build (_build_initial_value_solver). Without this the BVP
+    # system is under-determined and validation fails.
+    _merge_boundary_conditions!(problem)
     validate_problem(problem)
 
     solver_choice = solver_type === nothing ? matsolver : solver_type
