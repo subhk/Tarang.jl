@@ -38,7 +38,9 @@ function apply_dense_along_axis(matrix::AbstractMatrix, array::AbstractArray, ax
     if out === nothing
         out_shape = collect(size(array_cpu))
         out_shape[axis] = size(matrix, 1)
-        out_cpu = zeros(eltype(array_cpu), out_shape...)
+        # Promote so a complex matrix applied to a real array (or vice versa)
+        # yields a buffer that can hold the result (else copyto! → InexactError).
+        out_cpu = zeros(promote_type(eltype(array_cpu), eltype(matrix)), out_shape...)
     elseif out === array
         throw(ArgumentError("Cannot apply in place"))
     else
@@ -118,7 +120,8 @@ function apply_sparse_along_axis(matrix::SparseMatrixCSC, array::AbstractArray, 
     if out === nothing
         out_shape = collect(size(array_cpu))
         out_shape[axis] = size(matrix, 1)
-        out_cpu = zeros(eltype(array_cpu), out_shape...)
+        # Promote so a complex matrix × real array (or vice versa) fits the buffer.
+        out_cpu = zeros(promote_type(eltype(array_cpu), eltype(matrix)), out_shape...)
     elseif out === array
         throw(ArgumentError("Cannot apply in place"))
     else
