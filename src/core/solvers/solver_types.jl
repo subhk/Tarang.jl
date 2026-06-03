@@ -825,6 +825,10 @@ function _build_eigenvalue_solver(problem::EVP;
                                   target::Union{Nothing, ComplexF64}=nothing,
                                   matsolver::Union{String,Symbol,Type}=:sparse)
     setup_domain!(problem)
+    # Merge add_bc! boundary conditions into the equation set before validating
+    # (same fix as the BVP build): without this the BC rows are missing and the
+    # equation/variable counts mismatch for multi-variable tau systems.
+    _merge_boundary_conditions!(problem)
     validate_problem(problem)
 
     base = SolverBaseData(problem; matsolver=matsolver)
@@ -860,6 +864,25 @@ function _build_eigenvalue_solver(problem::EVP;
     solver = EigenvalueSolver(base, problem, ComplexF64[], zeros(ComplexF64, 0, 0),
                               L_sparse, M_sparse, nev, which_symbol, target,
                               perf_stats, global_solver, (), (), nothing)
+
+    # Configure matrix coupling so build_subsystems creates PER-FOURIER-MODE
+    # subproblems (Fourier separable, Chebyshev/Jacobi coupled), exactly like the
+    # BVP/IVP path. The per-subproblem L/M matrices are the SQUARE, full-rank tau
+    # systems; the global L is rank-deficient for multi-variable tau systems and
+    # makes Arpack's shift-invert factorization throw SingularException.
+    let coupling_field = nothing
+        for f in problem.variables
+            bs = hasproperty(f, :bases) ? f.bases : ()
+            if any(b -> b !== nothing && !isa(b, FourierBasis), bs)
+                coupling_field = f
+                break
+            end
+        end
+        if coupling_field !== nothing
+            solver.base.matrix_coupling =
+                Bool[b === nothing ? true : !isa(b, FourierBasis) for b in coupling_field.bases]
+        end
+    end
 
     subsystems = build_subsystems(solver)
     subproblems = build_subproblems(solver, subsystems; build_matrices=["L", "M"])

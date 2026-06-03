@@ -399,20 +399,70 @@ function _solve_nonlinear_global!(solver::BoundaryValueSolver)
 end
 
 # Eigenvalue solver
+# Order eigenvalues per the ARPACK-style `which` selector (and optional target,
+# which selects by proximity instead of the default ordering).
+function _eig_order(λ::AbstractVector, which::Symbol, target)
+    if target !== nothing
+        return sortperm(λ; by = x -> abs(x - target))
+    end
+    key = which === :LM ? (x -> -abs(x)) :
+          which === :SM ? (x ->  abs(x)) :
+          which === :LR ? (x -> -real(x)) :
+          which === :SR ? (x ->  real(x)) :
+          which === :LI ? (x -> -imag(x)) :
+          which === :SI ? (x ->  imag(x)) :
+          (x -> abs(x))
+    return sortperm(λ; by = key)
+end
+
+"""Solve the generalized eigenvalue problem `L v = λ M v`.
+
+Solves PER-FOURIER-MODE on the square per-subproblem tau matrices (`sp.L_min`,
+`sp.M_min`), mirroring the BVP solver and Dedalus. The GLOBAL `L`/`M` are
+rank-deficient for multi-variable tau systems, so the dense per-subproblem solve
+is both correct and robust (Arpack on the global matrices throws
+`SingularException`). Spurious eigenvalues from the singular mass matrix (the
+algebraic BC/tau rows have zero `M`) come back as non-finite or astronomically
+large and are filtered out. Falls back to global Arpack only when no per-mode
+subproblems are available.
+"""
 function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
                 which::Union{String,Symbol}=solver.which,
                 target::Union{Nothing, ComplexF64}=solver.target)
-    """Solve eigenvalue problem"""
-
     start_time = time()
-
     which_symbol = Symbol(uppercase(String(which)))
+    sps = solver.subproblems
+    use_persp = !isempty(sps) && any(sp -> sp.L_min !== nothing, sps)
 
-    # Solve generalized eigenvalue problem: L * v = λ * M * v
-    if target === nothing
-        λ, v = Arpack.eigs(solver.L_matrix, solver.M_matrix; nev=nev, which=which_symbol)
+    local λ, v
+    if use_persp
+        all_λ = ComplexF64[]
+        single_vecs = nothing          # eigenvectors only when there is one subproblem
+        n_active = count(sp -> sp.L_min !== nothing, sps)
+        for sp in sps
+            sp.L_min === nothing && continue
+            Lm = Matrix{ComplexF64}(sp.L_min)
+            Mm = Matrix{ComplexF64}(sp.M_min)
+            F = eigen(Lm, Mm)
+            # drop spurious eigenvalues from the singular (zero-row) mass matrix
+            keep = findall(x -> isfinite(x) && abs(x) < 1e10, F.values)
+            append!(all_λ, F.values[keep])
+            if n_active == 1
+                single_vecs = F.vectors[:, keep]
+            end
+        end
+        order = _eig_order(all_λ, which_symbol, target)
+        k = min(nev, length(order))
+        sel = order[1:k]
+        λ = all_λ[sel]
+        v = single_vecs === nothing ? zeros(ComplexF64, 0, 0) : single_vecs[:, sel]
     else
-        λ, v = Arpack.eigs(solver.L_matrix, solver.M_matrix; nev=nev, sigma=target)
+        # Legacy global path (no per-mode subproblems available).
+        if target === nothing
+            λ, v = Arpack.eigs(solver.L_matrix, solver.M_matrix; nev=nev, which=which_symbol)
+        else
+            λ, v = Arpack.eigs(solver.L_matrix, solver.M_matrix; nev=nev, sigma=target)
+        end
     end
 
     solver.nev = nev
@@ -421,7 +471,6 @@ function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
     solver.eigenvalues = λ
     solver.eigenvectors = v
 
-    # Update performance statistics
     solve_time = time() - start_time
     solver.performance_stats.total_time += solve_time
     solver.performance_stats.total_solves += 1
