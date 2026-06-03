@@ -3,38 +3,30 @@ End-to-end boundary-value-problem (BVP) solve tests with a manufactured
 (analytic) oracle: pick u_exact, derive forcing + BCs, solve, compare. Expected
 values come ONLY from the manufactured solution, never the solver's own output.
 
-STATUS (2026-06-03):
-  The steady BVP/NLBVP solver had three independent bugs. Two are FIXED:
-    A. `_solver_type` was undefined -> every BoundaryValueSolver/EigenvalueSolver
-       construction threw UndefVarError. FIXED (defined in solver_types.jl).
-    B. The BVP build never merged `add_bc!` boundary conditions, so the system
-       was under-determined and validation failed. FIXED (_merge_boundary_conditions!
-       now called in _build_boundary_value_solver, mirroring the IVP build).
-  One remains (documented @test_broken):
-    C. The GLOBAL tau-method matrix assembly (`build_matrices`) produces a
-       STRUCTURALLY SINGULAR L for a multi-variable tau system: for the Poisson
-       problem below it is 54x54 with rank 45 — zero rows (43,46) and zero columns
-       (4,49,50,51), i.e. tau/BC degrees of freedom that no equation constrains.
-       Construction therefore throws SingularException when the (LU) global solver
-       factorizes L, and no correct solution can be produced. The per-subproblem
-       assembly used by the IVP timestepper works (test_pencil_imex), so the fix
-       is either to repair the global multi-variable tau assembly or to solve the
-       BVP per-subproblem (reusing the timestepper machinery). UNFIXED.
+The steady BVP solver was rehabilitated 2026-06-03 to solve PER-FOURIER-MODE
+(one square tau subproblem per separable mode), mirroring the IVP timestepper and
+Dedalus. Fixes: `_solver_type` defined; `add_bc!` BCs merged in the BVP build;
+matrix-coupling configured (Fourier separable / Chebyshev coupled) so
+build_subsystems creates per-mode subproblems; `solve_linear!` rewritten to
+assemble each subproblem RHS (PDE forcing + BC rows) and solve `L_sp x = F_sp`.
+
+Problem (Dedalus second-order tau formulation):
+    Δu + lift(tau1,-1) + lift(tau2,-2) = -2   on z in [0, Lz]
+    u(z=0) = 0,  u(z=Lz) = 0
+    u_exact(z) = z (Lz - z)   (x-independent; peak Lz^2/4)
 
 Uniquely-prefixed names (bvp_*) — the full suite shares the Main namespace.
 """
 
 using Test
-using LinearAlgebra
 using Tarang
 
 const bvp_Lz = 1.0
 const bvp_Nx = 4
 const bvp_Nz = 16
-bvp_u_exact(z) = z * (bvp_Lz - z)          # Poisson: Δu=-2, u(0)=u(Lz)=0
+bvp_u_exact(z) = z * (bvp_Lz - z)
 
-# Build the manufactured Poisson LBVP (square tau-method system) and run the
-# build steps up to (but not throwing on) the global solve.
+# Build the manufactured Poisson LBVP (square per-mode tau system).
 function bvp_build_problem()
     coords = CartesianCoordinates("x", "z")
     dist   = Distributor(coords; dtype=Float64, device=CPU())
@@ -44,65 +36,57 @@ function bvp_build_problem()
     u    = ScalarField(dom, "u")
     tau1 = ScalarField(dist, "tau1", (xb,), Float64)
     tau2 = ScalarField(dist, "tau2", (xb,), Float64)
-    _, ez = unit_vector_fields(coords, dist)
-    τl(A) = lift(A, derivative_basis(zb, 1), -1)
-    gu = grad(u) + ez * τl(tau1)
+    lb2  = derivative_basis(zb, 2)
     prob = Tarang.LBVP([u, tau1, tau2])
-    add_parameters!(prob; Lz=bvp_Lz, ez=ez, τ_lift=τl, gu=gu)
-    Tarang.add_equation!(prob, "div(gu) + τ_lift(tau2) = -2")
+    add_parameters!(prob; Lz=bvp_Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+    Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
     Tarang.add_bc!(prob, "u(z=0) = 0")
     Tarang.add_bc!(prob, "u(z=Lz) = 0")
-    return prob, u, dom
+    return prob, u, zb, dist, dom
 end
 
 @testset "BVP solver" begin
-    @testset "Bug A FIXED: _solver_type is defined" begin
+    @testset "Fixes A/B present: _solver_type defined, BCs merge" begin
         @test isdefined(Tarang, :_solver_type)
-        # behaviour: passes through a plain choice, unwraps a (type, kwargs) tuple
         @test Tarang._solver_type(:sparse) === :sparse
         @test Tarang._solver_type((:sparse, (;))) === :sparse
-    end
 
-    @testset "Bug B FIXED: add_bc! BCs merge into the BVP system" begin
-        prob, _, _ = bvp_build_problem()
+        prob, _, _, _, _ = bvp_build_problem()
         Tarang.setup_domain!(prob)
         Tarang._merge_boundary_conditions!(prob)
-        # After merging, validation no longer fails with "equations < variables".
         merged_ok = try
             Tarang.validate_problem(prob); true
         catch err
             !occursin("less than number of variables", sprint(showerror, err))
         end
         @test merged_ok
-        # The global matrices assemble (square system) once BCs are merged.
-        L, M, F = Tarang.build_matrices(prob)
-        @test size(L, 1) == size(L, 2)          # square
-        @test length(F) == size(L, 1)
     end
 
-    @testset "Bug C: global tau assembly is singular (BVP solve broken)" begin
-        prob, u, dom = bvp_build_problem()
-        Tarang.setup_domain!(prob)
-        Tarang._merge_boundary_conditions!(prob)
-        L, _, _ = Tarang.build_matrices(prob)
-        Lm = Matrix(L)
-        # DOCUMENTED current (buggy) behaviour: L is rank-deficient.
-        @test rank(Lm) < size(Lm, 1)            # singular today (rank 45 < 54)
-
-        # CORRECT behaviour (manufactured oracle): the BVP solves to u_exact.
-        # Blocked by the singular global L -> construction/solve fails. @test_broken.
-        solved_ok = false
-        try
-            solver = Tarang.BoundaryValueSolver(prob)
-            Tarang.solve!(solver)
-            zc = vec(Array(Tarang.create_meshgrid(dom; on_device=false)["z"]))
-            grid = Array(Tarang.get_grid_data(u))
-            # x-independent solution: compare any x-column to u_exact(z)
-            col = ndims(grid) == 2 ? grid[1, :] : grid
-            solved_ok = isapprox(col, bvp_u_exact.(zc); rtol=1e-6, atol=1e-8)
-        catch
-            solved_ok = false
+    @testset "per-Fourier-mode build: square tau subproblems" begin
+        prob, _, _, _, _ = bvp_build_problem()
+        solver = Tarang.BoundaryValueSolver(prob)
+        @test !isempty(solver.subproblems)
+        # Each subproblem is square (Nz + n_tau) for its Fourier mode.
+        for sp in solver.subproblems
+            sp.L_min === nothing && continue
+            @test size(sp.L_min, 1) == size(sp.L_min, 2)
         end
-        @test_broken solved_ok
+    end
+
+    @testset "Linear BVP solves manufactured Poisson (analytic oracle)" begin
+        prob, u, zb, dist, dom = bvp_build_problem()
+        solver = Tarang.BoundaryValueSolver(prob)
+        Tarang.solve!(solver)
+        ensure_layout!(u, :g)
+
+        zc = vec(Array(Tarang.local_grid(zb, dist, 1)))     # 1D z nodes
+        g  = Array(Tarang.get_grid_data(u))                  # (Nx, Nz)
+        expected = bvp_u_exact.(zc)
+        # x-independent solution: every x-row equals u_exact(z)
+        for ix in 1:size(g, 1)
+            @test isapprox(g[ix, :], expected; rtol=1e-8, atol=1e-9)
+        end
+        # peak ≈ Lz^2/4 (grid max is near, not exactly, the z=Lz/2 maximum)
+        @test isapprox(maximum(g), bvp_Lz^2 / 4; rtol=1e-2)
     end
 end

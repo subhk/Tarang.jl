@@ -725,8 +725,27 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     solver = BoundaryValueSolver(base, problem, state, L_sparse, M_sparse, F_vec, Float64(tolerance), max_iterations,
                                  nothing, perf_stats, global_solver, (), (), nothing)
 
+    # Configure matrix coupling so build_subsystems creates PER-FOURIER-MODE
+    # subproblems (Fourier separable, Chebyshev/Jacobi coupled), exactly like the
+    # IVP path (_try_build_subproblems!). Without this the BVP builds one global
+    # multi-mode subsystem, incompatible with the single-mode per-mode operator
+    # matrices (lift/derivative) → DimensionMismatch. Pick a full-domain field
+    # (one carrying a coupled, i.e. non-Fourier, basis) to define the coupling.
+    let coupling_field = nothing
+        for f in state
+            if any(b -> b !== nothing && !isa(b, FourierBasis), f.bases)
+                coupling_field = f
+                break
+            end
+        end
+        if coupling_field !== nothing
+            solver.base.matrix_coupling =
+                Bool[b === nothing ? true : !isa(b, FourierBasis) for b in coupling_field.bases]
+        end
+    end
+
     subsystems = build_subsystems(solver)
-    subproblems = build_subproblems(solver, subsystems; build_matrices=["L", "M", "F"])
+    subproblems = build_subproblems(solver, subsystems; build_matrices=["L", "M"])
     coeff_system = CoeffSystem(subproblems, eltype(L_sparse))
     setfield!(solver, :subsystems, subsystems)
     setfield!(solver, :subproblems, subproblems)

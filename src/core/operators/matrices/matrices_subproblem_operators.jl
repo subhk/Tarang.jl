@@ -241,25 +241,18 @@ function subproblem_matrix(op::Lift, sp; kwargs...)
         return e_lift
     end
 
-    # A tau field can span more than one non-Chebyshev (e.g. Fourier) mode in a
-    # subproblem that is NOT reduced to a single separable mode (the steady BVP
-    # builds one coupled subsystem over all x-modes, unlike the per-mode IVP
-    # subproblems). In that case the lift must act independently on each mode:
-    # one Nz×1 z-lift column per mode. With the (x_fast, z_slow) coefficient
-    # flattening, that is `kron(e_lift, I_n_modes)` → (n_modes*Nz) × n_modes.
-    # When `n_modes == 1` this collapses to the original Nz×1 column, so the
-    # per-mode IVP path is unchanged.
-    _lift_block(n_modes::Int) =
-        n_modes <= 1 ? e_lift : kron(e_lift, sparse(ComplexF64(1) * I, n_modes, n_modes))
-
+    n_comp = 1
     if isa(field, VectorField)
-        comps = field.components
-        # Per-component mode count (components share bases).
-        n_modes = subproblem_field_size(sp, comps[1])
-        block = _lift_block(n_modes)
-        return blockdiag((block for _ in 1:length(comps))...)
+        n_comp = length(field.components)
+    end
+
+    if n_comp == 1
+        return e_lift  # (Nz × 1)
     else
-        return _lift_block(subproblem_field_size(sp, field))
+        # Block-diagonal: one lift column per component
+        # Result: (n_comp * Nz) × n_comp
+        blocks = [e_lift for _ in 1:n_comp]
+        return blockdiag(blocks...)
     end
 end
 

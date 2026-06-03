@@ -172,13 +172,93 @@ function _solve_bvp!(solver::BoundaryValueSolver, ::NLBVP)
     solve_nonlinear!(solver)
 end
 
-"""Solve linear boundary value problem"""
+"""Solve linear boundary value problem.
+
+Preferred path: solve PER-FOURIER-MODE subproblem (`L_sp x = F_sp`, scatter back),
+reusing the same machinery as the IVP timestepper. Each subproblem is a small
+square tau system over the coupled (Chebyshev) dimension for one separable mode,
+so the single-mode operator matrices are correct. Falls back to the (legacy)
+global `L \\ F` solve only when no per-mode subproblems are available.
+"""
 function solve_linear!(solver::BoundaryValueSolver)
-    # Direct solve: L * x = F
+    sps = solver.subproblems
+    if !isempty(sps) && any(sp -> sp.L_min !== nothing, sps)
+        _solve_bvp_per_subproblem!(solver)
+        return fields_to_vector(solver.state)
+    end
     if solver.global_solver !== nothing
         return MatSolvers.solve(solver.global_solver, solver.F_vector)
     end
     return solver.L_matrix \ solver.F_vector
+end
+
+# Build a solver for a subproblem's L_min, with SPQR → dense fallbacks for
+# rank-revealing / awkward tau systems (mirrors the IVP `_get_or_build_lhs!`).
+function _bvp_lhs_solver(sp::Subproblem)
+    st = _subproblem_solver_type(sp.solver.base.matsolver)
+    try
+        return MatSolvers.solver_instance(st, sp.L_min)
+    catch
+        try
+            return MatSolvers.solver_instance(MatSolvers.SPQRSolver, sp.L_min)
+        catch
+            return Matrix(sp.L_min)
+        end
+    end
+end
+
+# Per-Fourier-mode steady solve: assemble each subproblem RHS (PDE forcing via
+# gather_eqn_F!, BC rows via gather_alg_F!/apply_bc_override!), solve, scatter.
+function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
+    problem = solver.problem
+    state = solver.state
+    sps = solver.subproblems
+
+    # The IVP forcing path is M-term-gated (`_subproblem_eqn_targets` returns []
+    # for equations without a time derivative), so for a steady BVP it places
+    # nothing. We therefore build BVP targets directly: the "bulk" PDE equations
+    # are the largest equation blocks (full coupled-dimension size); the small
+    # blocks are algebraic BC/constraint rows (handled by gather_alg_F! +
+    # apply_bc_override! below). Each bulk equation's RHS forcing is gathered onto
+    # the coupled (non-Fourier) variable's rows. The forcing is solution-
+    # independent for a linear BVP, so evaluating on the current state is exact.
+    udix = findfirst(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    eqn_sizes = _subproblem_eqn_sizes(sps[1])
+    maxsz = isempty(eqn_sizes) ? 0 : maximum(eqn_sizes)
+
+    pde_F = Vector{Any}(nothing, length(state))
+    bvp_targets = Vector{Vector{Int}}(undef, length(problem.equation_data))
+    for (eq_idx, eq_data) in enumerate(problem.equation_data)
+        es = eq_idx <= length(eqn_sizes) ? eqn_sizes[eq_idx] : 0
+        if es == maxsz && es > 1 && udix !== nothing
+            bvp_targets[eq_idx] = [udix]
+            F_expr = get(eq_data, "F_expr", nothing)
+            F_expr === nothing && (F_expr = get(eq_data, "F", nothing))
+            if F_expr !== nothing && !_is_zero_F_expr(F_expr)
+                pde_F[udix] = evaluate_solver_expression(F_expr, problem.variables;
+                                                         layout = :g, template = state[udix])
+            end
+        else
+            bvp_targets[eq_idx] = Int[]
+        end
+    end
+
+    for sp in sps
+        sp.L_min === nothing && continue
+        # Override the M-gated target cache with the BVP bulk-equation targets.
+        sp.runtime.eqn_targets = bvp_targets
+        n_eq = size(sp.L_min, 1)
+        rhs = zeros(ComplexF64, n_eq)
+        gather_eqn_F!(rhs, sp, solver, pde_F, state)
+        alg_f = zeros(ComplexF64, n_eq)
+        gather_alg_F!(alg_f, sp)
+        apply_bc_override!(rhs, alg_f, sp, 1.0)
+
+        x = Vector{ComplexF64}(undef, size(sp.L_min, 2))
+        _solve_cached_system!(x, _bvp_lhs_solver(sp), rhs)
+        scatter_inputs(sp, x, state)
+    end
+    return solver
 end
 
 """Solve nonlinear boundary value problem using Newton iteration"""
