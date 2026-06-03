@@ -711,7 +711,16 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     problem.parameters["M_matrix"] = M_sparse
     problem.parameters["F_vector"] = F_vec
 
-    global_solver = MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
+    # The global L can be rank-deficient for multi-variable tau systems, which
+    # would make a direct (LU) factorization throw. Build the global solver
+    # tolerantly: on failure `global_solver` is left `nothing` and the solve
+    # falls back to the robust per-subproblem path.
+    global_solver = try
+        MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
+    catch err
+        @debug "BVP/EVP: global solver factorization failed; using per-subproblem solve" exception=err
+        nothing
+    end
 
     solver = BoundaryValueSolver(base, problem, state, L_sparse, M_sparse, F_vec, Float64(tolerance), max_iterations,
                                  nothing, perf_stats, global_solver, (), (), nothing)
@@ -818,7 +827,16 @@ function _build_eigenvalue_solver(problem::EVP;
     problem.parameters["M_matrix"] = M_sparse
 
     perf_stats = SolverPerformanceStats()
-    global_solver = MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
+    # The global L can be rank-deficient for multi-variable tau systems, which
+    # would make a direct (LU) factorization throw. Build the global solver
+    # tolerantly: on failure `global_solver` is left `nothing` and the solve
+    # falls back to the robust per-subproblem path.
+    global_solver = try
+        MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
+    catch err
+        @debug "BVP/EVP: global solver factorization failed; using per-subproblem solve" exception=err
+        nothing
+    end
     which_symbol = Symbol(uppercase(String(which)))
     solver = EigenvalueSolver(base, problem, ComplexF64[], zeros(ComplexF64, 0, 0),
                               L_sparse, M_sparse, nev, which_symbol, target,
