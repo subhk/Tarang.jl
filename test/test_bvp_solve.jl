@@ -82,11 +82,12 @@ end
         zc = vec(Array(Tarang.local_grid(zb, dist, 1)))     # 1D z nodes
         g  = Array(Tarang.get_grid_data(u))                  # (Nx, Nz)
         expected = bvp_u_exact.(zc)
-        # x-independent solution: every x-row equals u_exact(z)
+        # x-independent solution: every x-row equals u_exact(z) at the grid nodes.
+        # (This is the definitive oracle — the analytic solution sampled on the
+        # actual Chebyshev nodes; the grid does not sample z=Lz/2, so a separate
+        # peak-value check would be a grid artifact, not a correctness check.)
         for ix in 1:size(g, 1)
             @test isapprox(g[ix, :], expected; rtol=1e-8, atol=1e-9)
         end
-        # peak ≈ Lz^2/4 (grid max is near, not exactly, the z=Lz/2 maximum)
-        @test isapprox(maximum(g), bvp_Lz^2 / 4; rtol=1e-2)
     end
 end
