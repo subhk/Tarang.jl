@@ -14,7 +14,9 @@ using Test
 using LinearAlgebra
 using Tarang
 
-import Tarang: phi_functions, phi_functions_matrix
+import Tarang: phi_functions, phi_functions_matrix,
+               phiv_vector, expv_krylov, _phi_functions_pade, _phi_via_eigen,
+               _phi_functions_krylov
 
 @testset "Phi Functions" begin
 
@@ -171,5 +173,58 @@ import Tarang: phi_functions, phi_functions_matrix
         dt = 1.0
         exp_z, φ₁, φ₂ = phi_functions_matrix(A, dt)
         @test exp_z ≈ exp(dt * A) atol=1e-8
+    end
+
+    # Per-eigenvalue scalar oracle for a diagonal matrix's φ functions.
+    _phi_diag(λs, dt, k) = diagm([phi_functions(dt * l)[k + 1] for l in λs])
+
+    @testset "Singular matrix routes through _phi_via_eigen (λ=0 removable)" begin
+        # A zero eigenvalue makes z \\ (exp(z)-I) singular; phi_functions_matrix
+        # must fall back to the eigen-based evaluation (φ₁(0)=1, φ₂(0)=1/2).
+        λs = [0.0, -1.0, -3.0]
+        A = diagm(λs); dt = 1.0
+        exp_z, φ₁, φ₂ = phi_functions_matrix(A, dt)
+        @test exp_z ≈ _phi_diag(λs, dt, 0) rtol=1e-10
+        @test φ₁    ≈ _phi_diag(λs, dt, 1) rtol=1e-10
+        @test φ₂    ≈ _phi_diag(λs, dt, 2) rtol=1e-10
+        # the λ=0 mode hits the removable-singularity limits exactly
+        @test φ₁[1, 1] ≈ 1.0   rtol=1e-12
+        @test φ₂[1, 1] ≈ 0.5   rtol=1e-12
+
+        # call _phi_via_eigen directly on a non-diagonal (but diagonalizable) z
+        z = [0.0 0.2; 0.0 -1.5]
+        ez, p1, p2 = _phi_via_eigen(z, Matrix{Float64}(LinearAlgebra.I, 2, 2))
+        @test ez ≈ exp(z) rtol=1e-10
+        @test z * p1 ≈ exp(z) - LinearAlgebra.I rtol=1e-9
+    end
+
+    @testset "_phi_functions_pade matches dense exp/φ" begin
+        z = [0.3 0.1; -0.2 0.4]
+        exp_z, φ₁, φ₂ = _phi_functions_pade(z)
+        # Padé [3/3] with scaling-and-squaring — moderate accuracy
+        @test exp_z ≈ exp(z) atol=1e-6
+        @test z * φ₁ ≈ exp_z - LinearAlgebra.I atol=1e-7
+        @test z * φ₂ ≈ φ₁ - LinearAlgebra.I atol=1e-7
+    end
+
+    @testset "Large/stiff norm routes through _phi_functions_krylov" begin
+        λs = [-60.0, -70.0, -80.0]      # norm > 50 → Krylov branch
+        A = diagm(λs)
+        exp_z, φ₁, φ₂ = phi_functions_matrix(A, 1.0)
+        @test exp_z ≈ _phi_diag(λs, 1.0, 0) rtol=1e-8
+        @test φ₁    ≈ _phi_diag(λs, 1.0, 1) rtol=1e-8
+    end
+
+    @testset "expv_krylov and phiv_vector match dense oracle" begin
+        C = [-2.0 0.5; 0.1 -3.0]
+        b = [1.0, 2.0]
+        t = 0.7
+        # exp(tC)·b
+        @test expv_krylov(t, C, b) ≈ exp(t * C) * b rtol=1e-10
+        # phiv_vector columns: [φ₀(tC)b, φ₁(tC)b, φ₂(tC)b]
+        pv = phiv_vector(t, C, b, 2)
+        @test pv[:, 1] ≈ exp(t * C) * b rtol=1e-10
+        φ₁C = (t .* C) \ (exp(t * C) - LinearAlgebra.I)
+        @test pv[:, 2] ≈ φ₁C * b rtol=1e-9
     end
 end
