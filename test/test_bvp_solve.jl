@@ -90,4 +90,43 @@ end
             @test isapprox(g[ix, :], expected; rtol=1e-8, atol=1e-9)
         end
     end
+
+    # Nonlinear BVP: same manufactured oracle, but with a quadratic nonlinearity.
+    #     Δu + lift(tau1,-1) + lift(tau2,-2) = u² + g,   u(0)=u(Lz)=0
+    # Choose g = -2 - u_exact² so the equation reduces to Δu = -2, giving the
+    # SAME analytic solution u_exact(z) = z(Lz - z). Exercises the per-mode Newton
+    # (Frechet Jacobian dF = Δ + lift - 2u rebuilt each iteration, per Fourier mode).
+    @testset "Nonlinear BVP solves manufactured Poisson (Newton, analytic oracle)" begin
+        coords = CartesianCoordinates("x", "z")
+        dist   = Distributor(coords; dtype=Float64, device=CPU())
+        xb = RealFourier(coords["x"]; size=bvp_Nx, bounds=(0.0, 2π))
+        zb = ChebyshevT(coords["z"]; size=bvp_Nz, bounds=(0.0, bvp_Lz))
+        dom = Domain(dist, (xb, zb))
+        u    = ScalarField(dom, "u")
+        tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+        tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+        lb2  = derivative_basis(zb, 2)
+        g    = ScalarField(dom, "g"); ensure_layout!(g, :g)
+        zg   = Tarang.create_meshgrid(dom; on_device=false)["z"]
+        Tarang.get_grid_data(g) .= -2 .- (zg .* (bvp_Lz .- zg)).^2   # g = -2 - u_exact²
+
+        prob = Tarang.NLBVP([u, tau1, tau2])
+        add_parameters!(prob; Lz=bvp_Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
+        Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = u*u + g")
+        Tarang.add_bc!(prob, "u(z=0) = 0")
+        Tarang.add_bc!(prob, "u(z=Lz) = 0")
+
+        solver = Tarang.BoundaryValueSolver(prob)
+        solver.tolerance = 1e-10
+        ensure_layout!(u, :g); Tarang.get_grid_data(u) .= 0.0   # zero initial guess
+        Tarang.solve!(solver)
+        ensure_layout!(u, :g)
+
+        zc = vec(Array(Tarang.local_grid(zb, dist, 1)))
+        gd = Array(Tarang.get_grid_data(u))
+        expected = bvp_u_exact.(zc)
+        for ix in 1:size(gd, 1)
+            @test isapprox(gd[ix, :], expected; rtol=1e-7, atol=1e-9)
+        end
+    end
 end

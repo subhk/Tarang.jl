@@ -262,37 +262,139 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
 end
 
 """Solve nonlinear boundary value problem using Newton iteration"""
+# Solve nonlinear boundary value problem via PER-FOURIER-MODE Newton iteration,
+# mirroring Dedalus' NonlinearBoundaryValueSolver (per-subproblem dF Jacobian
+# rebuilt each iteration, per-subproblem residual, per-subproblem solve).
+#
+# Each iteration, per subproblem:
+#   residual  F_sp = L_lin_sp*x_sp - RHS_sp   (linear operator + nonlinear forcing)
+#   Jacobian  dF_sp = build of (orig_L - frechet(rhs))   (full-rank per mode)
+#   step      x_sp <- x_sp - dF_sp_inv * F_sp ;  scatter
+#
+# Falls back to the legacy global Newton when no per-mode subproblems are present.
 function solve_nonlinear!(solver::BoundaryValueSolver)
+    sps = solver.subproblems
+    if isempty(sps) || all(sp -> sp.L_min === nothing, sps)
+        return _solve_nonlinear_global!(solver)
+    end
+    problem = solver.problem
+    state = solver.state
+    eqd = problem.equation_data
 
-    # Initial guess (current state)
+    # Per-equation operators: original linear LHS, and the Frechet Jacobian
+    # operator dF = orig_L − frechet(rhs). dF carries the current-state NCCs
+    # (e.g. ∂(u²)/∂u = 2u), so build_matrices! rebuilds it fresh each iteration.
+    origL = [get(ed, "L", nothing) for ed in eqd]
+    dF_expr = Vector{Any}(undef, length(eqd))
+    for (i, ed) in enumerate(eqd)
+        rhs_expr = get(ed, "rhs", nothing)
+        fr = (rhs_expr === nothing) ? 0 :
+             frechet_differential(rhs_expr, problem.variables, problem.variables)
+        dF_expr[i] = (origL[i] === nothing) ? origL[i] :
+                     ((fr === 0 || fr === nothing) ? origL[i] : origL[i] - fr)
+    end
+
+    # PDE forcing targets: the largest equation block is the bulk PDE (targets the
+    # coupled variable); the small blocks are algebraic BC rows (left empty).
+    udix = findfirst(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    eqn_sizes = _subproblem_eqn_sizes(sps[1])
+    maxsz = isempty(eqn_sizes) ? 0 : maximum(eqn_sizes)
+    bvp_targets = Vector{Vector{Int}}(undef, length(eqd))
+    for i in eachindex(eqd)
+        es = i <= length(eqn_sizes) ? eqn_sizes[i] : 0
+        bvp_targets[i] = (es == maxsz && es > 1 && udix !== nothing) ? [udix] : Int[]
+    end
+
+    x = fields_to_vector(state)
+    converged = false
+    resnorm = Inf
+    for iter in 1:solver.max_iterations
+        copy_solution_to_fields!(state, x)
+
+        # --- Residual F_sp (sp.L_min holds the LINEAR operator here) ---
+        # nonlinear RHS forcing fields (e.g. u²+g) evaluated at the current state
+        pde_F = Vector{Any}(nothing, length(state))
+        for (i, ed) in enumerate(eqd)
+            isempty(bvp_targets[i]) && continue
+            rhs_expr = get(ed, "rhs", nothing)
+            rhs_expr === nothing && continue
+            ti = bvp_targets[i][1]
+            pde_F[ti] = evaluate_solver_expression(rhs_expr, problem.variables; layout=:g, template=state[ti])
+        end
+        F = Vector{Vector{ComplexF64}}(undef, length(sps))
+        resnorm = 0.0
+        for (k, sp) in enumerate(sps)
+            if sp.L_min === nothing
+                F[k] = ComplexF64[]
+                continue
+            end
+            n_eq = size(sp.L_min, 1)
+            x_sp = zeros(ComplexF64, size(sp.L_min, 2))
+            gather_inputs!(x_sp, sp, state)
+            Lx = zeros(ComplexF64, n_eq)
+            _apply_subproblem_operator!(Lx, _subproblem_operator(sp, :L, x_sp), x_sp)
+            rhs = zeros(ComplexF64, n_eq)
+            sp.runtime.eqn_targets = bvp_targets
+            gather_eqn_F!(rhs, sp, solver, pde_F, state)
+            alg = zeros(ComplexF64, n_eq)
+            gather_alg_F!(alg, sp)
+            apply_bc_override!(rhs, alg, sp, 1.0)
+            F[k] = Lx .- rhs
+            resnorm = max(resnorm, norm(F[k]))
+        end
+        if resnorm < solver.tolerance
+            converged = true
+            break
+        end
+
+        # --- Rebuild dF per subproblem (Jacobian at current state) ---
+        for (i, ed) in enumerate(eqd); ed["L"] = dF_expr[i]; end
+        for sp in sps; sp.L_min === nothing || build_matrices!(sp, ["L"], solver); end
+
+        # --- Newton step: dF_sp δ = F_sp ; x_sp ← x_sp − δ ; scatter ---
+        for (k, sp) in enumerate(sps)
+            sp.L_min === nothing && continue
+            x_sp = zeros(ComplexF64, size(sp.L_min, 2))
+            gather_inputs!(x_sp, sp, state)
+            δ = Vector{ComplexF64}(undef, size(sp.L_min, 2))
+            _solve_cached_system!(δ, _bvp_lhs_solver(sp), F[k])
+            scatter_inputs(sp, x_sp .- δ, state)
+        end
+
+        # --- Restore the linear operator for the next residual ---
+        for (i, ed) in enumerate(eqd); ed["L"] = origL[i]; end
+        for sp in sps; sp.L_min === nothing || build_matrices!(sp, ["L"], solver); end
+
+        x = fields_to_vector(state)
+    end
+
+    copy_solution_to_fields!(solver.state, x)
+    if !converged
+        @warn "NLBVP per-mode Newton did not reach tolerance $(solver.tolerance) in \
+               $(solver.max_iterations) iters (final |F|=$resnorm)"
+    end
+    return solver
+end
+
+# Legacy global Newton (fallback when no per-mode subproblems are available).
+function _solve_nonlinear_global!(solver::BoundaryValueSolver)
     x = fields_to_vector(solver.state)
     converged = false
     last_dx_norm = Inf
-
     for iter in 1:solver.max_iterations
-        # Evaluate residual and Jacobian
         residual, jacobian = evaluate_residual_and_jacobian(solver.problem, x)
-
-        # Newton update: J * dx = -R
         dx = -jacobian \ residual
         x += dx
         last_dx_norm = norm(dx)
-
-        # Check convergence
         if last_dx_norm < solver.tolerance
-            @info "Nonlinear solver converged in $iter iterations"
             converged = true
             break
         end
     end
-
     if !converged
         error("Nonlinear solver did not converge after $(solver.max_iterations) iterations " *
-              "(tolerance=$(solver.tolerance), final |dx|=$(last_dx_norm)). " *
-              "Consider: increasing max_iterations, loosening tolerance, or improving the initial guess.")
+              "(tolerance=$(solver.tolerance), final |dx|=$(last_dx_norm)).")
     end
-
-    # Copy solution back
     copy_solution_to_fields!(solver.state, x)
 end
 

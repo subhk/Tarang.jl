@@ -1181,6 +1181,13 @@ has(::ConstantOperator, vars...) = false
 has(::ArrayOperator, vars...) = false
 has(::UnknownOperator, vars...) = false  # Conservative: unknowns don't contain tracked vars
 
+# Symbolic derivatives of constant operators are zero (they hold no variables).
+# Needed by frechet_differential when an NLBVP RHS has constant/parameter terms
+# (e.g. ∂(u²+g)/∂tau = 0) or is differentiated w.r.t. a non-appearing variable.
+sym_diff(::ZeroOperator, ::ScalarField) = 0
+sym_diff(::ConstantOperator, ::ScalarField) = 0
+sym_diff(::ArrayOperator, ::ScalarField) = 0
+
 @inline coerce_constant_value(x) = x isa ConstantOperator ? x.value : x
 
 # Note: AddOperator, SubtractOperator, MultiplyOperator, DivideOperator, PowerOperator,
