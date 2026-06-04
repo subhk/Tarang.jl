@@ -25,6 +25,13 @@ const create_kronecker_operator = Tarang.create_kronecker_operator
 const scale_vector! = Tarang.scale_vector!
 const axpy_vector! = Tarang.axpy_vector!
 const fftfreq = Tarang.fftfreq
+const BlockSparseMatVec = Tarang.BlockSparseMatVec
+const SparseDenseMatMat = Tarang.SparseDenseMatMat
+const create_operator = Tarang.create_operator
+const streaming_matvec! = Tarang.streaming_matvec!
+const cache_efficient_matmat! = Tarang.cache_efficient_matmat!
+const get_block_ranges = Tarang.get_block_ranges
+const get_total_matrix_size = Tarang.get_total_matrix_size
 
 @testset "Linear Algebra" begin
 
@@ -179,5 +186,53 @@ const fftfreq = Tarang.fftfreq
         fast_matmat!(C_out, op, vec_C)
 
         @test vec(C_out) ≈ expected_vec rtol=1e-10
+    end
+
+    @testset "BlockSparseMatVec: block-diagonal" begin
+        A11 = sprand(5, 4, 0.5); A22 = sprand(3, 6, 0.5)
+        blocks = Union{SparseMatrixCSC{Float64, Int}, Nothing}[A11, A22]
+        bs = [1 0; 0 2]                          # (1,1)→blk1, (2,2)→blk2
+        op = BlockSparseMatVec(blocks, bs)
+        x = rand(4 + 6); y = zeros(5 + 3)
+        fast_matvec!(y, op, x)
+        @test y ≈ vcat(A11 * x[1:4], A22 * x[5:10])
+    end
+
+    @testset "SparseDenseMatMat: C = α*A_sparse*B + β*C" begin
+        A = sprand(10, 8, 0.4); B = rand(8, 5)
+        op = SparseDenseMatMat(A, Matrix{Float64}(undef, 10, 5))
+        C = zeros(10, 5); fast_matmat!(C, op, true, A, B);  @test C ≈ A * B
+        C = rand(10, 5); C0 = copy(C); fast_matmat!(C, op, true, A, B, 2.0, 0.5)
+        @test C ≈ 2.0 .* (A * B) .+ 0.5 .* C0
+    end
+
+    @testset "create_operator dispatch + validation" begin
+        Asp = sprand(6, 6, 0.4); Ad = rand(6, 6)
+        @test create_operator(Asp, :matvec) isa SparseMatVec
+        @test create_operator(Asp, :matmat) isa SparseDenseMatMat
+        @test create_operator(Ad,  :matvec) isa DenseMatVec
+        @test create_operator(Ad,  :matmat) isa DenseDenseMatMat
+        @test_throws ArgumentError create_operator(Ad, :bogus)
+        @test_throws ArgumentError create_kronecker_operator(AbstractMatrix[])
+    end
+
+    @testset "streaming_matvec! / cache_efficient_matmat!" begin
+        A = rand(40, 30); x = rand(30); y = zeros(40)
+        streaming_matvec!(y, A, x, 8);            @test y ≈ A * x
+        A2 = rand(20, 16); B2 = rand(16, 12); C = zeros(20, 12)
+        cache_efficient_matmat!(C, A2, B2);       @test C ≈ A2 * B2   # default cache_size
+        # Regression: a non-perfect-square cache_size used to throw InexactError
+        # (Int(√(cache_size÷8)) with √32 ≈ 5.66). Now floored.
+        C2 = zeros(20, 12); cache_efficient_matmat!(C2, A2, B2, 256)
+        @test C2 ≈ A2 * B2
+        C3 = zeros(20, 12); cache_efficient_matmat!(C3, A2, B2, 8)   # tiny → block_size ≥ 1
+        @test C3 ≈ A2 * B2
+    end
+
+    @testset "block range / total-size helpers" begin
+        bs = [1 0; 0 2]; rs = [5, 3]; cs = [4, 6]
+        @test get_block_ranges(bs, 1; row_sizes=rs, col_sizes=cs) == (1:5, 1:4)
+        @test get_block_ranges(bs, 2; row_sizes=rs, col_sizes=cs) == (6:8, 5:10)
+        @test get_total_matrix_size(bs; row_sizes=rs, col_sizes=cs) == (8, 10)
     end
 end

@@ -45,6 +45,7 @@ const TEST_FILES = [
     "test_bvp_solve.jl",
     "test_evp_solve.jl",
     "test_subproblem_modes.jl",
+    "test_problem_matrices_support.jl",
     "test_flow_tools.jl",
     "test_spectra.jl",
     "test_quick_domains.jl",

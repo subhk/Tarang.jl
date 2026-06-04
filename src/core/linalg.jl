@@ -628,8 +628,9 @@ function cache_efficient_matmat!(C::AbstractMatrix, A::AbstractMatrix, B::Abstra
 
     m, n, k = size(A, 1), size(B, 2), size(A, 2)
 
-    # Determine block sizes based on cache size
-    block_size = Int(sqrt(cache_size ÷ sizeof(eltype(A))))
+    # Determine block sizes based on cache size. Use floor (the sqrt is rarely an
+    # exact integer — e.g. cache_size÷8 = 32 → √32 ≈ 5.66) and keep ≥ 1.
+    block_size = max(1, floor(Int, sqrt(cache_size ÷ sizeof(eltype(A)))))
 
     fill!(C, zero(eltype(C)))
 
