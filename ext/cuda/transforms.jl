@@ -343,18 +343,19 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
         end
 
         if input_T <: Complex
-            # Complex Chebyshev: apply DCT to real and imaginary parts separately
+            # Complex Chebyshev: DCT real and imag parts separately (kernels need
+            # real input). Reuse cached scratch instead of allocating per call.
             real_T = real(input_T)
-            dct_plan = plan_gpu_dct(gpu_arch, n, real_T, 1)
-            real_part = real.(data_g)
-            imag_part = imag.(data_g)
-            real_out = similar(real_part)
-            imag_out = similar(imag_part)
-            gpu_forward_dct_1d!(real_out, real_part, dct_plan)
-            gpu_forward_dct_1d!(imag_out, imag_part, dct_plan)
+            dct_plan = get_gpu_dct_plan(gpu_arch, n, real_T, 1)
+            sc = get_gpu_dct_scratch(gpu_arch, size(data_g), real_T, 4)
+            real_in, imag_in, real_out, imag_out = sc[1], sc[2], sc[3], sc[4]
+            real_in .= real.(data_g)
+            imag_in .= imag.(data_g)
+            gpu_forward_dct_1d!(real_out, real_in, dct_plan)
+            gpu_forward_dct_1d!(imag_out, imag_in, dct_plan)
             get_coeff_data(field) .= complex.(real_out, imag_out)
         else
-            dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+            dct_plan = get_gpu_dct_plan(gpu_arch, n, input_T, 1)
             gpu_forward_dct_1d!(get_coeff_data(field), data_g, dct_plan)
         end
         return true
@@ -376,28 +377,31 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
             # Complex Chebyshev: apply DCT to real and imaginary parts separately
             # (DCT kernels use cos() which requires real-valued inputs on GPU)
             real_T = real(input_T)
-            temp_real = real.(data_g)
-            temp_imag = imag.(data_g)
+            # Ping-pong between cached buffers (shape is invariant under DCT), so
+            # no per-dimension device allocation.
+            sc = get_gpu_dct_scratch(gpu_arch, size(data_g), real_T, 4)
+            cur_real, buf_real, cur_imag, buf_imag = sc[1], sc[2], sc[3], sc[4]
+            cur_real .= real.(data_g)
+            cur_imag .= imag.(data_g)
             for dim in 1:length(bases)
-                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_real), real_T, dim)
-                out_real = CUDA.zeros(real_T, size(temp_real)...)
-                out_imag = CUDA.zeros(real_T, size(temp_imag)...)
-                gpu_dct_dim!(out_real, temp_real, dct_plan, Val(:forward))
-                gpu_dct_dim!(out_imag, temp_imag, dct_plan, Val(:forward))
-                temp_real = out_real
-                temp_imag = out_imag
+                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur_real), real_T, dim)
+                gpu_dct_dim!(buf_real, cur_real, dct_plan, Val(:forward))
+                gpu_dct_dim!(buf_imag, cur_imag, dct_plan, Val(:forward))
+                cur_real, buf_real = buf_real, cur_real
+                cur_imag, buf_imag = buf_imag, cur_imag
             end
-            get_coeff_data(field) .= complex.(temp_real, temp_imag)
+            get_coeff_data(field) .= complex.(cur_real, cur_imag)
         else
-            # Apply DCT along each dimension
-            temp_data = copy(data_g)
+            # Apply DCT along each dimension (ping-pong between cached buffers)
+            sc = get_gpu_dct_scratch(gpu_arch, size(data_g), input_T, 2)
+            cur, buf = sc[1], sc[2]
+            copyto!(cur, data_g)
             for dim in 1:length(bases)
-                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
-                output = CUDA.zeros(input_T, size(temp_data)...)
-                gpu_dct_dim!(output, temp_data, dct_plan, Val(:forward))
-                temp_data = output
+                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur), input_T, dim)
+                gpu_dct_dim!(buf, cur, dct_plan, Val(:forward))
+                cur, buf = buf, cur
             end
-            copyto!(get_coeff_data(field), temp_data)
+            copyto!(get_coeff_data(field), cur)
         end
         return true
 
@@ -628,16 +632,16 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
         if input_T <: Complex
             # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
             real_T = real(input_T)
-            dct_plan = plan_gpu_dct(gpu_arch, n, real_T, 1)
-            real_part = real.(data_c)
-            imag_part = imag.(data_c)
-            real_out = similar(real_part)
-            imag_out = similar(imag_part)
-            gpu_backward_dct_1d!(real_out, real_part, dct_plan)
-            gpu_backward_dct_1d!(imag_out, imag_part, dct_plan)
+            dct_plan = get_gpu_dct_plan(gpu_arch, n, real_T, 1)
+            sc = get_gpu_dct_scratch(gpu_arch, size(data_c), real_T, 4)
+            real_in, imag_in, real_out, imag_out = sc[1], sc[2], sc[3], sc[4]
+            real_in .= real.(data_c)
+            imag_in .= imag.(data_c)
+            gpu_backward_dct_1d!(real_out, real_in, dct_plan)
+            gpu_backward_dct_1d!(imag_out, imag_in, dct_plan)
             get_grid_data(field) .= complex.(real_out, imag_out)
         else
-            dct_plan = plan_gpu_dct(gpu_arch, n, input_T, 1)
+            dct_plan = get_gpu_dct_plan(gpu_arch, n, input_T, 1)
             gpu_backward_dct_1d!(get_grid_data(field), data_c, dct_plan)
         end
         return true
@@ -665,28 +669,30 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
             # (DCT kernels use cos() which requires real-valued inputs on GPU)
             real_T = real(input_T)
-            temp_real = real.(data_c)
-            temp_imag = imag.(data_c)
+            # Ping-pong between cached buffers (shape invariant), no per-dim alloc.
+            sc = get_gpu_dct_scratch(gpu_arch, size(data_c), real_T, 4)
+            cur_real, buf_real, cur_imag, buf_imag = sc[1], sc[2], sc[3], sc[4]
+            cur_real .= real.(data_c)
+            cur_imag .= imag.(data_c)
             for dim in reverse(1:length(bases))
-                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_real), real_T, dim)
-                out_real = CUDA.zeros(real_T, size(temp_real)...)
-                out_imag = CUDA.zeros(real_T, size(temp_imag)...)
-                gpu_dct_dim!(out_real, temp_real, dct_plan, Val(:backward))
-                gpu_dct_dim!(out_imag, temp_imag, dct_plan, Val(:backward))
-                temp_real = out_real
-                temp_imag = out_imag
+                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur_real), real_T, dim)
+                gpu_dct_dim!(buf_real, cur_real, dct_plan, Val(:backward))
+                gpu_dct_dim!(buf_imag, cur_imag, dct_plan, Val(:backward))
+                cur_real, buf_real = buf_real, cur_real
+                cur_imag, buf_imag = buf_imag, cur_imag
             end
-            get_grid_data(field) .= complex.(temp_real, temp_imag)
+            get_grid_data(field) .= complex.(cur_real, cur_imag)
         else
-            # Apply inverse DCT along each dimension (reverse order for consistency)
-            temp_data = copy(data_c)
+            # Inverse DCT along each dimension (ping-pong between cached buffers)
+            sc = get_gpu_dct_scratch(gpu_arch, size(data_c), input_T, 2)
+            cur, buf = sc[1], sc[2]
+            copyto!(cur, data_c)
             for dim in reverse(1:length(bases))
-                dct_plan = plan_gpu_dct_dim(gpu_arch, size(temp_data), input_T, dim)
-                output = CUDA.zeros(input_T, size(temp_data)...)
-                gpu_dct_dim!(output, temp_data, dct_plan, Val(:backward))
-                temp_data = output
+                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur), input_T, dim)
+                gpu_dct_dim!(buf, cur, dct_plan, Val(:backward))
+                cur, buf = buf, cur
             end
-            copyto!(get_grid_data(field), temp_data)
+            copyto!(get_grid_data(field), cur)
         end
         return true
 

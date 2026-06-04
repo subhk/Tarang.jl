@@ -1272,3 +1272,67 @@ function gpu_dct_dim!(output::CuArray{T, 3}, input::CuArray{T, 3},
     end
     return output
 end
+
+# ── Cached DCT plan getters ─────────────────────────────────────────────────
+# CUFFT-backed DCT plans are expensive to build (CUFFT planning + work-buffer
+# allocation), and `GPUDCTPlan` deliberately reuses its internal work arrays
+# across calls. The pure-Chebyshev transform path used to call `plan_gpu_dct`/
+# `plan_gpu_dct_dim` on EVERY forward/backward transform, rebuilding the plan
+# (and its buffers) each step. Cache plans per (device, size, eltype, axis) so
+# the hot path reuses one plan — mirroring `get_gpu_fft_plan` for the FFT path.
+const GPU_DCT_PLAN_CACHE = Dict{Tuple, GPUDCTPlan}()
+const GPU_DCT_DIM_PLAN_CACHE = Dict{Tuple, GPUDCTPlanDim}()
+const _GPU_DCT_PLAN_CACHE_LOCK = ReentrantLock()
+
+"""Get or create a cached 1D GPU DCT plan (thread-safe)."""
+function get_gpu_dct_plan(arch::GPU, n::Int, T::Type, axis::Int)
+    key = (_current_device_id(), n, T, axis)
+    lock(_GPU_DCT_PLAN_CACHE_LOCK) do
+        get!(() -> plan_gpu_dct(arch, n, T, axis), GPU_DCT_PLAN_CACHE, key)
+    end
+end
+
+"""Get or create a cached per-dimension GPU DCT plan (thread-safe)."""
+function get_gpu_dct_dim_plan(arch::GPU, full_size::Tuple, T::Type, dim::Int)
+    key = (_current_device_id(), full_size, T, dim)
+    lock(_GPU_DCT_PLAN_CACHE_LOCK) do
+        get!(() -> plan_gpu_dct_dim(arch, full_size, T, dim), GPU_DCT_DIM_PLAN_CACHE, key)
+    end
+end
+
+"""Clear all cached GPU DCT plans (thread-safe)."""
+function clear_gpu_dct_plan_cache!()
+    lock(_GPU_DCT_PLAN_CACHE_LOCK) do
+        empty!(GPU_DCT_PLAN_CACHE)
+        empty!(GPU_DCT_DIM_PLAN_CACHE)
+    end
+end
+
+# ── Reusable scratch buffers for the complex / multi-dim DCT paths ───────────
+# The pure-Chebyshev transform branches allocated fresh CuArrays every call:
+# `real.(x)`/`imag.(x)` splits for complex data (DCT kernels need real input),
+# and a new output array per dimension in the multi-dim ping-pong. For a field
+# transformed every timestep this is 4–8 device allocations per transform. Since
+# the DCT preserves array shape, we cache `count` reusable buffers per
+# (device, shape, eltype, count) and the multi-dim loop alternates between two of
+# them. Safe for serial single-GPU use: each transform copies its result into the
+# field's coeff/grid array before returning, so the scratch is free for the next
+# call (same assumption the plan work-buffer reuse already makes).
+const _GPU_DCT_SCRATCH_CACHE = Dict{Tuple, Any}()
+
+"""Get `count` cached, reusable `(shape, T)` GPU scratch buffers (thread-safe)."""
+function get_gpu_dct_scratch(arch::GPU, shape::NTuple{N,Int}, ::Type{T}, count::Int) where {N,T}
+    key = (_current_device_id(), shape, T, count)
+    buffers = lock(_GPU_DCT_PLAN_CACHE_LOCK) do
+        get!(() -> CuArray{T,N}[CUDA.zeros(T, shape...) for _ in 1:count],
+             _GPU_DCT_SCRATCH_CACHE, key)
+    end
+    return buffers::Vector{CuArray{T,N}}   # function barrier: type-stable downstream
+end
+
+"""Clear all cached GPU DCT scratch buffers (thread-safe)."""
+function clear_gpu_dct_scratch_cache!()
+    lock(_GPU_DCT_PLAN_CACHE_LOCK) do
+        empty!(_GPU_DCT_SCRATCH_CACHE)
+    end
+end
