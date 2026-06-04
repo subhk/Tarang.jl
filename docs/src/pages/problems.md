@@ -21,39 +21,102 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u*∂x(T)")
 
 ### LBVP - Linear Boundary Value Problem
 
-Steady-state linear PDEs.
+Steady-state linear PDEs. Boundary conditions in a bounded (Chebyshev/Jacobi)
+direction use the **tau method**: declare one `tau` variable per boundary
+condition, lift each into the bulk equation via
+`lift(tau, derivative_basis(basis, 2), -k)` (registered with `add_parameters!`),
+and declare the boundary conditions with `add_bc!` (not `add_equation!`).
 
 ```julia
-# Create LBVP
-problem = LBVP([phi])
+# 2D Poisson  Δu = -2,  u = 0 on both z walls  (solution u = z(Lz - z))
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords["x"]; size=4,  bounds=(0.0, 2π))   # periodic (separable)
+zb = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))  # bounded  (coupled)
+dom = Domain(dist, (xb, zb))
 
-# Add equations
-add_equation!(problem, "Δ(phi) = rho")
+u    = ScalarField(dom, "u")
+tau1 = ScalarField(dist, "tau1", (xb,), Float64)           # one tau per BC
+tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, "Δ(u) + l1 + l2 = -2")
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid
 ```
+
+!!! note "1D pure-Chebyshev BVP"
+    Verified BVPs include at least one separable (Fourier) direction. A pure
+    single-axis Chebyshev BVP currently mis-scatters the solution; add a Fourier
+    direction or use the EVP path for 1D spectra.
 
 ### NLBVP - Nonlinear Boundary Value Problem
 
-Steady-state nonlinear PDEs.
+Steady-state nonlinear PDEs. Same tau-method boundary handling as the LBVP
+(tau variables + `lift` + `add_bc!`). Put the nonlinear terms on the right-hand
+side; the solver linearizes them with a symbolic Frechet derivative and runs a
+per-Fourier-mode Newton iteration.
 
 ```julia
-# Create NLBVP
-problem = NLBVP([u, p])
+# Manufactured nonlinearity  Δu = u² + g,  with g = -2 - u_exact²  so u_exact = z(Lz - z)
+# domain / fields / taus as in the LBVP example above (u, tau1, tau2, lb2)
+g = ScalarField(dom, "g"); ensure_layout!(g, :g)
+zg = create_meshgrid(dom; on_device=false)["z"]
+get_grid_data(g) .= -2 .- (zg .* (1.0 .- zg)).^2
 
-# Add nonlinear equations
-add_equation!(problem, "-nu*Δ(u) + ∂x(p) = -u*∂x(u)")
+problem = NLBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
+add_equation!(problem, "Δ(u) + l1 + l2 = u*u + g")   # nonlinearity on the RHS
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
+
+solver = BoundaryValueSolver(problem)
+solver.tolerance = 1e-10
+ensure_layout!(u, :g); get_grid_data(u) .= 0.0       # initial guess
+solve!(solver)
+ensure_layout!(u, :g)
 ```
 
 ### EVP - Eigenvalue Problem
 
-Linear stability and eigenvalue analysis.
+Linear stability and eigenvalue analysis. Tarang solves the generalized problem
+`L x = σ M x`, where the mass matrix `M` is assembled from the **time-derivative
+terms** `dt(·)`: the eigenvalue *replaces* the time derivative (`dt(u) → σ u`).
+Keep the `dt(u)` term in the equation — do **not** multiply the eigenvalue symbol
+into it (`σ*u = …` builds an empty `M` and returns no eigenvalues). Boundary
+conditions use the same tau method (`tau` vars + `lift` + `add_bc!`).
 
 ```julia
-# Create EVP with eigenvalue name
-evp = EVP([u_hat, p_hat]; eigenvalue=:sigma)
+# 1D diffusion eigenproblem  σu = Δu, Dirichlet;  eigenvalues σ_n = -(nπ/Lz)²
+coords = CartesianCoordinates("z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+zb     = ChebyshevT(coords["z"]; size=32, bounds=(0.0, 1.0))
+dom    = Domain(dist, (zb,))
 
-# Add eigenvalue equations
-add_equation!(evp, "sigma*u_hat = Δ(u_hat)")
+u    = ScalarField(dom, "u")
+tau1 = ScalarField(dist, "tau1", (), Float64)
+tau2 = ScalarField(dist, "tau2", (), Float64)
+lb2  = derivative_basis(zb, 2)
+
+evp = EVP([u, tau1, tau2]; eigenvalue=:σ)
+add_parameters!(evp; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(evp, "dt(u) - Δ(u) - l1 - l2 = 0")   # dt(u) → σu marks M
+add_bc!(evp, "u(z=0)   = 0")
+add_bc!(evp, "u(z=1.0) = 0")
+
+solver = EigenvalueSolver(evp; nev=5, which=:SM)   # 5 smallest-magnitude
+eigenvalues, eigenvectors = solve!(solver)
+# |eigenvalues| ≈ (nπ)² = 9.87, 39.48, 88.83, ...
 ```
+
+`EigenvalueSolver` accepts only `nev`, `which` (∈ `:LM :SM :LR :SR :LI :SI`),
+`target`, and `matsolver`.
 
 ## Adding Equations
 
@@ -228,11 +291,29 @@ add_equation!(problem, "T(z=1) = 0")  # Cold top
 
 ### Poisson Equation (BVP)
 
+A steady BVP needs the tau method, and verified domains include at least one
+separable (Fourier) direction — a pure 1D Chebyshev Poisson currently
+mis-scatters. Here is the 2D form (`Δu = -2`, `u = 0` on both `z` walls):
+
 ```julia
-problem = LBVP([phi])
-add_equation!(problem, "Δ(phi) = rho")
-add_equation!(problem, "phi(z=0) = 0")
-add_equation!(problem, "phi(z=1) = 0")
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords["x"]; size=4,  bounds=(0.0, 2π))
+zb = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))
+dom = Domain(dist, (xb, zb))
+
+u    = ScalarField(dom, "u")
+tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, "Δ(u) + l1 + l2 = -2")
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
+
+solver = BoundaryValueSolver(problem); solve!(solver); ensure_layout!(u, :g)
 ```
 
 ## See Also

@@ -34,58 +34,80 @@ That is exactly how Tarang implements BCs.
 
 ## Quick-Start Example
 
-Here's the smallest complete example — a 1D steady heat equation with homogeneous Dirichlet BCs:
+Here's the smallest complete *verified* example — a 2D Poisson problem `Δu = -2`
+with homogeneous Dirichlet BCs on the two `z` walls, whose exact solution is
+`u = z(Lz - z)`. The domain has one separable (Fourier) `x` direction and one
+bounded (Chebyshev) `z` direction; the Chebyshev direction is the coupled one
+that needs tau corrections:
 
 ```julia
 using Tarang
 
-coords = CartesianCoordinates("z")
-dist   = Distributor(coords; dtype=Float64)
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
 
-zbasis = ChebyshevT(coords["z"]; size=64, bounds=(-1.0, 1.0))
-lift_basis = derivative_basis(zbasis)   # ChebyshevU of size 64
+xb = RealFourier(coords["x"]; size=4,  bounds=(0.0, 2π))    # periodic (separable)
+zb = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))   # bounded  (coupled)
+dom = Domain(dist, (xb, zb))
 
 # State field
-u = ScalarField(dist, "u", (zbasis,))
+u = ScalarField(dom, "u")
 
-# Tau fields — one per boundary. They have NO bases here (the problem is
-# 1D and the coupled direction is z, so the tau drops z and has nothing left).
-tau_u1 = ScalarField(dist, "tau_u1", ())
-tau_u2 = ScalarField(dist, "tau_u2", ())
+# Tau fields — one per boundary condition. Each lives on the COMPLEMENT of the
+# state's bases: the coupled (Chebyshev) z axis is dropped, leaving (xb,).
+tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 
-problem = LBVP([u, tau_u1, tau_u2])
+# The 2nd-derivative lift basis (one per second-order problem).
+lb2 = derivative_basis(zb, 2)
 
-# The equation carries its own tau corrections via lift():
-add_equation!(problem,
-    "∂²(u)/∂z² + lift(tau_u1, -1) + lift(tau_u2, -2) = f")
+problem = LBVP([u, tau1, tau2])
 
-add_bc!(problem, "u(z=-1) = 0")
-add_bc!(problem, "u(z=1)  = 0")
+# Register the lifts as named parameters, then reference them in the equation.
+# lift(tau, derivative_basis(zb, 2), -k) places tau at the k-th-from-last
+# Chebyshev coefficient slot (-1 = last, -2 = second-to-last).
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, "Δ(u) + l1 + l2 = -2")
+
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
 
 solver = BoundaryValueSolver(problem)
 solve!(solver)
+ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid
 ```
 
 Notice that:
 
-1. Tau fields (`tau_u1`, `tau_u2`) are **added to the state vector**, not computed from the state afterwards.
-2. The equation itself carries `lift(tau, -1)` and `lift(tau, -2)` terms.
-3. The BCs are plain-looking equations (`u(z=-1) = 0`) — Tarang converts each into an algebraic row that constrains the tau fields.
+1. Tau fields (`tau1`, `tau2`) are **added to the state vector**, not computed from the state afterwards.
+2. The lift terms are registered as named parameters via `add_parameters!` and then referenced by name (`l1`, `l2`) in the equation. Each lift uses the 3-arg form `lift(tau, derivative_basis(zb, 2), -k)`.
+3. The BCs are declared with `add_bc!` (`u(z=0) = 0`) — Tarang converts each into an algebraic row that constrains the tau fields.
 
-The solver determines `u`, `tau_u1`, and `tau_u2` **simultaneously** in a single linear solve.
+The solver builds **one square tau subproblem per separable Fourier mode** and
+determines `u`, `tau1`, and `tau2` **simultaneously** in a single linear solve.
+
+!!! note "1D pure-Chebyshev BVP"
+    The per-mode solve is verified for domains with at least one separable
+    (Fourier) direction. A pure single-axis Chebyshev BVP currently mis-scatters
+    the solution; add a (size-4 or larger) Fourier direction as above, or use the
+    EVP path for 1D spectra.
 
 ## The `lift` Operator
 
-`lift` is how a tau field enters an equation:
+`lift` is how a tau field enters an equation. The recommended form is the
+explicit 3-arg form, with the lift basis built from `derivative_basis`:
 
 ```julia
-lift(tau, basis, n)   # full form:  explicit lift basis
-lift(tau, n)          # short form: auto-detects the lift basis
+lift(tau, derivative_basis(basis, 2), -k)   # full form:  explicit lift basis
+lift(tau, -k)                               # short form: auto-detects the lift basis
 ```
 
 - **`tau`** is the tau field (a `ScalarField` or `VectorField` whose bases are a strict subset of the state field's bases — it's missing the coupled direction).
-- **`basis`** is the *lift basis*. For Chebyshev-T state fields, this is almost always `derivative_basis(zbasis)`, which returns ChebyshevU of the same size. See [Why the Derivative Basis?](#why-still-pass-derivative_basiszbasis) below.
-- **`n`** is an integer mode index with wraparound semantics: `n = -1` is the last coefficient slot of the coupled direction (`lift_mode = N-1` → Julia index `N`), `n = -2` is the second-to-last, `n = 0` is the first, and so on. For a ChebyshevT state of size `N`, `-1` places the tau value at coefficient `N-1`.
+- **`derivative_basis(basis, 2)`** is the *lift basis*. For a second-order problem
+  (e.g. `Δ(u)`) you take the **second** derivative basis of the coupled Chebyshev
+  axis once, bind it to a local name (`lb2 = derivative_basis(zb, 2)`), and reuse
+  it for both lift terms. See [Why the Derivative Basis?](#why-still-pass-the-derivative-basis) below.
+- **`-k`** is an integer mode index with wraparound semantics: `-1` is the last coefficient slot of the coupled direction (`lift_mode = N-1` → Julia index `N`), `-2` is the second-to-last, `0` is the first, and so on. For a ChebyshevT state of size `N`, `-1` places the tau value at coefficient `N-1`. A second-order problem uses two taus with lift orders `-1` and `-2`.
 
 ### Short form dependency ordering
 
@@ -105,7 +127,7 @@ bad     = lift(tau_u1, -1)   # ← may throw ArgumentError: cannot auto-detect b
 u       = ScalarField(dist, "u",       (xbasis, zbasis))
 ```
 
-If you want to avoid depending on layout-cache ordering entirely, use the **explicit form** `lift(tau, derivative_basis(zbasis), -1)`. All of Tarang's shipped examples use the explicit form (via a local `lift_basis = derivative_basis(zbasis)` binding) for exactly this reason.
+If you want to avoid depending on layout-cache ordering entirely, use the **explicit form** `lift(tau, derivative_basis(zb, 2), -1)`. All of Tarang's shipped examples use the explicit form (via a local `lb2 = derivative_basis(zb, 2)` binding) for exactly this reason.
 
 ### What `lift(tau, basis, n)` actually computes (solver view)
 
@@ -117,17 +139,17 @@ At the solver level, `lift(tau, basis, n)` resolves to a **single-column sparse 
 
 where ``e_{\text{lift\_mode}}`` is the unit vector with a `1` at the `lift_mode`-th Chebyshev-coefficient slot. When this is added to an equation's LHS, it contributes the unknown ``\tau`` to exactly one coefficient row, leaving every other interior row untouched. The linear solver then chooses ``\tau`` so that the BC rows hold — and because the perturbation is confined to one high-order coefficient, the interior PDE residual stays spectrally small for smooth solutions.
 
-> **Implementation detail worth knowing**: In Tarang's current solver, `subproblem_matrix(op::Lift, sp)` reads the dimension `N` from `_subproblem_cheb_basis(sp)` — the problem's own Chebyshev basis — and does **not** use `op.basis` to compute the matrix. That means `lift(tau, zbasis, -1)` and `lift(tau, derivative_basis(zbasis), -1)` produce **identical** delta columns at row `N-1`. The `basis` argument is a semantic hint inherited from Dedalus's type system; it's retained so that future refinements (e.g. different lift-basis behaviour for non-Jacobi bases, or explicit basis tracking through expression trees) can hook in without breaking user code.
+> **Implementation detail worth knowing**: In Tarang's current solver, `subproblem_matrix(op::Lift, sp)` reads the dimension `N` from `_subproblem_cheb_basis(sp)` — the problem's own Chebyshev basis — and does **not** use `op.basis` to compute the matrix. That means `lift(tau, zb, -1)` and `lift(tau, derivative_basis(zb, 2), -1)` produce **identical** delta columns at row `N-1`. The `basis` argument is a semantic hint inherited from Dedalus's type system; it's retained so that future refinements (e.g. different lift-basis behaviour for non-Jacobi bases, or explicit basis tracking through expression trees) can hook in without breaking user code.
 
-### Why still pass `derivative_basis(zbasis)`?
+### Why still pass the derivative basis?
 
-Even though the two choices produce identical matrices in the current solver, **writing `lift(tau, derivative_basis(zbasis), -1)` is the recommended idiom**, for three reasons:
+Even though the two choices produce identical matrices in the current solver, **writing `lift(tau, derivative_basis(zb, 2), -1)` is the recommended idiom**, for three reasons:
 
-1. **Forward-compatibility**: if Tarang later adopts Dedalus's fully basis-tracked lift semantics (where `op.basis` *does* determine the output coefficient space), your code will already be correct. Passing `zbasis` would silently start producing different matrices.
-2. **Semantic clarity**: in first-order formulations like `grad_u = grad(u) + ez * lift(tau_u1, -1)`, the lift lives alongside `grad(u)`, which naturally maps a ChebyshevT field into the derivative (ChebyshevU) space. Passing `derivative_basis(zbasis)` tells the reader what the lift is conceptually contributing, even if the linear algebra doesn't care.
-3. **Consistency with examples and tutorials**: all of Tarang's shipped examples use `derivative_basis(zbasis)`, so sticking with it makes your code pattern-match familiar code.
+1. **Forward-compatibility**: if Tarang later adopts Dedalus's fully basis-tracked lift semantics (where `op.basis` *does* determine the output coefficient space), your code will already be correct. Passing `zb` would silently start producing different matrices.
+2. **Semantic clarity**: in first-order formulations like `grad_u = grad(u) + ez * lift(tau_u1, -1)`, the lift lives alongside `grad(u)`, which naturally maps a ChebyshevT field into the derivative space. Passing the derivative basis tells the reader what the lift is conceptually contributing, even if the linear algebra doesn't care.
+3. **Consistency with examples and tutorials**: all of Tarang's shipped examples use `derivative_basis(zb, 2)`, so sticking with it makes your code pattern-match familiar code.
 
-**Rule of thumb**: always write `lift_basis = derivative_basis(zbasis)` at the top of your setup block and use `lift(tau, lift_basis, -1)` (or the auto-form `lift(tau, -1)`) throughout. Don't invent your own lift basis.
+**Rule of thumb**: always write `lb2 = derivative_basis(zb, 2)` at the top of your setup block and use `lift(tau, lb2, -1)` (or the auto-form `lift(tau, -1)`) throughout. Don't invent your own lift basis.
 
 ## Boundary Conditions as Algebraic Constraint Rows
 
@@ -374,9 +396,9 @@ A tau field declared in `problem.variables` but never referenced in any equation
 
 ### 3. Wrong lift basis
 
-Using `lift(tau, zbasis, -1)` instead of `lift(tau, derivative_basis(zbasis), -1)` works mathematically but conditions the system poorly at high resolution. Symptoms: solutions look correct at `Nz=32` but diverge or develop noise at `Nz=128`.
+Using `lift(tau, zb, -1)` instead of `lift(tau, derivative_basis(zb, 2), -1)` works mathematically but conditions the system poorly at high resolution. Symptoms: solutions look correct at `Nz=32` but diverge or develop noise at `Nz=128`.
 
-**Fix**: always use `derivative_basis(zbasis)` (or the short form `lift(tau, -1)` which auto-selects it).
+**Fix**: always build the lift basis with `derivative_basis(zb, 2)` (or use the short form `lift(tau, -1)` which auto-selects it).
 
 ### 4. Tau field bases don't match
 

@@ -33,43 +33,59 @@ For any problem with non-periodic boundary conditions:
 
 ## Complete Example: Poisson Equation
 
-Let's solve the Poisson equation $\nabla^2 u = f$ with Dirichlet BCs:
+Let's solve the Poisson equation $\nabla^2 u = -2$ with Dirichlet BCs `u = 0` on
+both `z` walls. This is a verified, runnable LBVP; the analytic solution is
+`u = z(Lz - z)` and the solver reproduces it to machine precision.
+
+The tau method needs **one tau variable per boundary condition**. Each tau is
+lifted into the bulk equation with `lift(tau, derivative_basis(z_basis, 2), -k)`
+and registered as a parameter via `add_parameters!`. The lift order index `-1`
+targets the last coefficient row and `-2` the second-to-last; a 2nd-order problem
+therefore uses two taus at orders `-1` and `-2`.
 
 ```julia
 using Tarang
 
-# Create coordinates and bases
+# Create coordinates, distributor, and bases
 coords = CartesianCoordinates("x", "z")
-x_basis = RealFourier(coords["x"], size=64, bounds=(0.0, 2π))
-z_basis = ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+x_basis = RealFourier(coords["x"]; size=4,  bounds=(0.0, 2π))   # periodic (separable)
+z_basis = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))  # bounded  (coupled)
+dom = Domain(dist, (x_basis, z_basis))
 
-# Create distributor and fields
-dist = Distributor(coords)
-u = ScalarField(dist, "u", (x_basis, z_basis))
-f = ScalarField(dist, "f", (x_basis, z_basis))  # Source term
+# Field to solve for
+u = ScalarField(dom, "u")
 
 # Step 1: Create tau fields (one per BC)
 # These live on the x-basis only (boundary is a line in 2D)
-tau_u1 = ScalarField(dist, "tau_u1", (x_basis,))  # For BC at z=0
-tau_u2 = ScalarField(dist, "tau_u2", (x_basis,))  # For BC at z=1
+tau1 = ScalarField(dist, "tau1", (x_basis,), Float64)  # For BC at z=0
+tau2 = ScalarField(dist, "tau2", (x_basis,), Float64)  # For BC at z=1
 
 # Step 2: Add ALL fields to problem (including tau fields)
-problem = LBVP([u, tau_u1, tau_u2])
+problem = LBVP([u, tau1, tau2])
 
-# Step 3: Add source term parameter
-add_parameters!(problem, f=f)
+# Step 3: Register the lifted tau terms as parameters
+#         (use the 2nd-derivative basis for a 2nd-order problem)
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 
-# Step 4: Add equation with lift() operators (string format)
-add_equation!(problem, "Δ(u) + lift(tau_u1, -1) + lift(tau_u2, -2) = f")
+# Step 4: Add equation referencing the lifted tau parameters
+add_equation!(problem, "Δ(u) + l1 + l2 = -2")
 
 # Step 5: Add boundary conditions
-add_bc!(problem, "u(z=0) = 0")   # u(z=0) = 0
-add_bc!(problem, "u(z=1) = 0")   # u(z=1) = 0
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
 
 # Solve
 solver = BoundaryValueSolver(problem)
 solve!(solver)
+ensure_layout!(u, :g)   # solve! writes coefficients; switch to grid space to read u
 ```
+
+!!! note "1D pure-Chebyshev BVP"
+    Verified-working steady BVPs include at least one separable (Fourier)
+    direction, as above. A pure single-axis Chebyshev BVP currently mis-scatters
+    the solution — keep a (size-4 or larger) Fourier axis in the domain.
 
 ## Dirichlet Boundary Conditions
 
@@ -79,14 +95,18 @@ Fix the value of a field at the boundary.
 
 ```julia
 # Create tau fields for each Dirichlet BC
-tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))
-tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))
+tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 
 # Add to problem
 problem = LBVP([T, tau_T1, tau_T2])
 
-# Add equation with lift terms (string format)
-add_equation!(problem, "Δ(T) + lift(tau_T1, -1) + lift(tau_T2, -2) = source")
+# Register the lifted tau terms (2nd-order problem -> 2nd-derivative basis)
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_T1, lb2, -1), l2=lift(tau_T2, lb2, -2))
+
+# Add equation referencing the lifted tau parameters
+add_equation!(problem, "Δ(T) + l1 + l2 = source")
 
 # Boundary conditions
 add_bc!(problem, "T(z=0) = 1")   # T(z=0) = 1
@@ -132,12 +152,16 @@ Specify the derivative (flux) at the boundary.
 
 ```julia
 # Tau fields for Neumann BCs
-tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))
-tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))
+tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 
 problem = LBVP([T, tau_T1, tau_T2])
 
-add_equation!(problem, "Δ(T) + lift(tau_T1, -1) + lift(tau_T2, -2) = source")
+# Register the lifted tau terms (2nd-order problem -> 2nd-derivative basis)
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_T1, lb2, -1), l2=lift(tau_T2, lb2, -2))
+
+add_equation!(problem, "Δ(T) + l1 + l2 = source")
 
 # Neumann: specify derivative at boundary
 add_bc!(problem, "∂z(T)(z=0) = 1")   # ∂T/∂z(z=0) = 1
@@ -159,15 +183,17 @@ add_bc!(problem, "∂z(u_x)(z=1) = 0")  # Stress-free at top (∂u/∂z = 0)
 Linear combination: $\alpha u + \beta \frac{\partial u}{\partial n} = \gamma$
 
 ```julia
-tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))
-tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))
+tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 
 problem = LBVP([T, tau_T1, tau_T2])
 
-# Add parameters
-add_parameters!(problem, h=10.0, k=1.0, T_amb=25.0)
+# Register the lifted tau terms and scalar parameters
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_T1, lb2, -1), l2=lift(tau_T2, lb2, -2),
+                         h=10.0, k=1.0, T_amb=25.0)
 
-add_equation!(problem, "Δ(T) + lift(tau_T1, -1) + lift(tau_T2, -2) = source")
+add_equation!(problem, "Δ(T) + l1 + l2 = source")
 
 # Convective heat transfer at top: h*T + k*dT/dn = h*T_ambient
 add_bc!(problem, "h*T(z=1) + k*∂z(T)(z=1) = h*T_amb")
@@ -193,37 +219,54 @@ x_basis = RealFourier(coords["x"], size=128, bounds=(0.0, 2π))
 
 ## The lift() Operator
 
-The `lift()` operator places tau corrections at specific spectral modes. In the string equation format:
+The `lift(tau, derivative_basis(basis, order), -k)` operator places a tau
+correction at a specific coefficient row of the bounded (Chebyshev/Jacobi) basis.
+You build the lifted terms once and register them as parameters, then reference
+those parameter names in the equation string:
 
 ```julia
-"Δ(u) + lift(tau_u1, -1) + lift(tau_u2, -2) = f"
+lb2 = derivative_basis(z_basis, 2)   # 2nd-order problem -> 2nd-derivative basis
+add_parameters!(problem; l1=lift(tau_u1, lb2, -1), l2=lift(tau_u2, lb2, -2))
+add_equation!(problem, "Δ(u) + l1 + l2 = f")
 ```
 
-The tau field name in the lift() operator should match the tau field name you created.
+The order index `-1` lifts into the last coefficient row, `-2` the
+second-to-last, and so on. The number of taus (and lift terms) must match the
+operator order in the bounded direction.
 
 ### Mode Selection Guidelines
 
-| Operator Order | Number of BCs | Number of lift() terms |
-|---------------|---------------|------------------------|
-| 1st (∂/∂z)    | 1             | 1                      |
-| 2nd (∂²/∂z²)  | 2             | 2                      |
-| 4th (∇⁴)      | 4             | 4                      |
+| Operator Order | Number of BCs | Number of lift() terms | derivative_basis order | Lift indices  |
+|----------------|---------------|------------------------|------------------------|---------------|
+| 1st (∂/∂z)     | 1             | 1                      | 1                      | -1            |
+| 2nd (∂²/∂z²)   | 2             | 2                      | 2                      | -1, -2        |
+| 4th (∇⁴)       | 4             | 4                      | 4                      | -1, -2, -3, -4|
 
 ### Example: Fourth-Order Problem
 
 For a biharmonic equation (∇⁴u = f) with 4 boundary conditions:
 
+!!! warning "Illustrative template"
+    The 4th-order tau pattern below mirrors the verified 2nd-order Poisson example
+    (tau vars + `lift` + `add_bc!`) but has not itself been run end-to-end. Use it
+    as a structural template, not a guaranteed-runnable snippet.
+
 ```julia
 # Four tau fields needed
-tau_u1 = ScalarField(dist, "tau_u1", (x_basis,))
-tau_u2 = ScalarField(dist, "tau_u2", (x_basis,))
-tau_u3 = ScalarField(dist, "tau_u3", (x_basis,))
-tau_u4 = ScalarField(dist, "tau_u4", (x_basis,))
+tau_u1 = ScalarField(dist, "tau_u1", (x_basis,), Float64)
+tau_u2 = ScalarField(dist, "tau_u2", (x_basis,), Float64)
+tau_u3 = ScalarField(dist, "tau_u3", (x_basis,), Float64)
+tau_u4 = ScalarField(dist, "tau_u4", (x_basis,), Float64)
 
 problem = LBVP([u, tau_u1, tau_u2, tau_u3, tau_u4])
 
-# Biharmonic equation with all four lift terms
-add_equation!(problem, "Δ(Δ(u)) + lift(tau_u1, -1) + lift(tau_u2, -2) + lift(tau_u3, -3) + lift(tau_u4, -4) = f")
+# Register the lifted tau terms (4th-order problem -> 4th-derivative basis)
+lb4 = derivative_basis(z_basis, 4)
+add_parameters!(problem; l1=lift(tau_u1, lb4, -1), l2=lift(tau_u2, lb4, -2),
+                         l3=lift(tau_u3, lb4, -3), l4=lift(tau_u4, lb4, -4))
+
+# Biharmonic equation with all four lifted tau terms
+add_equation!(problem, "Δ(Δ(u)) + l1 + l2 + l3 + l4 = f")
 
 # Clamped beam: u = 0 and du/dz = 0 at both ends
 add_bc!(problem, "u(z=0) = 0")
@@ -452,10 +495,12 @@ check_dirichlet_bc(T, "z", :right, 0.0)
 add_equation!(problem, "Δ(u) = f")
 add_bc!(problem, "u(z=0) = 0")
 
-# Correct: Create tau fields and add lift terms
-tau_u1 = ScalarField(dist, "tau_u1", (x_basis,))
-tau_u2 = ScalarField(dist, "tau_u2", (x_basis,))
-add_equation!(problem, "Δ(u) + lift(tau_u1, -1) + lift(tau_u2, -2) = f")
+# Correct: Create tau fields, register lifted tau parameters, add them to the equation
+tau_u1 = ScalarField(dist, "tau_u1", (x_basis,), Float64)
+tau_u2 = ScalarField(dist, "tau_u2", (x_basis,), Float64)
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_u1, lb2, -1), l2=lift(tau_u2, lb2, -2))
+add_equation!(problem, "Δ(u) + l1 + l2 = f")
 add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
 ```
@@ -481,10 +526,10 @@ add_bc!(problem, "u(z=1) = 0")
 ```julia
 # For a 2D problem with x-basis (periodic) and z-basis (non-periodic):
 # Boundaries are at constant z, so tau fields live on x-basis only
-tau_u = ScalarField(dist, "tau_u", (x_basis,))  # Correct: 1D on x
+tau_u = ScalarField(dist, "tau_u", (x_basis,), Float64)  # Correct: 1D on x
 
 # NOT:
-tau_u = ScalarField(dist, "tau_u", (x_basis, z_basis))  # Wrong: 2D
+tau_u = ScalarField(dist, "tau_u", (x_basis, z_basis), Float64)  # Wrong: 2D
 ```
 
 ## See Also

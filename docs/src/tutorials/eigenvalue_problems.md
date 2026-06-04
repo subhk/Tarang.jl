@@ -12,66 +12,66 @@ Eigenvalue problems arise in linear stability analysis where we seek modes of th
 
 where $\sigma$ is the eigenvalue (growth rate + frequency) and $\hat{\mathbf{u}}$ is the eigenfunction.
 
+## Eigenvalue Convention
+
+Tarang solves the generalized problem $L\,\mathbf{x} = \sigma M\,\mathbf{x}$, where
+the mass matrix $M$ is built from the **time-derivative terms** `dt(·)`. The
+eigenvalue $\sigma$ replaces the time derivative ($\partial_t \to \sigma$), which
+matches the normal-mode ansatz $\mathbf{u}\sim e^{\sigma t}$. So you write the
+equation with `dt(u)` kept in place — **not** by multiplying the eigenvalue symbol
+into the equation. (`sigma*u = …` produces an empty $M$ and returns no
+eigenvalues.)
+
+Bounded directions use the **tau method**, identical to the BVP: add one `tau`
+variable per boundary condition, lift it into the bulk equation with
+`lift(tau, derivative_basis(basis, 2), -k)`, and declare BCs with `add_bc!`.
+
 ## Basic EVP Setup
 
-### Problem Definition
+A complete, verified example — the 1D diffusion eigenproblem $\sigma u = \Delta u$
+with Dirichlet walls. Its spectrum is the Dirichlet Laplacian,
+$\sigma_n = -(n\pi/L_z)^2$.
 
 ```julia
 using Tarang
-using MPI
 
-MPI.Init()
-
-# Setup domain
 coords = CartesianCoordinates("z")
-dist = Distributor(coords; mesh=(1,), dtype=Float64)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
 z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
+dom    = Domain(dist, (z_basis,))
 
-# Create fields for eigenmodes
-u_hat = ScalarField(dist, "u_hat", (z_basis,), Float64)
+# Eigenmode field + one tau per boundary condition
+u_hat = ScalarField(dom, "u_hat")
+tau1  = ScalarField(dist, "tau1", (), Float64)
+tau2  = ScalarField(dist, "tau2", (), Float64)
+lb2   = derivative_basis(z_basis, 2)
 
-# Create eigenvalue problem
-evp = Tarang.EVP([u_hat]; eigenvalue=:sigma)
-```
+evp = Tarang.EVP([u_hat, tau1, tau2]; eigenvalue=:σ)
+add_parameters!(evp; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 
-### Adding Equations
+# σ u = Δu  ⇒  keep dt(u) (the solver maps dt → σ), move linear terms to the LHS
+Tarang.add_equation!(evp, "dt(u_hat) - Δ(u_hat) - l1 - l2 = 0")
+Tarang.add_bc!(evp, "u_hat(z=0)   = 0")
+Tarang.add_bc!(evp, "u_hat(z=1.0) = 0")
 
-The EVP format is: $A \mathbf{x} = \sigma B \mathbf{x}$
-
-```julia
-# Example: diffusion eigenvalue problem
-# σu = d²u/dz² (eigenvalues of Laplacian)
-Tarang.add_equation!(evp, "sigma*u_hat = ∂z(∂z(u_hat))")
-
-# Or equivalently
-Tarang.add_equation!(evp, "sigma*u_hat = Δ(u_hat)")
-```
-
-### Boundary Conditions
-
-```julia
-# Dirichlet BCs: u = 0 at boundaries
-Tarang.add_equation!(evp, "u_hat(z=0) = 0")
-Tarang.add_equation!(evp, "u_hat(z=1) = 0")
-```
-
-### Solving
-
-```julia
-# Validate problem setup
-@assert Tarang.validate_problem(evp)
-
-# Create solver and solve
-solver = Tarang.EigenvalueSolver(evp; nev=10, which="LR")
+solver = Tarang.EigenvalueSolver(evp; nev=5, which=:SM)   # 5 smallest |σ|
 eigenvalues, eigenvectors = Tarang.solve!(solver)
 
-# Print results
 for (i, σ) in enumerate(eigenvalues)
-    println("Mode $i: σ = $(real(σ)) + $(imag(σ))im")
+    println("Mode $i: σ = $(real(σ)) + $(imag(σ))im")   # |σ_n| ≈ (nπ)²
 end
 ```
 
 ## Rayleigh-Bénard Stability
+
+!!! warning "Illustrative template"
+    The multi-field stability examples below (Rayleigh–Bénard, Orr–Sommerfeld)
+    show the equation/operator structure and parameter-study workflow. They are
+    **not** verified runnable scripts: each coupled field needs its own `tau`
+    variables + `lift` terms and `add_bc!` boundary conditions (as in the Basic
+    EVP Setup above), and the eigenvalue must enter through `dt(·)`, not as a
+    `σ*` factor. Use the verified Basic EVP Setup as the runnable reference and
+    extend it per field.
 
 Classical linear stability problem for thermal convection.
 
@@ -123,26 +123,27 @@ evp.parameters["Pr"] = Pr
 evp.parameters["k"] = k
 evp.parameters["k2"] = k^2
 
-# Momentum equations (modified Laplacian: D² - k²)
-Tarang.add_equation!(evp, "sigma*u_hat + 1im*k*p_hat = Pr*(∂z(∂z(u_hat)) - k2*u_hat)")
-Tarang.add_equation!(evp, "sigma*w_hat + ∂z(p_hat) = Pr*(∂z(∂z(w_hat)) - k2*w_hat) + Ra*Pr*T_hat")
+# Momentum equations (modified Laplacian D² - k²). Keep dt(·): the eigenvalue
+# σ replaces ∂t, so dt(u_hat) → σ u_hat builds the mass matrix M.
+Tarang.add_equation!(evp, "dt(u_hat) + 1im*k*p_hat - Pr*(∂z(∂z(u_hat)) - k2*u_hat) = 0")
+Tarang.add_equation!(evp, "dt(w_hat) + ∂z(p_hat) - Pr*(∂z(∂z(w_hat)) - k2*w_hat) - Ra*Pr*T_hat = 0")
 
-# Continuity
+# Continuity (algebraic constraint — no dt term)
 Tarang.add_equation!(evp, "1im*k*u_hat + ∂z(w_hat) = 0")
 
 # Temperature
-Tarang.add_equation!(evp, "sigma*T_hat + w_hat = ∂z(∂z(T_hat)) - k2*T_hat")
+Tarang.add_equation!(evp, "dt(T_hat) + w_hat - (∂z(∂z(T_hat)) - k2*T_hat) = 0")
 
-# Boundary conditions (no-slip, fixed temperature)
-Tarang.add_equation!(evp, "u_hat(z=0) = 0")
-Tarang.add_equation!(evp, "u_hat(z=1) = 0")
-Tarang.add_equation!(evp, "w_hat(z=0) = 0")
-Tarang.add_equation!(evp, "w_hat(z=1) = 0")
-Tarang.add_equation!(evp, "T_hat(z=0) = 0")
-Tarang.add_equation!(evp, "T_hat(z=1) = 0")
+# Boundary conditions (no-slip, fixed temperature) — add_bc! + per-field tau lifts
+Tarang.add_bc!(evp, "u_hat(z=0) = 0")
+Tarang.add_bc!(evp, "u_hat(z=1) = 0")
+Tarang.add_bc!(evp, "w_hat(z=0) = 0")
+Tarang.add_bc!(evp, "w_hat(z=1) = 0")
+Tarang.add_bc!(evp, "T_hat(z=0) = 0")
+Tarang.add_bc!(evp, "T_hat(z=1) = 0")
 
 # Solve
-solver = Tarang.EigenvalueSolver(evp; nev=10, which="LR")
+solver = Tarang.EigenvalueSolver(evp; nev=10, which=:LR)
 eigenvalues, eigenvectors = Tarang.solve!(solver)
 
 # Find critical mode
@@ -328,17 +329,16 @@ solver = Tarang.EigenvalueSolver(evp; nev=10, which="SM")
 solver = Tarang.EigenvalueSolver(evp; nev=10, target=0.1+1.5im)
 ```
 
-### Convergence
+### Shift-invert near a target
 
 ```julia
-# Increase iterations for difficult problems
-solver = Tarang.EigenvalueSolver(evp;
-    nev=20,
-    which="LR",
-    tolerance=1e-10,
-    max_iterations=1000
-)
+# Order eigenvalues by proximity to a target (useful for interior spectra)
+solver = Tarang.EigenvalueSolver(evp; nev=20, target=0.0 + 0.0im)
 ```
+
+`EigenvalueSolver` accepts `nev`, `which` (`:LM`/`:SM`/`:LR`/`:SR`/`:LI`/`:SI`),
+`target`, and `matsolver`. It solves `eigen(L, M)` per Fourier mode on the square
+tau matrices and discards spurious eigenvalues from the singular mass matrix.
 
 ## See Also
 

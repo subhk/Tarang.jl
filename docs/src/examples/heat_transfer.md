@@ -129,36 +129,73 @@ end
 
 ### Laplace Equation
 
-Steady heat conduction.
+Steady heat conduction. This is a linear boundary value problem (LBVP): boundary
+conditions are enforced with the **tau method** (one `tau` variable per BC, lifted
+into the bulk equation and declared with `add_bc!`). The bounded direction here is
+`z` (Chebyshev); the periodic `x` direction is separable.
 
 ```julia
-problem = LBVP([T])
-Tarang.add_equation!(problem, "Δ(T) = 0")
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords["x"]; size=4,  bounds=(0.0, 1.0))   # periodic (separable)
+zb = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))   # bounded  (coupled)
+dom = Domain(dist, (xb, zb))
 
-# Boundary conditions define the solution
-Tarang.add_equation!(problem, "T(x=0) = 0")
-Tarang.add_equation!(problem, "T(x=1) = 1")
-Tarang.add_equation!(problem, "∂z(T)(z=0) = 0")
-Tarang.add_equation!(problem, "∂z(T)(z=1) = 0")
+T    = ScalarField(dom, "T")
+tau1 = ScalarField(dist, "tau1", (xb,), Float64)            # one tau per z-BC
+tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = LBVP([T, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+Tarang.add_equation!(problem, "Δ(T) + l1 + l2 = 0")
+
+# Boundary conditions on the bounded (z) direction, via the tau method
+Tarang.add_bc!(problem, "T(z=0)   = 1")
+Tarang.add_bc!(problem, "T(z=1.0) = 0")
 
 solver = BoundaryValueSolver(problem)
 solve!(solver)
+Tarang.ensure_layout!(T, :g)            # scatter writes coefficients; switch to grid
 ```
+
+!!! note "1D pure-Chebyshev BVP"
+    A steady BVP needs at least one separable (Fourier) direction. A pure
+    single-axis Chebyshev BVP currently mis-scatters the solution, so the example
+    above keeps a periodic `x` direction even though the profile is 1D in `z`.
 
 ### Poisson Equation
 
-With heat source.
+With heat source. Like the Laplace example this is a steady LBVP, so the wall
+boundary conditions use the **tau method** (`tau` variables + `lift` + `add_bc!`).
 
 ```julia
-# Heat source (e.g., volumetric heating)
-q = ScalarField(dist, "q", bases, Float64)
-Tarang.ensure_layout!(q, :g)
-# Define heat source distribution
-get_grid_data(q) .= sin.(π .* x) .* sin.(π .* z)
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords["x"]; size=4,  bounds=(0.0, 1.0))   # periodic (separable)
+zb = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))   # bounded  (coupled)
+dom = Domain(dist, (xb, zb))
 
-problem = LBVP([T])
-problem.fields["q"] = q
-Tarang.add_equation!(problem, "Δ(T) = -q")
+T    = ScalarField(dom, "T")
+tau1 = ScalarField(dist, "tau1", (xb,), Float64)            # one tau per z-BC
+tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+# Heat source (e.g., volumetric heating)
+q  = ScalarField(dom, "q")
+Tarang.ensure_layout!(q, :g)
+zg = create_meshgrid(dom; on_device=false)["z"]
+get_grid_data(q) .= sin.(π .* zg)                           # source distribution
+
+problem = LBVP([T, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), q=q)
+Tarang.add_equation!(problem, "Δ(T) + l1 + l2 = -q")
+Tarang.add_bc!(problem, "T(z=0)   = 0")
+Tarang.add_bc!(problem, "T(z=1.0) = 0")
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+Tarang.ensure_layout!(T, :g)
 ```
 
 ## Heat Transfer Analysis

@@ -16,6 +16,17 @@ where σ is the eigenvalue (growth rate + frequency).
 
 Critical Rayleigh number for convection onset.
 
+!!! warning "Illustrative template"
+    This multi-field example shows the *structure* of a Rayleigh–Bénard
+    stability problem; it is **not** a verified runnable script. Each coupled
+    field needs its own `tau` variables lifted into the bulk equation via
+    `lift(tau, derivative_basis(basis, 2), -k)` (registered with
+    `add_parameters!`), and every boundary condition must be declared with
+    `add_bc!`. The eigenvalue enters by **keeping** the `dt(·)` term in each
+    equation (`dt(field) → σ field` builds the mass matrix `M`) — never by
+    multiplying the eigenvalue symbol into the equation. See
+    [Problems API](../api/problems.md) for the verified 1D EVP pattern.
+
 ```julia
 using Tarang, MPI
 MPI.Init()
@@ -28,23 +39,42 @@ k = 3.117  # Critical wavenumber
 coords = CartesianCoordinates("z")
 dist = Distributor(coords; mesh=(1,), dtype=Float64, device=CPU())
 z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
+lb2 = derivative_basis(z_basis, 2)
 
-# Fields (complex amplitudes)
+# Fields (complex amplitudes) + one tau pair per coupled field for the BCs
 u_hat = ScalarField(dist, "u_hat", (z_basis,), ComplexF64)
 w_hat = ScalarField(dist, "w_hat", (z_basis,), ComplexF64)
 p_hat = ScalarField(dist, "p_hat", (z_basis,), ComplexF64)
 T_hat = ScalarField(dist, "T_hat", (z_basis,), ComplexF64)
+# Example tau variables (declare/lift as many as the BC count requires):
+tau_w1 = ScalarField(dist, "tau_w1", (), ComplexF64)
+tau_w2 = ScalarField(dist, "tau_w2", (), ComplexF64)
+tau_T1 = ScalarField(dist, "tau_T1", (), ComplexF64)
+tau_T2 = ScalarField(dist, "tau_T2", (), ComplexF64)
 
-# EVP
-evp = Tarang.EVP([u_hat, w_hat, p_hat, T_hat]; eigenvalue=:sigma)
+# EVP — include the tau variables alongside the physical fields
+evp = Tarang.EVP([u_hat, w_hat, p_hat, T_hat,
+                  tau_w1, tau_w2, tau_T1, tau_T2]; eigenvalue=:sigma)
 evp.parameters["Pr"] = Pr
 evp.parameters["k2"] = k^2
+# Lift each tau into the relevant bulk equation:
+add_parameters!(evp; lw1=lift(tau_w1, lb2, -1), lw2=lift(tau_w2, lb2, -2),
+                     lT1=lift(tau_T1, lb2, -1), lT2=lift(tau_T2, lb2, -2))
+
+# The eigenvalue replaces dt(·): KEEP dt(field) in every evolved equation, e.g.
+#   add_equation!(evp, "dt(w_hat) + ∂z(p_hat) - Pr*(∂z(∂z(w_hat)) - k2*w_hat)
+#                       - Ra*Pr*T_hat - lw1 - lw2 = 0")
+#   add_equation!(evp, "dt(T_hat) - (∂z(∂z(T_hat)) - k2*T_hat) - w_hat
+#                       - lT1 - lT2 = 0")
+# and declare the BCs with add_bc!:
+#   add_bc!(evp, "w_hat(z=0) = 0");  add_bc!(evp, "w_hat(z=1.0) = 0")
+#   add_bc!(evp, "T_hat(z=0) = 0");  add_bc!(evp, "T_hat(z=1.0) = 0")
 
 # Scan Ra to find critical value
 function find_critical_Ra(evp, Ra_range)
     for Ra in Ra_range
         evp.parameters["Ra"] = Ra
-        solver = Tarang.EigenvalueSolver(evp; nev=5, which="LR")
+        solver = Tarang.EigenvalueSolver(evp; nev=5, which=:LR)
         eigenvalues, _ = Tarang.solve!(solver)
         max_growth = maximum(real.(eigenvalues))
 
@@ -66,6 +96,16 @@ MPI.Finalize()
 
 Stability of channel flow.
 
+!!! warning "Illustrative template"
+    This shows the *structure* of the Orr–Sommerfeld eigenproblem; it is **not**
+    a verified runnable script. The fourth-order operator needs four boundary
+    conditions, so `psi_hat` requires four `tau` variables lifted into the bulk
+    equation via `lift(tau, derivative_basis(z_basis, 2), -k)` (registered with
+    `add_parameters!`), and each BC must be declared with `add_bc!`. The
+    eigenvalue `c` replaces the time derivative, so the temporal-mode form is
+    written by **keeping** the `dt(·)` term — never by multiplying `c` into the
+    equation. See [Problems API](../api/problems.md) for the verified pattern.
+
 ```julia
 # Base flow
 U(z) = 1 - (2z - 1)^2  # Parabolic profile
@@ -75,21 +115,32 @@ U_pp(z) = -8.0          # U''
 Re = 5000
 k = 1.0
 k2 = k^2
+k4 = k^4
+lb2 = derivative_basis(z_basis, 2)
 
-# EVP for complex wave speed c
-evp = Tarang.EVP([psi_hat]; eigenvalue=:c)
+# EVP for complex wave speed c — declare tau vars (one per BC) alongside psi_hat
+tau1 = ScalarField(dist, "tau1", (), ComplexF64)
+tau2 = ScalarField(dist, "tau2", (), ComplexF64)
+tau3 = ScalarField(dist, "tau3", (), ComplexF64)
+tau4 = ScalarField(dist, "tau4", (), ComplexF64)
+evp = Tarang.EVP([psi_hat, tau1, tau2, tau3, tau4]; eigenvalue=:c)
+add_parameters!(evp; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2),
+                     l3=lift(tau3, lb2, -3), l4=lift(tau4, lb2, -4))
 
+# The eigenvalue c replaces dt(·): KEEP the dt term so the mass matrix M is
+# built from dt(∂z(∂z(psi_hat)) - k2*psi_hat). Do NOT multiply c into the LHS.
 Tarang.add_equation!(evp, """
-    c*(∂z(∂z(psi_hat)) - k2*psi_hat) =
-    U*(∂z(∂z(psi_hat)) - k2*psi_hat) - U_pp*psi_hat +
-    (1im/(Re*k))*(∂z(∂z(∂z(∂z(psi_hat)))) - 2*k2*∂z(∂z(psi_hat)) + k4*psi_hat)
+    dt(∂z(∂z(psi_hat)) - k2*psi_hat)
+    - U*(∂z(∂z(psi_hat)) - k2*psi_hat) + U_pp*psi_hat
+    - (1im/(Re*k))*(∂z(∂z(∂z(∂z(psi_hat)))) - 2*k2*∂z(∂z(psi_hat)) + k4*psi_hat)
+    - l1 - l2 - l3 - l4 = 0
 """)
 
-# No-slip: ψ = ∂ψ/∂z = 0 at walls
-Tarang.add_equation!(evp, "psi_hat(z=0) = 0")
-Tarang.add_equation!(evp, "psi_hat(z=1) = 0")
-Tarang.add_equation!(evp, "∂z(psi_hat)(z=0) = 0")
-Tarang.add_equation!(evp, "∂z(psi_hat)(z=1) = 0")
+# No-slip: ψ = ∂ψ/∂z = 0 at walls — use add_bc!, not add_equation!
+Tarang.add_bc!(evp, "psi_hat(z=0) = 0")
+Tarang.add_bc!(evp, "psi_hat(z=1) = 0")
+Tarang.add_bc!(evp, "∂z(psi_hat)(z=0) = 0")
+Tarang.add_bc!(evp, "∂z(psi_hat)(z=1) = 0")
 ```
 
 ## Neutral Curves
@@ -111,7 +162,7 @@ function compute_neutral_curve(evp, k_range, Ra_range)
             Ra_mid = (Ra_lo + Ra_hi) / 2
             evp.parameters["Ra"] = Ra_mid
 
-            solver = Tarang.EigenvalueSolver(evp; nev=3, which="LR")
+            solver = Tarang.EigenvalueSolver(evp; nev=3, which=:LR)
             eigenvalues, _ = Tarang.solve!(solver)
             growth = maximum(real.(eigenvalues))
 
@@ -212,27 +263,27 @@ end
 
 ```julia
 # Most unstable (largest real part)
-solver = Tarang.EigenvalueSolver(evp; nev=10, which="LR")
+solver = Tarang.EigenvalueSolver(evp; nev=10, which=:LR)
 
 # Largest magnitude
-solver = Tarang.EigenvalueSolver(evp; nev=10, which="LM")
+solver = Tarang.EigenvalueSolver(evp; nev=10, which=:LM)
 
 # Near a target value
 solver = Tarang.EigenvalueSolver(evp; nev=5, target=0.1+1.5im)
 
 # Most oscillatory (largest imaginary)
-solver = Tarang.EigenvalueSolver(evp; nev=10, which="LI")
+solver = Tarang.EigenvalueSolver(evp; nev=10, which=:LI)
 ```
 
-### Convergence
+`which` accepts the symbols `:LM` `:SM` `:LR` `:SR` `:LI` `:SI`, or pass
+`target=…` to order by proximity to a shift. The `EigenvalueSolver` constructor
+takes only `nev`, `which`, `target`, and `matsolver` keywords.
+
+### Selecting eigenvalues by magnitude
 
 ```julia
-solver = Tarang.EigenvalueSolver(evp;
-    nev=20,
-    which="LR",
-    tolerance=1e-12,
-    max_iterations=2000
-)
+# Smallest-magnitude eigenvalues (e.g. least-damped modes)
+solver = Tarang.EigenvalueSolver(evp; nev=20, which=:SM)
 ```
 
 ## Tips

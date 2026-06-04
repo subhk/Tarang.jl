@@ -47,19 +47,43 @@ LBVP(fields::Vector{<:AbstractField})
 **Arguments**:
 - `fields`: Vector of fields to solve for
 
-**Examples**:
+**Boundary conditions (tau method)**: a bounded (Chebyshev/Jacobi) direction
+needs explicit `tau` variables, one per boundary condition, lifted into the bulk
+equation via `lift(tau, derivative_basis(basis, 2), -k)`. Boundary conditions are
+declared with `add_bc!` (not `add_equation!`). The solver builds one square tau
+subproblem per separable Fourier mode.
+
+**Example** (2D Poisson `Δu = -2`, `u = 0` on both `z` walls; solution
+`u = z(Lz - z)`, verified to machine precision):
 
 ```julia
-# Poisson equation
-problem = LBVP([phi])
-add_equation!(problem, "Δ(phi) = rho")
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords["x"]; size=4,  bounds=(0.0, 2π))   # periodic (separable)
+zb = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))  # bounded  (coupled)
+dom = Domain(dist, (xb, zb))
 
-# Stokes flow
-problem = LBVP([u, v, p])
-add_equation!(problem, "-nu*Δ(u) + ∂x(p) = fx")
-add_equation!(problem, "-nu*Δ(v) + ∂z(p) = fz")
-add_equation!(problem, "∂x(u) + ∂z(v) = 0")
+u    = ScalarField(dom, "u")
+tau1 = ScalarField(dist, "tau1", (xb,), Float64)           # one tau per BC
+tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, "Δ(u) + l1 + l2 = -2")
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid
 ```
+
+!!! note "1D pure-Chebyshev BVP"
+    The per-mode solve is verified for domains with at least one separable
+    (Fourier) direction. A pure single-axis Chebyshev BVP currently mis-scatters
+    the solution; add a (size-1 or larger) Fourier direction, or use the EVP path
+    for 1D spectra.
 
 **Use cases**:
 - Steady heat conduction
@@ -81,14 +105,31 @@ NLBVP(fields::Vector{<:AbstractField})
 **Arguments**:
 - `fields`: Vector of fields to solve for
 
-**Examples**:
+Same tau-method boundary handling as the LBVP (tau variables + `lift` + `add_bc!`).
+The nonlinear terms go on the right-hand side; the solver linearizes them with a
+symbolic Frechet derivative and runs a per-Fourier-mode Newton iteration (the
+Jacobian `dF = ∂(LHS − RHS)/∂u` is rebuilt each iteration with the current state).
+
+**Example** (manufactured quadratic nonlinearity `Δu = u² + g`, with
+`g = -2 - u_exact²` so `u_exact = z(Lz - z)`; verified to ~1e-12):
 
 ```julia
-# Steady Navier-Stokes
-problem = NLBVP([u, v, p])
-add_equation!(problem, "∂x(p) - nu*Δ(u) = -u*∂x(u) - v*∂z(u)")
-add_equation!(problem, "∂z(p) - nu*Δ(v) = -u*∂x(v) - v*∂z(v)")
-add_equation!(problem, "∂x(u) + ∂z(v) = 0")
+# domain / fields / taus as in the LBVP example above (u, tau1, tau2, lb2)
+g = ScalarField(dom, "g"); ensure_layout!(g, :g)
+zg = create_meshgrid(dom; on_device=false)["z"]
+get_grid_data(g) .= -2 .- (zg .* (1.0 .- zg)).^2
+
+problem = NLBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
+add_equation!(problem, "Δ(u) + l1 + l2 = u*u + g")   # nonlinearity on the RHS
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
+
+solver = BoundaryValueSolver(problem)
+solver.tolerance = 1e-10
+ensure_layout!(u, :g); get_grid_data(u) .= 0.0       # initial guess
+solve!(solver)
+ensure_layout!(u, :g)
 ```
 
 **Use cases**:
@@ -96,7 +137,8 @@ add_equation!(problem, "∂x(u) + ∂z(v) = 0")
 - Bifurcation analysis
 - Multiple steady states
 
-**Solution method**: Newton iteration or similar nonlinear solvers
+**Solution method**: per-Fourier-mode Newton iteration with a symbolic (Frechet)
+Jacobian.
 
 ---
 
@@ -110,19 +152,46 @@ EVP(fields::Vector{<:AbstractField}; eigenvalue::Symbol)
 ```
 
 **Arguments**:
-- `fields`: Vector of fields to solve for
-- `eigenvalue`: Symbol for eigenvalue (e.g., `:sigma`, `:lambda`, `:omega`)
+- `fields`: Vector of fields to solve for (plus the `tau` variables for BCs)
+- `eigenvalue`: Symbol naming the eigenvalue (declarative; e.g. `:σ`, `:λ`)
 
-**Examples**:
+**Eigenvalue convention**: the generalized problem is `L x = λ M x`, where the
+mass matrix `M` is assembled from the **time-derivative terms** `dt(·)`. The
+eigenvalue *replaces* the time derivative (`dt(u) → λ u`), so a normal-mode
+ansatz `u ~ e^{λ t}` is written by keeping the `dt(u)` term in the equation. Do
+**not** multiply the eigenvalue symbol into the equation (`σ*u = …` builds an
+empty `M` and returns no eigenvalues). Boundary conditions use the same tau
+method as the BVP (`tau` vars + `lift` + `add_bc!`).
+
+**Example** (1D diffusion eigenproblem `λu = Δu`, Dirichlet; eigenvalues are the
+Dirichlet-Laplacian values `λ_n = -(nπ/Lz)²`, verified to ~1e-13):
 
 ```julia
-# Rayleigh-Bénard stability
-problem = EVP([u, v, p, T], eigenvalue=:sigma)
-add_equation!(problem, "sigma*u = -u0*∂x(u) - v*∂x(u0) - ∂x(p) + Pr*Δ(u) + Pr*Ra*T")
-add_equation!(problem, "sigma*v = -u0*∂x(v) - v*∂z(u0) - ∂z(p) + Pr*Δ(v)")
-add_equation!(problem, "sigma*T = -u0*∂x(T) - v + Δ(T)")
-add_equation!(problem, "∂x(u) + ∂z(v) = 0")
+coords = CartesianCoordinates("z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+zb     = ChebyshevT(coords["z"]; size=32, bounds=(0.0, 1.0))
+dom    = Domain(dist, (zb,))
+
+u    = ScalarField(dom, "u")
+tau1 = ScalarField(dist, "tau1", (), Float64)
+tau2 = ScalarField(dist, "tau2", (), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = EVP([u, tau1, tau2]; eigenvalue=:σ)
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, "dt(u) - Δ(u) - l1 - l2 = 0")   # dt(u) → λu marks M
+add_bc!(problem, "u(z=0)   = 0")
+add_bc!(problem, "u(z=1.0) = 0")
+
+solver = EigenvalueSolver(problem; nev=5, which=:SM)   # 5 smallest-magnitude
+eigenvalues, eigenvectors = solve!(solver)
+# |eigenvalues| ≈ (nπ)² = 9.87, 39.48, 88.83, ...
 ```
+
+The solver solves `eigen(L, M)` per Fourier mode on the square tau matrices and
+filters spurious eigenvalues from the singular mass matrix (the BC/tau rows).
+`which` accepts `:LM` `:SM` `:LR` `:SR` `:LI` `:SI`, or pass `target=…` to order
+by proximity to a shift.
 
 **Use cases**:
 - Linear stability analysis

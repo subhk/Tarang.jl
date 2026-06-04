@@ -118,16 +118,22 @@ end
 - Poisson equation
 - Steady Stokes flow
 
-**Typical structure**:
+**Typical structure** (tau method: one `tau` variable per BC, lifted into the
+bulk equation and declared via `add_parameters!`; BCs use `add_bc!`):
 ```julia
-problem = LBVP(fields)
-add_equation!(problem, "lap(T) = f")
+# T plus one tau variable per boundary condition; lb2 = derivative_basis(zb, 2)
+problem = LBVP([T, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, "Δ(T) + l1 + l2 = f")
 add_bc!(problem, "T(z=0) = 0")
 add_bc!(problem, "T(z=1) = 1")
 
 solver = BoundaryValueSolver(problem)
 solve!(solver)
 ```
+
+The verified BVP path needs at least one separable (Fourier) direction; see the
+[Problems API](../api/problems.md) for a complete, runnable example.
 
 ### Eigenvalue Problems (EVP)
 
@@ -140,13 +146,21 @@ solve!(solver)
 
 **Typical structure**:
 ```julia
-problem = EVP(fields, eigenvalue=:sigma)
-add_equation!(problem, "sigma*u = -lap(u) + f")
+# tau variables + lift handle the bounded-direction BCs (tau method)
+problem = EVP([u, tau1, tau2], eigenvalue=:σ)
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+# The eigenvalue REPLACES the time derivative: keep dt(u) to build the mass matrix.
+# Do NOT write `σ*u = ...` — that builds an empty M and returns no eigenvalues.
+add_equation!(problem, "dt(u) - Δ(u) - l1 - l2 = 0")
 add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "u(z=1) = 0")
 
-solver = EigenvalueSolver(problem)
-eigenvalues = solve!(solver, nev=10)
+solver = EigenvalueSolver(problem; nev=5, which=:SM)
+eigenvalues, eigenvectors = solve!(solver)
 ```
+
+See the [Problems API](../api/problems.md) for the full eigenvalue convention
+(`L x = σ M x`, with `M` assembled from `dt(·)` terms).
 
 ## Choosing a Tutorial
 
