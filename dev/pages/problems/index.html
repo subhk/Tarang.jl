@@ -6,19 +6,62 @@ problem = IVP([u, v, p, T])
 
 # Add evolution equations (linear terms on LHS, nonlinear on RHS)
 add_equation!(problem, &quot;∂t(u) - nu*Δ(u) = -u*∂x(u)&quot;)
-add_equation!(problem, &quot;∂t(T) - kappa*Δ(T) = -u*∂x(T)&quot;)</code></pre><h3 id="LBVP-Linear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#LBVP-Linear-Boundary-Value-Problem">LBVP - Linear Boundary Value Problem</a><a id="LBVP-Linear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#LBVP-Linear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state linear PDEs.</p><pre><code class="language-julia hljs"># Create LBVP
-problem = LBVP([phi])
+add_equation!(problem, &quot;∂t(T) - kappa*Δ(T) = -u*∂x(T)&quot;)</code></pre><h3 id="LBVP-Linear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#LBVP-Linear-Boundary-Value-Problem">LBVP - Linear Boundary Value Problem</a><a id="LBVP-Linear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#LBVP-Linear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state linear PDEs. Boundary conditions in a bounded (Chebyshev/Jacobi) direction use the <strong>tau method</strong>: declare one <code>tau</code> variable per boundary condition, lift each into the bulk equation via <code>lift(tau, derivative_basis(basis, 2), -k)</code> (registered with <code>add_parameters!</code>), and declare the boundary conditions with <code>add_bc!</code> (not <code>add_equation!</code>).</p><pre><code class="language-julia hljs"># 2D Poisson  Δu = -2,  u = 0 on both z walls  (solution u = z(Lz - z))
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords[&quot;x&quot;]; size=4,  bounds=(0.0, 2π))   # periodic (separable)
+zb = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))  # bounded  (coupled)
+dom = Domain(dist, (xb, zb))
 
-# Add equations
-add_equation!(problem, &quot;Δ(phi) = rho&quot;)</code></pre><h3 id="NLBVP-Nonlinear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#NLBVP-Nonlinear-Boundary-Value-Problem">NLBVP - Nonlinear Boundary Value Problem</a><a id="NLBVP-Nonlinear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#NLBVP-Nonlinear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state nonlinear PDEs.</p><pre><code class="language-julia hljs"># Create NLBVP
-problem = NLBVP([u, p])
+u    = ScalarField(dom, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (xb,), Float64)           # one tau per BC
+tau2 = ScalarField(dist, &quot;tau2&quot;, (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
 
-# Add nonlinear equations
-add_equation!(problem, &quot;-nu*Δ(u) + ∂x(p) = -u*∂x(u)&quot;)</code></pre><h3 id="EVP-Eigenvalue-Problem"><a class="docs-heading-anchor" href="#EVP-Eigenvalue-Problem">EVP - Eigenvalue Problem</a><a id="EVP-Eigenvalue-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#EVP-Eigenvalue-Problem" title="Permalink"></a></h3><p>Linear stability and eigenvalue analysis.</p><pre><code class="language-julia hljs"># Create EVP with eigenvalue name
-evp = EVP([u_hat, p_hat]; eigenvalue=:sigma)
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)
+add_bc!(problem, &quot;u(z=0)   = 0&quot;)
+add_bc!(problem, &quot;u(z=1.0) = 0&quot;)
 
-# Add eigenvalue equations
-add_equation!(evp, &quot;sigma*u_hat = Δ(u_hat)&quot;)</code></pre><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="Equation-Syntax"><a class="docs-heading-anchor" href="#Equation-Syntax">Equation Syntax</a><a id="Equation-Syntax-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Syntax" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Format: &quot;LHS = RHS&quot; (linear terms on LHS, nonlinear on RHS)
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid</code></pre><div class="admonition is-info" id="1D-pure-Chebyshev-BVP-bda6f8ed565fb482"><header class="admonition-header">1D pure-Chebyshev BVP<a class="admonition-anchor" href="#1D-pure-Chebyshev-BVP-bda6f8ed565fb482" title="Permalink"></a></header><div class="admonition-body"><p>Verified BVPs include at least one separable (Fourier) direction. A pure single-axis Chebyshev BVP currently mis-scatters the solution; add a Fourier direction or use the EVP path for 1D spectra.</p></div></div><h3 id="NLBVP-Nonlinear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#NLBVP-Nonlinear-Boundary-Value-Problem">NLBVP - Nonlinear Boundary Value Problem</a><a id="NLBVP-Nonlinear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#NLBVP-Nonlinear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state nonlinear PDEs. Same tau-method boundary handling as the LBVP (tau variables + <code>lift</code> + <code>add_bc!</code>). Put the nonlinear terms on the right-hand side; the solver linearizes them with a symbolic Frechet derivative and runs a per-Fourier-mode Newton iteration.</p><pre><code class="language-julia hljs"># Manufactured nonlinearity  Δu = u² + g,  with g = -2 - u_exact²  so u_exact = z(Lz - z)
+# domain / fields / taus as in the LBVP example above (u, tau1, tau2, lb2)
+g = ScalarField(dom, &quot;g&quot;); ensure_layout!(g, :g)
+zg = create_meshgrid(dom; on_device=false)[&quot;z&quot;]
+get_grid_data(g) .= -2 .- (zg .* (1.0 .- zg)).^2
+
+problem = NLBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = u*u + g&quot;)   # nonlinearity on the RHS
+add_bc!(problem, &quot;u(z=0)   = 0&quot;)
+add_bc!(problem, &quot;u(z=1.0) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solver.tolerance = 1e-10
+ensure_layout!(u, :g); get_grid_data(u) .= 0.0       # initial guess
+solve!(solver)
+ensure_layout!(u, :g)</code></pre><h3 id="EVP-Eigenvalue-Problem"><a class="docs-heading-anchor" href="#EVP-Eigenvalue-Problem">EVP - Eigenvalue Problem</a><a id="EVP-Eigenvalue-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#EVP-Eigenvalue-Problem" title="Permalink"></a></h3><p>Linear stability and eigenvalue analysis. Tarang solves the generalized problem <code>L x = σ M x</code>, where the mass matrix <code>M</code> is assembled from the <strong>time-derivative terms</strong> <code>dt(·)</code>: the eigenvalue <em>replaces</em> the time derivative (<code>dt(u) → σ u</code>). Keep the <code>dt(u)</code> term in the equation — do <strong>not</strong> multiply the eigenvalue symbol into it (<code>σ*u = …</code> builds an empty <code>M</code> and returns no eigenvalues). Boundary conditions use the same tau method (<code>tau</code> vars + <code>lift</code> + <code>add_bc!</code>).</p><pre><code class="language-julia hljs"># 1D diffusion eigenproblem  σu = Δu, Dirichlet;  eigenvalues σ_n = -(nπ/Lz)²
+coords = CartesianCoordinates(&quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+zb     = ChebyshevT(coords[&quot;z&quot;]; size=32, bounds=(0.0, 1.0))
+dom    = Domain(dist, (zb,))
+
+u    = ScalarField(dom, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (), Float64)
+tau2 = ScalarField(dist, &quot;tau2&quot;, (), Float64)
+lb2  = derivative_basis(zb, 2)
+
+evp = EVP([u, tau1, tau2]; eigenvalue=:σ)
+add_parameters!(evp; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(evp, &quot;dt(u) - Δ(u) - l1 - l2 = 0&quot;)   # dt(u) → σu marks M
+add_bc!(evp, &quot;u(z=0)   = 0&quot;)
+add_bc!(evp, &quot;u(z=1.0) = 0&quot;)
+
+solver = EigenvalueSolver(evp; nev=5, which=:SM)   # 5 smallest-magnitude
+eigenvalues, eigenvectors = solve!(solver)
+# |eigenvalues| ≈ (nπ)² = 9.87, 39.48, 88.83, ...</code></pre><p><code>EigenvalueSolver</code> accepts only <code>nev</code>, <code>which</code> (∈ <code>:LM :SM :LR :SR :LI :SI</code>), <code>target</code>, and <code>matsolver</code>.</p><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="Equation-Syntax"><a class="docs-heading-anchor" href="#Equation-Syntax">Equation Syntax</a><a id="Equation-Syntax-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Syntax" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Format: &quot;LHS = RHS&quot; (linear terms on LHS, nonlinear on RHS)
 add_equation!(problem, &quot;∂t(u) - nu*Δ(u) = rhs_expression&quot;)
 
 # Multiple terms
@@ -90,7 +133,21 @@ add_equation!(problem, &quot;ux(z=1) = 0&quot;)
 add_equation!(problem, &quot;uz(z=0) = 0&quot;)
 add_equation!(problem, &quot;uz(z=1) = 0&quot;)
 add_equation!(problem, &quot;T(z=0) = 1&quot;)  # Hot bottom
-add_equation!(problem, &quot;T(z=1) = 0&quot;)  # Cold top</code></pre><h3 id="Poisson-Equation-(BVP)"><a class="docs-heading-anchor" href="#Poisson-Equation-(BVP)">Poisson Equation (BVP)</a><a id="Poisson-Equation-(BVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Poisson-Equation-(BVP)" title="Permalink"></a></h3><pre><code class="language-julia hljs">problem = LBVP([phi])
-add_equation!(problem, &quot;Δ(phi) = rho&quot;)
-add_equation!(problem, &quot;phi(z=0) = 0&quot;)
-add_equation!(problem, &quot;phi(z=1) = 0&quot;)</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems</li><li><a href="../../tutorials/boundary_conditions/">Boundary Conditions Tutorial</a>: Detailed BC guide</li><li><a href="../../api/problems/">API: Problems</a>: Complete reference</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators</a><a class="docs-footer-nextpage" href="../solvers/">Solvers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 4 June 2026 08:23">Thursday 4 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+add_equation!(problem, &quot;T(z=1) = 0&quot;)  # Cold top</code></pre><h3 id="Poisson-Equation-(BVP)"><a class="docs-heading-anchor" href="#Poisson-Equation-(BVP)">Poisson Equation (BVP)</a><a id="Poisson-Equation-(BVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Poisson-Equation-(BVP)" title="Permalink"></a></h3><p>A steady BVP needs the tau method, and verified domains include at least one separable (Fourier) direction — a pure 1D Chebyshev Poisson currently mis-scatters. Here is the 2D form (<code>Δu = -2</code>, <code>u = 0</code> on both <code>z</code> walls):</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords[&quot;x&quot;]; size=4,  bounds=(0.0, 2π))
+zb = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))
+dom = Domain(dist, (xb, zb))
+
+u    = ScalarField(dom, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (xb,), Float64)
+tau2 = ScalarField(dist, &quot;tau2&quot;, (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)
+add_bc!(problem, &quot;u(z=0)   = 0&quot;)
+add_bc!(problem, &quot;u(z=1.0) = 0&quot;)
+
+solver = BoundaryValueSolver(problem); solve!(solver); ensure_layout!(u, :g)</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems</li><li><a href="../../tutorials/boundary_conditions/">Boundary Conditions Tutorial</a>: Detailed BC guide</li><li><a href="../../api/problems/">API: Problems</a>: Complete reference</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators</a><a class="docs-footer-nextpage" href="../solvers/">Solvers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 4 June 2026 08:57">Thursday 4 June 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
