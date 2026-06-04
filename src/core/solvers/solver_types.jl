@@ -275,8 +275,12 @@ function _try_build_subproblems!(solver::InitialValueSolver)
         end
     end
 
-    # Only build for mixed Fourier + non-periodic (Chebyshev/Jacobi)
-    (fourier_basis === nothing || cheb_basis === nothing) && return
+    # Build whenever there is a coupled (Chebyshev/Jacobi) direction — its implicit
+    # operator is NOT diagonal, so it needs a per-mode tau subproblem. This covers
+    # both mixed Fourier+Chebyshev AND pure-Chebyshev (no Fourier) problems. A
+    # pure-Fourier problem (cheb_basis === nothing) has a diagonal per-mode implicit
+    # operator handled by a separate path, so it is intentionally skipped here.
+    cheb_basis === nothing && return
 
     # Set matrix coupling: Fourier dimensions are separable (each mode independent),
     # Chebyshev/Jacobi dimensions are coupled (modes interact via differentiation).

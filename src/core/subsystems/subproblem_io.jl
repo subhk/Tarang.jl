@@ -292,7 +292,16 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
         _assign_to_buffer!(dest, view(cd, 1:1))
         return offset + 1
     elseif ndims(cd) == 1
-        # 1D field (tau with Fourier basis): convert to local index
+        if any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
+            # Pure 1D coupled field (e.g. a single Chebyshev/Jacobi axis, no
+            # separable Fourier direction): there is no Fourier mode to select,
+            # so gather the ENTIRE coefficient spectrum for this subproblem.
+            n = length(cd)
+            dest = view(buffer, offset + 1:offset + n)
+            _assign_to_buffer!(dest, cd)
+            return offset + n
+        end
+        # 1D Fourier field (tau on a Fourier basis): select the single kx mode.
         kx_local = _global_to_local_kx(kx_global, field, sp)
         dest = view(buffer, offset + 1:offset + 1)
         if kx_local >= 1 && kx_local <= length(cd)
@@ -343,6 +352,13 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
         _assign_from_buffer!(view(cd, 1:1), view(data, offset + 1:offset + 1))
         return offset + 1
     elseif ndims(cd) == 1
+        if any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
+            # Pure 1D coupled field: write back the ENTIRE coefficient spectrum
+            # (mirror of the gather path above).
+            n = length(cd)
+            _assign_from_buffer!(view(cd, 1:n), view(data, offset + 1:offset + n))
+            return offset + n
+        end
         kx_local = _global_to_local_kx(kx_global, field, sp)
         if kx_local >= 1 && kx_local <= length(cd)
             _assign_from_buffer!(view(cd, kx_local:kx_local), view(data, offset + 1:offset + 1))

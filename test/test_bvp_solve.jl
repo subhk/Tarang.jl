@@ -129,4 +129,34 @@ end
             @test isapprox(gd[ix, :], expected; rtol=1e-7, atol=1e-9)
         end
     end
+
+    # 1D PURE-CHEBYSHEV BVP (no separable Fourier axis). Regression guard for the
+    # gather/scatter bug fixed 2026-06-04: `_gather_field_raw!`/`_scatter_field_raw!`
+    # used to treat ANY 1D coefficient array as a single-entry Fourier tau, so a
+    # pure-Chebyshev field (1D coeff vector of length Nz) had only its first
+    # coefficient gathered — the solve returned a constant. The fix gathers the
+    # full coupled spectrum when the 1D field's basis is non-Fourier.
+    @testset "1D pure-Chebyshev LBVP solves manufactured Poisson" begin
+        coords = CartesianCoordinates("z")
+        dist   = Distributor(coords; dtype=Float64, device=CPU())
+        zb = ChebyshevT(coords["z"]; size=bvp_Nz, bounds=(0.0, bvp_Lz))
+        dom = Domain(dist, (zb,))
+        u    = ScalarField(dom, "u")
+        tau1 = ScalarField(dist, "tau1", (), Float64)
+        tau2 = ScalarField(dist, "tau2", (), Float64)
+        lb2  = derivative_basis(zb, 2)
+        prob = Tarang.LBVP([u, tau1, tau2])
+        add_parameters!(prob; Lz=bvp_Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+        Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
+        Tarang.add_bc!(prob, "u(z=0) = 0")
+        Tarang.add_bc!(prob, "u(z=Lz) = 0")
+
+        solver = Tarang.BoundaryValueSolver(prob)
+        Tarang.solve!(solver)
+        ensure_layout!(u, :g)
+
+        zc = vec(Array(Tarang.local_grid(zb, dist, 1)))
+        g  = vec(Array(Tarang.get_grid_data(u)))
+        @test isapprox(g, bvp_u_exact.(zc); rtol=1e-8, atol=1e-9)
+    end
 end

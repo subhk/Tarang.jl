@@ -87,10 +87,9 @@ The solver builds **one square tau subproblem per separable Fourier mode** and
 determines `u`, `tau1`, and `tau2` **simultaneously** in a single linear solve.
 
 !!! note "1D pure-Chebyshev BVP"
-    The per-mode solve is verified for domains with at least one separable
-    (Fourier) direction. A pure single-axis Chebyshev BVP currently mis-scatters
-    the solution; add a (size-4 or larger) Fourier direction as above, or use the
-    EVP path for 1D spectra.
+    A pure single-axis Chebyshev BVP (no Fourier direction) works the same way —
+    drop the `x` axis and define the `tau` variables on `()`. The solver builds a
+    single coupled tau subproblem over the Chebyshev spectrum.
 
 ## The `lift` Operator
 

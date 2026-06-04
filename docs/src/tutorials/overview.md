@@ -132,8 +132,8 @@ solver = BoundaryValueSolver(problem)
 solve!(solver)
 ```
 
-The verified BVP path needs at least one separable (Fourier) direction; see the
-[Problems API](../api/problems.md) for a complete, runnable example.
+The BVP path supports both mixed Fourier+Chebyshev and pure single-axis Chebyshev
+domains; see the [Problems API](../api/problems.md) for a complete, runnable example.
 
 ### Eigenvalue Problems (EVP)
 

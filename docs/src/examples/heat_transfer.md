@@ -160,9 +160,9 @@ Tarang.ensure_layout!(T, :g)            # scatter writes coefficients; switch to
 ```
 
 !!! note "1D pure-Chebyshev BVP"
-    A steady BVP needs at least one separable (Fourier) direction. A pure
-    single-axis Chebyshev BVP currently mis-scatters the solution, so the example
-    above keeps a periodic `x` direction even though the profile is 1D in `z`.
+    The example keeps a periodic `x` direction, but a pure single-axis Chebyshev
+    BVP (no Fourier) also works — drop the `x` axis and put the `tau` variables on
+    `()`. The solver builds one coupled tau subproblem over the Chebyshev spectrum.
 
 ### Poisson Equation
 

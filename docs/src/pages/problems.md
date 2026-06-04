@@ -52,9 +52,9 @@ ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid
 ```
 
 !!! note "1D pure-Chebyshev BVP"
-    Verified BVPs include at least one separable (Fourier) direction. A pure
-    single-axis Chebyshev BVP currently mis-scatters the solution; add a Fourier
-    direction or use the EVP path for 1D spectra.
+    A pure single-axis Chebyshev BVP (no Fourier direction) works too: drop the
+    `x` axis and define the `tau` variables on `()`. The solver builds one coupled
+    tau subproblem over the Chebyshev spectrum.
 
 ### NLBVP - Nonlinear Boundary Value Problem
 
@@ -291,9 +291,9 @@ add_equation!(problem, "T(z=1) = 0")  # Cold top
 
 ### Poisson Equation (BVP)
 
-A steady BVP needs the tau method, and verified domains include at least one
-separable (Fourier) direction — a pure 1D Chebyshev Poisson currently
-mis-scatters. Here is the 2D form (`Δu = -2`, `u = 0` on both `z` walls):
+A steady BVP needs the tau method. The 2D form below (`Δu = -2`, `u = 0` on both
+`z` walls) is shown; a pure 1D Chebyshev Poisson works the same way — drop the `x`
+axis and put the `tau` variables on `()`.
 
 ```julia
 coords = CartesianCoordinates("x", "z")

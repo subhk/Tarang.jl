@@ -83,9 +83,10 @@ ensure_layout!(u, :g)   # solve! writes coefficients; switch to grid space to re
 ```
 
 !!! note "1D pure-Chebyshev BVP"
-    Verified-working steady BVPs include at least one separable (Fourier)
-    direction, as above. A pure single-axis Chebyshev BVP currently mis-scatters
-    the solution — keep a (size-4 or larger) Fourier axis in the domain.
+    The example above keeps a Fourier `x` axis, but a pure single-axis Chebyshev
+    BVP (no Fourier) also works — drop the `x` axis and define the `tau` variables
+    on `()`. The solver builds one coupled tau subproblem over the Chebyshev
+    spectrum.
 
 ## Dirichlet Boundary Conditions
 

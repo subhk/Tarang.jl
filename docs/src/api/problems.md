@@ -80,10 +80,9 @@ ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid
 ```
 
 !!! note "1D pure-Chebyshev BVP"
-    The per-mode solve is verified for domains with at least one separable
-    (Fourier) direction. A pure single-axis Chebyshev BVP currently mis-scatters
-    the solution; add a (size-1 or larger) Fourier direction, or use the EVP path
-    for 1D spectra.
+    A pure single-axis Chebyshev BVP (no Fourier direction) works too — just drop
+    the `x` axis and put the `tau` variables on `()`. The solver builds a single
+    coupled tau subproblem over the Chebyshev spectrum.
 
 **Use cases**:
 - Steady heat conduction
