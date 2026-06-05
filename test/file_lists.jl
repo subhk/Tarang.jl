@@ -91,6 +91,9 @@ const TEST_FILES = [
     "test_tools_parallel.jl",
     "test_random_arrays.jl",
     "test_matrices_builders.jl",
+    "test_component_buffers.jl",
+    "test_tensor_misc.jl",
+    "test_subproblem_ncc.jl",
     "test_pretty_printing.jl",
     "test_progress.jl",
     "test_convenience_api.jl",
@@ -113,6 +116,7 @@ const OPTIONAL_TEST_FILES = [
 const GPU_TEST_FILES = [
     "test_dct_reorder.jl",
     "test_optimized_dct.jl",
+    "test_gpu_transform_correctness.jl",
     "test_ilu0_preconditioner.jl",
 ]
 
