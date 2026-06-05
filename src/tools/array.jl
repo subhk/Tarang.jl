@@ -56,7 +56,7 @@ function axindex(ndim::Int, axis::Int, index)
     if axis < 1 || axis > ndim
         throw(ArgumentError("Axis $axis out of bounds for $ndim dimensions (must be 1 ≤ axis ≤ $ndim)"))
     end
-    indices = [Colon() for _ in 1:ndim]
+    indices = Any[Colon() for _ in 1:ndim]   # Any[] so the axis slot can hold an Int/range
     indices[axis] = index
     return tuple(indices...)
 end
@@ -79,7 +79,7 @@ function axslice(ndim::Int, axis::Int, slice_range)
     if axis < 1 || axis > ndim
         throw(ArgumentError("Axis $axis out of bounds for $ndim dimensions (must be 1 ≤ axis ≤ $ndim)"))
     end
-    indices = [Colon() for _ in 1:ndim]
+    indices = Any[Colon() for _ in 1:ndim]   # Any[] so the axis slot can hold an Int/range
     indices[axis] = slice_range
     return tuple(indices...)
 end

@@ -258,8 +258,11 @@ end
 function Base.getindex(ia::IndexArray, key...)
     selections = key === () ? () : key
     if length(selections) < length(ia.shape)
-        selections = Tuple(vcat(collect(selections),
-                                ntuple(_ -> Colon(), length(ia.shape) - length(selections))))
+        # Pad missing trailing dims with Colon(). Use `fill(...)` (a Vector) not
+        # `ntuple(...)` (a Tuple) so vcat spreads the colons instead of nesting
+        # the whole tuple as one element.
+        selections = Tuple(vcat(collect(Any, selections),
+                                fill(Colon(), length(ia.shape) - length(selections))))
     elseif length(selections) > length(ia.shape)
         throw(ArgumentError("Too many indices for IndexArray"))
     end
