@@ -40,6 +40,7 @@ const TEST_FILES = [
     "test_pencil_matrices.jl",
     "test_transforms.jl",
     "test_jacobi_transforms.jl",
+    "test_fft_dct.jl",
     "test_fftw_threads.jl",
     "test_solvers.jl",
     "test_bvp_solve.jl",

@@ -26,6 +26,7 @@ include("transforms/transform_planning.jl")
 include("transforms/transform_gpu.jl")
 include("transforms/transform_fourier.jl")
 include("transforms/transform_chebyshev.jl")
+include("transforms/transform_fft_dct.jl")
 include("transforms/transform_legendre.jl")
 include("transforms/transform_transposable.jl")
 

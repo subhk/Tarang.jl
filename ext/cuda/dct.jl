@@ -1012,23 +1012,13 @@ end
 
 Execute forward DCT along a specific dimension of a multi-dimensional array.
 """
-function gpu_dct_dim!(output::CuArray{T, 2}, input::CuArray{T, 2},
-                      plan::GPUDCTPlanDim, ::Val{:forward}) where T
-    nx, ny = size(input)
-    arch = Tarang.architecture(input)
-    pi_val = T(π)
-
-    if plan.transform_dim == 1
-        # DCT along rows (dimension 1)
-        launch!(arch, dct_forward_2d_dim1_kernel!, output, input, plan.twiddle_forward,
-                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny;
-                ndrange=ny)
-    else
-        # DCT along columns (dimension 2)
-        launch!(arch, dct_forward_2d_dim2_kernel!, output, input, plan.twiddle_forward,
-                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny;
-                ndrange=nx)
-    end
+# O(N log N) FFT-based multi-dim DCT (replaces the former O(N²) cos-sum kernels).
+# Delegates to the device-agnostic `fft_dct_*_dim` in src/core/transforms (validated
+# on CPU in test_fft_dct.jl; runs on GPU via CUFFT). Handles 2D and 3D. Real input
+# only — complex fields are split into real/imag parts upstream in transforms.jl.
+function gpu_dct_dim!(output::CuArray{T}, input::CuArray{T},
+                      plan::GPUDCTPlanDim, ::Val{:forward}) where {T<:Real}
+    output .= Tarang.fft_dct_forward_dim(input, plan.transform_dim)
     return output
 end
 
@@ -1037,21 +1027,9 @@ end
 
 Execute backward DCT along a specific dimension of a multi-dimensional array.
 """
-function gpu_dct_dim!(output::CuArray{T, 2}, input::CuArray{T, 2},
-                      plan::GPUDCTPlanDim, ::Val{:backward}) where T
-    nx, ny = size(input)
-    arch = Tarang.architecture(input)
-    pi_val = T(π)
-
-    if plan.transform_dim == 1
-        launch!(arch, dct_backward_2d_dim1_kernel!, output, input, plan.twiddle_backward,
-                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny;
-                ndrange=ny)
-    else
-        launch!(arch, dct_backward_2d_dim2_kernel!, output, input, plan.twiddle_backward,
-                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny;
-                ndrange=nx)
-    end
+function gpu_dct_dim!(output::CuArray{T}, input::CuArray{T},
+                      plan::GPUDCTPlanDim, ::Val{:backward}) where {T<:Real}
+    output .= Tarang.fft_dct_backward_dim(input, plan.transform_dim)
     return output
 end
 
@@ -1210,68 +1188,10 @@ See `dct_backward_2d_dim2_kernel!` for scaling convention explanation.
     end
 end
 
-"""
-    gpu_dct_dim!(output::CuArray{T,3}, input::CuArray{T,3}, plan::GPUDCTPlanDim, ::Val{:forward})
-
-Execute forward DCT along a specific dimension of a 3D array.
-"""
-function gpu_dct_dim!(output::CuArray{T, 3}, input::CuArray{T, 3},
-                      plan::GPUDCTPlanDim, ::Val{:forward}) where T
-    nx, ny, nz = size(input)
-    arch = Tarang.architecture(input)
-    pi_val = T(π)
-
-    if plan.transform_dim == 1
-        # DCT along dimension 1: each thread handles one (j,k) fiber
-        ndrange = ny * nz
-        launch!(arch, dct_forward_3d_dim1_kernel!, output, input,
-                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny, nz;
-                ndrange=ndrange)
-    elseif plan.transform_dim == 2
-        # DCT along dimension 2: each thread handles one (i,k) fiber
-        ndrange = nx * nz
-        launch!(arch, dct_forward_3d_dim2_kernel!, output, input,
-                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny, nz;
-                ndrange=ndrange)
-    else
-        # DCT along dimension 3: each thread handles one (i,j) fiber
-        ndrange = nx * ny
-        launch!(arch, dct_forward_3d_dim3_kernel!, output, input,
-                plan.forward_scale_zero, plan.forward_scale_pos, pi_val, nx, ny, nz;
-                ndrange=ndrange)
-    end
-    return output
-end
-
-"""
-    gpu_dct_dim!(output::CuArray{T,3}, input::CuArray{T,3}, plan::GPUDCTPlanDim, ::Val{:backward})
-
-Execute backward DCT along a specific dimension of a 3D array.
-"""
-function gpu_dct_dim!(output::CuArray{T, 3}, input::CuArray{T, 3},
-                      plan::GPUDCTPlanDim, ::Val{:backward}) where T
-    nx, ny, nz = size(input)
-    arch = Tarang.architecture(input)
-    pi_val = T(π)
-
-    if plan.transform_dim == 1
-        ndrange = ny * nz
-        launch!(arch, dct_backward_3d_dim1_kernel!, output, input,
-                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny, nz;
-                ndrange=ndrange)
-    elseif plan.transform_dim == 2
-        ndrange = nx * nz
-        launch!(arch, dct_backward_3d_dim2_kernel!, output, input,
-                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny, nz;
-                ndrange=ndrange)
-    else
-        ndrange = nx * ny
-        launch!(arch, dct_backward_3d_dim3_kernel!, output, input,
-                plan.backward_scale_zero, plan.backward_scale_pos, pi_val, nx, ny, nz;
-                ndrange=ndrange)
-    end
-    return output
-end
+# (3D `gpu_dct_dim!` is now handled by the generic `CuArray{T}` methods above,
+#  which call the O(N log N) FFT-based `fft_dct_*_dim` for any dimensionality.
+#  The former O(N²) cos-sum kernels `dct_{forward,backward}_{2d,3d}_dim*_kernel!`
+#  are superseded — left in place pending GPU validation, then removable.)
 
 # ── Cached DCT plan getters ─────────────────────────────────────────────────
 # CUFFT-backed DCT plans are expensive to build (CUFFT planning + work-buffer
