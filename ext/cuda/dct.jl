@@ -1204,9 +1204,17 @@ const GPU_DCT_PLAN_CACHE = Dict{Tuple, GPUDCTPlan}()
 const GPU_DCT_DIM_PLAN_CACHE = Dict{Tuple, GPUDCTPlanDim}()
 const _GPU_DCT_PLAN_CACHE_LOCK = ReentrantLock()
 
+# Key caches by the device the plan is actually built for. When `arch.device` is
+# a concrete `CuDevice` use it directly (direct multi-GPU calls may target a
+# device other than the current one); otherwise fall back to the current device.
+# Mirrors `get_gpu_fft_plan`'s `GPU{CuDevice}` vs generic `GPU` split so the DCT
+# and FFT caches agree on device identity.
+_dct_cache_device_id(arch::GPU{CuDevice}) = CUDA.deviceid(arch.device)
+_dct_cache_device_id(arch::GPU) = _current_device_id()
+
 """Get or create a cached 1D GPU DCT plan (thread-safe)."""
 function get_gpu_dct_plan(arch::GPU, n::Int, T::Type, axis::Int)
-    key = (_current_device_id(), n, T, axis)
+    key = (_dct_cache_device_id(arch), n, T, axis)
     lock(_GPU_DCT_PLAN_CACHE_LOCK) do
         get!(() -> plan_gpu_dct(arch, n, T, axis), GPU_DCT_PLAN_CACHE, key)
     end
@@ -1214,7 +1222,7 @@ end
 
 """Get or create a cached per-dimension GPU DCT plan (thread-safe)."""
 function get_gpu_dct_dim_plan(arch::GPU, full_size::Tuple, T::Type, dim::Int)
-    key = (_current_device_id(), full_size, T, dim)
+    key = (_dct_cache_device_id(arch), full_size, T, dim)
     lock(_GPU_DCT_PLAN_CACHE_LOCK) do
         get!(() -> plan_gpu_dct_dim(arch, full_size, T, dim), GPU_DCT_DIM_PLAN_CACHE, key)
     end
@@ -1242,7 +1250,7 @@ const _GPU_DCT_SCRATCH_CACHE = Dict{Tuple, Any}()
 
 """Get `count` cached, reusable `(shape, T)` GPU scratch buffers (thread-safe)."""
 function get_gpu_dct_scratch(arch::GPU, shape::NTuple{N,Int}, ::Type{T}, count::Int) where {N,T}
-    key = (_current_device_id(), shape, T, count)
+    key = (_dct_cache_device_id(arch), shape, T, count)
     buffers = lock(_GPU_DCT_PLAN_CACHE_LOCK) do
         get!(() -> CuArray{T,N}[CUDA.zeros(T, shape...) for _ in 1:count],
              _GPU_DCT_SCRATCH_CACHE, key)

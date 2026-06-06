@@ -925,6 +925,35 @@ function compute_transpose_counts!(buffer::NCCLTransposeBuffer, direction::Symbo
             buffer.send_counts[i] = chunk_x * local_shape[2] * local_shape[3]
             buffer.recv_counts[i] = pencil.x_pencil_shape[1] * chunk_y * pencil.x_pencil_shape[3]
         end
+    elseif direction == :y_to_z
+        # Y->Z, the reverse of Z->Y: distribute Z, gather Y. The transpose is an
+        # Alltoallv, so for the same rank pair send^{Y->Z}[i] == recv^{Z->Y}[i] and
+        # recv^{Y->Z}[i] == send^{Z->Y}[i] — i.e. swap the Z->Y send/recv counts.
+        Ny = pencil.global_shape[2]
+        Nz = pencil.global_shape[3]
+        local_shape = pencil.z_pencil_shape
+
+        for i in 1:comm_size
+            chunk_y = div(Ny, comm_size) + ((i-1) < mod(Ny, comm_size) ? 1 : 0)
+            chunk_z = div(Nz, comm_size) + ((i-1) < mod(Nz, comm_size) ? 1 : 0)
+            buffer.send_counts[i] = local_shape[1] * local_shape[2] * chunk_z
+            buffer.recv_counts[i] = local_shape[1] * chunk_y * local_shape[3]
+        end
+    elseif direction == :x_to_y
+        # X->Y, the reverse of Y->X: distribute Y, gather X. Swap the Y->X
+        # send/recv counts by the same transpose-symmetry identity.
+        Nx = pencil.global_shape[1]
+        Ny = pencil.global_shape[2]
+
+        for i in 1:comm_size
+            chunk_x = div(Nx, comm_size) + ((i-1) < mod(Nx, comm_size) ? 1 : 0)
+            chunk_y = div(Ny, comm_size) + ((i-1) < mod(Ny, comm_size) ? 1 : 0)
+            buffer.send_counts[i] = pencil.x_pencil_shape[1] * chunk_y * pencil.x_pencil_shape[3]
+            buffer.recv_counts[i] = chunk_x * pencil.y_pencil_shape[2] * pencil.y_pencil_shape[3]
+        end
+    else
+        error("compute_transpose_counts!: unsupported direction $direction " *
+              "(expected :z_to_y, :y_to_z, :y_to_x, or :x_to_y)")
     end
 
     # Compute displacements
