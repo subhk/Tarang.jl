@@ -109,6 +109,10 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
                                 @warn "RHS expression for state field $state_idx evaluated to $(typeof(rhs_field))"
                             end
                         catch e
+                            # An unrecognized RHS expression (typo / unknown operator)
+                            # is a user error, not a transient failure — propagate it
+                            # rather than silently leaving a zero RHS for this field.
+                            e isa UnrecognizedRHSExpression && rethrow()
                             bt = catch_backtrace()
                             @warn "Failed to evaluate RHS expression for state field $state_idx: $e" backtrace=sprint(showerror, e, bt)
                         end

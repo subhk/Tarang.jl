@@ -137,6 +137,27 @@ function _binary_template(left, right, template::Union{Nothing, ScalarField})
 end
 
 """
+    UnrecognizedRHSExpression(expr::String)
+
+Thrown when an equation RHS contains an `UnknownOperator` that survived to
+evaluation — an unregistered operator, unknown function, or undeclared variable
+(commonly a typo such as `dx` instead of `∂x`). Distinct from generic errors so
+the RHS-evaluation try/catch can propagate it instead of silently dropping the
+term.
+"""
+struct UnrecognizedRHSExpression <: Exception
+    expr::String
+end
+
+function Base.showerror(io::IO, e::UnrecognizedRHSExpression)
+    print(io,
+        "UnrecognizedRHSExpression: `", e.expr, "` in an equation RHS is not a ",
+        "registered operator, known function, or declared variable — check for a ",
+        "typo (for example `dx` instead of `∂x`) or an unsupported operator. ",
+        "Aborting rather than silently dropping the term.")
+end
+
+"""
     Evaluate a parsed solver expression with current field values.
     Returns a field (preferred) or a numeric scalar for constant expressions.
     """
@@ -176,11 +197,9 @@ function evaluate_solver_expression(expr, variables; layout::Symbol=:g, template
         # coordinate/time placeholders were already substituted at matrix-build.
         # Silently returning zero here would drop the term and change the equation
         # (e.g. a typo `dx(u)` instead of `∂x(u)`), so abort with a clear message.
-        throw(ArgumentError(
-            "Unrecognized expression in equation RHS: `$(expr.expression)`. " *
-            "It is not a registered operator, known function, or declared variable — " *
-            "check for a typo (for example `dx` instead of `∂x`) or an unsupported operator. " *
-            "Aborting rather than silently dropping the term."))
+        # A dedicated exception type lets the RHS-evaluation try/catch rethrow this
+        # (genuine user error) while still tolerating transient per-field errors.
+        throw(UnrecognizedRHSExpression(string(expr.expression)))
     elseif expr isa AddOperator
         left = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
         right = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)

@@ -63,6 +63,28 @@ struct LazyScale{T<:LazyFuture} <: LazyFuture
     coeff::Float64
 end
 
+"""Pointwise field/field division (grid space, undealiased) — mirrors
+`divide_operands(::ScalarField, ::ScalarField)`. Field/scalar division is folded
+into `LazyScale` at translation time."""
+struct LazyDiv{L<:LazyFuture, R<:LazyFuture} <: LazyFuture
+    left::L
+    right::R
+end
+
+"""Pointwise field power with a constant real exponent (grid space, undealiased)
+— mirrors `power_operands(::ScalarField, ::Real)`."""
+struct LazyPow{T<:LazyFuture} <: LazyFuture
+    operand::T
+    exponent::Float64
+end
+
+"""Pointwise unary grid function (sin, exp, tanh, …) — mirrors
+`UnaryGridFunction`. `func` is applied elementwise on grid data."""
+struct LazyUnaryFunc{T<:LazyFuture, F} <: LazyFuture
+    operand::T
+    func::F
+end
+
 # ── Differentiation ──────────────────────────────────────────────────────────
 
 struct LazyDiff{T<:LazyFuture} <: LazyFuture
@@ -188,6 +210,25 @@ function translate_to_lazy(expr, state; target=nothing)
         end
         return LazyMul(l, r)
     end
+    if isa(expr, DivideOperator)
+        l = translate_to_lazy(expr.left, state; target=target)
+        r = translate_to_lazy(expr.right, state; target=target)
+        (l === nothing || r === nothing) && return nothing
+        if isa(r, LazyConst)
+            # field / constant → scale by reciprocal (mirrors divide_operands(::ScalarField, ::Number)).
+            r.value == 0.0 && return nothing
+            return LazyScale(l, 1.0 / r.value)
+        end
+        return LazyDiv(l, r)
+    end
+    if isa(expr, PowerOperator)
+        # Only a constant real exponent is supported (mirrors power_operands(::ScalarField, ::Real)).
+        r = translate_to_lazy(expr.right, state; target=target)
+        (r === nothing || !isa(r, LazyConst)) && return nothing
+        l = translate_to_lazy(expr.left, state; target=target)
+        l === nothing && return nothing
+        return LazyPow(l, r.value)
+    end
 
     # Unary ops
     if isa(expr, NegateOperator)
@@ -210,6 +251,13 @@ function translate_to_lazy(expr, state; target=nothing)
         op === nothing && return nothing
         axis = target !== nothing ? _resolve_diff_axis(expr.coord, target.bases) : 0
         return LazyDiff(op, expr.coord, expr.order, axis)
+    end
+
+    # Pointwise unary grid function (sin, exp, tanh, …)
+    if isa(expr, UnaryGridFunction)
+        op = translate_to_lazy(expr.operand, state; target=target)
+        op === nothing && return nothing
+        return LazyUnaryFunc(op, expr.func)
     end
 
     # Future hierarchy
@@ -460,6 +508,46 @@ function evaluate_lazy!(out::ScalarField, expr::LazyDiff, state, ws::LazyWorkspa
     # Evaluate operand into out, then apply differentiation in-place
     evaluate_lazy!(out, expr.operand, state, ws)
     _apply_lazy_diff!(out, expr.coord, expr.order, expr.axis)
+    return out
+end
+
+# Pointwise field/field division in grid space (undealiased), mirroring
+# `divide_operands(::ScalarField, ::ScalarField)`.
+@inline function evaluate_lazy!(out::ScalarField, expr::LazyDiv, state, ws::LazyWorkspace)
+    _with_scratch_scope(ws) do
+        a = _borrow_scratch!(ws)
+        b = _borrow_scratch!(ws)
+        evaluate_lazy!(a, expr.left, state, ws)
+        evaluate_lazy!(b, expr.right, state, ws)
+        _fused_binary!(out, a, b, /)
+    end
+    return out
+end
+
+# Pointwise field power with constant exponent, mirroring
+# `power_operands(::ScalarField, ::Real)` (grid space, undealiased).
+@inline function evaluate_lazy!(out::ScalarField, expr::LazyPow, state, ws::LazyWorkspace)
+    evaluate_lazy!(out, expr.operand, state, ws)
+    ensure_layout!(out, :g)
+    out_data = get_local_data(get_grid_data(out))
+    p = expr.exponent
+    if out_data !== nothing
+        @. out_data = out_data ^ p
+    end
+    out.current_layout = :g
+    return out
+end
+
+# Pointwise unary grid function (sin/exp/…), mirroring `UnaryGridFunction`.
+@inline function evaluate_lazy!(out::ScalarField, expr::LazyUnaryFunc, state, ws::LazyWorkspace)
+    evaluate_lazy!(out, expr.operand, state, ws)
+    ensure_layout!(out, :g)
+    out_data = get_local_data(get_grid_data(out))
+    f = expr.func
+    if out_data !== nothing
+        @. out_data = f(out_data)
+    end
+    out.current_layout = :g
     return out
 end
 
