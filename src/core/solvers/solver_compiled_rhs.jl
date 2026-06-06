@@ -171,8 +171,16 @@ function evaluate_solver_expression(expr, variables; layout::Symbol=:g, template
         copyto!(target, expr.value)
         return result
     elseif expr isa UnknownOperator
-        @debug "Unknown operator expression: $(expr.expression)"
-        return template === nothing ? 0 : create_zero_field(template)
+        # A surviving UnknownOperator at RHS-evaluation time is unresolved: it is
+        # not a registered operator, known function, or declared variable, and
+        # coordinate/time placeholders were already substituted at matrix-build.
+        # Silently returning zero here would drop the term and change the equation
+        # (e.g. a typo `dx(u)` instead of `∂x(u)`), so abort with a clear message.
+        throw(ArgumentError(
+            "Unrecognized expression in equation RHS: `$(expr.expression)`. " *
+            "It is not a registered operator, known function, or declared variable — " *
+            "check for a typo (for example `dx` instead of `∂x`) or an unsupported operator. " *
+            "Aborting rather than silently dropping the term."))
     elseif expr isa AddOperator
         left = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
         right = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)

@@ -189,9 +189,13 @@ function _pad_spectral!(padded::AbstractArray{Complex{T}}, spec_data::AbstractAr
 
     if ndim == 1
         r = _freq_ranges(original_shape[1], padded_shape[1], 1 in fourier_dims)
-        padded[r[2]] .= spec_data[r[1]]
+        # @views: the RHS range slice is a view, not a materialized copy. Without
+        # it `spec_data[r[1]]` allocates a fresh Vector every call — the dominant
+        # per-step allocation for 1D nonlinear products (the 2D/3D paths below
+        # already use views).
+        @views padded[r[2]] .= spec_data[r[1]]
         if length(r[3]) > 0
-            padded[r[4]] .= spec_data[r[3]]
+            @views padded[r[4]] .= spec_data[r[3]]
         end
     elseif ndim == 2
         _pad_spectral_sliced_2d!(padded, spec_data, original_shape, padded_shape, fourier_dims)
@@ -248,9 +252,10 @@ function _truncate_spectral!(result::AbstractArray{Complex{T}}, padded_spec::Abs
 
     if ndim == 1
         r = _freq_ranges(original_shape[1], padded_shape[1], 1 in fourier_dims)
-        result[r[1]] .= padded_spec[r[2]]
+        # @views: avoid materializing the RHS range slice (see `_pad_spectral!`).
+        @views result[r[1]] .= padded_spec[r[2]]
         if length(r[3]) > 0
-            result[r[3]] .= padded_spec[r[4]]
+            @views result[r[3]] .= padded_spec[r[4]]
         end
     elseif ndim == 2
         r1 = _freq_ranges(original_shape[1], padded_shape[1], 1 in fourier_dims)
