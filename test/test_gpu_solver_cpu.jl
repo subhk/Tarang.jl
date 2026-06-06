@@ -103,6 +103,65 @@ using SparseArrays
         @test isapprox(x, x_exact; atol=1e-8)
     end
 
+    @testset "GMRES restart loop exhausts maxiter (maxiter < restart)" begin
+        # Mirrors the restart-cycle loop in gpu_matsolvers.jl `solve`. Regression
+        # guard for the bug where `for outer in 1:div(maxiter, restart)` ran zero
+        # cycles when maxiter < restart, returning the zero initial guess. The
+        # while/min(restart, remaining) form must keep iterating and take a final
+        # truncated cycle when maxiter is not a multiple of restart.
+        function gmres_cpu(A, b; tol=1e-10, maxiter=1000, restart=30)
+            n = length(b)
+            x = zeros(eltype(b), n)
+            total_iters = 0
+            while total_iters < maxiter
+                mj = min(restart, maxiter - total_iters)
+                r = b - A * x
+                beta = norm(r)
+                beta < tol && return x
+                V = [r / beta]
+                H = zeros(eltype(b), mj + 1, mj)
+                last_j = mj
+                for j in 1:mj
+                    w = A * V[j]
+                    for i in 1:j
+                        H[i, j] = dot(V[i], w)
+                        w = w - H[i, j] * V[i]
+                    end
+                    H[j + 1, j] = norm(w)
+                    if abs(H[j + 1, j]) < 1e-14
+                        last_j = j
+                        break
+                    end
+                    push!(V, w / H[j + 1, j])
+                end
+                H_sub = H[1:last_j + 1, 1:last_j]
+                e1 = zeros(eltype(b), last_j + 1)
+                e1[1] = beta
+                y = H_sub \ e1
+                for i in 1:last_j
+                    x .+= y[i] .* V[i]
+                end
+                total_iters += mj
+            end
+            return x
+        end
+
+        A = [4.0 1.0 0.0;
+             1.0 3.0 1.0;
+             0.0 1.0 2.0]
+        b = [1.0, 2.0, 3.0]
+        x_exact = A \ b
+
+        # maxiter < restart: old div(20,30)==0 returned zeros; must now converge.
+        x = gmres_cpu(A, b; maxiter=20, restart=30, tol=1e-12)
+        @test !iszero(x)
+        @test isapprox(x, x_exact; atol=1e-8)
+
+        # maxiter not a multiple of restart: final truncated cycle still solves.
+        x2 = gmres_cpu(A, b; maxiter=50, restart=30, tol=1e-12)
+        @test isapprox(x2, x_exact; atol=1e-8)
+    end
+
     # ========================================================================
     # CG core algorithm on CPU
     # ========================================================================

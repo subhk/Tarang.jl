@@ -845,8 +845,14 @@ function MatSolvers.solve(s::CuIterativeGMRES{T}, rhs::AbstractVector) where T
     m = s.restart
     x = _gpu_zeros(T, n)
 
-    # Outer iteration (restarts)
-    for outer in 1:div(s.maxiter, m)
+    # Outer iteration (restart cycles). Run until maxiter is exhausted, taking a
+    # final truncated cycle when maxiter is not a multiple of restart — otherwise
+    # maxiter < restart (div == 0) would return the zero guess without iterating.
+    total_iters = 0
+    while total_iters < s.maxiter
+        # Cycle length: full restart, or fewer on the final truncated cycle.
+        mj = min(m, s.maxiter - total_iters)
+
         # r = b - A*x
         r = b - s.A_csr * x
 
@@ -857,15 +863,16 @@ function MatSolvers.solve(s::CuIterativeGMRES{T}, rhs::AbstractVector) where T
 
         beta = norm(r)
         if beta < s.tol
-            @debug "GMRES converged in $(outer * m) iterations"
+            @debug "GMRES converged in $total_iters iterations"
             return x
         end
 
         # Arnoldi process
         V = [r / beta]  # Krylov basis vectors
-        H = zeros(T, m + 1, m)  # Hessenberg matrix — CPU to avoid scalar indexing in Arnoldi
+        H = zeros(T, mj + 1, mj)  # Hessenberg matrix — CPU to avoid scalar indexing in Arnoldi
 
-        for j in 1:m
+        last_j = mj  # tracks the actual subspace dimension on early breakdown
+        for j in 1:mj
             # w = A * v_j
             w = s.A_csr * V[j]
 
@@ -882,25 +889,29 @@ function MatSolvers.solve(s::CuIterativeGMRES{T}, rhs::AbstractVector) where T
             H[j + 1, j] = norm(w)
 
             if abs(H[j + 1, j]) < 1e-14
+                last_j = j  # happy breakdown: subspace is invariant at dim j
                 break
             end
 
             push!(V, w / H[j + 1, j])
         end
 
-        # Solve least squares: min ||H*y - beta*e1|| (build on CPU to avoid scalar indexing)
-        e1_cpu = zeros(T, m + 1)
+        # Solve least squares: min ||H*y - beta*e1|| over the subspace actually
+        # built. On breakdown the unfilled columns of H are zero (rank-deficient),
+        # so truncate to the (last_j+1) x last_j block — mirrors the CPU proxy.
+        H_sub = H[1:last_j + 1, 1:last_j]
+        e1_cpu = zeros(T, last_j + 1)
         e1_cpu[1] = beta
 
-        # Use QR factorization (small system, already on CPU)
-        H_cpu = H  # Already on CPU
-        y_cpu = H_cpu \ e1_cpu
-        y_vals = y_cpu[1:length(V)-1]
+        # QR factorization (small system, already on CPU)
+        y_cpu = H_sub \ e1_cpu
 
         # Update solution: x = x + V * y (use CPU y values to avoid GPU scalar indexing)
-        for i in 1:length(y_vals)
-            _gpu_axpy!(y_vals[i], V[i], x)
+        for i in 1:last_j
+            _gpu_axpy!(y_cpu[i], V[i], x)
         end
+
+        total_iters += mj
     end
 
     @warn "GMRES did not converge in $(s.maxiter) iterations"
