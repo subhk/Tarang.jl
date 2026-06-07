@@ -1,0 +1,392 @@
+/* Tarang.jl Custom Documentation Styles */
+
+/* ===== Color Palette ===== */
+:root {
+    --primary-color: #2563eb;
+    --primary-dark: #1d4ed8;
+    --secondary-color: #7c3aed;
+    --accent-color: #06b6d4;
+    --success-color: #10b981;
+    --warning-color: #f59e0b;
+    --danger-color: #ef4444;
+    --bg-light: #f8fafc;
+    --bg-code: #1e293b;
+    --text-dark: #1e293b;
+    --text-muted: #64748b;
+    --border-color: #e2e8f0;
+    --gradient-start: #2563eb;
+    --gradient-end: #7c3aed;
+}
+
+/* ===== Hero Section Styling ===== */
+.hero-banner {
+    background: linear-gradient(135deg, var(--gradient-start) 0%, var(--gradient-end) 100%);
+    color: white;
+    padding: 2rem;
+    border-radius: 12px;
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+.hero-banner h1 {
+    font-size: 2.5rem;
+    margin-bottom: 0.5rem;
+}
+
+.hero-banner p {
+    font-size: 1.2rem;
+    opacity: 0.9;
+}
+
+/* ===== Feature Cards ===== */
+.feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 1.5rem;
+    margin: 2rem 0;
+}
+
+.feature-card {
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1.5rem;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.feature-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.1);
+}
+
+.feature-card h3 {
+    color: var(--primary-color);
+    margin-top: 0;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.feature-card .icon {
+    font-size: 1.5rem;
+}
+
+/* ===== Code Blocks ===== */
+pre {
+    border-radius: 8px !important;
+    border: 1px solid var(--border-color) !important;
+}
+
+code {
+    font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace !important;
+    font-size: 0.9em !important;
+}
+
+/* Inline code */
+p code, li code, td code {
+    background: #f1f5f9 !important;
+    padding: 0.15rem 0.4rem !important;
+    border-radius: 4px !important;
+    color: var(--primary-dark) !important;
+    font-size: 0.85em !important;
+}
+
+/* ===== Tables ===== */
+table {
+    width: 100%;
+    border-collapse: separate;
+    border-spacing: 0;
+    border-radius: 8px;
+    overflow: hidden;
+    margin: 1.5rem 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+thead {
+    background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+    color: white;
+}
+
+thead th {
+    padding: 1rem;
+    text-align: left;
+    font-weight: 600;
+    border: none !important;
+}
+
+tbody tr {
+    transition: background-color 0.2s;
+}
+
+tbody tr:nth-child(even) {
+    background: var(--bg-light);
+}
+
+tbody tr:hover {
+    background: #e0e7ff;
+}
+
+tbody td {
+    padding: 0.875rem 1rem;
+    border: none !important;
+    border-bottom: 1px solid var(--border-color) !important;
+}
+
+/* ===== Admonitions ===== */
+.admonition {
+    border-radius: 8px !important;
+    border-left: 4px solid !important;
+    margin: 1.5rem 0 !important;
+    padding: 1rem 1.25rem !important;
+}
+
+.admonition.note {
+    background: #eff6ff !important;
+    border-color: var(--primary-color) !important;
+}
+
+.admonition.tip {
+    background: #ecfdf5 !important;
+    border-color: var(--success-color) !important;
+}
+
+.admonition.warning {
+    background: #fffbeb !important;
+    border-color: var(--warning-color) !important;
+}
+
+.admonition.danger {
+    background: #fef2f2 !important;
+    border-color: var(--danger-color) !important;
+}
+
+.admonition.info {
+    background: #f0f9ff !important;
+    border-color: var(--accent-color) !important;
+}
+
+.admonition-title {
+    font-weight: 700 !important;
+    margin-bottom: 0.5rem !important;
+}
+
+/* ===== Badges ===== */
+.badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.badge-cpu {
+    background: #dbeafe;
+    color: #1e40af;
+}
+
+.badge-gpu {
+    background: #d1fae5;
+    color: #065f46;
+}
+
+.badge-mpi {
+    background: #fae8ff;
+    color: #86198f;
+}
+
+.badge-new {
+    background: #fef3c7;
+    color: #92400e;
+}
+
+/* ===== Performance Box ===== */
+.performance-box {
+    background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+    color: white;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin: 1.5rem 0;
+}
+
+.performance-box h3 {
+    color: var(--accent-color);
+    margin-top: 0;
+}
+
+.performance-box table {
+    box-shadow: none;
+}
+
+.performance-box thead {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.performance-box tbody tr:nth-child(even) {
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.performance-box tbody tr:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+/* ===== Quick Links Grid ===== */
+.quick-links {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.quick-link {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: white;
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    text-decoration: none;
+    color: var(--text-dark);
+    transition: all 0.2s;
+}
+
+.quick-link:hover {
+    border-color: var(--primary-color);
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.15);
+    transform: translateY(-2px);
+}
+
+.quick-link .icon {
+    font-size: 1.5rem;
+}
+
+/* ===== Section Dividers ===== */
+hr {
+    border: none;
+    height: 1px;
+    background: linear-gradient(90deg, transparent, var(--border-color), transparent);
+    margin: 2.5rem 0;
+}
+
+/* ===== Sidebar Enhancements ===== */
+.docs-sidebar {
+    border-right: 1px solid var(--border-color);
+}
+
+.docs-sidebar .docs-logo img {
+    max-width: 180px;
+}
+
+/* ===== Headings ===== */
+h1 {
+    color: var(--text-dark);
+    border-bottom: 3px solid var(--primary-color);
+    padding-bottom: 0.5rem;
+}
+
+h2 {
+    color: var(--primary-dark);
+    margin-top: 2.5rem;
+}
+
+h3 {
+    color: var(--secondary-color);
+}
+
+/* ===== Copy Button for Code ===== */
+.copy-button {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    color: #94a3b8;
+    cursor: pointer;
+    font-size: 0.75rem;
+    transition: all 0.2s;
+}
+
+.copy-button:hover {
+    background: rgba(255, 255, 255, 0.2);
+    color: white;
+}
+
+/* ===== Responsive Adjustments ===== */
+@media (max-width: 768px) {
+    .feature-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .hero-banner h1 {
+        font-size: 1.75rem;
+    }
+
+    table {
+        font-size: 0.875rem;
+    }
+
+    thead th, tbody td {
+        padding: 0.5rem;
+    }
+}
+
+/* ===== Print Styles ===== */
+@media print {
+    .hero-banner {
+        background: #f3f4f6;
+        color: black;
+    }
+
+    .feature-card {
+        break-inside: avoid;
+    }
+}
+
+/* ===== Syntax Highlighting Enhancements ===== */
+.highlight .c { color: #6b7280; } /* Comment */
+.highlight .k { color: #8b5cf6; } /* Keyword */
+.highlight .s { color: #10b981; } /* String */
+.highlight .n { color: #e2e8f0; } /* Name */
+.highlight .o { color: #f472b6; } /* Operator */
+.highlight .nf { color: #38bdf8; } /* Function */
+
+/* ===== Animation for Interactive Elements ===== */
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.feature-card, .admonition {
+    animation: fadeIn 0.3s ease-out;
+}
+
+/* ===== Tooltip Styles ===== */
+[data-tooltip] {
+    position: relative;
+    cursor: help;
+}
+
+[data-tooltip]::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    padding: 0.5rem 0.75rem;
+    background: var(--text-dark);
+    color: white;
+    font-size: 0.75rem;
+    border-radius: 4px;
+    white-space: nowrap;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s;
+}
+
+[data-tooltip]:hover::after {
+    opacity: 1;
+}
