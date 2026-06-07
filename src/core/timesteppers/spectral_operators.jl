@@ -93,7 +93,7 @@ function SpectralLinearOperator(
     # the rfft layout: using the basis *grid* size here was the bug that made
     # L.coefficients (e.g. 16) mismatch the field's coeff array (e.g. 9) and
     # throw DimensionMismatch in the diagonal IMEX step.
-    coeff_shape = local_shape(Domain(dist, bases), :c)
+    coeff_shape = local_shape(get_or_build_domain(dist, bases), :c)
 
     if operator_type == :custom && coefficients !== nothing
         # Use provided coefficients

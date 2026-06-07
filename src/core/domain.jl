@@ -149,6 +149,33 @@ function Domain(dist::Distributor, bases::Vararg{Basis})
     return Domain(dist, tuple(bases...))
 end
 
+# ── Domain cache ─────────────────────────────────────────────────────────────
+# Building a Domain is expensive: the inner constructor runs `plan_transforms!`
+# (FFT planning) and allocates several caches. A Domain is fully determined by
+# its `(dist, bases)`, yet `ScalarField` previously built a fresh one on EVERY
+# construction — so direct field arithmetic (`u + 2v`) and the interpreted RHS
+# path re-planned transforms for every temporary, ~215 KB per result field.
+#
+# Cache Domains by the identity of their `(dist, bases)`. The cached Domain holds
+# `dist` and `bases` alive, so their `objectid`s stay valid while cached (no
+# stale-key reuse). Sharing is safe: a Domain's mutable state is idempotent
+# attribute/grid caches plus transform plans that depend only on `(dist, bases)`
+# — nothing field-specific (per-field scales live on the field, not the Domain).
+# Mirrors the FFT/DCT plan caches. Use `clear_domain_cache!()` to reset.
+const _DOMAIN_CACHE = Dict{Tuple{UInt, Tuple{Vararg{UInt}}}, Domain}()
+const _DOMAIN_CACHE_LOCK = ReentrantLock()
+
+"""Get a cached Domain for `(dist, bases)`, building and caching on first use."""
+function get_or_build_domain(dist::Distributor, bases::Tuple{Vararg{Basis}})
+    key = (objectid(dist), map(objectid, bases))
+    lock(_DOMAIN_CACHE_LOCK) do
+        get!(() -> Domain(dist, bases), _DOMAIN_CACHE, key)
+    end
+end
+
+"""Clear the cached Domains (thread-safe)."""
+clear_domain_cache!() = lock(() -> empty!(_DOMAIN_CACHE), _DOMAIN_CACHE_LOCK)
+
 # Architecture helper functions for Domain
 """
     architecture(domain::Domain)

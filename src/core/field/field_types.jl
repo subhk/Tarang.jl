@@ -118,7 +118,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
 
     function ScalarField(dist::Distributor, name::String="field", bases::Tuple{Vararg{Basis}}=(),
                          dtype::Type{T}=dist.dtype) where T
-        domain = length(bases) > 0 ? Domain(dist, bases) : nothing
+        domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
 
@@ -133,7 +133,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
     # Inner constructor for explicit storage type (e.g., TransposableFieldStorage)
     function ScalarField(dist::Distributor, name::String, bases::Tuple{Vararg{Basis}},
                          dtype::Type{T}, storage::S) where {T, S<:AbstractFieldStorage}
-        domain = length(bases) > 0 ? Domain(dist, bases) : nothing
+        domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
         field = new{T, S}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
@@ -167,7 +167,7 @@ mutable struct VectorField{T, S<:AbstractFieldStorage} <: Operand
 
     function VectorField(dist::Distributor, coordsys::CoordinateSystem, name::String="vector",
                          bases::Tuple{Vararg{Basis}}=(), dtype::Type{T}=dist.dtype) where T
-        domain = length(bases) > 0 ? Domain(dist, bases) : nothing
+        domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
 
         # Create component fields. SerialFieldStorage is now parametric, so build
         # into an abstractly-typed vector then narrow with identity.() — all
@@ -236,7 +236,7 @@ mutable struct TensorField{T, S<:AbstractFieldStorage} <: Operand
 
     function TensorField(dist::Distributor, coordsys::CoordinateSystem, name::String="tensor",
                          bases::Tuple{Vararg{Basis}}=(), dtype::Type{T}=dist.dtype) where T
-        domain = length(bases) > 0 ? Domain(dist, bases) : nothing
+        domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
 
         dim = coordsys.dim
         # SerialFieldStorage is now parametric: build an abstractly-typed matrix
