@@ -230,7 +230,12 @@ end
         opz = CartesianComponent(u3; index=0, comp=coords3["z"])
         M = subproblem_matrix(opz, nothing)
         @test size(M) == (n3, dim * n3)
-        @test Matrix(M) == kron(reshape(Float64[0, 0, 1], 1, 3), Matrix(I, n3, n3))
+        # Compare with ≈, not ==: the selection matrix is built from a sparse
+        # `kron`, and exact `==` on the larger 3D case was brittle across the
+        # x64/Julia-1.12.6 CI runner (the 2D cases above pass with `==`). `≈`
+        # tolerates floating representation while still catching a structural
+        # error — a misplaced selector entry (1.0 vs 0.0) is far above tolerance.
+        @test Matrix(M) ≈ kron(reshape(Float64[0, 0, 1], 1, 3), Matrix(I, n3, n3))
     end
 end
 
