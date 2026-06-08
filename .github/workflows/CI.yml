@@ -86,7 +86,7 @@ jobs:
           directories: src
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         if: matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
         with:
           files: lcov.info
@@ -182,7 +182,7 @@ jobs:
           directories: src
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           flags: optional
@@ -237,7 +237,7 @@ jobs:
           directories: src
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
+        uses: codecov/codecov-action@v7
         with:
           files: lcov.info
           flags: mpi-${{ matrix.nprocs }}
