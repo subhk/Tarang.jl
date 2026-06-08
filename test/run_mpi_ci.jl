@@ -40,6 +40,14 @@ const TEST_DIR = @__DIR__
 const MPIEXEC = MPI.mpiexec()
 const JULIA = Base.julia_cmd()
 
+# When TARANG_MPI_COVERAGE=true (CI), record code coverage in each rank process.
+# The flag must go on the per-rank `julia` (the ranks are where src runs), not on
+# this driver. Each rank writes its own `*.<pid>.cov`; CI then aggregates them
+# with julia-processcoverage and uploads to Codecov so distributed/MPI paths are
+# counted (they are invisible to the serial coverage job).
+const COVERAGE_FLAGS = get(ENV, "TARANG_MPI_COVERAGE", "false") == "true" ?
+    ["--code-coverage=user"] : String[]
+
 println("="^60)
 println("  Tarang.jl MPI CI driver")
 println("  fileset    : $FILESET ($(length(FILES)) files)")
@@ -51,7 +59,7 @@ failed = String[]
 for file in FILES
     path = joinpath(TEST_DIR, file)
     println("\n>>> [$NPROCS ranks] $file")
-    cmd = `$MPIEXEC -n $NPROCS $JULIA --project=$PROJECT_DIR $path`
+    cmd = `$MPIEXEC -n $NPROCS $JULIA --project=$PROJECT_DIR $COVERAGE_FLAGS $path`
     try
         run(cmd)
         println("    ✓ $file")

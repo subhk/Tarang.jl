@@ -90,6 +90,7 @@ jobs:
         if: matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
         with:
           files: lcov.info
+          flags: serial
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
 
@@ -169,11 +170,24 @@ jobs:
         uses: julia-actions/julia-buildpkg@v1
 
       - name: Run optional CPU feature tests
-        run: julia --project test/runtests.jl
+        run: julia --project --code-coverage=user test/runtests.jl
         env:
           TARANG_ONLY_OPTIONAL_TESTS: "true"
           JULIA_NUM_THREADS: 2
           OMP_NUM_THREADS: 1
+
+      - name: Process coverage
+        uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: src
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          flags: optional
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   mpi-tests:
     name: MPI Tests - ${{ matrix.nprocs }} processes
@@ -213,8 +227,22 @@ jobs:
       - name: Run MPI test suite (${{ matrix.nprocs }} ranks)
         run: julia --project test/run_mpi_ci.jl ${{ matrix.nprocs }}
         env:
+          TARANG_MPI_COVERAGE: "true"
           JULIA_NUM_THREADS: 1
           OMP_NUM_THREADS: 1
+
+      - name: Process coverage
+        uses: julia-actions/julia-processcoverage@v1
+        with:
+          directories: src
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          flags: mpi-${{ matrix.nprocs }}
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
 
   performance:
     name: Performance Benchmarks

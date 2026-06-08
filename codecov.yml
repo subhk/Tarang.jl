@@ -1,0 +1,44 @@
+# Coverage is collected from several CI jobs and merged by Codecov via flags:
+#   serial   — the main `test` job (single-process CPU `runtests.jl`)
+#   mpi-1/2/4 — the `mpi-tests` job (distributed/PencilArrays/MPI paths)
+#   optional  — the `optional-cpu-tests` job (TARANG_ONLY_OPTIONAL_TESTS)
+# GPU paths (ext/cuda, CUDA/NCCL) are intentionally NOT covered: there is no GPU
+# runner in CI, so those lines can never be hit. They are ignored below so they
+# don't count as misses and deflate the reported percentage.
+
+coverage:
+  status:
+    project:
+      default:
+        informational: true   # report, don't fail CI on coverage deltas
+    patch:
+      default:
+        informational: true
+
+# Carry a flag's last-known coverage forward to commits where that job didn't
+# upload, so the merged total doesn't drop when a job is skipped.
+flag_management:
+  default_rules:
+    carryforward: true
+  individual_flags:
+    - name: serial
+      carryforward: true
+    - name: optional
+      carryforward: true
+    - name: mpi-1
+      carryforward: true
+    - name: mpi-2
+      carryforward: true
+    - name: mpi-4
+      carryforward: true
+
+ignore:
+  - "ext/cuda/**"      # GPU-only: no GPU CI runner, uncoverable
+  - "test/**"
+  - "docs/**"
+  - "scripts/**"
+  - "benchmarks/**"
+
+comment:
+  layout: "reach, diff, flags, files"
+  require_changes: false
