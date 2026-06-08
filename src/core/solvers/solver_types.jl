@@ -343,6 +343,9 @@ function _build_initial_value_solver(problem::IVP, timestepper;
     try
         solver.rhs_plan = build_lazy_rhs_plan!(solver)
     catch e
+        # When the caller demanded a compiled RHS, propagate instead of silently
+        # degrading to the interpreted evaluator.
+        REQUIRE_LAZY_RHS[] && rethrow()
         @debug "LazyRHS build skipped: $e — using interpreted evaluation"
         solver.rhs_plan = nothing
     end

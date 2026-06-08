@@ -230,6 +230,23 @@ True if any Fourier axis requests dealiasing (factor > 1). Used to gate the
 nonlinear-product dealiasing: when every Fourier axis has `dealias ≤ 1`, the
 product is computed without any dealiasing.
 """
+# `field.bases` is abstractly typed (`Tuple{Vararg{Basis}}`), so a plain
+# `for b in bases` loop boxes every element — measurable per-step allocation on
+# the nonlinear-product hot path (this is called once per dealiased product per
+# step). Recurse over the tuple via `bases[1]` + `Base.tail` (the pattern
+# `Base.any(::Function, ::Tuple)` uses): each element is matched at its concrete
+# type and `tail` is allocation-free, so the walk is type-stable and non-boxing.
+# (A `b, rest...` splat-recursion looks equivalent but re-collects `rest` into a
+# fresh tuple each level — that allocates; `Base.tail` does not.)
+_any_axis_dealias(bases::Tuple, fallback::Float64) = _any_axis_dealias_tuple(fallback, bases)
+_any_axis_dealias_tuple(::Float64, ::Tuple{}) = false
+@inline function _any_axis_dealias_tuple(fallback::Float64, bases::Tuple)
+    b = bases[1]
+    (isa(b, Union{RealFourier, ComplexFourier}) && _axis_dealias_factor(b, fallback) > 1) && return true
+    return _any_axis_dealias_tuple(fallback, Base.tail(bases))
+end
+
+# Generic fallback for non-tuple `bases` (e.g. a Vector); not on the hot path.
 function _any_axis_dealias(bases, fallback::Float64)
     for basis in bases
         isa(basis, Union{RealFourier, ComplexFourier}) || continue

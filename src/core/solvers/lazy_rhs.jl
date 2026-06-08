@@ -762,6 +762,24 @@ _lazy_plan_field_type(::Type{F}) where {F<:ScalarField{<:Any, <:SerialFieldStora
     isconcretetype(F) ? F : ScalarField
 _lazy_plan_field_type(::Type) = ScalarField
 
+# When set (via `require_lazy_rhs!(true)`), `build_lazy_rhs_plan!` throws instead
+# of silently dropping the whole solver onto the ~100×-slower interpreted RHS
+# path. Off by default to keep the correctness-preserving fallback; turn it on in
+# CI / perf-sensitive runs to catch a degradation early.
+const REQUIRE_LAZY_RHS = Ref(false)
+
+"""
+    require_lazy_rhs!(on::Bool=true) -> Bool
+
+When `on`, RHS-compilation failure throws instead of silently falling back to the
+slower interpreted evaluator. Returns the previous setting.
+"""
+function require_lazy_rhs!(on::Bool=true)
+    prev = REQUIRE_LAZY_RHS[]
+    REQUIRE_LAZY_RHS[] = on
+    return prev
+end
+
 """
     build_lazy_rhs_plan!(solver) -> LazyRHSPlan
 
@@ -811,7 +829,12 @@ function build_lazy_rhs_plan!(solver)
             template = state[state_idx]
             lazy = translate_to_lazy(expr, state; target=template)
             if lazy === nothing
-                @info "LazyRHS: cannot translate eq$eq_idx F for target $(template.name); falling back" maxlog=3
+                msg = "LazyRHS: cannot compile the RHS of equation $eq_idx for `$(template.name)` " *
+                      "(expression: $(string(expr))). The whole solver falls back to the " *
+                      "~100×-slower interpreted RHS evaluator. Usual cause: an unsupported or " *
+                      "mistyped operator in this term."
+                REQUIRE_LAZY_RHS[] && error(msg * " [require_lazy_rhs! is set — aborting.]")
+                @warn msg maxlog=5
                 return plan  # is_compiled stays false
             end
             plan.exprs[state_idx] = lazy
