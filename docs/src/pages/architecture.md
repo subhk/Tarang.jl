@@ -359,7 +359,7 @@ Setup       : Coordinates → Distributor → Bases → Domain → Fields
 Problem     : Fields → Problem → add_equation!, add_bc!, add_parameters!
 Build       : build_solver_matrices! → _try_build_subproblems! → build_lazy_rhs_plan!
 Time step   : step! → refresh BCs → dispatch → step_subproblem_rk! / multistep
-Output      : evaluator → add_task! → NetCDF / HDF5 / callback
+Output      : evaluator → add_task! → NetCDF / callback
 ```
 
 ### Layout transitions

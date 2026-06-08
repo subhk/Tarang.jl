@@ -324,6 +324,30 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u*∂x(T)")
 
 ---
 
+## Spectral Operators
+
+### Hilbert Transform (hilbert)
+
+Applies the Hilbert transform in spectral space: each Fourier mode `k` is
+multiplied by `-i·sign(k)` (the `k = 0` mode maps to 0). Useful for analytic
+signals, envelope/phase diagnostics, and 90° phase shifts along a Fourier axis.
+
+**Syntax**:
+
+```julia
+hilbert(u)                       # functional form
+```
+
+```julia
+add_equation!(problem, "∂t(u) = hilbert(u)")   # parseable in equation strings
+```
+
+**Properties**:
+- Linear, spectral (diagonal in Fourier space).
+- Defined on Fourier (periodic) axes.
+
+---
+
 ## Vector Operations
 
 ### Dot Product / Advection

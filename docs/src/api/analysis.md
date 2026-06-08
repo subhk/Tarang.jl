@@ -190,35 +190,6 @@ close!(handler)
 
 ---
 
-### HDF5 Output
-
-#### add_hdf5_handler
-
-Similar to NetCDF but uses HDF5 format.
-
-**Syntax**:
-```julia
-add_hdf5_handler(
-    solver::InitialValueSolver,
-    base_path::String;
-    fields::Vector{<:AbstractField},
-    write_interval::Float64=1.0
-)
-```
-
-**Example**:
-
-```julia
-handler = add_hdf5_handler(
-    solver,
-    "output/data",
-    fields=[u, p, T],
-    write_interval=0.1
-)
-```
-
----
-
 ## Analysis Evaluators
 
 ### Scalar Evaluators

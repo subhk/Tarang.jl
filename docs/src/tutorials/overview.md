@@ -80,7 +80,7 @@ Problems with dynamics confined to surfaces or boundaries.
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
 | [Boundary Conditions](boundary_conditions.md) | All BC types and usage | Intermediate | Dirichlet, Neumann, Robin |
-| [Analysis & Output](analysis_and_output.md) | Data management | Intermediate | NetCDF, HDF5, analysis |
+| [Analysis & Output](analysis_and_output.md) | Data management | Intermediate | NetCDF, analysis |
 
 ## Problem Types Explained
 

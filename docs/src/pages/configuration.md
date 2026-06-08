@@ -202,7 +202,7 @@ Default output settings:
 
 ```toml
 [output]
-# Default output format: "netcdf", "hdf5", "jld2"
+# Output format: "netcdf" (the only supported format)
 DEFAULT_FORMAT = "netcdf"
 
 # Compression level (0-9, 0=none, 9=maximum)

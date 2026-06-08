@@ -223,12 +223,12 @@ Julia and all dependencies work natively on Apple Silicon. Use the ARM64 Julia b
 
 ### HPC Clusters
 
-Most HPC systems have modules for MPI and NetCDF. Load them before using Julia:
+Load Julia and your system MPI before using Tarang. NetCDF is provided by the
+bundled `NetCDF_jll` artifact, so no system NetCDF/HDF5 module is required:
 
 ```bash
 module load julia/1.9
 module load openmpi/4.1
-module load hdf5/1.12
 ```
 
 Configure MPI.jl to use the system MPI as shown above.
@@ -243,7 +243,6 @@ FROM julia:1.9
 RUN apt-get update && apt-get install -y \
     openmpi-bin \
     libopenmpi-dev \
-    libhdf5-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN julia -e 'using Pkg; \

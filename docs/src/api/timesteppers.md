@@ -101,6 +101,59 @@ SBDF4()  # 4th order
 | SBDF3 | 3 | 3 | A(α)-stable |
 | SBDF4 | 4 | 4 | A(α)-stable |
 
+### MCNAB2 / CNLF2
+
+Additional two-step multistep schemes.
+
+```julia
+MCNAB2()  # Modified Crank-Nicolson Adams-Bashforth (θ ≳ 1/2 for stiff stability)
+CNLF2()   # Crank-Nicolson Leapfrog (CN implicit + centered leapfrog explicit)
+```
+
+**Properties**: both are 2nd order, 2-step. `MCNAB2` accepts an optional CN
+weight `MCNAB2(theta)` (default `0.5`); a slightly larger `θ` improves stability
+for stiff linear terms.
+
+## Exponential Time Differencing (ETD)
+
+Exponential integrators that treat the linear term *exactly* via the matrix
+exponential, which is well suited to very stiff linear operators.
+
+```julia
+ETD_RK222()  # 2nd-order exponential Runge-Kutta
+ETD_CNAB2()  # 2nd-order exponential Crank-Nicolson Adams-Bashforth
+ETD_SBDF2()  # 2nd-order exponential semi-implicit BDF
+```
+
+**Properties**:
+- Order: 2
+- Linear term: exact exponential propagation (via φ-functions)
+- Nonlinear term: explicit (RK / Adams-Bashforth / BDF extrapolation)
+- Best for problems where the linear part dominates the stiffness.
+
+## Specialized IMEX-RK
+
+Additive Runge-Kutta (ARK) and diagonal IMEX schemes.
+
+```julia
+RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
+RKSMR()       # Strong-stability-preserving IMEX Runge-Kutta
+RK443_IMEX()  # Alias of RK443 (Kennedy-Carpenter ARK3(2)4L[2]SA), suffix clarifies IMEX intent
+```
+
+### Diagonal IMEX
+
+```julia
+DiagonalIMEX_RK222()  # 2nd order
+DiagonalIMEX_RK443()  # 3rd order
+DiagonalIMEX_SBDF2()  # 2nd order multistep
+```
+
+**Properties**: the implicit solve is **diagonal in spectral space** — the linear
+operator is applied per Fourier mode (`(I + γ·dt·L̂)⁻¹` per wavenumber) rather than
+through a global matrix solve. Much cheaper for pure-Fourier / diagonalizable
+linear terms; requires the implicit operator to be diagonal in the chosen basis.
+
 ## Usage with Solver
 
 ```julia

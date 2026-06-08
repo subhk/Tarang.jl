@@ -323,21 +323,6 @@ critical_mode = eigenvectors[max_idx]
 
 ## Solver State Management
 
-### Saving and Loading State
-
-```julia
-# Save solver state
-save_state(solver, "checkpoint.h5")
-
-# Load solver state
-load_state!(solver, "checkpoint.h5")
-
-# Resume simulation
-while proceed(solver)
-    step!(solver)
-end
-```
-
 ### State Vector Access
 
 ```julia
