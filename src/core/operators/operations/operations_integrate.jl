@@ -93,13 +93,13 @@ function integrate_along_coord(field::ScalarField, coord::Coordinate)
 
     # Create result field with reduced dimensionality
     if ndims(data) == 1
-        return sum(data .* weights)
+        return result_data
     else
         # Create new field without the integrated dimension
         nb = length(field.bases)
         new_bases = ntuple(i -> field.bases[i < basis_index ? i : i + 1], nb - 1)
         if nb == 1
-            return sum(data .* reshape(weights, size_for_axis(length(weights), basis_index, ndims(data))))
+            return sum(result_data)
         end
 
         result = ScalarField(field.dist, "int_$(field.name)", new_bases, field.dtype)
@@ -249,7 +249,9 @@ function integrate_weighted_sum(data::AbstractArray, weights::AbstractVector, ax
     end
 
     if nd == 1
-        return sum(data .* weights_device)
+        # dot conjugates its first argument; weights are real so this equals
+        # sum(data .* weights) without materializing the weighted array
+        return dot(weights_device, data)
     end
 
     # Reshape weights to broadcast along the correct axis

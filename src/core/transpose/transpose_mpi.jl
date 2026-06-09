@@ -237,7 +237,8 @@ Perform MPI.Allgatherv for gathering operations.
 Used for Z→Y transpose on 2D domains with 2D mesh where y needs to be gathered.
 """
 function _do_allgatherv!(send_buf, recv_buf, send_count::Int, recv_counts::Vector{Int},
-                         comm::MPI.Comm, arch::CPU, buffers=nothing)
+                         comm::MPI.Comm, arch::CPU, buffers=nothing;
+                         recv_displs::Union{Nothing, Vector{Int}}=nothing)
     # Validate send_count is non-negative
     if send_count < 0
         throw(ArgumentError(
@@ -275,12 +276,15 @@ function _do_allgatherv!(send_buf, recv_buf, send_count::Int, recv_counts::Vecto
         ))
     end
 
-    # Compute recv displacements
-    recv_displs = zeros(Int, length(recv_counts))
-    offset = 0
-    for i in 1:length(recv_counts)
-        recv_displs[i] = offset
-        offset += recv_counts[i]
+    # Compute recv displacements unless caller passed precomputed ones
+    # (TransposeCounts caches them; recomputing here allocates per call)
+    if recv_displs === nothing
+        recv_displs = zeros(Int, length(recv_counts))
+        offset = 0
+        for i in 1:length(recv_counts)
+            recv_displs[i] = offset
+            offset += recv_counts[i]
+        end
     end
 
     # Validate buffer size matches recv_counts total
@@ -297,7 +301,8 @@ function _do_allgatherv!(send_buf, recv_buf, send_count::Int, recv_counts::Vecto
 end
 
 function _do_allgatherv!(send_buf, recv_buf, send_count::Int, recv_counts::Vector{Int},
-                         comm::MPI.Comm, arch::AbstractArchitecture, buffers=nothing)
+                         comm::MPI.Comm, arch::AbstractArchitecture, buffers=nothing;
+                         recv_displs::Union{Nothing, Vector{Int}}=nothing)
     # Validate send_count is non-negative
     if send_count < 0
         throw(ArgumentError(
@@ -335,12 +340,15 @@ function _do_allgatherv!(send_buf, recv_buf, send_count::Int, recv_counts::Vecto
         ))
     end
 
-    # Compute recv displacements
-    recv_displs = zeros(Int, length(recv_counts))
-    offset = 0
-    for i in 1:length(recv_counts)
-        recv_displs[i] = offset
-        offset += recv_counts[i]
+    # Compute recv displacements unless caller passed precomputed ones
+    # (TransposeCounts caches them; recomputing here allocates per call)
+    if recv_displs === nothing
+        recv_displs = zeros(Int, length(recv_counts))
+        offset = 0
+        for i in 1:length(recv_counts)
+            recv_displs[i] = offset
+            offset += recv_counts[i]
+        end
     end
 
     # Validate buffer size matches recv_counts total
@@ -358,12 +366,28 @@ function _do_allgatherv!(send_buf, recv_buf, send_count::Int, recv_counts::Vecto
         # Direct GPU buffer transfer
         MPI.Allgatherv!(view(send_buf, 1:send_count), MPI.VBuffer(recv_buf, recv_counts, recv_displs), comm)
     else
-        # Stage through CPU
+        # Stage through CPU using pre-allocated staging buffers when available
         # CRITICAL: Sync GPU before copy to ensure data is ready
         _sync_gpu_if_needed(arch)
-        send_cpu = on_architecture(CPU(), view(send_buf, 1:send_count))
-        total_recv = sum(recv_counts)
-        recv_cpu = similar(send_cpu, total_recv)
+        use_preallocated = (buffers !== nothing &&
+                            buffers.send_staging !== nothing &&
+                            !buffers.staging_locked[] &&
+                            length(buffers.send_staging) >= send_count &&
+                            length(buffers.recv_staging) >= total_recv)
+        if use_preallocated
+            send_cpu = view(buffers.send_staging, 1:send_count)
+            copyto!(send_cpu, on_architecture(CPU(), view(send_buf, 1:send_count)))
+            recv_cpu = view(buffers.recv_staging, 1:total_recv)
+        else
+            # Staging buffers too small or unavailable - allocate fresh
+            if buffers !== nothing && buffers.send_staging !== nothing
+                staging_size = length(buffers.send_staging)
+                @warn "Allgatherv staging buffer too small: have $staging_size, need send=$send_count recv=$total_recv. " *
+                      "Allocating fresh buffers." maxlog=1
+            end
+            send_cpu = on_architecture(CPU(), view(send_buf, 1:send_count))
+            recv_cpu = similar(send_cpu, total_recv)
+        end
 
         MPI.Allgatherv!(send_cpu, MPI.VBuffer(recv_cpu, recv_counts, recv_displs), comm)
 

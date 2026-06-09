@@ -128,7 +128,8 @@ function transpose_z_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
 
         # Perform Allgatherv
         _do_allgatherv!(send_buf, recv_buf, send_count, tf.counts.zy_recv_counts,
-                        comm, arch, tf.buffers)
+                        comm, arch, tf.buffers;
+                        recv_displs=tf.counts.zy_recv_displs)
 
         # Unpack received data into y_local_data
         # Data comes from Ry processes, each contributing (Nx/Rx, Ny/Ry)
