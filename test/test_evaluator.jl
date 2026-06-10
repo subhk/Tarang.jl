@@ -11,6 +11,7 @@ Tests:
 
 using Test
 using Tarang
+using NetCDF
 
 @testset "Evaluator" begin
 
@@ -52,6 +53,39 @@ using Tarang
         # Scheduling
         @test should_write(handler, 0.0, 0.0, 5) == true
         @test should_write(handler, 0.0, 0.0, 3) == false
+    end
+
+    @testset "FileHandler writes a readable NetCDF file" begin
+        tmpdir = mktempdir()
+        N = 8
+        coords_fh = CartesianCoordinates("x", "y")
+        dist_fh = Distributor(coords_fh; mesh=(1, 1), dtype=Float64)
+        xb_fh = RealFourier(coords_fh["x"]; size=N, bounds=(0.0, 2π))
+        yb_fh = RealFourier(coords_fh["y"]; size=N, bounds=(0.0, 2π))
+        w = ScalarField(dist_fh, "w", (xb_fh, yb_fh), Float64)
+        ensure_layout!(w, :g)
+        ref = [Float64(i * 100 + j) for i in 1:N, j in 1:N]
+        get_grid_data(w) .= ref
+
+        problem_fh = IVP([w])
+        add_equation!(problem_fh, "dt(w) = 0")
+        solver_fh = InitialValueSolver(problem_fh, RK222())
+
+        handler = FileHandler(joinpath(tmpdir, "out.nc"); cadence=1)
+        add_task!(handler, w; name="w")
+        Tarang.write_handler!(handler, solver_fh, 0.0, 0.25, 7)
+
+        written = joinpath(tmpdir, "out_7.nc")
+        @test isfile(written)
+        @test ncread(written, "w") == ref
+        @test ncread(written, "sim_time")[1] == 0.25
+        @test Int(ncread(written, "iteration")[1]) == 7
+
+        # Second write goes to a fresh per-iteration file
+        Tarang.write_handler!(handler, solver_fh, 0.0, 0.5, 8)
+        @test isfile(joinpath(tmpdir, "out_8.nc"))
+        @test handler.write_count == 2
+        rm(tmpdir; recursive=true)
     end
 
     @testset "Global reductions on fields" begin

@@ -335,19 +335,24 @@ end
 # Note: evaluate_curl and evaluate_laplacian are defined in operators.jl
 # Do not redefine here to avoid method overwrite warnings
 
-"""Write data to NetCDF file (simple per-snapshot output)"""
+"""Write data to NetCDF file (simple per-snapshot output).
+
+Uses `_nc_put` (nccreate + ncwrite) — plain `ncwrite` cannot create the file
+or its variables. Each snapshot gets a fresh per-iteration file (see
+`write_handler!`), so variable creation never collides.
+"""
 function write_netcdf_simple_output(filename::String, data::Dict{String, Any}, sim_time::Float64, iteration::Int, rank::Int)
 
-    # Only rank 0 writes to file
+    # Only rank 0 writes to file (task data is already gathered + replicated)
     if rank == 0
         # Write metadata as 1-element arrays
-        ncwrite([sim_time], filename, "sim_time")
-        ncwrite([iteration], filename, "iteration")
+        _nc_put(filename, "sim_time", [sim_time])
+        _nc_put(filename, "iteration", [Float64(iteration)])
 
         # Write datasets
         for (name, dataset) in data
             if isa(dataset, AbstractArray)
-                ncwrite(dataset, filename, name)
+                _nc_put(filename, name, dataset)
             end
         end
     end
@@ -933,9 +938,72 @@ function should_write(handler::VirtualFileHandler, wall_time::Float64, sim_time:
 end
 
 """
+    _nc_put(filename, name, data)
+
+Create variable `name` (with per-variable dimension names) in `filename` —
+creating the file on first variable — then write `data`. NetCDF.jl's plain
+`ncwrite` requires the file and variable to already exist.
+"""
+function _nc_put(filename::String, name::String, data::AbstractArray)
+    dimargs = Any[]
+    for (i, s) in enumerate(size(data))
+        push!(dimargs, "$(name)_d$(i)")
+        push!(dimargs, s)
+    end
+    NetCDF.nccreate(filename, name, dimargs...; t=eltype(data))
+    ncwrite(data, filename, name)
+    return nothing
+end
+
+"""
+    _local_task_data(task) -> (block, starts, gshape)
+
+Per-rank slab of a task plus its placement: `block` is this rank's LOCAL data
+as a plain CPU `Array` (logical axis order), `starts` are the 1-based GLOBAL
+indices of the block's first element, `gshape` is the global array shape.
+No communication — this is the whole point of VirtualFileHandler.
+"""
+function _local_task_data(task::ScalarField)
+    ensure_layout!(task, :g)
+    d = get_grid_data(task)
+    if isa(d, PencilArrays.PencilArray)
+        gv = PencilArrays.global_view(d)            # permutation-aware
+        block = collect(gv)                          # plain Array, logical order
+        starts = Int[first(r) for r in axes(gv)]
+        return block, starts, collect(Int, PencilArrays.size_global(d))
+    else
+        block = Array(on_architecture(CPU(), d))     # GPU → host copy
+        return block, ones(Int, ndims(block)), collect(Int, size(block))
+    end
+end
+
+function _local_task_data(task::VectorField)
+    parts = [_local_task_data(c) for c in task.components]
+    blocks = first.(parts)
+    block = _stack_component_arrays(blocks)
+    starts = vcat(1, parts[1][2])
+    gshape = vcat(length(parts), parts[1][3])
+    return block, starts, gshape
+end
+
+function _local_task_data(task::Operator)
+    result = evaluate_operator(task)
+    return _local_task_data(result)
+end
+
+# Replicated plain arrays (e.g. integrate/average results): every rank holds
+# the full array, so each writes it at offset 1 and merge overwrites in place.
+function _local_task_data(task::AbstractArray)
+    block = Array(on_architecture(CPU(), task))
+    return block, ones(Int, ndims(block)), collect(Int, size(block))
+end
+
+"""
     process!(handler::VirtualFileHandler, solver, wall_time, sim_time, iteration)
 
-Write per-rank data files and rank-0 manifest file.
+Write per-rank data files (LOCAL slabs only — no gather) and rank-0 manifest.
+Each dataset `name` is stored with `name_start` (global offsets of the slab)
+and the manifest stores `name_gshape` (global shape) for reconstruction.
 """
 function process!(handler::VirtualFileHandler, solver::InitialValueSolver,
                   wall_time::Float64, sim_time::Float64, iteration::Int)
@@ -946,54 +1014,40 @@ function process!(handler::VirtualFileHandler, solver::InitialValueSolver,
     handler.file_write_num += 1
     set_num = handler.set_num
 
-    # Evaluate all tasks
-    task_data = Dict{String, Any}()
+    # Evaluate all tasks to (local block, global starts, global shape)
+    task_data = Dict{String, Tuple{Array, Vector{Int}, Vector{Int}}}()
     for (name, task) in handler.datasets
-        task_data[name] = evaluate_task(task, solver)
+        task_data[name] = _local_task_data(task)
     end
 
-    # Each rank writes its own NetCDF file
+    # Each rank writes its own NetCDF file with only its local slab
     rank_filename = joinpath(handler.base_path,
                              "$(handler.name)_s$(set_num)_p$(handler.rank).nc")
 
-    # Write metadata as 1-element arrays
-    ncwrite([handler.rank], rank_filename, "rank")
-    ncwrite([handler.nprocs], rank_filename, "nprocs")
-    ncwrite([sim_time], rank_filename, "sim_time")
-    ncwrite([iteration], rank_filename, "iteration")
-    ncwrite([set_num], rank_filename, "set_num")
-    ncwrite([handler.file_write_num], rank_filename, "write_num")
+    _nc_put(rank_filename, "rank", [Float64(handler.rank)])
+    _nc_put(rank_filename, "nprocs", [Float64(handler.nprocs)])
+    _nc_put(rank_filename, "sim_time", [sim_time])
+    _nc_put(rank_filename, "iteration", [Float64(iteration)])
+    _nc_put(rank_filename, "set_num", [Float64(set_num)])
+    _nc_put(rank_filename, "write_num", [Float64(handler.file_write_num)])
 
-    for (name, data) in task_data
-        if isa(data, AbstractArray)
-            ncwrite(data, rank_filename, name)
-        end
+    for (name, (block, starts, _)) in task_data
+        _nc_put(rank_filename, name, block)
+        _nc_put(rank_filename, "$(name)_start", Float64.(starts))
     end
 
-    # Rank 0 creates the manifest file with layout metadata
+    # Rank 0 writes the manifest with global layout metadata
     if handler.rank == 0
         manifest_filename = joinpath(handler.base_path,
                                      "$(handler.name)_s$(set_num).nc")
 
-        ncwrite([handler.nprocs], manifest_filename, "nprocs")
-        ncwrite([sim_time], manifest_filename, "sim_time")
-        ncwrite([iteration], manifest_filename, "iteration")
-        ncwrite([set_num], manifest_filename, "set_num")
+        _nc_put(manifest_filename, "nprocs", [Float64(handler.nprocs)])
+        _nc_put(manifest_filename, "sim_time", [sim_time])
+        _nc_put(manifest_filename, "iteration", [Float64(iteration)])
+        _nc_put(manifest_filename, "set_num", [Float64(set_num)])
 
-        # Store per-rank filenames and dataset shapes for reconstruction
-        for p in 0:(handler.nprocs - 1)
-            rank_file = "$(handler.name)_s$(set_num)_p$(p).nc"
-            # Store rank filename as a character array variable
-            ncwrite([Float64(p)], manifest_filename, "rank_$(p)_id")
-
-            # Store dataset shapes from rank 0 data
-            if p == 0
-                for (name, data) in task_data
-                    if isa(data, AbstractArray)
-                        ncwrite(collect(Float64.(size(data))), manifest_filename, "$(name)_shape")
-                    end
-                end
-            end
+        for (name, (_, _, gshape)) in task_data
+            _nc_put(manifest_filename, "$(name)_gshape", Float64.(gshape))
         end
 
         @debug "VirtualFileHandler wrote set $set_num: $manifest_filename"
@@ -1033,9 +1087,10 @@ function merge_virtual!(handler::VirtualFileHandler; set_num::Int=handler.set_nu
 
     # Metadata variable names (not field data)
     metadata_vars = Set(["rank", "nprocs", "sim_time", "iteration", "set_num", "write_num"])
+    _is_layout_var(name) = endswith(name, "_start") || endswith(name, "_gshape")
 
-    # Collect data from all ranks
-    all_data = Dict{String, Vector{Any}}()
+    # Place each rank's local block at its recorded global offsets
+    merged_data = Dict{String, Array{Float64}}()
     for p in 0:(nprocs - 1)
         rank_file = joinpath(handler.base_path,
                              "$(handler.name)_s$(set_num)_p$(p).nc")
@@ -1044,32 +1099,33 @@ function merge_virtual!(handler::VirtualFileHandler; set_num::Int=handler.set_nu
             continue
         end
 
+        var_names = String[]
         NetCDF.open(rank_file) do nc
             for (name, _) in nc.vars
-                if name in metadata_vars
-                    continue
-                end
-                if !haskey(all_data, name)
-                    all_data[name] = []
-                end
-                push!(all_data[name], ncread(rank_file, name))
+                (name in metadata_vars || _is_layout_var(name)) && continue
+                push!(var_names, name)
             end
+        end
+
+        for name in var_names
+            block = ncread(rank_file, name)
+            starts = Int.(ncread(rank_file, "$(name)_start"))
+            merged = get!(merged_data, name) do
+                gshape = Int.(ncread(manifest_filename, "$(name)_gshape"))
+                zeros(Float64, gshape...)
+            end
+            rng = ntuple(d -> starts[d]:(starts[d] + size(block, d) - 1), ndims(block))
+            merged[rng...] = block
         end
     end
 
-    # Write merged file — copy manifest metadata then merged data
-    sim_time_arr = ncread(manifest_filename, "sim_time")
-    iteration_arr = ncread(manifest_filename, "iteration")
-    ncwrite(sim_time_arr, output_filename, "sim_time")
-    ncwrite(iteration_arr, output_filename, "iteration")
-    ncwrite(nprocs_arr, output_filename, "nprocs")
+    # Write merged file — copy manifest metadata then reconstructed data
+    _nc_put(output_filename, "sim_time", ncread(manifest_filename, "sim_time"))
+    _nc_put(output_filename, "iteration", ncread(manifest_filename, "iteration"))
+    _nc_put(output_filename, "nprocs", nprocs_arr)
 
-    for (name, chunks) in all_data
-        if all(isa.(chunks, AbstractArray))
-            # Concatenate along first dimension (typical MPI decomposition)
-            merged = vcat(chunks...)
-            ncwrite(merged, output_filename, name)
-        end
+    for (name, merged) in merged_data
+        _nc_put(output_filename, name, merged)
     end
 
     @info "Merged virtual files into $output_filename"
