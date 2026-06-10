@@ -74,12 +74,8 @@ using Random
 # Abstract forcing types
 # ============================================================================
 
-"""
-    Forcing
-
-Abstract base type for all forcing types.
-"""
-abstract type Forcing end
+# NOTE: `abstract type Forcing end` is defined in problems/problem_types.jl
+# (which loads earlier) so IVP can type its stochastic_forcings dict.
 
 """
     StochasticForcingType <: Forcing

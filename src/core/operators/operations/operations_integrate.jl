@@ -34,6 +34,17 @@ function evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
     # Start with the operand
     result_field = copy(operand)
 
+    # MPI-distributed grid data needs its own paths: the serial per-axis loop
+    # below applies GLOBAL-length quadrature weights to LOCAL slabs, and
+    # PencilArrays' generic mapreduce is unavailable on non-Intel MPI builds.
+    # Full integration reduces to a scalar Allreduce; partial integration
+    # gathers the (analysis-sized) field and reuses the serial reduction.
+    ensure_layout!(result_field, :g)
+    gdata = get_grid_data(result_field)
+    if isa(gdata, PencilArrays.PencilArray) && length(coords) == length(operand.bases)
+        return _integrate_full_distributed(result_field, gdata)
+    end
+
     # Integrate over each coordinate in sequence
     for c in coords
         result_field = integrate_along_coord(result_field, c)
@@ -85,8 +96,18 @@ function integrate_along_coord(field::ScalarField, coord::Coordinate)
     # Get quadrature weights for this basis
     weights = get_integration_weights(basis)
 
-    # Apply weighted sum along the axis
+    # Apply weighted sum along the axis. Distributed fields are gathered to a
+    # replicated global array first (analysis-sized; cold path), so the serial
+    # reduction below applies and the reduced result is identical on all ranks
+    # — mirroring the serial return semantics. The reduced field is built on a
+    # COMM_SELF distributor: each rank holds the full result, and reduced
+    # sub-domains (e.g. 1D) cannot be MPI-transform-planned anyway.
     data = get_grid_data(field)
+    result_dist = field.dist
+    if isa(data, PencilArrays.PencilArray)
+        data = _allgather_global_grid(data, field.dist.comm)
+        result_dist = _serial_replica_distributor(field.dist, field.dtype)
+    end
 
     # Sum along the specified axis with weights
     result_data = integrate_weighted_sum(data, weights, basis_index)
@@ -102,11 +123,79 @@ function integrate_along_coord(field::ScalarField, coord::Coordinate)
             return sum(result_data)
         end
 
-        result = ScalarField(field.dist, "int_$(field.name)", new_bases, field.dtype)
+        result = ScalarField(result_dist, "int_$(field.name)", new_bases, field.dtype)
         set_grid_data!(result, result_data)
         result.current_layout = :g
         return result
     end
+end
+
+# Serial (COMM_SELF) distributors for rank-replicated reduction results,
+# cached so repeated integrate/average calls don't re-plan transforms.
+const _SERIAL_REPLICA_DISTS = Dict{Tuple{UInt, DataType}, Distributor}()
+
+function _serial_replica_distributor(dist::Distributor, dtype::DataType)
+    key = (objectid(dist.coordsys), dtype)
+    return get!(_SERIAL_REPLICA_DISTS, key) do
+        Distributor(dist.coordsys; comm=MPI.COMM_SELF, dtype=dtype)
+    end
+end
+
+"""
+    _allgather_global_grid(pdata, comm)
+
+Replicate a distributed grid array on every rank: each rank writes its local
+slab into the right global positions (via `global_view`, permutation-aware) of
+a zero array, then a single `Allreduce(+)` fills in everyone's pieces. Built-in
+reduction op, so safe on all architectures (PencilArrays' `gather` and generic
+mapreduce are not).
+"""
+function _allgather_global_grid(pdata::PencilArrays.PencilArray, comm)
+    g = zeros(eltype(pdata), PencilArrays.size_global(pdata))
+    gv = PencilArrays.global_view(pdata)
+    for I in CartesianIndices(gv)
+        g[I] = gv[I]
+    end
+    MPI.Allreduce!(g, +, comm)
+    return g
+end
+
+"""
+    _integrate_full_distributed(field, pdata)
+
+Integral over ALL coordinates of an MPI-distributed field: weight each rank's
+local slab with its slice of the global quadrature weights, sum locally, then
+`MPI.Allreduce` the scalar (built-in `+` op — safe on all architectures, unlike
+PencilArrays' generic mapreduce).
+
+Pencil grid arrays can be axis-permuted: `axes_local` is indexed by LOGICAL
+axis, while `parent(pdata)` is stored in PHYSICAL order, so each weight vector
+is reshaped along `findfirst(==(logical), permutation)` (same convention as
+`_apply_spectral_derivative_distributed!`).
+"""
+function _integrate_full_distributed(field::ScalarField, pdata::PencilArrays.PencilArray)
+    local_data = parent(pdata)
+    pencil = PencilArrays.pencil(pdata)
+    local_axes = pencil.axes_local
+    nd = ndims(local_data)
+    # Tuple(NoPermutation()) is `nothing`, not the identity tuple
+    perm_raw = Tuple(PencilArrays.permutation(pdata))
+    perm_tuple = perm_raw === nothing ? ntuple(identity, nd) : perm_raw
+
+    weighted = local_data
+    for l in 1:length(field.bases)
+        w_local = get_integration_weights(field.bases[l])[local_axes[l]]
+        if is_gpu_array(local_data)
+            w_local = copy_to_device(w_local, local_data)
+        end
+        p = findfirst(==(l), perm_tuple)
+        p === nothing && (p = l)
+        shape = ntuple(i -> i == p ? length(w_local) : 1, nd)
+        weighted = weighted .* reshape(w_local, shape)
+    end
+
+    local_sum = sum(weighted)
+    return MPI.Allreduce(local_sum, +, field.dist.comm)
 end
 
 """

@@ -93,18 +93,20 @@ struct FFTWTransformConfig{FP, BP, RA<:AbstractArray, CA<:AbstractArray} <: Abst
     scratch_complex::CA
 end
 
-struct PencilTransformConfig <: AbstractNonlinearTransformConfig
+struct PencilTransformConfig{A1, A2, F1, F2, P, D, N} <: AbstractNonlinearTransformConfig
     # Pencil transforms carry both the communication layout and the local FFT
     # plans needed to move between grid/coefficient layouts under MPI.
+    # Parametric so plan/array fields are concrete per instance; consumers
+    # specialize through a function barrier when pulling configs from caches.
     config::PencilConfig
-    forward_pencil_1::Any
-    forward_pencil_2::Any
-    fft_plan_1::Any
-    fft_plan_2::Any
-    shape::Tuple{Vararg{Int}}
+    forward_pencil_1::A1
+    forward_pencil_2::A2
+    fft_plan_1::F1
+    fft_plan_2::F2
+    shape::NTuple{N, Int}
     serial::Bool
-    pencil::Any
-    decomp_dims::Any
+    pencil::P
+    decomp_dims::D
 end
 
 # Nonlinear operator types

@@ -412,15 +412,22 @@ function _update_registered_forcings!(solver::InitialValueSolver, sim_time::Floa
 
     # Generate forcing for each registered forcing
     for (var_idx, forcing) in problem.stochastic_forcings
-        # Update dt if it changed
-        if hasfield(typeof(forcing), :dt) && forcing.dt != dt
-            set_dt!(forcing, dt)
-        end
-
-        # Generate new forcing realization
-        # Substep=1 ensures forcing is actually regenerated (not just cached)
-        generate_forcing!(forcing, sim_time, 1)
+        _generate_one_forcing!(forcing, sim_time, dt)
     end
+end
+
+# Function barrier: `forcing` is abstract in the dict, but here dispatch
+# specializes on its concrete type, so the dt check and generation compile
+# without runtime reflection overhead.
+function _generate_one_forcing!(forcing, sim_time::Float64, dt::Float64)
+    # Update dt if it changed
+    if hasfield(typeof(forcing), :dt) && forcing.dt != dt
+        set_dt!(forcing, dt)
+    end
+
+    # Generate new forcing realization
+    # Substep=1 ensures forcing is actually regenerated (not just cached)
+    generate_forcing!(forcing, sim_time, 1)
 end
 
 """
@@ -442,46 +449,41 @@ function _update_temporal_filters!(solver::InitialValueSolver, dt::Float64)
         return
     end
 
-    # Get variable name to field mapping
-    var_map = Dict{String, Any}()
-    for var in problem.variables
-        if hasproperty(var, :name)
-            var_map[getfield(var, :name)] = var
-        end
+    # Update each registered filter. The source field was resolved at
+    # registration time (TemporalFilterRegistration), so no per-step name
+    # lookup is needed.
+    for (filter_name, reg) in problem.temporal_filters
+        _update_one_filter!(filter_name, reg, dt)
+    end
+end
+
+# Function barrier: specializes on the registration's concrete filter and
+# field types, keeping the per-step update allocation-free.
+function _update_one_filter!(filter_name::Symbol, reg::TemporalFilterRegistration, dt::Float64)
+    source_var = reg.source_field
+
+    # Get the physical space data from the variable
+    if source_var isa ScalarField
+        ensure_layout!(source_var, :g)
+        data = get_grid_data(source_var)
+    elseif source_var isa VectorField
+        # For vector fields, use first component's grid data
+        ensure_layout!(source_var.components[1], :g)
+        data = get_grid_data(source_var.components[1])
+    elseif hasproperty(source_var, :data)
+        data = getfield(source_var, :data)
+    else
+        @warn "Cannot find data for variable $(reg.source)"
+        return nothing
     end
 
-    # Update each registered filter
-    for (filter_name, filter_info) in problem.temporal_filters
-        filter = filter_info.filter
-        source_sym = filter_info.source
-        source_name = String(source_sym)
-
-        if haskey(var_map, source_name)
-            source_var = var_map[source_name]
-            # Get the physical space data from the variable
-            if source_var isa ScalarField
-                ensure_layout!(source_var, :g)
-                data = get_grid_data(source_var)
-            elseif source_var isa VectorField
-                # For vector fields, use first component's grid data
-                ensure_layout!(source_var.components[1], :g)
-                data = get_grid_data(source_var.components[1])
-            elseif hasproperty(source_var, :data)
-                data = getfield(source_var, :data)
-            else
-                @warn "Cannot find data for variable $source_name"
-                continue
-            end
-
-            # Update the filter with current data
-            # Use try-catch in case filter types differ
-            try
-                update!(filter, data, dt)
-            catch e
-                @warn "Failed to update temporal filter :$filter_name: $e"
-            end
-        end
+    # Use try-catch in case filter types differ
+    try
+        update!(reg.filter, data, dt)
+    catch e
+        @warn "Failed to update temporal filter :$filter_name: $e"
     end
+    return nothing
 end
 
 """

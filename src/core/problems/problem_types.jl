@@ -6,6 +6,29 @@ Problem formulation classes
 
 abstract type Problem end
 
+"""
+    Forcing
+
+Abstract base type for all forcing types.
+
+Defined here (rather than in `stochastic_forcing.jl`, which loads later) so
+that `IVP.stochastic_forcings` can be concretely typed as `Dict{Int, Forcing}`.
+"""
+abstract type Forcing end
+
+"""
+    TemporalFilterRegistration{F, V}
+
+Concrete registration record for a temporal filter. The source field is
+resolved once at registration time so the per-timestep update loop needs no
+name lookup (no Dict rebuild, no Symbol→String conversion).
+"""
+struct TemporalFilterRegistration{F, V}
+    filter::F
+    source::Symbol
+    source_field::V
+end
+
 mutable struct IVP <: Problem
     variables::Vector{Operand}
     equations::Vector{String}
@@ -16,12 +39,12 @@ mutable struct IVP <: Problem
     domain::Union{Nothing, Domain}
     bc_manager::BoundaryConditionManager
     equation_data::Vector{Dict{String, Any}}
-    # Stochastic forcing: Dict mapping variable index to StochasticForcing
+    # Stochastic forcing: Dict mapping variable index to a Forcing subtype
     # Forcing is automatically added to RHS during timestepping
-    stochastic_forcings::Dict{Any, Any}
-    # Temporal filters: Dict mapping variable symbol to (filter, source_symbol)
+    stochastic_forcings::Dict{Int, Forcing}
+    # Temporal filters: Dict mapping filter name to its registration record
     # Filters are updated each timestep with the source variable's data
-    temporal_filters::Dict{Symbol, Any}
+    temporal_filters::Dict{Symbol, TemporalFilterRegistration}
 end
 
 mutable struct LBVP <: Problem
@@ -137,8 +160,8 @@ function _build_ivp(variables::Vector{<:Operand}; namespace::Union{Nothing, Abst
     ns = build_problem_namespace(vars, namespace)
     return IVP(vars, String[], String[], Dict{String, Any}(), ns,
                nothing, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}(),
-               Dict{Any, Any}(),      # Empty stochastic_forcings dict
-               Dict{Symbol, Any}())   # Empty temporal_filters dict
+               Dict{Int, Forcing}(),                       # Empty stochastic_forcings dict
+               Dict{Symbol, TemporalFilterRegistration}()) # Empty temporal_filters dict
 end
 
 function _build_lbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
@@ -623,7 +646,7 @@ end
 
 See also: [`StochasticForcing`](@ref), [`generate_forcing!`](@ref)
 """
-function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing)
+function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing::Forcing)
     # Find variable index by name
     var_name = String(variable)
     var_idx = nothing
@@ -714,22 +737,23 @@ end
 See also: [`ExponentialMean`](@ref), [`ButterworthFilter`](@ref), [`get_mean`](@ref)
 """
 function add_temporal_filter!(problem::IVP, filter_name::Symbol, filter, source_variable::Symbol)
-    # Validate source variable exists
+    # Resolve the source variable once here so the per-timestep update loop
+    # never has to rebuild a name → field map.
     var_name = String(source_variable)
-    found = false
+    source_field = nothing
     for var in problem.variables
         if hasproperty(var, :name) && getfield(var, :name) == var_name
-            found = true
+            source_field = var
             break
         end
     end
 
-    if !found
+    if source_field === nothing
         throw(ArgumentError("Source variable ':$source_variable' not found in problem variables"))
     end
 
-    # Store as (filter, source_symbol)
-    problem.temporal_filters[filter_name] = (filter=filter, source=source_variable)
+    problem.temporal_filters[filter_name] =
+        TemporalFilterRegistration(filter, source_variable, source_field)
 
     @info "Registered temporal filter :$filter_name tracking :$source_variable"
     return problem
@@ -746,7 +770,8 @@ has_temporal_filters(problem::IVP) = !isempty(problem.temporal_filters)
     get_temporal_filter(problem::IVP, filter_name::Symbol)
 
 Get the temporal filter by name, or nothing if not registered.
-Returns a NamedTuple with fields `filter` and `source`.
+Returns a [`TemporalFilterRegistration`](@ref) with fields `filter`, `source`,
+and `source_field`.
 """
 function get_temporal_filter(problem::IVP, filter_name::Symbol)
     return get(problem.temporal_filters, filter_name, nothing)

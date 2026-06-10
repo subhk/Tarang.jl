@@ -83,6 +83,7 @@ const TEST_FILES = [
     "test_gpu_solver_cpu.jl",
     "test_type_stability.jl",
     "test_field_typestability.jl",
+    "test_filter_forcing_typestability.jl",
     "test_fourier_algebraic_constraints.jl",
     "test_lazy_rhs_fourier.jl",
     "test_timestepper_boundaries.jl",
@@ -141,6 +142,7 @@ const MPI_TEST_FILES = [
     "test_mpi_batched_transform.jl",
     "test_mpi_dotproduct_term.jl",
     "test_stochastic_forcing_mpi.jl",
+    "test_mpi_integrate.jl",
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
 ]
