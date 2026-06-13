@@ -91,8 +91,8 @@ qg = qg_system_setup(
 )
 
 # Set initial surface buoyancy
-qg.θget_grid_data(_bot) .= initial_buoyancy_bottom
-qg.θget_grid_data(_top) .= initial_buoyancy_top
+get_grid_data(qg.θ_bot) .= initial_buoyancy_bottom
+get_grid_data(qg.θ_top) .= initial_buoyancy_top
 
 # Set interior PV (zero for SQG limit)
 get_grid_data(qg.q) .= 0.0
@@ -275,8 +275,8 @@ function qg_advection_rhs(qg::QGSystem)
 
     rhs_bot = ScalarField(qg.dist_2d_bot, "rhs_bot", qg.θ_bot.bases, Float64)
     ensure_layout!(rhs_bot, :g)
-    get_grid_data(rhs_bot) .= -(get_grid_data(qg.u_bot.components[1]) .* dθget_grid_data(_dx_bot) .+
-                        get_grid_data(qg.u_bot.components[2]) .* dθget_grid_data(_dy_bot))
+    get_grid_data(rhs_bot) .= -(get_grid_data(qg.u_bot.components[1]) .* get_grid_data(dθ_dx_bot) .+
+                        get_grid_data(qg.u_bot.components[2]) .* get_grid_data(dθ_dy_bot))
 
     # Top surface
     ensure_layout!(qg.θ_top, :g)
@@ -288,8 +288,8 @@ function qg_advection_rhs(qg::QGSystem)
 
     rhs_top = ScalarField(qg.dist_2d_top, "rhs_top", qg.θ_top.bases, Float64)
     ensure_layout!(rhs_top, :g)
-    get_grid_data(rhs_top) .= -(get_grid_data(qg.u_top.components[1]) .* dθget_grid_data(_dx_top) .+
-                        get_grid_data(qg.u_top.components[2]) .* dθget_grid_data(_dy_top))
+    get_grid_data(rhs_top) .= -(get_grid_data(qg.u_top.components[1]) .* get_grid_data(dθ_dx_top) .+
+                        get_grid_data(qg.u_top.components[2]) .* get_grid_data(dθ_dy_top))
 
     return rhs_bot, rhs_top
 end
@@ -340,14 +340,14 @@ function qg_step_euler!(qg::QGSystem, dt::Real)
     end
 
     # 5. Euler step
-    qg.θget_grid_data(_bot) .+= dt .* get_grid_data(rhs_bot)
-    qg.θget_grid_data(_top) .+= dt .* get_grid_data(rhs_top)
+    get_grid_data(qg.θ_bot) .+= dt .* get_grid_data(rhs_bot)
+    get_grid_data(qg.θ_top) .+= dt .* get_grid_data(rhs_top)
 end
 
 function qg_step_rk2!(qg::QGSystem, dt::Real)
     # Save initial state
-    θ_bot_0 = copy(qg.θget_grid_data(_bot))
-    θ_top_0 = copy(qg.θget_grid_data(_top))
+    θ_bot_0 = copy(get_grid_data(qg.θ_bot))
+    θ_top_0 = copy(get_grid_data(qg.θ_top))
 
     # Stage 1: Euler step to midpoint
     qg_step_euler!(qg, dt / 2)
@@ -364,14 +364,14 @@ function qg_step_rk2!(qg::QGSystem, dt::Real)
         get_grid_data(rhs_top) .+= qg.κ .* get_grid_data(frac_lap_top)
     end
 
-    qg.θget_grid_data(_bot) .= θ_bot_0 .+ dt .* get_grid_data(rhs_bot)
-    qg.θget_grid_data(_top) .= θ_top_0 .+ dt .* get_grid_data(rhs_top)
+    get_grid_data(qg.θ_bot) .= θ_bot_0 .+ dt .* get_grid_data(rhs_bot)
+    get_grid_data(qg.θ_top) .= θ_top_0 .+ dt .* get_grid_data(rhs_top)
 end
 
 function qg_step_rk4!(qg::QGSystem, dt::Real)
     # Save initial state
-    θ_bot_0 = copy(qg.θget_grid_data(_bot))
-    θ_top_0 = copy(qg.θget_grid_data(_top))
+    θ_bot_0 = copy(get_grid_data(qg.θ_bot))
+    θ_top_0 = copy(get_grid_data(qg.θ_top))
 
     function compute_rhs()
         qg_invert!(qg)
@@ -392,23 +392,23 @@ function qg_step_rk4!(qg::QGSystem, dt::Real)
     k1_bot, k1_top = compute_rhs()
 
     # k2
-    qg.θget_grid_data(_bot) .= θ_bot_0 .+ (dt / 2) .* k1_bot
-    qg.θget_grid_data(_top) .= θ_top_0 .+ (dt / 2) .* k1_top
+    get_grid_data(qg.θ_bot) .= θ_bot_0 .+ (dt / 2) .* k1_bot
+    get_grid_data(qg.θ_top) .= θ_top_0 .+ (dt / 2) .* k1_top
     k2_bot, k2_top = compute_rhs()
 
     # k3
-    qg.θget_grid_data(_bot) .= θ_bot_0 .+ (dt / 2) .* k2_bot
-    qg.θget_grid_data(_top) .= θ_top_0 .+ (dt / 2) .* k2_top
+    get_grid_data(qg.θ_bot) .= θ_bot_0 .+ (dt / 2) .* k2_bot
+    get_grid_data(qg.θ_top) .= θ_top_0 .+ (dt / 2) .* k2_top
     k3_bot, k3_top = compute_rhs()
 
     # k4
-    qg.θget_grid_data(_bot) .= θ_bot_0 .+ dt .* k3_bot
-    qg.θget_grid_data(_top) .= θ_top_0 .+ dt .* k3_top
+    get_grid_data(qg.θ_bot) .= θ_bot_0 .+ dt .* k3_bot
+    get_grid_data(qg.θ_top) .= θ_top_0 .+ dt .* k3_top
     k4_bot, k4_top = compute_rhs()
 
     # Final update
-    qg.θget_grid_data(_bot) .= θ_bot_0 .+ (dt / 6) .* (k1_bot .+ 2 .* k2_bot .+ 2 .* k3_bot .+ k4_bot)
-    qg.θget_grid_data(_top) .= θ_top_0 .+ (dt / 6) .* (k1_top .+ 2 .* k2_top .+ 2 .* k3_top .+ k4_top)
+    get_grid_data(qg.θ_bot) .= θ_bot_0 .+ (dt / 6) .* (k1_bot .+ 2 .* k2_bot .+ 2 .* k3_bot .+ k4_bot)
+    get_grid_data(qg.θ_top) .= θ_top_0 .+ (dt / 6) .* (k1_top .+ 2 .* k2_top .+ 2 .* k3_top .+ k4_top)
 end
 
 """
@@ -439,7 +439,7 @@ function qg_energy(qg::QGSystem)
     # Create energy density field for proper quadrature integration
     energy_field = ScalarField(qg.ψ.dist, "energy_density", qg.ψ.bases, qg.ψ.dtype)
     ensure_layout!(energy_field, :g)
-    get_grid_data(energy_field) .= dψget_grid_data(_dx).^2 .+ dψget_grid_data(_dy).^2 .+ S .* dψget_grid_data(_dz).^2
+    get_grid_data(energy_field) .= get_grid_data(dψ_dx).^2 .+ get_grid_data(dψ_dy).^2 .+ S .* get_grid_data(dψ_dz).^2
 
     # Integrate using basis-specific quadrature weights and compute volume average
     # integrate() uses proper weights: uniform for Fourier, Gauss-Legendre for Legendre,

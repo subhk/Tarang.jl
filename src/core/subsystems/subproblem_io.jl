@@ -274,6 +274,43 @@ function _gather_subproblem_raw(sp::Subproblem, fields::Vector)
     return _gather_subproblem_raw!(buffer, sp, fields)
 end
 
+"""
+Index tuple selecting this subproblem's mode from a multi-Fourier coefficient
+array `cd`: each Fourier axis → its local mode index (an `Int`, which drops that
+dimension); each coupled (non-Fourier, e.g. Chebyshev) axis → `Colon()` (kept in
+full). Returns `nothing` when a selected Fourier mode is not on this rank (MPI).
+
+Used for ≥3-D coefficient arrays — i.e. ≥2 Fourier axes plus a coupled axis (e.g.
+a 3D x,y-Fourier + z-Chebyshev field). The 0-D / 1-D / 2-D paths are handled
+inline; before this, the multi-D branch assumed a single Fourier axis (dim 1) and
+treated dim 2 as the coupled axis, so for 3D it selected only kx, never ky, and
+mis-sized the slice (BoundsError) — 3D mixed-basis solves never worked.
+"""
+function _subproblem_coeff_index(cd::AbstractArray, field::ScalarField, sp::Subproblem)
+    dist = sp.dist
+    nd = ndims(cd)
+    idx = Vector{Any}(undef, nd)
+    for axis in 1:nd
+        basis = axis <= length(field.bases) ? field.bases[axis] : nothing
+        g = axis <= length(sp.group) ? sp.group[axis] : nothing
+        if basis !== nothing && isa(basis, FourierBasis) && g isa Integer
+            kx_global = g + 1   # 0-based mode → 1-based index
+            kx_local = if dist === nothing || dist.size <= 1
+                kx_global
+            else
+                global_size = isa(basis, RealFourier) ? div(basis.meta.size, 2) + 1 : basis.meta.size
+                lr = local_indices(dist, axis, global_size)
+                kx_global - first(lr) + 1
+            end
+            (kx_local < 1 || kx_local > size(cd, axis)) && return nothing
+            idx[axis] = kx_local
+        else
+            idx[axis] = Colon()   # coupled axis (Chebyshev/Jacobi): keep all modes
+        end
+    end
+    return Tuple(idx)
+end
+
 function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
     ensure_layout!(field, :c)
     cd_raw = get_coeff_data(field)
@@ -311,16 +348,22 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
         end
         return offset + 1
     else
-        # 2D field: extract local row across all Chebyshev modes
-        kx_local = _global_to_local_kx(kx_global, field, sp)
-        Nz = size(cd, 2)
-        dest = view(buffer, offset + 1:offset + Nz)
-        if kx_local >= 1 && kx_local <= size(cd, 1)
-            _assign_to_buffer!(dest, selectdim(cd, 1, kx_local))
+        # Multi-D field: select each Fourier axis's local mode (drops that axis)
+        # and keep every coupled (non-Fourier) axis in full. Handles 1 Fourier + 1
+        # Chebyshev (the old 2-D case: idx = (kx, :) ≡ selectdim(cd,1,kx)), 2
+        # Fourier axes (a 0-D-in-z tau on (x,y): idx = (kx, ky) → 1 DOF), and 3D
+        # x,y-Fourier + z-Chebyshev (idx = (kx, ky, :)) uniformly. `n` comes from
+        # subproblem_field_size, which already counts 1 DOF per Fourier axis and
+        # the full coeff size per coupled axis.
+        n = subproblem_field_size(sp, field)
+        dest = view(buffer, offset + 1:offset + n)
+        idxt = _subproblem_coeff_index(cd, field, sp)
+        if idxt === nothing
+            fill!(dest, ComplexF64(0))   # selected mode not on this rank (MPI)
         else
-            fill!(dest, ComplexF64(0))
+            _assign_to_buffer!(dest, vec(view(cd, idxt...)))
         end
-        return offset + Nz
+        return offset + n
     end
 end
 
@@ -365,12 +408,15 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
         end
         return offset + 1
     else
-        kx_local = _global_to_local_kx(kx_global, field, sp)
-        Nz = size(cd, 2)
-        if kx_local >= 1 && kx_local <= size(cd, 1)
-            _assign_from_buffer!(selectdim(cd, 1, kx_local), view(data, offset + 1:offset + Nz))
+        # Mirror of the gather selector: write the solution back into the selected
+        # (kx[, ky, …]) mode across all coupled-axis coefficients. Covers 1F+1Cheb,
+        # 2 Fourier (0-D-in-z tau), and 3D x,y-Fourier + z-Cheb uniformly.
+        n = subproblem_field_size(sp, field)
+        idxt = _subproblem_coeff_index(cd, field, sp)
+        if idxt !== nothing
+            _assign_from_buffer!(view(cd, idxt...), view(data, offset + 1:offset + n))
         end
-        return offset + Nz
+        return offset + n
     end
 end
 

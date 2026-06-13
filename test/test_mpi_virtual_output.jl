@@ -73,6 +73,18 @@ MPI.Barrier(comm)
         end
         MPI.Barrier(comm)
     end
+
+    @testset "UnifiedEvaluator drives virtual handlers (orphan-loop guard)" begin
+        # REGRESSION GUARD: evaluate_unified_handlers! previously iterated only
+        # netcdf + dictionary handlers, never virtual_handlers, so VFH output was
+        # silently never written through the unified path.
+        evaluator = Tarang.UnifiedEvaluator(solver)
+        h = Tarang.add_virtual_file_handler(evaluator, outdir, "vunified"; cadence=1)
+        Tarang.add_task!(h, u, "u")
+        Tarang.evaluate_unified_handlers!(evaluator, 0.0, 0.0, 1)
+        MPI.Barrier(comm)
+        @test isfile(joinpath(outdir, "vunified_s1_p$(rank).nc"))
+    end
 end
 
 MPI.Barrier(comm)

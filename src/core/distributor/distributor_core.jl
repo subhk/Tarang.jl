@@ -971,30 +971,17 @@ function local_indices(dist::Distributor, axis::Int, global_size::Int)
         end
     end
 
-    # For PencilArrays convention, we need to check if this axis is decomposed
-    # Since we don't know ndims_global, accept any axis that could map to a mesh dim
+    # For PencilArrays convention, decomposition covers the LAST ndims_mesh of the
+    # field's global dimensions (matches _compute_full_decomp_dims / get_local_array_size).
+    # The distributor's total dimension `dist.dim` IS ndims_global, so map directly:
+    # decomposed axes are decomp_start..ndims_global → mesh dims 1..n_decomp; earlier
+    # axes are LOCAL (mesh_dim stays nothing → full 1:global_size returned below).
     if dist.use_pencil_arrays && mesh_dim === nothing
-        # Check all possible ndims_global values to see if axis maps to a mesh dim
-        # axis = ndims_global - ndims_mesh + i → i = axis - ndims_global + ndims_mesh
-        # For this to be valid: 1 ≤ i ≤ ndims_mesh, i.e., axis ≥ ndims_global - ndims_mesh + 1
-        # Since we don't know ndims_global, use a heuristic: if axis > ndims_mesh, it's likely
-        # a decomposed dimension (PencilArrays decomposes high-index dims)
-        # For the common case: ndims_global = dim of the domain, axis indexes into it
-        # mesh dim i corresponds to global dim (ndims_global - ndims_mesh + i)
-        # So mesh_dim = axis - (ndims_global - ndims_mesh)
-        # Without ndims_global, assume axis is directly decomposed by mesh dim (axis - offset)
-        # Fallback: treat as non-decomposed if we can't determine
-        for i in 1:ndims_mesh
-            # Try all plausible ndims_global values (axis..axis+ndims_mesh)
-            for ndims_global in axis:(axis + ndims_mesh)
-                if ndims_global - ndims_mesh + i == axis
-                    mesh_dim = i
-                    break
-                end
-            end
-            if mesh_dim !== nothing
-                break
-            end
+        ndims_global = dist.dim
+        n_decomp = min(ndims_mesh, ndims_global)
+        decomp_start = ndims_global - n_decomp + 1
+        if decomp_start <= axis <= ndims_global
+            mesh_dim = axis - decomp_start + 1
         end
     end
 

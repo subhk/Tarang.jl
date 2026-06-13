@@ -6,8 +6,8 @@ This file contains small vectorized array kernels, `fast_axpy!`, and
 """
 
 # LoopVectorization functions
-@inline """Vectorized addition: result = a + b"""
-function vectorized_add!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
+"""Vectorized addition: result = a + b"""
+@inline function vectorized_add!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
     if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
         result .= a .+ b
     elseif length(result) > 100
@@ -19,8 +19,8 @@ function vectorized_add!(result::AbstractArray, a::AbstractArray, b::AbstractArr
     end
 end
 
-@inline """Vectorized subtraction: result = a - b"""
-function vectorized_sub!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
+"""Vectorized subtraction: result = a - b"""
+@inline function vectorized_sub!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
     if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
         result .= a .- b
     elseif length(result) > 100
@@ -32,8 +32,8 @@ function vectorized_sub!(result::AbstractArray, a::AbstractArray, b::AbstractArr
     end
 end
 
-@inline """Vectorized multiplication: result = a * b (element-wise)"""
-function vectorized_mul!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
+"""Vectorized multiplication: result = a * b (element-wise)"""
+@inline function vectorized_mul!(result::AbstractArray, a::AbstractArray, b::AbstractArray)
     if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
         result .= a .* b
     elseif length(result) > 100
@@ -45,8 +45,8 @@ function vectorized_mul!(result::AbstractArray, a::AbstractArray, b::AbstractArr
     end
 end
 
-@inline """Vectorized scaling: result = α * a"""
-function vectorized_scale!(result::AbstractArray, a::AbstractArray, α::Real)
+"""Vectorized scaling: result = α * a"""
+@inline function vectorized_scale!(result::AbstractArray, a::AbstractArray, α::Real)
     if is_gpu_array(result) || is_gpu_array(a)
         result .= α .* a
     elseif length(result) > 100
@@ -58,8 +58,8 @@ function vectorized_scale!(result::AbstractArray, a::AbstractArray, α::Real)
     end
 end
 
-@inline """Vectorized AXPY: result = α*x + y"""
-function vectorized_axpy!(result::AbstractArray, α::Real, x::AbstractArray, y::AbstractArray)
+"""Vectorized AXPY: result = α*x + y"""
+@inline function vectorized_axpy!(result::AbstractArray, α::Real, x::AbstractArray, y::AbstractArray)
     if is_gpu_array(result) || is_gpu_array(x) || is_gpu_array(y)
         result .= α .* x .+ y
     elseif length(result) > 100
@@ -71,8 +71,8 @@ function vectorized_axpy!(result::AbstractArray, α::Real, x::AbstractArray, y::
     end
 end
 
-@inline """Vectorized linear combination: result = α*a + β*b"""
-function vectorized_linear_combination!(result::AbstractArray, α::Real, a::AbstractArray, β::Real, b::AbstractArray)
+"""Vectorized linear combination: result = α*a + β*b"""
+@inline function vectorized_linear_combination!(result::AbstractArray, α::Real, a::AbstractArray, β::Real, b::AbstractArray)
     if is_gpu_array(result) || is_gpu_array(a) || is_gpu_array(b)
         result .= α .* a .+ β .* b
     elseif length(result) > 100

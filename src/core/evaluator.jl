@@ -827,9 +827,17 @@ end
 function process!(handler::DictionaryHandler, solver::InitialValueSolver,
                   wall_time::Float64, sim_time::Float64, iteration::Int)
     """Evaluate all tasks and store results in-memory."""
-    if !should_write(handler, wall_time, sim_time, iteration)
-        return
+    # Decide on rank 0 and broadcast: evaluate_task gathers collectively, so a
+    # per-rank should_write (which depends on wall_time) could deadlock when only
+    # some ranks enter. All ranks must agree.
+    do_write = should_write(handler, wall_time, sim_time, iteration)
+    if MPI.Initialized()
+        dist = get_solver_dist(solver)
+        dw = Ref(do_write)
+        MPI.Bcast!(dw, dist.comm; root=0)
+        do_write = dw[]
     end
+    do_write || return
 
     for (name, task) in handler.datasets
         data = evaluate_task(task, solver)
@@ -1007,9 +1015,17 @@ and the manifest stores `name_gshape` (global shape) for reconstruction.
 """
 function process!(handler::VirtualFileHandler, solver::InitialValueSolver,
                   wall_time::Float64, sim_time::Float64, iteration::Int)
-    if !should_write(handler, wall_time, sim_time, iteration)
-        return
+    # Decide on rank 0 and broadcast: should_write depends on wall_time, which
+    # differs per rank, so a per-rank check could return on some ranks and fall
+    # through to the collective per-rank write + MPI.Barrier below on others →
+    # deadlock. All ranks must agree to enter or skip together.
+    do_write = should_write(handler, wall_time, sim_time, iteration)
+    if MPI.Initialized()
+        dw = Ref(do_write)
+        MPI.Bcast!(dw, handler.comm; root=0)
+        do_write = dw[]
     end
+    do_write || return
 
     handler.file_write_num += 1
     set_num = handler.set_num
@@ -1071,7 +1087,9 @@ Post-processing: merge per-rank NetCDF files into a single consolidated file.
 Reads the manifest to determine the file layout, then concatenates data
 along the decomposed dimension.
 """
-function merge_virtual!(handler::VirtualFileHandler; set_num::Int=handler.set_num)
+function merge_virtual!(handler::VirtualFileHandler; set_num::Int=max(1, handler.set_num - 1))
+    # Default to the LAST WRITTEN set: process! increments handler.set_num after
+    # each write, so handler.set_num points one past the last set actually on disk.
     manifest_filename = joinpath(handler.base_path,
                                  "$(handler.name)_s$(set_num).nc")
     if !isfile(manifest_filename)
@@ -1243,8 +1261,16 @@ function evaluate_unified_handlers!(evaluator::UnifiedEvaluator, wall_time::Floa
         end
     end
 
-    # Evaluate dictionary handlers (in-memory)
+    # Evaluate dictionary handlers (in-memory). process! broadcasts its own
+    # write decision (see DictionaryHandler process!), so no gating here.
     for handler in evaluator.dictionary_handlers
+        process!(handler, evaluator.solver, wall_time, sim_time, iteration)
+    end
+
+    # Evaluate virtual (per-rank NetCDF) handlers. Previously omitted entirely,
+    # so add_virtual_file_handler output was silently never written via the
+    # unified path. process! broadcasts its own write decision.
+    for handler in evaluator.virtual_handlers
         process!(handler, evaluator.solver, wall_time, sim_time, iteration)
     end
 

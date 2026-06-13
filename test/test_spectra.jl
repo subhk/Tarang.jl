@@ -59,6 +59,17 @@ end
         @test ps.power[peak] / sum(ps.power) > 0.99
     end
 
+    @testset "high x-mode above N/4 is retained, not truncated" begin
+        # REGRESSION GUARD: N=16 ⇒ Nyquist N/2 = 8. The rfft x-axis stores N/2+1=9
+        # coefficients; the old kmax used (N/2+1)÷2 = 4 ≈ N/4, silently discarding
+        # every mode in 5..8. Mode k=6 lies in that dropped band.
+        ps = Tarang.power_spectrum(_mode_field((x, y) -> cos(6x)))
+        @test maximum(ps.bin_edges) >= 6          # bin range must reach Nyquist, not N/4
+        peak = argmax(ps.power)
+        @test _bin_containing(ps, 6) == peak       # power lands in the k=6 bin
+        @test ps.power[peak] / sum(ps.power) > 0.99
+    end
+
     @testset "power scales with amplitude squared" begin
         ps1 = Tarang.power_spectrum(_mode_field((x, y) -> cos(3x)))
         ps2 = Tarang.power_spectrum(_mode_field((x, y) -> 2.0 * cos(3x)))

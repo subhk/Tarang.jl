@@ -159,4 +159,59 @@ end
         g  = vec(Array(Tarang.get_grid_data(u)))
         @test isapprox(g, bvp_u_exact.(zc); rtol=1e-8, atol=1e-9)
     end
+
+    # REGRESSION GUARD: high Fourier modes in steady solvers. The subsystem build
+    # used to collapse every nonzero mode onto a single {0,1} representative
+    # (compute_matrix_group saw matrix_dependence=false on separable axes), so any
+    # forcing at |k|≥2 was silently never solved. Manufactured Poisson with
+    # u_exact = sin(πz) cos(2x) (kx=2) pins the per-mode solve.
+    @testset "Linear BVP solves a HIGH Fourier mode (kx=2)" begin
+        Nx, Nz, Lz = 8, 24, 1.0
+        coords = CartesianCoordinates("x", "z"); dist = Distributor(coords; dtype=Float64, device=CPU())
+        xb = RealFourier(coords["x"]; size=Nx, bounds=(0.0, 2π), dealias=1.0)
+        zb = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz), dealias=1.0)
+        dom = Domain(dist, (xb, zb))
+        u = ScalarField(dom, "u"); tau1 = ScalarField(dist, "tau1", (xb,), Float64); tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+        fld = ScalarField(dom, "f"); lb2 = derivative_basis(zb, 2)
+        xg = vec(Array(Tarang.local_grid(xb, dist, 1))); zg = vec(Array(Tarang.local_grid(zb, dist, 1)))
+        uex(x, z) = sin(π * z / Lz) * cos(2x); λ = (π / Lz)^2 + 4
+        ensure_layout!(fld, :g); fd = Tarang.get_grid_data(fld)
+        for i in 1:Nx, k in 1:Nz; fd[i, k] = -λ * uex(xg[i], zg[k]); end
+        prob = Tarang.LBVP([u, tau1, tau2]); prob.namespace["f"] = fld
+        add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+        Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = f")
+        Tarang.add_bc!(prob, "u(z=0) = 0"); Tarang.add_bc!(prob, "u(z=Lz) = 0")
+        solver = Tarang.BoundaryValueSolver(prob); Tarang.solve!(solver); ensure_layout!(u, :g)
+        g = Array(Tarang.get_grid_data(u))
+        for i in 1:Nx, k in 1:Nz
+            @test isapprox(g[i, k], uex(xg[i], zg[k]); atol=1e-9)
+        end
+    end
+
+    # REGRESSION GUARD: 3D mixed basis (2 Fourier + 1 Chebyshev). Exercises
+    # (a) multi-Fourier-axis subproblem gather/scatter, (b) per-mode subproblem
+    # generation, and (c) the fft-layout (negative) wavenumber on the 2nd Fourier
+    # axis. u_exact = sin(πz) cos(x) cos(2y), with kx=1 ≠ ky=2.
+    @testset "Linear BVP solves a 3D Fourier×Fourier×Chebyshev Poisson" begin
+        Nx, Ny, Nz, Lz = 8, 8, 24, 1.0
+        coords = CartesianCoordinates("x", "y", "z"); dist = Distributor(coords; dtype=Float64, device=CPU())
+        xb = RealFourier(coords["x"]; size=Nx, bounds=(0.0, 2π), dealias=1.0)
+        yb = RealFourier(coords["y"]; size=Ny, bounds=(0.0, 2π), dealias=1.0)
+        zb = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz), dealias=1.0)
+        dom = Domain(dist, (xb, yb, zb))
+        u = ScalarField(dom, "u"); tau1 = ScalarField(dist, "tau1", (xb, yb), Float64); tau2 = ScalarField(dist, "tau2", (xb, yb), Float64)
+        fld = ScalarField(dom, "f"); lb2 = derivative_basis(zb, 2)
+        xg = vec(Array(Tarang.local_grid(xb, dist, 1))); yg = vec(Array(Tarang.local_grid(yb, dist, 1))); zg = vec(Array(Tarang.local_grid(zb, dist, 1)))
+        uex(x, y, z) = sin(π * z / Lz) * cos(x) * cos(2y); λ = (π / Lz)^2 + 1 + 4
+        ensure_layout!(fld, :g); fd = Tarang.get_grid_data(fld)
+        for i in 1:Nx, j in 1:Ny, k in 1:Nz; fd[i, j, k] = -λ * uex(xg[i], yg[j], zg[k]); end
+        prob = Tarang.LBVP([u, tau1, tau2]); prob.namespace["f"] = fld
+        add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+        Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = f")
+        Tarang.add_bc!(prob, "u(z=0) = 0"); Tarang.add_bc!(prob, "u(z=Lz) = 0")
+        solver = Tarang.BoundaryValueSolver(prob); Tarang.solve!(solver); ensure_layout!(u, :g)
+        g = Array(Tarang.get_grid_data(u))
+        err = maximum(abs(g[i, j, k] - uex(xg[i], yg[j], zg[k])) for i in 1:Nx, j in 1:Ny, k in 1:Nz)
+        @test err < 1e-8
+    end
 end

@@ -155,24 +155,31 @@ function fill_random!(field::VectorField, layout::String="g";
     return field
 end
 
-"""Integrate field over specified axes"""
+"""
+Integrate a field over the specified axes (default: all axes → a scalar).
+
+Delegates to the operator-path `integrate`/`evaluate_integrate`, which applies the
+basis quadrature weights to each rank's LOCAL slab and reduces collectively across
+MPI ranks. The previous direct implementation multiplied a per-rank local slab by
+GLOBAL-length weight vectors (DimensionMismatch on decomposed axes) and never
+reduced across ranks (each rank returned only its partial sum), and returned a
+1×1×… array instead of a scalar for full integration.
+"""
 function integrate(field::ScalarField, axes=:)
     if field.domain === nothing
         return 0.0
     end
-    
-    ensure_layout!(field, :g)
-    weights = integration_weights(field.domain)
-    
-    result = get_grid_data(field)
-    for (i, w) in enumerate(weights)
-        if axes === Colon() || i in axes
-            # Apply weights and sum along dimension i
-            result = sum(result .* reshape(w, ntuple(j -> j==i ? length(w) : 1, ndims(result))), dims=i)
-        end
+
+    coords_all = field.dist.coords
+    sel = if axes === Colon()
+        coords_all
+    else
+        tuple((coords_all[i] for i in axes)...)
     end
-    
-    return result
+    # Build the lazy Integrate operator directly (constructing it via the 2-arg
+    # `integrate` would be ambiguous with this very method); evaluate_integrate
+    # performs the MPI-correct weighted reduction over each rank's local slab.
+    return evaluate_integrate(Integrate(field, sel), :g)
 end
 
 # Vector field operations

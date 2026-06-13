@@ -135,10 +135,13 @@ the result is built from the differentiated component's bases, not the operand's
 """
 # Rotating pool of derivative-result buffers, keyed by (bases, dtype). Reuses
 # fields across calls instead of allocating a fresh ScalarField per derivative.
-# Uses N=8 distinct buffers (vs the global FieldPool's single-buffer reuse that
+# Uses N=16 distinct buffers (vs the global FieldPool's single-buffer reuse that
 # caused silent corruption — see step!), giving each of several simultaneously
 # live derivative results (e.g. the components of a gradient) its own buffer.
-const _DERIV_RESULT_POOL_SIZE = 8
+# Must be ≥ ndim² so a full 3D vector gradient (3×3 = 9 components evaluated in
+# one loop) never aliases buffer 1 with buffer 9 (8 was too small → T[3,3]
+# overwrote T[1,1]).
+const _DERIV_RESULT_POOL_SIZE = 16
 const _DERIV_RESULT_POOL = Dict{Tuple, Vector{ScalarField}}()
 const _DERIV_RESULT_IDX = Ref(0)
 

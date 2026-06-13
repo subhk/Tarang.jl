@@ -203,7 +203,15 @@ function Subsystem(solver, group::Tuple=SUBSYSTEM_GROUP)
 
     # Compute matrix group (following subsystems:124-129)
     matrix_coupling = hasfield(typeof(solver), :base) ? solver.base.matrix_coupling : fill(true, dist.dim)
-    matrix_dependence = copy(matrix_coupling)  # Default: same as coupling
+    # A SEPARABLE (non-coupled) Fourier axis is still matrix-DEPENDENT: the per-mode
+    # operator changes with the wavenumber (Laplacian → −k², derivative → ik), so
+    # each mode needs its own matrix/subproblem. The old `copy(matrix_coupling)`
+    # made matrix_dependence=false on separable axes, which let compute_matrix_group
+    # collapse every nonzero mode onto one representative (default_nonconst_groups,
+    # =1): only modes 0 and 1 got subproblems, so any forcing at |k|≥2 was silently
+    # never solved (LBVP/NLBVP/EVP returned 0 there). Mark every axis dependent so
+    # distinct modes keep distinct matrix groups.
+    matrix_dependence = fill(true, dist.dim)
     default_nonconst_groups = hasfield(typeof(dist), :default_nonconst_groups) ?
                               dist.default_nonconst_groups : ntuple(_ -> 1, dist.dim)
     matrix_group = compute_matrix_group(group, matrix_dependence, matrix_coupling, default_nonconst_groups)

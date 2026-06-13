@@ -18,11 +18,9 @@ where L̂ is the diagonal spectral operator.
 
 This avoids sparse matrix solves and stays 100% on GPU.
 
-!!! warning "Order reduction in stiff limit"
-    This implementation omits the off-diagonal implicit contributions
-    (- dt * Σ_{j<s} A_imp[s,j] * L̂ * Ŷ_j) from the stage RHS. This means
-    the method is only **first-order accurate in the stiff limit** (dt*|λ| >> 1).
-    For full 2nd-order IMEX-RK accuracy, use the dense IMEX methods in `step_rk.jl`.
+Uses the full ARS(2,2,2) ESDIRK tableau (including off-diagonal implicit terms),
+so it is L-stable and 2nd-order — identical math to `RK222`, but with the
+implicit solve done diagonally per Fourier mode instead of via a global matrix.
 """
 function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
@@ -32,19 +30,27 @@ function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValue
         _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
         return
     end
-    _step_diagonal_imex_rk222_impl!(state, solver, ts, L_spectral)
+    _step_diagonal_imex_rk_impl!(state, solver, ts, L_spectral)
     return nothing
 end
 
 # Function barrier: L is now a concrete SpectralLinearOperator{T,N,A}, so
 # L.coefficients has concrete type A and all broadcasts below are type-stable.
-function _step_diagonal_imex_rk222_impl!(state::TimestepperState, solver::InitialValueSolver,
-                                          ts::TimeStepper, L::SpectralLinearOperator)
+#
+# Unified IMEX-RK step for the GPU-native diagonal steppers (DiagonalIMEX_RK222 /
+# RK443). The implicit operator L̂ is diagonal in coefficient space, so each stage
+# solve is a per-mode division — but we use the FULL ESDIRK tableau `ts.A_implicit`
+# including the off-diagonal terms (−dt·Σ_{j<s} AI[s,j]·L̂·Y_j). Dropping those (as
+# the previous implementation did) makes the method unstable in the stiff limit
+# (R(z)→1−1/γ, |R|>1 for dt·λ≳5) rather than L-stable. This mirrors the math of
+# the distributed sibling `step_distributed_diagonal_imex_rk!`.
+function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialValueSolver,
+                                       ts::TimeStepper, L::SpectralLinearOperator)
     current_state = state.history[end]
     dt = state.dt
     t = solver.sim_time
-    γ = ts.γ
-    A = ts.A_explicit
+    AE = ts.A_explicit
+    AI = ts.A_implicit
     b_exp = ts.b_explicit
     b_imp = ts.b_implicit
     c = ts.c_explicit
@@ -67,18 +73,38 @@ function _step_diagonal_imex_rk222_impl!(state::TimestepperState, solver::Initia
             ws_idx = (s - 1) * n_fields + k
             ws_field = get_workspace_field!(state, src_field, ws_idx)
             copy_field_data!(ws_field, src_field)
-            ws_field.current_layout = src_field.current_layout
+            # Sync the coefficient buffer: copy_field_data! copies GRID data and
+            # leaves the field in :g, so merely flagging current_layout=:c would
+            # leave a stale (zero) coeff buffer — every in-place stage edit below
+            # would then be discarded when the field is re-read in :c (silently
+            # degrading the whole method to explicit forward Euler). ensure_layout!
+            # transforms grid→coeff so the implicit solve acts on the real X_n[k].
+            ensure_layout!(ws_field, :c)
             Y_s[k] = ws_field
 
-            coeff_data = get_coeff_data(ws_field)
+            coeff_data = get_coeff_data(ws_field)   # live coeff, = X_n[k]
             for j in 1:(s-1)
-                if abs(A[s, j]) > 1e-14
-                    coeff_data .+= dt .* A[s, j] .* get_coeff_data(F_stages[j][k])
+                if abs(AE[s, j]) > 1e-14
+                    coeff_data .+= dt .* AE[s, j] .* get_coeff_data(F_stages[j][k])
+                end
+                if abs(AI[s, j]) > 1e-14
+                    # Off-diagonal implicit contribution −dt·AI[s,j]·L̂·Y_j (the
+                    # term whose omission caused the stiff-limit instability).
+                    ensure_layout!(Y_stages[j][k], :c)
+                    coeff_data .-= dt .* AI[s, j] .* L.coefficients .* get_coeff_data(Y_stages[j][k])
                 end
             end
-            coeff_data ./= (1 .+ dt .* γ .* L.coefficients)
+            # Diagonal implicit solve (1 + dt·AI[s,s]·L̂)·Y_s = RHS. For the ESDIRK
+            # explicit first stage AI[1,1]=0, so this is a no-op there.
+            γ_s = AI[s, s]
+            if abs(γ_s) > 1e-14
+                coeff_data ./= (1 .+ dt .* γ_s .* L.coefficients)
+            end
         end
-        F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
+        # evaluate_rhs may return reused buffer fields; copy so a later stage's RHS
+        # evaluation cannot overwrite an earlier stage's stored F (matches the
+        # distributed sibling).
+        F_stages[s] = copy_state(evaluate_rhs(solver, Y_s, t + c[s] * dt))
     end
 
     new_state = copy_state(current_state)
@@ -109,13 +135,10 @@ end
 
 Diagonal IMEX RK step with GPU-native implicit treatment (4 stages).
 
-Uses classical RK4 explicit tableau for nonlinear terms, with implicit
-treatment of linear operator at each stage and final update.
-
-!!! warning "Order reduction in stiff limit"
-    Like `step_diagonal_imex_rk222!`, this omits off-diagonal implicit
-    contributions, reducing to first-order accuracy in the stiff limit.
-    For full 3rd-order IMEX accuracy, use the dense IMEX methods in `step_rk.jl`.
+Uses the Kennedy-Carpenter ARK3(2)4L[2]SA tableau (explicit ERK + full ESDIRK
+implicit, including off-diagonal terms), so it is L-stable and 3rd-order —
+identical math to `RK443`, with the implicit solve done diagonally per Fourier
+mode instead of via a global matrix.
 """
 function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
@@ -125,74 +148,8 @@ function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValue
         _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
         return
     end
-    _step_diagonal_imex_rk443_impl!(state, solver, ts, L_spectral)
+    _step_diagonal_imex_rk_impl!(state, solver, ts, L_spectral)
     return nothing
-end
-
-# Function barrier: L has concrete SpectralLinearOperator{T,N,A} type here.
-function _step_diagonal_imex_rk443_impl!(state::TimestepperState, solver::InitialValueSolver,
-                                          ts::TimeStepper, L::SpectralLinearOperator)
-    current_state = state.history[end]
-    dt = state.dt
-    t = solver.sim_time
-    A = ts.A_explicit
-    b_exp = ts.b_explicit
-    b_imp = ts.b_implicit
-    c = ts.c_explicit
-    γ_diag = ts.A_implicit_diag
-    stages = ts.stages
-
-    F_stages = Vector{Vector{ScalarField}}(undef, stages)
-    n_fields = length(current_state)
-    Y_stages = [Vector{ScalarField}(undef, n_fields) for _ in 1:stages]
-
-    for field in current_state
-        ensure_layout!(field, :c)
-    end
-
-    for s in 1:stages
-        state.current_substep = s
-        Y_s = Y_stages[s]
-        γ_s = γ_diag[s]
-        for (k, src_field) in enumerate(current_state)
-            ws_idx = (s - 1) * n_fields + k
-            ws_field = get_workspace_field!(state, src_field, ws_idx)
-            copy_field_data!(ws_field, src_field)
-            ws_field.current_layout = src_field.current_layout
-            Y_s[k] = ws_field
-
-            coeff_data = get_coeff_data(ws_field)
-            for j in 1:(s-1)
-                if abs(A[s, j]) > 1e-14
-                    coeff_data .+= dt .* A[s, j] .* get_coeff_data(F_stages[j][k])
-                end
-            end
-            coeff_data ./= (1 .+ dt .* γ_s .* L.coefficients)
-        end
-        F_stages[s] = evaluate_rhs(solver, Y_s, t + c[s] * dt)
-    end
-
-    new_state = copy_state(current_state)
-    for (k, field) in enumerate(new_state)
-        # copy_state may return the field in grid layout with a stale coefficient
-        # buffer; normalize to :c so the implicit update below writes the
-        # authoritative data (otherwise the edits are discarded when the field is
-        # next read in :c from its grid, and the state never evolves).
-        ensure_layout!(field, :c)
-        coeff_data = get_coeff_data(field)
-        for s in 1:stages
-            if abs(b_exp[s]) > 1e-14
-                ensure_layout!(F_stages[s][k], :c)
-                coeff_data .+= dt .* b_exp[s] .* get_coeff_data(F_stages[s][k])
-            end
-            if abs(b_imp[s]) > 1e-14
-                ensure_layout!(Y_stages[s][k], :c)
-                coeff_data .-= dt .* b_imp[s] .* L.coefficients .* get_coeff_data(Y_stages[s][k])
-            end
-        end
-    end
-
-    _push_trim!(state.history, new_state, 1)
 end
 
 """
@@ -233,7 +190,10 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
             _sbdf2_apply_be_L!(new_state, L_spectral, dt)
         end
         _push_trim!(state.history, new_state, 2)
-        _push_trim!(F_history, F_n, 2)
+        # evaluate_rhs returns reused buffer fields; copy before storing so the next
+        # step's RHS evaluation cannot overwrite this history entry (else F_{n-1}≡F_n
+        # and the AB2 extrapolation 2F_n−F_{n-1} collapses to first order).
+        _push_trim!(F_history, copy_state(F_n), 2)
     else
         X_n = current_state
         X_nm1 = state.history[end-1]
@@ -261,7 +221,7 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         end
 
         _push_trim!(state.history, new_state, 2)
-        _push_trim!(F_history, F_n, 2)
+        _push_trim!(F_history, copy_state(F_n), 2)  # copy: see startup branch above
     end
 
     state.timestepper_data[:iteration] = iteration + 1

@@ -487,22 +487,36 @@ struct DiagonalIMEX_RK222 <: TimeStepper
     b_explicit::Vector{Float64}
     b_implicit::Vector{Float64}
     c_explicit::Vector{Float64}
-    γ::Float64  # Implicit diagonal coefficient
+    A_implicit::Matrix{Float64}  # Full ESDIRK implicit tableau (off-diagonal terms required for L-stability)
+    γ::Float64  # Implicit diagonal coefficient (A_implicit[s,s] for s≥2)
 
     function DiagonalIMEX_RK222()
-        # Matches standard RK222 (Ascher-Ruuth-Spiteri 1997) explicit tableau
-        stages = 2
-        γ = 1 - 1/√2  # ≈ 0.2929 for L-stability
+        # Ascher-Ruuth-Spiteri (1997) ARS(2,2,2) — a matched, L-stable, 2nd-order
+        # IMEX pair. The implicit part is solved DIAGONALLY per Fourier mode (vs a
+        # global matrix), but it must carry the FULL ESDIRK tableau: omitting the
+        # off-diagonal implicit terms makes R(z)→1−1/γ≈−2.41 (|R|>1 for dt·λ≳4.8),
+        # i.e. unstable in the stiff limit — the opposite of L-stable.
+        stages = 3
+        γ = 1 - 1/√2  # ≈ 0.29289321881345254
 
+        # Explicit tableau (ERK), c = [0, γ, 1]
         A_explicit = [
-            0.0  0.0;
-            1.0  0.0
+            0.0    0.0      0.0;
+            γ      0.0      0.0;
+            γ      1.0-γ    0.0
         ]
-        b_explicit = [0.5, 0.5]
-        b_implicit = [1.0 - γ, γ]  # Implicit weights from SDIRK tableau
-        c_explicit = [0.0, 1.0]
+        b_explicit = [0.0, 1.0-γ, γ]
+        c_explicit = [0.0, γ, 1.0]
 
-        new(stages, A_explicit, b_explicit, b_implicit, c_explicit, γ)
+        # Implicit tableau (ESDIRK, explicit first stage, same γ diagonal), c = [0, γ, 1]
+        A_implicit = [
+            0.0    0.0      0.0;
+            0.0    γ        0.0;
+            0.0    1.0-γ    γ
+        ]
+        b_implicit = [0.0, 1.0-γ, γ]
+
+        new(stages, A_explicit, b_explicit, b_implicit, c_explicit, A_implicit, γ)
     end
 end
 
@@ -523,7 +537,8 @@ struct DiagonalIMEX_RK443 <: TimeStepper
     b_explicit::Vector{Float64}
     b_implicit::Vector{Float64}
     c_explicit::Vector{Float64}
-    A_implicit_diag::Vector{Float64}  # Diagonal implicit coefficients
+    A_implicit::Matrix{Float64}       # Full ESDIRK implicit tableau (off-diagonal terms required for L-stability)
+    A_implicit_diag::Vector{Float64}  # Diagonal implicit coefficients (= diag(A_implicit))
 
     function DiagonalIMEX_RK443()
         stages = 4
@@ -540,10 +555,17 @@ struct DiagonalIMEX_RK443 <: TimeStepper
         b_implicit = [0.0, 1.208496649176010, -0.6443631706844688, γ]  # Implicit weights from ESDIRK tableau
         c_explicit = [0.0, γ, 0.7179332607542195, 1.0]
 
-        # ESDIRK diagonal coefficients (0 for first stage, γ for remaining)
+        # Full ESDIRK implicit tableau (matches RK443; off-diagonal terms are
+        # essential — dropping them is the stiff-limit instability bug).
+        A_implicit = [
+            0.0   0.0                 0.0                  0.0;
+            0.0   γ                   0.0                  0.0;
+            0.0   0.2820667392457805  γ                    0.0;
+            0.0   1.208496649176010  -0.6443631706844688   γ
+        ]
         A_implicit_diag = [0.0, γ, γ, γ]
 
-        new(stages, A_explicit, b_explicit, b_implicit, c_explicit, A_implicit_diag)
+        new(stages, A_explicit, b_explicit, b_implicit, c_explicit, A_implicit, A_implicit_diag)
     end
 end
 

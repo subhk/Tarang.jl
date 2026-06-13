@@ -10,42 +10,55 @@ mode-dependent metadata while building per-subproblem operator matrices.
 # ============================================================================
 
 """
-    _subproblem_kx(sp) -> Float64
+    _subproblem_kx(sp, coord_name::AbstractString) -> Float64
 
-Get the Fourier wavenumber kx for a subproblem.
-Looks up the Fourier mode index from sp.group_dict and computes kx = nx * 2π/Lx
-using the domain length from the first FourierBasis found in problem variables.
+Get the Fourier wavenumber for the coordinate `coord_name` in a subproblem.
+Looks up that coordinate's mode index `sp.group_dict["n"*coord_name]` and the
+matching FourierBasis, then returns k = n·2π/L. Returns 0 if `coord_name` is not
+a Fourier axis of this subproblem.
+
+NOTE: `coord_name` is REQUIRED. A problem with two Fourier directions (e.g. x and
+y) builds a separate derivative matrix per axis; the previous no-argument version
+always returned the FIRST Fourier wavenumber, so the y-derivative was wrongly
+built with kx — yielding an implicit operator like −kx²−kx²+Dz² instead of
+−(kx²+ky²)+Dz² for a 3D x,y-periodic + z-Chebyshev Laplacian.
 """
-function _subproblem_kx(sp)
-    # Find the Fourier coordinate name and mode index from group_dict
+function _subproblem_kx(sp, coord_name::AbstractString)
+    key = "n" * coord_name
+    haskey(sp.group_dict, key) || return 0.0
+    n = sp.group_dict[key]
+
+    # Find the FourierBasis whose label matches coord_name, and its axis position
+    # in the field's basis list (needed to decide rfft vs fft wavenumber layout).
     fourier_basis = nothing
-    nx = nothing
+    fb_axis = 0
+    fb_bases = ()
     for var in sp.problem.variables
-        if !hasfield(typeof(var), :bases)
-            continue
-        end
-        for (i, basis) in enumerate(var.bases)
-            if basis !== nothing && isa(basis, FourierBasis)
-                coord_name = basis.meta.element_label
-                key = "n" * coord_name
-                if haskey(sp.group_dict, key)
-                    fourier_basis = basis
-                    nx = sp.group_dict[key]
-                    break
-                end
+        hasfield(typeof(var), :bases) || continue
+        for (axis, basis) in enumerate(var.bases)
+            if basis !== nothing && isa(basis, FourierBasis) &&
+               basis.meta.element_label == coord_name
+                fourier_basis = basis
+                fb_axis = axis
+                fb_bases = var.bases
+                break
             end
         end
-        if fourier_basis !== nothing
-            break
-        end
+        fourier_basis !== nothing && break
     end
 
-    if fourier_basis === nothing || nx === nothing
-        return 0.0
-    end
-
-    Lx = fourier_basis.meta.bounds[2] - fourier_basis.meta.bounds[1]
-    return nx * 2π / Lx
+    fourier_basis === nothing && return 0.0
+    # `n` is the 0-based COEFFICIENT index along this axis; its physical wavenumber
+    # depends on the storage layout. Only the first RealFourier axis is rfft (modes
+    # 0..N/2, all non-negative); every other Fourier axis is full fft (index n>N/2
+    # wraps to the NEGATIVE wavenumber n-N). The old `n·2π/L` was correct only for
+    # the first axis — on a 2nd Fourier axis it gave e.g. ky=6 instead of -2 for
+    # index 6 (N=8), so that mode's implicit operator used k²=36 instead of 4.
+    # Reuse the same wavenumber arrays the spectral derivatives use, so the matrix
+    # and the coefficient layout agree exactly.
+    karr = (isa(fourier_basis, RealFourier) && _is_first_real_fourier_axis(fb_bases, fb_axis)) ?
+           wavenumbers_rfft(fourier_basis) : wavenumbers_fft(fourier_basis)
+    return (n + 1) <= length(karr) ? Float64(real(karr[n + 1])) : 0.0
 end
 
 """
@@ -98,7 +111,7 @@ function _subproblem_diff_matrix(sp, coord_name::String, order::Int, Nz::Int)
             if basis.meta.element_label == coord_name
                 if isa(basis, FourierBasis)
                     # Fourier coordinate: use (im*kx)^order * I
-                    kx = _subproblem_kx(sp)
+                    kx = _subproblem_kx(sp, coord_name)
                     coeff = (im * kx)^order
                     return sparse(ComplexF64(coeff) * I, Nz, Nz)
                 elseif isa(basis, JacobiBasis)
@@ -124,7 +137,7 @@ function _subproblem_diff_matrix(sp, coord_name::String, order::Int, Nz::Int)
                     end
                     if basis.meta.element_label == coord_name
                         if isa(basis, FourierBasis)
-                            kx = _subproblem_kx(sp)
+                            kx = _subproblem_kx(sp, coord_name)
                             coeff = (im * kx)^order
                             return sparse(ComplexF64(coeff) * I, Nz, Nz)
                         elseif isa(basis, JacobiBasis)

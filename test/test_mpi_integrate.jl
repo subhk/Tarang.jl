@@ -63,6 +63,19 @@ end
         expected_x = 1.0 .+ cos.(2π .* (0:N-1) ./ N)
         @test all(isapprox.(adata, expected_x; atol=1e-10))
     end
+
+    @testset "field-level integrate(field) is a scalar, MPI-reduced" begin
+        # REGRESSION GUARD for the 1-arg field-level `integrate(field)` (used by
+        # e.g. qg_energy). It previously multiplied a per-rank LOCAL slab by
+        # GLOBAL-length weights (DimensionMismatch on decomposed axes) and never
+        # Allreduced (each rank returned only its partial), returning a 1×1 array
+        # rather than a scalar. Now it delegates to the MPI-correct operator path.
+        z = ScalarField(dist, "z", (xb, yb), Float64)
+        fill_by_global!(z, (gi, gj) -> 1.0, N)
+        val = Tarang.integrate(z)
+        @test val isa Number
+        @test isapprox(val, (2π)^2; rtol=1e-12)   # ∫∫ 1 dx dy over [0,2π]²
+    end
 end
 
 MPI.Finalize()

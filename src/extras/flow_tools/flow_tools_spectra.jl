@@ -1230,15 +1230,21 @@ function calculate_kmax_from_bases(fourier_bases, global_shape)
         return 0
     end
 
+    # `global_shape` is the COEFFICIENT shape. Only the FIRST RealFourier axis is
+    # stored as an rfft half-spectrum (length N/2+1); every other Fourier axis
+    # keeps the full complex spectrum (length N). Mirrors calculate_kmax_global.
+    first_rf_idx = findfirst(b -> isa(b, RealFourier), fourier_bases)
     kmaxes = Int[]
     for (i, basis) in enumerate(fourier_bases)
         if i <= length(global_shape)
             N = global_shape[i]
-            if isa(basis, RealFourier)
-                # RFFT: kmax = N/2
-                push!(kmaxes, N ÷ 2)
+            if isa(basis, RealFourier) && i == first_rf_idx
+                # rfft axis: coeff length N/2+1 ⇒ kmax = (N/2+1) - 1 = N/2.
+                # The old `N ÷ 2` here used the coeff length, giving (N/2+1)÷2 ≈ N/4
+                # and silently discarding every mode above a quarter of Nyquist.
+                push!(kmaxes, N - 1)
             else
-                # FFT: kmax = N/2
+                # Full-FFT axis: coeff length N ⇒ kmax = N/2.
                 push!(kmaxes, N ÷ 2)
             end
         end

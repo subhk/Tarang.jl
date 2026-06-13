@@ -274,4 +274,38 @@ import Tarang: SpectralLinearOperator
             @test isapprox(uf, exp(-2.0); rtol=0.05)   # decays at λ = ν k² = 2
         end
     end
+
+    @testset "DiagonalIMEX L-stability in the stiff limit" begin
+        # REGRESSION GUARD: the diagonal-IMEX RK steppers must include the
+        # off-diagonal implicit tableau terms, otherwise R(z) → 1−1/γ (|R|>1 for
+        # dt·λ ≳ 4.8) and high-wavenumber stiff modes BLOW UP instead of decaying.
+        # The non-stiff tests above (z = dt·ν·k² ≈ 0.01) cannot catch this; this
+        # one uses a deliberately stiff z = dt·ν·k² = 9.0. With the buggy
+        # diagonal-only update the k=6 mode grows ~|−1.47|^20 ≈ 2000×; the correct
+        # L-stable ESDIRK damps it to ≈ exp(−180) ≈ 0.
+        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443())
+            coords = CartesianCoordinates("x")
+            dist = Distributor(coords; mesh=(1,), dtype=Float64)
+            xb = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+            u = ScalarField(dist, "u", (xb,), Float64)
+            ensure_layout!(u, :g)
+            xs = collect(range(0, 2π, length=17))[1:16]
+            Tarang.get_grid_data(u) .= cos.(6 .* xs)        # stiff mode k=6, k²=36
+            u0 = maximum(abs, Tarang.get_grid_data(u))
+
+            L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=1.0)
+            problem = IVP([u]); add_equation!(problem, "dt(u) = 0")
+            dt = 0.25                                       # z = dt·ν·k² = 0.25·36 = 9 ≫ 4.8
+            solver = InitialValueSolver(problem, ts; dt=dt)
+            Tarang.set_spectral_linear_operator!(solver, L)
+            for _ in 1:20                                   # T = 5.0
+                step!(solver)
+            end
+            ensure_layout!(u, :g)
+            uf = maximum(abs, Tarang.get_grid_data(u))
+            @test isfinite(uf)
+            @test uf < u0          # stays bounded (the buggy version grows)
+            @test uf < 1e-2        # actually damped toward exp(−ν k² T) ≈ 0
+        end
+    end
 end
