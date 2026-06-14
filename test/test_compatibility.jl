@@ -263,8 +263,10 @@ end
     @test occursin("TARANG_FORCED_2D_INITIAL_NOISE", example)
     @test occursin("TARANG_FORCED_2D_LOG_INTERVAL", example)
     @test !occursin("refresh_streamfunction_from_vorticity!", example)
-    @test occursin("process!(snapshots)", example)
-    @test !occursin("process!(snapshots;", example)
+    @test occursin("add_file_handler(output_path, solver;", example)
+    @test occursin("run!(solver", example)
+    @test !occursin("process!(snapshots", example)
+    @test !occursin("close!(snapshots", example)
 end
 
 @testset "NetCDF evaluates operator tasks" begin
@@ -355,11 +357,11 @@ end
     @test occursin("log_interval = 100", example)
     @test occursin("output_path = \"sqg\"", example)
     @test occursin("ψ - invsqrtlap(θ) = 0", example)
-    @test occursin("add_file_handler(output_path, solver, Dict(\"θ\" => θ, \"ψ\" => ψ)", example)
+    @test occursin("add_file_handler(output_path, solver;", example)
     @test occursin("add_task!(snapshots, θ; name=\"theta\")", example)
-    @test occursin("process!(snapshots)", example)
-    @test !occursin("process!(snapshots;", example)
-    @test occursin("close!(snapshots)", example)
+    @test occursin("run!(solver", example)
+    @test !occursin("process!(snapshots", example)
+    @test !occursin("close!(snapshots", example)
 end
 
 @testset "Pluto snapshot notebook spectra" begin
