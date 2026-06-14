@@ -179,7 +179,11 @@ function integrate(field::ScalarField, axes=:)
     # Build the lazy Integrate operator directly (constructing it via the 2-arg
     # `integrate` would be ambiguous with this very method); evaluate_integrate
     # performs the MPI-correct weighted reduction over each rank's local slab.
-    return evaluate_integrate(Integrate(field, sel), :g)
+    # Returns a scalar for full integration, or a ScalarField over the remaining
+    # axes for partial integration.
+    result = evaluate_integrate(Integrate(field, sel), :g)
+    ensure_layout!(field, :g)   # restore the input field to grid layout (post-condition)
+    return result
 end
 
 # Vector field operations

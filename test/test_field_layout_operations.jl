@@ -98,6 +98,8 @@ using Random
     # 2. integrate(field, axes)
     #    Oracle: weights are uniform L/N (Fourier) and Clenshaw-Curtis
     #    summing to L (Chebyshev). integral of const c over axis = c*L.
+    #    FULL integration returns a SCALAR (MPI-reduced); PARTIAL integration
+    #    returns a ScalarField over the remaining axes.
     # ------------------------------------------------------------------
     @testset "integrate" begin
         Lx = 2pi
@@ -107,30 +109,32 @@ using Random
         f = ScalarField(dom1, "f")
         set!(f, 3.0)
         I = integrate(f, :)
-        @test I isa AbstractArray
-        @test ndims(I) == 1 && length(I) == 1   # collapsed along the single axis
-        @test isapprox(I[1], 3.0 * Lx; rtol=1e-12)
+        @test I isa Number                      # full integral is a scalar
+        @test isapprox(I, 3.0 * Lx; rtol=1e-12)
 
         # --- 1D periodic band-limited mode integrates to ~0 ---
         set!(f, (x,) -> sin(x) + cos(2x))
         Iz = integrate(f, :)
-        @test isapprox(Iz[1], 0.0; atol=1e-12)
+        @test isapprox(Iz, 0.0; atol=1e-12)
 
         # --- 2D periodic constant: c * Lx * Ly ---
         dom2 = PeriodicDomain(8, 8)             # [0,2π]^2
         g = ScalarField(dom2, "g")
         set!(g, 3.0)
         Ig = integrate(g, :)
-        @test size(Ig) == (1, 1)               # both axes collapsed
-        @test isapprox(Ig[1,1], 3.0 * Lx * Lx; rtol=1e-12)
+        @test Ig isa Number
+        @test isapprox(Ig, 3.0 * Lx * Lx; rtol=1e-12)
 
         # --- 2D integrate over a single axis only (axis 1 = x) ---
-        # Remaining axis keeps its length; collapsed axis becomes length 1.
+        # Partial integration returns a ScalarField over the remaining (y) axis.
         set!(g, 2.0)
         I1 = integrate(g, 1)
-        @test size(I1) == (1, 8)
+        @test I1 isa ScalarField
+        ensure_layout!(I1, :g)
+        I1d = vec(Array(get_grid_data(I1)))
+        @test length(I1d) == 8
         # Each surviving entry equals 2 * Lx (integral over x of the constant).
-        @test all(v -> isapprox(v, 2.0 * Lx; rtol=1e-12), I1)
+        @test all(v -> isapprox(v, 2.0 * Lx; rtol=1e-12), I1d)
 
         # --- Mixed Fourier x Chebyshev (channel): const over [0,2π]x[0,2] ---
         # Chebyshev Clenshaw-Curtis weights sum to L_z exactly, so ∫ c = c*Lx*Lz.
@@ -138,8 +142,8 @@ using Random
         cf = ScalarField(ch, "cf")
         set!(cf, 5.0)
         Ic = integrate(cf, :)
-        @test size(Ic) == (1, 1)
-        @test isapprox(Ic[1,1], 5.0 * 2pi * 2.0; rtol=1e-10)
+        @test Ic isa Number
+        @test isapprox(Ic, 5.0 * 2pi * 2.0; rtol=1e-10)
 
         # --- integrate auto-transforms from :c layout back to :g first ---
         k = ScalarField(dom2, "k")
@@ -147,8 +151,8 @@ using Random
         ensure_layout!(k, :c)                  # force coefficient layout
         @test k.current_layout == :c
         Ik = integrate(k, :)
-        @test isapprox(Ik[1,1], 4.0 * Lx * Lx; rtol=1e-12)
-        @test k.current_layout == :g           # integrate ensured grid layout
+        @test isapprox(Ik, 4.0 * Lx * Lx; rtol=1e-12)
+        @test k.current_layout == :g           # integrate restored grid layout
 
         # --- domain === nothing path returns 0.0 (0-D / tau-style field) ---
         coords = CartesianCoordinates("x", "y")
