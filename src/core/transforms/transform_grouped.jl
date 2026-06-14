@@ -392,7 +392,12 @@ Fourier forward on a stacked array.
 function _apply_stacked_forward(stacked, transform::FourierTransform, shifted_axis, dtype)
     dims = (shifted_axis,)
     if isa(transform.basis, RealFourier)
-        if dtype <: Complex
+        # Decide rfft vs fft from the RUNNING array eltype, NOT the original field
+        # dtype: after the first RealFourier axis runs rfft, `stacked` is already
+        # complex, so subsequent RealFourier axes must use fft (rfft only accepts
+        # real input). Using the fixed `dtype` here crashed multi-RealFourier-axis
+        # domains (e.g. 2D RealFourier × RealFourier).
+        if eltype(stacked) <: Complex
             return FFTW.fft(stacked, dims)
         else
             return FFTW.rfft(stacked, dims)
@@ -478,6 +483,13 @@ function _stacked_chebyshev_forward(data::AbstractArray, transform::ChebyshevTra
         _scale_last_along_axis!(full_result, axis, real_type(0.5))
     end
 
+    # Bridge FFTW's REDFT00 (defined on the standard grid) to Tarang's
+    # `-cos(πk/(N-1))` grid by flipping the sign of odd-degree coefficients —
+    # the per-field `_chebyshev_forward` does this too. Omitting it left the
+    # stacked path in the opposite (f(-x)) convention from every operator that
+    # consumes the coefficients (differentiation, interpolation, BC rows).
+    _flip_odd_indices_along_axis!(full_result, axis)
+
     # Truncate to coeff_size for dealiasing (matching per-field path)
     if coeff_size > 0 && coeff_size < n
         ncopy = min(n, coeff_size)
@@ -504,6 +516,11 @@ function _stacked_chebyshev_backward(data::AbstractArray, transform::ChebyshevTr
     # DCT-I backward: undo endpoint halving (double DC and last coeff)
     # This matches the per-field _chebyshev_backward path
     function _prescale_for_dct1_backward!(arr, ax, cs, gs)
+        # Reverse the grid-convention bridge applied in the forward transform:
+        # flip odd-degree coefficient signs FIRST, then undo the endpoint halving.
+        # Mirrors the per-field `_chebyshev_backward` (flip → ×2 endpoints). Without
+        # it the stacked round-trip silently used the f(-x) convention.
+        _flip_odd_indices_along_axis!(arr, ax)
         _scale_first_along_axis!(arr, ax, real_type(2.0))
         if cs > 1 && cs == gs
             _scale_last_along_axis!(arr, ax, real_type(2.0))

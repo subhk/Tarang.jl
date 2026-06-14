@@ -222,21 +222,32 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
     # apply_bc_override! below). Each bulk equation's RHS forcing is gathered onto
     # the coupled (non-Fourier) variable's rows. The forcing is solution-
     # independent for a linear BVP, so evaluating on the current state is exact.
-    udix = findfirst(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    # Each BULK PDE equation needs its OWN forcing container — a distinct field of
+    # the coupled/bulk shape. Targeting every bulk equation at a single `udix`
+    # (the first coupled field) made them overwrite one pde_F slot, so in a COUPLED
+    # MULTI-FIELD system every bulk equation received the LAST equation's RHS. Map
+    # the k-th bulk equation to the k-th coupled (non-Fourier) variable: distinct
+    # containers of the right shape. The container's variable identity is
+    # irrelevant — gather_eqn_F! places pde_F[ti] onto THIS equation's rows — only
+    # distinctness + shape matter. Single-field problems map to the same one var.
+    coupled_vars = findall(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
     eqn_sizes = _subproblem_eqn_sizes(sps[1])
     maxsz = isempty(eqn_sizes) ? 0 : maximum(eqn_sizes)
 
     pde_F = Vector{Any}(nothing, length(state))
     bvp_targets = Vector{Vector{Int}}(undef, length(problem.equation_data))
+    bulk_seen = 0
     for (eq_idx, eq_data) in enumerate(problem.equation_data)
         es = eq_idx <= length(eqn_sizes) ? eqn_sizes[eq_idx] : 0
-        if es == maxsz && es > 1 && udix !== nothing
-            bvp_targets[eq_idx] = [udix]
+        if es == maxsz && es > 1 && !isempty(coupled_vars)
+            bulk_seen += 1
+            ti = coupled_vars[min(bulk_seen, length(coupled_vars))]
+            bvp_targets[eq_idx] = [ti]
             F_expr = get(eq_data, "F_expr", nothing)
             F_expr === nothing && (F_expr = get(eq_data, "F", nothing))
             if F_expr !== nothing && !_is_zero_F_expr(F_expr)
-                pde_F[udix] = evaluate_solver_expression(F_expr, problem.variables;
-                                                         layout = :g, template = state[udix])
+                pde_F[ti] = evaluate_solver_expression(F_expr, problem.variables;
+                                                       layout = :g, template = state[ti])
             end
         else
             bvp_targets[eq_idx] = Int[]
@@ -296,13 +307,22 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
 
     # PDE forcing targets: the largest equation block is the bulk PDE (targets the
     # coupled variable); the small blocks are algebraic BC rows (left empty).
-    udix = findfirst(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    # Distinct forcing container per bulk equation (see solve_linear! above): map
+    # the k-th bulk PDE equation to the k-th coupled variable so a coupled
+    # multi-field system does not collapse every equation's RHS onto one slot.
+    coupled_vars = findall(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
     eqn_sizes = _subproblem_eqn_sizes(sps[1])
     maxsz = isempty(eqn_sizes) ? 0 : maximum(eqn_sizes)
     bvp_targets = Vector{Vector{Int}}(undef, length(eqd))
+    bulk_seen = 0
     for i in eachindex(eqd)
         es = i <= length(eqn_sizes) ? eqn_sizes[i] : 0
-        bvp_targets[i] = (es == maxsz && es > 1 && udix !== nothing) ? [udix] : Int[]
+        if es == maxsz && es > 1 && !isempty(coupled_vars)
+            bulk_seen += 1
+            bvp_targets[i] = [coupled_vars[min(bulk_seen, length(coupled_vars))]]
+        else
+            bvp_targets[i] = Int[]
+        end
     end
 
     x = fields_to_vector(state)

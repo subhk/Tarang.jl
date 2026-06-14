@@ -214,4 +214,38 @@ end
         err = maximum(abs(g[i, j, k] - uex(xg[i], yg[j], zg[k])) for i in 1:Nx, j in 1:Ny, k in 1:Nz)
         @test err < 1e-8
     end
+
+    # REGRESSION GUARD: coupled MULTI-FIELD steady solve. Every bulk PDE equation
+    # used to target the SAME first coupled variable `udix`, so the forcing slot
+    # was overwritten and all bulk equations received the LAST equation's RHS.
+    # Two co-solved Poissons at the same x-mode, different amplitudes (v=3u): with
+    # the bug u would pick up v's forcing (→ u = 3·u_exact).
+    @testset "Linear BVP solves a coupled multi-field system" begin
+        Nx, Nz, Lz = 8, 24, 1.0
+        coords = CartesianCoordinates("x", "z"); dist = Distributor(coords; dtype=Float64, device=CPU())
+        xb = RealFourier(coords["x"]; size=Nx, bounds=(0.0, 2π), dealias=1.0)
+        zb = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz), dealias=1.0)
+        dom = Domain(dist, (xb, zb))
+        u = ScalarField(dom, "u"); v = ScalarField(dom, "v")
+        tu1 = ScalarField(dist, "tu1", (xb,), Float64); tu2 = ScalarField(dist, "tu2", (xb,), Float64)
+        tv1 = ScalarField(dist, "tv1", (xb,), Float64); tv2 = ScalarField(dist, "tv2", (xb,), Float64)
+        fu = ScalarField(dom, "fu"); fv = ScalarField(dom, "fv"); lb2 = derivative_basis(zb, 2)
+        xg = vec(Array(Tarang.local_grid(xb, dist, 1))); zg = vec(Array(Tarang.local_grid(zb, dist, 1)))
+        uex(x, z) = sin(π * z / Lz) * cos(2x); vex(x, z) = 3 * uex(x, z); λ = (π / Lz)^2 + 4
+        ensure_layout!(fu, :g); ensure_layout!(fv, :g)
+        fud = Tarang.get_grid_data(fu); fvd = Tarang.get_grid_data(fv)
+        for i in 1:Nx, k in 1:Nz; fud[i, k] = -λ * uex(xg[i], zg[k]); fvd[i, k] = -λ * vex(xg[i], zg[k]); end
+        prob = Tarang.LBVP([u, v, tu1, tu2, tv1, tv2]); prob.namespace["fu"] = fu; prob.namespace["fv"] = fv
+        add_parameters!(prob; Lz=Lz, lu1=lift(tu1, lb2, -1), lu2=lift(tu2, lb2, -2),
+                        lv1=lift(tv1, lb2, -1), lv2=lift(tv2, lb2, -2))
+        Tarang.add_equation!(prob, "Δ(u) + lu1 + lu2 = fu")
+        Tarang.add_equation!(prob, "Δ(v) + lv1 + lv2 = fv")
+        Tarang.add_bc!(prob, "u(z=0) = 0"); Tarang.add_bc!(prob, "u(z=Lz) = 0")
+        Tarang.add_bc!(prob, "v(z=0) = 0"); Tarang.add_bc!(prob, "v(z=Lz) = 0")
+        solver = Tarang.BoundaryValueSolver(prob); Tarang.solve!(solver)
+        ensure_layout!(u, :g); ensure_layout!(v, :g)
+        gu = Array(Tarang.get_grid_data(u)); gv = Array(Tarang.get_grid_data(v))
+        @test maximum(abs(gu[i, k] - uex(xg[i], zg[k])) for i in 1:Nx, k in 1:Nz) < 1e-8
+        @test maximum(abs(gv[i, k] - vex(xg[i], zg[k])) for i in 1:Nx, k in 1:Nz) < 1e-8
+    end
 end
