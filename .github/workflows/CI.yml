@@ -81,13 +81,16 @@ jobs:
 
       - name: Process coverage
         uses: julia-actions/julia-processcoverage@v1
-        if: matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
+        # always(): upload the (bulk) serial coverage even if some tests fail —
+        # otherwise one failing test skips this step and the merged Codecov total
+        # collapses to just the optional+mpi flags (~22%).
+        if: always() && matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
         with:
           directories: src
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
-        if: matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
+        if: always() && matrix.version == '1.12' && matrix.os == 'ubuntu-latest'
         with:
           files: lcov.info
           flags: serial
@@ -178,11 +181,13 @@ jobs:
 
       - name: Process coverage
         uses: julia-actions/julia-processcoverage@v1
+        if: always()
         with:
           directories: src
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
+        if: always()
         with:
           files: lcov.info
           flags: optional
@@ -233,11 +238,13 @@ jobs:
 
       - name: Process coverage
         uses: julia-actions/julia-processcoverage@v1
+        if: always()
         with:
           directories: src
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v7
+        if: always()
         with:
           files: lcov.info
           flags: mpi-${{ matrix.nprocs }}
