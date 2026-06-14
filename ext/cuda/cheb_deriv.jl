@@ -12,8 +12,15 @@
 # the Chebyshev derivative recurrence entirely on GPU.
 # ============================================================================
 
-# Plan cache: keyed by (n, batch, T)
-const _GPU_CHEB_DERIV_CACHE = Dict{Tuple{Int,Int,DataType}, Any}()
+# Plan cache: keyed by (device, n, batch, T). The device MUST be part of the key —
+# the plan's CuArray work buffers and CUFFT plan are allocated on whatever device is
+# current at build time, so a plan built on device 0 must never be reused on device 1
+# (illegal cross-device access). Guarded by a lock for concurrent first-touch inserts.
+# NOTE: the cached plan's work_* buffers are shared across calls with the same key, so
+# concurrent derivative calls on the SAME (device,n,batch,T) must not overlap — the
+# transform layer is single-threaded per field (consistent with the rest of Tarang).
+const _GPU_CHEB_DERIV_CACHE = Dict{Any, Any}()
+const _GPU_CHEB_DERIV_LOCK = ReentrantLock()
 
 struct GPUChebyshevDerivPlan{T}
     n::Int                          # points along transform dimension
@@ -26,20 +33,21 @@ struct GPUChebyshevDerivPlan{T}
 end
 
 function _get_gpu_cheb_deriv_plan(n::Int, batch::Int, ::Type{T}) where {T<:AbstractFloat}
-    key = (n, batch, T)
-    p = get(_GPU_CHEB_DERIV_CACHE, key, nothing)
-    p !== nothing && return p::GPUChebyshevDerivPlan{T}
-
-    M = 2 * (n - 1)
-    work_ext   = CUDA.zeros(T,           M, batch)
-    work_cx    = CUDA.zeros(Complex{T},  n, batch)
-    work_real  = CUDA.zeros(T,           n, batch)
-    work_deriv = CUDA.zeros(T,           n, batch)
-    rfft_plan  = CUFFT.plan_rfft(work_ext, (1,))
-
-    p = GPUChebyshevDerivPlan{T}(n, batch, work_ext, work_cx, work_real, work_deriv, rfft_plan)
-    _GPU_CHEB_DERIV_CACHE[key] = p
-    return p
+    key = (CUDA.device(), n, batch, T)
+    return lock(_GPU_CHEB_DERIV_LOCK) do
+        p = get(_GPU_CHEB_DERIV_CACHE, key, nothing)
+        if p === nothing
+            M = 2 * (n - 1)
+            work_ext   = CUDA.zeros(T,           M, batch)
+            work_cx    = CUDA.zeros(Complex{T},  n, batch)
+            work_real  = CUDA.zeros(T,           n, batch)
+            work_deriv = CUDA.zeros(T,           n, batch)
+            rfft_plan  = CUFFT.plan_rfft(work_ext, (1,))
+            p = GPUChebyshevDerivPlan{T}(n, batch, work_ext, work_cx, work_real, work_deriv, rfft_plan)
+            _GPU_CHEB_DERIV_CACHE[key] = p
+        end
+        p::GPUChebyshevDerivPlan{T}
+    end
 end
 
 # ---------------------------------------------------------------------------
