@@ -777,7 +777,7 @@ end
 Parse common field expression patterns using regex matching.
 Fallback for when AST parsing fails.
 """
-function parse_field_expression_patterns(expr_str::String, namespace::Dict, dist)
+function parse_field_expression_patterns(expr_str::AbstractString, namespace::Dict, dist)
     # Pattern: ∂x(var), ∂y(var), ∂z(var) - Unicode only
     m = match(r"^∂([xyz])\((\w+)\)$", expr_str)
     if m !== nothing
@@ -848,7 +848,7 @@ function create_multiply_operator(left, right)
     return Dict("type" => "multiply", "left" => left, "right" => right)
 end
 
-function create_differentiate_operator(operand, coord_name::String, order::Int, namespace::Dict)
+function create_differentiate_operator(operand, coord_name::AbstractString, order::Int, namespace::Dict)
     # Try to find coordinate in namespace
     coord = get(namespace, coord_name, nothing)
     if coord === nothing
@@ -2286,7 +2286,21 @@ function add_file_handler(base_path::String, dist, vars; kwargs...)
     return NetCDFFileHandler(base_path, dist, vars; kwargs...)
 end
 
-function add_file_handler(base_path::String, solver::InitialValueSolver, vars; kwargs...)
+# Namespace used to resolve STRING-expression tasks (e.g. add_task!(h, "u*u")).
+# Defaults to the problem namespace, which already maps every problem variable by
+# name plus all operators (lap, ∂x, integrate, …) — so the explicit `vars` Dict is
+# only needed for names that are NOT problem variables (a field built outside the
+# problem). For plain field-object tasks (add_task!(h, u)) the namespace is unused.
+function _solver_output_namespace(solver::InitialValueSolver)
+    p = solver.problem
+    if p !== nothing && hasproperty(p, :namespace) && p.namespace !== nothing
+        return p.namespace
+    end
+    return Dict{String, Any}()
+end
+
+function add_file_handler(base_path::String, solver::InitialValueSolver,
+                          vars=_solver_output_namespace(solver); kwargs...)
     dist = if !isempty(solver.state)
         solver.state[1].dist
     else

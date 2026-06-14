@@ -441,9 +441,8 @@ add_equation!(problem, "T(x=1) = 0")
 
 solver = InitialValueSolver(problem, RK222(), dt=0.001)
 
-while solver.sim_time < 1.0
-    step!(solver)
-end
+# run! drives the loop to stop_time using the solver's fixed dt (no CFL here).
+run!(solver; stop_time=1.0)
 
 MPI.Finalize()
 ```
@@ -716,14 +715,21 @@ your problem.
 
 ### During Simulation
 
+Pass a callback to `run!` to plot periodically — an `Int` interval fires every N
+iterations:
+
 ```julia
 using Plots
 
-if solver.iteration % 100 == 0
-    T_grid = get_grid_data(T)
-    heatmap(T_grid')
-    savefig("output/T_$(solver.iteration).png")
-end
+run!(solver; stop_time=t_end, cfl=cfl,
+     callbacks=[
+         on_interval(100) do s
+             ensure_layout!(T, :g)
+             T_grid = Array(get_grid_data(T))
+             heatmap(T_grid')
+             savefig("output/T_$(s.iteration).png")
+         end
+     ])
 ```
 
 ### Post-Processing

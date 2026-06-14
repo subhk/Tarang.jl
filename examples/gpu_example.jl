@@ -212,12 +212,13 @@ else
     println("  Field 'u' is on CPU - no transfer needed")
 end
 
-# Note: When using NetCDFFileHandler output, the GPU→CPU transfer
-# happens automatically. You don't need to manually call get_cpu_data().
-# Example:
-#   handler = NetCDFFileHandler("output", dist, [u])
-#   add_task!(handler, u, "velocity")
-#   process!(handler)  # Automatically handles GPU→CPU transfer
+# Note: When using file-handler output, the GPU→CPU transfer happens
+# automatically. You don't need to manually call get_cpu_data().
+# Example (inside an IVP, the handler auto-registers on the solver and is
+# written by run! at its own cadence — no manual process!):
+#   handler = add_file_handler("output", solver; sim_dt=0.1)
+#   add_task!(handler, u; name="velocity")
+#   run!(solver; stop_time=10.0)   # auto-writes + closes handler; GPU→CPU handled
 
 # ============================================================================
 # Memory Management

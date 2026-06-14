@@ -23,8 +23,8 @@ handler = add_file_handler(
 )
 
 # Add field outputs
-add_task(handler, u; name="velocity")
-add_task(handler, T; name="temperature")
+add_task!(handler, u; name="velocity")
+add_task!(handler, T; name="temperature")
 
 # Process output at each timestep
 process!(handler;
@@ -95,7 +95,7 @@ function kinetic_energy(u_data)
 end
 
 # Add custom task
-add_task(handler, u;
+add_task!(handler, u;
     name="kinetic_energy",
     postprocess=kinetic_energy
 )
@@ -179,54 +179,22 @@ end
 
 ## Energy Spectra
 
-### 1D Spectrum
+Use the built-in `power_spectrum` (radially-binned shell spectrum of a scalar
+field with at least one Fourier basis) — no need to hand-roll wavenumber binning.
+It returns a NamedTuple `(k, power, bin_edges)`.
 
 ```julia
-function compute_1d_spectrum(u, axis)
-    ensure_layout!(u, :c)  # Spectral space
+ps = power_spectrum(u)                  # u::ScalarField with a Fourier axis
 
-    data = get_coeff_data(u)
-    N = size(data, axis)
+using Plots
+plot(ps.k, ps.power; xscale=:log10, yscale=:log10, xlabel="k", ylabel="E(k)")
 
-    # Sum over other dimensions
-    spectrum = zeros(N÷2)
-    for k in 1:N÷2
-        spectrum[k] = sum(abs2.(selectdim(data, axis, k)))
-    end
-
-    return spectrum
-end
+# For a velocity VectorField, the enstrophy (vorticity) spectrum:
+es = enstrophy_spectrum(velocity)       # → (k, power, bin_edges)
 ```
 
-### Shell-Averaged Spectrum
-
-```julia
-function compute_shell_spectrum(u, kmax)
-    ensure_layout!(u, :c)
-
-    # Initialize spectrum bins
-    E_k = zeros(kmax)
-    counts = zeros(Int, kmax)
-
-    # Get wavenumbers
-    kx = get_wavenumbers(u.bases[1])
-    ky = get_wavenumbers(u.bases[2])
-    kz = get_wavenumbers(u.bases[3])
-
-    # Bin energy by wavenumber magnitude
-    for i in eachindex(kx), j in eachindex(ky), k in eachindex(kz)
-        k_mag = sqrt(kx[i]^2 + ky[j]^2 + kz[k]^2)
-        k_bin = round(Int, k_mag)
-
-        if 1 <= k_bin <= kmax
-            E_k[k_bin] += abs2(get_coeff_data(u)[i,j,k])
-            counts[k_bin] += 1
-        end
-    end
-
-    return E_k
-end
-```
+See the [Analysis API](../api/analysis.md#Spectral-Analysis) for options
+(`max_wavenumber`, `radial_average`, binning).
 
 ## Time Series
 
@@ -238,20 +206,20 @@ times = Float64[]
 energies = Float64[]
 nusselts = Float64[]
 
-# During simulation
-while solver.sim_time < t_end
-    step!(solver, dt)
+# Record diagnostics each step via a run! callback (Int interval 1 = every step;
+# use a larger Int for every-N-steps, or a Float for every-Δt sim-time).
+# global_energy / compute_nusselt are the helpers defined under Global Diagnostics.
+run!(solver; stop_time=t_end,
+     callbacks=[1 => function (s)
+         push!(times, s.sim_time)
+         push!(energies, global_energy(u, reducer))
+         push!(nusselts, compute_nusselt(T, uz, L, kappa))
+     end])
 
-    # Record diagnostics
-    push!(times, solver.sim_time)
-    push!(energies, compute_kinetic_energy(u))
-    push!(nusselts, compute_nusselt(T, uz, L, kappa))
-end
-
-# Save to file
+# Save to file (plain vectors → any format; here a CSV via the stdlib)
 if rank == 0
-    using JLD2
-    @save "diagnostics.jld2" times energies nusselts
+    using DelimitedFiles
+    writedlm("diagnostics.csv", [times energies nusselts], ',')
 end
 ```
 
@@ -298,47 +266,61 @@ end
 
 ## Checkpointing
 
+Tarang has no built-in checkpoint type — write a small helper over the evolving
+state fields (`solver.state`, each a `ScalarField` with a `.name`) and plain
+NetCDF. Grid space is exact and real-valued, so it round-trips losslessly.
+
 ### Saving State
 
 ```julia
-function save_checkpoint(solver, filename)
-    state = Dict(
-        "sim_time" => solver.sim_time,
-        "iteration" => solver.iteration,
-        "dt" => solver.dt,
-        "fields" => Dict()
-    )
+using NetCDF
 
-    for (name, field) in solver.problem.fields
-        ensure_layout!(field, :c)
-        state["fields"][name] = copy(get_coeff_data(field))
+function save_checkpoint(solver, path)
+    isfile(path) && rm(path)
+    for f in solver.state
+        ensure_layout!(f, :g)
+        g = get_grid_data(f)
+        dimspec = collect(Iterators.flatten(
+            ("$(f.name)_d$i" => s for (i, s) in enumerate(size(g)))))
+        nccreate(path, f.name, dimspec...; t=NC_DOUBLE)   # NC_DOUBLE: keep Float64
+        ncwrite(g, path, f.name)
     end
-
-    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        using JLD2
-        @save filename state
-    end
+    ncputatt(path, "Global", Dict("sim_time" => solver.sim_time,
+                                  "iteration" => solver.iteration, "dt" => solver.dt))
+    return path
 end
 ```
 
 ### Loading State
 
 ```julia
-function load_checkpoint!(solver, filename)
-    using JLD2
-    @load filename state
-
-    solver.sim_time = state["sim_time"]
-    solver.iteration = state["iteration"]
-    solver.dt = state["dt"]
-
-    for (name, data) in state["fields"]
-        field = solver.problem.fields[name]
-        get_coeff_data(field) .= data
-        field.current_layout = :c
+function load_checkpoint!(solver, path)
+    for f in solver.state
+        ensure_layout!(f, :g)                 # ensure the grid buffer exists / layout is :g
+        get_grid_data(f) .= ncread(path, f.name)
     end
+    solver.sim_time  = ncgetatt(path, "Global", "sim_time")
+    solver.iteration = Int(ncgetatt(path, "Global", "iteration"))
+    solver.dt        = ncgetatt(path, "Global", "dt")
+    return solver
 end
 ```
+
+Use `solver.state` (the integrator's live fields), **not** the problem-variable
+handles. Restart then continues from `run!` as usual:
+
+```julia
+save_checkpoint(solver, "chk.nc")
+# … later, in a fresh session with the same problem/solver built …
+load_checkpoint!(solver, "chk.nc")
+run!(solver; stop_time=20.0, cfl=cfl)
+```
+
+!!! note "MPI"
+    `get_grid_data` is the rank-local slab, so this helper is per-rank/serial.
+    Under MPI either write one file per rank (include the rank in `path`), or
+    gather to rank 0 with `gather_array(f.dist, get_grid_data(f))` before writing
+    and scatter on load.
 
 ## Complete Example
 
@@ -353,12 +335,6 @@ rank = MPI.Comm_rank(MPI.COMM_WORLD)
 # Setup (abbreviated)
 # ... create domain, fields, problem ...
 
-# Output handler
-handler = add_file_handler("output", dist, Dict("T" => T);
-    parallel="gather", max_writes=100)
-add_task(handler, T; name="temperature")
-add_mean_task!(handler, T; dims=1, name="T_mean")
-
 # Create solver
 solver = InitialValueSolver(problem, RK222(), dt=1e-3)
 
@@ -366,37 +342,27 @@ solver = InitialValueSolver(problem, RK222(), dt=1e-3)
 cfl = CFL(problem, safety=0.5)
 add_velocity!(cfl, u)
 
-# Diagnostics storage
-times, energies = Float64[], Float64[]
+# Output handler — pass the SOLVER so the handler auto-registers and `run!`
+# processes it at its `sim_dt` cadence (no manual `process!` in the loop). No
+# `vars` Dict needed: T is a problem variable, already in the solver namespace.
+handler = add_file_handler("output", solver; parallel="gather", sim_dt=0.1, max_writes=100)
+add_task!(handler, T; name="temperature")           # field snapshot
+add_mean_task!(handler, T; dims=1, name="T_mean")    # x-averaged profile
 
-# Main loop
-output_interval = 0.1
-next_output = output_interval
+# Diagnostics storage (time series accumulated in a callback)
+times, max_T = Float64[], Float64[]
 
-while solver.sim_time < 10.0
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
-
-    # Store diagnostics
-    push!(times, solver.sim_time)
-    push!(energies, compute_kinetic_energy(u))
-
-    # Periodic output
-    if solver.sim_time >= next_output
-        process!(handler;
-            iteration=solver.iteration,
-            sim_time=solver.sim_time,
-            wall_time=0.0,
-            timestep=dt
-        )
-
-        if rank == 0
-            @printf("t = %.3f, E = %.6e\n", solver.sim_time, energies[end])
-        end
-
-        next_output += output_interval
-    end
-end
+# run! drives the whole loop: CFL-adaptive dt, auto-writes the registered handler,
+# runs callbacks, and closes the handler at the end. A Float callback interval
+# (0.1) fires every 0.1 sim-time units; an Int interval fires every N iterations.
+# global_max is MPI-reduced, so the value is identical on every rank.
+run!(solver; stop_time=10.0, cfl=cfl,
+     callbacks=[0.1 => function (s)
+         ensure_layout!(T, :g)
+         push!(times, s.sim_time)
+         push!(max_T, global_max(dist, abs.(get_grid_data(T))))
+         rank == 0 && @printf("t = %.3f, max|T| = %.6e\n", s.sim_time, max_T[end])
+     end])
 
 MPI.Finalize()
 ```

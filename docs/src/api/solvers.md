@@ -51,26 +51,39 @@ solver.state            # Current state vector
 
 #### run!
 
-The recommended way to run a simulation. Handles the loop, progress reporting, and callbacks:
+The recommended way to run a simulation. Drives the timestep loop, CFL-adaptive
+dt, output handlers, progress, and callbacks — so a typical script needs no manual
+`step!`/`process!`/`close!`:
 
 ```julia
+# Handlers created with the SOLVER auto-register; run! writes them every step
+# (at their own sim_dt/iter cadence) and closes them at the end.
+snap = add_file_handler("output/snap", solver; sim_dt=0.5)
+add_task!(snap, u; name="u")
+
 run!(solver;
      stop_time=10.0,
-     log_interval=100,
+     cfl=cfl,                       # adaptive dt = compute_timestep(cfl) each step
+     log_interval=100,              # built-in progress line every 100 steps
      callbacks=[
-         (10, s -> @info "Energy: $(compute_energy(s))"),
-         (0.5, s -> save_checkpoint(s))  # every 0.5 time units
+         100 => (s -> @printf("t=%.3f dt=%.2e max|u|=%.3e\n", s.sim_time, s.dt, global_max(u))),
+         0.5 => (s -> save_checkpoint(s)),   # every 0.5 sim-time units
      ])
 ```
 
 **Arguments**:
-- `stop_time`: Stop when `sim_time >= stop_time`
-- `stop_iteration`: Stop after N iterations
-- `stop_wall_time`: Stop after N seconds of wall time
-- `callbacks`: Vector of `(interval, function)` pairs
-- `log_interval`: Print progress every N iterations (0 to disable)
+- `stop_time`: stop when `sim_time >= stop_time`
+- `stop_iteration`: stop after N iterations
+- `stop_wall_time`: stop after N seconds of wall time
+- `cfl`: a `CFL` controller — if given, `dt = compute_timestep(cfl)` each step
+- `outputs`: extra output handlers to process each step (handlers created with the
+  solver are already auto-registered; use this for ones created from a `dist`)
+- `callbacks`: vector of `interval => function` pairs; the function receives the solver
+- `log_interval`: print a built-in progress line every N iterations (0 to disable)
 
-Callback intervals can be `Int` (every N iterations) or `Float64` (every T time units).
+Callback (and output) intervals can be `Int` (every N iterations) or `Float64`
+(every T sim-time units). Custom diagnostics — time, timestep, and field maxima
+via `global_max`/`global_min`/`global_sum` — go in a callback.
 
 #### step!
 
@@ -606,19 +619,15 @@ solver = InitialValueSolver(problem, RK222(), dt=1e-4)
 cfl = CFL(problem, safety=0.5)
 add_velocity!(cfl, u)
 
-# Output
-output = add_netcdf_handler(solver, "output", fields=[u, p, T], write_interval=0.1)
+# Output — created with the solver, so run! auto-writes + closes it
+output = add_file_handler("output", solver, Dict("u" => u, "p" => p, "T" => T); sim_dt=0.1)
 
-# Time integration
+# Time integration — run! drives the loop (CFL-adaptive dt, output, callbacks)
 t_end = 10.0
-while solver.sim_time < t_end
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
-
-    if solver.iteration % 100 == 0 && MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        println("t = $(solver.sim_time), dt = $dt")
-    end
-end
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[
+    100 => (s -> MPI.Comm_rank(MPI.COMM_WORLD) == 0 &&
+                 println("t = $(s.sim_time), dt = $(s.dt)")),
+])
 
 MPI.Finalize()
 ```
