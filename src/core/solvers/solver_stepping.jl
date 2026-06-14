@@ -103,6 +103,8 @@ function run!(solver::InitialValueSolver;
               stop_time::Real=Inf,
               stop_iteration::Integer=typemax(Int),
               stop_wall_time::Real=Inf,
+              cfl=nothing,
+              outputs::AbstractVector=Any[],
               callbacks::Vector=Pair[],
               log_interval::Integer=0,
               progress::Bool=true)
@@ -111,6 +113,15 @@ function run!(solver::InitialValueSolver;
     solver.stop_iteration = Int(stop_iteration)
     solver.stop_wall_time = Float64(stop_wall_time)
     solver.wall_time_start = time()
+
+    # Output handlers to process each step: those passed via `outputs=` plus any
+    # auto-registered on the solver by `add_file_handler(path, solver, vars)`.
+    all_outputs = collect(Any, outputs)
+    if solver.evaluator !== nothing && hasproperty(solver.evaluator, :output_handlers)
+        for h in solver.evaluator.output_handlers
+            (h in all_outputs) || push!(all_outputs, h)
+        end
+    end
 
     # Track last callback times for time-based intervals
     last_callback_times = Float64[solver.sim_time for _ in callbacks]
@@ -121,8 +132,27 @@ function run!(solver::InitialValueSolver;
 
     wall_start = time()
 
+    # Write an initial snapshot (iteration 0) so the first frame is captured,
+    # matching the typical manual `process!(h)` placed before the loop.
+    for h in all_outputs
+        process!(h)
+    end
+
     while proceed(solver)
+        # Adaptive timestep from a CFL controller, if supplied — lets CFL-driven
+        # runs use run! too (no manual while-loop just to call compute_timestep).
+        if cfl !== nothing
+            solver.dt = compute_timestep(cfl)
+        end
         step!(solver)
+
+        # Auto-process registered output handlers. Each handler gates its own
+        # cadence (sim_dt/iter/wall_dt) via should_write, so this is a no-op on
+        # non-output steps — the user no longer needs a manual process!(h) call
+        # in the step loop (easy to forget / silently drops output).
+        for h in all_outputs
+            process!(h)
+        end
 
         # Log progress
         if log_interval > 0 && solver.iteration % log_interval == 0
@@ -140,6 +170,16 @@ function run!(solver::InitialValueSolver;
                 func(solver)
                 last_callback_times[idx] = solver.sim_time
             end
+        end
+    end
+
+    # Finalize output handlers (stamp final metadata; data is already flushed
+    # per write). Guarded so a misbehaving close! cannot abort a finished run.
+    for h in all_outputs
+        try
+            close!(h)
+        catch e
+            @warn "Failed to close output handler" exception=e
         end
     end
 

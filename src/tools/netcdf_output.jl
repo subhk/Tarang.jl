@@ -2292,7 +2292,15 @@ function add_file_handler(base_path::String, solver::InitialValueSolver, vars; k
     else
         _first_problem_dist(solver.problem)
     end
-    return NetCDFFileHandler(base_path, dist, vars; solver=solver, kwargs...)
+    handler = NetCDFFileHandler(base_path, dist, vars; solver=solver, kwargs...)
+    # Register the handler with the solver so `run!(solver; ...)` auto-processes
+    # it every step — no manual `process!(handler)` in the loop required.
+    attach_evaluator!(solver)
+    ev = solver.evaluator
+    if ev !== nothing && hasproperty(ev, :output_handlers) && !(handler in ev.output_handlers)
+        push!(ev.output_handlers, handler)
+    end
+    return handler
 end
 
 function _first_problem_dist(problem::Problem)

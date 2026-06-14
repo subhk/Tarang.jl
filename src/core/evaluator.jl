@@ -107,11 +107,16 @@ mutable struct Evaluator <: AbstractEvaluator
     solver::InitialValueSolver
     file_handlers::Vector{FileHandler}
     dictionary_handlers::Vector{DictionaryHandler}
+    # Output handlers registered against the solver (e.g. NetCDFFileHandler from
+    # `add_file_handler(path, solver, vars)`). `run!` auto-processes these every
+    # step so a manual `process!(h)` in the loop is not required. Typed `Any`
+    # because NetCDFFileHandler is defined in a later-loaded module.
+    output_handlers::Vector{Any}
     performance_stats::EvaluatorPerformanceStats
 
     function Evaluator(solver::InitialValueSolver)
         perf_stats = EvaluatorPerformanceStats()
-        new(solver, FileHandler[], DictionaryHandler[], perf_stats)
+        new(solver, FileHandler[], DictionaryHandler[], Any[], perf_stats)
     end
 end
 
