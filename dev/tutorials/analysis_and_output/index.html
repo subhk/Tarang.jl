@@ -11,8 +11,8 @@ handler = add_file_handler(
 )
 
 # Add field outputs
-add_task(handler, u; name=&quot;velocity&quot;)
-add_task(handler, T; name=&quot;temperature&quot;)
+add_task!(handler, u; name=&quot;velocity&quot;)
+add_task!(handler, T; name=&quot;temperature&quot;)
 
 # Process output at each timestep
 process!(handler;
@@ -51,7 +51,7 @@ function kinetic_energy(u_data)
 end
 
 # Add custom task
-add_task(handler, u;
+add_task!(handler, u;
     name=&quot;kinetic_energy&quot;,
     postprocess=kinetic_energy
 )</code></pre><h2 id="Global-Diagnostics"><a class="docs-heading-anchor" href="#Global-Diagnostics">Global Diagnostics</a><a id="Global-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Global-Diagnostics" title="Permalink"></a></h2><h3 id="CFL-Condition"><a class="docs-heading-anchor" href="#CFL-Condition">CFL Condition</a><a id="CFL-Condition-1"></a><a class="docs-heading-anchor-permalink" href="#CFL-Condition" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Tarang
@@ -102,62 +102,31 @@ end</code></pre><h3 id="Nusselt-Number"><a class="docs-heading-anchor" href="#Nu
     Nu = 1.0 + flux_conv * L / (kappa * dT)
 
     return Nu
-end</code></pre><h2 id="Energy-Spectra"><a class="docs-heading-anchor" href="#Energy-Spectra">Energy Spectra</a><a id="Energy-Spectra-1"></a><a class="docs-heading-anchor-permalink" href="#Energy-Spectra" title="Permalink"></a></h2><h3 id="1D-Spectrum"><a class="docs-heading-anchor" href="#1D-Spectrum">1D Spectrum</a><a id="1D-Spectrum-1"></a><a class="docs-heading-anchor-permalink" href="#1D-Spectrum" title="Permalink"></a></h3><pre><code class="language-julia hljs">function compute_1d_spectrum(u, axis)
-    ensure_layout!(u, :c)  # Spectral space
+end</code></pre><h2 id="Energy-Spectra"><a class="docs-heading-anchor" href="#Energy-Spectra">Energy Spectra</a><a id="Energy-Spectra-1"></a><a class="docs-heading-anchor-permalink" href="#Energy-Spectra" title="Permalink"></a></h2><p>Use the built-in <code>power_spectrum</code> (radially-binned shell spectrum of a scalar field with at least one Fourier basis) — no need to hand-roll wavenumber binning. It returns a NamedTuple <code>(k, power, bin_edges)</code>.</p><pre><code class="language-julia hljs">ps = power_spectrum(u)                  # u::ScalarField with a Fourier axis
 
-    data = get_coeff_data(u)
-    N = size(data, axis)
+using Plots
+plot(ps.k, ps.power; xscale=:log10, yscale=:log10, xlabel=&quot;k&quot;, ylabel=&quot;E(k)&quot;)
 
-    # Sum over other dimensions
-    spectrum = zeros(N÷2)
-    for k in 1:N÷2
-        spectrum[k] = sum(abs2.(selectdim(data, axis, k)))
-    end
-
-    return spectrum
-end</code></pre><h3 id="Shell-Averaged-Spectrum"><a class="docs-heading-anchor" href="#Shell-Averaged-Spectrum">Shell-Averaged Spectrum</a><a id="Shell-Averaged-Spectrum-1"></a><a class="docs-heading-anchor-permalink" href="#Shell-Averaged-Spectrum" title="Permalink"></a></h3><pre><code class="language-julia hljs">function compute_shell_spectrum(u, kmax)
-    ensure_layout!(u, :c)
-
-    # Initialize spectrum bins
-    E_k = zeros(kmax)
-    counts = zeros(Int, kmax)
-
-    # Get wavenumbers
-    kx = get_wavenumbers(u.bases[1])
-    ky = get_wavenumbers(u.bases[2])
-    kz = get_wavenumbers(u.bases[3])
-
-    # Bin energy by wavenumber magnitude
-    for i in eachindex(kx), j in eachindex(ky), k in eachindex(kz)
-        k_mag = sqrt(kx[i]^2 + ky[j]^2 + kz[k]^2)
-        k_bin = round(Int, k_mag)
-
-        if 1 &lt;= k_bin &lt;= kmax
-            E_k[k_bin] += abs2(get_coeff_data(u)[i,j,k])
-            counts[k_bin] += 1
-        end
-    end
-
-    return E_k
-end</code></pre><h2 id="Time-Series"><a class="docs-heading-anchor" href="#Time-Series">Time Series</a><a id="Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Series" title="Permalink"></a></h2><h3 id="Storing-Scalar-Time-Series"><a class="docs-heading-anchor" href="#Storing-Scalar-Time-Series">Storing Scalar Time Series</a><a id="Storing-Scalar-Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Storing-Scalar-Time-Series" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Initialize storage
+# For a velocity VectorField, the enstrophy (vorticity) spectrum:
+es = enstrophy_spectrum(velocity)       # → (k, power, bin_edges)</code></pre><p>See the <a href="../../api/analysis/#Spectral-Analysis">Analysis API</a> for options (<code>max_wavenumber</code>, <code>radial_average</code>, binning).</p><h2 id="Time-Series"><a class="docs-heading-anchor" href="#Time-Series">Time Series</a><a id="Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Series" title="Permalink"></a></h2><h3 id="Storing-Scalar-Time-Series"><a class="docs-heading-anchor" href="#Storing-Scalar-Time-Series">Storing Scalar Time Series</a><a id="Storing-Scalar-Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Storing-Scalar-Time-Series" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Initialize storage
 times = Float64[]
 energies = Float64[]
 nusselts = Float64[]
 
-# During simulation
-while solver.sim_time &lt; t_end
-    step!(solver, dt)
+# Record diagnostics each step via a run! callback (Int interval 1 = every step;
+# use a larger Int for every-N-steps, or a Float for every-Δt sim-time).
+# global_energy / compute_nusselt are the helpers defined under Global Diagnostics.
+run!(solver; stop_time=t_end,
+     callbacks=[1 =&gt; function (s)
+         push!(times, s.sim_time)
+         push!(energies, global_energy(u, reducer))
+         push!(nusselts, compute_nusselt(T, uz, L, kappa))
+     end])
 
-    # Record diagnostics
-    push!(times, solver.sim_time)
-    push!(energies, compute_kinetic_energy(u))
-    push!(nusselts, compute_nusselt(T, uz, L, kappa))
-end
-
-# Save to file
+# Save to file (plain vectors → any format; here a CSV via the stdlib)
 if rank == 0
-    using JLD2
-    @save &quot;diagnostics.jld2&quot; times energies nusselts
+    using DelimitedFiles
+    writedlm(&quot;diagnostics.csv&quot;, [times energies nusselts], &#39;,&#39;)
 end</code></pre><h2 id="Visualization-Integration"><a class="docs-heading-anchor" href="#Visualization-Integration">Visualization Integration</a><a id="Visualization-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Visualization-Integration" title="Permalink"></a></h2><h3 id="Plots.jl"><a class="docs-heading-anchor" href="#Plots.jl">Plots.jl</a><a id="Plots.jl-1"></a><a class="docs-heading-anchor-permalink" href="#Plots.jl" title="Permalink"></a></h3><pre><code class="language-julia hljs">using Plots
 
 function plot_field(field, title=&quot;&quot;)
@@ -185,37 +154,34 @@ function plot_field_makie(field)
     Colorbar(fig[1,2], hm)
 
     return fig
-end</code></pre><h2 id="Checkpointing"><a class="docs-heading-anchor" href="#Checkpointing">Checkpointing</a><a id="Checkpointing-1"></a><a class="docs-heading-anchor-permalink" href="#Checkpointing" title="Permalink"></a></h2><h3 id="Saving-State"><a class="docs-heading-anchor" href="#Saving-State">Saving State</a><a id="Saving-State-1"></a><a class="docs-heading-anchor-permalink" href="#Saving-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">function save_checkpoint(solver, filename)
-    state = Dict(
-        &quot;sim_time&quot; =&gt; solver.sim_time,
-        &quot;iteration&quot; =&gt; solver.iteration,
-        &quot;dt&quot; =&gt; solver.dt,
-        &quot;fields&quot; =&gt; Dict()
-    )
+end</code></pre><h2 id="Checkpointing"><a class="docs-heading-anchor" href="#Checkpointing">Checkpointing</a><a id="Checkpointing-1"></a><a class="docs-heading-anchor-permalink" href="#Checkpointing" title="Permalink"></a></h2><p>Tarang has no built-in checkpoint type — write a small helper over the evolving state fields (<code>solver.state</code>, each a <code>ScalarField</code> with a <code>.name</code>) and plain NetCDF. Grid space is exact and real-valued, so it round-trips losslessly.</p><h3 id="Saving-State"><a class="docs-heading-anchor" href="#Saving-State">Saving State</a><a id="Saving-State-1"></a><a class="docs-heading-anchor-permalink" href="#Saving-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">using NetCDF
 
-    for (name, field) in solver.problem.fields
-        ensure_layout!(field, :c)
-        state[&quot;fields&quot;][name] = copy(get_coeff_data(field))
+function save_checkpoint(solver, path)
+    isfile(path) &amp;&amp; rm(path)
+    for f in solver.state
+        ensure_layout!(f, :g)
+        g = get_grid_data(f)
+        dimspec = collect(Iterators.flatten(
+            (&quot;$(f.name)_d$i&quot; =&gt; s for (i, s) in enumerate(size(g)))))
+        nccreate(path, f.name, dimspec...; t=NC_DOUBLE)   # NC_DOUBLE: keep Float64
+        ncwrite(g, path, f.name)
     end
-
-    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        using JLD2
-        @save filename state
+    ncputatt(path, &quot;Global&quot;, Dict(&quot;sim_time&quot; =&gt; solver.sim_time,
+                                  &quot;iteration&quot; =&gt; solver.iteration, &quot;dt&quot; =&gt; solver.dt))
+    return path
+end</code></pre><h3 id="Loading-State"><a class="docs-heading-anchor" href="#Loading-State">Loading State</a><a id="Loading-State-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">function load_checkpoint!(solver, path)
+    for f in solver.state
+        ensure_layout!(f, :g)                 # ensure the grid buffer exists / layout is :g
+        get_grid_data(f) .= ncread(path, f.name)
     end
-end</code></pre><h3 id="Loading-State"><a class="docs-heading-anchor" href="#Loading-State">Loading State</a><a id="Loading-State-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">function load_checkpoint!(solver, filename)
-    using JLD2
-    @load filename state
-
-    solver.sim_time = state[&quot;sim_time&quot;]
-    solver.iteration = state[&quot;iteration&quot;]
-    solver.dt = state[&quot;dt&quot;]
-
-    for (name, data) in state[&quot;fields&quot;]
-        field = solver.problem.fields[name]
-        get_coeff_data(field) .= data
-        field.current_layout = :c
-    end
-end</code></pre><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang
+    solver.sim_time  = ncgetatt(path, &quot;Global&quot;, &quot;sim_time&quot;)
+    solver.iteration = Int(ncgetatt(path, &quot;Global&quot;, &quot;iteration&quot;))
+    solver.dt        = ncgetatt(path, &quot;Global&quot;, &quot;dt&quot;)
+    return solver
+end</code></pre><p>Use <code>solver.state</code> (the integrator&#39;s live fields), <strong>not</strong> the problem-variable handles. Restart then continues from <code>run!</code> as usual:</p><pre><code class="language-julia hljs">save_checkpoint(solver, &quot;chk.nc&quot;)
+# … later, in a fresh session with the same problem/solver built …
+load_checkpoint!(solver, &quot;chk.nc&quot;)
+run!(solver; stop_time=20.0, cfl=cfl)</code></pre><div class="admonition is-info" id="MPI-33dd78779336ceb2"><header class="admonition-header">MPI<a class="admonition-anchor" href="#MPI-33dd78779336ceb2" title="Permalink"></a></header><div class="admonition-body"><p><code>get_grid_data</code> is the rank-local slab, so this helper is per-rank/serial. Under MPI either write one file per rank (include the rank in <code>path</code>), or gather to rank 0 with <code>gather_array(f.dist, get_grid_data(f))</code> before writing and scatter on load.</p></div></div><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang
 using MPI
 using Printf
 
@@ -225,12 +191,6 @@ rank = MPI.Comm_rank(MPI.COMM_WORLD)
 # Setup (abbreviated)
 # ... create domain, fields, problem ...
 
-# Output handler
-handler = add_file_handler(&quot;output&quot;, dist, Dict(&quot;T&quot; =&gt; T);
-    parallel=&quot;gather&quot;, max_writes=100)
-add_task(handler, T; name=&quot;temperature&quot;)
-add_mean_task!(handler, T; dims=1, name=&quot;T_mean&quot;)
-
 # Create solver
 solver = InitialValueSolver(problem, RK222(), dt=1e-3)
 
@@ -238,36 +198,26 @@ solver = InitialValueSolver(problem, RK222(), dt=1e-3)
 cfl = CFL(problem, safety=0.5)
 add_velocity!(cfl, u)
 
-# Diagnostics storage
-times, energies = Float64[], Float64[]
+# Output handler — pass the SOLVER so the handler auto-registers and `run!`
+# processes it at its `sim_dt` cadence (no manual `process!` in the loop). No
+# `vars` Dict needed: T is a problem variable, already in the solver namespace.
+handler = add_file_handler(&quot;output&quot;, solver; parallel=&quot;gather&quot;, sim_dt=0.1, max_writes=100)
+add_task!(handler, T; name=&quot;temperature&quot;)           # field snapshot
+add_mean_task!(handler, T; dims=1, name=&quot;T_mean&quot;)    # x-averaged profile
 
-# Main loop
-output_interval = 0.1
-next_output = output_interval
+# Diagnostics storage (time series accumulated in a callback)
+times, max_T = Float64[], Float64[]
 
-while solver.sim_time &lt; 10.0
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
+# run! drives the whole loop: CFL-adaptive dt, auto-writes the registered handler,
+# runs callbacks, and closes the handler at the end. A Float callback interval
+# (0.1) fires every 0.1 sim-time units; an Int interval fires every N iterations.
+# global_max is MPI-reduced, so the value is identical on every rank.
+run!(solver; stop_time=10.0, cfl=cfl,
+     callbacks=[0.1 =&gt; function (s)
+         ensure_layout!(T, :g)
+         push!(times, s.sim_time)
+         push!(max_T, global_max(dist, abs.(get_grid_data(T))))
+         rank == 0 &amp;&amp; @printf(&quot;t = %.3f, max|T| = %.6e\n&quot;, s.sim_time, max_T[end])
+     end])
 
-    # Store diagnostics
-    push!(times, solver.sim_time)
-    push!(energies, compute_kinetic_energy(u))
-
-    # Periodic output
-    if solver.sim_time &gt;= next_output
-        process!(handler;
-            iteration=solver.iteration,
-            sim_time=solver.sim_time,
-            wall_time=0.0,
-            timestep=dt
-        )
-
-        if rank == 0
-            @printf(&quot;t = %.3f, E = %.6e\n&quot;, solver.sim_time, energies[end])
-        end
-
-        next_output += output_interval
-    end
-end
-
-MPI.Finalize()</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../api/analysis/">Analysis API</a>: Full API reference</li><li><a href="../../api/io/">I/O API</a>: NetCDF output documentation</li><li><a href="../../pages/parallelism/">Parallelism</a>: Parallel I/O configuration</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../boundary_conditions/">« Boundary Conditions</a><a class="docs-footer-nextpage" href="../eigenvalue_problems/">Eigenvalue Problems »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 11:55">Sunday 14 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+MPI.Finalize()</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../api/analysis/">Analysis API</a>: Full API reference</li><li><a href="../../api/io/">I/O API</a>: NetCDF output documentation</li><li><a href="../../pages/parallelism/">Parallelism</a>: Parallel I/O configuration</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../boundary_conditions/">« Boundary Conditions</a><a class="docs-footer-nextpage" href="../eigenvalue_problems/">Eigenvalue Problems »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 17:08">Sunday 14 June 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

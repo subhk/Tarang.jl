@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Analysis · Tarang.jl</title><meta name="title" content="Analysis · Tarang.jl"/><meta property="og:title" content="Analysis · Tarang.jl"/><meta property="twitter:title" content="Analysis · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/api/analysis/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/api/analysis/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/api/analysis/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../../tutorials/overview/">Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../../examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/les_models/">LES Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../../pages/tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox" checked/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates</a></li><li><a class="tocitem" href="../bases/">Bases</a></li><li><a class="tocitem" href="../domains/">Domains</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../operators/">Operators</a></li><li><a class="tocitem" href="../problems/">Problems</a></li><li><a class="tocitem" href="../solvers/">Solvers</a></li><li><a class="tocitem" href="../timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../gpu/">GPU</a></li><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../les_models/">LES Models</a></li><li class="is-active"><a class="tocitem" href>Analysis</a><ul class="internal"><li><a class="tocitem" href="#CFL-Conditions"><span>CFL Conditions</span></a></li><li><a class="tocitem" href="#Output-Handlers"><span>Output Handlers</span></a></li><li><a class="tocitem" href="#Analysis-Evaluators"><span>Analysis Evaluators</span></a></li><li><a class="tocitem" href="#Analysis-Tasks"><span>Analysis Tasks</span></a></li><li><a class="tocitem" href="#Statistical-Analysis"><span>Statistical Analysis</span></a></li><li><a class="tocitem" href="#Spectral-Analysis"><span>Spectral Analysis</span></a></li><li><a class="tocitem" href="#Flow-Property-Analysis"><span>Flow Property Analysis</span></a></li><li><a class="tocitem" href="#Probe-Points"><span>Probe Points</span></a></li><li><a class="tocitem" href="#Monitoring-and-Diagnostics"><span>Monitoring and Diagnostics</span></a></li><li><a class="tocitem" href="#Data-Post-Processing"><span>Data Post-Processing</span></a></li><li><a class="tocitem" href="#Complete-Example"><span>Complete Example</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Reference</a></li><li><a class="is-disabled">API Reference</a></li><li class="is-active"><a href>Analysis</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Analysis</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/api/analysis.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Analysis-API"><a class="docs-heading-anchor" href="#Analysis-API">Analysis API</a><a id="Analysis-API-1"></a><a class="docs-heading-anchor-permalink" href="#Analysis-API" title="Permalink"></a></h1><p>Analysis tools for computing diagnostics, managing output, and monitoring simulations in real-time.</p><h2 id="CFL-Conditions"><a class="docs-heading-anchor" href="#CFL-Conditions">CFL Conditions</a><a id="CFL-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#CFL-Conditions" title="Permalink"></a></h2><h3 id="CFL"><a class="docs-heading-anchor" href="#CFL">CFL</a><a id="CFL-1"></a><a class="docs-heading-anchor-permalink" href="#CFL" title="Permalink"></a></h3><p>Computes adaptive timesteps based on the Courant-Friedrichs-Lewy (CFL) stability criterion.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">CFL(
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Analysis · Tarang.jl</title><meta name="title" content="Analysis · Tarang.jl"/><meta property="og:title" content="Analysis · Tarang.jl"/><meta property="twitter:title" content="Analysis · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/api/analysis/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/api/analysis/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/api/analysis/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../../tutorials/overview/">Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../../examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/les_models/">LES Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../../pages/tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox" checked/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../coordinates/">Coordinates</a></li><li><a class="tocitem" href="../bases/">Bases</a></li><li><a class="tocitem" href="../domains/">Domains</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../operators/">Operators</a></li><li><a class="tocitem" href="../problems/">Problems</a></li><li><a class="tocitem" href="../solvers/">Solvers</a></li><li><a class="tocitem" href="../timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../gpu/">GPU</a></li><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../les_models/">LES Models</a></li><li class="is-active"><a class="tocitem" href>Analysis</a><ul class="internal"><li><a class="tocitem" href="#CFL-Conditions"><span>CFL Conditions</span></a></li><li><a class="tocitem" href="#Output-Handlers"><span>Output Handlers</span></a></li><li><a class="tocitem" href="#In-Run-Diagnostics"><span>In-Run Diagnostics</span></a></li><li><a class="tocitem" href="#Derived-Fields"><span>Derived Fields</span></a></li><li><a class="tocitem" href="#In-Memory-Analysis"><span>In-Memory Analysis</span></a></li><li><a class="tocitem" href="#Statistical-Analysis"><span>Statistical Analysis</span></a></li><li><a class="tocitem" href="#Spectral-Analysis"><span>Spectral Analysis</span></a></li><li><a class="tocitem" href="#Flow-Diagnostics"><span>Flow Diagnostics</span></a></li><li><a class="tocitem" href="#Data-Post-Processing"><span>Data Post-Processing</span></a></li><li><a class="tocitem" href="#Complete-Example"><span>Complete Example</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Reference</a></li><li><a class="is-disabled">API Reference</a></li><li class="is-active"><a href>Analysis</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Analysis</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/api/analysis.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Analysis-API"><a class="docs-heading-anchor" href="#Analysis-API">Analysis API</a><a id="Analysis-API-1"></a><a class="docs-heading-anchor-permalink" href="#Analysis-API" title="Permalink"></a></h1><p>Analysis tools for computing diagnostics, managing output, and monitoring simulations in real-time.</p><h2 id="CFL-Conditions"><a class="docs-heading-anchor" href="#CFL-Conditions">CFL Conditions</a><a id="CFL-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#CFL-Conditions" title="Permalink"></a></h2><h3 id="CFL"><a class="docs-heading-anchor" href="#CFL">CFL</a><a id="CFL-1"></a><a class="docs-heading-anchor-permalink" href="#CFL" title="Permalink"></a></h3><p>Computes adaptive timesteps based on the Courant-Friedrichs-Lewy (CFL) stability criterion.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">CFL(
     problem::IVP;
     safety::Float64=0.5,
     max_change::Float64=2.0,
@@ -24,243 +24,115 @@ add_velocity!(cfl, c)  # Sound speed (for compressible flow)</code></pre><h4 id=
 end</code></pre><p><strong>CFL Condition</strong>:</p><p>For explicit methods:</p><p class="math-container">\[\Delta t \leq C \frac{\Delta x}{|u|_{max}}\]</p><p>where C is the safety factor.</p><p><strong>Properties</strong>:</p><pre><code class="language-julia hljs">cfl.safety          # Safety factor
 cfl.max_dt          # Maximum timestep
 cfl.min_dt          # Minimum timestep
-cfl.current_dt      # Last computed timestep</code></pre><hr/><h2 id="Output-Handlers"><a class="docs-heading-anchor" href="#Output-Handlers">Output Handlers</a><a id="Output-Handlers-1"></a><a class="docs-heading-anchor-permalink" href="#Output-Handlers" title="Permalink"></a></h2><h3 id="NetCDF-Output"><a class="docs-heading-anchor" href="#NetCDF-Output">NetCDF Output</a><a id="NetCDF-Output-1"></a><a class="docs-heading-anchor-permalink" href="#NetCDF-Output" title="Permalink"></a></h3><h4 id="add*netcdf*handler"><a class="docs-heading-anchor" href="#add*netcdf*handler">add<em>netcdf</em>handler</a><a id="add*netcdf*handler-1"></a><a class="docs-heading-anchor-permalink" href="#add*netcdf*handler" title="Permalink"></a></h4><p>Create NetCDF output handler for saving fields to files.</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_netcdf_handler(
+cfl.current_dt      # Last computed timestep</code></pre><hr/><h2 id="Output-Handlers"><a class="docs-heading-anchor" href="#Output-Handlers">Output Handlers</a><a id="Output-Handlers-1"></a><a class="docs-heading-anchor-permalink" href="#Output-Handlers" title="Permalink"></a></h2><h3 id="NetCDF-Output"><a class="docs-heading-anchor" href="#NetCDF-Output">NetCDF Output</a><a id="NetCDF-Output-1"></a><a class="docs-heading-anchor-permalink" href="#NetCDF-Output" title="Permalink"></a></h3><h4 id="add*file*handler-(recommended)"><a class="docs-heading-anchor" href="#add*file*handler-(recommended)">add<em>file</em>handler (recommended)</a><a id="add*file*handler-(recommended)-1"></a><a class="docs-heading-anchor-permalink" href="#add*file*handler-(recommended)" title="Permalink"></a></h4><p>Create a NetCDF output handler and <strong>register it with the solver</strong>, so <code>run!</code> writes it automatically at its own cadence and closes it at the end — no manual <code>process!</code>/<code>close!</code> in a step loop (easy to forget, silently drops output).</p><p><strong>Syntax</strong>:</p><pre><code class="language-julia hljs">add_file_handler(
+    base_path::String,
     solver::InitialValueSolver,
-    base_path::String;
-    fields::Vector{&lt;:AbstractField},
-    write_interval::Float64=1.0,
-    mode::String=&quot;overwrite&quot;
-)</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>solver</code>: IVP solver</li><li><code>base_path</code>: Base path for output files (without extension)</li><li><code>fields</code>: Fields to save</li><li><code>write_interval</code>: Time between writes</li><li><code>mode</code>: File mode (&quot;overwrite&quot;, &quot;append&quot;)</li></ul><p><strong>Examples</strong>:</p><pre><code class="language-julia hljs"># Basic output
-handler = add_netcdf_handler(
-    solver,
-    &quot;output/snapshots&quot;,
-    fields=[u, p, T],
-    write_interval=0.1
+    vars=&lt;problem namespace&gt;;   # optional; only for STRING-expression tasks (see below)
+    sim_dt=nothing,             # write every sim_dt time units
+    iter=nothing,               # …or every iter steps
+    wall_dt=nothing,            # …or every wall_dt seconds
+    max_writes=nothing,         # cap number of writes
+    mode=&quot;overwrite&quot;,           # &quot;overwrite&quot; | &quot;append&quot;
+)</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Register handler, add tasks, run — run! handles process!/close! and GPU→CPU
+snapshots = add_file_handler(&quot;output/snapshots&quot;, solver; sim_dt=0.1)
+add_task!(snapshots, u; name=&quot;u&quot;)          # field object
+add_task!(snapshots, lap(u); name=&quot;lap_u&quot;) # operator object (derived field)
+
+# Multiple handlers at different cadences (each auto-registered on the solver)
+checkpoints = add_file_handler(&quot;output/checkpoints&quot;, solver; sim_dt=1.0)
+add_task!(checkpoints, u; name=&quot;u&quot;)
+
+run!(solver; stop_time=20.0, cfl=cfl)      # writes both handlers + closes them</code></pre><p>A task can be a <strong>field object</strong> (<code>u</code>) or an <strong>operator object</strong> built from the exported operator functions (<code>lap(u)</code>, <code>Gradient(u, coords)</code>, <code>curl(u)</code>, …) — see <a href="#Derived-Fields">Derived Fields</a>. For reductions use <code>add_mean_task!</code> / <code>add_extrema_task!</code>.</p><div class="admonition is-info" id="The-vars-namespace-6eb6f68939484ca0"><header class="admonition-header">The `vars` namespace<a class="admonition-anchor" href="#The-vars-namespace-6eb6f68939484ca0" title="Permalink"></a></header><div class="admonition-body"><p>The optional third positional <code>vars</code> is a name→field table used only by the (limited) string-expression task parser. It defaults to the problem namespace. <strong>Prefer field/operator objects over string expressions</strong> — the string parser handles only trivial cases. Pass an explicit <code>Dict(&quot;name&quot; =&gt; field)</code> only if you rely on string tasks that reference a non-problem field.</p></div></div><p><strong>Output files</strong>:</p><ul><li>Each write-set goes in its own subdirectory: <code>snapshots_s1/…</code>, <code>snapshots_s2/…</code></li><li>Under MPI, one file per process per set</li><li>Combine with <code>merge_netcdf_files(&quot;output/snapshots&quot;)</code> (see below)</li></ul><hr/><h4 id="NetCDFFileHandler"><a class="docs-heading-anchor" href="#NetCDFFileHandler">NetCDFFileHandler</a><a id="NetCDFFileHandler-1"></a><a class="docs-heading-anchor-permalink" href="#NetCDFFileHandler" title="Permalink"></a></h4><p>Direct handler type, when you build it without a solver (e.g. a custom step loop) and pass the <code>Distributor</code> explicitly.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">NetCDFFileHandler(
+    base_path::String,
+    dist::Distributor,
+    vars;                       # Dict(&quot;name&quot; =&gt; field) or a vector of fields
+    sim_dt=nothing, iter=nothing, wall_dt=nothing,
+    max_writes=nothing,
+    mode=&quot;overwrite&quot;,           # &quot;overwrite&quot; | &quot;append&quot;
+    parallel=&quot;gather&quot;,          # &quot;gather&quot; (single file) | per-rank
+)</code></pre><p><strong>Methods</strong>:</p><pre><code class="language-julia hljs">process!(handler)   # write if the handler&#39;s sim_dt/iter/wall_dt cadence is due
+close!(handler)     # finalize / stamp metadata</code></pre><p><strong>Example</strong> (manual loop — only if not using <code>run!</code>):</p><pre><code class="language-julia hljs">handler = NetCDFFileHandler(&quot;output&quot;, dist, Dict(&quot;u&quot; =&gt; u, &quot;T&quot; =&gt; T); iter=100)
+
+process!(handler)                          # capture initial state (t = 0)
+while solver.sim_time &lt; t_end
+    step!(solver)
+    process!(handler)                      # no-op unless cadence is due
+end
+close!(handler)</code></pre><h4 id="merge*netcdf*files"><a class="docs-heading-anchor" href="#merge*netcdf*files">merge<em>netcdf</em>files</a><a id="merge*netcdf*files-1"></a><a class="docs-heading-anchor-permalink" href="#merge*netcdf*files" title="Permalink"></a></h4><p>Merge per-process / multi-set NetCDF output into a single file.</p><pre><code class="language-julia hljs">merge_netcdf_files(
+    &quot;output/snapshots&quot;;
+    set_number=1,               # which write-set to merge
+    output_name=&quot;&quot;,             # default: derived from base name
+    merge_mode=RECONSTRUCT,     # RECONSTRUCT | SIMPLE_CONCAT | DOMAIN_DECOMP
+    cleanup=false,              # delete source files after merge
 )
 
-# Multiple handlers for different cadences
-snapshots = add_netcdf_handler(solver, &quot;snapshots&quot;, fields=[u, p, T], write_interval=0.1)
-checkpoints = add_netcdf_handler(solver, &quot;checkpoints&quot;, fields=[u, p, T], write_interval=1.0)</code></pre><p><strong>Output files</strong>:</p><ul><li>Creates files like: <code>snapshots_proc0.nc</code>, <code>snapshots_proc1.nc</code>, etc.</li><li>One file per MPI process</li><li>Use <code>merge_processor_files</code> to combine</li></ul><hr/><h4 id="NetCDFFileHandler"><a class="docs-heading-anchor" href="#NetCDFFileHandler">NetCDFFileHandler</a><a id="NetCDFFileHandler-1"></a><a class="docs-heading-anchor-permalink" href="#NetCDFFileHandler" title="Permalink"></a></h4><p>Direct handler class for more control.</p><p><strong>Constructor</strong>:</p><pre><code class="language-julia hljs">NetCDFFileHandler(
-    filename::String,
-    fields::Vector{&lt;:AbstractField};
-    write_mode::String=&quot;overwrite&quot;,
-    compression::Int=4
-)</code></pre><p><strong>Methods</strong>:</p><pre><code class="language-julia hljs"># Write current state
-write_fields!(handler, sim_time)
+# Several handlers at once
+batch_merge_netcdf([&quot;output/snapshots&quot;, &quot;output/checkpoints&quot;])</code></pre><hr/><h2 id="In-Run-Diagnostics"><a class="docs-heading-anchor" href="#In-Run-Diagnostics">In-Run Diagnostics</a><a id="In-Run-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#In-Run-Diagnostics" title="Permalink"></a></h2><p>Scalar / time-series diagnostics are computed in a <code>run!</code> <strong>callback</strong> — an <code>interval =&gt; function</code> pair. The function receives the solver; an <code>Int</code> interval fires every N iterations, a <code>Float64</code> interval every N sim-time units. Inside it, reduce a field&#39;s grid data with the MPI-aware helpers <code>global_max</code> / <code>global_min</code> / <code>global_mean</code> / <code>global_sum</code> (identical value on every rank), or use <code>integrate</code> for a true domain integral.</p><pre><code class="language-julia hljs">times, ke = Float64[], Float64[]
 
-# Close file
-close!(handler)</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs">handler = NetCDFFileHandler(&quot;output.nc&quot;, [u, p, T], compression=6)
-
-while solver.sim_time &lt; t_end
-    step!(solver)
-
-    if solver.iteration % 100 == 0
-        write_fields!(handler, solver.sim_time)
-    end
+function diagnostics(s)
+    ensure_layout!(u, :g)
+    g = get_grid_data(u)
+    push!(times, s.sim_time)
+    push!(ke, 0.5 * global_mean(dist, g .^ 2))     # ⟨½u²⟩, MPI-reduced
+    rank == 0 &amp;&amp; println(&quot;t=$(s.sim_time)  KE=$(ke[end])&quot;)
 end
 
-close!(handler)</code></pre><hr/><h2 id="Analysis-Evaluators"><a class="docs-heading-anchor" href="#Analysis-Evaluators">Analysis Evaluators</a><a id="Analysis-Evaluators-1"></a><a class="docs-heading-anchor-permalink" href="#Analysis-Evaluators" title="Permalink"></a></h2><h3 id="Scalar-Evaluators"><a class="docs-heading-anchor" href="#Scalar-Evaluators">Scalar Evaluators</a><a id="Scalar-Evaluators-1"></a><a class="docs-heading-anchor-permalink" href="#Scalar-Evaluators" title="Permalink"></a></h3><p>Compute scalar diagnostics during simulation.</p><h4 id="add*scalar*evaluator"><a class="docs-heading-anchor" href="#add*scalar*evaluator">add<em>scalar</em>evaluator</a><a id="add*scalar*evaluator-1"></a><a class="docs-heading-anchor-permalink" href="#add*scalar*evaluator" title="Permalink"></a></h4><pre><code class="language-julia hljs">add_scalar_evaluator(
-    solver::InitialValueSolver,
-    name::String,
-    expression::String
-)</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Kinetic energy
-add_scalar_evaluator(solver, &quot;KE&quot;, &quot;0.5*integrate(u*u + v*v + w*w)&quot;)
+run!(solver; stop_time=10.0, cfl=cfl, callbacks=[10 =&gt; diagnostics])   # every 10 steps</code></pre><p><code>run!</code> also prints a built-in progress line if you pass <code>log_interval=100</code>.</p><hr/><h2 id="Derived-Fields"><a class="docs-heading-anchor" href="#Derived-Fields">Derived Fields</a><a id="Derived-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Derived-Fields" title="Permalink"></a></h2><p>To write a derived quantity (vorticity, Laplacian, a gradient component, …), build it as an <strong>operator object</strong> from the exported operator functions and add it as a task — <code>run!</code> evaluates and writes it like any field.</p><pre><code class="language-julia hljs">handler = add_file_handler(&quot;output/derived&quot;, solver; sim_dt=0.1)
+add_task!(handler, lap(u);              name=&quot;lap_u&quot;)     # Laplacian (Δ also works)
+add_task!(handler, Gradient(u, coords); name=&quot;grad_u&quot;)    # gradient (vector)
+add_task!(handler, curl(velocity);      name=&quot;vorticity&quot;) # curl of a VectorField</code></pre><p>Exported builders: <code>grad</code>/<code>Gradient</code>, <code>divergence</code>/<code>Divergence</code>, <code>curl</code>/<code>Curl</code>, <code>lap</code>/<code>Laplacian</code> (and the Unicode <code>∇</code>, <code>Δ</code>), plus <code>Differentiate(field, coord, order)</code> for a single-axis derivative.</p><div class="admonition is-warning" id="Prefer-operator-objects-over-string-expressions-76874de02bdb4c81"><header class="admonition-header">Prefer operator objects over string expressions<a class="admonition-anchor" href="#Prefer-operator-objects-over-string-expressions-76874de02bdb4c81" title="Permalink"></a></header><div class="admonition-body"><p><code>add_task!</code> also accepts a string (<code>add_task!(h, &quot;u*u&quot;)</code>), but the string parser handles only the most trivial cases — build operator objects instead.</p></div></div><h3 id="Reduction-tasks"><a class="docs-heading-anchor" href="#Reduction-tasks">Reduction tasks</a><a id="Reduction-tasks-1"></a><a class="docs-heading-anchor-permalink" href="#Reduction-tasks" title="Permalink"></a></h3><p>Reduce a field to a profile or extrema series, written by the same handler:</p><pre><code class="language-julia hljs">add_mean_task!(handler, u; dims=1, name=&quot;u_mean_x&quot;)   # average over axis 1 → profile
+add_extrema_task!(handler, u; name=&quot;u_extrema&quot;)        # min and max each write</code></pre><hr/><h2 id="In-Memory-Analysis"><a class="docs-heading-anchor" href="#In-Memory-Analysis">In-Memory Analysis</a><a id="In-Memory-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#In-Memory-Analysis" title="Permalink"></a></h2><p>To keep results in memory (no file I/O), attach a <code>DictionaryHandler</code> to a <code>UnifiedEvaluator</code> and evaluate it from a callback. Results are stored by name and read with <code>handler[name]</code>.</p><pre><code class="language-julia hljs">ev = UnifiedEvaluator(solver)
+diag = add_dictionary_handler(ev; sim_dt=0.5)   # cadence: sim_dt / iter / wall_dt
+add_task!(diag, u; name=&quot;u&quot;)
+add_task!(diag, lap(u); name=&quot;lap_u&quot;)
 
-# Enstrophy
-add_scalar_evaluator(solver, &quot;enstrophy&quot;, &quot;0.5*integrate(omega*omega)&quot;)
+# Evaluate every step; the handler gates its own write cadence internally.
+run!(solver; stop_time=10.0, cfl=cfl,
+     callbacks=[1 =&gt; s -&gt; evaluate_unified_handlers!(ev, time(), s.sim_time, s.iteration)])
 
-# Nusselt number
-add_scalar_evaluator(solver, &quot;Nu&quot;, &quot;1 + mean(w*T)&quot;)
+u_now = diag[&quot;u&quot;]     # most recent stored evaluation
+keys(diag)            # task names</code></pre><hr/><h2 id="Statistical-Analysis"><a class="docs-heading-anchor" href="#Statistical-Analysis">Statistical Analysis</a><a id="Statistical-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Statistical-Analysis" title="Permalink"></a></h2><h3 id="Time-averaging"><a class="docs-heading-anchor" href="#Time-averaging">Time averaging</a><a id="Time-averaging-1"></a><a class="docs-heading-anchor-permalink" href="#Time-averaging" title="Permalink"></a></h3><p>There is no separate averager type — accumulate a running mean in a callback:</p><pre><code class="language-julia hljs">snaps = Vector{Array{Float64}}()
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[0.1 =&gt; function (s)
+    ensure_layout!(u, :g)
+    push!(snaps, copy(get_grid_data(u)))
+end])
+u_time_mean = sum(snaps) ./ length(snaps)</code></pre><h3 id="Spatial-averaging"><a class="docs-heading-anchor" href="#Spatial-averaging">Spatial averaging</a><a id="Spatial-averaging-1"></a><a class="docs-heading-anchor-permalink" href="#Spatial-averaging" title="Permalink"></a></h3><p>For output, use <code>add_mean_task!(handler, field; dims=…)</code>. For an in-line value, reduce the grid array directly: <code>global_mean(dist, get_grid_data(field))</code> for the whole-domain mean, or <code>Statistics.mean(get_grid_data(field); dims=…)</code> over chosen array dimensions.</p><hr/><h2 id="Spectral-Analysis"><a class="docs-heading-anchor" href="#Spectral-Analysis">Spectral Analysis</a><a id="Spectral-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Analysis" title="Permalink"></a></h2><p><code>power_spectrum</code> computes the radially-binned power spectrum of a scalar field that has at least one Fourier basis. It puts the field in coefficient layout, then bins |f̂(k)|² by wavenumber magnitude, returning a NamedTuple with <code>k</code>, <code>power</code>, and <code>bin_edges</code>.</p><pre><code class="language-julia hljs">ps = power_spectrum(u)                  # u::ScalarField with a Fourier axis
 
-# Access values
-KE = get_scalar(solver, &quot;KE&quot;)</code></pre><hr/><h3 id="Field-Evaluators"><a class="docs-heading-anchor" href="#Field-Evaluators">Field Evaluators</a><a id="Field-Evaluators-1"></a><a class="docs-heading-anchor-permalink" href="#Field-Evaluators" title="Permalink"></a></h3><p>Compute derived fields during simulation.</p><h4 id="add*field*evaluator"><a class="docs-heading-anchor" href="#add*field*evaluator">add<em>field</em>evaluator</a><a id="add*field*evaluator-1"></a><a class="docs-heading-anchor-permalink" href="#add*field*evaluator" title="Permalink"></a></h4><pre><code class="language-julia hljs">add_field_evaluator(
-    solver::InitialValueSolver,
-    name::String,
-    expression::String
-)</code></pre><p><strong>Example</strong>:</p><pre><code class="language-julia hljs"># Vorticity
-add_field_evaluator(solver, &quot;omega&quot;, &quot;∂x(v) - ∂z(u)&quot;)
-
-# Q-criterion
-add_field_evaluator(solver, &quot;Q&quot;, &quot;0.5*(Omega*Omega - S*S)&quot;)
-
-# Temperature gradient magnitude
-add_field_evaluator(solver, &quot;grad_T_mag&quot;, &quot;sqrt(∂x(T)^2 + ∂z(T)^2)&quot;)
-
-# Access computed field
-omega = get_field(solver, &quot;omega&quot;)</code></pre><hr/><h2 id="Analysis-Tasks"><a class="docs-heading-anchor" href="#Analysis-Tasks">Analysis Tasks</a><a id="Analysis-Tasks-1"></a><a class="docs-heading-anchor-permalink" href="#Analysis-Tasks" title="Permalink"></a></h2><h3 id="Unified-Evaluator"><a class="docs-heading-anchor" href="#Unified-Evaluator">Unified Evaluator</a><a id="Unified-Evaluator-1"></a><a class="docs-heading-anchor-permalink" href="#Unified-Evaluator" title="Permalink"></a></h3><p>Combine multiple analysis operations.</p><pre><code class="language-julia hljs">evaluator = UnifiedEvaluator(solver)
-
-# Add various tasks
-add_task!(evaluator, &quot;scalar&quot;, &quot;KE&quot;, &quot;0.5*integrate(u*u)&quot;)
-add_task!(evaluator, &quot;field&quot;, &quot;omega&quot;, &quot;curl(u)&quot;)
-add_task!(evaluator, &quot;profile&quot;, &quot;T_mean&quot;, &quot;mean(T, dim=1)&quot;)  # Mean over x
-
-# Evaluate all tasks
-evaluate!(evaluator)
-
-# Access results
-KE = evaluator.results[&quot;KE&quot;]
-omega = evaluator.results[&quot;omega&quot;]
-T_profile = evaluator.results[&quot;T_mean&quot;]</code></pre><hr/><h2 id="Statistical-Analysis"><a class="docs-heading-anchor" href="#Statistical-Analysis">Statistical Analysis</a><a id="Statistical-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Statistical-Analysis" title="Permalink"></a></h2><h3 id="Time-Averaging"><a class="docs-heading-anchor" href="#Time-Averaging">Time Averaging</a><a id="Time-Averaging-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Averaging" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create time averager
-avg = TimeAverager(fields=[u, T], averaging_interval=1.0)
-
-# During simulation
-while solver.sim_time &lt; t_end
-    step!(solver)
-    accumulate!(avg, solver.sim_time)
-end
-
-# Get averaged fields
-u_mean = get_average(avg, &quot;u&quot;)
-T_mean = get_average(avg, &quot;T&quot;)</code></pre><h3 id="Spatial-Averaging"><a class="docs-heading-anchor" href="#Spatial-Averaging">Spatial Averaging</a><a id="Spatial-Averaging-1"></a><a class="docs-heading-anchor-permalink" href="#Spatial-Averaging" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Mean over dimension
-T_mean_x = mean(T, dim=1)  # Average over x
-u_mean_profile = mean(u, dim=1)  # Velocity profile
-
-# Volume average
-T_vol_avg = mean(T)  # Average over entire domain</code></pre><h3 id="Reynolds-Decomposition"><a class="docs-heading-anchor" href="#Reynolds-Decomposition">Reynolds Decomposition</a><a id="Reynolds-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Reynolds-Decomposition" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Compute fluctuations
-function reynolds_decomposition(field, mean_field)
-    fluctuation = field - mean_field
-    return fluctuation
-end
-
-# Example
-u_mean = mean(u, dim=1)
-u_prime = reynolds_decomposition(u, u_mean)
-
-# Reynolds stresses
-uu_mean = mean(u_prime * u_prime, dim=1)
-uv_mean = mean(u_prime * v_prime, dim=1)</code></pre><hr/><h2 id="Spectral-Analysis"><a class="docs-heading-anchor" href="#Spectral-Analysis">Spectral Analysis</a><a id="Spectral-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Analysis" title="Permalink"></a></h2><h3 id="Energy-Spectra"><a class="docs-heading-anchor" href="#Energy-Spectra">Energy Spectra</a><a id="Energy-Spectra-1"></a><a class="docs-heading-anchor-permalink" href="#Energy-Spectra" title="Permalink"></a></h3><pre><code class="language-julia hljs"># 1D energy spectrum
-function compute_energy_spectrum_1d(u, direction)
-    # Transform to spectral space
-    to_spectral!(u)
-    u_hat = get_spectral_data(u)
-
-    # Compute energy
-    E = abs2.(u_hat)
-
-    # Bin by wavenumber magnitude
-    k, E_k = bin_spectrum(E, direction)
-
-    return k, E_k
-end
-
-# Usage
-k, E_k = compute_energy_spectrum_1d(u, 1)  # Spectrum in x-direction
-
-# Plot
 using Plots
-plot(k, E_k, xscale=:log10, yscale=:log10,
-     xlabel=&quot;k&quot;, ylabel=&quot;E(k)&quot;)</code></pre><h3 id="3D-Isotropic-Spectrum"><a class="docs-heading-anchor" href="#3D-Isotropic-Spectrum">3D Isotropic Spectrum</a><a id="3D-Isotropic-Spectrum-1"></a><a class="docs-heading-anchor-permalink" href="#3D-Isotropic-Spectrum" title="Permalink"></a></h3><pre><code class="language-julia hljs">function compute_isotropic_spectrum(u)
-    # Compute 3D energy distribution
-    to_spectral!(u)
+plot(ps.k, ps.power; xscale=:log10, yscale=:log10, xlabel=&quot;k&quot;, ylabel=&quot;E(k)&quot;)
+plot!(ps.k, ps.k .^ (-5/3); linestyle=:dash, label=&quot;k^(-5/3)&quot;)   # Kolmogorov ref
 
-    E_hat = sum(abs2.(component) for component in u.components)
-
-    # Bin by |k|
-    k_mag = compute_k_magnitude(domain)
-    k, E_k = spherical_average(E_hat, k_mag)
-
-    return k, E_k
+# Options
+ps = power_spectrum(u; max_wavenumber=64, radial_average=true)</code></pre><p>For a velocity <code>VectorField</code>, <code>enstrophy_spectrum(velocity)</code> returns the enstrophy spectrum Z(k) = |ω̂(k)|² (vorticity power) with the same NamedTuple shape.</p><hr/><h2 id="Flow-Diagnostics"><a class="docs-heading-anchor" href="#Flow-Diagnostics">Flow Diagnostics</a><a id="Flow-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Flow-Diagnostics" title="Permalink"></a></h2><p>Flow-property scalars are computed in a callback from the field grid data — use <code>get_grid_data</code> (not <code>.data</code>) and the MPI-aware reducers. Example: a Nusselt-like heat flux ⟨wT⟩ and an RMS-velocity Reynolds number, accumulated over time.</p><pre><code class="language-julia hljs">Nu, Re = Float64[], Float64[]
+function flow_diag(s)
+    ensure_layout!(w, :g); ensure_layout!(T, :g); ensure_layout!(u, :g)
+    wT   = global_mean(dist, get_grid_data(w) .* get_grid_data(T))   # ⟨wT⟩
+    urms = sqrt(global_mean(dist, get_grid_data(u) .^ 2))            # RMS speed
+    push!(Nu, 1 + wT)
+    push!(Re, urms * L / nu)
 end
-
-# Kolmogorov scaling check
-k, E_k = compute_isotropic_spectrum(u)
-plot(k, E_k, xscale=:log10, yscale=:log10)
-plot!(k, k.^(-5/3), linestyle=:dash, label=&quot;k^(-5/3)&quot;)</code></pre><hr/><h2 id="Flow-Property-Analysis"><a class="docs-heading-anchor" href="#Flow-Property-Analysis">Flow Property Analysis</a><a id="Flow-Property-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Flow-Property-Analysis" title="Permalink"></a></h2><h3 id="Nusselt-Number"><a class="docs-heading-anchor" href="#Nusselt-Number">Nusselt Number</a><a id="Nusselt-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Nusselt-Number" title="Permalink"></a></h3><p>Heat transfer efficiency in convection:</p><pre><code class="language-julia hljs">function compute_nusselt(T, w, domain)
-    # Nu = 1 + &lt;w*T&gt; (horizontally averaged)
-    to_grid!(T)
-    to_grid!(w)
-
-    wT = w.data .* T.data
-    wT_mean = mean(wT, dims=1)  # Average over x
-
-    Nu = 1.0 .+ wT_mean
-    return mean(Nu)  # Domain average
-end</code></pre><h3 id="Reynolds-Number"><a class="docs-heading-anchor" href="#Reynolds-Number">Reynolds Number</a><a id="Reynolds-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Reynolds-Number" title="Permalink"></a></h3><p>From velocity statistics:</p><pre><code class="language-julia hljs">function compute_reynolds_number(u, nu, L)
-    # Re = U*L/nu
-    to_grid!(u)
-    U = sqrt(mean(u.data .^ 2))  # RMS velocity
-    Re = U * L / nu
-    return Re
-end</code></pre><h3 id="Richardson-Number"><a class="docs-heading-anchor" href="#Richardson-Number">Richardson Number</a><a id="Richardson-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Richardson-Number" title="Permalink"></a></h3><p>Stratification vs. shear:</p><pre><code class="language-julia hljs">function compute_richardson_number(u, T, dz, g, T0)
-    # Ri = (g/T0) * (∂T/∂z) / (∂u/∂z)^2
-    dTdz = ∂z(T)
-    dudz = ∂z(u)
-
-    to_grid!(dTdz)
-    to_grid!(dudz)
-
-    Ri = (g / T0) .* dTdz.data ./ (dudz.data .^ 2)
-    return mean(Ri)
-end</code></pre><hr/><h2 id="Probe-Points"><a class="docs-heading-anchor" href="#Probe-Points">Probe Points</a><a id="Probe-Points-1"></a><a class="docs-heading-anchor-permalink" href="#Probe-Points" title="Permalink"></a></h2><p>Sample fields at specific locations.</p><pre><code class="language-julia hljs"># Define probe locations
-probes = ProbeSet([
-    (&quot;probe1&quot;, x=1.0, z=0.5),
-    (&quot;probe2&quot;, x=2.0, z=0.5),
-    (&quot;probe3&quot;, x=3.0, z=0.5)
-])
-
-# Sample during simulation
-while solver.sim_time &lt; t_end
-    step!(solver)
-
-    if solver.iteration % 10 == 0
-        sample_probes!(probes, [u, T], solver.sim_time)
-    end
-end
-
-# Get time series
-u_probe1 = get_probe_data(probes, &quot;probe1&quot;, &quot;u&quot;)
-t_series = get_probe_times(probes)
-
-# Plot
-plot(t_series, u_probe1, xlabel=&quot;t&quot;, ylabel=&quot;u&quot;, label=&quot;Probe 1&quot;)</code></pre><hr/><h2 id="Monitoring-and-Diagnostics"><a class="docs-heading-anchor" href="#Monitoring-and-Diagnostics">Monitoring and Diagnostics</a><a id="Monitoring-and-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Monitoring-and-Diagnostics" title="Permalink"></a></h2><h3 id="Simulation-Monitoring"><a class="docs-heading-anchor" href="#Simulation-Monitoring">Simulation Monitoring</a><a id="Simulation-Monitoring-1"></a><a class="docs-heading-anchor-permalink" href="#Simulation-Monitoring" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Create monitor
-monitor = SimulationMonitor(
-    print_interval=100,
-    print_fields=true,
-    print_diagnostics=true
-)
-
-# Add to solver
-attach_monitor!(solver, monitor)
-
-# Automatically prints during simulation:
-# Iteration: 100, t = 0.100, dt = 0.001, KE = 1.234, max(u) = 2.345</code></pre><h3 id="Custom-Diagnostics"><a class="docs-heading-anchor" href="#Custom-Diagnostics">Custom Diagnostics</a><a id="Custom-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Diagnostics" title="Permalink"></a></h3><pre><code class="language-julia hljs">function my_diagnostics(solver, fields)
-    u, T = fields
-
-    # Compute custom quantities
-    KE = 0.5 * mean(u.data .^ 2)
-    max_T = maximum(T.data)
-    min_T = minimum(T.data)
-
-    return Dict(
-        &quot;KE&quot; =&gt; KE,
-        &quot;T_max&quot; =&gt; max_T,
-        &quot;T_min&quot; =&gt; min_T
-    )
-end
-
-# Register diagnostic
-add_diagnostic!(solver, my_diagnostics, interval=10)</code></pre><hr/><h2 id="Data-Post-Processing"><a class="docs-heading-anchor" href="#Data-Post-Processing">Data Post-Processing</a><a id="Data-Post-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Data-Post-Processing" title="Permalink"></a></h2><h3 id="Merging-Parallel-Output"><a class="docs-heading-anchor" href="#Merging-Parallel-Output">Merging Parallel Output</a><a id="Merging-Parallel-Output-1"></a><a class="docs-heading-anchor-permalink" href="#Merging-Parallel-Output" title="Permalink"></a></h3><p>After simulation with MPI:</p><pre><code class="language-julia hljs"># Merge NetCDF files from all ranks
-using Tarang.IO
-
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[10 =&gt; flow_diag])</code></pre><p>Derivative-based quantities (shear, gradient Richardson number, …) build the derivative as an operator object — <code>Differentiate(T, coords[&quot;z&quot;])</code>, <code>Gradient</code>, <code>lap</code>, … — and add it as a task or evaluate it via the in-memory handler above.</p><h3 id="Probe-points"><a class="docs-heading-anchor" href="#Probe-points">Probe points</a><a id="Probe-points-1"></a><a class="docs-heading-anchor-permalink" href="#Probe-points" title="Permalink"></a></h3><p>Sample a field at a fixed grid index inside a callback and append to a time series:</p><pre><code class="language-julia hljs">idx = (8, 16)                       # grid index to sample
+t_probe, u_probe = Float64[], Float64[]
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[10 =&gt; function (s)
+    ensure_layout!(u, :g)
+    push!(t_probe, s.sim_time)
+    push!(u_probe, get_grid_data(u)[idx...])
+end])</code></pre><p>(Under MPI <code>get_grid_data</code> is the rank-local slab — guard the sample by which rank owns <code>idx</code>, or write the field with a handler and probe the merged output.)</p><h3 id="Progress-monitoring"><a class="docs-heading-anchor" href="#Progress-monitoring">Progress monitoring</a><a id="Progress-monitoring-1"></a><a class="docs-heading-anchor-permalink" href="#Progress-monitoring" title="Permalink"></a></h3><p><code>run!</code> prints a built-in progress line every <code>log_interval</code> iterations; richer monitoring goes in a callback (see <a href="#In-Run-Diagnostics">In-Run Diagnostics</a>):</p><pre><code class="language-julia hljs">run!(solver; stop_time=t_end, cfl=cfl, log_interval=100)</code></pre><hr/><h2 id="Data-Post-Processing"><a class="docs-heading-anchor" href="#Data-Post-Processing">Data Post-Processing</a><a id="Data-Post-Processing-1"></a><a class="docs-heading-anchor-permalink" href="#Data-Post-Processing" title="Permalink"></a></h2><h3 id="Merging-Parallel-Output"><a class="docs-heading-anchor" href="#Merging-Parallel-Output">Merging Parallel Output</a><a id="Merging-Parallel-Output-1"></a><a class="docs-heading-anchor-permalink" href="#Merging-Parallel-Output" title="Permalink"></a></h3><p>After simulation with MPI:</p><pre><code class="language-julia hljs"># Merge per-rank / multi-set NetCDF files (merge_netcdf_files is a Tarang export)
 merge_netcdf_files(
     &quot;output/snapshots&quot;,
-    output_file=&quot;output/snapshots_merged.nc&quot;,
-    cleanup=true  # Remove individual rank files
-)</code></pre><h3 id="Loading-Data"><a class="docs-heading-anchor" href="#Loading-Data">Loading Data</a><a id="Loading-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-Data" title="Permalink"></a></h3><pre><code class="language-julia hljs">using NCDatasets
+    output_name=&quot;output/snapshots_merged&quot;,
+    cleanup=true  # remove individual rank files after merge
+)</code></pre><h3 id="Loading-Data"><a class="docs-heading-anchor" href="#Loading-Data">Loading Data</a><a id="Loading-Data-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-Data" title="Permalink"></a></h3><p>Tarang writes plain NetCDF, so read it with NetCDF.jl:</p><pre><code class="language-julia hljs">using NetCDF
 
-# Load merged data
-ds = Dataset(&quot;output/snapshots_merged.nc&quot;)
+ncinfo(&quot;output/snapshots_merged.nc&quot;)                  # list variables / dimensions
 
-# Access fields
-u_data = ds[&quot;u&quot;][:]
-T_data = ds[&quot;T&quot;][:]
-time = ds[&quot;time&quot;][:]
-
-close(ds)
+u_data = ncread(&quot;output/snapshots_merged.nc&quot;, &quot;u&quot;)
+T_data = ncread(&quot;output/snapshots_merged.nc&quot;, &quot;T&quot;)
+time   = ncread(&quot;output/snapshots_merged.nc&quot;, &quot;time&quot;)
 
 # Analyze or visualize
 using Plots
-heatmap(T_data[:, :, end], title=&quot;Temperature at t=$(time[end])&quot;)</code></pre><hr/><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang, MPI
+heatmap(T_data[:, :, end]; title=&quot;Temperature at t=$(time[end])&quot;)</code></pre><hr/><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang, MPI
 
 MPI.Init()
 
@@ -270,37 +142,29 @@ MPI.Init()
 cfl = CFL(problem, safety=0.5, max_dt=0.01)
 add_velocity!(cfl, u)
 
-# Output handlers
-snapshots = add_netcdf_handler(solver, &quot;snapshots&quot;,
-                                fields=[u, p, T], write_interval=0.1)
+# Output handler — created with the solver, so run! auto-writes + closes it.
+# Tasks (not the namespace) are what gets written, so add one per field.
+snapshots = add_file_handler(&quot;snapshots&quot;, solver; sim_dt=0.1)
+add_task!(snapshots, u; name=&quot;u&quot;)
+add_task!(snapshots, p; name=&quot;p&quot;)
+add_task!(snapshots, T; name=&quot;T&quot;)
 
-# Scalar diagnostics
-add_scalar_evaluator(solver, &quot;KE&quot;, &quot;0.5*integrate(u*u + w*w)&quot;)
-add_scalar_evaluator(solver, &quot;Nu&quot;, &quot;1 + mean(w*T)&quot;)
-
-# Monitoring
-monitor = SimulationMonitor(print_interval=100)
-attach_monitor!(solver, monitor)
-
-# Time integration
-while solver.sim_time &lt; 10.0
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
-
-    # Custom analysis every 1000 steps
-    if solver.iteration % 1000 == 0
-        KE = get_scalar(solver, &quot;KE&quot;)
-        Nu = get_scalar(solver, &quot;Nu&quot;)
-
-        if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-            println(&quot;t=$(solver.sim_time): KE=$KE, Nu=$Nu&quot;)
-        end
-    end
+# Custom diagnostics live in a callback (receives the solver). global_max is
+# MPI-reduced, so the printed value is identical on every rank.
+function diagnostics(s)
+    ensure_layout!(T, :g)
+    max_T = global_max(dist, abs.(get_grid_data(T)))
+    MPI.Comm_rank(MPI.COMM_WORLD) == 0 &amp;&amp;
+        println(&quot;t=$(s.sim_time): dt=$(s.dt), max|T|=$max_T&quot;)
 end
 
-# Merge output files
+# Time integration — run! drives the loop: CFL-adaptive dt, auto-writes
+# `snapshots` every sim_dt, fires `diagnostics` every 1000 steps, closes at end.
+run!(solver; stop_time=10.0, cfl=cfl, callbacks=[1000 =&gt; diagnostics])
+
+# Merge per-process / multi-set output into a single file
 if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-    merge_netcdf_files(&quot;snapshots&quot;, output_file=&quot;snapshots.nc&quot;, cleanup=true)
+    merge_netcdf_files(&quot;snapshots&quot;, output_name=&quot;snapshots_merged&quot;, cleanup=true)
 end
 
-MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Integration methods</li><li><a href="../fields/">Fields</a>: Field operations for analysis</li><li><a href="../../tutorials/analysis_and_output/">Tutorial: Analysis</a>: Detailed examples</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../les_models/">« LES Models</a><a class="docs-footer-nextpage" href="../io/">I/O »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 11:55">Sunday 14 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Integration methods</li><li><a href="../fields/">Fields</a>: Field operations for analysis</li><li><a href="../../tutorials/analysis_and_output/">Tutorial: Analysis</a>: Detailed examples</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../les_models/">« LES Models</a><a class="docs-footer-nextpage" href="../io/">I/O »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 17:08">Sunday 14 June 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

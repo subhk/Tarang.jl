@@ -140,10 +140,9 @@ analysis = add_netcdf_handler(
 # Add computed quantities
 add_task!(analysis, () -&gt; compute_kinetic_energy(u), name=&quot;kinetic_energy&quot;)
 add_task!(analysis, () -&gt; compute_enstrophy(u), name=&quot;enstrophy&quot;)
-add_task!(analysis, () -&gt; compute_dissipation(u, nu), name=&quot;dissipation&quot;)</code></pre><h2 id="Time-Integration"><a class="docs-heading-anchor" href="#Time-Integration">Time Integration</a><a id="Time-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Integration" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Simulation parameters
+add_task!(analysis, () -&gt; compute_dissipation(u, nu), name=&quot;dissipation&quot;)</code></pre><h2 id="Time-Integration"><a class="docs-heading-anchor" href="#Time-Integration">Time Integration</a><a id="Time-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Integration" title="Permalink"></a></h2><p><code>run!</code> drives the loop: it adapts <code>dt</code> from the CFL controller each step, auto-writes any output handler created with the solver, fires callbacks at their intervals, and closes the handlers at the end. Use a <code>Float64</code> callback interval to fire every Δt of simulation time (here every <code>output_interval</code> time units) for the diagnostic print.</p><pre><code class="language-julia hljs"># Simulation parameters
 t_end = 10.0
 output_interval = 0.5
-next_output = output_interval
 
 # Diagnostic output
 if rank == 0
@@ -153,27 +152,16 @@ if rank == 0
     println(&quot;=&quot; ^ 60)
 end
 
-# Main loop
-while solver.sim_time &lt; t_end
-    # Adaptive timestep
-    dt = compute_timestep(cfl)
-
-    # Advance solution
-    step!(solver, dt)
-
-    # Periodic output
-    if solver.sim_time &gt;= next_output
-        KE = compute_kinetic_energy(u)
-        eps = compute_dissipation(u, nu)
-
-        if rank == 0
-            @printf(&quot;t = %.3f, KE = %.6e, ε = %.6e, dt = %.2e\n&quot;,
-                    solver.sim_time, KE, eps, dt)
-        end
-
-        next_output += output_interval
-    end
+# Print KE / dissipation every `output_interval` simulation-time units.
+function report(s)
+    KE  = compute_kinetic_energy(u)
+    eps = compute_dissipation(u, nu)
+    @root_only @printf(&quot;t = %.3f, KE = %.6e, ε = %.6e, dt = %.2e\n&quot;,
+                       s.sim_time, KE, eps, s.dt)
 end
+
+run!(solver; stop_time=t_end, cfl=cfl,
+     callbacks=[output_interval =&gt; report])
 
 MPI.Finalize()</code></pre><h2 id="Performance-Considerations"><a class="docs-heading-anchor" href="#Performance-Considerations">Performance Considerations</a><a id="Performance-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Performance-Considerations" title="Permalink"></a></h2><h3 id="Resolution-Requirements"><a class="docs-heading-anchor" href="#Resolution-Requirements">Resolution Requirements</a><a id="Resolution-Requirements-1"></a><a class="docs-heading-anchor-permalink" href="#Resolution-Requirements" title="Permalink"></a></h3><table><tr><th style="text-align: right">Reynolds Number</th><th style="text-align: right">Minimum Grid</th><th style="text-align: right">Recommended Grid</th></tr><tr><td style="text-align: right">Re ~ 100</td><td style="text-align: right">32³</td><td style="text-align: right">64³</td></tr><tr><td style="text-align: right">Re ~ 1000</td><td style="text-align: right">64³</td><td style="text-align: right">128³</td></tr><tr><td style="text-align: right">Re ~ 10000</td><td style="text-align: right">128³</td><td style="text-align: right">256³</td></tr><tr><td style="text-align: right">Re ~ 100000</td><td style="text-align: right">256³</td><td style="text-align: right">512³+</td></tr></table><h3 id="MPI-Scaling"><a class="docs-heading-anchor" href="#MPI-Scaling">MPI Scaling</a><a id="MPI-Scaling-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Scaling" title="Permalink"></a></h3><p>For 3D simulations:</p><table><tr><th style="text-align: right">Processes</th><th style="text-align: right">Recommended Mesh</th><th style="text-align: right">Notes</th></tr><tr><td style="text-align: right">8</td><td style="text-align: right">(2, 2, 2)</td><td style="text-align: right">Basic</td></tr><tr><td style="text-align: right">64</td><td style="text-align: right">(4, 4, 4)</td><td style="text-align: right">Good scaling</td></tr><tr><td style="text-align: right">512</td><td style="text-align: right">(8, 8, 8)</td><td style="text-align: right">Large scale</td></tr></table><h3 id="Memory-Usage"><a class="docs-heading-anchor" href="#Memory-Usage">Memory Usage</a><a id="Memory-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Usage" title="Permalink"></a></h3><p>Estimate: ~100 bytes per grid point (double precision, 3D velocity + pressure + work arrays)</p><pre><code class="language-julia hljs"># Memory estimate
 N = 256
@@ -191,4 +179,4 @@ function visualize_slice(u, plane=&quot;xy&quot;, position=0.5)
     data = get_grid_data(u.components[1])
     # ... slice extraction ...
     heatmap(slice_data)
-end</code></pre><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li>Taylor, G. I., &amp; Green, A. E. (1937). Mechanism of the production of small eddies from large ones.</li><li>Pope, S. B. (2000). Turbulent Flows. Cambridge University Press.</li><li>Canuto, C., et al. (2007). Spectral Methods: Fundamentals in Single Domains.</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_2d_rbc/">« 2D Rayleigh-Benard</a><a class="docs-footer-nextpage" href="../boundary_conditions/">Boundary Conditions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 11:55">Sunday 14 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+end</code></pre><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li>Taylor, G. I., &amp; Green, A. E. (1937). Mechanism of the production of small eddies from large ones.</li><li>Pope, S. B. (2000). Turbulent Flows. Cambridge University Press.</li><li>Canuto, C., et al. (2007). Spectral Methods: Fundamentals in Single Domains.</li></ol></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_2d_rbc/">« 2D Rayleigh-Benard</a><a class="docs-footer-nextpage" href="../boundary_conditions/">Boundary Conditions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 17:08">Sunday 14 June 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

@@ -17,13 +17,19 @@ solver.dt               # Current timestep
 solver.sim_time         # Current simulation time
 solver.iteration        # Current iteration number
 solver.wall_time        # Elapsed wall clock time
-solver.state            # Current state vector</code></pre><p><strong>Methods</strong>:</p><h4 id="run!"><a class="docs-heading-anchor" href="#run!">run!</a><a id="run!-1"></a><a class="docs-heading-anchor-permalink" href="#run!" title="Permalink"></a></h4><p>The recommended way to run a simulation. Handles the loop, progress reporting, and callbacks:</p><pre><code class="language-julia hljs">run!(solver;
+solver.state            # Current state vector</code></pre><p><strong>Methods</strong>:</p><h4 id="run!"><a class="docs-heading-anchor" href="#run!">run!</a><a id="run!-1"></a><a class="docs-heading-anchor-permalink" href="#run!" title="Permalink"></a></h4><p>The recommended way to run a simulation. Drives the timestep loop, CFL-adaptive dt, output handlers, progress, and callbacks — so a typical script needs no manual <code>step!</code>/<code>process!</code>/<code>close!</code>:</p><pre><code class="language-julia hljs"># Handlers created with the SOLVER auto-register; run! writes them every step
+# (at their own sim_dt/iter cadence) and closes them at the end.
+snap = add_file_handler(&quot;output/snap&quot;, solver; sim_dt=0.5)
+add_task!(snap, u; name=&quot;u&quot;)
+
+run!(solver;
      stop_time=10.0,
-     log_interval=100,
+     cfl=cfl,                       # adaptive dt = compute_timestep(cfl) each step
+     log_interval=100,              # built-in progress line every 100 steps
      callbacks=[
-         (10, s -&gt; @info &quot;Energy: $(compute_energy(s))&quot;),
-         (0.5, s -&gt; save_checkpoint(s))  # every 0.5 time units
-     ])</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>stop_time</code>: Stop when <code>sim_time &gt;= stop_time</code></li><li><code>stop_iteration</code>: Stop after N iterations</li><li><code>stop_wall_time</code>: Stop after N seconds of wall time</li><li><code>callbacks</code>: Vector of <code>(interval, function)</code> pairs</li><li><code>log_interval</code>: Print progress every N iterations (0 to disable)</li></ul><p>Callback intervals can be <code>Int</code> (every N iterations) or <code>Float64</code> (every T time units).</p><h4 id="step!"><a class="docs-heading-anchor" href="#step!">step!</a><a id="step!-1"></a><a class="docs-heading-anchor-permalink" href="#step!" title="Permalink"></a></h4><p>Advance solution by one timestep (for custom loops):</p><pre><code class="language-julia hljs">step!(solver)           # Use solver.dt
+         100 =&gt; (s -&gt; @printf(&quot;t=%.3f dt=%.2e max|u|=%.3e\n&quot;, s.sim_time, s.dt, global_max(u))),
+         0.5 =&gt; (s -&gt; save_checkpoint(s)),   # every 0.5 sim-time units
+     ])</code></pre><p><strong>Arguments</strong>:</p><ul><li><code>stop_time</code>: stop when <code>sim_time &gt;= stop_time</code></li><li><code>stop_iteration</code>: stop after N iterations</li><li><code>stop_wall_time</code>: stop after N seconds of wall time</li><li><code>cfl</code>: a <code>CFL</code> controller — if given, <code>dt = compute_timestep(cfl)</code> each step</li><li><code>outputs</code>: extra output handlers to process each step (handlers created with the solver are already auto-registered; use this for ones created from a <code>dist</code>)</li><li><code>callbacks</code>: vector of <code>interval =&gt; function</code> pairs; the function receives the solver</li><li><code>log_interval</code>: print a built-in progress line every N iterations (0 to disable)</li></ul><p>Callback (and output) intervals can be <code>Int</code> (every N iterations) or <code>Float64</code> (every T sim-time units). Custom diagnostics — time, timestep, and field maxima via <code>global_max</code>/<code>global_min</code>/<code>global_sum</code> — go in a callback.</p><h4 id="step!"><a class="docs-heading-anchor" href="#step!">step!</a><a id="step!-1"></a><a class="docs-heading-anchor-permalink" href="#step!" title="Permalink"></a></h4><p>Advance solution by one timestep (for custom loops):</p><pre><code class="language-julia hljs">step!(solver)           # Use solver.dt
 step!(solver, dt)       # Use specified dt</code></pre><h4 id="proceed"><a class="docs-heading-anchor" href="#proceed">proceed</a><a id="proceed-1"></a><a class="docs-heading-anchor-permalink" href="#proceed" title="Permalink"></a></h4><p>Check if simulation should continue:</p><pre><code class="language-julia hljs">solver.stop_sim_time = 10.0
 
 while proceed(solver)
@@ -265,18 +271,14 @@ solver = InitialValueSolver(problem, RK222(), dt=1e-4)
 cfl = CFL(problem, safety=0.5)
 add_velocity!(cfl, u)
 
-# Output
-output = add_netcdf_handler(solver, &quot;output&quot;, fields=[u, p, T], write_interval=0.1)
+# Output — created with the solver, so run! auto-writes + closes it
+output = add_file_handler(&quot;output&quot;, solver, Dict(&quot;u&quot; =&gt; u, &quot;p&quot; =&gt; p, &quot;T&quot; =&gt; T); sim_dt=0.1)
 
-# Time integration
+# Time integration — run! drives the loop (CFL-adaptive dt, output, callbacks)
 t_end = 10.0
-while solver.sim_time &lt; t_end
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[
+    100 =&gt; (s -&gt; MPI.Comm_rank(MPI.COMM_WORLD) == 0 &amp;&amp;
+                 println(&quot;t = $(s.sim_time), dt = $(s.dt)&quot;)),
+])
 
-    if solver.iteration % 100 == 0 &amp;&amp; MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        println(&quot;t = $(solver.sim_time), dt = $dt&quot;)
-    end
-end
-
-MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../problems/">Problems</a>: Problem definition</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li><li><a href="../analysis/">Analysis</a>: CFL conditions and diagnostics</li><li><a href="../../tutorials/ivp_2d_rbc/">Tutorial: IVP</a>: Complete example</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../problems/">« Problems</a><a class="docs-footer-nextpage" href="../timesteppers/">Time Steppers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 11:55">Sunday 14 June 2026</span>. Using Julia version 1.12.6.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+MPI.Finalize()</code></pre><hr/><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../problems/">Problems</a>: Problem definition</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration schemes</li><li><a href="../analysis/">Analysis</a>: CFL conditions and diagnostics</li><li><a href="../../tutorials/ivp_2d_rbc/">Tutorial: IVP</a>: Complete example</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../problems/">« Problems</a><a class="docs-footer-nextpage" href="../timesteppers/">Time Steppers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 14 June 2026 17:08">Sunday 14 June 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
