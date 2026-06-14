@@ -30,10 +30,8 @@ Tarang.ensure_layout!(T, :g)
 x = get_grid(basis)
 get_grid_data(T) .= x .< 0.5
 
-# Solve to steady state
-while solver.sim_time < 10.0
-    step!(solver)
-end
+# Solve to steady state — run! drives the loop with the solver's fixed dt.
+run!(solver; stop_time=10.0)
 # Steady state: linear profile
 
 MPI.Finalize()

@@ -90,13 +90,15 @@ E0, Z0 = energy_enstrophy(q, u)
 @info "2D decaying turbulence" device=typeof(device) N ν dt NSTEPS E0 Z0
 
 # ── Time integration ─────────────────────────────────────────────────────────
-for step in 1:NSTEPS
-    step!(solver, dt)
-    if step % REPORT == 0
-        E, Z = energy_enstrophy(q, u)
-        @info "t=$(round(step*dt; digits=3))" E=round(E; sigdigits=4) Z=round(Z; sigdigits=4) E_frac=round(E/E0; digits=3) Z_frac=round(Z/Z0; digits=3)
-    end
+# run! drives the loop with the solver's fixed dt (no CFL controller here). The
+# REPORT callback fires every REPORT iterations and prints the same diagnostics
+# the manual loop did; s.sim_time == step*dt at that point.
+function report(s)
+    E, Z = energy_enstrophy(q, u)
+    @info "t=$(round(s.sim_time; digits=3))" E=round(E; sigdigits=4) Z=round(Z; sigdigits=4) E_frac=round(E/E0; digits=3) Z_frac=round(Z/Z0; digits=3)
 end
+
+run!(solver; stop_iteration=NSTEPS, callbacks=[REPORT => report])
 
 Ef, Zf = energy_enstrophy(q, u)
 @info "done" E_final=Ef Z_final=Zf energy_decayed=(Ef < E0) enstrophy_decayed=(Zf < Z0)

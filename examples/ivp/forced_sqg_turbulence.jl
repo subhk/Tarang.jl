@@ -87,7 +87,7 @@ fill_random!(θ, "g"; seed=42, distribution="normal", scale=initial_noise)
 
 # ─── Output ──────────────────────────────────────────────────
 output_path = "sqg"
-snapshots = add_file_handler(output_path, solver, Dict("θ" => θ, "ψ" => ψ);
+snapshots = add_file_handler(output_path, solver;
                              sim_dt=output_dt, max_writes=max_writes)
 
 add_task!(snapshots, θ; name="theta")
@@ -105,26 +105,20 @@ add_velocity!(cfl, u)
 @root_only @printf("  dt≤%.2e, output_dt=%.2e, initial_noise=%.1e\n",
                     max_dt, output_dt, initial_noise)
 
-# write initial state, t = 0
-process!(snapshots)
-
-while solver.sim_time < stop_time && solver.iteration < stop_iteration
-    dt = min(compute_timestep(cfl), stop_time - solver.sim_time)
-    step!(solver, dt)
-
-    process!(snapshots)
-
-    if solver.iteration % log_interval == 0
-        ensure_layout!(θ, :g)
-        max_θ = global_max(dist, abs.(get_grid_data(θ)))
-        if !isfinite(max_θ)
-            error("Non-finite surface buoyancy detected at iteration $(solver.iteration), t=$(solver.sim_time)")
-        end
-        @root_only @printf("  iter=%d, t=%.6f, dt=%.2e, max|θ|=%.4e\n",
-                            solver.iteration, solver.sim_time, solver.dt, max_θ)
-    end
+# Diagnostics: print time / timestep / max|θ| and guard against blow-up. The
+# callback receives the solver; global_max is MPI-reduced (same value on all ranks).
+function log_state(s)
+    ensure_layout!(θ, :g)
+    max_θ = global_max(dist, abs.(get_grid_data(θ)))
+    isfinite(max_θ) || error("Non-finite surface buoyancy detected at iteration $(s.iteration), t=$(s.sim_time)")
+    @root_only @printf("  iter=%d, t=%.6f, dt=%.2e, max|θ|=%.4e\n",
+                        s.iteration, s.sim_time, s.dt, max_θ)
 end
 
-close!(snapshots)
+# run! drives the whole loop: CFL-adaptive dt, auto-writes `snapshots` (registered
+# above by add_file_handler with the solver), fires the diagnostics callback every
+# `log_interval` steps, and closes the handler at the end — no manual step!/process!/close!.
+run!(solver; stop_time=stop_time, stop_iteration=stop_iteration, cfl=cfl,
+     callbacks=[log_interval => log_state])
 
 @root_only println("Done!")

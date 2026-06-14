@@ -180,7 +180,20 @@ add_extrema_task!(handler, field; name="field_extrema")
 Tarang.process!
 ```
 
-Write pending data to file.
+Write pending data to file (respecting the handler's `sim_dt`/`iter`/`wall_dt`
+cadence). This is the low-level call.
+
+**Recommended:** create the handler with the *solver* and let `run!` drive output
+— the handler auto-registers, and `run!` calls `process!` every step and `close!`
+at the end, so you never write a manual loop or forget a `process!`:
+
+```julia
+handler = add_file_handler("output/snap", solver; sim_dt=0.5)
+add_task!(handler, u; name="u")
+run!(solver; stop_time=20.0, cfl=cfl)   # auto: dt, process!(handler), close!
+```
+
+Call `process!`/`close!` directly only when you write your own step loop:
 
 ```julia
 process!(handler;
@@ -306,7 +319,7 @@ Tarang.merge_netcdf_files
 Merge multiple NetCDF files from parallel output.
 
 ```julia
-merge_netcdf_files(base_path; output_file="merged.nc")
+merge_netcdf_files(base_path; output_name="merged")
 ```
 
 ---
@@ -519,7 +532,7 @@ For post-processing virtual files:
 
 ```julia
 # Merge all parallel files
-merge_netcdf_files("output"; output_file="output_merged.nc", cleanup=true)
+merge_netcdf_files("output"; output_name="output_merged", cleanup=true)
 
 # Batch merge multiple handlers
 batch_merge_netcdf(["snapshots", "analysis", "checkpoints"])

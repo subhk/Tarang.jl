@@ -98,8 +98,7 @@ fill_random!(ζ, "g"; seed=42, distribution="normal", scale=initial_noise)
 
 # ─── Output ──────────────────────────────────────────────────
 output_path = get(ENV, "TARANG_FORCED_2D_OUTPUT", "2d_turb/2d_turb")
-snapshots = add_file_handler(output_path, solver,
-                            Dict("ζ" => ζ, "ψ" => ψ);
+snapshots = add_file_handler(output_path, solver;
                             sim_dt=output_dt, max_writes=max_writes)
 
 add_task!(snapshots, ζ; name="ζ")
@@ -113,31 +112,26 @@ cfl = CFL(solver; initial_dt=max_dt, cadence=10, safety=0.5,
           threshold=0.05, max_change=1.5, min_change=0.5, max_dt=max_dt)
 add_velocity!(cfl, u)
 
-# ─── Main Loop ────────────────────────────────────────────────
+# ─── Run ──────────────────────────────────────────────────────
 @root_only println("Forced 2D Turbulence")
 @root_only @printf("  N=%d×%d, ε=%.2e, k_f=%.1f, ν=%.1e, μ=%.1e\n", Nx, Ny, ε, k_f, nu, drag)
 @root_only @printf("  dt≤%.2e, output_dt=%.2e, initial_noise=%.1e\n",
                     max_dt, output_dt, initial_noise)
 
-process!(snapshots)
-
-while solver.sim_time < stop_time && solver.iteration < stop_iteration
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
-
-    process!(snapshots)
-
-    if solver.iteration % log_interval == 0
-        ensure_layout!(ζ, :g)
-        max_ζ = global_max(dist, abs.(get_grid_data(ζ)))
-        if !isfinite(max_ζ)
-            error("Non-finite vorticity detected at iteration $(solver.iteration), t=$(solver.sim_time)")
-        end
-        @root_only @printf("  iter=%d, t=%.6f, dt=%.2e, max|ζ|=%.4e\n",
-                            solver.iteration, solver.sim_time, solver.dt, max_ζ)
-    end
+# Diagnostics: print time / timestep / max|ζ| and guard against blow-up. The
+# callback receives the solver; global_max is MPI-reduced (same value on all ranks).
+function log_state(s)
+    ensure_layout!(ζ, :g)
+    max_ζ = global_max(dist, abs.(get_grid_data(ζ)))
+    isfinite(max_ζ) || error("Non-finite vorticity at iter $(s.iteration), t=$(s.sim_time)")
+    @root_only @printf("  iter=%d, t=%.6f, dt=%.2e, max|ζ|=%.4e\n",
+                       s.iteration, s.sim_time, s.dt, max_ζ)
 end
 
-close!(snapshots)
+# run! drives the whole loop: CFL-adaptive dt, auto-writes `snapshots` (registered
+# above by add_file_handler), fires the diagnostics callback every `log_interval`
+# steps, and closes the handler at the end — no manual step!/process!/close!.
+run!(solver; stop_time=stop_time, stop_iteration=stop_iteration, cfl=cfl,
+     callbacks=[log_interval => log_state])
 
 @root_only println("Done!")

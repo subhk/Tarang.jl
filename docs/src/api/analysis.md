@@ -104,410 +104,290 @@ cfl.current_dt      # Last computed timestep
 
 ### NetCDF Output
 
-#### add_netcdf_handler
+#### add_file_handler (recommended)
 
-Create NetCDF output handler for saving fields to files.
+Create a NetCDF output handler and **register it with the solver**, so `run!`
+writes it automatically at its own cadence and closes it at the end — no manual
+`process!`/`close!` in a step loop (easy to forget, silently drops output).
 
 **Syntax**:
 ```julia
-add_netcdf_handler(
+add_file_handler(
+    base_path::String,
     solver::InitialValueSolver,
-    base_path::String;
-    fields::Vector{<:AbstractField},
-    write_interval::Float64=1.0,
-    mode::String="overwrite"
+    vars=<problem namespace>;   # optional; only for STRING-expression tasks (see below)
+    sim_dt=nothing,             # write every sim_dt time units
+    iter=nothing,               # …or every iter steps
+    wall_dt=nothing,            # …or every wall_dt seconds
+    max_writes=nothing,         # cap number of writes
+    mode="overwrite",           # "overwrite" | "append"
 )
 ```
 
-**Arguments**:
-- `solver`: IVP solver
-- `base_path`: Base path for output files (without extension)
-- `fields`: Fields to save
-- `write_interval`: Time between writes
-- `mode`: File mode ("overwrite", "append")
-
-**Examples**:
+**Example**:
 
 ```julia
-# Basic output
-handler = add_netcdf_handler(
-    solver,
-    "output/snapshots",
-    fields=[u, p, T],
-    write_interval=0.1
-)
+# Register handler, add tasks, run — run! handles process!/close! and GPU→CPU
+snapshots = add_file_handler("output/snapshots", solver; sim_dt=0.1)
+add_task!(snapshots, u; name="u")          # field object
+add_task!(snapshots, lap(u); name="lap_u") # operator object (derived field)
 
-# Multiple handlers for different cadences
-snapshots = add_netcdf_handler(solver, "snapshots", fields=[u, p, T], write_interval=0.1)
-checkpoints = add_netcdf_handler(solver, "checkpoints", fields=[u, p, T], write_interval=1.0)
+# Multiple handlers at different cadences (each auto-registered on the solver)
+checkpoints = add_file_handler("output/checkpoints", solver; sim_dt=1.0)
+add_task!(checkpoints, u; name="u")
+
+run!(solver; stop_time=20.0, cfl=cfl)      # writes both handlers + closes them
 ```
 
+A task can be a **field object** (`u`) or an **operator object** built from the
+exported operator functions (`lap(u)`, `Gradient(u, coords)`, `curl(u)`, …) — see
+[Derived Fields](#Derived-Fields). For reductions use `add_mean_task!` /
+`add_extrema_task!`.
+
+!!! note "The `vars` namespace"
+    The optional third positional `vars` is a name→field table used only by the
+    (limited) string-expression task parser. It defaults to the problem namespace.
+    **Prefer field/operator objects over string expressions** — the string parser
+    handles only trivial cases. Pass an explicit `Dict("name" => field)` only if
+    you rely on string tasks that reference a non-problem field.
+
 **Output files**:
-- Creates files like: `snapshots_proc0.nc`, `snapshots_proc1.nc`, etc.
-- One file per MPI process
-- Use `merge_processor_files` to combine
+- Each write-set goes in its own subdirectory: `snapshots_s1/…`, `snapshots_s2/…`
+- Under MPI, one file per process per set
+- Combine with `merge_netcdf_files("output/snapshots")` (see below)
 
 ---
 
 #### NetCDFFileHandler
 
-Direct handler class for more control.
+Direct handler type, when you build it without a solver (e.g. a custom step loop)
+and pass the `Distributor` explicitly.
 
 **Constructor**:
 ```julia
 NetCDFFileHandler(
-    filename::String,
-    fields::Vector{<:AbstractField};
-    write_mode::String="overwrite",
-    compression::Int=4
+    base_path::String,
+    dist::Distributor,
+    vars;                       # Dict("name" => field) or a vector of fields
+    sim_dt=nothing, iter=nothing, wall_dt=nothing,
+    max_writes=nothing,
+    mode="overwrite",           # "overwrite" | "append"
+    parallel="gather",          # "gather" (single file) | per-rank
 )
 ```
 
 **Methods**:
 ```julia
-# Write current state
-write_fields!(handler, sim_time)
-
-# Close file
-close!(handler)
+process!(handler)   # write if the handler's sim_dt/iter/wall_dt cadence is due
+close!(handler)     # finalize / stamp metadata
 ```
 
-**Example**:
+**Example** (manual loop — only if not using `run!`):
 
 ```julia
-handler = NetCDFFileHandler("output.nc", [u, p, T], compression=6)
+handler = NetCDFFileHandler("output", dist, Dict("u" => u, "T" => T); iter=100)
 
+process!(handler)                          # capture initial state (t = 0)
 while solver.sim_time < t_end
     step!(solver)
-
-    if solver.iteration % 100 == 0
-        write_fields!(handler, solver.sim_time)
-    end
+    process!(handler)                      # no-op unless cadence is due
 end
-
 close!(handler)
 ```
 
----
+#### merge_netcdf_files
 
-## Analysis Evaluators
-
-### Scalar Evaluators
-
-Compute scalar diagnostics during simulation.
-
-#### add_scalar_evaluator
+Merge per-process / multi-set NetCDF output into a single file.
 
 ```julia
-add_scalar_evaluator(
-    solver::InitialValueSolver,
-    name::String,
-    expression::String
+merge_netcdf_files(
+    "output/snapshots";
+    set_number=1,               # which write-set to merge
+    output_name="",             # default: derived from base name
+    merge_mode=RECONSTRUCT,     # RECONSTRUCT | SIMPLE_CONCAT | DOMAIN_DECOMP
+    cleanup=false,              # delete source files after merge
 )
-```
 
-**Example**:
-
-```julia
-# Kinetic energy
-add_scalar_evaluator(solver, "KE", "0.5*integrate(u*u + v*v + w*w)")
-
-# Enstrophy
-add_scalar_evaluator(solver, "enstrophy", "0.5*integrate(omega*omega)")
-
-# Nusselt number
-add_scalar_evaluator(solver, "Nu", "1 + mean(w*T)")
-
-# Access values
-KE = get_scalar(solver, "KE")
+# Several handlers at once
+batch_merge_netcdf(["output/snapshots", "output/checkpoints"])
 ```
 
 ---
 
-### Field Evaluators
+## In-Run Diagnostics
 
-Compute derived fields during simulation.
-
-#### add_field_evaluator
+Scalar / time-series diagnostics are computed in a `run!` **callback** — an
+`interval => function` pair. The function receives the solver; an `Int` interval
+fires every N iterations, a `Float64` interval every N sim-time units. Inside it,
+reduce a field's grid data with the MPI-aware helpers `global_max` / `global_min`
+/ `global_mean` / `global_sum` (identical value on every rank), or use `integrate`
+for a true domain integral.
 
 ```julia
-add_field_evaluator(
-    solver::InitialValueSolver,
-    name::String,
-    expression::String
-)
+times, ke = Float64[], Float64[]
+
+function diagnostics(s)
+    ensure_layout!(u, :g)
+    g = get_grid_data(u)
+    push!(times, s.sim_time)
+    push!(ke, 0.5 * global_mean(dist, g .^ 2))     # ⟨½u²⟩, MPI-reduced
+    rank == 0 && println("t=$(s.sim_time)  KE=$(ke[end])")
+end
+
+run!(solver; stop_time=10.0, cfl=cfl, callbacks=[10 => diagnostics])   # every 10 steps
 ```
 
-**Example**:
+`run!` also prints a built-in progress line if you pass `log_interval=100`.
+
+---
+
+## Derived Fields
+
+To write a derived quantity (vorticity, Laplacian, a gradient component, …), build
+it as an **operator object** from the exported operator functions and add it as a
+task — `run!` evaluates and writes it like any field.
 
 ```julia
-# Vorticity
-add_field_evaluator(solver, "omega", "∂x(v) - ∂z(u)")
+handler = add_file_handler("output/derived", solver; sim_dt=0.1)
+add_task!(handler, lap(u);              name="lap_u")     # Laplacian (Δ also works)
+add_task!(handler, Gradient(u, coords); name="grad_u")    # gradient (vector)
+add_task!(handler, curl(velocity);      name="vorticity") # curl of a VectorField
+```
 
-# Q-criterion
-add_field_evaluator(solver, "Q", "0.5*(Omega*Omega - S*S)")
+Exported builders: `grad`/`Gradient`, `divergence`/`Divergence`, `curl`/`Curl`,
+`lap`/`Laplacian` (and the Unicode `∇`, `Δ`), plus `Differentiate(field, coord, order)`
+for a single-axis derivative.
 
-# Temperature gradient magnitude
-add_field_evaluator(solver, "grad_T_mag", "sqrt(∂x(T)^2 + ∂z(T)^2)")
+!!! warning "Prefer operator objects over string expressions"
+    `add_task!` also accepts a string (`add_task!(h, "u*u")`), but the string
+    parser handles only the most trivial cases — build operator objects instead.
 
-# Access computed field
-omega = get_field(solver, "omega")
+### Reduction tasks
+
+Reduce a field to a profile or extrema series, written by the same handler:
+
+```julia
+add_mean_task!(handler, u; dims=1, name="u_mean_x")   # average over axis 1 → profile
+add_extrema_task!(handler, u; name="u_extrema")        # min and max each write
 ```
 
 ---
 
-## Analysis Tasks
+## In-Memory Analysis
 
-### Unified Evaluator
-
-Combine multiple analysis operations.
+To keep results in memory (no file I/O), attach a `DictionaryHandler` to a
+`UnifiedEvaluator` and evaluate it from a callback. Results are stored by name and
+read with `handler[name]`.
 
 ```julia
-evaluator = UnifiedEvaluator(solver)
+ev = UnifiedEvaluator(solver)
+diag = add_dictionary_handler(ev; sim_dt=0.5)   # cadence: sim_dt / iter / wall_dt
+add_task!(diag, u; name="u")
+add_task!(diag, lap(u); name="lap_u")
 
-# Add various tasks
-add_task!(evaluator, "scalar", "KE", "0.5*integrate(u*u)")
-add_task!(evaluator, "field", "omega", "curl(u)")
-add_task!(evaluator, "profile", "T_mean", "mean(T, dim=1)")  # Mean over x
+# Evaluate every step; the handler gates its own write cadence internally.
+run!(solver; stop_time=10.0, cfl=cfl,
+     callbacks=[1 => s -> evaluate_unified_handlers!(ev, time(), s.sim_time, s.iteration)])
 
-# Evaluate all tasks
-evaluate!(evaluator)
-
-# Access results
-KE = evaluator.results["KE"]
-omega = evaluator.results["omega"]
-T_profile = evaluator.results["T_mean"]
+u_now = diag["u"]     # most recent stored evaluation
+keys(diag)            # task names
 ```
 
 ---
 
 ## Statistical Analysis
 
-### Time Averaging
+### Time averaging
+
+There is no separate averager type — accumulate a running mean in a callback:
 
 ```julia
-# Create time averager
-avg = TimeAverager(fields=[u, T], averaging_interval=1.0)
-
-# During simulation
-while solver.sim_time < t_end
-    step!(solver)
-    accumulate!(avg, solver.sim_time)
-end
-
-# Get averaged fields
-u_mean = get_average(avg, "u")
-T_mean = get_average(avg, "T")
+snaps = Vector{Array{Float64}}()
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[0.1 => function (s)
+    ensure_layout!(u, :g)
+    push!(snaps, copy(get_grid_data(u)))
+end])
+u_time_mean = sum(snaps) ./ length(snaps)
 ```
 
-### Spatial Averaging
+### Spatial averaging
 
-```julia
-# Mean over dimension
-T_mean_x = mean(T, dim=1)  # Average over x
-u_mean_profile = mean(u, dim=1)  # Velocity profile
-
-# Volume average
-T_vol_avg = mean(T)  # Average over entire domain
-```
-
-### Reynolds Decomposition
-
-```julia
-# Compute fluctuations
-function reynolds_decomposition(field, mean_field)
-    fluctuation = field - mean_field
-    return fluctuation
-end
-
-# Example
-u_mean = mean(u, dim=1)
-u_prime = reynolds_decomposition(u, u_mean)
-
-# Reynolds stresses
-uu_mean = mean(u_prime * u_prime, dim=1)
-uv_mean = mean(u_prime * v_prime, dim=1)
-```
+For output, use `add_mean_task!(handler, field; dims=…)`. For an in-line value,
+reduce the grid array directly: `global_mean(dist, get_grid_data(field))` for the
+whole-domain mean, or `Statistics.mean(get_grid_data(field); dims=…)` over chosen
+array dimensions.
 
 ---
 
 ## Spectral Analysis
 
-### Energy Spectra
+`power_spectrum` computes the radially-binned power spectrum of a scalar field that
+has at least one Fourier basis. It puts the field in coefficient layout, then bins
+|f̂(k)|² by wavenumber magnitude, returning a NamedTuple with `k`, `power`, and
+`bin_edges`.
 
 ```julia
-# 1D energy spectrum
-function compute_energy_spectrum_1d(u, direction)
-    # Transform to spectral space
-    to_spectral!(u)
-    u_hat = get_spectral_data(u)
+ps = power_spectrum(u)                  # u::ScalarField with a Fourier axis
 
-    # Compute energy
-    E = abs2.(u_hat)
-
-    # Bin by wavenumber magnitude
-    k, E_k = bin_spectrum(E, direction)
-
-    return k, E_k
-end
-
-# Usage
-k, E_k = compute_energy_spectrum_1d(u, 1)  # Spectrum in x-direction
-
-# Plot
 using Plots
-plot(k, E_k, xscale=:log10, yscale=:log10,
-     xlabel="k", ylabel="E(k)")
+plot(ps.k, ps.power; xscale=:log10, yscale=:log10, xlabel="k", ylabel="E(k)")
+plot!(ps.k, ps.k .^ (-5/3); linestyle=:dash, label="k^(-5/3)")   # Kolmogorov ref
+
+# Options
+ps = power_spectrum(u; max_wavenumber=64, radial_average=true)
 ```
 
-### 3D Isotropic Spectrum
-
-```julia
-function compute_isotropic_spectrum(u)
-    # Compute 3D energy distribution
-    to_spectral!(u)
-
-    E_hat = sum(abs2.(component) for component in u.components)
-
-    # Bin by |k|
-    k_mag = compute_k_magnitude(domain)
-    k, E_k = spherical_average(E_hat, k_mag)
-
-    return k, E_k
-end
-
-# Kolmogorov scaling check
-k, E_k = compute_isotropic_spectrum(u)
-plot(k, E_k, xscale=:log10, yscale=:log10)
-plot!(k, k.^(-5/3), linestyle=:dash, label="k^(-5/3)")
-```
+For a velocity `VectorField`, `enstrophy_spectrum(velocity)` returns the enstrophy
+spectrum Z(k) = |ω̂(k)|² (vorticity power) with the same NamedTuple shape.
 
 ---
 
-## Flow Property Analysis
+## Flow Diagnostics
 
-### Nusselt Number
-
-Heat transfer efficiency in convection:
+Flow-property scalars are computed in a callback from the field grid data — use
+`get_grid_data` (not `.data`) and the MPI-aware reducers. Example: a Nusselt-like
+heat flux ⟨wT⟩ and an RMS-velocity Reynolds number, accumulated over time.
 
 ```julia
-function compute_nusselt(T, w, domain)
-    # Nu = 1 + <w*T> (horizontally averaged)
-    to_grid!(T)
-    to_grid!(w)
-
-    wT = w.data .* T.data
-    wT_mean = mean(wT, dims=1)  # Average over x
-
-    Nu = 1.0 .+ wT_mean
-    return mean(Nu)  # Domain average
+Nu, Re = Float64[], Float64[]
+function flow_diag(s)
+    ensure_layout!(w, :g); ensure_layout!(T, :g); ensure_layout!(u, :g)
+    wT   = global_mean(dist, get_grid_data(w) .* get_grid_data(T))   # ⟨wT⟩
+    urms = sqrt(global_mean(dist, get_grid_data(u) .^ 2))            # RMS speed
+    push!(Nu, 1 + wT)
+    push!(Re, urms * L / nu)
 end
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[10 => flow_diag])
 ```
 
-### Reynolds Number
+Derivative-based quantities (shear, gradient Richardson number, …) build the
+derivative as an operator object — `Differentiate(T, coords["z"])`, `Gradient`,
+`lap`, … — and add it as a task or evaluate it via the in-memory handler above.
 
-From velocity statistics:
+### Probe points
+
+Sample a field at a fixed grid index inside a callback and append to a time series:
 
 ```julia
-function compute_reynolds_number(u, nu, L)
-    # Re = U*L/nu
-    to_grid!(u)
-    U = sqrt(mean(u.data .^ 2))  # RMS velocity
-    Re = U * L / nu
-    return Re
-end
+idx = (8, 16)                       # grid index to sample
+t_probe, u_probe = Float64[], Float64[]
+run!(solver; stop_time=t_end, cfl=cfl, callbacks=[10 => function (s)
+    ensure_layout!(u, :g)
+    push!(t_probe, s.sim_time)
+    push!(u_probe, get_grid_data(u)[idx...])
+end])
 ```
 
-### Richardson Number
+(Under MPI `get_grid_data` is the rank-local slab — guard the sample by which rank
+owns `idx`, or write the field with a handler and probe the merged output.)
 
-Stratification vs. shear:
+### Progress monitoring
 
-```julia
-function compute_richardson_number(u, T, dz, g, T0)
-    # Ri = (g/T0) * (∂T/∂z) / (∂u/∂z)^2
-    dTdz = ∂z(T)
-    dudz = ∂z(u)
-
-    to_grid!(dTdz)
-    to_grid!(dudz)
-
-    Ri = (g / T0) .* dTdz.data ./ (dudz.data .^ 2)
-    return mean(Ri)
-end
-```
-
----
-
-## Probe Points
-
-Sample fields at specific locations.
+`run!` prints a built-in progress line every `log_interval` iterations; richer
+monitoring goes in a callback (see [In-Run Diagnostics](#In-Run-Diagnostics)):
 
 ```julia
-# Define probe locations
-probes = ProbeSet([
-    ("probe1", x=1.0, z=0.5),
-    ("probe2", x=2.0, z=0.5),
-    ("probe3", x=3.0, z=0.5)
-])
-
-# Sample during simulation
-while solver.sim_time < t_end
-    step!(solver)
-
-    if solver.iteration % 10 == 0
-        sample_probes!(probes, [u, T], solver.sim_time)
-    end
-end
-
-# Get time series
-u_probe1 = get_probe_data(probes, "probe1", "u")
-t_series = get_probe_times(probes)
-
-# Plot
-plot(t_series, u_probe1, xlabel="t", ylabel="u", label="Probe 1")
-```
-
----
-
-## Monitoring and Diagnostics
-
-### Simulation Monitoring
-
-```julia
-# Create monitor
-monitor = SimulationMonitor(
-    print_interval=100,
-    print_fields=true,
-    print_diagnostics=true
-)
-
-# Add to solver
-attach_monitor!(solver, monitor)
-
-# Automatically prints during simulation:
-# Iteration: 100, t = 0.100, dt = 0.001, KE = 1.234, max(u) = 2.345
-```
-
-### Custom Diagnostics
-
-```julia
-function my_diagnostics(solver, fields)
-    u, T = fields
-
-    # Compute custom quantities
-    KE = 0.5 * mean(u.data .^ 2)
-    max_T = maximum(T.data)
-    min_T = minimum(T.data)
-
-    return Dict(
-        "KE" => KE,
-        "T_max" => max_T,
-        "T_min" => min_T
-    )
-end
-
-# Register diagnostic
-add_diagnostic!(solver, my_diagnostics, interval=10)
+run!(solver; stop_time=t_end, cfl=cfl, log_interval=100)
 ```
 
 ---
@@ -519,34 +399,30 @@ add_diagnostic!(solver, my_diagnostics, interval=10)
 After simulation with MPI:
 
 ```julia
-# Merge NetCDF files from all ranks
-using Tarang.IO
-
+# Merge per-rank / multi-set NetCDF files (merge_netcdf_files is a Tarang export)
 merge_netcdf_files(
     "output/snapshots",
-    output_file="output/snapshots_merged.nc",
-    cleanup=true  # Remove individual rank files
+    output_name="output/snapshots_merged",
+    cleanup=true  # remove individual rank files after merge
 )
 ```
 
 ### Loading Data
 
+Tarang writes plain NetCDF, so read it with NetCDF.jl:
+
 ```julia
-using NCDatasets
+using NetCDF
 
-# Load merged data
-ds = Dataset("output/snapshots_merged.nc")
+ncinfo("output/snapshots_merged.nc")                  # list variables / dimensions
 
-# Access fields
-u_data = ds["u"][:]
-T_data = ds["T"][:]
-time = ds["time"][:]
-
-close(ds)
+u_data = ncread("output/snapshots_merged.nc", "u")
+T_data = ncread("output/snapshots_merged.nc", "T")
+time   = ncread("output/snapshots_merged.nc", "time")
 
 # Analyze or visualize
 using Plots
-heatmap(T_data[:, :, end], title="Temperature at t=$(time[end])")
+heatmap(T_data[:, :, end]; title="Temperature at t=$(time[end])")
 ```
 
 ---
@@ -564,37 +440,29 @@ MPI.Init()
 cfl = CFL(problem, safety=0.5, max_dt=0.01)
 add_velocity!(cfl, u)
 
-# Output handlers
-snapshots = add_netcdf_handler(solver, "snapshots",
-                                fields=[u, p, T], write_interval=0.1)
+# Output handler — created with the solver, so run! auto-writes + closes it.
+# Tasks (not the namespace) are what gets written, so add one per field.
+snapshots = add_file_handler("snapshots", solver; sim_dt=0.1)
+add_task!(snapshots, u; name="u")
+add_task!(snapshots, p; name="p")
+add_task!(snapshots, T; name="T")
 
-# Scalar diagnostics
-add_scalar_evaluator(solver, "KE", "0.5*integrate(u*u + w*w)")
-add_scalar_evaluator(solver, "Nu", "1 + mean(w*T)")
-
-# Monitoring
-monitor = SimulationMonitor(print_interval=100)
-attach_monitor!(solver, monitor)
-
-# Time integration
-while solver.sim_time < 10.0
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
-
-    # Custom analysis every 1000 steps
-    if solver.iteration % 1000 == 0
-        KE = get_scalar(solver, "KE")
-        Nu = get_scalar(solver, "Nu")
-
-        if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-            println("t=$(solver.sim_time): KE=$KE, Nu=$Nu")
-        end
-    end
+# Custom diagnostics live in a callback (receives the solver). global_max is
+# MPI-reduced, so the printed value is identical on every rank.
+function diagnostics(s)
+    ensure_layout!(T, :g)
+    max_T = global_max(dist, abs.(get_grid_data(T)))
+    MPI.Comm_rank(MPI.COMM_WORLD) == 0 &&
+        println("t=$(s.sim_time): dt=$(s.dt), max|T|=$max_T")
 end
 
-# Merge output files
+# Time integration — run! drives the loop: CFL-adaptive dt, auto-writes
+# `snapshots` every sim_dt, fires `diagnostics` every 1000 steps, closes at end.
+run!(solver; stop_time=10.0, cfl=cfl, callbacks=[1000 => diagnostics])
+
+# Merge per-process / multi-set output into a single file
 if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-    merge_netcdf_files("snapshots", output_file="snapshots.nc", cleanup=true)
+    merge_netcdf_files("snapshots", output_name="snapshots_merged", cleanup=true)
 end
 
 MPI.Finalize()

@@ -239,11 +239,15 @@ add_task!(analysis, () -> compute_dissipation(u, nu), name="dissipation")
 
 ## Time Integration
 
+`run!` drives the loop: it adapts `dt` from the CFL controller each step, auto-writes
+any output handler created with the solver, fires callbacks at their intervals, and
+closes the handlers at the end. Use a `Float64` callback interval to fire every Δt of
+simulation time (here every `output_interval` time units) for the diagnostic print.
+
 ```julia
 # Simulation parameters
 t_end = 10.0
 output_interval = 0.5
-next_output = output_interval
 
 # Diagnostic output
 if rank == 0
@@ -253,27 +257,16 @@ if rank == 0
     println("=" ^ 60)
 end
 
-# Main loop
-while solver.sim_time < t_end
-    # Adaptive timestep
-    dt = compute_timestep(cfl)
-
-    # Advance solution
-    step!(solver, dt)
-
-    # Periodic output
-    if solver.sim_time >= next_output
-        KE = compute_kinetic_energy(u)
-        eps = compute_dissipation(u, nu)
-
-        if rank == 0
-            @printf("t = %.3f, KE = %.6e, ε = %.6e, dt = %.2e\n",
-                    solver.sim_time, KE, eps, dt)
-        end
-
-        next_output += output_interval
-    end
+# Print KE / dissipation every `output_interval` simulation-time units.
+function report(s)
+    KE  = compute_kinetic_energy(u)
+    eps = compute_dissipation(u, nu)
+    @root_only @printf("t = %.3f, KE = %.6e, ε = %.6e, dt = %.2e\n",
+                       s.sim_time, KE, eps, s.dt)
 end
+
+run!(solver; stop_time=t_end, cfl=cfl,
+     callbacks=[output_interval => report])
 
 MPI.Finalize()
 ```
