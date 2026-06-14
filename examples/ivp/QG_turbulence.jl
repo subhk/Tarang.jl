@@ -21,13 +21,19 @@ global_logger(ConsoleLogger(stderr, Logging.Warn))
 
 # ─── Parameters ───────────────────────────────────────────────
 Nx, Ny        = 512, 512
+Lx, Ly        = 2π, 2π         # Doubly-periodic domain
 nu            = 1e-20          # Hyperviscosity coefficient
 stop_time     = 50.0
 max_dt        = 0.001
 
 # ─── Domain & Fields ──────────────────────────────────────────
-domain = PeriodicDomain(Nx, Ny)
-dist   = domain.dist
+coords = CartesianCoordinates("x", "y")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+ybasis = RealFourier(coords["y"]; size=Ny, bounds=(0.0, Ly), dealias=3/2)
+
+domain = Domain(dist, (xbasis, ybasis))
 
 q     = ScalarField(domain, "q")          # Potential vorticity
 ψ     = ScalarField(domain, "ψ")          # Streamfunction

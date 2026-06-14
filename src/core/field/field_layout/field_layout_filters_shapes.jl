@@ -25,24 +25,44 @@ function apply_dealiasing_to_product!(field::ScalarField)
 end
 
 """
-    Apply spectral cutoff by zeroing modes above specified relative scales.
-    Following low_pass_filter implementation.
-    """
+Zero Fourier modes above the given relative scale(s), operating DIRECTLY in
+coefficient space. A scale `s` on a Fourier axis of grid size N keeps modes with
+|k| ≤ s·N/2; non-Fourier (Chebyshev) axes are left untouched. The field is left
+in grid layout (matching the previous behaviour).
+
+The old implementation filtered via a `set_scales!`→`require_grid_space!`→
+`set_scales!` resample round-trip. Under MPI that runs a per-rank LOCAL FFT (not a
+global spectral operation) on an incompatible pencil, producing silently-wrong
+results; this coefficient-space version uses each rank's GLOBAL wavenumbers.
+"""
 function apply_spectral_cutoff!(field::ScalarField, cutoff_scales::Union{Float64, Tuple{Vararg{Float64}}})
-    # Store original scales
-    original_scales = field.scales
-    
-    # Normalize cutoff_scales to tuple
-    if isa(cutoff_scales, Float64)
-        scales = tuple(fill(cutoff_scales, length(field.bases))...)
+    require_coeff_space!(field)
+    cd = get_coeff_data(field)
+    cd === nothing && return field
+    bases = field.bases
+    nb = length(bases)
+    scales = isa(cutoff_scales, Float64) ? ntuple(_ -> Float64(cutoff_scales), nb) : cutoff_scales
+
+    if cd isa PencilArrays.PencilArray
+        # MPI: zero modes above the cutoff using each rank's GLOBAL wavenumber
+        # indices. A uniform relative scale s corresponds to a dealias factor 1/s.
+        _apply_spectral_cutoff_distributed!(cd, bases, 1.0 / minimum(scales))
     else
-        scales = cutoff_scales
+        local_cd = get_local_data(cd)
+        cutoffs = ntuple(nb) do i
+            b = bases[i]
+            if isa(b, RealFourier) || isa(b, ComplexFourier)
+                max(0, floor(Int, scales[i] * b.meta.size / 2))
+            else
+                size(local_cd, i)        # non-Fourier (Chebyshev) axis: keep all modes
+            end
+        end
+        rfft_dims = ntuple(i -> isa(bases[i], RealFourier) && _is_first_real_fourier_axis(bases, i), nb)
+        apply_spectral_cutoff!(local_cd, cutoffs, rfft_dims)   # array method (nonlinear_dealiasing.jl)
     end
-    
-    # Apply low-pass filter by changing scales
-    set_scales!(field, scales)
-    require_grid_space!(field)
-    set_scales!(field, original_scales)
+
+    require_grid_space!(field)   # preserve the previous output layout (:g)
+    return field
 end
 
 """
@@ -51,22 +71,15 @@ end
     Following field:945-968 implementation.
     """
 function low_pass_filter!(field::ScalarField; shape=nothing, scales=nothing)
-    original_scales = field.scales
-    
-    # Determine scales from shape
+    # Determine scales from a target grid shape if given.
     if shape !== nothing
-        if scales !== nothing
-            error("Specify either shape or scales.")
-        end
-        # Get global grid shape
+        scales === nothing || error("Specify either shape or scales.")
         global_shape = get_global_grid_shape(field.dist, field.domain, scales=ones(Float64, length(field.bases)))
         scales = tuple((shape ./ global_shape)...)
     end
-    
-    # Apply low-pass filter by changing scales
-    set_scales!(field, scales)
-    require_grid_space!(field)
-    set_scales!(field, original_scales)
+    scales === nothing && error("low_pass_filter!: provide `shape` or `scales`.")
+    # Coefficient-space cutoff (MPI-correct); see apply_spectral_cutoff!.
+    return apply_spectral_cutoff!(field, Tuple(Float64.(scales)))
 end
 
 """

@@ -38,9 +38,19 @@ k_f      = parse(Float64, get(ENV, "TARANG_FORCED_2D_KF", "50.0"))
 dk_f     = parse(Float64, get(ENV, "TARANG_FORCED_2D_DKF", "2.0"))
 ε        = parse(Float64, get(ENV, "TARANG_FORCED_2D_EPSILON", "600.0"))
 
+# ─── Architecture ─────────────────────────────────────────────
+# CPU by default. Set TARANG_FORCED_2D_DEVICE=gpu to run on CUDA (needs a GPU +
+# CUDA.jl); optionally pick a specific GPU with TARANG_FORCED_2D_GPU_ID.
+const USE_GPU = lowercase(get(ENV, "TARANG_FORCED_2D_DEVICE", "cpu")) in ("gpu", "cuda")
+if USE_GPU
+    using CUDA
+    CUDA.device!(parse(Int, get(ENV, "TARANG_FORCED_2D_GPU_ID", "0")))
+end
+device = USE_GPU ? GPU() : CPU()
+
 # ─── Domain & Fields ──────────────────────────────────────────
 coords = CartesianCoordinates("x", "y")
-dist   = Distributor(coords; dtype=Float64, device=CPU())
+dist   = Distributor(coords; dtype=Float64, device=device)
 
 xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
 ybasis = RealFourier(coords["y"]; size=Ny, bounds=(0.0, Ly), dealias=3/2)
