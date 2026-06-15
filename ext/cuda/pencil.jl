@@ -98,7 +98,27 @@ function compute_pencil_shapes(global_shape::NTuple{3, Int},
 end
 
 """
-    PencilDecomposition(global_shape, proc_grid, rank, comm)
+    column_major_grid_coords(rank, proc_grid) -> (row, col)
+
+Grid coordinates for `rank` under the **distributor's column-major** block
+ownership convention, where the X-block index varies fastest:
+
+    X-block (row) = rank % P1          # the P1 (col_comm / X<->Y) dimension
+    Y-block (col) = (rank ÷ P1) % P2   # the P2 (row_comm / Y<->Z) dimension
+
+This is the alignment a `ScalarField`'s distributed coeff/grid buffer actually
+uses. It differs from the default row-major `rank_to_grid` (`row = rank ÷ P2`,
+`col = rank % P2`). Use it (via the `grid_coords` keyword of the constructor) so
+the pencil owns the SAME global block the field buffer holds.
+
+NOTE (np≥4): this only matters when P1>1 AND P2>1; for a 1×P or P×1 grid the two
+conventions coincide. Needs GPU validation at np≥4.
+"""
+column_major_grid_coords(rank::Int, proc_grid::NTuple{2, Int}) =
+    (mod(rank, proc_grid[1]), div(rank, proc_grid[1]) % proc_grid[2])
+
+"""
+    PencilDecomposition(global_shape, proc_grid, rank, comm; grid_coords=nothing)
 
 Create a pencil decomposition for the given domain and process grid.
 
@@ -108,6 +128,16 @@ Create a pencil decomposition for the given domain and process grid.
 - `rank::Int`: This process's MPI rank
 - `comm::MPI.Comm`: MPI world communicator
 
+# Keyword
+- `grid_coords::Union{Nothing,NTuple{2,Int}}`: explicit `(row, col)` grid
+  position. When `nothing` (default) the row-major `rank_to_grid(rank, proc_grid)`
+  is used (legacy behaviour). Pass `column_major_grid_coords(rank, proc_grid)` to
+  align the pencil with the distributor's column-major field-buffer ownership
+  (design decision #5 — needs np≥4 GPU validation). The row/col sub-communicators
+  are built consistently with whichever `grid_coords` is supplied: `row_comm`
+  groups equal-`row` ranks (Y<->Z, size P2), `col_comm` groups equal-`col` ranks
+  (X<->Y, size P1).
+
 # Returns
 A PencilDecomposition struct with pre-computed local shapes for all orientations
 and MPI sub-communicators for row and column communication.
@@ -115,10 +145,10 @@ and MPI sub-communicators for row and column communication.
 function PencilDecomposition(global_shape::NTuple{3, Int},
                               proc_grid::NTuple{2, Int},
                               rank::Int,
-                              comm::MPI.Comm)
-    P1, P2 = proc_grid
-    grid_coords = rank_to_grid(rank, proc_grid)
-    row, col = grid_coords
+                              comm::MPI.Comm;
+                              grid_coords::Union{Nothing, NTuple{2, Int}}=nothing)
+    gc = grid_coords === nothing ? rank_to_grid(rank, proc_grid) : grid_coords
+    row, col = gc
 
     # Create row and column sub-communicators
     # Row comm: all ranks with same row coordinate (for Y<->Z transpose)
@@ -127,13 +157,13 @@ function PencilDecomposition(global_shape::NTuple{3, Int},
     col_comm = MPI.Comm_split(comm, col, row)
 
     # Compute local shapes
-    x_shape, y_shape, z_shape = compute_pencil_shapes(global_shape, proc_grid, grid_coords)
+    x_shape, y_shape, z_shape = compute_pencil_shapes(global_shape, proc_grid, gc)
 
     pd = PencilDecomposition(
         global_shape,
         proc_grid,
         rank,
-        grid_coords,
+        gc,
         comm,
         row_comm,
         col_comm,
@@ -144,6 +174,47 @@ function PencilDecomposition(global_shape::NTuple{3, Int},
     )
     finalizer(free_pencil_decomposition!, pd)
     return pd
+end
+
+"""
+    build_coeff_pencil(main::PencilDecomposition, coeff_global_shape) -> PencilDecomposition
+
+Build a **coeff-sized** pencil that SHARES `main`'s row/col communicators, rank,
+proc grid and grid_coords, but uses a different global shape — specifically a
+dim-1 length of `div(Nx,2)+1` for a RealFourier dim-1 axis (half-spectrum).
+
+WHY this exists (the truncation-vs-transpose-back crux): the forward transform
+truncates dim 1 to the half-spectrum while dim 1 is LOCAL in the X-pencil, then
+transposes X→Y→Z so the coeffs land Z-local (matching the field coeff buffer).
+The verified fixed-shape NCCL transposes derive their pack/unpack counts from the
+pencil's `global_shape`/`*_pencil_shape`, so they MUST be driven by a pencil whose
+dim-1 length is the truncated `div(Nx,2)+1`, not `Nx`. This builder produces that
+pencil. In the Z-local coeff layout dim 1 is therefore decomposed by P1 with the
+half-spectrum length, exactly matching the framework's coeff convention.
+
+CRITICAL: the returned pencil aliases `main`'s `row_comm`/`col_comm` (so its NCCL
+sub-communicators match the shared `NCCLTransposeBuffer`). It is built WITHOUT a
+finalizer — do NOT free it / its comms independently; the owning `main` pencil's
+finalizer frees them.
+"""
+function build_coeff_pencil(main::PencilDecomposition, coeff_global_shape::NTuple{3, Int})
+    x_shape, y_shape, z_shape =
+        compute_pencil_shapes(coeff_global_shape, main.proc_grid, main.grid_coords)
+    # Raw (finalizer-free) construction via the default field constructor — shares
+    # main's communicators; see CRITICAL note above.
+    return PencilDecomposition(
+        coeff_global_shape,
+        main.proc_grid,
+        main.rank,
+        main.grid_coords,
+        main.world_comm,
+        main.row_comm,
+        main.col_comm,
+        x_shape,
+        y_shape,
+        z_shape,
+        Ref(:z_pencil)
+    )
 end
 
 """

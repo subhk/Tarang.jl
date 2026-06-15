@@ -58,12 +58,16 @@ Thread-safe caching by field properties (global shape, proc grid, element type).
 function get_or_create_distributed_dct_plan(field)
     dist = field.dist
 
-    # Create cache key from field properties
+    # Create cache key from field properties. axis_kind is part of the key because
+    # the plan's per-axis dispatch (and the coeff-pencil half-spectrum sizing)
+    # depend on the basis kinds, not just the shape/proc-grid/eltype.
     global_shape_tuple = Tuple(Tarang.global_shape(field.domain))
     proc_grid = _compute_proc_grid(dist.size)
     T = real(eltype(get_grid_data(field)))
+    bases = field.bases
+    axis_kind = Tarang.axis_kinds(bases)
 
-    key = (global_shape_tuple, proc_grid, T)
+    key = (global_shape_tuple, proc_grid, T, axis_kind)
 
     lock(DISTRIBUTED_DCT_PLAN_LOCK) do
         if haskey(DISTRIBUTED_DCT_PLAN_CACHE, key)
@@ -73,8 +77,8 @@ function get_or_create_distributed_dct_plan(field)
         # Create pencil decomposition from field's distributor
         pencil = get_or_create_pencil(dist, global_shape_tuple)
 
-        # Create plan
-        plan = DistributedDCTPlan(pencil, T)
+        # Create basis-aware plan
+        plan = DistributedDCTPlan(pencil, bases, T)
 
         DISTRIBUTED_DCT_PLAN_CACHE[key] = plan
         return plan
@@ -109,7 +113,12 @@ function get_or_create_pencil(dist, global_shape::NTuple{3, Int})
     # Determine process grid (prefer square-ish)
     proc_grid = _compute_proc_grid(nprocs)
 
-    return PencilDecomposition(global_shape, proc_grid, rank, comm)
+    # Align the pencil's block ownership with the distributor's column-major
+    # field-buffer convention (design decision #5). Only matters when P1>1 AND
+    # P2>1 (np≥4); coincides with row-major for 1×P / P×1 grids. Needs np≥4 GPU
+    # validation.
+    gc = column_major_grid_coords(rank, proc_grid)
+    return PencilDecomposition(global_shape, proc_grid, rank, comm; grid_coords=gc)
 end
 
 """
@@ -147,16 +156,17 @@ function distributed_gpu_forward_transform!(field::ScalarField)
     # Ensure we're in Z-pencil orientation (grid space)
     set_orientation!(plan.pencil, :z_pencil)
 
-    # Allocate output if needed (X-pencil shape for spectral coefficients)
-    coeffs = similar(data, plan.pencil.x_pencil_shape...)
+    # Allocate output. The rewritten driver lands coeffs **Z-local on the coeff
+    # pencil** (complex, half-spectrum on dim 1 for a RealFourier dim-1 axis) —
+    # NOT X-pencil. See distributed_forward_dct!. (This dispatch is currently
+    # disabled in gpu_forward_transform!; shapes kept consistent for GPU CI.)
+    T = real(eltype(data))
+    coeffs = similar(data, Complex{T}, plan.coeff_pencil.z_pencil_shape...)
 
-    # Perform distributed DCT
+    # Perform distributed transform (resets pencil orientations internally).
     distributed_forward_dct!(coeffs, data, plan)
 
-    # Update pencil orientation to reflect new layout
-    set_orientation!(plan.pencil, :x_pencil)
-
-    # Store coefficients
+    # Store coefficients (Z-local layout).
     set_coeff_data!(field, coeffs)
 
     return true
@@ -171,20 +181,16 @@ Transforms from spectral space (X-pencil layout) to grid space (Z-pencil layout)
 function distributed_gpu_backward_transform!(field::ScalarField)
     plan = get_or_create_distributed_dct_plan(field)
 
-    # Get local coefficient data
+    # Get local coefficient data (Z-local on the coeff pencil, complex).
     coeffs = get_coeff_data(field)
 
-    # Ensure we're in X-pencil orientation (spectral space)
-    set_orientation!(plan.pencil, :x_pencil)
+    # Allocate real grid output (Z-pencil shape). The rewritten driver starts from
+    # Z-local coeffs and drives the pencils' orientations internally.
+    T = real(eltype(coeffs))
+    data = similar(coeffs, T, plan.pencil.z_pencil_shape...)
 
-    # Allocate output (Z-pencil shape for grid values)
-    data = similar(coeffs, plan.pencil.z_pencil_shape...)
-
-    # Perform distributed inverse DCT
+    # Perform distributed inverse transform.
     distributed_backward_dct!(data, coeffs, plan)
-
-    # Update pencil orientation to reflect new layout
-    set_orientation!(plan.pencil, :z_pencil)
 
     # Store grid data
     set_grid_data!(field, data)
@@ -224,17 +230,17 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
     end
 
     nprocs = field.dist.size
-    # DISABLED (correctness): distributed_gpu_forward_transform! computes DCT-II (Makhoul),
-    # but Tarang's Chebyshev convention is DCT-I on the Gauss-Lobatto grid (see the
-    # has_chebyshev fallback below + transform_chebyshev.jl). Dispatching here produced
-    # silently-wrong multi-GPU Chebyshev coefficients. Until a validated GPU DCT-I exists,
-    # let control fall through: a Chebyshev+Fourier field hits the GPU+MPI Fourier guard
-    # below (honest error — a local FFT can't do a distributed Fourier transform), and a
-    # pure distributed Chebyshev field reaches `has_chebyshev → return false` and uses the
-    # CPU DCT-I chain. Re-enable once distributed_forward_dct! implements DCT-I.
-    # if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
-    #     return distributed_gpu_forward_transform!(field)
-    # end
+    # Distributed multi-GPU spectral transform (basis-aware DCT-I + Fourier), gated
+    # behind the support predicate. Fires only for nprocs>1 + NCCL (is_distributed_gpu)
+    # AND a Chebyshev-containing 3D field (needs_distributed_dct). distributed_forward_dct!
+    # now implements the framework DCT-I convention (complex-everywhere, Z-local coeffs).
+    if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
+        if Tarang.distributed_gpu_supported(field)
+            return distributed_gpu_forward_transform!(field)
+        else
+            return false   # unsupported layout (e.g. RealFourier not on dim 1) -> CPU DCT-I fallback
+        end
+    end
 
     # CRITICAL: GPU+MPI for Fourier transforms requires TransposableField/distributed paths
     # A local-only cuFFT in MPI mode produces INCORRECT results (each rank FFTs its local slab)
@@ -275,8 +281,9 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
     # false makes `forward_transform!` walk `dist.transforms`, whose Fourier and
     # Chebyshev `_apply_forward!` methods copy GPU arrays to the host, transform with
     # FFTW, and copy back. Pure-Fourier fields stay on the GPU (cuFFT, correct).
-    # NOTE: the multi-GPU distributed Chebyshev path (distributed_gpu_forward_transform!,
-    # taken above) is also DCT-II and remains incorrect — it needs a real GPU-DCT-I fix.
+    # NOTE: the multi-GPU distributed Chebyshev path (distributed_gpu_forward_transform!)
+    # is taken above when supported; this `return false` now only handles single-GPU /
+    # non-distributed / unsupported-layout Chebyshev fields, routing them to the CPU DCT-I chain.
     if has_chebyshev
         return false
     end
@@ -486,13 +493,15 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     end
 
     nprocs = field.dist.size
-    # DISABLED (correctness): mirror of gpu_forward_transform! — distributed_gpu_backward_transform!
-    # is DCT-II while Tarang's Chebyshev convention is DCT-I. Fall through so a distributed
-    # Chebyshev field reaches `has_chebyshev → return false` and uses the CPU DCT-I chain.
-    # Re-enable once distributed_backward_dct! implements DCT-I.
-    # if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
-    #     return distributed_gpu_backward_transform!(field)
-    # end
+    # Distributed multi-GPU inverse transform — mirror of gpu_forward_transform!.
+    # Gated behind the support predicate; distributed_backward_dct! now implements DCT-I.
+    if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
+        if Tarang.distributed_gpu_supported(field)
+            return distributed_gpu_backward_transform!(field)
+        else
+            return false   # unsupported layout (e.g. RealFourier not on dim 1) -> CPU DCT-I fallback
+        end
+    end
 
     # Use LOCAL coefficient array size to determine grid shape
     # This is critical for distributed computing where each rank owns a portion
@@ -507,8 +516,8 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     # CORRECTNESS: GPU DCT path is DCT-II but Tarang Chebyshev is DCT-I (see the
     # matching comment in gpu_forward_transform! and transform_chebyshev.jl). Route
     # any Chebyshev-containing field through the correct CPU transform chain. The
-    # multi-GPU distributed Chebyshev path (taken above) remains DCT-II and still
-    # needs a real GPU-DCT-I fix.
+    # multi-GPU distributed Chebyshev path (DCT-I) is taken above when supported; this
+    # only handles single-GPU / non-distributed / unsupported-layout Chebyshev fields.
     if has_chebyshev
         return false
     end
