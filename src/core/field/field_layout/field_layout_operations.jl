@@ -165,7 +165,13 @@ GLOBAL-length weight vectors (DimensionMismatch on decomposed axes) and never
 reduced across ranks (each rank returned only its partial sum), and returned a
 1×1×… array instead of a scalar for full integration.
 """
-function integrate(field::ScalarField, axes=:)
+# `axes` is constrained to axis specifiers (Colon / integer indices) ONLY. Without
+# this, the untyped `axes` also matched a `Coordinate`/`CartesianCoordinates`, making
+# `integrate(field, coord)` ambiguous with the operator-path `integrate(::Operand, ::Coordinate)`
+# (constructors.jl) — neither method is more specific (ScalarField wins arg 1, Coordinate
+# wins arg 2). Constraining the type routes Coordinate/coordsys calls to the operator path.
+function integrate(field::ScalarField,
+                   axes::Union{Colon,Integer,AbstractVector{<:Integer},Tuple{Vararg{Integer}}}=:)
     if field.domain === nothing
         return 0.0
     end

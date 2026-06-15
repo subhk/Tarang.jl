@@ -131,7 +131,16 @@ function _log_global_matrix_implicit_distributed_fallback(method_name::String,
                                                          reason::Symbol,
                                                          fallback_name::String)
     if reason === :mpi_pencil_without_subproblems
-        @debug "$method_name: MPI PencilArrays detected without subproblems, falling back to $fallback_name"
+        # Loud (not @debug): this is a silent-correctness footgun. On an MPI
+        # pure-Fourier (PencilArrays) problem these implicit multistep schemes have
+        # no per-mode diagonal-IMEX path implemented, so they fall back to the
+        # EXPLICIT $fallback_name — the implicit linear operator is dropped, which
+        # is UNSTABLE for stiff linear terms (diffusion/hyperviscosity) at an
+        # implicit-sized dt. Use SBDF2, which does have the distributed diagonal
+        # IMEX path, or reduce dt below the explicit stability limit.
+        @warn "$method_name has no distributed diagonal-IMEX path; on MPI pure-Fourier " *
+              "it falls back to EXPLICIT $fallback_name (implicit linear term dropped → " *
+              "may be unstable for stiff L). Prefer SBDF2 for MPI pure-Fourier stiff problems." maxlog=1
     else
         @debug "$method_name: global-matrix path unavailable, falling back to $fallback_name" reason
     end

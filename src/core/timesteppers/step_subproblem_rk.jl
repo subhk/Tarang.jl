@@ -313,9 +313,12 @@ LHS factorizations are cached in `sp.LHS_solvers` keyed by `a_ii`
 invalidated lazily when `dt` changes via the dirty-flag path in
 `_get_or_build_lhs!`.
 """
+# `ts` is threaded in (default state.timestepper) so callers like step_rk_imex! can
+# run a SPECIFIC RK tableau (e.g. RK443 for multistep startup) even when
+# state.timestepper is a multistep type with no Butcher-tableau fields. Reading
+# state.timestepper unconditionally here would FieldError on `ts.stages` in that case.
 function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
-                              subproblems::Tuple)
-    ts = state.timestepper
+                              subproblems::Tuple; ts::TimeStepper=state.timestepper)
     dt = state.dt
     t  = solver.sim_time
     problem = solver.problem

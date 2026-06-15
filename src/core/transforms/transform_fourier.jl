@@ -153,7 +153,11 @@ function _bwd_rfft_target(field::ScalarField, transform::FourierTransform)
     isa(transform.basis, RealFourier) || return 0
     ax = transform.axis
     scale = field.scales === nothing ? 1.0 : field.scales[ax]
-    return round(Int, scale * transform.basis.meta.size)
+    # MUST match the scaled-grid allocation in get_scaled_shape (field_data_scales.jl),
+    # which uses ceil(N*scale). Using round here disagreed for non-integer N*scale
+    # (e.g. N=7, scale=1.5 → ceil 11 vs round 10), so the backward irfft targeted the
+    # wrong grid length and the forward∘backward round-trip was broken.
+    return ceil(Int, scale * transform.basis.meta.size)
 end
 
 function _backward_transform_stage!(field::ScalarField, transform, in_arr::AbstractArray,

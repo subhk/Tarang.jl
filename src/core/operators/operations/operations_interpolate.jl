@@ -80,8 +80,16 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
         return _interpolate_fourier_1d(coeffs, basis, N, L, x)
     end
 
-    # For multi-D fields, interpolate along the specified axis using spectral weights
-    interp_weights = _fourier_interp_weights(basis, N, L, x)
+    # For multi-D fields, interpolate along the specified axis using spectral weights.
+    # The weight LAYOUT must match how this axis is stored: the operand's first
+    # RealFourier axis is an rfft half-spectrum (length N÷2+1), but a RealFourier axis
+    # that is NOT first is stored as a FULL FFT (length N, Hermitian) — that needs the
+    # full FFT-ordered weights, not the half-spectrum ones.
+    interp_weights = if isa(basis, RealFourier) && size(coeffs, axis) == N
+        _fourier_full_weights(N, L, x)        # full-FFT-stored RealFourier (non-first axis)
+    else
+        _fourier_interp_weights(basis, N, L, x)
+    end
 
     # Weighted sum along axis: result[...] = Σ_i weights[i] * coeffs[..., i, ...]
     # The weight vector length matches the coefficient extent along this axis
@@ -91,23 +99,46 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
     w_shaped = reshape(interp_weights, shape...)
     result_data = dropdims(sum(coeffs .* w_shaped, dims=axis), dims=axis)
 
-    # Create reduced-dimension field
+    # Reduced-dimension result
     nb = length(field.bases)
     new_bases = ntuple(i -> field.bases[i < axis ? i : i + 1], nb - 1)
     if nb == 1
         return real(result_data isa AbstractArray ? sum(result_data) : result_data)
     end
 
-    result_field = ScalarField(field.dist, "interp_$(field.name)", new_bases, field.dtype)
-    ensure_layout!(result_field, :c)
-    set_coeff_data!(result_field, real.(result_data))
-    result_field.current_layout = :c
-
-    if layout == :g
-        backward_transform!(result_field)
+    # `result_data` holds the spectral coefficients of the interpolated field on the
+    # REMAINING axes, in the operand's multi-D layout (the operand's first RealFourier
+    # axis is an rfft half-spectrum, other Fourier axes are full FFTs) and is generally
+    # COMPLEX (a real field's reduced spectrum is Hermitian, not real).
+    #
+    # Reconstruct grid values by inverse-transforming each remaining Fourier axis
+    # directly. Do NOT route this through a freshly-built reduced `ScalarField`: that
+    # field would inherit the parent's N-D `Distributor` (whose transform plans are
+    # N-D, throwing a BoundsError when applied to the reduced data), and storing the
+    # full-FFT slice into a 1-D field's rfft-sized coeff buffer is a size mismatch.
+    # Taking `real.(result_data)` (the previous behaviour) also zeroed the imaginary
+    # part of every surviving mode — corrupting the result.
+    if !all(b -> isa(b, RealFourier) || isa(b, ComplexFourier), new_bases)
+        throw(ArgumentError("interpolate: multi-dimensional interpolation is currently " *
+            "implemented only when the remaining axes are all Fourier; got " *
+            "$(typeof.(new_bases)). Interpolate along the non-Fourier axis separately."))
     end
-
-    return result_field
+    if layout != :g
+        # Spectral layout requested: return the remaining-axis coefficients (complex).
+        return result_data
+    end
+    # A remaining rfft half-spectrum axis exists only when the interpolated axis was
+    # NOT the operand's first RealFourier axis. ifft the full-spectrum axes, then irfft
+    # the half axis (which yields a real array); otherwise a plain inverse FFT.
+    half_axis = findfirst(d -> isa(new_bases[d], RealFourier) &&
+                               size(result_data, d) < new_bases[d].meta.size,
+                          1:length(new_bases))
+    if half_axis === nothing
+        return real.(ifft(result_data))
+    end
+    full_axes = Tuple(d for d in 1:ndims(result_data) if d != half_axis)
+    tmp = isempty(full_axes) ? result_data : ifft(result_data, full_axes)
+    return irfft(tmp, new_bases[half_axis].meta.size, half_axis)
 end
 
 """
@@ -165,13 +196,26 @@ function _fourier_interp_weights(basis::FourierBasis, N::Int, L::Real, x::Real)
         end
         return weights
     else  # ComplexFourier
-        weights = zeros(ComplexF64, N)
-        for i in 1:N
-            k = i <= N ÷ 2 + 1 ? i - 1 : i - N - 1
-            weights[i] = cis(k0 * k * x) / N
-        end
-        return weights
+        return _fourier_full_weights(N, L, x)
     end
+end
+
+"""
+    _fourier_full_weights(N, L, x)
+
+Interpolation weights for a FULL (unnormalized, FFT-ordered) complex Fourier
+spectrum of length `N`: `w_k = e^{i k k0 x} / N` with `k` in FFT order
+(`0,1,…,N÷2, -N÷2+…, -1`). Used for ComplexFourier axes and for RealFourier axes
+stored as a full FFT (any RealFourier axis other than the operand's first).
+"""
+function _fourier_full_weights(N::Int, L::Real, x::Real)
+    k0 = 2π / L
+    weights = zeros(ComplexF64, N)
+    for i in 1:N
+        k = i <= N ÷ 2 + 1 ? i - 1 : i - N - 1
+        weights[i] = cis(k0 * k * x) / N
+    end
+    return weights
 end
 
 """
