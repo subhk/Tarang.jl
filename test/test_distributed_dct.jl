@@ -31,13 +31,21 @@ end
             plan = DistributedDCTPlan(pencil, Float64)
 
             @test plan.pencil === pencil
-            @test length(plan.local_dct_plans) == 3
+            # New contract: complex-everywhere, per-axis basis classification. The legacy
+            # 2-arg ctor defaults all axes to Chebyshev. The removed `local_dct_plans`
+            # field is replaced by `axis_kind` (Chebyshev axes need no stored local plan).
+            @test plan.axis_kind == (:chebyshev, :chebyshev, :chebyshev)
             @test length(plan.work_arrays) == 3
+            @test eltype(plan.work_arrays[1]) == ComplexF64
 
-            # Verify work array shapes match pencil shapes
+            # Work arrays are complex and sized to the full-spectrum pencil orientations.
             @test size(plan.work_arrays[1]) == pencil.x_pencil_shape
             @test size(plan.work_arrays[2]) == pencil.y_pencil_shape
             @test size(plan.work_arrays[3]) == pencil.z_pencil_shape
+
+            # Coeffs land Z-local on the coeff pencil. All-Chebyshev → dim-1 stays full Nx
+            # (only a RealFourier dim-1 axis truncates to div(Nx,2)+1).
+            @test plan.coeff_pencil.global_shape == global_shape
 
             # Cleanup
             finalize_distributed_dct_plan!(plan)
@@ -77,18 +85,16 @@ end
                 pencil = PencilDecomposition(global_shape, proc_grid, rank, MPI.COMM_WORLD)
                 plan = DistributedDCTPlan(pencil, Float64)
 
-                # Create test data in Z-pencil
+                # Create test data in Z-pencil (real grid values).
                 data = CuArray(rand(Float64, pencil.z_pencil_shape...))
                 original = copy(data)
 
-                # Forward DCT
-                coeffs = CUDA.zeros(Float64, pencil.x_pencil_shape...)
+                # Forward DCT: coeffs are complex, Z-local on the coeff pencil.
+                coeffs = CUDA.zeros(ComplexF64, plan.coeff_pencil.z_pencil_shape...)
                 distributed_forward_dct!(coeffs, data, plan)
 
-                # For single rank, reset orientation for backward
-                set_orientation!(pencil, :x_pencil)
-
-                # Backward DCT
+                # Backward DCT: real grid output (Z-pencil shape). The driver manages
+                # pencil orientation internally (resets to :z_pencil on return).
                 recovered = CUDA.zeros(Float64, pencil.z_pencil_shape...)
                 distributed_backward_dct!(recovered, coeffs, plan)
 
@@ -110,18 +116,15 @@ end
                 pencil = PencilDecomposition(global_shape, proc_grid, rank, MPI.COMM_WORLD)
                 plan = DistributedDCTPlan(pencil, Float64)
 
-                # Create test data
+                # Create test data (real grid values, Z-pencil).
                 data = CuArray(rand(Float64, pencil.z_pencil_shape...))
                 original = copy(data)
 
-                # Forward DCT
-                coeffs = CUDA.zeros(Float64, pencil.x_pencil_shape...)
+                # Forward DCT: coeffs complex, Z-local on the coeff pencil.
+                coeffs = CUDA.zeros(ComplexF64, plan.coeff_pencil.z_pencil_shape...)
                 distributed_forward_dct!(coeffs, data, plan)
 
-                # Reset orientation for backward
-                set_orientation!(pencil, :x_pencil)
-
-                # Backward DCT
+                # Backward DCT: real grid output (driver manages orientation internally).
                 recovered = CUDA.zeros(Float64, pencil.z_pencil_shape...)
                 distributed_backward_dct!(recovered, coeffs, plan)
 
@@ -143,18 +146,15 @@ end
                 pencil = PencilDecomposition(global_shape, proc_grid, rank, MPI.COMM_WORLD)
                 plan = DistributedDCTPlan(pencil, Float32)
 
-                # Create test data
+                # Create test data (real grid values, Z-pencil).
                 data = CuArray(rand(Float32, pencil.z_pencil_shape...))
                 original = copy(data)
 
-                # Forward DCT
-                coeffs = CUDA.zeros(Float32, pencil.x_pencil_shape...)
+                # Forward DCT: coeffs complex (ComplexF32), Z-local on the coeff pencil.
+                coeffs = CUDA.zeros(ComplexF32, plan.coeff_pencil.z_pencil_shape...)
                 distributed_forward_dct!(coeffs, data, plan)
 
-                # Reset orientation for backward
-                set_orientation!(pencil, :x_pencil)
-
-                # Backward DCT
+                # Backward DCT: real grid output (driver manages orientation internally).
                 recovered = CUDA.zeros(Float32, pencil.z_pencil_shape...)
                 distributed_backward_dct!(recovered, coeffs, plan)
 

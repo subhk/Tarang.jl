@@ -250,3 +250,131 @@ function Tarang._gpu_chebyshev_deriv!(result::Tarang.ScalarField,
 
     return true
 end
+
+# ============================================================================
+# Standalone DCT-I (REDFT00) along a dimension — extracted from the verified
+# Chebyshev-derivative DCT-I building blocks above.
+# ============================================================================
+#
+# The derivative path `_apply_gpu_cheb_deriv_1!` performs:
+#     reverse → symmetric-extension → rfft → extract-real   (forward DCT-I)
+#     → recurrence (norm + endpoint half-weight + derivative + un-normalize)
+#     → symmetric-extension → rfft → extract-real → reverse+½  (inverse DCT-I)
+#
+# Here we lift JUST the transform (NOT the derivative recurrence) into a plain
+# forward/backward DCT-I that matches the CPU `_chebyshev_forward` /
+# `_chebyshev_backward` convention exactly (see transform_chebyshev.jl):
+#
+#   forward  = REDFT00 · (1/(N-1)) · (½ at endpoints) · (odd-index sign flip)
+#   backward = (odd-index sign flip) · (×2 at endpoints) · REDFT00 · ½
+#
+# Convention judgment call (documented):
+#   The verified GPU derivative code bridges Tarang's `-cos(πj/(N-1))` grid to
+#   FFTW's `+cos(πj/(N-1))` grid by REVERSING the data in grid space, whereas
+#   the CPU path applies `_flip_odd_indices_along_axis!` on the coefficients.
+#   These are algebraically identical:  REDFT00(reverse(x))[k] = (-1)^k REDFT00(x)[k],
+#   i.e. a grid reversal == an odd-degree coefficient sign flip. We therefore
+#   reuse the SAME `_cheb_reverse_kernel!` the derivative path uses (forward), and
+#   `_cheb_finalize_kernel!` (backward, which reverses AND halves), giving output
+#   identical to the CPU DCT-I convention. The norm (1/(N-1)) and endpoint
+#   half/double weighting were folded into the derivative recurrence kernel and
+#   are NOT separable from it, so per the task's fallback clause we add two
+#   minimal normalization kernels (`_dct1_fwd_normalize_kernel!`,
+#   `_dct1_bwd_prescale_kernel!`) that apply the SAME constants the recurrence
+#   kernel uses (inv_nm1 = 1/(N-1); endpoint factor ½ forward, ×2 backward).
+
+"""Forward DCT-I normalization on raw REDFT00 output (n×batch):
+multiply by 1/(N-1) and half-weight the two endpoints (k=1 and k=n)."""
+@kernel function _dct1_fwd_normalize_kernel!(out, @Const(coeff), n, batch, inv_nm1::T) where {T}
+    j = @index(Global)
+    if j <= batch
+        @inbounds for k in 1:n
+            v = coeff[k, j] * inv_nm1
+            if k == 1 || k == n
+                v *= T(0.5)
+            end
+            out[k, j] = v
+        end
+    end
+end
+
+"""Backward DCT-I pre-scale (n×batch): double the two endpoint coefficients
+(k=1 and k=n) to undo the forward half-weight before the inverse REDFT00.
+`* 2` keeps the element type (Int literal promotes to the float type)."""
+@kernel function _dct1_bwd_prescale_kernel!(out, @Const(coeff), n, batch)
+    j = @index(Global)
+    if j <= batch
+        @inbounds for k in 1:n
+            v = coeff[k, j]
+            if k == 1 || k == n
+                v *= 2
+            end
+            out[k, j] = v
+        end
+    end
+end
+
+"""
+    gpu_dct1_along_dim!(output, input, dim, direction) -> output
+
+Plain real DCT-I (REDFT00, 1/(N-1) norm, endpoint half-weight, odd-index sign
+flip) along `dim` of a real 3D CuArray, `:forward` or `:backward`. Permutes the
+transform axis to front, reshapes to (N, batch), reuses the cached
+`GPUChebyshevDerivPlan` (symmetric-extension + rfft) and the verified DCT-I
+kernels, then permutes back. Matches the CPU Chebyshev DCT-I convention in
+`transform_chebyshev.jl` (see the comment block above for the grid-reversal ==
+odd-flip equivalence).
+
+NOTE: this is the plain transform only — it does NOT truncate/zero-pad the
+coefficient axis. `size(output) == size(input)` is required.
+"""
+function gpu_dct1_along_dim!(output::CuArray{T,3}, input::CuArray{T,3},
+                             dim::Int, direction::Symbol) where {T<:AbstractFloat}
+    ensure_device!(Tarang.architecture(input))
+    @assert size(output) == size(input) "gpu_dct1_along_dim!: output and input must match size"
+    @assert 1 <= dim <= 3 "dim must be 1, 2, or 3"
+
+    n  = size(input, dim)
+    nd = 3
+
+    if n <= 1
+        copyto!(output, input)
+        return output
+    end
+
+    # Permute transform axis to front, reshape to (n, batch)
+    other_dims = ntuple(i -> i < dim ? i : i + 1, nd - 1)
+    perm   = (dim, other_dims...)
+    iperm  = invperm(perm)
+    in_perm = permutedims(input, perm)
+    batch   = prod(size(input)) ÷ n
+    in_mat  = reshape(in_perm, n, batch)
+    out_mat = similar(in_mat)
+
+    arch    = Tarang.architecture(input)
+    inv_nm1 = T(1.0 / (n - 1))
+    plan    = _get_gpu_cheb_deriv_plan(n, batch, T)
+
+    if direction === :forward
+        # reverse → symmetric extension → rfft → extract real → normalize+halve
+        launch!(arch, _cheb_reverse_kernel!, plan.work_real, in_mat, n, batch; ndrange=batch)
+        launch!(arch, _dct1_ext_kernel!, plan.work_ext, plan.work_real, n, batch; ndrange=batch)
+        mul!(plan.work_cx, plan.rfft_plan, plan.work_ext)
+        launch!(arch, _extract_real_kernel!, plan.work_real, plan.work_cx, n, batch; ndrange=batch)
+        launch!(arch, _dct1_fwd_normalize_kernel!, out_mat, plan.work_real, n, batch, inv_nm1; ndrange=batch)
+    elseif direction === :backward
+        # double endpoints → symmetric extension → rfft → extract real → reverse+½
+        launch!(arch, _dct1_bwd_prescale_kernel!, plan.work_real, in_mat, n, batch; ndrange=batch)
+        launch!(arch, _dct1_ext_kernel!, plan.work_ext, plan.work_real, n, batch; ndrange=batch)
+        mul!(plan.work_cx, plan.rfft_plan, plan.work_ext)
+        launch!(arch, _extract_real_kernel!, plan.work_real, plan.work_cx, n, batch; ndrange=batch)
+        launch!(arch, _cheb_finalize_kernel!, out_mat, plan.work_real, n, batch; ndrange=batch)
+    else
+        error("direction must be :forward or :backward, got $direction")
+    end
+
+    out_perm = reshape(out_mat, size(in_perm))
+    out_g    = permutedims(out_perm, iperm)
+    copyto!(output, out_g)
+    return output
+end

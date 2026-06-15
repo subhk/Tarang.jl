@@ -122,6 +122,16 @@ const GPU_TEST_FILES = [
     "test_optimized_dct.jl",
     "test_gpu_transform_correctness.jl",
     "test_ilu0_preconditioner.jl",
+    # GPU-CI-only: distributed RealFourier×Chebyshev DCT-I local primitives PLUS an
+    # end-to-end field-level testset (Task 9) that round-trips a 3D RealFourier ×
+    # ComplexFourier × Chebyshev GPU field through forward/backward_transform! and
+    # checks the unsupported-layout (RealFourier on dim 2) CPU fallback.
+    # Self-guards with CUDA.functional() (skips cleanly when no GPU is present).
+    # NOTE: at nprocs==1 (single-process include here) the field test is a wiring +
+    # round-trip smoke test (distributed dispatch is gated off; CPU DCT-I fallback).
+    # The .buildkite GPU pipeline MUST also run this file at nprocs ∈ {2,4} under
+    # mpiexec WITH NCCL to exercise the live distributed multi-GPU transform path.
+    "test_gpu_distributed_dct1.jl",
 ]
 
 # Multi-rank MPI tests. Each file calls MPI.Init itself and must be launched in

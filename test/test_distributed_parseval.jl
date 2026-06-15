@@ -47,8 +47,8 @@ end
                 # Compute physical energy
                 physical_energy = sum(data.^2)
 
-                # Forward DCT
-                coeffs = CUDA.zeros(Float64, pencil.x_pencil_shape...)
+                # Forward DCT: coeffs are complex, Z-local on the coeff pencil.
+                coeffs = CUDA.zeros(ComplexF64, plan.coeff_pencil.z_pencil_shape...)
                 distributed_forward_dct!(coeffs, data, plan)
 
                 # Compute spectral energy with DCT weights
@@ -58,8 +58,9 @@ end
                 Nx_g, Ny_g, Nz_g = global_shape
 
                 # Simplified: for uniformly normalized DCT, sum of squares should relate
-                # to physical energy by the normalization factor
-                spectral_energy = sum(coeffs.^2)
+                # to physical energy by the normalization factor. Coeffs are now complex
+                # (Z-local on the coeff pencil), so use abs2 to get a real spectral energy.
+                spectral_energy = sum(abs2, coeffs)
 
                 # The relationship depends on our specific normalization
                 # For DCT-II with scale_zero = 1/(2N) and scale_pos = 1/N:
@@ -74,8 +75,8 @@ end
                 @test isfinite(ratio)
                 @test ratio > 0
 
-                # Round-trip should preserve energy exactly
-                set_orientation!(pencil, :x_pencil)
+                # Round-trip should preserve energy exactly. The driver manages pencil
+                # orientation internally (resets to :z_pencil on return).
                 recovered = CUDA.zeros(Float64, pencil.z_pencil_shape...)
                 distributed_backward_dct!(recovered, coeffs, plan)
 
@@ -113,12 +114,12 @@ end
             # Gather global physical energy
             physical_energy = MPI.Allreduce(Array(local_physical_energy)[1], MPI.SUM, MPI.COMM_WORLD)
 
-            # Forward DCT
-            coeffs = CUDA.zeros(Float64, pencil.x_pencil_shape...)
+            # Forward DCT: coeffs are complex, Z-local on the coeff pencil.
+            coeffs = CUDA.zeros(ComplexF64, plan.coeff_pencil.z_pencil_shape...)
             distributed_forward_dct!(coeffs, local_data, plan)
 
-            # Compute local spectral energy
-            local_spectral_energy = sum(coeffs.^2)
+            # Compute local spectral energy (abs2 → real, coeffs are complex now)
+            local_spectral_energy = sum(abs2, coeffs)
 
             # Gather global spectral energy
             spectral_energy = MPI.Allreduce(Array(local_spectral_energy)[1], MPI.SUM, MPI.COMM_WORLD)
@@ -131,8 +132,7 @@ end
                 @info "Parseval ratio (physical/spectral): $ratio"
             end
 
-            # Round-trip should preserve energy
-            set_orientation!(pencil, :x_pencil)
+            # Round-trip should preserve energy (driver manages orientation internally).
             recovered = CUDA.zeros(Float64, pencil.z_pencil_shape...)
             distributed_backward_dct!(recovered, coeffs, plan)
 
@@ -185,12 +185,11 @@ end
             local_phys = sum(data.^2)
             phys_energy = MPI.Allreduce(Array(local_phys)[1], MPI.SUM, MPI.COMM_WORLD)
 
-            # Transform
-            coeffs = CUDA.zeros(Float64, pencil.x_pencil_shape...)
+            # Transform: coeffs are complex, Z-local on the coeff pencil.
+            coeffs = CUDA.zeros(ComplexF64, plan.coeff_pencil.z_pencil_shape...)
             distributed_forward_dct!(coeffs, data, plan)
 
-            # Round-trip
-            set_orientation!(pencil, :x_pencil)
+            # Round-trip (driver manages pencil orientation internally).
             recovered = CUDA.zeros(Float64, pencil.z_pencil_shape...)
             distributed_backward_dct!(recovered, coeffs, plan)
 
