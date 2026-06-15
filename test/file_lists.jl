@@ -100,6 +100,7 @@ const TEST_FILES = [
     "test_pretty_printing.jl",
     "test_progress.jl",
     "test_convenience_api.jl",
+    "test_distributed_gpu_dct1_support.jl",
 ]
 
 # CPU tests that are valid in ordinary CI but are kept out of the default

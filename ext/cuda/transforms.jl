@@ -223,12 +223,18 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
         return false
     end
 
-    # Check if distributed GPU transform should be used
-    # This is checked early because distributed transforms have different data layouts
     nprocs = field.dist.size
-    if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
-        return distributed_gpu_forward_transform!(field)
-    end
+    # DISABLED (correctness): distributed_gpu_forward_transform! computes DCT-II (Makhoul),
+    # but Tarang's Chebyshev convention is DCT-I on the Gauss-Lobatto grid (see the
+    # has_chebyshev fallback below + transform_chebyshev.jl). Dispatching here produced
+    # silently-wrong multi-GPU Chebyshev coefficients. Until a validated GPU DCT-I exists,
+    # let control fall through: a Chebyshev+Fourier field hits the GPU+MPI Fourier guard
+    # below (honest error — a local FFT can't do a distributed Fourier transform), and a
+    # pure distributed Chebyshev field reaches `has_chebyshev → return false` and uses the
+    # CPU DCT-I chain. Re-enable once distributed_forward_dct! implements DCT-I.
+    # if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
+    #     return distributed_gpu_forward_transform!(field)
+    # end
 
     # CRITICAL: GPU+MPI for Fourier transforms requires TransposableField/distributed paths
     # A local-only cuFFT in MPI mode produces INCORRECT results (each rank FFTs its local slab)
@@ -479,12 +485,14 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
         return false
     end
 
-    # Check if distributed GPU transform should be used
-    # This is checked early because distributed transforms have different data layouts
     nprocs = field.dist.size
-    if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
-        return distributed_gpu_backward_transform!(field)
-    end
+    # DISABLED (correctness): mirror of gpu_forward_transform! — distributed_gpu_backward_transform!
+    # is DCT-II while Tarang's Chebyshev convention is DCT-I. Fall through so a distributed
+    # Chebyshev field reaches `has_chebyshev → return false` and uses the CPU DCT-I chain.
+    # Re-enable once distributed_backward_dct! implements DCT-I.
+    # if is_distributed_gpu(arch, nprocs) && needs_distributed_dct(field)
+    #     return distributed_gpu_backward_transform!(field)
+    # end
 
     # Use LOCAL coefficient array size to determine grid shape
     # This is critical for distributed computing where each rank owns a portion
@@ -518,12 +526,16 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
                 local_grid_shape = size(existing_grid)
             else
                 # Use basis metadata for true grid sizes instead of assuming R2C halving.
+                # Size against the SCALED grid (ceil(scale*N) per dim via get_scaled_shape),
+                # NOT the base resolution, so a scaled/dealiased field's backward irfft targets
+                # the right length — mirrors the CPU _bwd_rfft_target (transform_fourier.jl).
                 # The mixed plan sorts RealFourier dims first; only the first RealFourier dim
                 # (in sorted order) gets R2C if data_is_real (i.e., field.dtype is real).
+                scaled_shape = Tarang.get_scaled_shape(field)
                 first_real_found = false
                 local_grid_shape = ntuple(length(bases)) do dim
                     if isa(bases[dim], RealFourier) && !first_real_found
-                        grid_n = bases[dim].meta.size
+                        grid_n = scaled_shape[dim]
                         if local_coeff_shape[dim] == div(grid_n, 2) + 1
                             # R2C was used for this dim
                             first_real_found = true
@@ -562,10 +574,11 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             if existing_grid isa CuArray
                 local_grid_shape = size(existing_grid)
             else
-                # Use basis metadata for true grid size instead of assuming R2C halving.
-                # bases[1].meta.size is the global grid resolution for dim 1 (== local for
-                # slab decomposition along last dim). Compare with coeff shape to detect R2C vs C2C.
-                grid_n1 = bases[1].meta.size
+                # Use the SCALED grid size for dim 1 (ceil(scale*N) via get_scaled_shape),
+                # NOT the base resolution, so a scaled field's irfft targets the right length
+                # (mirrors the CPU _bwd_rfft_target). For slab decomposition along the last dim,
+                # dim 1 is local. Compare with coeff shape to detect R2C vs C2C.
+                grid_n1 = Tarang.get_scaled_shape(field)[1]
                 if local_coeff_shape[1] == div(grid_n1, 2) + 1
                     # R2C was used: coeff dim 1 is halved
                     local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
@@ -855,8 +868,15 @@ Execute backward (inverse) FFT on GPU.
 """
 function gpu_backward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
     if plan.is_real
-        # irfft returns real output
-        mul!(output, plan.iplan, input)
+        # cuFFT C2R (irfft) OVERWRITES its input buffer (same as FFTW irfft). Here `input`
+        # is the field's coefficient buffer, so transforming from it directly corrupts the
+        # caller's coefficients. Copy into a cached scratch first and transform from that —
+        # mirrors the CPU path (transform_fourier.jl), which copies into a cached scratch for
+        # exactly this reason. (C2C inverse, below, is non-destructive — no copy needed.)
+        arch = Tarang.architecture(input)
+        scratch = get_gpu_dct_scratch(arch, size(input), eltype(input), 1)[1]
+        copyto!(scratch, input)
+        mul!(output, plan.iplan, scratch)
     else
         mul!(output, plan.iplan, input)
     end

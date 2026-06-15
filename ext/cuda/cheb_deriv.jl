@@ -218,6 +218,12 @@ function Tarang._gpu_chebyshev_deriv!(result::Tarang.ScalarField,
 
     T = eltype(data_g)
 
+    # Pin the current CUDA device to the operand's device before allocating work buffers
+    # / building the plan / launching kernels. The plan cache is keyed by CUDA.device()
+    # at call time, so without this a multi-GPU run whose current device != data_g's device
+    # would build the plan and scratch on the wrong device and then mix cross-device buffers.
+    ensure_device!(Tarang.architecture(data_g))
+
     # Permute so transform axis is first, then reshape to (n, batch)
     other_dims = ntuple(i -> i < axis ? i : i + 1, nd - 1)
     perm  = (axis, other_dims...)

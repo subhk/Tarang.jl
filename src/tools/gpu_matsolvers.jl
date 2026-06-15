@@ -372,7 +372,11 @@ end
 _supports_cusolver_rf(::Type{T}) where {T} = T == Float64
 
 function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e-12)
-    n = checksquare(matrix)
+    # `checksquare` (LinearAlgebra) is not imported into this module — calling it here
+    # threw UndefVarError, which the CuSparseLU constructor's try/catch silently swallowed,
+    # so the cuSOLVER-RF path never ran (every Float64 sparse system fell back to complex QR).
+    n = size(matrix, 1)
+    size(matrix, 2) == n || throw(DimensionMismatch("cuSOLVER-RF requires a square matrix, got $(size(matrix))"))
     nnzA = Cint(nnz(matrix))
     rowptrA, colindA, valsA = _host_csr(matrix)
 
@@ -501,8 +505,14 @@ function MatSolvers.solve(s::CuSparseLU{T}, rhs::AbstractVector) where T
 
     if s.backend === :rf
         rf = s.factor::CuSparseRF{Float64}
+        # cusolverRfSolve(handle, P, Q, nrhs, Temp, ldt, XF, ldxf): `XF` holds the RHS on
+        # input and the solution on output; `Temp` is pure scratch. The old call passed
+        # the RHS as `Temp` (clobbered) and an UNINITIALIZED buffer as `XF`, so the solve
+        # read garbage. Put the RHS in XF (x_gpu) and give it a separate scratch buffer.
+        copyto!(x_gpu, b_gpu)
+        temp = similar(b_gpu)
         CUDA.CUSOLVER.cusolverRfSolve(rf.handle, rf.P, rf.Q, Cint(1),
-                                      b_gpu, Cint(rf.n), x_gpu, Cint(rf.n))
+                                      temp, Cint(rf.n), x_gpu, Cint(rf.n))
     else
         CUDA.CUSOLVER.spqr_solve(s.factor, b_gpu, x_gpu)
     end
