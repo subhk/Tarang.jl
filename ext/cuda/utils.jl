@@ -221,11 +221,13 @@ For spectral truncation (2/3 rule), modes with index > cutoff_dim are zeroed.
     idx = @index(Global)
     j = ((idx - 1) ÷ nx) + 1
     i = ((idx - 1) % nx) + 1
-    # Zero modes beyond cutoff in both positive AND negative frequency range
-    # A mode is kept if i <= cutoff (positive) OR nx-i+1 <= cutoff (negative mirror)
-    # A mode is killed only if BOTH checks fail
-    kill_x = i > cutoff_x && (i == 1 || nx - i + 1 > cutoff_x)
-    kill_y = j > cutoff_y && (j == 1 || ny - j + 1 > cutoff_y)
+    # Zero modes beyond cutoff in both positive AND negative frequency range.
+    # `cutoff_x` is the number of modes RETAINED PER SIDE (low positive freqs +
+    # high-index negative-freq mirror). A mode is kept if i <= cutoff (positive) OR
+    # nx-i+1 <= cutoff (negative mirror); killed only if BOTH fail. (DC, i==1, is
+    # kept via i <= cutoff for any cutoff >= 1.)
+    kill_x = i > cutoff_x && nx - i + 1 > cutoff_x
+    kill_y = j > cutoff_y && ny - j + 1 > cutoff_y
     @inbounds if kill_x || kill_y
         data[i, j] = zero(eltype(data))
     end
@@ -240,9 +242,9 @@ Dealiasing kernel for 3D arrays: zero out modes beyond cutoff in each dimension.
     i = ((idx - 1) % nx) + 1
     j = (((idx - 1) ÷ nx) % ny) + 1
     k = ((idx - 1) ÷ (nx * ny)) + 1
-    kill_x = i > cutoff_x && (i == 1 || nx - i + 1 > cutoff_x)
-    kill_y = j > cutoff_y && (j == 1 || ny - j + 1 > cutoff_y)
-    kill_z = k > cutoff_z && (k == 1 || nz - k + 1 > cutoff_z)
+    kill_x = i > cutoff_x && nx - i + 1 > cutoff_x
+    kill_y = j > cutoff_y && ny - j + 1 > cutoff_y
+    kill_z = k > cutoff_z && nz - k + 1 > cutoff_z
     @inbounds if kill_x || kill_y || kill_z
         data[i, j, k] = zero(eltype(data))
     end
@@ -257,7 +259,10 @@ beyond the cutoff in any dimension are 0.0.
 """
 function create_dealiasing_mask_gpu(shape::Tuple, cutoff::Float64=2.0/3.0)
     mask = CUDA.ones(Float64, shape...)
-    cutoffs = map(n -> floor(Int, n * cutoff), shape)
+    # Per-side retained-mode count for the two-sided 2D/3D kernels (retain a total
+    # fraction `cutoff` of modes → `cutoff/2` on each of the positive/negative sides).
+    # (The 1D branch below recomputes its own one-sided cutoff for half-spectra.)
+    cutoffs = map(n -> floor(Int, n * cutoff / 2), shape)
 
     if length(shape) == 2
         nx, ny = shape
@@ -289,8 +294,9 @@ in each dimension. Modifies `data` in-place.
 """
 function apply_dealiasing_gpu!(data::CuArray{T, 2}, cutoff::Float64=2.0/3.0) where T
     nx, ny = size(data)
-    cutoff_x = floor(Int, nx * cutoff)
-    cutoff_y = floor(Int, ny * cutoff)
+    # Per-side retained-mode count (two-sided spectrum) — see dealiasing_2d_kernel!.
+    cutoff_x = floor(Int, nx * cutoff / 2)
+    cutoff_y = floor(Int, ny * cutoff / 2)
     arch = Tarang.architecture(data)
     launch!(arch, dealiasing_2d_kernel!, data, cutoff_x, cutoff_y, nx, ny;
             ndrange=nx*ny)
@@ -299,9 +305,9 @@ end
 
 function apply_dealiasing_gpu!(data::CuArray{T, 3}, cutoff::Float64=2.0/3.0) where T
     nx, ny, nz = size(data)
-    cutoff_x = floor(Int, nx * cutoff)
-    cutoff_y = floor(Int, ny * cutoff)
-    cutoff_z = floor(Int, nz * cutoff)
+    cutoff_x = floor(Int, nx * cutoff / 2)
+    cutoff_y = floor(Int, ny * cutoff / 2)
+    cutoff_z = floor(Int, nz * cutoff / 2)
     arch = Tarang.architecture(data)
     launch!(arch, dealiasing_3d_kernel!, data, cutoff_x, cutoff_y, cutoff_z,
             nx, ny, nz; ndrange=nx*ny*nz)
@@ -586,7 +592,9 @@ end
 Get current GPU memory usage information.
 """
 function gpu_memory_info()
-    free, total = CUDA.Mem.info()
+    # CUDA.jl v5 API (the old `CUDA.Mem.info()` was restructured out).
+    free  = CUDA.available_memory()
+    total = CUDA.total_memory()
     used = total - free
     return (
         free_bytes = free,
@@ -714,6 +722,11 @@ multiple slice-based copies, reducing kernel launch overhead.
 function Tarang._pad_spectral!(padded::CuArray{Complex{T}}, spec_data::CuArray{Complex{T}},
                                 original_shape::Tuple, padded_shape::Tuple,
                                 fourier_dims::Vector{Int}) where T
+    # Pin the current CUDA device to the array's device — these raw KA launches
+    # (get_backend + manual kernel call) don't go through `launch!`, which is the
+    # only place ensure_device! is otherwise called. Without this, a multi-GPU run
+    # whose current device != spec_data's device would hit an illegal access.
+    ensure_device!(Tarang.architecture(spec_data))
     fill!(padded, zero(Complex{T}))
     ndim = length(original_shape)
     backend = KernelAbstractions.get_backend(spec_data)
@@ -753,6 +766,8 @@ Override _truncate_spectral! for CuArray: uses fused GPU kernel.
 function Tarang._truncate_spectral!(result::CuArray{Complex{T}}, padded_spec::CuArray{Complex{T}},
                                      original_shape::Tuple, padded_shape::Tuple,
                                      fourier_dims::Vector{Int}) where T
+    # Pin the current CUDA device to the array's device (see _pad_spectral! note).
+    ensure_device!(Tarang.architecture(result))
     ndim = length(original_shape)
     backend = KernelAbstractions.get_backend(result)
 

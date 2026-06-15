@@ -258,6 +258,23 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
     has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
     has_chebyshev = any(b -> isa(b, ChebyshevT), bases)
 
+    # CORRECTNESS: the GPU DCT path below implements DCT-II (Makhoul), but Tarang's
+    # Chebyshev convention is DCT-I on the Gauss-Lobatto grid — see
+    # transform_chebyshev.jl (REDFT00 + 1/(N-1) norm + endpoint half-weight + odd-
+    # index sign flip). DCT-II and DCT-I are different transforms on different nodes,
+    # so the GPU Chebyshev/mixed coefficients disagree with the CPU path and with
+    # every downstream operator (differentiation matrix, BC rows, interpolation).
+    # Until a correct GPU DCT-I is implemented AND validated on a GPU, route any
+    # Chebyshev-containing field through the (correct) CPU transform chain: returning
+    # false makes `forward_transform!` walk `dist.transforms`, whose Fourier and
+    # Chebyshev `_apply_forward!` methods copy GPU arrays to the host, transform with
+    # FFTW, and copy back. Pure-Fourier fields stay on the GPU (cuFFT, correct).
+    # NOTE: the multi-GPU distributed Chebyshev path (distributed_gpu_forward_transform!,
+    # taken above) is also DCT-II and remains incorrect — it needs a real GPU-DCT-I fix.
+    if has_chebyshev
+        return false
+    end
+
     input_T = eltype(data_g)
     coeff_T = Tarang.coefficient_eltype(field.dtype)
 
@@ -478,6 +495,15 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     all_chebyshev = all(b -> isa(b, ChebyshevT), bases)
     has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
     has_chebyshev = any(b -> isa(b, ChebyshevT), bases)
+
+    # CORRECTNESS: GPU DCT path is DCT-II but Tarang Chebyshev is DCT-I (see the
+    # matching comment in gpu_forward_transform! and transform_chebyshev.jl). Route
+    # any Chebyshev-containing field through the correct CPU transform chain. The
+    # multi-GPU distributed Chebyshev path (taken above) remains DCT-II and still
+    # needs a real GPU-DCT-I fix.
+    if has_chebyshev
+        return false
+    end
 
     if all_fourier
         # Pure Fourier case - same logic as forward:
