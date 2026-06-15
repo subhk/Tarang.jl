@@ -76,6 +76,7 @@ const TEST_FILES = [
     "test_parsing.jl",
     "test_operators_tensor.jl",
     "test_diagonal_imex.jl",
+    "test_etd_multistep.jl",
     "test_rksmr_convergence.jl",
     "test_kernel_operations.jl",
     "test_cpu_architecture.jl",

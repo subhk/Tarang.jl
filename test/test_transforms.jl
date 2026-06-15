@@ -87,6 +87,32 @@ using Tarang
 
         @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-10, atol=1e-10)
     end
+
+    @testset "Scaled RealFourier roundtrip (non-integer N*scale)" begin
+        # The scaled grid is allocated with ceil(N*scale); the backward irfft target
+        # must use the SAME ceil (it used round, which disagreed for N=7, scale=1.5 →
+        # 11 vs 10, breaking the round-trip). Use odd N where ceil != round.
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        for (N, scale) in ((7, 1.5), (11, 1.5), (11, 1.3))
+            xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
+            field = ScalarField(Domain(dist, (xb,)), "u")
+            Tarang.require_scales!(field, scale)
+            ensure_layout!(field, :g)
+            g = Tarang.get_grid_data(field)
+            Ng = length(g)
+            @test Ng == ceil(Int, N * scale)
+            xs = collect(0:Ng-1) .* (2π / Ng)
+            g .= @. 1.0 + cos(xs) + 0.5 * sin(2 * xs)   # band-limited (modes 0,1,2)
+            original = copy(g)
+            forward_transform!(field)
+            backward_transform!(field)
+            ensure_layout!(field, :g)
+            gout = Tarang.get_grid_data(field)
+            @test length(gout) == Ng        # grid length preserved (was collapsing to round)
+            @test isapprox(gout, original; rtol=1e-10, atol=1e-10)
+        end
+    end
 end
 
 @testset "Transform dispatch helpers" begin

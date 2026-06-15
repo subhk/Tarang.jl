@@ -433,3 +433,35 @@ end
         @test haskey(basis.transforms, (:deriv_mult, N, 3))
     end
 end
+
+@testset "Chebyshev integrate (quadrature + dispatch)" begin
+    coords = CartesianCoordinates("z")
+    dist = Distributor(coords; mesh=(1,), dtype=Float64)
+    N = 16
+    zb = ChebyshevT(coords["z"]; size=N, bounds=(-1.0, 1.0))
+    field = ScalarField(dist, "u", (zb,), Float64)
+    z = Tarang.create_meshgrid(field.domain)["z"]
+
+    # Clenshaw-Curtis quadrature is exact for polynomials up to degree N-1:
+    # ∫_{-1}^1 z^k dz = 0 (odd k), 2/(k+1) (even k).
+    @testset "quadrature exactness" begin
+        for k in 0:N-2
+            ensure_layout!(field, :g)
+            Tarang.get_grid_data(field) .= z .^ k
+            val = integrate(field)                       # 1-arg field integrate
+            exact = iseven(k) ? 2.0 / (k + 1) : 0.0
+            @test isapprox(val, exact; atol=1e-12)
+        end
+    end
+
+    # The 2-arg `integrate(field, coord)` must dispatch (it was ambiguous with the
+    # operator-path integrate(::Operand, ::Coordinate) until `axes` was type-constrained).
+    @testset "integrate(field, coord) dispatches" begin
+        ensure_layout!(field, :g)
+        Tarang.get_grid_data(field) .= z .^ 2
+        op = integrate(field, coords["z"])               # returns the lazy Integrate operator
+        val = Tarang.evaluate_integrate(op, :g)
+        val = val isa AbstractArray ? (length(val) == 1 ? val[1] : sum(val)) : val
+        @test isapprox(val, 2/3; atol=1e-12)
+    end
+end

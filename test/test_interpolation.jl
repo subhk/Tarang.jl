@@ -129,24 +129,39 @@ end
         end
     end
 
-    @testset "multi-D Fourier interpolation (known limitation)" begin
-        # Interpolating along a Fourier axis of a multi-dimensional field tangles
-        # the half-spectrum (rfft'd) axis with the full-complex remaining axes and
-        # is not yet supported. Documented here so a future fix flips it to pass.
+    @testset "multi-D Fourier interpolation along one axis" begin
+        # Interpolating along one Fourier axis of a 2-D field reduces it to a 1-D
+        # grid function on the remaining axis. f(x,y)=cos(x)·sin(y): sin(y) has a
+        # purely IMAGINARY y-spectrum, so a result that drops the imaginary part
+        # (the previous `real.()` bug) collapses to ~0 — this catches that.
+        N = 8
         c2 = CartesianCoordinates("x", "y")
         d2 = Distributor(c2; mesh = (1, 1), dtype = Float64)
-        bx = RealFourier(c2["x"]; size = 8, bounds = (0.0, 2π))
-        by = RealFourier(c2["y"]; size = 8, bounds = (0.0, 2π))
+        bx = RealFourier(c2["x"]; size = N, bounds = (0.0, 2π))
+        by = RealFourier(c2["y"]; size = N, bounds = (0.0, 2π))
         f2 = ScalarField(d2, "f2", (bx, by), Float64)
         ensure_layout!(f2, :g)
-        Tarang.get_grid_data(f2) .= 1.0
-        result = try
-            op2 = Tarang.Interpolate(f2, c2["x"], 0.5)
-            Tarang.evaluate_interpolate(op2, :g)
-        catch
-            nothing
+        pts = collect(0:N-1) .* (2π / N)
+        g = Tarang.get_grid_data(f2)
+        for i in 1:N, j in 1:N
+            g[i, j] = cos(pts[i]) * sin(pts[j])
         end
-        @test_broken result !== nothing
+
+        # Interpolate along x (the rfft axis) → remaining y axis is full-spectrum.
+        x0 = π / 3
+        gy = Tarang.evaluate_interpolate(interpolate(f2, c2["x"], x0), :g)
+        gy = gy isa Tarang.ScalarField ? Tarang.get_grid_data(gy) : gy
+        @test gy ≈ cos(x0) .* sin.(pts) atol = 1e-12
+
+        # Interpolate along y → remaining x axis is the rfft half-spectrum (irfft path).
+        ensure_layout!(f2, :g)
+        for i in 1:N, j in 1:N
+            g[i, j] = cos(pts[i]) * sin(pts[j])
+        end
+        y0 = π / 6
+        hx = Tarang.evaluate_interpolate(interpolate(f2, c2["y"], y0), :g)
+        hx = hx isa Tarang.ScalarField ? Tarang.get_grid_data(hx) : hx
+        @test hx ≈ sin(y0) .* cos.(pts) atol = 1e-12
     end
 
     @testset "ChebyshevT polynomial interpolation" begin

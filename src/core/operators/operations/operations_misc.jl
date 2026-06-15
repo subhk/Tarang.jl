@@ -290,20 +290,35 @@ function _apply_hilbert_1d!(coeff::AbstractVector, basis::Basis)
             end
         end
     elseif isa(basis, RealFourier)
-        # RealFourier coefficients from rfft: complex vector [c0, c1, ..., c_{N/2}]
-        # where c_k is the complex coefficient for wavenumber k (all k >= 0).
-        # Hilbert transform: multiply by -i*sign(k).
-        # Since rfft only stores k >= 0, sign(k) = +1 for k > 0.
-        N = length(coeff)
-        coeff[1] = zero(eltype(coeff))  # DC (k=0) → 0
-        for i in 2:N
-            coeff[i] *= -im  # -i*sign(k) = -i for k > 0
-        end
-        # Nyquist mode (k=N/2): Hilbert of cos(N/2*x) is sin(N/2*x)
-        # but sin at Nyquist is unrepresentable in rfft → zero it out
+        # A RealFourier axis is stored as an rfft HALF-spectrum ([c0..c_{N/2}], all
+        # k>=0) only when it is the FIRST RealFourier axis; any other RealFourier axis
+        # is stored as a FULL FFT (length N, FFT-ordered wavenumbers including
+        # negatives). The half-spectrum-only multiplier (-i for every stored mode) is
+        # WRONG for a full-FFT axis — its negative-frequency modes need +i. Detect the
+        # layout by the stored length and apply -i*sign(k) accordingly. Hilbert: multiply
+        # by -i*sign(k); the DC and (even-N) Nyquist modes map to 0 for a real field.
         grid_size = basis.meta.size
-        if grid_size % 2 == 0
-            coeff[N] = zero(eltype(coeff))
+        half = grid_size ÷ 2 + 1
+        if length(coeff) == half && half != grid_size
+            # rfft half-spectrum (first RealFourier axis): all stored k >= 0.
+            coeff[1] = zero(eltype(coeff))            # DC (k=0)
+            for i in 2:length(coeff)
+                coeff[i] *= -im                        # -i*sign(k), k > 0
+            end
+            if grid_size % 2 == 0                      # Nyquist (k=N/2)
+                coeff[end] = zero(eltype(coeff))
+            end
+        else
+            # full FFT (RealFourier axis other than the first): FFT-ordered k.
+            N = length(coeff)
+            for i in 1:N
+                k = i <= N ÷ 2 + 1 ? i - 1 : i - N - 1
+                if k == 0 || (iseven(N) && i == N ÷ 2 + 1)   # DC and Nyquist → 0
+                    coeff[i] = zero(eltype(coeff))
+                else
+                    coeff[i] = -im * sign(k) * coeff[i]      # -i*sign(k)
+                end
+            end
         end
     end
     # Non-Fourier bases: no-op

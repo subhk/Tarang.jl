@@ -291,15 +291,19 @@ end
 
 struct MCNAB2 <: TimeStepper
     """
-    Modified Crank-Nicolson Adams-Bashforth 2nd order.
+    Crank-Nicolson / Adams-Bashforth — 2nd order at the default θ = 1/2.
 
-    Uses modified CN weighting for improved stability with stiff linear terms.
+    Implicit: θ-weighted treatment of the linear operator (θ on level n+1, 1−θ on n).
+    Explicit: 2nd-order Adams-Bashforth extrapolation of the nonlinear term.
 
-    Implicit: Modified Crank-Nicolson with θ = 1/2 + ε
-    Explicit: Adams-Bashforth 2nd order extrapolation
+    θ = 1/2 (default) is Crank-Nicolson and is **2nd order**. θ > 1/2 adds damping
+    for stiff linear terms but is only **1st order** — this is a 2-level θ-method,
+    NOT the 3-level Ascher-Ruuth-Wetton "modified CNAB" (stencil 1/2+γ, 1/2−2γ, γ)
+    that retains 2nd order with damping. Use θ = 1/2 unless you specifically want the
+    extra (1st-order) damping.
     """
     stages::Int
-    implicit_coefficient::Float64  # θ for modified CN (typically slightly > 0.5)
+    implicit_coefficient::Float64  # θ-weight: 0.5 = Crank-Nicolson (2nd order); >0.5 = damped, 1st order
     explicit_coefficients::Vector{Float64}
 
     function MCNAB2(theta::Float64=0.5)

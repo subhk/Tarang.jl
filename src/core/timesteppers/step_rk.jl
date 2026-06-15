@@ -65,7 +65,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
 
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
-        step_subproblem_rk!(state, solver, sps)
+        step_subproblem_rk!(state, solver, sps; ts=ts)   # thread ts (e.g. RK443 multistep startup)
         return nothing
     end
 

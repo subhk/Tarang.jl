@@ -115,6 +115,24 @@ end
         ht = Tarang.hilbert(field)
         @test isa(ht, Tarang.HilbertTransform)
     end
+
+    @testset "2D: Hilbert along a non-first RealFourier axis" begin
+        # A RealFourier axis other than the first is stored as a FULL fft (negative
+        # freqs need +i, not -i). hilbert applies H along each axis, so for
+        # f = cos(2x)cos(3y), H_x∘H_y[f] = sin(2x)sin(3y). Guards the 2nd-axis sign bug.
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; mesh=(1, 1), dtype=Float64)
+        xb = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+        yb = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
+        u = ScalarField(Domain(dist, (xb, yb)), "u")
+        m = Tarang.create_meshgrid(u.domain)
+        ensure_layout!(u, :g)
+        Tarang.get_grid_data(u) .= cos.(2 .* m["x"]) .* cos.(3 .* m["y"])
+
+        result = evaluate(Tarang.HilbertTransform(u), :g)
+        expected = sin.(2 .* m["x"]) .* sin.(3 .* m["y"])
+        @test isapprox(Tarang.get_grid_data(result), expected; atol=1e-10)
+    end
 end
 
 # -----------------------------------------------------------------------

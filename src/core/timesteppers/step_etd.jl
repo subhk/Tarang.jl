@@ -192,7 +192,7 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
             cache[:etd_cnab_phi] = phi_functions_matrix(L_linear, dt_current)
             cache[:etd_cnab_phi_dt] = dt_current
         end
-        exp_hL, φ₁_hL, _ = cache[:etd_cnab_phi]::NTuple{3, Matrix{ComplexF64}}
+        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_cnab_phi]::NTuple{3, Matrix{ComplexF64}}
 
         X_current = _timestep_fields_vector!(state, :etd_cnab2_X_current, current_state)
 
@@ -215,21 +215,25 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
             push!(F_history, copy(F_prev_vec))
         end
 
-        # Adams-Bashforth 2nd-order extrapolation: N_AB2 = c₁*N(uₙ) + c₂*N(uₙ₋₁)
-        c₁ = 1.0 + w1/2.0
-        c₂ = -w1/2.0
-        F_extrap = _timestep_vector_buffer!(state, :etd_cnab2_extrap, n)
-        @. F_extrap = c₁ * F_history[1]
-        if length(F_history) >= 2
-            axpy!(c₂, F_history[2], F_extrap)
-        end
-
-        # u_{n+1} = exp(hL)u_n + h*φ₁(hL)*N_AB2  — zero-alloc via mul!/axpy!
+        # 2nd-order ETD multistep (ETD-AB2) update — zero-alloc via mul!/axpy!:
+        #   u_{n+1} = exp(hL)uₙ + h[φ₁·Nₙ + w·φ₂·(Nₙ − Nₙ₋₁)]
+        # This is the canonical 2nd-order form (identical to step_etd_sbdf2!). The
+        # previous code applied a SINGLE φ₁ to the AB2 extrapolation
+        # (1+w/2)Nₙ − (w/2)Nₙ₋₁, which is 2nd order only as hL→0 and loses accuracy
+        # for stiff L (the ETD regime, ~10× larger local error at |hL|~10): the
+        # history term must be weighted by φ₂, not φ₁.
+        Nₙ = F_history[1]
         X_new = _timestep_vector_buffer!(state, :etd_cnab2_Xnew, n)
-        mul!(X_new, exp_hL, X_current)
-        phi1_N = _timestep_vector_buffer!(state, :etd_cnab2_phi1N, n)
-        mul!(phi1_N, φ₁_hL, F_extrap)
-        axpy!(dt_current, phi1_N, X_new)
+        buf1  = _timestep_vector_buffer!(state, :etd_cnab2_buf1, n)
+        mul!(X_new, exp_hL, X_current)          # exp(hL)·uₙ
+        mul!(buf1, φ₁_hL, Nₙ)                   # φ₁·Nₙ
+        axpy!(dt_current, buf1, X_new)           # X_new += h·φ₁·Nₙ
+        if length(F_history) >= 2
+            buf2 = _timestep_vector_buffer!(state, :etd_cnab2_buf2, n)
+            @. buf2 = Nₙ - F_history[2]          # Nₙ − Nₙ₋₁
+            mul!(buf1, φ₂_hL, buf2)              # φ₂·(Nₙ − Nₙ₋₁)
+            axpy!(dt_current * w1, buf1, X_new)  # X_new += h·w·φ₂·(Nₙ − Nₙ₋₁)
+        end
 
         _push_vector_state!(state.history, X_new, current_state, 4)
         cache[:etd_cnab2_iteration] += 1
