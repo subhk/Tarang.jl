@@ -6,6 +6,98 @@ FFT heuristics and CPU fallback execution.
 """
 
 # ============================================================================
+# Axis-kind classification and distributed-GPU eligibility predicate
+# ============================================================================
+
+"""
+    axis_kinds(bases::Tuple) → Tuple{Symbol...}
+
+Return a tuple of symbols classifying each basis in `bases`:
+- `:real_fourier`    — `RealFourier`
+- `:complex_fourier` — `ComplexFourier`
+- `:chebyshev`       — `ChebyshevT`
+
+Errors on any unrecognised basis type.
+"""
+function axis_kinds(bases::Tuple)
+    map(bases) do b
+        if isa(b, RealFourier)
+            :real_fourier
+        elseif isa(b, ComplexFourier)
+            :complex_fourier
+        elseif isa(b, ChebyshevT)
+            :chebyshev
+        else
+            error("Unsupported basis for distributed GPU transform: $(typeof(b))")
+        end
+    end
+end
+
+"""
+    distributed_gpu_supported(bases::Tuple) → Bool
+
+Return `true` iff the basis tuple is eligible for the distributed GPU
+Chebyshev DCT-I transform path. The conditions are:
+1. Exactly 3 dimensions.
+2. At least one `ChebyshevT` axis.
+3. Every `RealFourier` axis is on dim 1 (the framework's `bases[1]` convention).
+
+A `RealFourier` axis on dim 2 or dim 3 cannot be handled by the distributed
+GPU path and must fall back to CPU.
+"""
+function distributed_gpu_supported(bases::Tuple)
+    length(bases) == 3 || return false
+    kinds = axis_kinds(bases)
+    any(==(:chebyshev), kinds) || return false
+    for (dim, k) in enumerate(kinds)
+        if k === :real_fourier && dim != 1
+            return false
+        end
+    end
+    return true
+end
+
+"""
+    distributed_gpu_supported(field) → Bool
+
+Convenience overload: delegates to `distributed_gpu_supported(field.bases)`.
+"""
+distributed_gpu_supported(field) = distributed_gpu_supported(field.bases)
+
+# ============================================================================
+# Hermitian half-spectrum → full-spectrum expansion (1-D CPU reference)
+# ============================================================================
+
+"""
+    _hermitian_full_from_half(half::AbstractVector{<:Complex}, N::Int) → Vector
+
+Expand a half-spectrum of length `div(N,2)+1` (the non-redundant coefficients
+of a real-valued signal stored by RFFT convention) to the full complex spectrum
+of length `N` using Hermitian symmetry:
+
+    full[N - k + 2] = conj(full[k])   for k = 2 … (N - div(N,2))
+
+`full[1]` (DC) and — for even `N` — `full[div(N,2)+1]` (Nyquist) are real by
+construction; this function does not enforce that (it copies them as-is from
+`half`).
+
+Works for both even and odd `N`.  A later GPU kernel reproduces this exact index
+map along dim 1 of a 3-D CuArray.
+"""
+function _hermitian_full_from_half(half::AbstractVector{<:Complex}, N::Int)
+    M = div(N, 2) + 1
+    @assert length(half) == M "half length must be div(N,2)+1 = $M, got $(length(half))"
+    full = similar(half, N)
+    @inbounds for k in 1:M
+        full[k] = half[k]
+    end
+    @inbounds for k in 2:(N - M + 1)        # fill the mirror; covers even and odd N
+        full[N - k + 2] = conj(half[k])
+    end
+    return full
+end
+
+# ============================================================================
 # GPU Transform Support
 # ============================================================================
 

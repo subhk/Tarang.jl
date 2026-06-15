@@ -222,12 +222,13 @@ For spectral truncation (2/3 rule), modes with index > cutoff_dim are zeroed.
     j = ((idx - 1) ÷ nx) + 1
     i = ((idx - 1) % nx) + 1
     # Zero modes beyond cutoff in both positive AND negative frequency range.
-    # `cutoff_x` is the number of modes RETAINED PER SIDE (low positive freqs +
-    # high-index negative-freq mirror). A mode is kept if i <= cutoff (positive) OR
-    # nx-i+1 <= cutoff (negative mirror); killed only if BOTH fail. (DC, i==1, is
+    # `cutoff_x` is the per-side retained-mode count. Keep positive freqs i <= cutoff
+    # (|k| = i-1 ≤ cutoff-1) OR negative mirror nx-i+1 < cutoff (|k| = nx-i+1 ≤ cutoff-1);
+    # kill only if BOTH fail. The negative test uses `>=` (not `>`) so the retained band
+    # is conjugate-symmetric — keeping |k| ≤ cutoff-1 on each side. (DC, i==1, is always
     # kept via i <= cutoff for any cutoff >= 1.)
-    kill_x = i > cutoff_x && nx - i + 1 > cutoff_x
-    kill_y = j > cutoff_y && ny - j + 1 > cutoff_y
+    kill_x = i > cutoff_x && nx - i + 1 >= cutoff_x
+    kill_y = j > cutoff_y && ny - j + 1 >= cutoff_y
     @inbounds if kill_x || kill_y
         data[i, j] = zero(eltype(data))
     end
@@ -242,9 +243,11 @@ Dealiasing kernel for 3D arrays: zero out modes beyond cutoff in each dimension.
     i = ((idx - 1) % nx) + 1
     j = (((idx - 1) ÷ nx) % ny) + 1
     k = ((idx - 1) ÷ (nx * ny)) + 1
-    kill_x = i > cutoff_x && nx - i + 1 > cutoff_x
-    kill_y = j > cutoff_y && ny - j + 1 > cutoff_y
-    kill_z = k > cutoff_z && nz - k + 1 > cutoff_z
+    # `>=` on the negative mirror keeps the retained band conjugate-symmetric (see the
+    # matching note in dealiasing_2d_kernel!): |k| ≤ cutoff-1 on each side.
+    kill_x = i > cutoff_x && nx - i + 1 >= cutoff_x
+    kill_y = j > cutoff_y && ny - j + 1 >= cutoff_y
+    kill_z = k > cutoff_z && nz - k + 1 >= cutoff_z
     @inbounds if kill_x || kill_y || kill_z
         data[i, j, k] = zero(eltype(data))
     end
@@ -750,12 +753,19 @@ function Tarang._pad_spectral!(padded::CuArray{Complex{T}}, spec_data::CuArray{C
     else
         # 1D: fall back to slice-based (fast enough for 1D)
         N = original_shape[1]
-        Nh = N ÷ 2
         M = padded_shape[1]
-        n_neg = N - Nh - 1
-        padded[1:Nh+1] .= spec_data[1:Nh+1]
-        if n_neg > 0
-            padded[M-n_neg+1:M] .= spec_data[N-n_neg+1:N]
+        if 1 in fourier_dims
+            # Fourier: split the half-spectrum (low positive freqs + high-index negatives).
+            Nh = N ÷ 2
+            n_neg = N - Nh - 1
+            padded[1:Nh+1] .= spec_data[1:Nh+1]
+            if n_neg > 0
+                padded[M-n_neg+1:M] .= spec_data[N-n_neg+1:N]
+            end
+        else
+            # Non-Fourier (e.g. Chebyshev): coefficients run low→high order, so the
+            # correct zero-padded embedding is a full leading copy (`padded` is zero-filled).
+            padded[1:N] .= spec_data[1:N]
         end
     end
 end
@@ -790,12 +800,18 @@ function Tarang._truncate_spectral!(result::CuArray{Complex{T}}, padded_spec::Cu
     else
         # 1D: slice-based
         N = original_shape[1]
-        Nh = N ÷ 2
         M = padded_shape[1]
-        n_neg = N - Nh - 1
-        result[1:Nh+1] .= padded_spec[1:Nh+1]
-        if n_neg > 0
-            result[N-n_neg+1:N] .= padded_spec[M-n_neg+1:M]
+        if 1 in fourier_dims
+            # Fourier: take the low positive freqs + the high-index negative-freq mirror.
+            Nh = N ÷ 2
+            n_neg = N - Nh - 1
+            result[1:Nh+1] .= padded_spec[1:Nh+1]
+            if n_neg > 0
+                result[N-n_neg+1:N] .= padded_spec[M-n_neg+1:M]
+            end
+        else
+            # Non-Fourier (e.g. Chebyshev): keep the leading N low-order coefficients.
+            result[1:N] .= padded_spec[1:N]
         end
     end
 end
