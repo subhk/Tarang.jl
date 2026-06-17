@@ -340,34 +340,67 @@ end
 
 struct RKSMR <: TimeStepper
     """
-    Strong Stability Preserving Runge-Kutta method (SSP-RK).
+    Spalart–Moser–Rogers (SMR) semi-implicit (IMEX) Runge–Kutta scheme.
 
-    Also known as TVD (Total Variation Diminishing) RK methods.
+    The classic three-substep low-storage IMEX-RK of Spalart, Moser & Rogers
+    (J. Comput. Phys. 1991), the workhorse time integrator for incompressible
+    spectral DNS (Kim–Moin–Moser channel flow and descendants). It treats the
+    nonlinear/advective term `F` EXPLICITLY (3rd-order RK, with a two-substep
+    Adams-Bashforth-like blend) and the stiff linear term `L` (viscous diffusion)
+    IMPLICITLY (Crank–Nicolson, 2nd order, L-stable for the linear part):
 
-    This implements SSP-RK3 (Shu-Osher form):
-    Stage 1: u^(1) = u^n + dt*F(u^n)
-    Stage 2: u^(2) = 3/4*u^n + 1/4*u^(1) + 1/4*dt*F(u^(1))
-    Stage 3: u^{n+1} = 1/3*u^n + 2/3*u^(2) + 2/3*dt*F(u^(2))
+        (M - dt·β_k L) y^k = y^{k-1} + dt[γ_k F^{k-1} + ζ_k F^{k-2} + dt·α_k L y^{k-1}]
+        γ = (8/15, 5/12, 3/4),  ζ = (0, -17/60, -5/12)
+        α = (29/96, -3/40, 1/6), β = (37/160, 5/24, 1/6),  α_k+β_k = γ_k+ζ_k
+
+    Here it is stored in the equivalent 4-stage ESDIRK additive-Runge–Kutta
+    (ARK) Butcher form so it shares the generic IMEX driver `step_rk_imex!`
+    (M/L matrices, per-mode subproblems, distributed diagonal IMEX, fallbacks)
+    with RK222/RK443. Stage 1 is the trivial explicit-first stage (= yⁿ); stages
+    2–4 are the three SMR substeps. Cumulative explicit/implicit coefficients are
+    the running sums of (γ,ζ) and (α,β). Stiffly accurate: b = last stage row.
 
     Properties:
-    - 3rd order accurate
-    - Strong stability preserving (SSP) with CFL coefficient C = 1
-    - Optimal for hyperbolic conservation laws
+    - 3rd-order accurate for the explicit (nonlinear) part, 2nd-order for the
+      implicit (linear) part — the standard SMR accuracy profile.
+    - Implicit linear treatment is stable for diffusion-dominated problems
+      (previously this method silently ran fully explicit and blew up on stiff L).
     """
     stages::Int
-    alpha::Matrix{Float64}  # SSP coefficients (convex combinations)
-    beta::Vector{Float64}   # RHS scaling coefficients
+    A_explicit::Matrix{Float64}
+    b_explicit::Vector{Float64}
+    c_explicit::Vector{Float64}
+    A_implicit::Matrix{Float64}
+    b_implicit::Vector{Float64}
+    c_implicit::Vector{Float64}
 
     function RKSMR()
-        stages = 3
-        # Shu-Osher form coefficients for SSP-RK3
-        alpha = [
-            1.0  0.0  0.0;    # Stage 1: u^(1) = 1*u^n
-            0.75 0.25 0.0;    # Stage 2: u^(2) = 3/4*u^n + 1/4*u^(1)
-            1/3  0.0  2/3     # Stage 3: u^{n+1} = 1/3*u^n + 2/3*u^(2)
+        stages = 4
+        γ = (8/15, 5/12, 3/4)
+        ζ = (0.0, -17/60, -5/12)
+        α = (29/96, -3/40, 1/6)
+        β = (37/160, 5/24, 1/6)
+
+        # Explicit ARK tableau — cumulative running sums of (γ, ζ).
+        A_explicit = [
+            0.0          0.0          0.0   0.0;
+            γ[1]         0.0          0.0   0.0;
+            γ[1]+ζ[2]    γ[2]         0.0   0.0;
+            γ[1]+ζ[2]    γ[2]+ζ[3]    γ[3]  0.0
         ]
-        beta = [1.0, 0.25, 2/3]  # dt*F scaling for each stage
-        new(stages, alpha, beta)
+        # Implicit ARK tableau — cumulative running sums of (α, β); β on diagonal.
+        A_implicit = [
+            0.0     0.0          0.0          0.0;
+            α[1]    β[1]         0.0          0.0;
+            α[1]    β[1]+α[2]    β[2]         0.0;
+            α[1]    β[1]+α[2]    β[2]+α[3]    β[3]
+        ]
+        # Stiffly accurate: weights = last stage row → y^{n+1} = final substep.
+        b_explicit = A_explicit[4, :]
+        b_implicit = A_implicit[4, :]
+        c_explicit = [0.0, γ[1], γ[1]+ζ[2]+γ[2], 1.0]   # [0, 8/15, 2/3, 1]
+        c_implicit = copy(c_explicit)
+        new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
     end
 end
 

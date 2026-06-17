@@ -113,6 +113,35 @@ using Tarang
             @test isapprox(gout, original; rtol=1e-10, atol=1e-10)
         end
     end
+
+    @testset "Scaled ChebyshevT roundtrip (dealiased grid)" begin
+        # A scaled Chebyshev field lives on M = ceil(N*scale) Gauss-Lobatto points
+        # but stores N coefficients. The backward used the BASE grid_size, so the
+        # round-trip collapsed the grid from M back to N (→ NaN). The backward now
+        # zero-pads to M and inverse-DCT-I's at size M. Use a band-limited (low-degree)
+        # polynomial so truncation to N modes is lossless.
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        for (N, scale) in ((8, 1.5), (12, 1.5), (10, 1.3))
+            zb = ChebyshevT(coords["z"]; size=N, bounds=(-1.0, 1.0))
+            field = ScalarField(Domain(dist, (zb,)), "u")
+            Tarang.require_scales!(field, scale)
+            ensure_layout!(field, :g)
+            g = Tarang.get_grid_data(field)
+            M = length(g)
+            @test M == ceil(Int, N * scale)
+            zc = Float64[-cos(pi * (j - 1) / (M - 1)) for j in 1:M]   # scaled GL nodes
+            # degree-3 polynomial: representable in N (>=4) Chebyshev modes
+            g .= @. 1.0 + 2zc - 0.5 * (2zc^2 - 1) + 0.25 * zc^3
+            original = copy(g)
+            forward_transform!(field)
+            backward_transform!(field)
+            ensure_layout!(field, :g)
+            gout = Tarang.get_grid_data(field)
+            @test length(gout) == M          # grid preserved (was collapsing to base N)
+            @test isapprox(gout, original; rtol=1e-10, atol=1e-10)
+        end
+    end
 end
 
 @testset "Transform dispatch helpers" begin

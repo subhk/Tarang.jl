@@ -298,6 +298,30 @@ function _backward_output_spec(in::AbstractArray, transform::ChebyshevTransform)
     return out_shape, eltype(in)
 end
 
+# Scaled (dealiased) backward: a Chebyshev field with scale s lives on a grid of
+# M = ceil(s*N) Gauss-Lobatto points but stores only N coefficients. The backward
+# must zero-pad those N coefficients to M and run the inverse DCT-I at size M
+# (matching the forward, which used the actual M-point grid). `out_n` is that M,
+# threaded from `_bwd_rfft_target` exactly as the Fourier path does. out_n <= 0
+# means "no scale context" → base grid_size (unchanged behavior). When s == 1,
+# M == N == grid_size, so unscaled fields are byte-for-byte unaffected.
+function _bwd_rfft_target(field::ScalarField, transform::ChebyshevTransform)
+    ax = transform.axis
+    scale = field.scales === nothing ? 1.0 : field.scales[ax]
+    return ceil(Int, scale * transform.grid_size)
+end
+
+function _backward_output_spec(in::AbstractArray, transform::ChebyshevTransform, out_n::Int)
+    in_shape = size(in)
+    ax = transform.axis
+    if ax > ndims(in)
+        return in_shape, eltype(in)
+    end
+    grid_size = out_n > 0 ? out_n : transform.grid_size
+    out_shape = ntuple(i -> i == ax ? grid_size : in_shape[i], length(in_shape))
+    return out_shape, eltype(in)
+end
+
 """
 Get-or-allocate the forward scratch entry for this (input_shape, input_eltype).
 The scratch includes real/imag split buffers sized to the INPUT shape (so the
@@ -331,8 +355,11 @@ to the OUTPUT (grid) shape because the DCT-I is applied AFTER zero-padding
 the coefficient input up to grid size.
 """
 function _get_or_alloc_cheb_backward_scratch!(transform::ChebyshevTransform,
-                                              in_shape::Tuple, in_eltype::Type)
-    key = (in_shape, in_eltype)
+                                              in_shape::Tuple, in_eltype::Type, grid_size::Int)
+    # `grid_size` (the backward OUTPUT grid length, = the scaled M for dealiased
+    # fields) is part of the key: two fields with the same coefficient shape but
+    # different scales need differently-sized padded buffers and plans.
+    key = (in_shape, in_eltype, grid_size)
     cached = get(transform.bwd_scratch, key, nothing)
     if cached !== nothing
         return cached
@@ -340,7 +367,6 @@ function _get_or_alloc_cheb_backward_scratch!(transform::ChebyshevTransform,
 
     ax = transform.axis
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
-    grid_size = transform.grid_size
     padded_shape = ntuple(i -> i == ax ? grid_size : in_shape[i], length(in_shape))
 
     # Scratch sized to the padded (grid-size) shape for the DCT-I.
@@ -475,7 +501,16 @@ Algorithm (matches `_chebyshev_backward` exactly):
   3. Copy `scratch.tmp_real` (and imag) into `out`, recombining into
      complex if needed.
 """
-function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::ChebyshevTransform)
+# Base entry (no scale context) → base grid_size.
+_apply_backward!(out::AbstractArray, in::AbstractArray, transform::ChebyshevTransform) =
+    _apply_backward!(out, in, transform, 0)
+
+# Scale-aware entry: `out_n` is the backward output grid length (the scaled M for a
+# dealiased field, threaded from `_bwd_rfft_target` by `_backward_transform_stage!`).
+# out_n <= 0 means no scale context → base `transform.grid_size`.
+function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::ChebyshevTransform, out_n::Int)
+    grid_size = out_n > 0 ? out_n : transform.grid_size
+
     if is_gpu_array(in) || is_gpu_array(out)
         result = _chebyshev_backward(in, transform)
         if size(result) == size(out) && eltype(result) == eltype(out)
@@ -492,19 +527,23 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Cheb
         return out
     end
 
-    scratch = _get_or_alloc_cheb_backward_scratch!(transform, size(in), eltype(in))
+    scratch = _get_or_alloc_cheb_backward_scratch!(transform, size(in), eltype(in), grid_size)
     # Function barrier: same pattern as _apply_forward! — dispatch here specializes
     # _apply_backward_kernel! on the concrete ChebScratch{T,N,P} type.
-    return _apply_backward_kernel!(out, in, transform, scratch)
+    return _apply_backward_kernel!(out, in, transform, scratch, grid_size)
 end
 
 function _apply_backward_kernel!(out::AbstractArray, in::AbstractArray,
                                  transform::ChebyshevTransform,
-                                 scratch::ChebScratch{FT, N, P}) where {FT, N, P}
+                                 scratch::ChebScratch{FT, N, P}, grid_size::Int) where {FT, N, P}
     ax = transform.axis
     in_eltype = eltype(in)
     coeff_size = size(in, ax)
-    grid_size = transform.grid_size
+    # `grid_size` is the backward OUTPUT grid length (scaled M for dealiased fields),
+    # passed in rather than read from `transform.grid_size` so scaled fields zero-pad
+    # and inverse-DCT at the correct M. The endpoint-doubling guard below stays
+    # correct: for a scaled field coeff_size (N) != grid_size (M), so the truncated
+    # last coefficient is (rightly) not re-doubled.
 
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
     two = real_T(2.0)

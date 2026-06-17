@@ -84,7 +84,7 @@ function _dispatch_step!(::CNLF2, state, solver)
     _check_mpi_implicit_compat!(solver, "CNLF2")
     step_cnlf2!(state, solver)
 end
-_dispatch_step!(::RKSMR, state, solver) = step_rksmr!(state, solver)
+_dispatch_step!(::RKSMR, state, solver) = step_rksmr!(state, solver)   # IMEX ARK → step_rk_imex!
 _dispatch_step!(::RKGFY, state, solver) = step_rkgfy!(state, solver)
 _dispatch_step!(::RK443_IMEX, state, solver) = step_rk443_imex!(state, solver)
 

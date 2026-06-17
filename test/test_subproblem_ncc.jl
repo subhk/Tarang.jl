@@ -1,12 +1,20 @@
 """
-Tests for src/core/subsystems/subproblem_ncc.jl — the LIVE solver NCC
-(Non-Constant Coefficient) matrix builder.
+Tests for src/core/subsystems/subproblem_ncc.jl — the exported
+`cartesian_mode_matrix` + `build_ncc_matrix` NCC (Non-Constant Coefficient)
+helpers.
 
-This is a DISTINCT code path from the standalone basis_product_matrices.jl
-(ncc_matrix / product_matrix) exercised in test_ncc_product_matrices.jl. The
-solver assembles NCC multiplication matrices via THIS file's own
-`cartesian_mode_matrix` + `build_ncc_matrix`, which were previously at 0%
-coverage.
+NOTE (corrected 2026-06-17): these are EXPORTED helpers that are NOT currently
+invoked by the live solver matrix assembler. The live path is
+`build_matrices!` → `expression_matrices` (matrices_subproblem_operators.jl),
+which does not call `build_ncc_matrix`/`cartesian_mode_matrix` (verified: zero
+`src/` callers). These tests pin the helpers' standalone behavior (they were at
+0% coverage), they are NOT an end-to-end solver-NCC check.
+
+IMPORTANT: `cartesian_mode_matrix` builds a per-axis CIRCULAR shift, which is the
+correct convolution ONLY for periodic (ComplexFourier) bases. It is wrong for
+RealFourier (half-spectrum) and for Chebyshev/Jacobi (whose products follow the
+polynomial recurrence, not a shift). The basis-AWARE, correct builder is
+`ncc_matrix`/`product_matrix` in basis_product_matrices.jl (test_ncc_product_matrices.jl).
 
 Semantics being pinned (read off subproblem_ncc.jl):
 

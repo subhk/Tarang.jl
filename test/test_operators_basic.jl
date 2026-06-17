@@ -391,7 +391,36 @@ end
         @test get_grid_data(r) ≈ Float64.(1:8) ./ 2.0
     end
 
+    @testset "_divide_result Number/ScalarField" begin
+        # REGRESSION GUARD: the operator path (parsed `1/u` in analysis/output tasks)
+        # used to throw for Number/Field — only the Future path (`Divide`) worked. It
+        # now delegates to `divide_operands`, matching the solver RHS interpreter.
+        r = _divide_result(1.0, f, :g)
+        @test r isa ScalarField
+        ensure_layout!(r, :g)
+        @test get_grid_data(r) ≈ 1.0 ./ Float64.(1:8)
+    end
+
+    @testset "_divide_result ScalarField/ScalarField" begin
+        # REGRESSION GUARD: pointwise field/field division also used to throw here.
+        r = _divide_result(f, g, :g)
+        @test r isa ScalarField
+        ensure_layout!(r, :g)
+        @test get_grid_data(r) ≈ Float64.(1:8) ./ Float64.(8:-1:1)
+    end
+
     @testset "_divide_result unsupported throws" begin
         @test_throws ArgumentError _divide_result("a", "b", :g)
+    end
+
+    @testset "evaluate_power honors requested :c layout" begin
+        # REGRESSION GUARD: power is a pointwise (grid-space) op, so it used to return a
+        # :g field even when :c was requested — leaving stale/empty coefficients. It now
+        # transforms the result to the requested layout (like add/multiply/negate).
+        rc = evaluate(Tarang.PowerOperator(f, 2.0), :c)
+        @test rc isa ScalarField
+        @test rc.current_layout == :c
+        ensure_layout!(rc, :g)
+        @test get_grid_data(rc) ≈ Float64.(1:8) .^ 2     # round-trip is u^2
     end
 end

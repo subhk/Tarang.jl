@@ -65,6 +65,15 @@ end
         for n in 1:5
             @test isapprox(mags[n], evp_oracle(n); rtol=1e-6)
         end
+        # SIGN GUARD: the true growth rates are σ_n = -(nπ/Lz)² < 0 — pure diffusion
+        # always decays. The solver assembles σ·M + L = 0, so it must return σ, not -σ.
+        # A missing negation reported these as POSITIVE (spurious growth), which the
+        # magnitude check above could not detect.
+        @test all(real.(λ) .< 0)
+        signed = sort(real.(λ); rev=true)        # closest-to-zero first
+        for n in 1:5
+            @test isapprox(signed[n], -evp_oracle(n); rtol=1e-6)
+        end
         # eigenvectors returned in the (single) subproblem space, one column each.
         @test size(v, 2) == 5
     end

@@ -242,74 +242,25 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
 end
 
 """
-    Strong Stability Preserving Runge-Kutta 3rd order step (SSP-RK3).
+    step_rksmr!(state, solver)
 
-    This is the Shu-Osher form of SSP-RK3, optimal for hyperbolic PDEs.
+Spalart–Moser–Rogers semi-implicit (IMEX) RK3 step. RKSMR now carries an ARK
+Butcher tableau (see `RKSMR` in types.jl), so — like RKGFY and RK443_IMEX — it
+delegates to the generic IMEX driver `step_rk_imex!`, which treats the nonlinear
+term `F` explicitly and the stiff linear operator `L` implicitly (M/L matrices,
+per-mode subproblems, distributed diagonal IMEX). Falls back to explicit RK443
+only if that path throws.
 
-    Shu-Osher form:
-    Stage 1: u^(1) = u^n + dt*F(u^n)
-    Stage 2: u^(2) = 3/4*u^n + 1/4*u^(1) + 1/4*dt*F(u^(1))
-    Stage 3: u^{n+1} = 1/3*u^n + 2/3*u^(2) + 2/3*dt*F(u^(2))
-
-    Properties:
-    - 3rd order accurate
-    - SSP with CFL coefficient C = 1
-    - TVD (Total Variation Diminishing) for scalar conservation laws
-    """
+Previously this was a fully-EXPLICIT SSP-RK3 that ignored `L` entirely (only
+emitting a warning), so diffusion-dominated problems were integrated without any
+implicit treatment and went unstable.
+"""
 function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
-
-    current_state = state.history[end]
-    dt = state.dt
-    t = solver.sim_time
-
-    # RKSMR is fully explicit and assumes M = I (identity mass matrix).
-    # Only warn if the problem defines a non-trivial (non-identity) M_matrix.
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if M_matrix !== nothing && size(M_matrix, 1) > 0 && norm(M_matrix - I, Inf) > 1e-12
-        @warn "RKSMR (SSP-RK3) is a fully explicit method that assumes M = I. " *
-              "The problem defines a non-identity M_matrix which will be ignored. " *
-              "Use an IMEX method (SBDF, CNAB) for problems with non-identity mass matrix." maxlog=1
-    end
-
-    # RKSMR is purely explicit — it does NOT treat L_matrix implicitly.
-    # If a non-zero L_matrix is present, warn that stiff linear terms are untreated.
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    if L_matrix !== nothing && size(L_matrix, 1) > 0 && norm(L_matrix, Inf) > 1e-12
-        @warn "RKSMR (SSP-RK3) is a fully explicit method. The problem defines a " *
-              "non-zero L_matrix (stiff linear operator) which will NOT be treated " *
-              "implicitly. This may cause instability for diffusion-dominated problems. " *
-              "Use an IMEX method (RK222, RK443, SBDF) for implicit linear treatment." maxlog=1
-    end
-
-    alpha = state.timestepper.alpha
-    beta = state.timestepper.beta
-
     try
-        # Stage 1: u^(1) = u^n + dt*F(u^n)
-        F0 = evaluate_rhs(solver, current_state, t)
-        u1 = _timestep_field_state!(state, :rksmr_u1, current_state)
-        linear_combination_state!(u1, 1.0, current_state, dt * beta[1], F0)
-
-        # Stage 2: u^(2) = alpha[2,1]*u^n + alpha[2,2]*u^(1) + beta[2]*dt*F(u^(1))
-        F1 = evaluate_rhs(solver, u1, t + dt)
-        u2 = _timestep_field_state!(state, :rksmr_u2, current_state)
-        linear_combination_state!(u2, alpha[2,1], current_state, alpha[2,2], u1)
-        axpy_state!(dt * beta[2], F1, u2)
-
-        # Stage 3: u^{n+1} = alpha[3,1]*u^n + alpha[3,3]*u^(2) + beta[3]*dt*F(u^(2))
-        F2 = evaluate_rhs(solver, u2, t + 0.5*dt)  # SSP-RK3 Shu-Osher c₃ = 1/2
-        new_state = copy_state(current_state)
-        linear_combination_state!(new_state, alpha[3,1], current_state, alpha[3,3], u2)
-        axpy_state!(dt * beta[3], F2, new_state)
-
-        _push_trim!(state.history, new_state, 2)
-
-        @debug "RKSMR (SSP-RK3) step completed: dt=$dt"
-
+        step_rk_imex!(state, solver)
     catch e
         @warn "RKSMR failed: $e, falling back to RK443"
         step_rk443!(state, solver)
-        return
     end
 end
 

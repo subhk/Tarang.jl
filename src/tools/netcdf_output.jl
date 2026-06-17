@@ -2364,8 +2364,8 @@ function add_mean_task!(handler::NetCDFFileHandler, field; dims=nothing, name=no
 
     # Create postprocess function for mean computation
     if dims === nothing
-        # Global mean
-        postprocess = data -> [netcdf_mean(data)]
+        # Global mean (MPI-aware: combines across ranks)
+        postprocess = data -> [_global_mean_val(data, field)]
     else
         # Mean over specified dimensions
         dim_indices = resolve_dimension_indices(field, dims)
@@ -2476,7 +2476,7 @@ function add_variance_task!(handler::NetCDFFileHandler, field; dims=nothing, nam
     end
 
     if dims === nothing
-        postprocess = data -> [netcdf_var(data)]
+        postprocess = data -> [_global_var_val(data, field)]   # MPI-aware global variance
     else
         dim_indices = resolve_dimension_indices(field, dims)
         postprocess = data -> dropdims(netcdf_var(data, dims=dim_indices), dims=dim_indices)
@@ -2500,7 +2500,7 @@ function add_rms_task!(handler::NetCDFFileHandler, field; dims=nothing, name=not
     end
 
     if dims === nothing
-        postprocess = data -> [sqrt(netcdf_mean(data .^ 2))]
+        postprocess = data -> [_global_rms_val(data, field)]   # MPI-aware global RMS
     else
         dim_indices = resolve_dimension_indices(field, dims)
         postprocess = data -> sqrt.(dropdims(netcdf_mean(data .^ 2, dims=dim_indices), dims=dim_indices))
@@ -2517,13 +2517,68 @@ function add_extrema_task!(handler::NetCDFFileHandler, field; name=nothing)
 
     # Add min task
     min_name = name !== nothing ? "$(name)_min" : "$(field_name)_min"
-    add_task!(handler, field; name=min_name, postprocess=data -> [minimum(data)])
+    add_task!(handler, field; name=min_name, postprocess=data -> [_global_extremum_val(data, field, MPI.MIN)])
 
     # Add max task
     max_name = name !== nothing ? "$(name)_max" : "$(field_name)_max"
-    add_task!(handler, field; name=max_name, postprocess=data -> [maximum(data)])
+    add_task!(handler, field; name=max_name, postprocess=data -> [_global_extremum_val(data, field, MPI.MAX)])
 
     return handler
+end
+
+# ── MPI-aware GLOBAL reductions ──────────────────────────────────────────────
+# A task's `postprocess` runs on the field's LOCAL slab. Under MPI a whole-domain
+# reduction (mean/variance/rms/min/max with dims=nothing) must combine across ranks,
+# otherwise every rank writes only its slab's statistic. These reduce locally and, when
+# the field is MPI-distributed, Allreduce across the field's communicator (serial →
+# identical to the old local computation).
+
+# Communicator for a field's data distribution, or `nothing` when not MPI-distributed.
+function _reduction_comm(field)
+    (hasproperty(field, :dist) && field.dist !== nothing) || return nothing
+    dist = field.dist
+    (MPI.Initialized() && hasproperty(dist, :size) && dist.size > 1) || return nothing
+    return dist.comm
+end
+
+function _global_mean_val(data, field)
+    s = sum(data); n = length(data)
+    comm = _reduction_comm(field)
+    if comm !== nothing
+        s = MPI.Allreduce(s, MPI.SUM, comm)
+        n = MPI.Allreduce(n, MPI.SUM, comm)
+    end
+    return s / n
+end
+
+# Sample variance (÷(N-1)), matching serial netcdf_var, via global moments:
+# (Σx² − (Σx)²/N)/(N−1).
+function _global_var_val(data, field)
+    s1 = sum(data); s2 = sum(abs2, data); n = length(data)
+    comm = _reduction_comm(field)
+    if comm !== nothing
+        s1 = MPI.Allreduce(s1, MPI.SUM, comm)
+        s2 = MPI.Allreduce(s2, MPI.SUM, comm)
+        n  = MPI.Allreduce(n,  MPI.SUM, comm)
+    end
+    return (s2 - abs2(s1) / n) / max(1, n - 1)
+end
+
+function _global_rms_val(data, field)
+    s2 = sum(abs2, data); n = length(data)
+    comm = _reduction_comm(field)
+    if comm !== nothing
+        s2 = MPI.Allreduce(s2, MPI.SUM, comm)
+        n  = MPI.Allreduce(n,  MPI.SUM, comm)
+    end
+    return sqrt(s2 / n)
+end
+
+function _global_extremum_val(data, field, op)   # op = MPI.MIN or MPI.MAX
+    v = (op === MPI.MIN) ? minimum(data) : maximum(data)
+    comm = _reduction_comm(field)
+    comm === nothing || (v = MPI.Allreduce(v, op, comm))
+    return v
 end
 
 # ============================================================================

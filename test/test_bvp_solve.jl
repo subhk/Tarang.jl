@@ -248,4 +248,67 @@ end
         @test maximum(abs(gu[i, k] - uex(xg[i], zg[k])) for i in 1:Nx, k in 1:Nz) < 1e-8
         @test maximum(abs(gv[i, k] - vex(xg[i], zg[k])) for i in 1:Nx, k in 1:Nz) < 1e-8
     end
+
+    @testset "1D Chebyshev variable-coefficient LBVP (implicit NCC)" begin
+        # REGRESSION GUARD: a non-constant FIELD coefficient on the implicit side,
+        # `q(z)*u`, used to be SILENTLY DROPPED (MultiplyOperator matrix Case 3 returned
+        # the variable's block, ignoring the coefficient). It now builds a pseudospectral
+        # multiply-by-q matrix. Manufactured: Δu + q·u = f, u_exact=sin(πz/Lz), q=1+z.
+        Nz = 48; Lz = 1.0
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; dtype=Float64, device=CPU())
+        zb = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz))
+        dom = Domain(dist, (zb,))
+        zc = vec(Array(Tarang.create_meshgrid(dom)["z"]))
+        uex(z) = sin(π*z/Lz)
+        d2uex(z) = -(π/Lz)^2 * sin(π*z/Lz)
+
+        u    = ScalarField(dom, "u")
+        tau1 = ScalarField(dist, "tau1", (), Float64)
+        tau2 = ScalarField(dist, "tau2", (), Float64)
+        lb2  = derivative_basis(zb, 2)
+        q = ScalarField(dom, "q"); ensure_layout!(q, :g); Tarang.get_grid_data(q) .= (1.0 .+ zc)
+        f = ScalarField(dom, "f"); ensure_layout!(f, :g)
+        Tarang.get_grid_data(f) .= d2uex.(zc) .+ (1.0 .+ zc) .* uex.(zc)
+        prob = Tarang.LBVP([u, tau1, tau2])
+        add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), q=q, f=f)
+        Tarang.add_equation!(prob, "Δ(u) + q*u + l1 + l2 = f")
+        Tarang.add_bc!(prob, "u(z=0) = 0")
+        Tarang.add_bc!(prob, "u(z=Lz) = 0")
+        solver = Tarang.BoundaryValueSolver(prob); Tarang.solve!(solver)
+        ensure_layout!(u, :g)
+        @test maximum(abs.(vec(Array(Tarang.get_grid_data(u))) .- uex.(zc))) < 1e-8
+    end
+
+    @testset "2D Fourier×Cheb z-dependent-coefficient LBVP (implicit NCC)" begin
+        # REGRESSION GUARD: a coefficient varying along the Chebyshev direction (constant
+        # along Fourier) in a mixed Fourier-x × Cheb-z domain — the channel-flow case. The
+        # multiply-by-q(z) matrix is built per Fourier-mode subproblem. Manufactured:
+        # Δu + q(z)·u = f, u_exact = sin(πz/Lz)·cos(2x), q = 1+z (constant in x).
+        Nx = 8; Nz = 32; Lz = 1.0
+        coords = CartesianCoordinates("x", "z")
+        dist = Distributor(coords; dtype=Float64, device=CPU())
+        xb = RealFourier(coords["x"]; size=Nx, bounds=(0.0, 2π))
+        zb = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz))
+        dom = Domain(dist, (xb, zb))
+        mesh = Tarang.create_meshgrid(dom); X = Array(mesh["x"]); Z = Array(mesh["z"])
+        uex(x, z) = sin(π*z/Lz) * cos(2x)
+        lap_uex(x, z) = -(4 + (π/Lz)^2) * uex(x, z)
+
+        u    = ScalarField(dom, "u")
+        tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+        tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+        lb2  = derivative_basis(zb, 2)
+        q = ScalarField(dom, "q"); ensure_layout!(q, :g); Tarang.get_grid_data(q) .= (1.0 .+ Z)
+        f = ScalarField(dom, "f"); ensure_layout!(f, :g)
+        Tarang.get_grid_data(f) .= lap_uex.(X, Z) .+ (1.0 .+ Z) .* uex.(X, Z)
+        prob = Tarang.LBVP([u, tau1, tau2])
+        add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), q=q, f=f)
+        Tarang.add_equation!(prob, "Δ(u) + q*u + l1 + l2 = f")
+        Tarang.add_bc!(prob, "u(z=0) = 0")
+        Tarang.add_bc!(prob, "u(z=Lz) = 0")
+        solver = Tarang.BoundaryValueSolver(prob); Tarang.solve!(solver)
+        ensure_layout!(u, :g)
+        @test maximum(abs.(Array(Tarang.get_grid_data(u)) .- uex.(X, Z))) < 1e-8
+    end
 end
