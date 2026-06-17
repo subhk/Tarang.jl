@@ -243,6 +243,28 @@ end
         @test_throws ArgumentError evaluate_legendre_derivative!(rbad, fbad, 1, 1, :c)
     end
 
+    @testset "Legendre 2D derivative along each axis (multi-dim fiber guard)" begin
+        # REGRESSION GUARD: evaluate_legendre_single_derivative! used linear indexing,
+        # so on a multi-dimensional field it differentiated only the flattened first
+        # fiber and corrupted everything else (∂/∂x and ∂/∂z both had O(1) errors).
+        # The recurrence is now applied per-fiber along the requested axis.
+        coords = CartesianCoordinates("x", "z")
+        dist   = Distributor(coords; mesh=(1, 1), dtype=Float64)
+        xb = Legendre(coords["x"]; size=12, bounds=(-1.0, 1.0))
+        zb = Legendre(coords["z"]; size=12, bounds=(-1.0, 1.0))
+        f  = ScalarField(dist, "f", (xb, zb), Float64)
+        ensure_layout!(f, :g)
+        mesh = Tarang.create_meshgrid(f.domain)
+        X = Array(mesh["x"]); Z = Array(mesh["z"])
+        # g(x,z) = x^3*z + 2x*z^2 ; dg/dx = 3x^2*z + 2z^2 ; dg/dz = x^3 + 4x*z
+        get_grid_data(f) .= @. X^3 * Z + 2X * Z^2
+
+        dx = evaluate(Tarang.Differentiate(f, coords["x"], 1), :g)
+        dz = evaluate(Tarang.Differentiate(f, coords["z"], 1), :g)
+        @test isapprox(Array(get_grid_data(dx)), @. 3X^2 * Z + 2Z^2; rtol=1e-7, atol=1e-7)
+        @test isapprox(Array(get_grid_data(dz)), @. X^3 + 4X * Z;    rtol=1e-7, atol=1e-7)
+    end
+
     # ========================================================================
     # Part D: Low-level chebyshev_derivative_1d / _1d! / plan cache
     #   These operate on raw vectors of grid values at Cheb-Gauss-Lobatto nodes

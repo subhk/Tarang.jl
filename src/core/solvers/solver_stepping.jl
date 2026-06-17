@@ -503,7 +503,13 @@ function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
             sp.L_min === nothing && continue
             Lm = Matrix{ComplexF64}(sp.L_min)
             Mm = Matrix{ComplexF64}(sp.M_min)
-            F = eigen(Lm, Mm)
+            # The system assembles as  σ·M·X + L·X = 0  (the eigenvalue σ replaces ∂t),
+            # so the generalized problem is L·X = -σ·M·X and `eigen(L, M)` returns -σ.
+            # Negate L so F.values ARE the growth rates σ directly — and so the `which`/
+            # `target` selection below operates in σ-space. Without this, a purely
+            # diffusive (always-decaying, σ<0) problem was reported with σ>0, inverting
+            # every stability conclusion. Eigenvectors are unchanged by the negation.
+            F = eigen(-Lm, Mm)
             # drop spurious eigenvalues from the singular (zero-row) mass matrix
             keep = findall(x -> isfinite(x) && abs(x) < 1e10, F.values)
             append!(all_λ, F.values[keep])
@@ -517,11 +523,13 @@ function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
         λ = all_λ[sel]
         v = single_vecs === nothing ? zeros(ComplexF64, 0, 0) : single_vecs[:, sel]
     else
-        # Legacy global path (no per-mode subproblems available).
+        # Legacy global path (no per-mode subproblems available). Same σ·M + L = 0
+        # convention: negate L so the returned eigenvalues are the growth rates σ
+        # (not -σ), consistent with the per-mode path above.
         if target === nothing
-            λ, v = Arpack.eigs(solver.L_matrix, solver.M_matrix; nev=nev, which=which_symbol)
+            λ, v = Arpack.eigs(-solver.L_matrix, solver.M_matrix; nev=nev, which=which_symbol)
         else
-            λ, v = Arpack.eigs(solver.L_matrix, solver.M_matrix; nev=nev, sigma=target)
+            λ, v = Arpack.eigs(-solver.L_matrix, solver.M_matrix; nev=nev, sigma=target)
         end
     end
 

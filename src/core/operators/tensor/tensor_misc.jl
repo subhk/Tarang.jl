@@ -54,7 +54,9 @@ function evaluate_outer(outer_op::Outer, layout::Symbol=:g)
         end
     end
 
-    return result
+    # Outer product is computed in grid space (nonlinear); honor the requested layout
+    # so `evaluate(outer, :c)` returns coefficients rather than a :g-flagged tensor.
+    return _ensure_result_layout!(result, layout)
 end
 
 # ============================================================================

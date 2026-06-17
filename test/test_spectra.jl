@@ -77,4 +77,49 @@ end
         p2 = maximum(ps2.power)
         @test isapprox(p2, 4 * p1; rtol=1e-6)
     end
+
+    @testset "x-mode and y-mode of equal |k| give identical spectra (isotropy)" begin
+        # REGRESSION GUARD: in a RealFourier×RealFourier field the FIRST axis is the
+        # rfft half-spectrum (k=0..N/2) but every later axis is a full complex FFT
+        # whose wavenumbers run 0..N/2,-N/2+1..-1. The wavenumber builder used to label
+        # that 2nd axis as 0..N-1, so each negative-frequency y-mode got a spurious
+        # large |k| and was dropped beyond kmax. A cos(2y) field then lost its ky=-2
+        # half, making its spectrum HALF that of the physically-identical cos(2x).
+        psx = Tarang.power_spectrum(_mode_field((x, y) -> cos(2x)))
+        psy = Tarang.power_spectrum(_mode_field((x, y) -> cos(2y)))
+        @test _bin_containing(psx, 2) == argmax(psx.power)
+        @test _bin_containing(psy, 2) == argmax(psy.power)
+        # Isotropy: identical wavenumber in x or y must yield identical peak power.
+        @test isapprox(maximum(psy.power), maximum(psx.power); rtol=1e-6)
+    end
+
+    @testset "vector energy_spectrum on a non-2π domain keeps all energy" begin
+        # REGRESSION GUARD: energy_spectrum bins PHYSICAL wavenumbers (k=2π·n/L) but
+        # used a MODE-COUNT ceiling (kmax=N/2). On L<2π the physical k exceeds N/2, so
+        # every such mode was binned past kmax and silently dropped → lost energy. The
+        # ceiling is now the physical radial Nyquist. Here L=π ⇒ k0=2, so the n=6 mode
+        # sits at physical kx=12 > N/2=8 and used to vanish entirely.
+        N = 16; L = Float64(π)
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; mesh=(1, 1), dtype=Float64)
+        xb = RealFourier(coords["x"]; size=N, bounds=(0.0, L))
+        yb = RealFourier(coords["y"]; size=N, bounds=(0.0, L))
+        u = VectorField(dist, "u", (xb, yb), Float64)
+        xs = collect(range(0, L, length=N + 1))[1:N]
+        ensure_layout!(u.components[1], :g)
+        g1 = Tarang.get_grid_data(u.components[1])
+        for i in 1:N, j in 1:N
+            g1[i, j] = cos(2 * π * 6 * xs[i] / L)   # physical kx = 12
+        end
+        ensure_layout!(u.components[2], :g)
+        fill!(Tarang.get_grid_data(u.components[2]), 0.0)
+
+        ps = Tarang.energy_spectrum(u)
+        @test maximum(ps.k) >= 12          # physical ceiling reaches the mode (was 8)
+        @test sum(ps.bin_counts) > 0
+        @test sum(ps.power) > 0            # energy retained (was ≈ 0 — dropped)
+        # peak power sits in the bin containing the physical wavenumber 12
+        peak_k = ps.k[argmax(ps.power)]
+        @test isapprox(peak_k, 12.0; atol = 1.0)
+    end
 end

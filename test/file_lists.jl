@@ -156,6 +156,7 @@ const MPI_TEST_FILES = [
     "test_mpi_dotproduct_term.jl",
     "test_stochastic_forcing_mpi.jl",
     "test_mpi_integrate.jl",
+    "test_mpi_reductions.jl",
     "test_mpi_spectral_filter.jl",
     "test_mpi_virtual_output.jl",
     "test_distributed_gpu_transpose.jl",

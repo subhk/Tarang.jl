@@ -423,16 +423,16 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
     use_gpu = is_gpu_array(get_coeff_data(operand))
 
     if order == 1
-        evaluate_legendre_single_derivative!(result, operand, N, scale, use_gpu)
+        evaluate_legendre_single_derivative!(result, operand, axis, N, scale, use_gpu)
     else
         temp_field = ScalarField(operand.dist, "temp_deriv", operand.bases, operand.dtype)
         current_operand = operand
 
         for i in 1:order
             if i == order
-                evaluate_legendre_single_derivative!(result, current_operand, N, scale, use_gpu)
+                evaluate_legendre_single_derivative!(result, current_operand, axis, N, scale, use_gpu)
             else
-                evaluate_legendre_single_derivative!(temp_field, current_operand, N, scale, use_gpu)
+                evaluate_legendre_single_derivative!(temp_field, current_operand, axis, N, scale, use_gpu)
                 current_operand = temp_field
             end
         end
@@ -444,16 +444,16 @@ function evaluate_legendre_derivative!(result::ScalarField, operand::ScalarField
 end
 
 """
-    evaluate_legendre_single_derivative!(result, operand, N, scale, use_gpu)
+    evaluate_legendre_single_derivative!(result, operand, axis, N, scale, use_gpu)
 
-Single Legendre derivative using Jacobi approach.
+Single Legendre derivative using Jacobi approach, applied along `axis`.
 Supports both CPU and GPU arrays (GPU arrays are processed on CPU).
 
 Legendre polynomials are Jacobi polynomials with a=0, b=0.
 The standard Legendre derivative recurrence relation is:
 P'_n = (2n-1)*P_{n-1} + (2n-5)*P_{n-3} + (2n-9)*P_{n-5} + ...
 """
-function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, N::Int, scale::Float64, use_gpu::Bool=false)
+function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, axis::Int, N::Int, scale::Float64, use_gpu::Bool=false)
     if use_gpu
         operand_data_cpu = Array(get_coeff_data(operand))
         result_data_cpu = zeros(eltype(operand_data_cpu), size(get_coeff_data(result)))
@@ -473,19 +473,35 @@ function evaluate_legendre_single_derivative!(result::ScalarField, operand::Scal
     # Here the 1-based index i corresponds to mode m=i-1, so γ(i)=sqrt((2i-1)/2).
     γ(i) = sqrt((2.0 * i - 1.0) / 2.0)
 
-    @inbounds for k in 1:min(N, length(result_data_cpu))
-        coeff_sum = 0.0
-        for j in (k+1):min(N, length(operand_data_cpu))
-            if (j - k) % 2 == 1
-                coeff_sum += γ(j) * operand_data_cpu[j]
+    # The recurrence is 1D in the Legendre coefficient axis. For a multi-dimensional
+    # field the coefficient array is N-D, so apply it independently to every 1D fiber
+    # along `axis`. Linear indexing (the old `[k]`) would walk column-major across the
+    # flattened array, mixing unrelated modes from the other axes — wrong for any field
+    # with more than one dimension.
+    n_axis = min(N, size(operand_data_cpu, axis), size(result_data_cpu, axis))
+    fiber_shape = ntuple(d -> d == axis ? 1 : size(operand_data_cpu, d), ndims(operand_data_cpu))
+    @inbounds for base in CartesianIndices(fiber_shape)
+        for k in 1:n_axis
+            coeff_sum = zero(eltype(operand_data_cpu))
+            for j in (k+1):n_axis
+                if (j - k) % 2 == 1
+                    coeff_sum += γ(j) * operand_data_cpu[_legendre_fiber_index(base, axis, j)]
+                end
             end
+            result_data_cpu[_legendre_fiber_index(base, axis, k)] =
+                (2.0 * k - 1.0) * coeff_sum * scale / γ(k)
         end
-        result_data_cpu[k] = (2.0 * k - 1.0) * coeff_sum * scale / γ(k)
     end
 
     if use_gpu
         get_coeff_data(result) .= copy_to_device(result_data_cpu, get_coeff_data(result))
     end
+end
+
+# Replace the `axis`-th component of a CartesianIndex with `val`, keeping the rest —
+# lets the Legendre recurrence walk a single 1D fiber of an N-D coefficient array.
+@inline function _legendre_fiber_index(base::CartesianIndex{D}, axis::Int, val::Int) where {D}
+    return CartesianIndex(ntuple(d -> d == axis ? val : base[d], D))
 end
 
 """

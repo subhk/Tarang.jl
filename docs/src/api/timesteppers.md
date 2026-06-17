@@ -137,7 +137,7 @@ Additive Runge-Kutta (ARK) and diagonal IMEX schemes.
 
 ```julia
 RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
-RKSMR()       # Strong-stability-preserving IMEX Runge-Kutta
+RKSMR()       # Spalart-Moser-Rogers IMEX-RK3 (explicit nonlinear, implicit C-N linear)
 RK443_IMEX()  # Alias of RK443 (Kennedy-Carpenter ARK3(2)4L[2]SA), suffix clarifies IMEX intent
 ```
 

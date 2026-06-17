@@ -36,7 +36,7 @@ result = energy_spectrum(velocity, binning=LinearBinning(bin_width=2.0))
 ```
 """
 function energy_spectrum(velocity::VectorField;
-                         max_wavenumber::Union{Int,Nothing}=nothing,
+                         max_wavenumber::Union{Real,Nothing}=nothing,
                          radial_average::Bool=true,
                          binning::SpectrumBinning=LinearBinning())
     # Validate Fourier bases
@@ -54,11 +54,16 @@ function energy_spectrum(velocity::VectorField;
     # Get wavenumber grid information
     wavenumber_info = get_wavenumber_info(velocity, fourier_axes, fourier_bases)
 
-    # Determine maximum wavenumber if not specified
+    # Determine maximum wavenumber if not specified. The vector path bins PHYSICAL
+    # wavenumbers (k = 2π·n/L), so the ceiling must also be physical: `wavenumber_info.kmax`
+    # is only a MODE COUNT (N/2), which on a non-2π domain undershoots the physical
+    # Nyquist (L<2π) and silently discards every mode with physical |k| > N/2 → lost
+    # energy. Use the physical radial Nyquist (min over axes of each axis's max |k|).
+    phys_kmax = _physical_radial_kmax(wavenumber_info)
     if max_wavenumber === nothing
-        max_wavenumber = wavenumber_info.kmax
+        max_wavenumber = phys_kmax
     else
-        max_wavenumber = min(max_wavenumber, wavenumber_info.kmax)
+        max_wavenumber = min(float(max_wavenumber), phys_kmax)
     end
 
     # Calculate energy spectrum
@@ -119,6 +124,24 @@ function get_wavenumber_info(velocity::VectorField, fourier_axes::Vector{Int}, f
     kmax = calculate_kmax_global(global_coeff_shape, fourier_bases)
 
     return WavenumberInfo(kmax, k_magnitudes, kx_grid, ky_grid, kz_grid, domain_size, fourier_shape)
+end
+
+"""
+    _physical_radial_kmax(wi::WavenumberInfo) -> Float64
+
+Largest physical radial wavenumber for which the spherical/circular shells are
+complete: the MINIMUM over Fourier axes of each axis's maximum |k| (its physical
+Nyquist (N/2)·2π/L). The per-axis grids already hold physical wavenumbers, so this
+is just `min(maximum|kx|, maximum|ky|[, maximum|kz|])`. On a 2π domain k0=1 and
+this equals the old mode-count N/2, so the common case is unchanged; on L≠2π it is
+the physical ceiling so no resolved mode is binned past it and dropped.
+"""
+function _physical_radial_kmax(wi::WavenumberInfo)
+    kmaxes = Float64[maximum(abs, wi.kx_grid), maximum(abs, wi.ky_grid)]
+    if wi.kz_grid !== nothing
+        push!(kmaxes, maximum(abs, wi.kz_grid))
+    end
+    return minimum(kmaxes)
 end
 
 """
@@ -387,7 +410,7 @@ Returns a NamedTuple with:
 - `bin_edges`: Vector of bin edges used
 """
 function calculate_radial_energy_spectrum(velocity::VectorField, wavenumber_info::WavenumberInfo,
-                                          max_wavenumber::Int, binning::SpectrumBinning=LinearBinning())
+                                          max_wavenumber::Real, binning::SpectrumBinning=LinearBinning())
     # Calculate kinetic energy density in spectral space
     ke_spectral = calculate_spectral_kinetic_energy(velocity)
     k_magnitudes = wavenumber_info.k_magnitudes
@@ -544,7 +567,7 @@ end
     To combine across ranks, use MPI gather operations (not reduce, since each rank
     has different wavenumbers). The keys are globally unique across ranks.
     """
-function calculate_full_energy_spectrum(velocity::VectorField, wavenumber_info::WavenumberInfo, max_wavenumber::Int)
+function calculate_full_energy_spectrum(velocity::VectorField, wavenumber_info::WavenumberInfo, max_wavenumber::Real)
 
     ke_spectral = calculate_spectral_kinetic_energy(velocity)
 
@@ -801,12 +824,16 @@ function get_wavenumber_info_scalar(field::ScalarField, fourier_axes::Vector{Int
             offset = offsets[dim_idx]
             L = domain_size[dim_idx]
 
-            if isa(basis, RealFourier)
-                # RFFT: k = 0, 1, 2, ..., N/2
+            if isa(basis, RealFourier) && global_shape[dim_idx] == basis.meta.size ÷ 2 + 1
+                # RFFT half-spectrum (the FIRST RealFourier axis): k = 0, 1, ..., N/2
                 k_indices = offset:(offset + local_n - 1)
                 k_1d = collect(k_indices)
             else
-                # FFT: k = -N/2, ..., -1, 0, 1, ..., N/2-1
+                # Full FFT storage: ComplexFourier, OR a RealFourier axis that is NOT the
+                # first one — those are stored as a full complex FFT (length N) with
+                # FFT-ordered wavenumbers including the negative half. Treating such an
+                # axis as 0..N-1 (the rfft assumption above) mislabels every negative-
+                # frequency mode as a large positive |k|, corrupting the spectrum.
                 global_n = global_shape[dim_idx]
                 global_k = collect(fftshift(-global_n÷2:(global_n÷2-1)))
                 k_1d = global_k[(offset+1):(offset+local_n)]
@@ -993,7 +1020,7 @@ end
 
 Build bin edges based on binning configuration.
 """
-function _build_bin_edges(binning::SpectrumBinning, max_wavenumber::Int)
+function _build_bin_edges(binning::SpectrumBinning, max_wavenumber::Real)
     if binning.mode == :linear
         # Linear bins with specified width
         bin_width = binning.bin_width

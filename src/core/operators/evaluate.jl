@@ -318,13 +318,13 @@ end
 
 _divide_result(left::Number, right::Number, ::Symbol) = left / right
 
-function _divide_result(left, right, ::Symbol)
-    throw(ArgumentError(
-        "Cannot divide $(typeof(left)) by $(typeof(right)). " *
-        "Division is supported for ScalarField/Number and Number/Number. " *
-        "Field-by-field division is not directly supported; use pointwise: " *
-        "`get_grid_data(result) .= get_grid_data(a) ./ get_grid_data(b)`."))
-end
+# Delegate everything else (Number/Field, Vector/Number, Vector/Field, Field/Field)
+# to the Future-path `divide_operands`, which implements all of them and is what the
+# solver RHS interpreter uses. The operator/evaluate path (analysis/output of parsed
+# expressions like `1/u` or `B/rho0`) previously threw for these, so the SAME term
+# that works inside the solver errored when evaluated for output. `divide_operands`
+# raises its own clear error for genuinely-unsupported combinations.
+_divide_result(left, right, ::Symbol) = divide_operands(left, right)
 
 """
     evaluate_power(op::PowerOperator, layout::Symbol=:g)
@@ -340,7 +340,24 @@ function evaluate_power(op::PowerOperator, layout::Symbol=:g)
         throw(ArgumentError("Power operator requires numeric exponent, got $(typeof(exponent))"))
     end
 
-    return power_operands(base, exponent)
+    result = power_operands(base, exponent)
+    # `power_operands` is a pointwise (nonlinear) op done in grid space, so it returns a
+    # :g field. Honor the requested layout — otherwise a top-level `evaluate(u^2, :c)`
+    # returns a field flagged :g with stale/empty coefficients (siblings add/multiply/negate
+    # all transform to the requested layout).
+    return _ensure_result_layout!(result, layout)
+end
+
+# Transform a field result to `layout`; pass Numbers/Arrays through unchanged.
+_ensure_result_layout!(x, ::Symbol) = x
+_ensure_result_layout!(x::ScalarField, layout::Symbol) = (ensure_layout!(x, layout); x)
+function _ensure_result_layout!(x::VectorField, layout::Symbol)
+    for c in x.components; ensure_layout!(c, layout); end
+    return x
+end
+function _ensure_result_layout!(x::TensorField, layout::Symbol)
+    for c in x.components; ensure_layout!(c, layout); end
+    return x
 end
 
 """

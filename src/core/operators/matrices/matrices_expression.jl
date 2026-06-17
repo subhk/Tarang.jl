@@ -424,16 +424,138 @@ function expression_matrices(op::MultiplyOperator, sp, vars; kwargs...)
         end
     end
 
-    # Case 3: One side depends on vars, other doesn't -> linearity
+    # Case 3: one side depends on vars, the other is a (non-constant) coefficient.
+    # The coefficient side is a spatially-varying FIELD (NCC) — `q(z)*u`. It must
+    # become a multiply-by-q matrix that left-multiplies the var side's block.
+    # Previously this branch returned the var side alone, SILENTLY DROPPING q.
     left_dep = _depends_on_vars(left, vars)
     right_dep = _depends_on_vars(right, vars)
 
     if left_dep && !right_dep
-        return expression_matrices(left, sp, vars; kwargs...)
+        child = expression_matrices(left, sp, vars; kwargs...)
+        return _apply_implicit_ncc(_implicit_ncc_matrix(right), child)
     elseif right_dep && !left_dep
-        return expression_matrices(right, sp, vars; kwargs...)
+        child = expression_matrices(right, sp, vars; kwargs...)
+        return _apply_implicit_ncc(_implicit_ncc_matrix(left), child)
     end
 
     # Both depend on vars (nonlinear) or neither depends -> empty
     return Dict{Any, SparseMatrixCSC}()
+end
+
+"""
+    _implicit_ncc_matrix(ncc_operand) -> SparseMatrixCSC | Nothing
+
+Multiply-by-coefficient matrix for a non-constant FIELD coefficient on the implicit
+side (`q*u`). Built via the basis-aware `ncc_matrix`/`product_matrix` (correct for
+Chebyshev/Legendre/Jacobi).
+
+Supported (returns the matrix): the coefficient is a field varying along a SINGLE
+Jacobi (Chebyshev/Legendre/…) axis with NO Fourier/periodic axis. Unsupported
+(returns `nothing` after a one-time warning, so the coefficient is never DROPPED
+silently): any Fourier-axis dependence (couples Fourier modes → not representable per
+subproblem) or more than one Jacobi axis. Those belong in the explicit RHS.
+"""
+function _implicit_ncc_matrix(ncc_operand)
+    field = _resolve_operand_field(ncc_operand)
+    (field isa ScalarField && !isempty(field.bases)) || return nothing
+
+    jac_axes  = findall(b -> isa(b, JacobiBasis), field.bases)
+    four_axes = findall(b -> isa(b, FourierBasis), field.bases)
+
+    if length(jac_axes) != 1
+        @warn "Tarang: implicit NCC is supported only for a coefficient varying along a single " *
+              "Chebyshev/Jacobi direction (this one has $(length(jac_axes)) Jacobi axes). The " *
+              "term is being dropped from the implicit matrix — move it to the explicit RHS." maxlog=1
+        return nothing
+    end
+    jax = jac_axes[1]
+    coupled_basis = field.bases[jax]
+    Nc = coupled_basis.meta.size
+
+    # A coefficient that varies along a FOURIER axis couples Fourier modes and so cannot be
+    # a per-subproblem (single-mode) matrix. Only a coefficient CONSTANT along every Fourier
+    # axis (its non-DC Fourier coefficients vanish) is representable here — e.g. a z-dependent
+    # diffusivity in a Fourier-x × Chebyshev-z channel.
+    if !isempty(four_axes)
+        ensure_layout!(field, :c)
+        coeffs = get_coeff_data(field)
+        coeffs === nothing && return nothing
+        maxabs = maximum(abs, coeffs)
+        maxabs == 0 && return nothing
+        for fax in four_axes
+            if size(coeffs, fax) > 1
+                nonDC = selectdim(coeffs, fax, 2:size(coeffs, fax))
+                if !isempty(nonDC) && maximum(abs, nonDC) > 1e-8 * maxabs
+                    @warn "Tarang: a non-constant FIELD coefficient that varies along a " *
+                          "Fourier/periodic axis couples Fourier modes and is not supported in the " *
+                          "implicit operator. Dropping it — move the term to the explicit RHS." maxlog=1
+                    return nothing
+                end
+            end
+        end
+    end
+
+    # q on the coupled-axis grid. Because q is constant along the Fourier directions, the
+    # fiber at the first index of every other axis is the entire coefficient profile.
+    ensure_layout!(field, :g)
+    g = Array(get_grid_data(field))
+    idx = ntuple(d -> (d == jax ? Colon() : 1), ndims(g))
+    qfiber = vec(g[idx...])
+    (length(qfiber) == Nc && eltype(qfiber) <: Real && any(!=(0), qfiber)) || return nothing
+
+    # Build the multiply-by-q matrix PSEUDOSPECTRALLY through the coupled basis's OWN transform:
+    # Q = F · diag(q) · B (column k = forward(q .* backward(eₖ))). Convention-EXACT — it uses
+    # the actual Chebyshev/Legendre transform, sidestepping the standard-Jacobi-vs-normalized
+    # coefficient mismatch that makes the raw `ncc_matrix`/`product_matrix` disagree with
+    # Tarang's stored coeffs. Built on a fresh 1D domain so it is independent of the (possibly
+    # multi-dimensional) parent distributor and applies per Fourier-mode subproblem.
+    tmp = _ncc_temp_field(coupled_basis)
+    tmp === nothing && return nothing
+    Q = zeros(ComplexF64, Nc, Nc)
+    for k in 1:Nc
+        ensure_layout!(tmp, :c)
+        cd = get_coeff_data(tmp); fill!(cd, 0); cd[k] = 1
+        backward_transform!(tmp)                            # eₖ → grid
+        gg = get_grid_data(tmp); gg .= vec(gg) .* qfiber    # pointwise × q
+        forward_transform!(tmp)                             # → coeffs
+        @views Q[:, k] .= vec(Array(get_coeff_data(tmp)))
+    end
+    return sparse(Q)
+end
+
+# Fresh 1D ScalarField on a stand-alone copy of the coupled Jacobi basis, used only to run
+# the basis's forward/backward transform when assembling the pseudospectral NCC matrix.
+# Returns `nothing` for basis types we don't reconstruct (caller falls back).
+function _ncc_temp_field(coupled_basis)
+    lo, hi = coupled_basis.meta.bounds
+    N      = coupled_basis.meta.size
+    cname  = coupled_basis.meta.element_label
+    coord  = CartesianCoordinates(cname)
+    dist   = Distributor(coord; dtype=Float64)
+    b1     = _rebuild_jacobi_1d(coupled_basis, coord[cname], N, Float64(lo), Float64(hi))
+    b1 === nothing && return nothing
+    return ScalarField(Domain(dist, (b1,)), "_ncc_tmp")
+end
+
+_rebuild_jacobi_1d(::ChebyshevT, coord, N, lo, hi) = ChebyshevT(coord; size=N, bounds=(lo, hi))
+_rebuild_jacobi_1d(::ChebyshevU, coord, N, lo, hi) = ChebyshevU(coord; size=N, bounds=(lo, hi))
+_rebuild_jacobi_1d(::Legendre,   coord, N, lo, hi) = Legendre(coord;   size=N, bounds=(lo, hi))
+_rebuild_jacobi_1d(::Basis,      coord, N, lo, hi) = nothing
+
+# No NCC matrix (constant coefficient already handled, or unsupported+warned) → child blocks unchanged.
+_apply_implicit_ncc(::Nothing, child) = child
+function _apply_implicit_ncc(Q::AbstractMatrix, child)
+    result = Dict{Any, SparseMatrixCSC}()
+    for (var, mat) in child
+        if size(Q, 2) == size(mat, 1)
+            result[var] = sparse(Q * mat)
+        else
+            # Size mismatch (truncated/tau-augmented block) — don't crash; fall back.
+            @warn "Tarang: NCC multiply matrix $(size(Q)) incompatible with operand block " *
+                  "$(size(mat)); coefficient dropped for this block." maxlog=1
+            result[var] = mat
+        end
+    end
+    return result
 end
