@@ -2367,9 +2367,9 @@ function add_mean_task!(handler::NetCDFFileHandler, field; dims=nothing, name=no
         # Global mean (MPI-aware: combines across ranks)
         postprocess = data -> [_global_mean_val(data, field)]
     else
-        # Mean over specified dimensions
+        # Mean over specified dimensions (MPI-aware: reduce the replicated global array)
         dim_indices = resolve_dimension_indices(field, dims)
-        postprocess = data -> dropdims(netcdf_mean(data, dims=dim_indices), dims=dim_indices)
+        postprocess = data -> dropdims(netcdf_mean(_global_grid_or_local(field, data), dims=dim_indices), dims=dim_indices)
     end
 
     return add_task!(handler, field; name=name, layout=layout, scales=scales, postprocess=postprocess)
@@ -2446,10 +2446,13 @@ function add_profile_task!(handler::NetCDFFileHandler, field; dim=nothing, name=
     # Create postprocess function for profile computation
     keep_dim = resolve_dimension_index(field, dim)
 
+    # profile = mean over all dims except keep_dim. MPI-aware: reduce the replicated
+    # global array (the kept dim may itself be distributed, but the result is global
+    # + replicated so the postprocess write path is correct on every rank).
     postprocess = function(data)
-        ndims_data = ndims(data)
-        # Average over all dimensions except keep_dim
-        result = data
+        arr = _global_grid_or_local(field, data)
+        ndims_data = ndims(arr)
+        result = arr
         for d in ndims_data:-1:1
             if d != keep_dim
                 result = dropdims(netcdf_mean(result, dims=d), dims=d)
@@ -2479,7 +2482,7 @@ function add_variance_task!(handler::NetCDFFileHandler, field; dims=nothing, nam
         postprocess = data -> [_global_var_val(data, field)]   # MPI-aware global variance
     else
         dim_indices = resolve_dimension_indices(field, dims)
-        postprocess = data -> dropdims(netcdf_var(data, dims=dim_indices), dims=dim_indices)
+        postprocess = data -> dropdims(netcdf_var(_global_grid_or_local(field, data), dims=dim_indices), dims=dim_indices)
     end
 
     return add_task!(handler, field; name=name, postprocess=postprocess)
@@ -2503,7 +2506,7 @@ function add_rms_task!(handler::NetCDFFileHandler, field; dims=nothing, name=not
         postprocess = data -> [_global_rms_val(data, field)]   # MPI-aware global RMS
     else
         dim_indices = resolve_dimension_indices(field, dims)
-        postprocess = data -> sqrt.(dropdims(netcdf_mean(data .^ 2, dims=dim_indices), dims=dim_indices))
+        postprocess = data -> sqrt.(dropdims(netcdf_mean(_global_grid_or_local(field, data) .^ 2, dims=dim_indices), dims=dim_indices))
     end
 
     return add_task!(handler, field; name=name, postprocess=postprocess)
@@ -2579,6 +2582,25 @@ function _global_extremum_val(data, field, op)   # op = MPI.MIN or MPI.MAX
     comm = _reduction_comm(field)
     comm === nothing || (v = MPI.Allreduce(v, op, comm))
     return v
+end
+
+# PARTIAL reductions (mean/variance/rms over specific dims, and add_profile_task!) must
+# reduce the WHOLE field, but a task's `postprocess` receives only the field's LOCAL slab.
+# Reducing the local slab is wrong whenever the reduced axis is MPI-distributed. Postprocess
+# results bypass the per-rank-slab NetCDF write (build_layout_metadata returns nothing for
+# postprocess tasks) and every rank writes its result to the same location, so the result
+# must be GLOBAL + REPLICATED. This returns exactly that: under MPI it allgathers the field's
+# grid to a replicated global array (the same primitive integrate/average use); the partial
+# reduction below then runs on the full global data on every rank. Serial → the local array.
+function _global_grid_or_local(field, data)
+    if hasproperty(field, :dist) && field.dist !== nothing &&
+       MPI.Initialized() && hasproperty(field.dist, :size) && field.dist.size > 1
+        gd = get_grid_data(field)
+        if gd isa PencilArrays.PencilArray
+            return _allgather_global_grid(gd, field.dist.comm)
+        end
+    end
+    return data
 end
 
 # ============================================================================

@@ -60,17 +60,23 @@ function Base.:*(a::ScalarField, b::ScalarField)
         throw(ArgumentError("Cannot multiply fields with different bases"))
     end
 
+    # Dealiased product for spectral fields: delegate to the SAME nonlinear-product
+    # machinery the solver RHS uses — `evaluate_transform_multiply` (3/2-padded on
+    # serial, 2/3 input-truncation under MPI). The previous implementation multiplied
+    # on the un-padded grid and then applied a 2/3 OUTPUT cutoff, which left input
+    # modes in (N/3, N/2] aliased BELOW the cutoff (contaminating `a*b` and `dot(u,u)`).
+    # The gate uses the GLOBAL element count (prod of basis grid sizes) rather than the
+    # local-slab `length`, so under MPI every rank makes the same (collective) decision.
+    if has_spectral_bases(a) && prod(basis.meta.size for basis in a.bases) > 64
+        return evaluate_transform_multiply(a, b, _get_evaluator(a.dist))
+    end
+
     result = ScalarField(a.dist, _FIELD_ARITH_TMP_NAME, a.bases, a.dtype)
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
     ensure_layout!(result, :g)
 
     _local_data(get_grid_data(result)) .= _local_data(get_grid_data(a)) .* _local_data(get_grid_data(b))
-
-    # Apply basic dealiasing for spectral methods (3/2 rule)
-    if has_spectral_bases(a) && length(get_grid_data(a)) > 64
-        apply_dealiasing_to_product!(result)
-    end
 
     return result
 end

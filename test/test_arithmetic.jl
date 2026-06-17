@@ -354,3 +354,25 @@ end
         @test_throws ArgumentError combine_multiply(u, v)
     end
 end
+
+@testset "ScalarField product is correctly dealiased (no aliasing)" begin
+    # REGRESSION GUARD: `a*b` used to multiply on the un-padded grid then apply a 2/3
+    # OUTPUT cutoff — input modes in (N/3, N/2] aliased BELOW the cutoff and survived.
+    # It now routes through the solver's dealiased-product machinery (3/2-padded). A
+    # single mode cos(k0·x) with N/3 < k0 ≤ N/2 squares to 0.5 + 0.5cos(2k0·x); 2k0 is
+    # unresolved on the N-grid, so the dealiased square is DC ONLY — no spurious mode.
+    coords = CartesianCoordinates("x")
+    dist = Distributor(coords; mesh=(1,), dtype=Float64)
+    N = 128
+    xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))   # >64 ⇒ dealiasing engages
+    a = ScalarField(dist, "a", (xb,), Float64)
+    ensure_layout!(a, :g)
+    xs = collect(range(0, 2π, length=N + 1))[1:N]
+    Tarang.get_grid_data(a) .= cos.(50 .* xs)                 # k0=50: N/3≈42 < 50 ≤ N/2=64
+    p = a * a
+    ensure_layout!(p, :c)
+    pc = abs.(Array(Tarang.get_coeff_data(p)))
+    @test pc[1] > 1.0                                          # DC present
+    # no spurious aliased energy anywhere except DC (the k=28 contamination is gone)
+    @test maximum(pc[2:end]) < 1e-8
+end
