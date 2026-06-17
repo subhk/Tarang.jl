@@ -56,4 +56,29 @@ end
     @test Tarang._global_extremum_val(local_slab, u, MPI.MAX) == Float64(N)
 end
 
+@testset "MPI partial output reductions (profile / dims=) (np=$nprocs)" begin
+    # PARTIAL reductions (mean/var/rms over specific dims, add_profile_task!) must reduce
+    # the WHOLE field, but a postprocess sees only the local slab. `_global_grid_or_local`
+    # allgathers to a replicated global array so the reduction is correct on every rank
+    # (previously each rank reduced its slab → e.g. mean-over-x gave 4.5/12.5 not 8.5).
+    N = 16
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords)
+    xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
+    yb = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π))
+    u = ScalarField(dist, "u", (xb, yb), Float64)
+    mpired_fill!(u, (gi, gj) -> Float64(gi), N)        # value = gi (1..N), same for all y
+
+    local_slab = Array(get_grid_data(u))
+    garr = Tarang._global_grid_or_local(u, local_slab)
+    @test size(garr) == (N, N)                         # full GLOBAL array, replicated on every rank
+
+    # mean over x (the distributed axis) → y-profile = (N+1)/2 everywhere (mean of gi=1..N)
+    prof_x = dropdims(Tarang.netcdf_mean(garr, dims=1), dims=1)
+    @test all(isapprox.(prof_x, (N + 1) / 2; rtol=1e-12))
+    # mean over y → x-profile = gi (constant in y)
+    prof_y = dropdims(Tarang.netcdf_mean(garr, dims=2), dims=2)
+    @test all(isapprox.(prof_y, collect(1.0:N); rtol=1e-12))
+end
+
 MPI.Finalize()
