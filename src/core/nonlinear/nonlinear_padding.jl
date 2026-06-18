@@ -176,6 +176,40 @@ function _freq_ranges(N::Int, M::Int, is_fourier::Bool)
     return (pos_orig, pos_pad, neg_orig, neg_pad)
 end
 
+# ── Even-N Nyquist handling for the full-complex-FFT pad/truncate ────────────
+# With a full complex FFT, an even-N axis has a SINGLE Nyquist bin (k=N/2) that
+# physically represents both +N/2 and -N/2. Zero-padding must split it symmetrically
+# across ±N/2 (so the padded grid stays real/Hermitian for real fields), and
+# truncation must SUM the ±N/2 images back into the single N-grid Nyquist bin.
+# Without this the Nyquist mode of every dealiased product on an even-N Fourier axis
+# comes out at HALF amplitude. Odd N has no Nyquist bin and is untouched. Both helpers
+# use selectdim (generic over ndims, GPU-compatible) and process even axes in sequence;
+# for multiple even axes the in-place sweep correctly accumulates the corner terms.
+
+function _split_nyquist_symmetric!(padded, original_shape, padded_shape, fourier_dims)
+    for d in fourier_dims
+        N = original_shape[d]
+        (iseven(N) && padded_shape[d] > N) || continue
+        nyq = N ÷ 2 + 1                       # padded index of +N/2 (== original Nyquist)
+        mir = padded_shape[d] - N ÷ 2 + 1     # padded index of -N/2 (left zero by the copy)
+        plane = selectdim(padded, d, nyq)
+        plane .*= eltype(padded)(0.5)
+        selectdim(padded, d, mir) .= conj.(plane)
+    end
+    return padded
+end
+
+function _fold_nyquist_into_positive!(padded, original_shape, padded_shape, fourier_dims)
+    for d in fourier_dims
+        N = original_shape[d]
+        (iseven(N) && padded_shape[d] > N) || continue
+        nyq = N ÷ 2 + 1
+        mir = padded_shape[d] - N ÷ 2 + 1
+        selectdim(padded, d, nyq) .+= selectdim(padded, d, mir)
+    end
+    return padded
+end
+
 """
     _pad_spectral!(padded, spec_data, original_shape, padded_shape, fourier_dims)
 
@@ -202,6 +236,9 @@ function _pad_spectral!(padded::AbstractArray{Complex{T}}, spec_data::AbstractAr
     elseif ndim == 3
         _pad_spectral_sliced_3d!(padded, spec_data, original_shape, padded_shape, fourier_dims)
     end
+    # Split the even-N Nyquist symmetrically across ±N/2 so the padded grid stays
+    # real/Hermitian (no-op when the input has no Nyquist content).
+    _split_nyquist_symmetric!(padded, original_shape, padded_shape, fourier_dims)
 end
 
 function _pad_spectral_sliced_2d!(padded, spec_data, original_shape, padded_shape, fourier_dims)
@@ -249,6 +286,11 @@ function _truncate_spectral!(result::AbstractArray{Complex{T}}, padded_spec::Abs
                              original_shape::Tuple, padded_shape::Tuple,
                              fourier_dims::Vector{Int}) where T
     ndim = length(original_shape)
+
+    # Fold the dropped -N/2 image into the +N/2 plane (in place) along each even-N
+    # Fourier axis, so the standard copy below picks up the FULL Nyquist coefficient
+    # rather than half. Sequential per-axis folding accumulates the corner terms.
+    _fold_nyquist_into_positive!(padded_spec, original_shape, padded_shape, fourier_dims)
 
     if ndim == 1
         r = _freq_ranges(original_shape[1], padded_shape[1], 1 in fourier_dims)

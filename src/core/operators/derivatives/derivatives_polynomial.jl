@@ -176,22 +176,35 @@ function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::Sca
     end
     result.current_layout = :g
 
-    # If coefficient space is requested, apply forward DCT in-place
+    # If coefficient space is requested, convert grid → coeff.
     if layout == :c
-        if use_gpu
-            result_data_cpu = Array(get_grid_data(result))
+        has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), operand.bases)
+        if has_fourier || !(eltype_data <: AbstractFloat)
+            # Mixed Fourier×Chebyshev (or complex-valued data): the in-place DCT-I
+            # fast path (_cheb_coeff_convert!) only DCT-transforms real Chebyshev
+            # axes and leaves Fourier axes in grid space, producing a wrong-shaped
+            # /typed coeff array (the first RealFourier axis is rfft-halved). Use the
+            # framework's full basis-aware forward transform, which rffts/ffts the
+            # Fourier axes and DCT-Is the Chebyshev axes into the correct coeff buffer.
+            ensure_layout!(result, :c)
         else
-            result_data_cpu = get_grid_data(result)
-        end
+            # Pure real Chebyshev/Legendre/Jacobi domain: grid and coeff shapes/eltypes
+            # coincide, so the in-place DCT-I fast path is valid.
+            if use_gpu
+                result_data_cpu = Array(get_grid_data(result))
+            else
+                result_data_cpu = get_grid_data(result)
+            end
 
-        _cheb_coeff_convert!(result_data_cpu, operand, dims, eltype_data)
+            _cheb_coeff_convert!(result_data_cpu, operand, dims, eltype_data)
 
-        if use_gpu
-            get_coeff_data(result) .= copy_to_device(result_data_cpu, get_coeff_data(result))
-        else
-            get_coeff_data(result) .= result_data_cpu
+            if use_gpu
+                get_coeff_data(result) .= copy_to_device(result_data_cpu, get_coeff_data(result))
+            else
+                get_coeff_data(result) .= result_data_cpu
+            end
+            result.current_layout = :c
         end
-        result.current_layout = :c
     end
 end
 
@@ -389,10 +402,42 @@ function chebyshev_derivative_1d!(result::AbstractVector{T}, f::AbstractVector{T
     return result
 end
 
-# AbstractVector fallback for non-Float inputs (e.g. views of mixed type)
+# Complex inputs: the Chebyshev derivative (DCT-I + recurrence) is linear, so
+# differentiate the real and imaginary parts separately with the real kernel and
+# recombine. The cached FFTW REDFT00 plan is real-only, so this split is required
+# (and matches how the framework's Chebyshev forward transform handles complex data).
+function chebyshev_derivative_1d!(result::AbstractVector{Complex{T}}, f::AbstractVector{Complex{T}},
+                                  scale::Float64) where {T<:AbstractFloat}
+    N = length(f)
+    re = Vector{T}(undef, N); imv = Vector{T}(undef, N)
+    dre = Vector{T}(undef, N); dimv = Vector{T}(undef, N)
+    @inbounds for i in 1:N
+        re[i] = real(f[i]); imv[i] = imag(f[i])
+    end
+    chebyshev_derivative_1d!(dre, re, scale)
+    chebyshev_derivative_1d!(dimv, imv, scale)
+    @inbounds for i in 1:N
+        result[i] = complex(dre[i], dimv[i])
+    end
+    return result
+end
+
+# AbstractVector fallback for non-Float inputs (e.g. views of mixed/abstract type).
+# Promote to a concrete Float or Complex{Float} and dispatch to the typed method —
+# never re-enters this fallback, so no infinite recursion for complex eltypes.
 function chebyshev_derivative_1d!(result::AbstractVector, f::AbstractVector, scale::Float64)
     T = promote_type(eltype(result), eltype(f), Float64)
-    chebyshev_derivative_1d!(convert(Vector{T}, result), convert(Vector{T}, f), scale)
+    if T <: Complex
+        RT = real(T) <: AbstractFloat ? real(T) : Float64
+        tmp = chebyshev_derivative_1d!(Vector{Complex{RT}}(undef, length(f)),
+                                       convert(Vector{Complex{RT}}, f), scale)
+    else
+        FT = T <: AbstractFloat ? T : Float64
+        tmp = chebyshev_derivative_1d!(Vector{FT}(undef, length(f)),
+                                       convert(Vector{FT}, f), scale)
+    end
+    copyto!(result, tmp)
+    return result
 end
 
 # ============================================================================

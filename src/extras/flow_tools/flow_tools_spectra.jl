@@ -476,7 +476,7 @@ end
     - k=1 to k=N/2-1 (interior modes): count twice
     - k=N/2 (Nyquist, only if N even): count once
     """
-function calculate_spectral_kinetic_energy(velocity::VectorField; apply_conjugate_symmetry::Bool=true)
+function calculate_spectral_kinetic_energy(velocity::VectorField; apply_conjugate_symmetry::Bool=true, apply_half::Bool=true)
 
     # Get first component to determine array size (GPU-compatible allocation)
     first_component = velocity.components[1]
@@ -550,8 +550,12 @@ function calculate_spectral_kinetic_energy(velocity::VectorField; apply_conjugat
     end
 
     # Apply normalization factor (accounts for FFT scaling)
-    # Factor of 0.5 for kinetic energy definition: KE = (1/2)|u|²
-    ke_spectral .*= 0.5
+    # Factor of 0.5 for kinetic energy definition: KE = (1/2)|u|².
+    # Callers computing a plain squared magnitude Σ|v̂_i|² (e.g. enstrophy spectrum
+    # of the vorticity vector) pass apply_half=false to skip the ½.
+    if apply_half
+        ke_spectral .*= 0.5
+    end
 
     return ke_spectral
 end
@@ -1157,8 +1161,9 @@ Returns a NamedTuple with:
 """
 function calculate_radial_vector_spectrum(vector_field::VectorField, wavenumber_info::WavenumberInfo,
                                           max_wavenumber::Int, binning::SpectrumBinning=LinearBinning())
-    # Calculate |ω|² = Σ|ω̂_i|² with conjugate symmetry correction
-    vector_spectral = calculate_spectral_kinetic_energy(vector_field, apply_conjugate_symmetry=true)
+    # Calculate |ω|² = Σ|ω̂_i|² with conjugate symmetry correction.
+    # apply_half=false: this is a plain squared magnitude, NOT kinetic energy, so no ½.
+    vector_spectral = calculate_spectral_kinetic_energy(vector_field, apply_conjugate_symmetry=true, apply_half=false)
     k_magnitudes = wavenumber_info.k_magnitudes
     is_3d = wavenumber_info.kz_grid !== nothing
 
@@ -1215,7 +1220,8 @@ end
 Calculate full (non-averaged) spectrum of a vector field magnitude.
 """
 function calculate_full_vector_spectrum(vector_field::VectorField, wavenumber_info::WavenumberInfo, max_wavenumber::Int)
-    vector_spectral = calculate_spectral_kinetic_energy(vector_field, apply_conjugate_symmetry=true)
+    # apply_half=false: plain squared magnitude Σ|v̂_i|², not kinetic energy.
+    vector_spectral = calculate_spectral_kinetic_energy(vector_field, apply_conjugate_symmetry=true, apply_half=false)
 
     # Get MPI offsets
     first_component = vector_field.components[1]

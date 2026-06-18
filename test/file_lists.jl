@@ -70,6 +70,7 @@ const TEST_FILES = [
     "test_symbolic_diff.jl",
     "test_derivatives_polynomial.jl",
     "test_streamfunction.jl",
+    "test_cpu_audit_2026_06_19.jl",
     "test_analysis_tasks.jl",
     "test_phi_functions.jl",
     "test_evaluator.jl",

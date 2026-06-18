@@ -134,7 +134,12 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
                                size(result_data, d) < new_bases[d].meta.size,
                           1:length(new_bases))
     if half_axis === nothing
-        return real.(ifft(result_data))
+        # No remaining rfft half-spectrum axis. If every surviving axis is
+        # ComplexFourier the field is genuinely complex-valued, so keep the
+        # imaginary part; if any surviving axis is RealFourier (Hermitian) the
+        # physical field is real, so take the real part.
+        full = ifft(result_data)
+        return all(b -> isa(b, ComplexFourier), new_bases) ? full : real.(full)
     end
     full_axes = Tuple(d for d in 1:ndims(result_data) if d != half_axis)
     tmp = isempty(full_axes) ? result_data : ifft(result_data, full_axes)
@@ -164,13 +169,15 @@ function _interpolate_fourier_1d(coeffs::AbstractVector, basis::FourierBasis, N:
             result += factor * real(coeffs[i] * cis(k0 * k * x))
         end
         return result / N
-    else  # ComplexFourier: full unnormalized spectrum, FFT-ordered wavenumbers
+    else  # ComplexFourier: full unnormalized spectrum, FFT-ordered wavenumbers.
+        # A ComplexFourier field is the representation for genuinely complex-valued
+        # data, so the interpolant is complex in general — keep the imaginary part.
         result = complex(0.0, 0.0)
         for i in 1:N
             k = i <= N ÷ 2 + 1 ? i - 1 : i - N - 1
             result += coeffs[i] * cis(k0 * k * x)
         end
-        return real(result) / N
+        return result / N
     end
 end
 

@@ -221,10 +221,50 @@ function get_integration_weights(basis::Basis)
         _, weights = gauss_legendre_quadrature(N)
         return weights .* (L / 2)  # Scale from [-1,1] to [a,b]
 
+    elseif isa(basis, ChebyshevU) || isa(basis, ChebyshevV) ||
+           isa(basis, Ultraspherical) || isa(basis, Jacobi)
+        # These Jacobi-family bases collocate on NON-uniform Gauss / Gauss-Jacobi
+        # nodes (see _native_grid), so uniform L/N weights do NOT integrate them.
+        # Derive plain-integral weights from the basis's own reference nodes —
+        # exact for polynomials up to degree N-1, the span of the basis.
+        return _nodal_integration_weights(_native_grid(basis, 1.0), L)
+
     else
-        # Default: uniform weights
+        # Default: uniform weights (only valid for a uniform grid; kept as a
+        # defensive fallback for any future basis type).
         return fill(L / N, N)
     end
+end
+
+"""
+    _nodal_integration_weights(nodes_ref, L)
+
+Quadrature weights for an arbitrary set of nodal points `nodes_ref` on the
+reference interval [-1, 1], exact for polynomials up to degree N-1. Solves the
+(well-conditioned) Legendre Vandermonde system Vᵀ w = m, where V[k,j] = P_{j-1}(x_k)
+and m_j = ∫_{-1}^1 P_{j-1} dx = 2·δ_{j1}. Scaled by L/2 to map onto an interval of
+length L. Works for any Jacobi-family basis regardless of which Gauss/Gauss-Jacobi
+nodes it collocates on (the weights depend only on the nodes, not the basis).
+"""
+function _nodal_integration_weights(nodes_ref::AbstractVector{<:Real}, L::Real)
+    N = length(nodes_ref)
+    if N == 1
+        return [float(L)]
+    end
+    # V[k,j] = P_{j-1}(x_k) via the Legendre three-term recurrence.
+    V = Matrix{Float64}(undef, N, N)
+    @inbounds for k in 1:N
+        x = float(nodes_ref[k])
+        V[k, 1] = 1.0
+        V[k, 2] = x
+        for j in 2:(N - 1)
+            V[k, j + 1] = ((2j - 1) * x * V[k, j] - (j - 1) * V[k, j - 1]) / j
+        end
+    end
+    m = zeros(Float64, N)
+    m[1] = 2.0                    # ∫_{-1}^1 P_0 dx = 2; ∫ P_{j≥1} dx = 0 (orthogonality)
+    w_ref = transpose(V) \ m      # weights on [-1, 1]
+    return w_ref .* (L / 2)
 end
 
 """

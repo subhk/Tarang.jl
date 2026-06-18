@@ -302,18 +302,18 @@ lap_psi(x, y)     = -2.0 * sin(x) * cos(y)
     end
 
     # =======================================================================
-    # validate_streamfunction: docstring convention u=∂ψ/∂y, v=-∂ψ/∂x.
-    # Build a velocity matching THAT convention exactly and assert valid.
+    # validate_streamfunction uses the perp_grad convention u=-∂ψ/∂y, v=∂ψ/∂x
+    # (the velocity that streamfunction() itself round-trips). Build velocity via
+    # perp_grad(ψ) and assert valid.
     # =======================================================================
-    @testset "validate_streamfunction accepts u=∂ψ/∂y, v=-∂ψ/∂x" begin
+    @testset "validate_streamfunction accepts perp_grad convention u=-∂ψ/∂y, v=∂ψ/∂x" begin
         coords, dist, bases, x, y = build_periodic_2d()
         ψ = ScalarField(dist, "psi", bases, Float64)
         fill_scalar!(ψ, x, y, psi_fn)
 
-        # Build velocity to the validator's documented convention:
-        #   u = ∂ψ/∂y = -sin(x)sin(y),  v = -∂ψ/∂x = -cos(x)cos(y)
-        u = VectorField(dist, coords, "u", bases, Float64)
-        fill_vector!(u, x, y, (a, b) -> dpsi_dy(a, b), (a, b) -> -dpsi_dx(a, b))
+        # Velocity from the module's own canonical reconstruction:
+        #   u = -∂ψ/∂y = +sin(x)sin(y),  v = ∂ψ/∂x = cos(x)cos(y)
+        u = Tarang.perp_grad(ψ)
 
         result = Tarang.validate_streamfunction(u, ψ; tolerance=1e-6)
         @test result.valid
