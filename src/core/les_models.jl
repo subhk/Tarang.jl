@@ -639,27 +639,33 @@ Compute eddy diffusivity for scalar transport using AMD model.
 
 GPU-aware: Uses broadcasting for GPU arrays, optimized SIMD loops for CPU.
 
-For a scalar field b with gradient ∇b, the eddy diffusivity is:
+For a scalar field b with gradient ∇b, the AMD eddy diffusivity
+(Abkar, Bae & Moin 2016, eq. 2.7) is the FULL double contraction over the
+scaled-gradient direction k AND all velocity components i:
 
-    κₑ = max(0, κₑ†)
+    κₑ = max(0, κₑ†),   κₑ† = -C · [ Σₖ δₖ² (∂ₖ uᵢ)(∂ₖ b)(∂ᵢ b) ] / [ (∂ₗ b)(∂ₗ b) ]
 
-where:
-    κₑ† = -C (Δₖ² ∂v/∂xₖ ∂b/∂xₖ) / (∂b/∂xₙ ∂b/∂xₙ)
-
-For 2D flows, v is the vertical velocity component.
-For 3D flows (buoyancy-driven), w is the vertical velocity.
+i.e. for each direction k form the inner sum Σᵢ (∂ₖ uᵢ)(∂ᵢ b) over ALL velocity
+components uᵢ, weight by δₖ²(∂ₖ b), and sum over k. The method therefore needs
+every velocity-gradient component ∂uᵢ/∂xₖ (2D: 4 of them; 3D: 9), passed in
+component-major order, followed by the scalar gradients ∂b/∂xₖ.
+(An earlier version summed only a single velocity component, contracting the
+scaled velocity gradient with the SAME scalar-gradient direction twice — that is
+NOT the AMD diffusivity and is fixed here.)
 """
 function compute_eddy_diffusivity!(
     model::AMDModel{T, 2, A, Arch},
+    ∂u∂x::AbstractArray{T}, ∂u∂y::AbstractArray{T},
     ∂v∂x::AbstractArray{T}, ∂v∂y::AbstractArray{T},
     ∂b∂x::AbstractArray{T}, ∂b∂y::AbstractArray{T}
 ) where {T, A, Arch}
 
     # Validate input array sizes
-    _validate_gradient_sizes(model.field_size, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
+    _validate_gradient_sizes(model.field_size, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
 
-    (∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y) =
-        _coerce_arrays_to_architecture(model.architecture, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
+    (∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y) =
+        _coerce_arrays_to_architecture(model.architecture,
+                                       ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
 
     C = model.C
     Δx², Δy² = model.filter_width_sq
@@ -667,11 +673,12 @@ function compute_eddy_diffusivity!(
     clip = model.clip_negative
     eddy_diff = model.eddy_diffusivity
 
-    # Check if on GPU - use broadcasting for GPU arrays
+    # κₑ† = -[ Δx²(∂ₓb)Σᵢ(∂ₓuᵢ)(∂ᵢb) + Δy²(∂_yb)Σᵢ(∂_yuᵢ)(∂ᵢb) ] / |∇b|²
     if is_gpu(model.architecture)
         # GPU path: use broadcasting
         denom = ∂b∂x.^2 .+ ∂b∂y.^2
-        numer = .-(Δx² .* ∂v∂x .* ∂b∂x .+ Δy² .* ∂v∂y .* ∂b∂y)
+        numer = .-(Δx² .* ∂b∂x .* (∂u∂x .* ∂b∂x .+ ∂v∂x .* ∂b∂y) .+
+                   Δy² .* ∂b∂y .* (∂u∂y .* ∂b∂x .+ ∂v∂y .* ∂b∂y))
         eddy_diff .= ifelse.(denom .> eps_T, C .* numer ./ denom, zero(T))
         if clip
             eddy_diff .= max.(zero(T), eddy_diff)
@@ -679,8 +686,10 @@ function compute_eddy_diffusivity!(
     else
         # CPU path: use optimized SIMD loops
         @inbounds @simd for i in eachindex(eddy_diff)
-            denom = ∂b∂x[i]^2 + ∂b∂y[i]^2
-            numer = -(Δx² * ∂v∂x[i] * ∂b∂x[i] + Δy² * ∂v∂y[i] * ∂b∂y[i])
+            ax = ∂b∂x[i]; ay = ∂b∂y[i]
+            denom = ax^2 + ay^2
+            numer = -(Δx² * ax * (∂u∂x[i] * ax + ∂v∂x[i] * ay) +
+                      Δy² * ay * (∂u∂y[i] * ax + ∂v∂y[i] * ay))
             κₑ = denom > eps_T ? C * numer / denom : zero(T)
             κₑ = ifelse(clip, max(zero(T), κₑ), κₑ)
             eddy_diff[i] = κₑ
@@ -692,16 +701,24 @@ end
 
 function compute_eddy_diffusivity!(
     model::AMDModel{T, 3, A, Arch},
+    ∂u∂x::AbstractArray{T}, ∂u∂y::AbstractArray{T}, ∂u∂z::AbstractArray{T},
+    ∂v∂x::AbstractArray{T}, ∂v∂y::AbstractArray{T}, ∂v∂z::AbstractArray{T},
     ∂w∂x::AbstractArray{T}, ∂w∂y::AbstractArray{T}, ∂w∂z::AbstractArray{T},
     ∂b∂x::AbstractArray{T}, ∂b∂y::AbstractArray{T}, ∂b∂z::AbstractArray{T}
 ) where {T, A, Arch}
 
     # Validate input array sizes
-    _validate_gradient_sizes(model.field_size, ∂w∂x, ∂w∂y, ∂w∂z, ∂b∂x, ∂b∂y, ∂b∂z)
+    _validate_gradient_sizes(model.field_size,
+                             ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z,
+                             ∂w∂x, ∂w∂y, ∂w∂z, ∂b∂x, ∂b∂y, ∂b∂z)
 
-    (∂w∂x, ∂w∂y, ∂w∂z,
+    (∂u∂x, ∂u∂y, ∂u∂z,
+     ∂v∂x, ∂v∂y, ∂v∂z,
+     ∂w∂x, ∂w∂y, ∂w∂z,
      ∂b∂x, ∂b∂y, ∂b∂z) =
         _coerce_arrays_to_architecture(model.architecture,
+                                      ∂u∂x, ∂u∂y, ∂u∂z,
+                                      ∂v∂x, ∂v∂y, ∂v∂z,
                                       ∂w∂x, ∂w∂y, ∂w∂z,
                                       ∂b∂x, ∂b∂y, ∂b∂z)
 
@@ -711,11 +728,13 @@ function compute_eddy_diffusivity!(
     clip = model.clip_negative
     eddy_diff = model.eddy_diffusivity
 
-    # Check if on GPU - use broadcasting for GPU arrays
+    # κₑ† = -[ Σₖ δₖ²(∂ₖb) Σᵢ(∂ₖuᵢ)(∂ᵢb) ] / |∇b|², k,i ∈ {x,y,z}, u=(u,v,w)
     if is_gpu(model.architecture)
         # GPU path: use broadcasting
         denom = ∂b∂x.^2 .+ ∂b∂y.^2 .+ ∂b∂z.^2
-        numer = .-(Δx² .* ∂w∂x .* ∂b∂x .+ Δy² .* ∂w∂y .* ∂b∂y .+ Δz² .* ∂w∂z .* ∂b∂z)
+        numer = .-(Δx² .* ∂b∂x .* (∂u∂x .* ∂b∂x .+ ∂v∂x .* ∂b∂y .+ ∂w∂x .* ∂b∂z) .+
+                   Δy² .* ∂b∂y .* (∂u∂y .* ∂b∂x .+ ∂v∂y .* ∂b∂y .+ ∂w∂y .* ∂b∂z) .+
+                   Δz² .* ∂b∂z .* (∂u∂z .* ∂b∂x .+ ∂v∂z .* ∂b∂y .+ ∂w∂z .* ∂b∂z))
         eddy_diff .= ifelse.(denom .> eps_T, C .* numer ./ denom, zero(T))
         if clip
             eddy_diff .= max.(zero(T), eddy_diff)
@@ -723,8 +742,11 @@ function compute_eddy_diffusivity!(
     else
         # CPU path: use optimized SIMD loops
         @inbounds @simd for i in eachindex(eddy_diff)
-            denom = ∂b∂x[i]^2 + ∂b∂y[i]^2 + ∂b∂z[i]^2
-            numer = -(Δx² * ∂w∂x[i] * ∂b∂x[i] + Δy² * ∂w∂y[i] * ∂b∂y[i] + Δz² * ∂w∂z[i] * ∂b∂z[i])
+            ax = ∂b∂x[i]; ay = ∂b∂y[i]; az = ∂b∂z[i]
+            denom = ax^2 + ay^2 + az^2
+            numer = -(Δx² * ax * (∂u∂x[i] * ax + ∂v∂x[i] * ay + ∂w∂x[i] * az) +
+                      Δy² * ay * (∂u∂y[i] * ax + ∂v∂y[i] * ay + ∂w∂y[i] * az) +
+                      Δz² * az * (∂u∂z[i] * ax + ∂v∂z[i] * ay + ∂w∂z[i] * az))
             κₑ = denom > eps_T ? C * numer / denom : zero(T)
             κₑ = ifelse(clip, max(zero(T), κₑ), κₑ)
             eddy_diff[i] = κₑ
