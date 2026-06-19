@@ -25,15 +25,53 @@ function _spectral_operator_matrix(expr, var, eqn_size::Int, var_size::Int)
     field === nothing && return nothing
 
     if isa(expr, Laplacian)
-        return _spectral_laplacian(field, eqn_size, var_size)
+        # Composed operand (e.g. Δ(∂x(u))): build Δ as a square axis-operator and
+        # left-multiply by the operand's matrix so inner derivatives are NOT dropped.
+        if _operand_matches_variable(expr.operand, var)
+            return _spectral_laplacian(field, eqn_size, var_size)
+        end
+        return _compose_outer_with_operand(
+            _spectral_laplacian(field, var_size, var_size),
+            expr.operand, var, eqn_size, var_size)
     elseif isa(expr, FractionalLaplacian)
         return _spectral_fractional_laplacian(field, expr.α, eqn_size, var_size)
     elseif isa(expr, Differentiate)
-        return _spectral_differentiate(field, expr.coord, expr.order, eqn_size, var_size)
+        # Composed operand (e.g. ∂x(∂x(u)), ∂x(∂y(u)), ∂x(lap(u))): the old code
+        # walked straight to the innermost field and applied ONLY the outer
+        # coord/order, silently dropping every intermediate operator — so ∂x(∂x(u))
+        # was assembled as (ik)¹ instead of (ik)² = -k², turning an implicit
+        # diffusion term into an advection-like one. Recurse instead: build the
+        # outer 1D derivative as a square axis-operator and left-multiply by the
+        # operand's matrix.
+        if _operand_matches_variable(expr.operand, var)
+            return _spectral_differentiate(field, expr.coord, expr.order, eqn_size, var_size)
+        end
+        return _compose_outer_with_operand(
+            _spectral_differentiate(field, expr.coord, expr.order, var_size, var_size),
+            expr.operand, var, eqn_size, var_size)
     elseif isa(expr, Gradient)
         return _spectral_gradient(expr, var, eqn_size, var_size)
     end
     return nothing
+end
+
+"""
+    _compose_outer_with_operand(D_outer, operand, var, eqn_size, var_size)
+
+Compose an outer (square, `var_size × var_size`) spectral axis-operator with the
+matrix of a (possibly composed) inner `operand`: returns `D_outer · M(operand)`.
+Used when a differential operator wraps another operator so that intermediate
+derivatives are not dropped. Because every block here lives in the SAME coefficient
+basis (all `var_size × var_size`), operator composition is just matrix
+multiplication. Returns `nothing` if either piece can't be built or shapes mismatch.
+"""
+function _compose_outer_with_operand(D_outer, operand, var, eqn_size::Int, var_size::Int)
+    D_outer === nothing && return nothing
+    size(D_outer) == (var_size, var_size) || return nothing
+    B = build_expression_matrix_block(operand, var, var_size, var_size)
+    B === nothing && return nothing
+    result = D_outer * B
+    return size(result) == (eqn_size, var_size) ? result : nothing
 end
 
 """Get the ScalarField that the operator acts on (matching var)."""
