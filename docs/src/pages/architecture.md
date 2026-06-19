@@ -7,88 +7,71 @@ Overview of Tarang.jl's internal architecture. This page describes how the piece
 ```
 Tarang.jl/
 ├── src/
-│   ├── Tarang.jl                     # Main module
-│   ├── core/
-│   │   ├── architectures.jl            # CPU / GPU architecture abstraction
-│   │   ├── coords.jl                   # Coordinate systems
-│   │   ├── basis.jl                    # Manifest for basis/*
-│   │   ├── basis/
-│   │   │   ├── basis_core.jl
-│   │   │   ├── basis_wavenumbers.jl
-│   │   │   ├── basis_product_matrices.jl
-│   │   │   ├── basis_operators.jl
-│   │   │   └── basis_interface.jl
-│   │   ├── distributor.jl              # Manifest for distributor/*
-│   │   ├── distributor/
-│   │   │   ├── distributor_core.jl
-│   │   │   ├── distributor_mpi.jl
-│   │   │   ├── distributor_transpose.jl
-│   │   │   ├── distributor_exchange.jl
-│   │   │   └── distributor_grouped_transpose.jl
-│   │   ├── domain.jl
-│   │   ├── field/
-│   │   │   ├── field_types.jl
-│   │   │   ├── field_data.jl           # Manifest for field_data/*
-│   │   │   ├── field_data/
-│   │   │   ├── field_layout.jl         # Manifest for field_layout/*
-│   │   │   ├── field_layout/
-│   │   │   └── field_exports.jl
-│   │   ├── operators/
-│   │   │   ├── derivatives.jl          # Manifest for derivatives/*
-│   │   │   ├── operations.jl           # Manifest for operations/*
-│   │   │   ├── matrices.jl             # Manifest for matrices/*
-│   │   │   ├── tensor.jl               # Manifest for tensor/*
-│   │   │   └── ...
-│   │   ├── transforms/
-│   │   ├── problems/
-│   │   │   ├── problem_types.jl
-│   │   │   ├── problem_parsing.jl
-│   │   │   ├── problem_matrices.jl     # Manifest for problem_matrices/*
-│   │   │   ├── problem_matrices/
-│   │   │   └── problem_utils.jl
-│   │   ├── boundary_conditions.jl
-│   │   ├── subsystems.jl               # Manifest for subsystem/subproblem build + runtime
-│   │   ├── subsystems/
-│   │   │   ├── subsystem_types.jl
-│   │   │   ├── subsystem_methods.jl
-│   │   │   ├── subproblem_types.jl
-│   │   │   ├── subproblem_runtime.jl   # Manifest for I/O, BC/RHS gather, mode checks
-│   │   │   ├── subproblem_io.jl
-│   │   │   ├── subproblem_rhs.jl
-│   │   │   ├── subproblem_modes.jl
-│   │   │   ├── subproblem_build.jl     # Manifest for construction + matrix assembly
-│   │   │   ├── subproblem_build_orchestration.jl
-│   │   │   ├── subproblem_expr_helpers.jl
-│   │   │   ├── subproblem_matrix_build.jl
-│   │   │   ├── subproblem_permutations.jl
-│   │   │   ├── subproblem_matrix_utils.jl
-│   │   │   ├── subproblem_ncc.jl
-│   │   │   └── subsystem_exports.jl
-│   │   ├── solvers/
-│   │   ├── timesteppers/
-│   │   ├── evaluator.jl
-│   │   ├── nonlinear.jl               # Manifest for nonlinear/*
-│   │   └── nonlinear/
-│   ├── tools/
-│   │   ├── matsolvers.jl
-│   │   ├── gpu_matsolvers.jl
-│   │   ├── netcdf_output.jl
-│   │   ├── temporal_filters.jl        # Manifest for temporal_filters/*
-│   │   └── temporal_filters/
-│   └── extras/
-│       ├── quick_domains.jl
-│       ├── flow_tools.jl              # Manifest for flow_tools/*
-│       ├── flow_tools/
-│       └── plot_tools.jl
+│   ├── Tarang.jl                     # Root module and five-stage bootstrap
+│   ├── dependencies.jl               # External package imports
+│   ├── load_order.jl                 # Ordered implementation loaders
+│   ├── public_api.jl                 # Root-module public exports
+│   ├── runtime_init.jl               # MPI, FFTW, logging, and GPU initialization
+│   ├── core/                         # Numerical model and solver implementation
+│   │   ├── load_*.jl                 # Stable domain-level load manifests
+│   │   ├── basis/                    # Basis contracts, matrices, and wavenumbers
+│   │   ├── distributor/              # MPI layouts and transposes
+│   │   ├── field/                    # Field types, storage, and layouts
+│   │   ├── operators/                # Symbolic, evaluated, and matrix operators
+│   │   ├── problems/                 # Problem parsing and matrix assembly
+│   │   ├── solvers/                  # Solver construction and RHS execution
+│   │   ├── subsystems/               # Per-mode subproblem build and runtime
+│   │   ├── timesteppers/             # RK, multistep, IMEX, and ETD schemes
+│   │   ├── transforms/               # Serial, MPI, and backend transforms
+│   │   ├── transpose/                # Distributed transpose implementation
+│   │   └── nonlinear/                # Dealiasing and nonlinear evaluation
+│   ├── api/
+│   │   ├── public/                   # Public symbols grouped by capability
+│   │   └── namespaces.jl             # Fields/Problems/Solvers facade modules
+│   ├── tools/                        # Runtime, output, solver, and utility support
+│   │   ├── load_*.jl                 # Tool-layer load manifests
+│   │   └── temporal_filters/         # Temporal-filter implementations
+│   └── extras/                       # Convenience domains and analysis helpers
+│       ├── load_extras.jl            # Extras load manifest
+│       └── flow_tools/               # CFL, spectra, and flow diagnostics
 ├── ext/
-│   ├── TarangCUDAExt.jl
-│   └── cuda/
-├── examples/
-├── test/
-└── docs/
+│   ├── TarangCUDAExt.jl              # CUDA weak-dependency extension
+│   └── cuda/                         # GPU kernels and transform backends
+├── examples/                         # Runnable simulations
+├── test/                             # Serial, MPI, and GPU test suites
+└── docs/                             # Documenter source and build configuration
 ```
 
-Several top-level files are now thin manifest entry points. When a file and a same-named directory both exist, read the top-level file first; it tells you which focused implementation files to open next.
+This map intentionally stops at stable subsystem boundaries. For an implementation detail, open the subsystem's entry file first. Files such as `basis.jl`, `field.jl`, `problems.jl`, `solvers.jl`, and `transforms.jl` act as manifests for focused files below the same-named directory.
+
+## Package Bootstrap
+
+`src/Tarang.jl` keeps package startup declarative. It includes five files in order:
+
+1. `src/dependencies.jl` imports external dependencies.
+2. `src/load_order.jl` loads the internal implementation in dependency order.
+3. `src/public_api.jl` defines the root-module public surface from files under `src/api/public/`.
+4. `src/api/namespaces.jl` creates domain facades such as `Tarang.Fields`, `Tarang.Problems`, and `Tarang.Solvers`.
+5. `src/runtime_init.jl` defines `__init__` for MPI, FFTW threads, configuration, logging, and GPU solver discovery.
+
+The implementation order in `src/load_order.jl` is grouped by responsibility rather than by individual file:
+
+| Loader | Responsibility |
+|---|---|
+| `src/core/load_contracts.jl` | Architecture and module contracts needed by every later layer |
+| `src/tools/load_bootstrap.jl` | General utilities, exceptions, caches, dispatch, and parsing |
+| `src/core/load_fields.jl` | Coordinates, bases, distributors, domains, fields, futures, and arithmetic |
+| `src/core/load_problem_stack.jl` | Operators, transforms, BCs, problems, subproblems, and system assembly |
+| `src/tools/load_matsolvers.jl` | CPU and GPU matrix-solver backends |
+| `src/core/load_solver_stack.jl` | Solvers, forcing, timesteppers, and distributed field runtime |
+| `src/tools/load_output.jl` | Output handlers required by evaluators |
+| `src/core/load_evaluation.jl` | Evaluator and nonlinear execution |
+| `src/tools/load_runtime.jl` | Configuration, parallel utilities, logging, progress, I/O, and filters |
+| `src/core/load_models.jl` | Physics/model layers built on the solver stack |
+| `src/extras/load_extras.jl` | Optional flow tools, plotting, quick domains, and analysis tasks |
+| `src/tools/load_pretty_printing.jl` | Display methods loaded after public types exist |
+
+When load-order bugs occur, modify the owning loader rather than adding another direct include to `src/Tarang.jl`.
 
 ## Runtime Map
 
@@ -111,8 +94,9 @@ If you are reading the codebase for the first time, trace one IVP step in this o
 
 ## Contributor File Map
 
-The current tree is easier to navigate if you think in terms of focused directories rather than historic monolithic files:
+Start from the layer that owns the behavior, then follow its manifest into a focused directory:
 
+- `src/api/public/`: root public exports grouped by user capability; implementations remain in `core/`, `tools/`, or `extras/`
 - `src/core/basis/`: basis types, wavenumbers, NCC product matrices, and derivative/conversion operators
 - `src/core/distributor/`: MPI layout setup, collectives, transpose helpers, and communication-buffer management
 - `src/core/field/field_data/`: raw field storage, copying/allocation, local/global sizing, and scaling
@@ -120,9 +104,16 @@ The current tree is easier to navigate if you think in terms of focused director
 - `src/core/operators/derivatives/`, `operations/`, `matrices/`, `tensor/`: evaluation operators separated from sparse matrix assembly
 - `src/core/problems/problem_matrices/`: solver-facing matrix construction, expression analysis, spectral block builders, and legacy forcing-vector helpers
 - `src/core/subsystems/`: subsystem grouping, per-mode subproblem construction, runtime I/O/BC helpers, and NCC assembly
+- `src/core/solvers/`: solver state, stepping entry points, interpreted/compiled RHS paths, and lazy RHS evaluation
+- `src/core/timesteppers/`: timestepper types, dispatch, state management, and scheme implementations
+- `src/core/transforms/` and `src/core/transpose/`: spectral transforms and distributed data movement, respectively
 - `src/core/nonlinear/`: padding, transform setup, dealiasing, pencil compatibility helpers, and nonlinear evaluation
+- `src/tools/`: support code used across core layers; read the appropriate `load_*.jl` file to find its load boundary
 - `src/extras/flow_tools/`: CFL control, diagnostics, spectra, streamfunction/SQG helpers, QG tools, and boundary-advection helpers
 - `src/tools/temporal_filters/`: temporal-filter core types, IMEX/ETD updates, wave-mean helpers, and GQL utilities
+- `ext/cuda/`: CUDA-only implementations activated through `ext/TarangCUDAExt.jl`; core code must remain loadable without CUDA
+
+Tests mirror these ownership boundaries where practical. Use `test/file_lists.jl` to see the serial, MPI, optional, and GPU inventories used by CI.
 
 ## How the Solver Actually Works
 
