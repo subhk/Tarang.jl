@@ -1,0 +1,113 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 140">
+  <defs>
+    <!-- Deep saffron to maroon gradient -->
+    <linearGradient id="indianGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#E85D04"/>
+      <stop offset="50%" style="stop-color:#C1121F"/>
+      <stop offset="100%" style="stop-color:#780000"/>
+    </linearGradient>
+
+    <!-- Antique bronze gradient -->
+    <linearGradient id="bronzeGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#804A00"/>
+      <stop offset="25%" style="stop-color:#A0522D"/>
+      <stop offset="50%" style="stop-color:#8B4513"/>
+      <stop offset="75%" style="stop-color:#A0522D"/>
+      <stop offset="100%" style="stop-color:#6B3E26"/>
+    </linearGradient>
+
+    <!-- Subtle shadow -->
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="1" stdDeviation="1" flood-opacity="0.15"/>
+    </filter>
+  </defs>
+
+  <!-- Wave symbol in circular frame -->
+  <g transform="translate(70, 70)" filter="url(#shadow)">
+    <!-- Outer ring (mandala style) -->
+    <circle cx="0" cy="0" r="58" fill="none" stroke="url(#bronzeGradient)" stroke-width="1.5" opacity="0.5"/>
+
+    <!-- Background circle (cream/parchment) -->
+    <circle cx="0" cy="0" r="52" fill="#FFF8F0"/>
+
+    <!-- Inner decorative ring -->
+    <circle cx="0" cy="0" r="45" fill="none" stroke="url(#bronzeGradient)" stroke-width="0.5" opacity="0.3"/>
+
+    <!-- Lotus petal hints -->
+    <g opacity="0.08" fill="url(#bronzeGradient)">
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(0, 0, 0)"/>
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(45, 0, 0)"/>
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(90, 0, 0)"/>
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(135, 0, 0)"/>
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(180, 0, 0)"/>
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(225, 0, 0)"/>
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(270, 0, 0)"/>
+      <ellipse cx="0" cy="-42" rx="8" ry="16" transform="rotate(315, 0, 0)"/>
+    </g>
+
+    <!-- Three waves -->
+    <g>
+      <!-- Top wave -->
+      <path d="M -40 -12
+               C -25 -28, -10 -28, 5 -12
+               C 20 4, 35 4, 40 -12"
+            fill="none"
+            stroke="url(#indianGradient)"
+            stroke-width="3"
+            stroke-linecap="round"/>
+
+      <!-- Middle wave (bronze) -->
+      <path d="M -42 0
+               C -25 -20, -5 -20, 12 0
+               C 29 20, 45 20, 42 0"
+            fill="none"
+            stroke="url(#bronzeGradient)"
+            stroke-width="4"
+            stroke-linecap="round"/>
+
+      <!-- Bottom wave -->
+      <path d="M -40 12
+               C -25 28, -10 28, 5 12
+               C 20 -4, 35 -4, 40 12"
+            fill="none"
+            stroke="url(#indianGradient)"
+            stroke-width="3"
+            stroke-linecap="round"/>
+    </g>
+
+    <!-- Bindu dots -->
+    <circle cx="0" cy="-35" r="2" fill="url(#bronzeGradient)" opacity="0.6"/>
+    <circle cx="0" cy="35" r="2" fill="url(#bronzeGradient)" opacity="0.6"/>
+  </g>
+
+  <!-- Text: Tarang -->
+  <text x="150" y="62"
+        font-family="Georgia, 'Times New Roman', serif"
+        font-size="48"
+        font-weight="400"
+        font-style="italic"
+        fill="#5D3A1A">
+    Tarang
+  </text>
+
+  <!-- Devanagari subtitle -->
+  <text x="150" y="90"
+        font-family="'Noto Sans Devanagari', 'Mangal', sans-serif"
+        font-size="18"
+        fill="url(#indianGradient)"
+        opacity="0.85">
+    तरंग
+  </text>
+
+  <!-- Tagline -->
+  <text x="150" y="115"
+        font-family="system-ui, -apple-system, sans-serif"
+        font-size="11"
+        fill="#8B7355"
+        letter-spacing="3">
+    SPECTRAL PDE FRAMEWORK
+  </text>
+
+  <!-- Decorative line -->
+  <line x1="150" y1="125" x2="350" y2="125" stroke="url(#bronzeGradient)" stroke-width="0.5" opacity="0.4"/>
+</svg>
