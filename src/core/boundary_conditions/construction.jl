@@ -1,9 +1,34 @@
 # Boundary condition dependency detection, constructors, and manager setup helpers.
 
+"""
+    _bc_free_symbols(s) -> Set{Symbol}
+
+Free symbols referenced in a BC value expression string, via the same AST the safe
+evaluator uses. Recurses into `Expr` nodes, skipping the function-name slot of
+`:call` nodes (so `sin`/`dt` themselves are not counted as variables). This is
+needed because the old `\\bt\\b` / `\\bx\\b` word-boundary regexes silently MISS
+coordinates/time written with implicit multiplication next to a number — there is
+no word boundary in `"2t"` or `"sin(2t)"` (digit and letter are both word chars), so
+such BCs were misclassified as constant and frozen at their build-time value.
+"""
+function _bc_free_symbols(s::AbstractString)
+    syms = Set{Symbol}()
+    walk(n) = n isa Symbol ? push!(syms, n) :
+              n isa Expr ? (n.head === :call ? foreach(walk, @view n.args[2:end]) :
+                                               foreach(walk, n.args)) : nothing
+    try
+        walk(Meta.parse(String(s)))
+    catch
+    end
+    return syms
+end
+
+const _BC_SPACE_SYMBOLS = Set([:x, :y, :z, :r, :theta, :phi, :θ, :φ])
+
 """Check if value depends on time"""
 function is_time_dependent(value)
     if isa(value, String)
-        return occursin(r"\bt\b", value) || occursin("∂t(", value) || occursin("dt(", value)
+        return (:t in _bc_free_symbols(value)) || occursin("∂t(", value) || occursin("dt(", value)
     elseif isa(value, TimeDependentValue) || isa(value, TimeSpaceDependentValue)
         return true
     elseif isa(value, FieldReference)
@@ -15,10 +40,7 @@ end
 """Check if value depends on spatial coordinates"""
 function is_space_dependent(value)
     if isa(value, String)
-        # Check for common spatial coordinate patterns
-        spatial_patterns = [r"\bx\b", r"\by\b", r"\bz\b", r"\br\b", r"\btheta\b", r"\bphi\b"]
-        has_greek = occursin("θ", value) || occursin("φ", value)
-        return any(occursin(pat, value) for pat in spatial_patterns) || has_greek
+        return !isempty(intersect(_bc_free_symbols(value), _BC_SPACE_SYMBOLS))
     elseif isa(value, SpaceDependentValue) || isa(value, TimeSpaceDependentValue)
         return true
     elseif isa(value, FieldReference)

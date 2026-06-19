@@ -282,18 +282,15 @@ function subproblem_matrix(op::Interpolate, sp; kwargs...)
 
     Nz = cheb_basis.meta.size
     z0 = Float64(op.position)
-    z_min, z_max = cheb_basis.meta.bounds[1], cheb_basis.meta.bounds[2]
 
-    # Map physical position to canonical [-1, 1]
-    xi = 2.0 * (z0 - z_min) / (z_max - z_min) - 1.0
-
-    # Chebyshev evaluation: T_n(xi) row vector
-    T = zeros(ComplexF64, 1, Nz)
-    if Nz >= 1; T[1, 1] = 1.0; end
-    if Nz >= 2; T[1, 2] = xi; end
-    for n in 3:Nz
-        T[1, n] = 2.0 * xi * T[1, n-1] - T[1, n-2]
-    end
+    # Basis-aware evaluation: φ_n(z0) row for the ACTUAL stored basis. The field's
+    # coefficients are c_n with f = Σ c_n φ_n, so the point/Dirichlet BC functional
+    # f(z0)=Σ c_n φ_n(z0) must dot them with φ_n(z0) — NOT the Chebyshev-T values.
+    # Hardcoding T_n was wrong for ChebyshevU/V/Ultraspherical/Legendre/generic
+    # Jacobi (e.g. U_n(±1)=(±1)^n(n+1) ≠ T_n(±1)=(±1)^n) and at interior points for
+    # any non-Chebyshev basis. evaluate_basis maps z0→[-1,1] internally and
+    # reproduces the old T_n row exactly for ChebyshevT (no regression).
+    T = ComplexF64.(reshape(evaluate_basis(cheb_basis, [z0], 0:(Nz-1)), 1, Nz))
 
     # For vector operands, apply to each component: kron(I_ncomp, T_row)
     field = _resolve_operand_field(op.operand)
@@ -348,16 +345,20 @@ function subproblem_matrix(op::Integrate, sp; kwargs...)
     end
 
     Nz = cheb_basis.meta.size
-    z_min, z_max = cheb_basis.meta.bounds[1], cheb_basis.meta.bounds[2]
-    L = z_max - z_min
+    a_b, b_b = cheb_basis.meta.bounds[1], cheb_basis.meta.bounds[2]
 
-    # Chebyshev integration weights: ∫_{-1}^{1} T_n(x) dx = 2/(1-n²) for even n
-    w = zeros(ComplexF64, 1, Nz)
-    for k in 0:(Nz-1)
-        if k % 2 == 0
-            w[1, k+1] = ComplexF64(L / 2.0 * 2.0 / (1.0 - k^2))
-        end
-    end
+    # Basis-aware spectral integration weight row. The constraint acts on the stored
+    # spectral coefficients c_n (f = Σ c_n φ_n), so ∫f dz = Σ_n c_n (∫φ_n dz). Build
+    # the exact row w_n = ∫φ_n dz = Σ_j q_j φ_n(z_j), where q_j are the basis's own
+    # (already basis-aware) nodal quadrature weights and z_j its native collocation
+    # nodes. Hardcoding ∫T_n = L/2·2/(1-n²) was wrong — and SIGN-FLIPPED — for
+    # ChebyshevU/V/Ultraspherical/Legendre/Jacobi (e.g. ∫U_2 = +L/3, not −L/3); this
+    # reproduces the Chebyshev-T row exactly. Mirrors the operator-eval integrate fix.
+    q = get_integration_weights(cheb_basis)                    # physical nodal weights
+    x_ref = _native_grid(cheb_basis, 1.0)                      # reference nodes ∈ [-1,1]
+    z_nodes = a_b .+ (b_b - a_b) ./ 2 .* (x_ref .+ 1)          # map to physical nodes
+    Vb = evaluate_basis(cheb_basis, z_nodes, 0:(Nz-1))         # (Nz × Nz): φ_n(z_j)
+    w = ComplexF64.(reshape(permutedims(q) * Vb, 1, Nz))       # (1 × Nz) weight row
 
     # Scale by Fourier domain length for DC mode (x-integration gives Lx)
     for coord in coords

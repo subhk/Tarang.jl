@@ -137,10 +137,14 @@ this equals the old mode-count N/2, so the common case is unchanged; on L≠2π 
 the physical ceiling so no resolved mode is binned past it and dropped.
 """
 function _physical_radial_kmax(wi::WavenumberInfo)
-    kmaxes = Float64[maximum(abs, wi.kx_grid), maximum(abs, wi.ky_grid)]
-    if wi.kz_grid !== nothing
-        push!(kmaxes, maximum(abs, wi.kz_grid))
-    end
+    # Min over axes of max|k_axis| (the largest radius whose shell is fully
+    # resolved on every axis). Skip empty/absent axis grids so the 1D scalar
+    # power-spectrum path (ky_grid = empty, kz_grid = nothing) is also handled.
+    kmaxes = Float64[]
+    !isempty(wi.kx_grid) && push!(kmaxes, maximum(abs, wi.kx_grid))
+    wi.ky_grid !== nothing && !isempty(wi.ky_grid) && push!(kmaxes, maximum(abs, wi.ky_grid))
+    wi.kz_grid !== nothing && !isempty(wi.kz_grid) && push!(kmaxes, maximum(abs, wi.kz_grid))
+    isempty(kmaxes) && return 0.0
     return minimum(kmaxes)
 end
 
@@ -651,7 +655,7 @@ P_full = power_spectrum(scalar_field, radial_average=false)
 ```
 """
 function power_spectrum(field::ScalarField;
-                        max_wavenumber::Union{Int,Nothing}=nothing,
+                        max_wavenumber::Union{Real,Nothing}=nothing,
                         radial_average::Bool=true,
                         binning::SpectrumBinning=LinearBinning())
     # Validate Fourier bases
@@ -667,11 +671,15 @@ function power_spectrum(field::ScalarField;
     # Get wavenumber grid information
     wavenumber_info = get_wavenumber_info_scalar(field, fourier_axes, fourier_bases)
 
-    # Determine maximum wavenumber if not specified
+    # Determine maximum wavenumber if not specified. The grids hold PHYSICAL
+    # wavenumbers (k = 2π·n/L), so the ceiling must be the physical radial Nyquist —
+    # wavenumber_info.kmax is only a MODE COUNT and would drop modes on L<2π domains
+    # (same fix already applied to energy_spectrum).
+    phys_kmax = _physical_radial_kmax(wavenumber_info)
     if max_wavenumber === nothing
-        max_wavenumber = wavenumber_info.kmax
+        max_wavenumber = phys_kmax
     else
-        max_wavenumber = min(max_wavenumber, wavenumber_info.kmax)
+        max_wavenumber = min(float(max_wavenumber), phys_kmax)
     end
 
     # Calculate power spectrum
@@ -717,7 +725,7 @@ result = enstrophy_spectrum(velocity, binning=LogBinning(bins_per_decade=8))
 ```
 """
 function enstrophy_spectrum(velocity::VectorField;
-                            max_wavenumber::Union{Int,Nothing}=nothing,
+                            max_wavenumber::Union{Real,Nothing}=nothing,
                             radial_average::Bool=true,
                             binning::SpectrumBinning=LinearBinning())
     dim = velocity.coordsys.dim
@@ -746,10 +754,14 @@ function enstrophy_spectrum(velocity::VectorField;
         # Get wavenumber info
         wavenumber_info = get_wavenumber_info(velocity, fourier_axes, fourier_bases)
 
+        # Physical radial Nyquist ceiling (k_magnitudes are PHYSICAL k = 2π·n/L).
+        # wavenumber_info.kmax is a mode count and would discard resolved vorticity
+        # modes on L<2π domains — mirror the energy_spectrum fix.
+        phys_kmax = _physical_radial_kmax(wavenumber_info)
         if max_wavenumber === nothing
-            max_wavenumber = wavenumber_info.kmax
+            max_wavenumber = phys_kmax
         else
-            max_wavenumber = min(max_wavenumber, wavenumber_info.kmax)
+            max_wavenumber = min(float(max_wavenumber), phys_kmax)
         end
 
         if radial_average
@@ -828,10 +840,15 @@ function get_wavenumber_info_scalar(field::ScalarField, fourier_axes::Vector{Int
             offset = offsets[dim_idx]
             L = domain_size[dim_idx]
 
+            # Physical fundamental wavenumber. The grids must hold PHYSICAL
+            # wavenumbers k = k0·n (k0 = 2π/L), matching the vector path
+            # (calculate_wavenumber_grids_global) and energy_spectrum; the integer
+            # mode index alone is wrong on any non-2π domain (off by 1/k0).
+            k0 = 2π / L
             if isa(basis, RealFourier) && global_shape[dim_idx] == basis.meta.size ÷ 2 + 1
                 # RFFT half-spectrum (the FIRST RealFourier axis): k = 0, 1, ..., N/2
                 k_indices = offset:(offset + local_n - 1)
-                k_1d = collect(k_indices)
+                k_1d = k0 .* collect(k_indices)
             else
                 # Full FFT storage: ComplexFourier, OR a RealFourier axis that is NOT the
                 # first one — those are stored as a full complex FFT (length N) with
@@ -840,7 +857,7 @@ function get_wavenumber_info_scalar(field::ScalarField, fourier_axes::Vector{Int
                 # frequency mode as a large positive |k|, corrupting the spectrum.
                 global_n = global_shape[dim_idx]
                 global_k = collect(fftshift(-global_n÷2:(global_n÷2-1)))
-                k_1d = global_k[(offset+1):(offset+local_n)]
+                k_1d = k0 .* global_k[(offset+1):(offset+local_n)]
             end
             push!(k_grids, k_1d)
         end
@@ -964,7 +981,7 @@ Returns a NamedTuple with:
 - `bin_edges`: Vector of bin edges used
 """
 function calculate_radial_power_spectrum(field::ScalarField, wavenumber_info::WavenumberInfo,
-                                         max_wavenumber::Int, binning::SpectrumBinning=LinearBinning())
+                                         max_wavenumber::Real, binning::SpectrumBinning=LinearBinning())
     # Calculate spectral power density
     power_spectral = calculate_spectral_power(field)
     k_magnitudes = wavenumber_info.k_magnitudes
@@ -1115,7 +1132,7 @@ end
 
 Calculate full (non-averaged) power spectrum for a scalar field.
 """
-function calculate_full_power_spectrum(field::ScalarField, wavenumber_info::WavenumberInfo, max_wavenumber::Int)
+function calculate_full_power_spectrum(field::ScalarField, wavenumber_info::WavenumberInfo, max_wavenumber::Real)
     power_spectral = calculate_spectral_power(field)
 
     # Get MPI offsets
@@ -1160,7 +1177,7 @@ Returns a NamedTuple with:
 - `bin_edges`: Vector of bin edges used
 """
 function calculate_radial_vector_spectrum(vector_field::VectorField, wavenumber_info::WavenumberInfo,
-                                          max_wavenumber::Int, binning::SpectrumBinning=LinearBinning())
+                                          max_wavenumber::Real, binning::SpectrumBinning=LinearBinning())
     # Calculate |ω|² = Σ|ω̂_i|² with conjugate symmetry correction.
     # apply_half=false: this is a plain squared magnitude, NOT kinetic energy, so no ½.
     vector_spectral = calculate_spectral_kinetic_energy(vector_field, apply_conjugate_symmetry=true, apply_half=false)
@@ -1219,7 +1236,7 @@ end
 
 Calculate full (non-averaged) spectrum of a vector field magnitude.
 """
-function calculate_full_vector_spectrum(vector_field::VectorField, wavenumber_info::WavenumberInfo, max_wavenumber::Int)
+function calculate_full_vector_spectrum(vector_field::VectorField, wavenumber_info::WavenumberInfo, max_wavenumber::Real)
     # apply_half=false: plain squared magnitude Σ|v̂_i|², not kinetic energy.
     vector_spectral = calculate_spectral_kinetic_energy(vector_field, apply_conjugate_symmetry=true, apply_half=false)
 
