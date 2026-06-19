@@ -7,13 +7,8 @@ on:
     tags: '*'
   pull_request:
 
-# Serialize all Documentation runs. Without this, concurrent deploys — e.g. a
-# push to main (deploys /dev) and a tag/version deploy (deploys /vX.Y.Z), both
-# committing to the same gh-pages branch — race to push and the loser is rejected
-# non-fast-forward ("remote contains work that you do not have locally"). A single
-# constant group with cancel-in-progress:false queues them so each fast-forwards.
 concurrency:
-  group: documentation-deploy
+  group: docs-deployment
   cancel-in-progress: false
 
 jobs:
