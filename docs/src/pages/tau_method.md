@@ -93,19 +93,20 @@ determines `u`, `tau1`, and `tau2` **simultaneously** in a single linear solve.
 
 ## The `lift` Operator
 
-`lift` is how a tau field enters an equation. The recommended form is the
-explicit 3-arg form, with the lift basis built from `derivative_basis`:
+`lift` is how a tau field enters an equation. The explicit 3-argument form
+avoids basis auto-detection. Use the derivative order that matches the space in
+which the lifted term is added:
 
 ```julia
-lift(tau, derivative_basis(basis, 2), -k)   # full form:  explicit lift basis
+lift(tau, derivative_basis(basis, order), -k)  # explicit lift basis
 lift(tau, -k)                               # short form: auto-detects the lift basis
 ```
 
 - **`tau`** is the tau field (a `ScalarField` or `VectorField` whose bases are a strict subset of the state field's bases — it's missing the coupled direction).
-- **`derivative_basis(basis, 2)`** is the *lift basis*. For a second-order problem
-  (e.g. `Δ(u)`) you take the **second** derivative basis of the coupled Chebyshev
-  axis once, bind it to a local name (`lb2 = derivative_basis(zb, 2)`), and reuse
-  it for both lift terms. See [Why the Derivative Basis?](#why-still-pass-the-derivative-basis) below.
+- **`derivative_basis(basis, order)`** is the *lift basis*. A direct second-order
+  equation commonly uses `order = 2`; the first-order `grad_u`/`grad_T`
+  formulation used by the flow examples uses `order = 1`. Bind the result once
+  and reuse it. See [Why the Derivative Basis?](#why-still-pass-the-derivative-basis) below.
 - **`-k`** is an integer mode index with wraparound semantics: `-1` is the last coefficient slot of the coupled direction (`lift_mode = N-1` → Julia index `N`), `-2` is the second-to-last, `0` is the first, and so on. For a ChebyshevT state of size `N`, `-1` places the tau value at coefficient `N-1`. A second-order problem uses two taus with lift orders `-1` and `-2`.
 
 ### Short form dependency ordering
@@ -126,7 +127,11 @@ bad     = lift(tau_u1, -1)   # ← may throw ArgumentError: cannot auto-detect b
 u       = ScalarField(dist, "u",       (xbasis, zbasis))
 ```
 
-If you want to avoid depending on layout-cache ordering entirely, use the **explicit form** `lift(tau, derivative_basis(zb, 2), -1)`. All of Tarang's shipped examples use the explicit form (via a local `lb2 = derivative_basis(zb, 2)` binding) for exactly this reason.
+If you want to avoid depending on layout-cache ordering entirely, use the
+**explicit form**. For example, the shipped first-order convection examples use
+`lift_basis = derivative_basis(zb, 1)` and then
+`lift(tau, lift_basis, -1)`; direct second-order scalar examples use a
+second-derivative basis.
 
 ### What `lift(tau, basis, n)` actually computes (solver view)
 
@@ -142,13 +147,17 @@ where ``e_{\text{lift\_mode}}`` is the unit vector with a `1` at the `lift_mode`
 
 ### Why still pass the derivative basis?
 
-Even though the two choices produce identical matrices in the current solver, **writing `lift(tau, derivative_basis(zb, 2), -1)` is the recommended idiom**, for three reasons:
+Even though the explicit basis choices produce identical lift columns in the
+current solver, passing the intended derivative basis is useful for two reasons:
 
-1. **Forward-compatibility**: if Tarang later adopts Dedalus's fully basis-tracked lift semantics (where `op.basis` *does* determine the output coefficient space), your code will already be correct. Passing `zb` would silently start producing different matrices.
+1. **Forward-compatibility**: if Tarang later tracks the lift output basis in the
+   matrix representation, the expression already identifies the intended space.
 2. **Semantic clarity**: in first-order formulations like `grad_u = grad(u) + ez * lift(tau_u1, -1)`, the lift lives alongside `grad(u)`, which naturally maps a ChebyshevT field into the derivative space. Passing the derivative basis tells the reader what the lift is conceptually contributing, even if the linear algebra doesn't care.
-3. **Consistency with examples and tutorials**: all of Tarang's shipped examples use `derivative_basis(zb, 2)`, so sticking with it makes your code pattern-match familiar code.
 
-**Rule of thumb**: always write `lb2 = derivative_basis(zb, 2)` at the top of your setup block and use `lift(tau, lb2, -1)` (or the auto-form `lift(tau, -1)`) throughout. Don't invent your own lift basis.
+**Rule of thumb**: use `derivative_basis(zb, 1)` for a lift added to a
+first-order gradient substitution and `derivative_basis(zb, 2)` for lifts added
+directly to a second-order equation. The short form `lift(tau, -1)` is also
+valid after the distributor has cached the full state-field layout.
 
 ## Boundary Conditions as Algebraic Constraint Rows
 
@@ -203,11 +212,10 @@ Why this is better than the 2nd-order form:
 
 | Aspect | 2nd-order (`Δ(u)`) | First-order (`div(grad_u)`) |
 |---|---|---|
-| Tau fields | 1 per equation | 2 per equation (one in grad, one in ∂t) |
-| Differentiation matrices | Powers of `D` (ill-conditioned) | Products of first-order `D` (better) |
-| Boundary enforcement | Via a single lift mode | Split: one tau in grad, one in the evolution |
-| High-resolution behavior | Conditioning degrades as `N²` | Conditioning degrades as `N` |
-| Recommended | Prototyping / low `N` | Production / any `N > 64` |
+| Tau DOFs for two scalar wall constraints | 2 lift terms in the second-order equation | 2 tau fields: one in the gradient substitution and one in the evolution equation |
+| Operator representation | Second derivative assembled directly | Composition of first-order gradient and divergence operators |
+| Boundary enforcement | Two high-mode lift columns in the bulk equation | Split between the gradient substitution and evolution equation |
+| Recommended use | Compact scalar BVPs and small prototypes | Coupled IVPs and production flow problems |
 
 The convention we use throughout Tarang's examples is:
 
@@ -284,14 +292,14 @@ solver = InitialValueSolver(problem, RK222(); dt=1e-3)
 
 **Pattern summary**:
 
-- **5 BCs** (2 for `T`, 2 for `u`, 1 gauge for `p`) → **5 tau scalars per Fourier mode** (`tau_T1`, `tau_T2`, two components each of `tau_u1` and `tau_u2`, and `tau_p`).
+- The five `add_bc!` calls expand to **7 scalar constraint rows**: two temperature rows, four velocity rows (two vector components at each of two walls), and one pressure-gauge row. The tau variables supply the matching seven scalar tau DOFs: two from `tau_T1`/`tau_T2`, four from the two-component `tau_u1`/`tau_u2`, and one from `tau_p`.
 - **Each tau field drops the coupled direction** (`xbasis` only, not `zbasis`).
-- **`tau_p` is a 0-D scalar** (no bases) — it's a single number per Fourier mode, used as a gauge constraint, not a per-x correction.
+- **`tau_p` is a 0-D scalar** (no bases). It contributes a one-DOF candidate column during each subproblem build, but valid-mode filtering removes it at non-DC modes, leaving the actual gauge correction only at DC.
 - **The pressure gauge `integ(p) = 0`** is an algebraic constraint on the mean; it lives alongside the other BCs.
 
 ## Pressure Gauge and Valid-Mode Filtering
 
-In incompressible flow the pressure is only defined up to a constant, so continuity `trace(grad_u) = 0` is **rank-deficient** by one at every Fourier mode. Tarang handles this with two different mechanisms that are sometimes confused:
+In incompressible flow pressure is defined only up to one **global constant**, so the gauge ambiguity belongs to the all-zero (DC) Fourier mode. At non-DC modes the pressure fluctuation is determined, while the domain-integral gauge equation is identically `0 = 0`. Tarang handles the DC gauge and those trivial non-DC rows with two mechanisms that are sometimes confused:
 
 **1. Pressure gauge (a user-visible tau)**. You add `tau_p` to continuity and provide a gauge-fixing BC like `integ(p) = 0`:
 
@@ -318,7 +326,7 @@ The pairing uses a **smallest-column-norm heuristic**: for each zero row, the fi
 
 ## Number of Tau Terms
 
-The number of tau terms must match the total number of boundary conditions (including gauge conditions):
+The number of scalar tau DOFs must match the number of scalar constraint rows (including gauge conditions). A vector-valued `add_bc!` call contributes one scalar row per component, and a vector tau field contributes the corresponding component-wise tau DOFs:
 
 | PDE order in coupled direction | BCs needed | Tau terms per equation |
 |---|---|---|
@@ -393,11 +401,18 @@ A tau field declared in `problem.variables` but never referenced in any equation
 
 **Fix**: every tau field must appear inside exactly one `lift()` (or `τ_lift()` substitution) somewhere in the equation RHS.
 
-### 3. Wrong lift basis
+### 3. Lift basis cannot be inferred
 
-Using `lift(tau, zb, -1)` instead of `lift(tau, derivative_basis(zb, 2), -1)` works mathematically but conditions the system poorly at high resolution. Symptoms: solutions look correct at `Nz=32` but diverge or develop noise at `Nz=128`.
+The short form `lift(tau, -1)` searches distributor layout caches for a
+non-periodic basis that the tau field omits. If no full state field has yet
+registered that layout, construction raises `ArgumentError: cannot auto-detect
+basis`.
 
-**Fix**: always build the lift basis with `derivative_basis(zb, 2)` (or use the short form `lift(tau, -1)` which auto-selects it).
+**Fix**: create the full state field before using the short form, or pass the
+intended basis explicitly. Use `derivative_basis(zb, 1)` for the first-order
+gradient formulation and `derivative_basis(zb, 2)` for a direct second-order
+equation. In the current subproblem matrix builder the stored basis does not
+change the delta lift column, so it is not itself a conditioning control.
 
 ### 4. Tau field bases don't match
 

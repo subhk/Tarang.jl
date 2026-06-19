@@ -36,14 +36,14 @@ timestepper = RK111()
 
 ### RK222
 
-Second-order, 2-stage IMEX Runge-Kutta (Ascher, Ruuth, Spiteri 1997).
+Second-order IMEX Runge-Kutta using a three-stage matched ARS tableau (an explicit first stage followed by two diagonally implicit stages).
 
 ```julia
 timestepper = RK222()
 ```
 
-- **Implicit part**: 2-stage SDIRK (γ = 1 - 1/√2)
-- **Explicit part**: 2-stage explicit RK
+- **Implicit part**: ESDIRK with γ = 1 - 1/√2 on stages 2 and 3
+- **Explicit part**: matched three-row explicit tableau with `c = [0, γ, 1]`
 - **Accuracy**: O(Δt²)
 - **Stability**: L-stable
 - **Use case**: General purpose (recommended)
@@ -61,6 +61,19 @@ timestepper = RK443()
 - **Accuracy**: O(Δt³)
 - **Stability**: L-stable
 - **Use case**: High accuracy requirements, stiff problems
+
+### RKSMR
+
+The Spalart–Moser–Rogers semi-implicit scheme, stored as an equivalent four-stage additive Runge-Kutta tableau.
+
+```julia
+timestepper = RKSMR()
+```
+
+- **Explicit part**: third-order treatment of nonlinear/advection terms
+- **Implicit part**: second-order treatment of the linear term
+- **Runtime path**: the same generic IMEX driver used by `RK222` and `RK443`
+- **Use case**: incompressible spectral DNS where the classic SMR accuracy profile is desired
 
 ## Multistep IMEX Methods
 
@@ -130,7 +143,7 @@ This per-stage refresh (gated on `has_time_dependent_bcs`, so it's free when BCs
 
 RK dispatch via `step_rk_imex!` → `step_subproblem_rk!` is the obvious path, but `CNAB1`/`CNAB2`/`SBDF1..4` also dispatch through the subproblem path whenever subproblems are available (`problem.parameters["subproblems"] !== nothing`). The dispatch happens inside each `step_<scheme>!` function: it computes the scheme's `(a, b, c)` coefficient tuples and calls the generic `step_subproblem_multistep!(state, solver, sps, a, b, c)`.
 
-This means **every IMEX stepper in Tarang** that supports the subproblem path gets DAE-correct BC handling automatically. The legacy global-matrix path in the `step_multistep.jl` file still exists for pure-periodic problems without tau fields, but it's almost never exercised in practice.
+This means every IMEX stepper that supports the subproblem path gets DAE-correct BC handling automatically. The global-matrix path is still used when subproblem decomposition is unavailable, including pure-periodic/global systems. Inhomogeneous tau BCs should use the subproblem path; the global multistep path does not carry those algebraic BC values through the same override machinery.
 
 ### Why not just always use the override
 
@@ -177,7 +190,7 @@ timestepper = ETD_RK222()
 ```
 Stage 1 (predictor): a_n = exp(hL) * u_n
                      c = a_n + h * phi_1(hL) * N(u_n)
-Stage 2 (corrector): u_{n+1} = a_n + h * phi_1(hL) * N(c)
+Stage 2 (corrector): u_{n+1} = c + h * phi_2(hL) * (N(c) - N(u_n))
 ```
 
 where phi_1(z) = (exp(z) - 1) / z
@@ -198,8 +211,10 @@ timestepper = ETD_CNAB2()
 
 **Algorithm:**
 ```
-u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_AB2
-N_AB2 = (3/2) * N(u_n) - (1/2) * N(u_{n-1})
+w = h_n / h_{n-1}
+u_{n+1} = exp(hL) * u_n
+          + h * phi_1(hL) * N(u_n)
+          + h * w * phi_2(hL) * (N(u_n) - N(u_{n-1}))
 ```
 
 - **Linear part**: Exact via exponential propagator
@@ -217,9 +232,11 @@ timestepper = ETD_SBDF2()
 ```
 
 **Algorithm:**
-Uses proper 2-step exponential integration with phi_1 and phi_2 functions:
+Uses the same implemented variable-step two-step exponential update as `ETD_CNAB2`:
 ```
-u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_n + h^2 * phi_2(hL) * (N_n - N_{n-1}) / h
+w = h_n / h_{n-1}
+u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_n
+          + h * w * phi_2(hL) * (N_n - N_{n-1})
 ```
 
 - **Linear part**: Exact via exponential + phi functions
@@ -242,7 +259,7 @@ ETD methods use phi functions defined as:
 \phi_2(z) = \frac{e^z - 1 - z}{z^2}
 ```
 
-These are computed stably even for small z using Taylor series or Krylov methods.
+Scalar and small-norm matrix arguments use Taylor expansions near zero. Moderate dense matrices use a matrix exponential plus stable φ solves (with an eigen fallback for singular operators); sufficiently stiff matrices use the Krylov implementation. Matrix ETD is rejected above size 4096 because it requires dense storage.
 
 ### When to Use ETD
 
@@ -259,45 +276,14 @@ These are computed stably even for small z using Taylor series or Krylov methods
 
 ### Requirements
 
-ETD methods require:
-1. The linear operator L stored as `"L_matrix"` in problem parameters
-2. Optionally, mass matrix M as `"M_matrix"`
+ETD methods require the solver's assembled `"L_matrix"`; an assembled `"M_matrix"` is used when present. `InitialValueSolver` builds these matrices from the problem equations, so application code should not invent or manually insert a separate matrix with a different state ordering.
 
 ```julia
-# Setup L matrix for ETD
-problem.parameters["L_matrix"] = build_linear_operator(domain)
-
-# Use ETD solver
+# After defining the IVP equations, choose an ETD stepper normally.
 solver = InitialValueSolver(problem, ETD_RK222(); dt=1e-2)
 ```
 
-### Example: 1D Heat Equation with ETD
-
-```julia
-using Tarang
-
-# Setup Fourier domain (L is diagonal)
-coords = CartesianCoordinates("x")
-dist = Distributor(coords; mesh=(1,))
-x_basis = RealFourier(coords["x"]; size=128, bounds=(0.0, 2*pi))
-domain = Domain(dist, (x_basis,))
-
-# Temperature field
-T = ScalarField(dist, "T", domain.bases, Float64)
-
-# Build diagonal diffusion operator in Fourier space
-# For Fourier: d^2/dx^2 -> -k^2
-kx = wavenumbers(x_basis)
-L_diag = -nu * kx.^2  # Diagonal in spectral space
-problem.parameters["L_matrix"] = Diagonal(L_diag)
-
-# ETD solver - no stability limit from diffusion!
-solver = InitialValueSolver(problem, ETD_RK222(); dt=0.1)
-
-while solver.sim_time < t_end
-    step!(solver)
-end
-```
+For MPI pure-Fourier problems, the three exported ETD types currently dispatch to the distributed per-mode ETD-RK2 implementation because a global dense matrix exponential cannot run on distributed field vectors. If retaining the exact distinction between ETD multistep variants matters, use the serial global-matrix path.
 
 ### References
 
@@ -311,10 +297,11 @@ end
 
 | Stiffness | Indicator | Recommended |
 |-----------|-----------|-------------|
-| Mild | Moderate Re | RK222, RK443 |
-| Moderate | Higher Re | CNAB2, SBDF2 |
-| Stiff | High Re, requires tiny Δt | SBDF3, SBDF4 |
-| Very stiff (diagonal L) | Extreme diffusion | ETD_RK222, ETD_SBDF2 |
+| Mild | Explicit CFL dominates | RK222 |
+| Moderate linear stiffness | Implicit linear solve permits a larger step | RK443, CNAB2, SBDF2, RKSMR |
+| Smooth solution needing higher temporal order | Fixed/slowly varying step and adequate startup history | RK443, SBDF3, SBDF4 |
+| Very stiff, manageable global matrix | Dense exponential is affordable | ETD_RK222, ETD_CNAB2, ETD_SBDF2 |
+| Pure-Fourier diagonal linear operator | Per-mode implicit division is available | `DiagonalIMEX_RK222`, `DiagonalIMEX_RK443`, `DiagonalIMEX_SBDF2` |
 
 ### By Physics
 
@@ -322,8 +309,8 @@ end
 |--------------|-------------|
 | General purpose | RK222, RK443 |
 | Diffusion-dominated | CNAB2, SBDF2 |
-| High Rayleigh number | SBDF2, SBDF3 |
-| Turbulence | RK443 or SBDF2 |
+| High Rayleigh number | RK222, RK443, or SBDF2 with CFL control |
+| Turbulence | RK443, RKSMR, or SBDF2 with CFL control |
 | Reaction-diffusion (Fourier) | ETD_RK222 |
 | Very stiff diffusion (Fourier) | ETD_SBDF2 |
 
@@ -354,7 +341,7 @@ only constrained by advection, not diffusion.
 ### With CFL
 
 ```julia
-cfl = CFL(problem, safety=0.5)
+cfl = CFL(solver; initial_dt=solver.dt, safety=0.5)
 add_velocity!(cfl, u)
 
 while solver.sim_time < t_end
@@ -389,16 +376,18 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 
 ## Performance Comparison
 
-| Method | Evaluations/Step | Memory | Stability |
-|--------|------------------|--------|-----------|
-| RK111 | 1 + solve | Medium | Good (L-stable) |
-| RK222 | 2 + solve | Medium | Very good (L-stable) |
-| RK443 | 4 + solve | Higher | Best (L-stable) |
-| CNAB2 | 1 + solve | Medium | Very good |
-| SBDF2 | 1 + solve | Medium | Excellent |
-| ETD_RK222 | 2 + exp(hL) | Medium | Exact (linear) |
-| ETD_CNAB2 | 1 + exp(hL) | Medium | Exact (linear) |
-| ETD_SBDF2 | 1 + exp(hL) | Medium | Exact (linear) |
+| Method | RHS evaluations/step | Implicit/exponential work |
+|--------|----------------------|---------------------------|
+| RK111 | 1 | 1 implicit stage solve |
+| RK222 | 3 | 2 implicit stage solves (the first stage is explicit) |
+| RK443 | 4 | 3 implicit stage solves |
+| RKSMR | 4 | 3 implicit stage solves |
+| CNAB2 | 1 | 1 implicit solve after startup |
+| SBDF2 | 1 | 1 implicit solve after startup |
+| ETD_RK222 | 2 | cached `exp(hL)`, `phi_1`, and `phi_2` actions |
+| ETD_CNAB2 / ETD_SBDF2 | 1 | cached exponential/φ actions after ETD-RK2 startup |
+
+The implicit factorization is cached and reused while `dt` and the operator are unchanged. Adaptive steps can therefore cost more than fixed steps because changing `dt` invalidates the cached factorization.
 
 ## Example Usage
 
@@ -437,12 +426,7 @@ end
 ```julia
 using LinearAlgebra
 
-# For Fourier-based problems with diagonal L
-# Build the linear operator matrix
-L_matrix = build_diffusion_operator(domain)  # Diagonal in spectral space
-problem.parameters["L_matrix"] = L_matrix
-
-# ETD solver - no stability limit from stiff linear terms!
+# The problem equations define the assembled linear operator.
 solver = InitialValueSolver(problem, ETD_RK222(); dt=0.1)
 
 # Can use much larger timesteps when L is very stiff

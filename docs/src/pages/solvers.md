@@ -118,8 +118,9 @@ eigenvalues, eigenvectors = solve!(solver)
 
 ```julia
 RK111()  # 1st order, 1 stage
-RK222()  # 2nd order, 2 stages (recommended)
+RK222()  # 2nd order, 3 stages: explicit first stage + 2 implicit stages (recommended)
 RK443()  # 3rd order, 4 stages (higher accuracy)
+RKSMR()  # SMR: explicit 3rd order, implicit 2nd order
 ```
 
 ### IMEX Multistep Methods
@@ -136,13 +137,33 @@ SBDF3()  # Semi-implicit BDF, 3rd order
 SBDF4()  # Semi-implicit BDF, 4th order
 ```
 
+Exponential and diagonal-spectral families are also public:
+
+```julia
+ETD_RK222()
+ETD_CNAB2()
+ETD_SBDF2()
+
+DiagonalIMEX_RK222()
+DiagonalIMEX_RK443()
+DiagonalIMEX_SBDF2()
+```
+
+The ETD types use global matrix φ-functions in serial; under MPI pure-Fourier
+execution they currently share the distributed ETD-RK2 path. Diagonal IMEX
+requires a `SpectralLinearOperator` registered with
+`set_spectral_linear_operator!`.
+
 ### Choosing a Timestepper
 
 | Problem Type | Recommended |
 |--------------|-------------|
 | General purpose | RK222, RK443 |
-| Mildly stiff | CNAB2, SBDF2 |
-| Very stiff | SBDF3, SBDF4 |
+| Classic incompressible DNS | RKSMR |
+| Stiff linear term | CNAB2, SBDF2 |
+| Smooth high-order integration | RK443, SBDF3, SBDF4 |
+| Affordable global matrix exponential | ETD_RK222, ETD_CNAB2, ETD_SBDF2 |
+| Pure-Fourier diagonal linear term | Diagonal IMEX family |
 
 ## Adaptive Time Stepping
 
