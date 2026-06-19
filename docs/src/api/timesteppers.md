@@ -31,7 +31,7 @@ RK111()
 
 ### RK222
 
-2nd-order, 2-stage IMEX Runge-Kutta.
+2nd-order IMEX Runge-Kutta with three stored stages: an explicit first stage and two diagonally implicit stages.
 
 ```julia
 RK222()
@@ -39,10 +39,10 @@ RK222()
 
 **Properties**:
 - Order: 2
-- Stages: 2
-- Implicit part: 2-stage DIRK for linear terms
-- Explicit part: 2-stage explicit RK for nonlinear terms
-- Memory: 2 state copies
+- Stages: 3 (`c = [0, γ, 1]`)
+- Implicit part: ESDIRK with `γ = 1 - 1/sqrt(2)` on stages 2 and 3
+- Explicit part: matched three-row explicit tableau
+- Workspace field sets: 6 (stage state, explicit RHS, and implicit RHS storage)
 
 **Recommended for**: General purpose problems.
 
@@ -59,7 +59,7 @@ RK443()
 - Stages: 4
 - Implicit part: 4-stage DIRK for linear terms
 - Explicit part: 4-stage explicit RK for nonlinear terms
-- Memory: 4 state copies
+- Workspace field sets: 12 (three field sets per stage)
 
 **Recommended for**: High accuracy requirements.
 
@@ -101,19 +101,6 @@ SBDF4()  # 4th order
 | SBDF3 | 3 | 3 | A(α)-stable |
 | SBDF4 | 4 | 4 | A(α)-stable |
 
-### MCNAB2 / CNLF2
-
-Additional two-step multistep schemes.
-
-```julia
-MCNAB2()  # Modified Crank-Nicolson Adams-Bashforth (θ ≳ 1/2 for stiff stability)
-CNLF2()   # Crank-Nicolson Leapfrog (CN implicit + centered leapfrog explicit)
-```
-
-**Properties**: both are 2nd order, 2-step. `MCNAB2` accepts an optional CN
-weight `MCNAB2(theta)` (default `0.5`); a slightly larger `θ` improves stability
-for stiff linear terms.
-
 ## Exponential Time Differencing (ETD)
 
 Exponential integrators that treat the linear term *exactly* via the matrix
@@ -133,13 +120,16 @@ ETD_SBDF2()  # 2nd-order exponential semi-implicit BDF
 
 ## Specialized IMEX-RK
 
-Additive Runge-Kutta (ARK) and diagonal IMEX schemes.
+### RKSMR
 
 ```julia
-RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
-RKSMR()       # Spalart-Moser-Rogers IMEX-RK3 (explicit nonlinear, implicit C-N linear)
-RK443_IMEX()  # Alias of RK443 (Kennedy-Carpenter ARK3(2)4L[2]SA), suffix clarifies IMEX intent
+RKSMR()
 ```
+
+The Spalart–Moser–Rogers scheme is represented as a four-stage additive RK
+tableau. Its nonlinear/explicit part is third order and its linear/implicit part
+is second order. It uses the same generic IMEX runtime paths as `RK222` and
+`RK443`.
 
 ### Diagonal IMEX
 
@@ -187,21 +177,21 @@ Managed automatically by the solver.
 
 ## Stability Regions
 
-### Explicit Methods
+### Advective CFL
 
-CFL condition limits timestep:
+Explicitly treated advection/nonlinear terms still limit the timestep:
 
 ```math
 \Delta t < C \frac{\Delta x}{u_{max}}
 ```
 
-- RK111: C ≈ 1.0
-- RK222: C ≈ 1.0
-- RK443: C ≈ 1.4
+The admissible CFL factor depends on the PDE, spatial discretization, and chosen
+scheme; Tarang does not define universal constants for individual steppers.
 
 ### IMEX Methods
 
-Diffusive stability removed:
+Implicit linear treatment removes the corresponding explicit diffusive limit,
+but it does not remove the advective CFL limit:
 
 ```math
 \Delta t < C \frac{\Delta x}{u_{max}}
@@ -216,29 +206,29 @@ Only advective CFL, not diffusive.
 | General purpose | RK222 | Balance of cost/accuracy |
 | High accuracy | RK443 | More stages, higher order |
 | Diffusion-dominated | SBDF2 | Implicit diffusion |
-| Very stiff | SBDF3/SBDF4 | Strong stability |
+| Smooth high-order integration | RK443 or SBDF3/SBDF4 | Higher formal order; multistep methods require startup history |
+| Classic incompressible DNS IMEX | RKSMR | SMR explicit-third/implicit-second accuracy profile |
+| Diagonal Fourier linear operator | Diagonal IMEX family | Per-mode implicit division avoids a global sparse solve |
 
 ## Performance
 
 ### Computational Cost
 
-| Method | RHS Evaluations | Linear Solves |
-|--------|-----------------|---------------|
-| RK111 | 1 | 0 |
-| RK222 | 2 | 0 |
-| RK443 | 4 | 0 |
-| CNAB2 | 1 | 1 |
-| SBDF2 | 1 | 1 |
+| Method | RHS Evaluations | Implicit Solves |
+|--------|-----------------|-----------------|
+| RK111 | 1 | 1 |
+| RK222 | 3 | 2 |
+| RK443 | 4 | 3 |
+| RKSMR | 4 | 3 |
+| CNAB2 | 1 | 1 after startup |
+| SBDF2 | 1 | 1 after startup |
 
 ### Memory Requirements
 
-| Method | State Copies |
-|--------|--------------|
-| RK111 | 1 |
-| RK222 | 2 |
-| RK443 | 4 |
-| SBDF2 | 2 (history) |
-| SBDF4 | 4 (history) |
+Workspace storage is preallocated by timestepper type. The RK implementations
+reserve three field sets per stage (`X_stage`, explicit RHS, implicit RHS), while
+multistep methods use history rings and two general workspace field sets. These
+are reusable buffers, not fresh state copies allocated on every step.
 
 ## See Also
 

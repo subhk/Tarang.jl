@@ -26,10 +26,10 @@ Tarang.jl uses an explicit tau-method approach for handling boundary conditions.
 
 For any problem with non-periodic boundary conditions:
 
-1. **Create tau fields** - One per boundary condition
+1. **Create tau fields** - One scalar tau DOF per scalar constraint row (vector BCs contribute one row per component)
 2. **Add tau fields to the problem** - Include them in the field list
 3. **Add lift() terms to equations** - Place tau contributions at specific modes
-4. **Specify boundary conditions** - Link each BC to its tau field
+4. **Specify boundary conditions** - Add the algebraic constraint rows; tau columns and BC rows couple through the assembled matrix, not by a name-based link
 
 ## Complete Example: Poisson Equation
 
@@ -123,26 +123,33 @@ For viscous flows at solid walls, use vector fields for compact notation:
 u = VectorField(dist, coords, "u", (x_basis, z_basis))
 p = ScalarField(dist, "p", (x_basis, z_basis))
 
-# Vector tau fields for BCs at each wall
-tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
-tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
+# First-order tau fields: one in the gradient substitution, one in momentum
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))
 tau_p = ScalarField(dist, "tau_p", ())
+
+# First-order viscous operator
+ex, ez = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(z_basis, 1)
+τ_lift(A) = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
 
 # Pass vector fields directly to problem
 problem = IVP([u, p, tau_u1, tau_u2, tau_p])
 
-# Add parameters
-add_parameters!(problem, nu=nu)
+# Add parameters and substitutions
+add_parameters!(problem, nu=nu, grad_u=grad_u, τ_lift=τ_lift)
 
 # Momentum equation (single vector equation)
-add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2, -2) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u)")
 
 # Continuity with tau_p (removes degeneracy)
-add_equation!(problem, "div(u) + tau_p = 0")
+add_equation!(problem, "trace(grad_u) + tau_p = 0")
 
 # No-slip boundary conditions (vector notation)
 add_bc!(problem, "u(z=0) = 0")   # No-slip bottom (all components)
 add_bc!(problem, "u(z=1) = 0")   # No-slip top (all components)
+add_bc!(problem, "integ(p) = 0")  # Fix the global pressure constant
 ```
 
 ## Neumann Boundary Conditions
@@ -286,38 +293,45 @@ using Tarang
 coords = CartesianCoordinates("x", "z")
 x_basis = RealFourier(coords["x"]; size=64, bounds=(0.0, 2π))
 z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
-dist = Distributor(coords)
+dist = Distributor(coords; dtype=Float64, device=CPU())
+domain = Domain(dist, (x_basis, z_basis))
 
 # Vector velocity field
-u = VectorField(dist, coords, "u", (x_basis, z_basis))
-p = ScalarField(dist, "p", (x_basis, z_basis))
+u = VectorField(domain, "u")
+p = ScalarField(domain, "p")
 
-# Vector tau fields for velocity BCs at each wall
-tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
-tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
+# First-order tau fields
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,), Float64)
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), Float64)
 
 # Tau for pressure (removes degeneracy)
-tau_p = ScalarField(dist, "tau_p", ())
+tau_p = ScalarField(dist, "tau_p", (), Float64)
 
 # Parameters
 nu = 0.01
 dpdx = -1.0
 
-# Create problem with all fields
-problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+# First-order viscous operator
+ex, ez = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(z_basis, 1)
+τ_lift(A) = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
 
-# Add parameters
-add_parameters!(problem, nu=nu, dpdx=dpdx)
+# Create problem with all fields and register substitutions
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+add_parameters!(problem, nu=nu, dpdx=dpdx, ex=ex,
+                         grad_u=grad_u, τ_lift=τ_lift)
 
 # Momentum equation (vector form) - dpdx is the driving pressure gradient
-add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) + lift(tau_u2, -2) = -u⋅∇(u) - dpdx*ex")
+add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u) - dpdx*ex")
 
 # Continuity with tau_p (removes degeneracy)
-add_equation!(problem, "div(u) + tau_p = 0")
+add_equation!(problem, "trace(grad_u) + tau_p = 0")
 
 # No-slip at both walls (vector notation)
 add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
+add_bc!(problem, "integ(p) = 0")
 ```
 
 ### Rayleigh-Bénard Convection
@@ -328,43 +342,49 @@ using Tarang
 coords = CartesianCoordinates("x", "z")
 x_basis = RealFourier(coords["x"]; size=128, bounds=(0.0, 4.0))
 z_basis = ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
-dist = Distributor(coords)
+dist = Distributor(coords; dtype=Float64, device=CPU())
+domain = Domain(dist, (x_basis, z_basis))
 
 # Vector velocity field and scalar fields
-u = VectorField(dist, coords, "u", (x_basis, z_basis))
-p = ScalarField(dist, "p", (x_basis, z_basis))
-T = ScalarField(dist, "T", (x_basis, z_basis))
+u = VectorField(domain, "u")
+p = ScalarField(domain, "p")
+T = ScalarField(domain, "T")
 
 # Vector tau fields for velocity BCs
-tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,))  # Wall at z=0
-tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,))  # Wall at z=1
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,), Float64)
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), Float64)
 
 # Scalar tau fields for temperature BCs
-tau_T1 = ScalarField(dist, "tau_T1", (x_basis,))  # BC at z=0
-tau_T2 = ScalarField(dist, "tau_T2", (x_basis,))  # BC at z=1
+tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 
 # Tau for pressure (removes degeneracy)
-tau_p = ScalarField(dist, "tau_p", ())
+tau_p = ScalarField(dist, "tau_p", (), Float64)
 
 # Parameters
 Ra = 1e6   # Rayleigh number
 Pr = 1.0   # Prandtl number
 
-# Create problem with all fields
-problem = IVP([u, p, T, tau_u1, tau_u2, tau_T1, tau_T2, tau_p])
+# First-order substitutions
+ex, ez = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(z_basis, 1)
+τ_lift(A) = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-# Add parameter substitutions
-add_parameters!(problem, Ra=Ra, Pr=Pr)
+# Create problem with all fields and register substitutions
+problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+add_parameters!(problem, nu=Pr, buoy=Ra*Pr, ez=ez,
+                         grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 
 # Momentum equation (vector form with buoyancy)
-# ez is the unit vector in z-direction
-add_equation!(problem, "∂t(u) - Pr*Δ(u) + ∇(p) - Ra*Pr*T*ez + lift(tau_u2, -2) = -u⋅∇(u)")
+add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)")
 
 # Continuity with tau_p (removes degeneracy)
-add_equation!(problem, "div(u) + tau_p = 0")
+add_equation!(problem, "trace(grad_u) + tau_p = 0")
 
 # Temperature equation
-add_equation!(problem, "∂t(T) - Δ(T) + lift(tau_T2, -2) = -u⋅∇(T)")
+add_equation!(problem, "∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)")
 
 # Boundary conditions (vector notation for velocity)
 add_bc!(problem, "u(z=0) = 0")   # No-slip bottom
@@ -373,6 +393,7 @@ add_bc!(problem, "u(z=1) = 0")   # No-slip top
 # Fixed temperature
 add_bc!(problem, "T(z=0) = 1")   # Hot bottom
 add_bc!(problem, "T(z=1) = 0")   # Cold top
+add_bc!(problem, "integ(p) = 0")  # Pressure gauge
 ```
 
 ## Time- and Space-Dependent Boundary Conditions
@@ -485,11 +506,11 @@ check_dirichlet_bc(T, "z", :right, 0.0)
 
 ## Troubleshooting
 
-### Missing Tau Fields
+### Missing or Unused Tau Fields
 
-**Error**: `ArgumentError: Missing tau field specifications for boundary conditions`
+There is no separate automatic name-based pairing between a BC and a tau field. A missing lift column, an unused tau variable, or the wrong number of scalar tau DOFs normally appears during matrix construction or factorization as a non-square or rank-deficient system.
 
-**Solution**: Create tau fields and include lift() terms in your equations:
+**Solution**: Create the required tau fields, include every one in the problem variables, and reference every one through a lift term:
 
 ```julia
 # Wrong: No tau fields or lift terms
