@@ -180,6 +180,21 @@ function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple
 
     # Determine current layout
     is_grid_space = (field.current_layout == :g)
+    has_nonfourier = any(b -> !(isa(b, RealFourier) || isa(b, ComplexFourier)), field.bases)
+
+    if is_grid_space && has_nonfourier && get_grid_data(field) !== nothing
+        # Non-Fourier (Chebyshev/Legendre/Jacobi) axes live on non-uniform Gauss/
+        # Gauss-Lobatto nodes, so the periodic-FFT resample in resample_grid_data! is
+        # invalid (it assumes a uniform periodic grid). Resample spectrally through the
+        # basis transforms instead: forward to coefficients, resize the grid buffer,
+        # then backward — the basis-aware backward transform regenerates grid values at
+        # the new (scaled) collocation nodes exactly, for both Chebyshev and Fourier axes.
+        forward_transform!(field)            # → :c (coefficients unaffected by scale)
+        preset_scales!(field, new_scales)    # resize grid buffer; coeff size unchanged
+        backward_transform!(field)           # → :g at the new collocation nodes
+        @debug "Changed field scales via spectral (basis-aware) resample" old_scales=old_scales new_scales=new_scales
+        return field
+    end
 
     if is_grid_space && get_grid_data(field) !== nothing
         # Transform grid-space data to new resolution
@@ -343,6 +358,14 @@ function resample_1d!(new_data::AbstractVector, old_data::AbstractVector)
             # Copy positive frequencies including new Nyquist
             n_pos_new = div(n_new, 2)
             new_fft[1:n_pos_new+1] = old_fft[1:n_pos_new+1]
+            # Even n_new: the new grid's Nyquist bin (f=n_new/2) cannot distinguish
+            # +f from -f, so its correct DFT value is old_fft[+Nyq] + old_fft[-Nyq].
+            # The positive half was copied above; fold in the conjugate -Nyq partner
+            # (old index n_old - n_pos_new + 1), which the negative-freq copy below
+            # deliberately skips. Without this the new Nyquist mode is halved.
+            if iseven(n_new)
+                new_fft[n_pos_new+1] += old_fft[n_old-n_pos_new+1]
+            end
             # Copy negative frequencies (excluding Nyquist)
             n_neg_new = n_new - n_pos_new - 1  # Number of negative frequencies in new array
             if n_neg_new > 0

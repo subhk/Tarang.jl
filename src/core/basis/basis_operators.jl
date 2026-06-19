@@ -662,10 +662,47 @@ function differentiation_matrix(basis::JacobiBasis, order::Int=1)
     end
     scale = 2.0 / L
 
-    matrix = _jacobi_differentiation_matrix(N, a, b, order) * scale^order
+    is_chebyshev_t = abs(a + 0.5) < 1e-10 && abs(b + 0.5) < 1e-10
+    is_legendre    = abs(a) < 1e-10 && abs(b) < 1e-10
+    if is_chebyshev_t || is_legendre
+        # Exact sparse recurrence matrices on the reference interval; scale to physical.
+        matrix = _jacobi_differentiation_matrix(N, a, b, order) * scale^order
+    else
+        # ChebyshevU/V, Ultraspherical, generic Jacobi: the parameter-recurrence
+        # down-conversion (_general_jacobi_differentiation_matrix) is mathematically
+        # wrong, so build the coefficient differentiation matrix by collocation from
+        # the actual basis functions (already in physical coordinates → no extra
+        # scale factor). Exact for the degree-<N polynomials the basis represents.
+        matrix = _collocation_differentiation_matrix(basis, order)
+    end
 
     basis._differentiation_matrix_cache[order] = matrix
     return matrix
+end
+
+"""
+    _collocation_differentiation_matrix(basis, order) -> Matrix
+
+Coefficient-space differentiation matrix (`c' = D·c`) for a Jacobi-family basis,
+built by collocation: grid `g = B·c`, nodal derivative `g' = Dₙ·g`, derivative
+coefficients `c' = B \\ g'`, hence `D = B \\ (Dₙ·B)`. `Dₙ = _nodal_diff_matrix` is
+built on PHYSICAL nodes (domain scaling already included) and `B = evaluate_basis`
+uses the actual basis functions, so this is correct for ChebyshevU/V/Ultraspherical
+/generic Jacobi regardless of their normalization — unlike the parameter-recurrence
+path it replaces. Exact for polynomials of degree < N.
+"""
+function _collocation_differentiation_matrix(basis::JacobiBasis, order::Int)
+    N = basis.meta.size
+    if order == 0
+        return Matrix{Float64}(I, N, N)
+    end
+    a, b = basis.meta.bounds
+    native = _native_grid(basis, 1.0)                    # N reference nodes in [-1, 1]
+    nodes = [a + (x + 1) * (b - a) / 2 for x in native]  # physical nodes in [a, b]
+    B  = Matrix{Float64}(evaluate_basis(basis, nodes, 0:(N - 1)))   # B[k,n] = φ_n(x_k)
+    Dn = _nodal_diff_matrix(nodes)                        # physical nodal d/dx
+    D1 = B \ (Dn * B)                                     # one derivative, coeff space
+    return order == 1 ? D1 : D1^order
 end
 
 """Build Jacobi differentiation matrix."""

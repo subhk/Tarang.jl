@@ -7,7 +7,7 @@
     Solves the Poisson equation ∇²ψ = ω to obtain streamfunction from vorticity.
     Based on Tarang LBVP patterns for Poisson equation solving.
 
-    For incompressible 2D flow: u = ∂ψ/∂y, v = -∂ψ/∂x
+    For incompressible 2D flow (matching perp_grad): u = -∂ψ/∂y, v = ∂ψ/∂x
     Vorticity: ω = ∂v/∂x - ∂u/∂y = ∇²ψ
 
     Args:
@@ -286,18 +286,22 @@ function streamfunction_jacobi_solve(vorticity::ScalarField, bc_type::Symbol, ap
     dx2 = dx^2
     dy2 = dy^2
 
-    # Jacobi iteration coefficients
-    alpha = 2.0 / (dx2 + dy2)
+    # Jacobi iteration coefficients for the 5-point Poisson stencil ∇²ψ = ω:
+    #   (ψW+ψE-2ψ)/dx² + (ψS+ψN-2ψ)/dy² = ω  ⇒  ψ = (βx(ψW+ψE)+βy(ψS+ψN)-ω)/α
+    # with α = 2/dx² + 2/dy² (NOT 2/(dx²+dy²)). With this α the interior row-sum is
+    # exactly 1, so the iteration is diagonally dominant and converges; the source
+    # enters with a MINUS sign (∇²ψ=ω, not -ω).
+    alpha = 2.0 / dx2 + 2.0 / dy2
     beta_x = 1.0 / dx2
     beta_y = 1.0 / dy2
 
     for iter in 1:max_iter
-        # Jacobi update: psi_new[i,j] = (omega[i,j] + beta_x*(psi[i-1,j] + psi[i+1,j]) + beta_y*(psi[i,j-1] + psi[i,j+1])) / alpha
+        # Jacobi update: psi_new[i,j] = (beta_x*(psi[i-1,j] + psi[i+1,j]) + beta_y*(psi[i,j-1] + psi[i,j+1]) - omega[i,j]) / alpha
 
         for i in 2:(nx - 1), j in 2:(ny - 1)
-            psi_new[i, j] = (omega[i, j] +
-                           beta_x * (psi[i - 1, j] + psi[i + 1, j]) +
-                           beta_y * (psi[i, j - 1] + psi[i, j + 1])) / alpha
+            psi_new[i, j] = (beta_x * (psi[i - 1, j] + psi[i + 1, j]) +
+                           beta_y * (psi[i, j - 1] + psi[i, j + 1]) -
+                           omega[i, j]) / alpha
         end
 
         # Apply boundary conditions
@@ -358,7 +362,8 @@ end
 """
     Validate streamfunction by checking if it generates the correct velocity field.
 
-    For 2D incompressible flow: u = ∂ψ/∂y, v = -∂ψ/∂x
+    Uses the same sign convention as perp_grad / streamfunction (ω = ∇²ψ):
+    u = -∂ψ/∂y, v = ∂ψ/∂x.
     """
 function validate_streamfunction(velocity::VectorField, streamfunction::ScalarField; tolerance::Float64=1e-6)
 
@@ -370,15 +375,15 @@ function validate_streamfunction(velocity::VectorField, streamfunction::ScalarFi
     dpsi_dy = evaluate_differentiate(Differentiate(streamfunction, velocity.coordsys[2], 1), :g)
     dpsi_dx = evaluate_differentiate(Differentiate(streamfunction, velocity.coordsys[1], 1), :g)
 
-    # Check u = ∂ψ/∂y
+    # Check u = -∂ψ/∂y  (perp_grad convention; u + ∂ψ/∂y = 0)
     ensure_layout!(velocity.components[1], :g)
     ensure_layout!(dpsi_dy, :g)
-    u_error = maximum(abs.(get_grid_data(velocity.components[1]) - get_grid_data(dpsi_dy)))
+    u_error = maximum(abs.(get_grid_data(velocity.components[1]) + get_grid_data(dpsi_dy)))
 
-    # Check v = -∂ψ/∂x
+    # Check v = ∂ψ/∂x  (perp_grad convention; v - ∂ψ/∂x = 0)
     ensure_layout!(velocity.components[2], :g)
     ensure_layout!(dpsi_dx, :g)
-    v_error = maximum(abs.(get_grid_data(velocity.components[2]) + get_grid_data(dpsi_dx)))
+    v_error = maximum(abs.(get_grid_data(velocity.components[2]) - get_grid_data(dpsi_dx)))
 
     # MPI reduction for global error using field's communicator
     if MPI.Initialized()
