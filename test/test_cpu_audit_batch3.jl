@@ -23,8 +23,12 @@ verification, all FIXED and verified here against analytic oracles:
        (\\bt\\b regex) missed implicit-multiplication forms like "sin(2t)"/"2x",
        freezing dynamic BCs at their build-time value. Fixed via AST free-symbols.
 
-(C6 — AMD eddy-diffusivity double-contraction in les_models.jl — is a real but
- breaking-signature fix held for explicit user sign-off; not guarded here.)
+  C6 (MED) les_models.jl — AMD eddy-diffusivity numerator dropped the
+       velocity-gradient/scalar-gradient DOUBLE contraction (summed only one
+       velocity component, contracting the scaled velocity gradient with the same
+       scalar-gradient direction twice). Now the full Abkar-Moin (2016) eq 2.7
+       form over all velocity components — a BREAKING signature change (2D now
+       takes 4 velocity gradients, 3D takes 9), applied with user approval.
 """
 
 using Test
@@ -153,5 +157,96 @@ end
         @test Tarang.is_time_dependent("theta") == false       # no false positive
         @test !Tarang.is_time_dependent("0.0")
         @test !Tarang.is_space_dependent("0.0")
+    end
+
+    @testset "C6 AMD eddy diffusivity is the full double contraction" begin
+        # κₑ† = -[ Σ_k δ_k²(∂_k b) Σ_i (∂_k u_i)(∂_i b) ] / |∇b|² (Abkar-Moin 2016 eq 2.7).
+        # Oracle = explicit double sum over k AND velocity component i; the old
+        # single-component formula cannot reproduce it for these distinct values.
+        fs = (2, 2)
+        m2 = AMDModel(filter_width=(1.0, 1.0), field_size=fs)
+        du2 = ((0.3, 0.2), (-0.1, -0.4))     # du[i][k] = ∂u_i/∂x_k, i,k ∈ {x,y}
+        b2  = (0.4, 0.5)
+        compute_eddy_diffusivity!(m2,
+            fill(du2[1][1], fs), fill(du2[1][2], fs),
+            fill(du2[2][1], fs), fill(du2[2][2], fs),
+            fill(b2[1], fs), fill(b2[2], fs))
+        num2 = -sum(b2[k] * sum(du2[i][k] * b2[i] for i in 1:2) for k in 1:2)
+        exp2 = m2.C * num2 / (b2[1]^2 + b2[2]^2)
+        @test exp2 > 0
+        @test all(isapprox.(get_eddy_diffusivity(m2), max(0, exp2); atol=1e-12))
+
+        fs3 = (2, 2, 2)
+        m3 = AMDModel(filter_width=(1.0, 1.0, 1.0), field_size=fs3)
+        du3 = ((0.3, 0.2, 0.1), (-0.1, -0.4, 0.2), (0.05, -0.15, 0.25))
+        b3  = (0.4, 0.5, -0.3)
+        compute_eddy_diffusivity!(m3,
+            fill(du3[1][1], fs3), fill(du3[1][2], fs3), fill(du3[1][3], fs3),
+            fill(du3[2][1], fs3), fill(du3[2][2], fs3), fill(du3[2][3], fs3),
+            fill(du3[3][1], fs3), fill(du3[3][2], fs3), fill(du3[3][3], fs3),
+            fill(b3[1], fs3), fill(b3[2], fs3), fill(b3[3], fs3))
+        num3 = -sum(b3[k] * sum(du3[i][k] * b3[i] for i in 1:3) for k in 1:3)
+        exp3 = m3.C * num3 / (b3[1]^2 + b3[2]^2 + b3[3]^2)
+        @test exp3 > 0
+        @test all(isapprox.(get_eddy_diffusivity(m3), max(0, exp3); atol=1e-12))
+    end
+
+    @testset "R2-1 Poisson constraint solve respects the source sign" begin
+        # RHS of Δ(ψ)+others=0 is -(others). The source-field shortcut used to strip
+        # the sign, so Δ(ψ)+q=0 and Δ(ψ)-q=0 both solved to ψ=-q/k² — correct only for
+        # the -source convention. Source q=cos(2x) (kx=2,ky=0 ⇒ Δ=-4) ⇒ ψ=∓cos(2x)/4.
+        function _poisson_psi(eqstr)
+            Nx, Ny = 16, 16
+            coords = CartesianCoordinates("x", "y")
+            dist = Distributor(coords; dtype=Float64, device=CPU())
+            xb = RealFourier(coords["x"]; size=Nx, bounds=(0.0, 2pi), dealias=3/2)
+            yb = RealFourier(coords["y"]; size=Ny, bounds=(0.0, 2pi), dealias=3/2)
+            dom = Domain(dist, (xb, yb))
+            q = ScalarField(dom, "q"); psi = ScalarField(dom, "psi"); u = VectorField(dom, "u")
+            tau_psi = ScalarField(dist, "tau_psi", (), Float64)
+            prob = Tarang.IVP([q, psi, u, tau_psi])
+            Tarang.add_equation!(prob, "∂t(q) = 0")
+            Tarang.add_equation!(prob, eqstr)
+            Tarang.add_equation!(prob, "u - skew(grad(psi)) = 0")
+            Tarang.add_bc!(prob, "integ(psi) = 0")
+            solver = Tarang.InitialValueSolver(prob, SBDF1(); dt=1e-3)
+            x = Tarang.get_grid_coordinates(dom; on_device=false)["x"]
+            q["g"] = [cos(2 * x[i]) for i in 1:Nx, j in 1:Ny]
+            Tarang.evaluate_rhs(solver, solver.state, 0.0)
+            ensure_layout!(psi, :g)
+            return Array(get_grid_data(psi)), [cos(2 * x[i]) / 4 for i in 1:Nx, j in 1:Ny]
+        end
+        psiA, q4 = _poisson_psi("Δ(psi) + tau_psi - q = 0")   # Δψ=q ⇒ ψ=-q/4
+        psiB, _  = _poisson_psi("Δ(psi) + tau_psi + q = 0")   # Δψ=-q ⇒ ψ=+q/4
+        @test maximum(abs.(psiA .- (.-q4))) < 1e-9            # -source stays correct
+        @test maximum(abs.(psiB .- q4)) < 1e-9               # +source now +q/4, not -q/4
+    end
+
+    @testset "R3-1 DiffusionSpec(implicit=true) applies diffusion, not silently dropped" begin
+        # The explicit boundary-advection module has no implicit solver, so implicit=true
+        # used to DROP the diffusion term entirely (field bit-for-bit unchanged). It is now
+        # applied explicitly (with a one-time warning) — identical to implicit=false.
+        function _bad_diffuse(implicit_flag)
+            bad = Tarang.boundary_advection_diffusion_setup(
+                Lx=2π, Ly=2π, Nx=16, Ny=16,
+                boundaries=[Tarang.BoundarySpec("s", :z, 0.0)],
+                velocity_source=Tarang.PrescribedVelocity(),
+                diffusion=Tarang.DiffusionSpec(type=:laplacian, coefficient=0.5, implicit=implicit_flag))
+            f = bad.fields["s"]; ensure_layout!(f, :g)
+            gd = Tarang.get_grid_data(f)
+            for i in 1:16, j in 1:16
+                gd[i, j] = sin((i - 1) * 2π / 16) * cos((j - 1) * 2π / 16)
+            end
+            init = copy(Array(gd))
+            for _ in 1:5
+                Tarang.bad_step!(bad, 0.01)
+            end
+            ensure_layout!(f, :g)
+            return init, Array(Tarang.get_grid_data(f))
+        end
+        initT, finalT = _bad_diffuse(true)
+        _, finalF = _bad_diffuse(false)
+        @test maximum(abs.(finalT .- initT)) > 1e-3       # diffusion actually applied (was 0 change)
+        @test maximum(abs.(finalT .- finalF)) < 1e-12     # implicit=true ≡ explicit treatment now
     end
 end

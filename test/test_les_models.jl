@@ -88,16 +88,20 @@ end
     predictor3 = _amd_predictor_3d(model_amd3.C, 1.0, 1.0, 1.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     @test all(isapprox.(get_eddy_viscosity(model_amd3), predictor3; atol=1e-12))
 
-    # Eddy diffusivity
+    # Eddy diffusivity — FULL AMD double contraction (Abkar-Moin 2016 eq 2.7):
+    # κₑ† = -[ Σₖ δₖ²(∂ₖb) Σᵢ(∂ₖuᵢ)(∂ᵢb) ] / |∇b|². NON-tautological oracle: the
+    # cross terms (∂v/∂x·∂b/∂y, ∂u/∂y·∂b/∂x) MUST contribute, so the old
+    # single-velocity-component formula gives a different (wrong) value here.
     model_diff = AMDModel(filter_width=(1.0, 1.0), field_size=field_size)
-    w_x = fill(0.2, field_size)
-    w_y = fill(-0.1, field_size)
-    b_x = fill(0.4, field_size)
-    b_y = fill(-0.5, field_size)
-    compute_eddy_diffusivity!(model_diff, w_x, w_y, b_x, b_y)
-    denom = 0.4^2 + (-0.5)^2
-    numer = -(1.0^2 * 0.2 * 0.4 + 1.0^2 * -0.1 * -0.5)
+    ux = fill(0.3, field_size);  uy = fill(0.2, field_size)
+    vx = fill(-0.1, field_size); vy = fill(-0.4, field_size)
+    bx = fill(0.4, field_size);  by = fill(0.5, field_size)
+    compute_eddy_diffusivity!(model_diff, ux, uy, vx, vy, bx, by)
+    ax = 0.4; ay = 0.5
+    numer = -(1.0 * ax * (0.3 * ax + (-0.1) * ay) + 1.0 * ay * (0.2 * ax + (-0.4) * ay))
+    denom = ax^2 + ay^2
     expected_diff = model_diff.C * numer / denom
+    @test expected_diff > 0     # non-trivial (not clipped to zero); cross-terms matter
     @test all(isapprox.(get_eddy_diffusivity(model_diff), max(0, expected_diff); atol=1e-12))
 
     # Diagnostics
@@ -139,18 +143,18 @@ if _CUDA_AVAILABLE
         predictor = _amd_predictor_3d(model_gpu_amd.C, 1.0, 1.0, 1.0, 0.25, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         @test all(isapprox.(Array(get_eddy_viscosity(model_gpu_amd)), max(0, predictor); rtol=1e-6))
 
-        # GPU eddy diffusivity with CPU gradients (conversion check)
+        # GPU eddy diffusivity with CPU gradients (conversion check) — full AMD
+        # double contraction (Abkar-Moin 2016 eq 2.7) needs all 9 velocity gradients.
         reset!(model_gpu_amd)
-        w_x = fill(0.2f0, (2, 2, 2))
-        w_y = fill(-0.1f0, (2, 2, 2))
-        w_z = fill(0.05f0, (2, 2, 2))
-        b_x = fill(0.4f0, (2, 2, 2))
-        b_y = fill(-0.5f0, (2, 2, 2))
-        b_z = fill(0.3f0, (2, 2, 2))
-        compute_eddy_diffusivity!(model_gpu_amd, w_x, w_y, w_z, b_x, b_y, b_z)
-        denom = 0.4^2 + (-0.5)^2 + 0.3^2
-        numer = -(1.0 * 0.2 * 0.4 + 1.0 * -0.1 * -0.5 + 1.0 * 0.05 * 0.3)
-        expected_diff = model_gpu_amd.C * numer / denom
+        du = ((0.2f0, -0.1f0, 0.05f0), (0.1f0, 0.15f0, -0.05f0), (0.05f0, -0.1f0, 0.2f0))
+        bg = (0.4f0, -0.5f0, 0.3f0)
+        compute_eddy_diffusivity!(model_gpu_amd,
+            fill(du[1][1], (2, 2, 2)), fill(du[1][2], (2, 2, 2)), fill(du[1][3], (2, 2, 2)),
+            fill(du[2][1], (2, 2, 2)), fill(du[2][2], (2, 2, 2)), fill(du[2][3], (2, 2, 2)),
+            fill(du[3][1], (2, 2, 2)), fill(du[3][2], (2, 2, 2)), fill(du[3][3], (2, 2, 2)),
+            fill(bg[1], (2, 2, 2)), fill(bg[2], (2, 2, 2)), fill(bg[3], (2, 2, 2)))
+        numer = -sum(bg[k] * sum(du[i][k] * bg[i] for i in 1:3) for k in 1:3)
+        expected_diff = model_gpu_amd.C * numer / (bg[1]^2 + bg[2]^2 + bg[3]^2)
         @test all(isapprox.(Array(get_eddy_diffusivity(model_gpu_amd)), max(0, expected_diff); rtol=1e-6))
     end
 else

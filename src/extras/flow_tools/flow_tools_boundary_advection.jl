@@ -484,8 +484,18 @@ function bad_compute_rhs!(bad::BoundaryAdvectionDiffusion, boundary_name::String
     get_grid_data(rhs) .= -(get_grid_data(velocity.components[1]) .* get_grid_data(dfdx) .+
                     get_grid_data(velocity.components[2]) .* get_grid_data(dfdy))
 
-    # Diffusion term (explicit part)
-    if bad.diffusion.coefficient > 0 && !bad.diffusion.implicit
+    # Diffusion term. This boundary-advection module has only EXPLICIT timesteppers
+    # (no implicit / operator-split solve exists anywhere), so `implicit=true` is
+    # applied explicitly rather than SILENTLY DROPPED — the old `!implicit` guard
+    # removed the diffusion entirely, leaving the field fully under-dissipated with
+    # no error. Warn once so a stiff κ isn't integrated unstably without notice.
+    if bad.diffusion.coefficient > 0
+        if bad.diffusion.implicit
+            @warn "DiffusionSpec(implicit=true) is not supported by the explicit " *
+                  "boundary-advection timesteppers; treating diffusion EXPLICITLY. " *
+                  "Reduce dt for stability, or use the main solver framework for a " *
+                  "true implicit diffusion solve." maxlog=1
+        end
         diff_term = compute_diffusion_term(bad, field)
         get_grid_data(rhs) .+= get_grid_data(diff_term)
     end

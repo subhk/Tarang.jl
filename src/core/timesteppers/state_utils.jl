@@ -920,12 +920,26 @@ function _evaluate_poisson_rhs(problem, other_lhs_terms, F_expr)
     if other_lhs_terms !== nothing
         # Try to extract the main source field from the other terms
         # Look for ScalarField or NegateOperator(ScalarField)
-        source_field = _find_source_field_in_terms(other_lhs_terms)
+        found = _find_source_field_in_terms(other_lhs_terms)
 
-        if source_field !== nothing
-            @debug "Found source field: $(source_field.name)"
+        if found !== nothing
+            source_field, was_negated = found
+            @debug "Found source field: $(source_field.name) (negated=$was_negated)"
             rhs_value = copy(source_field)
             ensure_layout!(rhs_value, :c)
+            # RHS = -(other LHS terms). A source written with '+' in the constraint
+            # LHS (Δ(ψ) + q = 0  ⇒  Δψ = -q) contributes -source to the RHS; one
+            # written negated (Δ(ψ) - q = 0  ⇒  Δψ = +q) contributes +source. The old
+            # shortcut always copied +source, giving the WRONG SIGN for the +source
+            # convention (only the -source form was correct).
+            if !was_negated
+                coeff_data = get_coeff_data(rhs_value)
+                if isa(coeff_data, PencilArrays.PencilArray)
+                    parent(coeff_data) .*= -1
+                else
+                    coeff_data .*= -1
+                end
+            end
             @debug "Created RHS for Poisson solve from $(source_field.name)"
         else
             # Fallback: try to evaluate directly
@@ -976,8 +990,10 @@ end
 
 """
 Find the main spatial source field in an expression, ignoring 0D fields (tau variables).
-For "tau - q", this returns q.
-For "-q", this returns q.
+Returns `(field, was_negated)` — `was_negated` records whether the field appeared
+behind a NegateOperator in the constraint LHS, so the caller can give it the correct
+RHS sign (RHS = -(LHS terms)). Returns `nothing` if no spatial source field is found.
+For "tau - q" → (q, true); for "+q" → (q, false); for "-q" → (q, true).
 """
 function _find_source_field_in_terms(expr)
     # Flatten to get all terms
@@ -986,27 +1002,27 @@ function _find_source_field_in_terms(expr)
     for term in terms
         # Direct ScalarField with spatial dimensions
         if isa(term, ScalarField) && !isempty(term.bases)
-            return term
+            return (term, false)
         end
 
         # NegateOperator around ScalarField
         if isa(term, NegateOperator)
             inner = term.operand
             if isa(inner, ScalarField) && !isempty(inner.bases)
-                return inner
+                return (inner, true)
             end
         end
     end
 
     # Try to handle single term that's not an AddOperator
     if isa(expr, ScalarField) && !isempty(expr.bases)
-        return expr
+        return (expr, false)
     end
 
     if isa(expr, NegateOperator)
         inner = expr.operand
         if isa(inner, ScalarField) && !isempty(inner.bases)
-            return inner
+            return (inner, true)
         end
     end
 
