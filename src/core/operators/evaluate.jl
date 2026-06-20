@@ -324,7 +324,7 @@ _divide_result(left::Number, right::Number, ::Symbol) = left / right
 # expressions like `1/u` or `B/rho0`) previously threw for these, so the SAME term
 # that works inside the solver errored when evaluated for output. `divide_operands`
 # raises its own clear error for genuinely-unsupported combinations.
-_divide_result(left, right, ::Symbol) = divide_operands(left, right)
+_divide_result(left, right, layout::Symbol) = _ensure_result_layout!(divide_operands(left, right), layout)
 
 """
     evaluate_power(op::PowerOperator, layout::Symbol=:g)

@@ -901,7 +901,11 @@ end
 
 Compute the subgrid-scale dissipation rate:
 
-    εₛₛ = 2 νₑ |S̄|²
+    εₛₛ = νₑ |S̄|²
+
+where `|S̄| = √(2 S̄ᵢⱼS̄ᵢⱼ)` (the convention used by `compute_eddy_viscosity!`).
+The exact dissipation is εₛₛ = -τᵢⱼ S̄ᵢⱼ = 2 νₑ S̄ᵢⱼS̄ᵢⱼ = νₑ |S̄|² with that `|S̄|`;
+an extra factor of 2 here would double-count (the strain magnitude already carries it).
 
 GPU-aware: Uses broadcasting which works for both CPU and GPU arrays.
 Returns the dissipation field.
@@ -909,7 +913,7 @@ Returns the dissipation field.
 function sgs_dissipation(model::EddyViscosityModel, strain_magnitude::AbstractArray{T}) where T
     νₑ = model.eddy_viscosity
     # Use broadcasting - works for both CPU and GPU arrays
-    return T(2) .* νₑ .* strain_magnitude.^2
+    return νₑ .* strain_magnitude.^2
 end
 
 """
@@ -922,8 +926,9 @@ function mean_sgs_dissipation(model::EddyViscosityModel, strain_magnitude::Abstr
     νₑ = model.eddy_viscosity
     n = length(νₑ)
     n == 0 && return zero(T)
-    # Use broadcasting and sum - works for both CPU and GPU
-    return sum(T(2) .* νₑ .* strain_magnitude.^2) / n
+    # Use broadcasting and sum - works for both CPU and GPU.
+    # εₛₛ = νₑ |S̄|² with |S̄| = √(2 S̄ᵢⱼS̄ᵢⱼ); no extra factor of 2 (see sgs_dissipation).
+    return sum(νₑ .* strain_magnitude.^2) / n
 end
 
 # ============================================================================

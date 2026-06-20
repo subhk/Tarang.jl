@@ -200,14 +200,17 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         F_nm1 = F_history[end]
 
         dt_prev = length(state.dt_history) >= 2 ? state.dt_history[end-1] : dt
-        if !isapprox(dt, dt_prev, rtol=0.01)
-            @warn "DiagonalIMEX_SBDF2 uses constant-dt coefficients but dt/dt_prev = $(dt/dt_prev). Use SBDF2 (step_multistep.jl) for variable timesteps." maxlog=1
-        end
 
         new_state = copy_state(X_n)
         if L_spectral !== nothing
             _sbdf2_apply_bdf2_L!(new_state, X_n, X_nm1, F_n, F_nm1, dt, dt_prev, L_spectral)
         else
+            # Variable-dt SBDF2 (L̂ = 0, no spectral linear operator). w = dtₙ/dtₙ₋₁;
+            # reduces to the constant-dt (2, −½, 2, −1)/1.5 weights at w = 1. The previous
+            # hardcoded constant-dt coefficients were inconsistent under adaptive dt.
+            w = dt / dt_prev
+            a0 = (1.0 + 2.0w) / (1.0 + w)
+            a2 = w * w / (1.0 + w)
             for (i, result) in enumerate(new_state)
                 field_n = X_n[i];  field_nm1 = X_nm1[i]
                 f_n = F_n[i];      f_nm1 = F_nm1[i]
@@ -215,8 +218,8 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
                 ensure_layout!(f_n, :c);      ensure_layout!(f_nm1, :c)
                 ensure_layout!(result, :c)
                 d = get_coeff_data(result)
-                @. d = (2*get_coeff_data(field_n) - 0.5*get_coeff_data(field_nm1) +
-                        dt*(2*get_coeff_data(f_n) - get_coeff_data(f_nm1))) / 1.5
+                @. d = ((1.0 + w) * get_coeff_data(field_n) - a2 * get_coeff_data(field_nm1) +
+                        dt * ((1.0 + w) * get_coeff_data(f_n) - w * get_coeff_data(f_nm1))) / a0
             end
         end
 

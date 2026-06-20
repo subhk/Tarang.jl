@@ -109,7 +109,8 @@ end
     fill!(smag.eddy_viscosity, 0.5)
     mags = fill(0.3, (2, 2, 2))
     diss = sgs_dissipation(smag, mags)
-    @test all(diss .== 2 * 0.5 .* mags .^ 2)
+    # εₛₛ = νₑ|S̄|² with |S̄| = √(2 S̄ᵢⱼS̄ᵢⱼ); no extra factor of 2 (CPU audit 2026-06-20).
+    @test all(diss .== 0.5 .* mags .^ 2)
     avg = mean_sgs_dissipation(smag, mags)
     @test isapprox(avg, mean(diss); atol=1e-12)
 end

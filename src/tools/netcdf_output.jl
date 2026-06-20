@@ -2649,14 +2649,21 @@ function resolve_dimension_index(field, dim)
             ))
         end
 
-        # Map symbolic dimensions to indices
+        # Resolve against the field's ACTUAL axis order first. Coordinate names are
+        # arbitrary user strings, so the x=1/y=2/z=3 table must NOT take precedence over a
+        # field whose axes are e.g. (z, x): the operator path (operations_integrate.jl)
+        # resolves via basis.meta.element_label, and these task helpers must match it, or
+        # they silently reduce the WRONG axis (out-of-range dims are a silent no-op).
+        idx = get_dimension_index_from_field(field, dim)
+        if idx !== nothing
+            return idx
+        end
+        # Last-resort positional default only when no field coordinate matches.
         dim_map = Dict(:x => 1, :y => 2, :z => 3)
         if haskey(dim_map, dim)
             return dim_map[dim]
-        else
-            # Try to get from field's domain
-            return get_dimension_index_from_field(field, dim)
         end
+        throw(ArgumentError("Cannot resolve dimension :$dim against the field's coordinates"))
     else
         throw(ArgumentError("Unsupported dimension specification: $dim"))
     end
@@ -2677,19 +2684,17 @@ end
 Get dimension index from field's domain information.
 """
 function get_dimension_index_from_field(field, dim_symbol)
-    if isa(field, ScalarField) && field.domain !== nothing
-        # Try to match against coordinate names
+    if hasproperty(field, :bases)
+        # Match against each basis's coordinate label. Use basis.meta.element_label —
+        # the SAME attribute the operator path (operations_integrate.jl) resolves on —
+        # not basis.coord.name (which the previous broken fallback used).
         for (i, basis) in enumerate(field.bases)
-            if hasproperty(basis, :coord) && hasproperty(basis.coord, :name)
-                if Symbol(basis.coord.name) == dim_symbol
-                    return i
-                end
+            if hasproperty(basis, :meta) && Symbol(basis.meta.element_label) == dim_symbol
+                return i
             end
         end
     end
-    # Default mapping
-    dim_map = Dict(:x => 1, :y => 2, :z => 3)
-    return get(dim_map, dim_symbol, 1)
+    return nothing   # no matching coordinate → caller applies a positional fallback
 end
 
 """

@@ -626,9 +626,16 @@ function compute_weighted_integral(data::AbstractArray, weights::Vector)
         return sum(data)
     end
 
-    # Handle dimension mismatch
+    # Dimension mismatch is a correctness hazard: weights[k] is the quadrature weight for
+    # SPATIAL axis k and must line up 1:1 with the data axes. A VectorField property carries
+    # an extra component axis (ndims_data = nweights+1), which would shift every weight onto
+    # the wrong axis and leave one spatial axis unweighted — a silently wrong integral.
+    # Refuse rather than guess which axis is the component.
     if ndims_data != nweights
-        @warn "Data dimensions ($ndims_data) != weight dimensions ($nweights), using available weights"
+        throw(ArgumentError(
+            "compute_weighted_integral: data has $ndims_data dims but $nweights spatial " *
+            "quadrature weights. volume_integral is defined for scalar fields; for a " *
+            "VectorField integrate a single component or its magnitude (a scalar)."))
     end
 
     # 1D case

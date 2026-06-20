@@ -177,10 +177,16 @@ function translate_to_lazy(expr, state; target=nothing)
 
     # Leaf: numbers / constants
     if isa(expr, Number)
+        # LazyConst/LazyScale store a real Float64; a complex coefficient (e.g. `2im`)
+        # must NOT be silently truncated to its real part (that would zero an imaginary
+        # term — `2im*u` would compile to `0.0*u`). Bail so the interpreted RHS path,
+        # which carries complex coefficients correctly, takes over.
+        imag(expr) != 0 && return nothing
         return LazyConst(Float64(real(expr)))
     end
     if isa(expr, ConstantOperator)
-        return LazyConst(Float64(expr.value))
+        imag(expr.value) != 0 && return nothing
+        return LazyConst(Float64(real(expr.value)))
     end
     if isa(expr, ZeroOperator)
         return LazyConst(0.0)

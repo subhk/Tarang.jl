@@ -194,7 +194,13 @@ function _split_nyquist_symmetric!(padded, original_shape, padded_shape, fourier
         mir = padded_shape[d] - N ÷ 2 + 1     # padded index of -N/2 (left zero by the copy)
         plane = selectdim(padded, d, nyq)
         plane .*= eltype(padded)(0.5)
-        selectdim(padded, d, mir) .= conj.(plane)
+        # Duplicate (do NOT conjugate) the halved +N/2 plane into the −N/2 mirror. The
+        # even-N Nyquist mode is a real cosine for a real field; splitting it as X/2 at
+        # ±N/2 keeps the padded spectrum Hermitian AND lets _fold_nyquist_into_positive!
+        # recover X exactly (X/2 + X/2 = X). A plain `conj` here only matched the 1D
+        # real case and silently dropped the imaginary part of the Nyquist plane in ≥2D
+        # (the cross terms X[N/2, m] are complex), giving Re(X) on the round-trip.
+        selectdim(padded, d, mir) .= plane
     end
     return padded
 end

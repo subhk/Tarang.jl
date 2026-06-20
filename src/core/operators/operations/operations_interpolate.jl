@@ -253,7 +253,11 @@ function interpolate_jacobi(field::ScalarField, basis::JacobiBasis, axis::Int, p
     elseif isa(basis, ChebyshevU)
         clenshaw_chebyshev_u
     elseif isa(basis, Legendre)
-        clenshaw_legendre
+        # Stored coefficients are in the ORTHONORMAL Legendre basis: the forward/backward
+        # transform matrices carry the per-mode factor √((2n+1)/2) (transform_planning.jl).
+        # clenshaw_legendre evaluates the STANDARD-Pₙ series, so fold that factor into the
+        # coefficients first — otherwise interpolation is wrong by √((2n+1)/2) per mode.
+        (c, x) -> clenshaw_legendre([c[k] * sqrt((2 * (k - 1) + 1) / 2) for k in eachindex(c)], x)
     else
         (c, x) -> clenshaw_jacobi(c, x, basis.a, basis.b)
     end
