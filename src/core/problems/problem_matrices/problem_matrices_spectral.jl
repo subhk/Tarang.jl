@@ -566,6 +566,17 @@ end
 
 """Recurse into a single-operand operator to build its matrix block."""
 function _recurse_operand(expr, var, eqn_size::Int, var_size::Int; scale::Number=1.0)
+    # Recursing operand-as-identity is CORRECT only for TimeDerivative (M = I) and
+    # basis-conversion no-ops (Convert/Grid/Coeff/Copy). For genuine operators with no
+    # spectral matrix builder (HilbertTransform, Integrate, Average, Curl, Gradient,
+    # Divergence, Differentiate, FractionalLaplacian, …) this SILENTLY approximates the
+    # operator as identity in the global L/M matrix — wrong for the implicit solve. Warn
+    # loudly so it is not a silent correctness loss (the per-subproblem path is unaffected).
+    if !(expr isa Union{TimeDerivative, Convert, Grid, Coeff, Copy})
+        @warn "Implicit global matrix: operator $(typeof(expr)) has no spectral matrix " *
+              "builder and is approximated as IDENTITY-on-operand; the implicit solve will " *
+              "be wrong for this term. Add a builder or use the per-subproblem solve path." maxlog=3
+    end
     inner = build_expression_matrix_block(expr.operand, var, eqn_size, var_size)
     return scale == 1.0 ? inner : ComplexF64(scale) * inner
 end

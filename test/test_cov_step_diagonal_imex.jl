@@ -94,14 +94,14 @@ end
     end
 
     # -----------------------------------------------------------------------
-    # 2. SBDF2 VARIABLE-dt WARNING branch (lines 202-205) — with an operator
-    #    attached so the working `_sbdf2_apply_bdf2_L!` path runs (the warning
-    #    at line 203 fires regardless of L, before the L===nothing check).
-    #    Pass a changed dt to step!(solver, dt) on a later step so dt/dt_prev
-    #    deviates from 1 → the @warn fires; the integration must still finish
-    #    finite (the warning is informational, not an error).
+    # 2. SBDF2 VARIABLE-dt branch — with an operator attached so the working
+    #    `_sbdf2_apply_bdf2_L!` path runs. Pass a changed dt on a later step so
+    #    dt/dt_prev ≠ 1; both branches now use the variable-dt SBDF2 weights
+    #    (w = dtₙ/dtₙ₋₁), so the step is accurate and emits NO warning (the old
+    #    constant-dt warning was removed in the 2026-06-20 audit). Integration
+    #    must finish finite.
     # -----------------------------------------------------------------------
-    @testset "SBDF2 variable-dt warning still integrates" begin
+    @testset "SBDF2 variable-dt integrates (variable-dt weights, no warning)" begin
         coords = CartesianCoordinates("x")
         dist = Distributor(coords; mesh = (1,), dtype = Float64)
         xb = RealFourier(coords["x"]; size = 8, bounds = (0.0, 2π))
@@ -116,10 +116,10 @@ end
         Tarang.set_spectral_linear_operator!(solver, L)
 
         # Steps 1-2 at dt=0.02 establish history; step 3 at a clearly different
-        # dt=0.04 trips the constant-dt-coefficient warning branch (line 203-204).
+        # dt=0.04 exercises the variable-dt SBDF2 weights. No warning is expected.
         step!(solver, 0.02)
         step!(solver, 0.02)
-        @test_logs (:warn,) match_mode = :any step!(solver, 0.04)
+        step!(solver, 0.04)   # variable-dt SBDF2 weights; completes without warning
 
         ensure_layout!(u, :g)
         uf = Tarang.get_grid_data(u)[1]

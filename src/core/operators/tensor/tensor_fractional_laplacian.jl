@@ -43,10 +43,15 @@ function evaluate_scalar_fractional_laplacian(operand::ScalarField, alpha::Float
     # Fractional Laplacian is only defined for Fourier bases (wavenumber-based).
     # For Chebyshev/Legendre bases, the wavenumber grid would be all zeros,
     # producing a silently wrong zero result.
-    has_fourier = any(isa(b, Union{RealFourier, ComplexFourier}) for b in operand.bases)
-    if !has_fourier
-        throw(ArgumentError("Fractional Laplacian requires at least one Fourier basis. " *
-            "For Chebyshev/Legendre fields, use a matrix-based approach instead."))
+    # The wavenumber-based fractional Laplacian can only represent Fourier axes. A
+    # non-Fourier (Chebyshev/Legendre) axis contributes 0 to |k|² and would be SILENTLY
+    # dropped, producing a wrong operator on a mixed domain (e.g. returning only the
+    # horizontal part of -Δ). Require every axis to be Fourier rather than just one.
+    all_fourier = all(isa(b, Union{RealFourier, ComplexFourier}) for b in operand.bases)
+    if !all_fourier
+        throw(ArgumentError("Fractional Laplacian requires ALL axes to be Fourier bases. " *
+            "On a mixed Fourier/Chebyshev(Legendre) domain the non-Fourier direction would be " *
+            "silently dropped; use a matrix-based approach for those axes instead."))
     end
 
     # Create result field

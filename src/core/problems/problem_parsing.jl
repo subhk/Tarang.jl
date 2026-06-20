@@ -1188,7 +1188,35 @@ sym_diff(::ZeroOperator, ::ScalarField) = 0
 sym_diff(::ConstantOperator, ::ScalarField) = 0
 sym_diff(::ArrayOperator, ::ScalarField) = 0
 
-@inline coerce_constant_value(x) = x isa ConstantOperator ? x.value : x
+coerce_constant_value(x::Number) = x
+coerce_constant_value(x::ConstantOperator) = x.value
+# Constant-fold arithmetic over numbers / constants so an operator argument written as an
+# expression resolves to a NUMBER instead of degrading to UnknownOperator downstream. This
+# fixes e.g. a BC position `u(z=Lz/2)` (was parsed as UnknownOperator → BC silently dropped)
+# and a fractional exponent `fraclap(u, 1/2)` (was a DivideOperator → Float64() threw → term
+# dropped). Only folds when every leaf reduces to a Number; otherwise returns x unchanged.
+function coerce_constant_value(x)
+    if x isa DivideOperator
+        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
+        return (l isa Number && r isa Number) ? l / r : x
+    elseif x isa MultiplyOperator
+        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
+        return (l isa Number && r isa Number) ? l * r : x
+    elseif x isa AddOperator
+        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
+        return (l isa Number && r isa Number) ? l + r : x
+    elseif x isa SubtractOperator
+        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
+        return (l isa Number && r isa Number) ? l - r : x
+    elseif x isa PowerOperator
+        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
+        return (l isa Number && r isa Number) ? l ^ r : x
+    elseif x isa NegateOperator
+        v = coerce_constant_value(x.operand)
+        return v isa Number ? -v : x
+    end
+    return x
+end
 
 # Note: AddOperator, SubtractOperator, MultiplyOperator, DivideOperator, PowerOperator,
 # NegateOperator, IndexOperator are defined in operators.jl

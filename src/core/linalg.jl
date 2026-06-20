@@ -495,8 +495,11 @@ function fast_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector
         # Kronecker product multiplication: (A₁ ⊗ A₂) * vec(C) = vec(A₂ * C * A₁ᵀ)
         # Step 1: temp = A₂ * C
         mul!(temp, A2_dev, C_mat)
-        # Step 2: result = temp * A₁ᵀ
-        mul!(result_mat, temp, A1_dev')
+        # Step 2: result = temp * A₁ᵀ — use `transpose`, NOT adjoint `'`. The vec identity
+        # needs the PLAIN transpose; `A1_dev'` is the conjugate transpose and flips the sign
+        # of the imaginary part for complex factors (e.g. Fourier i·k operators), giving a
+        # wrong Kronecker product. transpose == adjoint for real matrices, so no regression.
+        mul!(result_mat, temp, transpose(A1_dev))
 
         # Apply scaling and accumulation
         if β == 0.0

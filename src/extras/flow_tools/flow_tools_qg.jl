@@ -146,8 +146,10 @@ function qg_system_setup(;
     interior_bvp.parameters["N"] = Float64(N)
     interior_bvp.parameters["S"] = (f0 / N)^2  # Burger number squared
 
-    # QG elliptic operator: ∇_h²ψ + S·∂²ψ/∂z² = q
-    add_equation!(interior_bvp, "Δ(ψ) + S*∂z(∂z(ψ)) = q")
+    # QG elliptic operator: ∇_h²ψ + S·∂²ψ/∂z² = q. Use the HORIZONTAL Laplacian
+    # explicitly: `Δ` is the full 3D Laplacian (∂xx+∂yy+∂zz), so `Δ(ψ) + S*∂z(∂z(ψ))`
+    # would double-count ∂²/∂z² and give a vertical coefficient (1+S) instead of S.
+    add_equation!(interior_bvp, "∂x(∂x(ψ)) + ∂y(∂y(ψ)) + S*∂z(∂z(ψ)) = q")
 
     # Boundary conditions: ∂ψ/∂z = (N/f₀)θ at surfaces
     # These will be updated at each timestep with current θ values
@@ -164,8 +166,11 @@ function qg_system_setup(;
     surface_ivp_top.parameters["α"] = Float64(α)
 
     if κ > 0
-        add_equation!(surface_ivp_bot, "∂t(θ_bot) - κ*fraclap(θ_bot, α) = 0")
-        add_equation!(surface_ivp_top, "∂t(θ_top) - κ*fraclap(θ_top, α) = 0")
+        # Dissipation must DECAY high-k: ∂tθ = -κ(-Δ)^α θ. fraclap = (-Δ)^α has positive
+        # eigenvalues |k|^{2α}, so the term enters with a PLUS sign on the LHS (moving it
+        # to the RHS gives -κ(-Δ)^α θ). A minus sign here would be anti-diffusion (blow-up).
+        add_equation!(surface_ivp_bot, "∂t(θ_bot) + κ*fraclap(θ_bot, α) = 0")
+        add_equation!(surface_ivp_top, "∂t(θ_top) + κ*fraclap(θ_top, α) = 0")
     else
         add_equation!(surface_ivp_bot, "∂t(θ_bot) = 0")
         add_equation!(surface_ivp_top, "∂t(θ_top) = 0")
@@ -335,8 +340,8 @@ function qg_step_euler!(qg::QGSystem, dt::Real)
     if qg.κ > 0
         frac_lap_bot = evaluate_fractional_laplacian(FractionalLaplacian(qg.θ_bot, qg.α), :g)
         frac_lap_top = evaluate_fractional_laplacian(FractionalLaplacian(qg.θ_top, qg.α), :g)
-        get_grid_data(rhs_bot) .+= qg.κ .* get_grid_data(frac_lap_bot)
-        get_grid_data(rhs_top) .+= qg.κ .* get_grid_data(frac_lap_top)
+        get_grid_data(rhs_bot) .-= qg.κ .* get_grid_data(frac_lap_bot)
+        get_grid_data(rhs_top) .-= qg.κ .* get_grid_data(frac_lap_top)
     end
 
     # 5. Euler step
@@ -360,8 +365,8 @@ function qg_step_rk2!(qg::QGSystem, dt::Real)
     if qg.κ > 0
         frac_lap_bot = evaluate_fractional_laplacian(FractionalLaplacian(qg.θ_bot, qg.α), :g)
         frac_lap_top = evaluate_fractional_laplacian(FractionalLaplacian(qg.θ_top, qg.α), :g)
-        get_grid_data(rhs_bot) .+= qg.κ .* get_grid_data(frac_lap_bot)
-        get_grid_data(rhs_top) .+= qg.κ .* get_grid_data(frac_lap_top)
+        get_grid_data(rhs_bot) .-= qg.κ .* get_grid_data(frac_lap_bot)
+        get_grid_data(rhs_top) .-= qg.κ .* get_grid_data(frac_lap_top)
     end
 
     get_grid_data(qg.θ_bot) .= θ_bot_0 .+ dt .* get_grid_data(rhs_bot)

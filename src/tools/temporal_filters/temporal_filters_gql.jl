@@ -7,26 +7,31 @@
 """
     GQLDecomposition{T, N}
 
-Generalized Quasi-Linear (GQL) decomposition using Fourier wavenumber cutoff.
+Generalized Quasi-Linear (GQL) decomposition using a ZONAL-wavenumber cutoff.
 
-Splits a field into "large-scale" (low wavenumber, |k| ≤ Λ) and "small-scale"
-(high wavenumber, |k| > Λ) components in spectral space.
+Splits a field into "large-scale" (low ZONAL wavenumber, |kₓ| ≤ Λ) and
+"small-scale" (|kₓ| > Λ) components in spectral space. The cutoff is on the
+ZONAL (first / streamwise, kₓ) wavenumber ALONE — the full kᵧ (and k_z)
+structure is retained on both sides. This is the defining feature of GQL: the
+zonal direction is treated specially (it is NOT an isotropic |k| = √(kₓ²+kᵧ²)
+cutoff).
 
-This follows the GQL approximation of Marston, Chini & Tobias (2016):
-- **QL (Quasi-Linear)**: Λ = 0, only k=0 mode is "large scale"
-- **GQL**: 0 < Λ < k_max, intermediate cutoff
-- **Full NL**: Λ = k_max, all modes are "large scale" (no approximation)
+This follows the GQL approximation of Marston, Chini & Tobias (2016), which
+separates the fields into large and small ZONAL scales via a spectral filter:
+- **QL (Quasi-Linear)**: Λ = 0 ⇒ large scale = the zonal mean (kₓ = 0, ALL kᵧ)
+- **GQL**: 0 < Λ < kₓ,max, intermediate zonal cutoff
+- **Full NL**: Λ = kₓ,max, all modes are "large scale" (no approximation)
 
 ```julia
-# Setup for 3D field with cutoff at |k| = 4
+# Setup for a 3D field with zonal cutoff at |kₓ| = 4
 gql = GQLDecomposition((Nx, Ny, Nz), (Lx, Ly); Λ=4)
 
 # Decompose field (requires FFT of field)
 f_hat = fft(f)  # User performs FFT
 f_large, f_small = decompose!(gql, f_hat)
 
-# f_large: modes with |k| ≤ Λ (includes k=0)
-# f_small: modes with |k| > Λ
+# f_large: modes with |kₓ| ≤ Λ (includes the kₓ=0 zonal mean for all kᵧ)
+# f_small: modes with |kₓ| > Λ
 
 # For GQL dynamics:
 # - Large-scale eqn: ∂f_L/∂t = NL(f_L, f_L) + NL(f_S, f_S)|_L
@@ -149,18 +154,19 @@ function GQLDecomposition(
             large_scale_mask_cpu[i] = (k_mag <= Λ_T)
         end
     elseif N == 2
+        # Zonal cutoff: large-scale = low ZONAL wavenumber |kₓ| ≤ Λ, retaining the FULL
+        # kᵧ structure (at Λ=0 this is the zonal mean, the whole kₓ=0 plane). NOT an
+        # isotropic √(kₓ²+kᵧ²) cutoff — see the docstring / Marston-Chini-Tobias (2016).
         Ny = field_size[2]
         for j in 1:Ny, i in 1:nkx
-            k_mag = sqrt(kx[i]^2 + ky[j]^2)
-            large_scale_mask_cpu[i, j] = (k_mag <= Λ_T)
+            large_scale_mask_cpu[i, j] = (abs(kx[i]) <= Λ_T)
         end
     elseif N == 3
         Ny = field_size[2]
         Nz = field_size[3]
-        # For 3D, cutoff is in horizontal (kx, ky) only
+        # 3D: zonal cutoff on kₓ only (full kᵧ, k_z retained).
         for k in 1:Nz, j in 1:Ny, i in 1:nkx
-            k_mag = sqrt(kx[i]^2 + ky[j]^2)
-            large_scale_mask_cpu[i, j, k] = (k_mag <= Λ_T)
+            large_scale_mask_cpu[i, j, k] = (abs(kx[i]) <= Λ_T)
         end
     end
 
@@ -272,16 +278,15 @@ function set_cutoff!(gql::GQLDecomposition{T, N, AMask, AComplex}, Λ_new::Real)
             mask_cpu[i] = (abs(kx[i]) <= Λ_T)
         end
     elseif N == 2
+        # Zonal cutoff |kₓ| ≤ Λ (full kᵧ retained); see constructor / docstring.
         Ny = mask_size[2]
         for j in 1:Ny, i in eachindex(kx)
-            k_mag = sqrt(kx[i]^2 + ky[j]^2)
-            mask_cpu[i, j] = (k_mag <= Λ_T)
+            mask_cpu[i, j] = (abs(kx[i]) <= Λ_T)
         end
     elseif N == 3
         Ny, Nz = mask_size[2], mask_size[3]
         for k in 1:Nz, j in 1:Ny, i in eachindex(kx)
-            k_mag = sqrt(kx[i]^2 + ky[j]^2)
-            mask_cpu[i, j, k] = (k_mag <= Λ_T)
+            mask_cpu[i, j, k] = (abs(kx[i]) <= Λ_T)
         end
     end
 

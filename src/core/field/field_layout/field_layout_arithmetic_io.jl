@@ -45,8 +45,14 @@ function Base.:-(a::ScalarField, b::ScalarField)
     return result
 end
 
-function Base.:*(a::ScalarField, b::Real)
-    result = ScalarField(a.dist, _FIELD_ARITH_TMP_NAME, a.bases, a.dtype)
+function Base.:*(a::ScalarField, b::Number)
+    # Accept any Number (was ::Real). A complex scalar must actually scale the field —
+    # the old ::Real method let `field * (2+3im)` fall through to the lazy `Multiply`
+    # Operand path and return an UNEVALUATED future (the scaling was silently never
+    # applied). Promote the dtype so a real field times a complex scalar yields a
+    # complex field.
+    T = promote_type(a.dtype, typeof(b))
+    result = ScalarField(a.dist, _FIELD_ARITH_TMP_NAME, a.bases, T)
     ensure_layout!(a, :g)
     ensure_layout!(result, :g)
 
@@ -82,7 +88,7 @@ function Base.:*(a::ScalarField, b::ScalarField)
 end
 
 # Commutative scalar multiplication
-Base.:*(b::Real, a::ScalarField) = a * b
+Base.:*(b::Number, a::ScalarField) = a * b
 
 # I/O operations
 """Save field to NetCDF file"""

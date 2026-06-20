@@ -283,18 +283,30 @@ function _expression_matrices_future(expr::Future, sp, vars; kwargs...)
 
         scalar_coeff = ComplexF64(1)
         dependent = Any[]
+        ncc_factors = Any[]      # non-constant FIELD coefficients (NCC), e.g. q(z) in q*u
         for arg in args
             if _is_const_or_param_local(arg) || isa(arg, Number)
                 scalar_coeff *= ComplexF64(_extract_scalar_local(arg))
             elseif _depends_on_vars(arg, vars)
                 push!(dependent, arg)
             else
-                return Dict{Any, SparseMatrixCSC}()
+                # Non-constant field coefficient (NCC) on the implicit side — handled below
+                # via the SAME multiply-by-q builder the string MultiplyOperator path uses,
+                # instead of being dropped. (Previously this object-syntax path warned+dropped.)
+                push!(ncc_factors, arg)
             end
         end
 
         length(dependent) == 1 || return Dict{Any, SparseMatrixCSC}()
         child_mats = expression_matrices(only(dependent), sp, vars; kwargs...)
+        # Apply each NCC factor as a multiply-by-coefficient matrix (mirrors the
+        # MultiplyOperator Case-3 string path, lines ~442-448). `_implicit_ncc_matrix`
+        # warns + returns `nothing` for unsupported (Fourier-dependent) coefficients, and
+        # `_apply_implicit_ncc(nothing, …)` then passes the child through — identical
+        # behavior to the string path, so the two construction routes now agree.
+        for ncc in ncc_factors
+            child_mats = _apply_implicit_ncc(_implicit_ncc_matrix(ncc), child_mats)
+        end
         return _scale_expression_mats(child_mats, scalar_coeff)
     end
 

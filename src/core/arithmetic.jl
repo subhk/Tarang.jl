@@ -139,7 +139,7 @@ combine_multiply(a::Number, b::Number) = a * b
 combine_multiply(a::VectorField, b::Union{ScalarField, Number}) = scale_vector_field(a, b)
 combine_multiply(a::Union{ScalarField, Number}, b::VectorField) = scale_vector_field(b, a)
 combine_multiply(::VectorField, ::VectorField) = throw(ArgumentError("VectorField * VectorField is ambiguous. Use dot(a, b) for dot product or cross(a, b) for cross product"))
-combine_multiply(a::AbstractArray, b::AbstractArray) = _binary_array_op(*, a, b)
+combine_multiply(a::AbstractArray, b::AbstractArray) = _binary_array_op((x, y) -> x .* y, a, b)  # elementwise (field product), NOT matrix `*`
 combine_multiply(a, b) = a * b  # Generic fallback
 
 @inline function _align_arrays(a::AbstractArray, b::AbstractArray)

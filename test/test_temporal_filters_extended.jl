@@ -294,19 +294,18 @@ end
         @test f_large .+ f_small ≈ f_hat
     end
 
-    # 2D decomposition with radial cutoff sqrt(kx²+ky²) ≤ Λ.
-    @testset "2D radial cutoff & mode counts" begin
+    # 2D decomposition with ZONAL cutoff |kx| ≤ Λ (full ky retained), per GQL.
+    @testset "2D zonal cutoff & mode counts" begin
         Nx, Ny = 16, 16
         Lx = Ly = 2π
         gql = GQLDecomposition((Nx, Ny), (Lx, Ly); Λ=4.0)
 
-        # Independently count modes with sqrt(kx²+ky²) ≤ 4 over the rfft grid.
+        # Independently count modes with |kx| ≤ 4 (for ALL ky) over the rfft grid.
         nkx = Nx ÷ 2 + 1
         kx = [(2π / Lx) * i for i in 0:nkx-1]
-        ky = [j <= Ny ÷ 2 ? (2π / Ly) * j : (2π / Ly) * (j - Ny) for j in 0:Ny-1]
         expected_large = 0
         for j in 1:Ny, i in 1:nkx
-            sqrt(kx[i]^2 + ky[j]^2) <= 4.0 && (expected_large += 1)
+            abs(kx[i]) <= 4.0 && (expected_large += 1)
         end
         expected_total = nkx * Ny
 
@@ -316,7 +315,7 @@ end
         @test get_cutoff(gql) ≈ 4.0
 
         # A single-frequency 2D field: f = cos(3x) ⇒ energy at (kx,ky)=(3,0).
-        # |k| = 3 ≤ 4 ⇒ large; nothing in small.
+        # |kx| = 3 ≤ 4 ⇒ large; nothing in small.
         x = collect(0:Nx-1) .* (Lx / Nx)
         f2 = [cos(3 * x[i]) for i in 1:Nx, _ in 1:Ny]
         fh2 = rfft(f2)
@@ -335,9 +334,10 @@ end
         n_large = count_large_modes(gql)
         @test n_large > n_small             # bigger Λ ⇒ more large modes
 
-        # Λ=0 ⇒ only k=0 (the (1,1) DC entry) is large.
+        # Λ=0 (QL) ⇒ the zonal mean: kx=0 for ALL ky → the whole kx=0 row (Ny entries),
+        # not just the (0,0) DC mode.
         set_cutoff!(gql, 0.0)
-        @test count_large_modes(gql) == 1
+        @test count_large_modes(gql) == Ny
     end
 
     # project_large!/project_small! are complementary in-place projections.

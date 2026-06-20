@@ -71,6 +71,7 @@ const TEST_FILES = [
     "test_derivatives_polynomial.jl",
     "test_streamfunction.jl",
     "test_cpu_audit_2026_06_19.jl",
+    "test_cpu_audit_2026_06_20.jl",
     "test_cpu_audit_batch3.jl",
     # CPU coverage-raising tests (2026-06-19): behavior-driven, target previously
     # under-covered serial-CPU modules.
