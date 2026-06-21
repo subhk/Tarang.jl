@@ -841,6 +841,10 @@ function work_stratonovich(forcing::StochasticForcing{T, N, A, CA}, sol::Abstrac
         @inbounds real((ps[i] + sol[i]) / 2 * conj(cf[i]))
     end
 
+    # The mapreduce ran over this rank's LOCAL slab only; combine partials
+    # across the field's communicator before normalising by the GLOBAL area.
+    work = _forcing_reduce_partial(sol, work)
+
     # The cached_forcing stores F̂ = √Q̂ · ξ / √dt
     # The forcing increment is ΔF̂ = F̂ · dt = √Q̂ · ξ · √dt
     # Work = (1/A) · Re Σ ψ_mid · ΔF̂* = (dt/A) · Re Σ ψ_mid · F̂*
@@ -873,6 +877,10 @@ function work_ito(forcing::StochasticForcing{T, N, A, CA}, sol_prev::AbstractArr
     work = mapreduce(+, eachindex(sol_prev, cf); init=zero(T)) do i
         @inbounds real(sol_prev[i] * conj(cf[i]))
     end
+
+    # Combine per-rank slab partials over the field's communicator (the drift
+    # term below is a replicated scalar and must NOT be reduced).
+    work = _forcing_reduce_partial(sol_prev, work)
 
     # The Itô integral has zero mean, so we add drift correction
     # to match Stratonovich mean: ⟨W_Itô⟩ = 0 + ε·dt = ε·dt
@@ -929,6 +937,9 @@ function instantaneous_power(forcing::StochasticForcing{T, N, A, CA}, sol::Abstr
     power = mapreduce(+, eachindex(sol, cf); init=zero(T)) do i
         @inbounds real(sol[i] * conj(cf[i]))
     end
+
+    # Combine per-rank slab partials over the field's communicator.
+    power = _forcing_reduce_partial(sol, power)
 
     # P = (1/A) · Re Σ ψ · F̂* where F̂ = √Q̂ · ξ / √dt
     return T(power / domain_area)
@@ -1022,6 +1033,21 @@ get_cached_forcing(forcing::StochasticForcing) = forcing.cached_forcing
 # ============================================================================
 # Internal helpers
 # ============================================================================
+
+# Sum a per-rank partial scalar (computed over the LOCAL PencilArray slab)
+# across the distributed field's MPI communicator. The work/power diagnostics
+# reduce over the owned slab and normalise by the GLOBAL domain area, so the
+# slab partials must be combined first or each rank returns only its fraction.
+# Serial / single-rank / non-PencilArray inputs are returned unchanged, so
+# existing serial and degenerate (single-rank) configurations are untouched.
+_forcing_reduce_partial(::AbstractArray, partial) = partial
+
+function _forcing_reduce_partial(sol::PencilArrays.PencilArray, partial)
+    MPI.Initialized() || return partial
+    comm = PencilArrays.get_comm(PencilArrays.pencil(sol))
+    MPI.Comm_size(comm) > 1 || return partial
+    return MPI.Allreduce(partial, MPI.SUM, comm)
+end
 
 function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
                                target_shape::NTuple{N, Int}) where {T, N, A, CA}

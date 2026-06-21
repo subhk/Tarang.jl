@@ -74,12 +74,21 @@ function group_pencil_transpose!(dest_arrays::Vector{<:PencilArrays.PencilArray}
     # Group by compatible pencil configurations
     groups = _group_pencil_arrays(src_arrays, dest_arrays)
 
-    for (key, indices) in groups
-        if length(indices) == 1
-            i = indices[1]
+    # Process groups in a RANK-INVARIANT order. Each `transpose!` is a collective
+    # over the shared topology comm and is matched purely by program order on
+    # every rank, so all ranks MUST issue the per-field transposes in the same
+    # sequence. `Dict` iteration order is not a cross-rank contract, so sort the
+    # groups by their (rank-invariant) minimum field index, and process the
+    # field indices within each group in ascending order.
+    ordered_groups = sort!(collect(values(groups)); by = minimum)
+
+    for indices in ordered_groups
+        sorted_indices = sort(indices)
+        if length(sorted_indices) == 1
+            i = sorted_indices[1]
             PencilArrays.transpose!(dest_arrays[i], src_arrays[i])
         else
-            _batched_pencil_transpose!(dest_arrays, src_arrays, indices, dist)
+            _batched_pencil_transpose!(dest_arrays, src_arrays, sorted_indices, dist)
         end
     end
 end
@@ -97,13 +106,19 @@ function _group_pencil_arrays(src_arrays::Vector{<:PencilArrays.PencilArray},
         src = src_arrays[i]
         dest = dest_arrays[i]
 
-        # Key by source/dest pencil shapes and element type
+        # Key by GLOBAL source/dest pencil shapes and element type.
+        # Global shapes are identical on every rank, so all ranks form the SAME
+        # groups. Keying on rank-local `size_local` is unsafe: under an uneven
+        # decomposition two fields can collide to the same local size on one
+        # rank but not another, so ranks would partition the field list
+        # differently and desynchronise the per-field collective `transpose!`
+        # calls (hang/corruption). See group_pencil_transpose! for ordering.
         src_pencil = PencilArrays.pencil(src)
         dest_pencil = PencilArrays.pencil(dest)
 
         key = (
-            PencilArrays.size_local(src_pencil),
-            PencilArrays.size_local(dest_pencil),
+            PencilArrays.size_global(src_pencil),
+            PencilArrays.size_global(dest_pencil),
             eltype(src)
         )
 

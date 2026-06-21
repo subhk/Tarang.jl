@@ -178,6 +178,13 @@ const MPI_TEST_FILES = [
     "test_mpi_reductions.jl",
     "test_mpi_spectral_filter.jl",
     "test_mpi_virtual_output.jl",
+    # MPI correctness fixes 2026-06-21 (see memory/project_mpi_audit_2026_06_21.md).
+    "test_mpi_spectra_consistency.jl",       # spectra axes_local + global num_bins (np>=2)
+    "test_mpi_forcing_diag.jl",              # C4 _forcing_reduce_partial (np>=2)
+    "test_mpi_unit_factor_mesh.jl",          # (1,N) mesh normalization (np>=2)
+    "test_mpi_grouped_transpose_rankinv.jl", # N1 rank-invariant grouping (np>=2)
+    "test_mpi_distributor_match_np4.jl",     # C1 coord ordering, 2x2 mesh (np==4)
+    "test_mpi_distributor_remainder_np2.jl", # C3 remainder-on-last-rank (np==2)
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
 ]

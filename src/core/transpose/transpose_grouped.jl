@@ -974,7 +974,7 @@ function group_distributed_forward_transform!(fields::Vector{<:TransposableField
             for field in fields
                 copyto!(vec(field.field["c"]), vec(field.buffers.z_local_data))
             end
-        else
+        elseif topo.Ry > 1
             # 1D decomposition: ZLocal=(Nx, Ny/P) → YLocal=(Nx/P, Ny)
             # x is local in ZLocal
 
@@ -992,6 +992,38 @@ function group_distributed_forward_transform!(fields::Vector{<:TransposableField
             for field in fields
                 ybasis = get_basis_for_dim(field, 2)
                 transform_in_dim!(field.buffers.y_local_data, 2, :forward, ybasis,
+                                field.buffers.architecture)
+            end
+
+            # Step 4: Transpose back to ZLocal layout to match field["c"] allocation
+            group_transpose_y_to_z!(fields)
+
+            for field in fields
+                copyto!(vec(field.field["c"]), vec(field.buffers.z_local_data))
+            end
+        else
+            # 1D decomposition with Rx>1 (default (nprocs,1) slab):
+            # ZLocal=(Nx/Rx, Ny) → YLocal=(Nx, Ny/Rx) — y is local in ZLocal,
+            # x is the distributed axis. Mirror the non-batched
+            # distributed_forward_transform! Rx>1 branch (transform_transforms.jl):
+            # transform y FIRST in ZLocal, then x in YLocal. (Also catches the
+            # serial Rx==1,Ry==1 case, which is order-invariant — separable FFT
+            # with identity copy transposes.)
+
+            # Step 1: Transform in y (dim 2, local in ZLocal)
+            for field in fields
+                ybasis = get_basis_for_dim(field, 2)
+                transform_in_dim!(field.buffers.z_local_data, 2, :forward, ybasis,
+                                field.buffers.architecture)
+            end
+
+            # Step 2: Z→Y transpose
+            group_transpose_z_to_y!(fields)
+
+            # Step 3: Transform in x (dim 1, now local in YLocal)
+            for field in fields
+                xbasis = get_basis_for_dim(field, 1)
+                transform_in_dim!(field.buffers.y_local_data, 1, :forward, xbasis,
                                 field.buffers.architecture)
             end
 
@@ -1106,7 +1138,7 @@ function group_distributed_backward_transform!(fields::Vector{<:TransposableFiel
                     copyto!(vec(field.field["g"]), real.(vec(field.buffers.z_local_data)))
                 end
             end
-        else
+        elseif topo.Ry > 1
             # 1D decomposition: field["c"] is in ZLocal layout
             # ZLocal has x local, so start inverse FFTs from ZLocal
             for field in fields
@@ -1128,6 +1160,45 @@ function group_distributed_backward_transform!(fields::Vector{<:TransposableFiel
             for field in fields
                 ybasis = get_basis_for_dim(field, 2)
                 transform_in_dim!(field.buffers.y_local_data, 2, :backward, ybasis,
+                                field.buffers.architecture)
+            end
+
+            # Step 4: Y→Z transpose back to ZLocal for field["g"]
+            group_transpose_y_to_z!(fields)
+
+            # Copy results
+            for field in fields
+                if field.field.dtype <: Complex
+                    copyto!(vec(field.field["g"]), vec(field.buffers.z_local_data))
+                else
+                    copyto!(vec(field.field["g"]), real.(vec(field.buffers.z_local_data)))
+                end
+            end
+        else
+            # 1D decomposition with Rx>1 (default (nprocs,1) slab):
+            # ZLocal=(Nx/Rx, Ny) — y is local in ZLocal. Mirror the non-batched
+            # distributed_backward_transform! Rx>1 branch: inverse y FIRST in
+            # ZLocal, then inverse x in YLocal. (Also catches serial Rx==1,Ry==1,
+            # which is order-invariant.)
+            for field in fields
+                field.buffers.active_layout[] = ZLocal
+                copyto!(vec(field.buffers.z_local_data), vec(field.field["c"]))
+            end
+
+            # Step 1: Inverse transform in y (dim 2, local in ZLocal)
+            for field in fields
+                ybasis = get_basis_for_dim(field, 2)
+                transform_in_dim!(field.buffers.z_local_data, 2, :backward, ybasis,
+                                field.buffers.architecture)
+            end
+
+            # Step 2: Z→Y transpose
+            group_transpose_z_to_y!(fields)
+
+            # Step 3: Inverse transform in x (dim 1, now local in YLocal)
+            for field in fields
+                xbasis = get_basis_for_dim(field, 1)
+                transform_in_dim!(field.buffers.y_local_data, 1, :backward, xbasis,
                                 field.buffers.architecture)
             end
 
