@@ -244,12 +244,33 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     # The pencil IMEX solve requires the full Chebyshev array on each rank.
     # Select the last mesh_dim Fourier axes for decomposition (PencilArrays convention).
     mesh_dim = length(dist.mesh)
-    if length(fourier_axes) >= mesh_dim
-        decomp_dims = Tuple(fourier_axes[end-mesh_dim+1:end])
-    else
+    ndims_total = length(domain.bases)
+
+    # PencilArrays decomposes the TRAILING `mesh_dim` dimensions, and a Chebyshev /
+    # non-Fourier axis CANNOT be decomposed — its DCT (a local FFTW r2r) needs the
+    # full axis on every rank. So the trailing (decomposed) dims must ALL be Fourier.
+    # If a non-Fourier axis sits in the trailing range (e.g. the common physics
+    # layout x:Fourier, y:Fourier, z:Chebyshev), fail loudly with actionable
+    # guidance instead of PencilFFTs' cryptic "decomposed dimensions must be (k,)"
+    # ArgumentError (mis-reported as a "PencilFFTs installation" problem). The
+    # verified-correct MPI layout places the Chebyshev axis BEFORE the Fourier axes.
+    trailing = collect((ndims_total - mesh_dim + 1):ndims_total)
+    nonfourier_trailing = [d for d in trailing if !(d in fourier_axes)]
+    if !isempty(nonfourier_trailing)
+        error("MPI mixed Fourier-Chebyshev: the decomposed (trailing) axis/axes " *
+              "$(nonfourier_trailing) are non-Fourier (e.g. Chebyshev), but PencilArrays " *
+              "decomposes the LAST $mesh_dim dimension(s) and a Chebyshev axis cannot be " *
+              "decomposed (its DCT needs the full axis local on each rank). Reorder your " *
+              "bases so the Chebyshev axis comes BEFORE the Fourier axes — e.g. " *
+              "(z_chebyshev, x_fourier, y_fourier), which is verified correct in MPI.")
+    end
+    if length(fourier_axes) < mesh_dim
         error("Cannot decompose $mesh_dim dimensions with only $(length(fourier_axes)) Fourier axes. " *
               "Chebyshev axes must remain local. Reduce mesh dimensionality or add Fourier axes.")
     end
+    # decomp_dims MUST be the trailing dims (PencilArrays convention); for the
+    # supported layouts these are exactly the trailing Fourier axes.
+    decomp_dims = Tuple(trailing)
     if dist.mpi_topology === nothing
         dist.mpi_topology = PencilArrays.MPITopology(dist.comm, dist.mesh)
     end
