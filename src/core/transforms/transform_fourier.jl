@@ -334,8 +334,18 @@ function _backward_output_spec(in::AbstractArray, transform::FourierTransform, o
         grid_n = _bwd_grid_size(transform, out_n)
         expected_rfft_size = div(grid_n, 2) + 1
         axis_len = in_shape[ax]
+        base_rfft_size = div(transform.basis.meta.size, 2) + 1
         if axis_len == expected_rfft_size
             # irfft: axis expands back from N/2+1 to the (scaled) grid size
+            out_shape = _replace_axis_shape(in_shape, ax, grid_n)
+            return out_shape, real_T
+        elseif grid_n > transform.basis.meta.size && axis_len == base_rfft_size
+            # UPSAMPLED rfft axis: the stored half-spectrum is the BASE length
+            # div(base_N,2)+1, but the target grid is finer (grid_n > base_N). The
+            # backward zero-pads the half-spectrum to div(grid_n,2)+1 and irfft-s
+            # to the real grid of length grid_n. Gating only on grid_n (the old
+            # `axis_len == expected_rfft_size`) missed this case and fell through
+            # to a same-shape complex ifft, returning wrong-length complex output.
             out_shape = _replace_axis_shape(in_shape, ax, grid_n)
             return out_shape, real_T
         else
@@ -390,9 +400,17 @@ function _get_or_plan_backward!(transform::FourierTransform, in::AbstractArray, 
     plan = if isa(transform.basis, RealFourier)
         expected_rfft_size = div(grid_n, 2) + 1
         axis_len = in_shape[transform.axis]
+        base_n = transform.basis.meta.size
         if axis_len == expected_rfft_size
             # irfft path: plan_irfft needs a dummy input of the same shape
             FFTW.plan_irfft(in, grid_n, dims)
+        elseif grid_n > base_n && axis_len == div(base_n, 2) + 1
+            # UPSAMPLED rfft axis: the half-spectrum is zero-padded along the axis
+            # to div(grid_n,2)+1 before the irfft, so the plan must be built on a
+            # dummy of that padded shape (not the base-length `in`).
+            padded_shape = _replace_axis_shape(in_shape, transform.axis, expected_rfft_size)
+            dummy = zeros(eltype(in), padded_shape...)
+            FFTW.plan_irfft(dummy, grid_n, dims)
         else
             FFTW.plan_ifft(in, dims)
         end
@@ -460,15 +478,45 @@ function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::Four
     # Use a cached scratch that's reused across calls. Only irfft needs
     # this; ifft (complex → complex) is non-destructive.
     is_irfft_path = false
+    is_upsampled_irfft = false
     if isa(transform.basis, RealFourier)
         # Detect against the SCALED grid size (grid_n), mirroring _get_or_plan_backward!.
         grid_n = _bwd_grid_size(transform, out_n)
-        if size(in, transform.axis) == div(grid_n, 2) + 1
+        base_n = transform.basis.meta.size
+        axis_len = size(in, transform.axis)
+        if axis_len == div(grid_n, 2) + 1
             is_irfft_path = true
+        elseif grid_n > base_n && axis_len == div(base_n, 2) + 1
+            # UPSAMPLED rfft axis: stored half-spectrum is the base length but the
+            # target grid is finer — zero-pad the half-spectrum then irfft.
+            is_upsampled_irfft = true
         end
     end
 
-    if is_irfft_path
+    if is_upsampled_irfft
+        grid_n = _bwd_grid_size(transform, out_n)
+        base_n = transform.basis.meta.size
+        ax = transform.axis
+        padded_shape = _replace_axis_shape(size(in), ax, div(grid_n, 2) + 1)
+        scratch_key = (padded_shape, _fft_eltype_tag(eltype(in)), SLOT_IRFFT)
+        scratch = _get_or_alloc_scratch!(transform.bwd_scratch, scratch_key,
+                                         padded_shape, eltype(in))
+        fill!(scratch, zero(eltype(scratch)))
+        # Copy the base half-spectrum into the low modes and rescale by
+        # grid_n/base_n: irfft divides by the (finer) grid_n while the stored
+        # coeffs were formed on base_n points, so without this factor the
+        # interpolated grid amplitude would be scaled by base_n/grid_n.
+        low = ntuple(i -> i == ax ? (1:size(in, ax)) : Colon(), ndims(in))
+        @views scratch[low...] .= in .* (grid_n / base_n)
+        if iseven(base_n)
+            # The base Nyquist mode (C_{N/2}) is ambiguous on the finer grid;
+            # drop it so this path agrees with the grid-space resample_1d! upsample.
+            nyq_i = div(base_n, 2) + 1
+            nyq = ntuple(i -> i == ax ? (nyq_i:nyq_i) : Colon(), ndims(in))
+            @views scratch[nyq...] .= 0
+        end
+        return _fourier_bwd_kernel!(out, scratch, plan)
+    elseif is_irfft_path
         scratch_key = (size(in), _fft_eltype_tag(eltype(in)), SLOT_IRFFT)
         scratch = _get_or_alloc_scratch!(transform.bwd_scratch, scratch_key,
                                          size(in), eltype(in))

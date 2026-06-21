@@ -73,6 +73,7 @@ const TEST_FILES = [
     "test_cpu_audit_2026_06_19.jl",
     "test_cpu_audit_2026_06_20.jl",
     "test_cpu_audit_batch3.jl",
+    "test_cpu_audit_2026_06_21.jl",
     # CPU coverage-raising tests (2026-06-19): behavior-driven, target previously
     # under-covered serial-CPU modules.
     "test_cov_step_diagonal_imex.jl",

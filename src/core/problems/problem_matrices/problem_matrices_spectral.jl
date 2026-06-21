@@ -594,6 +594,15 @@ function _is_const_or_param(expr)
     isa(expr, ConstantOperator) && return true
     isa(expr, ZeroOperator) && return true
     isa(expr, NegateOperator) && return _is_const_or_param(expr.operand)
+    # Arithmetic combinators whose leaves are ALL constant (e.g. (1/Re), a*b).
+    # Mirrors _is_constant_coefficient_strict so compound-constant coefficients
+    # are recognised here; otherwise build_expression_matrix_block falls to its
+    # else branch and silently drops the term (returns a zero block).
+    isa(expr, AddOperator)      && return _is_const_or_param(expr.left) && _is_const_or_param(expr.right)
+    isa(expr, SubtractOperator) && return _is_const_or_param(expr.left) && _is_const_or_param(expr.right)
+    isa(expr, MultiplyOperator) && return _is_const_or_param(expr.left) && _is_const_or_param(expr.right)
+    isa(expr, DivideOperator)   && return _is_const_or_param(expr.left) && _is_const_or_param(expr.right)
+    isa(expr, PowerOperator)    && return _is_const_or_param(expr.left) && _is_const_or_param(expr.right)
     # Constant ScalarField: 0D or single-element data (unit vectors, tau vars)
     if isa(expr, ScalarField)
         isempty(expr.bases) && return true
@@ -611,6 +620,13 @@ function _extract_scalar(expr)
     isa(expr, ConstantOperator) && return expr.value
     isa(expr, ZeroOperator) && return 0.0
     isa(expr, NegateOperator) && return -_extract_scalar(expr.operand)
+    # Fold compound-constant arithmetic (mirrors the _is_const_or_param recursion);
+    # only reached when every leaf is constant.
+    isa(expr, AddOperator)      && return _extract_scalar(expr.left) + _extract_scalar(expr.right)
+    isa(expr, SubtractOperator) && return _extract_scalar(expr.left) - _extract_scalar(expr.right)
+    isa(expr, MultiplyOperator) && return _extract_scalar(expr.left) * _extract_scalar(expr.right)
+    isa(expr, DivideOperator)   && return _extract_scalar(expr.left) / _extract_scalar(expr.right)
+    isa(expr, PowerOperator)    && return _extract_scalar(expr.left) ^ _extract_scalar(expr.right)
     if isa(expr, ScalarField)
         gdata = get_grid_data(expr)
         gdata !== nothing && length(gdata) >= 1 && return real(gdata[1])
