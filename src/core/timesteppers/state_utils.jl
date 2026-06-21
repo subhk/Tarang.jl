@@ -693,15 +693,18 @@ function _matched_forcing_view(forcing, target_size)
     end
 
     F = forcing.cached_forcing
-    if size(F) == target_size
+    # Call sites pass the coefficient ARRAY (state_utils.jl:133, lazy_rhs.jl:908),
+    # not a size tuple; normalize so both a size tuple and an array target work.
+    tsize = target_size isa AbstractArray ? size(target_size) : target_size
+    if size(F) == tsize
         return F
     end
 
     # Try to create a matching view
     try
-        if ndims(F) == ndims(target_size)
+        if ndims(F) == length(tsize)
             # Truncate or pad as needed
-            slices = ntuple(d -> 1:min(size(F, d), target_size[d]), ndims(F))
+            slices = ntuple(d -> 1:min(size(F, d), tsize[d]), ndims(F))
             return view(F, slices...)
         end
     catch

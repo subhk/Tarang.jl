@@ -386,8 +386,8 @@ function qg_step_rk4!(qg::QGSystem, dt::Real)
         if qg.κ > 0
             frac_lap_bot = evaluate_fractional_laplacian(FractionalLaplacian(qg.θ_bot, qg.α), :g)
             frac_lap_top = evaluate_fractional_laplacian(FractionalLaplacian(qg.θ_top, qg.α), :g)
-            get_grid_data(rhs_bot) .+= qg.κ .* get_grid_data(frac_lap_bot)
-            get_grid_data(rhs_top) .+= qg.κ .* get_grid_data(frac_lap_top)
+            get_grid_data(rhs_bot) .-= qg.κ .* get_grid_data(frac_lap_bot)
+            get_grid_data(rhs_top) .-= qg.κ .* get_grid_data(frac_lap_top)
         end
 
         return copy(get_grid_data(rhs_bot)), copy(get_grid_data(rhs_top))

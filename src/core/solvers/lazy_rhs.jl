@@ -350,9 +350,15 @@ function _translate_future_to_lazy(expr::Future, state; target=nothing)
         deps = Any[]
         for a in args
             if isa(a, Number)
+                # A complex coefficient (e.g. `2im`) must NOT have its imaginary
+                # part discarded — folding only the real part would silently zero
+                # an imaginary term (`2im*u` → `0.0*u`). Bail so the interpreted
+                # RHS, which carries complex coefficients correctly, takes over.
+                imag(a) != 0 && return nothing
                 scalar_coeff *= Float64(real(a))
             elseif isa(a, ConstantOperator)
-                scalar_coeff *= Float64(a.value)
+                imag(a.value) != 0 && return nothing
+                scalar_coeff *= Float64(real(a.value))
             else
                 push!(deps, a)
             end
