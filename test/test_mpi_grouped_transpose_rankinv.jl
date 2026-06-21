@@ -18,6 +18,14 @@ const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
 const nprocs = MPI.Comm_size(comm)
 
+# Needs >= 2 ranks: the test asserts a cross-rank invariant, and at np=1 the
+# distributor is serial so create_pencil returns a plain Array (not a PencilArray).
+if nprocs < 2
+    rank == 0 && @warn "N1 grouped-transpose rank-invariance guard needs >= 2 ranks; got $nprocs"
+    MPI.Finalize()
+    exit(0)
+end
+
 @testset "grouped transpose rank-invariant grouping (rank=$rank)" begin
     coords = CartesianCoordinates("x", "y")
     dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
