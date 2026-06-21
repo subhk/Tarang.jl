@@ -54,6 +54,18 @@ mutable struct Distributor
     pencil_fft_input::Union{Nothing, PencilArrays.Pencil}   # Input pencil from PencilFFT plan
     pencil_fft_output::Union{Nothing, PencilArrays.Pencil}  # Output pencil from PencilFFT plan
 
+    # Coeff-space "solve pencil" for distributed mixed Fourier–Chebyshev IMEX.
+    # `pencil_fft_output` decomposes the Chebyshev axis and keeps the Fourier
+    # axis LOCAL (with a Permutation). The per-Fourier-mode tau solve needs the
+    # OPPOSITE: each rank owns a subset of Fourier modes plus FULL Chebyshev
+    # columns. `pencil_solve` decomposes the trailing Fourier axis/axes, keeps
+    # the Chebyshev axis local, and uses NoPermutation (so `parent()` is in
+    # logical order for the gather/scatter index logic). Transpose-compatible
+    # with `pencil_fft_output` (same topology + global size, one differing
+    # decomp dim). Built in transform_planning.jl; `nothing` for pure-Fourier
+    # or serial runs.
+    pencil_solve::Union{Nothing, PencilArrays.Pencil}
+
     # Layout cache (keys are Tuple of bases)
     layouts::Dict{Tuple, Layout}
 
@@ -204,6 +216,7 @@ mutable struct Distributor
         pencil_fft_plan = nothing
         pencil_fft_input = nothing
         pencil_fft_output = nothing
+        pencil_solve = nothing
         layouts = Dict{Tuple, Layout}()
         perf_stats = DistributorPerformanceStats()
 
@@ -246,7 +259,7 @@ mutable struct Distributor
 
         dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
             architecture, _use_pencil_arrays, pencil_config, mpi_topology, pencil_cache, transforms,
-            pencil_fft_plan, pencil_fft_input, pencil_fft_output, layouts, perf_stats,
+            pencil_fft_plan, pencil_fft_input, pencil_fft_output, pencil_solve, layouts, perf_stats,
             mesh_coords, neighbor_ranks, nothing, gpu_fft_plans, gpu_arrays, distributed_gpu_config,
             transpose_comms_cache, transpose_counts_cache)
 

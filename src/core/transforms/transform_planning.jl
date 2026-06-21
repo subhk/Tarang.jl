@@ -290,6 +290,27 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
         _tmp_out = PencilFFTs.allocate_output(fft_plan)
         dist.pencil_fft_input = PencilArrays.pencil(_tmp_in)
         dist.pencil_fft_output = PencilArrays.pencil(_tmp_out)
+
+        # ── Mixed Fourier–Chebyshev solve pencil ─────────────────────────────
+        # For mixed domains (a non-Fourier axis is present), build the coeff-
+        # space "solve pencil". `pencil_fft_output` decomposes the Chebyshev
+        # axis and keeps the Fourier axis LOCAL (with a permutation); the
+        # per-Fourier-mode tau solve needs the OPPOSITE — Fourier axis
+        # DECOMPOSED, Chebyshev axis LOCAL — so each rank owns a subset of
+        # x-modes plus FULL z-columns. We decompose the SAME trailing Fourier
+        # axis/axes (`decomp_dims`) but on the coeff-space global size, with
+        # NoPermutation so `parent()` is in logical order for the gather/scatter
+        # index logic in subproblem_io.jl. Same topology + same logical global
+        # size as `pencil_fft_output` ⇒ transpose-compatible (one differing
+        # decomp dim). Pure-Fourier domains keep `pencil_solve = nothing`.
+        has_nonfourier = length(fourier_axes) < ndims_total
+        if has_nonfourier
+            solve_topo = PencilArrays.topology(dist.pencil_fft_output)
+            solve_size = PencilArrays.size_global(dist.pencil_fft_output)
+            dist.pencil_solve = PencilArrays.Pencil(
+                solve_topo, solve_size, decomp_dims;
+                permute=PencilArrays.NoPermutation())
+        end
     catch e
         if dist.size > 1
             # In MPI mode, failing to create parallel FFT is a critical error
