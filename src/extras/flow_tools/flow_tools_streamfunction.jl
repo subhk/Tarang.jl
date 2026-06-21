@@ -223,10 +223,14 @@ function _get_pencil_array_offsets_internal(field::ScalarField)
     if field.dist.use_pencil_arrays && field.dist.size > 1
         try
             if hasproperty(coeff_data, :pencil)
-                axes = PencilArrays.axes_local(coeff_data)
+                # Use the PUBLIC exported `range_local` — `PencilArrays.axes_local`
+                # is a PRIVATE struct field, not a callable, so calling it raised
+                # UndefVarError and crashed every distributed scalar spectrum.
+                # (Same fix as _get_pencil_array_offsets in flow_tools_spectra.jl.)
+                axes = PencilArrays.range_local(coeff_data)
                 return Tuple(first(ax) - 1 for ax in axes)
-            elseif applicable(PencilArrays.axes_local, coeff_data)
-                axes = PencilArrays.axes_local(coeff_data)
+            elseif applicable(PencilArrays.range_local, coeff_data)
+                axes = PencilArrays.range_local(coeff_data)
                 return Tuple(first(ax) - 1 for ax in axes)
             end
         catch e

@@ -164,6 +164,24 @@ mutable struct Distributor
         coords_tuple = coords(coordsys)  # Get coordinates from the coordinate system
         total_dim = coordsys.dim  # Total dimension
 
+        # Normalize process meshes that carry a unit factor (e.g. (1, N)) when the
+        # mesh would otherwise over-decompose the domain. PencilFFTs requires at
+        # least one array dimension to stay local for the FFT/transpose, so a mesh
+        # whose dimensionality reaches the domain dimensionality while containing a
+        # unit factor (like a 2D (1, N) mesh) decomposes *every* axis. PencilArrays
+        # accepts the (unique) decomp_dims, but PencilFFTPlan later shifts the
+        # decomposition between FFT stages and trips `@assert allunique(decomp)`
+        # (PencilFFTs plans.jl). A unit factor carries no real decomposition, so we
+        # drop it: a 2D (1, N) mesh collapses to the equivalent (N,) slab mesh and
+        # routes through the proven 1D-mesh path. Guarded by
+        # `length(mesh) >= total_dim` so genuine higher-rank meshes are untouched
+        # (e.g. the auto 3D (1, 2) mesh at np=2, where length 2 < total_dim 3, still
+        # decomposes dims (2, 3) over a 2D topology).
+        if size > 1 && _use_pencil_arrays && length(mesh) >= total_dim && any(==(1), mesh)
+            stripped = Tuple(filter(>(1), collect(mesh)))
+            mesh = isempty(stripped) ? (size,) : stripped
+        end
+
         # CRITICAL: Validate mesh dimensionality vs domain dimensionality
         # This catches cases where mesh has more dimensions than the domain,
         # which can cause helper functions to desync from actual PencilArray layouts
@@ -768,6 +786,38 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
 end
 
 """
+    pencil_local_range(dist, mesh_dim, n_procs, n_global) -> Union{UnitRange{Int}, Nothing}
+
+Local global-index range owned along a decomposed mesh dimension, reproducing
+PencilArrays' decomposition EXACTLY so that a field's grid coordinates and its
+PencilArrays-owned data slab always coincide.
+
+Returns `nothing` (caller then uses the legacy load-balancing formula) unless this
+is the PencilArrays path (`use_pencil_arrays` with an initialized `mpi_topology`).
+
+Two PencilArrays conventions are matched that the previous generic formula got
+wrong on non-degenerate decompositions:
+
+  * Coordinate ordering (C1) — the 1-based process coordinate is taken from the
+    MPI Cartesian topology (`coords_local`, laid out row-major / last mesh dim
+    fastest by `MPI.Cart_create`), NOT Tarang's column-major `rank->coord` map.
+    These differ on >=2D meshes (e.g. the off-diagonal ranks of a 2x2 mesh).
+  * Remainder placement (C3) — the split is PencilArrays' `local_data_range`
+    (PencilArrays/src/Pencils/data_ranges.jl): `a = N*(p-1)/P + 1`, `b = N*p/P`,
+    which gives the load-balance remainder to the LAST ranks. The previous
+    formula gave it to the FIRST ranks.
+"""
+@inline function pencil_local_range(dist::Distributor, mesh_dim::Int, n_procs::Int, n_global::Int)
+    (dist.use_pencil_arrays && dist.mpi_topology !== nothing) || return nothing
+    coords = dist.mpi_topology.coords_local
+    mesh_dim <= length(coords) || return nothing
+    p = coords[mesh_dim]                         # 1-based coordinate (MPI Cart, row-major)
+    a = (n_global * (p - 1)) ÷ n_procs + 1       # PencilArrays local_data_range(p, P, N)
+    b = (n_global * p) ÷ n_procs
+    return a:b
+end
+
+"""
     compute_local_shape(dist::Distributor, global_shape::Tuple)
 
 Compute local array shape based on MPI decomposition.
@@ -807,17 +857,26 @@ function compute_local_shape(dist::Distributor, global_shape::Tuple)
         n_global = global_shape[global_dim_idx]
         n_procs = dist.mesh[mesh_dim_idx]
 
-        # Get process coordinate in this dimension
-        proc_coord = get_process_coordinate_in_mesh(dist, mesh_dim_idx)
-
-        # Compute local size with load balancing
-        base_size = div(n_global, n_procs)
-        remainder = n_global % n_procs
-
-        if proc_coord < remainder
-            local_shape[global_dim_idx] = base_size + 1
+        # Match PencilArrays' decomposition exactly when on the PencilArrays path,
+        # so the reported local shape equals the owned data slab (coord ordering +
+        # remainder-on-LAST-rank). Fall back to generic load balancing only off
+        # that path (GPU / TransposableField).
+        pr = pencil_local_range(dist, mesh_dim_idx, n_procs, n_global)
+        if pr !== nothing
+            local_shape[global_dim_idx] = length(pr)
         else
-            local_shape[global_dim_idx] = base_size
+            # Get process coordinate in this dimension
+            proc_coord = get_process_coordinate_in_mesh(dist, mesh_dim_idx)
+
+            # Compute local size with load balancing
+            base_size = div(n_global, n_procs)
+            remainder = n_global % n_procs
+
+            if proc_coord < remainder
+                local_shape[global_dim_idx] = base_size + 1
+            else
+                local_shape[global_dim_idx] = base_size
+            end
         end
     end
 
@@ -991,6 +1050,13 @@ function local_indices(dist::Distributor, axis::Int, global_size::Int)
     end
 
     n_procs = dist.mesh[mesh_dim]
+
+    # Match PencilArrays' decomposition exactly when on the PencilArrays path so
+    # these indices address the same slab PencilArrays owns (coord ordering AND
+    # remainder placement). Fall back to generic load balancing otherwise.
+    pr = pencil_local_range(dist, mesh_dim, n_procs, global_size)
+    pr === nothing || return pr
+
     proc_coord = get_process_coordinate_in_mesh(dist, mesh_dim)
 
     # Compute start index and local size with load balancing

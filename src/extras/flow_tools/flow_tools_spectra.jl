@@ -59,7 +59,9 @@ function energy_spectrum(velocity::VectorField;
     # is only a MODE COUNT (N/2), which on a non-2π domain undershoots the physical
     # Nyquist (L<2π) and silently discards every mode with physical |k| > N/2 → lost
     # energy. Use the physical radial Nyquist (min over axes of each axis's max |k|).
-    phys_kmax = _physical_radial_kmax(wavenumber_info)
+    # Pass the field's distributor so the ceiling is reduced GLOBALLY across ranks
+    # (identical num_bins on every rank -> matched MPI.Allreduce buffers below).
+    phys_kmax = _physical_radial_kmax(wavenumber_info, velocity.components[1].dist)
     if max_wavenumber === nothing
         max_wavenumber = phys_kmax
     else
@@ -136,14 +138,28 @@ is just `min(maximum|kx|, maximum|ky|[, maximum|kz|])`. On a 2π domain k0=1 and
 this equals the old mode-count N/2, so the common case is unchanged; on L≠2π it is
 the physical ceiling so no resolved mode is binned past it and dropped.
 """
-function _physical_radial_kmax(wi::WavenumberInfo)
+function _physical_radial_kmax(wi::WavenumberInfo, dist=nothing)
     # Min over axes of max|k_axis| (the largest radius whose shell is fully
     # resolved on every axis). Skip empty/absent axis grids so the 1D scalar
     # power-spectrum path (ky_grid = empty, kz_grid = nothing) is also handled.
+    #
+    # MPI: the per-axis k-grids are LOCAL slabs, so each rank's max|k_axis| (and
+    # hence the resulting `num_bins`) differs. That makes the per-bin MPI.Allreduce
+    # buffers mismatched in length and crashes ALL distributed spectra. Reduce each
+    # axis's max with MAX over the field communicator so every rank derives the SAME
+    # global physical ceiling (and identical num_bins). Reducing per-axis BEFORE the
+    # min-over-axes is exact (= min of the per-axis GLOBAL maxima), unlike reducing
+    # the already-min'd local value. Every rank issues exactly three Allreduce calls
+    # (grid dimensionality is global), so the collective stays in lock-step.
+    use_mpi = dist !== nothing && MPI.Initialized() && dist.size > 1
+    _axis_kmax = function (grid)
+        m = (grid === nothing || isempty(grid)) ? -Inf : Float64(maximum(abs, grid))
+        return use_mpi ? MPI.Allreduce(m, MPI.MAX, dist.comm) : m
+    end
     kmaxes = Float64[]
-    !isempty(wi.kx_grid) && push!(kmaxes, maximum(abs, wi.kx_grid))
-    wi.ky_grid !== nothing && !isempty(wi.ky_grid) && push!(kmaxes, maximum(abs, wi.ky_grid))
-    wi.kz_grid !== nothing && !isempty(wi.kz_grid) && push!(kmaxes, maximum(abs, wi.kz_grid))
+    mx = _axis_kmax(wi.kx_grid); isfinite(mx) && push!(kmaxes, mx)
+    my = _axis_kmax(wi.ky_grid); isfinite(my) && push!(kmaxes, my)
+    mz = _axis_kmax(wi.kz_grid); isfinite(mz) && push!(kmaxes, mz)
     isempty(kmaxes) && return 0.0
     return minimum(kmaxes)
 end
@@ -542,12 +558,17 @@ function calculate_spectral_kinetic_energy(velocity::VectorField; apply_conjugat
             # Only apply doubling if there are valid indices to double
             if double_start <= double_end
                 double_range = double_start:double_end
-                if ndims(ke_spectral) == 2
-                    ke_spectral[double_range, :] .*= 2.0
-                elseif ndims(ke_spectral) == 3
-                    ke_spectral[double_range, :, :] .*= 2.0
-                elseif ndims(ke_spectral) == 1
-                    ke_spectral[double_range] .*= 2.0
+                # Scale the |k|>0 interior modes by 2 (rfft conjugate symmetry).
+                # Use scalar logical indexing over CartesianIndices: in MPI mode
+                # `ke_spectral` is a (possibly memory-permuted) PencilArray, and
+                # range-slicing it (`[range, :]`) tries to build a different-sized
+                # PencilArray and throws DimensionMismatch. Element-wise logical
+                # indexing works for both PencilArrays and plain serial Arrays and
+                # matches the binning loop's access pattern below.
+                @inbounds for idx in CartesianIndices(ke_spectral)
+                    if idx[1] in double_range
+                        ke_spectral[idx] *= 2.0
+                    end
                 end
             end
         end
@@ -675,7 +696,8 @@ function power_spectrum(field::ScalarField;
     # wavenumbers (k = 2π·n/L), so the ceiling must be the physical radial Nyquist —
     # wavenumber_info.kmax is only a MODE COUNT and would drop modes on L<2π domains
     # (same fix already applied to energy_spectrum).
-    phys_kmax = _physical_radial_kmax(wavenumber_info)
+    # Reduce the ceiling globally so num_bins matches across ranks (see line ~1013).
+    phys_kmax = _physical_radial_kmax(wavenumber_info, field.dist)
     if max_wavenumber === nothing
         max_wavenumber = phys_kmax
     else
@@ -757,7 +779,8 @@ function enstrophy_spectrum(velocity::VectorField;
         # Physical radial Nyquist ceiling (k_magnitudes are PHYSICAL k = 2π·n/L).
         # wavenumber_info.kmax is a mode count and would discard resolved vorticity
         # modes on L<2π domains — mirror the energy_spectrum fix.
-        phys_kmax = _physical_radial_kmax(wavenumber_info)
+        # Reduce globally for identical num_bins across ranks (vector Allreduce ~1208).
+        phys_kmax = _physical_radial_kmax(wavenumber_info, velocity.components[1].dist)
         if max_wavenumber === nothing
             max_wavenumber = phys_kmax
         else
@@ -955,12 +978,14 @@ function calculate_spectral_power(field::ScalarField; apply_conjugate_symmetry::
 
             if double_start <= double_end
                 double_range = double_start:double_end
-                if ndims(power_spectral) == 2
-                    power_spectral[double_range, :] .*= 2.0
-                elseif ndims(power_spectral) == 3
-                    power_spectral[double_range, :, :] .*= 2.0
-                elseif ndims(power_spectral) == 1
-                    power_spectral[double_range] .*= 2.0
+                # Scalar logical indexing (see calculate_spectral_kinetic_energy):
+                # range-slicing a distributed PencilArray throws DimensionMismatch,
+                # so scale the |k|>0 interior modes element-wise over CartesianIndices
+                # (correct for permuted PencilArrays and plain serial Arrays alike).
+                @inbounds for idx in CartesianIndices(power_spectral)
+                    if idx[1] in double_range
+                        power_spectral[idx] *= 2.0
+                    end
                 end
             end
         end
@@ -1334,23 +1359,27 @@ function _get_pencil_array_offsets(velocity::VectorField)
         # Check if this looks like a PencilArray (has pencil property or parent)
         # PencilArrays.axes_local returns global index ranges
         if hasproperty(coeff_data, :pencil)
-            # Direct PencilArray access
+            # Direct PencilArray access. Use the PUBLIC, exported `range_local`
+            # (default LogicalOrder) — `PencilArrays.axes_local` is a PRIVATE struct
+            # FIELD, not a callable, so the old call raised UndefVarError and crashed
+            # every distributed spectrum. `range_local(::PencilArray)` returns the
+            # owned global index range per axis; offset = first(range) - 1.
             try
-                axes = PencilArrays.axes_local(coeff_data)
+                axes = PencilArrays.range_local(coeff_data)
                 offsets = Tuple(first(ax) - 1 for ax in axes)
                 return offsets
             catch e
-                error("_get_pencil_array_offsets: PencilArray.axes_local failed: $e. " *
+                error("_get_pencil_array_offsets: PencilArrays.range_local failed: $e. " *
                       "Cannot compute correct MPI offsets.")
             end
-        elseif applicable(PencilArrays.axes_local, coeff_data)
-            # Try calling axes_local directly
+        elseif applicable(PencilArrays.range_local, coeff_data)
+            # Try calling range_local directly (public API; LogicalOrder by default).
             try
-                axes = PencilArrays.axes_local(coeff_data)
+                axes = PencilArrays.range_local(coeff_data)
                 offsets = Tuple(first(ax) - 1 for ax in axes)
                 return offsets
             catch e
-                error("_get_pencil_array_offsets: axes_local call failed: $e. " *
+                error("_get_pencil_array_offsets: range_local call failed: $e. " *
                       "Cannot compute correct MPI offsets.")
             end
         else
