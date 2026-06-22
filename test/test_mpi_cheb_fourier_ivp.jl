@@ -83,5 +83,49 @@ end
     @test isapprox(sumsq, SUMSQ_REF; atol=1e-6)
 end
 
+# Same problem, MULTISTEP (SBDF2) timestepper — exercises the solve-layout
+# brackets in step_subproblem_multistep! (separate serial reference).
+const SUMSQ_REF_MS = 33.0485280937167
+const BMAX_REF_MS  = 1.4302790931715417
+
+@testset "Distributed Cheb-Fourier IVP (SBDF2) matches serial (rank=$rank)" begin
+    kappa = 0.1; Lz = 1.0; dt = 1e-3; NSTEPS = 20; Nz = 12; Nx = 8
+    coords = CartesianCoordinates("z", "x")
+    dist = Distributor(coords; dtype=Float64, architecture=CPU())
+    zbasis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz))
+    xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, 2π))
+    domain = Domain(dist, (zbasis, xbasis))
+    b = ScalarField(domain, "b")
+    tau_b1 = ScalarField(dist, "tau_b1", (), Float64)
+    tau_b2 = ScalarField(dist, "tau_b2", (), Float64)
+    ex, ez = unit_vector_fields(coords, dist)
+    lift_basis = derivative_basis(zbasis, 1)
+    τ_lift(A) = lift(A, lift_basis, -1)
+    grad_b = grad(b) + ez * τ_lift(tau_b1)
+    problem = IVP([b, tau_b1, tau_b2])
+    add_parameters!(problem, kappa=kappa, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
+    add_equation!(problem, "∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = 0")
+    add_bc!(problem, "b(z=0) = 0")
+    add_bc!(problem, "b(z=1) = 0")
+    solver = InitialValueSolver(problem, SBDF2(); dt=dt)
+
+    xfull = [2π*(i-1)/Nx for i in 1:Nx]
+    zfull = [Lz/2*(1-cos(π*(k-1)/(Nz-1))) for k in 1:Nz]
+    b0(z, x) = sin(π*z/Lz)*(1 + 0.5*cos(2*x))
+    gdata = [b0(zfull[iz], xfull[ix]) for iz in 1:Nz, ix in 1:Nx]
+    ensure_layout!(b, :g); _assign_local!(b, gdata); ensure_layout!(b, :c)
+
+    for _ in 1:NSTEPS
+        step!(solver, dt)
+    end
+
+    ensure_layout!(b, :g); lv = _loc(b)
+    sumsq = MPI.Allreduce(sum(abs2, lv), MPI.SUM, comm)
+    bmax = MPI.Allreduce(maximum(abs, lv), MPI.MAX, comm)
+    rank == 0 && println("  SBDF2 np=$nprocs sumsq=$sumsq bmax=$bmax (ref sumsq=$SUMSQ_REF_MS)")
+    @test isapprox(bmax, BMAX_REF_MS; atol=1e-10)
+    @test isapprox(sumsq, SUMSQ_REF_MS; atol=1e-6)
+end
+
 MPI.Barrier(comm)
 MPI.Finalized() || MPI.Finalize()

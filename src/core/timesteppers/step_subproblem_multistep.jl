@@ -148,6 +148,11 @@ function step_subproblem_multistep!(
         ensure_layout!(f, :c)
     end
 
+    # Distributor handle for the mixed Fourier–Chebyshev solve-layout transpose
+    # (to_solve_layout!/from_solve_layout! are no-ops outside distributed
+    # mixed-basis runs). Same bracketing pattern as step_subproblem_rk!.
+    dist = length(subproblems) >= 1 ? subproblems[1].dist : nothing
+
     n_sp = length(subproblems)
 
     # ── Per-subproblem ring-buffer history (cached in timestepper_data) ──────
@@ -179,6 +184,12 @@ function step_subproblem_multistep!(
     # Write directly into ring slots — no per-step allocation.
     F_fields = evaluate_rhs_buffered(solver, state_fields, solver.sim_time)
 
+    # Solve layout for the per-mode gather (state + F coeffs). One collective
+    # transpose per field list, OUTSIDE the subproblem loop. F_fields are
+    # read-only here → restored by pointer swap only (no transpose back).
+    _ms_g_state = to_solve_layout!(state_fields, dist)
+    _ms_g_F     = to_solve_layout!(F_fields, dist)
+
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
         n = size(sp.M_min, 1)
@@ -199,6 +210,14 @@ function step_subproblem_multistep!(
 
         # F_current in equation space (PDE rows only — BC rows handled below)
         gather_eqn_F!(f_cur, sp, solver, F_fields, state_fields)
+    end
+
+    # Restore FFT layout for state (transpose back) and F (pointer swap only —
+    # its solved values are discarded; the pencil must be the FFT pencil for the
+    # next step's buffered RHS transform).
+    from_solve_layout!(_ms_g_state, dist)
+    for (f, fft_pa) in _ms_g_F
+        set_coeff_data!(f, fft_pa)
     end
 
     # ── Step 2: check if we have enough history to advance ──────────────────
@@ -238,6 +257,9 @@ function step_subproblem_multistep!(
     end
 
     # ── Step 4: build RHS and solve per subproblem ──────────────────────────
+    # Solve layout for the per-mode scatter (writes X_new back). One collective
+    # transpose OUTSIDE the loop; restored before _push_trim! reads grid space.
+    _ms_s_state = to_solve_layout!(state_fields, dist)
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
         n = size(sp.M_min, 1)
@@ -292,6 +314,9 @@ function step_subproblem_multistep!(
         _solve_cached_system!(x_new, lhs_solver, rhs)
         scatter_inputs(sp, x_new, state_fields)
     end
+
+    # Restore FFT layout before the grid-space history push below.
+    from_solve_layout!(_ms_s_state, dist)
 
     # ── Step 5: push new state to history ───────────────────────────────────
     _push_trim!(state.history, state_fields, 1)
