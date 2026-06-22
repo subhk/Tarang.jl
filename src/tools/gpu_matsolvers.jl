@@ -770,8 +770,16 @@ function MatSolvers.solve(s::CuIterativeCG{T}, rhs::AbstractVector) where T
         rz_old = rz_new
     end
 
-    @warn "CG did not converge in $(s.maxiter) iterations"
-    return x
+    # Non-convergence is a HARD error, not a silent last-iterate return: CG only
+    # converges for Hermitian positive-definite operators. The coupled
+    # Fourier–Chebyshev implicit tau operator (M + dt·a_ii·L) is non-Hermitian/
+    # indefinite (Chebyshev differentiation matrices are non-symmetric and the
+    # tau/BC rows break symmetry), so returning the last iterate would feed a
+    # silently wrong solution back into the timestep. Use a direct GPU solver
+    # (CuSparseLU / CuDenseLU) or GMRES for such systems.
+    error("CuIterativeCG did not converge in $(s.maxiter) iterations. CG requires a " *
+          "Hermitian positive-definite operator; coupled Chebyshev–Fourier (tau) " *
+          "systems are non-Hermitian. Use a direct solver (CuSparseLU/CuDenseLU) or GMRES.")
 end
 
 _apply_preconditioner!(z, M_inv, r) = error("Unsupported preconditioner type $(typeof(M_inv))")

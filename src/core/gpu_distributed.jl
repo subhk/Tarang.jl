@@ -388,9 +388,12 @@ function distributed_fft_cuda_aware!(data, dim::Int, dfft::DistributedGPUFFT, di
     # CRITICAL: Synchronize GPU before MPI to ensure pack kernels have completed
     synchronize_device!(arch)
 
-    # Step 7: Reverse all-to-all — recompute counts from transposed dimensions
+    # Step 7: Reverse all-to-all — REVERSE-orientation counts (split along `dim`,
+    # assemble along `other_dim`), matching the reverse pack and
+    # mpi_alltoall_transpose_reverse. Using the forward `_compute_alltoall_counts`
+    # here mis-segments the Alltoallv on nprocs>=4 / non-divisible splits.
     rev_send_counts, rev_recv_counts, rev_send_displs, rev_recv_displs =
-        _compute_alltoall_counts(size(result), dim, config)
+        _compute_alltoall_counts_reverse(size(result), dim, config)
     sendbuf_r = MPI.VBuffer(dfft.transpose_send, rev_send_counts, rev_send_displs)
     recvbuf_r = MPI.VBuffer(dfft.transpose_recv, rev_recv_counts, rev_recv_displs)
     MPI.Alltoallv!(sendbuf_r, recvbuf_r, comm)
@@ -536,6 +539,51 @@ end
 # ============================================================================
 # MPI Transpose Operations
 # ============================================================================
+
+"""
+    _compute_alltoall_counts_reverse(dims, dim, config)
+
+Send/recv counts + displacements for the REVERSE all-to-all (undoing the
+forward transpose): split along `dim` (now full `global_n`), assemble along
+`other_dim`. This is the orientation `mpi_alltoall_transpose_reverse` uses; the
+forward `_compute_alltoall_counts` splits along `other_dim` instead, so the
+CUDA-aware reverse path MUST use these (its pack splits along `dim`). For
+even nprocs=2 splits the two count sets coincide, which previously masked the
+mismatch on nprocs>=4 / non-divisible sizes.
+"""
+function _compute_alltoall_counts_reverse(dims::Tuple, dim::Int, config::DistributedGPUConfig)
+    nprocs = config.size
+    rank = config.rank
+    ndims_data = length(dims)
+    global_n = config.global_shape[dim]
+    other_dim = dim == ndims_data ? 1 : ndims_data
+    other_n = config.global_shape[other_dim]
+
+    chunk_other = Vector{Int}(undef, nprocs)
+    chunk_dim = Vector{Int}(undef, nprocs)
+    for p in 1:nprocs
+        chunk_other[p] = div(other_n, nprocs) + (p - 1 < mod(other_n, nprocs) ? 1 : 0)
+        chunk_dim[p]   = div(global_n, nprocs) + (p - 1 < mod(global_n, nprocs) ? 1 : 0)
+    end
+    chunk_dim_me = chunk_dim[rank + 1]
+    remaining = div(prod(dims), dims[dim] * dims[other_dim])
+
+    send_counts = Vector{Int}(undef, nprocs)
+    recv_counts = Vector{Int}(undef, nprocs)
+    send_displs = Vector{Int}(undef, nprocs)
+    recv_displs = Vector{Int}(undef, nprocs)
+    send_offset = 0
+    recv_offset = 0
+    for p in 1:nprocs
+        send_counts[p] = chunk_dim[p] * dims[other_dim] * remaining
+        recv_counts[p] = chunk_other[p] * chunk_dim_me * remaining
+        send_displs[p] = send_offset
+        recv_displs[p] = recv_offset
+        send_offset += send_counts[p]
+        recv_offset += recv_counts[p]
+    end
+    return send_counts, recv_counts, send_displs, recv_displs
+end
 
 """
     mpi_alltoall_transpose(data, dim, config)
