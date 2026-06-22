@@ -575,6 +575,24 @@ function distributed_backward_dct!(data::CuArray, coeffs::CuArray{Complex{T}, 3}
     # RealFourier dim-1 Hermitian expansion: half-spectrum → full Nx. dim 1 is
     # LOCAL here (X-pencil), so expanding it is correct; result dim 1 == Nx.
     Nx = pencil.global_shape[1]
+    # CORRECTNESS GUARD: _realfourier_hermitian_expand runs here while dims 2/3 are
+    # STILL spectral, doing a per-(k2,k3)-column conjugate (full[N1-k1+2,k2,k3] =
+    # conj(half[k1,k2,k3]), NO transverse-wavenumber flip). That is correct only
+    # when every transverse axis is real-kernel (Chebyshev DCT-I) or physical. A
+    # ComplexFourier (or RealFourier) transverse axis needs the conjugate partner
+    # at the flipped wavenumber ((N2-k2)%N2, …) — equivalently the dim-1 inverse
+    # must be the LAST distributed-backward stage (as on CPU; transform_fourier.jl
+    # walks transforms in reverse). Fail loudly instead of silently corrupting the
+    # round-trip. The proper reorder fix needs multi-GPU verification — see
+    # memory/project_gpu_ff_ffc_audit_2026_06_22.md.
+    if plan.axis_kind[1] === :real_fourier &&
+       any(k -> k === :complex_fourier || k === :real_fourier, plan.axis_kind[2:end])
+        error("Distributed-GPU backward DCT: RealFourier on dim 1 together with a " *
+              "Fourier transverse axis (dims 2/3) is not yet supported — the per-column " *
+              "Hermitian expand would place conjugate partners at the wrong transverse " *
+              "wavenumber. Reorder so the dim-1 inverse is the final stage, or use the " *
+              "CPU path for this layout.")
+    end
     spectral_x_full = plan.axis_kind[1] === :real_fourier ?
         _realfourier_hermitian_expand(x_c, Nx) : x_c
 
