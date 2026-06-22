@@ -42,6 +42,172 @@ underlying local buffer via `parent()`. For regular arrays, returns as-is.
 _local_coeff_data(cd::AbstractArray) = get_local_data(cd)
 _local_coeff_data(::Nothing) = nothing
 
+# ── Distributed mixed Fourier–Chebyshev solve-layout transpose ───────────────
+#
+# In coeff space a mixed Fourier–Chebyshev field's PencilArray (the
+# `pencil_fft_output` layout) is decomposed along the CHEBYSHEV axis with the
+# Fourier axis LOCAL (and a memory permutation). The per-Fourier-mode tau solve,
+# however, needs each rank to own a subset of Fourier modes plus FULL Chebyshev
+# columns — i.e. the Fourier axis DECOMPOSED and the Chebyshev axis LOCAL. That
+# is exactly the `dist.pencil_solve` layout. The gather/scatter index logic
+# (_subproblem_coeff_index, _global_to_local_kx, …) already matches the solve
+# layout (`local_indices` reports the x-mode split); the ONLY defect is data
+# placement. So before gather we transpose the coeff data into the solve pencil,
+# and after scatter we transpose it back into the FFT pencil.
+#
+# Collective-correctness: `to_solve_layout!`/`from_solve_layout!` iterate the
+# GLOBAL deterministic field list with a rank-independent predicate, and
+# `PencilArrays.transpose!` is ONE collective over the whole comm independent of
+# how many subproblems each rank iterates. They MUST be called OUTSIDE any
+# `for sp in subproblems` loop so every rank issues the same transpose count in
+# the same order.
+
+"""
+    _needs_solve_transpose(field::ScalarField, dist) -> Bool
+
+True when `field`'s coeff data must be transposed into the Chebyshev-local
+solve pencil before a per-mode gather/scatter: a distributed (`size>1`) run with
+a built `pencil_solve`, a non-Fourier (Chebyshev/Jacobi) basis present, and the
+coeff storage actually a `PencilArray`.
+"""
+function _needs_solve_transpose(field::ScalarField, dist)
+    return dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing &&
+           !isempty(field.bases) &&
+           any(b -> b !== nothing && !isa(b, FourierBasis), field.bases) &&
+           get_coeff_data(field) isa PencilArrays.PencilArray
+end
+
+_needs_solve_transpose(::Any, ::Any) = false
+
+"""
+    _iter_scalar_fields(fields) -> Vector{ScalarField}
+
+Flatten a state/RHS field list to its `ScalarField` leaves (Vector/Tensor field
+components expanded), mirroring the `_gather_field_raw!(::VectorField, …)`
+component iteration so the transpose set matches the gather set exactly.
+"""
+function _iter_scalar_fields(fields)
+    out = ScalarField[]
+    for f in fields
+        if f isa ScalarField
+            push!(out, f)
+        elseif f isa VectorField
+            for comp in f.components
+                push!(out, comp)
+            end
+        elseif f isa TensorField
+            for comp in vec(f.components)
+                push!(out, comp)
+            end
+        end
+    end
+    return out
+end
+
+# The distributed PencilFFT plan applies ONLY the Fourier transform (the
+# Chebyshev/Jacobi axis is `NoTransform`, kept local), so `pencil_fft_output`
+# holds Fourier-coeffs along the Fourier axis but GRID values along the
+# Chebyshev axis. The per-mode matrices are built in Chebyshev-COEFF space, so
+# once we are in the solve layout (Chebyshev axis LOCAL) we must apply the local
+# Chebyshev (or Legendre/Jacobi) forward transform along that axis before the
+# gather, and undo it after the scatter. `_apply_forward`/`_apply_backward` are
+# the SAME per-axis dispatchers the serial transform chain uses (they read
+# `transform.axis` and handle complex Fourier coefficients), so the coefficient
+# convention matches the matrices exactly. The Fourier transform is skipped here
+# (already done by the PencilFFT); non-`Transform` entries (the `PencilFFTPlan`
+# itself) are skipped too.
+
+"""
+    _solve_layout_forward_transform!(solve_pa, dist)
+
+Apply the local non-Fourier (Chebyshev/Legendre/Jacobi) forward transform along
+each such axis of `solve_pa` (NoPermutation ⇒ `parent` is in logical order, with
+the coupled axis local). Converts the coupled axis from grid to coefficient space
+so the per-mode gather sees spectral coefficients.
+"""
+function _solve_layout_forward_transform!(solve_pa::PencilArrays.PencilArray, dist)
+    cd = parent(solve_pa)
+    for transform in dist.transforms
+        (transform isa Transform) || continue          # skip PencilFFTPlan
+        (transform isa FourierTransform) && continue    # Fourier done by PencilFFT
+        out = _apply_forward(cd, transform)
+        out === cd || copyto!(cd, out)
+    end
+    return solve_pa
+end
+
+"""
+    _solve_layout_backward_transform!(solve_pa, dist)
+
+Inverse of `_solve_layout_forward_transform!`: apply the local non-Fourier
+backward transform along each coupled axis, returning the coupled axis to grid
+space before the transpose back to the FFT pencil.
+"""
+function _solve_layout_backward_transform!(solve_pa::PencilArrays.PencilArray, dist)
+    cd = parent(solve_pa)
+    for transform in dist.transforms
+        (transform isa Transform) || continue
+        (transform isa FourierTransform) && continue
+        out = _apply_backward(cd, transform)
+        out === cd || copyto!(cd, out)
+    end
+    return solve_pa
+end
+
+"""
+    to_solve_layout!(fields, dist) -> Vector{Pair}
+
+Transpose every eligible scalar field's coeff data from the FFT pencil
+(`pencil_fft_output`) into the Chebyshev-local solve pencil (`dist.pencil_solve`),
+apply the local Chebyshev/Jacobi forward DCT along the coupled axis (the PencilFFT
+left it in grid space), and swap the field's coeff storage to the solve
+PencilArray. Returns a stash of `field => fft_pencil_array` pairs to be undone by
+`from_solve_layout!`.
+
+No-op (returns an empty stash) for serial runs or when `pencil_solve` is unset.
+"""
+function to_solve_layout!(fields, dist)
+    stash = Pair{ScalarField, Any}[]
+    (dist === nothing || dist.size <= 1 || dist.pencil_solve === nothing) && return stash
+    cache = get_transpose_cache()
+    for f in _iter_scalar_fields(fields)
+        _needs_solve_transpose(f, dist) || continue
+        ensure_layout!(f, :c)
+        fft_pa = get_coeff_data(f)
+        (fft_pa isa PencilArrays.PencilArray) || continue
+        dtype = eltype(fft_pa)
+        key = (:solve, objectid(f), objectid(dist.pencil_solve))
+        solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
+        PencilArrays.transpose!(solve_pa, fft_pa)
+        _solve_layout_forward_transform!(solve_pa, dist)
+        set_coeff_data!(f, solve_pa)
+        push!(stash, f => fft_pa)
+    end
+    return stash
+end
+
+"""
+    from_solve_layout!(stash, dist)
+
+Undo `to_solve_layout!`: apply the local Chebyshev/Jacobi backward DCT along the
+coupled axis (returning it to grid space), transpose each field's solve
+PencilArray back into its FFT PencilArray, and restore the field's coeff storage.
+After this the field is in the `pencil_fft_output` layout (Fourier-coeff along the
+Fourier axis, GRID along the coupled axis) that the PencilFFT plan expects for
+grid-space transforms.
+"""
+function from_solve_layout!(stash, dist)
+    (dist === nothing || dist.size <= 1) && return
+    for (f, fft_pa) in stash
+        solve_pa = get_coeff_data(f)
+        (solve_pa isa PencilArrays.PencilArray) || continue
+        _solve_layout_backward_transform!(solve_pa, dist)
+        PencilArrays.transpose!(fft_pa, solve_pa)
+        set_coeff_data!(f, fft_pa)
+    end
+    return
+end
+
 @inline function _subproblem_backend_field(which::Symbol)
     if which === :M
         return :M_backend
