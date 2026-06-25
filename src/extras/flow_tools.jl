@@ -34,8 +34,12 @@ function turbulence_statistics(velocity::VectorField)
     for component in velocity.components
         ensure_layout!(component, :g)
         data = get_grid_data(component)
-        vel_sum_squared += sum(abs2.(data))
-        local_count += length(data)
+        # `parent` gives the LOCAL slab; reducing the PencilArray directly is a
+        # COLLECTIVE op (already global) which would then be Allreduced a second time
+        # below → nprocs× inflation (and errors on non-Intel MPI). parent is a no-op
+        # on plain serial arrays.
+        vel_sum_squared += sum(abs2, parent(data))
+        local_count += length(parent(data))
     end
 
     if use_mpi
@@ -51,7 +55,7 @@ function turbulence_statistics(velocity::VectorField)
     max_vel = 0.0
     for component in velocity.components
         ensure_layout!(component, :g)
-        max_vel = max(max_vel, maximum(abs.(get_grid_data(component))))
+        max_vel = max(max_vel, maximum(abs, parent(get_grid_data(component))))
     end
 
     if use_mpi
@@ -66,8 +70,8 @@ function turbulence_statistics(velocity::VectorField)
         vort = evaluate_operator(curl(velocity))
         ensure_layout!(vort, :g)
         vort_data = get_grid_data(vort)
-        vort_sum_squared = sum(abs2.(vort_data))
-        vort_count = length(vort_data)
+        vort_sum_squared = sum(abs2, parent(vort_data))   # local slab (see velocity_rms note)
+        vort_count = length(parent(vort_data))
 
         if use_mpi
             global_vort_sum = MPI.Allreduce(vort_sum_squared, MPI.SUM, comm)
@@ -78,7 +82,7 @@ function turbulence_statistics(velocity::VectorField)
         end
 
         # Maximum vorticity
-        max_vort = maximum(abs.(vort_data))
+        max_vort = maximum(abs, parent(vort_data))
         if use_mpi
             # Use field's communicator, not COMM_WORLD
             max_vort = MPI.Allreduce(max_vort, MPI.MAX, comm)

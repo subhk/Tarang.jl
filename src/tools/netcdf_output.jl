@@ -1219,15 +1219,24 @@ function build_layout_metadata(task::Dict, operator, data)
     end
 
     comp_dims = isa(operator, ScalarField) ? 0 : (isa(operator, VectorField) ? 1 : 2)
-    expected_ndims = comp_dims + length(local_shape)
-    if ndims_data != expected_ndims
+    base_ndims = comp_dims + length(local_shape)
+    # Complex data is written with a leading [real,imag] split dimension (size 2)
+    # before this is called (write_task_data!), so ndims(data) is base_ndims + 1.
+    # Account for it instead of bailing — otherwise NO start/count/global_shape
+    # attrs are written, and the RECONSTRUCT merge falls back to inferring a
+    # single-last-axis decomposition, which scrambles the restart on a >=2D process
+    # mesh (round-4 audit 2026-06-23). All leading (component + complex) dims are
+    # non-spatial; the decomposed spatial dims are trailing.
+    has_complex_split = (ndims_data == base_ndims + 1)
+    if ndims_data != base_ndims && !has_complex_split
         return nothing
     end
 
-    comp_sizes = comp_dims > 0 ? collect(size(data)[1:comp_dims]) : Int[]
-    start = vcat(fill(0, comp_dims), collect(Int.(local_start)))
-    count = vcat(comp_sizes, collect(Int.(local_shape)))
-    global_dims = vcat(comp_sizes, collect(Int.(global_shape)))
+    lead_dims = comp_dims + (has_complex_split ? 1 : 0)
+    lead_sizes = lead_dims > 0 ? collect(Int.(size(data)[1:lead_dims])) : Int[]
+    start = vcat(fill(0, lead_dims), collect(Int.(local_start)))
+    count = vcat(lead_sizes, collect(Int.(local_shape)))
+    global_dims = vcat(lead_sizes, collect(Int.(global_shape)))
 
     return (start=start, count=count, global_shape=global_dims, local_shape=count)
 end
@@ -1548,19 +1557,25 @@ function get_local_shape(layout, domain_info, scales, rank)
             mesh_dim_idx = i - (n_dims - n_mesh_dims)
 
             if mesh_dim_idx >= 1 && mesh_dim_idx <= n_mesh_dims
-                # This dimension is decomposed
+                # This dimension is decomposed. Match the actual PencilArrays slab
+                # EXACTLY (remainder-on-LAST, MPI-Cart row-major coords) so the
+                # written start/count attrs agree with the data actually written.
+                # The previous remainder-on-FIRST + column-major formula diverged
+                # from the slab on non-divisible / >=2D-mesh decompositions, so the
+                # RECONSTRUCT merge size-guard dropped every slab and NaN-filled the
+                # whole field (audit 2026-06-23).
                 n_procs = mesh[mesh_dim_idx]
-                proc_coord = get_process_coordinate_for_rank(dist, mesh_dim_idx, rank)
                 global_size = global_shape[i]
 
-                # Standard load-balanced decomposition
-                base_size = div(global_size, n_procs)
-                remainder = global_size % n_procs
-
-                if proc_coord < remainder
-                    local_dims[i] = base_size + 1
+                pr = (rank == dist.rank) ?
+                     pencil_local_range(dist, mesh_dim_idx, n_procs, global_size) : nothing
+                if pr !== nothing
+                    local_dims[i] = length(pr)
                 else
-                    local_dims[i] = base_size
+                    proc_coord = get_process_coordinate_for_rank(dist, mesh_dim_idx, rank)
+                    # PencilArrays local_data_range: count = N*(c+1)÷P - N*c÷P.
+                    local_dims[i] = div(global_size * (proc_coord + 1), n_procs) -
+                                    div(global_size * proc_coord, n_procs)
                 end
             else
                 # This dimension is not decomposed
@@ -1621,8 +1636,11 @@ function get_process_coordinate_for_rank(dist, mesh_dim::Int, rank::Int)
         return 0
     end
 
-    # Row-major ordering (matches distributor get_process_coordinate_in_mesh)
-    stride = prod(mesh[1:mesh_dim-1]; init=1)
+    # MPI Cartesian ordering: last mesh dim varies fastest (row-major, matching
+    # MPI.Cart_create / PencilArrays coords_local). The previous
+    # prod(mesh[1:mesh_dim-1]) was column-major and disagreed with the actual
+    # PencilArrays slab on >=2D meshes.
+    stride = prod(mesh[mesh_dim+1:end]; init=1)
     return div(rank, stride) % mesh[mesh_dim]
 end
 
@@ -1669,15 +1687,11 @@ function get_local_start(layout, domain_info, scales, rank)
 
     start_indices = Vector{Int}(undef, n_dims)
 
-    # Helper function to compute start index
+    # Helper: 0-based start of the PencilArrays local_data_range (remainder-on-LAST
+    # ranks): start = N*c÷P. The previous remainder-on-FIRST formula diverged from
+    # the actual slab on non-divisible decompositions (audit 2026-06-23).
     function compute_start(global_size, n_procs, proc_coord)
-        base_size = div(global_size, n_procs)
-        remainder = global_size % n_procs
-        if proc_coord < remainder
-            return proc_coord * (base_size + 1)
-        else
-            return remainder * (base_size + 1) + (proc_coord - remainder) * base_size
-        end
+        return div(global_size * proc_coord, n_procs)
     end
 
     if dist.use_pencil_arrays
@@ -1686,11 +1700,18 @@ function get_local_start(layout, domain_info, scales, rank)
             mesh_dim_idx = i - (n_dims - n_mesh_dims)
 
             if mesh_dim_idx >= 1 && mesh_dim_idx <= n_mesh_dims
-                # This dimension is decomposed - compute start index
+                # This dimension is decomposed - compute start index matching the
+                # actual PencilArrays slab (see get_local_shape).
                 n_procs = mesh[mesh_dim_idx]
-                proc_coord = get_process_coordinate_for_rank(dist, mesh_dim_idx, rank)
                 global_size = global_shape[i]
-                start_indices[i] = compute_start(global_size, n_procs, proc_coord)
+                pr = (rank == dist.rank) ?
+                     pencil_local_range(dist, mesh_dim_idx, n_procs, global_size) : nothing
+                if pr !== nothing
+                    start_indices[i] = first(pr) - 1
+                else
+                    proc_coord = get_process_coordinate_for_rank(dist, mesh_dim_idx, rank)
+                    start_indices[i] = compute_start(global_size, n_procs, proc_coord)
+                end
             else
                 # This dimension is not decomposed - starts at 0
                 start_indices[i] = 0
@@ -1850,13 +1871,27 @@ end
 Process handler: write all tasks to NetCDF (matching Tarang process method)
 """
 function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothing, sim_time=nothing, timestep=nothing)
+    init_mpi!(handler)
     iteration, wall_time, sim_time, timestep = output_metadata(
         handler; iteration=iteration, wall_time=wall_time,
         sim_time=sim_time, timestep=timestep
     )
 
-    if !check_schedule(handler; iteration=iteration, wall_time=wall_time,
-                       sim_time=sim_time, timestep=timestep)
+    scheduled = check_schedule(handler; iteration=iteration, wall_time=wall_time,
+                               sim_time=sim_time, timestep=timestep)
+    # `wall_time` differs per rank (per-rank `time()`), so a `wall_dt` cadence makes
+    # check_schedule's decision rank-divergent: some ranks would enter process! and
+    # block in its collectives (MPI.Barrier in create_current_file!, MPI.Allreduce
+    # in extrema/mean/var postprocess) while others return here → DEADLOCK.
+    # Broadcast rank 0's decision so every rank writes or skips together, mirroring
+    # process!(VirtualFileHandler,...) (round-4 audit 2026-06-23). iter/sim_dt
+    # cadences are already rank-consistent, so the Bcast is a no-op for them.
+    if MPI.Initialized() && handler.size > 1 && handler.comm !== nothing
+        sc = Ref(scheduled)
+        MPI.Bcast!(sc, handler.comm; root=0)
+        scheduled = sc[]
+    end
+    if !scheduled
         return false
     end
 

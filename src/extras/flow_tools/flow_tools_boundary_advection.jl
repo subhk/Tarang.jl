@@ -783,8 +783,10 @@ function bad_energy(bad::BoundaryAdvectionDiffusion)
         field = bad.fields[bspec.name]
         ensure_layout!(field, :g)
         data = get_grid_data(field)
-        total_sum_squared += sum(abs2.(data))
-        total_count += length(data)
+        # parent → LOCAL slab; sum(::PencilArray) is collective and would be
+        # Allreduced again below (nprocs× inflation / non-Intel MPI error). No-op serial.
+        total_sum_squared += sum(abs2, parent(data))
+        total_count += length(parent(data))
     end
 
     if MPI.Initialized()
@@ -822,8 +824,9 @@ function bad_enstrophy(bad::BoundaryAdvectionDiffusion, boundary_name::String)
     # Must reduce sums and counts separately, then divide
     data_x = get_grid_data(dfdx)
     data_y = get_grid_data(dfdy)
-    local_sum = sum(abs2.(data_x) .+ abs2.(data_y))
-    local_count = length(data_x)
+    # parent → LOCAL slabs (sum(::PencilArray) is collective → double-reduce; see bad_energy)
+    local_sum = sum(abs2, parent(data_x)) + sum(abs2, parent(data_y))
+    local_count = length(parent(data_x))
 
     if MPI.Initialized()
         # Use field's communicator, not COMM_WORLD

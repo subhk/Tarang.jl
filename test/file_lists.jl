@@ -176,6 +176,9 @@ const MPI_TEST_FILES = [
     "test_stochastic_forcing_mpi.jl",
     "test_mpi_integrate.jl",
     "test_mpi_reductions.jl",
+    "test_mpi_reduction_double_reduce.jl",   # global_sum/mean/turbulence_rms must not double-reduce PencilArray (np>=2)
+    "test_mpi_fill_random_walltime.jl",      # fill_random reproducible decomp-independent + proceed() collective wall-time stop (np>=2)
+    "test_mpi_interp_hilbert_guard.jl",      # interpolate/Hilbert error loudly on a decomposed Fourier axis; local-axis interp works (np>=2)
     "test_mpi_spectral_filter.jl",
     "test_mpi_virtual_output.jl",
     # MPI correctness fixes 2026-06-21 (see memory/project_mpi_audit_2026_06_21.md).
@@ -187,6 +190,17 @@ const MPI_TEST_FILES = [
     "test_mpi_distributor_remainder_np2.jl", # C3 remainder-on-last-rank (np==2)
     "test_mpi_fourier_chebyshev.jl",         # FFC: Cheb-last clear error, Cheb-first round-trip (np>=2)
     "test_mpi_cheb_fourier_ivp.jl",          # distributed Cheb-Fourier IMEX IVP == serial (np>=2/4)
+    "test_mpi_cheb_fourier_ivp_nonlinear.jl", # distributed NONLINEAR Cheb-Fourier channel IVP (advection+dealias+tau-BC+IMEX) == serial (np>=2)
+    # MPI correctness fixes 2026-06-23 (see memory/project_mpi_audit_2026_06_21.md).
+    "test_mpi_decomp_forcing_audit.jl",      # #1/#4 get_local_range slab; #2 forcing wavenumber placement (np>=2)
+    "test_mpi_bvp_cheb_fourier.jl",          # steady LBVP/NLBVP solve-layout transpose + Newton resnorm Allreduce (np>=2)
+    "test_mpi_output_audit.jl",              # wall_dt schedule Bcast (no deadlock) + complex checkpoint metadata (np>=2)
+    "test_mpi_forcing_work.jl",              # work_stratonovich/ito/instantaneous_power distributed == serial (np>=2)
+    "test_mpi_padded_dealiasing.jl",         # distributed 3/2 padded dealiasing == serial (transpose-pad) (np>=2)
+    "test_mpi_padded_dealiasing_3d.jl",      # distributed 3D padded dealiasing == serial (N-D, 2D-mesh at np=4) (np>=2)
+    "test_mpi_padded_dealiasing_chebfourier.jl", # distributed mixed Cheb-Fourier dealiasing == serial (Fourier-only pad) (np>=2)
+    "test_mpi_dealiasing_ivp_3d.jl",         # 3D Burgers IVP solve distributed == serial (e2e dealias-in-timestepper) (np>=2)
+    "test_mpi_padded_dealiasing_3d_mixed.jl", # 3D Cheb-Fourier-Fourier dealiasing == serial (decomp-order alignment fix) (np>=2)
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
 ]

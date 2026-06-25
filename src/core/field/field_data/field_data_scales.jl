@@ -196,8 +196,28 @@ function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple
         return field
     end
 
+    if is_grid_space && field.dist.size > 1 && field.dist.use_pencil_arrays &&
+       get_grid_data(field) !== nothing && old_grid_shape != new_grid_shape
+        # Under MPI a Fourier axis is decomposed across ranks, so the periodic-FFT
+        # resample in resample_grid_data! runs a per-rank LOCAL FFT (treating each
+        # slab's edges as global-periodic) → silently-wrong spectral interpolation
+        # that differs from the serial result. A correct distributed resample needs
+        # a spectral zero-pad/truncate that respects the pencil decomposition (not
+        # yet implemented), and the fixed-size PencilFFT plan cannot upsample
+        # in-place. Fail loud instead of corrupting data (audit 2026-06-23). The
+        # already-fixed dealiasing/filter paths resample in coefficient space and do
+        # not reach here; this only bites an explicit grid-space resample/LockedField.
+        error("Grid-space resampling of a distributed field (set_scales!/change_scales! " *
+              "from $(old_scales) to $(new_scales), grid $(old_grid_shape)→$(new_grid_shape)) " *
+              "is not supported under MPI: the per-rank local FFT would corrupt the " *
+              "decomposed Fourier axis. Resample in coefficient space, or change scales " *
+              "before distributing the field.")
+    end
+
     if is_grid_space && get_grid_data(field) !== nothing
-        # Transform grid-space data to new resolution
+        # Serial (or same-shape no-op under MPI): the local slab IS the whole global
+        # grid, so the periodic-FFT resample is exact. Transform grid-space data to
+        # new resolution.
         old_data = get_local_data(get_grid_data(field))
 
         if old_data !== nothing && !isempty(old_data)

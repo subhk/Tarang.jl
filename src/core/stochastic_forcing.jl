@@ -790,6 +790,21 @@ Works on both CPU and GPU arrays.
 Call this at the **beginning** of each timestep, before advancing.
 """
 function store_prevsol!(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
+    if sol isa PencilArrays.PencilArray
+        # Store the local slab as a plain Matrix whose CARTESIAN layout matches the
+        # PencilArray's logical getindex (pa[I] is logical, verified), so the
+        # work/power reductions — which iterate CartesianIndices — pair it correctly.
+        # Note: a `[sol[I] for I in CartesianIndices(sol)]` comprehension does NOT do
+        # this (it collects in the PencilArray's LINEAR/storage order == collect(sol),
+        # transposing a permuted pencil); an explicit `dest[I] = sol[I]` loop does.
+        # Round-5 audit 2026-06-23.
+        dest = Matrix{Complex{T}}(undef, size(sol))
+        @inbounds for I in CartesianIndices(sol)
+            dest[I] = sol[I]
+        end
+        forcing.prevsol = dest
+        return
+    end
     if forcing.prevsol === nothing || size(forcing.prevsol) != size(sol)
         # Allocate matching the solution shape (not forcing shape — they can differ
         # when forcing is on the full complex grid but solution uses RFFT half-grid)
@@ -798,6 +813,28 @@ function store_prevsol!(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractAr
     # Use copyto! for GPU compatibility
     copyto!(forcing.prevsol, sol)
 end
+
+# LOGICAL-order local forcing view for the work/power diagnostics, sliced by the
+# field's logical local ranges (axes_local[l] = global range of logical dim l).
+# The diagnostics iterate CartesianIndices (logical), pairing this with the
+# solution PencilArray's logical cartesian getindex. Distinct from
+# `_matched_forcing_view`, which returns a PARENT/memory-order view for the
+# broadcast `coeff_data .+= F_view` in the RHS path. Round-5 audit 2026-06-23.
+function _forcing_view_logical(forcing::StochasticForcing{T, N, A, CA},
+                               target::PencilArrays.PencilArray) where {T, N, A, CA}
+    local_axes = PencilArrays.pencil(target).axes_local
+    length(local_axes) == N || return nothing
+    fshape = size(forcing.cached_forcing)
+    ranges = Vector{UnitRange{Int}}(undef, N)
+    for d in 1:N
+        r = local_axes[d]
+        (first(r) < 1 || last(r) > fshape[d]) && return nothing
+        ranges[d] = r
+    end
+    return view(forcing.cached_forcing, Tuple(ranges)...)
+end
+_forcing_view_logical(forcing::StochasticForcing{T, N, A, CA}, target::AbstractArray) where {T, N, A, CA} =
+    _matched_forcing_view(forcing, size(target))
 
 """
     work_stratonovich(forcing::StochasticForcing, sol::AbstractArray)
@@ -835,10 +872,15 @@ function work_stratonovich(forcing::StochasticForcing{T, N, A, CA}, sol::Abstrac
     # GPU-compatible: mapreduce dispatches to GPU kernel on CuArrays.
     ps = forcing.prevsol
     size(ps) == size(sol) || throw(ArgumentError("Previous solution size $(size(ps)) does not match current solution size $(size(sol))"))
-    cf = _matched_forcing_view(forcing, sol)
+    cf = _forcing_view_logical(forcing, sol)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-    work = mapreduce(+, eachindex(ps, sol, cf); init=zero(T)) do i
-        @inbounds real((ps[i] + sol[i]) / 2 * conj(cf[i]))
+    # Iterate CARTESIAN (logical) indices. A plain prevsol Matrix is IndexLinear,
+    # which would make `eachindex` choose linear order — but a PencilArray's linear
+    # index is parent/storage (logical row-major) order, not the Matrix's
+    # column-major, scrambling the pairing for a permuted pencil. Cartesian getindex
+    # is logical for all of ps (Matrix), sol (PencilArray) and cf (view).
+    work = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
+        @inbounds real((ps[I] + sol[I]) / 2 * conj(cf[I]))
     end
 
     # The mapreduce ran over this rank's LOCAL slab only; combine partials
@@ -872,10 +914,10 @@ function work_ito(forcing::StochasticForcing{T, N, A, CA}, sol_prev::AbstractArr
 
     # Itô work (uses previous solution, which is independent of current forcing)
     # Fused mapreduce avoids temporary arrays; GPU-compatible.
-    cf = _matched_forcing_view(forcing, sol_prev)
+    cf = _forcing_view_logical(forcing, sol_prev)   # logical view + cartesian iteration (see work_stratonovich)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol_prev))"))
-    work = mapreduce(+, eachindex(sol_prev, cf); init=zero(T)) do i
-        @inbounds real(sol_prev[i] * conj(cf[i]))
+    work = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
+        @inbounds real(sol_prev[I] * conj(cf[I]))
     end
 
     # Combine per-rank slab partials over the field's communicator (the drift
@@ -931,11 +973,11 @@ Instantaneous power (energy per unit time).
 function instantaneous_power(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
     domain_area = prod(forcing.domain_size)
 
-    cf = _matched_forcing_view(forcing, sol)
+    cf = _forcing_view_logical(forcing, sol)   # logical view + cartesian iteration (see work_stratonovich)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
 
-    power = mapreduce(+, eachindex(sol, cf); init=zero(T)) do i
-        @inbounds real(sol[i] * conj(cf[i]))
+    power = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
+        @inbounds real(sol[I] * conj(cf[I]))
     end
 
     # Combine per-rank slab partials over the field's communicator.
@@ -1079,26 +1121,37 @@ end
 
 function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
                                target::PencilArrays.PencilArray) where {T, N, A, CA}
+    # `axes_local` is in LOGICAL (physical-dim) order, so index it by the
+    # logical/physical dim directly to slice the logical-order global
+    # cached_forcing — exactly as _integrate_full_distributed slices its global
+    # weight array (operations_integrate.jl:187). The consumer broadcasts against
+    # the PencilArray's PARENT (memory/storage) order, so the logical-order view
+    # is finally permuted into storage order via the pencil permutation.
+    #
+    # The previous code indexed axes_local by the PERMUTED storage position
+    # (findfirst(==(physical_dim), perm)), which both mis-sliced the spectrum
+    # (forcing injected at the wrong wavenumbers under MPI, empirically ERR≈9 at
+    # np=2) and could not broadcast on non-square local blocks (DimensionMismatch).
+    # Tuple(NoPermutation()) is `nothing`, treated as the identity permutation.
     local_axes = PencilArrays.pencil(target).axes_local
-    perm = Tuple(PencilArrays.permutation(target))
     length(local_axes) == N || return nothing
-    length(perm) == N || return nothing
 
     forcing_shape = size(forcing.cached_forcing)
     ranges = Vector{UnitRange{Int}}(undef, N)
 
     for physical_dim in 1:N
-        storage_dim = findfirst(==(physical_dim), perm)
-        storage_dim === nothing && return nothing
-
-        local_range = local_axes[storage_dim]
+        local_range = local_axes[physical_dim]
         if first(local_range) < 1 || last(local_range) > forcing_shape[physical_dim]
             return nothing
         end
         ranges[physical_dim] = local_range
     end
 
-    return view(forcing.cached_forcing, Tuple(ranges)...)
+    logical_view = view(forcing.cached_forcing, Tuple(ranges)...)
+
+    perm_raw = Tuple(PencilArrays.permutation(target))
+    perm_raw === nothing && return logical_view   # identity permutation
+    return PermutedDimsArray(logical_view, perm_raw)
 end
 
 """

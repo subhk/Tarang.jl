@@ -415,9 +415,10 @@ function global_min(reducer::GlobalArrayReducer, data::AbstractArray; empty::Flo
     if isempty(data)
         local_min = empty
     else
-        # minimum() works on both CPU and GPU arrays
-        # For GPU arrays, CUDA.jl performs the reduction on GPU and returns a scalar
-        local_min = Float64(minimum(data))
+        # minimum() works on both CPU and GPU arrays. `parent` keeps the reduction
+        # LOCAL — minimum(::PencilArray) is collective (re-reduced below; value is
+        # correct under idempotent MIN but it errors on non-Intel MPI). No-op serially.
+        local_min = Float64(minimum(parent(data)))
     end
     return reduce_scalar(reducer, local_min, MPI.MIN)
 end
@@ -433,9 +434,10 @@ function global_max(reducer::GlobalArrayReducer, data::AbstractArray; empty::Flo
     if isempty(data)
         local_max = empty
     else
-        # maximum() works on both CPU and GPU arrays
-        # For GPU arrays, CUDA.jl performs the reduction on GPU and returns a scalar
-        local_max = Float64(maximum(data))
+        # maximum() works on both CPU and GPU arrays. `parent` keeps the reduction
+        # LOCAL — maximum(::PencilArray) is collective (re-reduced below; correct under
+        # idempotent MAX but errors on non-Intel MPI). No-op serially.
+        local_max = Float64(maximum(parent(data)))
     end
     return reduce_scalar(reducer, local_max, MPI.MAX)
 end
@@ -452,11 +454,13 @@ global_max(reducer::GlobalArrayReducer, value::Real) = reduce_scalar(reducer, Fl
     is transferred to CPU for MPI reduction across ranks.
     """
 function global_mean(reducer::GlobalArrayReducer, data::AbstractArray)
-    # sum() and length() work on both CPU and GPU arrays
-    local_sum = Float64(real(sum(data)))
-    local_size = Float64(length(data))
+    # Reduce the LOCAL slab via `parent` (see global_sum): summing a PencilArray is
+    # collective, so sum(data) + reduce_scalar would double-reduce → nprocs× mean.
+    ld = parent(data)
+    local_sum = Float64(real(sum(ld)))
+    local_size = Float64(length(ld))
     if eltype(data) <: Complex
-        local_imag = Float64(imag(sum(data)))
+        local_imag = Float64(imag(sum(ld)))
         global_real = reduce_scalar(reducer, local_sum, MPI.SUM)
         global_imag = reduce_scalar(reducer, local_imag, MPI.SUM)
         global_size = reduce_scalar(reducer, local_size, MPI.SUM)
@@ -687,8 +691,11 @@ end
     is transferred to CPU for MPI reduction across ranks.
     """
 function global_sum(reducer::GlobalArrayReducer, data::AbstractArray)
-    # sum() works on both CPU and GPU arrays
-    local_val = sum(data)
+    # `parent` extracts the LOCAL slab: summing a PencilArray directly is a COLLECTIVE
+    # op (already global), which the reduce_scalar below would reduce a SECOND time →
+    # nprocs× the true sum (and errors on non-Intel MPI). parent is a no-op for plain
+    # serial/local arrays. Works on both CPU and GPU arrays.
+    local_val = sum(parent(data))
     if local_val isa Complex
         global_real = reduce_scalar(reducer, Float64(real(local_val)), MPI.SUM)
         global_imag = reduce_scalar(reducer, Float64(imag(local_val)), MPI.SUM)

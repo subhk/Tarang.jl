@@ -88,10 +88,15 @@ end
     Uses proper 3/2-rule padded dealiasing (Orszag 1971) when possible:
     - CPU serial: full padded dealiasing on all Fourier dimensions
     - GPU serial: full padded dealiasing using GPU FFTs (CUFFT)
-    - MPI distributed: padded dealiasing on LOCAL (non-decomposed) Fourier
-      dimensions; truncation-after-multiply on distributed dimensions
+    - MPI distributed: full padded dealiasing on ALL Fourier dimensions
+      (including the decomposed one) via PencilArrays transpose-pad — matches
+      the serial result to roundoff for 2D + 3D pure-Fourier and mixed
+      Fourier×(Chebyshev/Jacobi) fields (`evaluate_padded_multiply_distributed`).
 
-    Falls back to truncation-after-multiply only when no Fourier bases exist.
+    Falls back to local 2/3-rule truncation-after-multiply when padded dealiasing
+    does not apply: no Fourier bases, or (distributed only) >3D, a decomposed
+    non-Fourier axis, or a Fourier axis with N ≤ 4 (matching serial's small-grid
+    skip).
     """
 function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, evaluator::NonlinearEvaluator;
                                      result_layout::Symbol=:g)
@@ -115,13 +120,20 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
         # distributed routine can truncate inputs in coefficient space (avoids a
         # c→g→c round trip when operands arrive in coeff space — the usual case).
         if field1.dist.use_pencil_arrays && evaluator.dist.size > 1
-            # MPI path: 2/3-rule truncation dealiasing using correct per-rank global
-            # wavenumbers. Exact 3/2 zero-padding is avoided here because, under MPI
-            # decomposition, embedding the N-mode spectrum into the 3N/2 padded spectrum
-            # would require cross-rank redistribution (the original and padded
-            # PencilArrays decompose differently). Truncation is purely local per rank
-            # and dealiases quadratic nonlinear terms within the retained |k| ≤ N/3 band.
-            result = evaluate_truncated_multiply_distributed(field1, field2, evaluator;
+            # MPI path. Primary: FULL 3/2-rule padded dealiasing via the transpose-pad
+            # distributed FFT (evaluate_padded_multiply_distributed) — the cross-rank
+            # redistribution needed to embed the N-mode spectrum into the 3N/2 padded
+            # spectrum is done with PencilArrays transposes, so the result matches the
+            # serial padded multiply to roundoff (round-7 audit 2026-06). Covers 2D + 3D
+            # (incl. 2D process mesh) pure-Fourier and mixed Fourier×(Cheb/Jacobi).
+            # Fallback: it returns `nothing` for the cases it does not cover (>3D, a
+            # decomposed non-Fourier axis, or a Fourier axis with N ≤ 4 — the last
+            # mirroring serial's own small-grid skip), routing to local 2/3-rule
+            # truncation-after-multiply (evaluate_truncated_multiply_distributed).
+            padded = evaluate_padded_multiply_distributed(field1, field2, evaluator;
+                                                          result_layout=result_layout)
+            result = padded !== nothing ? padded :
+                     evaluate_truncated_multiply_distributed(field1, field2, evaluator;
                                                              result_layout=result_layout)
             evaluator.performance_stats.total_evaluations += 1
             if _TRACK_NL_TIMING
@@ -190,6 +202,119 @@ function gpu_multiply_fields!(result_data::AbstractArray, data1::AbstractArray, 
     # Default CPU implementation using broadcasting
     result_data .= data1 .* data2
     return result_data
+end
+
+# ── Full 3/2-rule padded dealiasing under MPI (N-D all-Fourier) ──────────────
+# Re-implements the serial padded product (evaluate_padded_multiply) for a
+# DISTRIBUTED field: pad each Fourier axis WHEN that axis is local, transposing to
+# bring each decomposed axis local in turn (PencilFFTs decomposes D-1 axes, keeping
+# one local; single-swap transposes cycle the local axis through all D). Reuses the
+# SAME per-axis pad/truncate helpers as serial (incl. even-N Nyquist split/fold) +
+# scale ∏(M_d/N_d) once, so it matches serial to ROUNDOFF (verified Real+Complex
+# Fourier, 2D np=2/4 + 3D np=2/4). Returns `nothing` for cases not covered (>3D,
+# mixed bases, not pencil-decomposed) → caller falls back to truncation-after-
+# multiply. Round-7 audit 2026-06-23.
+function evaluate_padded_multiply_distributed(field1::ScalarField, field2::ScalarField,
+                                              evaluator::NonlinearEvaluator; result_layout::Symbol=:g)
+    bases = field1.bases
+    D = length(bases)
+    (D == 2 || D == 3) || return nothing
+    isfourier(b) = isa(b, Union{RealFourier, ComplexFourier})
+    fourier_axes = Tuple(d for d in 1:D if isfourier(bases[d]))
+    isempty(fourier_axes) && return nothing
+    dist = field1.dist
+    factor = evaluator.dealiasing_factor
+    T = field1.dtype <: Complex ? real(field1.dtype) : field1.dtype
+    CT = Complex{T}
+    N = ntuple(d -> bases[d].meta.size, D)
+    # Only Fourier axes are 3/2-padded (matching serial evaluate_padded_multiply,
+    # which pads only fourier_dims); non-Fourier (Chebyshev/Jacobi) axes keep their
+    # nodal grid and are left untouched. Mp[d] == N[d] for non-Fourier axes.
+    Mp = ntuple(D) do d
+        isfourier(bases[d]) || return N[d]
+        af = _axis_dealias_factor(bases[d], factor); m = Int(ceil(af * N[d])); isodd(m) && (m += 1); m
+    end
+    any(d -> Mp[d] > N[d], fourier_axes) || return nothing
+    # Match serial _get_padded_workspace!: the 3/2-rule is invalid for a Fourier axis
+    # with N ≤ 4 (≤2 independent modes), where serial falls back to truncation. Mirror
+    # that here so distributed == serial on tiny Fourier axes too.
+    minimum(N[d] for d in fourier_axes) <= 4 && return nothing
+
+    ensure_layout!(field1, :g); ensure_layout!(field2, :g)
+    gd1 = get_grid_data(field1); gd2 = get_grid_data(field2)
+    (gd1 isa PencilArrays.PencilArray && gd2 isa PencilArrays.PencilArray) || return nothing
+    pen = PencilArrays.pencil(gd1)
+    topo = PencilArrays.topology(pen)
+    decomp0 = Tuple(PencilArrays.decomposition(pen))
+    length(decomp0) == D - 1 || return nothing        # exactly one local axis (slab/pencil)
+    all(d -> isfourier(bases[d]), decomp0) || return nothing   # only pad/transpose decomposed FOURIER axes
+    mkpen(sz, dd) = PencilArrays.Pencil(topo, Tuple(sz), Tuple(dd); permute=PencilArrays.NoPermutation())
+
+    tolog(gd) = begin
+        gc = PencilArrays.PencilArray{CT}(undef, PencilArrays.pencil(gd)); parent(gc) .= CT.(parent(gd))
+        a = PencilArrays.PencilArray{CT}(undef, mkpen(N, decomp0)); PencilArrays.transpose!(a, gc); a
+    end
+    # bring axis `a` into the (single) local slot by swapping it with the current
+    # local axis — a one-decomposed-dim change, which PencilArrays.transpose! allows.
+    makelocal(cur, csz, dec, loc, a) = a == loc ? (cur, dec, loc) : begin
+        ndec = [d == a ? loc : d for d in dec]
+        nxt = PencilArrays.PencilArray{CT}(undef, mkpen(csz, ndec)); PencilArrays.transpose!(nxt, cur); (nxt, ndec, a)
+    end
+    pad_local!(pout, pin, a) = begin
+        spec = fft(parent(pin), a)
+        orig = collect(size(parent(pin))); padl = copy(orig); padl[a] = Mp[a]
+        _pad_spectral!(parent(pout), spec, Tuple(orig), Tuple(padl), [a]); parent(pout) .= ifft(parent(pout), a)
+    end
+    trunc_local!(pout, pin, a) = begin
+        spec = fft(parent(pin), a)
+        orig = collect(size(parent(pin))); trl = copy(orig); trl[a] = N[a]
+        _truncate_spectral!(parent(pout), spec, Tuple(trl), Tuple(orig), [a]); parent(pout) .= ifft(parent(pout), a)
+    end
+    sweep(start, sdec, ssz, tgt, op) = begin
+        cur = start; dec = collect(sdec); loc = only(setdiff(1:D, collect(sdec))); csz = collect(ssz)
+        for a in fourier_axes   # pad/truncate only Fourier axes; non-Fourier stay nodal/local
+            cur, dec, loc = makelocal(cur, csz, dec, loc, a)
+            csz[a] = tgt[a]
+            nxt = PencilArrays.PencilArray{CT}(undef, mkpen(csz, dec)); op(nxt, cur, a); cur = nxt
+        end
+        cur
+    end
+
+    up1 = sweep(tolog(gd1), decomp0, N, Mp, pad_local!)
+    up2 = sweep(tolog(gd2), decomp0, N, Mp, pad_local!)
+    pdec = Tuple(PencilArrays.decomposition(PencilArrays.pencil(up1)))
+    P = PencilArrays.PencilArray{CT}(undef, mkpen(Mp, pdec)); parent(P) .= parent(up1) .* parent(up2)
+    res = sweep(P, pdec, Mp, N, trunc_local!)
+    parent(res) .*= (T(prod(Mp)) / T(prod(N)))
+
+    result = ScalarField(dist, "_nl_product", bases, field1.dtype)
+    ensure_layout!(result, :g)
+    rg = get_grid_data(result)
+    # Align `res` (NoPermutation) to the result grid pencil's EXACT ordered
+    # decomposition so the final transpose is perm-only. Matching just the local
+    # axis is NOT enough: res and rg can share the decomposed-axis SET but in a
+    # different ORDER (e.g. res (2,3) vs rg (3,2) for a 3D Cheb-Fourier-Fourier
+    # field), and PencilArrays.transpose! forbids a >1-slot decomp difference. Walk
+    # the decomp tuple slot by slot, each fix being one valid single-swap.
+    rgdec = collect(PencilArrays.decomposition(PencilArrays.pencil(rg)))
+    rdec = collect(PencilArrays.decomposition(PencilArrays.pencil(res)))
+    rloc = only(setdiff(1:D, rdec))
+    for i in eachindex(rgdec)
+        rdec[i] == rgdec[i] && continue
+        if rloc != rgdec[i]                                   # bring target axis local
+            res, rdec, rloc = makelocal(res, collect(N), rdec, rloc, rgdec[i])
+        end
+        res, rdec, rloc = makelocal(res, collect(N), rdec, rloc, rdec[i])  # swap it into slot i
+    end
+    rc = PencilArrays.PencilArray{CT}(undef, PencilArrays.pencil(rg))
+    PencilArrays.transpose!(rc, res)
+    if field1.dtype <: Complex
+        parent(rg) .= parent(rc)
+    else
+        parent(rg) .= real.(parent(rc))
+    end
+    ensure_layout!(result, result_layout)
+    return result
 end
 
 """2D transform-based multiplication using PencilFFTs"""

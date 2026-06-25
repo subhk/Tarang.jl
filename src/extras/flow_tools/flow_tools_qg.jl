@@ -457,12 +457,13 @@ function qg_energy(qg::QGSystem)
         domain_volume *= (basis.bounds[2] - basis.bounds[1])
     end
 
+    # `integrate()` already performs the global MPI.Allreduce internally
+    # (operations_integrate.jl: _integrate_full_distributed), so total_integral is
+    # the COMPLETE global integral, identical on every rank. A second
+    # MPI.Allreduce(SUM) here would sum that replicated scalar across all ranks and
+    # report nprocs × the true energy (round-4 audit 2026-06-23). Match the sibling
+    # diagnostics total_kinetic_energy / total_enstrophy, which integrate() directly.
     total_energy = total_integral / domain_volume
-
-    if MPI.Initialized() && qg.ψ.dist.size > 1
-        # Use field's communicator, not COMM_WORLD
-        total_energy = MPI.Allreduce(total_energy, MPI.SUM, qg.ψ.dist.comm)
-    end
 
     return total_energy
 end
