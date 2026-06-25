@@ -100,43 +100,16 @@ end
     end
 end
 
-# Per-basis `dealias=` must actually control truncation strength: a field with a
-# single mode at k=12 on N=48 survives the default cutoff (3/2 → 15) but is removed
-# by a stronger setting (3 → 8). Drives the real distributed multiply path.
-function run_factor_case(N, mesh, dealias)
-    coords = CartesianCoordinates("x", "y")
-    dist = Distributor(coords; mesh=mesh, dtype=Float64, architecture=CPU())
-    bx = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π), dealias=dealias)
-    by = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π), dealias=dealias)
-    domain = Domain(dist, (bx, by))
-
-    fa = ScalarField(domain, "fa")
-    fb = ScalarField(domain, "fb")
-    ensure_layout!(fa, :g); ensure_layout!(fb, :g)
-
-    x = [2π * (i - 1) / N for i in 1:N]
-    ga = [cos(12 * x[i]) for i in 1:N, _ in 1:N]
-    gb = ones(N, N)
-    _assign_local!(fa, ga)
-    _assign_local!(fb, gb)
-
-    ev = Tarang.NonlinearEvaluator(dist; dealiasing_factor=3/2)
-    product = Tarang.evaluate_transform_multiply(fa, fb, ev)
-    ensure_layout!(product, :g)
-    return MPI.Allreduce(maximum(abs.(_local(product))), MPI.MAX, comm)
-end
-
-@testset "basis dealias controls truncation strength (rank=$rank)" begin
-    amp_keep = run_factor_case(48, (nprocs,), 3/2)   # cutoff 15 ≥ 12 → mode survives
-    amp_kill = run_factor_case(48, (nprocs,), 3.0)   # cutoff 8  < 12 → mode removed
-    rank == 0 && println("  amp(dealias=3/2)=", amp_keep, "  amp(dealias=3)=", amp_kill)
-    @test amp_keep > 0.5
-    @test amp_kill < 1e-9
-end
-
-# dealias=1 disables dealiasing entirely: a mode beyond the 3/2 cutoff (k=20 > N/3=16)
-# is truncated by the default but kept when dealias=1.
-function run_mode20_case(N, mesh, dealias)
+# `dealias=factor` is the standard Orszag PADDING resolution for alias-free
+# quadratic products, NOT a low-pass cutoff. So multiplying any resolved-mode field
+# by 1 is the identity, to roundoff, regardless of the dealias factor — MATCHING
+# serial. The pre-2026-06-23 distributed path used truncation-after-multiply that
+# wrongly low-passed modes |k| > N/(2·factor) (a feature serial never had → it made
+# distributed ≠ serial); the round-7 transpose-pad fix
+# (evaluate_padded_multiply_distributed) makes distributed == serial to roundoff.
+# Aggressive low-pass filtering is a separate explicit operation
+# (apply_spectral_cutoff! / low_pass_filter!), not the dealias factor.
+function product_x1_err(N, mesh, k, dealias)
     coords = CartesianCoordinates("x", "y")
     dist = Distributor(coords; mesh=mesh, dtype=Float64, architecture=CPU())
     bx = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π), dealias=dealias)
@@ -145,20 +118,21 @@ function run_mode20_case(N, mesh, dealias)
     fa = ScalarField(domain, "fa"); fb = ScalarField(domain, "fb")
     ensure_layout!(fa, :g); ensure_layout!(fb, :g)
     x = [2π * (i - 1) / N for i in 1:N]
-    _assign_local!(fa, [cos(20 * x[i]) for i in 1:N, _ in 1:N])
+    _assign_local!(fa, [cos(k * x[i]) for i in 1:N, _ in 1:N])
     _assign_local!(fb, ones(N, N))
     ev = Tarang.NonlinearEvaluator(dist; dealiasing_factor=3/2)
     product = Tarang.evaluate_transform_multiply(fa, fb, ev)
     ensure_layout!(product, :g)
-    return MPI.Allreduce(maximum(abs.(_local(product))), MPI.MAX, comm)
+    # fa × 1 must equal fa (the input) to roundoff for every resolved mode.
+    MPI.Allreduce(maximum(abs.(_local(product) .- _local(fa))), MPI.MAX, comm)
 end
 
-@testset "dealias=1 disables dealiasing (rank=$rank)" begin
-    amp_default = run_mode20_case(48, (nprocs,), 3/2)   # k=20 > 15 → removed
-    amp_off     = run_mode20_case(48, (nprocs,), 1.0)   # no truncation → k=20 kept
-    rank == 0 && println("  amp(dealias=3/2)=", amp_default, "  amp(dealias=1)=", amp_off)
-    @test amp_default < 1e-9
-    @test amp_off > 0.5
+@testset "dealias=factor is padding resolution, not a low-pass cutoff (rank=$rank)" begin
+    for (k, fac) in ((12, 3/2), (12, 3.0), (20, 3/2), (20, 1.0))
+        err = product_x1_err(48, (nprocs,), k, fac)
+        rank == 0 && println("  k=$k dealias=$fac: |f×1 - f| = ", err)
+        @test err < 1e-9   # padding preserves every resolved mode; old path removed them
+    end
 end
 
 rank == 0 && println("MPI dealiasing product tests completed")

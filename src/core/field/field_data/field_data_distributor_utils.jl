@@ -106,6 +106,18 @@ function get_local_range(dist::Distributor, global_size::Int, axis::Int)
     end
 
     n_procs = dist.mesh[mesh_axis]
+
+    # Match PencilArrays' decomposition exactly on the PencilArrays path so the
+    # returned range addresses the same slab PencilArrays actually owns (MPI-Cart
+    # row-major coords + remainder-on-LAST). The legacy column-major /
+    # remainder-on-FIRST formula below diverges on non-divisible or >=2D-mesh
+    # decompositions; keep it only off the PencilArrays path (GPU /
+    # TransposableField). Mirrors compute_local_shape / local_indices.
+    pr = pencil_local_range(dist, mesh_axis, n_procs, global_size)
+    if pr !== nothing
+        return (first(pr), last(pr))
+    end
+
     proc_coord = get_process_coordinate(dist, mesh_axis)
 
     base_size = div(global_size, n_procs)

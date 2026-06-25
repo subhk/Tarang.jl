@@ -227,6 +227,22 @@ function evaluate_hilbert_transform(op::HilbertTransform, layout::Symbol=:g)
     ensure_layout!(result, :c)
     coeff = get_coeff_data(result)
 
+    # The spectral Hilbert multiplier −i·sign(k) needs each mode's GLOBAL wavenumber.
+    # Under MPI a decomposed Fourier axis hands each rank only a LOCAL coefficient
+    # slice, so the per-axis kernel would use local indices as wavenumbers and silently
+    # produce a wrong result. Fail loudly instead. (A Fourier axis that stays LOCAL —
+    # e.g. with a Chebyshev axis decomposed — is fine and not blocked here.)
+    if result.dist.size > 1 && isa(coeff, PencilArrays.PencilArray)
+        decomp = PencilArrays.decomposition(PencilArrays.pencil(coeff))
+        if any(d -> isa(result.bases[d], Union{RealFourier, ComplexFourier}), decomp)
+            throw(ErrorException(
+                "HilbertTransform is not supported under MPI decomposition of a Fourier " *
+                "axis (the spectral −i·sign(k) multiplier needs global wavenumbers; the " *
+                "decomposed axis only exposes per-rank-local indices). Run serially or " *
+                "gather the field onto one rank first."))
+        end
+    end
+
     # GPU path: transfer to CPU, apply, copy back (scalar indexing required)
     if is_gpu_array(coeff)
         cpu_coeff = Array(coeff)

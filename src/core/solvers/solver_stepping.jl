@@ -57,10 +57,20 @@ function proceed(solver::InitialValueSolver)
         return false
     end
     
-    if time() - solver.wall_time_start >= solver.stop_wall_time
-        return false
+    if isfinite(solver.stop_wall_time)
+        wall_stop = (time() - solver.wall_time_start) >= solver.stop_wall_time
+        # Wall-clock time differs per rank, so ranks could otherwise decide to stop on
+        # DIFFERENT iterations and deadlock the next collective step!. Agree on rank 0's
+        # decision (broadcast) so every rank exits the loop together.
+        comm = solver_comm(solver.problem)
+        if comm !== nothing && MPI.Initialized() && MPI.Comm_size(comm) > 1
+            ref = Ref(wall_stop)
+            MPI.Bcast!(ref, 0, comm)
+            wall_stop = ref[]
+        end
+        wall_stop && return false
     end
-    
+
     return true
 end
 
@@ -294,6 +304,18 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
         end
     end
 
+    # Distributed Cheb-Fourier: the per-mode gather/scatter needs each rank to own
+    # a subset of Fourier modes with FULL Chebyshev-COEFF columns, but the coeff
+    # data lives in the PencilFFT-output pencil (Chebyshev axis DECOMPOSED, kept in
+    # grid space). Transpose state AND the forcing into the Chebyshev-local solve
+    # pencil ONCE, OUTSIDE the loop (one collective per field, identical on every
+    # rank), then undo afterwards — mirroring the IVP subproblem steppers
+    # (step_subproblem_rk.jl). No-op for serial / non-mixed fields. Without this
+    # the gather indexes the wrong pencil → DimensionMismatch or wrong solution at
+    # np>=2 (round-2 audit 2026-06-23).
+    dist = isempty(sps) ? nothing : sps[1].dist
+    _state_stash = to_solve_layout!(state, dist)
+    _F_stash = to_solve_layout!(pde_F, dist)
     for sp in sps
         sp.L_min === nothing && continue
         # Override the M-gated target cache with the BVP bulk-equation targets.
@@ -308,6 +330,12 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
         x = Vector{ComplexF64}(undef, size(sp.L_min, 2))
         _solve_cached_system!(x, _bvp_lhs_solver(sp), rhs)
         scatter_inputs(sp, x, state)
+    end
+    from_solve_layout!(_state_stash, dist)
+    # Forcing fields are discarded after this solve; just restore their FFT-pencil
+    # storage pointer (no transpose back needed).
+    for (f, fft_pa) in _F_stash
+        set_coeff_data!(f, fft_pa)
     end
     return solver
 end
@@ -331,6 +359,8 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
     problem = solver.problem
     state = solver.state
     eqd = problem.equation_data
+    # Distributed Cheb-Fourier solve-layout transpose (see _solve_bvp_per_subproblem!).
+    dist = isempty(sps) ? nothing : sps[1].dist
 
     # Per-equation operators: original linear LHS, and the Frechet Jacobian
     # operator dF = orig_L − frechet(rhs). dF carries the current-state NCCs
@@ -383,6 +413,12 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
         end
         F = Vector{Vector{ComplexF64}}(undef, length(sps))
         resnorm = 0.0
+        # Distributed: state + forcing into the Cheb-local solve pencil, ONCE,
+        # OUTSIDE the loop. State is read-only in this residual pass, so restore
+        # its FFT-pencil storage pointer afterwards (no transpose back / no extra
+        # collective); same for the discarded forcing fields.
+        _res_state = to_solve_layout!(state, dist)
+        _res_F = to_solve_layout!(pde_F, dist)
         for (k, sp) in enumerate(sps)
             if sp.L_min === nothing
                 F[k] = ComplexF64[]
@@ -402,6 +438,15 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
             F[k] = Lx .- rhs
             resnorm = max(resnorm, norm(F[k]))
         end
+        for (f, fft_pa) in _res_state; set_coeff_data!(f, fft_pa); end
+        for (f, fft_pa) in _res_F; set_coeff_data!(f, fft_pa); end
+        # Each rank's `resnorm` only covers its LOCAL Fourier modes. Reduce across
+        # ranks so all agree on convergence and break on the SAME iteration —
+        # otherwise ranks issue a different number of solve-layout collectives and
+        # deadlock (round-2 audit 2026-06-23).
+        if dist !== nothing && dist.size > 1
+            resnorm = MPI.Allreduce(resnorm, max, dist.comm)
+        end
         if resnorm < solver.tolerance
             converged = true
             break
@@ -412,6 +457,9 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
         for sp in sps; sp.L_min === nothing || build_matrices!(sp, ["L"], solver); end
 
         # --- Newton step: dF_sp δ = F_sp ; x_sp ← x_sp − δ ; scatter ---
+        # State is gathered AND scattered (modified) here, so transpose into the
+        # solve pencil before and back after (the scatter wrote the new coeffs).
+        _step_state = to_solve_layout!(state, dist)
         for (k, sp) in enumerate(sps)
             sp.L_min === nothing && continue
             x_sp = zeros(ComplexF64, size(sp.L_min, 2))
@@ -420,6 +468,7 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
             _solve_cached_system!(δ, _bvp_lhs_solver(sp), F[k])
             scatter_inputs(sp, x_sp .- δ, state)
         end
+        from_solve_layout!(_step_state, dist)
 
         # --- Restore the linear operator for the next residual ---
         for (i, ed) in enumerate(eqd); ed["L"] = origL[i]; end
@@ -517,6 +566,17 @@ function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
                 single_vecs = F.vectors[:, keep]
             end
         end
+        # Distributed: each rank built subproblems for only its LOCAL Fourier
+        # modes, so `all_λ` is a SUBSET of the global spectrum. Gather every rank's
+        # eigenvalues so the global which/nev selection sees the full set —
+        # otherwise each rank returns its local-subset extrema, which differ from
+        # the serial result (round-2 audit 2026-06-23). Per-mode eigenVECTORS span
+        # multiple ranks, so none is returned in the distributed case.
+        dist = isempty(sps) ? nothing : sps[1].dist
+        if dist !== nothing && dist.size > 1
+            all_λ = _allgather_complex(all_λ, dist.comm)
+            single_vecs = nothing
+        end
         order = _eig_order(all_λ, which_symbol, target)
         k = min(nev, length(order))
         sel = order[1:k]
@@ -544,6 +604,16 @@ function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
     solver.performance_stats.total_solves += 1
 
     return λ, v
+end
+
+# Gather variable-length per-rank eigenvalue vectors into the FULL global set on
+# every rank. Each rank's EVP subproblems cover only its local Fourier modes, so
+# the global `which`/`nev` selection must see every rank's eigenvalues.
+function _allgather_complex(local_vals::Vector{ComplexF64}, comm)
+    counts = MPI.Allgather(Cint(length(local_vals)), comm)
+    recvbuf = Vector{ComplexF64}(undef, sum(counts))
+    MPI.Allgatherv!(local_vals, MPI.VBuffer(recvbuf, counts), comm)
+    return recvbuf
 end
 
 

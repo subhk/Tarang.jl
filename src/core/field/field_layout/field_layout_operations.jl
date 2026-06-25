@@ -39,8 +39,10 @@ function fill_random!(field::ScalarField, layout::String="g";
     ensure_layout!(field, Symbol(layout))
     data = layout == "g" ? get_grid_data(field) : get_coeff_data(field)
 
-    if seed !== nothing && reproducible && field.dist.size > 1
-        # MPI-reproducible mode: use global index-based seeding
+    if seed !== nothing && reproducible
+        # Reproducible mode: global index-based seeding — produces identical results
+        # regardless of MPI decomposition, INCLUDING np=1 (must use the SAME algorithm
+        # as np>1, else the serial result diverges from the distributed one).
         _fill_random_reproducible!(data, field, layout, seed, distribution, scale)
     else
         # Standard mode: rank-local seeding (original behavior)
