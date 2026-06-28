@@ -14,9 +14,13 @@ function reynolds_number(velocity::VectorField, viscosity::Float64, length_scale
     end
 
     vel_magnitude = sqrt.(vel_magnitude_squared)
-    max_vel = maximum(vel_magnitude)
+    # `maximum` on a PencilArray is COLLECTIVE (already global); reduce the LOCAL
+    # storage (parent) so the single global_max below is the one and only collective
+    # (was a redundant double-reduce). Use the field's communicator, not COMM_WORLD,
+    # so a sub-communicator run does not deadlock/mismatch.
+    max_vel = maximum(parent(vel_magnitude))
 
-    reducer = GlobalArrayReducer()
+    reducer = GlobalArrayReducer(velocity.components[1].dist.comm)
     max_vel = global_max(reducer, max_vel)
 
     return max_vel * length_scale / viscosity

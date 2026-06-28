@@ -382,12 +382,14 @@ function validate_streamfunction(velocity::VectorField, streamfunction::ScalarFi
     # Check u = -∂ψ/∂y  (perp_grad convention; u + ∂ψ/∂y = 0)
     ensure_layout!(velocity.components[1], :g)
     ensure_layout!(dpsi_dy, :g)
-    u_error = maximum(abs.(get_grid_data(velocity.components[1]) + get_grid_data(dpsi_dy)))
+    # `maximum` on a PencilArray is COLLECTIVE; reduce LOCAL storage (parent) so the
+    # Allreduce below is the only collective (was a redundant double-reduce).
+    u_error = maximum(abs.(parent(get_grid_data(velocity.components[1])) .+ parent(get_grid_data(dpsi_dy))))
 
     # Check v = ∂ψ/∂x  (perp_grad convention; v - ∂ψ/∂x = 0)
     ensure_layout!(velocity.components[2], :g)
     ensure_layout!(dpsi_dx, :g)
-    v_error = maximum(abs.(get_grid_data(velocity.components[2]) - get_grid_data(dpsi_dx)))
+    v_error = maximum(abs.(parent(get_grid_data(velocity.components[2])) .- parent(get_grid_data(dpsi_dx))))
 
     # MPI reduction for global error using field's communicator
     if MPI.Initialized()

@@ -845,7 +845,16 @@ Compute the domain-averaged eddy viscosity.
 function mean_eddy_viscosity(model::EddyViscosityModel)
     n = length(model.eddy_viscosity)
     n == 0 && return zero(eltype(model.eddy_viscosity))
-    return sum(model.eddy_viscosity) / n
+    s = sum(model.eddy_viscosity)
+    # LES models hold a per-rank plain Array (no communicator). Under MPI the bare
+    # sum/length is only this rank's slab → reduce the global mean as Σs/Σn over
+    # COMM_WORLD. Correct whether slabs are DECOMPOSED (tile the domain) or REPLICATED
+    # (Σ scales numerator and denominator by nprocs equally).
+    if MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
+        s = MPI.Allreduce(s, +, MPI.COMM_WORLD)
+        n = MPI.Allreduce(n, +, MPI.COMM_WORLD)
+    end
+    return s / n
 end
 
 """
@@ -853,7 +862,12 @@ end
 
 Return the maximum eddy viscosity in the domain.
 """
-max_eddy_viscosity(model::EddyViscosityModel) = maximum(model.eddy_viscosity)
+function max_eddy_viscosity(model::EddyViscosityModel)
+    m = maximum(model.eddy_viscosity)        # per-rank slab maximum
+    # Global maximum under MPI (idempotent → also correct for replicated slabs).
+    return (MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1) ?
+           MPI.Allreduce(m, MPI.MAX, MPI.COMM_WORLD) : m
+end
 
 """
     reset!(model::EddyViscosityModel)
@@ -928,7 +942,13 @@ function mean_sgs_dissipation(model::EddyViscosityModel, strain_magnitude::Abstr
     n == 0 && return zero(T)
     # Use broadcasting and sum - works for both CPU and GPU.
     # εₛₛ = νₑ |S̄|² with |S̄| = √(2 S̄ᵢⱼS̄ᵢⱼ); no extra factor of 2 (see sgs_dissipation).
-    return sum(νₑ .* strain_magnitude.^2) / n
+    s = sum(νₑ .* strain_magnitude.^2)
+    # Global mean under MPI (Σs/Σn — correct for decomposed or replicated slabs).
+    if MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
+        s = MPI.Allreduce(s, +, MPI.COMM_WORLD)
+        n = MPI.Allreduce(n, +, MPI.COMM_WORLD)
+    end
+    return s / n
 end
 
 # ============================================================================

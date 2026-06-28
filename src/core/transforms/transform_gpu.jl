@@ -262,6 +262,10 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
                 set_coeff_data!(field, pencil_plan * grid_data)
             end
         end
+        # The PencilFFT plan transforms ONLY the Fourier axes; a coupled
+        # (Chebyshev/Jacobi) axis is left in GRID space. Apply its local DCT now so
+        # distributed `:c` holds true spectral coefficients (no-op unless mixed+MPI).
+        _apply_distributed_coupled_dct!(field, true)
         field.current_layout = :c
         return
     end

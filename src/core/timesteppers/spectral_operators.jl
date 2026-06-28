@@ -95,12 +95,25 @@ function SpectralLinearOperator(
     # throw DimensionMismatch in the diagonal IMEX step.
     coeff_shape = local_shape(get_or_build_domain(dist, bases), :c)
 
+    # Per-axis 1-based range of GLOBAL coefficient modes this rank owns. Under MPI a
+    # decomposed Fourier axis is a sub-slab, so the operator must use THIS rank's
+    # wavenumbers (sliced by the global offset), not the first `local_len` global modes
+    # — otherwise rank>0 gets the wrong per-mode decay rate. Serial ⇒ full range
+    # (identical to the old behaviour). Mirrors the slicing in step_diagonal_imex.jl.
+    local_ranges = ntuple(N) do d
+        basis = bases[d]
+        gsize = basis isa RealFourier ? (basis.meta.size ÷ 2 + 1) :
+                (basis isa ComplexFourier ? basis.meta.size : coeff_shape[d])
+        (dist.size > 1 && coeff_shape[d] != gsize) ? local_indices(dist, d, gsize) :
+                                                     (1:coeff_shape[d])
+    end
+
     if operator_type == :custom && coefficients !== nothing
         # Use provided coefficients
         L_coeffs = on_architecture(arch, T.(coefficients))
     else
         # Build wavenumber-based operator on CPU first
-        L_coeffs_cpu = _build_spectral_operator(bases, coeff_shape, operator_type, ν, order, T)
+        L_coeffs_cpu = _build_spectral_operator(bases, coeff_shape, operator_type, ν, order, T, local_ranges)
         # Move to target architecture
         L_coeffs = on_architecture(arch, L_coeffs_cpu)
     end
@@ -138,7 +151,8 @@ function _build_spectral_operator(
     operator_type::Symbol,
     ν::Real,
     order::Int,
-    dtype::Type{T}
+    dtype::Type{T},
+    local_ranges::Tuple = ntuple(d -> 1:coeff_shape[d], length(bases))
 ) where {T}
 
     N = length(bases)
@@ -153,10 +167,11 @@ function _build_spectral_operator(
         basis = bases[d]
         Nb = hasfield(typeof(basis), :meta) ? basis.meta.size : coeff_shape[d]
         if basis isa RealFourier
-            coeff_shape[d] == (Nb ÷ 2 + 1) ? T.(wavenumbers_rfft(basis)) :
-                                             T.(wavenumbers_fft(basis))
+            full = coeff_shape[d] == (Nb ÷ 2 + 1) ? T.(wavenumbers_rfft(basis)) :
+                                                    T.(wavenumbers_fft(basis))
+            full[local_ranges[d]]                       # this rank's owned global modes
         elseif basis isa ComplexFourier
-            T.(wavenumbers(basis))
+            T.(wavenumbers(basis))[local_ranges[d]]
         else
             # Non-spectral basis (e.g., Chebyshev): no wavenumber damping.
             zeros(T, coeff_shape[d])

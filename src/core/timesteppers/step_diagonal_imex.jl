@@ -395,7 +395,9 @@ function _diagonal_deriv_grid(field::ScalarField, coord::Coordinate, order::Int)
     out = zeros(ComplexF64, size(lc))
     if isa(cd, PencilArrays.PencilArray)
         local_axes = PencilArrays.pencil(cd).axes_local
-        perm_tuple = Tuple(PencilArrays.permutation(cd))
+        # Tuple(NoPermutation()) is `nothing`, NOT identity — guard before findfirst.
+        _perm_raw = Tuple(PencilArrays.permutation(cd))
+        perm_tuple = _perm_raw === nothing ? ntuple(identity, ndims(out)) : _perm_raw
         lr = axis <= length(local_axes) ? local_axes[axis] : (1:length(k_axis))
         ik = ComplexF64.((im .* Float64.(k_axis[lr])) .^ order)
         paxis = findfirst(==(axis), perm_tuple)

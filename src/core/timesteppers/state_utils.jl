@@ -1248,7 +1248,9 @@ function _get_wavenumber_array_for_poisson(field::ScalarField, dim::Int, local_s
         pencil = PencilArrays.pencil(coeff_data)
         local_axes = pencil.axes_local
         perm = PencilArrays.permutation(coeff_data)
-        perm_tuple = Tuple(perm)
+        # Tuple(NoPermutation()) is `nothing`, NOT identity — guard before findfirst.
+        perm_raw = Tuple(perm)
+        perm_tuple = perm_raw === nothing ? ntuple(identity, ndims(coeff_data)) : perm_raw
         physical_axis = findfirst(==(dim), perm_tuple)
         if physical_axis === nothing
             physical_axis = dim
