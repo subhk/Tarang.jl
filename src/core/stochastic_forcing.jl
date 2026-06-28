@@ -771,7 +771,12 @@ function apply_forcing!(
 ) where {T, N, A, CA}
 
     F = generate_forcing!(forcing, t, substep)
-    F_view = _matched_forcing_view(forcing, size(rhs))
+    # Pass `rhs` itself (not size(rhs)): under MPI rhs is a PencilArray, so this
+    # selects the offset-aware PencilArray method (slices the rank's axes_local).
+    # Passing the NTuple `size(rhs)` instead routed to the offset-BLIND method
+    # (ranges = 1:local_n), injecting forcing at the wrong global wavenumbers on
+    # every rank>0 (or throwing on a non-matching local slab shape).
+    F_view = _matched_forcing_view(forcing, rhs)
     if F_view === nothing
         throw(ArgumentError("Forcing size $(size(F)) does not match RHS size $(size(rhs))"))
     end

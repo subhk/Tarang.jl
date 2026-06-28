@@ -447,9 +447,8 @@ function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64
     else
         nb = length(field.bases)
         cutoffs = ntuple(nb) do i
-            b = field.bases[i]
-            isa(b, Union{RealFourier, ComplexFourier}) ?
-                Int(floor(b.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
+            c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
+            c === nothing ? size(coeff_data, i) : c
         end
         rfft_dims = ntuple(nb) do i
             b = field.bases[i]
@@ -611,9 +610,8 @@ function _truncate_coeff_only!(dst::ScalarField, src::ScalarField, dealiasing_fa
     else
         nb = length(dst.bases)
         cutoffs = ntuple(nb) do i
-            b = dst.bases[i]
-            isa(b, Union{RealFourier, ComplexFourier}) ?
-                Int(floor(b.meta.size / (2 * dealiasing_factor))) : size(dc, i)
+            c = _axis_dealias_cutoff(dst.bases[i], dealiasing_factor)
+            c === nothing ? size(dc, i) : c
         end
         rfft_dims = ntuple(nb) do i
             b = dst.bases[i]

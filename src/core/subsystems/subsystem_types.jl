@@ -314,8 +314,29 @@ function build_subsystems(solver)
         push!(subsystems, subsystem)
     end
 
+    # Over-decomposition guard (uniform across ranks). We only reach here with real
+    # separable (Fourier) structure — the no-separation case returned a global
+    # subsystem above. For a MIXED distributed solve (`pencil_solve` set ⇒ a coupled
+    # Chebyshev/Jacobi axis whose per-mode tau solve issues collective solve-layout
+    # transposes), a rank that owns ZERO local Fourier modes cannot match the
+    # mode-owning ranks' collectives — the solve then crashes (DimensionMismatch) or
+    # deadlocks. This happens when nprocs exceeds the number of Fourier coefficient
+    # modes. Allreduce the empty flag so EVERY rank errors together (a rank-divergent
+    # error would itself hang the next collective).
+    if dist.size > 1 && dist.pencil_solve !== nothing
+        n_empty = MPI.Allreduce(isempty(subsystems) ? 1 : 0, +, dist.comm)
+        if n_empty > 0
+            error("Over-decomposed distributed solve: $n_empty of $(dist.size) MPI ranks own " *
+                  "zero separable (Fourier) modes, so the process count exceeds the number of " *
+                  "Fourier coefficient modes. The per-mode Chebyshev tau solve needs every rank " *
+                  "to own ≥1 Fourier mode (its collective solve-layout transpose cannot be matched " *
+                  "by a zero-mode rank). Reduce the number of MPI processes, or increase the " *
+                  "Fourier resolution, so #processes ≤ #Fourier modes.")
+        end
+    end
+
     if isempty(subsystems)
-        # Fallback to global subsystem
+        # Serial / non-separable: legitimate single global subsystem.
         return (Subsystem(solver),)
     end
 

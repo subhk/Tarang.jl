@@ -75,16 +75,13 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
         coeffs = get_coeff_data(field)
     end
 
-    # For 1D fields, evaluate directly
-    if ndims(coeffs) == 1
-        return _interpolate_fourier_1d(coeffs, basis, N, L, x)
-    end
-
     # MPI: reducing the interpolation axis multiplies the coefficients by global-length
     # spectral weights and sums over that axis. If the axis is MPI-DECOMPOSED, each rank
     # holds only a local coefficient slice (length < global) → the broadcast against the
     # global-length weights is a DimensionMismatch, and the per-rank sum would be partial.
     # Block it clearly. Interpolation along a NON-decomposed axis reduces correctly.
+    # NOTE: this guard MUST precede the 1-D early return below, else a genuinely 1-D
+    # MPI-decomposed Fourier field would bypass it and feed local coeffs to global weights.
     if field.dist.size > 1 && isa(get_coeff_data(field), PencilArrays.PencilArray)
         if axis in PencilArrays.decomposition(PencilArrays.pencil(get_coeff_data(field)))
             throw(ErrorException(
@@ -93,6 +90,11 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
                 "weights). Interpolate along a non-decomposed axis, run serially, or gather " *
                 "the field onto one rank first."))
         end
+    end
+
+    # For 1D fields, evaluate directly
+    if ndims(coeffs) == 1
+        return _interpolate_fourier_1d(coeffs, basis, N, L, x)
     end
 
     # For multi-D fields, interpolate along the specified axis using spectral weights.

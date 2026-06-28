@@ -856,7 +856,9 @@ function bad_max_velocity(bad::BoundaryAdvectionDiffusion)
         ensure_layout!(vel.components[2], :g)
 
         vel_mag = sqrt.(get_grid_data(vel.components[1]).^2 .+ get_grid_data(vel.components[2]).^2)
-        max_vel = max(max_vel, maximum(vel_mag))
+        # `maximum` on a PencilArray is COLLECTIVE; reduce LOCAL storage (parent) so
+        # the Allreduce below is the only collective (was a redundant double-reduce).
+        max_vel = max(max_vel, maximum(parent(vel_mag)))
     end
 
     if MPI.Initialized()

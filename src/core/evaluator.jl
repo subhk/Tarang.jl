@@ -575,6 +575,25 @@ function volume_integral(flow::GlobalFlowProperty, name::String)
 
     gdata = evaluate_property(flow, name)
 
+    # evaluate_property returns `Array(get_grid_data(field))` — the local slab in PARENT
+    # (storage) order. The quadrature weights below are sliced by LOGICAL axis
+    # (`local_indices` on each basis axis) and broadcast against data dimension `axis`,
+    # so for a PERMUTED grid pencil the two mis-align: a non-uniform Chebyshev/Legendre
+    # weight would multiply the wrong axis (silently wrong integral; uniform Fourier
+    # weights are unaffected). Reorder gdata into LOGICAL axis order so weights align.
+    # No-op for the usual NoPermutation grid pencil and for serial plain Arrays.
+    let f = haskey(flow.properties, name) ? flow.properties[name] : nothing
+        if f isa ScalarField
+            gd = get_grid_data(f)
+            if gd isa PencilArrays.PencilArray
+                perm = Tuple(PencilArrays.permutation(gd))
+                if perm !== nothing                       # non-identity ⇒ storage ≠ logical
+                    gdata = permutedims(gdata, invperm(collect(perm)))
+                end
+            end
+        end
+    end
+
     # Get domain and integration weights
     domain = get_solver_domain(flow.solver)
     if domain === nothing
@@ -997,11 +1016,23 @@ function _local_task_data(task::ScalarField)
         gv = PencilArrays.global_view(d)            # permutation-aware
         block = collect(gv)                          # plain Array, logical order
         starts = Int[first(r) for r in axes(gv)]
-        return block, starts, collect(Int, PencilArrays.size_global(d))
+        gshape = collect(Int, PencilArrays.size_global(d))
     else
         block = Array(on_architecture(CPU(), d))     # GPU → host copy
-        return block, ones(Int, ndims(block)), collect(Int, size(block))
+        starts = ones(Int, ndims(block))
+        gshape = collect(Int, size(block))
     end
+    if eltype(block) <: Complex
+        # NetCDF has no complex type. Encode as a real array with a trailing size-2
+        # axis [real, imag]; every rank owns the full re/im axis, so the per-rank
+        # slab placement (starts/gshape) just gains a leading 1 / trailing 2 and the
+        # downstream write + offset merge stay entirely real. Readers reconstruct via
+        # `complex.(A[..., 1], A[..., 2])`.
+        block = cat(real(block), imag(block); dims=ndims(block) + 1)
+        push!(starts, 1)
+        push!(gshape, 2)
+    end
+    return block, starts, gshape
 end
 
 function _local_task_data(task::VectorField)

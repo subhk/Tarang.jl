@@ -158,11 +158,12 @@ end
     to_solve_layout!(fields, dist) -> Vector{Pair}
 
 Transpose every eligible scalar field's coeff data from the FFT pencil
-(`pencil_fft_output`) into the Chebyshev-local solve pencil (`dist.pencil_solve`),
-apply the local Chebyshev/Jacobi forward DCT along the coupled axis (the PencilFFT
-left it in grid space), and swap the field's coeff storage to the solve
-PencilArray. Returns a stash of `field => fft_pencil_array` pairs to be undone by
-`from_solve_layout!`.
+(`pencil_fft_output`) into the Chebyshev-local solve pencil (`dist.pencil_solve`)
+and swap the field's coeff storage to the solve PencilArray. `:c` is already
+Chebyshev-SPECTRAL along the coupled axis (`forward_transform!` applies the coupled
+DCT via `_apply_distributed_coupled_dct!`), so the transpose alone lands the per-mode
+tau solve in coefficient space. Returns a stash of `field => fft_pencil_array` pairs
+to be undone by `from_solve_layout!`.
 
 No-op (returns an empty stash) for serial runs or when `pencil_solve` is unset.
 """
@@ -179,7 +180,9 @@ function to_solve_layout!(fields, dist)
         key = (:solve, objectid(f), objectid(dist.pencil_solve))
         solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
         PencilArrays.transpose!(solve_pa, fft_pa)
-        _solve_layout_forward_transform!(solve_pa, dist)
+        # `:c` is already Chebyshev-SPECTRAL (forward_transform! applied the coupled
+        # DCT via _apply_distributed_coupled_dct!), so the fft→solve transpose alone
+        # lands the per-mode tau solve in coefficient space. No DCT here (was double).
         set_coeff_data!(f, solve_pa)
         push!(stash, f => fft_pa)
     end
@@ -189,23 +192,65 @@ end
 """
     from_solve_layout!(stash, dist)
 
-Undo `to_solve_layout!`: apply the local Chebyshev/Jacobi backward DCT along the
-coupled axis (returning it to grid space), transpose each field's solve
-PencilArray back into its FFT PencilArray, and restore the field's coeff storage.
-After this the field is in the `pencil_fft_output` layout (Fourier-coeff along the
-Fourier axis, GRID along the coupled axis) that the PencilFFT plan expects for
-grid-space transforms.
+Undo `to_solve_layout!`: transpose each field's solve PencilArray back into its FFT
+PencilArray and restore the field's coeff storage. The coupled axis stays
+Chebyshev-SPECTRAL (the DCT is now owned by `forward_transform!`/`backward_transform!`),
+so after this the field is back in the `pencil_fft_output` layout holding full spectral
+coefficients — exactly what `backward_transform!` inverts (coupled inverse-DCT, then the
+PencilFFT Fourier `ldiv!`).
 """
 function from_solve_layout!(stash, dist)
     (dist === nothing || dist.size <= 1) && return
     for (f, fft_pa) in stash
         solve_pa = get_coeff_data(f)
         (solve_pa isa PencilArrays.PencilArray) || continue
-        _solve_layout_backward_transform!(solve_pa, dist)
+        # The coupled (Chebyshev) DCT is now applied/inverted by
+        # forward_transform!/backward_transform! (see _apply_distributed_coupled_dct!),
+        # so `:c` is Chebyshev-SPECTRAL in both the fft and solve pencils. The
+        # solve↔fft transpose preserves those coefficients; no DCT here.
         PencilArrays.transpose!(fft_pa, solve_pa)
         set_coeff_data!(f, fft_pa)
     end
     return
+end
+
+"""
+    _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool) -> field
+
+Apply (forward=true) or invert (forward=false) the local non-Fourier
+(Chebyshev/Legendre/Jacobi) transform along each coupled axis of a DISTRIBUTED
+mixed Fourier–Chebyshev field's coeff data, so that `:c` holds true spectral
+coefficients along the coupled axis rather than grid values.
+
+The distributed PencilFFT plan transforms ONLY the Fourier axes (the coupled axis is
+`NoTransform`, and is the DECOMPOSED axis of `pencil_fft_output`), so after `mul!`
+the coupled axis is still in GRID space — the long-standing "distributed mixed `:c`
+returns un-DCT'd data" bug. The coupled DCT needs that axis FULLY LOCAL, which is the
+`pencil_solve` layout, so we transpose `fft → solve`, apply the local forward/backward
+coupled transform (the SAME `_solve_layout_*_transform!` the solver uses), and transpose
+back — leaving the coeff data in the SAME `pencil_fft_output` layout but Chebyshev-spectral.
+
+No-op for serial runs, pure-Fourier fields, GPU coeff arrays, or when `pencil_solve` is
+unset. `forward_transform!`/`backward_transform!` run symmetrically on every rank, so the
+two `PencilArrays.transpose!` collectives here are always rank-uniform.
+"""
+function _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool)
+    dist = field.dist
+    (dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing) || return field
+    isempty(field.bases) && return field
+    any(b -> b !== nothing && !isa(b, FourierBasis), field.bases) || return field
+    fft_pa = get_coeff_data(field)
+    (fft_pa isa PencilArrays.PencilArray) || return field
+
+    cache = get_transpose_cache()
+    dtype = eltype(fft_pa)
+    key = (:coupled_dct, objectid(field), objectid(dist.pencil_solve))
+    solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
+    PencilArrays.transpose!(solve_pa, fft_pa)
+    forward ? _solve_layout_forward_transform!(solve_pa, dist) :
+              _solve_layout_backward_transform!(solve_pa, dist)
+    PencilArrays.transpose!(fft_pa, solve_pa)
+    return field
 end
 
 @inline function _subproblem_backend_field(which::Symbol)

@@ -193,6 +193,10 @@ const MPI_TEST_FILES = [
     "test_mpi_cheb_fourier_ivp_nonlinear.jl", # distributed NONLINEAR Cheb-Fourier channel IVP (advection+dealias+tau-BC+IMEX) == serial (np>=2)
     # MPI correctness fixes 2026-06-23 (see memory/project_mpi_audit_2026_06_21.md).
     "test_mpi_decomp_forcing_audit.jl",      # #1/#4 get_local_range slab; #2 forcing wavenumber placement (np>=2)
+    "test_mpi_audit_2026_06_28.jl",          # dealias cutoff np-independence; apply_forcing! offset; mixed Cheb-Fourier :c DCT; over-decomp solve fails loud (np>=4)
+    "test_mpi_audit_med_2026_06_28.jl",      # MED batch: LES diagnostics global reduce; VirtualFileHandler complex round-trip
+
+
     "test_mpi_bvp_cheb_fourier.jl",          # steady LBVP/NLBVP solve-layout transpose + Newton resnorm Allreduce (np>=2)
     "test_mpi_output_audit.jl",              # wall_dt schedule Bcast (no deadlock) + complex checkpoint metadata (np>=2)
     "test_mpi_forcing_work.jl",              # work_stratonovich/ito/instantaneous_power distributed == serial (np>=2)

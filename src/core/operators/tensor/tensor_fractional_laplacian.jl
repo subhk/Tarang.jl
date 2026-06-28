@@ -127,7 +127,9 @@ function compute_wavenumber_squared_grid(field::ScalarField)
         kp = parent(k_squared)
         pencil = PencilArrays.pencil(cd)
         local_axes = pencil.axes_local
-        perm_tuple = Tuple(PencilArrays.permutation(cd))
+        # Tuple(NoPermutation()) is `nothing`, NOT identity — guard before findfirst.
+        _perm_raw = Tuple(PencilArrays.permutation(cd))
+        perm_tuple = _perm_raw === nothing ? ntuple(identity, ndims(kp)) : _perm_raw
         for (axis, basis) in enumerate(bases)
             k_axis = if isa(basis, RealFourier)
                 _is_first_real_fourier_axis(bases, axis) ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)

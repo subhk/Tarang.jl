@@ -48,6 +48,10 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
     # Find appropriate transform
     pencil_plan = _find_pencil_plan(field.dist)
     if pencil_plan !== nothing
+        # Invert the coupled (Chebyshev/Jacobi) DCT BEFORE the PencilFFT ldiv!:
+        # distributed `:c` is Chebyshev-SPECTRAL, but the PencilFFT plan handles only
+        # the Fourier axes and needs the coupled axis in GRID space. No-op unless mixed+MPI.
+        _apply_distributed_coupled_dct!(field, false)
         # PencilFFTs is CPU-only; if data is on GPU, move to CPU first
         coeff_data = get_coeff_data(field)
         if is_gpu_array(coeff_data)

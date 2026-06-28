@@ -30,15 +30,13 @@ GPU-compatible: uses appropriate implementation based on field's architecture.
 function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     nb = length(field.bases)
     # Compute cutoffs: keep modes with |k| <= N/(2*dealiasing_factor)
-    cutoffs_check = ntuple(nb) do i
-        basis = field.bases[i]
-        isa(basis, Union{RealFourier, ComplexFourier}) ?
-            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : typemax(Int) >> 1
+    # Skip if grid too small for meaningful dealiasing (a dealiased Fourier axis
+    # whose alias-safe cutoff is 0). Uses the shared _axis_dealias_cutoff so the
+    # serial and distributed paths agree.
+    any_zero_cutoff = any(1:nb) do i
+        c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
+        c !== nothing && c == 0
     end
-
-    # Skip if grid too small for meaningful dealiasing
-    any_zero_cutoff = any(i -> isa(field.bases[i], Union{RealFourier, ComplexFourier}) &&
-                               cutoffs_check[i] == 0, 1:nb)
     if any_zero_cutoff
         return
     end
@@ -53,9 +51,8 @@ function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
         _apply_spectral_cutoff_distributed!(coeff_data, field.bases, dealiasing_factor)
     else
         cutoffs = ntuple(nb) do i
-            basis = field.bases[i]
-            isa(basis, Union{RealFourier, ComplexFourier}) ?
-                Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
+            c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
+            c === nothing ? size(coeff_data, i) : c
         end
 
         rfft_dims = ntuple(nb) do i
@@ -91,15 +88,12 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     nb = length(field.bases)
     # Compute cutoff wavenumbers for each Fourier basis dimension.
     # For the 2/3 rule (dealiasing_factor=1.5): keep modes with |k| <= N/3.
-    cutoffs_check = ntuple(nb) do i
-        basis = field.bases[i]
-        isa(basis, Union{RealFourier, ComplexFourier}) ?
-            Int(floor(basis.meta.size / (2 * dealiasing_factor))) : typemax(Int) >> 1
+    # Skip dealiasing if any dealiased Fourier axis is too small to retain a mode
+    # (alias-safe cutoff 0). Shared _axis_dealias_cutoff → serial == distributed.
+    any_zero_cutoff = any(1:nb) do i
+        c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
+        c !== nothing && c == 0
     end
-
-    # Skip dealiasing if any Fourier cutoff is 0 (grid too small for meaningful dealiasing).
-    any_zero_cutoff = any(i -> isa(field.bases[i], Union{RealFourier, ComplexFourier}) &&
-                               cutoffs_check[i] == 0, 1:nb)
     if any_zero_cutoff
         return
     end
@@ -115,9 +109,8 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     else
         # Recompute cutoffs using actual coeff array sizes for non-Fourier bases
         cutoffs = ntuple(nb) do i
-            basis = field.bases[i]
-            isa(basis, Union{RealFourier, ComplexFourier}) ?
-                Int(floor(basis.meta.size / (2 * dealiasing_factor))) : size(coeff_data, i)
+            c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
+            c === nothing ? size(coeff_data, i) : c
         end
 
         rfft_dims = ntuple(nb) do i
@@ -224,6 +217,32 @@ function _axis_dealias_factor(basis, fallback::Float64)
 end
 
 """
+    _axis_dealias_cutoff(basis, fallback_factor) -> Union{Int, Nothing}
+
+Per-axis alias-safe 2/3-rule truncation cutoff, shared by BOTH the serial
+(`apply_spectral_cutoff!`) and distributed (`_apply_spectral_cutoff_distributed!`)
+dealiasing paths so the retained band is identical at np=1 and np≥2.
+
+Returns `nothing` when the axis is not dealiased (non-Fourier basis, or per-axis
+factor ≤ 1 → keep every mode). Otherwise keep modes with `|k| ≤ cutoff` where
+
+    cutoff = min(floor(N / (2·factor)), (N − 1) ÷ 3)
+
+The `(N − 1) ÷ 3` cap enforces `3·cutoff < N`, so the quadratic product (modes up
+to `2·cutoff`) cannot alias back into `[−cutoff, cutoff]`. Without the cap the
+serial path admitted a sliver of aliasing at the boundary mode and, crucially,
+kept one extra mode than the distributed path whenever `N % 3 == 0` (e.g. N=12,
+factor=3/2: 4 vs 3) — making the same dealiasing call decomposition-dependent.
+"""
+function _axis_dealias_cutoff(basis, fallback_factor::Real)
+    isa(basis, Union{RealFourier, ComplexFourier}) || return nothing
+    factor = _axis_dealias_factor(basis, Float64(fallback_factor))
+    factor <= 1 && return nothing
+    N = basis.meta.size
+    return min(floor(Int, N / (2 * factor)), (N - 1) ÷ 3)
+end
+
+"""
     _any_axis_dealias(bases, fallback) -> Bool
 
 True if any Fourier axis requests dealiasing (factor > 1). Used to gate the
@@ -277,21 +296,18 @@ function _apply_spectral_cutoff_distributed!(coeff_data::PencilArrays.PencilArra
     pencil = PencilArrays.pencil(coeff_data)
     local_axes = pencil.axes_local
     perm = PencilArrays.permutation(coeff_data)
-    perm_tuple = Tuple(perm)
+    # Tuple(NoPermutation()) is `nothing`, NOT identity — guard before findfirst.
+    perm_raw = Tuple(perm)
+    perm_tuple = perm_raw === nothing ? ntuple(identity, ndims(local_data)) : perm_raw
 
     for axis in 1:length(bases)
         basis = bases[axis]
         (isa(basis, RealFourier) || isa(basis, ComplexFourier)) || continue
 
         N = basis.meta.size
-        factor = _axis_dealias_factor(basis, dealiasing_factor)
-        factor <= 1 && continue   # dealias ≤ 1 → no truncation on this axis
-        # Quadratic-alias-safe cutoff: keep |mode| ≤ cutoff with 3·cutoff < N so the
-        # highest product mode (2·cutoff) cannot alias back into the retained band.
-        # Truncation can keep at most (N-1)÷3 modes alias-free regardless of factor, so
-        # a larger factor (stronger dealiasing) lowers the cutoff; a smaller one is
-        # capped at the alias-free limit.
-        cutoff = min(floor(Int, N / (2 * factor)), (N - 1) ÷ 3)
+        # Shared alias-safe cutoff (identical to the serial path → np-independent).
+        cutoff = _axis_dealias_cutoff(basis, dealiasing_factor)
+        cutoff === nothing && continue   # factor ≤ 1 → no truncation on this axis
 
         # Global integer mode numbers matching the coefficient layout on this axis.
         if isa(basis, RealFourier) && _is_first_real_fourier_axis(bases, axis)

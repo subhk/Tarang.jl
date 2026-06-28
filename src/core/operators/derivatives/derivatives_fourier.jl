@@ -184,7 +184,10 @@ function _apply_spectral_derivative_distributed!(coeff_data::PencilArrays.Pencil
     # CRITICAL: PencilArrays can use a permutation where parent array axes differ from logical axes
     # Get the permutation and map logical axis to physical axis in parent
     perm = PencilArrays.permutation(coeff_data)
-    perm_tuple = Tuple(perm)  # Convert to tuple - identity perm gives (1, 2, ..., n)
+    # Tuple(NoPermutation()) is `nothing`, NOT the identity (1,…,n) — guard so a
+    # NoPermutation coeff pencil doesn't throw in the findfirst below.
+    perm_raw = Tuple(perm)
+    perm_tuple = perm_raw === nothing ? ntuple(identity, ndims(coeff_data)) : perm_raw
     # perm_tuple[physical] = logical, so find physical where perm_tuple[physical] == logical_axis
     physical_axis = findfirst(==(axis), perm_tuple)
     if physical_axis === nothing
