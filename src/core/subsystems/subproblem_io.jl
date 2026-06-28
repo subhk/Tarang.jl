@@ -130,8 +130,12 @@ function _solve_layout_forward_transform!(solve_pa::PencilArrays.PencilArray, di
     for transform in dist.transforms
         (transform isa Transform) || continue          # skip PencilFFTPlan
         (transform isa FourierTransform) && continue    # Fourier done by PencilFFT
-        out = _apply_forward(cd, transform)
-        out === cd || copyto!(cd, out)
+        # In-place via the transform's CACHED scratch+plan (zero-alloc once warm) —
+        # same path the serial chain uses. The allocating `_apply_forward` re-planned
+        # FFTW + allocated ~6 full-size arrays per call (≈3.5 MB/step under MPI). The
+        # solve pencil is square along the coupled axis (grid==coeff), so out===in is
+        # safe (the kernel reads `in` into scratch before writing `out`).
+        _apply_forward!(cd, cd, transform)
     end
     return solve_pa
 end
@@ -148,8 +152,9 @@ function _solve_layout_backward_transform!(solve_pa::PencilArrays.PencilArray, d
     for transform in dist.transforms
         (transform isa Transform) || continue
         (transform isa FourierTransform) && continue
-        out = _apply_backward(cd, transform)
-        out === cd || copyto!(cd, out)
+        # In-place via cached scratch+plan (zero-alloc once warm). 3-arg form ⇒
+        # out_n = transform.grid_size; square coupled axis ⇒ out===in is safe.
+        _apply_backward!(cd, cd, transform)
     end
     return solve_pa
 end
@@ -498,9 +503,19 @@ treated dim 2 as the coupled axis, so for 3D it selected only kx, never ky, and
 mis-sized the slice (BoundsError) — 3D mixed-basis solves never worked.
 """
 function _subproblem_coeff_index(cd::AbstractArray, field::ScalarField, sp::Subproblem)
+    # Memo: the index depends only on field.bases + sp.group + this rank's local mode
+    # range + the coeff layout (size(cd)) — all step-invariant. Key by field identity
+    # AND layout so a relayout (different cd) can't return a stale index. Caches the
+    # off-rank `nothing` too, and avoids the per-call Vector{Any} allocation on hits.
+    cache = sp.runtime.coeff_index_cache
+    key = hash(size(cd), objectid(field))
+    hit = get(cache, key, missing)
+    hit === missing || return hit
+
     dist = sp.dist
     nd = ndims(cd)
     idx = Vector{Any}(undef, nd)
+    valid = true
     for axis in 1:nd
         basis = axis <= length(field.bases) ? field.bases[axis] : nothing
         g = axis <= length(sp.group) ? sp.group[axis] : nothing
@@ -513,13 +528,18 @@ function _subproblem_coeff_index(cd::AbstractArray, field::ScalarField, sp::Subp
                 lr = local_indices(dist, axis, global_size)
                 kx_global - first(lr) + 1
             end
-            (kx_local < 1 || kx_local > size(cd, axis)) && return nothing
+            if kx_local < 1 || kx_local > size(cd, axis)
+                valid = false; break    # selected mode not on this rank (MPI)
+            end
             idx[axis] = kx_local
         else
             idx[axis] = Colon()   # coupled axis (Chebyshev/Jacobi): keep all modes
         end
     end
-    return Tuple(idx)
+    result = valid ? Tuple(idx) : nothing
+    length(cache) >= _SP_MEMO_CAP && empty!(cache)
+    cache[key] = result
+    return result
 end
 
 function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
@@ -638,15 +658,46 @@ function _scatter_field_raw!(field::VectorField, data::AbstractVector, offset::I
     return offset
 end
 
+# Concrete-typed gather/scatter inner loops. The cached subproblem buffers are stored
+# as abstract `AbstractVector{ComplexF64}` (so a CuArray fits the same slot), so an
+# inline index-copy loop over them dynamic-dispatches getindex/setindex! EVERY element
+# → boxes a ComplexF64 + the dispatch tuple per element (~3 MB/step under MPI, profiled
+# via Profile.Allocs). Narrow to the concrete CPU `Vector{ComplexF64}` once via a union
+# split so the hot branch compiles statically (zero-alloc); any other array type keeps
+# the generic — still correct — branch.
+@inline function _select_copy!(dest::AbstractVector, raw::AbstractVector, indices)
+    if dest isa Vector{ComplexF64} && raw isa Vector{ComplexF64}
+        @inbounds for i in eachindex(indices)
+            dest[i] = raw[indices[i]]
+        end
+    else
+        @inbounds for i in eachindex(indices)
+            dest[i] = raw[indices[i]]
+        end
+    end
+    return dest
+end
+
+@inline function _scatter_copy!(dest::AbstractVector, raw::AbstractVector, indices)
+    if dest isa Vector{ComplexF64} && raw isa Vector{ComplexF64}
+        @inbounds for i in eachindex(indices)
+            dest[indices[i]] = raw[i]
+        end
+    else
+        @inbounds for i in eachindex(indices)
+            dest[indices[i]] = raw[i]
+        end
+    end
+    return dest
+end
+
 function compress_variable_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)
     if sp.pre_right_pinv !== nothing
         indices = (!is_gpu_array(dest) && !is_gpu_array(raw)) ?
                   _subproblem_selection_indices!(sp, sp.pre_right_pinv, :pre_right_pinv) :
                   nothing
         if indices !== nothing
-            @inbounds for i in eachindex(indices)
-                dest[i] = raw[indices[i]]
-            end
+            _select_copy!(dest, raw, indices)
         else
             pre = _subproblem_backend_matrix!(sp, sp.pre_right_pinv, :pre_right_pinv, raw)
             if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
@@ -674,9 +725,7 @@ function expand_variable_space!(dest::AbstractVector, sp::Subproblem, data::Abst
                   nothing
         if indices !== nothing
             fill!(dest, zero(eltype(dest)))
-            @inbounds for i in eachindex(indices)
-                dest[indices[i]] = data[i]
-            end
+            _scatter_copy!(dest, data, indices)
         else
             pre = _subproblem_backend_matrix!(sp, sp.pre_right, :pre_right, data)
             if !is_gpu_array(dest) && !is_gpu_array(data) && pre isa AbstractMatrix
@@ -703,9 +752,7 @@ function compress_equation_space!(dest::AbstractVector, sp::Subproblem, raw::Abs
                   _subproblem_selection_indices!(sp, sp.pre_left, :pre_left) :
                   nothing
         if indices !== nothing
-            @inbounds for i in eachindex(indices)
-                dest[i] = raw[indices[i]]
-            end
+            _select_copy!(dest, raw, indices)
         else
             pre = _subproblem_backend_matrix!(sp, sp.pre_left, :pre_left, raw)
             if !is_gpu_array(dest) && !is_gpu_array(raw) && pre isa AbstractMatrix
