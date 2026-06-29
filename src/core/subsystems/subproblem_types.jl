@@ -37,6 +37,13 @@ mutable struct SubproblemRuntimeCache
     mass_solver::Any
     lhs_dirty::Dict{Float64, Bool}
     rk_buffers::Dict{_SubproblemRKBufferKey, AbstractVector{ComplexF64}}
+    # Per-(subproblem,field) memo of the per-mode DOF count and coeff-select index.
+    # Both depend only on the field's bases + this subproblem's mode group + the
+    # (step-invariant) coeff layout, so they are recomputed identically every step —
+    # cache them keyed by objectid(field). Bounded by `_SP_MEMO_CAP` to absorb the
+    # objectid churn of transient RHS fields on the interpreted path.
+    field_size_cache::Dict{UInt, Int}
+    coeff_index_cache::Dict{UInt, Any}
 end
 
 SubproblemRuntimeCache() = SubproblemRuntimeCache(
@@ -47,7 +54,14 @@ SubproblemRuntimeCache() = SubproblemRuntimeCache(
     nothing,
     Dict{Float64, Bool}(),
     Dict{_SubproblemRKBufferKey, AbstractVector{ComplexF64}}(),
+    Dict{UInt, Int}(),
+    Dict{UInt, Any}(),
 )
+
+# Cap for the per-field memo Dicts (field_size_cache / coeff_index_cache) so a long
+# interpreted-RHS run whose transient fields churn objectids can't grow them without
+# bound. The real working set (state + variable fields) is a handful of entries.
+const _SP_MEMO_CAP = 256
 
 mutable struct Subproblem
     solver::Any
@@ -231,27 +245,28 @@ For each basis dimension of the field:
 Fields with no bases (0-D taus) return 1.
 """
 function subproblem_field_size(sp::Subproblem, field::ScalarField)
+    cache = sp.runtime.field_size_cache
+    key = objectid(field)
+    hit = get(cache, key, -1)
+    hit >= 0 && return hit
+
     bases = field.bases
-    # 0-D tau fields (no bases) contribute 1 DOF
-    if isempty(bases)
-        return 1
+    group = sp.group
+    # 0-D tau fields (no bases) contribute 1 DOF.
+    dofs = 1
+    if !isempty(bases)
+        for (i, basis) in enumerate(bases)
+            basis === nothing && continue                 # no basis in this dim
+            if i <= length(group) && group[i] isa Int
+                dofs *= 1                                  # separable Fourier mode ⇒ 1 DOF
+            else
+                dofs *= _basis_coeff_size(basis)           # coupled axis ⇒ full coeff size
+            end
+        end
     end
 
-    group = sp.group
-    dofs = 1
-    for (i, basis) in enumerate(bases)
-        if basis === nothing
-            # No basis in this dimension — contributes nothing extra
-            continue
-        end
-        if i <= length(group) && group[i] isa Int
-            # Separable dimension: single Fourier mode => 1 DOF
-            dofs *= 1
-        else
-            # Coupled dimension: full basis coefficient size
-            dofs *= _basis_coeff_size(basis)
-        end
-    end
+    length(cache) >= _SP_MEMO_CAP && empty!(cache)
+    cache[key] = dofs
     return dofs
 end
 
