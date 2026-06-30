@@ -20,6 +20,28 @@
 # standard IMEX RK formulation.
 # ──────────────────────────────────────────────────────────────────────────────
 
+# Concrete-typed AXPY barrier for the IMEX history accumulation `rhs ± a*src`.
+# The per-subproblem history buffers (RK `F[j]`/`LX[j]`, multistep ring entries)
+# are stored as abstract `AbstractVector{ComplexF64}` so a CuArray fits the same
+# slot. A bare `rhs .+= a .* src` broadcast over that abstract eltype
+# dynamic-dispatches getindex/setindex! every element → boxes a ComplexF64 per
+# element (profiled ~MB/step under MPI). Narrow to the concrete CPU
+# `Vector{ComplexF64}` once via a union split so the hot branch compiles
+# statically (zero-alloc); any other array type (CuArray, views) keeps the
+# generic broadcast — still correct. Mirrors `_select_copy!` in subproblem_io.jl.
+# For a `-=` site, pass `-a`: dest[i] += (-a)*src[i] is IEEE-identical to
+# dest[i] -= a*src[i] (negation and the sign of the product are exact).
+@inline function _sp_axpy!(dest::AbstractVector, a::Number, src::AbstractVector)
+    if dest isa Vector{ComplexF64} && src isa Vector{ComplexF64}
+        @inbounds @simd for i in eachindex(dest, src)
+            dest[i] += a * src[i]
+        end
+    else
+        dest .+= a .* src
+    end
+    return dest
+end
+
 _subproblem_vector_slots(n::Int) = Vector{AbstractVector{ComplexF64}}(undef, n)
 
 function _subproblem_stage_vector_slots(stages::Int, n_sp::Int)
@@ -455,10 +477,10 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
                 a_ej = dt * A_exp[i, j]
                 a_ij = dt * A_imp[i, j]
                 if abs(a_ej) > 1e-14
-                    rhs .+= a_ej .* F[j][sp_idx]
+                    _sp_axpy!(rhs, a_ej, F[j][sp_idx])
                 end
                 if abs(a_ij) > 1e-14
-                    rhs .-= a_ij .* LX[j][sp_idx]
+                    _sp_axpy!(rhs, -a_ij, LX[j][sp_idx])
                 end
             end
 
@@ -572,10 +594,10 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             be = dt * b_exp[s]
             bi = dt * b_imp[s]
             if abs(be) > 1e-14
-                rhs .+= be .* F[s][sp_idx]
+                _sp_axpy!(rhs, be, F[s][sp_idx])
             end
             if abs(bi) > 1e-14
-                rhs .-= bi .* LX[s][sp_idx]
+                _sp_axpy!(rhs, -bi, LX[s][sp_idx])
             end
         end
 
