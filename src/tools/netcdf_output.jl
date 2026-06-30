@@ -1886,7 +1886,11 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
     # Broadcast rank 0's decision so every rank writes or skips together, mirroring
     # process!(VirtualFileHandler,...) (round-4 audit 2026-06-23). iter/sim_dt
     # cadences are already rank-consistent, so the Bcast is a no-op for them.
-    if MPI.Initialized() && handler.size > 1 && handler.comm !== nothing
+    # Only a `wall_dt` cadence makes check_schedule's decision rank-divergent
+    # (per-rank wall_time); iter/sim_dt decisions are identical on every rank.
+    # So the deadlock-guard Bcast is needed only when wall_dt is set — skipping
+    # it otherwise removes a per-step collective (C1 efficiency fix).
+    if handler.wall_dt !== nothing && MPI.Initialized() && handler.size > 1 && handler.comm !== nothing
         sc = Ref(scheduled)
         MPI.Bcast!(sc, handler.comm; root=0)
         scheduled = sc[]

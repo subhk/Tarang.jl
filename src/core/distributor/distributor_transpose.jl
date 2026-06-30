@@ -105,6 +105,14 @@ end
 # Global transpose buffer cache (lazy initialization)
 const TRANSPOSE_CACHE = Ref{Union{Nothing, TransposeBufferCache}}(nothing)
 
+# Hard cap on distinct cached transpose buffers, mirroring `_SP_MEMO_CAP` (=256) in
+# subsystems/subproblem_types.jl. The `:solve`/`:coupled_dct` keys are objectid- or
+# shape-based; on the interpreted-RHS fallback (churning field objectids) the Dict would
+# otherwise grow without bound — each miss allocs a full solve-pencil PencilArray and
+# keeps it forever. On overflow we evict wholesale; subsequent steps repopulate the few
+# buffers that are actually live.
+const _TRANSPOSE_CACHE_CAP = 256
+
 function get_transpose_cache()
     if TRANSPOSE_CACHE[] === nothing
         TRANSPOSE_CACHE[] = TransposeBufferCache()
@@ -128,6 +136,11 @@ function get_transpose_buffer!(cache::TransposeBufferCache, pencil::PencilArrays
     end
 
     cache.misses += 1
+
+    # Bound the cache (see `_TRANSPOSE_CACHE_CAP`): evict wholesale on overflow. Any
+    # buffer still in use stays alive via the field/stash that references it — `empty!`
+    # only drops the Dict's reference, exactly the `_SP_MEMO_CAP` memo-cache pattern.
+    length(cache.pencil_buffers) >= _TRANSPOSE_CACHE_CAP && empty!(cache.pencil_buffers)
 
     # Create new PencilArray buffer
     buf = PencilArrays.PencilArray{dtype}(undef, pencil)

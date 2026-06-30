@@ -278,21 +278,21 @@ function step_subproblem_multistep!(
             abs(ck) < 1e-14 && continue
             entry = ring_get(F_rings[sp_idx], k - 1)
             entry === nothing && continue
-            @. rhs += ck * entry
+            _sp_axpy!(rhs, ck, entry)
         end
         for k in 2:length(a)
             ak = a[k]
             abs(ak) < 1e-14 && continue
             entry = ring_get(MX_rings[sp_idx], k - 1)
             entry === nothing && continue
-            @. rhs -= ak * entry
+            _sp_axpy!(rhs, -ak, entry)
         end
         for k in 2:length(b)
             bk = b[k]
             abs(bk) < 1e-14 && continue
             entry = ring_get(LX_rings[sp_idx], k - 1)
             entry === nothing && continue
-            @. rhs -= bk * entry
+            _sp_axpy!(rhs, -bk, entry)
         end
 
         # Override BC rows: rhs[bc] = b[0] * F_alg[bc] so that

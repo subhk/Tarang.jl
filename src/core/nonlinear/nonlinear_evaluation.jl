@@ -204,6 +204,123 @@ function gpu_multiply_fields!(result_data::AbstractArray, data1::AbstractArray, 
     return result_data
 end
 
+# ── Cached workspace for the distributed padded multiply ─────────────────────
+# evaluate_padded_multiply_distributed runs an IDENTICAL transpose / pad / FFT
+# SEQUENCE on every call for a fixed problem (topology, global size and the
+# decomposition are stable). This workspace lets the routine REUSE across calls:
+#   (a) the intermediate Pencils — immutable metadata that PencilArrays.transpose!
+#       only reads, so sharing is safe (kills the ~14 fresh Pencils/call);
+#   (b) the complex N- and Mp-sized scratch PencilArray buffers (kills the ~14
+#       full-grid PencilArray allocations/call);
+#   (c) plan-backed in-place local-axis FFTs replacing out-of-place fft()/ifft()
+#       (kills the ~12 full-grid FFT-output allocations/call).
+# The result field comes from the shared rotating pool via _checkout_nl_result!
+# (kills the fresh ScalarField/call). Mirrors the cached-plan+scratch pattern of
+# _get_batched_backward_plan!/_BATCHED_PENCIL_PLAN_CACHE and the in-place-plan +
+# CPU/GPU split of _get_padded_workspace!/PaddedDealiasingWorkspace (serial sibling).
+#
+# Buffers are handed out by a per-call BUMP index (`idx`, reset to 0 at the start
+# of each call). Because the control flow is data-independent, the i-th _buf!
+# request asks for the same shape on every call, so each logical "role" (e.g. up1
+# vs up2, which are alive simultaneously when their product is formed) maps to a
+# DISTINCT, stable slot and never aliases. Every buffer is FULLY overwritten
+# (transpose! destination, a `.=` copy, or a full-coverage pad/truncate) before it
+# is read, so stale data from a previous call is never observed — exactly the
+# property the original relied on when it allocated `undef` buffers each call.
+mutable struct PaddedDistDealiasWorkspace{CT}
+    topo::Any
+    pencils::Dict{Tuple{Tuple, Tuple}, Any}     # (global size, decomp dims) → memoized NoPermutation Pencil
+    buffers::Vector{Any}                         # per-call bump pool of complex scratch PencilArrays
+    idx::Base.RefValue{Int}
+    fwd_plans::Dict{Tuple{Tuple, Int}, Any}      # (local array size, axis) → in-place forward FFT plan
+    inv_plans::Dict{Tuple{Tuple, Int}, Any}      # (local array size, axis) → in-place inverse FFT plan
+end
+
+const _PADDED_DIST_WS_CACHE = Dict{Tuple, Any}()
+
+# Keyed (like _get_batched_backward_plan!) on the problem identity — topology
+# object, basis kinds/sizes, complex eltype, and the global/padded sizes +
+# decomposition that fully determine the transpose sequence. `topo` is the exact
+# object the cached pencils are built from, so reused pencils stay compatible with
+# the field's grid pencil in transpose! (the same assumption the original makes by
+# taking `topo = topology(pencil(gd1))`).
+function _get_padded_dist_workspace!(dist, topo, bases, ::Type{CT}, N, Mp, decomp0, fourier_axes) where {CT}
+    key = (objectid(dist), objectid(topo), CT,
+           map(b -> (nameof(typeof(b)), b.meta.size), bases), N, Mp, decomp0, fourier_axes)
+    cached = get(_PADDED_DIST_WS_CACHE, key, nothing)
+    cached === nothing || return cached::PaddedDistDealiasWorkspace{CT}
+    ws = PaddedDistDealiasWorkspace{CT}(topo,
+        Dict{Tuple{Tuple, Tuple}, Any}(), Any[], Ref(0),
+        Dict{Tuple{Tuple, Int}, Any}(), Dict{Tuple{Tuple, Int}, Any}())
+    _PADDED_DIST_WS_CACHE[key] = ws
+    return ws
+end
+
+# Memoized NoPermutation Pencil for (size, decomp). Identity-stable: the same
+# (size, decomp) returns the SAME object, so _padded_dist_buf! hits the `===` path.
+@inline function _padded_dist_pencil!(ws::PaddedDistDealiasWorkspace, sz, dd)
+    key = (Tuple(sz), Tuple(dd))
+    p = get(ws.pencils, key, nothing)
+    p === nothing || return p
+    p = PencilArrays.Pencil(ws.topo, Tuple(sz), Tuple(dd); permute=PencilArrays.NoPermutation())
+    ws.pencils[key] = p
+    return p
+end
+
+# Two pencils may share a scratch buffer iff their geometry matches — same global
+# size + decomposition + permutation fully determines the local memory layout and
+# transpose! validity. `===` (memoized mkpen pencils) is the fast path; the
+# structural branch runs only for grid pencils pencil(gd)/pencil(rg), whose
+# geometry is fixed per problem (so it is always true on reuse). Permutation lives
+# in the Pencil type parameters, so typeof(...) === typeof(...) compares it exactly.
+@inline function _pen_compatible(a, b)
+    a === b && return true
+    return PencilArrays.size_global(a) == PencilArrays.size_global(b) &&
+           Tuple(PencilArrays.decomposition(a)) == Tuple(PencilArrays.decomposition(b)) &&
+           typeof(PencilArrays.permutation(a)) === typeof(PencilArrays.permutation(b))
+end
+
+# Next per-call scratch buffer for pencil `pen`. Bump index ⇒ each role gets a
+# distinct, stable slot (no aliasing of simultaneously-live buffers).
+function _padded_dist_buf!(ws::PaddedDistDealiasWorkspace{CT}, pen) where {CT}
+    i = (ws.idx[] += 1)
+    if i <= length(ws.buffers)
+        b = ws.buffers[i]::PencilArrays.PencilArray
+        _pen_compatible(PencilArrays.pencil(b), pen) && return b
+        nb = PencilArrays.PencilArray{CT}(undef, pen)       # shape changed: replace slot
+        ws.buffers[i] = nb
+        return nb
+    end
+    nb = PencilArrays.PencilArray{CT}(undef, pen)
+    push!(ws.buffers, nb)
+    return nb
+end
+
+# In-place single-local-axis FFT plans, cached by (local size, axis). CPU: FFTW
+# MEASURE on a throwaway (MEASURE scribbles its planning input) + UNALIGNED so one
+# plan serves every same-size buffer (the shape recurs across up1/up2/res). GPU /
+# generic: AbstractFFTs.plan_fft! dispatches to CUFFT. This is the same concrete-
+# CPU-branch / generic-fallback split used by _get_padded_workspace!.
+function _padded_dist_fwd_plan!(ws::PaddedDistDealiasWorkspace, arr, a::Int)
+    key = (size(arr), a)
+    p = get(ws.fwd_plans, key, nothing)
+    p === nothing || return p
+    p = arr isa Array ? FFTW.plan_fft!(similar(arr), a; flags=FFTW.MEASURE | FFTW.UNALIGNED) :
+                        plan_fft!(similar(arr), a)
+    ws.fwd_plans[key] = p
+    return p
+end
+
+function _padded_dist_inv_plan!(ws::PaddedDistDealiasWorkspace, arr, a::Int)
+    key = (size(arr), a)
+    p = get(ws.inv_plans, key, nothing)
+    p === nothing || return p
+    p = arr isa Array ? FFTW.plan_ifft!(similar(arr), a; flags=FFTW.MEASURE | FFTW.UNALIGNED) :
+                        plan_ifft!(similar(arr), a)
+    ws.inv_plans[key] = p
+    return p
+end
+
 # ── Full 3/2-rule padded dealiasing under MPI (N-D all-Fourier) ──────────────
 # Re-implements the serial padded product (evaluate_padded_multiply) for a
 # DISTRIBUTED field: pad each Fourier axis WHEN that axis is local, transposing to
@@ -248,34 +365,45 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
     decomp0 = Tuple(PencilArrays.decomposition(pen))
     length(decomp0) == D - 1 || return nothing        # exactly one local axis (slab/pencil)
     all(d -> isfourier(bases[d]), decomp0) || return nothing   # only pad/transpose decomposed FOURIER axes
-    mkpen(sz, dd) = PencilArrays.Pencil(topo, Tuple(sz), Tuple(dd); permute=PencilArrays.NoPermutation())
+    ws = _get_padded_dist_workspace!(dist, topo, bases, CT, N, Mp, decomp0, fourier_axes)
+    ws.idx[] = 0
+    mkpen(sz, dd) = _padded_dist_pencil!(ws, sz, dd)
 
     tolog(gd) = begin
-        gc = PencilArrays.PencilArray{CT}(undef, PencilArrays.pencil(gd)); parent(gc) .= CT.(parent(gd))
-        a = PencilArrays.PencilArray{CT}(undef, mkpen(N, decomp0)); PencilArrays.transpose!(a, gc); a
+        gc = _padded_dist_buf!(ws, PencilArrays.pencil(gd)); parent(gc) .= CT.(parent(gd))
+        a = _padded_dist_buf!(ws, mkpen(N, decomp0)); PencilArrays.transpose!(a, gc); a
     end
     # bring axis `a` into the (single) local slot by swapping it with the current
     # local axis — a one-decomposed-dim change, which PencilArrays.transpose! allows.
     makelocal(cur, csz, dec, loc, a) = a == loc ? (cur, dec, loc) : begin
         ndec = [d == a ? loc : d for d in dec]
-        nxt = PencilArrays.PencilArray{CT}(undef, mkpen(csz, ndec)); PencilArrays.transpose!(nxt, cur); (nxt, ndec, a)
+        nxt = _padded_dist_buf!(ws, mkpen(csz, ndec)); PencilArrays.transpose!(nxt, cur); (nxt, ndec, a)
     end
+    # Local-axis pad/truncate: forward FFT in place on the SPENT input buffer `pin`
+    # (never read again — see the workspace bump-pool note), pad/truncate into the
+    # fresh `pout` (a distinct slot/size), then inverse FFT in place. Plan-backed
+    # (no per-call fft()/ifft() allocation); identical FFTW/CUFFT routines + 1/N
+    # normalization as the original out-of-place fft/ifft, so the values match to
+    # roundoff. `_pad_spectral!` zero-fills pout; `_truncate_spectral!` writes full
+    # coverage — both overwrite pout completely before the inverse FFT reads it.
     pad_local!(pout, pin, a) = begin
-        spec = fft(parent(pin), a)
-        orig = collect(size(parent(pin))); padl = copy(orig); padl[a] = Mp[a]
-        _pad_spectral!(parent(pout), spec, Tuple(orig), Tuple(padl), [a]); parent(pout) .= ifft(parent(pout), a)
+        pp = parent(pin); _padded_dist_fwd_plan!(ws, pp, a) * pp
+        orig = collect(size(pp)); padl = copy(orig); padl[a] = Mp[a]
+        _pad_spectral!(parent(pout), pp, Tuple(orig), Tuple(padl), [a])
+        po = parent(pout); _padded_dist_inv_plan!(ws, po, a) * po
     end
     trunc_local!(pout, pin, a) = begin
-        spec = fft(parent(pin), a)
-        orig = collect(size(parent(pin))); trl = copy(orig); trl[a] = N[a]
-        _truncate_spectral!(parent(pout), spec, Tuple(trl), Tuple(orig), [a]); parent(pout) .= ifft(parent(pout), a)
+        pp = parent(pin); _padded_dist_fwd_plan!(ws, pp, a) * pp
+        orig = collect(size(pp)); trl = copy(orig); trl[a] = N[a]
+        _truncate_spectral!(parent(pout), pp, Tuple(trl), Tuple(orig), [a])
+        po = parent(pout); _padded_dist_inv_plan!(ws, po, a) * po
     end
     sweep(start, sdec, ssz, tgt, op) = begin
         cur = start; dec = collect(sdec); loc = only(setdiff(1:D, collect(sdec))); csz = collect(ssz)
         for a in fourier_axes   # pad/truncate only Fourier axes; non-Fourier stay nodal/local
             cur, dec, loc = makelocal(cur, csz, dec, loc, a)
             csz[a] = tgt[a]
-            nxt = PencilArrays.PencilArray{CT}(undef, mkpen(csz, dec)); op(nxt, cur, a); cur = nxt
+            nxt = _padded_dist_buf!(ws, mkpen(csz, dec)); op(nxt, cur, a); cur = nxt
         end
         cur
     end
@@ -283,11 +411,11 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
     up1 = sweep(tolog(gd1), decomp0, N, Mp, pad_local!)
     up2 = sweep(tolog(gd2), decomp0, N, Mp, pad_local!)
     pdec = Tuple(PencilArrays.decomposition(PencilArrays.pencil(up1)))
-    P = PencilArrays.PencilArray{CT}(undef, mkpen(Mp, pdec)); parent(P) .= parent(up1) .* parent(up2)
+    P = _padded_dist_buf!(ws, mkpen(Mp, pdec)); parent(P) .= parent(up1) .* parent(up2)
     res = sweep(P, pdec, Mp, N, trunc_local!)
     parent(res) .*= (T(prod(Mp)) / T(prod(N)))
 
-    result = ScalarField(dist, "_nl_product", bases, field1.dtype)
+    result = _checkout_nl_result!(evaluator, field1)
     ensure_layout!(result, :g)
     rg = get_grid_data(result)
     # Align `res` (NoPermutation) to the result grid pencil's EXACT ordered
@@ -306,7 +434,7 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
         end
         res, rdec, rloc = makelocal(res, collect(N), rdec, rloc, rdec[i])  # swap it into slot i
     end
-    rc = PencilArrays.PencilArray{CT}(undef, PencilArrays.pencil(rg))
+    rc = _padded_dist_buf!(ws, PencilArrays.pencil(rg))
     PencilArrays.transpose!(rc, res)
     if field1.dtype <: Complex
         parent(rg) .= parent(rc)
