@@ -155,11 +155,16 @@ function evaluate_handlers!(evaluator::Evaluator, wall_time::Float64, sim_time::
         # so that MPI collective operations in evaluate_task are entered
         # consistently by all ranks (avoiding deadlock).
         do_write = should_write(handler, wall_time, sim_time, iteration)
-        if MPI.Initialized()
+        # Only the wall_dt cadence is rank-divergent (per-rank wall_time); iter/sim_dt
+        # decisions are identical on every rank, so the deadlock-guard Bcast (and the
+        # size>1 guard) are needed only when wall_dt is set (C1 efficiency fix).
+        if handler.wall_dt !== nothing && MPI.Initialized()
             dist = get_solver_dist(evaluator.solver)
-            do_write_arr = Ref(do_write)
-            MPI.Bcast!(do_write_arr, dist.comm; root=0)
-            do_write = do_write_arr[]
+            if dist.size > 1
+                do_write_arr = Ref(do_write)
+                MPI.Bcast!(do_write_arr, dist.comm; root=0)
+                do_write = do_write_arr[]
+            end
         end
         if do_write
             write_handler!(handler, evaluator.solver, wall_time, sim_time, iteration)
@@ -869,11 +874,15 @@ function process!(handler::DictionaryHandler, solver::InitialValueSolver,
     # per-rank should_write (which depends on wall_time) could deadlock when only
     # some ranks enter. All ranks must agree.
     do_write = should_write(handler, wall_time, sim_time, iteration)
-    if MPI.Initialized()
+    # Only the wall_dt cadence is rank-divergent; gate the deadlock-guard Bcast
+    # (and add the missing size>1 guard) on it (C1 efficiency fix).
+    if handler.wall_dt !== nothing && MPI.Initialized()
         dist = get_solver_dist(solver)
-        dw = Ref(do_write)
-        MPI.Bcast!(dw, dist.comm; root=0)
-        do_write = dw[]
+        if dist.size > 1
+            dw = Ref(do_write)
+            MPI.Bcast!(dw, dist.comm; root=0)
+            do_write = dw[]
+        end
     end
     do_write || return
 
@@ -1070,7 +1079,9 @@ function process!(handler::VirtualFileHandler, solver::InitialValueSolver,
     # through to the collective per-rank write + MPI.Barrier below on others →
     # deadlock. All ranks must agree to enter or skip together.
     do_write = should_write(handler, wall_time, sim_time, iteration)
-    if MPI.Initialized()
+    # Only the wall_dt cadence is rank-divergent; gate the deadlock-guard Bcast on it
+    # (handler carries its own comm/nprocs) (C1 efficiency fix).
+    if handler.wall_dt !== nothing && MPI.Initialized() && handler.nprocs > 1
         dw = Ref(do_write)
         MPI.Bcast!(dw, handler.comm; root=0)
         do_write = dw[]
@@ -1300,11 +1311,15 @@ function evaluate_unified_handlers!(evaluator::UnifiedEvaluator, wall_time::Floa
         # Broadcast write decision from rank 0 to prevent MPI deadlock
         # (write_netcdf_data! may invoke collective MPI operations)
         do_write = should_write(handler, wall_time, sim_time, iteration)
-        if MPI.Initialized()
+        # Only the wall_dt cadence is rank-divergent; gate the deadlock-guard Bcast
+        # (and add the missing size>1 guard) on it (C1 efficiency fix).
+        if handler.wall_dt !== nothing && MPI.Initialized()
             dist = get_solver_dist(evaluator.solver)
-            do_write_arr = Ref(do_write)
-            MPI.Bcast!(do_write_arr, dist.comm; root=0)
-            do_write = do_write_arr[]
+            if dist.size > 1
+                do_write_arr = Ref(do_write)
+                MPI.Bcast!(do_write_arr, dist.comm; root=0)
+                do_write = do_write_arr[]
+            end
         end
         if do_write
             write_netcdf_data!(handler, sim_time, iteration)

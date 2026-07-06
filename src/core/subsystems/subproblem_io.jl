@@ -249,7 +249,18 @@ function _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool)
 
     cache = get_transpose_cache()
     dtype = eltype(fft_pa)
-    key = (:coupled_dct, objectid(field), objectid(dist.pencil_solve))
+    # Per-pencil key (drops objectid(field) but KEEPS objectid(dist.pencil_solve)):
+    # the coupled-DCT solve_pa is pure transient scratch — fully overwritten by the
+    # fft→solve transpose on entry and never stored back into the field — so all fields
+    # sharing this pencil_solve safely share ONE bounded buffer (only one field is live
+    # at a time within a single forward/backward transform). The buffer is ALLOCATED from
+    # dist.pencil_solve, so the key must carry that pencil's identity — a shape-only key
+    # would alias a DIFFERENT problem's pencil_solve of equal global size but incompatible
+    # topology/permutation (→ "pencil topologies must be the same"). objectid(pencil_solve)
+    # is stable per problem (only field objectids churn on the interpreted-RHS path), so
+    # this still bounds the cache to one buffer per problem. `dtype` is appended by
+    # `get_transpose_buffer!`.
+    key = (:coupled_dct, objectid(dist.pencil_solve))
     solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
     PencilArrays.transpose!(solve_pa, fft_pa)
     forward ? _solve_layout_forward_transform!(solve_pa, dist) :
@@ -587,12 +598,16 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
         # subproblem_field_size, which already counts 1 DOF per Fourier axis and
         # the full coeff size per coupled axis.
         n = subproblem_field_size(sp, field)
-        dest = view(buffer, offset + 1:offset + n)
         idxt = _subproblem_coeff_index(cd, field, sp)
         if idxt === nothing
-            fill!(dest, ComplexF64(0))   # selected mode not on this rank (MPI)
+            fill!(view(buffer, offset + 1:offset + n), ComplexF64(0))   # mode not on this rank (MPI)
+        elseif ndims(cd) == 2 && !is_gpu_array(cd) &&
+               ((idxt[1] isa Colon) ⊻ (idxt[2] isa Colon))
+            # 2-D mixed (1 Fourier mode × 1 full coupled axis): strided copy avoids the
+            # vec(view(cd, idxt...)) wrapper alloc (~96 B/call). GPU/other shapes → below.
+            _gather_select_2d!(buffer, offset, cd, idxt)
         else
-            _assign_to_buffer!(dest, vec(view(cd, idxt...)))
+            _assign_to_buffer!(view(buffer, offset + 1:offset + n), vec(view(cd, idxt...)))
         end
         return offset + n
     end
@@ -645,7 +660,14 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
         n = subproblem_field_size(sp, field)
         idxt = _subproblem_coeff_index(cd, field, sp)
         if idxt !== nothing
-            _assign_from_buffer!(view(cd, idxt...), view(data, offset + 1:offset + n))
+            if ndims(cd) == 2 && !is_gpu_array(cd) && !is_gpu_array(data) &&
+               ((idxt[1] isa Colon) ⊻ (idxt[2] isa Colon))
+                # 2-D mixed (1 Fourier mode × 1 full coupled axis): strided write avoids
+                # the view(cd, idxt...) wrapper alloc (~96 B/call). GPU/other shapes → below.
+                _scatter_select_2d!(cd, idxt, data, offset)
+            else
+                _assign_from_buffer!(view(cd, idxt...), view(data, offset + 1:offset + n))
+            end
         end
         return offset + n
     end
@@ -689,6 +711,82 @@ end
         end
     end
     return dest
+end
+
+# Strided gather/scatter for the 2-D mixed subproblem layout: exactly 1 Fourier mode
+# (an Int in `idxt`) × 1 full coupled/Chebyshev axis (a Colon in `idxt`). The previous
+# `vec(view(cd, idxt...))` / `view(cd, idxt...)` wrapper alloc'd ~96 B/call regardless
+# of typing; an explicit strided loop into/out of the flat buffer is zero-alloc. Mirrors
+# `_select_copy!` (above): a union split narrows to the concrete CPU `Matrix{ComplexF64}`
+# /`Vector{ComplexF64}` for a static hot loop, with a generic (other CPU eltype) fallback.
+# CPU-only — callers guard with `!is_gpu_array(...)` and route GPU/other shapes to the
+# unchanged `_assign_to_buffer!`/`_assign_from_buffer!` generic path.
+@inline function _gather_select_2d!(buffer::AbstractVector{ComplexF64}, offset::Int,
+                                    cd::AbstractMatrix, idxt::Tuple)
+    if idxt[1] isa Colon
+        col = idxt[2]::Int
+        n = size(cd, 1)
+        if buffer isa Vector{ComplexF64} && cd isa Matrix{ComplexF64}
+            @inbounds for i in 1:n
+                buffer[offset + i] = cd[i, col]
+            end
+        else
+            @inbounds for i in 1:n
+                buffer[offset + i] = ComplexF64(cd[i, col])
+            end
+        end
+    else
+        row = idxt[1]::Int
+        n = size(cd, 2)
+        if buffer isa Vector{ComplexF64} && cd isa Matrix{ComplexF64}
+            @inbounds for j in 1:n
+                buffer[offset + j] = cd[row, j]
+            end
+        else
+            @inbounds for j in 1:n
+                buffer[offset + j] = ComplexF64(cd[row, j])
+            end
+        end
+    end
+    return buffer
+end
+
+@inline function _scatter_select_2d!(cd::AbstractMatrix, idxt::Tuple,
+                                     data::AbstractVector, offset::Int)
+    if idxt[1] isa Colon
+        col = idxt[2]::Int
+        n = size(cd, 1)
+        if cd isa Matrix{ComplexF64} && data isa Vector{ComplexF64}
+            @inbounds for i in 1:n
+                cd[i, col] = data[offset + i]
+            end
+        elseif eltype(cd) <: Real
+            @inbounds for i in 1:n
+                cd[i, col] = real(data[offset + i])
+            end
+        else
+            @inbounds for i in 1:n
+                cd[i, col] = data[offset + i]
+            end
+        end
+    else
+        row = idxt[1]::Int
+        n = size(cd, 2)
+        if cd isa Matrix{ComplexF64} && data isa Vector{ComplexF64}
+            @inbounds for j in 1:n
+                cd[row, j] = data[offset + j]
+            end
+        elseif eltype(cd) <: Real
+            @inbounds for j in 1:n
+                cd[row, j] = real(data[offset + j])
+            end
+        else
+            @inbounds for j in 1:n
+                cd[row, j] = data[offset + j]
+            end
+        end
+    end
+    return cd
 end
 
 function compress_variable_space!(dest::AbstractVector, sp::Subproblem, raw::AbstractVector)

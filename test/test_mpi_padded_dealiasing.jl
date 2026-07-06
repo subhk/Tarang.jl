@@ -52,4 +52,22 @@ const MAX_REF   = 1.6899999999999995
         @test isapprox(sum(abs2, g), SUMSQ_REF; rtol=1e-10)
         @test isapprox(maximum(g),  MAX_REF;   rtol=1e-10)
     end
+
+    # Cache-hit / buffer-reuse path: the distributed padded multiply now reuses a
+    # cached per-problem workspace (Pencils + scratch PencilArrays + in-place FFT
+    # plans + pooled result). The FIRST call above allocates/plans; subsequent calls
+    # hit the reused buffers. Re-run several times and assert each still matches the
+    # serial reference — a stale-buffer or aliasing bug would surface here, not on
+    # the first call.
+    for rep in 1:3
+        p2 = Tarang.evaluate_transform_multiply(u, u, ev; result_layout=:g)
+        ensure_layout!(p2, :g)
+        pg2 = get_grid_data(p2)
+        g2 = pg2 isa PencilArrays.PencilArray ? PencilArrays.gather(pg2) :
+             Array(Tarang.get_cpu_data(pg2))
+        if rank == 0
+            @test isapprox(sum(abs2, g2), SUMSQ_REF; rtol=1e-10)
+            @test isapprox(maximum(g2),  MAX_REF;   rtol=1e-10)
+        end
+    end
 end

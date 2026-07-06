@@ -656,15 +656,33 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
     AE = ts.A_explicit; AI = ts.A_implicit
     bE = ts.b_explicit; bI = ts.b_implicit; cc = ts.c_explicit
 
-    Ys = Vector{Vector{ScalarField}}(undef, S)   # stage states
+    n_fields = length(X_n)
+    Ys = Vector{Vector{ScalarField}}(undef, S)   # stage states (workspace-backed)
     Fs = Vector{Vector{ScalarField}}(undef, S)    # F(Y_s), copied (evaluate_rhs reuses buffers)
 
     for s in 1:S
-        Y = copy_state(X_n)
-        for (i, field) in enumerate(Y)
-            haskey(Lhats, i) || continue
-            ensure_layout!(field, :c)
-            d = _local_coeff(get_coeff_data(field))           # starts as X_n[i]
+        # Stage state Yₛ reuses the timestepper's pre-allocated workspace fields
+        # (one distinct slot per (stage,field): ws_idx = (s-1)*n_fields + i) instead
+        # of a fresh full-state copy_state allocation per stage. Earlier stages' Yⱼ
+        # stay live for the off-diagonal implicit term and the final update because
+        # each (s,i) maps to its own slot. Budget: S·n_fields ≤
+        # _workspace_count(ts)·n_fields — this path runs under RK111/RK222/RK443
+        # (3 / 6 / 12 sets), so S (1 / 2 / 4) always fits. The copy is done in
+        # COEFFICIENT space (no grid↔coeff transforms) — exact here since the
+        # problem is pure-Fourier and X_n is forced to :c first. Mirrors the serial
+        # sibling _step_diagonal_imex_rk_impl! (get_workspace_field! + per-stage idx).
+        Y = Vector{ScalarField}(undef, n_fields)
+        for i in 1:n_fields
+            src = X_n[i]
+            ws = get_workspace_field!(state, src, (s - 1) * n_fields + i)
+            if !isempty(src.bases)
+                ensure_layout!(src, :c)
+                _ddirk_copy!(_local_coeff(get_coeff_data(ws)), _local_coeff(get_coeff_data(src)))
+                ws.current_layout = :c
+            end
+            Y[i] = ws
+            haskey(Lhats, i) || continue   # algebraic vars: refreshed inside evaluate_rhs
+            d = _local_coeff(get_coeff_data(ws))              # starts as X_n[i]
             Lhat = Lhats[i]
             for j in 1:s-1
                 if AE[s, j] != 0.0
@@ -723,5 +741,9 @@ end
 end
 @inline function _ddirk_implicit_divide!(d::AbstractArray, Lhat::AbstractArray, c::Float64)
     @inbounds @. d /= (1.0 + c * Lhat)
+    return d
+end
+@inline function _ddirk_copy!(d::AbstractArray, s::AbstractArray)
+    @inbounds copyto!(d, s)
     return d
 end
