@@ -339,11 +339,16 @@ function get_local_array_size(dist::Distributor, global_shape::Tuple)
                 if dim <= ndims_global
                     n_global = global_shape[dim]
                     n_procs = mesh[mesh_idx]
-                    proc_coord = coords[mesh_idx]
 
-                    base_size = div(n_global, n_procs)
-                    remainder = n_global % n_procs
-                    local_shape[dim] = base_size + (proc_coord < remainder ? 1 : 0)
+                    pr = pencil_local_range(dist, mesh_idx, n_procs, n_global)
+                    if pr !== nothing
+                        local_shape[dim] = length(pr)
+                    else
+                        proc_coord = coords[mesh_idx]
+                        base_size = div(n_global, n_procs)
+                        remainder = n_global % n_procs
+                        local_shape[dim] = base_size + (proc_coord < remainder ? 1 : 0)
+                    end
                 end
             end
         end

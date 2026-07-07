@@ -217,7 +217,7 @@ end
 
 # Transform execution functions
 """Apply forward transform to field"""
-function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
+function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_coupled_dct::Bool=true)
 
     if field.domain === nothing
         return
@@ -265,7 +265,13 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c)
         # The PencilFFT plan transforms ONLY the Fourier axes; a coupled
         # (Chebyshev/Jacobi) axis is left in GRID space. Apply its local DCT now so
         # distributed `:c` holds true spectral coefficients (no-op unless mixed+MPI).
-        _apply_distributed_coupled_dct!(field, true)
+        # `apply_coupled_dct=false` (used ONLY by `to_solve_layout!`'s fused
+        # grid→solve path) SKIPS it: the caller applies the coupled DCT directly in
+        # the solve pencil after a single fft→solve transpose, avoiding the redundant
+        # solve→fft back-transpose here that `to_solve_layout!` would immediately undo.
+        # The field is then left Fourier-spectral but coupled-axis GRID; the caller
+        # resolves it to fully-spectral before the `:c` flag is observed.
+        apply_coupled_dct && _apply_distributed_coupled_dct!(field, true)
         field.current_layout = :c
         return
     end

@@ -46,18 +46,25 @@ _callback_should_fire(interval::Integer, solver::InitialValueSolver, _::Float64)
 _callback_should_fire(interval::AbstractFloat, solver::InitialValueSolver, last_time::Float64) =
     solver.sim_time - last_time >= interval
 
+# Wall-time stop is checked (and Bcast for rank agreement) only every
+# `_WALL_CHECK_CADENCE` iterations rather than every step. The wall-clock budget
+# is inherently soft, so the bounded ≤(cadence-1)-step overshoot is acceptable,
+# and it cuts the per-step latency-bound Bcast by ~cadence×. `solver.iteration`
+# is rank-lockstep, so the gate is rank-uniform (no deadlock from divergence).
+const _WALL_CHECK_CADENCE = 16
+
 # Solver execution control
 """Check if solver should continue"""
 function proceed(solver::InitialValueSolver)
     if solver.sim_time >= solver.stop_sim_time
         return false
     end
-    
+
     if solver.iteration >= solver.stop_iteration
         return false
     end
-    
-    if isfinite(solver.stop_wall_time)
+
+    if isfinite(solver.stop_wall_time) && (solver.iteration % _WALL_CHECK_CADENCE == 0)
         wall_stop = (time() - solver.wall_time_start) >= solver.stop_wall_time
         # Wall-clock time differs per rank, so ranks could otherwise decide to stop on
         # DIFFERENT iterations and deadlock the next collective step!. Agree on rank 0's

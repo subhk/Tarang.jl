@@ -410,6 +410,21 @@ function reduce_scalar(reducer::GlobalArrayReducer, local_scalar::Real, mpi_op)
 end
 
 """
+    reduce_vector!(reducer, locals, mpi_op) -> locals
+
+Batched in-place reduction: one `Allreduce!` over `locals` (per-item LOCAL
+reductions) instead of one collective per item. Lets callers fold K scalar
+reductions (e.g. one per velocity field in CFL) into a single latency-bound
+collective. No-op (returns the local values) when MPI is not active.
+"""
+function reduce_vector!(reducer::GlobalArrayReducer, locals::AbstractVector{Float64}, mpi_op)
+    if MPI.Initialized() && !MPI.Finalized()
+        MPI.Allreduce!(locals, mpi_op, reducer.comm)
+    end
+    return locals
+end
+
+"""
     Compute global min of all array data.
 
     GPU-compatible: Works with both CPU arrays and GPU arrays (CuArray).

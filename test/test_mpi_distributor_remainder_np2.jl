@@ -28,11 +28,12 @@ rl  = range_local(pen, LogicalOrder())
 
 li2   = Tarang.local_indices(dist, 2, gshape[2])
 shape = Tarang.compute_local_shape(dist, gshape)
+local_array_size = Tarang.get_local_array_size(dist, gshape)
 
-ok_local = (li2 == rl[2]) && (shape == size(pa))
+ok_local = (li2 == rl[2]) && (shape == size(pa)) && (local_array_size == size(pa))
 
 for r in 0:nprocs-1
-    r == rank && println("rank $rank li2=$li2 rl2=$(rl[2]) shape=$shape size(pa)=$(size(pa))")
+    r == rank && println("rank $rank li2=$li2 rl2=$(rl[2]) shape=$shape local_array_size=$local_array_size size(pa)=$(size(pa))")
     MPI.Barrier(comm)
 end
 
@@ -41,6 +42,7 @@ ok_global = MPI.Allreduce(ok_local ? 1 : 0, MPI.MIN, comm) == 1
 @testset "C3 non-divisible decomposed axis matches PencilArrays (np=2, rank=$rank)" begin
     @test li2 == rl[2]
     @test shape == size(pa)
+    @test local_array_size == size(pa)
     @test ok_global
     # Pin the remainder-on-LAST-rank convention explicitly.
     @test li2 == (rank == 0 ? (1:2) : (3:5))
