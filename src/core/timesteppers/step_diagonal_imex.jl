@@ -660,6 +660,15 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
     Ys = Vector{Vector{ScalarField}}(undef, S)   # stage states (workspace-backed)
     Fs = Vector{Vector{ScalarField}}(undef, S)    # F(Y_s), copied (evaluate_rhs reuses buffers)
 
+    # Persistent per-stage F storage, reused across steps (replaces the per-stage
+    # `Fs[s] = copy_state(evaluate_rhs(...))` full-state allocation). evaluate_rhs
+    # reuses its output buffers across stages, so each stage's F must be RETAINED
+    # until the final update — we copy it (coeff space) into this dedicated cache
+    # instead of allocating S fresh field-sets every step. The workspace POOL is
+    # unusable for this: Y already consumes up to S·n_fields of the
+    # `_workspace_count(ts)` (=4 for the DiagonalIMEX tableaux) sets.
+    Fs_cache = _ddirk_fs_cache!(state, X_n, S, n_fields)
+
     for s in 1:S
         # Stage state Yₛ reuses the timestepper's pre-allocated workspace fields
         # (one distinct slot per (stage,field): ws_idx = (s-1)*n_fields + i) instead
@@ -703,11 +712,33 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
         Ys[s] = Y
         # evaluate_rhs refreshes the algebraic state of Y internally, so no
         # separate _refresh_algebraic_state! is needed here (avoids a redundant
-        # constraint solve + its transforms per stage).
-        Fs[s] = copy_state(evaluate_rhs(solver, Y, t + cc[s] * dt))
+        # constraint solve + its transforms per stage). Copy the stage RHS into
+        # the persistent cache in COEFFICIENT space — only the fields actually
+        # read downstream (those with a diagonal L̂) are copied; algebraic/0D
+        # fields' F is never used by the explicit accumulation.
+        F_result = evaluate_rhs(solver, Y, t + cc[s] * dt)
+        dst = Fs_cache[s]
+        @inbounds for i in 1:n_fields
+            haskey(Lhats, i) || continue
+            fr = F_result[i]
+            # A field with a diagonal L̂ always has spatial bases (its RHS is
+            # non-0D). The downstream reads are gated by `haskey(Lhats,i)` ALONE,
+            # so this entry MUST be written — fail loud rather than skip (which
+            # would leave the read seeing a stale previous-step F).
+            isempty(fr.bases) && error("diagonal-IMEX RK: field $i has a diagonal L̂ but an empty-bases RHS")
+            ensure_layout!(fr, :c)
+            _ddirk_copy!(_local_coeff(get_coeff_data(dst[i])), _local_coeff(get_coeff_data(fr)))
+            dst[i].current_layout = :c
+        end
+        Fs[s] = dst
     end
 
-    X_new = copy_state(X_n)
+    # X_new reuses the field-set that `_push_trim!`-to-2 dropped from history last
+    # step (out of history, no longer `solver.state`, never read by this ONE-step
+    # RK method) instead of a fresh `copy_state(X_n)`. Falls back to copy_state on
+    # the first steps (history not yet full). The coeff-space seed-copy of X_n
+    # below is exact; algebraic/0D fields are refreshed by `_refresh_algebraic_state!`.
+    X_new = _ddirk_acquire_xnew!(state, X_n, n_fields)
     for (i, field) in enumerate(X_new)
         haskey(Lhats, i) || continue
         ensure_layout!(field, :c)
@@ -727,7 +758,63 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
         end
     end
     _refresh_algebraic_state!(solver.problem, X_new)
-    _push_trim!(state.history, X_new, 2)
+    _ddirk_push_recycle!(state, X_new)
+end
+
+# ── Persistent-storage helpers for step_distributed_diagonal_imex_rk! ────────
+# All reuse field-sets across steps to drop the S+1 per-step `copy_state` allocs.
+
+"""Cached per-stage F storage (`S` field-sets shaped like `X_n`), reused every
+step. (Re)built only when missing, too few sets (timestepper switch grows `S`),
+or shape-mismatched. `X_n` is forced to `:c` first so the `copy_state` templates
+carry allocated coefficient arrays for the in-place coeff copies."""
+function _ddirk_fs_cache!(state::TimestepperState, X_n, S::Int, n_fields::Int)
+    cache = get!(() -> Vector{Vector{ScalarField}}(),
+                 state.timestepper_data, :_ddirk_Fs)::Vector{Vector{ScalarField}}
+    if length(cache) < S || (!isempty(cache) && length(cache[1]) != n_fields)
+        for f in X_n
+            isempty(f.bases) || ensure_layout!(f, :c)
+        end
+        if !isempty(cache) && length(cache[1]) != n_fields
+            empty!(cache)
+        end
+        while length(cache) < S
+            push!(cache, copy_state(X_n))
+        end
+    end
+    return cache
+end
+
+"""Acquire X_new storage: reuse the history-dropped field-set stashed by
+`_ddirk_push_recycle!` (seeding it with X_n's coefficients in place), else
+`copy_state(X_n)`. The recycled set is provably out of `history` and not
+`solver.state`, so reusing it cannot alias a live state."""
+function _ddirk_acquire_xnew!(state::TimestepperState, X_n, n_fields::Int)
+    rec = get(state.timestepper_data, :_ddirk_recycle, nothing)
+    if rec isa Vector{ScalarField} && length(rec) == n_fields
+        state.timestepper_data[:_ddirk_recycle] = nothing
+        @inbounds for i in 1:n_fields
+            isempty(X_n[i].bases) && continue
+            ensure_layout!(X_n[i], :c)
+            _ddirk_copy!(_local_coeff(get_coeff_data(rec[i])), _local_coeff(get_coeff_data(X_n[i])))
+            rec[i].current_layout = :c
+        end
+        return rec
+    end
+    # Guard failed (first steps, or a shape mismatch after a problem change):
+    # drop any stale stashed set so it can't linger, and allocate fresh.
+    state.timestepper_data[:_ddirk_recycle] = nothing
+    return copy_state(X_n)
+end
+
+"""Push X_new and trim history to 2, stashing the dropped field-set for reuse as
+the next step's X_new (see `_ddirk_acquire_xnew!`)."""
+function _ddirk_push_recycle!(state::TimestepperState, X_new)
+    push!(state.history, X_new)
+    while length(state.history) > 2
+        state.timestepper_data[:_ddirk_recycle] = popfirst!(state.history)
+    end
+    return state.history
 end
 
 # Function barriers (concrete array types resolved at the call → type-stable).

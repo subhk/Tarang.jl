@@ -84,7 +84,14 @@ function compute_timestep(cfl::CFL)
 
     min_dt = Inf
 
-    for velocity in cfl.velocities
+    # Compute each velocity's LOCAL max CFL frequency, then agree on the GLOBAL
+    # maxima with ONE batched Allreduce(MAX) instead of one collective per
+    # velocity. `empty=0.0` matches the prior `global_max(...; empty=0.0)`
+    # semantics (an empty local slab contributes 0.0 under MAX).
+    n_vel = length(cfl.velocities)
+    local_maxes = fill(0.0, n_vel)
+
+    for (k, velocity) in enumerate(cfl.velocities)
         # Get domain and grid spacing
         domain = velocity.domain
         spacings = grid_spacing(domain)
@@ -103,12 +110,21 @@ function compute_timestep(cfl::CFL)
         end
 
         if cfl_frequency !== nothing
-            max_frequency = global_max(cfl.reducer, cfl_frequency; empty=0.0)
+            # LOCAL max via `parent` (matches global_max: maximum(::PencilArray)
+            # is itself collective; we want only the per-rank max here).
+            pf = parent(cfl_frequency)
+            local_maxes[k] = isempty(pf) ? 0.0 : Float64(maximum(pf))
+        end
+    end
 
-            if max_frequency > 0
-                # Multidimensional advective CFL: dt < 1 / max(sum_i |u_i| / dx_i)
-                min_dt = min(min_dt, inv(max_frequency))
-            end
+    # Single collective for ALL velocities (was K separate global_max Allreduces).
+    reduce_vector!(cfl.reducer, local_maxes, MPI.MAX)
+
+    for k in 1:n_vel
+        max_frequency = local_maxes[k]
+        if max_frequency > 0
+            # Multidimensional advective CFL: dt < 1 / max(sum_i |u_i| / dx_i)
+            min_dt = min(min_dt, inv(max_frequency))
         end
     end
 

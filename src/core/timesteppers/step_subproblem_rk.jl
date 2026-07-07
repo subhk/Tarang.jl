@@ -48,6 +48,57 @@ function _subproblem_stage_vector_slots(stages::Int, n_sp::Int)
     return [_subproblem_vector_slots(n_sp) for _ in 1:stages]
 end
 
+# ── Per-step working-set reuse (cached in `state.timestepper_data`) ──────────
+# The slot *containers* (MX0/RHS/ALG_F/F/LX) and the flat state-field list are
+# step-INVARIANT in size (n_sp/stages fixed per solver; problem.variables fixed)
+# yet were rebuilt every step. Cache + reuse them; every entry is fully
+# reassigned before any read each step, so reusing the container is safe (no
+# stale reference is ever read). `get!`/identity-key mirror the multistep ring
+# cache idiom. The per-subproblem DATA vectors are already cached via
+# `_sp_stage_vector!`; only the outer reference vectors are reused here.
+
+"""
+    _cached_state_fields!(state, problem) -> Vector{<:ScalarField}
+
+Return the flat `collect_state_fields(problem.variables)` list, memoized on
+`state.timestepper_data` keyed by the identity of `problem.variables` (fixed for
+a solver's lifetime). Avoids rebuilding + reconcretizing two vectors every step.
+Read-only by callers (fields are mutated, the list is not), so sharing is safe.
+"""
+function _cached_state_fields!(state::TimestepperState, problem)
+    vars = problem.variables
+    cached = get(state.timestepper_data, :_sp_state_fields, nothing)
+    if cached !== nothing && cached[1] === vars
+        return cached[2]
+    end
+    sf = collect_state_fields(vars)
+    state.timestepper_data[:_sp_state_fields] = (vars, sf)
+    return sf
+end
+
+"""Reusable length-`n` slot container cached under `key`; rebuilt only if `n` changed."""
+function _sp_slots!(state::TimestepperState, key::Symbol, n::Int)
+    v = get!(() -> Vector{AbstractVector{ComplexF64}}(undef, n),
+             state.timestepper_data, key)::Vector{AbstractVector{ComplexF64}}
+    length(v) == n || resize!(v, n)
+    return v
+end
+
+"""Reusable `stages × n` nested slot container cached under `key`."""
+function _sp_stage_slots!(state::TimestepperState, key::Symbol, stages::Int, n::Int)
+    v = get!(() -> [Vector{AbstractVector{ComplexF64}}(undef, n) for _ in 1:stages],
+             state.timestepper_data, key)::Vector{Vector{AbstractVector{ComplexF64}}}
+    length(v) == stages || resize!(v, stages)
+    @inbounds for s in 1:stages
+        if !isassigned(v, s)
+            v[s] = Vector{AbstractVector{ComplexF64}}(undef, n)
+        elseif length(v[s]) != n
+            resize!(v[s], n)
+        end
+    end
+    return v
+end
+
 """
     WoodburySolver
 
@@ -351,8 +402,9 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     A_imp = ts.A_implicit   # implicit tableau
     c     = ts.c_explicit   # stage times
 
-    # Collect the flat list of ScalarFields that represent the state
-    state_fields = collect_state_fields(problem.variables)
+    # Collect the flat list of ScalarFields that represent the state (memoized;
+    # step-invariant for a solver, so rebuilt only on the first step).
+    state_fields = _cached_state_fields!(state, problem)
 
     # Distributor handle for the mixed Fourier–Chebyshev solve-layout transpose.
     # All subproblems share one Distributor. `to_solve_layout!`/`from_solve_layout!`
@@ -391,12 +443,14 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # ── Pre-stage: compute M*X_n per subproblem ──────────────────────────
     n_sp = length(subproblems)
 
-    MX0 = _subproblem_vector_slots(n_sp)
+    # Reused slot containers (cached on state.timestepper_data; every entry is
+    # reassigned below before any read, so reuse introduces no stale reference).
+    MX0 = _sp_slots!(state, :_sp_rk_MX0, n_sp)
     # F[j][sp_idx] = F(X_j) gathered per subproblem (evaluated AFTER stage j solve)
-    F   = _subproblem_stage_vector_slots(stages, n_sp)
+    F   = _sp_stage_slots!(state, :_sp_rk_F, stages, n_sp)
     # LX[j][sp_idx] = L*X_j per subproblem (evaluated AFTER stage j solve)
-    LX  = _subproblem_stage_vector_slots(stages, n_sp)
-    RHS = _subproblem_vector_slots(n_sp)
+    LX  = _sp_stage_slots!(state, :_sp_rk_LX, stages, n_sp)
+    RHS = _sp_slots!(state, :_sp_rk_RHS, n_sp)
     # Algebraic-constraint F (from BC / no-M equations), packed in equation
     # space with zeros at PDE rows. Computed ONCE per step because BC values
     # are stage-independent. Used to override BC rows in the stage RHS with
@@ -404,11 +458,23 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # enforcement). Without this override, the accumulated IMEX-RK formula
     # scales BC F by `A^E[i,j]/a_ii` (= 1/γ for RK222 stage 2 = 2+√2 ≈ 3.414)
     # and inhomogeneous BCs would be enforced at the wrong value.
-    ALG_F = _subproblem_vector_slots(n_sp)
+    ALG_F = _sp_slots!(state, :_sp_rk_ALG_F, n_sp)
 
-    # Solve layout for the per-mode gather (`gather_inputs!`). One collective
-    # transpose for the whole field list, OUTSIDE the subproblem loop.
-    _pre_stash = to_solve_layout!(state_fields, dist)
+    # ── Solve-layout bracketing (mixed Fourier–Chebyshev distributed only) ──
+    # The state needs the FFT pencil ONLY at `evaluate_rhs_buffered` (which reads
+    # grid space via the PencilFFT); every per-mode gather/scatter needs the solve
+    # pencil. So we enter the solve pencil ONCE here and stay there for the whole
+    # step, popping back to the FFT pencil only around each `evaluate_rhs` call
+    # (and once at the end before pushing to history). `solve_stash` threads the
+    # active solve→fft restore pairs. This collapses the old per-region
+    # to_solve/from_solve round-trips (which transposed solve→fft→solve with
+    # nothing reading the FFT layout in between). No-op outside distributed
+    # mixed-basis runs. One collective transpose for the whole field list.
+    # `fuse_from_grid=true`: state may be in grid space (first step, or after an
+    # evaluate_rhs pulled it to :g), so fuse the coupled DCT into the single
+    # fft→solve transpose. Safe because state is restored by `from_solve_layout!`
+    # (a real transpose back), not a pointer swap. F fields keep the default.
+    solve_stash = to_solve_layout!(state_fields, dist; fuse_from_grid=true)
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
             MX0[sp_idx] = ComplexF64[]
@@ -429,7 +495,11 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         gather_alg_F!(alg_f, sp)
         ALG_F[sp_idx] = alg_f
     end
-    from_solve_layout!(_pre_stash, dist)
+    # NO from_solve here: the pre-stage gather only READS state (MX0 = M·X_n),
+    # leaving it unmodified in the solve pencil. The stage loop's first gather
+    # needs exactly that solve pencil, and nothing reads the FFT layout in
+    # between — so we keep state in solve (cancels the old pre-stage→stage-1
+    # round-trip). `solve_stash` carries through to the first `evaluate_rhs` pop.
 
     # Whether this problem has any time-dependent BCs. If so, the stage
     # loop below refreshes `ALG_F` at each stage time `t + c[i]*dt` to
@@ -458,13 +528,10 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             end
         end
 
-        # Build RHS and solve per subproblem.
-        # Solve layout for the per-mode gather/scatter (`gather_inputs!` inside
-        # the RHS-history accumulation reads coeffs, `scatter_inputs` writes the
-        # stage solution). One collective transpose for the whole field list,
-        # OUTSIDE the subproblem loop; restored to FFT layout immediately after
-        # so `evaluate_rhs_buffered` below reads grid space via the PencilFFT plan.
-        _stage_stash = to_solve_layout!(state_fields, dist)
+        # Build RHS and solve per subproblem. State is ALREADY in the solve
+        # pencil (carried over from the pre-stage gather or the previous stage's
+        # F/LX gather), so no transpose here — `scatter_inputs` writes the stage
+        # solution directly in the solve pencil.
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
 
@@ -526,7 +593,10 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             # Scatter solution back to state fields
             scatter_inputs(sp, x_sol, state_fields)
         end
-        from_solve_layout!(_stage_stash, dist)
+        # Pop to the FFT pencil for `evaluate_rhs_buffered` (the ONLY operation
+        # in the loop that needs grid space via the PencilFFT). Consumes the
+        # active solve_stash.
+        from_solve_layout!(solve_stash, dist)
 
         # Evaluate F[i] and LX[i] AFTER the solve, at the stage i solution.
         # This matches step_rk_imex! where F_exp_vecs[s] and F_imp_vecs[s]
@@ -546,7 +616,10 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # objects across stages, so we must restore their coeff STORAGE pointer to
         # the FFT pencil (a local pointer swap, no collective) or the next
         # `evaluate_rhs_buffered` would transform into the wrong (solve) pencil.
-        _fg_state_stash = to_solve_layout!(state_fields, dist)
+        # State was just pulled to :g by `evaluate_rhs_buffered` above, so the fused
+        # grid→solve path fires here EVERY stage (the dominant win). F fields are
+        # restored by pointer swap below, so they keep the default (non-fused).
+        solve_stash = to_solve_layout!(state_fields, dist; fuse_from_grid=true)
         _fg_F_stash = to_solve_layout!(F_fields, dist)
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
@@ -560,7 +633,9 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             F[i][sp_idx] = f_stage
             LX[i][sp_idx] = lx_stage
         end
-        from_solve_layout!(_fg_state_stash, dist)
+        # State STAYS in the solve pencil (no from_solve): the next stage's gather
+        # — or the final update — needs exactly this layout, and nothing reads the
+        # FFT layout before then. solve_stash remains armed for the next pop.
         # Restore F's coeff storage pointer (no transpose; solved F values are
         # discarded, but the pencil must be the FFT pencil for the next stage's
         # buffered RHS transform).
@@ -577,11 +652,9 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # This matches step_rk_imex! which always does the weighted update (lines 191-203).
     b_imp = ts.b_implicit
     b_exp = ts.b_explicit
-    # Solve layout for the final per-mode gather is implicit in the cached RHS
-    # buffers, but `scatter_inputs` writes the updated state back per mode, so the
-    # state must be in solve layout for the whole loop. One collective transpose
-    # OUTSIDE the loop; restored before `_push_trim!` reads grid space below.
-    _final_stash = to_solve_layout!(state_fields, dist)
+    # State is ALREADY in the solve pencil (carried from the last stage's F/LX
+    # gather), so no transpose here — `scatter_inputs` writes the updated state
+    # directly per mode. solve_stash is still armed and is consumed below.
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
 
@@ -613,7 +686,9 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         end
         scatter_inputs(sp, x_sol, state_fields)
     end
-    from_solve_layout!(_final_stash, dist)
+    # Restore state to the FFT pencil before pushing to history (output handlers
+    # read grid space via the PencilFFT). Consumes the final armed solve_stash.
+    from_solve_layout!(solve_stash, dist)
 
     # ── Push new state to history ─────────────────────────────────────────
     _push_trim!(state.history, state_fields, 1)

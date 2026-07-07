@@ -104,6 +104,12 @@ function _iter_scalar_fields(fields)
     return out
 end
 
+# Shared empty stash returned by `to_solve_layout!` on the no-op (serial /
+# pure-Fourier / no-pencil_solve) path so the common case never allocates.
+# `from_solve_layout!` only iterates a stash (read-only), so sharing one const
+# across all no-op calls is safe. NEVER push! onto this.
+const _EMPTY_SOLVE_STASH = Pair{ScalarField, Any}[]
+
 # The distributed PencilFFT plan applies ONLY the Fourier transform (the
 # Chebyshev/Jacobi axis is `NoTransform`, kept local), so `pencil_fft_output`
 # holds Fourier-coeffs along the Fourier axis but GRID values along the
@@ -171,25 +177,64 @@ tau solve in coefficient space. Returns a stash of `field => fft_pencil_array` p
 to be undone by `from_solve_layout!`.
 
 No-op (returns an empty stash) for serial runs or when `pencil_solve` is unset.
+
+`fuse_from_grid=true` (state fields only) enables the fused grid→solve fast path:
+when a field is in grid space (`:g`), the coupled (Chebyshev) DCT is applied IN the
+solve pencil — where the single fft→solve transpose already lands the data — instead
+of `forward_transform!` transposing fft→solve→fft (a round-trip whose solve→fft leg
+this function would immediately undo with another fft→solve). This removes that pure
+`solve→fft→solve` round-trip (2 collective transposes / field / stage). It is safe
+ONLY for fields restored by `from_solve_layout!` (a real transpose back): the fused
+path leaves the stashed fft pencil array in Chebyshev-GRID (not spectral), which
+`from_solve_layout!`'s transpose overwrites, but a POINTER-SWAP restore (as used for
+read-only F fields) would leave that field `:c`-flagged yet coupled-axis-grid → its
+next `backward_transform!` would wrongly re-invert the DCT. So callers pass
+`fuse_from_grid=true` for state only, and leave it `false` (default) for F.
 """
-function to_solve_layout!(fields, dist)
+function to_solve_layout!(fields, dist; fuse_from_grid::Bool=false)
+    # No-op (serial / pure-Fourier / no pencil_solve): return the SHARED empty
+    # stash WITHOUT allocating. This guard runs ~8–14×/step even on serial runs;
+    # allocating a fresh empty `Pair[]` here was pure waste. `from_solve_layout!`
+    # only iterates the stash (never mutates), so a shared const is safe.
+    (dist === nothing || dist.size <= 1 || dist.pencil_solve === nothing) && return _EMPTY_SOLVE_STASH
     stash = Pair{ScalarField, Any}[]
-    (dist === nothing || dist.size <= 1 || dist.pencil_solve === nothing) && return stash
     cache = get_transpose_cache()
-    for f in _iter_scalar_fields(fields)
+    # `collect_state_fields`/buffered-RHS lists are ALREADY flat `ScalarField`
+    # vectors, so iterate them directly — `_iter_scalar_fields` would rebuild an
+    # identical `ScalarField[]` every call. Only the Vector/Tensor-component case
+    # needs the flatten. The list is iterated read-only here.
+    leaves = eltype(fields) <: ScalarField ? fields : _iter_scalar_fields(fields)
+    for f in leaves
         _needs_solve_transpose(f, dist) || continue
-        ensure_layout!(f, :c)
-        fft_pa = get_coeff_data(f)
-        (fft_pa isa PencilArrays.PencilArray) || continue
-        dtype = eltype(fft_pa)
         key = (:solve, objectid(f), objectid(dist.pencil_solve))
-        solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
-        PencilArrays.transpose!(solve_pa, fft_pa)
-        # `:c` is already Chebyshev-SPECTRAL (forward_transform! applied the coupled
-        # DCT via _apply_distributed_coupled_dct!), so the fft→solve transpose alone
-        # lands the per-mode tau solve in coefficient space. No DCT here (was double).
-        set_coeff_data!(f, solve_pa)
-        push!(stash, f => fft_pa)
+        if fuse_from_grid && f.current_layout === :g
+            # FUSED grid→solve: apply ONLY the Fourier transform here (skip the
+            # coupled DCT's fft→solve→fft round-trip), transpose fft→solve ONCE,
+            # then apply the local coupled DCT directly in the solve pencil — where
+            # the tau solve needs it — via the same `_solve_layout_forward_transform!`
+            # the solver uses. Net: one transpose instead of three for this field.
+            forward_transform!(f, :c; apply_coupled_dct=false)   # Fourier only; coupled axis stays GRID
+            fft_pa = get_coeff_data(f)
+            (fft_pa isa PencilArrays.PencilArray) || continue
+            dtype = eltype(fft_pa)
+            solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
+            PencilArrays.transpose!(solve_pa, fft_pa)
+            _solve_layout_forward_transform!(solve_pa, dist)     # coupled DCT, local, in solve pencil
+            set_coeff_data!(f, solve_pa)
+            push!(stash, f => fft_pa)
+        else
+            ensure_layout!(f, :c)
+            fft_pa = get_coeff_data(f)
+            (fft_pa isa PencilArrays.PencilArray) || continue
+            dtype = eltype(fft_pa)
+            solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
+            PencilArrays.transpose!(solve_pa, fft_pa)
+            # `:c` is already Chebyshev-SPECTRAL (forward_transform! applied the coupled
+            # DCT via _apply_distributed_coupled_dct!), so the fft→solve transpose alone
+            # lands the per-mode tau solve in coefficient space. No DCT here (was double).
+            set_coeff_data!(f, solve_pa)
+            push!(stash, f => fft_pa)
+        end
     end
     return stash
 end

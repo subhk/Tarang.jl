@@ -31,15 +31,18 @@ rl  = range_local(pen, LogicalOrder())   # one UnitRange per global (logical) ax
 # Tarang's notion of the owned ranges / shape, which MUST agree with `rl`.
 li    = ntuple(ax -> Tarang.local_indices(dist, ax, gshape[ax]), length(gshape))
 shape = Tarang.compute_local_shape(dist, gshape)
+local_array_size = Tarang.get_local_array_size(dist, gshape)
 
 ranges_match = all(ax -> li[ax] == rl[ax], 1:length(gshape))
 shape_match  = shape == size(pa)
-ok_local     = ranges_match && shape_match
+local_size_match = local_array_size == size(pa)
+ok_local     = ranges_match && shape_match && local_size_match
 
 for r in 0:nprocs-1
     if r == rank
         println("rank $rank coords_local=$(dist.mpi_topology.coords_local) ",
-                "li=$(li) rl=$(Tuple(rl)) shape=$(shape) size(pa)=$(size(pa)) ok=$ok_local")
+                "li=$(li) rl=$(Tuple(rl)) shape=$(shape) local_array_size=$(local_array_size) ",
+                "size(pa)=$(size(pa)) ok=$ok_local")
     end
     MPI.Barrier(comm)
 end
@@ -49,6 +52,7 @@ ok_global = MPI.Allreduce(ok_local ? 1 : 0, MPI.MIN, comm) == 1
 @testset "C1/C3 Distributor matches PencilArrays slab (2x2 mesh, np=4, rank=$rank)" begin
     @test ranges_match
     @test shape_match
+    @test local_size_match
     @test ok_global
 end
 

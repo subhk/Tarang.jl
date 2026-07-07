@@ -143,7 +143,7 @@ function step_subproblem_multistep!(
     c_hist_depth = length(c) - 1
     max_depth = max(a_hist_depth, b_hist_depth, c_hist_depth, 0)
 
-    state_fields = collect_state_fields(problem.variables)
+    state_fields = _cached_state_fields!(state, problem)
     for f in state_fields
         ensure_layout!(f, :c)
     end
@@ -184,11 +184,20 @@ function step_subproblem_multistep!(
     # Write directly into ring slots — no per-step allocation.
     F_fields = evaluate_rhs_buffered(solver, state_fields, solver.sim_time)
 
-    # Solve layout for the per-mode gather (state + F coeffs). One collective
-    # transpose per field list, OUTSIDE the subproblem loop. F_fields are
-    # read-only here → restored by pointer swap only (no transpose back).
-    _ms_g_state = to_solve_layout!(state_fields, dist)
-    _ms_g_F     = to_solve_layout!(F_fields, dist)
+    # Solve-layout bracketing: `evaluate_rhs_buffered` above (the only op needing
+    # the FFT pencil) has already run, so state enters the solve pencil ONCE here
+    # and STAYS there through the gather AND the step-4 solve/scatter, popping back
+    # to the FFT pencil only once before the history push. `ms_state_stash` threads
+    # the restore. This collapses the old gather→restore→re-transpose round-trip
+    # (steps 2-3 in between read only ring counts + equation_data, never FFT-pencil
+    # state). One collective transpose per field list, OUTSIDE the subproblem loop.
+    # F_fields are read-only here → restored by pointer swap only (no transpose back).
+    # `fuse_from_grid=true`: state is in grid space (evaluate_rhs_buffered above pulled
+    # it to :g), so fuse the coupled DCT into the single fft→solve transpose. Safe —
+    # ms_state_stash is restored by `from_solve_layout!` (real transpose back), not a
+    # pointer swap. F keeps the default (non-fused; it IS pointer-swapped).
+    ms_state_stash = to_solve_layout!(state_fields, dist; fuse_from_grid=true)
+    _ms_g_F        = to_solve_layout!(F_fields, dist)
 
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
@@ -212,10 +221,11 @@ function step_subproblem_multistep!(
         gather_eqn_F!(f_cur, sp, solver, F_fields, state_fields)
     end
 
-    # Restore FFT layout for state (transpose back) and F (pointer swap only —
-    # its solved values are discarded; the pencil must be the FFT pencil for the
-    # next step's buffered RHS transform).
-    from_solve_layout!(_ms_g_state, dist)
+    # State STAYS in the solve pencil for step 4's solve/scatter (no transpose
+    # back — nothing between here and the scatter reads FFT-pencil state).
+    # F (read-only) is restored by pointer swap only — its solved values are
+    # discarded; the pencil must be the FFT pencil for the next step's buffered
+    # RHS transform.
     for (f, fft_pa) in _ms_g_F
         set_coeff_data!(f, fft_pa)
     end
@@ -242,7 +252,7 @@ function step_subproblem_multistep!(
 
     # ── Step 3: compute F_alg once per step for BC row override ─────────────
     # Uses cached per-subproblem stage vectors — no per-step allocation.
-    ALG_F = _subproblem_vector_slots(n_sp)
+    ALG_F = _sp_slots!(state, :_sp_ms_ALG_F, n_sp)
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
             ALG_F[sp_idx] = ComplexF64[]
@@ -257,9 +267,8 @@ function step_subproblem_multistep!(
     end
 
     # ── Step 4: build RHS and solve per subproblem ──────────────────────────
-    # Solve layout for the per-mode scatter (writes X_new back). One collective
-    # transpose OUTSIDE the loop; restored before _push_trim! reads grid space.
-    _ms_s_state = to_solve_layout!(state_fields, dist)
+    # State is ALREADY in the solve pencil (carried from step 1's gather), so no
+    # transpose here — `scatter_inputs` writes X_new back directly per mode.
     for (sp_idx, sp) in enumerate(subproblems)
         sp.M_min === nothing && continue
         n = size(sp.M_min, 1)
@@ -315,8 +324,9 @@ function step_subproblem_multistep!(
         scatter_inputs(sp, x_new, state_fields)
     end
 
-    # Restore FFT layout before the grid-space history push below.
-    from_solve_layout!(_ms_s_state, dist)
+    # Restore state to the FFT pencil before the grid-space history push below.
+    # Consumes the single ms_state_stash armed at step 1.
+    from_solve_layout!(ms_state_stash, dist)
 
     # ── Step 5: push new state to history ───────────────────────────────────
     _push_trim!(state.history, state_fields, 1)
