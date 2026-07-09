@@ -499,17 +499,23 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
             _ddi_sbdf1_update!(_local_coeff(get_coeff_data(field)), Lhats[i], dt)
         end
         _refresh_algebraic_state!(solver.problem, new_state)
-        _push_trim!(state.history, new_state, 2)
-        # evaluate_rhs may return reused buffer fields; store a copy so the next
-        # step's F evaluation cannot overwrite this history entry (else F_{n-1}≡F_n).
-        _push_trim!(Fhist, copy_state(F_n), 2)
+        # Route pushes through the recycle-aware helpers so the state/F rings are
+        # seeded: from the next step on, the dropped field-sets are reused in place
+        # of copy_state (see _ddirk_acquire_xnew! / _ddi_sbdf2_push_fhist!). The F
+        # copy still guards F_{n-1}≢F_n (evaluate_rhs reuses buffers).
+        _ddirk_push_recycle!(state, new_state)
+        _ddi_sbdf2_push_fhist!(state, Fhist, F_n, length(F_n))
     else
         dt_prev = length(state.dt_history) >= 2 ? state.dt_history[end-1] : dt
         w = dt / dt_prev   # variable-dt SBDF2 ratio (handles CFL-adaptive dt)
         X_n = current_state
         X_nm1 = state.history[end-1]
         F_nm1 = Fhist[end]
-        new_state = copy_state(X_n)
+        # new_state reuses the history-dropped field-set (X_{n-2}, provably out of
+        # the live window: SBDF2 reads back only to history[end-1]=X_{n-1}) instead
+        # of a fresh copy_state(X_n). Seeded with X_n's coeffs; _ddi_sbdf2_update!
+        # overwrites every stepped field and _refresh_algebraic_state! the rest.
+        new_state = _ddirk_acquire_xnew!(state, X_n, length(X_n))
         for (i, field) in enumerate(new_state)
             haskey(Lhats, i) || continue
             ensure_layout!(field, :c); ensure_layout!(X_n[i], :c); ensure_layout!(X_nm1[i], :c)
@@ -522,8 +528,8 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
                                Lhats[i], dt, w)
         end
         _refresh_algebraic_state!(solver.problem, new_state)
-        _push_trim!(state.history, new_state, 2)
-        _push_trim!(Fhist, copy_state(F_n), 2)
+        _ddirk_push_recycle!(state, new_state)
+        _ddi_sbdf2_push_fhist!(state, Fhist, F_n, length(F_n))
     end
 
     state.timestepper_data[:dd_imex_iter] = iteration + 1
@@ -599,11 +605,24 @@ function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::I
     Lhats = _get_distributed_diagonal_Lhats!(state, solver)
     phis = _get_distributed_diagonal_phi!(state, dt, Lhats)
 
-    # N(Xₙ). evaluate_rhs may return reused buffers, so copy before re-evaluating.
-    N_n = copy_state(evaluate_rhs(solver, current_state, t))
+    # N(Xₙ) must survive the corrector's second evaluate_rhs (which reuses buffers).
+    # Reuse a persistent 1-slot cache + coeff-copy instead of copy_state every step;
+    # only φ-fields (those read by the predictor/corrector) are written.
+    n_fields = length(current_state)
+    _Nn_src = evaluate_rhs(solver, current_state, t)
+    N_n = _ddetd_nn_cache!(state, current_state, n_fields)
+    @inbounds for i in 1:n_fields
+        haskey(phis, i) || continue
+        fr = _Nn_src[i]
+        ensure_layout!(fr, :c)
+        _ddirk_copy!(_local_coeff(get_coeff_data(N_n[i])), _local_coeff(get_coeff_data(fr)))
+        N_n[i].current_layout = :c
+    end
 
-    # Predictor: c = exp(z)⊙Xₙ + dt·φ₁⊙N(Xₙ)
-    pred = copy_state(current_state)
+    # Predictor: c = exp(z)⊙Xₙ + dt·φ₁⊙N(Xₙ). `pred` reuses the history-dropped
+    # field-set (ETD is one-step — reads only history[end]=current_state — so the
+    # recycled set is provably not live) instead of a fresh copy_state.
+    pred = _ddirk_acquire_xnew!(state, current_state, n_fields)
     for (i, field) in enumerate(pred)
         haskey(phis, i) || continue
         ensure_layout!(field, :c); ensure_layout!(current_state[i], :c); ensure_layout!(N_n[i], :c)
@@ -625,7 +644,7 @@ function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::I
                           _local_coeff(get_coeff_data(N_n[i])), dt)
     end
     _refresh_algebraic_state!(solver.problem, pred)
-    _push_trim!(state.history, pred, 2)
+    _ddirk_push_recycle!(state, pred)
 end
 
 # ============================================================================
@@ -815,6 +834,53 @@ function _ddirk_push_recycle!(state::TimestepperState, X_new)
         state.timestepper_data[:_ddirk_recycle] = popfirst!(state.history)
     end
     return state.history
+end
+
+"""Persistent single field-set holding N(Xₙ) across the ETD corrector's second
+`evaluate_rhs` (which reuses buffers), reused every step in place of
+`copy_state(evaluate_rhs(...))`. Mirrors `_ddirk_fs_cache!` with one set; the
+caller writes only φ-fields, non-φ slots are never read. (Re)built on missing set
+or field-count change."""
+function _ddetd_nn_cache!(state::TimestepperState, template, n_fields::Int)
+    cache = get!(() -> Vector{ScalarField}[],
+                 state.timestepper_data, :_ddetd_Nn)::Vector{Vector{ScalarField}}
+    if isempty(cache) || length(cache[1]) != n_fields
+        for f in template
+            isempty(f.bases) || ensure_layout!(f, :c)
+        end
+        empty!(cache)
+        push!(cache, copy_state(template))
+    end
+    return cache[1]
+end
+
+"""Push a copy of `F_n` onto the rolling-2 SBDF2 `Fhist`, reusing the field-set
+dropped from `Fhist` on the previous step (stashed under `:_ddi_sbdf2_frec`) in
+place of a fresh `copy_state(F_n)`. The dropped set is `F_{n-2}`; SBDF2 reads only
+`Fhist[end]=F_{n-1}`, so the recycled set is provably out of the live window and
+reuse cannot alias a read F. Falls back to `copy_state` until the ring fills
+(steady state: 3 distinct sets rotate — 2 in `Fhist` + 1 stashed)."""
+function _ddi_sbdf2_push_fhist!(state::TimestepperState, Fhist, F_n, n_fields::Int)
+    rec = get(state.timestepper_data, :_ddi_sbdf2_frec, nothing)
+    if rec isa Vector{ScalarField} && length(rec) == n_fields
+        state.timestepper_data[:_ddi_sbdf2_frec] = nothing
+        @inbounds for i in 1:n_fields
+            isempty(F_n[i].bases) && continue
+            ensure_layout!(F_n[i], :c)
+            _ddirk_copy!(_local_coeff(get_coeff_data(rec[i])), _local_coeff(get_coeff_data(F_n[i])))
+            rec[i].current_layout = :c
+        end
+        push!(Fhist, rec)
+    else
+        # Guard failed (first steps, or a field-count change): drop any stale stash
+        # so it can't linger, and store a fresh copy.
+        state.timestepper_data[:_ddi_sbdf2_frec] = nothing
+        push!(Fhist, copy_state(F_n))
+    end
+    while length(Fhist) > 2
+        state.timestepper_data[:_ddi_sbdf2_frec] = popfirst!(Fhist)
+    end
+    return Fhist
 end
 
 # Function barriers (concrete array types resolved at the call → type-stable).
