@@ -171,6 +171,7 @@ const MPI_TEST_FILES = [
     "test_mpi_dealiasing_product.jl",
     "test_mpi_advection_term.jl",
     "test_mpi_implicit_advection.jl",
+    "test_mpi_diagonal_imex_alloc.jl",       # distributed diagonal-IMEX SBDF2/ETD O(1)-alloc (no per-step copy_state) + behavior-preserving (np>=2 bit-identical)
     "test_mpi_batched_transform.jl",
     "test_mpi_dotproduct_term.jl",
     "test_stochastic_forcing_mpi.jl",
