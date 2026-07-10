@@ -31,7 +31,7 @@ function _fourier_forward(data::AbstractArray, transform::FourierTransform)
 end
 
 """Apply backward transform to field """
-function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
+function backward_transform!(field::ScalarField, target_layout::Symbol=:g; apply_coupled_dct::Bool=true)
 
     if field.domain === nothing
         return
@@ -51,7 +51,11 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
         # Invert the coupled (Chebyshev/Jacobi) DCT BEFORE the PencilFFT ldiv!:
         # distributed `:c` is Chebyshev-SPECTRAL, but the PencilFFT plan handles only
         # the Fourier axes and needs the coupled axis in GRID space. No-op unless mixed+MPI.
-        _apply_distributed_coupled_dct!(field, false)
+        # `apply_coupled_dct=false` (used ONLY by `from_solve_layout!`'s fused solve→grid
+        # path) SKIPS it: the caller already inverted the coupled DCT locally in the solve
+        # pencil, leaving the coupled axis in GRID space, so only the Fourier `ldiv!`
+        # remains here. Mirrors the `forward_transform!` `apply_coupled_dct` kwarg.
+        apply_coupled_dct && _apply_distributed_coupled_dct!(field, false)
         # PencilFFTs is CPU-only; if data is on GPU, move to CPU first
         coeff_data = get_coeff_data(field)
         if is_gpu_array(coeff_data)
