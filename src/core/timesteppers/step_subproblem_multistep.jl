@@ -229,6 +229,11 @@ function step_subproblem_multistep!(
     for (f, fft_pa) in _ms_g_F
         set_coeff_data!(f, fft_pa)
     end
+    # `to_solve_layout!` above left the shared RHS buffer :c-flagged; the next step's
+    # `evaluate_rhs_buffered` would then pay a full distributed backward transform of
+    # coefficients it immediately overwrites. Its grid array is untouched by the forward
+    # transform, so the restored :g flag is honest. Same fix as the RK sibling.
+    _release_rhs_buffer!(F_fields, solver)
 
     # ── Step 2: check if we have enough history to advance ──────────────────
     # Need at least one of each history type (we just pushed current, so

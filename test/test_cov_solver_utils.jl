@@ -32,6 +32,23 @@ function build_cheb_solver(; N=16)
     return solver
 end
 
+# An RHS the lazy translator deliberately refuses: `curl` has no scalar LazyFuture form, so
+# the plan bails and the solver falls back to the interpreted evaluator. Used to exercise the
+# non-compiled branches (lap/div now compile, so they no longer serve that purpose).
+function build_uncompilable_solver(; N=8)
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; dtype=Float64, architecture=CPU())
+    xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
+    yb = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π))
+    domain = Domain(dist, (xb, yb))
+    q = ScalarField(domain, "q")
+    u = VectorField(dist, coords, "u", (xb, yb), Float64)
+    problem = IVP([q])
+    add_parameters!(problem, u=u)
+    Tarang.add_equation!(problem, "dt(q) = div(curl(u))")
+    return InitialValueSolver(problem, RK111(); dt=1e-3, device="cpu")
+end
+
 # Pure-Fourier trivial IVP. The implicit operator is diagonal per-mode, so NO
 # subproblems are built (parameters has no "subproblems" key). Its lazy RHS DOES
 # compile -> exercises the "lazy (type-specialized)" diagnose branch.
@@ -162,8 +179,11 @@ end
         @test occursin("compiled", s_ok)
         @test occursin("equations", s_ok)
 
-        # Non-compiled plan (Chebyshev Laplacian on RHS fails to lazy-compile).
-        csolver = build_cheb_solver(; N=16)
+        # Non-compiled plan. This used to use `dt(u) = lap(u)` on a Chebyshev basis, but
+        # lap/div now DO lazy-compile (and match the interpreted evaluator). `curl` is still
+        # deliberately untranslated — an RHS containing it must fall back — so it is what
+        # exercises the "failed" show branch now.
+        csolver = build_uncompilable_solver()
         @test csolver.rhs_plan !== nothing
         @test !csolver.rhs_plan.is_compiled
         s_fail = repr(csolver.rhs_plan)
@@ -174,6 +194,11 @@ end
     # -------------------------------------------------------------------------
     @testset "diagnose: Chebyshev (interpreted RHS + subproblems)" begin
         solver = build_cheb_solver(; N=16)
+        # `dt(u) = lap(u)` DOES lazy-compile now, so force the interpreted print branch by
+        # flipping the flag (same technique as test_timestepper_boundaries.jl) rather than
+        # relying on a particular expression failing to translate. What is under test here is
+        # diagnose's interpreted branch, not the translator's coverage.
+        solver.rhs_plan.is_compiled = false
         ret, out = capture_stdout(() -> Tarang.diagnose(solver))
         # diagnose returns the value of its last println (nothing-ish); we only
         # care about the printed tree.

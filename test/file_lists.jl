@@ -106,6 +106,8 @@ const TEST_FILES = [
     "test_filter_forcing_typestability.jl",
     "test_fourier_algebraic_constraints.jl",
     "test_lazy_rhs_fourier.jl",
+    "test_lazy_rhs_vector_ops.jl",           # lap/div(grad)/div compile to the lazy RHS and match the interpreted evaluator
+    "test_lazy_rhs_transform_budget.jl",     # lap() is fused (1 fwd + 1 bwd, not one round-trip per axis); alloc guards are blind to this
     "test_timestepper_boundaries.jl",
     "test_field_pool.jl",
     "test_linalg.jl",
@@ -172,6 +174,8 @@ const MPI_TEST_FILES = [
     "test_mpi_advection_term.jl",
     "test_mpi_implicit_advection.jl",
     "test_mpi_diagonal_imex_alloc.jl",       # distributed diagonal-IMEX SBDF2/ETD O(1)-alloc (no per-step copy_state) + behavior-preserving (np>=2 bit-identical)
+    "test_mpi_rhs_buffer_layout.jl",         # distributed diagonal-IMEX steppers must not leave the shared lazy-RHS buffer :c-flagged (spurious backward FFT/step)
+    "test_mpi_lazy_rhs_vector_ops.jl",       # distributed lap/div on the explicit RHS must compile (interpreted fallback FROZE the field under MPI)
     "test_mpi_batched_transform.jl",
     "test_mpi_dotproduct_term.jl",
     "test_stochastic_forcing_mpi.jl",

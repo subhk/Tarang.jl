@@ -56,9 +56,40 @@ function evaluate_chebyshev_derivative!(result::ScalarField, operand::ScalarFiel
     if order < 0
         throw(ArgumentError("Chebyshev derivative order must be non-negative, got $order"))
     end
-    # NOTE: MPI parallelization only supports pure Fourier domains.
-    # Chebyshev derivatives are always local since MPI + Chebyshev is not supported.
+    # This used to assume "MPI only supports pure Fourier domains, so a Chebyshev axis is
+    # always local". That stopped being true when distributed Chebyshev-Fourier landed: the
+    # Chebyshev axis CAN be decomposed, and the local DCT-I derivative below then silently
+    # differentiates a slab as if it were the whole axis — an RHS wrong by more than its own
+    # amplitude, integrated with no error. Refuse loudly instead.
+    _assert_local_polynomial_axis(operand, axis)
     _evaluate_local_chebyshev_derivative!(result, operand, axis, order, layout)
+end
+
+"""Error unless this rank owns the WHOLE non-Fourier `axis` of `field`.
+
+The polynomial (Chebyshev/Jacobi) derivative is a global operation along its axis — a DCT-I
+or a dense differentiation matrix — so it is only correct on a rank that holds every point
+of that axis. Under MPI a decomposed non-Fourier axis is only differentiable in the solve
+layout (`subproblem_io.jl`), which the interpreted evaluator never enters. Serial fields
+(plain arrays) always pass.
+
+The test is DECOMPOSITION (local extent vs this array's own global extent), NOT the basis
+size: a dealiased or rescaled grid legitimately has more points than `basis.meta.size`, and
+comparing against the basis size would reject those correct, fully-local configurations."""
+function _assert_local_polynomial_axis(field::ScalarField, axis::Int)
+    data = get_grid_data(field)
+    data isa PencilArrays.PencilArray || return nothing
+    basis = field.bases[axis]
+    basis === nothing && return nothing
+    pencil = PencilArrays.pencil(data)
+    n_local = length(pencil.axes_local[axis])
+    n_global = PencilArrays.size_global(pencil)[axis]
+    n_local == n_global && return nothing   # axis is fully local on this rank — fine
+    error("Interpreted RHS: cannot differentiate along the non-Fourier axis $axis " *
+          "($(nameof(typeof(basis)))) of a DISTRIBUTED field — this rank owns only $n_local " *
+          "of the $n_global points on that axis, so the local derivative is not the global " *
+          "one. Under MPI a non-Fourier derivative is only correct in the solve layout. Move " *
+          "the term to the implicit (L) side of the equation, or run in serial.")
 end
 
 """

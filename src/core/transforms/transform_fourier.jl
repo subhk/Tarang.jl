@@ -30,12 +30,38 @@ function _fourier_forward(data::AbstractArray, transform::FourierTransform)
     end
 end
 
+"""Opt-in transform counter (OFF by default; one `Ref` load when off).
+
+Spectral transforms are the dominant MPI cost, and a redundant one is INVISIBLE to an
+allocation guard — `ldiv!`/`mul!` are in-place, so a wasted distributed FFT allocates
+nothing. (A real regression of exactly this kind shipped and was caught only by hand-counting.)
+This lets a test assert the transform BUDGET of a step directly:
+
+    Tarang.reset_transform_counts!()
+    step!(solver, dt)
+    Tarang.transform_counts()   # (forward = n, backward = m)
+"""
+const _TRANSFORM_COUNT_ON = Ref(false)
+const _TRANSFORM_COUNTS = Ref((0, 0))   # (forward, backward)
+
+enable_transform_counts!(on::Bool=true) = (_TRANSFORM_COUNT_ON[] = on)
+reset_transform_counts!() = (_TRANSFORM_COUNTS[] = (0, 0); nothing)
+transform_counts() = (forward = _TRANSFORM_COUNTS[][1], backward = _TRANSFORM_COUNTS[][2])
+
+@inline function _count_transform!(kind::Symbol)
+    _TRANSFORM_COUNT_ON[] || return nothing
+    f, b = _TRANSFORM_COUNTS[]
+    _TRANSFORM_COUNTS[] = kind === :forward ? (f + 1, b) : (f, b + 1)
+    return nothing
+end
+
 """Apply backward transform to field """
-function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
+function backward_transform!(field::ScalarField, target_layout::Symbol=:g; apply_coupled_dct::Bool=true)
 
     if field.domain === nothing
         return
     end
+    _count_transform!(:backward)
 
     ensure_layout!(field, :c)  # Start in coefficient space
 
@@ -51,7 +77,11 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g)
         # Invert the coupled (Chebyshev/Jacobi) DCT BEFORE the PencilFFT ldiv!:
         # distributed `:c` is Chebyshev-SPECTRAL, but the PencilFFT plan handles only
         # the Fourier axes and needs the coupled axis in GRID space. No-op unless mixed+MPI.
-        _apply_distributed_coupled_dct!(field, false)
+        # `apply_coupled_dct=false` (used ONLY by `from_solve_layout!`'s fused solve→grid
+        # path) SKIPS it: the caller already inverted the coupled DCT locally in the solve
+        # pencil, leaving the coupled axis in GRID space, so only the Fourier `ldiv!`
+        # remains here. Mirrors the `forward_transform!` `apply_coupled_dct` kwarg.
+        apply_coupled_dct && _apply_distributed_coupled_dct!(field, false)
         # PencilFFTs is CPU-only; if data is on GPU, move to CPU first
         coeff_data = get_coeff_data(field)
         if is_gpu_array(coeff_data)

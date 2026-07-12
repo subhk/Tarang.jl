@@ -249,17 +249,45 @@ so after this the field is back in the `pencil_fft_output` layout holding full s
 coefficients — exactly what `backward_transform!` inverts (coupled inverse-DCT, then the
 PencilFFT Fourier `ldiv!`).
 """
-function from_solve_layout!(stash, dist)
+function from_solve_layout!(stash, dist; to_grid::Bool=false)
     (dist === nothing || dist.size <= 1) && return
     for (f, fft_pa) in stash
         solve_pa = get_coeff_data(f)
         (solve_pa isa PencilArrays.PencilArray) || continue
-        # The coupled (Chebyshev) DCT is now applied/inverted by
-        # forward_transform!/backward_transform! (see _apply_distributed_coupled_dct!),
-        # so `:c` is Chebyshev-SPECTRAL in both the fft and solve pencils. The
-        # solve↔fft transpose preserves those coefficients; no DCT here.
-        PencilArrays.transpose!(fft_pa, solve_pa)
-        set_coeff_data!(f, fft_pa)
+        if to_grid
+            # FUSED solve→grid: the field is ALREADY in the solve pencil, so invert the
+            # coupled (Chebyshev) DCT HERE — locally, no transpose — instead of leaving
+            # `:c` and letting the next `backward_transform!` transpose fft→solve to do
+            # it (which, paired with this function's solve→fft, is a redundant round-trip).
+            # Then transpose solve→fft ONCE and finish with the Fourier `ldiv!` only. Net
+            # for this field: one transpose instead of three. The transient
+            # "Fourier-spectral, coupled-axis GRID, :c-flagged" state exists ONLY between
+            # the transpose and `backward_transform!` below — entirely inside this
+            # function — so it never escapes and needs no persistent hybrid-state flag.
+            # Symmetric with `to_solve_layout!`'s fused grid→solve (`fuse_from_grid`).
+            # Safe ONLY for fields the caller next consumes at `:g` with no intervening
+            # coeff read (the per-stage state pop before `evaluate_rhs_buffered`).
+            # PRECONDITION: the field must be `:c`-flagged (Chebyshev-SPECTRAL in the
+            # solve pencil) on entry — the sole caller guarantees this. If a future
+            # caller passed `to_grid=true` for a `:g`-flagged field, the transpose below
+            # would store coupled-axis-GRID data that `backward_transform!`'s leading
+            # `ensure_layout!(:c)` would then re-derive from the STALE grid, silently
+            # discarding the solve result. Refuse loudly (rank-uniform: layout is
+            # replicated, so this errors on all ranks together or none).
+            f.current_layout === :c || error("from_solve_layout!(to_grid=true) requires " *
+                ":c-flagged fields; got :$(f.current_layout) for '$(f.name)'")
+            _solve_layout_backward_transform!(solve_pa, dist)     # inverse coupled DCT, local, in solve pencil
+            PencilArrays.transpose!(fft_pa, solve_pa)             # solve→fft (coupled axis now GRID)
+            set_coeff_data!(f, fft_pa)
+            backward_transform!(f, :g; apply_coupled_dct=false)   # Fourier ldiv! only → :g
+        else
+            # The coupled (Chebyshev) DCT is applied/inverted by
+            # forward_transform!/backward_transform! (see _apply_distributed_coupled_dct!),
+            # so `:c` is Chebyshev-SPECTRAL in both the fft and solve pencils. The
+            # solve↔fft transpose preserves those coefficients; no DCT here.
+            PencilArrays.transpose!(fft_pa, solve_pa)
+            set_coeff_data!(f, fft_pa)
+        end
     end
     return
 end

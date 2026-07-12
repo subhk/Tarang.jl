@@ -593,10 +593,15 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             # Scatter solution back to state fields
             scatter_inputs(sp, x_sol, state_fields)
         end
-        # Pop to the FFT pencil for `evaluate_rhs_buffered` (the ONLY operation
-        # in the loop that needs grid space via the PencilFFT). Consumes the
-        # active solve_stash.
-        from_solve_layout!(solve_stash, dist)
+        # Pop to grid for `evaluate_rhs_buffered` (the ONLY operation in the loop
+        # that needs grid space via the PencilFFT). Consumes the active solve_stash.
+        # `to_grid=true`: state is next read ONLY by `evaluate_rhs_buffered` below
+        # (which wants `:g`) — nothing reads the fft-pencil coeff in between — so land
+        # it at `:g` directly, folding away the backward coupled-DCT round-trip that
+        # `evaluate_rhs`'s `backward_transform!` would otherwise do (fft→solve→solve→fft).
+        # `evaluate_rhs`'s `ensure_layout!(:g)` then no-ops; the next `to_solve_layout!`
+        # (fuse_from_grid) already expects `:g`, so the bracket stays balanced.
+        from_solve_layout!(solve_stash, dist; to_grid=true)
 
         # Evaluate F[i] and LX[i] AFTER the solve, at the stage i solution.
         # This matches step_rk_imex! where F_exp_vecs[s] and F_imp_vecs[s]
@@ -642,6 +647,13 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         for (f, fft_pa) in _fg_F_stash
             set_coeff_data!(f, fft_pa)
         end
+        # `to_solve_layout!` above left the shared RHS buffer :c-flagged. The next stage's
+        # `evaluate_rhs_buffered` writes it through `ensure_layout!(out, :g)` and would pay a
+        # full distributed backward transform (PencilFFTs `ldiv!` + the coupled-DCT
+        # transposes) of coefficients it immediately overwrites. Its grid array is still the
+        # one the lazy RHS wrote (the forward transform reads grid, writes coeff), so the
+        # `:g` flag is honest. Same fix as the diagonal-IMEX steppers.
+        _release_rhs_buffer!(F_fields, solver)
     end
 
     # ── Final update: M*X_{n+1} = M*X_n + dt*Σ(b^E*F - b^I*L*X) ────────
