@@ -647,6 +647,13 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         for (f, fft_pa) in _fg_F_stash
             set_coeff_data!(f, fft_pa)
         end
+        # `to_solve_layout!` above left the shared RHS buffer :c-flagged. The next stage's
+        # `evaluate_rhs_buffered` writes it through `ensure_layout!(out, :g)` and would pay a
+        # full distributed backward transform (PencilFFTs `ldiv!` + the coupled-DCT
+        # transposes) of coefficients it immediately overwrites. Its grid array is still the
+        # one the lazy RHS wrote (the forward transform reads grid, writes coeff), so the
+        # `:g` flag is honest. Same fix as the diagonal-IMEX steppers.
+        _release_rhs_buffer!(F_fields, solver)
     end
 
     # ── Final update: M*X_{n+1} = M*X_n + dt*Σ(b^E*F - b^I*L*X) ────────

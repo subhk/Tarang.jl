@@ -222,6 +222,7 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
     if field.domain === nothing
         return
     end
+    _count_transform!(:forward)
 
     ensure_layout!(field, :g)  # Start in grid space
 

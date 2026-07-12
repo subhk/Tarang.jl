@@ -94,6 +94,22 @@ struct LazyDiff{T<:LazyFuture} <: LazyFuture
     axis::Int   # basis axis resolved at translation time (0 = resolve at runtime)
 end
 
+"""A SUM of derivatives of ONE shared operand — `Σᵢ ∂^{oᵢ}u/∂xᵢ^{oᵢ}` (i.e. `lap`).
+
+Each `LazyDiff` node costs a full grid→coeff→grid round-trip (two spectral transforms, and
+under MPI each is an all-to-all). Measured: every extra ∂ node adds exactly 6 transforms per
+RK222 step. Expanding `lap` into a chain of `LazyAdd(LazyDiff, LazyDiff, …)` therefore pays
+that round-trip PER AXIS, and re-evaluates the shared operand subtree per axis on top.
+
+This node evaluates the operand ONCE, does ONE forward transform, applies every axis's
+multiplier inside that single `:c` visit, and does ONE backward transform — 2 transforms
+regardless of dimension."""
+struct LazyMultiDiff{T<:LazyFuture} <: LazyFuture
+    operand::T
+    orders::Vector{Int}
+    axes::Vector{Int}
+end
+
 # ── Workspace ────────────────────────────────────────────────────────────────
 
 """
@@ -259,6 +275,26 @@ function translate_to_lazy(expr, state; target=nothing)
         return LazyDiff(op, expr.coord, expr.order, axis)
     end
 
+    # Vector/tensor operators that reduce to a SCALAR field. Without these the whole
+    # solver falls back to the interpreted RHS evaluator whenever an explicit term is
+    # written with lap/div (see `build_lazy_rhs_plan!`). Each expands into the same
+    # per-axis derivative sum the interpreted evaluator uses (evaluate_scalar_laplacian
+    # / evaluate_divergence), so the compiled and interpreted paths agree by construction.
+    #
+    # `grad` and `curl` are vector-valued and have no scalar LazyFuture representation;
+    # they are translated only inside `div(grad(·))`, and otherwise fall through to
+    # `nothing` (interpreted fallback) rather than being silently mistranslated.
+    if isa(expr, Laplacian)
+        return _translate_laplacian_to_lazy(expr.operand, state, target)
+    end
+
+    if isa(expr, Divergence)
+        inner = expr.operand
+        # div(grad(u)) == lap(u): the idiomatic spelling of a diffusion term.
+        isa(inner, Gradient) && return _translate_laplacian_to_lazy(inner.operand, state, target)
+        return _translate_divergence_to_lazy(inner, state, target)
+    end
+
     # Pointwise unary grid function (sin, exp, tanh, …)
     if isa(expr, UnaryGridFunction)
         op = translate_to_lazy(expr.operand, state; target=target)
@@ -272,6 +308,117 @@ function translate_to_lazy(expr, state; target=nothing)
     end
 
     return nothing
+end
+
+"""True when `_apply_lazy_diff!` can differentiate along `basis` CORRECTLY for `field`.
+
+The lazy derivative is not a drop-in for the interpreted one on every basis, and where it
+is not, the honest move is to decline the translation so the solver keeps its existing
+(correct) interpreted fallback — NOT to compile and then fail:
+
+  * DISTRIBUTED non-Fourier axis. The lazy derivative works in COEFFICIENT space, where the
+    coupled axis is precisely the decomposed one (`pencil_fft_output`), so the global
+    differentiation matrix does not conform to a rank's slab. The interpreted derivative
+    works in GRID space, where the non-Fourier axis is LOCAL — so it is correct there and we
+    must fall back to it. (Verified at np=2: interpreted err 1.3e-12; lazy is unserviceable.)
+  * NON-CHEBYSHEV JACOBI (Legendre, general Jacobi). `differentiation_matrix` returns the
+    classical recurrence for UNNORMALIZED Pₙ, but the transform stores ORTHONORMAL P̃ₙ = γₙPₙ
+    coefficients. The interpreted path applies that normalization; the lazy one does not, so
+    it is silently wrong (measured: error 5.3 on an amplitude-11.8 answer, wrong sign).
+    ChebyshevT/ChebyshevU carry no such normalization and agree to ~5e-13."""
+function _lazy_diff_axis_supported(field::ScalarField, basis)
+    isa(basis, FourierBasis) && return true
+    isa(basis, JacobiBasis) || return false
+    (isa(basis, ChebyshevT) || isa(basis, ChebyshevU)) || return false   # Legendre & friends
+    dist = field.dist
+    return !(dist !== nothing && dist.size > 1)                          # distributed ⇒ decline
+end
+
+"""True when `operand` is differentiable into `target`'s buffer axis-for-axis.
+
+The translators resolve axes against TARGET.bases, but `LazyParamField` copies an operand's
+array on a size-only check — so an operand whose bases are in a different ORDER than the
+target's (a directly-constructed VectorField does not get the coordsys canonicalization that
+`Domain` applies) would be silently transposed rather than rejected."""
+function _lazy_bases_match(operand::ScalarField, target::ScalarField)
+    length(operand.bases) == length(target.bases) || return false
+    for (ob, tb) in zip(operand.bases, target.bases)
+        ob === tb || return false
+    end
+    return true
+end
+
+"""Expand `lap(u)` into `Σᵢ ∂²u/∂xᵢ²` over the target's bases.
+
+Mirrors `evaluate_scalar_laplacian`, which sums `Differentiate(u, coord, 2)` over the
+operand's bases with `coord = basis.meta.coordsys[basis.meta.element_label]`. A
+VectorField operand is resolved to the component matching `target` (the vector
+Laplacian is diagonal: `lap(u)ᵢ == lap(uᵢ)`). Returns `nothing` — i.e. leaves the
+solver on its existing interpreted fallback — for anything it cannot map exactly."""
+function _translate_laplacian_to_lazy(operand, state, target)
+    target === nothing && return nothing
+    if isa(operand, VectorField)
+        comp = _vector_component_for_target(operand, target)
+        comp === nothing && return nothing
+        operand = comp
+    end
+    isa(operand, ScalarField) && !_lazy_bases_match(operand, target) && return nothing
+    # Decline the WHOLE laplacian if any axis is one the lazy derivative cannot serve.
+    for basis in target.bases
+        basis === nothing && continue
+        _lazy_diff_axis_supported(target, basis) || return nothing
+    end
+    op = translate_to_lazy(operand, state; target=target)
+    op === nothing && return nothing
+
+    axes = Int[]
+    for (axis, basis) in enumerate(target.bases)
+        basis === nothing && continue
+        push!(axes, axis)
+    end
+    isempty(axes) && return nothing
+
+    # One axis: a plain LazyDiff is already optimal (a fused node would add a copy for nothing).
+    # Two or more: fuse, so the operand is evaluated once and the whole Laplacian costs a single
+    # forward + backward transform instead of one round-trip PER AXIS.
+    length(axes) == 1 && return LazyDiff(op, _coord_of_axis(target, axes[1]), 2, axes[1])
+    return LazyMultiDiff(op, fill(2, length(axes)), axes)
+end
+
+"""The Coordinate owning `axis` of `field` (as `evaluate_scalar_laplacian` resolves it)."""
+_coord_of_axis(field::ScalarField, axis::Int) =
+    (b = field.bases[axis]; b.meta.coordsys[b.meta.element_label])
+
+"""Expand `div(v)` into `Σᵢ ∂vᵢ/∂xᵢ`.
+
+Mirrors `evaluate_divergence`: component `i` is differentiated along `coordsys.names[i]`.
+Bails (`nothing`) unless every coordinate resolves to an axis of the target, so a
+coordinate the target has no basis for falls back to the interpreted path instead of
+silently contributing an undifferentiated component (`_apply_lazy_diff!` is a no-op at
+`axis == 0`)."""
+function _translate_divergence_to_lazy(operand, state, target)
+    target === nothing && return nothing
+    isa(operand, VectorField) || return nothing
+    coordsys = operand.coordsys
+    comps = operand.components
+    length(comps) == length(coordsys.names) || return nothing
+    acc = nothing
+    for (i, coord_name) in enumerate(coordsys.names)
+        coord = coordsys[coord_name]
+        axis = _resolve_diff_axis(coord, target.bases)
+        axis == 0 && return nothing
+        basis = target.bases[axis]
+        # Decline the axes the lazy derivative cannot serve correctly (distributed
+        # non-Fourier, non-Chebyshev Jacobi) so the solver keeps the interpreted fallback.
+        (basis !== nothing && _lazy_diff_axis_supported(target, basis)) || return nothing
+        comp = comps[i]
+        isa(comp, ScalarField) && !_lazy_bases_match(comp, target) && return nothing
+        c = translate_to_lazy(comp, state; target=target)
+        c === nothing && return nothing
+        term = LazyDiff(c, coord, 1, axis)
+        acc = acc === nothing ? term : LazyAdd(acc, term)
+    end
+    return acc
 end
 
 """Find the VectorField component matching `target` by identity or name."""
@@ -523,6 +670,51 @@ function evaluate_lazy!(out::ScalarField, expr::LazyDiff, state, ws::LazyWorkspa
     return out
 end
 
+# Σᵢ ∂ᵢ^{oᵢ}(operand) in ONE coefficient-space visit: 2 spectral transforms total, instead of
+# 2 per axis. The per-axis multiplier application is the SAME code the single-axis path uses
+# (`_apply_lazy_diff_coeff!`), so rfft-vs-full-fft layout, the pencil permutation and the
+# distributed local index ranges are all handled identically — no new index math.
+function evaluate_lazy!(out::ScalarField, expr::LazyMultiDiff, state, ws::LazyWorkspace)
+    _with_scratch_scope(ws) do
+        src = _borrow_scratch!(ws)
+        evaluate_lazy!(src, expr.operand, state, ws)
+        ensure_layout!(src, :c)              # ONE forward transform, shared by every axis
+        src_coeff = get_local_data(get_coeff_data(src))
+
+        # First axis: seed `out` from the operand's coefficients (a copy, not a transform).
+        out_coeff = get_local_data(get_coeff_data(out))
+        copyto!(out_coeff, src_coeff)
+        out.current_layout = :c
+        _apply_lazy_diff_coeff!(out, expr.orders[1], expr.axes[1])
+
+        # Remaining axes: differentiate a copy of the SAME coefficients and accumulate.
+        tmp = length(expr.axes) > 1 ? _borrow_scratch!(ws) : nothing
+        if tmp !== nothing
+            tmp_coeff = get_local_data(get_coeff_data(tmp))
+            @inbounds for i in 2:length(expr.axes)
+                copyto!(tmp_coeff, src_coeff)
+                tmp.current_layout = :c
+                _apply_lazy_diff_coeff!(tmp, expr.orders[i], expr.axes[i])
+                out_c = get_local_data(get_coeff_data(out))
+                @. out_c += tmp_coeff
+            end
+        end
+
+        out.current_layout = :c
+        ensure_layout!(out, :g)              # ONE backward transform
+
+        # Hand the scratch fields back flagged :g. They are pooled and reused round-robin by
+        # sibling subtrees, whose writers all begin with `ensure_layout!(scratch, :g)` — a
+        # :c-flagged scratch would make that a full BACKWARD transform of coefficients the
+        # writer immediately overwrites. (Measured: leaving them :c re-added exactly the 3
+        # backward transforms per step this node had just removed.) Every evaluate_lazy!
+        # writer fully overwrites the grid array, so the :g flag costs nothing and is safe.
+        src.current_layout = :g
+        tmp === nothing || (tmp.current_layout = :g)
+    end
+    return out
+end
+
 # Pointwise field/field division in grid space (undealiased), mirroring
 # `divide_operands(::ScalarField, ::ScalarField)`.
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyDiv, state, ws::LazyWorkspace)
@@ -604,11 +796,23 @@ function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int, ax
     axis = axis_hint == 0 ? _resolve_diff_axis(coord, field.bases) : axis_hint
     axis == 0 && return field  # Not in this field's bases — skip
 
+    # Switch to coefficient space
+    ensure_layout!(field, :c)
+    _apply_lazy_diff_coeff!(field, order, axis)
+    # Transform back to grid space for downstream operations
+    ensure_layout!(field, :g)
+    return field
+end
+
+"""Coefficient-space core of the lazy derivative: `field` must ALREADY be `:c`, and is left `:c`.
+
+Split out of `_apply_lazy_diff!` so a fused multi-axis node (`LazyMultiDiff`) can apply several
+derivatives inside a SINGLE `:c` visit instead of paying a grid→coeff→grid round-trip per axis."""
+function _apply_lazy_diff_coeff!(field::ScalarField, order::Int, axis::Int)
+    axis == 0 && return field
     target_basis = field.bases[axis]
     target_basis === nothing && return field
 
-    # Switch to coefficient space
-    ensure_layout!(field, :c)
     coeff_storage = get_coeff_data(field)
     coeff_storage === nothing && return field
 
@@ -620,17 +824,55 @@ function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int, ax
         coeff_data = get_local_data(coeff_storage)
         coeff_data === nothing && return field
         D = differentiation_matrix(target_basis, order)
-        _apply_1d_matrix!(coeff_data, D, axis, target_basis)
+        _apply_1d_matrix!(coeff_data, D, _jacobi_diff_axis(coeff_storage, axis, target_basis, D),
+                          target_basis)
     elseif isa(target_basis, FourierBasis)
         _apply_lazy_fourier_diff!(coeff_storage, field, target_basis, axis, order)
-    else
-        return field
     end
 
     field.current_layout = :c
-    # Transform back to grid space for downstream operations
-    ensure_layout!(field, :g)
     return field
+end
+
+"""Physical (parent-array) axis to apply a Jacobi differentiation matrix along.
+
+The Jacobi branch multiplies the GLOBAL Nz×Nz differentiation matrix into the LOCAL
+coefficient array, which is only meaningful when this rank owns the whole non-Fourier
+axis. Two things can break that under MPI, and both used to be silent:
+
+  * the axis is DECOMPOSED — the rank holds a slab, so the global matrix does not
+    conform. Observed at np=2 on a Chebyshev×Fourier domain with `dt(q) = nu*lap(q)`:
+    either a `DimensionMismatch`, or (when the local extent coincidentally matches Nz)
+    an RHS wrong by more than its own amplitude, integrated forever with no error.
+  * the pencil is PERMUTED — `parent()` reorders the dims, so the logical axis is not
+    the parent axis (the Fourier branch already handles this; this one did not).
+
+A distributed non-Fourier derivative is only correct in the solve layout (the transpose
+machinery in `subproblem_io.jl`), which the lazy RHS does not enter — so refuse loudly
+rather than return garbage. Serial fields are unaffected."""
+function _jacobi_diff_axis(coeff_storage, axis::Int, basis, D)
+    coeff_storage isa PencilArrays.PencilArray || return axis
+
+    pencil = PencilArrays.pencil(coeff_storage)
+    n_local = length(pencil.axes_local[axis])
+    # DECOMPOSITION is the thing that makes the local matmul wrong. Test it against this
+    # array's own global extent rather than size(D,1), so a padded/rescaled coefficient
+    # array that is nonetheless fully local is not rejected for the wrong reason.
+    n_global = PencilArrays.size_global(pencil)[axis]
+    if n_local != n_global
+        error("Lazy RHS: cannot differentiate along the non-Fourier axis $axis " *
+              "($(nameof(typeof(basis)))) of a DISTRIBUTED field — this rank owns only " *
+              "$n_local of the $n_global coefficients on that axis, so the global " *
+              "differentiation matrix does not apply to its local slab. Under MPI a " *
+              "non-Fourier derivative is only correct in the solve layout. Move the term " *
+              "to the implicit (L) side of the equation, or run in serial.")
+    end
+
+    # perm_tuple[physical] = logical. Tuple(NoPermutation()) is `nothing`, NOT the identity.
+    perm_raw = Tuple(PencilArrays.permutation(coeff_storage))
+    perm_raw === nothing && return axis
+    physical = findfirst(==(axis), perm_raw)
+    return physical === nothing ? axis : physical
 end
 
 """
@@ -841,10 +1083,36 @@ function build_lazy_rhs_plan!(solver)
             template = state[state_idx]
             lazy = translate_to_lazy(expr, state; target=template)
             if lazy === nothing
+                distributed = template.dist !== nothing && template.dist.size > 1
+                # A DELIBERATE decline, not a defect: the lazy derivative operates in
+                # coefficient space, where a non-Fourier axis is the DECOMPOSED one, so it
+                # cannot serve a derivative along it. The interpreted evaluator differentiates
+                # in GRID space, where that axis is local — it is the CORRECT path here, just
+                # slower. Do not cry wolf about it (see `_lazy_diff_axis_supported`).
+                declined_non_fourier = distributed && any(
+                    b -> b !== nothing && !isa(b, FourierBasis), template.bases)
+
                 msg = "LazyRHS: cannot compile the RHS of equation $eq_idx for `$(template.name)` " *
                       "(expression: $(string(expr))). The whole solver falls back to the " *
-                      "~100×-slower interpreted RHS evaluator. Usual cause: an unsupported or " *
-                      "mistyped operator in this term."
+                      "~100×-slower interpreted RHS evaluator."
+                if declined_non_fourier
+                    msg *= " This is EXPECTED and CORRECT for a distributed non-Fourier " *
+                           "(Chebyshev/Jacobi) axis: the compiled path cannot differentiate " *
+                           "along a decomposed coefficient axis, so the interpreted evaluator " *
+                           "handles it — accurately, but slowly. Move the term to the implicit " *
+                           "(L) side to keep the compiled RHS."
+                else
+                    msg *= " Usual cause: an unsupported or mistyped operator in this term."
+                    # For an all-Fourier distributed field the fallback is not merely slow: the
+                    # distributed interpreted derivative has been observed to return zero,
+                    # leaving the field FROZEN with no error raised.
+                    if distributed
+                        msg *= " UNDER MPI THIS PATH IS ALSO KNOWN TO PRODUCE SILENTLY WRONG " *
+                               "RESULTS (the distributed interpreted derivative can evaluate to " *
+                               "zero, freezing the field). Rewrite the term using supported " *
+                               "operators, or call `require_lazy_rhs!()` to turn this into a hard error."
+                    end
+                end
                 REQUIRE_LAZY_RHS[] && error(msg * " [require_lazy_rhs! is set — aborting.]")
                 @warn msg maxlog=5
                 return plan  # is_compiled stays false

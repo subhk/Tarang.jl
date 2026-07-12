@@ -531,6 +531,7 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
         _ddirk_push_recycle!(state, new_state)
         _ddi_sbdf2_push_fhist!(state, Fhist, F_n, length(F_n))
     end
+    _release_rhs_buffer!(F_n, solver)   # F_n is now copied into Fhist; free the shared buffer
 
     state.timestepper_data[:dd_imex_iter] = iteration + 1
 end
@@ -618,6 +619,8 @@ function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::I
         _ddirk_copy!(_local_coeff(get_coeff_data(N_n[i])), _local_coeff(get_coeff_data(fr)))
         N_n[i].current_layout = :c
     end
+    _release_rhs_buffer!(_Nn_src, solver)   # N(Xₙ) is now in the cache; free the shared buffer
+                                            # before the corrector's evaluate_rhs reuses it.
 
     # Predictor: c = exp(z)⊙Xₙ + dt·φ₁⊙N(Xₙ). `pred` reuses the history-dropped
     # field-set (ETD is one-step — reads only history[end]=current_state — so the
@@ -643,6 +646,7 @@ function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::I
                           _local_coeff(get_coeff_data(N_c[i])),
                           _local_coeff(get_coeff_data(N_n[i])), dt)
     end
+    _release_rhs_buffer!(N_c, solver)   # corrector RHS consumed; free the shared buffer
     _refresh_algebraic_state!(solver.problem, pred)
     _ddirk_push_recycle!(state, pred)
 end
@@ -749,6 +753,7 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
             _ddirk_copy!(_local_coeff(get_coeff_data(dst[i])), _local_coeff(get_coeff_data(fr)))
             dst[i].current_layout = :c
         end
+        _release_rhs_buffer!(F_result, solver)   # stage RHS is now in the cache; free the shared buffer
         Fs[s] = dst
     end
 
@@ -881,6 +886,50 @@ function _ddi_sbdf2_push_fhist!(state::TimestepperState, Fhist, F_n, n_fields::I
         state.timestepper_data[:_ddi_sbdf2_frec] = popfirst!(Fhist)
     end
     return Fhist
+end
+
+"""Re-flag the lazy-RHS output buffer as `:g` once its coefficients are consumed.
+
+`evaluate_rhs` returns `plan.output_fields` — a SHARED buffer reused by every
+subsequent call, not a copy. Reading its coefficients requires `ensure_layout!(f, :c)`,
+which leaves the buffer `:c`-flagged; the next `evaluate_rhs` writes it through
+`ensure_layout!(out, :g)` and so pays a full distributed `backward_transform!`
+(a PencilFFTs `ldiv!` = MPI all-to-all) of coefficients it immediately overwrites.
+
+The forward transform reads the grid array and writes the coeff array (PencilFFTs
+`mul!` is out-of-place), so the grid data is untouched and the `:g` flag is still
+honest. Call this AFTER the last coefficient read of the buffer in a step.
+0D/algebraic fields (empty bases) hold no transformable data and are left alone.
+
+ONLY the compiled plan's own buffer may be re-flagged. `evaluate_rhs` returns
+`plan.output_fields` on the compiled path, but on the interpreted fallback it returns a
+fresh vector whose entries can be the PROBLEM'S OWN fields (`evaluate_solver_expression`
+hands back a field-valued expression by identity, so `dt(u) = f` yields `F[i] === f`).
+Re-flagging those would mutate a field this stepper does not own. The identity check
+against `plan.output_fields` is exactly that ownership test.
+
+Only entries the plan WRITES IN GRID SPACE may be released, i.e. those with a lazy
+expression. An `exprs[i] === nothing` entry is either untouched or (when forced) written
+straight into coefficients by `_reset_lazy_forced_rhs_field!` — its grid array is stale, so
+re-flagging it `:g` would forward-transform garbage on the next read."""
+@inline function _release_rhs_buffer!(F, solver::InitialValueSolver)
+    plan = solver.rhs_plan
+    plan === nothing && return F
+    p = plan::LazyRHSPlan
+    (p.is_compiled && F === p.output_fields) || return F
+    problem = solver.problem
+    forced = hasfield(typeof(problem), :stochastic_forcings) ? problem.stochastic_forcings : nothing
+    @inbounds for i in eachindex(F)
+        p.exprs[i] === nothing && continue
+        # A registered stochastic forcing is added to the buffer in COEFFICIENT space only
+        # (`_add_registered_forcings_to_lazy_rhs!`), so this field's grid array does NOT
+        # contain the forcing and the `:g` flag would be a lie: a later `ensure_layout!(:c)`
+        # would re-derive coefficients from the unforced grid and silently drop the forcing.
+        forced !== nothing && haskey(forced, i) && continue
+        f = F[i]
+        (f.current_layout === :c && !isempty(f.bases)) && (f.current_layout = :g)
+    end
+    return F
 end
 
 # Function barriers (concrete array types resolved at the call → type-stable).
