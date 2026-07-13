@@ -42,7 +42,20 @@ _evaluate_alg_F(c::ConstantOperator, sp::Subproblem) = _bc_constant_projection(F
 _evaluate_alg_F(x::Number, sp::Subproblem) = _bc_constant_projection(Float64(x), sp)
 _evaluate_alg_F(a::ArrayOperator, sp::Subproblem) = _bc_array_projection(a.value, sp)
 function _evaluate_alg_F(expr, sp::Subproblem)
-    @debug "gather_alg_F!: unsupported F expression type" expr_type=typeof(expr)
+    # A COMPOUND CONSTANT — `T(z=0) = 10*25`, `= h*T_amb`, `= 1/Re` — arrives here as a
+    # Multiply/Add/Divide operator tree, not as a ConstantOperator. It used to fall through to
+    # the silent zero below, so the boundary condition was enforced as 0 with no warning and the
+    # solve reported success. `_is_const_or_param` / `_extract_scalar` already fold exactly these
+    # node types for the L/M matrices; use them here too.
+    if _is_const_or_param(expr)
+        return _bc_constant_projection(Float64(_extract_scalar(expr)), sp)
+    end
+    # Anything else genuinely is not supported as a BC right-hand side. Enforcing it as zero is a
+    # silently wrong answer, which is worse than a slow or absent one — say so.
+    @warn "Boundary condition right-hand side of type $(typeof(expr)) is not supported and is " *
+          "being enforced as ZERO. Supported: a constant, a compound constant (`10*25`, `h*T_amb`), " *
+          "or a grid array (space-dependent BC). Rewrite the BC, or the solve will silently " *
+          "satisfy the wrong condition." maxlog=5
     return ComplexF64(0)
 end
 
