@@ -173,14 +173,17 @@ Second-order exponential Runge-Kutta method (Cox-Matthews 2002).
 timestepper = ETD_RK222()
 ```
 
-**Algorithm:**
+**Algorithm** (Cox-Matthews 2002, eq. 22):
 ```
 Stage 1 (predictor): a_n = exp(hL) * u_n
-                     c = a_n + h * phi_1(hL) * N(u_n)
-Stage 2 (corrector): u_{n+1} = a_n + h * phi_1(hL) * N(c)
+                     c   = a_n + h * phi_1(hL) * N(u_n)
+Stage 2 (corrector): u_{n+1} = c + h * phi_2(hL) * (N(c) - N(u_n))
 ```
 
-where phi_1(z) = (exp(z) - 1) / z
+where phi_1(z) = (exp(z) - 1) / z and phi_2(z) = (exp(z) - 1 - z) / z².
+
+The corrector needs **both** `N(u_n)` and `N(c)`, and the difference must be weighted by
+`phi_2` — a corrector that applies `phi_1` to `N(c)` alone is only first order.
 
 - **Linear part**: Exact via exp(hL) and phi functions
 - **Nonlinear part**: Explicit 2-stage Runge-Kutta
@@ -198,9 +201,14 @@ timestepper = ETD_CNAB2()
 
 **Algorithm:**
 ```
-u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_AB2
-N_AB2 = (3/2) * N(u_n) - (1/2) * N(u_{n-1})
+u_{n+1} = exp(hL) * u_n + h * [phi_1(hL) * N_n + w * phi_2(hL) * (N_n - N_{n-1})]
+w = h_n / h_{n-1}          (timestep ratio; w = 1 for constant dt)
 ```
+
+Despite the name, the linear term is **not** treated with Crank-Nicolson — "CNAB" refers only
+to the two-step structure. Note that the history term carries `phi_2`, not `phi_1`: applying a
+single `phi_1` to a plain AB2 extrapolation `(3/2)N_n − (1/2)N_{n−1}` is second order only in
+the `hL → 0` limit, and loses accuracy exactly in the stiff regime ETD exists for.
 
 - **Linear part**: Exact via exponential propagator
 - **Nonlinear part**: Adams-Bashforth extrapolation
@@ -217,10 +225,15 @@ timestepper = ETD_SBDF2()
 ```
 
 **Algorithm:**
-Uses proper 2-step exponential integration with phi_1 and phi_2 functions:
 ```
-u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_n + h^2 * phi_2(hL) * (N_n - N_{n-1}) / h
+u_{n+1} = exp(hL) * u_n + h * [phi_1(hL) * N_n + w * phi_2(hL) * (N_n - N_{n-1})]
+w = h_n / h_{n-1}
 ```
+
+This is the same second-order exponential-multistep update as `ETD_CNAB2` — both are the ETD
+analogue of AB2, obtained by interpolating `N` linearly between `t_{n-1}` and `t_n` and
+integrating the variation-of-constants formula exactly. The two schemes differ only in
+bookkeeping; pick either.
 
 - **Linear part**: Exact via exponential + phi functions
 - **Nonlinear part**: BDF-style extrapolation
@@ -242,7 +255,21 @@ ETD methods use phi functions defined as:
 \phi_2(z) = \frac{e^z - 1 - z}{z^2}
 ```
 
-These are computed stably even for small z using Taylor series or Krylov methods.
+`phi_functions_matrix(L, dt)` computes all three at once from the assembled `L_matrix`, choosing
+its method by the operator norm `‖dt·L‖`:
+
+| `‖dt·L‖` | method |
+|---|---|
+| `< 1e-8` | Taylor series (the `e^z − 1 − z` numerators cancel catastrophically here) |
+| `< 50` | dense matrix exponential, with an eigendecomposition fallback when `z` is singular (the `k=0` mode of a pure diffusion operator makes it so) |
+| `≥ 50` | Krylov approximation, column by column, via `ExponentialUtilities.phiv` |
+
+The Krylov branch announces itself with `Warning: Matrix is large or stiff (norm=...), using
+Krylov approximation`. It is not an error — a stiff `L` is the whole point of ETD, so any useful
+ETD run will trip it (the 1-D heat example below has `‖dt·L‖ ≈ 269` and still reproduces the
+analytic solution to 8 digits).
+
+The result is cached and only recomputed when `dt` changes.
 
 ### When to Use ETD
 
@@ -254,49 +281,69 @@ These are computed stably even for small z using Taylor series or Krylov methods
 
 **Less suitable for:**
 - Non-diagonal L (Chebyshev with BCs) - use IMEX instead
-- Large dense systems (exp(hL) is expensive)
+- Large serial problems (see the size limit below)
 - Problems with complex boundary conditions
 
-### Requirements
+### Setup (none required)
 
-ETD methods require:
-1. The linear operator L stored as `"L_matrix"` in problem parameters
-2. Optionally, mass matrix M as `"M_matrix"`
+You do **not** build or install a linear operator. `InitialValueSolver` runs
+`build_solver_matrices!`, which assembles `L_matrix`, `M_matrix` and `F_vector` from the
+equation strings and stores them in `problem.parameters`; the ETD steppers read `L_matrix`
+from there. Anything you write on the **left-hand side** of the equation is the linear operator
+L that gets propagated exactly; anything on the right-hand side is the nonlinear term N. So
+writing `add_equation!(problem, "∂t(T) - nu*lap(T) = 0")` is all it takes for `ETD_RK222()` to
+propagate `nu·∇²` with `exp(hL)` — see the complete example below.
 
-```julia
-# Setup L matrix for ETD
-problem.parameters["L_matrix"] = build_linear_operator(domain)
+### Size limit (serial)
 
-# Use ETD solver
-solver = InitialValueSolver(problem, ETD_RK222(); dt=1e-2)
-```
+In serial the exponential is taken of the **dense global** matrix, so the cost is O(n³) in the
+total number of coefficients. Above `n = 4096` degrees of freedom the phi-function builder
+refuses, and the stepper emits
+
+> `Warning: ETD-RK222 failed: ArgumentError("ETD matrix exponential requires dense O(n²) storage
+> but n=8193 is too large ..."), falling back to RK222`
+
+and carries on with RK222. If you asked for ETD and see that warning, you are not getting ETD —
+reduce the resolution or switch to SBDF2. Under **MPI with a pure-Fourier
+problem** this limit does not apply: the distributed path steps each Fourier mode with its own
+scalar exponential, never forming a global matrix (verified: a 128×128 Fourier heat problem,
+8320 coefficients, steps at np=2 with no fallback).
 
 ### Example: 1D Heat Equation with ETD
+
+The linear part is propagated exactly, so for a purely linear problem ETD is exact at *any*
+timestep — `dt = 0.1` here is far past the explicit diffusive stability limit and still lands on
+the analytic answer.
 
 ```julia
 using Tarang
 
-# Setup Fourier domain (L is diagonal)
-coords = CartesianCoordinates("x")
-dist = Distributor(coords; mesh=(1,))
-x_basis = RealFourier(coords["x"]; size=128, bounds=(0.0, 2*pi))
-domain = Domain(dist, (x_basis,))
+# Fourier domain (L is diagonal)
+coords  = CartesianCoordinates("x")
+dist    = Distributor(coords; dtype=Float64, device=CPU())
+x_basis = RealFourier(coords["x"]; size=64, bounds=(0.0, 2*pi))
+domain  = Domain(dist, (x_basis,))
 
-# Temperature field
-T = ScalarField(dist, "T", domain.bases, Float64)
+T = ScalarField(domain, "T")
 
-# Build diagonal diffusion operator in Fourier space
-# For Fourier: d^2/dx^2 -> -k^2
-kx = wavenumbers(x_basis)
-L_diag = -nu * kx.^2  # Diagonal in spectral space
-problem.parameters["L_matrix"] = Diagonal(L_diag)
+problem = IVP([T])
+add_parameters!(problem, nu=1.0)
+add_equation!(problem, "∂t(T) - nu*lap(T) = 0")     # L is built from this line
+
+x, = local_grids(dist, x_basis)
+ensure_layout!(T, :g)
+get_grid_data(T) .= sin.(x)
+ensure_layout!(T, :c)
 
 # ETD solver - no stability limit from diffusion!
 solver = InitialValueSolver(problem, ETD_RK222(); dt=0.1)
 
-while solver.sim_time < t_end
+for _ in 1:10          # t = 1.0
     step!(solver)
 end
+
+ensure_layout!(T, :g)
+maximum(abs, get_grid_data(T))      # 0.36787944 == exp(-nu*1.0), to 8 digits
 ```
 
 ### References
@@ -353,15 +400,32 @@ only constrained by advection, not diffusion.
 
 ### With CFL
 
-```julia
-cfl = CFL(problem, safety=0.5)
-add_velocity!(cfl, u)
+`CFL` is constructed from the **solver** (not the problem), and velocities are registered as
+`VectorField`s. The canonical use is to hand the controller to `run!`, which recomputes `dt`
+every `cadence` iterations and updates `solver.dt` for you:
 
+```julia
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+cfl = CFL(solver; initial_dt=1e-3, cadence=5, safety=0.4, max_dt=0.01)
+add_velocity!(cfl, u)                      # u must be a VectorField
+
+run!(solver; stop_iteration=10, cfl=cfl, progress=false)
+solver.dt                                  # updated by the controller
+```
+
+If you drive the loop yourself, call `compute_timestep` and pass the result to `step!`:
+
+```julia
 while solver.sim_time < t_end
     dt = compute_timestep(cfl)
     step!(solver, dt)
 end
 ```
+
+The remaining knobs are `threshold`, `max_change` and `min_change` (all *ratios* limiting how
+fast `dt` may change between recomputations). There is no `min_dt` field; the current step is
+`cfl.current_dt`.
 
 ### Manual Adjustment
 
@@ -396,60 +460,53 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 | RK443 | 4 + solve | Higher | Best (L-stable) |
 | CNAB2 | 1 + solve | Medium | Very good |
 | SBDF2 | 1 + solve | Medium | Excellent |
-| ETD_RK222 | 2 + exp(hL) | Medium | Exact (linear) |
-| ETD_CNAB2 | 1 + exp(hL) | Medium | Exact (linear) |
-| ETD_SBDF2 | 1 + exp(hL) | Medium | Exact (linear) |
+| ETD_RK222 | 2 + exp(hL) | Dense n×n (serial) | Exact (linear) |
+| ETD_CNAB2 | 1 + exp(hL) | Dense n×n (serial) | Exact (linear) |
+| ETD_SBDF2 | 1 + exp(hL) | Dense n×n (serial) | Exact (linear) |
+
+The exponentials are cached and reused while `dt` is unchanged, so the O(n³) factorization is
+paid once, not per step — but the dense n×n storage is permanent (and is why serial ETD is
+capped at n = 4096 coefficients).
 
 ## Example Usage
 
-### Runge-Kutta IMEX
+The timestepper is the only thing that changes between the three families — the problem, the
+fields and the loop are identical. This 2-D advection-diffusion problem runs with any of them:
 
 ```julia
 using Tarang
 
-# Problem setup
-problem = IVP([u, p])
-# ... add equations ...
+coords = CartesianCoordinates("x", "y")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb     = RealFourier(coords["x"]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+yb     = RealFourier(coords["y"]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+domain = Domain(dist, (xb, yb))
 
-# IMEX RK solver - handles stiff diffusion implicitly
+s = ScalarField(domain, "s")
+u = VectorField(domain, "u")
+
+problem = IVP([s, u])
+add_parameters!(problem, nu=0.05)
+add_equation!(problem, "∂t(s) - nu*lap(s) = -u⋅∇(s)")   # LHS implicit, RHS explicit
+add_equation!(problem, "∂t(u) - nu*lap(u) = 0")
+
+set!(s, (x, y) -> sin(x) * cos(y))
+set!(u.components[1], (x, y) -> 0.5)
+
+# Pick one:
+#   RK443()      -- IMEX Runge-Kutta, stiff diffusion handled implicitly
+#   SBDF2()      -- multistep IMEX, one RHS evaluation per step
+#   ETD_RK222()  -- exponential, no stability limit from the linear term
 solver = InitialValueSolver(problem, RK443(); dt=1e-3)
 
-# Larger timestep possible due to implicit treatment of linear terms
+t_end = 0.005
 while solver.sim_time < t_end
     step!(solver)
 end
 ```
 
-### Multistep IMEX (SBDF)
-
-```julia
-# Same problem, multistep IMEX solver
-solver = InitialValueSolver(problem, SBDF2(); dt=1e-3)
-
-# Larger timestep possible
-while solver.sim_time < t_end
-    step!(solver)
-end
-```
-
-### Exponential Time Differencing (ETD)
-
-```julia
-using LinearAlgebra
-
-# For Fourier-based problems with diagonal L
-# Build the linear operator matrix
-L_matrix = build_diffusion_operator(domain)  # Diagonal in spectral space
-problem.parameters["L_matrix"] = L_matrix
-
-# ETD solver - no stability limit from stiff linear terms!
-solver = InitialValueSolver(problem, ETD_RK222(); dt=0.1)
-
-# Can use much larger timesteps when L is very stiff
-while solver.sim_time < t_end
-    step!(solver)
-end
-```
+Swapping `RK443()` for `SBDF2()` or `ETD_RK222()` changes nothing else and, at this timestep,
+agrees to 6 digits (`max|s| = 0.999497` after 5 steps).
 
 ## Stochastic Forcing
 
@@ -460,16 +517,33 @@ Key points:
 - Required for proper Stratonovich calculus treatment
 - Supports ring, isotropic, and custom forcing spectra
 
+Register the forcing on the **problem**, against the variable it drives, before building the
+solver — `add_stochastic_forcing!` is the supported entry point, and the stepper picks the
+forcing up from there.
+
 ```julia
-# Quick example
+s = ScalarField(domain, "s")                      # starts at zero
+
+problem = IVP([s])
+add_parameters!(problem, nu=0.01)
+add_equation!(problem, "∂t(s) - nu*lap(s) = 0")   # no explicit source term
+
 forcing = StochasticForcing(
-    field_size = (64, 64),
+    field_size   = (16, 16),        # grid shape of the forced field
+    domain_size  = (2pi, 2pi),
     forcing_rate = 0.1,
-    k_forcing = 4.0,
-    dt = solver.dt
+    k_forcing    = 4.0,
+    dk_forcing   = 1.0,
+    dt           = 1e-3,
 )
-set_forcing!(solver.timestepper_state, forcing)
+add_stochastic_forcing!(problem, :s, forcing)     # :s is the variable's name
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+run!(solver; stop_iteration=20, progress=false)   # forcing drives s off zero (max|s| ~ 4e-3)
 ```
+
+The magnitude varies from run to run — the forcing is white in time. Pass an explicit `rng=` to
+`StochasticForcing` if you need a reproducible realization.
 
 ## See Also
 

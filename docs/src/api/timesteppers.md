@@ -2,15 +2,25 @@
 
 Time integration schemes for evolving PDEs in time.
 
+Tarang's timesteppers are **IMEX** schemes: the linear operator `L` (everything on the
+left-hand side of an equation) is advanced implicitly, and the nonlinear right-hand side
+is advanced explicitly.
+
 ## TimeStepper Types
 
 ### Abstract Type
 
+All timesteppers inherit from the abstract type `Tarang.TimeStepper`. It is **not
+exported** — write it qualified if you need to refer to it (e.g. in a type annotation):
+
 ```julia
-abstract type TimeStepper end
+using Tarang
+
+supertype(RK222)                  # Tarang.TimeStepper
+RK222() isa Tarang.TimeStepper    # true
 ```
 
-All timesteppers inherit from this abstract type.
+The concrete schemes below **are** exported, unless the section says otherwise.
 
 ## IMEX Runge-Kutta
 
@@ -24,14 +34,14 @@ RK111()
 
 **Properties**:
 - Order: 1
-- Stages: 1
+- Stages: 1 (all implicit)
 - Implicit part: Backward Euler for linear terms
 - Explicit part: Forward Euler for nonlinear terms
-- Memory: Minimal
+- Memory: minimal (3 workspace field sets)
 
 ### RK222
 
-2nd-order, 2-stage IMEX Runge-Kutta.
+2nd-order IMEX Runge-Kutta (Ascher, Ruuth & Spiteri 1997, ARS(2,2,2)).
 
 ```julia
 RK222()
@@ -39,16 +49,19 @@ RK222()
 
 **Properties**:
 - Order: 2
-- Stages: 2
-- Implicit part: 2-stage DIRK for linear terms
-- Explicit part: 2-stage explicit RK for nonlinear terms
-- Memory: 2 state copies
+- Stages: 3 — an ESDIRK form whose *first* stage is explicit, so only 2 of the 3 stages
+  require an implicit solve. (`RK222().stages == 3`; the explicit and implicit tableaux
+  share the abscissae `c = [0, γ, 1]` with `γ = 1 − 1/√2`, which is what makes the IMEX
+  pair 2nd order.)
+- Implicit part: L-stable ESDIRK for linear terms
+- Explicit part: explicit RK for nonlinear terms
+- Memory: 6 workspace field sets
 
 **Recommended for**: General purpose problems.
 
 ### RK443
 
-3rd-order, 4-stage IMEX Runge-Kutta.
+3rd-order IMEX Runge-Kutta (Kennedy & Carpenter ARK3(2)4L[2]SA).
 
 ```julia
 RK443()
@@ -56,10 +69,10 @@ RK443()
 
 **Properties**:
 - Order: 3
-- Stages: 4
-- Implicit part: 4-stage DIRK for linear terms
+- Stages: 4 — ESDIRK, first stage explicit, so 3 implicit solves per step
+- Implicit part: L-stable ESDIRK for linear terms
 - Explicit part: 4-stage explicit RK for nonlinear terms
-- Memory: 4 state copies
+- Memory: 12 workspace field sets
 
 **Recommended for**: High accuracy requirements.
 
@@ -101,18 +114,24 @@ SBDF4()  # 4th order
 | SBDF3 | 3 | 3 | A(α)-stable |
 | SBDF4 | 4 | 4 | A(α)-stable |
 
+Multistep schemes start from a single state, so the first few steps run at reduced order
+while the history fills.
+
 ### MCNAB2 / CNLF2
 
-Additional two-step multistep schemes.
+Additional two-step multistep schemes. **Neither is exported** — they must be qualified:
 
 ```julia
-MCNAB2()  # Modified Crank-Nicolson Adams-Bashforth (θ ≳ 1/2 for stiff stability)
-CNLF2()   # Crank-Nicolson Leapfrog (CN implicit + centered leapfrog explicit)
+Tarang.MCNAB2()   # θ-weighted Crank-Nicolson + Adams-Bashforth 2
+Tarang.CNLF2()    # Crank-Nicolson Leapfrog (CN implicit + centered leapfrog explicit)
 ```
 
-**Properties**: both are 2nd order, 2-step. `MCNAB2` accepts an optional CN
-weight `MCNAB2(theta)` (default `0.5`); a slightly larger `θ` improves stability
-for stiff linear terms.
+`MCNAB2` accepts an optional CN weight, `Tarang.MCNAB2(theta)` (default `0.5`). This is a
+**two-level θ-method**, not the three-level Ascher-Ruuth-Wetton "modified CNAB": at
+`θ = 0.5` it is Crank-Nicolson and 2nd order, but any `θ > 0.5` adds damping at the cost of
+dropping to **1st order**. Use the default unless you specifically want that trade.
+
+`CNLF2` is 2nd order and 2-step.
 
 ## Exponential Time Differencing (ETD)
 
@@ -133,13 +152,17 @@ ETD_SBDF2()  # 2nd-order exponential semi-implicit BDF
 
 ## Specialized IMEX-RK
 
-Additive Runge-Kutta (ARK) and diagonal IMEX schemes.
+Additive Runge-Kutta (ARK) schemes. `RKSMR` is exported; `RKGFY` and `RK443_IMEX` are
+**not**, and must be qualified.
 
 ```julia
-RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
-RKSMR()       # Spalart-Moser-Rogers IMEX-RK3 (explicit nonlinear, implicit C-N linear)
-RK443_IMEX()  # Alias of RK443 (Kennedy-Carpenter ARK3(2)4L[2]SA), suffix clarifies IMEX intent
+RKSMR()              # Spalart-Moser-Rogers IMEX-RK3 (explicit nonlinear, implicit C-N linear)
+Tarang.RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
+Tarang.RK443_IMEX()  # Same Kennedy-Carpenter coefficients as RK443; the suffix clarifies IMEX intent
 ```
+
+`RKSMR` is stored in a 4-stage ESDIRK form (a trivial explicit first stage plus the three
+SMR substeps), so it shares the generic IMEX-RK driver with `RK222` / `RK443`.
 
 ### Diagonal IMEX
 
@@ -149,22 +172,83 @@ DiagonalIMEX_RK443()  # 3rd order
 DiagonalIMEX_SBDF2()  # 2nd order multistep
 ```
 
-**Properties**: the implicit solve is **diagonal in spectral space** — the linear
-operator is applied per Fourier mode (`(I + γ·dt·L̂)⁻¹` per wavenumber) rather than
-through a global matrix solve. Much cheaper for pure-Fourier / diagonalizable
-linear terms; requires the implicit operator to be diagonal in the chosen basis.
+The implicit solve is **diagonal in spectral space** — the linear operator is applied per
+Fourier mode (`(I + γ·dt·L̂)⁻¹` per wavenumber) rather than through a global matrix solve.
+Much cheaper for pure-Fourier / diagonalizable linear terms, and because the solve is an
+element-wise division there is no sparse factorization to move off-device on GPU.
+
+**These schemes do not read the implicit operator from your equation.** They take it from a
+`SpectralLinearOperator` that you attach to the solver with `set_spectral_linear_operator!`:
+
+```julia
+using Tarang
+
+coords = CartesianCoordinates("x")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb     = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+
+u = ScalarField(dist, "u", (xb,), Float64)
+x = local_grid(xb, dist, 1)
+ensure_layout!(u, :g)
+get_grid_data(u) .= cos.(2 .* x)          # a single mode, k = 2
+
+problem = IVP([u])
+add_equation!(problem, "∂t(u) = 0")       # the linear term lives in L, NOT in the equation
+
+solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.005)
+L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=0.5)   # L̂(k) = ν k²
+set_spectral_linear_operator!(solver, L)
+
+run!(solver; stop_iteration=200, progress=false)   # t = 1.0
+
+ensure_layout!(u, :g)
+maximum(abs, get_grid_data(u))   # 0.13533 ≈ exp(-ν k² t) = exp(-2) = 0.13534
+```
+
+`SpectralLinearOperator(dist, bases, kind; ν, order)` supports `:laplacian` (`L̂ = ν k²`),
+`:hyperviscosity` (`L̂ = ν (k²)^order`), `:biharmonic` (`L̂ = ν k⁴`), and `:custom`
+(pass `coefficients` yourself).
+
+!!! warning "Attach the operator, or the linear term is lost"
+    If no `SpectralLinearOperator` is attached, `DiagonalIMEX_RK222` / `DiagonalIMEX_RK443`
+    fall back to a **fully explicit** RK step, and the implicit `L` written in the equation
+    is silently dropped: running `∂t(u) - nu*lap(u) = 0` with `DiagonalIMEX_RK222` and no
+    attached operator leaves `u` completely undiffused (`max|u|` stays at its initial
+    value). `DiagonalIMEX_SBDF2` errors outright on the same path. If you want the
+    equation's `L` treated implicitly without extra setup, use `RK222` / `SBDF2` instead.
 
 ## Usage with Solver
 
 ```julia
-# Create solver with timestepper
-solver = InitialValueSolver(problem, RK222(); dt=0.001)
+using Tarang
 
-# Or IMEX
-solver = InitialValueSolver(problem, SBDF2(); dt=0.01)
+coords = CartesianCoordinates("x", "y")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb     = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+yb     = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
+domain = Domain(dist, (xb, yb))
 
-# Time stepping
-while solver.sim_time < t_end
+u = ScalarField(domain, "u")
+problem = IVP([u])
+add_parameters!(problem, nu=0.1)
+add_equation!(problem, "∂t(u) - nu*lap(u) = 0")
+set!(u, (x, y) -> sin(x) * cos(y))
+
+# Create solver with a timestepper — note the `()`
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+# Drive it with run!
+run!(solver; stop_iteration=50, progress=false)
+
+ensure_layout!(u, :g)
+maximum(abs, get_grid_data(u))   # 0.99004983, matching exp(-2νt) to 1.6e-11
+```
+
+Or drive the loop yourself:
+
+```julia
+solver = InitialValueSolver(problem, SBDF2(); dt=1e-3)
+while solver.sim_time < 0.05
     step!(solver)
 end
 ```
@@ -173,41 +257,55 @@ end
 
 ### TimestepperState
 
-Internal state for multi-step methods.
+`Tarang.TimestepperState` holds everything a scheme needs between steps: the state history,
+the timestep history (for variable-`dt` multistep schemes), pre-allocated workspace fields,
+and any forcing. It is **not exported** and is managed automatically by the solver — you
+reach it as `solver.timestepper_state` and normally never touch it.
 
 ```julia
-struct TimestepperState
-    timestepper::TimeStepper
-    dt::Float64
-    history::Vector  # Previous time levels
-end
+fieldnames(Tarang.TimestepperState)
+# (:timestepper, :dt, :history, :dt_history, :stage, :timestepper_data,
+#  :workspace_fields, :workspace_allocated, :forcing, :current_substep, :forcing_generated)
 ```
 
-Managed automatically by the solver.
+## Stability
 
-## Stability Regions
+### Explicit (advective) restriction
 
-### Explicit Methods
-
-CFL condition limits timestep:
+The explicit half of every IMEX scheme is limited by the advective CFL condition:
 
 ```math
 \Delta t < C \frac{\Delta x}{u_{max}}
 ```
 
-- RK111: C ≈ 1.0
-- RK222: C ≈ 1.0
-- RK443: C ≈ 1.4
+Rather than hard-coding `C`, use the `CFL` controller, which recomputes `dt` from the grid
+spacing and the current velocity field with a `safety` factor. It is constructed from the
+**solver**, and its velocities must be `VectorField`s:
 
-### IMEX Methods
+```julia
+v = VectorField(domain, "v")
+set!(v.components[1], (x, y) -> 0.5)
 
-Diffusive stability removed:
+prob = IVP([u, v])
+add_parameters!(prob, nu=0.1)
+add_equation!(prob, "∂t(u) - nu*lap(u) = -v⋅∇(u)")
+add_equation!(prob, "∂t(v) - nu*lap(v) = 0")
+set!(u, (x, y) -> sin(x) * cos(y))
 
-```math
-\Delta t < C \frac{\Delta x}{u_{max}}
+solver = InitialValueSolver(prob, RK222(); dt=1e-3)
+
+cfl = CFL(solver; initial_dt=1e-3, cadence=5, safety=0.4, max_dt=0.01)
+add_velocity!(cfl, v)
+
+run!(solver; stop_iteration=10, cfl=cfl, progress=false)
+solver.dt   # updated by the controller
 ```
 
-Only advective CFL, not diffusive.
+### Implicit (diffusive) restriction
+
+Because the linear operator is advanced implicitly, the *diffusive* stability restriction
+(`Δt ≲ Δx²/ν`) is removed: only the advective CFL above constrains `dt`. This is the whole
+point of the IMEX splitting, and it is why all of Tarang's schemes are IMEX.
 
 ## Method Selection Guide
 
@@ -217,28 +315,48 @@ Only advective CFL, not diffusive.
 | High accuracy | RK443 | More stages, higher order |
 | Diffusion-dominated | SBDF2 | Implicit diffusion |
 | Very stiff | SBDF3/SBDF4 | Strong stability |
+| Very stiff, linear-dominated | ETD_RK222 | Exact exponential propagation of L |
+| Pure-Fourier / GPU | DiagonalIMEX_RK222 | Per-mode implicit solve, no matrix (needs an attached `SpectralLinearOperator`) |
 
 ## Performance
 
 ### Computational Cost
 
-| Method | RHS Evaluations | Linear Solves |
-|--------|-----------------|---------------|
-| RK111 | 1 | 0 |
-| RK222 | 2 | 0 |
-| RK443 | 4 | 0 |
-| CNAB2 | 1 | 1 |
-| SBDF2 | 1 | 1 |
+The RHS is evaluated once per stage; an implicit solve is needed on each stage whose
+implicit diagonal coefficient `A_implicit[s,s]` is nonzero (the ESDIRK first stage is free).
+Each IMEX-RK step then finishes with one mass-matrix solve for the update; the
+factorizations of `(M + a·dt·L)` and `M` are cached across steps and reused as long as `dt`
+is unchanged.
+
+| Method | Stages | RHS Evaluations | Implicit Solves |
+|--------|--------|-----------------|-----------------|
+| RK111 | 1 | 1 | 1 |
+| RK222 | 3 (1st explicit) | 3 | 2 |
+| RK443 | 4 (1st explicit) | 4 | 3 |
+| RKSMR | 4 (1st explicit) | 4 | 3 |
+| CNAB2 | — | 1 | 1 |
+| SBDF2 | — | 1 | 1 |
+
+For the `DiagonalIMEX_*` schemes the stage counts are the same, but each "implicit solve"
+is an element-wise division by `(1 + a·dt·L̂(k))` instead of a sparse factorization.
 
 ### Memory Requirements
 
-| Method | State Copies |
-|--------|--------------|
-| RK111 | 1 |
-| RK222 | 2 |
-| RK443 | 4 |
-| SBDF2 | 2 (history) |
-| SBDF4 | 4 (history) |
+Workspace field *sets* pre-allocated per state field (each set is one full field):
+
+| Method | Workspace Sets |
+|--------|----------------|
+| RK111 | 3 |
+| RK222 | 6 |
+| RK443 | 12 |
+| CNAB1 / CNAB2 | 2 |
+| SBDF1 – SBDF4 | 2 |
+| ETD_RK222 / ETD_CNAB2 / ETD_SBDF2 | 3 |
+| DiagonalIMEX_* | 4 |
+| everything else (RKSMR, MCNAB2, CNLF2, RKGFY, RK443_IMEX) | 2 |
+
+The multistep schemes additionally retain previous state and RHS levels (2–5, depending on
+order), which the RK schemes do not.
 
 ## See Also
 

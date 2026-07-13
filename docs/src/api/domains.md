@@ -4,7 +4,7 @@ A domain represents the spatial discretization of your problem, combining coordi
 
 ## Domain
 
-The domain class combines multiple spectral bases and manages the spatial discretization.
+The domain combines multiple spectral bases and manages the spatial discretization.
 
 **Constructor**:
 ```julia
@@ -18,21 +18,25 @@ Domain(
 - `distributor`: MPI distributor managing process distribution
 - `bases`: Tuple of spectral bases, one per coordinate dimension
 
+The process mesh belongs to the `Distributor`, not to the `Domain`. Omit `mesh=` and it is
+chosen automatically from the number of MPI ranks (in serial it is `(1,)`). If you do pass
+`mesh=`, `prod(mesh)` must equal the number of ranks — `Distributor(coords; mesh=(4,))` on one
+rank throws `ArgumentError: Mesh size 4 does not match number of processes 1`. See
+[Domains under MPI](#Domains-under-MPI) below.
+
 **Examples**:
 
 ### 1D Domain
 
 ```julia
-using Tarang, MPI
-
-MPI.Init()
+using Tarang
 
 # Setup coordinates and distributor
 coords = CartesianCoordinates("x")
-dist = Distributor(coords, mesh=(4,))
+dist = Distributor(coords; dtype=Float64, device=CPU())
 
 # Create basis
-x_basis = RealFourier(coords["x"], size=128, bounds=(0.0, 2π))
+x_basis = RealFourier(coords["x"]; size=128, bounds=(0.0, 2π))
 
 # Create domain
 domain = Domain(dist, (x_basis,))
@@ -42,11 +46,11 @@ domain = Domain(dist, (x_basis,))
 
 ```julia
 coords = CartesianCoordinates("x", "z")
-dist = Distributor(coords, mesh=(2, 2))
+dist = Distributor(coords; dtype=Float64, device=CPU())
 
 # Periodic horizontal, bounded vertical
-x_basis = RealFourier(coords["x"], size=256, bounds=(0.0, 4.0))
-z_basis = ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))
+x_basis = RealFourier(coords["x"]; size=64, bounds=(0.0, 4.0))
+z_basis = ChebyshevT(coords["z"]; size=32, bounds=(0.0, 1.0))
 
 domain = Domain(dist, (x_basis, z_basis))
 ```
@@ -55,12 +59,12 @@ domain = Domain(dist, (x_basis, z_basis))
 
 ```julia
 coords = CartesianCoordinates("x", "y", "z")
-dist = Distributor(coords, mesh=(4, 4, 2))
+dist = Distributor(coords; dtype=Float64, device=CPU())
 
 # All periodic (e.g., turbulence)
-x_basis = RealFourier(coords["x"], size=256, bounds=(0.0, 2π))
-y_basis = RealFourier(coords["y"], size=256, bounds=(0.0, 2π))
-z_basis = RealFourier(coords["z"], size=256, bounds=(0.0, 2π))
+x_basis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+y_basis = RealFourier(coords["y"]; size=32, bounds=(0.0, 2π))
+z_basis = RealFourier(coords["z"]; size=32, bounds=(0.0, 2π))
 
 domain = Domain(dist, (x_basis, y_basis, z_basis))
 ```
@@ -71,30 +75,48 @@ domain = Domain(dist, (x_basis, y_basis, z_basis))
 
 ### Basic Properties
 
+A `Domain` has exactly three user-facing fields:
+
 ```julia
-domain.distributor      # Distributor: MPI distribution
-domain.bases            # Tuple: Spectral bases
+domain.dist             # Distributor: MPI distribution
+domain.bases            # Tuple: Spectral bases, sorted by axis
 domain.dim              # Int: Number of dimensions
-domain.coords           # CoordinateSystem: Coordinate system
 ```
+
+The coordinate system is reached through the distributor (`domain.dist.coordsys`) or a single
+coordinate by name with `get_coord(domain, "x")`.
 
 ### Size Information
 
+Sizes are *functions*, not fields:
+
 ```julia
-# Global domain size (spectral modes)
-domain.global_size      # Tuple: (Nx, Ny, Nz)
+# Global grid shape (grid points)
+global_shape(domain, :g)    # (64, 32)
 
-# Global grid size (grid points)
-domain.global_grid_size # Tuple: Grid dimensions
+# Global coefficient shape — the first Fourier axis is halved by the rfft
+global_shape(domain, :c)    # (33, 32)
 
-# Local size on this MPI rank
-domain.local_size       # Tuple: Local array size
+# Local shape on this MPI rank (equals the global shape in serial)
+local_shape(domain, :g)     # (64, 32)
+local_shape(domain, :c)     # (33, 32)
 
-# Domain bounds
-domain.bounds           # Tuple of tuples: ((xmin,xmax), (ymin,ymax), ...)
+# Grid spacing per axis (minimum spacing for Chebyshev)
+grid_spacing(domain)        # [0.0625, 0.00256...]
 
-# Domain lengths
-domain.lengths          # Tuple: (Lx, Ly, Lz)
+# Domain volume (product of interval lengths)
+volume(domain)              # 4.0
+
+# Coordinate names, in axis order
+basis_names(domain)         # ["x", "z"]
+```
+
+Bounds and lengths live on the bases, in `basis.meta`:
+
+```julia
+bounds  = map(b -> b.meta.bounds, domain.bases)                       # ((0.0, 4.0), (0.0, 1.0))
+lengths = map(b -> b.meta.bounds[2] - b.meta.bounds[1], domain.bases) # (4.0, 1.0)
+sizes   = map(b -> b.meta.size, domain.bases)                         # (64, 32)
 ```
 
 ---
@@ -103,59 +125,69 @@ domain.lengths          # Tuple: (Lx, Ly, Lz)
 
 ### Grid Access
 
-```julia
-# Get grid points for each dimension
-x_grid = get_grid(domain, 1)  # First dimension
-y_grid = get_grid(domain, 2)  # Second dimension
-z_grid = get_grid(domain, 3)  # Third dimension
+Grids come from the bases plus the distributor, so the same call is correct in serial and
+distributed — it always returns *this rank's* slice.
 
-# Or access via basis
-x_grid = get_grid(domain.bases[1])
+```julia
+# All axes at once: a tuple of local 1D grid vectors
+x, z = local_grids(dist, x_basis, z_basis)
+
+# A single axis (third argument is the scale factor, 1 = no upsampling)
+x = local_grid(domain.bases[1], domain.dist, 1)
 ```
 
 ### Meshgrid Creation
 
+`create_meshgrid` returns a `Dict` keyed by coordinate name, with one full N-dimensional array
+per coordinate:
+
 ```julia
-# Create 2D meshgrid
-X, Z = meshgrid(domain)
+g = create_meshgrid(domain; on_device=false)
+X, Z = g["x"], g["z"]        # each of size (64, 32)
+```
 
-# For 3D
-X, Y, Z = meshgrid(domain)
+!!! warning "create_meshgrid is global"
+    `create_meshgrid` builds the *global* grid arrays on every rank. Under MPI they do not match
+    the local slab of a field, so broadcasting them into field data throws `DimensionMismatch`.
+    Initialize fields from `local_grids` instead — that is correct in serial and distributed.
 
-# Example: Initialize field on grid
+That idiom looks like this — correct in serial and at any rank count:
+
+```julia
 function init_temperature!(T, domain)
-    X, Z = meshgrid(domain)
-    T_grid = get_grid_data(T)
+    x, z = local_grids(domain.dist, domain.bases...)
+    Lx = domain.bases[1].meta.bounds[2] - domain.bases[1].meta.bounds[1]
+    Lz = domain.bases[2].meta.bounds[2] - domain.bases[2].meta.bounds[1]
 
-    T_grid .= @. sin(2π * X / domain.lengths[1]) * cos(π * Z / domain.lengths[2])
+    ensure_layout!(T, :g)
+    get_grid_data(T) .= sin.(2π .* x ./ Lx) .* cos.(π .* z' ./ Lz)
+    ensure_layout!(T, :c)
 
-    to_spectral!(T)
+    return T
 end
 ```
 
 ### Wavenumber Arrays
 
+Wavenumbers come from a Fourier basis, not from the domain:
+
 ```julia
-# Get wavenumber arrays
-kx = get_wavenumbers(domain, 1)
-ky = get_wavenumbers(domain, 2)
-kz = get_wavenumbers(domain, 3)
+# Physical wavenumbers k = 2πn/L, one entry per grid point
+kx = wavenumbers(x_basis)   # length 64 for the size-64 basis above: [0.0, 1.5708, 1.5708, ...]
 
-# Wavenumber magnitude
-function get_k_magnitude(domain)
-    kx = get_wavenumbers(domain, 1)
-    ky = get_wavenumbers(domain, 2)
-    kz = get_wavenumbers(domain, 3)
+# Wavenumber magnitude on a 3D Fourier domain
+function k_magnitude(domain)
+    kx, ky, kz = map(wavenumbers, domain.bases)
 
-    # 3D meshgrid of wavenumbers
     KX = reshape(kx, :, 1, 1)
     KY = reshape(ky, 1, :, 1)
     KZ = reshape(kz, 1, 1, :)
 
-    K = @. sqrt(KX^2 + KY^2 + KZ^2)
-    return K
+    return @. sqrt(KX^2 + KY^2 + KZ^2)
 end
 ```
+
+`wavenumbers` is only defined for `RealFourier` and `ComplexFourier` bases.
 
 ---
 
@@ -167,12 +199,12 @@ All directions periodic (e.g., homogeneous turbulence):
 
 ```julia
 coords = CartesianCoordinates("x", "y", "z")
-dist = Distributor(coords, mesh=(4, 4, 4))
+dist = Distributor(coords; dtype=Float64, device=CPU())
 
 bases = (
-    RealFourier(coords["x"], size=128, bounds=(0.0, 2π)),
-    RealFourier(coords["y"], size=128, bounds=(0.0, 2π)),
-    RealFourier(coords["z"], size=128, bounds=(0.0, 2π))
+    RealFourier(coords["x"]; size=32, bounds=(0.0, 2π)),
+    RealFourier(coords["y"]; size=32, bounds=(0.0, 2π)),
+    RealFourier(coords["z"]; size=32, bounds=(0.0, 2π))
 )
 
 domain = Domain(dist, bases)
@@ -188,18 +220,24 @@ Periodic in streamwise/spanwise, bounded in wall-normal:
 
 ```julia
 coords = CartesianCoordinates("x", "y", "z")
-dist = Distributor(coords, mesh=(8, 4, 2))
+dist = Distributor(coords; dtype=Float64, device=CPU())
 
 bases = (
-    RealFourier(coords["x"], size=256, bounds=(0.0, 2π)),  # Streamwise
-    RealFourier(coords["y"], size=128, bounds=(0.0, π)),   # Spanwise
-    ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))    # Wall-normal
+    RealFourier(coords["x"]; size=32, bounds=(0.0, 2π)),          # Streamwise
+    RealFourier(coords["y"]; size=16, bounds=(0.0, Float64(π))),  # Spanwise
+    ChebyshevT(coords["z"]; size=16, bounds=(0.0, 1.0))           # Wall-normal
 )
 
 domain = Domain(dist, bases)
 ```
 
 **Use cases**: Channel flow, pipe flow, boundary layers
+
+`bounds` must be a `Tuple{Float64, Float64}`: `bounds=(0.0, π)` throws a `TypeError` because `π`
+is an `Irrational`. Write `(0.0, 2π)` (already a `Float64`) or `(0.0, Float64(π))`.
+
+This axis order (bounded axis last) is the **serial** one. Under MPI the Chebyshev axis must come
+*first* — see [Domains under MPI](#Domains-under-MPI).
 
 ---
 
@@ -209,11 +247,11 @@ Periodic horizontal, bounded vertical:
 
 ```julia
 coords = CartesianCoordinates("x", "z")
-dist = Distributor(coords, mesh=(4, 2))
+dist = Distributor(coords; dtype=Float64, device=CPU())
 
 bases = (
-    RealFourier(coords["x"], size=256, bounds=(0.0, 4.0)),  # Horizontal
-    ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))     # Vertical
+    RealFourier(coords["x"]; size=64, bounds=(0.0, 4.0)),  # Horizontal
+    ChebyshevT(coords["z"]; size=32, bounds=(0.0, 1.0))    # Vertical
 )
 
 domain = Domain(dist, bases)
@@ -223,85 +261,87 @@ domain = Domain(dist, bases)
 
 ---
 
-### Spherical Domains
+### Non-Cartesian Domains
 
-For problems in spherical geometry:
+!!! note
+    `CartesianCoordinates` is the only coordinate system implemented. `SphericalCoordinates` and
+    other curvilinear systems are planned but do not exist yet, so there is no spherical-shell or
+    polar domain, and no metric/Jacobian machinery behind `grad`, `div`, `curl`.
+
+You can still name Cartesian coordinates anything you like and mix bases freely — but the
+operators remain Cartesian; no curvature terms are added:
 
 ```julia
-coords = SphericalCoordinates()
-dist = Distributor(coords, mesh=(2, 2, 2))
+# Chebyshev × Fourier, with coordinates named "r" and "theta".
+# The metric is still Cartesian: ∇ is (∂r, ∂theta), NOT (∂r, (1/r)∂theta).
+coords = CartesianCoordinates("r", "theta")
+dist = Distributor(coords; dtype=Float64, device=CPU())
 
 bases = (
-    ChebyshevT(coords["r"], size=64, bounds=(0.5, 1.0)),      # Radius
-    RealFourier(coords["theta"], size=128, bounds=(0.0, π)),  # Polar
-    RealFourier(coords["phi"], size=256, bounds=(0.0, 2π))    # Azimuthal
+    ChebyshevT(coords["r"]; size=32, bounds=(0.0, 1.0)),
+    RealFourier(coords["theta"]; size=64, bounds=(0.0, 2π))
 )
 
 domain = Domain(dist, bases)
 ```
 
-**Use cases**: Spherical shells, planetary cores, stellar interiors
-
 ---
 
 ## Multi-Domain Problems
 
-Some problems require multiple domains (e.g., domain decomposition, multi-scale):
+Some problems require multiple domains (e.g., multi-scale, coarse/fine comparison). Domains are
+cheap to build and can share a distributor:
 
 ```julia
+coords = CartesianCoordinates("x", "z")
+dist = Distributor(coords; dtype=Float64, device=CPU())
+
 # Coarse domain for large scales
-coords_coarse = CartesianCoordinates("x", "z")
-dist_coarse = Distributor(coords_coarse, mesh=(2, 2))
-bases_coarse = (
-    RealFourier(coords_coarse["x"], size=64, bounds=(0.0, 4.0)),
-    ChebyshevT(coords_coarse["z"], size=32, bounds=(0.0, 1.0))
-)
-domain_coarse = Domain(dist_coarse, bases_coarse)
+domain_coarse = Domain(dist, (
+    RealFourier(coords["x"]; size=32, bounds=(0.0, 4.0)),
+    ChebyshevT(coords["z"]; size=16, bounds=(0.0, 1.0))
+))
 
 # Fine domain for small scales
-dist_fine = Distributor(coords_coarse, mesh=(4, 4))
-bases_fine = (
-    RealFourier(coords_coarse["x"], size=256, bounds=(0.0, 4.0)),
-    ChebyshevT(coords_coarse["z"], size=128, bounds=(0.0, 1.0))
-)
-domain_fine = Domain(dist_fine, bases_fine)
+domain_fine = Domain(dist, (
+    RealFourier(coords["x"]; size=128, bounds=(0.0, 4.0)),
+    ChebyshevT(coords["z"]; size=64, bounds=(0.0, 1.0))
+))
 ```
 
 ---
 
 ## Domain Utilities
 
-### Volume Element
+### Integration
+
+Quadrature weights are per-axis vectors from `integration_weights`; the domain integral of a
+field is `integrate`:
 
 ```julia
-# Get volume element (dV)
-dV = get_volume_element(domain)
+w = integration_weights(domain; on_device=false)   # one weight vector per axis
+V = volume(domain)                                 # product of interval lengths
 
-# Useful for integrals
-function integrate(field, domain)
-    to_grid!(field)
-    data = get_grid_data(field)
-    dV = get_volume_element(domain)
-    return sum(data .* dV)
-end
+# Domain integral of a field (correct in serial and under MPI)
+total = integrate(T)
 ```
 
 ### Domain Information
 
 ```julia
-# Print domain information
 function print_domain_info(domain)
     println("Domain Information:")
     println("  Dimensions: $(domain.dim)")
-    println("  Global size: $(domain.global_size)")
-    println("  Grid size: $(domain.global_grid_size)")
-    println("  Bounds: $(domain.bounds)")
-    println("  Lengths: $(domain.lengths)")
+    println("  Grid shape: $(global_shape(domain, :g))")
+    println("  Coeff shape: $(global_shape(domain, :c))")
+    println("  Local grid shape: $(local_shape(domain, :g))")
+    println("  Volume: $(volume(domain))")
 
     for (i, basis) in enumerate(domain.bases)
-        println("  Basis $i: $(typeof(basis))")
-        println("    Size: $(basis.size)")
-        println("    Bounds: $(basis.bounds)")
+        println("  Basis $i: $(typeof(basis)) on '$(basis.meta.element_label)'")
+        println("    Size: $(basis.meta.size)")
+        println("    Bounds: $(basis.meta.bounds)")
+        println("    Dealias: $(basis.meta.dealias)")
     end
 end
 ```
@@ -309,101 +349,92 @@ end
 ### Domain Validation
 
 ```julia
-# Check domain validity
 function validate_domain(domain)
-    # Check dimensions match
+    dist = domain.dist
+
+    # One basis per axis
     @assert length(domain.bases) == domain.dim
-    @assert length(domain.distributor.mesh) == domain.dim
 
-    # Check process mesh matches
-    @assert prod(domain.distributor.mesh) == MPI.Comm_size(domain.distributor.comm)
+    # The process mesh must cover exactly the ranks in the communicator
+    @assert prod(dist.mesh) == dist.size
 
-    # Check bases match coordinates
-    for (i, basis) in enumerate(domain.bases)
-        @assert basis.coord.index == i
+    # MPI decomposes the TRAILING axes: those must be Fourier
+    if dist.size > 1
+        ndecomp = length(dist.mesh)
+        for basis in domain.bases[(end - ndecomp + 1):end]
+            @assert basis isa FourierBasis "decomposed axis '$(basis.meta.element_label)' must be Fourier"
+        end
     end
 
     println("Domain validation passed!")
 end
 ```
 
----
-
-## Domain Transformations
-
-### Coordinate Transformations
-
-For non-Cartesian geometries, coordinate transformations are handled automatically:
-
-```julia
-# Spherical coordinates example
-coords = SphericalCoordinates()
-# Metric tensor and Jacobian computed automatically
-# Operators (grad, div, curl) use correct forms
-```
-
 ### Grid Refinement
 
 ```julia
-# Create refined domain (double resolution)
-function refine_domain(domain_coarse)
-    bases_fine = map(domain_coarse.bases) do basis
-        if typeof(basis) <: RealFourier
-            RealFourier(basis.coord,
-                       size=2*basis.size,
-                       bounds=basis.bounds,
-                       dealias=basis.dealias)
-        elseif typeof(basis) <: ChebyshevT
-            ChebyshevT(basis.coord,
-                      size=2*basis.size,
-                      bounds=basis.bounds)
+function refine_domain(domain; factor=2)
+    bases_fine = map(domain.bases) do basis
+        coord = get_coord(domain, basis.meta.element_label)
+        if basis isa RealFourier
+            RealFourier(coord; size=factor * basis.meta.size,
+                        bounds=basis.meta.bounds, dealias=basis.meta.dealias)
+        elseif basis isa ChebyshevT
+            ChebyshevT(coord; size=factor * basis.meta.size,
+                       bounds=basis.meta.bounds, dealias=basis.meta.dealias)
+        else
+            error("refine_domain: unsupported basis $(typeof(basis))")
         end
     end
 
-    return Domain(domain_coarse.distributor, bases_fine)
+    return Domain(domain.dist, Tuple(bases_fine))
 end
 ```
 
 ---
 
-## Advanced Topics
+## Domains under MPI
 
-### Custom Domains
+Nothing in the domain changes under MPI — the decomposition is entirely the distributor's job —
+but two rules are hard constraints.
 
-For specialized geometries:
+### 1. The process mesh has one dimension fewer than the domain
 
-```julia
-# Define custom domain with mixed basis types
-coords = CartesianCoordinates("r", "theta")
-dist = Distributor(coords, mesh=(2, 2))
+PencilArrays decomposes the *trailing* axes and keeps the leading axis local for the FFT.
 
-bases = (
-    ChebyshevT(coords["r"], size=64, bounds=(0.0, 1.0)),  # Radial
-    RealFourier(coords["theta"], size=128, bounds=(0.0, 2π))  # Angular
-)
+| domain | `mesh=` | result |
+|---|---|---|
+| 2D | omitted | `(2,)` at 2 ranks, `(4,)` at 4 ranks — a **1D** mesh |
+| 2D | `(nprocs,)` | works — same decomposition as the automatic mesh |
+| 2D | `(2, 2)` on 4 ranks | **hard error**: `PencilFFT plan creation failed with 4 MPI processes` |
+| 3D | omitted | `(1, 2)` at 2 ranks, `(2, 2)` at 4 ranks — a **2D** mesh |
 
-domain = Domain(dist, bases)
-```
+A mesh whose rank equals the domain dimension decomposes *every* axis and leaves nothing local
+for the FFT. Just omit `mesh=` unless you have a specific reason to pin it.
 
-### Domain Decomposition
+A 16×32 (Chebyshev × Fourier) domain therefore has `local_shape(domain, :g) == (16, 16)` at 2
+ranks and `(16, 8)` at 4 ranks: only the trailing Fourier axis is split.
 
-For large problems, decompose into subdomains:
+### 2. A Chebyshev axis must come first
 
-```julia
-# Create subdomain for specific region
-function create_subdomain(domain, bounds_x, bounds_z)
-    # Extract relevant portions
-    # ... implementation depends on specific needs
-end
-```
-
-### Adaptive Mesh Refinement
+A Chebyshev transform needs the whole axis on one rank, and the trailing axes are the decomposed
+ones — so the Chebyshev axis has to be the leading one. This reverses the serial convention:
 
 ```julia
-# Refine in specific regions (advanced)
-# Would require custom basis implementation
-# Not currently built-in
+# Serial:  Domain(dist, (x_fourier, z_chebyshev))
+# MPI:     Domain(dist, (z_chebyshev, x_fourier))
+
+coords = CartesianCoordinates("z", "x")          # note the coordinate order too
+dist = Distributor(coords; dtype=Float64, device=CPU())
+z_basis = ChebyshevT(coords["z"]; size=16, bounds=(0.0, 1.0))
+x_basis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+
+domain = Domain(dist, (z_basis, x_basis))
 ```
+
+Getting this wrong is a loud error, not a silent wrong answer — building a domain with the
+Chebyshev axis last on more than one rank reports that the decomposed trailing axes are
+non-Fourier and tells you to reorder the bases.
 
 ---
 
@@ -412,33 +443,28 @@ end
 ### Memory Usage
 
 ```julia
-# Estimate memory usage
 function estimate_memory(domain)
-    bytes_per_point = 16  # Complex128
-    points = prod(domain.global_grid_size)
+    bytes_per_point = sizeof(domain.dist.dtype)
+    points = prod(global_shape(domain, :g))
     total_gb = bytes_per_point * points / 1e9
 
-    per_rank_gb = total_gb / MPI.Comm_size(domain.distributor.comm)
+    per_rank_gb = total_gb / domain.dist.size
 
-    println("Total memory: $(total_gb) GB")
+    println("Total memory per field: $(total_gb) GB")
     println("Per rank: $(per_rank_gb) GB")
 end
 ```
 
-### Optimal Domain Decomposition
+This counts one grid-space array per field; a solver also holds coefficient-space arrays
+(`global_shape(domain, :c)`) and per-stage timestepper workspace, so budget a few times this.
 
-```julia
-# Choose mesh based on domain aspect ratio
-function optimal_mesh(Nx, Ny, Nz, total_procs)
-    # Aim for cubic subdomains
-    ratio = (Nx, Ny, Nz) ./ sum([Nx, Ny, Nz])
+### Choosing a Decomposition
 
-    # Distribute processes proportionally
-    # ... heuristic for choosing mesh
-
-    return (Px, Py, Pz)
-end
-```
+The mesh rank is fixed by the domain (see above), so the only free choice is how the ranks are
+split across the trailing axes. The automatic mesh (`mesh=` omitted) balances that for you, and
+in practice it is the right answer. Whatever you choose, check what each rank actually got with
+`local_shape(domain, :g)` — a slab that is only one or two points thick along a decomposed axis
+spends most of its time in communication.
 
 ---
 

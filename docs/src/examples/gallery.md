@@ -177,6 +177,9 @@ solver = InitialValueSolver(problem, RK222(); dt=5e-3)
 **To run**:
 ```bash
 julia --project=. examples/ivp/forced_2d_turbulence.jl
+
+# The domain is all-Fourier, so this one does decompose across ranks
+mpiexec -n 4 julia --project=. examples/ivp/forced_2d_turbulence.jl
 ```
 
 ---
@@ -270,7 +273,7 @@ the momentum equation so that the Coriolis term ez×u is O(1).
 - Full 3D (x periodic, y periodic, z Chebyshev)
 - E/Pr prefactor on ∂t(u); Coriolis term `curl(u)` = ez×u
 - First-order formulation with derivative-basis lift closures (tau_u1/tau_u2, tau_θ1/tau_θ2)
-- ETD_RK222 timestepper for stiff rotating systems
+- RK222 IMEX timestepper
 - Ekman number, Prandtl number, Rayleigh number as control parameters
 
 **Code**: `examples/ivp/rotating_rayleigh_benard_3d.jl`
@@ -329,14 +332,32 @@ add_bc!(problem, "θ(z=0) = Lz");  add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "θ(z=Lz) = 0"); add_bc!(problem, "u(z=Lz) = 0")
 add_bc!(problem, "integ(p) = 0")
 
-solver = InitialValueSolver(problem, ETD_RK222(); dt=1e-3)
+solver = InitialValueSolver(problem, RK222(); dt=1e-6)
 ```
 
-**To run**:
+**The timestep is set by the buoyancy, not by the CFL condition.** `Ra*θ*ez` sits
+on the explicit side, and with `Ra = 10⁶` against the `E/Pr = 10⁻³` prefactor on
+`∂t(u)` its effective forcing is `Ra/(E/Pr) = 10⁹`. `dt = 10⁻³` — the value the
+shipped script uses — goes to `NaN` within twenty steps, at every resolution and
+with every timestepper tried (8³ and 16³; `RK222()` and `ETD_RK222()`). `dt = 10⁻⁶`
+integrates stably. Tarang also warns that `θ` appears linearly on the RHS; moving
+`- Ra*θ*ez` to the left-hand side gives the same answer but does *not* buy a
+larger step. Rescale the buoyancy (or shrink `dt`) before running this at the
+parameters above.
+
+The exponential timesteppers are not usable here either: the tau-augmented linear
+operator of this first-order formulation is singular, so `ETD_RK222()` cannot
+build its matrix exponential and warns
+(`ETD-RK222 failed: SingularException(…), falling back to RK222`) on *every*
+step. Use `RK222()` directly.
+
+**To run** — serial only. Under MPI the decomposed (trailing) axes must all be
+Fourier, so a `(x, y, z_cheb)` domain errors out at construction; and even with
+the Chebyshev axis moved to the front, the advective `-u⋅∇(u)` term needs a
+Chebyshev derivative on the explicit side, which is not supported distributed
+(see [Running with MPI](../getting_started/running_with_mpi.md)).
 ```bash
 julia --project=. examples/ivp/rotating_rayleigh_benard_3d.jl
-# or with MPI
-mpiexec -n 4 julia --project=. examples/ivp/rotating_rayleigh_benard_3d.jl
 ```
 
 **Parameters to Try**:
@@ -358,12 +379,8 @@ Canonical test case for 3D turbulence and vortex dynamics.
 - Energy spectrum analysis
 - Enstrophy tracking
 
-**Code**: See [3D Turbulence Tutorial](../tutorials/ivp_3d_turbulence.md) for complete implementation
-
-```julia
-# Run with 8 processes (2×2×2 mesh)
-mpiexec -n 8 julia examples/taylor_green_3d.jl
-```
+**Code**: See [3D Turbulence Tutorial](../tutorials/ivp_3d_turbulence.md) for a complete
+implementation — there is no standalone script for it under `examples/`.
 
 **Visualization**: Vorticity isosurfaces, energy spectra
 
@@ -413,39 +430,62 @@ Simple diffusion equation in one dimension.
 
 **Features**:
 - Single PDE
-- Dirichlet boundary conditions
+- Dirichlet boundary conditions via the tau method
 - Exact solution comparison
 - Good first example
 
 **Code**: See example below
 
-```julia
-using Tarang, MPI
+A bounded (Chebyshev) direction needs one **tau variable per boundary condition**:
+the BCs count as equations, so `IVP` must be given as many variables as there are
+equations, and the tau variables must be lifted back into the bulk equation. Two
+Dirichlet conditions ⇒ two tau variables ⇒ `IVP([T, tau_1, tau_2])`.
 
-MPI.Init()
+```julia
+using Tarang, Printf
 
 coords = CartesianCoordinates("x")
-dist = Distributor(coords; mesh=(4,), device=CPU())
+dist   = Distributor(coords; dtype=Float64, device=CPU())
 
-x = ChebyshevT(coords["x"], size=64, bounds=(0.0, 1.0))
-domain = Domain(dist, (x,))
+xbasis = ChebyshevT(coords["x"]; size=64, bounds=(0.0, 1.0))
+domain = Domain(dist, (xbasis,))
 
-T = ScalarField(dist, "T", (x,))
+T = ScalarField(domain, "T")
 
-problem = IVP([T])
-add_equation!(problem, "∂t(T) - kappa*lap(T) = 0")
-problem.namespace["kappa"] = 0.01
+# One tau variable per boundary condition, lifted onto the derivative basis
+tau_1 = ScalarField(dist, "tau_1", (), Float64)
+tau_2 = ScalarField(dist, "tau_2", (), Float64)
+lift_basis = derivative_basis(xbasis, 1)
+l1 = lift(tau_1, lift_basis, -1)
+l2 = lift(tau_2, lift_basis, -2)
 
-add_equation!(problem, "T(x=0) = 1")
-add_equation!(problem, "T(x=1) = 0")
+problem = IVP([T, tau_1, tau_2])
+add_parameters!(problem, kappa=0.01, l1=l1, l2=l2)
+add_equation!(problem, "∂t(T) - kappa*lap(T) + l1 + l2 = 0")
 
-solver = InitialValueSolver(problem, RK222(), dt=0.001)
+# Boundary conditions go through add_bc!, never add_equation!
+add_bc!(problem, "T(x=0) = 1")
+add_bc!(problem, "T(x=1) = 0")
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+# Initial condition: the steady profile 1 - x plus one decaying sine mode
+x, = local_grids(dist, xbasis)
+ensure_layout!(T, :g)
+get_grid_data(T) .= 1.0 .- x .+ 0.5 .* sin.(π .* x)
+ensure_layout!(T, :c)
 
 # run! drives the loop to stop_time using the solver's fixed dt (no CFL here).
-run!(solver; stop_time=1.0)
+run!(solver; stop_time=0.5)
 
-MPI.Finalize()
+# Exact solution: T = 1 - x + 0.5 sin(πx) exp(-κπ²t)
+ensure_layout!(T, :g)
+exact = 1.0 .- x .+ 0.5 .* sin.(π .* x) .* exp(-0.01 * π^2 * 0.5)
+@printf("max error = %.2e\n", maximum(abs, Array(get_grid_data(T)) .- exact))
 ```
+
+Prints `max error = 9.27e-12`, and the boundary values are enforced to machine
+precision (`T(x=0) = 1`, `T(x=1) = -5.2e-15`).
 
 ---
 
@@ -690,8 +730,9 @@ julia --project -e 'using Pkg; Pkg.instantiate()'
 # Run an example (serial)
 julia --project=. examples/ivp/rayleigh_benard_2d.jl
 
-# Run with MPI
-mpiexec -n 4 julia --project=. examples/ivp/rayleigh_benard_2d.jl
+# Run with MPI — only the all-Fourier examples are distributable; a Chebyshev
+# axis must stay local, which rules out the Rayleigh-Bénard / channel examples.
+mpiexec -n 4 julia --project=. examples/ivp/forced_2d_turbulence.jl
 ```
 
 ### Modifying Examples
@@ -734,18 +775,25 @@ run!(solver; stop_time=t_end, cfl=cfl,
 
 ### Post-Processing
 
-```julia
-using Plots, NetCDF
+Snapshot files are NetCDF-4 files whose variables live in **groups** (`vars`,
+`time`, `grids`), so a plain `NetCDF.ncread(file, "T")` cannot find them — read
+them with `group_ncread`. The leading axis of a task variable is the write index:
 
-# Load saved data
-T_data = ncread("output/fields.nc", "T")
+```julia
+using Plots, Tarang
+
+file   = "snapshots/snapshots_s1/snapshots_s1.nc"
+T_data = group_ncread(file, "vars", "T")        # (write, x, z)
+t      = group_ncread(file, "time", "sim_time") # (write,)
 
 # Animate
-anim = @animate for t in 1:size(T_data, 3)
-    heatmap(T_data[:, :, t]', clims=(0, 1))
+anim = @animate for n in 1:size(T_data, 1)
+    heatmap(T_data[n, :, :]', clims=(0, 1), title="t = $(t[n])")
 end
 gif(anim, "animation.gif", fps=15)
 ```
+
+`Tarang.group_variable_names(file, "vars")` lists the task names available in a file.
 
 ---
 

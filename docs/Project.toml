@@ -3,6 +3,7 @@ version = "1.0.0"
 
 [deps]
 Documenter = "e30172f5-a6a5-5a46-863b-614d45cd2de4"
+Tarang = "3caadacf-3504-43fd-90cf-12adede613ab"
 
 [compat]
 Documenter = "1"

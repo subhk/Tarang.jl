@@ -66,15 +66,17 @@
 
 ```julia
 using Pkg
-
-# Basic installation
 Pkg.add(url="https://github.com/subhk/Tarang.jl")
+```
 
-# With GPU support
-Pkg.add(["CUDA", "KernelAbstractions"])
+That is the whole installation. MPI, PencilArrays, PencilFFTs and KernelAbstractions are
+**hard dependencies** — they are installed with Tarang, and distributed runs work out of the box.
 
-# With MPI support
-Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
+GPU support is the one opt-in: CUDA is a weak dependency loaded through a package extension, so
+add it only if you want it.
+
+```julia
+Pkg.add("CUDA")     # enables the GPU backend (TarangCUDAExt)
 ```
 
 ### 1D Diffusion
@@ -89,36 +91,102 @@ problem = IVP([T])
 add_parameters!(problem, kappa=0.01)
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 
+set!(T, x -> sin(x))                            # Initial condition
 solver = InitialValueSolver(problem, RK222(); dt=0.01)
 run!(solver; stop_time=1.0)                     # That's it!
 ```
 
+The single mode `sin(x)` decays as `exp(-κt)`; after `t = 1` the solver gives
+`max|T| = 0.99004983` against the exact `0.99004983` — a relative error of 4e-12.
+
 ### 2D Rayleigh-Benard Convection
+
+A bounded (Chebyshev) direction needs the **tau method**: one tau variable per boundary
+condition, lifted into the equations. See [The Tau Method for Boundary Conditions](@ref) for the why.
 
 ```julia
 using Tarang
 
-# Channel domain: periodic in x (Fourier), bounded in z (Chebyshev)
-domain = ChannelDomain(256, 64; Lx=4.0, Lz=1.0)
+Lx, Lz = 4.0, 1.0
+Nx, Nz = 64, 32
+Rayleigh, Prandtl = 2e4, 1.0
 
-u = VectorField(domain, "u")                   # Velocity
-T = ScalarField(domain, "T")                   # Temperature
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+zbasis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
 p = ScalarField(domain, "p")                   # Pressure
+T = ScalarField(domain, "T")                   # Temperature
+u = VectorField(domain, "u")                   # Velocity
 
-problem = IVP([u, p, T])
-add_parameters!(problem, Pr=1.0, Ra=2e6)
-add_equation!(problem, "∂t(u) - Pr*Δ(u) + ∇(p) - Ra*Pr*T*ez = -u⋅∇(u)")
-add_equation!(problem, "div(u) = 0")
-add_equation!(problem, "∂t(T) - Δ(T) = -u⋅∇(T)")
-add_bc!(problem, "u(z=0) = 0")
-add_bc!(problem, "u(z=1) = 0")
-add_bc!(problem, "T(z=0) = 1")
-add_bc!(problem, "T(z=1) = 0")
+# One tau per boundary condition, carrying the Fourier bases (one per x-mode).
+tau_p  = ScalarField(dist, "tau_p",  (), Float64)          # pressure gauge
+tau_T1 = ScalarField(dist, "tau_T1", (xbasis,), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (xbasis,), Float64)
+tau_u1 = VectorField(dist, coords, "tau_u1", (xbasis,), Float64)
+tau_u2 = VectorField(dist, coords, "tau_u2", (xbasis,), Float64)
 
-solver = InitialValueSolver(problem, RK222(); dt=1e-3)
-diagnose(solver)                                # Print solver summary
-run!(solver; stop_time=10.0, log_interval=100)  # Run with progress
+# First-order reduction: grad_X = ∇X + ẑ·lift(τ)
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zbasis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
+
+problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+add_parameters!(problem, nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
+                grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
+
+add_equation!(problem, "trace(grad_u) + tau_p = 0")                                  # continuity
+add_equation!(problem, "∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)")
+add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)")
+
+# Boundary conditions go through add_bc!, never add_equation!.
+add_bc!(problem, "T(z=0) = 1")                 # hot bottom
+add_bc!(problem, "T(z=$Lz) = 0")               # cold top
+add_bc!(problem, "u(z=0) = 0")                 # no-slip
+add_bc!(problem, "u(z=$Lz) = 0")
+add_bc!(problem, "integ(p) = 0")               # pressure gauge
+
+# Conduction profile 1 - z, plus wall-damped noise to seed convection.
+x, z = local_grids(dist, xbasis, zbasis)
+fill_random!(T, "g"; seed=42, distribution="normal", scale=1e-3)
+get_grid_data(T) .*= z' .* (1.0 .- z')
+get_grid_data(T) .+= 1.0 .- z'
+ensure_layout!(T, :c)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-4)
+diagnose(solver)                               # Print solver summary
+run!(solver; stop_time=0.1, log_interval=100)
 ```
+
+Time is measured in thermal diffusion times, so `buoy = Ra·Pr` and `nu = Pr`. Over those first
+1000 steps the seeded noise grows into rolls (`max|u_z|` reaches 3.76) while the walls stay pinned
+to machine precision: `max|T(z=0) − 1| = 3.6e-15`, `max|T(z=Lz)| = 8.1e-15`.
+
+!!! warning "A fixed `dt` will not survive a stiff Rayleigh number"
+    This is a Quick Start, not a production run. Push `Rayleigh` to 2e6 with the same fixed
+    `dt=1e-4` and the velocities outrun the CFL limit — the run goes to `NaN` within ~100 steps,
+    at 64×32 *and* at 128×64. Real runs let a `CFL` controller choose `dt`
+    (`run!(solver; cfl=cfl, ...)`); see `examples/ivp/rayleigh_benard_2d.jl` for the full
+    256×64, Ra = 2e6 version.
+
+!!! warning "Boundary-condition strings are parsed by Tarang, not by Julia"
+    `add_bc!(problem, "T(z=Lz) = 0")` does **not** work: the parser resolves names against the
+    problem's variables and `add_parameters!` entries, never your script's globals. A bare global
+    warns (`Unknown variable: Lz`) and then fails the matrix build outright. Use a literal
+    (`"T(z=1) = 0"`) or interpolate the value in (`"T(z=$Lz) = 0"`) — both enforce the boundary
+    exactly.
+
+!!! note "This example is serial"
+    Two things here are serial-only. Under MPI the Chebyshev axis must come **first**
+    (`Domain(dist, (zbasis, xbasis))`) because a decomposed axis cannot hold a Chebyshev
+    transform — and per-mode tau fields (`(xbasis,)`) need the Fourier axis first, so distributed
+    runs use bare `()` taus. `-u⋅∇(T)` also puts a Chebyshev derivative on the explicit side, which
+    the distributed solver rejects. Pure-Fourier problems parallelize with no changes at all; see
+    [Running with MPI](@ref running-with-mpi).
 
 !!! tip "Pro Tip"
     Use `diagnose(solver)` at any time to inspect field layout, compiled RHS status, dealiasing mode, and memory usage.
@@ -135,6 +203,10 @@ domain = PeriodicDomain(512, 512; device=GPU(), dtype=Float32)
 field = ScalarField(domain, "u")
 forward_transform!(field)   # Uses cuFFT automatically
 ```
+
+`device` is the only line that changes: the same script with `device=CPU()` runs on the CPU, and
+`dtype=Float32` gives `ComplexF32` coefficients either way. `GPU()` needs CUDA.jl loaded — without
+it the constructor throws rather than silently falling back.
 
 ---
 
@@ -181,10 +253,9 @@ forward_transform!(field)   # Uses cuFFT automatically
 | Type | Description | Example |
 |------|-------------|---------|
 | **IVP** | Initial Value Problems | Time-dependent Navier-Stokes |
-| **BVP** | Boundary Value Problems | Steady-state solutions |
+| **LBVP** | Linear Boundary Value Problems | Poisson equation |
+| **NLBVP** | Nonlinear Boundary Value Problems | Steady nonlinear systems |
 | **EVP** | Eigenvalue Problems | Linear stability analysis |
-| **LBVP** | Linear BVPs | Poisson equation |
-| **NLBVP** | Nonlinear BVPs | Steady nonlinear systems |
 
 ## Spectral Bases
 
@@ -251,15 +322,20 @@ Depth = 1
 
 | Setup | Command | Use Case |
 |-------|---------|----------|
-| **Basic** | `Pkg.add(url="...")` | Single CPU, getting started |
-| **GPU** | `+ CUDA, KernelAbstractions` | NVIDIA GPU acceleration |
-| **MPI** | `+ MPI, PencilArrays, PencilFFTs` | Cluster computing |
-| **Full** | All of the above | Maximum flexibility |
+| **Default** | `Pkg.add(url="...")` | Single CPU **and** MPI — nothing else to install |
+| **GPU** | `Pkg.add("CUDA")` | NVIDIA GPU acceleration (loads `TarangCUDAExt`) |
+| **Cluster MPI** | `MPIPreferences.use_system_binary()` | Bind MPI.jl to the cluster's own MPI |
+
+MPI, MPIPreferences, PencilArrays, PencilFFTs and KernelAbstractions are `[deps]` of Tarang, so a
+plain install is already MPI-capable: `mpiexec -n 4 julia --project=. run.jl` works with the MPI
+binary that MPI.jl ships. Only CUDA is a `[weakdeps]` package extension.
 
 !!! note "Requirements"
     - Julia 1.10 or later
     - For GPU: NVIDIA GPU with CUDA support
-    - For MPI: OpenMPI or MPICH installed
+    - For MPI on a cluster: call `MPIPreferences.use_system_binary()` once so MPI.jl uses the
+      site's MPI (and its launcher) instead of the bundled one — see
+      [Running with MPI](@ref running-with-mpi).
 
 ---
 

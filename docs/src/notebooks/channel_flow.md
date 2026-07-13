@@ -6,72 +6,94 @@ This notebook demonstrates pressure-driven channel flow simulation.
 
 Channel flow (plane Poiseuille flow) is a fundamental benchmark for viscous flow simulations. Fluid flows between two parallel plates driven by a pressure gradient.
 
+The walls are resolved with a Chebyshev basis, the streamwise direction with a Fourier basis. Because the momentum equation carries the advection term `-u⋅∇(u)` on the explicit side, and that term contains a Chebyshev derivative, **this example is serial only** — a non-Fourier derivative in the explicit right-hand side is not supported under MPI (the solver raises a clear error on the first step). See [Running with MPI](../getting_started/running_with_mpi.md).
+
 ## Setup
 
 ```julia
 using Tarang
-using MPI
-using Plots
-
-MPI.Init()
+using Statistics   # for mean()
 ```
 
 ## Parameters
 
 ```julia
-Re = 1000.0     # Reynolds number
-dpdx = -1.0     # Pressure gradient (driving force)
-nu = 1.0 / Re   # Kinematic viscosity
-Lx = 4π         # Domain length
-Lz = 2.0        # Channel height
+Re   = 100.0            # Reynolds number (centreline velocity, half-height)
+Lx   = 4π               # Streamwise period
+Lz   = 2.0              # Channel height
+nu   = 1.0 / Re         # Kinematic viscosity
+dpdx = -8 * nu / Lz^2   # Driving pressure gradient (chosen so that u_max = 1)
 ```
 
 ## Domain
 
+The Fourier axis comes first, the Chebyshev axis last.
+
 ```julia
-coords = CartesianCoordinates("x", "z")
-dist = Distributor(coords; mesh=(1,), dtype=Float64)
+Nx, Nz = 32, 24
 
-Nx, Nz = 128, 64
-x_basis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=1.5)
-z_basis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz))
-
-domain = Domain(dist, (x_basis, z_basis))
+coords  = CartesianCoordinates("x", "z")
+dist    = Distributor(coords; dtype=Float64, device=CPU())
+x_basis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+z_basis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz), dealias=3/2)
+domain  = Domain(dist, (x_basis, z_basis))
 ```
 
 ## Fields
 
+The velocity is a `VectorField`; the pressure is a `ScalarField`. The tau fields carry
+the boundary-condition unknowns: one tau per streamwise mode (hence the `(x_basis,)`
+basis tuple), plus a scalar gauge unknown `tau_p` for the pressure.
+
 ```julia
-ux = ScalarField(dist, "ux", (x_basis, z_basis), Float64)
-uz = ScalarField(dist, "uz", (x_basis, z_basis), Float64)
-p = ScalarField(dist, "p", (x_basis, z_basis), Float64)
+p = ScalarField(domain, "p")
+u = VectorField(domain, "u")
+
+tau_p  = ScalarField(dist, "tau_p", (), Float64)
+tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,), Float64)
+tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), Float64)
 ```
 
 ## Problem Definition
 
+The wall-normal derivative is reduced to first order with a lift term, which is what makes
+the tau method work: `grad_u = ∇u + ẑ·lift(τ₁)`.
+
 ```julia
-problem = IVP([ux, uz, p])
-problem.namespace["nu"] = nu
-problem.namespace["dpdx"] = dpdx
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(z_basis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u     = grad(u) + ez * τ_lift(tau_u1)
 
-# Momentum equations
-Tarang.add_equation!(problem,
-    "∂t(ux) + ∂x(p) - nu*Δ(ux) = -ux*∂x(ux) - uz*∂z(ux) - dpdx")
-Tarang.add_equation!(problem,
-    "∂t(uz) + ∂z(p) - nu*Δ(uz) = -ux*∂x(uz) - uz*∂z(uz)")
+problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+add_parameters!(problem, nu=nu, dpdx=dpdx, ex=ex, ez=ez,
+                grad_u=grad_u, τ_lift=τ_lift)
 
-# Continuity
-Tarang.add_equation!(problem, "∂x(ux) + ∂z(uz) = 0")
+# Continuity (with pressure gauge)
+add_equation!(problem, "trace(grad_u) + tau_p = 0")
+
+# Momentum, driven by the imposed pressure gradient
+add_equation!(problem,
+    "∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u) - dpdx*ex")
 ```
+
+Names used inside an equation string must be registered with `add_parameters!` — a string
+expression cannot see plain Julia globals (an unregistered name is silently substituted
+with 0).
 
 ## Boundary Conditions
 
+Boundary conditions are declared with `add_bc!`, never with `add_equation!`: only `add_bc!`
+registers the condition with the boundary-condition manager. `$Lz` is interpolated by Julia
+before parsing, so the string the parser sees contains a numeric literal.
+
 ```julia
-# No-slip at walls
-Tarang.add_equation!(problem, "ux(z=0) = 0")    # Bottom
-Tarang.add_equation!(problem, "ux(z=$Lz) = 0")  # Top
-Tarang.add_equation!(problem, "uz(z=0) = 0")
-Tarang.add_equation!(problem, "uz(z=$Lz) = 0")
+# No-slip at both walls
+add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "u(z=$Lz) = 0")
+
+# Pressure gauge (the pressure is only defined up to a constant)
+add_bc!(problem, "integ(p) = 0")
 ```
 
 ## Analytical Solution
@@ -79,57 +101,58 @@ Tarang.add_equation!(problem, "uz(z=$Lz) = 0")
 For laminar flow, the exact solution is parabolic:
 
 ```julia
-# Poiseuille profile
-function poiseuille_profile(z, H, dpdx, nu)
-    return -dpdx / (2*nu) * z * (H - z)
-end
+poiseuille(z) = -dpdx / (2 * nu) * z * (Lz - z)
 
-# Maximum velocity
-u_max = -dpdx * Lz^2 / (8*nu)
-println("Expected u_max = $u_max")
+u_max = -dpdx * Lz^2 / (8 * nu)
+println("Expected u_max = $u_max")     # 1.0
 ```
 
 ## Initial Conditions
 
+`local_grids` returns this rank's grid vectors for each axis — use it instead of a global
+meshgrid.
+
 ```julia
-# Start from Poiseuille profile with perturbation
-z_grid = get_grid(z_basis)
-Tarang.ensure_layout!(ux, :g)
+xg, zg = local_grids(dist, x_basis, z_basis)
+ux = u.components[1]
 
-for i in 1:Nx, j in 1:Nz
-    get_grid_data(ux)[i, j] = poiseuille_profile(z_grid[j], Lz, dpdx, nu)
-end
-
-# Add small perturbation
-get_grid_data(ux) .+= 0.01 .* randn(size(get_grid_data(ux)))
-Tarang.ensure_layout!(ux, :c)
+fill_random!(ux, "g"; seed=42, distribution="normal", scale=1e-3)
+get_grid_data(ux) .*= zg' .* (Lz .- zg')   # damp the perturbation at the walls
+get_grid_data(ux) .+= poiseuille.(zg')     # laminar base flow
+ensure_layout!(u, :c)
 ```
 
 ## Solver
 
-```julia
-solver = InitialValueSolver(problem, SBDF2(); dt=1e-3)
+`CFL` is constructed from the **solver**, and velocities are added as `VectorField`s. The
+controller is then handed to `run!`, which applies it every `cadence` iterations.
 
-cfl = CFL(problem; safety=0.4)
-add_velocity!(cfl, ux)
-add_velocity!(cfl, uz)
+```julia
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+cfl = CFL(solver; initial_dt=1e-3, cadence=10, safety=0.4, max_dt=0.01)
+add_velocity!(cfl, u)
 ```
 
 ## Simulation
 
+Callbacks are `(interval, function)` tuples; the function receives the solver.
+
 ```julia
-t_end = 10.0
-
-while solver.sim_time < t_end
-    dt = compute_timestep(cfl)
-    step!(solver, dt)
-
-    if solver.iteration % 100 == 0
-        Tarang.ensure_layout!(ux, :g)
-        u_centerline = mean(get_grid_data(ux)[:, Nz÷2])
-        println("t = $(solver.sim_time), u_center = $u_centerline")
-    end
+report = s -> begin
+    ensure_layout!(u, :g)
+    uc = mean(get_grid_data(ux)[:, Nz ÷ 2])
+    println("t = $(round(s.sim_time, digits=4)), u_center = $(round(uc, digits=6))")
 end
+
+run!(solver; stop_iteration=50, cfl=cfl, callbacks=[(25, report)], progress=false)
+```
+
+Output of the run above:
+
+```
+t = 0.169, u_center = 0.995211
+t = 0.419, u_center = 0.995268
 ```
 
 ## Results
@@ -137,42 +160,32 @@ end
 ### Velocity Profile
 
 ```julia
-Tarang.ensure_layout!(ux, :g)
+ensure_layout!(u, :g)
 
 # Average over x
-u_profile = mean(get_grid_data(ux), dims=1)[:]
-z_points = get_grid(z_basis)
-
-# Analytical
-u_analytical = [poiseuille_profile(z, Lz, dpdx, nu) for z in z_points]
-
-plot(u_profile, z_points, label="Numerical")
-plot!(u_analytical, z_points, label="Analytical", linestyle=:dash)
-xlabel!("u")
-ylabel!("z")
-title!("Velocity Profile")
+u_profile    = mean(get_grid_data(ux), dims=1)[:]
+u_analytical = poiseuille.(zg)
 ```
+
+`u_profile` and `zg` are ordinary vectors, ready for the plotting package of your choice.
 
 ### Error Analysis
 
 ```julia
 error = maximum(abs.(u_profile .- u_analytical))
-println("Maximum error: $error")
+println("Maximum error: $error")     # 0.000124…
 ```
+
+The residual is the wall-damped perturbation decaying back to the laminar state. Starting
+from the exact Poiseuille profile with no perturbation, the same run reproduces it to
+`5.6e-16`, and the no-slip conditions hold to `1e-16` — the discrete steady state is the
+analytical one.
 
 ## Turbulent Channel (Higher Re)
 
-For turbulent flow, increase Reynolds number:
-
-```julia
-Re_turb = 5000
-nu_turb = 1.0 / Re_turb
-
-# Will need:
-# - Higher resolution (Nx=256, Nz=128)
-# - Longer integration time
-# - Statistical averaging
-```
+Turbulent flow needs a much larger Reynolds number (`Re = 5000`, `nu = 1/Re`), and with it a
+finer grid (`Nx = 256`, `Nz = 128`), a longer integration, and statistical averaging over the
+homogeneous `x` direction and over time. That is a production-scale run, not a notebook demo.
 
 ## Exercises
 
@@ -180,12 +193,6 @@ nu_turb = 1.0 / Re_turb
 2. **Convergence study**: How does error scale with Nz?
 3. **Add turbulence**: Re = 5000 with statistics
 4. **Couette flow**: Moving top wall instead of pressure gradient
-
-## Cleanup
-
-```julia
-MPI.Finalize()
-```
 
 ## References
 
