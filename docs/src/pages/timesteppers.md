@@ -36,14 +36,14 @@ timestepper = RK111()
 
 ### RK222
 
-Second-order, 2-stage IMEX Runge-Kutta (Ascher, Ruuth, Spiteri 1997).
+Second-order IMEX Runge-Kutta using a three-stage matched ARS tableau (an explicit first stage followed by two diagonally implicit stages).
 
 ```julia
 timestepper = RK222()
 ```
 
-- **Implicit part**: 2-stage SDIRK (γ = 1 - 1/√2)
-- **Explicit part**: 2-stage explicit RK
+- **Implicit part**: ESDIRK with γ = 1 - 1/√2 on stages 2 and 3
+- **Explicit part**: matched three-row explicit tableau with `c = [0, γ, 1]`
 - **Accuracy**: O(Δt²)
 - **Stability**: L-stable
 - **Use case**: General purpose (recommended)
@@ -61,6 +61,19 @@ timestepper = RK443()
 - **Accuracy**: O(Δt³)
 - **Stability**: L-stable
 - **Use case**: High accuracy requirements, stiff problems
+
+### RKSMR
+
+The Spalart–Moser–Rogers semi-implicit scheme, stored as an equivalent four-stage additive Runge-Kutta tableau.
+
+```julia
+timestepper = RKSMR()
+```
+
+- **Explicit part**: third-order treatment of nonlinear/advection terms
+- **Implicit part**: second-order treatment of the linear term
+- **Runtime path**: the same generic IMEX driver used by `RK222` and `RK443`
+- **Use case**: incompressible spectral DNS where the classic SMR accuracy profile is desired
 
 ## Multistep IMEX Methods
 
@@ -100,7 +113,9 @@ Concretely, for RK222 (`γ = 1 − 1/√2 ≈ 0.293`), the naive formula enforce
 
 `step_subproblem_rk!` handles this by **overriding** the BC-row entries of the stage RHS at each stage:
 
-```julia
+```
+# (pseudo-code — internal stepper logic, not user API)
+
 # After the normal accumulation:
 rhs = M*X_n + dt * Σ (A^E[i,j]*F_j − A^I[i,j]*L*X_j)
 
@@ -130,7 +145,7 @@ This per-stage refresh (gated on `has_time_dependent_bcs`, so it's free when BCs
 
 RK dispatch via `step_rk_imex!` → `step_subproblem_rk!` is the obvious path, but `CNAB1`/`CNAB2`/`SBDF1..4` also dispatch through the subproblem path whenever subproblems are available (`problem.parameters["subproblems"] !== nothing`). The dispatch happens inside each `step_<scheme>!` function: it computes the scheme's `(a, b, c)` coefficient tuples and calls the generic `step_subproblem_multistep!(state, solver, sps, a, b, c)`.
 
-This means **every IMEX stepper in Tarang** that supports the subproblem path gets DAE-correct BC handling automatically. The legacy global-matrix path in the `step_multistep.jl` file still exists for pure-periodic problems without tau fields, but it's almost never exercised in practice.
+This means every IMEX stepper that supports the subproblem path gets DAE-correct BC handling automatically. The global-matrix path is still used when subproblem decomposition is unavailable, including pure-periodic/global systems. Inhomogeneous tau BCs should use the subproblem path; the global multistep path does not carry those algebraic BC values through the same override machinery.
 
 ### Why not just always use the override
 
@@ -201,8 +216,10 @@ timestepper = ETD_CNAB2()
 
 **Algorithm:**
 ```
-u_{n+1} = exp(hL) * u_n + h * [phi_1(hL) * N_n + w * phi_2(hL) * (N_n - N_{n-1})]
 w = h_n / h_{n-1}          (timestep ratio; w = 1 for constant dt)
+u_{n+1} = exp(hL) * u_n
+          + h * phi_1(hL) * N(u_n)
+          + h * w * phi_2(hL) * (N(u_n) - N(u_{n-1}))
 ```
 
 Despite the name, the linear term is **not** treated with Crank-Nicolson — "CNAB" refers only
@@ -225,9 +242,11 @@ timestepper = ETD_SBDF2()
 ```
 
 **Algorithm:**
+Uses the same implemented variable-step two-step exponential update as `ETD_CNAB2`:
 ```
-u_{n+1} = exp(hL) * u_n + h * [phi_1(hL) * N_n + w * phi_2(hL) * (N_n - N_{n-1})]
 w = h_n / h_{n-1}
+u_{n+1} = exp(hL) * u_n + h * phi_1(hL) * N_n
+          + h * w * phi_2(hL) * (N_n - N_{n-1})
 ```
 
 This is the same second-order exponential-multistep update as `ETD_CNAB2` — both are the ETD
@@ -255,14 +274,20 @@ ETD methods use phi functions defined as:
 \phi_2(z) = \frac{e^z - 1 - z}{z^2}
 ```
 
-`phi_functions_matrix(L, dt)` computes all three at once from the assembled `L_matrix`, choosing
-its method by the operator norm `‖dt·L‖`:
+Scalar arguments use a Taylor expansion near zero (`|z| < 1e-8`), where the `e^z − 1 − z`
+numerator cancels catastrophically against the `z^2` denominator.
+
+For the matrix case, `phi_functions_matrix(L, dt)` computes all three at once from the assembled
+`L_matrix`, choosing its method by the operator norm `‖dt·L‖`:
 
 | `‖dt·L‖` | method |
 |---|---|
-| `< 1e-8` | Taylor series (the `e^z − 1 − z` numerators cancel catastrophically here) |
-| `< 50` | dense matrix exponential, with an eigendecomposition fallback when `z` is singular (the `k=0` mode of a pure diffusion operator makes it so) |
+| `< 1e-8` | Taylor series |
+| `< 50` | dense matrix exponential plus stable φ solves, with an eigendecomposition fallback when `z` is singular (the `k=0` mode of a pure diffusion operator makes it so) |
 | `≥ 50` | Krylov approximation, column by column, via `ExponentialUtilities.phiv` |
+
+Matrix ETD is rejected above size 4096 because it requires dense O(n²) storage — see the serial
+size limit below.
 
 The Krylov branch announces itself with `Warning: Matrix is large or stiff (norm=...), using
 Krylov approximation`. It is not an error — a stiff `L` is the whole point of ETD, so any useful
@@ -289,10 +314,14 @@ The result is cached and only recomputed when `dt` changes.
 You do **not** build or install a linear operator. `InitialValueSolver` runs
 `build_solver_matrices!`, which assembles `L_matrix`, `M_matrix` and `F_vector` from the
 equation strings and stores them in `problem.parameters`; the ETD steppers read `L_matrix`
-from there. Anything you write on the **left-hand side** of the equation is the linear operator
-L that gets propagated exactly; anything on the right-hand side is the nonlinear term N. So
-writing `add_equation!(problem, "∂t(T) - nu*lap(T) = 0")` is all it takes for `ETD_RK222()` to
-propagate `nu·∇²` with `exp(hL)` — see the complete example below.
+from there (and use `M_matrix` when present). Anything you write on the **left-hand side** of the
+equation is the linear operator L that gets propagated exactly; anything on the right-hand side is
+the nonlinear term N. So writing `add_equation!(problem, "∂t(T) - nu*lap(T) = 0")` is all it takes
+for `ETD_RK222()` to propagate `nu·∇²` with `exp(hL)` — see the complete example below.
+
+Because the solver assembles these matrices itself, application code should **not** invent or
+manually insert a separate `"L_matrix"`: a hand-built matrix will not share the solver's state
+ordering, and the stepper will silently propagate the wrong operator.
 
 ### Size limit (serial)
 
@@ -304,10 +333,19 @@ refuses, and the stepper emits
 > but n=8193 is too large ..."), falling back to RK222`
 
 and carries on with RK222. If you asked for ETD and see that warning, you are not getting ETD —
-reduce the resolution or switch to SBDF2. Under **MPI with a pure-Fourier
-problem** this limit does not apply: the distributed path steps each Fourier mode with its own
-scalar exponential, never forming a global matrix (verified: a 128×128 Fourier heat problem,
-8320 coefficients, steps at np=2 with no fallback).
+reduce the resolution or switch to SBDF2.
+
+### Under MPI (pure-Fourier)
+
+The serial size limit does **not** apply to a distributed pure-Fourier problem: a global dense
+matrix exponential cannot run on distributed field vectors, so the distributed path steps each
+Fourier mode with its own scalar exponential and never forms a global matrix (verified: a 128×128
+Fourier heat problem, 8320 coefficients, steps at np=2 with no fallback).
+
+The trade-off is that **all three** exported ETD types (`ETD_RK222`, `ETD_CNAB2`, `ETD_SBDF2`)
+dispatch to the same distributed per-mode ETD-RK2 implementation on that path — the distinction
+between the exponential-RK and the exponential-multistep variants is lost. If that distinction
+matters to you, use the serial global-matrix path.
 
 ### Example: 1D Heat Equation with ETD
 
@@ -358,10 +396,11 @@ maximum(abs, get_grid_data(T))      # 0.36787944 == exp(-nu*1.0), to 8 digits
 
 | Stiffness | Indicator | Recommended |
 |-----------|-----------|-------------|
-| Mild | Moderate Re | RK222, RK443 |
-| Moderate | Higher Re | CNAB2, SBDF2 |
-| Stiff | High Re, requires tiny Δt | SBDF3, SBDF4 |
-| Very stiff (diagonal L) | Extreme diffusion | ETD_RK222, ETD_SBDF2 |
+| Mild | Explicit CFL dominates | RK222 |
+| Moderate linear stiffness | Implicit linear solve permits a larger step | RK443, CNAB2, SBDF2, RKSMR |
+| Smooth solution needing higher temporal order | Fixed/slowly varying step and adequate startup history | RK443, SBDF3, SBDF4 |
+| Very stiff, manageable global matrix | Dense exponential is affordable | ETD_RK222, ETD_CNAB2, ETD_SBDF2 |
+| Pure-Fourier diagonal linear operator | Per-mode implicit division is available | `DiagonalIMEX_RK222`, `DiagonalIMEX_RK443`, `DiagonalIMEX_SBDF2` |
 
 ### By Physics
 
@@ -369,8 +408,8 @@ maximum(abs, get_grid_data(T))      # 0.36787944 == exp(-nu*1.0), to 8 digits
 |--------------|-------------|
 | General purpose | RK222, RK443 |
 | Diffusion-dominated | CNAB2, SBDF2 |
-| High Rayleigh number | SBDF2, SBDF3 |
-| Turbulence | RK443 or SBDF2 |
+| High Rayleigh number | RK222, RK443, or SBDF2 with CFL control |
+| Turbulence | RK443, RKSMR, or SBDF2 with CFL control |
 | Reaction-diffusion (Fourier) | ETD_RK222 |
 | Very stiff diffusion (Fourier) | ETD_SBDF2 |
 
@@ -453,20 +492,28 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 
 ## Performance Comparison
 
-| Method | Evaluations/Step | Memory | Stability |
-|--------|------------------|--------|-----------|
-| RK111 | 1 + solve | Medium | Good (L-stable) |
-| RK222 | 2 + solve | Medium | Very good (L-stable) |
-| RK443 | 4 + solve | Higher | Best (L-stable) |
-| CNAB2 | 1 + solve | Medium | Very good |
-| SBDF2 | 1 + solve | Medium | Excellent |
-| ETD_RK222 | 2 + exp(hL) | Dense n×n (serial) | Exact (linear) |
-| ETD_CNAB2 | 1 + exp(hL) | Dense n×n (serial) | Exact (linear) |
-| ETD_SBDF2 | 1 + exp(hL) | Dense n×n (serial) | Exact (linear) |
+The RK counts below are the number of stages actually driven per step. Note that `RK222` is a
+**three**-stage ESDIRK tableau (explicit first stage), so it costs three RHS evaluations, not two.
 
-The exponentials are cached and reused while `dt` is unchanged, so the O(n³) factorization is
-paid once, not per step — but the dense n×n storage is permanent (and is why serial ETD is
-capped at n = 4096 coefficients).
+| Method | RHS evaluations/step | Implicit/exponential work | Memory |
+|--------|----------------------|---------------------------|--------|
+| RK111 | 1 | 1 implicit stage solve | Medium |
+| RK222 | 3 | 2 implicit stage solves (the first stage is explicit) | Medium |
+| RK443 | 4 | 3 implicit stage solves | Higher |
+| RKSMR | 4 | 3 implicit stage solves | Higher |
+| CNAB2 | 1 | 1 implicit solve after startup | Medium |
+| SBDF2 | 1 | 1 implicit solve after startup | Medium |
+| ETD_RK222 | 2 | cached `exp(hL)`, `phi_1`, and `phi_2` actions | Dense n×n (serial) |
+| ETD_CNAB2 / ETD_SBDF2 | 1 | cached exponential/φ actions after ETD-RK2 startup | Dense n×n (serial) |
+
+The implicit factorization is cached and reused while `dt` and the operator are unchanged, so the
+factorization is paid once, not per step. Two consequences:
+
+- **Adaptive steps can cost more than fixed steps**, because changing `dt` invalidates the cached
+  factorization. (This is why `CFL` has a `threshold` ratio — it refuses to commit a new `dt` for
+  a change smaller than that, rather than refactorizing every recomputation.)
+- For ETD, the O(n³) exponential is likewise paid once per distinct `dt`, but the dense n×n
+  storage is permanent — which is why serial ETD is capped at n = 4096 coefficients.
 
 ## Example Usage
 
@@ -506,7 +553,8 @@ end
 ```
 
 Swapping `RK443()` for `SBDF2()` or `ETD_RK222()` changes nothing else and, at this timestep,
-agrees to 6 digits (`max|s| = 0.999497` after 5 steps).
+agrees to 6 digits (`max|s| = 0.999497` after 5 steps). In particular, the ETD stepper needs no
+extra setup: the problem equations already define the assembled linear operator it propagates.
 
 ## Stochastic Forcing
 

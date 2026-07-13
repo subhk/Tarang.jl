@@ -37,11 +37,12 @@ RK111()
 - Stages: 1 (all implicit)
 - Implicit part: Backward Euler for linear terms
 - Explicit part: Forward Euler for nonlinear terms
-- Memory: minimal (3 workspace field sets)
+- Workspace field sets: 3 (stage state, explicit RHS, implicit RHS)
 
 ### RK222
 
-2nd-order IMEX Runge-Kutta (Ascher, Ruuth & Spiteri 1997, ARS(2,2,2)).
+2nd-order IMEX Runge-Kutta (Ascher, Ruuth & Spiteri 1997, ARS(2,2,2)) with three stored
+stages: an explicit first stage and two diagonally implicit stages.
 
 ```julia
 RK222()
@@ -51,17 +52,16 @@ RK222()
 - Order: 2
 - Stages: 3 — an ESDIRK form whose *first* stage is explicit, so only 2 of the 3 stages
   require an implicit solve. (`RK222().stages == 3`; the explicit and implicit tableaux
-  share the abscissae `c = [0, γ, 1]` with `γ = 1 − 1/√2`, which is what makes the IMEX
-  pair 2nd order.)
-- Implicit part: L-stable ESDIRK for linear terms
-- Explicit part: explicit RK for nonlinear terms
-- Memory: 6 workspace field sets
+  share the abscissae `c = [0, γ, 1]`, which is what makes the IMEX pair 2nd order.)
+- Implicit part: L-stable ESDIRK with `γ = 1 - 1/sqrt(2)` on stages 2 and 3
+- Explicit part: matched three-row explicit tableau
+- Workspace field sets: 6 (stage state, explicit RHS, and implicit RHS storage)
 
 **Recommended for**: General purpose problems.
 
 ### RK443
 
-3rd-order IMEX Runge-Kutta (Kennedy & Carpenter ARK3(2)4L[2]SA).
+3rd-order, 4-stage IMEX Runge-Kutta (Kennedy & Carpenter ARK3(2)4L[2]SA).
 
 ```julia
 RK443()
@@ -72,7 +72,7 @@ RK443()
 - Stages: 4 — ESDIRK, first stage explicit, so 3 implicit solves per step
 - Implicit part: L-stable ESDIRK for linear terms
 - Explicit part: 4-stage explicit RK for nonlinear terms
-- Memory: 12 workspace field sets
+- Workspace field sets: 12 (three field sets per stage)
 
 **Recommended for**: High accuracy requirements.
 
@@ -114,8 +114,14 @@ SBDF4()  # 4th order
 | SBDF3 | 3 | 3 | A(α)-stable |
 | SBDF4 | 4 | 4 | A(α)-stable |
 
-Multistep schemes start from a single state, so the first few steps run at reduced order
-while the history fills.
+Multistep schemes start from a single state, so the history has to be seeded. `CNAB2` and
+`SBDF2` bootstrap with their own 1st-order member (`CNAB1` / `SBDF1`), so their first step
+is reduced order; `SBDF3` / `SBDF4` self-start with an order-3 RK443 step on the
+global-matrix path, which keeps the one-time startup error from capping the global order
+(on the per-subproblem path they still bootstrap from SBDF2/SBDF1 and are order-capped
+at 2). Only SBDF1/SBDF2 are A-stable: the higher-order members trade stability angle for
+formal order, so they suit *smooth, accuracy-limited* integration rather than the stiffest
+linear terms.
 
 ### MCNAB2 / CNLF2
 
@@ -155,14 +161,27 @@ ETD_SBDF2()  # 2nd-order exponential semi-implicit BDF
 Additive Runge-Kutta (ARK) schemes. `RKSMR` is exported; `RKGFY` and `RK443_IMEX` are
 **not**, and must be qualified.
 
+### RKSMR
+
 ```julia
-RKSMR()              # Spalart-Moser-Rogers IMEX-RK3 (explicit nonlinear, implicit C-N linear)
+RKSMR()
+```
+
+The Spalart–Moser–Rogers scheme, the workhorse IMEX integrator of incompressible spectral
+DNS. Its nonlinear/explicit part is **third order** and its linear/implicit part
+(Crank-Nicolson on the viscous term) is **second order** — that asymmetric accuracy profile
+is the standard SMR one, not an implementation limitation.
+
+It is stored in a four-stage additive-RK (ESDIRK) tableau — a trivial explicit first stage
+plus the three SMR substeps — so it shares the same generic IMEX runtime paths as `RK222`
+and `RK443`.
+
+### RKGFY / RK443_IMEX
+
+```julia
 Tarang.RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
 Tarang.RK443_IMEX()  # Same Kennedy-Carpenter coefficients as RK443; the suffix clarifies IMEX intent
 ```
-
-`RKSMR` is stored in a 4-stage ESDIRK form (a trivial explicit first stage plus the three
-SMR substeps), so it shares the generic IMEX-RK driver with `RK222` / `RK443`.
 
 ### Diagonal IMEX
 
@@ -175,7 +194,8 @@ DiagonalIMEX_SBDF2()  # 2nd order multistep
 The implicit solve is **diagonal in spectral space** — the linear operator is applied per
 Fourier mode (`(I + γ·dt·L̂)⁻¹` per wavenumber) rather than through a global matrix solve.
 Much cheaper for pure-Fourier / diagonalizable linear terms, and because the solve is an
-element-wise division there is no sparse factorization to move off-device on GPU.
+element-wise division there is no sparse factorization to move off-device on GPU. It
+requires the implicit operator to be diagonal in the chosen basis.
 
 **These schemes do not read the implicit operator from your equation.** They take it from a
 `SpectralLinearOperator` that you attach to the solver with `set_spectral_linear_operator!`:
@@ -278,9 +298,11 @@ The explicit half of every IMEX scheme is limited by the advective CFL condition
 \Delta t < C \frac{\Delta x}{u_{max}}
 ```
 
-Rather than hard-coding `C`, use the `CFL` controller, which recomputes `dt` from the grid
-spacing and the current velocity field with a `safety` factor. It is constructed from the
-**solver**, and its velocities must be `VectorField`s:
+The admissible factor `C` depends on the PDE, the spatial discretization and the scheme;
+Tarang does not define universal CFL constants for individual steppers. Rather than
+hard-coding `C`, use the `CFL` controller, which recomputes `dt` from the grid spacing and
+the current velocity field with a `safety` factor. It is constructed from the **solver**
+(never from a problem), and its velocities must be `VectorField`s:
 
 ```julia
 v = VectorField(domain, "v")
@@ -304,8 +326,10 @@ solver.dt   # updated by the controller
 ### Implicit (diffusive) restriction
 
 Because the linear operator is advanced implicitly, the *diffusive* stability restriction
-(`Δt ≲ Δx²/ν`) is removed: only the advective CFL above constrains `dt`. This is the whole
-point of the IMEX splitting, and it is why all of Tarang's schemes are IMEX.
+(`Δt ≲ Δx²/ν`) is removed. Implicit linear treatment removes the explicit diffusive limit,
+but it does **not** remove the advective CFL limit above: only advective CFL constrains
+`dt`. That is the whole point of the IMEX splitting, and it is why all of Tarang's schemes
+are IMEX.
 
 ## Method Selection Guide
 
@@ -313,10 +337,11 @@ point of the IMEX splitting, and it is why all of Tarang's schemes are IMEX.
 |--------------|--------|--------|
 | General purpose | RK222 | Balance of cost/accuracy |
 | High accuracy | RK443 | More stages, higher order |
-| Diffusion-dominated | SBDF2 | Implicit diffusion |
-| Very stiff | SBDF3/SBDF4 | Strong stability |
+| Diffusion-dominated | SBDF2 | A-stable implicit diffusion, one solve per step |
+| Smooth high-order integration | RK443 or SBDF3/SBDF4 | Higher formal order; the multistep members need startup history and are only A(α)-stable |
 | Very stiff, linear-dominated | ETD_RK222 | Exact exponential propagation of L |
-| Pure-Fourier / GPU | DiagonalIMEX_RK222 | Per-mode implicit solve, no matrix (needs an attached `SpectralLinearOperator`) |
+| Classic incompressible DNS IMEX | RKSMR | SMR explicit-third / implicit-second accuracy profile |
+| Diagonal Fourier linear operator / GPU | DiagonalIMEX family | Per-mode implicit division avoids a global sparse solve (needs an attached `SpectralLinearOperator`) |
 
 ## Performance
 
@@ -337,12 +362,17 @@ is unchanged.
 | CNAB2 | — | 1 | 1 |
 | SBDF2 | — | 1 | 1 |
 
+The multistep rows are the per-step cost once the history ring is full; the startup steps
+cost the same but run at reduced order.
+
 For the `DiagonalIMEX_*` schemes the stage counts are the same, but each "implicit solve"
 is an element-wise division by `(1 + a·dt·L̂(k))` instead of a sparse factorization.
 
 ### Memory Requirements
 
-Workspace field *sets* pre-allocated per state field (each set is one full field):
+Workspace storage is preallocated per timestepper type and reused: these are scratch
+buffers, not fresh state copies allocated on every step. Workspace field *sets* are
+allocated per state field (each set is one full field):
 
 | Method | Workspace Sets |
 |--------|----------------|
@@ -355,8 +385,8 @@ Workspace field *sets* pre-allocated per state field (each set is one full field
 | DiagonalIMEX_* | 4 |
 | everything else (RKSMR, MCNAB2, CNLF2, RKGFY, RK443_IMEX) | 2 |
 
-The multistep schemes additionally retain previous state and RHS levels (2–5, depending on
-order), which the RK schemes do not.
+The multistep schemes additionally retain previous state and RHS levels in a history ring
+(2–5 levels, depending on order), which the RK schemes do not.
 
 ## See Also
 

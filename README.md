@@ -1,7 +1,7 @@
 <h1 align="center">Tarang.jl</h1>
 
 <p align="center">
-  <strong>A High-Performance Spectral PDE Solver</strong>
+  <strong>A High-Performance (Pseudo-)Spectral PDE Solver</strong>
 </p>
 
 <p align="center">

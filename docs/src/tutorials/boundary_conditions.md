@@ -26,15 +26,26 @@ Tarang.jl uses an explicit tau-method approach for handling boundary conditions.
 
 For any problem with non-periodic boundary conditions:
 
-1. **Create tau fields** - One per boundary condition
-2. **Add tau fields to the problem** - Include them in the field list
-3. **Add lift() terms to equations** - Place tau contributions at specific modes
-4. **Specify boundary conditions** - Link each BC to its tau field
+1. **Create tau fields** — one scalar tau DOF per scalar constraint row (a BC on a
+   `VectorField` contributes one row per component, so it needs a `VectorField` tau)
+2. **Add tau fields to the problem** — include them in the field list
+3. **Add lift() terms to equations** — place tau contributions at specific modes
+4. **Specify boundary conditions** — add the algebraic constraint rows. Tau columns and
+   BC rows couple through the assembled matrix, not through a name-based link between a
+   BC and "its" tau field
 
-Every variable you declare must be matched by an equation or a BC. Tarang counts
-them and rejects the problem otherwise (`Number of equations (n) does not match
-number of variables (m)`), so a tau field that you declare but never lift into an
-equation is an error, not a harmless extra.
+Because there is no name-based pairing, the thing that keeps the system square is a
+**count**. Every variable you declare must be matched by an equation or a BC; Tarang
+checks this and rejects the problem otherwise. A tau field that you declare but never
+lift into an equation is an error, not a harmless extra.
+
+The wording of that rejection depends on the problem type, because a BVP is allowed to
+carry extra equations (its BCs) while an IVP is not:
+
+| problem | check | message |
+|---|---|---|
+| `LBVP` / `NLBVP` | `n_equations >= n_variables` | `Number of equations (2) is less than number of variables (3)` |
+| `IVP` / `EVP` | `n_equations == n_variables` | `Number of equations (7) does not match number of variables (5)` |
 
 ## Complete Example: Poisson Equation
 
@@ -87,7 +98,8 @@ solve!(solver)
 ensure_layout!(u, :g)   # solve! writes coefficients; switch to grid space to read u
 ```
 
-The solution matches `z(1 - z)` at every grid point to about `1e-16`.
+The solution matches `z(1 - z)` at every grid point to `1.4e-16`, and both walls
+come out at exactly `0.0`.
 
 !!! note "1D pure-Chebyshev BVP"
     The example above keeps a Fourier `x` axis, but a pure single-axis Chebyshev
@@ -129,18 +141,21 @@ solve!(solver)
 ensure_layout!(T, :g)
 ```
 
-With a zero source this is the conduction profile `T = 1 - z`; the walls come out
-at exactly `1.0` and `0.0`.
+With a zero source this is the conduction profile `T = 1 - z` (recovered to
+`2.5e-16`); the walls come out at exactly `1.0` and `0.0`.
 
 ### No-Slip Velocity (Vector Fields)
 
-For viscous flows at solid walls, use vector fields for compact notation. A
-second-order momentum equation needs **two** velocity tau fields per wall pair:
-one lifted into the *gradient* (`tau_u1`, giving the first-order reduction
-`grad_u = ∇u + ẑ·lift(τ)`), one lifted into the *equation* (`tau_u2`). The
-divergence constraint gets its own gauge tau, `tau_p`, matched by an `integ(p)`
-condition. This is the structure that Tarang's validator expects — every tau is
-lifted somewhere, and every tau is paid for by a BC.
+For viscous flows at solid walls, use vector fields for compact notation.
+
+The idiomatic form is a **first-order reduction**: rather than lifting two taus into a
+single second-order operator, introduce the gradient as a substitution and lift one tau
+into it. A second-order momentum equation then needs **two** velocity tau fields: one
+lifted into the *gradient* (`tau_u1`, giving `grad_u = ∇u + ẑ·lift(τ)`), one lifted into
+the *equation* (`tau_u2`). Both lifts use the **first-derivative** basis,
+`derivative_basis(z_basis, 1)` — see "Which derivative_basis order?" below. The
+divergence constraint gets its own gauge tau, `tau_p`, paid for by an `integ(p)`
+condition.
 
 ```julia
 using Tarang
@@ -154,7 +169,7 @@ dom = Domain(dist, (x_basis, z_basis))
 p = ScalarField(dom, "p")
 u = VectorField(dom, "u")
 
-# Tau fields: scalar gauge for the pressure, one vector tau per wall
+# Tau fields: scalar gauge for the pressure, one vector tau per lift site
 tau_p  = ScalarField(dist, "tau_p", (), Float64)
 tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,), Float64)
 tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), Float64)
@@ -222,7 +237,7 @@ solve!(solver)
 ensure_layout!(T, :g)
 ```
 
-The exact solution is `T = z - 1`, and the solve returns it to machine precision.
+The exact solution is `T = z - 1`, and the solve returns it to `2.5e-16`.
 
 Pair each Neumann condition with something that pins the level of the solution.
 Two Neumann conditions on a Laplacian leave the solution defined only up to a
@@ -233,9 +248,10 @@ meant.
 
 A BC applies to a **whole variable**. `add_bc!(problem, "u(z=0) = 0")` constrains
 every component of the `VectorField` `u`, and there is no string syntax that
-reaches into a single component — `"u_x(z=0) = 0"` is not recognised by the
-parser (it warns `Unknown variable: u_x` and produces a malformed, non-square
-matrix).
+reaches into a single component: `"u_x(z=0) = 0"` does not resolve to a component
+of `u`, so the four per-component strings are counted as four extra constraint
+rows and the problem fails validation (`Number of equations (7) does not match
+number of variables (5)`).
 
 To impose different conditions on different components — a stress-free wall,
 where `∂u_x/∂z = 0` but `u_z = 0` — declare the components as separate
@@ -312,7 +328,8 @@ The solve returns `T = 100 - 68.18 z`, and the Robin residual
     plain Julia global — `Tbot = 3.0` in your script, never registered — is
     **not** in scope: the BC is enforced as **zero**. It is at least loud about
     it (`Unknown variable: Tbot`, then `right-hand side … enforced as ZERO`).
-    See [Common pitfalls](#Common-pitfalls) for the full rules.
+    See [Constants and parameters in BC expressions](#Constants-and-parameters-in-BC-expressions)
+    for the full rules.
 
 ## Periodic Boundary Conditions
 
@@ -342,7 +359,7 @@ tau1 = ScalarField(dist, "tau1", (x_basis,), Float64)
 tau2 = ScalarField(dist, "tau2", (x_basis,), Float64)
 problem = LBVP([u, tau1, tau2])
 
-lb2 = derivative_basis(z_basis, 2)   # 2nd-order problem -> 2nd-derivative basis
+lb2 = derivative_basis(z_basis, 2)   # direct 2nd-order equation -> 2nd-derivative basis
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "Δ(u) + l1 + l2 = -2")
 ```
@@ -351,6 +368,30 @@ The order index `-1` lifts into the last coefficient row, `-2` the
 second-to-last, and so on. The number of taus (and lift terms) must match the
 operator order in the bounded direction.
 
+### Which derivative_basis order?
+
+The lift basis order follows the order of the operator you are lifting **into**, and
+that depends on which formulation you wrote:
+
+| Formulation | Lift basis | Tau layout |
+|---|---|---|
+| Direct 2nd-order equation, e.g. `Δ(u) + l1 + l2 = f` | `derivative_basis(z_basis, 2)` | two taus, lifted at `-1` and `-2` |
+| First-order reduction, `grad_u = grad(u) + ez*lift(tau_u1, …, -1)` then `div(grad_u)` | `derivative_basis(z_basis, 1)` | two taus, each lifted at `-1` — one into the gradient, one into the equation |
+| Direct 4th-order equation (∇⁴) | `derivative_basis(z_basis, 4)` | four taus, lifted at `-1 … -4` |
+
+The first-order reduction is **order 1, not 2** — this is the form used in the IVP
+examples below and in the Rayleigh-Bénard tutorial. Both formulations spend the same
+budget: two taus and two BCs per field per wall pair.
+
+!!! note "The basis argument is bookkeeping; the mode index is what assembles"
+    `subproblem_matrix(::Lift, …)` builds the lift column from the subproblem's own
+    Chebyshev basis and the mode index `-k` alone — the `derivative_basis(…)` object you
+    pass is not consulted when the matrix is assembled. Passing the wrong order therefore
+    does **not** raise an error, and the 2nd-order Poisson example above returns a
+    bit-identical answer with `derivative_basis(z_basis, 1)`. Get the order right anyway:
+    it documents the formulation, and it is what the rest of the framework (and any
+    future matrix builder) will read.
+
 ### Mode Selection Guidelines
 
 | Operator Order | Number of BCs | Number of lift() terms | derivative_basis order | Lift indices  |
@@ -358,11 +399,6 @@ operator order in the bounded direction.
 | 1st (∂/∂z)     | 1             | 1                      | 1                      | -1            |
 | 2nd (∂²/∂z²)   | 2             | 2                      | 2                      | -1, -2        |
 | 4th (∇⁴)       | 4             | 4                      | 4                      | -1, -2, -3, -4|
-
-The first-order reduction used in the IVP examples below is an equivalent way to
-spend the same budget: instead of two lifts into one 2nd-order equation, it puts
-one lift into the gradient (`tau_u1`) and one into the equation (`tau_u2`). Both
-forms consume two taus and two BCs.
 
 ### Example: Fourth-Order Problem
 
@@ -399,23 +435,23 @@ ensure_layout!(u, :g)
 ```
 
 The clamped beam with a unit load has the exact solution `u = z²(1-z)²/24`, which
-the solve reproduces to about `1e-18`.
+the solve reproduces to `1.4e-18`.
 
 ## Complete Examples
 
 ### Channel Flow (Poiseuille Flow)
 
-A channel driven by a constant body force. The force must be a real
-`VectorField` on the domain: a bare unit vector (`ex` from
-`unit_vector_fields`), or a parameter times one, contributes **nothing** on the
-explicit right-hand side.
+A channel driven by a constant pressure gradient. The forcing enters the explicit
+right-hand side as a parameter times a unit vector, `- dpdx*ex`; the scalar coefficient
+is honoured (doubling `dpdx` doubles the start-up velocity).
 
 ```julia
 using Tarang
 
 Lx, Lz = 2π, 1.0
 Nx, Nz = 16, 16
-nu = 0.01
+nu   = 0.01
+dpdx = -1.0
 
 coords = CartesianCoordinates("x", "z")
 dist   = Distributor(coords; dtype=Float64, device=CPU())
@@ -426,40 +462,48 @@ dom = Domain(dist, (x_basis, z_basis))
 p = ScalarField(dom, "p")
 u = VectorField(dom, "u")
 
+# First-order tau fields
 tau_p  = ScalarField(dist, "tau_p", (), Float64)
 tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,), Float64)
 tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), Float64)
 
-# Streamwise body force F = (1, 0): the driving pressure gradient
-F = VectorField(dom, "F")
-ensure_layout!(F.components[1], :g)
-get_grid_data(F.components[1]) .= 1.0
-ensure_layout!(F.components[1], :c)
-
+# First-order viscous operator
 ex, ez     = unit_vector_fields(coords, dist)
 lift_basis = derivative_basis(z_basis, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_u     = grad(u) + ez * τ_lift(tau_u1)
 
-problem = IVP([p, u, tau_p, tau_u1, tau_u2])
-add_parameters!(problem, nu=nu, ez=ez, F=F, grad_u=grad_u, τ_lift=τ_lift)
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+add_parameters!(problem, nu=nu, dpdx=dpdx, ex=ex, grad_u=grad_u, τ_lift=τ_lift)
 
+# Continuity with tau_p (removes degeneracy)
 add_equation!(problem, "trace(grad_u) + tau_p = 0")
-add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u) + F")
+
+# Momentum (vector form) — dpdx is the driving pressure gradient
+add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u) - dpdx*ex")
 
 # No-slip at both walls (vector notation)
 add_bc!(problem, "u(z=0) = 0")
 add_bc!(problem, "u(z=1) = 0")
-add_bc!(problem, "integ(p) = 0")
+add_bc!(problem, "integ(p) = 0")   # pressure gauge
 
 solver = InitialValueSolver(problem, RK222(); dt=1e-3)
 run!(solver; stop_iteration=50, progress=false)
 ```
 
 Starting from rest, the flow is still in its linear start-up phase after 50 steps
-(`t = 0.05`): the measured peak is `max u_x = 0.0500`, matching `F·t = 0.05`, and
-no-slip holds at both walls to about `7e-18`. The steady Poiseuille profile it is
-heading for is `u_x = F·z(Lz - z) / (2ν)`, which takes `t ≫ Lz²/ν` to establish.
+(`t = 0.05`): the measured peak is `max u_x = 0.0500`, matching `|dpdx|·t = 0.05`, and
+no-slip holds at both walls to `7e-18`. The steady Poiseuille profile it is heading for
+is `u_x = |dpdx|·z(Lz - z) / (2ν)`, which takes `t ≫ Lz²/ν` to establish.
+
+!!! note "Two things to know about this forcing"
+    * A **non-uniform** body force cannot be written as `parameter * unit_vector`. Build a
+      real `VectorField` on the domain, fill its components in grid space, and register it
+      with `add_parameters!(problem, F=F)`; then write `… = -u⋅∇(u) + F`.
+    * Naming the parameter `dpdx` trips a false-positive parser warning —
+      `Linear term on RHS: 'p' appears linearly on RHS` — because the name *contains* the
+      variable name `p`. It is harmless (the run above is correct); rename the parameter
+      (e.g. `fx`) if you want a clean log.
 
 ### Rayleigh-Bénard Convection
 
@@ -489,6 +533,7 @@ tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 tau_u1 = VectorField(dist, coords, "tau_u1", (x_basis,), Float64)
 tau_u2 = VectorField(dist, coords, "tau_u2", (x_basis,), Float64)
 
+# First-order substitutions (lift basis order 1)
 ex, ez     = unit_vector_fields(coords, dist)
 lift_basis = derivative_basis(z_basis, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
@@ -524,15 +569,16 @@ run!(solver; stop_iteration=20, progress=false)
 
 After 20 steps the buoyancy is driving a weak vertical flow
 (`max|u_z| = 7.6e-3`), and the wall temperatures hold to machine precision:
-`max|T(z=0) - 1| = 0.0`, `max|T(z=Lz)| = 1.4e-17`.
+`max|T(z=0) - 1| = 0.0`, `max|T(z=Lz)| = 1.6e-17`.
 
-!!! warning "This example is serial-only"
-    The `-u⋅∇(u)` and `-u⋅∇(T)` advection terms differentiate along the Chebyshev
-    axis on the explicit side, which the distributed solver refuses (it cannot
-    take a `z` derivative when each rank owns only part of the `z` spectrum). The
-    Poisson, Robin and Neumann BVPs above are unaffected; a distributed
-    Chebyshev-Fourier IVP must keep its non-Fourier derivatives on the implicit
-    side.
+!!! warning "Run this example serially"
+    A `(Fourier x, Chebyshev z)` domain cannot be decomposed as written: Tarang stops at
+    `np ≥ 2` with *"the decomposed (trailing) axis/axes [2] are non-Fourier … a Chebyshev
+    axis cannot be decomposed"*, because the DCT needs the whole `z` axis local to each
+    rank. Putting the Chebyshev axis first gets past that guard, but the 1-D boundary tau
+    fields then hit the "MPI parallelization is not supported for 1D problems" guard. The
+    LBVPs above (Poisson, Neumann, Robin, biharmonic) are unaffected — they are solved per
+    Fourier mode.
 
 ## Time- and Space-Dependent Boundary Conditions
 
@@ -569,7 +615,7 @@ add_bc!(problem, "T(z=1) = 0")
 At solver build, `_apply_bc_values_to_equations!(solver, 0.0)` evaluates `"1.0 + 0.1*sin(2*pi*x/4.0)"` against the auto-registered global `x` coordinate array, yielding an `Nx`-long grid-space array. This is wrapped in an `ArrayOperator` and stored in `equation_data[eq_idx]["F"]`. At each stepper call, `gather_alg_F!` runs `_bc_array_projection` on this array — taking an unnormalized `FFTW.rfft` and extracting each subproblem's own Fourier-mode coefficient.
 
 The bottom-wall temperature is thus enforced at `T(x, z=0) = 1 + 0.1·sin(2πx/Lx)`
-in grid space — verified to `1.1e-16`.
+in grid space — verified to `3.3e-15`.
 
 ### Space + time dependent BC
 
@@ -577,7 +623,7 @@ in grid space — verified to `1.1e-16`.
 add_bc!(problem, "T(z=0) = 1.0 + 0.1 * sin(2*pi*x/4.0) * cos(2*pi*t)")
 ```
 
-Combines both paths. The spatial pattern is re-projected at each stage time, so the stepper always sees the correct instantaneous BC. This is what enables oscillating boundary temperature patterns, traveling thermal waves at the wall, etc. Measured after 100 steps to `t = 0.1`, the enforced wall value tracks `1 + 0.1·sin(2πx/Lx)·cos(2πt)` to `3.3e-16`.
+Combines both paths. The spatial pattern is re-projected at each stage time, so the stepper always sees the correct instantaneous BC. This is what enables oscillating boundary temperature patterns, traveling thermal waves at the wall, etc. Measured after 100 steps to `t = 0.1`, the enforced wall value tracks `1 + 0.1·sin(2πx/Lx)·cos(2πt)` to `2.0e-15`.
 
 ### 3D problems: both periodic axes
 
@@ -593,7 +639,7 @@ add_bc!(problem, "T(z=0) = sin(2*pi*x/4.0)")
 
 The broadcast-and-FFT machinery places `rfft(sin(2π x/Lx))[k_x] · Ny` at the DC
 `y` mode and zero at non-DC `y` modes, matching the grid-space meaning exactly.
-Measured error `1.1e-16` on an 8×8×8 `RealFourier` × `RealFourier` ×
+Measured error `3.3e-16` on an 8×8×8 `RealFourier` × `RealFourier` ×
 `ChebyshevT` problem.
 
 A genuinely two-axis expression works as well: it is evaluated as an `(Nx, Ny)`
@@ -609,7 +655,7 @@ add_bc!(problem, "T(z=0) = cos(2*pi*y/2.0)")
 ```
 
 On the same 8×8×8 problem the enforced wall matches the intended grid-space
-pattern to `3.3e-16` for the `y`-only form and `2.2e-16` for the `x·y` product.
+pattern to `3.3e-16` for the `y`-only form and `4.4e-16` for the `x·y` product.
 
 !!! warning "Bake the box size in as a literal, not as `Lx`/`Ly`"
     Note the `2.0` and `4.0` above rather than `Ly` and `Lx`. This is the
@@ -695,15 +741,28 @@ check_dirichlet_bc(T, "z", :right, 0.0)
 ```
 
 Run against the Rayleigh-Bénard solver above, this returns `0.0` at the hot wall
-and `1.4e-17` at the cold wall.
+and `1.6e-17` at the cold wall.
 
 ## Troubleshooting
 
-### Missing Tau Fields
+### Missing or Unused Tau Fields
 
-**Error**: `ArgumentError: Missing tau field specifications for boundary conditions`
+There is no automatic name-based pairing between a BC and a tau field. A missing lift
+column, an unused tau variable, or the wrong number of scalar tau DOFs surfaces instead
+as a **counting or shape failure**:
 
-**Solution**: Create tau fields and include lift() terms in your equations:
+| mistake | what you actually see (in the `LBVP`s above) |
+|---|---|
+| BCs but no tau fields and no lift terms | `DimensionMismatch` during matrix construction (the BC rows have no tau columns to land in, so the system is not square) |
+| a tau field declared but never lifted | `ArgumentError: Problem validation failed: Number of equations (3) is less than number of variables (4)` |
+| a BC forgotten | `ArgumentError: Problem validation failed: Number of equations (2) is less than number of variables (3)` |
+
+In an `IVP` the same two mistakes read `Number of equations (n) does not match number of
+variables (m)` instead — that is the message the per-component `VectorField` BC above
+trips.
+
+**Solution**: create the required tau fields, include every one in the problem variables,
+and reference every one through a lift term:
 
 ```julia
 # Wrong: no tau fields, no lift terms — the BCs have nothing to act through
@@ -735,7 +794,7 @@ solve!(solver)
 
 ### Under-Specified System
 
-**Error**: `ArgumentError: Problem validation failed: Number of equations (4) does not match number of variables (5)`
+**Error** (in an `LBVP`): `ArgumentError: Problem validation failed: Number of equations (4) is less than number of variables (5)`
 
 **Solution**: Every variable needs an equation. Bulk equations and BCs both count,
 so a tau field you declared but never lifted into an equation — or a BC you forgot

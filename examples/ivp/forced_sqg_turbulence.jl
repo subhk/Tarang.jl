@@ -12,9 +12,6 @@
 #   - Sharp fronts in surface buoyancy
 #   - Filamentary structures
 #
-# The key difference from 2D turbulence: the streamfunction-vorticity
-# relation uses the fractional Laplacian (-Δ)^{-1/2} instead of Δ^{-1}.
-#
 # To run:
 #     julia --project=. examples/ivp/forced_sqg_turbulence.jl
 
