@@ -28,7 +28,7 @@ The challenge: **How do we separate these efficiently?**
 
 ## Solution: Temporal Filtering
 
-Instead of explicit trajectory tracking, we use **exponential temporal filters** that run alongside the simulation. The Butterworth filter provides sharp frequency separation with only two auxiliary arrays per filtered field.
+Instead of explicit trajectory tracking, we use **exponential temporal filters** that run alongside the simulation. The Butterworth filter provides sharp frequency separation with only two state arrays (the mean $\bar{h}$ and the auxiliary $\tilde{h}$) per filtered field.
 
 ### Wave-Mean Decomposition
 
@@ -43,12 +43,18 @@ The mean $\bar{u}$ captures the slow geostrophic motion, while $u&#39;$ contains
 
 ## Complete Example Code
 
+The filters below are the only Tarang machinery this tutorial needs; the shallow water
+dynamics are a plain FFTW pseudo-spectral RK4 solver, so the example is self-contained.
+The main loop is 10,000 RK4 steps at 64², which takes roughly half a minute — shorten
+`T_final` if you only want to see the filter machinery work.
+
 ```julia
 using Tarang
 using Statistics: mean
+using Printf
 
 # =============================================================================
-# ROTATING SHALLOW WATER MODEL WITH LAGRANGIAN MEAN COMPUTATION
+# ROTATING SHALLOW WATER MODEL WITH WAVE-MEAN DECOMPOSITION
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -57,7 +63,7 @@ using Statistics: mean
 
 # Domain
 Lx, Ly = 2π, 2π        # Domain size
-Nx, Ny = 128, 128      # Resolution
+Nx, Ny = 64, 64        # Resolution
 
 # Physical constants
 f = 1.0                # Coriolis parameter
@@ -67,7 +73,6 @@ H = 1.0                # Mean depth
 
 # Derived quantities
 c = sqrt(g * H)        # Gravity wave phase speed
-ω_min = f              # Minimum wave frequency (inertial)
 T_inertial = 2π / f    # Inertial period
 
 println(&quot;Physical parameters:&quot;)
@@ -122,31 +127,33 @@ dvdy = zeros(ComplexF64, Nx, Ny)
 dηdx = zeros(ComplexF64, Nx, Ny)
 dηdy = zeros(ComplexF64, Nx, Ny)
 
-# Initial condition: Geostrophic jet + wave perturbation
+# Wave perturbation (k=2, l=2 mode)
+k_wave, l_wave = 2.0, 2.0
+ω_wave = sqrt(f^2 + c^2 * (k_wave^2 + l_wave^2))
+amplitude = 0.1
+
+# Initial condition: geostrophic jet + wave perturbation
 for i in 1:Nx, j in 1:Ny
-    # Background geostrophic jet
+    # Background geostrophic jet.
+    # Balance is f*u = -g ∂η/∂y, so u = 0.5 sin(y) ⇒ η = +(f/g) * 0.5 * cos(y).
     u[i,j] = 0.5 * sin(y[j])
     v[i,j] = 0.0
-    η[i,j] = -(f/g) * 0.5 * cos(y[j])  # Geostrophic balance
+    η[i,j] = (f/g) * 0.5 * cos(y[j])
 
-    # Add wave perturbation (k=2, l=2 mode)
-    k_wave, l_wave = 2.0, 2.0
-    ω_wave = sqrt(f^2 + c^2 * (k_wave^2 + l_wave^2))
-    amplitude = 0.1
     η[i,j] += amplitude * cos(k_wave * x[i] + l_wave * y[j])
 end
 
 println(&quot;\nInitial condition:&quot;)
 println(&quot;  Geostrophic jet: U = 0.5 sin(y)&quot;)
-println(&quot;  Wave perturbation: amplitude = 0.1&quot;)
+println(&quot;  Wave perturbation: amplitude = &quot;, amplitude)
+println(&quot;  Wave frequency ω = &quot;, round(ω_wave, digits=3))
 
 # -----------------------------------------------------------------------------
 # 4. Setup Temporal Filters
 # -----------------------------------------------------------------------------
 
-# Filter timescale: average over ~20 wave periods
-T_wave = 2π / sqrt(f^2 + c^2 * 4)  # Wave period for k=l=2
-α = 1.0 / (20 * T_wave)            # Filter parameter
+T_wave = 2π / ω_wave    # Wave period for k = l = 2
+α = 1.0 / (20 * T_wave) # Average over ~20 wave periods
 
 println(&quot;\nFilter setup:&quot;)
 println(&quot;  Wave period T_wave = &quot;, round(T_wave, digits=3))
@@ -268,9 +275,9 @@ end
 # 6. Main Time Loop
 # -----------------------------------------------------------------------------
 
-T_final = 100.0        # Total simulation time
+T_final = 100.0                   # Total simulation time (≈7 filter timescales)
 nsteps = Int(T_final / dt)
-output_interval = Int(1.0 / dt)  # Output every 1 time unit
+output_interval = Int(10.0 / dt)  # Output every 10 time units
 
 # Diagnostics storage
 times = Float64[]
@@ -369,27 +376,69 @@ println(&quot;  Wave KE:      &quot;, round(ke_final_wave, digits=6),
 
 ## Understanding the Output
 
-### Energy Partition
+### Filter spin-up
 
-The simulation separates kinetic energy into:
-- **Mean flow KE**: Energy in slow, filtered geostrophic motion
-- **Wave KE**: Energy in fast inertia-gravity oscillations
+The filters start from zero, so the mean grows in over roughly one filter timescale
+$1/\alpha \approx 14$. What you see in the diagnostic stream is the wave energy being
+handed over to the mean:
 
-Typical output after spinup:
+```
+t =  10.00 | KE_total = 6.8060e-02 | KE_mean = 2.0311e-03 | KE_wave = 4.7654e-02
+t =  20.00 | KE_total = 6.4902e-02 | KE_mean = 1.5411e-02 | KE_wave = 1.9322e-02
+t =  30.00 | KE_total = 6.0933e-02 | KE_mean = 3.6276e-02 | KE_wave = 4.3692e-03
+t =  40.00 | KE_total = 5.8691e-02 | KE_mean = 5.3346e-02 | KE_wave = 4.2893e-04
+t =  50.00 | KE_total = 5.8350e-02 | KE_mean = 6.1947e-02 | KE_wave = 1.1300e-03
+t =  60.00 | KE_total = 5.7332e-02 | KE_mean = 6.3704e-02 | KE_wave = 1.3469e-03
+t =  70.00 | KE_total = 5.5658e-02 | KE_mean = 6.1958e-02 | KE_wave = 6.0873e-04
+t =  80.00 | KE_total = 5.4461e-02 | KE_mean = 5.9197e-02 | KE_wave = 2.6110e-04
+t =  90.00 | KE_total = 5.4004e-02 | KE_mean = 5.6644e-02 | KE_wave = 7.8581e-04
+t = 100.00 | KE_total = 5.2820e-02 | KE_mean = 5.4660e-02 | KE_wave = 5.8412e-04
+```
+
+Early on, &quot;KE_wave&quot; is large simply because $\bar{u}$ is still near zero, so
+$u&#39; = u - \bar{u}$ is the *whole* flow. Only after $t \gtrsim 3/\alpha \approx 40$ is the
+decomposition meaningful.
+
+### Energy partition
+
+The final block prints:
+
 ```
 Energy partition:
-  Total KE:     0.062500
-  Mean flow KE: 0.050000 (80.0%)
-  Wave KE:      0.012500 (20.0%)
+  Total KE:     0.05282
+  Mean flow KE: 0.05466 (103.5%)
+  Wave KE:      0.000584 (1.1%)
 ```
 
-### Wave-Mean Decomposition
+Two things are worth reading carefully:
 
-The filtered mean $\bar{u}$ should recover the initial geostrophic jet:
-```julia
-# Expected: ū ≈ 0.5 sin(y) (the background jet)
-# Expected: v̄ ≈ 0 (no mean meridional flow)
+- The mean flow holds essentially all the kinetic energy and the residual wave energy is
+  ~1% of it — the filter has done its job.
+- The percentages do **not** add to 100%, and the mean flow can even exceed the
+  instantaneous total. That is expected, not a bug: the filtered mean is a weighted average
+  over the *past*, and viscosity is slowly draining the jet, so $\bar{u}$ lags a slightly
+  stronger flow than the one at time $t$. There is also no orthogonality that would force
+  $\overline{|u|^2} = |\bar{u}|^2 + |u&#39;|^2$; the cross term $\bar{u}\cdot u&#39;$ is not zero.
+
+### Wave-mean decomposition
+
+The filtered mean recovers the initial geostrophic jet:
+
 ```
+Final state statistics:
+  Mean flow:
+    max|ū| = 0.4691      # the jet is 0.5 sin(y), viscously damped and filter-lagged
+    max|v̄| = 0.0001      # no mean meridional flow, as expected
+    max|η̄| = 0.0468
+  Wave fluctuations:
+    max|u&#39;| = 0.0592
+    max|v&#39;| = 0.0458
+    max|η&#39;| = 0.0109
+```
+
+Comparing $\bar{u}$ with the analytic jet gives `max|ū − 0.5 sin(y)| ≈ 0.031`, i.e. the mean
+profile is the jet to ~6%, the deficit being the viscous decay accumulated over 100 time
+units.
 
 ---
 
@@ -400,14 +449,16 @@ The filtered mean $\bar{u}$ should recover the initial geostrophic jet:
 ```julia
 update!(filter, field, dt)  # Forward Euler
 ```
-**Stability limit**: $\Delta t \leq \sqrt{2}/\alpha$
+**Stability limit**: $\Delta t \leq \sqrt{2}/\alpha$. `update!` *throws* an `ArgumentError`
+above it rather than silently producing garbage.
 
 ### Method 2: RK2 (moderate stability)
 
 ```julia
 update!(filter, field, dt, Val(:RK2))
 ```
-**Stability limit**: $\Delta t \leq 2\sqrt{2}/\alpha$
+**Stability limit**: $\Delta t \approx 2.183/\alpha$ for the Butterworth filter. Query it
+with `max_stable_timestep(filter; method=:RK2)` (and `method=:euler` for Method 1).
 
 ### Method 3: ETD (recommended - unconditionally stable)
 
@@ -423,7 +474,8 @@ update_etd!(filter, field, coeffs)
 coeffs = precompute_imex_coefficients(filter, dt; scheme=:SBDF2)
 update_imex!(filter, (h_n, h_nm1), coeffs)
 ```
-**No stability limit!** Integrates naturally with SBDF timestepping.
+**No stability limit!** Integrates naturally with SBDF timestepping. Pass a 1-tuple
+`(h_n,)` for `:SBDF1` and a 2-tuple `(h_n, h_nm1)` for `:SBDF2`.
 
 ---
 
@@ -431,18 +483,33 @@ update_imex!(filter, (h_n, h_nm1), coeffs)
 
 ### The key parameter: α
 
-$$\alpha = \frac{1}{T_{\text{avg}}}\]</p><p><strong>Rule of thumb</strong>: <span>$T_{\text{avg}} \approx 10$</span>-<span>$100 \times T_{\text{wave}}$</span></p><table><tr><th style="text-align: right">Waves to filter</th><th style="text-align: right">Wave period</th><th style="text-align: right">Recommended α</th></tr><tr><td style="text-align: right">Inertia-gravity waves</td><td style="text-align: right"><span>$2\pi/\sqrt{f^2 + c^2 k^2}$</span></td><td style="text-align: right"><span>$\alpha = 0.05$</span>-<span>$0.1 \times$</span> wave frequency</td></tr><tr><td style="text-align: right">Near-inertial waves</td><td style="text-align: right"><span>$2\pi/f$</span></td><td style="text-align: right"><span>$\alpha \approx f/50$</span></td></tr><tr><td style="text-align: right">Internal gravity waves</td><td style="text-align: right"><span>$2\pi/N$</span></td><td style="text-align: right"><span>$\alpha \approx N/100$</span></td></tr></table><h3 id="Filter-comparison"><a class="docs-heading-anchor" href="#Filter-comparison">Filter comparison</a><a id="Filter-comparison-1"></a><a class="docs-heading-anchor-permalink" href="#Filter-comparison" title="Permalink"></a></h3><table><tr><th style="text-align: right">Filter</th><th style="text-align: right">High-freq rolloff</th><th style="text-align: right">Memory</th><th style="text-align: right">Use case</th></tr><tr><td style="text-align: right"><code>ExponentialMean</code></td><td style="text-align: right">-20 dB/decade</td><td style="text-align: right">1 array</td><td style="text-align: right">Simple averaging</td></tr><tr><td style="text-align: right"><code>ButterworthFilter</code></td><td style="text-align: right">-40 dB/decade</td><td style="text-align: right">2 arrays</td><td style="text-align: right">Sharp wave-mean separation</td></tr></table><hr/><h2 id="Extensions"><a class="docs-heading-anchor" href="#Extensions">Extensions</a><a id="Extensions-1"></a><a class="docs-heading-anchor-permalink" href="#Extensions" title="Permalink"></a></h2><h3 id="Adding-Lagrangian-Averaging"><a class="docs-heading-anchor" href="#Adding-Lagrangian-Averaging">Adding Lagrangian Averaging</a><a id="Adding-Lagrangian-Averaging-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Lagrangian-Averaging" title="Permalink"></a></h3><p>For true Lagrangian mean (following particle motion):</p><pre><code class="language-julia hljs"># Create Lagrangian filter
-lag_filter = LagrangianFilter((Nx, Ny);
-    α=α,
-    filter_type=:butterworth
-)
+$$\alpha = \frac{1}{T_{\text{avg}}}\]</p><p><strong>Rule of thumb</strong>: <span>$T_{\text{avg}} \approx 10$</span>-<span>$100 \times T_{\text{wave}}$</span></p><table><tr><th style="text-align: right">Waves to filter</th><th style="text-align: right">Wave period</th><th style="text-align: right">Recommended α</th></tr><tr><td style="text-align: right">Inertia-gravity waves</td><td style="text-align: right"><span>$2\pi/\sqrt{f^2 + c^2 k^2}$</span></td><td style="text-align: right"><span>$\alpha = 0.05$</span>-<span>$0.1 \times$</span> wave frequency</td></tr><tr><td style="text-align: right">Near-inertial waves</td><td style="text-align: right"><span>$2\pi/f$</span></td><td style="text-align: right"><span>$\alpha \approx f/50$</span></td></tr><tr><td style="text-align: right">Internal gravity waves</td><td style="text-align: right"><span>$2\pi/N$</span></td><td style="text-align: right"><span>$\alpha \approx N/100$</span></td></tr></table><p>Remember that the mean needs <span>$\sim 3/\alpha$</span> of simulated time to spin up from zero, so a long averaging window costs you a long transient.</p><h3 id="Filter-comparison"><a class="docs-heading-anchor" href="#Filter-comparison">Filter comparison</a><a id="Filter-comparison-1"></a><a class="docs-heading-anchor-permalink" href="#Filter-comparison" title="Permalink"></a></h3><table><tr><th style="text-align: right">Filter</th><th style="text-align: right">High-freq rolloff</th><th style="text-align: right">State</th><th style="text-align: right">Use case</th></tr><tr><td style="text-align: right"><code>ExponentialMean</code></td><td style="text-align: right">-20 dB/decade</td><td style="text-align: right">1 array (<code>h̄</code>)</td><td style="text-align: right">Simple averaging</td></tr><tr><td style="text-align: right"><code>ButterworthFilter</code></td><td style="text-align: right">-40 dB/decade</td><td style="text-align: right">2 arrays (<code>h̄</code>, <code>h̃</code>)</td><td style="text-align: right">Sharp wave-mean separation</td></tr></table><hr/><h2 id="Extensions"><a class="docs-heading-anchor" href="#Extensions">Extensions</a><a id="Extensions-1"></a><a class="docs-heading-anchor-permalink" href="#Extensions" title="Permalink"></a></h2><h3 id="Adding-Lagrangian-Averaging"><a class="docs-heading-anchor" href="#Adding-Lagrangian-Averaging">Adding Lagrangian Averaging</a><a id="Adding-Lagrangian-Averaging-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Lagrangian-Averaging" title="Permalink"></a></h3><p>For a true Lagrangian mean (following particle motion), <code>LagrangianFilter</code> carries a displacement field <span>$\xi$</span> alongside the flow. Two API details matter:</p><ul><li><code>update_displacement!</code> takes the velocity as <strong>one array of shape <code>(field_size..., ndim)</code></strong>, not a tuple of components. Pack <code>u</code>, <code>v</code> into a <code>(Nx, Ny, 2)</code> array.</li><li>With <code>filter_type=:butterworth</code>, <code>lagrangian_mean!</code> needs <strong>five</strong> positional arguments — the auxiliary state <code>g̃</code> is part of the two-stage Butterworth scheme: <code>lagrangian_mean!(filter, gᴸ, g̃, g, dt)</code>. (Only the <code>:exponential</code> filter takes the four-argument form.)</li></ul><p>Continuing from the state reached above, run the dynamics for another <code>nsteps</code> while advancing the Lagrangian filter:</p><pre><code class="language-julia hljs">lag_filter = LagrangianFilter((Nx, Ny); α=α, filter_type=:butterworth)
 
-# In time loop:
-update_displacement!(lag_filter, (u, v), dt)
+uv  = zeros(Nx, Ny, 2)   # velocity packed as (field_size..., ndim)
+η_L = zeros(Nx, Ny)      # Lagrangian mean of η (output, modified in place)
+η̃   = zeros(Nx, Ny)      # auxiliary Butterworth state for the tracer
 
-# Get Lagrangian mean velocity
+for step in 1:nsteps
+    step_rk4!(u, v, η, dt,
+              u_hat, v_hat, η_hat,
+              dudx, dudy, dvdx, dvdy, dηdx, dηdy,
+              plan_fft, plan_ifft, kx, ky, f, g, H, ν)
+
+    uv[:, :, 1] .= u
+    uv[:, :, 2] .= v
+    update_displacement!(lag_filter, uv, dt)
+    lagrangian_mean!(lag_filter, η_L, η̃, η, dt)
+
+    # keep the Eulerian means in step, for the Stokes drift below
+    update_etd!(u_filter, u, etd_coeffs_u)
+    update_etd!(v_filter, v, etd_coeffs_v)
+end
+
+# Lagrangian mean velocity, shape (Nx, Ny, 2)
 ū_L = get_mean_velocity(lag_filter)
+println(&quot;max|ū_L| = &quot;, round(maximum(abs.(ū_L[:, :, 1])), digits=4))   # 0.4274
+println(&quot;max|η_L| = &quot;, round(maximum(abs.(η_L)), digits=4))            # 0.0427</code></pre><p><code>get_displacement(lag_filter)</code> returns <span>$\xi$</span> itself, also shaped <code>(Nx, Ny, 2)</code>.</p><p>Note that <code>get_mean</code>, <code>get_mean_velocity</code> and <code>get_displacement</code> all hand back the filter&#39;s <em>live</em> state array rather than a copy. The loop above keeps stepping <code>u_filter</code>, so the <code>ū</code> bound back in the final-analysis block changes underneath you as it runs. <code>copy</code> the array if you want a snapshot to keep.</p><h3 id="Computing-Stokes-Drift"><a class="docs-heading-anchor" href="#Computing-Stokes-Drift">Computing Stokes Drift</a><a id="Computing-Stokes-Drift-1"></a><a class="docs-heading-anchor-permalink" href="#Computing-Stokes-Drift" title="Permalink"></a></h3><p>The Stokes drift is the difference between the Lagrangian and Eulerian means, taken component by component:</p><pre><code class="language-julia hljs">u_stokes = ū_L[:, :, 1] .- get_mean(u_filter)
+v_stokes = ū_L[:, :, 2] .- get_mean(v_filter)
 
-# Compute Lagrangian mean of a tracer
-θ_L = zeros(Nx, Ny)
-lagrangian_mean!(lag_filter, θ_L, tracer, dt)</code></pre><h3 id="Computing-Stokes-Drift"><a class="docs-heading-anchor" href="#Computing-Stokes-Drift">Computing Stokes Drift</a><a id="Computing-Stokes-Drift-1"></a><a class="docs-heading-anchor-permalink" href="#Computing-Stokes-Drift" title="Permalink"></a></h3><p>The Stokes drift is the difference between Lagrangian and Eulerian means:</p><pre><code class="language-julia hljs">u_stokes = ū_L - ū_E  # Lagrangian mean - Eulerian mean</code></pre><p>This captures wave-induced transport important for:</p><ul><li>Pollutant dispersion</li><li>Larval transport in oceans</li><li>Sea ice drift</li></ul><hr/><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li><p><strong>Minz, C., Baker, L. E., Kafiabad, H. A., &amp; Vanneste, J.</strong> (2025). Efficient Lagrangian averaging with exponential filters. <em>Phys. Rev. Fluids</em>, 10, 074902. <a href="https://doi.org/10.1103/PhysRevFluids.10.074902">DOI</a></p></li><li><p><strong>Vallis, G. K.</strong> (2017). <em>Atmospheric and Oceanic Fluid Dynamics</em> (2nd ed.). Cambridge University Press. Chapter 3: Shallow water systems.</p></li><li><p><strong>Bühler, O.</strong> (2014). <em>Waves and Mean Flows</em> (2nd ed.). Cambridge University Press.</p></li></ol><hr/><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><a href="../../pages/temporal_filters/">Temporal Filters Reference</a> - Complete API documentation</li><li><a href="../../pages/les_models/">LES Models</a> - Subgrid-scale modeling for turbulence</li><li><a href="../surface_dynamics/">Surface Dynamics</a> - SQG and other surface-confined flows</li></ul><hr/><p><em>Tutorial version 1.0 | December 2024 | Tarang.jl</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../surface_dynamics/">« Surface Dynamics</a><a class="docs-footer-nextpage" href="../../examples/gallery/">Examples Gallery »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 12 July 2026 15:23">Sunday 12 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+println(&quot;max|u_stokes| = &quot;, round(maximum(abs.(u_stokes)), digits=5))  # 0.00166
+println(&quot;max|v_stokes| = &quot;, round(maximum(abs.(v_stokes)), digits=5))  # 0.0</code></pre><p>Here the drift is small (~0.3% of the jet) because the wave amplitude is small; it is the wave-induced transport that matters for:</p><ul><li>Pollutant dispersion</li><li>Larval transport in oceans</li><li>Sea ice drift</li></ul><p>Note that <code>update_displacement!</code> and <code>lagrangian_mean!</code> use the small-displacement approximation unless you supply an <code>interpolate_fn</code> keyword that evaluates a field at the displaced positions <span>$x + \xi$</span>.</p><hr/><h2 id="References"><a class="docs-heading-anchor" href="#References">References</a><a id="References-1"></a><a class="docs-heading-anchor-permalink" href="#References" title="Permalink"></a></h2><ol><li><p><strong>Minz, C., Baker, L. E., Kafiabad, H. A., &amp; Vanneste, J.</strong> (2025). Efficient Lagrangian averaging with exponential filters. <em>Phys. Rev. Fluids</em>, 10, 074902. <a href="https://doi.org/10.1103/PhysRevFluids.10.074902">DOI</a></p></li><li><p><strong>Vallis, G. K.</strong> (2017). <em>Atmospheric and Oceanic Fluid Dynamics</em> (2nd ed.). Cambridge University Press. Chapter 3: Shallow water systems.</p></li><li><p><strong>Bühler, O.</strong> (2014). <em>Waves and Mean Flows</em> (2nd ed.). Cambridge University Press.</p></li></ol><hr/><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><a href="../../pages/temporal_filters/">Temporal Filters Reference</a> - Complete API documentation</li><li><a href="../../pages/les_models/">LES Models</a> - Subgrid-scale modeling for turbulence</li><li><a href="../surface_dynamics/">Surface Dynamics</a> - SQG and other surface-confined flows</li></ul><hr/><p><em>Tutorial version 1.0 | December 2024 | Tarang.jl</em></p></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../surface_dynamics/">« Surface Dynamics</a><a class="docs-footer-nextpage" href="../../examples/gallery/">Examples Gallery »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 13 July 2026 18:24">Monday 13 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

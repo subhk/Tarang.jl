@@ -8,40 +8,54 @@ coords = CartesianCoordinates(&quot;x&quot;)
 coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
 
 # 3D
-coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)</code></pre><h3 id="Accessing-Coordinates"><a class="docs-heading-anchor" href="#Accessing-Coordinates">Accessing Coordinates</a><a id="Accessing-Coordinates-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Coordinates" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get specific coordinate
-x = coords[&quot;x&quot;]
-z = coords[&quot;z&quot;]
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)</code></pre><h3 id="Accessing-Coordinates"><a class="docs-heading-anchor" href="#Accessing-Coordinates">Accessing Coordinates</a><a id="Accessing-Coordinates-1"></a><a class="docs-heading-anchor-permalink" href="#Accessing-Coordinates" title="Permalink"></a></h3><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
 
-# Iterate over all coordinates
-for coord in coords
-    println(coord.name)
-end
+# Get a specific coordinate, by name or by position
+x = coords[&quot;x&quot;]
+z = coords[2]
 
 # Number of dimensions
-ndim = length(coords)</code></pre><h3 id="Coordinate-Properties"><a class="docs-heading-anchor" href="#Coordinate-Properties">Coordinate Properties</a><a id="Coordinate-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Coordinate-Properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">coord = coords[&quot;x&quot;]
+ndim = coords.dim          # 2
 
-coord.name      # String: &quot;x&quot;
-coord.index     # Int: position in coordinate tuple
-coord.system    # Symbol: :cartesian</code></pre><h2 id="Distributor"><a class="docs-heading-anchor" href="#Distributor">Distributor</a><a id="Distributor-1"></a><a class="docs-heading-anchor-permalink" href="#Distributor" title="Permalink"></a></h2><p>The Distributor manages MPI process distribution across the domain.</p><pre><code class="language-julia hljs"># Create distributor
-dist = Distributor(coords; mesh=(2, 2), dtype=Float64)</code></pre><h3 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h3><ul><li><code>coords</code>: Coordinate system</li><li><code>mesh</code>: Tuple specifying MPI process grid</li><li><code>dtype</code>: Data type (Float64, Float32)</li></ul><h3 id="MPI-Process-Mesh"><a class="docs-heading-anchor" href="#MPI-Process-Mesh">MPI Process Mesh</a><a id="MPI-Process-Mesh-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Process-Mesh" title="Permalink"></a></h3><p>The mesh determines how processes are arranged:</p><pre><code class="language-julia hljs"># 4 processes in 2×2 grid
-dist = Distributor(coords; mesh=(2, 2))
+# The coordinate names, in axis order
+coords.names               # [&quot;x&quot;, &quot;z&quot;]
 
-# 8 processes: 4 in x, 2 in z
-dist = Distributor(coords; mesh=(4, 2))
+# Iterate over all coordinates
+for coord in get_coords(coords)
+    println(coord.name)
+end</code></pre><p>A <code>CartesianCoordinates</code> is not itself iterable — <code>for coord in coords</code> and <code>length(coords)</code> throw a <code>MethodError</code>. Use <code>get_coords(coords)</code> to get the <code>Vector{Coordinate}</code>, and <code>coords.dim</code> for the dimension count.</p><h3 id="Coordinate-Properties"><a class="docs-heading-anchor" href="#Coordinate-Properties">Coordinate Properties</a><a id="Coordinate-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Coordinate-Properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">coord = coords[&quot;x&quot;]
+
+coord.name         # String: &quot;x&quot;
+coord.coordsys     # The parent CartesianCoordinates object, {x,z}
+coord.dim          # Int: 1 — a Coordinate is always one-dimensional
+coord.curvilinear  # Bool: false for Cartesian</code></pre><h2 id="Distributor"><a class="docs-heading-anchor" href="#Distributor">Distributor</a><a id="Distributor-1"></a><a class="docs-heading-anchor-permalink" href="#Distributor" title="Permalink"></a></h2><p>The Distributor manages MPI process distribution across the domain.</p><pre><code class="language-julia hljs"># Create distributor — the mesh is chosen for you
+dist = Distributor(coords; dtype=Float64, device=CPU())</code></pre><h3 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h3><ul><li><code>coords</code>: Coordinate system</li><li><code>mesh</code>: Tuple specifying the MPI process grid. Optional; omit it and Tarang picks a valid mesh for the number of ranks it is launched with.</li><li><code>dtype</code>: Data type (Float64, Float32)</li><li><code>device</code>: <code>CPU()</code> or <code>GPU()</code></li></ul><h3 id="MPI-Process-Mesh"><a class="docs-heading-anchor" href="#MPI-Process-Mesh">MPI Process Mesh</a><a id="MPI-Process-Mesh-1"></a><a class="docs-heading-anchor-permalink" href="#MPI-Process-Mesh" title="Permalink"></a></h3><p>The product of the mesh dimensions must equal the number of MPI processes; anything else is an <code>ArgumentError</code> (&quot;Mesh size 4 does not match number of processes 1&quot;).</p><p>The mesh must have <strong>one dimension fewer than the domain</strong>: a 2D domain takes a 1D mesh, a 3D domain takes a 2D mesh. The FFT needs at least one axis held whole on each rank, so a mesh that decomposes every axis has nothing left to transform.</p><pre><code class="language-julia hljs">coords_2d = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+coords_3d = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)
+
+# 2D domain on 4 processes: a 1D mesh
+dist = Distributor(coords_2d; mesh=(4,))
+
+# 3D domain on 8 processes: a 2D mesh
+dist = Distributor(coords_3d; mesh=(2, 4))
 
 # Serial (single process)
-dist = Distributor(coords; mesh=(1,))</code></pre><p><strong>Guidelines:</strong></p><ul><li>Product of mesh dimensions = total MPI processes</li><li>Match mesh to domain aspect ratio</li><li>Balance communication vs. computation</li></ul><h3 id="Distributor-Properties"><a class="docs-heading-anchor" href="#Distributor-Properties">Distributor Properties</a><a id="Distributor-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Distributor-Properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">dist.coords     # Coordinate system
+dist = Distributor(coords_2d; mesh=(1,))</code></pre><p>(Each of those lines is only valid when the job is launched with that many ranks.)</p><p>Passing a 2D mesh for a 2D domain — <code>mesh=(2, 2)</code> on 4 ranks — is a hard error:</p><blockquote><p><code>PencilFFT plan creation failed with 4 MPI processes. Local FFTW fallback would produce incorrect results.</code></p></blockquote><p>The defaults are the safe choice. Omitting <code>mesh</code> gives <code>(2,)</code>, <code>(4,)</code>, <code>(8,)</code> at 2, 4 and 8 ranks for a 2D domain, and <code>(1, 2)</code>, <code>(2, 2)</code>, <code>(2, 4)</code> for a 3D domain.</p><h3 id="Distributor-Properties"><a class="docs-heading-anchor" href="#Distributor-Properties">Distributor Properties</a><a id="Distributor-Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Distributor-Properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">dist.coordsys   # Coordinate system, {x,z}
+dist.coords     # Tuple of Coordinate objects, (x, z)
+dist.dim        # Total number of dimensions
 dist.comm       # MPI communicator
 dist.rank       # This process&#39;s rank
 dist.size       # Total number of processes
-dist.mesh       # Process mesh tuple</code></pre><h2 id="Domain-Decomposition"><a class="docs-heading-anchor" href="#Domain-Decomposition">Domain Decomposition</a><a id="Domain-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Decomposition" title="Permalink"></a></h2><h3 id="Local-vs-Global-Indices"><a class="docs-heading-anchor" href="#Local-vs-Global-Indices">Local vs Global Indices</a><a id="Local-vs-Global-Indices-1"></a><a class="docs-heading-anchor-permalink" href="#Local-vs-Global-Indices" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get local indices for this process (internal function)
-local_idx = Tarang.local_indices(dist, axis, global_size)
+dist.mesh       # Process mesh tuple — (1,) in serial
+dist.dtype      # Float64</code></pre><h2 id="Domain-Decomposition"><a class="docs-heading-anchor" href="#Domain-Decomposition">Domain Decomposition</a><a id="Domain-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Domain-Decomposition" title="Permalink"></a></h2><h3 id="Local-vs-Global-Indices"><a class="docs-heading-anchor" href="#Local-vs-Global-Indices">Local vs Global Indices</a><a id="Local-vs-Global-Indices-1"></a><a class="docs-heading-anchor-permalink" href="#Local-vs-Global-Indices" title="Permalink"></a></h3><p>Tarang decomposes the <strong>trailing</strong> axes and keeps the leading axis whole on every rank. On a 2D domain the first axis is therefore always local, and only the second is split:</p><pre><code class="language-julia hljs"># 2D domain, 32×32 grid, 4 processes (mesh (4,))
+Tarang.local_indices(dist, 1, 32)   # 1:32 on every rank — axis 1 is not decomposed
+Tarang.local_indices(dist, 2, 32)   # rank 0: 1:8, rank 1: 9:16, … rank 3: 25:32</code></pre><p><code>local_indices</code> is internal. In user code, get the local extent from the field itself:</p><pre><code class="language-julia hljs">using PencilArrays
 
-# Example: axis 1 with 128 global points on 4 processes
-# Process 0: 1:32
-# Process 1: 33:64
-# Process 2: 65:96
-# Process 3: 97:128</code></pre><h3 id="Pencil-Decomposition"><a class="docs-heading-anchor" href="#Pencil-Decomposition">Pencil Decomposition</a><a id="Pencil-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Pencil-Decomposition" title="Permalink"></a></h3><p>Tarang uses pencil (slab) decomposition for efficient parallel FFTs:</p><pre><code class="nohighlight hljs">3D domain distributed across 4 processes (2×2 mesh):
+u  = ScalarField(domain, &quot;u&quot;)
+gd = get_grid_data(u)               # a PencilArray when nprocs &gt; 1
+
+PencilArrays.range_local(gd)        # rank 0 of 4: (1:32, 1:8)
+local_shape(domain, :g)             # (32, 8)
+global_shape(domain, :g)            # (32, 32)</code></pre><h3 id="Pencil-Decomposition"><a class="docs-heading-anchor" href="#Pencil-Decomposition">Pencil Decomposition</a><a id="Pencil-Decomposition-1"></a><a class="docs-heading-anchor-permalink" href="#Pencil-Decomposition" title="Permalink"></a></h3><p>Tarang uses pencil (slab) decomposition for efficient parallel FFTs. A 3D 16³ domain on 4 processes gets the auto mesh <code>(2, 2)</code>, which splits the two trailing axes and leaves the first whole, so each rank holds a 16×8×8 pencil:</p><pre><code class="nohighlight hljs">3D domain distributed across 4 processes (2×2 mesh):
 
     Process 0     Process 1
     ┌─────────┐  ┌─────────┐
@@ -54,13 +68,40 @@ local_idx = Tarang.local_indices(dist, axis, global_size)
     │ ▒▒▒▒▒▒▒ │  │ ████████ │
     │ ▒▒▒▒▒▒▒ │  │ ████████ │
     │ ▒▒▒▒▒▒▒ │  │ ████████ │
-    └─────────┘  └─────────┘</code></pre><h2 id="Coordinate-Aware-Operations"><a class="docs-heading-anchor" href="#Coordinate-Aware-Operations">Coordinate-Aware Operations</a><a id="Coordinate-Aware-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Coordinate-Aware-Operations" title="Permalink"></a></h2><h3 id="Derivatives"><a class="docs-heading-anchor" href="#Derivatives">Derivatives</a><a id="Derivatives-1"></a><a class="docs-heading-anchor-permalink" href="#Derivatives" title="Permalink"></a></h3><p>Coordinate names determine derivative operators:</p><pre><code class="language-julia hljs"># ∂x, ∂y, ∂z automatically available for Cartesian
-add_equation!(problem, &quot;∂t(u) = ∂x(T)&quot;)
+    └─────────┘  └─────────┘</code></pre><h2 id="Coordinate-Aware-Operations"><a class="docs-heading-anchor" href="#Coordinate-Aware-Operations">Coordinate-Aware Operations</a><a id="Coordinate-Aware-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Coordinate-Aware-Operations" title="Permalink"></a></h2><h3 id="Derivatives"><a class="docs-heading-anchor" href="#Derivatives">Derivatives</a><a id="Derivatives-1"></a><a class="docs-heading-anchor-permalink" href="#Derivatives" title="Permalink"></a></h3><p>Coordinate names determine derivative operators. A coordinate named <code>&quot;x&quot;</code> gives you <code>∂x</code>, one named <code>&quot;z&quot;</code> gives you <code>∂z</code>, and so on:</p><pre><code class="language-julia hljs">using Tarang
 
-# The operator name matches the coordinate name
-# coords[&quot;x&quot;] → ∂x(field)
-# coords[&quot;z&quot;] → ∂z(field)</code></pre><h3 id="Grid-Access"><a class="docs-heading-anchor" href="#Grid-Access">Grid Access</a><a id="Grid-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Access" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Get grid points for a basis
-x_grid = get_grid(x_basis)  # Returns array of x values
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+ybasis = RealFourier(coords[&quot;y&quot;]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+domain = Domain(dist, (xbasis, ybasis))
 
-# Get local grid for distributed field
-local_grid = get_local_grid(field, axis)</code></pre><h2 id="Best-Practices"><a class="docs-heading-anchor" href="#Best-Practices">Best Practices</a><a id="Best-Practices-1"></a><a class="docs-heading-anchor-permalink" href="#Best-Practices" title="Permalink"></a></h2><h3 id="Choosing-Mesh-Dimensions"><a class="docs-heading-anchor" href="#Choosing-Mesh-Dimensions">Choosing Mesh Dimensions</a><a id="Choosing-Mesh-Dimensions-1"></a><a class="docs-heading-anchor-permalink" href="#Choosing-Mesh-Dimensions" title="Permalink"></a></h3><table><tr><th style="text-align: right">Domain Shape</th><th style="text-align: right">Recommended Mesh</th></tr><tr><td style="text-align: right">Square 2D</td><td style="text-align: right">(n, n)</td></tr><tr><td style="text-align: right">Wide 2D</td><td style="text-align: right">(2n, n)</td></tr><tr><td style="text-align: right">Tall 2D</td><td style="text-align: right">(n, 2n)</td></tr><tr><td style="text-align: right">Cubic 3D</td><td style="text-align: right">(n, n, n)</td></tr><tr><td style="text-align: right">Channel 3D</td><td style="text-align: right">(2n, n, n)</td></tr></table><h3 id="Memory-Considerations"><a class="docs-heading-anchor" href="#Memory-Considerations">Memory Considerations</a><a id="Memory-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Considerations" title="Permalink"></a></h3><ul><li>Each process holds <code>global_size / num_processes</code> data</li><li>Communication overhead scales with surface area between processes</li><li>Balance process count with per-process work</li></ul><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../bases/">Bases</a>: Spectral bases for each coordinate</li><li><a href="../domains/">Domains</a>: Combining coordinates and bases</li><li><a href="../parallelism/">Parallelism</a>: MPI details</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../examples/gallery/">« Examples Gallery</a><a class="docs-footer-nextpage" href="../bases/">Bases »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 12 July 2026 15:23">Sunday 12 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+u = ScalarField(domain, &quot;u&quot;)
+T = ScalarField(domain, &quot;T&quot;)
+
+problem = IVP([u, T])
+add_parameters!(problem, nu=0.01)
+add_equation!(problem, &quot;∂t(u) - nu*lap(u) = ∂x(T)&quot;)   # ∂x — named after coords[&quot;x&quot;]
+add_equation!(problem, &quot;∂t(T) - nu*lap(T) = 0&quot;)
+
+x, y = local_grids(dist, xbasis, ybasis)
+ensure_layout!(T, :g)
+get_grid_data(T) .= sin.(x) .* cos.(y&#39;)
+ensure_layout!(T, :c)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+run!(solver; stop_iteration=5, progress=false)</code></pre><h3 id="Grid-Access"><a class="docs-heading-anchor" href="#Grid-Access">Grid Access</a><a id="Grid-Access-1"></a><a class="docs-heading-anchor-permalink" href="#Grid-Access" title="Permalink"></a></h3><p>Grids come from the basis plus the distributor, never from the basis alone — that is what makes the same code correct in serial and under MPI, since each rank gets only its own slice.</p><pre><code class="language-julia hljs"># All local grid vectors at once, in axis order
+x, y = local_grids(dist, xbasis, ybasis)      # ((16,), (16,)) in serial
+
+# One axis at a time
+x = local_grid(xbasis, dist, 1)
+
+# Spectral wavenumbers for a Fourier basis
+k = wavenumbers(xbasis)                       # physical k = 2πn/L</code></pre><p>Broadcast against these to set a field, orienting each vector along its own axis:</p><pre><code class="language-julia hljs"># 2D
+ensure_layout!(u, :g)
+get_grid_data(u) .= sin.(x) .* cos.(y&#39;)
+ensure_layout!(u, :c)
+
+# 3D
+x, y, z = local_grids(dist, xbasis, ybasis, zbasis)
+get_grid_data(v) .= sin.(x) .* cos.(y&#39;) .* sin.(reshape(z, 1, 1, :))</code></pre><p>This is the distributed-safe way to initialize a field, because each rank writes only its own slab. <code>set!(field, ::Function)</code> builds the <em>global</em> meshgrid and so is serial-only — under MPI it throws a <code>DimensionMismatch</code>. (<code>set!(field, ::Number)</code> and <code>fill_random!</code> are fine distributed.)</p><h2 id="Best-Practices"><a class="docs-heading-anchor" href="#Best-Practices">Best Practices</a><a id="Best-Practices-1"></a><a class="docs-heading-anchor-permalink" href="#Best-Practices" title="Permalink"></a></h2><h3 id="Choosing-Mesh-Dimensions"><a class="docs-heading-anchor" href="#Choosing-Mesh-Dimensions">Choosing Mesh Dimensions</a><a id="Choosing-Mesh-Dimensions-1"></a><a class="docs-heading-anchor-permalink" href="#Choosing-Mesh-Dimensions" title="Permalink"></a></h3><p>Omit <code>mesh</code> unless you have a specific reason to set it. When you do set it, the mesh rank is fixed by the domain — one less than the domain dimension — and only the split is yours to choose:</p><table><tr><th style="text-align: right">Domain</th><th style="text-align: right">Processes</th><th style="text-align: right">Valid mesh</th><th style="text-align: right">Notes</th></tr><tr><td style="text-align: right">2D</td><td style="text-align: right">4</td><td style="text-align: right"><code>(4,)</code></td><td style="text-align: right">The only shape. <code>(2, 2)</code> is an error.</td></tr><tr><td style="text-align: right">3D</td><td style="text-align: right">4</td><td style="text-align: right"><code>(2, 2)</code></td><td style="text-align: right">The auto choice; <code>(1, 4)</code> and <code>(4, 1)</code> also work.</td></tr><tr><td style="text-align: right">3D</td><td style="text-align: right">8</td><td style="text-align: right"><code>(2, 4)</code></td><td style="text-align: right">Split the two trailing axes.</td></tr></table><h3 id="Memory-Considerations"><a class="docs-heading-anchor" href="#Memory-Considerations">Memory Considerations</a><a id="Memory-Considerations-1"></a><a class="docs-heading-anchor-permalink" href="#Memory-Considerations" title="Permalink"></a></h3><ul><li>Each process holds <code>global_size / num_processes</code> data</li><li>Communication overhead scales with surface area between processes</li><li>Balance process count with per-process work</li></ul><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../bases/">Bases</a>: Spectral bases for each coordinate</li><li><a href="../domains/">Domains</a>: Combining coordinates and bases</li><li><a href="../parallelism/">Parallelism</a>: MPI details</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../examples/gallery/">« Examples Gallery</a><a class="docs-footer-nextpage" href="../bases/">Bases »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Monday 13 July 2026 18:24">Monday 13 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
