@@ -10,42 +10,64 @@ File input/output for simulation data.
 Tarang.NetCDFFileHandler
 ```
 
-### add_netcdf_handler
-
-```@docs
-Tarang.add_netcdf_handler
-```
-
-Create a file handler for NetCDF output.
-
----
-
 ### add_file_handler
 
 ```@docs
 Tarang.add_file_handler
 ```
 
-Alternative constructor for file handlers.
+There are two ways to create a handler, and they behave differently.
+
+**Solver form (recommended).** The handler is registered with the solver, so `run!`
+processes it every step and closes it at the end. It also takes its time metadata
+(`sim_time`, `iteration`, `dt`) from the solver, so the `sim_dt`/`iter` cadence works
+and every record is stamped with the simulation time:
+
+```julia
+handler = add_file_handler("snapshots", solver; sim_dt=0.002, max_writes=100)
+add_task!(handler, T; name="T")
+run!(solver; stop_iteration=6, progress=false)   # writes at sim_time 0, 0.002, 0.004, 0.006
+```
+
+**Distributor form.** Builds a handler that knows nothing about a solver: it does *not*
+auto-register (you must pass it in `outputs=`), and with no solver attached its
+`sim_time`/`iteration` are always `0`, so a `sim_dt` or `iter` cadence never advances and
+only the first write lands. Pass `solver=` if you drive it with `run!`:
 
 ```julia
 handler = add_netcdf_handler(
-    base_path,          # Output path/name
-    dist,               # Distributor
-    fields_dict;        # Dict of fields
-    parallel="gather",  # I/O mode
-    max_writes=100      # Files before rollover
+    "snapshots",               # Output path/name
+    dist,                      # Distributor
+    Dict("T" => T, "u" => u);  # Dict of fields (namespace for string-expression tasks)
+    solver=solver,             # so sim_time/iteration are real, not 0
+    sim_dt=0.002,
+    max_writes=100             # writes per file before rolling over to the next set
 )
+add_task!(handler, T; name="T")
+run!(solver; stop_iteration=6, outputs=[handler], progress=false)   # outputs= is required
 ```
 
 **Arguments**:
-- `base_path`: Base path for output files
-- `dist`: MPI distributor
-- `fields_dict`: Dictionary mapping names to fields
-- `parallel`: "gather" (single file) or "virtual" (per-process)
-- `max_writes`: Maximum writes per file before creating new file
+- `base_path`: base path for output files (a trailing `.nc` is stripped)
+- `dist`: distributor
+- `vars`: dictionary mapping names to fields
+- `solver`: optional solver, used for time metadata
+- `sim_dt` / `iter` / `wall_dt`: write cadence (simulation time, iterations, wall seconds)
+- `max_writes`: maximum writes per file before starting a new file set
+- `parallel`: `"gather"` or `"virtual"` — see the Parallel I/O section below
+- `mode`: `"overwrite"` (default) or `"append"`
 
 **Returns**: `NetCDFFileHandler`
+
+---
+
+### add_netcdf_handler
+
+```@docs
+Tarang.add_netcdf_handler
+```
+
+Same as the distributor form of `add_file_handler` above.
 
 ---
 
@@ -67,16 +89,23 @@ Tarang.add_task
 
 Add a field output task (alternative syntax).
 
+Always pass the **field or operator object**, never a string expression: a string task
+(`add_task!(handler, "T*T")`) is accepted silently but writes a scalar of zeros instead of
+the field. Build the operator instead (`add_task!(handler, T*T; name="T2")`).
+
 ```julia
 add_task!(handler, field; name="field_name")
 ```
 
-With postprocessing:
+With postprocessing — `postprocess` receives the task's data array (this rank's slab) and
+its return value is what gets written, so the written shape follows from it:
 
 ```julia
+using Statistics
+
 add_task!(handler, field;
-    name="processed",
-    postprocess=data -> mean(data, dims=1)
+    name="field_xmean",
+    postprocess = data -> dropdims(mean(data, dims=1), dims=1)
 )
 ```
 
@@ -88,15 +117,19 @@ add_task!(handler, field;
 Tarang.add_profile_task!
 ```
 
-Add a task that computes mean profile over specified dimensions.
+Add a task that reduces the field to a 1D profile: the mean over every dimension *except*
+`dim`. The keyword is `dim` (singular) and it names the dimension to **keep** — either an
+axis index or a coordinate symbol.
 
 ```julia
-# Mean over x (dimension 1) - produces z-profile
-add_profile_task!(handler, field; dims=1, name="field_profile")
+# z-profile: mean over x, keep z
+add_profile_task!(handler, field; dim=:z, name="field_profile_z")
 
-# Mean over x and y
-add_profile_task!(handler, field; dims=(1,2), name="field_profile_xy")
+# same thing by axis index, on an (x, z) domain
+add_profile_task!(handler, field; dim=2, name="field_profile_z")
 ```
+
+To average over several dimensions instead, use `add_mean_task!` with `dims=`.
 
 ---
 
@@ -106,10 +139,12 @@ add_profile_task!(handler, field; dims=(1,2), name="field_profile_xy")
 Tarang.add_mean_task!
 ```
 
-Add a task that computes mean values.
+Add a task that computes mean values. With `dims` it averages over those dimensions;
+without `dims` it writes the single whole-domain mean (MPI-aware — combined across ranks).
 
 ```julia
-add_mean_task!(handler, field; name="field_mean")
+add_mean_task!(handler, field; name="field_mean")                 # scalar, whole domain
+add_mean_task!(handler, field; dims=(:x, :z), name="field_mean_xz")
 ```
 
 ---
@@ -120,15 +155,16 @@ add_mean_task!(handler, field; name="field_mean")
 Tarang.add_slice_task!
 ```
 
-Add a task that extracts a slice.
+Add a task that extracts a slice, given the axis (`dim`) and the index along it (`idx`):
 
 ```julia
-# Slice at index
-add_slice_task!(handler, field; dim=1, idx=64, name="field_slice")
-
-# Using slices dictionary
-add_slice_task!(handler, field; slices=Dict(1 => 32), name="slice")
+add_slice_task!(handler, field; dim=1, idx=8, name="field_slice")
 ```
+
+!!! warning "`slices=` is currently broken"
+    The `slices=Dict(...)` form advertised in the docstring above throws at write time
+    (`MethodError: Cannot convert an object of type Int64 to an object of type Colon`).
+    Use the `dim`/`idx` form.
 
 ---
 
@@ -138,7 +174,8 @@ add_slice_task!(handler, field; slices=Dict(1 => 32), name="slice")
 Tarang.add_rms_task!
 ```
 
-Add a task that computes RMS (root-mean-square) values.
+Add a task that computes RMS (root-mean-square) values — whole-domain by default,
+or per-remaining-axis with `dims`.
 
 ```julia
 add_rms_task!(handler, field; name="field_rms")
@@ -152,7 +189,7 @@ add_rms_task!(handler, field; name="field_rms")
 Tarang.add_variance_task!
 ```
 
-Add a task that computes variance.
+Add a task that computes variance (same `dims` convention as `add_rms_task!`).
 
 ```julia
 add_variance_task!(handler, field; name="field_variance")
@@ -166,10 +203,11 @@ add_variance_task!(handler, field; name="field_variance")
 Tarang.add_extrema_task!
 ```
 
-Add a task that tracks minimum and maximum values.
+Add a task that tracks minimum and maximum values. It writes **two** variables,
+`<name>_min` and `<name>_max` (whole-domain, MPI-aware):
 
 ```julia
-add_extrema_task!(handler, field; name="field_extrema")
+add_extrema_task!(handler, field; name="T")   # writes vars/T_min and vars/T_max
 ```
 
 ---
@@ -198,11 +236,13 @@ Call `process!`/`close!` directly only when you write your own step loop:
 ```julia
 process!(handler;
     iteration=solver.iteration,
-    wall_time=elapsed,
+    wall_time=time() - wall_start,
     sim_time=solver.sim_time,
-    timestep=dt
+    timestep=solver.dt
 )
 ```
+
+It returns `true` if the write happened and `false` if the schedule said "not yet".
 
 ---
 
@@ -234,10 +274,10 @@ Create a new output file.
 Tarang.current_path
 ```
 
-Get the current output file path.
+Get the directory of the current file set (`<name>_s<set>`), not a file:
 
 ```julia
-filepath = current_path(handler)
+current_path(handler)   # "snapshots/snapshots_s1"
 ```
 
 ---
@@ -248,10 +288,11 @@ filepath = current_path(handler)
 Tarang.current_file
 ```
 
-Get the current output file (alternative to current_path).
+Get the file the handler is writing into, inside that directory:
 
 ```julia
-filepath = current_file(handler)
+current_file(handler)   # serial: "snapshots/snapshots_s1/snapshots_s1.nc"
+                        # np=2:   "snapshots/snapshots_s1/snapshots_s1_p0.nc" (per rank)
 ```
 
 ---
@@ -262,7 +303,7 @@ filepath = current_file(handler)
 Tarang.get_output_files
 ```
 
-Get list of all output files created by handler.
+List the files this handler has created (all sets).
 
 ---
 
@@ -272,7 +313,9 @@ Get list of all output files created by handler.
 Tarang.get_handler_info
 ```
 
-Get information about the handler state.
+A `Dict` describing the handler state, with keys `base_path`, `name`, `set_num`,
+`file_writes`, `total_writes`, `max_writes`, `num_tasks`, `task_names`, `parallel`,
+`precision`, `mpi_rank`, `mpi_size`.
 
 ---
 
@@ -302,6 +345,13 @@ Reset the handler state.
 
 ## File Merging
 
+Under MPI each rank writes its own slab into its own file (see Parallel I/O below).
+Merging is the post-processing step that stitches those per-rank files back into one file
+holding the global field. It is a *serial* post-processing step: run it after the
+simulation, from the handler's output directory (the one that contains `<name>_s<set>/`).
+In a serial run there is nothing to merge — merging reports "No processor files found"
+and returns `false`.
+
 ### NetCDFMerger
 
 ```@docs
@@ -316,11 +366,29 @@ Tarang.NetCDFMerger
 Tarang.merge_netcdf_files
 ```
 
-Merge multiple NetCDF files from parallel output.
+Merge one file set written by a parallel run:
 
 ```julia
-merge_netcdf_files(base_path; output_name="merged")
+cd("snapshots")   # the directory containing snapshots_s1/
+merge_netcdf_files("snapshots"; set_number=1, output_name="snapshots_merged.nc")
 ```
+
+The per-rank slabs are reconstructed with the `start`/`count`/`global_shape` attributes
+each rank stored, so `vars/T` in the merged file has the full global shape
+(`(writes, Nx, Nz)`).
+
+Whole-domain reduction tasks (`add_mean_task!` and friends without `dims`) store no such
+attributes, because their value is already global on every rank. The merger has nothing to
+reconstruct for them, and says so loudly — expect, for each one,
+
+```
+┌ Warning: No global_shape metadata found for 'T_mean'. Using single-processor shape (3, 1)
+│ — the merged file may contain only a fraction of the full domain.
+      Error placing data from snapshots_s1_p1.nc: BoundsError(...)
+```
+
+This is noise, not failure: the merger keeps rank 0's value, which *is* the correct global
+one, and the merge still returns `true`.
 
 ---
 
@@ -330,6 +398,8 @@ merge_netcdf_files(base_path; output_name="merged")
 Tarang.merge_files!
 ```
 
+The lower-level call: build a `NetCDFMerger` yourself and run it.
+
 ---
 
 ### batch_merge_netcdf
@@ -338,11 +408,26 @@ Tarang.merge_files!
 Tarang.batch_merge_netcdf
 ```
 
-Merge multiple sets of parallel output files.
+Merge several handlers in one go; returns a `Dict` of handler name to success flag. Like
+`merge_netcdf_files`, it looks for `<name>_s<set>/` in the *current* directory — so every
+handler you name must have its set directories there. A handler created with a bare
+`base_path` roots its sets in a directory of its own (`snapshots/snapshots_s1/`), and no
+two such handlers ever share a parent; give them a common parent instead:
 
 ```julia
-batch_merge_netcdf(["output1", "output2", "output3"])
+# at setup, so both handlers write into out/
+h1 = add_file_handler("out/snapshots", solver; sim_dt=0.002)
+h2 = add_file_handler("out/analysis",  solver; sim_dt=0.002)
+# → out/snapshots_s1/snapshots_s1_p*.nc, out/analysis_s1/analysis_s1_p*.nc
+
+# after the run
+cd("out")
+find_mergeable_handlers(".")                    # Dict("snapshots" => [1], "analysis" => [1])
+batch_merge_netcdf(["snapshots", "analysis"])   # Dict("snapshots" => true, "analysis" => true)
 ```
+
+Called from the wrong directory it finds nothing, warns `No processor files found for
+merging`, and returns `false` for every handler.
 
 ---
 
@@ -352,7 +437,12 @@ batch_merge_netcdf(["output1", "output2", "output3"])
 Tarang.find_mergeable_handlers
 ```
 
-Find handlers that can be merged.
+Scan a directory for handler file sets, returning a `Dict` of handler name to the set
+numbers found:
+
+```julia
+find_mergeable_handlers("snapshots")   # Dict("snapshots" => [1])
+```
 
 ---
 
@@ -398,152 +488,171 @@ Tarang.lambdify_functions
 
 ### Using NetCDF.jl
 
+Output files are **NetCDF-4 with groups**, so the task data is not at the file root: a
+plain `NetCDF.ncread(file, "T")` fails with *"does not have a variable named T"*, and
+`ncinfo` lists no variables. Read through the group helpers instead:
+
 ```julia
-using NetCDF
+using Tarang, NetCDF
 
-# Read variable
-data = NetCDF.ncread(filename, "temperature")
+file = "snapshots/snapshots_s1/snapshots_s1.nc"
 
-# Read attribute
-attr = NetCDF.ncgetatt(filename, "NC_GLOBAL", "title")
+Tarang.group_variable_names(file, "vars")     # ["T", "T_mean", "T_min", "T_max", ...]
+T = Tarang.group_ncread(file, "vars", "T")    # size (writes, Nx, Nz)
 
-# Read time array
-times = NetCDF.ncread(filename, "t")
+times = Tarang.group_ncread(file, "time", "sim_time")   # size (writes,)
+x     = Tarang.group_ncread(file, "grids", "x")         # size (Nx,)
+
+NetCDF.ncgetatt(file, "global", "title")      # "Tarang.jl simulation output"
 ```
 
 ## File Structure
 
 ### NetCDF Layout
 
+Three groups: `vars` (the tasks), `time` (per-write metadata), `grids` (coordinates).
+The write index is the **leading** dimension of every task variable.
+
 ```
-output_s1.nc
-├── Dimensions
-│   ├── x (128)
-│   ├── z (64)
-│   └── t (unlimited)
-├── Coordinates
-│   ├── x [128]
-│   ├── z [64]
-│   └── t [N_writes]
-├── Variables
-│   ├── temperature (t, x, z)
-│   ├── velocity_x (t, x, z)
-│   └── ...
-└── Attributes
-    ├── title
-    ├── handler_name
-    ├── software
-    └── tarang_version
+snapshots/snapshots_s1/snapshots_s1.nc
+├── vars
+│   ├── T          (sim_time, x, z)
+│   ├── T_profile_z (sim_time, T_profile_z_dim1)
+│   └── T_min, T_max, ...   (sim_time, 1)
+├── time
+│   ├── sim_time    [N_writes]   (unlimited dimension)
+│   ├── wall_time   [N_writes]
+│   ├── timestep    [N_writes]
+│   ├── iteration   [N_writes]
+│   └── write_number[N_writes]
+├── grids
+│   ├── x [Nx]
+│   ├── z [Nz]
+│   └── <task>_dim1 [...]    for reduced/derived tasks
+└── global attributes
 ```
+
+Each task variable also carries `layout` (`"g"`/`"c"`), `grid_space`, and — for a
+distributed run — the `start`/`count`/`global_shape`/`local_shape` of that rank's slab,
+which is what `merge_netcdf_files` uses to reconstruct the global field.
 
 ### Global Attributes
 
 Written automatically:
 
-| Attribute | Description |
+| Attribute | Value |
 |-----------|-------------|
 | `title` | "Tarang.jl simulation output" |
 | `handler_name` | Handler name from path |
 | `software` | "Tarang" |
+| `software_repository` | Repository URL |
 | `tarang_version` | Package version |
+| `institution`, `source`, `history`, `Conventions` | Provenance / CF-1.8 |
+| `set_number`, `writes` | Current file set and its write count |
+| `mpi_size`, `processor_rank` | Only when running on more than one rank |
+
+Read them with `NetCDF.ncgetatt(file, "global", name)`.
 
 ## Checkpointing
 
+Tarang has no built-in checkpoint type. Write a small helper over `solver.state` — the
+integrator's live fields, each a `ScalarField` with a `.name` (a vector variable `u`
+appears as its components `u_x`, `u_z`, …). Use `solver.state`, **not** the
+problem-variable handles: those are separate objects and writing to them does not restore
+the integrator.
+
 ### Saving State
 
+Grid space is real-valued and exact, so it round-trips losslessly:
+
 ```julia
-function save_checkpoint(solver, filename)
-    using JLD2
+using NetCDF
 
-    state = Dict(
-        "sim_time" => solver.sim_time,
-        "iteration" => solver.iteration,
-        "dt" => solver.dt,
-        "fields" => Dict()
-    )
-
-    for (name, field) in solver.problem.fields
-        Tarang.ensure_layout!(field, :c)
-        state["fields"][name] = copy(get_coeff_data(field))
+function save_checkpoint(solver, path)
+    isfile(path) && rm(path)
+    for f in solver.state
+        ensure_layout!(f, :g)
+        g = get_grid_data(f)
+        dimspec = collect(Iterators.flatten(
+            ("$(f.name)_d$i" => s for (i, s) in enumerate(size(g)))))
+        nccreate(path, f.name, dimspec...; t=NC_DOUBLE)
+        ncwrite(g, path, f.name)
     end
-
-    if MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        @save filename state
-    end
+    ncputatt(path, "Global", Dict("sim_time" => solver.sim_time,
+                                  "iteration" => solver.iteration, "dt" => solver.dt))
+    return path
 end
 ```
 
 ### Loading State
 
 ```julia
-function load_checkpoint!(solver, filename)
-    using JLD2
-    @load filename state
-
-    solver.sim_time = state["sim_time"]
-    solver.iteration = state["iteration"]
-    solver.dt = state["dt"]
-
-    for (name, data) in state["fields"]
-        field = solver.problem.fields[name]
-        get_coeff_data(field) .= data
-        field.current_layout = :c
+function load_checkpoint!(solver, path)
+    for f in solver.state
+        ensure_layout!(f, :g)               # make the grid buffer current
+        get_grid_data(f) .= ncread(path, f.name)
     end
+    solver.sim_time  = ncgetatt(path, "Global", "sim_time")
+    solver.iteration = Int(ncgetatt(path, "Global", "iteration"))
+    solver.dt        = ncgetatt(path, "Global", "dt")
+    return solver
 end
 ```
 
-## Parallel I/O Modes
-
-### Gather Mode
+Restarting then reproduces the uninterrupted trajectory to the bit:
 
 ```julia
-handler = add_netcdf_handler(path, dist, fields; parallel="gather")
+save_checkpoint(solver, "chk.nc")
+# … later, with the same problem/solver rebuilt …
+load_checkpoint!(solver, "chk.nc")
+run!(solver; stop_iteration=solver.iteration + 20, progress=false)
 ```
 
-- All data gathered to rank 0
-- Single output file
-- Memory limited by rank 0
+`get_grid_data` is the rank-local slab, so under MPI either put the rank in `path` (one
+checkpoint file per rank, restarted on the same decomposition) or gather to rank 0 with
+`gather_array(f.dist, get_grid_data(f))` before writing.
 
-### Virtual Mode
+## Parallel I/O
 
-```julia
-handler = add_netcdf_handler(path, dist, fields; parallel="virtual")
+There is no gather-to-rank-0 write path. On more than one rank **every rank writes its own
+file**, containing its own slab:
+
+```
+snapshots/snapshots_s1/snapshots_s1_p0.nc    # rank 0's slab, e.g. (writes, 16, 8)
+snapshots/snapshots_s1/snapshots_s1_p1.nc    # rank 1's slab
 ```
 
-- Each process writes own file
-- Filenames: `output_p0.nc`, `output_p1.nc`, etc.
-- Requires post-processing to merge
+Reassemble them afterwards with `merge_netcdf_files` (see File Merging). Whole-domain
+reductions (`add_mean_task!`, `add_rms_task!`, `add_variance_task!`, `add_extrema_task!`
+without `dims`) are MPI-aware: every rank's file already holds the *global* value.
+
+The `parallel` keyword (`"gather"`, the default, or `"virtual"`) only chooses the serial
+file name: with `parallel="gather"` on one rank you get a single `snapshots_s1.nc`;
+otherwise the file is named `..._p<rank>.nc`. It does not move data between ranks.
 
 ## File Management
 
 ### File Naming
 
-Files are numbered sequentially:
+Each file set lives in its own directory, and sets are numbered sequentially — a new set
+starts once `max_writes` writes have landed in the current one:
 
 ```
-output_s1.nc   # First file
-output_s2.nc   # After max_writes reached
-output_s3.nc   # etc.
+snapshots/snapshots_s1/snapshots_s1.nc   # first set
+snapshots/snapshots_s2/snapshots_s2.nc   # after max_writes reached
+snapshots/snapshots_s3/snapshots_s3.nc   # etc.
 ```
 
-### Merging Files
-
-For post-processing virtual files:
-
-```julia
-# Merge all parallel files
-merge_netcdf_files("output"; output_name="output_merged", cleanup=true)
-
-# Batch merge multiple handlers
-batch_merge_netcdf(["snapshots", "analysis", "checkpoints"])
-```
+With `mode="overwrite"` (the default) the handler deletes pre-existing sets of the same
+name when it is constructed.
 
 ## Performance Tips
 
-1. **Batch writes**: Don't write every iteration
-2. **Use gather for small outputs**: Simpler file handling
-3. **Use virtual for large outputs**: Better scaling
-4. **Compress if needed**: NetCDF supports compression
+1. **Batch writes**: use a `sim_dt`/`iter` cadence rather than writing every iteration
+2. **Cap file size**: `max_writes` rolls over to a new set instead of one huge file
+3. **Write what you need**: reduction tasks (profiles, means, extrema) are far cheaper to
+   store than full fields
+4. **Merge offline**: reassemble per-rank files after the run, not during it
 
 ## See Also
 

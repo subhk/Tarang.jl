@@ -42,7 +42,20 @@ _evaluate_alg_F(c::ConstantOperator, sp::Subproblem) = _bc_constant_projection(F
 _evaluate_alg_F(x::Number, sp::Subproblem) = _bc_constant_projection(Float64(x), sp)
 _evaluate_alg_F(a::ArrayOperator, sp::Subproblem) = _bc_array_projection(a.value, sp)
 function _evaluate_alg_F(expr, sp::Subproblem)
-    @debug "gather_alg_F!: unsupported F expression type" expr_type=typeof(expr)
+    # A COMPOUND CONSTANT — `T(z=0) = 10*25`, `= h*T_amb`, `= 1/Re` — arrives here as a
+    # Multiply/Add/Divide operator tree, not as a ConstantOperator. It used to fall through to
+    # the silent zero below, so the boundary condition was enforced as 0 with no warning and the
+    # solve reported success. `_is_const_or_param` / `_extract_scalar` already fold exactly these
+    # node types for the L/M matrices; use them here too.
+    if _is_const_or_param(expr)
+        return _bc_constant_projection(Float64(_extract_scalar(expr)), sp)
+    end
+    # Anything else genuinely is not supported as a BC right-hand side. Enforcing it as zero is a
+    # silently wrong answer, which is worse than a slow or absent one — say so.
+    @warn "Boundary condition right-hand side of type $(typeof(expr)) is not supported and is " *
+          "being enforced as ZERO. Supported: a constant, a compound constant (`10*25`, `h*T_amb`), " *
+          "or a grid array (space-dependent BC). Rewrite the BC, or the solve will silently " *
+          "satisfy the wrong condition." maxlog=5
     return ComplexF64(0)
 end
 
@@ -131,6 +144,45 @@ function _subproblem_fourier_group_indices(sp::Subproblem)
     return idx
 end
 
+"""Expand a BC array onto the full boundary plane spanned by the Fourier axes.
+
+A BC that depends on a subset of the Fourier axes evaluates to an array with singleton (or
+missing) dimensions — `(1, Ny)` for `cos(2πy/Ly)`, `(Nx,)` for `sin(2πx/Lx)` in a 1-Fourier-axis
+problem. Broadcast it up to `fourier_sizes` so the transform is taken over the right axes.
+
+A 1-D array in a MULTI-Fourier-axis problem is ambiguous — it carries no axis identity — and used
+to be silently treated as the first axis. It can only arise now if a caller registered a
+coordinate array by hand, so accept it when its length pins the axis unambiguously and refuse
+otherwise, rather than guessing."""
+function _expand_bc_array_to_plane(arr::AbstractArray, fourier_sizes)
+    dims = Tuple(fourier_sizes)
+    size(arr) == dims && return arr
+    n = length(dims)
+
+    if ndims(arr) == n
+        # Singleton dims → broadcast. (Every non-singleton dim must already match.)
+        all(d -> size(arr, d) == dims[d] || size(arr, d) == 1, 1:n) || return arr
+        out = Array{Float64}(undef, dims)
+        out .= arr
+        return out
+    end
+
+    if ndims(arr) == 1 && n >= 2
+        matches = findall(==(length(arr)), collect(dims))
+        if length(matches) == 1
+            shape = ntuple(d -> d == matches[1] ? length(arr) : 1, n)
+            out = Array{Float64}(undef, dims)
+            out .= reshape(arr, shape)
+            return out
+        end
+        @warn "BC array of length $(length(arr)) is ambiguous on a boundary plane of size " *
+              "$dims — it does not identify which axis it varies along. Register the " *
+              "coordinate with its axis shape (e.g. reshape to (1, N)) so the BC is applied to " *
+              "the intended direction." maxlog=3
+    end
+    return arr
+end
+
 """
     _bc_array_projection(arr, sp)
 
@@ -138,17 +190,10 @@ Project a grid-space array `arr` (from a space-dependent BC) onto the current
 subproblem's Fourier mode. Returns a `ComplexF64` value suitable for writing
 into the BC row of the raw equation-space vector.
 
-Handles several shape conventions for `arr`:
-- `arr` is already the full BC output shape (1D for 2D problems, 2D for
-  3D-with-two-periodic-axes problems, etc.) — FFT it directly.
-- `arr` is lower-dimensional than the output (e.g., a 1D `sin(x)` in a 3D
-  `(x, y, z)` problem) — broadcast it to the full Fourier output shape
-  under the assumption that axes beyond `ndims(arr)` are constant.
-- `arr` is a scalar-like 1-element array — treat as constant (DC only).
-
-The broadcast/FFT result is cached by identity on `sp.problem.parameters`
-via an `IdDict`, so all subproblems sharing the same `ArrayOperator` reuse
-a single FFT per refresh.
+`arr` is first expanded onto the full boundary plane (see
+`_expand_bc_array_to_plane`), then transformed. The FFT result is cached by
+identity on `sp.problem.parameters` via an `IdDict`, so all subproblems sharing
+the same `ArrayOperator` reuse a single FFT per refresh.
 """
 function _bc_array_projection(arr::AbstractArray, sp::Subproblem)
     (arr === nothing || length(arr) == 0) && return ComplexF64(0)
@@ -159,6 +204,13 @@ function _bc_array_projection(arr::AbstractArray, sp::Subproblem)
         # the DC-mode value.
         return ComplexF64(first(arr))
     end
+
+    # The BC expression is evaluated against coordinate arrays that carry their axis identity in
+    # their shape (see `_auto_register_coordinate_fields!`), so a BC depending on only some of the
+    # Fourier axes comes back with singleton dims — `(1, Ny)` for `cos(2πy/Ly)`. Expand it onto the
+    # full boundary plane before transforming; otherwise the FFT is taken over the wrong axis and
+    # the profile is silently applied along the wrong direction.
+    arr = _expand_bc_array_to_plane(arr, fourier_sizes)
 
     coeffs = _get_or_compute_bc_array_coeffs!(arr, sp, fourier_sizes)
     coeffs === nothing && return ComplexF64(0)

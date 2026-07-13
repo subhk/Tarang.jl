@@ -94,16 +94,33 @@ Problems with dynamics confined to surfaces or boundaries.
 - Wave propagation
 - Reaction-diffusion systems
 
-**Typical structure**:
+**Typical structure** (1D viscous Burgers, complete and runnable):
 ```julia
-problem = IVP(fields)
-add_equation!(problem, "∂t(u) - nu*Δ(u) = -u*∂x(u)")
-solver = InitialValueSolver(problem, RK222())
+using Tarang
 
+coords = CartesianCoordinates("x")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+domain = Domain(dist, (xbasis,))
+u      = ScalarField(domain, "u")
+
+problem = IVP([u])
+add_parameters!(problem, nu=0.05)          # names used in equation strings must be parameters
+add_equation!(problem, "∂t(u) - nu*Δ(u) = -u*∂x(u)")
+set!(u, x -> sin(x))                       # serial only — under MPI use `local_grids` (below)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+t_end = 0.02
 while solver.sim_time < t_end
-    step!(solver, dt)
+    step!(solver)
 end
 ```
+
+`step!(solver)` uses `solver.dt`. `step!(solver, dt)` steps with `dt` **and stores it**:
+`solver.dt` is overwritten, so every later bare `step!(solver)` keeps using the new value. The
+`run!(solver; stop_time=…, stop_iteration=…)` driver is the usual alternative to writing the loop
+yourself, and is what you need if you want CFL control or file output (below).
 
 ### Boundary Value Problems (BVP)
 
@@ -121,15 +138,27 @@ end
 **Typical structure** (tau method: one `tau` variable per BC, lifted into the
 bulk equation and declared via `add_parameters!`; BCs use `add_bc!`):
 ```julia
-# T plus one tau variable per boundary condition; lb2 = derivative_basis(zb, 2)
+using Tarang
+
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords["x"]; size=4,  bounds=(0.0, 2π))
+zb = ChebyshevT(coords["z"];  size=16, bounds=(0.0, 1.0))
+domain = Domain(dist, (xb, zb))
+
+T    = ScalarField(domain, "T")
+tau1 = ScalarField(dist, "tau1", (xb,), Float64)   # one tau per BC, carrying the Fourier basis
+tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
 problem = LBVP([T, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
-add_equation!(problem, "Δ(T) + l1 + l2 = f")
+add_equation!(problem, "Δ(T) + l1 + l2 = -2")
 add_bc!(problem, "T(z=0) = 0")
 add_bc!(problem, "T(z=1) = 1")
 
 solver = BoundaryValueSolver(problem)
-solve!(solver)
+solve!(solver)     # recovers T = 2z - z² to 1.7e-16
 ```
 
 The BVP path supports both mixed Fourier+Chebyshev and pure single-axis Chebyshev
@@ -144,10 +173,22 @@ domains; see the [Problems API](../api/problems.md) for a complete, runnable exa
 - Normal mode analysis
 - Resonance frequencies
 
-**Typical structure**:
+**Typical structure** (growth rates of the Dirichlet Laplacian on `z ∈ [0, 1]`):
 ```julia
+using Tarang
+
+coords = CartesianCoordinates("z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+zb     = ChebyshevT(coords["z"]; size=32, bounds=(0.0, 1.0))
+domain = Domain(dist, (zb,))
+
+u    = ScalarField(domain, "u")
+tau1 = ScalarField(dist, "tau1", (), Float64)
+tau2 = ScalarField(dist, "tau2", (), Float64)
+lb2  = derivative_basis(zb, 2)
+
 # tau variables + lift handle the bounded-direction BCs (tau method)
-problem = EVP([u, tau1, tau2], eigenvalue=:σ)
+problem = EVP([u, tau1, tau2]; eigenvalue=:σ)
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 # The eigenvalue REPLACES the time derivative: keep dt(u) to build the mass matrix.
 # Do NOT write `σ*u = ...` — that builds an empty M and returns no eigenvalues.
@@ -157,6 +198,7 @@ add_bc!(problem, "u(z=1) = 0")
 
 solver = EigenvalueSolver(problem; nev=5, which=:SM)
 eigenvalues, eigenvectors = solve!(solver)
+# eigenvalues ≈ [-9.8696, -39.478, -88.826, -157.91, -246.74] = -(nπ)², i.e. pure decay
 ```
 
 See the [Problems API](../api/problems.md) for the full eigenvalue convention
@@ -211,64 +253,94 @@ See the [Problems API](../api/problems.md) for the full eigenvalue convention
 
 ### Setting Up a Simulation
 
-Every tutorial follows this pattern:
+Every tutorial follows this pattern. Here it is in full for 2D heat diffusion — the
+smallest complete simulation Tarang can run:
 
 ```julia
-# 1. MPI initialization
+# 1. MPI initialization (harmless in serial; needed for `mpiexec` runs)
 using Tarang, MPI
-MPI.Init()
+MPI.Initialized() || MPI.Init()
 
 # 2. Domain setup
-coords = CartesianCoordinates(...)
-dist = Distributor(coords, mesh=...)
-bases = (basis1, basis2, ...)
-domain = Domain(dist, bases)
+coords = CartesianCoordinates("x", "y")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+ybasis = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
+domain = Domain(dist, (xbasis, ybasis))
 
 # 3. Fields
-field1 = ScalarField(...)
-field2 = VectorField(...)
+u = ScalarField(domain, "u")
 
 # 4. Problem
-problem = IVP([field1, field2, ...])
-add_equation!(problem, "...")
-add_bc!(problem, "...")
+problem = IVP([u])
+add_parameters!(problem, nu=0.1)
+add_equation!(problem, "∂t(u) - nu*Δ(u) = 0")
+# add_bc!(problem, "...")   # only for bounded (Chebyshev/Jacobi) directions
 
-# 5. Solver
-solver = InitialValueSolver(problem, timestepper)
+# 5. Initial condition — use `local_grids`, which returns THIS rank's slab
+x, y = local_grids(dist, xbasis, ybasis)
+ensure_layout!(u, :g)
+get_grid_data(u) .= sin.(x) .* cos.(y')
+ensure_layout!(u, :c)
 
-# 6. Time loop
+# 6. Solver and time loop
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+t_end = 0.5
 while solver.sim_time < t_end
-    step!(solver, dt)
+    step!(solver)
 end
-
-# 7. Cleanup
-MPI.Finalize()
+# max|u| = 0.90483742, exactly exp(-2*nu*t_end)
 ```
+
+`MPI.Init()` defaults to `finalize_atexit=true`, so `MPI.Finalize()` runs on exit by itself —
+you do not need a cleanup step.
+
+!!! warning "`set!(field, ::Function)` is serial-only"
+    `set!(u, (x, y) -> …)` builds the *global* meshgrid, so under MPI it throws
+    `DimensionMismatch`. `local_grids(dist, bases...)` gives each rank its own slice and
+    works identically at `np = 1, 2, 4`, which is why the pattern above uses it.
 
 ### Adding Analysis
 
-Common analysis tasks:
+Common analysis tasks, on a solver whose state has a scalar `T` and a `VectorField` `u`:
 
 ```julia
-# CFL condition
-cfl = CFL(problem)
+# Adaptive timestep: CFL takes the SOLVER, and velocities must be VectorFields
+cfl = CFL(solver; initial_dt=1e-3, cadence=10, safety=0.4, max_dt=0.01)
 add_velocity!(cfl, u)
 
-# File output
-handler = add_netcdf_handler(
-    solver,
-    "outputs",
-    fields=[u, p, T],
-    write_interval=0.1
-)
+# File output: base path FIRST, solver SECOND, then one task per quantity
+handler = add_file_handler("outputs", solver; sim_dt=0.005, max_writes=10)
+add_task!(handler, u; name="u")
+add_task!(handler, T; name="T")
+
+# `run!` applies the CFL controller and processes solver-registered handlers
+run!(solver; stop_iteration=20, cfl=cfl)
 
 # Custom diagnostics
-function compute_diagnostics(solver, u, T)
-    ke = 0.5 * mean(u.data .^ 2)
-    temp_mean = mean(T.data)
+function compute_diagnostics(u, T)
+    ke = total_kinetic_energy(u)    # Float64: domain integral of ½|u|²
+    temp_mean = integrate(T)        # Float64: quadrature-weighted integral
     return (ke=ke, temp=temp_mean)
 end
 ```
+
+Three things that trip people up here:
+
+- Pass **field or operator objects** to `add_task!`, never strings. `add_task!(h, "u*u")` is
+  accepted silently and then writes a scalar of zeros.
+- The last component of the base path is the handler **name**, and each write set gets its own
+  directory: `add_file_handler("outputs", …)` writes
+  `outputs/outputs_s1/outputs_s1.nc`, and a new `_sN` set is started every `max_writes` writes
+  (`outputs/outputs_s2/…`). Use `Tarang.current_file(handler)` to get the path in code. The
+  variables live in NetCDF-4 **groups** (`vars`, `time`, `grids`), so a plain
+  `NetCDF.ncread(file, "u")` will not find them — read them with
+  `Tarang.group_ncread(file, "vars", "u")`. A `VectorField` task is stored with its component
+  axis, e.g. `vars/u` has shape `(write, component, x, y)`.
+- `add_file_handler` also has a `(path, dist, vars)` form. That one is **not** registered with
+  the solver, so `run!` will not process it unless you also pass `outputs=[handler]`.
+
+See [Analysis and Output](analysis_and_output.md) for the full output API.
 
 ## Getting Help
 

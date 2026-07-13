@@ -5,31 +5,47 @@ Operators compute derivatives and other mathematical operations on fields. Taran
 ## Overview
 
 Tarang.jl supports:
-- **Differential operators**: grad (∇), div, curl, lap (Δ, ∇²)
-- **Coordinate derivatives**: ∂x, ∂y, ∂z, ∂r, etc.
+- **Differential operators**: grad (∇), divergence (div), curl, lap (Δ, ∇²)
+- **Coordinate derivatives**: `∂x`, `∂y`, `∂z`, … in equation strings; `d(field, coord, order)` in Julia code
 - **Time derivatives**: ∂t
 - **Field operations**: dot (⋅), cross (×)
-- **Custom operators**: User-defined operations
+- **Custom operators**: helper functions that compose the built-in operators
+
+Operators are **lazy**: `∇(T)` builds a `Gradient` object, it does not compute anything.
+Call `evaluate` to get a field back:
+
+```julia
+∇T = ∇(T)            # Gradient{ScalarField{...}}  — an unevaluated operator
+∇T = evaluate(∇(T))  # VectorField                 — the computed gradient
+```
+
+Inside an equation string (`add_equation!`) you never call `evaluate` — the solver does it.
 
 ## Unicode Operators
 
-Tarang.jl uses Unicode mathematical symbols for readable, publication-quality code:
+Tarang.jl uses Unicode mathematical symbols for readable, publication-quality code.
+Some names are **callable Julia functions**, others exist **only inside equation strings** —
+the last column says which:
 
-| Syntax | Description | Typing |
-|--------|-------------|--------|
-| `∇(f)` | Gradient | `\nabla` Tab |
-| `Δ(f)` or `∇²(f)` | Laplacian | `\Delta` Tab |
-| `∂t(f)` | Time derivative | `\partial` Tab `t` |
-| `∂x(f)` | x-derivative | `\partial` Tab `x` |
-| `∂y(f)` | y-derivative | `\partial` Tab `y` |
-| `∂z(f)` | z-derivative | `\partial` Tab `z` |
-| `∂r(f)` | r-derivative | `\partial` Tab `r` |
-| `u ⋅ v` | Dot product | `\cdot` Tab |
-| `u × v` | Cross product | `\times` Tab |
+| Syntax | Description | Typing | Available as |
+|--------|-------------|--------|--------------|
+| `∇(f)` | Gradient | `\nabla` Tab | Julia function + equation string (`grad`) |
+| `Δ(f)` or `∇²(f)` | Laplacian | `\Delta` Tab | Julia function + equation string (`lap`, `Δ`) |
+| `∂t(f)` | Time derivative | `\partial` Tab `t` | Julia function + equation string |
+| `∂x(f)` | x-derivative | `\partial` Tab `x` | **equation string only** |
+| `∂y(f)` | y-derivative | `\partial` Tab `y` | **equation string only** |
+| `∂z(f)` | z-derivative | `\partial` Tab `z` | **equation string only** |
+| `u ⋅ v` | Dot product | `\cdot` Tab | Julia function + equation string |
+| `u × v` | Cross product | `\times` Tab | Julia function + equation string |
 
-**Example** - Navier-Stokes equation:
+`∂x`, `∂y`, `∂z` (and `∂<name>` for any coordinate in your coordinate system) are tokens the
+equation parser recognizes — they are **not bound in the `Tarang` module**, so `dudx = ∂x(u)`
+in Julia code is an `UndefVarError`. The callable derivative is `d(field, coord, order)`
+(see **Coordinate Derivatives** below).
+
+**Example** - advection-diffusion:
 ```julia
-add_equation!(problem, "∂t(u) + ∇(p) - nu*Δ(u) = -u⋅∇(u)")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 ```
 
 **Typing Unicode in Julia**:
@@ -42,6 +58,30 @@ add_equation!(problem, "∂t(u) + ∇(p) - nu*Δ(u) = -u⋅∇(u)")
 
 ---
 
+## Setup used by the examples below
+
+Every programmatic example on this page runs against this 2-D periodic domain:
+
+```julia
+using Tarang
+
+coords = CartesianCoordinates("x", "y")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+bx = RealFourier(coords["x"]; size=16, bounds=(0.0, 2pi))
+by = RealFourier(coords["y"]; size=16, bounds=(0.0, 2pi))
+domain = Domain(dist, (bx, by))
+
+T = ScalarField(domain, "T")
+u = VectorField(domain, "u")
+set!(T, (x, y) -> sin(x) * cos(y))
+set!(u.components[1], (x, y) -> sin(y))
+set!(u.components[2], (x, y) -> cos(x))
+
+x, y = local_grids(dist, bx, by)   # grid vectors, for checking results
+```
+
+---
+
 ## Differential Operators
 
 ### Gradient (grad / ∇)
@@ -51,10 +91,10 @@ Computes the gradient of a scalar field, returning a vector field.
 **Syntax**:
 ```julia
 # In equations
-add_equation!(problem, "∇(p)")  # or "grad(p)"
+add_equation!(problem, "∂t(T) = -u⋅∇(T)")   # or "grad(T)"
 
 # Programmatic
-∇p = ∇(p)  # or grad(p)
+∇T = evaluate(∇(T))    # or evaluate(grad(T))  -> VectorField
 ```
 
 **Definitions**:
@@ -69,28 +109,22 @@ add_equation!(problem, "∇(p)")  # or "grad(p)"
 \nabla p = \frac{\partial p}{\partial r}\hat{r} + \frac{1}{r}\frac{\partial p}{\partial \theta}\hat{\theta} + \frac{1}{r\sin\theta}\frac{\partial p}{\partial \phi}\hat{\phi}
 ```
 
-**Examples**:
+**Example**:
 
 ```julia
-# 2D gradient
-coords = CartesianCoordinates("x", "z")
-problem = IVP([u, w, p])
-
-# Pressure gradient in momentum equation
-add_equation!(problem, "∂t(u) + ∇(p) = 0")
-
-# Expands to:
-# ∂t(u_x) = -∂x(p)
-# ∂t(u_z) = -∂z(p)
+∇T = evaluate(∇(T))                       # VectorField, 2 components
+ensure_layout!(∇T.components[1], :g)
+get_grid_data(∇T.components[1])           # ∂T/∂x = cos(x)cos(y), error 2.1e-15
 ```
 
-```julia
-# 3D gradient with custom usage
-∇T = ∇(T)  # Returns VectorField
-# Components: ∇T.components[1] = ∂x(T), etc.
-```
+The components live on the *evaluated* field: `∇(T).components` does not exist, because
+`∇(T)` is still an operator.
 
-**Return type**: VectorField
+Applied to a `VectorField`, `grad` returns a `TensorField` with `(∇u)[i,j] = ∂u_j/∂x_i`
+(the first index is the derivative direction).
+
+**Return type**: `Gradient` operator; evaluates to `VectorField` (from a scalar) or
+`TensorField` (from a vector).
 
 ---
 
@@ -101,10 +135,11 @@ Computes the divergence of a vector field, returning a scalar field.
 **Syntax**:
 ```julia
 # In equations
-add_equation!(problem, "div(u) = 0")
+add_equation!(problem, "div(grad_phi) + τ_lift(tau2) = rho")
 
-# Programmatic
-div_u = div(u)
+# Programmatic — the callable is `divergence` (alias `div_op`).
+# `div` is Julia's integer division; `div(u)` is a MethodError.
+div_u = evaluate(divergence(u))
 ```
 
 **Definitions**:
@@ -119,34 +154,31 @@ div_u = div(u)
 \nabla \cdot \mathbf{u} = \frac{1}{r^2}\frac{\partial (r^2 u_r)}{\partial r} + \frac{1}{r\sin\theta}\frac{\partial (\sin\theta\, u_\theta)}{\partial \theta} + \frac{1}{r\sin\theta}\frac{\partial u_\phi}{\partial \phi}
 ```
 
-**Examples**:
+**Example**:
 
 ```julia
-# Incompressibility constraint
-problem = IVP([u, v, w, p])
-add_equation!(problem, "div(u) = 0")
+div_u = evaluate(divergence(u))       # ScalarField
+ensure_layout!(div_u, :g)
+maximum(abs, get_grid_data(div_u))    # u = (sin y, cos x) is divergence-free: 0.0
 ```
 
-```julia
-# Mass conservation with source
-add_equation!(problem, "div(u) = S")
-```
+`evaluate` does not compose `Divergence` with an unevaluated `Gradient`
+(`evaluate(divergence(grad(T)))` throws). Use `Δ(T)` for the Laplacian, or evaluate the
+inner operator first. Inside an *equation string*, `div(...)` of a gradient expression is
+supported on the implicit side — that is the tau-method form used below and in
+[Tau method](../pages/tau_method.md).
 
-**Return type**: ScalarField
+**Return type**: `Divergence` operator; evaluates to `ScalarField`.
 
 ---
 
 ### Curl (curl)
 
-Computes the curl of a vector field, returning a vector field.
+Computes the curl of a vector field.
 
 **Syntax**:
 ```julia
-# In equations
-add_equation!(problem, "omega = curl(u)")
-
-# Programmatic
-ω = curl(u)
+ω = evaluate(curl(u))
 ```
 
 **Definitions**:
@@ -161,22 +193,43 @@ add_equation!(problem, "omega = curl(u)")
 \omega = \frac{\partial v}{\partial x} - \frac{\partial u}{\partial y}
 ```
 
-**Examples**:
+**Example** — 2-D vorticity diagnostic:
 
 ```julia
-# Vorticity equation (3D)
-problem = IVP([u, omega])
-add_equation!(problem, "∂t(omega) = curl(u × omega)")
+ω = evaluate(curl(u))                 # 2D -> ScalarField
+ensure_layout!(ω, :g)
+get_grid_data(ω)                      # -sin(x) - cos(y), error 3.0e-15
 ```
+
+**Vorticity evolution.** The rotational form `∇×(u×ω)` is **not supported**: a
+`CrossProduct` cannot be an operand of `curl` (`curl(u × ω)` throws
+`FieldError: type CrossProduct has no field dist`). Write the vorticity equation in
+advective form instead — it compiles and steps:
 
 ```julia
-# 2D vorticity
-coords = CartesianCoordinates("x", "y")
-problem = IVP([u, v, omega])
-add_equation!(problem, "omega = ∂x(v) - ∂y(u)")
+omega = ScalarField(domain, "omega")     # in 2D the vorticity is a SCALAR
+set!(omega, (x, y) -> -sin(x) - cos(y))  # = curl(u) for the u above
+
+problem = IVP([omega, u])
+add_parameters!(problem, nu=0.01)
+add_equation!(problem, "∂t(omega) - nu*Δ(omega) = -u⋅∇(omega)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+solver.rhs_plan.is_compiled              # true
+run!(solver; stop_iteration=5, progress=false)   # max|omega| = 1.9999
+
+# `run!` evolves `u` as well, so restore the setup's velocity for the examples below:
+set!(u.components[1], (x, y) -> sin(y))
+set!(u.components[2], (x, y) -> cos(x))
 ```
 
-**Return type**: VectorField (3D) or ScalarField (2D)
+There is no vortex-stretching term in 2D, and you cannot write one: with a *scalar* `omega`,
+`omega⋅∇(u)` is a scalar dotted with a tensor, and the solver rejects it on the first step
+with `UnrecognizedRHSExpression`. Stretching only makes sense on a 3-D domain, where
+`omega` is a `VectorField`; there the same equation with `+ omega⋅∇(u)` compiles and steps.
+
+**Return type**: `Curl` operator; evaluates to `ScalarField` (2D) or `VectorField` (3D).
 
 ---
 
@@ -190,7 +243,7 @@ Computes the Laplacian (second derivative) of a field.
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 
 # Programmatic
-∇²T = Δ(T)
+ΔT = evaluate(Δ(T))    # or lap(T), or ∇²(T)
 ```
 
 **Definitions**:
@@ -208,19 +261,50 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 **Examples**:
 
 ```julia
-# Diffusion equation
+# Programmatic: Δ(sin(x)cos(y)) = -2 sin(x)cos(y), error 1.1e-14
+ΔT = evaluate(Δ(T))
+```
+
+```julia
+# Diffusion / advection-diffusion equation
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 ```
 
 ```julia
-# Viscous term in Navier-Stokes
-add_equation!(problem, "∂t(u) + ∇(p) - nu*Δ(u) = 0")
-```
+# Poisson equation (LBVP) — Δφ = ρ with Dirichlet BCs on a Fourier × Chebyshev domain.
+# A BVP needs boundary conditions, and the Chebyshev axis needs tau terms.
+# NOTE: this block builds its OWN domain, so it uses fresh names (`pcoords`, `pdist`, …)
+# and leaves the 2-D setup above intact for the later sections.
+pcoords = CartesianCoordinates("x", "z")
+pdist   = Distributor(pcoords; dtype=Float64, device=CPU())
+xb = RealFourier(pcoords["x"]; size=16, bounds=(0.0, 2pi))
+zb = ChebyshevT(pcoords["z"];  size=24, bounds=(0.0, 1.0))
+pdomain = Domain(pdist, (xb, zb))
 
-```julia
-# Poisson equation (BVP)
-problem = LBVP([phi])
-add_equation!(problem, "Δ(phi) = rho")
+phi  = ScalarField(pdomain, "phi")
+rho  = ScalarField(pdomain, "rho")
+tau1 = ScalarField(pdist, "tau1", (xb,), Float64)
+tau2 = ScalarField(pdist, "tau2", (xb,), Float64)
+
+xg, zg = local_grids(pdist, xb, zb)
+ensure_layout!(rho, :g)
+get_grid_data(rho) .= -(1 + pi^2) .* cos.(xg) .* sin.(pi .* zg')  # exact: φ = cos(x) sin(πz)
+ensure_layout!(rho, :c)
+
+ex, ez     = unit_vector_fields(pcoords, pdist)
+lift_basis = derivative_basis(zb, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_phi   = grad(phi) + ez * τ_lift(tau1)
+
+problem = LBVP([phi, tau1, tau2])
+add_parameters!(problem, rho=rho, grad_phi=grad_phi, τ_lift=τ_lift)
+add_equation!(problem, "div(grad_phi) + τ_lift(tau2) = rho")
+add_bc!(problem, "phi(z=0) = 0")
+add_bc!(problem, "phi(z=1) = 0")
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)                       # max error vs cos(x)sin(πz): 4.4e-16
 ```
 
 **Works on**: ScalarField, VectorField (applies componentwise)
@@ -233,31 +317,18 @@ add_equation!(problem, "Δ(phi) = rho")
 
 Partial derivatives with respect to coordinate directions.
 
-**Syntax**:
+**In equation strings** — `∂<coord>` for any coordinate name in your coordinate system:
+
 ```julia
-∂x(field)   # ∂/∂x
-∂y(field)   # ∂/∂y
-∂z(field)   # ∂/∂z
-∂r(field)   # ∂/∂r (spherical/polar)
-∂θ(field)   # ∂/∂θ
-∂φ(field)   # ∂/∂φ
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -0.5*∂x(T) - 0.2*∂y(T)")
 ```
 
-**Examples**:
+**In Julia code** — `∂x` is *not* a function. Use `d(field, coord, order)` (constructor
+alias `Differentiate`), and `evaluate` it:
 
 ```julia
-# Advection term
-add_equation!(problem, "∂t(T) = -u*∂x(T) - w*∂z(T)")
-```
-
-```julia
-# Shear
-add_equation!(problem, "S = ∂x(u) + ∂z(w)")
-```
-
-```julia
-# Custom derivative
-dudz = ∂z(u)  # Returns field with ∂u/∂z
+dTdx = evaluate(d(T, coords["x"], 1))     # ∂T/∂x = cos(x)cos(y), error 2.1e-15
+d2T  = evaluate(d(T, coords["x"], 2))     # ∂²T/∂x² = -sin(x)cos(y), error 8.9e-15
 ```
 
 **Implementation**:
@@ -268,34 +339,24 @@ dudz = ∂z(u)  # Returns field with ∂u/∂z
 
 ### Higher Derivatives
 
-Multiple derivatives can be composed:
+**In equation strings** derivatives compose directly:
 
-**Syntax**:
 ```julia
-# Second derivatives
-∂x(∂x(T))   # ∂²T/∂x²
-∂z(∂z(T))   # ∂²T/∂z²
+# Second and mixed derivatives
+add_equation!(problem, "∂t(T) = ∂x(∂y(T))")            # compiles; RHS = ∂²T/∂x∂y
 
-# Mixed derivatives
-∂x(∂z(T))   # ∂²T/∂x∂z
-
-# Higher order
-∂x(∂x(∂x(T)))  # ∂³T/∂x³
+# Biharmonic / hyperdiffusion
+add_equation!(problem, "∂t(psi) + nu4*Δ(Δ(psi)) = 0")
 ```
 
-**Examples**:
+**In Julia code** an unevaluated `Differentiate` cannot be differentiated again. Either
+raise the order, or evaluate the inner derivative first:
 
 ```julia
-# Biharmonic operator
-add_equation!(problem, "Δ(Δ(psi)) = omega")
-
-# Equivalent to:
-add_equation!(problem, "∂x(∂x(∂x(∂x(psi)))) + 2*∂x(∂x(∂z(∂z(psi)))) + ∂z(∂z(∂z(∂z(psi)))) = omega")
-```
-
-```julia
-# Hyperdiffusion (for numerical stability)
-add_equation!(problem, "∂t(T) + nu4*Δ(Δ(T)) = 0")
+d2T   = evaluate(d(T, coords["x"], 2))                       # ∂²T/∂x²
+dxT   = evaluate(d(T, coords["x"], 1))
+dxdyT = evaluate(d(dxT, coords["y"], 1))                     # ∂²T/∂x∂y, error 3.1e-15
+# evaluate(d(d(T, coords["x"], 1), coords["y"], 1))          # ArgumentError
 ```
 
 ---
@@ -316,8 +377,8 @@ dt(field)   # ASCII
 
 ```julia
 # Evolution equations
-add_equation!(problem, "∂t(u) - nu*Δ(u) = -u*∂x(u)")
-add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u*∂x(T)")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
+add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")
 ```
 
 **Note**: Only use in IVP (Initial Value Problems). Not valid for BVP or EVP.
@@ -335,16 +396,25 @@ signals, envelope/phase diagnostics, and 90° phase shifts along a Fourier axis.
 **Syntax**:
 
 ```julia
-hilbert(u)                       # functional form
+Hf = evaluate(hilbert(f))                      # ScalarField -> ScalarField
 ```
 
 ```julia
-add_equation!(problem, "∂t(u) = hilbert(u)")   # parseable in equation strings
+add_equation!(problem, "∂t(T) = hilbert(T)")   # parseable in equation strings
 ```
 
-**Properties**:
-- Linear, spectral (diagonal in Fourier space).
-- Defined on Fourier (periodic) axes.
+**Properties** (all verified on a 32-point `RealFourier` axis):
+- `H[sin x] = -cos x` (error 5.6e-16), and `H[H[f]] = -f` for zero-mean `f` (error 3.3e-16).
+- It is applied to **every** Fourier axis of the field, not just the first: on the 2-D
+  domain above, `hilbert(sin(x)cos(y))` returns `-cos(x)sin(y)` (error 8.9e-16).
+- Scalar fields only (a `VectorField` operand throws).
+
+**Limitations**:
+- `hilbert` in an equation RHS is **not** handled by the compiled ("lazy") RHS: the solver
+  logs a warning and the whole problem falls back to the slower interpreted evaluator
+  (`solver.rhs_plan.is_compiled == false`).
+- Under MPI it throws if a **Fourier** axis is the decomposed one — the `-i·sign(k)`
+  multiplier needs global wavenumbers, which a decomposed axis does not expose.
 
 ---
 
@@ -352,50 +422,43 @@ add_equation!(problem, "∂t(u) = hilbert(u)")   # parseable in equation strings
 
 ### Dot Product / Advection
 
-**Syntax**:
+**In equations** — use vector notation directly:
 ```julia
-# In equations - use vector notation directly
-add_equation!(problem, "∂t(T) = -u⋅∇(T)")
-
-# For vector advection (nonlinear term)
-add_equation!(problem, "∂t(u) = -u⋅∇(u)")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")    # scalar advection
+add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")       # vector advection
 ```
 
-**Example**:
-
+**Programmatic**:
 ```julia
-# Scalar advection: -u·∇T
-add_equation!(problem, "∂t(T) = -u⋅∇(T)")
-
-# Vector advection (Navier-Stokes nonlinear term)
-add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
+adv = evaluate(u ⋅ ∇(T))     # ScalarField, u·∇T — error ~1e-15 against the exact field
 ```
 
 ---
 
 ### Cross Product
 
-**Syntax**:
-```julia
-# Use cross function or × operator
-u_cross_omega = cross(u, omega)
-u_cross_omega = u × omega  # Unicode: \times Tab
-```
-
-**Example**:
+The cross product is a 3-D operation, so it needs a 3-D domain. As with the Poisson block,
+this one uses fresh names so it does not disturb the 2-D setup used by the sections below:
 
 ```julia
-# Vorticity equation: ∂ω/∂t = ∇×(u×ω)
-problem = IVP([ux, uy, uz, omega_x, omega_y, omega_z])
+coords3 = CartesianCoordinates("x", "y", "z")
+dist3   = Distributor(coords3; dtype=Float64, device=CPU())
+domain3 = Domain(dist3, (RealFourier(coords3["x"]; size=8, bounds=(0.0, 2pi)),
+                         RealFourier(coords3["y"]; size=8, bounds=(0.0, 2pi)),
+                         RealFourier(coords3["z"]; size=8, bounds=(0.0, 2pi))))
+u3 = VectorField(domain3, "u")
+ω3 = VectorField(domain3, "omega")
+set!(u3.components[1], (x, y, z) -> sin(y))     # u = (sin y, 0, 0)
+set!(ω3.components[3], (x, y, z) -> cos(x))     # ω = (0, 0, cos x)
 
-# Compute u × ω
-u_cross_omega = cross(u, omega)
-# Or equivalently:
-u_cross_omega = u × omega
-
-# Then: ∇×(u×ω)
-add_equation!(problem, "∂t(omega) = curl(u_cross_omega)")
+uxω = evaluate(cross(u3, ω3))                   # or: evaluate(u3 × ω3)  -> VectorField
+ensure_layout!(uxω.components[2], :g)
+get_grid_data(uxω.components[2])                # -sin(y)cos(x), error 7.8e-16
 ```
+
+`u × ω` is also parseable inside an equation string, but the term is not compiled by the
+lazy RHS (the solver falls back to the interpreted evaluator). It **cannot** be nested
+inside `curl` — see **Curl** above for the supported vorticity form.
 
 ---
 
@@ -409,70 +472,86 @@ Combine operators for complex expressions.
 # For vector field u
 # ∇²u = (∇²u_x, ∇²u_y, ∇²u_z)
 
-add_equation!(problem, "∂t(u) - nu*Δ(u) = 0")
-# Automatically applies componentwise
+add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")
+# Δ automatically applies componentwise
 ```
 
 ### Advection Operator
 
 ```julia
-# u·∇u (nonlinear advection) - use vector notation directly
-
-# Navier-Stokes momentum equation:
-add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u)")
-
 # Scalar advection:
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 
-# With buoyancy (Boussinesq):
-add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*T*ez")
+# Vector advection (Navier-Stokes nonlinear term):
+add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")
 ```
+
+The incompressible momentum equation with a pressure gradient needs the tau/BC machinery —
+see the [Rayleigh-Bénard tutorial](../tutorials/ivp_2d_rbc.md) for the full form.
 
 ### Strain Rate Tensor
 
+`grad` of a `VectorField` evaluates to a `TensorField` with `(∇u)[i,j] = ∂u_j/∂x_i`.
+Build the symmetric part from its components — arithmetic on `ScalarField`s is eager, so
+each expression below is a real field:
+
 ```julia
-# S_ij = 1/2 (∂u_i/∂x_j + ∂u_j/∂x_i)
-
-function strain_rate_tensor(u)
-    # Returns TensorField
-    S = TensorField(u.distributor, u.coords, "S", u.bases, symmetric=true)
-
-    S[1,1] = ∂x(u.components[1])
-    S[1,2] = 0.5 * (∂x(u.components[2]) + ∂y(u.components[1]))
-    S[2,2] = ∂y(u.components[2])
-    # ... etc
-
-    return S
-end
+∇u  = evaluate(grad(u))                                  # TensorField
+S11 = ∇u.components[1, 1]
+S12 = 0.5 * (∇u.components[1, 2] + ∇u.components[2, 1])  # ScalarField
+S22 = ∇u.components[2, 2]
 ```
+
+For `u = (sin y, cos x)`: `S11 = S22 = 0` exactly, and `S12 = 0.5(cos y - sin x)` to
+1.3e-15.
+
+`S[i, j]` is shorthand for `S.components[i, j]`, for reading *and* for assignment, so you
+can also collect the components into a `TensorField` of your own:
+
+```julia
+S = TensorField(dist, "S", (bx, by), Float64)
+S[1, 2] = S12
+S[2, 1] = S12                    # S[1,2] === S.components[1,2]
+```
+
+There is no `symmetric=` keyword on the `TensorField` constructor (`MethodError`).
 
 ---
 
 ## Operator Properties
 
-### Linearity
-
-All operators are linear:
+The identities below were checked numerically on the 2-D setup, with a second scalar field
 
 ```julia
-# ∇(αf + βg) = α∇f + β∇g
-∇(alpha*f + beta*g) == alpha*∇(f) + beta*∇(g)
+g = ScalarField(domain, "g")
+set!(g, (x, y) -> cos(2x))
+```
+
+The quoted figure is the measured maximum difference.
+
+### Linearity
+
+```julia
+# ∇(αf + βg) = α∇f + β∇g          — max difference 3.6e-15
+lhs = evaluate(∇(2.0 * T + 3.0 * g))
+gT, gg = evaluate(∇(T)), evaluate(∇(g))
+# lhs.components[i] ≈ 2.0 * gT.components[i] + 3.0 * gg.components[i]
 ```
 
 ### Commutativity
 
-Partial derivatives commute:
-
 ```julia
-# ∂²f/∂x∂z = ∂²f/∂z∂x
-∂x(∂z(f)) == ∂z(∂x(f))
+# ∂²f/∂x∂y = ∂²f/∂y∂x             — max difference 3.4e-15
+a = evaluate(d(evaluate(d(T, coords["x"], 1)), coords["y"], 1))
+b = evaluate(d(evaluate(d(T, coords["y"], 1)), coords["x"], 1))
 ```
 
 ### Product Rule
 
 ```julia
-# ∇(fg) = f∇g + g∇f
-∇(f*g) == f*∇(g) + g*∇(f)
+# ∇(fg) = f∇g + g∇f               — max difference ~2e-15
+lhs = evaluate(∇(T * g))
+# lhs.components[i] ≈ T * gg.components[i] + g * gT.components[i]
 ```
 
 ---
@@ -481,18 +560,24 @@ Partial derivatives commute:
 
 ### Defining Helper Functions
 
-You can define helper functions that compose built-in operators:
+Helper functions that compose built-in operators return operator objects, which you can
+register as a parameter and then name inside an equation string:
 
 ```julia
-# Define helper function
-function my_diffusion(field, kappa)
-    # Custom operation combining derivatives
-    return kappa * Δ(field)
-end
+hyperdiffusion(field, k4) = k4 * Δ(Δ(field))
 
-# Use programmatically
-diffusion_term = my_diffusion(T, kappa)
+problem = IVP([T])
+add_parameters!(problem, hyper_T = hyperdiffusion(T, 1e-4))
+add_equation!(problem, "∂t(T) + hyper_T = 0")
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+run!(solver; stop_iteration=10, progress=false)
+solver.rhs_plan.is_compiled      # true
 ```
+
+This is the supported way to inject a hand-built term: an equation string can only see
+fields of the problem and names registered with `add_parameters!` — it cannot see plain
+Julia globals, and there is no `field.rhs` / `field.data` to write into.
 
 ### Using Built-in Operators in Equations
 
@@ -500,8 +585,8 @@ The equation parser recognizes all registered operators. Use them directly in eq
 
 ```julia
 # Available operators in equations:
-# grad, div, curl, lap (or Δ), dt (or ∂t), d
-# integrate, average, interpolate, convert, lift
+# grad, div, curl, lap (or Δ), dt (or ∂t), d, ∂<coord>
+# integrate, average, interpolate, convert, lift, trace, hilbert
 # sin, cos, tan, exp, log, sqrt, abs, tanh
 
 # Example: diffusion equation
@@ -509,16 +594,6 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 
 # Example: advection-diffusion
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
-```
-
-For complex expressions, compute terms programmatically and use the result:
-
-```julia
-# Compute complex term
-rhs_term = kappa * Δ(T) - u * ∂x(T)
-
-# Add to field's RHS
-T.rhs .+= rhs_term.data
 ```
 
 ---
@@ -531,11 +606,11 @@ Tarang.jl parses equation strings into operator applications:
 
 ```julia
 # String equation
-add_equation!(problem, "∂t(u) + ∂x(p) - nu*Δ(u) = -u*∂x(u)")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -0.5*∂x(T) - 0.2*∂y(T)")
 
 # Parsed as:
-# LHS: ∂t(u) + ∂x(p) - nu*Δ(u)
-# RHS: -u*∂x(u)
+# LHS: ∂t(T) - kappa*Δ(T)
+# RHS: -0.5*∂x(T) - 0.2*∂y(T)
 ```
 
 **Supported operations**:
@@ -560,27 +635,27 @@ Operators are evaluated in spectral space when possible:
 
 ## Performance Tips
 
-### Minimize Grid-Spectral Transforms
+### Check that the RHS compiled
+
+The explicit side of every equation is compiled into a type-specialized plan. If any term
+cannot be compiled, the *whole solver* silently drops to the ~100×-slower interpreted
+evaluator (after a loud `@warn`). Check it:
 
 ```julia
-# Bad: Multiple transforms
-add_equation!(problem, "∂t(T) = -u*∂x(T)")  # Transforms for each term
-
-# Better: Group operations
-# Tarang automatically optimizes transform grouping
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+solver.rhs_plan.is_compiled      # true for every equation on this page except `hilbert`
+                                 # (a bare `u × ω` term does not compile either)
 ```
 
-### Precompute Common Terms
+### Keep non-Fourier derivatives off the explicit side
 
-```julia
-# If using same derivative multiple times
-dudx = ∂x(u)
+A Chebyshev/Legendre derivative in an RHS is either declined by the compiler (Legendre,
+and any non-Fourier axis under MPI) or — distributed — errors at the first step, because a
+rank owns only part of that axis. Express those terms with `grad`/`div` on the implicit
+(L) side of the equation. Fourier derivatives are fine anywhere: they are a diagonal `ik`
+multiply.
 
-add_equation!(problem, "term1 = dudx")
-add_equation!(problem, "term2 = w*dudx")
-```
-
-### Use Sparse Differentiation
+### Use sparse differentiation
 
 Chebyshev/Legendre derivatives are sparse matrix operations - very efficient.
 

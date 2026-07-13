@@ -398,6 +398,16 @@ function _auto_register_coordinate_fields!(problem::Problem)
             scales = comp.scales === nothing ?
                      ntuple(_ -> 1.0, max(length(comp.bases), 1)) :
                      comp.scales
+            # A BC lives on the boundary PLANE, which is spanned by the Fourier axes. When there
+            # are two or more of them, a coordinate registered as a bare 1-D vector loses its axis
+            # identity: `cos(2*pi*y/Ly)` evaluates to a length-Ny vector that is indistinguishable
+            # from a length-Nx one, and the projection assumed the FIRST Fourier axis — so the
+            # y-profile was silently applied along x. Give each coordinate its axis identity in its
+            # SHAPE ((Nx,1) and (1,Ny)), so broadcasting reconstructs the correct boundary plane and
+            # the projection sees the true 2-D dependence.
+            fourier_axes = [i for (i, b) in enumerate(comp.bases)
+                            if b !== nothing && isa(b, FourierBasis)]
+            n_fourier = length(fourier_axes)
             for (axis_idx, basis) in enumerate(comp.bases)
                 basis === nothing && continue
                 label = String(basis.meta.element_label)
@@ -406,6 +416,12 @@ function _auto_register_coordinate_fields!(problem::Problem)
                 try
                     scale = axis_idx <= length(scales) ? scales[axis_idx] : 1.0
                     grid = _global_bc_grid(basis, scale)
+                    fpos = findfirst(==(axis_idx), fourier_axes)
+                    if fpos !== nothing && n_fourier >= 2
+                        # Orient this Fourier coordinate along its own axis of the boundary plane.
+                        shape = ntuple(d -> d == fpos ? length(grid) : 1, n_fourier)
+                        grid = reshape(grid, shape)
+                    end
                     bc_manager.coordinate_fields[label] = grid
                     push!(seen, label)
                 catch err

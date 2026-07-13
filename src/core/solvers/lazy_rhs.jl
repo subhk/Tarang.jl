@@ -557,16 +557,30 @@ end
     ensure_layout!(out, :g)
     out_data = get_local_data(get_grid_data(out))
     out_data === nothing && return out
-    if isa(expr.field, ScalarField)
-        ensure_layout!(expr.field, :g)
-        src_data = get_local_data(get_grid_data(expr.field))
-        if src_data !== nothing && size(src_data) == size(out_data)
-            copyto!(out_data, src_data)
-        else
-            fill!(out_data, zero(eltype(out_data)))
-        end
+    f = expr.field
+    if !isa(f, ScalarField)
+        error("LazyRHS: parameter of type $(typeof(f)) cannot be evaluated as a field term. " *
+              "This used to be silently replaced by ZERO, dropping the term from the RHS.")
+    end
+
+    ensure_layout!(f, :g)
+    src_data = get_local_data(get_grid_data(f))
+    src_data === nothing && error("LazyRHS: parameter field `$(f.name)` has no grid data.")
+
+    if size(src_data) == size(out_data)
+        copyto!(out_data, src_data)
+    elseif isempty(f.bases) || length(src_data) == 1
+        # A 0-D / CONSTANT field — e.g. a component of `unit_vector_fields`, whose components are
+        # 0-D fields holding a single 1.0 or 0.0. Broadcast its value across the target's grid.
+        #
+        # This branch used to fall into `fill!(out_data, 0)` because the shapes differ, so a term
+        # like `dpdx*ex` on an explicit RHS was silently ZEROED: a pressure-gradient-driven flow
+        # never got forced, the fluid stayed at rest, and `is_compiled` still reported `true`.
+        @inbounds fill!(out_data, convert(eltype(out_data), real(first(src_data))))
     else
-        fill!(out_data, zero(eltype(out_data)))
+        error("LazyRHS: parameter field `$(f.name)` has local grid size $(size(src_data)), which " *
+              "does not match the target field's $(size(out_data)) and is not a 0-D constant. " *
+              "Zeroing it (the old behavior) would silently drop the term from the RHS.")
     end
     out.current_layout = :g
     return out

@@ -177,18 +177,48 @@ This is the core of the modern solver path. `_try_build_subproblems!(solver)` ca
 At runtime, the build path does the following:
 
 1. **Enumerates Fourier-mode groups.** For each separable (Fourier) axis, each mode is a "subproblem group". In a 2D problem with `Nx = 256` RealFourier modes and one Chebyshev direction, there are `Nx/2 + 1 = 129` subproblems.
-2. **Builds per-subproblem matrices.** For each subproblem, `build_matrices!(sp, ...)` walks the problem's equation list and calls `expression_matrices(expr, sp, vars)` to construct small sparse `L` and `M` matrices — typically of shape `(n_eqs_rows, n_var_cols)` where the sizes are the per-Fourier-mode DOF counts (e.g. `263 × 263` for 2D RBC at `Nz = 64`).
+2. **Builds per-subproblem matrices.** For each subproblem, `build_matrices!(sp, ...)` walks the problem's equation list and calls `expression_matrices(expr, sp, vars)` to construct small sparse `L` and `M` matrices — typically of shape `(n_eqs_rows, n_var_cols)` where the sizes are the per-Fourier-mode DOF counts (`262 × 262` for the 2D RBC skeleton at `Nz = 64`).
 3. **Applies left / right permutations** (`left_permutation`, `right_permutation`) to group equations and variables by their domain dimension, matching the Dedalus subsystem ordering convention.
-4. **Applies valid-mode filtering.** Rows that are identically zero in both `L` and `M` — typically trivially-satisfied gauge constraints like `integ(p) = 0` at non-DC Fourier modes — are paired with the "least-used" 1-DOF tau column (by smallest `|L| + |M|` norm) and both are dropped from the filtered system. This yields a smaller square sparse system (`L_min`, `M_min`) that a sparse LU can factor cleanly.
+4. **Applies valid-mode filtering.** Rows that are identically zero in both `L` and `M` — typically trivially-satisfied gauge constraints like `integ(p) = 0` at non-DC Fourier modes — are paired with the "least-used" 1-DOF tau column (by smallest `|L| + |M|` norm) and both are dropped. The filtered system (`L_min`, `M_min`) is square and factors cleanly under a sparse LU; where a mode has no such zero rows it is simply the raw block.
 5. **Classifies rows by equation size.** `sp.bulk_rows` holds row indices where `eq_size ≥ Nz` (PDE rows and Nz-sized algebraic rows like continuity); `sp.bc_rows` holds row indices where `eq_size < Nz` (BC rows and gauge rows). The IMEX stepper uses `sp.bc_rows` to target algebraic-constraint rows for the per-stage `apply_bc_override!` path.
 
 The output — a `Tuple{Vararg{Subproblem}}` stored in `problem.parameters["subproblems"]` — is what the stepper consumes.
 
 ### 5. Lazy RHS plan
 
-`build_lazy_rhs_plan!(solver)` walks each equation's `F` expression and translates it into a type-parameterized `LazyFuture` tree (see `src/core/solvers/lazy_rhs.jl`). Each node (`LazyAdd`, `LazyMul`, `LazyDiff`, `LazyStateField`, `LazyParamField`, `LazyConst`) has a specialized `evaluate_lazy!` method. At first call, Julia's JIT specializes the entire `evaluate_lazy!` chain — eliminating dynamic dispatch and enabling broadcast fusion across arithmetic combinators.
+`build_lazy_rhs_plan!(solver)` walks each equation's `F` expression and translates it into a type-parameterized `LazyFuture` tree (see `src/core/solvers/lazy_rhs.jl`). Each node — `LazyStateField`, `LazyParamField`, `LazyConst`, `LazyAdd`, `LazySub`, `LazyMul`, `LazyNegate`, `LazyScale`, `LazyDiv`, `LazyPow`, `LazyUnaryFunc`, `LazyDiff`, `LazyMultiDiff` — has a specialized `evaluate_lazy!` method. At first call, Julia's JIT specializes the entire `evaluate_lazy!` chain — eliminating dynamic dispatch and enabling broadcast fusion across arithmetic combinators.
 
-If translation fails for any equation (unsupported operator type), the plan's `is_compiled` stays false and `evaluate_rhs` falls back to the interpreted expression path (slower but universally functional).
+`LazyMultiDiff` is the fused Laplacian: `lap(u)` is a SUM of derivatives of one operand, so it evaluates the operand once, does a single forward transform, applies every axis's multiplier in one coefficient-space visit, and does a single backward transform — two spectral transforms regardless of dimension, instead of a full grid→coefficient→grid round-trip per axis.
+
+If translation fails for **any** equation, the plan's `is_compiled` stays `false` and `evaluate_rhs` falls back to the interpreted expression path — **for the whole solver, not just the offending term**.
+
+Failure is not always a defect. `_lazy_diff_axis_supported` (`lazy_rhs.jl:329`) *deliberately* declines to translate a derivative in two situations where the lazy path would be wrong rather than merely absent, and the interpreted evaluator — correct, but roughly 100× slower — takes over.
+
+!!! warning "The interpreted fallback is slow, and under MPI it is not always correct"
+    The fallback is roughly **100× slower** per RHS evaluation. Worse, on a **distributed all-Fourier** field the interpreted derivative has been observed to evaluate to **zero**, leaving the field frozen with no error raised. Do not treat the fallback as a safe default: treat it as a bug to fix in your equation.
+
+    Check whether your solver compiled:
+
+    ```julia
+    solver.rhs_plan.is_compiled   # false ⇒ you are on the interpreted path
+    ```
+
+    `diagnose(solver)` reports the same thing. To turn a silent fallback into a hard error:
+
+    ```julia
+    Tarang.require_lazy_rhs!()    # subsequent solver construction errors instead of warning
+    ```
+
+    A fallback is **expected and correct** in two cases, both of them declines by `_lazy_diff_axis_supported`:
+
+    | Situation | Why the lazy path is declined |
+    |---|---|
+    | Derivative along a **distributed non-Fourier (Chebyshev) axis** in an explicit RHS term | The compiled path works in coefficient space, where that axis is the decomposed one, so a rank's slab does not conform to the global differentiation matrix. The interpreted path works in grid space, where the axis is local, and is accurate. |
+    | Derivative on a **Legendre / general (non-Chebyshev) Jacobi** basis — distributed or not | `differentiation_matrix` returns the recurrence for *unnormalized* `Pₙ`, while the transform stores *orthonormal* coefficients. The interpreted path applies that normalization; the lazy one does not, so it would be silently wrong. `ChebyshevT` / `ChebyshevU` carry no such normalization and are compiled. |
+
+    The `@warn` spells the first case out ("This is EXPECTED and CORRECT for a distributed non-Fourier (Chebyshev/Jacobi) axis…"). It does **not** yet do so for the second: a Legendre decline prints only the generic "Usual cause: an unsupported or mistyped operator in this term", so if you are on a Legendre / general-Jacobi basis, do not go hunting for a typo that isn't there.
+
+    For the first case, move the term to the implicit (`L`) side to keep the compiled RHS; for the second, there is nothing to fix — the interpreted path *is* the correct path on that basis.
 
 The plan is stored as `solver.rhs_plan::LazyRHSPlan` and used by `evaluate_rhs(solver, state, time)` during every stage of every step.
 
@@ -196,7 +226,7 @@ The plan is stored as `solver.rhs_plan::LazyRHSPlan` and used by `evaluate_rhs(s
 
 A single `step!(solver, dt)` call does:
 
-1. **Refresh dynamic BCs** (`solver_stepping.jl:23`). If `has_time_dependent_bcs(bcm)` is true, call `update_time_dependent_bcs!(bcm, t+dt)` and `_apply_bc_values_to_equations!(solver, t+dt)`, which rewrites `equation_data[eq_idx]["F"]` with a fresh `ConstantOperator` or `ArrayOperator` for every time/space-dependent BC.
+1. **Refresh dynamic BCs** (`_refresh_step_boundary_conditions!`, `solver_stepping.jl`). If `has_time_dependent_bcs(bcm)` is true, call `update_time_dependent_bcs!(bcm, t+dt)` and `_apply_bc_values_to_equations!(solver, t+dt)`, which rewrites `equation_data[eq_idx]["F"]` with a fresh `ConstantOperator` or `ArrayOperator` for every time/space-dependent BC.
 2. **Dispatch by timestepper type** (`timesteppers/dispatch.jl`). `RK222()` → `step_rk_imex!` → if `problem.parameters["subproblems"]` exists, call `step_subproblem_rk!(state, solver, sps)`. For `CNAB2`/`SBDF2` the dispatch is similar via `step_subproblem_multistep!`.
 3. **Per-stage subproblem solve** (`step_subproblem_rk.jl`). For each RK stage:
    - Refresh `ALG_F` per stage (re-run `gather_alg_F!` after re-calling `update_time_dependent_bcs!` at `t + c[i]·dt`). This recovers full stage-order accuracy for rapidly-varying BCs.
@@ -213,11 +243,15 @@ The same pattern applies to the multistep stepper (`step_subproblem_multistep.jl
 ### Coordinates
 
 ```julia
-abstract type Coordinates end
+abstract type CoordinateSystem end
 
-struct CartesianCoordinates <: Coordinates
+struct CartesianCoordinates <: CoordinateSystem
     names::Vector{String}
+    dim::Int
     coords::Vector{Coordinate}
+    curvilinear::Bool
+    right_handed::Union{Nothing, Bool}
+    default_nonconst_groups::Tuple{Vararg{Int}}
 end
 ```
 
@@ -225,17 +259,19 @@ end
 
 ```julia
 abstract type Basis end
-abstract type FourierBasis <: Basis end
-abstract type JacobiBasis <: Basis end
+abstract type IntervalBasis <: Basis end
+abstract type JacobiBasis  <: IntervalBasis end
+abstract type FourierBasis <: IntervalBasis end
 
-struct RealFourier   <: FourierBasis  end
+struct RealFourier    <: FourierBasis end
 struct ComplexFourier <: FourierBasis end
-struct ChebyshevT    <: JacobiBasis   end
-struct ChebyshevU    <: JacobiBasis   end
-struct Legendre      <: JacobiBasis   end
+struct ChebyshevT     <: JacobiBasis  end
+struct ChebyshevU     <: JacobiBasis  end
+struct Legendre       <: JacobiBasis  end
+struct Jacobi         <: JacobiBasis  end
 ```
 
-Every basis carries a `meta::BasisMeta` with `size`, `bounds`, `element_label`, `dealias`, and cached conversion matrices.
+Every basis carries a `meta::BasisMeta` — `coordsys`, `element_label`, `dim`, `size`, `bounds`, `dealias`, `dtype` — and, alongside it, its own memo dictionaries for product, conversion, and differentiation matrices (`_conversion_matrix_cache` and friends live on the basis struct, not on `meta`).
 
 ### Fields
 
@@ -322,7 +358,7 @@ All RK variants carry their full Butcher tableau. Multistep variants (`CNAB1/2`,
 ### Solver
 
 ```julia
-mutable struct InitialValueSolver
+mutable struct InitialValueSolver <: Solver
     base::SolverBaseData
     problem::IVP
     timestepper::TimeStepper
@@ -334,7 +370,7 @@ mutable struct InitialValueSolver
     state::Vector{<:ScalarField}
     dt::Float64
     timestepper_state::Union{Nothing, AbstractTimestepperState}
-    evaluator::Any              # Evaluator or nothing
+    evaluator::Union{Nothing, AbstractEvaluator}
     wall_time_start::Float64
     performance_stats::SolverPerformanceStats
     rhs_plan::Any                # Lazy RHS plan or nothing
@@ -367,11 +403,18 @@ Grid space
 
 ### MPI communication
 
-- **All-to-all** — layout transposes between pencils via `PencilFFTPlan`.
+- **All-to-all** — layout transposes between pencils: inside the FFTs (`PencilFFTPlan`), and — on a distributed mixed Fourier–Chebyshev domain — the solve-layout transposes described below (`PencilArrays.transpose!`).
 - **Allreduce** — global reductions for energy, CFL, diagnostics.
-- **Allgatherv** — assembling subproblem-local data when a global view is needed (rare; most of the step is rank-local because subproblems are per-Fourier-mode).
+- **Allgatherv** — the Z→Y transpose step on a true 2D process mesh, and the EVP eigenvalue gather (`_allgather_complex` in `solver_stepping.jl`), where every rank's local Fourier modes must contribute to one global `which`/`nev` selection.
 
-Under the subproblem architecture, each MPI rank owns a subset of Fourier modes. Every rank iterates its own subproblems independently — no inter-rank communication inside the stepper loop. The only rank-to-rank traffic is during the forward/backward FFTs and the optional global reductions in user callbacks.
+Under the subproblem architecture, each MPI rank owns a subset of Fourier modes, and **the per-subproblem solve itself is rank-local**: every rank iterates its own subproblems with no rank-to-rank traffic between them, and none of it is per-mode. What surrounds that loop depends on the bases:
+
+- **Pure Fourier.** The only traffic is the forward/backward FFTs in the RHS evaluation, plus whatever global reductions user callbacks ask for. The stepper loop itself communicates nothing.
+- **Mixed Fourier–Chebyshev, distributed.** The stepper additionally pays collective *pencil transposes inside the step*. In coefficient space a mixed field is decomposed along the **Chebyshev** axis (the `pencil_fft_output` layout), but the per-mode tau solve needs the opposite: Fourier modes split across ranks and **full Chebyshev columns rank-local**. That is the `dist.pencil_solve` layout, and `to_solve_layout!` / `from_solve_layout!` (`subsystems/subproblem_io.jl`) move the state and `F` fields between the two. `step_subproblem_rk!` brackets every RK stage with them; `step_subproblem_multistep!` does the same once per step.
+
+  Each call is **one collective over the whole comm** — so they are hoisted **outside** the `for sp in subproblems` loop, and every rank must issue the same transpose count in the same order. The cost is therefore per *stage*, not per *mode*; but "no communication inside the stepper loop" is true only for the pure-Fourier case.
+
+Both helpers short-circuit to a no-op when `dist === nothing`, `dist.size <= 1`, or `dist.pencil_solve === nothing` — i.e. serial and pure-Fourier runs pay nothing for them.
 
 ## Extension Points
 

@@ -107,11 +107,13 @@ add_equation!(problem, "∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)")
 add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)")
 
 # Boundary conditions
-add_bc!(problem, "T(z=0) = 1")       # hot bottom
-add_bc!(problem, "T(z=1) = 0")      # cold top
-add_bc!(problem, "u(z=0) = 0")       # no-slip bottom
-add_bc!(problem, "u(z=1) = 0")      # no-slip top
-add_bc!(problem, "integ(p) = 0")     # pressure gauge
+# NOTE: BC strings are parsed by Tarang, not Julia — they cannot see Julia
+# globals, so the value of Lz must be interpolated into the string.
+add_bc!(problem, "T(z=0) = 1")        # hot bottom
+add_bc!(problem, "T(z=$Lz) = 0")      # cold top
+add_bc!(problem, "u(z=0) = 0")        # no-slip bottom
+add_bc!(problem, "u(z=$Lz) = 0")      # no-slip top
+add_bc!(problem, "integ(p) = 0")      # pressure gauge
 
 # ─── Solver ───────────────────────────────────────────────────
 solver = InitialValueSolver(problem, RK222(); dt=max_dt)
@@ -119,9 +121,9 @@ solver = InitialValueSolver(problem, RK222(); dt=max_dt)
 @root_only diagnose(solver)
 
 # ─── Output ──────────────────────────────────────────────────
-snapshots = add_file_handler("snapshots", dist,
-    Dict("T" => T, "ux" => u.components[1], "uz" => u.components[2]);
-    sim_dt=0.1, max_writes=50)
+# The solver form auto-registers the handler with the solver's evaluator, so
+# `run!` writes it every step. The `dist` form does not — it needs `outputs=[...]`.
+snapshots = add_file_handler("snapshots", solver; sim_dt=0.1, max_writes=50)
 add_task!(snapshots, T;               name="temperature")
 add_task!(snapshots, u.components[1]; name="ux")
 add_task!(snapshots, u.components[2]; name="uz")
@@ -145,6 +147,7 @@ add_velocity!(cfl, u)
 
 run!(solver;
      stop_time=stop_time,
+     cfl=cfl,
      log_interval=100,
      callbacks=[
          on_interval(10) do s

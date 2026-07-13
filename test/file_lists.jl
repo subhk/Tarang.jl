@@ -108,6 +108,7 @@ const TEST_FILES = [
     "test_lazy_rhs_fourier.jl",
     "test_lazy_rhs_vector_ops.jl",           # lap/div(grad)/div compile to the lazy RHS and match the interpreted evaluator
     "test_lazy_rhs_transform_budget.jl",     # lap() is fused (1 fwd + 1 bwd, not one round-trip per axis); alloc guards are blind to this
+    "test_silent_zero_terms.jl",             # compound-constant BCs and unit-vector RHS forcing were silently enforced/applied as ZERO
     "test_timestepper_boundaries.jl",
     "test_field_pool.jl",
     "test_linalg.jl",

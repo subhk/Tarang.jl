@@ -45,6 +45,10 @@ Boundary conditions:
 - `T(z=0) = 1`, `T(z=Lz) = 0` (fixed hot/cold)
 - `u(z=0) = u(z=Lz) = 0` (no-slip)
 
+This problem runs **in serial only** — the explicit advection terms need a Chebyshev
+derivative, which Tarang cannot evaluate on a distributed field. See
+[Running the simulation](#Running-the-simulation) below.
+
 ### First-order reformulation
 
 For better spectral conditioning — especially at high resolution — we rewrite the second-order operators in **first-order form** using auxiliary gradient variables:
@@ -179,14 +183,29 @@ Key substitutions:
 ### Boundary conditions
 
 ```julia
-add_bc!(problem, "T(z=0) = 1")       # hot bottom
-add_bc!(problem, "T(z=Lz) = 0")      # cold top
-add_bc!(problem, "u(z=0) = 0")       # no-slip bottom
-add_bc!(problem, "u(z=Lz) = 0")      # no-slip top
-add_bc!(problem, "integ(p) = 0")     # pressure gauge
+add_bc!(problem, "T(z=0) = 1")        # hot bottom
+add_bc!(problem, "T(z=$Lz) = 0")      # cold top
+add_bc!(problem, "u(z=0) = 0")        # no-slip bottom
+add_bc!(problem, "u(z=$Lz) = 0")      # no-slip top
+add_bc!(problem, "integ(p) = 0")      # pressure gauge
 ```
 
-The BC count (5) equals the tau-DOF count (`tau_p` + `tau_T1` + `tau_T2` + 2 components of `tau_u1` = 5), which is what makes the filtered subproblem matrix square.
+!!! warning "BC strings are parsed by Tarang, not by Julia"
+    The string handed to `add_bc!` is parsed by Tarang's own expression parser, which only
+    knows the problem's variables and its `add_parameters!` names — **it cannot see Julia
+    globals**. Writing `"T(z=Lz) = 0"` does not fail loudly: the parser warns
+    `Unknown variable: Lz`, builds the equation with zero output DOFs, and the run then dies
+    with a `DimensionMismatch` from the (now non-square) subproblem solve. Either interpolate
+    the Julia value into the string (`"T(z=$Lz) = 0"`, which is what is done above and expands
+    to `T(z=1.0)`), or write a literal (`"T(z=1) = 0"`).
+
+Boundary conditions must always go through `add_bc!` — declaring one with `add_equation!`
+compiles, but the constraint is silently not enforced.
+
+The tau DOFs and the BC rows balance: per Fourier mode there are six tau unknowns
+(`tau_T1`, `tau_T2`, and two components each of `tau_u1`, `tau_u2`) against six BC rows
+(`T` and `u` at both walls, counting velocity components), plus the global gauge pair
+`tau_p` ↔ `integ(p)`. That balance is what makes the filtered subproblem matrix square.
 
 ### Solver
 
@@ -201,12 +220,25 @@ solver = InitialValueSolver(problem, RK222(); dt=max_dt)
 ### Output handler
 
 ```julia
-snapshots = add_file_handler("snapshots", dist,
-    Dict("T" => T, "ux" => u.components[1], "uz" => u.components[2]);
-    sim_dt=0.1, max_writes=50)
+snapshots = add_file_handler("snapshots", solver; sim_dt=0.1, max_writes=50)
 add_task!(snapshots, T;               name="temperature")
 add_task!(snapshots, u.components[1]; name="ux")
 add_task!(snapshots, u.components[2]; name="uz")
+```
+
+Pass the **solver** — that form registers the handler with the solver's evaluator, so `run!`
+processes it every step with no further wiring. The other method,
+`add_file_handler(path, dist, vars)`, does *not* auto-register; a handler built that way is
+never written unless you also pass it as `run!(solver; outputs=[snapshots], …)`.
+
+The written file is NetCDF-4 with groups, so read tasks back out of the `vars` group rather
+than from the file root:
+
+```julia
+f = "snapshots/snapshots_s1/snapshots_s1.nc"
+Tarang.group_variable_names(f, "vars")        # ["temperature", "ux", "uz"]
+Tarang.group_ncread(f, "vars", "temperature") # (write, x, z)
+Tarang.group_ncread(f, "time", "sim_time")    # (write,)
 ```
 
 ### Initial conditions
@@ -229,6 +261,11 @@ cfl = CFL(solver; initial_dt=max_dt, cadence=10, safety=0.5,
 add_velocity!(cfl, u)
 ```
 
+`CFL` is constructed from the **solver** (not the problem), and `add_velocity!` takes a
+`VectorField`. Building the controller is not enough — you must hand it to `run!` with
+`cfl=cfl` (below), otherwise `solver.dt` stays pinned at its constructor value for the whole
+run.
+
 ### Diagnostic callback
 
 ```julia
@@ -247,6 +284,7 @@ ensure_layout!(T, :c)
 
 run!(solver;
      stop_time=stop_time,
+     cfl=cfl,
      log_interval=100,
      callbacks=[
          on_interval(1) do s
@@ -267,12 +305,34 @@ run!(solver;
 ## Running the simulation
 
 ```bash
-# Serial
 julia --project=. examples/ivp/rayleigh_benard_2d.jl
-
-# MPI (4 ranks)
-mpiexec -n 4 julia --project=. examples/ivp/rayleigh_benard_2d.jl
 ```
+
+### Why this problem is serial-only
+
+Do not launch it under `mpiexec`. Two independent limits of the distributed Chebyshev support
+block it, and both are loud rather than silently wrong:
+
+1. **The Chebyshev axis cannot be decomposed.** PencilArrays splits the *trailing* dimensions,
+   and a Chebyshev DCT needs the whole axis local on each rank. `Domain(dist, (xbasis, zbasis))`
+   — the Fourier-first order this tutorial uses — therefore errors at construction under
+   `nprocs > 1`:
+
+   > `MPI mixed Fourier-Chebyshev: the decomposed (trailing) axis/axes [2] are non-Fourier … Reorder your bases so the Chebyshev axis comes BEFORE the Fourier axes`
+
+2. **A Chebyshev derivative cannot appear on the explicit side.** Reordering to
+   `(zbasis, xbasis)` fixes the decomposition, and the solver still builds — but the advection
+   terms `-u⋅∇(T)` and `-u⋅∇(u)` expand to a `∂z` on the RHS, and the first step dies:
+
+   > `Lazy RHS: cannot differentiate along the non-Fourier axis 1 (ChebyshevT) of a DISTRIBUTED field — this rank owns only … of the … coefficients on that axis, so the global differentiation matrix does not apply to its local slab … Move the term to the implicit (L) side of the equation, or run in serial.`
+
+   Reordering also forces the tau fields onto no bases (`()` instead of `(xbasis,)`), because
+   per-Fourier-mode taus require the Fourier axis to come first.
+
+What *does* run distributed on a Chebyshev–Fourier domain is a problem whose explicit RHS
+differentiates only along **Fourier** axes (all Chebyshev derivatives on the implicit `L` side)
+— see `test/test_mpi_cheb_fourier_ivp_nonlinear.jl`. Fully periodic problems parallelize
+without restriction; see the [3D Turbulence](ivp_3d_turbulence.md) tutorial.
 
 Expected early output:
 
@@ -319,11 +379,13 @@ You can compute it online via a callback that integrates over the full domain.
 
 ## Visualization
 
+Plots.jl is not a Tarang dependency — add it to your own environment first.
+
 ```julia
 using Plots
 
 ensure_layout!(T, :g)
-T_grid = Array(get_grid_data(T))
+T_grid = Array(get_grid_data(T))       # (Nx, Nz)
 heatmap(T_grid', xlabel="x", ylabel="z", aspect_ratio=:equal,
         title="Temperature (Ra = $(Rayleigh))")
 savefig("temperature.png")
@@ -369,14 +431,20 @@ Scaling: roughly `Nx, Nz × 1.5` for each `Ra × 10`.
 ### Timestep control
 
 ```julia
-# For high Ra, reduce safety factor to stay stable
-cfl = CFL(solver; safety=0.3, ...)
+# For high Ra, reduce the safety factor to stay stable
+cfl = CFL(solver; initial_dt=max_dt, safety=0.3, cadence=10, max_dt=max_dt)
 
 # Smooth dt evolution to avoid thrashing the LHS cache
-cfl = CFL(solver; max_change=1.2, min_change=0.5, ...)
+cfl = CFL(solver; initial_dt=max_dt, max_change=1.2, min_change=0.5, max_dt=max_dt)
+
+add_velocity!(cfl, u)
 ```
 
-The LHS solver cache in `step_subproblem_rk!` is keyed by `(dt, a_ii)` — if `dt` changes every step, the sparse LU is rebuilt every step, which is wasteful. Keeping `max_change` modest lets CFL ride out for several steps at a fixed `dt` before re-factoring.
+The LHS solver cache in `step_subproblem_rk!` (`sp.LHS_solvers`) is keyed by the stage
+coefficient `a_ii`, and every entry is marked dirty whenever `dt` changes — so if `dt` changes
+every step, the sparse LU is refactored every step, which is wasteful. Keeping `max_change`
+modest, and `cadence` above 1, lets CFL ride out several steps at a fixed `dt` between
+re-factorizations.
 
 ## Troubleshooting
 
@@ -395,9 +463,9 @@ Cause: the `apply_bc_override!` DAE path in `step_subproblem_rk!` isn't firing f
 ### NaN in the solution
 
 Causes and fixes:
-- Timestep too large → reduce `cfl.safety` to 0.2–0.3
+- Timestep too large → reduce `cfl.safety` to 0.2–0.3 (`CFL` is mutable, so you can set the field directly)
 - Insufficient resolution → bump `Nz` up
-- Missing dealiasing → make sure `dealias = 3/2` is set on both bases
+- Missing dealiasing → `dealias` is a **padding factor**, so `3/2` is the 3/2 rule and any value `≤ 1` switches dealiasing off. It only acts on Fourier axes; the factor passed to `zbasis` is ignored.
 
 ### Simulation not converging to a steady state
 
@@ -409,7 +477,9 @@ Causes and fixes:
 
 - Reduce `Nx`, `Nz`
 - Switch to `CNAB2` or `SBDF2` (smaller LU cache than multi-stage RK443)
-- Run with more MPI ranks
+
+More MPI ranks will not help here — this problem is serial-only, see
+[Running the simulation](#Running-the-simulation).
 
 ## Complete script
 

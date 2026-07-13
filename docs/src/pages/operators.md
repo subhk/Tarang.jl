@@ -6,26 +6,36 @@ Operators perform mathematical operations on fields, including differentiation a
 
 ### First Derivatives
 
-```julia
-# Syntax in equations
-∂x(field)   # ∂/∂x
-∂y(field)   # ∂/∂y
-∂z(field)   # ∂/∂z
+`∂x`, `∂y`, `∂z` are **equation-string syntax**: the parser reads `∂<name>` as a derivative
+along the coordinate named `<name>`. They are not Julia functions — a bare `∂x(field)` in
+Julia code raises `UndefVarError`.
 
-# Example
-add_equation!(problem, "∂t(T) = -u*∂x(T) - w*∂z(T)")
+```julia
+# Syntax in equations: ∂<coordinate name>
+add_equation!(problem, "∂t(T) = -ux*∂x(T) - uz*∂z(T)")
+```
+
+In Julia code, use the exported `d` constructor, which takes a `Coordinate`:
+
+```julia
+d(T, coords["x"])      # ∂T/∂x
+d(T, coords["x"], 2)   # ∂²T/∂x²
 ```
 
 ### Second Derivatives
 
 ```julia
-# Composed derivatives
-∂x(∂x(field))   # ∂²/∂x²
-∂z(∂z(field))   # ∂²/∂z²
-∂x(∂z(field))   # ∂²/∂x∂z
+# Composed derivatives (equation-string syntax)
+add_equation!(problem, "∂t(T) - kappa*(∂x(∂x(T)) + ∂z(∂z(T))) = 0")
+
+# ∂x(∂x(f))   ∂²/∂x²
+# ∂z(∂z(f))   ∂²/∂z²
+# ∂x(∂z(f))   ∂²/∂x∂z
 ```
 
 ### Laplacian
+
+`Δ` (alias `lap`, `∇²`) works both in equation strings and in Julia code.
 
 ```julia
 # Δ(f) = ∇²f
@@ -40,13 +50,13 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 The fractional Laplacian `(-Δ)^α` generalizes the Laplacian to non-integer powers:
 
 ```julia
-# fraclap(f, α) = (-Δ)^α f
+# fraclap(f, α) = (-Δ)^α f  — Julia code
 fraclap(field, 0.5)    # Square root: (-Δ)^(1/2)
 fraclap(field, -0.5)   # Inverse square root: (-Δ)^(-1/2)
 fraclap(field, 1.0)    # Standard Laplacian: (-Δ)^1 = -Δ
 fraclap(field, 2.0)    # Biharmonic: (-Δ)^2 = Δ²
 
-# Convenience functions
+# Convenience functions (Julia code only — see the note below)
 sqrtlap(field)         # Same as fraclap(f, 0.5)
 invsqrtlap(field)      # Same as fraclap(f, -0.5)
 ```
@@ -58,25 +68,32 @@ invsqrtlap(field)      # Same as fraclap(f, -0.5)
 - **Fractional diffusion**: `∂θ/∂t = -κ(-Δ)^α θ` for anomalous diffusion
 - **Hyperviscosity**: `(-Δ)^n` for numerical dissipation at small scales
 
-```julia
-# SQG buoyancy equation with fractional dissipation
-add_equation!(problem, "∂t(θ) - κ*fraclap(θ, 0.5) = -u⋅∇(θ)")
+Inside an equation string, write `fraclap(f, α)` (or the Unicode alias `Δᵅ(f, α)`).
+Put the term on the **implicit (LHS)** side: the compiled RHS declines a fractional
+Laplacian and falls back to the slower interpreted path if it appears on the right.
 
-# Can also be used on LHS (implicit treatment)
+```julia
+# Buoyancy with fractional dissipation, treated implicitly
 add_equation!(problem, "∂t(θ) + κ*fraclap(θ, 0.5) = -u⋅∇(θ)")
 ```
+
+!!! warning "`sqrtlap` does not parse inside an equation string"
+    `sqrtlap(f)` in an `add_equation!` string hits a parser bug, and the whole term is
+    **silently dropped** from the equation (you get a one-time warning and an
+    `UnknownOperator` placeholder). Write `fraclap(f, 0.5)` instead. `invsqrtlap(f)` and
+    `fraclap(f, -0.5)` both parse correctly.
 
 ### Hyperviscosity (Higher-Order Laplacian)
 
 For turbulence simulations, hyperviscosity provides selective dissipation at small scales while preserving large-scale dynamics:
 
 ```julia
-# General form: hyperlap(f, n) = (-Δ)^n = |k|^(2n) in Fourier space
+# General form (Julia code): hyperlap(f, n) = (-Δ)^n = |k|^(2n) in Fourier space
 hyperlap(field, 2)   # Biharmonic: (-Δ)² = |k|⁴
 hyperlap(field, 4)   # 8th-order: (-Δ)⁴ = |k|⁸
 hyperlap(field, 8)   # 16th-order: (-Δ)⁸ = |k|¹⁶
 
-# Unicode shortcuts (preferred)
+# Unicode shortcuts — these are the forms to use inside equation strings
 Δ²(field)   # Biharmonic (4th-order derivative)
 Δ⁴(field)   # 8th-order derivative
 Δ⁶(field)   # 12th-order derivative
@@ -91,12 +108,17 @@ hyperlap(field, 8)   # 16th-order: (-Δ)⁸ = |k|¹⁶
 # 2D turbulence with biharmonic hyperviscosity
 add_equation!(problem, "∂t(ω) + ν₄*Δ²(ω) = -u⋅∇(ω)")
 
-# 3D turbulence with 8th-order hyperviscosity
+# Incompressible turbulence with 8th-order hyperviscosity
 add_equation!(problem, "∂t(u) + ∇(p) + ν₈*Δ⁴(u) = -u⋅∇(u)")
-
-# General n-th order using hyperlap
-add_equation!(problem, "∂t(u) + ν*hyperlap(u, 4) = -u⋅∇(u)")
+add_equation!(problem, "div(u) = 0")
 ```
+
+!!! warning "`hyperlap(f, n)` does not parse inside an equation string"
+    `hyperlap` requires an **`Integer`** order, but the equation parser turns every numeric
+    literal into a `Float64`. `hyperlap(u, 4)` inside an `add_equation!` string therefore
+    fails to build and the hyperviscosity term is **silently dropped** from the equation.
+    Use `Δ²`/`Δ⁴`/`Δ⁶`/`Δ⁸` in equation strings, and reserve `hyperlap(f, n)` for direct
+    Julia calls.
 
 **Why use hyperviscosity?**
 
@@ -184,25 +206,30 @@ add_equation!(problem, "div(u) = 0")
 # ∂u_x/∂x + ∂u_y/∂y + ∂u_z/∂z = 0
 ```
 
+!!! note "`div` vs `divergence` in Julia code"
+    `div` is a parser alias, valid inside equation strings. In Julia code the name resolves
+    to `Base.div` (integer division), so `div(u)` on a field is a `MethodError`. Call
+    **`divergence(u)`** instead:
+
+    ```julia
+    divu = divergence(u)   # Divergence operator
+    ```
+
 ### Curl
 
-For 3D vector fields (returns vector):
+`curl(u)` takes a `VectorField` (not a `Gradient` or other operator node). In 3D it returns
+a vector; in 2D it evaluates to the scalar vorticity `ω = ∂v/∂x - ∂u/∂y`.
 
 ```julia
 # curl(u) = ∇×u
 omega = curl(u)
 ```
 
-For 2D (returns scalar vorticity):
-
-```julia
-# ω = ∂v/∂x - ∂u/∂y
-add_equation!(problem, "omega = ∂x(v) - ∂y(u)")
-```
-
 ### Perpendicular Gradient
 
-For 2D flows, the perpendicular gradient creates a divergence-free velocity from a streamfunction:
+For 2D flows, the perpendicular gradient creates a divergence-free velocity from a streamfunction.
+Unlike the operators above, `perp_grad` is **eager**: it takes a 2-D `ScalarField` and returns a
+`VectorField` computed immediately, rather than a symbolic operator node.
 
 ```julia
 # perp_grad(ψ) = ∇⊥ψ = (-∂ψ/∂y, ∂ψ/∂x)
@@ -221,7 +248,7 @@ u = perp_grad(psi)
 
 ```julia
 # ∂t(field) for IVP equations
-add_equation!(problem, "∂t(u) = rhs")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 
 # Only valid in Initial Value Problems
 ```
@@ -252,17 +279,19 @@ add_equation!(problem, "∂t(u) + ∇(p) - nu*Δ(u) = -u⋅∇(u)")
 
 ```julia
 # ASCII
-velocity = grad(pressure)
-vorticity = curl(velocity)
+pressure_grad = grad(pressure)   # ScalarField -> Gradient
+vorticity     = curl(u)          # VectorField -> Curl
 
 # Unicode (equivalent)
-velocity = ∇(pressure)
-vorticity = curl(velocity)
+pressure_grad = ∇(pressure)
+vorticity     = curl(u)
 
 # Mixed - use what's clearest
-u = ∇⊥(ψ)        # Perpendicular gradient
-dissipation = Δ(T)  # Laplacian
+velocity    = ∇⊥(ψ)   # Perpendicular gradient (2D ScalarField -> VectorField)
+dissipation = Δ(T)    # Laplacian
 ```
+
+`curl` needs a `VectorField`; passing it an operator node such as `grad(p)` throws.
 
 ### Typing Unicode in Julia
 
@@ -277,7 +306,7 @@ In Julia REPL or editors with Julia support:
 | `×` | `\times` + Tab |
 | `⊥` | `\perp` + Tab |
 | `α` | `\alpha` + Tab |
-| `½` | `\^1` + Tab, then type `/2` |
+| `²` `⁴` `⁶` `⁸` | `\^2` + Tab, `\^4` + Tab, … |
 
 ## Using Operators in Equations
 
@@ -285,7 +314,7 @@ In Julia REPL or editors with Julia support:
 
 ```julia
 # Equations are strings parsed symbolically
-add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u*∂x(T)")
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -ux*∂x(T)")
 
 # Supports:
 # - Addition/subtraction: +, -
@@ -298,8 +327,8 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u*∂x(T)")
 ### Common Patterns
 
 ```julia
-# Advection
-"u*∂x(f) + w*∂z(f)"
+# Advection (ux, uz are ScalarFields)
+"ux*∂x(f) + uz*∂z(f)"
 
 # Diffusion
 "nu*Δ(u)"
@@ -338,10 +367,11 @@ Applying `Differentiate` to a `VectorField` operates component-wise — each com
 ```julia
 # Differentiate(VectorField, coord) works component-wise
 # e.g. ∂z(u) differentiates each component of u with respect to z
-add_equation!(problem, "∂z(u)(z=0) = 0")  # stress-free BC for vector field
+add_bc!(problem, "∂z(u)(z=0) = 0")   # stress-free BC for a vector field
+add_bc!(problem, "∂z(u)(z=1) = 0")
 ```
 
-This means you can apply `∂z`, `∂x`, etc. directly to vector fields in equations and boundary conditions without manually indexing components.
+This means you can apply `∂z`, `∂x`, etc. directly to vector fields in equations and boundary conditions without manually indexing components. Note that boundary conditions must be declared with `add_bc!`, not `add_equation!` — see [Boundary Conditions](../tutorials/boundary_conditions.md).
 
 ## Implementation Details
 
@@ -375,29 +405,58 @@ Implemented as sparse matrix operations.
 
 ### Helper Functions
 
+Build operator trees in Julia with `d(field, coord, order)` — the coordinates come from the
+field's distributor, so the same helper works in any dimension. (Remember that `∂x`/`∂z` are
+equation-string syntax, not Julia functions.)
+
 ```julia
-function advection(u, field)
+function advection(u::VectorField, field)
     # u·∇f
-    result = u.components[1] * ∂x(field)
+    cs = u.dist.coordsys
+    result = u.components[1] * d(field, cs[1], 1)
     for i in 2:length(u.components)
-        result += u.components[i] * d[i](field)
+        result = result + u.components[i] * d(field, cs[i], 1)
     end
     return result
 end
 ```
 
-### Using Built-in Operators in Equations
-
-The equation parser recognizes all built-in operators:
+The helper returns a deferred expression tree, not a field. Give it to the problem with
+`add_parameters!` and refer to it by name in the equation — the same mechanism the tau method
+uses for `grad_u`:
 
 ```julia
-# Available operators in equations:
-# grad, div, curl, lap (or Δ), dt (or ∂t), d
-# integrate, average, interpolate, convert, lift
-# sin, cos, tan, exp, log, sqrt, abs, tanh
+add_parameters!(problem, kappa=0.05, adv=advection(u, T))
+add_equation!(problem, "∂t(T) - kappa*Δ(T) = -adv")
+```
+
+This produces bit-identical results to writing `-u⋅∇(T)` directly, which is what you would
+normally do — the parser performs exactly this expansion for you.
+
+### Using Built-in Operators in Equations
+
+Operators the equation parser recognises out of the box:
+
+```julia
+# Differential:  ∂t (or dt), ∂x/∂y/∂z, d(f, x, n), grad (∇), div, curl,
+#                lap (Δ, ∇²), trace, lift
+# Fractional:    fraclap(f, α) (Δᵅ), invsqrtlap, Δ², Δ⁴, Δ⁶, Δ⁸
+# Reductions:    integ(f) / integrate(f)
+# Interpolation: f(z=0)      # boundary/point evaluation
+# Products:      a⋅b (dot), a×b (cross), component(u, i)
+# Elementwise:   sin, cos, tan, exp, log, sqrt, abs, tanh
 
 # Use operators directly
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = -ux*∂x(T) - uz*∂z(T)")
+```
+
+`average(f, x)`, `integrate(f, x)` and `interpolate(f, x, pos)` take a `Coordinate` argument,
+and coordinate *names* are not bound to `Coordinate` objects in the default namespace. Register
+the coordinate first if you need them:
+
+```julia
+add_parameters!(problem, x=coords["x"])
+add_equation!(problem, "∂t(T) - kappa*Δ(T) + average(T, x) = 0")
 ```
 
 ## Performance Tips

@@ -115,8 +115,18 @@ makedocs(;
     clean = true,
     doctest = tarang_loaded,
     linkcheck = false,
-    checkdocs = :none,
-    warnonly = [:cross_references, :missing_docs, :docs_block],
+    # A `@docs` block naming a function that no longer exists, or a dead cross-reference, is a
+    # DOC BUG — the docs have drifted from the code. `:docs_block` and `:cross_references` were
+    # in `warnonly`, so the build stayed green through exactly that kind of rot; they are now
+    # errors.
+    #
+    # `:missing_docs` stays a warning (not an error) on purpose: `checkdocs = :exports` reports
+    # every exported symbol whose docstring is not reproduced somewhere in the manual, and the
+    # API pages are currently hand-written prose rather than `@docs` blocks — so that list is
+    # ~1000 entries long and failing on it would only teach people to re-add `warnonly`. The
+    # warning is the honest signal; shrinking it is the follow-up work.
+    checkdocs = :exports,
+    warnonly = [:missing_docs],
     draft = false
 )
 
