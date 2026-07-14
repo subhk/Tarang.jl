@@ -123,10 +123,23 @@ mutable struct LazyWorkspace{F<:ScalarField}
     fields::Vector{F}
     next_idx::Int     # index of next free field (grows as needed)
     template::Union{Nothing, F}
+    # Coefficients of a STATE field, shared by every ∂ node that differentiates it within one
+    # RHS evaluation. Every advection term is several derivatives of ONE operand
+    # (`u*∂x(u) + v*∂y(u) + w*∂z(u)`), and each ∂ node used to forward-transform that operand
+    # again — N nodes paid N forward transforms for the same coefficients.
+    # `diff_cache` holds the buffers (persistent, reused across steps); `diff_cache_valid` says
+    # which are populated for the CURRENT evaluation and is cleared between them.
+    diff_cache::Dict{Int, F}
+    diff_cache_valid::Set{Int}
 end
 
-LazyWorkspace{F}() where {F<:ScalarField} = LazyWorkspace{F}(F[], 1, nothing)
+LazyWorkspace{F}() where {F<:ScalarField} =
+    LazyWorkspace{F}(F[], 1, nothing, Dict{Int, F}(), Set{Int}())
 LazyWorkspace() = LazyWorkspace{ScalarField}()
+
+"""Drop the shared-operand coefficient cache. The state changes between RHS evaluations, so
+anything cached from the previous one is stale."""
+@inline _reset_diff_cache!(ws::LazyWorkspace) = (empty!(ws.diff_cache_valid); nothing)
 
 """Get a scratch ScalarField from the pool, allocating if needed."""
 function _borrow_scratch!(ws::LazyWorkspace{F}) where {F<:ScalarField}
@@ -677,7 +690,79 @@ end
     return out
 end
 
+"""True when every axis of `field` is Fourier, so `:c` is unambiguous.
+
+The shared-operand cache is restricted to this case on purpose. On a mixed field, `:c` has TWO
+possible meanings (Chebyshev-spectral, or the Fourier-spectral/Chebyshev-grid form that
+`_apply_lazy_diff!` uses when it skips the coupled DCT), and caching one representation where the
+other is expected would be silently wrong. Pure-Fourier has no such ambiguity — and it is exactly
+where the win is: a mixed Chebyshev-Fourier RHS carries a single ∂ node, so it has no siblings to
+share with anyway."""
+@inline function _all_fourier_bases(field::ScalarField)
+    isempty(field.bases) && return false
+    return all(b -> b === nothing || isa(b, FourierBasis), field.bases)
+end
+
+"""Coefficients of state field `idx`, computed ONCE per RHS evaluation and shared by every ∂ node
+that differentiates it. Returns `nothing` when the fast path does not apply.
+
+If the state field is already `:c` (the diagonal-IMEX path holds it there), this costs ZERO
+transforms — we copy the coefficients the stepper already has. Otherwise it costs ONE forward
+transform, which the siblings then share."""
+function _shared_state_coeffs!(ws::LazyWorkspace{F}, state, idx::Int,
+                               template::ScalarField) where {F<:ScalarField}
+    (1 <= idx <= length(state)) || return nothing
+    s = state[idx]
+    _lazy_bases_match(s, template) || return nothing
+
+    idx in ws.diff_cache_valid && return ws.diff_cache[idx]
+
+    buf = get(ws.diff_cache, idx, nothing)
+    if buf === nothing
+        buf = ScalarField(template.dist, "_lazy_dcache_$(idx)", template.bases, template.dtype)
+        ws.diff_cache[idx] = buf
+    end
+
+    if s.current_layout === :c
+        # The stepper already holds these coefficients — no transform at all.
+        sc = get_local_data(get_coeff_data(s))
+        bc = get_local_data(get_coeff_data(buf))
+        (sc === nothing || bc === nothing || size(sc) != size(bc)) && return nothing
+        copyto!(bc, sc)
+    else
+        sg = get_local_data(get_grid_data(s))
+        bg = get_local_data(get_grid_data(buf))
+        (sg === nothing || bg === nothing || size(sg) != size(bg)) && return nothing
+        copyto!(bg, sg)
+        buf.current_layout = :g
+        forward_transform!(buf, :c)      # ONE forward, shared by every sibling ∂ node
+    end
+    buf.current_layout = :c
+    push!(ws.diff_cache_valid, idx)
+    return buf
+end
+
 function evaluate_lazy!(out::ScalarField, expr::LazyDiff, state, ws::LazyWorkspace)
+    # A ∂ of a STATE field is the common case (all advection is exactly this), and several such
+    # nodes usually share one operand. Take the operand's coefficients from the per-evaluation
+    # cache instead of re-evaluating and re-forward-transforming it: N sibling nodes then cost
+    # 1 forward + N backward rather than N forward + N backward.
+    op = expr.operand
+    if op isa LazyStateField && expr.axis > 0 && _all_fourier_bases(out)
+        src = _shared_state_coeffs!(ws, state, op.idx, out)
+        if src !== nothing
+            out_c = get_local_data(get_coeff_data(out))
+            src_c = get_local_data(get_coeff_data(src))
+            if out_c !== nothing && src_c !== nothing && size(out_c) == size(src_c)
+                copyto!(out_c, src_c)
+                out.current_layout = :c
+                _apply_lazy_diff_coeff!(out, expr.order, expr.axis)
+                ensure_layout!(out, :g)          # the one backward this node genuinely needs
+                return out
+            end
+        end
+    end
+
     # Evaluate operand into out, then apply differentiation in-place
     evaluate_lazy!(out, expr.operand, state, ws)
     _apply_lazy_diff!(out, expr.coord, expr.order, expr.axis)
@@ -1191,6 +1276,11 @@ function execute_lazy_rhs_buffered!(plan::LazyRHSPlan, state, solver)
         result_field = plan.output_fields[idx]
         ws = plan.workspaces[idx]
         ws.next_idx = 1  # reset between equations
+        # The state advances between RHS evaluations (and between stages), so any operand
+        # coefficients cached during the previous one are STALE. Dropping them here is what makes
+        # the shared-operand cache safe: within one evaluate_lazy! call the state is frozen, and
+        # across calls nothing is reused.
+        _reset_diff_cache!(ws)
         evaluate_lazy!(result_field, expr, state, ws)
     end
     _add_registered_forcings_to_lazy_rhs!(plan.output_fields, solver.problem)
