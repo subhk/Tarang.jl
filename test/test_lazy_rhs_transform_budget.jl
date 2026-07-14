@@ -60,8 +60,37 @@ end
     @test lap < 20     # measured 14; the unfused translation was 23
 
     # Two derivatives of the same operand that are NOT summed (u*∂x(u) + u*∂y(u)) cannot be
-    # fused into one output — they legitimately cost one round-trip each. This pins the
-    # distinction so a future "optimization" that fuses them (and is therefore wrong) fails.
+    # fused into one output — they legitimately need one BACKWARD transform each. But they must
+    # share the operand's coefficients, so the FORWARD count must not grow with them.
     two_indep = _count("-u*d(u,x) - u*d(u,y)")
     @test two_indep > lap
+end
+
+@testset "sibling ∂ nodes share one forward transform" begin
+    # Every advection term is several derivatives of ONE operand. Each ∂ node used to
+    # forward-transform that operand again, so the forward count grew with the number of nodes
+    # (measured: 6 / 9 / 12 forwards for 1 / 2 / 3 nodes). The per-evaluation cache in
+    # LazyWorkspace makes the operand's coefficients shared, so FORWARDS ARE NOW CONSTANT and
+    # only the backwards (one per node, genuinely needed — each node produces a different field)
+    # grow.
+    #
+    # Zero-allocation, value-identical saving ⇒ invisible to every guard except a count.
+    fwd(rhs) = begin
+        solver = _solver(rhs)
+        for _ in 1:6; step!(solver, 1e-4); end
+        Tarang.enable_transform_counts!(true)
+        Tarang.reset_transform_counts!()
+        step!(solver, 1e-4)
+        c = Tarang.transform_counts()
+        Tarang.enable_transform_counts!(false)
+        @test solver.rhs_plan.is_compiled
+        c.forward
+    end
+
+    f1 = fwd("-u*d(u,x)")
+    f2 = fwd("-u*d(u,x) - u*d(u,y)")           # 2 ∂ nodes, same operand
+    f3 = fwd("-u*d(u,x) - u*d(u,y) - u*d(u,x)") # 3 ∂ nodes, same operand
+
+    @test f2 == f1      # was f1 + 3
+    @test f3 == f1      # was f1 + 6
 end
