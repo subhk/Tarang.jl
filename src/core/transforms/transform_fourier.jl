@@ -39,19 +39,28 @@ This lets a test assert the transform BUDGET of a step directly:
 
     Tarang.reset_transform_counts!()
     step!(solver, dt)
-    Tarang.transform_counts()   # (forward = n, backward = m)
+    Tarang.transform_counts()   # (forward = n, backward = m, coupled_dct = k)
+
+`coupled_dct` counts round-trips through `_apply_distributed_coupled_dct!`, each of which is
+TWO collective `PencilArrays.transpose!` calls. It is tracked separately because it is the
+dominant collective cost of a distributed mixed Fourier–Chebyshev step, and — like a wasted
+FFT — it allocates nothing, so no allocation guard can see it.
 """
 const _TRANSFORM_COUNT_ON = Ref(false)
-const _TRANSFORM_COUNTS = Ref((0, 0))   # (forward, backward)
+const _TRANSFORM_COUNTS = Ref((0, 0, 0))   # (forward, backward, coupled_dct)
 
 enable_transform_counts!(on::Bool=true) = (_TRANSFORM_COUNT_ON[] = on)
-reset_transform_counts!() = (_TRANSFORM_COUNTS[] = (0, 0); nothing)
-transform_counts() = (forward = _TRANSFORM_COUNTS[][1], backward = _TRANSFORM_COUNTS[][2])
+reset_transform_counts!() = (_TRANSFORM_COUNTS[] = (0, 0, 0); nothing)
+transform_counts() = (forward     = _TRANSFORM_COUNTS[][1],
+                      backward    = _TRANSFORM_COUNTS[][2],
+                      coupled_dct = _TRANSFORM_COUNTS[][3])
 
 @inline function _count_transform!(kind::Symbol)
     _TRANSFORM_COUNT_ON[] || return nothing
-    f, b = _TRANSFORM_COUNTS[]
-    _TRANSFORM_COUNTS[] = kind === :forward ? (f + 1, b) : (f, b + 1)
+    f, b, c = _TRANSFORM_COUNTS[]
+    _TRANSFORM_COUNTS[] = kind === :forward     ? (f + 1, b, c) :
+                          kind === :backward    ? (f, b + 1, c) :
+                                                  (f, b, c + 1)
     return nothing
 end
 

@@ -804,11 +804,40 @@ function _resolve_diff_axis(coord::Coordinate, bases)
     return 0
 end
 
+"""True when this field's transforms drag a coupled-DCT round-trip.
+
+A DISTRIBUTED field with a non-Fourier (Chebyshev/Jacobi) axis: `forward_transform!` /
+`backward_transform!` each call `_apply_distributed_coupled_dct!`, which is TWO collective
+`PencilArrays.transpose!` calls (fft pencil → solve pencil → back)."""
+@inline function _has_distributed_coupled_axis(field::ScalarField)
+    dist = field.dist
+    (dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing) || return false
+    isempty(field.bases) && return false
+    return any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
+end
+
 function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int, axis_hint::Int=0)
     # Axis is precomputed at translation time; fall back to a runtime lookup only
     # when the hint is absent (0), avoiding per-call string allocations otherwise.
     axis = axis_hint == 0 ? _resolve_diff_axis(coord, field.bases) : axis_hint
     axis == 0 && return field  # Not in this field's bases — skip
+
+    # A derivative along a FOURIER axis multiplies each coefficient by (ik)^order, where k
+    # belongs to that Fourier axis alone. Whether the coupled (Chebyshev) axis currently holds
+    # spectral coefficients or grid values is IRRELEVANT to that multiplier — the two transforms
+    # act on different axes and commute. So on a distributed mixed field we can transform with
+    # the coupled DCT SKIPPED on both legs: the intermediate `:c` is "Fourier-spectral,
+    # Chebyshev-grid", a private representation that never escapes this function.
+    #
+    # That removes the coupled-DCT round-trip from BOTH legs — 4 collective transposes and 2
+    # local DCT sweeps per ∂ node, on the mixed Chebyshev-Fourier path that is the main
+    # distributed workload. `-b*∂x(b)` style advection is exactly this shape.
+    if isa(field.bases[axis], FourierBasis) && _has_distributed_coupled_axis(field)
+        forward_transform!(field, :c; apply_coupled_dct=false)    # sets :c
+        _apply_lazy_diff_coeff!(field, order, axis)
+        backward_transform!(field, :g; apply_coupled_dct=false)   # sets :g
+        return field
+    end
 
     # Switch to coefficient space
     ensure_layout!(field, :c)

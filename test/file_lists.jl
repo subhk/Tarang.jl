@@ -176,6 +176,7 @@ const MPI_TEST_FILES = [
     "test_mpi_implicit_advection.jl",
     "test_mpi_diagonal_imex_alloc.jl",       # distributed diagonal-IMEX SBDF2/ETD O(1)-alloc (no per-step copy_state) + behavior-preserving (np>=2 bit-identical)
     "test_mpi_rhs_buffer_layout.jl",         # distributed diagonal-IMEX steppers must not leave the shared lazy-RHS buffer :c-flagged (spurious backward FFT/step)
+    "test_mpi_collective_budget.jl",         # a Fourier-axis derivative must not drag a coupled-DCT round-trip (2 collective transposes) on a mixed distributed field
     "test_mpi_lazy_rhs_vector_ops.jl",       # distributed lap/div on the explicit RHS must compile (interpreted fallback FROZE the field under MPI)
     "test_mpi_batched_transform.jl",
     "test_mpi_dotproduct_term.jl",

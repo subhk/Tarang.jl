@@ -319,6 +319,7 @@ function _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool)
     any(b -> b !== nothing && !isa(b, FourierBasis), field.bases) || return field
     fft_pa = get_coeff_data(field)
     (fft_pa isa PencilArrays.PencilArray) || return field
+    _count_transform!(:coupled_dct)   # 2 collective transposes below
 
     cache = get_transpose_cache()
     dtype = eltype(fft_pa)
