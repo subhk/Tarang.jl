@@ -47,9 +47,11 @@ function _global_multistep_distributed_fallback!(state::TimestepperState,
     reason = _global_matrix_implicit_distributed_fallback_reason(current_state)
     reason === nothing && return false
 
-    _log_global_matrix_implicit_distributed_fallback(method_name, reason, "RK222")
-    step_rk222!(state, solver)
-    return true
+    throw(ArgumentError(
+        "$method_name has no distributed diagonal-IMEX implementation for MPI " *
+        "pure-Fourier problems. Refusing to drop the implicit linear operator " *
+        "and take an explicit step, which can be unstable for stiff systems. " *
+        "Use SBDF2 or a distributed diagonal-IMEX Runge-Kutta method instead."))
 end
 
 function _prepare_global_multistep_matrices!(state::TimestepperState,
@@ -490,20 +492,9 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
-        # NOTE: this step_sbdf2!→step_sbdf1! startup gives an O(dt²) local seed and
-        # caps the subproblem-path SBDF3 at global order 2 (confirmed by a Chebyshev
-        # diffusion order test: ~2.0). The global path avoids this with an RK443
-        # startup (_multistep_rk443_startup!), but the subproblem multistep reads a
-        # per-subproblem F-ring history (sp_multistep_F_rings) that only
-        # step_subproblem_multistep! populates — a high-order RK startup would have to
-        # seed those rings too, so a plain startup swap turns SBDF3 into pure RK443.
-        # Proper fix (seed F-rings during an RK443 advance) is TODO.
-        if _sp_multistep_history_depth(state) < 2
-            step_sbdf2!(state, solver)
-            return
-        end
-        if length(state.dt_history) < 3
-            step_sbdf2!(state, solver)
+        if _sp_multistep_history_depth(state) < 2 || length(state.dt_history) < 3
+            _seed_subproblem_multistep_history!(state, solver, sps, 3)
+            step_rk_imex!(state, solver; ts=_RK443_SINGLETON)
             return
         end
         k2 = state.dt_history[end]
@@ -621,14 +612,9 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     # Subproblem path handles inhomogeneous BCs correctly (see step_cnab1!).
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
-        # Capped at order 2 on the subproblem path (same F-ring-seeding issue as
-        # step_sbdf3! above — proper RK443-startup fix is TODO).
-        if _sp_multistep_history_depth(state) < 3
-            step_sbdf3!(state, solver)
-            return
-        end
-        if length(state.dt_history) < 4
-            step_sbdf3!(state, solver)
+        if _sp_multistep_history_depth(state) < 3 || length(state.dt_history) < 4
+            _seed_subproblem_multistep_history!(state, solver, sps, 4)
+            step_rk_imex!(state, solver; ts=_RK443_SINGLETON)
             return
         end
         k3 = state.dt_history[end]

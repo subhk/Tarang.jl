@@ -50,11 +50,12 @@ is_transposable_storage(x) = storage_mode(x) isa TransposableStorage
 Storage for serial (single-process) or PencilArray-backed fields.
 Wraps the existing FieldBuffers structure.
 
-Parametrized on the CONCRETE grid (`G`) and coefficient (`C`) array types so
-that field-data access (`get_grid_data`/`get_coeff_data`) is type-stable. The
-arrays are built up-front by `_build_field_arrays` (or the typed length-0
-sentinels for 0-D fields) and the storage is constructed from them — fields are
-architecture-fixed, so these types are stable for the field's life.
+Parametrized on the grid (`G`) and coefficient (`C`) array types. Grid storage
+is concrete on every backend. MPI mixed-basis coefficient storage fixes all
+`PencilArray` parameters except the pencil layout, because the subproblem
+solver temporarily swaps between FFT and solve pencils; this keeps inference
+bounded without rejecting the valid layout swap. The arrays are built up-front
+by `_build_field_arrays` (or typed length-0 sentinels for 0-D fields).
 """
 mutable struct SerialFieldStorage{G<:AbstractArray, C<:AbstractArray} <: AbstractFieldStorage
     architecture::AbstractArchitecture
@@ -67,16 +68,15 @@ end
 # from the struct definition above, so no explicit outer constructor is needed —
 # adding one would collide with the auto-generated method during precompilation.
 
-# Storage type-parameter selection. Local arrays (Array / CuArray) bind to their
-# CONCRETE type so serial/GPU field-data access is type-stable. MPI fields bind to
-# the abstract `PencilArray` UnionAll instead: a field's pencil decomposition and
-# permutation change under transposes (e.g. group_transpose_fields!),
-# producing a DIFFERENT concrete PencilArray type, so a
-# frozen exact type would make set_grid_data!/set_coeff_data! throw on the
-# re-decomposed array. MPI access stays abstract (as before parametrization);
-# the type-stability win targets the serial/single-node hot path.
-_field_storage_param(::PencilArrays.PencilArray) = PencilArrays.PencilArray
-_field_storage_param(a::AbstractArray) = typeof(a)
+# Grid arrays never change pencil permutation, so they can always use their
+# exact type. Mixed Fourier–Chebyshev subproblem solves temporarily swap the
+# coefficient array between FFT and solve pencils. Those arrays differ only in
+# the final Pencil type parameter; retain every other parameter so inference is
+# narrow while permitting that intentional swap.
+_grid_storage_param(a::AbstractArray) = typeof(a)
+_coeff_storage_param(a::PencilArrays.PencilArray{T,N,A,Nd,Np}) where {T,N,A,Nd,Np} =
+    PencilArrays.PencilArray{T,N,A,Nd,Np}
+_coeff_storage_param(a::AbstractArray) = typeof(a)
 
 # TransposableFieldStorage is defined in transposable_field.jl (loaded later)
 # because it depends on TransposeBuffers, Topology2D, etc. from transpose_types.jl.
@@ -126,7 +126,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         # parametrized on their real types. 0-D fields get typed length-0
         # sentinels so storage is never nothing (Phase 1 type-stability).
         g, c = domain !== nothing ? _build_field_arrays(dist, domain, T) : (_empty_grid(T), _empty_coeff(T))
-        storage = SerialFieldStorage{_field_storage_param(g), _field_storage_param(c)}(dist.architecture, g, c)
+        storage = SerialFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)
         return new{T, typeof(storage)}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
     end
 
@@ -273,4 +273,3 @@ storage_mode(::ScalarField{T, <:SerialFieldStorage}) where T = SerialStorage()
 storage_mode(field::ScalarField) = storage_mode(field.dist)  # fallback
 storage_mode(vf::VectorField) = storage_mode(vf.dist)
 storage_mode(tf::TensorField) = storage_mode(tf.dist)
-

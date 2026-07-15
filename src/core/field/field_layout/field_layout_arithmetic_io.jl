@@ -95,8 +95,12 @@ Base.:*(b::Number, a::ScalarField) = a * b
 function save_field(field::ScalarField, filename::String, dataset_name::String="field")
     ensure_layout!(field, :g)
 
-    # Gather data to root process for writing
-    global_data = gather_array(field.dist, get_grid_data(field))
+    # PencilArray checkpoints are root-owned: non-root ranks do not allocate or
+    # receive a full global field that only rank zero will write.
+    grid_data = get_grid_data(field)
+    global_data = grid_data isa PencilArrays.PencilArray ?
+                  _gather_array_to_root(field.dist, grid_data) :
+                  gather_array(field.dist, grid_data)
 
     if field.dist.rank == 0
         if !endswith(filename, ".nc")
@@ -137,13 +141,14 @@ function load_field!(field::ScalarField, filename::String, dataset_name::String=
         end
     end
 
-    if field.dist.rank != 0
-        global_shape = get_global_grid_shape(field.dist, field.domain; scales=field.scales)
-        global_data = zeros(eltype(get_local_data(get_grid_data(field))), global_shape...)
-    end
+    global_shape = get_global_grid_shape(field.dist, field.domain; scales=field.scales)
+    local_dtype = eltype(get_local_data(get_grid_data(field)))
 
-    # Scatter data to all processes
-    local_data = scatter_array(field.dist, global_data)
+    # Scatter directly from rank zero using shape/type metadata already known
+    # from the field. Non-root ranks keep `global_data === nothing`.
+    local_data = field.dist.size > 1 ?
+                 _scatter_array_from_root(field.dist, global_data, global_shape, local_dtype) :
+                 scatter_array(field.dist, global_data)
 
     ensure_layout!(field, :g)
 

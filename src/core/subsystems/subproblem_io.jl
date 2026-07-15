@@ -627,22 +627,49 @@ function _subproblem_coeff_index(cd::AbstractArray, field::ScalarField, sp::Subp
     return result
 end
 
+"""True when this field carries no basis at all — a 0-D (tau) field.
+
+`ScalarField.bases` is declared `Tuple{Vararg{Basis}}`, so it CANNOT contain `nothing`; the old
+`all(b -> b === nothing, field.bases)` could therefore only ever be true for an empty tuple, and
+was equivalent to `isempty`. It was not free, though: the basis tuple is not concretely typed
+(`Vararg{Basis}`), so both the closure and a hand-written loop over it BOX — ~42-72 B per call,
+once per field, per subproblem, per gather AND scatter, per stage. That made this branch
+*condition* one of the largest allocation sites of a 3-D step. `isempty` on a tuple is free."""
+@inline _is_zero_dim_field(field::ScalarField) = isempty(field.bases)
+
+"""Zero a slice of the buffer without materializing a `view` wrapper."""
+@inline function _zero_buffer_range!(buffer::AbstractVector{ComplexF64}, offset::Int, n::Int)
+    @inbounds for i in 1:n
+        buffer[offset + i] = ComplexF64(0)
+    end
+    return buffer
+end
+
 function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
     ensure_layout!(field, :c)
     cd_raw = get_coeff_data(field)
     if cd_raw === nothing || isempty(cd_raw)
         n = subproblem_field_size(sp, field)
-        # Vectorized zero-fill: works on CPU and GPU without scalar indexing.
         if n > 0
-            fill!(view(buffer, offset + 1 : offset + n), ComplexF64(0))
+            if buffer isa Vector{ComplexF64}
+                _zero_buffer_range!(buffer, offset, n)
+            else
+                fill!(view(buffer, offset + 1 : offset + n), ComplexF64(0))   # GPU-safe
+            end
         end
         return offset + n
     end
     cd = _local_coeff_data(cd_raw)
 
-    if isempty(field.bases) || all(b -> b === nothing, field.bases)
-        dest = view(buffer, offset + 1:offset + 1)
-        _assign_to_buffer!(dest, view(cd, 1:1))
+    if _is_zero_dim_field(field)
+        # A 0-D field (a tau variable) carries ONE coefficient. Building two SubArray wrappers
+        # to move a single number cost ~42 B per call, once per tau per subproblem per stage —
+        # the largest single allocation site in a 3-D step. Copy it directly on the CPU.
+        if !is_gpu_array(cd) && !is_gpu_array(buffer)
+            @inbounds buffer[offset + 1] = ComplexF64(cd[1])
+        else
+            _assign_to_buffer!(view(buffer, offset + 1:offset + 1), view(cd, 1:1))
+        end
         return offset + 1
     elseif ndims(cd) == 1
         if any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
@@ -672,14 +699,19 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
         # subproblem_field_size, which already counts 1 DOF per Fourier axis and
         # the full coeff size per coupled axis.
         n = subproblem_field_size(sp, field)
+        # One strided run covers every CPU shape — 2-D (1 Fourier × 1 coupled), 3-D
+        # (2 Fourier × 1 coupled), and an all-Fourier tau (a single element). No views, no
+        # `Any`-splat, no dynamic dispatch. GPU and ≥2-coupled-axis shapes fall through.
+        sidx = is_gpu_array(cd) ? nothing : _subproblem_strided_index(cd, field, sp)
+        if sidx !== nothing
+            start, step_, len = sidx
+            _gather_strided!(buffer, offset, cd, start, step_, len)
+            return offset + n
+        end
+
         idxt = _subproblem_coeff_index(cd, field, sp)
         if idxt === nothing
             fill!(view(buffer, offset + 1:offset + n), ComplexF64(0))   # mode not on this rank (MPI)
-        elseif ndims(cd) == 2 && !is_gpu_array(cd) &&
-               ((idxt[1] isa Colon) ⊻ (idxt[2] isa Colon))
-            # 2-D mixed (1 Fourier mode × 1 full coupled axis): strided copy avoids the
-            # vec(view(cd, idxt...)) wrapper alloc (~96 B/call). GPU/other shapes → below.
-            _gather_select_2d!(buffer, offset, cd, idxt)
         else
             _assign_to_buffer!(view(buffer, offset + 1:offset + n), vec(view(cd, idxt...)))
         end
@@ -711,8 +743,14 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
     end
     cd = _local_coeff_data(cd_raw)
 
-    if isempty(field.bases) || all(b -> b === nothing, field.bases)
-        _assign_from_buffer!(view(cd, 1:1), view(data, offset + 1:offset + 1))
+    if _is_zero_dim_field(field)
+        # Mirror of the gather side: one coefficient, copied directly rather than through two
+        # SubArray wrappers.
+        if !is_gpu_array(cd) && !is_gpu_array(data)
+            @inbounds cd[1] = eltype(cd) <: Real ? real(data[offset + 1]) : data[offset + 1]
+        else
+            _assign_from_buffer!(view(cd, 1:1), view(data, offset + 1:offset + 1))
+        end
         return offset + 1
     elseif ndims(cd) == 1
         if any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
@@ -732,16 +770,18 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
         # (kx[, ky, …]) mode across all coupled-axis coefficients. Covers 1F+1Cheb,
         # 2 Fourier (0-D-in-z tau), and 3D x,y-Fourier + z-Cheb uniformly.
         n = subproblem_field_size(sp, field)
+        # Mirror of the gather fast path: one strided run, no views, no `Any`-splat.
+        sidx = (is_gpu_array(cd) || is_gpu_array(data)) ? nothing :
+               _subproblem_strided_index(cd, field, sp)
+        if sidx !== nothing
+            start, step_, len = sidx
+            _scatter_strided!(cd, data, offset, start, step_, len)
+            return offset + n
+        end
+
         idxt = _subproblem_coeff_index(cd, field, sp)
         if idxt !== nothing
-            if ndims(cd) == 2 && !is_gpu_array(cd) && !is_gpu_array(data) &&
-               ((idxt[1] isa Colon) ⊻ (idxt[2] isa Colon))
-                # 2-D mixed (1 Fourier mode × 1 full coupled axis): strided write avoids
-                # the view(cd, idxt...) wrapper alloc (~96 B/call). GPU/other shapes → below.
-                _scatter_select_2d!(cd, idxt, data, offset)
-            else
-                _assign_from_buffer!(view(cd, idxt...), view(data, offset + 1:offset + n))
-            end
+            _assign_from_buffer!(view(cd, idxt...), view(data, offset + 1:offset + n))
         end
         return offset + n
     end
@@ -795,6 +835,94 @@ end
 # /`Vector{ComplexF64}` for a static hot loop, with a generic (other CPU eltype) fallback.
 # CPU-only — callers guard with `!is_gpu_array(...)` and route GPU/other shapes to the
 # unchanged `_assign_to_buffer!`/`_assign_from_buffer!` generic path.
+"""Describe this subproblem's coefficient selection as a single STRIDED RUN `(start, step, len)`.
+
+Selecting one mode on every Fourier axis and keeping the coupled axis whole always picks out a
+strided run of `cd` — `(:, kx, ky)` on a Chebyshev-first 3-D layout is even contiguous. Encoding
+it as three `Int`s removes the `view(cd, idxt...)` splat off an `Any`-typed index tuple, which
+dynamic-dispatched and allocated a SubArray wrapper on EVERY gather and scatter, for every field,
+in every subproblem, on every stage. In 3-D that is `Nx·Ny/nprocs` subproblems, i.e. thousands of
+calls per step.
+
+Also covers the degenerate shapes the old code special-cased with views: a 0-D tau
+(`len == 1`), and an all-Fourier field with no coupled axis (also `len == 1`).
+
+Returns `nothing` when the mode is not on this rank, or when the shape is not a single strided
+run (≥2 coupled axes — the generic `view` path still handles that). Memoized concretely."""
+function _subproblem_strided_index(cd::AbstractArray, field::ScalarField, sp::Subproblem)
+    cache = sp.runtime.strided_index_cache
+    key = hash(size(cd), objectid(field))
+    hit = get(cache, key, missing)
+    hit === missing || return hit
+
+    result = _compute_strided_index(cd, field, sp)
+    length(cache) >= _SP_MEMO_CAP && empty!(cache)
+    cache[key] = result
+    return result
+end
+
+function _compute_strided_index(cd::AbstractArray, field::ScalarField, sp::Subproblem)
+    idxt = _subproblem_coeff_index(cd, field, sp)
+    idxt === nothing && return nothing
+    nd = ndims(cd)
+    length(idxt) == nd || return nothing
+
+    # Exactly one Colon (the coupled axis) → a strided run. Zero Colons → a single element.
+    # Two or more → not expressible as one run; fall back to the generic path.
+    ncolon = count(x -> x isa Colon, idxt)
+    ncolon <= 1 || return nothing
+
+    strides_cd = strides(cd)
+    start = 1
+    step_ = 1
+    len = 1
+    @inbounds for d in 1:nd
+        if idxt[d] isa Colon
+            step_ = strides_cd[d]
+            len = size(cd, d)
+        else
+            i = idxt[d]::Int
+            (1 <= i <= size(cd, d)) || return nothing
+            start += (i - 1) * strides_cd[d]
+        end
+    end
+    return (start, step_, len)
+end
+
+"""Copy a strided run of `cd` into `buffer` — no views, no dynamic dispatch."""
+@inline function _gather_strided!(buffer::AbstractVector{ComplexF64}, offset::Int,
+                                  cd::AbstractArray, start::Int, step_::Int, len::Int)
+    if buffer isa Vector{ComplexF64} && cd isa Array{ComplexF64}
+        @inbounds for i in 1:len
+            buffer[offset + i] = cd[start + (i - 1) * step_]
+        end
+    else
+        @inbounds for i in 1:len
+            buffer[offset + i] = ComplexF64(cd[start + (i - 1) * step_])
+        end
+    end
+    return buffer
+end
+
+"""Write a strided run back into `cd` — the mirror of `_gather_strided!`."""
+@inline function _scatter_strided!(cd::AbstractArray, data::AbstractVector, offset::Int,
+                                   start::Int, step_::Int, len::Int)
+    if cd isa Array{ComplexF64} && data isa Vector{ComplexF64}
+        @inbounds for i in 1:len
+            cd[start + (i - 1) * step_] = data[offset + i]
+        end
+    elseif eltype(cd) <: Real
+        @inbounds for i in 1:len
+            cd[start + (i - 1) * step_] = real(data[offset + i])
+        end
+    else
+        @inbounds for i in 1:len
+            cd[start + (i - 1) * step_] = data[offset + i]
+        end
+    end
+    return cd
+end
+
 @inline function _gather_select_2d!(buffer::AbstractVector{ComplexF64}, offset::Int,
                                     cd::AbstractMatrix, idxt::Tuple)
     if idxt[1] isa Colon

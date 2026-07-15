@@ -13,16 +13,13 @@
 function setup_nonlinear_transforms!(evaluator::NonlinearEvaluator)
 
     dist = evaluator.dist
-
-    if length(dist.mesh) >= 2
-        @info "Nonlinear evaluator configured for 2D+ parallelization (lazy transform creation)"
-        @info "  Process mesh: $(dist.mesh)"
-        @info "  Dealiasing factor: $(evaluator.dealiasing_factor)"
-    else
-        @info "Setting up nonlinear transforms for 1D parallelization (fallback)"
-        # 1D parallelization fallback
-        setup_1d_nonlinear_transforms!(evaluator)
-    end
+    # All transform families are created on demand by `get_nonlinear_transform`
+    # or by the distributed padded-dealiasing workspace builders.  Eagerly
+    # populating the legacy 1-D-mesh catalogue retained >200 MiB of scratch
+    # arrays per evaluator/rank, including unrelated 3-D sizes.
+    @info "Nonlinear evaluator configured for lazy transform creation"
+    @info "  Process mesh: $(dist.mesh)"
+    @info "  Dealiasing factor: $(evaluator.dealiasing_factor)"
 end
 
 """Setup PencilFFT transforms for specific 2D shape"""
@@ -91,9 +88,11 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
                 if dist.mpi_topology !== nothing
                     pencil = PencilArrays.Pencil(dist.mpi_topology, shape, decomp_dims)
                 else
-                    # Create topology matching Distributor's mesh
-                    temp_topology = PencilArrays.MPITopology(dist.comm, dist.mesh)
-                    pencil = PencilArrays.Pencil(temp_topology, shape, decomp_dims)
+                    # Keep the communicator owner on Distributor so `close(dist)`
+                    # can release it; a temporary topology would leak its MPI
+                    # Cartesian communicator and subcommunicators.
+                    initialize_mpi_topology!(dist)
+                    pencil = PencilArrays.Pencil(dist.mpi_topology, shape, decomp_dims)
                 end
 
                 # Create PencilArrays with proper pencil configuration

@@ -118,6 +118,71 @@ function ring_resize!(ring::SPHistoryRing, new_capacity::Int)
     return ring
 end
 
+"""Return the per-subproblem MX/LX/F rings, growing them as required."""
+function _sp_multistep_rings!(state::TimestepperState, n_sp::Int, capacity::Int)
+    cap = max(capacity, 1)
+    MX_rings = get!(state.timestepper_data, :sp_multistep_MX_rings) do
+        [SPHistoryRing(cap) for _ in 1:n_sp]
+    end::Vector{SPHistoryRing}
+    LX_rings = get!(state.timestepper_data, :sp_multistep_LX_rings) do
+        [SPHistoryRing(cap) for _ in 1:n_sp]
+    end::Vector{SPHistoryRing}
+    F_rings = get!(state.timestepper_data, :sp_multistep_F_rings) do
+        [SPHistoryRing(cap) for _ in 1:n_sp]
+    end::Vector{SPHistoryRing}
+
+    length(MX_rings) == n_sp && length(LX_rings) == n_sp && length(F_rings) == n_sp ||
+        error("subproblem count changed after multistep history initialization")
+    @inbounds for i in 1:n_sp
+        MX_rings[i].capacity < cap && ring_resize!(MX_rings[i], cap)
+        LX_rings[i].capacity < cap && ring_resize!(LX_rings[i], cap)
+        F_rings[i].capacity  < cap && ring_resize!(F_rings[i], cap)
+    end
+    return MX_rings, LX_rings, F_rings
+end
+
+"""Record M*X, L*X, and F(X) without advancing the solution.
+
+Used before a high-order RK startup step so the later SBDF3/SBDF4 call sees
+the same per-subproblem history it would have accumulated through multistep
+steps, while the startup state itself is advanced at sufficient order.
+"""
+function _seed_subproblem_multistep_history!(
+    state::TimestepperState, solver::InitialValueSolver,
+    subproblems::Tuple, capacity::Int,
+)
+    problem = solver.problem
+    state_fields = _cached_state_fields!(state, problem)
+    for f in state_fields
+        ensure_layout!(f, :c)
+    end
+
+    n_sp = length(subproblems)
+    MX_rings, LX_rings, F_rings = _sp_multistep_rings!(state, n_sp, capacity)
+    F_fields = evaluate_rhs_buffered(solver, state_fields, solver.sim_time)
+    dist = n_sp >= 1 ? subproblems[1].dist : nothing
+    state_stash = to_solve_layout!(state_fields, dist; fuse_from_grid=true)
+    F_stash = to_solve_layout!(F_fields, dist)
+
+    for (sp_idx, sp) in enumerate(subproblems)
+        sp.M_min === nothing && continue
+        x_cur = gather_inputs(sp, state_fields)
+        mx_cur = ring_push_newest!(MX_rings[sp_idx], x_cur)
+        lx_cur = ring_push_newest!(LX_rings[sp_idx], x_cur)
+        f_cur = ring_push_newest!(F_rings[sp_idx], x_cur)
+        _apply_subproblem_operator!(mx_cur, _subproblem_operator(sp, :M, x_cur), x_cur)
+        _apply_subproblem_operator!(lx_cur, _subproblem_operator(sp, :L, x_cur), x_cur)
+        gather_eqn_F!(f_cur, sp, solver, F_fields, state_fields)
+    end
+
+    for (f, fft_pa) in F_stash
+        set_coeff_data!(f, fft_pa)
+    end
+    _release_rhs_buffer!(F_fields, solver)
+    from_solve_layout!(state_stash, dist)
+    return nothing
+end
+
 """
     step_subproblem_multistep!(state, solver, subproblems, a, b, c)
 
@@ -162,23 +227,8 @@ function step_subproblem_multistep!(
     # (e.g. SBDF2 → SBDF4), we `ring_resize!` to grow capacity while
     # preserving existing history.
     max_capacity = max(a_hist_depth, b_hist_depth, c_hist_depth, 1)
-    MX_rings = get!(state.timestepper_data, :sp_multistep_MX_rings) do
-        [SPHistoryRing(max_capacity) for _ in 1:n_sp]
-    end::Vector{SPHistoryRing}
-    LX_rings = get!(state.timestepper_data, :sp_multistep_LX_rings) do
-        [SPHistoryRing(max_capacity) for _ in 1:n_sp]
-    end::Vector{SPHistoryRing}
-    F_rings = get!(state.timestepper_data, :sp_multistep_F_rings) do
-        [SPHistoryRing(max_capacity) for _ in 1:n_sp]
-    end::Vector{SPHistoryRing}
-
-    # Grow any ring whose capacity is now smaller than the current method's
-    # requirement (only happens on a timestepper-type switch).
-    @inbounds for i in 1:n_sp
-        MX_rings[i].capacity < max_capacity && ring_resize!(MX_rings[i], max_capacity)
-        LX_rings[i].capacity < max_capacity && ring_resize!(LX_rings[i], max_capacity)
-        F_rings[i].capacity  < max_capacity && ring_resize!(F_rings[i],  max_capacity)
-    end
+    MX_rings, LX_rings, F_rings =
+        _sp_multistep_rings!(state, n_sp, max_capacity)
 
     # ── Step 1: compute M*X_current, L*X_current, F_current per subproblem ──
     # Write directly into ring slots — no per-step allocation.

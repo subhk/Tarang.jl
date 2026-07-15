@@ -96,7 +96,7 @@ abstract type DeterministicForcingType <: Forcing end
 # ============================================================================
 
 """
-    StochasticForcing{T, N, A<:AbstractArray}
+    StochasticForcing{T, N, A<:AbstractArray{T,N}, CA<:AbstractArray{Complex{T},N}}
 
 Stochastic forcing in Fourier space with white-noise temporal correlation.
 Supports both CPU and GPU architectures.
@@ -1206,19 +1206,26 @@ _try_gpu_rand!(phases::AbstractArray) = false
 # ============================================================================
 
 """
-    DeterministicForcing{T, N}
+    DeterministicForcing{T, N, A<:AbstractArray{T,N}}
 
 Deterministic (non-random) forcing.
+
+The forcing function is called as `forcing_function(grid..., t, parameters)` and must return an
+array whose size is exactly `field_size`, so write it with broadcasting over the grid arrays.
 
 ## Example
 
 ```julia
-# Sinusoidal forcing
+# Sinusoidal forcing on a 16×16 grid
 forcing = DeterministicForcing(
-    (x, y, t, p) -> p[:A] * sin(p[:k] * x) * cos(p[:ω] * t),
-    (64, 64);
-    parameters = Dict(:A => 1.0, :k => 4.0, :ω => 1.0)
+    (x, y, t, p) -> p[:A] .* sin.(p[:k] .* x) .* cos.(y) .* cos(p[:omega] * t),
+    (16, 16);
+    parameters = Dict(:A => 1.0, :k => 4.0, :omega => 1.0)
 )
+
+x = reshape(range(0, 2π, length=17)[1:16], 16, 1)   # column vector
+y = reshape(range(0, 2π, length=17)[1:16], 1, 16)   # row vector
+F = generate_forcing!(forcing, (x, y), 0.0)         # 16×16 Matrix{Float64}
 ```
 """
 mutable struct DeterministicForcing{T<:AbstractFloat, N, A<:AbstractArray{T, N}} <: DeterministicForcingType

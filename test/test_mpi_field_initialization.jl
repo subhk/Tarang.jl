@@ -44,6 +44,10 @@ rank == 0 && println("=" ^ 60)
     ]
 
     for field in fields
+        @test (@inferred Tarang.get_grid_data(field); true)
+        coeff_return = only(Base.return_types(Tarang.get_coeff_data, Tuple{typeof(field)}))
+        @test coeff_return !== Any
+        @test typeof(Tarang.get_coeff_data(field)) <: coeff_return
         @test global_nonzero_count(get_grid_data(field)) == 0
         @test global_nonzero_count(get_coeff_data(field)) == 0
     end

@@ -22,6 +22,17 @@ function gather_array(dist::Distributor, local_array::PencilArrays.PencilArray)
     return result
 end
 
+"""Gather a PencilArray to rank zero without broadcasting a global copy."""
+function _gather_array_to_root(dist::Distributor, local_array::PencilArrays.PencilArray)
+    start_time = time()
+    result = dist.size == 1 ? Array(local_array) : PencilArrays.gather(local_array, 0)
+    if dist.size > 1
+        dist.performance_stats.mpi_operations += 1
+    end
+    dist.performance_stats.total_time += time() - start_time
+    return dist.rank == 0 ? result : nothing
+end
+
 """
     Gather array from all processes (fallback for non-PencilArray types).
     Note: MPI.Allgather flattens arrays - use the PencilArray version for
@@ -34,18 +45,14 @@ function gather_array(dist::Distributor, local_array::AbstractArray)
 
     start_time = time()
 
-    # CRITICAL: Check if this is actually a PencilArray wrapper (view, reshape, etc.)
-    # These wrappers dispatch to AbstractArray but should use PencilArray gather
+    # A wrapper around a PencilArray represents a rank-local selection/reshape,
+    # not the whole distributed parent.  Materialize that wrapper and use the
+    # documented flat AbstractArray Allgather semantics; unwrapping it would
+    # silently gather unrelated parent values.
     underlying = _get_underlying_pencil_array(local_array)
-    if underlying !== nothing
-        @warn "gather_array received a PencilArray wrapper ($(typeof(local_array))). " *
-              "This may cause incorrect MPI gather behavior. Using PencilArray gather instead." maxlog=1
-        dist.performance_stats.total_time += time() - start_time
-        return gather_array(dist, underlying)
-    end
 
     # For GPU arrays, transfer to CPU first (MPI requires CPU memory)
-    cpu_array = on_architecture(CPU(), local_array)
+    cpu_array = underlying === nothing ? on_architecture(CPU(), local_array) : Array(local_array)
 
     if dist.size == 1
         result = cpu_array
@@ -81,11 +88,6 @@ function _get_underlying_pencil_array(array::AbstractArray)
     if array isa SubArray
         parent_arr = parent(array)
         if isa(parent_arr, PencilArrays.PencilArray)
-            @warn "View of PencilArray detected in gather_array. " *
-                  "Consider using PencilArray directly or copying to a new PencilArray. " *
-                  "View slicing may not preserve the correct distributed structure." maxlog=1
-            # Return the parent PencilArray - note: this may not be exactly what was intended
-            # since the view might select a subset
             return parent_arr
         end
         # Recursively check parent
@@ -96,9 +98,6 @@ function _get_underlying_pencil_array(array::AbstractArray)
     if array isa Base.ReshapedArray
         parent_arr = parent(array)
         if isa(parent_arr, PencilArrays.PencilArray)
-            @warn "Reshaped PencilArray detected in gather_array. " *
-                  "Reshaping may break the distributed array structure. " *
-                  "Consider gathering first, then reshaping the result." maxlog=1
             return parent_arr
         end
         return _get_underlying_pencil_array(parent_arr)
@@ -140,10 +139,20 @@ end
     Isend/Irecv with Waitall for better overlap.
     """
 function scatter_array(dist::Distributor, global_array::AbstractArray)
+    return _scatter_array_from_root(
+        dist, global_array, size(global_array), eltype(global_array))
+end
+
+"""Scatter a root-owned global array using metadata known on every rank."""
+function _scatter_array_from_root(dist::Distributor,
+                                  global_array::Union{Nothing, AbstractArray},
+                                  global_shape::Tuple,
+                                  ::Type{T}) where {T}
 
     start_time = time()
 
     if dist.size == 1 || dist.mesh === nothing
+        global_array === nothing && error("rank 0 must provide the global scatter array")
         dist.performance_stats.total_time += time() - start_time
         return _maybe_to_architecture(dist.architecture, global_array)
     end
@@ -151,15 +160,16 @@ function scatter_array(dist::Distributor, global_array::AbstractArray)
     # CRITICAL: For MPI scatter, global_array must be on CPU for rank 0
     # Other ranks don't need global_array, but MPI.Recv! needs CPU buffers
     # unless using CUDA-aware MPI
+    dist.rank == 0 && global_array === nothing &&
+        error("rank 0 must provide the global scatter array")
     cpu_global_array = global_array
-    if is_gpu_array(global_array)
+    if dist.rank == 0 && is_gpu_array(global_array)
         if !check_cuda_aware_mpi()
             # Stage through CPU for MPI operations
             cpu_global_array = Array(global_array)
         end
     end
 
-    global_shape = size(global_array)
     ndims_global = length(global_shape)
     ndims_mesh = length(dist.mesh)
 
@@ -172,7 +182,7 @@ function scatter_array(dist::Distributor, global_array::AbstractArray)
         end
 
         pencil = nothing
-        cache_key = (global_shape, decomp_dims, eltype(global_array))
+        cache_key = (global_shape, decomp_dims, T)
         if haskey(dist.pencil_cache, cache_key)
             pencil = dist.pencil_cache[cache_key]
         else
@@ -180,10 +190,7 @@ function scatter_array(dist::Distributor, global_array::AbstractArray)
                 # CRITICAL: Initialize mpi_topology if not done, then reuse.
                 # Creating temporary MPITopology each call leaks MPI communicators.
                 if dist.mpi_topology === nothing
-                    dist.mpi_topology = PencilArrays.MPITopology(dist.comm, dist.mesh)
-                    if dist.rank == 0
-                        @debug "Initialized MPI topology in scatter_array: $(dist.mesh)"
-                    end
+                    initialize_mpi_topology!(dist)
                 end
                 pencil = PencilArrays.Pencil(dist.mpi_topology, global_shape, decomp_dims)
                 dist.pencil_cache[cache_key] = pencil
@@ -199,7 +206,7 @@ function scatter_array(dist::Distributor, global_array::AbstractArray)
         extra_dims = ndims_global > n_spatial ? global_shape[(n_spatial + 1):end] : ()
         local_spatial = length.(pencil.axes_local)
         local_shape = (local_spatial..., extra_dims...)
-        local_array = zeros(eltype(global_array), local_shape...)
+        local_array = zeros(T, local_shape...)
 
         if dist.rank == 0
             nprocs = length(pencil.topology)
@@ -233,7 +240,7 @@ function scatter_array(dist::Distributor, global_array::AbstractArray)
         # GPU+MPI / TransposableField ZLocal convention: decompose FIRST dims
         # Use get_local_array_size which respects use_pencil_arrays convention
         local_shape = get_local_array_size(dist, global_shape)
-        local_array = zeros(eltype(global_array), local_shape...)
+        local_array = zeros(T, local_shape...)
 
         # Compute local ranges for FIRST dims decomposition
         # This matches TransposableField's ZLocal convention

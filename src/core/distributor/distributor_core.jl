@@ -46,6 +46,7 @@ mutable struct Distributor
     use_pencil_arrays::Bool  # Flag to enable/disable PencilArrays for MPI parallelization
     pencil_config::Union{Nothing, PencilConfig}
     mpi_topology::Union{Nothing, PencilArrays.MPITopology}  # MPI Cartesian topology
+    closed::Bool  # true after owned MPI topology communicators are released
     pencil_cache::Dict{Tuple, PencilArrays.Pencil}  # Cache Pencil objects by (shape, decomp_dims)
     transforms::Vector{Any}
     pencil_fft_plan::Union{Nothing, PencilFFTs.PencilFFTPlan}  # Cached plan reference (avoids Vector{Any} scan)
@@ -258,7 +259,7 @@ mutable struct Distributor
         transpose_counts_cache = Dict{Tuple, AbstractTransposeCounts}()
 
         dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
-            architecture, _use_pencil_arrays, pencil_config, mpi_topology, pencil_cache, transforms,
+            architecture, _use_pencil_arrays, pencil_config, mpi_topology, false, pencil_cache, transforms,
             pencil_fft_plan, pencil_fft_input, pencil_fft_output, pencil_solve, layouts, perf_stats,
             mesh_coords, neighbor_ranks, nothing, gpu_fft_plans, gpu_arrays, distributed_gpu_config,
             transpose_comms_cache, transpose_counts_cache)
@@ -276,6 +277,48 @@ mutable struct Distributor
         return dist
     end
 end
+
+"""
+    close(dist::Distributor)
+
+Collectively release the Cartesian communicator and subcommunicators owned by
+an MPI/PencilArrays distributor. The parent communicator passed to the
+constructor is borrowed and is never freed. All ranks in `dist.comm` must call
+`close` in the same order after fields, plans, and solvers using `dist` are no
+longer needed. Repeated calls are safe.
+"""
+function Base.close(dist::Distributor)
+    dist.closed && return nothing
+    topology = dist.mpi_topology
+    topology === nothing && return nothing
+
+    # Drop every cached object which refers to the topology before invalidating
+    # its communicator handles. Distributor objects are terminal after close.
+    empty!(dist.pencil_cache)
+    empty!(dist.transforms)
+    empty!(dist.layouts)
+    dist.pencil_config = nothing
+    dist.pencil_fft_plan = nothing
+    dist.pencil_fft_input = nothing
+    dist.pencil_fft_output = nothing
+    dist.pencil_solve = nothing
+    dist.nonlinear_evaluator = nothing
+
+    if MPI.Initialized() && !MPI.Finalized()
+        # PencilArrays creates these communicators collectively. Free the
+        # direction subcommunicators first, then their Cartesian parent.
+        for subcomm in topology.subcomms
+            MPI.free(subcomm)
+        end
+        MPI.free(topology.comm)
+    end
+
+    dist.mpi_topology = nothing
+    dist.closed = true
+    return nothing
+end
+
+Base.isopen(dist::Distributor) = !dist.closed
 
 @inline _ensure_cpu_array(arr::AbstractArray) = is_gpu_array(arr) ? Array(arr) : arr
 
@@ -414,6 +457,7 @@ Initialize MPI Cartesian topology for PencilArrays.
 Following PencilArrays best practices from documentation.
 """
 function initialize_mpi_topology!(dist::Distributor)
+    dist.closed && throw(ArgumentError("cannot initialize a closed Distributor"))
     if dist.size == 1
         return  # No topology needed for serial
     end
@@ -528,6 +572,7 @@ Example: `create_pencil(dist, (64, 64, 64), (2, 3))` - decompose dims 2 and 3, k
 function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
                       decomp_index::Union{Int, Nothing}=nothing; dtype::Type=dist.dtype)
 
+    dist.closed && throw(ArgumentError("cannot create a pencil from a closed Distributor"))
     start_time = time()
 
     # Serial execution or explicit non-PencilArrays path (e.g., GPU)
@@ -575,16 +620,8 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
 
     # Create Pencil using proper PencilArrays API
     try
-        if dist.mpi_topology !== nothing
-            # Use pre-created MPI topology (preferred)
-            # Pencil(topology, global_dims, decomp_dims)
-            pencil = PencilArrays.Pencil(dist.mpi_topology, global_shape, decomp_dims)
-        else
-            # Fallback: create topology and STORE it to avoid MPI communicator leak.
-            # MPITopology creates an MPI Cartesian communicator that must be kept alive.
-            dist.mpi_topology = PencilArrays.MPITopology(dist.comm, dist.mesh)
-            pencil = PencilArrays.Pencil(dist.mpi_topology, global_shape, decomp_dims)
-        end
+        dist.mpi_topology === nothing && initialize_mpi_topology!(dist)
+        pencil = PencilArrays.Pencil(dist.mpi_topology, global_shape, decomp_dims)
 
         # Cache the Pencil object for reuse
         dist.pencil_cache[cache_key] = pencil
@@ -735,6 +772,7 @@ Example: create_pencil(dist, (64, 64, 64), (2, 3)) - decompose dims 2 and 3, kee
 function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
                       decomp_dims::Tuple{Vararg{Int}}; dtype::Type=dist.dtype)
 
+    dist.closed && throw(ArgumentError("cannot create a pencil from a closed Distributor"))
     start_time = time()
 
     # Serial execution or explicit non-PencilArrays path (e.g., GPU)
@@ -774,10 +812,7 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
         # CRITICAL: If mpi_topology is not initialized, create it once and cache it.
         # Creating temporary MPITopology each call leaks MPI communicators.
         if dist.mpi_topology === nothing
-            dist.mpi_topology = PencilArrays.MPITopology(dist.comm, dist.mesh)
-            if dist.rank == 0
-                @debug "Initialized MPI topology on first pencil creation: $(dist.mesh)"
-            end
+            initialize_mpi_topology!(dist)
         end
         pencil = PencilArrays.Pencil(dist.mpi_topology, global_shape, decomp_dims)
 

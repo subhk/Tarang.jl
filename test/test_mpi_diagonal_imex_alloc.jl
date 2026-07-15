@@ -49,6 +49,46 @@ function _alloc_per_step(stepper; N=128, warmup=15, measure=20, dt=1e-3)
     MPI.Allreduce(peak, MPI.MAX, MPI.COMM_WORLD)
 end
 
+# The state-history recycler must accept the concrete Vector{ScalarField{T,S}}
+# stored by TimestepperState.  `Vector{ScalarField}` is invariant in Julia, so a
+# too-narrow isa guard silently discards the stash and calls copy_state every step.
+function _recycler_reuses_stash(stepper; N=16, dt=1e-3)
+    coords = CartesianCoordinates("x", "y"); dist = _mkdist(coords)
+    xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
+    yb = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π))
+    domain = Domain(dist, (xb, yb)); q = ScalarField(domain, "q")
+    problem = IVP([q]); add_parameters!(problem, nu=0.02)
+    add_equation!(problem, "dt(q) - nu*lap(q) = 0")
+    solver = InitialValueSolver(problem, stepper; dt=dt)
+    _ic!(q, N, (x,y)->sin(x-y))
+
+    for _ in 1:3
+        step!(solver, dt)
+    end
+    state = solver.timestepper_state
+    stashed = get(state.timestepper_data, :_ddirk_recycle, nothing)
+    @test stashed isa AbstractVector{<:ScalarField}
+    step!(solver, dt)
+    return state.history[end] === stashed
+end
+
+function _unsupported_mpi_multistep_error(stepper; N=16, dt=1e-3)
+    coords = CartesianCoordinates("x", "y"); dist = _mkdist(coords)
+    xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
+    yb = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π))
+    q = ScalarField(Domain(dist, (xb, yb)), "q")
+    problem = IVP([q]); add_parameters!(problem, nu=1.0)
+    add_equation!(problem, "dt(q) - nu*lap(q) = 0")
+    solver = InitialValueSolver(problem, stepper; dt=dt)
+    _ic!(q, N, (x,y)->sin(x-y))
+    return try
+        step!(solver, dt)
+        nothing
+    catch err
+        err
+    end
+end
+
 # Two-field linearly-coupled diffusive system. The cross-field advection terms are
 # NOT diagonal in a pure-Fourier basis, so they land in the explicit RHS F (F != 0):
 # this exercises the F-recycling (SBDF2 F-history ring, ETD N(Xn) cache) that a
@@ -87,6 +127,18 @@ const REF_RTOL  = 1e-9
             # post-fix they allocate like the RK sibling. 1.5× cleanly separates.
             @test sbdf2 < 1.5 * rk
             @test etd   < 1.5 * rk
+        end
+        @testset "steady-state history storage is actually recycled" begin
+            @test _recycler_reuses_stash(RK222())
+            @test _recycler_reuses_stash(SBDF2())
+            @test _recycler_reuses_stash(ETD_RK222())
+        end
+        @testset "unsupported pure-Fourier implicit schemes fail instead of dropping L" begin
+            for ts in (CNAB1(), CNAB2(), SBDF1(), SBDF3(), SBDF4())
+                err = _unsupported_mpi_multistep_error(ts)
+                @test err isa ArgumentError
+                @test occursin("distributed diagonal-IMEX", sprint(showerror, err))
+            end
         end
         @testset "distributed result bit-identical to pinned reference" begin
             su, sv = _coupled_sumsq(SBDF2())
