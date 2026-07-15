@@ -127,25 +127,6 @@ function _global_matrix_implicit_distributed_fallback_reason(fields::Vector{<:Sc
     return nothing
 end
 
-function _log_global_matrix_implicit_distributed_fallback(method_name::String,
-                                                         reason::Symbol,
-                                                         fallback_name::String)
-    if reason === :mpi_pencil_without_subproblems
-        # Loud (not @debug): this is a silent-correctness footgun. On an MPI
-        # pure-Fourier (PencilArrays) problem these implicit multistep schemes have
-        # no per-mode diagonal-IMEX path implemented, so they fall back to the
-        # EXPLICIT $fallback_name — the implicit linear operator is dropped, which
-        # is UNSTABLE for stiff linear terms (diffusion/hyperviscosity) at an
-        # implicit-sized dt. Use SBDF2, which does have the distributed diagonal
-        # IMEX path, or reduce dt below the explicit stability limit.
-        @warn "$method_name has no distributed diagonal-IMEX path; on MPI pure-Fourier " *
-              "it falls back to EXPLICIT $fallback_name (implicit linear term dropped → " *
-              "may be unstable for stiff L). Prefer SBDF2 for MPI pure-Fourier stiff problems." maxlog=1
-    else
-        @debug "$method_name: global-matrix path unavailable, falling back to $fallback_name" reason
-    end
-end
-
 function _log_global_matrix_implicit_matrix_fallback(method_name::String,
                                                     reason::Symbol,
                                                     fallback_name::String)
@@ -162,15 +143,17 @@ end
     _check_mpi_implicit_compat!(solver, method_name)
 
 Check if a global-matrix implicit timestepper can run with MPI fields.
-These methods (SBDF3/4, MCNAB2, CNLF2) use global matrix solves that require
-all field data on a single rank, a limitation of the legacy stepper path that
-has not been ported to the subproblem architecture.
+Methods without subproblems use global matrix solves that require all field
+data on a single rank. Subproblem-backed methods solve locally per Fourier mode
+and do not have that limitation.
 """
 function _check_mpi_implicit_compat!(solver::InitialValueSolver, method_name::String)
     dist = solver.state[1].dist
     if dist.size <= 1
         return nothing
     end
+
+    _timestepper_subproblems(solver) !== nothing && return nothing
 
     total_dof = _global_matrix_implicit_total_dofs(solver)
     if total_dof > GLOBAL_MATRIX_IMPLICIT_DOF_LIMIT

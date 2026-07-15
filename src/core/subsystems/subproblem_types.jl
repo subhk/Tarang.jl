@@ -44,6 +44,16 @@ mutable struct SubproblemRuntimeCache
     # objectid churn of transient RHS fields on the interpreted path.
     field_size_cache::Dict{UInt, Int}
     coeff_index_cache::Dict{UInt, Any}
+    # CONCRETELY-TYPED companion to `coeff_index_cache`. The index it stores is a
+    # `Vector{Any}`-turned-`Tuple` (it has to be: it mixes `Int` mode indices with `Colon`),
+    # so it infers as `Any` and every `view(cd, idxt...)` splat off it dynamic-dispatches and
+    # allocates a SubArray wrapper — per field, per subproblem, per gather AND scatter, per
+    # stage. In 3D the local subproblem count is Nx·Ny/nprocs, so that is thousands of calls.
+    #
+    # But every one of those selections is a single STRIDED RUN through `cd`: pick one mode on
+    # each Fourier axis and keep the coupled axis whole. `(start, step, len)` describes it
+    # exactly, is fully concrete, and needs no views at all.
+    strided_index_cache::Dict{UInt, Union{Nothing, Tuple{Int, Int, Int}}}
 end
 
 SubproblemRuntimeCache() = SubproblemRuntimeCache(
@@ -56,6 +66,7 @@ SubproblemRuntimeCache() = SubproblemRuntimeCache(
     Dict{_SubproblemRKBufferKey, AbstractVector{ComplexF64}}(),
     Dict{UInt, Int}(),
     Dict{UInt, Any}(),
+    Dict{UInt, Union{Nothing, Tuple{Int, Int, Int}}}(),
 )
 
 # Cap for the per-field memo Dicts (field_size_cache / coeff_index_cache) so a long

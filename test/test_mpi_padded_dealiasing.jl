@@ -43,6 +43,13 @@ const MAX_REF   = 1.6899999999999995
     end
 
     ev = Tarang.NonlinearEvaluator(dist; dealiasing_factor=3/2)
+    # Construction must be lazy even for the common slab mesh `(nprocs,)`.
+    # Prebuilding the legacy catalogue retains >200 MiB of scratch arrays per
+    # evaluator/rank before the actual distributed padded path is used.
+    @test isempty(ev.pencil_transforms.shape_transforms)
+    @test isempty(ev.pencil_transforms.tuple_transforms)
+    @test isempty(ev.pencil_transforms.padded_dealiasing)
+    @test isempty(ev.pencil_transforms.padded_pencil)
     p = Tarang.evaluate_transform_multiply(u, u, ev; result_layout=:g)
     ensure_layout!(p, :g)
     pg = get_grid_data(p)

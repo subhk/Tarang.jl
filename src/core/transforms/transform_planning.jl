@@ -272,7 +272,7 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     # supported layouts these are exactly the trailing Fourier axes.
     decomp_dims = Tuple(trailing)
     if dist.mpi_topology === nothing
-        dist.mpi_topology = PencilArrays.MPITopology(dist.comm, dist.mesh)
+        initialize_mpi_topology!(dist)
     end
     pencil = PencilArrays.Pencil(dist.mpi_topology, global_shape, decomp_dims)
 

@@ -181,6 +181,29 @@ end
         # Verify data integrity after barrier
         MPI.Barrier(comm)
         @test all(pencil .== Float64(rank + 1))
+
+        # Wrappers must gather the wrapper's local values, not silently unwrap
+        # and gather the entire parent PencilArray.  The documented AbstractArray
+        # fallback is flat/rank-ordered, matching MPI.Allgather.
+        sliced = view(pencil, :, 1:1)
+        @test gather_array(dist, sliced) == MPI.Allgather(Array(sliced), comm)
+
+        reshaped = reshape(pencil, :)
+        @test gather_array(dist, reshaped) == MPI.Allgather(Array(reshaped), comm)
+
+        root_only = Tarang._gather_array_to_root(dist, pencil)
+        if rank == 0
+            @test size(root_only) == global_size
+        else
+            @test root_only === nothing
+        end
+
+        root_source = rank == 0 ? reshape(Float64.(1:prod(global_size)), global_size) : nothing
+        local_from_root = Tarang._scatter_array_from_root(
+            dist, root_source, global_size, Float64)
+        expected_local = rank == 0 ? root_source : zeros(Float64, global_size)
+        expected_local = scatter_array(dist, expected_local)
+        @test local_from_root == expected_local
     end
 
     @testset "Field distribution across ranks" begin
@@ -477,6 +500,25 @@ end
         end
     end
 
+end
+
+@testset "Distributor communicator lifecycle (rank=$rank)" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, architecture=CPU())
+    topology = dist.mpi_topology
+
+    @test topology !== nothing
+    @test isopen(dist)
+    @test_nowarn close(dist)
+    @test !isopen(dist)
+    @test dist.mpi_topology === nothing
+    @test topology.comm == MPI.COMM_NULL
+    @test all(comm -> comm == MPI.COMM_NULL, topology.subcomms)
+    @test_nowarn close(dist)  # idempotent
+    @test_throws ArgumentError Tarang.create_pencil(dist, (8, 8))
+
+    # Closing the Distributor must not close its borrowed parent communicator.
+    @test MPI.Comm_size(comm) == nprocs
 end
 
 @testset "Group Transpose Tests (rank=$rank)" begin

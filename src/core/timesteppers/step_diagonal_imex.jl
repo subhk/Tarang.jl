@@ -815,7 +815,7 @@ end
 `solver.state`, so reusing it cannot alias a live state."""
 function _ddirk_acquire_xnew!(state::TimestepperState, X_n, n_fields::Int)
     rec = get(state.timestepper_data, :_ddirk_recycle, nothing)
-    if rec isa Vector{ScalarField} && length(rec) == n_fields
+    if rec isa AbstractVector{<:ScalarField} && length(rec) == n_fields
         state.timestepper_data[:_ddirk_recycle] = nothing
         @inbounds for i in 1:n_fields
             isempty(X_n[i].bases) && continue
