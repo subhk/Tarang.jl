@@ -1159,6 +1159,25 @@ end
             @test solver.sim_time ≈ dt
             @test all(isfinite, Array(get_coeff_data(ζ)))
             @test any(!iszero, Array(forcing.cached_forcing))
+
+            state = solver.timestepper_state
+            @test length(state.workspace_fields) ==
+                  (solver.timestepper.stages + 1) * length(state.history[end])
+
+            # Warm FFT plans, nonlinear pools, forcing kernels, and the state
+            # recycler before measuring device allocations. A steady 2D step
+            # should launch kernels only; every full-sized device buffer is
+            # owned by the solver, forcing, or timestepper workspace already.
+            for _ in 1:5
+                step!(solver)
+            end
+            CUDA.synchronize()
+            allocation_stats = getfield(CUDA, :alloc_stats)
+            allocated_before = allocation_stats.alloc_bytes
+            step!(solver)
+            device_allocated = allocation_stats.alloc_bytes - allocated_before
+            CUDA.synchronize()
+            @test device_allocated == 0
         end
 
     else

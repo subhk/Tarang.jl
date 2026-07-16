@@ -826,6 +826,15 @@ function _try_solve_simple_constraint!(problem, L_expr, F_expr, state::Vector{<:
         return
     end
 
+    # The doubly-periodic 2D IVP uses u = skew(grad(psi)). Write those two
+    # Fourier derivatives straight into u's existing coefficient buffers. The
+    # generic evaluator below constructs several full-sized temporary fields,
+    # which is especially expensive when those fields live on a GPU.
+    if _try_refresh_fourier_streamfunction_velocity!(target_var, eval_expr)
+        push!(solved_vars, target_name)
+        return
+    end
+
     try
         # Evaluate the expression to get the value
         result = evaluate_solver_expression(eval_expr, problem.variables; layout=:g)
@@ -869,6 +878,19 @@ function _try_solve_poisson_constraint!(problem, L_expr, F_expr, state::Vector{<
         return
     end
 
+    # Fast path for Δ(psi) ± q + tau = 0 on a pure-Fourier domain. The tau
+    # variable affects only k=0, which the gauge pins to zero. Solving directly
+    # into psi avoids both the copied RHS field and the rotating result field.
+    found = other_lhs_terms === nothing ? nothing :
+            _find_source_field_in_terms(other_lhs_terms)
+    if found !== nothing && _is_zero_constraint_rhs(F_expr)
+        source_field, was_negated = found
+        if _spectral_poisson_solve_into!(laplacian_var, source_field, was_negated)
+            push!(solved_vars, target_name)
+            return
+        end
+    end
+
     try
         # Build RHS for Poisson equation
         # For "Δ(ψ) + tau - q = 0", we need Δ(ψ) = q - tau
@@ -899,6 +921,82 @@ function _try_solve_poisson_constraint!(problem, L_expr, F_expr, state::Vector{<
     catch e
         @debug "Could not solve Poisson constraint for $target_name: $e"
     end
+end
+
+@inline _is_zero_constraint_rhs(::Nothing) = true
+@inline _is_zero_constraint_rhs(expr::ZeroOperator) = true
+@inline _is_zero_constraint_rhs(expr::ConstantOperator) = iszero(expr.value)
+@inline _is_zero_constraint_rhs(expr::Number) = iszero(expr)
+@inline _is_zero_constraint_rhs(expr) = false
+
+@inline function _constraint_all_fourier_bases(field::ScalarField)
+    !isempty(field.bases) && all(basis -> basis isa FourierBasis, field.bases)
+end
+
+@inline _coefficient_array(data::PencilArrays.PencilArray) = parent(data)
+@inline _coefficient_array(data::AbstractArray) = data
+
+"""
+Solve a pure-Fourier Poisson constraint directly into `target`.
+
+`was_negated` describes the source sign in the constraint LHS. For
+`Δ(target) - source = 0`, the resulting coefficients are `-source/k²`;
+for `Δ(target) + source = 0`, they are `+source/k²`.
+"""
+function _spectral_poisson_solve_into!(target::ScalarField, source::ScalarField,
+                                       was_negated::Bool)
+    (_constraint_all_fourier_bases(target) && target.bases == source.bases) || return false
+    ensure_layout!(source, :c)
+    ensure_layout!(target, :c)
+    target_coeff = get_coeff_data(target)
+    source_coeff = get_coeff_data(source)
+    (target_coeff === nothing || source_coeff === nothing) && return false
+
+    k2 = _build_k_squared(source)
+    k2 === nothing && return false
+    dest = _coefficient_array(target_coeff)
+    src = _coefficient_array(source_coeff)
+    sign = was_negated ? -1.0 : 1.0
+    dest .= ifelse.(k2 .> 1e-12, sign .* src ./ k2, zero(eltype(dest)))
+    target.current_layout = :c
+    return true
+end
+
+"""Refresh `u = skew(grad(psi))` in existing 2D pure-Fourier buffers."""
+function _try_refresh_fourier_streamfunction_velocity!(target, expr)
+    target isa VectorField || return false
+    expr isa Skew || return false
+    gradient = expr.operand
+    gradient isa Gradient || return false
+    source = gradient.operand
+    source isa ScalarField || return false
+    length(target.components) == 2 || return false
+    length(gradient.coordsys.names) == 2 || return false
+    _constraint_all_fourier_bases(source) || return false
+    all(comp -> comp.bases == source.bases, target.components) || return false
+
+    ensure_layout!(source, :c)
+    source_coeff = get_coeff_data(source)
+    source_coeff === nothing && return false
+    source_data = _coefficient_array(source_coeff)
+
+    # skew(grad(psi)) = (-dpsi/dy, dpsi/dx)
+    derivative_coords = (gradient.coordsys[gradient.coordsys.names[2]],
+                         gradient.coordsys[gradient.coordsys.names[1]])
+    signs = (-1.0, 1.0)
+    @inbounds for i in 1:2
+        component = target.components[i]
+        ensure_layout!(component, :c)
+        component_coeff = get_coeff_data(component)
+        component_coeff === nothing && return false
+        copyto!(_coefficient_array(component_coeff), source_data)
+        axis = _resolve_diff_axis(derivative_coords[i], component.bases)
+        axis == 0 && return false
+        _apply_lazy_diff_coeff!(component, 1, axis)
+        signs[i] == 1.0 || (_coefficient_array(component_coeff) .*= signs[i])
+        component.current_layout = :c
+    end
+    return true
 end
 
 """

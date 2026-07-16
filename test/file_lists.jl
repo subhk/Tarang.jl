@@ -105,6 +105,7 @@ const TEST_FILES = [
     "test_field_typestability.jl",
     "test_filter_forcing_typestability.jl",
     "test_fourier_algebraic_constraints.jl",
+    "test_gpu_field_rk_allocations.jl",
     "test_lazy_rhs_fourier.jl",
     "test_lazy_rhs_vector_ops.jl",           # lap/div(grad)/div compile to the lazy RHS and match the interpreted evaluator
     "test_lazy_rhs_transform_budget.jl",     # lap() is fused (1 fwd + 1 bwd, not one round-trip per axis); alloc guards are blind to this

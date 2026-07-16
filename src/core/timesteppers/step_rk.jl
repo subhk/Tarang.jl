@@ -389,25 +389,20 @@ function _step_explicit_rk_gpu!(state::TimestepperState, solver::InitialValueSol
     t = solver.sim_time
     stages = length(b)
 
-    # Store stage derivatives (k values) as field vectors
-    k_stages = Vector{Vector{ScalarField}}(undef, stages)
-    n_fields = length(current_state)
-
-    # Pre-build a reusable stage_state from workspace fields (avoids copy_state per stage)
-    stage_state = Vector{ScalarField}(undef, n_fields)
-    for (k, src_field) in enumerate(current_state)
-        stage_state[k] = get_workspace_field!(state, src_field, k)
-    end
+    # One workspace set holds the mutable stage state. Each derivative needs a
+    # distinct retained set because the compiled lazy RHS reuses one output
+    # buffer and overwrites it at the next stage.
+    stage_state = _workspace_field_state!(
+        state, :explicit_field_rk_stage_state, current_state, 1)
+    k_stages = _workspace_stage_states!(
+        state, :explicit_field_rk_k_stages, current_state, stages, 2)
 
     @inbounds for s in 1:stages
         state.current_substep = s
 
         # Compute stage value: Y_s = X_n + dt * sum_{j<s} A[s,j] * k_j
         # Copy current_state into workspace (in-place, no allocation)
-        for (k, src_field) in enumerate(current_state)
-            copy_field_data!(stage_state[k], src_field)
-            stage_state[k].current_layout = src_field.current_layout
-        end
+        _copy_field_state!(stage_state, current_state)
         # Add contributions from previous stages
         for j in 1:(s-1)
             if abs(A[s, j]) > 1e-14
@@ -417,11 +412,13 @@ function _step_explicit_rk_gpu!(state::TimestepperState, solver::InitialValueSol
 
         # Evaluate RHS: k_s = F(t + c[s]*dt, Y_s)
         F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
-        k_stages[s] = F_stage
+        _copy_field_state!(k_stages[s], F_stage)
+        _release_rhs_buffer!(F_stage, solver)
     end
 
     # Compute final update: X_{n+1} = X_n + dt * sum_s b[s] * k_s
-    new_state = copy_state(current_state)
+    new_state = _acquire_recycled_history_state!(
+        state, :explicit_field_rk_recycle, current_state)
     @inbounds for s in 1:stages
         if abs(b[s]) > 1e-14
             axpy_state!(dt * b[s], k_stages[s], new_state)
@@ -429,7 +426,7 @@ function _step_explicit_rk_gpu!(state::TimestepperState, solver::InitialValueSol
     end
 
     _refresh_algebraic_state!(solver.problem, new_state)
-    _push_trim!(state.history, new_state, 1)
+    _push_recycled_history_state!(state, :explicit_field_rk_recycle, new_state)
 end
 
 """
