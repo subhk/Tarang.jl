@@ -58,7 +58,6 @@ This module is split into multiple files for maintainability:
 - transpose_sync.jl: Synchronous transpose operations
 - transpose_async.jl: Asynchronous transpose operations
 - transpose_transforms.jl: Distributed FFT operations
-- transpose_grouped.jl: Grouped transpose operations
 """
 
 # MPI, FFTW already in Tarang.jl
@@ -73,7 +72,6 @@ include("transpose/transpose_mpi.jl")
 include("transpose/transpose_sync.jl")
 include("transpose/transpose_async.jl")
 include("transpose/transpose_transforms.jl")
-include("transpose/transpose_grouped.jl")
 
 # ============================================================================
 # TransposableFieldStorage (deferred from field.jl due to type dependencies)
@@ -346,9 +344,3 @@ export get_transpose_stats, reset_transpose_stats!
 export get_active_buffers, swap_buffers!
 # Basis-aware transform helpers
 export transform_in_dim!, fft_in_dim!, dct_in_dim!, get_basis_for_dim
-
-# Grouped transposes (GROUP_TRANSPOSES equivalent)
-export GroupedTransposeConfig, set_group_transposes!
-export group_transpose_z_to_y!, group_transpose_y_to_z!
-export group_transpose_y_to_x!, group_transpose_x_to_y!
-export group_distributed_forward_transform!, group_distributed_backward_transform!

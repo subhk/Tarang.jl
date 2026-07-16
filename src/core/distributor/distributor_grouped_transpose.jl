@@ -141,58 +141,17 @@ function _batched_pencil_transpose!(dest_arrays::Vector{<:PencilArrays.PencilArr
                                     src_arrays::Vector{<:PencilArrays.PencilArray},
                                     indices::Vector{Int},
                                     dist::Distributor)
-    nfields = length(indices)
-    if nfields == 0
+    if isempty(indices)
         return
     end
 
-    # Get first array for sizing
-    first_idx = indices[1]
-    first_src = src_arrays[first_idx]
-    first_dest = dest_arrays[first_idx]
-
-    T = eltype(first_src)
-    src_local_size = length(parent(first_src))
-    dest_local_size = length(parent(first_dest))
-
-    # Stack all source data
-    stacked_src = zeros(T, src_local_size * nfields)
-    for (batch_idx, field_idx) in enumerate(indices)
-        src_data = parent(src_arrays[field_idx])
-        offset = (batch_idx - 1) * src_local_size
-        stacked_src[offset+1:offset+src_local_size] .= vec(src_data)
-    end
-
-    # Use PencilArrays transpose infrastructure
-    # Get the transpose plan from the first array pair
-    # Note: PencilArrays may not directly support stacked transposes
-    # So we use MPI.Alltoallv with proper counts
-
-    src_pencil = PencilArrays.pencil(first_src)
-    dest_pencil = PencilArrays.pencil(first_dest)
-
-    # Try to use PencilArrays transpose for the batch
-    # If not possible, fall back to individual transposes
-    try
-        # Compute send/recv counts for the stacked data
-        # Each field contributes equally to the counts
-        stacked_dest = zeros(T, dest_local_size * nfields)
-
-        # Get topology from pencil
-        topo = PencilArrays.topology(src_pencil)
-        comm = PencilArrays.comm(topo)
-
-        # For now, fall back to individual transposes since PencilArrays
-        # doesn't directly support batched operations on stacked data
-        for field_idx in indices
-            PencilArrays.transpose!(dest_arrays[field_idx], src_arrays[field_idx])
-        end
-    catch e
-        # Fallback: transpose individually
-        @debug "Batched PencilArray transpose failed, using individual transposes: $e"
-        for field_idx in indices
-            PencilArrays.transpose!(dest_arrays[field_idx], src_arrays[field_idx])
-        end
+    # PencilArrays does not expose a batched (stacked) Alltoallv, so a grouped
+    # transpose is just the individual per-field transposes. An earlier version
+    # stacked every field's source into one buffer and allocated a matching
+    # destination stack before this loop, then discarded both — pure per-call
+    # allocation (two (local*nfields)-sized arrays + a copy) for no benefit.
+    for field_idx in indices
+        PencilArrays.transpose!(dest_arrays[field_idx], src_arrays[field_idx])
     end
 end
 
