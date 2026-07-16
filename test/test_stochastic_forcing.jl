@@ -179,6 +179,11 @@ println("=" ^ 60)
         @test_throws ArgumentError StochasticForcing(; common..., injection_metric=:unknown)
         @test_throws ArgumentError StochasticForcing(; common..., energy_injection_rate=-0.1)
         @test_throws ArgumentError StochasticForcing(; common..., forcing_rate=-0.1)
+        overriding_alias = @test_logs (:warn, r"Both forcing_rate and energy_injection_rate") StochasticForcing(
+            ; common..., energy_injection_rate=-0.1, forcing_rate=0.1
+        )
+        @test overriding_alias.energy_injection_rate == 0.1
+        @test overriding_alias.forcing_rate == 0.1
         @test_throws ArgumentError StochasticForcing(
             field_size=(8, 8),
             energy_injection_rate=0.1,

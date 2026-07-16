@@ -250,10 +250,6 @@ function StochasticForcing(;
     spectrum_type = _normalize_spectrum_type(spectrum_type)
 
     _validate_injection_metric(injection_metric)
-    energy_injection_rate < 0 &&
-        throw(ArgumentError("energy_injection_rate must be nonnegative (got $energy_injection_rate)"))
-    forcing_rate !== nothing && forcing_rate < 0 &&
-        throw(ArgumentError("forcing_rate must be nonnegative (got $forcing_rate)"))
 
     # Validate dk_forcing for spectrum types that use it
     if dk_forcing <= 0 && spectrum_type in (:ring, :kolmogorov)
@@ -272,6 +268,8 @@ function StochasticForcing(;
     # Only warn if both appear to be explicitly set (forcing_rate provided AND energy_injection_rate differs from default)
     default_energy_injection_rate = 1.0
     energy = forcing_rate === nothing ? energy_injection_rate : forcing_rate
+    energy < 0 &&
+        throw(ArgumentError("effective energy injection rate must be nonnegative (got $energy)"))
     if forcing_rate !== nothing && !isapprox(energy_injection_rate, default_energy_injection_rate) && !isapprox(forcing_rate, energy_injection_rate)
         @warn "Both forcing_rate and energy_injection_rate were provided; using forcing_rate"
     end
