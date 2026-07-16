@@ -142,6 +142,16 @@ and warmed solves reuse their RHS, solution, and scratch allocations. Passing
 an explicit CPU-only `matsolver=:sparse` or `:dense` raises an error with a
 suggestion to use `:auto` or `:cuda_sparse`.
 
+The same single-GPU paths support three-dimensional IVPs. For a triply
+periodic Fourier--Fourier--Fourier domain, use `StochasticForcing`; the
+field-native RK path and multidimensional cuFFT stay on the GPU. For a
+Fourier--Fourier--Chebyshev domain, use `SeparableStochasticForcing` with
+`fourier_size=(Nx, Ny)` and the Chebyshev basis/profile. That coupled path
+uses `CuSparseLU` and cached mixed-transform buffers. Once the plans and
+workspaces are warm, neither path allocates device memory during `step!`.
+These guarantees currently apply to one GPU; distributed multi-GPU IVPs have
+separate transform constraints.
+
 ---
 
 ## Understanding the Example

@@ -94,7 +94,10 @@ else
         @testset "2D mixed RealFourier × ChebyshevT" begin
             mk(c) = (RealFourier(c["x"]; size=16, bounds=(0.0, 2π)),
                      ChebyshevT(c["y"]; size=16, bounds=(0.0, 1.0)))
-            _check(_pair(("x","y"), mk, Float64)...)
+            cpu_u, gpu_u, data = _pair(("x","y"), mk, Float64)
+            @test Tarang.gpu_forward_transform!(gpu_u)
+            @test Tarang.gpu_backward_transform!(gpu_u)
+            _check(cpu_u, gpu_u, data)
         end
 
         @testset "2D ComplexFourier (complex split/scratch path)" begin
@@ -372,6 +375,9 @@ else
         @test gpu_solver.base.matsolver === CuSparseLU
         @test gpu_forcing.cached_forcing isa CUDA.CuArray
         @test gpu_forcing.fourier_realization isa CUDA.CuArray
+        ensure_layout!(gpu_b, :g)
+        @test Tarang.gpu_forward_transform!(gpu_b)
+        @test Tarang.gpu_backward_transform!(gpu_b)
 
         for _ in 1:3
             step!(cpu_solver, dt)
