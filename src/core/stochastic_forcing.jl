@@ -172,6 +172,8 @@ mutable struct SeparableStochasticForcing{
     FCA<:AbstractArray{Complex{T},NF},
     P<:AbstractVector{T},
     CA<:AbstractArray{Complex{T},N},
+    FRV<:AbstractArray{Complex{T},N},
+    PV<:AbstractArray{T,N},
 } <: StochasticForcingType
     forcing_spectrum::A
     energy_injection_rate::T
@@ -190,6 +192,8 @@ mutable struct SeparableStochasticForcing{
     rng::AbstractRNG
     random_phases::A
     fourier_realization::FCA
+    fourier_outer_view::FRV
+    profile_outer_view::PV
     last_update_time::T
     spectrum_type::Symbol
     enforce_hermitian::Bool
@@ -478,6 +482,8 @@ function SeparableStochasticForcing(;
     cached_forcing = zeros(architecture, Complex{T}, field_size...)
     fourier_realization = zeros(architecture, Complex{T}, fourier_size...)
     N = NF + 1
+    fourier_outer_view = reshape(fourier_realization, (fourier_size..., 1))
+    profile_outer_view = reshape(profile, (ntuple(_ -> 1, NF)..., nz))
 
     return SeparableStochasticForcing{
         T, NF, N,
@@ -485,6 +491,8 @@ function SeparableStochasticForcing(;
         typeof(fourier_realization),
         typeof(profile),
         typeof(cached_forcing),
+        typeof(fourier_outer_view),
+        typeof(profile_outer_view),
     }(
         base.forcing_spectrum,
         base.energy_injection_rate,
@@ -503,6 +511,8 @@ function SeparableStochasticForcing(;
         base.rng,
         base.random_phases,
         fourier_realization,
+        fourier_outer_view,
+        profile_outer_view,
         T(-Inf),
         base.spectrum_type,
         enforce_hermitian,
@@ -789,6 +799,35 @@ function _generate_forcing_gpu_compatible!(forcing::StochasticForcing{T, N, A, C
     # Enforce zero mean (k=0 mode)
     _set_zero_mode!(forcing.cached_forcing, forcing.architecture)
 
+    return forcing.cached_forcing
+end
+
+function generate_forcing!(forcing::SeparableStochasticForcing{T}, t::Real,
+                           substep::Int=1) where T
+    substep > 1 && return forcing.cached_forcing
+    t == forcing.last_update_time && return forcing.cached_forcing
+
+    forcing.dt > 0 || error(
+        "SeparableStochasticForcing requires dt > 0 (got dt=$(forcing.dt)). " *
+        "Ensure the timestep is set before generating forcing.",
+    )
+
+    _fill_random_phases!(
+        forcing.architecture, forcing.random_phases, forcing.rng,
+    )
+    sqrt_dt = sqrt(forcing.dt)
+    forcing.fourier_realization .= forcing.forcing_spectrum .*
+        exp.(im .* forcing.random_phases) ./ sqrt_dt
+
+    if forcing.enforce_hermitian
+        _enforce_hermitian_symmetry!(
+            forcing.fourier_realization, forcing.architecture,
+        )
+    end
+    _set_zero_mode!(forcing.fourier_realization, forcing.architecture)
+
+    forcing.cached_forcing .= forcing.fourier_outer_view .* forcing.profile_outer_view
+    forcing.last_update_time = T(t)
     return forcing.cached_forcing
 end
 
@@ -1275,8 +1314,10 @@ Return the target (mean) energy injection rate ε.
 This is the ensemble average of work done per unit time.
 """
 mean_energy_injection_rate(forcing::StochasticForcing) = forcing.energy_injection_rate
+mean_energy_injection_rate(forcing::SeparableStochasticForcing) = forcing.energy_injection_rate
 
 energy_injection_rate(forcing::StochasticForcing) = forcing.energy_injection_rate
+energy_injection_rate(forcing::SeparableStochasticForcing) = forcing.energy_injection_rate
 
 function get_forcing_real(forcing::StochasticForcing)
     return real.(forcing.cached_forcing)
@@ -1352,6 +1393,17 @@ function set_dt!(forcing::StochasticForcing{T, N, A, CA}, dt::Real) where {T, N,
     return forcing
 end
 
+function set_dt!(forcing::SeparableStochasticForcing{T}, dt::Real) where T
+    new_dt = T(dt)
+    if forcing.dt != new_dt
+        forcing.dt = new_dt
+        forcing.last_update_time = T(-Inf)
+        fill!(forcing.cached_forcing, zero(eltype(forcing.cached_forcing)))
+        fill!(forcing.fourier_realization, zero(eltype(forcing.fourier_realization)))
+    end
+    return forcing
+end
+
 """
     reset_forcing!(forcing::StochasticForcing)
 
@@ -1367,12 +1419,23 @@ function reset_forcing!(forcing::StochasticForcing{T, N, A, CA}) where {T, N, A,
     end
 end
 
+function reset_forcing!(forcing::SeparableStochasticForcing{T}) where T
+    forcing.last_update_time = T(-Inf)
+    fill!(forcing.cached_forcing, zero(eltype(forcing.cached_forcing)))
+    fill!(forcing.fourier_realization, zero(eltype(forcing.fourier_realization)))
+    if forcing.prevsol !== nothing
+        fill!(forcing.prevsol, zero(eltype(forcing.prevsol)))
+    end
+    return forcing
+end
+
 """
     get_forcing_spectrum(forcing::StochasticForcing)
 
 Return the forcing amplitude spectrum √Q̂(k).
 """
 get_forcing_spectrum(forcing::StochasticForcing) = forcing.forcing_spectrum
+get_forcing_spectrum(forcing::SeparableStochasticForcing) = forcing.forcing_spectrum
 
 """
     get_cached_forcing(forcing::StochasticForcing)
@@ -1380,6 +1443,7 @@ get_forcing_spectrum(forcing::StochasticForcing) = forcing.forcing_spectrum
 Return the current cached forcing F̂(k).
 """
 get_cached_forcing(forcing::StochasticForcing) = forcing.cached_forcing
+get_cached_forcing(forcing::SeparableStochasticForcing) = forcing.cached_forcing
 
 # ============================================================================
 # Internal helpers

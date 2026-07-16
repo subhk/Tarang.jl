@@ -43,4 +43,41 @@ using Tarang
         wrong_basis = ChebyshevU(other_coords["z"]; size=10, bounds=(0.0, 1.0))
         @test_throws ArgumentError constructor(profile_basis=wrong_basis)
     end
+
+    @testset "generation and lifecycle" begin
+        forcing = constructor()
+        generated = generate_forcing!(forcing, 0.0, 1)
+
+        expected = reshape(forcing.fourier_realization, 8, 1) .*
+                   reshape(forcing.chebyshev_profile, 1, 10)
+        @test generated === forcing.cached_forcing
+        @test generated == expected
+        @test all(iszero, @view generated[1, :])
+        @test forcing.fourier_realization[2:4] ≈
+              conj.(forcing.fourier_realization[8:-1:6])
+        @test isreal(forcing.fourier_realization[5])
+
+        first_realization = copy(generated)
+        @test generate_forcing!(forcing, 0.0, 1) === generated
+        @test generate_forcing!(forcing, 0.0, 2) === generated
+        @test generated == first_realization
+
+        generate_forcing!(forcing, 1.0, 1)
+        @test generated != first_realization
+        @test get_forcing_spectrum(forcing) === forcing.forcing_spectrum
+        @test get_cached_forcing(forcing) === forcing.cached_forcing
+        @test mean_energy_injection_rate(forcing) == 0.2
+        @test energy_injection_rate(forcing) == 0.2
+
+        set_dt!(forcing, 2e-2)
+        @test forcing.dt == 2e-2
+        @test all(iszero, forcing.cached_forcing)
+        generate_forcing!(forcing, 2.0, 1) # warm compilation
+        allocations = @allocated generate_forcing!(forcing, 3.0, 1)
+        @test allocations <= 4096
+
+        reset_forcing!(forcing)
+        @test forcing.last_update_time == -Inf
+        @test all(iszero, forcing.cached_forcing)
+    end
 end
