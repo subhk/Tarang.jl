@@ -27,9 +27,9 @@ const G    = ComplexF64[ (0.3*i - 0.2*j) + (0.1*i*j)im for i in 1:N, j in 1:N]
 const solG = ComplexF64[ (0.5*i + 0.7*j) - (0.05*i - 0.03*j)im for i in 1:N, j in 1:N]
 const prvG = ComplexF64[ (0.2*j - 0.4*i) + (0.06*i + 0.02*j)im for i in 1:N, j in 1:N]
 # Serial reference (computed at np=1 from the same code path).
-const W_STRAT_REF = 0.02526697
-const W_ITO_REF   = 0.08505513
-const P_REF       = 0.65478815
+const W_STRAT_REF = 0.001596
+const W_ITO_REF   = 0.099056
+const P_REF       = 0.04136
 
 @testset "Distributed forcing work/power == serial (np=$nprocs)" begin
     coords = CartesianCoordinates("x", "y")

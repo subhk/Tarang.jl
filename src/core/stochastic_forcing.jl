@@ -629,7 +629,7 @@ end
     if i < ci
         data[ci] = conj(data[i])
     elseif i == ci
-        data[i] = Complex{T}(real(data[i]), zero(T))
+        data[i] = Complex{T}(sqrt(T(2)) * real(data[i]), zero(T))
     end
 end
 
@@ -643,7 +643,7 @@ end
     if (i < ci) || (i == ci && j < cj)
         data[ci, cj] = conj(data[i, j])
     elseif i == ci && j == cj
-        data[i, j] = Complex{T}(real(data[i, j]), zero(T))
+        data[i, j] = Complex{T}(sqrt(T(2)) * real(data[i, j]), zero(T))
     end
 end
 
@@ -662,7 +662,7 @@ end
     if lin_idx < conj_lin_idx
         data[ci, cj, ck] = conj(data[i, j, k])
     elseif lin_idx == conj_lin_idx
-        data[i, j, k] = Complex{T}(real(data[i, j, k]), zero(T))
+        data[i, j, k] = Complex{T}(sqrt(T(2)) * real(data[i, j, k]), zero(T))
     end
 end
 
@@ -688,12 +688,12 @@ function _enforce_hermitian_1d!(data::AbstractVector{Complex{T}}) where T
     n = length(data)
 
     # DC mode (k=0) must be real
-    data[1] = Complex{T}(real(data[1]), zero(T))
+    data[1] = Complex{T}(sqrt(T(2)) * real(data[1]), zero(T))
 
     # Nyquist mode (if even n) must be real
     if iseven(n)
         nyq = n ÷ 2 + 1
-        data[nyq] = Complex{T}(real(data[nyq]), zero(T))
+        data[nyq] = Complex{T}(sqrt(T(2)) * real(data[nyq]), zero(T))
     end
 
     # Enforce conjugate symmetry: F(-k) = F(k)*
@@ -723,8 +723,8 @@ function _enforce_hermitian_2d!(data::AbstractMatrix{Complex{T}}) where T
                 # Keep the primary value so unit-magnitude phases are preserved.
                 data[ci, cj] = conj(data[i, j])
             elseif i == ci && j == cj
-                # Self-conjugate modes must be real
-                data[i, j] = Complex{T}(real(data[i, j]), zero(T))
+                # Project to the real axis and preserve the mode's expected power.
+                data[i, j] = Complex{T}(sqrt(T(2)) * real(data[i, j]), zero(T))
             end
         end
     end
@@ -754,8 +754,8 @@ function _enforce_hermitian_3d!(data::AbstractArray{Complex{T}, 3}) where T
                     # Keep the primary value so unit-magnitude phases are preserved.
                     data[ci, cj, ck] = conj(data[i, j, k])
                 elseif lin_idx == conj_lin_idx
-                    # Self-conjugate modes must be real
-                    data[i, j, k] = Complex{T}(real(data[i, j, k]), zero(T))
+                    # Project to the real axis and preserve the mode's expected power.
+                    data[i, j, k] = Complex{T}(sqrt(T(2)) * real(data[i, j, k]), zero(T))
                 end
             end
         end
@@ -878,6 +878,79 @@ end
 _forcing_view_logical(forcing::StochasticForcing{T, N, A, CA}, target::AbstractArray) where {T, N, A, CA} =
     _matched_forcing_view(forcing, size(target))
 
+function _diagnostic_layout(target::AbstractArray{<:Any, N}) where N
+    return size(target), ntuple(d -> 1:size(target, d), N)
+end
+
+function _diagnostic_layout(target::PencilArrays.PencilArray)
+    return Tuple(PencilArrays.size_global(target)), Tuple(PencilArrays.pencil(target).axes_local)
+end
+
+@inline function _rfft_multiplicity(::Type{T}, full_n::Int, target_n::Int,
+                                    global_i::Int) where T
+    if target_n == full_n
+        return one(T)
+    elseif full_n == 2 * (target_n - 1) # even physical size: DC and Nyquist are unique
+        return (global_i == 1 || global_i == target_n) ? one(T) : T(2)
+    elseif full_n == 2 * target_n - 1   # odd physical size: only DC is unique
+        return global_i == 1 ? one(T) : T(2)
+    end
+    throw(ArgumentError("Forcing size $full_n does not match spectral target size $target_n"))
+end
+
+function _diagnostic_weights(forcing::StochasticForcing{T, N},
+                             target::AbstractArray{<:Any, N}) where {T, N}
+    global_shape, local_ranges = _diagnostic_layout(target)
+    local_shape = ntuple(d -> length(local_ranges[d]), N)
+    weights = Array{T}(undef, local_shape)
+    M2 = T(prod(forcing.field_size))^2
+
+    for I in CartesianIndices(weights)
+        multiplicity = one(T)
+        k2 = zero(T)
+        for d in 1:N
+            global_i = first(local_ranges[d]) + I[d] - 1
+            multiplicity *= _rfft_multiplicity(T, forcing.field_size[d],
+                                                global_shape[d], global_i)
+            kd = forcing.wavenumbers[d][global_i]
+            k2 += kd^2
+        end
+        weights[I] = multiplicity *
+                     _injection_metric_weight(k2, forcing.injection_metric) / M2
+    end
+    return weights
+end
+
+function _diagnostic_inner_product(forcing::StochasticForcing{T, N},
+                                   sol::AbstractArray{Complex{T}, N},
+                                   cf::AbstractArray{Complex{T}, N},
+                                   other::Union{Nothing, AbstractArray{Complex{T}, N}}=nothing) where {T, N}
+    weights_cpu = _diagnostic_weights(forcing, sol)
+    partial = if is_gpu(forcing.architecture) || is_gpu_array(sol)
+        # Keep the reduction on-device. In particular, do not iterate CuArray
+        # Cartesian indices, which would trigger scalar indexing.
+        weights = on_architecture(forcing.architecture, weights_cpu)
+        if other === nothing
+            sum(weights .* real.(sol .* conj.(cf)))
+        else
+            sum(weights .* real.(((other .+ sol) ./ T(2)) .* conj.(cf)))
+        end
+    else
+        value = zero(T)
+        if other === nothing
+            @inbounds for I in CartesianIndices(weights_cpu)
+                value += weights_cpu[I] * real(sol[I] * conj(cf[I]))
+            end
+        else
+            @inbounds for I in CartesianIndices(weights_cpu)
+                value += weights_cpu[I] * real((other[I] + sol[I]) / T(2) * conj(cf[I]))
+            end
+        end
+        value
+    end
+    return T(_forcing_reduce_partial(sol, partial))
+end
+
 """
     work_stratonovich(forcing::StochasticForcing, sol::AbstractArray)
 
@@ -908,31 +981,16 @@ function work_stratonovich(forcing::StochasticForcing{T, N, A, CA}, sol::Abstrac
 
     # Stratonovich work: W = Re⟨ψ_mid · ΔF̂*⟩ where ΔF̂ = F̂_stored · dt
     # Since F̂_stored = √Q̂ · ξ / √dt, we have ΔF̂ = √Q̂ · ξ · √dt
-    domain_area = prod(forcing.domain_size)
-
-    # Fused mapreduce: computes Re(ψ_mid · F̂*) without temporary arrays.
-    # GPU-compatible: mapreduce dispatches to GPU kernel on CuArrays.
     ps = forcing.prevsol
     size(ps) == size(sol) || throw(ArgumentError("Previous solution size $(size(ps)) does not match current solution size $(size(sol))"))
     cf = _forcing_view_logical(forcing, sol)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-    # Iterate CARTESIAN (logical) indices. A plain prevsol Matrix is IndexLinear,
-    # which would make `eachindex` choose linear order — but a PencilArray's linear
-    # index is parent/storage (logical row-major) order, not the Matrix's
-    # column-major, scrambling the pairing for a permuted pencil. Cartesian getindex
-    # is logical for all of ps (Matrix), sol (PencilArray) and cf (view).
-    work = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
-        @inbounds real((ps[I] + sol[I]) / 2 * conj(cf[I]))
-    end
-
-    # The mapreduce ran over this rank's LOCAL slab only; combine partials
-    # across the field's communicator before normalising by the GLOBAL area.
-    work = _forcing_reduce_partial(sol, work)
+    work = _diagnostic_inner_product(forcing, sol, cf, ps)
 
     # The cached_forcing stores F̂ = √Q̂ · ξ / √dt
     # The forcing increment is ΔF̂ = F̂ · dt = √Q̂ · ξ · √dt
-    # Work = (1/A) · Re Σ ψ_mid · ΔF̂* = (dt/A) · Re Σ ψ_mid · F̂*
-    return T(work * forcing.dt / domain_area)
+    # Parseval contributes M⁻² for Tarang's unnormalised FFT coefficients.
+    return T(work * forcing.dt)
 end
 
 """
@@ -952,26 +1010,15 @@ In Itô calculus, ψⁿ is independent of Fⁿ⁺¹, so ⟨ψⁿ · ΔF̂⟩ = 0
 The drift ensures ⟨W_Itô⟩ = ⟨W_Stratonovich⟩ = ε · dt.
 """
 function work_ito(forcing::StochasticForcing{T, N, A, CA}, sol_prev::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
-    domain_area = prod(forcing.domain_size)
-
-    # Itô work (uses previous solution, which is independent of current forcing)
-    # Fused mapreduce avoids temporary arrays; GPU-compatible.
     cf = _forcing_view_logical(forcing, sol_prev)   # logical view + cartesian iteration (see work_stratonovich)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol_prev))"))
-    work = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
-        @inbounds real(sol_prev[I] * conj(cf[I]))
-    end
-
-    # Combine per-rank slab partials over the field's communicator (the drift
-    # term below is a replicated scalar and must NOT be reduced).
-    work = _forcing_reduce_partial(sol_prev, work)
+    work = _diagnostic_inner_product(forcing, sol_prev, cf)
 
     # The Itô integral has zero mean, so we add drift correction
     # to match Stratonovich mean: ⟨W_Itô⟩ = 0 + ε·dt = ε·dt
     drift = forcing.energy_injection_rate * forcing.dt
 
-    # Work = (dt/A) · Re Σ ψ_prev · F̂* (same scaling as Stratonovich)
-    return T(work * forcing.dt / domain_area + drift)
+    return T(work * forcing.dt + drift)
 end
 
 # ============================================================================
@@ -996,7 +1043,7 @@ end
 """
     instantaneous_power(forcing::StochasticForcing, sol::AbstractArray)
 
-Compute instantaneous power input P = Re⟨ψ · F̂*⟩ / A.
+Compute instantaneous power input from the Parseval-normalized spectral pairing.
 Works on both CPU and GPU arrays.
 
 This is the correlation between the solution and forcing at a given instant.
@@ -1013,20 +1060,9 @@ use `work_stratonovich(forcing, sol) / forcing.dt` instead.
 Instantaneous power (energy per unit time).
 """
 function instantaneous_power(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
-    domain_area = prod(forcing.domain_size)
-
     cf = _forcing_view_logical(forcing, sol)   # logical view + cartesian iteration (see work_stratonovich)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-
-    power = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
-        @inbounds real(sol[I] * conj(cf[I]))
-    end
-
-    # Combine per-rank slab partials over the field's communicator.
-    power = _forcing_reduce_partial(sol, power)
-
-    # P = (1/A) · Re Σ ψ · F̂* where F̂ = √Q̂ · ξ / √dt
-    return T(power / domain_area)
+    return _diagnostic_inner_product(forcing, sol, cf)
 end
 
 """
@@ -1111,8 +1147,8 @@ get_cached_forcing(forcing::StochasticForcing) = forcing.cached_forcing
 
 # Sum a per-rank partial scalar (computed over the LOCAL PencilArray slab)
 # across the distributed field's MPI communicator. The work/power diagnostics
-# reduce over the owned slab and normalise by the GLOBAL domain area, so the
-# slab partials must be combined first or each rank returns only its fraction.
+# reduce over the owned slab and use the GLOBAL transform size for Parseval
+# normalization, so the slab partials must be combined first.
 # Serial / single-rank / non-PencilArray inputs are returned unchanged, so
 # existing serial and degenerate (single-rank) configurations are untouched.
 _forcing_reduce_partial(::AbstractArray, partial) = partial

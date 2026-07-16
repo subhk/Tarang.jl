@@ -286,6 +286,13 @@ println("=" ^ 60)
         println("  Self-conjugate modes are real OK")
     end
 
+    @testset "Self-conjugate projection preserves power" begin
+        data = zeros(ComplexF64, 8)
+        data[5] = 3 + 4im
+        Tarang._enforce_hermitian_1d!(data)
+        @test data[5] ≈ 3sqrt(2) + 0im
+    end
+
     @testset "Substep Awareness (KEY TEST)" begin
         Random.seed!(12345)
 
@@ -460,36 +467,43 @@ println("=" ^ 60)
 
     @testset "Work diagnostics support half-spectrum targets" begin
         dt = 0.01
-        forcing = StochasticForcing(
-            field_size=(8, 8),
-            forcing_rate=0.1,
-            k_forcing=3.0,
-            dk_forcing=1.0,
-            dt=dt,
-            rng=MersenneTwister(42)
-        )
+        field_size = (8, 8)
+        half_size = (5, 8)
+        multiplicity = reshape([1.0, 2.0, 2.0, 2.0, 1.0], :, 1)
 
-        generate_forcing!(forcing, 0.0)
-        forcing_view = Tarang._matched_forcing_view(forcing, (5, 8))
-        @test forcing_view !== nothing
+        for metric in (:direct, :vorticity_kinetic)
+            forcing = StochasticForcing(
+                field_size=field_size,
+                forcing_rate=0.1,
+                injection_metric=metric,
+                k_forcing=2.0,
+                dk_forcing=0.1,
+                spectrum_type=:band,
+                dt=dt,
+                rng=MersenneTwister(42),
+            )
+            generate_forcing!(forcing, 0.0)
+            forcing_view = Tarang._matched_forcing_view(forcing, half_size)
+            rng = MersenneTwister(7)
+            sol_prev = randn(rng, ComplexF64, half_size)
+            sol_next = sol_prev .+ dt .* forcing_view
+            store_prevsol!(forcing, sol_prev)
 
-        rng = MersenneTwister(7)
-        sol_prev = randn(rng, ComplexF64, size(forcing_view))
-        sol_next = sol_prev .+ dt .* forcing_view
-        store_prevsol!(forcing, sol_prev)
+            metric_weight = [
+                metric === :direct ? 1.0 :
+                    (iszero(kx^2 + ky^2) ? 0.0 : inv(kx^2 + ky^2))
+                for kx in forcing.wavenumbers[1][1:half_size[1]],
+                    ky in forcing.wavenumbers[2]
+            ]
+            weights = multiplicity .* metric_weight ./ prod(field_size)^2
+            pairing(a) = sum(weights .* real.(a .* conj.(forcing_view)))
 
-        domain_area = prod(forcing.domain_size)
-        expected_stratonovich =
-            sum(real.(((sol_prev .+ sol_next) ./ 2) .* conj.(forcing_view))) * dt / domain_area
-        expected_ito =
-            sum(real.(sol_prev .* conj.(forcing_view))) * dt / domain_area +
-            forcing.energy_injection_rate * dt
-        expected_power =
-            sum(real.(sol_prev .* conj.(forcing_view))) / domain_area
-
-        @test work_stratonovich(forcing, sol_next) ≈ expected_stratonovich
-        @test work_ito(forcing, sol_prev) ≈ expected_ito
-        @test instantaneous_power(forcing, sol_prev) ≈ expected_power
+            @test work_stratonovich(forcing, sol_next) ≈
+                  pairing((sol_prev .+ sol_next) ./ 2) * dt
+            @test work_ito(forcing, sol_prev) ≈
+                  pairing(sol_prev) * dt + forcing.energy_injection_rate * dt
+            @test instantaneous_power(forcing, sol_prev) ≈ pairing(sol_prev)
+        end
         println("  Work diagnostics use matched forcing views OK")
     end
 
@@ -673,15 +687,14 @@ println("=" ^ 60)
     end
 
     # ------------------------------------------------------------------
-    # Regression tests for work computation (fused mapreduce, zero alloc)
-    # Verifies that the optimised mapreduce path produces the same
-    # numerical answers as the naive broadcast reference formulas.
+    # Regression tests for the shared spectral work pairing.
+    # Verifies numerical answers against direct Parseval-normalized references.
     # ------------------------------------------------------------------
     @testset "work_stratonovich regression" begin
         T = Float64
         dt = 0.01
         domain_size = (2π, 2π)
-        area = prod(domain_size)
+        M2 = 16^4
 
         forcing = StochasticForcing(
             field_size=(16, 16),
@@ -705,13 +718,13 @@ println("=" ^ 60)
         # Store previous solution
         store_prevsol!(forcing, prev)
 
-        # -- Test 1: numerical value matches broadcast reference --
+        # -- Test 1: numerical value matches direct spectral reference --
         W = work_stratonovich(forcing, sol)
 
-        # Reference: broadcast-based computation (the old implementation)
-        ref = sum(real.((prev .+ sol) ./ 2 .* conj.(cf))) * dt / area
+        # Reference: full-spectrum Parseval pairing.
+        ref = sum(real.((prev .+ sol) ./ 2 .* conj.(cf))) * dt / M2
         @test W ≈ ref atol=1e-12 rtol=1e-12
-        println("  work_stratonovich matches broadcast reference OK")
+        println("  work_stratonovich matches Parseval reference OK")
 
         # -- Test 2: returns zero(T) when prevsol is nothing --
         # Temporarily set prevsol to nothing
@@ -725,7 +738,7 @@ println("=" ^ 60)
         T = Float64
         dt = 0.005
         domain_size = (2π, 2π)
-        area = prod(domain_size)
+        M2 = 16^4
         eps_rate = 0.25  # non-default energy injection rate
 
         forcing = StochasticForcing(
@@ -746,15 +759,15 @@ println("=" ^ 60)
         Random.seed!(99)
         sol_prev = randn(ComplexF64, 16, 16)
 
-        # -- Test: numerical value matches broadcast reference with drift --
+        # -- Test: numerical value matches Parseval reference with drift --
         W = work_ito(forcing, sol_prev)
 
         # Reference: broadcast-based Ito work + drift correction
         work_sum = sum(real.(sol_prev .* conj.(cf)))
         drift    = eps_rate * dt
-        ref      = work_sum * dt / area + drift
+        ref      = work_sum * dt / M2 + drift
         @test W ≈ ref atol=1e-12 rtol=1e-12
-        println("  work_ito matches broadcast reference with drift OK")
+        println("  work_ito matches Parseval reference with drift OK")
     end
 
 end
