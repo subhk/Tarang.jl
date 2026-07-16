@@ -1,10 +1,10 @@
 # Guard: distributed stochastic-forcing work/power diagnostics match serial (np>=2).
 #
-# work_stratonovich / work_ito / instantaneous_power slice the cached forcing
+# work_stratonovich / work_ito / instantaneous_power pair the cached forcing
 # spectrum against the solution and reduce. Under MPI the solution is a
 # PencilArray: its CARTESIAN getindex pa[I] is LOGICAL, but its LINEAR index is
-# parent/storage order. The diagnostics now use a LOGICAL forcing view
-# (_forcing_view_logical) + CartesianIndices iteration, and store_prevsol! copies
+# parent/storage order. The diagnostics now pair logical Cartesian indices with
+# the cached forcing's global indices, and store_prevsol! copies
 # the slab with an explicit dest[I]=sol[I] loop (a CartesianIndices comprehension
 # collects in linear/storage order, transposing a permuted pencil). Round-5 audit.
 using Test
@@ -115,4 +115,28 @@ end
     @test ws ≈ ws_ref atol=1e-12 rtol=1e-12
     @test wi ≈ wi_ref atol=1e-12 rtol=1e-12
     @test p ≈ p_ref atol=1e-12 rtol=1e-12
+end
+
+@testset "Three-dimensional Pencil snapshots preserve logical shape (np=$nprocs)" begin
+    n = 4
+    coords_3d = CartesianCoordinates("x", "y", "z")
+    dist_3d = Distributor(coords_3d)
+    bases = ntuple(3) do d
+        ComplexFourier(coords_3d[("x", "y", "z")[d]]; size=n, bounds=(0.0, 2π))
+    end
+    u = ScalarField(dist_3d, "u_3d", bases, ComplexF64); ensure_layout!(u, :c)
+    coeffs = get_coeff_data(u)
+    @inbounds for I in CartesianIndices(coeffs)
+        coeffs[I] = ComplexF64(sum(Tuple(I)), I[1] - I[3])
+    end
+
+    forcing = StochasticForcing(
+        field_size=(n, n, n), forcing_rate=0.0,
+        k_forcing=1.0, dk_forcing=0.1, spectrum_type=:band,
+    )
+    store_prevsol!(forcing, coeffs)
+
+    @test ndims(forcing.prevsol) == 3
+    @test size(forcing.prevsol) == size(coeffs)
+    @test all(I -> forcing.prevsol[I] == coeffs[I], CartesianIndices(coeffs))
 end

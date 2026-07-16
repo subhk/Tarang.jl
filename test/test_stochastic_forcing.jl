@@ -532,6 +532,27 @@ println("=" ^ 60)
         @test instantaneous_power(forcing, sol) != 1 / 7^2
     end
 
+    @testset "CPU work diagnostics are allocation-free after warmup" begin
+        forcing = StochasticForcing(
+            field_size=(8, 8), forcing_rate=0.1, k_forcing=2.0,
+            dk_forcing=0.1, spectrum_type=:band, dt=0.01,
+            rng=MersenneTwister(91),
+        )
+        generate_forcing!(forcing, 0.0)
+        sol = randn(MersenneTwister(92), ComplexF64, 5, 8)
+        store_prevsol!(forcing, sol)
+        work_stratonovich(forcing, sol)
+        work_ito(forcing, sol)
+        instantaneous_power(forcing, sol)
+
+        allocations = (
+            @allocated(work_stratonovich(forcing, sol)),
+            @allocated(work_ito(forcing, sol)),
+            @allocated(instantaneous_power(forcing, sol)),
+        )
+        @test allocations == (0, 0, 0)
+    end
+
     @testset "Deterministic Forcing" begin
         # Test deterministic forcing
         function my_forcing(x, y, t, params)
@@ -976,6 +997,10 @@ end
                 @test work_ito(forcing, sol_prev) ≈
                       pairing(sol_prev_cpu) * dt + forcing.energy_injection_rate * dt
                 @test instantaneous_power(forcing, sol_prev) ≈ pairing(sol_prev_cpu)
+                cached_weights = forcing.diagnostic_weights
+                @test cached_weights !== nothing
+                instantaneous_power(forcing, sol_prev)
+                @test forcing.diagnostic_weights === cached_weights
             end
         end
 

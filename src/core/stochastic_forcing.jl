@@ -129,6 +129,7 @@ where ξ(k) is complex white noise with |ξ| = 1 and random phase.
 - `prevsol::Union{Nothing,AbstractArray{Complex{T},N}}`: Previous solution (for Stratonovich work)
 - `rng::AbstractRNG`: Random number generator (default: fresh MersenneTwister per instance for thread/parallel safety)
 - `random_phases::AbstractArray{T,N}`: Pre-allocated random phase buffer (on target architecture)
+- `diagnostic_weights`: Cached backend weights for the active GPU diagnostic layout
 - `last_update_time::T`: Time of last forcing update
 - `spectrum_type::Symbol`: Type of forcing spectrum
 - `enforce_hermitian::Bool`: Enforce Hermitian symmetry for real-valued fields
@@ -148,6 +149,10 @@ mutable struct StochasticForcing{T<:AbstractFloat, N, A<:AbstractArray{T,N}, CA<
     prevsol::Union{Nothing, CA}             # For Stratonovich work
     rng::AbstractRNG                        # CPU-side RNG
     random_phases::A                        # Pre-allocated random phase buffer
+    diagnostic_weights::Union{Nothing, A}   # Cached backend weights for GPU reductions
+    diagnostic_global_shape::NTuple{N, Int}
+    diagnostic_local_ranges::NTuple{N, UnitRange{Int}}
+    diagnostic_metric::Symbol
     last_update_time::T
     spectrum_type::Symbol
     enforce_hermitian::Bool                 # Enforce Hermitian symmetry for real fields
@@ -324,6 +329,10 @@ function StochasticForcing(;
         prevsol,
         rng,
         random_phases,
+        nothing,
+        ntuple(_ -> 0, N),
+        ntuple(_ -> 1:0, N),
+        injection_metric,
         T(-Inf),  # Initialize to -Inf so first call always updates
         spectrum_type,
         enforce_hermitian,
@@ -833,14 +842,17 @@ Call this at the **beginning** of each timestep, before advancing.
 """
 function store_prevsol!(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
     if sol isa PencilArrays.PencilArray
-        # Store the local slab as a plain Matrix whose CARTESIAN layout matches the
+        # Store the local slab as a plain N-D Array whose CARTESIAN layout matches the
         # PencilArray's logical getindex (pa[I] is logical, verified), so the
         # work/power reductions — which iterate CartesianIndices — pair it correctly.
         # Note: a `[sol[I] for I in CartesianIndices(sol)]` comprehension does NOT do
         # this (it collects in the PencilArray's LINEAR/storage order == collect(sol),
         # transposing a permuted pencil); an explicit `dest[I] = sol[I]` loop does.
         # Round-5 audit 2026-06-23.
-        dest = Matrix{Complex{T}}(undef, size(sol))
+        if forcing.prevsol === nothing || size(forcing.prevsol) != size(sol)
+            forcing.prevsol = Array{Complex{T}, N}(undef, size(sol))
+        end
+        dest = forcing.prevsol
         @inbounds for I in CartesianIndices(sol)
             dest[I] = sol[I]
         end
@@ -855,28 +867,6 @@ function store_prevsol!(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractAr
     # Use copyto! for GPU compatibility
     copyto!(forcing.prevsol, sol)
 end
-
-# LOGICAL-order local forcing view for the work/power diagnostics, sliced by the
-# field's logical local ranges (axes_local[l] = global range of logical dim l).
-# The diagnostics iterate CartesianIndices (logical), pairing this with the
-# solution PencilArray's logical cartesian getindex. Distinct from
-# `_matched_forcing_view`, which returns a PARENT/memory-order view for the
-# broadcast `coeff_data .+= F_view` in the RHS path. Round-5 audit 2026-06-23.
-function _forcing_view_logical(forcing::StochasticForcing{T, N, A, CA},
-                               target::PencilArrays.PencilArray) where {T, N, A, CA}
-    local_axes = PencilArrays.pencil(target).axes_local
-    length(local_axes) == N || return nothing
-    fshape = size(forcing.cached_forcing)
-    ranges = Vector{UnitRange{Int}}(undef, N)
-    for d in 1:N
-        r = local_axes[d]
-        (first(r) < 1 || last(r) > fshape[d]) && return nothing
-        ranges[d] = r
-    end
-    return view(forcing.cached_forcing, Tuple(ranges)...)
-end
-_forcing_view_logical(forcing::StochasticForcing{T, N, A, CA}, target::AbstractArray) where {T, N, A, CA} =
-    _matched_forcing_view(forcing, size(target))
 
 function _diagnostic_layout(target::AbstractArray{<:Any, N}) where N
     return size(target), ntuple(d -> 1:size(target, d), N)
@@ -899,8 +889,8 @@ end
 end
 
 function _diagnostic_weights(forcing::StochasticForcing{T, N},
-                             target::AbstractArray{<:Any, N}) where {T, N}
-    global_shape, local_ranges = _diagnostic_layout(target)
+                             global_shape::NTuple{N, Int},
+                             local_ranges::NTuple{N, UnitRange{Int}}) where {T, N}
     local_shape = ntuple(d -> length(local_ranges[d]), N)
     weights = Array{T}(undef, local_shape)
     M2 = T(prod(forcing.field_size))^2
@@ -921,34 +911,113 @@ function _diagnostic_weights(forcing::StochasticForcing{T, N},
     return weights
 end
 
+function _validate_diagnostic_layout(forcing::StochasticForcing{T, N},
+                                     global_shape::NTuple{N, Int},
+                                     local_ranges::NTuple{N, UnitRange{Int}}) where {T, N}
+    for d in 1:N
+        r = local_ranges[d]
+        (first(r) < 1 || last(r) > global_shape[d]) &&
+            throw(ArgumentError("Local spectral range $r exceeds target size $(global_shape[d])"))
+        _rfft_multiplicity(T, forcing.field_size[d], global_shape[d], first(r))
+    end
+    return nothing
+end
+
+function _cached_gpu_diagnostic_weights!(forcing::StochasticForcing{T, N, A},
+                                         global_shape::NTuple{N, Int},
+                                         local_ranges::NTuple{N, UnitRange{Int}}) where {T, N, A}
+    if forcing.diagnostic_weights === nothing ||
+       forcing.diagnostic_global_shape != global_shape ||
+       forcing.diagnostic_local_ranges != local_ranges ||
+       forcing.diagnostic_metric !== forcing.injection_metric
+        weights_cpu = _diagnostic_weights(forcing, global_shape, local_ranges)
+        forcing.diagnostic_weights = on_architecture(forcing.architecture, weights_cpu)
+        forcing.diagnostic_global_shape = global_shape
+        forcing.diagnostic_local_ranges = local_ranges
+        forcing.diagnostic_metric = forcing.injection_metric
+    end
+    return forcing.diagnostic_weights::A
+end
+
+@inline function _diagnostic_mode_weight(forcing::StochasticForcing{T, N},
+                                         global_shape::NTuple{N, Int},
+                                         G::CartesianIndex{N}, M2::T) where {T, N}
+    multiplicity = one(T)
+    k2 = zero(T)
+    for d in 1:N
+        global_i = G[d]
+        multiplicity *= _rfft_multiplicity(T, forcing.field_size[d],
+                                            global_shape[d], global_i)
+        kd = forcing.wavenumbers[d][global_i]
+        k2 += kd^2
+    end
+    return multiplicity * _injection_metric_weight(k2, forcing.injection_metric) / M2
+end
+
+function _diagnostic_inner_product_cpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::Nothing) where {T, N}
+    M2 = T(prod(forcing.field_size))^2
+    offset = CartesianIndex(ntuple(d -> first(local_ranges[d]) - 1, N))
+    value = zero(T)
+    @inbounds for I in CartesianIndices(sol)
+        G = I + offset
+        weight = _diagnostic_mode_weight(forcing, global_shape, G, M2)
+        value += weight * real(sol[I] * conj(forcing.cached_forcing[G]))
+    end
+    return T(_forcing_reduce_partial(sol, value))
+end
+
+function _diagnostic_inner_product_cpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::AbstractArray{Complex{T}, N}) where {T, N}
+    M2 = T(prod(forcing.field_size))^2
+    offset = CartesianIndex(ntuple(d -> first(local_ranges[d]) - 1, N))
+    value = zero(T)
+    @inbounds for I in CartesianIndices(sol)
+        G = I + offset
+        weight = _diagnostic_mode_weight(forcing, global_shape, G, M2)
+        midpoint = (other[I] + sol[I]) / T(2)
+        value += weight * real(midpoint * conj(forcing.cached_forcing[G]))
+    end
+    return T(_forcing_reduce_partial(sol, value))
+end
+
+function _diagnostic_inner_product_gpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::Nothing) where {T, N}
+    weights = _cached_gpu_diagnostic_weights!(forcing, global_shape, local_ranges)
+    cf = view(forcing.cached_forcing, local_ranges...)
+    return T(mapreduce((w, s, f) -> w * real(s * conj(f)), +,
+                       weights, sol, cf; init=zero(T)))
+end
+
+function _diagnostic_inner_product_gpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::AbstractArray{Complex{T}, N}) where {T, N}
+    weights = _cached_gpu_diagnostic_weights!(forcing, global_shape, local_ranges)
+    cf = view(forcing.cached_forcing, local_ranges...)
+    return T(mapreduce((w, a, b, f) -> w * real((a + b) / T(2) * conj(f)), +,
+                       weights, other, sol, cf; init=zero(T)))
+end
+
 function _diagnostic_inner_product(forcing::StochasticForcing{T, N},
                                    sol::AbstractArray{Complex{T}, N},
-                                   cf::AbstractArray{Complex{T}, N},
                                    other::Union{Nothing, AbstractArray{Complex{T}, N}}=nothing) where {T, N}
-    weights_cpu = _diagnostic_weights(forcing, sol)
-    partial = if is_gpu(forcing.architecture) || is_gpu_array(sol)
-        # Keep the reduction on-device. In particular, do not iterate CuArray
-        # Cartesian indices, which would trigger scalar indexing.
-        weights = on_architecture(forcing.architecture, weights_cpu)
-        if other === nothing
-            sum(weights .* real.(sol .* conj.(cf)))
-        else
-            sum(weights .* real.(((other .+ sol) ./ T(2)) .* conj.(cf)))
-        end
-    else
-        value = zero(T)
-        if other === nothing
-            @inbounds for I in CartesianIndices(weights_cpu)
-                value += weights_cpu[I] * real(sol[I] * conj(cf[I]))
-            end
-        else
-            @inbounds for I in CartesianIndices(weights_cpu)
-                value += weights_cpu[I] * real((other[I] + sol[I]) / T(2) * conj(cf[I]))
-            end
-        end
-        value
+    global_shape, local_ranges = _diagnostic_layout(sol)
+    _validate_diagnostic_layout(forcing, global_shape, local_ranges)
+    if is_gpu(forcing.architecture) || is_gpu_array(sol)
+        return _diagnostic_inner_product_gpu(forcing, sol, global_shape, local_ranges, other)
     end
-    return T(_forcing_reduce_partial(sol, partial))
+    return _diagnostic_inner_product_cpu(forcing, sol, global_shape, local_ranges, other)
 end
 
 """
@@ -983,9 +1052,7 @@ function work_stratonovich(forcing::StochasticForcing{T, N, A, CA}, sol::Abstrac
     # Since F̂_stored = √Q̂ · ξ / √dt, we have ΔF̂ = √Q̂ · ξ · √dt
     ps = forcing.prevsol
     size(ps) == size(sol) || throw(ArgumentError("Previous solution size $(size(ps)) does not match current solution size $(size(sol))"))
-    cf = _forcing_view_logical(forcing, sol)
-    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-    work = _diagnostic_inner_product(forcing, sol, cf, ps)
+    work = _diagnostic_inner_product(forcing, sol, ps)
 
     # The cached_forcing stores F̂ = √Q̂ · ξ / √dt
     # The forcing increment is ΔF̂ = F̂ · dt = √Q̂ · ξ · √dt
@@ -1010,9 +1077,7 @@ In Itô calculus, ψⁿ is independent of Fⁿ⁺¹, so ⟨ψⁿ · ΔF̂⟩ = 0
 The drift ensures ⟨W_Itô⟩ = ⟨W_Stratonovich⟩ = ε · dt.
 """
 function work_ito(forcing::StochasticForcing{T, N, A, CA}, sol_prev::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
-    cf = _forcing_view_logical(forcing, sol_prev)   # logical view + cartesian iteration (see work_stratonovich)
-    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol_prev))"))
-    work = _diagnostic_inner_product(forcing, sol_prev, cf)
+    work = _diagnostic_inner_product(forcing, sol_prev)
 
     # The Itô integral has zero mean, so we add drift correction
     # to match Stratonovich mean: ⟨W_Itô⟩ = 0 + ε·dt = ε·dt
@@ -1060,9 +1125,7 @@ use `work_stratonovich(forcing, sol) / forcing.dt` instead.
 Instantaneous power (energy per unit time).
 """
 function instantaneous_power(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
-    cf = _forcing_view_logical(forcing, sol)   # logical view + cartesian iteration (see work_stratonovich)
-    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-    return _diagnostic_inner_product(forcing, sol, cf)
+    return _diagnostic_inner_product(forcing, sol)
 end
 
 """
