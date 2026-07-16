@@ -160,6 +160,12 @@ export gpu_memory_info, check_gpu_memory
 # Internal allocation helpers are NOT exported - use Base.zeros/ones/similar with GPU arch instead
 # These functions are internal: _gpu_zeros, _gpu_ones, _gpu_similar, _gpu_fill
 
+function __init__()
+    # Tarang may be loaded before CUDA. In that order Tarang.__init__ cannot see
+    # this extension yet, so register CUDA matrix solvers when it becomes live.
+    Tarang._init_gpu_solvers!()
+end
+
 # Transpose kernels for TransposableField
 export pack_for_transpose_kernel_3d!, pack_for_transpose_kernel_2d!
 export unpack_from_transpose_kernel_3d!, unpack_from_transpose_kernel_2d!

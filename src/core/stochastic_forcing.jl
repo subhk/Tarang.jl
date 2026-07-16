@@ -171,6 +171,7 @@ mutable struct SeparableStochasticForcing{
     A<:AbstractArray{T,NF},
     FCA<:AbstractArray{Complex{T},NF},
     P<:AbstractVector{T},
+    HP<:Array{T,NF},
     CA<:AbstractArray{Complex{T},N},
     FRV<:AbstractArray{Complex{T},N},
     PV<:AbstractArray{T,N},
@@ -191,6 +192,7 @@ mutable struct SeparableStochasticForcing{
     prevsol::Union{Nothing,CA}
     rng::AbstractRNG
     random_phases::A
+    random_phases_host::HP
     fourier_realization::FCA
     fourier_outer_view::FRV
     profile_outer_view::PV
@@ -481,6 +483,8 @@ function SeparableStochasticForcing(;
     field_size = (fourier_size..., nz)
     cached_forcing = zeros(architecture, Complex{T}, field_size...)
     fourier_realization = zeros(architecture, Complex{T}, fourier_size...)
+    random_phases_host = is_gpu(architecture) ?
+        zeros(T, fourier_size...) : base.random_phases
     N = NF + 1
     fourier_outer_view = reshape(fourier_realization, (fourier_size..., 1))
     profile_outer_view = reshape(profile, (ntuple(_ -> 1, NF)..., nz))
@@ -490,6 +494,7 @@ function SeparableStochasticForcing(;
         typeof(base.forcing_spectrum),
         typeof(fourier_realization),
         typeof(profile),
+        typeof(random_phases_host),
         typeof(cached_forcing),
         typeof(fourier_outer_view),
         typeof(profile_outer_view),
@@ -510,6 +515,7 @@ function SeparableStochasticForcing(;
         nothing,
         base.rng,
         base.random_phases,
+        random_phases_host,
         fourier_realization,
         fourier_outer_view,
         profile_outer_view,
@@ -812,9 +818,11 @@ function generate_forcing!(forcing::SeparableStochasticForcing{T}, t::Real,
         "Ensure the timestep is set before generating forcing.",
     )
 
-    _fill_random_phases!(
-        forcing.architecture, forcing.random_phases, forcing.rng,
-    )
+    rand!(forcing.rng, forcing.random_phases_host)
+    forcing.random_phases_host .*= T(2π)
+    if forcing.random_phases !== forcing.random_phases_host
+        copyto!(forcing.random_phases, forcing.random_phases_host)
+    end
     sqrt_dt = sqrt(forcing.dt)
     forcing.fourier_realization .= forcing.forcing_spectrum .*
         exp.(im .* forcing.random_phases) ./ sqrt_dt

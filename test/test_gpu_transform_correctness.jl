@@ -25,6 +25,7 @@ Oracle: build the SAME grid data on a CPU field and a GPU field; assert
 using Test
 using Tarang
 using LinearAlgebra
+using Random
 try
     using CUDA
 catch
@@ -137,5 +138,100 @@ else
         #    real solve, not a trivial no-op match): u(t) = exp(-ν·k²·t)·u₀.
         analytic = exp(-ν * 2 * (nsteps * dt)) .* ic
         @test isapprox(cpu_final, analytic; rtol=1e-4, atol=1e-8)
+    end
+
+
+    @testset "End-to-end forced RealFourier × ChebyshevT IVP" begin
+        CUDA.allowscalar(false)
+        nx, nz = 8, 10
+        dt = 1e-3
+
+        function build_forced_mixed_solver(device)
+            coords = CartesianCoordinates("x", "z")
+            dist = Distributor(coords; dtype=Float64, device)
+            xbasis = RealFourier(coords["x"]; size=nx, bounds=(0.0, 2pi))
+            zbasis = ChebyshevT(coords["z"]; size=nz, bounds=(0.0, 1.0))
+            domain = Domain(dist, (xbasis, zbasis))
+
+            b = ScalarField(domain, "b")
+            tau1 = ScalarField(dist, "tau1", (xbasis,), Float64)
+            tau2 = ScalarField(dist, "tau2", (xbasis,), Float64)
+            _, ez = unit_vector_fields(coords, dist)
+            lift_basis = derivative_basis(zbasis, 1)
+            tau_lift(A) = lift(A, lift_basis, -1)
+            grad_b = grad(b) + ez * tau_lift(tau1)
+
+            problem = IVP([b, tau1, tau2])
+            add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
+            add_equation!(problem,
+                          "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = 0")
+            add_bc!(problem, "b(z=0) = 0")
+            add_bc!(problem, "b(z=1) = 0")
+
+            forcing = SeparableStochasticForcing(
+                fourier_size=(nx,),
+                chebyshev_basis=zbasis,
+                chebyshev_profile=z -> z * (1 - z),
+                domain_size=(2pi,),
+                energy_injection_rate=0.05,
+                k_forcing=2.0,
+                dk_forcing=0.5,
+                dt=dt,
+                architecture=device,
+                rng=MersenneTwister(1234),
+            )
+            add_stochastic_forcing!(problem, :b, forcing)
+            solver = InitialValueSolver(problem, RK222(); dt)
+            return solver, b, forcing
+        end
+
+        cpu_solver, cpu_b, _ = build_forced_mixed_solver(CPU())
+        gpu_solver, gpu_b, gpu_forcing = build_forced_mixed_solver(GPU())
+        @test gpu_solver.base.matsolver === CuSparseLU
+        @test gpu_forcing.cached_forcing isa CUDA.CuArray
+        @test gpu_forcing.random_phases isa CUDA.CuArray
+        @test get_coeff_data(gpu_b) isa CUDA.CuArray
+
+        for _ in 1:3
+            step!(cpu_solver, dt)
+            step!(gpu_solver, dt)
+        end
+        CUDA.synchronize()
+
+        ensure_layout!(cpu_b, :c)
+        ensure_layout!(gpu_b, :c)
+        @test Array(get_coeff_data(gpu_b)) ≈ get_coeff_data(cpu_b) rtol=2e-7 atol=1e-9
+
+        subproblems = gpu_solver.problem.parameters["subproblems"]
+        @test !isempty(subproblems)
+        for sp in subproblems
+            for buffer in values(sp.runtime.rk_buffers)
+                @test buffer isa CUDA.CuArray
+            end
+            for matrix_solver in values(sp.LHS_solvers)
+                @test matrix_solver isa CuSparseLU
+                @test matrix_solver.A_csr.nzVal isa CUDA.CuArray
+                @test matrix_solver.rhs_buffer isa CUDA.CuArray
+                @test matrix_solver.solution_buffer isa CUDA.CuArray
+                @test matrix_solver.temp_buffer isa CUDA.CuArray
+            end
+        end
+
+        forcing_before_stage = copy(gpu_forcing.cached_forcing)
+        @test generate_forcing!(gpu_forcing, gpu_forcing.last_update_time, 2) ===
+              gpu_forcing.cached_forcing
+        @test gpu_forcing.cached_forcing == forcing_before_stage
+        step!(gpu_solver, dt)
+        @test gpu_forcing.cached_forcing != forcing_before_stage
+
+        for _ in 1:4
+            step!(gpu_solver, dt)
+        end
+        CUDA.synchronize()
+        allocation_stats = getfield(CUDA, :alloc_stats)
+        allocated_before = allocation_stats.alloc_bytes
+        step!(gpu_solver, dt)
+        CUDA.synchronize()
+        @test allocation_stats.alloc_bytes - allocated_before == 0
     end
 end

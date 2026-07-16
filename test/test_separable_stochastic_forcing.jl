@@ -133,5 +133,17 @@ using Tarang
         @test rhs_data ≈ forcing_view
         @test forcing_view == @view(forcing.cached_forcing[1:half_nx, :])
         @test Tarang._matched_forcing_view(forcing, (half_nx, nz - 1)) === nothing
+
+        initial_coeffs = copy(get_coeff_data(b))
+        first_forcing = copy(forcing.cached_forcing)
+        step!(solver, dt)
+        ensure_layout!(b, :c)
+        @test all(isfinite, get_coeff_data(b))
+        @test get_coeff_data(b) != initial_coeffs
+        @test forcing.cached_forcing == first_forcing
+
+        step!(solver, dt)
+        @test forcing.cached_forcing != first_forcing
+        @test solver.iteration == 2
     end
 end
