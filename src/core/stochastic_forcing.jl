@@ -1527,6 +1527,70 @@ function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
     return PermutedDimsArray(logical_view, perm_raw)
 end
 
+function _separable_forcing_ranges(
+    forcing_shape::NTuple{N,Int},
+    target_shape::NTuple{N,Int},
+    fourier_dims::Int,
+) where N
+    ranges = Vector{UnitRange{Int}}(undef, N)
+    for d in 1:fourier_dims
+        nf, nt = forcing_shape[d], target_shape[d]
+        if nf == nt || nf == 2 * (nt - 1) || nf == 2 * nt - 1
+            ranges[d] = 1:nt
+        else
+            return nothing
+        end
+    end
+
+    chebyshev_dim = fourier_dims + 1
+    forcing_shape[chebyshev_dim] == target_shape[chebyshev_dim] || return nothing
+    ranges[chebyshev_dim] = 1:target_shape[chebyshev_dim]
+    return Tuple(ranges)
+end
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target_shape::NTuple{N,Int},
+) where {T,NF,N}
+    ranges = _separable_forcing_ranges(size(forcing.cached_forcing), target_shape, NF)
+    ranges === nothing && return nothing
+    return view(forcing.cached_forcing, ranges...)
+end
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target::AbstractArray,
+) where {T,NF,N}
+    ndims(target) == N || return nothing
+    return _matched_forcing_view(forcing, size(target))
+end
+
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target::PencilArrays.PencilArray,
+) where {T,NF,N}
+    global_shape = Tuple(PencilArrays.size_global(target))
+    _separable_forcing_ranges(size(forcing.cached_forcing), global_shape, NF) === nothing &&
+        return nothing
+
+    local_axes = PencilArrays.pencil(target).axes_local
+    length(local_axes) == N || return nothing
+    forcing_shape = size(forcing.cached_forcing)
+    ranges = ntuple(N) do d
+        local_range = local_axes[d]
+        first(local_range) >= 1 && last(local_range) <= forcing_shape[d] ||
+            return nothing
+        local_range
+    end
+    any(isnothing, ranges) && return nothing
+
+    logical_view = view(forcing.cached_forcing, ranges...)
+    perm_raw = Tuple(PencilArrays.permutation(target))
+    perm_raw === nothing && return logical_view
+    return PermutedDimsArray(logical_view, perm_raw)
+end
+
 """
     _fill_random_phases!(arch, phases, rng)
 

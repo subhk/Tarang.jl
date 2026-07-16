@@ -80,4 +80,58 @@ using Tarang
         @test forcing.last_update_time == -Inf
         @test all(iszero, forcing.cached_forcing)
     end
+
+    @testset "registered Fourier--Chebyshev RHS" begin
+        nx, nz = 8, 10
+        dt = 1e-2
+        coords2 = CartesianCoordinates("x", "z")
+        dist = Distributor(coords2; dtype=Float64, device=CPU())
+        xbasis = RealFourier(coords2["x"]; size=nx, bounds=(0.0, 2pi))
+        zbasis2 = ChebyshevT(coords2["z"]; size=nz, bounds=(0.0, 1.0))
+        domain = Domain(dist, (xbasis, zbasis2))
+
+        b = ScalarField(domain, "b")
+        tau1 = ScalarField(dist, "tau1", (xbasis,), Float64)
+        tau2 = ScalarField(dist, "tau2", (xbasis,), Float64)
+        _, ez = unit_vector_fields(coords2, dist)
+        lift_basis = derivative_basis(zbasis2, 1)
+        tau_lift(A) = lift(A, lift_basis, -1)
+        grad_b = grad(b) + ez * tau_lift(tau1)
+
+        problem = IVP([b, tau1, tau2])
+        add_parameters!(problem; grad_b, tau_lift)
+        add_equation!(problem, "∂t(b) - div(grad_b) + tau_lift(tau2) = 0")
+        add_bc!(problem, "b(z=0) = 0")
+        add_bc!(problem, "b(z=1) = 0")
+
+        forcing = SeparableStochasticForcing(
+            fourier_size=(nx,),
+            chebyshev_basis=zbasis2,
+            chebyshev_profile=z -> z * (1 - z),
+            domain_size=(2pi,),
+            energy_injection_rate=0.2,
+            k_forcing=2.0,
+            dk_forcing=0.5,
+            dt=dt,
+            architecture=CPU(),
+            rng=MersenneTwister(42),
+        )
+        add_stochastic_forcing!(problem, :b, forcing)
+        solver = InitialValueSolver(problem, RK222(); dt)
+        @test solver.rhs_plan !== nothing
+        @test solver.rhs_plan.is_compiled
+
+        Tarang._update_registered_forcings!(solver, 0.0, dt)
+        rhs = Tarang.evaluate_rhs(solver, solver.state, 0.0)[1]
+        ensure_layout!(rhs, :c)
+        rhs_data = get_coeff_data(rhs)
+        forcing_view = Tarang._matched_forcing_view(forcing, rhs_data)
+
+        half_nx = div(nx, 2) + 1
+        @test size(rhs_data) == (half_nx, nz)
+        @test forcing_view !== nothing
+        @test rhs_data ≈ forcing_view
+        @test forcing_view == @view(forcing.cached_forcing[1:half_nx, :])
+        @test Tarang._matched_forcing_view(forcing, (half_nx, nz - 1)) === nothing
+    end
 end
