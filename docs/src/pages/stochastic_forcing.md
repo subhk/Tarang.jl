@@ -65,10 +65,11 @@ forcing = StochasticForcing(
     dk_forcing = dk_f,
     dt = max_dt,
     spectrum_type = :ring,
+    architecture = device,
 )
 
 problem = IVP([ζ, ψ, u, tau_ψ])
-add_equation!(problem, "∂t(ζ) + drag*ζ + nu*Δ⁴(ζ) = -u⋅∇(ζ)")
+add_equation!(problem, "∂t(ζ) = -u⋅∇(ζ) - drag*ζ - nu*Δ⁴(ζ)")
 add_equation!(problem, "Δ(ψ) + tau_ψ - ζ = 0")
 add_equation!(problem, "u - skew(grad(ψ)) = 0")
 add_bc!(problem, "integ(ψ) = 0")
@@ -79,6 +80,15 @@ step!(solver)
 ```
 
 The full file includes initialization, CFL control, output, and CPU/GPU selection.
+Run it on CUDA with:
+
+```bash
+TARANG_FORCED_2D_DEVICE=gpu julia --project=. examples/ivp/forced_2d_turbulence.jl
+```
+
+The prognostic terms remain on the explicit RHS because the pure-Fourier GPU
+runtime uses a device-native explicit RK path while refreshing the Poisson and
+velocity constraints spectrally at every stage.
 
 ---
 

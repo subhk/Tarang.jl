@@ -1114,6 +1114,53 @@ end
             end
         end
 
+        @testset "GPU forced 2D IVP advances without scalar indexing" begin
+            CUDA.allowscalar(false)
+            n = 8
+            dt = 1e-3
+            coords = CartesianCoordinates("x", "y")
+            dist = Distributor(coords; dtype=Float64, device=GPU())
+            xb = RealFourier(coords["x"]; size=n, bounds=(0.0, 2π), dealias=3/2)
+            yb = RealFourier(coords["y"]; size=n, bounds=(0.0, 2π), dealias=3/2)
+            domain = Domain(dist, (xb, yb))
+
+            ζ = ScalarField(domain, "ζ")
+            ψ = ScalarField(domain, "ψ")
+            u = VectorField(domain, "u")
+            tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
+
+            forcing = StochasticForcing(
+                field_size=(n, n), domain_size=(2π, 2π),
+                energy_injection_rate=0.1,
+                injection_metric=:vorticity_kinetic,
+                k_forcing=2.0, dk_forcing=0.5, dt=dt,
+                spectrum_type=:ring, architecture=GPU(),
+                rng=MersenneTwister(42),
+            )
+
+            problem = IVP([ζ, ψ, u, tau_ψ])
+            add_parameters!(problem; nu=1e-8, drag=1e-3)
+            add_equation!(problem, "∂t(ζ) = -u⋅∇(ζ) - drag*ζ - nu*Δ⁴(ζ)")
+            add_equation!(problem, "Δ(ψ) + tau_ψ - ζ = 0")
+            add_equation!(problem, "u - skew(grad(ψ)) = 0")
+            add_bc!(problem, "integ(ψ) = 0")
+            add_stochastic_forcing!(problem, :ζ, forcing)
+
+            solver = InitialValueSolver(problem, RK222(); dt=dt)
+            @test get(problem.parameters, "L_matrix", nothing) === nothing
+            @test get(problem.parameters, "M_matrix", nothing) === nothing
+            @test solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
+            fill_random!(ζ, "g"; seed=42, distribution="normal", scale=1e-3)
+            step!(solver)
+
+            @test forcing.cached_forcing isa CUDA.CuArray
+            @test get_coeff_data(ζ) isa CUDA.CuArray
+            @test solver.iteration == 1
+            @test solver.sim_time ≈ dt
+            @test all(isfinite, Array(get_coeff_data(ζ)))
+            @test any(!iszero, Array(forcing.cached_forcing))
+        end
+
     else
         println("\nGPU tests skipped (CUDA not available)")
         @test_skip "GPU construction"
@@ -1122,6 +1169,7 @@ end
         @test_skip "GPU apply_forcing!"
         @test_skip "GPU work calculation"
         @test_skip "GPU manual work diagnostics"
+        @test_skip "GPU forced 2D IVP"
     end
 end
 
