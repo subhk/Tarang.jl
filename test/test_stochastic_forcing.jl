@@ -287,10 +287,20 @@ println("=" ^ 60)
     end
 
     @testset "Self-conjugate projection preserves power" begin
-        data = zeros(ComplexF64, 8)
-        data[5] = 3 + 4im
-        Tarang._enforce_hermitian_1d!(data)
-        @test data[5] ≈ 3sqrt(2) + 0im
+        data_1d = zeros(ComplexF64, 8)
+        data_1d[5] = 3 + 4im
+        Tarang._enforce_hermitian_1d!(data_1d)
+        @test data_1d[5] ≈ 3sqrt(2) + 0im
+
+        data_2d = zeros(ComplexF64, 8, 6)
+        data_2d[5, 4] = 3 + 4im
+        Tarang._enforce_hermitian_2d!(data_2d)
+        @test data_2d[5, 4] ≈ 3sqrt(2) + 0im
+
+        data_3d = zeros(ComplexF64, 8, 6, 4)
+        data_3d[5, 4, 3] = 3 + 4im
+        Tarang._enforce_hermitian_3d!(data_3d)
+        @test data_3d[5, 4, 3] ≈ 3sqrt(2) + 0im
     end
 
     @testset "Substep Awareness (KEY TEST)" begin
@@ -505,6 +515,21 @@ println("=" ^ 60)
             @test instantaneous_power(forcing, sol_prev) ≈ pairing(sol_prev)
         end
         println("  Work diagnostics use matched forcing views OK")
+    end
+
+    @testset "Odd half-spectrum retains doubled final mode" begin
+        forcing = StochasticForcing(
+            field_size=(7,), forcing_rate=0.0, k_forcing=2.0,
+            dk_forcing=0.1, spectrum_type=:band, dt=0.1,
+        )
+        fill!(forcing.cached_forcing, 0)
+        forcing.cached_forcing[4] = 1
+        forcing.cached_forcing[5] = 1
+        sol = ComplexF64[0, 0, 0, 1]
+
+        manual = 2 / 7^2
+        @test instantaneous_power(forcing, sol) ≈ manual
+        @test instantaneous_power(forcing, sol) != 1 / 7^2
     end
 
     @testset "Deterministic Forcing" begin
@@ -838,6 +863,20 @@ end
             println("    GPU Hermitian symmetry OK")
         end
 
+        @testset "GPU self-conjugate projection preserves power" begin
+            arch = GPU()
+            for (shape, index) in (((8,), (5,)),
+                                   ((8, 6), (5, 4)),
+                                   ((8, 6, 4), (5, 4, 3)))
+                data_cpu = zeros(ComplexF64, shape)
+                data_cpu[index...] = 3 + 4im
+                data_gpu = CUDA.CuArray(data_cpu)
+                Tarang._enforce_hermitian_symmetry!(data_gpu, arch)
+                CUDA.synchronize()
+                @test Array(data_gpu)[index...] ≈ 3sqrt(2) + 0im
+            end
+        end
+
         @testset "GPU apply_forcing!" begin
             forcing_gpu = StochasticForcing(
                 field_size=(16, 16),
@@ -894,12 +933,60 @@ end
             println("    GPU Itô work = $W_ito")
         end
 
+        @testset "GPU work diagnostics match manual half-spectrum references" begin
+            field_size = (8, 8)
+            half_size = (5, 8)
+            dt = 0.01
+            multiplicity = reshape([1.0, 2.0, 2.0, 2.0, 1.0], :, 1)
+            kx = Float64[0, 1, 2, 3, 4]
+            ky = Float64[0, 1, 2, 3, 4, -3, -2, -1]
+            forcing_cpu = ComplexF64[
+                (0.2i - 0.1j) + (0.03i * j)im
+                for i in 1:field_size[1], j in 1:field_size[2]
+            ]
+            forcing_view = @view forcing_cpu[1:half_size[1], :]
+            sol_prev_cpu = ComplexF64[
+                (0.15i + 0.07j) - (0.02i * j)im
+                for i in 1:half_size[1], j in 1:half_size[2]
+            ]
+            sol_next_cpu = sol_prev_cpu .+ dt .* forcing_view
+
+            for metric in (:direct, :vorticity_kinetic)
+                forcing = StochasticForcing(
+                    field_size=field_size, forcing_rate=0.1,
+                    injection_metric=metric, k_forcing=2.0,
+                    dk_forcing=0.1, spectrum_type=:band, dt=dt,
+                    architecture=GPU(), rng=MersenneTwister(42),
+                )
+                copyto!(forcing.cached_forcing, CUDA.CuArray(forcing_cpu))
+                sol_prev = CUDA.CuArray(sol_prev_cpu)
+                sol_next = CUDA.CuArray(sol_next_cpu)
+                store_prevsol!(forcing, sol_prev)
+
+                metric_weight = [
+                    metric === :direct ? 1.0 :
+                        (iszero(x^2 + y^2) ? 0.0 : inv(x^2 + y^2))
+                    for x in kx, y in ky
+                ]
+                weights = multiplicity .* metric_weight ./ prod(field_size)^2
+                pairing(a) = sum(weights .* real.(a .* conj.(forcing_view)))
+
+                @test work_stratonovich(forcing, sol_next) ≈
+                      pairing((sol_prev_cpu .+ sol_next_cpu) ./ 2) * dt
+                @test work_ito(forcing, sol_prev) ≈
+                      pairing(sol_prev_cpu) * dt + forcing.energy_injection_rate * dt
+                @test instantaneous_power(forcing, sol_prev) ≈ pairing(sol_prev_cpu)
+            end
+        end
+
     else
         println("\nGPU tests skipped (CUDA not available)")
         @test_skip "GPU construction"
         @test_skip "GPU forcing generation"
+        @test_skip "GPU exact self-conjugate projection"
         @test_skip "GPU apply_forcing!"
         @test_skip "GPU work calculation"
+        @test_skip "GPU manual work diagnostics"
     end
 end
 

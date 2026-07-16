@@ -57,3 +57,62 @@ const P_REF       = 0.04136
         @test isapprox(p,  P_REF;       atol=1e-7)
     end
 end
+
+@testset "Distributed half-spectrum vorticity diagnostics (np=$nprocs)" begin
+    n = 8
+    half_shape = (n ÷ 2 + 1, n)
+    dt = 0.05
+    coords_half = CartesianCoordinates("x", "y")
+    dist_half = Distributor(coords_half)
+    xb = RealFourier(coords_half["x"]; size=n, bounds=(0.0, 2π))
+    yb = RealFourier(coords_half["y"]; size=n, bounds=(0.0, 2π))
+    u = ScalarField(dist_half, "u_half", (xb, yb)); ensure_layout!(u, :c)
+
+    forcing_full = ComplexF64[
+        (0.11i - 0.04j) + (0.02i * j)im for i in 1:n, j in 1:n
+    ]
+    sol_prev = ComplexF64[
+        (0.09i + 0.03j) - (0.015i * j)im
+        for i in 1:half_shape[1], j in 1:half_shape[2]
+    ]
+    forcing_half = @view forcing_full[1:half_shape[1], :]
+    sol_next = sol_prev .+ dt .* forcing_half
+
+    set_half!(global_data) = begin
+        coeffs = get_coeff_data(u)
+        global_coeffs = PencilArrays.global_view(coeffs)
+        for I in CartesianIndices(global_coeffs)
+            global_coeffs[I] = global_data[I]
+        end
+    end
+
+    forcing = StochasticForcing(
+        field_size=(n, n), energy_injection_rate=0.2,
+        injection_metric=:vorticity_kinetic, k_forcing=2.0,
+        dk_forcing=0.1, spectrum_type=:band, dt=dt,
+    )
+    forcing.cached_forcing = copy(forcing_full)
+
+    multiplicity = reshape([1.0, 2.0, 2.0, 2.0, 1.0], :, 1)
+    kx = Float64[0, 1, 2, 3, 4]
+    ky = Float64[0, 1, 2, 3, 4, -3, -2, -1]
+    metric_weight = [
+        iszero(x^2 + y^2) ? 0.0 : inv(x^2 + y^2) for x in kx, y in ky
+    ]
+    weights = multiplicity .* metric_weight ./ n^4
+    pairing(a) = sum(weights .* real.(a .* conj.(forcing_half)))
+    ws_ref = pairing((sol_prev .+ sol_next) ./ 2) * dt
+    wi_ref = pairing(sol_prev) * dt + forcing.energy_injection_rate * dt
+    p_ref = pairing(sol_next)
+
+    set_half!(sol_prev)
+    wi = work_ito(forcing, get_coeff_data(u))
+    store_prevsol!(forcing, get_coeff_data(u))
+    set_half!(sol_next)
+    ws = work_stratonovich(forcing, get_coeff_data(u))
+    p = instantaneous_power(forcing, get_coeff_data(u))
+
+    @test ws ≈ ws_ref atol=1e-12 rtol=1e-12
+    @test wi ≈ wi_ref atol=1e-12 rtol=1e-12
+    @test p ≈ p_ref atol=1e-12 rtol=1e-12
+end
