@@ -1034,11 +1034,14 @@ end
 
 Compute mean enstrophy injection rate (for 2D turbulence).
 
-    η = ∑_k |k|² Q̂(k) / (2 · domain_area)
+This assumes the stochastic forcing is applied directly to vorticity. With
+`M = prod(field_size)` and Tarang's unnormalized FFT convention,
 
-Note: This assumes the forcing spectrum Q̂(k) corresponds to direct field forcing.
-For vorticity forcing, enstrophy injection is simply ε. For streamfunction forcing,
-this formula gives the enstrophy injection rate.
+    η = ∑_k Q̂(k) / (2M²)
+
+For `injection_metric=:direct`, this equals the configured energy injection
+rate. For `:vorticity_kinetic`, it is generally of order `k_forcing²` times
+the configured kinetic-energy injection rate.
 """
 function forcing_enstrophy_injection_rate(forcing::StochasticForcing{T, N, A, CA}) where {T, N, A, CA}
     if N != 2
@@ -1046,22 +1049,10 @@ function forcing_enstrophy_injection_rate(forcing::StochasticForcing{T, N, A, CA
         return zero(T)
     end
 
-    domain_area = prod(forcing.domain_size)
-    kx, ky = forcing.wavenumbers
-
     # Get spectrum on CPU for computation (spectrum might be on GPU)
     spectrum_cpu = Array(forcing.forcing_spectrum)
-
-    # Compute enstrophy injection rate
-    η = zero(T)
-    for j in eachindex(ky)
-        for i in eachindex(kx)
-            k2 = kx[i]^2 + ky[j]^2
-            η += k2 * spectrum_cpu[i, j]^2
-        end
-    end
-
-    return η / (2 * domain_area)
+    M = T(prod(forcing.field_size))
+    return sum(abs2, spectrum_cpu) / (2 * M^2)
 end
 
 # ============================================================================

@@ -155,6 +155,22 @@ println("=" ^ 60)
         @test weighted_power / (2prod(vorticity_forcing.field_size)^2) ≈ ε rtol=5e-14
         @test vorticity_forcing.injection_metric === :vorticity_kinetic
 
+        direct_vorticity_forcing = StochasticForcing(
+            field_size=(32, 32),
+            energy_injection_rate=ε,
+            k_forcing=6.0,
+            dk_forcing=1.0,
+            spectrum_type=:band,
+            injection_metric=:direct,
+        )
+        @test forcing_enstrophy_injection_rate(direct_vorticity_forcing) ≈ ε rtol=5e-14
+
+        M_vorticity = prod(vorticity_forcing.field_size)
+        manual_enstrophy_rate = sum(abs2, vorticity_forcing.spectrum) / (2M_vorticity^2)
+        @test forcing_enstrophy_injection_rate(vorticity_forcing) ≈
+              manual_enstrophy_rate rtol=5e-14
+        @test manual_enstrophy_rate > ε
+
         ring = StochasticForcing(
             field_size=(32,),
             energy_injection_rate=ε,
