@@ -636,6 +636,55 @@ println("=" ^ 60)
         println("  Registered forcing is included in compiled lazy RHS")
     end
 
+    @testset "registered white-noise forcing rejects RHS-extrapolating multistep schemes" begin
+        function forced_solver(timestepper)
+            N = 8
+            dt = 0.01
+            domain = PeriodicDomain(N, N)
+            q = ScalarField(domain, "q")
+            forcing = StochasticForcing(
+                field_size=(N, N),
+                forcing_rate=0.1,
+                k_forcing=3.0,
+                dk_forcing=1.0,
+                dt=dt,
+                rng=MersenneTwister(42)
+            )
+            problem = IVP([q])
+            add_equation!(problem, "∂t(q) = 0")
+            add_stochastic_forcing!(problem, :q, forcing)
+            return InitialValueSolver(problem, timestepper; dt=dt), forcing
+        end
+
+        unsafe_timesteppers = (
+            CNAB2(), SBDF2(), SBDF3(), SBDF4(),
+            ETD_CNAB2(), ETD_SBDF2(),
+        )
+        for timestepper in unsafe_timesteppers
+            solver, forcing = forced_solver(timestepper)
+            error = try
+                step!(solver)
+                nothing
+            catch exception
+                exception
+            end
+
+            @test error isa ArgumentError
+            @test occursin("colors white noise", sprint(showerror, error))
+            @test occursin("one-step", sprint(showerror, error))
+            @test forcing.last_update_time == -Inf
+            @test all(iszero, forcing.cached_forcing)
+        end
+
+        for timestepper in (RK222(), CNAB1(), SBDF1())
+            solver, forcing = forced_solver(timestepper)
+            step!(solver)
+            @test solver.iteration == 1
+            @test forcing.last_update_time == 0.0
+            @test any(x -> !iszero(x), forcing.cached_forcing)
+        end
+    end
+
     @testset "registered forcing resolves flattened solver-state indices" begin
         N = 8
         dt = 0.01

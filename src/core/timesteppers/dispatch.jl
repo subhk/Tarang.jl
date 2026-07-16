@@ -20,6 +20,8 @@ IMPORTANT for stochastic forcing (following GeophysicalFlows.jl pattern):
 - This is essential for correct Stratonovich calculus interpretation
 """
 function step!(state::TimestepperState, solver::InitialValueSolver)
+    _check_stochastic_timestepper_compatibility!(state, solver)
+
     # Generate stochastic forcing ONCE at the beginning of the timestep
     update_forcing!(state, solver.sim_time)
 
@@ -37,6 +39,34 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
     # Reset forcing flag at the end of timestep (prepare for next forcing generation)
     reset_forcing_flag!(state)
     return nothing
+end
+
+const _RHS_EXTRAPOLATING_STOCHASTIC_TIMESTEPPERS = Union{
+    CNAB2, SBDF2, SBDF3, SBDF4, ETD_CNAB2, ETD_SBDF2,
+}
+
+function _has_registered_stochastic_forcing(solver::InitialValueSolver)
+    problem = solver.problem
+    hasfield(typeof(problem), :stochastic_forcings) || return false
+    return any(forcing -> forcing isa StochasticForcingType,
+               values(problem.stochastic_forcings))
+end
+
+function _check_stochastic_timestepper_compatibility!(state::TimestepperState,
+                                                       solver::InitialValueSolver)
+    timestepper = state.timestepper
+    timestepper isa _RHS_EXTRAPOLATING_STOCHASTIC_TIMESTEPPERS || return nothing
+    has_stochastic_forcing = state.forcing isa StochasticForcingType ||
+                             _has_registered_stochastic_forcing(solver)
+    has_stochastic_forcing || return nothing
+
+    scheme = nameof(typeof(timestepper))
+    throw(ArgumentError(
+        "StochasticForcing is incompatible with $scheme because multistep RHS " *
+        "extrapolation colors white noise in time and changes its variance. " *
+        "Use a supported one-step method such as RK222, RK443, or ETD_RK222 " *
+        "(CNAB1 and SBDF1 are also supported first-order methods)."
+    ))
 end
 
 # ============================================================================
