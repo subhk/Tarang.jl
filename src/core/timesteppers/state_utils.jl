@@ -1150,9 +1150,9 @@ function _spectral_poisson_solve(rhs::ScalarField, dist::Distributor)
         return nothing
     end
 
-    # Apply Poisson inversion: result = -rhs/k² (avoiding k=0). The loop is run
-    # through a concretely-typed function barrier so the per-index work is not
-    # boxed/allocated (coeff_data / k_squared are abstractly typed here).
+    # Apply Poisson inversion: result = -rhs/k² (avoiding k=0). The function
+    # barrier below uses one fused broadcast, which is a regular CPU loop for
+    # Arrays and a device kernel for GPU arrays (no forbidden scalar indexing).
     if isa(coeff_data, PencilArrays.PencilArray)
         _poisson_invert!(parent(coeff_data), k_squared)
     else
@@ -1163,12 +1163,9 @@ function _spectral_poisson_solve(rhs::ScalarField, dist::Distributor)
 end
 
 """Function barrier for the spectral Poisson inversion: `data .= -data / k²`
-(with the k=0 gauge mode zeroed). Concrete array types ⇒ no per-index boxing."""
+(with the k=0 gauge mode zeroed). The fused broadcast is CPU/GPU portable."""
 function _poisson_invert!(data::AbstractArray, k2::AbstractArray)
-    @inbounds for idx in eachindex(data, k2)
-        kk = k2[idx]
-        data[idx] = kk > 1e-12 ? -data[idx] / kk : zero(eltype(data))
-    end
+    data .= ifelse.(k2 .> 1e-12, .-data ./ k2, zero(eltype(data)))
     return data
 end
 
@@ -1197,9 +1194,21 @@ function _build_k_squared(field::ScalarField)
     end
 
     T = real(eltype(coeff_data))
-    key = (Tuple(b === nothing ? 0 : b.meta.size for b in field.bases), local_shape, T)
+    # Include the storage backend in the cache key.  A CPU k² array cannot be
+    # broadcast with CuArray coefficients, and rebuilding/copying k² at every RK
+    # stage would add an unnecessary host-to-device transfer.
+    backend = (typeof(coeff_data), architecture(coeff_data))
+    basis_key = Tuple(b === nothing ? nothing :
+                      (typeof(b), b.meta.size, b.meta.bounds) for b in field.bases)
+    key = (basis_key, local_shape, T, backend)
     cached = get(_POISSON_K2_CACHE, key, nothing)
-    cached !== nothing && return cached::Array{T}
+    cached !== nothing && return cached
+
+    if is_gpu_array(coeff_data)
+        k_squared = compute_wavenumber_squared_grid(field)
+        _POISSON_K2_CACHE[key] = k_squared
+        return k_squared
+    end
 
     k_squared = zeros(T, local_shape)
 

@@ -307,6 +307,23 @@ function _try_build_subproblems!(solver::InitialValueSolver)
     @info "  $n_total subproblems built ($n_with_mats with matrices)"
 end
 
+"""True for a GPU-resident IVP whose spatial axes are all Fourier.
+
+Such problems advance through the device-native field path and refresh their
+algebraic constraints spectrally.  They neither use the global CPU matrices nor
+build coupled (Jacobi/Chebyshev) subproblems.
+"""
+function _gpu_pure_fourier_state(state::Vector{<:ScalarField})
+    found_spatial = false
+    for field in state
+        isempty(field.bases) && continue
+        found_spatial = true
+        is_gpu(field_architecture(field)) || return false
+        all(b -> b !== nothing && isa(b, FourierBasis), field.bases) || return false
+    end
+    return found_spatial
+end
+
 function _build_initial_value_solver(problem::IVP, timestepper;
                                      dt::Real=1e-3,
                                      device::String="cpu",
@@ -334,8 +351,17 @@ function _build_initial_value_solver(problem::IVP, timestepper;
         set_time_variable!(problem.bc_manager, "t")
     end
 
-    build_solver_matrices!(solver)
-    _try_build_subproblems!(solver)
+    if _gpu_pure_fourier_state(state)
+        # RK/IMEX dispatch deliberately uses the field-wise explicit path for
+        # pure-Fourier GPU states.  Building global host matrices here is both
+        # unused and prohibitive at production sizes (e.g. the 512² turbulence
+        # example), while the algebraic Poisson/velocity constraints are handled
+        # spectrally by evaluate_rhs at each stage.
+        @info "Pure-Fourier GPU IVP: skipping unused global CPU matrix assembly"
+    else
+        build_solver_matrices!(solver)
+        _try_build_subproblems!(solver)
+    end
 
     # Build the type-specialized lazy RHS plan. If translation fails for any
     # equation (e.g., unsupported operator type), `is_compiled` stays false
