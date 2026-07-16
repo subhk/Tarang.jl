@@ -146,4 +146,62 @@ using Tarang
         @test forcing.cached_forcing != first_forcing
         @test solver.iteration == 2
     end
+
+
+    @testset "registered 3D Fourier--Fourier--Chebyshev IVP" begin
+        nx, ny, nz = 8, 8, 10
+        dt = 1e-3
+        coords3 = CartesianCoordinates("x", "y", "z")
+        dist = Distributor(coords3; dtype=Float64, device=CPU())
+        xbasis = RealFourier(coords3["x"]; size=nx, bounds=(0.0, 2pi))
+        ybasis = RealFourier(coords3["y"]; size=ny, bounds=(0.0, 2pi))
+        zbasis3 = ChebyshevT(coords3["z"]; size=nz, bounds=(0.0, 1.0))
+        domain = Domain(dist, (xbasis, ybasis, zbasis3))
+
+        b = ScalarField(domain, "b3")
+        tau1 = ScalarField(dist, "tau31", (xbasis, ybasis), Float64)
+        tau2 = ScalarField(dist, "tau32", (xbasis, ybasis), Float64)
+        _, _, ez = unit_vector_fields(coords3, dist)
+        lift_basis = derivative_basis(zbasis3, 1)
+        tau_lift3(A) = lift(A, lift_basis, -1)
+        grad_b3 = grad(b) + ez * tau_lift3(tau1)
+
+        problem = IVP([b, tau1, tau2])
+        add_parameters!(problem; kappa=0.1, grad_b3, tau_lift3)
+        add_equation!(problem,
+                      "∂t(b3) - kappa*div(grad_b3) + tau_lift3(tau32) = 0")
+        add_bc!(problem, "b3(z=0) = 0")
+        add_bc!(problem, "b3(z=1) = 0")
+
+        forcing = SeparableStochasticForcing(
+            fourier_size=(nx, ny),
+            chebyshev_basis=zbasis3,
+            chebyshev_profile=z -> z * (1 - z),
+            domain_size=(2pi, 2pi),
+            energy_injection_rate=0.05,
+            k_forcing=2.0,
+            dk_forcing=0.5,
+            dt=dt,
+            architecture=CPU(),
+            rng=MersenneTwister(2026),
+        )
+        add_stochastic_forcing!(problem, :b3, forcing)
+        solver = InitialValueSolver(problem, RK222(); dt)
+        Tarang._update_registered_forcings!(solver, 0.0, dt)
+
+        rhs = Tarang.evaluate_rhs(solver, solver.state, 0.0)[1]
+        ensure_layout!(rhs, :c)
+        rhs_data = get_coeff_data(rhs)
+        forcing_view = Tarang._matched_forcing_view(forcing, rhs_data)
+        @test size(rhs_data) == (div(nx, 2) + 1, ny, nz)
+        @test forcing_view !== nothing
+        @test rhs_data ≈ forcing_view
+
+        initial = copy(get_coeff_data(b))
+        step!(solver, dt)
+        ensure_layout!(b, :c)
+        @test get_coeff_data(b) != initial
+        @test all(isfinite, get_coeff_data(b))
+        @test solver.iteration == 1
+    end
 end

@@ -234,4 +234,189 @@ else
         CUDA.synchronize()
         @test allocation_stats.alloc_bytes - allocated_before == 0
     end
+
+
+    @testset "End-to-end GPU vs CPU: forced 3D periodic IVP" begin
+        CUDA.allowscalar(false)
+        n = 8
+        dt = 1e-3
+
+        function build_periodic_3d(device; forced=false)
+            coords = CartesianCoordinates("x", "y", "z")
+            dist = Distributor(coords; dtype=Float64, device)
+            bases = ntuple(3) do d
+                name = ("x", "y", "z")[d]
+                RealFourier(coords[name]; size=n, bounds=(0.0, 2pi))
+            end
+            domain = Domain(dist, bases)
+            q = ScalarField(domain, "q3")
+            problem = IVP([q])
+            add_parameters!(problem; nu=0.05)
+            add_equation!(problem, "∂t(q3) - nu*Δ(q3) = 0")
+
+            forcing = nothing
+            if forced
+                forcing = StochasticForcing(
+                    field_size=(n, n, n),
+                    domain_size=(2pi, 2pi, 2pi),
+                    energy_injection_rate=0.02,
+                    k_forcing=2.0,
+                    dk_forcing=0.5,
+                    dt=dt,
+                    architecture=device,
+                    rng=MersenneTwister(77),
+                )
+                add_stochastic_forcing!(problem, :q3, forcing)
+            end
+
+            mesh = Tarang.get_grid_coordinates(domain; on_device=false)
+            x = reshape(mesh["x"], n, 1, 1)
+            y = reshape(mesh["y"], 1, n, 1)
+            z = reshape(mesh["z"], 1, 1, n)
+            initial = @. sin(x) * cos(y) * sin(z)
+            ensure_layout!(q, :g)
+            get_grid_data(q) .= device isa CPU ? initial : CUDA.CuArray(initial)
+            solver = InitialValueSolver(problem, RK222(); dt)
+            return solver, q, forcing
+        end
+
+        cpu_solver, cpu_q, _ = build_periodic_3d(CPU())
+        gpu_solver, gpu_q, _ = build_periodic_3d(GPU())
+        for _ in 1:4
+            step!(cpu_solver, dt)
+            step!(gpu_solver, dt)
+        end
+        ensure_layout!(cpu_q, :c)
+        ensure_layout!(gpu_q, :c)
+        @test Array(get_coeff_data(gpu_q)) ≈ get_coeff_data(cpu_q) rtol=2e-8 atol=1e-10
+        @test get_coeff_data(gpu_q) isa CUDA.CuArray
+        @test get(gpu_solver.problem.parameters, "L_matrix", nothing) === nothing
+        @test get(gpu_solver.problem.parameters, "M_matrix", nothing) === nothing
+
+        forced_solver, forced_q, forcing = build_periodic_3d(GPU(); forced=true)
+        step!(forced_solver, dt)
+        @test forcing.cached_forcing isa CUDA.CuArray
+        @test get_coeff_data(forced_q) isa CUDA.CuArray
+        @test all(isfinite, Array(get_coeff_data(forced_q)))
+        periodic_state = forced_solver.timestepper_state
+        for field in Iterators.flatten(periodic_state.workspace_fields)
+            @test get_grid_data(field) isa CUDA.CuArray
+            @test get_coeff_data(field) isa CUDA.CuArray
+        end
+        first_forcing = copy(forcing.cached_forcing)
+        @test generate_forcing!(forcing, forcing.last_update_time, 2) ===
+              forcing.cached_forcing
+        @test forcing.cached_forcing == first_forcing
+        step!(forced_solver, dt)
+        @test forcing.cached_forcing != first_forcing
+
+        for _ in 1:4
+            step!(forced_solver, dt)
+        end
+        CUDA.synchronize()
+        allocation_stats = getfield(CUDA, :alloc_stats)
+        allocated_before = allocation_stats.alloc_bytes
+        step!(forced_solver, dt)
+        CUDA.synchronize()
+        @test allocation_stats.alloc_bytes - allocated_before == 0
+    end
+
+
+    @testset "End-to-end forced 3D Fourier × Fourier × ChebyshevT IVP" begin
+        CUDA.allowscalar(false)
+        nx, ny, nz = 8, 8, 10
+        dt = 1e-3
+
+        function build_forced_mixed_3d(device)
+            coords = CartesianCoordinates("x", "y", "z")
+            dist = Distributor(coords; dtype=Float64, device)
+            xbasis = RealFourier(coords["x"]; size=nx, bounds=(0.0, 2pi))
+            ybasis = RealFourier(coords["y"]; size=ny, bounds=(0.0, 2pi))
+            zbasis = ChebyshevT(coords["z"]; size=nz, bounds=(0.0, 1.0))
+            domain = Domain(dist, (xbasis, ybasis, zbasis))
+
+            b = ScalarField(domain, "b3")
+            tau1 = ScalarField(dist, "tau31", (xbasis, ybasis), Float64)
+            tau2 = ScalarField(dist, "tau32", (xbasis, ybasis), Float64)
+            _, _, ez = unit_vector_fields(coords, dist)
+            lift_basis = derivative_basis(zbasis, 1)
+            tau_lift3(A) = lift(A, lift_basis, -1)
+            grad_b3 = grad(b) + ez * tau_lift3(tau1)
+
+            problem = IVP([b, tau1, tau2])
+            add_parameters!(problem; kappa=0.1, grad_b3, tau_lift3)
+            add_equation!(problem,
+                          "∂t(b3) - kappa*div(grad_b3) + tau_lift3(tau32) = 0")
+            add_bc!(problem, "b3(z=0) = 0")
+            add_bc!(problem, "b3(z=1) = 0")
+
+            forcing = SeparableStochasticForcing(
+                fourier_size=(nx, ny),
+                chebyshev_basis=zbasis,
+                chebyshev_profile=z -> z * (1 - z),
+                domain_size=(2pi, 2pi),
+                energy_injection_rate=0.05,
+                k_forcing=2.0,
+                dk_forcing=0.5,
+                dt=dt,
+                architecture=device,
+                rng=MersenneTwister(2026),
+            )
+            add_stochastic_forcing!(problem, :b3, forcing)
+            solver = InitialValueSolver(problem, RK222(); dt)
+            return solver, b, forcing
+        end
+
+        cpu_solver, cpu_b, _ = build_forced_mixed_3d(CPU())
+        gpu_solver, gpu_b, gpu_forcing = build_forced_mixed_3d(GPU())
+        @test gpu_solver.base.matsolver === CuSparseLU
+        @test gpu_forcing.cached_forcing isa CUDA.CuArray
+        @test gpu_forcing.fourier_realization isa CUDA.CuArray
+
+        for _ in 1:3
+            step!(cpu_solver, dt)
+            step!(gpu_solver, dt)
+        end
+        CUDA.synchronize()
+        ensure_layout!(cpu_b, :c)
+        ensure_layout!(gpu_b, :c)
+        @test Array(get_coeff_data(gpu_b)) ≈ get_coeff_data(cpu_b) rtol=3e-7 atol=2e-9
+
+        subproblems = gpu_solver.problem.parameters["subproblems"]
+        @test !isempty(subproblems)
+        mixed_state = gpu_solver.timestepper_state
+        for field in Iterators.flatten(mixed_state.workspace_fields)
+            @test get_grid_data(field) isa CUDA.CuArray
+            @test get_coeff_data(field) isa CUDA.CuArray
+        end
+        for sp in subproblems
+            for buffer in values(sp.runtime.rk_buffers)
+                @test buffer isa CUDA.CuArray
+            end
+            for matrix_solver in values(sp.LHS_solvers)
+                @test matrix_solver isa CuSparseLU
+                @test matrix_solver.A_csr.nzVal isa CUDA.CuArray
+                @test matrix_solver.rhs_buffer isa CUDA.CuArray
+                @test matrix_solver.solution_buffer isa CUDA.CuArray
+                @test matrix_solver.temp_buffer isa CUDA.CuArray
+            end
+        end
+
+        forcing_before_stage = copy(gpu_forcing.cached_forcing)
+        @test generate_forcing!(gpu_forcing, gpu_forcing.last_update_time, 2) ===
+              gpu_forcing.cached_forcing
+        @test gpu_forcing.cached_forcing == forcing_before_stage
+        step!(gpu_solver, dt)
+        @test gpu_forcing.cached_forcing != forcing_before_stage
+
+        for _ in 1:4
+            step!(gpu_solver, dt)
+        end
+        CUDA.synchronize()
+        allocation_stats = getfield(CUDA, :alloc_stats)
+        allocated_before = allocation_stats.alloc_bytes
+        step!(gpu_solver, dt)
+        CUDA.synchronize()
+        @test allocation_stats.alloc_bytes - allocated_before == 0
+    end
 end
