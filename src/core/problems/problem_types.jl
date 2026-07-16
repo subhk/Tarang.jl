@@ -618,7 +618,9 @@ or `apply_forcing!` in your time loop.
 ## Arguments
 
 - `problem::IVP`: The initial value problem
-- `variable::Symbol`: The variable name (as Symbol) whose RHS receives the forcing
+- `variable::Symbol`: The scalar field or flattened component name whose RHS receives
+  the forcing. For a vector or tensor, register a component such as `:u_x`; registering
+  the container name (for example `:u`) is ambiguous and raises `ArgumentError`.
 - `forcing`: The stochastic forcing configuration
 
 ## Example
@@ -632,6 +634,7 @@ add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
 forcing = StochasticForcing(
     field_size = (256, 256),
     energy_injection_rate = 0.1,
+    injection_metric = :vorticity_kinetic,
     k_forcing = 10.0,
     dt = dt
 )

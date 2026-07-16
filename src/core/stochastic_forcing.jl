@@ -195,7 +195,10 @@ Create a stochastic forcing configuration that works on CPU or GPU.
 - `field_size::NTuple{N,Int}`: Grid size (Nx, Ny, ...)
 - `domain_size::NTuple{N,Real}`: Domain size (Lx, Ly, ...), default 2π in each direction
 - `energy_injection_rate::Real`: Target energy injection rate ε (default: 1.0)
-- `injection_metric::Symbol`: Energy metric, `:direct` or `:vorticity_kinetic` (default: `:direct`)
+- `injection_metric::Symbol`: Quadratic invariant used to normalize ε. `:direct`
+  uses unit Fourier weight; `:vorticity_kinetic` uses `1/|k|²` for nonzero
+  modes (default: `:direct`). Use the latter when forcing 2-D vorticity and ε
+  denotes kinetic-energy injection.
 - `k_forcing::Real`: Central forcing wavenumber k_f (default: 4.0)
 - `dk_forcing::Real`: Forcing bandwidth δ_f (default: 1.0)
 - `dt::Real`: Initial timestep (default: 0.01)
@@ -399,9 +402,10 @@ end
     compute_forcing_spectrum(wavenumbers, k_f, dk_f, ε, domain_size, spectrum_type, dtype;
                              injection_metric=:direct)
 
-Compute the forcing amplitude spectrum √Q̂(k).
-
-The spectrum is normalized such that the energy injection rate equals ε.
+Compute the forcing amplitude spectrum √Q̂(k). With `M` physical grid points,
+the full spectrum is normalized so `sum(Q̂(k) * w(k)) / (2M²) == ε`, where
+`w=1` for `:direct` and `w=1/|k|²` for `:vorticity_kinetic`. A positive ε
+whose selected band contains no representable nonzero mode raises `ArgumentError`.
 """
 function compute_forcing_spectrum(
     wavenumbers::NTuple{N, Vector{T}},
