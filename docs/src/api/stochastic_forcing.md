@@ -122,6 +122,63 @@ and `w = 1/|k|²` for `:vorticity_kinetic`. A positive ε whose selected spectru
 no representable nonzero mode raises `ArgumentError`. `:isotropic` aliases `:ring`, and
 `:bandlimited` aliases `:band`.
 
+### SeparableStochasticForcing
+
+```@docs
+SeparableStochasticForcing
+```
+
+Use `SeparableStochasticForcing` for a Fourier--Chebyshev product domain. The
+random spectrum is defined only over the Fourier axes and is multiplied by a
+fixed Chebyshev profile:
+
+```math
+\hat F(k_1,\ldots,k_d,n,t) = \hat\xi(k_1,\ldots,k_d,t)\,p_n.
+```
+
+```julia
+forcing = SeparableStochasticForcing(
+    fourier_size=(Nx,),
+    chebyshev_basis=zbasis,
+    chebyshev_profile=z -> z * (1 - z),
+    domain_size=(Lx,),
+    energy_injection_rate=0.1,
+    k_forcing=4.0,
+    dk_forcing=1.0,
+    dt=dt,
+    architecture=GPU(),
+)
+add_stochastic_forcing!(problem, :b, forcing)
+```
+
+`chebyshev_profile` can be either a function of the physical Chebyshev
+coordinate or a vector of Chebyshev coefficients whose length equals
+`chebyshev_basis.meta.size`. A function is sampled on the basis grid and
+transformed once during construction. In either form the profile is normalized
+to unit physical mean square with the basis quadrature weights. Non-finite,
+zero-norm, and mis-sized profiles are rejected.
+
+The mixed normalization currently supports only `injection_metric=:direct`.
+Passing `:vorticity_kinetic` raises `ArgumentError`, because a kinetic-energy
+metric in a bounded direction requires model-specific inverse operators rather
+than the Fourier `1/|k|²` weight.
+
+All forcing arrays and outer-product views are persistent. With a supplied RNG,
+the Fourier phase draw is reproducible between CPU and GPU; the GPU path uses a
+persistent host staging array and copies into its persistent device phase array.
+Only Fourier axes may be shortened to real-FFT half spectra when the forcing is
+added to a field. The Chebyshev coefficient count must match exactly.
+
+For a coupled Jacobi/Chebyshev GPU IVP, the default
+`InitialValueSolver(...; matsolver=:auto)` selects `CuSparseLU`. Its RHS,
+solution, and scratch device buffers are cached and reused across solves and
+same-size numeric refactors. An explicit CPU-only `:sparse` or `:dense` solver
+is rejected on that path. CPU and pure-Fourier IVPs retain the existing sparse
+default behavior.
+
+For Fourier--Fourier domains, continue to use `StochasticForcing`; for
+Fourier--Chebyshev domains, use `SeparableStochasticForcing`.
+
 ### DeterministicForcing
 
 ```@docs
@@ -198,6 +255,7 @@ Generate forcing realization. Returns cached value for substeps > 1.
 # Stochastic forcing
 generate_forcing!(forcing::StochasticForcing, t::Real, substep::Int=1)
 generate_forcing!(forcing::StochasticForcing, t::Real)
+generate_forcing!(forcing::SeparableStochasticForcing, t::Real, substep::Int=1)
 
 # Deterministic forcing
 generate_forcing!(forcing::DeterministicForcing, grid, t::Real)
