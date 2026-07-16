@@ -478,6 +478,55 @@ println("=" ^ 60)
         println("  Registered forcing is included in compiled lazy RHS")
     end
 
+    @testset "registered forcing resolves flattened solver-state indices" begin
+        N = 8
+        dt = 0.01
+        domain = PeriodicDomain(N, N)
+        u = VectorField(domain, "u")
+        q = ScalarField(domain, "q")
+
+        forcing = StochasticForcing(
+            field_size=(N, N),
+            forcing_rate=0.1,
+            k_forcing=3.0,
+            dk_forcing=1.0,
+            dt=dt,
+            rng=MersenneTwister(42)
+        )
+
+        problem = IVP([u, q])
+        add_equation!(problem, "∂t(u) = 0")
+        add_equation!(problem, "∂t(q) = 0")
+        add_stochastic_forcing!(problem, :q, forcing)
+
+        @test haskey(problem.stochastic_forcings, 3)
+
+        solver = InitialValueSolver(problem, RK222(); dt=dt)
+        @test [field.name for field in solver.state] == ["u_x", "u_y", "q"]
+
+        Tarang._update_registered_forcings!(solver, 0.0, dt)
+        rhs = Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        foreach(field -> ensure_layout!(field, :c), rhs)
+        rhs_data = map(get_coeff_data, rhs)
+        forcing_view = Tarang._matched_forcing_view(forcing, size(rhs_data[3]))
+
+        @test all(iszero, rhs_data[1])
+        @test all(iszero, rhs_data[2])
+        @test forcing_view !== nothing
+        @test rhs_data[3] ≈ forcing_view
+
+        @testset "component names map to component state indices" begin
+            component_problem = IVP([u, q])
+            add_stochastic_forcing!(component_problem, :u_x, forcing)
+            @test haskey(component_problem.stochastic_forcings, 1)
+        end
+
+        @testset "vector container names are ambiguous" begin
+            ambiguous_problem = IVP([u, q])
+            @test_throws ArgumentError add_stochastic_forcing!(ambiguous_problem, :u, forcing)
+        end
+    end
+
     @testset "1D Forcing" begin
         forcing_1d = StochasticForcing(
             field_size=(64,),

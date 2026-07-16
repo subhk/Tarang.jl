@@ -646,20 +646,35 @@ end
 
 See also: [`StochasticForcing`](@ref), [`generate_forcing!`](@ref)
 """
-function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing::Forcing)
-    # Find variable index by name
+function _stochastic_forcing_state_index(problem::IVP, variable::Symbol)
     var_name = String(variable)
-    var_idx = nothing
-    for (i, var) in enumerate(problem.variables)
-        if hasproperty(var, :name) && getfield(var, :name) == var_name
-            var_idx = i
-            break
+    state_idx = 0
+
+    for var in problem.variables
+        if isa(var, ScalarField)
+            state_idx += 1
+            var.name == var_name && return state_idx
+        elseif isa(var, VectorField) || isa(var, TensorField)
+            if var.name == var_name
+                component_names = join((":$(component.name)" for component in var.components), ", ")
+                throw(ArgumentError(
+                    "Variable ':$variable' is a field container; register one of its " *
+                    "components instead ($component_names)"
+                ))
+            end
+
+            for component in var.components
+                state_idx += 1
+                component.name == var_name && return state_idx
+            end
         end
     end
 
-    if var_idx === nothing
-        throw(ArgumentError("Variable ':$variable' not found in problem variables"))
-    end
+    throw(ArgumentError("Variable ':$variable' not found in problem variables or components"))
+end
+
+function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing::Forcing)
+    var_idx = _stochastic_forcing_state_index(problem, variable)
 
     # Store in stochastic_forcings dict keyed by variable index
     problem.stochastic_forcings[var_idx] = forcing
