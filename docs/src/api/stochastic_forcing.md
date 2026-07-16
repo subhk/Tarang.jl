@@ -85,8 +85,9 @@ StochasticForcing(;
 ) where {T<:AbstractFloat, N}
 ```
 
-`forcing_rate` and `energy_injection_rate` set the same target ε. If both are given and they
-disagree, `forcing_rate` wins and a warning is emitted.
+`forcing_rate` and `energy_injection_rate` set the same target ε. `forcing_rate` wins when
+provided. If a non-default `energy_injection_rate` is also supplied and the values disagree,
+a warning is emitted.
 
 `injection_metric = :direct` makes ε the injection rate of the forced variable's direct
 quadratic invariant. Use `:vorticity_kinetic` when forcing 2-D vorticity and ε should be
@@ -104,7 +105,7 @@ Self-conjugate modes are projected as `sqrt(2) * real(z)`; the factor preserves 
 variance that would otherwise be halved by discarding the imaginary part.
 
 `dk_forcing` must be positive for `:ring`, `:band` and `:kolmogorov` (an `ArgumentError` is thrown
-otherwise); `:lowk` ignores it.
+otherwise); `:lowk` ignores it. `:kolmogorov` also requires `k_forcing > 0`.
 
 **Spectrum types:**
 

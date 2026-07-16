@@ -421,6 +421,12 @@ function compute_forcing_spectrum(
     spectrum_type = _normalize_spectrum_type(spectrum_type)
     _validate_injection_metric(injection_metric)
     ε < 0 && throw(ArgumentError("energy injection rate must be nonnegative (got $ε)"))
+    if spectrum_type === :kolmogorov && !(k_f > 0)
+        throw(ArgumentError(
+            "k_forcing must be positive for spectrum_type=:kolmogorov " *
+            "(got k_forcing=$k_f)"
+        ))
+    end
     field_size = ntuple(d -> length(wavenumbers[d]), N)
     spectrum = zeros(T, field_size)
 

@@ -195,6 +195,15 @@ println("=" ^ 60)
         @test_throws ArgumentError StochasticForcing(; common..., injection_metric=:unknown)
         @test_throws ArgumentError StochasticForcing(; common..., energy_injection_rate=-0.1)
         @test_throws ArgumentError StochasticForcing(; common..., forcing_rate=-0.1)
+        @test_throws ArgumentError StochasticForcing(
+            field_size=(16,), energy_injection_rate=0.0,
+            k_forcing=0.0, dk_forcing=1.0,
+            spectrum_type=:kolmogorov,
+        )
+        @test_throws ArgumentError compute_forcing_spectrum(
+            build_wavenumbers((16,), (2π,), Float64),
+            -1.0, 1.0, 0.0, (2π,), :kolmogorov, Float64,
+        )
         overriding_alias = @test_logs (:warn, r"Both forcing_rate and energy_injection_rate") StochasticForcing(
             ; common..., energy_injection_rate=-0.1, forcing_rate=0.1
         )
