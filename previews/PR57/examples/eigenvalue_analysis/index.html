@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Eigenvalue Analysis Examples · Tarang.jl</title><meta name="title" content="Eigenvalue Analysis Examples · Tarang.jl"/><meta property="og:title" content="Eigenvalue Analysis Examples · Tarang.jl"/><meta property="twitter:title" content="Eigenvalue Analysis Examples · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/examples/eigenvalue_analysis/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/examples/eigenvalue_analysis/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/examples/eigenvalue_analysis/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../../tutorials/overview/">Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/les_models/">LES Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../../pages/tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../../pages/architecture/">Architecture</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox"/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../api/bases/">Bases</a></li><li><a class="tocitem" href="../../api/domains/">Domains</a></li><li><a class="tocitem" href="../../api/fields/">Fields</a></li><li><a class="tocitem" href="../../api/operators/">Operators</a></li><li><a class="tocitem" href="../../api/problems/">Problems</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers</a></li><li><a class="tocitem" href="../../api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../api/gpu/">GPU</a></li><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis</a></li><li><a class="tocitem" href="../../api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Eigenvalue Analysis Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Eigenvalue Analysis Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/examples/eigenvalue_analysis.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Eigenvalue-Analysis-Examples"><a class="docs-heading-anchor" href="#Eigenvalue-Analysis-Examples">Eigenvalue Analysis Examples</a><a id="Eigenvalue-Analysis-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Eigenvalue-Analysis-Examples" title="Permalink"></a></h1><p>Collection of linear stability and eigenvalue problem examples with Tarang.jl.</p><h2 id="Linear-Stability-Overview"><a class="docs-heading-anchor" href="#Linear-Stability-Overview">Linear Stability Overview</a><a id="Linear-Stability-Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Linear-Stability-Overview" title="Permalink"></a></h2><p>Eigenvalue problems determine the stability of base states by solving:</p><p class="math-container">\[A \mathbf{x} = \sigma B \mathbf{x}\]</p><p>where σ is the eigenvalue (growth rate + frequency).</p><p>In Tarang the eigenvalue <strong>replaces the time derivative</strong>: you write the linearised equation exactly as you would for an IVP, keeping the <code>dt(·)</code> term, and the solver assembles <code>σ M x + L x = 0</code>. You never multiply the eigenvalue symbol into the equation yourself. Every boundary condition is declared with <code>add_bc!</code> and paired with a <code>tau</code> variable lifted into the bulk equation.</p><div class="admonition is-warning" id="Fold-constant-coefficients-into-a-single-parameter-878eba37c0cf3bf7"><header class="admonition-header">Fold constant coefficients into a single parameter<a class="admonition-anchor" href="#Fold-constant-coefficients-into-a-single-parameter-878eba37c0cf3bf7" title="Permalink"></a></header><div class="admonition-body"><p>A coefficient built from <em>several</em> constants multiplied together inside the equation string — <code>Pr*Ra*k2*T</code>, or <code>2*k2*∂z(∂z(w))</code> — loses its value when the implicit matrix is assembled: the term enters <code>L</code> with coefficient <strong>1</strong>. Compute the product in Julia and register it as <strong>one</strong> parameter (<code>buoy = Pr*Ra*k^2</code>, <code>twok2 = 2k^2</code>), then write <code>buoy*T</code> and <code>twok2*∂z(∂z(w))</code>. A single scalar multiplying an expression — <code>Pr*(…)</code>, <code>invRe*(…)</code> — is fine.</p></div></div><h2 id="Rayleigh-Bénard-Stability"><a class="docs-heading-anchor" href="#Rayleigh-Bénard-Stability">Rayleigh-Bénard Stability</a><a id="Rayleigh-Bénard-Stability-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard-Stability" title="Permalink"></a></h2><p>Critical Rayleigh number for convection onset. Eliminating the pressure and the horizontal velocity leaves a fourth-order system for the vertical velocity <code>w</code> and the temperature perturbation <code>T</code> at a single horizontal wavenumber <code>k</code>:</p><p class="math-container">\[\sigma (\partial_z^2 - k^2) w = Pr\left[(\partial_z^2 - k^2)^2 w - Ra\, k^2 T\right],
+\qquad \sigma T = w + (\partial_z^2 - k^2) T\]</p><p><code>w</code> is fourth order, so it needs four boundary conditions and four <code>tau</code> variables; <code>T</code> is second order and needs two. With stress-free walls (<code>w = ∂z²w = 0</code>) the onset is known analytically — <code>Ra_c(k) = (π² + k²)³ / k²</code>, minimised at <code>Ra_c = 657.51</code> for <code>k = 2.2214</code> — which makes it a good check that the problem is assembled correctly.</p><pre><code class="language-julia hljs">using Tarang
+using Printf
+
+function rbc_evp(Ra, k; Pr=1.0, Nz=32, slip=:free)
+    coords = CartesianCoordinates(&quot;z&quot;)
+    dist   = Distributor(coords; dtype=Float64, device=CPU())
+    zbasis = ChebyshevT(coords[&quot;z&quot;]; size=Nz, bounds=(0.0, 1.0))
+    domain = Domain(dist, (zbasis,))
+    lift_basis = derivative_basis(zbasis, 2)
+
+    w = ScalarField(domain, &quot;w&quot;)
+    T = ScalarField(domain, &quot;T&quot;)
+    # tau variables: four for the fourth-order w equation, two for T
+    tw = [ScalarField(dist, &quot;tw$i&quot;, (), Float64) for i in 1:4]
+    tT = [ScalarField(dist, &quot;tT$i&quot;, (), Float64) for i in 1:2]
+
+    evp = EVP([w, T, tw..., tT...]; eigenvalue=:σ)
+    add_parameters!(evp; Pr=Pr, k2=k^2, k4=k^4, twok2=2k^2, buoy=Pr*Ra*k^2,
+                    lw1=lift(tw[1], lift_basis, -1), lw2=lift(tw[2], lift_basis, -2),
+                    lw3=lift(tw[3], lift_basis, -3), lw4=lift(tw[4], lift_basis, -4),
+                    lT1=lift(tT[1], lift_basis, -1), lT2=lift(tT[2], lift_basis, -2))
+
+    # KEEP dt(·) — it builds the mass matrix M. Never multiply σ into the equation.
+    add_equation!(evp, &quot;dt(∂z(∂z(w)) - k2*w) &quot; *
+                       &quot;- Pr*(∂z(∂z(∂z(∂z(w)))) - twok2*∂z(∂z(w)) + k4*w) &quot; *
+                       &quot;+ buoy*T - lw1 - lw2 - lw3 - lw4 = 0&quot;)
+    add_equation!(evp, &quot;dt(T) - (∂z(∂z(T)) - k2*T) - w - lT1 - lT2 = 0&quot;)
+
+    # boundary conditions — always add_bc!, never add_equation!
+    add_bc!(evp, &quot;w(z=0) = 0&quot;)
+    add_bc!(evp, &quot;w(z=1) = 0&quot;)
+    if slip == :free                       # stress-free
+        add_bc!(evp, &quot;∂z(∂z(w))(z=0) = 0&quot;)
+        add_bc!(evp, &quot;∂z(∂z(w))(z=1) = 0&quot;)
+    else                                   # no-slip
+        add_bc!(evp, &quot;∂z(w)(z=0) = 0&quot;)
+        add_bc!(evp, &quot;∂z(w)(z=1) = 0&quot;)
+    end
+    add_bc!(evp, &quot;T(z=0) = 0&quot;)
+    add_bc!(evp, &quot;T(z=1) = 0&quot;)
+    return evp
+end
+
+function growth_rate(Ra, k; Pr=1.0, Nz=32)
+    solver = EigenvalueSolver(rbc_evp(Ra, k; Pr=Pr, Nz=Nz); nev=4, which=:LR)
+    λ, _ = solve!(solver)
+    return maximum(real, λ)
+end
+
+for Ra in (500.0, 800.0)
+    @printf(&quot;Ra = %5.0f   σ_max = %+.6f\n&quot;, Ra, growth_rate(Ra, 2.2214))
+end</code></pre><pre><code class="nohighlight hljs">Ra =   500   σ_max = -1.894439
+Ra =   800   σ_max = +1.525506</code></pre><p>The sign of <code>σ_max</code> brackets the onset, so a bisection gives the critical Rayleigh number:</p><pre><code class="language-julia hljs">function critical_Ra(k; Pr=1.0, Nz=32, Ra_lo=100.0, Ra_hi=5000.0, tol=1e-4)
+    while (Ra_hi - Ra_lo) / Ra_hi &gt; tol
+        Ra_mid = (Ra_lo + Ra_hi) / 2
+        if growth_rate(Ra_mid, k; Pr=Pr, Nz=Nz) &gt; 0
+            Ra_hi = Ra_mid
+        else
+            Ra_lo = Ra_mid
+        end
+    end
+    return (Ra_lo + Ra_hi) / 2
+end
+
+@printf(&quot;Ra_c = %.2f   (exact: %.2f)\n&quot;, critical_Ra(2.2214), (π^2 + 2.2214^2)^3 / 2.2214^2)</code></pre><pre><code class="nohighlight hljs">Ra_c = 657.53   (exact: 657.51)</code></pre><p>The no-slip case (<code>slip=:noslip</code>) has no closed form, and its tau system throws off large spurious eigenvalues that <code>which=:LR</code> picks up first — see <a href="#Spurious-Modes">Spurious Modes</a> for the filter that makes it usable.</p><h2 id="Orr-Sommerfeld-(Plane-Poiseuille)"><a class="docs-heading-anchor" href="#Orr-Sommerfeld-(Plane-Poiseuille)">Orr-Sommerfeld (Plane Poiseuille)</a><a id="Orr-Sommerfeld-(Plane-Poiseuille)-1"></a><a class="docs-heading-anchor-permalink" href="#Orr-Sommerfeld-(Plane-Poiseuille)" title="Permalink"></a></h2><p>Stability of channel flow with base profile <code>U(z) = 1 - z²</code> on <code>z ∈ [-1, 1]</code>. Written for the growth rate <code>σ</code> (the complex wave speed is then <code>c = iσ/k</code>):</p><p class="math-container">\[\sigma (\partial_z^2 - k^2)\psi = -ikU(\partial_z^2 - k^2)\psi + ikU&#39;&#39;\psi
+    + \tfrac{1}{Re}(\partial_z^2 - k^2)^2\psi\]</p><div class="admonition is-warning" id="The-base-flow-field-must-be-real-32702e2687de02ab"><header class="admonition-header">The base-flow field must be real<a class="admonition-anchor" href="#The-base-flow-field-must-be-real-32702e2687de02ab" title="Permalink"></a></header><div class="admonition-body"><p><code>U(z)</code> enters as a spatially varying (non-constant) coefficient, and only a <strong>real</strong> coefficient field is representable in the implicit operator. Build the fields with <code>dtype=Float64</code> and keep the complex factor <code>-ik</code> outside, as a plain scalar parameter (<code>mik = -1im*k</code>). If you fold <code>-ik</code> into the field instead — making it complex, or declaring the fields <code>ComplexF64</code> — the coefficient is silently replaced by 1 and the solver returns a converged-looking but wrong spectrum. The assembled matrices are complex regardless of the field dtype, so nothing is lost.</p></div></div><pre><code class="language-julia hljs">using Tarang
+using Printf
+
+# A fourth-order tau system produces spurious eigenvalues. A spurious eigenvalue moves
+# when the resolution changes; a physical one does not. See Tips → Spurious Modes.
+function converged_eigenvalues(build, N1, N2; nev=25, which=:LR, rtol=1e-5)
+    λ1, _ = solve!(EigenvalueSolver(build(N1); nev=nev, which=which))
+    λ2, _ = solve!(EigenvalueSolver(build(N2); nev=nev, which=which))
+    return [λ for λ in λ1 if minimum(abs.(λ .- λ2)) &lt;= rtol * max(1.0, abs(λ))]
+end
+
+function os_evp(Re, k, Nz)
+    coords = CartesianCoordinates(&quot;z&quot;)
+    dist   = Distributor(coords; dtype=Float64, device=CPU())
+    zbasis = ChebyshevT(coords[&quot;z&quot;]; size=Nz, bounds=(-1.0, 1.0))
+    domain = Domain(dist, (zbasis,))
+    lift_basis = derivative_basis(zbasis, 2)
+
+    psi = ScalarField(domain, &quot;psi&quot;)
+    tp  = [ScalarField(dist, &quot;tp$i&quot;, (), Float64) for i in 1:4]   # fourth order → 4 taus
+
+    U = ScalarField(domain, &quot;U&quot;)            # REAL base flow, U(z) = 1 - z²
+    z = local_grid(zbasis, dist, 1)
+    ensure_layout!(U, :g)
+    get_grid_data(U) .= 1 .- z .^ 2
+    ensure_layout!(U, :c)
+
+    evp = EVP([psi, tp...]; eigenvalue=:σ)
+    add_parameters!(evp; U=U, k2=k^2, k4=k^4, twok2=2k^2,
+                    mik=-1im*k,           # -ik
+                    Upp=1im*k*(-2.0),     #  ik U&#39;&#39;   (U&#39;&#39; = -2)
+                    invRe=1.0/Re,
+                    l1=lift(tp[1], lift_basis, -1), l2=lift(tp[2], lift_basis, -2),
+                    l3=lift(tp[3], lift_basis, -3), l4=lift(tp[4], lift_basis, -4))
+
+    add_equation!(evp, &quot;dt(∂z(∂z(psi)) - k2*psi) &quot; *
+                       &quot;- mik*(U*(∂z(∂z(psi)) - k2*psi)) - Upp*psi &quot; *
+                       &quot;- invRe*(∂z(∂z(∂z(∂z(psi)))) - twok2*∂z(∂z(psi)) + k4*psi) &quot; *
+                       &quot;- l1 - l2 - l3 - l4 = 0&quot;)
+
+    # No-slip: ψ = ∂ψ/∂z = 0 at both walls
+    add_bc!(evp, &quot;psi(z=-1) = 0&quot;)
+    add_bc!(evp, &quot;psi(z=1) = 0&quot;)
+    add_bc!(evp, &quot;∂z(psi)(z=-1) = 0&quot;)
+    add_bc!(evp, &quot;∂z(psi)(z=1) = 0&quot;)
+    return evp
+end
+
+Re, k = 10000.0, 1.0
+λ = converged_eigenvalues(N -&gt; os_evp(Re, k, N), 64, 80; nev=30)
+σ = λ[argmax(real.(λ))]                 # most unstable growth rate
+@printf(&quot;c = %s\n&quot;, string(round(1im * σ / k, digits=8)))</code></pre><pre><code class="nohighlight hljs">c = 0.23752649 + 0.00373967im</code></pre><p>This is Orszag&#39;s (1971) benchmark value for <code>Re = 10000</code>, <code>k = 1</code>, to all eight digits; <code>Im(c) &gt; 0</code>, so the mode grows.</p><h2 id="Neutral-Curves"><a class="docs-heading-anchor" href="#Neutral-Curves">Neutral Curves</a><a id="Neutral-Curves-1"></a><a class="docs-heading-anchor-permalink" href="#Neutral-Curves" title="Permalink"></a></h2><p>The stability boundary in parameter space is one bisection per wavenumber, reusing <code>critical_Ra</code> from the Rayleigh-Bénard example:</p><pre><code class="language-julia hljs">ks   = [1.5, 2.0, 2.2214, 2.5, 3.0]
+Ra_n = [critical_Ra(k) for k in ks]
+
+for (k, Ra) in zip(ks, Ra_n)
+    @printf(&quot;k = %.4f   Ra_c = %8.2f   (exact %8.2f)\n&quot;, k, Ra, (π^2 + k^2)^3 / k^2)
+end
+
+i = argmin(Ra_n)
+@printf(&quot;critical point: k = %.4f, Ra_c = %.2f\n&quot;, ks[i], Ra_n[i])</code></pre><pre><code class="nohighlight hljs">k = 1.5000   Ra_c =   791.19   (exact   791.19)
+k = 2.0000   Ra_c =   667.02   (exact   667.01)
+k = 2.2214   Ra_c =   657.53   (exact   657.51)
+k = 2.5000   Ra_c =   670.16   (exact   670.17)
+k = 3.0000   Ra_c =   746.54   (exact   746.53)
+critical point: k = 2.2214, Ra_c = 657.53</code></pre><p>Refine the <code>k</code> grid around the minimum to locate the critical point more precisely.</p><h2 id="Eigenmode-Structure"><a class="docs-heading-anchor" href="#Eigenmode-Structure">Eigenmode Structure</a><a id="Eigenmode-Structure-1"></a><a class="docs-heading-anchor-permalink" href="#Eigenmode-Structure" title="Permalink"></a></h2><p><code>solve!</code> returns <code>(eigenvalues, eigenvectors)</code>. The eigenvector columns live in the subproblem&#39;s coefficient space — every variable and tau concatenated, not a per-field dictionary. Write a column back onto the problem&#39;s fields with <code>scatter_inputs</code>, then transform to the grid:</p><pre><code class="language-julia hljs">Nz  = 32
+evp = rbc_evp(2000.0, 2.2214; Nz=Nz)
+solver = EigenvalueSolver(evp; nev=4, which=:LR)
+λ, v = solve!(solver)
+
+# most unstable mode → scatter it back onto the problem&#39;s variables
+mode = v[:, argmax(real.(λ))]
+Tarang.scatter_inputs(solver.subproblems[1], mode, evp.variables)
+
+w = evp.variables[1]
+ensure_layout!(w, :g)
+w_profile = real.(copy(get_grid_data(w)))
+w_profile ./= maximum(abs, w_profile)          # normalise
+
+coords = CartesianCoordinates(&quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+z      = local_grid(ChebyshevT(coords[&quot;z&quot;]; size=Nz, bounds=(0.0, 1.0)), dist, 1)
+
+@printf(&quot;σ = %.6f\n&quot;, maximum(real, λ))
+@printf(&quot;max | |w| - |sin(πz)| | = %.2e\n&quot;,
+        maximum(abs, abs.(w_profile) .- abs.(sin.(π .* z))))</code></pre><pre><code class="nohighlight hljs">σ = 11.015345
+max | |w| - |sin(πz)| | = 3.16e-03</code></pre><p>The stress-free eigenfunction is <code>sin(πz)</code>, recovered here to three digits. <code>z</code> and <code>w_profile</code> are plain vectors — plot them with the package of your choice.</p><h2 id="Solver-Options"><a class="docs-heading-anchor" href="#Solver-Options">Solver Options</a><a id="Solver-Options-1"></a><a class="docs-heading-anchor-permalink" href="#Solver-Options" title="Permalink"></a></h2><h3 id="Finding-Specific-Eigenvalues"><a class="docs-heading-anchor" href="#Finding-Specific-Eigenvalues">Finding Specific Eigenvalues</a><a id="Finding-Specific-Eigenvalues-1"></a><a class="docs-heading-anchor-permalink" href="#Finding-Specific-Eigenvalues" title="Permalink"></a></h3><p>Building a solver merges the boundary conditions into the equation set, which <strong>mutates the problem</strong>: a given <code>EVP</code> can be handed to <code>EigenvalueSolver</code> only once. Reusing it raises <code>Number of equations (14) does not match number of variables (8)</code>. Build a fresh problem for each solver — which is why every example here wraps the problem in a function.</p><pre><code class="language-julia hljs"># Most unstable (largest real part)
+solver = EigenvalueSolver(rbc_evp(2000.0, 2.2214); nev=10, which=:LR)
+
+# Largest magnitude
+solver = EigenvalueSolver(rbc_evp(2000.0, 2.2214); nev=10, which=:LM)
+
+# Near a target value
+solver = EigenvalueSolver(rbc_evp(2000.0, 2.2214); nev=5, target=0.1+1.5im)
+
+# Most oscillatory (largest imaginary)
+solver = EigenvalueSolver(rbc_evp(2000.0, 2.2214); nev=10, which=:LI)</code></pre><p><code>which</code> accepts the symbols <code>:LM</code> <code>:SM</code> <code>:LR</code> <code>:SR</code> <code>:LI</code> <code>:SI</code>, or pass <code>target=…</code> to order by proximity to a shift. The <code>EigenvalueSolver</code> constructor takes only <code>nev</code>, <code>which</code>, <code>target</code>, and <code>matsolver</code> keywords.</p><h3 id="Selecting-eigenvalues-by-magnitude"><a class="docs-heading-anchor" href="#Selecting-eigenvalues-by-magnitude">Selecting eigenvalues by magnitude</a><a id="Selecting-eigenvalues-by-magnitude-1"></a><a class="docs-heading-anchor-permalink" href="#Selecting-eigenvalues-by-magnitude" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Smallest-magnitude eigenvalues (e.g. least-damped modes)
+solver = EigenvalueSolver(rbc_evp(2000.0, 2.2214); nev=20, which=:SM)
+λ, _ = solve!(solver)
+@printf(&quot;least-damped: σ = %+.6f\n&quot;, λ[1])</code></pre><pre><code class="nohighlight hljs">least-damped: σ = +11.015345</code></pre><h2 id="Tips"><a class="docs-heading-anchor" href="#Tips">Tips</a><a id="Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Tips" title="Permalink"></a></h2><h3 id="Resolution"><a class="docs-heading-anchor" href="#Resolution">Resolution</a><a id="Resolution-1"></a><a class="docs-heading-anchor-permalink" href="#Resolution" title="Permalink"></a></h3><ul><li>Start coarse (N=32), refine until eigenvalues converge</li><li>Chebyshev provides exponential convergence</li><li>Boundary layer modes need more resolution</li></ul><h3 id="Spurious-Modes"><a class="docs-heading-anchor" href="#Spurious-Modes">Spurious Modes</a><a id="Spurious-Modes-1"></a><a class="docs-heading-anchor-permalink" href="#Spurious-Modes" title="Permalink"></a></h3><p>The tau rows carry zero mass, so a tau system throws off spurious eigenvalues — and they are not small. The no-slip Rayleigh-Bénard problem above returns modes near <code>+8e5</code> at <code>Nz = 24</code>, <code>+3e6</code> at <code>Nz = 32</code> and <code>+1.7e7</code> at <code>Nz = 48</code>: large enough to clear the solver&#39;s internal <code>|λ| &lt; 1e10</code> cut, and picked first by <code>which=:LR</code>, which would report a comfortably stable state as violently unstable.</p><p>The tell is in those numbers — a spurious eigenvalue <strong>moves with the resolution</strong>, a physical one does not. Solve at two resolutions and keep the modes that agree (this is the <code>converged_eigenvalues</code> used in the Orr-Sommerfeld example):</p><pre><code class="language-julia hljs">function critical_Ra_filtered(k; N1=24, N2=32, Ra_lo=500.0, Ra_hi=4000.0, tol=1e-4)
+    while (Ra_hi - Ra_lo) / Ra_hi &gt; tol
+        Ra_mid = (Ra_lo + Ra_hi) / 2
+        λ = converged_eigenvalues(N -&gt; rbc_evp(Ra_mid, k; Nz=N, slip=:noslip),
+                                  N1, N2; nev=10)
+        maximum(real, λ) &gt; 0 ? (Ra_hi = Ra_mid) : (Ra_lo = Ra_mid)
+    end
+    return (Ra_lo + Ra_hi) / 2
+end
+
+@printf(&quot;no-slip Ra_c = %.2f   (Chandrasekhar: 1707.762)\n&quot;, critical_Ra_filtered(3.117))</code></pre><pre><code class="nohighlight hljs">no-slip Ra_c = 1707.77   (Chandrasekhar: 1707.762)</code></pre><p>Also check the mode structure — spurious eigenfunctions oscillate wildly at the grid scale — and confirm that the answer is insensitive to <code>nev</code>.</p><h3 id="Physical-Validation"><a class="docs-heading-anchor" href="#Physical-Validation">Physical Validation</a><a id="Physical-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Physical-Validation" title="Permalink"></a></h3><ul><li>Compare with known analytical results: stress-free Rayleigh-Bénard has <code>Ra_c(k) = (π² + k²)³/k²</code>; no-slip has <code>Ra_c = 1707.762</code> at <code>k = 3.117</code>; the Orr-Sommerfeld benchmark is <code>c = 0.23752649 + 0.00373967i</code> at <code>Re = 10⁴</code>, <code>k = 1</code></li><li>Check limiting cases</li><li>Verify neutral curve shape</li></ul><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems Tutorial</a></li><li><a href="../../api/solvers/">API: Solvers</a></li><li><a href="../gallery/">Example Gallery</a></li></ul></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 16 July 2026 18:03">Thursday 16 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
