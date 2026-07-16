@@ -685,6 +685,56 @@ println("=" ^ 60)
         end
     end
 
+    @testset "state-level forcing rejects multistep schemes before mutation" begin
+        N = 8
+        dt = 0.01
+        domain = PeriodicDomain(N, N)
+        q = ScalarField(domain, "q")
+        set!(q, (x, y) -> sin(x) + cos(y))
+
+        problem = IVP([q])
+        add_equation!(problem, "∂t(q) = 0")
+        solver = InitialValueSolver(problem, CNAB2(); dt=dt)
+        forcing = StochasticForcing(
+            field_size=(N, N),
+            forcing_rate=0.1,
+            k_forcing=3.0,
+            dk_forcing=1.0,
+            dt=dt,
+            rng=MersenneTwister(42)
+        )
+        state = Tarang._ensure_timestepper_state!(solver, dt)
+        Tarang.set_forcing!(state, forcing)
+
+        @test isempty(problem.stochastic_forcings)
+        @test solver.timestepper_state === state
+        @test state.forcing === forcing
+
+        rng_before = copy(forcing.rng)
+        cache_before = copy(forcing.cached_forcing)
+        update_time_before = forcing.last_update_time
+        field_before = copy(get_grid_data(solver.state[1]))
+        iteration_before = solver.iteration
+        sim_time_before = solver.sim_time
+
+        error = try
+            step!(solver)
+            nothing
+        catch exception
+            exception
+        end
+
+        @test error isa ArgumentError
+        @test occursin("colors white noise", sprint(showerror, error))
+        @test forcing.rng == rng_before
+        @test forcing.cached_forcing == cache_before
+        @test forcing.last_update_time == update_time_before
+        @test !state.forcing_generated
+        @test get_grid_data(solver.state[1]) == field_before
+        @test solver.iteration == iteration_before
+        @test solver.sim_time == sim_time_before
+    end
+
     @testset "registered forcing resolves flattened solver-state indices" begin
         N = 8
         dt = 0.01
