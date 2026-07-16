@@ -313,6 +313,29 @@ else
         step!(forced_solver, dt)
         @test forcing.cached_forcing != first_forcing
 
+        ensure_layout!(forced_q, :c)
+        coeff_before_write = copy(get_coeff_data(forced_q))
+        ensure_layout!(forced_q, :g)
+        grid_before_write = Array(get_grid_data(forced_q))
+        output_root = mktempdir()
+        output = add_file_handler(joinpath(output_root, "periodic3d"), forced_solver;
+                                  iter=1, max_writes=1)
+        add_task!(output, forced_q; name="q3_grid", layout="g")
+        add_task!(output, forced_q; name="q3_coeff", layout="c")
+        process!(output)
+
+        output_file = Tarang.current_file(output)
+        written_grid = dropdims(Tarang.group_ncread(output_file, "vars", "q3_grid"); dims=1)
+        written_coeff_parts = Tarang.group_ncread(output_file, "vars", "q3_coeff")
+        written_coeff = complex.(dropdims(selectdim(written_coeff_parts, 2, 1); dims=1),
+                                 dropdims(selectdim(written_coeff_parts, 2, 2); dims=1))
+        @test written_grid ≈ grid_before_write rtol=2e-8 atol=1e-10
+        @test written_coeff ≈ Array(coeff_before_write) rtol=2e-8 atol=1e-10
+        ensure_layout!(forced_q, :c)
+        @test get_coeff_data(forced_q) ≈ coeff_before_write rtol=2e-8 atol=1e-10
+        @test get_grid_data(forced_q) isa CUDA.CuArray
+        @test get_coeff_data(forced_q) isa CUDA.CuArray
+
         for _ in 1:4
             step!(forced_solver, dt)
         end
@@ -414,6 +437,24 @@ else
         @test gpu_forcing.cached_forcing == forcing_before_stage
         step!(gpu_solver, dt)
         @test gpu_forcing.cached_forcing != forcing_before_stage
+
+        ensure_layout!(gpu_b, :c)
+        coeff_before_write = copy(get_coeff_data(gpu_b))
+        ensure_layout!(gpu_b, :g)
+        grid_before_write = Array(get_grid_data(gpu_b))
+        output_root = mktempdir()
+        output = add_file_handler(joinpath(output_root, "mixed3d"), gpu_solver;
+                                  iter=1, max_writes=1)
+        add_task!(output, gpu_b; name="b3", layout="g")
+        process!(output)
+
+        written = dropdims(
+            Tarang.group_ncread(Tarang.current_file(output), "vars", "b3"); dims=1)
+        @test written ≈ grid_before_write rtol=3e-7 atol=2e-9
+        ensure_layout!(gpu_b, :c)
+        @test get_coeff_data(gpu_b) ≈ coeff_before_write rtol=3e-7 atol=2e-9
+        @test get_grid_data(gpu_b) isa CUDA.CuArray
+        @test get_coeff_data(gpu_b) isa CUDA.CuArray
 
         for _ in 1:4
             step!(gpu_solver, dt)
