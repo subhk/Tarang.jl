@@ -636,7 +636,7 @@ println("=" ^ 60)
         println("  Registered forcing is included in compiled lazy RHS")
     end
 
-    @testset "registered white-noise forcing rejects RHS-extrapolating multistep schemes" begin
+    @testset "registered white-noise forcing rejects multistep schemes" begin
         function forced_solver(timestepper)
             N = 8
             dt = 0.01
@@ -659,6 +659,7 @@ println("=" ^ 60)
         unsafe_timesteppers = (
             CNAB2(), SBDF2(), SBDF3(), SBDF4(),
             ETD_CNAB2(), ETD_SBDF2(),
+            Tarang.MCNAB2(), DiagonalIMEX_SBDF2(), Tarang.CNLF2(),
         )
         for timestepper in unsafe_timesteppers
             solver, forcing = forced_solver(timestepper)
@@ -670,6 +671,7 @@ println("=" ^ 60)
             end
 
             @test error isa ArgumentError
+            @test occursin("reuse or combination", sprint(showerror, error))
             @test occursin("colors white noise", sprint(showerror, error))
             @test occursin("one-step", sprint(showerror, error))
             @test forcing.last_update_time == -Inf

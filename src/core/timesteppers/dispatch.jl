@@ -41,8 +41,9 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
     return nothing
 end
 
-const _RHS_EXTRAPOLATING_STOCHASTIC_TIMESTEPPERS = Union{
+const _UNSAFE_STOCHASTIC_MULTISTEP_TIMESTEPPERS = Union{
     CNAB2, SBDF2, SBDF3, SBDF4, ETD_CNAB2, ETD_SBDF2,
+    MCNAB2, DiagonalIMEX_SBDF2, CNLF2,
 }
 
 function _has_registered_stochastic_forcing(solver::InitialValueSolver)
@@ -55,15 +56,16 @@ end
 function _check_stochastic_timestepper_compatibility!(state::TimestepperState,
                                                        solver::InitialValueSolver)
     timestepper = state.timestepper
-    timestepper isa _RHS_EXTRAPOLATING_STOCHASTIC_TIMESTEPPERS || return nothing
+    timestepper isa _UNSAFE_STOCHASTIC_MULTISTEP_TIMESTEPPERS || return nothing
     has_stochastic_forcing = state.forcing isa StochasticForcingType ||
                              _has_registered_stochastic_forcing(solver)
     has_stochastic_forcing || return nothing
 
     scheme = nameof(typeof(timestepper))
     throw(ArgumentError(
-        "StochasticForcing is incompatible with $scheme because multistep RHS " *
-        "extrapolation colors white noise in time and changes its variance. " *
+        "StochasticForcing is incompatible with $scheme because multistep reuse or " *
+        "combination of stochastic RHS/state across time levels colors white noise " *
+        "in time or gives it the wrong variance. " *
         "Use a supported one-step method such as RK222, RK443, or ETD_RK222 " *
         "(CNAB1 and SBDF1 are also supported first-order methods)."
     ))
