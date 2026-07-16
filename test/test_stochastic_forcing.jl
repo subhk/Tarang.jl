@@ -120,6 +120,83 @@ println("=" ^ 60)
         println("  Kolmogorov spectrum OK")
     end
 
+    @testset "Physical spectrum normalization and validation" begin
+        ε = 0.125
+
+        # Tarang stores unnormalized full FFT coefficients, so Parseval's
+        # normalization is M⁻² and must not depend on grid resolution.
+        for field_size in ((16,), (16, 16), (8, 8, 8), (32, 32))
+            forcing = StochasticForcing(
+                field_size=field_size,
+                energy_injection_rate=ε,
+                k_forcing=3.0,
+                spectrum_type=:lowk,
+                injection_metric=:direct,
+            )
+            M = prod(field_size)
+            physical_rate = sum(abs2, forcing.spectrum) / (2M^2)
+            @test physical_rate ≈ ε rtol=5e-14
+            @test forcing.injection_metric === :direct
+        end
+
+        vorticity_forcing = StochasticForcing(
+            field_size=(32, 32),
+            energy_injection_rate=ε,
+            k_forcing=6.0,
+            dk_forcing=1.0,
+            spectrum_type=:band,
+            injection_metric=:vorticity_kinetic,
+        )
+        kx, ky = vorticity_forcing.wavenumbers
+        weighted_power = sum(CartesianIndices(vorticity_forcing.spectrum)) do I
+            k2 = kx[I[1]]^2 + ky[I[2]]^2
+            iszero(k2) ? 0.0 : abs2(vorticity_forcing.spectrum[I]) / k2
+        end
+        @test weighted_power / (2prod(vorticity_forcing.field_size)^2) ≈ ε rtol=5e-14
+        @test vorticity_forcing.injection_metric === :vorticity_kinetic
+
+        ring = StochasticForcing(
+            field_size=(32,),
+            energy_injection_rate=ε,
+            k_forcing=8.0,
+            dk_forcing=2.0,
+            spectrum_type=:ring,
+        )
+        @test abs2(ring.spectrum[11]) / abs2(ring.spectrum[9]) ≈ exp(-1 / 2) rtol=5e-14
+
+        kolmogorov = StochasticForcing(
+            field_size=(32,),
+            energy_injection_rate=ε,
+            k_forcing=8.0,
+            dk_forcing=2.0,
+            spectrum_type=:kolmogorov,
+        )
+        expected_kolmogorov_power_ratio = (6 / 8) * exp(-1 / 2)
+        @test abs2(kolmogorov.spectrum[7]) / abs2(kolmogorov.spectrum[9]) ≈
+              expected_kolmogorov_power_ratio rtol=5e-14
+
+        common = (field_size=(16, 16), k_forcing=4.0, dk_forcing=1.0)
+        @test_throws ArgumentError StochasticForcing(; common..., injection_metric=:unknown)
+        @test_throws ArgumentError StochasticForcing(; common..., energy_injection_rate=-0.1)
+        @test_throws ArgumentError StochasticForcing(; common..., forcing_rate=-0.1)
+        @test_throws ArgumentError StochasticForcing(
+            field_size=(8, 8),
+            energy_injection_rate=0.1,
+            k_forcing=100.0,
+            dk_forcing=0.25,
+            spectrum_type=:band,
+        )
+
+        empty_zero_rate = StochasticForcing(
+            field_size=(8, 8),
+            energy_injection_rate=0.0,
+            k_forcing=100.0,
+            dk_forcing=0.25,
+            spectrum_type=:band,
+        )
+        @test iszero(sum(abs2, empty_zero_rate.spectrum))
+    end
+
     @testset "Forcing Generation" begin
         Random.seed!(12345)
 

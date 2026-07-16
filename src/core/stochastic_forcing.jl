@@ -118,6 +118,7 @@ where ξ(k) is complex white noise with |ξ| = 1 and random phase.
 
 - `forcing_spectrum::A`: √Q̂(k) - square root of power spectrum
 - `energy_injection_rate::T`: Target energy injection rate ε
+- `injection_metric::Symbol`: Quadratic invariant used to normalize ε
 - `k_forcing::T`: Central forcing wavenumber k_f
 - `dk_forcing::T`: Forcing bandwidth δ_f
 - `dt::T`: Current timestep (for proper scaling)
@@ -136,6 +137,7 @@ where ξ(k) is complex white noise with |ξ| = 1 and random phase.
 mutable struct StochasticForcing{T<:AbstractFloat, N, A<:AbstractArray{T,N}, CA<:AbstractArray{Complex{T},N}} <: StochasticForcingType
     forcing_spectrum::A                     # √Q̂(k) - amplitude spectrum
     energy_injection_rate::T                # Target ε
+    injection_metric::Symbol                # :direct or :vorticity_kinetic
     k_forcing::T                            # Central wavenumber
     dk_forcing::T                           # Bandwidth
     dt::T                                   # Timestep
@@ -170,6 +172,7 @@ end
         field_size,
         domain_size = ntuple(i -> 2π, length(field_size)),
         energy_injection_rate = 1.0,
+        injection_metric = :direct,
         k_forcing = 4.0,
         dk_forcing = 1.0,
         dt = 0.01,
@@ -187,6 +190,7 @@ Create a stochastic forcing configuration that works on CPU or GPU.
 - `field_size::NTuple{N,Int}`: Grid size (Nx, Ny, ...)
 - `domain_size::NTuple{N,Real}`: Domain size (Lx, Ly, ...), default 2π in each direction
 - `energy_injection_rate::Real`: Target energy injection rate ε (default: 1.0)
+- `injection_metric::Symbol`: Energy metric, `:direct` or `:vorticity_kinetic` (default: `:direct`)
 - `k_forcing::Real`: Central forcing wavenumber k_f (default: 4.0)
 - `dk_forcing::Real`: Forcing bandwidth δ_f (default: 1.0)
 - `dt::Real`: Initial timestep (default: 0.01)
@@ -231,6 +235,7 @@ function StochasticForcing(;
     domain_size::Union{Nothing, NTuple{N, Real}} = nothing,
     energy_injection_rate::Real = 1.0,
     forcing_rate::Union{Nothing, Real} = nothing,
+    injection_metric::Symbol = :direct,
     k_forcing::Real = 4.0,
     dk_forcing::Real = 1.0,
     dt::Real = 0.01,
@@ -243,6 +248,12 @@ function StochasticForcing(;
 
     # Normalize aliases before validation so :isotropic/:bandlimited are caught
     spectrum_type = _normalize_spectrum_type(spectrum_type)
+
+    _validate_injection_metric(injection_metric)
+    energy_injection_rate < 0 &&
+        throw(ArgumentError("energy_injection_rate must be nonnegative (got $energy_injection_rate)"))
+    forcing_rate !== nothing && forcing_rate < 0 &&
+        throw(ArgumentError("forcing_rate must be nonnegative (got $forcing_rate)"))
 
     # Validate dk_forcing for spectrum types that use it
     if dk_forcing <= 0 && spectrum_type in (:ring, :kolmogorov)
@@ -281,7 +292,8 @@ function StochasticForcing(;
     # Compute the forcing spectrum √Q̂(k) on CPU first
     forcing_spectrum_cpu = compute_forcing_spectrum(
         wavenumbers, k_forcing, dk_forcing, energy,
-        domain_size, spectrum_type, dtype
+        domain_size, spectrum_type, dtype;
+        injection_metric
     )
 
     # Move spectrum to target architecture
@@ -303,6 +315,7 @@ function StochasticForcing(;
     StochasticForcing{T, N, A, CA}(
         forcing_spectrum,
         T(energy),
+        injection_metric,
         T(k_forcing),
         T(dk_forcing),
         T(dt),
@@ -327,6 +340,21 @@ function _normalize_spectrum_type(spectrum_type::Symbol)
         return :band
     end
     return spectrum_type
+end
+
+function _validate_injection_metric(injection_metric::Symbol)
+    injection_metric in (:direct, :vorticity_kinetic) ||
+        throw(ArgumentError("injection_metric must be :direct or :vorticity_kinetic (got :$injection_metric)"))
+    return nothing
+end
+
+function _injection_metric_weight(k2::T, injection_metric::Symbol) where T
+    if injection_metric === :direct
+        return one(T)
+    elseif injection_metric === :vorticity_kinetic
+        return iszero(k2) ? zero(T) : inv(k2)
+    end
+    _validate_injection_metric(injection_metric)
 end
 
 """
@@ -361,7 +389,8 @@ function build_wavenumbers(
 end
 
 """
-    compute_forcing_spectrum(wavenumbers, k_f, dk_f, ε, domain_size, spectrum_type, dtype)
+    compute_forcing_spectrum(wavenumbers, k_f, dk_f, ε, domain_size, spectrum_type, dtype;
+                             injection_metric=:direct)
 
 Compute the forcing amplitude spectrum √Q̂(k).
 
@@ -374,10 +403,13 @@ function compute_forcing_spectrum(
     ε::Real,
     domain_size::NTuple{N, Real},
     spectrum_type::Symbol,
-    dtype::Type{T}
+    dtype::Type{T};
+    injection_metric::Symbol=:direct,
 ) where {T<:AbstractFloat, N}
 
     spectrum_type = _normalize_spectrum_type(spectrum_type)
+    _validate_injection_metric(injection_metric)
+    ε < 0 && throw(ArgumentError("energy injection rate must be nonnegative (got $ε)"))
     field_size = ntuple(d -> length(wavenumbers[d]), N)
     spectrum = zeros(T, field_size)
 
@@ -395,16 +427,23 @@ function compute_forcing_spectrum(
     # Enforce zero mean (no forcing at k=0)
     spectrum[ntuple(_ -> 1, N)...] = zero(T)
 
-    # Normalize to achieve target energy injection rate ε
-    # Energy injection rate: ε = ∑_k Q̂(k) / (2 * domain_area)
-    domain_area = prod(T.(domain_size))
-
-    # Current unnormalized energy injection
-    ε0 = sum(spectrum.^2) / (2 * domain_area)
+    # Tarang stores unnormalized full FFT coefficients. Parseval therefore
+    # contributes M⁻², where M is the number of physical grid points.
+    weighted_power = zero(T)
+    for I in CartesianIndices(spectrum)
+        k2 = injection_metric === :direct ? zero(T) :
+             sum(d -> wavenumbers[d][I[d]]^2, 1:N)
+        weight = _injection_metric_weight(k2, injection_metric)
+        weighted_power += abs2(spectrum[I]) * weight
+    end
+    M = T(prod(field_size))
+    ε0 = weighted_power / (2 * M^2)
 
     if ε0 > 0
         # Scale spectrum to achieve target ε
         spectrum .*= sqrt(T(ε) / ε0)
+    elseif ε > 0
+        throw(ArgumentError("forcing spectrum has no representable nonzero modes for positive energy injection rate $ε"))
     end
 
     return spectrum
@@ -452,7 +491,7 @@ function _spectrum_amplitude(k::T, k_f::Real, dk_f::Real, spectrum_type::Symbol)
     if spectrum_type == :ring
         # Gaussian ring: concentrated around |k| = k_f
         # Q̂(k) ∝ exp(-(|k| - k_f)² / (2 δ_f²))
-        return exp(-((k - k_f)^2) / (2 * dk_f^2))
+        return exp(-((k - k_f)^2) / (4 * dk_f^2))
 
     elseif spectrum_type == :band
         # Sharp band: |k| ∈ [k_f - δ_f, k_f + δ_f]
@@ -472,9 +511,9 @@ function _spectrum_amplitude(k::T, k_f::Real, dk_f::Real, spectrum_type::Symbol)
 
     elseif spectrum_type == :kolmogorov
         # Large-scale forcing for Kolmogorov cascade
-        # Smooth cutoff at k_f
+        # Square root of Q̂(k) ∝ (k/k_f) exp(-(|k|-k_f)²/(2δ_f²)).
         if k < k_f + dk_f
-            return exp(-((k - k_f)^2) / (2 * dk_f^2)) * (k / k_f)
+            return exp(-((k - k_f)^2) / (4 * dk_f^2)) * sqrt(k / k_f)
         else
             return zero(T)
         end
