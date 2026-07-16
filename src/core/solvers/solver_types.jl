@@ -349,6 +349,19 @@ function _select_ivp_matsolver(choice, architecture::AbstractArchitecture,
     return _select_ivp_matsolver(choice, is_gpu(architecture), coupled)
 end
 
+function _cpu_only_matsolver_type(choice)
+    cpu_types = (
+        MatSolvers.DummySolver,
+        MatSolvers.DenseLUSolver,
+        MatSolvers.SparseLUSolver,
+        MatSolvers.WoodburySolver,
+        MatSolvers.BandedLUSolver,
+        MatSolvers.BlockDiagonalSolver,
+        MatSolvers.SPQRSolver,
+    )
+    return any(T -> choice === T || (choice isa Type && choice <: T), cpu_types)
+end
+
 function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
     auto = (choice isa Symbol || choice isa AbstractString) &&
            lowercase(String(choice)) == "auto"
@@ -357,7 +370,8 @@ function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
     end
 
     normalized = _normalize_matsolver(choice)
-    if gpu && coupled && normalized in (:sparse, :dense)
+    if gpu && coupled &&
+       (normalized in (:sparse, :dense) || _cpu_only_matsolver_type(normalized))
         throw(ArgumentError(
             "A coupled Jacobi/Chebyshev GPU IVP cannot use the CPU-only " *
             "matrix solver :$normalized. Leave matsolver=:auto or select " *

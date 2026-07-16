@@ -59,6 +59,9 @@ using Test
         @test Tarang._select_ivp_matsolver(:cuda_sparse, true, true) == :cuda_sparse
         @test_throws ArgumentError Tarang._select_ivp_matsolver(:sparse, true, true)
         @test_throws ArgumentError Tarang._select_ivp_matsolver(:dense, true, true)
+        @test_throws ArgumentError Tarang._select_ivp_matsolver(
+            Tarang.MatSolvers.SparseLUSolver, true, true,
+        )
     end
 
     @testset "matrix solver in-place allocations" begin
