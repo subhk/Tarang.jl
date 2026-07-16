@@ -110,6 +110,12 @@ struct LazyMultiDiff{T<:LazyFuture} <: LazyFuture
     axes::Vector{Int}
 end
 
+"""Fourier-space `(-Δ)^α` applied to one scalar-field expression."""
+struct LazyFractionalLaplacian{T<:LazyFuture} <: LazyFuture
+    operand::T
+    alpha::Float64
+end
+
 # ── Workspace ────────────────────────────────────────────────────────────────
 
 """
@@ -301,6 +307,10 @@ function translate_to_lazy(expr, state; target=nothing)
         return _translate_laplacian_to_lazy(expr.operand, state, target)
     end
 
+    if isa(expr, FractionalLaplacian)
+        return _translate_fractional_laplacian_to_lazy(expr.operand, expr.α, state, target)
+    end
+
     if isa(expr, Divergence)
         inner = expr.operand
         # div(grad(u)) == lap(u): the idiomatic spelling of a diffusion term.
@@ -321,6 +331,27 @@ function translate_to_lazy(expr, state; target=nothing)
     end
 
     return nothing
+end
+
+"""Translate `(-Δ)^α` when every target axis is Fourier.
+
+The interpreted fractional-Laplacian implementation has the same all-Fourier
+requirement.  Keeping the operator as one lazy node also evaluates it with one
+forward transform, one diagonal device broadcast, and one backward transform.
+"""
+function _translate_fractional_laplacian_to_lazy(operand, alpha, state, target)
+    target === nothing && return nothing
+    if isa(operand, VectorField)
+        comp = _vector_component_for_target(operand, target)
+        comp === nothing && return nothing
+        operand = comp
+    end
+    isa(operand, ScalarField) || return nothing
+    _lazy_bases_match(operand, target) || return nothing
+    all(b -> isa(b, FourierBasis), target.bases) || return nothing
+    op = translate_to_lazy(operand, state; target=target)
+    op === nothing && return nothing
+    return LazyFractionalLaplacian(op, Float64(alpha))
 end
 
 """True when `_apply_lazy_diff!` can differentiate along `basis` CORRECTLY for `field`.
@@ -811,6 +842,23 @@ function evaluate_lazy!(out::ScalarField, expr::LazyMultiDiff, state, ws::LazyWo
         src.current_layout = :g
         tmp === nothing || (tmp.current_layout = :g)
     end
+    return out
+end
+
+function evaluate_lazy!(out::ScalarField, expr::LazyFractionalLaplacian,
+                        state, ws::LazyWorkspace)
+    evaluate_lazy!(out, expr.operand, state, ws)
+    ensure_layout!(out, :c)
+    coeff = get_local_data(get_coeff_data(out))
+    k2 = get_local_data(_build_k_squared(out))
+    alpha = expr.alpha
+    if alpha >= 0
+        @. coeff *= k2 ^ alpha
+    else
+        @. coeff *= ifelse(k2 > 1e-14, k2 ^ alpha, zero(eltype(k2)))
+    end
+    out.current_layout = :c
+    ensure_layout!(out, :g)
     return out
 end
 
