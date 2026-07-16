@@ -56,6 +56,7 @@ const TEST_FILES = [
     "test_root_module_structure.jl",
     "test_cartesian_operators.jl",
     "test_stochastic_forcing.jl",
+    "test_separable_stochastic_forcing.jl",
     "test_temporal_filters.jl",
     "test_temporal_filters_extended.jl",
     "test_arithmetic.jl",
