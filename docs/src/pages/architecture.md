@@ -1,4 +1,4 @@
-# Architecture
+# Architecture and Codebase Structure
 
 Overview of Tarang.jl's internal architecture. This page describes how the pieces fit together — from coordinate/basis setup through problem assembly, subproblem decomposition, RHS evaluation, and time stepping. It's aimed at contributors and power users who want to understand (or extend) what happens under the hood.
 
@@ -14,6 +14,7 @@ Tarang.jl/
 │   ├── runtime_init.jl               # MPI, FFTW, logging, and GPU initialization
 │   ├── core/                         # Numerical model and solver implementation
 │   │   ├── load_*.jl                 # Stable domain-level load manifests
+│   │   ├── stochastic_forcing.jl     # Backend-neutral forcing state and updates
 │   │   ├── basis/                    # Basis contracts, matrices, and wavenumbers
 │   │   ├── distributor/              # MPI layouts and transposes
 │   │   ├── field/                    # Field types, storage, and layouts
@@ -30,6 +31,8 @@ Tarang.jl/
 │   │   └── namespaces.jl             # Fields/Problems/Solvers facade modules
 │   ├── tools/                        # Runtime, output, solver, and utility support
 │   │   ├── load_*.jl                 # Tool-layer load manifests
+│   │   ├── gpu_matsolvers.jl         # GPU matrix-solver types and registration
+│   │   ├── netcdf_output.jl          # Scheduled output and GPU host staging
 │   │   └── temporal_filters/         # Temporal-filter implementations
 │   └── extras/                       # Convenience domains and analysis helpers
 │       ├── load_extras.jl            # Extras load manifest
@@ -37,9 +40,14 @@ Tarang.jl/
 ├── ext/
 │   ├── TarangCUDAExt.jl              # CUDA weak-dependency extension
 │   └── cuda/                         # GPU kernels and transform backends
+│       ├── transforms.jl             # Field-level CUDA transform dispatch
+│       ├── mixed_transforms.jl       # Cached Fourier--Chebyshev plans/scratch
+│       └── cheb_deriv.jl             # Device-native DCT-I differentiation
 ├── examples/                         # Runnable simulations
-├── test/                             # Serial, MPI, and GPU test suites
-└── docs/                             # Documenter source and build configuration
+├── test/
+│   └── file_lists.jl                 # Serial, optional, MPI, and GPU CI registry
+└── docs/
+    └── make.jl                       # Documenter build and website navigation
 ```
 
 This map intentionally stops at stable subsystem boundaries. For an implementation detail, open the subsystem's entry file first. Files such as `basis.jl`, `field.jl`, `problems.jl`, `solvers.jl`, and `transforms.jl` act as manifests for focused files below the same-named directory.
@@ -114,6 +122,35 @@ Start from the layer that owns the behavior, then follow its manifest into a foc
 - `ext/cuda/`: CUDA-only implementations activated through `ext/TarangCUDAExt.jl`; core code must remain loadable without CUDA
 
 Tests mirror these ownership boundaries where practical. Use `test/file_lists.jl` to see the serial, MPI, optional, and GPU inventories used by CI.
+
+## GPU IVP, Forcing, and Output Ownership
+
+GPU support is an extension of the same solver stack, not a second solver tree.
+The core package owns backend-neutral state and dispatch hooks, while
+`ext/TarangCUDAExt.jl` installs CUDA implementations when CUDA.jl is loaded.
+This split keeps `using Tarang` valid on systems without CUDA.
+
+| Concern | Core owner | CUDA owner and allocation boundary | Primary tests |
+|---|---|---|---|
+| Stochastic forcing | `src/core/stochastic_forcing.jl` constructs, normalizes, caches, and applies `StochasticForcing` and `SeparableStochasticForcing` | Forcing arrays follow the field architecture. Pure Fourier forcing uses the full coefficient shape; Fourier--Chebyshev forcing draws only Fourier modes and combines them with a fixed Chebyshev profile. | `test/test_stochastic_forcing.jl`, `test/test_separable_stochastic_forcing.jl` |
+| Pure Fourier transforms | `src/core/transforms/transform_gpu.jl` defines the backend hook and field-layout contract | `ext/cuda/transforms.jl` dispatches 2D/3D Fourier fields to multidimensional cuFFT and reuses transform plans. | `test/test_gpu_transform_correctness.jl` |
+| Mixed transforms and derivatives | Core transform and operator code selects the required basis operation | `ext/cuda/mixed_transforms.jl` owns cached Fourier--Chebyshev plans and persistent scratch; `ext/cuda/cheb_deriv.jl` performs Chebyshev DCT-I differentiation without a CPU round trip. | `test/test_gpu_transform_correctness.jl`, `test/test_evaluator.jl` |
+| Coupled IVP solves | The subproblem timesteppers gather, solve, and scatter each Fourier-mode block | `src/tools/gpu_matsolvers.jl` provides `CuSparseLU` and reusable device RHS/solution buffers. The default `matsolver=:auto` selects it for a single-GPU mixed IVP. | `test/test_gpu_field_rk_allocations.jl`, `test/test_subproblem_rk.jl` |
+| NetCDF output | `src/tools/netcdf_output.jl` owns scheduling, diagnostic refresh, metadata, and writes | A per-write `NetCDFStagingCache` performs bulk GPU-to-host staging and reuses a staged scalar field within that write. Output after a completed step rebinds current state without re-solving constraints, so writing is observational. | `test/test_compatibility.jl`, `test/test_gpu_transform_correctness.jl` |
+
+The supported single-GPU IVP paths are:
+
+- Fourier--Fourier in 2D and Fourier--Fourier--Fourier in 3D: field-native RK,
+  multidimensional cuFFT, and `StochasticForcing` remain device-resident.
+- Fourier--Chebyshev in 2D and Fourier--Fourier--Chebyshev in 3D:
+  per-mode `CuSparseLU`, cached mixed-transform scratch, and
+  `SeparableStochasticForcing` keep the timestep path device-resident.
+
+After plans and workspaces are warm, these timestep paths reuse their device
+buffers rather than allocating on each `step!`. NetCDF is necessarily a host
+I/O boundary: it stages each requested GPU field to CPU memory, then writes the
+staged arrays. Distributed multi-GPU transforms and output have separate MPI
+layout constraints; do not infer their support from the single-GPU paths above.
 
 ## How the Solver Actually Works
 
