@@ -64,12 +64,13 @@ u     = VectorField(domain, "u")          # Velocity
 tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
 
 # ─── Stochastic Forcing ──────────────────────────────────────
-# Ring forcing in wavenumber space: energy injected in |k| ∈ [k_f - dk_f, k_f + dk_f]
+# Gaussian ring forcing in wavenumber space, concentrated near |k| = k_f
 # White-in-time: new random phase each timestep, amplitude set by ε
 forcing = StochasticForcing(
     field_size             = (Nx, Ny),
     domain_size            = (Lx, Ly),
     energy_injection_rate  = ε,
+    injection_metric       = :vorticity_kinetic, # ε is kinetic-energy injection
     k_forcing              = k_f,
     dk_forcing             = dk_f,
     dt                     = max_dt,
