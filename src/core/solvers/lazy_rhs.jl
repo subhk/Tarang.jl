@@ -1070,16 +1070,16 @@ function _apply_lazy_fourier_diff!(coeff_storage, field::ScalarField,
     data = get_local_data(coeff_storage)
     data === nothing && return coeff_storage
 
-    deriv_mult = _get_cached_lazy_deriv_mult(basis, order, uses_rfft)
+    deriv_mult = _get_cached_lazy_deriv_mult(basis, order, uses_rfft, data)
     if length(deriv_mult) != size(data, axis)
         error("Lazy Fourier derivative coefficient size mismatch on axis $axis: " *
               "local coefficient size is $(size(data, axis)) but expected $(length(deriv_mult)) " *
               "(basis=$(typeof(basis)), uses_rfft=$uses_rfft).")
     end
 
-    # `data` is a concrete array (SerialFieldStorage is parametrized on the array
-    # type) and `deriv_mult` is a concrete Vector{ComplexF64}, so this broadcast is
-    # type-stable inline — no function barrier needed.
+    # SerialFieldStorage fixes `data`'s concrete backend, and the cached
+    # multiplier is materialized on that same backend, so the broadcast stays
+    # type-stable and device-local.
     mult_shape = ntuple(i -> i == axis ? length(deriv_mult) : 1, ndims(data))
     data .*= reshape(deriv_mult, mult_shape...)
     return coeff_storage
@@ -1104,6 +1104,20 @@ function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int, uses_rfft:
     deriv_mult = ComplexF64.((im .* k_axis) .^ order)
     basis.transforms[cache_key] = deriv_mult
     return deriv_mult
+end
+
+"""Return the cached Fourier multiplier on the same backend as `data`."""
+function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int,
+                                     uses_rfft::Bool, data::AbstractArray)
+    host = _get_cached_lazy_deriv_mult(basis, order, uses_rfft)
+    is_gpu_array(data) || return host
+
+    cache_key = (:lazy_deriv_mult_device, order, uses_rfft, architecture(data))
+    cached = get(basis.transforms, cache_key, nothing)
+    cached !== nothing && return cached
+    device_multiplier = copy_to_device(host, data)
+    basis.transforms[cache_key] = device_multiplier
+    return device_multiplier
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place.

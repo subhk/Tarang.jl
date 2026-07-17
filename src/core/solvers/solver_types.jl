@@ -324,10 +324,73 @@ function _gpu_pure_fourier_state(state::Vector{<:ScalarField})
     return found_spatial
 end
 
+function _gpu_coupled_state(state::Vector{<:ScalarField})
+    found_spatial = false
+    found_coupled = false
+    for field in state
+        isempty(field.bases) && continue
+        found_spatial = true
+        is_gpu(field_architecture(field)) || return false
+        found_coupled |= any(b -> b !== nothing && isa(b, JacobiBasis), field.bases)
+    end
+    return found_spatial && found_coupled
+end
+
+function _ivp_state_architecture(state::Vector{<:ScalarField})
+    for field in state
+        isempty(field.bases) && continue
+        return field_architecture(field)
+    end
+    return CPU()
+end
+
+function _select_ivp_matsolver(choice, architecture::AbstractArchitecture,
+                               coupled::Bool)
+    return _select_ivp_matsolver(choice, is_gpu(architecture), coupled)
+end
+
+function _cpu_only_matsolver_type(choice)
+    cpu_types = (
+        MatSolvers.DummySolver,
+        MatSolvers.DenseLUSolver,
+        MatSolvers.SparseLUSolver,
+        MatSolvers.WoodburySolver,
+        MatSolvers.BandedLUSolver,
+        MatSolvers.BlockDiagonalSolver,
+        MatSolvers.SPQRSolver,
+    )
+    return any(T -> choice === T || (choice isa Type && choice <: T), cpu_types)
+end
+
+function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
+    auto = (choice isa Symbol || choice isa AbstractString) &&
+           lowercase(String(choice)) == "auto"
+    if auto
+        return gpu && coupled ? :cuda_sparse : :sparse
+    end
+
+    normalized = _normalize_matsolver(choice)
+    if gpu && coupled &&
+       (normalized in (:sparse, :dense) || _cpu_only_matsolver_type(normalized))
+        throw(ArgumentError(
+            "A coupled Jacobi/Chebyshev GPU IVP cannot use the CPU-only " *
+            "matrix solver :$normalized. Leave matsolver=:auto or select " *
+            "matsolver=:cuda_sparse explicitly.",
+        ))
+    end
+    return normalized
+end
+
+function _select_ivp_matsolver(choice, state::Vector{<:ScalarField})
+    architecture = _ivp_state_architecture(state)
+    coupled = _gpu_coupled_state(state)
+    return _select_ivp_matsolver(choice, architecture, coupled)
+end
+
 function _build_initial_value_solver(problem::IVP, timestepper;
                                      dt::Real=1e-3,
                                      device::String="cpu",
-                                     matsolver::Union{String,Symbol,Type,Tuple}=:sparse)
+                                     matsolver::Union{String,Symbol,Type,Tuple}=:auto)
     setup_domain!(problem)
 
     # Merge boundary conditions into equation system
@@ -335,9 +398,9 @@ function _build_initial_value_solver(problem::IVP, timestepper;
 
     validate_problem(problem)
 
-    base = SolverBaseData(problem; matsolver=matsolver)
-
     state = collect_state_fields(problem.variables)
+    selected_matsolver = _select_ivp_matsolver(matsolver, state)
+    base = SolverBaseData(problem; matsolver=selected_matsolver)
 
     perf_stats = SolverPerformanceStats()
 

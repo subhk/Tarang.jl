@@ -352,6 +352,72 @@ end
     end
 end
 
+@testset "NetCDF writes do not mutate refreshed 3D constraints" begin
+    tmp = mktempdir()
+    cd(tmp) do
+        N = 6
+        dt = 2e-3
+        coords = CartesianCoordinates("x", "y", "z")
+        dist = Distributor(coords; dtype=Float64, device=CPU())
+        xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2pi), dealias=1.0)
+        yb = RealFourier(coords["y"]; size=N, bounds=(0.0, 2pi), dealias=1.0)
+        zb = RealFourier(coords["z"]; size=N, bounds=(0.0, 2pi), dealias=1.0)
+        domain = Domain(dist, (xb, yb, zb))
+
+        w = ntuple(i -> ScalarField(domain, "w$i"), 3)
+        A = ntuple(i -> ScalarField(domain, "A$i"), 3)
+        u = ntuple(i -> ScalarField(domain, "u$i"), 3)
+        tau = ntuple(i -> ScalarField(dist, "tau_A$i", (), Float64), 3)
+
+        problem = IVP([w..., A..., u..., tau...])
+        add_parameters!(problem; nu=0.01)
+        for i in 1:3
+            add_equation!(problem, "∂t(w$i) - nu*Δ(w$i) = 0")
+            add_equation!(problem, "Δ(A$i) + tau_A$i + w$i = 0")
+        end
+        add_equation!(problem, "u1 - (∂y(A3) - ∂z(A2)) = 0")
+        add_equation!(problem, "u2 - (∂z(A1) - ∂x(A3)) = 0")
+        add_equation!(problem, "u3 - (∂x(A2) - ∂y(A1)) = 0")
+        for i in 1:3
+            add_bc!(problem, "integ(A$i) = 0")
+        end
+
+        x, y, z = local_grids(dist, xb, yb, zb)
+        Z = reshape(z, 1, 1, :)
+        for field in w
+            ensure_layout!(field, :g)
+        end
+        get_grid_data(w[1]) .= -cos.(x) .* sin.(y') .* sin.(Z)
+        get_grid_data(w[2]) .= -sin.(x) .* cos.(y') .* sin.(Z)
+        get_grid_data(w[3]) .= 2 .* sin.(x) .* sin.(y') .* cos.(Z)
+
+        solver = InitialValueSolver(problem, RK222(); dt)
+        step!(solver, dt)
+        ensure_layout!(w[1], :g)
+        written_field_before = copy(get_grid_data(w[1]))
+        for field in u
+            ensure_layout!(field, :g)
+        end
+        velocity_before = map(field -> copy(get_grid_data(field)), u)
+
+        handler = add_file_handler(joinpath(tmp, "observational"), solver;
+                                   iter=1, max_writes=1)
+        add_task!(handler, w[1]; name="w1")
+        process!(handler)
+
+        written_field = dropdims(
+            Tarang.group_ncread(Tarang.current_file(handler), "vars", "w1"); dims=1)
+        @test written_field ≈ written_field_before rtol=1e-12 atol=1e-12
+
+        for field in u
+            ensure_layout!(field, :g)
+        end
+        for i in 1:3
+            @test get_grid_data(u[i]) ≈ velocity_before[i] rtol=1e-12 atol=1e-12
+        end
+    end
+end
+
 @testset "Forced SQG turbulence example controls" begin
     example = read(joinpath(dirname(@__DIR__), "examples", "ivp", "forced_sqg_turbulence.jl"), String)
 

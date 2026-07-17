@@ -51,6 +51,19 @@ using Test
         @test Tarang._normalize_matsolver(:unknown) == :unknown
     end
 
+    @testset "mixed GPU IVP matrix solver selection" begin
+        @test Tarang._select_ivp_matsolver(:auto, false, true) == :sparse
+        @test Tarang._select_ivp_matsolver("auto", false, false) == :sparse
+        @test Tarang._select_ivp_matsolver(:auto, true, false) == :sparse
+        @test Tarang._select_ivp_matsolver(:auto, true, true) == :cuda_sparse
+        @test Tarang._select_ivp_matsolver(:cuda_sparse, true, true) == :cuda_sparse
+        @test_throws ArgumentError Tarang._select_ivp_matsolver(:sparse, true, true)
+        @test_throws ArgumentError Tarang._select_ivp_matsolver(:dense, true, true)
+        @test_throws ArgumentError Tarang._select_ivp_matsolver(
+            Tarang.MatSolvers.SparseLUSolver, true, true,
+        )
+    end
+
     @testset "matrix solver in-place allocations" begin
         MS = Tarang.MatSolvers
         A = spdiagm(0 => fill(4.0 + 0im, 8),

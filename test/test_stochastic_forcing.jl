@@ -22,6 +22,25 @@ println("=" ^ 60)
 println("Stochastic Forcing Tests")
 println("=" ^ 60)
 
+function cpu_work_diagnostic_allocations(forcing, sol)
+    # Keep measurement in a type-specialized function. Julia 1.10 can charge a
+    # 16-byte captured-variable box when @allocated is expanded in a testset.
+    return (
+        @allocated(begin
+            work_stratonovich(forcing, sol)
+            nothing
+        end),
+        @allocated(begin
+            work_ito(forcing, sol)
+            nothing
+        end),
+        @allocated(begin
+            instantaneous_power(forcing, sol)
+            nothing
+        end),
+    )
+end
+
 @testset "StochasticForcing" begin
 
     @testset "CPU Construction" begin
@@ -554,11 +573,7 @@ println("=" ^ 60)
         work_ito(forcing, sol)
         instantaneous_power(forcing, sol)
 
-        allocations = (
-            @allocated(work_stratonovich(forcing, sol)),
-            @allocated(work_ito(forcing, sol)),
-            @allocated(instantaneous_power(forcing, sol)),
-        )
+        allocations = cpu_work_diagnostic_allocations(forcing, sol)
         @test allocations == (0, 0, 0)
     end
 
@@ -1159,6 +1174,25 @@ end
             @test solver.sim_time ≈ dt
             @test all(isfinite, Array(get_coeff_data(ζ)))
             @test any(!iszero, Array(forcing.cached_forcing))
+
+            state = solver.timestepper_state
+            @test length(state.workspace_fields) ==
+                  (solver.timestepper.stages + 1) * length(state.history[end])
+
+            # Warm FFT plans, nonlinear pools, forcing kernels, and the state
+            # recycler before measuring device allocations. A steady 2D step
+            # should launch kernels only; every full-sized device buffer is
+            # owned by the solver, forcing, or timestepper workspace already.
+            for _ in 1:5
+                step!(solver)
+            end
+            CUDA.synchronize()
+            allocation_stats = getfield(CUDA, :alloc_stats)
+            allocated_before = allocation_stats.alloc_bytes
+            step!(solver)
+            device_allocated = allocation_stats.alloc_bytes - allocated_before
+            CUDA.synchronize()
+            @test device_allocated == 0
         end
 
     else
