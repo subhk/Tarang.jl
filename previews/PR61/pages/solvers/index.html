@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Solvers · Tarang.jl</title><meta name="title" content="Solvers · Tarang.jl"/><meta property="og:title" content="Solvers · Tarang.jl"/><meta property="twitter:title" content="Solvers · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/pages/solvers/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/pages/solvers/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/pages/solvers/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../../tutorials/overview/">Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../../examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../coordinates/">Coordinates</a></li><li><a class="tocitem" href="../bases/">Bases</a></li><li><a class="tocitem" href="../domains/">Domains</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../operators/">Operators</a></li><li><a class="tocitem" href="../problems/">Problems</a></li><li class="is-active"><a class="tocitem" href>Solvers</a><ul class="internal"><li><a class="tocitem" href="#InitialValueSolver"><span>InitialValueSolver</span></a></li><li><a class="tocitem" href="#BoundaryValueSolver"><span>BoundaryValueSolver</span></a></li><li><a class="tocitem" href="#EigenvalueSolver"><span>EigenvalueSolver</span></a></li><li><a class="tocitem" href="#Time-Steppers"><span>Time Steppers</span></a></li><li><a class="tocitem" href="#Adaptive-Time-Stepping"><span>Adaptive Time Stepping</span></a></li><li><a class="tocitem" href="#Stopping-Conditions"><span>Stopping Conditions</span></a></li><li><a class="tocitem" href="#Complete-Example"><span>Complete Example</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../parallelism/">Parallelism</a></li><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../les_models/">LES Models</a></li><li><a class="tocitem" href="../gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../architecture/">Architecture &amp; Codebase</a></li><li><a class="tocitem" href="../testing/">Testing</a></li><li><a class="tocitem" href="../contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox"/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../api/bases/">Bases</a></li><li><a class="tocitem" href="../../api/domains/">Domains</a></li><li><a class="tocitem" href="../../api/fields/">Fields</a></li><li><a class="tocitem" href="../../api/operators/">Operators</a></li><li><a class="tocitem" href="../../api/problems/">Problems</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers</a></li><li><a class="tocitem" href="../../api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../api/gpu/">GPU</a></li><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis</a></li><li><a class="tocitem" href="../../api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Solvers</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Solvers</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/pages/solvers.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Solvers"><a class="docs-heading-anchor" href="#Solvers">Solvers</a><a id="Solvers-1"></a><a class="docs-heading-anchor-permalink" href="#Solvers" title="Permalink"></a></h1><p>Solvers integrate PDEs in time or solve for steady states.</p><h2 id="InitialValueSolver"><a class="docs-heading-anchor" href="#InitialValueSolver">InitialValueSolver</a><a id="InitialValueSolver-1"></a><a class="docs-heading-anchor-permalink" href="#InitialValueSolver" title="Permalink"></a></h2><p>For time-dependent problems (IVP).</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 2π))
+ybasis = RealFourier(coords[&quot;y&quot;]; size=16, bounds=(0.0, 2π))
+domain = Domain(dist, (xbasis, ybasis))
+
+u = ScalarField(domain, &quot;u&quot;)
+problem = IVP([u])
+add_parameters!(problem, nu=0.1)
+add_equation!(problem, &quot;∂t(u) - nu*lap(u) = 0&quot;)
+set!(u, (x, y) -&gt; sin(x) * cos(y))
+
+# Create solver
+solver = InitialValueSolver(problem, RK222(); dt=0.001)
+
+# Time stepping
+t_end = 0.01
+while solver.sim_time &lt; t_end
+    step!(solver)
+end</code></pre><h3 id="Properties"><a class="docs-heading-anchor" href="#Properties">Properties</a><a id="Properties-1"></a><a class="docs-heading-anchor-permalink" href="#Properties" title="Permalink"></a></h3><pre><code class="language-julia hljs">solver.problem       # The IVP problem
+solver.timestepper   # Time integration scheme
+solver.dt            # Current timestep
+solver.sim_time      # Current simulation time
+solver.iteration     # Iteration count
+solver.state         # Vector of the problem&#39;s ScalarFields
+solver.rhs_plan      # Compiled RHS plan; `solver.rhs_plan.is_compiled` is the fast-path flag</code></pre><h3 id="Methods"><a class="docs-heading-anchor" href="#Methods">Methods</a><a id="Methods-1"></a><a class="docs-heading-anchor-permalink" href="#Methods" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Advance one step
+step!(solver)           # Use solver.dt
+step!(solver, 5e-4)     # Step with the given dt, and adopt it as solver.dt
+
+# Check stopping conditions
+proceed(solver)         # Returns true if should continue
+
+# Run the whole loop (handles stopping, CFL, outputs, callbacks)
+run!(solver; stop_iteration=100, progress=false)
+
+# Print a tree-style summary of the solver configuration
+diagnose(solver)</code></pre><h3 id="Internal-solver-build-path"><a class="docs-heading-anchor" href="#Internal-solver-build-path">Internal solver build path</a><a id="Internal-solver-build-path-1"></a><a class="docs-heading-anchor-permalink" href="#Internal-solver-build-path" title="Permalink"></a></h3><p>At solver construction, <code>InitialValueSolver(problem, timestepper; dt=...)</code> runs several build stages in order:</p><ol><li><strong><code>build_solver_matrices!(solver)</code></strong> — parses the equation strings and assembles the <strong>global</strong> <code>L_matrix</code>, <code>M_matrix</code>, and <code>F_vector</code> for legacy fall-back paths. These are stored in <code>problem.parameters</code>.</li><li><strong><code>_try_build_subproblems!(solver)</code></strong> — this is the fast path. It decomposes the problem into per-Fourier-mode subproblems via <code>build_subproblems</code> in <code>src/core/subsystems/</code>, building small sparse <code>L_min</code> / <code>M_min</code> matrices per mode, applying left/right permutations, and running valid-mode filtering to drop trivially-satisfied constraint rows (like <code>integ(p) = 0</code> at non-DC modes). The resulting <code>Tuple{Vararg{Subproblem}}</code> is stored in <code>problem.parameters[&quot;subproblems&quot;]</code> and drives the modern IMEX stepper.</li><li><strong><code>build_lazy_rhs_plan!(solver)</code></strong> — walks each equation&#39;s <code>F</code> expression and translates it into a type-parametric <code>LazyFuture</code> tree (in <code>src/core/solvers/lazy_rhs.jl</code>). Each node (<code>LazyAdd</code>, <code>LazySub</code>, <code>LazyMul</code>, <code>LazyDiv</code>, <code>LazyPow</code>, <code>LazyUnaryFunc</code>, <code>LazyDiff</code>, <code>LazyMultiDiff</code>, <code>LazyStateField</code>, <code>LazyParamField</code>, <code>LazyConst</code>, …) has a specialized <code>evaluate_lazy!</code> method. Julia&#39;s JIT then specializes the whole <code>evaluate_lazy!</code> call chain on first use — eliminating dynamic dispatch and fusing broadcast operations. If translation fails for any equation, the plan&#39;s <code>is_compiled</code> flag stays <code>false</code> and <code>evaluate_rhs</code> falls back to the interpreted expression path <strong>for the entire solver</strong>. See <a href="../../api/solvers/#rhs-compilation">the RHS compilation section</a> — the fallback is ~100× slower, so it is worth checking (<code>solver.rhs_plan.is_compiled</code>, or the <code>diagnose(solver)</code> output).</li><li><strong><code>_apply_bc_values_to_equations!(solver, 0.0)</code></strong> — only runs if there are time- or space-dependent BCs. Populates the initial <code>equation_data[eq_idx][&quot;F&quot;]</code> slots with the BC values evaluated at <code>t=0</code>, and auto-registers global coordinate arrays in <code>problem.bc_manager.coordinate_fields</code> so user BC expressions referencing <code>x</code>, <code>y</code>, <code>z</code>, <code>t</code> can be resolved at runtime.</li></ol><p>All four steps are transparent to the user. You only interact with the resulting <code>solver</code> object.</p><h2 id="BoundaryValueSolver"><a class="docs-heading-anchor" href="#BoundaryValueSolver">BoundaryValueSolver</a><a id="BoundaryValueSolver-1"></a><a class="docs-heading-anchor-permalink" href="#BoundaryValueSolver" title="Permalink"></a></h2><p><code>BoundaryValueSolver</code> solves both steady problem types: it dispatches on the problem, solving an <code>LBVP</code> with a single linear solve and an <code>NLBVP</code> with Newton iteration. There is no separate nonlinear solver type.</p><h3 id="Linear-(LBVP)"><a class="docs-heading-anchor" href="#Linear-(LBVP)">Linear (LBVP)</a><a id="Linear-(LBVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Linear-(LBVP)" title="Permalink"></a></h3><p>Manufactured Poisson problem <code>Δu = -2</code> on <code>z ∈ [0, 1]</code> with <code>u(0) = u(1) = 0</code>, whose exact solution is <code>u(z) = z(1-z)</code>:</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=4,  bounds=(0.0, 2π))
+zbasis = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))
+domain = Domain(dist, (xbasis, zbasis))
+
+u    = ScalarField(domain, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (xbasis,), Float64)
+tau2 = ScalarField(dist, &quot;tau2&quot;, (xbasis,), Float64)
+lb   = derivative_basis(zbasis, 2)
+
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; Lz=1.0, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2))
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=Lz) = 0&quot;)
+
+# Create solver and solve
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+
+# Solution is in the field variables
+ensure_layout!(u, :g)
+get_grid_data(u)          # matches z(1-z) to 1.4e-16</code></pre><h3 id="Nonlinear-(NLBVP)"><a class="docs-heading-anchor" href="#Nonlinear-(NLBVP)">Nonlinear (NLBVP)</a><a id="Nonlinear-(NLBVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Nonlinear-(NLBVP)" title="Permalink"></a></h3><p>Declare the problem as an <code>NLBVP</code> and put the nonlinear terms on the right-hand side. The same <code>BoundaryValueSolver</code> then runs a per-Fourier-mode Newton iteration, rebuilding the Frechet Jacobian at the current state each iteration.</p><pre><code class="language-julia hljs"># Δu + lift(τ) = u² + g   with   g = -2 - (z(1-z))²
+# chosen so the equation reduces to Δu = -2 and the exact solution is again z(1-z).
+g = ScalarField(domain, &quot;g&quot;)
+ensure_layout!(g, :g)
+zg = Tarang.create_meshgrid(domain; on_device=false)[&quot;z&quot;]
+get_grid_data(g) .= -2 .- (zg .* (1 .- zg)) .^ 2
+
+problem = NLBVP([u, tau1, tau2])
+add_parameters!(problem; Lz=1.0, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2), g=g)
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = u*u + g&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=Lz) = 0&quot;)
+
+ensure_layout!(u, :g)
+get_grid_data(u) .= 0.0   # Newton initial guess
+
+solver = BoundaryValueSolver(problem; tolerance=1e-10, max_iterations=50)
+solve!(solver)            # Newton; returns the solver, warns if it does not converge</code></pre><p>Only <code>tolerance</code> and <code>max_iterations</code> are Newton knobs (defaults <code>1e-10</code> and <code>100</code>); they can also be set after construction (<code>solver.tolerance = 1e-8</code>). <code>solve!</code> always returns the solver and leaves the solution in the field variables — it does not return a convergence flag. Non-convergence is reported as a warning naming the final residual:</p><pre><code class="nohighlight hljs">┌ Warning: NLBVP per-mode Newton did not reach tolerance 1.0e-10 in 100 iters (final |F|=…)</code></pre><h2 id="EigenvalueSolver"><a class="docs-heading-anchor" href="#EigenvalueSolver">EigenvalueSolver</a><a id="EigenvalueSolver-1"></a><a class="docs-heading-anchor-permalink" href="#EigenvalueSolver" title="Permalink"></a></h2><p>For eigenvalue problems (EVP). The eigenvalue symbol declared with <code>eigenvalue=</code> replaces <code>dt(...)</code> in the equations, so <code>dt(u) - Δ(u) = 0</code> becomes the generalized problem <code>σ M u + L u = 0</code> and the returned values are the growth rates <code>σ</code>.</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+zbasis = ChebyshevT(coords[&quot;z&quot;]; size=24, bounds=(0.0, 1.0))
+domain = Domain(dist, (zbasis,))
+
+u    = ScalarField(domain, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (), Float64)
+tau2 = ScalarField(dist, &quot;tau2&quot;, (), Float64)
+lb   = derivative_basis(zbasis, 2)
+
+problem = EVP([u, tau1, tau2]; eigenvalue=:σ)
+add_parameters!(problem; Lz=1.0, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2))
+add_equation!(problem, &quot;dt(u) - Δ(u) - l1 - l2 = 0&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=Lz) = 0&quot;)
+
+# Create solver
+solver = EigenvalueSolver(problem;
+    nev=4,        # Number of eigenvalues
+    which=&quot;SM&quot;    # Smallest magnitude
+)
+
+# Solve
+eigenvalues, eigenvectors = solve!(solver)
+# eigenvalues ≈ [-9.8696, -39.4784, -88.8264, -157.9137] = -(nπ)², the Dirichlet Laplacian</code></pre><p><code>nev</code>, <code>which</code> and <code>target</code> may be given to the constructor or overridden at solve time (<code>solve!(solver; nev=8, which=&quot;LR&quot;)</code>); the values used are stored back on the solver. Passing <code>target=0.0+0.0im</code> selects the <code>nev</code> eigenvalues closest to the target instead of using <code>which</code>.</p><p>Eigenvectors come back only when the problem has exactly one active subproblem — as above, where there is no separable Fourier axis. A Fourier axis makes every mode its own subproblem, and <code>solve!</code> then returns the eigenvalues pooled over all modes together with an empty <code>0×0</code> eigenvector matrix.</p><h3 id="Which-Eigenvalues"><a class="docs-heading-anchor" href="#Which-Eigenvalues">Which Eigenvalues</a><a id="Which-Eigenvalues-1"></a><a class="docs-heading-anchor-permalink" href="#Which-Eigenvalues" title="Permalink"></a></h3><ul><li><code>&quot;LM&quot;</code>: Largest magnitude (default)</li><li><code>&quot;SM&quot;</code>: Smallest magnitude</li><li><code>&quot;LR&quot;</code>: Largest real part (most unstable)</li><li><code>&quot;SR&quot;</code>: Smallest real part</li><li><code>&quot;LI&quot;</code>: Largest imaginary part</li><li><code>&quot;SI&quot;</code>: Smallest imaginary part</li></ul><h2 id="Time-Steppers"><a class="docs-heading-anchor" href="#Time-Steppers">Time Steppers</a><a id="Time-Steppers-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Steppers" title="Permalink"></a></h2><h3 id="IMEX-Runge-Kutta"><a class="docs-heading-anchor" href="#IMEX-Runge-Kutta">IMEX Runge-Kutta</a><a id="IMEX-Runge-Kutta-1"></a><a class="docs-heading-anchor-permalink" href="#IMEX-Runge-Kutta" title="Permalink"></a></h3><pre><code class="language-julia hljs">RK111()  # 1st order, 1 stage
+RK222()  # 2nd order, 3 stages: explicit first stage + 2 implicit stages (recommended)
+RK443()  # 3rd order, 4 stages (higher accuracy)
+RKSMR()  # SMR: explicit 3rd order, implicit 2nd order</code></pre><h3 id="IMEX-Multistep-Methods"><a class="docs-heading-anchor" href="#IMEX-Multistep-Methods">IMEX Multistep Methods</a><a id="IMEX-Multistep-Methods-1"></a><a class="docs-heading-anchor-permalink" href="#IMEX-Multistep-Methods" title="Permalink"></a></h3><p>For problems with stiff linear terms:</p><pre><code class="language-julia hljs">CNAB1()  # Crank-Nicolson Adams-Bashforth, 1st order
+CNAB2()  # Crank-Nicolson Adams-Bashforth, 2nd order
+
+SBDF1()  # Semi-implicit BDF, 1st order
+SBDF2()  # Semi-implicit BDF, 2nd order
+SBDF3()  # Semi-implicit BDF, 3rd order
+SBDF4()  # Semi-implicit BDF, 4th order</code></pre><p>Exponential and diagonal-spectral families are also public:</p><pre><code class="language-julia hljs">ETD_RK222()
+ETD_CNAB2()
+ETD_SBDF2()
+
+DiagonalIMEX_RK222()
+DiagonalIMEX_RK443()
+DiagonalIMEX_SBDF2()</code></pre><p>The ETD types use global matrix φ-functions in serial; under MPI pure-Fourier execution they currently share the distributed ETD-RK2 path. Diagonal IMEX requires a <code>SpectralLinearOperator</code> registered with <code>set_spectral_linear_operator!</code>.</p><h3 id="Choosing-a-Timestepper"><a class="docs-heading-anchor" href="#Choosing-a-Timestepper">Choosing a Timestepper</a><a id="Choosing-a-Timestepper-1"></a><a class="docs-heading-anchor-permalink" href="#Choosing-a-Timestepper" title="Permalink"></a></h3><table><tr><th style="text-align: right">Problem Type</th><th style="text-align: right">Recommended</th></tr><tr><td style="text-align: right">General purpose</td><td style="text-align: right">RK222, RK443</td></tr><tr><td style="text-align: right">Classic incompressible DNS</td><td style="text-align: right">RKSMR</td></tr><tr><td style="text-align: right">Stiff linear term</td><td style="text-align: right">CNAB2, SBDF2</td></tr><tr><td style="text-align: right">Smooth high-order integration</td><td style="text-align: right">RK443, SBDF3, SBDF4</td></tr><tr><td style="text-align: right">Affordable global matrix exponential</td><td style="text-align: right">ETD<em>RK222, ETD</em>CNAB2, ETD_SBDF2</td></tr><tr><td style="text-align: right">Pure-Fourier diagonal linear term</td><td style="text-align: right">Diagonal IMEX family</td></tr></table><h2 id="Adaptive-Time-Stepping"><a class="docs-heading-anchor" href="#Adaptive-Time-Stepping">Adaptive Time Stepping</a><a id="Adaptive-Time-Stepping-1"></a><a class="docs-heading-anchor-permalink" href="#Adaptive-Time-Stepping" title="Permalink"></a></h2><h3 id="CFL-Condition"><a class="docs-heading-anchor" href="#CFL-Condition">CFL Condition</a><a id="CFL-Condition-1"></a><a class="docs-heading-anchor-permalink" href="#CFL-Condition" title="Permalink"></a></h3><p><code>CFL</code> is built from an <strong><code>InitialValueSolver</code></strong> (not from the problem), and velocities are registered as <code>VectorField</code>s. The simplest way to use it is to hand it to <code>run!</code>, which recomputes <code>solver.dt</code> before each step:</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 2π), dealias=3/2)
+ybasis = RealFourier(coords[&quot;y&quot;]; size=16, bounds=(0.0, 2π), dealias=3/2)
+domain = Domain(dist, (xbasis, ybasis))
+
+s = ScalarField(domain, &quot;s&quot;)
+u = VectorField(domain, &quot;u&quot;)
+
+problem = IVP([s, u])
+add_parameters!(problem, nu=0.05)
+add_equation!(problem, &quot;∂t(s) - nu*lap(s) = -u⋅∇(s)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*lap(u) = 0&quot;)
+set!(s, (x, y) -&gt; sin(x) * cos(y))
+set!(u.components[1], (x, y) -&gt; 0.5)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+# Create CFL controller from the SOLVER
+cfl = CFL(solver;
+    initial_dt=1e-3,  # Starting timestep
+    cadence=5,        # Recompute dt every 5 iterations
+    safety=0.4,       # Safety factor
+    threshold=0.1,    # Only commit a dt change larger than 10% (avoids LU rebuilds)
+    max_change=1.5,   # Max dt increase per update
+    min_change=0.5,   # Max dt decrease per update
+    max_dt=0.01       # Upper limit on dt
+)
+
+# Register velocity field (VectorField only)
+add_velocity!(cfl, u)
+
+# run! drives the controller
+run!(solver; stop_iteration=10, cfl=cfl, progress=false)
+solver.dt          # 0.01 — updated by the controller</code></pre><p>If you write the loop yourself, ask the controller for the new step and assign it:</p><pre><code class="language-julia hljs">solver.stop_iteration = 20
+while proceed(solver)
+    solver.dt = compute_timestep(cfl)
+    step!(solver)
+end</code></pre><h3 id="CFL-Parameters"><a class="docs-heading-anchor" href="#CFL-Parameters">CFL Parameters</a><a id="CFL-Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#CFL-Parameters" title="Permalink"></a></h3><p>All are keyword arguments to <code>CFL(solver; …)</code> and are also live fields of the returned object (<code>cfl.max_dt = 0.02</code> after construction is fine).</p><table><tr><th style="text-align: right">Parameter</th><th style="text-align: right">Default</th><th style="text-align: right">Typical Value</th><th style="text-align: right">Description</th></tr><tr><td style="text-align: right">initial_dt</td><td style="text-align: right">0.01</td><td style="text-align: right">your starting dt</td><td style="text-align: right">dt used before the first recomputation</td></tr><tr><td style="text-align: right">cadence</td><td style="text-align: right">1</td><td style="text-align: right">1-10</td><td style="text-align: right">Recompute dt every N iterations</td></tr><tr><td style="text-align: right">safety</td><td style="text-align: right">0.4</td><td style="text-align: right">0.3-0.5</td><td style="text-align: right">Lower = more stable</td></tr><tr><td style="text-align: right">threshold</td><td style="text-align: right">0.1</td><td style="text-align: right">0.0-0.2</td><td style="text-align: right">Relative change below which dt is kept (0 = commit every change)</td></tr><tr><td style="text-align: right">max_change</td><td style="text-align: right">2.0</td><td style="text-align: right">1.2-2.0</td><td style="text-align: right">Smooth dt increases</td></tr><tr><td style="text-align: right">min_change</td><td style="text-align: right">0.5</td><td style="text-align: right">0.5</td><td style="text-align: right">Prevent sudden drops</td></tr><tr><td style="text-align: right">max_dt</td><td style="text-align: right">Inf</td><td style="text-align: right">your output cadence</td><td style="text-align: right">Hard ceiling on dt</td></tr></table><p>There is no <code>min_dt</code>: the floor on the timestep is expressed as the <em>ratio</em> <code>min_change</code>, not as an absolute value. The current step is <code>cfl.current_dt</code>.</p><h2 id="Stopping-Conditions"><a class="docs-heading-anchor" href="#Stopping-Conditions">Stopping Conditions</a><a id="Stopping-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Stopping-Conditions" title="Permalink"></a></h2><pre><code class="language-julia hljs"># Set stop conditions
+solver.stop_sim_time = 10.0      # Stop at t=10
+solver.stop_wall_time = 3600.0   # Stop after 1 hour
+solver.stop_iteration = 10000    # Stop after 10000 steps
+
+# Use proceed() to check
+while proceed(solver)
+    step!(solver)
+end</code></pre><p><code>run!</code> sets the same three fields from its <code>stop_time</code>, <code>stop_wall_time</code> and <code>stop_iteration</code> keywords, so <code>run!(solver; stop_time=10.0)</code> is equivalent to the loop above.</p><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang
+
+# Domain
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=32, bounds=(0.0, 2π), dealias=3/2)
+ybasis = RealFourier(coords[&quot;y&quot;]; size=32, bounds=(0.0, 2π), dealias=3/2)
+domain = Domain(dist, (xbasis, ybasis))
+
+# Fields and problem: a scalar advected by a fixed velocity, with diffusion
+s = ScalarField(domain, &quot;s&quot;)
+u = VectorField(domain, &quot;u&quot;)
+
+problem = IVP([s, u])
+add_parameters!(problem, nu=0.01)
+add_equation!(problem, &quot;∂t(s) - nu*lap(s) = -u⋅∇(s)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*lap(u) = 0&quot;)
+
+set!(s, (x, y) -&gt; sin(x) * cos(y))
+set!(u.components[1], (x, y) -&gt; 1.0)
+
+# Solver
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+# CFL
+cfl = CFL(solver; initial_dt=1e-3, cadence=10, safety=0.5, max_dt=0.01)
+add_velocity!(cfl, u)
+
+# Run: stopping, adaptive dt and logging in one call
+run!(solver; stop_time=0.2, cfl=cfl,
+     callbacks=[(20, sol -&gt; println(&quot;t = $(sol.sim_time), dt = $(sol.dt)&quot;))],
+     progress=false)</code></pre><p>The same script runs under MPI without modification — launch it with <code>mpiexec</code> and see <a href="../parallelism/">Parallelism</a>.</p><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../problems/">Problems</a>: Problem definition</li><li><a href="../timesteppers/">Timesteppers</a>: Time integration details</li><li><a href="../../api/solvers/">API: Solvers</a>: Complete reference</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../problems/">« Problems</a><a class="docs-footer-nextpage" href="../timesteppers/">Time Steppers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 17 July 2026 15:58">Friday 17 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>

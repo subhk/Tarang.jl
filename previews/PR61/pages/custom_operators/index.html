@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Custom Operators · Tarang.jl</title><meta name="title" content="Custom Operators · Tarang.jl"/><meta property="og:title" content="Custom Operators · Tarang.jl"/><meta property="twitter:title" content="Custom Operators · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/pages/custom_operators/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/pages/custom_operators/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/pages/custom_operators/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../../tutorials/overview/">Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../../examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../coordinates/">Coordinates</a></li><li><a class="tocitem" href="../bases/">Bases</a></li><li><a class="tocitem" href="../domains/">Domains</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../operators/">Operators</a></li><li><a class="tocitem" href="../problems/">Problems</a></li><li><a class="tocitem" href="../solvers/">Solvers</a></li><li><a class="tocitem" href="../timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../parallelism/">Parallelism</a></li><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../les_models/">LES Models</a></li><li><a class="tocitem" href="../gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../architecture/">Architecture &amp; Codebase</a></li><li><a class="tocitem" href="../testing/">Testing</a></li><li><a class="tocitem" href="../contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox"/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../api/bases/">Bases</a></li><li><a class="tocitem" href="../../api/domains/">Domains</a></li><li><a class="tocitem" href="../../api/fields/">Fields</a></li><li><a class="tocitem" href="../../api/operators/">Operators</a></li><li><a class="tocitem" href="../../api/problems/">Problems</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers</a></li><li><a class="tocitem" href="../../api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../api/gpu/">GPU</a></li><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis</a></li><li><a class="tocitem" href="../../api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Custom Operators</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Custom Operators</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/pages/custom_operators.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Custom-Operators"><a class="docs-heading-anchor" href="#Custom-Operators">Custom Operators</a><a id="Custom-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Operators" title="Permalink"></a></h1><p>Creating custom differential and integral operators.</p><h2 id="Overview"><a class="docs-heading-anchor" href="#Overview">Overview</a><a id="Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Overview" title="Permalink"></a></h2><p>Beyond built-in operators (grad, div, curl, lap), you can define custom operators for specialized physics. There is no plugin API to implement — a custom operator is just a Julia function that <em>composes</em> built-in operators into an expression. Such an expression is lazy: nothing is computed until you either</p><ul><li>pass it to the solver as part of an equation, or</li><li>call <code>evaluate(expr, :g)</code> to get a field back.</li></ul><p>For diagnostics you can also skip the operator layer entirely and work directly on grid data with <code>get_grid_data</code>.</p><p>All examples below share this setup:</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 2π), dealias=3/2)
+zbasis = RealFourier(coords[&quot;z&quot;]; size=16, bounds=(0.0, 2π), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+T = ScalarField(domain, &quot;T&quot;)
+u = VectorField(domain, &quot;u&quot;)
+
+x, z = local_grids(dist, xbasis, zbasis)
+
+ensure_layout!(T, :g)
+get_grid_data(T) .= sin.(x) .* cos.(z&#39;)      # T = sin(x) cos(z)
+ensure_layout!(T, :c)
+
+ensure_layout!(u, :g)
+get_grid_data(u.components[1]) .= ones(length(x)) .* sin.(z)&#39;   # u = (sin z, 0): a shear flow
+get_grid_data(u.components[2]) .= 0
+ensure_layout!(u, :c)</code></pre><h2 id="Helper-Functions"><a class="docs-heading-anchor" href="#Helper-Functions">Helper Functions</a><a id="Helper-Functions-1"></a><a class="docs-heading-anchor-permalink" href="#Helper-Functions" title="Permalink"></a></h2><h3 id="Simple-Custom-Operators"><a class="docs-heading-anchor" href="#Simple-Custom-Operators">Simple Custom Operators</a><a id="Simple-Custom-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Simple-Custom-Operators" title="Permalink"></a></h3><p>An operator is a function returning an operator expression. Build the expression from the built-ins and let <code>evaluate</code> do the transforms:</p><pre><code class="language-julia hljs"># Advection operator: u·∇f
+advect(u, f) = u ⋅ grad(f)
+
+adv    = advect(u, T)          # DotProduct — nothing computed yet
+result = evaluate(adv, :g)     # ScalarField, in grid layout
+
+maximum(abs, get_grid_data(result))   # 0.5, matching sin(z)·cos(x)cos(z)</code></pre><p>Note that <code>u ⋅ grad(f)</code> is <code>dot(u, grad(f))</code>: <code>⋅</code> and <code>×</code> between two vector-valued operands build <code>DotProduct</code> / <code>CrossProduct</code> nodes, which <code>evaluate</code> understands.</p><h3 id="What-evaluate-accepts"><a class="docs-heading-anchor" href="#What-evaluate-accepts">What <code>evaluate</code> accepts</a><a id="What-evaluate-accepts-1"></a><a class="docs-heading-anchor-permalink" href="#What-evaluate-accepts" title="Permalink"></a></h3><p><code>evaluate(expr, layout)</code> handles operator nodes (<code>Differentiate</code>, <code>Gradient</code>, <code>Divergence</code>, <code>Curl</code>, <code>Laplacian</code>, <code>Integrate</code>, …) and <code>⋅</code> / <code>×</code> products of vector fields:</p><pre><code class="language-julia hljs">evaluate(d(T, coords[&quot;x&quot;]), :g)   # ScalarField
+evaluate(lap(T), :g)              # ScalarField
+evaluate(grad(u), :g)             # TensorField</code></pre><p>Plain arithmetic around an operator (<code>2.0 * lap(T)</code>, <code>a + b</code>) builds a deferred <code>Multiply</code> / <code>Add</code> node instead. Those nodes are meant for <em>equations</em>; <code>evaluate</code> does not compute them and throws a <code>MethodError</code>. Scale the evaluated field instead:</p><pre><code class="language-julia hljs">lapT = evaluate(lap(T), :g)
+get_grid_data(lapT) .*= 2.0</code></pre><h3 id="Using-in-Equations"><a class="docs-heading-anchor" href="#Using-in-Equations">Using in Equations</a><a id="Using-in-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Using-in-Equations" title="Permalink"></a></h3><p>A custom operator becomes usable inside an equation string once you register it as a parameter. Equation strings resolve names against the problem&#39;s variables and its registered parameters only — they cannot see Julia globals — so <code>add_parameters!</code> is what makes the name visible:</p><pre><code class="language-julia hljs">hyperdiff(f) = lap(lap(f))        # custom operator: ∇⁴
+
+problem = IVP([T])
+add_parameters!(problem, nu4=0.01, hyperdiff=hyperdiff)
+add_equation!(problem, &quot;∂t(T) + nu4*hyperdiff(T) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+run!(solver; stop_iteration=100, progress=false)
+
+# T = sin(x)cos(z) is a ∇⁴ eigenfunction with eigenvalue (kx²+kz²)² = 4
+ensure_layout!(T, :g)
+maximum(abs, get_grid_data(T))    # 0.99600798934 ≈ exp(-nu4 * 4 * 0.1)</code></pre><p>The same trick works for operator <em>values</em>, not just functions: <code>add_parameters!(problem, gradT=grad(T))</code> registers the expression under the name <code>gradT</code>.</p><div class="admonition is-warning" id="An-operator-used-in-an-equation-must-return-an-operator-expression-4001d6c8ca484c20"><header class="admonition-header">An operator used in an equation must return an operator expression<a class="admonition-anchor" href="#An-operator-used-in-an-equation-must-return-an-operator-expression-4001d6c8ca484c20" title="Permalink"></a></header><div class="admonition-body"><p>The parser calls your function with the parsed operands and splices the result into the equation tree. If the function computes eagerly and returns a raw array — anything built with <code>get_grid_data</code> — the term is <strong>silently dropped</strong>: no error, no warning, and the equation integrates as if the term were absent. Keep equation-side operators symbolic (<code>lap</code>, <code>grad</code>, <code>d</code>, <code>lift</code>, …). Grid-space kernels are for diagnostics and post-processing only.</p></div></div><h2 id="Using-Operators-in-Equations"><a class="docs-heading-anchor" href="#Using-Operators-in-Equations">Using Operators in Equations</a><a id="Using-Operators-in-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Using-Operators-in-Equations" title="Permalink"></a></h2><p>The equation parser recognizes all built-in operators. Use them directly:</p><pre><code class="language-julia hljs"># Differential:  grad (∇), div, curl, lap (Δ, laplacian), d (differentiate), dt (∂t)
+#                hyperlap, fraclap, sqrtlap, invsqrtlap, hilbert
+# Reductions:    integrate (integ), average (avg, ave), interpolate
+# Tensor:        trace, skew, transpose_components (trans), outer, component (comp)
+# Basis:         convert, lift, grid, coeff, copy
+# Ufuncs:        sin, cos, tan, tanh, exp, log, sqrt, abs
+
+T2 = ScalarField(domain, &quot;T2&quot;)
+u2 = VectorField(domain, &quot;u2&quot;)
+
+problem2 = IVP([T2, u2])
+add_parameters!(problem2, kappa=0.05, nu=0.05)
+add_equation!(problem2, &quot;∂t(T2) - kappa*Δ(T2) = -u2⋅∇(T2)&quot;)
+add_equation!(problem2, &quot;∂t(u2) - nu*lap(u2) = -u2⋅∇(u2)&quot;)
+
+solver2 = InitialValueSolver(problem2, RK222(); dt=1e-3)
+solver2.rhs_plan.is_compiled     # true — the RHS was compiled, not interpreted</code></pre><p><code>-u⋅∇(u)</code> (vector advection) is likewise valid <em>inside an equation</em>. It has no direct <code>evaluate</code> form: <code>evaluate(u ⋅ grad(u), :g)</code> throws, because <code>grad(u)</code> is a tensor and <code>DotProduct</code> requires two vector fields. Compute it componentwise if you need it outside a solve (see <a href="#Convective-Derivative">Convective Derivative</a> below).</p><h2 id="Spectral-Differentiation"><a class="docs-heading-anchor" href="#Spectral-Differentiation">Spectral Differentiation</a><a id="Spectral-Differentiation-1"></a><a class="docs-heading-anchor-permalink" href="#Spectral-Differentiation" title="Permalink"></a></h2><h3 id="Fourier-Derivative"><a class="docs-heading-anchor" href="#Fourier-Derivative">Fourier Derivative</a><a id="Fourier-Derivative-1"></a><a class="docs-heading-anchor-permalink" href="#Fourier-Derivative" title="Permalink"></a></h3><p>Coefficient arrays store the first axis in RFFT layout (<code>N÷2+1</code> complex values, non-negative wavenumbers) and every trailing axis in FFT layout (signed wavenumbers). Use the matching wavenumber vector:</p><pre><code class="language-julia hljs">function fourier_dx!(f, basis)
+    ensure_layout!(f, :c)
+    k = Tarang.wavenumbers_rfft(basis)    # first axis: [0, k₀, 2k₀, …, (N/2)k₀]
+    get_coeff_data(f) .*= im .* k         # multiply by ik
+    return f
+end
+
+g = ScalarField(domain, &quot;g&quot;)
+ensure_layout!(g, :g)
+get_grid_data(g) .= sin.(x) .* cos.(z&#39;)
+ensure_layout!(g, :c)
+
+fourier_dx!(g, xbasis)
+ensure_layout!(g, :g)
+maximum(abs, get_grid_data(g) .- cos.(x) .* cos.(z&#39;))   # 2.0e-15</code></pre><p>For a trailing axis the layout is the standard FFT ordering, so the wavenumbers are <code>wavenumbers_fft</code> and they broadcast along that axis:</p><pre><code class="language-julia hljs">function fourier_dz!(f, basis)
+    ensure_layout!(f, :c)
+    k = Tarang.wavenumbers_fft(basis)     # [0, …, N/2-1, -N/2, …, -1] · k₀
+    get_coeff_data(f) .*= im .* k&#39;
+    return f
+end</code></pre><p>(<code>wavenumbers(basis)</code> returns the <em>native</em> RealFourier cos/sin ordering of length <code>N</code>, which does <strong>not</strong> match the coefficient array. <code>Tarang.wavenumbers_rfft</code> / <code>Tarang.wavenumbers_fft</code> are the ones that do.)</p><h3 id="Chebyshev-Derivative"><a class="docs-heading-anchor" href="#Chebyshev-Derivative">Chebyshev Derivative</a><a id="Chebyshev-Derivative-1"></a><a class="docs-heading-anchor-permalink" href="#Chebyshev-Derivative" title="Permalink"></a></h3><p>There is no hand-rolled path worth writing here: <code>d(f, coord)</code> already applies the correct recurrence, in the correct basis, for Chebyshev and every other Jacobi basis.</p><pre><code class="language-julia hljs">zcoords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+zdist   = Distributor(zcoords; dtype=Float64, device=CPU())
+xb = RealFourier(zcoords[&quot;x&quot;]; size=8,  bounds=(0.0, 2π))
+zb = ChebyshevT(zcoords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))
+cdomain = Domain(zdist, (xb, zb))
+
+q = ScalarField(cdomain, &quot;q&quot;)
+xq, zq = local_grids(zdist, xb, zb)
+ensure_layout!(q, :g)
+get_grid_data(q) .= ones(length(xq)) .* (zq .^ 3)&#39;
+ensure_layout!(q, :c)
+
+dq = evaluate(d(q, zcoords[&quot;z&quot;]), :g)
+maximum(abs, get_grid_data(dq) .- (3 .* zq .^ 2)&#39;)     # 1.9e-14</code></pre><p>If you need the underlying coefficient-space matrix — to assemble your own operator, say — it is <code>differentiation_matrix(basis, order)</code> (a sparse <code>N×N</code> matrix, cached on the basis):</p><pre><code class="language-julia hljs">D = differentiation_matrix(zb, 1)      # 16×16 SparseMatrixCSC</code></pre><h2 id="Integral-Operators"><a class="docs-heading-anchor" href="#Integral-Operators">Integral Operators</a><a id="Integral-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Integral-Operators" title="Permalink"></a></h2><h3 id="Spatial-Integration"><a class="docs-heading-anchor" href="#Spatial-Integration">Spatial Integration</a><a id="Spatial-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Spatial-Integration" title="Permalink"></a></h3><p>Integration is a built-in operator, and it carries the right quadrature weights for every basis (uniform on Fourier, Chebyshev–Gauss on Chebyshev), so do not roll your own:</p><pre><code class="language-julia hljs">integrate(T)                                     # Float64: integral over the whole domain
+Tx = evaluate(integrate(T, coords[&quot;x&quot;]), :g)     # ScalarField on z: integral along x only
+Tz = evaluate(average(T, coords[&quot;z&quot;]), :g)       # ScalarField on x: mean along z
+
+integrate(q)                                     # ∫∫ z³ dz dx over [0,2π]×[0,1] = 1.5707963268</code></pre><p><code>integrate(field)</code> is also the MPI-safe form: it reduces across ranks for you.</p><h2 id="Vector-Calculus"><a class="docs-heading-anchor" href="#Vector-Calculus">Vector Calculus</a><a id="Vector-Calculus-1"></a><a class="docs-heading-anchor-permalink" href="#Vector-Calculus" title="Permalink"></a></h2><h3 id="Strain-Rate-Tensor"><a class="docs-heading-anchor" href="#Strain-Rate-Tensor">Strain Rate Tensor</a><a id="Strain-Rate-Tensor-1"></a><a class="docs-heading-anchor-permalink" href="#Strain-Rate-Tensor" title="Permalink"></a></h3><pre><code class="language-julia hljs">function strain_rate(u)
+    cs = u.coordsys
+    S  = TensorField(u.dist, cs, &quot;S&quot;, u.bases, u.dtype)
+
+    for i in 1:cs.dim, j in 1:cs.dim   # S_ij = ½(∂u_i/∂x_j + ∂u_j/∂x_i)
+        dij = evaluate(d(u.components[i], cs.coords[j]), :g)
+        dji = evaluate(d(u.components[j], cs.coords[i]), :g)
+        Sij = S.components[i, j]
+        ensure_layout!(Sij, :g)
+        get_grid_data(Sij) .= 0.5 .* (get_grid_data(dij) .+ get_grid_data(dji))
+    end
+    return S
+end
+
+S = strain_rate(u)
+maximum(abs, get_grid_data(S.components[1,2]))   # 0.5, matching ½cos(z) for u = (sin z, 0)</code></pre><p><code>TensorField</code> components live in a <code>dim × dim</code> matrix — <code>S.components[i,j]</code> — and are <code>ScalarField</code>s like any other. There is no <code>S[i,j] = …</code> setindex and no <code>symmetric=true</code> option.</p><p>The velocity gradient itself is a single call, with the convention <code>(∇u)_ij = ∂u_j/∂x_i</code>:</p><pre><code class="language-julia hljs">gu   = evaluate(grad(u), :g)                     # TensorField
+gu_T = evaluate(transpose_components(gu), :g)    # its transpose</code></pre><p><code>transpose_components</code> needs a concrete <code>TensorField</code>, so evaluate <code>grad(u)</code> first.</p><h3 id="Vorticity-(2D)"><a class="docs-heading-anchor" href="#Vorticity-(2D)">Vorticity (2D)</a><a id="Vorticity-(2D)-1"></a><a class="docs-heading-anchor-permalink" href="#Vorticity-(2D)" title="Permalink"></a></h3><p>In two dimensions <code>curl</code> returns a <code>ScalarField</code>:</p><pre><code class="language-julia hljs">omega = evaluate(curl(u), :g)                    # ω = ∂x u_z − ∂z u_x
+maximum(abs, get_grid_data(omega))               # 1.0, matching −cos(z)</code></pre><p>which is the same thing as writing it out by hand:</p><pre><code class="language-julia hljs">omega2 = evaluate(d(u.components[2], coords[&quot;x&quot;]) - d(u.components[1], coords[&quot;z&quot;]), :g)</code></pre><h3 id="Helicity-(3D)"><a class="docs-heading-anchor" href="#Helicity-(3D)">Helicity (3D)</a><a id="Helicity-(3D)-1"></a><a class="docs-heading-anchor-permalink" href="#Helicity-(3D)" title="Permalink"></a></h3><pre><code class="language-julia hljs">coords3 = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;, &quot;z&quot;)
+dist3   = Distributor(coords3; dtype=Float64, device=CPU())
+bx = RealFourier(coords3[&quot;x&quot;]; size=8, bounds=(0.0, 2π))
+by = RealFourier(coords3[&quot;y&quot;]; size=8, bounds=(0.0, 2π))
+bz = RealFourier(coords3[&quot;z&quot;]; size=8, bounds=(0.0, 2π))
+domain3 = Domain(dist3, (bx, by, bz))
+
+v = VectorField(domain3, &quot;v&quot;)
+x3, y3, z3 = local_grids(dist3, bx, by, bz)
+ensure_layout!(v, :g)
+vx, vy, vz = (get_grid_data(c) for c in v.components)
+for k in eachindex(z3), j in eachindex(y3), i in eachindex(x3)
+    vx[i,j,k] = sin(z3[k]) + cos(y3[j])          # ABC flow with A=B=C=1: ∇×v = v
+    vy[i,j,k] = sin(x3[i]) + cos(z3[k])
+    vz[i,j,k] = sin(y3[j]) + cos(x3[i])
+end
+ensure_layout!(v, :c)
+
+H = evaluate(v ⋅ curl(v), :g)      # H = u·ω, a ScalarField
+integrate(H)                       # 744.15 — total helicity (= ∫|v|² for this flow)</code></pre><h2 id="Nonlinear-Operators"><a class="docs-heading-anchor" href="#Nonlinear-Operators">Nonlinear Operators</a><a id="Nonlinear-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Nonlinear-Operators" title="Permalink"></a></h2><h3 id="Convective-Derivative"><a class="docs-heading-anchor" href="#Convective-Derivative">Convective Derivative</a><a id="Convective-Derivative-1"></a><a class="docs-heading-anchor-permalink" href="#Convective-Derivative" title="Permalink"></a></h3><p><code>u ⋅ grad(f)</code> is the one-liner (see above). When you want the loop — to reuse buffers, or to get at the individual terms — write it in grid space:</p><pre><code class="language-julia hljs">function convective_derivative(u, f)
+    ensure_layout!(f, :g)
+    result = zeros(size(get_grid_data(f)))
+    cs = u.coordsys
+
+    for (i, comp) in enumerate(u.components)
+        ensure_layout!(comp, :g)
+        df = evaluate(d(f, cs.coords[i]), :g)
+        result .+= get_grid_data(comp) .* get_grid_data(df)
+    end
+    return result
+end
+
+convective_derivative(u, T)   # matches evaluate(u ⋅ grad(T), :g) to roundoff (2.8e-16)</code></pre><p><code>cs.coords[i]</code> is the <code>Coordinate</code> for axis <code>i</code>; <code>d(f, coord)</code> differentiates along it.</p><h3 id="Nonlinear-Term-(u·u)"><a class="docs-heading-anchor" href="#Nonlinear-Term-(u·u)">Nonlinear Term (u·∇u)</a><a id="Nonlinear-Term-(u·u)-1"></a><a class="docs-heading-anchor-permalink" href="#Nonlinear-Term-(u·u)" title="Permalink"></a></h3><p>Inside an equation, write it directly: <code>add_equation!(problem, &quot;∂t(u) - nu*lap(u) = -u⋅∇(u)&quot;)</code>. Outside a solve, apply <code>convective_derivative</code> to each velocity component:</p><pre><code class="language-julia hljs">function nonlinear_advection(u)
+    result = VectorField(u.dist, u.coordsys, &quot;adv&quot;, u.bases, u.dtype)
+
+    for (j, uj) in enumerate(u.components)
+        rj = result.components[j]
+        ensure_layout!(rj, :g)
+        get_grid_data(rj) .= convective_derivative(u, uj)
+    end
+    return result
+end</code></pre><h2 id="Physics-Specific-Operators"><a class="docs-heading-anchor" href="#Physics-Specific-Operators">Physics-Specific Operators</a><a id="Physics-Specific-Operators-1"></a><a class="docs-heading-anchor-permalink" href="#Physics-Specific-Operators" title="Permalink"></a></h2><h3 id="Coriolis-Force"><a class="docs-heading-anchor" href="#Coriolis-Force">Coriolis Force</a><a id="Coriolis-Force-1"></a><a class="docs-heading-anchor-permalink" href="#Coriolis-Force" title="Permalink"></a></h3><p>For rotation about the z-axis, <code>-2Ω ẑ × u = (2Ω u_y, -2Ω u_x, 0)</code> has no z-component and needs no derivatives, so build it straight in grid space:</p><pre><code class="language-julia hljs">function coriolis(u, Omega)
+    cs = u.coordsys
+    f  = VectorField(u.dist, cs, &quot;coriolis&quot;, u.bases, u.dtype)
+    ux, uy = u.components[1], u.components[2]
+    ensure_layout!(ux, :g); ensure_layout!(uy, :g)
+    for comp in f.components
+        ensure_layout!(comp, :g)
+    end
+
+    get_grid_data(f.components[1]) .=  2 .* Omega .* get_grid_data(uy)   # +2Ω v
+    get_grid_data(f.components[2]) .= -2 .* Omega .* get_grid_data(ux)   # -2Ω u
+    get_grid_data(f.components[3]) .= 0
+    return f
+end
+
+fc = coriolis(v, 0.5)      # VectorField on the same bases as v</code></pre><p>Note that the <code>ez</code> from <code>unit_vector_fields</code> is a <em>basis-less</em> <code>VectorField</code>, so <code>cross(ez, u)</code> raises <code>ArgumentError: Cannot compute cross product of VectorFields with different bases</code>. Unit vectors are for equation strings (<code>buoy*T*ez</code>), not for <code>evaluate</code>.</p><h3 id="Lorentz-Force-(MHD)"><a class="docs-heading-anchor" href="#Lorentz-Force-(MHD)">Lorentz Force (MHD)</a><a id="Lorentz-Force-(MHD)-1"></a><a class="docs-heading-anchor-permalink" href="#Lorentz-Force-(MHD)" title="Permalink"></a></h3><p><code>cross</code> (<code>×</code>) works directly on two vector fields that share a domain:</p><pre><code class="language-julia hljs">J = VectorField(domain3, &quot;J&quot;)
+B = VectorField(domain3, &quot;B&quot;)
+ensure_layout!(J, :g); ensure_layout!(B, :g)
+get_grid_data(J.components[1]) .= 1.0        # J = x̂
+get_grid_data(B.components[2]) .= 1.0        # B = ŷ
+ensure_layout!(J, :c); ensure_layout!(B, :c)
+
+F = evaluate(J × B, :g)                      # x̂ × ŷ = ẑ
+get_grid_data(F.components[3])[1,1,1]        # 1.0</code></pre><h2 id="Tips"><a class="docs-heading-anchor" href="#Tips">Tips</a><a id="Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Tips" title="Permalink"></a></h2><h3 id="Performance"><a class="docs-heading-anchor" href="#Performance">Performance</a><a id="Performance-1"></a><a class="docs-heading-anchor-permalink" href="#Performance" title="Permalink"></a></h3><ul><li>Keep operations in same space (grid or spectral)</li><li>Minimize transforms</li><li>Pre-compute constant factors</li></ul><h3 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h3><ul><li>Test against analytical solutions</li><li>Check symmetries</li><li>Verify conservation properties</li></ul><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../operators/">Operators</a>: Built-in operators</li><li><a href="../fields/">Fields</a>: Field types</li><li><a href="../../api/operators/">API: Operators</a>: Reference</li></ul></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 17 July 2026 15:58">Friday 17 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
