@@ -123,6 +123,39 @@ jobs:
           julia -e 'using JuliaFormatter; format(".", verbose=true) || error("Formatting check failed")'
         continue-on-error: true
 
+  cuda-extension-load:
+    name: CUDA Extension Load (no driver)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.12'
+
+      - name: Install MPI
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openmpi-bin libopenmpi-dev
+
+      - uses: julia-actions/cache@v1
+
+      - name: Install CUDA weak dependency and precompile extension
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.activate("/tmp/tarang-cuda-extension")
+            Pkg.develop(path=pwd())
+            Pkg.add("CUDA")
+            Pkg.precompile()'
+
+      - name: Verify CUDA extension loads completely
+        run: julia --project=/tmp/tarang-cuda-extension test/test_gpu_transform_correctness.jl
+        env:
+          JULIA_NUM_THREADS: 2
+          OMP_NUM_THREADS: 1
+
   optional-cpu-tests:
     name: Optional CPU Feature Tests
     runs-on: ubuntu-latest

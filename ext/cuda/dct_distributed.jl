@@ -173,10 +173,6 @@ Each thread handles one (k_freq, j, k_z) element of the FFT output.
                                                   scale_zero, scale_pos, N, Ny, Nz)
     idx = @index(Global)
     half_N_plus1 = N ÷ 2 + 1
-    total = half_N_plus1 * Ny * Nz
-    if idx > total
-        return
-    end
     # Map to (freq, j, k)
     freq = ((idx - 1) % half_N_plus1) + 1  # 1-indexed frequency
     j = (((idx - 1) ÷ half_N_plus1) % Ny) + 1
@@ -204,10 +200,6 @@ end
                                                   scale_zero, scale_pos, N, Nx, Nz)
     idx = @index(Global)
     half_N_plus1 = N ÷ 2 + 1
-    total = Nx * half_N_plus1 * Nz
-    if idx > total
-        return
-    end
     i = ((idx - 1) % Nx) + 1
     freq = (((idx - 1) ÷ Nx) % half_N_plus1) + 1
     k = ((idx - 1) ÷ (Nx * half_N_plus1)) + 1
@@ -234,10 +226,6 @@ end
                                                   scale_zero, scale_pos, N, Nx, Ny)
     idx = @index(Global)
     half_N_plus1 = N ÷ 2 + 1
-    total = Nx * Ny * half_N_plus1
-    if idx > total
-        return
-    end
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     freq = ((idx - 1) ÷ (Nx * Ny)) + 1
@@ -265,10 +253,6 @@ Prepares complex array for C2R IFFT from DCT coefficients.
                                                     scale_zero, scale_pos, N, Ny, Nz)
     idx = @index(Global)
     half_N_plus1 = N ÷ 2 + 1
-    total = half_N_plus1 * Ny * Nz
-    if idx > total
-        return
-    end
     freq = ((idx - 1) % half_N_plus1) + 1
     j = (((idx - 1) ÷ half_N_plus1) % Ny) + 1
     k = ((idx - 1) ÷ (half_N_plus1 * Ny)) + 1
@@ -295,10 +279,6 @@ end
                                                     scale_zero, scale_pos, N, Nx, Nz)
     idx = @index(Global)
     half_N_plus1 = N ÷ 2 + 1
-    total = Nx * half_N_plus1 * Nz
-    if idx > total
-        return
-    end
     i = ((idx - 1) % Nx) + 1
     freq = (((idx - 1) ÷ Nx) % half_N_plus1) + 1
     k = ((idx - 1) ÷ (Nx * half_N_plus1)) + 1
@@ -325,10 +305,6 @@ end
                                                     scale_zero, scale_pos, N, Nx, Ny)
     idx = @index(Global)
     half_N_plus1 = N ÷ 2 + 1
-    total = Nx * Ny * half_N_plus1
-    if idx > total
-        return
-    end
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     freq = ((idx - 1) ÷ (Nx * Ny)) + 1

@@ -133,11 +133,6 @@ Each element is placed contiguously for its destination rank.
                                       @Const(prefix_sums))
     idx = @index(Global)
 
-    total = Nx * Ny * Nz
-    if idx > total
-        return
-    end
-
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     k = ((idx - 1) ÷ (Nx * Ny)) + 1
@@ -160,11 +155,6 @@ Reorganizes received data into Y-pencil layout after all-to-all communication.
                                         @Const(chunk_sizes), @Const(displs), nranks,
                                         @Const(prefix_sums))
     idx = @index(Global)
-
-    total = Nx * Ny * Nz
-    if idx > total
-        return
-    end
 
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
@@ -193,11 +183,6 @@ We send Y-chunks to each rank, keeping our Nz_local portion.
                                       @Const(prefix_sums))
     idx = @index(Global)
 
-    total = Nx * Ny * Nz_local
-    if idx > total
-        return
-    end
-
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     k = ((idx - 1) ÷ (Nx * Ny)) + 1
@@ -222,11 +207,6 @@ Output is Z-pencil: (Nx_local, Ny_local, Nz) where Nz is now full.
                                         @Const(prefix_sums))
     idx = @index(Global)
 
-    total = Nx * Ny_local * Nz
-    if idx > total
-        return
-    end
-
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny_local) + 1
     k = ((idx - 1) ÷ (Nx * Ny_local)) + 1
@@ -248,11 +228,6 @@ Reorganizes data from Y-pencil layout for column communicator all-to-all.
                                       @Const(prefix_sums))
     idx = @index(Global)
 
-    total = Nx * Ny * Nz
-    if idx > total
-        return
-    end
-
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     k = ((idx - 1) ÷ (Nx * Ny)) + 1
@@ -273,11 +248,6 @@ Reorganizes received data into X-pencil layout.
                                         @Const(chunk_sizes), @Const(displs), nranks,
                                         @Const(prefix_sums))
     idx = @index(Global)
-
-    total = Nx * Ny * Nz
-    if idx > total
-        return
-    end
 
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
@@ -301,11 +271,6 @@ Splits the X dimension among ranks (the reverse of the Y->X unpack).
                                       @Const(prefix_sums))
     idx = @index(Global)
 
-    total = Nx * Ny * Nz
-    if idx > total
-        return
-    end
-
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
     k = ((idx - 1) ÷ (Nx * Ny)) + 1
@@ -327,11 +292,6 @@ Gathers Y-slices from each rank (the reverse of the Y->X pack).
                                         @Const(chunk_sizes), @Const(displs), nranks,
                                         @Const(prefix_sums))
     idx = @index(Global)
-
-    total = Nx * Ny * Nz
-    if idx > total
-        return
-    end
 
     i = ((idx - 1) % Nx) + 1
     j = (((idx - 1) ÷ Nx) % Ny) + 1
