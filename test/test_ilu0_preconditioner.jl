@@ -30,6 +30,41 @@ if cuda_available
 
     @testset "ILU(0) Preconditioner Tests" begin
 
+        @testset "CuSparseLU reuses device solve buffers" begin
+            using Tarang
+
+            n = 8
+            A = spdiagm(
+                -1 => fill(-1.0 + 0.25im, n - 1),
+                 0 => fill(4.0 + 0.5im, n),
+                 1 => fill(-0.5 - 0.1im, n - 1),
+            )
+            rhs_cpu = ComplexF64.(1:n)
+            rhs = CUDA.CuArray(rhs_cpu)
+            dest = similar(rhs)
+            solver = CuSparseLU(A)
+
+            Tarang.MatSolvers.solve!(dest, solver, rhs)
+            rhs_buffer = solver.rhs_buffer
+            solution_buffer = solver.solution_buffer
+            temp_buffer = solver.temp_buffer
+
+            Tarang.MatSolvers.solve!(dest, solver, rhs)
+            @test solver.rhs_buffer === rhs_buffer
+            @test solver.solution_buffer === solution_buffer
+            @test solver.temp_buffer === temp_buffer
+            @test Array(dest) ≈ A \ rhs_cpu rtol=1e-10
+
+            A2 = copy(A)
+            A2.nzval .*= 1.01
+            Tarang.MatSolvers.refactor!(solver, A2)
+            @test solver.rhs_buffer === rhs_buffer
+            @test solver.solution_buffer === solution_buffer
+            @test solver.temp_buffer === temp_buffer
+            Tarang.MatSolvers.solve!(dest, solver, rhs)
+            @test Array(dest) ≈ A2 \ rhs_cpu rtol=1e-10
+        end
+
         @testset "ilu02 function exists and works" begin
             # Create a simple SPD matrix
             n = 100

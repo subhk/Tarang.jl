@@ -159,7 +159,63 @@ mutable struct StochasticForcing{T<:AbstractFloat, N, A<:AbstractArray{T,N}, CA<
     architecture::AbstractArchitecture
 end
 
+"""
+    SeparableStochasticForcing
+
+Stochastic forcing for a Fourier product domain with one trailing Chebyshev
+dimension. Randomness and spectral localization live only in the Fourier
+dimensions; `chebyshev_profile` supplies the fixed Chebyshev dependence.
+"""
+mutable struct SeparableStochasticForcing{
+    T<:AbstractFloat, NF, N,
+    A<:AbstractArray{T,NF},
+    FCA<:AbstractArray{Complex{T},NF},
+    P<:AbstractVector{T},
+    HP<:Array{T,NF},
+    CA<:AbstractArray{Complex{T},N},
+    FRV<:AbstractArray{Complex{T},N},
+    PV<:AbstractArray{T,N},
+} <: StochasticForcingType
+    forcing_spectrum::A
+    energy_injection_rate::T
+    injection_metric::Symbol
+    k_forcing::T
+    dk_forcing::T
+    dt::T
+    domain_size::NTuple{NF,T}
+    fourier_size::NTuple{NF,Int}
+    field_size::NTuple{N,Int}
+    wavenumbers::NTuple{NF,Vector{T}}
+    chebyshev_basis::ChebyshevT
+    chebyshev_profile::P
+    cached_forcing::CA
+    prevsol::Union{Nothing,CA}
+    rng::AbstractRNG
+    random_phases::A
+    random_phases_host::HP
+    fourier_realization::FCA
+    fourier_outer_view::FRV
+    profile_outer_view::PV
+    last_update_time::T
+    spectrum_type::Symbol
+    enforce_hermitian::Bool
+    architecture::AbstractArchitecture
+end
+
 function Base.getproperty(forcing::StochasticForcing, name::Symbol)
+    if name === :forcing_rate
+        return getfield(forcing, :energy_injection_rate)
+    elseif name === :spectrum
+        return getfield(forcing, :forcing_spectrum)
+    elseif name === :is_stochastic
+        return true
+    elseif name === :is_gpu
+        return is_gpu(getfield(forcing, :architecture))
+    end
+    return getfield(forcing, name)
+end
+
+function Base.getproperty(forcing::SeparableStochasticForcing, name::Symbol)
     if name === :forcing_rate
         return getfield(forcing, :energy_injection_rate)
     elseif name === :spectrum
@@ -340,6 +396,133 @@ function StochasticForcing(;
         spectrum_type,
         enforce_hermitian,
         architecture
+    )
+end
+
+function _normalized_chebyshev_profile(
+    basis::ChebyshevT,
+    profile,
+    ::Type{T},
+) where {T<:AbstractFloat}
+    n = basis.meta.size
+    transform = ChebyshevTransform(basis)
+    setup_chebyshev_cpu_transform!(transform, n, n, 1)
+
+    if profile isa AbstractVector
+        length(profile) == n || throw(DimensionMismatch(
+            "Chebyshev profile has length $(length(profile)); expected $n coefficients",
+        ))
+        coeffs = T.(profile)
+        values = vec(_chebyshev_backward(coeffs, transform))
+    else
+        lo, hi = basis.meta.bounds
+        reference_grid = _native_grid(basis, 1.0)
+        physical_grid = @. T((hi - lo) / 2) * reference_grid + T((hi + lo) / 2)
+        values = T[profile(z) for z in physical_grid]
+        coeffs = vec(T.(_chebyshev_forward(values, transform)))
+    end
+
+    all(isfinite, coeffs) && all(isfinite, values) ||
+        throw(ArgumentError("Chebyshev profile must contain only finite values"))
+
+    lo, hi = basis.meta.bounds
+    weights = T.(get_integration_weights(basis))
+    mean_square = sum(weights .* abs2.(values)) / T(hi - lo)
+    isfinite(mean_square) && mean_square > zero(T) ||
+        throw(ArgumentError("Chebyshev profile must have a finite, nonzero mean-square norm"))
+
+    coeffs ./= sqrt(mean_square)
+    return coeffs
+end
+
+function SeparableStochasticForcing(;
+    fourier_size::NTuple{NF,Int},
+    chebyshev_basis,
+    chebyshev_profile,
+    domain_size::Union{Nothing,NTuple{NF,Real}}=nothing,
+    energy_injection_rate::Real=1.0,
+    forcing_rate::Union{Nothing,Real}=nothing,
+    injection_metric::Symbol=:direct,
+    k_forcing::Real=4.0,
+    dk_forcing::Real=1.0,
+    dt::Real=0.01,
+    spectrum_type::Symbol=:ring,
+    rng::AbstractRNG=Random.MersenneTwister(),
+    dtype::Type{T}=Float64,
+    enforce_hermitian::Bool=true,
+    architecture::AbstractArchitecture=CPU(),
+) where {T<:AbstractFloat,NF}
+    chebyshev_basis isa ChebyshevT || throw(ArgumentError(
+        "SeparableStochasticForcing requires a ChebyshevT basis",
+    ))
+    injection_metric === :direct || throw(ArgumentError(
+        "mixed Fourier--Chebyshev forcing supports only injection_metric=:direct",
+    ))
+
+    base = StochasticForcing(
+        field_size=fourier_size,
+        domain_size=domain_size,
+        energy_injection_rate=energy_injection_rate,
+        forcing_rate=forcing_rate,
+        injection_metric=:direct,
+        k_forcing=k_forcing,
+        dk_forcing=dk_forcing,
+        dt=dt,
+        spectrum_type=spectrum_type,
+        rng=rng,
+        dtype=dtype,
+        enforce_hermitian=enforce_hermitian,
+        architecture=architecture,
+    )
+
+    profile_cpu = _normalized_chebyshev_profile(
+        chebyshev_basis, chebyshev_profile, T,
+    )
+    profile = on_architecture(architecture, profile_cpu)
+    nz = chebyshev_basis.meta.size
+    field_size = (fourier_size..., nz)
+    cached_forcing = zeros(architecture, Complex{T}, field_size...)
+    fourier_realization = zeros(architecture, Complex{T}, fourier_size...)
+    random_phases_host = is_gpu(architecture) ?
+        zeros(T, fourier_size...) : base.random_phases
+    N = NF + 1
+    fourier_outer_view = reshape(fourier_realization, (fourier_size..., 1))
+    profile_outer_view = reshape(profile, (ntuple(_ -> 1, NF)..., nz))
+
+    return SeparableStochasticForcing{
+        T, NF, N,
+        typeof(base.forcing_spectrum),
+        typeof(fourier_realization),
+        typeof(profile),
+        typeof(random_phases_host),
+        typeof(cached_forcing),
+        typeof(fourier_outer_view),
+        typeof(profile_outer_view),
+    }(
+        base.forcing_spectrum,
+        base.energy_injection_rate,
+        :direct,
+        base.k_forcing,
+        base.dk_forcing,
+        base.dt,
+        base.domain_size,
+        fourier_size,
+        field_size,
+        base.wavenumbers,
+        chebyshev_basis,
+        profile,
+        cached_forcing,
+        nothing,
+        base.rng,
+        base.random_phases,
+        random_phases_host,
+        fourier_realization,
+        fourier_outer_view,
+        profile_outer_view,
+        T(-Inf),
+        base.spectrum_type,
+        enforce_hermitian,
+        architecture,
     )
 end
 
@@ -622,6 +805,37 @@ function _generate_forcing_gpu_compatible!(forcing::StochasticForcing{T, N, A, C
     # Enforce zero mean (k=0 mode)
     _set_zero_mode!(forcing.cached_forcing, forcing.architecture)
 
+    return forcing.cached_forcing
+end
+
+function generate_forcing!(forcing::SeparableStochasticForcing{T}, t::Real,
+                           substep::Int=1) where T
+    substep > 1 && return forcing.cached_forcing
+    t == forcing.last_update_time && return forcing.cached_forcing
+
+    forcing.dt > 0 || error(
+        "SeparableStochasticForcing requires dt > 0 (got dt=$(forcing.dt)). " *
+        "Ensure the timestep is set before generating forcing.",
+    )
+
+    rand!(forcing.rng, forcing.random_phases_host)
+    forcing.random_phases_host .*= T(2π)
+    if forcing.random_phases !== forcing.random_phases_host
+        copyto!(forcing.random_phases, forcing.random_phases_host)
+    end
+    sqrt_dt = sqrt(forcing.dt)
+    forcing.fourier_realization .= forcing.forcing_spectrum .*
+        exp.(im .* forcing.random_phases) ./ sqrt_dt
+
+    if forcing.enforce_hermitian
+        _enforce_hermitian_symmetry!(
+            forcing.fourier_realization, forcing.architecture,
+        )
+    end
+    _set_zero_mode!(forcing.fourier_realization, forcing.architecture)
+
+    forcing.cached_forcing .= forcing.fourier_outer_view .* forcing.profile_outer_view
+    forcing.last_update_time = T(t)
     return forcing.cached_forcing
 end
 
@@ -1108,8 +1322,10 @@ Return the target (mean) energy injection rate ε.
 This is the ensemble average of work done per unit time.
 """
 mean_energy_injection_rate(forcing::StochasticForcing) = forcing.energy_injection_rate
+mean_energy_injection_rate(forcing::SeparableStochasticForcing) = forcing.energy_injection_rate
 
 energy_injection_rate(forcing::StochasticForcing) = forcing.energy_injection_rate
+energy_injection_rate(forcing::SeparableStochasticForcing) = forcing.energy_injection_rate
 
 function get_forcing_real(forcing::StochasticForcing)
     return real.(forcing.cached_forcing)
@@ -1185,6 +1401,17 @@ function set_dt!(forcing::StochasticForcing{T, N, A, CA}, dt::Real) where {T, N,
     return forcing
 end
 
+function set_dt!(forcing::SeparableStochasticForcing{T}, dt::Real) where T
+    new_dt = T(dt)
+    if forcing.dt != new_dt
+        forcing.dt = new_dt
+        forcing.last_update_time = T(-Inf)
+        fill!(forcing.cached_forcing, zero(eltype(forcing.cached_forcing)))
+        fill!(forcing.fourier_realization, zero(eltype(forcing.fourier_realization)))
+    end
+    return forcing
+end
+
 """
     reset_forcing!(forcing::StochasticForcing)
 
@@ -1200,12 +1427,23 @@ function reset_forcing!(forcing::StochasticForcing{T, N, A, CA}) where {T, N, A,
     end
 end
 
+function reset_forcing!(forcing::SeparableStochasticForcing{T}) where T
+    forcing.last_update_time = T(-Inf)
+    fill!(forcing.cached_forcing, zero(eltype(forcing.cached_forcing)))
+    fill!(forcing.fourier_realization, zero(eltype(forcing.fourier_realization)))
+    if forcing.prevsol !== nothing
+        fill!(forcing.prevsol, zero(eltype(forcing.prevsol)))
+    end
+    return forcing
+end
+
 """
     get_forcing_spectrum(forcing::StochasticForcing)
 
 Return the forcing amplitude spectrum √Q̂(k).
 """
 get_forcing_spectrum(forcing::StochasticForcing) = forcing.forcing_spectrum
+get_forcing_spectrum(forcing::SeparableStochasticForcing) = forcing.forcing_spectrum
 
 """
     get_cached_forcing(forcing::StochasticForcing)
@@ -1213,6 +1451,7 @@ get_forcing_spectrum(forcing::StochasticForcing) = forcing.forcing_spectrum
 Return the current cached forcing F̂(k).
 """
 get_cached_forcing(forcing::StochasticForcing) = forcing.cached_forcing
+get_cached_forcing(forcing::SeparableStochasticForcing) = forcing.cached_forcing
 
 # ============================================================================
 # Internal helpers
@@ -1293,6 +1532,70 @@ function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
 
     perm_raw = Tuple(PencilArrays.permutation(target))
     perm_raw === nothing && return logical_view   # identity permutation
+    return PermutedDimsArray(logical_view, perm_raw)
+end
+
+function _separable_forcing_ranges(
+    forcing_shape::NTuple{N,Int},
+    target_shape::NTuple{N,Int},
+    fourier_dims::Int,
+) where N
+    ranges = Vector{UnitRange{Int}}(undef, N)
+    for d in 1:fourier_dims
+        nf, nt = forcing_shape[d], target_shape[d]
+        if nf == nt || nf == 2 * (nt - 1) || nf == 2 * nt - 1
+            ranges[d] = 1:nt
+        else
+            return nothing
+        end
+    end
+
+    chebyshev_dim = fourier_dims + 1
+    forcing_shape[chebyshev_dim] == target_shape[chebyshev_dim] || return nothing
+    ranges[chebyshev_dim] = 1:target_shape[chebyshev_dim]
+    return Tuple(ranges)
+end
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target_shape::NTuple{N,Int},
+) where {T,NF,N}
+    ranges = _separable_forcing_ranges(size(forcing.cached_forcing), target_shape, NF)
+    ranges === nothing && return nothing
+    return view(forcing.cached_forcing, ranges...)
+end
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target::AbstractArray,
+) where {T,NF,N}
+    ndims(target) == N || return nothing
+    return _matched_forcing_view(forcing, size(target))
+end
+
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target::PencilArrays.PencilArray,
+) where {T,NF,N}
+    global_shape = Tuple(PencilArrays.size_global(target))
+    _separable_forcing_ranges(size(forcing.cached_forcing), global_shape, NF) === nothing &&
+        return nothing
+
+    local_axes = PencilArrays.pencil(target).axes_local
+    length(local_axes) == N || return nothing
+    forcing_shape = size(forcing.cached_forcing)
+    ranges = ntuple(N) do d
+        local_range = local_axes[d]
+        first(local_range) >= 1 && last(local_range) <= forcing_shape[d] ||
+            return nothing
+        local_range
+    end
+    any(isnothing, ranges) && return nothing
+
+    logical_view = view(forcing.cached_forcing, ranges...)
+    perm_raw = Tuple(PencilArrays.permutation(target))
+    perm_raw === nothing && return logical_view
     return PermutedDimsArray(logical_view, perm_raw)
 end
 
@@ -1443,7 +1746,7 @@ end
 export Forcing, StochasticForcingType, DeterministicForcingType
 
 # Export concrete forcing types
-export StochasticForcing, DeterministicForcing
+export StochasticForcing, SeparableStochasticForcing, DeterministicForcing
 
 # Export forcing generation and application
 export generate_forcing!, apply_forcing!

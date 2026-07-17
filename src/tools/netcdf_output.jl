@@ -2014,9 +2014,18 @@ function refresh_solver_diagnostics!(handler::NetCDFFileHandler)
         ts_state = solver.timestepper_state
         if ts_state !== nothing && !isempty(ts_state.history)
             solver.state = ts_state.history[end]
+            # A completed timestep already refreshed its algebraic constraints.
+            # Re-solving them here is not observational: substitution constraints
+            # can overwrite the live history buffers a second time and corrupt
+            # derived fields on every writing iteration. Rebind public handles to
+            # the current history and stage that state exactly as the solver left it.
+            _alias_state_to_problem!(solver.problem, solver.state)
+            return nothing
         end
     end
 
+    # Before the first timestep there is no refreshed history yet. Preserve the
+    # iteration-zero behavior by materializing algebraic diagnostics once.
     sync_state_to_problem!(solver.problem, solver.state)
     _solve_algebraic_constraints!(solver.problem, solver.state)
     return nothing

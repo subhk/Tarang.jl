@@ -92,6 +92,68 @@ velocity constraints spectrally at every stage.
 
 ---
 
+## Fourier--Chebyshev domains
+
+`StochasticForcing` is the right choice when every spatial direction is
+Fourier. A bounded Chebyshev direction is not a wavenumber axis, so applying a
+Fourier ring formula to its coefficient index is not physically meaningful.
+Use `SeparableStochasticForcing` instead:
+
+```julia
+coords = CartesianCoordinates("x", "z")
+dist = Distributor(coords; dtype=Float64, device=GPU())
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx))
+zbasis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz))
+domain = Domain(dist, (xbasis, zbasis))
+
+b = ScalarField(domain, "b")
+forcing = SeparableStochasticForcing(
+    fourier_size=(Nx,),
+    chebyshev_basis=zbasis,
+    chebyshev_profile=z -> z * (Lz - z),
+    domain_size=(Lx,),
+    energy_injection_rate=0.05,
+    injection_metric=:direct,
+    k_forcing=4 * 2pi / Lx,
+    dk_forcing=2pi / Lx,
+    dt=dt,
+    architecture=GPU(),
+    rng=MersenneTwister(1234),
+)
+add_stochastic_forcing!(problem, :b, forcing)
+solver = InitialValueSolver(problem, RK222(); dt)
+```
+
+The function profile is evaluated on the physical Chebyshev grid, transformed
+once, and normalized to unit quadrature mean square. You may instead pass an
+`Nz`-element vector of Chebyshev coefficients. The forcing then draws only the
+Fourier modes and forms their outer product with that fixed profile. It stays
+constant across RK stages and changes at the next timestep.
+
+Mixed forcing supports `injection_metric=:direct`. The
+`:vorticity_kinetic` metric is intentionally rejected because its Fourier
+`1/|k|²` definition does not extend to a bounded direction without specifying
+the model's inverse elliptic operator.
+
+On CUDA, a coupled Fourier--Chebyshev IVP left at the default
+`matsolver=:auto` selects `CuSparseLU`. The field, forcing, RK workspace,
+subproblem vectors, sparse matrix, and solve buffers remain device-resident,
+and warmed solves reuse their RHS, solution, and scratch allocations. Passing
+an explicit CPU-only `matsolver=:sparse` or `:dense` raises an error with a
+suggestion to use `:auto` or `:cuda_sparse`.
+
+The same single-GPU paths support three-dimensional IVPs. For a triply
+periodic Fourier--Fourier--Fourier domain, use `StochasticForcing`; the
+field-native RK path and multidimensional cuFFT stay on the GPU. For a
+Fourier--Fourier--Chebyshev domain, use `SeparableStochasticForcing` with
+`fourier_size=(Nx, Ny)` and the Chebyshev basis/profile. That coupled path
+uses `CuSparseLU` and cached mixed-transform buffers. Once the plans and
+workspaces are warm, neither path allocates device memory during `step!`.
+These guarantees currently apply to one GPU; distributed multi-GPU IVPs have
+separate transform constraints.
+
+---
+
 ## Understanding the Example
 
 ### Forcing Spectrum

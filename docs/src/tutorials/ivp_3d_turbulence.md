@@ -263,28 +263,23 @@ vorticity is set, and `KE = 0.125` **once the solver has taken a step**.
     during the first step. Call `kinetic_energy()` straight after the initial condition and you get
     exactly `0.0`, not `0.125`. After one step it is `0.124985`.
 
-!!! warning "Reading the velocity back"
-    The velocity is a *substitution constraint* (`u = ∇ × A`), and there are two situations in which the
-    copy you read out of `u1, u2, u3` is **corrupted**:
+!!! warning "Reading the velocity back under MPI"
+    The velocity is a *substitution constraint* (`u = ∇ × A`). Serial CPU and
+    single-GPU output is observational: a handler stages the constraint state
+    produced by the completed timestep without solving it again, so writing a
+    snapshot no longer changes `u1, u2, u3`.
 
-    - **In serial, on any iteration in which an output handler writes.** Right after a write,
-      `max|u1| = 0.664` where the true value is `0.996`, `max|u2| = 0.332` (true `0.997`) and
-      `max|u3| = 0.333` (true `0.013`). This is *not* a uniform rescale — the components come out
-      differently wrong, so do not try to correct it by multiplying by `1.5`. The **next step restores
-      them** (`max|u1|` is back to `0.996` one iteration later), so the damage is confined to the
-      writing iteration. It bites in two places: a callback that fires on the same iteration as a
-      write, and any inspection *after* `run!` returns — the final iteration is normally a write, so
-      the velocity you find sitting in `u1, u2, u3` at the end of a run is the corrupted copy.
-    - **Under MPI, on every step**, handler or no handler (measured identically at np = 2, 4 and 8:
-      `max|u1| = 0.6658` against a true `0.9987`).
+    **Under MPI, on every step**, handler or no handler, the reconstructed
+    velocity remains corrupted (measured identically at np = 2, 4 and 8:
+    `max|u1| = 0.6658` against a true `0.9987`).
 
     What is *not* affected is the physics. The time-stepped vorticity is bit-identical at np = 1, 2 and 4
     (`max|w1| = 0.998933308710438` at all three), and the enstrophy after 20 steps agrees to ~15 digits
     (`0.374138356478886`; the MPI reduction can differ in the last ulp because it sums in a different
     order) whether a handler writes every iteration or not — the solver's internal RHS uses a correct
     velocity. So `enstrophy()` and `dissipation()` are trustworthy everywhere. Take `kinetic_energy()` and
-    the velocity spectrum below from a serial run on a non-writing iteration; otherwise diagnose with the
-    vorticity, or reconstruct the velocity from saved vorticity snapshots in post-processing.
+    the velocity spectrum below from a serial run; under MPI, diagnose with the vorticity or reconstruct
+    the velocity from saved vorticity snapshots in post-processing.
 
 ### Energy Spectrum
 
@@ -365,13 +360,12 @@ Tarang.group_ncread(f, "vars", "w3")         # (write, x, y, z)
 Tarang.group_ncread(f, "time", "sim_time")   # (write,)
 ```
 
-!!! warning "Snapshot the vorticity, not the velocity"
-    `add_task!(snapshots, u1)` writes the corrupted velocity described under
-    [Diagnostics](#Diagnostics) — the constraint-solved velocity is wrong precisely on the iterations a
-    handler writes, which is exactly when it gets sampled. (Merely *attaching* the handler is enough:
-    the corruption happens on write even when the only task is `w1`.) The time-stepped vorticity is
-    written correctly — `vars/w3` peaks at the exact `2.0`. Snapshot `w1, w2, w3` and reconstruct the
-    velocity in post-processing.
+!!! warning "Snapshot vorticity under MPI"
+    In serial CPU and single-GPU runs, `add_task!(snapshots, u1)` writes the
+    constraint state without mutating it. Under MPI the velocity is already
+    affected by the reconstruction issue described under [Diagnostics](#Diagnostics),
+    independent of output. For distributed runs, snapshot `w1, w2, w3` and
+    reconstruct velocity in post-processing.
 
 ## Performance Considerations
 

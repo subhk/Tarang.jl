@@ -90,11 +90,10 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     # Only the first RealFourier dimension is R2C (shrinks that dim); others use C2C.
     coeff_shape = current_shape
 
-    # Create DCT plans for Chebyshev dimensions (use coefficient shape)
+    # Mixed transforms use the cached DCT-I implementation from cheb_deriv.jl.
+    # Keep this field for plan compatibility, but do not allocate the obsolete
+    # DCT-II/III twiddle plans.
     dct_plans = Dict{Int, GPUDCTPlanDim}()
-    for dim in chebyshev_dims
-        dct_plans[dim] = plan_gpu_dct_dim(arch, coeff_shape, T, dim)
-    end
 
     return GPUMixedTransformPlan(
         basis_types, transform_order,
@@ -120,6 +119,40 @@ struct GPUMixedTransformCache
 end
 
 const GPU_MIXED_TRANSFORM_CACHE = GPUMixedTransformCache(Dict{Tuple, GPUMixedTransformPlan}(), ReentrantLock())
+
+struct GPUMixedTransformScratch{CA,RA}
+    complex_a::CA
+    complex_b::CA
+    real_input::RA
+    real_output::RA
+    imag_output::RA
+end
+
+const GPU_MIXED_SCRATCH_CACHE = Dict{Tuple,Any}()
+
+function get_gpu_mixed_transform_scratch(plan::GPUMixedTransformPlan,
+                                         ::Type{CT}) where {CT<:Complex}
+    RT = real(CT)
+    key = (_current_device_id(), plan.grid_shape, plan.coeff_shape, CT)
+    scratch = lock(GPU_MIXED_TRANSFORM_CACHE.lock) do
+        get!(GPU_MIXED_SCRATCH_CACHE, key) do
+            complex_a = CUDA.zeros(CT, plan.coeff_shape...)
+            complex_b = CUDA.zeros(CT, plan.coeff_shape...)
+            GPUMixedTransformScratch(
+                complex_a,
+                complex_b,
+                CUDA.zeros(RT, plan.coeff_shape...),
+                CUDA.zeros(RT, plan.coeff_shape...),
+                CUDA.zeros(RT, plan.coeff_shape...),
+            )
+        end
+    end
+    return scratch::GPUMixedTransformScratch
+end
+
+@inline function _next_mixed_complex_buffer(current, scratch::GPUMixedTransformScratch)
+    return current === scratch.complex_a ? scratch.complex_b : scratch.complex_a
+end
 
 """
     _mixed_plan_key(arch, bases, local_grid_shape, T)
@@ -157,6 +190,7 @@ Clear all cached GPU mixed transform plans (thread-safe).
 function clear_gpu_mixed_transform_cache!()
     lock(GPU_MIXED_TRANSFORM_CACHE.lock) do
         empty!(GPU_MIXED_TRANSFORM_CACHE.plans)
+        empty!(GPU_MIXED_SCRATCH_CACHE)
     end
 end
 
@@ -176,57 +210,45 @@ Transforms grid-space data to spectral coefficients:
 """
 function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuArray{S, N},
                                       plan::GPUMixedTransformPlan) where {T, S, N}
-    # Determine complex type for intermediate results
     complex_T = T <: Complex ? T : Complex{T}
+    scratch = get_gpu_mixed_transform_scratch(plan, complex_T)
 
-    # Work through dimensions in order
     current_data = grid_data
 
     for dim in plan.transform_order
         basis_type = plan.basis_types[dim]
 
         if basis_type == :fourier_real || basis_type == :fourier_complex
-            # FFT along this dimension
             fft_plan = plan.fft_plans[dim]
+            output = _next_mixed_complex_buffer(current_data, scratch)
 
             if fft_plan.is_real
-                # R2C transform: requires real input, changes size along this dimension.
-                # With correct plan creation (data_is_real tracking), input should always be real here.
-                out_shape = ntuple(i -> i == dim ? div(size(current_data, i), 2) + 1 : size(current_data, i), N)
-                output = CUDA.zeros(complex_T, out_shape...)
                 gpu_fft_dim!(output, current_data, fft_plan)
             else
-                # C2C transform preserves size; promote real input to complex if needed
-                fft_input = eltype(current_data) <: Real ? complex_T.(current_data) : current_data
-                output = CUDA.zeros(complex_T, size(fft_input)...)
-                gpu_fft_dim!(output, fft_input, fft_plan)
+                if eltype(current_data) <: Real
+                    input = output === scratch.complex_b ? scratch.complex_a : scratch.complex_b
+                    input .= complex.(current_data)
+                    gpu_fft_dim!(output, input, fft_plan)
+                else
+                    gpu_fft_dim!(output, current_data, fft_plan)
+                end
             end
 
             current_data = output
 
         elseif basis_type == :chebyshev
-            # DCT along this dimension
-            dct_plan = plan.dct_plans[dim]
-
-            # DCT works on real data - if we have complex from FFT, process real and imag separately
             if eltype(current_data) <: Complex
-                output_real = CUDA.zeros(real(eltype(current_data)), size(current_data)...)
-                output_imag = CUDA.zeros(real(eltype(current_data)), size(current_data)...)
-
-                # Extract real and imaginary parts
-                input_real = real.(current_data)
-                input_imag = imag.(current_data)
-
-                # DCT on each
-                gpu_dct_dim!(output_real, input_real, dct_plan, Val(:forward))
-                gpu_dct_dim!(output_imag, input_imag, dct_plan, Val(:forward))
-
-                # Combine back to complex
-                current_data = complex.(output_real, output_imag)
-            else
-                output = CUDA.zeros(eltype(current_data), size(current_data)...)
-                gpu_dct_dim!(output, current_data, dct_plan, Val(:forward))
+                scratch.real_input .= real.(current_data)
+                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :forward)
+                scratch.real_input .= imag.(current_data)
+                gpu_dct1_along_dim!(scratch.imag_output, scratch.real_input, dim, :forward)
+                output = _next_mixed_complex_buffer(current_data, scratch)
+                output .= complex.(scratch.real_output, scratch.imag_output)
                 current_data = output
+            else
+                scratch.real_input .= current_data
+                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :forward)
+                current_data = scratch.real_output
             end
         end
     end
@@ -248,56 +270,51 @@ Transforms spectral coefficients to grid-space data:
 """
 function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuArray{S, N},
                                        plan::GPUMixedTransformPlan) where {T, S, N}
-    # Work through dimensions in REVERSE order
+    complex_T = S <: Complex ? S : Complex{S}
+    scratch = get_gpu_mixed_transform_scratch(plan, complex_T)
     current_data = coeff_data
 
     for dim in reverse(plan.transform_order)
         basis_type = plan.basis_types[dim]
 
         if basis_type == :chebyshev
-            # Inverse DCT along this dimension
-            dct_plan = plan.dct_plans[dim]
-
             if eltype(current_data) <: Complex
-                output_real = CUDA.zeros(real(eltype(current_data)), size(current_data)...)
-                output_imag = CUDA.zeros(real(eltype(current_data)), size(current_data)...)
-
-                input_real = real.(current_data)
-                input_imag = imag.(current_data)
-
-                gpu_dct_dim!(output_real, input_real, dct_plan, Val(:backward))
-                gpu_dct_dim!(output_imag, input_imag, dct_plan, Val(:backward))
-
-                current_data = complex.(output_real, output_imag)
-            else
-                output = CUDA.zeros(eltype(current_data), size(current_data)...)
-                gpu_dct_dim!(output, current_data, dct_plan, Val(:backward))
+                scratch.real_input .= real.(current_data)
+                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :backward)
+                scratch.real_input .= imag.(current_data)
+                gpu_dct1_along_dim!(scratch.imag_output, scratch.real_input, dim, :backward)
+                output = _next_mixed_complex_buffer(current_data, scratch)
+                output .= complex.(scratch.real_output, scratch.imag_output)
                 current_data = output
+            else
+                scratch.real_input .= current_data
+                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :backward)
+                current_data = scratch.real_output
             end
 
         elseif basis_type == :fourier_real || basis_type == :fourier_complex
-            # Inverse FFT along this dimension
             fft_plan = plan.fft_plans[dim]
 
             if fft_plan.is_real
-                # C2R transform: requires complex input, expands this dimension back to grid size
-                out_shape = ntuple(i -> i == dim ? plan.grid_shape[i] : size(current_data, i), N)
-                output = CUDA.zeros(T, out_shape...)
-                gpu_ifft_dim!(output, current_data, fft_plan)
+                gpu_ifft_dim!(grid_data, current_data, fft_plan)
+                current_data = grid_data
             else
-                # C2C inverse: requires complex input; promote real if needed
-                ifft_input = eltype(current_data) <: Real ?
-                    (T <: Complex ? T : Complex{real(T)}).(current_data) : current_data
-                output = CUDA.zeros(eltype(ifft_input), size(ifft_input)...)
-                gpu_ifft_dim!(output, ifft_input, fft_plan)
+                output = _next_mixed_complex_buffer(current_data, scratch)
+                if eltype(current_data) <: Real
+                    input = output === scratch.complex_b ? scratch.complex_a : scratch.complex_b
+                    input .= complex.(current_data)
+                    gpu_ifft_dim!(output, input, fft_plan)
+                else
+                    gpu_ifft_dim!(output, current_data, fft_plan)
+                end
+                current_data = output
             end
-
-            current_data = output
         end
     end
 
-    # Copy to output - only take real part if grid_data is real-valued
-    if T <: Real
+    if current_data === grid_data
+        return grid_data
+    elseif T <: Real
         copyto!(grid_data, real.(current_data))
     else
         copyto!(grid_data, current_data)
