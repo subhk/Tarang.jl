@@ -108,8 +108,10 @@ struct GPU{D} <: AbstractSerialArchitecture
     device::D
 end
 
-# Default GPU constructor - will be overridden by extension
-function GPU(; device_id::Int = 0)
+# The CUDA extension adds a more-specific `_gpu_device(::Int)` method. Keeping
+# the public constructor here avoids overwriting a core method while package
+# extensions are precompiled on Julia 1.12.
+function _gpu_device(device_id::Integer)
     error("""
         GPU architecture requires CUDA.jl to be loaded.
 
@@ -121,6 +123,11 @@ function GPU(; device_id::Int = 0)
 
             arch = GPU()
         """)
+end
+
+function GPU(; device_id::Int = 0)
+    gpu_device = _gpu_device(device_id)
+    return GPU{typeof(gpu_device)}(gpu_device)
 end
 
 # Placeholder methods - overridden by CUDA extension
@@ -299,7 +306,8 @@ is_gpu(::GPU) = true
 
 Check if CUDA is available (placeholder - set by extension).
 """
-has_cuda() = false  # Overridden by CUDA extension
+_cuda_functional(::Any) = false
+has_cuda() = _cuda_functional(Val(:cuda))
 
 """
     is_gpu_array(a::AbstractArray)

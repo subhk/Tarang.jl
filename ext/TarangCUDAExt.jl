@@ -23,9 +23,9 @@ The extension is organized into the following files:
 """
 module TarangCUDAExt
 
-using Tarang
+import Tarang
 using Tarang: AbstractArchitecture, AbstractSerialArchitecture, GPU, CPU
-using Tarang: device, array_type, architecture, on_architecture, workgroup_size, launch!, KernelOperation, ensure_device!
+using Tarang: device, array_type, architecture, on_architecture, workgroup_size, launch!, KernelOperation
 using Tarang: synchronize, unsafe_free!, has_cuda
 using Tarang: ScalarField, VectorField, Distributor, Domain, Basis
 using Tarang: get_local_data, set_local_data!
@@ -34,6 +34,7 @@ using Tarang: is_gpu_array, gpu_forward_transform!, gpu_backward_transform!, sho
 using Tarang: _gpu_chebyshev_deriv!
 using Tarang: RealFourier, ComplexFourier, ChebyshevT, Legendre
 using Tarang: DistributedGPUFFT
+import Tarang: ensure_device!
 # Note: global_shape and coefficient_shape are NOT imported - transform functions
 # use local array sizes (size(data_g), size(data_c)) for MPI correctness
 # Note: coefficient_eltype, gpu_multiply_fields!, local_fft_dim!, local_ifft_dim!
@@ -41,27 +42,27 @@ using Tarang: DistributedGPUFFT
 
 using Random
 using MPI
-using CUDA
-using CUDA: CuArray, CuDevice, device!, synchronize as cuda_sync
+import CUDA
+using CUDA: CUDABackend, CuArray, CuDevice, CuMatrix, CuVector, device!, synchronize as cuda_sync
 using CUDA: CuStream, default_stream, @sync
 using CUDA.CUFFT
 using CUDA.CUBLAS
-using KernelAbstractions
+import KernelAbstractions
 using KernelAbstractions: @kernel, @index, @Const
 
 # Include sub-modules in dependency order
 include("cuda/config.jl")
 include("cuda/memory.jl")
 include("cuda/architecture.jl")
-include("cuda/transforms.jl")
 include("cuda/dct.jl")
 include("cuda/cheb_deriv.jl")
 include("cuda/mixed_transforms.jl")
 include("cuda/kernels.jl")
-include("cuda/batched_fft.jl")
 include("cuda/pencil.jl")
 include("cuda/nccl_transpose.jl")  # NCCL-based transpose for pencil decomposition
 include("cuda/dct_distributed.jl")  # Distributed DCT for multi-GPU Chebyshev transforms
+include("cuda/transforms.jl")
+include("cuda/batched_fft.jl")
 include("cuda/utils.jl")
 include("cuda/transpose_kernels.jl")  # TransposableField GPU support
 

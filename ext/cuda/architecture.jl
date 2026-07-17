@@ -3,9 +3,9 @@
 # ============================================================================
 
 """
-    GPU(; device_id::Int = 0)
+    Tarang._gpu_device(device_id::Int)
 
-Create a GPU architecture using the specified CUDA device.
+Select and return the specified CUDA device for Tarang's `GPU` constructor.
 
 # Arguments
 - `device_id`: CUDA device ID (0-indexed, default: 0)
@@ -19,7 +19,7 @@ arch = GPU()                 # Use default device
 arch = GPU(device_id=1)      # Use second GPU
 ```
 """
-function Tarang.GPU(; device_id::Int = 0)
+function Tarang._gpu_device(device_id::Int)
     if !CUDA.functional()
         error("CUDA is not functional. Please check your GPU drivers and CUDA installation.")
     end
@@ -36,7 +36,7 @@ function Tarang.GPU(; device_id::Int = 0)
 
     @info "Initialized GPU architecture on device $device_id: $(CUDA.name(dev))"
 
-    return GPU{CuDevice}(dev)
+    return dev
 end
 
 # ============================================================================
@@ -55,22 +55,19 @@ function Tarang.device(gpu::GPU{CuDevice})
     return CUDABackend()
 end
 
-# Fallback for GPU without specific device (uses current device)
-Tarang.device(::GPU) = CUDABackend()
-
 """
     array_type(::GPU)
 
 Return CuArray as the array type for GPU.
 """
-Tarang.array_type(::GPU) = CuArray
+Tarang.array_type(::GPU{CuDevice}) = CuArray
 
 """
     array_type(::GPU, T::Type)
 
 Return the concrete CuArray type with element type T.
 """
-Tarang.array_type(::GPU, T::Type) = CuArray{T}
+Tarang.array_type(::GPU{CuDevice}, T::Type) = CuArray{T}
 
 # ============================================================================
 # Device-aware Base.zeros/ones/similar Overrides
@@ -225,7 +222,7 @@ Tarang.on_architecture(::CPU, a::CuArray) = Array(a)
 
 Return true when CUDA is available.
 """
-Tarang.has_cuda() = CUDA.functional()
+Tarang._cuda_functional(::Val{:cuda}) = CUDA.functional()
 
 """
     synchronize(gpu::GPU{CuDevice})
@@ -236,9 +233,6 @@ function Tarang.synchronize(gpu::GPU{CuDevice})
     ensure_device!(gpu)
     cuda_sync()
 end
-
-# Fallback for generic GPU (syncs current device)
-Tarang.synchronize(::GPU) = cuda_sync()
 
 """
     unsafe_free!(gpu::GPU{CuDevice}, a::CuArray)

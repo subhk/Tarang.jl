@@ -144,7 +144,7 @@ should_use_gpu_fft(field::ScalarField) = (get_grid_data(field) !== nothing) && s
 GPU-specific forward transform using CUFFT.
 Returns true if GPU transform was applied, false otherwise.
 """
-function gpu_forward_transform!(field::ScalarField)
+function gpu_forward_transform!(field)
     # Check if we're on GPU architecture
     arch = field.dist.architecture
     if !is_gpu(arch)
@@ -169,7 +169,7 @@ end
 GPU-specific backward transform using CUFFT.
 Returns true if GPU transform was applied, false otherwise.
 """
-function gpu_backward_transform!(field::ScalarField)
+function gpu_backward_transform!(field)
     # Check if we're on GPU architecture
     arch = field.dist.architecture
     if !is_gpu(arch)

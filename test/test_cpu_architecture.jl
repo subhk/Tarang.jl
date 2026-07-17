@@ -1,5 +1,6 @@
 using Test
 using Tarang
+using KernelAbstractions
 using Tarang: CPU, GPU, launch!, KernelOperation, workgroup_size, architecture,
              ensure_device!, on_architecture, is_gpu, is_gpu_array, array_type
 

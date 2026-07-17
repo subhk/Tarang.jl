@@ -33,6 +33,14 @@ end
 
 const _HAS_CUDA = (@isdefined CUDA) && CUDA.functional()
 
+if @isdefined CUDA
+    @testset "CUDA extension loads completely" begin
+        cuda_ext = Base.get_extension(Tarang, :TarangCUDAExt)
+        @test cuda_ext !== nothing
+        @test isdefined(cuda_ext, :GPU_UNPACK_3D_OP)
+    end
+end
+
 if !_HAS_CUDA
     @testset "GPU transform correctness (skipped: no functional CUDA)" begin
         @test_skip "CUDA not functional on this host"
