@@ -49,10 +49,6 @@ Arguments:
 
     # Total elements
     total = Nx * Ny * Nz
-    if i > total
-        return
-    end
-
     # Convert linear index to 3D indices (column-major order)
     ix = ((i - 1) % Nx) + 1
     iy = (((i - 1) ÷ Nx) % Ny) + 1
@@ -95,10 +91,6 @@ Uses binary search for O(log P) rank lookup.
     i = @index(Global)
 
     total = Nx * Ny
-    if i > total
-        return
-    end
-
     ix = ((i - 1) % Nx) + 1
     iy = ((i - 1) ÷ Nx) + 1
 
@@ -135,10 +127,6 @@ Uses binary search for O(log P) rank lookup.
     i = @index(Global)
 
     total = Nx * Ny * Nz
-    if i > total
-        return
-    end
-
     ix = ((i - 1) % Nx) + 1
     iy = (((i - 1) ÷ Nx) % Ny) + 1
     iz = ((i - 1) ÷ (Nx * Ny)) + 1
@@ -177,10 +165,6 @@ Uses binary search for O(log P) rank lookup.
     i = @index(Global)
 
     total = Nx * Ny
-    if i > total
-        return
-    end
-
     ix = ((i - 1) % Nx) + 1
     iy = ((i - 1) ÷ Nx) + 1
 
@@ -516,7 +500,11 @@ function Tarang._gpu_pack_for_transpose!(send_buf::CuArray, data::CuArray,
     # Determine pack direction from data shape:
     # Forward: dim is distributed (small), split other_dim among ranks
     # Reverse: dim is local (global_n), split dim among ranks
-    if dims[dim] < global_n
+    # Degenerate global_n == 1: the shapes cannot distinguish the directions
+    # (dims[dim] == global_n either way). Classify as FORWARD so the pack
+    # matches the forward `Tarang._compute_alltoall_counts` (split other_dim),
+    # which is what `mpi_alltoall_transpose` uses for the alltoallv itself.
+    if dims[dim] < global_n || global_n == 1
         # Forward: split along other_dim
         split_dim = other_dim
         split_n = dims[split_dim]
@@ -569,7 +557,10 @@ function Tarang._gpu_unpack_from_transpose!(output::CuArray, recv_buf::CuArray,
     # Determine unpack direction from output shape:
     # Forward: output[dim] == global_n → assemble along dim from per-rank chunks
     # Reverse: output[dim] < global_n → assemble along other_dim
-    if out_dims[dim] == global_n
+    # Degenerate global_n == 1: ambiguous by shape (out_dims[dim] is 1 == global_n
+    # on the owning rank, 0 elsewhere). Classify as FORWARD on every rank, matching
+    # the pack side and the forward `Tarang._compute_alltoall_counts` recv counts.
+    if out_dims[dim] == global_n || global_n == 1
         # Forward unpack: assemble along dim
         assemble_dim = dim
         assemble_n = global_n
@@ -601,11 +592,16 @@ end
 
 """
 Override fft_in_dim! for GPU arrays using CUFFT.
+
+Accepts the `plan` keyword its callers always pass (see `transform_in_dim!` in
+src/core/transpose/transpose_transforms.jl) but ignores it: the plan handed down
+may be a CPU FFTW plan or a placeholder, so the cached CUFFT plan is used instead.
 """
-function Tarang.fft_in_dim!(data::CuArray, dim::Int, direction::Symbol, arch::Tarang.GPU)
+function Tarang.fft_in_dim!(data::CuArray, dim::Int, direction::Symbol, arch::Tarang.GPU;
+                            plan=nothing)
     # Use cached CUFFT plan to avoid expensive plan creation per call
-    plan = get_fft_1d_plan(size(data), dim, eltype(data); inverse=(direction != :forward))
-    data .= plan * data
+    cufft_plan = get_fft_1d_plan(size(data), dim, eltype(data); inverse=(direction != :forward))
+    data .= cufft_plan * data
     CUDA.synchronize()
     return data
 end
@@ -614,10 +610,34 @@ end
 # GPU DCT in dimension (for Chebyshev transforms)
 # ============================================================================
 
-"""
-Override dct_in_dim! for GPU arrays using GPU DCT kernels.
+"""Undo the odd-degree sign flip along `dim` of a 3D array in place:
+`a[k, …] *= (-1)^(k-1)` (1-based `k` along `dim`). Since
+`REDFT00(reverse(x))[k] = (-1)^k REDFT00(x)[k]`, this converts between the
+reversed-grid DCT-I convention of `gpu_dct1_along_dim!` and the plain (unflipped)
+REDFT00 convention of the CPU distributed reference."""
+function _dct1_undo_odd_flip!(a::CuArray{T,3}, dim::Int) where {T}
+    n = size(a, dim)
+    sgn = CuArray(T[iseven(k) ? -one(T) : one(T) for k in 1:n])
+    a .*= reshape(sgn, ntuple(i -> i == dim ? n : 1, 3))
+    return a
+end
 
-Uses the GPUDCTPlanDim from dct.jl for efficient GPU-based DCT.
+"""
+Override dct_in_dim! for GPU arrays.
+
+Tarang's Chebyshev transform is DCT-I (REDFT00) on the Gauss–Lobatto grid, so
+this must match the CPU distributed reference `Tarang.dct_in_dim!(…, ::CPU)` in
+src/core/transpose/transpose_transforms.jl EXACTLY:
+  forward:  REDFT00, 1/(N-1) normalization, half-weight at both endpoints,
+            NO odd-degree sign flip
+  backward: double both endpoint coefficients, REDFT00, divide by 2
+
+The verified GPU DCT-I building block `gpu_dct1_along_dim!` (ext/cuda/cheb_deriv.jl)
+implements the same transform but in the reversed-grid convention of
+transform_chebyshev.jl, whose output is `(-1)^k ×` the CPU reference here
+(a grid reversal ≡ an odd-degree coefficient sign flip). We therefore undo that
+flip explicitly: AFTER the forward transform, and on the coefficients BEFORE the
+backward transform.
 """
 function Tarang.dct_in_dim!(data::CuArray{T,N}, dim::Int, direction::Symbol, arch::Tarang.GPU) where {T,N}
     # Handle complex data by transforming real and imaginary parts separately
@@ -634,33 +654,34 @@ function Tarang.dct_in_dim!(data::CuArray{T,N}, dim::Int, direction::Symbol, arc
         return data
     end
 
-    # Real data path
-    real_T = T <: Complex ? real(T) : T
-    full_size = size(data)
+    # Real data path — DCT-I via the verified gpu_dct1_along_dim! (3D kernels).
+    n = size(data, dim)
+    n <= 1 && return data
 
-    if N == 1
-        # 1D case: use GPUDCTPlan + gpu_forward/backward_dct_1d!
-        n = full_size[1]
-        plan_1d = plan_gpu_dct(arch, n, real_T, 1)
-        output = similar(data)
-        if direction == :forward
-            gpu_forward_dct_1d!(output, data, plan_1d)
-        else
-            gpu_backward_dct_1d!(output, data, plan_1d)
-        end
-    else
-        # 2D/3D case: use GPUDCTPlanDim + gpu_dct_dim!
-        plan = plan_gpu_dct_dim(arch, full_size, real_T, dim)
-        output = similar(data)
-        if direction == :forward
-            gpu_dct_dim!(output, data, plan, Val(:forward))
-        else
-            gpu_dct_dim!(output, data, plan, Val(:backward))
-        end
+    if N > 3 || !(T <: AbstractFloat)
+        # No GPU DCT-I wiring for this case — fall back to the CPU reference
+        # (correctness over speed).
+        data_cpu = Array(data)
+        Tarang.dct_in_dim!(data_cpu, dim, direction, Tarang.CPU())
+        copyto!(data, data_cpu)
+        return data
     end
 
-    # Copy result back to data
-    copyto!(data, output)
+    # Reshape 1D/2D input to 3D (CuArray reshape shares storage, so writing
+    # through data3 writes data). `dim` stays valid: trailing dims are appended.
+    data3 = N == 3 ? data : reshape(data, size(data)..., ntuple(_ -> 1, 3 - N)...)
+    out3 = similar(data3)
+
+    if direction == :forward
+        gpu_dct1_along_dim!(out3, data3, dim, :forward)
+        _dct1_undo_odd_flip!(out3, dim)
+        data3 .= out3
+    else
+        _dct1_undo_odd_flip!(data3, dim)
+        gpu_dct1_along_dim!(out3, data3, dim, :backward)
+        data3 .= out3
+    end
+
     CUDA.synchronize()
     return data
 end
