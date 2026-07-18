@@ -22,6 +22,25 @@ println("=" ^ 60)
 println("Stochastic Forcing Tests")
 println("=" ^ 60)
 
+function cpu_work_diagnostic_allocations(forcing, sol)
+    # Keep measurement in a type-specialized function. Julia 1.10 can charge a
+    # 16-byte captured-variable box when @allocated is expanded in a testset.
+    return (
+        @allocated(begin
+            work_stratonovich(forcing, sol)
+            nothing
+        end),
+        @allocated(begin
+            work_ito(forcing, sol)
+            nothing
+        end),
+        @allocated(begin
+            instantaneous_power(forcing, sol)
+            nothing
+        end),
+    )
+end
+
 @testset "StochasticForcing" begin
 
     @testset "CPU Construction" begin
@@ -120,6 +139,113 @@ println("=" ^ 60)
         println("  Kolmogorov spectrum OK")
     end
 
+    @testset "Physical spectrum normalization and validation" begin
+        ε = 0.125
+
+        # Tarang stores unnormalized full FFT coefficients, so Parseval's
+        # normalization is M⁻² and must not depend on grid resolution.
+        for field_size in ((16,), (16, 16), (8, 8, 8), (32, 32))
+            forcing = StochasticForcing(
+                field_size=field_size,
+                energy_injection_rate=ε,
+                k_forcing=3.0,
+                spectrum_type=:lowk,
+                injection_metric=:direct,
+            )
+            M = prod(field_size)
+            physical_rate = sum(abs2, forcing.spectrum) / (2M^2)
+            @test physical_rate ≈ ε rtol=5e-14
+            @test forcing.injection_metric === :direct
+        end
+
+        vorticity_forcing = StochasticForcing(
+            field_size=(32, 32),
+            energy_injection_rate=ε,
+            k_forcing=6.0,
+            dk_forcing=1.0,
+            spectrum_type=:band,
+            injection_metric=:vorticity_kinetic,
+        )
+        kx, ky = vorticity_forcing.wavenumbers
+        weighted_power = sum(CartesianIndices(vorticity_forcing.spectrum)) do I
+            k2 = kx[I[1]]^2 + ky[I[2]]^2
+            iszero(k2) ? 0.0 : abs2(vorticity_forcing.spectrum[I]) / k2
+        end
+        @test weighted_power / (2prod(vorticity_forcing.field_size)^2) ≈ ε rtol=5e-14
+        @test vorticity_forcing.injection_metric === :vorticity_kinetic
+
+        direct_vorticity_forcing = StochasticForcing(
+            field_size=(32, 32),
+            energy_injection_rate=ε,
+            k_forcing=6.0,
+            dk_forcing=1.0,
+            spectrum_type=:band,
+            injection_metric=:direct,
+        )
+        @test forcing_enstrophy_injection_rate(direct_vorticity_forcing) ≈ ε rtol=5e-14
+
+        M_vorticity = prod(vorticity_forcing.field_size)
+        manual_enstrophy_rate = sum(abs2, vorticity_forcing.spectrum) / (2M_vorticity^2)
+        @test forcing_enstrophy_injection_rate(vorticity_forcing) ≈
+              manual_enstrophy_rate rtol=5e-14
+        @test manual_enstrophy_rate > ε
+
+        ring = StochasticForcing(
+            field_size=(32,),
+            energy_injection_rate=ε,
+            k_forcing=8.0,
+            dk_forcing=2.0,
+            spectrum_type=:ring,
+        )
+        @test abs2(ring.spectrum[11]) / abs2(ring.spectrum[9]) ≈ exp(-1 / 2) rtol=5e-14
+
+        kolmogorov = StochasticForcing(
+            field_size=(32,),
+            energy_injection_rate=ε,
+            k_forcing=8.0,
+            dk_forcing=2.0,
+            spectrum_type=:kolmogorov,
+        )
+        expected_kolmogorov_power_ratio = (6 / 8) * exp(-1 / 2)
+        @test abs2(kolmogorov.spectrum[7]) / abs2(kolmogorov.spectrum[9]) ≈
+              expected_kolmogorov_power_ratio rtol=5e-14
+
+        common = (field_size=(16, 16), k_forcing=4.0, dk_forcing=1.0)
+        @test_throws ArgumentError StochasticForcing(; common..., injection_metric=:unknown)
+        @test_throws ArgumentError StochasticForcing(; common..., energy_injection_rate=-0.1)
+        @test_throws ArgumentError StochasticForcing(; common..., forcing_rate=-0.1)
+        @test_throws ArgumentError StochasticForcing(
+            field_size=(16,), energy_injection_rate=0.0,
+            k_forcing=0.0, dk_forcing=1.0,
+            spectrum_type=:kolmogorov,
+        )
+        @test_throws ArgumentError compute_forcing_spectrum(
+            build_wavenumbers((16,), (2π,), Float64),
+            -1.0, 1.0, 0.0, (2π,), :kolmogorov, Float64,
+        )
+        overriding_alias = @test_logs (:warn, r"Both forcing_rate and energy_injection_rate") StochasticForcing(
+            ; common..., energy_injection_rate=-0.1, forcing_rate=0.1
+        )
+        @test overriding_alias.energy_injection_rate == 0.1
+        @test overriding_alias.forcing_rate == 0.1
+        @test_throws ArgumentError StochasticForcing(
+            field_size=(8, 8),
+            energy_injection_rate=0.1,
+            k_forcing=100.0,
+            dk_forcing=0.25,
+            spectrum_type=:band,
+        )
+
+        empty_zero_rate = StochasticForcing(
+            field_size=(8, 8),
+            energy_injection_rate=0.0,
+            k_forcing=100.0,
+            dk_forcing=0.25,
+            spectrum_type=:band,
+        )
+        @test iszero(sum(abs2, empty_zero_rate.spectrum))
+    end
+
     @testset "Forcing Generation" begin
         Random.seed!(12345)
 
@@ -186,6 +312,23 @@ println("=" ^ 60)
         @test abs(imag(F[1, nyq_y])) < 1e-10  # (0, Ny/2)
         @test abs(imag(F[nyq_x, nyq_y])) < 1e-10  # (Nx/2, Ny/2)
         println("  Self-conjugate modes are real OK")
+    end
+
+    @testset "Self-conjugate projection preserves power" begin
+        data_1d = zeros(ComplexF64, 8)
+        data_1d[5] = 3 + 4im
+        Tarang._enforce_hermitian_1d!(data_1d)
+        @test data_1d[5] ≈ 3sqrt(2) + 0im
+
+        data_2d = zeros(ComplexF64, 8, 6)
+        data_2d[5, 4] = 3 + 4im
+        Tarang._enforce_hermitian_2d!(data_2d)
+        @test data_2d[5, 4] ≈ 3sqrt(2) + 0im
+
+        data_3d = zeros(ComplexF64, 8, 6, 4)
+        data_3d[5, 4, 3] = 3 + 4im
+        Tarang._enforce_hermitian_3d!(data_3d)
+        @test data_3d[5, 4, 3] ≈ 3sqrt(2) + 0im
     end
 
     @testset "Substep Awareness (KEY TEST)" begin
@@ -362,37 +505,76 @@ println("=" ^ 60)
 
     @testset "Work diagnostics support half-spectrum targets" begin
         dt = 0.01
-        forcing = StochasticForcing(
-            field_size=(8, 8),
-            forcing_rate=0.1,
-            k_forcing=3.0,
-            dk_forcing=1.0,
-            dt=dt,
-            rng=MersenneTwister(42)
-        )
+        field_size = (8, 8)
+        half_size = (5, 8)
+        multiplicity = reshape([1.0, 2.0, 2.0, 2.0, 1.0], :, 1)
 
-        generate_forcing!(forcing, 0.0)
-        forcing_view = Tarang._matched_forcing_view(forcing, (5, 8))
-        @test forcing_view !== nothing
+        for metric in (:direct, :vorticity_kinetic)
+            forcing = StochasticForcing(
+                field_size=field_size,
+                forcing_rate=0.1,
+                injection_metric=metric,
+                k_forcing=2.0,
+                dk_forcing=0.1,
+                spectrum_type=:band,
+                dt=dt,
+                rng=MersenneTwister(42),
+            )
+            generate_forcing!(forcing, 0.0)
+            forcing_view = Tarang._matched_forcing_view(forcing, half_size)
+            rng = MersenneTwister(7)
+            sol_prev = randn(rng, ComplexF64, half_size)
+            sol_next = sol_prev .+ dt .* forcing_view
+            store_prevsol!(forcing, sol_prev)
 
-        rng = MersenneTwister(7)
-        sol_prev = randn(rng, ComplexF64, size(forcing_view))
-        sol_next = sol_prev .+ dt .* forcing_view
-        store_prevsol!(forcing, sol_prev)
+            metric_weight = [
+                metric === :direct ? 1.0 :
+                    (iszero(kx^2 + ky^2) ? 0.0 : inv(kx^2 + ky^2))
+                for kx in forcing.wavenumbers[1][1:half_size[1]],
+                    ky in forcing.wavenumbers[2]
+            ]
+            weights = multiplicity .* metric_weight ./ prod(field_size)^2
+            pairing(a) = sum(weights .* real.(a .* conj.(forcing_view)))
 
-        domain_area = prod(forcing.domain_size)
-        expected_stratonovich =
-            sum(real.(((sol_prev .+ sol_next) ./ 2) .* conj.(forcing_view))) * dt / domain_area
-        expected_ito =
-            sum(real.(sol_prev .* conj.(forcing_view))) * dt / domain_area +
-            forcing.energy_injection_rate * dt
-        expected_power =
-            sum(real.(sol_prev .* conj.(forcing_view))) / domain_area
-
-        @test work_stratonovich(forcing, sol_next) ≈ expected_stratonovich
-        @test work_ito(forcing, sol_prev) ≈ expected_ito
-        @test instantaneous_power(forcing, sol_prev) ≈ expected_power
+            @test work_stratonovich(forcing, sol_next) ≈
+                  pairing((sol_prev .+ sol_next) ./ 2) * dt
+            @test work_ito(forcing, sol_prev) ≈
+                  pairing(sol_prev) * dt + forcing.energy_injection_rate * dt
+            @test instantaneous_power(forcing, sol_prev) ≈ pairing(sol_prev)
+        end
         println("  Work diagnostics use matched forcing views OK")
+    end
+
+    @testset "Odd half-spectrum retains doubled final mode" begin
+        forcing = StochasticForcing(
+            field_size=(7,), forcing_rate=0.0, k_forcing=2.0,
+            dk_forcing=0.1, spectrum_type=:band, dt=0.1,
+        )
+        fill!(forcing.cached_forcing, 0)
+        forcing.cached_forcing[4] = 1
+        forcing.cached_forcing[5] = 1
+        sol = ComplexF64[0, 0, 0, 1]
+
+        manual = 2 / 7^2
+        @test instantaneous_power(forcing, sol) ≈ manual
+        @test instantaneous_power(forcing, sol) != 1 / 7^2
+    end
+
+    @testset "CPU work diagnostics are allocation-free after warmup" begin
+        forcing = StochasticForcing(
+            field_size=(8, 8), forcing_rate=0.1, k_forcing=2.0,
+            dk_forcing=0.1, spectrum_type=:band, dt=0.01,
+            rng=MersenneTwister(91),
+        )
+        generate_forcing!(forcing, 0.0)
+        sol = randn(MersenneTwister(92), ComplexF64, 5, 8)
+        store_prevsol!(forcing, sol)
+        work_stratonovich(forcing, sol)
+        work_ito(forcing, sol)
+        instantaneous_power(forcing, sol)
+
+        allocations = cpu_work_diagnostic_allocations(forcing, sol)
+        @test allocations == (0, 0, 0)
     end
 
     @testset "Deterministic Forcing" begin
@@ -478,6 +660,156 @@ println("=" ^ 60)
         println("  Registered forcing is included in compiled lazy RHS")
     end
 
+    @testset "registered white-noise forcing rejects multistep schemes" begin
+        function forced_solver(timestepper)
+            N = 8
+            dt = 0.01
+            domain = PeriodicDomain(N, N)
+            q = ScalarField(domain, "q")
+            forcing = StochasticForcing(
+                field_size=(N, N),
+                forcing_rate=0.1,
+                k_forcing=3.0,
+                dk_forcing=1.0,
+                dt=dt,
+                rng=MersenneTwister(42)
+            )
+            problem = IVP([q])
+            add_equation!(problem, "∂t(q) = 0")
+            add_stochastic_forcing!(problem, :q, forcing)
+            return InitialValueSolver(problem, timestepper; dt=dt), forcing
+        end
+
+        unsafe_timesteppers = (
+            CNAB2(), SBDF2(), SBDF3(), SBDF4(),
+            ETD_CNAB2(), ETD_SBDF2(),
+            Tarang.MCNAB2(), DiagonalIMEX_SBDF2(), Tarang.CNLF2(),
+        )
+        for timestepper in unsafe_timesteppers
+            solver, forcing = forced_solver(timestepper)
+            error = try
+                step!(solver)
+                nothing
+            catch exception
+                exception
+            end
+
+            @test error isa ArgumentError
+            @test occursin("reuse or combination", sprint(showerror, error))
+            @test occursin("colors white noise", sprint(showerror, error))
+            @test occursin("one-step", sprint(showerror, error))
+            @test forcing.last_update_time == -Inf
+            @test all(iszero, forcing.cached_forcing)
+        end
+
+        for timestepper in (RK222(), CNAB1(), SBDF1())
+            solver, forcing = forced_solver(timestepper)
+            step!(solver)
+            @test solver.iteration == 1
+            @test forcing.last_update_time == 0.0
+            @test any(x -> !iszero(x), forcing.cached_forcing)
+        end
+    end
+
+    @testset "state-level forcing rejects multistep schemes before mutation" begin
+        N = 8
+        dt = 0.01
+        domain = PeriodicDomain(N, N)
+        q = ScalarField(domain, "q")
+        set!(q, (x, y) -> sin(x) + cos(y))
+
+        problem = IVP([q])
+        add_equation!(problem, "∂t(q) = 0")
+        solver = InitialValueSolver(problem, CNAB2(); dt=dt)
+        forcing = StochasticForcing(
+            field_size=(N, N),
+            forcing_rate=0.1,
+            k_forcing=3.0,
+            dk_forcing=1.0,
+            dt=dt,
+            rng=MersenneTwister(42)
+        )
+        state = Tarang._ensure_timestepper_state!(solver, dt)
+        Tarang.set_forcing!(state, forcing)
+
+        @test isempty(problem.stochastic_forcings)
+        @test solver.timestepper_state === state
+        @test state.forcing === forcing
+
+        rng_before = copy(forcing.rng)
+        cache_before = copy(forcing.cached_forcing)
+        update_time_before = forcing.last_update_time
+        field_before = copy(get_grid_data(solver.state[1]))
+        iteration_before = solver.iteration
+        sim_time_before = solver.sim_time
+
+        error = try
+            step!(solver)
+            nothing
+        catch exception
+            exception
+        end
+
+        @test error isa ArgumentError
+        @test occursin("colors white noise", sprint(showerror, error))
+        @test forcing.rng == rng_before
+        @test forcing.cached_forcing == cache_before
+        @test forcing.last_update_time == update_time_before
+        @test !state.forcing_generated
+        @test get_grid_data(solver.state[1]) == field_before
+        @test solver.iteration == iteration_before
+        @test solver.sim_time == sim_time_before
+    end
+
+    @testset "registered forcing resolves flattened solver-state indices" begin
+        N = 8
+        dt = 0.01
+        domain = PeriodicDomain(N, N)
+        u = VectorField(domain, "u")
+        q = ScalarField(domain, "q")
+
+        forcing = StochasticForcing(
+            field_size=(N, N),
+            forcing_rate=0.1,
+            k_forcing=3.0,
+            dk_forcing=1.0,
+            dt=dt,
+            rng=MersenneTwister(42)
+        )
+
+        problem = IVP([u, q])
+        add_equation!(problem, "∂t(u) = 0")
+        add_equation!(problem, "∂t(q) = 0")
+        add_stochastic_forcing!(problem, :q, forcing)
+
+        @test haskey(problem.stochastic_forcings, 3)
+
+        solver = InitialValueSolver(problem, RK222(); dt=dt)
+        @test [field.name for field in solver.state] == ["u_x", "u_y", "q"]
+
+        Tarang._update_registered_forcings!(solver, 0.0, dt)
+        rhs = Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        foreach(field -> ensure_layout!(field, :c), rhs)
+        rhs_data = map(get_coeff_data, rhs)
+        forcing_view = Tarang._matched_forcing_view(forcing, size(rhs_data[3]))
+
+        @test all(iszero, rhs_data[1])
+        @test all(iszero, rhs_data[2])
+        @test forcing_view !== nothing
+        @test rhs_data[3] ≈ forcing_view
+
+        @testset "component names map to component state indices" begin
+            component_problem = IVP([u, q])
+            add_stochastic_forcing!(component_problem, :u_x, forcing)
+            @test haskey(component_problem.stochastic_forcings, 1)
+        end
+
+        @testset "vector container names are ambiguous" begin
+            ambiguous_problem = IVP([u, q])
+            @test_throws ArgumentError add_stochastic_forcing!(ambiguous_problem, :u, forcing)
+        end
+    end
+
     @testset "1D Forcing" begin
         forcing_1d = StochasticForcing(
             field_size=(64,),
@@ -526,15 +858,14 @@ println("=" ^ 60)
     end
 
     # ------------------------------------------------------------------
-    # Regression tests for work computation (fused mapreduce, zero alloc)
-    # Verifies that the optimised mapreduce path produces the same
-    # numerical answers as the naive broadcast reference formulas.
+    # Regression tests for the shared spectral work pairing.
+    # Verifies numerical answers against direct Parseval-normalized references.
     # ------------------------------------------------------------------
     @testset "work_stratonovich regression" begin
         T = Float64
         dt = 0.01
         domain_size = (2π, 2π)
-        area = prod(domain_size)
+        M2 = 16^4
 
         forcing = StochasticForcing(
             field_size=(16, 16),
@@ -558,13 +889,13 @@ println("=" ^ 60)
         # Store previous solution
         store_prevsol!(forcing, prev)
 
-        # -- Test 1: numerical value matches broadcast reference --
+        # -- Test 1: numerical value matches direct spectral reference --
         W = work_stratonovich(forcing, sol)
 
-        # Reference: broadcast-based computation (the old implementation)
-        ref = sum(real.((prev .+ sol) ./ 2 .* conj.(cf))) * dt / area
+        # Reference: full-spectrum Parseval pairing.
+        ref = sum(real.((prev .+ sol) ./ 2 .* conj.(cf))) * dt / M2
         @test W ≈ ref atol=1e-12 rtol=1e-12
-        println("  work_stratonovich matches broadcast reference OK")
+        println("  work_stratonovich matches Parseval reference OK")
 
         # -- Test 2: returns zero(T) when prevsol is nothing --
         # Temporarily set prevsol to nothing
@@ -578,7 +909,7 @@ println("=" ^ 60)
         T = Float64
         dt = 0.005
         domain_size = (2π, 2π)
-        area = prod(domain_size)
+        M2 = 16^4
         eps_rate = 0.25  # non-default energy injection rate
 
         forcing = StochasticForcing(
@@ -599,15 +930,15 @@ println("=" ^ 60)
         Random.seed!(99)
         sol_prev = randn(ComplexF64, 16, 16)
 
-        # -- Test: numerical value matches broadcast reference with drift --
+        # -- Test: numerical value matches Parseval reference with drift --
         W = work_ito(forcing, sol_prev)
 
         # Reference: broadcast-based Ito work + drift correction
         work_sum = sum(real.(sol_prev .* conj.(cf)))
         drift    = eps_rate * dt
-        ref      = work_sum * dt / area + drift
+        ref      = work_sum * dt / M2 + drift
         @test W ≈ ref atol=1e-12 rtol=1e-12
-        println("  work_ito matches broadcast reference with drift OK")
+        println("  work_ito matches Parseval reference with drift OK")
     end
 
 end
@@ -678,6 +1009,20 @@ end
             println("    GPU Hermitian symmetry OK")
         end
 
+        @testset "GPU self-conjugate projection preserves power" begin
+            arch = GPU()
+            for (shape, index) in (((8,), (5,)),
+                                   ((8, 6), (5, 4)),
+                                   ((8, 6, 4), (5, 4, 3)))
+                data_cpu = zeros(ComplexF64, shape)
+                data_cpu[index...] = 3 + 4im
+                data_gpu = CUDA.CuArray(data_cpu)
+                Tarang._enforce_hermitian_symmetry!(data_gpu, arch)
+                CUDA.synchronize()
+                @test Array(data_gpu)[index...] ≈ 3sqrt(2) + 0im
+            end
+        end
+
         @testset "GPU apply_forcing!" begin
             forcing_gpu = StochasticForcing(
                 field_size=(16, 16),
@@ -734,12 +1079,131 @@ end
             println("    GPU Itô work = $W_ito")
         end
 
+        @testset "GPU work diagnostics match manual half-spectrum references" begin
+            field_size = (8, 8)
+            half_size = (5, 8)
+            dt = 0.01
+            multiplicity = reshape([1.0, 2.0, 2.0, 2.0, 1.0], :, 1)
+            kx = Float64[0, 1, 2, 3, 4]
+            ky = Float64[0, 1, 2, 3, 4, -3, -2, -1]
+            forcing_cpu = ComplexF64[
+                (0.2i - 0.1j) + (0.03i * j)im
+                for i in 1:field_size[1], j in 1:field_size[2]
+            ]
+            forcing_view = @view forcing_cpu[1:half_size[1], :]
+            sol_prev_cpu = ComplexF64[
+                (0.15i + 0.07j) - (0.02i * j)im
+                for i in 1:half_size[1], j in 1:half_size[2]
+            ]
+            sol_next_cpu = sol_prev_cpu .+ dt .* forcing_view
+
+            for metric in (:direct, :vorticity_kinetic)
+                forcing = StochasticForcing(
+                    field_size=field_size, forcing_rate=0.1,
+                    injection_metric=metric, k_forcing=2.0,
+                    dk_forcing=0.1, spectrum_type=:band, dt=dt,
+                    architecture=GPU(), rng=MersenneTwister(42),
+                )
+                copyto!(forcing.cached_forcing, CUDA.CuArray(forcing_cpu))
+                sol_prev = CUDA.CuArray(sol_prev_cpu)
+                sol_next = CUDA.CuArray(sol_next_cpu)
+                store_prevsol!(forcing, sol_prev)
+
+                metric_weight = [
+                    metric === :direct ? 1.0 :
+                        (iszero(x^2 + y^2) ? 0.0 : inv(x^2 + y^2))
+                    for x in kx, y in ky
+                ]
+                weights = multiplicity .* metric_weight ./ prod(field_size)^2
+                pairing(a) = sum(weights .* real.(a .* conj.(forcing_view)))
+
+                @test work_stratonovich(forcing, sol_next) ≈
+                      pairing((sol_prev_cpu .+ sol_next_cpu) ./ 2) * dt
+                @test work_ito(forcing, sol_prev) ≈
+                      pairing(sol_prev_cpu) * dt + forcing.energy_injection_rate * dt
+                @test instantaneous_power(forcing, sol_prev) ≈ pairing(sol_prev_cpu)
+                cached_weights = forcing.diagnostic_weights
+                @test cached_weights !== nothing
+                instantaneous_power(forcing, sol_prev)
+                @test forcing.diagnostic_weights === cached_weights
+            end
+        end
+
+        @testset "GPU forced 2D IVP advances without scalar indexing" begin
+            CUDA.allowscalar(false)
+            n = 8
+            dt = 1e-3
+            coords = CartesianCoordinates("x", "y")
+            dist = Distributor(coords; dtype=Float64, device=GPU())
+            xb = RealFourier(coords["x"]; size=n, bounds=(0.0, 2π), dealias=3/2)
+            yb = RealFourier(coords["y"]; size=n, bounds=(0.0, 2π), dealias=3/2)
+            domain = Domain(dist, (xb, yb))
+
+            ζ = ScalarField(domain, "ζ")
+            ψ = ScalarField(domain, "ψ")
+            u = VectorField(domain, "u")
+            tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
+
+            forcing = StochasticForcing(
+                field_size=(n, n), domain_size=(2π, 2π),
+                energy_injection_rate=0.1,
+                injection_metric=:vorticity_kinetic,
+                k_forcing=2.0, dk_forcing=0.5, dt=dt,
+                spectrum_type=:ring, architecture=GPU(),
+                rng=MersenneTwister(42),
+            )
+
+            problem = IVP([ζ, ψ, u, tau_ψ])
+            add_parameters!(problem; nu=1e-8, drag=1e-3)
+            add_equation!(problem, "∂t(ζ) = -u⋅∇(ζ) - drag*ζ - nu*Δ⁴(ζ)")
+            add_equation!(problem, "Δ(ψ) + tau_ψ - ζ = 0")
+            add_equation!(problem, "u - skew(grad(ψ)) = 0")
+            add_bc!(problem, "integ(ψ) = 0")
+            add_stochastic_forcing!(problem, :ζ, forcing)
+
+            solver = InitialValueSolver(problem, RK222(); dt=dt)
+            @test get(problem.parameters, "L_matrix", nothing) === nothing
+            @test get(problem.parameters, "M_matrix", nothing) === nothing
+            @test solver.rhs_plan !== nothing && solver.rhs_plan.is_compiled
+            fill_random!(ζ, "g"; seed=42, distribution="normal", scale=1e-3)
+            step!(solver)
+
+            @test forcing.cached_forcing isa CUDA.CuArray
+            @test get_coeff_data(ζ) isa CUDA.CuArray
+            @test solver.iteration == 1
+            @test solver.sim_time ≈ dt
+            @test all(isfinite, Array(get_coeff_data(ζ)))
+            @test any(!iszero, Array(forcing.cached_forcing))
+
+            state = solver.timestepper_state
+            @test length(state.workspace_fields) ==
+                  (solver.timestepper.stages + 1) * length(state.history[end])
+
+            # Warm FFT plans, nonlinear pools, forcing kernels, and the state
+            # recycler before measuring device allocations. A steady 2D step
+            # should launch kernels only; every full-sized device buffer is
+            # owned by the solver, forcing, or timestepper workspace already.
+            for _ in 1:5
+                step!(solver)
+            end
+            CUDA.synchronize()
+            allocation_stats = getfield(CUDA, :alloc_stats)
+            allocated_before = allocation_stats.alloc_bytes
+            step!(solver)
+            device_allocated = allocation_stats.alloc_bytes - allocated_before
+            CUDA.synchronize()
+            @test device_allocated == 0
+        end
+
     else
         println("\nGPU tests skipped (CUDA not available)")
         @test_skip "GPU construction"
         @test_skip "GPU forcing generation"
+        @test_skip "GPU exact self-conjugate projection"
         @test_skip "GPU apply_forcing!"
         @test_skip "GPU work calculation"
+        @test_skip "GPU manual work diagnostics"
+        @test_skip "GPU forced 2D IVP"
     end
 end
 

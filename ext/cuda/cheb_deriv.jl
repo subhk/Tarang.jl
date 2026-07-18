@@ -318,42 +318,52 @@ end
     gpu_dct1_along_dim!(output, input, dim, direction) -> output
 
 Plain real DCT-I (REDFT00, 1/(N-1) norm, endpoint half-weight, odd-index sign
-flip) along `dim` of a real 3D CuArray, `:forward` or `:backward`. Permutes the
-transform axis to front, reshapes to (N, batch), reuses the cached
-`GPUChebyshevDerivPlan` (symmetric-extension + rfft) and the verified DCT-I
-kernels, then permutes back. Matches the CPU Chebyshev DCT-I convention in
+flip) along `dim` of a real CuArray, `:forward` or `:backward`. The transform
+axis is viewed first as an (N, batch) matrix and the cached
+`GPUChebyshevDerivPlan` supplies both the symmetric-extension/rfft workspace
+and the permutation buffer. Matches the CPU Chebyshev DCT-I convention in
 `transform_chebyshev.jl` (see the comment block above for the grid-reversal ==
 odd-flip equivalence).
 
 NOTE: this is the plain transform only — it does NOT truncate/zero-pad the
 coefficient axis. `size(output) == size(input)` is required.
 """
-function gpu_dct1_along_dim!(output::CuArray{T,3}, input::CuArray{T,3},
-                             dim::Int, direction::Symbol) where {T<:AbstractFloat}
+function gpu_dct1_along_dim!(output::CuArray{T,N}, input::CuArray{T,N},
+                             dim::Int, direction::Symbol) where {T<:AbstractFloat,N}
     ensure_device!(Tarang.architecture(input))
     @assert size(output) == size(input) "gpu_dct1_along_dim!: output and input must match size"
-    @assert 1 <= dim <= 3 "dim must be 1, 2, or 3"
+    @assert 1 <= dim <= N "dim must be between 1 and $N"
 
     n  = size(input, dim)
-    nd = 3
 
     if n <= 1
         copyto!(output, input)
         return output
     end
 
-    # Permute transform axis to front, reshape to (n, batch)
-    other_dims = ntuple(i -> i < dim ? i : i + 1, nd - 1)
+    # Put the transform dimension first. For dim == 1 the original arrays are
+    # already contiguous (n, batch) matrices. Otherwise, use work_deriv as the
+    # persistent permutation buffer; after the input has been consumed it also
+    # holds the transformed result before the inverse permutation.
+    other_dims = ntuple(i -> i < dim ? i : i + 1, N - 1)
     perm   = (dim, other_dims...)
     iperm  = invperm(perm)
-    in_perm = permutedims(input, perm)
     batch   = prod(size(input)) ÷ n
-    in_mat  = reshape(in_perm, n, batch)
-    out_mat = similar(in_mat)
 
     arch    = Tarang.architecture(input)
     inv_nm1 = T(1.0 / (n - 1))
     plan    = _get_gpu_cheb_deriv_plan(n, batch, T)
+    perm_shape = ntuple(i -> size(input, perm[i]), N)
+
+    if dim == 1
+        in_mat = reshape(input, n, batch)
+        out_mat = reshape(output, n, batch)
+    else
+        in_perm = reshape(plan.work_deriv, perm_shape)
+        permutedims!(in_perm, input, perm)
+        in_mat = reshape(in_perm, n, batch)
+        out_mat = in_mat
+    end
 
     if direction === :forward
         # reverse → symmetric extension → rfft → extract real → normalize+halve
@@ -373,8 +383,9 @@ function gpu_dct1_along_dim!(output::CuArray{T,3}, input::CuArray{T,3},
         error("direction must be :forward or :backward, got $direction")
     end
 
-    out_perm = reshape(out_mat, size(in_perm))
-    out_g    = permutedims(out_perm, iperm)
-    copyto!(output, out_g)
+    if dim != 1
+        out_perm = reshape(out_mat, perm_shape)
+        permutedims!(output, out_perm, iperm)
+    end
     return output
 end

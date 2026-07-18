@@ -3,14 +3,23 @@
 # ============================================================================
 
 """
-    _construct_gpu_arch(device_id::Int)
+    Tarang._gpu_device(device_id::Int)
 
-Implementation behind `Tarang.GPU(; device_id)`. Registered in
-`Tarang._GPU_EXT_CONSTRUCTOR` by this extension's `__init__` — defining a
-`Tarang.GPU(; device_id)` method here would overwrite the same-signature
-fallback in src (illegal during precompilation).
+Select and return the specified CUDA device for Tarang's `GPU` constructor.
+
+# Arguments
+- `device_id`: CUDA device ID (0-indexed, default: 0)
+
+# Example
+```julia
+using CUDA
+using Tarang
+
+arch = GPU()                 # Use default device
+arch = GPU(device_id=1)      # Use second GPU
+```
 """
-function _construct_gpu_arch(device_id::Int)
+function Tarang._gpu_device(device_id::Int)
     if !CUDA.functional()
         error("CUDA is not functional. Please check your GPU drivers and CUDA installation.")
     end
@@ -27,7 +36,7 @@ function _construct_gpu_arch(device_id::Int)
 
     @info "Initialized GPU architecture on device $device_id: $(CUDA.name(dev))"
 
-    return GPU{CuDevice}(dev)
+    return dev
 end
 
 # ============================================================================
@@ -250,9 +259,12 @@ Tarang.on_architecture(gpu::GPU{CuDevice}, a::AbstractArray) = Tarang.on_archite
 # GPU Utilities
 # ============================================================================
 
-# has_cuda: registered as a hook (Tarang._HAS_CUDA_HOOK[] = CUDA.functional)
-# from this extension's __init__ — a zero-arg method here would overwrite the
-# same-signature `has_cuda() = false` fallback in src.
+"""
+    has_cuda()
+
+Return true when CUDA is available.
+"""
+Tarang._cuda_functional(::Val{:cuda}) = CUDA.functional()
 
 """
     synchronize(gpu::GPU{CuDevice})

@@ -380,6 +380,9 @@ mutable struct CuSparseLU{T} <: AbstractMatSolver
     tol::Float64
     reorder::Bool
     n::Int
+    rhs_buffer::Any
+    solution_buffer::Any
+    temp_buffer::Any
 end
 
 function _host_csr(A::SparseMatrixCSC{T,<:Integer}) where T
@@ -504,7 +507,12 @@ function CuSparseLU(matrix::SparseMatrixCSC; tol::Real=1e-12, reorder::Bool=true
         A_csr = _gpu_sparse_csr(A, Float64)
         try
             rf = _build_cusolver_rf(A; tol=tol)
-            return CuSparseLU{Float64}(A_csr, rf, :rf, Float64(tol), reorder, size(A, 1))
+            n = size(A, 1)
+            return CuSparseLU{Float64}(
+                A_csr, rf, :rf, Float64(tol), reorder, n,
+                _gpu_zeros(Float64, n), _gpu_zeros(Float64, n),
+                _gpu_zeros(Float64, n),
+            )
         catch err
             @warn "CuSparseLU: RF setup failed, falling back to sparse QR" exception=(err, catch_backtrace()) maxlog=1
         end
@@ -513,16 +521,41 @@ function CuSparseLU(matrix::SparseMatrixCSC; tol::Real=1e-12, reorder::Bool=true
     Tq = promote_type(T, ComplexF64)
     A_csr = _gpu_sparse_csr(matrix, Tq)
     qr_factor = _build_sparse_qr(A_csr, Tq, tol)
-    return CuSparseLU{Tq}(A_csr, qr_factor, :qr, Float64(tol), reorder, size(matrix, 1))
+    n = size(matrix, 1)
+    return CuSparseLU{Tq}(
+        A_csr, qr_factor, :qr, Float64(tol), reorder, n,
+        _gpu_zeros(Tq, n), _gpu_zeros(Tq, n), _gpu_zeros(Tq, n),
+    )
 end
 
 function CuSparseLU(matrix::AbstractMatrix; kwargs...)
     return CuSparseLU(sparse(matrix); kwargs...)
 end
 
-function MatSolvers.solve(s::CuSparseLU{T}, rhs::AbstractVector) where T
-    b_gpu = _is_gpu_array(rhs) && eltype(rhs) == T ? copy(rhs) : _gpu_array(rhs, T)
-    x_gpu = similar(b_gpu)
+@inline _valid_cusparse_buffer(buffer, ::Type{T}, n::Int) where T =
+    buffer !== nothing && length(buffer) == n && eltype(buffer) == T
+
+function _cusparse_buffers!(s::CuSparseLU{T}) where T
+    _valid_cusparse_buffer(s.rhs_buffer, T, s.n) ||
+        (s.rhs_buffer = _gpu_zeros(T, s.n))
+    _valid_cusparse_buffer(s.solution_buffer, T, s.n) ||
+        (s.solution_buffer = _gpu_zeros(T, s.n))
+    _valid_cusparse_buffer(s.temp_buffer, T, s.n) ||
+        (s.temp_buffer = _gpu_zeros(T, s.n))
+    return s.rhs_buffer, s.solution_buffer, s.temp_buffer
+end
+
+function MatSolvers.solve!(dest::AbstractVector, s::CuSparseLU{T},
+                           rhs::AbstractVector) where T
+    length(rhs) == s.n || throw(DimensionMismatch(
+        "CuSparseLU right-hand side has length $(length(rhs)); expected $(s.n)",
+    ))
+    length(dest) == s.n || throw(DimensionMismatch(
+        "CuSparseLU destination has length $(length(dest)); expected $(s.n)",
+    ))
+
+    b_gpu, x_gpu, temp = _cusparse_buffers!(s)
+    copyto!(b_gpu, rhs)
 
     if s.backend === :rf
         rf = s.factor::CuSparseRF{Float64}
@@ -531,13 +564,19 @@ function MatSolvers.solve(s::CuSparseLU{T}, rhs::AbstractVector) where T
         # the RHS as `Temp` (clobbered) and an UNINITIALIZED buffer as `XF`, so the solve
         # read garbage. Put the RHS in XF (x_gpu) and give it a separate scratch buffer.
         copyto!(x_gpu, b_gpu)
-        temp = similar(b_gpu)
         _cusolver().cusolverRfSolve(rf.handle, rf.P, rf.Q, Cint(1),
                                       temp, Cint(rf.n), x_gpu, Cint(rf.n))
     else
         _cusolver().spqr_solve(s.factor, b_gpu, x_gpu)
     end
-    return x_gpu
+    copyto!(dest, x_gpu)
+    return dest
+end
+
+function MatSolvers.solve(s::CuSparseLU{T}, rhs::AbstractVector) where T
+    _, x_gpu, _ = _cusparse_buffers!(s)
+    result = similar(x_gpu)
+    return MatSolvers.solve!(result, s, rhs)
 end
 
 """
@@ -575,6 +614,10 @@ function MatSolvers.refactor!(solver::CuSparseLU{T}, A::SparseMatrixCSC) where {
         solver.A_csr = new_solver.A_csr
         solver.factor = new_solver.factor
         solver.backend = new_solver.backend
+        solver.n = new_solver.n
+        solver.rhs_buffer = new_solver.rhs_buffer
+        solver.solution_buffer = new_solver.solution_buffer
+        solver.temp_buffer = new_solver.temp_buffer
         return solver
     end
 

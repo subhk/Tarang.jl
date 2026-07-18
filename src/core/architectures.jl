@@ -108,16 +108,12 @@ struct GPU{D} <: AbstractSerialArchitecture
     device::D
 end
 
-# Hook filled in by the CUDA extension's __init__ (extensions must not define
-# methods with signatures identical to methods in the parent package — that is
-# method overwriting, which is an error during precompilation).
-const _GPU_EXT_CONSTRUCTOR = Ref{Any}(nothing)
-
-function GPU(; device_id::Int = 0)
-    ctor = _GPU_EXT_CONSTRUCTOR[]
-    if ctor === nothing
-        error("""
-            GPU architecture requires CUDA.jl to be loaded.
+# The CUDA extension adds a more-specific `_gpu_device(::Int)` method. Keeping
+# the public constructor here avoids overwriting a core method while package
+# extensions are precompiled on Julia 1.12.
+function _gpu_device(device_id::Integer)
+    error("""
+        GPU architecture requires CUDA.jl to be loaded.
 
             Please add CUDA.jl to your project and load it:
                 using Pkg
@@ -127,8 +123,11 @@ function GPU(; device_id::Int = 0)
 
                 arch = GPU()
             """)
-    end
-    return ctor(device_id)
+end
+
+function GPU(; device_id::Int = 0)
+    gpu_device = _gpu_device(device_id)
+    return GPU{typeof(gpu_device)}(gpu_device)
 end
 
 # Placeholder methods - the CUDA extension adds GPU{CuDevice}-specific methods
@@ -309,12 +308,8 @@ is_gpu(::GPU) = true
 Check if CUDA is available. The CUDA extension registers `CUDA.functional`
 here from its `__init__`; without the extension this is always `false`.
 """
-const _HAS_CUDA_HOOK = Ref{Any}(nothing)
-
-function has_cuda()
-    h = _HAS_CUDA_HOOK[]
-    return h === nothing ? false : h()::Bool
-end
+_cuda_functional(::Any) = false
+has_cuda() = _cuda_functional(Val(:cuda))
 
 """
     is_gpu_array(a::AbstractArray)

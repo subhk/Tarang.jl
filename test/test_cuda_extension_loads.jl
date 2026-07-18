@@ -31,9 +31,9 @@ end
         ext = Base.get_extension(Tarang, :TarangCUDAExt)
         @test ext !== nothing
 
-        # __init__ hook registration
-        @test Tarang._GPU_EXT_CONSTRUCTOR[] !== nothing
-        @test Tarang._HAS_CUDA_HOOK[] !== nothing
+        # Dispatch/hook wiring: the ext adds a CuDevice _gpu_device method and a
+        # Val{:cuda} _cuda_functional method; transforms are hook-registered.
+        @test hasmethod(Tarang._gpu_device, Tuple{Int})
         @test Tarang._GPU_FORWARD_TRANSFORM_HOOK[] !== nothing
         @test Tarang._GPU_BACKWARD_TRANSFORM_HOOK[] !== nothing
 

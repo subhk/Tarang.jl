@@ -118,6 +118,7 @@ where ξ(k) is complex white noise with |ξ| = 1 and random phase.
 
 - `forcing_spectrum::A`: √Q̂(k) - square root of power spectrum
 - `energy_injection_rate::T`: Target energy injection rate ε
+- `injection_metric::Symbol`: Quadratic invariant used to normalize ε
 - `k_forcing::T`: Central forcing wavenumber k_f
 - `dk_forcing::T`: Forcing bandwidth δ_f
 - `dt::T`: Current timestep (for proper scaling)
@@ -128,6 +129,7 @@ where ξ(k) is complex white noise with |ξ| = 1 and random phase.
 - `prevsol::Union{Nothing,AbstractArray{Complex{T},N}}`: Previous solution (for Stratonovich work)
 - `rng::AbstractRNG`: Random number generator (default: fresh MersenneTwister per instance for thread/parallel safety)
 - `random_phases::AbstractArray{T,N}`: Pre-allocated random phase buffer (on target architecture)
+- `diagnostic_weights`: Cached backend weights for the active GPU diagnostic layout
 - `last_update_time::T`: Time of last forcing update
 - `spectrum_type::Symbol`: Type of forcing spectrum
 - `enforce_hermitian::Bool`: Enforce Hermitian symmetry for real-valued fields
@@ -136,6 +138,7 @@ where ξ(k) is complex white noise with |ξ| = 1 and random phase.
 mutable struct StochasticForcing{T<:AbstractFloat, N, A<:AbstractArray{T,N}, CA<:AbstractArray{Complex{T},N}} <: StochasticForcingType
     forcing_spectrum::A                     # √Q̂(k) - amplitude spectrum
     energy_injection_rate::T                # Target ε
+    injection_metric::Symbol                # :direct or :vorticity_kinetic
     k_forcing::T                            # Central wavenumber
     dk_forcing::T                           # Bandwidth
     dt::T                                   # Timestep
@@ -146,13 +149,73 @@ mutable struct StochasticForcing{T<:AbstractFloat, N, A<:AbstractArray{T,N}, CA<
     prevsol::Union{Nothing, CA}             # For Stratonovich work
     rng::AbstractRNG                        # CPU-side RNG
     random_phases::A                        # Pre-allocated random phase buffer
+    diagnostic_weights::Union{Nothing, A}   # Cached backend weights for GPU reductions
+    diagnostic_global_shape::NTuple{N, Int}
+    diagnostic_local_ranges::NTuple{N, UnitRange{Int}}
+    diagnostic_metric::Symbol
     last_update_time::T
     spectrum_type::Symbol
     enforce_hermitian::Bool                 # Enforce Hermitian symmetry for real fields
     architecture::AbstractArchitecture
 end
 
+"""
+    SeparableStochasticForcing
+
+Stochastic forcing for a Fourier product domain with one trailing Chebyshev
+dimension. Randomness and spectral localization live only in the Fourier
+dimensions; `chebyshev_profile` supplies the fixed Chebyshev dependence.
+"""
+mutable struct SeparableStochasticForcing{
+    T<:AbstractFloat, NF, N,
+    A<:AbstractArray{T,NF},
+    FCA<:AbstractArray{Complex{T},NF},
+    P<:AbstractVector{T},
+    HP<:Array{T,NF},
+    CA<:AbstractArray{Complex{T},N},
+    FRV<:AbstractArray{Complex{T},N},
+    PV<:AbstractArray{T,N},
+} <: StochasticForcingType
+    forcing_spectrum::A
+    energy_injection_rate::T
+    injection_metric::Symbol
+    k_forcing::T
+    dk_forcing::T
+    dt::T
+    domain_size::NTuple{NF,T}
+    fourier_size::NTuple{NF,Int}
+    field_size::NTuple{N,Int}
+    wavenumbers::NTuple{NF,Vector{T}}
+    chebyshev_basis::ChebyshevT
+    chebyshev_profile::P
+    cached_forcing::CA
+    prevsol::Union{Nothing,CA}
+    rng::AbstractRNG
+    random_phases::A
+    random_phases_host::HP
+    fourier_realization::FCA
+    fourier_outer_view::FRV
+    profile_outer_view::PV
+    last_update_time::T
+    spectrum_type::Symbol
+    enforce_hermitian::Bool
+    architecture::AbstractArchitecture
+end
+
 function Base.getproperty(forcing::StochasticForcing, name::Symbol)
+    if name === :forcing_rate
+        return getfield(forcing, :energy_injection_rate)
+    elseif name === :spectrum
+        return getfield(forcing, :forcing_spectrum)
+    elseif name === :is_stochastic
+        return true
+    elseif name === :is_gpu
+        return is_gpu(getfield(forcing, :architecture))
+    end
+    return getfield(forcing, name)
+end
+
+function Base.getproperty(forcing::SeparableStochasticForcing, name::Symbol)
     if name === :forcing_rate
         return getfield(forcing, :energy_injection_rate)
     elseif name === :spectrum
@@ -170,6 +233,7 @@ end
         field_size,
         domain_size = ntuple(i -> 2π, length(field_size)),
         energy_injection_rate = 1.0,
+        injection_metric = :direct,
         k_forcing = 4.0,
         dk_forcing = 1.0,
         dt = 0.01,
@@ -187,6 +251,10 @@ Create a stochastic forcing configuration that works on CPU or GPU.
 - `field_size::NTuple{N,Int}`: Grid size (Nx, Ny, ...)
 - `domain_size::NTuple{N,Real}`: Domain size (Lx, Ly, ...), default 2π in each direction
 - `energy_injection_rate::Real`: Target energy injection rate ε (default: 1.0)
+- `injection_metric::Symbol`: Quadratic invariant used to normalize ε. `:direct`
+  uses unit Fourier weight; `:vorticity_kinetic` uses `1/|k|²` for nonzero
+  modes (default: `:direct`). Use the latter when forcing 2-D vorticity and ε
+  denotes kinetic-energy injection.
 - `k_forcing::Real`: Central forcing wavenumber k_f (default: 4.0)
 - `dk_forcing::Real`: Forcing bandwidth δ_f (default: 1.0)
 - `dt::Real`: Initial timestep (default: 0.01)
@@ -231,6 +299,7 @@ function StochasticForcing(;
     domain_size::Union{Nothing, NTuple{N, Real}} = nothing,
     energy_injection_rate::Real = 1.0,
     forcing_rate::Union{Nothing, Real} = nothing,
+    injection_metric::Symbol = :direct,
     k_forcing::Real = 4.0,
     dk_forcing::Real = 1.0,
     dt::Real = 0.01,
@@ -243,6 +312,8 @@ function StochasticForcing(;
 
     # Normalize aliases before validation so :isotropic/:bandlimited are caught
     spectrum_type = _normalize_spectrum_type(spectrum_type)
+
+    _validate_injection_metric(injection_metric)
 
     # Validate dk_forcing for spectrum types that use it
     if dk_forcing <= 0 && spectrum_type in (:ring, :kolmogorov)
@@ -261,6 +332,8 @@ function StochasticForcing(;
     # Only warn if both appear to be explicitly set (forcing_rate provided AND energy_injection_rate differs from default)
     default_energy_injection_rate = 1.0
     energy = forcing_rate === nothing ? energy_injection_rate : forcing_rate
+    energy < 0 &&
+        throw(ArgumentError("effective energy injection rate must be nonnegative (got $energy)"))
     if forcing_rate !== nothing && !isapprox(energy_injection_rate, default_energy_injection_rate) && !isapprox(forcing_rate, energy_injection_rate)
         @warn "Both forcing_rate and energy_injection_rate were provided; using forcing_rate"
     end
@@ -281,7 +354,8 @@ function StochasticForcing(;
     # Compute the forcing spectrum √Q̂(k) on CPU first
     forcing_spectrum_cpu = compute_forcing_spectrum(
         wavenumbers, k_forcing, dk_forcing, energy,
-        domain_size, spectrum_type, dtype
+        domain_size, spectrum_type, dtype;
+        injection_metric
     )
 
     # Move spectrum to target architecture
@@ -303,6 +377,7 @@ function StochasticForcing(;
     StochasticForcing{T, N, A, CA}(
         forcing_spectrum,
         T(energy),
+        injection_metric,
         T(k_forcing),
         T(dk_forcing),
         T(dt),
@@ -313,10 +388,141 @@ function StochasticForcing(;
         prevsol,
         rng,
         random_phases,
+        nothing,
+        ntuple(_ -> 0, N),
+        ntuple(_ -> 1:0, N),
+        injection_metric,
         T(-Inf),  # Initialize to -Inf so first call always updates
         spectrum_type,
         enforce_hermitian,
         architecture
+    )
+end
+
+function _normalized_chebyshev_profile(
+    basis::ChebyshevT,
+    profile,
+    ::Type{T},
+) where {T<:AbstractFloat}
+    n = basis.meta.size
+    transform = ChebyshevTransform(basis)
+    setup_chebyshev_cpu_transform!(transform, n, n, 1)
+
+    if profile isa AbstractVector
+        length(profile) == n || throw(DimensionMismatch(
+            "Chebyshev profile has length $(length(profile)); expected $n coefficients",
+        ))
+        coeffs = T.(profile)
+        values = vec(_chebyshev_backward(coeffs, transform))
+    else
+        lo, hi = basis.meta.bounds
+        reference_grid = _native_grid(basis, 1.0)
+        physical_grid = @. T((hi - lo) / 2) * reference_grid + T((hi + lo) / 2)
+        values = T[profile(z) for z in physical_grid]
+        coeffs = vec(T.(_chebyshev_forward(values, transform)))
+    end
+
+    all(isfinite, coeffs) && all(isfinite, values) ||
+        throw(ArgumentError("Chebyshev profile must contain only finite values"))
+
+    lo, hi = basis.meta.bounds
+    weights = T.(get_integration_weights(basis))
+    mean_square = sum(weights .* abs2.(values)) / T(hi - lo)
+    isfinite(mean_square) && mean_square > zero(T) ||
+        throw(ArgumentError("Chebyshev profile must have a finite, nonzero mean-square norm"))
+
+    coeffs ./= sqrt(mean_square)
+    return coeffs
+end
+
+function SeparableStochasticForcing(;
+    fourier_size::NTuple{NF,Int},
+    chebyshev_basis,
+    chebyshev_profile,
+    domain_size::Union{Nothing,NTuple{NF,Real}}=nothing,
+    energy_injection_rate::Real=1.0,
+    forcing_rate::Union{Nothing,Real}=nothing,
+    injection_metric::Symbol=:direct,
+    k_forcing::Real=4.0,
+    dk_forcing::Real=1.0,
+    dt::Real=0.01,
+    spectrum_type::Symbol=:ring,
+    rng::AbstractRNG=Random.MersenneTwister(),
+    dtype::Type{T}=Float64,
+    enforce_hermitian::Bool=true,
+    architecture::AbstractArchitecture=CPU(),
+) where {T<:AbstractFloat,NF}
+    chebyshev_basis isa ChebyshevT || throw(ArgumentError(
+        "SeparableStochasticForcing requires a ChebyshevT basis",
+    ))
+    injection_metric === :direct || throw(ArgumentError(
+        "mixed Fourier--Chebyshev forcing supports only injection_metric=:direct",
+    ))
+
+    base = StochasticForcing(
+        field_size=fourier_size,
+        domain_size=domain_size,
+        energy_injection_rate=energy_injection_rate,
+        forcing_rate=forcing_rate,
+        injection_metric=:direct,
+        k_forcing=k_forcing,
+        dk_forcing=dk_forcing,
+        dt=dt,
+        spectrum_type=spectrum_type,
+        rng=rng,
+        dtype=dtype,
+        enforce_hermitian=enforce_hermitian,
+        architecture=architecture,
+    )
+
+    profile_cpu = _normalized_chebyshev_profile(
+        chebyshev_basis, chebyshev_profile, T,
+    )
+    profile = on_architecture(architecture, profile_cpu)
+    nz = chebyshev_basis.meta.size
+    field_size = (fourier_size..., nz)
+    cached_forcing = zeros(architecture, Complex{T}, field_size...)
+    fourier_realization = zeros(architecture, Complex{T}, fourier_size...)
+    random_phases_host = is_gpu(architecture) ?
+        zeros(T, fourier_size...) : base.random_phases
+    N = NF + 1
+    fourier_outer_view = reshape(fourier_realization, (fourier_size..., 1))
+    profile_outer_view = reshape(profile, (ntuple(_ -> 1, NF)..., nz))
+
+    return SeparableStochasticForcing{
+        T, NF, N,
+        typeof(base.forcing_spectrum),
+        typeof(fourier_realization),
+        typeof(profile),
+        typeof(random_phases_host),
+        typeof(cached_forcing),
+        typeof(fourier_outer_view),
+        typeof(profile_outer_view),
+    }(
+        base.forcing_spectrum,
+        base.energy_injection_rate,
+        :direct,
+        base.k_forcing,
+        base.dk_forcing,
+        base.dt,
+        base.domain_size,
+        fourier_size,
+        field_size,
+        base.wavenumbers,
+        chebyshev_basis,
+        profile,
+        cached_forcing,
+        nothing,
+        base.rng,
+        base.random_phases,
+        random_phases_host,
+        fourier_realization,
+        fourier_outer_view,
+        profile_outer_view,
+        T(-Inf),
+        base.spectrum_type,
+        enforce_hermitian,
+        architecture,
     )
 end
 
@@ -327,6 +533,21 @@ function _normalize_spectrum_type(spectrum_type::Symbol)
         return :band
     end
     return spectrum_type
+end
+
+function _validate_injection_metric(injection_metric::Symbol)
+    injection_metric in (:direct, :vorticity_kinetic) ||
+        throw(ArgumentError("injection_metric must be :direct or :vorticity_kinetic (got :$injection_metric)"))
+    return nothing
+end
+
+function _injection_metric_weight(k2::T, injection_metric::Symbol) where T
+    if injection_metric === :direct
+        return one(T)
+    elseif injection_metric === :vorticity_kinetic
+        return iszero(k2) ? zero(T) : inv(k2)
+    end
+    _validate_injection_metric(injection_metric)
 end
 
 """
@@ -361,11 +582,13 @@ function build_wavenumbers(
 end
 
 """
-    compute_forcing_spectrum(wavenumbers, k_f, dk_f, ε, domain_size, spectrum_type, dtype)
+    compute_forcing_spectrum(wavenumbers, k_f, dk_f, ε, domain_size, spectrum_type, dtype;
+                             injection_metric=:direct)
 
-Compute the forcing amplitude spectrum √Q̂(k).
-
-The spectrum is normalized such that the energy injection rate equals ε.
+Compute the forcing amplitude spectrum √Q̂(k). With `M` physical grid points,
+the full spectrum is normalized so `sum(Q̂(k) * w(k)) / (2M²) == ε`, where
+`w=1` for `:direct` and `w=1/|k|²` for `:vorticity_kinetic`. A positive ε
+whose selected band contains no representable nonzero mode raises `ArgumentError`.
 """
 function compute_forcing_spectrum(
     wavenumbers::NTuple{N, Vector{T}},
@@ -374,10 +597,19 @@ function compute_forcing_spectrum(
     ε::Real,
     domain_size::NTuple{N, Real},
     spectrum_type::Symbol,
-    dtype::Type{T}
+    dtype::Type{T};
+    injection_metric::Symbol=:direct,
 ) where {T<:AbstractFloat, N}
 
     spectrum_type = _normalize_spectrum_type(spectrum_type)
+    _validate_injection_metric(injection_metric)
+    ε < 0 && throw(ArgumentError("energy injection rate must be nonnegative (got $ε)"))
+    if spectrum_type === :kolmogorov && !(k_f > 0)
+        throw(ArgumentError(
+            "k_forcing must be positive for spectrum_type=:kolmogorov " *
+            "(got k_forcing=$k_f)"
+        ))
+    end
     field_size = ntuple(d -> length(wavenumbers[d]), N)
     spectrum = zeros(T, field_size)
 
@@ -395,16 +627,23 @@ function compute_forcing_spectrum(
     # Enforce zero mean (no forcing at k=0)
     spectrum[ntuple(_ -> 1, N)...] = zero(T)
 
-    # Normalize to achieve target energy injection rate ε
-    # Energy injection rate: ε = ∑_k Q̂(k) / (2 * domain_area)
-    domain_area = prod(T.(domain_size))
-
-    # Current unnormalized energy injection
-    ε0 = sum(spectrum.^2) / (2 * domain_area)
+    # Tarang stores unnormalized full FFT coefficients. Parseval therefore
+    # contributes M⁻², where M is the number of physical grid points.
+    weighted_power = zero(T)
+    for I in CartesianIndices(spectrum)
+        k2 = injection_metric === :direct ? zero(T) :
+             sum(d -> wavenumbers[d][I[d]]^2, 1:N)
+        weight = _injection_metric_weight(k2, injection_metric)
+        weighted_power += abs2(spectrum[I]) * weight
+    end
+    M = T(prod(field_size))
+    ε0 = weighted_power / (2 * M^2)
 
     if ε0 > 0
         # Scale spectrum to achieve target ε
         spectrum .*= sqrt(T(ε) / ε0)
+    elseif ε > 0
+        throw(ArgumentError("forcing spectrum has no representable nonzero modes for positive energy injection rate $ε"))
     end
 
     return spectrum
@@ -452,7 +691,7 @@ function _spectrum_amplitude(k::T, k_f::Real, dk_f::Real, spectrum_type::Symbol)
     if spectrum_type == :ring
         # Gaussian ring: concentrated around |k| = k_f
         # Q̂(k) ∝ exp(-(|k| - k_f)² / (2 δ_f²))
-        return exp(-((k - k_f)^2) / (2 * dk_f^2))
+        return exp(-((k - k_f)^2) / (4 * dk_f^2))
 
     elseif spectrum_type == :band
         # Sharp band: |k| ∈ [k_f - δ_f, k_f + δ_f]
@@ -472,9 +711,9 @@ function _spectrum_amplitude(k::T, k_f::Real, dk_f::Real, spectrum_type::Symbol)
 
     elseif spectrum_type == :kolmogorov
         # Large-scale forcing for Kolmogorov cascade
-        # Smooth cutoff at k_f
+        # Square root of Q̂(k) ∝ (k/k_f) exp(-(|k|-k_f)²/(2δ_f²)).
         if k < k_f + dk_f
-            return exp(-((k - k_f)^2) / (2 * dk_f^2)) * (k / k_f)
+            return exp(-((k - k_f)^2) / (4 * dk_f^2)) * sqrt(k / k_f)
         else
             return zero(T)
         end
@@ -569,6 +808,37 @@ function _generate_forcing_gpu_compatible!(forcing::StochasticForcing{T, N, A, C
     return forcing.cached_forcing
 end
 
+function generate_forcing!(forcing::SeparableStochasticForcing{T}, t::Real,
+                           substep::Int=1) where T
+    substep > 1 && return forcing.cached_forcing
+    t == forcing.last_update_time && return forcing.cached_forcing
+
+    forcing.dt > 0 || error(
+        "SeparableStochasticForcing requires dt > 0 (got dt=$(forcing.dt)). " *
+        "Ensure the timestep is set before generating forcing.",
+    )
+
+    rand!(forcing.rng, forcing.random_phases_host)
+    forcing.random_phases_host .*= T(2π)
+    if forcing.random_phases !== forcing.random_phases_host
+        copyto!(forcing.random_phases, forcing.random_phases_host)
+    end
+    sqrt_dt = sqrt(forcing.dt)
+    forcing.fourier_realization .= forcing.forcing_spectrum .*
+        exp.(im .* forcing.random_phases) ./ sqrt_dt
+
+    if forcing.enforce_hermitian
+        _enforce_hermitian_symmetry!(
+            forcing.fourier_realization, forcing.architecture,
+        )
+    end
+    _set_zero_mode!(forcing.fourier_realization, forcing.architecture)
+
+    forcing.cached_forcing .= forcing.fourier_outer_view .* forcing.profile_outer_view
+    forcing.last_update_time = T(t)
+    return forcing.cached_forcing
+end
+
 """
     _enforce_hermitian_symmetry!(data, arch)
 
@@ -592,7 +862,7 @@ end
     if i < ci
         data[ci] = conj(data[i])
     elseif i == ci
-        data[i] = Complex{T}(real(data[i]), zero(T))
+        data[i] = Complex{T}(sqrt(T(2)) * real(data[i]), zero(T))
     end
 end
 
@@ -606,7 +876,7 @@ end
     if (i < ci) || (i == ci && j < cj)
         data[ci, cj] = conj(data[i, j])
     elseif i == ci && j == cj
-        data[i, j] = Complex{T}(real(data[i, j]), zero(T))
+        data[i, j] = Complex{T}(sqrt(T(2)) * real(data[i, j]), zero(T))
     end
 end
 
@@ -625,7 +895,7 @@ end
     if lin_idx < conj_lin_idx
         data[ci, cj, ck] = conj(data[i, j, k])
     elseif lin_idx == conj_lin_idx
-        data[i, j, k] = Complex{T}(real(data[i, j, k]), zero(T))
+        data[i, j, k] = Complex{T}(sqrt(T(2)) * real(data[i, j, k]), zero(T))
     end
 end
 
@@ -651,12 +921,12 @@ function _enforce_hermitian_1d!(data::AbstractVector{Complex{T}}) where T
     n = length(data)
 
     # DC mode (k=0) must be real
-    data[1] = Complex{T}(real(data[1]), zero(T))
+    data[1] = Complex{T}(sqrt(T(2)) * real(data[1]), zero(T))
 
     # Nyquist mode (if even n) must be real
     if iseven(n)
         nyq = n ÷ 2 + 1
-        data[nyq] = Complex{T}(real(data[nyq]), zero(T))
+        data[nyq] = Complex{T}(sqrt(T(2)) * real(data[nyq]), zero(T))
     end
 
     # Enforce conjugate symmetry: F(-k) = F(k)*
@@ -686,8 +956,8 @@ function _enforce_hermitian_2d!(data::AbstractMatrix{Complex{T}}) where T
                 # Keep the primary value so unit-magnitude phases are preserved.
                 data[ci, cj] = conj(data[i, j])
             elseif i == ci && j == cj
-                # Self-conjugate modes must be real
-                data[i, j] = Complex{T}(real(data[i, j]), zero(T))
+                # Project to the real axis and preserve the mode's expected power.
+                data[i, j] = Complex{T}(sqrt(T(2)) * real(data[i, j]), zero(T))
             end
         end
     end
@@ -717,8 +987,8 @@ function _enforce_hermitian_3d!(data::AbstractArray{Complex{T}, 3}) where T
                     # Keep the primary value so unit-magnitude phases are preserved.
                     data[ci, cj, ck] = conj(data[i, j, k])
                 elseif lin_idx == conj_lin_idx
-                    # Self-conjugate modes must be real
-                    data[i, j, k] = Complex{T}(real(data[i, j, k]), zero(T))
+                    # Project to the real axis and preserve the mode's expected power.
+                    data[i, j, k] = Complex{T}(sqrt(T(2)) * real(data[i, j, k]), zero(T))
                 end
             end
         end
@@ -796,14 +1066,17 @@ Call this at the **beginning** of each timestep, before advancing.
 """
 function store_prevsol!(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
     if sol isa PencilArrays.PencilArray
-        # Store the local slab as a plain Matrix whose CARTESIAN layout matches the
+        # Store the local slab as a plain N-D Array whose CARTESIAN layout matches the
         # PencilArray's logical getindex (pa[I] is logical, verified), so the
         # work/power reductions — which iterate CartesianIndices — pair it correctly.
         # Note: a `[sol[I] for I in CartesianIndices(sol)]` comprehension does NOT do
         # this (it collects in the PencilArray's LINEAR/storage order == collect(sol),
         # transposing a permuted pencil); an explicit `dest[I] = sol[I]` loop does.
         # Round-5 audit 2026-06-23.
-        dest = Matrix{Complex{T}}(undef, size(sol))
+        if forcing.prevsol === nothing || size(forcing.prevsol) != size(sol)
+            forcing.prevsol = Array{Complex{T}, N}(undef, size(sol))
+        end
+        dest = forcing.prevsol
         @inbounds for I in CartesianIndices(sol)
             dest[I] = sol[I]
         end
@@ -819,71 +1092,156 @@ function store_prevsol!(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractAr
     copyto!(forcing.prevsol, sol)
 end
 
-# LOGICAL-order local forcing view for the work/power diagnostics, sliced by the
-# field's logical local ranges (axes_local[l] = global range of logical dim l).
-# The diagnostics iterate CartesianIndices (logical), pairing this with the
-# solution PencilArray's logical cartesian getindex. Distinct from
-# `_matched_forcing_view`, which returns a PARENT/memory-order view for the
-# broadcast `coeff_data .+= F_view` in the RHS path. Round-5 audit 2026-06-23.
-function _forcing_view_logical(forcing::StochasticForcing{T, N, A, CA},
-                               target::PencilArrays.PencilArray) where {T, N, A, CA}
-    local_axes = PencilArrays.pencil(target).axes_local
-    length(local_axes) == N || return nothing
-    fshape = size(forcing.cached_forcing)
-    ranges = Vector{UnitRange{Int}}(undef, N)
+function _diagnostic_layout(target::AbstractArray{<:Any, N}) where N
+    return size(target), ntuple(d -> 1:size(target, d), N)
+end
+
+function _diagnostic_layout(target::PencilArrays.PencilArray)
+    return Tuple(PencilArrays.size_global(target)), Tuple(PencilArrays.pencil(target).axes_local)
+end
+
+@inline function _rfft_multiplicity(::Type{T}, full_n::Int, target_n::Int,
+                                    global_i::Int) where T
+    if target_n == full_n
+        return one(T)
+    elseif full_n == 2 * (target_n - 1) # even physical size: DC and Nyquist are unique
+        return (global_i == 1 || global_i == target_n) ? one(T) : T(2)
+    elseif full_n == 2 * target_n - 1   # odd physical size: only DC is unique
+        return global_i == 1 ? one(T) : T(2)
+    end
+    throw(ArgumentError("Forcing size $full_n does not match spectral target size $target_n"))
+end
+
+function _diagnostic_weights(forcing::StochasticForcing{T, N},
+                             global_shape::NTuple{N, Int},
+                             local_ranges::NTuple{N, UnitRange{Int}}) where {T, N}
+    local_shape = ntuple(d -> length(local_ranges[d]), N)
+    weights = Array{T}(undef, local_shape)
+    M2 = T(prod(forcing.field_size))^2
+
+    for I in CartesianIndices(weights)
+        multiplicity = one(T)
+        k2 = zero(T)
+        for d in 1:N
+            global_i = first(local_ranges[d]) + I[d] - 1
+            multiplicity *= _rfft_multiplicity(T, forcing.field_size[d],
+                                                global_shape[d], global_i)
+            kd = forcing.wavenumbers[d][global_i]
+            k2 += kd^2
+        end
+        weights[I] = multiplicity *
+                     _injection_metric_weight(k2, forcing.injection_metric) / M2
+    end
+    return weights
+end
+
+function _validate_diagnostic_layout(forcing::StochasticForcing{T, N},
+                                     global_shape::NTuple{N, Int},
+                                     local_ranges::NTuple{N, UnitRange{Int}}) where {T, N}
     for d in 1:N
-        r = local_axes[d]
-        (first(r) < 1 || last(r) > fshape[d]) && return nothing
-        ranges[d] = r
+        r = local_ranges[d]
+        (first(r) < 1 || last(r) > global_shape[d]) &&
+            throw(ArgumentError("Local spectral range $r exceeds target size $(global_shape[d])"))
+        _rfft_multiplicity(T, forcing.field_size[d], global_shape[d], first(r))
     end
-    return view(forcing.cached_forcing, Tuple(ranges)...)
-end
-_forcing_view_logical(forcing::StochasticForcing{T, N, A, CA}, target::AbstractArray) where {T, N, A, CA} =
-    _matched_forcing_view(forcing, size(target))
-
-# Whole-array reductions for the work/power diagnostics.
-#
-# The ARRAYS are the reduction operands (not a CartesianIndices collection), so
-# `mapreduce` dispatches on the array type: plain Arrays use Base's fold and GPU
-# arrays hit the GPUArrays fused reduction kernel. Iterating
-# `mapreduce(+, CartesianIndices(cf)) do I ...` instead dispatches on the
-# CartesianIndices (a CPU collection), so every `a[I]` inside the closure is
-# scalar indexing on a GPU array — a GPUArrays scalar-indexing error in scripts
-# and a ~1000x slowdown interactively.
-#
-# PencilArray solutions keep an explicit cartesian loop: `ps` (logical-order
-# Matrix from store_prevsol!) and `cf` (logical-order view) pair with the
-# PencilArray's logical CARTESIAN getindex, whereas zip/linear iteration follows
-# the pencil's parent/storage order, scrambling the pairing for a permuted
-# pencil (see store_prevsol!). That loop runs on the CPU over the local slab
-# only. Round-5 audit 2026-06-23; GPU audit 2026-07.
-
-# Re Σ sol · conj(cf)   (work_ito, instantaneous_power)
-function _diag_real_dot(sol::AbstractArray, cf)
-    T = real(eltype(sol))
-    return mapreduce((s, c) -> real(s * conj(c)), +, sol, cf; init = zero(T))
+    return nothing
 end
 
-function _diag_real_dot(sol::PencilArrays.PencilArray, cf)
-    acc = zero(real(eltype(sol)))
-    @inbounds for I in CartesianIndices(cf)
-        acc += real(sol[I] * conj(cf[I]))
+function _cached_gpu_diagnostic_weights!(forcing::StochasticForcing{T, N, A},
+                                         global_shape::NTuple{N, Int},
+                                         local_ranges::NTuple{N, UnitRange{Int}}) where {T, N, A}
+    if forcing.diagnostic_weights === nothing ||
+       forcing.diagnostic_global_shape != global_shape ||
+       forcing.diagnostic_local_ranges != local_ranges ||
+       forcing.diagnostic_metric !== forcing.injection_metric
+        weights_cpu = _diagnostic_weights(forcing, global_shape, local_ranges)
+        forcing.diagnostic_weights = on_architecture(forcing.architecture, weights_cpu)
+        forcing.diagnostic_global_shape = global_shape
+        forcing.diagnostic_local_ranges = local_ranges
+        forcing.diagnostic_metric = forcing.injection_metric
     end
-    return acc
+    return forcing.diagnostic_weights::A
 end
 
-# Re Σ (ps + sol)/2 · conj(cf)   (work_stratonovich midpoint)
-function _diag_real_middot(ps, sol::AbstractArray, cf)
-    T = real(eltype(sol))
-    return mapreduce((p, s, c) -> real((p + s) / 2 * conj(c)), +, ps, sol, cf; init = zero(T))
-end
-
-function _diag_real_middot(ps, sol::PencilArrays.PencilArray, cf)
-    acc = zero(real(eltype(sol)))
-    @inbounds for I in CartesianIndices(cf)
-        acc += real((ps[I] + sol[I]) / 2 * conj(cf[I]))
+@inline function _diagnostic_mode_weight(forcing::StochasticForcing{T, N},
+                                         global_shape::NTuple{N, Int},
+                                         G::CartesianIndex{N}, M2::T) where {T, N}
+    multiplicity = one(T)
+    k2 = zero(T)
+    for d in 1:N
+        global_i = G[d]
+        multiplicity *= _rfft_multiplicity(T, forcing.field_size[d],
+                                            global_shape[d], global_i)
+        kd = forcing.wavenumbers[d][global_i]
+        k2 += kd^2
     end
-    return acc
+    return multiplicity * _injection_metric_weight(k2, forcing.injection_metric) / M2
+end
+
+function _diagnostic_inner_product_cpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::Nothing) where {T, N}
+    M2 = T(prod(forcing.field_size))^2
+    offset = CartesianIndex(ntuple(d -> first(local_ranges[d]) - 1, N))
+    value = zero(T)
+    @inbounds for I in CartesianIndices(sol)
+        G = I + offset
+        weight = _diagnostic_mode_weight(forcing, global_shape, G, M2)
+        value += weight * real(sol[I] * conj(forcing.cached_forcing[G]))
+    end
+    return T(_forcing_reduce_partial(sol, value))
+end
+
+function _diagnostic_inner_product_cpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::AbstractArray{Complex{T}, N}) where {T, N}
+    M2 = T(prod(forcing.field_size))^2
+    offset = CartesianIndex(ntuple(d -> first(local_ranges[d]) - 1, N))
+    value = zero(T)
+    @inbounds for I in CartesianIndices(sol)
+        G = I + offset
+        weight = _diagnostic_mode_weight(forcing, global_shape, G, M2)
+        midpoint = (other[I] + sol[I]) / T(2)
+        value += weight * real(midpoint * conj(forcing.cached_forcing[G]))
+    end
+    return T(_forcing_reduce_partial(sol, value))
+end
+
+function _diagnostic_inner_product_gpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::Nothing) where {T, N}
+    weights = _cached_gpu_diagnostic_weights!(forcing, global_shape, local_ranges)
+    cf = view(forcing.cached_forcing, local_ranges...)
+    return T(mapreduce((w, s, f) -> w * real(s * conj(f)), +,
+                       weights, sol, cf; init=zero(T)))
+end
+
+function _diagnostic_inner_product_gpu(forcing::StochasticForcing{T, N},
+                                       sol::AbstractArray{Complex{T}, N},
+                                       global_shape::NTuple{N, Int},
+                                       local_ranges::NTuple{N, UnitRange{Int}},
+                                       other::AbstractArray{Complex{T}, N}) where {T, N}
+    weights = _cached_gpu_diagnostic_weights!(forcing, global_shape, local_ranges)
+    cf = view(forcing.cached_forcing, local_ranges...)
+    return T(mapreduce((w, a, b, f) -> w * real((a + b) / T(2) * conj(f)), +,
+                       weights, other, sol, cf; init=zero(T)))
+end
+
+function _diagnostic_inner_product(forcing::StochasticForcing{T, N},
+                                   sol::AbstractArray{Complex{T}, N},
+                                   other::Union{Nothing, AbstractArray{Complex{T}, N}}=nothing) where {T, N}
+    global_shape, local_ranges = _diagnostic_layout(sol)
+    _validate_diagnostic_layout(forcing, global_shape, local_ranges)
+    if is_gpu(forcing.architecture) || is_gpu_array(sol)
+        return _diagnostic_inner_product_gpu(forcing, sol, global_shape, local_ranges, other)
+    end
+    return _diagnostic_inner_product_cpu(forcing, sol, global_shape, local_ranges, other)
 end
 
 """
@@ -916,26 +1274,14 @@ function work_stratonovich(forcing::StochasticForcing{T, N, A, CA}, sol::Abstrac
 
     # Stratonovich work: W = Re⟨ψ_mid · ΔF̂*⟩ where ΔF̂ = F̂_stored · dt
     # Since F̂_stored = √Q̂ · ξ / √dt, we have ΔF̂ = √Q̂ · ξ · √dt
-    domain_area = prod(forcing.domain_size)
-
-    # Whole-array reduction: computes Re(ψ_mid · F̂*) with the ARRAYS as the
-    # reduction operands, so it runs as a fused GPU kernel on GPU arrays and a
-    # plain fold on CPU arrays; the PencilArray method keeps the logical
-    # cartesian pairing (see _diag_real_middot above for both).
     ps = forcing.prevsol
     size(ps) == size(sol) || throw(ArgumentError("Previous solution size $(size(ps)) does not match current solution size $(size(sol))"))
-    cf = _forcing_view_logical(forcing, sol)
-    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-    work = _diag_real_middot(ps, sol, cf)
-
-    # The reduction ran over this rank's LOCAL slab only; combine partials
-    # across the field's communicator before normalising by the GLOBAL area.
-    work = _forcing_reduce_partial(sol, work)
+    work = _diagnostic_inner_product(forcing, sol, ps)
 
     # The cached_forcing stores F̂ = √Q̂ · ξ / √dt
     # The forcing increment is ΔF̂ = F̂ · dt = √Q̂ · ξ · √dt
-    # Work = (1/A) · Re Σ ψ_mid · ΔF̂* = (dt/A) · Re Σ ψ_mid · F̂*
-    return T(work * forcing.dt / domain_area)
+    # Parseval contributes M⁻² for Tarang's unnormalised FFT coefficients.
+    return T(work * forcing.dt)
 end
 
 """
@@ -955,25 +1301,13 @@ In Itô calculus, ψⁿ is independent of Fⁿ⁺¹, so ⟨ψⁿ · ΔF̂⟩ = 0
 The drift ensures ⟨W_Itô⟩ = ⟨W_Stratonovich⟩ = ε · dt.
 """
 function work_ito(forcing::StochasticForcing{T, N, A, CA}, sol_prev::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
-    domain_area = prod(forcing.domain_size)
-
-    # Itô work (uses previous solution, which is independent of current forcing)
-    # Whole-array reduction over the arrays themselves: GPU-kernel on GPU
-    # arrays, logical cartesian pairing for PencilArrays (see _diag_real_dot).
-    cf = _forcing_view_logical(forcing, sol_prev)
-    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol_prev))"))
-    work = _diag_real_dot(sol_prev, cf)
-
-    # Combine per-rank slab partials over the field's communicator (the drift
-    # term below is a replicated scalar and must NOT be reduced).
-    work = _forcing_reduce_partial(sol_prev, work)
+    work = _diagnostic_inner_product(forcing, sol_prev)
 
     # The Itô integral has zero mean, so we add drift correction
     # to match Stratonovich mean: ⟨W_Itô⟩ = 0 + ε·dt = ε·dt
     drift = forcing.energy_injection_rate * forcing.dt
 
-    # Work = (dt/A) · Re Σ ψ_prev · F̂* (same scaling as Stratonovich)
-    return T(work * forcing.dt / domain_area + drift)
+    return T(work * forcing.dt + drift)
 end
 
 # ============================================================================
@@ -988,8 +1322,10 @@ Return the target (mean) energy injection rate ε.
 This is the ensemble average of work done per unit time.
 """
 mean_energy_injection_rate(forcing::StochasticForcing) = forcing.energy_injection_rate
+mean_energy_injection_rate(forcing::SeparableStochasticForcing) = forcing.energy_injection_rate
 
 energy_injection_rate(forcing::StochasticForcing) = forcing.energy_injection_rate
+energy_injection_rate(forcing::SeparableStochasticForcing) = forcing.energy_injection_rate
 
 function get_forcing_real(forcing::StochasticForcing)
     return real.(forcing.cached_forcing)
@@ -998,7 +1334,7 @@ end
 """
     instantaneous_power(forcing::StochasticForcing, sol::AbstractArray)
 
-Compute instantaneous power input P = Re⟨ψ · F̂*⟩ / A.
+Compute instantaneous power input from the Parseval-normalized spectral pairing.
 Works on both CPU and GPU arrays.
 
 This is the correlation between the solution and forcing at a given instant.
@@ -1015,20 +1351,7 @@ use `work_stratonovich(forcing, sol) / forcing.dt` instead.
 Instantaneous power (energy per unit time).
 """
 function instantaneous_power(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
-    domain_area = prod(forcing.domain_size)
-
-    # Whole-array reduction over the arrays themselves: GPU-kernel on GPU
-    # arrays, logical cartesian pairing for PencilArrays (see _diag_real_dot).
-    cf = _forcing_view_logical(forcing, sol)
-    cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-
-    power = _diag_real_dot(sol, cf)
-
-    # Combine per-rank slab partials over the field's communicator.
-    power = _forcing_reduce_partial(sol, power)
-
-    # P = (1/A) · Re Σ ψ · F̂* where F̂ = √Q̂ · ξ / √dt
-    return T(power / domain_area)
+    return _diagnostic_inner_product(forcing, sol)
 end
 
 """
@@ -1036,11 +1359,14 @@ end
 
 Compute mean enstrophy injection rate (for 2D turbulence).
 
-    η = ∑_k |k|² Q̂(k) / (2 · domain_area)
+This assumes the stochastic forcing is applied directly to vorticity. With
+`M = prod(field_size)` and Tarang's unnormalized FFT convention,
 
-Note: This assumes the forcing spectrum Q̂(k) corresponds to direct field forcing.
-For vorticity forcing, enstrophy injection is simply ε. For streamfunction forcing,
-this formula gives the enstrophy injection rate.
+    η = ∑_k Q̂(k) / (2M²)
+
+For `injection_metric=:direct`, this equals the configured energy injection
+rate. For `:vorticity_kinetic`, it is generally of order `k_forcing²` times
+the configured kinetic-energy injection rate.
 """
 function forcing_enstrophy_injection_rate(forcing::StochasticForcing{T, N, A, CA}) where {T, N, A, CA}
     if N != 2
@@ -1048,22 +1374,10 @@ function forcing_enstrophy_injection_rate(forcing::StochasticForcing{T, N, A, CA
         return zero(T)
     end
 
-    domain_area = prod(forcing.domain_size)
-    kx, ky = forcing.wavenumbers
-
     # Get spectrum on CPU for computation (spectrum might be on GPU)
     spectrum_cpu = Array(forcing.forcing_spectrum)
-
-    # Compute enstrophy injection rate
-    η = zero(T)
-    for j in eachindex(ky)
-        for i in eachindex(kx)
-            k2 = kx[i]^2 + ky[j]^2
-            η += k2 * spectrum_cpu[i, j]^2
-        end
-    end
-
-    return η / (2 * domain_area)
+    M = T(prod(forcing.field_size))
+    return sum(abs2, spectrum_cpu) / (2 * M^2)
 end
 
 # ============================================================================
@@ -1087,6 +1401,17 @@ function set_dt!(forcing::StochasticForcing{T, N, A, CA}, dt::Real) where {T, N,
     return forcing
 end
 
+function set_dt!(forcing::SeparableStochasticForcing{T}, dt::Real) where T
+    new_dt = T(dt)
+    if forcing.dt != new_dt
+        forcing.dt = new_dt
+        forcing.last_update_time = T(-Inf)
+        fill!(forcing.cached_forcing, zero(eltype(forcing.cached_forcing)))
+        fill!(forcing.fourier_realization, zero(eltype(forcing.fourier_realization)))
+    end
+    return forcing
+end
+
 """
     reset_forcing!(forcing::StochasticForcing)
 
@@ -1102,12 +1427,23 @@ function reset_forcing!(forcing::StochasticForcing{T, N, A, CA}) where {T, N, A,
     end
 end
 
+function reset_forcing!(forcing::SeparableStochasticForcing{T}) where T
+    forcing.last_update_time = T(-Inf)
+    fill!(forcing.cached_forcing, zero(eltype(forcing.cached_forcing)))
+    fill!(forcing.fourier_realization, zero(eltype(forcing.fourier_realization)))
+    if forcing.prevsol !== nothing
+        fill!(forcing.prevsol, zero(eltype(forcing.prevsol)))
+    end
+    return forcing
+end
+
 """
     get_forcing_spectrum(forcing::StochasticForcing)
 
 Return the forcing amplitude spectrum √Q̂(k).
 """
 get_forcing_spectrum(forcing::StochasticForcing) = forcing.forcing_spectrum
+get_forcing_spectrum(forcing::SeparableStochasticForcing) = forcing.forcing_spectrum
 
 """
     get_cached_forcing(forcing::StochasticForcing)
@@ -1115,6 +1451,7 @@ get_forcing_spectrum(forcing::StochasticForcing) = forcing.forcing_spectrum
 Return the current cached forcing F̂(k).
 """
 get_cached_forcing(forcing::StochasticForcing) = forcing.cached_forcing
+get_cached_forcing(forcing::SeparableStochasticForcing) = forcing.cached_forcing
 
 # ============================================================================
 # Internal helpers
@@ -1122,8 +1459,8 @@ get_cached_forcing(forcing::StochasticForcing) = forcing.cached_forcing
 
 # Sum a per-rank partial scalar (computed over the LOCAL PencilArray slab)
 # across the distributed field's MPI communicator. The work/power diagnostics
-# reduce over the owned slab and normalise by the GLOBAL domain area, so the
-# slab partials must be combined first or each rank returns only its fraction.
+# reduce over the owned slab and use the GLOBAL transform size for Parseval
+# normalization, so the slab partials must be combined first.
 # Serial / single-rank / non-PencilArray inputs are returned unchanged, so
 # existing serial and degenerate (single-rank) configurations are untouched.
 _forcing_reduce_partial(::AbstractArray, partial) = partial
@@ -1195,6 +1532,70 @@ function _matched_forcing_view(forcing::StochasticForcing{T, N, A, CA},
 
     perm_raw = Tuple(PencilArrays.permutation(target))
     perm_raw === nothing && return logical_view   # identity permutation
+    return PermutedDimsArray(logical_view, perm_raw)
+end
+
+function _separable_forcing_ranges(
+    forcing_shape::NTuple{N,Int},
+    target_shape::NTuple{N,Int},
+    fourier_dims::Int,
+) where N
+    ranges = Vector{UnitRange{Int}}(undef, N)
+    for d in 1:fourier_dims
+        nf, nt = forcing_shape[d], target_shape[d]
+        if nf == nt || nf == 2 * (nt - 1) || nf == 2 * nt - 1
+            ranges[d] = 1:nt
+        else
+            return nothing
+        end
+    end
+
+    chebyshev_dim = fourier_dims + 1
+    forcing_shape[chebyshev_dim] == target_shape[chebyshev_dim] || return nothing
+    ranges[chebyshev_dim] = 1:target_shape[chebyshev_dim]
+    return Tuple(ranges)
+end
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target_shape::NTuple{N,Int},
+) where {T,NF,N}
+    ranges = _separable_forcing_ranges(size(forcing.cached_forcing), target_shape, NF)
+    ranges === nothing && return nothing
+    return view(forcing.cached_forcing, ranges...)
+end
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target::AbstractArray,
+) where {T,NF,N}
+    ndims(target) == N || return nothing
+    return _matched_forcing_view(forcing, size(target))
+end
+
+
+function _matched_forcing_view(
+    forcing::SeparableStochasticForcing{T,NF,N},
+    target::PencilArrays.PencilArray,
+) where {T,NF,N}
+    global_shape = Tuple(PencilArrays.size_global(target))
+    _separable_forcing_ranges(size(forcing.cached_forcing), global_shape, NF) === nothing &&
+        return nothing
+
+    local_axes = PencilArrays.pencil(target).axes_local
+    length(local_axes) == N || return nothing
+    forcing_shape = size(forcing.cached_forcing)
+    ranges = ntuple(N) do d
+        local_range = local_axes[d]
+        first(local_range) >= 1 && last(local_range) <= forcing_shape[d] ||
+            return nothing
+        local_range
+    end
+    any(isnothing, ranges) && return nothing
+
+    logical_view = view(forcing.cached_forcing, ranges...)
+    perm_raw = Tuple(PencilArrays.permutation(target))
+    perm_raw === nothing && return logical_view
     return PermutedDimsArray(logical_view, perm_raw)
 end
 
@@ -1345,7 +1746,7 @@ end
 export Forcing, StochasticForcingType, DeterministicForcingType
 
 # Export concrete forcing types
-export StochasticForcing, DeterministicForcing
+export StochasticForcing, SeparableStochasticForcing, DeterministicForcing
 
 # Export forcing generation and application
 export generate_forcing!, apply_forcing!

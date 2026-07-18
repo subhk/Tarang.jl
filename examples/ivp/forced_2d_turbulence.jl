@@ -4,7 +4,7 @@
 #
 #     ∂t(ζ) + u·∇(ζ) = -ν Δ⁴(ζ) - μζ + F
 #
-# where ζ = Δ(ψ), u = skew(∇ψ)), and F is white-in-time ring forcing
+# where ζ = Δ(ψ), u = skew(∇ψ), and F is white-in-time ring forcing
 # injecting energy at wavenumber k_f.
 #
 # The forcing drives an inverse energy cascade (energy → large scales)
@@ -42,11 +42,12 @@ dk_f     = parse(Float64, get(ENV, "TARANG_FORCED_2D_DKF", "2.0"))
 # CPU by default. Set TARANG_FORCED_2D_DEVICE=gpu to run on CUDA (needs a GPU +
 # CUDA.jl); optionally pick a specific GPU with TARANG_FORCED_2D_GPU_ID.
 const USE_GPU = lowercase(get(ENV, "TARANG_FORCED_2D_DEVICE", "cpu")) in ("gpu", "cuda")
+gpu_id = parse(Int, get(ENV, "TARANG_FORCED_2D_GPU_ID", "0"))
 if USE_GPU
     using CUDA
-    CUDA.device!(parse(Int, get(ENV, "TARANG_FORCED_2D_GPU_ID", "0")))
+    CUDA.allowscalar(false)
 end
-device = USE_GPU ? GPU() : CPU()
+device = USE_GPU ? GPU(device_id=gpu_id) : CPU()
 
 # ─── Domain & Fields ──────────────────────────────────────────
 coords = CartesianCoordinates("x", "y")
@@ -64,24 +65,31 @@ u     = VectorField(domain, "u")          # Velocity
 tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
 
 # ─── Stochastic Forcing ──────────────────────────────────────
-# Ring forcing in wavenumber space: energy injected in |k| ∈ [k_f - dk_f, k_f + dk_f]
+# Gaussian ring forcing in wavenumber space, concentrated near |k| = k_f
 # White-in-time: new random phase each timestep, amplitude set by ε
 forcing = StochasticForcing(
     field_size             = (Nx, Ny),
     domain_size            = (Lx, Ly),
     energy_injection_rate  = ε,
+    injection_metric       = :vorticity_kinetic, # ε is kinetic-energy injection
     k_forcing              = k_f,
     dk_forcing             = dk_f,
     dt                     = max_dt,
     spectrum_type          = :ring,      # Isotropic ring in k-space
     enforce_hermitian      = true,       # Real-valued vorticity
+    architecture           = device,
 )
 
 # ─── Problem ─────────────────────────────────────────────────
 problem = IVP([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu, drag=drag)
 
-add_equation!(problem, "∂t(ζ) + drag*ζ + nu*Δ⁴(ζ) = -u⋅∇(ζ)")  # PV evolution (forcing added below)
+# Keep every prognostic term on the explicit RHS.  Pure-Fourier GPU fields use
+# Tarang's device-native explicit RK path (there is no global GPU DAE solve), so
+# terms placed on the implicit LHS would otherwise be omitted by that fallback.
+# At the default resolution/parameters the hyperviscous stability limit is much
+# larger than max_dt, so explicit treatment is both correct and stable here.
+add_equation!(problem, "∂t(ζ) = -u⋅∇(ζ) - drag*ζ - nu*Δ⁴(ζ)")  # forcing added below
 add_equation!(problem, "Δ(ψ) + tau_ψ - ζ  = 0")                # Poisson equation
 add_equation!(problem, "u - skew(grad(ψ)) = 0")                # Velocity from ψ
 

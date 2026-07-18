@@ -14,9 +14,6 @@ The unpack operation reverses this, taking received data and placing it
 into the appropriate positions in the output array.
 """
 
-using KernelAbstractions
-using KernelAbstractions: @kernel, @index, @Const
-
 # Binary search helpers (_gpu_find_rank, _gpu_find_rank_1based) are defined in
 # nccl_transpose.jl which is loaded before this file.
 
@@ -47,8 +44,6 @@ Arguments:
                                                @Const(prefix_sums))
     i = @index(Global)
 
-    # Total elements
-    total = Nx * Ny * Nz
     # Convert linear index to 3D indices (column-major order)
     ix = ((i - 1) % Nx) + 1
     iy = (((i - 1) ÷ Nx) % Ny) + 1
@@ -90,7 +85,6 @@ Uses binary search for O(log P) rank lookup.
                                                @Const(prefix_sums))
     i = @index(Global)
 
-    total = Nx * Ny
     ix = ((i - 1) % Nx) + 1
     iy = ((i - 1) ÷ Nx) + 1
 
@@ -126,7 +120,6 @@ Uses binary search for O(log P) rank lookup.
                                                   @Const(prefix_sums))
     i = @index(Global)
 
-    total = Nx * Ny * Nz
     ix = ((i - 1) % Nx) + 1
     iy = (((i - 1) ÷ Nx) % Ny) + 1
     iz = ((i - 1) ÷ (Nx * Ny)) + 1
@@ -164,7 +157,6 @@ Uses binary search for O(log P) rank lookup.
                                                   @Const(prefix_sums))
     i = @index(Global)
 
-    total = Nx * Ny
     ix = ((i - 1) % Nx) + 1
     iy = ((i - 1) ÷ Nx) + 1
 

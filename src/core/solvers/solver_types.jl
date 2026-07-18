@@ -307,10 +307,90 @@ function _try_build_subproblems!(solver::InitialValueSolver)
     @info "  $n_total subproblems built ($n_with_mats with matrices)"
 end
 
+"""True for a GPU-resident IVP whose spatial axes are all Fourier.
+
+Such problems advance through the device-native field path and refresh their
+algebraic constraints spectrally.  They neither use the global CPU matrices nor
+build coupled (Jacobi/Chebyshev) subproblems.
+"""
+function _gpu_pure_fourier_state(state::Vector{<:ScalarField})
+    found_spatial = false
+    for field in state
+        isempty(field.bases) && continue
+        found_spatial = true
+        is_gpu(field_architecture(field)) || return false
+        all(b -> b !== nothing && isa(b, FourierBasis), field.bases) || return false
+    end
+    return found_spatial
+end
+
+function _gpu_coupled_state(state::Vector{<:ScalarField})
+    found_spatial = false
+    found_coupled = false
+    for field in state
+        isempty(field.bases) && continue
+        found_spatial = true
+        is_gpu(field_architecture(field)) || return false
+        found_coupled |= any(b -> b !== nothing && isa(b, JacobiBasis), field.bases)
+    end
+    return found_spatial && found_coupled
+end
+
+function _ivp_state_architecture(state::Vector{<:ScalarField})
+    for field in state
+        isempty(field.bases) && continue
+        return field_architecture(field)
+    end
+    return CPU()
+end
+
+function _select_ivp_matsolver(choice, architecture::AbstractArchitecture,
+                               coupled::Bool)
+    return _select_ivp_matsolver(choice, is_gpu(architecture), coupled)
+end
+
+function _cpu_only_matsolver_type(choice)
+    cpu_types = (
+        MatSolvers.DummySolver,
+        MatSolvers.DenseLUSolver,
+        MatSolvers.SparseLUSolver,
+        MatSolvers.WoodburySolver,
+        MatSolvers.BandedLUSolver,
+        MatSolvers.BlockDiagonalSolver,
+        MatSolvers.SPQRSolver,
+    )
+    return any(T -> choice === T || (choice isa Type && choice <: T), cpu_types)
+end
+
+function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
+    auto = (choice isa Symbol || choice isa AbstractString) &&
+           lowercase(String(choice)) == "auto"
+    if auto
+        return gpu && coupled ? :cuda_sparse : :sparse
+    end
+
+    normalized = _normalize_matsolver(choice)
+    if gpu && coupled &&
+       (normalized in (:sparse, :dense) || _cpu_only_matsolver_type(normalized))
+        throw(ArgumentError(
+            "A coupled Jacobi/Chebyshev GPU IVP cannot use the CPU-only " *
+            "matrix solver :$normalized. Leave matsolver=:auto or select " *
+            "matsolver=:cuda_sparse explicitly.",
+        ))
+    end
+    return normalized
+end
+
+function _select_ivp_matsolver(choice, state::Vector{<:ScalarField})
+    architecture = _ivp_state_architecture(state)
+    coupled = _gpu_coupled_state(state)
+    return _select_ivp_matsolver(choice, architecture, coupled)
+end
+
 function _build_initial_value_solver(problem::IVP, timestepper;
                                      dt::Real=1e-3,
                                      device::String="cpu",
-                                     matsolver::Union{String,Symbol,Type,Tuple}=:sparse)
+                                     matsolver::Union{String,Symbol,Type,Tuple}=:auto)
     setup_domain!(problem)
 
     # Merge boundary conditions into equation system
@@ -318,9 +398,9 @@ function _build_initial_value_solver(problem::IVP, timestepper;
 
     validate_problem(problem)
 
-    base = SolverBaseData(problem; matsolver=matsolver)
-
     state = collect_state_fields(problem.variables)
+    selected_matsolver = _select_ivp_matsolver(matsolver, state)
+    base = SolverBaseData(problem; matsolver=selected_matsolver)
 
     perf_stats = SolverPerformanceStats()
 
@@ -334,8 +414,17 @@ function _build_initial_value_solver(problem::IVP, timestepper;
         set_time_variable!(problem.bc_manager, "t")
     end
 
-    build_solver_matrices!(solver)
-    _try_build_subproblems!(solver)
+    if _gpu_pure_fourier_state(state)
+        # RK/IMEX dispatch deliberately uses the field-wise explicit path for
+        # pure-Fourier GPU states.  Building global host matrices here is both
+        # unused and prohibitive at production sizes (e.g. the 512² turbulence
+        # example), while the algebraic Poisson/velocity constraints are handled
+        # spectrally by evaluate_rhs at each stage.
+        @info "Pure-Fourier GPU IVP: skipping unused global CPU matrix assembly"
+    else
+        build_solver_matrices!(solver)
+        _try_build_subproblems!(solver)
+    end
 
     # Build the type-specialized lazy RHS plan. If translation fails for any
     # equation (e.g., unsupported operator type), `is_compiled` stays false

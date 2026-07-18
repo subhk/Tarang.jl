@@ -76,7 +76,7 @@ pages = Any[
         "Tau Method" => "pages/tau_method.md",
     ],
     "Developer Guide" => Any[
-        "Architecture" => "pages/architecture.md",
+        "Architecture & Codebase" => "pages/architecture.md",
         "Testing" => "pages/testing.md",
         "Contributing" => "pages/contributing.md",
     ],

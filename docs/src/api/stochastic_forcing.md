@@ -36,6 +36,7 @@ the same struct holds `Array`s on the CPU and `CuArray`s on the GPU.
 |-------|------|-------------|
 | `forcing_spectrum` | `A` | √Q̂(k) - amplitude spectrum |
 | `energy_injection_rate` | `T` | Target ε |
+| `injection_metric` | `Symbol` | `:direct` or `:vorticity_kinetic` |
 | `k_forcing` | `T` | Central forcing wavenumber |
 | `dk_forcing` | `T` | Forcing bandwidth |
 | `dt` | `T` | Current timestep |
@@ -46,6 +47,10 @@ the same struct holds `Array`s on the CPU and `CuArray`s on the GPU.
 | `prevsol` | `Union{Nothing, CA}` | Previous solution for Stratonovich work |
 | `rng` | `AbstractRNG` | Random number generator |
 | `random_phases` | `A` | Pre-allocated random phase buffer |
+| `diagnostic_weights` | `Union{Nothing,A}` | Cached backend diagnostic weights |
+| `diagnostic_global_shape` | `NTuple{N,Int}` | Shape associated with cached weights |
+| `diagnostic_local_ranges` | `NTuple{N,UnitRange{Int}}` | Local ranges associated with cached weights |
+| `diagnostic_metric` | `Symbol` | Metric associated with cached weights |
 | `last_update_time` | `T` | Time of last forcing update |
 | `spectrum_type` | `Symbol` | Type of forcing spectrum |
 | `enforce_hermitian` | `Bool` | Enforce F̂(-k) = F̂(k)\* for real-valued fields |
@@ -68,6 +73,7 @@ StochasticForcing(;
     domain_size::Union{Nothing, NTuple{N, Real}} = nothing,  # nothing => 2π in each direction
     energy_injection_rate::Real = 1.0,
     forcing_rate::Union{Nothing, Real} = nothing,            # alias for energy_injection_rate
+    injection_metric::Symbol = :direct,
     k_forcing::Real = 4.0,
     dk_forcing::Real = 1.0,
     dt::Real = 0.01,
@@ -79,32 +85,99 @@ StochasticForcing(;
 ) where {T<:AbstractFloat, N}
 ```
 
-`forcing_rate` and `energy_injection_rate` set the same target ε. If both are given and they
-disagree, `forcing_rate` wins and a warning is emitted.
+`forcing_rate` and `energy_injection_rate` set the same target ε. `forcing_rate` wins when
+provided. If a non-default `energy_injection_rate` is also supplied and the values disagree,
+a warning is emitted.
 
-The default `rng` is a **fresh `MersenneTwister` per instance** (not `Random.GLOBAL_RNG`), so
-forcing is thread- and task-safe. Under MPI with more than one rank the constructor broadcasts a
-seed from rank 0, so every rank draws the same phases and the forcing stays coherent across the
-decomposition.
+`injection_metric = :direct` makes ε the injection rate of the forced variable's direct
+quadratic invariant. Use `:vorticity_kinetic` when forcing 2-D vorticity and ε should be
+kinetic-energy injection; it weights each nonzero Fourier mode by `1/|k|²`.
+
+The default `rng` is a **fresh `MersenneTwister` per instance** (not
+`Random.GLOBAL_RNG`), which avoids accidental RNG sharing between forcing instances.
+Concurrent mutation of the same forcing object is not supported. Under MPI with more than
+one rank the constructor broadcasts a seed from rank 0 on `MPI.COMM_WORLD`, so every rank
+draws the same phases and the forcing stays coherent across the decomposition.
 
 Set `enforce_hermitian = false` when the forced field is genuinely complex; with the default
 `true`, F̂(-k) = F̂(k)\* is imposed so that the inverse transform of the forcing is real.
+Self-conjugate modes are projected as `sqrt(2) * real(z)`; the factor preserves the
+variance that would otherwise be halved by discarding the imaginary part.
 
 `dk_forcing` must be positive for `:ring`, `:band` and `:kolmogorov` (an `ArgumentError` is thrown
-otherwise); `:lowk` ignores it.
+otherwise); `:lowk` ignores it. `:kolmogorov` also requires `k_forcing > 0`.
 
 **Spectrum types:**
 
 | Symbol | Description | Unnormalized amplitude √Q̂(k) |
 |--------|-------------|------------------------------|
-| `:ring` | Gaussian ring around k_f | exp(-(\|k\| - k_f)² / 2δ_f²) |
+| `:ring` | Gaussian ring around k_f | exp(-(\|k\| - k_f)² / 4δ_f²) |
 | `:band` | Sharp band \|k\| ∈ (k_f - δ_f, k_f + δ_f) | 1 if \|\|k\| - k_f\| < δ_f, else 0 |
 | `:lowk` | Low wavenumber forcing | 1 if \|k\| < k_f, else 0 |
-| `:kolmogorov` | Large scales with a smooth cutoff at k_f + δ_f | (\|k\|/k_f) · exp(-(\|k\| - k_f)² / 2δ_f²) if \|k\| < k_f + δ_f, else 0 |
+| `:kolmogorov` | Large scales with a smooth cutoff at k_f + δ_f | √(\|k\|/k_f) · exp(-(\|k\| - k_f)² / 4δ_f²) if \|k\| < k_f + δ_f, else 0 |
 
-In every case the k = 0 mode is zero, and the whole spectrum is rescaled so that the energy
-injection rate equals ε. `:isotropic` is accepted as an alias for `:ring`, and `:bandlimited` for
-`:band`.
+In every case the k = 0 mode is zero, and the full stored spectrum is rescaled so
+`sum(Q̂ .* w) / (2M^2) == ε`, where `M = prod(field_size)`, `w = 1` for `:direct`,
+and `w = 1/|k|²` for `:vorticity_kinetic`. A positive ε whose selected spectrum contains
+no representable nonzero mode raises `ArgumentError`. `:isotropic` aliases `:ring`, and
+`:bandlimited` aliases `:band`.
+
+### SeparableStochasticForcing
+
+```@docs
+SeparableStochasticForcing
+```
+
+Use `SeparableStochasticForcing` for a Fourier--Chebyshev product domain. The
+random spectrum is defined only over the Fourier axes and is multiplied by a
+fixed Chebyshev profile:
+
+```math
+\hat F(k_1,\ldots,k_d,n,t) = \hat\xi(k_1,\ldots,k_d,t)\,p_n.
+```
+
+```julia
+forcing = SeparableStochasticForcing(
+    fourier_size=(Nx,),
+    chebyshev_basis=zbasis,
+    chebyshev_profile=z -> z * (1 - z),
+    domain_size=(Lx,),
+    energy_injection_rate=0.1,
+    k_forcing=4.0,
+    dk_forcing=1.0,
+    dt=dt,
+    architecture=GPU(),
+)
+add_stochastic_forcing!(problem, :b, forcing)
+```
+
+`chebyshev_profile` can be either a function of the physical Chebyshev
+coordinate or a vector of Chebyshev coefficients whose length equals
+`chebyshev_basis.meta.size`. A function is sampled on the basis grid and
+transformed once during construction. In either form the profile is normalized
+to unit physical mean square with the basis quadrature weights. Non-finite,
+zero-norm, and mis-sized profiles are rejected.
+
+The mixed normalization currently supports only `injection_metric=:direct`.
+Passing `:vorticity_kinetic` raises `ArgumentError`, because a kinetic-energy
+metric in a bounded direction requires model-specific inverse operators rather
+than the Fourier `1/|k|²` weight.
+
+All forcing arrays and outer-product views are persistent. With a supplied RNG,
+the Fourier phase draw is reproducible between CPU and GPU; the GPU path uses a
+persistent host staging array and copies into its persistent device phase array.
+Only Fourier axes may be shortened to real-FFT half spectra when the forcing is
+added to a field. The Chebyshev coefficient count must match exactly.
+
+For a coupled Jacobi/Chebyshev GPU IVP, the default
+`InitialValueSolver(...; matsolver=:auto)` selects `CuSparseLU`. Its RHS,
+solution, and scratch device buffers are cached and reused across solves and
+same-size numeric refactors. An explicit CPU-only `:sparse` or `:dense` solver
+is rejected on that path. CPU and pure-Fourier IVPs retain the existing sparse
+default behavior.
+
+For Fourier--Fourier domains, continue to use `StochasticForcing`; for
+Fourier--Chebyshev domains, use `SeparableStochasticForcing`.
 
 ### DeterministicForcing
 
@@ -182,6 +255,7 @@ Generate forcing realization. Returns cached value for substeps > 1.
 # Stochastic forcing
 generate_forcing!(forcing::StochasticForcing, t::Real, substep::Int=1)
 generate_forcing!(forcing::StochasticForcing, t::Real)
+generate_forcing!(forcing::SeparableStochasticForcing, t::Real, substep::Int=1)
 
 # Deterministic forcing
 generate_forcing!(forcing::DeterministicForcing, grid, t::Real)
@@ -196,6 +270,18 @@ generate_forcing!(forcing::DeterministicForcing, grid, t::Real)
 - Requires `forcing.dt > 0`; otherwise an error is raised
 
 **Returns:** The cached forcing array `forcing.cached_forcing`
+
+### Automatic registration and timestepper compatibility
+
+`add_stochastic_forcing!(problem, variable, forcing)` registers automatic RHS forcing.
+`variable` names a scalar field or a flattened vector/tensor component (for example
+`:u_x`). A container name such as `:u` is ambiguous and raises `ArgumentError`.
+
+One forcing realization is reused across the stages of supported one-step RK/ETD methods;
+`CNAB1` and `SBDF1` are supported first-order methods. Tarang rejects `CNAB2`, `MCNAB2`,
+`CNLF2`, `SBDF2`, `SBDF3`, `SBDF4`, `DiagonalIMEX_SBDF2`, `ETD_CNAB2`, and
+`ETD_SBDF2` before drawing forcing. Those schemes reuse or combine values across time
+levels, which colors white noise or gives it the wrong variance.
 
 ### apply_forcing!
 
@@ -283,12 +369,16 @@ work_stratonovich(forcing::StochasticForcing{T, N, A, CA},
                   sol::AbstractArray{Complex{T}, N}) -> T
 ```
 
-**Formula** (with `V = prod(domain_size)`, the domain area/volume):
+**Formula** (with `M = prod(field_size)`):
 ```math
-W = \frac{dt}{V}\,\text{Re}\sum_k \frac{\psi^n + \psi^{n+1}}{2}\, \hat{F}^*
+W = \frac{dt}{M^2}\,\text{Re}\sum_k m_k w_k
+    \frac{q^n_k + q^{n+1}_k}{2}\, \hat{F}_k^*
 ```
 
 Uses midpoint evaluation and returns `zero(T)` unless `store_prevsol!` was called first.
+Here `w_k` is the selected injection-metric weight and `m_k` is the real-FFT
+multiplicity: 2 for an omitted conjugate partner, 1 for DC and an even-length Nyquist
+endpoint. For a full complex spectrum, every `m_k = 1`.
 
 ### work_ito
 
@@ -305,7 +395,8 @@ work_ito(forcing::StochasticForcing{T, N, A, CA},
 
 **Formula:**
 ```math
-W_{\text{Itô}} = \frac{dt}{V}\,\text{Re}\sum_k \psi^n\, \hat{F}^* \;+\; \varepsilon\, dt
+W_{\text{Itô}} = \frac{dt}{M^2}\,\text{Re}\sum_k m_k w_k q^n_k\,
+\hat{F}_k^* \;+\; \varepsilon\, dt
 ```
 
 Uses the solution *before* the step (independent of the current forcing) plus the drift correction
@@ -346,7 +437,7 @@ instantaneous_power(forcing::StochasticForcing{T, N, A, CA},
 
 **Formula:**
 ```math
-P = \frac{1}{V}\,\text{Re}\sum_k \psi\, \hat{F}^*
+P = \frac{1}{M^2}\,\text{Re}\sum_k m_k w_k q_k\, \hat{F}_k^*
 ```
 
 This is the instantaneous correlation between solution and forcing, and it fluctuates. Its mean
@@ -368,10 +459,13 @@ forcing_enstrophy_injection_rate(forcing::StochasticForcing{T, N, A, CA}) -> T
 
 **Formula:**
 ```math
-\eta = \frac{1}{2V} \sum_k |k|^2 \hat{Q}(k)
+\eta = \frac{1}{2M^2} \sum_k \hat{Q}(k)
 ```
 
-Only meaningful in 2D: for `N != 2` it warns and returns `zero(T)`.
+This assumes the forcing is applied directly to 2-D vorticity. With
+`injection_metric=:direct`, η equals the configured ε. With
+`:vorticity_kinetic`, ε is kinetic-energy injection and η is generally of order
+`k_forcing^2 * ε`. For `N != 2` the function warns and returns `zero(T)`.
 
 ### get_forcing_spectrum
 
@@ -440,12 +534,15 @@ compute_forcing_spectrum(
     ε::Real,
     domain_size::NTuple{N, Real},
     spectrum_type::Symbol,
-    dtype::Type{T}
+    dtype::Type{T};
+    injection_metric::Symbol = :direct
 ) -> Array{T, N}
 ```
 
-The spectrum is normalized such that the energy injection rate equals ε, i.e. so that
-`sum(spectrum .^ 2) / (2 * prod(domain_size)) == ε`.
+The full spectrum is normalized so that
+`sum(abs2(spectrum[k]) * w[k]) / (2 * prod(field_size)^2) == ε`, with the
+metric weights defined above. `compute_forcing_spectrum` uses the supplied `wavenumbers`;
+the constructor obtains those wavenumbers from `domain_size` before calling it.
 
 ---
 

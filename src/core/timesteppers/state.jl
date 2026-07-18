@@ -491,18 +491,13 @@ end
 
 Return the number of workspace field sets needed for a timestepper.
 """
-# IMEX RK methods (stages * 3 for X_stages, F_exp, F_imp)
-function _workspace_count(::RK111)
-    return 3  # 1 stage: X_stages, F_exp, F_imp
-end
-
-function _workspace_count(::RK222)
-    return 6  # 2 stages: 2 * (X_stages, F_exp, F_imp)
-end
-
-function _workspace_count(::RK443)
-    return 12  # 4 stages: 4 * (X_stages, F_exp, F_imp)
-end
+# Field-native explicit RK keeps one mutable stage state plus one retained RHS
+# state per stage. The global/subproblem paths keep their own storage, and the
+# distributed diagonal path needs only one state per stage, so this is the
+# tight upper bound shared by all RK dispatches.
+_workspace_count(ts::RK111) = ts.stages + 1
+_workspace_count(ts::RK222) = ts.stages + 1
+_workspace_count(ts::RK443) = ts.stages + 1
 
 function _workspace_count(::Union{CNAB1, CNAB2})
     return 2
@@ -539,6 +534,84 @@ function get_workspace_field!(state::TimestepperState, template::ScalarField, id
         # Fallback: allocate new field (should rarely happen)
         return ScalarField(template.dist, "workspace", template.bases, template.dtype)
     end
+end
+
+"""
+    _workspace_field_state!(state, key, template, set_index)
+
+Return a cached state-vector container whose fields refer to one preallocated
+workspace set. `set_index` is one-based; only the small host container is cached
+here, while the field storage remains owned by `state.workspace_fields`.
+"""
+function _workspace_field_state!(state::TimestepperState, key::Symbol,
+                                 template::Vector{F}, set_index::Int) where {F<:ScalarField}
+    cached = get(state.timestepper_data, key, nothing)
+    if cached isa Vector{F} && length(cached) == length(template)
+        return cached
+    end
+
+    n_fields = length(template)
+    fields = Vector{F}(undef, n_fields)
+    offset = (set_index - 1) * n_fields
+    @inbounds for i in 1:n_fields
+        fields[i] = get_workspace_field!(state, template[i], offset + i)
+    end
+    state.timestepper_data[key] = fields
+    return fields
+end
+
+"""Return cached containers for `stages` distinct workspace-backed field sets."""
+function _workspace_stage_states!(state::TimestepperState, key::Symbol,
+                                  template::Vector{F}, stages::Int,
+                                  first_set::Int) where {F<:ScalarField}
+    cached = get(state.timestepper_data, key, nothing)
+    if cached isa Vector{Vector{F}} && length(cached) == stages &&
+       all(fields -> length(fields) == length(template), cached)
+        return cached
+    end
+
+    fields = Vector{Vector{F}}(undef, stages)
+    for s in 1:stages
+        n_fields = length(template)
+        stage = Vector{F}(undef, n_fields)
+        offset = (first_set + s - 2) * n_fields
+        @inbounds for i in 1:n_fields
+            stage[i] = get_workspace_field!(state, template[i], offset + i)
+        end
+        fields[s] = stage
+    end
+    state.timestepper_data[key] = fields
+    return fields
+end
+
+"""Copy one field-state into another without allocating field storage."""
+function _copy_field_state!(dest::Vector{<:ScalarField}, src::Vector{<:ScalarField})
+    @inbounds for i in eachindex(dest, src)
+        copy_field_data!(dest[i], src[i])
+    end
+    return dest
+end
+
+"""Acquire the state dropped from the previous one-entry history rotation."""
+function _acquire_recycled_history_state!(state::TimestepperState, key::Symbol,
+                                          current::V) where {V<:Vector{<:ScalarField}}
+    recycled = get(state.timestepper_data, key, nothing)
+    if recycled isa V && length(recycled) == length(current)
+        state.timestepper_data[key] = nothing
+        return _copy_field_state!(recycled, current)
+    end
+
+    state.timestepper_data[key] = nothing
+    return copy_state(current)
+end
+
+"""Push a state into a one-entry history and retain the dropped storage."""
+function _push_recycled_history_state!(state::TimestepperState, key::Symbol, new_state)
+    push!(state.history, new_state)
+    while length(state.history) > 1
+        state.timestepper_data[key] = popfirst!(state.history)
+    end
+    return state.history
 end
 
 """

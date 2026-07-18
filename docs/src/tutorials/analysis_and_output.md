@@ -69,6 +69,14 @@ Tasks must be **field or operator objects**. A string expression
 (`add_task!(handler, "u*u")`) is accepted silently and then writes zeros — build the
 operator instead: `add_task!(handler, u ⋅ u; name="u2")`.
 
+On a CUDA run the same API stages each unique field/layout to a CPU array once
+per write, because NetCDF cannot write a `CuArray` directly. This is a bulk,
+synchronizing device-to-host copy; it does not use scalar GPU indexing and it
+does not move the solver field itself off the GPU. Grid- and coefficient-layout
+tasks are both supported. A completed timestep's algebraic constraints are not
+re-solved by the writer, so producing a snapshot is observational and leaves the
+live solver state unchanged.
+
 ### Handler bound to the distributor
 
 The `dist` method takes a `vars` Dict and does **not** register itself with a solver.

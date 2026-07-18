@@ -13,6 +13,7 @@ The simplest way to add stochastic forcing is using `add_stochastic_forcing!`:
 forcing = StochasticForcing(
     field_size = (256, 256),
     energy_injection_rate = 0.1,
+    injection_metric = :vorticity_kinetic,
     k_forcing = 10.0,
     dt = dt
 )
@@ -31,7 +32,7 @@ The timestepper automatically:
 - Uses the SAME forcing value across all RK substeps
 - Adds forcing to the RHS of the specified equation
 
-This ensures correct **Stratonovich calculus** without any manual intervention.
+This keeps one white-noise draw fixed across the stages of a supported one-step method.
 
 ---
 
@@ -39,166 +40,117 @@ This ensures correct **Stratonovich calculus** without any manual intervention.
 
 White-in-time noise requires careful handling for correct statistics:
 
-1. **Stratonovich vs Itô**: Physical systems use Stratonovich calculus where the chain rule works normally
+1. **Stratonovich vs Itô**: Choose the diagnostic interpretation appropriate to the model
 2. **Constant within timestep**: For Stratonovich correctness, forcing must be constant across all RK substeps
 3. **√dt scaling**: Discrete forcing needs `F = √(Q̂/dt) · noise` to give correct variance
 
-If you wrote forcing as a regular RHS term, it would be evaluated at each RK stage with different random values - this gives **wrong statistics** (Itô instead of Stratonovich).
+If forcing were evaluated independently at every RK stage, its discrete covariance would be wrong.
 
 ---
 
-## Complete Example: Forced 2D Turbulence
+## Maintained Example: Forced 2D Turbulence
 
-We simulate the 2D vorticity equation with stochastic forcing and linear drag:
-
-```math
-\frac{\partial \omega}{\partial t} + J(\psi, \omega) = -\mu \omega + \nu \nabla^2 \omega + \xi
-```
-
-where ξ is white-in-time, spatially-correlated stochastic forcing.
+The runnable CPU/GPU example is
+[`examples/ivp/forced_2d_turbulence.jl`](https://github.com/subhk/Tarang.jl/blob/main/examples/ivp/forced_2d_turbulence.jl).
+It evolves vorticity, solves for streamfunction, derives velocity, and registers ring
+forcing on vorticity. Its essential forcing setup is:
 
 ```julia
-using Tarang
-using Random
-using Printf
-
-# ============================================================
-# 1. Physical and Numerical Parameters
-# ============================================================
-
-# Grid
-n = 256                     # Resolution
-L = 2π                      # Domain size
-dt = 0.005                  # Timestep
-nsteps = 4000               # Total steps
-
-# Dissipation
-ν = 2e-7                    # Viscosity (hyperviscosity coefficient)
-μ = 1e-1                    # Linear drag coefficient
-
-# Forcing parameters
-forcing_wavenumber = 14.0 * 2π/L    # k_f: force at this scale
-forcing_bandwidth = 1.5 * 2π/L      # δ_f: width of forcing ring
-ε = 0.1                              # Energy injection rate
-
-# ============================================================
-# 2. Set Up Domain and Fields
-# ============================================================
-
-coords = CartesianCoordinates("x", "y")
-dist = Distributor(coords; mesh=(1, 1))
-
-xbasis = RealFourier(coords["x"]; size=n, bounds=(0.0, L))
-ybasis = RealFourier(coords["y"]; size=n, bounds=(0.0, L))
-domain = Domain(dist, (xbasis, ybasis))
-
-# Vorticity field
-ω = ScalarField(dist, "omega", (xbasis, ybasis))
-
-# ============================================================
-# 3. Create Stochastic Forcing
-# ============================================================
-
-# The forcing is concentrated in a ring around |k| = k_f
-# with Gaussian profile: exp(-(|k| - k_f)² / 2δ_f²)
-
 forcing = StochasticForcing(
-    field_size = (n, n),
-    domain_size = (L, L),
+    field_size = (Nx, Ny),
+    domain_size = (Lx, Ly),
     energy_injection_rate = ε,
-    k_forcing = forcing_wavenumber,
-    dk_forcing = forcing_bandwidth,
-    dt = dt,
+    injection_metric = :vorticity_kinetic,
+    k_forcing = k_f,
+    dk_forcing = dk_f,
+    dt = max_dt,
     spectrum_type = :ring,
-    rng = MersenneTwister(1234)     # For reproducibility
+    architecture = device,
 )
 
-println("Forcing setup:")
-println("  k_forcing = $(forcing_wavenumber) (mode ≈ $(forcing_wavenumber * L / 2π))")
-println("  bandwidth = $(forcing_bandwidth)")
-println("  ε = $(ε)")
+problem = IVP([ζ, ψ, u, tau_ψ])
+add_equation!(problem, "∂t(ζ) = -u⋅∇(ζ) - drag*ζ - nu*Δ⁴(ζ)")
+add_equation!(problem, "Δ(ψ) + tau_ψ - ζ = 0")
+add_equation!(problem, "u - skew(grad(ψ)) = 0")
+add_bc!(problem, "integ(ψ) = 0")
+add_stochastic_forcing!(problem, :ζ, forcing)
 
-# ============================================================
-# 4. Set Up Problem and Solver
-# ============================================================
-
-problem = IVP([ω])
-
-# Vorticity equation: ∂ω/∂t = -μω + ν∇²ω - J(ψ,ω) + ξ
-# Note: Forcing ξ is NOT in the equation string - it's added automatically!
-add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
-problem.namespace["ν"] = ν
-problem.namespace["μ"] = μ
-
-# Register stochastic forcing - it will be added to ω's RHS automatically
-add_stochastic_forcing!(problem, :ω, forcing)
-
-solver = InitialValueSolver(problem, RK443(); dt=dt, device="cpu")
-
-# ============================================================
-# 5. Diagnostics: Energy and Enstrophy
-# ============================================================
-
-function compute_energy(ω_hat, grid)
-    # E = ½⟨|∇ψ|²⟩ = ½ ∑_k |ω̂_k|² / |k|²
-    E = 0.0
-    for j in 1:size(ω_hat, 2), i in 1:size(ω_hat, 1)
-        k2 = grid.kx[i]^2 + grid.ky[j]^2
-        if k2 > 0
-            E += abs2(ω_hat[i,j]) / k2
-        end
-    end
-    return 0.5 * E / prod(size(ω_hat))
-end
-
-function compute_enstrophy(ω_hat)
-    # Z = ½⟨ω²⟩ = ½ ∑_k |ω̂_k|²
-    return 0.5 * sum(abs2, ω_hat) / prod(size(ω_hat))
-end
-
-# ============================================================
-# 6. Time Integration Loop
-# ============================================================
-
-# Storage for diagnostics
-t_save = Float64[]
-E_save = Float64[]
-Z_save = Float64[]
-work_save = Float64[]
-
-println("\nStarting simulation...")
-println("=" ^ 60)
-
-for step in 1:nsteps
-    # Store previous solution for Stratonovich work calculation (optional diagnostic)
-    store_prevsol!(forcing, get_coeff_data(ω))
-
-    # Advance one timestep - forcing is generated and applied automatically!
-    step!(solver)
-
-    # Compute work done by forcing (Stratonovich) - optional diagnostic
-    W = work_stratonovich(forcing, get_coeff_data(ω))
-
-    # Periodic diagnostics
-    if step % 100 == 0 || step == 1
-        E = compute_energy(get_coeff_data(ω), domain.grid)
-        Z = compute_enstrophy(get_coeff_data(ω))
-
-        push!(t_save, solver.sim_time)
-        push!(E_save, E)
-        push!(Z_save, Z)
-        push!(work_save, W)
-
-        @printf("step %4d, t = %6.3f, E = %.2e, Z = %.2e, W = %+.2e\n",
-                step, solver.sim_time, E, Z, W)
-    end
-end
-
-println("=" ^ 60)
-println("Simulation complete!")
-println("Final time: $(solver.sim_time)")
-println("Mean energy injection rate: $(mean(work_save ./ dt))")
+solver = InitialValueSolver(problem, RK222(); dt=max_dt)
+step!(solver)
 ```
+
+The full file includes initialization, CFL control, output, and CPU/GPU selection.
+Run it on CUDA with:
+
+```bash
+TARANG_FORCED_2D_DEVICE=gpu julia --project=. examples/ivp/forced_2d_turbulence.jl
+```
+
+The prognostic terms remain on the explicit RHS because the pure-Fourier GPU
+runtime uses a device-native explicit RK path while refreshing the Poisson and
+velocity constraints spectrally at every stage.
+
+---
+
+## Fourier--Chebyshev domains
+
+`StochasticForcing` is the right choice when every spatial direction is
+Fourier. A bounded Chebyshev direction is not a wavenumber axis, so applying a
+Fourier ring formula to its coefficient index is not physically meaningful.
+Use `SeparableStochasticForcing` instead:
+
+```julia
+coords = CartesianCoordinates("x", "z")
+dist = Distributor(coords; dtype=Float64, device=GPU())
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx))
+zbasis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz))
+domain = Domain(dist, (xbasis, zbasis))
+
+b = ScalarField(domain, "b")
+forcing = SeparableStochasticForcing(
+    fourier_size=(Nx,),
+    chebyshev_basis=zbasis,
+    chebyshev_profile=z -> z * (Lz - z),
+    domain_size=(Lx,),
+    energy_injection_rate=0.05,
+    injection_metric=:direct,
+    k_forcing=4 * 2pi / Lx,
+    dk_forcing=2pi / Lx,
+    dt=dt,
+    architecture=GPU(),
+    rng=MersenneTwister(1234),
+)
+add_stochastic_forcing!(problem, :b, forcing)
+solver = InitialValueSolver(problem, RK222(); dt)
+```
+
+The function profile is evaluated on the physical Chebyshev grid, transformed
+once, and normalized to unit quadrature mean square. You may instead pass an
+`Nz`-element vector of Chebyshev coefficients. The forcing then draws only the
+Fourier modes and forms their outer product with that fixed profile. It stays
+constant across RK stages and changes at the next timestep.
+
+Mixed forcing supports `injection_metric=:direct`. The
+`:vorticity_kinetic` metric is intentionally rejected because its Fourier
+`1/|k|²` definition does not extend to a bounded direction without specifying
+the model's inverse elliptic operator.
+
+On CUDA, a coupled Fourier--Chebyshev IVP left at the default
+`matsolver=:auto` selects `CuSparseLU`. The field, forcing, RK workspace,
+subproblem vectors, sparse matrix, and solve buffers remain device-resident,
+and warmed solves reuse their RHS, solution, and scratch allocations. Passing
+an explicit CPU-only `matsolver=:sparse` or `:dense` raises an error with a
+suggestion to use `:auto` or `:cuda_sparse`.
+
+The same single-GPU paths support three-dimensional IVPs. For a triply
+periodic Fourier--Fourier--Fourier domain, use `StochasticForcing`; the
+field-native RK path and multidimensional cuFFT stay on the GPU. For a
+Fourier--Fourier--Chebyshev domain, use `SeparableStochasticForcing` with
+`fourier_size=(Nx, Ny)` and the Chebyshev basis/profile. That coupled path
+uses `CuSparseLU` and cached mixed-transform buffers. Once the plans and
+workspaces are warm, neither path allocates device memory during `step!`.
+These guarantees currently apply to one GPU; distributed multi-GPU IVPs have
+separate transform constraints.
 
 ---
 
@@ -263,6 +215,7 @@ forcing = StochasticForcing(
     field_size = (n, n),              # Match your grid
     domain_size = (L, L),             # Match your domain
     energy_injection_rate = ε,        # Normalized automatically
+    injection_metric = :vorticity_kinetic, # forcing is applied to vorticity
     k_forcing = forcing_wavenumber,
     dk_forcing = forcing_bandwidth,
     dt = dt,                          # For √dt scaling
@@ -275,19 +228,13 @@ forcing = StochasticForcing(
 
 ```julia
 for step in 1:nsteps
-    # 1. Store ψⁿ for Stratonovich work
+    # 1. Store qⁿ for the optional Stratonovich work diagnostic
     store_prevsol!(forcing, get_coeff_data(ω))
 
-    # 2. Generate F̂ (new forcing each timestep)
-    F_hat = generate_forcing!(forcing, t, 1)
-
-    # 3. Add to your RHS: rhs .+= F_hat
-    apply_forcing!(rhs, forcing, t, 1)
-
-    # 4. Advance your solution
+    # 2. Advance; registered forcing is generated and applied automatically
     step!(solver)
 
-    # 5. Compute work done
+    # 3. Compute work done
     W = work_stratonovich(forcing, get_coeff_data(ω))
 end
 ```
@@ -388,13 +335,27 @@ For discrete time with step dt:
 
 The √dt scaling gives correct variance: ⟨|F̂|²⟩ · dt = Q̂(k)
 
-### Energy Injection Rate
+### Injection metric and normalization
 
 ```math
-\varepsilon = \int \frac{d^2 k}{(2\pi)^2} \, \frac{\hat{Q}(k)}{2|k|^2}
+\varepsilon = \frac{1}{2M^2}\sum_k \hat{Q}(k)w_k,
+\qquad
+w_k = \begin{cases}
+1 & \texttt{:direct},\\
+|k|^{-2} & \texttt{:vorticity\_kinetic}.
+\end{cases}
 ```
 
-Tarang normalizes the spectrum to achieve the requested `energy_injection_rate`.
+Here `M = prod(field_size)` because Tarang uses unnormalized FFT coefficients. The
+default `injection_metric = :direct` normalizes the quadratic invariant of the forced
+variable itself. When forcing is applied to 2-D vorticity and ε should mean kinetic-energy
+injection, set `injection_metric = :vorticity_kinetic` explicitly. The zero mode has zero
+weight for that metric.
+
+The constructor stores the full Fourier spectrum. Diagnostics also accept real-FFT
+half-spectra: omitted conjugate modes then have multiplicity 2, except the DC mode and an
+even-length Nyquist endpoint, which have multiplicity 1. A positive ε with no representable
+nonzero forced mode raises `ArgumentError` instead of silently creating zero forcing.
 
 ### Stratonovich vs Itô
 
@@ -407,14 +368,18 @@ Tarang normalizes the spectrum to achieve the requested `energy_injection_rate`.
 
 | Calculus | Formula |
 |----------|---------|
-| Stratonovich | W = -⟨(ψⁿ + ψⁿ⁺¹)/2 · F̂*⟩ |
-| Itô | W = -⟨ψⁿ · F̂*⟩ + ε·dt |
+| Stratonovich | W = dt Re⟨(qⁿ + qⁿ⁺¹)/2, F̂⟩_w |
+| Itô | W = dt Re⟨qⁿ, F̂⟩_w + ε dt |
+
+The weighted pairing `⟨⋅,⋅⟩_w` includes `M⁻²`, the selected injection metric,
+and real-FFT multiplicities. For vorticity-kinetic forcing, pass vorticity coefficients;
+the pairing supplies `1/|k|²`.
 
 ---
 
-## Multi-Stage Timesteppers
+## Supported timesteppers
 
-For RK4, SBDF, and other multi-stage methods, forcing must stay constant within a timestep:
+For Runge--Kutta and other supported one-step methods, forcing stays constant within a timestep:
 
 ```
 Timestep n:     [stage 1] → [stage 2] → [stage 3] → [stage 4]
@@ -435,6 +400,15 @@ generate_forcing!(forcing, t, 2)  # Same as substep 1
 generate_forcing!(forcing, t, 3)  # Same as substep 1
 generate_forcing!(forcing, t, 4)  # Same as substep 1
 ```
+
+First-order `CNAB1` and `SBDF1` are also supported. Methods that reuse or combine
+stochastic RHS/state values across time levels would color white noise or produce the
+wrong variance, so Tarang fails before drawing forcing for `CNAB2`, `MCNAB2`, `CNLF2`,
+`SBDF2`, `SBDF3`, `SBDF4`, `DiagonalIMEX_SBDF2`, `ETD_CNAB2`, and `ETD_SBDF2`.
+Use a supported one-step Runge--Kutta/ETD method or a first-order IMEX method instead.
+
+With `enforce_hermitian=true`, self-conjugate Fourier modes are projected to
+`sqrt(2) * real(z)`. The factor preserves their variance while making the inverse transform real.
 
 ---
 
@@ -471,11 +445,12 @@ StochasticForcing(;
     field_size,                          # (Nx, Ny) or (Nx, Ny, Nz)
     domain_size = (2π, 2π, ...),        # (Lx, Ly, ...)
     energy_injection_rate = 1.0,         # ε
+    injection_metric = :direct,          # or :vorticity_kinetic
     k_forcing = 4.0,                     # k_f
     dk_forcing = 1.0,                    # δ_f
     dt = 0.01,
     spectrum_type = :ring,               # :ring, :band, :lowk, :kolmogorov
-    rng = Random.GLOBAL_RNG,
+    rng = Random.MersenneTwister(),       # fresh RNG per forcing instance
     dtype = Float64
 )
 ```

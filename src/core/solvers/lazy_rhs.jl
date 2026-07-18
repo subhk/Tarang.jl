@@ -110,6 +110,12 @@ struct LazyMultiDiff{T<:LazyFuture} <: LazyFuture
     axes::Vector{Int}
 end
 
+"""Fourier-space `(-Δ)^α` applied to one scalar-field expression."""
+struct LazyFractionalLaplacian{T<:LazyFuture} <: LazyFuture
+    operand::T
+    alpha::Float64
+end
+
 # ── Workspace ────────────────────────────────────────────────────────────────
 
 """
@@ -301,6 +307,10 @@ function translate_to_lazy(expr, state; target=nothing)
         return _translate_laplacian_to_lazy(expr.operand, state, target)
     end
 
+    if isa(expr, FractionalLaplacian)
+        return _translate_fractional_laplacian_to_lazy(expr.operand, expr.α, state, target)
+    end
+
     if isa(expr, Divergence)
         inner = expr.operand
         # div(grad(u)) == lap(u): the idiomatic spelling of a diffusion term.
@@ -321,6 +331,27 @@ function translate_to_lazy(expr, state; target=nothing)
     end
 
     return nothing
+end
+
+"""Translate `(-Δ)^α` when every target axis is Fourier.
+
+The interpreted fractional-Laplacian implementation has the same all-Fourier
+requirement.  Keeping the operator as one lazy node also evaluates it with one
+forward transform, one diagonal device broadcast, and one backward transform.
+"""
+function _translate_fractional_laplacian_to_lazy(operand, alpha, state, target)
+    target === nothing && return nothing
+    if isa(operand, VectorField)
+        comp = _vector_component_for_target(operand, target)
+        comp === nothing && return nothing
+        operand = comp
+    end
+    isa(operand, ScalarField) || return nothing
+    _lazy_bases_match(operand, target) || return nothing
+    all(b -> isa(b, FourierBasis), target.bases) || return nothing
+    op = translate_to_lazy(operand, state; target=target)
+    op === nothing && return nothing
+    return LazyFractionalLaplacian(op, Float64(alpha))
 end
 
 """True when `_apply_lazy_diff!` can differentiate along `basis` CORRECTLY for `field`.
@@ -814,6 +845,23 @@ function evaluate_lazy!(out::ScalarField, expr::LazyMultiDiff, state, ws::LazyWo
     return out
 end
 
+function evaluate_lazy!(out::ScalarField, expr::LazyFractionalLaplacian,
+                        state, ws::LazyWorkspace)
+    evaluate_lazy!(out, expr.operand, state, ws)
+    ensure_layout!(out, :c)
+    coeff = get_local_data(get_coeff_data(out))
+    k2 = get_local_data(_build_k_squared(out))
+    alpha = expr.alpha
+    if alpha >= 0
+        @. coeff *= k2 ^ alpha
+    else
+        @. coeff *= ifelse(k2 > 1e-14, k2 ^ alpha, zero(eltype(k2)))
+    end
+    out.current_layout = :c
+    ensure_layout!(out, :g)
+    return out
+end
+
 # Pointwise field/field division in grid space (undealiased), mirroring
 # `divide_operands(::ScalarField, ::ScalarField)`.
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyDiv, state, ws::LazyWorkspace)
@@ -1022,16 +1070,16 @@ function _apply_lazy_fourier_diff!(coeff_storage, field::ScalarField,
     data = get_local_data(coeff_storage)
     data === nothing && return coeff_storage
 
-    deriv_mult = _get_cached_lazy_deriv_mult(basis, order, uses_rfft)
+    deriv_mult = _get_cached_lazy_deriv_mult(basis, order, uses_rfft, data)
     if length(deriv_mult) != size(data, axis)
         error("Lazy Fourier derivative coefficient size mismatch on axis $axis: " *
               "local coefficient size is $(size(data, axis)) but expected $(length(deriv_mult)) " *
               "(basis=$(typeof(basis)), uses_rfft=$uses_rfft).")
     end
 
-    # `data` is a concrete array (SerialFieldStorage is parametrized on the array
-    # type) and `deriv_mult` is a concrete Vector{ComplexF64}, so this broadcast is
-    # type-stable inline — no function barrier needed.
+    # SerialFieldStorage fixes `data`'s concrete backend, and the cached
+    # multiplier is materialized on that same backend, so the broadcast stays
+    # type-stable and device-local.
     mult_shape = ntuple(i -> i == axis ? length(deriv_mult) : 1, ndims(data))
     data .*= reshape(deriv_mult, mult_shape...)
     return coeff_storage
@@ -1056,6 +1104,20 @@ function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int, uses_rfft:
     deriv_mult = ComplexF64.((im .* k_axis) .^ order)
     basis.transforms[cache_key] = deriv_mult
     return deriv_mult
+end
+
+"""Return the cached Fourier multiplier on the same backend as `data`."""
+function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int,
+                                     uses_rfft::Bool, data::AbstractArray)
+    host = _get_cached_lazy_deriv_mult(basis, order, uses_rfft)
+    is_gpu_array(data) || return host
+
+    cache_key = (:lazy_deriv_mult_device, order, uses_rfft, architecture(data))
+    cached = get(basis.transforms, cache_key, nothing)
+    cached !== nothing && return cached
+    device_multiplier = copy_to_device(host, data)
+    basis.transforms[cache_key] = device_multiplier
+    return device_multiplier
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place.

@@ -56,6 +56,7 @@ const TEST_FILES = [
     "test_root_module_structure.jl",
     "test_cartesian_operators.jl",
     "test_stochastic_forcing.jl",
+    "test_separable_stochastic_forcing.jl",
     "test_temporal_filters.jl",
     "test_temporal_filters_extended.jl",
     "test_arithmetic.jl",
@@ -105,6 +106,7 @@ const TEST_FILES = [
     "test_field_typestability.jl",
     "test_filter_forcing_typestability.jl",
     "test_fourier_algebraic_constraints.jl",
+    "test_gpu_field_rk_allocations.jl",
     "test_lazy_rhs_fourier.jl",
     "test_lazy_rhs_vector_ops.jl",           # lap/div(grad)/div compile to the lazy RHS and match the interpreted evaluator
     "test_lazy_rhs_transform_budget.jl",     # lap() is fused (1 fwd + 1 bwd, not one round-trip per axis); alloc guards are blind to this

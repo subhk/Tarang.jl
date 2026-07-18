@@ -23,9 +23,9 @@ The extension is organized into the following files:
 """
 module TarangCUDAExt
 
-using Tarang
+import Tarang
 using Tarang: AbstractArchitecture, AbstractSerialArchitecture, GPU, CPU
-using Tarang: device, array_type, architecture, on_architecture, workgroup_size, launch!, KernelOperation, ensure_device!
+using Tarang: device, array_type, architecture, on_architecture, workgroup_size, launch!, KernelOperation
 using Tarang: synchronize, unsafe_free!, has_cuda
 using Tarang: ScalarField, VectorField, Distributor, Domain, Basis
 using Tarang: get_local_data, set_local_data!
@@ -34,6 +34,7 @@ using Tarang: is_gpu_array, should_use_gpu_fft
 using Tarang: _gpu_chebyshev_deriv!
 using Tarang: RealFourier, ComplexFourier, ChebyshevT, Legendre
 using Tarang: DistributedGPUFFT
+import Tarang: ensure_device!
 # Note: global_shape and coefficient_shape are NOT imported - transform functions
 # use local array sizes (size(data_g), size(data_c)) for MPI correctness
 # Note: coefficient_eltype, gpu_multiply_fields!, local_fft_dim!, local_ifft_dim!
@@ -41,27 +42,27 @@ using Tarang: DistributedGPUFFT
 
 using Random
 using MPI
-using CUDA
-using CUDA: CuArray, CuDevice, device!, synchronize as cuda_sync
+import CUDA
+using CUDA: CUDABackend, CuArray, CuDevice, CuMatrix, CuVector, device!, synchronize as cuda_sync
 using CUDA: CuStream, default_stream, @sync
 using CUDA.CUFFT
 using CUDA.CUBLAS
-using KernelAbstractions
+import KernelAbstractions
 using KernelAbstractions: @kernel, @index, @Const
 
 # Include sub-modules in dependency order
 include("cuda/config.jl")
 include("cuda/memory.jl")
 include("cuda/architecture.jl")
-include("cuda/transforms.jl")
 include("cuda/dct.jl")
 include("cuda/cheb_deriv.jl")
 include("cuda/mixed_transforms.jl")
 include("cuda/kernels.jl")
-include("cuda/batched_fft.jl")
 include("cuda/pencil.jl")
 include("cuda/nccl_transpose.jl")  # NCCL-based transpose for pencil decomposition
 include("cuda/dct_distributed.jl")  # Distributed DCT for multi-GPU Chebyshev transforms
+include("cuda/transforms.jl")
+include("cuda/batched_fft.jl")
 include("cuda/utils.jl")
 include("cuda/transpose_kernels.jl")  # TransposableField GPU support
 
@@ -174,8 +175,9 @@ export gpu_pack_for_transpose!, gpu_unpack_from_transpose!
 # `Base.get_extension` inside Tarang.__init__ always ran BEFORE this extension
 # loaded, so CUDA_AVAILABLE was never set.
 function __init__()
-    Tarang._GPU_EXT_CONSTRUCTOR[] = _construct_gpu_arch
-    Tarang._HAS_CUDA_HOOK[] = CUDA.functional
+    # GPU()/has_cuda() are dispatch-differentiated (Tarang._gpu_device /
+    # Tarang._cuda_functional methods in architecture.jl); only the pieces that
+    # cannot be expressed as more-specific methods are registered here.
     Tarang._GPU_FORWARD_TRANSFORM_HOOK[] = _gpu_forward_transform_impl!
     Tarang._GPU_BACKWARD_TRANSFORM_HOOK[] = _gpu_backward_transform_impl!
     Tarang._activate_gpu_solvers!(CUDA)
