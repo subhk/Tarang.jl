@@ -45,8 +45,10 @@ end
 # Distributed DCT Plan Cache
 # ============================================================================
 
-# Global cache for distributed DCT plans (thread-safe)
-const DISTRIBUTED_DCT_PLAN_CACHE = Dict{Tuple, DistributedDCTPlan}()
+# Global cache for distributed DCT plans (thread-safe).
+# Value type is Any: DistributedDCTPlan is defined in dct_distributed.jl, which
+# is included AFTER this file — naming it here is an UndefVarError at load time.
+const DISTRIBUTED_DCT_PLAN_CACHE = Dict{Tuple, Any}()
 const DISTRIBUTED_DCT_PLAN_LOCK = ReentrantLock()
 
 """
@@ -110,8 +112,18 @@ function get_or_create_pencil(dist, global_shape::NTuple{3, Int})
     rank = dist.rank
     comm = dist.comm
 
-    # Determine process grid (prefer square-ish)
-    proc_grid = _compute_proc_grid(nprocs)
+    # Honor a user-supplied process mesh: Distributor stores it as `dist.mesh`
+    # (a 2D tuple for 3D domains, e.g. (4, 2)). Deriving the grid from
+    # _compute_proc_grid alone ignored it — e.g. mesh (4, 2) silently became
+    # pencil grid (2, 4), so the pencil's local shapes disagreed with every
+    # mesh-derived buffer and the shape asserts rejected the run. Fall back to
+    # the square-ish heuristic only when no usable 2D mesh is present.
+    mesh = dist.mesh
+    proc_grid = if mesh isa Tuple && length(mesh) == 2 && prod(mesh) == nprocs
+        (mesh[1], mesh[2])
+    else
+        _compute_proc_grid(nprocs)
+    end
 
     # Align the pencil's block ownership with the distributor's column-major
     # field-buffer convention (design decision #5). Only matters when P1>1 AND
@@ -158,8 +170,9 @@ function distributed_gpu_forward_transform!(field::ScalarField)
 
     # Allocate output. The rewritten driver lands coeffs **Z-local on the coeff
     # pencil** (complex, half-spectrum on dim 1 for a RealFourier dim-1 axis) —
-    # NOT X-pencil. See distributed_forward_dct!. (This dispatch is currently
-    # disabled in gpu_forward_transform!; shapes kept consistent for GPU CI.)
+    # NOT X-pencil. See distributed_forward_dct!. (This dispatch fires from
+    # _gpu_forward_transform_impl! when is_distributed_gpu + needs_distributed_dct
+    # + Tarang.distributed_gpu_supported all hold.)
     T = real(eltype(data))
     coeffs = similar(data, Complex{T}, plan.coeff_pencil.z_pencil_shape...)
 
@@ -199,15 +212,19 @@ function distributed_gpu_backward_transform!(field::ScalarField)
 end
 
 """
-    gpu_forward_transform!(field::ScalarField)
+    _gpu_forward_transform_impl!(field::ScalarField)
 
-GPU-specific forward transform using CUFFT.
+GPU-specific forward transform using CUFFT (extension-local implementation).
+Registered into `Tarang._GPU_FORWARD_TRANSFORM_HOOK` by `TarangCUDAExt.__init__`;
+`Tarang.gpu_forward_transform!` calls it through the hook (a same-signature
+`Tarang.gpu_forward_transform!` method here would overwrite the src method).
+Returns `true` if the GPU transform was applied, `false` to fall back to CPU.
 Supports:
 - Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT
-- Pure Chebyshev - uses GPU DCT
-- Mixed Fourier-Chebyshev - dimension-by-dimension transforms
+- Chebyshev-containing fields route to CPU (GPU DCT machinery is DCT-II,
+  Tarang's Chebyshev convention is DCT-I), except the distributed DCT-I path.
 """
-function Tarang.gpu_forward_transform!(field::ScalarField)
+function _gpu_forward_transform_impl!(field::ScalarField)
     arch = field.dist.architecture
     if !Tarang.is_gpu(arch)
         return false
@@ -292,38 +309,27 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
     coeff_T = Tarang.coefficient_eltype(field.dtype)
 
     if all_fourier
-        # Pure Fourier case - use optimized multi-dimensional FFT
-        # CUFFT's plan_rfft convention: R2C on first dimension, C2C on rest.
-        # Only valid when bases[1] is RealFourier.
-        has_real = any(b -> isa(b, RealFourier), bases)
+        # Pure Fourier case - use optimized multi-dimensional FFT.
+        #
+        # CANONICAL LAYOUT (src/core/domain.jl `_fourier_output_size`): only the
+        # FIRST Fourier axis is halved, and only if it is RealFourier (rfft of real
+        # data). Every other axis — including a RealFourier axis that is NOT first —
+        # stays full size (the CPU chain sees complex input there and runs a full
+        # C2C fft, transform_fourier.jl `_fourier_forward`). So:
+        #   - R2C (multi-dim rfft: R2C on dim 1, C2C on rest) ONLY when bases[1] is
+        #     RealFourier AND the grid data is real;
+        #   - otherwise full multi-dim C2C, coeff shape == grid shape.
+        # A rfft along a non-first RealFourier axis would produce a coeff buffer of
+        # a NON-canonical shape (halved along the wrong axis), silently misaligning
+        # every consumer sized from `coefficient_shape`.
         first_is_real = isa(bases[1], RealFourier)
+        use_r2c = first_is_real && !(input_T <: Complex)
 
-        if has_real && !first_is_real
-            # RealFourier on a non-first dimension: can't use multi-dim rfft.
-            # Fall through to dimension-by-dimension approach (mixed transform handles this).
-            plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
-            local_coeff_shape = plan.coeff_shape
-
-            existing_coeff = get_coeff_data(field)
-            needs_alloc = !(existing_coeff isa CuArray) ||
-                          eltype(existing_coeff) != coeff_T ||
-                          size(existing_coeff) != local_coeff_shape
-            if needs_alloc
-                set_coeff_data!(field, CUDA.zeros(coeff_T, local_coeff_shape...))
-            end
-
-            gpu_mixed_forward_transform!(get_coeff_data(field), data_g, plan)
-        elseif first_is_real
-            # First dim is RealFourier: use multi-dim rfft (R2C on dim 1, C2C on rest)
-            # BUT if input is already complex, rfft is invalid — use C2C instead
-            # (matches CPU path which falls back to fft when data is complex)
-            if input_T <: Complex
-                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=false)
-                local_coeff_shape = local_grid_shape  # C2C preserves shape
-            else
-                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=true)
-                local_coeff_shape = (div(local_grid_shape[1], 2) + 1, local_grid_shape[2:end]...)
-            end
+        if use_r2c
+            # dim 1 is RealFourier with real data: multi-dim rfft (R2C on dim 1,
+            # C2C on the rest) — matches the canonical halved-first-axis layout.
+            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=true)
+            local_coeff_shape = (div(local_grid_shape[1], 2) + 1, local_grid_shape[2:end]...)
 
             existing_coeff = get_coeff_data(field)
             needs_alloc = !(existing_coeff isa CuArray) ||
@@ -335,8 +341,10 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
 
             gpu_forward_fft!(get_coeff_data(field), data_g, plan)
         else
-            # All ComplexFourier: use multi-dim cfft
-            # C2C requires complex input; promote real data if needed
+            # Full C2C on all axes: covers (a) all-ComplexFourier, (b) RealFourier
+            # NOT on dim 1 (canonical layout keeps it full size), and (c) complex
+            # input with RealFourier on dim 1 (CPU falls back to fft too).
+            # C2C requires complex input; promote real data if needed.
             if input_T <: Real
                 fft_input = Complex{input_T}.(data_g)
                 plan_T = Complex{input_T}
@@ -360,6 +368,11 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
         return true
 
     elseif all_chebyshev && length(bases) == 1
+        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+        # This branch implements DCT-II (Makhoul), but Tarang's Chebyshev
+        # convention is DCT-I on the Gauss-Lobatto grid. It is UNREACHABLE behind
+        # the `has_chebyshev → return false` guard above and would produce wrong
+        # coefficients if reached.
         # Pure Chebyshev 1D case - use GPU DCT
         n = local_grid_shape[1]
         local_coeff_shape = local_grid_shape  # Chebyshev: same shape
@@ -391,6 +404,10 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
         return true
 
     elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+        # This branch implements DCT-II (Makhoul), but Tarang's Chebyshev
+        # convention is DCT-I. Unreachable behind the `has_chebyshev → return
+        # false` guard above.
         # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions
         # Coefficient shape equals grid shape for Chebyshev
         local_coeff_shape = local_grid_shape
@@ -436,6 +453,10 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
         return true
 
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+        # The Chebyshev stages of the mixed plan implement DCT-II (Makhoul), but
+        # Tarang's Chebyshev convention is DCT-I. Unreachable behind the
+        # `has_chebyshev → return false` guard above.
         # Mixed Fourier-Chebyshev 2D/3D case
         # Use the mixed transform plan for dimension-by-dimension transforms
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
@@ -463,15 +484,55 @@ function Tarang.gpu_forward_transform!(field::ScalarField)
 end
 
 """
-    gpu_backward_transform!(field::ScalarField)
+    _gpu_backward_c2c_fft!(field, gpu_arch, data_c, local_grid_shape)
 
-GPU-specific backward transform using CUFFT.
-Supports:
-- Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT
-- Pure Chebyshev - uses GPU DCT
-- Mixed Fourier-Chebyshev - dimension-by-dimension transforms
+Shared full multi-dimensional C2C inverse FFT for the pure-Fourier backward
+path: promotes real coefficient data if needed, sizes/allocates the grid buffer
+to `local_grid_shape` (== coeff shape; C2C preserves shape), and stores the
+complex inverse-FFT result — mirroring the CPU chain, which keeps the complex
+ifft output for C2C axes.
 """
-function Tarang.gpu_backward_transform!(field::ScalarField)
+function _gpu_backward_c2c_fft!(field::ScalarField, gpu_arch::GPU, data_c::CuArray,
+                                local_grid_shape::Tuple)
+    coeff_T = eltype(data_c)
+    # C2C inverse requires complex input; promote if needed (shouldn't normally happen)
+    if coeff_T <: Real
+        fft_input = Complex{coeff_T}.(data_c)
+        plan_T = Complex{coeff_T}
+    else
+        fft_input = data_c
+        plan_T = coeff_T
+    end
+    plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
+
+    existing_grid = get_grid_data(field)
+    needs_alloc = existing_grid === nothing ||
+                  !(existing_grid isa CuArray) ||
+                  eltype(existing_grid) != plan_T ||
+                  size(existing_grid) != local_grid_shape
+    if needs_alloc
+        set_grid_data!(field, CUDA.zeros(plan_T, local_grid_shape...))
+    end
+
+    gpu_backward_fft!(get_grid_data(field), fft_input, plan)
+    return nothing
+end
+
+"""
+    _gpu_backward_transform_impl!(field::ScalarField)
+
+GPU-specific backward transform using CUFFT (extension-local implementation).
+Registered into `Tarang._GPU_BACKWARD_TRANSFORM_HOOK` by `TarangCUDAExt.__init__`;
+`Tarang.gpu_backward_transform!` calls it through the hook (a same-signature
+`Tarang.gpu_backward_transform!` method here would overwrite the src method).
+Returns `true` if the GPU transform was applied, `false` to fall back to CPU.
+Supports:
+- Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT (including the
+  upsampled-rfft scaled/dealias backward path)
+- Chebyshev-containing fields route to CPU (GPU DCT machinery is DCT-II,
+  Tarang's Chebyshev convention is DCT-I), except the distributed DCT-I path.
+"""
+function _gpu_backward_transform_impl!(field::ScalarField)
     arch = field.dist.architecture
     if !Tarang.is_gpu(arch)
         return false
@@ -523,40 +584,55 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
     end
 
     if all_fourier
-        # Pure Fourier case - same logic as forward:
-        # Only use multi-dim irfft when bases[1] is RealFourier.
-        has_real = any(b -> isa(b, RealFourier), bases)
+        # Pure Fourier case — exact mirror of _gpu_forward_transform_impl!:
+        # the forward uses R2C (multi-dim rfft) ONLY when bases[1] is RealFourier
+        # and the data is real; every other combination — all-ComplexFourier,
+        # RealFourier NOT on dim 1 (canonical layout keeps such axes FULL size,
+        # src/core/domain.jl `_fourier_output_size`), complex input — is a full
+        # multi-dim C2C with coeff shape == grid shape.
         first_is_real = isa(bases[1], RealFourier)
 
-        if has_real && !first_is_real
-            # RealFourier on non-first dimension: use dimension-by-dimension approach
-            existing_grid = get_grid_data(field)
-            if existing_grid isa CuArray
-                local_grid_shape = size(existing_grid)
-            else
-                # Use basis metadata for true grid sizes instead of assuming R2C halving.
-                # Size against the SCALED grid (ceil(scale*N) per dim via get_scaled_shape),
-                # NOT the base resolution, so a scaled/dealiased field's backward irfft targets
-                # the right length — mirrors the CPU _bwd_rfft_target (transform_fourier.jl).
-                # The mixed plan sorts RealFourier dims first; only the first RealFourier dim
-                # (in sorted order) gets R2C if data_is_real (i.e., field.dtype is real).
-                scaled_shape = Tarang.get_scaled_shape(field)
-                first_real_found = false
-                local_grid_shape = ntuple(length(bases)) do dim
-                    if isa(bases[dim], RealFourier) && !first_real_found
-                        grid_n = scaled_shape[dim]
-                        if local_coeff_shape[dim] == div(grid_n, 2) + 1
-                            # R2C was used for this dim
-                            first_real_found = true
-                            return grid_n
-                        else
-                            # C2C was used (complex input or not the first processed dim)
-                            return local_coeff_shape[dim]
-                        end
-                    else
-                        return local_coeff_shape[dim]
-                    end
+        if first_is_real && !(field.dtype <: Complex)
+            # dim 1 stored as an rfft half-spectrum (forward used R2C). Classify
+            # the backward path using basis metadata, mirroring the CPU detection
+            # ORDER (transform_fourier.jl `_apply_backward!`): test the R2C
+            # interpretation FIRST — pure shape heuristics misclassify N=1/N=2,
+            # where div(N,2)+1 == N — then the upsampled (scaled) half-spectrum,
+            # then C2C. Anything else is ambiguous: return false (CPU fallback),
+            # NEVER run a guessed same-shape ifft and store junk.
+            scaled_shape = Tarang.get_scaled_shape(field)
+            coeff_T_bk = eltype(data_c)
+            if length(scaled_shape) != length(local_coeff_shape) || !(coeff_T_bk <: Complex)
+                return false  # missing/mismatched shape info or non-complex coeffs → CPU
+            end
+            grid_n1 = scaled_shape[1]
+            base_n1 = bases[1].meta.size
+            axis_len = local_coeff_shape[1]
+
+            if axis_len == div(grid_n1, 2) + 1
+                # Direct irfft: half-spectrum already at the (scaled) grid length.
+                upsampled = false
+                local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
+            elseif grid_n1 > base_n1 && axis_len == div(base_n1, 2) + 1
+                # UPSAMPLED rfft axis (scaled/dealiased field): the stored
+                # half-spectrum is the BASE length div(base_N,2)+1 but the target
+                # grid is finer (grid_n1 = ceil(scale*base_N) > base_N). Mirror
+                # the CPU rule (transform_fourier.jl `_apply_backward!` upsampled
+                # branch): zero-pad to div(grid_n,2)+1, rescale by grid_n/base_n,
+                # zero the base Nyquist bin, then irfft at grid_n.
+                upsampled = true
+                local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
+            elseif axis_len == grid_n1
+                # Full-length dim 1: a C2C spectrum despite the real dtype (e.g.
+                # coefficients written directly). CPU stores the complex ifft.
+                if !Tarang.should_use_gpu_fft(field, local_coeff_shape)
+                    return false
                 end
+                _gpu_backward_c2c_fft!(field, gpu_arch, data_c, local_coeff_shape)
+                return true
+            else
+                # Shape matches no recognized half/full spectrum layout.
+                return false
             end
 
             if !Tarang.should_use_gpu_fft(field, local_grid_shape)
@@ -564,6 +640,7 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
             end
 
             real_T = field.dtype
+            existing_grid = get_grid_data(field)
             needs_alloc = existing_grid === nothing ||
                           !(existing_grid isa CuArray) ||
                           eltype(existing_grid) != real_T ||
@@ -572,92 +649,50 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
                 set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
             end
 
-            plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, real_T)
-            gpu_mixed_backward_transform!(get_grid_data(field), data_c, plan)
-
-        elseif first_is_real
-            # First dim is RealFourier: normally use irfft (C2R on dim 1, C2C on rest).
-            # BUT if forward used C2C (complex input), coeff shape == grid shape (no halving),
-            # so we must detect this and use C2C inverse instead.
-            existing_grid = get_grid_data(field)
-            if existing_grid isa CuArray
-                local_grid_shape = size(existing_grid)
-            else
-                # Use the SCALED grid size for dim 1 (ceil(scale*N) via get_scaled_shape),
-                # NOT the base resolution, so a scaled field's irfft targets the right length
-                # (mirrors the CPU _bwd_rfft_target). For slab decomposition along the last dim,
-                # dim 1 is local. Compare with coeff shape to detect R2C vs C2C.
-                grid_n1 = Tarang.get_scaled_shape(field)[1]
-                if local_coeff_shape[1] == div(grid_n1, 2) + 1
-                    # R2C was used: coeff dim 1 is halved
-                    local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
-                else
-                    # C2C was used: coeff shape == grid shape
-                    local_grid_shape = local_coeff_shape
+            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, real_T; real_input=true)
+            if upsampled
+                # Zero-pad the base half-spectrum to div(grid_n,2)+1 along dim 1
+                # and rescale by grid_n/base_n: the irfft divides by the (finer)
+                # grid_n while the stored coeffs were formed on base_n points.
+                padded_len = div(grid_n1, 2) + 1
+                padded = CUDA.zeros(coeff_T_bk, padded_len, local_coeff_shape[2:end]...)
+                nd = length(local_coeff_shape)
+                front = ntuple(i -> i == 1 ? (1:axis_len) : Colon(), nd)
+                @views padded[front...] .= data_c .* (grid_n1 / base_n1)
+                if iseven(base_n1)
+                    # The base Nyquist mode is ambiguous on the finer grid; drop it
+                    # so this path agrees with the CPU spectral upsample.
+                    nyq_i = div(base_n1, 2) + 1
+                    nyq = ntuple(i -> i == 1 ? (nyq_i:nyq_i) : Colon(), nd)
+                    @views padded[nyq...] .= 0
                 end
-            end
-
-            # Determine if R2C or C2C was used: if coeff dim 1 == grid dim 1, C2C was used
-            used_r2c = (local_coeff_shape[1] != local_grid_shape[1])
-            real_T = field.dtype
-
-            if used_r2c
-                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, real_T; real_input=true)
-                output_T = real_T
+                gpu_backward_fft!(get_grid_data(field), padded, plan)
             else
-                # C2C inverse: coeff and grid have same shape
-                coeff_T_bk = eltype(data_c)
-                plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, coeff_T_bk; real_input=false)
-                output_T = coeff_T_bk
+                gpu_backward_fft!(get_grid_data(field), data_c, plan)
             end
-
-            if !Tarang.should_use_gpu_fft(field, local_grid_shape)
-                return false
-            end
-
-            needs_alloc = existing_grid === nothing ||
-                          !(existing_grid isa CuArray) ||
-                          eltype(existing_grid) != output_T ||
-                          size(existing_grid) != local_grid_shape
-            if needs_alloc
-                set_grid_data!(field, CUDA.zeros(output_T, local_grid_shape...))
-            end
-
-            gpu_backward_fft!(get_grid_data(field), data_c, plan)
         else
-            # All ComplexFourier: use multi-dim icfft
+            # Full multi-dim C2C inverse (grid shape == coeff shape): covers
+            # all-ComplexFourier, RealFourier on a non-first dim (those axes were
+            # transformed C2C at full size — canonical layout), and complex-dtype
+            # fields with RealFourier on dim 1 (forward used C2C). Mirrors the CPU
+            # chain, which stores the complex ifft result.
             local_grid_shape = local_coeff_shape
 
             if !Tarang.should_use_gpu_fft(field, local_grid_shape)
                 return false
             end
 
-            coeff_T = eltype(data_c)
-            # C2C inverse requires complex input; promote if needed (shouldn't normally happen)
-            if coeff_T <: Real
-                fft_input = Complex{coeff_T}.(data_c)
-                plan_T = Complex{coeff_T}
-            else
-                fft_input = data_c
-                plan_T = coeff_T
-            end
-            plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
-
-            existing_grid = get_grid_data(field)
-            needs_alloc = existing_grid === nothing ||
-                          !(existing_grid isa CuArray) ||
-                          eltype(existing_grid) != plan_T ||
-                          size(existing_grid) != local_grid_shape
-            if needs_alloc
-                set_grid_data!(field, CUDA.zeros(plan_T, local_grid_shape...))
-            end
-
-            gpu_backward_fft!(get_grid_data(field), fft_input, plan)
+            _gpu_backward_c2c_fft!(field, gpu_arch, data_c, local_grid_shape)
         end
 
         return true
 
     elseif all_chebyshev && length(bases) == 1
+        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+        # This branch implements the inverse of DCT-II (Makhoul), but Tarang's
+        # Chebyshev convention is DCT-I on the Gauss-Lobatto grid. It is
+        # UNREACHABLE behind the `has_chebyshev → return false` guard above and
+        # would produce wrong grid data if reached.
         # Pure Chebyshev 1D case - use GPU inverse DCT
         local_grid_shape = local_coeff_shape  # Chebyshev: same shape
 
@@ -695,6 +730,10 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
         return true
 
     elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+        # This branch implements the inverse of DCT-II (Makhoul), but Tarang's
+        # Chebyshev convention is DCT-I. Unreachable behind the `has_chebyshev →
+        # return false` guard above.
         # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions (in reverse order)
         local_grid_shape = local_coeff_shape  # For Chebyshev, shapes are equal
 
@@ -745,6 +784,12 @@ function Tarang.gpu_backward_transform!(field::ScalarField)
         return true
 
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
+        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+        # The Chebyshev stages of the mixed plan implement (inverse) DCT-II
+        # (Makhoul), but Tarang's Chebyshev convention is DCT-I. Unreachable
+        # behind the `has_chebyshev → return false` guard above. (Its R2C/C2C
+        # shape-reconstruction heuristics below also predate the canonical-layout
+        # fixes — do not reuse them.)
         # Mixed Fourier-Chebyshev 2D/3D case
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
 
@@ -874,6 +919,13 @@ end
     gpu_backward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
 
 Execute backward (inverse) FFT on GPU.
+
+!!! warning "Scratch-cache single-task contract"
+    The C2R branch borrows a scratch buffer from `get_gpu_dct_scratch`, which
+    caches buffers per (device, shape, eltype, count) and hands the SAME buffers
+    to every caller with matching keys. Concurrent same-shape transforms from
+    multiple Julia tasks would collide on that shared scratch; serial use (one
+    transform at a time per device) is the supported pattern.
 """
 function gpu_backward_fft!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
     if plan.is_real

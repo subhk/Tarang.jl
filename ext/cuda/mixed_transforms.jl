@@ -60,15 +60,29 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     end
 
     # Transform order: Fourier first (they may change array size), then Chebyshev.
-    # Within Fourier dims, put RealFourier dims first so R2C optimization can be used
-    # (R2C halves the output along that dimension, saving memory).
-    # After the first R2C, data is complex so subsequent dims must use C2C regardless.
-    sort!(fourier_dims, by = d -> basis_types[d] == :fourier_real ? 0 : 1)
+    #
+    # CANONICAL LAYOUT (src/core/domain.jl `_fourier_output_size`): only the FIRST
+    # Fourier axis (in ascending dim order) may be halved, and only if it is
+    # RealFourier with real input. Fourier dims are therefore processed in
+    # ASCENDING dim order — the CPU chain's axis order. The old "RealFourier dims
+    # first" sort broke this: for bases like (ComplexFourier, RealFourier) it
+    # applied rfft along the NON-first RealFourier axis, producing a coeff shape
+    # (N1, N2÷2+1) instead of the canonical (N1, N2) — every consumer sized from
+    # `coefficient_shape` then broke or silently misaligned. With ascending order,
+    # `data_is_real` tracking makes exactly the canonical choice: R2C fires only
+    # on the first Fourier dim (data still real, basis RealFourier); after any
+    # FFT the data is complex, so every later Fourier dim — including a non-first
+    # RealFourier — uses full-size C2C, matching the CPU chain
+    # (transform_fourier.jl `_fourier_forward`: complex input → full fft).
+    # (Chebyshev stages preserve realness and shape, so ordering them after the
+    # Fourier stages does not affect the shape bookkeeping.)
+    sort!(fourier_dims)
     transform_order = vcat(fourier_dims, chebyshev_dims)
 
     # Create FFT plans for Fourier dimensions
-    # Only the FIRST RealFourier dimension uses R2C (real_input=true), and only if T is real.
-    # After that, data is complex, so subsequent Fourier dimensions use C2C.
+    # Only the FIRST Fourier dimension uses R2C (real_input=true), and only if it
+    # is RealFourier and T is real. After that, data is complex, so subsequent
+    # Fourier dimensions use C2C at full size.
     fft_plans = Dict{Int, GPUFFTPlanDim}()
     current_shape = local_grid_shape
     data_is_real = !(T <: Complex)  # Track whether current data is still real-valued
@@ -87,7 +101,9 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     end
 
     # Coefficient shape is the shape after all Fourier transforms have been applied.
-    # Only the first RealFourier dimension is R2C (shrinks that dim); others use C2C.
+    # Only a RealFourier FIRST Fourier dimension is R2C (shrinks that dim); all
+    # others use C2C — this now matches the framework's canonical
+    # `coefficient_shape` (`_fourier_output_size`) exactly.
     coeff_shape = current_shape
 
     # Create DCT plans for Chebyshev dimensions (use coefficient shape)
@@ -205,6 +221,14 @@ function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuAr
             current_data = output
 
         elseif basis_type == :chebyshev
+            # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+            # This Chebyshev stage implements DCT-II (Makhoul), but Tarang's
+            # Chebyshev convention is DCT-I on the Gauss-Lobatto grid. It is
+            # unreachable in practice: Chebyshev-containing fields are routed to
+            # the CPU chain by the `has_chebyshev → return false` guards in
+            # _gpu_forward_transform_impl! / _gpu_backward_transform_impl!
+            # (ext/cuda/transforms.jl), so mixed plans are only ever executed for
+            # pure-Fourier dims. Would produce wrong coefficients if reached.
             # DCT along this dimension
             dct_plan = plan.dct_plans[dim]
 
@@ -255,6 +279,11 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
         basis_type = plan.basis_types[dim]
 
         if basis_type == :chebyshev
+            # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
+            # This Chebyshev stage implements the inverse of DCT-II (Makhoul),
+            # but Tarang's Chebyshev convention is DCT-I. Unreachable behind the
+            # `has_chebyshev → return false` guards in the transform impls
+            # (ext/cuda/transforms.jl); would produce wrong grid data if reached.
             # Inverse DCT along this dimension
             dct_plan = plan.dct_plans[dim]
 
