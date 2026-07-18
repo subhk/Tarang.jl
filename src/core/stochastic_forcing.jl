@@ -841,6 +841,51 @@ end
 _forcing_view_logical(forcing::StochasticForcing{T, N, A, CA}, target::AbstractArray) where {T, N, A, CA} =
     _matched_forcing_view(forcing, size(target))
 
+# Whole-array reductions for the work/power diagnostics.
+#
+# The ARRAYS are the reduction operands (not a CartesianIndices collection), so
+# `mapreduce` dispatches on the array type: plain Arrays use Base's fold and GPU
+# arrays hit the GPUArrays fused reduction kernel. Iterating
+# `mapreduce(+, CartesianIndices(cf)) do I ...` instead dispatches on the
+# CartesianIndices (a CPU collection), so every `a[I]` inside the closure is
+# scalar indexing on a GPU array — a GPUArrays scalar-indexing error in scripts
+# and a ~1000x slowdown interactively.
+#
+# PencilArray solutions keep an explicit cartesian loop: `ps` (logical-order
+# Matrix from store_prevsol!) and `cf` (logical-order view) pair with the
+# PencilArray's logical CARTESIAN getindex, whereas zip/linear iteration follows
+# the pencil's parent/storage order, scrambling the pairing for a permuted
+# pencil (see store_prevsol!). That loop runs on the CPU over the local slab
+# only. Round-5 audit 2026-06-23; GPU audit 2026-07.
+
+# Re Σ sol · conj(cf)   (work_ito, instantaneous_power)
+function _diag_real_dot(sol::AbstractArray, cf)
+    T = real(eltype(sol))
+    return mapreduce((s, c) -> real(s * conj(c)), +, sol, cf; init = zero(T))
+end
+
+function _diag_real_dot(sol::PencilArrays.PencilArray, cf)
+    acc = zero(real(eltype(sol)))
+    @inbounds for I in CartesianIndices(cf)
+        acc += real(sol[I] * conj(cf[I]))
+    end
+    return acc
+end
+
+# Re Σ (ps + sol)/2 · conj(cf)   (work_stratonovich midpoint)
+function _diag_real_middot(ps, sol::AbstractArray, cf)
+    T = real(eltype(sol))
+    return mapreduce((p, s, c) -> real((p + s) / 2 * conj(c)), +, ps, sol, cf; init = zero(T))
+end
+
+function _diag_real_middot(ps, sol::PencilArrays.PencilArray, cf)
+    acc = zero(real(eltype(sol)))
+    @inbounds for I in CartesianIndices(cf)
+        acc += real((ps[I] + sol[I]) / 2 * conj(cf[I]))
+    end
+    return acc
+end
+
 """
     work_stratonovich(forcing::StochasticForcing, sol::AbstractArray)
 
@@ -873,22 +918,17 @@ function work_stratonovich(forcing::StochasticForcing{T, N, A, CA}, sol::Abstrac
     # Since F̂_stored = √Q̂ · ξ / √dt, we have ΔF̂ = √Q̂ · ξ · √dt
     domain_area = prod(forcing.domain_size)
 
-    # Fused mapreduce: computes Re(ψ_mid · F̂*) without temporary arrays.
-    # GPU-compatible: mapreduce dispatches to GPU kernel on CuArrays.
+    # Whole-array reduction: computes Re(ψ_mid · F̂*) with the ARRAYS as the
+    # reduction operands, so it runs as a fused GPU kernel on GPU arrays and a
+    # plain fold on CPU arrays; the PencilArray method keeps the logical
+    # cartesian pairing (see _diag_real_middot above for both).
     ps = forcing.prevsol
     size(ps) == size(sol) || throw(ArgumentError("Previous solution size $(size(ps)) does not match current solution size $(size(sol))"))
     cf = _forcing_view_logical(forcing, sol)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
-    # Iterate CARTESIAN (logical) indices. A plain prevsol Matrix is IndexLinear,
-    # which would make `eachindex` choose linear order — but a PencilArray's linear
-    # index is parent/storage (logical row-major) order, not the Matrix's
-    # column-major, scrambling the pairing for a permuted pencil. Cartesian getindex
-    # is logical for all of ps (Matrix), sol (PencilArray) and cf (view).
-    work = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
-        @inbounds real((ps[I] + sol[I]) / 2 * conj(cf[I]))
-    end
+    work = _diag_real_middot(ps, sol, cf)
 
-    # The mapreduce ran over this rank's LOCAL slab only; combine partials
+    # The reduction ran over this rank's LOCAL slab only; combine partials
     # across the field's communicator before normalising by the GLOBAL area.
     work = _forcing_reduce_partial(sol, work)
 
@@ -918,12 +958,11 @@ function work_ito(forcing::StochasticForcing{T, N, A, CA}, sol_prev::AbstractArr
     domain_area = prod(forcing.domain_size)
 
     # Itô work (uses previous solution, which is independent of current forcing)
-    # Fused mapreduce avoids temporary arrays; GPU-compatible.
-    cf = _forcing_view_logical(forcing, sol_prev)   # logical view + cartesian iteration (see work_stratonovich)
+    # Whole-array reduction over the arrays themselves: GPU-kernel on GPU
+    # arrays, logical cartesian pairing for PencilArrays (see _diag_real_dot).
+    cf = _forcing_view_logical(forcing, sol_prev)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol_prev))"))
-    work = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
-        @inbounds real(sol_prev[I] * conj(cf[I]))
-    end
+    work = _diag_real_dot(sol_prev, cf)
 
     # Combine per-rank slab partials over the field's communicator (the drift
     # term below is a replicated scalar and must NOT be reduced).
@@ -978,12 +1017,12 @@ Instantaneous power (energy per unit time).
 function instantaneous_power(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractArray{Complex{T}, N}) where {T, N, A, CA}
     domain_area = prod(forcing.domain_size)
 
-    cf = _forcing_view_logical(forcing, sol)   # logical view + cartesian iteration (see work_stratonovich)
+    # Whole-array reduction over the arrays themselves: GPU-kernel on GPU
+    # arrays, logical cartesian pairing for PencilArrays (see _diag_real_dot).
+    cf = _forcing_view_logical(forcing, sol)
     cf === nothing && throw(ArgumentError("Forcing size $(size(forcing.cached_forcing)) does not match solution size $(size(sol))"))
 
-    power = mapreduce(+, CartesianIndices(cf); init=zero(T)) do I
-        @inbounds real(sol[I] * conj(cf[I]))
-    end
+    power = _diag_real_dot(sol, cf)
 
     # Combine per-rank slab partials over the field's communicator.
     power = _forcing_reduce_partial(sol, power)
