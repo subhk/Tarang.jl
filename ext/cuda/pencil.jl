@@ -285,3 +285,18 @@ function current_local_shape(p::PencilDecomposition)
         return p.z_pencil_shape
     end
 end
+
+# ============================================================================
+# GPU Synchronization
+# ============================================================================
+
+"""
+    Tarang.synchronize_device!(::GPU{CuDevice})
+
+CUDA override of the no-op `synchronize_device!` fallback declared in
+`src/core/gpu_distributed.jl`. `Tarang.architecture(::CuArray)` returns a
+`GPU{CuDevice}`, so the "CRITICAL: Synchronize GPU before MPI" call sites in
+`distributed_fft_cuda_aware!` dispatch here and actually block until pending
+GPU work (e.g. pack kernels) has completed before handing buffers to MPI.
+"""
+Tarang.synchronize_device!(::GPU{CuDevice}) = CUDA.synchronize()

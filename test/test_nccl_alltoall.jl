@@ -192,12 +192,20 @@ end
             send_displs = collect(0:n_per_rank:(total-n_per_rank))
             recv_displs = collect(0:n_per_rank:(total-n_per_rank))
 
-            # Call alltoall with nothing comm (single-rank fallback)
-            nccl_alltoall!(send_buf, recv_buf, send_counts, recv_counts,
-                           send_displs, recv_displs, nothing; my_rank=rank)
+            if nprocs == 1
+                # nothing comm is only legal for a true single-rank exchange
+                nccl_alltoall!(send_buf, recv_buf, send_counts, recv_counts,
+                               send_displs, recv_displs, nothing; my_rank=rank)
 
-            # With nothing comm, should just copy
-            @test Array(recv_buf) ≈ Array(send_buf) rtol=1e-14
+                # With nothing comm on a single rank, should just copy
+                @test Array(recv_buf) ≈ Array(send_buf) rtol=1e-14
+            else
+                # Multi-rank with a missing NCCL communicator must throw loudly —
+                # the old silent self-copy fallback produced wrong transposes.
+                @test_throws Exception nccl_alltoall!(
+                    send_buf, recv_buf, send_counts, recv_counts,
+                    send_displs, recv_displs, nothing; my_rank=rank)
+            end
 
             if rank == 0
                 @info "NCCL alltoall function test passed"
