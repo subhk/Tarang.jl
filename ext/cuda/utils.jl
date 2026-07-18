@@ -72,10 +72,14 @@ _gpu_zeros(::GPU, T::Type, dims...) = CUDA.zeros(T, dims...)
 
 function _gpu_zeros(arr::CuArray, T::Type, dims...)
     prev_device = CUDA.device()
-    CUDA.device!(CUDA.device(arr))
-    result = CUDA.zeros(T, dims...)
-    CUDA.device!(prev_device)
-    return result
+    try
+        CUDA.device!(CUDA.device(arr))
+        return CUDA.zeros(T, dims...)
+    finally
+        # try/finally: an exception mid-allocation (e.g. OOM) must not strand the
+        # task on the wrong device (matches Tarang.allocate_like below).
+        CUDA.device!(prev_device)
+    end
 end
 
 _gpu_zeros(arr::CuArray, dims...) = _gpu_zeros(arr, eltype(arr), dims...)
@@ -89,20 +93,24 @@ _gpu_ones(::GPU, T::Type, dims...) = CUDA.ones(T, dims...)
 
 function _gpu_ones(arr::CuArray, T::Type, dims...)
     prev_device = CUDA.device()
-    CUDA.device!(CUDA.device(arr))
-    result = CUDA.ones(T, dims...)
-    CUDA.device!(prev_device)
-    return result
+    try
+        CUDA.device!(CUDA.device(arr))
+        return CUDA.ones(T, dims...)
+    finally
+        CUDA.device!(prev_device)
+    end
 end
 
 _gpu_ones(arr::CuArray, dims...) = _gpu_ones(arr, eltype(arr), dims...)
 
 function _gpu_similar(arr::CuArray, T::Type, dims...)
     prev_device = CUDA.device()
-    CUDA.device!(CUDA.device(arr))
-    result = CuArray{T}(undef, dims...)
-    CUDA.device!(prev_device)
-    return result
+    try
+        CUDA.device!(CUDA.device(arr))
+        return CuArray{T}(undef, dims...)
+    finally
+        CUDA.device!(prev_device)
+    end
 end
 
 _gpu_similar(arr::CuArray, dims...) = _gpu_similar(arr, eltype(arr), dims...)
@@ -117,10 +125,12 @@ _gpu_fill(::GPU, val, dims...) = CUDA.fill(val, dims...)
 
 function _gpu_fill(arr::CuArray, val, dims...)
     prev_device = CUDA.device()
-    CUDA.device!(CUDA.device(arr))
-    result = CUDA.fill(val, dims...)
-    CUDA.device!(prev_device)
-    return result
+    try
+        CUDA.device!(CUDA.device(arr))
+        return CUDA.fill(val, dims...)
+    finally
+        CUDA.device!(prev_device)
+    end
 end
 
 # ============================================================================
@@ -214,75 +224,109 @@ end
 # ============================================================================
 
 """
-Dealiasing kernel for 2D arrays: zero out modes beyond cutoff in each dimension.
-For spectral truncation (2/3 rule), modes with index > cutoff_dim are zeroed.
+    _dealias_kmax(N, keep_fraction) -> Int
+
+Max retained |mode| for an axis of a two-sided full FFT spectrum, using the SAME
+rule as the CPU solver's `Tarang._axis_dealias_cutoff(basis, factor)` with
+`factor = 1/keep_fraction`:
+
+    kmax = min(floor(N / (2·factor)), (N − 1) ÷ 3)
+
+The `(N − 1) ÷ 3` cap enforces `3·kmax < N`, so quadratic products (modes up to
+`2·kmax`) cannot alias back into `[−kmax, kmax]` — see nonlinear_dealiasing.jl.
+`keep_fraction ≥ 1` disables dealiasing (all modes kept), mirroring
+`_axis_dealias_cutoff` returning `nothing` for factor ≤ 1; here we return `N`
+(no index has |mode| > N, so nothing is zeroed).
 """
-@kernel function dealiasing_2d_kernel!(data, cutoff_x::Int, cutoff_y::Int, nx::Int, ny::Int)
+@inline function _dealias_kmax(N::Int, keep_fraction::Float64)
+    keep_fraction >= 1 && return N   # factor ≤ 1 → keep every mode
+    factor = 1.0 / keep_fraction
+    return min(floor(Int, N / (2 * factor)), (N - 1) ÷ 3)
+end
+
+"""
+Dealiasing kernel for 2D arrays (two-sided full FFT spectrum on BOTH axes):
+zero every mode with |k| > kmax on either axis.
+
+Index ↔ mode map per axis of length n: index i is mode i−1 on the positive side
+or −(n−i+1) on the negative side. An entry is killed only when BOTH
+interpretations exceed kmax, so the retained band is |k| ≤ kmax on each side
+(conjugate-symmetric; DC at i==1 is always kept since kmax ≥ 0). The even-N
+Nyquist index n÷2+1 has |k| = n/2 > kmax (kmax ≤ (n−1)÷3) and is always zeroed.
+"""
+@kernel function dealiasing_2d_kernel!(data, kmax_x::Int, kmax_y::Int, nx::Int, ny::Int)
     idx = @index(Global)
     j = ((idx - 1) ÷ nx) + 1
     i = ((idx - 1) % nx) + 1
-    # Zero modes beyond cutoff in both positive AND negative frequency range.
-    # `cutoff_x` is the per-side retained-mode count. Keep positive freqs i <= cutoff
-    # (|k| = i-1 ≤ cutoff-1) OR negative mirror nx-i+1 < cutoff (|k| = nx-i+1 ≤ cutoff-1);
-    # kill only if BOTH fail. The negative test uses `>=` (not `>`) so the retained band
-    # is conjugate-symmetric — keeping |k| ≤ cutoff-1 on each side. (DC, i==1, is always
-    # kept via i <= cutoff for any cutoff >= 1.)
-    kill_x = i > cutoff_x && nx - i + 1 >= cutoff_x
-    kill_y = j > cutoff_y && ny - j + 1 >= cutoff_y
+    kill_x = (i - 1 > kmax_x) && (nx - i + 1 > kmax_x)
+    kill_y = (j - 1 > kmax_y) && (ny - j + 1 > kmax_y)
     @inbounds if kill_x || kill_y
         data[i, j] = zero(eltype(data))
     end
 end
 
 """
-Dealiasing kernel for 3D arrays: zero out modes beyond cutoff in each dimension.
+Dealiasing kernel for 3D arrays (two-sided full FFT spectrum on all axes):
+zero every mode with |k| > kmax on any axis. See dealiasing_2d_kernel! for the
+index ↔ mode map.
 """
-@kernel function dealiasing_3d_kernel!(data, cutoff_x::Int, cutoff_y::Int, cutoff_z::Int,
+@kernel function dealiasing_3d_kernel!(data, kmax_x::Int, kmax_y::Int, kmax_z::Int,
                                         nx::Int, ny::Int, nz::Int)
     idx = @index(Global)
     i = ((idx - 1) % nx) + 1
     j = (((idx - 1) ÷ nx) % ny) + 1
     k = ((idx - 1) ÷ (nx * ny)) + 1
-    # `>=` on the negative mirror keeps the retained band conjugate-symmetric (see the
-    # matching note in dealiasing_2d_kernel!): |k| ≤ cutoff-1 on each side.
-    kill_x = i > cutoff_x && nx - i + 1 >= cutoff_x
-    kill_y = j > cutoff_y && ny - j + 1 >= cutoff_y
-    kill_z = k > cutoff_z && nz - k + 1 >= cutoff_z
+    kill_x = (i - 1 > kmax_x) && (nx - i + 1 > kmax_x)
+    kill_y = (j - 1 > kmax_y) && (ny - j + 1 > kmax_y)
+    kill_z = (k - 1 > kmax_z) && (nz - k + 1 > kmax_z)
     @inbounds if kill_x || kill_y || kill_z
         data[i, j, k] = zero(eltype(data))
     end
 end
 
 """
-    create_dealiasing_mask_gpu(shape::Tuple, cutoff::Float64=2.0/3.0)
+    create_dealiasing_mask_gpu(shape::Tuple, cutoff::Float64=2.0/3.0; eltype::Type=Float64)
 
-Create dealiasing mask on GPU for the 2/3 rule.
-Returns a CuArray where entries within the cutoff are 1.0 and entries
-beyond the cutoff in any dimension are 0.0.
+Create a dealiasing mask on GPU: entries with |k| ≤ kmax on every axis are one,
+all others zero, where kmax per axis follows the solver's
+`Tarang._axis_dealias_cutoff` rule (`min(floor(N·cutoff/2), (N−1)÷3)` for the
+default `cutoff = 2/3` retained fraction).
+
+Every axis is treated as a TWO-SIDED full FFT spectrum (layout: DC, positive
+freqs, [Nyquist,] negative freqs). rfft half-spectrum layouts are NOT supported
+— a half-spectrum axis is indistinguishable from a short full spectrum by shape
+alone, so it cannot be detected here; do not pass rfft output to this helper.
+
+Supports 1–3 dimensions; other ranks throw an `ArgumentError`. `eltype` selects
+the mask element type (default `Float64`).
 """
-function create_dealiasing_mask_gpu(shape::Tuple, cutoff::Float64=2.0/3.0)
-    mask = CUDA.ones(Float64, shape...)
-    # Per-side retained-mode count for the two-sided 2D/3D kernels (retain a total
-    # fraction `cutoff` of modes → `cutoff/2` on each of the positive/negative sides).
-    # (The 1D branch below recomputes its own one-sided cutoff for half-spectra.)
-    cutoffs = map(n -> floor(Int, n * cutoff / 2), shape)
+function create_dealiasing_mask_gpu(shape::Tuple, cutoff::Float64=2.0/3.0; eltype::Type=Float64)
+    T = eltype
+    nd = length(shape)
+    1 <= nd <= 3 || throw(ArgumentError(
+        "create_dealiasing_mask_gpu supports 1-, 2-, or 3-dimensional shapes, got ndims=$nd"))
 
-    if length(shape) == 2
+    mask = CUDA.ones(T, shape...)
+    kmaxs = map(n -> _dealias_kmax(n, cutoff), shape)
+
+    if nd == 2
         nx, ny = shape
         arch = Tarang.architecture(mask)
-        launch!(arch, dealiasing_2d_kernel!, mask, cutoffs[1], cutoffs[2], nx, ny;
+        launch!(arch, dealiasing_2d_kernel!, mask, kmaxs[1], kmaxs[2], nx, ny;
                 ndrange=nx*ny)
-    elseif length(shape) == 3
+    elseif nd == 3
         nx, ny, nz = shape
         arch = Tarang.architecture(mask)
-        launch!(arch, dealiasing_3d_kernel!, mask, cutoffs[1], cutoffs[2], cutoffs[3],
+        launch!(arch, dealiasing_3d_kernel!, mask, kmaxs[1], kmaxs[2], kmaxs[3],
                 nx, ny, nz; ndrange=nx*ny*nz)
     else
-        # 1D fallback
+        # 1D: two-sided band |k| ≤ kmax → zero indices kmax+2 : n-kmax
+        # (i−1 > kmax on the positive side AND n−i+1 > kmax on the negative side).
         n = shape[1]
-        cutoff_idx = floor(Int, n * cutoff)
-        if cutoff_idx < n
-            fill!(view(mask, cutoff_idx+1:n), 0.0)
+        kmax = kmaxs[1]
+        lo, hi = kmax + 2, n - kmax
+        if lo <= hi
+            fill!(view(mask, lo:hi), zero(T))
         end
     end
 
@@ -292,36 +336,40 @@ end
 """
     apply_dealiasing_gpu!(data::CuArray, cutoff::Float64=2.0/3.0)
 
-Apply 2/3-rule dealiasing on GPU by zeroing spectral modes beyond the cutoff
-in each dimension. Modifies `data` in-place.
+Zero spectral modes with |k| > kmax on any axis, in place, where kmax per axis
+follows the solver's `Tarang._axis_dealias_cutoff` rule (see
+`create_dealiasing_mask_gpu`). All axes are treated as two-sided full FFT
+spectra; rfft half-spectrum layouts are NOT supported (undetectable from the
+array shape — do not pass rfft output here).
 """
 function apply_dealiasing_gpu!(data::CuArray{T, 2}, cutoff::Float64=2.0/3.0) where T
     nx, ny = size(data)
-    # Per-side retained-mode count (two-sided spectrum) — see dealiasing_2d_kernel!.
-    cutoff_x = floor(Int, nx * cutoff / 2)
-    cutoff_y = floor(Int, ny * cutoff / 2)
+    kmax_x = _dealias_kmax(nx, cutoff)
+    kmax_y = _dealias_kmax(ny, cutoff)
     arch = Tarang.architecture(data)
-    launch!(arch, dealiasing_2d_kernel!, data, cutoff_x, cutoff_y, nx, ny;
+    launch!(arch, dealiasing_2d_kernel!, data, kmax_x, kmax_y, nx, ny;
             ndrange=nx*ny)
     return data
 end
 
 function apply_dealiasing_gpu!(data::CuArray{T, 3}, cutoff::Float64=2.0/3.0) where T
     nx, ny, nz = size(data)
-    cutoff_x = floor(Int, nx * cutoff / 2)
-    cutoff_y = floor(Int, ny * cutoff / 2)
-    cutoff_z = floor(Int, nz * cutoff / 2)
+    kmax_x = _dealias_kmax(nx, cutoff)
+    kmax_y = _dealias_kmax(ny, cutoff)
+    kmax_z = _dealias_kmax(nz, cutoff)
     arch = Tarang.architecture(data)
-    launch!(arch, dealiasing_3d_kernel!, data, cutoff_x, cutoff_y, cutoff_z,
+    launch!(arch, dealiasing_3d_kernel!, data, kmax_x, kmax_y, kmax_z,
             nx, ny, nz; ndrange=nx*ny*nz)
     return data
 end
 
 function apply_dealiasing_gpu!(data::CuArray{T, 1}, cutoff::Float64=2.0/3.0) where T
     n = length(data)
-    cutoff_idx = floor(Int, n * cutoff)
-    if cutoff_idx < n
-        fill!(view(data, cutoff_idx+1:n), zero(T))
+    kmax = _dealias_kmax(n, cutoff)
+    # Two-sided band |k| ≤ kmax → zero indices kmax+2 : n-kmax (see mask helper).
+    lo, hi = kmax + 2, n - kmax
+    if lo <= hi
+        fill!(view(data, lo:hi), zero(T))
     end
     return data
 end
@@ -338,6 +386,11 @@ Avoids CPU round-trip for scale changes and dealiasing.
 """
 function Tarang.gpu_resample_grid_data!(new_data::CuArray, old_data::CuArray,
                                         old_shape::Tuple, new_shape::Tuple)
+    # Pin the current CUDA device to the array's device before any CUFFT plan /
+    # CUDA.zeros below — every sibling GPU entry point does this; without it a
+    # multi-GPU run whose current device != the data's device would allocate and
+    # plan on the wrong device.
+    ensure_device!(Tarang.architecture(new_data))
     old_size = size(old_data)
     new_size = size(new_data)
 
@@ -362,6 +415,8 @@ Perform spectral interpolation on GPU: forward FFT, pad/truncate coefficients,
 inverse FFT. Handles real and complex element types.
 """
 function gpu_spectral_resample!(new_data::CuArray{T}, old_data::CuArray{T}) where T
+    # Pin the device (also called directly, not only via gpu_resample_grid_data!).
+    ensure_device!(Tarang.architecture(new_data))
     CT = T <: Real ? Complex{T} : T
     RT = T <: Real ? T : real(T)
 
@@ -389,82 +444,88 @@ function gpu_spectral_resample!(new_data::CuArray{T}, old_data::CuArray{T}) wher
 end
 
 """
+    _resample_axis_pairs(n_old::Int, n_new::Int) -> Vector{Tuple{UnitRange{Int}, UnitRange{Int}}}
+
+Per-axis (src_range, dst_range) copy list for spectral pad/truncate, replicating
+EXACTLY the Nyquist conventions of the CPU `Tarang.resample_1d!`
+(src/core/field/field_data/field_data_scales.jl):
+
+- Upsampling from even n_old: the old Nyquist bin (index n_old÷2+1) is ZEROED
+  (not copied) — copying it one-sidedly would leave a non-Hermitian spectrum and
+  an aliased half-period oscillation on the fine grid.
+- Downsampling to even n_new: the new Nyquist bin (index n_new÷2+1) receives
+  old[+Nyq] PLUS the −Nyq image old[n_old−n_new÷2+1] (conjugate partners for a
+  real field) — without the fold the new Nyquist mode comes out at half amplitude.
+
+Destination ranges may overlap (the fold targets a bin inside the positive-copy
+range), so consumers must ACCUMULATE (`.+=`) into a zeroed destination.
+"""
+function _resample_axis_pairs(n_old::Int, n_new::Int)
+    pairs = Tuple{UnitRange{Int}, UnitRange{Int}}[]
+    if n_old == n_new
+        push!(pairs, (1:n_old, 1:n_new))
+    elseif n_new > n_old
+        # Upsample: zero-pad high frequencies.
+        h_old = div(n_old, 2)
+        if iseven(n_old)
+            # Even n_old: copy positive freqs EXCLUDING the Nyquist (index h_old+1).
+            push!(pairs, (1:h_old, 1:h_old))
+        else
+            # Odd n_old: no Nyquist bin; copy all positive freqs.
+            push!(pairs, (1:h_old+1, 1:h_old+1))
+        end
+        n_neg = n_old - h_old - 1
+        n_neg > 0 && push!(pairs, (n_old-n_neg+1:n_old, n_new-n_neg+1:n_new))
+    else
+        # Downsample: truncate high frequencies.
+        h_new = div(n_new, 2)
+        # Positive freqs including the new Nyquist (index h_new+1).
+        push!(pairs, (1:h_new+1, 1:h_new+1))
+        # Even n_new: fold the −Nyq image into the new Nyquist bin (accumulates
+        # on top of the positive copy above).
+        iseven(n_new) && push!(pairs, (n_old-h_new+1:n_old-h_new+1, h_new+1:h_new+1))
+        n_neg = n_new - h_new - 1
+        n_neg > 0 && push!(pairs, (n_old-n_neg+1:n_old, n_new-n_neg+1:n_new))
+    end
+    return pairs
+end
+
+"""
     spectral_pad_truncate_gpu!(new_fft::CuArray, old_fft::CuArray)
 
-Copy FFT coefficients from old_fft to new_fft, handling the standard FFT frequency
-layout (DC, positive freqs, Nyquist, negative freqs) in each dimension.
-Pads with zeros for upsampling, truncates for downsampling.
+Copy FFT coefficients from old_fft into the ZEROED new_fft, handling the standard
+FFT frequency layout (DC, positive freqs, [Nyquist,] negative freqs) per axis.
+Pads with zeros for upsampling, truncates for downsampling, with the same even-N
+Nyquist conventions as the CPU `Tarang.resample_1d!` (zero the old Nyquist on
+upsample; fold the −Nyq image into the new Nyquist on downsample) — see
+`_resample_axis_pairs`. Accumulates (`.+=`), so `new_fft` MUST be zero on entry
+(the caller `gpu_spectral_resample!` allocates it with `CUDA.zeros`).
 """
 function spectral_pad_truncate_gpu!(new_fft::CuArray{T,1}, old_fft::CuArray{T,1}) where T
-    n_old = size(old_fft, 1)
-    n_new = size(new_fft, 1)
-
-    n_pos = min(div(n_old, 2), div(n_new, 2))
-    n_neg = min(n_old - div(n_old, 2) - 1, n_new - div(n_new, 2) - 1)
-
-    # DC + positive frequencies
-    copyto!(view(new_fft, 1:n_pos+1), view(old_fft, 1:n_pos+1))
-    # Negative frequencies
-    if n_neg > 0
-        copyto!(view(new_fft, n_new-n_neg+1:n_new), view(old_fft, n_old-n_neg+1:n_old))
+    for (s1, d1) in _resample_axis_pairs(size(old_fft, 1), size(new_fft, 1))
+        @views new_fft[d1] .+= old_fft[s1]
     end
+    return new_fft
 end
 
 function spectral_pad_truncate_gpu!(new_fft::CuArray{T,2}, old_fft::CuArray{T,2}) where T
-    nx_old, ny_old = size(old_fft)
-    nx_new, ny_new = size(new_fft)
-
-    px = min(div(nx_old, 2), div(nx_new, 2))
-    py = min(div(ny_old, 2), div(ny_new, 2))
-    nx_neg = min(nx_old - div(nx_old, 2) - 1, nx_new - div(nx_new, 2) - 1)
-    ny_neg = min(ny_old - div(ny_old, 2) - 1, ny_new - div(ny_new, 2) - 1)
-
-    # Four corners: (pos_x, pos_y), (pos_x, neg_y), (neg_x, pos_y), (neg_x, neg_y)
-    xp_old = 1:px+1;       xp_new = 1:px+1
-    yp_old = 1:py+1;       yp_new = 1:py+1
-    xn_old = nx_old-nx_neg+1:nx_old;  xn_new = nx_new-nx_neg+1:nx_new
-    yn_old = ny_old-ny_neg+1:ny_old;  yn_new = ny_new-ny_neg+1:ny_new
-
-    copyto!(view(new_fft, xp_new, yp_new), view(old_fft, xp_old, yp_old))
-    if ny_neg > 0
-        copyto!(view(new_fft, xp_new, yn_new), view(old_fft, xp_old, yn_old))
+    pairs1 = _resample_axis_pairs(size(old_fft, 1), size(new_fft, 1))
+    pairs2 = _resample_axis_pairs(size(old_fft, 2), size(new_fft, 2))
+    # Tensor product of the per-axis maps == sequential per-axis resample_1d!.
+    for (s1, d1) in pairs1, (s2, d2) in pairs2
+        @views new_fft[d1, d2] .+= old_fft[s1, s2]
     end
-    if nx_neg > 0
-        copyto!(view(new_fft, xn_new, yp_new), view(old_fft, xn_old, yp_old))
-    end
-    if nx_neg > 0 && ny_neg > 0
-        copyto!(view(new_fft, xn_new, yn_new), view(old_fft, xn_old, yn_old))
-    end
+    return new_fft
 end
 
 function spectral_pad_truncate_gpu!(new_fft::CuArray{T,3}, old_fft::CuArray{T,3}) where T
-    nx_old, ny_old, nz_old = size(old_fft)
-    nx_new, ny_new, nz_new = size(new_fft)
-
-    px = min(div(nx_old, 2), div(nx_new, 2))
-    py = min(div(ny_old, 2), div(ny_new, 2))
-    pz = min(div(nz_old, 2), div(nz_new, 2))
-    nx_neg = min(nx_old - div(nx_old, 2) - 1, nx_new - div(nx_new, 2) - 1)
-    ny_neg = min(ny_old - div(ny_old, 2) - 1, ny_new - div(ny_new, 2) - 1)
-    nz_neg = min(nz_old - div(nz_old, 2) - 1, nz_new - div(nz_new, 2) - 1)
-
-    xp_old = 1:px+1;       xp_new = 1:px+1
-    yp_old = 1:py+1;       yp_new = 1:py+1
-    zp_old = 1:pz+1;       zp_new = 1:pz+1
-    xn_old = nx_old-nx_neg+1:nx_old;  xn_new = nx_new-nx_neg+1:nx_new
-    yn_old = ny_old-ny_neg+1:ny_old;  yn_new = ny_new-ny_neg+1:ny_new
-    zn_old = nz_old-nz_neg+1:nz_old;  zn_new = nz_new-nz_neg+1:nz_new
-
-    # Eight corners of the 3D frequency cube
-    for (xo, xn) in ((xp_old, xp_new), nx_neg > 0 ? (xn_old, xn_new) : (1:0, 1:0))
-        for (yo, yn) in ((yp_old, yp_new), ny_neg > 0 ? (yn_old, yn_new) : (1:0, 1:0))
-            for (zo, zn) in ((zp_old, zp_new), nz_neg > 0 ? (zn_old, zn_new) : (1:0, 1:0))
-                if length(xo) > 0 && length(yo) > 0 && length(zo) > 0
-                    copyto!(view(new_fft, xn, yn, zn), view(old_fft, xo, yo, zo))
-                end
-            end
-        end
+    pairs1 = _resample_axis_pairs(size(old_fft, 1), size(new_fft, 1))
+    pairs2 = _resample_axis_pairs(size(old_fft, 2), size(new_fft, 2))
+    pairs3 = _resample_axis_pairs(size(old_fft, 3), size(new_fft, 3))
+    for (s1, d1) in pairs1, (s2, d2) in pairs2, (s3, d3) in pairs3
+        @views new_fft[d1, d2, d3] .+= old_fft[s1, s2, s3]
     end
+    return new_fft
 end
 
 # ============================================================================
@@ -681,15 +742,19 @@ function Tarang.copy_to_device(a::CuArray, target::CuArray)
         # Cross-device copy: explicitly go through host memory to avoid
         # requiring P2P access between devices.
         prev_device = CUDA.device()
-        # 1. Set source device context and download to host
-        CUDA.device!(src_device)
-        host_data = Array(a)
-        # 2. Set destination device context and upload from host
-        CUDA.device!(dst_device)
-        result = CuArray(host_data)
-        # 3. Restore caller's device context
-        CUDA.device!(prev_device)
-        return result
+        try
+            # 1. Set source device context and download to host
+            CUDA.device!(src_device)
+            host_data = Array(a)
+            # 2. Set destination device context and upload from host
+            CUDA.device!(dst_device)
+            return CuArray(host_data)
+        finally
+            # 3. Restore caller's device context — even on exception (e.g. OOM
+            #    during the upload), so the task is not stranded on the wrong
+            #    device (matches Tarang.allocate_like).
+            CUDA.device!(prev_device)
+        end
     end
 end
 
@@ -700,19 +765,25 @@ end
 """
     Tarang._try_gpu_rand!(phases::CuArray{T}) -> Bool
 
-Fill CuArray with random numbers in [0, 1) using CUDA's native RNG.
-Returns true to indicate success (GPU path was used).
+Deliberately returns `false` for CuArrays so that the caller
+(`Tarang._fill_random_phases!` in stochastic_forcing.jl) takes its host-RNG
+fallback: `rand(rng, T, size(phases)...)` on the CPU followed by a `copyto!`
+to the device.
 
-This is much faster than generating on CPU and copying to GPU,
-especially for large arrays.
+The previous implementation called `CUDA.rand!(phases)` here, which uses the
+unseeded CURAND stream and IGNORES the caller's `rng`. That broke two contracts
+(see the matching `Tarang._fill_random_phases!(::GPU{CuDevice}, ...)` override
+in ext/cuda/architecture.jl, which draws on the host rng and uploads for the
+same reasons):
+1. Reproducibility — the user's seed must be honored.
+2. MPI rank-coherence — StochasticForcing seeds every rank identically so the
+   global forcing field is coherent across slabs; per-device CURAND streams
+   would decorrelate the ranks.
 
-Note: Uses CUDA's default RNG (CURAND). For reproducible results,
-use `CUDA.seed!(seed)` before simulation.
+`_try_gpu_rand!` receives no `rng` argument, so the seeded draw cannot happen
+here; returning `false` routes control to the caller's rng-based path.
 """
-function Tarang._try_gpu_rand!(phases::CuArray{T}) where {T<:AbstractFloat}
-    CUDA.rand!(phases)
-    return true
-end
+Tarang._try_gpu_rand!(phases::CuArray{T}) where {T<:AbstractFloat} = false
 
 # ============================================================================
 # GPU-Native Spectral Padding/Truncation for 3/2-Rule Dealiasing
@@ -768,6 +839,16 @@ function Tarang._pad_spectral!(padded::CuArray{Complex{T}}, spec_data::CuArray{C
             padded[1:N] .= spec_data[1:N]
         end
     end
+
+    # Split the even-N Nyquist symmetrically across ±N/2 so the padded spectrum
+    # stays Hermitian for real fields — EXACTLY as the CPU `_pad_spectral!` does
+    # after its copy step. The index maps above (kernel `_gpu_padded_idx` and the
+    # 1D slices) copy the full Nyquist bin to +N/2 and leave −N/2 zero; without
+    # this split the padded grid picks up a spurious imaginary part that
+    # contaminates every dealiased product. The helper is pure selectdim views +
+    # broadcast (GPU-compatible; no-op for odd N, which has no Nyquist bin).
+    Tarang._split_nyquist_symmetric!(padded, original_shape, padded_shape, fourier_dims)
+    return padded
 end
 
 """
@@ -780,6 +861,13 @@ function Tarang._truncate_spectral!(result::CuArray{Complex{T}}, padded_spec::Cu
     ensure_device!(Tarang.architecture(result))
     ndim = length(original_shape)
     backend = KernelAbstractions.get_backend(result)
+
+    # Fold the dropped −N/2 image into the +N/2 plane (in place, BEFORE the copy)
+    # along each even-N Fourier axis — EXACTLY as the CPU `_truncate_spectral!`
+    # does — so the copy below picks up the FULL Nyquist coefficient instead of
+    # only the +N/2 half. Pure selectdim views + broadcast (GPU-compatible;
+    # no-op for odd N).
+    Tarang._fold_nyquist_into_positive!(padded_spec, original_shape, padded_shape, fourier_dims)
 
     if ndim == 2
         N1, N2 = original_shape
