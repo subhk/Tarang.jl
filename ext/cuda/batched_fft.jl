@@ -222,13 +222,33 @@ The FFT is truly asynchronous - call CUDA.synchronize(stream) to wait for comple
 Uses CUDA.stream! context manager which properly integrates with CUDA.jl's
 internal stream management (update_stream) so the plan correctly tracks
 which stream it's executing on.
+
+For real plans (`plan.is_real`), the C2R (irfft) transform is DESTRUCTIVE on
+its input buffer (cuFFT convention, same as FFTW). The input is copied into a
+freshly allocated scratch before the `mul!` so the caller's coefficient buffer
+is never corrupted — mirrors the guard in `gpu_backward_fft!` (a fresh
+allocation, not the shared `get_gpu_dct_scratch` cache, because async/stream
+execution must not race other users of the shared scratch).
 """
 function gpu_ifft_async!(output::CuArray, input::CuArray, plan::GPUFFTPlan; stream=nothing, synchronize::Bool=false)
     if stream !== nothing
         CUDA.stream!(stream) do
-            mul!(output, plan.iplan, input)
+            _gpu_ifft_exec!(output, input, plan)
         end
         synchronize && CUDA.synchronize(stream)
+    else
+        _gpu_ifft_exec!(output, input, plan)
+    end
+    return output
+end
+
+# Execute the inverse transform, guarding the caller's input against cuFFT's
+# destructive C2R. C2C inverse is non-destructive — no copy needed.
+function _gpu_ifft_exec!(output::CuArray, input::CuArray, plan::GPUFFTPlan)
+    if plan.is_real
+        scratch = similar(input)
+        copyto!(scratch, input)
+        mul!(output, plan.iplan, scratch)
     else
         mul!(output, plan.iplan, input)
     end

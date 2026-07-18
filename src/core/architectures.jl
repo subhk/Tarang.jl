@@ -115,14 +115,14 @@ function _gpu_device(device_id::Integer)
     error("""
         GPU architecture requires CUDA.jl to be loaded.
 
-        Please add CUDA.jl to your project and load it:
-            using Pkg
-            Pkg.add("CUDA")
-            using CUDA
-            using Tarang
+            Please add CUDA.jl to your project and load it:
+                using Pkg
+                Pkg.add("CUDA")
+                using CUDA
+                using Tarang
 
-            arch = GPU()
-        """)
+                arch = GPU()
+            """)
 end
 
 function GPU(; device_id::Int = 0)
@@ -130,7 +130,7 @@ function GPU(; device_id::Int = 0)
     return GPU{typeof(gpu_device)}(gpu_device)
 end
 
-# Placeholder methods - overridden by CUDA extension
+# Placeholder methods - the CUDA extension adds GPU{CuDevice}-specific methods
 device(gpu::GPU) = gpu.device
 array_type(::GPU) = error("GPU array_type requires CUDA.jl to be loaded")
 array_type(::GPU, T::Type) = error("GPU array_type requires CUDA.jl to be loaded")
@@ -231,10 +231,12 @@ function Base.zeros(arch::CPU, T::Type, dims::Integer...)
 end
 
 function Base.zeros(arch::GPU, T::Type, dims::Integer...)
-    # For GPU, use the array_type which returns CuArray{T}
-    # CUDA.jl provides zeros(CuArray{T}, dims...) method
+    # Generic-GPU fallback (the CUDA extension provides a device-aware
+    # GPU{CuDevice} method). `similar(AT, dims)` works for any array type
+    # exposing the AT(undef, dims) constructor; there is no array-type-first
+    # `zeros` method to call.
     AT = array_type(arch, T)
-    return zeros(AT, dims...)
+    return fill!(similar(AT, dims), zero(T))
 end
 
 function Base.zeros(arch::AbstractArchitecture, T::Type, dims::Tuple{Vararg{Integer}})
@@ -252,10 +254,9 @@ function Base.ones(arch::CPU, T::Type, dims::Integer...)
 end
 
 function Base.ones(arch::GPU, T::Type, dims::Integer...)
-    # For GPU, use the array_type which returns CuArray{T}
-    # CUDA.jl provides ones(CuArray{T}, dims...) method
+    # Generic-GPU fallback (see zeros above): no array-type-first `ones` exists.
     AT = array_type(arch, T)
-    return ones(AT, dims...)
+    return fill!(similar(AT, dims), one(T))
 end
 
 function Base.ones(arch::AbstractArchitecture, T::Type, dims::Tuple{Vararg{Integer}})
@@ -304,7 +305,8 @@ is_gpu(::GPU) = true
 """
     has_cuda()
 
-Check if CUDA is available (placeholder - set by extension).
+Check if CUDA is available. The CUDA extension registers `CUDA.functional`
+here from its `__init__`; without the extension this is always `false`.
 """
 _cuda_functional(::Any) = false
 has_cuda() = _cuda_functional(Val(:cuda))

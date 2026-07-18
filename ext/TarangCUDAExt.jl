@@ -30,7 +30,7 @@ using Tarang: synchronize, unsafe_free!, has_cuda
 using Tarang: ScalarField, VectorField, Distributor, Domain, Basis
 using Tarang: get_local_data, set_local_data!
 using Tarang: get_grid_data, get_coeff_data, set_grid_data!, set_coeff_data!
-using Tarang: is_gpu_array, gpu_forward_transform!, gpu_backward_transform!, should_use_gpu_fft
+using Tarang: is_gpu_array, should_use_gpu_fft
 using Tarang: _gpu_chebyshev_deriv!
 using Tarang: RealFourier, ComplexFourier, ChebyshevT, Legendre
 using Tarang: DistributedGPUFFT
@@ -161,15 +161,27 @@ export gpu_memory_info, check_gpu_memory
 # Internal allocation helpers are NOT exported - use Base.zeros/ones/similar with GPU arch instead
 # These functions are internal: _gpu_zeros, _gpu_ones, _gpu_similar, _gpu_fill
 
-function __init__()
-    # Tarang may be loaded before CUDA. In that order Tarang.__init__ cannot see
-    # this extension yet, so register CUDA matrix solvers when it becomes live.
-    Tarang._init_gpu_solvers!()
-end
-
 # Transpose kernels for TransposableField
 export pack_for_transpose_kernel_3d!, pack_for_transpose_kernel_2d!
 export unpack_from_transpose_kernel_3d!, unpack_from_transpose_kernel_2d!
 export gpu_pack_for_transpose!, gpu_unpack_from_transpose!
+
+# ============================================================================
+# Extension initialization
+# ============================================================================
+# Everything that cannot be expressed as a dispatch-differentiated method
+# (zero-arg functions, same-signature replacements, solver registration) is
+# registered through hooks here. This also fixes GPU solver activation:
+# `Base.get_extension` inside Tarang.__init__ always ran BEFORE this extension
+# loaded, so CUDA_AVAILABLE was never set.
+function __init__()
+    # GPU()/has_cuda() are dispatch-differentiated (Tarang._gpu_device /
+    # Tarang._cuda_functional methods in architecture.jl); only the pieces that
+    # cannot be expressed as more-specific methods are registered here.
+    Tarang._GPU_FORWARD_TRANSFORM_HOOK[] = _gpu_forward_transform_impl!
+    Tarang._GPU_BACKWARD_TRANSFORM_HOOK[] = _gpu_backward_transform_impl!
+    Tarang._activate_gpu_solvers!(CUDA)
+    return nothing
+end
 
 end # module TarangCUDAExt

@@ -129,14 +129,15 @@ end
 # FFT-based Batched DCT for 3D Arrays
 # ============================================================================
 
-# Cache for batched R2C / C2R plans (keyed by device, shape, dim)
-const _BATCHED_RFFT_CACHE = Dict{Tuple{Int, Tuple, Int}, Any}()
-const _BATCHED_IRFFT_CACHE = Dict{Tuple{Int, Tuple, Int, Int}, Any}()
+# Cache for batched R2C / C2R plans (keyed by device, shape, dim, ELEMENT TYPE —
+# omitting T would hand a Float64 plan to a same-shape Float32 call, or vice versa)
+const _BATCHED_RFFT_CACHE = Dict{Tuple{Int, Tuple, Int, DataType}, Any}()
+const _BATCHED_IRFFT_CACHE = Dict{Tuple{Int, Tuple, Int, Int, DataType}, Any}()
 const _BATCHED_DCT_CACHE_LOCK = ReentrantLock()
 
 function _get_batched_rfft_plan(shape::Tuple, dim::Int, ::Type{T}) where T
     device_id = _current_device_id()
-    key = (device_id, shape, dim)
+    key = (device_id, shape, dim, T)
     lock(_BATCHED_DCT_CACHE_LOCK)
     try
         if !haskey(_BATCHED_RFFT_CACHE, key)
@@ -151,7 +152,7 @@ end
 
 function _get_batched_irfft_plan(shape::Tuple, dim::Int, n_out::Int, ::Type{T}) where T
     device_id = _current_device_id()
-    key = (device_id, shape, dim, n_out)
+    key = (device_id, shape, dim, n_out, T)
     lock(_BATCHED_DCT_CACHE_LOCK)
     try
         if !haskey(_BATCHED_IRFFT_CACHE, key)
@@ -262,7 +263,10 @@ Prepares complex array for C2R IFFT from DCT coefficients.
             if freq == 1
                 complex_out[1, j, k] = coeffs[1, j, k] * scale_zero * twiddle_inv[1]
             elseif freq == half_N_plus1
-                complex_out[freq, j, k] = coeffs[freq, j, k] * scale_pos * twiddle_inv[freq]
+                # Nyquist: C2R input bin must be REAL = √2·S_{N/2} — regular branch
+                # with the mirror partner being itself: (S - i·S)·e^{iπ/4} = √2·S.
+                s = coeffs[freq, j, k] * scale_pos
+                complex_out[freq, j, k] = Complex(s, -s) * twiddle_inv[freq]
             else
                 sr = coeffs[freq, j, k] * scale_pos
                 si = -coeffs[N - freq + 2, j, k] * scale_pos
@@ -288,7 +292,9 @@ end
             if freq == 1
                 complex_out[i, 1, k] = coeffs[i, 1, k] * scale_zero * twiddle_inv[1]
             elseif freq == half_N_plus1
-                complex_out[i, freq, k] = coeffs[i, freq, k] * scale_pos * twiddle_inv[freq]
+                # Nyquist: C2R input bin must be REAL = √2·S_{N/2} (see dim-1 kernel).
+                s = coeffs[i, freq, k] * scale_pos
+                complex_out[i, freq, k] = Complex(s, -s) * twiddle_inv[freq]
             else
                 sr = coeffs[i, freq, k] * scale_pos
                 si = -coeffs[i, N - freq + 2, k] * scale_pos
@@ -314,7 +320,9 @@ end
             if freq == 1
                 complex_out[i, j, 1] = coeffs[i, j, 1] * scale_zero * twiddle_inv[1]
             elseif freq == half_N_plus1
-                complex_out[i, j, freq] = coeffs[i, j, freq] * scale_pos * twiddle_inv[freq]
+                # Nyquist: C2R input bin must be REAL = √2·S_{N/2} (see dim-1 kernel).
+                s = coeffs[i, j, freq] * scale_pos
+                complex_out[i, j, freq] = Complex(s, -s) * twiddle_inv[freq]
             else
                 sr = coeffs[i, j, freq] * scale_pos
                 si = -coeffs[i, j, N - freq + 2] * scale_pos
@@ -348,6 +356,12 @@ function local_dct_along_dim!(output::CuArray{T, 3}, input::CuArray{T, 3},
     Nx, Ny, Nz = size(input)
     N = size(input, dim)
     @assert size(output) == size(input) "Output and input must have same size"
+    # The twiddle kernels index dct_plan.twiddle(_inv)[1:N÷2+1] under @inbounds —
+    # a plan built for a different length would read out of bounds. Fail loudly.
+    if dct_plan.size != N
+        throw(ArgumentError("local_dct_along_dim!: dct_plan.size = $(dct_plan.size) " *
+                            "does not match size(input, $dim) = $N"))
+    end
 
     arch = Tarang.architecture(input)
     half_N_plus1 = N ÷ 2 + 1

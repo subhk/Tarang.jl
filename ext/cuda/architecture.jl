@@ -56,14 +56,18 @@ function Tarang.device(gpu::GPU{CuDevice})
 end
 
 """
-    array_type(::GPU)
+    array_type(::GPU{CuDevice})
 
 Return CuArray as the array type for GPU.
+
+All methods in this extension dispatch on `GPU{CuDevice}` (an ext-owned type
+parameter) — generic `::GPU` signatures would overwrite the same-signature
+error fallbacks in src/core/architectures.jl.
 """
 Tarang.array_type(::GPU{CuDevice}) = CuArray
 
 """
-    array_type(::GPU, T::Type)
+    array_type(::GPU{CuDevice}, T::Type)
 
 Return the concrete CuArray type with element type T.
 """
@@ -147,16 +151,18 @@ Tarang.architecture(arr::CuArray) = GPU{CuDevice}(CUDA.device(arr))
 
 Ensure the correct CUDA device is active for operations on this architecture.
 Call this before any GPU operation that doesn't go through `device(gpu)`.
+
+Must be defined as `Tarang.ensure_device!` — the name is imported via
+`using Tarang: ensure_device!`, and an unqualified definition of an imported
+function is an error at extension load time.
 """
-function ensure_device!(gpu::GPU{CuDevice})
+function Tarang.ensure_device!(gpu::GPU{CuDevice})
     current = CUDA.device()
     if current != gpu.device
         CUDA.device!(gpu.device)
     end
     return nothing
 end
-
-ensure_device!(::GPU) = nothing  # No-op for generic GPU
 
 # ============================================================================
 # Data Movement
@@ -213,6 +219,42 @@ Move GPU CuArray to CPU Array.
 """
 Tarang.on_architecture(::CPU, a::CuArray) = Array(a)
 
+"""
+    on_architecture(::CPU, a::AnyCuArray)
+
+Move a wrapped CuArray (SubArray/ReshapedArray/... view of device memory) to a
+CPU Array. Materialize on the device first — `Array(::SubArray{...,CuArray})`
+would fall back to element-wise scalar indexing.
+"""
+Tarang.on_architecture(::CPU, a::CUDA.AnyCuArray) = Array(CuArray(a))
+
+"""
+    on_architecture(gpu::GPU{CuDevice}, a::AnyCuArray)
+
+Materialize a wrapped CuArray on its own device, then move to `gpu`'s device
+if different.
+"""
+function Tarang.on_architecture(gpu::GPU{CuDevice}, a::CUDA.AnyCuArray)
+    root = _root_cuarray(a)
+    prev_device = CUDA.device()
+    dense = try
+        CUDA.device!(CUDA.device(root))
+        CuArray(a)
+    finally
+        CUDA.device!(prev_device)
+    end
+    return Tarang.on_architecture(gpu, dense)
+end
+
+"""
+    on_architecture(gpu::GPU{CuDevice}, a::AbstractArray)
+
+Generic host-array fallback (ReshapedArray/SubArray/... of host memory):
+materialize to a dense Array, then upload. Without this, `scatter!`'s
+`reshape(slice, shape)` views hit a MethodError on GPU fields.
+"""
+Tarang.on_architecture(gpu::GPU{CuDevice}, a::AbstractArray) = Tarang.on_architecture(gpu, Array(a))
+
 # ============================================================================
 # GPU Utilities
 # ============================================================================
@@ -253,11 +295,30 @@ Tarang.unsafe_free!(::GPU, a::CuArray) = CUDA.unsafe_free!(a)
 # ============================================================================
 
 """
-    is_gpu_array(a::CuArray)
+    is_gpu_array(a)
 
-CuArray is a GPU array.
+Any CuArray — including wrapped forms (SubArray, ReshapedArray,
+PermutedDimsArray, … over a CuArray, i.e. `CUDA.AnyCuArray`) — is a GPU array.
+Covering only bare `CuArray` made views of device memory classify as CPU and
+sent them down FFTW/scalar-indexing paths.
 """
-Tarang.is_gpu_array(::CuArray) = true
+Tarang.is_gpu_array(::CUDA.AnyCuArray) = true
+
+# Walk wrapper parents down to the root CuArray (AnyCuArray guarantees one).
+_root_cuarray(a::CuArray) = a
+function _root_cuarray(a::AbstractArray)
+    p = parent(a)
+    p === a && error("no CuArray root found for $(typeof(a))")
+    return _root_cuarray(p)
+end
+
+"""
+    architecture(arr::AnyCuArray)
+
+Infer GPU architecture from a (possibly wrapped) CuArray, using the device of
+the underlying storage.
+"""
+Tarang.architecture(arr::CUDA.AnyCuArray) = GPU{CuDevice}(CUDA.device(_root_cuarray(arr)))
 
 # ============================================================================
 # Random Utilities
@@ -265,11 +326,16 @@ Tarang.is_gpu_array(::CuArray) = true
 
 function Tarang._fill_random_phases!(arch::GPU{CuDevice}, phases::CuArray{T}, rng::Random.AbstractRNG) where {T}
     ensure_device!(arch)
-    if applicable(CUDA.rand!, rng, phases)
-        CUDA.rand!(rng, phases)
-    else
-        CUDA.rand!(phases)
-    end
-    phases .*= T(2π)
+    # Draw on the HOST rng, then upload. Three reasons this must not use CURAND:
+    # 1. `CUDA.rand!` IS `Random.rand!` — with a host rng (MersenneTwister) the
+    #    generic Random fallback fills the CuArray element-by-element (scalar
+    #    indexing error / ~1000x slowdown).
+    # 2. The user's seed must be honored for reproducibility.
+    # 3. Under MPI, StochasticForcing seeds every rank identically so the global
+    #    forcing field is coherent across slabs — per-device CURAND streams
+    #    would break that contract.
+    host = rand(rng, T, size(phases))
+    host .*= T(2π)
+    copyto!(phases, host)
     return phases
 end

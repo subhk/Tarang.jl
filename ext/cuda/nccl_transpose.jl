@@ -108,6 +108,18 @@ function NCCLTransposeBuffer(pencil::PencilDecomposition, T::Type)
     # Initialize NCCL sub-communicators
     nccl_subcomms = Tarang.init_nccl_subcomms!(pencil.row_comm, pencil.col_comm)
 
+    # A multi-rank pencil without working NCCL sub-communicators must fail
+    # loudly here: silently continuing would let the transposes degrade into
+    # local self-copies and produce completely wrong results.
+    row_size = MPI.Comm_size(pencil.row_comm)
+    col_size = MPI.Comm_size(pencil.col_comm)
+    if (row_size > 1 || col_size > 1) && !nccl_subcomms.initialized
+        error("NCCLTransposeBuffer: NCCL sub-communicator initialization failed for a " *
+              "multi-rank pencil (row_size=$row_size, col_size=$col_size). " *
+              "Load NCCL.jl with `using NCCL` before multi-GPU transposes; " *
+              "see the init_nccl_subcomms! warning for the underlying failure.")
+    end
+
     return NCCLTransposeBuffer{T}(
         send_buffer, recv_buffer,
         zeros(Int, max_peers),
@@ -370,7 +382,12 @@ end
 Perform all-to-all using NCCL grouped send/recv operations.
 
 NCCL does not have a native Alltoallv operation, so we implement it using
-grouped point-to-point send!/recv! operations wrapped in group_start/group_end.
+grouped point-to-point `NCCL.Send`/`NCCL.Recv!` operations wrapped in
+`NCCL.groupStart()`/`NCCL.groupEnd()`.
+
+Complex element types are handled by reinterpreting the buffers to the
+underlying real type at the wire (NCCL has no complex `ncclDataType_t`), with
+all counts and displacements doubled accordingly.
 
 # Arguments
 - `send_buf`: GPU buffer containing data to send
@@ -385,6 +402,18 @@ function nccl_alltoall!(send_buf::CuArray, recv_buf::CuArray,
                          send_counts::Vector{Int}, recv_counts::Vector{Int},
                          send_displs::Vector{Int}, recv_displs::Vector{Int},
                          nccl_comm; my_rank::Int)
+    # NCCL has no complex ncclDataType_t: reinterpret complex buffers to the
+    # underlying real type at the wire and DOUBLE (never halve) every count and
+    # displacement. `reinterpret` on a CuArray returns a memory-sharing CuArray,
+    # so the recursion below runs the identical real-typed path.
+    if eltype(send_buf) <: Complex
+        RT = real(eltype(send_buf))
+        return nccl_alltoall!(reinterpret(RT, send_buf), reinterpret(RT, recv_buf),
+                              2 .* send_counts, 2 .* recv_counts,
+                              2 .* send_displs, 2 .* recv_displs,
+                              nccl_comm; my_rank=my_rank)
+    end
+
     # CRITICAL: Use error() instead of @assert for production safety
     total_send = sum(send_counts)
     total_recv = sum(recv_counts)
@@ -395,8 +424,19 @@ function nccl_alltoall!(send_buf::CuArray, recv_buf::CuArray,
         error("nccl_alltoall!: Recv counts ($total_recv) exceed buffer size ($(length(recv_buf)))")
     end
 
+    nranks = length(send_counts)
+
     if nccl_comm === nothing
-        # Single rank - just copy
+        # The self-copy shortcut is only legal when the communicator genuinely
+        # spans a single rank. With nranks > 1 a missing NCCL communicator means
+        # initialization failed — self-copying would silently produce a wrong
+        # transpose, so throw instead.
+        if nranks != 1
+            error("nccl_alltoall!: NCCL communicator is missing but the transpose spans " *
+                  "$nranks ranks. Refusing the single-rank self-copy fallback, which would " *
+                  "silently produce wrong results. Load NCCL.jl with `using NCCL` before " *
+                  "multi-GPU transposes.")
+        end
         total = sum(send_counts)
         if total > 0
             copyto!(view(recv_buf, 1:total), view(send_buf, 1:total))
@@ -404,12 +444,12 @@ function nccl_alltoall!(send_buf::CuArray, recv_buf::CuArray,
         return
     end
 
-    nranks = length(send_counts)
+    # Resolve the user-loaded NCCL.jl module (Tarang/ext have no NCCL dependency)
+    nccl = Tarang._require_nccl_module()
 
-    # Ensure NCCL is loaded (should be loaded by init_nccl_subcomms!, but verify)
-    if !isdefined(@__MODULE__, :NCCL)
-        @eval using NCCL
-    end
+    # Task-local CUDA stream: pack kernels and the copyto! below are ordered on
+    # this stream, so passing it to NCCL keeps pack -> NCCL -> unpack sound.
+    comm_stream = CUDA.stream()
 
     # Handle self-communication with direct copyto! (NCCL P2P does not support self-send/recv)
     if my_rank >= 0 && send_counts[my_rank+1] > 0
@@ -422,31 +462,36 @@ function nccl_alltoall!(send_buf::CuArray, recv_buf::CuArray,
     end
 
     # NCCL grouped P2P for all remote peers
-    NCCL.group_start()
+    # (real API: NCCL.groupStart()/groupEnd(), NCCL.Send(buf, comm; dest, stream),
+    #  NCCL.Recv!(buf, comm; source, stream))
+    nccl.groupStart()
+    try
+        for peer in 0:(nranks-1)
+            # Skip self — already handled above
+            if peer == my_rank
+                continue
+            end
 
-    for peer in 0:(nranks-1)
-        # Skip self — already handled above
-        if peer == my_rank
-            continue
-        end
+            if send_counts[peer+1] > 0
+                send_start = send_displs[peer+1] + 1
+                send_end = send_start + send_counts[peer+1] - 1
+                send_slice = view(send_buf, send_start:send_end)
+                nccl.Send(send_slice, nccl_comm; dest=peer, stream=comm_stream)
+            end
 
-        if send_counts[peer+1] > 0
-            send_start = send_displs[peer+1] + 1
-            send_end = send_start + send_counts[peer+1] - 1
-            send_slice = view(send_buf, send_start:send_end)
-            NCCL.send!(send_slice, peer, nccl_comm)
+            if recv_counts[peer+1] > 0
+                recv_start = recv_displs[peer+1] + 1
+                recv_end = recv_start + recv_counts[peer+1] - 1
+                recv_slice = view(recv_buf, recv_start:recv_end)
+                nccl.Recv!(recv_slice, nccl_comm; source=peer, stream=comm_stream)
+            end
         end
-
-        if recv_counts[peer+1] > 0
-            recv_start = recv_displs[peer+1] + 1
-            recv_end = recv_start + recv_counts[peer+1] - 1
-            recv_slice = view(recv_buf, recv_start:recv_end)
-            NCCL.recv!(recv_slice, peer, nccl_comm)
-        end
+    finally
+        nccl.groupEnd()
     end
 
-    NCCL.group_end()
-
+    # Block until the grouped NCCL ops on `comm_stream` complete, so the recv
+    # buffer is safe for the unpack kernels that follow.
     CUDA.synchronize()
 end
 
@@ -474,7 +519,7 @@ sizes) may require more sophisticated handling in future versions.
 # Returns
 - Output data in Y-pencil layout (newly allocated)
 """
-function transpose_z_to_y!(buffer::NCCLTransposeBuffer{T},
+function Tarang.transpose_z_to_y!(buffer::NCCLTransposeBuffer{T},
                             data::CuArray{T, 3},
                             pencil::PencilDecomposition) where T
     # CRITICAL: Use error() instead of @assert for production safety
@@ -494,6 +539,14 @@ function transpose_z_to_y!(buffer::NCCLTransposeBuffer{T},
         output = CUDA.zeros(T, pencil.y_pencil_shape...)
         copyto!(reshape(output, :), reshape(data, :))
         return output
+    end
+
+    # Multi-rank transpose requires a live NCCL row communicator; a missing one
+    # would silently degrade into a wrong self-copy inside nccl_alltoall!.
+    if !buffer.nccl_subcomms.initialized || buffer.nccl_subcomms.row_comm === nothing
+        error("transpose_z_to_y!: row communicator spans $row_size ranks but the NCCL row " *
+              "sub-communicator is not initialized. Load NCCL.jl with `using NCCL` before " *
+              "multi-GPU transposes (see the init_nccl_subcomms! warning for the root cause).")
     end
 
     # Compute counts: split Z (fully local) among row_size peers, gather Y
@@ -571,7 +624,7 @@ in future versions.
 # Returns
 - Output data in Z-pencil layout (newly allocated)
 """
-function transpose_y_to_z!(buffer::NCCLTransposeBuffer{T},
+function Tarang.transpose_y_to_z!(buffer::NCCLTransposeBuffer{T},
                             data::CuArray{T, 3},
                             pencil::PencilDecomposition) where T
     # CRITICAL: Use error() instead of @assert for production safety
@@ -590,6 +643,14 @@ function transpose_y_to_z!(buffer::NCCLTransposeBuffer{T},
         output = CUDA.zeros(T, pencil.z_pencil_shape...)
         copyto!(reshape(output, :), reshape(data, :))
         return output
+    end
+
+    # Multi-rank transpose requires a live NCCL row communicator; a missing one
+    # would silently degrade into a wrong self-copy inside nccl_alltoall!.
+    if !buffer.nccl_subcomms.initialized || buffer.nccl_subcomms.row_comm === nothing
+        error("transpose_y_to_z!: row communicator spans $row_size ranks but the NCCL row " *
+              "sub-communicator is not initialized. Load NCCL.jl with `using NCCL` before " *
+              "multi-GPU transposes (see the init_nccl_subcomms! warning for the root cause).")
     end
 
     # For Y->Z transpose: partition Y (send Y-chunks), receive Z-chunks
@@ -671,7 +732,7 @@ in future versions.
 # Returns
 - Output data in X-pencil layout (newly allocated)
 """
-function transpose_y_to_x!(buffer::NCCLTransposeBuffer{T},
+function Tarang.transpose_y_to_x!(buffer::NCCLTransposeBuffer{T},
                             data::CuArray{T, 3},
                             pencil::PencilDecomposition) where T
     # CRITICAL: Use error() instead of @assert for production safety
@@ -690,6 +751,14 @@ function transpose_y_to_x!(buffer::NCCLTransposeBuffer{T},
         output = CUDA.zeros(T, pencil.x_pencil_shape...)
         copyto!(reshape(output, :), reshape(data, :))
         return output
+    end
+
+    # Multi-rank transpose requires a live NCCL col communicator; a missing one
+    # would silently degrade into a wrong self-copy inside nccl_alltoall!.
+    if !buffer.nccl_subcomms.initialized || buffer.nccl_subcomms.col_comm === nothing
+        error("transpose_y_to_x!: col communicator spans $col_size ranks but the NCCL col " *
+              "sub-communicator is not initialized. Load NCCL.jl with `using NCCL` before " *
+              "multi-GPU transposes (see the init_nccl_subcomms! warning for the root cause).")
     end
 
     # Compute counts: split Y (fully local) among col_size peers, gather X
@@ -763,7 +832,7 @@ in future versions.
 # Returns
 - Output data in Y-pencil layout (newly allocated)
 """
-function transpose_x_to_y!(buffer::NCCLTransposeBuffer{T},
+function Tarang.transpose_x_to_y!(buffer::NCCLTransposeBuffer{T},
                             data::CuArray{T, 3},
                             pencil::PencilDecomposition) where T
     # CRITICAL: Use error() instead of @assert for production safety
@@ -782,6 +851,14 @@ function transpose_x_to_y!(buffer::NCCLTransposeBuffer{T},
         output = CUDA.zeros(T, pencil.y_pencil_shape...)
         copyto!(reshape(output, :), reshape(data, :))
         return output
+    end
+
+    # Multi-rank transpose requires a live NCCL col communicator; a missing one
+    # would silently degrade into a wrong self-copy inside nccl_alltoall!.
+    if !buffer.nccl_subcomms.initialized || buffer.nccl_subcomms.col_comm === nothing
+        error("transpose_x_to_y!: col communicator spans $col_size ranks but the NCCL col " *
+              "sub-communicator is not initialized. Load NCCL.jl with `using NCCL` before " *
+              "multi-GPU transposes (see the init_nccl_subcomms! warning for the root cause).")
     end
 
     # For X->Y transpose, we split X among ranks and gather Y
@@ -848,6 +925,11 @@ end
 
 Compute send/recv counts for the specified transpose direction.
 
+The formulas mirror EXACTLY the inline count computations inside the production
+`transpose_z_to_y!`/`transpose_y_to_z!`/`transpose_y_to_x!`/`transpose_x_to_y!`
+(pairwise symmetric, uneven-decomposition-aware, per-rank chunk sizes — never
+full pencil dims). Invariant: `sum(send_counts) == prod(<source pencil shape>)`.
+
 # Arguments
 - `buffer`: Transpose buffer to update counts in
 - `direction`: One of :z_to_y, :y_to_z, :y_to_x, :x_to_y
@@ -862,54 +944,75 @@ function compute_transpose_counts!(buffer::NCCLTransposeBuffer, direction::Symbo
     end
 
     if direction == :z_to_y
-        # Z->Y: distribute Y, gather Z
-        Ny = pencil.global_shape[2]
-        Nz = pencil.global_shape[3]
-        local_shape = pencil.z_pencil_shape
+        # Z->Y (row comm): split our fully-local Z among peers, gather Y.
+        # Source layout is the Z-pencil (Nx_local, Ny_local, Nz_global).
+        Ny_g = pencil.global_shape[2]
+        Nz_g = pencil.global_shape[3]
+        Nx_local = pencil.z_pencil_shape[1]
+        Ny_local = pencil.z_pencil_shape[2]
+        row_rank = MPI.Comm_rank(pencil.row_comm)
+        Nz_me = div(Nz_g, comm_size) + (row_rank < mod(Nz_g, comm_size) ? 1 : 0)
 
         for i in 1:comm_size
-            chunk_y = div(Ny, comm_size) + ((i-1) < mod(Ny, comm_size) ? 1 : 0)
-            chunk_z = div(Nz, comm_size) + ((i-1) < mod(Nz, comm_size) ? 1 : 0)
-            buffer.send_counts[i] = local_shape[1] * chunk_y * local_shape[3]
-            buffer.recv_counts[i] = local_shape[1] * local_shape[2] * chunk_z
-        end
-    elseif direction == :y_to_x
-        # Y->X: distribute X, gather Y
-        Nx = pencil.global_shape[1]
-        Ny = pencil.global_shape[2]
-        local_shape = pencil.y_pencil_shape
-
-        for i in 1:comm_size
-            chunk_x = div(Nx, comm_size) + ((i-1) < mod(Nx, comm_size) ? 1 : 0)
-            chunk_y = div(Ny, comm_size) + ((i-1) < mod(Ny, comm_size) ? 1 : 0)
-            buffer.send_counts[i] = chunk_x * local_shape[2] * local_shape[3]
-            buffer.recv_counts[i] = pencil.x_pencil_shape[1] * chunk_y * pencil.x_pencil_shape[3]
+            Nz_i = div(Nz_g, comm_size) + ((i-1) < mod(Nz_g, comm_size) ? 1 : 0)
+            Ny_i = div(Ny_g, comm_size) + ((i-1) < mod(Ny_g, comm_size) ? 1 : 0)
+            # Send: our (Nx_local, Ny_local) face × rank i's Nz_i z-slices
+            buffer.send_counts[i] = Nx_local * Ny_local * Nz_i
+            # Recv: rank i's Ny_i y-chunk × our Nz_me z-slices
+            buffer.recv_counts[i] = Nx_local * Ny_i * Nz_me
         end
     elseif direction == :y_to_z
-        # Y->Z, the reverse of Z->Y: distribute Z, gather Y. The transpose is an
-        # Alltoallv, so for the same rank pair send^{Y->Z}[i] == recv^{Z->Y}[i] and
-        # recv^{Y->Z}[i] == send^{Z->Y}[i] — i.e. swap the Z->Y send/recv counts.
-        Ny = pencil.global_shape[2]
-        Nz = pencil.global_shape[3]
-        local_shape = pencil.z_pencil_shape
+        # Y->Z (row comm): split our fully-local Y among peers, gather Z.
+        # Source layout is the Y-pencil (Nx_local, Ny_global, Nz_local).
+        Ny_g = pencil.global_shape[2]
+        Nz_g = pencil.global_shape[3]
+        Nx_local = pencil.y_pencil_shape[1]
+        Nz_local = pencil.y_pencil_shape[3]
+        Ny_local_after = pencil.z_pencil_shape[2]  # our Y chunk after transpose
 
         for i in 1:comm_size
-            chunk_y = div(Ny, comm_size) + ((i-1) < mod(Ny, comm_size) ? 1 : 0)
-            chunk_z = div(Nz, comm_size) + ((i-1) < mod(Nz, comm_size) ? 1 : 0)
-            buffer.send_counts[i] = local_shape[1] * local_shape[2] * chunk_z
-            buffer.recv_counts[i] = local_shape[1] * chunk_y * local_shape[3]
+            Ny_i = div(Ny_g, comm_size) + ((i-1) < mod(Ny_g, comm_size) ? 1 : 0)
+            Nz_i = div(Nz_g, comm_size) + ((i-1) < mod(Nz_g, comm_size) ? 1 : 0)
+            # Send: rank i's Ny_i y-chunk × our Nz_local z-slices
+            buffer.send_counts[i] = Nx_local * Ny_i * Nz_local
+            # Recv: our Ny_local_after y-chunk × rank i's Nz_i z-slices
+            buffer.recv_counts[i] = Nx_local * Ny_local_after * Nz_i
+        end
+    elseif direction == :y_to_x
+        # Y->X (col comm): split our fully-local Y among peers, gather X.
+        # Source layout is the Y-pencil (Nx_local, Ny_global, Nz_local).
+        Nx_g = pencil.global_shape[1]
+        Ny_g = pencil.global_shape[2]
+        Nx_local = pencil.y_pencil_shape[1]
+        Nz_local = pencil.y_pencil_shape[3]
+        col_rank = MPI.Comm_rank(pencil.col_comm)
+        Ny_me = div(Ny_g, comm_size) + (col_rank < mod(Ny_g, comm_size) ? 1 : 0)
+
+        for i in 1:comm_size
+            Ny_i = div(Ny_g, comm_size) + ((i-1) < mod(Ny_g, comm_size) ? 1 : 0)
+            Nx_i = div(Nx_g, comm_size) + ((i-1) < mod(Nx_g, comm_size) ? 1 : 0)
+            # Send: our (Nx_local, Nz_local) face × rank i's Ny_i y-slices
+            buffer.send_counts[i] = Nx_local * Ny_i * Nz_local
+            # Recv: rank i's Nx_i x-chunk × our Ny_me y-slices
+            buffer.recv_counts[i] = Nx_i * Ny_me * Nz_local
         end
     elseif direction == :x_to_y
-        # X->Y, the reverse of Y->X: distribute Y, gather X. Swap the Y->X
-        # send/recv counts by the same transpose-symmetry identity.
-        Nx = pencil.global_shape[1]
-        Ny = pencil.global_shape[2]
+        # X->Y (col comm): split our fully-local X among peers, gather Y.
+        # Source layout is the X-pencil (Nx_global, Ny_local, Nz_local).
+        Nx_g = pencil.global_shape[1]
+        Ny_g = pencil.global_shape[2]
+        Ny_local = pencil.x_pencil_shape[2]
+        Nz_local = pencil.x_pencil_shape[3]
+        col_rank = MPI.Comm_rank(pencil.col_comm)
+        Nx_me = div(Nx_g, comm_size) + (col_rank < mod(Nx_g, comm_size) ? 1 : 0)
 
         for i in 1:comm_size
-            chunk_x = div(Nx, comm_size) + ((i-1) < mod(Nx, comm_size) ? 1 : 0)
-            chunk_y = div(Ny, comm_size) + ((i-1) < mod(Ny, comm_size) ? 1 : 0)
-            buffer.send_counts[i] = pencil.x_pencil_shape[1] * chunk_y * pencil.x_pencil_shape[3]
-            buffer.recv_counts[i] = chunk_x * pencil.y_pencil_shape[2] * pencil.y_pencil_shape[3]
+            Nx_i = div(Nx_g, comm_size) + ((i-1) < mod(Nx_g, comm_size) ? 1 : 0)
+            Ny_i = div(Ny_g, comm_size) + ((i-1) < mod(Ny_g, comm_size) ? 1 : 0)
+            # Send: rank i's Nx_i x-slices × our (Ny_local, Nz_local)
+            buffer.send_counts[i] = Nx_i * Ny_local * Nz_local
+            # Recv: our Nx_me x-chunk × rank i's Ny_i y-slices
+            buffer.recv_counts[i] = Nx_me * Ny_i * Nz_local
         end
     else
         error("compute_transpose_counts!: unsupported direction $direction " *

@@ -896,6 +896,48 @@ end
 
 const NCCL_CONFIG = NCCLConfig()
 
+# ----------------------------------------------------------------------------
+# Runtime NCCL.jl module resolution
+#
+# Tarang does NOT depend on NCCL.jl, so `using NCCL` (or any static `NCCL.foo`
+# reference) from package code can never work. The user must load NCCL.jl in
+# their session (`using NCCL`) before multi-GPU transposes; we then locate the
+# already-loaded root module in `Base.loaded_modules` and route every NCCL call
+# through the resolved module object. The result is cached in a `Ref{Any}`.
+# ----------------------------------------------------------------------------
+const _NCCL_MODULE = Ref{Any}(nothing)
+
+"""
+    _find_nccl_module() -> Union{Module, Nothing}
+
+Scan `Base.loaded_modules` for a root module named "NCCL" and cache it.
+Returns `nothing` when NCCL.jl has not been loaded.
+"""
+function _find_nccl_module()
+    _NCCL_MODULE[] === nothing || return _NCCL_MODULE[]
+    for (pkgid, mod) in Base.loaded_modules
+        if pkgid.name == "NCCL" && mod isa Module
+            _NCCL_MODULE[] = mod
+            return mod
+        end
+    end
+    return nothing
+end
+
+"""
+    _require_nccl_module() -> Module
+
+Like [`_find_nccl_module`](@ref) but throws a descriptive error when NCCL.jl
+is not loaded.
+"""
+function _require_nccl_module()
+    mod = _find_nccl_module()
+    if mod === nothing
+        error("NCCL.jl is not loaded. Load NCCL.jl with `using NCCL` before multi-GPU transposes.")
+    end
+    return mod
+end
+
 """
     NCCLSubComms
 
@@ -952,14 +994,27 @@ end
 function init_nccl_subcomms!(row_mpi_comm::MPI.Comm, col_mpi_comm::MPI.Comm)
     subcomms = NCCLSubComms()
 
+    # A multi-rank communicator without NCCL cannot be silently ignored: the
+    # transposes would degrade into local self-copies and produce wrong answers.
+    multi_rank = MPI.Comm_size(row_mpi_comm) > 1 || MPI.Comm_size(col_mpi_comm) > 1
+
     if !has_cuda()
-        @debug "NCCL sub-comm initialization skipped - CUDA not available"
+        if multi_rank
+            @warn "NCCL sub-comm initialization skipped - CUDA not available; multi-GPU transposes will fail loudly rather than fall back"
+        else
+            @debug "NCCL sub-comm initialization skipped - CUDA not available"
+        end
         return subcomms
     end
 
-    # Check if NCCL is available (requires NCCL.jl to be loaded)
+    # Check if NCCL is available (requires the user to have loaded NCCL.jl)
     if !nccl_available() && !_try_load_nccl()
-        @debug "NCCL sub-comm initialization skipped - NCCL not available"
+        if multi_rank
+            @warn "NCCL sub-comm initialization skipped - NCCL.jl is not loaded. " *
+                  "Load NCCL.jl with `using NCCL` before multi-GPU transposes."
+        else
+            @debug "NCCL sub-comm initialization skipped - NCCL not available"
+        end
         return subcomms
     end
 
@@ -995,7 +1050,7 @@ function init_nccl_subcomms!(row_mpi_comm::MPI.Comm, col_mpi_comm::MPI.Comm)
         @debug "NCCL sub-communicators initialized" row_rank=row_rank row_size=row_size col_rank=col_rank col_size=col_size
 
     catch e
-        @debug "NCCL sub-comm initialization failed" exception=(e, catch_backtrace())
+        @warn "NCCL sub-comm initialization failed" exception=(e, catch_backtrace())
         subcomms.initialized = false
     end
 
@@ -1026,27 +1081,26 @@ function create_nccl_comm_from_mpi(mpi_comm::MPI.Comm)
     rank = MPI.Comm_rank(mpi_comm)
     nprocs = MPI.Comm_size(mpi_comm)
 
-    # Ensure NCCL is available (load once, then call directly)
-    if !isdefined(Main, :NCCL) && !isdefined(@__MODULE__, :NCCL)
-        @eval using NCCL
-    end
+    # Resolve the user-loaded NCCL.jl module (Tarang has no NCCL dependency)
+    nccl = _require_nccl_module()
+    uid_type = nccl.UniqueID  # NCCL.UniqueID === LibNCCL.ncclUniqueId (128-byte bits type)
 
     # Generate unique ID on rank 0 and broadcast to all ranks
     if rank == 0
-        unique_id = NCCL.UniqueId()
+        unique_id = nccl.UniqueID()
         id_bytes = Vector{UInt8}(reinterpret(UInt8, [unique_id]))
     else
-        id_bytes = Vector{UInt8}(undef, sizeof(NCCL.UniqueId))
+        id_bytes = Vector{UInt8}(undef, sizeof(uid_type))
     end
 
     MPI.Bcast!(id_bytes, mpi_comm; root=0)
 
     if rank != 0
-        unique_id = reinterpret(NCCL.UniqueId, id_bytes)[1]
+        unique_id = reinterpret(uid_type, id_bytes)[1]
     end
 
-    # Create NCCL communicator
-    nccl_comm = NCCL.Communicator(nprocs, rank, unique_id)
+    # Create NCCL communicator (real API: Communicator(nranks, rank; unique_id))
+    nccl_comm = nccl.Communicator(nprocs, rank; unique_id=unique_id)
 
     return nccl_comm
 end
@@ -1054,17 +1108,11 @@ end
 """
     _try_load_nccl()
 
-Attempt to load NCCL.jl dynamically.
-Returns true if successful, false otherwise.
+Check whether NCCL.jl is already loaded in the session (Tarang cannot load it
+itself since NCCL.jl is not a dependency). Returns true if the NCCL module was
+found, false otherwise.
 """
-function _try_load_nccl()
-    try
-        @eval using NCCL
-        return true
-    catch
-        return false
-    end
-end
+_try_load_nccl() = _find_nccl_module() !== nothing
 
 """
     finalize_nccl_subcomms!(subcomms::NCCLSubComms)
@@ -1118,26 +1166,26 @@ function init_nccl!(comm::MPI.Comm)
     size = MPI.Comm_size(comm)
 
     try
-        # Try to load NCCL.jl dynamically
-        # This requires NCCL.jl to be installed
-        @eval using NCCL
+        # NCCL.jl must already be loaded by the user (`using NCCL`)
+        nccl = _require_nccl_module()
+        uid_type = nccl.UniqueID
 
         # Create NCCL unique ID on rank 0 and broadcast
         if rank == 0
-            unique_id = NCCL.UniqueId()
+            unique_id = nccl.UniqueID()
             id_bytes = Vector{UInt8}(reinterpret(UInt8, [unique_id]))
         else
-            id_bytes = Vector{UInt8}(undef, sizeof(NCCL.UniqueId))
+            id_bytes = Vector{UInt8}(undef, sizeof(uid_type))
         end
 
         MPI.Bcast!(id_bytes, comm; root=0)
 
         if rank != 0
-            unique_id = reinterpret(NCCL.UniqueId, id_bytes)[1]
+            unique_id = reinterpret(uid_type, id_bytes)[1]
         end
 
-        # Initialize NCCL communicator
-        nccl_comm = NCCL.Communicator(size, rank, unique_id)
+        # Initialize NCCL communicator (real API: Communicator(nranks, rank; unique_id))
+        nccl_comm = nccl.Communicator(size, rank; unique_id=unique_id)
 
         NCCL_CONFIG.initialized = true
         NCCL_CONFIG.comm_handle = nccl_comm
@@ -1148,7 +1196,7 @@ function init_nccl!(comm::MPI.Comm)
         return true
 
     catch e
-        @debug "NCCL initialization failed: $e"
+        @warn "NCCL initialization failed" exception=(e, catch_backtrace())
         NCCL_CONFIG.initialized = false
         return false
     end
@@ -1168,11 +1216,13 @@ function nccl_allreduce!(data, op::Symbol=:sum)
         error("NCCL not initialized. Call init_nccl! first.")
     end
 
-    # Map operation symbol to NCCL op
+    # Map operation symbol to a reduction function; NCCL.jl converts it via
+    # ncclRedOp_t(::typeof(+)) etc. internally.
     nccl_op = _get_nccl_op(op)
 
-    # Perform all-reduce
-    @eval NCCL.allreduce!($(data), $(data), $(nccl_op), $(NCCL_CONFIG.comm_handle))
+    # Perform all-reduce (real API: Allreduce!(sendrecvbuf, op, comm))
+    nccl = _require_nccl_module()
+    nccl.Allreduce!(data, nccl_op, NCCL_CONFIG.comm_handle)
 
     return data
 end
@@ -1187,7 +1237,9 @@ function nccl_broadcast!(data, root::Int=0)
         error("NCCL not initialized. Call init_nccl! first.")
     end
 
-    @eval NCCL.broadcast!($(data), $(data), $(root), $(NCCL_CONFIG.comm_handle))
+    # Real API: Broadcast!(sendrecvbuf, comm; root)
+    nccl = _require_nccl_module()
+    nccl.Broadcast!(data, NCCL_CONFIG.comm_handle; root=root)
     return data
 end
 
@@ -1201,24 +1253,28 @@ function nccl_allgather!(recv_data, send_data)
         error("NCCL not initialized. Call init_nccl! first.")
     end
 
-    @eval NCCL.allgather!($(recv_data), $(send_data), $(NCCL_CONFIG.comm_handle))
+    # Real API: Allgather!(sendbuf, recvbuf, comm)
+    nccl = _require_nccl_module()
+    nccl.Allgather!(send_data, recv_data, NCCL_CONFIG.comm_handle)
     return recv_data
 end
 
 """
     _get_nccl_op(op::Symbol)
 
-Convert operation symbol to NCCL operation type.
+Convert operation symbol to a reduction function accepted by NCCL.jl's
+collectives (which map `+`, `*`, `max`, `min` to ncclSum/ncclProd/ncclMax/ncclMin
+via `ncclRedOp_t`). Avoids any static NCCL binding reference.
 """
 function _get_nccl_op(op::Symbol)
     if op == :sum
-        return @eval NCCL.ncclSum
+        return +
     elseif op == :prod
-        return @eval NCCL.ncclProd
+        return *
     elseif op == :max
-        return @eval NCCL.ncclMax
+        return max
     elseif op == :min
-        return @eval NCCL.ncclMin
+        return min
     else
         error("Unsupported NCCL operation: $op")
     end
