@@ -87,25 +87,44 @@ x = solve(solver, b)
 # Only load GPU solvers if CUDA is available
 const CUDA_AVAILABLE = Ref(false)
 
+# The CUDA module itself, registered by the extension's __init__. src code must
+# not reference `CUDA.` directly (CUDA is only a weakdep — the binding does not
+# exist in Tarang); everything below goes through these getters.
+const _CUDA_MOD = Ref{Any}(nothing)
+
+function _cuda()
+    m = _CUDA_MOD[]
+    m === nothing && error("CUDA.jl is not loaded — GPU solvers unavailable. Run `using CUDA` before constructing GPU solvers.")
+    return m::Module
+end
+
+_cusolver() = _cuda().CUSOLVER
+_cusparse() = _cuda().CUSPARSE
+
+"""
+    _activate_gpu_solvers!(cuda_module::Module)
+
+Called by TarangCUDAExt.__init__ once the extension is loaded. Records the CUDA
+module, flips `CUDA_AVAILABLE`, and registers the GPU solver constructors in
+the solver registry.
+"""
+function _activate_gpu_solvers!(cuda_module::Module)
+    _CUDA_MOD[] = cuda_module
+    CUDA_AVAILABLE[] = true
+    _register_gpu_solvers()
+    @debug "GPU matrix solvers enabled (CUDA extension active)"
+    return nothing
+end
+
 """
     _init_gpu_solvers!()
 
-Initialize GPU matrix solvers if CUDA is available.
-Called from the main module __init__ function.
+Legacy hook kept for the main module `__init__`. Extension loading always
+happens AFTER the parent package's `__init__`, so `Base.get_extension` can
+never see TarangCUDAExt here — actual activation is driven by the extension
+itself via `_activate_gpu_solvers!`. This function is now a no-op.
 """
-function _init_gpu_solvers!()
-    # Check if CUDA extension is loaded (provides GPU helper implementations)
-    try
-        cuda_mod = Base.get_extension(@__MODULE__, :TarangCUDAExt)
-        if cuda_mod !== nothing
-            CUDA_AVAILABLE[] = true
-            _register_gpu_solvers()
-            @info "GPU matrix solvers enabled (CUDA available via extension)"
-        end
-    catch e
-        @debug "GPU solver initialization failed: $e"
-    end
-end
+_init_gpu_solvers!() = nothing
 
 # Import from parent MatSolvers module
 using ..MatSolvers: AbstractMatSolver, register_solver, SOLVER_REGISTRY
@@ -182,8 +201,10 @@ abstract type AbstractPreconditioner end
 
 struct NoPreconditioner <: AbstractPreconditioner end
 
-struct DiagonalPreconditioner{T} <: AbstractPreconditioner
-    diag_inv::Any  # CuVector{T}
+# Type parameter is the stored vector type (a CuVector on GPU). A field typed
+# `Any` with an undeducible {T} made the struct unconstructible.
+struct DiagonalPreconditioner{V} <: AbstractPreconditioner
+    diag_inv::V
 end
 
 struct CustomPreconditioner{F} <: AbstractPreconditioner
@@ -285,7 +306,7 @@ function CuDenseLU(matrix::AbstractMatrix; kwargs...)
 
     # Perform LU factorization on GPU
     # cusolverDnXgetrf computes LU factorization in-place
-    CUDA.CUSOLVER.getrf!(A_gpu, ipiv)
+    _cusolver().getrf!(A_gpu, ipiv)
 
     return CuDenseLU{T}(A_gpu, nothing, ipiv, nothing, n)
 end
@@ -296,7 +317,7 @@ function MatSolvers.solve(s::CuDenseLU{T}, rhs::AbstractVector) where T
 
     # Solve using pre-factored LU
     # cusolverDnXgetrs solves A*X = B using LU factorization
-    CUDA.CUSOLVER.getrs!('N', s.A_gpu, s.ipiv, b_gpu)
+    _cusolver().getrs!('N', s.A_gpu, s.ipiv, b_gpu)
 
     # Return result (caller decides if they want CPU or GPU)
     return b_gpu
@@ -353,7 +374,7 @@ IMEX-RK solvers that rebuild `(M + dt*a_ii*L)` with a new `dt`.
   rebuild. Still safe to call; the interface matches the CPU path.
 """
 mutable struct CuSparseLU{T} <: AbstractMatSolver
-    A_csr::Any   # CUDA.CUSPARSE.CuSparseMatrixCSR{T, Int32}
+    A_csr::Any   # _cusparse().CuSparseMatrixCSR{T, Int32}
     factor::Any
     backend::Symbol
     tol::Float64
@@ -380,31 +401,31 @@ function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e
     nnzA = Cint(nnz(matrix))
     rowptrA, colindA, valsA = _host_csr(matrix)
 
-    sp_handle = CUDA.CUSOLVER.sparse_handle()
-    descA = CUDA.CUSPARSE.CuMatrixDescriptor('G', 'L', 'N', 'O')
-    info_ref = Ref{CUDA.CUSOLVER.csrluInfoHost_t}()
-    CUDA.CUSOLVER.cusolverSpCreateCsrluInfoHost(info_ref)
+    sp_handle = _cusolver().sparse_handle()
+    descA = _cusparse().CuMatrixDescriptor('G', 'L', 'N', 'O')
+    info_ref = Ref{_cusolver().csrluInfoHost_t}()
+    _cusolver().cusolverSpCreateCsrluInfoHost(info_ref)
     info = info_ref[]
 
-    CUDA.CUSOLVER.cusolverSpXcsrluAnalysisHost(sp_handle, Cint(n), nnzA, descA, rowptrA, colindA, info)
+    _cusolver().cusolverSpXcsrluAnalysisHost(sp_handle, Cint(n), nnzA, descA, rowptrA, colindA, info)
 
     internal_bytes = Ref{Csize_t}(0)
     workspace_bytes = Ref{Csize_t}(0)
-    CUDA.CUSOLVER.cusolverSpDcsrluBufferInfoHost(sp_handle, Cint(n), nnzA, descA,
+    _cusolver().cusolverSpDcsrluBufferInfoHost(sp_handle, Cint(n), nnzA, descA,
                                                  valsA, rowptrA, colindA, info,
                                                  internal_bytes, workspace_bytes)
     workspace = Vector{UInt8}(undef, Int(workspace_bytes[]))
-    CUDA.CUSOLVER.cusolverSpDcsrluFactorHost(sp_handle, Cint(n), nnzA, descA,
+    _cusolver().cusolverSpDcsrluFactorHost(sp_handle, Cint(n), nnzA, descA,
                                              valsA, rowptrA, colindA, info,
                                              Float64(tol), pointer(workspace))
 
     singularity = Ref{Cint}(-1)
-    CUDA.CUSOLVER.cusolverSpDcsrluZeroPivotHost(sp_handle, info, Float64(tol), singularity)
+    _cusolver().cusolverSpDcsrluZeroPivotHost(sp_handle, info, Float64(tol), singularity)
     singularity[] >= 0 && throw(SingularException(Int(singularity[])))
 
     nnzL = Ref{Cint}(0)
     nnzU = Ref{Cint}(0)
-    CUDA.CUSOLVER.cusolverSpXcsrluNnzHost(sp_handle, nnzL, nnzU, info)
+    _cusolver().cusolverSpXcsrluNnzHost(sp_handle, nnzL, nnzU, info)
 
     P = Vector{Cint}(undef, n)
     Q = Vector{Cint}(undef, n)
@@ -414,23 +435,23 @@ function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e
     rowptrU = Vector{Cint}(undef, n + 1)
     colindU = Vector{Cint}(undef, Int(nnzU[]))
     valsU = Vector{Float64}(undef, Int(nnzU[]))
-    descL = CUDA.CUSPARSE.CuMatrixDescriptor('G', 'L', 'U', 'O')
-    descU = CUDA.CUSPARSE.CuMatrixDescriptor('G', 'U', 'N', 'O')
+    descL = _cusparse().CuMatrixDescriptor('G', 'L', 'U', 'O')
+    descU = _cusparse().CuMatrixDescriptor('G', 'U', 'N', 'O')
 
-    CUDA.CUSOLVER.cusolverSpDcsrluExtractHost(sp_handle, P, Q,
+    _cusolver().cusolverSpDcsrluExtractHost(sp_handle, P, Q,
                                               descL, valsL, rowptrL, colindL,
                                               descU, valsU, rowptrU, colindU,
                                               info, pointer(workspace))
-    CUDA.CUSOLVER.cusolverSpDestroyCsrluInfoHost(info)
+    _cusolver().cusolverSpDestroyCsrluInfoHost(info)
 
-    handle_ref = Ref{CUDA.CUSOLVER.cusolverRfHandle_t}()
-    CUDA.CUSOLVER.cusolverRfCreate(handle_ref)
+    handle_ref = Ref{_cusolver().cusolverRfHandle_t}()
+    _cusolver().cusolverRfCreate(handle_ref)
     handle = handle_ref[]
-    CUDA.CUSOLVER.cusolverRfSetMatrixFormat(handle,
-        CUDA.CUSOLVER.CUSOLVERRF_MATRIX_FORMAT_CSR,
-        CUDA.CUSOLVER.CUSOLVERRF_UNIT_DIAGONAL_ASSUMED_L)
-    CUDA.CUSOLVER.cusolverRfSetResetValuesFastMode(handle,
-        CUDA.CUSOLVER.CUSOLVERRF_RESET_VALUES_FAST_MODE_ON)
+    _cusolver().cusolverRfSetMatrixFormat(handle,
+        _cusolver().CUSOLVERRF_MATRIX_FORMAT_CSR,
+        _cusolver().CUSOLVERRF_UNIT_DIAGONAL_ASSUMED_L)
+    _cusolver().cusolverRfSetResetValuesFastMode(handle,
+        _cusolver().CUSOLVERRF_RESET_VALUES_FAST_MODE_ON)
 
     A_rowptr_gpu = _gpu_array(rowptrA, Int32)
     A_colind_gpu = _gpu_array(colindA, Int32)
@@ -444,13 +465,13 @@ function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e
     P_gpu = _gpu_array(P, Int32)
     Q_gpu = _gpu_array(Q, Int32)
 
-    CUDA.CUSOLVER.cusolverRfSetupDevice(Cint(n), nnzA,
+    _cusolver().cusolverRfSetupDevice(Cint(n), nnzA,
                                         A_rowptr_gpu, A_colind_gpu, A_vals_gpu,
                                         nnzL[], L_rowptr_gpu, L_colind_gpu, L_vals_gpu,
                                         nnzU[], U_rowptr_gpu, U_colind_gpu, U_vals_gpu,
                                         P_gpu, Q_gpu, handle)
-    CUDA.CUSOLVER.cusolverRfAnalyze(handle)
-    CUDA.CUSOLVER.cusolverRfRefactor(handle)
+    _cusolver().cusolverRfAnalyze(handle)
+    _cusolver().cusolverRfRefactor(handle)
 
     rf = CuSparseRF{Float64}(handle,
                              A_rowptr_gpu, A_colind_gpu, A_vals_gpu,
@@ -459,7 +480,7 @@ function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e
                              P_gpu, Q_gpu, n)
     finalizer(rf) do _
         try
-            CUDA.CUSOLVER.cusolverRfDestroy(handle)
+            _cusolver().cusolverRfDestroy(handle)
         catch
         end
     end
@@ -467,8 +488,8 @@ function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e
 end
 
 function _build_sparse_qr(A_csr, ::Type{T}, tol::Real) where {T}
-    factor = CUDA.CUSOLVER.SparseQR(A_csr)
-    CUDA.CUSOLVER.spqr_factorise(factor, A_csr, Float64(tol))
+    factor = _cusolver().SparseQR(A_csr)
+    _cusolver().spqr_factorise(factor, A_csr, Float64(tol))
     return factor
 end
 
@@ -511,10 +532,10 @@ function MatSolvers.solve(s::CuSparseLU{T}, rhs::AbstractVector) where T
         # read garbage. Put the RHS in XF (x_gpu) and give it a separate scratch buffer.
         copyto!(x_gpu, b_gpu)
         temp = similar(b_gpu)
-        CUDA.CUSOLVER.cusolverRfSolve(rf.handle, rf.P, rf.Q, Cint(1),
+        _cusolver().cusolverRfSolve(rf.handle, rf.P, rf.Q, Cint(1),
                                       temp, Cint(rf.n), x_gpu, Cint(rf.n))
     else
-        CUDA.CUSOLVER.spqr_solve(s.factor, b_gpu, x_gpu)
+        _cusolver().spqr_solve(s.factor, b_gpu, x_gpu)
     end
     return x_gpu
 end
@@ -531,7 +552,7 @@ step compared to rebuilding from scratch.
 
 For the `:qr` backend (complex matrices or Float64-RF-unavailable
 fallback), the fast path updates `solver.A_csr.nzVal` in place (from
-the transposed CSC of `A`) and re-calls `CUDA.CUSOLVER.spqr_factorise`
+the transposed CSC of `A`) and re-calls `_cusolver().spqr_factorise`
 on the existing `SparseQR` handle. This reuses the cached symbolic
 analysis (row/column pattern and scratch buffer allocated inside the
 `SparseQR` info struct) and runs only the Setup + numeric Factor
@@ -572,12 +593,12 @@ function MatSolvers.refactor!(solver::CuSparseLU{T}, A::SparseMatrixCSC) where {
             # Reset matrix values in the RF handle and re-run numeric
             # factorization. The symbolic analysis (P, Q, L/U patterns)
             # is preserved from the original build.
-            CUDA.CUSOLVER.cusolverRfResetValues(
+            _cusolver().cusolverRfResetValues(
                 Cint(solver.n), Cint(nnz(A_f64)),
                 rf.A_rowptr, rf.A_colind, rf.A_vals,
                 rf.P, rf.Q, rf.handle,
             )
-            CUDA.CUSOLVER.cusolverRfRefactor(rf.handle)
+            _cusolver().cusolverRfRefactor(rf.handle)
             return solver
         catch err
             @debug "refactor!(CuSparseLU, :rf) failed, rebuilding from scratch" exception=(err, catch_backtrace())
@@ -610,7 +631,7 @@ function MatSolvers.refactor!(solver::CuSparseLU{T}, A::SparseMatrixCSC) where {
             # Re-run the numeric factorization on the existing
             # `SparseQR` handle, which preserves its cached info +
             # scratch buffer.
-            CUDA.CUSOLVER.spqr_factorise(solver.factor, solver.A_csr, Float64(solver.tol))
+            _cusolver().spqr_factorise(solver.factor, solver.A_csr, Float64(solver.tol))
             return solver
         catch err
             @debug "refactor!(CuSparseLU, :qr) failed, rebuilding from scratch" exception=(err, catch_backtrace())

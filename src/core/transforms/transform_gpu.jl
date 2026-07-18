@@ -54,6 +54,15 @@ function distributed_gpu_supported(bases::Tuple)
             return false
         end
     end
+    # RealFourier on dim 1 combined with a Fourier transverse axis: the forward
+    # pipeline completes, but the backward Hermitian expansion needs the
+    # conjugate partner at the FLIPPED transverse wavenumber and hard-errors
+    # (see the guard in distributed_backward_dct!). Reject at plan level so the
+    # layout falls back to CPU instead of dying on the first backward transform.
+    if kinds[1] === :real_fourier &&
+       any(k -> k === :complex_fourier || k === :real_fourier, kinds[2:end])
+        return false
+    end
     return true
 end
 
@@ -144,6 +153,9 @@ should_use_gpu_fft(field::ScalarField) = (get_grid_data(field) !== nothing) && s
 GPU-specific forward transform using CUFFT.
 Returns true if GPU transform was applied, false otherwise.
 """
+const _GPU_FORWARD_TRANSFORM_HOOK = Ref{Any}(nothing)
+const _GPU_BACKWARD_TRANSFORM_HOOK = Ref{Any}(nothing)
+
 function gpu_forward_transform!(field::ScalarField)
     # Check if we're on GPU architecture
     arch = field.dist.architecture
@@ -157,10 +169,14 @@ function gpu_forward_transform!(field::ScalarField)
         return false
     end
 
-    # GPU transform will be dispatched via extension
-    # The extension overrides this function when CUDA is loaded
-    @warn "GPU architecture specified but CUDA extension not loaded. Falling back to CPU." maxlog=1
-    return false
+    # The CUDA extension registers the implementation from its __init__
+    # (a same-signature method here would be illegal method overwriting).
+    h = _GPU_FORWARD_TRANSFORM_HOOK[]
+    if h === nothing
+        @warn "GPU architecture specified but CUDA extension not loaded. Falling back to CPU." maxlog=1
+        return false
+    end
+    return h(field)::Bool
 end
 
 """
@@ -182,9 +198,13 @@ function gpu_backward_transform!(field::ScalarField)
         return false
     end
 
-    # GPU transform will be dispatched via extension
-    @warn "GPU architecture specified but CUDA extension not loaded. Falling back to CPU." maxlog=1
-    return false
+    # See gpu_forward_transform! — implementation is hook-registered.
+    h = _GPU_BACKWARD_TRANSFORM_HOOK[]
+    if h === nothing
+        @warn "GPU architecture specified but CUDA extension not loaded. Falling back to CPU." maxlog=1
+        return false
+    end
+    return h(field)::Bool
 end
 
 # -----------------------------------------------------------------------------

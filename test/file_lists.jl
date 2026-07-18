@@ -124,6 +124,7 @@ const TEST_FILES = [
     "test_progress.jl",
     "test_convenience_api.jl",
     "test_distributed_gpu_dct1_support.jl",
+    "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
 ]
 
 # CPU tests that are valid in ordinary CI but are kept out of the default

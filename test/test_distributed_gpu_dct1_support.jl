@@ -7,6 +7,9 @@ eligible for the distributed GPU Chebyshev transform path:
   - must be 3D
   - must have at least one ChebyshevT axis
   - every RealFourier axis must be on dim 1 (the framework convention)
+  - RealFourier on dim 1 must not be combined with a Fourier transverse axis
+    (the backward Hermitian expansion cannot place conjugate partners at the
+    flipped transverse wavenumber — such layouts fall back to CPU)
 """
 
 using Test
@@ -25,8 +28,15 @@ using Tarang: axis_kinds, distributed_gpu_supported
     # axis_kinds returns a tuple of symbols
     @test axis_kinds((rf, cf, cb)) == (:real_fourier, :complex_fourier, :chebyshev)
 
-    # Supported: RealFourier on dim 1, at least one ChebyshevT, 3D
-    @test distributed_gpu_supported((rf, cf, cb)) == true
+    # Not supported: RealFourier on dim 1 with a Fourier transverse axis. The
+    # forward pipeline completes, but the backward Hermitian expansion needs
+    # conjugate partners at the FLIPPED transverse wavenumber and hard-errors
+    # (guard in distributed_backward_dct!) — the predicate rejects the layout
+    # up front so it falls back to CPU instead of dying on the first backward.
+    @test distributed_gpu_supported((rf, cf, cb)) == false
+
+    # Supported: RealFourier on dim 1 with only Chebyshev transverse axes
+    @test distributed_gpu_supported((rf, cb, cb)) == true
 
     # Supported: no RealFourier at all, has ChebyshevT, 3D
     @test distributed_gpu_supported((cf, cf, cb)) == true

@@ -108,22 +108,30 @@ struct GPU{D} <: AbstractSerialArchitecture
     device::D
 end
 
-# Default GPU constructor - will be overridden by extension
+# Hook filled in by the CUDA extension's __init__ (extensions must not define
+# methods with signatures identical to methods in the parent package — that is
+# method overwriting, which is an error during precompilation).
+const _GPU_EXT_CONSTRUCTOR = Ref{Any}(nothing)
+
 function GPU(; device_id::Int = 0)
-    error("""
-        GPU architecture requires CUDA.jl to be loaded.
+    ctor = _GPU_EXT_CONSTRUCTOR[]
+    if ctor === nothing
+        error("""
+            GPU architecture requires CUDA.jl to be loaded.
 
-        Please add CUDA.jl to your project and load it:
-            using Pkg
-            Pkg.add("CUDA")
-            using CUDA
-            using Tarang
+            Please add CUDA.jl to your project and load it:
+                using Pkg
+                Pkg.add("CUDA")
+                using CUDA
+                using Tarang
 
-            arch = GPU()
-        """)
+                arch = GPU()
+            """)
+    end
+    return ctor(device_id)
 end
 
-# Placeholder methods - overridden by CUDA extension
+# Placeholder methods - the CUDA extension adds GPU{CuDevice}-specific methods
 device(gpu::GPU) = gpu.device
 array_type(::GPU) = error("GPU array_type requires CUDA.jl to be loaded")
 array_type(::GPU, T::Type) = error("GPU array_type requires CUDA.jl to be loaded")
@@ -224,10 +232,12 @@ function Base.zeros(arch::CPU, T::Type, dims::Integer...)
 end
 
 function Base.zeros(arch::GPU, T::Type, dims::Integer...)
-    # For GPU, use the array_type which returns CuArray{T}
-    # CUDA.jl provides zeros(CuArray{T}, dims...) method
+    # Generic-GPU fallback (the CUDA extension provides a device-aware
+    # GPU{CuDevice} method). `similar(AT, dims)` works for any array type
+    # exposing the AT(undef, dims) constructor; there is no array-type-first
+    # `zeros` method to call.
     AT = array_type(arch, T)
-    return zeros(AT, dims...)
+    return fill!(similar(AT, dims), zero(T))
 end
 
 function Base.zeros(arch::AbstractArchitecture, T::Type, dims::Tuple{Vararg{Integer}})
@@ -245,10 +255,9 @@ function Base.ones(arch::CPU, T::Type, dims::Integer...)
 end
 
 function Base.ones(arch::GPU, T::Type, dims::Integer...)
-    # For GPU, use the array_type which returns CuArray{T}
-    # CUDA.jl provides ones(CuArray{T}, dims...) method
+    # Generic-GPU fallback (see zeros above): no array-type-first `ones` exists.
     AT = array_type(arch, T)
-    return ones(AT, dims...)
+    return fill!(similar(AT, dims), one(T))
 end
 
 function Base.ones(arch::AbstractArchitecture, T::Type, dims::Tuple{Vararg{Integer}})
@@ -297,9 +306,15 @@ is_gpu(::GPU) = true
 """
     has_cuda()
 
-Check if CUDA is available (placeholder - set by extension).
+Check if CUDA is available. The CUDA extension registers `CUDA.functional`
+here from its `__init__`; without the extension this is always `false`.
 """
-has_cuda() = false  # Overridden by CUDA extension
+const _HAS_CUDA_HOOK = Ref{Any}(nothing)
+
+function has_cuda()
+    h = _HAS_CUDA_HOOK[]
+    return h === nothing ? false : h()::Bool
+end
 
 """
     is_gpu_array(a::AbstractArray)
