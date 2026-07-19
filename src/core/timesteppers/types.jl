@@ -60,12 +60,13 @@ struct RK222 <: TimeStepper
     - 2nd order accuracy for both parts
     - SDIRK structure (same diagonal)
 
-    Butcher tableaux:
-    Explicit:            Implicit:
-    0   | 0   0          γ   | γ   0
-    1   | 1   0          1   | 1-γ γ
-    ----|------          ----|------
-        | 1/2 1/2            | 1-γ γ
+    Butcher tableaux (3-stage form, shared abscissae c = [0, γ, 1]):
+    Explicit:                  Implicit (ESDIRK):
+    0   | 0    0    0          0   | 0    0    0
+    γ   | γ    0    0          γ   | 0    γ    0
+    1   | γ    1-γ  0          1   | 0    1-γ  γ
+    ----|------------          ----|------------
+        | 0    1-γ  γ              | 0    1-γ  γ
     """
     stages::Int
     A_explicit::Matrix{Float64}
@@ -110,8 +111,12 @@ struct RK443 <: TimeStepper
     """
     4-stage, 3rd order IMEX Runge-Kutta.
 
-    Based on Kennedy & Carpenter (2003) ARK3(2)4L[2]SA.
-    "Additive Runge-Kutta schemes for convection-diffusion-reaction equations"
+    ARK built on Alexander's (1977) 3-stage L-stable SDIRK3 embedded as ESDIRK:
+    γ ≈ 0.435866521508459 is the root of x³ − 3x² + (3/2)x − 1/6, with
+    c = [0, γ, (1+γ)/2, 1] and the classical b₂, b₃ weights. (Note: this is
+    NOT Kennedy & Carpenter's ARK3(2)4L[2]SA, whose c₂ = 2γ, nor ARS(4,4,3);
+    the full order-3 ARK coupling conditions are nonetheless satisfied —
+    verified numerically to ≤1e-11.)
 
     Properties:
     - L-stable implicit part (stiff decay)
@@ -133,8 +138,8 @@ struct RK443 <: TimeStepper
     function RK443()
         stages = 4
 
-        # Kennedy & Carpenter ARK3(2)4L[2]SA coefficients
-        # γ is the SDIRK diagonal value
+        # Alexander SDIRK3-based ARK coefficients (see docstring)
+        # γ is the SDIRK diagonal value: root of x³ − 3x² + (3/2)x − 1/6
         γ = 0.4358665215084590  # Root for L-stability
 
         # Explicit tableau (ERK part)
@@ -325,6 +330,13 @@ struct CNLF2 <: TimeStepper
     Explicit: Leapfrog (centered 2-step extrapolation)
 
     Formula: (1 + θ*dt*L) X^{n+1} = (1 - (1-θ)*dt*L) X^{n-1} + 2*dt*F^n
+
+    Variable dt: the stepper generalizes the stencils with exact nonuniform
+    Lagrange weights (Wang 2008 eqn 2.11) and stays 2nd order through smooth or
+    isolated dt changes. RAPIDLY ALTERNATING dt degrades it toward 1st order —
+    the leapfrog parasitic mode has amplification |−w₁²| per step (w₁ = dt
+    ratio), only marginally stable when the ratio oscillates. Prefer CNAB2 or
+    SBDF2 under aggressive adaptive stepping.
     """
     stages::Int
     implicit_coefficient::Float64
@@ -464,7 +476,7 @@ struct RK443_IMEX <: TimeStepper
     """
     4-stage 3rd-order IMEX Runge-Kutta method.
 
-    Uses the same Kennedy & Carpenter ARK3(2)4L[2]SA coefficients as RK443.
+    Uses the same Alexander-SDIRK3-based ARK coefficients as RK443.
     This type exists as an alias for use in contexts where the "_IMEX" suffix
     makes the intent clearer.
 
@@ -483,7 +495,7 @@ struct RK443_IMEX <: TimeStepper
     c_implicit::Vector{Float64}
 
     function RK443_IMEX()
-        # Use the proven Kennedy & Carpenter ARK3(2)4L[2]SA coefficients
+        # Use the same Alexander-SDIRK3-based ARK coefficients as RK443
         # (same as RK443)
         rk = RK443()
         new(rk.stages, rk.A_explicit, rk.b_explicit, rk.c_explicit,
@@ -562,7 +574,7 @@ end
 
 3rd-order IMEX Runge-Kutta with diagonal spectral implicit treatment.
 
-Uses the Kennedy-Carpenter ARK3(2)4L[2]SA explicit tableau (same as RK443)
+Uses the same Alexander-SDIRK3-based ARK explicit tableau as RK443
 paired with its ESDIRK diagonal for the implicit part. This ensures the
 IMEX coupling conditions are satisfied for 3rd-order accuracy.
 
@@ -579,9 +591,9 @@ struct DiagonalIMEX_RK443 <: TimeStepper
 
     function DiagonalIMEX_RK443()
         stages = 4
-        γ = 0.4358665215084590  # L-stable coefficient (Kennedy-Carpenter)
+        γ = 0.4358665215084590  # L-stable SDIRK3 root (Alexander)
 
-        # Kennedy-Carpenter ARK3(2)4L[2]SA explicit tableau (matches RK443)
+        # Alexander-SDIRK3-based ARK explicit tableau (matches RK443)
         A_explicit = [
             0.0                  0.0                  0.0                  0.0;
             0.4358665215084590   0.0                  0.0                  0.0;

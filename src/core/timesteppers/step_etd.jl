@@ -111,8 +111,12 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
         @debug "ETDRK2 step completed: dt=$dt, |X_new|=$(norm(X_new))"
 
     catch e
-        @warn "ETD-RK222 failed: $e, falling back to RK222"
-        step_rk222!(state, solver)
+        # Fall back to CNAB2 (like ETD_CNAB2/ETD_SBDF2 do), NOT to step_rk222!:
+        # on GPU/MPI the RK path degrades to fully-explicit treatment and would
+        # silently integrate WITHOUT the implicit linear operator (no viscosity).
+        # CNAB2's global-matrix solve keeps L implicit — slower but correct.
+        @warn "ETD-RK222 failed: $e, falling back to CNAB2 (keeps the linear operator implicit)"
+        step_cnab2!(state, solver)
         return
     end
 end

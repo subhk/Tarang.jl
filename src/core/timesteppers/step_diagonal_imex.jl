@@ -280,6 +280,10 @@ function _distributed_diagonal_imex_applicable(solver::InitialValueSolver)
         if !isempty(f.bases); field = f; break; end
     end
     field === nothing && return false
+    # Host-only subsystem: _diagonal_Lhat_from_expr and the φ/update kernels build
+    # and broadcast host Arrays, which throws against device-resident coefficient
+    # data. GPU runs must decline here (they then error loudly in step_rk_imex!).
+    is_gpu(field_architecture(field)) && return false
     (field.dist.use_pencil_arrays && field.dist.size > 1) || return false
     return all(b -> b === nothing || isa(b, FourierBasis), field.bases)
 end
@@ -563,9 +567,12 @@ function _get_distributed_diagonal_phi!(state::TimestepperState, dt::Float64,
             z = -dt * Lhat[j]
             ez = exp(z)
             expz[j] = ez
-            if abs(z) < 1e-8
-                ph1[j] = 1.0 + z/2 + z*z/6
-                ph2[j] = 0.5 + z/6 + z*z/24
+            if abs(z) < 1e-2
+                # 1e-2 cutoff + extended series: the direct formulas cancel
+                # catastrophically for small |z| (see phi_functions).
+                zz = z * z
+                ph1[j] = 1.0 + z/2 + zz/6 + zz*z/24 + zz*zz/120
+                ph2[j] = 0.5 + z/6 + zz/24 + zz*z/120 + zz*zz/720
             else
                 ph1[j] = (ez - 1.0) / z
                 ph2[j] = (ez - 1.0 - z) / (z*z)

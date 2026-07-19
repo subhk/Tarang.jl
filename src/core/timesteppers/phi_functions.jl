@@ -10,15 +10,17 @@ Compute φ functions for exponential time differencing methods.
 These functions handle the z ≈ 0 case using Taylor expansions.
 """
 function phi_functions(z::Number)
-    if abs(z) < 1e-8
-        # Use Taylor expansions for small z to avoid numerical issues
-        φ₀ = 1 + z + z^2/2 + z^3/6 + z^4/24
-        φ₁ = 1 + z/2 + z^2/6 + z^3/24 + z^4/120
-        φ₂ = 1/2 + z/6 + z^2/24 + z^3/120 + z^4/720
-        φ₃ = 1/6 + z/24 + z^2/120 + z^3/720 + z^4/5040
+    exp_z = exp(z)
+    φ₀ = exp_z
+    # The direct formulas cancel catastrophically well above roundoff: with a
+    # 1e-8 cutoff, φ₂'s relative error reaches ~1% at |z|=1e-7 and φ₃'s exceeds
+    # O(1) up to |z|~1e-5. At the 1e-2 crossover the series truncation (≲1e-13
+    # relative) meets the direct formulas' cancellation error (≲1e-10).
+    if abs(z) < 1e-2
+        φ₁ = 1 + z/2 + z^2/6 + z^3/24 + z^4/120 + z^5/720
+        φ₂ = 1/2 + z/6 + z^2/24 + z^3/120 + z^4/720 + z^5/5040
+        φ₃ = 1/6 + z/24 + z^2/120 + z^3/720 + z^4/5040 + z^5/40320
     else
-        exp_z = exp(z)
-        φ₀ = exp_z
         φ₁ = (exp_z - 1) / z
         φ₂ = (exp_z - 1 - z) / z^2
         φ₃ = (exp_z - 1 - z - z^2/2) / z^3
@@ -163,9 +165,11 @@ function _phi_via_eigen(z::AbstractMatrix, I_mat)
     φ2 = similar(λ)
     @inbounds for i in eachindex(λ)
         l = λ[i]
-        if abs(l) < 1e-8
-            φ1[i] = one(eltype(λ)) + l/2 + l^2/6
-            φ2[i] = one(eltype(λ))/2 + l/6 + l^2/24
+        if abs(l) < 1e-2
+            # 1e-2 cutoff + extended series: the direct formulas cancel
+            # catastrophically for small |l| (see phi_functions above).
+            φ1[i] = one(eltype(λ)) + l/2 + l^2/6 + l^3/24 + l^4/120
+            φ2[i] = one(eltype(λ))/2 + l/6 + l^2/24 + l^3/120 + l^4/720
         else
             φ1[i] = (exp(l) - 1) / l
             φ2[i] = (exp(l) - 1 - l) / l^2
