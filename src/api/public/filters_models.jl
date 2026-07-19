@@ -12,4 +12,4 @@ export
     get_eddy_viscosity, get_eddy_diffusivity, get_filter_width,
     mean_eddy_viscosity, max_eddy_viscosity,
     sgs_dissipation, mean_sgs_dissipation,
-    set_constant!
+    set_constant!, set_filter_width!, reset!
