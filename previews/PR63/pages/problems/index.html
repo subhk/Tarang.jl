@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Problems · Tarang.jl</title><meta name="title" content="Problems · Tarang.jl"/><meta property="og:title" content="Problems · Tarang.jl"/><meta property="twitter:title" content="Problems · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/pages/problems/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/pages/problems/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/pages/problems/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../../tutorials/overview/">Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../../examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../coordinates/">Coordinates</a></li><li><a class="tocitem" href="../bases/">Bases</a></li><li><a class="tocitem" href="../domains/">Domains</a></li><li><a class="tocitem" href="../fields/">Fields</a></li><li><a class="tocitem" href="../operators/">Operators</a></li><li class="is-active"><a class="tocitem" href>Problems</a><ul class="internal"><li><a class="tocitem" href="#Problem-Types"><span>Problem Types</span></a></li><li><a class="tocitem" href="#Adding-Equations"><span>Adding Equations</span></a></li><li><a class="tocitem" href="#First-Order-Formulation"><span>First-Order Formulation</span></a></li><li><a class="tocitem" href="#Boundary-Conditions"><span>Boundary Conditions</span></a></li><li><a class="tocitem" href="#Problem-Validation"><span>Problem Validation</span></a></li><li><a class="tocitem" href="#Common-Problem-Patterns"><span>Common Problem Patterns</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../solvers/">Solvers</a></li><li><a class="tocitem" href="../timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../parallelism/">Parallelism</a></li><li><a class="tocitem" href="../stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../les_models/">LES Models</a></li><li><a class="tocitem" href="../gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../architecture/">Architecture &amp; Codebase</a></li><li><a class="tocitem" href="../testing/">Testing</a></li><li><a class="tocitem" href="../contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox"/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../api/bases/">Bases</a></li><li><a class="tocitem" href="../../api/domains/">Domains</a></li><li><a class="tocitem" href="../../api/fields/">Fields</a></li><li><a class="tocitem" href="../../api/operators/">Operators</a></li><li><a class="tocitem" href="../../api/problems/">Problems</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers</a></li><li><a class="tocitem" href="../../api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../api/gpu/">GPU</a></li><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis</a></li><li><a class="tocitem" href="../../api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">User Guide</a></li><li class="is-active"><a href>Problems</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Problems</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/pages/problems.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Problems"><a class="docs-heading-anchor" href="#Problems">Problems</a><a id="Problems-1"></a><a class="docs-heading-anchor-permalink" href="#Problems" title="Permalink"></a></h1><p>Problems define the PDE system to be solved, including equations and boundary conditions.</p><h2 id="Problem-Types"><a class="docs-heading-anchor" href="#Problem-Types">Problem Types</a><a id="Problem-Types-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Types" title="Permalink"></a></h2><h3 id="IVP-Initial-Value-Problem"><a class="docs-heading-anchor" href="#IVP-Initial-Value-Problem">IVP - Initial Value Problem</a><a id="IVP-Initial-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#IVP-Initial-Value-Problem" title="Permalink"></a></h3><p>Time-dependent PDEs with initial conditions. Every unknown — including any <code>tau</code> variables — is listed in the <code>IVP([...])</code> constructor, and the number of equations (evolution equations <strong>plus</strong> boundary conditions) must equal the number of variables.</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+bx = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 2π), dealias=3/2)
+by = RealFourier(coords[&quot;y&quot;]; size=16, bounds=(0.0, 2π), dealias=3/2)
+dom = Domain(dist, (bx, by))
+
+s = ScalarField(dom, &quot;s&quot;)
+u = VectorField(dom, &quot;u&quot;)
+
+problem = IVP([s, u])
+add_parameters!(problem, nu=0.05)
+
+# Linear terms on the LHS (treated implicitly), nonlinear terms on the RHS
+add_equation!(problem, &quot;∂t(s) - nu*Δ(s) = -u⋅∇(s)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*Δ(u) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)</code></pre><p>A fully periodic (all-Fourier) problem like this needs no boundary conditions and no <code>tau</code> variables. A bounded Chebyshev/Jacobi direction needs both — see <em>Boundary Conditions</em> below.</p><h3 id="LBVP-Linear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#LBVP-Linear-Boundary-Value-Problem">LBVP - Linear Boundary Value Problem</a><a id="LBVP-Linear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#LBVP-Linear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state linear PDEs. Boundary conditions in a bounded (Chebyshev/Jacobi) direction use the <strong>tau method</strong>: declare one <code>tau</code> variable per boundary condition, lift each into the bulk equation via <code>lift(tau, derivative_basis(basis, 2), -k)</code> (registered with <code>add_parameters!</code>), and declare the boundary conditions with <code>add_bc!</code> (not <code>add_equation!</code>).</p><pre><code class="language-julia hljs"># 2D Poisson  Δu = -2,  u = 0 on both z walls  (solution u = z(Lz - z))
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords[&quot;x&quot;]; size=4,  bounds=(0.0, 2π))   # periodic (separable)
+zb = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))  # bounded  (coupled)
+dom = Domain(dist, (xb, zb))
+
+u    = ScalarField(dom, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (xb,), Float64)           # one tau per BC
+tau2 = ScalarField(dist, &quot;tau2&quot;, (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)
+add_bc!(problem, &quot;u(z=0)   = 0&quot;)
+add_bc!(problem, &quot;u(z=1.0) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid</code></pre><div class="admonition is-info" id="1D-pure-Chebyshev-BVP-aac447341e89c3af"><header class="admonition-header">1D pure-Chebyshev BVP<a class="admonition-anchor" href="#1D-pure-Chebyshev-BVP-aac447341e89c3af" title="Permalink"></a></header><div class="admonition-body"><p>A pure single-axis Chebyshev BVP (no Fourier direction) works too: drop the <code>x</code> axis and define the <code>tau</code> variables on <code>()</code>. The solver builds one coupled tau subproblem over the Chebyshev spectrum.</p></div></div><h3 id="NLBVP-Nonlinear-Boundary-Value-Problem"><a class="docs-heading-anchor" href="#NLBVP-Nonlinear-Boundary-Value-Problem">NLBVP - Nonlinear Boundary Value Problem</a><a id="NLBVP-Nonlinear-Boundary-Value-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#NLBVP-Nonlinear-Boundary-Value-Problem" title="Permalink"></a></h3><p>Steady-state nonlinear PDEs. Same tau-method boundary handling as the LBVP (tau variables + <code>lift</code> + <code>add_bc!</code>). Put the nonlinear terms on the right-hand side; the solver linearizes them with a symbolic Frechet derivative and runs a per-Fourier-mode Newton iteration.</p><pre><code class="language-julia hljs"># Manufactured nonlinearity  Δu = u² + g,  with g = -2 - u_exact²  so u_exact = z(Lz - z)
+# domain / fields / taus as in the LBVP example above (u, tau1, tau2, lb2)
+g = ScalarField(dom, &quot;g&quot;); ensure_layout!(g, :g)
+zg = create_meshgrid(dom; on_device=false)[&quot;z&quot;]
+get_grid_data(g) .= -2 .- (zg .* (1.0 .- zg)).^2
+
+problem = NLBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = u*u + g&quot;)   # nonlinearity on the RHS
+add_bc!(problem, &quot;u(z=0)   = 0&quot;)
+add_bc!(problem, &quot;u(z=1.0) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solver.tolerance = 1e-10
+ensure_layout!(u, :g); get_grid_data(u) .= 0.0       # initial guess
+solve!(solver)
+ensure_layout!(u, :g)</code></pre><h3 id="EVP-Eigenvalue-Problem"><a class="docs-heading-anchor" href="#EVP-Eigenvalue-Problem">EVP - Eigenvalue Problem</a><a id="EVP-Eigenvalue-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#EVP-Eigenvalue-Problem" title="Permalink"></a></h3><p>Linear stability and eigenvalue analysis. Tarang solves the generalized problem <code>L x = σ M x</code>, where the mass matrix <code>M</code> is assembled from the <strong>time-derivative terms</strong> <code>dt(·)</code>: the eigenvalue <em>replaces</em> the time derivative (<code>dt(u) → σ u</code>). Keep the <code>dt(u)</code> term in the equation — do <strong>not</strong> multiply the eigenvalue symbol into it (<code>σ*u = …</code> builds an empty <code>M</code> and returns no eigenvalues). Boundary conditions use the same tau method (<code>tau</code> vars + <code>lift</code> + <code>add_bc!</code>).</p><pre><code class="language-julia hljs"># 1D diffusion eigenproblem  σu = Δu, Dirichlet;  eigenvalues σ_n = -(nπ/Lz)²
+coords = CartesianCoordinates(&quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+zb     = ChebyshevT(coords[&quot;z&quot;]; size=32, bounds=(0.0, 1.0))
+dom    = Domain(dist, (zb,))
+
+u    = ScalarField(dom, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (), Float64)
+tau2 = ScalarField(dist, &quot;tau2&quot;, (), Float64)
+lb2  = derivative_basis(zb, 2)
+
+evp = EVP([u, tau1, tau2]; eigenvalue=:σ)
+add_parameters!(evp; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(evp, &quot;dt(u) - Δ(u) - l1 - l2 = 0&quot;)   # dt(u) → σu marks M
+add_bc!(evp, &quot;u(z=0)   = 0&quot;)
+add_bc!(evp, &quot;u(z=1.0) = 0&quot;)
+
+solver = EigenvalueSolver(evp; nev=5, which=:SM)   # 5 smallest-magnitude
+eigenvalues, eigenvectors = solve!(solver)
+# |eigenvalues| ≈ (nπ)² = 9.87, 39.48, 88.83, ...</code></pre><p><code>EigenvalueSolver</code> accepts only <code>nev</code>, <code>which</code> (∈ <code>:LM :SM :LR :SR :LI :SI</code>), <code>target</code>, and <code>matsolver</code>.</p><h2 id="Adding-Equations"><a class="docs-heading-anchor" href="#Adding-Equations">Adding Equations</a><a id="Adding-Equations-1"></a><a class="docs-heading-anchor-permalink" href="#Adding-Equations" title="Permalink"></a></h2><h3 id="Equation-Syntax"><a class="docs-heading-anchor" href="#Equation-Syntax">Equation Syntax</a><a id="Equation-Syntax-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Syntax" title="Permalink"></a></h3><p>An equation is a <code>&quot;LHS = RHS&quot;</code> string. Everything linear goes on the LHS, where it is stepped implicitly; the nonlinear terms go on the RHS, where they are stepped explicitly.</p><pre><code class="language-julia hljs"># scalar advection-diffusion: diffusion implicit, advection explicit
+add_equation!(problem, &quot;∂t(s) - nu*Δ(s) = -u⋅∇(s)&quot;)
+
+# any number of linear terms may share the LHS
+add_equation!(problem, &quot;∂t(s) - nu*Δ(s) + ∂x(s) = -u⋅∇(s)&quot;)</code></pre><h3 id="Equation-Sizing"><a class="docs-heading-anchor" href="#Equation-Sizing">Equation Sizing</a><a id="Equation-Sizing-1"></a><a class="docs-heading-anchor-permalink" href="#Equation-Sizing" title="Permalink"></a></h3><p>The solver automatically determines each equation&#39;s row count in the system matrix from the expression&#39;s output type (scalar, vector, tensor, etc.). Equations can be added in any order — no specific ordering is required.</p><pre><code class="language-julia hljs"># q, ψ: ScalarFields;  u: VectorField;  tau_ψ = ScalarField(dist, &quot;tau_ψ&quot;, (), Float64)
+problem = IVP([q, ψ, u, tau_ψ])
+add_parameters!(problem, nu=1e-6)
+
+# Any order is fine:
+add_equation!(problem, &quot;Δ(ψ) + tau_ψ - q = 0&quot;)           # scalar → D rows
+add_equation!(problem, &quot;u - skew(grad(ψ)) = 0&quot;)           # vector → 2D rows
+add_equation!(problem, &quot;∂t(q) + nu*Δ⁴(q) = -u⋅∇(q)&quot;)     # scalar → D rows
+add_bc!(problem, &quot;integ(ψ) = 0&quot;)                           # constraint → 1 row</code></pre><h3 id="Supported-Operations"><a class="docs-heading-anchor" href="#Supported-Operations">Supported Operations</a><a id="Supported-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Supported-Operations" title="Permalink"></a></h3><ul><li>Derivatives: <code>∂x</code>, <code>∂y</code>, <code>∂z</code>, <code>∂t</code> (or <code>dt</code>), <code>Δ</code> (or <code>lap</code>), <code>∇</code>, <code>div</code>, <code>curl</code>, <code>Δ⁴</code> (hyperdiffusion), and the advection shorthand <code>u⋅∇(f)</code></li><li>Tensor/algebraic: <code>trace</code>, <code>skew</code>, <code>grad</code>, <code>lift</code>, <code>integ</code></li><li>Arithmetic: <code>+</code>, <code>-</code>, <code>*</code>, <code>/</code>, <code>^</code></li><li>Functions: <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>exp</code>, <code>log</code>, <code>sqrt</code>, <code>abs</code>, <code>tanh</code></li><li>Parameters: any name registered with <code>add_parameters!</code> (i.e. present in <code>problem.namespace</code>) — a bare Julia global is <em>not</em> visible to an equation string</li></ul><h3 id="Parameters"><a class="docs-heading-anchor" href="#Parameters">Parameters</a><a id="Parameters-1"></a><a class="docs-heading-anchor-permalink" href="#Parameters" title="Permalink"></a></h3><p>Equation strings resolve names against <code>problem.namespace</code>. They cannot see plain Julia globals, so every constant, field or operator an equation refers to must be registered first — with <code>add_parameters!</code> (preferred) or by writing into the namespace directly.</p><pre><code class="language-julia hljs">add_parameters!(problem; nu=0.01, Ra=1e6, Pr=1.0)   # preferred
+problem.namespace[&quot;nu&quot;] = 0.01                       # equivalent, direct dict access
+
+add_equation!(problem, &quot;∂t(u) - nu*Δ(u) = 0&quot;)</code></pre><p>Keep parameter-times-field terms on the LHS: a linear term on the RHS (<code>= Ra*Pr*w</code>) breaks the IMEX splitting, and <code>add_equation!</code> warns about it.</p><h2 id="First-Order-Formulation"><a class="docs-heading-anchor" href="#First-Order-Formulation">First-Order Formulation</a><a id="First-Order-Formulation-1"></a><a class="docs-heading-anchor-permalink" href="#First-Order-Formulation" title="Permalink"></a></h2><p>For problems involving Chebyshev bases, Tarang supports a first-order reduction (tau method) that replaces <code>Δ(f)</code> with <code>div(grad_f)</code> where <code>grad_f</code> includes a tau-lifting term. This ensures correct boundary condition enforcement.</p><pre><code class="language-julia hljs"># Derivative basis and lift closure
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zbasis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+
+# First-order gradient substitutions
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_b = grad(b) + ez * τ_lift(tau_b1)
+
+# The substitutions are Julia objects, so they must be registered before the equation
+# strings can name them
+add_parameters!(problem, kappa=0.1, grad_u=grad_u, grad_b=grad_b, τ_lift=τ_lift)
+
+# Equations use div(grad_f) instead of Δ(f)
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+add_equation!(problem, &quot;∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = -u⋅∇(b)&quot;)</code></pre><p>Each <code>τ_lift(tau_*)</code> term carries one tau variable, and each tau variable pays for one boundary condition. The Rayleigh-Bénard pattern below is a complete system in this form.</p><p>The advection operator <code>u⋅∇(f)</code> is automatically expanded component-wise to <code>Σᵢ uᵢ ∂ᵢf</code>, so it works for both scalar and vector fields without manual expansion.</p><h2 id="Boundary-Conditions"><a class="docs-heading-anchor" href="#Boundary-Conditions">Boundary Conditions</a><a id="Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Boundary-Conditions" title="Permalink"></a></h2><p>Boundary conditions are declared with <strong><code>add_bc!</code></strong>, not <code>add_equation!</code>. The syntax <code>field(coord=value)</code> is auto-detected and converted to the appropriate condition.</p><p>Two rules govern every BC:</p><ol><li><strong>Each boundary condition needs its own <code>tau</code> variable.</strong> A BC adds one row to the system, and the solver requires as many equations (PDEs + BCs) as variables. A wall problem with two conditions per field carries two tau variables per field, lifted into the bulk equation (see the <a href="../tau_method/">tau method</a>); without them, solver construction throws <code>Problem validation failed: Number of equations ... does not match number of variables</code>.</li><li><strong>The value must be a literal or a registered parameter.</strong> BC strings resolve names against <code>problem.namespace</code>, so a plain Julia global warns <code>Unknown variable</code> and is silently enforced as <code>0</code>. Use a literal, or register the name with <code>add_parameters!</code>.</li></ol><p>Declaring a BC with <code>add_equation!</code> also registers it as an equation row, but it never reaches the BC manager, so a space- or time-dependent value is never refreshed and is enforced as zero. Always use <code>add_bc!</code>.</p><h3 id="Dirichlet-(Value)"><a class="docs-heading-anchor" href="#Dirichlet-(Value)">Dirichlet (Value)</a><a id="Dirichlet-(Value)-1"></a><a class="docs-heading-anchor-permalink" href="#Dirichlet-(Value)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># field = value at location
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # T = 1 at z = 0
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # T = 0 at z = 1</code></pre><h3 id="Neumann-(Derivative)"><a class="docs-heading-anchor" href="#Neumann-(Derivative)">Neumann (Derivative)</a><a id="Neumann-(Derivative)-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-(Derivative)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># ∂field/∂z = value at location
+add_bc!(problem, &quot;∂z(T)(z=0) = 1&quot;)   # ∂T/∂z = 1 at z = 0</code></pre><h3 id="Robin-(Mixed)"><a class="docs-heading-anchor" href="#Robin-(Mixed)">Robin (Mixed)</a><a id="Robin-(Mixed)-1"></a><a class="docs-heading-anchor-permalink" href="#Robin-(Mixed)" title="Permalink"></a></h3><pre><code class="language-julia hljs"># α*T + β*∂T/∂n = γ
+add_bc!(problem, &quot;1.0*T(z=0) + 1.0*∂z(T)(z=0) = 0&quot;)
+
+# The same condition as a structured object: robin_bc(field, coord, position, α, β, γ)
+add_bc!(problem, robin_bc(&quot;T&quot;, &quot;z&quot;, 0.0, 1.0, 1.0, 0.0))</code></pre><h3 id="No-Slip-and-Stress-Free-Walls"><a class="docs-heading-anchor" href="#No-Slip-and-Stress-Free-Walls">No-Slip and Stress-Free Walls</a><a id="No-Slip-and-Stress-Free-Walls-1"></a><a class="docs-heading-anchor-permalink" href="#No-Slip-and-Stress-Free-Walls" title="Permalink"></a></h3><pre><code class="language-julia hljs">add_bc!(problem, &quot;u(z=0) = 0&quot;)       # no-slip:     u = 0 at a solid wall
+add_bc!(problem, &quot;∂z(u)(z=1) = 0&quot;)   # stress-free: ∂u/∂z = 0 at a free surface</code></pre><h3 id="Named-Helpers"><a class="docs-heading-anchor" href="#Named-Helpers">Named Helpers</a><a id="Named-Helpers-1"></a><a class="docs-heading-anchor-permalink" href="#Named-Helpers" title="Permalink"></a></h3><p>The common physical conditions have wrappers that build the same BCs:</p><pre><code class="language-julia hljs">no_slip!(problem, &quot;u&quot;, &quot;z&quot;, 0.0)            # u = 0        at z = 0
+free_slip!(problem, &quot;u&quot;, &quot;z&quot;, 1.0)          # ∂u/∂z = 0    at z = 1
+fixed_value!(problem, &quot;T&quot;, &quot;z&quot;, 0.0, 1.0)   # T = 1        at z = 0
+insulating!(problem, &quot;T&quot;, &quot;z&quot;, 1.0)         # ∂T/∂z = 0    at z = 1</code></pre><h3 id="Gauge-Constraints"><a class="docs-heading-anchor" href="#Gauge-Constraints">Gauge Constraints</a><a id="Gauge-Constraints-1"></a><a class="docs-heading-anchor-permalink" href="#Gauge-Constraints" title="Permalink"></a></h3><p>A pressure-like field defined only up to a constant needs a gauge condition, which is also declared with <code>add_bc!</code> and also consumes a tau variable:</p><pre><code class="language-julia hljs">add_bc!(problem, &quot;integ(p) = 0&quot;)</code></pre><h2 id="Problem-Validation"><a class="docs-heading-anchor" href="#Problem-Validation">Problem Validation</a><a id="Problem-Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Problem-Validation" title="Permalink"></a></h2><p><code>validate_problem</code> returns <code>true</code> for a well-posed system and otherwise throws an <code>ArgumentError</code> listing every problem it found (missing variables or equations, a mismatched equation count, invalid boundary conditions). It runs automatically inside every solver constructor, so a badly-posed problem fails at solver construction — you rarely need to call it yourself.</p><pre><code class="language-julia hljs">validate_problem(problem)   # true, or throws ArgumentError</code></pre><p>The equation count check is exact for IVPs and EVPs (<code>#equations + #BCs == #variables</code>) and a lower bound for BVPs (<code>#equations + #BCs &gt;= #variables</code>). Boundary conditions are merged into the equation list when the solver is built, which is why every BC must be paired with a tau variable.</p><h2 id="Common-Problem-Patterns"><a class="docs-heading-anchor" href="#Common-Problem-Patterns">Common Problem Patterns</a><a id="Common-Problem-Patterns-1"></a><a class="docs-heading-anchor-permalink" href="#Common-Problem-Patterns" title="Permalink"></a></h2><p>All three wall-bounded patterns below share one skeleton: a periodic Fourier direction <code>x</code>, a bounded Chebyshev direction <code>z</code>, one tau variable per boundary condition, and BCs declared with <code>add_bc!</code>.</p><h3 id="Heat-Equation"><a class="docs-heading-anchor" href="#Heat-Equation">Heat Equation</a><a id="Heat-Equation-1"></a><a class="docs-heading-anchor-permalink" href="#Heat-Equation" title="Permalink"></a></h3><p>Two Dirichlet walls, so two tau variables lifted into the diffusion term. Lifting into a second-order operator (<code>Δ</code>) uses <code>derivative_basis(zb, 2)</code> at lift orders <code>-1</code> and <code>-2</code>.</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords[&quot;x&quot;]; size=8,  bounds=(0.0, 2π))
+zb = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))
+dom = Domain(dist, (xb, zb))
+
+T    = ScalarField(dom, &quot;T&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (xb,), Float64)   # one tau per BC
+tau2 = ScalarField(dist, &quot;tau2&quot;, (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = IVP([T, tau1, tau2])
+add_parameters!(problem; kappa=0.01, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, &quot;∂t(T) - kappa*Δ(T) + l1 + l2 = 0&quot;)
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # hot bottom
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # cold top
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+set!(T, 0.0)
+run!(solver; stop_iteration=10, progress=false)</code></pre><h3 id="Incompressible-Navier-Stokes"><a class="docs-heading-anchor" href="#Incompressible-Navier-Stokes">Incompressible Navier-Stokes</a><a id="Incompressible-Navier-Stokes-1"></a><a class="docs-heading-anchor-permalink" href="#Incompressible-Navier-Stokes" title="Permalink"></a></h3><p>Velocity is a single <code>VectorField</code> (not per-component scalars), and the equations use the first-order tau form: <code>div(grad_u)</code> in place of <code>Δ(u)</code>, with <code>tau_u1</code> inside <code>grad_u</code> and <code>tau_u2</code> lifted into the momentum equation. <code>tau_p</code> is the gauge unknown that pays for <code>integ(p) = 0</code>.</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 4.0), dealias=3/2)
+zb = ChebyshevT(coords[&quot;z&quot;];  size=12, bounds=(0.0, 1.0), dealias=3/2)
+dom = Domain(dist, (xb, zb))
+
+p = ScalarField(dom, &quot;p&quot;)
+u = VectorField(dom, &quot;u&quot;)
+tau_p  = ScalarField(dist, &quot;tau_p&quot;, (), Float64)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (xb,), Float64)
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (xb,), Float64)
+
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zb, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u     = grad(u) + ez * τ_lift(tau_u1)
+
+problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+add_parameters!(problem, nu=0.01, grad_u=grad_u, τ_lift=τ_lift)
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)                                 # continuity
+add_equation!(problem, &quot;∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u)&quot;)  # momentum
+add_bc!(problem, &quot;u(z=0) = 0&quot;)     # no-slip walls
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_bc!(problem, &quot;integ(p) = 0&quot;)   # pressure gauge
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-4)</code></pre><h3 id="Rayleigh-Bénard"><a class="docs-heading-anchor" href="#Rayleigh-Bénard">Rayleigh-Bénard</a><a id="Rayleigh-Bénard-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard" title="Permalink"></a></h3><p>Navier-Stokes plus a buoyant temperature field: two more tau variables (<code>tau_T1</code>, <code>tau_T2</code>) for the two temperature walls.</p><pre><code class="language-julia hljs">Rayleigh, Prandtl = 2e4, 1.0
+
+# coords / dist / xb / zb / dom / p / u / tau_p / tau_u1 / tau_u2 / ez / τ_lift / grad_u
+# exactly as in the Navier-Stokes pattern above
+T      = ScalarField(dom, &quot;T&quot;)
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (xb,), Float64)
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (xb,), Float64)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
+
+problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+add_parameters!(problem, nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
+                grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+add_equation!(problem, &quot;∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)&quot;)
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # hot bottom
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # cold top
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_bc!(problem, &quot;integ(p) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-4)</code></pre><div class="admonition is-warning" id="Chebyshev-advection-is-serial-only-8855389896427ec4"><header class="admonition-header">Chebyshev advection is serial-only<a class="admonition-anchor" href="#Chebyshev-advection-is-serial-only-8855389896427ec4" title="Permalink"></a></header><div class="admonition-body"><p>The <code>-u⋅∇(u)</code> / <code>-u⋅∇(T)</code> terms differentiate along the Chebyshev axis on the explicit side, which a distributed run cannot do — each rank owns only part of that axis. Both patterns run in serial; under MPI the first step raises an error. See <a href="../parallelism/">Parallelism</a>.</p></div></div><h3 id="Poisson-Equation-(BVP)"><a class="docs-heading-anchor" href="#Poisson-Equation-(BVP)">Poisson Equation (BVP)</a><a id="Poisson-Equation-(BVP)-1"></a><a class="docs-heading-anchor-permalink" href="#Poisson-Equation-(BVP)" title="Permalink"></a></h3><p>A steady BVP needs the tau method. The 2D form below (<code>Δu = -2</code>, <code>u = 0</code> on both <code>z</code> walls) is shown; a pure 1D Chebyshev Poisson works the same way — drop the <code>x</code> axis and put the <code>tau</code> variables on <code>()</code>.</p><pre><code class="language-julia hljs">coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xb = RealFourier(coords[&quot;x&quot;]; size=4,  bounds=(0.0, 2π))
+zb = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))
+dom = Domain(dist, (xb, zb))
+
+u    = ScalarField(dom, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (xb,), Float64)
+tau2 = ScalarField(dist, &quot;tau2&quot;, (xb,), Float64)
+lb2  = derivative_basis(zb, 2)
+
+problem = LBVP([u, tau1, tau2])
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)
+add_bc!(problem, &quot;u(z=0)   = 0&quot;)
+add_bc!(problem, &quot;u(z=1.0) = 0&quot;)
+
+solver = BoundaryValueSolver(problem); solve!(solver); ensure_layout!(u, :g)</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../solvers/">Solvers</a>: Solving problems</li><li><a href="../../tutorials/boundary_conditions/">Boundary Conditions Tutorial</a>: Detailed BC guide</li><li><a href="../../api/problems/">API: Problems</a>: Complete reference</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../operators/">« Operators</a><a class="docs-footer-nextpage" href="../solvers/">Solvers »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 19 July 2026 08:49">Sunday 19 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
