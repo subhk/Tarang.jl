@@ -126,6 +126,7 @@ const TEST_FILES = [
     "test_progress.jl",
     "test_convenience_api.jl",
     "test_distributed_gpu_dct1_support.jl",
+    "test_variable_coefficient_lhs.jl",      # field-valued LHS coefficient must not be silently dropped
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
 ]
 

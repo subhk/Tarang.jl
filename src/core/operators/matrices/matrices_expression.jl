@@ -300,12 +300,15 @@ function _expression_matrices_future(expr::Future, sp, vars; kwargs...)
         length(dependent) == 1 || return Dict{Any, SparseMatrixCSC}()
         child_mats = expression_matrices(only(dependent), sp, vars; kwargs...)
         # Apply each NCC factor as a multiply-by-coefficient matrix (mirrors the
-        # MultiplyOperator Case-3 string path, lines ~442-448). `_implicit_ncc_matrix`
-        # warns + returns `nothing` for unsupported (Fourier-dependent) coefficients, and
-        # `_apply_implicit_ncc(nothing, …)` then passes the child through — identical
-        # behavior to the string path, so the two construction routes now agree.
+        # MultiplyOperator Case-3 string path). `_implicit_ncc_matrix` reports
+        # `ImplicitNCCUnsupported` for coefficients that cannot live in the implicit
+        # operator, and `_apply_implicit_ncc` turns that into a descriptive error — the
+        # two construction routes behave identically, and neither drops a term.
         for ncc in ncc_factors
-            child_mats = _apply_implicit_ncc(_implicit_ncc_matrix(ncc), child_mats)
+            # Non-scalar (VectorField/TensorField) factors are rank-changing block expansions,
+            # not scalar coefficients — a separate, pre-existing gap left untouched here.
+            _is_scalar_coefficient(ncc) || continue
+            child_mats = _apply_implicit_ncc(_implicit_ncc_matrix(ncc), child_mats, _expr_label(expr))
         end
         return _scale_expression_mats(child_mats, scalar_coeff)
     end
@@ -439,16 +442,19 @@ function expression_matrices(op::MultiplyOperator, sp, vars; kwargs...)
     # Case 3: one side depends on vars, the other is a (non-constant) coefficient.
     # The coefficient side is a spatially-varying FIELD (NCC) — `q(z)*u`. It must
     # become a multiply-by-q matrix that left-multiplies the var side's block.
-    # Previously this branch returned the var side alone, SILENTLY DROPPING q.
+    # Previously this branch returned the var side alone, SILENTLY DROPPING q; a
+    # coefficient that cannot be represented implicitly now RAISES (never drops).
     left_dep = _depends_on_vars(left, vars)
     right_dep = _depends_on_vars(right, vars)
 
     if left_dep && !right_dep
         child = expression_matrices(left, sp, vars; kwargs...)
-        return _apply_implicit_ncc(_implicit_ncc_matrix(right), child)
+        _is_scalar_coefficient(right) || return child   # rank-changing factor; see below
+        return _apply_implicit_ncc(_implicit_ncc_matrix(right), child, _expr_label(op))
     elseif right_dep && !left_dep
         child = expression_matrices(right, sp, vars; kwargs...)
-        return _apply_implicit_ncc(_implicit_ncc_matrix(left), child)
+        _is_scalar_coefficient(left) || return child
+        return _apply_implicit_ncc(_implicit_ncc_matrix(left), child, _expr_label(op))
     end
 
     # Both depend on vars (nonlinear) or neither depends -> empty
@@ -456,30 +462,96 @@ function expression_matrices(op::MultiplyOperator, sp, vars; kwargs...)
 end
 
 """
-    _implicit_ncc_matrix(ncc_operand) -> SparseMatrixCSC | Nothing
+    ImplicitNCCUnsupported
+
+Result of `_implicit_ncc_matrix` when a field-valued (non-constant) coefficient on the
+implicit LHS cannot be turned into a multiply-by-coefficient matrix. It carries the
+reason so the caller can raise a descriptive error.
+
+This type exists because the alternative — returning `nothing` and letting the caller
+pass the operand through unchanged — DISCARDS the coefficient, which silently turns
+e.g. `dt(u) - nu(x)*lap(u) = 0` into an inviscid run. A dropped term is never an
+acceptable outcome here, so every unsupported case must be reported, not swallowed.
+"""
+struct ImplicitNCCUnsupported
+    reason::String
+end
+
+"""
+    _ncc_direct_field(expr) -> ScalarField | Nothing
+
+The ScalarField that `expr` *is*, seeing through value-preserving wrappers only
+(`Grid`/`Coeff`/`Convert`/`Copy` are representation changes, not value changes).
+
+Deliberately NOT `_resolve_operand_field`, which walks to the first leaf field anywhere
+in the tree: for a coefficient like `∂z(q)` that would hand back `q` and build a
+multiply-by-`q` matrix — a silently WRONG operator. Anything other than a bare field is
+reported as unsupported instead.
+"""
+function _ncc_direct_field(expr)
+    isa(expr, ScalarField) && return expr
+    if isa(expr, Union{Grid, Coeff, Convert, Copy}) && hasfield(typeof(expr), :operand)
+        return _ncc_direct_field(expr.operand)
+    end
+    return nothing
+end
+
+"""
+    _is_scalar_coefficient(expr) -> Bool
+
+True when `expr` is a SCALAR-valued coefficient factor, i.e. one whose only possible matrix
+form is "multiply by a scalar field". Such a factor must either be built into the implicit
+operator or reported — never dropped.
+
+Deliberately FALSE for VectorField/TensorField-valued factors such as the `ez` in `b*ez`.
+Those are rank-CHANGING block expansions handled separately (`expression_matrices` Case 2,
+`_build_constant_field_matrix`), and the global matrix path has never implemented them at
+all. Routing them into the NCC error path would raise on long-working Boussinesq and
+rotating-frame equations — a pre-existing gap, distinct from the dropped-scalar-coefficient
+bug this path exists to prevent.
+"""
+@inline _is_scalar_coefficient(expr) = _resolve_operand_field(expr) isa ScalarField
+
+"""
+    _implicit_ncc_matrix(ncc_operand) -> SparseMatrixCSC | ImplicitNCCUnsupported
 
 Multiply-by-coefficient matrix for a non-constant FIELD coefficient on the implicit
-side (`q*u`). Built via the basis-aware `ncc_matrix`/`product_matrix` (correct for
-Chebyshev/Legendre/Jacobi).
+side (`q*u`), built pseudospectrally through the coupled basis's own transform.
 
-Supported (returns the matrix): the coefficient is a field varying along a SINGLE
-Jacobi (Chebyshev/Legendre/…) axis with NO Fourier/periodic axis. Unsupported
-(returns `nothing` after a one-time warning, so the coefficient is never DROPPED
-silently): any Fourier-axis dependence (couples Fourier modes → not representable per
-subproblem) or more than one Jacobi axis. Those belong in the explicit RHS.
+Supported (returns the matrix): the coefficient is a bare field varying along a SINGLE
+Jacobi (Chebyshev/Legendre/…) axis and CONSTANT along every Fourier/periodic axis.
+Everything else returns `ImplicitNCCUnsupported` with a reason — the caller must raise,
+never drop. A coefficient that is identically zero returns an explicit ZERO matrix
+(the term really is zero; passing the operand through would wrongly imply q ≡ 1).
 """
 function _implicit_ncc_matrix(ncc_operand)
-    field = _resolve_operand_field(ncc_operand)
-    (field isa ScalarField && !isempty(field.bases)) || return nothing
+    field = _ncc_direct_field(ncc_operand)
+    if field === nothing
+        return ImplicitNCCUnsupported(
+            "the coefficient is the expression `$(_expr_label(ncc_operand))` rather than a plain " *
+            "field; only a bare field coefficient can be built into an implicit multiply matrix")
+    end
+    if isempty(field.bases)
+        return ImplicitNCCUnsupported(
+            "the coefficient field `$(field.name)` has no spatial bases, so it has no " *
+            "coefficient-space representation to multiply by")
+    end
+    if any(b -> b === nothing, field.bases)
+        return ImplicitNCCUnsupported(
+            "the coefficient field `$(field.name)` has an undefined (nothing) basis on one of its axes")
+    end
 
     jac_axes  = findall(b -> isa(b, JacobiBasis), field.bases)
     four_axes = findall(b -> isa(b, FourierBasis), field.bases)
 
     if length(jac_axes) != 1
-        @warn "Tarang: implicit NCC is supported only for a coefficient varying along a single " *
-              "Chebyshev/Jacobi direction (this one has $(length(jac_axes)) Jacobi axes). The " *
-              "term is being dropped from the implicit matrix — move it to the explicit RHS." maxlog=1
-        return nothing
+        detail = isempty(jac_axes) ?
+            "it has no Chebyshev/Jacobi axis at all (on a fully periodic/Fourier domain a " *
+            "varying coefficient couples every Fourier mode, so there is no per-mode matrix)" :
+            "it varies along $(length(jac_axes)) Chebyshev/Jacobi axes and only a single " *
+            "coupled axis can be represented"
+        return ImplicitNCCUnsupported(
+            "the coefficient field `$(field.name)` is not representable: $detail")
     end
     jax = jac_axes[1]
     coupled_basis = field.bases[jax]
@@ -492,17 +564,24 @@ function _implicit_ncc_matrix(ncc_operand)
     if !isempty(four_axes)
         ensure_layout!(field, :c)
         coeffs = get_coeff_data(field)
-        coeffs === nothing && return nothing
+        if coeffs === nothing
+            return ImplicitNCCUnsupported(
+                "the coefficient field `$(field.name)` has no coefficient-space data available")
+        end
         maxabs = maximum(abs, coeffs)
-        maxabs == 0 && return nothing
+        # Identically zero coefficient: the term genuinely vanishes. Return a real zero
+        # matrix rather than `nothing`, which would have left the operand unscaled (q ≡ 1).
+        maxabs == 0 && return spzeros(ComplexF64, Nc, Nc)
         for fax in four_axes
             if size(coeffs, fax) > 1
                 nonDC = selectdim(coeffs, fax, 2:size(coeffs, fax))
                 if !isempty(nonDC) && maximum(abs, nonDC) > 1e-8 * maxabs
-                    @warn "Tarang: a non-constant FIELD coefficient that varies along a " *
-                          "Fourier/periodic axis couples Fourier modes and is not supported in the " *
-                          "implicit operator. Dropping it — move the term to the explicit RHS." maxlog=1
-                    return nothing
+                    fb = field.bases[fax]
+                    axis_label = hasfield(typeof(fb), :meta) ? string(fb.meta.element_label) : "?"
+                    return ImplicitNCCUnsupported(
+                        "the coefficient field `$(field.name)` varies along the Fourier/periodic " *
+                        "axis `$(axis_label)`, which couples Fourier modes and therefore has no " *
+                        "per-mode implicit matrix")
                 end
             end
         end
@@ -514,7 +593,18 @@ function _implicit_ncc_matrix(ncc_operand)
     g = Array(get_grid_data(field))
     idx = ntuple(d -> (d == jax ? Colon() : 1), ndims(g))
     qfiber = vec(g[idx...])
-    (length(qfiber) == Nc && eltype(qfiber) <: Real && any(!=(0), qfiber)) || return nothing
+    if length(qfiber) != Nc
+        return ImplicitNCCUnsupported(
+            "the coefficient field `$(field.name)` has $(length(qfiber)) grid points along its " *
+            "coupled axis but the basis has $Nc coefficients")
+    end
+    if !(eltype(qfiber) <: Real)
+        return ImplicitNCCUnsupported(
+            "the coefficient field `$(field.name)` has complex grid data; only real-valued " *
+            "implicit coefficients are supported")
+    end
+    # All-zero profile: the term is genuinely zero (see the maxabs branch above).
+    any(!=(0), qfiber) || return spzeros(ComplexF64, Nc, Nc)
 
     # Build the multiply-by-q matrix PSEUDOSPECTRALLY through the coupled basis's OWN transform:
     # Q = F · diag(q) · B (column k = forward(q .* backward(eₖ))). Convention-EXACT — it uses
@@ -523,7 +613,12 @@ function _implicit_ncc_matrix(ncc_operand)
     # Tarang's stored coeffs. Built on a fresh 1D domain so it is independent of the (possibly
     # multi-dimensional) parent distributor and applies per Fourier-mode subproblem.
     tmp = _ncc_temp_field(coupled_basis)
-    tmp === nothing && return nothing
+    if tmp === nothing
+        return ImplicitNCCUnsupported(
+            "the coupled basis type $(nameof(typeof(coupled_basis))) of coefficient field " *
+            "`$(field.name)` cannot be rebuilt as a stand-alone 1-D basis, so its " *
+            "multiply-by-coefficient transform cannot be assembled")
+    end
     Q = zeros(ComplexF64, Nc, Nc)
     for k in 1:Nc
         ensure_layout!(tmp, :c)
@@ -555,19 +650,106 @@ _rebuild_jacobi_1d(::ChebyshevU, coord, N, lo, hi) = ChebyshevU(coord; size=N, b
 _rebuild_jacobi_1d(::Legendre,   coord, N, lo, hi) = Legendre(coord;   size=N, bounds=(lo, hi))
 _rebuild_jacobi_1d(::Basis,      coord, N, lo, hi) = nothing
 
-# No NCC matrix (constant coefficient already handled, or unsupported+warned) → child blocks unchanged.
-_apply_implicit_ncc(::Nothing, child) = child
-function _apply_implicit_ncc(Q::AbstractMatrix, child)
+"""
+    ImplicitNCCError
+
+Raised when an implicit (LHS) term carries a field-valued coefficient that cannot be
+represented in the implicit operator. Assembling the term without its coefficient would
+silently change the equation being solved, so assembly stops instead.
+"""
+struct ImplicitNCCError <: Exception
+    term::String
+    reason::String
+end
+
+function Base.showerror(io::IO, e::ImplicitNCCError)
+    print(io, """
+    Tarang: the implicit (left-hand-side) term `$(e.term)` has a field-valued (non-constant)
+    coefficient that cannot be represented in the implicit operator, because $(e.reason).
+
+    This is an ERROR rather than a warning because the only alternative is to assemble the
+    term without its coefficient, which silently solves a different equation (for a diffusion
+    term, an inviscid run that shows no dependence on the coefficient at all).
+
+    Fix: move the term to the EXPLICIT right-hand side and expand the product yourself, e.g.
+
+        dt(u) = nu_e*lap(u) + ∂x(nu_e)*∂x(u) + ∂y(nu_e)*∂y(u)
+
+    Alternatively, keep a CONSTANT scalar coefficient on the LHS (so the implicit solve stays
+    well conditioned) and put only the varying part on the RHS. Tarang deliberately does not
+    move the term for you: that would change the implicit/explicit splitting, and with it the
+    stability properties of your timestepper, behind your back.
+
+    Field coefficients are supported in the implicit operator only when the coefficient varies
+    along a single Chebyshev/Jacobi axis and is constant along every Fourier/periodic axis.""")
+end
+
+# `_implicit_ncc_matrix` never returns `nothing`; an unsupported coefficient is reported as
+# `ImplicitNCCUnsupported` and raised here. Dropping it is never an option — see the struct docs.
+function _apply_implicit_ncc(u::ImplicitNCCUnsupported, child, term_label::AbstractString="<implicit term>")
+    # If the variable side contributes nothing anyway, the coefficient is irrelevant: there is
+    # no term to lose, so do not raise on a block that was always going to be empty.
+    (isempty(child) || all(mat -> nnz(mat) == 0, values(child))) && return child
+    throw(ImplicitNCCError(String(term_label), u.reason))
+end
+
+function _apply_implicit_ncc(Q::AbstractMatrix, child, term_label::AbstractString="<implicit term>")
     result = Dict{Any, SparseMatrixCSC}()
     for (var, mat) in child
         if size(Q, 2) == size(mat, 1)
             result[var] = sparse(Q * mat)
+        elseif nnz(mat) == 0
+            result[var] = mat   # empty block: nothing to scale, nothing to lose
         else
-            # Size mismatch (truncated/tau-augmented block) — don't crash; fall back.
-            @warn "Tarang: NCC multiply matrix $(size(Q)) incompatible with operand block " *
-                  "$(size(mat)); coefficient dropped for this block." maxlog=1
-            result[var] = mat
+            # Size mismatch (truncated/tau-augmented block). Passing `mat` through would drop
+            # the coefficient for a block that really does carry the term — that is the exact
+            # silent-wrong-answer this path exists to prevent, so raise.
+            throw(ImplicitNCCError(String(term_label),
+                "its multiply-by-coefficient matrix $(size(Q)) does not match the " *
+                "$(size(mat)) operand block for variable `$(_expr_label(var))`"))
         end
     end
     return result
+end
+
+"""
+    _expr_label(expr) -> String
+
+Short human-readable rendering of an expression tree, used to name the offending term in
+implicit-NCC errors. Best-effort: falls back to the operator's type name.
+"""
+function _expr_label(expr)
+    isa(expr, AbstractString) && return String(expr)
+    isa(expr, Number) && return string(expr)
+    isa(expr, ConstantOperator) && return string(expr.value)
+    isa(expr, ZeroOperator) && return "0"
+    if isa(expr, ScalarField) || isa(expr, VectorField) || isa(expr, TensorField)
+        return string(expr.name)
+    end
+    isa(expr, NegateOperator) && return "-" * _expr_label(expr.operand)
+    isa(expr, AddOperator)      && return _expr_label(expr.left) * " + " * _expr_label(expr.right)
+    isa(expr, SubtractOperator) && return _expr_label(expr.left) * " - " * _expr_label(expr.right)
+    isa(expr, MultiplyOperator) && return _expr_label(expr.left) * "*" * _expr_label(expr.right)
+    isa(expr, DivideOperator)   && return _expr_label(expr.left) * "/" * _expr_label(expr.right)
+    isa(expr, PowerOperator)    && return _expr_label(expr.left) * "^" * _expr_label(expr.right)
+    isa(expr, TimeDerivative)   && return "dt(" * _expr_label(expr.operand) * ")"
+    isa(expr, Laplacian)        && return "lap(" * _expr_label(expr.operand) * ")"
+    isa(expr, Gradient)         && return "grad(" * _expr_label(expr.operand) * ")"
+    isa(expr, Divergence)       && return "div(" * _expr_label(expr.operand) * ")"
+    isa(expr, Curl)             && return "curl(" * _expr_label(expr.operand) * ")"
+    if isa(expr, Differentiate)
+        cname = hasfield(typeof(expr), :coord) && expr.coord !== nothing ? string(expr.coord.name) : "?"
+        ord = hasfield(typeof(expr), :order) ? expr.order : 1
+        suffix = ord == 1 ? "" : "^$ord"
+        return "∂$(cname)$(suffix)(" * _expr_label(expr.operand) * ")"
+    end
+    if isa(expr, Future)
+        args = future_args(expr)
+        inner = join((_expr_label(a) for a in args), ", ")
+        return string(nameof(typeof(expr))) * "(" * inner * ")"
+    end
+    if hasfield(typeof(expr), :operand)
+        return string(nameof(typeof(expr))) * "(" * _expr_label(expr.operand) * ")"
+    end
+    return string(nameof(typeof(expr)))
 end
