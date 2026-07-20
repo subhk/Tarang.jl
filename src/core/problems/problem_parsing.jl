@@ -190,14 +190,23 @@ end
 
 """
     Validate that equation follows structure requirements.
-    
+
     Requirements:
     1. LHS must be linear in dependent variables
-    2. LHS must be first-order in time derivatives  
+    2. LHS must be first-order in time derivatives
     3. RHS can contain nonlinear terms
-    4. Non-constant coefficients should be on RHS
+    4. Coefficients that the implicit operator cannot represent belong on the RHS
+
+    `variables` is the problem's list of solved-for variables (`problem.variables`).
+    It is what tells a COEFFICIENT factor (`q` in `q*lap(u)`) apart from a
+    variable-dependent factor (`u` in `u*dx(u)`) — the same distinction the matrix
+    builder makes via `_references_variable`. Pass it whenever it is available;
+    without it the RHS "move this to the LHS" check is skipped rather than guessed,
+    because a forcing field on the RHS is indistinguishable from a misplaced linear
+    term once the variable list is gone.
     """
-function validate_equation_structure(LHS, RHS, original_equation::String)
+function validate_equation_structure(LHS, RHS, original_equation::String;
+                                     variables=nothing)
 
     # Check for temporal derivatives on RHS (not allowed)
     if contains_time_derivatives(RHS)
@@ -212,24 +221,37 @@ function validate_equation_structure(LHS, RHS, original_equation::String)
         return true
     end
 
+    vars = _problem_variable_operands(variables)
+
     # Collect misplaced terms and suggest correction
     lhs_terms = _collect_addends(LHS)
     rhs_terms = _collect_addends(RHS)
 
-    nonlinear_on_lhs = filter(t -> !_is_linear_term(t), lhs_terms)
-    linear_on_rhs = filter(t -> _is_linear_term(t) && !_is_constant_term(t), rhs_terms)
+    # A RHS term belongs on the LHS only when it is (a) linear AND implicit-capable,
+    # (b) not a bare constant, and (c) actually about a solved-for variable. Without
+    # (c) every constant-in-time forcing field on the RHS — a completely legitimate
+    # explicit term with no matrix column to move into — would be reported. With no
+    # variable list at all, (c) is unanswerable and the check is skipped rather than
+    # guessed: `u*dx(u)` and `q*dx(u)` are indistinguishable without it, and the
+    # advice for one is exactly wrong for the other.
+    _moves_to_lhs(t) = _references_problem_variable(t, vars) &&
+                       _is_linear_term(t, vars) && !_is_constant_term(t)
+
+    nonlinear_on_lhs = filter(t -> !_is_linear_term(t, vars), lhs_terms)
+    linear_on_rhs = filter(_moves_to_lhs, rhs_terms)
 
     if !isempty(nonlinear_on_lhs) || !isempty(linear_on_rhs)
-        # Build suggested equation
-        new_lhs_terms = filter(t -> _is_linear_term(t), lhs_terms)
+        # Build suggested equation. `0` addends are dropped: an equation written
+        # "... = 0" would otherwise be suggested back as "0 - (-(q * Δ(u)))".
+        new_lhs_terms = filter(t -> _is_linear_term(t, vars) && !isa(t, ZeroOperator), lhs_terms)
         # Move linear RHS terms to LHS (flip sign)
         for t in linear_on_rhs
-            push!(new_lhs_terms, NegateOperator(t))
+            push!(new_lhs_terms, _negate_term(t))
         end
-        new_rhs_terms = filter(t -> !_is_linear_term(t) || _is_constant_term(t), rhs_terms)
+        new_rhs_terms = filter(t -> !_moves_to_lhs(t) && !isa(t, ZeroOperator), rhs_terms)
         # Move nonlinear LHS terms to RHS (flip sign)
         for t in nonlinear_on_lhs
-            push!(new_rhs_terms, NegateOperator(t))
+            push!(new_rhs_terms, _negate_term(t))
         end
 
         suggested_lhs = _format_sum(new_lhs_terms)
@@ -242,6 +264,62 @@ function validate_equation_structure(LHS, RHS, original_equation::String)
     return true
 end
 
+"""
+    validate_added_equation(problem, equation::String) -> Bool
+
+Run [`validate_equation_structure`](@ref) on an equation as it is ADDED to the
+problem, so the guidance lands at the point of the mistake instead of at solve
+time (or, as was the case before, never — `validate_equation_structure` only ran
+inside `parse_equation`, which no solver path calls).
+
+Equations are stored as strings and parsed later, so this parses into a throwaway
+tree. Three properties keep that safe:
+
+* Only equations that actually contain `dt(`/`∂t(` are parsed at all. Boundary
+  conditions, constraints and diagnostic equations are skipped without being
+  touched, and `validate_equation_structure` would have returned early for them
+  anyway.
+* The parse runs under a null logger. A parameter that has not been added to the
+  namespace yet (equation written before `add_parameters!`) would otherwise emit
+  "Unknown variable" warnings that no user sees today, because the real parse
+  happens later, after the namespace is complete. Nothing is lost: that parse
+  still runs, with logging, at build time.
+* Anything unexpected is swallowed. A structure check must never be able to stop
+  an equation from being added.
+"""
+function validate_added_equation(problem, equation::String)
+    _has_time_derivative_syntax(equation) || return true
+    try
+        lhs_str, rhs_str = split_equation(equation)
+        variables = hasfield(typeof(problem), :variables) ? problem.variables : nothing
+        namespace = hasfield(typeof(problem), :namespace) ? problem.namespace : Dict{String, Any}()
+        LHS = nothing
+        RHS = nothing
+        Base.CoreLogging.with_logger(Base.CoreLogging.NullLogger()) do
+            LHS = parse_expression(strip(lhs_str), namespace)
+            RHS = parse_expression(strip(rhs_str), namespace)
+        end
+        validate_equation_structure(LHS, RHS, equation; variables=variables)
+    catch e
+        if isa(e, ArgumentError)
+            # e.g. a time derivative on the RHS. Report it, but never throw: the
+            # equation has already been stored and add_equation! has never thrown.
+            @warn "Equation structure: $(e.msg)"
+        else
+            @debug "Structure check skipped for equation" equation exception=e
+        end
+    end
+    return true
+end
+
+"""True when the equation string contains a time derivative (`dt(...)`/`∂t(...)`)."""
+function _has_time_derivative_syntax(equation::AbstractString)
+    return occursin(r"(?:^|[^A-Za-z0-9_])(?:dt|∂t)\s*\(", equation)
+end
+
+"""Flip a term's sign for the suggested form, collapsing `-(-x)` back to `x`."""
+_negate_term(t) = isa(t, NegateOperator) ? t.operand : NegateOperator(t)
+
 """Collect top-level addends from an expression tree (split by +/-)."""
 function _collect_addends(expr)
     if isa(expr, AddOperator)
@@ -253,40 +331,249 @@ function _collect_addends(expr)
     end
 end
 
-"""Check if a term is linear (contains a differential operator or ∂t, but no variable products)."""
-function _is_linear_term(expr)
-    if isa(expr, TimeDerivative) || isa(expr, Laplacian) || isa(expr, Gradient) ||
-       isa(expr, Divergence) || isa(expr, Differentiate) || isa(expr, Lift) ||
-       isa(expr, FractionalLaplacian) || isa(expr, Curl) || isa(expr, Skew) ||
-       isa(expr, Trace) || isa(expr, Integrate) || isa(expr, Average) ||
-       isa(expr, Interpolate) || isa(expr, Convert) || isa(expr, HilbertTransform) ||
-       isa(expr, Component) || isa(expr, RadialComponent) ||
-       isa(expr, AngularComponent) || isa(expr, AzimuthalComponent)
-        return true
-    elseif isa(expr, NegateOperator)
-        return _is_linear_term(expr.operand)
+"""
+    _is_linear_term(expr, variables=nothing) -> Bool
+
+True when `expr` is a term the IMPLICIT (left-hand) side can hold: linear in the
+solved-for variables *and* built from coefficients the implicit operator can
+actually represent.
+
+Nonlinearity is decided by exclusion rather than by an allowlist of linear
+operator types — an allowlist silently mis-reports every operator nobody
+remembered to add to it (`Δ⁴`, `Copy`, `Grid`, …). A term is nonlinear only when
+it is one of the constructs that genuinely cannot become a matrix:
+
+* a product whose factors are BOTH variable-dependent (`u*dx(u)`), or whose
+  coefficient factor is not implicit-capable (`nu_e*lap(u)` on a Fourier domain);
+* a division by anything other than a constant (`lap(u)/q` — the matrix builder
+  raises on the reciprocal of a field);
+* a power other than `^1` of a variable-dependent base (`u^2`);
+* a nonlinear function of a variable-dependent operand (`sin(u)`).
+"""
+function _is_linear_term(expr, variables=nothing)
+    if isa(expr, NegateOperator)
+        return _is_linear_term(expr.operand, variables)
+    elseif isa(expr, AddOperator) || isa(expr, SubtractOperator)
+        return _is_linear_term(expr.left, variables) && _is_linear_term(expr.right, variables)
     elseif isa(expr, MultiplyOperator)
-        # c * L(u) is linear if one side is a constant/parameter
-        left_is_const = _is_constant_term(expr.left)
-        right_is_const = _is_constant_term(expr.right)
-        if left_is_const
-            return _is_linear_term(expr.right)
-        elseif right_is_const
-            return _is_linear_term(expr.left)
+        # c * L(u) is linear when one side is a coefficient the implicit operator
+        # can represent — a number, a constant parameter, or a field-valued NCC
+        # the matrix builder actually knows how to multiply by.
+        left_is_coeff = _is_implicit_coefficient(expr.left, variables)
+        right_is_coeff = _is_implicit_coefficient(expr.right, variables)
+        if left_is_coeff && right_is_coeff
+            return true                       # coefficient * coefficient: a constant term
+        elseif left_is_coeff
+            return _is_linear_term(expr.right, variables)
+        elseif right_is_coeff
+            return _is_linear_term(expr.left, variables)
         else
-            return false  # variable * variable = nonlinear
+            return false                      # variable * variable = nonlinear
         end
-    elseif isa(expr, ScalarField) || isa(expr, VectorField)
-        return true  # bare field reference is linear
+    elseif isa(expr, DivideOperator)
+        # Only division by a CONSTANT scales a matrix block. A field-valued
+        # denominator raises in the matrix builder (1/q is not an implicit operator),
+        # so it must be reported, not accepted.
+        return _is_constant_term(expr.right) && _is_linear_term(expr.left, variables)
+    elseif isa(expr, PowerOperator)
+        _is_constant_term(expr) && return true
+        exponent = _get_constant_value(expr.right)
+        return exponent !== nothing && exponent == 1 &&
+               _is_linear_term(expr.left, variables)
+    elseif isa(expr, Union{GeneralFunction, UnaryGridFunction, NonlinearOperator})
+        # sin(u), exp(u), … are linear only if their operand holds no variable.
+        return !_references_problem_variable(expr, variables)
+    elseif isa(expr, Future)
+        return _is_linear_future_term(expr, variables)
+    elseif hasfield(typeof(expr), :operand)
+        # A single-operand operator is exactly as linear as what it wraps. Stopping
+        # at the outer node instead would call `div(nu_e*grad(u))` an implicit term
+        # because the outermost thing is a Divergence — and then advise moving an
+        # explicitly-written variable-viscosity diffusion onto the LHS, where it
+        # raises.
+        return _is_linear_term(getfield(expr, :operand), variables)
     else
-        return _is_constant_term(expr)
+        # Bare fields, constants and unresolved symbols. Reporting an unrecognised
+        # node as nonlinear would be a guess, and a wrong guess produces wrong advice.
+        return true
     end
 end
 
-"""Check if a term is a constant (number, parameter, ZeroOperator)."""
+"""Linearity for the object-syntax (`Future`) arithmetic nodes."""
+function _is_linear_future_term(expr, variables)
+    args = collect(Any, future_args(expr))
+    if isa(expr, Multiply)
+        dependent = filter(a -> _references_problem_variable(a, variables), args)
+        length(dependent) > 1 && return false
+        coefficients = filter(a -> !_references_problem_variable(a, variables), args)
+        all(a -> _is_implicit_coefficient(a, variables), coefficients) || return false
+        return all(a -> _is_linear_term(a, variables), dependent)
+    elseif isa(expr, Divide)
+        length(args) >= 2 || return true
+        return _is_constant_term(args[2]) && _is_linear_term(args[1], variables)
+    elseif isa(expr, Add) || isa(expr, Subtract) || isa(expr, Negate)
+        return all(a -> _is_linear_term(a, variables), args)
+    end
+    # DotProduct / CrossProduct / Outer / Power and friends: nonlinear as soon as
+    # more than one operand carries a variable (and Power is nonlinear with even one).
+    dependent = count(a -> _references_problem_variable(a, variables), args)
+    return dependent == 0
+end
+
+"""
+    _is_constant_term(expr) -> Bool
+
+True for a CONSTANT scalar coefficient — precisely the set the matrix builder
+folds into a scalar multiplier (`_is_const_or_param`, problem_matrices_spectral.jl):
+numbers, `ConstantOperator`/`ZeroOperator`, arithmetic whose leaves are all
+constant, and a `ScalarField` that is 0-D or holds a single value (a tau variable
+or a scalar parameter stored as a field).
+
+Also accepts a constant `VectorField`/`TensorField` — the unit vectors `ez` in
+`Ra*Pr*b*ez`. Those are rank-changing block expansions rather than scalar
+multipliers, but they are long-supported implicit coefficients
+(`_build_constant_field_matrix`), so calling them nonlinear would flag standard
+Boussinesq equations.
+"""
 function _is_constant_term(expr)
-    isa(expr, Number) || isa(expr, ZeroOperator) || isa(expr, ConstantOperator) ||
-    (isa(expr, NegateOperator) && _is_constant_term(expr.operand))
+    isa(expr, NegateOperator) && return _is_constant_term(expr.operand)
+    _is_const_or_param(expr) && return true
+    if isa(expr, AddOperator) || isa(expr, SubtractOperator) ||
+       isa(expr, MultiplyOperator) || isa(expr, DivideOperator) || isa(expr, PowerOperator)
+        return _is_constant_term(expr.left) && _is_constant_term(expr.right)
+    end
+    if isa(expr, VectorField) || isa(expr, TensorField)
+        comps = expr.components
+        return !isempty(comps) && all(_is_const_or_param, comps)
+    end
+    return false
+end
+
+"""
+    _is_implicit_coefficient(expr, variables=nothing) -> Bool
+
+True when `expr` can be the COEFFICIENT factor of an implicit (LHS) product — that
+is, when the matrix builder turns it into an operator instead of raising
+`ImplicitNCCError`. This mirrors, in order, the three tests the builder applies:
+
+1. `_references_variable` — a factor that mentions a solved-for variable is not a
+   coefficient at all, it is the variable-dependent side of the product.
+2. `_is_const_or_param` — numbers, constant parameters, 0-D/single-point fields
+   (see [`_is_constant_term`](@ref)).
+3. `_implicit_ncc_matrix` — a bare field coefficient is representable only when it
+   varies along exactly one Jacobi/Chebyshev axis and is constant along every
+   Fourier axis. A coefficient that varies along a Fourier axis couples Fourier
+   modes, has no per-mode matrix, and genuinely does NOT belong on the LHS.
+
+The narrower predicate this replaces accepted only `Number`/`ZeroOperator`/
+`ConstantOperator`, so it reported `dt(u) - q(z)*lap(u) = 0` and
+`dt(u) - nu0*lap(u) = 0` as misplaced and advised moving them to the RHS — advice
+that is wrong for terms the implicit path builds correctly.
+"""
+function _is_implicit_coefficient(expr, variables=nothing)
+    _references_problem_variable(expr, variables) && return false
+    isa(expr, NegateOperator) && return _is_implicit_coefficient(expr.operand, variables)
+    _is_constant_term(expr) && return true
+    # A symbol that is not in the namespace yet (the equation was written before
+    # `add_parameters!`) parses to a placeholder. Assume it is the scalar parameter
+    # it looks like; treating it as a nonlinearity would invent a problem.
+    isa(expr, UnknownOperator) && return true
+
+    field = _ncc_direct_field(expr)      # sees through Grid/Coeff/Convert/Copy only
+    field === nothing && return false
+    isempty(field.bases) && return true
+    any(b -> b === nothing, field.bases) && return false
+    count(b -> isa(b, JacobiBasis), field.bases) == 1 || return false
+    return !_coefficient_varies_along_fourier(field)
+end
+
+"""
+    _coefficient_varies_along_fourier(field) -> Bool
+
+True when a coefficient field's data varies along one of its Fourier/periodic axes,
+which is what makes it unrepresentable in the per-mode implicit operator.
+
+Reads whichever layout the field is ALREADY in — never transforms. `add_equation!`
+must not mutate a user's field as a side effect of validating a string, and a field
+whose data is not set yet is zero, which the matrix builder itself treats as a
+representable (identically zero) coefficient. Any surprise is reported as "does not
+vary", because the cost of guessing wrong here is a false warning.
+"""
+function _coefficient_varies_along_fourier(field)
+    fourier_axes = findall(b -> isa(b, FourierBasis), field.bases)
+    isempty(fourier_axes) && return false
+    try
+        layout = hasfield(typeof(field), :current_layout) ?
+                 getfield(field, :current_layout) : :g
+        data = layout === :c ? get_coeff_data(field) : get_grid_data(field)
+        data === nothing && return false
+        arr = Array(data)
+        (isempty(arr) || ndims(arr) != length(field.bases)) && return false
+        scale = maximum(abs, arr)
+        scale == 0 && return false          # identically zero: genuinely representable
+        for axis in fourier_axes
+            size(arr, axis) > 1 || continue
+            if layout === :c
+                # Constant along a Fourier axis <=> only the DC coefficient is nonzero.
+                non_dc = selectdim(arr, axis, 2:size(arr, axis))
+                (!isempty(non_dc) && maximum(abs, non_dc) > 1e-8 * scale) && return true
+            else
+                reference = selectdim(arr, axis, 1)
+                for k in 2:size(arr, axis)
+                    maximum(abs, selectdim(arr, axis, k) .- reference) > 1e-8 * scale &&
+                        return true
+                end
+            end
+        end
+    catch e
+        @debug "Could not inspect coefficient field for Fourier variation" exception=e
+        return false
+    end
+    return false
+end
+
+"""
+    _problem_variable_operands(variables) -> Vector{Operand}
+
+The problem's variables, plus the scalar components of every vector/tensor
+variable. `_detect_equation_variables` matches by NAME, so the component `u_x`
+produced by expanding `u⋅∇(q)` does not match the `VectorField` `u` it came from —
+without the components in the list, `u_x` looks like an innocent coefficient field
+and `u⋅∇(q)` is mistaken for a linear term.
+"""
+function _problem_variable_operands(variables)
+    result = Operand[]
+    variables === nothing && return result
+    for var in variables
+        isa(var, Operand) || continue
+        push!(result, var)
+        if isa(var, VectorField) || isa(var, TensorField)
+            for comp in var.components
+                isa(comp, Operand) && push!(result, comp)
+            end
+        end
+    end
+    return result
+end
+
+"""
+    _references_problem_variable(expr, variables) -> Bool
+
+True when `expr` mentions one of the solved-for variables. Mirrors
+`_references_variable` in the matrix builder. An empty/absent variable list means
+"cannot tell", and the answer is `false` so that no factor is wrongly demoted from
+coefficient to variable-dependent.
+"""
+function _references_problem_variable(expr, variables)
+    (variables === nothing || isempty(variables)) && return false
+    try
+        vars = eltype(variables) <: Operand ? variables : Operand[v for v in variables if isa(v, Operand)]
+        isempty(vars) && return false
+        return !isempty(_detect_equation_variables(expr, vars))
+    catch e
+        @debug "Variable-reference check failed" exception=e
+        return false
+    end
 end
 
 """Format a list of addends as a readable sum string, handling signs cleanly."""

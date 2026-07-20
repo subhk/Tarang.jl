@@ -130,6 +130,8 @@ const TEST_FILES = [
     "test_rhs_error_propagation.jl",         # a failed RHS term must not silently become zero
     "test_diagonal_imex_robustness.jl",      # DiagonalIMEX must not silently drop the implicit operator
     "test_cfl_diffusive.jl",                 # CFL diffusive limit for explicitly-treated diffusion
+    "test_conservative_flux.jl",              # div(a*u) conservative flux form
+    "test_equation_structure_validation.jl",  # misplaced-term validation must match what actually builds
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
 ]
 

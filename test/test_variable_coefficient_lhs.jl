@@ -387,3 +387,38 @@ end
         @test Tarang._expr_label(2.5) == "2.5"
     end
 end
+
+# ---------------------------------------------------------------------------
+# An unset constant coefficient must not silently read as zero.
+#
+# `ScalarField(dist, name, (), T)` allocates a ZERO-element vector, so a 0-D
+# parameter field has no value to read. `_extract_scalar` used to return 0.0 for
+# that case, which turns off every term the coefficient multiplies:
+# `dt(u) - nu0*lap(u) = 0` integrated as inviscid, with no diagnostic.
+# ---------------------------------------------------------------------------
+@testset "unset constant coefficient raises instead of reading as zero" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; dtype=Float64)
+    xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+    yb = ComplexFourier(coords["y"]; size=8, bounds=(0.0, 2π))
+
+    # A 0-D parameter field really does allocate zero elements.
+    nu_unset = ScalarField(dist, "nu_unset", (), Float64)
+    @test length(Tarang.get_grid_data(nu_unset)) == 0
+    @test_throws ArgumentError Tarang._extract_scalar(nu_unset)
+
+    # ... and the message points at the fix rather than just failing.
+    err = try
+        Tarang._extract_scalar(nu_unset); nothing
+    catch e
+        sprint(showerror, e)
+    end
+    @test err !== nothing
+    @test occursin("nu_unset", err)
+    @test occursin("set_grid_data!", err)
+
+    # Once set, it reads back and is usable as a constant coefficient.
+    nu_set = ScalarField(dist, "nu_set", (), Float64)
+    Tarang.set_grid_data!(nu_set, [0.5])
+    @test Tarang._extract_scalar(nu_set) ≈ 0.5
+end

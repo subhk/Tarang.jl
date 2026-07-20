@@ -288,8 +288,11 @@ problem.namespace["kappa"] = 0.01  # Thermal diffusivity
 Use CFL condition for adaptive time steps:
 
 ```julia
-cfl = CFL(problem, safety=0.5)
+cfl = CFL(solver; safety=0.5)
 add_velocity!(cfl, u)
+# The returned dt covers advection only. If you treat diffusion explicitly
+# (e.g. an LES eddy viscosity), also register it:
+#   add_diffusivity!(cfl, nu_e)
 
 while solver.sim_time < t_end
     dt = compute_timestep(cfl)

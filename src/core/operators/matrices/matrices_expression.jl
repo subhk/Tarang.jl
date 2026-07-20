@@ -123,7 +123,13 @@ function _extract_scalar_local(expr)
         gdata !== nothing && length(gdata) >= 1 && return real(gdata[1])
         cdata = get_coeff_data(expr)
         cdata !== nothing && length(cdata) >= 1 && return real(cdata[1])
-        return 0.0  # uninitialized constant -> zero
+        # See `_extract_scalar`: assuming zero for an unset coefficient silently
+        # deletes every term it multiplies.
+        throw(ArgumentError(
+            "Constant coefficient field `$(expr.name)` has no data, so its value cannot be " *
+            "determined. Set it before building the problem, e.g. " *
+            "`set_grid_data!($(expr.name), [value])`."
+        ))
     end
     return 1.0  # fallback
 end

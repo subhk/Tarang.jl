@@ -533,6 +533,10 @@ function add_equation!(problem::Problem, equation::String)
     push!(problem.equations, equation)
     # Quick string-level check for common mistakes (linear terms on RHS)
     _check_equation_placement(equation, problem)
+    # Full structural check (parses a throwaway tree; never throws) — this is the
+    # only path on which users ever reach `validate_equation_structure`, so the
+    # guidance lands where the equation is written rather than at solve time.
+    validate_added_equation(problem, equation)
 end
 
 # Linear operator patterns that should be on the LHS

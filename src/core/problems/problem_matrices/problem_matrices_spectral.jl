@@ -763,7 +763,17 @@ function _extract_scalar(expr)
         gdata !== nothing && length(gdata) >= 1 && return real(gdata[1])
         cdata = get_coeff_data(expr)
         cdata !== nothing && length(cdata) >= 1 && return real(cdata[1])
-        return 0.0  # uninitialized constant → zero
+        # No data to read. Substituting zero here silently turns the whole term
+        # off — `dt(u) - nu0*lap(u) = 0` with an unset `nu0` integrates as
+        # inviscid, which looks like a plausible answer. Note a 0-D
+        # `ScalarField(dist, name, (), T)` allocates a ZERO-element vector, so a
+        # parameter field lands here unless its value was set explicitly.
+        throw(ArgumentError(
+            "Constant coefficient field `$(expr.name)` has no data, so its value cannot be " *
+            "determined. Set it before building the problem, e.g. " *
+            "`set_grid_data!($(expr.name), [value])`. (Refusing to assume zero: that would " *
+            "silently drop every term this coefficient multiplies.)"
+        ))
     end
     return 1.0  # fallback
 end

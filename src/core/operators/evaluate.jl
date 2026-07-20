@@ -184,13 +184,58 @@ function _multiply_result(left::VectorField, right::Number, layout::Symbol)
     return _multiply_result(right, left, layout)
 end
 
+# A scalar FIELD times a vector field: (a u)ᵢ = a uᵢ. This is a rank-preserving
+# scaling — the conservative flux `ρu`, a variable-coefficient stress, `a*grad(u)`
+# once the gradient has been evaluated — not an ambiguous vector×vector product,
+# so it has a single meaning and belongs here.
+#
+# The deferred-`Multiply` path has always accepted it (`combine_multiply` →
+# `scale_vector_field` in arithmetic.jl). Rejecting it here meant the SAME term
+# evaluated one way inside the solver and threw when the parsed operator tree was
+# evaluated — the same inconsistency the `_divide_result` delegation below exists
+# to close.
+#
+# Products are pointwise, so they are formed in grid space whatever `layout` asks
+# for (mirroring ScalarField*ScalarField) and transformed afterwards.
+function _multiply_result(left::ScalarField, right::VectorField, layout::Symbol)
+    result = VectorField(right.dist, right.coordsys, "_mul", right.bases, right.dtype)
+    ensure_layout!(left, :g)
+    scalar_data = get_grid_data(left)
+
+    for (i, comp) in enumerate(right.components)
+        ensure_layout!(comp, :g)
+        ensure_layout!(result.components[i], :g)
+        src = get_grid_data(comp)
+        dst = get_grid_data(result.components[i])
+        if scalar_data !== nothing && src !== nothing && dst !== nothing
+            if size(scalar_data) != size(src)
+                throw(ArgumentError(
+                    "Cannot multiply ScalarField '$(left.name)' (grid shape " *
+                    "$(size(scalar_data))) by component $i of VectorField " *
+                    "'$(right.name)' (grid shape $(size(src))): a scalar coefficient " *
+                    "must live on the same grid as the field it scales."))
+            end
+            @. dst = scalar_data * src
+        end
+        result.components[i].current_layout = :g
+    end
+
+    layout == :c && ensure_layout!(result, :c)
+    return result
+end
+
+function _multiply_result(left::VectorField, right::ScalarField, layout::Symbol)
+    return _multiply_result(right, left, layout)
+end
+
 _multiply_result(left::Number, right::Number, ::Symbol) = left * right
 
 function _multiply_result(left, right, ::Symbol)
     throw(ArgumentError(
         "Cannot multiply $(typeof(left)) and $(typeof(right)). " *
         "Supported: ScalarField*ScalarField, Number*ScalarField, ScalarField*Number, " *
-        "Number*VectorField, VectorField*Number. " *
+        "Number*VectorField, VectorField*Number, ScalarField*VectorField, " *
+        "VectorField*ScalarField. " *
         "For dot product use `dot(u, v)` or `u ⋅ v`. " *
         "For cross product use `cross(u, v)` or `u × v`."))
 end
