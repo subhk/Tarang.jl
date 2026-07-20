@@ -79,7 +79,7 @@ add_equation!(problem, "T(z=1) = 0")   # cold top
 solver = InitialValueSolver(problem, RK222(); dt=1e-3, device="cpu")
 
 # 7) CFL-based adaptive timestep
-cfl = CFL(problem; safety=0.5, max_change=1.2, min_change=0.5)
+cfl = CFL(solver; safety=0.5, max_change=1.2, min_change=0.5)
 add_velocity!(cfl, u)
 
 t_end = 1.0

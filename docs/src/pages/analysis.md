@@ -6,26 +6,58 @@ Analysis tools for computing diagnostics, statistics, and derived quantities.
 
 Compute stable timesteps based on flow velocity.
 
+The controller wraps the **solver**, not the problem — it needs the solver's
+communicator for the global reduction that makes the step agree across ranks.
+
 ```julia
 using Tarang
 
-# Create CFL calculator
-cfl = CFL(problem;
-    safety=0.5,      # Safety factor (0.3-0.5 typical)
-    max_change=1.5,  # Max dt increase per step
-    min_change=0.5   # Max dt decrease per step
+coords = CartesianCoordinates("x", "y")
+dist   = Distributor(coords; dtype=Float64)
+xbasis = RealFourier(coords["x"]; size=64, bounds=(0.0, 2π))
+ybasis = RealFourier(coords["y"]; size=64, bounds=(0.0, 2π))
+domain = Domain(dist, (xbasis, ybasis))
+
+mesh = Tarang.create_meshgrid(domain)
+x, y = mesh["x"], mesh["y"]
+
+u = VectorField(domain, "u")
+u.components[1]["g"] = @.  sin(x) * cos(y)
+u.components[2]["g"] = @. -cos(x) * sin(y)
+
+problem = IVP([u]; namespace=Dict("u" => u))
+add_equation!(problem, "∂t(u) = 0")
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+# Create the CFL controller
+cfl = CFL(solver;
+    initial_dt = 1e-3,  # dt used until the first computation
+    safety     = 0.5,   # safety factor (0.3-0.5 typical)
+    cadence    = 1,     # recompute every N iterations
+    max_change = 1.5,   # largest dt increase per commit
+    min_change = 0.5,   # largest dt decrease per commit
+    threshold  = 0.1,   # only commit changes larger than 10% (see below)
+    max_dt     = 0.1,   # hard upper bound on dt
 )
 
-# Register velocity field
+# Register the fields that constrain the step
 add_velocity!(cfl, u)
 
-# Optional limits
-cfl.max_dt = 0.01
-cfl.min_dt = 1e-8
+# Compute a timestep…
+dt = compute_timestep(cfl)   # 0.0491 = safety * Δx / max|u| here
 
-# Compute timestep
-dt = compute_timestep(cfl)
+# …or hand the controller to `run!` and let it do that each iteration
+# run!(solver; cfl=cfl, stop_iteration=1000)
 ```
+
+Every keyword is also a mutable field, so `cfl.max_dt = 0.05` between steps
+works. There is **no** `min_dt`: `dt` has no floor, and the `safety`,
+`min_change` and `threshold` knobs are what keep it from collapsing.
+
+`threshold` is sticky-`dt` hysteresis. Changing `dt` invalidates the cached LHS
+factorization in the implicit solve, so a proposed step within `threshold`
+(relative) of the current one is discarded and the current `dt` reused. Default
+`0.1`; set `0.0` to commit every change.
 
 !!! warning "Advection only by default"
     With just `add_velocity!`, the returned `dt` accounts for **advection only**.
