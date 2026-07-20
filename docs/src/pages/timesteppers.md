@@ -435,6 +435,19 @@ IMEX methods allow larger timesteps by treating diffusion implicitly:
 
 only constrained by advection, not diffusion.
 
+!!! warning "Explicitly-treated diffusion still limits dt"
+    That holds only for diffusion the timestepper actually treats implicitly. A
+    **spatially varying** coefficient — most importantly an LES eddy viscosity νₑ —
+    cannot go down the implicit path, so it is stepped explicitly and imposes
+
+    ```math
+    \Delta t \le \frac{1}{2 \nu_{max} \sum_i \Delta x_i^{-2}}
+    ```
+
+    (equivalently `Δx²/(2dν)` on an isotropic `d`-dimensional grid). The `CFL`
+    controller does **not** enforce this unless you register the coefficient with
+    `add_diffusivity!(cfl, get_eddy_viscosity(model))`.
+
 ## Adaptive Time Stepping
 
 ### With CFL
@@ -465,6 +478,10 @@ end
 The remaining knobs are `threshold`, `max_change` and `min_change` (all *ratios* limiting how
 fast `dt` may change between recomputations). There is no `min_dt` field; the current step is
 `cfl.current_dt`.
+
+Registering velocities alone gives an **advection-only** step. Add
+`add_diffusivity!(cfl, ν)` for anything diffusive you integrate explicitly — see
+[Diffusive Limit](solvers.md#Diffusive-Limit-for-Explicit-Diffusion).
 
 ### Manual Adjustment
 

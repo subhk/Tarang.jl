@@ -129,6 +129,7 @@ const TEST_FILES = [
     "test_variable_coefficient_lhs.jl",      # field-valued LHS coefficient must not be silently dropped
     "test_rhs_error_propagation.jl",         # a failed RHS term must not silently become zero
     "test_diagonal_imex_robustness.jl",      # DiagonalIMEX must not silently drop the implicit operator
+    "test_cfl_diffusive.jl",                 # CFL diffusive limit for explicitly-treated diffusion
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
 ]
 

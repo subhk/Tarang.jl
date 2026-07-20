@@ -331,6 +331,58 @@ object (`cfl.max_dt = 0.02` after construction is fine).
 There is no `min_dt`: the floor on the timestep is expressed as the *ratio* `min_change`,
 not as an absolute value. The current step is `cfl.current_dt`.
 
+### Diffusive Limit for Explicit Diffusion
+
+!!! warning
+    With only `add_velocity!` registered, `compute_timestep` returns an
+    **advection-only** step, `dt = safety / max(Σᵢ |uᵢ|/Δxᵢ)`. Diffusion that the
+    timestepper integrates *explicitly* is not accounted for at all.
+
+The usual offender is an LES eddy viscosity νₑ. A spatially varying coefficient cannot go
+down the implicit path, so it is stepped explicitly and carries its own parabolic limit.
+Register it with `add_diffusivity!`:
+
+```julia
+cfl = CFL(solver; safety=0.4)
+add_velocity!(cfl, u)
+
+add_diffusivity!(cfl, nu)                             # constant, explicitly-treated ν
+add_diffusivity!(cfl, get_eddy_viscosity(les_model))  # LES νₑ, refreshed in place
+add_diffusivity!(cfl, nu_field)                       # a ScalarField
+add_diffusivity!(cfl, nu_array; domain=other.domain)  # explicit grid for a bare array
+```
+
+| Argument | Meaning |
+|----------|---------|
+| `Real` | Constant diffusivity |
+| `AbstractArray` | Per-point diffusivity; under MPI this rank's slab, reduced for you |
+| `ScalarField` | Transformed to grid space on each evaluation |
+| `domain=` | Grid supplying the spacings (defaults to the field's, else the first velocity's, else the problem's) |
+
+Each entry contributes the frequency
+
+```
+f_diff = 2 ν_max Σᵢ Δxᵢ⁻²        ⟹        dt ≤ 1 / f_diff
+```
+
+which is the forward-Euler limit of the second-order central Laplacian (extreme eigenvalue
+`-4ν Σᵢ Δxᵢ⁻²`, so `|1 + λ dt| ≤ 1` gives `dt ≤ 1/(2ν Σᵢ Δxᵢ⁻²)`). The **sum** over axes is
+the anisotropic form; on an isotropic `d`-dimensional grid it collapses to the familiar
+`dt ≤ Δx²/(2dν)`. The advective and diffusive limits are combined by taking the smaller
+step (the larger frequency), and `safety` applies to both.
+
+Notes:
+
+* **Opt-in.** A `CFL` with no registered diffusivity behaves exactly as before.
+* **Register once.** Arrays and fields are held by reference, so a model that overwrites νₑ
+  in place every step is picked up automatically.
+* **One collective.** Diffusivities share the single batched `Allreduce(MAX)` with the
+  velocities, so `ν_max` is the *global* maximum without adding communication.
+* **Implicit diffusion needs no registration** — only what the timestepper treats explicitly.
+* **Chebyshev axes matter most.** `grid_spacing` reports the *minimum* near-wall spacing,
+  `Δz = L(1 − cos(π/(N−1)))/2`, which is far below `L/N`; the `Δz⁻²` there routinely
+  dominates the step.
+
 ## Stopping Conditions
 
 ```julia

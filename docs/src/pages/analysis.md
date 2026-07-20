@@ -27,6 +27,20 @@ cfl.min_dt = 1e-8
 dt = compute_timestep(cfl)
 ```
 
+!!! warning "Advection only by default"
+    With just `add_velocity!`, the returned `dt` accounts for **advection only**.
+    Diffusion the timestepper integrates *explicitly* — notably an LES eddy
+    viscosity νₑ, whose spatial variation rules out the implicit path — carries its
+    own limit `dt ≤ 1/(2 ν_max Σᵢ Δxᵢ⁻²)` that nothing enforces here. Register it:
+
+    ```julia
+    add_diffusivity!(cfl, nu)                             # constant ν
+    add_diffusivity!(cfl, get_eddy_viscosity(les_model))  # LES νₑ (per-rank slab)
+    ```
+
+    Both limits then apply and the smaller step wins. See
+    [Diffusive Limit](solvers.md#Diffusive-Limit-for-Explicit-Diffusion).
+
 ## Global Reductions
 
 Compute global statistics across MPI processes.
