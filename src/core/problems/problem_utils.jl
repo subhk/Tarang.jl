@@ -368,7 +368,21 @@ function expression_to_string(expr::Differentiate)
     coord_name = hasfield(typeof(expr.coord), :name) ? expr.coord.name : string(expr.coord)
     return "d($(expression_to_string(expr.operand)), $coord_name)"
 end
-expression_to_string(expr) = hasfield(typeof(expr), :name) ? expr.name : string(expr)
+expression_to_string(expr::FractionalLaplacian) = "Δ^$(expr.α)($(expression_to_string(expr.operand)))"
+expression_to_string(expr::Curl) = "∇×($(expression_to_string(expr.operand)))"
+expression_to_string(expr::Lift) = "lift($(expression_to_string(expr.operand)), $(expr.n))"
+# Fallback. Any other single-operand operator is rendered as `Name(operand)` rather
+# than dumped as a struct: these strings are shown to users in the "Suggested form"
+# of the equation-structure warning, and `FractionalLaplacian{ScalarField{Float64,
+# Tarang.SerialFieldStorage{...}}}(ScalarField(q, 16×16), 4.0)` is not a suggestion
+# anybody can act on.
+function expression_to_string(expr)
+    hasfield(typeof(expr), :name) && return string(getfield(expr, :name))
+    if hasfield(typeof(expr), :operand)
+        return "$(nameof(typeof(expr)))($(expression_to_string(getfield(expr, :operand))))"
+    end
+    return string(expr)
+end
 
 """
     expand_namespace_substitutions!(problem::Problem)
