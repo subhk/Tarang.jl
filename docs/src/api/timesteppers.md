@@ -197,8 +197,10 @@ Much cheaper for pure-Fourier / diagonalizable linear terms, and because the sol
 element-wise division there is no sparse factorization to move off-device on GPU. It
 requires the implicit operator to be diagonal in the chosen basis.
 
-**These schemes do not read the implicit operator from your equation.** They take it from a
-`SpectralLinearOperator` that you attach to the solver with `set_spectral_linear_operator!`:
+These schemes read the implicit operator from your equation's `L` and diagonalize it
+automatically, so `∂t(u) - nu*lap(u) = 0` is treated implicitly with no extra setup. You can
+still attach an explicit `SpectralLinearOperator` with `set_spectral_linear_operator!` to
+override that — an attached operator takes precedence and is applied to every field:
 
 ```julia
 using Tarang
@@ -229,13 +231,18 @@ maximum(abs, get_grid_data(u))   # 0.13533 ≈ exp(-ν k² t) = exp(-2) = 0.1353
 `:hyperviscosity` (`L̂ = ν (k²)^order`), `:biharmonic` (`L̂ = ν k⁴`), and `:custom`
 (pass `coefficients` yourself).
 
-!!! warning "Attach the operator, or the linear term is lost"
-    If no `SpectralLinearOperator` is attached, `DiagonalIMEX_RK222` / `DiagonalIMEX_RK443`
-    fall back to a **fully explicit** RK step, and the implicit `L` written in the equation
-    is silently dropped: running `∂t(u) - nu*lap(u) = 0` with `DiagonalIMEX_RK222` and no
-    attached operator leaves `u` completely undiffused (`max|u|` stays at its initial
-    value). `DiagonalIMEX_SBDF2` errors outright on the same path. If you want the
-    equation's `L` treated implicitly without extra setup, use `RK222` / `SBDF2` instead.
+!!! note "A non-diagonalizable implicit term is an error, not a silent drop"
+    These schemes require the implicit operator to be diagonal in the chosen basis. A
+    constant-coefficient Fourier term such as `nu*lap(u)` qualifies; a term coupling
+    different fields, a Chebyshev/Jacobi basis, or a field-valued (spatially varying)
+    coefficient does not. In those cases the scheme raises an `ArgumentError` naming the
+    field and the offending equation — use `RK222` / `SBDF2` / `RK443`, which solve the
+    implicit part through a global matrix. A fully explicit RK step is used only when the
+    equation genuinely has no implicit term, and that is announced once at `@info`.
+
+    Earlier versions silently fell back to a fully explicit step whenever no
+    `SpectralLinearOperator` was attached, so `∂t(u) - nu*lap(u) = 0` ran undiffused with no
+    diagnostic. That no longer happens.
 
 ## Usage with Solver
 

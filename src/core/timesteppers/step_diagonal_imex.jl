@@ -2,6 +2,135 @@
 # Diagonal IMEX Step Functions (GPU-native)
 # =============================================================================
 
+# -----------------------------------------------------------------------------
+# Resolving the implicit operator for the SERIAL diagonal-IMEX steppers.
+#
+# These schemes can only apply an implicit operator that is DIAGONAL in
+# coefficient space (the stage solve is a per-mode division). There are two
+# sources for it, in precedence order:
+#
+#   1. A `SpectralLinearOperator` attached with `set_spectral_linear_operator!`.
+#      Applied to every field, exactly as before.
+#   2. The problem's own per-equation `L` expressions, parsed into per-field
+#      diagonal Fourier multipliers by `_diagonal_Lhat_from_expr` — the same
+#      routine the MPI sibling `_get_distributed_diagonal_Lhats!` uses.
+#
+# If a NON-ZERO implicit `L` exists that cannot be diagonalized, we raise. The
+# previous behaviour was to log at `@debug` (invisible by default) and take a
+# fully EXPLICIT step, which drops the implicit operator entirely: a pure
+# diffusion problem then returned its initial condition undamped (1.0 instead of
+# exp(-1)) with no diagnostic at all. `_get_distributed_diagonal_Lhats!` already
+# refuses loudly in the same situation; the serial path now matches it.
+#
+# Falling back to explicit is only legitimate when the problem genuinely has no
+# implicit term, and even then it is announced at `@info`.
+# -----------------------------------------------------------------------------
+
+"""Per-field diagonal implicit operators for a serial diagonal-IMEX step.
+Keys are `solver.state` indices; each value broadcasts against that field's
+coefficient array. An EMPTY map means the problem is purely explicit."""
+const DiagonalLMap = Dict{Int, AbstractArray}
+
+"""
+    _serial_diagonal_imex_Lmap!(state, solver, scheme) -> DiagonalLMap
+
+Resolve (and cache) the diagonal implicit operators for a serial diagonal-IMEX
+step. Throws when a non-zero implicit `L` cannot be represented diagonally.
+
+The cache is keyed on the identity of the attached `SpectralLinearOperator` (or
+`nothing`), so attaching/replacing one between steps is picked up.
+"""
+function _serial_diagonal_imex_Lmap!(state::TimestepperState, solver::InitialValueSolver,
+                                     scheme::AbstractString)
+    L_attached = _get_spectral_linear_operator(solver)
+    if haskey(state.timestepper_data, :sdi_Lmap) &&
+       get(state.timestepper_data, :sdi_Lmap_src, missing) === L_attached
+        return state.timestepper_data[:sdi_Lmap]::DiagonalLMap
+    end
+
+    lmap = if L_attached !== nothing
+        # Legacy semantics: one attached operator applies to EVERY field.
+        coeffs = L_attached.coefficients
+        DiagonalLMap(i => coeffs for i in eachindex(solver.state))
+    else
+        _diagonal_imex_Lmap_from_equations(solver, scheme)
+    end
+
+    state.timestepper_data[:sdi_Lmap] = lmap
+    state.timestepper_data[:sdi_Lmap_src] = L_attached
+    return lmap
+end
+
+"""
+Build the per-field diagonal implicit operators from the problem's `L`
+expressions. Mirrors `_get_distributed_diagonal_Lhats!`, including its refusal
+to continue when a term is not diagonal in the field's basis.
+"""
+function _diagonal_imex_Lmap_from_equations(solver::InitialValueSolver, scheme::AbstractString)
+    lmap = DiagonalLMap()
+    problem = solver.problem
+    hasfield(typeof(problem), :equation_data) || return lmap
+    sfields = solver.state
+
+    for eq_data in problem.equation_data
+        M_expr = get(eq_data, "M", nothing)
+        (M_expr === nothing || _is_zero_m_term(M_expr)) && continue   # algebraic constraint
+        L_expr = get(eq_data, "L", nothing)
+        (L_expr === nothing || is_zero_expression(L_expr)) && continue # no implicit term here
+        for idx in _find_time_derivative_targets(M_expr, sfields, problem.variables)
+            (idx isa Integer && 1 <= idx <= length(sfields)) || continue
+            field = sfields[Int(idx)]
+            Lhat = _serial_diagonal_Lhat(L_expr, field)
+            Lhat === nothing &&
+                throw(ArgumentError(_diagonal_imex_nondiagonal_message(scheme, field, eq_data)))
+            lmap[Int(idx)] = Lhat
+        end
+    end
+    return lmap
+end
+
+"""
+Diagonal L̂ for one field, or `nothing` when the operator cannot be diagonalized.
+A diagonal per-mode solve only exists on a purely Fourier basis, so a field
+carrying any non-Fourier (e.g. Chebyshev) direction is rejected outright.
+"""
+function _serial_diagonal_Lhat(L_expr, field::ScalarField)
+    isempty(field.bases) && return nothing
+    all(b -> b === nothing || isa(b, FourierBasis), field.bases) || return nothing
+    return _diagonal_Lhat_from_expr(L_expr, field)
+end
+
+"""Error text for a non-diagonalizable implicit operator: names the scheme, the
+field, the equation, and the ways out."""
+function _diagonal_imex_nondiagonal_message(scheme::AbstractString, field::ScalarField, eq_data)
+    eq_str = get(eq_data, "equation_string", nothing)
+    where_str = eq_str === nothing ? "" : " (equation \"$(eq_str)\")"
+    return string(
+        "$scheme: the implicit linear operator for field '$(field.name)'$where_str is not ",
+        "diagonal in that field's coefficient space, so this scheme's per-mode implicit ",
+        "solve cannot represent it. Diagonal-IMEX supports, on a purely Fourier basis: a ",
+        "CONSTANT-coefficient Laplacian, hyper-/fractional Laplacian, constant damping, and ",
+        "derivatives of the field itself. Spatially varying coefficients, cross-field ",
+        "coupling and non-Fourier (e.g. Chebyshev) directions are not representable. ",
+        "Options: (a) use a non-diagonal IMEX scheme that builds a global implicit matrix — ",
+        "RK222, RK443, SBDF1-SBDF4, CNAB1, CNAB2; (b) attach an explicit diagonal operator ",
+        "with `set_spectral_linear_operator!(solver, SpectralLinearOperator(...))`; or ",
+        "(c) move the term to the explicit RHS. Previously this silently degraded to a fully ",
+        "explicit step, dropping the operator and returning an undamped (wrong) answer.")
+end
+
+"""Announce a legitimate fully-explicit step (the problem has no implicit term
+at all). Fires once per solver — not `@debug`, which nobody sees."""
+function _log_diagonal_imex_explicit_fallback(state::TimestepperState, scheme::AbstractString)
+    get(state.timestepper_data, :sdi_explicit_notified, false) === true && return nothing
+    state.timestepper_data[:sdi_explicit_notified] = true
+    @info "$scheme: no implicit linear operator found (every equation's L term is zero and " *
+          "no SpectralLinearOperator is attached) — stepping fully EXPLICITLY. If an " *
+          "implicit term was intended, put it on the equation's LHS or attach one with " *
+          "`set_spectral_linear_operator!`."
+    return nothing
+end
+
 """
     step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValueSolver)
 
@@ -21,22 +150,24 @@ This avoids sparse matrix solves and stays 100% on GPU.
 Uses the full ARS(2,2,2) ESDIRK tableau (including off-diagonal implicit terms),
 so it is L-stable and 2nd-order — identical math to `RK222`, but with the
 implicit solve done diagonally per Fourier mode instead of via a global matrix.
+
+L̂ comes from an attached `SpectralLinearOperator` if there is one, otherwise it
+is derived from the equation's own `L` term (see `_serial_diagonal_imex_Lmap!`).
+A non-zero `L` that is not diagonalizable raises; a fully explicit step happens
+only when the problem has no implicit term at all.
 """
 function step_diagonal_imex_rk222!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
-    L_spectral = _get_spectral_linear_operator(solver)
-    if L_spectral === nothing
-        @debug "DiagonalIMEX_RK222: No spectral operator, using explicit RK"
+    Lmap = _serial_diagonal_imex_Lmap!(state, solver, "DiagonalIMEX_RK222")
+    if isempty(Lmap)
+        _log_diagonal_imex_explicit_fallback(state, "DiagonalIMEX_RK222")
         _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
-        return
+        return nothing
     end
-    _step_diagonal_imex_rk_impl!(state, solver, ts, L_spectral)
+    _step_diagonal_imex_rk_impl!(state, solver, ts, Lmap)
     return nothing
 end
 
-# Function barrier: L is now a concrete SpectralLinearOperator{T,N,A}, so
-# L.coefficients has concrete type A and all broadcasts below are type-stable.
-#
 # Unified IMEX-RK step for the GPU-native diagonal steppers (DiagonalIMEX_RK222 /
 # RK443). The implicit operator L̂ is diagonal in coefficient space, so each stage
 # solve is a per-mode division — but we use the FULL ESDIRK tableau `ts.A_implicit`
@@ -44,8 +175,14 @@ end
 # the previous implementation did) makes the method unstable in the stiff limit
 # (R(z)→1−1/γ, |R|>1 for dt·λ≳5) rather than L-stable. This mirrors the math of
 # the distributed sibling `step_distributed_diagonal_imex_rk!`.
+#
+# `Lmap` carries one diagonal operator per field index (see
+# `_serial_diagonal_imex_Lmap!`). Fields absent from it get no implicit treatment
+# — their explicit tableau terms still apply. The array element types in `Lmap`
+# are abstract at this call site, so every L̂ broadcast goes through the
+# `_ddirk_*` function barriers below, which recover full type stability.
 function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialValueSolver,
-                                       ts::TimeStepper, L::SpectralLinearOperator)
+                                       ts::TimeStepper, Lmap::DiagonalLMap)
     current_state = state.history[end]
     dt = state.dt
     t = solver.sim_time
@@ -83,22 +220,29 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
             Y_s[k] = ws_field
 
             coeff_data = get_coeff_data(ws_field)   # live coeff, = X_n[k]
+            Lhat = get(Lmap, k, nothing)            # nothing ⇒ no implicit term here
             for j in 1:(s-1)
                 if abs(AE[s, j]) > 1e-14
-                    coeff_data .+= dt .* AE[s, j] .* get_coeff_data(F_stages[j][k])
+                    # F_stages[j] came from copy_state(evaluate_rhs(...)), which can
+                    # hand back a grid-layout field with a stale coeff buffer; force
+                    # :c so the stage RHS actually contributes (matches the final
+                    # update block below).
+                    ensure_layout!(F_stages[j][k], :c)
+                    _ddirk_axpy!(coeff_data, dt * AE[s, j], get_coeff_data(F_stages[j][k]))
                 end
-                if abs(AI[s, j]) > 1e-14
+                if Lhat !== nothing && abs(AI[s, j]) > 1e-14
                     # Off-diagonal implicit contribution −dt·AI[s,j]·L̂·Y_j (the
                     # term whose omission caused the stiff-limit instability).
                     ensure_layout!(Y_stages[j][k], :c)
-                    coeff_data .-= dt .* AI[s, j] .* L.coefficients .* get_coeff_data(Y_stages[j][k])
+                    _ddirk_axpy_lhat!(coeff_data, -dt * AI[s, j], Lhat,
+                                      get_coeff_data(Y_stages[j][k]))
                 end
             end
             # Diagonal implicit solve (1 + dt·AI[s,s]·L̂)·Y_s = RHS. For the ESDIRK
             # explicit first stage AI[1,1]=0, so this is a no-op there.
             γ_s = AI[s, s]
-            if abs(γ_s) > 1e-14
-                coeff_data ./= (1 .+ dt .* γ_s .* L.coefficients)
+            if Lhat !== nothing && abs(γ_s) > 1e-14
+                _ddirk_implicit_divide!(coeff_data, Lhat, dt * γ_s)
             end
         end
         # evaluate_rhs may return reused buffer fields; copy so a later stage's RHS
@@ -115,14 +259,16 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
         # next read in :c from its grid, and the state never evolves).
         ensure_layout!(field, :c)
         coeff_data = get_coeff_data(field)
+        Lhat = get(Lmap, k, nothing)
         for s in 1:stages
             if abs(b_exp[s]) > 1e-14
                 ensure_layout!(F_stages[s][k], :c)
-                coeff_data .+= dt .* b_exp[s] .* get_coeff_data(F_stages[s][k])
+                _ddirk_axpy!(coeff_data, dt * b_exp[s], get_coeff_data(F_stages[s][k]))
             end
-            if abs(b_imp[s]) > 1e-14
+            if Lhat !== nothing && abs(b_imp[s]) > 1e-14
                 ensure_layout!(Y_stages[s][k], :c)
-                coeff_data .-= dt .* b_imp[s] .* L.coefficients .* get_coeff_data(Y_stages[s][k])
+                _ddirk_axpy_lhat!(coeff_data, -dt * b_imp[s], Lhat,
+                                  get_coeff_data(Y_stages[s][k]))
             end
         end
     end
@@ -139,16 +285,19 @@ Uses the Kennedy-Carpenter ARK3(2)4L[2]SA tableau (explicit ERK + full ESDIRK
 implicit, including off-diagonal terms), so it is L-stable and 3rd-order —
 identical math to `RK443`, with the implicit solve done diagonally per Fourier
 mode instead of via a global matrix.
+
+L̂ is resolved exactly as for `step_diagonal_imex_rk222!` — see
+`_serial_diagonal_imex_Lmap!`.
 """
 function step_diagonal_imex_rk443!(state::TimestepperState, solver::InitialValueSolver)
     ts = state.timestepper
-    L_spectral = _get_spectral_linear_operator(solver)
-    if L_spectral === nothing
-        @debug "DiagonalIMEX_RK443: No spectral operator, using explicit RK"
+    Lmap = _serial_diagonal_imex_Lmap!(state, solver, "DiagonalIMEX_RK443")
+    if isempty(Lmap)
+        _log_diagonal_imex_explicit_fallback(state, "DiagonalIMEX_RK443")
         _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
-        return
+        return nothing
     end
-    _step_diagonal_imex_rk_impl!(state, solver, ts, L_spectral)
+    _step_diagonal_imex_rk_impl!(state, solver, ts, Lmap)
     return nothing
 end
 
@@ -165,13 +314,19 @@ Rearranged:
 
 With diagonal spectral operator:
     X̂_{n+1} = RHS / (3/2 + dt*L̂)
+
+Uses variable-dt SBDF2 weights (w = dtₙ/dtₙ₋₁), so CFL-adaptive timestepping is
+handled correctly. L̂ is resolved exactly as for `step_diagonal_imex_rk222!` —
+see `_serial_diagonal_imex_Lmap!`; fields without a diagonal operator take the
+same update with L̂ ≡ 0.
 """
 function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
     t = solver.sim_time
 
-    L_spectral = _get_spectral_linear_operator(solver)
+    Lmap = _serial_diagonal_imex_Lmap!(state, solver, "DiagonalIMEX_SBDF2")
+    isempty(Lmap) && _log_diagonal_imex_explicit_fallback(state, "DiagonalIMEX_SBDF2")
 
     if !haskey(state.timestepper_data, :F_history)
         state.timestepper_data[:F_history] = Vector{ScalarField}[]
@@ -186,9 +341,7 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
     if iteration == 0 || length(state.history) < 2
         new_state = copy_state(current_state)
         axpy_state!(dt, F_n, new_state)
-        if L_spectral !== nothing
-            _sbdf2_apply_be_L!(new_state, L_spectral, dt)
-        end
+        _sbdf2_apply_be_L!(new_state, Lmap, dt)
         _push_trim!(state.history, new_state, 2)
         # evaluate_rhs returns reused buffer fields; copy before storing so the next
         # step's RHS evaluation cannot overwrite this history entry (else F_{n-1}≡F_n
@@ -202,26 +355,7 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         dt_prev = length(state.dt_history) >= 2 ? state.dt_history[end-1] : dt
 
         new_state = copy_state(X_n)
-        if L_spectral !== nothing
-            _sbdf2_apply_bdf2_L!(new_state, X_n, X_nm1, F_n, F_nm1, dt, dt_prev, L_spectral)
-        else
-            # Variable-dt SBDF2 (L̂ = 0, no spectral linear operator). w = dtₙ/dtₙ₋₁;
-            # reduces to the constant-dt (2, −½, 2, −1)/1.5 weights at w = 1. The previous
-            # hardcoded constant-dt coefficients were inconsistent under adaptive dt.
-            w = dt / dt_prev
-            a0 = (1.0 + 2.0w) / (1.0 + w)
-            a2 = w * w / (1.0 + w)
-            for (i, result) in enumerate(new_state)
-                field_n = X_n[i];  field_nm1 = X_nm1[i]
-                f_n = F_n[i];      f_nm1 = F_nm1[i]
-                ensure_layout!(field_n, :c);  ensure_layout!(field_nm1, :c)
-                ensure_layout!(f_n, :c);      ensure_layout!(f_nm1, :c)
-                ensure_layout!(result, :c)
-                d = get_coeff_data(result)
-                @. d = ((1.0 + w) * get_coeff_data(field_n) - a2 * get_coeff_data(field_nm1) +
-                        dt * ((1.0 + w) * get_coeff_data(f_n) - w * get_coeff_data(f_nm1))) / a0
-            end
-        end
+        _sbdf2_apply_bdf2_L!(new_state, X_n, X_nm1, F_n, F_nm1, dt, dt_prev, Lmap)
 
         _push_trim!(state.history, new_state, 2)
         _push_trim!(F_history, copy_state(F_n), 2)  # copy: see startup branch above
@@ -230,19 +364,35 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
     state.timestepper_data[:iteration] = iteration + 1
 end
 
-# Function barriers: L has concrete SpectralLinearOperator{T,N,A} type here,
-# so L.coefficients is concrete type A and broadcasts are type-stable.
-function _sbdf2_apply_be_L!(fields::Vector{<:ScalarField}, L::SpectralLinearOperator, dt::Float64)
-    for field in fields
+# SBDF1 startup: (1 + dt·L̂)·X_new = X_n + dt·F_n, per field. Fields with no
+# diagonal operator are left as the already-applied explicit Euler predictor.
+# `_ddi_sbdf1_update!` is a function barrier: `Lmap`'s value type is abstract, so
+# the concrete array types are only recovered at that call.
+function _sbdf2_apply_be_L!(fields::Vector{<:ScalarField}, Lmap::DiagonalLMap, dt::Float64)
+    isempty(Lmap) && return fields
+    for (i, field) in enumerate(fields)
+        Lhat = get(Lmap, i, nothing)
+        Lhat === nothing && continue
         ensure_layout!(field, :c)
-        _ddi_sbdf1_update!(get_coeff_data(field), L.coefficients, dt)
+        _ddi_sbdf1_update!(get_coeff_data(field), Lhat, dt)
     end
+    return fields
 end
 
+# Variable-dt SBDF2 (w = dtₙ/dtₙ₋₁): BDF2 implicit on L̂, AB2 extrapolation of F.
+# Reduces to the constant-dt (2, −½, 2, −1)/1.5 weights at w = 1.
+#
+# The coefficient arrays MUST be pulled out of their fields before the broadcast
+# and handed to a function barrier. The previous no-operator branch inlined
+# `@. d = ((1+w)*get_coeff_data(field_n) - ...)`, and `@.` dots EVERY call in the
+# expression — including `get_coeff_data`, which then tried to broadcast over a
+# `ScalarField`. `Base.broadcastable` falls back to `collect`, which needs
+# `length(::ScalarField)`; that method does not exist, so step 2 of every
+# DiagonalIMEX_SBDF2 run died with `MethodError: no method matching length(::ScalarField)`.
 function _sbdf2_apply_bdf2_L!(new_state::Vector{<:ScalarField},
                                X_n::Vector{<:ScalarField}, X_nm1::Vector{<:ScalarField},
                                F_n::Vector{<:ScalarField}, F_nm1::Vector{<:ScalarField},
-                               dt::Float64, dt_prev::Float64, L::SpectralLinearOperator)
+                               dt::Float64, dt_prev::Float64, Lmap::DiagonalLMap)
     w = dt / dt_prev
     for (i, result) in enumerate(new_state)
         field_n = X_n[i];  field_nm1 = X_nm1[i]
@@ -250,11 +400,19 @@ function _sbdf2_apply_bdf2_L!(new_state::Vector{<:ScalarField},
         ensure_layout!(field_n, :c);  ensure_layout!(field_nm1, :c)
         ensure_layout!(f_n, :c);      ensure_layout!(f_nm1, :c)
         ensure_layout!(result, :c)
-        _ddi_sbdf2_update!(get_coeff_data(result),
-                           get_coeff_data(field_n), get_coeff_data(field_nm1),
-                           get_coeff_data(f_n), get_coeff_data(f_nm1),
-                           L.coefficients, dt, w)
+        Lhat = get(Lmap, i, nothing)
+        if Lhat === nothing
+            _ddi_sbdf2_update_noL!(get_coeff_data(result),
+                                   get_coeff_data(field_n), get_coeff_data(field_nm1),
+                                   get_coeff_data(f_n), get_coeff_data(f_nm1), dt, w)
+        else
+            _ddi_sbdf2_update!(get_coeff_data(result),
+                               get_coeff_data(field_n), get_coeff_data(field_nm1),
+                               get_coeff_data(f_n), get_coeff_data(f_nm1),
+                               Lhat, dt, w)
+        end
     end
+    return new_state
 end
 
 # Note: _get_spectral_linear_operator and set_spectral_linear_operator! are
@@ -351,6 +509,12 @@ function _accumulate_diagonal_term!(Lhat, k2, coeff::Float64, op, field::ScalarF
         @. Lhat += coeff * (-k2)
         return true
     elseif isa(op, ScalarField)
+        # A bare field in L is a constant damping term μ·u ONLY when it is the
+        # field being stepped. A DIFFERENT field is a coupling term (e.g.
+        # `dt(u) + v = 0`), which is not a per-mode multiplier on u at all —
+        # folding it in as a constant would silently integrate a different
+        # equation. Mirrors the `is_self` guard on `Differentiate` below.
+        (op === field || op.name == field.name) || return false
         @. Lhat += coeff   # constant (e.g. linear damping μ·ζ)
         return true
     elseif isa(op, Differentiate)
@@ -463,6 +627,18 @@ end
     a0 = (1.0 + 2.0 * w) / (1.0 + w)
     a2 = w * w / (1.0 + w)
     @inbounds @. d = ((1.0 + w) * dn - a2 * dnm1 + dt * ((1.0 + w) * fn - w * fnm1)) / (a0 + dt * Lhat)
+    return d
+end
+
+"""Same variable-dt SBDF2 update with L̂ ≡ 0, for fields carrying no implicit
+operator. Kept as its own barrier so the `@.` broadcast only ever sees ARRAYS —
+dotting a `get_coeff_data(field)` call inside `@.` is what crashed this branch."""
+@inline function _ddi_sbdf2_update_noL!(d::AbstractArray, dn::AbstractArray, dnm1::AbstractArray,
+                                        fn::AbstractArray, fnm1::AbstractArray,
+                                        dt::Float64, w::Float64)
+    a0 = (1.0 + 2.0 * w) / (1.0 + w)
+    a2 = w * w / (1.0 + w)
+    @inbounds @. d = ((1.0 + w) * dn - a2 * dnm1 + dt * ((1.0 + w) * fn - w * fnm1)) / a0
     return d
 end
 

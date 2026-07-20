@@ -37,10 +37,21 @@ apply_implicit_diagonal!(u_new, u_old, L, dt, γ)
 struct SpectralLinearOperator{T<:AbstractFloat, N, A<:AbstractArray{T,N}}
     coefficients::A                          # L̂(k) diagonal values
     architecture::AbstractArchitecture
-    operator_type::Symbol                    # :laplacian, :hyperviscosity, :custom
+    operator_type::Symbol                    # one of SPECTRAL_OPERATOR_TYPES
     ν::Float64                               # viscosity/diffusion coefficient
     order::Int                               # power of Laplacian (1 = ∇², 2 = ∇⁴, …)
 end
+
+"""
+Valid `operator_type` symbols accepted by [`SpectralLinearOperator`](@ref).
+
+Kept as a single source of truth so the constructor's validation and the
+per-mode kernel `_spectral_operator_value` cannot drift apart. An unrecognised
+symbol used to fall through to `zero(T)`, producing an ALL-ZERO operator: the
+implicit term then vanished with no diagnostic (e.g. a viscous run silently
+became inviscid). Unknown symbols now raise instead.
+"""
+const SPECTRAL_OPERATOR_TYPES = (:laplacian, :hyperviscosity, :biharmonic, :custom)
 
 """
     SpectralLinearOperator(dist::Distributor, bases::Tuple, operator_type::Symbol; kwargs...)
@@ -50,15 +61,24 @@ Create a spectral linear operator for diagonal IMEX methods.
 # Arguments
 - `dist`: Distributor (determines architecture and local grid)
 - `bases`: Tuple of basis objects (e.g., `(ComplexFourier, ComplexFourier)`)
-- `operator_type`: Type of operator
-  - `:laplacian` - `-ν∇²` with coefficient `ν`
-  - `:hyperviscosity` - `-ν∇^(2p)` with coefficient `ν` and `order=p`
-  - `:custom` - provide `coefficients` directly
+- `operator_type`: Type of operator — one of `$(SPECTRAL_OPERATOR_TYPES)`
+  - `:laplacian` - `-ν∇²` with coefficient `ν`, i.e. `L̂ = ν k²`
+  - `:hyperviscosity` - `-ν∇^(2p)` with coefficient `ν` and `order=p`, i.e. `L̂ = ν (k²)^p`
+  - `:biharmonic` - `ν∇⁴` with coefficient `ν`, i.e. `L̂ = ν k⁴`
+  - `:custom` - provide `coefficients` directly (required for this type)
+
+Any other symbol raises an `ArgumentError`.
 
 # Keyword Arguments
-- `ν::Real=1.0`: Viscosity/diffusion coefficient
+- `ν::Real=1.0`: Viscosity/diffusion coefficient. Deliberately a SCALAR: a
+  diagonal operator multiplies each coefficient by a number that depends on the
+  wavenumber alone, so a spatially varying `ν(x)` is not representable (it
+  couples modes). Passing an array raises a `MethodError` here; a variable
+  coefficient written into an equation's implicit `L` term is rejected by the
+  diagonal-IMEX steppers (see `_serial_diagonal_imex_Lmap!`). Use a
+  non-diagonal IMEX scheme (`RK222`, `SBDF2`, …) for variable coefficients.
 - `order::Int=1`: Power of Laplacian (1 for ∇², 2 for ∇⁴, 4 for ∇⁸)
-- `coefficients::AbstractArray`: Custom diagonal coefficients (for :custom)
+- `coefficients::AbstractArray`: Custom diagonal coefficients (required for `:custom`)
 - `dtype::Type=Float64`: Element type
 
 # Example
@@ -82,6 +102,19 @@ function SpectralLinearOperator(
     coefficients::Union{Nothing, AbstractArray}=nothing,
     dtype::Type{T}=Float64
 ) where {T<:AbstractFloat}
+
+    # Reject an unrecognised operator_type up front. Falling through used to yield
+    # an all-zero L̂ — the implicit term silently disappeared and the run was, e.g.,
+    # inviscid without any complaint. Validate here (before any allocation) so the
+    # message names the offending symbol and the full valid set.
+    _validate_spectral_operator_type(operator_type)
+    if operator_type === :custom && coefficients === nothing
+        throw(ArgumentError(
+            "SpectralLinearOperator: operator_type=:custom requires the `coefficients` " *
+            "keyword (the diagonal L̂ values). Without it the operator would be all zeros, " *
+            "silently dropping the implicit term. Pass `coefficients=...`, or use one of " *
+            "$(join(filter(!=(:custom), SPECTRAL_OPERATOR_TYPES), ", ")) with `ν`/`order`."))
+    end
 
     arch = dist.architecture
     N = length(bases)
@@ -210,6 +243,23 @@ function _build_spectral_operator(
 end
 
 """
+    _validate_spectral_operator_type(operator_type::Symbol)
+
+Throw an `ArgumentError` naming the valid symbols unless `operator_type` is one
+of [`SPECTRAL_OPERATOR_TYPES`](@ref).
+"""
+function _validate_spectral_operator_type(operator_type::Symbol)
+    operator_type in SPECTRAL_OPERATOR_TYPES && return nothing
+    throw(ArgumentError(
+        "SpectralLinearOperator: unknown operator_type `:$(operator_type)`. " *
+        "Valid options are: $(join(map(s -> ":$s", SPECTRAL_OPERATOR_TYPES), ", ")). " *
+        "(`:laplacian` → L̂ = ν k²; `:hyperviscosity` → L̂ = ν (k²)^order; " *
+        "`:biharmonic` → L̂ = ν k⁴; `:custom` → supply `coefficients` yourself.) " *
+        "An unrecognised symbol previously produced an all-zero operator, silently " *
+        "dropping the implicit term."))
+end
+
+"""
 Compute operator value L(k²) for a given k².
 """
 function _spectral_operator_value(k2::T, operator_type::Symbol, ν::Real, order::Int, ::Type{T}) where T
@@ -223,7 +273,12 @@ function _spectral_operator_value(k2::T, operator_type::Symbol, ν::Real, order:
         # L = ν * k⁴
         return T(ν * k2^2)
     else
-        return zero(T)
+        # Unreachable via the constructor (which validates first); a direct call
+        # with a bad symbol must still fail loudly rather than return zero.
+        _validate_spectral_operator_type(operator_type)
+        throw(ArgumentError(
+            "SpectralLinearOperator: operator_type `:$(operator_type)` has no per-mode " *
+            "value function (`:custom` operators must supply `coefficients` directly)."))
     end
 end
 
