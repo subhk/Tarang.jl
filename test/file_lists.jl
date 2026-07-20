@@ -126,6 +126,10 @@ const TEST_FILES = [
     "test_progress.jl",
     "test_convenience_api.jl",
     "test_distributed_gpu_dct1_support.jl",
+    "test_variable_coefficient_lhs.jl",      # field-valued LHS coefficient must not be silently dropped
+    "test_rhs_error_propagation.jl",         # a failed RHS term must not silently become zero
+    "test_diagonal_imex_robustness.jl",      # DiagonalIMEX must not silently drop the implicit operator
+    "test_cfl_diffusive.jl",                 # CFL diffusive limit for explicitly-treated diffusion
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
 ]
 
@@ -191,6 +195,7 @@ const MPI_TEST_FILES = [
     "test_stochastic_forcing_mpi.jl",
     "test_mpi_integrate.jl",
     "test_mpi_reductions.jl",
+    "test_mpi_cfl_diffusive.jl",             # CFL diffusive limit must use the GLOBAL max diffusivity
     "test_mpi_reduction_double_reduce.jl",   # global_sum/mean/turbulence_rms must not double-reduce PencilArray (np>=2)
     "test_mpi_fill_random_walltime.jl",      # fill_random reproducible decomp-independent + proceed() collective wall-time stop (np>=2)
     "test_mpi_interp_hilbert_guard.jl",      # interpolate/Hilbert error loudly on a decomposed Fourier axis; local-axis interp works (np>=2)

@@ -400,19 +400,47 @@ function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
         elseif _is_const_or_param(expr.right)
             coeff = _extract_scalar(expr.right)
             return ComplexF64(coeff) * build_expression_matrix_block(expr.left, var, eqn_size, var_size)
-        else
-            # Nonlinear product (field * field) → belongs on RHS, zero in L
-            return _zero_block(eqn_size, var_size)
         end
+
+        # Neither factor is a constant. If exactly one of them references `var`, the OTHER is
+        # a field-valued (non-constant) coefficient — an NCC — and must become a
+        # multiply-by-coefficient matrix.
+        #
+        # This branch used to return a zero block here, which DISCARDED THE ENTIRE TERM
+        # without a word: `dt(u) - nu_e*lap(u) = 0` with a ScalarField `nu_e` assembled as
+        # `dt(u) = 0`, i.e. an inviscid run whose answer was identical for nu_e = 0.01, 0.5
+        # and 5.0. Build the coefficient in, or raise — never drop.
+        left_dep  = _references_variable(expr.left, var)
+        right_dep = _references_variable(expr.right, var)
+        if left_dep && !right_dep && _is_scalar_coefficient(expr.right)
+            return _ncc_variable_block(expr.right, expr.left, var, eqn_size, var_size, _expr_label(expr))
+        elseif right_dep && !left_dep && _is_scalar_coefficient(expr.left)
+            return _ncc_variable_block(expr.left, expr.right, var, eqn_size, var_size, _expr_label(expr))
+        end
+
+        # Both factors reference `var` (a genuinely nonlinear product, which belongs on the
+        # explicit RHS and contributes nothing to a linear operator), or neither does (the
+        # product concerns some other variable). Either way there is no block for `var`.
+        return _zero_block(eqn_size, var_size)
     end
     if isa(expr, DivideOperator)
         if _is_const_or_param(expr.right)
             coeff = _extract_scalar(expr.right)
             return (ComplexF64(1) / ComplexF64(coeff)) *
                    build_expression_matrix_block(expr.left, var, eqn_size, var_size)
-        else
-            return _zero_block(eqn_size, var_size)
         end
+        # Division by a field-valued coefficient. Same silent-drop hazard as the product
+        # above: returning a zero block would delete `lap(u)/nu_e` from the equation.
+        # 1/q is not built as an implicit operator here, so report it.
+        numerator_block = _is_scalar_coefficient(expr.right) ?
+                          build_expression_matrix_block(expr.left, var, eqn_size, var_size) :
+                          _zero_block(eqn_size, var_size)
+        if nnz(numerator_block) != 0
+            throw(ImplicitNCCError(_expr_label(expr),
+                "it divides by the field-valued expression `$(_expr_label(expr.right))`, and " *
+                "the reciprocal of a field is not built as an implicit operator"))
+        end
+        return _zero_block(eqn_size, var_size)
     end
     if isa(expr, PowerOperator)
         # x^const is nonlinear unless x is itself const → zero
@@ -440,16 +468,29 @@ function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
             # Separate scalar constants from field/operator factors
             scalars = filter(a -> _is_const_or_param(a) || isa(a, Number), args)
             fields  = filter(a -> !(_is_const_or_param(a) || isa(a, Number)), args)
-            if length(fields) > 1
-                # Multiple field factors → nonlinear product → zero in L
-                return _zero_block(eqn_size, var_size)
-            end
             scalar_val = isempty(scalars) ? ComplexF64(1) :
                          prod(ComplexF64(_extract_scalar(s)) for s in scalars)
             if isempty(fields)
                 return _zero_block(eqn_size, var_size)  # pure scalar product
             end
-            return scalar_val * build_expression_matrix_block(fields[1], var, eqn_size, var_size)
+
+            # Object-syntax counterpart of the MultiplyOperator branch above. Exactly one
+            # factor may depend on `var`; the remaining non-constant factors are field-valued
+            # coefficients (NCCs). Treating >1 field factor as "nonlinear → zero" dropped
+            # `q * lap(u)` silently whenever the equation was built through the Future
+            # hierarchy rather than from a string.
+            dep = filter(a -> _references_variable(a, var), fields)
+            ncc = filter(a -> !_references_variable(a, var), fields)
+            if length(dep) != 1 || !all(_is_scalar_coefficient, ncc)
+                # 0 dep → this product does not involve `var`; >1 dep → genuinely nonlinear
+                # in `var`; a non-scalar coefficient → rank-changing, see _is_scalar_coefficient.
+                return _zero_block(eqn_size, var_size)
+            end
+            block = build_expression_matrix_block(only(dep), var, eqn_size, var_size)
+            for c in ncc
+                block = _apply_ncc_to_block(c, block, _expr_label(expr))
+            end
+            return scalar_val * block
         else
             # Unknown Future type (DotProduct, CrossProduct, Power, etc.)
             # These are generally nonlinear → zero in L
@@ -579,6 +620,96 @@ function _recurse_operand(expr, var, eqn_size::Int, var_size::Int; scale::Number
     end
     inner = build_expression_matrix_block(expr.operand, var, eqn_size, var_size)
     return scale == 1.0 ? inner : ComplexF64(scale) * inner
+end
+
+"""
+    _references_variable(expr, var) -> Bool
+
+True when `expr` mentions the problem variable `var` anywhere in its tree. Used to tell a
+variable-dependent factor of a product apart from a coefficient factor.
+"""
+@inline function _references_variable(expr, var)
+    var isa Operand || return false
+    return !isempty(_detect_equation_variables(expr, Operand[var]))
+end
+
+"""
+    _ncc_kron_expand(ncc_expr, Qaxis, nrows) -> SparseMatrixCSC | Nothing
+
+Lift the 1-D multiply-by-coefficient matrix `Qaxis` (built on the coefficient's single
+coupled Chebyshev/Jacobi axis) to the full `nrows × nrows` global coefficient layout, by
+Kronecker product with identities on every other axis.
+
+The per-subproblem path never needs this — it solves one Fourier mode at a time, so the
+1-D matrix applies directly. The GLOBAL matrix assembled by `build_matrices` holds all
+modes at once, so the same operator has to be expanded. Kronecker ordering matches
+`_spectral_laplacian`/`_spectral_differentiate` (reversed, for column-major layout).
+
+Returns `nothing` if the shapes cannot be reconciled; the caller raises rather than
+returning a coefficient-free block.
+"""
+function _ncc_kron_expand(ncc_expr, Qaxis::AbstractMatrix, nrows::Int)
+    field = _ncc_direct_field(ncc_expr)
+    field === nothing && return nothing
+    any(b -> b === nothing, field.bases) && return nothing
+
+    cshape = _coeff_shape(field)
+    prod(cshape) == nrows || return nothing
+    length(cshape) == length(field.bases) || return nothing
+
+    jax = findfirst(b -> isa(b, JacobiBasis), field.bases)
+    jax === nothing && return nothing
+    size(Qaxis, 1) == cshape[jax] && size(Qaxis, 2) == cshape[jax] || return nothing
+
+    nd = length(cshape)
+    nd == 1 && return sparse(Qaxis)
+    mats = [i == jax ? sparse(Qaxis) : sparse(ComplexF64(1) * I, cshape[i], cshape[i])
+            for i in 1:nd]
+    result = mats[end]
+    for i in (nd - 1):-1:1
+        result = kron(result, mats[i])
+    end
+    return result
+end
+
+"""
+    _apply_ncc_to_block(ncc_expr, block, term_label) -> SparseMatrixCSC
+
+Left-multiply an already-assembled matrix `block` by the multiply-by-coefficient matrix of
+the field-valued coefficient `ncc_expr`.
+
+Raises `ImplicitNCCError` when the coefficient is not representable in the implicit
+operator. It must NOT return `block` unchanged in that case: doing so drops the
+coefficient and silently solves a different equation — the exact defect this path fixes.
+"""
+function _apply_ncc_to_block(ncc_expr, block::SparseMatrixCSC, term_label::AbstractString)
+    # An empty block carries no term, so there is nothing to lose and nothing to report.
+    nnz(block) == 0 && return block
+
+    Qaxis = _implicit_ncc_matrix(ncc_expr)
+    if isa(Qaxis, ImplicitNCCUnsupported)
+        throw(ImplicitNCCError(String(term_label), Qaxis.reason))
+    end
+
+    Qglobal = _ncc_kron_expand(ncc_expr, Qaxis, size(block, 1))
+    if Qglobal === nothing
+        throw(ImplicitNCCError(String(term_label),
+            "its $(size(Qaxis)) multiply-by-coefficient matrix could not be expanded to the " *
+            "$(size(block, 1))-row global coefficient layout of this equation"))
+    end
+    return sparse(Qglobal * block)
+end
+
+"""
+    _ncc_variable_block(ncc_expr, dep_expr, var, eqn_size, var_size, term_label)
+
+Matrix block for a product of a field-valued coefficient `ncc_expr` and a
+variable-dependent factor `dep_expr`.
+"""
+function _ncc_variable_block(ncc_expr, dep_expr, var, eqn_size::Int, var_size::Int,
+                             term_label::AbstractString)
+    block = build_expression_matrix_block(dep_expr, var, eqn_size, var_size)
+    return _apply_ncc_to_block(ncc_expr, block, term_label)
 end
 
 """

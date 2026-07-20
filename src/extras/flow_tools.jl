@@ -98,7 +98,7 @@ end
 # ============================================================================
 
 # CFL adaptive timestepping
-export CFL, add_velocity!, compute_timestep
+export CFL, add_velocity!, add_diffusivity!, compute_timestep
 
 # Flow diagnostics
 export reynolds_number, kinetic_energy, total_kinetic_energy

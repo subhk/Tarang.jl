@@ -7,11 +7,11 @@ Targets the reachable serial-CPU lines of the diagonal-IMEX steppers:
         (no SpectralLinearOperator attached → `_step_explicit_rk!`)
   * step_diagonal_imex_sbdf2!  variable-dt warning branch and SBDF1 startup.
 
-NOTE: the no-operator SBDF2 *explicit* fallback (step_diagonal_imex.jl lines
-211-220) is genuinely BROKEN: line 218 writes a dotted assignment that
-broadcasts get_coeff_data itself over the ScalarField, throwing
-MethodError(length, ::ScalarField). That dead branch cannot be exercised
-without crashing, so it is intentionally NOT tested here.
+NOTE: the no-operator SBDF2 branch used to crash — a dotted assignment
+broadcast `get_coeff_data` itself over the ScalarField, throwing
+MethodError(length, ::ScalarField) on step 2. That is fixed (the coefficient
+arrays are hoisted out of the broadcast), and the branch is covered in
+test_diagonal_imex_robustness.jl along with the diagonalization contract.
   * The IMPLICIT path (`_step_diagonal_imex_rk_impl!`, `_sbdf2_apply_be_L!`,
         `_sbdf2_apply_bdf2_L!`, `_ddi_sbdf1_update!`, `_ddi_sbdf2_update!`)
         with a SpectralLinearOperator attached → analytic viscous decay

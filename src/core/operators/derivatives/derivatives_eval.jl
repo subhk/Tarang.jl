@@ -51,68 +51,293 @@ function evaluate_gradient(grad_op::Gradient, layout::Symbol=:g)
 end
 
 """
-    evaluate_divergence(div_op, layout=:g) -> ScalarField
+    evaluate_divergence(div_op, layout=:g) -> ScalarField | VectorField
 
-Evaluate `∇·u` for a `VectorField`, lowering rank by one: sums `∂uᵢ/∂xᵢ` over
-all coordinates into a single scalar result. Accumulation is done directly on
-the result's field data (not via the symbolic `+` tree) to avoid building
-intermediate operator nodes. The result buffer is taken from the field pool and
-zero-initialized in the requested `layout`; PencilArray buffers are zeroed via
-their `parent`. Throws `ArgumentError` for non-vector operands.
+Evaluate `∇·(…)`, lowering the operand's rank by one. Three operand forms are
+supported:
+
+1. **`VectorField`** — sums `∂uᵢ/∂xᵢ` over all coordinates into a single scalar
+   result.
+
+2. **A scalar coefficient times a `Gradient`** — `div(a*grad(u))` (either factor
+   order), the standard variable-coefficient diffusion term. It is expanded with
+   the exact product rule
+
+       ∇·(a ∇u) = a ∇²u + ∇a·∇u = Σₖ (a ∂ₖ²u + ∂ₖa ∂ₖu)
+
+   so every derivative is taken spectrally on `a` or `u` themselves and only the
+   pointwise products are formed on the grid — numerically identical (to
+   round-off) to writing `a*lap(u) + ∂x(a)*∂x(u) + …` by hand. `u` may be a
+   `ScalarField` (result: `ScalarField`) or a `VectorField` (result:
+   `VectorField`; the identity applied component-wise, since `∇·(a∇u)ⱼ =
+   Σₖ ∂ₖ(a ∂ₖuⱼ)`).
+
+3. **Any other expression that evaluates to a `VectorField`** — e.g.
+   `div(grad(u))`, `div(skew(grad(ψ)))`, `div(-u)`. The operand is evaluated and
+   its divergence taken as in case 1.
+
+Accumulation is done directly on the result's field data (not via the symbolic
+`+` tree) to avoid building intermediate operator nodes. The result buffer is
+taken from the field pool and zero-initialized; PencilArray buffers are zeroed
+via their `parent`.
+
+Anything else throws an `ArgumentError` naming the unsupported operand. A
+divergence must never quietly evaluate to zero because its operand was not
+recognized: callers treat a zero field as a real value, so a silent fallback
+turns an unsupported term into a wrong answer rather than a failure.
 """
 function evaluate_divergence(div_op::Divergence, layout::Symbol=:g)
     operand = div_op.operand
 
-    if isa(operand, VectorField)
-        # Sum partial derivatives of components
-        coordsys = operand.coordsys
+    isa(operand, VectorField) && return _evaluate_vector_divergence(operand, layout)
 
-        # Create result field from pool, then copy data to preserve PencilArray structure
-        result = checkout_or_alloc(operand.components[1].bases, operand.components[1].dtype, operand.components[1].dist)
-        copy_field_data!(result, operand.components[1])
-        result.current_layout = operand.components[1].current_layout
-        result.name = "div_$(operand.name)"
-
-        # Initialize result to zero — ensure data is allocated even if copy didn't provide it
-        ensure_layout!(result, layout)
-        if layout == :g
-            grid_data = get_grid_data(result)
-            if grid_data === nothing
-                # Allocate grid data if not present (copy may not have provided it)
-                set_grid_data!(result, zeros(eltype(get_grid_data(operand.components[1])),
-                                             size(get_grid_data(operand.components[1]))))
-            elseif isa(grid_data, PencilArrays.PencilArray)
-                fill!(parent(grid_data), zero(eltype(grid_data)))
-            else
-                fill!(grid_data, zero(eltype(grid_data)))
-            end
-        else
-            coeff_data = get_coeff_data(result)
-            if coeff_data === nothing
-                set_coeff_data!(result, zeros(eltype(get_coeff_data(operand.components[1])),
-                                              size(get_coeff_data(operand.components[1]))))
-            elseif isa(coeff_data, PencilArrays.PencilArray)
-                fill!(parent(coeff_data), zero(eltype(coeff_data)))
-            else
-                fill!(coeff_data, zero(eltype(coeff_data)))
-            end
-        end
-
-        for (i, coord_name) in enumerate(coordsys.names)
-            coord = coordsys[coord_name]
-            # Add d(u_i)/d(x_i) — accumulate into field data directly, not via symbolic +
-            component_deriv = evaluate_differentiate(Differentiate(operand.components[i], coord, 1), layout)
-            if layout == :g
-                get_grid_data(result) .+= get_grid_data(component_deriv)
-            else
-                get_coeff_data(result) .+= get_coeff_data(component_deriv)
-            end
-        end
-
-        return result
-    else
-        throw(ArgumentError("Divergence not implemented for operand type $(typeof(operand))"))
+    # div(a*grad(u)): expand symbolically before evaluating, so the coefficient
+    # and the gradient are never multiplied into an intermediate vector field.
+    factors = _divergence_product_factors(operand)
+    if factors !== nothing
+        coeff_expr, grad_op = factors
+        return _evaluate_variable_coefficient_divergence(coeff_expr, grad_op, layout)
     end
+
+    # Any other expression: evaluate it; a vector result has a well-defined
+    # divergence. Errors raised while evaluating the operand propagate as-is —
+    # they name the real problem better than a generic message here could.
+    evaluated = _eval_operand(operand, :g)
+    isa(evaluated, VectorField) && return _evaluate_vector_divergence(evaluated, layout)
+
+    evaluated_note = evaluated === operand ? "" : " (evaluates to $(typeof(evaluated)))"
+    throw(ArgumentError(
+        "Divergence not implemented for operand type $(typeof(operand))$(evaluated_note). " *
+        "∇· lowers rank by one, so its operand must be vector-valued. Supported: a " *
+        "VectorField, a scalar coefficient times a gradient (`div(a*grad(u))`), or any " *
+        "expression that evaluates to a VectorField."))
+end
+
+"""
+    _evaluate_vector_divergence(operand::VectorField, layout) -> ScalarField
+
+`∇·u = Σᵢ ∂uᵢ/∂xᵢ`, accumulated straight into the result's field data.
+Component `i` is differentiated along `coordsys.names[i]`.
+"""
+function _evaluate_vector_divergence(operand::VectorField, layout::Symbol)
+    coordsys = operand.coordsys
+    template = operand.components[1]
+    result = _divergence_result_field(template, "div_$(operand.name)", layout)
+
+    for (i, coord_name) in enumerate(coordsys.names)
+        coord = coordsys[coord_name]
+        # Add d(u_i)/d(x_i) — accumulate into field data directly, not via symbolic +
+        component_deriv = evaluate_differentiate(Differentiate(operand.components[i], coord, 1), layout)
+        if layout == :g
+            get_grid_data(result) .+= get_grid_data(component_deriv)
+        else
+            get_coeff_data(result) .+= get_coeff_data(component_deriv)
+        end
+    end
+
+    return result
+end
+
+"""
+    _divergence_result_field(template, name, layout) -> ScalarField
+
+Check out a result field shaped like `template` (preserving PencilArray
+structure via `copy_field_data!`), put it in `layout`, and zero it. Data is
+allocated explicitly if the copy did not provide it.
+"""
+function _divergence_result_field(template::ScalarField, name::AbstractString, layout::Symbol)
+    result = checkout_or_alloc(template.bases, template.dtype, template.dist)
+    copy_field_data!(result, template)
+    result.current_layout = template.current_layout
+    result.name = name
+    ensure_layout!(result, layout)
+
+    if layout == :g
+        grid_data = get_grid_data(result)
+        if grid_data === nothing
+            # Allocate grid data if not present (copy may not have provided it)
+            set_grid_data!(result, zeros(eltype(get_grid_data(template)),
+                                         size(get_grid_data(template))))
+        else
+            _fill_zeros!(grid_data)
+        end
+    else
+        coeff_data = get_coeff_data(result)
+        if coeff_data === nothing
+            set_coeff_data!(result, zeros(eltype(get_coeff_data(template)),
+                                          size(get_coeff_data(template))))
+        else
+            _fill_zeros!(coeff_data)
+        end
+    end
+
+    return result
+end
+
+"""Zero an array, going through `parent` for PencilArray buffers."""
+@inline function _fill_zeros!(data::AbstractArray)
+    if isa(data, PencilArrays.PencilArray)
+        fill!(parent(data), zero(eltype(data)))
+    else
+        fill!(data, zero(eltype(data)))
+    end
+    return data
+end
+
+"""
+    _divergence_product_factors(operand) -> (coefficient_expr, ::Gradient) | nothing
+
+Split a symbolic product into its `Gradient` factor and the coefficient
+multiplying it, accepting either operand order (`a*grad(u)` and `grad(u)*a`) and
+both product spellings: `MultiplyOperator` (built by the equation-string parser)
+and the deferred `Multiply` future (built by the Julia `*` operators).
+
+Returns `nothing` when the operand is not such a product — including when it
+holds more than one `Gradient`, where "the coefficient" is not well defined.
+"""
+_divergence_product_factors(operand) = nothing
+
+function _divergence_product_factors(operand::MultiplyOperator)
+    left, right = operand.left, operand.right
+    if isa(right, Gradient) && !isa(left, Gradient)
+        return (left, right)
+    elseif isa(left, Gradient) && !isa(right, Gradient)
+        return (right, left)
+    end
+    return nothing
+end
+
+function _divergence_product_factors(operand::Multiply)
+    args = future_args(operand)
+    gradient_positions = findall(arg -> isa(arg, Gradient), args)
+    length(gradient_positions) == 1 || return nothing
+    k = only(gradient_positions)
+    rest = [arg for (i, arg) in enumerate(args) if i != k]
+    coefficient = if isempty(rest)
+        1
+    elseif length(rest) == 1
+        only(rest)
+    else
+        Multiply(rest...)
+    end
+    return (coefficient, args[k])
+end
+
+"""
+    _evaluate_variable_coefficient_divergence(coeff_expr, grad_op, layout)
+
+`∇·(a ∇u)` via the product rule `Σₖ (a ∂ₖ²u + ∂ₖa ∂ₖu)`. Coordinates are taken
+from the gradient's own coordinate system, matching `evaluate_gradient` and
+`_evaluate_vector_divergence`, so a coordinate with no basis simply contributes
+nothing (its derivatives are zero).
+
+Throws `ArgumentError` when the coefficient is not scalar-valued or when `u` is
+neither a `ScalarField` nor a `VectorField`.
+"""
+function _evaluate_variable_coefficient_divergence(coeff_expr, grad_op::Gradient, layout::Symbol)
+    coefficient = _eval_operand(coeff_expr, :g)
+    if !(isa(coefficient, ScalarField) || isa(coefficient, Number))
+        throw(ArgumentError(
+            "div(a*grad(u)) requires a SCALAR coefficient `a` — a ScalarField, a number, " *
+            "or an expression evaluating to one. Got $(typeof(coeff_expr)) evaluating to " *
+            "$(typeof(coefficient)), which is not scalar-valued; a vector or tensor " *
+            "coefficient has no product-rule expansion here, so write that term out " *
+            "explicitly (for example as div() of an explicitly assembled flux vector)."))
+    end
+
+    # An expression coefficient can come back in a rotating derivative buffer,
+    # which is recycled after `_DERIV_RESULT_POOL_SIZE` further derivatives —
+    # and the loops below issue three per coordinate per component, which a 3D
+    # vector `u` exceeds. Pin it into a checked-out field, which is never handed
+    # out again, so `a` cannot change under us mid-accumulation.
+    if isa(coefficient, ScalarField) && !isa(coeff_expr, ScalarField)
+        pinned = checkout_or_alloc(coefficient.bases, coefficient.dtype, coefficient.dist)
+        copy_field_data!(pinned, coefficient)
+        pinned.current_layout = coefficient.current_layout
+        pinned.name = coefficient.name
+        coefficient = pinned
+    end
+
+    field = grad_op.operand
+    coordsys = grad_op.coordsys
+
+    if isa(field, ScalarField)
+        result = _divergence_result_field(field, "div_coeff_grad_$(field.name)", :g)
+        _accumulate_coeff_gradient_divergence!(result, coefficient, field, coordsys)
+        ensure_layout!(result, layout)
+        return result
+
+    elseif isa(field, VectorField)
+        # ∇·(a∇u) for vector u: the identity applies to each component separately.
+        result = VectorField(field.dist, field.coordsys,
+                             "div_coeff_grad_$(field.name)", field.bases, field.dtype)
+        for (j, component) in enumerate(field.components)
+            component_result = _divergence_result_field(
+                component, "div_coeff_grad_$(component.name)", :g)
+            _accumulate_coeff_gradient_divergence!(component_result, coefficient,
+                                                   component, coordsys)
+            ensure_layout!(component_result, layout)
+            result.components[j] = component_result
+        end
+        return result
+    end
+
+    throw(ArgumentError(
+        "div(a*grad(u)) is implemented for a ScalarField or VectorField `u`; got " *
+        "grad($(typeof(field)))."))
+end
+
+"""
+    _accumulate_coeff_gradient_divergence!(result, coefficient, u, coordsys)
+
+Write `Σₖ (a ∂ₖ²u + ∂ₖa ∂ₖu)` into `result`'s grid data. `result` is zeroed
+first. Derivatives are spectral; only the products are formed pointwise on the
+grid, so the result matches the hand-written `a*lap(u) + Σₖ ∂ₖ(a)*∂ₖ(u)` to
+round-off.
+"""
+function _accumulate_coeff_gradient_divergence!(result::ScalarField, coefficient,
+                                                u::ScalarField, coordsys)
+    ensure_layout!(result, :g)
+    result_data = get_grid_data(result)
+    result_data === nothing && throw(ArgumentError(
+        "div(a*grad(u)): result field $(result.name) has no grid data to accumulate into."))
+    _fill_zeros!(result_data)
+
+    coefficient_data = nothing
+    if isa(coefficient, ScalarField)
+        ensure_layout!(coefficient, :g)
+        coefficient_data = get_grid_data(coefficient)
+        coefficient_data === nothing && throw(ArgumentError(
+            "div(a*grad(u)): coefficient field $(coefficient.name) has no grid data."))
+        if size(coefficient_data) != size(result_data)
+            throw(ArgumentError(
+                "div(a*grad(u)): coefficient $(coefficient.name) has grid shape " *
+                "$(size(coefficient_data)) but $(u.name) has $(size(result_data)). " *
+                "The coefficient must live on the same grid as the differentiated field."))
+        end
+    end
+
+    for coord_name in coordsys.names
+        coord = coordsys[coord_name]
+
+        # a ∂ₖ²u
+        second_derivative = evaluate_differentiate(Differentiate(u, coord, 2), :g)
+        if coefficient_data === nothing
+            result_data .+= coefficient .* get_grid_data(second_derivative)
+        else
+            result_data .+= coefficient_data .* get_grid_data(second_derivative)
+
+            # ∂ₖa ∂ₖu (identically zero for a constant coefficient)
+            coefficient_derivative = evaluate_differentiate(
+                Differentiate(coefficient, coord, 1), :g)
+            first_derivative = evaluate_differentiate(Differentiate(u, coord, 1), :g)
+            result_data .+= get_grid_data(coefficient_derivative) .*
+                            get_grid_data(first_derivative)
+        end
+    end
+
+    result.current_layout = :g
+    return result
 end
 
 # ============================================================================
