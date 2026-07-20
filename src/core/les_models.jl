@@ -64,19 +64,123 @@ abstract type EddyViscosityModel <: SGSModel end
 # ============================================================================
 
 """
-    _validate_gradient_sizes(expected_size, arrays...)
+    _validate_gradient_arrays(reference, arrays...)
 
-Validate that all input gradient arrays match the expected field size.
-Uses @boundscheck so it can be disabled with @inbounds for performance.
+Validate every input gradient array against `reference` — the model's own output
+array, which is what the kernels actually iterate.
+
+This check is deliberately NOT wrapped in `@boundscheck`. It used to be, and that
+made it vanish under `--check-bounds=no` (a plausible flag for a production LES
+run) while the kernels still ran `@inbounds`: an undersized gradient array was
+then read past its end, which segfaults for a large mismatch and silently returns
+values read from unowned memory for a small one. One predictable branch per call
+is nothing against the O(N) work that follows.
+
+`reference` is the model's array rather than `model.field_size`, so a mutated
+`field_size` cannot desync the validated shape from the iterated one.
 """
-@inline function _validate_gradient_sizes(expected_size::NTuple{N, Int}, arrays...) where N
-    @boundscheck begin
-        for (i, arr) in enumerate(arrays)
-            if size(arr) != expected_size
-                throw(DimensionMismatch(
-                    "Gradient array $i has size $(size(arr)), expected $expected_size"
-                ))
-            end
+function _validate_gradient_arrays(reference::AbstractArray, arrays...)
+    expected_size = size(reference)
+    for (i, arr) in enumerate(arrays)
+        if size(arr) != expected_size
+            throw(DimensionMismatch(
+                "Gradient array $i has size $(size(arr)), expected $expected_size"
+            ))
+        end
+        _reject_nonlocal_array(i, arr)
+    end
+    return nothing
+end
+
+"""
+    _reject_nonlocal_array(i, arr)
+
+Reject array types whose element order does not match the model's own array.
+
+The kernels pair cells positionally against a rank-local dense array. A
+`PencilArray` reports the same `size` but stores its data in (possibly permuted)
+parent order, so mixing one in passes a size check and then silently pairs the
+wrong cells — measured at 75% of cells mispaired for a `Permutation(3,2,1)`
+pencil. Fail loudly with the fix instead.
+"""
+@inline function _reject_nonlocal_array(i::Int, arr::AbstractArray)
+    if arr isa PencilArrays.PencilArray
+        throw(ArgumentError(
+            "Gradient array $i is a PencilArray. LES models work on rank-local dense " *
+            "arrays and pair cells positionally, which does not match a PencilArray's " *
+            "storage order. Pass `get_local_data(field)` (or `parent(array)`) instead."
+        ))
+    end
+    return nothing
+end
+
+"""
+    _safe_quotient(C, numer, denom)
+
+Return `C * numer / denom`, guarding only the genuine `0/0`.
+
+`denom` is `|∇u|²` (or `|∇b|²`) — a DIMENSIONAL quantity. The previous guard
+compared it against an absolute `100*eps(T)`, which made the result depend on the
+caller's choice of units and dtype and broke the model's exact invariances: κₑ is
+mathematically unchanged by `b → αb`, yet a Float64 scalar scaled by 1e-8 (a trace
+species in mixing-ratio units) returned identically zero, and in Float32 an
+ordinary weakly-turbulent field had 89% of its cells silently zeroed. No guard
+that large is needed: `numer` is `O(denom^1.5)`, so the quotient stays finite for
+every `denom > 0` down to the smallest subnormal.
+
+NaN propagates deliberately. Returning zero for a blown-up velocity field would
+hide the blow-up at the one place a solver would naturally notice it.
+"""
+@inline function _safe_quotient(C::T, numer::T, denom::T) where {T}
+    isnan(denom) && return T(NaN)
+    return denom > zero(T) ? C * numer / denom : zero(T)
+end
+
+"""
+    _apply_clip(clip, value)
+
+Clip a negative eddy-viscosity/diffusivity predictor to zero when requested.
+`max` propagates NaN, so a NaN predictor survives clipping (see `_safe_quotient`).
+"""
+@inline _apply_clip(clip::Bool, value::T) where {T} = clip ? max(zero(T), value) : value
+
+"""
+    _effective_delta(filter_width)
+
+Geometric-mean filter width `(Δ₁ Δ₂ … Δ_N)^(1/N)`, derived on demand so a mutated
+`filter_width` can never disagree with it.
+"""
+# Signature requires at least one element: `NTuple{N,T}` also matches the empty
+# tuple, which leaves `T` unbound (Aqua flags it, and `prod(())^(1/0)` is
+# meaningless anyway). `N` comes from the tuple length, which is static.
+@inline function _effective_delta(filter_width::Tuple{T, Vararg{T}}) where {T}
+    return T(prod(filter_width)^(1 / length(filter_width)))
+end
+
+"""
+    _validate_model_params(constant_name, constant, filter_width, field_size)
+
+Shared constructor validation for the SGS models. Previously absent, which let
+`filter_width = (-1,-1,-1)` construct an AMD model silently (the sign vanished in
+the squaring) while raising `DomainError` from the geometric mean in Smagorinsky,
+and let `C = -5` (anti-dissipative), zero widths, and empty grids through.
+"""
+function _validate_model_params(constant_name::Symbol, constant::Real,
+                                filter_width::NTuple{N, Real},
+                                field_size::NTuple{N, Int}) where {N}
+    if !isfinite(constant) || constant < 0
+        throw(ArgumentError("$constant_name must be finite and non-negative, got $constant"))
+    end
+    for (d, Δ) in enumerate(filter_width)
+        if !isfinite(Δ) || Δ <= 0
+            throw(ArgumentError(
+                "filter_width[$d] must be finite and positive, got $Δ (filter_width = $filter_width)"
+            ))
+        end
+    end
+    for (d, n) in enumerate(field_size)
+        if n <= 0
+            throw(ArgumentError("field_size[$d] must be positive, got $n (field_size = $field_size)"))
         end
     end
     return nothing
@@ -208,8 +312,11 @@ function SmagorinskyModel(;
     architecture::Arch = CPU()
 ) where {T<:AbstractFloat, N, Arch<:AbstractArchitecture}
 
-    # Effective filter width: geometric mean
-    effective_delta = T(prod(filter_width)^(1/N))
+    _validate_model_params(:C_s, C_s, filter_width, field_size)
+
+    # Effective filter width: geometric mean. Cached for inspection only — the
+    # compute kernels re-derive it from `filter_width` so the two cannot desync.
+    effective_delta = _effective_delta(T.(filter_width))
 
     # Allocate arrays on the appropriate architecture
     eddy_viscosity = zeros(architecture, T, field_size...)
@@ -245,50 +352,54 @@ compute_eddy_viscosity!(model, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
 compute_eddy_viscosity!(model, ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z, ∂w∂x, ∂w∂y, ∂w∂z)
 ```
 """
+# ----------------------------------------------------------------------------
+# Pointwise kernels
+# ----------------------------------------------------------------------------
+# One scalar function per formula, broadcast over whatever array type the model
+# holds. CPU and GPU previously ran separately hand-written implementations of
+# the same algebra: they happened to agree bitwise, but every future edit had to
+# be mirrored by hand, and the GPU branch materialised up to eight field-sized
+# temporaries per call (≈1 GB at 256³ Float64 for AMD 3-D). Broadcasting one
+# scalar kernel needs none and cannot drift.
+
+"""
+    _smag_strain(gradients...)
+
+Strain-rate magnitude `|S̄| = √(2 S̄ᵢⱼ S̄ᵢⱼ)` at a point.
+"""
+@inline function _smag_strain(u_x::T, u_y::T, v_x::T, v_y::T) where {T}
+    S12 = T(0.5) * (u_y + v_x)
+    return sqrt(T(2) * (u_x^2 + v_y^2 + T(2) * S12^2))
+end
+
+@inline function _smag_strain(u_x::T, u_y::T, u_z::T,
+                              v_x::T, v_y::T, v_z::T,
+                              w_x::T, w_y::T, w_z::T) where {T}
+    S12 = T(0.5) * (u_y + v_x)
+    S13 = T(0.5) * (u_z + w_x)
+    S23 = T(0.5) * (v_z + w_y)
+    return sqrt(T(2) * (u_x^2 + v_y^2 + w_z^2 + T(2) * (S12^2 + S13^2 + S23^2)))
+end
+
 function compute_eddy_viscosity!(
     model::SmagorinskyModel{T, 2, A, Arch},
     ∂u∂x::AbstractArray{T}, ∂u∂y::AbstractArray{T},
     ∂v∂x::AbstractArray{T}, ∂v∂y::AbstractArray{T}
 ) where {T, A, Arch}
 
-    # Validate input array sizes
-    _validate_gradient_sizes(model.field_size, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
+    strain_mag = model.strain_magnitude
+    eddy_visc = model.eddy_viscosity
+
+    _validate_gradient_arrays(eddy_visc, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
 
     (∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y) =
         _coerce_arrays_to_architecture(model.architecture, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
 
-    # Pre-compute constant factor
-    CΔ_sq = (model.C_s * model.effective_delta)^2
-    half = T(0.5)
-    two = T(2)
+    # Derived per call: a mutated `filter_width` must not leave a stale Δ behind.
+    CΔ_sq = (model.C_s * _effective_delta(model.filter_width))^2
 
-    strain_mag = model.strain_magnitude
-    eddy_visc = model.eddy_viscosity
-
-    # Check if on GPU - use broadcasting for GPU arrays
-    if is_gpu(model.architecture)
-        # GPU path: use broadcasting (CUDA.jl handles optimization)
-        # S12 = 0.5 * (∂u∂y + ∂v∂x)
-        # |S̄| = √(2 * (S11² + S22² + 2*S12²))
-        S12_tmp = half .* (∂u∂y .+ ∂v∂x)
-        strain_mag .= sqrt.(two .* (∂u∂x.^2 .+ ∂v∂y.^2 .+ two .* S12_tmp.^2))
-        eddy_visc .= CΔ_sq .* strain_mag
-    else
-        # CPU path: use optimized SIMD loops
-        @inbounds @simd for i in eachindex(strain_mag)
-            # Strain rate tensor components
-            S11 = ∂u∂x[i]
-            S22 = ∂v∂y[i]
-            S12 = half * (∂u∂y[i] + ∂v∂x[i])
-
-            # |S̄| = √(2 Sᵢⱼ Sᵢⱼ)
-            S_mag = sqrt(two * (S11^2 + S22^2 + two*S12^2))
-            strain_mag[i] = S_mag
-
-            # νₑ = (Cₛ Δ)² |S̄|
-            eddy_visc[i] = CΔ_sq * S_mag
-        end
-    end
+    strain_mag .= _smag_strain.(∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
+    eddy_visc .= CΔ_sq .* strain_mag
 
     return eddy_visc
 end
@@ -300,8 +411,10 @@ function compute_eddy_viscosity!(
     ∂w∂x::AbstractArray{T}, ∂w∂y::AbstractArray{T}, ∂w∂z::AbstractArray{T}
 ) where {T, A, Arch}
 
-    # Validate input array sizes
-    _validate_gradient_sizes(model.field_size, ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z, ∂w∂x, ∂w∂y, ∂w∂z)
+    strain_mag = model.strain_magnitude
+    eddy_visc = model.eddy_viscosity
+
+    _validate_gradient_arrays(eddy_visc, ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z, ∂w∂x, ∂w∂y, ∂w∂z)
 
     (∂u∂x, ∂u∂y, ∂u∂z,
      ∂v∂x, ∂v∂y, ∂v∂z,
@@ -311,42 +424,10 @@ function compute_eddy_viscosity!(
                                       ∂v∂x, ∂v∂y, ∂v∂z,
                                       ∂w∂x, ∂w∂y, ∂w∂z)
 
-    # Pre-compute constant factor
-    CΔ_sq = (model.C_s * model.effective_delta)^2
-    half = T(0.5)
-    two = T(2)
+    CΔ_sq = (model.C_s * _effective_delta(model.filter_width))^2
 
-    strain_mag = model.strain_magnitude
-    eddy_visc = model.eddy_viscosity
-
-    # Check if on GPU - use broadcasting for GPU arrays
-    if is_gpu(model.architecture)
-        # GPU path: use broadcasting (CUDA.jl handles optimization)
-        S12_tmp = half .* (∂u∂y .+ ∂v∂x)
-        S13_tmp = half .* (∂u∂z .+ ∂w∂x)
-        S23_tmp = half .* (∂v∂z .+ ∂w∂y)
-        strain_mag .= sqrt.(two .* (∂u∂x.^2 .+ ∂v∂y.^2 .+ ∂w∂z.^2 .+
-                                     two .* (S12_tmp.^2 .+ S13_tmp.^2 .+ S23_tmp.^2)))
-        eddy_visc .= CΔ_sq .* strain_mag
-    else
-        # CPU path: use optimized SIMD loops
-        @inbounds @simd for i in eachindex(strain_mag)
-            # Strain rate tensor components
-            S11 = ∂u∂x[i]
-            S22 = ∂v∂y[i]
-            S33 = ∂w∂z[i]
-            S12 = half * (∂u∂y[i] + ∂v∂x[i])
-            S13 = half * (∂u∂z[i] + ∂w∂x[i])
-            S23 = half * (∂v∂z[i] + ∂w∂y[i])
-
-            # |S̄| = √(2 Sᵢⱼ Sᵢⱼ)
-            S_mag = sqrt(two * (S11^2 + S22^2 + S33^2 + two*(S12^2 + S13^2 + S23^2)))
-            strain_mag[i] = S_mag
-
-            # νₑ = (Cₛ Δ)² |S̄|
-            eddy_visc[i] = CΔ_sq * S_mag
-        end
-    end
+    strain_mag .= _smag_strain.(∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z, ∂w∂x, ∂w∂y, ∂w∂z)
+    eddy_visc .= CΔ_sq .* strain_mag
 
     return eddy_visc
 end
@@ -461,7 +542,11 @@ function AMDModel(;
     architecture::Arch = CPU()
 ) where {T<:AbstractFloat, N, Arch<:AbstractArchitecture}
 
-    filter_width_sq = T.(filter_width .^ 2)
+    _validate_model_params(:C, C, filter_width, field_size)
+
+    # Cached for inspection only — the compute kernels re-derive Δ² from
+    # `filter_width`, so mutating the struct cannot leave a stale squared width.
+    filter_width_sq = T.(filter_width) .^ 2
 
     # Allocate arrays on the appropriate architecture
     eddy_viscosity = zeros(architecture, T, field_size...)
@@ -479,6 +564,80 @@ function AMDModel(;
         clip_negative,
         architecture
     )
+end
+
+"""
+    _amd_nu(C, Δ²..., clip, gradients...)
+
+AMD eddy viscosity at a point:
+
+    νₑ = max(0, -C (Δₖ² ∂uᵢ/∂xₖ ∂uⱼ/∂xₖ S̄ᵢⱼ) / (∂uₘ/∂xₙ ∂uₘ/∂xₙ))
+
+summed over k. Note Δₖ indexes the DERIVATIVE direction, not the velocity
+component — that is what makes the model anisotropy-aware, and it is the term
+most easily got wrong.
+"""
+@inline function _amd_nu(C::T, Δx²::T, Δy²::T, clip::Bool,
+                         u_x::T, u_y::T, v_x::T, v_y::T) where {T}
+    S11 = u_x
+    S22 = v_y
+    S12 = T(0.5) * (u_y + v_x)
+    denom = u_x^2 + u_y^2 + v_x^2 + v_y^2
+    numer_x = Δx² * (u_x^2 * S11 + T(2) * u_x * v_x * S12 + v_x^2 * S22)
+    numer_y = Δy² * (u_y^2 * S11 + T(2) * u_y * v_y * S12 + v_y^2 * S22)
+    numer = -(numer_x + numer_y)
+    return _apply_clip(clip, _safe_quotient(C, numer, denom))
+end
+
+@inline function _amd_nu(C::T, Δx²::T, Δy²::T, Δz²::T, clip::Bool,
+                         u_x::T, u_y::T, u_z::T,
+                         v_x::T, v_y::T, v_z::T,
+                         w_x::T, w_y::T, w_z::T) where {T}
+    S11 = u_x
+    S22 = v_y
+    S33 = w_z
+    S12 = T(0.5) * (u_y + v_x)
+    S13 = T(0.5) * (u_z + w_x)
+    S23 = T(0.5) * (v_z + w_y)
+    denom = u_x^2 + u_y^2 + u_z^2 + v_x^2 + v_y^2 + v_z^2 + w_x^2 + w_y^2 + w_z^2
+    numer_x = Δx² * (u_x^2 * S11 + v_x^2 * S22 + w_x^2 * S33 +
+                     T(2) * (u_x * v_x * S12 + u_x * w_x * S13 + v_x * w_x * S23))
+    numer_y = Δy² * (u_y^2 * S11 + v_y^2 * S22 + w_y^2 * S33 +
+                     T(2) * (u_y * v_y * S12 + u_y * w_y * S13 + v_y * w_y * S23))
+    numer_z = Δz² * (u_z^2 * S11 + v_z^2 * S22 + w_z^2 * S33 +
+                     T(2) * (u_z * v_z * S12 + u_z * w_z * S13 + v_z * w_z * S23))
+    numer = -(numer_x + numer_y + numer_z)
+    return _apply_clip(clip, _safe_quotient(C, numer, denom))
+end
+
+"""
+    _amd_kappa(C, Δ²..., clip, velocity_gradients..., scalar_gradients...)
+
+AMD eddy diffusivity at a point (Abkar, Bae & Moin 2016):
+
+    κₑ = max(0, -C (Σₖ Δₖ² (∂ₖb) Σᵢ (∂ₖuᵢ)(∂ᵢb)) / (∂ₗb ∂ₗb))
+
+The inner sum runs over ALL velocity components i, not just one.
+"""
+@inline function _amd_kappa(C::T, Δx²::T, Δy²::T, clip::Bool,
+                            u_x::T, u_y::T, v_x::T, v_y::T,
+                            b_x::T, b_y::T) where {T}
+    denom = b_x^2 + b_y^2
+    numer = -(Δx² * b_x * (u_x * b_x + v_x * b_y) +
+              Δy² * b_y * (u_y * b_x + v_y * b_y))
+    return _apply_clip(clip, _safe_quotient(C, numer, denom))
+end
+
+@inline function _amd_kappa(C::T, Δx²::T, Δy²::T, Δz²::T, clip::Bool,
+                            u_x::T, u_y::T, u_z::T,
+                            v_x::T, v_y::T, v_z::T,
+                            w_x::T, w_y::T, w_z::T,
+                            b_x::T, b_y::T, b_z::T) where {T}
+    denom = b_x^2 + b_y^2 + b_z^2
+    numer = -(Δx² * b_x * (u_x * b_x + v_x * b_y + w_x * b_z) +
+              Δy² * b_y * (u_y * b_x + v_y * b_y + w_y * b_z) +
+              Δz² * b_z * (u_z * b_x + v_z * b_y + w_z * b_z))
+    return _apply_clip(clip, _safe_quotient(C, numer, denom))
 end
 
 """
@@ -507,50 +666,18 @@ function compute_eddy_viscosity!(
     ∂v∂x::AbstractArray{T}, ∂v∂y::AbstractArray{T}
 ) where {T, A, Arch}
 
-    # Validate input array sizes
-    _validate_gradient_sizes(model.field_size, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
+    eddy_visc = model.eddy_viscosity
+
+    _validate_gradient_arrays(eddy_visc, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
 
     (∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y) =
         _coerce_arrays_to_architecture(model.architecture, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
 
     C = model.C
-    Δx², Δy² = model.filter_width_sq
-    half = T(0.5)
-    two = T(2)
-    eps_T = T(100) * eps(T)
+    Δx², Δy² = model.filter_width .^ 2   # derived per call; see _effective_delta
     clip = model.clip_negative
-    eddy_visc = model.eddy_viscosity
 
-    # Check if on GPU - use broadcasting for GPU arrays
-    if is_gpu(model.architecture)
-        # GPU path: use broadcasting
-        S12 = half .* (∂u∂y .+ ∂v∂x)
-        denom = ∂u∂x.^2 .+ ∂u∂y.^2 .+ ∂v∂x.^2 .+ ∂v∂y.^2
-        numer_x = Δx² .* (∂u∂x.^2 .* ∂u∂x .+ two .* ∂u∂x .* ∂v∂x .* S12 .+ ∂v∂x.^2 .* ∂v∂y)
-        numer_y = Δy² .* (∂u∂y.^2 .* ∂u∂x .+ two .* ∂u∂y .* ∂v∂y .* S12 .+ ∂v∂y.^2 .* ∂v∂y)
-        numer = .-(numer_x .+ numer_y)
-        # Safe division and clipping
-        eddy_visc .= ifelse.(denom .> eps_T, C .* numer ./ denom, zero(T))
-        if clip
-            eddy_visc .= max.(zero(T), eddy_visc)
-        end
-    else
-        # CPU path: use optimized SIMD loops
-        @inbounds @simd for i in eachindex(eddy_visc)
-            u_x = ∂u∂x[i]; u_y = ∂u∂y[i]
-            v_x = ∂v∂x[i]; v_y = ∂v∂y[i]
-            S11 = u_x
-            S22 = v_y
-            S12 = half * (u_y + v_x)
-            denom = u_x^2 + u_y^2 + v_x^2 + v_y^2
-            numer_x = Δx² * (u_x^2 * S11 + two*u_x*v_x*S12 + v_x^2 * S22)
-            numer_y = Δy² * (u_y^2 * S11 + two*u_y*v_y*S12 + v_y^2 * S22)
-            numer = -(numer_x + numer_y)
-            νₑ = denom > eps_T ? C * numer / denom : zero(T)
-            νₑ = ifelse(clip, max(zero(T), νₑ), νₑ)
-            eddy_visc[i] = νₑ
-        end
-    end
+    eddy_visc .= _amd_nu.(C, Δx², Δy², clip, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
 
     return eddy_visc
 end
@@ -562,8 +689,9 @@ function compute_eddy_viscosity!(
     ∂w∂x::AbstractArray{T}, ∂w∂y::AbstractArray{T}, ∂w∂z::AbstractArray{T}
 ) where {T, A, Arch}
 
-    # Validate input array sizes
-    _validate_gradient_sizes(model.field_size, ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z, ∂w∂x, ∂w∂y, ∂w∂z)
+    eddy_visc = model.eddy_viscosity
+
+    _validate_gradient_arrays(eddy_visc, ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z, ∂w∂x, ∂w∂y, ∂w∂z)
 
     (∂u∂x, ∂u∂y, ∂u∂z,
      ∂v∂x, ∂v∂y, ∂v∂z,
@@ -574,56 +702,13 @@ function compute_eddy_viscosity!(
                                       ∂w∂x, ∂w∂y, ∂w∂z)
 
     C = model.C
-    Δx², Δy², Δz² = model.filter_width_sq
-    half = T(0.5)
-    two = T(2)
-    eps_T = T(100) * eps(T)
+    Δx², Δy², Δz² = model.filter_width .^ 2
     clip = model.clip_negative
-    eddy_visc = model.eddy_viscosity
 
-    # Check if on GPU - use broadcasting for GPU arrays
-    if is_gpu(model.architecture)
-        # GPU path: use broadcasting
-        S12 = half .* (∂u∂y .+ ∂v∂x)
-        S13 = half .* (∂u∂z .+ ∂w∂x)
-        S23 = half .* (∂v∂z .+ ∂w∂y)
-
-        denom = ∂u∂x.^2 .+ ∂u∂y.^2 .+ ∂u∂z.^2 .+ ∂v∂x.^2 .+ ∂v∂y.^2 .+ ∂v∂z.^2 .+ ∂w∂x.^2 .+ ∂w∂y.^2 .+ ∂w∂z.^2
-
-        numer_x = Δx² .* (∂u∂x.^2 .* ∂u∂x .+ ∂v∂x.^2 .* ∂v∂y .+ ∂w∂x.^2 .* ∂w∂z .+
-                          two .* (∂u∂x .* ∂v∂x .* S12 .+ ∂u∂x .* ∂w∂x .* S13 .+ ∂v∂x .* ∂w∂x .* S23))
-        numer_y = Δy² .* (∂u∂y.^2 .* ∂u∂x .+ ∂v∂y.^2 .* ∂v∂y .+ ∂w∂y.^2 .* ∂w∂z .+
-                          two .* (∂u∂y .* ∂v∂y .* S12 .+ ∂u∂y .* ∂w∂y .* S13 .+ ∂v∂y .* ∂w∂y .* S23))
-        numer_z = Δz² .* (∂u∂z.^2 .* ∂u∂x .+ ∂v∂z.^2 .* ∂v∂y .+ ∂w∂z.^2 .* ∂w∂z .+
-                          two .* (∂u∂z .* ∂v∂z .* S12 .+ ∂u∂z .* ∂w∂z .* S13 .+ ∂v∂z .* ∂w∂z .* S23))
-
-        numer = .-(numer_x .+ numer_y .+ numer_z)
-        eddy_visc .= ifelse.(denom .> eps_T, C .* numer ./ denom, zero(T))
-        if clip
-            eddy_visc .= max.(zero(T), eddy_visc)
-        end
-    else
-        # CPU path: use optimized SIMD loops
-        @inbounds @simd for i in eachindex(eddy_visc)
-            u_x = ∂u∂x[i]; u_y = ∂u∂y[i]; u_z = ∂u∂z[i]
-            v_x = ∂v∂x[i]; v_y = ∂v∂y[i]; v_z = ∂v∂z[i]
-            w_x = ∂w∂x[i]; w_y = ∂w∂y[i]; w_z = ∂w∂z[i]
-            S11 = u_x
-            S22 = v_y
-            S33 = w_z
-            S12 = half * (u_y + v_x)
-            S13 = half * (u_z + w_x)
-            S23 = half * (v_z + w_y)
-            denom = u_x^2 + u_y^2 + u_z^2 + v_x^2 + v_y^2 + v_z^2 + w_x^2 + w_y^2 + w_z^2
-            numer_x = Δx² * (u_x^2 * S11 + v_x^2 * S22 + w_x^2 * S33 + two * (u_x*v_x*S12 + u_x*w_x*S13 + v_x*w_x*S23))
-            numer_y = Δy² * (u_y^2 * S11 + v_y^2 * S22 + w_y^2 * S33 + two * (u_y*v_y*S12 + u_y*w_y*S13 + v_y*w_y*S23))
-            numer_z = Δz² * (u_z^2 * S11 + v_z^2 * S22 + w_z^2 * S33 + two * (u_z*v_z*S12 + u_z*w_z*S13 + v_z*w_z*S23))
-            numer = -(numer_x + numer_y + numer_z)
-            νₑ = denom > eps_T ? C * numer / denom : zero(T)
-            νₑ = ifelse(clip, max(zero(T), νₑ), νₑ)
-            eddy_visc[i] = νₑ
-        end
-    end
+    eddy_visc .= _amd_nu.(C, Δx², Δy², Δz², clip,
+                          ∂u∂x, ∂u∂y, ∂u∂z,
+                          ∂v∂x, ∂v∂y, ∂v∂z,
+                          ∂w∂x, ∂w∂y, ∂w∂z)
 
     return eddy_visc
 end
@@ -660,41 +745,19 @@ function compute_eddy_diffusivity!(
     ∂b∂x::AbstractArray{T}, ∂b∂y::AbstractArray{T}
 ) where {T, A, Arch}
 
-    # Validate input array sizes
-    _validate_gradient_sizes(model.field_size, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
+    eddy_diff = model.eddy_diffusivity
+
+    _validate_gradient_arrays(eddy_diff, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
 
     (∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y) =
         _coerce_arrays_to_architecture(model.architecture,
                                        ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
 
     C = model.C
-    Δx², Δy² = model.filter_width_sq
-    eps_T = T(100) * eps(T)
+    Δx², Δy² = model.filter_width .^ 2
     clip = model.clip_negative
-    eddy_diff = model.eddy_diffusivity
 
-    # κₑ† = -[ Δx²(∂ₓb)Σᵢ(∂ₓuᵢ)(∂ᵢb) + Δy²(∂_yb)Σᵢ(∂_yuᵢ)(∂ᵢb) ] / |∇b|²
-    if is_gpu(model.architecture)
-        # GPU path: use broadcasting
-        denom = ∂b∂x.^2 .+ ∂b∂y.^2
-        numer = .-(Δx² .* ∂b∂x .* (∂u∂x .* ∂b∂x .+ ∂v∂x .* ∂b∂y) .+
-                   Δy² .* ∂b∂y .* (∂u∂y .* ∂b∂x .+ ∂v∂y .* ∂b∂y))
-        eddy_diff .= ifelse.(denom .> eps_T, C .* numer ./ denom, zero(T))
-        if clip
-            eddy_diff .= max.(zero(T), eddy_diff)
-        end
-    else
-        # CPU path: use optimized SIMD loops
-        @inbounds @simd for i in eachindex(eddy_diff)
-            ax = ∂b∂x[i]; ay = ∂b∂y[i]
-            denom = ax^2 + ay^2
-            numer = -(Δx² * ax * (∂u∂x[i] * ax + ∂v∂x[i] * ay) +
-                      Δy² * ay * (∂u∂y[i] * ax + ∂v∂y[i] * ay))
-            κₑ = denom > eps_T ? C * numer / denom : zero(T)
-            κₑ = ifelse(clip, max(zero(T), κₑ), κₑ)
-            eddy_diff[i] = κₑ
-        end
-    end
+    eddy_diff .= _amd_kappa.(C, Δx², Δy², clip, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y, ∂b∂x, ∂b∂y)
 
     return eddy_diff
 end
@@ -707,10 +770,11 @@ function compute_eddy_diffusivity!(
     ∂b∂x::AbstractArray{T}, ∂b∂y::AbstractArray{T}, ∂b∂z::AbstractArray{T}
 ) where {T, A, Arch}
 
-    # Validate input array sizes
-    _validate_gradient_sizes(model.field_size,
-                             ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z,
-                             ∂w∂x, ∂w∂y, ∂w∂z, ∂b∂x, ∂b∂y, ∂b∂z)
+    eddy_diff = model.eddy_diffusivity
+
+    _validate_gradient_arrays(eddy_diff,
+                              ∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z,
+                              ∂w∂x, ∂w∂y, ∂w∂z, ∂b∂x, ∂b∂y, ∂b∂z)
 
     (∂u∂x, ∂u∂y, ∂u∂z,
      ∂v∂x, ∂v∂y, ∂v∂z,
@@ -723,35 +787,14 @@ function compute_eddy_diffusivity!(
                                       ∂b∂x, ∂b∂y, ∂b∂z)
 
     C = model.C
-    Δx², Δy², Δz² = model.filter_width_sq
-    eps_T = T(100) * eps(T)
+    Δx², Δy², Δz² = model.filter_width .^ 2
     clip = model.clip_negative
-    eddy_diff = model.eddy_diffusivity
 
-    # κₑ† = -[ Σₖ δₖ²(∂ₖb) Σᵢ(∂ₖuᵢ)(∂ᵢb) ] / |∇b|², k,i ∈ {x,y,z}, u=(u,v,w)
-    if is_gpu(model.architecture)
-        # GPU path: use broadcasting
-        denom = ∂b∂x.^2 .+ ∂b∂y.^2 .+ ∂b∂z.^2
-        numer = .-(Δx² .* ∂b∂x .* (∂u∂x .* ∂b∂x .+ ∂v∂x .* ∂b∂y .+ ∂w∂x .* ∂b∂z) .+
-                   Δy² .* ∂b∂y .* (∂u∂y .* ∂b∂x .+ ∂v∂y .* ∂b∂y .+ ∂w∂y .* ∂b∂z) .+
-                   Δz² .* ∂b∂z .* (∂u∂z .* ∂b∂x .+ ∂v∂z .* ∂b∂y .+ ∂w∂z .* ∂b∂z))
-        eddy_diff .= ifelse.(denom .> eps_T, C .* numer ./ denom, zero(T))
-        if clip
-            eddy_diff .= max.(zero(T), eddy_diff)
-        end
-    else
-        # CPU path: use optimized SIMD loops
-        @inbounds @simd for i in eachindex(eddy_diff)
-            ax = ∂b∂x[i]; ay = ∂b∂y[i]; az = ∂b∂z[i]
-            denom = ax^2 + ay^2 + az^2
-            numer = -(Δx² * ax * (∂u∂x[i] * ax + ∂v∂x[i] * ay + ∂w∂x[i] * az) +
-                      Δy² * ay * (∂u∂y[i] * ax + ∂v∂y[i] * ay + ∂w∂y[i] * az) +
-                      Δz² * az * (∂u∂z[i] * ax + ∂v∂z[i] * ay + ∂w∂z[i] * az))
-            κₑ = denom > eps_T ? C * numer / denom : zero(T)
-            κₑ = ifelse(clip, max(zero(T), κₑ), κₑ)
-            eddy_diff[i] = κₑ
-        end
-    end
+    eddy_diff .= _amd_kappa.(C, Δx², Δy², Δz², clip,
+                             ∂u∂x, ∂u∂y, ∂u∂z,
+                             ∂v∂x, ∂v∂y, ∂v∂z,
+                             ∂w∂x, ∂w∂y, ∂w∂z,
+                             ∂b∂x, ∂b∂y, ∂b∂z)
 
     return eddy_diff
 end
@@ -830,6 +873,14 @@ Return the current eddy diffusivity field (AMD model only).
 """
 get_eddy_diffusivity(model::AMDModel) = model.eddy_diffusivity
 
+function get_eddy_diffusivity(model::EddyViscosityModel)
+    throw(ArgumentError(
+        "$(nameof(typeof(model))) has no eddy diffusivity — only AMDModel models " *
+        "scalar transport directly. Use an AMDModel, or derive a diffusivity from " *
+        "the eddy viscosity with a turbulent Prandtl number: κₑ = νₑ / Pr_t."
+    ))
+end
+
 """
     get_filter_width(model::EddyViscosityModel)
 
@@ -838,11 +889,18 @@ Return the filter width(s).
 get_filter_width(model::EddyViscosityModel) = model.filter_width
 
 """
-    mean_eddy_viscosity(model::EddyViscosityModel)
+    mean_eddy_viscosity(model::EddyViscosityModel; global_reduce=true)
 
 Compute the domain-averaged eddy viscosity.
+
+!!! warning "Collective under MPI"
+    With `global_reduce=true` (the default) this is a **collective** call on
+    `MPI.COMM_WORLD`: every rank must call it, or the ones that do will hang.
+    In particular `rank == 0 && @info mean_eddy_viscosity(model)` deadlocks —
+    compute on all ranks first, then log on one. Pass `global_reduce=false` for
+    this rank's slab only, which is safe to call from a subset of ranks.
 """
-function mean_eddy_viscosity(model::EddyViscosityModel)
+function mean_eddy_viscosity(model::EddyViscosityModel; global_reduce::Bool=true)
     n = length(model.eddy_viscosity)
     n == 0 && return zero(eltype(model.eddy_viscosity))
     s = sum(model.eddy_viscosity)
@@ -850,7 +908,7 @@ function mean_eddy_viscosity(model::EddyViscosityModel)
     # sum/length is only this rank's slab → reduce the global mean as Σs/Σn over
     # COMM_WORLD. Correct whether slabs are DECOMPOSED (tile the domain) or REPLICATED
     # (Σ scales numerator and denominator by nprocs equally).
-    if MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
+    if global_reduce && MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
         s = MPI.Allreduce(s, +, MPI.COMM_WORLD)
         n = MPI.Allreduce(n, +, MPI.COMM_WORLD)
     end
@@ -858,14 +916,18 @@ function mean_eddy_viscosity(model::EddyViscosityModel)
 end
 
 """
-    max_eddy_viscosity(model::EddyViscosityModel)
+    max_eddy_viscosity(model::EddyViscosityModel; global_reduce=true)
 
 Return the maximum eddy viscosity in the domain.
+
+!!! warning "Collective under MPI"
+    See [`mean_eddy_viscosity`](@ref) — with `global_reduce=true` every rank must
+    call this or the callers hang.
 """
-function max_eddy_viscosity(model::EddyViscosityModel)
+function max_eddy_viscosity(model::EddyViscosityModel; global_reduce::Bool=true)
     m = maximum(model.eddy_viscosity)        # per-rank slab maximum
     # Global maximum under MPI (idempotent → also correct for replicated slabs).
-    return (MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1) ?
+    return (global_reduce && MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1) ?
            MPI.Allreduce(m, MPI.MAX, MPI.COMM_WORLD) : m
 end
 
@@ -877,6 +939,14 @@ GPU-aware: fill!() works for both CPU and GPU arrays.
 """
 function reset!(model::EddyViscosityModel)
     fill!(model.eddy_viscosity, zero(eltype(model.eddy_viscosity)))
+    return model
+end
+
+# Also clear the cached |S̄|: it feeds sgs_dissipation, so leaving it populated
+# after a reset lets a stale strain field flow into a diagnostic.
+function reset!(model::SmagorinskyModel{T, N, A, Arch}) where {T, N, A, Arch}
+    fill!(model.eddy_viscosity, zero(T))
+    fill!(model.strain_magnitude, zero(T))
     return model
 end
 
@@ -892,6 +962,8 @@ end
 Update the Smagorinsky constant.
 """
 function set_constant!(model::SmagorinskyModel{T, N, A, Arch}, C_s::Real) where {T, N, A, Arch}
+    (isfinite(C_s) && C_s >= 0) ||
+        throw(ArgumentError("C_s must be finite and non-negative, got $C_s"))
     model.C_s = T(C_s)
     return model
 end
@@ -902,7 +974,35 @@ end
 Update the AMD Poincaré constant.
 """
 function set_constant!(model::AMDModel{T, N, A, Arch}, C::Real) where {T, N, A, Arch}
+    (isfinite(C) && C >= 0) ||
+        throw(ArgumentError("C must be finite and non-negative, got $C"))
     model.C = T(C)
+    return model
+end
+
+"""
+    set_filter_width!(model, filter_width)
+
+Update the filter width and its cached derived quantities together.
+
+Assigning `model.filter_width` directly is also safe — the compute kernels derive
+Δ² and the geometric-mean Δ from `filter_width` on every call — but it leaves the
+cached `filter_width_sq` / `effective_delta` fields reading stale. Use this to
+keep every view of the model consistent.
+"""
+function set_filter_width!(model::AMDModel{T, N, A, Arch},
+                           filter_width::NTuple{N, Real}) where {T, N, A, Arch}
+    _validate_model_params(:C, model.C, filter_width, model.field_size)
+    model.filter_width = T.(filter_width)
+    model.filter_width_sq = model.filter_width .^ 2
+    return model
+end
+
+function set_filter_width!(model::SmagorinskyModel{T, N, A, Arch},
+                           filter_width::NTuple{N, Real}) where {T, N, A, Arch}
+    _validate_model_params(:C_s, model.C_s, filter_width, model.field_size)
+    model.filter_width = T.(filter_width)
+    model.effective_delta = _effective_delta(model.filter_width)
     return model
 end
 
@@ -935,8 +1035,13 @@ end
 
 Compute domain-averaged SGS dissipation rate.
 GPU-aware: Uses broadcasting and sum() which work for both CPU and GPU arrays.
+
+!!! warning "Collective under MPI"
+    See [`mean_eddy_viscosity`](@ref) — with `global_reduce=true` every rank must
+    call this or the callers hang.
 """
-function mean_sgs_dissipation(model::EddyViscosityModel, strain_magnitude::AbstractArray{T}) where T
+function mean_sgs_dissipation(model::EddyViscosityModel, strain_magnitude::AbstractArray{T};
+                              global_reduce::Bool=true) where T
     νₑ = model.eddy_viscosity
     n = length(νₑ)
     n == 0 && return zero(T)
@@ -944,7 +1049,7 @@ function mean_sgs_dissipation(model::EddyViscosityModel, strain_magnitude::Abstr
     # εₛₛ = νₑ |S̄|² with |S̄| = √(2 S̄ᵢⱼS̄ᵢⱼ); no extra factor of 2 (see sgs_dissipation).
     s = sum(νₑ .* strain_magnitude.^2)
     # Global mean under MPI (Σs/Σn — correct for decomposed or replicated slabs).
-    if MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
+    if global_reduce && MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
         s = MPI.Allreduce(s, +, MPI.COMM_WORLD)
         n = MPI.Allreduce(n, +, MPI.COMM_WORLD)
     end
@@ -961,5 +1066,5 @@ export compute_eddy_viscosity!, compute_eddy_diffusivity!
 export compute_sgs_stress
 export get_eddy_viscosity, get_eddy_diffusivity, get_filter_width
 export mean_eddy_viscosity, max_eddy_viscosity
-export reset!, set_constant!
+export reset!, set_constant!, set_filter_width!
 export sgs_dissipation, mean_sgs_dissipation

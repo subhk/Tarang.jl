@@ -69,9 +69,23 @@ max_eddy_viscosity(model)       # 0.00891… — global
 `mean_eddy_viscosity`, `max_eddy_viscosity` and `mean_sgs_dissipation` each perform their own
 reduction over `MPI.COMM_WORLD`, so they return domain-global values: for the 16×16 case above
 they give the same numbers at np = 1, 2 and 4. Being collectives, they must be called on **every**
-rank — reaching for one inside an `if rank == 0` block deadlocks. `get_eddy_viscosity(model)` is,
-by contrast, this rank's slab — broadcast it against the other `parent(...)` arrays to build the
-stress locally.
+rank — reaching for one inside an `if rank == 0` block deadlocks. Pass `global_reduce=false` to
+skip the reduction and get this rank's slab value, which is safe to call from a subset of ranks:
+
+```julia
+# Deadlocks at np > 1 — only rank 0 enters the collective.
+rank == 0 && @info "mean νₑ" mean_eddy_viscosity(model)
+
+# Correct: every rank reduces, one rank prints.
+ν̄ = mean_eddy_viscosity(model)
+rank == 0 && @info "mean νₑ" ν̄
+
+# Or opt out of the reduction entirely.
+rank == 0 && @info "local νₑ" mean_eddy_viscosity(model; global_reduce=false)
+```
+
+`get_eddy_viscosity(model)` is, by contrast, this rank's slab — broadcast it against the other
+`parent(...)` arrays to build the stress locally.
 
 Sizing the model to the global grid is a loud error rather than a silent wrong answer:
 
@@ -400,9 +414,16 @@ export compute_eddy_viscosity!, compute_eddy_diffusivity!
 export compute_sgs_stress
 export get_eddy_viscosity, get_eddy_diffusivity, get_filter_width
 export mean_eddy_viscosity, max_eddy_viscosity
-export reset!, set_constant!
+export reset!, set_constant!, set_filter_width!
 export sgs_dissipation, mean_sgs_dissipation
 ```
+
+### Mutating a model
+
+`set_constant!(model, C)` and `set_filter_width!(model, Δ)` validate their argument and keep the
+cached derived quantities (`filter_width_sq`, `effective_delta`) in step. Assigning
+`model.filter_width` directly is also honoured — the kernels re-derive Δ² and the geometric-mean Δ
+on every call — but it leaves those cached fields reading stale, so prefer the setter.
 
 ---
 

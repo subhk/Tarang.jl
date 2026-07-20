@@ -2,6 +2,17 @@
 
 This page provides a comprehensive introduction to Large Eddy Simulation (LES) and the subgrid-scale (SGS) closure models available in Tarang.jl.
 
+!!! note "Scope: these models are array-level utilities"
+    The SGS models are **array-level utilities**. They consume grid-space
+    velocity-gradient arrays and produce an eddy-viscosity array (and, for AMD, an
+    eddy-diffusivity array). They are **not** automatically coupled into an `IVP`, and
+    no solver, RHS builder, timestepper or problem parser reads them: you evaluate the
+    gradients, call the model, and apply the resulting stress yourself. The examples
+    below therefore show the SGS update in isolation — the momentum and scalar updates
+    around it are code you write. In particular, there is no timestepper keyword that
+    takes an effective-viscosity array; a variable-viscosity term has to be assembled
+    and applied explicitly.
+
 ---
 
 ## What is Large Eddy Simulation?
@@ -122,10 +133,15 @@ The SGS model must drain energy from resolved scales at the correct rate to main
 The rate at which energy is transferred from resolved to unresolved scales is:
 
 ```math
-\varepsilon_{sgs} = -\tau_{ij} \bar{S}_{ij} = 2\nu_e |\bar{S}|^2
+\varepsilon_{sgs} = -\tau_{ij} \bar{S}_{ij} = 2\nu_e \bar{S}_{ij}\bar{S}_{ij} = \nu_e |\bar{S}|^2
 ```
 
 where $|\bar{S}| = \sqrt{2\bar{S}_{ij}\bar{S}_{ij}}$ is the strain rate magnitude.
+
+There is **no** extra factor of 2 in the final expression: the $\sqrt{2}$ in the
+definition of $|\bar{S}|$ already carries it. This is what
+[`sgs_dissipation`](../api/les_models.md) returns — writing $2\nu_e|\bar{S}|^2$ would
+double-count the dissipation.
 
 A good SGS model ensures $\varepsilon_{sgs}$ matches the actual energy transfer rate.
 
@@ -239,10 +255,15 @@ The AMD model (Rozema et al., 2015) addresses key limitations of Smagorinsky:
 The AMD model computes eddy viscosity as:
 
 ```math
-\nu_e = \max\left(0, -C \frac{\hat{\delta}_{ij}^2 \frac{\partial \bar{u}_i}{\partial x_k} \frac{\partial \bar{u}_j}{\partial x_k} \bar{S}_{ij}}{\frac{\partial \bar{u}_m}{\partial x_n} \frac{\partial \bar{u}_m}{\partial x_n}}\right)
+\nu_e = \max\left(0, -C \frac{\Delta_k^2 \frac{\partial \bar{u}_i}{\partial x_k} \frac{\partial \bar{u}_j}{\partial x_k} \bar{S}_{ij}}{\frac{\partial \bar{u}_m}{\partial x_n} \frac{\partial \bar{u}_m}{\partial x_n}}\right)
 ```
 
-where $\hat{\delta}_{ij} = \Delta_i \delta_{ij}$ (no sum) incorporates anisotropic filter widths.
+with summation over $i$, $j$ and $k$. The filter width $\Delta_k$ is indexed by the
+**derivative direction** $k$, *not* by the velocity-component index — that is what makes
+the model anisotropy-aware, and it is the term most easily got wrong. Tying $\Delta$ to
+the component index instead (e.g. $\hat{\delta}_{ij} = \Delta_i \delta_{ij}$) leaves only
+the diagonal strain contributing, and gives a different sign as well as a different
+magnitude.
 
 **Simplified form:**
 
@@ -303,10 +324,16 @@ For buoyancy-driven flows, AMD also provides eddy diffusivity for scalar transpo
 \kappa_e = \max\left(0, -C \frac{\Delta_k^2 \frac{\partial \bar{u}_i}{\partial x_k} \frac{\partial \bar{\theta}}{\partial x_k} \frac{\partial \bar{\theta}}{\partial x_i}}{\frac{\partial \bar{\theta}}{\partial x_n} \frac{\partial \bar{\theta}}{\partial x_n}}\right)
 ```
 
+The inner sum runs over **every** velocity component $u_i$, so the method needs the
+complete velocity-gradient tensor (9 components in 3D, 4 in 2D) before the scalar
+gradients — not the gradient of a single velocity component:
+
 ```julia
 # Compute eddy diffusivity for buoyancy/temperature
 compute_eddy_diffusivity!(sgs_model,
-    ∂w∂x, ∂w∂y, ∂w∂z,    # Vertical velocity gradients
+    ∂u∂x, ∂u∂y, ∂u∂z,    # Gradients of u
+    ∂v∂x, ∂v∂y, ∂v∂z,    # Gradients of v
+    ∂w∂x, ∂w∂y, ∂w∂z,    # Gradients of w
     ∂b∂x, ∂b∂y, ∂b∂z     # Buoyancy/scalar gradients
 )
 
@@ -360,7 +387,10 @@ Is computational cost a primary concern?
 
 ## Complete Example: LES of Decaying Turbulence
 
-This example demonstrates a complete LES setup for decaying homogeneous isotropic turbulence.
+This example demonstrates the SGS side of an LES of decaying homogeneous isotropic
+turbulence: building the model, evaluating the velocity gradients, and refreshing νₑ
+each step. Advancing the momentum equation is not shown, because Tarang does not do it
+for you — see the scope note at the top of this page.
 
 ```julia
 using Tarang
@@ -385,7 +415,8 @@ nsteps = 1000               # Number of time steps
 sgs = SmagorinskyModel(
     C_s = 0.17,
     filter_width = (Δ, Δ, Δ),
-    field_size = (N, N, N)
+    field_size = (N, N, N),
+    architecture = CPU()       # GPU() keeps νₑ on the device
 )
 
 # Option B: AMD (recommended for most applications)
@@ -413,29 +444,37 @@ domain = Domain(dist, (xbasis, ybasis, zbasis))
 u = VectorField(dist, coords, "u", (xbasis, ybasis, zbasis))
 
 # ============================================================
-# 4. Initialize with Turbulent Velocity Field
+# 4. Initialize with a Turbulent Velocity Field
 # ============================================================
 
-# (Initialize u with your preferred IC - e.g., random phases
-#  with prescribed energy spectrum)
+# A Taylor-Green vortex keeps this example self-contained; substitute your
+# own IC (e.g. random phases with a prescribed energy spectrum).
+x, y, z = local_grids(dist, xbasis, ybasis, zbasis)
+ensure_layout!(u, :g)
+get_grid_data(u.components[1]) .=  sin.(x) .* cos.(y') .* cos.(reshape(z, 1, 1, :))
+get_grid_data(u.components[2]) .= .-cos.(x) .* sin.(y') .* cos.(reshape(z, 1, 1, :))
+get_grid_data(u.components[3]) .= 0.0
+ensure_layout!(u, :c)
 
 # ============================================================
 # 5. Helper Function: Compute All Velocity Gradients
 # ============================================================
 
 function compute_velocity_gradients(u)
-    # Uses spectral differentiation for high accuracy
-    ∂u∂x, ∂u∂y, ∂u∂z = gradient(u.components[1])
-    ∂v∂x, ∂v∂y, ∂v∂z = gradient(u.components[2])
-    ∂w∂x, ∂w∂y, ∂w∂z = gradient(u.components[3])
-    return (∂u∂x, ∂u∂y, ∂u∂z,
-            ∂v∂x, ∂v∂y, ∂v∂z,
-            ∂w∂x, ∂w∂y, ∂w∂z)
+    # grad(u) is a lazy Gradient — it is not itself iterable, so it cannot be
+    # destructured directly. evaluate() turns it into a TensorField whose
+    # components are already in the component-major order the models expect:
+    # (∂u∂x, ∂u∂y, ∂u∂z, ∂v∂x, ∂v∂y, ∂v∂z, ∂w∂x, ∂w∂y, ∂w∂z).
+    G = evaluate(grad(u))
+    return Tuple(get_grid_data(g) for g in G.components)
 end
 
 # ============================================================
-# 6. Time Integration Loop
+# 6. Per-Step SGS Update
 # ============================================================
+#
+# Nothing in the solver stack calls the SGS model for you. What follows is the
+# SGS half of a timestep; advancing ū is code you supply.
 
 for step in 1:nsteps
     # --- Step 1: Compute velocity gradients ---
@@ -446,14 +485,14 @@ for step in 1:nsteps
 
     # --- Step 3: Get effective viscosity ---
     νₑ = get_eddy_viscosity(sgs)
-    ν_eff = ν .+ νₑ  # Total viscosity = molecular + SGS
+    ν_eff = ν .+ νₑ  # Total viscosity = molecular + SGS, one value per grid point
 
-    # --- Step 4: Advance momentum equation ---
+    # --- Step 4: Advance the momentum equation (your code) ---
     # The filtered Navier-Stokes with SGS model:
-    #   ∂ū/∂t + (ū·∇)ū = -∇p̄/ρ + (ν + νₑ)∇²ū
+    #   ∂ū/∂t + (ū·∇)ū = -∇p̄/ρ + ∇·((ν + νₑ)∇ū)
     #
-    # In your timestepper, use ν_eff instead of ν
-    # for the viscous term
+    # ν_eff is a plain array and no timestepper keyword accepts it, so the
+    # variable-viscosity term must be assembled and applied explicitly.
 
     # --- Step 5: Diagnostics ---
     if step % 100 == 0
@@ -472,7 +511,8 @@ end
 
 ## Complete Example: LES of Rayleigh-Bénard Convection
 
-For buoyancy-driven turbulence, we need both momentum and scalar closures:
+For buoyancy-driven turbulence we need both momentum and scalar closures. As above, only
+the SGS update is shown — the momentum and temperature updates are yours to write.
 
 ```julia
 using Tarang
@@ -483,16 +523,36 @@ using Tarang
 
 Nx, Nz = 256, 128           # Grid resolution
 Lx, Lz = 4.0, 1.0           # Domain size
-Δx, Δz = Lx/Nx, Lz/Nz       # Grid spacing
 
 Ra = 1e8                    # Rayleigh number
 Pr = 1.0                    # Prandtl number
 ν = sqrt(Pr / Ra)           # Kinematic viscosity
 κ = ν / Pr                  # Thermal diffusivity
+nsteps = 1000               # Number of time steps
+
+# ============================================================
+# Domain and Fields
+# ============================================================
+
+coords = CartesianCoordinates("x", "z")
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx))  # periodic
+zbasis = ChebyshevT(coords["z"];  size=Nz, bounds=(0.0, Lz))  # wall-bounded
+domain = Domain(dist, (xbasis, zbasis))
+
+u = Field(dist; name="u", bases=(xbasis, zbasis))   # horizontal velocity
+w = Field(dist; name="w", bases=(xbasis, zbasis))   # vertical velocity
+T = Field(dist; name="T", bases=(xbasis, zbasis))   # temperature
+
+# (Initialise u, w and T with your own IC and boundary conditions.)
 
 # ============================================================
 # Create AMD Model (recommended for RBC)
 # ============================================================
+
+# One filter width per axis. `grid_spacing` reports the *smallest* spacing on
+# each axis, which is the conservative choice on the Chebyshev-clustered z axis.
+Δx, Δz = grid_spacing(domain)
 
 sgs = AMDModel(
     C = 1/12,
@@ -501,29 +561,32 @@ sgs = AMDModel(
 )
 
 # ============================================================
-# In the Time Loop
+# Per-Step SGS Update
 # ============================================================
 
 for step in 1:nsteps
-    # Compute velocity gradients
-    ∂u∂x, ∂u∂z = gradient(u)
-    ∂w∂x, ∂w∂z = gradient(w)
+    # Velocity gradients. grad() is lazy and not iterable; evaluate() realises
+    # it, and for a scalar field the result has one component per axis.
+    ∂u∂x, ∂u∂z = (get_grid_data(g) for g in evaluate(grad(u)).components)
+    ∂w∂x, ∂w∂z = (get_grid_data(g) for g in evaluate(grad(w)).components)
 
-    # Compute temperature gradients
-    ∂T∂x, ∂T∂z = gradient(T)
+    # Temperature gradients
+    ∂T∂x, ∂T∂z = (get_grid_data(g) for g in evaluate(grad(T)).components)
 
     # --- Momentum closure ---
+    # 2D needs the complete 2×2 velocity-gradient tensor, component-major.
     compute_eddy_viscosity!(sgs, ∂u∂x, ∂u∂z, ∂w∂x, ∂w∂z)
     νₑ = get_eddy_viscosity(sgs)
     ν_eff = ν .+ νₑ
 
     # --- Scalar (temperature) closure ---
-    compute_eddy_diffusivity!(sgs, ∂w∂x, ∂w∂z, ∂T∂x, ∂T∂z)
+    # The same velocity-gradient tensor first, then the scalar gradients.
+    compute_eddy_diffusivity!(sgs, ∂u∂x, ∂u∂z, ∂w∂x, ∂w∂z, ∂T∂x, ∂T∂z)
     κₑ = get_eddy_diffusivity(sgs)
     κ_eff = κ .+ κₑ
 
-    # Use ν_eff in momentum equation
-    # Use κ_eff in temperature equation
+    # ν_eff and κ_eff are plain arrays. Applying them to the momentum and
+    # temperature equations is your code — see the scope note at the top.
 end
 ```
 
@@ -539,10 +602,10 @@ The SGS dissipation rate tells you how much energy is being drained by the model
 # Get strain magnitude (computed during eddy viscosity calculation)
 S_mag = sgs.strain_magnitude  # Only for Smagorinsky
 
-# Or compute it yourself
-S_mag = sqrt(2 * (S11.^2 + S22.^2 + S33.^2 + 2*S12.^2 + 2*S13.^2 + 2*S23.^2))
+# Or compute it yourself — note the broadcasting dots (sqrt is not vectorised)
+S_mag = sqrt.(2 .* (S11.^2 .+ S22.^2 .+ S33.^2 .+ 2 .* S12.^2 .+ 2 .* S13.^2 .+ 2 .* S23.^2))
 
-# SGS dissipation field: ε_sgs = 2 νₑ |S|²
+# SGS dissipation field: ε_sgs = νₑ |S̄|²  (no extra factor of 2 — |S̄| carries it)
 ε_sgs = sgs_dissipation(sgs, S_mag)
 
 # Domain-averaged SGS dissipation
@@ -626,6 +689,54 @@ compute_eddy_viscosity!(sgs_2d, ∂u∂x, ∂u∂y, ∂v∂x, ∂v∂y)
 
 ---
 
+## Choosing an Architecture (CPU / GPU)
+
+Both models take an `architecture` keyword, defaulting to `CPU()`. It decides where the
+model's internal buffers (`eddy_viscosity`, `strain_magnitude`, and for AMD
+`eddy_diffusivity`) are allocated: plain `Array`s on `CPU()`, `CuArray`s on `GPU()`.
+
+```julia
+# CPU (the default)
+sgs_cpu = SmagorinskyModel(
+    C_s = 0.17,
+    filter_width = (Δ, Δ, Δ),
+    field_size = (N, N, N),
+    architecture = CPU()
+)
+
+# AMD takes the same keyword
+amd_cpu = AMDModel(
+    C = 1/12,
+    filter_width = (Δx, Δy, Δz),
+    field_size = (Nx, Ny, Nz),
+    architecture = CPU()
+)
+```
+
+`GPU()` requires CUDA.jl to be loaded first, and a CUDA device to be present — it throws
+otherwise:
+
+```julia
+using CUDA        # must be loaded before GPU() can be constructed
+using Tarang
+
+sgs_gpu = SmagorinskyModel(
+    C_s = 0.17,
+    filter_width = (Δ, Δ, Δ),
+    field_size = (N, N, N),
+    architecture = GPU()
+)
+```
+
+`compute_eddy_viscosity!` and `compute_eddy_diffusivity!` dispatch on the model's
+architecture: broadcast kernels on the GPU, SIMD loops on the CPU. Gradient arrays that
+are not already on the model's architecture are copied there on every call, so a CPU
+array handed to a `GPU()` model works but pays a host-to-device transfer each step —
+keep the gradients on the same device as the model. `get_eddy_viscosity` returns an
+array of the model's own kind (`Array` on `CPU()`, `CuArray` on `GPU()`).
+
+---
+
 ## API Reference
 
 ### Constructors
@@ -635,7 +746,8 @@ SmagorinskyModel(;
     C_s = 0.17,                    # Smagorinsky constant
     filter_width::NTuple{N, Real}, # (Δx, Δy) or (Δx, Δy, Δz)
     field_size::NTuple{N, Int},    # (Nx, Ny) or (Nx, Ny, Nz)
-    dtype = Float64                # Precision
+    dtype = Float64,               # Precision
+    architecture = CPU()           # CPU() or GPU()
 )
 
 AMDModel(;
@@ -643,7 +755,8 @@ AMDModel(;
     filter_width::NTuple{N, Real}, # Can be anisotropic
     field_size::NTuple{N, Int},
     clip_negative = true,          # Ensure νₑ ≥ 0
-    dtype = Float64
+    dtype = Float64,               # Precision
+    architecture = CPU()           # CPU() or GPU()
 )
 ```
 
@@ -672,7 +785,7 @@ AMDModel(;
 | `set_constant!(model, C)` | Update model constant |
 | `reset!(model)` | Reset νₑ (and κₑ) to zero |
 | `get_filter_width(model)` | Return filter width tuple |
-| `compute_sgs_stress(model, S...)` | Compute full SGS stress tensor |
+| `compute_sgs_stress(model, S...)` | Compute the deviatoric SGS stress tensor τᵢⱼ = -2 νₑ S̄ᵢⱼ |
 
 ---
 
