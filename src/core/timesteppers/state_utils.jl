@@ -100,21 +100,35 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
                                 # Vector RHS (e.g. -u⋅∇(u)) — extract the component
                                 # matching this state field's position within the vector
                                 comp_idx = state_idx - first(target_indices) + 1
-                                if 1 <= comp_idx <= length(rhs_field.components)
-                                    comp = rhs_field.components[comp_idx]
-                                    ensure_layout!(comp, :c)
-                                    rhs[state_idx] = comp
+                                if !(1 <= comp_idx <= length(rhs_field.components))
+                                    error("RHS expression for state field $state_idx is a " *
+                                          "$(length(rhs_field.components))-component VectorField, " *
+                                          "but this field maps to component $comp_idx of it. " *
+                                          "The equation's ∂t targets and its RHS rank disagree.")
                                 end
+                                comp = rhs_field.components[comp_idx]
+                                ensure_layout!(comp, :c)
+                                rhs[state_idx] = comp
                             else
-                                @warn "RHS expression for state field $state_idx evaluated to $(typeof(rhs_field))"
+                                error("RHS expression for state field $state_idx evaluated to " *
+                                      "$(typeof(rhs_field)); expected a ScalarField or VectorField.")
                             end
                         catch e
-                            # An unrecognized RHS expression (typo / unknown operator)
-                            # is a user error, not a transient failure — propagate it
-                            # rather than silently leaving a zero RHS for this field.
-                            e isa UnrecognizedRHSExpression && rethrow()
-                            bt = catch_backtrace()
-                            @warn "Failed to evaluate RHS expression for state field $state_idx: $e" backtrace=sprint(showerror, e, bt)
+                            # NEVER degrade a failed RHS evaluation to "RHS = 0". Zero is a
+                            # physically meaningful right-hand side, so leaving it here
+                            # silently replaces the equation with a different one — the run
+                            # completes, reports success, and returns a wrong answer, and it
+                            # takes down every other term in the same sum with it (the whole
+                            # field's RHS stays at the zero it was initialized to). This
+                            # extends the policy that used to apply only to
+                            # UnrecognizedRHSExpression (typo'd operators) to every
+                            # evaluation failure: an unsupported or malformed term must be
+                            # reported, not quietly dropped. The catch survives only to
+                            # name the offending state field before re-raising.
+                            @error "Failed to evaluate the RHS expression for state field " *
+                                   "$state_idx (expression type $(typeof(expr))). Aborting " *
+                                   "rather than continuing with a zero RHS for this field."
+                            rethrow()
                         end
                     end
                 end
