@@ -53,7 +53,7 @@ end
 """
     evaluate_divergence(div_op, layout=:g) -> ScalarField | VectorField
 
-Evaluate `∇·(…)`, lowering the operand's rank by one. Three operand forms are
+Evaluate `∇·(…)`, lowering the operand's rank by one. Four operand forms are
 supported:
 
 1. **`VectorField`** — sums `∂uᵢ/∂xᵢ` over all coordinates into a single scalar
@@ -72,9 +72,22 @@ supported:
    `VectorField`; the identity applied component-wise, since `∇·(a∇u)ⱼ =
    Σₖ ∂ₖ(a ∂ₖuⱼ)`).
 
-3. **Any other expression that evaluates to a `VectorField`** — e.g.
-   `div(grad(u))`, `div(skew(grad(ψ)))`, `div(-u)`. The operand is evaluated and
-   its divergence taken as in case 1.
+3. **A scalar coefficient times a `VectorField`** — `div(a*u)` (either factor
+   order), the *conservative flux* form: `∇·(ρu)` in mass conservation, `∇·(uc)`
+   in conservative advection, `∇·(κ q)` for a variable-coefficient flux. Expanded
+   with the same kind of exact product rule,
+
+       ∇·(a u) = a (∇·u) + u·∇a = Σᵢ (a ∂ᵢuᵢ + uᵢ ∂ᵢa)
+
+   so, again, derivatives are spectral on `a` and `u` themselves and only the
+   pointwise products touch the grid. Writing it this way rather than
+   differentiating the assembled product `a uᵢ` keeps the answer identical to the
+   hand-written `a*div(u) + dot(u, grad(a))` and avoids differentiating a product
+   that may not be resolved on the grid its factors are resolved on.
+
+4. **Any other expression that evaluates to a `VectorField`** — e.g.
+   `div(grad(u))`, `div(skew(grad(ψ)))`, `div(-u)`, `div(a*curl(A))`. The operand
+   is evaluated and its divergence taken as in case 1.
 
 Accumulation is done directly on the result's field data (not via the symbolic
 `+` tree) to avoid building intermediate operator nodes. The result buffer is
@@ -99,6 +112,13 @@ function evaluate_divergence(div_op::Divergence, layout::Symbol=:g)
         return _evaluate_variable_coefficient_divergence(coeff_expr, grad_op, layout)
     end
 
+    # div(a*u): the conservative flux form, expanded the same way.
+    flux_factors = _divergence_flux_factors(operand)
+    if flux_factors !== nothing
+        coeff_expr, vector_field = flux_factors
+        return _evaluate_conservative_flux_divergence(coeff_expr, vector_field, layout)
+    end
+
     # Any other expression: evaluate it; a vector result has a well-defined
     # divergence. Errors raised while evaluating the operand propagate as-is —
     # they name the real problem better than a generic message here could.
@@ -109,8 +129,9 @@ function evaluate_divergence(div_op::Divergence, layout::Symbol=:g)
     throw(ArgumentError(
         "Divergence not implemented for operand type $(typeof(operand))$(evaluated_note). " *
         "∇· lowers rank by one, so its operand must be vector-valued. Supported: a " *
-        "VectorField, a scalar coefficient times a gradient (`div(a*grad(u))`), or any " *
-        "expression that evaluates to a VectorField."))
+        "VectorField, a scalar coefficient times a gradient (`div(a*grad(u))`), a scalar " *
+        "coefficient times a vector field (`div(a*u)`), or any expression that evaluates " *
+        "to a VectorField."))
 end
 
 """
@@ -221,6 +242,168 @@ function _divergence_product_factors(operand::Multiply)
         Multiply(rest...)
     end
     return (coefficient, args[k])
+end
+
+"""
+    _divergence_flux_factors(operand) -> (coefficient_expr, ::VectorField) | nothing
+
+Split a symbolic product into its `VectorField` factor and the coefficient
+multiplying it — the conservative flux `a u` — accepting either operand order
+(`a*u` and `u*a`) and both product spellings, exactly as
+[`_divergence_product_factors`](@ref) does for `a*grad(u)`.
+
+Returns `nothing` unless exactly one factor is a `VectorField`; with none there
+is no flux, and with two (`v*u`) "the coefficient" is not well defined and the
+product itself is ambiguous (dot? cross?). Both cases fall through to the generic
+branch of `evaluate_divergence`, which raises the error that names them.
+
+Note this is checked *after* the `Gradient` split, so `div(v*grad(u))` with a
+vector `v` still reports the unsupported non-scalar coefficient rather than being
+re-read as a flux whose coefficient happens to be a gradient.
+"""
+_divergence_flux_factors(operand) = nothing
+
+function _divergence_flux_factors(operand::MultiplyOperator)
+    left, right = operand.left, operand.right
+    if isa(right, VectorField) && !isa(left, VectorField)
+        return (left, right)
+    elseif isa(left, VectorField) && !isa(right, VectorField)
+        return (right, left)
+    end
+    return nothing
+end
+
+function _divergence_flux_factors(operand::Multiply)
+    args = future_args(operand)
+    vector_positions = findall(arg -> isa(arg, VectorField), args)
+    length(vector_positions) == 1 || return nothing
+    k = only(vector_positions)
+    rest = [arg for (i, arg) in enumerate(args) if i != k]
+    coefficient = if isempty(rest)
+        1
+    elseif length(rest) == 1
+        only(rest)
+    else
+        Multiply(rest...)
+    end
+    return (coefficient, args[k])
+end
+
+"""
+    _evaluate_conservative_flux_divergence(coeff_expr, u, layout) -> ScalarField
+
+`∇·(a u)` via the exact product rule `Σᵢ (a ∂ᵢuᵢ + uᵢ ∂ᵢa)`. Coordinates come
+from the vector field's own coordinate system, matching
+`_evaluate_vector_divergence`, so component `i` is differentiated along
+`coordsys.names[i]`.
+
+Throws `ArgumentError` when the coefficient is not scalar-valued, or when the
+vector field has a different number of components than the coordinate system has
+coordinates (there is then no `∂ᵢuᵢ` pairing to sum).
+"""
+function _evaluate_conservative_flux_divergence(coeff_expr, u::VectorField, layout::Symbol)
+    coefficient = _eval_operand(coeff_expr, :g)
+    if !(isa(coefficient, ScalarField) || isa(coefficient, Number))
+        throw(ArgumentError(
+            "div(a*u) requires a SCALAR coefficient `a` — a ScalarField, a number, or an " *
+            "expression evaluating to one. Got $(typeof(coeff_expr)) evaluating to " *
+            "$(typeof(coefficient)), which is not scalar-valued. A vector or tensor " *
+            "coefficient has no product-rule expansion here: `div(v*u)` is ambiguous " *
+            "(dot or cross?), and a tensor flux must be assembled explicitly and passed " *
+            "to div() as a vector."))
+    end
+
+    coordsys = u.coordsys
+    if length(u.components) != length(coordsys.names)
+        coordinate_list = join(coordsys.names, ", ")
+        throw(ArgumentError(
+            "div(a*u): VectorField '$(u.name)' has $(length(u.components)) components but " *
+            "its coordinate system has $(length(coordsys.names)) coordinates " *
+            "($(coordinate_list)). ∇·(a u) = Σᵢ ∂ᵢ(a uᵢ) needs one component per " *
+            "coordinate."))
+    end
+
+    # Same hazard as in `_evaluate_variable_coefficient_divergence`: an expression
+    # coefficient can come back in one of the rotating derivative-pool buffers,
+    # which is recycled after `_DERIV_RESULT_POOL_SIZE` further derivatives. Pin
+    # it into a checked-out field, which is never handed out again while it is
+    # held, so `a` cannot change under us mid-accumulation.
+    #
+    # The margin here is wider than in the gradient sibling: this loop issues 2
+    # checkouts per coordinate (6 in 3D) against that path's 3 per coordinate per
+    # component (27 for a 3D vector, which does wrap 16 and did corrupt
+    # components 2 and 3 by 2.0 and 2.9 before it was pinned). So this pin is not
+    # currently load-bearing — measured identical with and without at ndim ≤ 3 —
+    # but the count scales with ndim while the pool size is a constant that has
+    # already had to be raised once, and the copy is one field per div().
+    if isa(coefficient, ScalarField) && !isa(coeff_expr, ScalarField)
+        pinned = checkout_or_alloc(coefficient.bases, coefficient.dtype, coefficient.dist)
+        copy_field_data!(pinned, coefficient)
+        pinned.current_layout = coefficient.current_layout
+        pinned.name = coefficient.name
+        coefficient = pinned
+    end
+
+    result = _divergence_result_field(u.components[1], "div_flux_$(u.name)", :g)
+    _accumulate_conservative_flux_divergence!(result, coefficient, u, coordsys)
+    ensure_layout!(result, layout)
+    return result
+end
+
+"""
+    _accumulate_conservative_flux_divergence!(result, coefficient, u, coordsys)
+
+Write `Σᵢ (a ∂ᵢuᵢ + uᵢ ∂ᵢa)` into `result`'s grid data. `result` is zeroed first.
+Derivatives are spectral; only the products are formed pointwise on the grid, so
+the result matches the hand-written `a*div(u) + dot(u, grad(a))` to round-off.
+
+A constant (`Number`) coefficient contributes only `a ∂ᵢuᵢ` — `∂ᵢa` is
+identically zero — so it reduces exactly to `a*div(u)`.
+"""
+function _accumulate_conservative_flux_divergence!(result::ScalarField, coefficient,
+                                                   u::VectorField, coordsys)
+    ensure_layout!(result, :g)
+    result_data = get_grid_data(result)
+    result_data === nothing && throw(ArgumentError(
+        "div(a*u): result field $(result.name) has no grid data to accumulate into."))
+    _fill_zeros!(result_data)
+
+    coefficient_data = nothing
+    if isa(coefficient, ScalarField)
+        ensure_layout!(coefficient, :g)
+        coefficient_data = get_grid_data(coefficient)
+        coefficient_data === nothing && throw(ArgumentError(
+            "div(a*u): coefficient field $(coefficient.name) has no grid data."))
+        if size(coefficient_data) != size(result_data)
+            throw(ArgumentError(
+                "div(a*u): coefficient $(coefficient.name) has grid shape " *
+                "$(size(coefficient_data)) but $(u.name) has $(size(result_data)). " *
+                "The coefficient must live on the same grid as the field it multiplies."))
+        end
+    end
+
+    for (i, coord_name) in enumerate(coordsys.names)
+        coord = coordsys[coord_name]
+        component = u.components[i]
+
+        # a ∂ᵢuᵢ
+        component_derivative = evaluate_differentiate(Differentiate(component, coord, 1), :g)
+        if coefficient_data === nothing
+            result_data .+= coefficient .* get_grid_data(component_derivative)
+        else
+            result_data .+= coefficient_data .* get_grid_data(component_derivative)
+
+            # uᵢ ∂ᵢa (identically zero for a constant coefficient, hence the branch)
+            coefficient_derivative = evaluate_differentiate(
+                Differentiate(coefficient, coord, 1), :g)
+            ensure_layout!(component, :g)
+            result_data .+= get_grid_data(component) .*
+                            get_grid_data(coefficient_derivative)
+        end
+    end
+
+    result.current_layout = :g
+    return result
 end
 
 """
