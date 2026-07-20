@@ -71,13 +71,25 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
 
     fallback_reason = _imex_rk_explicit_fallback_reason(state, solver, current_state, L_matrix)
     if fallback_reason !== nothing
-        # MPI pure-Fourier has no subproblems and no global L_matrix, so the IMEX
-        # solve can't run as a matrix solve — but the linear operator is diagonal
-        # in Fourier space, so treat it per-mode instead of degrading to a fully
-        # explicit step (which blows up on stiff νΔ⁴/μ → high-wavenumber noise).
-        if _distributed_diagonal_imex_applicable(solver)
-            step_distributed_diagonal_imex_rk!(state, solver, ts)
-            return nothing
+        if fallback_reason === :gpu_without_subproblems ||
+           fallback_reason === :mpi_without_subproblems
+            # Nonzero implicit operator, but no subproblem/global-matrix path on
+            # this architecture. MPI pure-Fourier can still treat L per-mode
+            # (diagonal in Fourier space) instead of degrading to a fully
+            # explicit step (which blows up on stiff νΔ⁴/μ → high-wavenumber noise).
+            if _distributed_diagonal_imex_applicable(solver)
+                step_distributed_diagonal_imex_rk!(state, solver, ts)
+                return nothing
+            end
+            # No implicit-capable path left. Refusing loudly: the explicit
+            # fallback would integrate the equations WITHOUT their implicit
+            # linear terms (e.g. run without viscosity) and only ever @debug'd.
+            error("IMEX RK ($(nameof(typeof(ts)))): the equations have a nonzero implicit " *
+                  "linear operator, but no implicit-capable path exists for this " *
+                  "configuration ($(fallback_reason)). Refusing to silently drop it. " *
+                  "Options: on GPU use DiagonalIMEX_RK222/RK443/SBDF2 with an attached " *
+                  "SpectralLinearOperator (set_spectral_linear_operator!), move the " *
+                  "linear terms to the RHS for explicit treatment, or run on CPU.")
         end
         _log_imex_rk_explicit_fallback(fallback_reason)
         _step_rk_imex_explicit_fallback!(state, solver, ts)

@@ -40,3 +40,21 @@ end
     # Same ETD-AB2 update + same startup ⇒ identical to roundoff.
     @test maximum(abs.(cnab2 .- sbdf2)) < 1e-10 * maximum(abs.(sbdf2))
 end
+
+@testset "phi_functions small-z accuracy (cancellation regression)" begin
+    # The direct formulas (e^z−1−z)/z² etc. cancel catastrophically for small
+    # |z|: with the old 1e-8 Taylor cutoff, φ₂'s relative error reached ~1% at
+    # z=−1e-7 and φ₃'s exceeded 1e5(!). Low-|k| modes (z = −dt·ν·k²) sweep this
+    # band in essentially every ETD run. The cutoff is now 1e-2 with extended
+    # series. Reference values from BigFloat evaluation of the exact formulas.
+    setprecision(BigFloat, 256) do
+        for z in (-1e-7, -1e-6, -1e-5, -1e-4, -1e-3, -5e-3, -0.5, -5.0)
+            φ0, φ1, φ2, φ3 = Tarang.phi_functions(z)
+            bz = big(z)
+            @test isapprox(φ0, Float64(exp(bz)); rtol=1e-12)
+            @test isapprox(φ1, Float64((exp(bz) - 1) / bz); rtol=1e-11)
+            @test isapprox(φ2, Float64((exp(bz) - 1 - bz) / bz^2); rtol=1e-11)
+            @test isapprox(φ3, Float64((exp(bz) - 1 - bz - bz^2 / 2) / bz^3); rtol=1e-9)
+        end
+    end
+end

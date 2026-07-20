@@ -158,6 +158,10 @@ const GPU_TEST_FILES = [
     # The .buildkite GPU pipeline MUST also run this file at nprocs ∈ {2,4} under
     # mpiexec WITH NCCL to exercise the live distributed multi-GPU transform path.
     "test_gpu_distributed_dct1.jl",
+    # First GPU coverage of step! itself: DiagonalIMEX exact viscous decay,
+    # explicit-RK order (stage-aliasing regression), and the loud refusal when
+    # a nonzero implicit L has no GPU-capable path (silent L-drop regression).
+    "test_gpu_timesteppers.jl",
 ]
 
 # Multi-rank MPI tests. Each file calls MPI.Init itself and must be launched in

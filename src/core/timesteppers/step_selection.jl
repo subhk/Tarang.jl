@@ -57,15 +57,19 @@ function _imex_rk_explicit_fallback_reason(state,
                                            solver::InitialValueSolver,
                                            current_state::Vector{<:ScalarField},
                                            L_matrix)
+    # A missing/zero linear operator makes the fully-explicit treatment exact on
+    # every architecture, so it must be checked BEFORE the GPU/MPI reasons: the
+    # *_without_subproblems reasons now guarantee a nonzero L, which lets
+    # step_rk_imex! refuse to silently drop it when no implicit path exists.
+    L_matrix === nothing && return :missing_linear_operator
+    _linear_operator_is_zero(L_matrix) && return :zero_linear_operator
+
     distributed_reason = _distributed_field_path_reason(current_state)
     if distributed_reason === :gpu
         return :gpu_without_subproblems
     elseif distributed_reason === :mpi_pencil
         return :mpi_without_subproblems
     end
-
-    L_matrix === nothing && return :missing_linear_operator
-    _linear_operator_is_zero(L_matrix) && return :zero_linear_operator
     return nothing
 end
 
