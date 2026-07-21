@@ -88,6 +88,66 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         @test isapprox(_grid(F[1]), expected; rtol=1e-10, atol=1e-12)
     end
 
+    @testset "div(a*u) conservative flux compiles and matches interpreted" begin
+        coords, dist, domain = _setup()
+        q = ScalarField(domain, "q"); _init!(q)
+        a = ScalarField(domain, "a"); ensure_layout!(a, :g)
+        xs = [2π*(i-1)/N for i in 1:N]
+        get_grid_data(a) .= [2.0 + sin(xs[i]) * cos(xs[j]) for i in 1:N, j in 1:N]
+        ensure_layout!(a, :c)
+        u = VectorField(dist, coords, "u", (domain.bases[1], domain.bases[2]), Float64)
+        for (k, c) in enumerate(u.components)
+            ensure_layout!(c, :g)
+            get_grid_data(c) .= [sin(k*xs[i]) * cos(xs[j]) for i in 1:N, j in 1:N]
+            ensure_layout!(c, :c)
+        end
+        problem = IVP([q])
+        add_parameters!(problem, a=a, u=u)
+        add_equation!(problem, "dt(q) = -div(a*u)")
+        solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+        @test solver.rhs_plan.is_compiled
+        F = Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        expected = .-_grid(evaluate(Tarang.Divergence(a * u)))
+        @test isapprox(_grid(F[1]), expected; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "div(a*grad(q)) variable-coefficient diffusion compiles and matches interpreted" begin
+        coords, dist, domain = _setup()
+        q = ScalarField(domain, "q"); _init!(q)
+        a = ScalarField(domain, "a"); ensure_layout!(a, :g)
+        xs = [2π*(i-1)/N for i in 1:N]
+        get_grid_data(a) .= [1.5 + 0.4*cos(xs[i]) * sin(xs[j]) for i in 1:N, j in 1:N]
+        ensure_layout!(a, :c)
+        problem = IVP([q])
+        add_parameters!(problem, a=a)
+        add_equation!(problem, "dt(q) = div(a*grad(q))")
+        solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+        @test solver.rhs_plan.is_compiled
+        F = Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        expected = _grid(evaluate(Tarang.Divergence(a * grad(q))))
+        @test isapprox(_grid(F[1]), expected; rtol=1e-10, atol=1e-12)
+    end
+
+    @testset "constant coefficient div(c*u) still compiles and matches c*div(u)" begin
+        coords, dist, domain = _setup()
+        q = ScalarField(domain, "q"); _init!(q)
+        u = VectorField(dist, coords, "u", (domain.bases[1], domain.bases[2]), Float64)
+        xs = [2π*(i-1)/N for i in 1:N]
+        for (k, c) in enumerate(u.components)
+            ensure_layout!(c, :g)
+            get_grid_data(c) .= [sin(k*xs[i]) * cos(xs[j]) for i in 1:N, j in 1:N]
+            ensure_layout!(c, :c)
+        end
+        problem = IVP([q])
+        add_parameters!(problem, u=u)
+        add_equation!(problem, "dt(q) = -2.5*div(u)")
+        solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+        @test solver.rhs_plan.is_compiled
+        F = Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        expected = -2.5 .* _grid(evaluate(Tarang.Divergence(u)))
+        @test isapprox(_grid(F[1]), expected; rtol=1e-10, atol=1e-12)
+    end
+
     @testset "Legendre lap() declines to compile (and the fallback is correct)" begin
         # `differentiation_matrix` for Legendre is the classical recurrence for UNNORMALIZED
         # Pₙ, but the transform stores ORTHONORMAL P̃ₙ coefficients. The lazy path does not
