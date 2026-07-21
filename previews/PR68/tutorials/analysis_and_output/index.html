@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Analysis &amp; Output · Tarang.jl</title><meta name="title" content="Analysis &amp; Output · Tarang.jl"/><meta property="og:title" content="Analysis &amp; Output · Tarang.jl"/><meta property="twitter:title" content="Analysis &amp; Output · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/tutorials/analysis_and_output/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/tutorials/analysis_and_output/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/tutorials/analysis_and_output/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../overview/">Overview</a></li><li><a class="tocitem" href="../ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../boundary_conditions/">Boundary Conditions</a></li><li class="is-active"><a class="tocitem" href>Analysis &amp; Output</a><ul class="internal"><li><a class="tocitem" href="#Setup"><span>Setup</span></a></li><li><a class="tocitem" href="#File-Output"><span>File Output</span></a></li><li><a class="tocitem" href="#Analysis-Tasks"><span>Analysis Tasks</span></a></li><li><a class="tocitem" href="#Global-Diagnostics"><span>Global Diagnostics</span></a></li><li><a class="tocitem" href="#Energy-Spectra"><span>Energy Spectra</span></a></li><li><a class="tocitem" href="#Time-Series"><span>Time Series</span></a></li><li><a class="tocitem" href="#Visualization-Integration"><span>Visualization Integration</span></a></li><li><a class="tocitem" href="#Checkpointing"><span>Checkpointing</span></a></li><li><a class="tocitem" href="#Complete-Example"><span>Complete Example</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../../examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/les_models/">LES Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../../pages/tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../../pages/architecture/">Architecture &amp; Codebase</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox"/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../api/bases/">Bases</a></li><li><a class="tocitem" href="../../api/domains/">Domains</a></li><li><a class="tocitem" href="../../api/fields/">Fields</a></li><li><a class="tocitem" href="../../api/operators/">Operators</a></li><li><a class="tocitem" href="../../api/problems/">Problems</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers</a></li><li><a class="tocitem" href="../../api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../api/gpu/">GPU</a></li><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis</a></li><li><a class="tocitem" href="../../api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials &amp; Examples</a></li><li class="is-active"><a href>Analysis &amp; Output</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Analysis &amp; Output</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/tutorials/analysis_and_output.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial:-Analysis-and-Output"><a class="docs-heading-anchor" href="#Tutorial:-Analysis-and-Output">Tutorial: Analysis and Output</a><a id="Tutorial:-Analysis-and-Output-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial:-Analysis-and-Output" title="Permalink"></a></h1><p>This tutorial covers saving simulation data and computing diagnostics in Tarang.jl.</p><h2 id="Setup"><a class="docs-heading-anchor" href="#Setup">Setup</a><a id="Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Setup" title="Permalink"></a></h2><p>Every block on this page runs against the same small periodic problem: a scalar temperature <code>T</code> advected by a velocity <code>u</code> on a 16×16 doubly-Fourier domain.</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+zbasis = RealFourier(coords[&quot;z&quot;]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+T = ScalarField(domain, &quot;T&quot;)
+u = VectorField(domain, &quot;u&quot;)
+
+problem = IVP([T, u])
+add_parameters!(problem, kappa=0.05, nu=0.05)
+add_equation!(problem, &quot;∂t(T) - kappa*lap(T) = -u⋅∇(T)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*lap(u) = 0&quot;)
+
+# Initial condition: local_grids is correct both in serial and under MPI
+xg, zg = local_grids(dist, xbasis, zbasis)
+ensure_layout!(T, :g)
+get_grid_data(T) .= sin.(xg) .* cos.(zg&#39;)
+ensure_layout!(T, :c)
+
+ux, uz = u.components
+ensure_layout!(ux, :g); get_grid_data(ux) .= 0.5;             ensure_layout!(ux, :c)
+ensure_layout!(uz, :g); get_grid_data(uz) .= 0.2 .* sin.(xg); ensure_layout!(uz, :c)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)</code></pre><h2 id="File-Output"><a class="docs-heading-anchor" href="#File-Output">File Output</a><a id="File-Output-1"></a><a class="docs-heading-anchor-permalink" href="#File-Output" title="Permalink"></a></h2><p>Output goes through a NetCDF file handler. <code>add_file_handler</code> has two methods, and they do <strong>not</strong> behave the same way in <code>run!</code>.</p><h3 id="Handler-bound-to-the-solver"><a class="docs-heading-anchor" href="#Handler-bound-to-the-solver">Handler bound to the solver</a><a id="Handler-bound-to-the-solver-1"></a><a class="docs-heading-anchor-permalink" href="#Handler-bound-to-the-solver" title="Permalink"></a></h3><p>Pass the <strong>solver</strong>: the handler auto-registers with it, and <code>run!</code> processes it at its own cadence — no manual <code>process!</code> anywhere. This is the recommended form.</p><pre><code class="language-julia hljs">handler = add_file_handler(&quot;output/snapshots&quot;, solver;
+                           parallel=&quot;gather&quot;,   # parallel I/O mode
+                           sim_dt=0.002,        # write every 0.002 time units
+                           max_writes=100)      # writes per file set
+
+add_task!(handler, T; name=&quot;temperature&quot;)   # pass the FIELD OBJECT
+add_task!(handler, u; name=&quot;velocity&quot;)      # a VectorField writes all components
+
+run!(solver; stop_iteration=10, progress=false)</code></pre><p>This writes <code>output/snapshots_s1/snapshots_s1.nc</code>: the directory part of the base path is the output root, the file name part names the file <em>set</em>. When <code>max_writes</code> is exceeded the handler rolls over to <code>output/snapshots_s2/…</code>. (A base path with no directory part, <code>&quot;snapshots&quot;</code>, uses the name itself as the root, i.e. <code>snapshots/snapshots_s1/…</code> — passing a directory is clearer.)</p><p>Tasks must be <strong>field or operator objects</strong>. A string expression (<code>add_task!(handler, &quot;u*u&quot;)</code>) is accepted silently and then writes zeros — build the operator instead: <code>add_task!(handler, u ⋅ u; name=&quot;u2&quot;)</code>.</p><p>On a CUDA run the same API stages each unique field/layout to a CPU array once per write, because NetCDF cannot write a <code>CuArray</code> directly. This is a bulk, synchronizing device-to-host copy; it does not use scalar GPU indexing and it does not move the solver field itself off the GPU. Grid- and coefficient-layout tasks are both supported. A completed timestep&#39;s algebraic constraints are not re-solved by the writer, so producing a snapshot is observational and leaves the live solver state unchanged.</p><h3 id="Handler-bound-to-the-distributor"><a class="docs-heading-anchor" href="#Handler-bound-to-the-distributor">Handler bound to the distributor</a><a id="Handler-bound-to-the-distributor-1"></a><a class="docs-heading-anchor-permalink" href="#Handler-bound-to-the-distributor" title="Permalink"></a></h3><p>The <code>dist</code> method takes a <code>vars</code> Dict and does <strong>not</strong> register itself with a solver. If you use it, hand it to <code>run!</code> via <code>outputs=</code> (or call <code>process!</code> yourself):</p><pre><code class="language-julia hljs">handler_dist = add_file_handler(&quot;output/snapshots_dist&quot;, dist, Dict(&quot;T&quot; =&gt; T);
+                                parallel=&quot;virtual&quot;, iter=5, max_writes=100)
+add_task!(handler_dist, T; name=&quot;temperature&quot;)
+
+run!(solver; stop_iteration=20, outputs=[handler_dist], progress=false)</code></pre><p>Forgetting <code>outputs=</code> is a silent no-op: the run completes and no file appears.</p><h3 id="Output-Modes"><a class="docs-heading-anchor" href="#Output-Modes">Output Modes</a><a id="Output-Modes-1"></a><a class="docs-heading-anchor-permalink" href="#Output-Modes" title="Permalink"></a></h3><pre><code class="language-julia hljs">h_gather  = add_file_handler(&quot;output/snap_gather&quot;,  solver; parallel=&quot;gather&quot;)
+h_virtual = add_file_handler(&quot;output/snap_virtual&quot;, solver; parallel=&quot;virtual&quot;)</code></pre><p>On the CPU NetCDF path, <code>parallel</code> only decides the file layout in the serial case: <code>&quot;gather&quot;</code> with one process writes a single file, <code>output/snap_gather_s1/snap_gather_s1.nc</code>. With more than one process — in <strong>either</strong> mode — every rank writes its own file, <code>…_s1/…_s1_p0.nc</code>, <code>…_s1_p1.nc</code>, …, each holding that rank&#39;s slab: on two ranks of a 16×16 grid, a field task is <code>(nwrites, 16, 8)</code> in each of the two files. The reduction tasks (<code>add_mean_task!</code> and friends) are the exception — they reduce globally, so every rank writes the same global result.</p><p>To reassemble the per-rank files into one dataset, use <code>scripts/merge_netcdf.jl</code>.</p><h3 id="Output-Frequency"><a class="docs-heading-anchor" href="#Output-Frequency">Output Frequency</a><a id="Output-Frequency-1"></a><a class="docs-heading-anchor-permalink" href="#Output-Frequency" title="Permalink"></a></h3><p>The handler owns its schedule; you do not gate it from the loop. The scheduling keywords are <code>sim_dt</code> (simulation time), <code>iter</code> (iterations) and <code>wall_dt</code> (wall-clock seconds); a write happens whenever one of them comes due.</p><pre><code class="language-julia hljs">h1 = add_file_handler(&quot;output/snaps_simdt&quot;, solver; sim_dt=0.002)  # every 0.002 sim-time
+h2 = add_file_handler(&quot;output/timeseries&quot;,  solver; iter=5)        # every 5 iterations
+h3 = add_file_handler(&quot;output/restarts&quot;,    solver; wall_dt=60.0)  # every 60 wall seconds</code></pre><p>If you drive the loop yourself instead of using <code>run!</code>, call <code>process!</code> each step and let the handler decide. Set a stop criterion on the solver first: a fresh solver has <code>stop_iteration = typemax(Int)</code> and <code>stop_sim_time = Inf</code>, so <code>proceed</code> is <code>true</code> forever and the loop below never exits. (<code>run!</code> sets these for you from its keywords.)</p><pre><code class="language-julia hljs">solver.stop_iteration = 5      # or solver.stop_sim_time = 0.01
+
+while proceed(solver)
+    step!(solver)
+    process!(handler)   # no-op unless the schedule says &quot;write&quot;
+end</code></pre><h3 id="Reading-the-Output-Back"><a class="docs-heading-anchor" href="#Reading-the-Output-Back">Reading the Output Back</a><a id="Reading-the-Output-Back-1"></a><a class="docs-heading-anchor-permalink" href="#Reading-the-Output-Back" title="Permalink"></a></h3><p>The files use NetCDF-4 <strong>groups</strong>, so a bare <code>ncread(file, &quot;temperature&quot;)</code> does not find the variable. The groups are <code>vars</code>, <code>time</code> and <code>grids</code>:</p><pre><code class="language-julia hljs">f = &quot;output/snapshots_s1/snapshots_s1.nc&quot;
+
+Tarang.group_variable_names(f, &quot;vars&quot;)     # [&quot;temperature&quot;, &quot;velocity&quot;, ...]
+group_ncread(f, &quot;vars&quot;, &quot;temperature&quot;)     # (nwrites, 16, 16)
+group_ncread(f, &quot;vars&quot;, &quot;velocity&quot;)        # (nwrites, 2, 16, 16) — component axis first
+group_ncread(f, &quot;time&quot;, &quot;sim_time&quot;)        # (nwrites,)
+group_ncread(f, &quot;grids&quot;, &quot;x&quot;)              # (16,)</code></pre><h2 id="Analysis-Tasks"><a class="docs-heading-anchor" href="#Analysis-Tasks">Analysis Tasks</a><a id="Analysis-Tasks-1"></a><a class="docs-heading-anchor-permalink" href="#Analysis-Tasks" title="Permalink"></a></h2><h3 id="Computing-Means"><a class="docs-heading-anchor" href="#Computing-Means">Computing Means</a><a id="Computing-Means-1"></a><a class="docs-heading-anchor-permalink" href="#Computing-Means" title="Permalink"></a></h3><p><code>dims</code> are the dimensions <strong>averaged over</strong>:</p><pre><code class="language-julia hljs"># Average over x, leaving a profile in z
+add_mean_task!(handler, T; dims=1, name=&quot;T_mean_x&quot;)
+
+# Average over z, leaving a profile in x
+add_mean_task!(handler, T; dims=2, name=&quot;T_mean_z&quot;)
+
+# Full spatial average (scalar)
+add_mean_task!(handler, T; dims=(1,2), name=&quot;T_avg&quot;)</code></pre><h3 id="Extracting-Slices-and-Profiles"><a class="docs-heading-anchor" href="#Extracting-Slices-and-Profiles">Extracting Slices and Profiles</a><a id="Extracting-Slices-and-Profiles-1"></a><a class="docs-heading-anchor-permalink" href="#Extracting-Slices-and-Profiles" title="Permalink"></a></h3><pre><code class="language-julia hljs"># Slice at a specific index along a dimension
+add_slice_task!(handler, T; dim=2, idx=1,  name=&quot;T_bottom&quot;)
+add_slice_task!(handler, T; dim=2, idx=16, name=&quot;T_top&quot;)
+
+# Profile: mean over every dimension EXCEPT `dim` (singular — the axis KEPT)
+add_profile_task!(handler, T; dim=2, name=&quot;T_profile_z&quot;)</code></pre><h3 id="Custom-Analysis"><a class="docs-heading-anchor" href="#Custom-Analysis">Custom Analysis</a><a id="Custom-Analysis-1"></a><a class="docs-heading-anchor-permalink" href="#Custom-Analysis" title="Permalink"></a></h3><p><code>postprocess</code> is any function of the task&#39;s data array; its return value is written in place of the field:</p><pre><code class="language-julia hljs">half_sumsq(data) = 0.5 * sum(abs2, data)
+
+add_task!(handler, T; name=&quot;T_half_sumsq&quot;, postprocess=half_sumsq)</code></pre><div class="admonition is-warning" id="postprocess-sees-the-rank-local-slab-f4bfd94dd1bf6d2f"><header class="admonition-header">postprocess sees the rank-local slab<a class="admonition-anchor" href="#postprocess-sees-the-rank-local-slab-f4bfd94dd1bf6d2f" title="Permalink"></a></header><div class="admonition-body"><p>Under MPI a custom <code>postprocess</code> receives only this rank&#39;s data, so a reduction written that way is <em>per-rank</em>, not global. The built-in <code>add_mean_task!</code>, <code>add_profile_task!</code>, <code>add_rms_task!</code>, <code>add_variance_task!</code> and <code>add_extrema_task!</code> are MPI-aware and reduce globally.</p></div></div><h2 id="Global-Diagnostics"><a class="docs-heading-anchor" href="#Global-Diagnostics">Global Diagnostics</a><a id="Global-Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Global-Diagnostics" title="Permalink"></a></h2><h3 id="CFL-Condition"><a class="docs-heading-anchor" href="#CFL-Condition">CFL Condition</a><a id="CFL-Condition-1"></a><a class="docs-heading-anchor-permalink" href="#CFL-Condition" title="Permalink"></a></h3><p><code>CFL</code> is constructed from the <strong>solver</strong> (not the problem), and velocities are registered as <code>VectorField</code>s. Every knob is a keyword with a default: <code>initial_dt=0.01</code>, <code>cadence=1</code>, <code>safety=0.4</code>, <code>threshold=0.1</code>, <code>max_change=2.0</code>, <code>min_change=0.5</code>, <code>max_dt=Inf</code>.</p><pre><code class="language-julia hljs">cfl = CFL(solver; initial_dt=1e-3, cadence=5, safety=0.5,
+          max_change=1.5, min_change=0.5, max_dt=0.01)
+
+add_velocity!(cfl, u)          # VectorField only
+
+# Hand it to run!: the loop sets solver.dt from the CFL condition each step
+run!(solver; stop_iteration=30, cfl=cfl, progress=false)</code></pre><p><code>compute_timestep(cfl)</code> returns the proposed <code>dt</code> if you drive the loop yourself (<code>solver.dt = compute_timestep(cfl); step!(solver)</code>). It recomputes only every <code>cadence</code>-th call, and commits a change only when it exceeds <code>threshold</code> (relative), so the implicit LHS factorization is not rebuilt on every tiny drift.</p><h3 id="Flow-Statistics"><a class="docs-heading-anchor" href="#Flow-Statistics">Flow Statistics</a><a id="Flow-Statistics-1"></a><a class="docs-heading-anchor-permalink" href="#Flow-Statistics" title="Permalink"></a></h3><p>MPI reductions have one trap: a reduction over a whole <code>PencilArray</code> (what <code>get_grid_data</code> returns when <code>nprocs &gt; 1</code>) is <strong>already collective</strong>. Reduce the rank-local storage with <code>parent(...)</code> and do exactly one <code>Allreduce</code>:</p><pre><code class="language-julia hljs">using MPI
+
+reducer = GlobalArrayReducer(dist.comm)
+
+ensure_layout!(T, :g)
+Td = parent(get_grid_data(T))                            # rank-local storage
+
+T_max = reduce_scalar(reducer, maximum(abs, Td), MPI.MAX)
+T_l2  = sqrt(reduce_scalar(reducer, sum(abs2, Td), MPI.SUM))</code></pre><p>The bundled helpers already do exactly that, and are usually what you want:</p><pre><code class="language-julia hljs">global_max(T)        # Float64, identical on every rank
+global_sum(T)
+integrate(T)         # quadrature-weighted domain integral
+
+function total_energy(field)
+    ensure_layout!(field, :g)
+    return 0.5 * global_sum(field.dist, abs2.(parent(get_grid_data(field))))
+end</code></pre><h3 id="Reynolds-Number"><a class="docs-heading-anchor" href="#Reynolds-Number">Reynolds Number</a><a id="Reynolds-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Reynolds-Number" title="Permalink"></a></h3><p><code>reynolds_number(u, ν, L)</code> is built in. It is based on the <strong>maximum</strong> velocity magnitude, <code>Re = max|u| · L / ν</code>, and reduces across ranks:</p><pre><code class="language-julia hljs">Re = reynolds_number(u, 0.05, 2pi)</code></pre><h3 id="Nusselt-Number"><a class="docs-heading-anchor" href="#Nusselt-Number">Nusselt Number</a><a id="Nusselt-Number-1"></a><a class="docs-heading-anchor-permalink" href="#Nusselt-Number" title="Permalink"></a></h3><p>For thermal convection there is no built-in, so reduce explicitly:</p><pre><code class="language-julia hljs">function compute_nusselt(T::ScalarField, uz::ScalarField, L, kappa, dT)
+    ensure_layout!(T, :g)
+    ensure_layout!(uz, :g)
+    Td  = parent(get_grid_data(T))
+    uzd = parent(get_grid_data(uz))
+
+    # Convective heat flux ⟨T·u_z⟩, averaged over the global grid
+    r    = GlobalArrayReducer(T.dist.comm)
+    npts = reduce_scalar(r, Float64(length(Td)), MPI.SUM)
+    flux = reduce_scalar(r, sum(Td .* uzd), MPI.SUM) / npts
+
+    # Nusselt = total flux / conductive flux, with dT the temperature difference
+    return 1.0 + flux * L / (kappa * dT)
+end
+
+Nu = compute_nusselt(T, u.components[2], 2pi, 0.05, 1.0)</code></pre><h2 id="Energy-Spectra"><a class="docs-heading-anchor" href="#Energy-Spectra">Energy Spectra</a><a id="Energy-Spectra-1"></a><a class="docs-heading-anchor-permalink" href="#Energy-Spectra" title="Permalink"></a></h2><p>Use the built-in <code>power_spectrum</code> — no need to hand-roll wavenumber binning. It is the radially-binned shell spectrum of a <code>ScalarField</code> whose axes are <strong>all Fourier</strong>; a Chebyshev axis is not supported and throws <code>Unsupported field dimensions: 2 with 1 Fourier bases</code>. It returns a NamedTuple <code>(k, power, bin_counts, bin_edges)</code>, where <code>k</code> holds the bin centres in physical wavenumber.</p><pre><code class="language-julia hljs">ps = power_spectrum(T)                  # T::ScalarField, every axis Fourier
+ps.k                                    # bin centres: [0.5, 1.5, 2.5, ...]
+ps.power                                # binned power
+ps.bin_counts                           # modes per bin</code></pre><p>There is no <code>power_spectrum(::VectorField)</code> method — for a velocity field use the vector spectra, which return the same NamedTuple:</p><pre><code class="language-julia hljs">es = energy_spectrum(u)                 # → (k, power, bin_counts, bin_edges)
+en = enstrophy_spectrum(u)              # vorticity spectrum, same shape</code></pre><p>Watch the return types of the related diagnostics: <code>kinetic_energy</code> returns the <em>field</em> ½ρ|u|², not a number.</p><pre><code class="language-julia hljs">ke_field = kinetic_energy(u)            # ScalarField
+ke_total = total_kinetic_energy(u)      # Float64</code></pre><p>See the <a href="../../api/analysis/#Spectral-Analysis">Analysis API</a> for options (<code>max_wavenumber</code>, <code>radial_average</code>, binning).</p><h2 id="Time-Series"><a class="docs-heading-anchor" href="#Time-Series">Time Series</a><a id="Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Time-Series" title="Permalink"></a></h2><h3 id="Storing-Scalar-Time-Series"><a class="docs-heading-anchor" href="#Storing-Scalar-Time-Series">Storing Scalar Time Series</a><a id="Storing-Scalar-Time-Series-1"></a><a class="docs-heading-anchor-permalink" href="#Storing-Scalar-Time-Series" title="Permalink"></a></h3><pre><code class="language-julia hljs">using DelimitedFiles
+
+# Initialize storage
+times = Float64[]
+energies = Float64[]
+nusselts = Float64[]
+
+# Record diagnostics via a run! callback (Int interval = every N iterations;
+# use a Float interval for every-Δt of sim-time).
+# total_energy / compute_nusselt are the helpers defined under Global Diagnostics.
+run!(solver; stop_iteration=40, progress=false,
+     callbacks=[2 =&gt; function (s)
+         push!(times, s.sim_time)
+         push!(energies, total_energy(T))
+         push!(nusselts, compute_nusselt(T, u.components[2], 2pi, 0.05, 1.0))
+     end])
+
+# Save to file (plain vectors → any format; here a CSV via the stdlib)
+if dist.rank == 0
+    writedlm(&quot;diagnostics.csv&quot;, [times energies nusselts], &#39;,&#39;)
+end</code></pre><h2 id="Visualization-Integration"><a class="docs-heading-anchor" href="#Visualization-Integration">Visualization Integration</a><a id="Visualization-Integration-1"></a><a class="docs-heading-anchor-permalink" href="#Visualization-Integration" title="Permalink"></a></h2><p>Tarang depends on no plotting package, so it cannot draw a figure for you. It <em>does</em> export <code>plot_1d</code>, <code>plot_2d</code>, <code>plot_vector_field</code> and <code>plot_streamlines</code>, but these <strong>render nothing</strong>: <code>plot_2d(T)</code> logs the data ranges and hands back a <code>PlotData</code> struct (<code>x</code>, <code>y</code>, <code>data</code>, labels) for you to feed to a real backend.</p><p>For an actual plot, take the grid data — a plain array — and give it to whatever package you already use. Convert with <code>Array</code> first: under MPI <code>get_grid_data</code> returns this rank&#39;s <code>PencilArray</code> slab, and a plot of it is a plot of one slab only.</p><pre><code class="language-julia hljs">ensure_layout!(T, :g)
+data = Array(get_grid_data(T))    # dense (16, 16) Matrix{Float64}, ready to plot</code></pre><p><code>data&#39;</code> is then the usual (x horizontal, z vertical) orientation for a <code>heatmap</code>.</p><h2 id="Checkpointing"><a class="docs-heading-anchor" href="#Checkpointing">Checkpointing</a><a id="Checkpointing-1"></a><a class="docs-heading-anchor-permalink" href="#Checkpointing" title="Permalink"></a></h2><p>Tarang has no built-in checkpoint type — write a small helper over the evolving state fields (<code>solver.state</code>, each a <code>ScalarField</code> with a <code>.name</code>) and plain NetCDF. Grid space is exact and real-valued, so it round-trips losslessly.</p><h3 id="Saving-State"><a class="docs-heading-anchor" href="#Saving-State">Saving State</a><a id="Saving-State-1"></a><a class="docs-heading-anchor-permalink" href="#Saving-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">using NetCDF
+
+function save_checkpoint(solver, path)
+    isfile(path) &amp;&amp; rm(path)
+    for f in solver.state
+        ensure_layout!(f, :g)
+        g = get_grid_data(f)
+        dimspec = collect(Iterators.flatten(
+            (&quot;$(f.name)_d$i&quot; =&gt; s for (i, s) in enumerate(size(g)))))
+        nccreate(path, f.name, dimspec...; t=NC_DOUBLE)   # NC_DOUBLE: keep Float64
+        ncwrite(g, path, f.name)
+    end
+    ncputatt(path, &quot;Global&quot;, Dict(&quot;sim_time&quot; =&gt; solver.sim_time,
+                                  &quot;iteration&quot; =&gt; solver.iteration, &quot;dt&quot; =&gt; solver.dt))
+    return path
+end</code></pre><h3 id="Loading-State"><a class="docs-heading-anchor" href="#Loading-State">Loading State</a><a id="Loading-State-1"></a><a class="docs-heading-anchor-permalink" href="#Loading-State" title="Permalink"></a></h3><pre><code class="language-julia hljs">function load_checkpoint!(solver, path)
+    for f in solver.state
+        ensure_layout!(f, :g)                 # ensure the grid buffer exists / layout is :g
+        get_grid_data(f) .= ncread(path, f.name)
+    end
+    solver.sim_time  = ncgetatt(path, &quot;Global&quot;, &quot;sim_time&quot;)
+    solver.iteration = Int(ncgetatt(path, &quot;Global&quot;, &quot;iteration&quot;))
+    solver.dt        = ncgetatt(path, &quot;Global&quot;, &quot;dt&quot;)
+    return solver
+end</code></pre><p>Use <code>solver.state</code> (the integrator&#39;s live fields), <strong>not</strong> the problem-variable handles. For a vector variable the state holds its components, named <code>u_x</code>, <code>u_z</code>, … Restart then continues from <code>run!</code> as usual, and reproduces the uninterrupted trajectory to the bit:</p><pre><code class="language-julia hljs">save_checkpoint(solver, &quot;chk.nc&quot;)
+# … later, in a fresh session with the same problem/solver built …
+load_checkpoint!(solver, &quot;chk.nc&quot;)
+run!(solver; stop_iteration=solver.iteration + 20, cfl=cfl, progress=false)</code></pre><div class="admonition is-warning" id="The-state-and-your-field-handles-are-the-same-object-only-until-the-first-step-2780453e1eb417e3"><header class="admonition-header">The state and your field handles are the same object only until the first step<a class="admonition-anchor" href="#The-state-and-your-field-handles-are-the-same-object-only-until-the-first-step-2780453e1eb417e3" title="Permalink"></a></header><div class="admonition-body"><p>On a freshly built solver <code>solver.state[1] === T</code>. After the first step they are distinct objects holding equal data: the stepper rebinds <code>solver.state</code> to its own history buffer and then copies <em>from</em> the state back into the problem variables. The sync is <strong>one-way</strong>. So once a run has started, <code>T</code> is a read-only view for diagnostics — writing into it (to perturb, reset, or restore a field) is silently discarded on the next step. Write to <code>solver.state</code> instead, which is what the <code>load_checkpoint!</code> above does.</p></div></div><div class="admonition is-info" id="MPI-33dd78779336ceb2"><header class="admonition-header">MPI<a class="admonition-anchor" href="#MPI-33dd78779336ceb2" title="Permalink"></a></header><div class="admonition-body"><p><code>get_grid_data</code> is the rank-local slab, so this helper is per-rank/serial. Under MPI either write one file per rank (include the rank in <code>path</code>), or gather to rank 0 with <code>gather_array(f.dist, get_grid_data(f))</code> before writing and scatter on load.</p></div></div><h2 id="Complete-Example"><a class="docs-heading-anchor" href="#Complete-Example">Complete Example</a><a id="Complete-Example-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example" title="Permalink"></a></h2><pre><code class="language-julia hljs">using Tarang
+using MPI
+using Printf
+
+MPI.Init()
+rank = MPI.Comm_rank(MPI.COMM_WORLD)
+
+# Setup
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+zbasis = RealFourier(coords[&quot;z&quot;]; size=16, bounds=(0.0, 2pi), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+T = ScalarField(domain, &quot;T&quot;)
+u = VectorField(domain, &quot;u&quot;)
+
+problem = IVP([T, u])
+add_parameters!(problem, kappa=0.05, nu=0.05)
+add_equation!(problem, &quot;∂t(T) - kappa*lap(T) = -u⋅∇(T)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*lap(u) = 0&quot;)
+
+xg, zg = local_grids(dist, xbasis, zbasis)
+ensure_layout!(T, :g); get_grid_data(T) .= sin.(xg) .* cos.(zg&#39;); ensure_layout!(T, :c)
+ux, uz = u.components
+ensure_layout!(ux, :g); get_grid_data(ux) .= 0.5;             ensure_layout!(ux, :c)
+ensure_layout!(uz, :g); get_grid_data(uz) .= 0.2 .* sin.(xg); ensure_layout!(uz, :c)
+
+# Create solver
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+# CFL — takes the SOLVER, not the problem
+cfl = CFL(solver; initial_dt=1e-3, safety=0.5, max_dt=0.01)
+add_velocity!(cfl, u)
+
+# Output handler — pass the SOLVER so the handler auto-registers and `run!`
+# processes it at its `sim_dt` cadence (no manual `process!` in the loop). No
+# `vars` Dict needed: T is a problem variable, already in the solver namespace.
+handler = add_file_handler(&quot;output/snapshots&quot;, solver; parallel=&quot;gather&quot;, sim_dt=0.1, max_writes=100)
+add_task!(handler, T; name=&quot;temperature&quot;)            # field snapshot
+add_mean_task!(handler, T; dims=1, name=&quot;T_mean&quot;)    # x-averaged profile
+
+# Diagnostics storage (time series accumulated in a callback)
+times, max_T = Float64[], Float64[]
+
+# run! drives the whole loop: CFL-adaptive dt, auto-writes the registered handler,
+# runs callbacks, and closes the handler at the end. A Float callback interval
+# (0.1) fires every 0.1 sim-time units; an Int interval fires every N iterations.
+# global_max is MPI-reduced, so the value is identical on every rank.
+run!(solver; stop_time=1.0, cfl=cfl, progress=false,
+     callbacks=[0.1 =&gt; function (s)
+         push!(times, s.sim_time)
+         push!(max_T, global_max(T))
+         rank == 0 &amp;&amp; @printf(&quot;t = %.3f, max|T| = %.6e\n&quot;, s.sim_time, max_T[end])
+     end])
+
+MPI.Finalize()</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../api/analysis/">Analysis API</a>: Full API reference</li><li><a href="../../api/io/">I/O API</a>: NetCDF output documentation</li><li><a href="../../pages/parallelism/">Parallelism</a>: Parallel I/O configuration</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../boundary_conditions/">« Boundary Conditions</a><a class="docs-footer-nextpage" href="../eigenvalue_problems/">Eigenvalue Problems »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Tuesday 21 July 2026 04:37">Tuesday 21 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
