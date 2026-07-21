@@ -89,17 +89,46 @@ else
         @test log2(e1 / e2) > 1.7          # 2nd order (aliasing gives ~1.0)
     end
 
-    @testset "GPU IMEX RK refuses to drop the implicit operator" begin
-        # Dedalus-style heat equation with plain RK222 on GPU: no implicit-capable
-        # path exists, so step! must error loudly instead of integrating without
-        # diffusion (the old behavior was a silent @debug + explicit fallback).
-        N = 16
-        coords, dist, xb, u = _gpu_fourier_field(N)
-        xs = collect(range(0, 2π, length=N+1))[1:N]
-        ensure_layout!(u, :g)
-        copyto!(Tarang.get_grid_data(u), cos.(2 .* xs))
-        problem = IVP([u]); add_equation!(problem, "dt(u) - lap(u) = 0")
-        solver = InitialValueSolver(problem, RK222(); dt=0.01)
-        @test_throws ErrorException step!(solver)
+    @testset "GPU non-diagonal schemes refuse to drop the implicit operator" begin
+        # Heat equation with an implicit LHS operator on a pure-Fourier GPU: these
+        # schemes have no per-mode implicit path there (the solver builds no global
+        # matrix/subproblem), so step! must error loudly instead of integrating
+        # without diffusion. The old behavior was a silent @debug + explicit
+        # fallback — a heat equation ran inviscid with no error.
+        for ts in (RK222(), RK443(), SBDF2(), CNAB2(), ETD_RK222())
+            N = 16
+            coords, dist, xb, u = _gpu_fourier_field(N)
+            xs = collect(range(0, 2π, length=N+1))[1:N]
+            ensure_layout!(u, :g)
+            copyto!(Tarang.get_grid_data(u), cos.(2 .* xs))
+            problem = IVP([u]); add_equation!(problem, "dt(u) - lap(u) = 0")
+            solver = InitialValueSolver(problem, ts; dt=0.01)
+            @test_throws ErrorException step!(solver)
+        end
+    end
+
+    @testset "GPU DiagonalIMEX equation-derived viscous decay (no attached op)" begin
+        # The implicit operator comes from the EQUATION (`dt(u) - ν lap(u) = 0`),
+        # not an attached SpectralLinearOperator. This exercises the device L̂ build
+        # (_diagonal_Lhat_from_expr on GPU coefficient arrays); before the device
+        # allocation fix it threw a scalar-indexing error at L̂ construction.
+        # ν = 0.5, u0 = cos(2x) → λ = ν·k² = 2; after T = 1.0 amplitude = exp(−2).
+        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+            N = 16
+            coords, dist, xb, u = _gpu_fourier_field(N)
+            xs = collect(range(0, 2π, length=N+1))[1:N]
+            ensure_layout!(u, :g)
+            copyto!(Tarang.get_grid_data(u), cos.(2 .* xs))
+            problem = IVP([u]); add_equation!(problem, "dt(u) - 0.5*lap(u) = 0")
+            solver = InitialValueSolver(problem, ts; dt=0.005)
+            u0 = maximum(abs, _gpu_grid(u))
+            for _ in 1:200
+                step!(solver)
+            end
+            ensure_layout!(u, :g)
+            uf = maximum(abs, _gpu_grid(u))
+            @test isfinite(uf)
+            @test isapprox(uf / u0, exp(-2.0); rtol=0.05)   # actually diffused
+        end
     end
 end

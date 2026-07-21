@@ -21,6 +21,7 @@ IMPORTANT for stochastic forcing (following GeophysicalFlows.jl pattern):
 """
 function step!(state::TimestepperState, solver::InitialValueSolver)
     _check_stochastic_timestepper_compatibility!(state, solver)
+    _check_gpu_implicit_compatibility!(state, solver)
 
     # Generate stochastic forcing ONCE at the beginning of the timestep
     update_forcing!(state, solver.sim_time)
@@ -45,6 +46,74 @@ const _UNSAFE_STOCHASTIC_MULTISTEP_TIMESTEPPERS = Union{
     CNAB2, SBDF2, SBDF3, SBDF4, ETD_CNAB2, ETD_SBDF2,
     MCNAB2, DiagonalIMEX_SBDF2, CNLF2,
 }
+
+# The only schemes with an on-device per-mode implicit solve (diagonal Fourier
+# operator). Every other scheme needs a global-matrix or subproblem solve that a
+# pure-Fourier GPU IVP does not build.
+const _DIAGONAL_IMEX_TIMESTEPPERS = Union{
+    DiagonalIMEX_RK222, DiagonalIMEX_RK443, DiagonalIMEX_SBDF2,
+}
+
+"""Does the problem carry a nonzero implicit (LHS) linear operator on an evolution
+equation? Architecture-independent — reads the parsed L/M expressions, not the
+(possibly skipped) assembled global matrix."""
+function _problem_has_implicit_linear_term(solver::InitialValueSolver)
+    problem = solver.problem
+    hasfield(typeof(problem), :equation_data) || return false
+    for eq_data in problem.equation_data
+        M_expr = get(eq_data, "M", nothing)
+        (M_expr === nothing || _is_zero_m_term(M_expr)) && continue   # not an evolution equation
+        L_expr = get(eq_data, "L", nothing)
+        (L_expr === nothing || is_zero_expression(L_expr)) && continue
+        return true
+    end
+    return false
+end
+
+"""
+    _check_gpu_implicit_compatibility!(state, solver)
+
+Refuse — loudly — to silently drop an implicit linear operator on a single-GPU IVP
+that has no per-mode implicit path.
+
+A pure-Fourier GPU IVP skips global-matrix and subproblem assembly, so
+`L_matrix === nothing` no longer means "no implicit term". Every standard IMEX RK /
+multistep / ETD scheme then falls through to a fully-explicit step and drops the
+implicit `L` with no error — a heat equation runs inviscid. Only the diagonal-IMEX
+schemes solve the diagonal Fourier operator per mode on-device. Turn the silent
+wrong answer into a clear error naming the working alternative.
+
+Scoped to GPU: the coupled (Fourier×Chebyshev) GPU path DOES build subproblems and
+is exempt; the CPU global-matrix path is unaffected.
+"""
+function _check_gpu_implicit_compatibility!(state::TimestepperState, solver::InitialValueSolver)
+    state.timestepper isa _DIAGONAL_IMEX_TIMESTEPPERS && return nothing
+
+    _distributed_field_path_reason(solver.state) === :gpu || return nothing
+
+    # Coupled Fourier×Chebyshev GPU builds subproblems that solve the implicit part
+    # per mode — not affected by the pure-Fourier matrix skip.
+    if haskey(solver.problem.parameters, "subproblems") &&
+       solver.problem.parameters["subproblems"] !== nothing
+        return nothing
+    end
+
+    _problem_has_implicit_linear_term(solver) || return nothing   # genuinely explicit — fine
+
+    scheme = nameof(typeof(state.timestepper))
+    # `error` (ErrorException) mirrors the original loud-refusal guard at
+    # step_rk.jl:87 that this reaches before, and the existing GPU test asserts
+    # `@test_throws ErrorException`.
+    error(
+        "$scheme cannot treat an implicit (left-hand-side) linear operator on a single " *
+        "GPU: a pure-Fourier GPU solver builds no global matrix or subproblem, so the " *
+        "term has no per-mode implicit solve and would be silently dropped — the equation " *
+        "would integrate without it. Use a diagonal-IMEX scheme (DiagonalIMEX_RK222, " *
+        "DiagonalIMEX_RK443, or DiagonalIMEX_SBDF2), which solves the diagonal Fourier " *
+        "operator per mode on-device, or move the linear term to the explicit right-hand " *
+        "side (e.g. write `dt(u) = nu*lap(u) + ...` instead of `dt(u) - nu*lap(u) = ...`)."
+    )
+end
 
 function _has_registered_stochastic_forcing(solver::InitialValueSolver)
     problem = solver.problem
