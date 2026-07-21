@@ -315,6 +315,13 @@ function translate_to_lazy(expr, state; target=nothing)
         inner = expr.operand
         # div(grad(u)) == lap(u): the idiomatic spelling of a diffusion term.
         isa(inner, Gradient) && return _translate_laplacian_to_lazy(inner.operand, state, target)
+        # div(a*u) conservative flux and div(a*grad(u)) variable-coefficient
+        # diffusion: same product-rule expansion the interpreted evaluator uses,
+        # so the compiled and interpreted paths agree by construction. Without
+        # these the whole solver drops to the ~100×-slower interpreted evaluator
+        # whenever such a term appears in an explicit RHS.
+        prod = _translate_divergence_product_to_lazy(inner, state, target)
+        prod !== nothing && return prod
         return _translate_divergence_to_lazy(inner, state, target)
     end
 
@@ -463,6 +470,115 @@ function _translate_divergence_to_lazy(operand, state, target)
         acc = acc === nothing ? term : LazyAdd(acc, term)
     end
     return acc
+end
+
+"""Split `a * X` into `(coefficient_expr, X)` where `X isa wanted`, for both the
+parser's `MultiplyOperator` and the deferred `Multiply` future, in either factor
+order. Returns `nothing` if the product is not a single `wanted` factor times a
+scalar coefficient — mirrors `_divergence_flux_factors` in the interpreted path."""
+function _lazy_coeff_times(inner, wanted::Type)
+    if isa(inner, MultiplyOperator)
+        l, r = inner.left, inner.right
+        isa(r, wanted) && !isa(l, wanted) && return (l, r)
+        isa(l, wanted) && !isa(r, wanted) && return (r, l)
+        return nothing
+    elseif isa(inner, Multiply)
+        args = future_args(inner)
+        pos = findall(a -> isa(a, wanted), args)
+        length(pos) == 1 || return nothing
+        k = only(pos)
+        rest = [a for (i, a) in enumerate(args) if i != k]
+        coeff = isempty(rest) ? 1 : (length(rest) == 1 ? only(rest) : Multiply(rest...))
+        return (coeff, args[k])
+    end
+    return nothing
+end
+
+"""Translate a scalar coefficient for the divergence-of-product forms.
+
+Returns `(lazy_coeff, is_constant)`, or `nothing` to decline (interpreted
+fallback). Only a `Number`/`ConstantOperator` or a `ScalarField` whose bases
+match `target` is accepted: differentiating the coefficient spectrally along a
+target axis needs it on the same grid, and a more general coefficient expression
+is left to the interpreted evaluator."""
+function _lazy_divergence_coeff(coeff_expr, state, target)
+    if isa(coeff_expr, Number) || isa(coeff_expr, ConstantOperator)
+        a = translate_to_lazy(coeff_expr, state; target=target)
+        a === nothing && return nothing
+        return (a, true)
+    elseif isa(coeff_expr, ScalarField)
+        _lazy_bases_match(coeff_expr, target) || return nothing
+        a = translate_to_lazy(coeff_expr, state; target=target)
+        a === nothing && return nothing
+        return (a, false)
+    end
+    return nothing
+end
+
+"""Translate `div(a*u)` (conservative flux) and `div(a*grad(u))` (variable-
+coefficient diffusion) to a lazy scalar future, or `nothing` to fall back."""
+function _translate_divergence_product_to_lazy(inner, state, target)
+    target === nothing && return nothing
+
+    # div(a*u): Σᵢ (a ∂ᵢuᵢ + uᵢ ∂ᵢa), coordinate i from the field's coordsys.
+    flux = _lazy_coeff_times(inner, VectorField)
+    if flux !== nothing
+        coeff_expr, vf = flux
+        coordsys = vf.coordsys
+        comps = vf.components
+        length(comps) == length(coordsys.names) || return nothing
+        ca = _lazy_divergence_coeff(coeff_expr, state, target)
+        ca === nothing && return nothing
+        a, coeff_is_const = ca
+        acc = nothing
+        for (i, coord_name) in enumerate(coordsys.names)
+            coord = coordsys[coord_name]
+            axis = _resolve_diff_axis(coord, target.bases)
+            axis == 0 && return nothing
+            basis = target.bases[axis]
+            (basis !== nothing && _lazy_diff_axis_supported(target, basis)) || return nothing
+            comp = comps[i]
+            isa(comp, ScalarField) && !_lazy_bases_match(comp, target) && return nothing
+            ci = translate_to_lazy(comp, state; target=target)
+            ci === nothing && return nothing
+            term = LazyMul(a, LazyDiff(ci, coord, 1, axis))                 # a ∂ᵢuᵢ
+            if !coeff_is_const                                             # uᵢ ∂ᵢa (0 if a const)
+                term = LazyAdd(term, LazyMul(ci, LazyDiff(a, coord, 1, axis)))
+            end
+            acc = acc === nothing ? term : LazyAdd(acc, term)
+        end
+        return acc
+    end
+
+    # div(a*grad(u)): Σₖ (a ∂ₖ²u + ∂ₖa ∂ₖu) over the target's own axes.
+    diff = _lazy_coeff_times(inner, Gradient)
+    if diff !== nothing
+        coeff_expr, grad_op = diff
+        u_operand = grad_op.operand
+        isa(u_operand, VectorField) && (u_operand = _vector_component_for_target(u_operand, target))
+        (u_operand isa ScalarField) || return nothing
+        _lazy_bases_match(u_operand, target) || return nothing
+        ca = _lazy_divergence_coeff(coeff_expr, state, target)
+        ca === nothing && return nothing
+        a, coeff_is_const = ca
+        u = translate_to_lazy(u_operand, state; target=target)
+        u === nothing && return nothing
+        acc = nothing
+        for (axis, basis) in enumerate(target.bases)
+            basis === nothing && continue
+            _lazy_diff_axis_supported(target, basis) || return nothing
+            coord = _coord_of_axis(target, axis)
+            term = LazyMul(a, LazyDiff(u, coord, 2, axis))                 # a ∂ₖ²u
+            if !coeff_is_const                                            # ∂ₖa ∂ₖu (0 if a const)
+                term = LazyAdd(term, LazyMul(LazyDiff(a, coord, 1, axis),
+                                             LazyDiff(u, coord, 1, axis)))
+            end
+            acc = acc === nothing ? term : LazyAdd(acc, term)
+        end
+        return acc
+    end
+
+    return nothing
 end
 
 """Find the VectorField component matching `target` by identity or name."""
