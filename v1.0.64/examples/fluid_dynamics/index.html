@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Fluid Dynamics Examples · Tarang.jl</title><meta name="title" content="Fluid Dynamics Examples · Tarang.jl"/><meta property="og:title" content="Fluid Dynamics Examples · Tarang.jl"/><meta property="twitter:title" content="Fluid Dynamics Examples · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/examples/fluid_dynamics/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/examples/fluid_dynamics/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/examples/fluid_dynamics/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../../tutorials/overview/">Overview</a></li><li><a class="tocitem" href="../../tutorials/ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../../tutorials/ivp_3d_turbulence/">3D Turbulence</a></li><li><a class="tocitem" href="../../tutorials/boundary_conditions/">Boundary Conditions</a></li><li><a class="tocitem" href="../../tutorials/analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../../tutorials/eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../../tutorials/surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../../tutorials/rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/les_models/">LES Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../../pages/tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../../pages/architecture/">Architecture &amp; Codebase</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox"/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../api/bases/">Bases</a></li><li><a class="tocitem" href="../../api/domains/">Domains</a></li><li><a class="tocitem" href="../../api/fields/">Fields</a></li><li><a class="tocitem" href="../../api/operators/">Operators</a></li><li><a class="tocitem" href="../../api/problems/">Problems</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers</a></li><li><a class="tocitem" href="../../api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../api/gpu/">GPU</a></li><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis</a></li><li><a class="tocitem" href="../../api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Fluid Dynamics Examples</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Fluid Dynamics Examples</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/examples/fluid_dynamics.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Fluid-Dynamics-Examples"><a class="docs-heading-anchor" href="#Fluid-Dynamics-Examples">Fluid Dynamics Examples</a><a id="Fluid-Dynamics-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Fluid-Dynamics-Examples" title="Permalink"></a></h1><p>Collection of fluid dynamics simulations with Tarang.jl. Each example is a complete, self-contained script that runs as it stands; the resolutions and step counts are kept small so they finish in seconds to a couple of minutes, and the numbers quoted after each one are what it prints. Raise <code>N</code> and the stop criterion for production runs.</p><h2 id="Incompressible-Navier-Stokes"><a class="docs-heading-anchor" href="#Incompressible-Navier-Stokes">Incompressible Navier-Stokes</a><a id="Incompressible-Navier-Stokes-1"></a><a class="docs-heading-anchor-permalink" href="#Incompressible-Navier-Stokes" title="Permalink"></a></h2><p>Which formulation you write is decided by the geometry, because the incompressibility constraint is solved through the tau method on a <em>coupled</em> (non-periodic) axis:</p><table><tr><th style="text-align: right">geometry</th><th style="text-align: right">formulation</th></tr><tr><td style="text-align: right">walls in one direction, periodic in the others</td><td style="text-align: right">primitive variables <code>u</code>, <code>p</code> + Chebyshev tau method</td></tr><tr><td style="text-align: right">fully periodic</td><td style="text-align: right">vorticity–streamfunction (2D)</td></tr></table><p>Two configurations that look natural but do <strong>not</strong> work:</p><ul><li><strong>Two bounded axes</strong> (Chebyshev × Chebyshev — the classic lid-driven cavity) cannot be built. Tarang couples exactly one non-periodic axis; the remaining axes must be separable (Fourier). Even with correct tau variables and lifts, the solve fails with <code>DimensionMismatch: second dimension of A, 12, does not match the first dimension of B, 144</code>.</li><li><strong>Primitive variables in a fully periodic box.</strong> <code>div(u) + tau_p = 0</code> is accepted, but with no coupled axis the constraint is never enforced: starting from a random (non-solenoidal) field, <code>max|div u|</code> was 2.918 before and 2.920 after 20 <code>RK222()</code> steps, and <code>SBDF2()</code> throws <code>SingularException</code>. Use the vorticity–streamfunction form in a periodic box, where <code>u = skew(∇ψ)</code> is divergence-free by construction.</li></ul><h3 id="2D-Channel-Flow-(Poiseuille)"><a class="docs-heading-anchor" href="#2D-Channel-Flow-(Poiseuille)">2D Channel Flow (Poiseuille)</a><a id="2D-Channel-Flow-(Poiseuille)-1"></a><a class="docs-heading-anchor-permalink" href="#2D-Channel-Flow-(Poiseuille)" title="Permalink"></a></h3><p>Wall-bounded flow driven by a constant body force: Fourier in the streamwise direction, Chebyshev between the walls, no-slip at both walls.</p><pre><code class="language-julia hljs">using Tarang, Printf
+
+Lx, Lz = 4.0, 1.0
+Nx, Nz = 16, 16
+nu     = 1.0          # kinematic viscosity
+fx     = 1.0          # constant streamwise body force (the pressure gradient)
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+
+xbasis = RealFourier(coords[&quot;x&quot;]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+zbasis = ChebyshevT(coords[&quot;z&quot;];  size=Nz, bounds=(0.0, Lz), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+p = ScalarField(domain, &quot;p&quot;)
+u = VectorField(domain, &quot;u&quot;)
+
+# tau variables carry the Fourier basis: one tau per streamwise mode
+tau_p  = ScalarField(dist, &quot;tau_p&quot;, (), Float64)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (xbasis,), Float64)
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (xbasis,), Float64)
+
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zbasis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u     = grad(u) + ez * τ_lift(tau_u1)      # first-order reduction
+
+problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+add_parameters!(problem, nu=nu, fx=fx, ex=ex, grad_u=grad_u, τ_lift=τ_lift)
+
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u) + fx*ex&quot;)
+
+add_bc!(problem, &quot;u(z=0) = 0&quot;)        # no-slip walls
+add_bc!(problem, &quot;u(z=$Lz) = 0&quot;)
+add_bc!(problem, &quot;integ(p) = 0&quot;)      # pressure gauge
+
+solver = InitialValueSolver(problem, RK222(); dt=2e-2)
+
+cfl = CFL(solver; initial_dt=2e-2, cadence=10, safety=0.5, max_dt=2e-2)
+add_velocity!(cfl, u)
+
+run!(solver; stop_iteration=250, cfl=cfl, progress=false)   # t = 5 viscous times
+
+# Steady state is the analytic Poiseuille parabola ux(z) = fx z (Lz - z) / (2ν)
+ux = u.components[1]
+ensure_layout!(ux, :g)
+x, z    = local_grids(dist, xbasis, zbasis)
+profile = get_grid_data(ux)[1, :]                 # ux is x-independent
+exact   = @. fx * z * (Lz - z) / (2 * nu)
+@printf(&quot;t = %.2f   max|ux| = %.6f (exact %.6f)   rel. error = %.2e\n&quot;,
+        solver.sim_time, maximum(profile), fx * Lz^2 / (8 * nu),
+        maximum(abs, profile .- exact) / maximum(exact))</code></pre><p>After 250 steps (<code>t = 5</code>, five viscous times) the flow has converged to the analytic parabola: the profile matches <code>fx z (Lz - z) / 2ν</code> to a relative error of <code>6.3e-15</code>. The printed <code>max|ux| = 0.123634</code> is the largest value <em>on the grid</em> — the Chebyshev nodes do not include the centreline where the exact peak <code>fx Lz²/8ν = 0.125</code> sits.</p><p>Note that the boundary-condition strings are parsed by Tarang, not Julia: they cannot see Julia globals, so <code>Lz</code> is interpolated into the string by Julia before <code>add_bc!</code> sees it. Boundary conditions must go through <code>add_bc!</code> — declaring them with <code>add_equation!</code> silently fails to enforce anything but a constant.</p><h3 id="Kelvin-Helmholtz-Instability"><a class="docs-heading-anchor" href="#Kelvin-Helmholtz-Instability">Kelvin-Helmholtz Instability</a><a id="Kelvin-Helmholtz-Instability-1"></a><a class="docs-heading-anchor-permalink" href="#Kelvin-Helmholtz-Instability" title="Permalink"></a></h3><p>Shear-layer instability in a doubly periodic domain, in vorticity–streamfunction form. A double shear layer keeps the base state periodic.</p><pre><code class="language-julia hljs">using Tarang, Printf
+
+N      = 64
+δ, A   = 0.05, 1e-2      # shear-layer thickness, perturbation amplitude
+nu     = 1e-4
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=N, bounds=(0.0, 1.0), dealias=3/2)
+zbasis = RealFourier(coords[&quot;z&quot;]; size=N, bounds=(0.0, 1.0), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+ζ     = ScalarField(domain, &quot;zeta&quot;)     # vorticity
+ψ     = ScalarField(domain, &quot;psi&quot;)      # streamfunction
+u     = VectorField(domain, &quot;u&quot;)        # velocity, divergence-free by construction
+tau_ψ = ScalarField(dist, &quot;tau_psi&quot;, (), Float64)
+
+problem = IVP([ζ, ψ, u, tau_ψ])
+add_parameters!(problem, nu=nu)
+add_equation!(problem, &quot;∂t(zeta) - nu*Δ(zeta) = -u⋅∇(zeta)&quot;)   # vorticity transport
+add_equation!(problem, &quot;Δ(psi) + tau_psi - zeta = 0&quot;)          # Δψ = ζ
+add_equation!(problem, &quot;u - skew(grad(psi)) = 0&quot;)              # u = ∇⊥ψ
+add_bc!(problem, &quot;integ(psi) = 0&quot;)                             # gauge
+
+solver = InitialValueSolver(problem, RK222(); dt=2e-3)
+
+# Double shear layer (periodic): ux = tanh((z-1/4)/δ) below, tanh((3/4-z)/δ) above,
+# so ζ = -∂z(ux); seeded with a k=1 perturbation.
+x, z = local_grids(dist, xbasis, zbasis)
+zz   = reshape(z, 1, :)
+ensure_layout!(ζ, :g)
+get_grid_data(ζ) .= @. ifelse(zz &lt; 0.5,
+                              -(1 - tanh((zz - 0.25) / δ)^2) / δ,
+                               (1 - tanh((0.75 - zz) / δ)^2) / δ) +
+                       A * sin(2π * x) * cos(2π * zz)
+ensure_layout!(ζ, :c)
+
+uz = u.components[2]
+uz_max() = (ensure_layout!(uz, :g); maximum(abs, get_grid_data(uz)))
+
+run!(solver; stop_iteration=1, progress=false)      # one step populates u from ψ
+uz0 = uz_max()
+run!(solver; stop_iteration=500, progress=false)
+ensure_layout!(ζ, :g)
+@printf(&quot;t = %.2f   max|uz|: %.2e -&gt; %.2e (×%.0f)   max|zeta| = %.2f   E = %.4f\n&quot;,
+        solver.sim_time, uz0, uz_max(), uz_max() / uz0,
+        maximum(abs, get_grid_data(ζ)), total_kinetic_energy(u))</code></pre><p><code>ψ</code> and <code>u</code> are algebraic (no <code>∂t</code>), so they are only filled once the solver takes a step — hence the one-step warm-up before reading the initial <code>max|uz|</code>. Over <code>t = 1</code> the perturbation grows from <code>7.96e-4</code> to <code>6.64e-3</code> (a factor of 8): the shear layer is unstable, as expected.</p><h2 id="Thermal-Convection"><a class="docs-heading-anchor" href="#Thermal-Convection">Thermal Convection</a><a id="Thermal-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Thermal-Convection" title="Permalink"></a></h2><p>Both examples below are Rayleigh-Bénard-type: Fourier in <code>x</code>, Chebyshev in <code>z</code>, tau variables on the Fourier basis, first-order reduction (<code>grad_X = ∇X + ẑ·lift(τ)</code>) for the Chebyshev tau method.</p><h3 id="Double-Diffusive-Convection"><a class="docs-heading-anchor" href="#Double-Diffusive-Convection">Double-Diffusive Convection</a><a id="Double-Diffusive-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Double-Diffusive-Convection" title="Permalink"></a></h3><p>Convection driven by two scalars with very different diffusivities (temperature and salinity).</p><pre><code class="language-julia hljs">using Tarang, Printf
+
+Lx, Lz = 2.0, 1.0
+Nx, Nz = 32, 24
+Pr     = 7.0      # Prandtl number
+tau_d  = 0.01     # diffusivity ratio κ_S/κ_T
+Ra_T   = 1e5      # thermal Rayleigh number
+Ra_S   = 1e4      # solutal Rayleigh number
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+zbasis = ChebyshevT(coords[&quot;z&quot;];  size=Nz, bounds=(0.0, Lz), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+p = ScalarField(domain, &quot;p&quot;)
+T = ScalarField(domain, &quot;T&quot;)      # temperature
+S = ScalarField(domain, &quot;S&quot;)      # salinity
+u = VectorField(domain, &quot;u&quot;)
+
+tau_p  = ScalarField(dist, &quot;tau_p&quot;, (), Float64)
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (xbasis,), Float64)
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (xbasis,), Float64)
+tau_S1 = ScalarField(dist, &quot;tau_S1&quot;, (xbasis,), Float64)
+tau_S2 = ScalarField(dist, &quot;tau_S2&quot;, (xbasis,), Float64)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (xbasis,), Float64)
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (xbasis,), Float64)
+
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zbasis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
+grad_S = grad(S) + ez * τ_lift(tau_S1)
+
+problem = IVP([p, T, S, u, tau_p, tau_T1, tau_T2, tau_S1, tau_S2, tau_u1, tau_u2])
+add_parameters!(problem, Pr=Pr, taud=tau_d, buoyT=Ra_T*Pr, buoyS=Ra_S*Pr, ez=ez,
+                grad_u=grad_u, grad_T=grad_T, grad_S=grad_S, τ_lift=τ_lift)
+
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+add_equation!(problem, &quot;∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)&quot;)
+add_equation!(problem, &quot;∂t(S) - taud*div(grad_S) + τ_lift(tau_S2) = -u⋅∇(S)&quot;)
+add_equation!(problem,
+    &quot;∂t(u) - Pr*div(grad_u) + ∇(p) - buoyT*T*ez + buoyS*S*ez + τ_lift(tau_u2) = -u⋅∇(u)&quot;)
+
+add_bc!(problem, &quot;T(z=0) = 1&quot;); add_bc!(problem, &quot;T(z=$Lz) = 0&quot;)
+add_bc!(problem, &quot;S(z=0) = 1&quot;); add_bc!(problem, &quot;S(z=$Lz) = 0&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;); add_bc!(problem, &quot;u(z=$Lz) = 0&quot;)
+add_bc!(problem, &quot;integ(p) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-4)
+
+# Linear conduction profiles + damped noise on both scalars
+x, z = local_grids(dist, xbasis, zbasis)
+for (field, seed) in ((T, 42), (S, 43))
+    fill_random!(field, &quot;g&quot;; seed=seed, distribution=&quot;normal&quot;, scale=1e-3)
+    get_grid_data(field) .*= z&#39; .* (Lz .- z&#39;)
+    get_grid_data(field) .+= 1.0 .- z&#39; ./ Lz
+    ensure_layout!(field, :c)
+end
+
+run!(solver; stop_iteration=100, progress=false)
+
+uz = u.components[2]
+ensure_layout!(T, :g); ensure_layout!(S, :g); ensure_layout!(uz, :g)
+Tg, Sg = get_grid_data(T), get_grid_data(S)
+@printf(&quot;t = %.4f   max|T| = %.4f   max|S| = %.4f   max|uz| = %.3e\n&quot;,
+        solver.sim_time, maximum(abs, Tg), maximum(abs, Sg), maximum(abs, get_grid_data(uz)))
+@printf(&quot;BC residuals: |T(z=0)-1| = %.1e   |S(z=Lz)| = %.1e\n&quot;,
+        maximum(abs, Tg[:, 1] .- 1), maximum(abs, Sg[:, end]))</code></pre><p>After 100 steps the scalars stay in <code>[0, 1]</code>, convection is starting (<code>max|uz| = 2.4</code>), and the boundary conditions hold to machine precision (<code>|T(z=0) − 1| ≈ 1e-15</code>, <code>|S(z=Lz)| = 1.2e-16</code>). The buoyancy signs are what set the regime: <code>-buoyT*T*ez + buoyS*S*ez</code> makes temperature destabilizing and salinity stabilizing.</p><h3 id="Rotating-Convection"><a class="docs-heading-anchor" href="#Rotating-Convection">Rotating Convection</a><a id="Rotating-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Rotating-Convection" title="Permalink"></a></h3><p>Rotation about the vertical axis couples the in-plane flow to an out-of-plane velocity, so the 2D plane needs a third velocity component: a scalar field <code>v</code>. The Coriolis terms <code>+f v x̂</code> and <code>−f ux</code> are the two halves of <code>−2Ω × u</code>.</p><pre><code class="language-julia hljs">using Tarang, Printf
+
+Lx, Lz = 2.0, 1.0
+Nx, Nz = 32, 24
+Pr     = 1.0
+Ra     = 2e4
+Ta     = 1e4                 # Taylor number
+fcor   = sqrt(Ta) * Pr       # Coriolis coefficient in these units
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+zbasis = ChebyshevT(coords[&quot;z&quot;];  size=Nz, bounds=(0.0, Lz), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+p = ScalarField(domain, &quot;p&quot;)
+T = ScalarField(domain, &quot;T&quot;)
+v = ScalarField(domain, &quot;v&quot;)      # out-of-plane (spanwise) velocity
+u = VectorField(domain, &quot;u&quot;)      # in-plane velocity (ux, uz)
+
+tau_p  = ScalarField(dist, &quot;tau_p&quot;, (), Float64)
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (xbasis,), Float64)
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (xbasis,), Float64)
+tau_v1 = ScalarField(dist, &quot;tau_v1&quot;, (xbasis,), Float64)
+tau_v2 = ScalarField(dist, &quot;tau_v2&quot;, (xbasis,), Float64)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (xbasis,), Float64)
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (xbasis,), Float64)
+
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zbasis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
+grad_v = grad(v) + ez * τ_lift(tau_v1)
+ux     = u.components[1]
+
+problem = IVP([p, T, v, u, tau_p, tau_T1, tau_T2, tau_v1, tau_v2, tau_u1, tau_u2])
+add_parameters!(problem, Pr=Pr, buoy=Ra*Pr, fcor=fcor, ex=ex, ez=ez, ux=ux,
+                grad_u=grad_u, grad_T=grad_T, grad_v=grad_v, τ_lift=τ_lift)
+
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+add_equation!(problem, &quot;∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)&quot;)
+# Spanwise momentum: Coriolis couples v to ux
+add_equation!(problem, &quot;∂t(v) - Pr*div(grad_v) + τ_lift(tau_v2) = -u⋅∇(v) - fcor*ux&quot;)
+# In-plane momentum: buoyancy along ẑ, Coriolis along x̂
+add_equation!(problem,
+    &quot;∂t(u) - Pr*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u) + fcor*v*ex&quot;)
+
+add_bc!(problem, &quot;T(z=0) = 1&quot;); add_bc!(problem, &quot;T(z=$Lz) = 0&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;); add_bc!(problem, &quot;u(z=$Lz) = 0&quot;)
+add_bc!(problem, &quot;v(z=0) = 0&quot;); add_bc!(problem, &quot;v(z=$Lz) = 0&quot;)
+add_bc!(problem, &quot;integ(p) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-4)
+
+x, z = local_grids(dist, xbasis, zbasis)
+fill_random!(T, &quot;g&quot;; seed=42, distribution=&quot;normal&quot;, scale=1e-3)
+get_grid_data(T) .*= z&#39; .* (Lz .- z&#39;)
+get_grid_data(T) .+= 1.0 .- z&#39; ./ Lz
+ensure_layout!(T, :c)
+
+run!(solver; stop_iteration=100, progress=false)
+
+uz = u.components[2]
+ensure_layout!(v, :g); ensure_layout!(uz, :g)
+@printf(&quot;t = %.4f   max|uz| = %.3e   max|v| = %.3e\n&quot;,
+        solver.sim_time, maximum(abs, get_grid_data(uz)), maximum(abs, get_grid_data(v)))</code></pre><p>After 100 steps: <code>max|uz| = 9.8e-3</code> and <code>max|v| = 2.5e-3</code> — the spanwise velocity is generated entirely by rotation (it is zero at <code>Ta = 0</code>).</p><p>There is no parseable cross-product in equation strings, so write the Coriolis force with unit vectors and components, as above. A vector times a scalar field (<code>fcor*v*ex</code>) is fine on either side of the equation.</p><h2 id="Stratified-Flows"><a class="docs-heading-anchor" href="#Stratified-Flows">Stratified Flows</a><a id="Stratified-Flows-1"></a><a class="docs-heading-anchor-permalink" href="#Stratified-Flows" title="Permalink"></a></h2><h3 id="Internal-Gravity-Waves"><a class="docs-heading-anchor" href="#Internal-Gravity-Waves">Internal Gravity Waves</a><a id="Internal-Gravity-Waves-1"></a><a class="docs-heading-anchor-permalink" href="#Internal-Gravity-Waves" title="Permalink"></a></h3><p>Boussinesq flow with a stable background stratification, doubly periodic, in vorticity–streamfunction form. With <code>u = ∇⊥ψ</code> the vertical velocity is <code>uz = ∂x(ψ)</code>, which is how the stratification term is written.</p><pre><code class="language-julia hljs">using Tarang, Printf
+
+N     = 32
+N2    = 1.0        # Brunt-Väisälä frequency squared
+nu    = 1e-6
+kappa = 1e-6
+A     = 1e-3       # wave amplitude (linear regime)
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=N, bounds=(0.0, 2π), dealias=3/2)
+zbasis = RealFourier(coords[&quot;z&quot;]; size=N, bounds=(0.0, 2π), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
+
+ζ     = ScalarField(domain, &quot;zeta&quot;)
+ψ     = ScalarField(domain, &quot;psi&quot;)
+b     = ScalarField(domain, &quot;b&quot;)        # buoyancy
+u     = VectorField(domain, &quot;u&quot;)
+tau_ψ = ScalarField(dist, &quot;tau_psi&quot;, (), Float64)
+
+problem = IVP([ζ, ψ, b, u, tau_ψ])
+add_parameters!(problem, nu=nu, kappa=kappa, N2=N2)
+
+add_equation!(problem, &quot;∂t(zeta) - nu*Δ(zeta) - ∂x(b) = -u⋅∇(zeta)&quot;)
+add_equation!(problem, &quot;∂t(b) - kappa*Δ(b) + N2*∂x(psi) = -u⋅∇(b)&quot;)
+add_equation!(problem, &quot;Δ(psi) + tau_psi - zeta = 0&quot;)
+add_equation!(problem, &quot;u - skew(grad(psi)) = 0&quot;)
+add_bc!(problem, &quot;integ(psi) = 0&quot;)
+
+# Plane wave with kx = kz = 1: theory gives ω = N*kx/|k| = 1/√2
+kx, kz = 1.0, 1.0
+ω      = sqrt(N2) * kx / hypot(kx, kz)
+period = 2π / ω
+
+solver = InitialValueSolver(problem, RK222(); dt=period / 2000)
+
+x, z = local_grids(dist, xbasis, zbasis)
+ensure_layout!(b, :g)
+get_grid_data(b) .= A .* cos.(kx .* x .+ kz .* reshape(z, 1, :))
+ensure_layout!(b, :c)
+b0 = copy(get_grid_data(b))
+
+# Starting from rest, b(t) = b(0)*cos(ωt): the correlation with b(0) traces the wave
+corr() = (ensure_layout!(b, :g); sum(get_grid_data(b) .* b0) / sum(b0 .^ 2))
+
+for (frac, steps) in ((0.5, 1000), (1.0, 2000))
+    run!(solver; stop_iteration=steps, progress=false)
+    @printf(&quot;t = %.3f (%.2f period)  &lt;b(t),b(0)&gt;/&lt;b(0),b(0)&gt; = %+.4f  (cos(ωt) = %+.4f)\n&quot;,
+            solver.sim_time, frac, corr(), cos(ω * solver.sim_time))
+end</code></pre><p>This reproduces the internal-wave dispersion relation <code>ω = N kx/|k|</code> exactly: the buoyancy field anti-correlates with its initial state after half a period (<code>−1.0000</code>) and returns to it after a full period (<code>+1.0000</code>, theoretical period <code>8.8858</code>).</p><h2 id="Turbulence"><a class="docs-heading-anchor" href="#Turbulence">Turbulence</a><a id="Turbulence-1"></a><a class="docs-heading-anchor-permalink" href="#Turbulence" title="Permalink"></a></h2><h3 id="Decaying-2D-Turbulence"><a class="docs-heading-anchor" href="#Decaying-2D-Turbulence">Decaying 2D Turbulence</a><a id="Decaying-2D-Turbulence-1"></a><a class="docs-heading-anchor-permalink" href="#Decaying-2D-Turbulence" title="Permalink"></a></h3><p>Band-limited random vorticity in a doubly periodic box, then let it evolve: the enstrophy cascades to small scales and is dissipated, while the energy stays at large scales.</p><pre><code class="language-julia hljs">using Tarang, Printf, Random
+using Statistics: mean
+
+N  = 64
+ν  = 1e-3
+dt = 2e-3
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;y&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords[&quot;x&quot;]; size=N, bounds=(0.0, 2π), dealias=3/2)
+ybasis = RealFourier(coords[&quot;y&quot;]; size=N, bounds=(0.0, 2π), dealias=3/2)
+domain = Domain(dist, (xbasis, ybasis))
+
+ζ     = ScalarField(domain, &quot;zeta&quot;)
+ψ     = ScalarField(domain, &quot;psi&quot;)
+u     = VectorField(domain, &quot;u&quot;)
+tau_ψ = ScalarField(dist, &quot;tau_psi&quot;, (), Float64)
+
+problem = IVP([ζ, ψ, u, tau_ψ])
+add_parameters!(problem, nu=ν)
+add_equation!(problem, &quot;∂t(zeta) - nu*Δ(zeta) = -u⋅∇(zeta)&quot;)
+add_equation!(problem, &quot;Δ(psi) + tau_psi - zeta = 0&quot;)
+add_equation!(problem, &quot;u - skew(grad(psi)) = 0&quot;)
+add_bc!(problem, &quot;integ(psi) = 0&quot;)
+
+solver = InitialValueSolver(problem, RK222(); dt=dt)
+
+# Band-limited random vorticity: energy initially in 4 ≤ |k| ≤ 8
+Random.seed!(42)
+x, y = local_grids(dist, xbasis, ybasis)
+ζ0 = zeros(length(x), length(y))
+for kx in 1:10, ky in 1:10
+    4 &lt;= hypot(kx, ky) &lt;= 8 || continue
+    a, φ = randn(), 2π * rand()
+    @. ζ0 += a * sin(kx * x + φ) * cos(ky * y&#39; + φ)
+end
+ζ0 .*= 10.0 / maximum(abs, ζ0)
+ensure_layout!(ζ, :g)
+get_grid_data(ζ) .= ζ0
+ensure_layout!(ζ, :c)
+
+enstrophy_of(ζ) = (ensure_layout!(ζ, :g); 0.5 * mean(get_grid_data(ζ) .^ 2))
+
+# ψ and u are algebraic: one step of the solver populates them from ζ
+run!(solver; stop_iteration=1, progress=false)
+E0, Z0 = total_kinetic_energy(u), enstrophy_of(ζ)
+
+run!(solver; stop_iteration=500, progress=false)
+
+E1, Z1 = total_kinetic_energy(u), enstrophy_of(ζ)
+@printf(&quot;t = %.2f   E: %.3f -&gt; %.3f (%.0f%%)   Z: %.2f -&gt; %.2f (%.0f%%)\n&quot;,
+        solver.sim_time, E0, E1, 100 * E1 / E0, Z0, Z1, 100 * Z1 / Z0)
+
+spec = energy_spectrum(u)                       # NamedTuple (k, power, bin_counts, bin_edges)
+kpeak = spec.k[argmax(spec.power)]
+@printf(&quot;energy spectrum peaks at k = %.1f\n&quot;, kpeak)</code></pre><p>Over <code>t = 1</code> at <code>ν = 1e-3</code>: <code>E</code> falls from <code>5.225</code> to <code>4.902</code> and <code>Z</code> from <code>4.26</code> to <code>3.95</code>, and the energy spectrum still peaks at <code>k = 5.5</code>, inside the band it was seeded in. Push <code>N</code>, lower <code>ν</code> and integrate for longer to see the inverse cascade move that peak to smaller <code>k</code>.</p><p>Two things are deliberately not shown here. <strong>3D homogeneous isotropic turbulence</strong> has no supported formulation today: a triply periodic box has no pressure projection (see above), and the vorticity–streamfunction trick is 2D-only. <strong>Stochastically forced turbulence</strong> via <code>StochasticForcing</code> builds and steps, but the energy it actually injects is many orders of magnitude below its <code>energy_injection_rate</code> setting (at <code>N = 64</code>, <code>ε = 1</code>, <code>k_f = 8</code>, the kinetic energy after <code>t = 1</code> was <code>1.4e-6</code>, not <code>≈ 1</code>), so the knob does not currently mean what it says.</p><h2 id="Tips"><a class="docs-heading-anchor" href="#Tips">Tips</a><a id="Tips-1"></a><a class="docs-heading-anchor-permalink" href="#Tips" title="Permalink"></a></h2><h3 id="Resolution-Requirements"><a class="docs-heading-anchor" href="#Resolution-Requirements">Resolution Requirements</a><a id="Resolution-Requirements-1"></a><a class="docs-heading-anchor-permalink" href="#Resolution-Requirements" title="Permalink"></a></h3><table><tr><th style="text-align: right">Problem</th><th style="text-align: right">Typical Resolution</th></tr><tr><td style="text-align: right">Laminar</td><td style="text-align: right">64-128</td></tr><tr><td style="text-align: right">Transitional</td><td style="text-align: right">128-256</td></tr><tr><td style="text-align: right">Turbulent (moderate Re)</td><td style="text-align: right">256-512</td></tr><tr><td style="text-align: right">Turbulent (high Re)</td><td style="text-align: right">512-2048+</td></tr></table><h3 id="Timestepping"><a class="docs-heading-anchor" href="#Timestepping">Timestepping</a><a id="Timestepping-1"></a><a class="docs-heading-anchor-permalink" href="#Timestepping" title="Permalink"></a></h3><ul><li>Use <code>RK222</code> or <code>RK443</code> for advection-dominated flows.</li><li>Use <code>SBDF2</code>/<code>SBDF3</code> for diffusion-dominated or stiff problems.</li><li>Drive the loop with a CFL controller (as in the channel example above): construct it from the <strong>solver</strong>, register a <code>VectorField</code> velocity, and hand it to <code>run!</code>.</li></ul><pre><code class="language-julia hljs">cfl = CFL(solver; initial_dt=1e-3, cadence=10, safety=0.5, max_dt=1e-2)
+add_velocity!(cfl, u)                 # VectorField only
+run!(solver; stop_iteration=1000, cfl=cfl)</code></pre><h3 id="Diagnostics"><a class="docs-heading-anchor" href="#Diagnostics">Diagnostics</a><a id="Diagnostics-1"></a><a class="docs-heading-anchor-permalink" href="#Diagnostics" title="Permalink"></a></h3><p><code>total_kinetic_energy</code> and <code>total_enstrophy</code> return domain integrals (<code>Float64</code>); <code>kinetic_energy</code> and <code>enstrophy</code> return the corresponding <code>ScalarField</code>s. <code>energy_spectrum</code> needs every axis to be Fourier. <code>global_max</code> is MPI-reduced, so it returns the same value on every rank.</p><pre><code class="language-julia hljs">E    = total_kinetic_energy(u)      # Float64: domain integral of ½|u|²
+Z    = total_enstrophy(u)           # Float64: domain integral of ½ω²  (2D only)
+spec = energy_spectrum(u)           # NamedTuple: (k, power, bin_counts, bin_edges)
+
+ux = u.components[1]
+ensure_layout!(ux, :g)
+umax = global_max(dist, abs.(get_grid_data(ux)))   # MPI-reduced: same on every rank
+
+@printf(&quot;E = %.4e   Z = %.4e   max|ux| = %.4f   spectrum peak at k = %.1f\n&quot;,
+        E, Z, umax, spec.k[argmax(spec.power)])</code></pre><h3 id="Running-in-parallel"><a class="docs-heading-anchor" href="#Running-in-parallel">Running in parallel</a><a id="Running-in-parallel-1"></a><a class="docs-heading-anchor-permalink" href="#Running-in-parallel" title="Permalink"></a></h3><p>The fully periodic examples (Kelvin-Helmholtz, internal waves, decaying turbulence) run under MPI unchanged — they use <code>local_grids</code> for initial conditions, which returns each rank&#39;s own slice:</p><pre><code class="nohighlight hljs">mpiexec -n 2 julia --project=. kelvin_helmholtz.jl</code></pre><p>The Kelvin-Helmholtz script above gives bit-identical output at 1 and 2 ranks (<code>max|zeta| = 18.62</code>, <code>E = 0.3948</code>).</p><p>The wall-bounded examples (channel, double-diffusive, rotating convection) are <strong>serial</strong>: their right-hand sides contain <code>-u⋅∇(u)</code>, a Chebyshev derivative in the explicit RHS, which a distributed run rejects (each rank owns only part of the Chebyshev axis). MPI also requires the Chebyshev axis to come <em>first</em> in the domain. See <a href="../../getting_started/running_with_mpi/">Running with MPI</a>.</p><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../tutorials/ivp_2d_rbc/">Rayleigh-Bénard Tutorial</a></li><li><a href="../heat_transfer/">Heat Transfer Examples</a></li><li><a href="../gallery/">Example Gallery</a></li></ul></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Tuesday 21 July 2026 04:02">Tuesday 21 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
