@@ -62,6 +62,7 @@ const TEST_FILES = [
     "test_arithmetic.jl",
     "test_distributor.jl",
     "test_les_models.jl",
+    "test_les_models_gpu_compat.jl",   # AMD/Smagorinsky device-safety via JLArray (no GPU needed)
     "test_chebyshev.jl",
     "test_domain.jl",
     "test_boundary_conditions.jl",
