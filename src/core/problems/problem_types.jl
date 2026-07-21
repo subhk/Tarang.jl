@@ -531,75 +531,16 @@ add_bc!(problem, "integ(ψ) = 0")                           # constraint → 1 r
 """
 function add_equation!(problem::Problem, equation::String)
     push!(problem.equations, equation)
-    # Quick string-level check for common mistakes (linear terms on RHS)
-    _check_equation_placement(equation, problem)
-    # Full structural check (parses a throwaway tree; never throws) — this is the
-    # only path on which users ever reach `validate_equation_structure`, so the
-    # guidance lands where the equation is written rather than at solve time.
+    # Structural check (parses a throwaway tree; never throws) — this is the only
+    # path on which users ever reach `validate_equation_structure`, so the
+    # guidance lands where the equation is written rather than at solve time. It
+    # decides misplacement from the parsed tree AND from whether a term is
+    # actually implicit-capable, so it does not warn about a linear-looking term
+    # (e.g. `div(a*u)` with a spatially varying `a`) that genuinely cannot move
+    # to the LHS. The older string-regex heuristic that used to run first has
+    # been removed: it flagged any `div(`/`lap(` on the RHS blindly, including
+    # correct forcing and variable-coefficient terms, and this check subsumes it.
     validate_added_equation(problem, equation)
-end
-
-# Linear operator patterns that should be on the LHS
-const _LINEAR_OP_PATTERNS = [r"Δ\(", r"lap\(", r"∇\(", r"div\(", r"curl\(", r"∇²\("]
-
-"""Check if equation string has linear operator terms or parameter*field terms on the RHS."""
-function _check_equation_placement(equation::String, problem::Problem)
-    # Skip BCs like "u(z=0) = 0"
-    occursin(r"\w+\(\w+=", equation) && return
-
-    parts = split(equation, "="; limit=2)
-    length(parts) != 2 && return
-    lhs, rhs = strip(parts[1]), strip(parts[2])
-
-    # Mask nonlinear advection terms (u⋅∇(q)) so ∇( doesn't false-positive
-    rhs_check = replace(rhs, "⋅∇(" => "⋅_advect_(")
-
-    # Check for linear operators on RHS
-    for pat in _LINEAR_OP_PATTERNS
-        if occursin(pat, rhs_check)
-            @warn "Linear operator on RHS: \"$equation\"\n" *
-                  "  Move linear terms to LHS for correct IMEX time splitting.\n" *
-                  "  Example: \"∂t(u) = nu*Δ(u)\" → \"∂t(u) - nu*Δ(u) = 0\""
-            return
-        end
-    end
-
-    # Check for parameter*field patterns on RHS (e.g., Ra*Pr*T)
-    field_names = String[f.name for f in problem.variables if hasfield(typeof(f), :name)]
-
-    for fname in field_names
-        # Skip if field name doesn't appear on RHS at all
-        occursin(fname, rhs) || continue
-
-        # Skip if field is inside a function call like ∂x(u), Δ(u) — that's an operator, already caught above
-        occursin(fname * "(", rhs) && continue
-        occursin("(" * fname * ")", rhs) && continue
-
-        # Skip if field is part of a nonlinear product:
-        #   field*field: u*T, u*v
-        #   field*operator(field): u*∂x(T), u⋅∇(T)
-        is_nonlinear = false
-        for f2 in field_names
-            f2 == fname && continue
-            # u*T or T*u
-            if occursin(f2 * "*" * fname, rhs) || occursin(fname * "*" * f2, rhs)
-                is_nonlinear = true; break
-            end
-            # u*∂x(T) or u*Δ(T) etc
-            if occursin(fname * "*∂", rhs) || occursin(fname * "*Δ", rhs) ||
-               occursin(fname * "*∇", rhs) || occursin(fname * "*lap", rhs) ||
-               occursin(fname * "⋅∇", rhs) || occursin(fname * "*div", rhs)
-                is_nonlinear = true; break
-            end
-        end
-        is_nonlinear && continue
-
-        # Field appears on RHS without another field multiplying it → linear term
-        @warn "Linear term on RHS: \"$equation\"\n" *
-              "  '$fname' appears linearly on RHS (multiplied only by parameters).\n" *
-              "  Move to LHS for correct IMEX time splitting."
-        return
-    end
 end
 
 """
