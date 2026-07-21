@@ -562,12 +562,18 @@ end
         # Reproducible: same seed → identical field.
         @test make() == make()
 
-        # Golden snapshot of the seed-DERIVED serial stream. If the derivation is
-        # ever re-gated on Comm_size, the serial field reverts to the raw-RNG
-        # stream and these change — which is exactly the regression to catch.
-        F = make()
-        @test isapprox(sum(abs, F), 1619.0861620062; rtol=1e-9)
-        @test isapprox(F[2, 3], -48.6889042048 - 13.7619260040im; rtol=1e-9)
+        # The constructor stores a DERIVED rng (MersenneTwister(rand(user_rng))),
+        # not the raw user rng — the same derivation an MPI run applies, so serial
+        # and parallel agree. This is the regression to catch: if the derivation
+        # is re-gated on Comm_size, the serial path keeps the raw rng and this
+        # stored rng would equal MersenneTwister(777). Checked by rng identity so
+        # it is independent of the actual random values (which are not bit-portable
+        # across Julia versions / platforms — a hardcoded snapshot is not).
+        f = StochasticForcing(
+            field_size=(8, 8), forcing_rate=0.1, injection_metric=:direct,
+            k_forcing=3.0, dk_forcing=1.0, spectrum_type=:band, dt=0.01,
+            rng=MersenneTwister(777))
+        @test f.rng != MersenneTwister(777)
         println("  RNG seed-derivation (serial==parallel) OK")
     end
 
