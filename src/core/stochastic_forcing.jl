@@ -338,15 +338,22 @@ function StochasticForcing(;
         @warn "Both forcing_rate and energy_injection_rate were provided; using forcing_rate"
     end
 
-    # Ensure MPI-consistent RNG seeding: all ranks must generate the same
-    # random phases for the forcing to be physically coherent across processes.
-    # When no explicit rng is provided (default MersenneTwister with OS entropy),
-    # broadcast a shared seed from rank 0 so all ranks produce identical sequences.
+    # Derive the working RNG from a single shared seed. Two goals:
+    #  1. Every MPI rank must generate the SAME global random field — the phases
+    #     have to match across ranks or the assembled forcing is incoherent. The
+    #     Bcast makes rank 0's seed win when ranks carry independent RNG state
+    #     (e.g. a default MersenneTwister with per-process OS entropy).
+    #  2. A given user seed must reproduce the SAME forcing regardless of the
+    #     number of ranks. This derivation runs UNCONDITIONALLY — previously it
+    #     was gated on Comm_size > 1, so a serial run kept the raw user RNG while
+    #     a parallel run forked to MersenneTwister(rand(rng, UInt64)); the two
+    #     then diverged (~169% different) under the same seed, and a serial
+    #     trajectory could not be reproduced in parallel.
+    seed_buf = Ref(rand(rng, UInt64))
     if MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
-        seed_buf = Ref(rand(rng, UInt64))
         MPI.Bcast!(seed_buf, 0, MPI.COMM_WORLD)
-        rng = Random.MersenneTwister(seed_buf[])
     end
+    rng = Random.MersenneTwister(seed_buf[])
 
     # Build wavenumber arrays (always on CPU for setup)
     wavenumbers = build_wavenumbers(field_size, domain_size, dtype)
@@ -1218,8 +1225,11 @@ function _diagnostic_inner_product_gpu(forcing::StochasticForcing{T, N},
                                        other::Nothing) where {T, N}
     weights = _cached_gpu_diagnostic_weights!(forcing, global_shape, local_ranges)
     cf = view(forcing.cached_forcing, local_ranges...)
-    return T(mapreduce((w, s, f) -> w * real(s * conj(f)), +,
-                       weights, sol, cf; init=zero(T)))
+    partial = mapreduce((w, s, f) -> w * real(s * conj(f)), +,
+                        weights, sol, cf; init=zero(T))
+    # Sum this rank's slab into the global value, like the CPU path. Without the
+    # reduce a distributed-GPU diagnostic would report only this rank's fraction.
+    return T(_forcing_reduce_partial(sol, partial))
 end
 
 function _diagnostic_inner_product_gpu(forcing::StochasticForcing{T, N},
@@ -1229,8 +1239,10 @@ function _diagnostic_inner_product_gpu(forcing::StochasticForcing{T, N},
                                        other::AbstractArray{Complex{T}, N}) where {T, N}
     weights = _cached_gpu_diagnostic_weights!(forcing, global_shape, local_ranges)
     cf = view(forcing.cached_forcing, local_ranges...)
-    return T(mapreduce((w, a, b, f) -> w * real((a + b) / T(2) * conj(f)), +,
-                       weights, other, sol, cf; init=zero(T)))
+    partial = mapreduce((w, a, b, f) -> w * real((a + b) / T(2) * conj(f)), +,
+                        weights, other, sol, cf; init=zero(T))
+    # See the other GPU method: reduce this rank's slab into the global value.
+    return T(_forcing_reduce_partial(sol, partial))
 end
 
 function _diagnostic_inner_product(forcing::StochasticForcing{T, N},

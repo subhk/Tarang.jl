@@ -545,6 +545,74 @@ end
         println("  Work diagnostics use matched forcing views OK")
     end
 
+    @testset "RNG is seed-derived so serial and parallel agree" begin
+        # The working RNG is derived unconditionally as
+        # MersenneTwister(rand(user_rng, UInt64)) — the SAME derivation an MPI
+        # run applies after the seed Bcast — so a given user seed reproduces the
+        # SAME forcing regardless of rank count. Previously the derivation was
+        # gated on Comm_size > 1, so a serial run kept the raw user RNG and
+        # diverged (~169%) from a parallel run under the same seed.
+        make() = (f = StochasticForcing(
+                      field_size=(8, 8), forcing_rate=0.1, injection_metric=:direct,
+                      k_forcing=3.0, dk_forcing=1.0, spectrum_type=:band, dt=0.01,
+                      rng=MersenneTwister(777));
+                  generate_forcing!(f, 0.0);
+                  copy(f.cached_forcing))
+
+        # Reproducible: same seed → identical field.
+        @test make() == make()
+
+        # Golden snapshot of the seed-DERIVED serial stream. If the derivation is
+        # ever re-gated on Comm_size, the serial field reverts to the raw-RNG
+        # stream and these change — which is exactly the regression to catch.
+        F = make()
+        @test isapprox(sum(abs, F), 1619.0861620062; rtol=1e-9)
+        @test isapprox(F[2, 3], -48.6889042048 - 13.7619260040im; rtol=1e-9)
+        println("  RNG seed-derivation (serial==parallel) OK")
+    end
+
+    @testset "Achieved injection rate equals requested epsilon (Monte-Carlo)" begin
+        # The existing work-diagnostic tests pair `cached_forcing` against a
+        # solution on BOTH sides, so a bug in the ABSOLUTE forcing amplitude
+        # (e.g. `/sqrt(dt)` becoming `/dt`, or a stray factor of 2) cancels and
+        # every one of them still passes. This is the only test that measures the
+        # achieved mean injection rate against the requested epsilon end-to-end.
+        #
+        # Forward-Euler one-step: next = prev + dt*F, with prev drawn independently
+        # of the forcing. Then <W_strat>/dt = <W_ito>/dt = epsilon (both equal,
+        # per-sample, since pairing(F) = 2*eps/dt exactly cancels the dt). An
+        # amplitude error by a factor a rescales the measured ratio to a^2, so a
+        # factor-2 bug reads 4, a sqrt(2) bug reads 2 — far outside the band below.
+        M = 3000
+        eps = 0.1
+        dt = 0.005
+        fs = (16, 16)
+        forcing = StochasticForcing(
+            field_size=fs, forcing_rate=eps, injection_metric=:direct,
+            k_forcing=4.0, dk_forcing=1.0, spectrum_type=:band, dt=dt,
+            rng=MersenneTwister(2024),
+        )
+        prng = MersenneTwister(99)
+        ws = 0.0
+        wi = 0.0
+        for i in 1:M
+            generate_forcing!(forcing, Float64(i))          # fresh random phases
+            prev = randn(prng, ComplexF64, fs) .* 0.3       # independent of F
+            store_prevsol!(forcing, prev)
+            next = prev .+ dt .* forcing.cached_forcing
+            ws += work_stratonovich(forcing, next)
+            wi += work_ito(forcing, prev)
+        end
+        ratio_strat = ws / M / dt / eps
+        ratio_ito = wi / M / dt / eps
+        # Measured ~1.00 (deterministic at this seed); the band excludes every
+        # O(1) scale-bug signature (0.5, sqrt2, pi/2, 2, 4).
+        @test isapprox(ratio_strat, 1.0; atol=0.08)
+        @test isapprox(ratio_ito, 1.0; atol=0.08)
+        println("  Achieved epsilon: strat ratio=$(round(ratio_strat, digits=4)), " *
+                "ito ratio=$(round(ratio_ito, digits=4)) OK")
+    end
+
     @testset "Odd half-spectrum retains doubled final mode" begin
         forcing = StochasticForcing(
             field_size=(7,), forcing_rate=0.0, k_forcing=2.0,
