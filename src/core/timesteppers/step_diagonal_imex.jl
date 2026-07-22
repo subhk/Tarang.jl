@@ -461,11 +461,17 @@ function _diagonal_Lhat_from_expr(L_expr, field::ScalarField)
     cd === nothing && return nothing
     # L̂ is ComplexF64: Laplacian/fractional/damping terms are real (−k², k²^α, const),
     # but first-derivative terms contribute imaginary (ik)^order multipliers.
-    (L_expr === nothing || is_zero_expression(L_expr)) && return zeros(ComplexF64, size(_local_coeff(cd)))
+    # Allocate on the field's own device (via similar_zeros): compute_wavenumber_squared_grid
+    # returns a device array on GPU, and the accumulation `@. Lhat += coeff*(-k2)` broadcasts
+    # against it — a host Lhat would scalar-index the device k2. This is what makes the
+    # equation-derived diagonal-IMEX operator build on a single GPU instead of throwing.
+    lc = _local_coeff(cd)
+    (L_expr === nothing || is_zero_expression(L_expr)) &&
+        return similar_zeros(lc, ComplexF64, size(lc)...)
 
     k2grid = compute_wavenumber_squared_grid(field)
     k2 = _local_coeff(k2grid)
-    Lhat = zeros(ComplexF64, size(k2))
+    Lhat = similar_zeros(k2, ComplexF64, size(k2)...)
     _accumulate_diagonal_L!(Lhat, k2, L_expr, 1.0, field) || return nothing
     return Lhat
 end
@@ -560,7 +566,10 @@ function _diagonal_deriv_grid(field::ScalarField, coord::Coordinate, order::Int)
     end
 
     lc = _local_coeff(cd)
-    out = zeros(ComplexF64, size(lc))
+    # Device-matching (see _diagonal_Lhat_from_expr): the reshape-broadcast of the
+    # 1-D wavenumber multiplier below accumulates into `out`, so on GPU it must live
+    # on the field's device — mirrors compute_wavenumber_squared_grid.
+    out = similar_zeros(lc, ComplexF64, size(lc)...)
     if isa(cd, PencilArrays.PencilArray)
         local_axes = PencilArrays.pencil(cd).axes_local
         # Tuple(NoPermutation()) is `nothing`, NOT identity — guard before findfirst.
