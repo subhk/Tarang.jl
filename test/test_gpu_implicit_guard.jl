@@ -62,4 +62,47 @@ using Tarang
         ratio = maximum(abs, Tarang.get_grid_data(u)) / n0
         @test isapprox(ratio, exp(-0.5 * 4 * 0.2); rtol=1e-3)   # exp(−ν k² T), k=2
     end
+
+    @testset "coupled 2D vorticity: DiagonalIMEX == global-matrix SBDF2" begin
+        # The flagship 2D-turbulence GPU example is a COUPLED system (vorticity
+        # transport with implicit viscosity + a streamfunction Poisson constraint +
+        # velocity + gauge BC) on a pure-Fourier domain. On GPU that path builds no
+        # global matrix, so it must use DiagonalIMEX (which the guard exempts). Pin
+        # that DiagonalIMEX_SBDF2 handles the coupled constraints AND applies the
+        # viscous term, matching global-matrix SBDF2 — i.e. the example is viscous,
+        # not the silently-inviscid run it was with SBDF2 on GPU.
+        using Statistics: mean
+        function run_coupled(ts; N=32, nu=1e-3, dt=2e-3, nsteps=60)
+            u_field = ScalarField
+            xb2 = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π), dealias=3/2)
+            yb2 = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π), dealias=3/2)
+            dom = Domain(dist, (xb2, yb2))
+            q = ScalarField(dom, "q"); psi = ScalarField(dom, "psi")
+            vel = VectorField(dom, "u"); tau = ScalarField(dist, "tau", (), Float64)
+            prob = IVP([q, psi, vel, tau]); add_parameters!(prob; nu=nu)
+            add_equation!(prob, "∂t(q) - nu*Δ(q) = -u⋅∇(q)")
+            add_equation!(prob, "Δ(psi) + tau - q = 0")
+            add_equation!(prob, "u - skew(grad(psi)) = 0")
+            add_bc!(prob, "integ(psi) = 0")
+            s = InitialValueSolver(prob, ts; dt=dt)
+            xc = Tarang.get_grid_coordinates(dom; on_device=false)["x"]
+            yc = Tarang.get_grid_coordinates(dom; on_device=false)["y"]
+            q0 = zeros(N, N)
+            for kx in 1:6, ky in 1:6
+                k = hypot(kx, ky); (4 <= k <= 8) || continue
+                @. q0 += sin(kx * xc + 0.3) * cos(ky * yc' + 0.3)
+            end
+            q0 .*= 10.0 / maximum(abs, q0); q["g"] = q0
+            Tarang.evaluate_rhs(s, s.state, 0.0)
+            ensure_layout!(q, :g); Z0 = 0.5 * mean(get_grid_data(q) .^ 2)
+            for _ in 1:nsteps; step!(s, dt); end
+            ensure_layout!(q, :g)
+            return Z0, 0.5 * mean(get_grid_data(q) .^ 2)
+        end
+        Z0_ref, Zf_ref = run_coupled(SBDF2())
+        Z0_dia, Zf_dia = run_coupled(DiagonalIMEX_SBDF2())
+        @test Zf_ref / Z0_ref < 0.999                      # global-matrix run is viscous
+        @test isapprox(Zf_dia, Zf_ref; rtol=1e-8)          # DiagonalIMEX matches it
+        @test Zf_dia / Z0_dia < 0.999                      # ... and is therefore viscous too
+    end
 end
