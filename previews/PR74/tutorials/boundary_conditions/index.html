@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Boundary Conditions · Tarang.jl</title><meta name="title" content="Boundary Conditions · Tarang.jl"/><meta property="og:title" content="Boundary Conditions · Tarang.jl"/><meta property="twitter:title" content="Boundary Conditions · Tarang.jl"/><meta name="description" content="Documentation for Tarang.jl."/><meta property="og:description" content="Documentation for Tarang.jl."/><meta property="twitter:description" content="Documentation for Tarang.jl."/><meta property="og:url" content="https://subhk.github.io/Tarang.jl/stable/tutorials/boundary_conditions/"/><meta property="twitter:url" content="https://subhk.github.io/Tarang.jl/stable/tutorials/boundary_conditions/"/><link rel="canonical" href="https://subhk.github.io/Tarang.jl/stable/tutorials/boundary_conditions/"/><script data-outdated-warner src="../../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL="../.."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../../assets/documenter.js"></script><script src="../../search_index.js"></script><script src="../../siteinfo.js"></script><script src="../../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../../assets/themeswap.js"></script><link href="../../assets/custom.css" rel="stylesheet" type="text/css"/></head><body><div id="documenter"><nav class="docs-sidebar"><a class="docs-logo" href="../../"><img src="../../assets/logo.svg" alt="Tarang.jl logo"/></a><div class="docs-package-name"><span class="docs-autofit"><a href="../../">Tarang.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../../">Home</a></li><li><span class="tocitem">Getting Started</span><ul><li><a class="tocitem" href="../../getting_started/installation/">Installation</a></li><li><a class="tocitem" href="../../getting_started/first_steps/">First Steps</a></li><li><a class="tocitem" href="../../getting_started/running_with_mpi/">Running with MPI</a></li><li><a class="tocitem" href="../../pages/configuration/">Configuration</a></li></ul></li><li><span class="tocitem">Tutorials &amp; Examples</span><ul><li><a class="tocitem" href="../overview/">Overview</a></li><li><a class="tocitem" href="../ivp_2d_rbc/">2D Rayleigh-Benard</a></li><li><a class="tocitem" href="../ivp_3d_turbulence/">3D Turbulence</a></li><li class="is-active"><a class="tocitem" href>Boundary Conditions</a><ul class="internal"><li><a class="tocitem" href="#Overview"><span>Overview</span></a></li><li><a class="tocitem" href="#The-Tau-Method-Approach"><span>The Tau Method Approach</span></a></li><li><a class="tocitem" href="#Complete-Example:-Poisson-Equation"><span>Complete Example: Poisson Equation</span></a></li><li><a class="tocitem" href="#Dirichlet-Boundary-Conditions"><span>Dirichlet Boundary Conditions</span></a></li><li><a class="tocitem" href="#Neumann-Boundary-Conditions"><span>Neumann Boundary Conditions</span></a></li><li><a class="tocitem" href="#Robin-Boundary-Conditions"><span>Robin Boundary Conditions</span></a></li><li><a class="tocitem" href="#Periodic-Boundary-Conditions"><span>Periodic Boundary Conditions</span></a></li><li><a class="tocitem" href="#The-lift()-Operator"><span>The lift() Operator</span></a></li><li><a class="tocitem" href="#Complete-Examples"><span>Complete Examples</span></a></li><li><a class="tocitem" href="#Time-and-Space-Dependent-Boundary-Conditions"><span>Time- and Space-Dependent Boundary Conditions</span></a></li><li><a class="tocitem" href="#Validation"><span>Validation</span></a></li><li><a class="tocitem" href="#Troubleshooting"><span>Troubleshooting</span></a></li><li><a class="tocitem" href="#See-Also"><span>See Also</span></a></li></ul></li><li><a class="tocitem" href="../analysis_and_output/">Analysis &amp; Output</a></li><li><a class="tocitem" href="../eigenvalue_problems/">Eigenvalue Problems</a></li><li><a class="tocitem" href="../surface_dynamics/">Surface Dynamics</a></li><li><a class="tocitem" href="../rotating_shallow_water/">Rotating Shallow Water</a></li><li><a class="tocitem" href="../../examples/gallery/">Examples Gallery</a></li></ul></li><li><span class="tocitem">User Guide</span><ul><li><a class="tocitem" href="../../pages/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../pages/bases/">Bases</a></li><li><a class="tocitem" href="../../pages/domains/">Domains</a></li><li><a class="tocitem" href="../../pages/fields/">Fields</a></li><li><a class="tocitem" href="../../pages/operators/">Operators</a></li><li><a class="tocitem" href="../../pages/problems/">Problems</a></li><li><a class="tocitem" href="../../pages/solvers/">Solvers</a></li><li><a class="tocitem" href="../../pages/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../pages/gpu_computing/">GPU Computing</a></li><li><a class="tocitem" href="../../pages/parallelism/">Parallelism</a></li><li><a class="tocitem" href="../../pages/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../pages/les_models/">LES Models</a></li><li><a class="tocitem" href="../../pages/gql_approximation/">GQL Approximation</a></li><li><a class="tocitem" href="../../pages/tau_method/">Tau Method</a></li></ul></li><li><span class="tocitem">Developer Guide</span><ul><li><a class="tocitem" href="../../pages/architecture/">Architecture &amp; Codebase</a></li><li><a class="tocitem" href="../../pages/testing/">Testing</a></li><li><a class="tocitem" href="../../pages/contributing/">Contributing</a></li></ul></li><li><span class="tocitem">Reference</span><ul><li><input class="collapse-toggle" id="menuitem-6-1" type="checkbox"/><label class="tocitem" for="menuitem-6-1"><span class="docs-label">API Reference</span><i class="docs-chevron"></i></label><ul class="collapsed"><li><a class="tocitem" href="../../api/coordinates/">Coordinates</a></li><li><a class="tocitem" href="../../api/bases/">Bases</a></li><li><a class="tocitem" href="../../api/domains/">Domains</a></li><li><a class="tocitem" href="../../api/fields/">Fields</a></li><li><a class="tocitem" href="../../api/operators/">Operators</a></li><li><a class="tocitem" href="../../api/problems/">Problems</a></li><li><a class="tocitem" href="../../api/solvers/">Solvers</a></li><li><a class="tocitem" href="../../api/timesteppers/">Time Steppers</a></li><li><a class="tocitem" href="../../api/gpu/">GPU</a></li><li><a class="tocitem" href="../../api/stochastic_forcing/">Stochastic Forcing</a></li><li><a class="tocitem" href="../../api/les_models/">LES Models</a></li><li><a class="tocitem" href="../../api/analysis/">Analysis</a></li><li><a class="tocitem" href="../../api/io/">I/O</a></li></ul></li></ul></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li><a class="is-disabled">Tutorials &amp; Examples</a></li><li class="is-active"><a href>Boundary Conditions</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Boundary Conditions</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/subhk/Tarang.jl/blob/main/docs/src/tutorials/boundary_conditions.md#" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Tutorial:-Boundary-Conditions"><a class="docs-heading-anchor" href="#Tutorial:-Boundary-Conditions">Tutorial: Boundary Conditions</a><a id="Tutorial:-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Tutorial:-Boundary-Conditions" title="Permalink"></a></h1><p>This tutorial covers the different types of boundary conditions available in Tarang.jl and how to apply them effectively using the tau method with explicit tau fields.</p><h2 id="Overview"><a class="docs-heading-anchor" href="#Overview">Overview</a><a id="Overview-1"></a><a class="docs-heading-anchor-permalink" href="#Overview" title="Permalink"></a></h2><p>Boundary conditions (BCs) are essential for well-posed PDE problems. Tarang.jl supports:</p><ul><li><strong>Dirichlet</strong>: Specify field value at boundary</li><li><strong>Neumann</strong>: Specify derivative at boundary</li><li><strong>Robin</strong>: Linear combination of value and derivative</li><li><strong>Periodic</strong>: Automatic for Fourier bases</li></ul><h2 id="The-Tau-Method-Approach"><a class="docs-heading-anchor" href="#The-Tau-Method-Approach">The Tau Method Approach</a><a id="The-Tau-Method-Approach-1"></a><a class="docs-heading-anchor-permalink" href="#The-Tau-Method-Approach" title="Permalink"></a></h2><p>Tarang.jl uses an explicit tau-method approach for handling boundary conditions. Users must <strong>explicitly create tau fields</strong> and add them to equations using the <code>lift()</code> operator.</p><h3 id="Why-Explicit-Tau-Fields?"><a class="docs-heading-anchor" href="#Why-Explicit-Tau-Fields?">Why Explicit Tau Fields?</a><a id="Why-Explicit-Tau-Fields?-1"></a><a class="docs-heading-anchor-permalink" href="#Why-Explicit-Tau-Fields?" title="Permalink"></a></h3><ol><li><strong>Clarity</strong>: The mathematical structure is visible in your code</li><li><strong>Flexibility</strong>: Full control over tau placement</li><li><strong>Debugging</strong>: Easy to inspect tau field values</li><li><strong>Consistency</strong>: Matches the mathematical formulation</li></ol><h3 id="Required-Steps"><a class="docs-heading-anchor" href="#Required-Steps">Required Steps</a><a id="Required-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Required-Steps" title="Permalink"></a></h3><p>For any problem with non-periodic boundary conditions:</p><ol><li><strong>Create tau fields</strong> — one scalar tau DOF per scalar constraint row (a BC on a <code>VectorField</code> contributes one row per component, so it needs a <code>VectorField</code> tau)</li><li><strong>Add tau fields to the problem</strong> — include them in the field list</li><li><strong>Add lift() terms to equations</strong> — place tau contributions at specific modes</li><li><strong>Specify boundary conditions</strong> — add the algebraic constraint rows. Tau columns and BC rows couple through the assembled matrix, not through a name-based link between a BC and &quot;its&quot; tau field</li></ol><p>Because there is no name-based pairing, the thing that keeps the system square is a <strong>count</strong>. Every variable you declare must be matched by an equation or a BC; Tarang checks this and rejects the problem otherwise. A tau field that you declare but never lift into an equation is an error, not a harmless extra.</p><p>The wording of that rejection depends on the problem type, because a BVP is allowed to carry extra equations (its BCs) while an IVP is not:</p><table><tr><th style="text-align: right">problem</th><th style="text-align: right">check</th><th style="text-align: right">message</th></tr><tr><td style="text-align: right"><code>LBVP</code> / <code>NLBVP</code></td><td style="text-align: right"><code>n_equations &gt;= n_variables</code></td><td style="text-align: right"><code>Number of equations (2) is less than number of variables (3)</code></td></tr><tr><td style="text-align: right"><code>IVP</code> / <code>EVP</code></td><td style="text-align: right"><code>n_equations == n_variables</code></td><td style="text-align: right"><code>Number of equations (7) does not match number of variables (5)</code></td></tr></table><h2 id="Complete-Example:-Poisson-Equation"><a class="docs-heading-anchor" href="#Complete-Example:-Poisson-Equation">Complete Example: Poisson Equation</a><a id="Complete-Example:-Poisson-Equation-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Example:-Poisson-Equation" title="Permalink"></a></h2><p>Let&#39;s solve the Poisson equation <span>$\nabla^2 u = -2$</span> with Dirichlet BCs <code>u = 0</code> on both <code>z</code> walls. This is a verified, runnable LBVP; the analytic solution is <code>u = z(Lz - z)</code> and the solver reproduces it to machine precision.</p><p>The tau method needs <strong>one tau variable per boundary condition</strong>. Each tau is lifted into the bulk equation with <code>lift(tau, derivative_basis(z_basis, 2), -k)</code> and registered as a parameter via <code>add_parameters!</code>. The lift order index <code>-1</code> targets the last coefficient row and <code>-2</code> the second-to-last; a 2nd-order problem therefore uses two taus at orders <code>-1</code> and <code>-2</code>.</p><pre><code class="language-julia hljs">using Tarang
+
+# Create coordinates, distributor, and bases
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+x_basis = RealFourier(coords[&quot;x&quot;]; size=4,  bounds=(0.0, 2π))   # periodic (separable)
+z_basis = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))  # bounded  (coupled)
+dom = Domain(dist, (x_basis, z_basis))
+
+# Field to solve for
+u = ScalarField(dom, &quot;u&quot;)
+
+# Step 1: Create tau fields (one per BC)
+# These live on the x-basis only (boundary is a line in 2D)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (x_basis,), Float64)  # For BC at z=0
+tau2 = ScalarField(dist, &quot;tau2&quot;, (x_basis,), Float64)  # For BC at z=1
+
+# Step 2: Add ALL fields to problem (including tau fields)
+problem = LBVP([u, tau1, tau2])
+
+# Step 3: Register the lifted tau terms as parameters
+#         (use the 2nd-derivative basis for a 2nd-order problem)
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+
+# Step 4: Add equation referencing the lifted tau parameters
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)
+
+# Step 5: Add boundary conditions
+add_bc!(problem, &quot;u(z=0)   = 0&quot;)
+add_bc!(problem, &quot;u(z=1.0) = 0&quot;)
+
+# Solve
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(u, :g)   # solve! writes coefficients; switch to grid space to read u</code></pre><p>The solution matches <code>z(1 - z)</code> at every grid point to <code>1.4e-16</code>, and both walls come out at exactly <code>0.0</code>.</p><div class="admonition is-info" id="1D-pure-Chebyshev-BVP-efef419a4832f45d"><header class="admonition-header">1D pure-Chebyshev BVP<a class="admonition-anchor" href="#1D-pure-Chebyshev-BVP-efef419a4832f45d" title="Permalink"></a></header><div class="admonition-body"><p>The example above keeps a Fourier <code>x</code> axis, but a pure single-axis Chebyshev BVP (no Fourier) also works — drop the <code>x</code> axis and define the <code>tau</code> variables on <code>()</code>. The solver builds one coupled tau subproblem over the Chebyshev spectrum.</p></div></div><h2 id="Dirichlet-Boundary-Conditions"><a class="docs-heading-anchor" href="#Dirichlet-Boundary-Conditions">Dirichlet Boundary Conditions</a><a id="Dirichlet-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Dirichlet-Boundary-Conditions" title="Permalink"></a></h2><p>Fix the value of a field at the boundary.</p><h3 id="Basic-Setup"><a class="docs-heading-anchor" href="#Basic-Setup">Basic Setup</a><a id="Basic-Setup-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Setup" title="Permalink"></a></h3><p>Continuing with the <code>dist</code>, <code>x_basis</code>, <code>z_basis</code> and <code>dom</code> from above:</p><pre><code class="language-julia hljs">T = ScalarField(dom, &quot;T&quot;)
+
+# Create tau fields for each Dirichlet BC
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,), Float64)
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,), Float64)
+
+# Add to problem
+problem = LBVP([T, tau_T1, tau_T2])
+
+# Register the lifted tau terms (2nd-order problem -&gt; 2nd-derivative basis)
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_T1, lb2, -1), l2=lift(tau_T2, lb2, -2), source=0.0)
+
+# Add equation referencing the lifted tau parameters
+add_equation!(problem, &quot;Δ(T) + l1 + l2 = source&quot;)
+
+# Boundary conditions
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # hot wall
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # cold wall
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(T, :g)</code></pre><p>With a zero source this is the conduction profile <code>T = 1 - z</code> (recovered to <code>2.5e-16</code>); the walls come out at exactly <code>1.0</code> and <code>0.0</code>.</p><h3 id="No-Slip-Velocity-(Vector-Fields)"><a class="docs-heading-anchor" href="#No-Slip-Velocity-(Vector-Fields)">No-Slip Velocity (Vector Fields)</a><a id="No-Slip-Velocity-(Vector-Fields)-1"></a><a class="docs-heading-anchor-permalink" href="#No-Slip-Velocity-(Vector-Fields)" title="Permalink"></a></h3><p>For viscous flows at solid walls, use vector fields for compact notation.</p><p>The idiomatic form is a <strong>first-order reduction</strong>: rather than lifting two taus into a single second-order operator, introduce the gradient as a substitution and lift one tau into it. A second-order momentum equation then needs <strong>two</strong> velocity tau fields: one lifted into the <em>gradient</em> (<code>tau_u1</code>, giving <code>grad_u = ∇u + ẑ·lift(τ)</code>), one lifted into the <em>equation</em> (<code>tau_u2</code>). Both lifts use the <strong>first-derivative</strong> basis, <code>derivative_basis(z_basis, 1)</code> — see &quot;Which derivative<em>basis order?&quot; below. The divergence constraint gets its own gauge tau, `tau</em>p<code>, paid for by an</code>integ(p)` condition.</p><pre><code class="language-julia hljs">using Tarang
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+x_basis = RealFourier(coords[&quot;x&quot;]; size=8,  bounds=(0.0, 2π))
+z_basis = ChebyshevT(coords[&quot;z&quot;];  size=16, bounds=(0.0, 1.0))
+dom = Domain(dist, (x_basis, z_basis))
+
+p = ScalarField(dom, &quot;p&quot;)
+u = VectorField(dom, &quot;u&quot;)
+
+# Tau fields: scalar gauge for the pressure, one vector tau per lift site
+tau_p  = ScalarField(dist, &quot;tau_p&quot;, (), Float64)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,), Float64)
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,), Float64)
+
+# First-order reduction: grad_u = ∇u + ẑ·lift(tau_u1)
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(z_basis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u     = grad(u) + ez * τ_lift(tau_u1)
+
+problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+add_parameters!(problem, nu=0.01, ez=ez, grad_u=grad_u, τ_lift=τ_lift)
+
+# Continuity with tau_p (removes the pressure degeneracy)
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+
+# Momentum (single vector equation)
+add_equation!(problem, &quot;∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u)&quot;)
+
+# No-slip boundary conditions (vector notation — all components at once)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_bc!(problem, &quot;integ(p) = 0&quot;)   # pressure gauge, pays for tau_p
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+
+# Start from a decaying shear layer
+ux = u.components[1]
+x, z = local_grids(dist, x_basis, z_basis)
+ensure_layout!(ux, :g)
+get_grid_data(ux) .= sin.(π .* z&#39;)
+ensure_layout!(ux, :c)
+
+run!(solver; stop_iteration=20, progress=false)</code></pre><p>After 20 steps the no-slip walls hold to <code>1.1e-16</code> and the interior shear layer has decayed slightly (<code>max|u_x| = 0.985</code>, from 1.0).</p><h2 id="Neumann-Boundary-Conditions"><a class="docs-heading-anchor" href="#Neumann-Boundary-Conditions">Neumann Boundary Conditions</a><a id="Neumann-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Neumann-Boundary-Conditions" title="Permalink"></a></h2><p>Specify the derivative (flux) at the boundary.</p><h3 id="Basic-Setup-2"><a class="docs-heading-anchor" href="#Basic-Setup-2">Basic Setup</a><a class="docs-heading-anchor-permalink" href="#Basic-Setup-2" title="Permalink"></a></h3><pre><code class="language-julia hljs">T = ScalarField(dom, &quot;T&quot;)
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,), Float64)
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,), Float64)
+
+problem = LBVP([T, tau_T1, tau_T2])
+
+# Register the lifted tau terms (2nd-order problem -&gt; 2nd-derivative basis)
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_T1, lb2, -1), l2=lift(tau_T2, lb2, -2), source=0.0)
+
+add_equation!(problem, &quot;Δ(T) + l1 + l2 = source&quot;)
+
+# Neumann: prescribed flux at z=0, Dirichlet at z=1
+add_bc!(problem, &quot;∂z(T)(z=0) = 1&quot;)
+add_bc!(problem, &quot;T(z=1) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(T, :g)</code></pre><p>The exact solution is <code>T = z - 1</code>, and the solve returns it to <code>2.5e-16</code>.</p><p>Pair each Neumann condition with something that pins the level of the solution. Two Neumann conditions on a Laplacian leave the solution defined only up to a constant; the tau solve will still return <em>an</em> answer, but it is not the one you meant.</p><h3 id="Per-Component-Conditions-(Stress-Free-Walls)"><a class="docs-heading-anchor" href="#Per-Component-Conditions-(Stress-Free-Walls)">Per-Component Conditions (Stress-Free Walls)</a><a id="Per-Component-Conditions-(Stress-Free-Walls)-1"></a><a class="docs-heading-anchor-permalink" href="#Per-Component-Conditions-(Stress-Free-Walls)" title="Permalink"></a></h3><p>A BC applies to a <strong>whole variable</strong>. <code>add_bc!(problem, &quot;u(z=0) = 0&quot;)</code> constrains every component of the <code>VectorField</code> <code>u</code>, and there is no string syntax that reaches into a single component: <code>&quot;u_x(z=0) = 0&quot;</code> does not resolve to a component of <code>u</code>, so the four per-component strings are counted as four extra constraint rows and the problem fails validation (<code>Number of equations (7) does not match number of variables (5)</code>).</p><p>To impose different conditions on different components — a stress-free wall, where <code>∂u_x/∂z = 0</code> but <code>u_z = 0</code> — declare the components as separate <code>ScalarField</code>s, each with its own tau pair:</p><pre><code class="language-julia hljs">ux = ScalarField(dom, &quot;ux&quot;)
+uz = ScalarField(dom, &quot;uz&quot;)
+
+tx1 = ScalarField(dist, &quot;tx1&quot;, (x_basis,), Float64)
+tx2 = ScalarField(dist, &quot;tx2&quot;, (x_basis,), Float64)
+tz1 = ScalarField(dist, &quot;tz1&quot;, (x_basis,), Float64)
+tz2 = ScalarField(dist, &quot;tz2&quot;, (x_basis,), Float64)
+
+problem = LBVP([ux, uz, tx1, tx2, tz1, tz2])
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; lx1=lift(tx1, lb2, -1), lx2=lift(tx2, lb2, -2),
+                         lz1=lift(tz1, lb2, -1), lz2=lift(tz2, lb2, -2))
+
+add_equation!(problem, &quot;Δ(ux) + lx1 + lx2 = -2&quot;)
+add_equation!(problem, &quot;Δ(uz) + lz1 + lz2 = 0&quot;)
+
+add_bc!(problem, &quot;ux(z=0) = 0&quot;)       # no-slip at the bottom
+add_bc!(problem, &quot;∂z(ux)(z=1) = 0&quot;)   # stress-free at the top
+add_bc!(problem, &quot;uz(z=0) = 0&quot;)
+add_bc!(problem, &quot;uz(z=1) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(ux, :g)</code></pre><p>The exact solution is <code>ux = 2z - z²</code> (zero value at the bottom, zero slope at the top), recovered to <code>1.7e-16</code>.</p><h2 id="Robin-Boundary-Conditions"><a class="docs-heading-anchor" href="#Robin-Boundary-Conditions">Robin Boundary Conditions</a><a id="Robin-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Robin-Boundary-Conditions" title="Permalink"></a></h2><p>Linear combination: <span>$\alpha u + \beta \frac{\partial u}{\partial n} = \gamma$</span></p><p>Parameters registered with <code>add_parameters!</code> may be used both as <strong>coefficients</strong> on the left-hand side of a BC and inside a <strong>constant right-hand side</strong> — the product <code>h*T_amb</code> is folded to a number when the BC row is built.</p><pre><code class="language-julia hljs">T = ScalarField(dom, &quot;T&quot;)
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,), Float64)
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,), Float64)
+
+problem = LBVP([T, tau_T1, tau_T2])
+
+# Register the lifted tau terms and the scalar parameters
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_T1, lb2, -1), l2=lift(tau_T2, lb2, -2),
+                         h=10.0, k=1.0, T_amb=25.0, source=0.0)
+
+add_equation!(problem, &quot;Δ(T) + l1 + l2 = source&quot;)
+
+# Convective heat transfer at top: h*T + k*dT/dz = h*T_ambient
+add_bc!(problem, &quot;h*T(z=1) + k*∂z(T)(z=1) = h*T_amb&quot;)
+
+# Dirichlet at bottom
+add_bc!(problem, &quot;T(z=0) = 100&quot;)
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(T, :g)</code></pre><p>The solve returns <code>T = 100 - 68.18 z</code>, and the Robin residual <code>h·T(1) + k·T&#39;(1)</code> comes out at exactly <code>250.0 = h·T_amb</code>.</p><div class="admonition is-warning" id="A-name-in-a-BC-must-be-a-registered-parameter-d2ecfbe88149d1f3"><header class="admonition-header">A name in a BC must be a registered parameter<a class="admonition-anchor" href="#A-name-in-a-BC-must-be-a-registered-parameter-d2ecfbe88149d1f3" title="Permalink"></a></header><div class="admonition-body"><p>The folding only reaches numbers and names passed to <code>add_parameters!</code>. A plain Julia global — <code>Tbot = 3.0</code> in your script, never registered — is <strong>not</strong> in scope: the BC is enforced as <strong>zero</strong>. It is at least loud about it (<code>Unknown variable: Tbot</code>, then <code>right-hand side … enforced as ZERO</code>). See <a href="#Constants-and-parameters-in-BC-expressions">Constants and parameters in BC expressions</a> for the full rules.</p></div></div><h2 id="Periodic-Boundary-Conditions"><a class="docs-heading-anchor" href="#Periodic-Boundary-Conditions">Periodic Boundary Conditions</a><a id="Periodic-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Periodic-Boundary-Conditions" title="Permalink"></a></h2><p>Periodic boundaries are automatically handled by Fourier bases - no tau fields needed!</p><pre><code class="language-julia hljs"># Fourier basis implies periodicity
+periodic_x = RealFourier(coords[&quot;x&quot;]; size=128, bounds=(0.0, 2π))
+
+# No boundary conditions or tau fields needed for x-direction
+# The Fourier representation automatically enforces u(x=0) = u(x=2π)</code></pre><div class="admonition is-warning" id="Mixing-Periodic-and-Non-Periodic-b7ce6b520a677dde"><header class="admonition-header">Mixing Periodic and Non-Periodic<a class="admonition-anchor" href="#Mixing-Periodic-and-Non-Periodic-b7ce6b520a677dde" title="Permalink"></a></header><div class="admonition-body"><p>When using Fourier (periodic) and Chebyshev (non-periodic) bases together, only create tau fields and boundary conditions for the non-periodic directions.</p></div></div><h2 id="The-lift()-Operator"><a class="docs-heading-anchor" href="#The-lift()-Operator">The lift() Operator</a><a id="The-lift()-Operator-1"></a><a class="docs-heading-anchor-permalink" href="#The-lift()-Operator" title="Permalink"></a></h2><p>The <code>lift(tau, derivative_basis(basis, order), -k)</code> operator places a tau correction at a specific coefficient row of the bounded (Chebyshev/Jacobi) basis. You build the lifted terms once and register them as parameters, then reference those parameter names in the equation string:</p><pre><code class="language-julia hljs">u    = ScalarField(dom, &quot;u&quot;)
+tau1 = ScalarField(dist, &quot;tau1&quot;, (x_basis,), Float64)
+tau2 = ScalarField(dist, &quot;tau2&quot;, (x_basis,), Float64)
+problem = LBVP([u, tau1, tau2])
+
+lb2 = derivative_basis(z_basis, 2)   # direct 2nd-order equation -&gt; 2nd-derivative basis
+add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)</code></pre><p>The order index <code>-1</code> lifts into the last coefficient row, <code>-2</code> the second-to-last, and so on. The number of taus (and lift terms) must match the operator order in the bounded direction.</p><h3 id="Which-derivative_basis-order?"><a class="docs-heading-anchor" href="#Which-derivative_basis-order?">Which derivative_basis order?</a><a id="Which-derivative_basis-order?-1"></a><a class="docs-heading-anchor-permalink" href="#Which-derivative_basis-order?" title="Permalink"></a></h3><p>The lift basis order follows the order of the operator you are lifting <strong>into</strong>, and that depends on which formulation you wrote:</p><table><tr><th style="text-align: right">Formulation</th><th style="text-align: right">Lift basis</th><th style="text-align: right">Tau layout</th></tr><tr><td style="text-align: right">Direct 2nd-order equation, e.g. <code>Δ(u) + l1 + l2 = f</code></td><td style="text-align: right"><code>derivative_basis(z_basis, 2)</code></td><td style="text-align: right">two taus, lifted at <code>-1</code> and <code>-2</code></td></tr><tr><td style="text-align: right">First-order reduction, <code>grad_u = grad(u) + ez*lift(tau_u1, …, -1)</code> then <code>div(grad_u)</code></td><td style="text-align: right"><code>derivative_basis(z_basis, 1)</code></td><td style="text-align: right">two taus, each lifted at <code>-1</code> — one into the gradient, one into the equation</td></tr><tr><td style="text-align: right">Direct 4th-order equation (∇⁴)</td><td style="text-align: right"><code>derivative_basis(z_basis, 4)</code></td><td style="text-align: right">four taus, lifted at <code>-1 … -4</code></td></tr></table><p>The first-order reduction is <strong>order 1, not 2</strong> — this is the form used in the IVP examples below and in the Rayleigh-Bénard tutorial. Both formulations spend the same budget: two taus and two BCs per field per wall pair.</p><div class="admonition is-info" id="The-basis-argument-is-bookkeeping;-the-mode-index-is-what-assembles-5ccedf9dbf134619"><header class="admonition-header">The basis argument is bookkeeping; the mode index is what assembles<a class="admonition-anchor" href="#The-basis-argument-is-bookkeeping;-the-mode-index-is-what-assembles-5ccedf9dbf134619" title="Permalink"></a></header><div class="admonition-body"><p><code>subproblem_matrix(::Lift, …)</code> builds the lift column from the subproblem&#39;s own Chebyshev basis and the mode index <code>-k</code> alone — the <code>derivative_basis(…)</code> object you pass is not consulted when the matrix is assembled. Passing the wrong order therefore does <strong>not</strong> raise an error, and the 2nd-order Poisson example above returns a bit-identical answer with <code>derivative_basis(z_basis, 1)</code>. Get the order right anyway: it documents the formulation, and it is what the rest of the framework (and any future matrix builder) will read.</p></div></div><h3 id="Mode-Selection-Guidelines"><a class="docs-heading-anchor" href="#Mode-Selection-Guidelines">Mode Selection Guidelines</a><a id="Mode-Selection-Guidelines-1"></a><a class="docs-heading-anchor-permalink" href="#Mode-Selection-Guidelines" title="Permalink"></a></h3><table><tr><th style="text-align: right">Operator Order</th><th style="text-align: right">Number of BCs</th><th style="text-align: right">Number of lift() terms</th><th style="text-align: right">derivative_basis order</th><th style="text-align: right">Lift indices</th></tr><tr><td style="text-align: right">1st (∂/∂z)</td><td style="text-align: right">1</td><td style="text-align: right">1</td><td style="text-align: right">1</td><td style="text-align: right">-1</td></tr><tr><td style="text-align: right">2nd (∂²/∂z²)</td><td style="text-align: right">2</td><td style="text-align: right">2</td><td style="text-align: right">2</td><td style="text-align: right">-1, -2</td></tr><tr><td style="text-align: right">4th (∇⁴)</td><td style="text-align: right">4</td><td style="text-align: right">4</td><td style="text-align: right">4</td><td style="text-align: right">-1, -2, -3, -4</td></tr></table><h3 id="Example:-Fourth-Order-Problem"><a class="docs-heading-anchor" href="#Example:-Fourth-Order-Problem">Example: Fourth-Order Problem</a><a id="Example:-Fourth-Order-Problem-1"></a><a class="docs-heading-anchor-permalink" href="#Example:-Fourth-Order-Problem" title="Permalink"></a></h3><p>For a biharmonic equation (∇⁴u = f) with 4 boundary conditions:</p><pre><code class="language-julia hljs">u = ScalarField(dom, &quot;u&quot;)
+
+# Four tau fields needed
+tau_u1 = ScalarField(dist, &quot;tau_u1&quot;, (x_basis,), Float64)
+tau_u2 = ScalarField(dist, &quot;tau_u2&quot;, (x_basis,), Float64)
+tau_u3 = ScalarField(dist, &quot;tau_u3&quot;, (x_basis,), Float64)
+tau_u4 = ScalarField(dist, &quot;tau_u4&quot;, (x_basis,), Float64)
+
+problem = LBVP([u, tau_u1, tau_u2, tau_u3, tau_u4])
+
+# Register the lifted tau terms (4th-order problem -&gt; 4th-derivative basis)
+lb4 = derivative_basis(z_basis, 4)
+add_parameters!(problem; l1=lift(tau_u1, lb4, -1), l2=lift(tau_u2, lb4, -2),
+                         l3=lift(tau_u3, lb4, -3), l4=lift(tau_u4, lb4, -4), f=1.0)
+
+# Biharmonic equation with all four lifted tau terms
+add_equation!(problem, &quot;Δ(Δ(u)) + l1 + l2 + l3 + l4 = f&quot;)
+
+# Clamped beam: u = 0 and du/dz = 0 at both ends
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;∂z(u)(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_bc!(problem, &quot;∂z(u)(z=1) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)
+ensure_layout!(u, :g)</code></pre><p>The clamped beam with a unit load has the exact solution <code>u = z²(1-z)²/24</code>, which the solve reproduces to <code>1.4e-18</code>.</p><h2 id="Complete-Examples"><a class="docs-heading-anchor" href="#Complete-Examples">Complete Examples</a><a id="Complete-Examples-1"></a><a class="docs-heading-anchor-permalink" href="#Complete-Examples" title="Permalink"></a></h2><h3 id="Channel-Flow-(Poiseuille-Flow)"><a class="docs-heading-anchor" href="#Channel-Flow-(Poiseuille-Flow)">Channel Flow (Poiseuille Flow)</a><a id="Channel-Flow-(Poiseuille-Flow)-1"></a><a class="docs-heading-anchor-permalink" href="#Channel-Flow-(Poiseuille-Flow)" title="Permalink"></a></h3><p>A channel driven by a constant pressure gradient. The forcing enters the explicit right-hand side as a parameter times a unit vector, <code>- dpdx*ex</code>; the scalar coefficient is honoured (doubling <code>dpdx</code> doubles the start-up velocity).</p><pre><code class="language-julia hljs">using Tarang
+
+Lx, Lz = 2π, 1.0
+Nx, Nz = 16, 16
+nu   = 0.01
+dpdx = -1.0
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+x_basis = RealFourier(coords[&quot;x&quot;]; size=Nx, bounds=(0.0, Lx))
+z_basis = ChebyshevT(coords[&quot;z&quot;];  size=Nz, bounds=(0.0, Lz))
+dom = Domain(dist, (x_basis, z_basis))
+
+p = ScalarField(dom, &quot;p&quot;)
+u = VectorField(dom, &quot;u&quot;)
+
+# First-order tau fields
+tau_p  = ScalarField(dist, &quot;tau_p&quot;, (), Float64)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,), Float64)
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,), Float64)
+
+# First-order viscous operator
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(z_basis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u     = grad(u) + ez * τ_lift(tau_u1)
+
+problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+add_parameters!(problem, nu=nu, dpdx=dpdx, ex=ex, grad_u=grad_u, τ_lift=τ_lift)
+
+# Continuity with tau_p (removes degeneracy)
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+
+# Momentum (vector form) — dpdx is the driving pressure gradient
+add_equation!(problem, &quot;∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u) - dpdx*ex&quot;)
+
+# No-slip at both walls (vector notation)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+add_bc!(problem, &quot;integ(p) = 0&quot;)   # pressure gauge
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-3)
+run!(solver; stop_iteration=50, progress=false)</code></pre><p>Starting from rest, the flow is still in its linear start-up phase after 50 steps (<code>t = 0.05</code>): the measured peak is <code>max u_x = 0.0500</code>, matching <code>|dpdx|·t = 0.05</code>, and no-slip holds at both walls to <code>7e-18</code>. The steady Poiseuille profile it is heading for is <code>u_x = |dpdx|·z(Lz - z) / (2ν)</code>, which takes <code>t ≫ Lz²/ν</code> to establish.</p><div class="admonition is-info" id="Two-things-to-know-about-this-forcing-46e3f44dfb2b2dd4"><header class="admonition-header">Two things to know about this forcing<a class="admonition-anchor" href="#Two-things-to-know-about-this-forcing-46e3f44dfb2b2dd4" title="Permalink"></a></header><div class="admonition-body"><ul><li>A <strong>non-uniform</strong> body force cannot be written as <code>parameter * unit_vector</code>. Build a real <code>VectorField</code> on the domain, fill its components in grid space, and register it with <code>add_parameters!(problem, F=F)</code>; then write <code>… = -u⋅∇(u) + F</code>.</li><li>Naming the parameter <code>dpdx</code> trips a false-positive parser warning — <code>Linear term on RHS: &#39;p&#39; appears linearly on RHS</code> — because the name <em>contains</em> the variable name <code>p</code>. It is harmless (the run above is correct); rename the parameter (e.g. <code>fx</code>) if you want a clean log.</li></ul></div></div><h3 id="Rayleigh-Bénard-Convection"><a class="docs-heading-anchor" href="#Rayleigh-Bénard-Convection">Rayleigh-Bénard Convection</a><a id="Rayleigh-Bénard-Convection-1"></a><a class="docs-heading-anchor-permalink" href="#Rayleigh-Bénard-Convection" title="Permalink"></a></h3><p>The full convection problem: momentum, continuity and temperature, with a first-order reduction on both <code>u</code> and <code>T</code>.</p><pre><code class="language-julia hljs">using Tarang
+
+Lx, Lz = 4.0, 1.0
+Nx, Nz = 32, 16
+Ra, Pr = 2e4, 1.0
+
+coords = CartesianCoordinates(&quot;x&quot;, &quot;z&quot;)
+dist   = Distributor(coords; dtype=Float64, device=CPU())
+x_basis = RealFourier(coords[&quot;x&quot;]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+z_basis = ChebyshevT(coords[&quot;z&quot;];  size=Nz, bounds=(0.0, Lz), dealias=3/2)
+dom = Domain(dist, (x_basis, z_basis))
+
+p = ScalarField(dom, &quot;p&quot;)
+T = ScalarField(dom, &quot;T&quot;)
+u = VectorField(dom, &quot;u&quot;)
+
+tau_p  = ScalarField(dist, &quot;tau_p&quot;,  (), Float64)
+tau_T1 = ScalarField(dist, &quot;tau_T1&quot;, (x_basis,), Float64)
+tau_T2 = ScalarField(dist, &quot;tau_T2&quot;, (x_basis,), Float64)
+tau_u1 = VectorField(dist, coords, &quot;tau_u1&quot;, (x_basis,), Float64)
+tau_u2 = VectorField(dist, coords, &quot;tau_u2&quot;, (x_basis,), Float64)
+
+# First-order substitutions (lift basis order 1)
+ex, ez     = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(z_basis, 1)
+τ_lift(A)  = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
+
+problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+add_parameters!(problem, nu=Pr, buoy=Ra*Pr, ez=ez,
+                grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
+
+add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
+add_equation!(problem, &quot;∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)&quot;)
+add_equation!(problem, &quot;∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)&quot;)
+
+# Boundary conditions (vector notation for velocity)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)   # No-slip bottom
+add_bc!(problem, &quot;u(z=1) = 0&quot;)   # No-slip top
+add_bc!(problem, &quot;T(z=0) = 1&quot;)   # Hot bottom
+add_bc!(problem, &quot;T(z=1) = 0&quot;)   # Cold top
+add_bc!(problem, &quot;integ(p) = 0&quot;) # Pressure gauge
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-4)
+
+# Conduction profile + damped noise
+x, z = local_grids(dist, x_basis, z_basis)
+fill_random!(T, &quot;g&quot;; seed=42, distribution=&quot;normal&quot;, scale=1e-3)
+get_grid_data(T) .*= z&#39; .* (Lz .- z&#39;)
+get_grid_data(T) .+= 1.0 .- z&#39; ./ Lz
+ensure_layout!(T, :c)
+
+run!(solver; stop_iteration=20, progress=false)</code></pre><p>After 20 steps the buoyancy is driving a weak vertical flow (<code>max|u_z| = 7.6e-3</code>), and the wall temperatures hold to machine precision: <code>max|T(z=0) - 1| = 0.0</code>, <code>max|T(z=Lz)| = 1.6e-17</code>.</p><div class="admonition is-warning" id="Run-this-example-serially-f58c3e4121cf2233"><header class="admonition-header">Run this example serially<a class="admonition-anchor" href="#Run-this-example-serially-f58c3e4121cf2233" title="Permalink"></a></header><div class="admonition-body"><p>A <code>(Fourier x, Chebyshev z)</code> domain cannot be decomposed as written: Tarang stops at <code>np ≥ 2</code> with <em>&quot;the decomposed (trailing) axis/axes [2] are non-Fourier … a Chebyshev axis cannot be decomposed&quot;</em>, because the DCT needs the whole <code>z</code> axis local to each rank. Putting the Chebyshev axis first gets past that guard, but the 1-D boundary tau fields then hit the &quot;MPI parallelization is not supported for 1D problems&quot; guard. The LBVPs above (Poisson, Neumann, Robin, biharmonic) are unaffected — they are solved per Fourier mode.</p></div></div><h2 id="Time-and-Space-Dependent-Boundary-Conditions"><a class="docs-heading-anchor" href="#Time-and-Space-Dependent-Boundary-Conditions">Time- and Space-Dependent Boundary Conditions</a><a id="Time-and-Space-Dependent-Boundary-Conditions-1"></a><a class="docs-heading-anchor-permalink" href="#Time-and-Space-Dependent-Boundary-Conditions" title="Permalink"></a></h2><p>An <code>IVP</code> supports BCs whose value varies in time, space, or both. The BC expression string is re-evaluated at solver build time (for space-dependent) and at every time step / RK stage (for time-dependent), and the result is projected onto the appropriate Fourier mode for each per-subproblem solve.</p><p>Nothing extra is required — no <code>add_coordinate_field!</code> call, no <code>set_time_variable!</code> — the solver auto-registers coordinate arrays from the problem&#39;s bases and uses <code>t</code> as the default time variable.</p><div class="admonition is-info" id="Time-stepped-problems-only-cacbdefd12a07560"><header class="admonition-header">Time-stepped problems only<a class="admonition-anchor" href="#Time-stepped-problems-only-cacbdefd12a07560" title="Permalink"></a></header><div class="admonition-body"><p>This machinery is driven by the stepper. In an <code>LBVP</code>/<code>NLBVP</code> a space-dependent BC string is currently evaluated as <strong>zero</strong> — use a constant BC there.</p></div></div><h3 id="Time-dependent-BC-(scalar)"><a class="docs-heading-anchor" href="#Time-dependent-BC-(scalar)">Time-dependent BC (scalar)</a><a id="Time-dependent-BC-(scalar)-1"></a><a class="docs-heading-anchor-permalink" href="#Time-dependent-BC-(scalar)" title="Permalink"></a></h3><pre><code class="language-julia hljs">add_bc!(problem, &quot;T(z=0) = 1.0 + 0.1 * cos(2*pi*t)&quot;)</code></pre><p>The BC value is re-evaluated <strong>at every RK stage time</strong> <code>t + c[i]·dt</code>, so multi-stage methods retain full formal order of accuracy even for rapidly-varying BCs. Internally this goes through <code>update_time_dependent_bcs!(bc_manager, stage_time)</code> followed by <code>_apply_bc_values_to_equations!</code>, and the resulting <code>ConstantOperator(value)</code> is written into <code>equation_data[eq_idx][&quot;F&quot;]</code>.</p><p>Measured on a 2D diffusion problem after 100 steps to <code>t = 0.1</code>, the enforced wall value tracks <code>1 + 0.1·cos(2πt)</code> to <code>2.2e-16</code>.</p><h3 id="Space-dependent-BC-(1D-variation-in-2D-problem)"><a class="docs-heading-anchor" href="#Space-dependent-BC-(1D-variation-in-2D-problem)">Space-dependent BC (1D variation in 2D problem)</a><a id="Space-dependent-BC-(1D-variation-in-2D-problem)-1"></a><a class="docs-heading-anchor-permalink" href="#Space-dependent-BC-(1D-variation-in-2D-problem)" title="Permalink"></a></h3><pre><code class="language-julia hljs">add_bc!(problem, &quot;T(z=0) = 1.0 + 0.1 * sin(2*pi*x/4.0)&quot;)
+add_bc!(problem, &quot;T(z=1) = 0&quot;)</code></pre><p>At solver build, <code>_apply_bc_values_to_equations!(solver, 0.0)</code> evaluates <code>&quot;1.0 + 0.1*sin(2*pi*x/4.0)&quot;</code> against the auto-registered global <code>x</code> coordinate array, yielding an <code>Nx</code>-long grid-space array. This is wrapped in an <code>ArrayOperator</code> and stored in <code>equation_data[eq_idx][&quot;F&quot;]</code>. At each stepper call, <code>gather_alg_F!</code> runs <code>_bc_array_projection</code> on this array — taking an unnormalized <code>FFTW.rfft</code> and extracting each subproblem&#39;s own Fourier-mode coefficient.</p><p>The bottom-wall temperature is thus enforced at <code>T(x, z=0) = 1 + 0.1·sin(2πx/Lx)</code> in grid space — verified to <code>3.3e-15</code>.</p><h3 id="Space-time-dependent-BC"><a class="docs-heading-anchor" href="#Space-time-dependent-BC">Space + time dependent BC</a><a id="Space-time-dependent-BC-1"></a><a class="docs-heading-anchor-permalink" href="#Space-time-dependent-BC" title="Permalink"></a></h3><pre><code class="language-julia hljs">add_bc!(problem, &quot;T(z=0) = 1.0 + 0.1 * sin(2*pi*x/4.0) * cos(2*pi*t)&quot;)</code></pre><p>Combines both paths. The spatial pattern is re-projected at each stage time, so the stepper always sees the correct instantaneous BC. This is what enables oscillating boundary temperature patterns, traveling thermal waves at the wall, etc. Measured after 100 steps to <code>t = 0.1</code>, the enforced wall value tracks <code>1 + 0.1·sin(2πx/Lx)·cos(2πt)</code> to <code>2.0e-15</code>.</p><h3 id="3D-problems:-both-periodic-axes"><a class="docs-heading-anchor" href="#3D-problems:-both-periodic-axes">3D problems: both periodic axes</a><a id="3D-problems:-both-periodic-axes-1"></a><a class="docs-heading-anchor-permalink" href="#3D-problems:-both-periodic-axes" title="Permalink"></a></h3><p>In a 3D problem with two periodic axes <code>(x, y)</code>, a BC expression may vary along <code>x</code>, along <code>y</code>, or along both.</p><p>A 1D expression in <code>x</code> alone is broadcast along <code>y</code> — &quot;uniform in <code>y</code>&quot;:</p><pre><code class="language-julia hljs"># 3D problem; this is constant in y by design
+add_bc!(problem, &quot;T(z=0) = sin(2*pi*x/4.0)&quot;)</code></pre><p>The broadcast-and-FFT machinery places <code>rfft(sin(2π x/Lx))[k_x] · Ny</code> at the DC <code>y</code> mode and zero at non-DC <code>y</code> modes, matching the grid-space meaning exactly. Measured error <code>3.3e-16</code> on an 8×8×8 <code>RealFourier</code> × <code>RealFourier</code> × <code>ChebyshevT</code> problem.</p><p>A genuinely two-axis expression works as well: it is evaluated as an <code>(Nx, Ny)</code> grid-space array, and each <code>(kx, ky)</code> subproblem extracts its own coefficient. Either of these is a valid single <code>z=0</code> condition:</p><pre><code class="language-julia hljs"># varies along y only
+add_bc!(problem, &quot;T(z=0) = cos(2*pi*y/2.0)&quot;)
+
+# varies along both axes (use ONE of these, not both)
+# add_bc!(problem, &quot;T(z=0) = sin(2*pi*x/4.0) * cos(2*pi*y/2.0)&quot;)</code></pre><p>On the same 8×8×8 problem the enforced wall matches the intended grid-space pattern to <code>3.3e-16</code> for the <code>y</code>-only form and <code>4.4e-16</code> for the <code>x·y</code> product.</p><div class="admonition is-warning" id="Bake-the-box-size-in-as-a-literal,-not-as-Lx/Ly-a5f8946e88a43974"><header class="admonition-header">Bake the box size in as a literal, not as `Lx`/`Ly`<a class="admonition-anchor" href="#Bake-the-box-size-in-as-a-literal,-not-as-Lx/Ly-a5f8946e88a43974" title="Permalink"></a></header><div class="admonition-body"><p>Note the <code>2.0</code> and <code>4.0</code> above rather than <code>Ly</code> and <code>Lx</code>. This is the coordinate-expression rule from the table below, and it bites hardest here. <code>&quot;T(z=0) = cos(2*pi*y/Ly)&quot;</code> does <strong>not</strong> fail because of the <code>y</code> axis — it fails because <code>Ly</code> is a <em>name</em>, and a coordinate expression cannot see the problem&#39;s parameters. It is enforced as <strong>zero</strong>, and says so (<code>Unknown variable: Ly</code>, then <code>right-hand side … enforced as ZERO</code>). Registering <code>Ly</code> with <code>add_parameters!</code> does not help; interpolate the number into the string instead.</p></div></div><h3 id="Constants-and-parameters-in-BC-expressions"><a class="docs-heading-anchor" href="#Constants-and-parameters-in-BC-expressions">Constants and parameters in BC expressions</a><a id="Constants-and-parameters-in-BC-expressions-1"></a><a class="docs-heading-anchor-permalink" href="#Constants-and-parameters-in-BC-expressions" title="Permalink"></a></h3><p>A BC right-hand side is read in one of two ways, and it matters which. A <strong>constant</strong> right-hand side is folded to a number — arithmetic over numeric literals and registered parameters is fine. An <strong>expression</strong> right-hand side (one that mentions a coordinate or <code>t</code>) goes through a different evaluator, and that one sees the coordinate arrays and <code>t</code> but <strong>not</strong> the problem&#39;s parameters:</p><table><tr><th style="text-align: right">right-hand side</th><th style="text-align: right">how it is read</th><th style="text-align: right">works?</th></tr><tr><td style="text-align: right"><code>&quot;T(z=0) = 1&quot;</code></td><td style="text-align: right">bare literal</td><td style="text-align: right">✅</td></tr><tr><td style="text-align: right"><code>&quot;T(z=0) = Tbot&quot;</code>, with <code>add_parameters!(problem, Tbot=3.0)</code></td><td style="text-align: right">bare parameter name</td><td style="text-align: right">✅</td></tr><tr><td style="text-align: right"><code>&quot;T(z=0) = 10*25&quot;</code>, <code>&quot;= h*T_amb&quot;</code>, <code>&quot;= 1/Re&quot;</code></td><td style="text-align: right">compound constant, folded</td><td style="text-align: right">✅</td></tr><tr><td style="text-align: right"><code>&quot;T(z=0) = Tbot&quot;</code>, with <code>Tbot</code> an unregistered Julia global</td><td style="text-align: right">unknown name</td><td style="text-align: right">❌ warns, enforced as <strong>zero</strong></td></tr><tr><td style="text-align: right"><code>&quot;T(z=0) = 1.0 + 0.1*sin(2*pi*x/4.0)&quot;</code></td><td style="text-align: right">coordinate/time expression, numeric literals</td><td style="text-align: right">✅</td></tr><tr><td style="text-align: right"><code>&quot;T(z=0) = 1.0 + amplitude*sin(2*pi*x/Lx)&quot;</code></td><td style="text-align: right">coordinate expression naming parameters</td><td style="text-align: right">❌ warns, enforced as <strong>zero</strong></td></tr></table><p>So a <em>constant</em> BC may name parameters freely:</p><pre><code class="language-julia hljs">add_parameters!(problem, h=10.0, k=1.0, T_amb=25.0)
+add_bc!(problem, &quot;h*T(z=1) + k*∂z(T)(z=1) = h*T_amb&quot;)</code></pre><p>but an <em>expression</em> BC may not — bake its constants in with Julia string interpolation instead:</p><pre><code class="language-julia hljs">Lx = 4.0
+amplitude = 0.1
+add_bc!(problem, &quot;T(z=0) = 1.0 + $amplitude * sin(2*pi*x/$Lx)&quot;)</code></pre><p>An unsupported right-hand side is enforced as zero, but it says so: you get <code>Unknown variable: amplitude</code> followed by <code>Boundary condition right-hand side of type … is not supported and is being enforced as ZERO</code>. Treat that warning as an error — the solve will otherwise &quot;succeed&quot; against the wrong boundary condition.</p><h3 id="Common-pitfalls"><a class="docs-heading-anchor" href="#Common-pitfalls">Common pitfalls</a><a id="Common-pitfalls-1"></a><a class="docs-heading-anchor-permalink" href="#Common-pitfalls" title="Permalink"></a></h3><ul><li><strong>Missing coordinate field</strong> — for a BC to reference <code>x</code>, the problem must have a basis with <code>element_label == &quot;x&quot;</code>. This is automatic if you build bases with <code>coords[&quot;x&quot;]</code>, but if you have multiple coordinate systems the auto-registration may pick the wrong <code>x</code>. A <code>&quot;space-dependent BCs detected but no coordinate fields registered&quot;</code> warning at solver build means the auto-registration didn&#39;t find a matching basis.</li><li><strong>Time variable other than <code>t</code></strong> — the parser and the runtime evaluator both hard-code <code>t</code> as the time symbol. Custom time variable names aren&#39;t fully supported; use <code>t</code> in your BC expressions.</li><li><strong>Non-constant custom function</strong> — the BC string evaluator whitelists <code>sin</code>, <code>cos</code>, <code>tan</code>, <code>exp</code>, <code>log</code>, <code>sqrt</code>, <code>abs</code>, <code>sign</code>, <code>floor</code>, <code>ceil</code>, <code>round</code>, <code>rem</code>, <code>min</code>, <code>max</code>, and hyperbolic variants. Arbitrary Julia functions in BC strings are not supported; if you need a custom function, build it into the value at simulation-script level (outside the string) and register via <code>add_parameters!</code>.</li><li><strong>BCs must be declared with <code>add_bc!</code></strong> — passing a boundary condition to <code>add_equation!</code> does not register it with the BC manager. A constant BC happens to come out right; anything space- or time-dependent is then silently not enforced.</li></ul><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><h3 id="Checking-BC-Satisfaction"><a class="docs-heading-anchor" href="#Checking-BC-Satisfaction">Checking BC Satisfaction</a><a id="Checking-BC-Satisfaction-1"></a><a class="docs-heading-anchor-permalink" href="#Checking-BC-Satisfaction" title="Permalink"></a></h3><pre><code class="language-julia hljs"># After solving, verify BCs are satisfied
+function check_dirichlet_bc(field, coord, location, expected_value; tol=1e-10)
+    ensure_layout!(field, :g)
+    data = get_grid_data(field)
+
+    # Get boundary values
+    if coord == &quot;z&quot; &amp;&amp; location == :left
+        bc_values = data[:, 1]
+    elseif coord == &quot;z&quot; &amp;&amp; location == :right
+        bc_values = data[:, end]
+    end
+
+    error = maximum(abs.(bc_values .- expected_value))
+    @assert error &lt; tol &quot;BC error: $error&quot;
+
+    return error
+end
+
+# Usage
+check_dirichlet_bc(T, &quot;z&quot;, :left, 1.0)
+check_dirichlet_bc(T, &quot;z&quot;, :right, 0.0)</code></pre><p>Run against the Rayleigh-Bénard solver above, this returns <code>0.0</code> at the hot wall and <code>1.6e-17</code> at the cold wall.</p><h2 id="Troubleshooting"><a class="docs-heading-anchor" href="#Troubleshooting">Troubleshooting</a><a id="Troubleshooting-1"></a><a class="docs-heading-anchor-permalink" href="#Troubleshooting" title="Permalink"></a></h2><h3 id="Missing-or-Unused-Tau-Fields"><a class="docs-heading-anchor" href="#Missing-or-Unused-Tau-Fields">Missing or Unused Tau Fields</a><a id="Missing-or-Unused-Tau-Fields-1"></a><a class="docs-heading-anchor-permalink" href="#Missing-or-Unused-Tau-Fields" title="Permalink"></a></h3><p>There is no automatic name-based pairing between a BC and a tau field. A missing lift column, an unused tau variable, or the wrong number of scalar tau DOFs surfaces instead as a <strong>counting or shape failure</strong>:</p><table><tr><th style="text-align: right">mistake</th><th style="text-align: right">what you actually see (in the <code>LBVP</code>s above)</th></tr><tr><td style="text-align: right">BCs but no tau fields and no lift terms</td><td style="text-align: right"><code>DimensionMismatch</code> during matrix construction (the BC rows have no tau columns to land in, so the system is not square)</td></tr><tr><td style="text-align: right">a tau field declared but never lifted</td><td style="text-align: right"><code>ArgumentError: Problem validation failed: Number of equations (3) is less than number of variables (4)</code></td></tr><tr><td style="text-align: right">a BC forgotten</td><td style="text-align: right"><code>ArgumentError: Problem validation failed: Number of equations (2) is less than number of variables (3)</code></td></tr></table><p>In an <code>IVP</code> the same two mistakes read <code>Number of equations (n) does not match number of variables (m)</code> instead — that is the message the per-component <code>VectorField</code> BC above trips.</p><p><strong>Solution</strong>: create the required tau fields, include every one in the problem variables, and reference every one through a lift term:</p><pre><code class="language-julia hljs"># Wrong: no tau fields, no lift terms — the BCs have nothing to act through
+#     problem = LBVP([u])
+#     add_equation!(problem, &quot;Δ(u) = -2&quot;)
+#     add_bc!(problem, &quot;u(z=0) = 0&quot;)
+
+# Correct: create tau fields, register lifted tau parameters, add them to the equation
+u = ScalarField(dom, &quot;u&quot;)
+tau_u1 = ScalarField(dist, &quot;tau_u1&quot;, (x_basis,), Float64)
+tau_u2 = ScalarField(dist, &quot;tau_u2&quot;, (x_basis,), Float64)
+
+problem = LBVP([u, tau_u1, tau_u2])
+lb2 = derivative_basis(z_basis, 2)
+add_parameters!(problem; l1=lift(tau_u1, lb2, -1), l2=lift(tau_u2, lb2, -2))
+add_equation!(problem, &quot;Δ(u) + l1 + l2 = -2&quot;)
+add_bc!(problem, &quot;u(z=0) = 0&quot;)
+add_bc!(problem, &quot;u(z=1) = 0&quot;)
+
+solver = BoundaryValueSolver(problem)
+solve!(solver)</code></pre><h3 id="Over-Specified-System"><a class="docs-heading-anchor" href="#Over-Specified-System">Over-Specified System</a><a id="Over-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Over-Specified-System" title="Permalink"></a></h3><p><strong>Problem</strong>: Too many boundary conditions cause singular matrices.</p><p><strong>Solution</strong>: Match the number of BCs (and tau fields) to the operator order in each direction.</p><h3 id="Under-Specified-System"><a class="docs-heading-anchor" href="#Under-Specified-System">Under-Specified System</a><a id="Under-Specified-System-1"></a><a class="docs-heading-anchor-permalink" href="#Under-Specified-System" title="Permalink"></a></h3><p><strong>Error</strong> (in an <code>LBVP</code>): <code>ArgumentError: Problem validation failed: Number of equations (4) is less than number of variables (5)</code></p><p><strong>Solution</strong>: Every variable needs an equation. Bulk equations and BCs both count, so a tau field you declared but never lifted into an equation — or a BC you forgot — shows up here. Count them: <code>n_equations + n_bcs == n_variables</code>.</p><h3 id="Tau-Field-Dimension-Mismatch"><a class="docs-heading-anchor" href="#Tau-Field-Dimension-Mismatch">Tau Field Dimension Mismatch</a><a id="Tau-Field-Dimension-Mismatch-1"></a><a class="docs-heading-anchor-permalink" href="#Tau-Field-Dimension-Mismatch" title="Permalink"></a></h3><p><strong>Problem</strong>: Tau field has wrong dimensionality.</p><p><strong>Solution</strong>: Tau fields should live on the <em>boundary</em>, not the full domain:</p><pre><code class="language-julia hljs"># For a 2D problem with x-basis (periodic) and z-basis (non-periodic):
+# Boundaries are at constant z, so tau fields live on x-basis only
+tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis,), Float64)  # Correct: 1D on x
+
+# NOT:
+tau_u = ScalarField(dist, &quot;tau_u&quot;, (x_basis, z_basis), Float64)  # Wrong: 2D</code></pre><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../pages/tau_method/">Tau Method (Advanced)</a>: Mathematical details</li><li><a href="../../api/problems/">Problems API</a>: Problem definition</li><li><a href="../../api/bases/">Bases API</a>: Spectral basis selection</li><li><a href="../ivp_2d_rbc/">2D Rayleigh-Bénard Tutorial</a>: Complete example with BCs</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../ivp_3d_turbulence/">« 3D Turbulence</a><a class="docs-footer-nextpage" href="../analysis_and_output/">Analysis &amp; Output »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 23 July 2026 23:56">Thursday 23 July 2026</span>. Using Julia version 1.10.11.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
