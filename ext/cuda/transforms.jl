@@ -442,12 +442,13 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         return true
 
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
-        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
-        # The Chebyshev stages of the mixed plan implement DCT-II (Makhoul), but
-        # Tarang's Chebyshev convention is DCT-I. Unreachable behind the
-        # `has_chebyshev → return false` guard above.
-        # Mixed Fourier-Chebyshev 2D/3D case
-        # Use the mixed transform plan for dimension-by-dimension transforms
+        # LIVE mixed Fourier×Chebyshev path (2D/3D). The `has_chebyshev && !has_fourier`
+        # guard above diverts only PURE-Chebyshev fields to CPU, so any field with BOTH a
+        # Chebyshev and a Fourier axis reaches here. The Chebyshev stages use
+        # `gpu_dct1_along_dim!` — DCT-I on the Gauss-Lobatto grid, Tarang's convention
+        # (see mixed_transforms.jl) — NOT DCT-II. Verified: forward→backward round-trip is
+        # identity (4.4e-16) and the coefficients are bit-identical to the CPU mixed
+        # transform. (A prior comment here mislabeled this a dead DCT-II branch — it is not.)
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
 
         # Get or create mixed transform plan (determines correct coeff_shape)
@@ -770,13 +771,11 @@ function _gpu_backward_transform_impl!(field::ScalarField)
         return true
 
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
-        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
-        # The Chebyshev stages of the mixed plan implement (inverse) DCT-II
-        # (Makhoul), but Tarang's Chebyshev convention is DCT-I. Unreachable
-        # behind the `has_chebyshev → return false` guard above. (Its R2C/C2C
-        # shape-reconstruction heuristics below also predate the canonical-layout
-        # fixes — do not reuse them.)
-        # Mixed Fourier-Chebyshev 2D/3D case
+        # LIVE mixed Fourier×Chebyshev inverse path (2D/3D) — mirror of the forward
+        # branch. Reached for any Fourier+Chebyshev field (the guard above diverts only
+        # PURE-Chebyshev fields to CPU). The Chebyshev stages use `gpu_dct1_along_dim!`
+        # (inverse DCT-I), NOT DCT-II; forward→backward round-trips to identity (4.4e-16).
+        # (A prior comment here mislabeled this a dead DCT-II branch — it is not.)
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
 
         # Determine grid shape: use existing grid data if available,

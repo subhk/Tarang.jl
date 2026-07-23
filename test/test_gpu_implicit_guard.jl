@@ -105,4 +105,36 @@ using Tarang
         @test isapprox(Zf_dia, Zf_ref; rtol=1e-8)          # DiagonalIMEX matches it
         @test Zf_dia / Z0_dia < 0.999                      # ... and is therefore viscous too
     end
+
+    @testset "Fourier×Chebyshev channel is exempt from the guard (builds subproblems)" begin
+        # A wall-bounded 2D channel (Fourier x × Chebyshev z) is the `_gpu_coupled_state`
+        # path: it builds per-Fourier-mode subproblems (Chebyshev BVPs) that DO solve the
+        # implicit operator per mode. The GPU implicit-guard must therefore NOT refuse it —
+        # its exemption keys on subproblems being present. This pins that the guard does not
+        # break wall-bounded 2D GPU IVPs (which, unlike pure-Fourier, need no diagonal-IMEX).
+        cheb = CartesianCoordinates("x", "z")
+        cdist = Distributor(cheb; dtype=Float64)
+        xbc = RealFourier(cheb["x"]; size=16, bounds=(0.0, 2π))
+        zbc = ChebyshevT(cheb["z"]; size=16, bounds=(-1.0, 1.0))
+        dom = Domain(cdist, (xbc, zbc))
+        w = ScalarField(dom, "w")
+        prob = IVP([w]; namespace=Dict("w" => w)); add_parameters!(prob; nu=0.1)
+        Tarang.add_equation!(prob, "dt(w) - nu*lap(w) = 0")
+        s = InitialValueSolver(prob, SBDF2(); dt=1e-3)
+
+        @test haskey(prob.parameters, "subproblems")                 # coupled path built them
+        @test prob.parameters["subproblems"] !== nothing
+        @test Tarang._problem_has_implicit_linear_term(s)            # it does have an implicit L
+
+        # and it actually diffuses on CPU (baseline correctness of the channel path)
+        ensure_layout!(w, :g); g = Tarang.get_grid_data(w)
+        zc = Tarang.get_grid_coordinates(dom; on_device=false)["z"]
+        for k in axes(g, 2), i in axes(g, 1)
+            g[i, k] = sin(2π * (i - 1) / 16) * (1 - zc[k]^2)
+        end
+        n0 = maximum(abs, g)
+        for _ in 1:100; step!(s, 1e-3); end
+        ensure_layout!(w, :g)
+        @test maximum(abs, Tarang.get_grid_data(w)) / n0 < 0.999      # viscous, not dropped
+    end
 end

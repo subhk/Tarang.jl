@@ -46,6 +46,16 @@ if !_HAS_CUDA
         @test_skip "CUDA not functional on this host"
     end
 else
+    # Every test field here is small (≤ a few hundred elements), far below the
+    # default GPU_FFT_MIN_ELEMENTS=32768 threshold. Left at the default, the
+    # high-level {forward,backward}_transform! would silently take the CPU-FFTW
+    # fallback on BOTH sides — a "GPU vs CPU" comparison that never touches a single
+    # GPU transform kernel — and the explicit gpu_forward_transform! asserts below
+    # (which return false when the field is sub-threshold) would fail on real
+    # hardware. Force the real GPU path for the whole block; restored at the end.
+    _saved_gpu_fft_min = Tarang.gpu_fft_min_elements()
+    Tarang.set_gpu_fft_min_elements!(1)
+
     # Build a ScalarField on `device` with bases from makebases(coords); element
     # type `T` (Float64 or ComplexF64). Returns the field.
     function _build(device, coordnames, makebases, T)
@@ -474,4 +484,6 @@ else
         CUDA.synchronize()
         @test allocation_stats.alloc_bytes - allocated_before == 0
     end
+
+    Tarang.set_gpu_fft_min_elements!(_saved_gpu_fft_min)   # restore default for later tests
 end
