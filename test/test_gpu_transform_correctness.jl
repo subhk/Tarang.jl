@@ -46,15 +46,8 @@ if !_HAS_CUDA
         @test_skip "CUDA not functional on this host"
     end
 else
-    # Every test field here is small (≤ a few hundred elements), far below the
-    # default GPU_FFT_MIN_ELEMENTS=32768 threshold. Left at the default, the
-    # high-level {forward,backward}_transform! would silently take the CPU-FFTW
-    # fallback on BOTH sides — a "GPU vs CPU" comparison that never touches a single
-    # GPU transform kernel — and the explicit gpu_forward_transform! asserts below
-    # (which return false when the field is sub-threshold) would fail on real
-    # hardware. Force the real GPU path for the whole block; restored at the end.
-    _saved_gpu_fft_min = Tarang.gpu_fft_min_elements()
-    Tarang.set_gpu_fft_min_elements!(1)
+    # These deliberately small fields pin the strict dispatch contract: GPU
+    # transforms must stay on-device even below the legacy size threshold.
 
     # Build a ScalarField on `device` with bases from makebases(coords); element
     # type `T` (Float64 or ComplexF64). Returns the field.
@@ -126,9 +119,12 @@ else
     end
 
     # End-to-end: integrate 2D periodic diffusion (dt u = ν Δu) on CPU and GPU
-    # from the same IC and compare the final state. This validates the WHOLE GPU
-    # pipeline — forward/backward transforms, implicit RHS, timestep — not just an
-    # isolated transform, so it is the strongest single GPU correctness check.
+    # from the same IC and compare the final state. Pure-Fourier GPU IVPs do not
+    # build a global implicit matrix, so this must use the diagonal-IMEX variant:
+    # ordinary RK222 is deliberately rejected by the GPU implicit-operator guard
+    # because it would otherwise drop νΔu. This validates the WHOLE supported GPU
+    # pipeline — 2D transforms, equation-derived diagonal operator, implicit stage
+    # solves, and timestep update — not just an isolated transform.
     @testset "End-to-end GPU vs CPU: 2D periodic diffusion" begin
         ν = 0.1; dt = 1e-3; nsteps = 25       # t_final = 0.025; mode k=(1,1) → k²=2
         function run_diffusion(device)
@@ -144,7 +140,10 @@ else
             mesh = Tarang.get_grid_coordinates(dom; on_device=false)
             ic = @. sin(mesh["x"]) * cos(mesh["y"]')      # the k=(1,1) mode, (Nx,Ny) host
             get_grid_data(u) .= (device isa CPU ? ic : CuArray(ic))
-            solver = InitialValueSolver(prob, RK222(); dt=dt)
+            # Keep the CPU global-matrix solve as an independent oracle. The GPU
+            # must use its supported per-mode diagonal implicit solve.
+            ts = device isa CPU ? RK222() : DiagonalIMEX_RK222()
+            solver = InitialValueSolver(prob, ts; dt=dt)
             for _ in 1:nsteps
                 step!(solver, dt)
             end
@@ -485,5 +484,4 @@ else
         @test allocation_stats.alloc_bytes - allocated_before == 0
     end
 
-    Tarang.set_gpu_fft_min_elements!(_saved_gpu_fft_min)   # restore default for later tests
 end

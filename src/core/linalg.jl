@@ -216,35 +216,34 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
     matrix_gpu = is_gpu_array(matrix)
     x_gpu = is_gpu_array(x)
     y_gpu = is_gpu_array(y)
-    target_gpu = x_gpu || y_gpu
+    x_gpu == y_gpu || throw(ArgumentError(
+        "DenseMatVec input and output must use the same architecture; CPU/GPU staging is disabled"))
 
-    if target_gpu
-        arch = y_gpu ? architecture(y) : architecture(x)
-        matrix_dev = matrix_gpu ?
-            (architecture(matrix) == arch ? matrix : on_architecture(arch, matrix)) :
-            on_architecture(arch, matrix)
-        x_dev = x_gpu && architecture(x) == arch ? x : on_architecture(arch, x)
-        y_dev = y_gpu && architecture(y) == arch ? y : on_architecture(arch, y)
+    if x_gpu
+        arch = architecture(x)
+        architecture(y) == arch || throw(ArgumentError(
+            "DenseMatVec input and output must reside on the same GPU device"))
+        matrix_gpu && architecture(matrix) != arch && throw(ArgumentError(
+            "DenseMatVec matrix resides on a different GPU device; implicit cross-device staging is disabled"))
+        matrix_dev = matrix_gpu ? matrix : on_architecture(arch, matrix)
+        A_dev = op.transposed ? transpose(matrix_dev) : matrix_dev
 
         if β == 0.0
-            mul!(y_dev, matrix_dev, x_dev)
+            mul!(y, A_dev, x)
             if α != 1.0
-                y_dev .*= α
+                y .*= α
             end
         else
-            tmp = similar(y_dev)
-            mul!(tmp, matrix_dev, x_dev)
-            @. y_dev = α * tmp + β * y_dev
-        end
-
-        if !y_gpu
-            copyto!(y, Array(y_dev))
+            tmp = similar(y)
+            mul!(tmp, A_dev, x)
+            @. y = α * tmp + β * y
         end
 
         _record_matvec!(time() - start_time; dense=true)
         return y
     elseif matrix_gpu
-        matrix = Array(matrix)
+        throw(ArgumentError(
+            "DenseMatVec cannot apply a GPU matrix to CPU vectors; CPU fallback is disabled"))
     end
 
     use_blas = matrix isa StridedMatrix{<:BlasTypes} &&
@@ -392,26 +391,24 @@ function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix
 
     start_time = time()
 
-    is_gpu = is_gpu_array(A) || is_gpu_array(B) || is_gpu_array(C)
+    gpu_flags = (is_gpu_array(A), is_gpu_array(B), is_gpu_array(C))
+    any(gpu_flags) && !all(gpu_flags) && throw(ArgumentError(
+        "DenseDenseMatMat operands and output must use the same architecture; CPU/GPU staging is disabled"))
+    is_gpu = all(gpu_flags)
     if is_gpu
-        arch = is_gpu_array(C) ? architecture(C) : (is_gpu_array(A) ? architecture(A) : architecture(B))
-        A_dev = is_gpu_array(A) && architecture(A) == arch ? A : on_architecture(arch, A)
-        B_dev = is_gpu_array(B) && architecture(B) == arch ? B : on_architecture(arch, B)
-        C_dev = is_gpu_array(C) && architecture(C) == arch ? C : on_architecture(arch, C)
+        arch = architecture(C)
+        (architecture(A) == arch && architecture(B) == arch) || throw(ArgumentError(
+            "DenseDenseMatMat arrays must reside on the same GPU device"))
 
         if β == 0.0
-            mul!(C_dev, A_dev, B_dev)
+            mul!(C, A, B)
             if α != 1.0
-                C_dev .*= α
+                C .*= α
             end
         else
-            tmp = similar(C_dev)
-            mul!(tmp, A_dev, B_dev)
-            @. C_dev = α * tmp + β * C_dev
-        end
-
-        if !is_gpu_array(C)
-            copyto!(C, Array(C_dev))
+            tmp = similar(C)
+            mul!(tmp, A, B)
+            @. C = α * tmp + β * C
         end
 
         _record_matmat!(time() - start_time; dense=true)
@@ -470,16 +467,25 @@ function fast_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector
         end
 
         # Reshape vec(C) to matrix form (C is n2 x n1)
-        is_gpu = is_gpu_array(C) || is_gpu_array(vec_C)
+        c_gpu = is_gpu_array(C)
+        vec_gpu = is_gpu_array(vec_C)
+        c_gpu == vec_gpu || throw(ArgumentError(
+            "TensorMatMat input and output must use the same architecture; CPU/GPU staging is disabled"))
+        is_gpu = c_gpu
         if is_gpu
-            arch = is_gpu_array(C) ? architecture(C) : architecture(vec_C)
-            vec_C_dev = is_gpu_array(vec_C) && architecture(vec_C) == arch ? vec_C : on_architecture(arch, vec_C)
-            C_mat = reshape(vec_C_dev, (n2, n1))
-            temp = create_array(arch, eltype(vec_C_dev), m2, n1)
-            result_mat = create_array(arch, eltype(vec_C_dev), m2, m1)
-            A1_dev = is_gpu_array(A1) && architecture(A1) == arch ? A1 : on_architecture(arch, A1)
-            A2_dev = is_gpu_array(A2) && architecture(A2) == arch ? A2 : on_architecture(arch, A2)
-            C_dev = is_gpu_array(C) && architecture(C) == arch ? C : on_architecture(arch, C)
+            arch = architecture(C)
+            architecture(vec_C) == arch || throw(ArgumentError(
+                "TensorMatMat input and output must reside on the same GPU device"))
+            C_mat = reshape(vec_C, (n2, n1))
+            temp = create_array(arch, eltype(vec_C), m2, n1)
+            result_mat = create_array(arch, eltype(vec_C), m2, m1)
+            is_gpu_array(A1) && architecture(A1) != arch && throw(ArgumentError(
+                "TensorMatMat factor A1 resides on a different GPU device"))
+            is_gpu_array(A2) && architecture(A2) != arch && throw(ArgumentError(
+                "TensorMatMat factor A2 resides on a different GPU device"))
+            A1_dev = is_gpu_array(A1) ? A1 : on_architecture(arch, A1)
+            A2_dev = is_gpu_array(A2) ? A2 : on_architecture(arch, A2)
+            C_dev = C
         else
             C_mat = reshape(vec_C, (n2, n1))
             if length(op.temp_matrices) < 2
@@ -506,10 +512,6 @@ function fast_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector
             vec(C_dev) .= α .* vec(result_mat)
         else
             vec(C_dev) .= α .* vec(result_mat) .+ β .* vec(C_dev)
-        end
-
-        if is_gpu && !is_gpu_array(C)
-            copyto!(C, Array(C_dev))
         end
 
     else

@@ -25,6 +25,16 @@ function _fields_vector_size(fields::Vector{<:ScalarField})
     return total_size
 end
 
+function _require_cpu_vector_transport(fields::Vector{<:ScalarField}, operation::AbstractString)
+    for field in fields
+        if _field_uses_gpu(field)
+            error("$operation cannot flatten GPU-resident fields into a CPU solver vector; " *
+                  "CPU fallback is disabled. Use a device-native field or subproblem solver.")
+        end
+    end
+    return nothing
+end
+
 function _ensure_coeff_layout!(fields::Vector{<:ScalarField})
     isempty(fields) && return nothing
 
@@ -40,6 +50,8 @@ end
 
 function _copy_field_data_to_vector!(vector::AbstractVector{ComplexF64}, offset::Int,
                                      field::ScalarField, field_size::Int)
+    _field_uses_gpu(field) && error(
+        "Field-to-vector packing cannot download GPU field '$(field.name)'; CPU fallback is disabled.")
     field_size == 0 && return offset
 
     end_offset = offset + field_size - 1
@@ -91,6 +103,7 @@ function fields_to_vector!(vector::AbstractVector{ComplexF64}, fields::Vector{<:
         throw(ArgumentError("fields_to_vector! does not support MPI global gather; use fields_to_vector instead"))
     end
 
+    _require_cpu_vector_transport(fields, "fields_to_vector!")
     # Ensure all fields are in coefficient space before computing sizes:
     # Real-valued grid layouts and spectral layouts can have different lengths.
     _ensure_coeff_layout!(fields)
@@ -113,6 +126,7 @@ function fields_to_vector(fields::Vector{<:ScalarField})
     mode = _state_vector_transport_mode(fields)
     mode === :empty && return Vector{ComplexF64}()
 
+    _require_cpu_vector_transport(fields, "fields_to_vector")
     # Ensure all fields are in coefficient space before computing sizes:
     # Real-valued grid layouts and spectral layouts can have different lengths.
     _ensure_coeff_layout!(fields)
@@ -310,6 +324,10 @@ function extract_field_data_for_vector(field::ScalarField)
     if isempty(field.bases)
         return zeros(ComplexF64, 1)
     end
+
+    _field_uses_gpu(field) && error(
+        "extract_field_data_for_vector cannot download GPU field '$(field.name)'; " *
+        "CPU fallback is disabled.")
 
     ensure_layout!(field, :c)
 

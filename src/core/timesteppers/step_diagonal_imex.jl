@@ -441,7 +441,7 @@ function _distributed_diagonal_imex_applicable(solver::InitialValueSolver)
     # Host-only subsystem: _diagonal_Lhat_from_expr and the φ/update kernels build
     # and broadcast host Arrays, which throws against device-resident coefficient
     # data. GPU runs must decline here (they then error loudly in step_rk_imex!).
-    is_gpu(field_architecture(field)) && return false
+    _field_uses_gpu(field) && return false
     (field.dist.use_pencil_arrays && field.dist.size > 1) || return false
     return all(b -> b === nothing || isa(b, FourierBasis), field.bases)
 end

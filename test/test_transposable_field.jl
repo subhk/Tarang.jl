@@ -346,6 +346,19 @@ end  # if NPROCS == 1
 
 end
 
+@testset "Generic GPU Pack/Unpack Refuses CPU Staging" begin
+    data = reshape(collect(1.0:8.0), 2, 2, 2)
+    buffer = similar(vec(data))
+    counts = [length(data)]
+    displs = [0]
+    gpu = Tarang.GPU(:mock)
+
+    @test_throws ErrorException Tarang.pack_for_transpose!(
+        buffer, data, counts, displs, 3, 1, gpu)
+    @test_throws ErrorException Tarang.unpack_from_transpose!(
+        data, buffer, counts, displs, 3, 1, gpu)
+end
+
 @testset "compute_local_shapes" begin
 
     if NPROCS == 2

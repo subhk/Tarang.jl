@@ -52,6 +52,20 @@ Check if all bases are ComplexFourier (required for MPI).
 is_pure_complex_fourier_domain(bases::Tuple) = all(is_complex_fourier_basis(b) for b in bases)
 is_pure_complex_fourier_domain(bases::Vector) = all(is_complex_fourier_basis(b) for b in bases)
 
+"""Basis-level eligibility for the custom three-dimensional GPU+MPI DCT-I path."""
+function _distributed_gpu_dct_bases_supported(bases)
+    length(bases) == 3 || return false
+    all(b -> isa(b, RealFourier) || isa(b, ComplexFourier) || isa(b, ChebyshevT),
+        bases) || return false
+    any(b -> isa(b, ChebyshevT), bases) || return false
+    any(is_fourier_basis, bases) || return false
+    any(i -> isa(bases[i], RealFourier), 2:3) && return false
+    if isa(bases[1], RealFourier) && any(is_fourier_basis, bases[2:3])
+        return false
+    end
+    return true
+end
+
 """
     validate_mpi_fourier_only(bases, nprocs::Int; use_pencil_arrays::Bool=true)
 
@@ -62,9 +76,9 @@ device=CPU() with MPI (PencilArrays/PencilFFTs):
   - Mixed Fourier-Chebyshev domains: supported via decomp_dims + solve-layout transpose
 
 device=GPU() with MPI (TransposableField):
-  - Pure ComplexFourier domains only
-  - RealFourier: blocked (half-spectrum incompatible with custom transposes)
-  - Non-Fourier bases (Chebyshev): blocked (no GPU distributed Chebyshev support)
+  - Pure ComplexFourier domains
+  - Eligible 3D Fourier/Chebyshev layouts handled by the distributed DCT-I path
+  - Other RealFourier or non-Fourier layouts are rejected explicitly
 """
 function validate_mpi_fourier_only(bases, nprocs::Int; use_pencil_arrays::Bool=true)
     if nprocs <= 1
@@ -83,12 +97,18 @@ function validate_mpi_fourier_only(bases, nprocs::Int; use_pencil_arrays::Bool=t
         return true
     end
 
-    # GPU+MPI (TransposableField): pure Fourier only, ComplexFourier required
+    # GPU+MPI custom distributed DCT-I: allow exactly the basis layouts that the
+    # CUDA transform dispatcher can execute. Keep this basis-level predicate in
+    # core so Domain validation and the extension cannot drift apart.
+    _distributed_gpu_dct_bases_supported(bases) && return true
+
+    # Other GPU+MPI TransposableField domains: pure ComplexFourier only.
     if !is_pure_fourier_domain(bases)
         non_fourier = [typeof(b).name.name for b in bases if !is_fourier_basis(b)]
-        error("GPU+MPI (TransposableField, nprocs=$nprocs) only supports pure Fourier domains. " *
+        error("GPU+MPI (TransposableField, nprocs=$nprocs) does not support this basis layout. " *
               "Found non-Fourier bases: $(join(non_fourier, ", ")). " *
-              "For mixed Fourier-Chebyshev with MPI, use device=CPU() (PencilArrays).")
+              "Use an eligible 3D distributed GPU DCT-I layout or device=CPU() (PencilArrays); " *
+              "CPU staging fallback is disabled.")
     end
 
     if !is_pure_complex_fourier_domain(bases)

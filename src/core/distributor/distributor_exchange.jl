@@ -10,23 +10,14 @@
 Non-blocking allreduce operation for overlapping communication and computation.
 Returns an MPI request that can be waited on later.
 
-Note: For GPU arrays with non-CUDA-aware MPI, this function stages data through CPU.
-The caller must ensure dest is ready to receive GPU data after wait_async!.
+GPU arrays require CUDA-aware MPI; host staging is disabled.
 """
 function async_allreduce!(dest::AbstractArray, src::AbstractArray, op, dist::Distributor)
     start_time = time()
 
     # Handle GPU arrays with non-CUDA-aware MPI
     if is_gpu_array(src) && !check_cuda_aware_mpi()
-        # Stage through CPU
-        src_cpu = Array(src)
-        dest_cpu = similar(src_cpu)
-        request = MPI.Iallreduce!(src_cpu, dest_cpu, op, dist.comm)
-        dist.performance_stats.mpi_operations += 1
-        # Return a wrapper that includes staging info for wait_async!
-        # Since MPI.Request doesn't support metadata, we use a NamedTuple
-        # Retain src_cpu in the tuple to prevent GC while non-blocking MPI reads from it
-        return (request=request, staged=true, src_cpu=src_cpu, dest_cpu=dest_cpu, dest_gpu=dest)
+        error("GPU all-reduce requires CUDA-aware MPI; host staging fallback is disabled.")
     end
 
     request = MPI.Iallreduce!(src, dest, op, dist.comm)
@@ -46,10 +37,8 @@ function wait_async!(async_result::NamedTuple, dist::Distributor)
 
     MPI.Wait(async_result.request)
 
-    # If data was staged through CPU, copy back to GPU
-    if async_result.staged && hasproperty(async_result, :dest_gpu)
-        copyto!(async_result.dest_gpu, async_result.dest_cpu)
-    end
+    async_result.staged && error(
+        "Async GPU communication returned a staged result; host staging is disabled.")
 
     dist.performance_stats.communication_time += time() - start_time
 end
@@ -91,13 +80,13 @@ function neighbor_exchange!(send_left::AbstractArray, send_right::AbstractArray,
     end
 
     # CRITICAL: Check for GPU arrays with non-CUDA-aware MPI
-    # MPI operations on GPU arrays require CUDA-aware MPI or explicit staging
+    # MPI operations on GPU arrays require CUDA-aware MPI.
     if (is_gpu_array(send_left) || is_gpu_array(send_right) ||
         is_gpu_array(recv_left) || is_gpu_array(recv_right)) && !check_cuda_aware_mpi()
         error("neighbor_exchange! with GPU arrays requires CUDA-aware MPI. " *
               "Set TARANG_CUDA_AWARE_MPI=1 if your MPI supports it, or copy data " *
-              "to CPU before calling. For TransposableField operations, use the " *
-              "built-in transpose functions which handle GPU staging automatically.")
+              "to CPU before calling. TransposableField GPU operations also require " *
+              "CUDA-aware MPI; implicit staging is disabled.")
     end
 
     start_time = time()

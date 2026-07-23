@@ -30,8 +30,8 @@ end
 """
     evaluate_chebyshev_derivative!(result, operand, axis, order, layout)
 
-Evaluate Chebyshev derivative using direct DCT operations.
-Supports both CPU and GPU arrays (GPU arrays are processed on CPU for DCT).
+Evaluate a Chebyshev derivative using direct DCT operations. GPU arrays require
+the device-native DCT-I implementation; they are never processed by FFTW.
 
 This function computes Chebyshev spectral derivatives by:
 1. Applying DCT-I to grid data to get Chebyshev coefficients
@@ -46,7 +46,7 @@ Using the recurrence relation for derivatives in terms of T_n:
 c'_{n-1} = 2*n*c_n + c'_{n+1}  (backward recurrence)
 """
 # Stub overridden by TarangCUDAExt when CUDA is loaded.
-# Returns true if GPU handled the derivative, false for CPU fallback.
+# Returns true if GPU handled the derivative. The caller rejects false for GPU data.
 function _gpu_chebyshev_deriv!(result::ScalarField, operand::ScalarField,
                                 data_g::AbstractArray, axis::Int, order::Int, scale::Float64)
     return false
@@ -120,30 +120,24 @@ function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::Sca
         if _gpu_chebyshev_deriv!(result, operand, data_g, axis, order, scale)
             result.current_layout = :g
             if layout == :c
-                result_g_cpu = Array(get_grid_data(result))
-                _cheb_coeff_convert!(result_g_cpu, operand, dims, eltype(result_g_cpu))
-                get_coeff_data(result) .= copy_to_device(result_g_cpu, get_coeff_data(result))
-                result.current_layout = :c
+                ensure_layout!(result, :c)
             end
             return
         end
+        error("No on-device Chebyshev derivative supports $(typeof(data_g)); " *
+              "CPU fallback is disabled.")
     end
 
-    data_g_cpu = use_gpu ? Array(data_g) : data_g
+    data_g_cpu = data_g
 
     eltype_data = eltype(data_g_cpu)
 
     # For CPU path, write derivative result directly into the result field's
-    # pre-allocated grid buffer — avoids the intermediate zeros() allocation
-    # and the final copy. For GPU, compute on CPU then transfer.
-    if use_gpu
+    # pre-allocated grid buffer — avoids the intermediate zeros() allocation.
+    deriv_g_cpu = get_grid_data(result)
+    if deriv_g_cpu === nothing || size(deriv_g_cpu) != data_shape || eltype(deriv_g_cpu) != eltype_data
         deriv_g_cpu = zeros(eltype_data, data_shape)
-    else
-        deriv_g_cpu = get_grid_data(result)
-        if deriv_g_cpu === nothing || size(deriv_g_cpu) != data_shape || eltype(deriv_g_cpu) != eltype_data
-            deriv_g_cpu = zeros(eltype_data, data_shape)
-            set_grid_data!(result, deriv_g_cpu)
-        end
+        set_grid_data!(result, deriv_g_cpu)
     end
 
     # Pre-allocate one temp vector for higher-order (≥2) derivatives.
@@ -202,9 +196,6 @@ function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::Sca
         throw(ArgumentError("Chebyshev derivative only implemented for 1D, 2D, and 3D"))
     end
 
-    if use_gpu
-        get_grid_data(result) .= copy_to_device(deriv_g_cpu, get_grid_data(result))
-    end
     result.current_layout = :g
 
     # If coefficient space is requested, convert grid → coeff.
@@ -221,19 +212,11 @@ function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::Sca
         else
             # Pure real Chebyshev/Legendre/Jacobi domain: grid and coeff shapes/eltypes
             # coincide, so the in-place DCT-I fast path is valid.
-            if use_gpu
-                result_data_cpu = Array(get_grid_data(result))
-            else
-                result_data_cpu = get_grid_data(result)
-            end
+            result_data_cpu = get_grid_data(result)
 
             _cheb_coeff_convert!(result_data_cpu, operand, dims, eltype_data)
 
-            if use_gpu
-                get_coeff_data(result) .= copy_to_device(result_data_cpu, get_coeff_data(result))
-            else
-                get_coeff_data(result) .= result_data_cpu
-            end
+            get_coeff_data(result) .= result_data_cpu
             result.current_layout = :c
         end
     end
@@ -523,7 +506,8 @@ end
     evaluate_legendre_single_derivative!(result, operand, axis, N, scale, use_gpu)
 
 Single Legendre derivative using Jacobi approach, applied along `axis`.
-Supports both CPU and GPU arrays (GPU arrays are processed on CPU).
+GPU coefficient arrays are rejected until a device-native Legendre recurrence
+is available; they are never downloaded for CPU processing.
 
 Legendre polynomials are Jacobi polynomials with a=0, b=0.
 The standard Legendre derivative recurrence relation is:
@@ -531,14 +515,12 @@ P'_n = (2n-1)*P_{n-1} + (2n-5)*P_{n-3} + (2n-9)*P_{n-5} + ...
 """
 function evaluate_legendre_single_derivative!(result::ScalarField, operand::ScalarField, axis::Int, N::Int, scale::Float64, use_gpu::Bool=false)
     if use_gpu
-        operand_data_cpu = Array(get_coeff_data(operand))
-        result_data_cpu = zeros(eltype(operand_data_cpu), size(get_coeff_data(result)))
-    else
-        # Defensive copy when operand and result alias (happens for order >= 3)
-        operand_data_cpu = operand === result ? copy(get_coeff_data(operand)) : get_coeff_data(operand)
-        result_data_cpu = get_coeff_data(result)
-        fill!(result_data_cpu, 0.0)
+        error("Legendre derivatives are not implemented on GPU; CPU fallback is disabled.")
     end
+    # Defensive copy when operand and result alias (happens for order >= 3)
+    operand_data_cpu = operand === result ? copy(get_coeff_data(operand)) : get_coeff_data(operand)
+    result_data_cpu = get_coeff_data(result)
+    fill!(result_data_cpu, 0.0)
 
     # Legendre spectral derivative. The classic recurrence
     #     c'[k] = (2k-1) * sum_{j>k, j-k odd} c[j]
@@ -569,9 +551,6 @@ function evaluate_legendre_single_derivative!(result::ScalarField, operand::Scal
         end
     end
 
-    if use_gpu
-        get_coeff_data(result) .= copy_to_device(result_data_cpu, get_coeff_data(result))
-    end
 end
 
 # Replace the `axis`-th component of a CartesianIndex with `val`, keeping the rest —
@@ -626,12 +605,10 @@ function evaluate_jacobi_collocation_derivative!(result::ScalarField, operand::S
     D = order == 1 ? Dbase : Dbase^order
 
     data_g = get_grid_data(operand)
-    gpu = is_gpu_array(data_g)
-    data_cpu = gpu ? Array(data_g) : data_g
-    deriv = apply_matrix_along_axis(D, data_cpu, axis)
+    deriv = apply_matrix_along_axis(D, data_g, axis)
 
     ensure_layout!(result, :g)
-    set_grid_data!(result, gpu ? copy_to_device(deriv, get_grid_data(result)) : deriv)
+    set_grid_data!(result, deriv)
     result.current_layout = :g
 
     if layout == :c

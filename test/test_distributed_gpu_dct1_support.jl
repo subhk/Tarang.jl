@@ -9,7 +9,7 @@ eligible for the distributed GPU Chebyshev transform path:
   - every RealFourier axis must be on dim 1 (the framework convention)
   - RealFourier on dim 1 must not be combined with a Fourier transverse axis
     (the backward Hermitian expansion cannot place conjugate partners at the
-    flipped transverse wavenumber — such layouts fall back to CPU)
+    flipped transverse wavenumber — such layouts are rejected explicitly)
 """
 
 using Test
@@ -32,7 +32,7 @@ using Tarang: axis_kinds, distributed_gpu_supported
     # forward pipeline completes, but the backward Hermitian expansion needs
     # conjugate partners at the FLIPPED transverse wavenumber and hard-errors
     # (guard in distributed_backward_dct!) — the predicate rejects the layout
-    # up front so it falls back to CPU instead of dying on the first backward.
+    # up front so it fails explicitly before the first backward transform.
     @test distributed_gpu_supported((rf, cf, cb)) == false
 
     # Supported: RealFourier on dim 1 with only Chebyshev transverse axes
@@ -41,8 +41,9 @@ using Tarang: axis_kinds, distributed_gpu_supported
     # Supported: no RealFourier at all, has ChebyshevT, 3D
     @test distributed_gpu_supported((cf, cf, cb)) == true
 
-    # Supported: all Chebyshev, 3D
-    @test distributed_gpu_supported((cb, cb, cb)) == true
+    # Not yet supported: all-Chebyshev Float64 fields have real coefficient
+    # storage, while the distributed DCT driver currently emits complex buffers.
+    @test distributed_gpu_supported((cb, cb, cb)) == false
 
     # Not supported: RealFourier on dim 2 (must be dim 1)
     @test distributed_gpu_supported((cf, rf, cb)) == false
@@ -55,6 +56,18 @@ using Tarang: axis_kinds, distributed_gpu_supported
 
     # Not supported: only 2D
     @test distributed_gpu_supported((rf, cb)) == false
+
+    @testset "GPU+MPI domain validation matches the transform predicate" begin
+        @test Tarang.validate_mpi_fourier_only(
+            (rf, cb, cb), 2; use_pencil_arrays=false,
+        )
+        @test_throws ErrorException Tarang.validate_mpi_fourier_only(
+            (rf, cf, cb), 2; use_pencil_arrays=false,
+        )
+        @test_throws ErrorException Tarang.validate_mpi_fourier_only(
+            (cb, cb, cb), 2; use_pencil_arrays=false,
+        )
+    end
 end
 
 # ---------------------------------------------------------------------------

@@ -83,18 +83,16 @@ backward_transform!(field)
 
 ### FFT Mode Control
 
-Control when GPU FFTs are used:
+GPU fields always use GPU transforms, including small arrays:
 
 ```julia
 # Per-field control
 set_gpu_fft_mode!(field, :gpu)   # Always use GPU FFT
-set_gpu_fft_mode!(field, :cpu)   # Always use CPU FFT
-set_gpu_fft_mode!(field, :auto)  # Heuristic-based (default)
-
-# Global threshold for :auto mode
-# Use GPU FFT only if array has >= N elements
-set_gpu_fft_min_elements!(64_000)
+set_gpu_fft_mode!(field, :auto)  # Default; also always on-device
 ```
+
+`:cpu` is rejected for a GPU field. Unsupported basis/layout combinations fail
+with an error instead of downloading the field and running FFTW.
 
 ### Mixed Fourier-Chebyshev Transforms
 
@@ -229,9 +227,13 @@ using TarangCUDAExt: check_cuda_aware_mpi
 if check_cuda_aware_mpi()
     println("CUDA-aware MPI available - using direct GPU transfers")
 else
-    println("Staging through CPU for MPI transfers")
+    error("CUDA-aware MPI is required; implicit CPU staging is disabled")
 end
 ```
+
+GPU LBVPs require a CUDA matrix solver such as `:cuda_sparse`, `:cuda_cg`, or
+`:cuda_gmres`; CPU-only choices are rejected. GPU NLBVP and EVP solves are not
+yet device-native and raise an explicit unsupported-operation error.
 
 ### TransposableField for GPU+MPI
 
@@ -353,9 +355,13 @@ end
 # Ensure synchronization isn't killing performance
 CUDA.allowscalar(false)  # Disable slow scalar indexing
 
-# Check for CPU fallbacks
+# Strict dispatch also checks this before every transform
 @assert field["g"] isa CuArray "Data not on GPU!"
 ```
+
+GPU transforms, resampling, polynomial derivatives, coupled IVP solves, and
+stochastic phase generation do not fall back to CPU. Unsupported operations
+raise an error naming the missing device path.
 
 **MPI + CUDA Issues**
 ```julia

@@ -222,10 +222,12 @@ end
 
 function _solve_bvp!(solver::BoundaryValueSolver, ::LBVP)
     solution = solve_linear!(solver)
-    copy_solution_to_fields!(solver.state, solution)
+    solution === nothing || copy_solution_to_fields!(solver.state, solution)
 end
 
 function _solve_bvp!(solver::BoundaryValueSolver, ::NLBVP)
+    any(_field_uses_gpu, solver.state) && error(
+        "GPU nonlinear boundary-value solves are not device-native; CPU fallback is disabled.")
     solve_nonlinear!(solver)
 end
 
@@ -239,10 +241,16 @@ global `L \\ F` solve only when no per-mode subproblems are available.
 """
 function solve_linear!(solver::BoundaryValueSolver)
     sps = solver.subproblems
+    gpu_state = any(_field_uses_gpu, solver.state)
     if !isempty(sps) && any(sp -> sp.L_min !== nothing, sps)
         _solve_bvp_per_subproblem!(solver)
-        return fields_to_vector(solver.state)
+        # The per-subproblem solve has already scattered its solution into the
+        # fields. Avoid downloading it merely to satisfy the legacy vector return.
+        return gpu_state ? nothing : fields_to_vector(solver.state)
     end
+    gpu_state && error(
+        "GPU linear boundary-value solve has no device-native subproblem path; " *
+        "CPU fallback is disabled.")
     if solver.global_solver !== nothing
         return MatSolvers.solve(solver.global_solver, solver.F_vector)
     end
@@ -255,7 +263,10 @@ function _bvp_lhs_solver(sp::Subproblem)
     st = _subproblem_solver_type(sp.solver.base.matsolver)
     try
         return MatSolvers.solver_instance(st, sp.L_min)
-    catch
+    catch err
+        _gpu_subproblem_execution(sp) && error(
+            "GPU BVP factorization with $(st) failed; CPU SPQR/dense fallback is disabled. " *
+            "Original error: $(sprint(showerror, err))")
         try
             return MatSolvers.solver_instance(MatSolvers.SPQRSolver, sp.L_min)
         catch
@@ -545,6 +556,9 @@ subproblems are available.
 function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
                 which::Union{String,Symbol}=solver.which,
                 target::Union{Nothing, ComplexF64}=solver.target)
+    any(f -> hasproperty(f, :bases) && _field_uses_gpu(f),
+        solver.problem.variables) && error(
+        "GPU eigenvalue solves are not device-native; CPU eigensolver fallback is disabled.")
     start_time = time()
     which_symbol = Symbol(uppercase(String(which)))
     sps = solver.subproblems
@@ -628,10 +642,6 @@ end
 """
     Convert field array to solution vector following gather pattern.
 
-    GPU-aware: For GPU fields, data is synchronized and transferred to CPU.
-    Linear solves are performed on CPU (standard practice for sparse solvers),
-    and results are transferred back to GPU via copy_solution_to_fields!.
-
-    This function always returns a CPU Vector{ComplexF64} since that's what
-    sparse linear solvers expect.
+    CPU-only legacy helper. GPU fields are rejected by `fields_to_vector`; GPU
+    runtime paths use device-native field or subproblem vectors.
     """

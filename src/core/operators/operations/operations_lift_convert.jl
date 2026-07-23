@@ -52,25 +52,15 @@ function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
     # Find which axis corresponds to the output basis
     basis_axis = _find_basis_axis(output_bases, output_basis)
 
-    # Build P coefficients on CPU, then transfer to GPU if needed
+    # Build P coefficients directly on the field architecture. `selectdim` returns
+    # a view, and broadcast assignment launches a device kernel for GPU storage.
     p_data = get_coeff_data(P)
     arch = operand.dist.architecture
-    if is_gpu_array(p_data)
-        # Build on CPU first, then copy to GPU
-        cpu_p = zeros(eltype(p_data), size(p_data))
-        if ndims(cpu_p) == 1
-            cpu_p[lift_mode] = one(eltype(cpu_p))
-        else
-            selectdim(cpu_p, basis_axis, lift_mode) .= one(eltype(cpu_p))
-        end
-        copyto!(p_data, on_architecture(arch, cpu_p))
+    fill!(p_data, zero(eltype(p_data)))
+    if ndims(p_data) == 1
+        view(p_data, lift_mode:lift_mode) .= one(eltype(p_data))
     else
-        fill!(p_data, zero(eltype(p_data)))
-        if ndims(p_data) == 1
-            p_data[lift_mode] = one(eltype(p_data))
-        else
-            selectdim(p_data, basis_axis, lift_mode) .= one(eltype(p_data))
-        end
+        selectdim(p_data, basis_axis, lift_mode) .= one(eltype(p_data))
     end
 
     # Step 2: Compute result = P * operand
@@ -153,38 +143,28 @@ Multiply lift polynomial P by operand.
 P has a single non-zero coefficient at lift_mode.
 Result = P * operand places operand's values at mode lift_mode.
 
-GPU-compatible: avoids scalar indexing by building on CPU and copying,
-or using broadcasting operations that work on GPU arrays.
+GPU-compatible: uses `fill!`, views, and broadcasting directly on the device.
 """
 function _multiply_lift_polynomial!(result::AbstractArray, P_data::AbstractArray,
                                     operand_data::AbstractArray, basis_axis::Int,
                                     lift_mode::Int, arch=nothing)
     if is_gpu_array(result)
-        # GPU path: build result on CPU, then copy to GPU
-        cpu_result = zeros(eltype(result), size(result))
-        cpu_operand = is_gpu_array(operand_data) ? Array(operand_data) : operand_data
-
-        if ndims(cpu_result) == 1
-            if length(cpu_operand) >= 1
-                cpu_result[lift_mode] = cpu_operand[1]
-            end
+        is_gpu_array(operand_data) || error(
+            "GPU lift multiplication requires a GPU-resident operand; CPU staging is disabled.")
+        fill!(result, zero(eltype(result)))
+        if ndims(result) == 1
+            # A one-element view keeps the assignment device-side.
+            @views result[lift_mode:lift_mode] .= operand_data[1:1]
         else
-            result_slice = selectdim(cpu_result, basis_axis, lift_mode)
-            if ndims(cpu_operand) == ndims(cpu_result)
-                operand_slice = selectdim(cpu_operand, basis_axis, 1)
+            result_slice = selectdim(result, basis_axis, lift_mode)
+            if ndims(operand_data) == ndims(result)
+                operand_slice = selectdim(operand_data, basis_axis, 1)
                 result_slice .= operand_slice
-            elseif ndims(cpu_operand) < ndims(cpu_result)
-                result_slice .= cpu_operand
+            elseif ndims(operand_data) < ndims(result)
+                result_slice .= operand_data
             else
-                result_slice .= selectdim(cpu_operand, basis_axis, 1)
+                result_slice .= selectdim(operand_data, basis_axis, 1)
             end
-        end
-
-        # Transfer to GPU
-        if arch !== nothing
-            copyto!(result, on_architecture(arch, cpu_result))
-        else
-            copyto!(result, cpu_result)
         end
     else
         # CPU path: direct operations

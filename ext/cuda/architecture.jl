@@ -319,23 +319,3 @@ Infer GPU architecture from a (possibly wrapped) CuArray, using the device of
 the underlying storage.
 """
 Tarang.architecture(arr::CUDA.AnyCuArray) = GPU{CuDevice}(CUDA.device(_root_cuarray(arr)))
-
-# ============================================================================
-# Random Utilities
-# ============================================================================
-
-function Tarang._fill_random_phases!(arch::GPU{CuDevice}, phases::CuArray{T}, rng::Random.AbstractRNG) where {T}
-    ensure_device!(arch)
-    # Draw on the HOST rng, then upload. Three reasons this must not use CURAND:
-    # 1. `CUDA.rand!` IS `Random.rand!` — with a host rng (MersenneTwister) the
-    #    generic Random fallback fills the CuArray element-by-element (scalar
-    #    indexing error / ~1000x slowdown).
-    # 2. The user's seed must be honored for reproducibility.
-    # 3. Under MPI, StochasticForcing seeds every rank identically so the global
-    #    forcing field is coherent across slabs — per-device CURAND streams
-    #    would break that contract.
-    host = rand(rng, T, size(phases))
-    host .*= T(2π)
-    copyto!(phases, host)
-    return phases
-end

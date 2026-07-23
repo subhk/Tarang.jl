@@ -287,12 +287,9 @@ function resample_grid_data!(new_data::AbstractArray, old_data::AbstractArray,
         if gpu_resample_grid_data!(new_data, old_data, old_shape, new_shape)
             return
         end
-        # Fallback: CPU round-trip if GPU-native resample unavailable
-        old_cpu = on_architecture(CPU(), old_data)
-        new_cpu = similar(old_cpu, eltype(old_cpu), size(new_data)...)
-        resample_grid_data!(new_cpu, old_cpu, old_shape, new_shape)
-        copyto!(new_data, on_architecture(architecture(new_data), new_cpu))
-        return
+        error("No on-device resampling implementation supports GPU arrays " *
+              "$(typeof(old_data)) → $(typeof(new_data)) with sizes " *
+              "$(size(old_data)) → $(size(new_data)); CPU fallback is disabled.")
     end
 
     old_size = size(old_data)

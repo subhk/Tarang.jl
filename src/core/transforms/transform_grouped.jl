@@ -164,6 +164,14 @@ function _batch_forward_transform!(fields::Vector{<:ScalarField})
     first_field = fields[1]
     dist = first_field.dist
 
+    # The grouped implementations below are FFTW/PencilFFTs-specific. GPU
+    # fields use their per-field backend hooks so batching can never stage the
+    # group through host memory.
+    if is_gpu(dist.architecture) || any(f -> is_gpu_array(get_grid_data(f)), fields)
+        foreach(forward_transform!, fields)
+        return
+    end
+
     # Check for PencilFFTs plan
     pencil_plan = _find_pencil_plan(dist)
 
@@ -190,6 +198,11 @@ function _batch_backward_transform!(fields::Vector{<:ScalarField})
 
     first_field = fields[1]
     dist = first_field.dist
+
+    if is_gpu(dist.architecture) || any(f -> is_gpu_array(get_coeff_data(f)), fields)
+        foreach(backward_transform!, fields)
+        return
+    end
 
     pencil_plan = _find_pencil_plan(dist)
 
@@ -219,10 +232,7 @@ function _pencil_batch_forward_transform!(fields::Vector{<:ScalarField},
         grid_data = get_grid_data(field)
 
         if is_gpu_array(grid_data)
-            # PencilFFTs is CPU-only; transfer to CPU first
-            host_data = Array(grid_data)
-            host_result = plan * host_data  # Uses PencilArrays.transpose! internally
-            set_coeff_data!(field, copy_to_device(host_result, grid_data))
+            error("Grouped PencilFFTs cannot transform GPU data; CPU fallback is disabled.")
         else
             # Direct PencilFFT transform (uses PencilArrays for transposes)
             set_coeff_data!(field, plan * grid_data)
@@ -243,9 +253,7 @@ function _pencil_batch_backward_transform!(fields::Vector{<:ScalarField},
         coeff_data = get_coeff_data(field)
 
         if is_gpu_array(coeff_data)
-            host_data = Array(coeff_data)
-            host_result = plan \ host_data  # Uses PencilArrays.transpose! internally
-            set_grid_data!(field, copy_to_device(host_result, coeff_data))
+            error("Grouped PencilFFTs cannot transform GPU data; CPU fallback is disabled.")
         else
             set_grid_data!(field, plan \ coeff_data)
         end
@@ -604,4 +612,3 @@ function _stacked_legendre_backward(data::AbstractArray, transform::LegendreTran
     error("Batched Legendre backward transform not implemented. " *
           "Disable grouped transforms for Legendre bases or use per-field transforms.")
 end
-

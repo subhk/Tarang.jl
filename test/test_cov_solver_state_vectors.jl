@@ -173,6 +173,17 @@ struct _UnknownBasis; foo::Int; end
         @test isempty(v)
     end
 
+    @testset "GPU solver vectors never download field state" begin
+        f, dist = cheb_field(; size=8)
+        ensure_layout!(f, :c)
+        dist.architecture = Tarang.GPU(0)
+
+        @test_throws ErrorException Tarang.fields_to_vector([f])
+        @test_throws ErrorException Tarang.fields_to_vector!(
+            Vector{ComplexF64}(undef, 8), [f])
+        @test_throws ErrorException Tarang.extract_field_data_for_vector(f)
+    end
+
     @testset "fields_to_vector with empty-bases (tau) field" begin
         # _copy_field_data_to_vector! isempty(field.bases) branch: writes a 0.
         tau, _ = empty_field()

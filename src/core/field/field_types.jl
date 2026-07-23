@@ -109,7 +109,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
     # Scale information
     scales::Union{Nothing, Tuple{Vararg{Float64}}}  # Current scales for each dimension
 
-    # GPU FFT preference (:auto, :cpu, :gpu)
+    # Transform preference (:auto, :cpu, :gpu). GPU fields reject :cpu.
     fft_mode::Symbol
 
     # Pool tracking metadata (managed by FieldPool)

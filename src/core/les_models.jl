@@ -190,8 +190,8 @@ end
     _coerce_arrays_to_architecture(arch, arrays...)
 
 Ensure all gradient arrays live on the target architecture.
-CPU models can accept GPU inputs (and vice versa) without scalar indexing,
-which is especially important when CUDA scalar indexing is disallowed.
+CPU inputs may be uploaded to a GPU model. GPU inputs are never downloaded to
+a CPU model implicitly; that architecture mismatch is rejected.
 """
 function _coerce_arrays_to_architecture(arch::AbstractArchitecture, arrays::AbstractArray...)
     return tuple((_ensure_array_on_architecture(arch, arr) for arr in arrays)...)
@@ -201,7 +201,10 @@ end
     if is_gpu(arch)
         return is_gpu_array(arr) ? arr : _move_array_to_gpu(arch, arr)
     else
-        return is_gpu_array(arr) ? on_architecture(arch, arr) : arr
+        is_gpu_array(arr) && error(
+            "A CPU LES model cannot consume GPU gradient arrays; CPU fallback is disabled. " *
+            "Construct the model with architecture=GPU().")
+        return arr
     end
 end
 

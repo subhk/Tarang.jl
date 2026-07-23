@@ -75,6 +75,74 @@ Produces identical results regardless of MPI decomposition.
 Uses a simple but effective approach: generates random values point-by-point
 using a hash of (seed, global_indices) as the per-point seed.
 """
+@inline function _field_random_splitmix64(x::UInt64)
+    z = x + UInt64(0x9e3779b97f4a7c15)
+    z = xor(z, z >> 30) * UInt64(0xbf58476d1ce4e5b9)
+    z = xor(z, z >> 27) * UInt64(0x94d049bb133111eb)
+    return xor(z, z >> 31)
+end
+
+@inline function _field_random_uniform(seed::UInt64, counter::UInt64, ::Type{T}) where T
+    bits = _field_random_splitmix64(xor(seed, counter))
+    return T(bits >> 11) * T(1.1102230246251565e-16)
+end
+
+@kernel function _fill_reproducible_random_kernel!(data, seed::UInt64,
+                                                     offsets, global_sizes,
+                                                     normal::Bool, scale)
+    i = @index(Global, Linear)
+    if i <= length(data)
+        linear_local = i - 1
+        remainder = linear_local
+        global_linear = 0
+        stride = 1
+        for dim in 1:ndims(data)
+            local_coord = remainder % size(data, dim)
+            remainder ÷= size(data, dim)
+            global_linear += (local_coord + offsets[dim]) * stride
+            stride *= global_sizes[dim]
+        end
+
+        ET = eltype(data)
+        RT = typeof(real(zero(ET)))
+        counter = UInt64(global_linear + 1)
+        u1 = _field_random_uniform(seed, 2counter - 1, RT)
+        u2 = _field_random_uniform(seed, 2counter, RT)
+        if normal
+            radius = sqrt(-RT(2) * log(max(u1, eps(RT))))
+            re = radius * cos(RT(2π) * u2)
+            if ET <: Complex
+                imv = radius * sin(RT(2π) * u2)
+                @inbounds data[i] = ET(re, imv) * scale
+            else
+                @inbounds data[i] = re * scale
+            end
+        else
+            re = RT(2) * u1 - one(RT)
+            if ET <: Complex
+                imv = RT(2) * u2 - one(RT)
+                @inbounds data[i] = ET(re, imv) * scale
+            else
+                @inbounds data[i] = re * scale
+            end
+        end
+    end
+end
+
+function _fill_random_reproducible_device!(arch::AbstractArchitecture,
+                                            data::AbstractArray, seed::Int,
+                                            offsets::Tuple, global_sizes::Tuple,
+                                            distribution::String, scale::Real)
+    normal = distribution == "normal" || distribution == "standard_normal"
+    (normal || distribution == "uniform") || throw(ArgumentError(
+        "Unknown distribution: $distribution. Use 'normal' or 'uniform'."))
+    seed_bits = reinterpret(UInt64, Int64(seed))
+    launch!(arch, _fill_reproducible_random_kernel!, data, seed_bits,
+            offsets, global_sizes, normal, eltype(data)(scale);
+            ndrange=length(data))
+    return data
+end
+
 function _fill_random_reproducible!(data::AbstractArray, field::ScalarField,
                                     layout::String, seed::Int,
                                     distribution::String, scale::Real)
@@ -107,9 +175,15 @@ function _fill_random_reproducible!(data::AbstractArray, field::ScalarField,
         global_offsets[dim] = start_idx - 1  # Convert to 0-based offset
     end
 
-    # Transfer data to CPU for random generation if on GPU
     arch = dist.architecture
-    cpu_data = is_gpu(arch) ? Array(data) : data
+    if is_gpu(arch)
+        global_sizes = ntuple(dim -> dim <= length(gshape) ? gshape[dim] : local_size[dim],
+                              ndims_data)
+        _fill_random_reproducible_device!(arch, data, seed, Tuple(global_offsets),
+                                          global_sizes, distribution, scale)
+        return
+    end
+    cpu_data = data
 
     # Fill each point using deterministic RNG based on global index
     # Use a simple hash: seed + linear_global_index
@@ -136,10 +210,6 @@ function _fill_random_reproducible!(data::AbstractArray, field::ScalarField,
         end
     end
 
-    # Copy back to GPU if needed
-    if is_gpu(arch)
-        copyto!(data, on_architecture(arch, cpu_data))
-    end
 end
 
 function fill_random!(field::VectorField, layout::String="g";

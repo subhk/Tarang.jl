@@ -105,7 +105,7 @@ function async_transpose_z_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
     tf.async_state.in_progress = true
     tf.async_state.from_layout = ZLocal
     tf.async_state.to_layout = YLocal
-    # CRITICAL: Store recv_size for correct staging buffer copy in wait_transpose!
+    # Store the receive size for validation/future backends.
     tf.async_state.recv_size = sum(tf.counts.zy_recv_counts)
 
     return tf
@@ -175,7 +175,7 @@ function async_transpose_y_to_x!(tf::TransposableField{F,T,N}) where {F,T,N}
     tf.async_state.in_progress = true
     tf.async_state.from_layout = YLocal
     tf.async_state.to_layout = XLocal
-    # CRITICAL: Store recv_size for correct staging buffer copy in wait_transpose!
+    # Store the receive size for validation/future backends.
     tf.async_state.recv_size = sum(tf.counts.yx_recv_counts)
 
     return tf
@@ -205,40 +205,11 @@ function wait_transpose!(tf::TransposableField{F,T,N}) where {F,T,N}
     # Unlock staging buffers now that the async MPI operation is complete
     tf.buffers.staging_locked[] = false
 
-    # Get the receive buffer - for non-CUDA-aware MPI on GPU, data is in staging buffer
+    # GPU communication reaches this point only after the CUDA-aware MPI guard.
     recv_buf = tf.buffers.recv_buffer_2
 
-    # If we used staging buffers (non-CUDA-aware MPI with GPU), copy back to GPU
-    # CRITICAL: Only do this when async was actually used (used_async=true).
-    # When blocking fallback was used (request=nothing), _do_alltoallv! already
-    # copied the result directly to recv_buf, so copying from stale staging would corrupt data.
-    # CRITICAL: Only copy recv_size elements, not the entire staging buffer!
-    # The staging buffer may be larger than the actual received data, and copying
-    # uninitialized memory would corrupt the result.
-    if used_async && is_gpu(arch) && !check_cuda_aware_mpi() && tf.buffers.recv_staging !== nothing
-        recv_size = tf.async_state.recv_size
-
-        # Validate recv_size before using it
-        if recv_size < 0
-            error("wait_transpose!: Invalid recv_size=$recv_size (negative). " *
-                  "This indicates async_state was not properly initialized.")
-        end
-        if recv_size > length(tf.buffers.recv_staging)
-            error("wait_transpose!: recv_size=$recv_size exceeds staging buffer size " *
-                  "$(length(tf.buffers.recv_staging)). This indicates a buffer allocation or " *
-                  "recv_size tracking bug.")
-        end
-        if recv_size > length(recv_buf)
-            error("wait_transpose!: recv_size=$recv_size exceeds recv_buffer size " *
-                  "$(length(recv_buf)). This indicates mismatched buffer sizes.")
-        end
-
-        if recv_size > 0
-            staging_view = view(tf.buffers.recv_staging, 1:recv_size)
-            recv_view = view(recv_buf, 1:recv_size)
-            copyto!(recv_view, on_architecture(arch, staging_view))
-        end
-    end
+    used_async && is_gpu(arch) && !check_cuda_aware_mpi() && error(
+        "Asynchronous GPU transpose completed without CUDA-aware MPI; CPU staging is disabled.")
 
     # Unpack based on destination layout
     unpack_start = time()
@@ -299,7 +270,7 @@ function is_transpose_complete(tf::TransposableField)
     end
 
     if tf.async_state.request === nothing
-        # Communication done (e.g., blocking fallback was used), finalize
+        # Communication completed through the blocking path; finalize.
         wait_transpose!(tf)
         return true
     end
@@ -309,10 +280,9 @@ function is_transpose_complete(tf::TransposableField)
         # MPI communication complete — finalize: unpack data, update layout.
         # MPI.Test has already internally freed the MPI handle (set to MPI_REQUEST_NULL).
         # We leave tf.async_state.request as-is (not nothing) so that wait_transpose!
-        # correctly identifies this as an async operation and performs the GPU staging
-        # buffer copy for non-CUDA-aware MPI. MPI.Wait on MPI_REQUEST_NULL is a no-op.
+        # correctly identifies this as an async operation. MPI.Wait on
+        # MPI_REQUEST_NULL is a no-op.
         wait_transpose!(tf)
     end
     return flag
 end
-

@@ -90,13 +90,16 @@ end
 
 function _field_coeff_vector(field::ScalarField)
     data = _coeff_data(field)
-    # Subproblem matrices live on the CPU. GPU fields are staged back before
-    # being flattened into solver vectors.
-    cpu_data = is_gpu_array(data) ? get_cpu_data(data) : data
-    return vec(cpu_data)
+    _field_uses_gpu(field) && error(
+        "Legacy FieldSystem gathering cannot flatten GPU field '$(field.name)' into " *
+        "a CPU vector; CPU fallback is disabled. Use device-native subproblem I/O.")
+    return vec(data)
 end
 
 function _assign_coefficients_from_slice!(field::ScalarField, coeffs::AbstractArray, slice::AbstractVector{<:Number})
+    _field_uses_gpu(field) && error(
+        "Legacy FieldSystem scattering cannot upload a CPU solution into GPU field " *
+        "'$(field.name)'; CPU fallback is disabled. Use device-native subproblem I/O.")
     target_shape = size(coeffs)
     expected = prod(target_shape)
 

@@ -1,8 +1,9 @@
 """
     Transform GPU - GPU transform support and heuristics
 
-This file contains GPU-specific transform support including
-FFT heuristics and CPU fallback execution.
+This file contains GPU-specific transform support. A field configured for a
+GPU is never transformed by staging its data through CPU memory: unsupported
+GPU transforms fail explicitly.
 """
 
 # ============================================================================
@@ -40,30 +41,15 @@ Return `true` iff the basis tuple is eligible for the distributed GPU
 Chebyshev DCT-I transform path. The conditions are:
 1. Exactly 3 dimensions.
 2. At least one `ChebyshevT` axis.
-3. Every `RealFourier` axis is on dim 1 (the framework's `bases[1]` convention).
+3. At least one Fourier axis (pure-Chebyshev real coefficient storage is not
+   supported by the complex distributed driver yet).
+4. Every `RealFourier` axis is on dim 1 (the framework's `bases[1]` convention).
 
 A `RealFourier` axis on dim 2 or dim 3 cannot be handled by the distributed
-GPU path and must fall back to CPU.
+GPU path and is rejected explicitly.
 """
 function distributed_gpu_supported(bases::Tuple)
-    length(bases) == 3 || return false
-    kinds = axis_kinds(bases)
-    any(==(:chebyshev), kinds) || return false
-    for (dim, k) in enumerate(kinds)
-        if k === :real_fourier && dim != 1
-            return false
-        end
-    end
-    # RealFourier on dim 1 combined with a Fourier transverse axis: the forward
-    # pipeline completes, but the backward Hermitian expansion needs the
-    # conjugate partner at the FLIPPED transverse wavenumber and hard-errors
-    # (see the guard in distributed_backward_dct!). Reject at plan level so the
-    # layout falls back to CPU instead of dying on the first backward transform.
-    if kinds[1] === :real_fourier &&
-       any(k -> k === :complex_fourier || k === :real_fourier, kinds[2:end])
-        return false
-    end
-    return true
+    return _distributed_gpu_dct_bases_supported(bases)
 end
 
 """
@@ -121,7 +107,8 @@ const GPU_FFT_MIN_ELEMENTS = Ref(32_768)
 """
     set_gpu_fft_min_elements!(n::Integer)
 
-Set the minimum number of elements required before GPU FFTs are attempted.
+Set the legacy minimum-size heuristic used by non-GPU transform selection.
+GPU-resident fields always use their device transform, regardless of size.
 """
 function set_gpu_fft_min_elements!(n::Integer)
     GPU_FFT_MIN_ELEMENTS[] = max(1, Int(n))
@@ -132,6 +119,12 @@ gpu_fft_min_elements() = GPU_FFT_MIN_ELEMENTS[]
 
 function should_use_gpu_fft(field::ScalarField, data_shape::Tuple)
     mode = gpu_fft_mode(field)
+    if is_gpu(field.dist.architecture)
+        mode === :cpu && throw(ArgumentError(
+            "GPU fields cannot use fft_mode=:cpu because GPU transforms may not " *
+            "fall back to CPU. Use :auto or :gpu."))
+        return true
+    end
     if mode === :gpu
         return true
     elseif mode === :cpu
@@ -139,8 +132,8 @@ function should_use_gpu_fft(field::ScalarField, data_shape::Tuple)
     end
     use_gpu = prod(data_shape) >= GPU_FFT_MIN_ELEMENTS[]
     if !use_gpu
-        @debug "GPU FFT bypassed: $(prod(data_shape)) elements < threshold $(GPU_FFT_MIN_ELEMENTS[]). " *
-               "Using CPU FFTW with GPU↔CPU transfer. Set set_gpu_fft_min_elements!(1) to force GPU." maxlog=1
+        @debug "GPU FFT bypassed by the legacy size heuristic: $(prod(data_shape)) " *
+               "elements < threshold $(GPU_FFT_MIN_ELEMENTS[])." maxlog=1
     end
     return use_gpu
 end
@@ -150,8 +143,9 @@ should_use_gpu_fft(field::ScalarField) = (get_grid_data(field) !== nothing) && s
 """
     gpu_forward_transform!(field::ScalarField)
 
-GPU-specific forward transform using CUFFT.
-Returns true if GPU transform was applied, false otherwise.
+GPU-specific forward transform using the registered device backend.
+Returns `false` only for a CPU field. A GPU field either completes on-device or
+throws; it is never handed to the CPU transform chain.
 """
 const _GPU_FORWARD_TRANSFORM_HOOK = Ref{Any}(nothing)
 const _GPU_BACKWARD_TRANSFORM_HOOK = Ref{Any}(nothing)
@@ -166,24 +160,29 @@ function gpu_forward_transform!(field::ScalarField)
     # Check if data is on GPU
     data_g = get_grid_data(field)
     if !is_gpu_array(data_g)
-        return false
+        error("GPU forward transform requires GPU-resident grid data, but field " *
+              "$(repr(field.name)) stores $(typeof(data_g)). Refusing CPU fallback.")
     end
 
     # The CUDA extension registers the implementation from its __init__
     # (a same-signature method here would be illegal method overwriting).
     h = _GPU_FORWARD_TRANSFORM_HOOK[]
     if h === nothing
-        @warn "GPU architecture specified but CUDA extension not loaded. Falling back to CPU." maxlog=1
-        return false
+        error("GPU forward transform backend is unavailable. Load CUDA.jl before " *
+              "constructing GPU fields; CPU fallback is disabled.")
     end
-    return h(field)::Bool
+    handled = h(field)::Bool
+    handled || error("No on-device forward transform supports field $(repr(field.name)) " *
+                     "with bases $(map(typeof, field.bases)); CPU fallback is disabled.")
+    return true
 end
 
 """
     gpu_backward_transform!(field::ScalarField)
 
-GPU-specific backward transform using CUFFT.
-Returns true if GPU transform was applied, false otherwise.
+GPU-specific backward transform using the registered device backend.
+Returns `false` only for a CPU field. A GPU field either completes on-device or
+throws; it is never handed to the CPU transform chain.
 """
 function gpu_backward_transform!(field)
     # Check if we're on GPU architecture
@@ -195,27 +194,31 @@ function gpu_backward_transform!(field)
     # Check if data is on GPU
     data_c = get_coeff_data(field)
     if !is_gpu_array(data_c)
-        return false
+        error("GPU backward transform requires GPU-resident coefficient data, but field " *
+              "$(repr(field.name)) stores $(typeof(data_c)). Refusing CPU fallback.")
     end
 
     # See gpu_forward_transform! — implementation is hook-registered.
     h = _GPU_BACKWARD_TRANSFORM_HOOK[]
     if h === nothing
-        @warn "GPU architecture specified but CUDA extension not loaded. Falling back to CPU." maxlog=1
-        return false
+        error("GPU backward transform backend is unavailable. Load CUDA.jl before " *
+              "constructing GPU fields; CPU fallback is disabled.")
     end
-    return h(field)::Bool
+    handled = h(field)::Bool
+    handled || error("No on-device backward transform supports field $(repr(field.name)) " *
+                     "with bases $(map(typeof, field.bases)); CPU fallback is disabled.")
+    return true
 end
 
 # -----------------------------------------------------------------------------
-# Helper utilities for GPU fallbacks
+# Helper utilities for CPU-only local transforms
 # -----------------------------------------------------------------------------
 
 """
     _execute_on_cpu(f, data)
 
-Ensure `f` runs on CPU memory even when `data` lives on a GPU.
-Returns the result on the original device (GPU or CPU).
+Run `f` on CPU memory. GPU input is rejected so internal transform helpers
+cannot silently download device data.
 
 Note: f is the first argument to support do-block syntax:
     _execute_on_cpu(data) do host_data
@@ -228,9 +231,8 @@ Note: f is the first argument to support do-block syntax:
 # Fallback for other array types (GPU arrays, wrapped arrays)
 function _execute_on_cpu(f, data::AbstractArray)
     if is_gpu_array(data)
-        host_data = Array(data)
-        host_result = f(host_data)
-        return copy_to_device(host_result, data)
+        error("A CPU-only transform was called with GPU data $(typeof(data)); " *
+              "CPU fallback is disabled.")
     end
     return f(data)
 end
@@ -255,12 +257,10 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
     # Find appropriate transform
     pencil_plan = _find_pencil_plan(field.dist)
     if pencil_plan !== nothing
-        # PencilFFTs is CPU-only; if data is on GPU, move to CPU first
+        # PencilFFTs is CPU-only; GPU data must have been handled by its backend.
         grid_data = get_grid_data(field)
         if is_gpu_array(grid_data)
-            host_data = Array(grid_data)
-            host_result = pencil_plan * host_data
-            set_coeff_data!(field, copy_to_device(host_result, grid_data))
+            error("PencilFFTs cannot transform GPU data; CPU fallback is disabled.")
         else
             # Use in-place mul! if coeff data is already allocated. The
             # fallback catch path allocates a fresh PencilArray each call,

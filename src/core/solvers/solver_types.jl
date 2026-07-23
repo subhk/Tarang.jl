@@ -3,16 +3,17 @@ Solver classes for different problem types.
 
 ## CPU/GPU Architecture Strategy
 
-This module supports both CPU and GPU architectures with a hybrid approach:
+This module supports both CPU and GPU architectures with strict field-device
+execution:
 
 1. **Field data**: Stored on the target architecture (CPU or GPU)
    - ScalarField, VectorField, TensorField can have GPU arrays
    - All field operations respect the architecture
 
-2. **Linear algebra / Matrix solves**: Configurable CPU or GPU
-   - Default: CPU sparse solvers (UMFPACK, SuperLU) - most efficient for small/medium
-   - Optional: GPU solvers via `matsolver=:gpu` or specific GPU solver types
-   - GPU solvers beneficial for large problems (>50K unknowns) or iterative methods
+2. **Linear algebra / Matrix solves**: Match field architecture for coupled IVPs
+   - Coupled GPU IVPs default to `:cuda_sparse`
+   - CPU-only solvers are rejected for coupled GPU fields
+   - A GPU solver failure is reported; it does not retry on CPU
 
 3. **Time-stepping**: Works on target architecture
    - Field updates use broadcasting which works on GPU
@@ -20,9 +21,8 @@ This module supports both CPU and GPU architectures with a hybrid approach:
    - FFTs use CUFFT on GPU via architecture abstraction
 
 4. **Data transfers**:
-   - `fields_to_vector`: Extracts field data to CPU for linear solves
-   - `copy_solution_to_fields!`: Copies solution back to field's architecture
-   - For GPU linear solvers, data stays on GPU (no transfer overhead)
+   - GPU IVP state and solve vectors stay on-device
+   - Explicit output, checkpoint, and diagnostic APIs may copy results to host
 
 ## Linear Solver Options
 
@@ -41,15 +41,15 @@ This module supports both CPU and GPU architectures with a hybrid approach:
 # CPU solver (default) - best for most spectral method problems
 solver = InitialValueSolver(problem, RK443(); dt=0.001)
 
-# GPU fields with CPU linear solve (recommended for small-medium problems)
+# Coupled GPU fields select a GPU sparse solve automatically
 domain = Domain(bases..., architecture=GPU())
 problem = IVP([eq1, eq2, eq3], namespace=namespace)
 solver = InitialValueSolver(problem, RK443(); dt=0.001)
 
-# GPU fields with GPU linear solve (for large problems)
+# GPU LBVP fields require a GPU linear solve
 solver = BoundaryValueSolver(problem; matsolver=:cuda_cg)
 
-# Hybrid auto-selection (uses GPU if problem is large enough)
+# :hybrid is normalized to a strict CUDA sparse solve for GPU fields
 solver = BoundaryValueSolver(problem; matsolver=:hybrid)
 ```
 
@@ -318,7 +318,7 @@ function _gpu_pure_fourier_state(state::Vector{<:ScalarField})
     for field in state
         isempty(field.bases) && continue
         found_spatial = true
-        is_gpu(field_architecture(field)) || return false
+        _field_uses_gpu(field) || return false
         all(b -> b !== nothing && isa(b, FourierBasis), field.bases) || return false
     end
     return found_spatial
@@ -330,7 +330,7 @@ function _gpu_coupled_state(state::Vector{<:ScalarField})
     for field in state
         isempty(field.bases) && continue
         found_spatial = true
-        is_gpu(field_architecture(field)) || return false
+        _field_uses_gpu(field) || return false
         found_coupled |= any(b -> b !== nothing && isa(b, JacobiBasis), field.bases)
     end
     return found_spatial && found_coupled
@@ -339,7 +339,7 @@ end
 function _ivp_state_architecture(state::Vector{<:ScalarField})
     for field in state
         isempty(field.bases) && continue
-        return field_architecture(field)
+        return is_gpu(field.dist.architecture) ? field.dist.architecture : field_architecture(field)
     end
     return CPU()
 end
@@ -362,6 +362,12 @@ function _cpu_only_matsolver_type(choice)
     return any(T -> choice === T || (choice isa Type && choice <: T), cpu_types)
 end
 
+function _hybrid_matsolver_choice(choice)
+    key = choice isa Tuple ? first(choice) : choice
+    return key in (:gpu, :hybrid) ||
+           key === HybridSolver || (key isa Type && key <: HybridSolver)
+end
+
 function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
     auto = (choice isa Symbol || choice isa AbstractString) &&
            lowercase(String(choice)) == "auto"
@@ -370,6 +376,11 @@ function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
     end
 
     normalized = _normalize_matsolver(choice)
+    if gpu && _hybrid_matsolver_choice(normalized)
+        # HybridSolver may silently choose or retry a CPU solver. A GPU field
+        # instead gets the concrete device solver so failure stays explicit.
+        return :cuda_sparse
+    end
     if gpu && coupled &&
        (normalized in (:sparse, :dense) || _cpu_only_matsolver_type(normalized))
         throw(ArgumentError(
@@ -803,10 +814,12 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     _merge_boundary_conditions!(problem)
     validate_problem(problem)
 
-    solver_choice = solver_type === nothing ? matsolver : solver_type
-    base = SolverBaseData(problem; matsolver=solver_choice)
-
     state = collect_state_fields(problem.variables)
+    solver_choice = solver_type === nothing ? matsolver : solver_type
+    has_gpu_state = any(_field_uses_gpu, state)
+    selected_matsolver = has_gpu_state ?
+        _select_ivp_matsolver(solver_choice, true, true) : solver_choice
+    base = SolverBaseData(problem; matsolver=selected_matsolver)
 
     L, M, F = build_matrices(problem)
     apply_entry_cutoff!(L, base.entry_cutoff)

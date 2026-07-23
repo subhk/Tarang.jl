@@ -68,12 +68,9 @@ function interpolate_fourier(field::ScalarField, basis::FourierBasis, axis::Int,
     # Normalize position to [0, L)
     x = mod(position - x0, L)
 
-    # Get coefficient data (copy to CPU if on GPU - interpolation uses scalar indexing)
-    if is_gpu_array(get_coeff_data(field))
-        coeffs = Array(get_coeff_data(field))
-    else
-        coeffs = get_coeff_data(field)
-    end
+    coeffs = get_coeff_data(field)
+    is_gpu_array(coeffs) && error(
+        "Fourier interpolation is not yet device-native; CPU fallback is disabled.")
 
     # MPI: reducing the interpolation axis multiplies the coefficients by global-length
     # spectral weights and sums over that axis. If the axis is MPI-DECOMPOSED, each rank
@@ -257,12 +254,9 @@ function interpolate_jacobi(field::ScalarField, basis::JacobiBasis, axis::Int, p
     # Clamp to valid range
     x_native = clamp(x_native, -1.0, 1.0)
 
-    # Get coefficient data (copy to CPU if on GPU - Clenshaw uses scalar indexing)
-    if is_gpu_array(get_coeff_data(field))
-        coeffs = Array(get_coeff_data(field))
-    else
-        coeffs = get_coeff_data(field)
-    end
+    coeffs = get_coeff_data(field)
+    is_gpu_array(coeffs) && error(
+        "Jacobi interpolation is not yet device-native; CPU fallback is disabled.")
 
     # Select the appropriate Clenshaw function
     clenshaw_fn = if isa(basis, ChebyshevT)

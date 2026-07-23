@@ -368,7 +368,9 @@ Generic explicit Runge-Kutta step for X' = M^-1 F(X).
 
 GPU-aware: When no mass matrix is present (M_matrix === nothing), uses a
 GPU-optimized path that keeps all field data on the GPU and avoids CPU transfers.
-When a mass matrix is present, falls back to CPU-based linear solve.
+GPU/MPI fields always use that field path; a non-trivial mass operator must be
+handled by the device-native per-subproblem timestepper and is never sent to a
+CPU linear solve.
 """
 function _step_explicit_rk!(state::TimestepperState, solver::InitialValueSolver,
                             A::AbstractMatrix, b::AbstractVector, c::AbstractVector)

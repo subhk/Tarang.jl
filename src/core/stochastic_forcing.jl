@@ -825,11 +825,7 @@ function generate_forcing!(forcing::SeparableStochasticForcing{T}, t::Real,
         "Ensure the timestep is set before generating forcing.",
     )
 
-    rand!(forcing.rng, forcing.random_phases_host)
-    forcing.random_phases_host .*= T(2π)
-    if forcing.random_phases !== forcing.random_phases_host
-        copyto!(forcing.random_phases, forcing.random_phases_host)
-    end
+    _fill_random_phases!(forcing.architecture, forcing.random_phases, forcing.rng)
     sqrt_dt = sqrt(forcing.dt)
     forcing.fourier_realization .= forcing.forcing_spectrum .*
         exp.(im .* forcing.random_phases) ./ sqrt_dt
@@ -1386,10 +1382,8 @@ function forcing_enstrophy_injection_rate(forcing::StochasticForcing{T, N, A, CA
         return zero(T)
     end
 
-    # Get spectrum on CPU for computation (spectrum might be on GPU)
-    spectrum_cpu = Array(forcing.forcing_spectrum)
     M = T(prod(forcing.field_size))
-    return sum(abs2, spectrum_cpu) / (2 * M^2)
+    return sum(abs2, forcing.forcing_spectrum) / (2 * M^2)
 end
 
 # ============================================================================
@@ -1614,42 +1608,39 @@ end
 """
     _fill_random_phases!(arch, phases, rng)
 
-Fill array with random phases in [0, 2π). GPU-compatible.
-
-For GPU arrays:
-- If CUDA extension is loaded, uses CUDA.rand! for direct GPU generation (faster)
-- Otherwise, falls back to CPU generation + copy (slower but always works)
-
-For reproducible results with a specific RNG, the CPU fallback is used since
-GPU RNGs (CURAND) have different state management.
+Fill an array with random phases in `[0, 2π)`. The caller RNG supplies one
+scalar seed, then a counter-based kernel expands it on `arch`. Seeded CPU and
+GPU runs therefore agree without moving a field-sized phase array through CPU
+memory.
 """
-function _fill_random_phases!(arch::AbstractArchitecture, phases::AbstractArray{T}, rng::AbstractRNG) where {T}
-    if is_gpu_array(phases)
-        # Try GPU-native generation first (overloaded in CUDA extension)
-        if _try_gpu_rand!(phases)
-            phases .*= T(2π)
-            return phases
-        end
-        # Fallback: generate on CPU and copy to GPU
-        phases_cpu = rand(rng, T, size(phases)...)
-        phases_cpu .*= T(2π)
-        copyto!(phases, phases_cpu)
-        return phases
-    end
+@inline function _phase_splitmix64(x::UInt64)
+    z = x + UInt64(0x9e3779b97f4a7c15)
+    z = xor(z, z >> 30) * UInt64(0xbf58476d1ce4e5b9)
+    z = xor(z, z >> 27) * UInt64(0x94d049bb133111eb)
+    return xor(z, z >> 31)
+end
 
-    # CPU path
-    rand!(rng, phases)
-    phases .*= T(2π)
+@kernel function _fill_random_phase_kernel!(phases, seed::UInt64, two_pi)
+    i = @index(Global, Linear)
+    if i <= length(phases)
+        bits = _phase_splitmix64(xor(seed, UInt64(i)))
+        u = eltype(phases)(bits >> 11) * eltype(phases)(1.1102230246251565e-16)
+        @inbounds phases[i] = u * two_pi
+    end
+end
+
+function _fill_random_phases!(arch::AbstractArchitecture, phases::AbstractArray{T}, rng::AbstractRNG) where {T}
+    seed = rand(rng, UInt64)
+    launch!(arch, _fill_random_phase_kernel!, phases, seed, T(2π);
+            ndrange=length(phases))
     return phases
 end
 
 """
     _try_gpu_rand!(phases) -> Bool
 
-Try to fill GPU array with random numbers using GPU-native RNG.
-Returns true if successful, false if fallback needed.
-
-This is overloaded by the CUDA extension to use CUDA.rand!.
+Legacy extension hook retained for compatibility. New forcing code uses the
+counter-based architecture kernel above.
 """
 _try_gpu_rand!(phases::AbstractArray) = false
 

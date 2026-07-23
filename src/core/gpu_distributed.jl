@@ -15,7 +15,7 @@ For GPU + MPI parallelization, we use a **slab decomposition** approach:
 ## Communication Modes
 
 1. **CUDA-aware MPI**: Direct GPU-to-GPU transfers (fastest)
-2. **CPU staging**: Copy to CPU → MPI → Copy back to GPU (fallback)
+2. Non-CUDA-aware MPI is rejected; host staging fallback is disabled.
 
 ## Data Layout
 
@@ -263,12 +263,12 @@ function distributed_fft_dim!(data, dim::Int, dfft::DistributedGPUFFT, direction
 
     # This requires MPI all-to-all communication
     # For CUDA-aware MPI: direct GPU buffer transfer
-    # For regular MPI: stage through CPU
+    # Non-CUDA-aware MPI is unsupported in strict GPU mode.
 
     if config.cuda_aware_mpi
         return distributed_fft_cuda_aware!(data, dim, dfft, direction)
     else
-        return distributed_fft_staged!(data, dim, dfft, direction)
+        error("Distributed GPU FFT requires CUDA-aware MPI; CPU staging fallback is disabled.")
     end
 end
 
@@ -278,6 +278,8 @@ end
 Distributed FFT with CPU staging for MPI communication.
 """
 function distributed_fft_staged!(data, dim::Int, dfft::DistributedGPUFFT, direction::Symbol)
+    is_gpu_array(data) && error(
+        "CPU-staged distributed FFT is disabled for GPU data; use CUDA-aware MPI.")
     config = dfft.config
     arch = architecture(data)
 
@@ -331,10 +333,9 @@ function distributed_fft_cuda_aware!(data, dim::Int, dfft::DistributedGPUFFT, di
 
     # Verify CUDA-aware MPI is actually available
     if !_verify_cuda_aware_mpi()
-        @warn "CUDA-aware MPI not verified, falling back to staged" maxlog=1
         config.cuda_aware_mpi = false
         _CUDA_AWARE_MPI_VERIFIED[] = false  # Update global cache to match
-        return distributed_fft_staged!(data, dim, dfft, direction)
+        error("Distributed GPU FFT requires verified CUDA-aware MPI; CPU staging fallback is disabled.")
     end
 
     comm = config.comm
@@ -1341,6 +1342,8 @@ end
 Optimized staged distributed FFT using pinned memory buffers.
 """
 function distributed_fft_staged_optimized!(data, dim::Int, dfft::DistributedGPUFFT, direction::Symbol)
+    is_gpu_array(data) && error(
+        "CPU-staged distributed FFT is disabled for GPU data; use CUDA-aware MPI.")
     config = dfft.config
     arch = architecture(data)
 

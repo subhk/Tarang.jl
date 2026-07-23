@@ -28,6 +28,14 @@ catch err
     false
 end
 
+if _JL_OK
+    const _JL_LES_ARRAY = JLArrays.JLArray
+    const _JL_LES_ARCH = Tarang.GPU(JLArrays.JLBackend())
+    Tarang.is_gpu_array(::_JL_LES_ARRAY) = true
+    Tarang.architecture(::_JL_LES_ARRAY) = _JL_LES_ARCH
+    Tarang.on_architecture(::Tarang.GPU{JLArrays.JLBackend}, a::Array) = _JL_LES_ARRAY(a)
+end
+
 @testset "LES models GPU-compat (JLArray, no scalar indexing)" begin
     if !_JL_OK
         @test_skip "JLArrays not available"
@@ -38,17 +46,17 @@ end
         # JLArray-backed twin of a CPU-built model: same scalars, device arrays.
         function jltwin(m::Tarang.AMDModel)
             E = eltype(m.eddy_viscosity); D = ndims(m.eddy_viscosity)
-            Tarang.AMDModel{E, D, JLArray{E, D}, typeof(m.architecture)}(
+            Tarang.AMDModel{E, D, JLArray{E, D}, typeof(_JL_LES_ARCH)}(
                 m.C, m.filter_width, m.filter_width_sq,
                 JLArray(copy(m.eddy_viscosity)), JLArray(copy(m.eddy_diffusivity)),
-                m.field_size, m.clip_negative, m.architecture)
+                m.field_size, m.clip_negative, _JL_LES_ARCH)
         end
         function jltwin(m::Tarang.SmagorinskyModel)
             E = eltype(m.eddy_viscosity); D = ndims(m.eddy_viscosity)
-            Tarang.SmagorinskyModel{E, D, JLArray{E, D}, typeof(m.architecture)}(
+            Tarang.SmagorinskyModel{E, D, JLArray{E, D}, typeof(_JL_LES_ARCH)}(
                 m.C_s, m.filter_width, m.effective_delta,
                 JLArray(copy(m.eddy_viscosity)), JLArray(copy(m.strain_magnitude)),
-                m.field_size, m.architecture)
+                m.field_size, _JL_LES_ARCH)
         end
 
         n = (6, 6, 6)
@@ -81,6 +89,13 @@ end
             jamd2 = jltwin(amd)
             compute_eddy_viscosity!(jamd2, JLArray.(Gn)...)
             @test isnan(Array(get_eddy_viscosity(jamd2))[1])      # blow-up not laundered
+        end
+
+        @testset "CPU models reject GPU gradients instead of downloading" begin
+            cpu_model = SmagorinskyModel(
+                C_s=0.17, filter_width=(0.1, 0.05, 0.2), field_size=n)
+            @test_throws ErrorException compute_eddy_viscosity!(
+                cpu_model, JLArray.(G)...)
         end
 
         @testset "Smagorinsky + stress + diagnostics on device" begin

@@ -57,6 +57,15 @@ using Test
         @test Tarang._select_ivp_matsolver(:auto, true, false) == :sparse
         @test Tarang._select_ivp_matsolver(:auto, true, true) == :cuda_sparse
         @test Tarang._select_ivp_matsolver(:cuda_sparse, true, true) == :cuda_sparse
+        @test Tarang._select_ivp_matsolver(:gpu, true, true) == :cuda_sparse
+        @test Tarang._select_ivp_matsolver(:hybrid, true, true) == :cuda_sparse
+        @test Tarang._select_ivp_matsolver(:hybrid, true, false) == :cuda_sparse
+        @test Tarang._select_ivp_matsolver(
+            (:hybrid, (; threshold=10_000)), true, true,
+        ) == :cuda_sparse
+        @test Tarang._select_ivp_matsolver(
+            Tarang.HybridSolver, true, true,
+        ) == :cuda_sparse
         @test_throws ArgumentError Tarang._select_ivp_matsolver(:sparse, true, true)
         @test_throws ArgumentError Tarang._select_ivp_matsolver(:dense, true, true)
         @test_throws ArgumentError Tarang._select_ivp_matsolver(
