@@ -224,7 +224,7 @@ end
 # ============================================================================
 
 """
-    _dealias_kmax(N, keep_fraction) -> Int
+    _dealias_kmax(N, cutoff) -> Int
 
 Max retained |mode| for an axis of a two-sided full FFT spectrum, using the SAME
 rule as the CPU solver's `Tarang._axis_dealias_cutoff(basis, factor)` with
@@ -234,12 +234,21 @@ rule as the CPU solver's `Tarang._axis_dealias_cutoff(basis, factor)` with
 
 The `(N − 1) ÷ 3` cap enforces `3·kmax < N`, so quadratic products (modes up to
 `2·kmax`) cannot alias back into `[−kmax, kmax]` — see nonlinear_dealiasing.jl.
-`keep_fraction ≥ 1` disables dealiasing (all modes kept), mirroring
-`_axis_dealias_cutoff` returning `nothing` for factor ≤ 1; here we return `N`
-(no index has |mode| > N, so nothing is zeroed).
+
+`cutoff` accepts EITHER convention, disambiguated by magnitude (they are
+numerically disjoint — both mean "dealiasing off" only at exactly 1):
+- a **retained fraction** ≤ 1 (this function's native units, e.g. `2/3`), or
+- the codebase-wide `dealias` **padding factor** ≥ 1 (e.g. `3/2`), mapped through
+  `1/cutoff` to the retained fraction.
+
+This dual acceptance kills the silent no-op that passing the padding factor
+`3/2` (or any value > 1) to a keep-fraction API would otherwise cause. `cutoff == 1`
+disables dealiasing (all modes kept); we return `N` (no index has |mode| > N, so
+nothing is zeroed), mirroring `_axis_dealias_cutoff` returning `nothing`.
 """
-@inline function _dealias_kmax(N::Int, keep_fraction::Float64)
-    keep_fraction >= 1 && return N   # factor ≤ 1 → keep every mode
+@inline function _dealias_kmax(N::Int, cutoff::Float64)
+    keep_fraction = cutoff <= 1.0 ? cutoff : 1.0 / cutoff
+    keep_fraction >= 1 && return N   # cutoff == 1 → keep every mode (dealias off)
     factor = 1.0 / keep_fraction
     return min(floor(Int, N / (2 * factor)), (N - 1) ÷ 3)
 end
@@ -290,7 +299,9 @@ end
 Create a dealiasing mask on GPU: entries with |k| ≤ kmax on every axis are one,
 all others zero, where kmax per axis follows the solver's
 `Tarang._axis_dealias_cutoff` rule (`min(floor(N·cutoff/2), (N−1)÷3)` for the
-default `cutoff = 2/3` retained fraction).
+default `cutoff = 2/3` retained fraction). `cutoff` accepts EITHER a retained
+fraction ≤ 1 (e.g. `2/3`) OR the `dealias` padding factor ≥ 1 (e.g. `3/2`); see
+`_dealias_kmax`. `cutoff == 1` disables dealiasing.
 
 Every axis is treated as a TWO-SIDED full FFT spectrum (layout: DC, positive
 freqs, [Nyquist,] negative freqs). rfft half-spectrum layouts are NOT supported
@@ -338,9 +349,12 @@ end
 
 Zero spectral modes with |k| > kmax on any axis, in place, where kmax per axis
 follows the solver's `Tarang._axis_dealias_cutoff` rule (see
-`create_dealiasing_mask_gpu`). All axes are treated as two-sided full FFT
-spectra; rfft half-spectrum layouts are NOT supported (undetectable from the
-array shape — do not pass rfft output here).
+`create_dealiasing_mask_gpu`). `cutoff` accepts EITHER a retained fraction ≤ 1
+(e.g. `2/3`) OR the `dealias` padding factor ≥ 1 (e.g. `3/2`); `cutoff == 1`
+disables dealiasing (see `_dealias_kmax`). All axes are treated as two-sided full
+FFT spectra; rfft half-spectrum layouts are NOT supported (undetectable from the
+array shape — for rfft/production dealiasing use `Tarang.apply_spectral_cutoff!`,
+which is rfft-aware).
 """
 function apply_dealiasing_gpu!(data::CuArray{T, 2}, cutoff::Float64=2.0/3.0) where T
     nx, ny = size(data)

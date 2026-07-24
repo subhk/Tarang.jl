@@ -1,6 +1,14 @@
 # ============================================================================
 # KernelAbstractions Kernels for Element-wise Operations
 # ============================================================================
+#
+# ALIASING CONTRACT: the input operands below are marked `@Const`, which on CUDA
+# lowers to a read-only/`__ldg` load that assumes the input does NOT alias the
+# writable output. Callers MUST pass an output buffer distinct from every
+# `@Const` input — i.e. do NOT call these in place as `gpu_mul!(a, a, b)` or
+# `gpu_squared_magnitude!(a, a)`; the cached read could return stale values.
+# (Accumulate-style kernels whose output also appears as an input — axpy, axpby,
+# multiply-add, viscous_damping — correctly leave that buffer non-`@Const`.)
 
 """
 Element-wise addition kernel: c = a + b
@@ -443,22 +451,26 @@ function gpu_squared_magnitude!(c::CuArray, a::CuArray)
 end
 
 """
-    gpu_kinetic_energy_2d!(e, u, v)
+    gpu_kinetic_energy_2d!(e, u, v; density=1)
 
-2D kinetic energy: e = 0.5 * (|u|² + |v|²)
+2D kinetic energy: e = 0.5 * density * (|u|² + |v|²). `density` matches the CPU
+`kinetic_energy(..., density)` factor (default 1); scaled in place only when ≠ 1.
 """
-function gpu_kinetic_energy_2d!(e::CuArray, u::CuArray, v::CuArray)
+function gpu_kinetic_energy_2d!(e::CuArray, u::CuArray, v::CuArray; density::Real=1)
     launch!(architecture(e), kinetic_energy_2d_kernel!, e, u, v; ndrange=length(e))
+    density == 1 || (e .*= eltype(e)(density))
     return e
 end
 
 """
-    gpu_kinetic_energy_3d!(e, u, v, w)
+    gpu_kinetic_energy_3d!(e, u, v, w; density=1)
 
-3D kinetic energy: e = 0.5 * (|u|² + |v|² + |w|²)
+3D kinetic energy: e = 0.5 * density * (|u|² + |v|² + |w|²). `density` matches the
+CPU `kinetic_energy(..., density)` factor (default 1); scaled in place only when ≠ 1.
 """
-function gpu_kinetic_energy_3d!(e::CuArray, u::CuArray, v::CuArray, w::CuArray)
+function gpu_kinetic_energy_3d!(e::CuArray, u::CuArray, v::CuArray, w::CuArray; density::Real=1)
     launch!(architecture(e), kinetic_energy_3d_kernel!, e, u, v, w; ndrange=length(e))
+    density == 1 || (e .*= eltype(e)(density))
     return e
 end
 
