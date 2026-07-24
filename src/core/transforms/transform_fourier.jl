@@ -91,12 +91,10 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g; apply
         # pencil, leaving the coupled axis in GRID space, so only the Fourier `ldiv!`
         # remains here. Mirrors the `forward_transform!` `apply_coupled_dct` kwarg.
         apply_coupled_dct && _apply_distributed_coupled_dct!(field, false)
-        # PencilFFTs is CPU-only; if data is on GPU, move to CPU first
+        # PencilFFTs is CPU-only; GPU data must have been handled by its backend.
         coeff_data = get_coeff_data(field)
         if is_gpu_array(coeff_data)
-            host_data = Array(coeff_data)
-            host_result = pencil_plan \ host_data
-            set_grid_data!(field, copy_to_device(host_result, coeff_data))
+            error("PencilFFTs cannot transform GPU data; CPU fallback is disabled.")
         else
             # In-place backward via `ldiv!` when the grid buffer is a
             # pre-allocated PencilArray (the common case — `allocate_data!`

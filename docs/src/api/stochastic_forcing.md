@@ -164,8 +164,9 @@ metric in a bounded direction requires model-specific inverse operators rather
 than the Fourier `1/|k|²` weight.
 
 All forcing arrays and outer-product views are persistent. With a supplied RNG,
-the Fourier phase draw is reproducible between CPU and GPU; the GPU path uses a
-persistent host staging array and copies into its persistent device phase array.
+the Fourier phase draw is reproducible between CPU and GPU: one scalar seed is
+drawn from the RNG and a counter-based kernel generates the phase array on the
+field architecture, without host staging.
 Only Fourier axes may be shortened to real-FFT half spectra when the forcing is
 added to a field. The Chebyshev coefficient count must match exactly.
 

@@ -651,12 +651,8 @@ function Tarang.dct_in_dim!(data::CuArray{T,N}, dim::Int, direction::Symbol, arc
     n <= 1 && return data
 
     if N > 3 || !(T <: AbstractFloat)
-        # No GPU DCT-I wiring for this case — fall back to the CPU reference
-        # (correctness over speed).
-        data_cpu = Array(data)
-        Tarang.dct_in_dim!(data_cpu, dim, direction, Tarang.CPU())
-        copyto!(data, data_cpu)
-        return data
+        error("GPU DCT-I supports real floating-point arrays with at most three " *
+              "dimensions; got $(typeof(data)). CPU fallback is disabled.")
     end
 
     # Reshape 1D/2D input to 3D (CuArray reshape shares storage, so writing

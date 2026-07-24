@@ -257,14 +257,15 @@ function cross_operands(a::AbstractVector, b::AbstractVector)
     if length(a) != 3 || length(b) != 3
         throw(ArgumentError("Cross product requires 3-element vectors"))
     end
-    # GPU-safe: LinearAlgebra.cross uses scalar indexing which fails on GPU
-    # For small 3-element vectors, copying to CPU has negligible overhead
+    # LinearAlgebra.cross scalar-indexes, so use one-element device views.
     if is_gpu_array(a) || is_gpu_array(b)
-        a_cpu = Array(a)
-        b_cpu = Array(b)
-        result_cpu = LinearAlgebra.cross(a_cpu, b_cpu)
-        # Return result on same device as first input
-        return is_gpu_array(a) ? copy_to_device(result_cpu, a) : result_cpu
+        is_gpu_array(a) && is_gpu_array(b) || throw(ArgumentError(
+            "Cross-product operands must share an architecture; implicit staging is disabled"))
+        result = similar(a, promote_type(eltype(a), eltype(b)), 3)
+        @views result[1:1] .= a[2:2] .* b[3:3] .- a[3:3] .* b[2:2]
+        @views result[2:2] .= a[3:3] .* b[1:1] .- a[1:1] .* b[3:3]
+        @views result[3:3] .= a[1:1] .* b[2:2] .- a[2:2] .* b[1:1]
+        return result
     else
         return LinearAlgebra.cross(a, b)
     end

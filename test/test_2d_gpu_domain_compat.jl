@@ -34,8 +34,10 @@ if _JL2D_OK
     # Wire JLArray into Tarang's GPU dispatch so the REAL refresh functions treat
     # it as device memory — mirrors ext/cuda/architecture.jl and ext/cuda/utils.jl.
     # Test-scoped; JLArray is used by nothing else in the suite.
+    const _JL2D_ARCH = Tarang.GPU(JLArrays.JLBackend())
     Tarang.is_gpu_array(::_JLA2D) = true
-    Tarang.architecture(::_JLA2D) = Tarang.GPU{Symbol}(:jl)
+    Tarang.architecture(::_JLA2D) = _JL2D_ARCH
+    Tarang.on_architecture(::Tarang.GPU{JLArrays.JLBackend}, a::Array) = _JLA2D(a)
     Tarang.copy_to_device(a::AbstractArray, ::_JLA2D) = _JLA2D(Array(a))
     Tarang.copy_to_device(a::_JLA2D, ::_JLA2D) = copy(a)
 end
@@ -111,6 +113,80 @@ end
             uxd = _JLA2D(ux); uyd = _JLA2D(uy); qd = _JLA2D(q)
             @test 0.5 * mean(@. uxd^2 + uyd^2) ≈ E_ref rtol=1e-12
             @test 0.5 * mean(qd .^ 2) ≈ Z_ref rtol=1e-12
+        end
+
+        @testset "2D axis-matrix application remains device-resident" begin
+            M = [2.0 -1.0; 0.5 3.0]
+            A = reshape(collect(1.0:8.0), 2, 4)
+            Ad = _JLA2D(A)
+            got = Tarang.apply_dense_along_axis(M, Ad, 1)
+            @test got isa _JLA2D
+            @test Array(got) ≈ M * A
+        end
+
+        @testset "low-level dense algebra refuses CPU result staging" begin
+            M = [2.0 -1.0; 0.5 3.0]
+            x = _JLA2D([1.0, 2.0])
+            y = _JLA2D(zeros(2))
+            Tarang.fast_matvec!(y, Tarang.DenseMatVec(M), x)
+            @test y isa _JLA2D
+            @test Array(y) ≈ M * [1.0, 2.0]
+            @test_throws ArgumentError Tarang.fast_matvec!(
+                zeros(2), Tarang.DenseMatVec(M), x)
+
+            A = _JLA2D([1.0 2.0; 3.0 4.0])
+            B = _JLA2D([2.0 0.0; 1.0 2.0])
+            C = _JLA2D(zeros(2, 2))
+            Tarang.fast_matmat!(C, Tarang.DenseDenseMatMat(), A, B)
+            @test C isa _JLA2D
+            @test Array(C) ≈ Array(A) * Array(B)
+            @test_throws ArgumentError Tarang.fast_matmat!(
+                zeros(2, 2), Tarang.DenseDenseMatMat(), A, B)
+        end
+
+        @testset "subproblem buffers refuse architecture staging" begin
+            src = _JLA2D(ComplexF64[1, 2])
+            dest = _JLA2D(zeros(ComplexF64, 2))
+            Tarang._assign_to_buffer!(dest, src)
+            @test Array(dest) == ComplexF64[1, 2]
+            @test_throws ErrorException Tarang._assign_to_buffer!(
+                zeros(ComplexF64, 2), src)
+            @test_throws ErrorException Tarang._assign_from_buffer!(
+                src, zeros(ComplexF64, 2))
+        end
+
+        @testset "2D Hilbert multipliers remain device-resident" begin
+            coords = Tarang.CartesianCoordinates("x", "y")
+            xb = Tarang.RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+            yb = Tarang.RealFourier(coords["y"]; size=8, bounds=(0.0, 2π))
+            coeff = ComplexF64.(randn(5, 8), randn(5, 8))
+            ref = copy(coeff)
+            got = _JLA2D(copy(coeff))
+
+            Tarang._apply_hilbert_spectral!(ref, (xb, yb))
+            Tarang._apply_hilbert_spectral!(got, (xb, yb))
+
+            @test got isa _JLA2D
+            @test Array(got) ≈ ref
+        end
+
+        @testset "reproducible random fill is generated on-device" begin
+            a = _JLA2D(zeros(Float64, 4, 3))
+            b = similar(a)
+            Tarang._fill_random_reproducible_device!(
+                Tarang.architecture(a), a, 42, (0, 0), size(a), "normal", 0.5)
+            Tarang._fill_random_reproducible_device!(
+                Tarang.architecture(b), b, 42, (0, 0), size(b), "normal", 0.5)
+            @test Array(a) == Array(b)
+            @test all(isfinite, Array(a))
+            @test any(!iszero, Array(a))
+        end
+
+        @testset "unsupported GPU resampling fails instead of staging through CPU" begin
+            old = _JLA2D(ones(Float64, 4, 4))
+            new = _JLA2D(zeros(Float64, 4, 4, 1))
+            @test_throws ErrorException Tarang.resample_grid_data!(
+                new, old, size(old), size(new))
         end
 
         GPUArrays.allowscalar(true)   # restore for later tests in the process

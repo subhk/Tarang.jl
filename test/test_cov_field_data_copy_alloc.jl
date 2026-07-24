@@ -242,6 +242,19 @@ end
         @test_throws ArgumentError T_set_gpu_fft_mode!(f, :bogus)
     end
 
+    @testset "GPU transforms never select a CPU fallback" begin
+        _, dist, f = make_fourier_field(n=8)
+        # A mock GPU architecture is enough to exercise the core dispatch
+        # contract without requiring CUDA on the test host.  The arrays remain
+        # CPU-backed deliberately: transform dispatch must reject that mismatch
+        # before it can reach FFTW.
+        dist.architecture = Tarang.GPU(0)
+
+        @test Tarang.should_use_gpu_fft(f, (8,))
+        @test_throws ArgumentError T_set_gpu_fft_mode!(f, :cpu)
+        @test_throws ErrorException Tarang.forward_transform!(f)
+    end
+
     @testset "get_local_array_size serial fast-path" begin
         _, dist, _ = make_fourier_field()
         # size == 1 ⇒ local == global.

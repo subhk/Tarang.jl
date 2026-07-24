@@ -209,9 +209,8 @@ For ComplexFourier: multiply mode k by -i*sign(k), k=0 → 0.
 For RealFourier (interleaved [a0, a1, b1, a2, b2, ...]): swap cos↔sin
 with sign change: H[cos(nx)] = sin(nx), H[sin(nx)] = -cos(nx).
 
-GPU-compatible: Coefficient manipulation uses scalar indexing, so GPU arrays
-are transferred to CPU, transformed, and copied back (same pattern as
-interpolation and lift operations).
+GPU-compatible: The spectral multiplier is assembled as small configuration
+data and uploaded once per Fourier axis; coefficient data remains on-device.
 """
 function evaluate_hilbert_transform(op::HilbertTransform, layout::Symbol=:g)
     operand = op.operand
@@ -243,15 +242,7 @@ function evaluate_hilbert_transform(op::HilbertTransform, layout::Symbol=:g)
         end
     end
 
-    # GPU path: transfer to CPU, apply, copy back (scalar indexing required)
-    if is_gpu_array(coeff)
-        cpu_coeff = Array(coeff)
-        _apply_hilbert_spectral!(cpu_coeff, result.bases)
-        arch = result.dist.architecture
-        copyto!(coeff, on_architecture(arch, cpu_coeff))
-    else
-        _apply_hilbert_spectral!(coeff, result.bases)
-    end
+    _apply_hilbert_spectral!(coeff, result.bases)
 
     if layout == :g
         backward_transform!(result)
@@ -266,32 +257,47 @@ Apply -i*sign(k) multiplier in spectral space for each Fourier basis.
 Non-Fourier bases are left unchanged (Hilbert transform only acts on
 periodic dimensions).
 
-Note: This function assumes `coeff` is a CPU array. GPU arrays must be
-transferred to CPU before calling this (handled by evaluate_hilbert_transform).
+For GPU arrays, only the one-dimensional multiplier is transferred to the
+device. The coefficient array is modified in place by a device broadcast.
 """
 function _apply_hilbert_spectral!(coeff::AbstractArray, bases::Tuple)
-    # For 1D fields, apply directly
-    if ndims(coeff) == 1 && length(bases) >= 1
-        basis = bases[1]
-        _apply_hilbert_1d!(coeff, basis)
-        return
+    local_coeff = coeff isa PencilArrays.PencilArray ? parent(coeff) : coeff
+
+    # PencilArray parents may store logical axes in a permuted physical order.
+    perm_tuple = if coeff isa PencilArrays.PencilArray
+        raw = Tuple(PencilArrays.permutation(coeff))
+        raw === nothing ? ntuple(identity, ndims(local_coeff)) : raw
+    else
+        ntuple(identity, ndims(local_coeff))
     end
 
-    # For multi-D, apply along each Fourier axis
-    for (axis, basis) in enumerate(bases)
+    for (logical_axis, basis) in enumerate(bases)
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
-            _apply_hilbert_along_axis!(coeff, basis, axis)
+            physical_axis = findfirst(==(logical_axis), perm_tuple)
+            physical_axis === nothing && (physical_axis = logical_axis)
+            _apply_hilbert_along_axis!(local_coeff, basis, physical_axis)
         end
     end
+    return coeff
 end
 
 """
 Apply Hilbert transform to 1D coefficient array for a single basis.
-Operates on CPU arrays only (scalar indexing).
+Uses a broadcast and is valid on CPU and GPU arrays.
 """
 function _apply_hilbert_1d!(coeff::AbstractVector, basis::Basis)
+    multiplier = _hilbert_multiplier(basis, length(coeff), eltype(coeff))
+    if is_gpu_array(coeff)
+        multiplier = copy_to_device(multiplier, coeff)
+    end
+    coeff .*= multiplier
+    return coeff
+end
+
+"""Build the one-dimensional `-im * sign(k)` Hilbert multiplier."""
+function _hilbert_multiplier(basis::Basis, N::Int, ::Type{T}) where T
+    multiplier = ones(T, N)
     if isa(basis, ComplexFourier)
-        N = length(coeff)
         for i in 1:N
             if i <= N ÷ 2 + 1
                 k = i - 1           # DC and positive frequencies (including Nyquist)
@@ -299,10 +305,9 @@ function _apply_hilbert_1d!(coeff::AbstractVector, basis::Basis)
                 k = i - N - 1       # negative frequencies
             end
             if k == 0
-                coeff[i] = zero(eltype(coeff))
+                multiplier[i] = zero(T)
             else
-                # Multiply by -i*sign(k)
-                coeff[i] = -im * sign(k) * coeff[i]
+                multiplier[i] = convert(T, -im * sign(k))
             end
         end
     elseif isa(basis, RealFourier)
@@ -315,39 +320,40 @@ function _apply_hilbert_1d!(coeff::AbstractVector, basis::Basis)
         # by -i*sign(k); the DC and (even-N) Nyquist modes map to 0 for a real field.
         grid_size = basis.meta.size
         half = grid_size ÷ 2 + 1
-        if length(coeff) == half && half != grid_size
+        if N == half && half != grid_size
             # rfft half-spectrum (first RealFourier axis): all stored k >= 0.
-            coeff[1] = zero(eltype(coeff))            # DC (k=0)
-            for i in 2:length(coeff)
-                coeff[i] *= -im                        # -i*sign(k), k > 0
+            multiplier[1] = zero(T)                    # DC (k=0)
+            for i in 2:N
+                multiplier[i] = convert(T, -im)        # -i*sign(k), k > 0
             end
             if grid_size % 2 == 0                      # Nyquist (k=N/2)
-                coeff[end] = zero(eltype(coeff))
+                multiplier[end] = zero(T)
             end
         else
             # full FFT (RealFourier axis other than the first): FFT-ordered k.
-            N = length(coeff)
             for i in 1:N
                 k = i <= N ÷ 2 + 1 ? i - 1 : i - N - 1
                 if k == 0 || (iseven(N) && i == N ÷ 2 + 1)   # DC and Nyquist → 0
-                    coeff[i] = zero(eltype(coeff))
+                    multiplier[i] = zero(T)
                 else
-                    coeff[i] = -im * sign(k) * coeff[i]      # -i*sign(k)
+                    multiplier[i] = convert(T, -im * sign(k))
                 end
             end
         end
     end
-    # Non-Fourier bases: no-op
+    return multiplier
 end
 
 """
 Apply Hilbert transform along a specific axis of a multi-dimensional array.
-Operates on CPU arrays only (scalar indexing via CartesianIndices and view).
+Uses a broadcast and is valid on CPU and GPU arrays.
 """
 function _apply_hilbert_along_axis!(coeff::AbstractArray, basis::Basis, axis::Int)
-    for idx in CartesianIndices(ntuple(d -> d == axis ? (1:1) : (1:size(coeff, d)), ndims(coeff)))
-        ranges = ntuple(d -> d == axis ? (1:size(coeff, d)) : (idx[d]:idx[d]), ndims(coeff))
-        slice = view(coeff, ranges...)
-        _apply_hilbert_1d!(vec(slice), basis)
+    multiplier = _hilbert_multiplier(basis, size(coeff, axis), eltype(coeff))
+    if is_gpu_array(coeff)
+        multiplier = copy_to_device(multiplier, coeff)
     end
+    shape = ntuple(d -> d == axis ? length(multiplier) : 1, ndims(coeff))
+    coeff .*= reshape(multiplier, shape)
+    return coeff
 end

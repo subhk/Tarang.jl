@@ -11,6 +11,19 @@ using Test
 using Tarang
 # These tests require a CUDA GPU; they run only on the GPU CI runner.
 using CUDA
+using MPI
+
+# Buildkite launches one MPI process per GPU without setting
+# CUDA_VISIBLE_DEVICES per rank. Select a distinct device before allocating any
+# field data so NCCL does not see every rank on device 0.
+const _DCT1_GPU_ARCH = if CUDA.functional()
+    MPI.Initialized() || MPI.Init()
+    gpu_id = MPI.Comm_rank(MPI.COMM_WORLD) % CUDA.ndevices()
+    CUDA.device!(gpu_id)
+    GPU(device_id=gpu_id)
+else
+    nothing
+end
 
 if !CUDA.functional()
     @info "test_gpu_distributed_dct1.jl skipped: no functional CUDA device"
@@ -127,35 +140,32 @@ end
 # WHAT THIS COVERS / WHERE IT RUNS:
 #   * nprocs == 1 (this single-process GPU CI runner — GPU_TEST_FILES, included
 #     WITHOUT mpiexec): `is_distributed_gpu` returns false (it requires nprocs>1
-#     + NCCL), so a Chebyshev-containing field round-trips through the CPU DCT-I
-#     fallback. So at 1 rank this is a *wiring + round-trip smoke test*: it proves
-#     the re-enabled dispatch does not error and the field round-trips, and (when
+#     + NCCL), so a Chebyshev-containing field round-trips through the single-GPU
+#     device transform. At 1 rank this is a *wiring + round-trip smoke test*, and (when
 #     NCCL is present) the inner block drives distributed_forward_dct! /
 #     distributed_backward_dct! directly on CuArrays at 1 rank.
-#   * nprocs ∈ {2,4} (JuliaGPU Buildkite, launched under mpiexec WITH NCCL): the
+#   * nprocs == 2 (JuliaGPU Buildkite, launched under mpiexec WITH NCCL): the
 #     SAME forward_transform!/backward_transform! calls take the LIVE distributed
 #     path (distributed_gpu_forward/backward_transform!). The .buildkite GPU
-#     pipeline MUST run this file at nprocs ∈ {1,2,4} with NCCL available to
-#     exercise the multi-rank distributed transform (it is registered in
-#     GPU_TEST_FILES in test/file_lists.jl; the {2,4} runs require launching it
-#     under mpiexec so the Distributor sees Comm_size > 1).
+#     pipeline runs this file from DISTRIBUTED_GPU_TEST_FILES as well as the
+#     single-process GPU list, so the Distributor sees both sizes 1 and 2.
 #
 # NOT GPU-VERIFIED: authored on a GPU-less machine — parse-checked only. The GPU
 # assertions are first exercised on a CUDA node.
 # ============================================================================
 if CUDA.functional()
     @testset "distributed GPU DCT-I end-to-end (field-level)" begin
-        # 3D RealFourier(x) × ComplexFourier(y) × Chebyshev(z): RealFourier only on
-        # dim 1 (the framework convention) → distributed_gpu_supported == true.
+        # 3D RealFourier(x) × Chebyshev(y) × Chebyshev(z): RealFourier only on
+        # dim 1 and no Fourier transverse axis → distributed_gpu_supported == true.
         # Real field (Float64): the distributed path truncates dim 1 to the
         # half-spectrum, which is only meaningful for a real-valued physical field.
         coords = CartesianCoordinates("x", "y", "z")
-        dist   = Distributor(coords; dtype=Float64, device=GPU())
+        dist   = Distributor(coords; dtype=Float64, device=_DCT1_GPU_ARCH)
         xb = RealFourier(coords["x"];    size=16, bounds=(0.0, 2π))
-        yb = ComplexFourier(coords["y"]; size=8,  bounds=(0.0, 2π))
+        yb = ChebyshevT(coords["y"];     size=8,  bounds=(-1.0, 1.0))
         zb = ChebyshevT(coords["z"];     size=12, bounds=(-1.0, 1.0))
         field  = ScalarField(dist, "u", (xb, yb, zb), Float64)
-        nprocs = field.dist.size
+        nprocs = dist.size
 
         @test Tarang.distributed_gpu_supported(field) == true
 
@@ -166,8 +176,8 @@ if CUDA.functional()
         get_grid_data(field) .= CuArray(data)
         original = copy(Array(get_grid_data(field)))
 
-        # Field-level round-trip: nprocs==1 → CPU DCT-I fallback; nprocs>1 → live
-        # distributed GPU path. Either way the grid must be recovered.
+        # Field-level round-trip: nprocs==1 uses the single-GPU device path;
+        # nprocs>1 uses the live distributed GPU path.
         forward_transform!(field)
         backward_transform!(field)
         ensure_layout!(field, :g)
@@ -178,7 +188,7 @@ if CUDA.functional()
         if nprocs == 1
             cdist = Distributor(coords; dtype=Float64, device=CPU())
             cxb = RealFourier(coords["x"];    size=16, bounds=(0.0, 2π))
-            cyb = ComplexFourier(coords["y"]; size=8,  bounds=(0.0, 2π))
+            cyb = ChebyshevT(coords["y"];     size=8,  bounds=(-1.0, 1.0))
             czb = ChebyshevT(coords["z"];     size=12, bounds=(-1.0, 1.0))
             cpu = ScalarField(cdist, "u", (cxb, cyb, czb), Float64)
             ensure_layout!(cpu, :g)
@@ -212,27 +222,23 @@ if CUDA.functional()
         end
     end
 
-    @testset "unsupported layout (RealFourier on dim 2) → CPU fallback" begin
-        # ComplexFourier(x) × RealFourier(y) × Chebyshev(z): RealFourier on dim 2 →
-        # distributed_gpu_supported == false, so the dispatch returns false and
-        # control falls to the CPU DCT-I chain.
+    @testset "unsupported distributed layout is rejected without CPU staging" begin
+        # RealFourier(x) × ComplexFourier(y) × Chebyshev(z) needs transverse
+        # conjugate partners that the distributed inverse cannot currently form.
         coords = CartesianCoordinates("x", "y", "z")
-        dist   = Distributor(coords; dtype=Float64, device=GPU())
-        xb = ComplexFourier(coords["x"]; size=8,  bounds=(0.0, 2π))
-        yb = RealFourier(coords["y"];    size=16, bounds=(0.0, 2π))
+        dist   = Distributor(coords; dtype=Float64, device=_DCT1_GPU_ARCH)
+        xb = RealFourier(coords["x"];    size=16, bounds=(0.0, 2π))
+        yb = ComplexFourier(coords["y"]; size=8,  bounds=(0.0, 2π))
         zb = ChebyshevT(coords["z"];     size=12, bounds=(-1.0, 1.0))
-        field  = ScalarField(dist, "u", (xb, yb, zb), Float64)
-        nprocs = field.dist.size
+        nprocs = dist.size
 
-        @test Tarang.distributed_gpu_supported(field) == false
+        bases = (xb, yb, zb)
+        @test Tarang.distributed_gpu_supported(bases) == false
 
-        # Round-trip via the CPU fallback is only valid at nprocs==1. At nprocs>1 a
-        # Fourier-containing field on GPU hits the explicit GPU+MPI Fourier guard
-        # (a local cuFFT cannot do a distributed Fourier transform), which errors by
-        # design. Any unsupported 3D Chebyshev layout necessarily places a RealFourier
-        # off dim 1, so there is no Fourier-free unsupported layout to round-trip at
-        # nprocs>1 — hence the predicate check above is the portable assertion.
+        # At one rank the general mixed transform is device-native and can round-trip.
+        # At multiple ranks Domain validation rejects it before allocation, never stages.
         if nprocs == 1
+            field = ScalarField(dist, "u", bases, Float64)
             ensure_layout!(field, :g)
             gshape = size(get_grid_data(field))
             data   = rand(Float64, gshape...)
@@ -243,8 +249,26 @@ if CUDA.functional()
             ensure_layout!(field, :g)
             @test isapprox(Array(get_grid_data(field)), original; rtol=1e-9, atol=1e-11)
         else
-            @info "nprocs>1: unsupported Fourier-containing layout errors at the " *
-                  "GPU+MPI Fourier guard (by design); round-trip asserted only at nprocs==1."
+            @test_throws ErrorException ScalarField(dist, "u", bases, Float64)
+        end
+    end
+
+
+    @testset "direct distributed backward transform refuses rank-local inverse" begin
+        coords = CartesianCoordinates("x", "y", "z")
+        dist = Distributor(coords; dtype=ComplexF64, device=_DCT1_GPU_ARCH)
+        nprocs = dist.size
+        if nprocs == 1
+            @test_skip "requires a multi-rank GPU launch"
+        else
+            labels = ("x", "y", "z")
+            bases = ntuple(i -> ComplexFourier(
+                coords[labels[i]]; size=8, bounds=(0.0, 2π)), 3)
+            field = ScalarField(dist, "u_coeff", bases, ComplexF64)
+            coeff = get_coeff_data(field)
+            coeff .= CUDA.rand(ComplexF64, size(coeff)...)
+            field.current_layout = :c
+            @test_throws ErrorException backward_transform!(field)
         end
     end
 end

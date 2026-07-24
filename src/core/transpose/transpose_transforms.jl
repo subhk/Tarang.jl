@@ -392,7 +392,9 @@ function fft_in_dim!(data, dim::Int, direction::Symbol, arch::CPU; plan=nothing)
 end
 
 function fft_in_dim!(data, dim::Int, direction::Symbol, arch::AbstractArchitecture; plan=nothing)
-    # Default: fall back to CPU (GPU plans are handled by CUDA extension)
+    is_gpu(arch) && error("No on-device FFT implementation supports $(typeof(data)); " *
+                          "CPU fallback is disabled.")
+    # Generic non-GPU architectures may use the CPU reference.
     data_cpu = on_architecture(CPU(), data)
     fft_in_dim!(data_cpu, dim, direction, CPU(); plan=plan)
     copyto!(data, on_architecture(arch, data_cpu))
@@ -484,7 +486,9 @@ function _apply_dct_scaling!(data, dim::Int, scale_zero::Float64, scale_pos::Flo
 end
 
 function dct_in_dim!(data, dim::Int, direction::Symbol, arch::AbstractArchitecture; grid_size::Union{Nothing,Int}=nothing)
-    # Default: fall back to CPU
+    is_gpu(arch) && error("No on-device DCT implementation supports $(typeof(data)); " *
+                          "CPU fallback is disabled.")
+    # Generic non-GPU architectures may use the CPU reference.
     data_cpu = on_architecture(CPU(), data)
     dct_in_dim!(data_cpu, dim, direction, CPU(); grid_size=grid_size)
     copyto!(data, on_architecture(arch, data_cpu))
@@ -506,4 +510,3 @@ function get_basis_for_dim(tf::TransposableField, dim::Int)
     end
     return tf.field.bases[dim]
 end
-

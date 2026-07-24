@@ -380,6 +380,8 @@ infrastructure is used. For field-valued derivatives (e.g., 2*u from u²),
 diagonal matrices are constructed from grid values.
 """
 function build_symbolic_jacobian(problem, state_fields)
+    any(_field_uses_gpu, state_fields) && error(
+        "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
     n = length(fields_to_vector(state_fields))
     vars = state_fields
 
@@ -470,10 +472,12 @@ Evaluate a Jacobian block (derivative expression) to a matrix.
 For scalar-valued expressions (field * perturbation), returns a diagonal matrix.
 For operator-valued expressions (Laplacian), returns the operator matrix.
 
-GPU-compatible: Field data is transferred to CPU before constructing sparse
-matrices (spdiagm requires CPU arrays for scalar indexing).
+GPU-valued Jacobian blocks are rejected until sparse Jacobian assembly is
+device-native; field data is never downloaded implicitly.
 """
 function _evaluate_jacobian_block(expr, var::ScalarField, nrows::Int, ncols::Int)
+    _field_uses_gpu(var) && error(
+        "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
     if isa(expr, Number)
         # Constant: scalar * identity
         return expr * sparse(I, min(nrows, ncols), min(nrows, ncols))
@@ -481,8 +485,9 @@ function _evaluate_jacobian_block(expr, var::ScalarField, nrows::Int, ncols::Int
         # Field-valued: diagonal matrix from coefficient values
         ensure_layout!(expr, :c)
         data = get_coeff_data(expr)
-        # Transfer to CPU if on GPU (sparse matrix construction requires CPU)
-        cpu_data = is_gpu_array(data) ? Array(data) : data
+        is_gpu_array(data) && error(
+            "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
+        cpu_data = data
         n = min(length(cpu_data), nrows, ncols)
         return spdiagm(0 => real.(cpu_data[1:n]))
     elseif isa(expr, Operator)
@@ -492,13 +497,15 @@ function _evaluate_jacobian_block(expr, var::ScalarField, nrows::Int, ncols::Int
             if isa(result, ScalarField)
                 ensure_layout!(result, :c)
                 data = get_coeff_data(result)
-                # Transfer to CPU if on GPU
-                cpu_data = is_gpu_array(data) ? Array(data) : data
+                is_gpu_array(data) && error(
+                    "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
+                cpu_data = data
                 n = min(length(cpu_data), nrows, ncols)
                 return spdiagm(0 => real.(cpu_data[1:n]))
             elseif isa(result, AbstractMatrix)
-                # Ensure matrix is on CPU
-                return is_gpu_array(result) ? Array(result) : result
+                is_gpu_array(result) && error(
+                    "GPU symbolic Jacobian matrices are unsupported; CPU fallback is disabled.")
+                return result
             elseif isa(result, Number)
                 return result * sparse(I, min(nrows, ncols), min(nrows, ncols))
             end

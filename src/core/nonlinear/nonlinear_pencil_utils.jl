@@ -23,9 +23,9 @@ function get_pencil_compatible_data(field::ScalarField, config::PencilConfig)
     field_data = get_grid_data(field)
     field_shape = size(field_data)
 
-    # Pencil transforms operate on CPU arrays; copy from GPU if needed
+    # PencilArrays is CPU-only. GPU nonlinear paths use TransposableField.
     if is_gpu_array(field_data)
-        field_pencil = Array(field_data)
+        error("PencilArray conversion is unavailable for GPU fields; CPU fallback is disabled.")
     else
         field_pencil = field_data
     end

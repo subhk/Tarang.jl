@@ -19,7 +19,7 @@ This file contains MPI communication functions used by transpose operations:
 Synchronize GPU stream before MPI operations to ensure all GPU kernels have completed.
 CRITICAL: Must be called before:
 1. CUDA-aware MPI operations (to ensure send buffer data is ready)
-2. GPU-to-CPU copies (to ensure GPU data is complete before staging)
+2. Direct CUDA-aware MPI reads of GPU buffers
 
 This prevents race conditions where MPI reads from GPU buffers before
 prior GPU operations (FFTs, pack kernels) have completed.
@@ -94,8 +94,11 @@ end
 
 function _do_alltoallv!(send_buf, recv_buf, send_counts, recv_counts,
                         comm::MPI.Comm, arch::AbstractArchitecture, buffers=nothing)
-    # Check for CUDA-aware MPI
-    if is_gpu(arch) && check_cuda_aware_mpi()
+    if is_gpu(arch) && !check_cuda_aware_mpi()
+        error("GPU MPI transpose requires CUDA-aware MPI; host staging fallback is disabled.")
+    end
+    # Direct device-buffer MPI after the strict capability check above.
+    if is_gpu(arch)
         # CRITICAL: Sync GPU before MPI to ensure pack kernels completed
         _sync_gpu_if_needed(arch)
         # Direct GPU buffer transfer
@@ -174,7 +177,10 @@ function _do_ialltoallv!(send_buf, recv_buf, send_counts, recv_counts,
         return nothing
     end
 
-    if is_gpu(arch) && check_cuda_aware_mpi()
+    if is_gpu(arch) && !check_cuda_aware_mpi()
+        error("Asynchronous GPU MPI transpose requires CUDA-aware MPI; " *
+              "host staging fallback is disabled.")
+    elseif is_gpu(arch)
         # CRITICAL: Sync GPU before MPI to ensure pack kernels completed
         _sync_gpu_if_needed(arch)
         # Direct GPU buffer transfer (non-blocking)
@@ -360,7 +366,9 @@ function _do_allgatherv!(send_buf, recv_buf, send_count::Int, recv_counts::Vecto
         ))
     end
 
-    if is_gpu(arch) && check_cuda_aware_mpi()
+    if is_gpu(arch) && !check_cuda_aware_mpi()
+        error("GPU MPI all-gather requires CUDA-aware MPI; host staging fallback is disabled.")
+    elseif is_gpu(arch)
         # CRITICAL: Sync GPU before MPI to ensure data is ready
         _sync_gpu_if_needed(arch)
         # Direct GPU buffer transfer
@@ -530,4 +538,3 @@ function _pack_scatter_y!(buffer::AbstractVector{T}, src::AbstractArray{T,2},
     block .= view(src, :, y_start : y_start+rank_ny-1)
     return buffer
 end
-

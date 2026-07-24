@@ -218,11 +218,14 @@ GPU-specific forward transform using CUFFT (extension-local implementation).
 Registered into `Tarang._GPU_FORWARD_TRANSFORM_HOOK` by `TarangCUDAExt.__init__`;
 `Tarang.gpu_forward_transform!` calls it through the hook (a same-signature
 `Tarang.gpu_forward_transform!` method here would overwrite the src method).
-Returns `true` if the GPU transform was applied, `false` to fall back to CPU.
+Returns `true` if the GPU transform was applied. `false` means unsupported and
+is converted by the core dispatcher into an explicit error; no CPU fallback is
+performed.
 Supports:
 - Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT
-- Chebyshev-containing fields route to CPU (GPU DCT machinery is DCT-II,
-  Tarang's Chebyshev convention is DCT-I), except the distributed DCT-I path.
+- Mixed Fourier×Chebyshev fields use the GPU DCT-I path.
+- Same-size single-GPU pure-Chebyshev fields use the GPU DCT-I path. Eligible
+  distributed 3D fields use the multi-GPU DCT-I path above.
 """
 function _gpu_forward_transform_impl!(field::ScalarField)
     arch = field.dist.architecture
@@ -255,7 +258,7 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         if Tarang.distributed_gpu_supported(field)
             return distributed_gpu_forward_transform!(field)
         else
-            return false   # unsupported layout (e.g. RealFourier not on dim 1) -> CPU DCT-I fallback
+            return false   # unsupported layout; core raises without CPU staging
         end
     end
 
@@ -286,16 +289,24 @@ function _gpu_forward_transform_impl!(field::ScalarField)
     all_chebyshev = all(b -> isa(b, ChebyshevT), bases)
     has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
     has_chebyshev = any(b -> isa(b, ChebyshevT), bases)
-
-    # The mixed path below uses Tarang's Gauss-Lobatto DCT-I implementation.
-    # The older pure-Chebyshev dispatcher still uses DCT-II/III, so keep those
-    # fields on the correct CPU transform chain until it is migrated too.
-    if has_chebyshev && !has_fourier
-        return false
-    end
-
     input_T = eltype(data_g)
     coeff_T = Tarang.coefficient_eltype(field.dtype)
+
+    # Reuse the mixed-plan driver for pure Chebyshev fields: with no Fourier
+    # axes it is a sequence of the verified on-device DCT-I kernels. The driver
+    # currently requires equal grid/coefficient shapes along Chebyshev axes;
+    # scaled/truncated shapes are rejected by the core dispatcher.
+    if all_chebyshev
+        length(bases) <= 3 || return false
+        existing_coeff = get_coeff_data(field)
+        size(existing_coeff) == local_grid_shape || return false
+        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+        if !(existing_coeff isa CuArray) || eltype(existing_coeff) != input_T
+            set_coeff_data!(field, CUDA.zeros(input_T, local_grid_shape...))
+        end
+        gpu_mixed_forward_transform!(get_coeff_data(field), data_g, plan)
+        return true
+    end
 
     if all_fourier
         # Pure Fourier case - use optimized multi-dimensional FFT.
@@ -356,95 +367,8 @@ function _gpu_forward_transform_impl!(field::ScalarField)
 
         return true
 
-    elseif all_chebyshev && length(bases) == 1
-        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
-        # This branch implements DCT-II (Makhoul), but Tarang's Chebyshev
-        # convention is DCT-I on the Gauss-Lobatto grid. It is UNREACHABLE behind
-        # the `has_chebyshev → return false` guard above and would produce wrong
-        # coefficients if reached.
-        # Pure Chebyshev 1D case - use GPU DCT
-        n = local_grid_shape[1]
-        local_coeff_shape = local_grid_shape  # Chebyshev: same shape
-
-        existing_coeff = get_coeff_data(field)
-        needs_alloc = !(existing_coeff isa CuArray) ||
-                      eltype(existing_coeff) != input_T ||
-                      size(existing_coeff) != local_coeff_shape
-        if needs_alloc
-            set_coeff_data!(field, CUDA.zeros(input_T, local_coeff_shape...))
-        end
-
-        if input_T <: Complex
-            # Complex Chebyshev: DCT real and imag parts separately (kernels need
-            # real input). Reuse cached scratch instead of allocating per call.
-            real_T = real(input_T)
-            dct_plan = get_gpu_dct_plan(gpu_arch, n, real_T, 1)
-            sc = get_gpu_dct_scratch(gpu_arch, size(data_g), real_T, 4)
-            real_in, imag_in, real_out, imag_out = sc[1], sc[2], sc[3], sc[4]
-            real_in .= real.(data_g)
-            imag_in .= imag.(data_g)
-            gpu_forward_dct_1d!(real_out, real_in, dct_plan)
-            gpu_forward_dct_1d!(imag_out, imag_in, dct_plan)
-            get_coeff_data(field) .= complex.(real_out, imag_out)
-        else
-            dct_plan = get_gpu_dct_plan(gpu_arch, n, input_T, 1)
-            gpu_forward_dct_1d!(get_coeff_data(field), data_g, dct_plan)
-        end
-        return true
-
-    elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
-        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
-        # This branch implements DCT-II (Makhoul), but Tarang's Chebyshev
-        # convention is DCT-I. Unreachable behind the `has_chebyshev → return
-        # false` guard above.
-        # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions
-        # Coefficient shape equals grid shape for Chebyshev
-        local_coeff_shape = local_grid_shape
-
-        existing_coeff = get_coeff_data(field)
-        needs_alloc = !(existing_coeff isa CuArray) ||
-                      eltype(existing_coeff) != input_T ||
-                      size(existing_coeff) != local_coeff_shape
-        if needs_alloc
-            set_coeff_data!(field, CUDA.zeros(input_T, local_coeff_shape...))
-        end
-
-        if input_T <: Complex
-            # Complex Chebyshev: apply DCT to real and imaginary parts separately
-            # (DCT kernels use cos() which requires real-valued inputs on GPU)
-            real_T = real(input_T)
-            # Ping-pong between cached buffers (shape is invariant under DCT), so
-            # no per-dimension device allocation.
-            sc = get_gpu_dct_scratch(gpu_arch, size(data_g), real_T, 4)
-            cur_real, buf_real, cur_imag, buf_imag = sc[1], sc[2], sc[3], sc[4]
-            cur_real .= real.(data_g)
-            cur_imag .= imag.(data_g)
-            for dim in 1:length(bases)
-                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur_real), real_T, dim)
-                gpu_dct_dim!(buf_real, cur_real, dct_plan, Val(:forward))
-                gpu_dct_dim!(buf_imag, cur_imag, dct_plan, Val(:forward))
-                cur_real, buf_real = buf_real, cur_real
-                cur_imag, buf_imag = buf_imag, cur_imag
-            end
-            get_coeff_data(field) .= complex.(cur_real, cur_imag)
-        else
-            # Apply DCT along each dimension (ping-pong between cached buffers)
-            sc = get_gpu_dct_scratch(gpu_arch, size(data_g), input_T, 2)
-            cur, buf = sc[1], sc[2]
-            copyto!(cur, data_g)
-            for dim in 1:length(bases)
-                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur), input_T, dim)
-                gpu_dct_dim!(buf, cur, dct_plan, Val(:forward))
-                cur, buf = buf, cur
-            end
-            copyto!(get_coeff_data(field), cur)
-        end
-        return true
-
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
-        # LIVE mixed Fourier×Chebyshev path (2D/3D). The `has_chebyshev && !has_fourier`
-        # guard above diverts only PURE-Chebyshev fields to CPU, so any field with BOTH a
-        # Chebyshev and a Fourier axis reaches here. The Chebyshev stages use
+        # LIVE mixed Fourier×Chebyshev path (2D/3D). The Chebyshev stages use
         # `gpu_dct1_along_dim!` — DCT-I on the Gauss-Lobatto grid, Tarang's convention
         # (see mixed_transforms.jl) — NOT DCT-II. Verified: forward→backward round-trip is
         # identity (4.4e-16) and the coefficients are bit-identical to the CPU mixed
@@ -469,7 +393,7 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         return true
     end
 
-    # For unsupported combinations (e.g., Legendre), fall back to CPU
+    # Unsupported combinations (e.g. Legendre) are rejected by the core guard.
     return false
 end
 
@@ -515,12 +439,15 @@ GPU-specific backward transform using CUFFT (extension-local implementation).
 Registered into `Tarang._GPU_BACKWARD_TRANSFORM_HOOK` by `TarangCUDAExt.__init__`;
 `Tarang.gpu_backward_transform!` calls it through the hook (a same-signature
 `Tarang.gpu_backward_transform!` method here would overwrite the src method).
-Returns `true` if the GPU transform was applied, `false` to fall back to CPU.
+Returns `true` if the GPU transform was applied. `false` means unsupported and
+is converted by the core dispatcher into an explicit error; no CPU fallback is
+performed.
 Supports:
 - Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT (including the
   upsampled-rfft scaled/dealias backward path)
-- Chebyshev-containing fields route to CPU (GPU DCT machinery is DCT-II,
-  Tarang's Chebyshev convention is DCT-I), except the distributed DCT-I path.
+- Mixed Fourier×Chebyshev fields use the GPU DCT-I path.
+- Same-size single-GPU pure-Chebyshev fields use the GPU DCT-I path. Eligible
+  distributed 3D fields use the multi-GPU DCT-I path above.
 """
 function _gpu_backward_transform_impl!(field::ScalarField)
     arch = field.dist.architecture
@@ -550,8 +477,18 @@ function _gpu_backward_transform_impl!(field::ScalarField)
         if Tarang.distributed_gpu_supported(field)
             return distributed_gpu_backward_transform!(field)
         else
-            return false   # unsupported layout (e.g. RealFourier not on dim 1) -> CPU DCT-I fallback
+            return false   # unsupported layout; core raises without CPU staging
         end
+    end
+
+    # Never interpret a rank-local slab as a complete field. The distributed
+    # DCT-I branch above is the only direct ScalarField multi-rank path handled
+    # here; pure Fourier GPU+MPI must use TransposableField/distributed APIs.
+    if nprocs > 1
+        error("Direct backward_transform! is unavailable for GPU fields with " *
+              "$(nprocs) MPI processes outside the supported distributed DCT-I path. " *
+              "A rank-local inverse would be incorrect; CPU staging fallback is disabled. " *
+              "Use TransposableField or a supported distributed transform.")
     end
 
     # Use LOCAL coefficient array size to determine grid shape
@@ -564,10 +501,21 @@ function _gpu_backward_transform_impl!(field::ScalarField)
     has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
     has_chebyshev = any(b -> isa(b, ChebyshevT), bases)
 
-    # Mixed fields use the cached GPU DCT-I path. Pure-Chebyshev fields still
-    # use the CPU transform chain because their legacy device branch is DCT-II/III.
-    if has_chebyshev && !has_fourier
-        return false
+    # Pure Chebyshev is the no-Fourier case of the mixed-plan DCT-I driver.
+    # Equal grid/coefficient shapes are required until GPU truncation/padding is
+    # implemented; unsupported shapes are rejected without CPU staging.
+    if all_chebyshev
+        length(bases) <= 3 || return false
+        existing_grid = get_grid_data(field)
+        local_grid_shape = existing_grid isa CuArray ? size(existing_grid) : local_coeff_shape
+        local_grid_shape == local_coeff_shape || return false
+        input_T = field.dtype
+        if !(existing_grid isa CuArray) || eltype(existing_grid) != input_T
+            set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
+        end
+        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+        gpu_mixed_backward_transform!(get_grid_data(field), data_c, plan)
+        return true
     end
 
     if all_fourier
@@ -585,12 +533,12 @@ function _gpu_backward_transform_impl!(field::ScalarField)
             # ORDER (transform_fourier.jl `_apply_backward!`): test the R2C
             # interpretation FIRST — pure shape heuristics misclassify N=1/N=2,
             # where div(N,2)+1 == N — then the upsampled (scaled) half-spectrum,
-            # then C2C. Anything else is ambiguous: return false (CPU fallback),
-            # NEVER run a guessed same-shape ifft and store junk.
+            # then C2C. Anything else is ambiguous and is rejected; NEVER run a
+            # guessed same-shape ifft and store junk.
             scaled_shape = Tarang.get_scaled_shape(field)
             coeff_T_bk = eltype(data_c)
             if length(scaled_shape) != length(local_coeff_shape) || !(coeff_T_bk <: Complex)
-                return false  # missing/mismatched shape info or non-complex coeffs → CPU
+                return false  # missing/mismatched shape info; core rejects it
             end
             grid_n1 = scaled_shape[1]
             base_n1 = bases[1].meta.size
@@ -674,106 +622,9 @@ function _gpu_backward_transform_impl!(field::ScalarField)
 
         return true
 
-    elseif all_chebyshev && length(bases) == 1
-        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
-        # This branch implements the inverse of DCT-II (Makhoul), but Tarang's
-        # Chebyshev convention is DCT-I on the Gauss-Lobatto grid. It is
-        # UNREACHABLE behind the `has_chebyshev → return false` guard above and
-        # would produce wrong grid data if reached.
-        # Pure Chebyshev 1D case - use GPU inverse DCT
-        local_grid_shape = local_coeff_shape  # Chebyshev: same shape
-
-        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
-            return false
-        end
-
-        input_T = eltype(data_c)
-        n = local_coeff_shape[1]
-
-        existing_grid = get_grid_data(field)
-        needs_alloc = existing_grid === nothing ||
-                      !(existing_grid isa CuArray) ||
-                      eltype(existing_grid) != input_T ||
-                      size(existing_grid) != local_grid_shape
-        if needs_alloc
-            set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
-        end
-
-        if input_T <: Complex
-            # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
-            real_T = real(input_T)
-            dct_plan = get_gpu_dct_plan(gpu_arch, n, real_T, 1)
-            sc = get_gpu_dct_scratch(gpu_arch, size(data_c), real_T, 4)
-            real_in, imag_in, real_out, imag_out = sc[1], sc[2], sc[3], sc[4]
-            real_in .= real.(data_c)
-            imag_in .= imag.(data_c)
-            gpu_backward_dct_1d!(real_out, real_in, dct_plan)
-            gpu_backward_dct_1d!(imag_out, imag_in, dct_plan)
-            get_grid_data(field) .= complex.(real_out, imag_out)
-        else
-            dct_plan = get_gpu_dct_plan(gpu_arch, n, input_T, 1)
-            gpu_backward_dct_1d!(get_grid_data(field), data_c, dct_plan)
-        end
-        return true
-
-    elseif all_chebyshev && (length(bases) == 2 || length(bases) == 3)
-        # ██ DEAD CODE — DO NOT RE-ENABLE WITHOUT A DCT-I REIMPLEMENTATION ██
-        # This branch implements the inverse of DCT-II (Makhoul), but Tarang's
-        # Chebyshev convention is DCT-I. Unreachable behind the `has_chebyshev →
-        # return false` guard above.
-        # Pure Chebyshev 2D/3D case - use GPU DCT on all dimensions (in reverse order)
-        local_grid_shape = local_coeff_shape  # For Chebyshev, shapes are equal
-
-        if !Tarang.should_use_gpu_fft(field, local_grid_shape)
-            return false
-        end
-
-        input_T = eltype(data_c)
-
-        existing_grid = get_grid_data(field)
-        needs_alloc = existing_grid === nothing ||
-                      !(existing_grid isa CuArray) ||
-                      eltype(existing_grid) != input_T ||
-                      size(existing_grid) != local_grid_shape
-        if needs_alloc
-            set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
-        end
-
-        if input_T <: Complex
-            # Complex Chebyshev: apply inverse DCT to real and imaginary parts separately
-            # (DCT kernels use cos() which requires real-valued inputs on GPU)
-            real_T = real(input_T)
-            # Ping-pong between cached buffers (shape invariant), no per-dim alloc.
-            sc = get_gpu_dct_scratch(gpu_arch, size(data_c), real_T, 4)
-            cur_real, buf_real, cur_imag, buf_imag = sc[1], sc[2], sc[3], sc[4]
-            cur_real .= real.(data_c)
-            cur_imag .= imag.(data_c)
-            for dim in reverse(1:length(bases))
-                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur_real), real_T, dim)
-                gpu_dct_dim!(buf_real, cur_real, dct_plan, Val(:backward))
-                gpu_dct_dim!(buf_imag, cur_imag, dct_plan, Val(:backward))
-                cur_real, buf_real = buf_real, cur_real
-                cur_imag, buf_imag = buf_imag, cur_imag
-            end
-            get_grid_data(field) .= complex.(cur_real, cur_imag)
-        else
-            # Inverse DCT along each dimension (ping-pong between cached buffers)
-            sc = get_gpu_dct_scratch(gpu_arch, size(data_c), input_T, 2)
-            cur, buf = sc[1], sc[2]
-            copyto!(cur, data_c)
-            for dim in reverse(1:length(bases))
-                dct_plan = get_gpu_dct_dim_plan(gpu_arch, size(cur), input_T, dim)
-                gpu_dct_dim!(buf, cur, dct_plan, Val(:backward))
-                cur, buf = buf, cur
-            end
-            copyto!(get_grid_data(field), cur)
-        end
-        return true
-
     elseif has_fourier && has_chebyshev && (length(bases) == 2 || length(bases) == 3)
         # LIVE mixed Fourier×Chebyshev inverse path (2D/3D) — mirror of the forward
-        # branch. Reached for any Fourier+Chebyshev field (the guard above diverts only
-        # PURE-Chebyshev fields to CPU). The Chebyshev stages use `gpu_dct1_along_dim!`
+        # branch. The Chebyshev stages use `gpu_dct1_along_dim!`
         # (inverse DCT-I), NOT DCT-II; forward→backward round-trips to identity (4.4e-16).
         # (A prior comment here mislabeled this a dead DCT-II branch — it is not.)
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
@@ -826,7 +677,7 @@ function _gpu_backward_transform_impl!(field::ScalarField)
         return true
     end
 
-    # For unsupported combinations (e.g., Legendre), fall back to CPU
+    # Unsupported combinations (e.g. Legendre) are rejected by the core guard.
     return false
 end
 

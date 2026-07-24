@@ -27,7 +27,7 @@ function _distributed_field_path_reason(fields::Vector{<:ScalarField})
     isempty(fields) && return nothing
 
     first_field = fields[1]
-    is_gpu(field_architecture(first_field)) && return :gpu
+    _field_uses_gpu(first_field) && return :gpu
     _mpi_pencil_distribution_active(first_field.dist) && return :mpi_pencil
     return nothing
 end
@@ -41,6 +41,13 @@ for MPI PencilArrays distributions.
 """
 _distributed_field_path_required(fields::Vector{<:ScalarField}) =
     _distributed_field_path_reason(fields) !== nothing
+
+"""Return true when a subproblem belongs to a GPU-resident solver state."""
+function _gpu_subproblem_execution(sp)
+    solver = sp.solver
+    hasproperty(solver, :state) || return false
+    return any(f -> !isempty(f.bases) && _field_uses_gpu(f), solver.state)
+end
 
 function _linear_operator_is_zero(L_matrix::AbstractMatrix)
     return (L_matrix isa SparseMatrixCSC && nnz(L_matrix) == 0) ||

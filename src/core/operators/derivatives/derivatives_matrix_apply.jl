@@ -28,42 +28,47 @@ function apply_dense_along_axis(matrix::AbstractMatrix, array::AbstractArray, ax
     ndim = ndims(array)
     use_gpu = is_gpu_array(array)
     arch = architecture(array)
-    array_cpu = use_gpu ? Array(array) : array
 
     # Resolve wraparound axis
     axis = mod1(axis, ndim)
 
     out_is_gpu = out !== nothing && is_gpu_array(out)
+    out !== nothing && use_gpu != out_is_gpu && throw(ArgumentError(
+        "Input and output must use the same architecture; implicit CPU/GPU staging is disabled"))
 
     if out === nothing
-        out_shape = collect(size(array_cpu))
-        out_shape[axis] = size(matrix, 1)
+        out_shape = ntuple(d -> d == axis ? size(matrix, 1) : size(array, d), ndim)
         # Promote so a complex matrix applied to a real array (or vice versa)
         # yields a buffer that can hold the result (else copyto! → InexactError).
-        out_cpu = zeros(promote_type(eltype(array_cpu), eltype(matrix)), out_shape...)
+        out_data = similar(array, promote_type(eltype(array), eltype(matrix)), out_shape)
     elseif out === array
         throw(ArgumentError("Cannot apply in place"))
     else
-        out_cpu = out_is_gpu ? Array(out) : out
+        out_data = out
     end
+
+    # The matrix is configuration data, not field state. Upload it once for a
+    # GPU multiplication; the field array itself never leaves its device.
+    matrix_data = use_gpu ? on_architecture(arch, Matrix(matrix)) : matrix
+    work_array = array
 
     # Move target axis to position 1
     if axis != 1
         perm = collect(1:ndim)
         perm[1] = axis
         perm[axis] = 1
-        array_cpu = permutedims(array_cpu, perm)
+        work_array = permutedims(work_array, perm)
     end
 
-    array_shape = size(array_cpu)
+    array_shape = size(work_array)
 
     # Flatten later axes for matrix multiplication
     if ndim > 2
-        array_cpu = reshape(array_cpu, (array_shape[1], prod(array_shape[2:end])))
+        work_array = reshape(work_array, (array_shape[1], prod(array_shape[2:end])))
     end
 
     # Apply matrix multiplication
-    temp = matrix * array_cpu
+    temp = matrix_data * work_array
 
     # Unflatten later axes
     if ndim > 2
@@ -79,29 +84,16 @@ function apply_dense_along_axis(matrix::AbstractMatrix, array::AbstractArray, ax
         temp = permutedims(temp, perm)
     end
 
-    copyto!(out_cpu, temp)
-
-    if use_gpu || out_is_gpu
-        if out === nothing
-            return on_architecture(arch, out_cpu)
-        else
-            if out_is_gpu
-                out .= copy_to_device(out_cpu, out)
-            else
-                copyto!(out, out_cpu)
-            end
-            return out
-        end
-    else
-        return out_cpu
-    end
+    copyto!(out_data, temp)
+    return out_data
 end
 
 """
     apply_sparse_along_axis(matrix, array, axis; out=nothing, check_shapes=false)
 
 Apply sparse matrix along any axis of an array.
-Supports both CPU and GPU arrays (GPU arrays are copied to CPU for sparse operations).
+For GPU arrays the sparse matrix is densified as configuration data and uploaded;
+the field array and result remain on-device.
 Following apply_sparse implementation in array:171-203.
 Note: Uses SparseMatrixCSC (Julia's sparse format) instead of CSR.
 """
@@ -109,11 +101,13 @@ function apply_sparse_along_axis(matrix::SparseMatrixCSC, array::AbstractArray, 
     ndim = ndims(array)
 
     use_gpu = is_gpu_array(array)
+    out_is_gpu = out !== nothing && is_gpu_array(out)
+    out !== nothing && use_gpu != out_is_gpu && throw(ArgumentError(
+        "Input and output must use the same architecture; implicit CPU/GPU staging is disabled"))
     if use_gpu
-        array_cpu = Array(array)
-    else
-        array_cpu = array
+        return apply_dense_along_axis(Matrix(matrix), array, axis; out=out)
     end
+    array_cpu = array
 
     axis = mod1(axis, ndim)
 
@@ -125,7 +119,7 @@ function apply_sparse_along_axis(matrix::SparseMatrixCSC, array::AbstractArray, 
     elseif out === array
         throw(ArgumentError("Cannot apply in place"))
     else
-        out_cpu = use_gpu ? Array(out) : out
+        out_cpu = out
     end
 
     if check_shapes
@@ -171,14 +165,5 @@ function apply_sparse_along_axis(matrix::SparseMatrixCSC, array::AbstractArray, 
 
     copyto!(out_cpu, temp)
 
-    if use_gpu
-        if out === nothing
-            return copy_to_device(out_cpu, array)
-        else
-            out .= copy_to_device(out_cpu, out)
-            return out
-        end
-    else
-        return out_cpu
-    end
+    return out_cpu
 end

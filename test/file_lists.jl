@@ -159,13 +159,13 @@ const GPU_TEST_FILES = [
     "test_ilu0_preconditioner.jl",
     # GPU-CI-only: distributed RealFourier×Chebyshev DCT-I local primitives PLUS an
     # end-to-end field-level testset (Task 9) that round-trips a 3D RealFourier ×
-    # ComplexFourier × Chebyshev GPU field through forward/backward_transform! and
-    # checks the unsupported-layout (RealFourier on dim 2) CPU fallback.
+    # Chebyshev × Chebyshev GPU field through forward/backward_transform! and
+    # checks that an unsupported distributed Fourier layout is rejected explicitly.
     # Self-guards with CUDA.functional() (skips cleanly when no GPU is present).
     # NOTE: at nprocs==1 (single-process include here) the field test is a wiring +
-    # round-trip smoke test (distributed dispatch is gated off; CPU DCT-I fallback).
-    # The .buildkite GPU pipeline MUST also run this file at nprocs ∈ {2,4} under
-    # mpiexec WITH NCCL to exercise the live distributed multi-GPU transform path.
+    # round-trip smoke test through the single-GPU device transform path.
+    # It is also registered in DISTRIBUTED_GPU_TEST_FILES below, where Buildkite
+    # launches it under mpiexec with NCCL to exercise the live multi-rank path.
     "test_gpu_distributed_dct1.jl",
     # First GPU coverage of step! itself: DiagonalIMEX exact viscous decay,
     # explicit-RK order (stage-aliasing regression), and the loud refusal when
@@ -243,6 +243,7 @@ const DISTRIBUTED_GPU_TEST_FILES = [
     "test_distributed_dct.jl",
     "test_distributed_dispatch.jl",
     "test_distributed_parseval.jl",
+    "test_gpu_distributed_dct1.jl",
     "test_nccl_alltoall.jl",
     "test_nccl_subcomm.jl",
     "test_pencil_decomposition.jl",

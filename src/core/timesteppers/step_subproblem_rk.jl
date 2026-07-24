@@ -804,6 +804,11 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         sp.LHS_solvers[a_ii] = lhs_solver
         return lhs_solver
     catch err
+        if _gpu_subproblem_execution(sp)
+            error("GPU subproblem factorization failed for group=$(sp.group), " *
+                  "stage=$stage_idx; CPU sparse/dense fallback is disabled. " *
+                  "Original error: $(sprint(showerror, err))")
+        end
         if solver_type != MatSolvers.SPQRSolver
             try
                 qr_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, LHS)
@@ -845,6 +850,11 @@ function _get_or_compute_mass_lu!(sp::Subproblem)
         sp.runtime.mass_solver = mass_solver
         return mass_solver
     catch err
+        if _gpu_subproblem_execution(sp)
+            error("GPU mass-matrix factorization failed for group=$(sp.group); " *
+                  "CPU sparse fallback is disabled. Original error: " *
+                  "$(sprint(showerror, err))")
+        end
         if solver_type != MatSolvers.SPQRSolver
             try
                 mass_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, M)

@@ -98,6 +98,10 @@ end
 is_gpu_field(field::VectorField) = is_gpu_field(field.components[1])
 is_gpu_field(field::TensorField) = is_gpu_field(field.components[1,1])
 
+"""True when either a field's declared distributor or its current storage uses GPU."""
+_field_uses_gpu(field::ScalarField) =
+    is_gpu(field.dist.architecture) || is_gpu(field_architecture(field)) || is_gpu_field(field)
+
 """
     set_local_data!(field_data, values)
 

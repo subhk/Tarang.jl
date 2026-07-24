@@ -443,6 +443,11 @@ function _get_or_build_multistep_lhs!(sp::Subproblem, a0::Float64, b0::Float64)
         sp.matrices[cache_key_k] = current_key
         return lhs_solver
     catch err
+        if _gpu_subproblem_execution(sp)
+            error("GPU multistep factorization failed for group=$(sp.group); " *
+                  "CPU sparse/dense fallback is disabled. Original error: " *
+                  "$(sprint(showerror, err))")
+        end
         if solver_type != MatSolvers.SPQRSolver
             try
                 qr_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, LHS)

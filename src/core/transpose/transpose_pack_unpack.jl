@@ -183,10 +183,10 @@ end
 
 function pack_for_transpose!(buffer, data, counts, displs, dim::Int,
                              nranks::Int, arch::AbstractArchitecture)
-    # Default implementation for GPU - use CPU version via staging
-    # GPU version overrides this in TarangCUDAExt
-    # Keeping this fallback here lets non-CUDA architectures run correctly even
-    # before they grow specialized pack/unpack kernels.
+    is_gpu(arch) && error(
+        "No on-device transpose pack implementation supports $(typeof(data)); " *
+        "CPU staging fallback is disabled.")
+    # Generic non-GPU architectures may use the CPU reference.
     data_cpu = on_architecture(CPU(), data)
     buffer_cpu = on_architecture(CPU(), buffer)
 
@@ -354,7 +354,10 @@ end
 
 function unpack_from_transpose!(data, buffer, counts, displs, dim::Int,
                                 nranks::Int, arch::AbstractArchitecture)
-    # Default implementation
+    is_gpu(arch) && error(
+        "No on-device transpose unpack implementation supports $(typeof(data)); " *
+        "CPU staging fallback is disabled.")
+    # Generic non-GPU architectures may use the CPU reference.
     data_cpu = on_architecture(CPU(), data)
     buffer_cpu = on_architecture(CPU(), buffer)
 

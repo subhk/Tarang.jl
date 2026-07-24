@@ -503,38 +503,48 @@ function _subproblem_selection_indices!(sp::Subproblem, matrix::Union{Nothing, S
 end
 
 function _assign_to_buffer!(dest::AbstractVector{ComplexF64}, src)
-    if is_gpu_array(dest)
-        src_dev = is_gpu_array(src) ? src : on_architecture(architecture(dest), Array(src))
-        if eltype(src_dev) <: Complex
-            dest .= src_dev
+    dest_gpu = is_gpu_array(dest)
+    src_gpu = is_gpu_array(src)
+    dest_gpu == src_gpu || error(
+        "Subproblem gather buffers and field data must use the same architecture; " *
+        "CPU/GPU staging is disabled.")
+    if dest_gpu
+        architecture(dest) == architecture(src) || error(
+            "Subproblem gather buffers and field data must reside on the same GPU device.")
+        if eltype(src) <: Complex
+            dest .= src
         else
-            dest .= ComplexF64.(src_dev)
+            dest .= ComplexF64.(src)
         end
     else
-        src_cpu = is_gpu_array(src) ? Array(src) : src
-        if eltype(src_cpu) <: Complex
-            copyto!(dest, src_cpu)
+        if eltype(src) <: Complex
+            copyto!(dest, src)
         else
-            copyto!(dest, ComplexF64.(src_cpu))
+            copyto!(dest, ComplexF64.(src))
         end
     end
     return dest
 end
 
 function _assign_from_buffer!(dest, src)
-    if is_gpu_array(dest)
-        src_dev = is_gpu_array(src) ? src : on_architecture(architecture(dest), Array(src))
+    dest_gpu = is_gpu_array(dest)
+    src_gpu = is_gpu_array(src)
+    dest_gpu == src_gpu || error(
+        "Subproblem scatter buffers and field data must use the same architecture; " *
+        "CPU/GPU staging is disabled.")
+    if dest_gpu
+        architecture(dest) == architecture(src) || error(
+            "Subproblem scatter buffers and field data must reside on the same GPU device.")
         if eltype(dest) <: Real
-            dest .= real.(src_dev)
+            dest .= real.(src)
         else
-            dest .= src_dev
+            dest .= src
         end
     else
-        src_cpu = is_gpu_array(src) ? Array(src) : src
         if eltype(dest) <: Real
-            dest .= real.(src_cpu)
+            dest .= real.(src)
         else
-            dest .= src_cpu
+            dest .= src
         end
     end
     return dest

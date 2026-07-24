@@ -401,7 +401,7 @@ function Tarang.gpu_resample_grid_data!(new_data::CuArray, old_data::CuArray,
 
     ndims_data = length(old_size)
     if length(new_size) != ndims_data
-        return false  # Dimension mismatch, fall back to CPU
+        return false  # Unsupported; core raises instead of staging through CPU.
     end
 
     gpu_spectral_resample!(new_data, old_data)
@@ -765,23 +765,8 @@ end
 """
     Tarang._try_gpu_rand!(phases::CuArray{T}) -> Bool
 
-Deliberately returns `false` for CuArrays so that the caller
-(`Tarang._fill_random_phases!` in stochastic_forcing.jl) takes its host-RNG
-fallback: `rand(rng, T, size(phases)...)` on the CPU followed by a `copyto!`
-to the device.
-
-The previous implementation called `CUDA.rand!(phases)` here, which uses the
-unseeded CURAND stream and IGNORES the caller's `rng`. That broke two contracts
-(see the matching `Tarang._fill_random_phases!(::GPU{CuDevice}, ...)` override
-in ext/cuda/architecture.jl, which draws on the host rng and uploads for the
-same reasons):
-1. Reproducibility — the user's seed must be honored.
-2. MPI rank-coherence — StochasticForcing seeds every rank identically so the
-   global forcing field is coherent across slabs; per-device CURAND streams
-   would decorrelate the ranks.
-
-`_try_gpu_rand!` receives no `rng` argument, so the seeded draw cannot happen
-here; returning `false` routes control to the caller's rng-based path.
+Legacy compatibility hook. Stochastic forcing now uses Tarang's seeded
+counter-based device kernel and no longer calls this function.
 """
 Tarang._try_gpu_rand!(phases::CuArray{T}) where {T<:AbstractFloat} = false
 
@@ -921,4 +906,3 @@ Tarang._is_gpu_array(a::CuArray) = true
 Tarang._is_gpu_array(::Any) = false
 Tarang._gpu_ilu0(A_csr) = CUDA.CUSPARSE.ilu02(A_csr)
 Tarang._gpu_ic0(A_csr) = CUDA.CUSPARSE.ic02(A_csr)
-

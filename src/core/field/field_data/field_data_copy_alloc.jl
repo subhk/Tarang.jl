@@ -203,11 +203,14 @@ gpu_fft_mode(field::ScalarField) = field.fft_mode
 """
     set_gpu_fft_mode!(field::ScalarField, mode::Symbol)
 
-Set the GPU FFT preference for a field. Use `:gpu` to force GPU transforms,
-`:cpu` to keep them on CPU, or `:auto` to rely on heuristics.
+Set the FFT preference for a field. `:cpu` is valid only for CPU fields. GPU
+fields accept `:auto` and `:gpu`; both execute transforms on-device.
 """
 function set_gpu_fft_mode!(field::ScalarField, mode::Symbol)
     mode in GPU_FFT_MODES || throw(ArgumentError("Invalid GPU FFT mode $mode (expected :auto, :cpu, or :gpu)"))
+    if mode === :cpu && is_gpu(field.dist.architecture)
+        throw(ArgumentError("GPU fields cannot use fft_mode=:cpu; CPU fallback is disabled"))
+    end
     field.fft_mode = mode
     return field
 end

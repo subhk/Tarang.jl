@@ -85,37 +85,38 @@ context switching; `launch!` calls it on every launch.
 
 ### FFT Backend Control
 
-Transforms choose between CPU FFTW and GPU CUFFT per field. The choice is a per-field mode
-plus a global size threshold.
+GPU fields use GPU transforms regardless of array size. They never download
+field data to run FFTW; an unsupported transform raises an error.
+
+The same strict rule applies to runtime solver transport: GPU IVP/LBVP state is
+not flattened into a CPU sparse-solver vector. Coupled IVPs and LBVPs require a
+CUDA matrix solver. GPU NLBVP and EVP solves currently report that they are
+unsupported rather than invoking their CPU implementations.
 
 | Function | Description |
 |----------|-------------|
 | `gpu_fft_mode(field)` | Current mode: `:auto` (default), `:cpu`, or `:gpu` |
-| `set_gpu_fft_mode!(field, mode)` | Set the mode. Any other symbol throws `ArgumentError` |
-| `set_gpu_fft_min_elements!(n)` | Element count below which `:auto` stays on the CPU (default `32_768`) |
-| `gpu_fft_min_elements()` | Read that threshold |
-| `should_use_gpu_fft(field)` | Whether the GPU FFT path would be taken for this field |
+| `set_gpu_fft_mode!(field, mode)` | Set the mode. GPU fields reject `:cpu` |
+| `set_gpu_fft_min_elements!(n)` | Set the legacy preference threshold for CPU fields; it does not affect GPU fields |
+| `gpu_fft_min_elements()` | Read that legacy threshold |
+| `should_use_gpu_fft(field)` | Always `true` for a GPU field unless its invalid mode is `:cpu` |
 
 ```julia
 coords = CartesianCoordinates("x", "y")
-dist   = Distributor(coords; dtype=Float64, device=CPU())
+dist   = Distributor(coords; dtype=Float64, device=GPU())
 bx = RealFourier(coords["x"]; size=16, bounds=(0.0, 2pi))
 by = RealFourier(coords["y"]; size=16, bounds=(0.0, 2pi))
 s  = ScalarField(Domain(dist, (bx, by)), "s")
 
 gpu_fft_mode(s)                    # :auto
-should_use_gpu_fft(s)              # false — 256 elements < the 32_768 threshold
+should_use_gpu_fft(s)              # true, even for 256 elements
 
-set_gpu_fft_mode!(s, :gpu)         # force GPU regardless of size
-should_use_gpu_fft(s)              # true
-
-set_gpu_fft_mode!(s, :auto)
-set_gpu_fft_min_elements!(1)       # lower the threshold instead
+set_gpu_fft_mode!(s, :gpu)         # explicitly require GPU
 should_use_gpu_fft(s)              # true
 ```
 
-Note that `should_use_gpu_fft` reports the *preference*: on a `CPU()` distributor the GPU path
-is never actually taken, whatever the mode says.
+On a `CPU()` distributor, transforms use FFTW. `should_use_gpu_fft` then reports
+only the legacy preference; it does not migrate the field.
 
 ### Transform Execution
 
@@ -130,9 +131,8 @@ backward_transform!(s)     # s.current_layout == :g, round-trip error ~3e-16
 ```
 
 `Tarang.gpu_forward_transform!` / `Tarang.gpu_backward_transform!` are the internal dispatch
-hooks these call. They are not exported, and they are not a way to "force" a GPU transform:
-each returns a `Bool` saying whether it *did* run on the GPU (always `false` on a CPU
-architecture). Use `set_gpu_fft_mode!` to steer the backend.
+hooks these call. They are not exported. Each returns `false` on a CPU
+architecture; for a GPU field it either completes on-device or raises an error.
 
 ## Writing Kernels: `KernelOperation`
 
@@ -235,8 +235,8 @@ computation (not supported for a 2D domain on a true 2D mesh, which warns and fa
 check_cuda_aware_mpi()      # false unless the MPI build supports device pointers
 ```
 
-When it returns `true`, distributed transforms pass `CuArray`s straight to MPI; otherwise the
-buffers are staged through the host.
+Distributed GPU transforms require this to return `true` and pass `CuArray`s
+straight to MPI. Non-CUDA-aware MPI raises an error; host staging is disabled.
 
 ## Memory Management
 
