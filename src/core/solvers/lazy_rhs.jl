@@ -291,6 +291,11 @@ function translate_to_lazy(expr, state; target=nothing)
         op = translate_to_lazy(op_expr, state; target=target)
         op === nothing && return nothing
         axis = target !== nothing ? _resolve_diff_axis(expr.coord, target.bases) : 0
+        if target !== nothing
+            axis == 0 && return nothing
+            basis = target.bases[axis]
+            (basis !== nothing && _lazy_diff_axis_supported(target, basis)) || return nothing
+        end
         return LazyDiff(op, expr.coord, expr.order, axis)
     end
 
@@ -1322,10 +1327,9 @@ _lazy_plan_field_type(::Type{F}) where {F<:ScalarField{<:Any, <:SerialFieldStora
     isconcretetype(F) ? F : ScalarField
 _lazy_plan_field_type(::Type) = ScalarField
 
-# When set (via `require_lazy_rhs!(true)`), `build_lazy_rhs_plan!` throws instead
-# of silently dropping the whole solver onto the ~100×-slower interpreted RHS
-# path. Off by default to keep the correctness-preserving fallback; turn it on in
-# CI / perf-sensitive runs to catch a degradation early.
+# Backward-compatible process-wide strictness switch. New code should prefer
+# the per-solver `rhs_fallback` keyword so independent simulations do not share
+# mutable policy.
 const REQUIRE_LAZY_RHS = Ref(false)
 
 """
@@ -1397,16 +1401,24 @@ function build_lazy_rhs_plan!(solver)
                 # slower. Do not cry wolf about it (see `_lazy_diff_axis_supported`).
                 declined_non_fourier = distributed && any(
                     b -> b !== nothing && !isa(b, FourierBasis), template.bases)
+                declined_normalized_jacobi = any(
+                    b -> isa(b, JacobiBasis) &&
+                         !(isa(b, ChebyshevT) || isa(b, ChebyshevU)),
+                    template.bases,
+                )
 
                 msg = "LazyRHS: cannot compile the RHS of equation $eq_idx for `$(template.name)` " *
-                      "(expression: $(string(expr))). The whole solver falls back to the " *
-                      "~100×-slower interpreted RHS evaluator."
+                      "(expression: $(string(expr)))."
                 if declined_non_fourier
                     msg *= " This is EXPECTED and CORRECT for a distributed non-Fourier " *
                            "(Chebyshev/Jacobi) axis: the compiled path cannot differentiate " *
                            "along a decomposed coefficient axis, so the interpreted evaluator " *
                            "handles it — accurately, but slowly. Move the term to the implicit " *
                            "(L) side to keep the compiled RHS."
+                elseif declined_normalized_jacobi
+                    msg *= " The field uses a Legendre/non-Chebyshev Jacobi axis, " *
+                           "whose orthonormal coefficient normalization is not supported " *
+                           "by the compiled derivative path."
                 else
                     msg *= " Usual cause: an unsupported or mistyped operator in this term."
                     # For an all-Fourier distributed field the fallback is not merely slow: the
@@ -1419,8 +1431,15 @@ function build_lazy_rhs_plan!(solver)
                                "operators, or call `require_lazy_rhs!()` to turn this into a hard error."
                     end
                 end
-                REQUIRE_LAZY_RHS[] && error(msg * " [require_lazy_rhs! is set — aborting.]")
-                @warn msg maxlog=5
+                unsafe_distributed_fallback = distributed && !declined_non_fourier
+                if unsafe_distributed_fallback
+                    error(msg * " [This distributed fallback is known to be incorrect " *
+                          "and cannot be enabled.]")
+                elseif _strict_rhs_required(solver)
+                    error(msg * " [Strict RHS policy is active. Rewrite the RHS, or use " *
+                          "interpreted execution only for a verified non-GPU compatibility case.]")
+                end
+                @warn msg * " Using the ~100×-slower interpreted compatibility evaluator." maxlog=5
                 return plan  # is_compiled stays false
             end
             plan.exprs[state_idx] = lazy

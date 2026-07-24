@@ -1,5 +1,5 @@
 # Public exports: compute architectures (CPU/GPU), device placement, kernel launch.
-export
+@public_api(
     AbstractArchitecture, AbstractSerialArchitecture,
     CPU, GPU,
     device, array_type, architecture,
@@ -9,4 +9,4 @@ export
     create_array, move_to_architecture,
     set_gpu_fft_min_elements!, gpu_fft_min_elements, should_use_gpu_fft,
     allocate_like, similar_zeros, copy_to_device, is_gpu_array,
-    _gpu_chebyshev_deriv!
+    _gpu_chebyshev_deriv!)

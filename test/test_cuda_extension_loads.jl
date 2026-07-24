@@ -39,7 +39,9 @@ end
 
         # GPU solver activation (was dead in every load order before the fix)
         @test Tarang.CUDA_AVAILABLE[]
-        @test Tarang._CUDA_MOD[] === CUDA
+        @test Tarang._gpu_cusolver_module() === CUDA.CUSOLVER
+        @test Tarang._gpu_cusparse_module() === CUDA.CUSPARSE
+        @test !isdefined(Tarang, :_CUDA_MOD)
         for name in ("cuda_lu", "cuda_dense", "cuda_cg", "cuda_gmres", "cuda_sparse")
             @test haskey(Tarang.MatSolvers.SOLVER_REGISTRY, name)
         end

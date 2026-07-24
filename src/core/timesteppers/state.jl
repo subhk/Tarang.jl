@@ -360,22 +360,26 @@ end
 """
     _get_problem_matrix(problem, key)
 
-Fetch a matrix from `problem.parameters` ensuring it resides on CPU memory.
-If the stored matrix is a GPU array, it is copied back to CPU once and the
-problem parameter is updated in place so subsequent calls reuse the CPU copy.
+Fetch a matrix from `problem.compiled` ensuring it resides on CPU memory.
+If a compiled configuration matrix is a GPU array, it is copied back once and
+the canonical compiled slot plus compatibility mirror are updated in place.
 """
 function _get_problem_matrix(problem::Problem, key::AbstractString)::Union{Nothing, AbstractMatrix}
-    params = problem.parameters
     key_str = key isa String ? key : String(key)
-    if !haskey(params, key_str)
-        return nothing
+    compiled = compiled_problem(problem)
+    matrix = if key_str == "L_matrix"
+        compiled.linear_matrix
+    elseif key_str == "M_matrix"
+        compiled.mass_matrix
+    else
+        throw(ArgumentError("Unknown compiled problem matrix key: $key_str"))
     end
-    matrix = params[key_str]
-    result = _ensure_cpu_matrix!(params, key_str, matrix)
+    matrix === nothing && return nothing
+    result = _ensure_cpu_matrix!(problem, key_str, matrix)
     return result isa AbstractMatrix ? result : nothing
 end
 
-function _ensure_cpu_matrix!(params::Dict{String, Any}, key::String, matrix)
+function _ensure_cpu_matrix!(problem::Problem, key::String, matrix)
     if matrix isa AbstractArray && is_gpu_array(matrix)
         # Config-matrix normalization (L/M operator matrices are consumed by
         # host-side factorization), not field-state staging — but say so loudly:
@@ -384,7 +388,10 @@ function _ensure_cpu_matrix!(params::Dict{String, Any}, key::String, matrix)
               "downloading it to CPU for host-side factorization (one-time, " *
               "config only — field state is never staged through CPU)." maxlog=1
         cpu_matrix = Array(matrix)
-        params[key] = cpu_matrix
+        compiled = compiled_problem(problem)
+        key == "L_matrix" ? (compiled.linear_matrix = cpu_matrix) :
+                            (compiled.mass_matrix = cpu_matrix)
+        problem.parameters[key] = cpu_matrix  # compatibility mirror
         return cpu_matrix
     end
     return matrix

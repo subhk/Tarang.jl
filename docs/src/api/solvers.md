@@ -140,7 +140,10 @@ subproblem decomposition, stop conditions, and performance stats.
 
 During solver construction, Tarang.jl compiles each equation's explicit right-hand side into a type-specialized expression tree (the "lazy" RHS). This eliminates runtime type dispatch and per-timestep allocation.
 
-If **any** term fails to translate, the **whole solver** — every equation — falls back to the interpreted evaluator.
+If **any** term fails to translate, the compiled plan is unavailable for the
+whole solver. Serial CPU solvers retain the interpreted compatibility path by
+default. MPI and GPU solvers fail during construction instead of selecting an
+unsafe fallback.
 
 ```julia
 solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -150,33 +153,27 @@ solver.rhs_plan.is_compiled   # true  ⇒ fast path
 diagnose(solver)              # reports the same, with the rest of the setup
 ```
 
-!!! warning "Do not ignore a fallback"
-    The interpreted path is roughly **100× slower** per RHS evaluation, and under MPI it is also **wrong**: on a **distributed all-Fourier** field its derivative evaluates to **zero**, so every term built on one silently vanishes. At 2 ranks the advection in `∂t(s) - nu*lap(s) = -u⋅∇(s)` contributes nothing — only the diffusion survives, and nothing is raised. (Serial is correct, merely slow.) A fallback you did not intend is a bug in your equation, not a graceful degradation.
-
-    Turn it into a hard error while developing:
-
-    ```julia
-    Tarang.require_lazy_rhs!()   # solver construction now errors instead of warning
-    ```
+!!! warning "Interpreted execution is an explicit compatibility mode"
+    The interpreted path is roughly **100× slower** per RHS evaluation. Use
+    `rhs_fallback=:strict` to require compilation on a serial CPU solver. A
+    verified CPU/MPI compatibility case can opt in with
+    `rhs_fallback=:interpreted`. GPU execution rejects that option: it never
+    enters the interpreted path. Distributed all-Fourier fallback is known to
+    be incorrect and is also rejected even when compatibility mode is requested.
 
 **What compiles.** Arithmetic (`+ - * / ^`), scalar functions (`sin`, `exp`, `tanh`, …), field and parameter references, derivatives (`∂x(u)`, `d(u,x)`), and the vector/tensor operators that reduce to a scalar: `lap(u)`, `div(v)`, `div(grad(u))`.
 
-**What does not, and why.** `curl` (and anything built on it) has no scalar form and is not translated: the whole solver falls back, with a loud warning.
+**What does not, and why.** `curl` (and anything built on it) has no scalar form
+and is not translated. Serial CPU solvers may use the compatibility evaluator;
+strict solvers reject it at construction.
 
-Two further cases *should* fall back, and do — **but only when the derivative is spelled `lap(·)` or `div(grad(·))`**. Written as a bare derivative (`∂z(u)`, `d(u,z)`, or the advection `u⋅∇(u)`) they are **not** declined, and the two behave very differently:
+Two further cases deliberately decline compilation for every spelling,
+including bare derivatives (`∂z(u)`, `d(u,z)`, or advection):
 
-| Case | As `lap(·)` / `div(grad(·))` | As a bare derivative (`∂z(u)`, `u⋅∇(u)`) |
-|---|---|---|
-| Derivative along a **distributed non-Fourier (Chebyshev) axis** | Declined → interpreted fallback, with a warning. Correct: the compiled path differentiates in coefficient space, where that axis is the decomposed one, while the interpreted path differentiates in grid space, where it is local. | Compiles, then **hard-errors** on the first RHS evaluation (`cannot differentiate along the non-Fourier axis … of a DISTRIBUTED field`). Loud, not silent. Move the term to the implicit (`L`) side, or run serial. |
-| **Legendre** / non-Chebyshev Jacobi bases | Declined → interpreted fallback, with a warning. Correct. | Compiles and is **silently wrong** — it applies an unnormalized differentiation matrix to orthonormal coefficients. Measured on a 20-step Legendre run: the compiled answer disagrees with the interpreted one by 32%. |
-
-!!! danger "Bare derivatives on a Legendre axis are silently wrong in an explicit RHS"
-    This is a live bug, not a design choice: the guard that declines these axes is consulted
-    only by the `lap`/`div` translators, so `∂z(u)`, `d(u,z)` and `u⋅∇(u)` slip past it. There
-    is no warning and no fallback — the RHS is simply wrong. Until it is fixed, keep
-    derivatives along a Legendre / non-Chebyshev Jacobi axis **out of the explicit RHS**
-    (move them to the implicit `L` side), or write them as `lap(·)`/`div(grad(·))`, which
-    do fall back correctly.
+| Case | Behavior |
+|---|---|
+| Derivative along a **distributed non-Fourier (Chebyshev) axis** | Strict by default. The verified grid-space evaluator can be requested with `rhs_fallback=:interpreted`; moving the term to the implicit side is faster. |
+| **Legendre** / non-Chebyshev Jacobi bases | Declined because the compiled differentiation matrix uses a different normalization. Serial CPU compatibility evaluation remains correct. |
 
 !!! note "Behavior change"
     `lap(u*v)` and `div(grad(u))` in an **explicit** RHS used to raise an error inside the interpreted evaluator, which was caught and swallowed — silently zeroing that equation's *entire* right-hand side. Scripts written that way were integrating `F ≡ 0`. They now compile and produce correct results, so their output will differ from earlier versions.

@@ -911,6 +911,8 @@ end
 
 using SparseArrays: SparseMatrixCSC
 
+Tarang._gpu_cusolver_module() = CUDA.CUSOLVER
+Tarang._gpu_cusparse_module() = CUDA.CUSPARSE
 Tarang._gpu_zeros(T::Type, dims...) = CUDA.zeros(T, dims...)
 Tarang._gpu_array(data::AbstractArray, T::Type) = CuVector{T}(data)
 Tarang._gpu_array(data::AbstractMatrix, T::Type) = CuMatrix{T}(data)

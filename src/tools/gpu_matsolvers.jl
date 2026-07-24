@@ -87,29 +87,23 @@ x = solve(solver, b)
 # Only load GPU solvers if CUDA is available
 const CUDA_AVAILABLE = Ref(false)
 
-# The CUDA module itself, registered by the extension's __init__. src code must
-# not reference `CUDA.` directly (CUDA is only a weakdep — the binding does not
-# exist in Tarang); everything below goes through these getters.
-const _CUDA_MOD = Ref{Any}(nothing)
+# CUDA-specific bindings live in TarangCUDAExt. Core owns the solver contracts
+# and algorithms, while these extension methods supply CUSOLVER/CUSPARSE only
+# after CUDA.jl has actually loaded.
+function _gpu_cusolver_module end
+function _gpu_cusparse_module end
 
-function _cuda()
-    m = _CUDA_MOD[]
-    m === nothing && error("CUDA.jl is not loaded — GPU solvers unavailable. Run `using CUDA` before constructing GPU solvers.")
-    return m::Module
-end
-
-_cusolver() = _cuda().CUSOLVER
-_cusparse() = _cuda().CUSPARSE
+_cusolver() = _gpu_cusolver_module()
+_cusparse() = _gpu_cusparse_module()
 
 """
-    _activate_gpu_solvers!(cuda_module::Module)
+    _activate_gpu_solvers!()
 
-Called by TarangCUDAExt.__init__ once the extension is loaded. Records the CUDA
-module, flips `CUDA_AVAILABLE`, and registers the GPU solver constructors in
-the solver registry.
+Called by TarangCUDAExt.__init__ once the extension is loaded. The extension
+owns all CUDA module bindings; this hook only flips availability and registers
+the GPU solver constructors in the solver registry.
 """
-function _activate_gpu_solvers!(cuda_module::Module)
-    _CUDA_MOD[] = cuda_module
+function _activate_gpu_solvers!()
     CUDA_AVAILABLE[] = true
     _register_gpu_solvers()
     @debug "GPU matrix solvers enabled (CUDA extension active)"

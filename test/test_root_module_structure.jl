@@ -5,6 +5,7 @@ const TARANG_SOURCE = read(joinpath(ROOT_DIR, "src", "Tarang.jl"), String)
 const LOAD_ORDER_SOURCE = read(joinpath(ROOT_DIR, "src", "load_order.jl"), String)
 const PUBLIC_API_SOURCE = read(joinpath(ROOT_DIR, "src", "public_api.jl"), String)
 const BOUNDARY_CONDITIONS_SOURCE = read(joinpath(ROOT_DIR, "src", "core", "boundary_conditions.jl"), String)
+const PROBLEMS_SOURCE = read(joinpath(ROOT_DIR, "src", "core", "problems.jl"), String)
 const API_DIR = joinpath(ROOT_DIR, "src", "api")
 const PUBLIC_API_DIR = joinpath(API_DIR, "public")
 const BOUNDARY_CONDITIONS_DIR = joinpath(ROOT_DIR, "src", "core", "boundary_conditions")
@@ -41,6 +42,12 @@ const BOUNDARY_CONDITIONS_DIR = joinpath(ROOT_DIR, "src", "core", "boundary_cond
     @test isfile(joinpath(API_DIR, "output.jl"))
 end
 
+@testset "Problem compilation boundary" begin
+    @test occursin("include(\"problems/problem_ir.jl\")", PROBLEMS_SOURCE)
+    @test occursin("include(\"problems/problem_types.jl\")", PROBLEMS_SOURCE)
+    @test isfile(joinpath(ROOT_DIR, "src", "core", "problems", "problem_ir.jl"))
+end
+
 @testset "Public API export structure" begin
     export_files = [
         "quick_start.jl",
@@ -59,9 +66,15 @@ end
 
     for file in export_files
         @test occursin("include(\"api/public/$file\")", PUBLIC_API_SOURCE)
-        @test isfile(joinpath(PUBLIC_API_DIR, file))
+        path = joinpath(PUBLIC_API_DIR, file)
+        @test isfile(path)
+        source = read(path, String)
+        @test occursin("@public_api", source)
+        @test !occursin(r"(?m)^export\b", source)
     end
 
+    @test occursin("const _PUBLIC_API_NAMES", PUBLIC_API_SOURCE)
+    @test occursin("macro public_api", PUBLIC_API_SOURCE)
     @test !occursin("\nexport\n", PUBLIC_API_SOURCE)
     @test !occursin("PeriodicDomain, ChebyshevDomain", PUBLIC_API_SOURCE)
     @test !occursin("NetCDFFileHandler, NetCDFEvaluator", PUBLIC_API_SOURCE)

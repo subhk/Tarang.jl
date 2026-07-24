@@ -79,8 +79,8 @@ function diagnose(solver::InitialValueSolver)
     # Subproblem decomposition summary (per-rank locality + cost report).
     # Shows count and cost imbalance so users can spot suboptimal MPI rank
     # counts before a production run.
-    if haskey(problem.parameters, "subproblems")
-        sps = problem.parameters["subproblems"]
+    sps = compiled_subproblems(problem)
+    if sps !== nothing
         if sps isa Tuple
             if dist.size > 1
                 try
@@ -225,8 +225,8 @@ function subproblem_locality_report(solver::InitialValueSolver)
     n_sp_local = 0
     with_matrices = 0
     local_cost = 0.0
-    if haskey(problem.parameters, "subproblems")
-        sps = problem.parameters["subproblems"]
+    sps = compiled_subproblems(problem)
+    if sps !== nothing
         if sps isa Tuple
             n_sp_local = length(sps)
             with_matrices = count(sp -> sp.M_min !== nothing, sps)

@@ -463,6 +463,12 @@ end
     @test !occursin("Tarang.__version__", merge_script)
     @test !occursin(r"include\(joinpath\(dirname\(@__DIR__\), \"src\", \"tools\", \"netcdf_merge\.jl\"\)\)", merge_script)
 
+    legacy_merge_script = read(joinpath(dirname(@__DIR__), "scripts", "merge_file.jl"), String)
+    @test occursin("merge_netcdf.jl", legacy_merge_script)
+    @test occursin("deprecated", legacy_merge_script)
+    @test count(occursin("function parse_arguments", source) for source in
+                (merge_script, legacy_merge_script)) == 1
+
     @test occursin("discover_handler_sets", merge_script)
     @test occursin("for (set_number, workdir) in discover_handler_sets", merge_script)
     @test occursin("normalize_handler_arg", merge_script)

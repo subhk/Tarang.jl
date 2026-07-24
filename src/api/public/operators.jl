@@ -1,5 +1,5 @@
 # Public exports: differential/algebraic operators and symbolic calculus.
-export
+@public_api(
     grad, div, curl, lap, trace, skew, transpose_components,
     Gradient, Divergence, Curl, Laplacian, Trace, Skew, TransposeComponents,
     ∇, Δ, ∇², ∂t,
@@ -20,4 +20,4 @@ export
     cartesian_component,
     is_linear, operator_order,
     advection, nonlinear_momentum, convection,
-    AdvectionOperator, NonlinearAdvectionOperator, ConvectiveOperator
+    AdvectionOperator, NonlinearAdvectionOperator, ConvectiveOperator)

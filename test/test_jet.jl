@@ -14,7 +14,7 @@ using Tarang
     # error-path noise) — ~911 as of 2026-06. A bare `@test result isa Any`
     # never noticed new instabilities; this ceiling catches a regression that
     # meaningfully grows the backlog without forcing it to zero. Lower it as the
-    # backlog is paid down. Exact counts can shift slightly with Julia/JET
-    # versions, hence the headroom.
-    @test n_reports <= 1000
+    # backlog is paid down. JET 0.11.6 reports 958 on Julia 1.12; exact counts
+    # shift slightly across compiler/JET versions, hence the small headroom.
+    @test n_reports <= 975
 end

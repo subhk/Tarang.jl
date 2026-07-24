@@ -455,7 +455,7 @@ end
 
 """Extract residual expression (LHS - RHS) from equation data."""
 function _get_residual_expression(eq_data)
-    if isa(eq_data, Dict)
+    if isa(eq_data, AbstractDict)
         lhs = get(eq_data, "LHS", nothing)
         rhs = get(eq_data, "RHS", nothing)
         if lhs !== nothing && rhs !== nothing

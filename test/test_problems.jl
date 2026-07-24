@@ -309,6 +309,21 @@ end
     @test solver.iteration == 0
     @test length(solver.state) >= 1
 
+    # Parsed equations and solver artifacts have explicit ownership. Dict-style
+    # access remains available for downstream compatibility during migration.
+    @test prob.equation_data[1] isa Tarang.EquationIR
+    @test prob.equation_data[1].mass === prob.equation_data[1]["M"]
+    @test prob.equation_data[1].equation_size == 5
+    @test prob.compiled isa Tarang.CompiledProblem
+    @test prob.compiled.linear_matrix === prob.parameters["L_matrix"]
+    @test prob.compiled.mass_matrix === prob.parameters["M_matrix"]
+
+    prob.compiled.caches.bc_rfft[f] = :cached
+    Tarang.reset_compiled_problem!(prob)
+    @test isempty(prob.compiled.caches.bc_rfft)
+    @test prob.compiled.linear_matrix === nothing
+    @test !haskey(prob.parameters, "L_matrix")
+
     # With RK222 timestepper
     f2 = make_periodic_field("v")
     prob2 = IVP([f2])

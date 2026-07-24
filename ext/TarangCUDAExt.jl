@@ -180,7 +180,7 @@ function __init__()
     # cannot be expressed as more-specific methods are registered here.
     Tarang._GPU_FORWARD_TRANSFORM_HOOK[] = _gpu_forward_transform_impl!
     Tarang._GPU_BACKWARD_TRANSFORM_HOOK[] = _gpu_backward_transform_impl!
-    Tarang._activate_gpu_solvers!(CUDA)
+    Tarang._activate_gpu_solvers!()
     return nothing
 end
 

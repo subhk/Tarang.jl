@@ -2,7 +2,7 @@
 #
 # This is the main modern timestepper path for mixed Fourier / Chebyshev
 # problems. `step_rk.jl` lands here after it finds pre-built subproblems in
-# `problem.parameters["subproblems"]`.
+# `problem.compiled.subproblems`.
 #
 # Runtime shape:
 # - gather one Fourier-mode-sized state vector per subproblem

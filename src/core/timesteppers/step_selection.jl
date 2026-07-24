@@ -11,11 +11,11 @@ const GLOBAL_MATRIX_IMPLICIT_DOF_LIMIT = 1_000_000
     _timestepper_subproblems(solver) -> Tuple or nothing
 
 Return the solver's assembled subproblems when the subproblem runtime path is
-available. Non-tuple values are treated as absent to preserve older parameter
-payloads without making every timestepper inspect `problem.parameters`.
+available. Non-tuple values are treated as absent so timestepper code consumes
+only artifacts owned by `CompiledProblem`.
 """
 function _timestepper_subproblems(solver::InitialValueSolver)
-    sps = get(solver.problem.parameters, "subproblems", nothing)
+    sps = compiled_subproblems(solver.problem)
     return sps isa Tuple ? sps : nothing
 end
 

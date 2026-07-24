@@ -70,7 +70,7 @@ _coeff_space_dofs(var::TensorField) = sum(_coeff_space_dofs(c) for c in vec(var.
 
 """Compute size (degrees of freedom) of field or equation data"""
 function compute_field_size(field_or_data)
-    if isa(field_or_data, Dict)
+    if isa(field_or_data, AbstractDict)
         if haskey(field_or_data, "equation_size")
             return field_or_data["equation_size"]
         elseif haskey(field_or_data, "equation_variables")
@@ -111,7 +111,7 @@ end
     Following patterns where equations can be conditionally
     included/excluded based on wavenumber, problem parameters, etc.
     """
-function check_equation_condition(eq_data::Dict)
+function check_equation_condition(eq_data::AbstractDict)
 
     # Check if equation is explicitly disabled
     if haskey(eq_data, "enabled") && !eq_data["enabled"]
@@ -221,7 +221,7 @@ end
     Check if equation data is structurally valid.
     Returns (is_valid::Bool, error_message::Union{String,Nothing})
     """
-function is_equation_valid(eq_data::Dict)
+function is_equation_valid(eq_data::AbstractDict)
 
     # Must have equation string
     if !haskey(eq_data, "equation_string")
@@ -253,17 +253,17 @@ end
 """
     Set a condition for equation inclusion in matrix assembly.
     """
-function set_equation_condition!(eq_data::Dict, condition::Union{Bool, Function})
+function set_equation_condition!(eq_data::AbstractDict, condition::Union{Bool, Function})
     eq_data["condition"] = condition
 end
 
 """Enable an equation for matrix assembly."""
-function enable_equation!(eq_data::Dict)
+function enable_equation!(eq_data::AbstractDict)
     eq_data["enabled"] = true
 end
 
 """Disable an equation from matrix assembly."""
-function disable_equation!(eq_data::Dict)
+function disable_equation!(eq_data::AbstractDict)
     eq_data["enabled"] = false
 end
 
@@ -271,7 +271,7 @@ end
     Set the valid wavenumber modes for this equation.
     The equation will only be included for these modes.
     """
-function set_valid_modes!(eq_data::Dict, modes::Union{Vector, Set, AbstractRange})
+function set_valid_modes!(eq_data::AbstractDict, modes::Union{Vector, Set, AbstractRange})
     eq_data["valid_modes"] = Set(modes)
 end
 
@@ -279,12 +279,12 @@ end
     Exclude this equation from k=0 (homogeneous) mode.
     Useful for gauge conditions in incompressible flow problems.
     """
-function exclude_k_zero!(eq_data::Dict, exclude::Bool=true)
+function exclude_k_zero!(eq_data::AbstractDict, exclude::Bool=true)
     eq_data["exclude_k_zero"] = exclude
 end
 
 """Get matrix expression from equation data"""
-function get_matrix_expression(eq_data::Dict, matrix_name::String)
+function get_matrix_expression(eq_data::AbstractDict, matrix_name::String)
     return get(eq_data, matrix_name, nothing)
 end
 
