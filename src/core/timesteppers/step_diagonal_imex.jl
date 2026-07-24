@@ -583,8 +583,17 @@ function _diagonal_deriv_grid(field::ScalarField, coord::Coordinate, order::Int)
         out .+= reshape(ik, shp...)
     else
         ik = ComplexF64.((im .* Float64.(k_axis)) .^ order)
+        # `out` lives on the field's device (similar_zeros above) but `ik` is a
+        # host Vector — broadcasting a host array into a CuArray kernel fails
+        # (non-isbits argument). Upload the 1-D multiplier first, mirroring
+        # add_wavenumber_squared_contribution! (tensor_fractional_laplacian.jl).
+        # Without this, any DiagonalIMEX GPU problem whose implicit L contains a
+        # derivative-of-self term (dt(u) + β*d(u,x) = …) died with an opaque
+        # GPU kernel-compilation error. (The PencilArray branch above keeps the
+        # host broadcast: PencilArrays are CPU-only in this framework.)
+        ik_dev = copy_to_device(ik, out)
         shp = ntuple(i -> i == axis ? length(ik) : 1, ndims(out))
-        out .+= reshape(ik, shp...)
+        out .+= reshape(ik_dev, shp...)
     end
     return out
 end

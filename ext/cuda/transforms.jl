@@ -262,18 +262,18 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         end
     end
 
-    # CRITICAL: GPU+MPI for Fourier transforms requires TransposableField/distributed paths
-    # A local-only cuFFT in MPI mode produces INCORRECT results (each rank FFTs its local slab)
-    # If we reach here with nprocs > 1 and have Fourier bases, error out explicitly
+    # Never interpret a rank-local slab as a complete field — for ANY basis
+    # combination, not just Fourier. The old guard fired only `if has_fourier`,
+    # which let a multi-rank pure-Chebyshev field (e.g. 2D Cheb×Cheb, which the
+    # 3D-only distributed-DCT gate above does not catch) fall through to the
+    # LOCAL all_chebyshev DCT-I branch below and silently transform each rank's
+    # slab as if it were the whole field. Mirrors the unconditional guard in
+    # _gpu_backward_transform_impl!.
     if nprocs > 1
-        has_fourier = any(b -> isa(b, RealFourier) || isa(b, ComplexFourier), bases)
-        if has_fourier
-            error("GPU+MPI Fourier transforms require using TransposableField or the distributed " *
-                  "transform path (distributed_forward_transform!). Direct forward_transform! on " *
-                  "GPU with $(nprocs) MPI processes would produce incorrect results (local FFT only). " *
-                  "Either: (1) use TransposableField for distributed transforms, " *
-                  "(2) use distributed_forward_transform!, or (3) run with a single GPU.")
-        end
+        error("Direct forward_transform! is unavailable for GPU fields with " *
+              "$(nprocs) MPI processes outside the supported distributed DCT-I path. " *
+              "A rank-local transform would be incorrect; CPU staging fallback is disabled. " *
+              "Use TransposableField or a supported distributed transform.")
     end
 
     # Use LOCAL array size from actual data (not global domain size)

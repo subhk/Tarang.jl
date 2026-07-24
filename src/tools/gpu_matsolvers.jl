@@ -1032,6 +1032,11 @@ function HybridSolver(matrix::AbstractMatrix;
     n = size(matrix, 1)
 
     mode ∈ (:auto, :cpu, :gpu) || throw(ArgumentError("HybridSolver mode must be :auto, :cpu, or :gpu"))
+    # Validate up front: an unrecognized type previously matched no construction
+    # branch yet still set use_gpu=true with gpu_solver=nothing — the solver then
+    # LOGGED "Using GPU" while silently solving on CPU.
+    gpu_solver_type ∈ (:cg, :gmres, :lu) || throw(ArgumentError(
+        "HybridSolver gpu_solver_type must be :cg, :gmres, or :lu, got $(repr(gpu_solver_type))"))
 
     # Build CPU solver (always available)
     cpu_solver = SparseLUSolver(matrix)
@@ -1048,13 +1053,17 @@ function HybridSolver(matrix::AbstractMatrix;
                 gpu_solver = CuIterativeCG(matrix; preconditioner=gpu_preconditioner, kwargs...)
             elseif gpu_solver_type == :gmres
                 gpu_solver = CuIterativeGMRES(matrix; preconditioner=gpu_preconditioner, kwargs...)
-            elseif gpu_solver_type == :lu
+            else  # :lu (validated above)
                 gpu_solver = CuDenseLU(matrix)
             end
             use_gpu = true
             @info "HybridSolver: Using GPU $(gpu_solver_type) (mode=$(mode), n=$n, threshold=$threshold)"
         catch e
-            @warn "GPU solver creation failed, using CPU: $e"
+            # An EXPLICIT :gpu request must not silently degrade to CPU — that
+            # is the implicit-CPU-fallback pattern the framework forbids
+            # (see PR #74). Only :auto may fall back, and it says so.
+            mode === :gpu && rethrow()
+            @warn "HybridSolver(mode=:auto): GPU solver creation failed, using CPU solver instead" exception=(e, catch_backtrace()) maxlog=1
         end
     else
         @debug "HybridSolver: Using CPU solver (mode=$(mode), n=$n, threshold=$threshold)"
@@ -1077,14 +1086,30 @@ end
 # Registration
 # ============================================================================
 
+"""
+    StrictGPUSolver
+
+Registry factory for the solver name "gpu": constructs a `HybridSolver` pinned
+to `mode=:gpu`, so a user who explicitly requested "gpu" either gets a working
+GPU solver or a loud error — never a silent CPU solve. (Previously "gpu" mapped
+to `HybridSolver` with its default `mode=:auto`, which silently ran 100% CPU
+whenever CUDA was unavailable or the system was below the size threshold.)
+Use the name "hybrid" for the auto CPU/GPU selection behavior.
+
+The type itself is never instantiated — its constructor-style call returns the
+underlying `HybridSolver` (the registry requires a `Type` entry).
+"""
+struct StrictGPUSolver <: AbstractMatSolver end
+StrictGPUSolver(matrix::AbstractMatrix; kwargs...) = HybridSolver(matrix; kwargs..., mode=:gpu)
+
 function _register_gpu_solvers()
     register_solver("cuda_dense", CuDenseLU)
     register_solver("cuda_lu", CuDenseLU)
     register_solver("cuda_sparse", CuSparseLU)
     register_solver("cuda_cg", CuIterativeCG)
     register_solver("cuda_gmres", CuIterativeGMRES)
-    register_solver("gpu", HybridSolver)
-    register_solver("hybrid", HybridSolver)
+    register_solver("gpu", StrictGPUSolver)   # explicit "gpu" = strict, no silent CPU
+    register_solver("hybrid", HybridSolver)   # "hybrid" = auto CPU/GPU selection
     @debug "Registered GPU matrix solvers"
 end
 

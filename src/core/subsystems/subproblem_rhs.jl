@@ -511,8 +511,14 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
     end
 
     # Upload the CPU-built raw vector into the device-resident raw buffer.
+    # This is an INTENTIONAL one-shot H2D upload of a freshly host-built staging
+    # vector (the scalar writes above must stay off device arrays), NOT field
+    # staging — so use a direct copyto! rather than `_assign_to_buffer!`, whose
+    # same-architecture guard exists to catch *accidental* CPU/GPU mixing and
+    # would (correctly, for its purpose) refuse this transfer. Routing through
+    # it killed every GPU coupled subproblem step at the pre-stage ALG_F gather.
     raw = _subproblem_cached_vector!(sp, :gather_alg_F_raw, I_raw; like=dest)
-    _assign_to_buffer!(raw, raw_cpu)
+    copyto!(raw, raw_cpu)
 
     compress_equation_space!(dest, sp, raw)
     return dest

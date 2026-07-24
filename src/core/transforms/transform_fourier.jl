@@ -470,15 +470,14 @@ Caller must ensure `out` has the shape/eltype returned by
 `_forward_output_spec(in, transform)`.
 """
 function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::FourierTransform)
-    # Only FFTW (CPU) arrays are handled here; GPU data is caught earlier.
+    # Only FFTW (CPU) arrays are handled here; GPU-arch fields are dispatched
+    # on-device (or error) before the CPU chain. Reaching this with device data
+    # means a dispatch bug — refuse loudly rather than host-compute. (The old
+    # defensive branch silently computed on host and silently SKIPPED the
+    # copyto! on any shape/eltype mismatch, returning stale `out`.)
     if is_gpu_array(in) || is_gpu_array(out)
-        # Shouldn't happen on the new hot path — forward_transform! has
-        # already branched to the GPU path by now — but handle defensively.
-        result = _fourier_forward(in, transform)
-        if size(result) == size(out) && eltype(result) == eltype(out)
-            copyto!(out, result)
-        end
-        return out
+        error("_apply_forward!(::FourierTransform): GPU data reached the CPU transform " *
+              "chain (in=$(typeof(in)), out=$(typeof(out))); CPU fallback is disabled.")
     end
 
     plan = _get_or_plan_forward!(transform, in)
@@ -503,12 +502,11 @@ _apply_backward!(out::AbstractArray, in::AbstractArray, transform::FourierTransf
     _apply_backward!(out, in, transform, 0)
 
 function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::FourierTransform, out_n::Int)
+    # Mirror of _apply_forward!: device data here is a dispatch bug — refuse
+    # loudly, never host-compute (and never silently skip the copyto!).
     if is_gpu_array(in) || is_gpu_array(out)
-        result = _fourier_backward(in, transform, out_n)
-        if size(result) == size(out) && eltype(result) == eltype(out)
-            copyto!(out, result)
-        end
-        return out
+        error("_apply_backward!(::FourierTransform): GPU data reached the CPU transform " *
+              "chain (in=$(typeof(in)), out=$(typeof(out))); CPU fallback is disabled.")
     end
 
     plan = _get_or_plan_backward!(transform, in, out_n)

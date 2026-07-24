@@ -377,6 +377,12 @@ end
 
 function _ensure_cpu_matrix!(params::Dict{String, Any}, key::String, matrix)
     if matrix isa AbstractArray && is_gpu_array(matrix)
+        # Config-matrix normalization (L/M operator matrices are consumed by
+        # host-side factorization), not field-state staging — but say so loudly:
+        # a user who built the matrix on device should know it now lives on host.
+        @warn "Timestepper parameter \"$key\" was provided as a GPU array; " *
+              "downloading it to CPU for host-side factorization (one-time, " *
+              "config only — field state is never staged through CPU)." maxlog=1
         cpu_matrix = Array(matrix)
         params[key] = cpu_matrix
         return cpu_matrix

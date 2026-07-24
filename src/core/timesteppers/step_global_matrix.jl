@@ -130,6 +130,12 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
         @debug "MCNAB2 step completed: dt=$dt_current, θ=$θ, iteration=$(state.timestepper_data[:iteration])"
 
     catch e
+        # GPU state: rethrow. Substituting another scheme here would SWALLOW the
+        # framework's deliberate loud refusals (GPU vector-pack guard, GPU
+        # factorization errors) and silently run CNAB2 in place of MCNAB2 every
+        # step. MCNAB2 is a global-matrix method with no GPU path — on GPU use
+        # CNAB2/SBDF2 (subproblem-backed) or DiagonalIMEX_SBDF2 explicitly.
+        any(_field_uses_gpu, solver.state) && rethrow()
         @warn "MCNAB2 failed: $e, falling back to CNAB2"
         step_cnab2!(state, solver)
         return
@@ -234,6 +240,11 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
         @debug "CNLF2 step completed: dt=$dt_current, w1=$w1, iteration=$(state.timestepper_data[:iteration])"
 
     catch e
+        # GPU state: rethrow (see the MCNAB2 catch above). Silently running
+        # CNAB2 in place of CNLF2 changes the scheme's stability character.
+        # CNLF2 is a global-matrix method with no GPU path — on GPU use
+        # CNAB2/SBDF2 (subproblem-backed) or DiagonalIMEX_SBDF2 explicitly.
+        any(_field_uses_gpu, solver.state) && rethrow()
         @warn "CNLF2 failed: $e, falling back to CNAB2"
         step_cnab2!(state, solver)
         return
@@ -259,6 +270,11 @@ function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
     try
         step_rk_imex!(state, solver)
     catch e
+        # GPU state: rethrow. Falling back to fully-explicit RK443 drops the
+        # implicit L, the mass matrix, AND BC/tau enforcement — exactly the
+        # silent-L-drop failure the GPU guards exist to prevent; this catch
+        # must not convert those loud errors back into a silently wrong run.
+        any(_field_uses_gpu, solver.state) && rethrow()
         @warn "RKSMR failed: $e, falling back to RK443"
         step_rk443!(state, solver)
     end
@@ -272,6 +288,8 @@ function step_rkgfy!(state::TimestepperState, solver::InitialValueSolver)
     try
         step_rk_imex!(state, solver)
     catch e
+        # GPU: rethrow — see step_rksmr! (explicit fallback silently drops L/M/BC).
+        any(_field_uses_gpu, solver.state) && rethrow()
         @warn "RKGFY failed: $e, falling back to RK443"
         step_rk443!(state, solver)
     end
@@ -281,6 +299,8 @@ function step_rk443_imex!(state::TimestepperState, solver::InitialValueSolver)
     try
         step_rk_imex!(state, solver)
     catch e
+        # GPU: rethrow — see step_rksmr! (explicit fallback silently drops L/M/BC).
+        any(_field_uses_gpu, solver.state) && rethrow()
         @warn "RK443_IMEX failed: $e, falling back to RK443"
         step_rk443!(state, solver)
     end
