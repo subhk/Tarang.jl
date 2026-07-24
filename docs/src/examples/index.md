@@ -1,1 +1,1 @@
-- [GPU FFT Heuristics](gpu_fft_heuristics.md)
+- [GPU Transform Dispatch](gpu_fft_heuristics.md)

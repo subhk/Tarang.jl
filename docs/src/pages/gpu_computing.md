@@ -1,389 +1,183 @@
 # GPU Computing
 
-Tarang.jl provides comprehensive GPU acceleration through CUDA.jl, enabling significant speedups for spectral simulations on NVIDIA GPUs.
-
-## Overview
-
-```@raw html
-<div class="admonition is-info">
-<p class="admonition-title">Requirements</p>
-<p>GPU support requires an NVIDIA GPU with CUDA capability 5.0+ and the CUDA.jl package.</p>
-</div>
-```
-
-### Key Features
-
-| Feature | Description |
-|---------|-------------|
-| **Automatic Dispatch** | Arrays automatically use GPU kernels when on GPU memory |
-| **CUFFT Integration** | Optimized FFT plans via NVIDIA's cuFFT library |
-| **Custom Kernels** | KernelAbstractions.jl for portable CPU/GPU code |
-| **Memory Pools** | Efficient GPU memory management with pooling |
-| **Multi-GPU** | MPI + CUDA for distributed GPU computing |
-| **Mixed Precision** | Float32 support for memory-bound problems |
-
-## Quick Start
-
-### Basic GPU Setup
+Tarang uses CUDA.jl through a Julia package extension. Load CUDA before creating
+GPU fields:
 
 ```julia
-using Tarang
 using CUDA
+using Tarang
 
-# Check GPU availability
-@assert CUDA.functional() "CUDA not available"
+@assert CUDA.functional()
+```
 
-# Create distributor with GPU architecture
+## Quick start
+
+Choose the architecture on the `Distributor`; fields and solvers inherit it.
+
+```julia
 coords = CartesianCoordinates("x", "y")
-dist = Distributor(coords; mesh=(1,), dtype=Float64, device=GPU())
+dist = Distributor(coords; dtype=Float64, device=GPU())
 
-# Create bases and fields (automatically on GPU)
-xbasis = Fourier(coords, "x", 256)
-ybasis = Fourier(coords, "y", 256)
-field = ScalarField(dist, "u", (xbasis, ybasis))
+xb = RealFourier(coords["x"]; size=256, bounds=(0.0, 2π))
+yb = RealFourier(coords["y"]; size=256, bounds=(0.0, 2π))
+domain = Domain(dist, (xb, yb))
+u = ScalarField(domain, "u")
 
-# Field data is a CuArray
-@assert field["g"] isa CuArray
+u["g"] .= CUDA.rand(Float64, size(u["g"])...)
+forward_transform!(u)
+backward_transform!(u)
+
+@assert get_grid_data(u) isa CuArray
 ```
 
-### CPU vs GPU Architecture
+Use `CPU()` instead of `GPU()` to construct a CPU simulation.
+
+## Strict GPU execution
+
+A GPU field is never downloaded to run an unavailable CPU implementation.
+Supported operations remain on the selected device; unsupported operations
+raise an error. This applies to transforms, resampling, derivatives, solver
+vectors, MPI communication, and stochastic phase generation.
+
+Host transfers still occur when explicitly requested, for example:
 
 ```julia
-# CPU execution (default)
-dist_cpu = Distributor(coords; device=CPU())
-
-# GPU execution
-dist_gpu = Distributor(coords; device=GPU())
-
-# Check architecture
-arch = dist_gpu.architecture  # GPU()
+host_data = on_architecture(CPU(), u["g"])
 ```
 
-## GPU Transforms
+Output, checkpoints, gathers, and explicit architecture conversions are data
+movement APIs, not computational fallbacks.
 
-### Automatic FFT Acceleration
+## Transforms
 
-When fields are on GPU, transforms automatically use CUFFT:
+GPU transforms run on the device for every array size.
 
 ```julia
-using Tarang, CUDA
-
-dist = Distributor(coords; device=GPU())
-field = ScalarField(dist, "u", (xbasis, ybasis))
-
-# Initialize with GPU data
-field["g"] .= CUDA.rand(Float64, size(field["g"])...)
-
-# Forward transform (uses CUFFT automatically)
-forward_transform!(field)
-
-# Backward transform
-backward_transform!(field)
+set_gpu_fft_mode!(u, :auto)  # default; device-resident
+set_gpu_fft_mode!(u, :gpu)   # explicitly require the GPU backend
 ```
 
-### FFT Mode Control
+`set_gpu_fft_mode!(u, :cpu)` is rejected for GPU fields. The legacy global FFT
+size threshold applies only to CPU-field preferences and cannot move a GPU field
+to FFTW.
 
-GPU fields always use GPU transforms, including small arrays:
+Current single-GPU transform support is:
+
+| Bases | Support |
+|-------|---------|
+| Real or complex Fourier | Device FFT |
+| 2D/3D Fourier × Chebyshev | Device FFT plus DCT-I |
+| Same-size pure Chebyshev, up to 3D | Device DCT-I |
+| Legendre transforms or scaled pure-Chebyshev transforms | Explicitly unsupported |
+
+Unsupported basis and layout combinations fail before entering the CPU
+transform chain.
+
+## 2D time stepping and solves
+
+Pure-Fourier GPU IVPs use field-native stepping. When the left-hand side has an
+implicit diagonal Fourier operator, select a diagonal IMEX scheme such as
+`DiagonalIMEX_RK222()` or `DiagonalIMEX_SBDF2()` so the operator is applied in
+spectral space on the device.
+
+Fourier–Chebyshev IVPs use per-mode coupled subproblems. With GPU fields,
+`matsolver=:auto`, `:gpu`, and `:hybrid` resolve to the concrete CUDA sparse
+solver; CPU-only solvers are rejected and solver failures are not retried on
+CPU.
+
+GPU LBVPs require an explicit CUDA solver, for example:
 
 ```julia
-# Per-field control
-set_gpu_fft_mode!(field, :gpu)   # Always use GPU FFT
-set_gpu_fft_mode!(field, :auto)  # Default; also always on-device
+solver = BoundaryValueSolver(problem; matsolver=:cuda_sparse)
 ```
 
-`:cpu` is rejected for a GPU field. Unsupported basis/layout combinations fail
-with an error instead of downloading the field and running FFTW.
+GPU NLBVP and EVP solves are not device-native yet and raise an unsupported
+operation error.
 
-### Mixed Fourier-Chebyshev Transforms
+## Multi-GPU execution
 
-GPU DCT for Chebyshev bases:
+Assign one device to each MPI rank before allocating fields:
 
 ```julia
-# Mixed basis domain
-xbasis = Fourier(coords, "x", 256)      # FFT
-zbasis = ChebyshevT(coords, "z", 64)    # DCT
-
-dist = Distributor(coords; device=GPU())
-field = ScalarField(dist, "T", (xbasis, zbasis))
-
-# Transforms automatically select FFT or DCT per dimension
-forward_transform!(field)   # FFT in x, DCT in z
-backward_transform!(field)  # IFFT in x, IDCT in z
-```
-
-## GPU Memory Management
-
-Tarang relies on CUDA.jl's built-in memory pool (following the Oceananigans.jl approach).
-No custom pooling is needed — CUDA.jl handles allocation efficiently.
-
-Configure the pool via environment variable:
-```bash
-export JULIA_CUDA_MEMORY_POOL=binned  # default, efficient for repeated allocations
-```
-
-### Data Transfers
-
-```julia
-# CPU → GPU
-async_copy_to_gpu!(gpu_array, cpu_array)
-
-# GPU → CPU
-async_copy_to_cpu!(cpu_array, gpu_array)
-```
-
-For pinned memory (faster MPI transfers), use CUDA.jl directly:
-```julia
-CUDA.Mem.pin(cpu_array)  # page-lock for faster DMA transfers
-```
-
-## Custom GPU Kernels
-
-### KernelAbstractions Integration
-
-Write portable kernels that run on both CPU and GPU:
-
-```julia
-using Tarang, KernelAbstractions
-
-# Define a kernel
-@kernel function add_kernel!(c, @Const(a), @Const(b))
-    i = @index(Global)
-    @inbounds c[i] = a[i] + b[i]
-end
-
-# Wrap as KernelOperation
-add_op = KernelOperation(add_kernel!) do c, a, b
-    length(c)  # ndrange
-end
-
-# Use on any architecture
-arch = GPU()
-a = ones(arch, Float64, 1024)
-b = ones(arch, Float64, 1024)
-c = zeros(arch, Float64, 1024)
-
-add_op(arch, c, a, b)  # Runs on GPU
-```
-
-### Built-in GPU Kernels
-
-Tarang provides optimized kernels for common operations:
-
-```julia
-using TarangCUDAExt
-
-# Element-wise operations
-gpu_add!(c, a, b)           # c = a + b
-gpu_sub!(c, a, b)           # c = a - b
-gpu_mul!(c, a, b)           # c = a * b
-gpu_scale!(y, α, x)         # y = α * x
-gpu_axpy!(y, α, x)          # y = y + α * x
-gpu_linear_combination!(y, α, a, β, b)  # y = α*a + β*b
-
-# Fused operations for timestepping
-gpu_rk_stage!(u_new, u, k, dt, coeff)
-gpu_axpby!(y, α, x, β)      # y = α*x + β*y
-
-# Physics kernels
-gpu_kinetic_energy_2d!(ke, ux, uy)
-gpu_kinetic_energy_3d!(ke, ux, uy, uz)
-gpu_viscous_damping!(field, ν, k2)
-```
-
-## Distributed GPU Computing
-
-### MPI + CUDA
-
-For multi-GPU simulations:
-
-```julia
-using Tarang, MPI, CUDA
+using MPI
 
 MPI.Init()
-
 comm = MPI.COMM_WORLD
 rank = MPI.Comm_rank(comm)
+gpu_id = rank % CUDA.ndevices()
+CUDA.device!(gpu_id)
 
-# Assign GPU to MPI rank
-if CUDA.ndevices() >= MPI.Comm_size(comm)
-    CUDA.device!(rank)
-end
-
-# Create distributed GPU setup
+arch = GPU(device_id=gpu_id)
 coords = CartesianCoordinates("x", "y", "z")
-dist = Distributor(coords; mesh=(2, 2), device=GPU())
-
-# Each rank has its own GPU memory
-field = ScalarField(dist, "u", bases)
+dist = Distributor(coords; comm=comm, dtype=ComplexF64, device=arch)
 ```
 
-### CUDA-Aware MPI
-
-For direct GPU-to-GPU communication:
+Distributed GPU communication requires CUDA-aware MPI. Tarang raises an error
+when device buffers cannot be passed directly; it does not stage them through
+host memory.
 
 ```julia
-using TarangCUDAExt: check_cuda_aware_mpi
-
-if check_cuda_aware_mpi()
-    println("CUDA-aware MPI available - using direct GPU transfers")
-else
-    error("CUDA-aware MPI is required; implicit CPU staging is disabled")
-end
+@assert check_cuda_aware_mpi()
 ```
 
-GPU LBVPs require a CUDA matrix solver such as `:cuda_sparse`, `:cuda_cg`, or
-`:cuda_gmres`; CPU-only choices are rejected. GPU NLBVP and EVP solves are not
-yet device-native and raise an explicit unsupported-operation error.
-
-### TransposableField for GPU+MPI
-
-Efficient distributed FFTs with GPU:
+Pure complex-Fourier domains use `TransposableField`:
 
 ```julia
-# Create transposable field for distributed transforms
-field = ScalarField(dist, "u", bases)
+bases = (
+    ComplexFourier(coords["x"]; size=128, bounds=(0.0, 2π)),
+    ComplexFourier(coords["y"]; size=128, bounds=(0.0, 2π)),
+    ComplexFourier(coords["z"]; size=128, bounds=(0.0, 2π)),
+)
+field = ScalarField(Domain(dist, bases), "u")
 tf = TransposableField(field)
-
-# Distributed forward transform (handles GPU transposes)
 distributed_forward_transform!(tf)
-
-# Distributed backward transform
 distributed_backward_transform!(tf)
 ```
 
-## Performance Optimization
+The distributed DCT-I path supports selected three-dimensional
+Fourier–Chebyshev layouts. It requires at least one Fourier and one Chebyshev
+axis. `RealFourier` is allowed only on the first axis and cannot be combined
+with another Fourier axis. Other layouts, including pure Chebyshev, are rejected.
 
-### Best Practices
+## Custom kernels
 
-1. **Use Float32 when possible** - 2x memory bandwidth, often sufficient accuracy
-   ```julia
-   dist = Distributor(coords; dtype=Float32, device=GPU())
-   ```
-
-2. **Batch operations** - Minimize kernel launches
-   ```julia
-   # Bad: many small operations
-   for i in 1:n
-       gpu_scale!(field, α)
-   end
-
-   # Good: fused operations
-   gpu_rk_stage!(u_new, u, k, dt, coeff)
-   ```
-
-3. **Preallocate buffers** - Avoid allocation in hot loops
-   ```julia
-   # Preallocate work arrays
-   work = zeros(GPU(), Float64, size(field["g"]))
-
-   for step in 1:nsteps
-       # Reuse work array
-       compute!(work, field)
-   end
-   ```
-
-4. **Synchronize when needed** - Ensure GPU operations complete before CPU access
-   ```julia
-   CUDA.synchronize()  # Wait for all GPU operations to finish
-   ```
-
-### Profiling
+Use the public architecture layer instead of importing implementation details
+from `TarangCUDAExt`:
 
 ```julia
-using CUDA
+using KernelAbstractions: @kernel, @index
 
-# Profile a section
+@kernel function scale_kernel!(y, x, α)
+    i = @index(Global)
+    @inbounds y[i] = α * x[i]
+end
+
+scale = KernelOperation(scale_kernel!) do y, x, α
+    length(y)
+end
+
+arch = GPU()
+x = ones(arch, Float64, 1024)
+y = similar(x)
+scale(arch, y, x, 2.0)
+```
+
+`KernelOperation` accepts an architecture or an array as its first argument;
+passing `arch` makes the launch target explicit.
+
+## Memory and profiling
+
+Tarang uses CUDA.jl's memory pool. Prefer preallocated work arrays and use
+CUDA.jl directly for inspection and profiling:
+
+```julia
+CUDA.memory_status()
 CUDA.@profile begin
-    forward_transform!(field)
-    backward_transform!(field)
+    forward_transform!(u)
+    backward_transform!(u)
 end
-
-# Time with synchronization
-CUDA.@elapsed begin
-    forward_transform!(field)
-    CUDA.synchronize()
-end
+CUDA.reclaim()
 ```
 
-### Memory Bandwidth Optimization
-
-```julia
-# Check if transform is memory-bound
-n = prod(size(field["g"]))
-bytes_transferred = n * sizeof(eltype(field["g"])) * 4  # rough estimate
-
-# Theoretical bandwidth (e.g., A100 = 2 TB/s)
-theoretical_time = bytes_transferred / 2e12
-
-# Compare to actual time
-actual_time = CUDA.@elapsed forward_transform!(field)
-efficiency = theoretical_time / actual_time
-println("Memory bandwidth efficiency: $(efficiency * 100)%")
-```
-
-## Tensor Core Support
-
-For supported operations on Ampere+ GPUs:
-
-```julia
-using TarangCUDAExt: enable_tensor_cores!, disable_tensor_cores!
-
-# Enable tensor cores (requires compatible data types)
-enable_tensor_cores!()
-
-# Disable if numerical precision is critical
-disable_tensor_cores!()
-```
-
-## Troubleshooting
-
-### Common Issues
-
-**Out of Memory**
-```julia
-# Check available memory before large allocations
-info = gpu_memory_info()
-if info.free_bytes < required_bytes
-    clear_memory_pool!()  # Free cached allocations
-    GC.gc()               # Trigger garbage collection
-    CUDA.reclaim()        # Reclaim CUDA memory
-end
-```
-
-**Slow Performance**
-```julia
-# Ensure synchronization isn't killing performance
-CUDA.allowscalar(false)  # Disable slow scalar indexing
-
-# Strict dispatch also checks this before every transform
-@assert field["g"] isa CuArray "Data not on GPU!"
-```
-
-GPU transforms, resampling, polynomial derivatives, coupled IVP solves, and
-stochastic phase generation do not fall back to CPU. Unsupported operations
-raise an error naming the missing device path.
-
-**MPI + CUDA Issues**
-```julia
-# Ensure correct GPU assignment
-println("Rank $rank using GPU $(CUDA.device())")
-
-# Force synchronization before MPI calls
-CUDA.synchronize()
-MPI.Barrier(comm)
-```
-
-## API Reference
-
-See the [GPU API documentation](../api/gpu.md) for complete function references.
-
-### Key Functions
-
-| Function | Description |
-|----------|-------------|
-| `GPU()` | GPU architecture singleton |
-| `on_architecture(GPU(), array)` | Move array to GPU |
-| `forward_transform!(field)` | GPU-accelerated forward FFT |
-| `backward_transform!(field)` | GPU-accelerated inverse FFT |
-| `set_gpu_fft_mode!(field, mode)` | Control FFT backend |
-| `TransposableField(field)` | Distributed GPU transforms |
+See the [GPU API reference](../api/gpu.md) for the public architecture,
+transform, and distributed interfaces.
