@@ -401,12 +401,12 @@ Step 4 is where the shape mismatch between tmp_real (input-shape) and
 out (coeff_size-along-axis) is resolved.
 """
 function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::ChebyshevTransform)
+    # GPU-arch fields are dispatched on-device (or error) before the CPU chain;
+    # device data here is a dispatch bug — refuse loudly, never host-compute
+    # (the old defensive branch silently skipped copyto! on shape mismatch).
     if is_gpu_array(in) || is_gpu_array(out)
-        result = _chebyshev_forward(in, transform)
-        if size(result) == size(out) && eltype(result) == eltype(out)
-            copyto!(out, result)
-        end
-        return out
+        error("_apply_forward!(::ChebyshevTransform): GPU data reached the CPU transform " *
+              "chain (in=$(typeof(in)), out=$(typeof(out))); CPU fallback is disabled.")
     end
 
     ax = transform.axis
@@ -511,12 +511,11 @@ _apply_backward!(out::AbstractArray, in::AbstractArray, transform::ChebyshevTran
 function _apply_backward!(out::AbstractArray, in::AbstractArray, transform::ChebyshevTransform, out_n::Int)
     grid_size = out_n > 0 ? out_n : transform.grid_size
 
+    # Mirror of _apply_forward!: device data here is a dispatch bug — refuse
+    # loudly, never host-compute (and never silently skip the copyto!).
     if is_gpu_array(in) || is_gpu_array(out)
-        result = _chebyshev_backward(in, transform)
-        if size(result) == size(out) && eltype(result) == eltype(out)
-            copyto!(out, result)
-        end
-        return out
+        error("_apply_backward!(::ChebyshevTransform): GPU data reached the CPU transform " *
+              "chain (in=$(typeof(in)), out=$(typeof(out))); CPU fallback is disabled.")
     end
 
     ax = transform.axis

@@ -6,18 +6,20 @@ Uses Gauss-Legendre quadrature via a precomputed forward/backward matrix
 `setup_legendre_transform!` in transform_planning.jl).
 
 Only the generic (multi-dim, out-of-place) path is kept here. The in-place
-multi-dim path hasn't been written for Legendre yet — the dispatch via
-`_apply_forward!` / `_apply_backward!` falls through to this file's
-out-of-place functions through the GPU-guard fallback in the Fourier
-in-place variants. If you add a Legendre-heavy benchmark that becomes
-allocation-bound, write `_apply_forward!(::LegendreTransform)` following
-the pattern in `transform_fourier.jl`.
+multi-dim path hasn't been written for Legendre yet — the
+`_apply_forward!(::MatrixTransform)` / `_apply_backward!(::MatrixTransform)`
+methods below simply copyto! from this file's out-of-place functions. These
+are CPU-only: GPU input is rejected loudly by `_execute_on_cpu` (and a
+GPU-arch Legendre field errors at the core dispatcher before reaching this
+file). If you add a Legendre-heavy benchmark that becomes allocation-bound,
+write a true in-place `_apply_forward!` following `transform_fourier.jl`.
 """
 
 function _legendre_forward(data::AbstractArray, transform::Union{LegendreTransform, JacobiTransform})
-    # Legendre transforms are matrix-backed and CPU-only today. GPU inputs are
-    # staged through `_execute_on_cpu` and returned by the caller's transform
-    # orchestration path.
+    # Legendre transforms are matrix-backed and CPU-only today. GPU input is
+    # REJECTED (loud error) by `_execute_on_cpu` — CPU staging fallback is
+    # disabled; a GPU-arch Legendre field already errors at the core dispatcher
+    # ("No on-device forward transform supports field ...") before reaching here.
     return _execute_on_cpu(data) do host_data
         axis = transform.axis
         if axis > ndims(host_data)
