@@ -170,13 +170,6 @@ field architecture, without host staging.
 Only Fourier axes may be shortened to real-FFT half spectra when the forcing is
 added to a field. The Chebyshev coefficient count must match exactly.
 
-For a coupled Jacobi/Chebyshev GPU IVP, the default
-`InitialValueSolver(...; matsolver=:auto)` selects `CuSparseLU`. Its RHS,
-solution, and scratch device buffers are cached and reused across solves and
-same-size numeric refactors. An explicit CPU-only `:sparse` or `:dense` solver
-is rejected on that path. CPU and pure-Fourier IVPs retain the existing sparse
-default behavior.
-
 For Fourier--Fourier domains, continue to use `StochasticForcing`; for
 Fourier--Chebyshev domains, use `SeparableStochasticForcing`.
 

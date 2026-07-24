@@ -1,30 +1,20 @@
 # GPU API Reference
 
-This page documents the GPU-related functions and types that Tarang.jl exports.
-
-GPU support ships as a **package extension** (`TarangCUDAExt`), which Julia loads
-automatically once CUDA.jl is available. You therefore need both packages in scope:
+GPU support is provided by the CUDA package extension. Load both packages before
+constructing `GPU()`:
 
 ```julia
-using CUDA     # loads the extension
+using CUDA
 using Tarang
 ```
 
-Without CUDA loaded, `GPU()` raises an actionable error
-(`"GPU architecture requires CUDA.jl to be loaded"`), so everything runs on the CPU.
-
-The API below is *architecture-generic*: the same functions take `CPU()` or `GPU()`, and you
-select the device once, on the `Distributor`:
+The architecture is selected on the `Distributor` and inherited by its fields:
 
 ```julia
-dist = Distributor(coords; dtype=Float64, device=CPU())   # or device=GPU()
+dist = Distributor(coords; dtype=Float64, device=GPU())
 ```
 
-Fields, transforms, and timesteppers all inherit the architecture from the distributor. The
-examples on this page are written with `CPU()` so that they run anywhere; substituting
-`device=GPU()` is the only change needed to run them on a GPU.
-
-## Architecture Types
+## Architectures
 
 ```@docs
 GPU
@@ -32,238 +22,131 @@ CPU
 AbstractArchitecture
 ```
 
-## Array Operations
+Useful public helpers include:
 
-### Data Movement
+| Function | Purpose |
+|----------|---------|
+| `architecture(array)` | Return the array architecture |
+| `is_gpu(arch)` | Test an architecture |
+| `is_gpu_array(array)` | Test whether storage is device-resident |
+| `has_cuda()` | Report whether the CUDA extension is loaded |
+| `ensure_device!(arch)` | Activate the architecture device |
+| `synchronize(arch)` | Wait for queued work |
+| `array_type(arch)` | Return the architecture array type |
+
+## Allocation and explicit transfers
+
+Architecture-aware allocation uses the architecture as the first argument:
 
 ```julia
-a = zeros(CPU(), Float64, 4, 4)
-
-on_architecture(CPU(), a)   # move/keep an array on the CPU (a no-op for a plain Array)
-
-is_gpu_array(a)             # false
-architecture(a)             # CPU()  — architecture inferred from the array type
-is_gpu(CPU())               # false
-has_cuda()                  # false when CUDA.jl is not loaded
+a = zeros(GPU(), Float64, 128, 128)
+b = ones(GPU(), Float32, 256)
+c = create_array(GPU(), ComplexF64, 16, 16)
 ```
 
-With the extension loaded, `on_architecture(GPU(), a)` returns a `CuArray` and
-`on_architecture(CPU(), cu_a)` copies it back to a host `Array`. `on_architecture` also
-accepts tuples, named tuples, numbers, and `nothing`, so it can be mapped over heterogeneous
-state without special-casing.
-
-### Allocation
-
-`Base.zeros`, `Base.ones`, and `Base.similar` take an architecture as their first argument;
-with `GPU()` they allocate `CuArray`s instead of `Array`s.
+Use `on_architecture` for an explicit transfer:
 
 ```julia
-zeros(CPU(), Float64, 128, 128)     # Matrix{Float64}
-ones(CPU(), Float32, 256)           # Vector{Float32}
-similar(CPU(), a)                   # same shape/eltype, same architecture
-create_array(CPU(), ComplexF64, 2, 2)
+a_host = on_architecture(CPU(), a)
+a_device = on_architecture(GPU(), a_host)
 ```
 
-`allocate_like(a, dims...)`, `similar_zeros(a)`, and `copy_to_device(a, target)` allocate
-from an *existing* array instead of an architecture, which keeps the device implicit.
+`allocate_like`, `similar_zeros`, and `copy_to_device` infer the target from an
+existing array. Tarang uses CUDA.jl's memory pool; `unsafe_free!` can release a
+large device buffer eagerly.
 
-### Device Context and Cleanup
+Explicit output, checkpoint, gather, and architecture-conversion APIs may copy
+data to the host. GPU computation itself does not silently switch to CPU.
 
-| Function | Description |
-|----------|-------------|
-| `ensure_device!(arch)` | Activate the correct CUDA device. No-op on `CPU()`. Called by `launch!` before every kernel. |
-| `synchronize(arch)` | Wait for outstanding device work. No-op on `CPU()`. |
-| `unsafe_free!(arch, a)` | Eagerly release a device buffer. No-op on `CPU()`. |
-| `device(arch)` | The KernelAbstractions backend (`KernelAbstractions.CPU(false)` for `CPU()`). |
-| `array_type(arch)` | `Array` for `CPU()`, `CuArray` for `GPU()`. |
+## Transform dispatch
 
-For multi-GPU runs (one GPU per MPI rank) build the architecture with an explicit device id —
-`GPU(device_id = MPI.Comm_rank(comm) % CUDA.ndevices())` — and let `ensure_device!` handle the
-context switching; `launch!` calls it on every launch.
+| Function | Purpose |
+|----------|---------|
+| `forward_transform!(field)` | Grid to coefficient layout |
+| `backward_transform!(field)` | Coefficient to grid layout |
+| `gpu_fft_mode(field)` | Return `:auto`, `:gpu`, or `:cpu` |
+| `set_gpu_fft_mode!(field, mode)` | Set the field transform mode |
+| `should_use_gpu_fft(field)` | Report whether the device path is selected |
 
-## Transform Functions
+For a GPU field, `:auto` and `:gpu` both remain on-device for every array size.
+`:cpu` is rejected. An unsupported transform raises an error instead of
+downloading the field and calling FFTW.
 
-### FFT Backend Control
+`set_gpu_fft_min_elements!` and `gpu_fft_min_elements` are legacy CPU-field
+preference controls; they do not affect GPU fields.
 
-GPU fields use GPU transforms regardless of array size. They never download
-field data to run FFTW; an unsupported transform raises an error.
+See [GPU Computing](../pages/gpu_computing.md#Transforms) for the supported
+Fourier and Chebyshev combinations.
 
-The same strict rule applies to runtime solver transport: GPU IVP/LBVP state is
-not flattened into a CPU sparse-solver vector. Coupled IVPs and LBVPs require a
-CUDA matrix solver. GPU NLBVP and EVP solves currently report that they are
-unsupported rather than invoking their CPU implementations.
+## Portable kernels
 
-| Function | Description |
-|----------|-------------|
-| `gpu_fft_mode(field)` | Current mode: `:auto` (default), `:cpu`, or `:gpu` |
-| `set_gpu_fft_mode!(field, mode)` | Set the mode. GPU fields reject `:cpu` |
-| `set_gpu_fft_min_elements!(n)` | Set the legacy preference threshold for CPU fields; it does not affect GPU fields |
-| `gpu_fft_min_elements()` | Read that legacy threshold |
-| `should_use_gpu_fft(field)` | Always `true` for a GPU field unless its invalid mode is `:cpu` |
+`KernelOperation` wraps a KernelAbstractions kernel and launches it through the
+selected architecture.
 
 ```julia
-coords = CartesianCoordinates("x", "y")
-dist   = Distributor(coords; dtype=Float64, device=GPU())
-bx = RealFourier(coords["x"]; size=16, bounds=(0.0, 2pi))
-by = RealFourier(coords["y"]; size=16, bounds=(0.0, 2pi))
-s  = ScalarField(Domain(dist, (bx, by)), "s")
+using KernelAbstractions: @kernel, @index
 
-gpu_fft_mode(s)                    # :auto
-should_use_gpu_fft(s)              # true, even for 256 elements
-
-set_gpu_fft_mode!(s, :gpu)         # explicitly require GPU
-should_use_gpu_fft(s)              # true
-```
-
-On a `CPU()` distributor, transforms use FFTW. `should_use_gpu_fft` then reports
-only the legacy preference; it does not migrate the field.
-
-### Transform Execution
-
-| Function | Description |
-|----------|-------------|
-| `forward_transform!(field)` | Grid → coefficient transform; dispatches to GPU when the field is on a GPU |
-| `backward_transform!(field)` | Coefficient → grid transform |
-
-```julia
-forward_transform!(s)      # s.current_layout == :c
-backward_transform!(s)     # s.current_layout == :g, round-trip error ~3e-16
-```
-
-`Tarang.gpu_forward_transform!` / `Tarang.gpu_backward_transform!` are the internal dispatch
-hooks these call. They are not exported. Each returns `false` on a CPU
-architecture; for a GPU field it either completes on-device or raises an error.
-
-## Writing Kernels: `KernelOperation`
-
-`KernelOperation` wraps a KernelAbstractions `@kernel` together with a default `ndrange`, and
-launches it through the architecture abstraction so the same code runs on CPU and GPU.
-
-```julia
-using KernelAbstractions: @kernel, @index, @Const
-
-@kernel function scale_kernel!(y, @Const(x), alpha)
+@kernel function add_kernel!(c, a, b)
     i = @index(Global)
-    @inbounds y[i] = alpha * x[i]
+    @inbounds c[i] = a[i] + b[i]
 end
 
-# ndrange from a do-block over the call arguments
-my_op = KernelOperation(scale_kernel!) do y, x, alpha
-    length(y)
+add = KernelOperation(add_kernel!) do c, a, b
+    length(c)
 end
 
-x = ones(CPU(), Float64, 8)
-y = zeros(CPU(), Float64, 8)
-my_op(CPU(), y, x, 2.5)            # y == fill(2.5, 8)
+arch = GPU()
+a = ones(arch, Float64, 1024)
+b = ones(arch, Float64, 1024)
+c = similar(a)
+add(arch, c, a, b)
 ```
 
-Import KernelAbstractions **selectively**, as above. A bare `using KernelAbstractions`
-alongside `using Tarang` makes `CPU` ambiguous — both packages export that name — and every
-later `CPU()` fails with ``UndefVarError: `CPU` not defined in `Main` ``.
+The lower-level `launch!` accepts an architecture or an array and calls
+`ensure_device!` before launching. Import KernelAbstractions names selectively;
+both packages export a type named `CPU`.
 
-Without a do-block the default `ndrange` is `length(args[1])`, and `launch!` is the underlying
-one-shot form:
+## Distributed GPU transforms
+
+The public distributed interface includes:
+
+| Function or type | Purpose |
+|------------------|---------|
+| `check_cuda_aware_mpi()` | Check whether MPI accepts device buffers |
+| `TransposableField(field)` | Create distributed transpose storage |
+| `distributed_forward_transform!(tf)` | Distributed forward transform |
+| `distributed_backward_transform!(tf)` | Distributed inverse transform |
+| `active_layout(tf)` | Return the active transpose layout |
+| `current_data(tf)` | Return the active local buffer |
+| `local_shape(tf, layout)` | Return a local layout shape |
+
+Multi-GPU runs must select a device per MPI rank:
 
 ```julia
-op = KernelOperation(scale_kernel!)   # ndrange = length(y)
-op(CPU(), y, x, 3.0)
+using MPI
 
-launch!(CPU(), scale_kernel!, y, x, 4.0; ndrange=length(y))
-workgroup_size(CPU(), 8)              # 8
+gpu_id = MPI.Comm_rank(comm) % CUDA.ndevices()
+CUDA.device!(gpu_id)
+arch = GPU(device_id=gpu_id)
 ```
 
-`launch!` accepts an architecture *or* an array (whose architecture it infers), and calls
-`ensure_device!` before launching.
+GPU MPI communication requires CUDA-aware MPI. Missing support raises an error;
+host staging is disabled. Pure complex-Fourier domains use `TransposableField`.
+The limited distributed Fourier–Chebyshev DCT-I path is described in
+[GPU Computing](../pages/gpu_computing.md#Multi-GPU-execution).
 
-## Distributed Transforms: `TransposableField`
+## Solver behavior
 
-`TransposableField` wraps a `ScalarField` with the buffers and sub-communicators needed for
-pencil transposes, and drives the transpose-FFT-transpose sequence. It is the *custom*
-transpose path, written for **multi-GPU** runs: `create_distributed_gpu_transform` builds one
-internally, and its MPI validation errors name the GPU+MPI configuration.
+GPU runtime state and solver vectors stay on the device. Coupled GPU IVPs map
+`:auto`, `:gpu`, and `:hybrid` to `:cuda_sparse`; CPU-only solver choices are
+rejected. GPU LBVPs require an explicit CUDA solver. GPU NLBVP and EVP solves
+are currently unsupported.
 
-It is **not** the CPU+MPI path. On a `CPU()` distributor with more than one rank, fields are
-allocated by PencilArrays as z-decomposed slabs, and `TransposableField` — which expects its
-own ZLocal decomposition (y decomposed, z local) — rejects them:
+Unsupported solver operations and factorization failures raise errors rather
+than retrying with a CPU solver.
 
-> `TransposableField layout mismatch: field storage shape (8, 8, 4) does not match expected
-> ZLocal shape (8, 4, 8) for topology (Rx=1, Ry=2)`
+## Extension boundary
 
-For CPU + MPI, just call `forward_transform!` / `backward_transform!`; PencilFFTs does the
-transposes for you. `TransposableField` on a CPU distributor is useful at `nprocs == 1`, which
-is what the example below runs.
-
-Two constraints come from the implementation:
-
-* the field's bases must all be `ComplexFourier` under MPI — `RealFourier`'s half-spectrum
-  layout is incompatible with the custom transposes. This one *is* enforced: the constructor
-  errors at `nprocs > 1`.
-* the distributor's `dtype` must be complex, since the transpose buffers are complex. This one
-  is **not** checked. With a real `dtype` the `TransposableField` constructs (the buffers are
-  promoted to `Complex{dtype}`), and the failure only surfaces inside the transform, as
-  `MethodError: no method matching mul!(::Array{ComplexF64, 3}, ::FFTW.cFFTWPlan{…}, ::Array{Float64, 3}, …)`.
-  Pass `dtype=ComplexF64`.
-
-```julia
-coords = CartesianCoordinates("x", "y", "z")
-dist   = Distributor(coords; dtype=ComplexF64, device=CPU())
-bx = ComplexFourier(coords["x"]; size=8, bounds=(0.0, 2pi))
-by = ComplexFourier(coords["y"]; size=8, bounds=(0.0, 2pi))
-bz = ComplexFourier(coords["z"]; size=8, bounds=(0.0, 2pi))
-f  = ScalarField(Domain(dist, (bx, by, bz)), "f")
-
-xg, yg, zg = local_grids(dist, bx, by, bz)
-ensure_layout!(f, :g)
-get_grid_data(f) .= sin.(xg) .* cos.(yg') .* ones(1, 1, 8)
-
-tf = TransposableField(f)          # or make_transposable(f)
-
-active_layout(tf)                  # ZLocal  (also XLocal, YLocal)
-current_data(tf)                   # the buffer for the active layout
-local_shape(tf, XLocal)            # (8, 8, 8)
-
-distributed_forward_transform!(tf)   # writes the result back into f["c"]
-distributed_backward_transform!(tf)  # round-trip error ~2e-16
-```
-
-Both transforms accept `overlap=true` to use async transposes that overlap communication with
-computation (not supported for a 2D domain on a true 2D mesh, which warns and falls back).
-
-### CUDA-Aware MPI
-
-```julia
-check_cuda_aware_mpi()      # false unless the MPI build supports device pointers
-```
-
-Distributed GPU transforms require this to return `true` and pass `CuArray`s
-straight to MPI. Non-CUDA-aware MPI raises an error; host staging is disabled.
-
-## Memory Management
-
-Tarang uses CUDA.jl's built-in memory pool — there is no custom pooling layer. Use CUDA.jl's
-own tools for inspection and reclamation (`CUDA.memory_status()`, `CUDA.reclaim()`), and
-`unsafe_free!(arch, a)` when you want to drop a large buffer without waiting for the GC.
-
-## The CUDA Extension is Not Public API
-
-The GPU kernels, FFT/DCT plans, and transpose helpers live in the extension module
-`TarangCUDAExt` (`ext/cuda/*.jl`). A Julia package extension **cannot** add names to its
-parent module, so these are *not* reachable as `Tarang.x` and are not in scope after
-`using Tarang, CUDA` — `isdefined(Tarang, :gpu_add!)` is `false`. They are implementation
-details that Tarang's own transform and timestepping code calls; they are reachable only via
-`Base.get_extension(Tarang, :TarangCUDAExt)` and may change without notice.
-
-What the extension implements, for orientation when reading the source:
-
-| Area | Source | Contents |
-|------|--------|----------|
-| Element-wise kernels | `ext/cuda/kernels.jl` | `gpu_add!`, `gpu_sub!`, `gpu_mul!`, `gpu_scale!`, `gpu_axpy!`, `gpu_linear_combination!` and their `GPU_*_OP` `KernelOperation` wrappers |
-| Fused kernels | `ext/cuda/kernels.jl` | `gpu_rk_stage!`, `gpu_axpby!`, `gpu_fma!`, `gpu_dealias_multiply!`, `gpu_triple_product!`, `gpu_conj_multiply!`, `gpu_squared_magnitude!`, `gpu_kinetic_energy_2d!/3d!`, `gpu_grad_mag_sq_2d!`, `gpu_viscous_damping!` |
-| FFT plans | `ext/cuda/transforms.jl`, `ext/cuda/batched_fft.jl` | `plan_gpu_fft`, `gpu_forward_fft!`, `gpu_backward_fft!`, batched plans, plan caches |
-| Chebyshev DCT | `ext/cuda/dct.jl`, `ext/cuda/dct_distributed.jl` | DCT plans, multi-GPU distributed DCT |
-| Mixed transforms | `ext/cuda/mixed_transforms.jl` | Fourier-Chebyshev plans |
-| Transposes | `ext/cuda/transpose_kernels.jl`, `ext/cuda/nccl_transpose.jl` | pack/unpack kernels, NCCL all-to-all |
-| Config / memory | `ext/cuda/config.jl`, `ext/cuda/memory.jl` | tensor-core toggles, async host↔device copies |
-
-To write your own device code, use the public `KernelOperation` / `launch!` path above rather
-than reaching into the extension.
+CUDA kernels and transform plans under `ext/cuda/` are implementation details.
+Application code should use the public architecture, transform, solver, and
+`KernelOperation` interfaces documented above.
