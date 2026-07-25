@@ -33,6 +33,23 @@ For Fourier(x) × Chebyshev(z), we decompose along x (Fourier) only.
 Transform order: Fourier dimensions first, then Chebyshev.
 This minimizes data movement since Chebyshev is local.
 """
+
+"""
+    _mixed_stage_eltype(ops, dim, T) -> Type
+
+Element type the plan for axis `dim` must be built for: real only while no
+earlier stage has produced complex data (the shared `AxisOp` chain records that),
+complex from the first FFT onward.
+"""
+function _mixed_stage_eltype(ops, dim::Int, ::Type{T}) where {T}
+    complex_in = T <: Complex
+    for ax in 1:(dim - 1)
+        complex_in |= ops[ax].out_complex
+    end
+    RT = T <: Complex ? real(T) : T
+    return complex_in ? Complex{RT} : T
+end
+
 function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_shape::Tuple, T::Type)
     ensure_device!(arch)
 
@@ -60,51 +77,28 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     end
 
     # Transform order: Fourier first (they may change array size), then Chebyshev.
-    #
-    # CANONICAL LAYOUT (src/core/domain.jl `_fourier_output_size`): only the FIRST
-    # Fourier axis (in ascending dim order) may be halved, and only if it is
-    # RealFourier with real input. Fourier dims are therefore processed in
-    # ASCENDING dim order — the CPU chain's axis order. The old "RealFourier dims
-    # first" sort broke this: for bases like (ComplexFourier, RealFourier) it
-    # applied rfft along the NON-first RealFourier axis, producing a coeff shape
-    # (N1, N2÷2+1) instead of the canonical (N1, N2) — every consumer sized from
-    # `coefficient_shape` then broke or silently misaligned. With ascending order,
-    # `data_is_real` tracking makes exactly the canonical choice: R2C fires only
-    # on the first Fourier dim (data still real, basis RealFourier); after any
-    # FFT the data is complex, so every later Fourier dim — including a non-first
-    # RealFourier — uses full-size C2C, matching the CPU chain
-    # (transform_fourier.jl `_fourier_forward`: complex input → full fft).
-    # (Chebyshev stages preserve realness and shape, so ordering them after the
-    # Fourier stages does not affect the shape bookkeeping.)
+    # Chebyshev stages preserve shape and realness here (a SCALED Chebyshev axis is
+    # refused upstream), so ordering them last does not affect shape bookkeeping.
     sort!(fourier_dims)
     transform_order = vcat(fourier_dims, chebyshev_dims)
 
-    # Create FFT plans for Fourier dimensions
-    # Only the FIRST Fourier dimension uses R2C (real_input=true), and only if it
-    # is RealFourier and T is real. After that, data is complex, so subsequent
-    # Fourier dimensions use C2C at full size.
+    # Which axis is R2C, and the resulting coefficient shape, come from the SHARED
+    # layout rules (src/core/transforms/transform_layout.jl) — the same code
+    # `coefficient_shape` and the CPU stage specs use. Deriving them here instead
+    # is what let this plan disagree with the rest of the framework: it sized the
+    # coefficient buffer from the GRID shape, so a scaled Chebyshev axis silently
+    # kept every grid mode the CPU chain truncates.
+    ops, coeff_shape, _ = Tarang.forward_layout(bases, local_grid_shape, T)
+
     fft_plans = Dict{Int, GPUFFTPlanDim}()
     current_shape = local_grid_shape
-    data_is_real = !(T <: Complex)  # Track whether current data is still real-valued
-
     for dim in fourier_dims
-        use_real = data_is_real && (basis_types[dim] == :fourier_real)
-        # Plan uses the element type appropriate for current data state
-        plan_T = data_is_real ? T : (T <: Complex ? T : Complex{T})
+        op = ops[dim]
+        use_real = op.op === :rfft
+        plan_T = _mixed_stage_eltype(ops, dim, T)
         fft_plans[dim] = plan_gpu_fft_dim(arch, current_shape, plan_T, dim; real_input=use_real)
-
-        # Update shape and data type tracking
-        if use_real
-            current_shape = ntuple(i -> i == dim ? div(current_shape[i], 2) + 1 : current_shape[i], ndims)
-        end
-        data_is_real = false  # After any FFT, data is complex
+        current_shape = ntuple(i -> i == dim ? op.out_len : current_shape[i], ndims)
     end
-
-    # Coefficient shape is the shape after all Fourier transforms have been applied.
-    # Only a RealFourier FIRST Fourier dimension is R2C (shrinks that dim); all
-    # others use C2C — this now matches the framework's canonical
-    # `coefficient_shape` (`_fourier_output_size`) exactly.
-    coeff_shape = current_shape
 
     # Mixed transforms use the cached DCT-I implementation from cheb_deriv.jl.
     # Keep this field for plan compatibility, but do not allocate the obsolete

@@ -141,15 +141,75 @@ end
 should_use_gpu_fft(field::ScalarField) = (get_grid_data(field) !== nothing) && should_use_gpu_fft(field, size(get_grid_data(field)))
 
 """
+    GPUTransformUnsupported <: Exception
+
+Raised when no on-device transform covers a field. Carries the REASON, which a
+plain `false` return could not: a refusal reads
+"scaled Chebyshev axis 2 (26 grid points, basis size 17)" instead of the
+shrug that every unsupported configuration used to share.
+"""
+struct GPUTransformUnsupported <: Exception
+    field::String
+    bases::String
+    direction::Symbol
+    reason::String
+end
+
+function Base.showerror(io::IO, e::GPUTransformUnsupported)
+    print(io, "No on-device $(e.direction) transform supports field $(e.field) ",
+          "with bases $(e.bases)")
+    isempty(e.reason) || print(io, ": ", e.reason)
+    print(io, ". CPU fallback is disabled.")
+end
+
+"""
+    gpu_transform_unsupported(field, direction, reason)
+
+Refuse an on-device transform with an actionable reason. Backends call this
+instead of `return false`; it throws, so it type-checks anywhere a `Bool` is
+expected. `false` remains valid for a backend with nothing to say.
+"""
+@noinline function gpu_transform_unsupported(field, direction::Symbol, reason::AbstractString)
+    throw(GPUTransformUnsupported(repr(field.name), string(map(typeof, field.bases)),
+                                  direction, String(reason)))
+end
+
+_raise_unsupported_gpu_transform(field, direction::Symbol) =
+    gpu_transform_unsupported(field, direction, "")
+
+"""
+    _gpu_forward_transform_backend!(arch, field) -> Bool
+    _gpu_backward_transform_backend!(arch, field) -> Bool
+
+Device backend entry points. A device package (currently `TarangCUDAExt`) adds a
+method on the concrete architecture — `::GPU` is strictly more specific than the
+`::AbstractArchitecture` fallback below, so the extension EXTENDS these rather
+than overwriting them. That specificity gap is the whole reason these exist as
+plain functions: an extension method with the same signature as a `Tarang` method
+would be method overwriting, which is what the previous `Ref{Any}` hook
+indirection was working around. Dispatch gives the same wiring with inference
+through the call and no "hook not registered" state to check at runtime.
+
+Return `true` when the transform ran on-device; `false` means unsupported, and
+the caller raises (never a CPU fallback).
+"""
+function _gpu_forward_transform_backend! end
+function _gpu_backward_transform_backend! end
+
+_gpu_forward_transform_backend!(::AbstractArchitecture, ::ScalarField) =
+    error("GPU forward transform backend is unavailable. Load CUDA.jl before " *
+          "constructing GPU fields; CPU fallback is disabled.")
+_gpu_backward_transform_backend!(::AbstractArchitecture, ::Any) =
+    error("GPU backward transform backend is unavailable. Load CUDA.jl before " *
+          "constructing GPU fields; CPU fallback is disabled.")
+
+"""
     gpu_forward_transform!(field::ScalarField)
 
-GPU-specific forward transform using the registered device backend.
+GPU-specific forward transform, dispatched to the device backend.
 Returns `false` only for a CPU field. A GPU field either completes on-device or
 throws; it is never handed to the CPU transform chain.
 """
-const _GPU_FORWARD_TRANSFORM_HOOK = Ref{Any}(nothing)
-const _GPU_BACKWARD_TRANSFORM_HOOK = Ref{Any}(nothing)
-
 function gpu_forward_transform!(field::ScalarField)
     # Check if we're on GPU architecture
     arch = field.dist.architecture
@@ -164,16 +224,8 @@ function gpu_forward_transform!(field::ScalarField)
               "$(repr(field.name)) stores $(typeof(data_g)). Refusing CPU fallback.")
     end
 
-    # The CUDA extension registers the implementation from its __init__
-    # (a same-signature method here would be illegal method overwriting).
-    h = _GPU_FORWARD_TRANSFORM_HOOK[]
-    if h === nothing
-        error("GPU forward transform backend is unavailable. Load CUDA.jl before " *
-              "constructing GPU fields; CPU fallback is disabled.")
-    end
-    handled = h(field)::Bool
-    handled || error("No on-device forward transform supports field $(repr(field.name)) " *
-                     "with bases $(map(typeof, field.bases)); CPU fallback is disabled.")
+    handled = _gpu_forward_transform_backend!(arch, field)::Bool
+    handled || _raise_unsupported_gpu_transform(field, :forward)
     return true
 end
 
@@ -198,15 +250,9 @@ function gpu_backward_transform!(field)
               "$(repr(field.name)) stores $(typeof(data_c)). Refusing CPU fallback.")
     end
 
-    # See gpu_forward_transform! — implementation is hook-registered.
-    h = _GPU_BACKWARD_TRANSFORM_HOOK[]
-    if h === nothing
-        error("GPU backward transform backend is unavailable. Load CUDA.jl before " *
-              "constructing GPU fields; CPU fallback is disabled.")
-    end
-    handled = h(field)::Bool
-    handled || error("No on-device backward transform supports field $(repr(field.name)) " *
-                     "with bases $(map(typeof, field.bases)); CPU fallback is disabled.")
+    # See gpu_forward_transform! — the backend is a dispatched method.
+    handled = _gpu_backward_transform_backend!(arch, field)::Bool
+    handled || _raise_unsupported_gpu_transform(field, :backward)
     return true
 end
 

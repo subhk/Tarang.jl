@@ -484,4 +484,73 @@ else
         @test allocation_stats.alloc_bytes - allocated_before == 0
     end
 
+    # ── Regressions for the 2D audit of 2026-07-25 ────────────────────────────
+
+    @testset "Real-dtype ComplexFourier field round-trips (2D + 1D)" begin
+        # A ComplexFourier axis fed REAL data used to die in the CPU chain
+        # (`mul!` on an FFTW complex plan) and, on the GPU backward, tried to store
+        # a complex inverse into the field's real grid buffer. Both devices now
+        # promote on the way in and keep the real part on the way out.
+        mk2(c) = (ComplexFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+                  ComplexFourier(c["y"]; size=8, bounds=(0.0, 2π)))
+        _check(_pair(("x", "y"), mk2, Float64)...)
+        mk1(c) = (ComplexFourier(c["x"]; size=8, bounds=(0.0, 2π)),)
+        _check(_pair(("x",), mk1, Float64)...)
+    end
+
+    @testset "Chebyshev derivative on complex grid data" begin
+        # ComplexFourier × Chebyshev: the grid array is complex, and the GPU DCT-I
+        # workspace is real-only — the derivative used to raise a MethodError on
+        # the plan lookup. It now splits real/imag like the CPU kernel.
+        coords = CartesianCoordinates("x", "z")
+        function build(device)
+            dist = Distributor(coords; dtype=ComplexF64, device=device)
+            dom = Domain(dist, (ComplexFourier(coords["x"]; size=8, bounds=(0.0, 2π)),
+                                ChebyshevT(coords["z"]; size=9, bounds=(0.0, 1.0))))
+            (ScalarField(dom, "u"), dom)
+        end
+        cpu_u, _ = build(CPU())
+        gpu_u, _ = build(GPU())
+        ensure_layout!(cpu_u, :g); ensure_layout!(gpu_u, :g)
+        data = rand(ComplexF64, size(get_grid_data(cpu_u))...)
+        get_grid_data(cpu_u) .= data
+        get_grid_data(gpu_u) .= CuArray(data)
+        dz_cpu = Tarang.evaluate_differentiate(Tarang.Differentiate(cpu_u, coords["z"], 1), :g)
+        dz_gpu = Tarang.evaluate_differentiate(Tarang.Differentiate(gpu_u, coords["z"], 1), :g)
+        ensure_layout!(dz_cpu, :g); ensure_layout!(dz_gpu, :g)
+        @test isapprox(Array(get_grid_data(dz_gpu)), get_grid_data(dz_cpu);
+                       rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "Scaled Chebyshev axis is refused, scaled Fourier still works" begin
+        # `set_scales!` on a Chebyshev axis: the CPU chain truncates the Chebyshev
+        # coefficients back to basis size, the GPU mixed driver keeps every grid
+        # mode. Silently returning the longer spectrum skipped the truncation, so
+        # the GPU now refuses (the core turns that into an explicit error).
+        coords = CartesianCoordinates("x", "z")
+        dist = Distributor(coords; dtype=Float64, device=GPU())
+        dom = Domain(dist, (RealFourier(coords["x"]; size=16, bounds=(0.0, 2π)),
+                            ChebyshevT(coords["z"]; size=17, bounds=(0.0, 1.0))))
+        u = ScalarField(dom, "u")
+        Tarang.set_scales!(u, 3 / 2)
+        ensure_layout!(u, :g)
+        get_grid_data(u) .= CuArray(rand(size(get_grid_data(u))...))
+        @test_throws Exception forward_transform!(u)
+
+        # ...while a scaled PURE-Fourier field is unaffected (both devices keep
+        # the full scaled-length spectrum) and must still round-trip.
+        coords2 = CartesianCoordinates("x", "y")
+        dist2 = Distributor(coords2; dtype=Float64, device=GPU())
+        dom2 = Domain(dist2, (RealFourier(coords2["x"]; size=16, bounds=(0.0, 2π)),
+                              RealFourier(coords2["y"]; size=16, bounds=(0.0, 2π))))
+        v = ScalarField(dom2, "v")
+        Tarang.set_scales!(v, 3 / 2)
+        ensure_layout!(v, :g)
+        vdata = rand(size(get_grid_data(v))...)
+        get_grid_data(v) .= CuArray(vdata)
+        forward_transform!(v); ensure_layout!(v, :c)
+        backward_transform!(v); ensure_layout!(v, :g)
+        @test isapprox(Array(get_grid_data(v)), vdata; rtol=1e-9, atol=1e-11)
+    end
+
 end

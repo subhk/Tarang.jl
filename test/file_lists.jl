@@ -99,6 +99,7 @@ const TEST_FILES = [
     "test_diagonal_imex.jl",
     "test_gpu_implicit_guard.jl",             # single-GPU implicit-operator guard (CPU-side logic)
     "test_2d_gpu_domain_compat.jl",           # 2D pure-Fourier GPU refresh device-safety (JLArray)
+    "test_gpu_2d_device_stack.jl",            # 2D forcing kernels / device fields / staging contract (JLArray)
     "test_etd_multistep.jl",
     "test_rksmr_convergence.jl",
     "test_kernel_operations.jl",

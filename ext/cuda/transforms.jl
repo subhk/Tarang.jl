@@ -212,21 +212,71 @@ function distributed_gpu_backward_transform!(field::ScalarField)
 end
 
 """
+    _gpu_chebyshev_axes_unscaled(bases, grid_shape) -> Bool
+
+`true` iff every Chebyshev axis carries exactly `basis.meta.size` grid points.
+
+A SCALED Chebyshev axis (`set_scales!` / `change_scales!`, i.e. grid points >
+basis size) is not supported by the GPU mixed driver, and accepting it silently
+would be WRONG, not merely slower: the CPU chain truncates a Chebyshev axis back
+to `ChebyshevTransform.coeff_size == basis.meta.size` on the forward transform
+(and zero-pads it back on the backward), whereas `plan_gpu_mixed_transform`
+derives its `coeff_shape` from the grid shape and keeps EVERY grid mode. On a
+3/2-scaled 2D Fourier×Chebyshev field the CPU stores (13, 17) coefficients while
+this path would reallocate the field's coefficient buffer to (13, 26) — a
+non-canonical spectrum that skips the truncation the scaling exists to perform,
+with no error anywhere. The backward direction fails less quietly (a scratch
+DimensionMismatch deep inside `gpu_mixed_backward_transform!`), but neither is
+acceptable. Refuse here instead; the core dispatcher turns `false` into an
+explicit error (no CPU staging). Fourier axes are exempt — a scaled Fourier axis
+keeps its full transformed length on BOTH devices, so those already agree.
+
+The pure-Chebyshev branches enforce the same condition through their existing
+grid-shape == coefficient-shape guards.
+"""
+# Shared with the CPU chain (src/core/transforms/transform_layout.jl).
+const _scaled_chebyshev_axis = Tarang.scaled_chebyshev_axis
+
+_gpu_chebyshev_axes_unscaled(bases, grid_shape::Tuple) =
+    _scaled_chebyshev_axis(bases, grid_shape) === nothing
+
+"""Refusal message for the axis `_scaled_chebyshev_axis` reported."""
+function _scaled_cheb_reason((dim, grid_n, basis_n)::Tuple{Int,Int,Int})
+    return "Chebyshev axis $dim is scaled ($grid_n grid points vs basis size $basis_n); " *
+           "the device driver has no Chebyshev truncation/zero-pad stage, so it would " *
+           "return a spectrum the CPU chain truncates. Use scales=1 on Chebyshev axes " *
+           "(Fourier axes may still be scaled)"
+end
+
+"""
     _gpu_forward_transform_impl!(field::ScalarField)
 
 GPU-specific forward transform using CUFFT (extension-local implementation).
-Registered into `Tarang._GPU_FORWARD_TRANSFORM_HOOK` by `TarangCUDAExt.__init__`;
-`Tarang.gpu_forward_transform!` calls it through the hook (a same-signature
-`Tarang.gpu_forward_transform!` method here would overwrite the src method).
-Returns `true` if the GPU transform was applied. `false` means unsupported and
-is converted by the core dispatcher into an explicit error; no CPU fallback is
-performed.
+Reached through the dispatched backend method
+`Tarang._gpu_forward_transform_backend!(::GPU, field)` defined below — `::GPU` is
+more specific than Tarang's `::AbstractArchitecture` fallback, so this EXTENDS
+rather than overwrites (which is why a same-signature `gpu_forward_transform!`
+method here would be illegal, and why this used to go through a `Ref` hook).
+Returns `true` if the GPU transform was applied. Unsupported configurations call
+`Tarang.gpu_transform_unsupported` with a reason (it throws); a bare `false` is
+still accepted by the core and raises a reason-less error. No CPU fallback is
+performed either way.
 Supports:
 - Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT
 - Mixed Fourier×Chebyshev fields use the GPU DCT-I path.
 - Same-size single-GPU pure-Chebyshev fields use the GPU DCT-I path. Eligible
   distributed 3D fields use the multi-GPU DCT-I path above.
 """
+# Backend entry points — the more-specific `::GPU` methods Tarang dispatches to.
+Tarang._gpu_forward_transform_backend!(::GPU, field::ScalarField) =
+    _gpu_forward_transform_impl!(field)
+Tarang._gpu_backward_transform_backend!(::GPU, field) =
+    _gpu_backward_transform_impl!(field)
+
+# Shorthand for a refusal that carries its reason to the user.
+_refuse_fwd(field, reason) = Tarang.gpu_transform_unsupported(field, :forward, reason)
+_refuse_bwd(field, reason) = Tarang.gpu_transform_unsupported(field, :backward, reason)
+
 function _gpu_forward_transform_impl!(field::ScalarField)
     arch = field.dist.architecture
     if !Tarang.is_gpu(arch)
@@ -246,7 +296,7 @@ function _gpu_forward_transform_impl!(field::ScalarField)
     # Determine transform type based on bases
     bases = field.bases
     if isempty(bases)
-        return false
+        _refuse_fwd(field, "the field has no spectral bases")
     end
 
     nprocs = field.dist.size
@@ -258,7 +308,10 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         if Tarang.distributed_gpu_supported(field)
             return distributed_gpu_forward_transform!(field)
         else
-            return false   # unsupported layout; core raises without CPU staging
+            # Unsupported layout; core raises without CPU staging.
+            _refuse_fwd(field, "the distributed multi-GPU DCT-I path needs a 3D field " *
+                               "with at least one Chebyshev axis, at least one Fourier " *
+                               "axis, and every RealFourier axis on dim 1")
         end
     end
 
@@ -281,7 +334,8 @@ function _gpu_forward_transform_impl!(field::ScalarField)
     local_grid_shape = size(data_g)
 
     if !Tarang.should_use_gpu_fft(field, local_grid_shape)
-        return false
+        _refuse_fwd(field, "the transform-selection heuristic declined the device path " *
+                           "for a $(local_grid_shape) array")
     end
 
     # Classify bases
@@ -297,9 +351,15 @@ function _gpu_forward_transform_impl!(field::ScalarField)
     # currently requires equal grid/coefficient shapes along Chebyshev axes;
     # scaled/truncated shapes are rejected by the core dispatcher.
     if all_chebyshev
-        length(bases) <= 3 || return false
+        length(bases) <= 3 ||
+            _refuse_fwd(field, "the pure-Chebyshev device path handles 1D-3D fields, got " *
+                               "$(length(bases))D")
         existing_coeff = get_coeff_data(field)
-        size(existing_coeff) == local_grid_shape || return false
+        size(existing_coeff) == local_grid_shape ||
+            _refuse_fwd(field, "a pure-Chebyshev device transform needs matching grid and " *
+                               "coefficient shapes, got grid $(local_grid_shape) vs " *
+                               "coefficients $(size(existing_coeff)) (a scaled or truncated " *
+                               "Chebyshev axis is not implemented on device)")
         plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
         if !(existing_coeff isa CuArray) || eltype(existing_coeff) != input_T
             set_coeff_data!(field, CUDA.zeros(input_T, local_grid_shape...))
@@ -322,14 +382,18 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         # A rfft along a non-first RealFourier axis would produce a coeff buffer of
         # a NON-canonical shape (halved along the wrong axis), silently misaligning
         # every consumer sized from `coefficient_shape`.
-        first_is_real = isa(bases[1], RealFourier)
-        use_r2c = first_is_real && !(input_T <: Complex)
+        # Ask the shared layout rules instead of re-deriving "rfft only when the
+        # first axis is RealFourier AND the data is still real" (the multi-dim
+        # cuFFT rfft plan is R2C on dim 1 and C2C on the rest, which is exactly
+        # the chain `forward_layout` describes).
+        use_r2c = Tarang.forward_axis_op(bases[1], local_grid_shape[1],
+                                         input_T <: Complex).op === :rfft
 
         if use_r2c
             # dim 1 is RealFourier with real data: multi-dim rfft (R2C on dim 1,
             # C2C on the rest) — matches the canonical halved-first-axis layout.
             plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, input_T; real_input=true)
-            local_coeff_shape = (div(local_grid_shape[1], 2) + 1, local_grid_shape[2:end]...)
+            _, local_coeff_shape, _ = Tarang.forward_layout(bases, local_grid_shape, input_T)
 
             existing_coeff = get_coeff_data(field)
             needs_alloc = !(existing_coeff isa CuArray) ||
@@ -375,6 +439,10 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         # transform. (A prior comment here mislabeled this a dead DCT-II branch — it is not.)
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
 
+        let scaled = _scaled_chebyshev_axis(bases, local_grid_shape)
+            scaled === nothing || _refuse_fwd(field, _scaled_cheb_reason(scaled))
+        end
+
         # Get or create mixed transform plan (determines correct coeff_shape)
         plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
         local_coeff_shape = plan.coeff_shape
@@ -393,8 +461,10 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         return true
     end
 
-    # Unsupported combinations (e.g. Legendre) are rejected by the core guard.
-    return false
+    # Unsupported combinations (e.g. Legendre).
+    _refuse_fwd(field, "no device transform covers this basis combination " *
+                       "(supported: pure Fourier, pure Chebyshev, and mixed " *
+                       "Fourier×Chebyshev in 2D/3D)")
 end
 
 """
@@ -419,6 +489,25 @@ function _gpu_backward_c2c_fft!(field::ScalarField, gpu_arch::GPU, data_c::CuArr
     end
     plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
 
+    # A REAL-dtype field (a ComplexFourier axis, or a full-length dim-1 spectrum)
+    # has an `Array{dtype}`-typed grid buffer, so storing the complex inverse in it
+    # throws `TypeError: in setfield!, expected CuArray{Float64}, got CuArray{ComplexF64}`.
+    # The forward promoted real grid data, so the imaginary part is roundoff: keep
+    # the real part. Mirrors the CPU `_backward_final_real!` (transform_fourier.jl)
+    # and `gpu_mixed_backward_transform!`'s `T <: Real` branch.
+    real_T = field.dtype
+    if real_T <: Real
+        scratch = get_gpu_dct_scratch(Tarang.architecture(data_c), local_grid_shape, plan_T, 1)[1]
+        gpu_backward_fft!(scratch, fft_input, plan)
+        existing_grid = get_grid_data(field)
+        if existing_grid === nothing || !(existing_grid isa CuArray) ||
+           eltype(existing_grid) != real_T || size(existing_grid) != local_grid_shape
+            set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
+        end
+        get_grid_data(field) .= real.(scratch)
+        return nothing
+    end
+
     existing_grid = get_grid_data(field)
     needs_alloc = existing_grid === nothing ||
                   !(existing_grid isa CuArray) ||
@@ -436,11 +525,10 @@ end
     _gpu_backward_transform_impl!(field::ScalarField)
 
 GPU-specific backward transform using CUFFT (extension-local implementation).
-Registered into `Tarang._GPU_BACKWARD_TRANSFORM_HOOK` by `TarangCUDAExt.__init__`;
-`Tarang.gpu_backward_transform!` calls it through the hook (a same-signature
-`Tarang.gpu_backward_transform!` method here would overwrite the src method).
-Returns `true` if the GPU transform was applied. `false` means unsupported and
-is converted by the core dispatcher into an explicit error; no CPU fallback is
+Reached through `Tarang._gpu_backward_transform_backend!(::GPU, field)` — see the
+forward implementation for why this is a dispatched backend rather than a hook.
+Returns `true` if the GPU transform was applied. Unsupported configurations call
+`Tarang.gpu_transform_unsupported` with a reason (it throws); no CPU fallback is
 performed.
 Supports:
 - Pure Fourier (RealFourier, ComplexFourier) - uses cuFFT (including the
@@ -467,7 +555,7 @@ function _gpu_backward_transform_impl!(field::ScalarField)
 
     bases = field.bases
     if isempty(bases)
-        return false
+        _refuse_bwd(field, "the field has no spectral bases")
     end
 
     nprocs = field.dist.size
@@ -477,7 +565,10 @@ function _gpu_backward_transform_impl!(field::ScalarField)
         if Tarang.distributed_gpu_supported(field)
             return distributed_gpu_backward_transform!(field)
         else
-            return false   # unsupported layout; core raises without CPU staging
+            # Unsupported layout; core raises without CPU staging.
+            _refuse_bwd(field, "the distributed multi-GPU DCT-I path needs a 3D field " *
+                               "with at least one Chebyshev axis, at least one Fourier " *
+                               "axis, and every RealFourier axis on dim 1")
         end
     end
 
@@ -505,10 +596,16 @@ function _gpu_backward_transform_impl!(field::ScalarField)
     # Equal grid/coefficient shapes are required until GPU truncation/padding is
     # implemented; unsupported shapes are rejected without CPU staging.
     if all_chebyshev
-        length(bases) <= 3 || return false
+        length(bases) <= 3 ||
+            _refuse_bwd(field, "the pure-Chebyshev device path handles 1D-3D fields, got " *
+                               "$(length(bases))D")
         existing_grid = get_grid_data(field)
         local_grid_shape = existing_grid isa CuArray ? size(existing_grid) : local_coeff_shape
-        local_grid_shape == local_coeff_shape || return false
+        local_grid_shape == local_coeff_shape ||
+            _refuse_bwd(field, "a pure-Chebyshev device inverse needs matching grid and " *
+                               "coefficient shapes, got grid $(local_grid_shape) vs " *
+                               "coefficients $(local_coeff_shape) (a scaled or truncated " *
+                               "Chebyshev axis is not implemented on device)")
         input_T = field.dtype
         if !(existing_grid isa CuArray) || eltype(existing_grid) != input_T
             set_grid_data!(field, CUDA.zeros(input_T, local_grid_shape...))
@@ -538,40 +635,48 @@ function _gpu_backward_transform_impl!(field::ScalarField)
             scaled_shape = Tarang.get_scaled_shape(field)
             coeff_T_bk = eltype(data_c)
             if length(scaled_shape) != length(local_coeff_shape) || !(coeff_T_bk <: Complex)
-                return false  # missing/mismatched shape info; core rejects it
+                _refuse_bwd(field, "expected a complex $(length(local_coeff_shape))D " *
+                                   "spectrum with matching scale info, got " *
+                                   "$(coeff_T_bk) coefficients of shape $(local_coeff_shape) " *
+                                   "against scaled grid $(scaled_shape)")
             end
             grid_n1 = scaled_shape[1]
             base_n1 = bases[1].meta.size
             axis_len = local_coeff_shape[1]
 
-            if axis_len == div(grid_n1, 2) + 1
-                # Direct irfft: half-spectrum already at the (scaled) grid length.
+            # Classification comes from the SHARED rule (transform_layout.jl), so
+            # the device path cannot disagree with the CPU chain about which of
+            # direct-irfft / upsampled-irfft / C2C a given spectrum is. Its
+            # ordering also handles N=1/N=2, where rfft_len(N) == N.
+            op = Tarang.backward_axis_op(bases[1], axis_len, grid_n1, true)
+            if op.op === :irfft
                 upsampled = false
-                local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
-            elseif grid_n1 > base_n1 && axis_len == div(base_n1, 2) + 1
-                # UPSAMPLED rfft axis (scaled/dealiased field): the stored
-                # half-spectrum is the BASE length div(base_N,2)+1 but the target
-                # grid is finer (grid_n1 = ceil(scale*base_N) > base_N). Mirror
-                # the CPU rule (transform_fourier.jl `_apply_backward!` upsampled
-                # branch): zero-pad to div(grid_n,2)+1, rescale by grid_n/base_n,
-                # zero the base Nyquist bin, then irfft at grid_n.
+                local_grid_shape = (op.out_len, local_coeff_shape[2:end]...)
+            elseif op.op === :irfft_upsampled
+                # The stored half-spectrum is the BASE length; the target grid is
+                # finer. Zero-pad to op.pad_len, rescale by grid_n/base_n, drop the
+                # base Nyquist bin, then irfft at grid_n — the CPU upsample rule.
                 upsampled = true
-                local_grid_shape = (grid_n1, local_coeff_shape[2:end]...)
+                local_grid_shape = (op.out_len, local_coeff_shape[2:end]...)
             elseif axis_len == grid_n1
                 # Full-length dim 1: a C2C spectrum despite the real dtype (e.g.
                 # coefficients written directly). CPU stores the complex ifft.
                 if !Tarang.should_use_gpu_fft(field, local_coeff_shape)
-                    return false
+                    _refuse_bwd(field, "the transform-selection heuristic declined the " *
+                                       "device path for a $(local_coeff_shape) array")
                 end
                 _gpu_backward_c2c_fft!(field, gpu_arch, data_c, local_coeff_shape)
                 return true
             else
-                # Shape matches no recognized half/full spectrum layout.
-                return false
+                _refuse_bwd(field, "coefficient axis 1 has length $(axis_len), which is " *
+                                   "neither the half-spectrum of the $(grid_n1)-point grid " *
+                                   "($(Tarang.rfft_len(grid_n1))), the base half-spectrum " *
+                                   "($(Tarang.rfft_len(base_n1))), nor a full-length spectrum")
             end
 
             if !Tarang.should_use_gpu_fft(field, local_grid_shape)
-                return false
+                _refuse_bwd(field, "the transform-selection heuristic declined the device " *
+                                   "path for a $(local_grid_shape) array")
             end
 
             real_T = field.dtype
@@ -589,7 +694,7 @@ function _gpu_backward_transform_impl!(field::ScalarField)
                 # Zero-pad the base half-spectrum to div(grid_n,2)+1 along dim 1
                 # and rescale by grid_n/base_n: the irfft divides by the (finer)
                 # grid_n while the stored coeffs were formed on base_n points.
-                padded_len = div(grid_n1, 2) + 1
+                padded_len = op.pad_len
                 padded = CUDA.zeros(coeff_T_bk, padded_len, local_coeff_shape[2:end]...)
                 nd = length(local_coeff_shape)
                 front = ntuple(i -> i == 1 ? (1:axis_len) : Colon(), nd)
@@ -614,7 +719,8 @@ function _gpu_backward_transform_impl!(field::ScalarField)
             local_grid_shape = local_coeff_shape
 
             if !Tarang.should_use_gpu_fft(field, local_grid_shape)
-                return false
+                _refuse_bwd(field, "the transform-selection heuristic declined the device " *
+                                   "path for a $(local_grid_shape) array")
             end
 
             _gpu_backward_c2c_fft!(field, gpu_arch, data_c, local_grid_shape)
@@ -655,7 +761,16 @@ function _gpu_backward_transform_impl!(field::ScalarField)
         end
 
         if !Tarang.should_use_gpu_fft(field, local_grid_shape)
-            return false
+            _refuse_bwd(field, "the transform-selection heuristic declined the device " *
+                               "path for a $(local_grid_shape) array")
+        end
+
+        # A scaled Chebyshev axis would need zero-padding from coeff_size to the
+        # scaled grid size (the CPU `_chebyshev_backward` does exactly that); this
+        # driver has no such stage and would only fail deep inside the scratch
+        # broadcast. See `_gpu_chebyshev_axes_unscaled`.
+        let scaled = _scaled_chebyshev_axis(bases, local_grid_shape)
+            scaled === nothing || _refuse_bwd(field, _scaled_cheb_reason(scaled))
         end
 
         real_T = field.dtype
@@ -677,8 +792,10 @@ function _gpu_backward_transform_impl!(field::ScalarField)
         return true
     end
 
-    # Unsupported combinations (e.g. Legendre) are rejected by the core guard.
-    return false
+    # Unsupported combinations (e.g. Legendre).
+    _refuse_bwd(field, "no device inverse transform covers this basis combination " *
+                       "(supported: pure Fourier, pure Chebyshev, and mixed " *
+                       "Fourier×Chebyshev in 2D/3D)")
 end
 
 # ============================================================================

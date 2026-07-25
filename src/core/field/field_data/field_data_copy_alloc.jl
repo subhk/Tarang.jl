@@ -137,7 +137,7 @@ Behavior:
 function _build_field_arrays(dist::Distributor, domain::Domain, ::Type{T}) where {T}
     # See allocate_data! for the rationale on shape choices (non-dealiased sizes).
     gshape = global_shape(domain)
-    cshape = get_coefficient_shape_for_context(domain, dist)
+    cshape = get_coefficient_shape_for_context(domain, dist, T)   # the FIELD's dtype
     arch = dist.architecture
     # Basis-aware coeff eltype: complex for Fourier domains, real for pure-Jacobi
     # (Chebyshev/Legendre) domains — matches what the transform chain produces so
