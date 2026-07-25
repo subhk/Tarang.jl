@@ -42,6 +42,13 @@ end
     @test isempty(prob.equations)
     @test isempty(prob.boundary_conditions)
 
+    # Legacy code may still push Dict equation records directly. Keep this
+    # conversion explicit across Julia versions while EquationIR migrates the
+    # internal representation to named fields.
+    push!(prob.equation_data, Dict{String, Any}("equation_size" => 3))
+    @test prob.equation_data[1] isa Tarang.EquationIR
+    @test prob.equation_data[1].equation_size == 3
+
     # IVP with multiple variables
     domain, p, T, u = make_channel_fields()
     ux, uz = u.components

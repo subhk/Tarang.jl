@@ -31,6 +31,11 @@ function EquationIR(values::AbstractDict)
     return ir
 end
 
+# `Vector{EquationIR}` calls `convert` when legacy downstream code pushes a
+# `Dict`. Julia's generic AbstractDict conversion tries to reconstruct this
+# fixed-key compatibility wrapper and can report a spurious key collision.
+Base.convert(::Type{EquationIR}, values::AbstractDict) = EquationIR(values)
+
 @inline function _equation_ir_field(key::String)
     key == "M" && return :mass
     key == "L" && return :linear
