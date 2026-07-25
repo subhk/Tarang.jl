@@ -46,6 +46,42 @@ using Tarang
         @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-10, atol=1e-12)
     end
 
+    @testset "ComplexFourier with a REAL dtype round-trips" begin
+        # A ComplexFourier axis that is the FIRST Fourier axis of a real-dtype
+        # field receives REAL grid data. FFTW's complex plan cannot consume a real
+        # buffer through `mul!`, so the in-place chain used to die with
+        #   MethodError: mul!(::Matrix{ComplexF64}, ::cFFTWPlan{ComplexF64}, ::Matrix{Float64})
+        # while the out-of-place path (FFTW.fft) and the GPU path both handled it.
+        # The forward now promotes into a complex scratch; the backward stores the
+        # real part, since the field's grid buffer is `Array{dtype}`.
+        for (names, mk) in (
+            (("x", "y"), c -> (ComplexFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+                               ComplexFourier(c["y"]; size=8, bounds=(0.0, 2π)))),
+            (("x", "y"), c -> (ComplexFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+                               RealFourier(c["y"];   size=8, bounds=(0.0, 2π)))),
+            (("x",),     c -> (ComplexFourier(c["x"]; size=8, bounds=(0.0, 2π)),)))
+            coords = CartesianCoordinates(names...)
+            dist = Distributor(coords; dtype=Float64)
+            dom = Domain(dist, mk(coords))
+            u = ScalarField(dom, "u")
+            ensure_layout!(u, :g)
+            shape = size(Tarang.get_grid_data(u))
+            data = [cos(2π * (sum(Tuple(I)) - length(shape)) / 8) + 0.25
+                    for I in CartesianIndices(shape)]
+            Tarang.get_grid_data(u) .= data
+
+            forward_transform!(u)
+            ensure_layout!(u, :c)
+            @test eltype(Tarang.get_coeff_data(u)) === ComplexF64
+
+            backward_transform!(u)
+            ensure_layout!(u, :g)
+            grid = Tarang.get_grid_data(u)
+            @test eltype(grid) === Float64          # real buffer preserved
+            @test isapprox(grid, data; rtol=1e-10, atol=1e-12)
+        end
+    end
+
     @testset "Fourier 3D roundtrip normalization" begin
         coords = CartesianCoordinates("x", "y", "z")
         dist = Distributor(coords; mesh=(1, 1, 1), dtype=Float64)

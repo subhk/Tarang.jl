@@ -9,6 +9,7 @@ This module provides spectral transforms for various bases:
 ## File Organization
 
 This module is split into multiple files for maintainability:
+- transform_layout.jl: THE layout rules (axis ops, shapes, eltypes) both backends share
 - transform_types.jl: Core type definitions + in-place dispatch protocol
 - transform_planning.jl: Transform planning (builds 1D FFTW plans)
 - transform_gpu.jl: Serial CPU + GPU dispatch (`forward_transform!`)
@@ -21,6 +22,7 @@ This module is split into multiple files for maintainability:
 # PencilFFTs, FFTW, LinearAlgebra, SparseArrays already in Tarang.jl
 
 # Include all the split files
+include("transforms/transform_layout.jl")
 include("transforms/transform_types.jl")
 include("transforms/transform_planning.jl")
 include("transforms/transform_gpu.jl")

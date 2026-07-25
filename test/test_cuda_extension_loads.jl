@@ -31,11 +31,16 @@ end
         ext = Base.get_extension(Tarang, :TarangCUDAExt)
         @test ext !== nothing
 
-        # Dispatch/hook wiring: the ext adds a CuDevice _gpu_device method and a
-        # Val{:cuda} _cuda_functional method; transforms are hook-registered.
+        # Dispatch wiring: the ext adds a CuDevice _gpu_device method, a
+        # Val{:cuda} _cuda_functional method, and the two transform backends.
+        # The backends are dispatched (::GPU beats Tarang's
+        # ::AbstractArchitecture fallback), so "is the backend wired?" is a
+        # method-table question, not a `Ref` that may still hold `nothing`.
         @test hasmethod(Tarang._gpu_device, Tuple{Int})
-        @test Tarang._GPU_FORWARD_TRANSFORM_HOOK[] !== nothing
-        @test Tarang._GPU_BACKWARD_TRANSFORM_HOOK[] !== nothing
+        for f in (Tarang._gpu_forward_transform_backend!, Tarang._gpu_backward_transform_backend!)
+            m = which(f, Tuple{Tarang.GPU, Tarang.ScalarField})
+            @test m.module === ext          # the ext's method wins, not the error fallback
+        end
 
         # GPU solver activation (was dead in every load order before the fix)
         @test Tarang.CUDA_AVAILABLE[]

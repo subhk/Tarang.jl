@@ -201,12 +201,39 @@ end
 # Main dispatch: overrides Tarang._gpu_chebyshev_deriv! for CuArray
 # ---------------------------------------------------------------------------
 
+"""
+    _gpu_cheb_deriv_real(data_g::CuArray{<:AbstractFloat}, axis, order, scale) -> CuArray
+
+Batched real Chebyshev derivative: permute `axis` to the front, run the cached
+DCT-I plan on the resulting `(n, batch)` matrix, permute back.
+"""
+function _gpu_cheb_deriv_real(data_g::CuArray{T}, axis::Int, order::Int,
+                              scale::Float64) where {T<:AbstractFloat}
+    nd = ndims(data_g)
+    n  = size(data_g, axis)
+
+    # Permute so transform axis is first, then reshape to (n, batch)
+    other_dims = ntuple(i -> i < axis ? i : i + 1, nd - 1)
+    perm  = (axis, other_dims...)
+    iperm = invperm(perm)
+
+    data_perm = permutedims(data_g, perm)
+    batch     = prod(size(data_g)) ÷ n
+    data_mat  = reshape(data_perm, n, batch)
+    out_mat   = similar(data_mat)
+
+    plan = _get_gpu_cheb_deriv_plan(n, batch, T)
+    _apply_gpu_cheb_deriv_nth!(data_mat, out_mat, scale, order, plan)
+
+    # Reshape and permute back to original layout
+    return permutedims(reshape(out_mat, size(data_perm)), iperm)
+end
+
 function Tarang._gpu_chebyshev_deriv!(result::Tarang.ScalarField,
                                        operand::Tarang.ScalarField,
                                        data_g::CuArray, axis::Int, order::Int,
                                        scale::Float64)
     n  = size(data_g, axis)
-    nd = ndims(data_g)
 
     if n <= 1
         result_data = Tarang.get_grid_data(result)
@@ -224,22 +251,18 @@ function Tarang._gpu_chebyshev_deriv!(result::Tarang.ScalarField,
     # would build the plan and scratch on the wrong device and then mix cross-device buffers.
     ensure_device!(Tarang.architecture(data_g))
 
-    # Permute so transform axis is first, then reshape to (n, batch)
-    other_dims = ntuple(i -> i < axis ? i : i + 1, nd - 1)
-    perm  = (axis, other_dims...)
-    iperm = invperm(perm)
-
-    data_perm = permutedims(data_g, perm)
-    batch     = prod(size(data_g)) ÷ n
-    data_mat  = reshape(data_perm, n, batch)
-    out_mat   = similar(data_mat)
-
-    plan = _get_gpu_cheb_deriv_plan(n, batch, T)
-    _apply_gpu_cheb_deriv_nth!(data_mat, out_mat, scale, order, plan)
-
-    # Reshape and permute back to original layout
-    out_perm = reshape(out_mat, size(data_perm))
-    out_g    = permutedims(out_perm, iperm)
+    # COMPLEX grid data (e.g. a ComplexFourier × Chebyshev field): the DCT-I plan
+    # and its rfft workspace are real-only, so differentiate the real and imaginary
+    # parts separately and recombine — the transform is linear, and this is exactly
+    # what the CPU `chebyshev_derivative_1d!(::Vector{Complex})` does. Without this
+    # the call died on `MethodError: _get_gpu_cheb_deriv_plan(::Int, ::Int, ::Type{ComplexF64})`.
+    out_g = if T <: Complex
+        re = _gpu_cheb_deriv_real(real.(data_g), axis, order, scale)
+        im = _gpu_cheb_deriv_real(imag.(data_g), axis, order, scale)
+        complex.(re, im)
+    else
+        _gpu_cheb_deriv_real(data_g, axis, order, scale)
+    end
 
     result_data = Tarang.get_grid_data(result)
     if result_data !== nothing && size(result_data) == size(out_g)
