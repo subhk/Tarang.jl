@@ -137,6 +137,12 @@ end
 
 const BlasTypes = Union{Float32, Float64, ComplexF32, ComplexF64}
 
+# BLAS-vs-broadcast selection is DISPATCH, not a runtime flag: `architecture(y)`
+# already answers "where does this array live", so the two implementations are
+# two methods rather than two branches of one. The `is_gpu_array` form was
+# subtly load-bearing — a `CuVector` can satisfy `StridedVector{<:BlasTypes}`,
+# so the plain `isa` test alone would hand device memory to BLAS — which is
+# exactly the kind of condition that is safer stated once, in a signature.
 @inline function scale_vector!(y::AbstractVector, α::Real)
     if α == 1
         return y
@@ -144,23 +150,27 @@ const BlasTypes = Union{Float32, Float64, ComplexF32, ComplexF64}
         fill!(y, zero(eltype(y)))
         return y
     end
-    # Use BLAS scal! only for CPU strided vectors, otherwise use broadcasting
-    if !is_gpu_array(y) && y isa StridedVector{<:BlasTypes}
-        scal!(length(y), eltype(y)(α), y, 1)
-    else
-        y .*= α  # Broadcasting works for both CPU and GPU
-    end
-    return y
+    return _scale_vector!(architecture(y), y, α)
 end
 
+# CPU + strided + BLAS element type → BLAS; everything else broadcasts.
+@inline _scale_vector!(::CPU, y::StridedVector{<:BlasTypes}, α::Real) =
+    (scal!(length(y), eltype(y)(α), y, 1); y)
+@inline _scale_vector!(::AbstractArchitecture, y::AbstractVector, α::Real) =
+    (y .*= α; y)
+
 @inline function axpy_vector!(α::Real, x::AbstractVector, y::AbstractVector)
-    # Use BLAS axpy! only for CPU strided vectors, otherwise use broadcasting
-    if !is_gpu_array(x) && !is_gpu_array(y) &&
-       x isa StridedVector{<:BlasTypes} && y isa StridedVector{<:BlasTypes} && eltype(x) === eltype(y)
-        axpy!(eltype(y)(α), x, y)
-    else
-        @. y = y + α * x  # Broadcasting works for both CPU and GPU
-    end
+    return _axpy_vector!(architecture(x), architecture(y), α, x, y)
+end
+
+@inline function _axpy_vector!(::CPU, ::CPU, α::Real,
+                               x::StridedVector{T}, y::StridedVector{T}) where {T<:BlasTypes}
+    axpy!(T(α), x, y)
+    return y
+end
+@inline function _axpy_vector!(::AbstractArchitecture, ::AbstractArchitecture, α::Real,
+                               x::AbstractVector, y::AbstractVector)
+    @. y = y + α * x   # works on CPU and device arrays alike
     return y
 end
 
