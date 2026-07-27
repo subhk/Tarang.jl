@@ -205,30 +205,56 @@ function _backward_transform_stage!(field::ScalarField, transform, in_arr::Abstr
                                     is_final::Bool)
     out_n = _bwd_rfft_target(field, transform)
     out_shape, out_eltype = _backward_output_spec(in_arr, transform, out_n)
-    # `out_eltype` is decided at runtime — real for the final irfft stage,
-    # complex for the ifft stages — so it is a type-UNSTABLE `DataType` value.
-    # Forward output is always complex (stable), but backward must union-split
-    # here: matching `out_eltype` against the concrete FFT element types pins it
-    # to a compile-time `T` inside `_backward_stage_typed!`, so the buffer match,
-    # scratch fetch and `mul!` specialize and run allocation-free. Without this,
-    # the unstable eltype boxes a `Tuple{Int,Int}` on every backward stage.
-    # The branches must cover every FFT element type and the fallback must NOT
-    # forward the abstract `out_eltype` — an `error` returns `Union{}` so it drops
-    # out of the inferred return type, leaving a small concrete union
-    # (`Union{Matrix{Float64}, Matrix{ComplexF64}, …}`). Forwarding `out_eltype`
-    # instead widened the return to `Union{Nothing, AbstractArray}`, which x86_64
-    # codegen boxes on every backward stage.
-    if out_eltype === ComplexF64
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF64, out_n)
-    elseif out_eltype === Float64
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float64, out_n)
-    elseif out_eltype === ComplexF32
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, ComplexF32, out_n)
-    elseif out_eltype === Float32
-        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape, Float32, out_n)
-    else
-        error("Tarang backward transform: unsupported output element type $out_eltype")
+    # A backward stage's output is real (the final irfft) or complex (an ifft),
+    # decided per call — so `out_eltype` is a runtime `DataType`, and forwarding
+    # it directly infers as `Union{Nothing, AbstractArray}`, which x86_64 codegen
+    # boxes on every stage. It therefore has to be pinned to a concrete `T`
+    # before `_backward_stage_typed!` (which specializes its buffer match,
+    # scratch fetch and `mul!` on that `T` and runs allocation-free).
+    #
+    # This used to be a four-way match against each concrete FFT element type.
+    # It does not need to be: PRECISION is already static — it comes from
+    # `eltype(in_arr)`, which this function is specialized on — so only REALNESS
+    # varies at runtime, and the shared rule (transform_layout.jl) reports that
+    # as a single flag. Two arms, both concrete.
+    real_T = real(eltype(in_arr))
+    if out_eltype <: Complex
+        # FINAL stage producing COMPLEX output for a REAL-dtype field is the
+        # ComplexFourier-axis case: the inverse is a full ifft, but the field's
+        # grid buffer is `Array{dtype}`, so storing the complex result raised
+        # `TypeError: in setfield!, expected Matrix{Float64}, got Matrix{ComplexF64}`.
+        # The forward promoted real grid data, so the imaginary part is roundoff:
+        # keep the real part, exactly as the GPU mixed backward does.
+        if is_final && field.dtype <: Real
+            return _backward_final_real!(field, transform, in_arr, out_shape,
+                                         Complex{real_T}, out_n)
+        end
+        return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape,
+                                      Complex{real_T}, out_n)
     end
+    return _backward_stage_typed!(field, transform, in_arr, is_final, out_shape,
+                                  real_T, out_n)
+end
+
+"""
+    _backward_final_real!(field, transform, in_arr, out_shape, CT, out_n) → grid
+
+Final backward stage whose transform output is complex (`CT`) while the field's
+grid buffer is real: run the inverse into the stage scratch, then store its real
+part in the field's `Array{real(CT)}` grid buffer. See the call site in
+`_backward_transform_stage!` for why this case exists.
+"""
+@inline function _backward_final_real!(field::ScalarField, transform, in_arr::AbstractArray,
+                                       out_shape::NTuple{N,Int}, ::Type{CT},
+                                       out_n::Int) where {N,CT}
+    RT = real(CT)
+    tmp::Array{CT,N} = _get_scratch_for_transform!(transform, SLOT_BWD_INTER, out_shape, CT)
+    _apply_backward!(tmp, in_arr, transform, out_n)
+    existing = get_grid_data(field)
+    grid::Array{RT,N} = (existing isa Array{RT,N} && size(existing) == out_shape) ?
+        existing : _alloc_grid_buffer!(field, RT, out_shape)
+    grid .= real.(tmp)
+    return grid
 end
 
 @inline function _backward_stage_typed!(field::ScalarField, transform, in_arr::AbstractArray,
@@ -338,20 +364,13 @@ function _forward_output_spec(in::AbstractArray, transform::FourierTransform)
     in_shape = size(in)
     in_eltype = eltype(in)
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
-    complex_T = Complex{real_T}
     ax = transform.axis
-
-    if isa(transform.basis, RealFourier)
-        if in_eltype <: Complex
-            # Already-complex input: full fft, shape unchanged
-            return in_shape, complex_T
-        end
-        # Real input: rfft halves the transform axis from N to div(N, 2) + 1
-        out_shape = _replace_axis_shape(in_shape, ax, div(in_shape[ax], 2) + 1)
-        return out_shape, complex_T
-    else  # ComplexFourier
-        return in_shape, complex_T
-    end
+    # The rfft-halves-only-real-input rule lives in transform_layout.jl, which
+    # `coefficient_shape` and the GPU plan also consult — so a stage's output
+    # shape and the pre-allocated buffer cannot disagree.
+    op = forward_axis_op(transform.basis, in_shape[ax], in_eltype <: Complex)
+    out_shape = _replace_axis_shape(in_shape, ax, op.out_len)
+    return out_shape, op.out_complex ? Complex{real_T} : real_T
 end
 
 # `out_n` is the SCALED grid size along this transform's axis (scale × base),
@@ -371,31 +390,13 @@ function _backward_output_spec(in::AbstractArray, transform::FourierTransform, o
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
     ax = transform.axis
 
-    if isa(transform.basis, RealFourier)
-        grid_n = _bwd_grid_size(transform, out_n)
-        expected_rfft_size = div(grid_n, 2) + 1
-        axis_len = in_shape[ax]
-        base_rfft_size = div(transform.basis.meta.size, 2) + 1
-        if axis_len == expected_rfft_size
-            # irfft: axis expands back from N/2+1 to the (scaled) grid size
-            out_shape = _replace_axis_shape(in_shape, ax, grid_n)
-            return out_shape, real_T
-        elseif grid_n > transform.basis.meta.size && axis_len == base_rfft_size
-            # UPSAMPLED rfft axis: the stored half-spectrum is the BASE length
-            # div(base_N,2)+1, but the target grid is finer (grid_n > base_N). The
-            # backward zero-pads the half-spectrum to div(grid_n,2)+1 and irfft-s
-            # to the real grid of length grid_n. Gating only on grid_n (the old
-            # `axis_len == expected_rfft_size`) missed this case and fell through
-            # to a same-shape complex ifft, returning wrong-length complex output.
-            out_shape = _replace_axis_shape(in_shape, ax, grid_n)
-            return out_shape, real_T
-        else
-            # ifft fallback (complex input from a non-first-axis fft): same shape, still complex
-            return in_shape, Complex{real_T}
-        end
-    else  # ComplexFourier
-        return in_shape, Complex{real_T}
-    end
+    # Classification order (direct half-spectrum, then upsampled, then C2C) is
+    # stated once in transform_layout.jl and shared with the GPU backend; a pure
+    # shape heuristic misreads N=1/N=2, where rfft_len(N) == N.
+    op = backward_axis_op(transform.basis, in_shape[ax],
+                          _bwd_grid_size(transform, out_n), in_eltype <: Complex)
+    out_shape = _replace_axis_shape(in_shape, ax, op.out_len)
+    return out_shape, op.out_complex ? Complex{real_T} : real_T
 end
 
 # Preserve the 2-arg form (base size) for any caller without scale context.
@@ -478,6 +479,23 @@ function _apply_forward!(out::AbstractArray, in::AbstractArray, transform::Fouri
     if is_gpu_array(in) || is_gpu_array(out)
         error("_apply_forward!(::FourierTransform): GPU data reached the CPU transform " *
               "chain (in=$(typeof(in)), out=$(typeof(out))); CPU fallback is disabled.")
+    end
+
+    # A ComplexFourier stage fed REAL data: FFTW's complex plan cannot consume a
+    # real buffer through `mul!` (only the allocating `plan * x` promotes), so
+    # this used to die with an opaque
+    #   `MethodError: mul!(::Matrix{ComplexF64}, ::cFFTWPlan{ComplexF64}, ::Matrix{Float64})`
+    # for any real-dtype field whose FIRST Fourier axis is ComplexFourier — while
+    # the out-of-place `_fourier_forward` (FFTW.fft) and the GPU path both handle
+    # it. Promote into a cached complex scratch so all three agree. (A
+    # ComplexFourier axis that is NOT first already receives complex data from the
+    # preceding stage and skips this.)
+    if !(eltype(in) <: Complex) && isa(transform.basis, ComplexFourier)
+        cin = _get_scratch_for_transform!(transform, SLOT_FWD_PROMOTE, size(in),
+                                          Complex{eltype(in)})
+        copyto!(cin, in)
+        plan = _get_or_plan_forward!(transform, cin)
+        return _fourier_fwd_kernel!(out, cin, plan)
     end
 
     plan = _get_or_plan_forward!(transform, in)

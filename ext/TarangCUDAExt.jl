@@ -178,8 +178,9 @@ function __init__()
     # GPU()/has_cuda() are dispatch-differentiated (Tarang._gpu_device /
     # Tarang._cuda_functional methods in architecture.jl); only the pieces that
     # cannot be expressed as more-specific methods are registered here.
-    Tarang._GPU_FORWARD_TRANSFORM_HOOK[] = _gpu_forward_transform_impl!
-    Tarang._GPU_BACKWARD_TRANSFORM_HOOK[] = _gpu_backward_transform_impl!
+    # Transform backends are dispatched, not registered: see the
+    # `Tarang._gpu_{forward,backward}_transform_backend!(::GPU, …)` methods in
+    # cuda/transforms.jl.
     Tarang._activate_gpu_solvers!()
     return nothing
 end

@@ -470,7 +470,7 @@ block above for the rule.
 """
 @inline function _fourier_output_size(basis::Basis, is_first_fourier::Bool)
     if isa(basis, RealFourier) && is_first_fourier
-        return div(basis.meta.size, 2) + 1  # rfft halves the first Fourier axis
+        return rfft_len(basis.meta.size)     # rfft halves the first Fourier axis
     else
         return basis.meta.size               # fft (or non-Fourier): full size
     end
@@ -482,24 +482,18 @@ end
 Compute the coefficient-space shape for a domain using the shared rule
 (see the comment block above). Callable from both serial and MPI wrappers.
 """
-function _coefficient_shape_impl(domain::Domain)
-    # Find the first Fourier axis (RealFourier or ComplexFourier) — this
-    # is the only one that can use RFFT (or the only one whose shape can
-    # change under the transform).
-    first_fourier_idx = nothing
-    for (i, basis) in enumerate(domain.bases)
-        if isa(basis, RealFourier) || isa(basis, ComplexFourier)
-            first_fourier_idx = i
-            break
-        end
-    end
-
-    shape = Int[]
-    for (i, basis) in enumerate(domain.bases)
-        is_first = (first_fourier_idx !== nothing && i == first_fourier_idx)
-        push!(shape, _fourier_output_size(basis, is_first))
-    end
-    return tuple(shape...)
+function _coefficient_shape_impl(domain::Domain, dtype::Type=domain.dist.dtype)
+    # Delegates to the shared layout rules (transform_layout.jl) so this shape
+    # and the one each transform backend produces cannot drift apart — they are
+    # now computed by the same code. `layout_coefficient_shape` walks the axes
+    # tracking realness, which reproduces "only the first Fourier axis is halved,
+    # and only if it is RealFourier" without a special case for it.
+    #
+    # `dtype` is the FIELD's element type, which a caller may set independently of
+    # the distributor's (`ScalarField(dist, name, bases, T)`). It matters because
+    # complex data never takes the rfft branch, so a complex field's spectrum stays
+    # full-length — the same reason `coefficient_eltype(domain, T)` takes it.
+    return layout_coefficient_shape(domain.bases, dtype)
 end
 
 """
@@ -510,7 +504,8 @@ modes, only the first Fourier axis is halved (and only if it's
 RealFourier). See the `_coefficient_shape_impl` comment block for the
 rationale.
 """
-coefficient_shape(domain::Domain) = _coefficient_shape_impl(domain)
+coefficient_shape(domain::Domain, dtype::Type=domain.dist.dtype) =
+    _coefficient_shape_impl(domain, dtype)
 
 """
     coefficient_shape_mpi(domain::Domain) -> Tuple
@@ -519,7 +514,8 @@ Retained as a distinct public name for callers that want to express
 "I specifically mean the MPI-compatible shape." Returns the same result
 as `coefficient_shape` — the rule is identical in both modes.
 """
-coefficient_shape_mpi(domain::Domain) = _coefficient_shape_impl(domain)
+coefficient_shape_mpi(domain::Domain, dtype::Type=domain.dist.dtype) =
+    _coefficient_shape_impl(domain, dtype)
 
 """
     get_coefficient_shape_for_context(domain, dist) -> Tuple
@@ -529,11 +525,12 @@ MPI wrappers compute the same result now (see `_coefficient_shape_impl`
 comment block), so this just dispatches to either — retained for
 call-site clarity.
 """
-function get_coefficient_shape_for_context(domain::Domain, dist::Distributor)
+function get_coefficient_shape_for_context(domain::Domain, dist::Distributor,
+                                          dtype::Type=dist.dtype)
     if dist.size > 1 && dist.use_pencil_arrays
-        return coefficient_shape_mpi(domain)
+        return coefficient_shape_mpi(domain, dtype)
     else
-        return coefficient_shape(domain)
+        return coefficient_shape(domain, dtype)
     end
 end
 
