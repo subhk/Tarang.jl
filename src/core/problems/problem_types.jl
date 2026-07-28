@@ -4,8 +4,6 @@ Problem formulation classes
 
 # LinearAlgebra, SparseArrays already in Tarang.jl
 
-abstract type Problem end
-
 """
     Forcing
 
@@ -38,7 +36,8 @@ mutable struct IVP <: Problem
     time::Union{Nothing, ScalarField}
     domain::Union{Nothing, Domain}
     bc_manager::BoundaryConditionManager
-    equation_data::Vector{Dict{String, Any}}
+    equation_data::Vector{EquationIR}
+    compiled::CompiledProblem
     # Stochastic forcing: Dict mapping variable index to a Forcing subtype
     # Forcing is automatically added to RHS during timestepping
     stochastic_forcings::Dict{Int, Forcing}
@@ -55,7 +54,8 @@ mutable struct LBVP <: Problem
     namespace::Dict{String, Any}
     domain::Union{Nothing, Domain}
     bc_manager::BoundaryConditionManager
-    equation_data::Vector{Dict{String, Any}}
+    equation_data::Vector{EquationIR}
+    compiled::CompiledProblem
 end
 
 mutable struct NLBVP <: Problem
@@ -66,7 +66,8 @@ mutable struct NLBVP <: Problem
     namespace::Dict{String, Any}
     domain::Union{Nothing, Domain}
     bc_manager::BoundaryConditionManager
-    equation_data::Vector{Dict{String, Any}}
+    equation_data::Vector{EquationIR}
+    compiled::CompiledProblem
 end
 
 mutable struct EVP <: Problem
@@ -78,7 +79,8 @@ mutable struct EVP <: Problem
     eigenvalue::Union{Nothing, Symbol}
     domain::Union{Nothing, Domain}
     bc_manager::BoundaryConditionManager
-    equation_data::Vector{Dict{String, Any}}
+    equation_data::Vector{EquationIR}
+    compiled::CompiledProblem
 end
 
 function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{Nothing, AbstractDict{String}})
@@ -159,7 +161,7 @@ function _build_ivp(variables::Vector{<:Operand}; namespace::Union{Nothing, Abst
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return IVP(vars, String[], String[], Dict{String, Any}(), ns,
-               nothing, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}(),
+               nothing, nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem(),
                Dict{Int, Forcing}(),                       # Empty stochastic_forcings dict
                Dict{Symbol, TemporalFilterRegistration}()) # Empty temporal_filters dict
 end
@@ -168,21 +170,21 @@ function _build_lbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, Abs
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return LBVP(vars, String[], String[], Dict{String, Any}(), ns,
-                nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
+                nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem())
 end
 
 function _build_nlbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return NLBVP(vars, String[], String[], Dict{String, Any}(), ns,
-                 nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
+                 nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem())
 end
 
 function _build_evp(variables::Vector{<:Operand}; eigenvalue::Union{Nothing, Symbol}=nothing, namespace::Union{Nothing, AbstractDict{String}}=nothing)
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
     return EVP(vars, String[], String[], Dict{String, Any}(), ns,
-               eigenvalue, nothing, BoundaryConditionManager(), Vector{Dict{String, Any}}())
+               eigenvalue, nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem())
 end
 
 const _IVP_constructor = _build_ivp

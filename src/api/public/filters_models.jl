@@ -1,5 +1,5 @@
 # Public exports: temporal filters and subgrid-scale (LES) models.
-export
+@public_api(
     TemporalFilter, ExponentialMean, ButterworthFilter, LagrangianFilter,
     get_mean, get_auxiliary, set_α!,
     update_displacement!, lagrangian_mean!, get_mean_velocity, get_displacement,
@@ -12,4 +12,4 @@ export
     get_eddy_viscosity, get_eddy_diffusivity, get_filter_width,
     mean_eddy_viscosity, max_eddy_viscosity,
     sgs_dissipation, mean_sgs_dissipation,
-    set_constant!, set_filter_width!, reset!
+    set_constant!, set_filter_width!, reset!)

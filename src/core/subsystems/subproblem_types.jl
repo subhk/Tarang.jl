@@ -408,7 +408,7 @@ end
 Compute per-subproblem output DOFs for an equation from its expression tree.
 Tries lhs first, then L, then M expressions.
 """
-function _subproblem_eqn_size(sp::Subproblem, eq_data::Dict)
+function _subproblem_eqn_size(sp::Subproblem, eq_data::AbstractDict)
     for key in ("lhs", "L", "M")
         expr = get(eq_data, key, nothing)
         if expr !== nothing

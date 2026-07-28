@@ -911,6 +911,10 @@ end
 
 using SparseArrays: SparseMatrixCSC
 
+# `::Val{:cuda}` beats Tarang's `::Val` fallback, so these EXTEND rather than
+# overwrite (a zero-argument method here would overwrite Tarang's).
+Tarang._gpu_cusolver_module(::Val{:cuda}) = CUDA.CUSOLVER
+Tarang._gpu_cusparse_module(::Val{:cuda}) = CUDA.CUSPARSE
 Tarang._gpu_zeros(T::Type, dims...) = CUDA.zeros(T, dims...)
 Tarang._gpu_array(data::AbstractArray, T::Type) = CuVector{T}(data)
 Tarang._gpu_array(data::AbstractMatrix, T::Type) = CuMatrix{T}(data)

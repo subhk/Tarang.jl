@@ -32,3 +32,21 @@ using Tarang
     @test Tarang.Output.NetCDFFileHandler === Tarang.NetCDFFileHandler
     @test Tarang.Output.NetCDFMerger === Tarang.NetCDFMerger
 end
+
+@testset "Supported public API manifest" begin
+    public_names = Tarang.public_api_names()
+    @test issorted(public_names; by=string)
+    @test length(public_names) == length(unique(public_names))
+    @test Tarang.is_public_api(:InitialValueSolver)
+    @test Tarang.is_public_api("ScalarField")
+    @test Tarang.is_public_api(:public_api_names)
+    @test !Tarang.is_public_api(:_build_initial_value_solver)
+
+    for facade in (Tarang.Fields, Tarang.Problems, Tarang.Solvers,
+                   Tarang.Timesteppers, Tarang.TransformOps, Tarang.Output)
+        for name in names(facade; all=false, imported=false)
+            name === nameof(facade) && continue
+            @test Tarang.is_public_api(name)
+        end
+    end
+end

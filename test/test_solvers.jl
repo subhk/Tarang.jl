@@ -73,6 +73,17 @@ using Test
         )
     end
 
+    @testset "GPU RHS policy never permits interpreted fallback" begin
+        @test Tarang._resolve_rhs_fallback_policy(:auto, true, false) === :strict
+        @test Tarang._resolve_rhs_fallback_policy(:strict, true, false) === :strict
+        @test_throws ArgumentError Tarang._resolve_rhs_fallback_policy(
+            :interpreted, true, false)
+        @test Tarang._resolve_rhs_fallback_policy(
+            :interpreted, false, true) === :interpreted
+        @test Tarang._resolve_rhs_fallback_policy(
+            :interpreted, false, false) === :interpreted
+    end
+
     @testset "matrix solver in-place allocations" begin
         MS = Tarang.MatSolvers
         A = spdiagm(0 => fill(4.0 + 0im, 8),

@@ -1,5 +1,5 @@
 # Public exports: distributed/GPU pencil transposes and distributed FFT transforms.
-export
+@public_api(
     DistributedGPUConfig, DistributedGPUFFT,
     distributed_fft_forward!, distributed_fft_backward!,
     check_cuda_aware_mpi, setup_distributed_gpu!,
@@ -10,4 +10,4 @@ export
     transpose_z_to_y!, transpose_y_to_z!, transpose_y_to_x!, transpose_x_to_y!,
     async_transpose_z_to_y!, async_transpose_y_to_x!, wait_transpose!, is_transpose_complete,
     distributed_forward_transform!, distributed_backward_transform!,
-    active_layout, current_data, local_shape
+    active_layout, current_data, local_shape)

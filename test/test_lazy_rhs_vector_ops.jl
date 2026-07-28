@@ -169,6 +169,26 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         @test isapprox(_grid(F[1]), 6 .* zg; rtol=1e-6, atol=1e-8)   # d²/dz²(z³-0.3z) = 6z
     end
 
+    @testset "bare Legendre derivatives also decline safely" begin
+        N = 10
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; dtype=Float64, architecture=CPU())
+        zb = Legendre(coords["z"]; size=N, bounds=(0.0, 2.0))
+        q = ScalarField(dist, "q_bare", (zb,), Float64)
+        zg = collect(Tarang.local_grid(zb, dist, 1.0))
+        ensure_layout!(q, :g)
+        get_grid_data(q) .= zg .^ 3 .- 0.3 .* zg
+        ensure_layout!(q, :c)
+
+        problem = IVP([q])
+        add_equation!(problem, "dt(q_bare) = d(q_bare,z)")
+        solver = InitialValueSolver(problem, RK222(); dt=1e-4)
+        @test !solver.rhs_plan.is_compiled
+
+        F = Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        @test isapprox(_grid(F[1]), 3 .* zg .^ 2 .- 0.3; rtol=1e-6, atol=1e-8)
+    end
+
     @testset "unsupported operator still bails to the interpreted path" begin
         # curl is deliberately NOT translated: the solver must fall back rather than
         # miscompute. (The interpreted curl path has its own unrelated defect, so this
@@ -182,5 +202,35 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         add_equation!(problem, "dt(q) = nu*div(curl(u))")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
         @test !solver.rhs_plan.is_compiled
+    end
+
+    @testset "RHS fallback policy is per solver" begin
+        N = 8
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; dtype=Float64, architecture=CPU())
+        zb = Legendre(coords["z"]; size=N, bounds=(0.0, 1.0))
+
+        function legendre_problem(name)
+            q = ScalarField(dist, name, (zb,), Float64)
+            problem = IVP([q])
+            add_equation!(problem, "dt($name) = lap($name)")
+            return problem
+        end
+
+        compatible = InitialValueSolver(
+            legendre_problem("q_compatible"), RK222();
+            dt=1e-4, rhs_fallback=:interpreted,
+        )
+        @test compatible.rhs_fallback_policy === :interpreted
+        @test !compatible.rhs_plan.is_compiled
+
+        @test_throws ErrorException InitialValueSolver(
+            legendre_problem("q_strict"), RK222();
+            dt=1e-4, rhs_fallback=:strict,
+        )
+        @test_throws ArgumentError InitialValueSolver(
+            legendre_problem("q_invalid"), RK222();
+            dt=1e-4, rhs_fallback=:unknown,
+        )
     end
 end

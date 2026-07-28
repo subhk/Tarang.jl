@@ -22,7 +22,7 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     # — this reconciles the term bases that a field-level `lhs_field - rhs_field`
     # cannot (it throws "Cannot add fields with different bases"). The RHS
     # (nonlinear terms + forcing, with NO lift) is evaluated cleanly as fields.
-    L_matrix = get(problem.parameters, "L_matrix", nothing)
+    L_matrix = compiled_problem(problem).linear_matrix
 
     rhs_fields = ScalarField[]
     if hasfield(typeof(problem), :equation_data) && problem.equation_data !== nothing &&
@@ -56,8 +56,8 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
         build_symbolic_jacobian(problem, state_fields)
     catch e
         @debug "Symbolic Jacobian construction failed ($e), using fallback"
-        if haskey(problem.parameters, "L_matrix")
-            problem.parameters["L_matrix"]
+        if compiled_problem(problem).linear_matrix !== nothing
+            compiled_problem(problem).linear_matrix
         else
             sparse(I, n, n)
         end

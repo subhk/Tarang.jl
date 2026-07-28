@@ -91,7 +91,16 @@ end
 
         problem = IVP([q]); add_parameters!(problem, nu=1.0)
         add_equation!(problem, "dt(q) = nu*lap(q)")
-        solver = InitialValueSolver(problem, RK222(); dt=1e-4)
+        if NP > 1
+            # Distributed explicit Chebyshev differentiation is one of the few
+            # verified users of the interpreted compatibility evaluator. MPI is
+            # strict by default, so this path must be requested explicitly.
+            @test_throws ErrorException InitialValueSolver(problem, RK222(); dt=1e-4)
+        end
+        solver = InitialValueSolver(
+            problem, RK222(); dt=1e-4,
+            rhs_fallback=NP > 1 ? :interpreted : :auto,
+        )
         if NP > 1
             @test !solver.rhs_plan.is_compiled     # declined — the lazy path cannot serve it
         else

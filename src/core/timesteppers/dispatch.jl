@@ -93,8 +93,7 @@ function _check_gpu_implicit_compatibility!(state::TimestepperState, solver::Ini
 
     # Coupled Fourier×Chebyshev GPU builds subproblems that solve the implicit part
     # per mode — not affected by the pure-Fourier matrix skip.
-    if haskey(solver.problem.parameters, "subproblems") &&
-       solver.problem.parameters["subproblems"] !== nothing
+    if compiled_subproblems(solver.problem) !== nothing
         return nothing
     end
 

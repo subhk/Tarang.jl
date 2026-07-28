@@ -228,9 +228,49 @@ mutable struct InitialValueSolver <: Solver
     wall_time_start::Float64
     performance_stats::SolverPerformanceStats
 
+    # RHS fallback policy resolved at construction. `:strict` rejects an
+    # uncompiled RHS; `:interpreted` permits the compatibility evaluator.
+    rhs_fallback_policy::Symbol
+
     # Type-specialized lazy RHS evaluation plan (LazyRHSPlan from lazy_rhs.jl)
     rhs_plan::Any
 end
+
+"""
+    _resolve_rhs_fallback_policy(choice, state) -> Symbol
+
+Resolve the public `rhs_fallback` solver keyword. `:auto` is strict whenever
+the state uses a GPU or more than one MPI rank. GPU state rejects interpreted
+execution even when requested explicitly; serial CPU retains it for
+compatibility and MPI may opt in only for a verified supported case.
+"""
+function _resolve_rhs_fallback_policy(choice, state)
+    gpu = any(field -> is_gpu(field.dist.architecture), state)
+    distributed = any(field -> field.dist.size > 1, state)
+    return _resolve_rhs_fallback_policy(choice, gpu, distributed)
+end
+
+function _resolve_rhs_fallback_policy(choice, gpu::Bool, distributed::Bool)
+    key = Symbol(lowercase(String(choice)))
+    if key === :auto
+        return (gpu || distributed) ? :strict : :interpreted
+    elseif key === :strict
+        return :strict
+    elseif key in (:interpreted, :allow, :compatibility)
+        gpu && throw(ArgumentError(
+            "rhs_fallback=:interpreted is unavailable for GPU state: GPU " *
+            "execution never falls back to the interpreted/CPU path. Rewrite " *
+            "the RHS using supported operators.",
+        ))
+        return :interpreted
+    end
+    throw(ArgumentError(
+        "rhs_fallback must be :auto, :strict, or :interpreted; got $(repr(choice))",
+    ))
+end
+
+@inline _strict_rhs_required(solver::InitialValueSolver) =
+    solver.rhs_fallback_policy === :strict || REQUIRE_LAZY_RHS[]
 
 function attach_evaluator!(solver::InitialValueSolver)
     if solver.base.evaluator === nothing
@@ -243,7 +283,8 @@ end
 
 """
 Auto-detect mixed Fourier+Chebyshev domains and build subproblem matrices.
-Stores the subproblems tuple in problem.parameters["subproblems"].
+Stores solver artifacts in `problem.compiled` while maintaining the legacy
+`problem.parameters["subproblems"]` mirror.
 """
 function _try_build_subproblems!(solver::InitialValueSolver)
     problem = solver.problem
@@ -300,7 +341,7 @@ function _try_build_subproblems!(solver::InitialValueSolver)
     @info "Building subproblem matrix system"
     subsystems = build_subsystems(solver)
     subproblems = build_subproblems(solver, subsystems; build_matrices=["M", "L"])
-    problem.parameters["subproblems"] = subproblems
+    set_compiled_subproblems!(problem, subproblems; subsystems)
 
     n_total = length(subproblems)
     n_with_mats = count(sp -> sp.M_min !== nothing && sp.L_min !== nothing, subproblems)
@@ -401,7 +442,9 @@ end
 function _build_initial_value_solver(problem::IVP, timestepper;
                                      dt::Real=1e-3,
                                      device::String="cpu",
-                                     matsolver::Union{String,Symbol,Type,Tuple}=:auto)
+                                     matsolver::Union{String,Symbol,Type,Tuple}=:auto,
+                                     rhs_fallback::Union{String,Symbol}=:auto)
+    reset_compiled_problem!(problem)
     setup_domain!(problem)
 
     # Merge boundary conditions into equation system
@@ -410,6 +453,7 @@ function _build_initial_value_solver(problem::IVP, timestepper;
     validate_problem(problem)
 
     state = collect_state_fields(problem.variables)
+    rhs_fallback_policy = _resolve_rhs_fallback_policy(rhs_fallback, state)
     selected_matsolver = _select_ivp_matsolver(matsolver, state)
     base = SolverBaseData(problem; matsolver=selected_matsolver)
 
@@ -417,7 +461,7 @@ function _build_initial_value_solver(problem::IVP, timestepper;
 
     solver = InitialValueSolver(base, problem, timestepper, 0.0, 0, Inf, Inf, typemax(Int),
                                 state, Float64(dt), nothing, nothing, time(),
-                                perf_stats, nothing)
+                                perf_stats, rhs_fallback_policy, nothing)
     attach_evaluator!(solver)
 
     if has_time_dependent_bcs(problem.bc_manager)
@@ -437,15 +481,12 @@ function _build_initial_value_solver(problem::IVP, timestepper;
         _try_build_subproblems!(solver)
     end
 
-    # Build the type-specialized lazy RHS plan. If translation fails for any
-    # equation (e.g., unsupported operator type), `is_compiled` stays false
-    # and `evaluate_rhs` falls back to interpreted evaluation.
+    # Build the type-specialized lazy RHS plan. Serial CPU solvers may opt into
+    # the compatibility evaluator; MPI/GPU solvers are strict by default.
     try
         solver.rhs_plan = build_lazy_rhs_plan!(solver)
     catch e
-        # When the caller demanded a compiled RHS, propagate instead of silently
-        # degrading to the interpreted evaluator.
-        REQUIRE_LAZY_RHS[] && rethrow()
+        _strict_rhs_required(solver) && rethrow()
         @debug "LazyRHS build skipped: $e — using interpreted evaluation"
         solver.rhs_plan = nothing
     end
@@ -750,7 +791,7 @@ Handles:
 - Scalar Robin: uses the value component; skips if it isn't numeric
 - Array Dirichlet/Neumann: `ArrayOperator(value)` (for space-dependent BCs)
 """
-function _write_bc_value_to_eq!(eq_data::Dict, bc_manager, bc_idx::Int, current_time)
+function _write_bc_value_to_eq!(eq_data::AbstractDict, bc_manager, bc_idx::Int, current_time)
     bc = bc_manager.conditions[bc_idx]
 
     # Scalar time-dependent path (cache key `(bc_idx, current_time)`).
@@ -807,6 +848,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
                                       solver_type::Union{Nothing, String, Symbol}=nothing,
                                       tolerance::Real=1e-10,
                                       max_iterations::Int=100)
+    reset_compiled_problem!(problem)
     setup_domain!(problem)
     # Merge add_bc! boundary conditions into the equation system (tau rows),
     # mirroring the IVP build (_build_initial_value_solver). Without this the BVP
@@ -832,9 +874,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
 
     perf_stats = SolverPerformanceStats()
 
-    problem.parameters["L_matrix"] = L_sparse
-    problem.parameters["M_matrix"] = M_sparse
-    problem.parameters["F_vector"] = F_vec
+    set_compiled_matrices!(problem, L_sparse, M_sparse, F_vec)
 
     # The global L can be rank-deficient for multi-variable tau systems, which
     # would make a direct (LU) factorization throw. Build the global solver
@@ -875,6 +915,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     setfield!(solver, :subsystems, subsystems)
     setfield!(solver, :subproblems, subproblems)
     setfield!(solver, :coeff_system, coeff_system)
+    set_compiled_subproblems!(problem, subproblems; subsystems, coeff_system)
 
     return solver
 end
@@ -949,6 +990,7 @@ function _build_eigenvalue_solver(problem::EVP;
                                   which::Union{String,Symbol}=:LM,
                                   target::Union{Nothing, ComplexF64}=nothing,
                                   matsolver::Union{String,Symbol,Type}=:sparse)
+    reset_compiled_problem!(problem)
     setup_domain!(problem)
     # Merge add_bc! boundary conditions into the equation set before validating
     # (same fix as the BVP build): without this the BC rows are missing and the
@@ -971,8 +1013,7 @@ function _build_eigenvalue_solver(problem::EVP;
               "This may corrupt eigenvalues from tau-method BCs. Consider setting entry_cutoff=0." maxlog=1
     end
 
-    problem.parameters["L_matrix"] = L_sparse
-    problem.parameters["M_matrix"] = M_sparse
+    set_compiled_matrices!(problem, L_sparse, M_sparse)
 
     perf_stats = SolverPerformanceStats()
     # The global L can be rank-deficient for multi-variable tau systems, which
@@ -1016,6 +1057,7 @@ function _build_eigenvalue_solver(problem::EVP;
     setfield!(solver, :subsystems, subsystems)
     setfield!(solver, :subproblems, subproblems)
     setfield!(solver, :coeff_system, coeff_system)
+    set_compiled_subproblems!(problem, subproblems; subsystems, coeff_system)
 
     return solver
 end
@@ -1081,9 +1123,7 @@ function build_solver_matrices!(solver::InitialValueSolver)
     apply_entry_cutoff!(F, cutoff)
     
     # Store matrices for timestepping
-    solver.problem.parameters["L_matrix"] = sparse(L)
-    solver.problem.parameters["M_matrix"] = sparse(M)
-    solver.problem.parameters["F_vector"] = F
+    set_compiled_matrices!(solver.problem, sparse(L), sparse(M), F)
 end
 
 function apply_entry_cutoff!(A::AbstractMatrix, cutoff::Real)

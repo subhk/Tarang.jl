@@ -42,6 +42,13 @@ end
     @test isempty(prob.equations)
     @test isempty(prob.boundary_conditions)
 
+    # Legacy code may still push Dict equation records directly. Keep this
+    # conversion explicit across Julia versions while EquationIR migrates the
+    # internal representation to named fields.
+    push!(prob.equation_data, Dict{String, Any}("equation_size" => 3))
+    @test prob.equation_data[1] isa Tarang.EquationIR
+    @test prob.equation_data[1].equation_size == 3
+
     # IVP with multiple variables
     domain, p, T, u = make_channel_fields()
     ux, uz = u.components
@@ -308,6 +315,21 @@ end
     @test solver.sim_time == 0.0
     @test solver.iteration == 0
     @test length(solver.state) >= 1
+
+    # Parsed equations and solver artifacts have explicit ownership. Dict-style
+    # access remains available for downstream compatibility during migration.
+    @test prob.equation_data[1] isa Tarang.EquationIR
+    @test prob.equation_data[1].mass === prob.equation_data[1]["M"]
+    @test prob.equation_data[1].equation_size == 5
+    @test prob.compiled isa Tarang.CompiledProblem
+    @test prob.compiled.linear_matrix === prob.parameters["L_matrix"]
+    @test prob.compiled.mass_matrix === prob.parameters["M_matrix"]
+
+    prob.compiled.caches.bc_rfft[f] = :cached
+    Tarang.reset_compiled_problem!(prob)
+    @test isempty(prob.compiled.caches.bc_rfft)
+    @test prob.compiled.linear_matrix === nothing
+    @test !haskey(prob.parameters, "L_matrix")
 
     # With RK222 timestepper
     f2 = make_periodic_field("v")

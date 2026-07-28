@@ -1,5 +1,5 @@
 # Public exports: coordinates, bases, domains, fields, and layout/data access.
-export
+@public_api(
     CartesianCoordinates,
     coords, unit_vector_fields,
     RealFourier, ComplexFourier, Fourier,
@@ -13,5 +13,6 @@ export
     storage_mode, is_pencil_storage, is_serial_storage,
     stack_components, unstack_components!,
     ensure_layout!, forward_transform!, backward_transform!,
+    setup_pencil_fft_transforms_2d!, setup_pencil_fft_transforms_3d!,
     get_cpu_data, get_cpu_local_data, get_local_data, is_gpu_field,
-    local_grid, local_grids
+    local_grid, local_grids)

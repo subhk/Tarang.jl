@@ -139,7 +139,7 @@ end
 
 Get valid modes array for equation.
 """
-function get_valid_modes(eq_data::Dict, sp::Subproblem, num_modes::Int)
+function get_valid_modes(eq_data::AbstractDict, sp::Subproblem, num_modes::Int)
     valid = get(eq_data, "valid_modes", nothing)
     if valid === nothing
         return ones(Bool, num_modes)

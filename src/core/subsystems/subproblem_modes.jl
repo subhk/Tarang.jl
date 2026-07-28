@@ -4,7 +4,7 @@
 Check if equation condition is satisfied for this subproblem.
 Following subsystems:494-495.
 """
-function check_condition(sp::Subproblem, eq_data::Dict)
+function check_condition(sp::Subproblem, eq_data::AbstractDict)
     condition = get(eq_data, "condition", "true")
     if condition == "true" || condition === nothing || condition == true
         return true

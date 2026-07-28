@@ -106,7 +106,7 @@ end
 """
 function build_matrix_expressions!(problem::Problem)
     
-    problem.equation_data = Dict{String, Any}[]
+    empty!(problem.equation_data)
     
     for (i, equation_str) in enumerate(problem.equations)
         # Parse LHS first (for sizing) — it must succeed.
@@ -132,7 +132,7 @@ function build_matrix_expressions!(problem::Problem)
         end
 
         try
-            eq_data = build_equation_expressions(lhs, rhs, problem.variables)
+            eq_data = EquationIR(build_equation_expressions(lhs, rhs, problem.variables))
             eq_data["equation_index"] = i
             eq_data["equation_string"] = equation_str
             eq_size = _equation_output_dofs(lhs)
@@ -144,14 +144,14 @@ function build_matrix_expressions!(problem::Problem)
         catch e
             @error "Failed to build matrix expressions for equation $i: $equation_str" exception=e
             eq_size = lhs !== nothing ? _equation_output_dofs(lhs) : 0
-            fallback_data = Dict(
+            fallback_data = EquationIR(Dict(
                 "M" => nothing,
                 "L" => lhs isa UnknownOperator ? lhs : UnknownOperator(equation_str),
                 "F" => ZeroOperator(),
                 "equation_index" => i,
                 "equation_string" => equation_str,
                 "equation_size" => eq_size
-            )
+            ))
             push!(problem.equation_data, fallback_data)
         end
     end

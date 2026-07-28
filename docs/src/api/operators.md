@@ -410,9 +410,9 @@ add_equation!(problem, "∂t(T) = hilbert(T)")   # parseable in equation strings
 - Scalar fields only (a `VectorField` operand throws).
 
 **Limitations**:
-- `hilbert` in an equation RHS is **not** handled by the compiled ("lazy") RHS: the solver
-  logs a warning and the whole problem falls back to the slower interpreted evaluator
-  (`solver.rhs_plan.is_compiled == false`).
+- `hilbert` in an equation RHS is **not** handled by the compiled ("lazy") RHS.
+  Serial CPU solvers can use the interpreted compatibility evaluator; MPI/GPU
+  solvers reject the uncompiled RHS by default.
 - Under MPI it throws if a **Fourier** axis is the decomposed one — the `-i·sign(k)`
   multiplier needs global wavenumbers, which a decomposed axis does not expose.
 
@@ -637,9 +637,9 @@ Operators are evaluated in spectral space when possible:
 
 ### Check that the RHS compiled
 
-The explicit side of every equation is compiled into a type-specialized plan. If any term
-cannot be compiled, the *whole solver* silently drops to the ~100×-slower interpreted
-evaluator (after a loud `@warn`). Check it:
+The explicit side of every equation is compiled into a type-specialized plan.
+Serial CPU solvers can use the compatibility evaluator when a term cannot be
+compiled; MPI/GPU solvers are strict by default. Check it:
 
 ```julia
 solver = InitialValueSolver(problem, RK222(); dt=1e-3)

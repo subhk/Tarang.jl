@@ -248,18 +248,14 @@ Cache-backed helper that:
    real input) and complex FFT along remaining axes.
 3. Returns the complex coefficient array for downstream indexing.
 
-The result is cached on `sp.problem.parameters["_bc_rfft_cache"]` by array
-object identity (`IdDict`) so all subproblems reusing the same `arr` share
-a single FFT per refresh.
+The result is cached in the problem's compiled-runtime cache by array object
+identity (`IdDict`) so all subproblems reusing the same `arr` share a single
+FFT per refresh without mixing runtime state into user parameters.
 """
 function _get_or_compute_bc_array_coeffs!(arr::AbstractArray,
                                           sp::Subproblem,
                                           fourier_sizes::Vector{Int})
-    cache = get(sp.problem.parameters, "_bc_rfft_cache", nothing)
-    if cache === nothing
-        cache = IdDict{Any, Any}()
-        sp.problem.parameters["_bc_rfft_cache"] = cache
-    end
+    cache = compiled_problem(sp.problem).caches.bc_rfft
     cached = get(cache, arr, nothing)
     cached !== nothing && return cached
 
@@ -373,11 +369,7 @@ at the start of each step, or after evaluating new time-dependent array
 values via `_apply_bc_values_to_equations!`).
 """
 function invalidate_bc_array_cache!(problem)
-    cache = get(problem.parameters, "_bc_rfft_cache", nothing)
-    cache === nothing && return
-    if cache isa IdDict
-        empty!(cache)
-    end
+    empty!(compiled_problem(problem).caches.bc_rfft)
     return
 end
 

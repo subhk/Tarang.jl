@@ -181,7 +181,7 @@ function __init__()
     # Transform backends are dispatched, not registered: see the
     # `Tarang._gpu_{forward,backward}_transform_backend!(::GPU, …)` methods in
     # cuda/transforms.jl.
-    Tarang._activate_gpu_solvers!(CUDA)
+    Tarang._activate_gpu_solvers!()
     return nothing
 end
 
