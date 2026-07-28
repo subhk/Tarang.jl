@@ -234,25 +234,17 @@ function subproblem_locality_report(solver::InitialValueSolver)
         end
     end
 
-    per_rank = if dist.size > 1
-        try
-            Int.(MPI.Allgather(Int32(n_sp_local), dist.comm))
-        catch
-            Int[n_sp_local]
-        end
-    else
+    # No try/catch around these collectives. A failing Allgather cannot be recovered from
+    # locally: the other ranks are still blocked inside it, so swallowing the error diverges
+    # the communicator. The old fallback also degraded a GLOBAL balance report to rank-local
+    # data — reporting 0% imbalance precisely when something is wrong.
+    per_rank = dist.size > 1 ?
+        Int.(MPI.Allgather(Int32(n_sp_local), dist.comm)) :
         Int[n_sp_local]
-    end
 
-    per_rank_cost = if dist.size > 1
-        try
-            Float64.(MPI.Allgather(Float64(local_cost), dist.comm))
-        catch
-            Float64[local_cost]
-        end
-    else
+    per_rank_cost = dist.size > 1 ?
+        Float64.(MPI.Allgather(Float64(local_cost), dist.comm)) :
         Float64[local_cost]
-    end
 
     total = sum(per_rank)
     min_pr = isempty(per_rank) ? 0 : minimum(per_rank)

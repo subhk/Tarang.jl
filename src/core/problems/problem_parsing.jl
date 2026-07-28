@@ -973,9 +973,17 @@ function parse_expression(expr_str::AbstractString, namespace::Dict{String, Any}
             @warn "Parse error in expression '$expr_str': $(e.msg)"
             return UnknownOperator(expr_str)
         else
-            # For evaluation errors, try fallback parsing patterns
+            # For evaluation errors, try the fallback patterns. If the fallback actually
+            # recognises the expression, use it. If it only hands back an `UnknownOperator`
+            # placeholder it understood nothing, and swallowing `e` would turn a diagnosable
+            # error (a bad lift, an unknown operator, a malformed call) into a silent
+            # placeholder term in the equation. Rethrow instead.
+            fallback = fallback_parse_expression(expr_str, namespace)
+            if isa(fallback, UnknownOperator)
+                rethrow(e)
+            end
             @warn "Error evaluating expression '$expr_str': $e" maxlog=1
-            return fallback_parse_expression(expr_str, namespace)
+            return fallback
         end
     end
 end
@@ -1183,14 +1191,13 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
                         operand = evaluate_parsed_expression(arg_exprs[1], namespace)
                         n_val = coerce_constant_value(evaluate_parsed_expression(arg_exprs[2], namespace))
                         n_int = Int(round(n_val))
-                        try
-                            return lift(operand, n_int)
-                        catch
-                            # Auto-detection failed; return operand directly.
-                            # For matrix sizing the Lift is just a shape-preserving
-                            # wrapper, so the operand alone is sufficient.
-                            return operand
-                        end
+                        # No fallback to the bare operand. A Lift is NOT a shape-preserving
+                        # wrapper: `subproblem_matrix(::Lift)` places each tau DOF at
+                        # Chebyshev mode Nz+n+1, while a bare operand is promoted onto the
+                        # FIRST row block instead. Dropping it made the DC subproblem
+                        # rank-deficient and left the manufactured Poisson BVP ~100% wrong.
+                        # `lift` already raises an ArgumentError naming the 3-argument form.
+                        return lift(operand, n_int)
                     elseif length(arg_exprs) >= 3
                         # Full form: lift(tau, basis, -1)
                         operand = evaluate_parsed_expression(arg_exprs[1], namespace)
