@@ -8,6 +8,22 @@
 # matrices instead of moving dense blocks by hand.
 
 """
+    _ragged_index(L0, n1, n2, n3) -> Int or nothing
+
+`L0[n1][n2][n3]` when every level of the ragged hierarchy has that entry, `nothing` otherwise.
+Replaces probing the hole with a caught `BoundsError`, which cost a throw per hole and made a
+genuine failure indistinguishable from an absent entry.
+"""
+@inline function _ragged_index(L0, n1::Int, n2::Int, n3::Int)
+    n1 <= length(L0) || return nothing
+    L1 = L0[n1]
+    n2 <= length(L1) || return nothing
+    L2 = L1[n2]
+    n3 <= length(L2) || return nothing
+    return L2[n3]
+end
+
+"""
     left_permutation(sp, equations, bc_top, interleave_components)
 
 Left permutation acting on equations.
@@ -60,20 +76,17 @@ function _left_permutation_indices(sp::Subproblem, equations, eqn_sizes::Abstrac
     n2max = maximum(length(L1) for L1 in L0; init=1)
     n3max = maximum(length(L2) for L1 in L0 for L2 in L1; init=1)
 
+    # The hierarchy is ragged, so most (n1, n2, n3) triples do not exist. Skip them with an
+    # explicit bounds check rather than by catching the BoundsError: a bare catch here would
+    # also swallow any *other* failure, silently dropping a row from the permutation.
     if interleave_components
         for n3 in 1:n3max
             for n2 in 1:n2max
                 for n1 in 1:n1max
                     dim = get(equations[n1], "domain_dim", 0)
-                    try
-                        idx = L0[n1][n2][n3]
-                        if !haskey(indices_by_dim, dim)
-                            indices_by_dim[dim] = Int[]
-                        end
-                        push!(indices_by_dim[dim], idx)
-                    catch
-                        continue
-                    end
+                    idx = _ragged_index(L0, n1, n2, n3)
+                    idx === nothing && continue
+                    push!(get!(() -> Int[], indices_by_dim, dim), idx)
                 end
             end
         end
@@ -82,15 +95,9 @@ function _left_permutation_indices(sp::Subproblem, equations, eqn_sizes::Abstrac
             for n1 in 1:n1max
                 dim = get(equations[n1], "domain_dim", 0)
                 for n2 in 1:n2max
-                    try
-                        idx = L0[n1][n2][n3]
-                        if !haskey(indices_by_dim, dim)
-                            indices_by_dim[dim] = Int[]
-                        end
-                        push!(indices_by_dim[dim], idx)
-                    catch
-                        continue
-                    end
+                    idx = _ragged_index(L0, n1, n2, n3)
+                    idx === nothing && continue
+                    push!(get!(() -> Int[], indices_by_dim, dim), idx)
                 end
             end
         end
@@ -172,39 +179,26 @@ function _right_permutation_indices(sp::Subproblem, variables, tau_left::Bool, i
     n2max = maximum(length(L1) for L1 in L0; init=1)
     n3max = maximum(length(L2) for L1 in L0 for L2 in L1; init=1)
 
+    # Ragged, exactly as in `_left_permutation_indices`: bounds-check, do not catch.
     if interleave_components
         for n3 in 1:n3max
             for n2 in 1:n2max
                 for n1 in 1:n1max
-                    var = variables[n1]
-                    dim = get_var_dim(var)
-                    try
-                        idx = L0[n1][n2][n3]
-                        if !haskey(indices_by_dim, dim)
-                            indices_by_dim[dim] = Int[]
-                        end
-                        push!(indices_by_dim[dim], idx)
-                    catch
-                        continue
-                    end
+                    dim = get_var_dim(variables[n1])
+                    idx = _ragged_index(L0, n1, n2, n3)
+                    idx === nothing && continue
+                    push!(get!(() -> Int[], indices_by_dim, dim), idx)
                 end
             end
         end
     else
         for n3 in 1:n3max
             for n1 in 1:n1max
-                var = variables[n1]
-                dim = get_var_dim(var)
+                dim = get_var_dim(variables[n1])
                 for n2 in 1:n2max
-                    try
-                        idx = L0[n1][n2][n3]
-                        if !haskey(indices_by_dim, dim)
-                            indices_by_dim[dim] = Int[]
-                        end
-                        push!(indices_by_dim[dim], idx)
-                    catch
-                        continue
-                    end
+                    idx = _ragged_index(L0, n1, n2, n3)
+                    idx === nothing && continue
+                    push!(get!(() -> Int[], indices_by_dim, dim), idx)
                 end
             end
         end

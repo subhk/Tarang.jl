@@ -139,8 +139,11 @@ ns2 = Dict{String, Any}("vv" => vv, "u" => u2,
         # integ / average error paths
         @test_throws ArgumentError evaluate_parsed_expression(Meta.parse("integ()"), ns1)
         @test_throws ArgumentError evaluate_parsed_expression(Meta.parse("average(u)"), ns1)
-        # lift short form: auto-detect basis; for matrix sizing returns the operand
-        @test parse_expression("lift(u, -1)", ns1) === u1
+        # lift short form: auto-detect basis. `u1` is a full-shape Chebyshev field, so there
+        # is no missing non-periodic basis to infer and detection MUST raise. This used to
+        # return `u1` — silently dropping the Lift, which is not shape-preserving and left a
+        # tau-method solve ~100% wrong (test_lift_not_dropped.jl).
+        @test_throws ArgumentError parse_expression("lift(u, -1)", ns1)
         @test_throws ArgumentError evaluate_parsed_expression(Meta.parse("lift(u)"), ns1)
         # fractional / inverse-sqrt laplacian
         @test parse_expression("fraclap(u, 1.0)", ns1) isa FractionalLaplacian

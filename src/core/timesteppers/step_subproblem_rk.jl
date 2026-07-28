@@ -815,7 +815,8 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
                 sp.LHS_solvers[a_ii] = qr_solver
                 @info "step_subproblem_rk!: using sparse QR fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
                 return qr_solver
-            catch
+            catch qr_err
+                @debug "step_subproblem_rk!: sparse QR fallback also failed for group=$(sp.group), stage=$stage_idx" exception=qr_err
             end
         end
         @debug "step_subproblem_rk!: solver build failed for group=$(sp.group), stage=$stage_idx" exception=(err, catch_backtrace())
@@ -860,7 +861,8 @@ function _get_or_compute_mass_lu!(sp::Subproblem)
                 mass_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, M)
                 sp.runtime.mass_solver = mass_solver
                 return mass_solver
-            catch
+            catch qr_err
+                @debug "step_subproblem_rk!: sparse QR mass-solver fallback also failed for group=$(sp.group)" exception=qr_err
             end
         end
         @debug "step_subproblem_rk!: mass solver build failed for group=$(sp.group)" exception=(err, catch_backtrace())

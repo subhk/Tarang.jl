@@ -454,7 +454,8 @@ function _get_or_build_multistep_lhs!(sp::Subproblem, a0::Float64, b0::Float64)
                 sp.matrices[cache_key] = qr_solver
                 sp.matrices[cache_key_k] = current_key
                 return qr_solver
-            catch
+            catch qr_err
+                @debug "multistep: sparse QR fallback also failed for group=$(sp.group)" exception=qr_err
             end
         end
         @debug "multistep LHS build failed for group=$(sp.group)" exception=(err, catch_backtrace())

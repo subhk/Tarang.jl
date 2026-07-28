@@ -627,12 +627,28 @@ function _coord_value(coords, name::String)
     return haskey(coords, sym) ? coords[sym] : nothing
 end
 
+"""
+    _is_signature_mismatch(e, func, nargs) -> Bool
+
+True when `e` is a `MethodError` raised by dispatch on `func` itself for a call with `nargs`
+arguments — i.e. the candidate signature simply does not exist, so the next one may be tried.
+
+Any other exception, including a `MethodError` raised *inside* the body, is a real failure.
+Callbacks must never have their errors mistaken for a wrong argument count: that turns a typo
+or a `BoundsError` into a silent degradation to a shorter (wrong) call.
+"""
+_is_signature_mismatch(e, func, nargs::Int) =
+    e isa MethodError && e.f === func && length(e.args) == nargs
+
 function _evaluate_function_expression(func::Function, current_time, coords)
-    # Try different argument combinations based on function arity
+    # Speculative probe of the container convention `func(t, coords)`. This one probe must
+    # stay permissive: a two-argument callback written as `func(t, x)` is indistinguishable
+    # from `func(t, coords)` by dispatch, so it gets *called* here with the coordinate
+    # container and can fail from inside its own body. Every probe after this one is strict.
     try
         return func(current_time, coords)
-    catch
-        # Continue with component-wise arguments
+    catch e
+        @debug "BC callback did not accept the (time, coords) form" exception = e
     end
 
     x = _coord_value(coords, "x")
@@ -648,38 +664,43 @@ function _evaluate_function_expression(func::Function, current_time, coords)
         phi = _coord_value(coords, "phi")
     end
 
-    try
-        # Try with all available arguments
-        if x !== nothing && y !== nothing && z !== nothing
-            return func(current_time, x, y, z)
-        elseif x !== nothing && y !== nothing
-            return func(current_time, x, y)
-        elseif r !== nothing && theta !== nothing && phi !== nothing
-            return func(current_time, r, theta, phi)
-        elseif r !== nothing && theta !== nothing
-            return func(current_time, r, theta)
-        elseif x !== nothing
-            return func(current_time, x)
-        else
-            return func(current_time)
-        end
-    catch
-        # If that fails, try just time
+    args = if x !== nothing && y !== nothing && z !== nothing
+        (current_time, x, y, z)
+    elseif x !== nothing && y !== nothing
+        (current_time, x, y)
+    elseif r !== nothing && theta !== nothing && phi !== nothing
+        (current_time, r, theta, phi)
+    elseif r !== nothing && theta !== nothing
+        (current_time, r, theta)
+    elseif x !== nothing
+        (current_time, x)
+    else
+        (current_time,)
+    end
+
+    # Fall back to progressively shorter signatures, but only on a genuine dispatch miss.
+    candidates = length(args) == 1 ? (args, ()) : (args, (current_time,), ())
+    for candidate in candidates
         try
-            return func(current_time)
-        catch
-            # Last resort: try no arguments
-            return func()
+            return func(candidate...)
+        catch e
+            _is_signature_mismatch(e, func, length(candidate)) || rethrow()
         end
     end
+
+    throw(ArgumentError(
+        "Time-dependent boundary condition callback accepts none of the supported " *
+        "signatures. Tried (time, coords), $(length(args))-argument (time, coordinates...), " *
+        "(time,) and (). Define a method for one of these."))
 end
 
 function _evaluate_space_function_expression(func::Function, coords)
-    # Try different argument combinations based on function arity
+    # Speculative probe of the container convention `func(coords)`; see the note in
+    # `_evaluate_function_expression`. Only this first probe is permissive.
     try
         return func(coords)
-    catch
-        # Continue with component-wise arguments
+    catch e
+        @debug "BC callback did not accept the (coords,) form" exception = e
     end
 
     x = _coord_value(coords, "x")
@@ -695,33 +716,39 @@ function _evaluate_space_function_expression(func::Function, coords)
         phi = _coord_value(coords, "phi")
     end
 
-    try
-        if x !== nothing && y !== nothing && z !== nothing
-            return func(x, y, z)
-        elseif x !== nothing && y !== nothing
-            return func(x, y)
-        elseif r !== nothing && theta !== nothing && phi !== nothing
-            return func(r, theta, phi)
-        elseif r !== nothing && theta !== nothing
-            return func(r, theta)
-        elseif x !== nothing
-            return func(x)
-        elseif r !== nothing
-            return func(r)
-        elseif theta !== nothing
-            return func(theta)
-        elseif phi !== nothing
-            return func(phi)
-        else
-            return func()
-        end
-    catch
+    args = if x !== nothing && y !== nothing && z !== nothing
+        (x, y, z)
+    elseif x !== nothing && y !== nothing
+        (x, y)
+    elseif r !== nothing && theta !== nothing && phi !== nothing
+        (r, theta, phi)
+    elseif r !== nothing && theta !== nothing
+        (r, theta)
+    elseif x !== nothing
+        (x,)
+    elseif r !== nothing
+        (r,)
+    elseif theta !== nothing
+        (theta,)
+    elseif phi !== nothing
+        (phi,)
+    else
+        ()
+    end
+
+    candidates = isempty(args) ? (args,) : (args, ())
+    for candidate in candidates
         try
-            return func()
-        catch
-            return func
+            return func(candidate...)
+        catch e
+            _is_signature_mismatch(e, func, length(candidate)) || rethrow()
         end
     end
+
+    throw(ArgumentError(
+        "Space-dependent boundary condition callback accepts none of the supported " *
+        "signatures. Tried (coords,), $(length(args))-argument (coordinates...) and (). " *
+        "Define a method for one of these."))
 end
 
 """Update all time-dependent boundary conditions for current time"""

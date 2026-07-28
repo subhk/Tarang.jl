@@ -116,6 +116,9 @@ const TEST_FILES = [
     "test_lazy_rhs_transform_budget.jl",     # lap() is fused (1 fwd + 1 bwd, not one round-trip per axis); alloc guards are blind to this
     "test_subproblem_gather_alloc.jl",       # 3D per-mode gather/scatter must use the strided path, not the Any-splat view (−39% alloc/step)
     "test_silent_zero_terms.jl",             # compound-constant BCs and unit-vector RHS forcing were silently enforced/applied as ZERO
+    "test_bc_function_arity.jl",             # BC callback arity was probed by exception: body errors masked as arity misses, and `func` itself returned as a value
+    "test_subproblem_permutations.jl",       # pins the ragged L0[eq][comp][coeff] regrouping so the BoundsError-driven loops could be replaced by bounds checks
+    "test_lift_not_dropped.jl",              # the parser silently dropped `lift` on auto-detect failure; a dropped Lift leaves the tau solve ~100% wrong
     "test_timestepper_boundaries.jl",
     "test_field_pool.jl",
     "test_linalg.jl",
