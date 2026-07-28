@@ -90,8 +90,24 @@ const CUDA_AVAILABLE = Ref(false)
 # CUDA-specific bindings live in TarangCUDAExt. Core owns the solver contracts
 # and algorithms, while these extension methods supply CUSOLVER/CUSPARSE only
 # after CUDA.jl has actually loaded.
-function _gpu_cusolver_module end
-function _gpu_cusparse_module end
+# Dispatch on `Val{:cuda}` rather than declaring method-less functions: the
+# extension needs a signature it can EXTEND, and a zero-argument
+# `Tarang._gpu_cusolver_module() = CUDA.CUSOLVER` in the extension would
+# OVERWRITE a zero-argument definition here rather than add to it (there is no
+# specificity gap between two zero-argument methods). The `::Val` fallback is
+# strictly less specific than the extension's `::Val{:cuda}`, so both coexist.
+# Mirrors `_cuda_functional(::Val{:cuda})`.
+#
+# The method-less form this replaces also left the call sites below with nothing
+# to resolve, which is a MethodError to any caller — and to JET, which reported
+# both of them.
+_gpu_cusolver_module(::Val) = error(
+    "CUSOLVER bindings require CUDA.jl to be loaded (load CUDA before using GPU solvers).")
+_gpu_cusparse_module(::Val) = error(
+    "CUSPARSE bindings require CUDA.jl to be loaded (load CUDA before using GPU solvers).")
+
+_gpu_cusolver_module() = _gpu_cusolver_module(Val(:cuda))
+_gpu_cusparse_module() = _gpu_cusparse_module(Val(:cuda))
 
 _cusolver() = _gpu_cusolver_module()
 _cusparse() = _gpu_cusparse_module()

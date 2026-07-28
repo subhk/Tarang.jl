@@ -52,12 +52,27 @@ function Base.getindex(ir::EquationIR, key::String)
     return getfield(ir, field)
 end
 
+"""
+    _equation_size_value(value) -> Int
+
+Convert an assigned `"equation_size"` to `Int`. `setindex!` takes an untyped
+`value` because the other keys legitimately hold strings and operator objects,
+so a bare `Int(value)` here is a `MethodError` waiting for the first caller that
+writes the wrong type to this one key — `Int(::String)`,
+`Int(::ConstantOperator)` and `Int(::ArrayOperator)` are all reachable and were
+all reported by JET. Convert through dispatch instead, and say which key is at
+fault when the type is wrong.
+"""
+_equation_size_value(value::Integer) = Int(value)
+_equation_size_value(value) = throw(ArgumentError(
+    "EquationIR[\"equation_size\"] must be an Integer, got $(typeof(value))"))
+
 function Base.setindex!(ir::EquationIR, value, key::String)
     field = _equation_ir_field(key)
     if field === nothing
         ir.metadata[key] = value
     elseif field === :equation_size
-        setfield!(ir, field, Int(value))
+        setfield!(ir, field, _equation_size_value(value))
     else
         setfield!(ir, field, value)
     end
