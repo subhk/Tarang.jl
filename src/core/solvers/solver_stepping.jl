@@ -269,7 +269,11 @@ function _bvp_lhs_solver(sp::Subproblem)
             "Original error: $(sprint(showerror, err))")
         try
             return MatSolvers.solver_instance(MatSolvers.SPQRSolver, sp.L_min)
-        catch
+        catch qr_err
+            # Dense `A \ b` is the documented last tier, but record WHY both sparse
+            # factorizations declined — otherwise the drop to dense is invisible.
+            @warn "BVP: $(st) and sparse QR both failed to factor L_min; falling back to a " *
+                  "dense solve for group=$(sp.group)" maxlog = 1 exception = qr_err
             return Matrix(sp.L_min)
         end
     end
