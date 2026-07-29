@@ -98,6 +98,7 @@ const TEST_FILES = [
     "test_operators_tensor.jl",
     "test_diagonal_imex.jl",
     "test_gpu_implicit_guard.jl",             # single-GPU implicit-operator guard (CPU-side logic)
+    "test_gpu_implicit_guard_jlarray.jl",     # the same guard must FIRE on device fields — its detector read IR the GPU path never builds
     "test_2d_gpu_domain_compat.jl",           # 2D pure-Fourier GPU refresh device-safety (JLArray)
     "test_gpu_2d_device_stack.jl",            # 2D forcing kernels / device fields / staging contract (JLArray)
     "test_etd_multistep.jl",
@@ -119,6 +120,7 @@ const TEST_FILES = [
     "test_bc_function_arity.jl",             # BC callback arity was probed by exception: body errors masked as arity misses, and `func` itself returned as a value
     "test_subproblem_permutations.jl",       # pins the ragged L0[eq][comp][coeff] regrouping so the BoundsError-driven loops could be replaced by bounds checks
     "test_lift_not_dropped.jl",              # the parser silently dropped `lift` on auto-detect failure; a dropped Lift leaves the tau solve ~100% wrong
+    "test_catch_ratchet.jl",                 # bare `catch` population must not grow — every silent-wrong-value bug found so far came from one
     "test_timestepper_boundaries.jl",
     "test_field_pool.jl",
     "test_linalg.jl",
