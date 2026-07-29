@@ -60,6 +60,19 @@ equation? Architecture-independent — reads the parsed L/M expressions, not the
 function _problem_has_implicit_linear_term(solver::InitialValueSolver)
     problem = solver.problem
     hasfield(typeof(problem), :equation_data) || return false
+
+    # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
+    # global-matrix assembly — the step a pure-Fourier GPU IVP SKIPS. That is precisely
+    # the case `_check_gpu_implicit_compatibility!` exists to catch, so reading the IR
+    # alone left the detector blind exactly when it mattered: `n(equations) == 1` while
+    # `n(equation_data) == 0`, so this returned false and the implicit operator was
+    # dropped silently. Build the (matrix-free) expression IR on demand instead.
+    # Deliberately not wrapped in try/catch: if the equations cannot be parsed we cannot
+    # decide, and returning `false` would be the silent drop this guard prevents.
+    if isempty(problem.equation_data) && !isempty(problem.equations)
+        build_matrix_expressions!(problem)
+    end
+
     for eq_data in problem.equation_data
         M_expr = get(eq_data, "M", nothing)
         (M_expr === nothing || _is_zero_m_term(M_expr)) && continue   # not an evolution equation

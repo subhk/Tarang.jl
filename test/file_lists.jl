@@ -98,6 +98,7 @@ const TEST_FILES = [
     "test_operators_tensor.jl",
     "test_diagonal_imex.jl",
     "test_gpu_implicit_guard.jl",             # single-GPU implicit-operator guard (CPU-side logic)
+    "test_gpu_implicit_guard_jlarray.jl",     # the same guard must FIRE on device fields — its detector read IR the GPU path never builds
     "test_2d_gpu_domain_compat.jl",           # 2D pure-Fourier GPU refresh device-safety (JLArray)
     "test_gpu_2d_device_stack.jl",            # 2D forcing kernels / device fields / staging contract (JLArray)
     "test_etd_multistep.jl",
