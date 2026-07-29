@@ -119,6 +119,7 @@ const TEST_FILES = [
     "test_bc_function_arity.jl",             # BC callback arity was probed by exception: body errors masked as arity misses, and `func` itself returned as a value
     "test_subproblem_permutations.jl",       # pins the ragged L0[eq][comp][coeff] regrouping so the BoundsError-driven loops could be replaced by bounds checks
     "test_lift_not_dropped.jl",              # the parser silently dropped `lift` on auto-detect failure; a dropped Lift leaves the tau solve ~100% wrong
+    "test_catch_ratchet.jl",                 # bare `catch` population must not grow — every silent-wrong-value bug found so far came from one
     "test_timestepper_boundaries.jl",
     "test_field_pool.jl",
     "test_linalg.jl",
