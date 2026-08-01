@@ -102,6 +102,9 @@ const TEST_FILES = [
     "test_2d_gpu_domain_compat.jl",           # 2D pure-Fourier GPU refresh device-safety (JLArray)
     "test_gpu_2d_device_stack.jl",            # 2D forcing kernels / device fields / staging contract (JLArray)
     "test_multistep_field_path.jl",           # matrix-free multistep for explicit GPU/MPI problems — was a permanent forward-Euler collapse
+    "test_slab_io.jl",                        # NetCDF slab index math + serial file round-trip
+    "test_checkpoint_restart.jl",             # save_field/load_field! + solver save_state/load_state!
+    "test_gpu_checkpoint_staging.jl",         # checkpoint load uploads to device storage (JLArray, no GPU needed)
     "test_etd_multistep.jl",
     "test_rksmr_convergence.jl",
     "test_kernel_operations.jl",
@@ -225,6 +228,7 @@ const MPI_TEST_FILES = [
     "test_mpi_cheb_fourier_ivp.jl",          # distributed Cheb-Fourier IMEX IVP == serial (np>=2/4)
     "test_mpi_sbdf_high_order.jl",            # SBDF3/4 subproblem startup retains nominal convergence order (np>=2)
     "test_mpi_explicit_multistep_field.jl",   # explicit multistep on distributed pure-Fourier: field path == serial (np>=2); used to throw
+    "test_mpi_checkpoint_restart.jl",         # checkpoint written on N ranks loads on M and matches serial (np>=2)
     "test_mpi_cheb_fourier_ivp_nonlinear.jl", # distributed NONLINEAR Cheb-Fourier channel IVP (advection+dealias+tau-BC+IMEX) == serial (np>=2)
     # MPI correctness fixes 2026-06-23 (see memory/project_mpi_audit_2026_06_21.md).
     "test_mpi_decomp_forcing_audit.jl",      # #1/#4 get_local_range slab; #2 forcing wavenumber placement (np>=2)

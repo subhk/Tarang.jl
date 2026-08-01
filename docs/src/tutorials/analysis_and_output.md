@@ -365,57 +365,24 @@ data = Array(get_grid_data(T))    # dense (16, 16) Matrix{Float64}, ready to plo
 
 ## Checkpointing
 
-Tarang has no built-in checkpoint type — write a small helper over the evolving
-state fields (`solver.state`, each a `ScalarField` with a `.name`) and plain
-NetCDF. Grid space is exact and real-valued, so it round-trips losslessly.
-
-### Saving State
-
-```julia
-using NetCDF
-
-function save_checkpoint(solver, path)
-    isfile(path) && rm(path)
-    for f in solver.state
-        ensure_layout!(f, :g)
-        g = get_grid_data(f)
-        dimspec = collect(Iterators.flatten(
-            ("$(f.name)_d$i" => s for (i, s) in enumerate(size(g)))))
-        nccreate(path, f.name, dimspec...; t=NC_DOUBLE)   # NC_DOUBLE: keep Float64
-        ncwrite(g, path, f.name)
-    end
-    ncputatt(path, "Global", Dict("sim_time" => solver.sim_time,
-                                  "iteration" => solver.iteration, "dt" => solver.dt))
-    return path
-end
-```
-
-### Loading State
+Tarang has a built-in checkpoint type: `save_state` writes every field in
+`solver.state` plus the simulation clock (`sim_time`, `iteration`, `dt`) to
+NetCDF via the slab layer, and `load_state!` restores them — on CPU, at any rank
+count. On GPU, single-device staging is covered but **GPU + MPI checkpointing is
+untested**: it takes a different geometry branch that no test executes. See
+[Checkpoint and restart](../api/io.md#Checkpoint-and-restart) for the full API,
+including what GPU support does and does not cover and which schemes warn on
+restart.
 
 ```julia
-function load_checkpoint!(solver, path)
-    for f in solver.state
-        ensure_layout!(f, :g)                 # ensure the grid buffer exists / layout is :g
-        get_grid_data(f) .= ncread(path, f.name)
-    end
-    solver.sim_time  = ncgetatt(path, "Global", "sim_time")
-    solver.iteration = Int(ncgetatt(path, "Global", "iteration"))
-    solver.dt        = ncgetatt(path, "Global", "dt")
-    return solver
-end
-```
-
-Use `solver.state` (the integrator's live fields), **not** the problem-variable
-handles. For a vector variable the state holds its components, named `u_x`, `u_z`, …
-Restart then continues from `run!` as usual, and reproduces the uninterrupted
-trajectory to the bit:
-
-```julia
-save_checkpoint(solver, "chk.nc")
-# … later, in a fresh session with the same problem/solver built …
-load_checkpoint!(solver, "chk.nc")
+save_state(solver, "checkpoints/run1")
+# … later, or in a new process, with the same problem/solver built …
+load_state!(solver, "checkpoints/run1")
 run!(solver; stop_iteration=solver.iteration + 20, cfl=cfl, progress=false)
 ```
+
+`load_state!` writes into `solver.state` (the integrator's live fields), **not**
+the problem-variable handles — that is required, not optional:
 
 !!! warning "The state and your field handles are the same object only until the first step"
     On a freshly built solver `solver.state[1] === T`. After the first step they are
@@ -423,14 +390,8 @@ run!(solver; stop_iteration=solver.iteration + 20, cfl=cfl, progress=false)
     history buffer and then copies *from* the state back into the problem variables. The
     sync is **one-way**. So once a run has started, `T` is a read-only view for
     diagnostics — writing into it (to perturb, reset, or restore a field) is silently
-    discarded on the next step. Write to `solver.state` instead, which is what the
-    `load_checkpoint!` above does.
-
-!!! note "MPI"
-    `get_grid_data` is the rank-local slab, so this helper is per-rank/serial.
-    Under MPI either write one file per rank (include the rank in `path`), or
-    gather to rank 0 with `gather_array(f.dist, get_grid_data(f))` before writing
-    and scatter on load.
+    discarded on the next step. `load_state!` writes to `solver.state`, which is what
+    keeps a restart correct.
 
 ## Complete Example
 

@@ -225,20 +225,26 @@ function save_field_data(field::Union{ScalarField, VectorField}, filename::Strin
     end
 end
 
-"""Save field to NetCDF format"""
+"""Save field to NetCDF format.
+
+Logs the path `save_field` actually returned, not `filename`: under MPI
+`save_field` writes `<stem>/<stem>_p<rank>.nc`, so logging the argument reports
+a file that does not exist."""
 function save_field_netcdf(field::Union{ScalarField, VectorField}, filename::String)
 
-    if isa(field, ScalarField)
+    written = if isa(field, ScalarField)
         save_field(field, filename)
     else
-        # Save vector components
+        # Save vector components; every component lands in the same file.
+        last_path = nothing
         for (i, component) in enumerate(field.components)
             component_name = "component_$i"
-            save_field(component, filename, component_name)
+            last_path = save_field(component, filename, component_name)
         end
+        last_path
     end
 
-    @info "Saved field data to NetCDF file: $filename"
+    @info "Saved field data to NetCDF file: $(written === nothing ? filename : written)"
 end
 
 """Save scalar field to CSV format"""

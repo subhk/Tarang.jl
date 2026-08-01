@@ -553,64 +553,98 @@ Written automatically:
 
 Read them with `NetCDF.ncgetatt(file, "global", name)`.
 
-## Checkpointing
+## Checkpoint and restart
 
-Tarang has no built-in checkpoint type. Write a small helper over `solver.state` — the
-integrator's live fields, each a `ScalarField` with a `.name` (a vector variable `u`
-appears as its components `u_x`, `u_z`, …). Use `solver.state`, **not** the
-problem-variable handles: those are separate objects and writing to them does not restore
-the integrator.
-
-### Saving State
-
-Grid space is real-valued and exact, so it round-trips losslessly:
+`save_state` writes every evolved field in `solver.state` plus `sim_time`,
+`iteration` and `dt`. `load_state!` reads it back.
 
 ```julia
-using NetCDF
+save_state(solver, "checkpoints/run1")
+# ... later, or in a new process ...
+load_state!(solver, "checkpoints/run1")
+```
 
-function save_checkpoint(solver, path)
-    isfile(path) && rm(path)
-    for f in solver.state
-        ensure_layout!(f, :g)
-        g = get_grid_data(f)
-        dimspec = collect(Iterators.flatten(
-            ("$(f.name)_d$i" => s for (i, s) in enumerate(size(g)))))
-        nccreate(path, f.name, dimspec...; t=NC_DOUBLE)
-        ncwrite(g, path, f.name)
-    end
-    ncputatt(path, "Global", Dict("sim_time" => solver.sim_time,
-                                  "iteration" => solver.iteration, "dt" => solver.dt))
-    return path
+Serial runs produce `run1.nc`. Under MPI each rank writes its own slab to
+`run1/run1_p<rank>.nc` with no gather, so rank 0 never has to hold the whole
+field. `load_state!` reads a checkpoint written at **any** rank count: each rank
+works out the range it needs and reads only the overlapping hyperslabs.
+
+### GPU
+
+NetCDF reads into host memory, so the loader stages through a host buffer and
+then performs one explicit upload into the field's existing device storage.
+
+What is actually tested: **single-device GPU staging**, via JLArray emulation on
+a serial 1-D field — it proves `load_field!` uploads into the device array
+rather than replacing it with a host array. **GPU + MPI checkpointing is
+untested.** It takes a different geometry branch entirely (first-dims
+decomposition with the TransposableField convention, not the PencilArrays one),
+no test executes that branch, and this repository's GPU CI pipeline is inert.
+Treat a distributed GPU checkpoint as unverified.
+
+### Restart fidelity
+
+One-step schemes restart exactly: RK111, RK222, RK443, RK443\_IMEX, RKSMR,
+RKGFY, ETD\_RK222, DiagonalIMEX\_RK222 and DiagonalIMEX\_RK443. So do the
+first-order multistep bootstraps CNAB1 and SBDF1 — they depend only on the
+current state, so there is no history to lose.
+
+Every other scheme is multistep: it stores time levels the checkpoint does not
+carry, so it re-seeds on restart and warns, naming the number of reduced-order
+steps. The run stays correct but is not bit-identical to an uninterrupted one.
+
+| Scheme | Reduced-order steps after restart |
+|---|---|
+| CNAB2, MCNAB2, CNLF2 | 1 |
+| SBDF2, ETD\_SBDF2, ETD\_CNAB2 | 1 |
+| SBDF3 | 2 |
+| SBDF4 | 3 |
+| DiagonalIMEX\_SBDF2 | 1 |
+
+Note `DiagonalIMEX_SBDF2`: despite the family name it is a **multi-step**
+method (so says its own docstring) and does *not* restart exactly. The other two
+`DiagonalIMEX_*` schemes do.
+
+## Field-level save and load
+
+`save_field` and `load_field!` write and read a single `ScalarField`. They are
+the layer `save_state`/`load_state!` are built on, and are useful on their own
+for dumping one field outside the solver's checkpoint cadence.
+
+```julia
+save_field(u, "dumps/u")            # -> "dumps/u.nc"; returns the path written
+load_field!(v, "dumps/u", "u")      # v must have the same global shape
+```
+
+The signature is `save_field(field, filename, dataset_name="field")` and
+`load_field!(field, filename, dataset_name="field")`. `dataset_name` is the
+NetCDF variable name, so several fields can share one file — which is exactly
+how a `VectorField`'s components are stored:
+
+```julia
+for (i, component) in enumerate(w.components)
+    save_field(component, "dumps/w", "component_$i")
 end
 ```
 
-### Loading State
+`save_field` is additive. Writing a *new* variable into an existing file appends
+to it; re-writing a variable that is already there rewrites the file, which
+NetCDF can only do by deleting it — so that is allowed only when the variable is
+the file's sole occupant, and refused with an error naming what would be lost
+otherwise.
 
-```julia
-function load_checkpoint!(solver, path)
-    for f in solver.state
-        ensure_layout!(f, :g)               # make the grid buffer current
-        get_grid_data(f) .= ncread(path, f.name)
-    end
-    solver.sim_time  = ncgetatt(path, "Global", "sim_time")
-    solver.iteration = Int(ncgetatt(path, "Global", "iteration"))
-    solver.dt        = ncgetatt(path, "Global", "dt")
-    return solver
-end
-```
+!!! note "Under MPI these are per-rank files, not one file"
+    `save_field` returns `<stem>/<stem>_p<rank>.nc` on more than one rank, and
+    each rank writes only its own slab — there is no gather. Point `load_field!`
+    at the **directory** (`"dumps/u"`), not at an individual `_p<rank>.nc`, and
+    it reassembles this rank's region from whichever slabs overlap it. That
+    works at any rank count, including a count different from the one that
+    wrote. On one rank both functions use a plain `<stem>.nc`.
 
-Restarting then reproduces the uninterrupted trajectory to the bit:
-
-```julia
-save_checkpoint(solver, "chk.nc")
-# … later, with the same problem/solver rebuilt …
-load_checkpoint!(solver, "chk.nc")
-run!(solver; stop_iteration=solver.iteration + 20, progress=false)
-```
-
-`get_grid_data` is the rank-local slab, so under MPI either put the rank in `path` (one
-checkpoint file per rank, restarted on the same decomposition) or gather to rank 0 with
-`gather_array(f.dist, get_grid_data(f))` before writing.
+`load_field!` also reads a `NetCDFFileHandler` output directory, since those
+variables carry the same `start`/`count`/`global_shape` attributes. Handler
+variables have a leading unlimited `sim_time` axis, and the **most recent write**
+is the one loaded.
 
 ## Parallel I/O
 
