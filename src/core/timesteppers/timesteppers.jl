@@ -40,6 +40,7 @@ include("step_vector_helpers.jl") # Shared vector/history helpers for step paths
 include("step_selection.jl")     # Runtime path and compatibility decisions
 include("step_rk.jl")            # RK step functions
 include("step_multistep.jl")     # CNAB, SBDF step functions
+include("step_multistep_field.jl")  # matrix-free multistep for explicit GPU/MPI problems
 include("step_etd.jl")           # ETD step functions
 include("step_diagonal_imex.jl") # GPU-native diagonal IMEX step functions
 include("step_global_matrix.jl") # Global-matrix methods (MCNAB2, CNLF2)
