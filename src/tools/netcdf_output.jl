@@ -305,13 +305,21 @@ end
 function group_ncwrite(data::AbstractArray, filename::String, group::String, var_name::String; start=nothing)
     array = Array(data)
     start_indices = start === nothing ? ones(Int, ndims(array)) : collect(Int, start)
-    length(start_indices) == ndims(array) || throw(DimensionMismatch("start must have one index per dimension"))
-
-    c_start = Csize_t.(reverse(start_indices .- 1))
-    c_count = Csize_t.(reverse(collect(size(array))))
+    count_indices = collect(Int, size(array))
 
     with_netcdf_file(filename, NetCDF.NC_WRITE) do ncid
         gid, varid = group_var_id(ncid, group, var_name)
+        # Validate against the variable's rank ON DISK, not `ndims(array)`. The old
+        # check compared the two Julia vectors to each other, so a rank-2 array
+        # written into a rank-3 variable still handed a 2-entry vector to a C call
+        # that reads 3 — the same read-past-the-end hazard as the read path.
+        _, shape, unlimited = _group_var_layout(gid, varid)
+        _validate_vara_indices(start_indices, count_indices, shape,
+                               "group_ncwrite($(repr(group)), $(repr(var_name)))";
+                               unlimited = unlimited)
+
+        c_start = Csize_t.(reverse(start_indices .- 1))
+        c_count = Csize_t.(reverse(count_indices))
         _group_put_vara(gid, varid, c_start, c_count, array)
     end
 
@@ -319,20 +327,71 @@ function group_ncwrite(data::AbstractArray, filename::String, group::String, var
 end
 
 function _group_var_type_and_shape(gid::Integer, varid::Integer)
+    typep, shape, _ = _group_var_layout(gid, varid)
+    return typep, shape
+end
+
+"""Element type, current shape, and per-dimension unlimited flags for a group variable.
+
+The unlimited flags matter because an unlimited dimension's *current* length is not
+a bound: writing past it is how the dimension grows. A `sim_time` axis sits at
+length 0 until the first write."""
+function _group_var_layout(gid::Integer, varid::Integer)
     typep = Int32[0]
     ndimsp = Int32[0]
     dimids = zeros(Int32, NetCDF.NC_MAX_VAR_DIMS)
     natts = Int32[0]
     NetCDF.nc_inq_var(gid, varid, C_NULL, typep, ndimsp, dimids, natts)
 
+    var_dimids = dimids[1:ndimsp[1]]
+    unlim = _group_unlimited_dimids(gid)
+
     c_shape = Int[]
-    for dimid in dimids[1:ndimsp[1]]
+    c_unlimited = Bool[]
+    for dimid in var_dimids
         len = Csize_t[0]
         NetCDF.nc_inq_dimlen(gid, dimid, len)
         push!(c_shape, Int(len[1]))
+        push!(c_unlimited, dimid in unlim)
     end
 
-    return typep[1], reverse(c_shape)
+    return typep[1], reverse(c_shape), reverse(c_unlimited)
+end
+
+"""Dimension ids that are unlimited and visible from `gid` — its own and its ancestors'.
+
+`nc_inq_unlimdims` reports only the dimensions defined IN the group it is asked
+about, not the ones a group inherits. `root_dim_id` defines every dimension at the
+root, so asking a `"vars"`/`"time"` group alone reports none and an unlimited
+`sim_time` axis looks like a fixed axis of length 0. Walk up to the root."""
+function _group_unlimited_dimids(gid::Integer)
+    ids = Int32[]
+    current = Int32(gid)
+    while true
+        nunlim = Int32[0]
+        NetCDF.nc_inq_unlimdims(current, nunlim, C_NULL)
+        n = Int(nunlim[1])
+        if n > 0
+            level = zeros(Int32, n)
+            NetCDF.nc_inq_unlimdims(current, nunlim, level)
+            append!(ids, level)
+        end
+        parent = Int32[0]
+        at_root = false
+        try
+            NetCDF.nc_inq_grp_parent(current, parent)
+        catch err
+            # NC_ENOGRP means `current` IS the root, which is the loop's exit
+            # condition. Anything else is a real failure and must not be swallowed —
+            # silently treating it as "no parent" would drop the root's unlimited
+            # dimensions and turn an append into a spurious bounds error.
+            err isa NetCDF.NetCDFError && err.code == NetCDF.NC_ENOGRP || rethrow()
+            at_root = true
+        end
+        at_root && break
+        current = parent[1]
+    end
+    return ids
 end
 
 function group_variable_names(filename::String, group::String)
@@ -402,6 +461,61 @@ function _group_get_vara!(gid::Integer, varid::Integer, start, count, data::Arra
     NetCDF.nc_get_vara_int(gid, varid, start, count, data)
 end
 
+"""
+    _validate_vara_indices(start_indices, count_indices, shape, context)
+
+Check a 1-based `start`/`count` hyperslab against a variable's on-disk `shape`.
+
+`nc_get_vara_*` and `nc_put_vara_*` read exactly `ndims(variable)` entries from the
+`start` and `count` pointers, regardless of how long the Julia vectors behind them
+are. A vector shorter than the variable's rank therefore makes the C library read
+past the end of Julia-owned memory. That is not a theoretical hazard: a rank-2
+`start` against a rank-3 variable returned a plausible array with **no error at
+all**, its shape and part of its contents taken from whatever followed the vector
+in memory. Silent wrong values are this codebase's dominant failure mode, so every
+index vector is checked here before it reaches a `ccall`.
+
+`count[i] == -1` means "to the end of dimension i" and must already have been
+resolved by the caller.
+"""
+function _validate_vara_indices(start_indices::Vector{Int}, count_indices::Vector{Int},
+                                shape::Vector{Int}, context::AbstractString;
+                                unlimited::Union{Nothing, Vector{Bool}}=nothing)
+    n = length(shape)
+    if length(start_indices) != n || length(count_indices) != n
+        throw(DimensionMismatch(
+            "$context: the variable has $n dimension(s), so start and count must each " *
+            "have $n entries; got start=$(start_indices) ($(length(start_indices))) and " *
+            "count=$(count_indices) ($(length(count_indices))). A shorter vector would be " *
+            "read past its end by NetCDF's C API."))
+    end
+
+    for i in 1:n
+        s, c = start_indices[i], count_indices[i]
+        if s < 1
+            throw(ArgumentError(
+                "$context: start[$i] = $s; these indices are 1-based, so it must be >= 1."))
+        end
+        if c < 0
+            throw(ArgumentError(
+                "$context: count[$i] = $c; a count must be non-negative (use -1 before " *
+                "resolution to mean 'to the end of this dimension')."))
+        end
+        # An unlimited dimension's current length is not a bound — writing past it is
+        # how it grows, and a `sim_time` axis sits at length 0 until the first write.
+        # Callers that pass `unlimited` (writes) exempt those axes; callers that do
+        # not (reads) get the full extent check, because reading past the current
+        # length of an unlimited dimension is genuinely out of bounds.
+        is_unlimited = unlimited !== nothing && unlimited[i]
+        if !is_unlimited && s + c - 1 > shape[i]
+            throw(ArgumentError(
+                "$context: start[$i] = $s with count[$i] = $c reads through index " *
+                "$(s + c - 1) of dimension $i, which has length $(shape[i])."))
+        end
+    end
+    return nothing
+end
+
 function group_ncread(filename::String, group::String, var_name::String; start=nothing, count=nothing)
     with_netcdf_file(filename, NetCDF.NC_NOWRITE) do ncid
         gid, varid = group_var_id(ncid, group, var_name)
@@ -410,11 +524,17 @@ function group_ncread(filename::String, group::String, var_name::String; start=n
 
         start_indices = start === nothing ? ones(Int, length(shape)) : collect(Int, start)
         count_indices = count === nothing ? collect(shape) : collect(Int, count)
-        for i in eachindex(count_indices)
-            if count_indices[i] == -1
-                count_indices[i] = shape[i] - start_indices[i] + 1
+        # Resolve the "to the end" sentinel before validating, but only where a
+        # matching start exists — a length mismatch is the validator's to report.
+        if length(count_indices) == length(start_indices) == length(shape)
+            for i in eachindex(count_indices)
+                if count_indices[i] == -1
+                    count_indices[i] = shape[i] - start_indices[i] + 1
+                end
             end
         end
+        _validate_vara_indices(start_indices, count_indices, shape,
+                               "group_ncread($(repr(group)), $(repr(var_name)))")
 
         data = Array{T}(undef, count_indices...)
         c_start = Csize_t.(reverse(start_indices .- 1))

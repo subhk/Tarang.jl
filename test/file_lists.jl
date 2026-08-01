@@ -102,6 +102,7 @@ const TEST_FILES = [
     "test_2d_gpu_domain_compat.jl",           # 2D pure-Fourier GPU refresh device-safety (JLArray)
     "test_gpu_2d_device_stack.jl",            # 2D forcing kernels / device fields / staging contract (JLArray)
     "test_multistep_field_path.jl",           # matrix-free multistep for explicit GPU/MPI problems — was a permanent forward-Euler collapse
+    "test_group_vara_bounds.jl",              # group_ncread/ncwrite must validate start/count before the ccall — a short vector was read past its end
     "test_slab_io.jl",                        # NetCDF slab index math + serial file round-trip
     "test_checkpoint_restart.jl",             # save_field/load_field! + solver save_state/load_state!
     "test_gpu_checkpoint_staging.jl",         # checkpoint load uploads to device storage (JLArray, no GPU needed)
