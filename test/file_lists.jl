@@ -55,6 +55,7 @@ const TEST_FILES = [
     "test_compatibility.jl",
     "test_namespaces.jl",
     "test_root_module_structure.jl",
+    "test_export_surface_ratchet.jl",   # 853 names are exported but undeclared in the @public_api manifest — an exported name is a promise, and unexamined ones rot (save_field/load_field! were exported, broken and untested at once)
     "test_cartesian_operators.jl",
     "test_stochastic_forcing.jl",
     "test_separable_stochastic_forcing.jl",
