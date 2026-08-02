@@ -158,153 +158,205 @@ function Base.showerror(io::IO, e::UnrecognizedRHSExpression)
 end
 
 """
-    Evaluate a parsed solver expression with current field values.
-    Returns a field (preferred) or a numeric scalar for constant expressions.
-    """
-function evaluate_solver_expression(expr, variables; layout::Symbol=:g, template::Union{Nothing, ScalarField}=nothing)
+    evaluate_solver_expression(expr, variables; layout=:g, template=nothing)
 
-    if expr === nothing
-        throw(ArgumentError("Cannot evaluate null expression"))
+Evaluate a parsed solver expression with current field values. Returns a field
+(preferred) or a numeric scalar for constant expressions.
+
+Dispatched on the node type, one method per node, rather than tested with a chain
+of `isa` branches. The distinction matters here for two reasons.
+
+*Ordering stops being load-bearing.* Every concrete operator below is a subtype of
+`Operator`, and `Operator` has its own generic method that defers to `evaluate`. In
+a manual chain the generic test has to come last, and moving it — or inserting a
+new branch beneath it — quietly disables every branch it shadows. Julia picks the
+most specific method regardless of the order they are written in, so that hazard
+cannot be reintroduced.
+
+*Fall-through becomes visible.* There are 56 `Operator` subtypes and only the
+eleven below are handled specially; the rest are served by the `::Operator` method
+on purpose. Written as a chain, "handled generically" and "nobody remembered this
+case" look identical. Written as methods, the generic case is a method someone
+wrote, and `methods(evaluate_solver_expression)` enumerates the real contract.
+
+Operand combinations dispatch the same way — see `_rhs_add` and friends — so an
+unsupported pairing raises from a fallback method instead of falling off the end of
+a chain.
+"""
+function evaluate_solver_expression end
+
+# --- operand combination rules -------------------------------------------------
+# One method per supported pairing, plus a fallback that names what was rejected.
+# The fallback is the whole point: an unhandled combination raises instead of
+# reaching whatever the next branch happened to be.
+
+_rhs_add(left::Number, right::Number) = left + right
+_rhs_add(left::ScalarField, right::ScalarField) = left + right
+_rhs_add(left::VectorField, right::VectorField) = add_vector_fields(left, right)
+_rhs_add(left, right) =
+    throw(ArgumentError("Unsupported Add operands: $(typeof(left)) and $(typeof(right))"))
+
+_rhs_subtract(left::Number, right::Number) = left - right
+_rhs_subtract(left::ScalarField, right::ScalarField) = left - right
+_rhs_subtract(left::VectorField, right::VectorField) =
+    add_vector_fields(left, _scale_vector_field(right, -1))
+_rhs_subtract(left, right) =
+    throw(ArgumentError("Unsupported Subtract operands: $(typeof(left)) and $(typeof(right))"))
+
+_rhs_multiply(left::Number, right::Number) = left * right
+_rhs_multiply(left::ScalarField, right::ScalarField) = left * right
+_rhs_multiply(left::ScalarField, right::Number) = left * right
+_rhs_multiply(left::Number, right::ScalarField) = right * left
+_rhs_multiply(left::VectorField, right::Number) = _scale_vector_field(left, right)
+_rhs_multiply(left::Number, right::VectorField) = _scale_vector_field(right, left)
+_rhs_multiply(left::ScalarField, right::VectorField) = scale_vector_field(right, left)
+_rhs_multiply(left::VectorField, right::ScalarField) = scale_vector_field(left, right)
+_rhs_multiply(left, right) =
+    throw(ArgumentError("Unsupported Multiply operands: $(typeof(left)) and $(typeof(right))"))
+
+_rhs_negate(operand::Number) = -operand
+_rhs_negate(operand::ScalarField) = operand * -1
+_rhs_negate(operand::VectorField) = _scale_vector_field(operand, -1)
+_rhs_negate(operand) =
+    throw(ArgumentError("Unsupported negation operand: $(typeof(operand))"))
+
+function _rhs_index(array_val::ScalarField, indices, layout::Symbol)
+    ensure_layout!(array_val, layout)
+    data = layout == :g ? get_grid_data(array_val) : get_coeff_data(array_val)
+    if data === nothing
+        throw(ArgumentError("Field $(array_val.name) has no data in layout $layout"))
     end
+    return data[indices...]
+end
+_rhs_index(array_val::AbstractArray, indices, ::Symbol) = array_val[indices...]
+_rhs_index(array_val, _indices, ::Symbol) =
+    throw(ArgumentError("Unsupported indexed operand: $(typeof(array_val))"))
 
-    if expr isa ScalarField
+"""Evaluate both operands of a binary node and coerce them onto a shared template.
+
+Add/Subtract/Multiply/Divide share this preamble exactly; only the combination step
+differs, which is what the `_rhs_*` methods above supply.
+"""
+function _eval_binary_operands(expr, variables, layout::Symbol, template)
+    left = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
+    right = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)
+    op_template = _binary_template(left, right, template)
+    return (_coerce_numeric_operand(left, op_template; layout=layout),
+            _coerce_numeric_operand(right, op_template; layout=layout))
+end
+
+# --- node types ----------------------------------------------------------------
+
+# A field evaluates to itself, once its data is in the requested layout.
+for FieldType in (:ScalarField, :VectorField, :TensorField)
+    @eval function evaluate_solver_expression(expr::$FieldType, _variables;
+                                              layout::Symbol=:g,
+                                              template::Union{Nothing, ScalarField}=nothing)
         ensure_layout!(expr, layout)
         return expr
-    elseif expr isa VectorField
-        ensure_layout!(expr, layout)
-        return expr
-    elseif expr isa TensorField
-        ensure_layout!(expr, layout)
-        return expr
-    elseif expr isa Future
-        return evaluate(expr)
-    elseif expr isa ZeroOperator
-        return template === nothing ? 0 : create_zero_field(template)
-    elseif expr isa ConstantOperator
-        return template === nothing ? expr.value : _constant_field_from_template(template, expr.value; layout=layout)
-    elseif expr isa ArrayOperator
-        if template === nothing
-            return expr.value
-        end
-        result = create_zero_field(template)
-        ensure_layout!(result, layout)
-        target = layout == :g ? get_grid_data(result) : get_coeff_data(result)
-        copyto!(target, expr.value)
-        return result
-    elseif expr isa UnknownOperator
-        # A surviving UnknownOperator at RHS-evaluation time is unresolved: it is
-        # not a registered operator, known function, or declared variable, and
-        # coordinate/time placeholders were already substituted at matrix-build.
-        # Silently returning zero here would drop the term and change the equation
-        # (e.g. a typo `dx(u)` instead of `∂x(u)`), so abort with a clear message.
-        # A dedicated exception type lets the RHS-evaluation try/catch rethrow this
-        # (genuine user error) while still tolerating transient per-field errors.
-        throw(UnrecognizedRHSExpression(string(expr.expression)))
-    elseif expr isa AddOperator
-        left = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
-        right = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)
-        op_template = _binary_template(left, right, template)
-        left = _coerce_numeric_operand(left, op_template; layout=layout)
-        right = _coerce_numeric_operand(right, op_template; layout=layout)
-        if left isa Number && right isa Number
-            return left + right
-        elseif left isa ScalarField && right isa ScalarField
-            return left + right
-        elseif left isa VectorField && right isa VectorField
-            return add_vector_fields(left, right)
-        else
-            throw(ArgumentError("Unsupported Add operands: $(typeof(left)) and $(typeof(right))"))
-        end
-    elseif expr isa SubtractOperator
-        left = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
-        right = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)
-        op_template = _binary_template(left, right, template)
-        left = _coerce_numeric_operand(left, op_template; layout=layout)
-        right = _coerce_numeric_operand(right, op_template; layout=layout)
-        if left isa Number && right isa Number
-            return left - right
-        elseif left isa ScalarField && right isa ScalarField
-            return left - right
-        elseif left isa VectorField && right isa VectorField
-            return add_vector_fields(left, _scale_vector_field(right, -1))
-        else
-            throw(ArgumentError("Unsupported Subtract operands: $(typeof(left)) and $(typeof(right))"))
-        end
-    elseif expr isa MultiplyOperator
-        left = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
-        right = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)
-        op_template = _binary_template(left, right, template)
-        left = _coerce_numeric_operand(left, op_template; layout=layout)
-        right = _coerce_numeric_operand(right, op_template; layout=layout)
-        if left isa Number && right isa Number
-            return left * right
-        elseif left isa ScalarField && right isa ScalarField
-            return left * right
-        elseif left isa ScalarField && right isa Number
-            return left * right
-        elseif left isa Number && right isa ScalarField
-            return right * left
-        elseif left isa VectorField && right isa Number
-            return _scale_vector_field(left, right)
-        elseif left isa Number && right isa VectorField
-            return _scale_vector_field(right, left)
-        elseif left isa ScalarField && right isa VectorField
-            return scale_vector_field(right, left)
-        elseif left isa VectorField && right isa ScalarField
-            return scale_vector_field(left, right)
-        else
-            throw(ArgumentError("Unsupported Multiply operands: $(typeof(left)) and $(typeof(right))"))
-        end
-    elseif expr isa DivideOperator
-        left = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
-        right = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)
-        op_template = _binary_template(left, right, template)
-        left = _coerce_numeric_operand(left, op_template; layout=layout)
-        right = _coerce_numeric_operand(right, op_template; layout=layout)
-        return divide_operands(left, right)
-    elseif expr isa PowerOperator
-        base = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
-        exponent = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)
-        if exponent isa Number
-            return power_operands(base, exponent)
-        end
+    end
+end
+
+evaluate_solver_expression(expr::Future, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) = evaluate(expr)
+
+evaluate_solver_expression(::ZeroOperator, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    template === nothing ? 0 : create_zero_field(template)
+
+evaluate_solver_expression(expr::ConstantOperator, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    template === nothing ? expr.value :
+        _constant_field_from_template(template, expr.value; layout=layout)
+
+function evaluate_solver_expression(expr::ArrayOperator, _variables;
+                                    layout::Symbol=:g,
+                                    template::Union{Nothing, ScalarField}=nothing)
+    template === nothing && return expr.value
+    result = create_zero_field(template)
+    ensure_layout!(result, layout)
+    target = layout == :g ? get_grid_data(result) : get_coeff_data(result)
+    copyto!(target, expr.value)
+    return result
+end
+
+# A surviving UnknownOperator at RHS-evaluation time is unresolved: it is not a
+# registered operator, known function, or declared variable, and coordinate/time
+# placeholders were already substituted at matrix-build. Silently returning zero
+# here would drop the term and change the equation (e.g. a typo `dx(u)` instead of
+# `∂x(u)`), so abort with a clear message. A dedicated exception type lets the
+# RHS-evaluation try/catch rethrow this (genuine user error) while still tolerating
+# transient per-field errors.
+evaluate_solver_expression(expr::UnknownOperator, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    throw(UnrecognizedRHSExpression(string(expr.expression)))
+
+evaluate_solver_expression(expr::AddOperator, variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    _rhs_add(_eval_binary_operands(expr, variables, layout, template)...)
+
+evaluate_solver_expression(expr::SubtractOperator, variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    _rhs_subtract(_eval_binary_operands(expr, variables, layout, template)...)
+
+evaluate_solver_expression(expr::MultiplyOperator, variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    _rhs_multiply(_eval_binary_operands(expr, variables, layout, template)...)
+
+evaluate_solver_expression(expr::DivideOperator, variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    divide_operands(_eval_binary_operands(expr, variables, layout, template)...)
+
+function evaluate_solver_expression(expr::PowerOperator, variables;
+                                    layout::Symbol=:g,
+                                    template::Union{Nothing, ScalarField}=nothing)
+    base = evaluate_solver_expression(expr.left, variables; layout=layout, template=template)
+    exponent = evaluate_solver_expression(expr.right, variables; layout=layout, template=template)
+    exponent isa Number ||
         throw(ArgumentError("Power operator requires numeric exponent, got $(typeof(exponent))"))
-    elseif expr isa NegateOperator
-        operand = evaluate_solver_expression(expr.operand, variables; layout=layout, template=template)
-        if operand isa Number
-            return -operand
-        elseif operand isa ScalarField
-            return operand * -1
-        elseif operand isa VectorField
-            return _scale_vector_field(operand, -1)
-        else
-            throw(ArgumentError("Unsupported negation operand: $(typeof(operand))"))
-        end
-    elseif expr isa IndexOperator
-        array_val = evaluate_solver_expression(expr.array, variables; layout=layout, template=template)
-        indices = Any[evaluate_solver_expression(idx, variables; layout=layout, template=template) for idx in expr.indices]
-        indices = map(idx -> idx isa Number ? Int(idx) : idx, indices)
-        if array_val isa ScalarField
-            ensure_layout!(array_val, layout)
-            data = layout == :g ? get_grid_data(array_val) : get_coeff_data(array_val)
-            if data === nothing
-                throw(ArgumentError("Field $(array_val.name) has no data in layout $layout"))
-            end
-            return data[indices...]
-        elseif array_val isa AbstractArray
-            return array_val[indices...]
-        else
-            throw(ArgumentError("Unsupported indexed operand: $(typeof(array_val))"))
-        end
-    elseif expr isa Operator
-        return evaluate(expr, layout)
-    elseif expr isa Number
-        return template === nothing ? expr : _constant_field_from_template(template, expr; layout=layout)
-    end
+    return power_operands(base, exponent)
+end
 
+function evaluate_solver_expression(expr::NegateOperator, variables;
+                                    layout::Symbol=:g,
+                                    template::Union{Nothing, ScalarField}=nothing)
+    operand = evaluate_solver_expression(expr.operand, variables; layout=layout, template=template)
+    return _rhs_negate(operand)
+end
+
+function evaluate_solver_expression(expr::IndexOperator, variables;
+                                    layout::Symbol=:g,
+                                    template::Union{Nothing, ScalarField}=nothing)
+    array_val = evaluate_solver_expression(expr.array, variables; layout=layout, template=template)
+    indices = Any[evaluate_solver_expression(idx, variables; layout=layout, template=template)
+                  for idx in expr.indices]
+    indices = map(idx -> idx isa Number ? Int(idx) : idx, indices)
+    return _rhs_index(array_val, indices, layout)
+end
+
+# The generic operator case, deliberately: the 45 `Operator` subtypes without a
+# method above (derivatives, lifts, interpolations, ...) all evaluate through the
+# operator machinery. Being a real method rather than the last branch of a chain is
+# what keeps the specific methods above winning on specificity alone.
+evaluate_solver_expression(expr::Operator, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    evaluate(expr, layout)
+
+evaluate_solver_expression(expr::Number, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    template === nothing ? expr :
+        _constant_field_from_template(template, expr; layout=layout)
+
+evaluate_solver_expression(::Nothing, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
+    throw(ArgumentError("Cannot evaluate null expression"))
+
+# Fallback. Reached only by a node type no method above claims, which is a parser
+# bug or a missing handler — never a value to guess at.
+evaluate_solver_expression(expr, _variables; layout::Symbol=:g,
+                           template::Union{Nothing, ScalarField}=nothing) =
     error("Unsupported expression type in evaluate_solver_expression: $(typeof(expr)). " *
           "Value: $(repr(expr)). This may indicate a parsing error or missing operator handler.")
-end
 
 """
     Build Jacobian matrix block from Frechet differential expression following Tarang patterns.

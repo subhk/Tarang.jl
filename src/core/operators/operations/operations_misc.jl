@@ -223,8 +223,7 @@ function evaluate_hilbert_transform(op::HilbertTransform, layout::Symbol=:g)
     end
 
     result = deepcopy(operand)
-    ensure_layout!(result, :c)
-    coeff = get_coeff_data(result)
+    coeff = coeff_data!(result)
 
     # The spectral Hilbert multiplier −i·sign(k) needs each mode's GLOBAL wavenumber.
     # Under MPI a decomposed Fourier axis hands each rank only a LOCAL coefficient

@@ -268,8 +268,7 @@ function vector_to_fields!(output::Vector{<:ScalarField}, vector::AbstractVector
             # multistep state in :g). Allocate its coefficient buffer so the
             # solution vector is actually written; skipping here silently leaves
             # the field frozen at its copied value (degrades multistep to 1st order).
-            ensure_layout!(output[i], :c)
-            coeff_data = get_coeff_data(output[i])
+            coeff_data = coeff_data!(output[i])
             coeff_data === nothing && continue
         end
         local_data = get_local_data(coeff_data)

@@ -568,8 +568,7 @@ function _implicit_ncc_matrix(ncc_operand)
     # axis (its non-DC Fourier coefficients vanish) is representable here — e.g. a z-dependent
     # diffusivity in a Fourier-x × Chebyshev-z channel.
     if !isempty(four_axes)
-        ensure_layout!(field, :c)
-        coeffs = get_coeff_data(field)
+        coeffs = coeff_data!(field)
         if coeffs === nothing
             return ImplicitNCCUnsupported(
                 "the coefficient field `$(field.name)` has no coefficient-space data available")

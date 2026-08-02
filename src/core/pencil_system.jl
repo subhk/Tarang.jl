@@ -767,15 +767,13 @@ function _ps_scatter_field!(pencils, field::ScalarField, comp_offset::Int,
         end
         pencils[1][comp_offset + 1] = val
     elseif comp_size == 1
-        ensure_layout!(field, :c)
-        cd = get_coeff_data(field)
+        cd = coeff_data!(field)
         cd === nothing && return
         for kx in 1:min(ps.n_pencils, length(cd))
             pencils[kx][comp_offset + 1] = ComplexF64(cd[kx])
         end
     else
-        ensure_layout!(field, :c)
-        cd = get_coeff_data(field)
+        cd = coeff_data!(field)
         cd === nothing && return
         c2d = reshape(vec(cd), ps.n_pencils, ps.n_cheb)
         for kx in 1:ps.n_pencils
@@ -845,8 +843,7 @@ function pencils_to_vars!(variables, pencils::Vector{Vector{ComplexF64}},
 
             elseif comp_size == 1
                 # ── 1D Fourier-only: write one value per mode ─────────────────
-                ensure_layout!(field, :c)
-                cd = get_coeff_data(field)
+                cd = coeff_data!(field)
                 cd === nothing && continue
                 for kx_idx in 1:ps.n_pencils
                     if kx_idx <= length(cd)
@@ -857,8 +854,7 @@ function pencils_to_vars!(variables, pencils::Vector{Vector{ComplexF64}},
 
             else
                 # ── 2D Fourier×Chebyshev: reassemble n_cheb columns ───────────
-                ensure_layout!(field, :c)
-                cd = get_coeff_data(field)
+                cd = coeff_data!(field)
                 cd === nothing && continue
                 c2d = reshape(vec(cd), ps.n_pencils, ps.n_cheb)
                 for kx_idx in 1:ps.n_pencils

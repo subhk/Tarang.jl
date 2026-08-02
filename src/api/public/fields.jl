@@ -9,6 +9,9 @@
     field_architecture, synchronize_field_architecture!,
     gpu_fft_mode, set_gpu_fft_mode!,
     get_grid_data, get_coeff_data, set_grid_data!, set_coeff_data!,
+    # Layout-enforcing reads: transform if needed, then return that layout's buffer.
+    # Prefer these to the `ensure_layout!` + `get_*_data` pair.
+    grid_data!, coeff_data!,
     FieldStorageMode, SerialStorage, PencilStorage,
     storage_mode, is_pencil_storage, is_serial_storage,
     stack_components, unstack_components!,

@@ -23,15 +23,13 @@ function evaluate_nonlinear_term(op::AdvectionOperator, layout::Symbol=:g)
     # Evaluate u·∇φ = u_x ∂φ/∂x + u_y ∂φ/∂y (+ u_z ∂φ/∂z in 3D)
     # Use in-place accumulation to avoid lazy Add trees and per-iteration allocation
     result = ScalarField(dist, "$(op.name)_$(scalar.name)", scalar.bases, scalar.dtype)
-    ensure_layout!(result, :g)
-    result_data = get_grid_data(result)
+    result_data = grid_data!(result)
     fill!(result_data, zero(scalar.dtype))
 
     # Sum velocity components times gradient components (in-place)
     for i in 1:length(velocity.components)
         product = evaluate_transform_multiply(velocity.components[i], grad_scalar.components[i], evaluator)
-        ensure_layout!(product, :g)
-        product_data = get_grid_data(product)
+        product_data = grid_data!(product)
         if isa(result_data, PencilArrays.PencilArray) && isa(product_data, PencilArrays.PencilArray)
             parent(result_data) .+= parent(product_data)
         else
@@ -60,8 +58,7 @@ function evaluate_nonlinear_term(op::NonlinearAdvectionOperator, layout::Symbol=
     # For each component: (u·∇)u_i = u_j ∂u_i/∂x_j (summed over j)
     # Use in-place accumulation to avoid lazy Add trees and allocation per iteration
     for i in 1:length(velocity.components)
-        ensure_layout!(result.components[i], :g)
-        comp_data = get_grid_data(result.components[i])
+        comp_data = grid_data!(result.components[i])
         fill!(comp_data, zero(velocity.dtype))
 
         # Sum over all spatial directions (in-place)
@@ -70,8 +67,7 @@ function evaluate_nonlinear_term(op::NonlinearAdvectionOperator, layout::Symbol=
             du_i_dx_j = evaluate_differentiate(Differentiate(velocity.components[i], coord, 1), :g)
 
             product = evaluate_transform_multiply(velocity.components[j], du_i_dx_j, evaluator)
-            ensure_layout!(product, :g)
-            product_data = get_grid_data(product)
+            product_data = grid_data!(product)
             if isa(comp_data, PencilArrays.PencilArray) && isa(product_data, PencilArrays.PencilArray)
                 parent(comp_data) .+= parent(product_data)
             else
@@ -416,8 +412,7 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
     parent(res) .*= (T(prod(Mp)) / T(prod(N)))
 
     result = _checkout_nl_result!(evaluator, field1)
-    ensure_layout!(result, :g)
-    rg = get_grid_data(result)
+    rg = grid_data!(result)
     # Align `res` (NoPermutation) to the result grid pencil's EXACT ordered
     # decomposition so the final transpose is perm-only. Matching just the local
     # axis is NOT enough: res and rg can share the decomposed-axis SET but in a
@@ -613,12 +608,10 @@ function evaluate_vector_dot_product(v1::VectorField, v2::VectorField)
     if n >= 2 && c1.dist.use_pencil_arrays && c1.dist.size > 1 &&
        all(b -> isa(b, Union{RealFourier, ComplexFourier}), c1.bases)
         result = evaluate_transform_multiply(v1.components[1], v2.components[1], evaluator; result_layout=:c)
-        ensure_layout!(result, :c)
-        rc = get_coeff_data(result)
+        rc = coeff_data!(result)
         for i in 2:n
             product = evaluate_transform_multiply(v1.components[i], v2.components[i], evaluator; result_layout=:c)
-            ensure_layout!(product, :c)
-            pc = get_coeff_data(product)
+            pc = coeff_data!(product)
             if isa(rc, PencilArrays.PencilArray) && isa(pc, PencilArrays.PencilArray)
                 parent(rc) .+= parent(pc)
             else

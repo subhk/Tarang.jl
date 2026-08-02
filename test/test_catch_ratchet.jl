@@ -34,6 +34,11 @@ const CATCH_RATCHET_SRC = normpath(joinpath(@__DIR__, "..", "src"))
 const CATCH_BARE_RE = r"(^|[^A-Za-z0-9_!])catch[ \t]*(;|$)"
 const CATCH_ANY_RE = r"(^|[^A-Za-z0-9_!])catch([^A-Za-z0-9_!]|$)"
 
+# How many CODE lines after a `catch` may be searched for a re-raise. Long enough to
+# cover a handler that logs, cleans up and then rethrows; short enough that it cannot
+# wander into unrelated code. The scan also stops early at a top-level `function`/`end`.
+const CATCH_LOOKAHEAD = 30
+
 """Drop a trailing `#` comment, ignoring `#` inside a double-quoted string."""
 function _catch_strip_comment(line::AbstractString)
     in_string = false
@@ -83,33 +88,59 @@ a ratchet must never do. `unbalanced_files` names any file that ends mid-docstri
 the testset can fail on it."""
 function _scan_catches(root::AbstractString)
     bare = Tuple{String, Int, String}[]
+    silent = Tuple{String, Int, String}[]
     total = 0
     unbalanced = String[]
     for (dir, _, files) in walkdir(root), f in files
         endswith(f, ".jl") || continue
         path = joinpath(dir, f)
         in_triple = false
+
+        # Collapse the file to its CODE lines first — comments stripped, docstring
+        # bodies dropped — so the `catch` match and the rethrow look-ahead below
+        # both see the same filtered view. Doing the look-ahead over raw lines would
+        # let the word "rethrow" in a comment or docstring clear a genuinely silent
+        # catch, which would quietly weaken the second ratchet.
+        code_lines = Tuple{Int, String}[]
         for (lineno, raw) in enumerate(eachline(path))
             n_markers = _catch_count_triple_quotes(raw)
             was_in_triple = in_triple
             isodd(n_markers) && (in_triple = !in_triple)
             (was_in_triple || n_markers > 0) && continue
-
             code = _catch_strip_comment(raw)
             isempty(code) && continue
+            push!(code_lines, (lineno, code))
+        end
+        in_triple && push!(unbalanced, relpath(path, root))
+
+        for (i, (lineno, code)) in pairs(code_lines)
             occursin(CATCH_ANY_RE, code) || continue
             total += 1
             if occursin(CATCH_BARE_RE, code)
                 push!(bare, (relpath(path, root), lineno, strip(code)))
             end
+            # Does this handler re-raise anything? Scan forward over code lines,
+            # stopping at a top-level `function`/`end` so the window cannot borrow a
+            # `rethrow` from the next definition.
+            reraises = false
+            for (_, ahead) in code_lines[(i + 1):min(i + CATCH_LOOKAHEAD, end)]
+                if occursin(r"^(function |end$)", ahead)
+                    break
+                end
+                if occursin("rethrow", ahead) || occursin(r"\bthrow\(", ahead) ||
+                   occursin(r"\berror\(", ahead)
+                    reraises = true
+                    break
+                end
+            end
+            reraises || push!(silent, (relpath(path, root), lineno, strip(code)))
         end
-        in_triple && push!(unbalanced, relpath(path, root))
     end
-    return bare, total, unbalanced
+    return bare, silent, total, unbalanced
 end
 
 @testset "bare `catch` ratchet" begin
-    bare, total, unbalanced = _scan_catches(CATCH_RATCHET_SRC)
+    bare, silent, total, unbalanced = _scan_catches(CATCH_RATCHET_SRC)
     n_bare = length(bare)
 
     @info "src/ catch clauses: $total total, $n_bare bare (unbound exception)"
@@ -158,4 +189,56 @@ end
               "scan them:\n" * join(("  " * f for f in unbalanced), "\n")
     end
     @test isempty(unbalanced)
+end
+
+@testset "non-re-raising `catch` ratchet" begin
+    # The second population, and the one the bare-catch ratchet above cannot see.
+    #
+    # Binding the exception was only half the fix. A handler that binds `err`, logs
+    # it, and then returns a substitute value is still control flow by exception —
+    # it just has a name for what it swallowed. That is the exact shape of the bugs
+    # in the header comment: the parser bound its error and returned an
+    # `UnknownOperator`; the BC arity probe bound its error and called the shorter
+    # signature. Both would pass the ratchet above.
+    #
+    # This is NOT a claim that all 87 are wrong. Most are legitimate: an in-place
+    # FFT that falls back to the allocating form, a sparse factorization that falls
+    # back to dense, an MPI communicator free during teardown. Those reach the same
+    # answer by another route, or are cleanup where there is nothing to re-raise
+    # into. The ones that matter substitute a DIFFERENT NUMERICAL ANSWER, and no
+    # regex can tell the two apart.
+    #
+    # So this is a growth ratchet, not a correctness assertion: the population may
+    # shrink freely and must not grow. Adding a handler that swallows should be a
+    # deliberate act that makes you come here and justify it, rather than something
+    # that lands unnoticed.
+    _, silent, total, _ = _scan_catches(CATCH_RATCHET_SRC)
+    n_silent = length(silent)
+
+    @info "src/ catch clauses: $total total, $n_silent with no rethrow/throw/error in the handler"
+
+    # Current count. Lower it when you remove one; never raise it.
+    SILENT_RATCHET = 87
+
+    if n_silent > SILENT_RATCHET
+        sites = sort(silent; by = x -> (x[1], x[2]))
+        shown = first(sites, 25)
+        listing = join(("  $f:$ln  $txt" for (f, ln, txt) in shown), "\n")
+        length(sites) > length(shown) && (listing *= "\n  … and $(length(sites) - length(shown)) more")
+        @warn "$n_silent non-re-raising `catch` clauses in src/, ratchet is $SILENT_RATCHET. " *
+              "A handler that logs and returns a substitute value is still control flow by " *
+              "exception. Either rethrow what you did not expect, or — if the fallback " *
+              "genuinely reaches the same answer — say so in a comment at the site. " *
+              "Full inventory (not only the new ones):\n" * listing
+    elseif n_silent < SILENT_RATCHET
+        @info "Non-re-raising `catch` count dropped to $n_silent — lower SILENT_RATCHET in " *
+              "$(basename(@__FILE__)) to match."
+    end
+
+    @test n_silent <= SILENT_RATCHET
+
+    # Sanity: the look-ahead must actually be discriminating. If it matched nothing,
+    # every catch would look like it re-raises and the ratchet would be vacuous; if
+    # it matched everything, `n_silent` would equal `total` and carry no signal.
+    @test 0 < n_silent < total
 end

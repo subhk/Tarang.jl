@@ -1492,28 +1492,30 @@ coerce_constant_value(x::ConstantOperator) = x.value
 # fixes e.g. a BC position `u(z=Lz/2)` (was parsed as UnknownOperator → BC silently dropped)
 # and a fractional exponent `fraclap(u, 1/2)` (was a DivideOperator → Float64() threw → term
 # dropped). Only folds when every leaf reduces to a Number; otherwise returns x unchanged.
-function coerce_constant_value(x)
-    if x isa DivideOperator
-        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
-        return (l isa Number && r isa Number) ? l / r : x
-    elseif x isa MultiplyOperator
-        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
-        return (l isa Number && r isa Number) ? l * r : x
-    elseif x isa AddOperator
-        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
-        return (l isa Number && r isa Number) ? l + r : x
-    elseif x isa SubtractOperator
-        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
-        return (l isa Number && r isa Number) ? l - r : x
-    elseif x isa PowerOperator
-        l = coerce_constant_value(x.left); r = coerce_constant_value(x.right)
-        return (l isa Number && r isa Number) ? l ^ r : x
-    elseif x isa NegateOperator
-        v = coerce_constant_value(x.operand)
-        return v isa Number ? -v : x
-    end
-    return x
+"""Fold a binary node if both sides reduced to numbers; otherwise hand back the
+node untouched, so a partially-constant expression stays symbolic."""
+function _fold_binary_constant(x, op)
+    l = coerce_constant_value(x.left)
+    r = coerce_constant_value(x.right)
+    return (l isa Number && r isa Number) ? op(l, r) : x
 end
+
+coerce_constant_value(x::DivideOperator)   = _fold_binary_constant(x, /)
+coerce_constant_value(x::MultiplyOperator) = _fold_binary_constant(x, *)
+coerce_constant_value(x::AddOperator)      = _fold_binary_constant(x, +)
+coerce_constant_value(x::SubtractOperator) = _fold_binary_constant(x, -)
+coerce_constant_value(x::PowerOperator)    = _fold_binary_constant(x, ^)
+
+function coerce_constant_value(x::NegateOperator)
+    v = coerce_constant_value(x.operand)
+    return v isa Number ? -v : x
+end
+
+# Anything else is not foldable and is returned unchanged. Unlike the fallbacks in
+# evaluate_solver_expression this one is a real answer, not an error: the caller
+# asked whether an expression reduces to a constant, and "it does not" is a valid
+# reply that leaves the symbolic node in place.
+coerce_constant_value(x) = x
 
 # Note: AddOperator, SubtractOperator, MultiplyOperator, DivideOperator, PowerOperator,
 # NegateOperator, IndexOperator are defined in operators.jl

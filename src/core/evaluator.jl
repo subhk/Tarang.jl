@@ -1034,8 +1034,7 @@ indices of the block's first element, `gshape` is the global array shape.
 No communication — this is the whole point of VirtualFileHandler.
 """
 function _local_task_data(task::ScalarField)
-    ensure_layout!(task, :g)
-    d = get_grid_data(task)
+    d = grid_data!(task)
     if isa(d, PencilArrays.PencilArray)
         gv = PencilArrays.global_view(d)            # permutation-aware
         block = collect(gv)                          # plain Array, logical order

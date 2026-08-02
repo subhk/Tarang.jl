@@ -362,16 +362,14 @@ identically zero — so it reduces exactly to `a*div(u)`.
 """
 function _accumulate_conservative_flux_divergence!(result::ScalarField, coefficient,
                                                    u::VectorField, coordsys)
-    ensure_layout!(result, :g)
-    result_data = get_grid_data(result)
+    result_data = grid_data!(result)
     result_data === nothing && throw(ArgumentError(
         "div(a*u): result field $(result.name) has no grid data to accumulate into."))
     _fill_zeros!(result_data)
 
     coefficient_data = nothing
     if isa(coefficient, ScalarField)
-        ensure_layout!(coefficient, :g)
-        coefficient_data = get_grid_data(coefficient)
+        coefficient_data = grid_data!(coefficient)
         coefficient_data === nothing && throw(ArgumentError(
             "div(a*u): coefficient field $(coefficient.name) has no grid data."))
         if size(coefficient_data) != size(result_data)
@@ -480,16 +478,14 @@ round-off.
 """
 function _accumulate_coeff_gradient_divergence!(result::ScalarField, coefficient,
                                                 u::ScalarField, coordsys)
-    ensure_layout!(result, :g)
-    result_data = get_grid_data(result)
+    result_data = grid_data!(result)
     result_data === nothing && throw(ArgumentError(
         "div(a*grad(u)): result field $(result.name) has no grid data to accumulate into."))
     _fill_zeros!(result_data)
 
     coefficient_data = nothing
     if isa(coefficient, ScalarField)
-        ensure_layout!(coefficient, :g)
-        coefficient_data = get_grid_data(coefficient)
+        coefficient_data = grid_data!(coefficient)
         coefficient_data === nothing && throw(ArgumentError(
             "div(a*grad(u)): coefficient field $(coefficient.name) has no grid data."))
         if size(coefficient_data) != size(result_data)

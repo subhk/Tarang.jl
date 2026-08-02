@@ -257,8 +257,7 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
         # buffer; normalize to :c so the implicit update below writes the
         # authoritative data (otherwise the edits are discarded when the field is
         # next read in :c from its grid, and the state never evolves).
-        ensure_layout!(field, :c)
-        coeff_data = get_coeff_data(field)
+        coeff_data = coeff_data!(field)
         Lhat = get(Lmap, k, nothing)
         for s in 1:stages
             if abs(b_exp[s]) > 1e-14
@@ -456,8 +455,7 @@ Returns `nothing` if the operator contains a term that is not diagonal in a
 pure-Fourier basis (caller then leaves the field to the explicit fallback).
 """
 function _diagonal_Lhat_from_expr(L_expr, field::ScalarField)
-    ensure_layout!(field, :c)
-    cd = get_coeff_data(field)
+    cd = coeff_data!(field)
     cd === nothing && return nothing
     # L̂ is ComplexF64: Laplacian/fractional/damping terms are real (−k², k²^α, const),
     # but first-derivative terms contribute imaginary (ik)^order multipliers.

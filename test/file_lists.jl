@@ -26,6 +26,7 @@ const TEST_FILES = [
     "test_interpolation.jl",
     "test_matrix_apply.jl",
     "test_field_layout_operations.jl",
+    "test_layout_discipline_ratchet.jl",   # layout is a mutable Symbol and get_*_data does not consult it — reading the wrong buffer is stale numbers, not an error; pins the manual-management population
     "test_cartesian_operator_core.jl",
     "test_transforms_extended.jl",
     "test_transform_inplace.jl",
@@ -54,6 +55,7 @@ const TEST_FILES = [
     "test_compatibility.jl",
     "test_namespaces.jl",
     "test_root_module_structure.jl",
+    "test_export_surface_ratchet.jl",   # 853 names are exported but undeclared in the @public_api manifest — an exported name is a promise, and unexamined ones rot (save_field/load_field! were exported, broken and untested at once)
     "test_cartesian_operators.jl",
     "test_stochastic_forcing.jl",
     "test_separable_stochastic_forcing.jl",
@@ -144,6 +146,7 @@ const TEST_FILES = [
     "test_distributed_gpu_dct1_support.jl",
     "test_variable_coefficient_lhs.jl",      # field-valued LHS coefficient must not be silently dropped
     "test_rhs_error_propagation.jl",         # a failed RHS term must not silently become zero
+    "test_rhs_dispatch_contract.jl",         # RHS node handling must resolve by specificity, not by source order — the generic ::Operator branch shadowed all 11 specific ones
     "test_diagonal_imex_robustness.jl",      # DiagonalIMEX must not silently drop the implicit operator
     "test_cfl_diffusive.jl",                 # CFL diffusive limit for explicitly-treated diffusion
     "test_conservative_flux.jl",              # div(a*u) conservative flux form
@@ -249,6 +252,10 @@ const MPI_TEST_FILES = [
     "test_mpi_padded_dealiasing_3d_mixed.jl", # 3D Cheb-Fourier-Fourier dealiasing == serial (decomp-order alignment fix) (np>=2)
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
+    # The distributed half of the configuration matrix. test_configuration_matrix.jl
+    # pins the serial cells; the backend is the axis it cannot see, and nearly every
+    # correctness bug in this project was backend-specific (np>=2).
+    "test_mpi_configuration_matrix.jl",
 ]
 
 # Distributed CUDA/NCCL tests. These require CUDA extension symbols, NCCL, or

@@ -145,15 +145,24 @@ mutable struct CompiledProblem
     subproblems::Union{Nothing, Tuple}
     coeff_system::Any
     caches::RuntimeCacheContext
+    # Operators the GLOBAL matrix builder had no spectral builder for and folded in
+    # as identity-on-operand. That approximation makes the global L/M wrong for those
+    # terms — but the global matrices are discarded whenever per-mode subproblems
+    # exist, which is the common case. Recording instead of warning at build time lets
+    # the warning fire only where the matrix is actually consumed.
+    identity_approx_ops::Vector{String}
 end
 
 CompiledProblem() = CompiledProblem(nothing, nothing, nothing, nothing, nothing,
-                                    nothing, RuntimeCacheContext())
+                                    nothing, RuntimeCacheContext(), String[])
 
 compiled_problem(problem::Problem) = problem.compiled
 
 function set_compiled_matrices!(problem::Problem, linear, mass, forcing=nothing)
     compiled = compiled_problem(problem)
+    # Attach whatever the spectral builder had to approximate as identity while
+    # producing these matrices, so the warning can be raised where they are USED.
+    _drain_identity_approximations!(problem)
     compiled.linear_matrix = linear
     compiled.mass_matrix = mass
     compiled.forcing_vector = forcing

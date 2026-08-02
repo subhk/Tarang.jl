@@ -208,6 +208,41 @@ end
 # implementations with optional target_layout parameters.
 
 """
+    grid_data!(field)  -> grid-space data buffer
+    coeff_data!(field) -> coefficient-space data buffer
+
+Transform `field` into the required layout if it is not already there, then return
+that layout's buffer. The trailing `!` is the transform, not a write to the buffer.
+
+Prefer these over the `ensure_layout!` + `get_*_data` pair they replace:
+
+    ensure_layout!(u, :g)          #  grid_data!(u)
+    data = get_grid_data(u)        #
+
+`get_grid_data` and `get_coeff_data` hand back whatever buffer the field is holding
+without checking `current_layout`, so reading the wrong one is not an error — it is
+stale or untransformed numbers, which is the silent-wrong-value failure this project
+keeps rediscovering. Writing the pair correctly is a per-call-site obligation
+repeated a few hundred times over `src/`; the layout is a mutable `Symbol` on the
+field, so nothing in the type system can help. Folding the two calls into one at
+least makes the guarantee part of the name and removes the chance to write the
+second line without the first.
+
+This does NOT make the raw accessors unsafe to use, and it does not help the harder
+case — code that sets a layout for something to read later, somewhere else. Those
+sites are counted by the ratchet in `test/test_layout_discipline_ratchet.jl`.
+"""
+function grid_data!(field)
+    ensure_layout!(field, :g)
+    return get_grid_data(field)
+end
+
+function coeff_data!(field)
+    ensure_layout!(field, :c)
+    return get_coeff_data(field)
+end
+
+"""
     Require one axis (default: all axes) to be in grid space.
     Following implementation in field:674-681
     """

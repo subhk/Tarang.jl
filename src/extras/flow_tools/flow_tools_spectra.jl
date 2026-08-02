@@ -949,8 +949,7 @@ end
 Calculate power density |f̂|² in spectral space with proper RFFT handling.
 """
 function calculate_spectral_power(field::ScalarField; apply_conjugate_symmetry::Bool=true)
-    ensure_layout!(field, :c)
-    coeff_data = get_coeff_data(field)
+    coeff_data = coeff_data!(field)
 
     # Compute |f̂|²
     power_spectral = similar(coeff_data, Float64)
