@@ -144,6 +144,7 @@ const TEST_FILES = [
     "test_distributed_gpu_dct1_support.jl",
     "test_variable_coefficient_lhs.jl",      # field-valued LHS coefficient must not be silently dropped
     "test_rhs_error_propagation.jl",         # a failed RHS term must not silently become zero
+    "test_rhs_dispatch_contract.jl",         # RHS node handling must resolve by specificity, not by source order — the generic ::Operator branch shadowed all 11 specific ones
     "test_diagonal_imex_robustness.jl",      # DiagonalIMEX must not silently drop the implicit operator
     "test_cfl_diffusive.jl",                 # CFL diffusive limit for explicitly-treated diffusion
     "test_conservative_flux.jl",              # div(a*u) conservative flux form
