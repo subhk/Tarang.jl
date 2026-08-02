@@ -96,7 +96,6 @@ export NCCLTransposeBuffer
 export transpose_z_to_y!, transpose_y_to_z!
 export transpose_y_to_x!, transpose_x_to_y!
 export nccl_alltoall!
-export nccl_pack_for_transpose!, nccl_unpack_from_transpose!
 export compute_transpose_counts!, finalize_nccl_transpose!
 
 # GPU DCT (Discrete Cosine Transform) for Chebyshev basis

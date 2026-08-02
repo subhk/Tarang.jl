@@ -80,26 +80,43 @@ end
             end
         end
 
-        @testset "Pack/unpack round-trip (simplified)" begin
-            # Test the simplified pack/unpack functions for basic correctness
+        @testset "Pack/unpack produce a rank-contiguous layout" begin
+            # This used to call `nccl_pack_for_transpose!(packed, data, dim)`, a
+            # stub that flat-copied because its signature carried no decomposition
+            # — and a round-trip assertion passes for any no-op, so the test was
+            # vacuous. Drive the real launchers, which take counts/displs, and
+            # check the PERMUTATION against an independently built layout.
+            # Kernel-level coverage that needs no GPU lives in
+            # test_gpu_transpose_kernels_cpu.jl.
             Nx, Ny, Nz = 16, 16, 32
-            data = CuArray(rand(Float64, Nx, Ny, Nz))
+            host = rand(Float64, Nx, Ny, Nz)
+            data = CuArray(host)
 
-            # Create flat buffer
+            dim = 2                          # Y redistributed: a genuine permutation
+            chunks = [Ny ÷ 2, Ny - Ny ÷ 2]
+            nranks_local = length(chunks)
+            counts = [c * Nx * Nz for c in chunks]
+            displs = [0, counts[1]]
+
             packed = CUDA.zeros(Float64, Nx * Ny * Nz)
+            gpu_pack_for_transpose!(packed, data, counts, displs, dim, nranks_local)
 
-            # Pack along Z dimension (simplified interface)
-            nccl_pack_for_transpose!(packed, data, 3)
+            expected = Float64[]
+            offset = 0
+            for c in chunks
+                append!(expected, vec(host[:, (offset+1):(offset+c), :]))
+                offset += c
+            end
+            @test Array(packed) == expected
+            # A flat copy would satisfy the round-trip below but not this.
+            @test Array(packed) != vec(host)
 
-            # Unpack should recover original data
             unpacked = CUDA.zeros(Float64, Nx, Ny, Nz)
-            nccl_unpack_from_transpose!(unpacked, packed, 3)
-
-            # Verify round-trip
-            @test Array(unpacked) ≈ Array(data) rtol=1e-14
+            gpu_unpack_from_transpose!(unpacked, packed, counts, displs, dim, nranks_local)
+            @test Array(unpacked) ≈ host rtol=1e-14
 
             if rank == 0
-                @info "Pack/unpack round-trip test passed"
+                @info "Pack/unpack permutation test passed"
             end
         end
 

@@ -52,14 +52,49 @@ function _catch_strip_comment(line::AbstractString)
     return rstrip(line)
 end
 
-"""Return (bare_sites, total_catch_clauses) for every `.jl` file under `root`."""
+"""Count non-overlapping `\"\"\"` markers on a single line."""
+function _catch_count_triple_quotes(line::AbstractString)
+    n = 0
+    idx = firstindex(line)
+    while idx <= lastindex(line)
+        r = findnext("\"\"\"", line, idx)
+        r === nothing && break
+        n += 1
+        idx = nextind(line, last(r))
+    end
+    return n
+end
+
+"""Return (bare_sites, total_catch_clauses, unbalanced_files) for every `.jl` file under `root`.
+
+Lines inside a `\"\"\"`-delimited block (a docstring) are skipped entirely before the
+`catch` regexes ever see them: English prose that mentions a `catch` block — e.g.
+explaining why some code uses `throw` instead of `rethrow` — reads to a line-oriented
+regex exactly like code. State is tracked per file as `in_triple`, toggled by every
+`\"\"\"` marker encountered. A line that both opens and closes a docstring (an even,
+nonzero marker count) is treated as fully inside one, same as a line that only opens
+one whose matching close appears many lines later.
+
+That state machine is also the scanner's own weak point: if a file's `\"\"\"` markers
+do not balance — a `\"\"\"` inside a string literal, say — `in_triple` is left stuck
+`true` and EVERY REMAINING LINE of that file is skipped, silently disabling the
+ratchet over the rest of it. A weakened ratchet stays green, which is the one thing
+a ratchet must never do. `unbalanced_files` names any file that ends mid-docstring so
+the testset can fail on it."""
 function _scan_catches(root::AbstractString)
     bare = Tuple{String, Int, String}[]
     total = 0
+    unbalanced = String[]
     for (dir, _, files) in walkdir(root), f in files
         endswith(f, ".jl") || continue
         path = joinpath(dir, f)
+        in_triple = false
         for (lineno, raw) in enumerate(eachline(path))
+            n_markers = _catch_count_triple_quotes(raw)
+            was_in_triple = in_triple
+            isodd(n_markers) && (in_triple = !in_triple)
+            (was_in_triple || n_markers > 0) && continue
+
             code = _catch_strip_comment(raw)
             isempty(code) && continue
             occursin(CATCH_ANY_RE, code) || continue
@@ -68,12 +103,13 @@ function _scan_catches(root::AbstractString)
                 push!(bare, (relpath(path, root), lineno, strip(code)))
             end
         end
+        in_triple && push!(unbalanced, relpath(path, root))
     end
-    return bare, total
+    return bare, total, unbalanced
 end
 
 @testset "bare `catch` ratchet" begin
-    bare, total = _scan_catches(CATCH_RATCHET_SRC)
+    bare, total, unbalanced = _scan_catches(CATCH_RATCHET_SRC)
     n_bare = length(bare)
 
     @info "src/ catch clauses: $total total, $n_bare bare (unbound exception)"
@@ -101,4 +137,15 @@ end
     # silently matched nothing would make the ratchet vacuously green.
     @test total >= 100
     @test n_bare >= 1
+
+    # The docstring skip is the scanner's own blind spot: a file whose `"""` markers do
+    # not balance leaves `in_triple` stuck true, so every line after the offending one is
+    # skipped and the ratchet quietly stops scanning the rest of that file. Balanced at
+    # end-of-file is the invariant that keeps the skip from weakening the ratchet.
+    if !isempty(unbalanced)
+        @warn "Docstring scan ended mid-`\"\"\"` block in $(length(unbalanced)) file(s); " *
+              "every line after the unbalanced marker was skipped, so the ratchet did NOT " *
+              "scan them:\n" * join(("  " * f for f in unbalanced), "\n")
+    end
+    @test isempty(unbalanced)
 end

@@ -273,4 +273,4 @@ function subproblem_locality_report(solver::InitialValueSolver)
 end
 
 # Export core solver API
-export step!, solve!, proceed, run!, subproblem_locality_report, estimate_subproblem_cost
+export step!, solve!, proceed, run!, save_state, load_state!, subproblem_locality_report, estimate_subproblem_cost

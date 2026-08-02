@@ -88,6 +88,10 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
+    # GPU / MPI without subproblems: no global matrix exists, so an explicit
+    # problem takes the matrix-free field combination (see step_multistep_field.jl).
+    _try_step_explicit_multistep_field!(state, solver, :cnab1) && return
+
     _global_multistep_distributed_fallback!(state, solver, current_state, "CNAB1") && return
 
     # Initialize history arrays if needed (following Tarang MultistepIMEX.__init__)
@@ -174,6 +178,8 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
         step_subproblem_multistep!(state, solver, sps, a, b, c)
         return
     end
+
+    _try_step_explicit_multistep_field!(state, solver, :cnab2) && return
 
     _global_multistep_distributed_fallback!(state, solver, current_state, "CNAB2") && return
 
@@ -282,6 +288,8 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     # Initialize history arrays if needed
     _init_global_multistep_history!(state, :sbdf1_iteration)
 
+    _try_step_explicit_multistep_field!(state, solver, :sbdf1) && return
+
     _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF1") && return
 
     L_matrix, M_matrix, fell_back =
@@ -374,6 +382,11 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         step_distributed_diagonal_imex_sbdf2!(state, solver)
         return
     end
+
+    # After the distributed diagonal-IMEX branch above: that path already serves
+    # MPI pure-Fourier (implicit L included), so it keeps precedence there. This
+    # reaches GPU, where it declines.
+    _try_step_explicit_multistep_field!(state, solver, :sbdf2) && return
 
     _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF2") && return
 
@@ -507,6 +520,8 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
+    _try_step_explicit_multistep_field!(state, solver, :sbdf3) && return
+
     _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF3") && return
 
     # Initialize history arrays if needed
@@ -627,6 +642,8 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
         step_subproblem_multistep!(state, solver, sps, a, b, c)
         return
     end
+
+    _try_step_explicit_multistep_field!(state, solver, :sbdf4) && return
 
     _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF4") && return
 

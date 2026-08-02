@@ -317,59 +317,14 @@ Gathers Y-slices from each rank (the reverse of the Y->X pack).
     @inbounds data[i, j, k] = packed[buf_idx]
 end
 
-# ============================================================================
-# Simplified Pack/Unpack Interface (for testing)
-# ============================================================================
-
-"""
-    nccl_pack_for_transpose!(packed::CuArray{T}, data::CuArray{T,3}, dim::Int) where T
-
-Pack 3D array for transpose along specified dimension.
-
-This is a simplified interface for testing. For actual transposes, use the
-full transpose_z_to_y!, transpose_y_to_x!, etc. functions.
-
-# Arguments
-- `packed`: Output buffer (flattened)
-- `data`: Input 3D array
-- `dim`: Dimension along which to prepare for transpose (1=X, 2=Y, 3=Z)
-"""
-function nccl_pack_for_transpose!(packed::CuArray{T}, data::CuArray{T,3}, dim::Int) where T
-    @warn "nccl_pack_for_transpose! is a testing stub (simple copy). For actual transposes, use transpose_z_to_y! etc." maxlog=1
-    Nx, Ny, Nz = size(data)
-    total = Nx * Ny * Nz
-
-    if dim == 3 || dim == 2 || dim == 1
-        copyto!(view(packed, 1:total), reshape(data, :))
-    end
-
-    return packed
-end
-
-"""
-    nccl_unpack_from_transpose!(data::CuArray{T,3}, packed::CuArray{T}, dim::Int) where T
-
-Unpack 3D array after transpose along specified dimension.
-
-This is a simplified interface for testing. For actual transposes, use the
-full transpose_z_to_y!, transpose_y_to_x!, etc. functions.
-
-# Arguments
-- `data`: Output 3D array
-- `packed`: Input buffer (flattened)
-- `dim`: Dimension along which transpose was performed (1=X, 2=Y, 3=Z)
-"""
-function nccl_unpack_from_transpose!(data::CuArray{T,3}, packed::CuArray{T}, dim::Int) where T
-    @warn "nccl_unpack_from_transpose! is a testing stub (simple copy). For actual transposes, use transpose_z_to_y! etc." maxlog=1
-    Nx, Ny, Nz = size(data)
-    total = Nx * Ny * Nz
-
-    if dim == 3 || dim == 2 || dim == 1
-        copyto!(reshape(data, :), view(packed, 1:total))
-    end
-
-    return data
-end
+# NOTE: `nccl_pack_for_transpose!(packed, data, dim)` and its unpack partner used
+# to live here as exported "simplified interfaces for testing". They were removed
+# because the signature cannot express the operation: which elements go to which
+# rank is fixed by `counts`/`displs`/`nranks`, none of which they took, so both
+# degenerated to a flat copy — correct only at nranks == 1 and silently wrong for
+# every real decomposition. Use `gpu_pack_for_transpose!` /
+# `gpu_unpack_from_transpose!` (ext/cuda/transpose_kernels.jl), which take the
+# decomposition, or the `transpose_*_to_*!` drivers that wrap them.
 
 # ============================================================================
 # NCCL All-to-All Operations
