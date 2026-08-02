@@ -415,8 +415,11 @@ function expand_namespace_substitutions!(problem::Problem)
                 if !isempty(lhs_clean) && !isempty(rhs_clean)
                     substitutions[lhs_clean] = rhs_clean
                 end
-            catch
-                # Not a valid substitution, skip
+            catch err
+                # `split_equation` raises ArgumentError when the string is not an
+                # `lhs = rhs` substitution, which is the expected miss. Anything else
+                # is a real fault and must not be silently skipped.
+                err isa ArgumentError || rethrow()
             end
         end
     end

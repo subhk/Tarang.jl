@@ -223,11 +223,13 @@ function evaluate_rhs_scalar(op, variables::Vector)
         if op == "0" || op == "zero"
             return 0.0
         end
-        try
-            return parse(Float64, op)
-        catch
-            return 0.0
-        end
+        # `tryparse` returns nothing rather than throwing, so a non-numeric string
+        # takes the documented 0.0 fallback without an exception handler that would
+        # also swallow a real fault. The 0.0 itself is this function's stated
+        # contract for an unevaluable RHS scalar (see the docstring and the
+        # unhandled-type branch below).
+        val = tryparse(Float64, op)
+        return val === nothing ? 0.0 : val
 
     else
         @debug "evaluate_rhs_scalar: unhandled type $(typeof(op)), returning 0.0"

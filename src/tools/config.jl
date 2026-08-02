@@ -111,11 +111,13 @@ function getint(section::ConfigSection, key::String; default::Union{Int, Nothing
             throw(ArgumentError("Float value $value is not an integer in $(section.name).$key"))
         end
     elseif isa(value, String)
-        try
-            return parse(Int, strip(value))
-        catch
+        # `tryparse` returns nothing rather than throwing, so the ArgumentError below
+        # is raised only for genuinely unparseable text — the old handler also caught
+        # any unrelated failure and relabelled it as a parse error.
+        parsed = tryparse(Int, strip(value))
+        parsed === nothing &&
             throw(ArgumentError("Cannot parse '$value' as integer in $(section.name).$key"))
-        end
+        return parsed
     else
         throw(ArgumentError("Cannot convert $(typeof(value)) to integer in $(section.name).$key"))
     end
@@ -134,11 +136,13 @@ function getfloat(section::ConfigSection, key::String; default::Union{Float64, N
     if isa(value, Number)
         return Float64(value)
     elseif isa(value, String)
-        try
-            return parse(Float64, strip(value))
-        catch
+        # `tryparse` returns nothing rather than throwing, so the ArgumentError below
+        # is raised only for genuinely unparseable text — the old handler also caught
+        # any unrelated failure and relabelled it as a parse error.
+        parsed = tryparse(Float64, strip(value))
+        parsed === nothing &&
             throw(ArgumentError("Cannot parse '$value' as float in $(section.name).$key"))
-        end
+        return parsed
     else
         throw(ArgumentError("Cannot convert $(typeof(value)) to float in $(section.name).$key"))
     end

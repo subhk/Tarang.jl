@@ -618,8 +618,11 @@ function get_diff_coordinate(expr)
                         if hasfield(typeof(basis.meta), :coordsys) && basis.meta.coordsys !== nothing
                             try
                                 return basis.meta.coordsys[coord_name]
-                            catch
-                                # Coordinate not found in coordsys
+                            catch err
+                                # A missing coordinate is the expected miss; any other
+                                # exception is a fault in the coordinate system and must
+                                # not be read as "not found".
+                                err isa Union{KeyError, BoundsError, ArgumentError} || rethrow()
                             end
                         end
                     end
@@ -640,8 +643,8 @@ function get_diff_coordinate(expr)
             if hasfield(typeof(dist), :coordsys) && dist.coordsys !== nothing
                 try
                     return dist.coordsys[coord_name]
-                catch
-                    # Coordinate not found in coordsys
+                catch err
+                    err isa Union{KeyError, BoundsError, ArgumentError} || rethrow()
                 end
             end
         end

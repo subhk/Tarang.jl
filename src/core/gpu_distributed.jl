@@ -841,8 +841,11 @@ function check_cuda_aware_mpi()
         if haskey(ENV, "MPICH_GPU_SUPPORT_ENABLED") && ENV["MPICH_GPU_SUPPORT_ENABLED"] == "1"
             return true
         end
-    catch
-        # Env access failed, treat as not detected
+    catch err
+        # `ENV` lookups raise nothing but they are wrapped here defensively; a genuine
+        # failure while probing the environment should not be reported as "no
+        # CUDA-aware MPI", which silently downgrades a distributed GPU run.
+        @debug "CUDA-aware MPI environment probe failed" exception = err
     end
 
     return false

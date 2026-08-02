@@ -74,8 +74,11 @@ function OrderedSet(items)
         # Use eltype for collections, or promote_type for iterables
         T = try
             eltype(items)
-        catch
-            # Fallback: collect and get common type
+        catch err
+            # An iterable with no `eltype` method raises MethodError; fall back to
+            # inspecting the collected elements. Any other exception comes from the
+            # iterable itself and must not be hidden behind a type guess.
+            err isa MethodError || rethrow()
             collected = collect(items)
             isempty(collected) ? Any : mapreduce(typeof, promote_type, collected)
         end
@@ -572,8 +575,10 @@ function close_logger()
         try
             flush(_LOG_FILE_HANDLE[])
             close(_LOG_FILE_HANDLE[])
-        catch
-            # Ignore errors during cleanup
+        catch err
+            # Teardown must not throw, but a failure to flush the log means losing the
+            # tail of the run — record what happened instead of discarding it.
+            @debug "close_logger: failed to flush/close the log file" exception = err
         end
         _LOG_FILE_HANDLE[] = nothing
     end

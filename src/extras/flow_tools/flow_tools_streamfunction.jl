@@ -201,8 +201,11 @@ function _get_global_coeff_shape_internal(field::ScalarField)
             if applicable(PencilArrays.size_global, coeff_data)
                 return Tuple(PencilArrays.size_global(coeff_data))
             end
-        catch
-            # Fallback
+        catch err
+            # A layout with no global size declines with MethodError; the local-shape
+            # fallback below then applies. Any other exception is a real fault in the
+            # decomposition and must not be read as "no global size available".
+            err isa MethodError || rethrow()
         end
     end
     return size(coeff_data)

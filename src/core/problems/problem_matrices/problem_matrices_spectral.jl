@@ -145,9 +145,14 @@ function _spectral_laplacian(field::ScalarField, eqn_size::Int, var_size::Int)
             push!(ops_1d, spdiagm(0 => vals))
         else
             # Chebyshev/Legendre: dense D² matrix
+            # A basis with no second-derivative matrix declines with MethodError or
+            # ArgumentError, and the caller then falls back to another path. Any other
+            # exception means the matrix exists but could not be built — a real fault
+            # that must not be reported as "this basis is unsupported".
             D2 = try
                 ComplexF64.(differentiation_matrix(basis, 2))
-            catch
+            catch err
+                err isa Union{MethodError, ArgumentError} || rethrow()
                 nothing
             end
             D2 === nothing && return nothing
@@ -301,7 +306,15 @@ function _spectral_differentiate(field::ScalarField, coord::Coordinate, order::I
         end
         D1d = spdiagm(0 => vals)
     else
-        D_dense = try ComplexF64.(differentiation_matrix(basis, order)) catch; nothing end
+        # As above: a basis without a matrix for this order declines with MethodError
+        # or ArgumentError and the caller falls back. Any other exception means the
+        # matrix exists but could not be built, and must not read as "unsupported".
+        D_dense = try
+            ComplexF64.(differentiation_matrix(basis, order))
+        catch err
+            err isa Union{MethodError, ArgumentError} || rethrow()
+            nothing
+        end
         D_dense === nothing && return nothing
         D1d = sparse(D_dense)
     end

@@ -75,8 +75,11 @@ end
 function Base.close(logger::MPILogger)
     try
         close(logger.base_logger)
-    catch
-        # Base logger may not support close
+    catch err
+        # A logger that does not implement `close` raises MethodError — expected, and
+        # nothing to clean up. A real failure while closing (an IO error flushing to
+        # disk) is data loss and must not be silent.
+        err isa MethodError || rethrow()
     end
 end
 
@@ -204,8 +207,10 @@ function Base.close(logger::TeeLogger)
     for l in logger.loggers
         try
             close(l)
-        catch
-            # Not all loggers may support close, ignore errors
+        catch err
+            # As above: MethodError means this logger has no `close`. Any other error
+            # is a genuine failure to flush and must surface.
+            err isa MethodError || rethrow()
         end
     end
 end
@@ -357,8 +362,11 @@ end
 function Base.close(logger::LevelFilterLogger)
     try
         close(logger.base_logger)
-    catch
-        # Base logger may not support close
+    catch err
+        # A logger that does not implement `close` raises MethodError — expected, and
+        # nothing to clean up. A real failure while closing (an IO error flushing to
+        # disk) is data loss and must not be silent.
+        err isa MethodError || rethrow()
     end
 end
 

@@ -302,19 +302,11 @@ function parse_bc_string(bc_string::String)
 
     # Parse numeric positions, but keep symbolic positions such as `Lz` as
     # strings so the BC manager can still track dynamic values at named bounds.
-    position = try
-        parse(Float64, pos_str)
-    catch
-        pos_str
-    end
+    position = something(tryparse(Float64, pos_str), pos_str)
 
-    # Parse value - could be number or expression string
-    value = try
-        parse(Float64, val_str)
-    catch
-        # Keep as string expression for space/time dependent BCs
-        val_str
-    end
+    # Parse value — a number, or a string expression kept verbatim for
+    # space/time-dependent BCs.
+    value = something(tryparse(Float64, val_str), val_str)
 
     return (field_name, coordinate, position, value)
 end
@@ -394,18 +386,10 @@ function _finish_neumann_bc_parse(bc_string::String, deriv_coord::String, field_
 
     # Parse numeric positions, but keep symbolic positions such as `Lz` as
     # strings so dynamic Neumann BCs can be registered and refreshed.
-    position = try
-        parse(Float64, pos_str)
-    catch
-        pos_str
-    end
+    position = something(tryparse(Float64, pos_str), pos_str)
 
     # Parse value
-    value = try
-        parse(Float64, val_str)
-    catch
-        val_str
-    end
+    value = something(tryparse(Float64, val_str), val_str)
 
     return (field_name, bc_coord, position, value)
 end
@@ -459,18 +443,10 @@ function parse_robin_bc_string(bc_string::String)
     beta = parse(Float64, beta_str)
 
     # Parse numeric positions, but preserve symbolic bounds such as `Lz`.
-    position = try
-        parse(Float64, field_pos_str)
-    catch
-        field_pos_str
-    end
+    position = something(tryparse(Float64, field_pos_str), field_pos_str)
 
     # Parse value
-    value = try
-        parse(Float64, val_str)
-    catch
-        val_str
-    end
+    value = something(tryparse(Float64, val_str), val_str)
 
     return (field_name1, field_coord, position, alpha, beta, value)
 end
@@ -501,11 +477,7 @@ function parse_stress_free_bc_string(bc_string::String)
     pos_str = String(m.captures[3])
 
     # Parse numeric positions, but preserve symbolic bounds such as `Lz`.
-    position = try
-        parse(Float64, pos_str)
-    catch
-        pos_str
-    end
+    position = something(tryparse(Float64, pos_str), pos_str)
 
     return (velocity_field, coordinate, position)
 end
@@ -818,10 +790,14 @@ function _register_string_bc!(problem::Problem, bc_string::String)
                  occursin(r"^d[a-zA-Z_][a-zA-Z0-9_]*\(", stripped)
 
     if is_neumann
+        # A string that is not in Neumann form raises ArgumentError; that is the
+        # expected miss and falls back to the raw-string path. Anything else is a
+        # real fault inside the parser and must not be mistaken for "not a Neumann BC".
         parts = try
             parse_neumann_bc_string(bc_string)
-        catch
-            return  # unparseable — fall back to raw-string path
+        catch err
+            err isa ArgumentError || rethrow()
+            return
         end
         field_name, coord, position, value = parts
         bc_obj = neumann_bc(field_name, coord, position, value)
@@ -830,10 +806,14 @@ function _register_string_bc!(problem::Problem, bc_string::String)
     end
 
     # Dirichlet path.
+    # As above: ArgumentError means "not in `field(coord=pos) = value` form" (e.g.
+    # `integ(p) = 0`, which the raw-string path handles). Any other exception is a
+    # parser fault and must surface.
     parts = try
         parse_bc_string(bc_string)
-    catch
-        return  # unparseable (e.g. `integ(p) = 0` — handled via raw string)
+    catch err
+        err isa ArgumentError || rethrow()
+        return
     end
     field_name, coord, position, value = parts
 

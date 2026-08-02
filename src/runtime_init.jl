@@ -33,13 +33,18 @@ Override with the `TARANG_FFTW_THREADS` environment variable. Any failure
 function _init_fftw_threads!()
     n = try
         if haskey(ENV, "TARANG_FFTW_THREADS")
-            parse(Int, ENV["TARANG_FFTW_THREADS"])
+            # `tryparse` keeps an unparseable override on the documented single-thread
+            # fallback without an exception handler around the whole block.
+            something(tryparse(Int, ENV["TARANG_FFTW_THREADS"]), 1)
         elseif MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
             1
         else
             Threads.nthreads()
         end
-    catch
+    catch err
+        # MPI not yet initialised, or a thread-count query that fails: fall back to one
+        # thread, as documented. Anything else is a real fault during startup.
+        err isa Union{MPI.MPIError, MethodError, UndefVarError} || rethrow()
         1
     end
     n = max(1, n)

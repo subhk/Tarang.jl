@@ -115,7 +115,12 @@ end
     @info "src/ catch clauses: $total total, $n_bare bare (unbound exception)"
 
     # Current count. Lower it when you remove one; never raise it.
-    RATCHET = 54
+    #
+    # The population is now ZERO: every `catch` in src/ binds its exception and
+    # re-raises what it did not expect. Keep it there — a bare `catch` cannot name
+    # what it swallowed, and every silent-wrong-value bug this project has found
+    # came from one used as control flow.
+    RATCHET = 0
 
     if n_bare > RATCHET
         # There is no stored baseline, so this is the full inventory, not just the new ones.
@@ -135,8 +140,13 @@ end
 
     # Sanity: the scanner must actually be finding things. A regex or path regression that
     # silently matched nothing would make the ratchet vacuously green.
+    #
+    # This used to assert `n_bare >= 1` on the same reasoning, but the population is now
+    # zero, so that check would force a bare `catch` to be kept alive purely to prove the
+    # scanner works. `total` counts EVERY catch clause, bound or not, through the same
+    # walk and the same comment/docstring stripping — so a broken scanner still fails
+    # here, and a genuinely clean tree stays green.
     @test total >= 100
-    @test n_bare >= 1
 
     # The docstring skip is the scanner's own blind spot: a file whose `"""` markers do
     # not balance leaves `in_triple` stuck true, so every line after the offending one is

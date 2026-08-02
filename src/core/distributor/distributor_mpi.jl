@@ -107,7 +107,12 @@ function _get_underlying_pencil_array(array::AbstractArray)
     if applicable(parent, array)
         parent_arr = try
             parent(array)
-        catch
+        catch err
+            # `applicable` said `parent` exists, so a MethodError here means an inner
+            # dispatch failed; treat that as "no wrapped parent". Any other exception
+            # comes from the array itself and must surface rather than making an
+            # unwrapping failure look like a plain (unwrapped) array.
+            err isa MethodError || rethrow()
             nothing
         end
         if parent_arr !== nothing && parent_arr !== array
