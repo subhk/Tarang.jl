@@ -500,12 +500,10 @@ function _update_one_filter!(filter_name::Symbol, reg::TemporalFilterRegistratio
 
     # Get the physical space data from the variable
     if source_var isa ScalarField
-        ensure_layout!(source_var, :g)
-        data = get_grid_data(source_var)
+        data = grid_data!(source_var)
     elseif source_var isa VectorField
         # For vector fields, use first component's grid data
-        ensure_layout!(source_var.components[1], :g)
-        data = get_grid_data(source_var.components[1])
+        data = grid_data!(source_var.components[1])
     elseif hasproperty(source_var, :data)
         data = getfield(source_var, :data)
     else

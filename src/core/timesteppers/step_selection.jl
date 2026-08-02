@@ -103,8 +103,7 @@ methods. This centralizes the size heuristic used by MPI compatibility checks.
 function _global_matrix_implicit_total_dofs(solver::InitialValueSolver)
     total = 0
     for field in solver.state
-        ensure_layout!(field, :c)
-        coeffs = get_coeff_data(field)
+        coeffs = coeff_data!(field)
         coeffs === nothing && continue
         total += length(coeffs)
     end

@@ -966,8 +966,7 @@ function _spectral_poisson_solve_into!(target::ScalarField, source::ScalarField,
                                        was_negated::Bool)
     (_constraint_all_fourier_bases(target) && target.bases == source.bases) || return false
     ensure_layout!(source, :c)
-    ensure_layout!(target, :c)
-    target_coeff = get_coeff_data(target)
+    target_coeff = coeff_data!(target)
     source_coeff = get_coeff_data(source)
     (target_coeff === nothing || source_coeff === nothing) && return false
 
@@ -994,8 +993,7 @@ function _try_refresh_fourier_streamfunction_velocity!(target, expr)
     _constraint_all_fourier_bases(source) || return false
     all(comp -> comp.bases == source.bases, target.components) || return false
 
-    ensure_layout!(source, :c)
-    source_coeff = get_coeff_data(source)
+    source_coeff = coeff_data!(source)
     source_coeff === nothing && return false
     source_data = _coefficient_array(source_coeff)
 
@@ -1005,8 +1003,7 @@ function _try_refresh_fourier_streamfunction_velocity!(target, expr)
     signs = (-1.0, 1.0)
     @inbounds for i in 1:2
         component = target.components[i]
-        ensure_layout!(component, :c)
-        component_coeff = get_coeff_data(component)
+        component_coeff = coeff_data!(component)
         component_coeff === nothing && return false
         copyto!(_coefficient_array(component_coeff), source_data)
         axis = _resolve_diff_axis(derivative_coords[i], component.bases)
@@ -1067,8 +1064,7 @@ function _evaluate_poisson_rhs(problem, other_lhs_terms, F_expr)
                 other_value = evaluate_solver_expression(other_lhs_terms, problem.variables; layout=:c)
                 if isa(other_value, ScalarField)
                     rhs_value = copy(other_value)
-                    ensure_layout!(rhs_value, :c)
-                    coeff_data = get_coeff_data(rhs_value)
+                    coeff_data = coeff_data!(rhs_value)
                     if isa(coeff_data, PencilArrays.PencilArray)
                         parent(coeff_data) .*= -1
                     else
@@ -1090,8 +1086,7 @@ function _evaluate_poisson_rhs(problem, other_lhs_terms, F_expr)
                 if rhs_value === nothing
                     rhs_value = copy(f_value)
                 else
-                    ensure_layout!(rhs_value, :c)
-                    rhs_coeff = get_coeff_data(rhs_value)
+                    rhs_coeff = coeff_data!(rhs_value)
                     f_coeff = get_coeff_data(f_value)
                     if isa(rhs_coeff, PencilArrays.PencilArray)
                         parent(rhs_coeff) .+= parent(f_coeff)
@@ -1296,8 +1291,7 @@ solves. The caller (`_spectral_poisson_solve`) only reads it, so sharing is safe
 const _POISSON_K2_CACHE = Dict{Tuple, Any}()
 
 function _build_k_squared(field::ScalarField)
-    ensure_layout!(field, :c)
-    coeff_data = get_coeff_data(field)
+    coeff_data = coeff_data!(field)
 
     if coeff_data === nothing
         return nothing

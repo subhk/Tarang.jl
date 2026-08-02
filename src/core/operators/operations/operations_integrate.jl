@@ -39,8 +39,7 @@ function evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
     # PencilArrays' generic mapreduce is unavailable on non-Intel MPI builds.
     # Full integration reduces to a scalar Allreduce; partial integration
     # gathers the (analysis-sized) field and reuses the serial reduction.
-    ensure_layout!(result_field, :g)
-    gdata = get_grid_data(result_field)
+    gdata = grid_data!(result_field)
     if isa(gdata, PencilArrays.PencilArray) && length(coords) == length(operand.bases)
         return _integrate_full_distributed(result_field, gdata)
     end

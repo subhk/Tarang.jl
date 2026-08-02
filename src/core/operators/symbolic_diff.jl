@@ -483,8 +483,7 @@ function _evaluate_jacobian_block(expr, var::ScalarField, nrows::Int, ncols::Int
         return expr * sparse(I, min(nrows, ncols), min(nrows, ncols))
     elseif isa(expr, ScalarField)
         # Field-valued: diagonal matrix from coefficient values
-        ensure_layout!(expr, :c)
-        data = get_coeff_data(expr)
+        data = coeff_data!(expr)
         is_gpu_array(data) && error(
             "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
         cpu_data = data
@@ -495,8 +494,7 @@ function _evaluate_jacobian_block(expr, var::ScalarField, nrows::Int, ncols::Int
         try
             result = evaluate(expr, :c)
             if isa(result, ScalarField)
-                ensure_layout!(result, :c)
-                data = get_coeff_data(result)
+                data = coeff_data!(result)
                 is_gpu_array(data) && error(
                     "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
                 cpu_data = data

@@ -98,8 +98,7 @@ function evaluate_advective_cfl(cfl_op::AdvectiveCFL, layout::Symbol=:g)
 
     ndims_field = length(bases)
     for i in 1:dim
-        ensure_layout!(velocity.components[i], :g)
-        vel_data = get_grid_data(velocity.components[i])
+        vel_data = grid_data!(velocity.components[i])
 
         basis = bases[i]
         grid_spacing = compute_grid_spacing(basis, dist, i)

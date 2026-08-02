@@ -411,8 +411,7 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     # Write result to a pooled output field (rotating buffers — distinct for
     # consecutively-held products like cross product; no per-call allocation).
     result = _checkout_nl_result!(evaluator, field1)
-    ensure_layout!(result, :g)
-    result_data = get_grid_data(result)
+    result_data = grid_data!(result)
 
     # Write the scaled result directly into the (preallocated) output grid via a
     # fused broadcast — no intermediate `scaled_result` allocation. The workspace
@@ -532,8 +531,7 @@ function _pencil_batched_backward!(fields::Vector{<:ScalarField})
     k = length(fields)
     k == 0 && return
     f0 = fields[1]
-    ensure_layout!(f0, :c)
-    cd0 = get_coeff_data(f0)
+    cd0 = coeff_data!(f0)
     if k == 1 || !isa(cd0, PencilArrays.PencilArray) || is_gpu_array(cd0)
         for f in fields
             backward_transform!(f)
@@ -680,8 +678,7 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
     # Multiply on the grid. `result` comes from a rotating buffer pool — distinct
     # buffers for consecutively-held products (e.g. cross product), no per-call alloc.
     result = _checkout_nl_result!(evaluator, field1)
-    ensure_layout!(result, :g)
-    result_data = get_grid_data(result)
+    result_data = grid_data!(result)
     d1 = get_grid_data(f1)
     d2 = get_grid_data(f2)
     if isa(result_data, PencilArrays.PencilArray)

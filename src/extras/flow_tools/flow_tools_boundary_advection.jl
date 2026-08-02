@@ -781,8 +781,7 @@ function bad_energy(bad::BoundaryAdvectionDiffusion)
 
     for bspec in bad.boundary_specs
         field = bad.fields[bspec.name]
-        ensure_layout!(field, :g)
-        data = get_grid_data(field)
+        data = grid_data!(field)
         # parent → LOCAL slab; sum(::PencilArray) is collective and would be
         # Allreduced again below (nprocs× inflation / non-Intel MPI error). No-op serial.
         total_sum_squared += sum(abs2, parent(data))

@@ -32,8 +32,7 @@ function turbulence_statistics(velocity::VectorField)
     vel_sum_squared = 0.0
     local_count = 0
     for component in velocity.components
-        ensure_layout!(component, :g)
-        data = get_grid_data(component)
+        data = grid_data!(component)
         # `parent` gives the LOCAL slab; reducing the PencilArray directly is a
         # COLLECTIVE op (already global) which would then be Allreduced a second time
         # below → nprocs× inflation (and errors on non-Intel MPI). parent is a no-op
@@ -68,8 +67,7 @@ function turbulence_statistics(velocity::VectorField)
     if velocity.coordsys.dim == 2
         # Vorticity RMS for 2D flows - CRITICAL: Use global reduction for MPI
         vort = evaluate_operator(curl(velocity))
-        ensure_layout!(vort, :g)
-        vort_data = get_grid_data(vort)
+        vort_data = grid_data!(vort)
         vort_sum_squared = sum(abs2, parent(vort_data))   # local slab (see velocity_rms note)
         vort_count = length(parent(vort_data))
 

@@ -127,8 +127,7 @@ function get_2d_wavenumber_grids(field::ScalarField)
     end
 
     # Get spectral shape and MPI offsets
-    ensure_layout!(field, :c)
-    coeff_data = get_coeff_data(field)
+    coeff_data = coeff_data!(field)
     local_nx, local_ny = size(coeff_data)[1:2]
 
     # CRITICAL FIX: Get global shape and local offsets for MPI
@@ -271,8 +270,7 @@ function streamfunction_jacobi_solve(vorticity::ScalarField, bc_type::Symbol, ap
     Converges to tolerance or max_iter, whichever comes first.
     """
 
-    ensure_layout!(vorticity, :g)
-    omega = get_grid_data(vorticity)
+    omega = grid_data!(vorticity)
     nx, ny = size(omega)
 
     # Initialize streamfunction

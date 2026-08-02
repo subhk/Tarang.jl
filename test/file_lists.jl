@@ -26,6 +26,7 @@ const TEST_FILES = [
     "test_interpolation.jl",
     "test_matrix_apply.jl",
     "test_field_layout_operations.jl",
+    "test_layout_discipline_ratchet.jl",   # layout is a mutable Symbol and get_*_data does not consult it — reading the wrong buffer is stale numbers, not an error; pins the manual-management population
     "test_cartesian_operator_core.jl",
     "test_transforms_extended.jl",
     "test_transform_inplace.jl",

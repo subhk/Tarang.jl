@@ -199,8 +199,7 @@ end
 # for (mirroring ScalarField*ScalarField) and transformed afterwards.
 function _multiply_result(left::ScalarField, right::VectorField, layout::Symbol)
     result = VectorField(right.dist, right.coordsys, "_mul", right.bases, right.dtype)
-    ensure_layout!(left, :g)
-    scalar_data = get_grid_data(left)
+    scalar_data = grid_data!(left)
 
     for (i, comp) in enumerate(right.components)
         ensure_layout!(comp, :g)

@@ -1489,8 +1489,7 @@ function _reset_lazy_forced_rhs_field!(field::ScalarField, problem::Problem, var
     haskey(problem.stochastic_forcings, var_idx) || return field
     isempty(field.bases) && return field
 
-    ensure_layout!(field, :c)
-    coeff_data = get_coeff_data(field)
+    coeff_data = coeff_data!(field)
     coeff_data === nothing && return field
     fill!(coeff_data, zero(eltype(coeff_data)))
     return field
@@ -1505,8 +1504,7 @@ function _add_registered_forcings_to_lazy_rhs!(rhs_fields, problem::Problem)
         rhs_field = rhs_fields[var_idx]
         isempty(rhs_field.bases) && continue
 
-        ensure_layout!(rhs_field, :c)
-        coeff_data = get_coeff_data(rhs_field)
+        coeff_data = coeff_data!(rhs_field)
         coeff_data === nothing && continue
 
         F_view = _matched_forcing_view(forcing, coeff_data)

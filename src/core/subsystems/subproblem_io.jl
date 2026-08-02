@@ -223,8 +223,7 @@ function to_solve_layout!(fields, dist; fuse_from_grid::Bool=false)
             set_coeff_data!(f, solve_pa)
             push!(stash, f => fft_pa)
         else
-            ensure_layout!(f, :c)
-            fft_pa = get_coeff_data(f)
+            fft_pa = coeff_data!(f)
             (fft_pa isa PencilArrays.PencilArray) || continue
             dtype = eltype(fft_pa)
             solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
@@ -656,8 +655,7 @@ once per field, per subproblem, per gather AND scatter, per stage. That made thi
 end
 
 function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
-    ensure_layout!(field, :c)
-    cd_raw = get_coeff_data(field)
+    cd_raw = coeff_data!(field)
     if cd_raw === nothing || isempty(cd_raw)
         n = subproblem_field_size(sp, field)
         if n > 0
@@ -746,8 +744,7 @@ function _scatter_subproblem_raw(sp::Subproblem, data::AbstractVector, fields::V
 end
 
 function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::Int, kx_global::Int, sp::Subproblem)
-    ensure_layout!(field, :c)
-    cd_raw = get_coeff_data(field)
+    cd_raw = coeff_data!(field)
     if cd_raw === nothing || isempty(cd_raw)
         return offset + subproblem_field_size(sp, field)
     end
