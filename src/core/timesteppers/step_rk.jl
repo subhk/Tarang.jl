@@ -59,15 +59,19 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
     b_imp = ts.b_implicit
     c = ts.c_explicit  # Stage times (same for both tableaux)
 
-    # Check if L_matrix is available for implicit treatment
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-
+    # Take the per-subproblem path BEFORE touching the global matrices. It does not use
+    # them, and fetching them first is not free of consequence: the accessor warns when a
+    # global matrix folded an operator in as identity, so fetching-then-discarding told
+    # users on a perfectly correct subproblem solve that their implicit solve was wrong.
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
         step_subproblem_rk!(state, solver, sps; ts=ts)   # thread ts (e.g. RK443 multistep startup)
         return nothing
     end
+
+    # Check if L_matrix is available for implicit treatment
+    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
+    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
     fallback_reason = _imex_rk_explicit_fallback_reason(state, solver, current_state, L_matrix)
     if fallback_reason !== nothing

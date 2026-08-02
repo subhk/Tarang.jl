@@ -618,6 +618,26 @@ end
 
 # ── Helpers ─────────────────────────────────────────────────────
 
+
+# Operator names the global matrix builder approximated as identity, collected during
+# a build. `build_matrix_expressions!` drains this into the problem's CompiledProblem,
+# so the record travels with the problem rather than living in a global forever.
+const _IDENTITY_APPROX_PENDING = String[]
+
+_note_identity_approximation!(name::AbstractString) =
+    (name in _IDENTITY_APPROX_PENDING || push!(_IDENTITY_APPROX_PENDING, String(name)); nothing)
+
+"""Move the pending identity-approximation record onto `problem` and clear it."""
+function _drain_identity_approximations!(problem)
+    isempty(_IDENTITY_APPROX_PENDING) && return nothing
+    compiled = compiled_problem(problem)
+    for name in _IDENTITY_APPROX_PENDING
+        name in compiled.identity_approx_ops || push!(compiled.identity_approx_ops, name)
+    end
+    empty!(_IDENTITY_APPROX_PENDING)
+    return nothing
+end
+
 """Recurse into a single-operand operator to build its matrix block."""
 function _recurse_operand(expr, var, eqn_size::Int, var_size::Int; scale::Number=1.0)
     # Recursing operand-as-identity is CORRECT only for TimeDerivative (M = I) and
@@ -627,9 +647,14 @@ function _recurse_operand(expr, var, eqn_size::Int, var_size::Int; scale::Number
     # operator as identity in the global L/M matrix — wrong for the implicit solve. Warn
     # loudly so it is not a silent correctness loss (the per-subproblem path is unaffected).
     if !(expr isa Union{TimeDerivative, Convert, Grid, Coeff, Copy})
-        @warn "Implicit global matrix: operator $(typeof(expr)) has no spectral matrix " *
-              "builder and is approximated as IDENTITY-on-operand; the implicit solve will " *
-              "be wrong for this term. Add a builder or use the per-subproblem solve path." maxlog=3
+        # RECORD, do not warn. This builder runs for every problem, but the global L/M
+        # it produces are discarded whenever per-mode subproblems exist — the usual case
+        # for anything with a coupled (Chebyshev) direction. Warning here told users with
+        # a perfectly correct subproblem solve that "the implicit solve will be wrong",
+        # once per operator per rank, which is both false for them and loud enough to
+        # bury real diagnostics. `_note_identity_approximation!` stashes the operator
+        # name; `_get_problem_matrix` warns only when the matrix is actually handed out.
+        _note_identity_approximation!(string(nameof(typeof(expr))))
     end
     inner = build_expression_matrix_block(expr.operand, var, eqn_size, var_size)
     return scale == 1.0 ? inner : ComplexF64(scale) * inner

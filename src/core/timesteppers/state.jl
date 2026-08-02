@@ -375,8 +375,31 @@ function _get_problem_matrix(problem::Problem, key::AbstractString)::Union{Nothi
         throw(ArgumentError("Unknown compiled problem matrix key: $key_str"))
     end
     matrix === nothing && return nothing
+    _warn_identity_approximated_matrix(problem, key_str)
     result = _ensure_cpu_matrix!(problem, key_str, matrix)
     return result isa AbstractMatrix ? result : nothing
+end
+
+"""Warn when a global matrix that folded an operator in as identity is handed out.
+
+The spectral builder has no matrix for several operators (`Lift`, `Laplacian`,
+`Gradient`, `Divergence`, …) and approximates them as identity-on-operand, which makes
+the global L/M wrong for those terms. It used to warn while BUILDING — but the global
+matrices are built for every problem and then discarded whenever per-mode subproblems
+exist, which is the usual case for anything with a Chebyshev direction. Users running a
+perfectly correct subproblem solve were told, once per operator per rank, that "the
+implicit solve will be wrong".
+
+Warning here instead means it fires only when a caller actually takes the matrix."""
+function _warn_identity_approximated_matrix(problem::Problem, key_str::AbstractString)
+    ops = compiled_problem(problem).identity_approx_ops
+    isempty(ops) && return nothing
+    @warn "Implicit global matrix ($key_str) folded in operator(s) $(join(ops, ", ")) as " *
+          "IDENTITY-on-operand, because the spectral builder has no matrix for them. Any " *
+          "implicit solve using this matrix is wrong for those terms. The per-subproblem " *
+          "path does not use this matrix and is unaffected; reaching here means the solve " *
+          "fell back to the global path." maxlog=3
+    return nothing
 end
 
 function _ensure_cpu_matrix!(problem::Problem, key::String, matrix)
