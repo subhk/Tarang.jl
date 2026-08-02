@@ -37,29 +37,57 @@ root cause below.
 
 ## Root cause
 
-`is_space_dependent` (`src/core/boundary_conditions/construction.jl:46`) recognises
-only `String`, `SpaceDependentValue`, `TimeSpaceDependentValue` and `FieldReference`.
-An operator expression tree over fields matches none of them, so:
+**Corrected after a second pass — the first version of this document had this wrong,
+and the correction changes where the fix belongs.**
 
-1. the BC is never added to `manager.space_dependent_bcs`;
-2. the spatial evaluation pipeline never runs for it, so nothing populates
-   `cache.spatial_values`;
-3. `_lift_bc_value_into_eq_data!` (`src/core/solvers/solver_types.jl:~805`) gets
-   `value === nothing` from both the time and spatial caches and returns early,
-   leaving the raw expression tree in `eq_data["F"]`;
-4. that tree reaches `_evaluate_alg_F` (`src/core/subsystems/subproblem_rhs.jl:45`),
-   which handles `Nothing`/`ZeroOperator`/`ConstantOperator`/`Number`/`ArrayOperator`
-   and compound constants — and warns-and-zeroes everything else.
+`BCValueType` (`src/core/boundary_conditions/types.jl:146`) does not include operator
+trees:
 
-The warning at step 4 is the symptom. The gap is at step 1.
+```julia
+const BCValueType = Union{Real, String, Function, FieldReference,
+                          TimeDependentValue, SpaceDependentValue, TimeSpaceDependentValue}
+```
 
-## Why the obvious fix is the wrong one
+So `add_bc!(prob, "b(z=0) = h*w + q")` stores the **string** `"h*w + q"` on the BC. The
+operator tree in the warning is built later, when the BC is lowered into an equation,
+and lands in `eq_data["F"]`.
 
-Extending `_evaluate_alg_F` looks natural and is not viable: it receives only
-`(expr, sp)`. It has no boundary coordinate and no position, so it cannot know
-*where* to evaluate the expression. Threading those through is possible but solves
-the problem in the wrong layer — by then the per-step refresh machinery has already
-been bypassed, and a BC over evolving fields must be re-evaluated every step.
+That rules out the fix this document originally proposed. `is_space_dependent`
+(`construction.jl:46`) tests a string's free symbols against `_BC_SPACE_SYMBOLS`
+(`x`, `y`, `z`, `r`, `theta`, `phi`). For `"h*w + q"` the free symbols are `h`, `w`, `q`
+— none is a coordinate, so it is correctly not "space dependent" in that sense, and
+the function has no namespace with which to discover that those names resolve to
+field-valued parameters. Making it namespace-aware would push problem state into BC
+construction, which runs before the namespace is necessarily complete.
+
+The chain is therefore:
+
+1. `add_bc!` stores the string; the BC is neither time- nor space-dependent by the
+   existing tests, so it joins neither `time_dependent_bcs` nor `space_dependent_bcs`;
+2. BC→equation lowering parses the string against the namespace, producing
+   `AddOperator{MultiplyOperator{ScalarField, ScalarField}, ScalarField}` in
+   `eq_data["F"]`;
+3. `_lift_bc_value_into_eq_data!` finds nothing in either cache and returns early,
+   leaving that tree in place;
+4. `_evaluate_alg_F` (`subproblem_rhs.jl:45`) does not recognise it, warns, and
+   returns zero.
+
+**The fix belongs at step 2** — the BC→equation lowering, the one place where both the
+BC object (carrying `coordinate` and `position`) and the resolved expression tree are
+in scope at once. Neither `is_space_dependent` (string only, no namespace) nor
+`_evaluate_alg_F` (tree only, no coordinate or position) can see both.
+
+## Verified along the way
+
+* An expression built directly in Julia — `a*b + c` over `ScalarField`s — **evaluates
+  eagerly to a `ScalarField`**; it never becomes a tree. Only the string form produces
+  one. Both must be handled, and they arrive by different routes.
+* `evaluate_solver_expression(expr, Operand[]; layout = :g)` collapses such a tree to a
+  `ScalarField` correctly with an EMPTY variables vector, because the leaves are
+  already concrete field objects. Measured against the analytic value: exact.
+
+That second point is what makes the remaining work tractable: evaluation is solved,
+and what is left is the boundary slice plus the MPI gather.
 
 ## Design
 
@@ -70,15 +98,17 @@ array and already refreshes per step via `_drop_spatial_cache_entries!`.
 
 Three pieces:
 
-### 1. Recognise the value
+### 1. Recognise the value, at lowering time
 
-`is_space_dependent(value)` returns `true` when `value` is an operator expression
-whose tree references at least one `ScalarField`/`VectorField`. Such a BC must also
-report `is_time_dependent == true` — the referenced fields evolve, so a value cached
-against `(bc_index, time)` must not be reused across steps.
-
-Reuse `_detect_equation_variables` (already used by `_references_variable` in
+At BC→equation lowering, after the string has been parsed against the namespace, test
+whether the resulting tree references a `ScalarField`/`VectorField`. Reuse
+`_detect_equation_variables` (already used by `_references_variable` in
 `problem_matrices_spectral.jl`) rather than writing a new tree walk.
+
+A BC that does must be registered as **both** space- and time-dependent, so its cached
+value is keyed by time and re-evaluated every step: the referenced fields evolve, and a
+value cached once would pin the boundary to its first-step value — a bug that a
+single-step test would not catch.
 
 ### 2. Evaluate to a global boundary plane
 
