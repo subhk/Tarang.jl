@@ -60,11 +60,23 @@ function build_matrices!(sp::Subproblem, names, solver)
                                 if !isempty(block_rows) && (maximum(block_rows) > eqn_size || maximum(block_cols) > var_size)
                                     var_name = hasfield(typeof(var), :name) ? var.name : "?"
                                     eq_str = get(eq_data, "equation_string", "?")
-                                    @error "Block size mismatch in eq$eq_idx($name_str) × var$var_idx($var_name): " *
-                                           "block=$(size(block)), expected rows≤$eqn_size cols≤$var_size, " *
-                                           "actual max_row=$(maximum(block_rows)) max_col=$(maximum(block_cols)). " *
-                                           "Equation: $eq_str"
-                                    continue  # skip this block to avoid crash
+                                    # This USED TO `@error` and `continue`, "to avoid a
+                                    # crash". Skipping the block drops an entire
+                                    # equation×variable coupling out of the operator and
+                                    # then solves the remaining system, returning a
+                                    # confident wrong answer — a pure-Fourier Poisson LBVP
+                                    # came back as exactly zero this way, with the @error
+                                    # buried in the log. A crash is the correct outcome: a
+                                    # block that does not fit its slot means the operator
+                                    # cannot be assembled, and no answer derived from a
+                                    # truncated operator is worth returning.
+                                    error("Block size mismatch in eq$eq_idx($name_str) × var$var_idx($var_name): " *
+                                          "block=$(size(block)), expected rows≤$eqn_size cols≤$var_size, " *
+                                          "actual max_row=$(maximum(block_rows)) max_col=$(maximum(block_cols)). " *
+                                          "Equation: $eq_str. " *
+                                          "The operator cannot be assembled, so no solve is attempted. " *
+                                          "A point boundary condition on a periodic (Fourier) axis is one way to " *
+                                          "reach this: a periodic direction has no boundary to place a tau row on.")
                                 end
                                 append!(data, block_vals)
                                 append!(rows, i0 .+ block_rows)

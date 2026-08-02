@@ -281,6 +281,34 @@ end
 
 # Per-Fourier-mode steady solve: assemble each subproblem RHS (PDE forcing via
 # gather_eqn_F!, BC rows via gather_alg_F!/apply_bc_override!), solve, scatter.
+"""
+    _bvp_bulk_target_vars(state) -> Vector{Int}
+
+Indices of the state fields a steady BVP may use as forcing containers, one per
+bulk PDE equation.
+
+The containers only need to be DISTINCT and of the bulk shape — `gather_eqn_F!`
+places each one onto its own equation's rows, so the container's variable identity
+is irrelevant. For a coupled (Fourier×Chebyshev) problem the non-Fourier variables
+are the natural choice: they carry the coupled dimension, and picking them keeps a
+multi-field system from collapsing every equation's RHS onto one slot.
+
+A PURE-FOURIER problem has no non-Fourier variable, and selecting on that alone
+returned an empty list — so no equation got a target, no forcing was ever gathered,
+and `Δu = f` solved to exactly zero with no error and no warning, for a field, a
+scaled field, a sum, or a negation alike. Only a bare numeric literal survived,
+because it takes a different branch. Fall back to the spatial state fields, which
+already have the bulk shape.
+
+Zero-dimensional tau variables are excluded: they carry no spatial data and are not
+valid forcing containers.
+"""
+function _bvp_bulk_target_vars(state::Vector{<:ScalarField})
+    coupled = findall(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    isempty(coupled) || return coupled
+    return findall(f -> !isempty(f.bases), state)
+end
+
 function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
     problem = solver.problem
     state = solver.state
@@ -302,7 +330,7 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
     # containers of the right shape. The container's variable identity is
     # irrelevant — gather_eqn_F! places pde_F[ti] onto THIS equation's rows — only
     # distinctness + shape matter. Single-field problems map to the same one var.
-    coupled_vars = findall(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    bulk_vars = _bvp_bulk_target_vars(state)
     eqn_sizes = _subproblem_eqn_sizes(sps[1])
     maxsz = isempty(eqn_sizes) ? 0 : maximum(eqn_sizes)
 
@@ -311,9 +339,9 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
     bulk_seen = 0
     for (eq_idx, eq_data) in enumerate(problem.equation_data)
         es = eq_idx <= length(eqn_sizes) ? eqn_sizes[eq_idx] : 0
-        if es == maxsz && es > 1 && !isempty(coupled_vars)
+        if es == maxsz && es > 1 && !isempty(bulk_vars)
             bulk_seen += 1
-            ti = coupled_vars[min(bulk_seen, length(coupled_vars))]
+            ti = bulk_vars[min(bulk_seen, length(bulk_vars))]
             bvp_targets[eq_idx] = [ti]
             F_expr = get(eq_data, "F_expr", nothing)
             F_expr === nothing && (F_expr = get(eq_data, "F", nothing))
@@ -402,16 +430,16 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
     # Distinct forcing container per bulk equation (see solve_linear! above): map
     # the k-th bulk PDE equation to the k-th coupled variable so a coupled
     # multi-field system does not collapse every equation's RHS onto one slot.
-    coupled_vars = findall(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    bulk_vars = _bvp_bulk_target_vars(state)
     eqn_sizes = _subproblem_eqn_sizes(sps[1])
     maxsz = isempty(eqn_sizes) ? 0 : maximum(eqn_sizes)
     bvp_targets = Vector{Vector{Int}}(undef, length(eqd))
     bulk_seen = 0
     for i in eachindex(eqd)
         es = i <= length(eqn_sizes) ? eqn_sizes[i] : 0
-        if es == maxsz && es > 1 && !isempty(coupled_vars)
+        if es == maxsz && es > 1 && !isempty(bulk_vars)
             bulk_seen += 1
-            bvp_targets[i] = [coupled_vars[min(bulk_seen, length(coupled_vars))]]
+            bvp_targets[i] = [bulk_vars[min(bulk_seen, length(bulk_vars))]]
         else
             bvp_targets[i] = Int[]
         end
