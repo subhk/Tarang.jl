@@ -142,3 +142,35 @@ end
     pure = ScalarField(Domain(dist, (xb, RealFourier(coords["z"]; size = 8, bounds = (0.0, 2π)))), "w")
     @test Tarang._bvp_bulk_target_vars([pure, tau]) == [1]
 end
+
+@testset "The global forcing vector refuses a non-constant RHS instead of zeroing it" begin
+    # `build_forcing_vector` can only place a scalar per equation block: any RHS that
+    # is not a ConstantOperator is written as ZERO. A solve that consumes that vector
+    # is wrong by exactly the dropped forcing, and zero is a plausible-looking answer.
+    # The predicate that drives the guard is checked directly, because the solve path
+    # that consumes the vector is only reached when no per-mode subproblems exist.
+    domain = PeriodicDomain(8)
+
+    # Constant RHS: nothing dropped, the global vector can carry it.
+    u1 = ScalarField(domain, "u")
+    p1 = LBVP([u1])
+    add_equation!(p1, "lap(u) = 3.0")
+    add_bc!(p1, "u(x=0) = 0")
+    Tarang.build_matrix_expressions!(p1)
+    @test isempty(Tarang._global_forcing_dropped_equations(p1))
+
+    # Field-valued RHS: dropped, so the guard must name that equation.
+    u2 = ScalarField(domain, "u")
+    f2 = ScalarField(domain, "f"); set!(f2, (x,) -> sin(x))
+    p2 = LBVP([u2])
+    add_parameters!(p2, f = f2)
+    add_equation!(p2, "lap(u) = f")
+    add_bc!(p2, "u(x=0) = 0")
+    Tarang.build_matrix_expressions!(p2)
+    @test !isempty(Tarang._global_forcing_dropped_equations(p2))
+
+    # And the vector really is zero there — the reason the guard exists.
+    eqn_sizes = [8 for _ in p2.equation_data]
+    Fv = Tarang.build_forcing_vector(p2, eqn_sizes, 8 * length(p2.equation_data))
+    @test all(iszero, Fv)
+end

@@ -305,8 +305,17 @@ function _vector_components(expr)
         isa(expr, NegateOperator) && return [-c for c in inner]
         isa(expr, Lift)           && return [Lift(c, expr.basis, expr.n) for c in inner]
         isa(expr, Differentiate)  && return [Differentiate(c, expr.coord, expr.order) for c in inner]
-        # Generic: try wrapping each component
-        return try [typeof(expr)(c) for c in inner] catch; nothing end
+        # Generic: try wrapping each component. An operator whose constructor does not
+        # accept a single component declines with MethodError (or ArgumentError for a
+        # rejected argument), and the caller then treats the expression as
+        # non-decomposable. Any other exception comes from building a component that
+        # WAS accepted, and must surface rather than reading as "not a vector".
+        return try
+            [typeof(expr)(c) for c in inner]
+        catch err
+            err isa Union{MethodError, ArgumentError} || rethrow()
+            nothing
+        end
     end
 
     # Future types (Add, Multiply, Negate, etc.)

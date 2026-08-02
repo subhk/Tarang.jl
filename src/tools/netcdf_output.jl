@@ -162,6 +162,27 @@ function create_empty_netcdf4_file!(filename::String)
     return nothing
 end
 
+"""
+    _netcdf_absence(err) -> Bool
+
+True when `err` means a NetCDF lookup found no such file, group, or variable —
+as opposed to a real failure while reading one.
+
+NetCDF.jl is inconsistent about this: the C-API wrappers raise a typed
+`NetCDF.NetCDFError`, but its higher-level readers raise an untyped
+`ErrorException` via `error("NetCDF file ... does not have a variable named ...")`.
+A type test alone therefore cannot express "absent", which is why this predicate
+also matches that message. Every caller that treats absence as an expected miss
+goes through here, so the string match lives in exactly one place and re-raises
+anything it does not recognise.
+"""
+function _netcdf_absence(err)
+    err isa NetCDF.NetCDFError && return true
+    err isa ErrorException || return false
+    return occursin("does not have a variable named", err.msg) ||
+           occursin("does not have a dimension named", err.msg)
+end
+
 function with_netcdf_file(filename::String, mode::Integer, f::Function)
     ncid = Int32[0]
     NetCDF.nc_open(filename, mode, ncid)
@@ -177,8 +198,10 @@ with_netcdf_file(f::Function, filename::String, mode::Integer) = with_netcdf_fil
 function enter_define_mode!(ncid::Integer)
     try
         NetCDF.nc_redef(ncid)
-    catch
-        # Already in define mode.
+    catch err
+        # NC_EINDEFINE simply means the file is already in define mode, which is the
+        # whole point of the probe. Any other NetCDF failure is real.
+        err isa NetCDF.NetCDFError || rethrow()
     end
     return nothing
 end
@@ -189,7 +212,10 @@ function group_id(ncid::Integer, group::String; create::Bool=false)
     gid = Int32[0]
     try
         NetCDF.nc_inq_grp_ncid(ncid, group, gid)
-    catch
+    catch err
+        # "no such group" is the expected miss; a different NetCDF fault, or any
+        # non-NetCDF exception, must not be mistaken for an absent group.
+        err isa NetCDF.NetCDFError || rethrow()
         create || rethrow()
         NetCDF.nc_def_grp(ncid, group, gid)
     end
@@ -200,7 +226,9 @@ function root_dim_id(ncid::Integer, dim_name::String, dim_len)
     dimid = Int32[0]
     try
         NetCDF.nc_inq_dimid(ncid, dim_name, dimid)
-    catch
+    catch err
+        # "no such dimension" is the expected miss and means we define it here.
+        err isa NetCDF.NetCDFError || rethrow()
         len = dim_len == Inf ? NetCDF.NC_UNLIMITED : Csize_t(dim_len)
         NetCDF.nc_def_dim(ncid, dim_name, len, dimid)
     end
@@ -221,7 +249,10 @@ function group_var_exists(filename::String, group::String, var_name::String)
             group_var_id(ncid, group, var_name)
         end
         return true
-    catch
+    catch err
+        # A missing file, group or variable answers "no". A non-NetCDF exception is a
+        # real fault and must not be reported as absence.
+        _netcdf_absence(err) || rethrow()
         return false
     end
 end
@@ -265,7 +296,8 @@ function group_nccreate(filename::String, group::String, var_name::String, dims.
         varid = Int32[0]
         try
             NetCDF.nc_inq_varid(gid, var_name, varid)
-        catch
+        catch err
+            err isa NetCDF.NetCDFError || rethrow()
             exists = false
         end
 
@@ -413,7 +445,10 @@ function group_variable_names(filename::String, group::String)
             end
             return names
         end
-    catch
+    catch err
+        # A file or group that cannot be opened has no variables to list. Anything
+        # other than a NetCDF failure is real.
+        err isa NetCDF.NetCDFError || rethrow()
         return String[]
     end
 end
@@ -708,11 +743,10 @@ function parse_field_expression(expr_str::String, vars::Dict, dist)
     end
 
     # Handle numeric literals
-    try
-        num_val = parse(Float64, expr_str)
-        return ConstantOperator(num_val)
-    catch
-        # Not a number, continue parsing
+    # `tryparse` returns nothing instead of throwing, so a non-numeric string falls
+    # through to the parsing below with no handler that could swallow a real fault.
+    let num_val = tryparse(Float64, expr_str)
+        num_val === nothing || return ConstantOperator(num_val)
     end
 
     # Handle zero

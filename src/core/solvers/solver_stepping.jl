@@ -251,6 +251,21 @@ function solve_linear!(solver::BoundaryValueSolver)
     gpu_state && error(
         "GPU linear boundary-value solve has no device-native subproblem path; " *
         "CPU fallback is disabled.")
+
+    # From here the solve consumes the GLOBAL forcing vector, which can only carry a
+    # scalar per equation block: `build_forcing_vector` writes zero for any RHS that
+    # is not a bare constant. Solving with that vector returns an answer wrong by
+    # exactly the dropped forcing, and a zero looks like a legitimate result — so
+    # refuse rather than return it.
+    dropped = _global_forcing_dropped_equations(solver.problem)
+    isempty(dropped) || error(
+        "Linear BVP: the right-hand side of equation(s) $(join(dropped, ", ")) is not a " *
+        "constant, and this solve has no per-mode subproblems, so it would use the " *
+        "global forcing vector — which carries only constants and writes every other " *
+        "RHS as zero. The result would be wrong by exactly that forcing, with no " *
+        "error. A field- or expression-valued RHS needs the per-subproblem path, " *
+        "which requires a coupled (non-Fourier) direction such as a Chebyshev axis.")
+
     if solver.global_solver !== nothing
         return MatSolvers.solve(solver.global_solver, solver.F_vector)
     end

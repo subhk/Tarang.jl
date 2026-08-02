@@ -118,11 +118,14 @@ function subproblem_matrix(op::Divergence, sp; kwargs...)
 
     ndim = coordsys.dim
     field_size = subproblem_field_size(sp, field)
-    input_size = try
-        _subproblem_expr_dofs(sp, op.operand)
-    catch
-        field_size
-    end
+    # `_subproblem_expr_dofs` is total: every branch returns, and the fallthrough
+    # yields 0. It has no expected failure mode, so an exception from it is a real
+    # bug — and substituting `field_size` here is not harmless, because `input_size`
+    # selects which `block_size` branch below is taken. A wrong branch yields a
+    # differentiation matrix of the wrong size, which then either fails to fit its
+    # slot during assembly or, worse, fits a different one. Surface the original
+    # cause instead of guessing a size.
+    input_size = _subproblem_expr_dofs(sp, op.operand)
 
     # Vector divergence: div(u) maps (dim * Nz) -> Nz.
     # Tensor divergence: div(grad(u)) maps (dim * Nu) -> Nu where Nu = dim * Nz.

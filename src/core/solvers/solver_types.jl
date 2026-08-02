@@ -657,6 +657,24 @@ function _merge_boundary_conditions!(problem::Problem)
     @debug "Merged $(length(problem.boundary_conditions)) BCs into equations (total: $(length(problem.equations)))"
 end
 
+"""Parse a BC string in either Dirichlet or Neumann form, or `nothing` if it is neither.
+
+Both parsers raise `ArgumentError` for a string not in their form — that is the
+expected miss here, since this helper exists precisely to ask "which form is this?".
+Any other exception is a fault inside a parser and is re-raised, so a broken parser
+cannot masquerade as an unrecognised BC and silently make two different boundary
+conditions compare equal."""
+function _try_parse_bc_string(s::AbstractString)
+    for parser in (parse_bc_string, parse_neumann_bc_string)
+        try
+            return parser(String(s))
+        catch err
+            err isa ArgumentError || rethrow()
+        end
+    end
+    return nothing
+end
+
 """
     _bc_strings_equivalent(a, b) -> Bool
 
@@ -683,16 +701,8 @@ function _bc_strings_equivalent(a::AbstractString, b::AbstractString)
     sb = replace(b, r"\s+" => "")
     sa == sb && return true
     # Structured comparison via the BC string parser.
-    pa = try
-        parse_bc_string(a)
-    catch
-        try; parse_neumann_bc_string(a); catch; nothing; end
-    end
-    pb = try
-        parse_bc_string(b)
-    catch
-        try; parse_neumann_bc_string(b); catch; nothing; end
-    end
+    pa = _try_parse_bc_string(a)
+    pb = _try_parse_bc_string(b)
     (pa === nothing || pb === nothing) && return false
     # Tuple layout: (field_name, coordinate, position, value)
     pa[1] == pb[1] || return false

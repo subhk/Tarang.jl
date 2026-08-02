@@ -1003,7 +1003,11 @@ function evaluate_parsed_expression(expr, namespace::Dict{String, Any})
             # Try built-in Julia functions/constants
             try
                 return eval(expr)
-            catch
+            catch err
+                # An unbound name is the expected miss and becomes an UnknownOperator
+                # placeholder. An error raised BY a bound symbol is a real failure and
+                # must not be disguised as an unknown variable.
+                err isa UndefVarError || rethrow()
                 @warn "Unknown variable: $var_name"
                 return UnknownOperator(var_name)
             end
@@ -1352,12 +1356,11 @@ function fallback_parse_expression(expr_str::AbstractString, namespace::Dict{Str
         return namespace[expr_str]
     end
     
-    # Handle simple numeric constants
-    try
-        val = parse(Float64, expr_str)
-        return ConstantOperator(val)
-    catch
-        # Continue with pattern matching
+    # Handle simple numeric constants. `tryparse` returns nothing rather than
+    # throwing, so a non-numeric string falls through to pattern matching without
+    # an exception handler that could also swallow a real fault.
+    let val = tryparse(Float64, expr_str)
+        val === nothing || return ConstantOperator(val)
     end
     
     # Pattern-based parsing for common PDE operators (as fallback)
@@ -1557,8 +1560,10 @@ function _find_coordinate_for_field(field::Operand, coord_name::String, namespac
             if hasfield(typeof(dist), :coordsys)
                 try
                     return dist.coordsys[coord_name]
-                catch
-                    # Coordinate not found in coordsys
+                catch err
+                    # A missing coordinate is the expected miss; anything else is a
+                    # fault in the coordinate system and must not read as "not found".
+                    err isa Union{KeyError, BoundsError, ArgumentError} || rethrow()
                 end
             end
         end
@@ -1582,8 +1587,8 @@ function _find_coordinate_for_field(field::Operand, coord_name::String, namespac
                         # Try subscript access
                         try
                             return coordsys[coord_name]
-                        catch
-                            # Not found
+                        catch err
+                            err isa Union{KeyError, BoundsError, ArgumentError} || rethrow()
                         end
                     end
                 end

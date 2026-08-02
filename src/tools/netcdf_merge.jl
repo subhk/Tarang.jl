@@ -256,9 +256,13 @@ function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String,
     covered = falses(0)
 
     for file in merger.processor_files
+        # A processor file that does not carry this coordinate is skipped; that is
+        # the expected miss. A non-NetCDF exception is a real fault and must not be
+        # silently turned into "this file contributes nothing".
         coord_data = try
             read_netcdf_variable(file, coord_var)
-        catch
+        catch err
+            _netcdf_absence(err) || rethrow()
             continue
         end
 
@@ -273,7 +277,8 @@ function reconstruct_spatial_coordinate(merger::NetCDFMerger, coord_var::String,
 
         data_shape = try
             size(read_netcdf_variable(file, source_var))
-        catch
+        catch err
+            _netcdf_absence(err) || rethrow()
             continue
         end
         global_shape = normalize_global_shape(get(var_info.atts, "global_shape", nothing), data_shape)
@@ -348,8 +353,9 @@ function analyze_processor_files(merger::NetCDFMerger)
         try
             data = read_netcdf_variable(first_file, coord)
             time_info[coord] = length(data)
-        catch
-            # Coordinate doesn't exist
+        catch err
+            # An absent coordinate has length 0; any other failure is real.
+            _netcdf_absence(err) || rethrow()
             time_info[coord] = 0
         end
     end
@@ -438,7 +444,8 @@ function merge_spatial_coordinates!(merger::NetCDFMerger, output_file::String, f
                 try
                     coord_data = read_netcdf_variable(file, coord_var)
                     break
-                catch
+                catch err
+                    _netcdf_absence(err) || rethrow()
                     continue
                 end
             end
@@ -484,7 +491,9 @@ function ensure_processor_coordinate!(output_file::String, n_procs::Int)
     try
         read_netcdf_variable(output_file, "processor", start=[1], count=[1])
         exists = true
-    catch
+    catch err
+        # Absence is the answer being probed for; anything else is a real fault.
+        _netcdf_absence(err) || rethrow()
         exists = false
     end
 
@@ -773,8 +782,13 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
                         reconstructed_data[origin_slices...] = data
                         coverage_mask[origin_slices...] .= true
                     end
-                catch
-                    merger.verbose && println("        Could not place data from $(basename(proc_info["file"]))")
+                catch err2
+                    # Last-resort overlay: a shape mismatch (DimensionMismatch /
+                    # BoundsError) means this slab genuinely does not fit at the origin
+                    # and the coverage check downstream reports the gap. Anything else
+                    # is a real fault — do not let it read as "could not place".
+                    err2 isa Union{DimensionMismatch, BoundsError} || rethrow()
+                    merger.verbose && println("        Could not place data from $(basename(proc_info["file"])): $err2")
                 end
             end
         else

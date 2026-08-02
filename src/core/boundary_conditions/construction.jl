@@ -16,9 +16,14 @@ function _bc_free_symbols(s::AbstractString)
     walk(n) = n isa Symbol ? push!(syms, n) :
               n isa Expr ? (n.head === :call ? foreach(walk, @view n.args[2:end]) :
                                                foreach(walk, n.args)) : nothing
+    # A BC value that is not parseable Julia contributes no free symbols; that is the
+    # expected miss (`Meta.parse` raises Meta.ParseError). Anything else is a fault in
+    # the walker itself and must not silently yield an empty symbol set — an empty set
+    # reads as "this BC depends on nothing", which would drop a space/time dependence.
     try
         walk(Meta.parse(String(s)))
-    catch
+    catch err
+        err isa Base.Meta.ParseError || rethrow()
     end
     return syms
 end

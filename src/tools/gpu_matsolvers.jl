@@ -494,7 +494,11 @@ function _build_cusolver_rf(matrix::SparseMatrixCSC{Float64,Int32}; tol::Real=1e
     finalizer(rf) do _
         try
             _cusolver().cusolverRfDestroy(handle)
-        catch
+        catch err
+            # A finalizer must never throw — an exception here would be raised on an
+            # arbitrary task during GC. Record the leak instead of discarding it
+            # silently; a cuSOLVER handle that will not destroy is worth knowing about.
+            @debug "cusolverRfDestroy failed in finalizer; handle may leak" exception = err
         end
     end
     return rf

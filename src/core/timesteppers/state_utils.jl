@@ -721,7 +721,12 @@ function _matched_forcing_view(forcing, target_size)
             slices = ntuple(d -> 1:min(size(F, d), tsize[d]), ndims(F))
             return view(F, slices...)
         end
-    catch
+    catch err
+        # An array that cannot be viewed with these slices declines with BoundsError,
+        # DimensionMismatch or MethodError, and the caller then treats the forcing as
+        # unmatched. Any other exception is a real fault and must not be turned into a
+        # silent `nothing`, which would drop the forcing term entirely.
+        err isa Union{BoundsError, DimensionMismatch, MethodError} || rethrow()
         return nothing
     end
 

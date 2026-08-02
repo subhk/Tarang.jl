@@ -459,10 +459,10 @@ function _evaluate_string_expression(expr::String, current_time, coords)
     end
 
     # Try to parse as a simple number
-    try
-        return parse(Float64, stripped)
-    catch
-        # Continue with expression parsing
+    # `tryparse` returns nothing rather than throwing, so a symbolic BC value falls
+    # through to expression parsing with no handler that could mask a real fault.
+    let simple = tryparse(Float64, stripped)
+        simple === nothing || return simple
     end
 
     # Build variable substitution dictionary
