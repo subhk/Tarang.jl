@@ -28,7 +28,8 @@ execution:
 
 | Solver | Type | Best For |
 |--------|------|----------|
-| `:sparse` (default) | CPU sparse LU | Small-medium sparse systems |
+| `:auto` (default) | Per architecture | CPU state -> `:sparse`; GPU state -> `:cuda_sparse` |
+| `:sparse` | CPU sparse LU | Small-medium sparse systems |
 | `:dense` | CPU dense LU | Small dense systems |
 | `:cuda_cg` | GPU iterative CG | Large SPD systems |
 | `:cuda_gmres` | GPU iterative GMRES | Large non-symmetric systems |
@@ -46,8 +47,10 @@ domain = Domain(bases..., architecture=GPU())
 problem = IVP([eq1, eq2, eq3], namespace=namespace)
 solver = InitialValueSolver(problem, RK443(); dt=0.001)
 
-# GPU LBVP fields require a GPU linear solve
-solver = BoundaryValueSolver(problem; matsolver=:cuda_cg)
+# GPU LBVP fields select a GPU sparse solve automatically, as an IVP does.
+# Passing a CPU-only solver explicitly is still rejected rather than silently honoured.
+solver = BoundaryValueSolver(problem)
+solver = BoundaryValueSolver(problem; matsolver=:cuda_cg)   # or choose one
 
 # :hybrid is normalized to a strict CUDA sparse solve for GPU fields
 solver = BoundaryValueSolver(problem; matsolver=:hybrid)
@@ -409,10 +412,12 @@ function _hybrid_matsolver_choice(choice)
            key === HybridSolver || (key isa Type && key <: HybridSolver)
 end
 
+"""Is this matsolver choice the architecture-dispatched `:auto`?"""
+_matsolver_is_auto(choice) =
+    (choice isa Symbol || choice isa AbstractString) && lowercase(String(choice)) == "auto"
+
 function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
-    auto = (choice isa Symbol || choice isa AbstractString) &&
-           lowercase(String(choice)) == "auto"
-    if auto
+    if _matsolver_is_auto(choice)
         return gpu && coupled ? :cuda_sparse : :sparse
     end
 
@@ -854,7 +859,7 @@ _solver_type(choice) = choice isa Tuple ? choice[1] : choice
 
 function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
                                       device::String="cpu",
-                                      matsolver::Union{String,Symbol,Type}=:sparse,
+                                      matsolver::Union{String,Symbol,Type}=:auto,
                                       solver_type::Union{Nothing, String, Symbol}=nothing,
                                       tolerance::Real=1e-10,
                                       max_iterations::Int=100)
@@ -869,8 +874,20 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     state = collect_state_fields(problem.variables)
     solver_choice = solver_type === nothing ? matsolver : solver_type
     has_gpu_state = any(_field_uses_gpu, state)
-    selected_matsolver = has_gpu_state ?
-        _select_ivp_matsolver(solver_choice, true, true) : solver_choice
+    # `:auto` resolves per architecture, exactly as it does for an IVP. Without this
+    # the BVP default (:sparse) reached `_select_ivp_matsolver(:sparse, true, true)` on
+    # any GPU state and was rejected as a CPU-only solver — so a GPU BVP could not be
+    # constructed with default arguments at all, and the refusal advised "leave
+    # matsolver=:auto", which was not the BVP default. Only `:auto` is intercepted
+    # here; every other CPU choice is still passed through untouched, so existing
+    # string/Type arguments keep reaching SolverBaseData exactly as before.
+    selected_matsolver = if has_gpu_state
+        _select_ivp_matsolver(solver_choice, true, true)
+    elseif _matsolver_is_auto(solver_choice)
+        :sparse
+    else
+        solver_choice
+    end
     base = SolverBaseData(problem; matsolver=selected_matsolver)
 
     L, M, F = build_matrices(problem)
