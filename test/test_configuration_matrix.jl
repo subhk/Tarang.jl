@@ -188,6 +188,86 @@ function _lbvp_cheb_fourier_ordered(; cheb_first::Bool, tau_per_mode::Bool,
     return Array(get_grid_data(u)), expected
 end
 
+
+"""3D pure-Fourier IVP: u₀ = sin(x)cos(y)sin(z), decays at e^{-3κt}.
+
+Three Fourier axes is the case a 1D or 2D cell cannot reach: the transform chain,
+the wavenumber grid and the dealiasing all index differently once a third axis
+exists, and a bug there is invisible below 3D."""
+function _ivp_fourier_3d(stepper; N = 8, κ = 0.1, tfinal = 0.2, dt = 0.005)
+    coords = CartesianCoordinates("x", "y", "z")
+    dist = Distributor(coords; dtype = Float64, architecture = CPU())
+    bases = (RealFourier(coords["x"]; size = N, bounds = (0.0, 2π)),
+             RealFourier(coords["y"]; size = N, bounds = (0.0, 2π)),
+             RealFourier(coords["z"]; size = N, bounds = (0.0, 2π)))
+    domain = Domain(dist, bases)
+    u = ScalarField(domain, "u"); set!(u, (x, y, z) -> sin(x) * cos(y) * sin(z))
+    prob = IVP([u]); add_parameters!(prob, kappa = κ)
+    add_equation!(prob, "dt(u) = kappa*lap(u)")
+    solver = InitialValueSolver(prob, stepper; dt)
+    for _ in 1:round(Int, tfinal / dt); step!(solver, dt); end
+    f = solver.state[1]; ensure_layout!(f, :g)
+    g = [2π * (i - 1) / N for i in 1:N]
+    return real.(Array(get_grid_data(f))),
+           [sin(x) * cos(y) * sin(z) * exp(-3κ * tfinal) for x in g, y in g, z in g]
+end
+
+"""1D pure-Chebyshev IVP with a tau/lift formulation: u = sin(πz)e^{-κπ²t}.
+
+A COUPLED direction with no Fourier axis at all. Every other IVP cell has at least
+one separable axis, so this is the only one exercising the per-mode machinery with
+a single mode."""
+function _ivp_cheb_1d(stepper; Nz = 24, κ = 0.05, tfinal = 0.1, dt = 0.002)
+    coords = CartesianCoordinates("z")
+    dist = Distributor(coords; dtype = Float64, architecture = CPU())
+    zb = ChebyshevT(coords["z"]; size = Nz, bounds = (0.0, 1.0))
+    domain = Domain(dist, (zb,))
+    b = ScalarField(domain, "b"); set!(b, (z,) -> sin(π * z))
+    tau1 = ScalarField(dist, "tau1", (), Float64)
+    tau2 = ScalarField(dist, "tau2", (), Float64)
+    lb = derivative_basis(zb, 1); tau_lift(A) = lift(A, lb, -1)
+    prob = IVP([b, tau1, tau2])
+    add_parameters!(prob, kappa = κ, tau_lift = tau_lift)
+    add_equation!(prob, "dt(b) - kappa*lap(b) + tau_lift(tau1) + tau_lift(tau2) = 0")
+    add_bc!(prob, "b(z=0) = 0"); add_bc!(prob, "b(z=1) = 0")
+    solver = InitialValueSolver(prob, stepper; dt)
+    for _ in 1:round(Int, tfinal / dt); step!(solver, dt); end
+    f = solver.state[1]; ensure_layout!(f, :g)
+    zs = [0.5 * (1 - cos(π * (k - 1) / (Nz - 1))) for k in 1:Nz]
+    return real.(Array(get_grid_data(f))), sin.(π .* zs) .* exp(-κ * π^2 * tfinal)
+end
+
+"""Fourier×Chebyshev IVP with tau/lift: u = sin(πz)cos(x)e^{-κ(π²+1)t}.
+
+The production geometry — a separable axis plus a coupled one — driven as an
+INITIAL-value problem. The existing coupled cell is a steady BVP, so the per-mode
+timestepping path was uncovered."""
+function _ivp_fourier_cheb(stepper; Nx = 8, Nz = 20, κ = 0.05, tfinal = 0.1, dt = 0.002)
+    coords = CartesianCoordinates("x", "z")
+    dist = Distributor(coords; dtype = Float64, architecture = CPU())
+    xb = RealFourier(coords["x"]; size = Nx, bounds = (0.0, 2π))
+    zb = ChebyshevT(coords["z"]; size = Nz, bounds = (0.0, 1.0))
+    domain = Domain(dist, (xb, zb))
+    b = ScalarField(domain, "b"); set!(b, (x, z) -> sin(π * z) * cos(x))
+    tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+    tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+    lb = derivative_basis(zb, 1); tau_lift(A) = lift(A, lb, -1)
+    _, ez = unit_vector_fields(coords, dist)
+    grad_b = grad(b) + ez * tau_lift(tau1)
+    prob = IVP([b, tau1, tau2])
+    add_parameters!(prob, kappa = κ, ez = ez, grad_b = grad_b, tau_lift = tau_lift)
+    add_equation!(prob, "dt(b) - kappa*div(grad_b) + tau_lift(tau2) = 0")
+    add_bc!(prob, "b(z=0) = 0"); add_bc!(prob, "b(z=1) = 0")
+    solver = InitialValueSolver(prob, stepper; dt)
+    for _ in 1:round(Int, tfinal / dt); step!(solver, dt); end
+    f = solver.state[1]; ensure_layout!(f, :g)
+    xs = [2π * (i - 1) / Nx for i in 1:Nx]
+    zs = [0.5 * (1 - cos(π * (k - 1) / (Nz - 1))) for k in 1:Nz]
+    λ = κ * (π^2 + 1)
+    return Array(get_grid_data(f)),
+           [sin(π * z) * cos(x) * exp(-λ * tfinal) for x in xs, z in zs]
+end
+
 # ---------------------------------------------------------------------------
 # The matrix. (label, builder, expectation, tolerance)
 # ---------------------------------------------------------------------------
@@ -204,6 +284,18 @@ const MATRIX = [
     ("IVP  1D Fourier  SBDF4",   () -> _ivp_fourier_1d(SBDF4()),   :solves, 1e-5),
     ("IVP  2D Fourier  RK222",   () -> _ivp_fourier_2d(RK222()),   :solves, 1e-6),
     ("IVP  2D Fourier  SBDF2",   () -> _ivp_fourier_2d(SBDF2()),   :solves, 1e-5),
+
+    # --- Coupled and 3-D IVP cells. Every pre-existing IVP row is pure Fourier in
+    #     1D or 2D, so the per-mode TIMESTEPPING path (as opposed to the steady BVP
+    #     one) and everything above two axes were uncovered. Tolerances are the
+    #     measured error rounded up, not round numbers.
+    ("IVP  3D Fourier  RK222",        () -> _ivp_fourier_3d(RK222()),   :solves, 1e-6),
+    ("IVP  3D Fourier  SBDF2",        () -> _ivp_fourier_3d(SBDF2()),   :solves, 1e-5),
+    ("IVP  1D Chebyshev+tau RK222",   () -> _ivp_cheb_1d(RK222()),      :solves, 1e-7),
+    ("IVP  1D Chebyshev+tau SBDF2",   () -> _ivp_cheb_1d(SBDF2()),      :solves, 1e-5),
+    ("IVP  Fourier×Chebyshev RK222",  () -> _ivp_fourier_cheb(RK222()), :solves, 1e-7),
+    ("IVP  Fourier×Chebyshev RK443",  () -> _ivp_fourier_cheb(RK443()), :solves, 1e-9),
+    ("IVP  Fourier×Chebyshev SBDF2",  () -> _ivp_fourier_cheb(SBDF2()), :solves, 1e-5),
 
     # --- LBVP across basis combinations.
     ("LBVP 1D Chebyshev",        _lbvp_cheb_1d,                    :solves, 1e-8),
