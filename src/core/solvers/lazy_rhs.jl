@@ -1363,7 +1363,28 @@ function build_lazy_rhs_plan!(solver)
         plan.workspaces[idx].template = template
     end
 
-    if !hasfield(typeof(problem), :equation_data) || isempty(problem.equation_data)
+    hasfield(typeof(problem), :equation_data) || (plan.is_compiled = true; return plan)
+
+    # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
+    # global-matrix assembly — the step a pure-Fourier GPU IVP deliberately SKIPS
+    # (solver_types.jl, `_gpu_pure_fourier_state`). Treating "no IR" as "nothing to
+    # compile" therefore produced, on every such solver, a plan holding only zero
+    # fields and flagged `is_compiled = true`. That flag makes
+    # `_compiled_lazy_rhs_available` true, so `evaluate_rhs` took the lazy path, got
+    # zeros, and returned them — never reaching the interpreted evaluator. The RHS was
+    # identically zero at every stage, so the solution never moved and nothing was
+    # raised: a heat equation simply held its initial condition forever.
+    #
+    # Build the IR on demand instead. It is matrix-free and cheap — this is the same
+    # remedy `_problem_has_implicit_linear_term` (dispatch.jl) already applies for the
+    # same root cause. Deliberately not wrapped in try/catch: if the equations cannot
+    # be parsed we must not fall back to a zero RHS, which is the bug being fixed.
+    if isempty(problem.equation_data) && !isempty(problem.equations)
+        build_matrix_expressions!(problem)
+    end
+
+    if isempty(problem.equation_data)
+        # Genuinely nothing to evolve (no equations at all). A zero RHS is correct here.
         plan.is_compiled = true
         return plan
     end
@@ -1450,10 +1471,39 @@ function build_lazy_rhs_plan!(solver)
         end
     end
 
-    plan.is_compiled = true
     n_eqs = count(!isnothing, plan.exprs)
+
+    # Backstop for the failure above, and for any future path that empties the IR.
+    # A plan with no compiled expression evaluates to a zero RHS for every stage. That
+    # is correct when the problem has nothing to evolve, and catastrophic when it does —
+    # the solution silently holds its initial condition. The two are indistinguishable
+    # from the plan alone, so compare against the problem: if any equation carries a
+    # time derivative, at least one expression must have compiled.
+    if n_eqs == 0 && _problem_has_evolution_equation(problem)
+        error("LazyRHS: the problem has at least one time-derivative equation but no RHS " *
+              "expression compiled, which would make the right-hand side identically zero " *
+              "and freeze the solution at its initial condition with no further warning. " *
+              "This usually means `equation_data` was empty when the plan was built. " *
+              "Refusing to return a zero RHS.")
+    end
+
+    plan.is_compiled = true
     @info "LazyRHS: built type-specialized plan for $n_eqs equations"
     return plan
+end
+
+"""Does any equation carry a (non-zero) time derivative, i.e. is anything evolved?
+
+Read from `equation_data`, so call it only after the IR exists — `build_lazy_rhs_plan!`
+ensures that above."""
+function _problem_has_evolution_equation(problem)
+    hasfield(typeof(problem), :equation_data) || return false
+    for eq_data in problem.equation_data
+        M_expr = get(eq_data, "M", nothing)
+        (M_expr === nothing || _is_zero_m_term(M_expr)) && continue
+        return true
+    end
+    return false
 end
 
 function _lazy_allocate_result(template::ScalarField)

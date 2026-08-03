@@ -62,6 +62,19 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
             end
         end
 
+        # `equation_data` is filled by `build_matrix_expressions!`, which runs as part
+        # of global-matrix assembly — the step a pure-Fourier GPU IVP SKIPS. Treating an
+        # empty IR as "no equations contribute" would leave `rhs` as the zero fields
+        # allocated above and freeze the solution at its initial condition with nothing
+        # raised. That is the bug fixed in `build_lazy_rhs_plan!`; this is the same hole
+        # on the interpreted path, closed the same way. The build is matrix-free, and
+        # the enclosing catch rethrows, so a parse failure surfaces instead of becoming
+        # a zero RHS.
+        if hasfield(typeof(problem), :equation_data) &&
+           isempty(problem.equation_data) && !isempty(problem.equations)
+            build_matrix_expressions!(problem)
+        end
+
         # Build mapping from state field index to equation F_expr
         # Only equations with time derivatives contribute to F
         if hasfield(typeof(problem), :equation_data) && !isempty(problem.equation_data)
