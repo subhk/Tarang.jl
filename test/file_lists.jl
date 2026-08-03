@@ -104,6 +104,7 @@ const TEST_FILES = [
     "test_2d_gpu_domain_compat.jl",           # 2D pure-Fourier GPU refresh device-safety (JLArray)
     "test_gpu_2d_device_stack.jl",            # 2D forcing kernels / device fields / staging contract (JLArray)
     "test_multistep_field_path.jl",           # matrix-free multistep for explicit GPU/MPI problems — was a permanent forward-Euler collapse
+    "test_bc_value_matrix.jl",                # time-/space-dependent BCs must be enforced with the VALUE they name — only the FLAGS were tested
     "test_configuration_matrix.jl",           # every basis x problem x timestepper cell must solve correctly or refuse — no silent third option
     "test_bvp_fourier_forcing.jl",            # an unassemblable BVP operator must refuse, not skip a block and return a confident wrong answer
     "test_group_vara_bounds.jl",              # group_ncread/ncwrite must validate start/count before the ccall — a short vector was read past its end
