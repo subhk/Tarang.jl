@@ -16,25 +16,19 @@ This file contains MPI communication functions used by transpose operations:
 """
     _sync_gpu_if_needed(arch)
 
-Synchronize GPU stream before MPI operations to ensure all GPU kernels have completed.
-CRITICAL: Must be called before:
+Synchronize the device before MPI operations so all preceding kernels have
+completed. CRITICAL: must be called before:
 1. CUDA-aware MPI operations (to ensure send buffer data is ready)
 2. Direct CUDA-aware MPI reads of GPU buffers
 
 This prevents race conditions where MPI reads from GPU buffers before
 prior GPU operations (FFTs, pack kernels) have completed.
-"""
-function _sync_gpu_if_needed(arch::AbstractArchitecture)
-    # GPU case: synchronize() is defined on the architecture abstraction layer.
-    # For GPU architectures, this calls the appropriate device synchronize
-    # (overridden by CUDA extension via Tarang.synchronize dispatch).
-    if is_gpu(arch)
-        synchronize(arch)
-    end
-end
 
-# CPU case - no sync needed
-_sync_gpu_if_needed(::CPU) = nothing
+`synchronize` already dispatches on the architecture — `synchronize(::CPU)` is a
+no-op and the CUDA extension supplies `synchronize(::GPU{CuDevice})` — so this
+needs no `is_gpu` branch and no separate CPU method.
+"""
+_sync_gpu_if_needed(arch::AbstractArchitecture) = synchronize(arch)
 
 # ============================================================================
 # MPI Communication Helpers

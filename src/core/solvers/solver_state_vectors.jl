@@ -42,9 +42,7 @@ function _ensure_coeff_layout!(fields::Vector{<:ScalarField})
     for field in fields
         ensure_layout!(field, :c)
     end
-    if is_gpu(arch)
-        synchronize(arch)
-    end
+    synchronize(arch)   # no-op on CPU; device sync on GPU
     return arch
 end
 
@@ -216,10 +214,7 @@ function copy_solution_to_fields!(fields::Vector{<:ScalarField}, solution::Abstr
         end
     end
 
-    arch = fields[1].dist.architecture
-    if is_gpu(arch)
-        synchronize(arch)
-    end
+    synchronize(fields[1].dist.architecture)   # no-op on CPU; device sync on GPU
 
     @debug "Vector to fields completed: solution_size=$(length(solution)), fields=$(length(fields))"
     return nothing
@@ -383,13 +378,8 @@ function set_field_data_from_vector!(field::ScalarField, data::AbstractVector{<:
             reshaped_data = reshape(convert.(target_eltype, data_slice), target_shape)
         end
 
-        arch = field.dist.architecture
-        if is_gpu(arch)
-            gpu_data = on_architecture(arch, reshaped_data)
-            copyto!(get_coeff_data(field), gpu_data)
-        else
-            copyto!(get_coeff_data(field), reshaped_data)
-        end
+        # `to_architecture` uploads on GPU and returns `reshaped_data` untouched on CPU.
+        copyto!(get_coeff_data(field), to_architecture(field.dist.architecture, reshaped_data))
 
         field.current_layout = :c
 
@@ -410,13 +400,8 @@ function set_field_data_from_vector!(field::ScalarField, data::AbstractVector{<:
                 reshaped_data = reshape(convert.(target_eltype, data), target_shape)
             end
 
-            arch = field.dist.architecture
-            if is_gpu(arch)
-                gpu_data = on_architecture(arch, reshaped_data)
-                copyto!(get_grid_data(field), gpu_data)
-            else
-                copyto!(get_grid_data(field), reshaped_data)
-            end
+            copyto!(get_grid_data(field),
+                    to_architecture(field.dist.architecture, reshaped_data))
         else
             @warn "Size mismatch setting grid data for field $(field.name)"
         end

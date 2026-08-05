@@ -121,13 +121,9 @@ function _assign_coefficients_from_slice!(field::ScalarField, coeffs::AbstractAr
         reshape(convert.(target_eltype, slice), target_shape)
     end
 
-    arch = field.dist.architecture
-    if is_gpu(arch)
-        # Preserve the field's storage architecture after the CPU-side solve.
-        copyto!(coeffs, on_architecture(arch, data_array))
-    else
-        copyto!(coeffs, data_array)
-    end
+    # Preserve the field's storage architecture after the CPU-side solve:
+    # `to_architecture` uploads on GPU and is the identity on CPU.
+    copyto!(coeffs, to_architecture(field.dist.architecture, data_array))
 
     field.current_layout = :c
 end

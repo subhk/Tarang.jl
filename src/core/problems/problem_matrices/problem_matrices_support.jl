@@ -228,7 +228,15 @@ function is_equation_valid(eq_data::AbstractDict)
         return (false, "Missing equation_string")
     end
 
-    # Must have LHS
+    # Must have LHS.
+    #
+    # NOTE: this fires only for plain-`Dict` input. `EquationIR` — what the
+    # parser actually produces — stores "lhs" as a struct field, so `haskey` is
+    # true for it unconditionally and a never-assigned LHS is indistinguishable
+    # from one explicitly set to `nothing`. Deliberately NOT switched to a
+    # value test: a present-but-`nothing` LHS is accepted downstream (see the
+    # `lhs !== nothing` check below), and rejecting it here would exclude
+    # equations from assembly that are currently built.
     if !haskey(eq_data, "lhs")
         return (false, "Missing LHS expression")
     end

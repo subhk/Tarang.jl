@@ -197,15 +197,18 @@ function _coerce_arrays_to_architecture(arch::AbstractArchitecture, arrays::Abst
     return tuple((_ensure_array_on_architecture(arch, arr) for arr in arrays)...)
 end
 
-@inline function _ensure_array_on_architecture(arch::AbstractArchitecture, arr::AbstractArray)
-    if is_gpu(arch)
-        return is_gpu_array(arr) ? arr : _move_array_to_gpu(arch, arr)
-    else
-        is_gpu_array(arr) && error(
-            "A CPU LES model cannot consume GPU gradient arrays; CPU fallback is disabled. " *
-            "Construct the model with architecture=GPU().")
-        return arr
-    end
+# One method per architecture rather than an `is_gpu` branch: a GPU model that
+# reaches a build without the CUDA extension now fails on the missing
+# `on_architecture(::GPU, _)` method instead of silently taking the host path.
+@inline function _ensure_array_on_architecture(::CPU, arr::AbstractArray)
+    is_gpu_array(arr) && error(
+        "A CPU LES model cannot consume GPU gradient arrays; CPU fallback is disabled. " *
+        "Construct the model with architecture=GPU().")
+    return arr
+end
+
+@inline function _ensure_array_on_architecture(arch::GPU, arr::AbstractArray)
+    return is_gpu_array(arr) ? arr : _move_array_to_gpu(arch, arr)
 end
 
 @inline function _move_array_to_gpu(arch::AbstractArchitecture, arr::AbstractArray)

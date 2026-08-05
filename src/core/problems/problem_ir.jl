@@ -9,6 +9,35 @@ Named intermediate representation for one parsed equation. The common matrix
 and RHS slots are real fields, so internal code no longer depends on unchecked
 string keys. `AbstractDict` compatibility is retained temporarily for existing
 extensions and downstream code; uncommon metadata lives in `metadata`.
+
+# `haskey` does NOT mean "was assigned"
+
+This is the one place the `AbstractDict` shim does not behave like a `Dict`, and
+it has already caused live bugs, so read it before writing a guard.
+
+The six canonical keys — `"M"`, `"L"`, `"F"`, `"F_expr"`, `"lhs"`,
+`"equation_size"` — are struct fields, so they always exist. `haskey` therefore
+returns `true` for all of them whether or not anything was ever stored, and
+`keys` lists them all. Only `metadata` keys answer `haskey` the way a `Dict`
+would.
+
+    haskey(ir, "lhs")       # true, always — even when ir.lhs === nothing
+    haskey(ir, "condition") # honest: metadata
+
+So `if !haskey(eq_data, "lhs") …` is dead code, and
+`if haskey(eq_data, "lhs") …` is unconditional. **Test the value**:
+`get(eq_data, "lhs", nothing) === nothing`, or read the field directly.
+
+# Canonical keys are case-sensitive and are not aliased
+
+`"lhs"` is a canonical field; `"rhs"` is ordinary metadata; `"LHS"` and `"RHS"`
+are neither, and nothing in the package writes them. Reading `"LHS"` returns the
+default forever — which is exactly how `_get_residual_expression` came to build
+every Newton Jacobian from `F` alone, silently dropping the implicit `L` term.
+
+Prefer direct field access (`ir.linear`) over `get(ir, "L", nothing)` in new
+code: a mistyped field name is an immediate error, a mistyped string key is a
+default value.
 """
 mutable struct EquationIR <: AbstractDict{String, Any}
     mass::Any

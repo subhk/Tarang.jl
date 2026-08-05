@@ -159,7 +159,7 @@ function _scatter_array_from_root(dist::Distributor,
     if dist.size == 1 || dist.mesh === nothing
         global_array === nothing && error("rank 0 must provide the global scatter array")
         dist.performance_stats.total_time += time() - start_time
-        return _maybe_to_architecture(dist.architecture, global_array)
+        return to_architecture(dist.architecture, global_array)
     end
 
     # CRITICAL: For MPI scatter, global_array must be on CPU for rank 0
@@ -328,7 +328,7 @@ function _scatter_array_from_root(dist::Distributor,
     dist.performance_stats.mpi_operations += 1
     dist.performance_stats.total_time += time() - start_time
 
-    return _maybe_to_architecture(dist.architecture, local_array)
+    return to_architecture(dist.architecture, local_array)
 end
 
 """All-reduce operation on array"""
@@ -341,7 +341,7 @@ function allreduce_array(dist::Distributor, local_array::AbstractArray, op=MPI.S
         local_cpu = _ensure_cpu_array(local_array)
         result_cpu = similar(local_cpu)
         MPI.Allreduce!(local_cpu, result_cpu, op, dist.comm)
-        result = _maybe_to_architecture(arch, result_cpu)
+        result = to_architecture(arch, result_cpu)
     else
         result = similar(local_array)
         MPI.Allreduce!(local_array, result, op, dist.comm)

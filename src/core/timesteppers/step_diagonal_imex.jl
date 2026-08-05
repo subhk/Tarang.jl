@@ -430,18 +430,36 @@ end
 # ============================================================================
 
 """True when the distributed diagonal IMEX path should handle this solver:
-MPI PencilArrays distribution and a fully-Fourier (separable) spatial domain."""
+MPI PencilArrays distribution, a fully-Fourier (separable) spatial domain, and a
+scheme that actually implements the path.
+
+Architecture and distribution come from `solver.execution_plan`, so this agrees
+by construction with every other consumer of those facts. The scheme check is the
+declared capability rather than "did somebody paste the branch into this
+`step_*!`" — see `supports_distributed_diagonal_imex`. It is a no-op for today's
+callers (all of which declare `true`) and exists so a scheme cannot reach this
+path without saying it implements it.
+"""
 function _distributed_diagonal_imex_applicable(solver::InitialValueSolver)
+    plan = solver.execution_plan
+    # Host-only subsystem: _diagonal_Lhat_from_expr and the φ/update kernels build
+    # and broadcast host Arrays, which throws against device-resident coefficient
+    # data. GPU runs must decline here (they then error loudly in step_rk_imex!).
+    plan_is_gpu(plan) && return false
+    plan_is_distributed(plan) || return false
+    supports_distributed_diagonal_imex(solver.timestepper) || return false
+
     field = nothing
     for f in solver.state
         if !isempty(f.bases); field = f; break; end
     end
     field === nothing && return false
-    # Host-only subsystem: _diagonal_Lhat_from_expr and the φ/update kernels build
-    # and broadcast host Arrays, which throws against device-resident coefficient
-    # data. GPU runs must decline here (they then error loudly in step_rk_imex!).
-    _field_uses_gpu(field) && return false
-    (field.dist.use_pencil_arrays && field.dist.size > 1) || return false
+    # NOTE: this basis test is deliberately NOT `plan.spectral_structure`. It
+    # accepts a `nothing` basis as separable, whereas the strict definition the
+    # plan records (matching `_gpu_pure_fourier_state`, which decides whether to
+    # skip host assembly) treats `nothing` as disqualifying. The two questions
+    # are different and the looser rule is load-bearing here, so unifying them
+    # would be a behavioural change, not a cleanup.
     return all(b -> b === nothing || isa(b, FourierBasis), field.bases)
 end
 

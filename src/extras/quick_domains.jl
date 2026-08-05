@@ -271,11 +271,7 @@ function set!(field::ScalarField, f::Function)
     # Extract arrays in basis order (meshgrid is a Dict{String, Array})
     grids = Tuple(meshgrid[b.meta.element_label] for b in domain.bases)
     data = f.(grids...)
-    if is_gpu(field.dist.architecture)
-        get_grid_data(field) .= on_architecture(field.dist.architecture, data)
-    else
-        get_grid_data(field) .= data
-    end
+    get_grid_data(field) .= to_architecture(field.dist.architecture, data)
     return field
 end
 

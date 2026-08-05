@@ -175,15 +175,30 @@ function _fill_random_reproducible!(data::AbstractArray, field::ScalarField,
         global_offsets[dim] = start_idx - 1  # Convert to 0-based offset
     end
 
-    arch = dist.architecture
-    if is_gpu(arch)
-        global_sizes = ntuple(dim -> dim <= length(gshape) ? gshape[dim] : local_size[dim],
-                              ndims_data)
-        _fill_random_reproducible_device!(arch, data, seed, Tuple(global_offsets),
-                                          global_sizes, distribution, scale)
-        return
-    end
-    cpu_data = data
+    global_sizes = ntuple(dim -> dim <= length(gshape) ? gshape[dim] : local_size[dim],
+                          ndims_data)
+    # Host vs device is resolved by dispatch on the architecture, not by an
+    # `is_gpu` branch: a GPU distributor with no device implementation raises a
+    # MethodError here instead of falling through to the host method.
+    return _fill_random_global_indexed!(dist.architecture, data, seed,
+                                        Tuple(global_offsets), global_sizes,
+                                        distribution, scale)
+end
+
+function _fill_random_global_indexed!(arch::GPU, data::AbstractArray, seed::Int,
+                                      global_offsets::Tuple, global_sizes::Tuple,
+                                      
+                                      distribution::String, scale::Real)
+    _fill_random_reproducible_device!(arch, data, seed, global_offsets,
+                                      global_sizes, distribution, scale)
+    return nothing
+end
+
+function _fill_random_global_indexed!(::CPU, cpu_data::AbstractArray, seed::Int,
+                                      global_offsets::Tuple, global_sizes::Tuple,
+                                      
+                                      distribution::String, scale::Real)
+    ndims_data = ndims(cpu_data)
 
     # Fill each point using deterministic RNG based on global index
     # Use a simple hash: seed + linear_global_index
@@ -194,7 +209,7 @@ function _fill_random_reproducible!(data::AbstractArray, field::ScalarField,
         for dim in 1:ndims_data
             global_coord = I[dim] + global_offsets[dim] - 1  # 0-based global coordinate
             global_idx += global_coord * stride
-            stride *= dim <= length(gshape) ? gshape[dim] : local_size[dim]
+            stride *= global_sizes[dim]
         end
 
         # Use deterministic seed for this point

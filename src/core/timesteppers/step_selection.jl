@@ -7,6 +7,58 @@
 
 const GLOBAL_MATRIX_IMPLICIT_DOF_LIMIT = 1_000_000
 
+# ============================================================================
+# Per-scheme capability declarations
+#
+# Which implicit paths a scheme can actually take used to be implicit in whether
+# somebody had pasted the corresponding branch into that scheme's `step_*!`. It
+# was not written down anywhere, so it drifted: `step_sbdf2!` gained the
+# distributed diagonal-IMEX branch and its five multistep siblings did not, which
+# means SBDF2 solves an MPI pure-Fourier problem with a stiff implicit operator
+# while SBDF1/3/4 and CNAB1/2 refuse the identical configuration. Nothing could
+# detect that, because there was no single list to compare against.
+#
+# Declaring it as a trait makes the table explicit and testable — see
+# `test/test_execution_plan.jl`, which enumerates every `TimeStepper` subtype and
+# pins the answer. Adding the missing implementations is a numerical change and
+# deliberately NOT done here; this only stops the gap from being invisible.
+# ============================================================================
+
+"""
+    supports_distributed_diagonal_imex(timestepper) -> Bool
+
+Does this scheme have an implementation that treats a Fourier-diagonal implicit
+operator per mode under MPI decomposition?
+
+`false` is the safe default: a scheme that lacks the path refuses the
+configuration loudly rather than dropping the implicit operator.
+"""
+supports_distributed_diagonal_imex(::TimeStepper) = false
+
+# Reached via `step_rk_imex!`, which holds the branch for the whole IMEX RK family.
+supports_distributed_diagonal_imex(::RK111) = true
+supports_distributed_diagonal_imex(::RK222) = true
+supports_distributed_diagonal_imex(::RK443) = true
+supports_distributed_diagonal_imex(::RKSMR) = true
+supports_distributed_diagonal_imex(::RKGFY) = true
+supports_distributed_diagonal_imex(::RK443_IMEX) = true
+
+# Each ETD entry point carries its own branch.
+supports_distributed_diagonal_imex(::ETD_RK222) = true
+supports_distributed_diagonal_imex(::ETD_CNAB2) = true
+supports_distributed_diagonal_imex(::ETD_SBDF2) = true
+
+# The diagonal-IMEX family is built around this path.
+supports_distributed_diagonal_imex(::DiagonalIMEX_RK222) = true
+supports_distributed_diagonal_imex(::DiagonalIMEX_RK443) = true
+supports_distributed_diagonal_imex(::DiagonalIMEX_SBDF2) = true
+
+# Multistep: SBDF2 alone. CNAB1, CNAB2, SBDF1, SBDF3, SBDF4 have no distributed
+# diagonal implementation, and neither do the global-matrix schemes MCNAB2 and
+# CNLF2 — they refuse via `_global_multistep_distributed_fallback!` /
+# `_check_mpi_implicit_compat!`.
+supports_distributed_diagonal_imex(::SBDF2) = true
+
 """
     _timestepper_subproblems(solver) -> Tuple or nothing
 

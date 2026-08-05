@@ -407,14 +407,9 @@ Get temporary array for intermediate calculations.
 Architecture-aware: allocates on GPU if evaluator uses GPU architecture.
 """
 function get_temp_array(evaluator::NonlinearEvaluator, shape::Tuple, dtype::Type)
-    arch = architecture(evaluator)
-    if is_gpu(arch)
-        # GPU: use architecture-aware allocation
-        return create_array(arch, dtype, shape...)
-    else
-        # CPU: standard zeros allocation
-        return zeros(dtype, shape...)
-    end
+    # `create_array` already dispatches on the architecture: `zeros(::CPU, ...)`
+    # is `zeros(T, dims...)`, so the CPU branch this replaced was identical.
+    return create_array(architecture(evaluator), dtype, shape...)
 end
 
 """

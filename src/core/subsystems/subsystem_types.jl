@@ -364,15 +364,15 @@ function get_matrix_coupling(solver, problem::Problem, dist::Distributor)
     coupling = fill(false, ndims)
 
     for eq_data in problem.equation_data
-        if haskey(eq_data, "lhs")
-            lhs_op = eq_data["lhs"]
-            op_coupling = analyze_operator_coupling(lhs_op, ndims)
-            coupling .|= op_coupling
+        # By value, not by key: `haskey(eq_data, "lhs")` is true for every
+        # EquationIR regardless of whether the slot holds anything.
+        lhs_op = get(eq_data, "lhs", nothing)
+        if lhs_op !== nothing
+            coupling .|= analyze_operator_coupling(lhs_op, ndims)
         end
-        if haskey(eq_data, "rhs")
-            rhs_op = eq_data["rhs"]
-            op_coupling = analyze_operator_coupling(rhs_op, ndims)
-            coupling .|= op_coupling
+        rhs_op = get(eq_data, "rhs", nothing)
+        if rhs_op !== nothing
+            coupling .|= analyze_operator_coupling(rhs_op, ndims)
         end
     end
 

@@ -456,13 +456,20 @@ end
 """Extract residual expression (LHS - RHS) from equation data."""
 function _get_residual_expression(eq_data)
     if isa(eq_data, AbstractDict)
-        lhs = get(eq_data, "LHS", nothing)
-        rhs = get(eq_data, "RHS", nothing)
+        # The parser writes these under LOWERCASE "lhs"/"rhs"
+        # (problem_matrices_build.jl). This read "LHS"/"RHS", which nothing in the
+        # package ever writes, so the subtraction branch was unreachable and every
+        # residual fell through to `F` — a Newton Jacobian missing the entire
+        # implicit `L` contribution, with no error to say so.
+        lhs = get(eq_data, "lhs", nothing)
+        rhs = get(eq_data, "rhs", nothing)
         if lhs !== nothing && rhs !== nothing
             return SubtractOperator(lhs, rhs)
-        elseif haskey(eq_data, "F")
-            return eq_data["F"]
         end
+        # `haskey` is true for every canonical EquationIR slot whether or not it
+        # holds anything, so test the value rather than the key.
+        forcing = get(eq_data, "F", nothing)
+        forcing === nothing || return forcing
     end
     return 0
 end
