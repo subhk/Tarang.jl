@@ -28,7 +28,10 @@ function evaluate_gradient(grad_op::Gradient, layout::Symbol=:g)
         result = VectorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
         for (i, coord_name) in enumerate(coordsys.names)
             coord = coordsys[coord_name]
-            result.components[i] = evaluate_differentiate(Differentiate(operand, coord, 1), layout)
+            # Own the result: the returned buffer belongs to the shared pool and
+            # would be reissued out from under this VectorField. See _own_deriv_result.
+            result.components[i] =
+                _own_deriv_result(evaluate_differentiate(Differentiate(operand, coord, 1), layout))
         end
         return result
 
@@ -39,8 +42,10 @@ function evaluate_gradient(grad_op::Gradient, layout::Symbol=:g)
         for (i, coord_name) in enumerate(coordsys.names)
             coord = coordsys[coord_name]
             for j in 1:length(operand.components)
-                result.components[i, j] = evaluate_differentiate(
-                    Differentiate(operand.components[j], coord, 1), layout)
+                # 3-D needs 9 of these live at once, and two live gradients need
+                # 18 against a pool of 16. Own each one. See _own_deriv_result.
+                result.components[i, j] = _own_deriv_result(evaluate_differentiate(
+                    Differentiate(operand.components[j], coord, 1), layout))
             end
         end
         return result
@@ -548,6 +553,43 @@ the result is built from the differentiated component's bases, not the operand's
 const _DERIV_RESULT_POOL_SIZE = 16
 const _DERIV_RESULT_POOL = Dict{Tuple, Vector{ScalarField}}()
 const _DERIV_RESULT_IDX = Ref(0)
+
+"""
+    _own_deriv_result(src::ScalarField) -> ScalarField
+
+Copy `src` — a buffer on loan from the shared rotating derivative pool — into a
+freshly allocated field the caller owns outright.
+
+WHY THIS IS NEEDED. `evaluate_differentiate` returns pool memory, and the pool
+hands the same slot to the next caller after `_DERIV_RESULT_POOL_SIZE` checkouts.
+Storing that buffer straight into a `VectorField`/`TensorField` keeps it
+referenced for as long as the container lives, so the container silently changes
+value when the pool wraps. Two live 3-D vector gradients need 18 slots against a
+pool of 16: `grad(u)` was overwritten by `grad(v)` with a max error of 3.0 and no
+error raised — this project's dominant bug shape, a wrong value that looks
+plausible.
+
+The pool had already been grown 8 -> 16 after the same failure inside a single
+tensor (`T[3,3]` overwriting `T[1,1]`). Growing it again only moves the
+threshold, because nothing bounds how many results a caller may hold. Taking
+ownership removes the dependence on pool size entirely; the pool keeps serving
+the transient single-result case it was built for.
+
+Layout-preserving, unlike `copy_field_data!`, which forces both sides to `:g` and
+would discard a `layout=:c` derivative.
+"""
+function _own_deriv_result(src::ScalarField)
+    owned = ScalarField(src.dist, src.name, src.bases, src.dtype)
+    layout = src.current_layout
+    src_data = layout === :c ? get_coeff_data(src) : get_grid_data(src)
+    if src_data !== nothing
+        ensure_layout!(owned, layout)
+        dest_data = layout === :c ? get_coeff_data(owned) : get_grid_data(owned)
+        dest_data === nothing || copyto!(dest_data, src_data)
+    end
+    owned.current_layout = layout
+    return owned
+end
 
 function _checkout_deriv_result!(bases::Tuple, dtype::DataType, dist)
     key = (hash(bases), dtype)

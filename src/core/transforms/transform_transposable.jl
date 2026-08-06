@@ -10,6 +10,22 @@ TransposableField layouts.
 # ============================================================================
 
 """
+    _plan_local_axis_fft(arch, CT, shape, dim) -> plan
+
+Plan the in-layout FFT along `dim` for a `TransposableField` buffer of element
+type `CT` and local `shape`.
+
+Two methods rather than five copies of `if is_gpu(arch) … else … end`: the host
+method builds the FFTW plan, and the device method defers to `TarangCUDAExt`,
+which creates the plan lazily from the resident array type.
+"""
+_plan_local_axis_fft(::GPU, ::Type, ::Tuple, ::Int) = :gpu_pending
+
+function _plan_local_axis_fft(::CPU, ::Type{CT}, shape::Tuple, dim::Int) where {CT}
+    return FFTW.plan_fft(zeros(CT, shape...), dim; flags=FFTW.MEASURE)
+end
+
+"""
     plan_transposable_transforms!(tf)
 
 Create FFT plans for each layout in a TransposableField.
@@ -35,64 +51,15 @@ function plan_transposable_transforms!(tf)
     # Plan for each layout based on which dimension is local
     ndim = length(tf.global_shape)
 
-    if ndim >= 3
-        # ZLocal layout: z-dimension is local, plan FFT in z
-        z_shape = tf.local_shapes[ZLocal]
-        if !haskey(tf.fft_plans, ZLocal)
-            if is_gpu(arch)
-                # GPU plans will be created by TarangCUDAExt
-                tf.fft_plans[ZLocal] = :gpu_pending
-            else
-                # CPU FFTW plan for z-dimension (dim 3)
-                dummy = zeros(CT, z_shape...)
-                tf.fft_plans[ZLocal] = FFTW.plan_fft(dummy, 3; flags=FFTW.MEASURE)
-            end
-        end
+    # Each layout leaves exactly one axis local; plan the FFT along that axis.
+    layout_axes = ndim >= 3 ? ((ZLocal, 3), (YLocal, 2), (XLocal, 1)) :
+                  ndim == 2 ? ((YLocal, 2), (XLocal, 1)) :
+                  ()
 
-        # YLocal layout: y-dimension is local, plan FFT in y
-        y_shape = tf.local_shapes[YLocal]
-        if !haskey(tf.fft_plans, YLocal)
-            if is_gpu(arch)
-                tf.fft_plans[YLocal] = :gpu_pending
-            else
-                dummy = zeros(CT, y_shape...)
-                tf.fft_plans[YLocal] = FFTW.plan_fft(dummy, 2; flags=FFTW.MEASURE)
-            end
-        end
-
-        # XLocal layout: x-dimension is local, plan FFT in x
-        x_shape = tf.local_shapes[XLocal]
-        if !haskey(tf.fft_plans, XLocal)
-            if is_gpu(arch)
-                tf.fft_plans[XLocal] = :gpu_pending
-            else
-                dummy = zeros(CT, x_shape...)
-                tf.fft_plans[XLocal] = FFTW.plan_fft(dummy, 1; flags=FFTW.MEASURE)
-            end
-        end
-
-    elseif ndim == 2
-        # 2D case: plan FFT for x and y dimensions
-        y_shape = tf.local_shapes[YLocal]
-        x_shape = tf.local_shapes[XLocal]
-
-        if !haskey(tf.fft_plans, YLocal)
-            if is_gpu(arch)
-                tf.fft_plans[YLocal] = :gpu_pending
-            else
-                dummy = zeros(CT, y_shape...)
-                tf.fft_plans[YLocal] = FFTW.plan_fft(dummy, 2; flags=FFTW.MEASURE)
-            end
-        end
-
-        if !haskey(tf.fft_plans, XLocal)
-            if is_gpu(arch)
-                tf.fft_plans[XLocal] = :gpu_pending
-            else
-                dummy = zeros(CT, x_shape...)
-                tf.fft_plans[XLocal] = FFTW.plan_fft(dummy, 1; flags=FFTW.MEASURE)
-            end
-        end
+    for (layout, dim) in layout_axes
+        haskey(tf.fft_plans, layout) && continue
+        tf.fft_plans[layout] =
+            _plan_local_axis_fft(arch, CT, tf.local_shapes[layout], dim)
     end
 
     return tf

@@ -202,8 +202,9 @@ function sync_state_to_problem!(problem::Problem, state::Vector{<:ScalarField})
     end
 end
 
-# LazyRHSPlan is defined later in lazy_rhs.jl (included after this file).
-# Forward-declare as Any for the solver field below.
+# LazyRHSPlan is defined later in lazy_rhs.jl (included after this file), so the
+# solver field below names the `AbstractRHSPlan` contract from module_contracts.jl
+# rather than the concrete type.
 
 mutable struct InitialValueSolver <: Solver
     base::SolverBaseData
@@ -235,8 +236,17 @@ mutable struct InitialValueSolver <: Solver
     # uncompiled RHS; `:interpreted` permits the compatibility evaluator.
     rhs_fallback_policy::Symbol
 
-    # Type-specialized lazy RHS evaluation plan (LazyRHSPlan from lazy_rhs.jl)
-    rhs_plan::Any
+    # Type-specialized lazy RHS evaluation plan (LazyRHSPlan from lazy_rhs.jl),
+    # or `nothing` when compilation was skipped or declined. Declared through the
+    # `AbstractRHSPlan` contract rather than `::Any` so the field matches its
+    # siblings above and cannot be assigned an unrelated object. Consumers still
+    # narrow to `::LazyRHSPlan` to reach concrete fields.
+    rhs_plan::Union{Nothing, AbstractRHSPlan}
+
+    # Runtime path facts resolved once at the end of construction. Timesteppers
+    # read this instead of re-deriving architecture/distribution/assembly state,
+    # so every consumer necessarily agrees. See solver_execution_plan.jl.
+    execution_plan::ExecutionPlan
 end
 
 """
@@ -464,9 +474,15 @@ function _build_initial_value_solver(problem::IVP, timestepper;
 
     perf_stats = SolverPerformanceStats()
 
+    # Placeholder plan: replaced below once assembly has actually run. Nothing
+    # between here and there consults it.
+    provisional_plan = _resolve_execution_plan(state, problem;
+                                               assembled_global_matrices=false)
+
     solver = InitialValueSolver(base, problem, timestepper, 0.0, 0, Inf, Inf, typemax(Int),
                                 state, Float64(dt), nothing, nothing, time(),
-                                perf_stats, rhs_fallback_policy, nothing)
+                                perf_stats, rhs_fallback_policy, nothing,
+                                provisional_plan)
     attach_evaluator!(solver)
 
     if has_time_dependent_bcs(problem.bc_manager)
@@ -474,6 +490,7 @@ function _build_initial_value_solver(problem::IVP, timestepper;
         set_time_variable!(problem.bc_manager, "t")
     end
 
+    assembled_global_matrices = false
     if _gpu_pure_fourier_state(state)
         # RK/IMEX dispatch deliberately uses the field-wise explicit path for
         # pure-Fourier GPU states.  Building global host matrices here is both
@@ -484,7 +501,14 @@ function _build_initial_value_solver(problem::IVP, timestepper;
     else
         build_solver_matrices!(solver)
         _try_build_subproblems!(solver)
+        assembled_global_matrices = true
     end
+
+    # Record what assembly ACTUALLY did, rather than leaving later code to infer
+    # it from an empty `equation_data` — the inference that made the GPU implicit
+    # guard blind to the very case it existed to catch.
+    solver.execution_plan = _resolve_execution_plan(state, problem;
+                                                    assembled_global_matrices)
 
     # Build the type-specialized lazy RHS plan. Serial CPU solvers may opt into
     # the compatibility evaluator; MPI/GPU solvers are strict by default.

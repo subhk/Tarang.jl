@@ -160,7 +160,9 @@ function evaluate(op::DirectProductGradient, layout::Symbol=:g)
         # differentiating along each coordinate of the product space.
         result = VectorField(operand.dist, coordsys, "grad_$(operand.name)", operand.bases, operand.dtype)
         for (i, coord) in enumerate(coordsys.coords)
-            result.components[i] = evaluate_differentiate(Differentiate(operand, coord, 1), layout)
+            # Own the pooled buffer; see _own_deriv_result in derivatives_eval.jl.
+            result.components[i] =
+                _own_deriv_result(evaluate_differentiate(Differentiate(operand, coord, 1), layout))
         end
         return result
     end

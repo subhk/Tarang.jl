@@ -27,6 +27,11 @@ const TEST_FILES = [
     "test_matrix_apply.jl",
     "test_field_layout_operations.jl",
     "test_layout_discipline_ratchet.jl",   # layout is a mutable Symbol and get_*_data does not consult it — reading the wrong buffer is stale numbers, not an error; pins the manual-management population
+    "test_backend_dispatch_ratchet.jl",    # `is_gpu(arch)` branches are unreachable text on CPU-only CI; pins the population and the host-identity contract of to_architecture
+    "test_execution_plan.jl",              # runtime path facts must be RECORDED at construction, not re-inferred; pins the per-scheme capability table that silently diverged across the multistep family
+    "test_layering.jl",                    # Julia resolves calls at run time, so a core->tools inversion loads and runs fine and is invisible; derives load stages from load_order.jl and ratchets the backward references
+    "test_deriv_pool_ownership.jl",        # grad() stored rotating-pool buffers in its result: two live 3-D vector gradients need 18 slots against a pool of 16, so grad(u) was silently overwritten by grad(v) (max err 3.0)
+    "test_equation_ir.jl",                 # EquationIR's AbstractDict shim is not a Dict: haskey is true for every canonical slot whether assigned or not, and keys are case-sensitive — both shapes caused live silent-fallback bugs
     "test_cartesian_operator_core.jl",
     "test_transforms_extended.jl",
     "test_transform_inplace.jl",

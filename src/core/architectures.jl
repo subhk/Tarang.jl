@@ -210,6 +210,26 @@ on_architecture(::AbstractArchitecture, x::Number) = x
 on_architecture(::AbstractArchitecture, x::String) = x
 on_architecture(::AbstractArchitecture, x::Symbol) = x
 
+"""
+    to_architecture(arch::AbstractArchitecture, x)
+
+Place `x` on `arch`'s device, as a no-op when `arch` is the host.
+
+Distinct from [`on_architecture`](@ref) in exactly one respect: the `CPU`
+fallback of `on_architecture` materializes `Array(x)` for any input outside its
+`Array` and view-of-`Array` identity methods, so a host-resident wrapper such as
+a `PermutedDimsArray` is copied. Call sites that only wanted "upload if this is a
+GPU run" therefore wrapped it in
+`is_gpu(arch) ? on_architecture(arch, x) : x` — putting a Bool branch in front of
+an otherwise architecture-generic operation. This function performs that choice
+by dispatch instead, so the host case is a method rather than a branch.
+
+Use `on_architecture(CPU(), x)` when a dense host `Array` is genuinely required
+(MPI buffers, file IO); use this when the host case should leave `x` untouched.
+"""
+to_architecture(::CPU, x) = x
+to_architecture(arch::AbstractArchitecture, x) = on_architecture(arch, x)
+
 # ============================================================================
 # Array Allocation on Architecture
 # ============================================================================

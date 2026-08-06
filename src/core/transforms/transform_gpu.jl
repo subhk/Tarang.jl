@@ -210,13 +210,14 @@ GPU-specific forward transform, dispatched to the device backend.
 Returns `false` only for a CPU field. A GPU field either completes on-device or
 throws; it is never handed to the CPU transform chain.
 """
-function gpu_forward_transform!(field::ScalarField)
-    # Check if we're on GPU architecture
-    arch = field.dist.architecture
-    if !is_gpu(arch)
-        return false
-    end
+gpu_forward_transform!(field::ScalarField) =
+    _gpu_forward_transform!(field.dist.architecture, field)
 
+# "Not a GPU field" is an architecture method, not an `is_gpu` test, so the
+# device implementation below is only ever entered with a GPU architecture.
+_gpu_forward_transform!(::CPU, ::ScalarField) = false
+
+function _gpu_forward_transform!(arch::GPU, field::ScalarField)
     # Check if data is on GPU
     data_g = get_grid_data(field)
     if !is_gpu_array(data_g)
@@ -236,13 +237,13 @@ GPU-specific backward transform using the registered device backend.
 Returns `false` only for a CPU field. A GPU field either completes on-device or
 throws; it is never handed to the CPU transform chain.
 """
-function gpu_backward_transform!(field)
-    # Check if we're on GPU architecture
-    arch = field.dist.architecture
-    if !is_gpu(arch)
-        return false
-    end
+gpu_backward_transform!(field) =
+    _gpu_backward_transform!(field.dist.architecture, field)
 
+# See gpu_forward_transform! — the CPU case is a method, not a branch.
+_gpu_backward_transform!(::CPU, _) = false
+
+function _gpu_backward_transform!(arch::GPU, field)
     # Check if data is on GPU
     data_c = get_coeff_data(field)
     if !is_gpu_array(data_c)

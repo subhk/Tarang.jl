@@ -56,9 +56,24 @@ const _DIAGONAL_IMEX_TIMESTEPPERS = Union{
 
 """Does the problem carry a nonzero implicit (LHS) linear operator on an evolution
 equation? Architecture-independent — reads the parsed L/M expressions, not the
-(possibly skipped) assembled global matrix."""
+(possibly skipped) assembled global matrix.
+
+Memoized on `solver.execution_plan`: the answer is a property of the parsed
+equations, which do not change over a solver's life, and resolving it can require
+building the expression IR. Callers should use this rather than inspecting
+`problem.equation_data` themselves — see below for why that inspection is a trap.
+"""
 function _problem_has_implicit_linear_term(solver::InitialValueSolver)
-    problem = solver.problem
+    memo = solver.execution_plan.implicit_linear
+    cached = memo[]
+    cached === nothing || return cached::Bool
+
+    answer = _compute_problem_has_implicit_linear_term(solver.problem)
+    memo[] = answer
+    return answer
+end
+
+function _compute_problem_has_implicit_linear_term(problem)
     hasfield(typeof(problem), :equation_data) || return false
 
     # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
@@ -102,13 +117,15 @@ is exempt; the CPU global-matrix path is unaffected.
 function _check_gpu_implicit_compatibility!(state::TimestepperState, solver::InitialValueSolver)
     state.timestepper isa _DIAGONAL_IMEX_TIMESTEPPERS && return nothing
 
-    _distributed_field_path_reason(solver.state) === :gpu || return nothing
+    plan = solver.execution_plan
+    plan_is_gpu(plan) || return nothing
 
     # Coupled Fourier×Chebyshev GPU builds subproblems that solve the implicit part
-    # per mode — not affected by the pure-Fourier matrix skip.
-    if compiled_subproblems(solver.problem) !== nothing
-        return nothing
-    end
+    # per mode — not affected by the pure-Fourier matrix skip. Read the recorded
+    # fact: whether assembly ran is exactly what this guard was previously unable
+    # to see, and `subproblems::Union{Nothing, Tuple}` makes the plan's `isa Tuple`
+    # identical to the old `!== nothing` test.
+    plan.assembled_subproblems && return nothing
 
     _problem_has_implicit_linear_term(solver) || return nothing   # genuinely explicit — fine
 

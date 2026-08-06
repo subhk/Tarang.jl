@@ -1302,7 +1302,7 @@ A pre-built lazy RHS evaluation plan.
 - `workspace`: shared scratch pool
 - `is_compiled`: true if all non-trivial equations translated successfully
 """
-mutable struct LazyRHSPlan{F<:ScalarField}
+mutable struct LazyRHSPlan{F<:ScalarField} <: AbstractRHSPlan
     exprs::Vector{Union{LazyFuture, Nothing}}
     result_fields::Vector{Union{F, Nothing}}
     output_fields::Vector{F}

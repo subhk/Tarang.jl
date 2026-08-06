@@ -322,9 +322,6 @@ Base.isopen(dist::Distributor) = !dist.closed
 
 @inline _ensure_cpu_array(arr::AbstractArray) = is_gpu_array(arr) ? Array(arr) : arr
 
-@inline function _maybe_to_architecture(arch::AbstractArchitecture, arr)
-    return is_gpu(arch) ? on_architecture(arch, arr) : arr
-end
 
 """
     precompute_mesh_coordinates(rank::Int, mesh::Union{Nothing, Tuple})

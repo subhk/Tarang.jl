@@ -602,10 +602,21 @@ end
 @testset "Jacobian helpers: _get_equation_data / _get_residual_expression" begin
     fu, x, _, _, _ = sd_fourier_field(name="u", N=8)
 
-    # _get_residual_expression with LHS/RHS Dict -> SubtractOperator(LHS, RHS).
-    res = Tarang._get_residual_expression(Dict("LHS" => fu, "RHS" => 0.0))
+    # _get_residual_expression with lhs/rhs -> SubtractOperator(lhs, rhs).
+    #
+    # These are the keys `build_matrix_expressions!` actually writes
+    # (problem_matrices_build.jl). This assertion previously used "LHS"/"RHS",
+    # which nothing in the package writes, so it passed while production input
+    # never reached the subtraction branch at all — every Newton Jacobian was
+    # built from `F` alone, dropping the implicit `L` term. The test was checking
+    # the function against invented input rather than against the parser.
+    res = Tarang._get_residual_expression(Dict("lhs" => fu, "rhs" => 0.0))
     @test isa(res, Tarang.SubtractOperator)
     @test res.left === fu
+
+    # Canonical keys are case-sensitive and NOT aliased: uppercase must not be
+    # mistaken for the real slots, or the same silent fallthrough returns.
+    @test Tarang._get_residual_expression(Dict("LHS" => fu, "RHS" => 0.0)) == 0
 
     # _get_residual_expression with "F" key -> the residual directly.
     F = Tarang.PowerOperator(fu, 2)

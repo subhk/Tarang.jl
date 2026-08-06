@@ -627,9 +627,9 @@ function integration_weights(domain::Domain; on_device::Bool=true)
         # Compute weights on CPU first
         w = get_integration_weights(basis)
 
-        # Move to device if requested and domain is on GPU
-        if on_device && is_gpu(domain)
-            w = on_architecture(arch, w)
+        # Move to device if requested; `to_architecture` is the identity on CPU.
+        if on_device
+            w = to_architecture(arch, w)
         end
 
         # Cache the weights
@@ -700,9 +700,9 @@ function get_grid_coordinates(domain::Domain; on_device::Bool=true)
             _problem_coord_fallback(basis, native_grid)
         end
 
-        # Move to device if requested and domain is on GPU
-        if on_device && is_gpu(domain)
-            coord_values = on_architecture(arch, coord_values)
+        # Move to device if requested; `to_architecture` is the identity on CPU.
+        if on_device
+            coord_values = to_architecture(arch, coord_values)
         end
 
         domain.grid_coordinates[cache_key] = coord_values
