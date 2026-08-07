@@ -184,6 +184,7 @@ const GPU_TEST_FILES = [
     "test_dct_reorder.jl",
     "test_optimized_dct.jl",
     "test_gpu_transform_correctness.jl",
+    "test_gpu_fc_2d_complete.jl",
     "test_ilu0_preconditioner.jl",
     # GPU-CI-only: distributed RealFourier×Chebyshev DCT-I local primitives PLUS an
     # end-to-end field-level testset (Task 9) that round-trips a 3D RealFourier ×

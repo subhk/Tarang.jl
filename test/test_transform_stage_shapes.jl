@@ -51,3 +51,39 @@ using Tarang
         @test_throws DimensionMismatch Tarang.transform_stage_shapes(ops, (8,), (1, 2))
     end
 end
+
+@testset "Transform axis prefix resizing" begin
+    @testset "truncate and restore axis 2" begin
+        source = reshape(collect(1:54), 6, 9)
+        truncated = zeros(Int, 6, 5)
+
+        @test Tarang._copy_axis_prefix!(truncated, source, 2) === truncated
+        @test truncated == source[:, 1:5]
+
+        restored = fill(-1, 6, 9)
+        @test Tarang._zero_pad_axis_prefix!(restored, truncated, 2) === restored
+        @test restored[:, 1:5] == truncated
+        @test iszero(restored[:, 6:9])
+    end
+
+    @testset "complex data along axis 1" begin
+        source = complex.(reshape(collect(1:24), 6, 4),
+                          reshape(collect(25:48), 6, 4))
+        truncated = zeros(Complex{Int}, 3, 4)
+        Tarang._copy_axis_prefix!(truncated, source, 1)
+        @test truncated == source[1:3, :]
+
+        restored = fill(Complex{Int}(-1, -1), 6, 4)
+        Tarang._zero_pad_axis_prefix!(restored, truncated, 1)
+        @test restored[1:3, :] == truncated
+        @test iszero(restored[4:6, :])
+    end
+
+    @testset "invalid resize shapes are rejected" begin
+        @test_throws ArgumentError Tarang._copy_axis_prefix!(zeros(5, 4), zeros(3, 4), 1)
+        @test_throws ArgumentError Tarang._zero_pad_axis_prefix!(zeros(3, 4), zeros(5, 4), 1)
+        @test_throws DimensionMismatch Tarang._copy_axis_prefix!(zeros(3, 5), zeros(6, 4), 1)
+        @test_throws DimensionMismatch Tarang._zero_pad_axis_prefix!(zeros(6, 5), zeros(3, 4), 1)
+        @test_throws ArgumentError Tarang._copy_axis_prefix!(zeros(3, 4), zeros(6, 4), 3)
+    end
+end

@@ -154,6 +154,45 @@ function transform_stage_shapes(ops, input_shape::Tuple, order)
     return stages
 end
 
+function _validate_axis_prefix_shapes(dst::AbstractArray, src::AbstractArray,
+                                      axis::Int, operation::Symbol)
+    ndims(dst) == ndims(src) || throw(DimensionMismatch(
+        "$operation requires arrays with the same dimensionality, got " *
+        "$(ndims(dst))D and $(ndims(src))D"))
+    1 <= axis <= ndims(src) || throw(ArgumentError(
+        "resize axis must be between 1 and $(ndims(src)), got $axis"))
+    for dim in 1:ndims(src)
+        dim == axis && continue
+        size(dst, dim) == size(src, dim) || throw(DimensionMismatch(
+            "$operation may change only axis $axis, but axis $dim has sizes " *
+            "$(size(dst, dim)) and $(size(src, dim))"))
+    end
+    return nothing
+end
+
+"""Copy the leading part of `src` along `axis` into the shorter `dst`."""
+function _copy_axis_prefix!(dst::AbstractArray, src::AbstractArray, axis::Int)
+    _validate_axis_prefix_shapes(dst, src, axis, :truncate)
+    size(dst, axis) <= size(src, axis) || throw(ArgumentError(
+        "truncate destination axis $axis has length $(size(dst, axis)), larger than " *
+        "source length $(size(src, axis))"))
+    indices = ntuple(dim -> dim == axis ? (1:size(dst, axis)) : Colon(), ndims(src))
+    @views dst .= src[indices...]
+    return dst
+end
+
+"""Zero `dst`, then copy `src` into its leading entries along `axis`."""
+function _zero_pad_axis_prefix!(dst::AbstractArray, src::AbstractArray, axis::Int)
+    _validate_axis_prefix_shapes(dst, src, axis, :zero_pad)
+    size(dst, axis) >= size(src, axis) || throw(ArgumentError(
+        "zero-pad destination axis $axis has length $(size(dst, axis)), smaller than " *
+        "source length $(size(src, axis))"))
+    fill!(dst, zero(eltype(dst)))
+    indices = ntuple(dim -> dim == axis ? (1:size(src, axis)) : Colon(), ndims(dst))
+    @views dst[indices...] .= src
+    return dst
+end
+
 """
     layout_coefficient_shape(bases, dtype) -> Tuple
 
