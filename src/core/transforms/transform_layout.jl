@@ -121,6 +121,40 @@ function forward_layout(bases, grid_shape::Tuple, dtype::Type)
 end
 
 """
+    transform_stage_shapes(ops, input_shape, order) -> Vector{Tuple}
+
+Return the input shape followed by the shape after each axis operation in
+`order`. This lets a backend execute the shared `AxisOp` rules in a different
+order (for example, Fourier axes before Chebyshev axes on CUDA) without
+re-deriving intermediate buffer sizes.
+
+`order` must be a permutation of every axis exactly once. The helper runs only
+while constructing a transform plan, so clarity is preferred over hot-path
+allocation constraints.
+"""
+function transform_stage_shapes(ops, input_shape::Tuple, order)
+    n = length(ops)
+    length(input_shape) == n || throw(DimensionMismatch(
+        "received $n axis operations for an input shape with " *
+        "$(length(input_shape)) dimensions"))
+
+    axes_order = collect(Int, order)
+    if length(axes_order) != n || sort(axes_order) != collect(1:n)
+        throw(ArgumentError(
+            "transform order must contain every axis 1:$n exactly once, got " *
+            "$(Tuple(axes_order))"))
+    end
+
+    shape = collect(Int, input_shape)
+    stages = Tuple[Tuple(shape)]
+    for axis in axes_order
+        shape[axis] = ops[axis].out_len
+        push!(stages, Tuple(shape))
+    end
+    return stages
+end
+
+"""
     layout_coefficient_shape(bases, dtype) -> Tuple
 
 Canonical (unscaled) coefficient shape implied by `bases` and `dtype`. This is

@@ -37,6 +37,7 @@ const TEST_FILES = [
     "test_equation_ir.jl",                 # EquationIR's AbstractDict shim is not a Dict: haskey is true for every canonical slot whether assigned or not, and keys are case-sensitive — both shapes caused live silent-fallback bugs
     "test_cartesian_operator_core.jl",
     "test_transforms_extended.jl",
+    "test_transform_stage_shapes.jl",
     "test_transform_inplace.jl",
     "test_bc_regression.jl",
     "test_cfl.jl",
