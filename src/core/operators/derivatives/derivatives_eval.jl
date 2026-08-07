@@ -31,7 +31,8 @@ function evaluate_gradient(grad_op::Gradient, layout::Symbol=:g)
             # Own the result: the returned buffer belongs to the shared pool and
             # would be reissued out from under this VectorField. See _own_borrowed_field in field_pool.jl.
             result.components[i] =
-                _own_borrowed_field(evaluate_differentiate(Differentiate(operand, coord, 1), layout))
+                _own_borrowed_field(evaluate_differentiate(
+                    Differentiate(operand, coord, 1), layout; own=false))
         end
         return result
 
@@ -45,7 +46,7 @@ function evaluate_gradient(grad_op::Gradient, layout::Symbol=:g)
                 # 3-D needs 9 of these live at once, and two live gradients need
                 # 18 against a pool of 16. Own each one. See _own_borrowed_field in field_pool.jl.
                 result.components[i, j] = _own_borrowed_field(evaluate_differentiate(
-                    Differentiate(operand.components[j], coord, 1), layout))
+                    Differentiate(operand.components[j], coord, 1), layout; own=false))
             end
         end
         return result
@@ -529,7 +530,7 @@ end
 # ============================================================================
 
 """
-    evaluate_differentiate(diff_op, layout=:g) -> ScalarField | VectorField
+    evaluate_differentiate(diff_op, layout=:g; own=true) -> ScalarField | VectorField
 
 Evaluate `∂ⁿf/∂(coord)ⁿ` along a single coordinate. `VectorField` operands are
 differentiated component-wise; `ScalarField` operands are differentiated by
@@ -541,6 +542,11 @@ copy (identity), and a coordinate absent from the operand's bases (a constant
 dimension) returns a zeroed field. Note the result basis can differ from the
 operand's — e.g. Chebyshev differentiation maps `ChebyshevT → ChebyshevU` — so
 the result is built from the differentiated component's bases, not the operand's.
+
+Scalar derivatives use a rotating internal result pool. The public default
+`own=true` copies those borrowed buffers before returning them, so callers may
+retain results safely. Internal callers that fully consume a scalar result before
+the pool can wrap may pass `own=false` to avoid that ownership copy.
 """
 # Rotating pool of derivative-result buffers, keyed by (bases, dtype). Reuses
 # fields across calls instead of allocating a fresh ScalarField per derivative.
@@ -554,10 +560,8 @@ const _DERIV_RESULT_POOL_SIZE = 16
 const _DERIV_RESULT_POOL = Dict{Tuple, Vector{ScalarField}}()
 const _DERIV_RESULT_IDX = Ref(0)
 
-# `evaluate_differentiate` returns pool memory. Any caller that RETAINS the result
-# — every `VectorField`/`TensorField` component assignment below — must take
-# ownership via `_own_borrowed_field` (`src/core/field_pool.jl`), which documents
-# the bug class and why growing the pool is not a fix.
+# `_checkout_deriv_result!` returns pool memory. Public evaluation owns it by
+# default; internal callers may explicitly borrow only for immediate consumption.
 function _checkout_deriv_result!(bases::Tuple, dtype::DataType, dist)
     key = (hash(bases), dtype)
     bufs = get!(() -> Vector{ScalarField}(undef, _DERIV_RESULT_POOL_SIZE),
@@ -570,14 +574,14 @@ function _checkout_deriv_result!(bases::Tuple, dtype::DataType, dist)
     return bufs[i]
 end
 
-function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
+function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g; own::Bool=true)
     operand = diff_op.operand
     coord = diff_op.coord
     order = diff_op.order
 
     # VectorField: differentiate each component, return VectorField
     if isa(operand, VectorField)
-        diff_comps = [evaluate_differentiate(Differentiate(c, coord, order), layout)
+        diff_comps = [evaluate_differentiate(Differentiate(c, coord, order), layout; own=false)
                       for c in operand.components]
         # Create result with differentiated component bases (may differ from
         # original for Chebyshev: ChebyshevT → ChebyshevU after differentiation)
@@ -673,5 +677,5 @@ function evaluate_differentiate(diff_op::Differentiate, layout::Symbol=:g)
             "Check that the coordinate '$(coord.name)' has a valid basis assigned."))
     end
 
-    return result
+    return own ? _own_borrowed_field(result) : result
 end

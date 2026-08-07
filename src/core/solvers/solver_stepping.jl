@@ -546,6 +546,28 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
     return solver
 end
 
+# Solve one global Newton correction. Symbolic Jacobians use a doubled-real
+# representation because RealFourier nonlinear maps are real-linear rather than
+# complex-linear. Sparse QR tolerates the zero rows/columns belonging to the
+# nonphysical imaginary DC/Nyquist RFFT slots and returns their minimum-norm
+# (zero) correction.
+function _solve_newton_correction(jacobian::AbstractMatrix,
+                                  residual::AbstractVector{<:Complex})
+    n = length(residual)
+    if size(jacobian) == (n, n)
+        return -(jacobian \ residual)
+    elseif size(jacobian) == (2n, 2n)
+        doubled_residual = vcat(real.(residual), imag.(residual))
+        doubled_correction = -(qr(jacobian) \ doubled_residual)
+        return complex.(@view(doubled_correction[1:n]),
+                        @view(doubled_correction[n + 1:2n]))
+    end
+    doubled_n = 2n
+    throw(DimensionMismatch(
+        "Newton Jacobian has size $(size(jacobian)); expected ($n, $n) or " *
+        "($doubled_n, $doubled_n)"))
+end
+
 # Legacy global Newton (fallback when no per-mode subproblems are available).
 function _solve_nonlinear_global!(solver::BoundaryValueSolver)
     x = fields_to_vector(solver.state)
@@ -553,7 +575,7 @@ function _solve_nonlinear_global!(solver::BoundaryValueSolver)
     last_dx_norm = Inf
     for iter in 1:solver.max_iterations
         residual, jacobian = evaluate_residual_and_jacobian(solver.problem, x)
-        dx = -jacobian \ residual
+        dx = _solve_newton_correction(jacobian, residual)
         x += dx
         last_dx_norm = norm(dx)
         if last_dx_norm < solver.tolerance

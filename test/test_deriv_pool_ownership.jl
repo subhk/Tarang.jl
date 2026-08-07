@@ -1,11 +1,13 @@
 """
 A field handed back by `grad` must not be a buffer the derivative pool can reissue.
 
-THE BUG THIS PINS. `evaluate_differentiate` returns memory borrowed from a global
-rotating pool (`_DERIV_RESULT_POOL`, `_DERIV_RESULT_IDX`), which hands the same
-slot to the next caller after `_DERIV_RESULT_POOL_SIZE` checkouts. `grad` stored
-those buffers directly into the `VectorField` / `TensorField` it returned, so the
-container went on referencing pool slots after the pool had moved on.
+THE BUG THIS PINS. The derivative kernel writes into memory borrowed from a
+global rotating pool (`_DERIV_RESULT_POOL`, `_DERIV_RESULT_IDX`), which hands the
+same slot to the next internal borrower after `_DERIV_RESULT_POOL_SIZE`
+checkouts. Public `evaluate_differentiate` calls now copy out by default, while
+explicit `own=false` internal calls expose the borrowed buffer. `grad` once
+stored those buffers directly into the `VectorField` / `TensorField` it returned,
+so the container kept referencing pool slots after the pool had moved on.
 
 A 3-D vector gradient is a 3x3 Jacobian: 9 slots held live. Two live vector
 gradients need 18, against a pool of 16. So
@@ -142,11 +144,54 @@ end
     end
 end
 
+@testset "public scalar derivatives own their results" begin
+    coords, dist, bases = _pool_test_domain()
+    f = ScalarField(dist, "f", bases, Float64)
+    set!(f, (x, y, z) -> sin(x))
+    coord = coords["x"]
+
+    # Both exported entry points hand their results to user code. Retaining either
+    # result must therefore be safe across any number of later derivative calls.
+    held_evaluate = evaluate(Tarang.Differentiate(f, coord, 1), :g)
+    held_direct = Tarang.evaluate_differentiate(
+        Tarang.Differentiate(f, coord, 1), :g)
+    evaluate_snapshot = copy(Array(get_grid_data(held_evaluate)))
+    direct_snapshot = copy(Array(get_grid_data(held_direct)))
+
+    for k in 1:(2 * Tarang._DERIV_RESULT_POOL_SIZE)
+        set!(f, (x, y, z) -> k * sin(x))
+        evaluate(Tarang.Differentiate(f, coord, 1), :g)
+    end
+
+    @test Array(get_grid_data(held_evaluate)) == evaluate_snapshot
+    @test Array(get_grid_data(held_direct)) == direct_snapshot
+end
+
+@testset "nested derivative operands remain owned until consumed" begin
+    coords, dist, bases = _pool_test_domain()
+    coord = coords["x"]
+
+    # A binary evaluator retains its left operand while recursively evaluating
+    # the right subtree. With one derivative on the left and a full pool's worth
+    # on the right, a borrowed left result would be overwritten before addition.
+    derivatives = map(1:(Tarang._DERIV_RESULT_POOL_SIZE + 1)) do amplitude
+        f = ScalarField(dist, "f$amplitude", bases, Float64)
+        set!(f, (x, y, z) -> amplitude * sin(x))
+        Tarang.Differentiate(f, coord, 1)
+    end
+    expression = foldr(Tarang.AddOperator, derivatives)
+    result = evaluate(expression, :g)
+
+    N = 8
+    grid = [2π * (m - 1) / N for m in 1:N]
+    amplitude_sum = sum(1:(Tarang._DERIV_RESULT_POOL_SIZE + 1))
+    expected = [amplitude_sum * cos(x) for x in grid, _ in grid, _ in grid]
+    @test maximum(abs, Array(get_grid_data(result)) .- expected) < 1e-9
+end
+
 @testset "the pool is still a pool" begin
-    # Ownership is taken by `grad`, not by removing pooling: a bare
-    # `evaluate_differentiate` still returns borrowed memory, which is what makes
-    # the transient single-derivative case allocation-free. If this ever stops
-    # being true the ownership copies above become dead weight and should go.
+    # Ownership is taken at public boundaries, not by removing pooling: internal
+    # callers may explicitly borrow for a transient, immediately-consumed result.
     coords, dist, bases = _pool_test_domain()
     f = ScalarField(dist, "f", bases, Float64)
     set!(f, (x, y, z) -> sin(x))
@@ -154,7 +199,8 @@ end
 
     seen = UInt64[]
     for _ in 1:(Tarang._DERIV_RESULT_POOL_SIZE + 1)
-        d = Tarang.evaluate_differentiate(Tarang.Differentiate(f, coord, 1), :g)
+        d = Tarang.evaluate_differentiate(
+            Tarang.Differentiate(f, coord, 1), :g; own=false)
         push!(seen, objectid(d))
     end
     @test length(unique(seen)) <= Tarang._DERIV_RESULT_POOL_SIZE

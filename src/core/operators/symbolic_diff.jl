@@ -1,13 +1,15 @@
 """
     Symbolic Differentiation for Operator Expressions
 
-Provides `sym_diff(expr, var)` for computing symbolic derivatives of operator
-expressions with respect to field variables. Used by the NLBVP solver to
-build analytical Jacobians via Frechet differentiation.
+Provides pointwise symbolic partial derivatives through `sym_diff(expr, var)`
+and perturbation-aware directional derivatives through
+`frechet_differential(expr, vars, perts)`. The latter is used by the NLBVP
+Jacobian path because differential operators produce linear maps rather than
+scalar derivative coefficients.
 
 Key components:
 - UFUNC_DERIVATIVES: lookup table for derivatives of standard math functions
-- sym_diff(): recursive symbolic differentiation following chain/product/sum rules
+- sym_diff(): pointwise symbolic differentiation following chain/product/sum rules
 - simplify(): basic algebraic simplification (0+x→x, 1*x→x, 0*x→0)
 - frechet_differential(): linearization dF(X0).dX = Σ (∂F/∂uⱼ) * δuⱼ
 - build_symbolic_jacobian(): assemble Jacobian matrix for NLBVP Newton iteration
@@ -56,8 +58,8 @@ Rules:
 - Divide: quotient rule
 - Negate: d(-f)/d(var) = -d(f)/d(var)
 - Power: d(f^n)/d(var) = n*f^(n-1)*d(f)/d(var)
-- Differentiate: commutes with sym_diff (d/dx commutes with d/du)
-- Laplacian: commutes with sym_diff
+- Differential operators: their derivatives are linear maps and require an
+  explicit perturbation; use `frechet_differential` for those expressions
 - UnaryGridFunction: chain rule using UFUNC_DERIVATIVES
 """
 function sym_diff end
@@ -129,39 +131,22 @@ function sym_diff(op::PowerOperator, var::ScalarField)
     end
 end
 
-# Differential operators commute with sym_diff
-function sym_diff(op::Differentiate, var::ScalarField)
-    d_operand = sym_diff(op.operand, var)
-    if d_operand == 0 || d_operand === 0
-        return 0
-    end
-    if isa(d_operand, Number)
-        return 0  # Derivative of constant is 0
-    end
-    return Differentiate(d_operand, op.coord, op.order)
+# A two-argument scalar partial cannot represent an operator-valued derivative.
+# For example, d[Δ(u)]/du is the map δu -> Δ(δu), not the scalar zero and not
+# Δ(1). Returning either silently loses where the perturbation belongs. Keep the
+# independent-operand zero case, but require the directional Frechet API whenever
+# this operator actually depends on `var`.
+function _operator_valued_symdiff(op::Operator, var::ScalarField)
+    has(op.operand, var) || return 0
+    throw(ArgumentError(
+        "sym_diff cannot represent the operator-valued derivative of " *
+        "$(nameof(typeof(op))) with two arguments. Use " *
+        "frechet_differential(expr, [var], [perturbation]) instead."))
 end
 
-function sym_diff(op::Laplacian, var::ScalarField)
-    d_operand = sym_diff(op.operand, var)
-    if d_operand == 0 || d_operand === 0
-        return 0
-    end
-    if isa(d_operand, Number)
-        return 0
-    end
-    return Laplacian(d_operand)
-end
-
-function sym_diff(op::FractionalLaplacian, var::ScalarField)
-    d_operand = sym_diff(op.operand, var)
-    if d_operand == 0 || d_operand === 0
-        return 0
-    end
-    if isa(d_operand, Number)
-        return 0
-    end
-    return FractionalLaplacian(d_operand, op.α)
-end
+sym_diff(op::Differentiate, var::ScalarField) = _operator_valued_symdiff(op, var)
+sym_diff(op::Laplacian, var::ScalarField) = _operator_valued_symdiff(op, var)
+sym_diff(op::FractionalLaplacian, var::ScalarField) = _operator_valued_symdiff(op, var)
 
 # Chain rule for UnaryGridFunction
 function sym_diff(op::UnaryGridFunction, var::ScalarField)
@@ -199,22 +184,9 @@ function sym_diff(op::Copy, var::ScalarField)
     return sym_diff(op.operand, var)
 end
 
-# Gradient, Divergence, Curl pass through
-function sym_diff(op::Gradient, var::ScalarField)
-    d_operand = sym_diff(op.operand, var)
-    if d_operand == 0 || d_operand === 0
-        return 0
-    end
-    return Gradient(d_operand, op.coordsys)
-end
-
-function sym_diff(op::Divergence, var::ScalarField)
-    d_operand = sym_diff(op.operand, var)
-    if d_operand == 0 || d_operand === 0
-        return 0
-    end
-    return Divergence(d_operand)
-end
+# Gradient and divergence are operator-valued for the same reason.
+sym_diff(op::Gradient, var::ScalarField) = _operator_valued_symdiff(op, var)
+sym_diff(op::Divergence, var::ScalarField) = _operator_valued_symdiff(op, var)
 
 # TimeDerivative: for NLBVP (steady-state), ∂t(u) = 0 so ∂(∂t(u))/∂u = 0
 function sym_diff(op::TimeDerivative, var::ScalarField)
@@ -340,6 +312,116 @@ end
 # Frechet Differentiation for NLBVP
 # ============================================================================
 
+@inline _direction_iszero(x) = x === 0 || (x isa Number && iszero(x))
+
+"""
+    _directional_diff(expr, var, pert)
+
+Construct the directional derivative `d(expr)[var]·pert`. Unlike `sym_diff`,
+this keeps the perturbation inside differential operators, which is required for
+field-valued functional derivatives such as `d[Δ(u)]·δu = Δ(δu)`.
+"""
+_directional_diff(f::ScalarField, var::ScalarField, pert::ScalarField) =
+    f === var ? pert : 0
+_directional_diff(::Number, ::ScalarField, ::ScalarField) = 0
+
+function _directional_diff(op::AddOperator, var::ScalarField, pert::ScalarField)
+    return _simplify_add(
+        _directional_diff(op.left, var, pert),
+        _directional_diff(op.right, var, pert))
+end
+
+function _directional_diff(op::SubtractOperator, var::ScalarField, pert::ScalarField)
+    return _simplify_sub(
+        _directional_diff(op.left, var, pert),
+        _directional_diff(op.right, var, pert))
+end
+
+function _directional_diff(op::MultiplyOperator, var::ScalarField, pert::ScalarField)
+    dl = _directional_diff(op.left, var, pert)
+    dr = _directional_diff(op.right, var, pert)
+    return _simplify_add(_simplify_mul(dl, op.right), _simplify_mul(op.left, dr))
+end
+
+function _directional_diff(op::DivideOperator, var::ScalarField, pert::ScalarField)
+    dl = _directional_diff(op.left, var, pert)
+    dr = _directional_diff(op.right, var, pert)
+    _direction_iszero(dr) && return _simplify_div(dl, op.right)
+    numerator = _simplify_sub(
+        _simplify_mul(dl, op.right), _simplify_mul(op.left, dr))
+    return _simplify_div(numerator, _simplify_mul(op.right, op.right))
+end
+
+function _directional_diff(op::NegateOperator, var::ScalarField, pert::ScalarField)
+    return _simplify_neg(_directional_diff(op.operand, var, pert))
+end
+
+function _directional_diff(op::PowerOperator, var::ScalarField, pert::ScalarField)
+    df = _directional_diff(op.left, var, pert)
+    dn = _directional_diff(op.right, var, pert)
+    _direction_iszero(dn) || error(
+        "Directional differentiation of variable exponents is not supported")
+    return _simplify_mul(
+        _simplify_mul(op.right, PowerOperator(op.left, _simplify_sub(op.right, 1))), df)
+end
+
+function _directional_diff(op::UnaryGridFunction, var::ScalarField, pert::ScalarField)
+    du = _directional_diff(op.operand, var, pert)
+    _direction_iszero(du) && return 0
+    f_prime = get(UFUNC_DERIVATIVES, op.func, nothing)
+    f_prime === nothing && error(
+        "No symbolic derivative registered for function '$(op.name)'. " *
+        "Add it to UFUNC_DERIVATIVES.")
+    outer = UnaryGridFunction(op.operand, f_prime, "d_$(op.name)")
+    return _simplify_mul(outer, du)
+end
+
+function _directional_diff(op::GeneralFunction, var::ScalarField, pert::ScalarField)
+    du = _directional_diff(op.operand, var, pert)
+    _direction_iszero(du) && return 0
+    f_prime = get(UFUNC_DERIVATIVES, op.func, nothing)
+    f_prime === nothing && error(
+        "No symbolic derivative registered for function '$(op.name)'. " *
+        "Add it to UFUNC_DERIVATIVES.")
+    outer = GeneralFunction(op.operand, f_prime, "d_$(op.name)")
+    return _simplify_mul(outer, du)
+end
+
+_directional_diff(op::Copy, var::ScalarField, pert::ScalarField) =
+    _directional_diff(op.operand, var, pert)
+
+function _directional_diff(op::Differentiate, var::ScalarField, pert::ScalarField)
+    inner = _directional_diff(op.operand, var, pert)
+    return _direction_iszero(inner) ? 0 : Differentiate(inner, op.coord, op.order)
+end
+
+function _directional_diff(op::Laplacian, var::ScalarField, pert::ScalarField)
+    inner = _directional_diff(op.operand, var, pert)
+    return _direction_iszero(inner) ? 0 : Laplacian(inner)
+end
+
+function _directional_diff(op::FractionalLaplacian, var::ScalarField, pert::ScalarField)
+    inner = _directional_diff(op.operand, var, pert)
+    return _direction_iszero(inner) ? 0 : FractionalLaplacian(inner, op.α)
+end
+
+function _directional_diff(op::Gradient, var::ScalarField, pert::ScalarField)
+    inner = _directional_diff(op.operand, var, pert)
+    return _direction_iszero(inner) ? 0 : Gradient(inner, op.coordsys)
+end
+
+function _directional_diff(op::Divergence, var::ScalarField, pert::ScalarField)
+    inner = _directional_diff(op.operand, var, pert)
+    return _direction_iszero(inner) ? 0 : Divergence(inner)
+end
+
+_directional_diff(::TimeDerivative, ::ScalarField, ::ScalarField) = 0
+
+function _directional_diff(op::Operator, var::ScalarField, pert::ScalarField)
+    has(op, var) || return 0
+    error("Directional differentiation is not implemented for operator type $(typeof(op))")
+end
+
 """
     frechet_differential(F, vars, perts)
 
@@ -358,9 +440,9 @@ function frechet_differential(F, vars::Vector, perts::Vector)
 
     terms = Any[]
     for (var, pert) in zip(vars, perts)
-        dF_dvar = sym_diff(F, var)
-        (dF_dvar === 0 || dF_dvar == 0) && continue
-        push!(terms, _simplify_mul(dF_dvar, pert))
+        direction = _directional_diff(F, var, pert)
+        _direction_iszero(direction) && continue
+        push!(terms, direction)
     end
     isempty(terms) && return 0
     return foldl(_simplify_add, terms)
@@ -369,20 +451,21 @@ end
 """
     build_symbolic_jacobian(problem, state_fields)
 
-Build the Jacobian matrix for an NLBVP by symbolically differentiating
-each equation residual with respect to each state variable, then
-evaluating the derivatives at the current state.
+Build the Jacobian matrix for an NLBVP by constructing the directional
+derivative of each equation residual and applying it to both quadratures of
+each coefficient-space basis vector at the current state.
 
-Returns a sparse matrix J where J[i,j] = ∂F_i/∂u_j evaluated at current state.
+Returns a doubled-real sparse matrix acting on `[real(x); imag(x)]`. This is
+required for `RealFourier` half-spectra: nonlinear physical-space operations are
+real-linear in their packed complex coefficients, but are not complex-linear.
 
-For operator-valued derivatives (e.g., Laplacian), the existing matrix
-infrastructure is used. For field-valued derivatives (e.g., 2*u from u²),
-diagonal matrices are constructed from grid values.
+Applying the actual directional expression preserves differential operators and
+the convolution induced by field-valued pointwise multipliers. This CPU fallback
+favours correctness over the diagonal approximation previously used here.
 """
 function build_symbolic_jacobian(problem::Problem, state_fields)
     any(_field_uses_gpu, state_fields) && error(
         "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
-    n = length(fields_to_vector(state_fields))
     vars = state_fields
 
     # Get equation data
@@ -420,19 +503,20 @@ function build_symbolic_jacobian(problem::Problem, state_fields)
 
         col_offset = 0
         for (j, var) in enumerate(vars)
-            # Compute ∂F_i/∂u_j symbolically
-            dF_duj = sym_diff(F_i, var)
+            block = _directional_jacobian_block(
+                F_i, var, state_fields[i], block_sizes[i], block_sizes[j])
 
-            if dF_duj !== 0 && dF_duj != 0
-                # Evaluate the derivative at the current state
-                block = _evaluate_jacobian_block(dF_duj, var, block_sizes[i], block_sizes[j])
-
-                # Insert non-zeros into sparse arrays
-                for (bi, bj, bv) in _sparse_entries(block)
-                    push!(I_idx, row_offset + bi)
-                    push!(J_idx, col_offset + bj)
-                    push!(V_val, bv)
-                end
+            # A block is locally ordered as [real rows; imag rows] ×
+            # [real cols; imag cols]. Map it into the global ordering
+            # [real(all fields); imag(all fields)].
+            for (bi, bj, bv) in _sparse_entries(block)
+                global_i = bi <= block_sizes[i] ? row_offset + bi :
+                           total_size + row_offset + bi - block_sizes[i]
+                global_j = bj <= block_sizes[j] ? col_offset + bj :
+                           total_size + col_offset + bj - block_sizes[j]
+                push!(I_idx, global_i)
+                push!(J_idx, global_j)
+                push!(V_val, bv)
             end
 
             col_offset += block_sizes[j]
@@ -440,7 +524,10 @@ function build_symbolic_jacobian(problem::Problem, state_fields)
         row_offset += block_sizes[i]
     end
 
-    return sparse(I_idx, J_idx, V_val, total_size, total_size)
+    for field in state_fields
+        coeff_data!(field)
+    end
+    return sparse(I_idx, J_idx, V_val, 2total_size, 2total_size)
 end
 
 """
@@ -479,59 +566,144 @@ function _get_residual_expression(eq_data)
 end
 
 """
+    _directional_jacobian_block(residual, var, template, nrows, ncols)
+
+Assemble one Jacobian block by applying the exact directional expression to the
+real and imaginary quadratures of every coefficient basis vector. Rebuilding
+the expression for every probe keeps its perturbation field live inside nested
+differential operators.
+"""
+function _directional_jacobian_block(residual, var::ScalarField,
+                                     template::ScalarField, nrows::Int, ncols::Int)
+    pert = ScalarField(var.dist, "δ_$(var.name)", var.bases, var.dtype)
+    basis_vector = zeros(ComplexF64, ncols)
+    real_actions = zeros(ComplexF64, nrows, ncols)
+    imag_actions = zeros(ComplexF64, nrows, ncols)
+
+    for col in 1:ncols
+        for (probe, actions) in ((1.0 + 0.0im, real_actions),
+                                 (0.0 + 1.0im, imag_actions))
+            fill!(basis_vector, 0)
+            basis_vector[col] = probe
+            copy_solution_to_fields!([pert], basis_vector)
+
+            direction = _directional_diff(residual, var, pert)
+            _direction_iszero(direction) && continue
+            result = direction isa ScalarField ? direction :
+                     evaluate_solver_expression(
+                         direction, [pert]; layout=:g, template=template)
+            result isa ScalarField || error(
+                "Directional Jacobian action for $(typeof(residual)) returned " *
+                "$(typeof(result)); expected ScalarField")
+            values = fields_to_vector([result])
+            length(values) == nrows || throw(DimensionMismatch(
+                "Directional Jacobian action has $(length(values)) coefficients, expected $nrows"))
+            @views actions[:, col] .= values
+        end
+    end
+
+    return _doubled_real_matrix(real_actions, imag_actions)
+end
+
+"""Build the real matrix mapping `[Re(x); Im(x)]` to `[Re(y); Im(y)]`."""
+function _doubled_real_matrix(real_actions::AbstractMatrix,
+                              imag_actions::AbstractMatrix)
+    size(real_actions) == size(imag_actions) || throw(DimensionMismatch(
+        "Real and imaginary Jacobian probes must have matching sizes"))
+    return sparse([real.(real_actions) real.(imag_actions);
+                   imag.(real_actions) imag.(imag_actions)])
+end
+
+"""Doubled-real representation of a complex-linear matrix."""
+function _complex_linear_to_doubled_real(matrix::AbstractMatrix)
+    return sparse([real.(matrix) -imag.(matrix);
+                   imag.(matrix)  real.(matrix)])
+end
+
+function _scalar_to_doubled_real(value::Number, nrows::Int, ncols::Int)
+    n = min(nrows, ncols)
+    identity_block = spdiagm(nrows, ncols, 0 => ones(Float64, n))
+    a = Float64(real(value))
+    b = Float64(imag(value))
+    return [a .* identity_block  -b .* identity_block;
+            b .* identity_block   a .* identity_block]
+end
+
+"""
 Evaluate a Jacobian block (derivative expression) to a matrix.
-For scalar-valued expressions (field * perturbation), returns a diagonal matrix.
+For scalar-valued expressions, returns their exact coefficient-space
+multiplication matrix.
 For operator-valued expressions (Laplacian), returns the operator matrix.
 
 GPU-valued Jacobian blocks are rejected until sparse Jacobian assembly is
 device-native; field data is never downloaded implicitly.
 """
+function _field_multiplication_matrix(coefficient::ScalarField, var::ScalarField,
+                                      nrows::Int, ncols::Int)
+    coefficient.bases == var.bases || throw(ArgumentError(
+        "Jacobian coefficient field and perturbation field must have matching bases"))
+    pert = ScalarField(var.dist, "δ_$(var.name)", var.bases, var.dtype)
+    basis_vector = zeros(ComplexF64, ncols)
+    real_actions = zeros(ComplexF64, nrows, ncols)
+    imag_actions = zeros(ComplexF64, nrows, ncols)
+
+    for col in 1:ncols
+        for (probe, actions) in ((1.0 + 0.0im, real_actions),
+                                 (0.0 + 1.0im, imag_actions))
+            fill!(basis_vector, 0)
+            basis_vector[col] = probe
+            copy_solution_to_fields!([pert], basis_vector)
+            product = coefficient * pert
+            values = fields_to_vector([product])
+            length(values) == nrows || throw(DimensionMismatch(
+                "Coefficient product has $(length(values)) coefficients, expected $nrows"))
+            @views actions[:, col] .= values
+        end
+    end
+    return _doubled_real_matrix(real_actions, imag_actions)
+end
+
+
 function _evaluate_jacobian_block(expr, var::ScalarField, nrows::Int, ncols::Int)
     _field_uses_gpu(var) && error(
         "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
     if isa(expr, Number)
-        # Constant: scalar * identity
-        return expr * sparse(I, min(nrows, ncols), min(nrows, ncols))
+        return _scalar_to_doubled_real(expr, nrows, ncols)
     elseif isa(expr, ScalarField)
-        # Field-valued: diagonal matrix from coefficient values
-        data = coeff_data!(expr)
+        data = grid_data!(expr)
         is_gpu_array(data) && error(
             "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
-        cpu_data = data
-        n = min(length(cpu_data), nrows, ncols)
-        return spdiagm(0 => real.(cpu_data[1:n]))
+        return _field_multiplication_matrix(expr, var, nrows, ncols)
     elseif isa(expr, Operator)
         # Try to evaluate as a matrix
         try
-            result = evaluate(expr, :c)
+            result = evaluate(expr, :g)
             if isa(result, ScalarField)
-                data = coeff_data!(result)
+                data = grid_data!(result)
                 is_gpu_array(data) && error(
                     "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
-                cpu_data = data
-                n = min(length(cpu_data), nrows, ncols)
-                return spdiagm(0 => real.(cpu_data[1:n]))
+                return _field_multiplication_matrix(result, var, nrows, ncols)
             elseif isa(result, AbstractMatrix)
                 is_gpu_array(result) && error(
                     "GPU symbolic Jacobian matrices are unsupported; CPU fallback is disabled.")
-                return result
+                return _complex_linear_to_doubled_real(result)
             elseif isa(result, Number)
-                return result * sparse(I, min(nrows, ncols), min(nrows, ncols))
+                return _scalar_to_doubled_real(result, nrows, ncols)
             end
         catch e1
             # Fallback: try to get operator matrix from infrastructure
             try
-                return subproblem_matrix(expr)
+                return _complex_linear_to_doubled_real(subproblem_matrix(expr))
             catch e2
                 # Last resort: identity block — warn so Newton convergence issues are diagnosable
                 @warn "Jacobian block for $(typeof(expr)) could not be evaluated; using identity fallback. " *
                       "Newton convergence may be degraded or incorrect." evaluate_error=e1 matrix_error=e2 maxlog=3
-                return sparse(I, min(nrows, ncols), min(nrows, ncols))
+                return _scalar_to_doubled_real(1, nrows, ncols)
             end
         end
     end
     @warn "Unrecognized expression type $(typeof(expr)) in Jacobian block; using identity fallback." maxlog=3
-    return sparse(I, min(nrows, ncols), min(nrows, ncols))
+    return _scalar_to_doubled_real(1, nrows, ncols)
 end
 
 """Extract sparse entries (i, j, v) from a matrix."""
@@ -540,18 +712,18 @@ function _sparse_entries(M)
         I_m, J_m, V_m = findnz(M)
         return zip(I_m, J_m, V_m)
     elseif isa(M, AbstractMatrix)
-        entries = Tuple{Int, Int, Float64}[]
+        entries = Tuple{Int, Int, Any}[]
         for j in 1:size(M, 2), i in 1:size(M, 1)
             v = M[i, j]
             if v != 0
-                push!(entries, (i, j, Float64(v)))
+                push!(entries, (i, j, v))
             end
         end
         return entries
     elseif isa(M, Number)
-        return [(1, 1, Float64(M))]
+        return [(1, 1, M)]
     end
-    return Tuple{Int, Int, Float64}[]
+    return Tuple{Int, Int, Any}[]
 end
 
 # ============================================================================

@@ -23,7 +23,8 @@ function evaluate_cartesian_gradient(op::CartesianGradient, layout::Symbol=:g)
         for (i, coord) in enumerate(coordsys.coords)
             deriv_op = Differentiate(operand, coord, 1)
             # Own the pooled buffer; see _own_borrowed_field in field_pool.jl.
-            result.components[i] = _own_borrowed_field(evaluate_differentiate(deriv_op, layout))
+            result.components[i] = _own_borrowed_field(
+                evaluate_differentiate(deriv_op, layout; own=false))
         end
 
         return result
@@ -37,7 +38,8 @@ function evaluate_cartesian_gradient(op::CartesianGradient, layout::Symbol=:g)
                 deriv_op = Differentiate(comp, coord, 1)
                 # 3-D holds 9 of these live; two live gradients exceed the pool.
                 # See _own_borrowed_field in field_pool.jl.
-                result.components[i, j] = _own_borrowed_field(evaluate_differentiate(deriv_op, layout))
+                result.components[i, j] = _own_borrowed_field(
+                    evaluate_differentiate(deriv_op, layout; own=false))
             end
         end
 
