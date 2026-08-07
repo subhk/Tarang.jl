@@ -64,6 +64,7 @@ mutable struct FieldPool
 end
 
 const _FIELD_POOL_OWNERS = WeakKeyDict{Any, Any}()
+const _FIELD_POOL_ACTIVE = WeakKeyDict{Any, Bool}()
 
 # ---------------------------------------------------------------------------
 # checkout!
@@ -105,6 +106,7 @@ function checkout!(pool::FieldPool,
     field._from_pool = true
     field._pool_generation += 1
     _FIELD_POOL_OWNERS[field] = pool
+    _FIELD_POOL_ACTIVE[field] = true
     pool.in_use += 1
     return field
 end
@@ -121,7 +123,8 @@ Return `field` to the pool so it can be reused by a future `checkout!` call.
 The field's `current_layout` is reset to `:g` before it is stashed.
 
 Throws `ArgumentError` if the field was not originally obtained from this pool
-(i.e. `field._from_pool` is `false`).
+(i.e. `field._from_pool` is `false`), belongs to another pool, or has already
+been returned from its current checkout.
 
 If the per-key stack already holds `pool.max_per_key` fields the returned field
 is simply dropped (allowing the GC to collect it).
@@ -147,6 +150,11 @@ function return!(pool::FieldPool, field::ScalarField)
             "Cannot return ScalarField $(field.name) to a different FieldPool " *
             "than the one that checked it out."))
     end
+    if !get(_FIELD_POOL_ACTIVE, field, false)
+        throw(ArgumentError(
+            "Cannot return pooled ScalarField $(field.name) because it is not " *
+            "currently checked out; it has already been returned."))
+    end
 
     # Reset layout so the next user always starts from a known state
     field.current_layout = :g
@@ -159,7 +167,8 @@ function return!(pool::FieldPool, field::ScalarField)
     end
     # else: drop the field and let GC collect it
 
-    pool.in_use = max(0, pool.in_use - 1)
+    _FIELD_POOL_ACTIVE[field] = false
+    pool.in_use -= 1
     return nothing
 end
 
@@ -212,6 +221,7 @@ function prewarm!(pool::FieldPool,
         field = ScalarField(pool.dist, "pool_field", bases, dtype)
         field._from_pool = true
         _FIELD_POOL_OWNERS[field] = pool
+        _FIELD_POOL_ACTIVE[field] = false
         # _pool_generation stays 0 — it will be incremented on first checkout
         push!(stack, field)
     end

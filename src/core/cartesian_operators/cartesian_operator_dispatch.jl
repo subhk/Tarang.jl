@@ -162,7 +162,8 @@ function evaluate(op::DirectProductGradient, layout::Symbol=:g)
         for (i, coord) in enumerate(coordsys.coords)
             # Own the pooled buffer; see _own_borrowed_field in field_pool.jl.
             result.components[i] =
-                _own_borrowed_field(evaluate_differentiate(Differentiate(operand, coord, 1), layout))
+                _own_borrowed_field(evaluate_differentiate(
+                    Differentiate(operand, coord, 1), layout; own=false))
         end
         return result
     end

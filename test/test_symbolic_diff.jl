@@ -10,11 +10,10 @@ test_dedalus_features.jl; this file targets the remaining branches:
   - Chain rule for more UFUNCs (cos, tan, tanh, log, sqrt, sinh, cosh,
     atan, abs) beyond sin/exp; GeneralFunction chain rule; error path for
     an unregistered function.
-  - Differential-operator passthrough/commute: Differentiate, Laplacian,
-    FractionalLaplacian, Gradient, Divergence, Copy.
-  - Conventions: sym_diff(Differentiate(f), f) == 0 and
-    sym_diff(TimeDerivative(f), f) == 0 (linear-derivative terms are
-    handled by the solver's linear operator L, not by Frechet).
+  - Differential-operator guards: two-argument sym_diff rejects operator-valued
+    derivatives and directs callers to perturbation-aware Frechet differentiation.
+  - Directional Frechet rules for Differentiate, Laplacian, and
+    FractionalLaplacian, plus the steady-NLBVP TimeDerivative convention.
   - The _simplify_* helpers unit-tested directly.
   - frechet_differential / build_symbolic_jacobian on simple residuals
     with analytically-known derivatives.
@@ -28,6 +27,8 @@ using Test
 using Tarang
 using LinearAlgebra
 using SparseArrays
+
+sd_real_dofs(v::AbstractVector{<:Number}) = vcat(real.(v), imag.(v))
 
 # ----------------------------------------------------------------------------
 # Helpers
@@ -269,7 +270,7 @@ end
 end
 
 # -----------------------------------------------------------------------
-@testset "Differentiate: commute + convention" begin
+@testset "Differentiate: operator-valued derivative guard" begin
     fu, x, _, coords1d_dist, coords = sd_fourier_field(name="u")
     fg, _, _, _, _ = sd_fourier_field(name="g")
     Tarang.get_grid_data(fu) .= @. 0.4 + sin(x)
@@ -277,20 +278,14 @@ end
     Tarang.get_grid_data(fg) .= gvals
     cx = coords["x"]
 
-    # Commute: d/du[ d/dx(u*g) ] = d/dx(g)   (g independent of u).
-    # Evaluate both sides numerically and compare.
+    # A two-argument symbolic partial cannot represent the linear map
+    # δu -> d/dx(g*δu). It must direct callers to frechet_differential instead
+    # of returning d/dx(g), which silently drops the perturbation inside d/dx.
     expr = Tarang.Differentiate(Tarang.MultiplyOperator(fu, fg), cx, 1)
-    d = sym_diff(expr, fu)
-    @test isa(d, Tarang.Differentiate)
-    lhs = eval_grid(d)
-    rhs = eval_grid(Tarang.Differentiate(fg, cx, 1))   # analytic-equivalent ref
-    @test isapprox(lhs, rhs; rtol=1e-9, atol=1e-10)
+    @test_throws ArgumentError sym_diff(expr, fu)
 
-    # CONVENTION (tested, not a bug): d/du[ d/dx(u) ] == 0.
-    # The operand u reduces to the constant 1, so the Differentiate branch
-    # returns 0. Linear-derivative terms are handled by the solver's linear
-    # operator L, NOT by Frechet differentiation.
-    @test sym_diff(Tarang.Differentiate(fu, cx, 1), fu) == 0
+    # The same guard applies to the linear map δu -> d/dx(δu).
+    @test_throws ArgumentError sym_diff(Tarang.Differentiate(fu, cx, 1), fu)
 
     # Operand independent of var -> 0 (d_operand == 0 branch).
     fv, _, _, _, _ = sd_fourier_field(name="v")
@@ -298,23 +293,18 @@ end
 end
 
 # -----------------------------------------------------------------------
-@testset "Laplacian: commute + convention" begin
+@testset "Laplacian: operator-valued derivative guard" begin
     fu, x, y, coords, _ = sd_fourier_field_2d(name="u")
     fg, _, _, _, _ = sd_fourier_field_2d(name="g")
     Tarang.get_grid_data(fu) .= @. 0.3 + sin(x) * cos(y)
     gvals = @. 1.0 + cos(x) * sin(2y)
     Tarang.get_grid_data(fg) .= gvals
 
-    # Commute: d/du[ ∇²(u*g) ] = ∇²(g)   (g independent of u).
+    # The derivative is the map δu -> ∇²(g*δu), not the scalar expression ∇²g.
     expr = Tarang.Laplacian(Tarang.MultiplyOperator(fu, fg))
-    d = sym_diff(expr, fu)
-    @test isa(d, Tarang.Laplacian)
-    lhs = eval_grid(d)
-    rhs = eval_grid(Tarang.Laplacian(fg))
-    @test isapprox(lhs, rhs; rtol=1e-9, atol=1e-10)
+    @test_throws ArgumentError sym_diff(expr, fu)
 
-    # CONVENTION: d/du[ ∇²(u) ] == 0 (operand reduces to constant 1).
-    @test sym_diff(Tarang.Laplacian(fu), fu) == 0
+    @test_throws ArgumentError sym_diff(Tarang.Laplacian(fu), fu)
 
     # Operand independent of var -> 0.
     fv, _, _, _, _ = sd_fourier_field_2d(name="v")
@@ -322,7 +312,7 @@ end
 end
 
 # -----------------------------------------------------------------------
-@testset "FractionalLaplacian: commute + convention" begin
+@testset "FractionalLaplacian: operator-valued derivative guard" begin
     fu, x, y, coords, _ = sd_fourier_field_2d(name="u")
     fg, _, _, _, _ = sd_fourier_field_2d(name="g")
     Tarang.get_grid_data(fu) .= @. 0.3 + sin(x) * cos(y)
@@ -330,56 +320,34 @@ end
     Tarang.get_grid_data(fg) .= gvals
 
     α = 0.5
-    # Commute: d/du[ (-Δ)^α (u*g) ] = (-Δ)^α (g).
+    # This is likewise an operator-valued derivative requiring a perturbation.
     expr = Tarang.FractionalLaplacian(Tarang.MultiplyOperator(fu, fg), α)
-    d = sym_diff(expr, fu)
-    @test isa(d, Tarang.FractionalLaplacian)
-    @test d.α == α
-    lhs = eval_grid(d)
-    rhs = eval_grid(Tarang.FractionalLaplacian(fg, α))
-    @test isapprox(lhs, rhs; rtol=1e-9, atol=1e-10)
+    @test_throws ArgumentError sym_diff(expr, fu)
 
-    # CONVENTION: linear operand reduces to constant -> 0.
-    @test sym_diff(Tarang.FractionalLaplacian(fu, α), fu) == 0
+    @test_throws ArgumentError sym_diff(Tarang.FractionalLaplacian(fu, α), fu)
     # Independent operand -> 0.
     fv, _, _, _, _ = sd_fourier_field_2d(name="v")
     @test sym_diff(Tarang.FractionalLaplacian(fv, α), fu) == 0
 end
 
 # -----------------------------------------------------------------------
-@testset "Gradient / Divergence passthrough" begin
+@testset "Gradient / Divergence operator-valued derivative guards" begin
     fu, x, y, coords, _ = sd_fourier_field_2d(name="u")
     fg, _, _, _, _ = sd_fourier_field_2d(name="g")
     Tarang.get_grid_data(fu) .= @. 0.5 + sin(x) * cos(y)
     gvals = @. 1.0 + cos(x) * sin(y)
     Tarang.get_grid_data(fg) .= gvals
 
-    # Gradient passthrough: d/du[ ∇(u*g) ] = ∇(g).  Compare component-wise.
+    # Both derivatives are linear maps on a perturbation, not plain expressions.
     gexpr = Tarang.Gradient(Tarang.MultiplyOperator(fu, fg), coords)
-    dg = sym_diff(gexpr, fu)
-    @test isa(dg, Tarang.Gradient)
-    got = evaluate(dg)                      # vector field-like
-    ref = evaluate(Tarang.Gradient(fg, coords))
-    for i in 1:2
-        ensure_layout!(got[i], :g)
-        ensure_layout!(ref[i], :g)
-        @test isapprox(Tarang.get_grid_data(got[i]), Tarang.get_grid_data(ref[i]);
-                       rtol=1e-9, atol=1e-10)
-    end
+    @test_throws ArgumentError sym_diff(gexpr, fu)
 
     # Gradient of var-independent operand -> 0.
     fv, _, _, _, _ = sd_fourier_field_2d(name="v")
     @test sym_diff(Tarang.Gradient(fv, coords), fu) == 0
 
-    # Divergence passthrough (structural): d/du[ ∇·(∇(u*g)) ] = ∇·(∇(g)).
-    # The Divergence branch returns Divergence(sym_diff(operand)); the inner
-    # Gradient passthrough turns ∇(u*g) into ∇(g). evaluate(Divergence(Gradient(scalar)))
-    # is not implemented in the evaluator, so we assert the symbolic structure.
     div_expr = Tarang.Divergence(Tarang.Gradient(Tarang.MultiplyOperator(fu, fg), coords))
-    d_div = sym_diff(div_expr, fu)
-    @test isa(d_div, Tarang.Divergence)
-    @test isa(d_div.operand, Tarang.Gradient)          # ∇(g)
-    @test d_div.operand.operand === fg                  # operand of ∇ is g
+    @test_throws ArgumentError sym_diff(div_expr, fu)
 
     # Divergence of var-independent operand -> 0.
     @test sym_diff(Tarang.Divergence(Tarang.Gradient(fv, coords)), fu) == 0
@@ -480,7 +448,7 @@ end
 
 # -----------------------------------------------------------------------
 @testset "frechet_differential" begin
-    fu, x, _, _, _ = sd_fourier_field(name="u")
+    fu, x, _, _, coords = sd_fourier_field(name="u")
     fv, _, _, _, _ = sd_fourier_field(name="v")
     uvals = @. 0.8 + 0.3 * sin(x)
     Tarang.get_grid_data(fu) .= uvals
@@ -506,6 +474,29 @@ end
     expected = @. gvals * duvals + uvals * dvvals
     @test isapprox(eval_grid(dFuv), expected; rtol=1e-9)
 
+    # Linear differential operators act on the perturbation; they are not zero.
+    cx = coords["x"]
+    d_diff = frechet_differential(Tarang.Differentiate(fu, cx, 1), [fu], [du])
+    d_lap = frechet_differential(Tarang.Laplacian(fu), [fu], [du])
+    α = 0.5
+    d_frac = frechet_differential(Tarang.FractionalLaplacian(fu, α), [fu], [du])
+    @test d_diff !== 0
+    @test d_lap !== 0
+    @test d_frac !== 0
+    if d_diff !== 0 && d_lap !== 0 && d_frac !== 0
+        @test isapprox(eval_grid(d_diff), eval_grid(Tarang.Differentiate(du, cx, 1)); rtol=1e-9)
+        @test isapprox(eval_grid(d_lap), eval_grid(Tarang.Laplacian(du)); rtol=1e-9)
+        @test isapprox(eval_grid(d_frac), eval_grid(Tarang.FractionalLaplacian(du, α)); rtol=1e-9)
+    end
+
+    # Differential operators must enclose the full directional product rule:
+    # d[Δ(u²)]·du = Δ(u*du + du*u), not Δ(2u)*du.
+    nested = Tarang.Laplacian(Tarang.MultiplyOperator(fu, fu))
+    d_nested = frechet_differential(nested, [fu], [du])
+    nested_ref = Tarang.Laplacian(Tarang.AddOperator(
+        Tarang.MultiplyOperator(fu, du), Tarang.MultiplyOperator(du, fu)))
+    @test isapprox(eval_grid(d_nested), eval_grid(nested_ref); rtol=1e-8, atol=1e-9)
+
     # Constant residual -> 0 (empty terms branch).
     @test frechet_differential(5.0, [fu], [du]) == 0
 
@@ -526,10 +517,33 @@ end
 
     J = build_symbolic_jacobian(prob, state)
     @test isa(J, SparseMatrixCSC)
-    @test size(J) == (ncoeff, ncoeff)
-    # Residual is lap(u) - u*u - g, so dF/du is non-zero: the assembler must
-    # emit structure, not an empty matrix.
-    @test nnz(J) > 0
+    @test eltype(J) <: Real
+    @test size(J) == (2ncoeff, 2ncoeff)
+    # Residual is lap(u) - u*u - g at u=1. On Fourier mode k=1 its exact
+    # Jacobian eigenvalue is -k² - 2u = -3.
+    mode1 = zeros(ComplexF64, ncoeff)
+    mode1[2] = 1
+    @test isapprox((J * sd_real_dofs(mode1))[2], -3.0; rtol=1e-10, atol=1e-12)
+
+    # A sine perturbation coupled across k=0 exercises the imaginary
+    # RealFourier quadrature. The doubled-real Jacobian must match the complete
+    # directional residual, not only cosine/real coefficient probes.
+    mesh = Tarang.create_meshgrid(fu.domain)
+    x = mesh["x"]
+    ensure_layout!(fu, :g); Tarang.get_grid_data(fu) .= @. 1.0 + 0.25 * cos(3x)
+    sine_pert = ScalarField(fu.dist, "sine_pert", fu.bases, fu.dtype)
+    ensure_layout!(sine_pert, :g); Tarang.get_grid_data(sine_pert) .= @. sin(2x)
+    sine_delta = Tarang.fields_to_vector([sine_pert])
+    residual = Tarang._get_residual_expression(prob.equation_data[1])
+    directional = frechet_differential(residual, [fu], [sine_pert])
+    expected_field = Tarang.evaluate_solver_expression(
+        directional, [sine_pert]; layout=:g, template=fu)
+    expected_direction = Tarang.fields_to_vector([expected_field])
+    varying_J = build_symbolic_jacobian(prob, state)
+    @test isapprox(varying_J * sd_real_dofs(sine_delta),
+                   sd_real_dofs(expected_direction); rtol=1e-10, atol=1e-12)
+    correction = Tarang._solve_newton_correction(varying_J, expected_direction)
+    @test isapprox(correction, -sine_delta; rtol=1e-9, atol=1e-10)
 
     # Guard: no equation data (IR never built) -> error.
     u_bare = ScalarField(fu.dist, "u_bare", fu.bases, Float64)
@@ -553,20 +567,65 @@ end
     bnum = Tarang._evaluate_jacobian_block(3.0, fu, 4, 4)
     @test isa(bnum, SparseMatrixCSC)
     @test all(diag(Matrix(bnum)) .== 3.0)
-    @test size(bnum) == (4, 4)
+    @test size(bnum) == (8, 8)
 
-    # ScalarField branch: diagonal built from this field's own coeff values.
-    coef = real.(Tarang.get_coeff_data(fu))
+    # ScalarField branch: multiplication by a physical constant is that constant
+    # on every valid RealFourier degree of freedom. The imaginary DC/Nyquist
+    # slots are not physical RFFT degrees of freedom and correctly map to zero.
     bsf = Tarang._evaluate_jacobian_block(fu, fu, ncoef, ncoef)
     @test isa(bsf, SparseMatrixCSC)
-    @test isapprox(diag(Matrix(bsf)), coef[1:ncoef]; rtol=1e-12)
+    valid_delta = zeros(ComplexF64, ncoef)
+    valid_delta[1] = 0.5
+    valid_delta[2] = 1 + 2im
+    valid_delta[end] = 0.25
+    @test isapprox(bsf * sd_real_dofs(valid_delta),
+                   2.0 .* sd_real_dofs(valid_delta); rtol=1e-12)
 
-    # Operator branch: MultiplyOperator(2.0, u) evaluates to a ScalarField,
-    # then diag of its coeff data == 2 * (coeff of u).
+    # An operator-valued coefficient is evaluated and gets the same treatment.
     op = Tarang.MultiplyOperator(2.0, fu)
     bop = Tarang._evaluate_jacobian_block(op, fu, ncoef, ncoef)
     @test isa(bop, SparseMatrixCSC)
-    @test isapprox(diag(Matrix(bop)), 2 .* coef[1:ncoef]; rtol=1e-10)
+    @test isapprox(bop * sd_real_dofs(valid_delta),
+                   4.0 .* sd_real_dofs(valid_delta); rtol=1e-10)
+
+    # A varying coefficient couples Fourier modes. Check the full matrix action
+    # against an independently evaluated physical-space product.
+    ensure_layout!(fu, :g); Tarang.get_grid_data(fu) .= @. 1.0 + 0.25 * cos(x)
+    pert = ScalarField(fu.dist, "pert", fu.bases, fu.dtype)
+    ensure_layout!(pert, :g); Tarang.get_grid_data(pert) .= @. cos(2x)
+    varying_block = Tarang._evaluate_jacobian_block(fu, pert, ncoef, ncoef)
+    delta = Tarang.fields_to_vector([pert])
+    expected_product = Tarang.fields_to_vector([fu * pert])
+    @test isapprox(varying_block * sd_real_dofs(delta),
+                   sd_real_dofs(expected_product); rtol=1e-10, atol=1e-12)
+
+    # A RealFourier half-spectrum is only real-linear: multiplication by a
+    # varying real field couples each positive mode to its implicit conjugate.
+    # Crossing through k=0 flips the sine contribution, which a matrix assembled
+    # from cosine-only coefficient probes cannot reproduce.
+    q, qx, _, _, _ = sd_fourier_field(name="q", N=16)
+    ensure_layout!(q, :g); Tarang.get_grid_data(q) .= @. 1.0 + 0.25 * cos(3qx)
+    sine_pert = ScalarField(q.dist, "sine_pert", q.bases, q.dtype)
+    ensure_layout!(sine_pert, :g); Tarang.get_grid_data(sine_pert) .= @. sin(2qx)
+    sn = length(Tarang.fields_to_vector([sine_pert]))
+    sine_block = Tarang._evaluate_jacobian_block(q, sine_pert, sn, sn)
+    sine_delta = Tarang.fields_to_vector([sine_pert])
+    sine_expected = Tarang.fields_to_vector([q * sine_pert])
+    @test isapprox(sine_block * sd_real_dofs(sine_delta),
+                   sd_real_dofs(sine_expected); rtol=1e-10, atol=1e-12)
+
+    # Complex coefficient values must survive assembly.
+    ccoords = CartesianCoordinates("x")
+    cdist = Distributor(ccoords; mesh=(1,), dtype=ComplexF64)
+    cbasis = ComplexFourier(ccoords["x"]; size=8, bounds=(0.0, 2π))
+    ccoef = ScalarField(cdist, "q", (cbasis,), ComplexF64)
+    cvar = ScalarField(cdist, "δu", (cbasis,), ComplexF64)
+    set!(ccoef, (x,) -> 1 + 2im)
+    cn = length(Tarang.get_coeff_data(ccoef))
+    cblock = Tarang._evaluate_jacobian_block(ccoef, cvar, cn, cn)
+    cI = Matrix{Float64}(I, cn, cn)
+    expected_cblock = [cI -2cI; 2cI cI]
+    @test isapprox(Matrix(cblock), expected_cblock; rtol=1e-12)
 
     # _sparse_entries: SparseMatrixCSC path.
     Sp = spdiagm(0 => [1.0, 2.0, 3.0])

@@ -117,6 +117,9 @@ nabla^2 f = Sigma_i d^2f/dx_i^2
 """
 function evaluate_laplacian(lap_op::Laplacian, layout::Symbol=:g)
     operand = lap_op.operand
+    if isa(operand, Operator)
+        operand = evaluate(operand, layout)
+    end
 
     if isa(operand, ScalarField)
         return evaluate_scalar_laplacian(operand, layout)

@@ -56,6 +56,23 @@ end
     end
 
     # -------------------------------------------------------------------
+    # 2b. Returning the same live checkout twice is rejected
+    # -------------------------------------------------------------------
+    @testset "return! rejects duplicate returns" begin
+        pool = FieldPool(dist)
+        field = checkout!(pool, bases, Float64)
+
+        return!(pool, field)
+        @test_throws ArgumentError return!(pool, field)
+
+        first = checkout!(pool, bases, Float64)
+        second = checkout!(pool, bases, Float64)
+        @test first === field
+        @test second !== first
+        @test pool.in_use == 2
+    end
+
+    # -------------------------------------------------------------------
     # 3. return! resets current_layout to :g
     # -------------------------------------------------------------------
     @testset "return! resets layout to :g" begin
