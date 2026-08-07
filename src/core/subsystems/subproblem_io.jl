@@ -23,7 +23,7 @@ function _global_to_local_kx(kx_global::Int, field::ScalarField, sp::Subproblem)
     end
     # Find the separable (Fourier) axis and its global size
     for (axis, g) in enumerate(sp.group)
-        if g isa Integer && axis <= length(field.bases) && field.bases[axis] !== nothing
+        if g isa Integer && axis <= length(field.bases)
             basis = field.bases[axis]
             if isa(basis, FourierBasis)
                 global_size = isa(basis, RealFourier) ? div(basis.meta.size, 2) + 1 : basis.meta.size
@@ -73,7 +73,7 @@ coeff storage actually a `PencilArray`.
 function _needs_solve_transpose(field::ScalarField, dist)
     return dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing &&
            !isempty(field.bases) &&
-           any(b -> b !== nothing && !isa(b, FourierBasis), field.bases) &&
+           any(b -> !is_fourier_axis(b), field.bases) &&
            get_coeff_data(field) isa PencilArrays.PencilArray
 end
 
@@ -315,7 +315,7 @@ function _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool)
     dist = field.dist
     (dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing) || return field
     isempty(field.bases) && return field
-    any(b -> b !== nothing && !isa(b, FourierBasis), field.bases) || return field
+    any(b -> !is_fourier_axis(b), field.bases) || return field
     fft_pa = get_coeff_data(field)
     (fft_pa isa PencilArrays.PencilArray) || return field
     _count_transform!(:coupled_dct)   # 2 collective transposes below
@@ -680,7 +680,7 @@ function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, fie
         end
         return offset + 1
     elseif ndims(cd) == 1
-        if any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
+        if any(b -> !is_fourier_axis(b), field.bases)
             # Pure 1D coupled field (e.g. a single Chebyshev/Jacobi axis, no
             # separable Fourier direction): there is no Fourier mode to select,
             # so gather the ENTIRE coefficient spectrum for this subproblem.
@@ -760,7 +760,7 @@ function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::I
         end
         return offset + 1
     elseif ndims(cd) == 1
-        if any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
+        if any(b -> !is_fourier_axis(b), field.bases)
             # Pure 1D coupled field: write back the ENTIRE coefficient spectrum
             # (mirror of the gather path above).
             n = length(cd)

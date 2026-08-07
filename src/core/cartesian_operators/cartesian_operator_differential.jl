@@ -108,7 +108,13 @@ function subproblem_matrix(op::CartesianGradient, subproblem)
         # Build block matrix with dim² row blocks and dim column blocks
         dim = coordsys.dim
         comps = operand.components
-        n_per = field_dofs(comps[1])
+        # GRID size, matching `build_operator_differentiation_matrix` below.
+        # This read `field_dofs`, which counts COEFFICIENT DOFs — smaller on any
+        # RealFourier axis (144 vs 256 for RealFourier(16)^2) — so the zero
+        # blocks and the differentiation blocks disagreed and the `vcat`/`hcat`
+        # raised DimensionMismatch. The scalar branch above has always used
+        # `get_scalar_size`; only this branch measured the other way.
+        n_per = get_scalar_size(comps[1], subproblem)
         zero_block = spzeros(Float64, n_per, n_per)
 
         rows = SparseMatrixCSC[]
@@ -142,7 +148,7 @@ function check_conditions(op::CartesianGradient)
         # For vector operand, check that all components are in a consistent layout
         layouts = Symbol[]
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+            if comp isa ScalarField
                 push!(layouts, comp.current_layout)
             end
         end
@@ -150,7 +156,7 @@ function check_conditions(op::CartesianGradient)
     else
         # Scalar operand: check layout consistency across derivative args
         layouts = [arg.operand.current_layout for arg in op.args
-                   if hasfield(typeof(arg.operand), :current_layout)]
+                   if arg.operand isa ScalarField]
         return length(Set(layouts)) <= 1
     end
 end
@@ -162,13 +168,13 @@ function enforce_conditions(op::CartesianGradient)
     if isa(operand, VectorField)
         # For vector operand, ensure all components are in coefficient layout
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout)
+            if comp isa ScalarField
                 ensure_layout!(comp, :c)
             end
         end
     else
         for arg in op.args
-            if hasfield(typeof(arg), :operand) && hasfield(typeof(arg.operand), :current_layout)
+            if hasfield(typeof(arg), :operand) && arg.operand isa ScalarField
                 ensure_layout!(arg.operand, :c)
             end
         end
@@ -256,7 +262,9 @@ function subproblem_matrix(op::CartesianDivergence, subproblem)
 
     coordsys = op.coordsys
     n_comp = length(operand.components)
-    n_per_comp = n_comp > 0 ? field_dofs(operand.components[1]) : 0
+    # Grid size, to match the differentiation matrices — see the note in
+    # `subproblem_matrix(::CartesianGradient, …)`.
+    n_per_comp = n_comp > 0 ? get_scalar_size(operand.components[1], subproblem) : 0
 
     blocks = SparseMatrixCSC[]
     for (i, coord) in enumerate(coordsys.coords)
@@ -276,7 +284,7 @@ function check_conditions(op::CartesianDivergence)
     if isa(operand, VectorField)
         layouts = Symbol[]
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+            if comp isa ScalarField
                 push!(layouts, comp.current_layout)
             end
         end
@@ -285,12 +293,12 @@ function check_conditions(op::CartesianDivergence)
     end
 
     # For other operand types, check if they have valid data
-    if hasfield(typeof(operand), :current_layout)
+    if operand isa ScalarField
         layout = operand.current_layout
         if layout == :g
-            return hasfield(typeof(operand), :buffers) && get_grid_data(operand) !== nothing
+            return get_grid_data(operand) !== nothing
         elseif layout == :c
-            return hasfield(typeof(operand), :buffers) && get_coeff_data(operand) !== nothing
+            return get_coeff_data(operand) !== nothing
         end
     end
 
@@ -304,11 +312,11 @@ function enforce_conditions(op::CartesianDivergence)
     # For VectorField, ensure all components are in coefficient layout
     if isa(operand, VectorField)
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout)
+            if comp isa ScalarField
                 ensure_layout!(comp, :c)
             end
         end
-    elseif hasfield(typeof(operand), :current_layout)
+    elseif operand isa ScalarField
         ensure_layout!(operand, :c)
     end
 
@@ -425,7 +433,9 @@ function subproblem_matrix(op::CartesianCurl, subproblem)
 
     coords = op.coordsys.coords
     comps = operand.components
-    n_per = field_dofs(comps[1])
+    # Grid size, to match the differentiation matrices — see the note in
+    # `subproblem_matrix(::CartesianGradient, …)`.
+    n_per = get_scalar_size(comps[1], subproblem)
     zero_block = spzeros(Float64, n_per, n_per)
 
     D = Array{SparseMatrixCSC}(undef, 3, 3)
@@ -454,7 +464,7 @@ function check_conditions(op::CartesianCurl)
     if isa(operand, VectorField)
         layouts = Symbol[]
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+            if comp isa ScalarField
                 push!(layouts, comp.current_layout)
             end
         end
@@ -472,11 +482,11 @@ function enforce_conditions(op::CartesianCurl)
     # For VectorField, ensure all components are in coefficient layout
     if isa(operand, VectorField)
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout)
+            if comp isa ScalarField
                 ensure_layout!(comp, :c)
             end
         end
-    elseif hasfield(typeof(operand), :current_layout)
+    elseif operand isa ScalarField
         ensure_layout!(operand, :c)
     end
 
@@ -563,7 +573,7 @@ function check_conditions(op::CartesianLaplacian)
     if isa(operand, VectorField)
         layouts = Symbol[]
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+            if comp isa ScalarField
                 push!(layouts, comp.current_layout)
             end
         end
@@ -571,12 +581,12 @@ function check_conditions(op::CartesianLaplacian)
     end
 
     # For ScalarField or similar
-    if hasfield(typeof(operand), :current_layout)
+    if operand isa ScalarField
         layout = operand.current_layout
         if layout == :g
-            return hasfield(typeof(operand), :buffers) && get_grid_data(operand) !== nothing
+            return get_grid_data(operand) !== nothing
         elseif layout == :c
-            return hasfield(typeof(operand), :buffers) && get_coeff_data(operand) !== nothing
+            return get_coeff_data(operand) !== nothing
         end
     end
 
@@ -590,11 +600,11 @@ function enforce_conditions(op::CartesianLaplacian)
     # For VectorField, ensure all components are in coefficient layout
     if isa(operand, VectorField)
         for comp in operand.components
-            if hasfield(typeof(comp), :current_layout)
+            if comp isa ScalarField
                 ensure_layout!(comp, :c)
             end
         end
-    elseif hasfield(typeof(operand), :current_layout)
+    elseif operand isa ScalarField
         ensure_layout!(operand, :c)
     end
 

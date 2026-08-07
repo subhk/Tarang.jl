@@ -279,7 +279,7 @@ function check_conditions(op::FractionalLaplacian)
     operand = op.operand
 
     if isa(operand, ScalarField)
-        if hasfield(typeof(operand), :current_layout)
+        if operand isa ScalarField
             layout = operand.current_layout
             if layout == :c
                 return get_coeff_data(operand) !== nothing

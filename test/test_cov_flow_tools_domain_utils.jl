@@ -8,46 +8,17 @@ using Test, Tarang, LinearAlgebra
 # and the many fallback branches with lightweight mock structs.
 
 # ---------------------------------------------------------------------------
-# Mock domain/basis structs to reach the duck-typed fallback branches.
-# The real `Domain` filters out `nothing` bases and always has `:bases`, so
-# the only way to reach those branches is via mocks matching the field shapes
-# the functions probe with `hasfield`.
+# NO MOCKS. This file used to define six stand-in structs (NoBasesDomain,
+# NilBasesDomain, MockDomain, MockMeta, MockMetaBasis, MockDirectBasis,
+# MockUnknownBasis) whose sole purpose was to reach `hasfield` fallback branches
+# in get_domain_size/get_domain_bounds. Those branches could not be reached from
+# the package: `Domain.bases` is `Tuple{Vararg{Basis}}` (so it is never `nothing`
+# and holds no `nothing` entries) and `BasisMeta.bounds` is
+# `Tuple{Float64, Float64}` (so it is never `nothing` and never shorter than 2).
+# The mocks were the only callers those branches ever had, and the branches are
+# gone. Both functions now take `::Union{Nothing, Domain}`, so a stand-in is a
+# MethodError — asserted below.
 # ---------------------------------------------------------------------------
-
-# A mock with NO `:bases` field at all.
-struct NoBasesDomain
-    something_else::Int
-end
-
-# A mock whose `bases` is `nothing`.
-struct NilBasesDomain
-    bases::Any
-end
-
-# A mock domain wrapping an arbitrary iterable of "bases".
-struct MockDomain
-    bases::Any
-end
-
-# A mock basis-meta carrying bounds (matches `basis.meta.bounds`).
-struct MockMeta
-    bounds::Any
-end
-
-# A mock basis that exposes `.meta.bounds`.
-struct MockMetaBasis
-    meta::MockMeta
-end
-
-# A mock basis that exposes a direct `.bounds` field (no `.meta`).
-struct MockDirectBasis
-    bounds::Any
-end
-
-# A mock basis with neither `.meta` nor `.bounds` (unknown type).
-struct MockUnknownBasis
-    label::String
-end
 
 @testset "flow_tools_domain_utils coverage" begin
 
@@ -89,73 +60,20 @@ end
     end
 
     # -----------------------------------------------------------------------
-    # get_domain_size: fallback branches via mocks
+    # get_domain_size: the one fallback that is actually reachable
     # -----------------------------------------------------------------------
     @testset "get_domain_size nothing domain -> default" begin
-        sz = get_domain_size(nothing)
+        sz = @test_logs (:warn,) get_domain_size(nothing)
         @test sz == (2π, 2π, 2π)
     end
 
-    @testset "get_domain_size no :bases field -> default" begin
-        sz = get_domain_size(NoBasesDomain(7))
-        @test sz == (2π, 2π, 2π)
-    end
-
-    @testset "get_domain_size :bases === nothing -> default" begin
-        sz = get_domain_size(NilBasesDomain(nothing))
-        @test sz == (2π, 2π, 2π)
-    end
-
-    @testset "get_domain_size nothing-basis element -> push default 2π" begin
-        # A basis entry that is `nothing` pushes a 2π default and continues.
-        good = MockMetaBasis(MockMeta((0.0, 3.0)))
-        dom = MockDomain([nothing, good])
-        sz = get_domain_size(dom)
-        @test length(sz) == 2
-        @test sz[1] ≈ 2π            # default for the nothing entry
-        @test sz[2] ≈ 3.0          # extent of the good basis
-    end
-
-    @testset "get_domain_size meta.bounds too short -> default" begin
-        # bounds present but length < 2 hits the else branch (line 50).
-        dom = MockDomain([MockMetaBasis(MockMeta((1.0,)))])
-        sz = get_domain_size(dom)
-        @test sz == (2π,)
-    end
-
-    @testset "get_domain_size meta.bounds === nothing -> default" begin
-        dom = MockDomain([MockMetaBasis(MockMeta(nothing))])
-        sz = get_domain_size(dom)
-        @test sz == (2π,)
-    end
-
-    @testset "get_domain_size direct :bounds field" begin
-        # No `.meta`, but a direct `.bounds` field (lines 52-57).
-        dom = MockDomain([MockDirectBasis((1.0, 4.5))])
-        sz = get_domain_size(dom)
-        @test length(sz) == 1
-        @test sz[1] ≈ 3.5
-    end
-
-    @testset "get_domain_size direct :bounds too short -> default" begin
-        # Direct bounds present but length < 2 (line 59).
-        dom = MockDomain([MockDirectBasis((2.0,))])
-        sz = get_domain_size(dom)
-        @test sz == (2π,)
-    end
-
-    @testset "get_domain_size unknown basis type -> default" begin
-        # Neither `.meta` nor `.bounds` (line 62).
-        dom = MockDomain([MockUnknownBasis("mystery")])
-        sz = get_domain_size(dom)
-        @test sz == (2π,)
-    end
-
-    @testset "get_domain_size empty bases -> 3D default" begin
-        # Iterable but empty -> isempty(sizes) (line 67).
-        dom = MockDomain(Any[])
-        sz = get_domain_size(dom)
-        @test sz == (2π, 2π, 2π)
+    @testset "get_domain_size / bounds reject non-domains" begin
+        # Both take ::Union{Nothing, Domain}. Anything else is a MethodError at
+        # the call, not a 2π guess several branches later.
+        @test_throws MethodError get_domain_size(42)
+        @test_throws MethodError get_domain_size(Dict("bases" => nothing))
+        @test_throws MethodError get_domain_bounds(42)
+        @test_throws MethodError get_domain_bounds((bases = nothing,))
     end
 
     # -----------------------------------------------------------------------
@@ -189,71 +107,10 @@ end
     end
 
     # -----------------------------------------------------------------------
-    # get_domain_bounds: fallback branches via mocks
+    # get_domain_bounds: the one reachable fallback
     # -----------------------------------------------------------------------
     @testset "get_domain_bounds nothing domain -> default" begin
         b = get_domain_bounds(nothing)
-        @test b == [(0.0, 2π), (0.0, 2π), (0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds no :bases field -> default" begin
-        b = get_domain_bounds(NoBasesDomain(3))
-        @test b == [(0.0, 2π), (0.0, 2π), (0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds :bases === nothing -> default" begin
-        b = get_domain_bounds(NilBasesDomain(nothing))
-        @test b == [(0.0, 2π), (0.0, 2π), (0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds nothing-basis element -> push default" begin
-        good = MockMetaBasis(MockMeta((1.0, 6.0)))
-        dom = MockDomain([nothing, good])
-        b = get_domain_bounds(dom)
-        @test length(b) == 2
-        @test b[1] == (0.0, 2π)
-        @test b[2] == (1.0, 6.0)
-    end
-
-    @testset "get_domain_bounds meta.bounds too short -> default" begin
-        dom = MockDomain([MockMetaBasis(MockMeta((1.0,)))])
-        b = get_domain_bounds(dom)
-        @test b == [(0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds meta.bounds === nothing -> default" begin
-        dom = MockDomain([MockMetaBasis(MockMeta(nothing))])
-        b = get_domain_bounds(dom)
-        @test b == [(0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds direct :bounds field" begin
-        dom = MockDomain([MockDirectBasis((-2.0, 3.0))])
-        b = get_domain_bounds(dom)
-        @test b == [(-2.0, 3.0)]
-    end
-
-    @testset "get_domain_bounds direct :bounds too short -> default" begin
-        dom = MockDomain([MockDirectBasis((2.0,))])
-        b = get_domain_bounds(dom)
-        @test b == [(0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds direct :bounds === nothing -> default" begin
-        dom = MockDomain([MockDirectBasis(nothing)])
-        b = get_domain_bounds(dom)
-        @test b == [(0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds unknown basis type -> default" begin
-        dom = MockDomain([MockUnknownBasis("mystery")])
-        b = get_domain_bounds(dom)
-        @test b == [(0.0, 2π)]
-    end
-
-    @testset "get_domain_bounds empty bases -> 3D default" begin
-        dom = MockDomain(Any[])
-        b = get_domain_bounds(dom)
         @test b == [(0.0, 2π), (0.0, 2π), (0.0, 2π)]
     end
 

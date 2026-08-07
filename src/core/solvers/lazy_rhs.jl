@@ -805,7 +805,10 @@ end
 """Dealiased field·field product for the lazy RHS, written into `out` (grid layout)."""
 function _dealiased_lazy_product!(out::ScalarField, a::ScalarField, b::ScalarField)
     evaluator = _get_evaluator(out.dist)
-    product = evaluate_transform_multiply(a, b, evaluator)
+    # `own=false`: the product is copied into `out` below and never escapes this
+    # function, so borrowing the pooled buffer is safe here — and this is the hot
+    # RHS path the pool exists for.
+    product = evaluate_transform_multiply(a, b, evaluator; own=false)
     ensure_layout!(product, :g)
     ensure_layout!(out, :g)
     out_data = get_local_data(get_grid_data(out))
@@ -851,8 +854,8 @@ other is expected would be silently wrong. Pure-Fourier has no such ambiguity �
 where the win is: a mixed Chebyshev-Fourier RHS carries a single ∂ node, so it has no siblings to
 share with anyway."""
 @inline function _all_fourier_bases(field::ScalarField)
-    isempty(field.bases) && return false
-    return all(b -> b === nothing || isa(b, FourierBasis), field.bases)
+    isempty(field.bases) && return false   # a 0-D tau field has no `:c` to cache
+    return all(is_fourier_axis, field.bases)
 end
 
 """Coefficients of state field `idx`, computed ONCE per RHS evaluation and shared by every ∂ node
@@ -1067,7 +1070,7 @@ A DISTRIBUTED field with a non-Fourier (Chebyshev/Jacobi) axis: `forward_transfo
     dist = field.dist
     (dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing) || return false
     isempty(field.bases) && return false
-    return any(b -> b !== nothing && !isa(b, FourierBasis), field.bases)
+    return any(b -> !is_fourier_axis(b), field.bases)
 end
 
 function _apply_lazy_diff!(field::ScalarField, coord::Coordinate, order::Int, axis_hint::Int=0)
@@ -1350,7 +1353,7 @@ end
 Walk the problem's equation data and translate each equation's F expression
 into a LazyFuture tree. Returns a plan with `is_compiled=true` if successful.
 """
-function build_lazy_rhs_plan!(solver)
+function build_lazy_rhs_plan!(solver::InitialValueSolver)
     problem = solver.problem
     state = solver.state
     F = _lazy_plan_field_type(state)
@@ -1363,7 +1366,10 @@ function build_lazy_rhs_plan!(solver)
         plan.workspaces[idx].template = template
     end
 
-    hasfield(typeof(problem), :equation_data) || (plan.is_compiled = true; return plan)
+    # (There used to be a `hasfield(typeof(problem), :equation_data) || (is_compiled =
+    # true; return plan)` line here. All four `Problem` subtypes declare
+    # `equation_data`, so it never fired — but it was one rename away from
+    # reintroducing exactly the zero-RHS freeze described below, and silently.)
 
     # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
     # global-matrix assembly — the step a pure-Fourier GPU IVP deliberately SKIPS
@@ -1421,7 +1427,7 @@ function build_lazy_rhs_plan!(solver)
                 # in GRID space, where that axis is local — it is the CORRECT path here, just
                 # slower. Do not cry wolf about it (see `_lazy_diff_axis_supported`).
                 declined_non_fourier = distributed && any(
-                    b -> b !== nothing && !isa(b, FourierBasis), template.bases)
+                    b -> !is_fourier_axis(b), template.bases)
                 declined_normalized_jacobi = any(
                     b -> isa(b, JacobiBasis) &&
                          !(isa(b, ChebyshevT) || isa(b, ChebyshevU)),
@@ -1496,8 +1502,7 @@ end
 
 Read from `equation_data`, so call it only after the IR exists — `build_lazy_rhs_plan!`
 ensures that above."""
-function _problem_has_evolution_equation(problem)
-    hasfield(typeof(problem), :equation_data) || return false
+function _problem_has_evolution_equation(problem::Problem)
     for eq_data in problem.equation_data
         M_expr = get(eq_data, "M", nothing)
         (M_expr === nothing || _is_zero_m_term(M_expr)) && continue

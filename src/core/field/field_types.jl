@@ -267,6 +267,43 @@ This is a convenience constructor equivalent to:
 TensorField(dist::Distributor, name::String, bases::Tuple{Vararg{Basis}}, dtype::Type=dist.dtype) =
     TensorField(dist, dist.coordsys, name, bases, dtype)
 
+# ============================================================================
+# Operand accessors
+# ============================================================================
+#
+# `Operand` covers both the three field types and the ~45 operator nodes, and
+# only the fields carry storage. Asking "does this operand have data?" used to be
+# written as `hasfield(typeof(x), :domain)` / `:current_layout` / `:buffers` at
+# ~60 call sites. A field-presence test answers `false` for two different
+# reasons — the operand genuinely has no such thing, or the field was renamed —
+# and the second reason is silent, which is how `:buffers` came to guard
+# unreachable branches long after `ScalarField` stopped having a field by that
+# name. These accessors give the same information through dispatch, so a rename
+# is a `MethodError` at the definition rather than a branch that quietly stops
+# being taken.
+
+"""
+    operand_domain(op::Operand) -> Union{Domain, Nothing}
+
+`Domain` an operand belongs to, or `nothing` for operands that carry no data
+(operator nodes, futures). Fields may also answer `nothing`: `domain` is
+`Union{Nothing, Domain}` on all three of them.
+"""
+operand_domain(::Operand) = nothing
+operand_domain(f::ScalarField) = f.domain
+operand_domain(f::VectorField) = f.domain
+operand_domain(f::TensorField) = f.domain
+
+"""
+    operand_layout(op::Operand) -> Union{Symbol, Nothing}
+
+Current layout (`:g` or `:c`) of an operand that stores data, `nothing`
+otherwise. `ScalarField` is the only `Operand` with a layout of its own; a
+vector/tensor's layout is a property of its components.
+"""
+operand_layout(::Operand) = nothing
+operand_layout(f::ScalarField) = f.current_layout
+
 # storage_mode methods — dispatch on storage type parameter when available
 storage_mode(::ScalarField{T, <:SerialFieldStorage}) where T = SerialStorage()
 # TransposableFieldStorage dispatch is defined in transposable_field.jl (loaded later)

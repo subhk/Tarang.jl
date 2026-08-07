@@ -379,7 +379,7 @@ For operator-valued derivatives (e.g., Laplacian), the existing matrix
 infrastructure is used. For field-valued derivatives (e.g., 2*u from u²),
 diagonal matrices are constructed from grid values.
 """
-function build_symbolic_jacobian(problem, state_fields)
+function build_symbolic_jacobian(problem::Problem, state_fields)
     any(_field_uses_gpu, state_fields) && error(
         "GPU symbolic Jacobian assembly is unsupported; CPU fallback is disabled.")
     n = length(fields_to_vector(state_fields))
@@ -387,7 +387,7 @@ function build_symbolic_jacobian(problem, state_fields)
 
     # Get equation data
     eq_data_list = _get_equation_data(problem)
-    if eq_data_list === nothing || isempty(eq_data_list)
+    if isempty(eq_data_list)
         error("No equation data available for symbolic Jacobian construction")
     end
 
@@ -443,15 +443,19 @@ function build_symbolic_jacobian(problem, state_fields)
     return sparse(I_idx, J_idx, V_val, total_size, total_size)
 end
 
-"""Extract equation data list from problem."""
-function _get_equation_data(problem)
-    if hasfield(typeof(problem), :equation_data) && problem.equation_data !== nothing
-        return problem.equation_data
-    elseif hasfield(typeof(problem), :equations)
-        return problem.equations
-    end
-    return nothing
-end
+"""
+    _get_equation_data(problem::Problem) -> Vector{EquationIR}
+
+The problem's equation IR.
+
+This used to be a `hasfield` chain that fell back to `problem.equations` when
+`:equation_data` was missing. All four `Problem` subtypes declare
+`equation_data`, so the fallback was unreachable from the package — and it would
+have been wrong if reached, because `equations` is a `Vector{String}` while
+every caller treats the result as equation IR. The only thing exercising it was
+a duck-typed stand-in in the test file.
+"""
+_get_equation_data(problem::Problem) = problem.equation_data
 
 """Extract residual expression (LHS - RHS) from equation data."""
 function _get_residual_expression(eq_data)

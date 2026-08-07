@@ -28,7 +28,7 @@ function evaluate_nonlinear_term(op::AdvectionOperator, layout::Symbol=:g)
 
     # Sum velocity components times gradient components (in-place)
     for i in 1:length(velocity.components)
-        product = evaluate_transform_multiply(velocity.components[i], grad_scalar.components[i], evaluator)
+        product = evaluate_transform_multiply(velocity.components[i], grad_scalar.components[i], evaluator; own=false)
         product_data = grid_data!(product)
         if isa(result_data, PencilArrays.PencilArray) && isa(product_data, PencilArrays.PencilArray)
             parent(result_data) .+= parent(product_data)
@@ -66,7 +66,7 @@ function evaluate_nonlinear_term(op::NonlinearAdvectionOperator, layout::Symbol=
             coord = dist.coordsys[j]
             du_i_dx_j = evaluate_differentiate(Differentiate(velocity.components[i], coord, 1), :g)
 
-            product = evaluate_transform_multiply(velocity.components[j], du_i_dx_j, evaluator)
+            product = evaluate_transform_multiply(velocity.components[j], du_i_dx_j, evaluator; own=false)
             product_data = grid_data!(product)
             if isa(comp_data, PencilArrays.PencilArray) && isa(product_data, PencilArrays.PencilArray)
                 parent(comp_data) .+= parent(product_data)
@@ -93,9 +93,27 @@ end
     does not apply: no Fourier bases, or (distributed only) >3D, a decomposed
     non-Fourier axis, or a Fourier axis with N ≤ 4 (matching serial's small-grid
     skip).
+
+    # Buffer ownership
+
+    The dealiased paths write into `_NL_RESULT_POOL`, a rotating pool of
+    `_NL_RESULT_POOL_SIZE` buffers whose index is shared across every caller of
+    this evaluator — including the solver RHS. `own=true` (the default) copies the
+    result out, so the returned field is safe to store, return across an API
+    boundary, or hand to user code.
+
+    Pass `own=false` ONLY when the result is fully consumed before control returns
+    to the caller (an immediate `copyto!`, `.+=`, or arithmetic that allocates its
+    own output). Borrowing and then retaining is a silent wrong-answer bug: the
+    buffer is reissued after the index wraps and the retained field changes value
+    with no error. `Base.:*(::ScalarField, ::ScalarField)` did exactly that, and
+    because the index is shared with the RHS, one held product was lost after
+    eight internal ones. See `_own_borrowed_field` in `src/core/field_pool.jl`.
+
+    Defaulting to `own=true` makes a forgotten annotation slow, not wrong.
     """
 function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, evaluator::NonlinearEvaluator;
-                                     result_layout::Symbol=:g)
+                                     result_layout::Symbol=:g, own::Bool=true)
 
     _TRACK_NL_TIMING && (start_time = time())
 
@@ -137,7 +155,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
                 evaluator.performance_stats.total_time += elapsed
                 evaluator.performance_stats.dealiasing_time += elapsed
             end
-            return result
+            return own ? _own_borrowed_field(result) : result
         else
             # Serial path (CPU or GPU): pad all Fourier dimensions (needs grid inputs)
             ensure_layout!(field1, :g)
@@ -152,7 +170,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
                     evaluator.performance_stats.total_time += elapsed
                     evaluator.performance_stats.dealiasing_time += elapsed
                 end
-                return result
+                return own ? _own_borrowed_field(result) : result
             end
         end
     end
@@ -607,10 +625,12 @@ function evaluate_vector_dot_product(v1::VectorField, v2::VectorField)
     # returned truncated-in-coeff via `result_layout=:c` (skips its own backward).
     if n >= 2 && c1.dist.use_pencil_arrays && c1.dist.size > 1 &&
        all(b -> isa(b, Union{RealFourier, ComplexFourier}), c1.bases)
+        # The first product becomes the accumulator and IS returned, so it must be
+        # owned; the rest are added into it and borrow.
         result = evaluate_transform_multiply(v1.components[1], v2.components[1], evaluator; result_layout=:c)
         rc = coeff_data!(result)
         for i in 2:n
-            product = evaluate_transform_multiply(v1.components[i], v2.components[i], evaluator; result_layout=:c)
+            product = evaluate_transform_multiply(v1.components[i], v2.components[i], evaluator; result_layout=:c, own=false)
             pc = coeff_data!(product)
             if isa(rc, PencilArrays.PencilArray) && isa(pc, PencilArrays.PencilArray)
                 parent(rc) .+= parent(pc)
@@ -622,9 +642,10 @@ function evaluate_vector_dot_product(v1::VectorField, v2::VectorField)
     end
 
     # Serial / non-Fourier: sum products in grid (original path).
+    # Owned: with n == 1 the loop never runs and this value is returned directly.
     result = evaluate_transform_multiply(v1.components[1], v2.components[1], evaluator)
     for i in 2:n
-        product = evaluate_transform_multiply(v1.components[i], v2.components[i], evaluator)
+        product = evaluate_transform_multiply(v1.components[i], v2.components[i], evaluator; own=false)
         result = result + product
     end
 
@@ -655,18 +676,18 @@ function evaluate_vector_cross_product(v1::VectorField, v2::VectorField)
     result = VectorField(v1.dist, v1.coordsys, "cross_$(v1.name)_$(v2.name)", v1.bases, v1.dtype)
 
     # x-component
-    term1 = evaluate_transform_multiply(v1.components[2], v2.components[3], evaluator)
-    term2 = evaluate_transform_multiply(v1.components[3], v2.components[2], evaluator)
+    term1 = evaluate_transform_multiply(v1.components[2], v2.components[3], evaluator; own=false)
+    term2 = evaluate_transform_multiply(v1.components[3], v2.components[2], evaluator; own=false)
     result.components[1] = (term1 - term2) * handedness
 
     # y-component
-    term1 = evaluate_transform_multiply(v1.components[3], v2.components[1], evaluator)
-    term2 = evaluate_transform_multiply(v1.components[1], v2.components[3], evaluator)
+    term1 = evaluate_transform_multiply(v1.components[3], v2.components[1], evaluator; own=false)
+    term2 = evaluate_transform_multiply(v1.components[1], v2.components[3], evaluator; own=false)
     result.components[2] = (term1 - term2) * handedness
 
     # z-component
-    term1 = evaluate_transform_multiply(v1.components[1], v2.components[2], evaluator)
-    term2 = evaluate_transform_multiply(v1.components[2], v2.components[1], evaluator)
+    term1 = evaluate_transform_multiply(v1.components[1], v2.components[2], evaluator; own=false)
+    term2 = evaluate_transform_multiply(v1.components[2], v2.components[1], evaluator; own=false)
     result.components[3] = (term1 - term2) * handedness
 
     return result

@@ -482,7 +482,6 @@ function _is_implicit_coefficient(expr, variables=nothing)
     field = _ncc_direct_field(expr)      # sees through Grid/Coeff/Convert/Copy only
     field === nothing && return false
     isempty(field.bases) && return true
-    any(b -> b === nothing, field.bases) && return false
     count(b -> isa(b, JacobiBasis), field.bases) == 1 || return false
     return !_coefficient_varies_along_fourier(field)
 end
@@ -503,7 +502,7 @@ function _coefficient_varies_along_fourier(field)
     fourier_axes = findall(b -> isa(b, FourierBasis), field.bases)
     isempty(fourier_axes) && return false
     try
-        layout = hasfield(typeof(field), :current_layout) ?
+        layout = field isa ScalarField ?
                  getfield(field, :current_layout) : :g
         data = layout === :c ? get_coeff_data(field) : get_grid_data(field)
         data === nothing && return false

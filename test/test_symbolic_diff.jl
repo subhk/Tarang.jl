@@ -54,23 +54,28 @@ function sd_fourier_field_2d(; N=16, name="u")
     return field, mesh["x"], mesh["y"], coords, dist
 end
 
-# Minimal problem-like structs to drive the Jacobian-assembly helpers
-# (struct defs must live at top level, not inside a @testset).
-struct _SDProblem
-    equations::Vector{Any}
-end
-struct _EqProb1
-    equations::Vector{Any}
-end
-struct _EqProb2
-    equation_data::Any
-end
-struct _EqProb3
-    foo::Int
-end
-# Two-equation problem (to trigger the non-square Jacobian guard).
-struct _SDProblem2Eq
-    equations::Vector{Any}
+# A SQUARE problem for the Jacobian-assembly helpers: one variable, one
+# equation, periodic domain. No boundary conditions means no tau variables,
+# so n_eqs == n_vars, which is what `build_symbolic_jacobian` requires.
+#
+# This replaces five hand-written structs (`_SDProblem`, `_EqProb1..3`,
+# `_SDProblem2Eq`) that stood in for a problem. They reached the assembler only
+# through `_get_equation_data`'s `hasfield(..., :equations)` fallback — a branch
+# no `Problem` subtype could take, kept alive by these very tests. That is the
+# same arrangement that let a live bug sit in `_get_residual_expression` (it read
+# "LHS"/"RHS", which no parser writes) until the test was rewritten to use the
+# spellings the parser actually produces.
+function sd_square_nlbvp(; N=16)
+    fu, _, xb, dist, _ = sd_fourier_field(N=N, name="u")
+    ensure_layout!(fu, :g); Tarang.get_grid_data(fu) .= 1.0
+    g = ScalarField(dist, "g", (xb,), Float64)
+    ensure_layout!(g, :g); Tarang.get_grid_data(g) .= 0.0
+
+    prob = Tarang.NLBVP([fu])
+    add_parameters!(prob; g=g)
+    Tarang.add_equation!(prob, "lap(u) = u*u + g")
+    Tarang.build_matrix_expressions!(prob)   # matrix-free; fills equation_data
+    return prob, fu
 end
 
 # Reduce a sym_diff result to a grid-data array (or pass through a Number).
@@ -510,49 +515,31 @@ end
 
 # -----------------------------------------------------------------------
 @testset "build_symbolic_jacobian (u^2 residual)" begin
-    # Drive build_symbolic_jacobian via a minimal problem-like object that
-    # exposes equation_data as a list of Dicts with "F" residuals.
-    # ∂(u^2)/∂u = 2u; the Jacobian block is diag of coeff values of 2u.
-    fu, x, _, _, _ = sd_fourier_field(name="u", N=16)
-    uvals = @. 1.0 + 0.0 * x        # constant field -> trivial coeffs
-    ensure_layout!(fu, :g); Tarang.get_grid_data(fu) .= uvals
-
-    # Minimal struct carrying an `equations` field (list of Dicts).
-    F = Tarang.PowerOperator(fu, 2)
-    eq = Dict("F" => F)
-
-    prob = _SDProblem(Any[eq])
-
-    # state_fields must support fields_to_vector / get_coeff_data.
+    # This used to run against `_SDProblem`, a hand-written struct with an
+    # `equations::Vector{Any}` field, reaching the assembler through a fallback
+    # in `_get_equation_data` that no real problem could take. It never managed
+    # to produce a Jacobian either — the assertion was `@test_broken built`.
+    # Driving a real NLBVP instead covers the production path and produces one.
+    prob, fu = sd_square_nlbvp(N=16)
     state = [fu]
+    ncoeff = length(Tarang.get_coeff_data(fu))
 
-    local J
-    built = true
-    try
-        J = build_symbolic_jacobian(prob, state)
-    catch err
-        built = false
-        @info "build_symbolic_jacobian threw" err
-    end
+    J = build_symbolic_jacobian(prob, state)
+    @test isa(J, SparseMatrixCSC)
+    @test size(J) == (ncoeff, ncoeff)
+    # Residual is lap(u) - u*u - g, so dF/du is non-zero: the assembler must
+    # emit structure, not an empty matrix.
+    @test nnz(J) > 0
 
-    if built
-        @test isa(J, SparseMatrixCSC)
-        @test size(J, 1) == size(J, 2)
-        # Jacobian should be non-empty (∂(u^2)/∂u = 2u != 0).
-        @test nnz(J) >= 0
-    else
-        # API too intricate to drive with a clean oracle in isolation; the
-        # sym_diff path it relies on (PowerOperator -> 2u) is already covered
-        # above. Mark as broken so the gap is visible.
-        @test_broken built
-    end
+    # Guard: no equation data (IR never built) -> error.
+    u_bare = ScalarField(fu.dist, "u_bare", fu.bases, Float64)
+    @test_throws ErrorException build_symbolic_jacobian(Tarang.NLBVP([u_bare]), [u_bare])
 
-    # Guard: no equation data available -> error.
-    @test_throws ErrorException build_symbolic_jacobian(_EqProb3(1), state)
+    # Guard: non-square system (1 equation, 2 variables) -> error.
+    @test_throws ErrorException build_symbolic_jacobian(prob, [fu, u_bare])
 
-    # Guard: non-square system (2 equations, 1 variable) -> error.
-    prob2 = _SDProblem2Eq(Any[Dict("F" => F), Dict("F" => F)])
-    @test_throws ErrorException build_symbolic_jacobian(prob2, state)
+    # Guard: the assembler takes a Problem, not anything that quacks like one.
+    @test_throws MethodError build_symbolic_jacobian(Dict("equations" => []), state)
 end
 
 # -----------------------------------------------------------------------
@@ -628,15 +615,15 @@ end
     # _get_residual_expression with a Dict lacking LHS/RHS/F -> 0.
     @test Tarang._get_residual_expression(Dict("other" => 1)) == 0
 
-    # _get_equation_data: object exposing `equations` field.
-    eqs = Any[Dict("F" => F)]
-    @test Tarang._get_equation_data(_EqProb1(eqs)) === eqs
-
-    # _get_equation_data: object exposing non-nothing `equation_data`.
-    @test Tarang._get_equation_data(_EqProb2(eqs)) === eqs
-
-    # _get_equation_data: object with neither -> nothing.
-    @test Tarang._get_equation_data(_EqProb3(1)) === nothing
+    # _get_equation_data returns the problem's own IR, and takes ::Problem only.
+    # It used to accept anything and fall back to `problem.equations`, a
+    # Vector{String}, where every caller expects equation IR. No Problem subtype
+    # can reach that branch; only the duck-typed stand-ins that used to live at
+    # the top of this file could, which is why it survived.
+    prob = sd_square_nlbvp()[1]
+    @test Tarang._get_equation_data(prob) === prob.equation_data
+    @test_throws MethodError Tarang._get_equation_data(Dict("F" => F))
+    @test_throws MethodError Tarang._get_equation_data(42)
 end
 
 # ============================================================================

@@ -1,6 +1,7 @@
 using Test
 using Tarang
 using LinearAlgebra
+using InteractiveUtils: subtypes
 
 # Coverage-focused tests for src/core/solvers/solver_state_vectors.jl
 #
@@ -48,14 +49,12 @@ function empty_field(name="tau")
     return f, dist
 end
 
-# Duck-typed basis stand-ins for the get_basis_size fallback branches.
-# These have no `.meta` field, so they fall through to .shape / .size / .N /
-# default. Defined at top level (struct defs are illegal in local scope).
-struct _ShapeTupleBasis; shape::Tuple{Int,Int}; end
-struct _ShapeScalarBasis; shape::Int; end
-struct _SizeBasis; size::Int; end
-struct _NBasis; N::Int; end
-struct _UnknownBasis; foo::Int; end
+# NOTE. This file used to define five duck-typed basis stand-ins
+# (`_ShapeTupleBasis`, `_SizeBasis`, `_NBasis`, ...) whose only purpose was to
+# reach `get_basis_size`'s `.shape` / `.size` / `.N` / default branches. No
+# `Basis` subtype has any of those fields, so the branches were unreachable and
+# the stand-ins existed to make dead code look covered. `get_basis_size` now
+# takes `::Basis` and reads `meta.size`; the stand-ins went with the branches.
 
 @testset "solver_state_vectors coverage" begin
 
@@ -89,15 +88,23 @@ struct _UnknownBasis; foo::Int; end
         @test Tarang.get_basis_size(fourier) == 32
     end
 
-    @testset "get_basis_size: fallback branches via duck-typed structs" begin
-        @test Tarang.get_basis_size(_ShapeTupleBasis((4, 5))) == 20   # .shape Tuple
-        @test Tarang.get_basis_size(_ShapeScalarBasis(7)) == 7        # .shape scalar
-        @test Tarang.get_basis_size(_SizeBasis(11)) == 11             # .size
-        @test Tarang.get_basis_size(_NBasis(13)) == 13                # .N
-        # default branch -> 64 (warns)
-        local sz
-        @test_logs (:warn,) (sz = Tarang.get_basis_size(_UnknownBasis(1)))
-        @test sz == 64
+    @testset "get_basis_size: every Basis subtype answers, non-Basis is an error" begin
+        # `meta.size` is the one spelling, so the accessor is total over `Basis`
+        # and defined nowhere else. A non-basis argument must raise rather than
+        # fall through to an invented default.
+        concrete = Type[]
+        stack = Type[Tarang.Basis]
+        while !isempty(stack)
+            T = pop!(stack)
+            isabstracttype(T) ? append!(stack, subtypes(T)) : push!(concrete, T)
+        end
+        @test length(concrete) >= 8
+        for T in concrete
+            @test hasfield(T, :meta)
+            @test hasfield(fieldtype(T, :meta), :size)
+        end
+        @test_throws MethodError Tarang.get_basis_size(nothing)
+        @test_throws MethodError Tarang.get_basis_size(42)
     end
 
     @testset "_state_vector_transport_mode" begin

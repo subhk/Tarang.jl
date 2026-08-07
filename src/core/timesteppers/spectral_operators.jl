@@ -198,7 +198,11 @@ function _build_spectral_operator(
     # full-length Fourier axes use the fft layout [0,…,N/2-1,-N/2,…,-1].
     k_arrays = ntuple(N) do d
         basis = bases[d]
-        Nb = hasfield(typeof(basis), :meta) ? basis.meta.size : coeff_shape[d]
+        # `bases` here is a field's `Tuple{Vararg{Basis}}`, so `meta.size` is
+        # always there. The old `hasfield ? … : coeff_shape[d]` silently swapped
+        # in the LOCAL coefficient length — a different quantity, and on a
+        # decomposed axis not even the same on every rank.
+        Nb = basis.meta.size
         if basis isa RealFourier
             full = coeff_shape[d] == (Nb ÷ 2 + 1) ? T.(wavenumbers_rfft(basis)) :
                                                     T.(wavenumbers_fft(basis))

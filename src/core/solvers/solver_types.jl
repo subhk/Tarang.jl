@@ -373,7 +373,7 @@ function _gpu_pure_fourier_state(state::Vector{<:ScalarField})
         isempty(field.bases) && continue
         found_spatial = true
         _field_uses_gpu(field) || return false
-        all(b -> b !== nothing && isa(b, FourierBasis), field.bases) || return false
+        all(is_fourier_axis, field.bases) || return false
     end
     return found_spatial
 end
@@ -385,7 +385,7 @@ function _gpu_coupled_state(state::Vector{<:ScalarField})
         isempty(field.bases) && continue
         found_spatial = true
         _field_uses_gpu(field) || return false
-        found_coupled |= any(b -> b !== nothing && isa(b, JacobiBasis), field.bases)
+        found_coupled |= any(b -> isa(b, JacobiBasis), field.bases)
     end
     return found_spatial && found_coupled
 end
@@ -949,14 +949,14 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     # (one carrying a coupled, i.e. non-Fourier, basis) to define the coupling.
     let coupling_field = nothing
         for f in state
-            if any(b -> b !== nothing && !isa(b, FourierBasis), f.bases)
+            if any(b -> !is_fourier_axis(b), f.bases)
                 coupling_field = f
                 break
             end
         end
         if coupling_field !== nothing
             solver.base.matrix_coupling =
-                Bool[b === nothing ? true : !isa(b, FourierBasis) for b in coupling_field.bases]
+                Bool[!is_fourier_axis(b) for b in coupling_field.bases]
         end
     end
 
@@ -1090,14 +1090,14 @@ function _build_eigenvalue_solver(problem::EVP;
     let coupling_field = nothing
         for f in problem.variables
             bs = hasproperty(f, :bases) ? f.bases : ()
-            if any(b -> b !== nothing && !isa(b, FourierBasis), bs)
+            if any(b -> !is_fourier_axis(b), bs)
                 coupling_field = f
                 break
             end
         end
         if coupling_field !== nothing
             solver.base.matrix_coupling =
-                Bool[b === nothing ? true : !isa(b, FourierBasis) for b in coupling_field.bases]
+                Bool[!is_fourier_axis(b) for b in coupling_field.bases]
         end
     end
 

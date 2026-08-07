@@ -72,6 +72,99 @@ function _prepare_global_multistep_matrices!(state::TimestepperState,
     return L_matrix, M_matrix, false
 end
 
+"""Accumulate `sign * coefs[i] * history[i-1]` for every term the history can supply.
+
+`coefs` is 1-based, so `coefs[1]` is the implicit `a[0]`/`b[0]` handled by the LHS
+and only `coefs[2:end]` contribute here. A scheme running below its nominal order
+(startup, or after a history reset) simply has fewer entries and drops the tail —
+the same per-term `length(history) >= k` guards the six schemes each wrote out by
+hand, now written once."""
+@inline function _accumulate_history_terms!(rhs::Vector{ComplexF64}, coefs::Tuple,
+                                            history::Vector{Vector{ComplexF64}}, sign::Float64)
+    @inbounds for i in 2:length(coefs)
+        (i - 1) <= length(history) || continue
+        coef = sign * coefs[i]
+        h = history[i - 1]
+        @. rhs += coef * h
+    end
+    return rhs
+end
+
+"""
+    _global_multistep_core!(state, solver, current_state, L_matrix, M_matrix, a, b, c; ...)
+
+The global-matrix MultistepIMEX update shared by CNAB1/2 and SBDF1-4:
+
+    (a[0] M + b[0] L) X^{n+1} = Σ c[i] F[i-1] − Σ a[i] MX[i-1] − Σ b[i] LX[i-1]
+
+(0-based in the formula, 1-based in the tuples.) The schemes differ ONLY in the
+coefficients, the history depths and the state-history cap — the seven numbered
+steps below were six near-identical copies.
+
+That duplication was not free. It is how `step_sbdf2!` came to be the only scheme
+carrying the distributed diagonal-IMEX branch, and how `step_sbdf1!` came to be
+the only one initialising its history before rather than after the explicit-field
+probe: differences that mattered and differences that did not looked identical in
+the source. Both remaining asymmetries now live in the prologues, which are short
+enough to compare at a glance.
+
+`use_lx=false` (SBDF3/4) skips the `L·X` product AND the `LX_history` rotation
+entirely, as those schemes already did — their `b` is `(1, 0, 0, …)`, so the terms
+would be zero, but the matvec would not be.
+"""
+function _global_multistep_core!(state::TimestepperState, solver::InitialValueSolver,
+                                 current_state::Vector{<:ScalarField},
+                                 L_matrix::AbstractMatrix, M_matrix::AbstractMatrix,
+                                 a::Tuple, b::Tuple, c::Tuple;
+                                 mx_depth::Int, f_depth::Int, state_cap::Int,
+                                 iter_key::Symbol, name::String,
+                                 use_lx::Bool=true, lx_depth::Int=mx_depth,
+                                 warn_short_f::Bool=false)
+    # Step 1: current state as a vector
+    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
+
+    # Step 2: M.X[0] and (when the scheme uses it) L.X[0]
+    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
+
+    # Step 3: F(X[0]) at the current time
+    F_current = evaluate_rhs(solver, current_state, solver.sim_time)
+    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
+
+    # Step 4: rotate and store history
+    MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
+    F_history  = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
+    _prepend_history_buffer!(MX_history, MX_current, mx_depth)
+    _prepend_history_buffer!(F_history, F_current_vec, f_depth)
+
+    LX_history = state.timestepper_data[:LX_history]::Vector{Vector{ComplexF64}}
+    if use_lx
+        LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
+        _prepend_history_buffer!(LX_history, LX_current, lx_depth)
+    end
+
+    if warn_short_f && length(F_history) < length(c) - 1
+        @warn "$name: insufficient F_history ($(length(F_history)) < $(length(c) - 1)), " *
+              "falling back to lower-order extrapolation" maxlog=1
+    end
+
+    # Step 5: RHS
+    rhs = _global_multistep_zero_rhs!(state, length(X_current))
+    _accumulate_history_terms!(rhs, c, F_history, 1.0)
+    _accumulate_history_terms!(rhs, a, MX_history, -1.0)
+    use_lx && _accumulate_history_terms!(rhs, b, LX_history, -1.0)
+
+    # Step 6: solve (a[0] M + b[0] L) X = RHS
+    cache_key = (a[1], b[1])
+    X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
+
+    # Step 7: update state
+    _push_vector_state!(state.history, X_new, current_state, state_cap)
+    state.timestepper_data[iter_key] += 1
+
+    @debug "$name step completed: dt=$(state.dt), iteration=$(state.timestepper_data[iter_key]), |X_new|=$(norm(X_new))"
+    return X_new
+end
+
 function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
@@ -106,48 +199,10 @@ function step_cnab1!(state::TimestepperState, solver::InitialValueSolver)
     a = (1.0/dt, -1.0/dt)  # a[0], a[1]
     b = (0.5, 0.5)         # b[0], b[1]
     c = (0.0, 1.0)         # c[0], c[1]
-    
-    # Step 1: Convert current state to vector (following Tarang gather_inputs)
-    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
-    # Step 2: Compute M.X[0] and L.X[0] (following Tarang lines 142-147)
-    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
-
-    # Step 3: Evaluate F(X[0]) at current time step (following Tarang lines 149-153)
-    F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
-
-    # Step 4: Rotate and store history (following Tarang lines 124-126)
-    MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
-    LX_history = state.timestepper_data[:LX_history]::Vector{Vector{ComplexF64}}
-    F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
-
-    _prepend_history_buffer!(MX_history, MX_current, 1)
-    _prepend_history_buffer!(LX_history, LX_current, 1)
-    _prepend_history_buffer!(F_history, F_current_vec, 2)
-
-    # Step 5: Build RHS following Tarang exactly (timesteppers:156-166)
-    # RHS = c[1] * F[0] - a[1] * MX[0] - b[1] * LX[0]
-    rhs = _global_multistep_zero_rhs!(state, length(X_current))
-    @. rhs += c[2] * F_history[1]  # c[1] * F[0] (using 1-based indexing)
-    if length(MX_history) >= 1  # a[1] term
-        @. rhs -= a[2] * MX_history[1]  # -a[1] * MX[0]
-    end
-    if length(LX_history) >= 1  # b[1] term
-        @. rhs -= b[2] * LX_history[1]  # -b[1] * LX[0]
-    end
-
-    # Step 6: Build and solve LHS system (following Tarang lines 174-184)
-    # (a[0] * M + b[0] * L).X = RHS
-    cache_key = (a[1], b[1])
-    X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
-
-    # Step 7: Update state
-    _push_vector_state!(state.history, X_new, current_state, 3)
-    state.timestepper_data[:cnab1_iteration] += 1
-
-    @debug "CNAB1 step completed: dt=$dt, iteration=$(state.timestepper_data[:cnab1_iteration]), |X_new|=$(norm(X_new))"
+    _global_multistep_core!(state, solver, current_state, L_matrix, M_matrix, a, b, c;
+                            mx_depth=1, lx_depth=1, f_depth=2, state_cap=3,
+                            iter_key=:cnab1_iteration, name="CNAB1")
 end
 
 """
@@ -211,53 +266,10 @@ function step_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     c = (0.0, 1.0 + w1/2.0, -w1/2.0)      # c[0], c[1], c[2]
     
     @debug "CNAB2 variable timestep: dt_current=$dt_current, dt_previous=$dt_previous, w1=$w1"
-    
-    # Step 1: Convert current state to vector
-    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
-    # Step 2: Compute M.X[0] and L.X[0] (following Tarang lines 142-147)
-    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
-
-    # Step 3: Evaluate F(X[0]) at current time step (following Tarang lines 149-153)
-    F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
-
-    # Step 4: Rotate and store history (following Tarang lines 124-126)
-    MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
-    LX_history = state.timestepper_data[:LX_history]::Vector{Vector{ComplexF64}}
-    F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
-
-    _prepend_history_buffer!(MX_history, MX_current, 1)
-    _prepend_history_buffer!(LX_history, LX_current, 1)
-    _prepend_history_buffer!(F_history, F_current_vec, 2)
-
-    # Step 5: Build RHS following Tarang exactly (timesteppers:156-166)
-    # RHS = c[1] * F[0] + c[2] * F[1] - a[1] * MX[0] - b[1] * LX[0]
-    rhs = _global_multistep_zero_rhs!(state, length(X_current))
-    @. rhs += c[2] * F_history[1]  # c[1] * F[0]
-    if length(F_history) >= 2  # c[2] term (Adams-Bashforth 2 extrapolation)
-        @. rhs += c[3] * F_history[2]  # c[2] * F[1]
-    else
-        @warn "CNAB2: insufficient F_history ($(length(F_history)) < 2), falling back to first-order extrapolation" maxlog=1
-    end
-    if length(MX_history) >= 1  # a[1] term
-        @. rhs -= a[2] * MX_history[1]  # -a[1] * MX[0]
-    end
-    if length(LX_history) >= 1  # b[1] term
-        @. rhs -= b[2] * LX_history[1]  # -b[1] * LX[0]
-    end
-
-    # Step 6: Build and solve LHS system (following Tarang lines 174-184)
-    # (a[0] * M + b[0] * L).X = RHS
-    cache_key = (a[1], b[1])
-    X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
-
-    # Step 7: Update state
-    _push_vector_state!(state.history, X_new, current_state, 4)
-    state.timestepper_data[:cnab2_iteration] += 1
-
-    @debug "CNAB2 step completed: dt=$dt_current, w1=$w1, iteration=$(state.timestepper_data[:cnab2_iteration]), |X_new|=$(norm(X_new))"
+    _global_multistep_core!(state, solver, current_state, L_matrix, M_matrix, a, b, c;
+                            mx_depth=1, lx_depth=1, f_depth=2, state_cap=4,
+                            iter_key=:cnab2_iteration, name="CNAB2", warn_short_f=true)
 end
 
 # BDF methods
@@ -285,12 +297,15 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
-    # Initialize history arrays if needed
-    _init_global_multistep_history!(state, :sbdf1_iteration)
-
     _try_step_explicit_multistep_field!(state, solver, :sbdf1) && return
 
     _global_multistep_distributed_fallback!(state, solver, current_state, "SBDF1") && return
+
+    # Initialize history arrays if needed. This used to sit ABOVE the explicit-field
+    # probe — SBDF1 was the only one of the six that did — which allocated the
+    # global-matrix history deques on a path that never reads them. Nothing outside
+    # this file reads `:sbdf1_iteration`.
+    _init_global_multistep_history!(state, :sbdf1_iteration)
 
     L_matrix, M_matrix, fell_back =
         _prepare_global_multistep_matrices!(state, solver, "SBDF1", "forward Euler", step_rk111!)
@@ -298,48 +313,15 @@ function step_sbdf1!(state::TimestepperState, solver::InitialValueSolver)
     
     # Get SBDF1 coefficients following Tarang exactly (timesteppers:247-250)
     a = (1.0/dt, -1.0/dt)  # a[0], a[1] - BDF1 time derivative
-    b = (1.0,)             # b[0] - fully implicit (not 1/2 like CNAB)
+    b = (1.0,)             # b[0] - fully implicit (not 1/2 like CNAB); bmax=1, so no b[1] term
     c = (0.0, 1.0)         # c[0], c[1] - forward Euler explicit
-    
-    # Step 1: Convert current state to vector
-    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
 
-    # Step 2: Compute M.X[0] and L.X[0] (following Tarang MultistepIMEX pattern)
-    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
-
-    # Step 3: Evaluate F(X[0]) at current time step
-    F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
-
-    # Step 4: Rotate and store history
-    MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
-    LX_history = state.timestepper_data[:LX_history]::Vector{Vector{ComplexF64}}
-    F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
-
-    _prepend_history_buffer!(MX_history, MX_current, 1)
-    _prepend_history_buffer!(LX_history, LX_current, 1)
-    _prepend_history_buffer!(F_history, F_current_vec, 1)
-
-    # Step 5: Build RHS following Tarang MultistepIMEX pattern
-    # RHS = c[1] * F[0] - a[1] * MX[0] - 0 * LX[0] (since bmax=1, no b[1] term)
-    rhs = _global_multistep_zero_rhs!(state, length(X_current))
-    @. rhs += c[2] * F_history[1]  # c[1] * F[0]
-    if length(MX_history) >= 1  # a[1] term
-        @. rhs -= a[2] * MX_history[1]  # -a[1] * MX[0]
-    end
-    # No b[1] term for SBDF1 since bmax=1
-
-    # Step 6: Build and solve LHS system
-    # (a[0] * M + b[0] * L).X = RHS  ->  (1/dt * M + 1 * L).X = RHS
-    cache_key = (a[1], b[1])
-    X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
-
-    # Step 7: Update state
-    _push_vector_state!(state.history, X_new, current_state, 3)
-    state.timestepper_data[:sbdf1_iteration] += 1
-
-    @debug "SBDF1 step completed: dt=$dt, iteration=$(state.timestepper_data[:sbdf1_iteration]), |X_new|=$(norm(X_new))"
+    # `use_lx` stays true even though `b` contributes no history term: SBDF1 has
+    # always kept `LX_history` rotating, and CNAB1/2 — which SBDF-family fallbacks
+    # can reach — read it.
+    _global_multistep_core!(state, solver, current_state, L_matrix, M_matrix, a, b, c;
+                            mx_depth=1, lx_depth=1, f_depth=1, state_cap=3,
+                            iter_key=:sbdf1_iteration, name="SBDF1")
 end
 
 """
@@ -421,51 +403,11 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
 
     @debug "SBDF2 variable timestep: dt_current=$dt_current, dt_previous=$dt_previous, w1=$w1"
 
-    # Step 1: Convert current state to vector
-    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
-
-    # Step 2: Compute M.X[0] and L.X[0]
-    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-    LX_current = _timestep_matvec!(state, :multistep_LX_current_vec, L_matrix, X_current)
-
-    # Step 3: Evaluate F(X[0]) at current time step
-    F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
-
-    # Step 4: Rotate and store history
-    MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
-    LX_history = state.timestepper_data[:LX_history]::Vector{Vector{ComplexF64}}
-    F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
-
-    _prepend_history_buffer!(MX_history, MX_current, 2)
-    _prepend_history_buffer!(LX_history, LX_current, 2)
-    _prepend_history_buffer!(F_history, F_current_vec, 2)
-
-    # Step 5: Build RHS following Tarang MultistepIMEX pattern
-    # RHS = c[1]*F[0] + c[2]*F[1] - a[1]*MX[0] - a[2]*MX[1] - 0*LX terms (bmax=1)
-    rhs = _global_multistep_zero_rhs!(state, length(X_current))
-    @. rhs += c[2] * F_history[1]  # c[1] * F[0]
-    if length(F_history) >= 2  # c[2] term
-        @. rhs += c[3] * F_history[2]  # c[2] * F[1]
-    end
-    if length(MX_history) >= 1  # a[1] term
-        @. rhs -= a[2] * MX_history[1]  # -a[1] * MX[0]
-    end
-    if length(MX_history) >= 2  # a[2] term
-        @. rhs -= a[3] * MX_history[2]  # -a[2] * MX[1]
-    end
-    # No b[1], b[2] terms since bmax=1 for SBDF2
-
-    # Step 6: Build and solve LHS system
-    # (a[0] * M + b[0] * L).X = RHS
-    cache_key = (a[1], b[1])
-    X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
-
-    # Step 7: Update state
-    _push_vector_state!(state.history, X_new, current_state, 4)
-    state.timestepper_data[:sbdf2_iteration] += 1
-
-    @debug "SBDF2 step completed: dt=$dt_current, w1=$w1, iteration=$(state.timestepper_data[:sbdf2_iteration]), |X_new|=$(norm(X_new))"
+    # bmax=1, so `b` contributes no history term; LX_history keeps rotating as it
+    # always has (see step_sbdf1!).
+    _global_multistep_core!(state, solver, current_state, L_matrix, M_matrix, a, b, c;
+                            mx_depth=2, lx_depth=2, f_depth=2, state_cap=4,
+                            iter_key=:sbdf2_iteration, name="SBDF2")
 end
 
 """
@@ -563,52 +505,13 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
          -w2*(1 + w1*(1 + w2)),
          w1*w1*w2*(1 + w2) / (1 + w1))
 
-    # Step 1: Convert current state to vector
-    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
+    @debug "SBDF3 variable timestep: k2=$k2, k1=$k1, k0=$k0, w2=$w2, w1=$w1"
 
-    # Step 2: Compute M.X[0]
-    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-
-    # Step 3: Evaluate F(X[0]) at current time step (only 1 RHS eval, reuse history)
-    F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
-
-    # Step 4: Rotate and store history (following SBDF1/SBDF2 pattern)
-    MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
-    F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
-
-    _prepend_history_buffer!(MX_history, MX_current, 3)
-    _prepend_history_buffer!(F_history, F_current_vec, 3)
-
-    # Step 5: Build RHS following Tarang multistep pattern
-    # RHS = c[1]*F[0] + c[2]*F[1] + c[3]*F[2] - a[1]*MX[0] - a[2]*MX[1] - a[3]*MX[2]
-    rhs = _global_multistep_zero_rhs!(state, length(X_current))
-    @. rhs += c[2] * F_history[1]  # c[1] * F[0]
-    if length(F_history) >= 2
-        @. rhs += c[3] * F_history[2]  # c[2] * F[1]
-    end
-    if length(F_history) >= 3
-        @. rhs += c[4] * F_history[3]  # c[3] * F[2]
-    end
-    if length(MX_history) >= 1  # a[1] term
-        @. rhs -= a[2] * MX_history[1]  # -a[1] * MX[0]
-    end
-    if length(MX_history) >= 2  # a[2] term
-        @. rhs -= a[3] * MX_history[2]  # -a[2] * MX[1]
-    end
-    if length(MX_history) >= 3  # a[3] term
-        @. rhs -= a[4] * MX_history[3]  # -a[3] * MX[2]
-    end
-
-    # Step 6: Build and solve LHS system: (a[0]*M + b[0]*L).X(n+1) = RHS
-    cache_key = (a[1], b[1])
-    X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
-
-    # Step 7: Update state
-    _push_vector_state!(state.history, X_new, current_state, 4)
-    state.timestepper_data[:sbdf3_iteration] += 1
-
-    @debug "SBDF3 step completed: dt=$k2, w2=$w2, w1=$w1, |X_new|=$(norm(X_new))"
+    # `use_lx=false`: b = (1, 0, 0, 0), so the L·X history terms are all zero — and
+    # skipping them also skips the matvec, which is not.
+    _global_multistep_core!(state, solver, current_state, L_matrix, M_matrix, a, b, c;
+                            mx_depth=3, f_depth=3, state_cap=4, use_lx=false,
+                            iter_key=:sbdf3_iteration, name="SBDF3")
 end
 
 """
@@ -693,59 +596,12 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
          (w2^2 * w3 * (1 + w3) * A3) / (1 + w2),
          -(w1^3 * w2^2 * w3 * (1 + w3) * A2) / ((1 + w1) * A1))
 
-    # Step 1: Convert current state to vector
-    X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
+    @debug "SBDF4 variable timestep: k3=$k3, k2=$k2, k1=$k1, k0=$k0, w3=$w3, w2=$w2, w1=$w1"
 
-    # Step 2: Compute M.X[0]
-    MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-
-    # Step 3: Evaluate F(X[0]) at current time step (only 1 RHS eval, reuse history)
-    F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-    F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
-
-    # Step 4: Rotate and store history (following SBDF1/SBDF2/SBDF3 pattern)
-    MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
-    F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
-
-    _prepend_history_buffer!(MX_history, MX_current, 4)
-    _prepend_history_buffer!(F_history, F_current_vec, 4)
-
-    # Step 5: Build RHS following Tarang multistep pattern
-    # RHS = c[1]*F[0] + c[2]*F[1] + c[3]*F[2] + c[4]*F[3]
-    #     - a[1]*MX[0] - a[2]*MX[1] - a[3]*MX[2] - a[4]*MX[3]
-    rhs = _global_multistep_zero_rhs!(state, length(X_current))
-    @. rhs += c[2] * F_history[1]  # c[1] * F[0]
-    if length(F_history) >= 2
-        @. rhs += c[3] * F_history[2]  # c[2] * F[1]
-    end
-    if length(F_history) >= 3
-        @. rhs += c[4] * F_history[3]  # c[3] * F[2]
-    end
-    if length(F_history) >= 4
-        @. rhs += c[5] * F_history[4]  # c[4] * F[3]
-    end
-    if length(MX_history) >= 1  # a[1] term
-        @. rhs -= a[2] * MX_history[1]  # -a[1] * MX[0]
-    end
-    if length(MX_history) >= 2  # a[2] term
-        @. rhs -= a[3] * MX_history[2]  # -a[2] * MX[1]
-    end
-    if length(MX_history) >= 3  # a[3] term
-        @. rhs -= a[4] * MX_history[3]  # -a[3] * MX[2]
-    end
-    if length(MX_history) >= 4  # a[4] term
-        @. rhs -= a[5] * MX_history[4]  # -a[4] * MX[3]
-    end
-
-    # Step 6: Build and solve LHS system: (a[0]*M + b[0]*L).X(n+1) = RHS
-    cache_key = (a[1], b[1])
-    X_new = _global_multistep_solve!(state, cache_key, M_matrix, L_matrix, a[1], b[1], rhs)
-
-    # Step 7: Update state
-    _push_vector_state!(state.history, X_new, current_state, 5)
-    state.timestepper_data[:sbdf4_iteration] += 1
-
-    @debug "SBDF4 step completed: dt=$k3, w3=$w3, w2=$w2, w1=$w1, |X_new|=$(norm(X_new))"
+    # `use_lx=false` for the same reason as SBDF3.
+    _global_multistep_core!(state, solver, current_state, L_matrix, M_matrix, a, b, c;
+                            mx_depth=4, f_depth=4, state_cap=5, use_lx=false,
+                            iter_key=:sbdf4_iteration, name="SBDF4")
 end
 
 # Exponential Time Differencing methods

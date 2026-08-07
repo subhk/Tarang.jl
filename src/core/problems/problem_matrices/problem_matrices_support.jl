@@ -85,17 +85,12 @@ function compute_field_size(field_or_data)
             end
         end
         return 0
-    elseif isa(field_or_data, ScalarField)
-        return field_dofs(field_or_data)
-    elseif isa(field_or_data, VectorField) || isa(field_or_data, TensorField)
-        return field_dofs(field_or_data)
-    elseif hasfield(typeof(field_or_data), :buffers) && get_coeff_data(field_or_data) !== nothing
-        return length(get_coeff_data(field_or_data))
-    elseif hasfield(typeof(field_or_data), :buffers) && get_grid_data(field_or_data) !== nothing
-        return length(get_grid_data(field_or_data))
-    else
-        return 0
     end
+    # `field_dofs` already dispatches: the three field types answer from their
+    # own methods, everything else answers 0. The two `hasfield(…, :buffers)`
+    # branches that used to sit here were unreachable — `:buffers` belongs only
+    # to `TransposableField`, for which `get_coeff_data` has no method.
+    return field_dofs(field_or_data)
 end
 
 """

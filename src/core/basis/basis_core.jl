@@ -17,10 +17,39 @@ abstract type FourierBasis <: IntervalBasis end  # Base for Fourier bases
     is_fourier_basis(basis)
 
 Check if a basis is a Fourier basis (RealFourier or ComplexFourier).
+
+An ABSENT axis (`nothing`) answers `true`: this predicate asks "is anything here
+incompatible with a Fourier-only path", and nothing is not. Callers that need the
+strict reading — "is this axis actually spectral in a Fourier sense" — want
+[`is_fourier_axis`](@ref) instead. The two policies used to be spelled out by hand
+at five different call sites, in three different ways, with only one of them
+documenting the choice. Naming them is what makes the choice reviewable.
+
+Note that `Nothing` is NOT a `Basis`, and `ScalarField.bases` is declared
+`Tuple{Vararg{Basis}}` — so a field's bases can never contain `nothing`, and the
+distinction only matters for loose basis collections (`Domain` construction,
+`_get_lift_output_bases`, and other `Vector{Union{Nothing, Basis}}` values).
 """
 is_fourier_basis(::FourierBasis) = true
 is_fourier_basis(::Basis) = false
 is_fourier_basis(::Nothing) = true  # No basis = OK (e.g., 1D/2D cases)
+# Non-basis values (a raw size, a symbol) are not Fourier. This method used to
+# live in transforms/transform_layout.jl as an untyped `is_fourier_basis(basis) =
+# isa(basis, RealFourier) || isa(basis, ComplexFourier)`, i.e. a second definition
+# of this predicate in another file that disagreed about `nothing`. It never won
+# for a `Basis` or for `nothing` (both are more specific here), so the disagreement
+# was invisible — which is exactly why it was worth deleting rather than leaving to
+# be discovered by whichever type stopped matching first.
+is_fourier_basis(::Any) = false
+
+"""
+    is_fourier_axis(basis) -> Bool
+
+Strict counterpart to [`is_fourier_basis`](@ref): an absent (`nothing`) axis is
+NOT a Fourier axis. Use this when the question is which transform an axis needs,
+rather than whether an axis blocks a Fourier-only path.
+"""
+@inline is_fourier_axis(basis) = isa(basis, FourierBasis)
 
 """
     is_complex_fourier_basis(basis)

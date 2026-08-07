@@ -39,7 +39,7 @@ function diagnose(solver::InitialValueSolver)
     println("├── state fields: $(length(solver.state))")
     for (i, field) in enumerate(solver.state)
         gdata = get_grid_data(field)
-        sz = gdata !== nothing ? size(gdata) : (isempty(field.bases) ? () : tuple([b.meta.size for b in field.bases if b !== nothing]...))
+        sz = gdata !== nothing ? size(gdata) : (isempty(field.bases) ? () : tuple([b.meta.size for b in field.bases]...))
         dof = max(prod(sz; init=1), 1)
         mem = dof * sizeof(field.dtype)
         total_dof += dof

@@ -929,15 +929,12 @@ Extract domain size from Fourier basis metadata.
 function _get_domain_size_from_bases(fourier_bases)
     sizes = Float64[]
     for basis in fourier_bases
-        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :bounds)
-            bounds = basis.meta.bounds
-            if bounds !== nothing && length(bounds) >= 2
-                push!(sizes, Float64(bounds[2] - bounds[1]))
-            else
-                push!(sizes, 2π)  # Default
-            end
+        bounds = basis.meta.bounds
+        if bounds !== nothing && length(bounds) >= 2
+            push!(sizes, Float64(bounds[2] - bounds[1]))
         else
-            push!(sizes, 2π)  # Default
+            @warn "Basis $(typeof(basis)) has no bounds; using 2π for its extent" maxlog=1
+            push!(sizes, 2π)
         end
     end
     return Tuple(sizes)

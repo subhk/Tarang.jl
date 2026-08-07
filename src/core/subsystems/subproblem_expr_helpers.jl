@@ -112,10 +112,15 @@ function _subproblem_expr_dofs(sp::Subproblem, expr)
     return 0
 end
 
-function _has_only_zero_dim_bases(field::ScalarField)
-    isempty(field.bases) && return true
-    return all(b -> b === nothing, field.bases)
-end
+"""True when this field carries no basis at all — a 0-D (tau) field.
+
+`ScalarField.bases` is `Tuple{Vararg{Basis}}` and cannot contain `nothing`, so the
+old `all(b -> b === nothing, field.bases)` tail could only ever be true vacuously,
+i.e. for the empty tuple the line above already returned on. It was not free: the
+tuple is not concretely typed (`Vararg{Basis}`), so the closure BOXES per call.
+`_is_zero_dim_field` in subsystems/subproblem_io.jl is the same predicate and was
+already reduced to `isempty` for exactly this reason."""
+_has_only_zero_dim_bases(field::ScalarField) = isempty(field.bases)
 
 function _has_only_zero_dim_bases(field::VectorField)
     return all(_has_only_zero_dim_bases, field.components)

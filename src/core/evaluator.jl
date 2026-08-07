@@ -743,34 +743,33 @@ function global_sum(reducer::GlobalArrayReducer, data::AbstractArray)
     return reduce_scalar(reducer, Float64(local_val), MPI.SUM)
 end
 
-"""Get domain from solver, handling various solver configurations."""
+"""
+    get_solver_domain(solver::InitialValueSolver) -> Union{Domain, Nothing}
+
+The solver's `Domain`, looked up through the problem, then its first variable,
+then the first state field. Returns `nothing` only if none of the three carries
+one — `domain` is `Union{Nothing, Domain}` on both the problem and the fields,
+so an un-domained solver is representable.
+
+WHAT THIS USED TO DO. Six `hasfield` guards, of which five were decided by
+`InitialValueSolver`'s own definition, and the first — `hasfield(typeof(solver),
+:domain)` — was ALWAYS FALSE: the struct has no `domain` field, so the branch
+advertised as the direct lookup could never run. Guarding a concrete type's
+fields with `hasfield` reads as defence and buys none; a typo or rename turns
+into a branch that stops being taken instead of an error.
+"""
 function get_solver_domain(solver::InitialValueSolver)
-    # Try direct domain access
-    if hasfield(typeof(solver), :domain) && solver.domain !== nothing
-        return solver.domain
+    problem = solver.problem
+    problem.domain === nothing || return problem.domain
+
+    if !isempty(problem.variables)
+        var_domain = operand_domain(problem.variables[1])
+        var_domain === nothing || return var_domain
     end
 
-    # Try through problem
-    if hasfield(typeof(solver), :problem) && solver.problem !== nothing
-        problem = solver.problem
-        if hasfield(typeof(problem), :domain) && problem.domain !== nothing
-            return problem.domain
-        end
-        # Try through variables
-        if hasfield(typeof(problem), :variables) && !isempty(problem.variables)
-            var = problem.variables[1]
-            if hasfield(typeof(var), :domain) && var.domain !== nothing
-                return var.domain
-            end
-        end
-    end
-
-    # Try through state
-    if hasfield(typeof(solver), :state) && solver.state !== nothing && !isempty(solver.state)
-        field = solver.state[1]
-        if hasfield(typeof(field), :domain) && field.domain !== nothing
-            return field.domain
-        end
+    if !isempty(solver.state)
+        state_domain = operand_domain(solver.state[1])
+        state_domain === nothing || return state_domain
     end
 
     return nothing
@@ -787,7 +786,16 @@ function volume_average(flow::GlobalFlowProperty, name::String)
     domain = get_solver_domain(flow.solver)
 
     if domain === nothing
-        # Fallback to grid average
+        # Fall back to the unweighted grid mean. These are DIFFERENT numbers on
+        # any non-uniform grid — a Chebyshev axis clusters points at the walls,
+        # so the grid mean over-weights them — and the caller asked for the
+        # volume average. Returning the other one without saying so hands back a
+        # plausible wrong value, which is precisely the failure this codebase
+        # keeps paying for. The sibling `hypervolume <= 0` fallback below has
+        # warned all along; this one did not.
+        @warn "No domain available for $(name); returning the unweighted grid " *
+              "average instead of the volume average (these differ on a " *
+              "non-uniform grid)" maxlog=1
         return grid_average(flow, name)
     end
 
@@ -816,25 +824,23 @@ function compute_hypervolume(domain::Domain)
     hypervolume = 1.0
 
     for basis in domain.bases
-        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :bounds)
-            bounds = basis.meta.bounds
-            if length(bounds) >= 2
-                L = bounds[2] - bounds[1]
-                # Validate that interval length is positive
-                if L <= 0
-                    @warn "Invalid bounds for basis: [$( bounds[1]), $(bounds[2])], using absolute value"
-                    L = abs(L)
-                    if L == 0
-                        L = 1.0  # Fallback to unit interval for degenerate case
-                    end
+        # `meta.bounds` is always present on a `Basis`; only its VALUE varies, so
+        # this is a value test. It used to be wrapped in two `hasfield` guards
+        # with their own unit-interval fallbacks, neither reachable.
+        bounds = basis.meta.bounds
+        if bounds !== nothing && length(bounds) >= 2
+            L = bounds[2] - bounds[1]
+            # Validate that interval length is positive
+            if L <= 0
+                @warn "Invalid bounds for basis: [$(bounds[1]), $(bounds[2])], using absolute value"
+                L = abs(L)
+                if L == 0
+                    L = 1.0  # Fallback to unit interval for degenerate case
                 end
-                hypervolume *= L
-            else
-                # Assume unit interval
-                hypervolume *= 1.0
             end
+            hypervolume *= L
         else
-            # Default to unit interval
+            # Assume unit interval
             hypervolume *= 1.0
         end
     end
