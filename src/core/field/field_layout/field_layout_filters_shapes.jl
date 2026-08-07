@@ -176,14 +176,9 @@ end
     For most bases, this is the number of modes/coefficients.
     Some bases may have different grid vs coefficient sizes.
     """
-function get_basis_grid_size(basis::Basis)
-    if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :size)
-        return basis.meta.size
-    else
-        # Fallback
-        return 64
-    end
-end
+# Every `Basis` carries `meta.size`; the `hasfield` guard that used to wrap this
+# was always true and its `else` returned a literal 64 that no basis justified.
+get_basis_grid_size(basis::Basis) = basis.meta.size
 
 """
     Get global coefficient shape for a domain.
@@ -213,13 +208,7 @@ end
     For Fourier bases: same as grid size
     For Chebyshev/Legendre: may differ due to boundary conditions
     """
-function get_basis_coeff_size(basis::Basis)
-    if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :size)
-        return basis.meta.size
-    else
-        return 64
-    end
-end
+get_basis_coeff_size(basis::Basis) = basis.meta.size
 
 """
     Get local grid shape for this MPI process.

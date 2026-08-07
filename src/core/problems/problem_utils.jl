@@ -123,7 +123,7 @@ function expand_substitutions!(problem::Problem)
     variables = problem.variables
     
     # Expand equation expressions if they exist
-    if hasfield(typeof(problem), :equation_data) && !isempty(problem.equation_data)
+    if !isempty(problem.equation_data)
         # Expand parsed equation data
         for eq_data in problem.equation_data
             try

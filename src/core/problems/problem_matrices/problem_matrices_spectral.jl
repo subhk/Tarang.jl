@@ -182,7 +182,7 @@ end
 
 """Spectral fractional Laplacian: (-Δ)^α — uses |k|^{2α} for fully Fourier domains."""
 function _spectral_fractional_laplacian(field::ScalarField, α::Float64, eqn_size::Int, var_size::Int)
-    all_fourier = all(b -> b !== nothing && isa(b, FourierBasis), field.bases)
+    all_fourier = all(is_fourier_axis, field.bases)
     !all_fourier && return nothing
 
     lap = _spectral_laplacian(field, eqn_size, var_size)
@@ -689,7 +689,6 @@ returning a coefficient-free block.
 function _ncc_kron_expand(ncc_expr, Qaxis::AbstractMatrix, nrows::Int)
     field = _ncc_direct_field(ncc_expr)
     field === nothing && return nothing
-    any(b -> b === nothing, field.bases) && return nothing
 
     cshape = _coeff_shape(field)
     prod(cshape) == nrows || return nothing

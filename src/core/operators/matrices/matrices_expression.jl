@@ -542,10 +542,6 @@ function _implicit_ncc_matrix(ncc_operand)
             "the coefficient field `$(field.name)` has no spatial bases, so it has no " *
             "coefficient-space representation to multiply by")
     end
-    if any(b -> b === nothing, field.bases)
-        return ImplicitNCCUnsupported(
-            "the coefficient field `$(field.name)` has an undefined (nothing) basis on one of its axes")
-    end
 
     jac_axes  = findall(b -> isa(b, JacobiBasis), field.bases)
     four_axes = findall(b -> isa(b, FourierBasis), field.bases)

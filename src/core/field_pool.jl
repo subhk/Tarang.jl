@@ -276,3 +276,53 @@ function maybe_return!(field::ScalarField)
     end
     return nothing
 end
+
+# ---------------------------------------------------------------------------
+# Taking ownership of a borrowed buffer
+# ---------------------------------------------------------------------------
+
+"""
+    _own_borrowed_field(src::ScalarField) -> ScalarField
+
+Copy `src` — a buffer on loan from one of the rotating result pools — into a
+freshly allocated field the caller owns outright.
+
+WHY THIS EXISTS. `FieldPool` above tracks ownership explicitly: a buffer is
+reissued only after an explicit `return!`. The rotating pools do not. They hand
+out slot `i = idx % N` and reissue it after `N` further checkouts regardless of
+who is still holding it, so **a rotating pool plus any caller that RETAINS the
+result is an aliasing bug** — the retained field silently changes value, with no
+error, once the index wraps. Growing `N` only moves the threshold, because
+nothing bounds how many results a caller may hold.
+
+Two of these have already been live wrong-answer bugs:
+
+  * `_DERIV_RESULT_POOL` (16 slots). A 3-D vector gradient holds 9 slots, so two
+    live gradients need 18: `gu = grad(u); gv = grad(v)` rewrote components of
+    `gu` with values belonging to `gv`, max error 3.0. The pool had already been
+    grown 8 -> 16 after the same failure inside a single tensor (`T[3,3]` over
+    `T[1,1]`).
+  * `_NL_RESULT_POOL` (8 slots). `Base.:*(::ScalarField, ::ScalarField)` returned
+    pool memory, so holding 9 products silently rewrote the first — and the index
+    is shared with the solver RHS, so a user holding ONE product loses it after
+    8 internal products.
+
+Callers that consume the result before the next checkout may keep borrowing; any
+caller that stores the result in a container, returns it across an API boundary,
+or hands it to user code must take ownership here.
+
+Layout-preserving, unlike `copy_field_data!`, which forces both sides to `:g` and
+would discard a `layout=:c` result.
+"""
+function _own_borrowed_field(src::ScalarField)
+    owned = ScalarField(src.dist, src.name, src.bases, src.dtype)
+    layout = src.current_layout
+    src_data = layout === :c ? get_coeff_data(src) : get_grid_data(src)
+    if src_data !== nothing
+        ensure_layout!(owned, layout)
+        dest_data = layout === :c ? get_coeff_data(owned) : get_grid_data(owned)
+        dest_data === nothing || copyto!(dest_data, src_data)
+    end
+    owned.current_layout = layout
+    return owned
+end

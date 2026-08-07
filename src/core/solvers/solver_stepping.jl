@@ -10,35 +10,31 @@
 # Scheme-specific stage logic lives in `src/core/timesteppers/step_*.jl`.
 # -----------------------------------------------------------------------------
 
-"""Advance solution by one time step using existing timestepper infrastructure"""
+"""Advance solution by one time step using existing timestepper infrastructure
+
+No `FieldPool` is installed for the step. `Future.evaluate` returns every
+intermediate to the pool once `operate` has run (`future.jl`), which is only
+sound if no one else still holds that intermediate — and dot product, cross
+product and the RHS all keep several live at once. Installing a pool here made
+those reissue the same buffer for different live values, silently. The recycling
+that survived is the rotating result pools, whose contract is documented in
+`src/core/module_contracts.jl`; `checkout_or_alloc` consequently always
+allocates, which is the intended behaviour, not a fallback.
+"""
 function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
+    start_time = time()
 
-    # NOTE: FieldPool is disabled until the checkout_or_alloc lifetime/aliasing
-    # issues are resolved. Multiple arithmetic operations (dot product, cross product,
-    # RHS evaluation) require simultaneous intermediate fields; the pool can return
-    # the same buffer for different live intermediates, causing silent data corruption.
-    # See: evaluate_vector_cross_product, dot_operands, evaluate_rhs.
-    pool_owner = false
+    _refresh_step_boundary_conditions!(solver, dt)
+    ts_state = _ensure_timestepper_state!(solver, dt)
 
-    try
-        start_time = time()
+    # Call existing timestepper step function from timesteppers.jl
+    step!(ts_state, solver)
 
-        _refresh_step_boundary_conditions!(solver, dt)
-        ts_state = _ensure_timestepper_state!(solver, dt)
+    step_time = time() - start_time
+    _sync_solver_from_timestepper!(solver)
+    _advance_solver_clock!(solver, dt, step_time)
 
-        # Call existing timestepper step function from timesteppers.jl
-        step!(ts_state, solver)
-
-        step_time = time() - start_time
-        _sync_solver_from_timestepper!(solver)
-        _advance_solver_clock!(solver, dt, step_time)
-
-        return solver
-    finally
-        if pool_owner
-            set_field_pool!(nothing)
-        end
-    end
+    return solver
 end
 
 _callback_should_fire(interval::Integer, solver::InitialValueSolver, _::Float64) =
@@ -319,7 +315,7 @@ Zero-dimensional tau variables are excluded: they carry no spatial data and are 
 valid forcing containers.
 """
 function _bvp_bulk_target_vars(state::Vector{<:ScalarField})
-    coupled = findall(f -> any(b -> b !== nothing && !isa(b, FourierBasis), f.bases), state)
+    coupled = findall(f -> any(b -> !is_fourier_axis(b), f.bases), state)
     isempty(coupled) || return coupled
     return findall(f -> !isempty(f.bases), state)
 end

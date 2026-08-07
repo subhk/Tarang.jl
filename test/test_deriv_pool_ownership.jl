@@ -19,7 +19,7 @@ project's dominant failure shape: not a crash, a plausible wrong number.
 The pool size had already been raised 8 -> 16 after exactly this failure inside a
 single tensor (`T[3,3]` overwriting `T[1,1]`). Raising it again would only move
 the threshold, because nothing bounds how many results a caller may hold live.
-The fix takes ownership instead: `_own_deriv_result` copies out of the pool, so
+The fix takes ownership instead: `_own_borrowed_field` copies out of the pool, so
 correctness no longer depends on the pool size at all.
 
 These tests therefore check both halves — that results are independent objects

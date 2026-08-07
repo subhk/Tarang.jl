@@ -237,6 +237,25 @@ end
         # error — a misplaced selector entry (1.0 vs 0.0) is far above tolerance.
         @test Matrix(M) ≈ kron(reshape(Float64[0, 0, 1], 1, 3), Matrix(I, n3, n3))
     end
+
+    @testset "vector gradient blocks agree with the differentiation matrices" begin
+        # REGRESSION. The Vector -> Tensor branch sized its zero blocks with
+        # `field_dofs`, which counts COEFFICIENT DOFs: on a RealFourier axis that
+        # is rfft_len(N) = N/2+1 per axis, so 144 for 16x16 against the 256 that
+        # `build_operator_differentiation_matrix` returns. The blocks did not
+        # compose and the assembly raised DimensionMismatch. The scalar branch of
+        # the same function had always used `get_scalar_size` (grid size); only
+        # this branch measured the other way.
+        u = VectorField(dist, coords, "u", bases, Float64)
+        dim = 2
+
+        D = Tarang.build_operator_differentiation_matrix(u.components[1], coords["x"], 1)
+        @test size(D) == (n, n)                      # grid-sized, not 144
+        @test Tarang.field_dofs(u.components[1]) < n # ...and coeff DOFs are smaller
+
+        M = subproblem_matrix(CartesianGradient(u, coords), nothing)
+        @test size(M) == (dim * dim * n, dim * n)
+    end
 end
 
 # ===========================================================================
@@ -251,8 +270,11 @@ end
     u = VectorField(dist, coords, "u", bases, Float64)
     T = TensorField(dist, coords, "T", bases, Float64)
 
-    # ScalarField: hits :bases branch -> product of basis sizes.
+    # ScalarField: GRID size, i.e. the product of basis sizes. This is the unit
+    # the Cartesian operator matrices are assembled at, NOT the coefficient
+    # count — on a RealFourier axis those differ.
     @test get_scalar_size(f, nothing) == Ncore * Ncore
+    @test Tarang.field_dofs(f) < get_scalar_size(f, nothing)
     # VectorField: recurses into components[1] (a ScalarField).
     @test get_scalar_size(u, nothing) == Ncore * Ncore
     # TensorField: recurses into components[1] (a ScalarField) too.
@@ -262,7 +284,7 @@ end
     f3 = ScalarField(dist3, "f", bases3, Float64)
     @test get_scalar_size(f3, nothing) == Ncore^3
 
-    # Fallback branch: an operand with none of components/buffers/bases -> 1.
+    # Non-field operands (operators, numbers) have no scalar block -> 1.
     @test get_scalar_size(42, nothing) == 1
 end
 

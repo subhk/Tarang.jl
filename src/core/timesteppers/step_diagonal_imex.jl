@@ -69,7 +69,6 @@ to continue when a term is not diagonal in the field's basis.
 function _diagonal_imex_Lmap_from_equations(solver::InitialValueSolver, scheme::AbstractString)
     lmap = DiagonalLMap()
     problem = solver.problem
-    hasfield(typeof(problem), :equation_data) || return lmap
     sfields = solver.state
 
     for eq_data in problem.equation_data
@@ -96,7 +95,7 @@ carrying any non-Fourier (e.g. Chebyshev) direction is rejected outright.
 """
 function _serial_diagonal_Lhat(L_expr, field::ScalarField)
     isempty(field.bases) && return nothing
-    all(b -> b === nothing || isa(b, FourierBasis), field.bases) || return nothing
+    all(is_fourier_axis, field.bases) || return nothing
     return _diagonal_Lhat_from_expr(L_expr, field)
 end
 
@@ -454,13 +453,13 @@ function _distributed_diagonal_imex_applicable(solver::InitialValueSolver)
         if !isempty(f.bases); field = f; break; end
     end
     field === nothing && return false
-    # NOTE: this basis test is deliberately NOT `plan.spectral_structure`. It
-    # accepts a `nothing` basis as separable, whereas the strict definition the
-    # plan records (matching `_gpu_pure_fourier_state`, which decides whether to
-    # skip host assembly) treats `nothing` as disqualifying. The two questions
-    # are different and the looser rule is load-bearing here, so unifying them
-    # would be a behavioural change, not a cleanup.
-    return all(b -> b === nothing || isa(b, FourierBasis), field.bases)
+    # This basis test is deliberately NOT `plan.spectral_structure`: the plan
+    # records a whole-state property, while this asks about the first spatial
+    # field only. The `nothing`-basis caveat that used to be documented here was
+    # phantom — `ScalarField.bases` is `Tuple{Vararg{Basis}}` and cannot hold
+    # `nothing`, so the loose and strict readings agreed on every input this can
+    # receive. See `is_fourier_basis` in basis/basis_core.jl.
+    return all(is_fourier_axis, field.bases)
 end
 
 _local_coeff(cd) = cd isa PencilArrays.PencilArray ? parent(cd) : cd

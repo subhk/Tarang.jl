@@ -293,16 +293,17 @@ function compute_field_vector_size(field::ScalarField)
     elseif get_grid_data(field) !== nothing
         return length(get_grid_data(field))
     else
+        # `bases` is `Tuple{Vararg{Basis}}`, so a `nothing` entry is not
+        # representable and needs no guard here. Only `full_bases(domain)` —
+        # which pads absent axes — can hand out `nothing`.
         total_size = 1
         first_rf = true
         for basis in field.bases
-            if basis !== nothing
-                if isa(basis, RealFourier) && first_rf
-                    total_size *= div(get_basis_size(basis), 2) + 1
-                    first_rf = false
-                else
-                    total_size *= get_basis_size(basis)
-                end
+            if isa(basis, RealFourier) && first_rf
+                total_size *= rfft_len(get_basis_size(basis))
+                first_rf = false
+            else
+                total_size *= get_basis_size(basis)
             end
         end
         return total_size
@@ -414,23 +415,18 @@ function set_field_data_from_vector!(field::ScalarField, data::AbstractVector{<:
     return nothing
 end
 
-"""Get the size (number of modes) for a basis following Tarang patterns."""
-function get_basis_size(basis)
-    if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :size)
-        return basis.meta.size
-    elseif hasfield(typeof(basis), :shape)
-        shape = basis.shape
-        if isa(shape, Tuple)
-            return prod(shape)
-        else
-            return shape
-        end
-    elseif hasfield(typeof(basis), :size)
-        return basis.size
-    elseif hasfield(typeof(basis), :N)
-        return basis.N
-    else
-        @warn "Could not determine basis size for $(typeof(basis)), using default"
-        return 64
-    end
-end
+"""
+    get_basis_size(basis::Basis) -> Int
+
+Number of modes carried by `basis`.
+
+Every `Basis` stores its size in `meta`; there is no second spelling. This used
+to be a four-branch `hasfield` chain trying `.meta.size`, `.shape`, `.size` and
+`.N` in turn and, failing all four, warning and returning a literal `64`. None of
+the last three fields exists on any of the eight concrete `Basis` subtypes, so
+the only reachable branch was the first and the `64` was a value the package
+could never justify — one more plausible wrong number of the kind this codebase
+keeps having to hunt down. Taking `::Basis` makes anything else a `MethodError`
+at the call site instead.
+"""
+get_basis_size(basis::Basis) = basis.meta.size

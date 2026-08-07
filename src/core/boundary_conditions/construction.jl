@@ -370,21 +370,12 @@ end
     Extracts coordinate and basis information from a Domain object.
     """
 function register_domain_info!(manager::BoundaryConditionManager, domain::Domain)
-    if !hasfield(typeof(domain), :bases) || domain.bases === nothing
-        @warn "Domain has no bases information"
-        return manager
-    end
-
+    # `Domain.bases` is `Tuple{Vararg{Basis}}` and `BasisMeta` always carries
+    # `element_label`, so the presence guards that used to wrap this were both
+    # unconditionally true — and the `else` invented names ("coord_1", …) that
+    # would not have matched any coordinate anyway.
     bases = collect(domain.bases)
-
-    coordinates = String[]
-    for basis in bases
-        if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :element_label)
-            push!(coordinates, basis.meta.element_label)
-        else
-            push!(coordinates, "coord_$(length(coordinates)+1)")
-        end
-    end
+    coordinates = String[basis.meta.element_label for basis in bases]
 
     manager.coordinate_info["coordinates"] = coordinates
     manager.coordinate_info["bases"] = bases

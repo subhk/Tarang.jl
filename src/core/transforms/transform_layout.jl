@@ -54,27 +54,17 @@ definition of the rfft layout rule; prefer it over writing `div(n, 2) + 1`.
 """
 @inline rfft_len(n::Integer) = div(n, 2) + 1
 
-"""
-    is_fourier_basis(basis) -> Bool
-"""
-@inline is_fourier_basis(basis) = isa(basis, RealFourier) || isa(basis, ComplexFourier)
-
-"""
-    first_fourier_axis(bases) -> Int
-
-Axis index of the first Fourier basis, or `0` if there is none. Only this axis
-can be halved: after any FFT the data is complex, so every later Fourier axis
-sees complex input and runs a full-size C2C transform. Both the serial FFTW chain
-(`_fourier_forward` dispatches on element type) and the MPI PencilFFTs plan
-(RFFT only on the first Fourier axis) follow this rule, which is why coefficient
-shapes agree in serial and distributed runs.
-"""
-@inline function first_fourier_axis(bases)
-    for (i, b) in enumerate(bases)
-        is_fourier_basis(b) && return i
-    end
-    return 0
-end
+# `is_fourier_basis` is defined once, in basis/basis_core.jl. A second definition
+# lived here and disagreed with it about an absent axis; see the note there.
+#
+# `first_fourier_axis(bases)` also lived here — "axis index of the first Fourier
+# basis, or 0". It had no callers: transform_planning.jl computes a LOCAL variable
+# of the same name from its own `fourier_axes` list, which reads like a call and is
+# not one. The rule it documented is still true and still enforced there — only
+# this axis can be halved, because after any FFT the data is complex, so every
+# later Fourier axis runs a full-size C2C transform (serial FFTW dispatches on
+# element type; the MPI PencilFFTs plan does RFFT only on the first Fourier axis),
+# which is why coefficient shapes agree in serial and distributed runs.
 
 # ---------------------------------------------------------------------------
 # Forward

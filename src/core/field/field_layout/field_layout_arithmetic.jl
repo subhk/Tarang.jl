@@ -74,6 +74,9 @@ function Base.:*(a::ScalarField, b::ScalarField)
     # modes in (N/3, N/2] aliased BELOW the cutoff (contaminating `a*b` and `dot(u,u)`).
     # The gate uses the GLOBAL element count (prod of basis grid sizes) rather than the
     # local-slab `length`, so under MPI every rank makes the same (collective) decision.
+    # The result is handed straight to user code, which may hold any number of
+    # products at once, so it must NOT be a borrowed pool buffer — keep the default
+    # `own=true`. See `_own_borrowed_field` in `src/core/field_pool.jl`.
     if has_spectral_bases(a) && prod(basis.meta.size for basis in a.bases) > 64
         return evaluate_transform_multiply(a, b, _get_evaluator(a.dist))
     end

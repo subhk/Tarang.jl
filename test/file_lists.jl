@@ -31,6 +31,9 @@ const TEST_FILES = [
     "test_execution_plan.jl",              # runtime path facts must be RECORDED at construction, not re-inferred; pins the per-scheme capability table that silently diverged across the multistep family
     "test_layering.jl",                    # Julia resolves calls at run time, so a core->tools inversion loads and runs fine and is invisible; derives load stages from load_order.jl and ratchets the backward references
     "test_deriv_pool_ownership.jl",        # grad() stored rotating-pool buffers in its result: two live 3-D vector gradients need 18 slots against a pool of 16, so grad(u) was silently overwritten by grad(v) (max err 3.0)
+    "test_nl_product_ownership.jl",        # same family on the nonlinear pool: Base.:*(field, field) returned one of 8 rotating buffers, so a held product was silently overwritten (max err 99) — and the index is shared with the solver RHS
+    "test_buffer_ownership_ratchet.jl",    # the set of rotating pools cannot grow without an ownership decision, and no FieldPool is installed behind a caller's back
+    "test_hasfield_ratchet.jl",            # hasfield(typeof(x), :f) answers false both when x has no such thing and when the field was renamed — the second silently; pins the population and the structural facts the deleted guards asserted
     "test_equation_ir.jl",                 # EquationIR's AbstractDict shim is not a Dict: haskey is true for every canonical slot whether assigned or not, and keys are case-sensitive — both shapes caused live silent-fallback bugs
     "test_cartesian_operator_core.jl",
     "test_transforms_extended.jl",

@@ -70,14 +70,13 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
         # on the interpreted path, closed the same way. The build is matrix-free, and
         # the enclosing catch rethrows, so a parse failure surfaces instead of becoming
         # a zero RHS.
-        if hasfield(typeof(problem), :equation_data) &&
-           isempty(problem.equation_data) && !isempty(problem.equations)
+        if isempty(problem.equation_data) && !isempty(problem.equations)
             build_matrix_expressions!(problem)
         end
 
         # Build mapping from state field index to equation F_expr
         # Only equations with time derivatives contribute to F
-        if hasfield(typeof(problem), :equation_data) && !isempty(problem.equation_data)
+        if !isempty(problem.equation_data)
             for (eq_idx, eq_data) in enumerate(problem.equation_data)
                 # Check if this equation has a time derivative (M term)
                 M_expr = get(eq_data, "M", nothing)
@@ -284,7 +283,6 @@ function _refresh_algebraic_state!(problem::Problem, state::Vector{<:ScalarField
 end
 
 function _has_algebraic_constraints(problem::Problem)
-    hasfield(typeof(problem), :equation_data) || return false
     isempty(problem.equation_data) && return false
 
     for eq_data in problem.equation_data
@@ -759,9 +757,7 @@ For QG-type problems, this handles:
 """
 function _solve_algebraic_constraints!(problem::Problem, state::Vector{<:ScalarField})
     # Only needed if we have equation_data
-    if !hasfield(typeof(problem), :equation_data) || isempty(problem.equation_data)
-        return
-    end
+    isempty(problem.equation_data) && return
 
     # Track which variables have been solved to ensure correct ordering
     solved_vars = Set{String}()
@@ -962,7 +958,7 @@ end
 @inline _is_zero_constraint_rhs(expr) = false
 
 @inline function _constraint_all_fourier_bases(field::ScalarField)
-    !isempty(field.bases) && all(basis -> basis isa FourierBasis, field.bases)
+    !isempty(field.bases) && all(is_fourier_axis, field.bases)
 end
 
 @inline _coefficient_array(data::PencilArrays.PencilArray) = parent(data)

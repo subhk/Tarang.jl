@@ -21,6 +21,13 @@
 # that list to empty first; the test is the checklist, and the count is a ratchet
 # so the list cannot quietly grow again.
 
+# Root of the problem hierarchy (`IVP`, `LBVP`, `NLBVP`, `EVP`, all in
+# problems/problem_types.jl). Declared here rather than next to those structs
+# because the operator layer loads two stages earlier and needs the name to
+# annotate signatures — `symbolic_diff.jl` takes `::Problem`, which is what
+# stops a duck-typed stand-in from reaching code that assumes the equation IR.
+abstract type Problem end
+
 abstract type AbstractNonlinearEvaluator end
 abstract type AbstractEvaluator end
 abstract type AbstractDistributedGPUConfig end
@@ -35,6 +42,43 @@ abstract type AbstractTimestepperState end
 # `::LazyRHSPlan` by hand; this at least makes assigning something unrelated a
 # type error at the assignment rather than a puzzle at the next read.
 abstract type AbstractRHSPlan end
+
+# ---------------------------------------------------------------------------
+# BUFFER OWNERSHIP — which returned fields the caller may keep
+# ---------------------------------------------------------------------------
+#
+# Two buffer-recycling designs exist in this package and they have opposite
+# safety properties. Know which one you are holding.
+#
+# 1. `FieldPool` (`core/field_pool.jl`) tracks ownership: a buffer is reissued
+#    only after an explicit `return!`, cross-pool returns throw, and
+#    `with_pool_field` gives RAII. It is NOT installed by default — see the
+#    docstring on `step!` for why — so `checkout_or_alloc` always allocates.
+#
+# 2. The rotating result pools track nothing. They hand out slot `idx % N` and
+#    reissue it after N further checkouts no matter who is still holding it:
+#
+#      `_DERIV_RESULT_POOL`   (16) — `operators/derivatives/derivatives_eval.jl`
+#      `_NL_RESULT_POOL`      ( 8) — `nonlinear/nonlinear_padding.jl`
+#      `_POISSON_RESULT_POOL` ( 4) — `timesteppers/state_utils.jl`
+#
+# THE CONTRACT. A rotating-pool result may be borrowed only by a caller that
+# consumes it before returning. Any caller that stores it in a container, returns
+# it across an API boundary, or hands it to user code MUST take ownership with
+# `_own_borrowed_field`. Growing N is not a fix: nothing bounds how many results
+# a caller may hold, so every N is wrong for some caller.
+#
+# This has been a live wrong-answer bug twice — `grad()` retaining derivative
+# slots, and `Base.:*` returning a nonlinear slot to user code — both silent, both
+# found only by asserting values. `evaluate_transform_multiply` therefore defaults
+# to `own=true` and makes borrowing the explicit opt-in, so a caller that forgets
+# gets a slow answer rather than a wrong one. Prefer that direction for any new
+# pooled producer. `_spectral_poisson_solve` is the exception that needs no
+# ownership call: it has a single consumer that `copy_field_data!`s the result on
+# the next line.
+#
+# `test/test_deriv_pool_ownership.jl`, `test/test_nl_product_ownership.jl` and
+# `test/test_buffer_ownership_ratchet.jl` pin all of the above.
 
 # Custom PencilConfig struct for pencil array configuration.
 struct PencilConfig{N, M}

@@ -73,9 +73,7 @@ function _problem_has_implicit_linear_term(solver::InitialValueSolver)
     return answer
 end
 
-function _compute_problem_has_implicit_linear_term(problem)
-    hasfield(typeof(problem), :equation_data) || return false
-
+function _compute_problem_has_implicit_linear_term(problem::Problem)
     # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
     # global-matrix assembly — the step a pure-Fourier GPU IVP SKIPS. That is precisely
     # the case `_check_gpu_implicit_compatibility!` exists to catch, so reading the IR

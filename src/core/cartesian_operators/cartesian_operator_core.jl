@@ -194,29 +194,47 @@ function subproblem_matrix(op::CartesianComponent, subproblem)
 end
 
 """
-    get_scalar_size(operand, subproblem)
+    get_scalar_size(operand, subproblem) -> Int
 
-Get the size of the scalar portion of an operand for matrix assembly.
+Degrees of freedom of the SCALAR part of `operand` — the block size the
+identity/selection matrices in `subproblem_matrix` are built from. For a vector
+or tensor operand that is ONE component, not the sum over components (which is
+what `field_dofs` returns for those types).
+
+The unit is the GRID size, `prod(basis.meta.size)` — the size the Cartesian
+operator matrices are built at. `build_operator_differentiation_matrix` on a
+`RealFourier(16) x RealFourier(16)` field returns a 256x256 matrix, not the
+144x144 its coefficient array would suggest, because a `RealFourier` axis stores
+only the `rfft_len` half-spectrum. Blocks assembled here have to compose with
+those matrices.
+
+WHY THIS IS NO LONGER A `hasfield` CHAIN. The previous body tried
+`hasfield(typeof(operand), :buffers)` to reach `length(get_coeff_data(operand))`
+BEFORE falling back to the basis product. No field type has a `:buffers` field —
+`TransposableField` is the only `Operand` that does, and it has no
+`get_coeff_data` method — so those two branches never ran. Which is the only
+reason the function was right: had they run they would have returned 144 where
+the surrounding `kron` needs 256, and the selection matrix would not have
+composed. A dead branch that is also wrong is worse than either alone, because
+its deadness is what makes the code work and nothing says so.
 """
-function get_scalar_size(operand, subproblem)
-    if hasfield(typeof(operand), :components) && !isempty(operand.components)
-        return get_scalar_size(operand.components[1], subproblem)
-    elseif hasfield(typeof(operand), :buffers) && get_coeff_data(operand) !== nothing
-        return length(get_coeff_data(operand))
-    elseif hasfield(typeof(operand), :buffers) && get_grid_data(operand) !== nothing
-        return length(get_grid_data(operand))
-    elseif hasfield(typeof(operand), :bases)
-        size = 1
-        for basis in operand.bases
-            if basis !== nothing
-                size *= basis.meta.size
-            end
-        end
-        return size
-    else
-        return 1
-    end
-end
+get_scalar_size(operand::ScalarField, subproblem) = _bases_dof_product(operand.bases)
+
+get_scalar_size(operand::VectorField, subproblem) =
+    isempty(operand.components) ? _bases_dof_product(operand.bases) :
+                                  get_scalar_size(operand.components[1], subproblem)
+
+get_scalar_size(operand::TensorField, subproblem) =
+    isempty(operand.components) ? _bases_dof_product(operand.bases) :
+                                  get_scalar_size(operand.components[1], subproblem)
+
+# Operators and non-field operands carry no scalar block of their own.
+get_scalar_size(operand, subproblem) = 1
+
+"""Grid-space DOF count of a basis tuple: the block size the Cartesian operator
+matrices are assembled at. Distinct from `field_dofs`, which counts COEFFICIENT
+DOFs and is smaller on any `RealFourier` axis."""
+_bases_dof_product(bases) = isempty(bases) ? 1 : prod(b.meta.size for b in bases)
 
 # ============================================================================
 # Layout condition check/enforce for CartesianComponent
@@ -245,8 +263,8 @@ function check_conditions(op::CartesianComponent)
     end
 
     # Verify operand has valid data in at least one layout (scalar fields)
-    if hasfield(typeof(operand), :current_layout)
-        layout = operand.current_layout
+    layout = operand_layout(operand)
+    if layout !== nothing
         if layout == :g
             return get_grid_data(operand) !== nothing
         elseif layout == :c
@@ -282,18 +300,18 @@ function enforce_conditions(op::CartesianComponent)
         end
         layout = operand.components[1, 1].current_layout
         ensure_layout!(operand, layout)
-    elseif hasfield(typeof(operand), :current_layout) && hasfield(typeof(operand), :buffers)
+    elseif operand isa ScalarField
+        # This branch used to be gated on `hasfield(typeof(operand), :buffers)`,
+        # which `ScalarField` answers FALSE to — `TransposableField` is the only
+        # `Operand` with a `:buffers` field — so it never ran and a scalar
+        # operand got no enforcement at all. `ensure_layout!` is idempotent when
+        # the data is already there, so making it live only adds the repair the
+        # branch was written to perform.
         layout = operand.current_layout
         if layout == :g && get_grid_data(operand) === nothing
-            # Need to transform from coefficient space to grid space
-            if hasfield(typeof(operand), :buffers) && get_coeff_data(operand) !== nothing
-                # Trigger transform - this depends on the field's transform implementation
-                ensure_layout!(operand, :g)
-            end
+            get_coeff_data(operand) === nothing || ensure_layout!(operand, :g)
         elseif layout == :c && get_coeff_data(operand) === nothing
-            if hasfield(typeof(operand), :buffers) && get_grid_data(operand) !== nothing
-                ensure_layout!(operand, :c)
-            end
+            get_grid_data(operand) === nothing || ensure_layout!(operand, :c)
         end
     end
 
@@ -310,14 +328,14 @@ function operate(op::CartesianComponent, out)
     operand = op.operand
 
     # Prefer the output layout if provided, otherwise infer from operand
-    layout = if hasfield(typeof(out), :current_layout)
-        out.current_layout
+    layout = if operand_layout(out) !== nothing
+        operand_layout(out)
     elseif isa(operand, VectorField)
         operand.components[op.comp_subaxis + 1].current_layout
     elseif isa(operand, TensorField)
         operand.components[1, 1].current_layout
-    elseif hasfield(typeof(operand), :current_layout)
-        operand.current_layout
+    elseif operand_layout(operand) !== nothing
+        operand_layout(operand)
     else
         :g
     end
@@ -332,7 +350,7 @@ function operate(op::CartesianComponent, out)
         comp_field = operand.components[comp_idx]
 
         ensure_layout!(comp_field, layout)
-        if hasfield(typeof(out), :current_layout)
+        if out isa ScalarField
             ensure_layout!(out, layout)
         end
         if layout == :g

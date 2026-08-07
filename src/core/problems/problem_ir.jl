@@ -1,6 +1,7 @@
 """Typed equation and compiled-problem state owned by the problem layer."""
 
-abstract type Problem end
+# `abstract type Problem` is declared in core/module_contracts.jl: the operator
+# layer loads before this file and annotates signatures with it.
 
 """
     EquationIR

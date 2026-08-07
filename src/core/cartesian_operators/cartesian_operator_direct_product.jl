@@ -180,7 +180,9 @@ function subproblem_matrix(op::DirectProductCurl, subproblem)
 
     coords = op.coordsys.coords
     comps = operand.components
-    n_per = field_dofs(comps[1])
+    # Grid size, to match the differentiation matrices — see the note in
+    # `subproblem_matrix(::CartesianGradient, …)`.
+    n_per = get_scalar_size(comps[1], subproblem)
     zero_block = spzeros(Float64, n_per, n_per)
 
     D = Array{SparseMatrixCSC}(undef, 3, 3)
@@ -208,7 +210,7 @@ function check_conditions(op::DirectProductCurl)
     if isa(op.operand, VectorField)
         layouts = Symbol[]
         for comp in op.operand.components
-            if hasfield(typeof(comp), :current_layout) && comp.current_layout !== nothing
+            if comp isa ScalarField
                 push!(layouts, comp.current_layout)
             end
         end
@@ -220,7 +222,7 @@ end
 function enforce_conditions(op::DirectProductCurl)
     if isa(op.operand, VectorField)
         for comp in op.operand.components
-            if hasfield(typeof(comp), :current_layout)
+            if comp isa ScalarField
                 ensure_layout!(comp, :c)
             end
         end

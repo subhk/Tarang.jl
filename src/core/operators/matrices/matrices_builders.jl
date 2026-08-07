@@ -320,14 +320,15 @@ end
 Get coordinate associated with a basis.
 """
 function get_coord_for_basis(basis::Basis)
-    if hasfield(typeof(basis), :meta) && hasfield(typeof(basis.meta), :coordsys)
-        coordsys = basis.meta.coordsys
+    # `meta.coordsys` is `Union{Nothing, CoordinateSystem}` — a VALUE test, not a
+    # field-presence test, is what distinguishes the two cases. Every
+    # `CoordinateSystem` has `coords`.
+    coordsys = basis.meta.coordsys
+    if coordsys !== nothing
         coord_name = basis.meta.element_label
-        if hasfield(typeof(coordsys), :coords)
-            for coord in coordsys.coords
-                if coord.name == coord_name
-                    return coord
-                end
+        for coord in coordsys.coords
+            if coord.name == coord_name
+                return coord
             end
         end
     end
@@ -335,26 +336,18 @@ function get_coord_for_basis(basis::Basis)
 end
 
 """
-    field_dofs(field)
+    field_dofs(x) -> 0
 
-Get total degrees of freedom for a field.
+Fallback for operands that are not fields: operators, expression nodes, plain
+numbers. They contribute no degrees of freedom.
+
+The real implementations are the `ScalarField` / `VectorField` / `TensorField`
+methods in `problem_matrices/problem_matrices_support.jl`. This method used to
+carry a four-branch `hasfield` chain that looked like the implementation and was
+entirely unreachable: `:bases` and `:components` belong only to the three field
+types, each of which has a more specific method, and `:buffers` belongs only to
+`TransposableField`, which has no `get_coeff_data`/`get_grid_data` method — so
+that branch could not have succeeded either. Anything reaching here answered
+`0` through the final `return`, which is now the whole body.
 """
-function field_dofs(field)
-    if hasfield(typeof(field), :buffers) && get_coeff_data(field) !== nothing
-        return length(get_coeff_data(field))
-    elseif hasfield(typeof(field), :buffers) && get_grid_data(field) !== nothing
-        return length(get_grid_data(field))
-    elseif hasfield(typeof(field), :bases)
-        total = 1
-        for basis in field.bases
-            if basis !== nothing
-                total *= basis.meta.size
-            end
-        end
-        return total
-    elseif hasfield(typeof(field), :components)
-        # VectorField or TensorField
-        return sum(field_dofs(comp) for comp in field.components)
-    end
-    return 0
-end
+field_dofs(x) = 0

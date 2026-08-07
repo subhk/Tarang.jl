@@ -312,7 +312,6 @@ function _apply_global_algebraic_rhs!(rhs::AbstractVector{ComplexF64},
     isempty(zero_rows) && return rhs
     fill!(view(rhs, zero_rows), zero(ComplexF64))
 
-    hasfield(typeof(problem), :equation_data) || return rhs
     isempty(problem.equation_data) && return rhs
 
     zero_row_set = Set(zero_rows)

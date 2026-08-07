@@ -25,8 +25,7 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     L_matrix = compiled_problem(problem).linear_matrix
 
     rhs_fields = ScalarField[]
-    if hasfield(typeof(problem), :equation_data) && problem.equation_data !== nothing &&
-       !isempty(problem.equation_data)
+    if !isempty(problem.equation_data)
         for (i, eq_data) in enumerate(problem.equation_data)
             template = state_fields[min(i, length(state_fields))]
             rhs_expr = get(eq_data, "rhs", nothing)
@@ -55,7 +54,13 @@ function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
     jacobian = try
         build_symbolic_jacobian(problem, state_fields)
     catch e
-        @debug "Symbolic Jacobian construction failed ($e), using fallback"
+        # Newton keeps converging on an approximate Jacobian — linearly instead
+        # of quadratically, or not at all with the identity — so this substitution
+        # shows up as "the solve is slow" or "it did not converge", never as the
+        # reason. It was a @debug, i.e. invisible by default.
+        @warn "Symbolic Jacobian construction failed; falling back to the " *
+              "linear matrix (or the identity if there is none). Newton will " *
+              "converge slowly or not at all." exception=e maxlog=1
         if compiled_problem(problem).linear_matrix !== nothing
             compiled_problem(problem).linear_matrix
         else

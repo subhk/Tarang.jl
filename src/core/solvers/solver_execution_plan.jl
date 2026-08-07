@@ -95,7 +95,7 @@ function _plan_spectral_structure(state::Vector{<:ScalarField})
     for field in state
         isempty(field.bases) && continue
         found_spatial = true
-        all(b -> b !== nothing && isa(b, FourierBasis), field.bases) || return :coupled
+        all(is_fourier_axis, field.bases) || return :coupled
     end
     return found_spatial ? :fourier : :none
 end
