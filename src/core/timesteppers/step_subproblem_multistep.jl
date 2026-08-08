@@ -317,7 +317,14 @@ function step_subproblem_multistep!(
         ref = ring_get(F_rings[sp_idx], 1)  # always valid after step 1
         alg_f = ref === nothing ? zeros(ComplexF64, n) :
                                   _sp_stage_vector!(sp, :multistep_alg_f, n, ref)
-        gather_alg_F!(alg_f, sp)
+        # Static-BC ALG_F is a constant of the problem: gather once into the
+        # cached stage vector (identity-checked — a fresh `zeros` above never
+        # matches and always gathers). Time-dependent BCs are rewritten into
+        # equation_data once per step upstream, so they re-gather every step.
+        if has_time_dependent_bcs(sp.problem.bc_manager) ||
+           sp.runtime.alg_F_gathered_into !== alg_f
+            gather_alg_F!(alg_f, sp)
+        end
         ALG_F[sp_idx] = alg_f
     end
 

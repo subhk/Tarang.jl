@@ -407,6 +407,15 @@ function copy_to_device(a::AbstractArray, target::AbstractArray)
     return copy(a)
 end
 
+"""
+    _device_cache_token(x::AbstractArray)
+
+Identity of the device that owns `x`, for workspace-cache keys. `nothing` for
+host arrays; the CUDA extension returns the device id for `CuArray`s, so a
+multi-GPU process never shares cached buffers or plans across devices.
+"""
+_device_cache_token(::AbstractArray) = nothing
+
 # ============================================================================
 # Architecture Array Creation
 # ============================================================================

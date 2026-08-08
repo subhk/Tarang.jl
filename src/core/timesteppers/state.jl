@@ -545,8 +545,12 @@ function _workspace_count(::Union{ETD_RK222, ETD_CNAB2, ETD_SBDF2})
     return 3
 end
 
-function _workspace_count(::Union{DiagonalIMEX_RK222, DiagonalIMEX_RK443, DiagonalIMEX_SBDF2})
-    return 4  # Stage storage for diagonal IMEX
+# Diagonal-IMEX RK pools one Y set AND one F set per stage (the F sets used to
+# be per-step `copy_state` allocations).
+_workspace_count(ts::Union{DiagonalIMEX_RK222, DiagonalIMEX_RK443}) = 2 * ts.stages
+
+function _workspace_count(::DiagonalIMEX_SBDF2)
+    return 4  # Stage storage for diagonal IMEX multistep
 end
 
 function _workspace_count(::TimeStepper)
@@ -618,21 +622,25 @@ function _workspace_stage_states!(state::TimestepperState, key::Symbol,
     return fields
 end
 
-"""Copy one field-state into another without allocating field storage."""
-function _copy_field_state!(dest::Vector{<:ScalarField}, src::Vector{<:ScalarField})
+"""Copy one field-state into another without allocating field storage.
+`preserve_layout=true` copies coefficient buffers directly for `:c` sources
+(no transforms) — see `copy_field_data!`."""
+function _copy_field_state!(dest::Vector{<:ScalarField}, src::Vector{<:ScalarField};
+                            preserve_layout::Bool=false)
     @inbounds for i in eachindex(dest, src)
-        copy_field_data!(dest[i], src[i])
+        copy_field_data!(dest[i], src[i]; preserve_layout)
     end
     return dest
 end
 
 """Acquire the state dropped from the previous one-entry history rotation."""
 function _acquire_recycled_history_state!(state::TimestepperState, key::Symbol,
-                                          current::V) where {V<:Vector{<:ScalarField}}
+                                          current::V;
+                                          preserve_layout::Bool=false) where {V<:Vector{<:ScalarField}}
     recycled = get(state.timestepper_data, key, nothing)
     if recycled isa V && length(recycled) == length(current)
         state.timestepper_data[key] = nothing
-        return _copy_field_state!(recycled, current)
+        return _copy_field_state!(recycled, current; preserve_layout)
     end
 
     state.timestepper_data[key] = nothing
@@ -649,14 +657,21 @@ function _push_recycled_history_state!(state::TimestepperState, key::Symbol, new
 end
 
 """
-    copy_field_data!(dest::ScalarField, src::ScalarField)
+    copy_field_data!(dest::ScalarField, src::ScalarField; preserve_layout=false)
 
 Copy field data in-place without allocation.
+
+By default both fields are normalized to `:g` first — which BACKWARD-transforms
+a `:c` source and costs the caller a forward transform if it needs `:c` again
+(a full FFT round-trip per copy in a coefficient-space stepper).
+`preserve_layout=true` instead copies the coefficient buffer directly when the
+source sits in `:c` and the buffers line up, leaving `dest` in `:c` with zero
+transforms; it falls back to the grid path when they don't.
 
 GPU-aware: Uses copyto!() which works on both CPU and GPU arrays.
 Both source and destination should be on the same architecture.
 """
-function copy_field_data!(dest::ScalarField, src::ScalarField)
+function copy_field_data!(dest::ScalarField, src::ScalarField; preserve_layout::Bool=false)
     # Skip 0D fields (tau variables) which have no spatial data
     if isempty(src.bases) || isempty(dest.bases)
         return
@@ -675,6 +690,18 @@ function copy_field_data!(dest::ScalarField, src::ScalarField)
         if dest.domain !== nothing
             allocate_data!(dest)
         end
+    end
+
+    if preserve_layout && src.current_layout == :c
+        src_coeff = get_coeff_data(src)
+        dest_coeff = get_coeff_data(dest)
+        if src_coeff !== nothing && dest_coeff !== nothing &&
+           size(dest_coeff) == size(src_coeff) && eltype(dest_coeff) == eltype(src_coeff)
+            copyto!(dest_coeff, src_coeff)
+            dest.current_layout = :c
+            return
+        end
+        # Buffers don't line up — fall through to the grid-normalizing path.
     end
 
     # Now do the actual copy

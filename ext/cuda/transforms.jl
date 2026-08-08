@@ -371,10 +371,12 @@ function _gpu_forward_transform_impl!(field::ScalarField)
             # Full C2C on all axes: covers (a) all-ComplexFourier, (b) RealFourier
             # NOT on dim 1 (canonical layout keeps it full size), and (c) complex
             # input with RealFourier on dim 1 (CPU falls back to fft too).
-            # C2C requires complex input; promote real data if needed.
+            # C2C requires complex input; promote real data if needed — into
+            # cached scratch, not a fresh per-call device array.
             if input_T <: Real
-                fft_input = Complex{input_T}.(data_g)
                 plan_T = Complex{input_T}
+                fft_input = get_gpu_dct_scratch(gpu_arch, local_grid_shape, plan_T, 1)[1]
+                fft_input .= data_g
             else
                 fft_input = data_g
                 plan_T = input_T
@@ -438,13 +440,18 @@ ifft output for C2C axes.
 function _gpu_backward_c2c_fft!(field::ScalarField, gpu_arch::GPU, data_c::CuArray,
                                 local_grid_shape::Tuple)
     coeff_T = eltype(data_c)
-    # C2C inverse requires complex input; promote if needed (shouldn't normally happen)
+    plan_T = coeff_T <: Real ? Complex{coeff_T} : coeff_T
+    # C2C inverse requires complex input; promote if needed (shouldn't normally
+    # happen). Both the promoted input and the real-dtype inverse below draw from
+    # the SAME count=2 scratch set — two distinct slots, because cuFFT C2C must
+    # not run in place through `mul!`. (A count=1 request here would hand the
+    # promotion and the inverse the same buffer.)
+    scratch2 = get_gpu_dct_scratch(Tarang.architecture(data_c), local_grid_shape, plan_T, 2)
     if coeff_T <: Real
-        fft_input = Complex{coeff_T}.(data_c)
-        plan_T = Complex{coeff_T}
+        fft_input = scratch2[1]
+        fft_input .= data_c
     else
         fft_input = data_c
-        plan_T = coeff_T
     end
     plan = get_gpu_fft_plan(gpu_arch, local_grid_shape, plan_T; real_input=false)
 
@@ -456,7 +463,7 @@ function _gpu_backward_c2c_fft!(field::ScalarField, gpu_arch::GPU, data_c::CuArr
     # and `gpu_mixed_backward_transform!`'s `T <: Real` branch.
     real_T = field.dtype
     if real_T <: Real
-        scratch = get_gpu_dct_scratch(Tarang.architecture(data_c), local_grid_shape, plan_T, 1)[1]
+        scratch = scratch2[2]
         gpu_backward_fft!(scratch, fft_input, plan)
         existing_grid = get_grid_data(field)
         if existing_grid === nothing || !(existing_grid isa CuArray) ||
@@ -653,10 +660,19 @@ function _gpu_backward_transform_impl!(field::ScalarField)
                 # Zero-pad the base half-spectrum to div(grid_n,2)+1 along dim 1
                 # and rescale by grid_n/base_n: the irfft divides by the (finer)
                 # grid_n while the stored coeffs were formed on base_n points.
+                # The padded buffer is CACHED scratch, not a per-call CUDA.zeros —
+                # this path runs on every dealiased backward transform. Only the
+                # pad tail needs zeroing (the head is overwritten just below);
+                # count=2 keeps the key disjoint from gpu_backward_fft!'s
+                # defensive count=1 scratch.
                 padded_len = op.pad_len
-                padded = CUDA.zeros(coeff_T_bk, padded_len, local_coeff_shape[2:end]...)
+                padded_shape = (padded_len, local_coeff_shape[2:end]...)
+                padded = get_gpu_dct_scratch(Tarang.architecture(data_c),
+                                             padded_shape, coeff_T_bk, 2)[1]
                 nd = length(local_coeff_shape)
                 front = ntuple(i -> i == 1 ? (1:axis_len) : Colon(), nd)
+                tail = ntuple(i -> i == 1 ? (axis_len+1:padded_len) : Colon(), nd)
+                @views padded[tail...] .= 0
                 @views padded[front...] .= data_c .* (grid_n1 / base_n1)
                 if iseven(base_n1)
                     # The base Nyquist mode is ambiguous on the finer grid; drop it
@@ -665,7 +681,9 @@ function _gpu_backward_transform_impl!(field::ScalarField)
                     nyq = ntuple(i -> i == 1 ? (nyq_i:nyq_i) : Colon(), nd)
                     @views padded[nyq...] .= 0
                 end
-                gpu_backward_fft!(get_grid_data(field), padded, plan)
+                # `padded` is disposable — let the destructive C2R consume it
+                # directly instead of copying it into yet another scratch.
+                mul!(get_grid_data(field), plan.iplan, padded)
             else
                 gpu_backward_fft!(get_grid_data(field), data_c, plan)
             end

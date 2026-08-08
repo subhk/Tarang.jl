@@ -835,23 +835,25 @@ function gpu_fft_dim!(output::CuArray, input::CuArray, plan::GPUFFTPlanDim)
 end
 
 """
-    gpu_ifft_dim!(output::CuArray, input::CuArray, plan::GPUFFTPlanDim)
+    gpu_ifft_dim!(output::CuArray, input::CuArray, plan::GPUFFTPlanDim; destroy_input=false)
 
 Execute inverse FFT along a specific dimension.
 
 For an R2C (`is_real`) plan the inverse is a cuFFT C2R (irfft), which OVERWRITES
-its input buffer. Copy `input` into a cached scratch first so the caller's
-coefficient buffer is never corrupted — mirrors `gpu_backward_fft!`
-(transforms.jl) and the async `_gpu_ifft_exec!` (batched_fft.jl). The sole
-in-tree caller (`gpu_mixed_backward_transform!`) already passes a scratch buffer,
-so this is belt-and-suspenders that also protects external callers of this
-exported primitive. C2C inverse is non-destructive — no copy needed.
+its input buffer. By default, copy `input` into a cached scratch first so the
+caller's coefficient buffer is never corrupted — mirrors `gpu_backward_fft!`
+(transforms.jl) and the async `_gpu_ifft_exec!` (batched_fft.jl). A caller
+passing a buffer that is already dead (e.g. `gpu_mixed_backward_transform!`,
+whose input at this stage is ping-pong scratch) sets `destroy_input=true` to
+skip that full-array defensive copy. C2C inverse is non-destructive — the flag
+is irrelevant there.
 
 Uses the shared per-(device,shape,eltype) scratch cache, so serial single-GPU
 use (one transform at a time per device) is the supported pattern.
 """
-function gpu_ifft_dim!(output::CuArray, input::CuArray, plan::GPUFFTPlanDim)
-    if plan.is_real
+function gpu_ifft_dim!(output::CuArray, input::CuArray, plan::GPUFFTPlanDim;
+                       destroy_input::Bool=false)
+    if plan.is_real && !destroy_input
         arch = Tarang.architecture(input)
         scratch = get_gpu_dct_scratch(arch, size(input), eltype(input), 1)[1]
         copyto!(scratch, input)

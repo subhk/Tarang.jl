@@ -429,31 +429,22 @@ end
 
 Override the algebraic-constraint rows of `rhs` with `coeff * alg_f[bc_rows]`.
 
-Pipeline:
-
-    tmp .= alg_f[bc_rows]     # gather into cached scratch buffer
-    tmp .*= coeff             # in-place scale
-    rhs[bc_rows] = tmp        # scatter
-
-All three operations are vectorized and stay on the same device as `rhs`, so
-this is safe under `CUDA.allowscalar(false)`. The `bc_rows` index vector is
-materialized on the correct device by `_bc_rows_device` and cached on the
-subproblem to avoid per-step host→device transfers. The gather target
-`tmp` is also a cached scratch buffer (`_bc_override_scratch!`), so this
-function performs zero per-call allocation after the first call.
+GPU path: ONE fused broadcast over index views — gather, scale, and scatter in
+a single kernel, zero per-call allocation. (The previous form,
+`rhs[bc_rows] = c .* alg_f[bc_rows]`, allocated a gather temporary and launched
+twice; a prior docstring also promised a `_bc_override_scratch!` cache that
+never existed.) The `bc_rows` index vector is materialized on the correct
+device by `_bc_rows_device` and cached on the subproblem to avoid per-step
+host→device transfers. CPU path: scalar loop, zero allocation. Both stay on
+`rhs`'s device, so this is safe under `CUDA.allowscalar(false)`.
 """
 function apply_bc_override!(rhs::AbstractVector, alg_f::AbstractVector,
                             sp::Subproblem, coeff)
     isempty(sp.bc_rows) && return rhs
     c = ComplexF64(coeff)
     if is_gpu_array(rhs)
-        # GPU path — vectorized scatter via on-device index array. The
-        # `alg_f[bc_rows]` gather allocates a small CuArray (length =
-        # length(sp.bc_rows), typically ≤ 16), but the allocation is cheap
-        # on modern device runtimes and cannot be avoided without a custom
-        # kernel. The cached `_bc_rows_device` avoids per-call H2D.
         bc_rows = _bc_rows_device(sp, rhs)
-        rhs[bc_rows] = c .* alg_f[bc_rows]
+        @views rhs[bc_rows] .= c .* alg_f[bc_rows]
     else
         # CPU path — scalar loop, zero allocation. For small bc_rows counts
         # (typical: 5–20) this is faster than broadcast-gather anyway.

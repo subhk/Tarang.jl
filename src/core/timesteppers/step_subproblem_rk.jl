@@ -474,6 +474,15 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # evaluate_rhs pulled it to :g), so fuse the coupled DCT into the single
     # fft→solve transpose. Safe because state is restored by `from_solve_layout!`
     # (a real transpose back), not a pointer swap. F fields keep the default.
+    # Whether this problem has any time-dependent BCs. If so, ALG_F is
+    # re-gathered every step here AND the stage loop below refreshes it at each
+    # stage time `t + c[i]*dt` to retain full stage-order accuracy on
+    # rapidly-varying BCs. STATIC BCs are populated at solver build time and
+    # never change — their ALG_F is gathered exactly once into the cached stage
+    # vector (identity-checked via `alg_F_gathered_into`), not rebuilt on the
+    # host and re-uploaded once per subproblem per step.
+    bc_dynamic = has_time_dependent_bcs(problem.bc_manager)
+
     solve_stash = to_solve_layout!(state_fields, dist; fuse_from_grid=true)
     for (sp_idx, sp) in enumerate(subproblems)
         if sp.M_min === nothing
@@ -492,7 +501,9 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         RHS[sp_idx] = rhs
 
         alg_f = _sp_stage_vector!(sp, :alg_f, n_eq, mx0)
-        gather_alg_F!(alg_f, sp)
+        if bc_dynamic || sp.runtime.alg_F_gathered_into !== alg_f
+            gather_alg_F!(alg_f, sp)
+        end
         ALG_F[sp_idx] = alg_f
     end
     # NO from_solve here: the pre-stage gather only READS state (MX0 = M·X_n),
@@ -500,13 +511,6 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # needs exactly that solve pencil, and nothing reads the FFT layout in
     # between — so we keep state in solve (cancels the old pre-stage→stage-1
     # round-trip). `solve_stash` carries through to the first `evaluate_rhs` pop.
-
-    # Whether this problem has any time-dependent BCs. If so, the stage
-    # loop below refreshes `ALG_F` at each stage time `t + c[i]*dt` to
-    # retain full stage-order accuracy on rapidly-varying BCs. Pure
-    # space-dependent (non-time) BCs are already populated at solver build
-    # time — they don't need per-stage refreshes.
-    bc_dynamic = has_time_dependent_bcs(problem.bc_manager)
 
     # ── Stage loop ────────────────────────────────────────────────────────
     # Each stage: build RHS → solve → scatter → evaluate F and L*X at solution

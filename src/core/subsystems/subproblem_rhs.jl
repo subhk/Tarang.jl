@@ -513,5 +513,9 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
     copyto!(raw, raw_cpu)
 
     compress_equation_space!(dest, sp, raw)
+    # Record WHICH vector now holds the gathered ALG_F, so static-BC steppers
+    # can skip this whole host-rebuild + upload on later steps (see the field's
+    # comment in SubproblemRuntimeCache).
+    sp.runtime.alg_F_gathered_into = dest
     return dest
 end

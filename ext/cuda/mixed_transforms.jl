@@ -263,32 +263,48 @@ function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuAr
             current_data = output
 
         elseif basis_type == :chebyshev
+            is_last = stage_index == lastindex(plan.transform_order)
+            needs_resize = output_shape != input_shape
             scratch = get_gpu_mixed_transform_scratch(plan, complex_T, input_shape)
+
+            # Complex data runs ONE packed-re/im batched DCT-I
+            # (gpu_dct1_along_dim! in cheb_deriv.jl) instead of a
+            # real./imag./complex. split around two separate DCTs; real data is
+            # read in place instead of being staged through real_input first.
+            # The final unresized stage lands directly in the caller's
+            # coefficient buffer — no trailing full-array copy.
+            direct_final = is_last && !needs_resize &&
+                           eltype(coeff_data) == eltype(current_data)
             if eltype(current_data) <: Complex
-                scratch.real_input .= real.(current_data)
-                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :forward)
-                scratch.real_input .= imag.(current_data)
-                gpu_dct1_along_dim!(scratch.imag_output, scratch.real_input, dim, :forward)
-                output = _next_mixed_complex_buffer(current_data, scratch)
-                output .= complex.(scratch.real_output, scratch.imag_output)
-                current_data = output
+                dct_out = direct_final ? coeff_data :
+                          _next_mixed_complex_buffer(current_data, scratch)
+                gpu_dct1_along_dim!(dct_out, current_data, dim, :forward)
+                current_data = dct_out
             else
-                scratch.real_input .= current_data
-                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :forward)
-                current_data = scratch.real_output
+                dct_out = direct_final ? coeff_data : scratch.real_output
+                gpu_dct1_along_dim!(dct_out, current_data, dim, :forward)
+                current_data = dct_out
             end
 
-            if output_shape != input_shape
-                resized_scratch = get_gpu_mixed_transform_scratch(
-                    plan, complex_T, output_shape)
-                if eltype(current_data) <: Complex
-                    resized = _next_mixed_complex_buffer(current_data, resized_scratch)
-                    Tarang._copy_axis_prefix!(resized, current_data, dim)
-                    current_data = resized
+            if needs_resize
+                # Scaled Chebyshev axis: truncate to the basis size (matches the
+                # CPU chain). The final stage truncates straight into the
+                # coefficient buffer.
+                if is_last && eltype(coeff_data) == eltype(current_data)
+                    Tarang._copy_axis_prefix!(coeff_data, current_data, dim)
+                    current_data = coeff_data
                 else
-                    Tarang._copy_axis_prefix!(resized_scratch.real_output,
-                                              current_data, dim)
-                    current_data = resized_scratch.real_output
+                    resized_scratch = get_gpu_mixed_transform_scratch(
+                        plan, complex_T, output_shape)
+                    if eltype(current_data) <: Complex
+                        resized = _next_mixed_complex_buffer(current_data, resized_scratch)
+                        Tarang._copy_axis_prefix!(resized, current_data, dim)
+                        current_data = resized
+                    else
+                        Tarang._copy_axis_prefix!(resized_scratch.real_output,
+                                                  current_data, dim)
+                        current_data = resized_scratch.real_output
+                    end
                 end
             end
         end
@@ -297,7 +313,7 @@ function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuAr
     end
 
     _require_mixed_shape("final transformed data", current_data, plan.coeff_shape)
-    copyto!(coeff_data, current_data)
+    current_data === coeff_data || copyto!(coeff_data, current_data)
     return coeff_data
 end
 
@@ -326,6 +342,7 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
         basis_type = plan.basis_types[dim]
 
         if basis_type == :chebyshev
+            is_final = stage_index == firstindex(plan.transform_order)
             scratch = get_gpu_mixed_transform_scratch(plan, complex_T, output_shape)
             dct_input = current_data
             if output_shape != input_shape
@@ -340,18 +357,18 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
                 end
             end
 
+            # Packed-re/im batched DCT-I for complex data (one transform, no
+            # split/recombine); real data is read in place. A final all-real
+            # stage (pure-Chebyshev field) writes the grid buffer directly.
             if eltype(dct_input) <: Complex
-                scratch.real_input .= real.(dct_input)
-                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :backward)
-                scratch.real_input .= imag.(dct_input)
-                gpu_dct1_along_dim!(scratch.imag_output, scratch.real_input, dim, :backward)
                 output = _next_mixed_complex_buffer(dct_input, scratch)
-                output .= complex.(scratch.real_output, scratch.imag_output)
+                gpu_dct1_along_dim!(output, dct_input, dim, :backward)
                 current_data = output
             else
-                scratch.real_input .= dct_input
-                gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :backward)
-                current_data = scratch.real_output
+                out_tgt = (is_final && eltype(grid_data) == eltype(dct_input)) ?
+                          grid_data : scratch.real_output
+                gpu_dct1_along_dim!(out_tgt, dct_input, dim, :backward)
+                current_data = out_tgt
             end
 
         elseif basis_type == :fourier_real || basis_type == :fourier_complex
@@ -365,7 +382,12 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
                 output_shape == plan.grid_shape || throw(DimensionMismatch(
                     "real inverse FFT produced intermediate shape $output_shape " *
                     "instead of final grid shape $(plan.grid_shape)"))
-                gpu_ifft_dim!(grid_data, current_data, fft_plan)
+                # current_data is ping-pong scratch here (the reversed order
+                # visits a Chebyshev stage before any Fourier stage on mixed
+                # fields), so the destructive cuFFT C2R may consume it without
+                # the defensive input copy.
+                gpu_ifft_dim!(grid_data, current_data, fft_plan;
+                              destroy_input=(current_data !== coeff_data))
                 current_data = grid_data
             else
                 scratch = get_gpu_mixed_transform_scratch(plan, complex_T, output_shape)

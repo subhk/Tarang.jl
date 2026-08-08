@@ -729,6 +729,11 @@ function Tarang.allocate_like(a::CuArray, dims...)
     end
 end
 
+# Device identity for workspace-cache keys (src fallback returns `nothing` for
+# host arrays): two CuArrays on different devices must never share cached
+# buffers or CUFFT plans.
+Tarang._device_cache_token(x::CuArray) = CUDA.deviceid(CUDA.device(x))
+
 """
     copy_to_device(a::AbstractArray, target::CuArray)
 

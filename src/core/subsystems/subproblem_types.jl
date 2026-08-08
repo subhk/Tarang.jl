@@ -31,6 +31,12 @@ mutable struct SubproblemRuntimeCache
     gather_eqn_F_raw::Union{Nothing, AbstractVector{ComplexF64}}
     gather_alg_F_raw::Union{Nothing, AbstractVector{ComplexF64}}
     gather_alg_F_raw_cpu::Union{Nothing, Vector{ComplexF64}}
+    # The exact destination vector the last `gather_alg_F!` filled. Static-BC
+    # steppers skip the (host rebuild + H2D upload) re-gather when their cached
+    # stage vector is IDENTICALLY this object — identity, not a flag, so a
+    # reallocated/retyped buffer can never be mistaken for a gathered one
+    # (a stale flag would silently serve zeros as BC values).
+    alg_F_gathered_into::Any
     eqn_sizes::Union{Nothing, Vector{Int}}
     eqn_raw_size::Int
     eqn_targets::Union{Nothing, Vector{Vector{Int}}}
@@ -60,6 +66,7 @@ SubproblemRuntimeCache() = SubproblemRuntimeCache(
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,
+    nothing,
     nothing, 0, nothing,
     nothing,
     Dict{Float64, Bool}(),
