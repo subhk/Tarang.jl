@@ -317,4 +317,101 @@ else
             check_product(; chebyshev_first, nyquist)
         end
     end
+
+    @testset "Nonlinear wall-bounded 2D FC IVP matches CPU" begin
+        nx, nz = 8, 10
+        dt = 1e-3
+        nsteps = 5
+
+        function build_channel_solver(device)
+            coords = CartesianCoordinates("x", "z")
+            dist = Distributor(coords; dtype=Float64, device=device)
+            xbasis = RealFourier(
+                coords["x"]; size=nx, bounds=(0.0, 2π), dealias=3 / 2)
+            zbasis = ChebyshevT(coords["z"]; size=nz, bounds=(0.0, 1.0))
+            domain = Domain(dist, (xbasis, zbasis))
+
+            b = ScalarField(domain, "b")
+            tau1 = ScalarField(dist, "tau1", (xbasis,), Float64)
+            tau2 = ScalarField(dist, "tau2", (xbasis,), Float64)
+            _, ez = unit_vector_fields(coords, dist)
+            lift_basis = derivative_basis(zbasis, 1)
+            tau_lift(A) = lift(A, lift_basis, -1)
+            grad_b = grad(b) + ez * tau_lift(tau1)
+
+            problem = IVP([b, tau1, tau2])
+            add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
+            add_equation!(problem,
+                          "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = -b*∂x(b)")
+            add_bc!(problem, "b(z=0) = 0")
+            add_bc!(problem, "b(z=1) = 0")
+            solver = InitialValueSolver(problem, RK222(); dt)
+            return solver, b, tau1, tau2
+        end
+
+        cpu_solver, cpu_b, _, _ = build_channel_solver(CPU())
+        gpu_solver, gpu_b, gpu_tau1, gpu_tau2 = build_channel_solver(GPU())
+        @test gpu_solver.base.matsolver === CuSparseLU
+
+        x = (0:nx-1) .* (2π / nx)
+        z = (1 .- cos.(π .* (0:nz-1) ./ (nz - 1))) ./ 2
+        initial = [sin(π * zj) * (1 + 0.5cos(2xi)) for xi in x, zj in z]
+        ensure_layout!(cpu_b, :g)
+        ensure_layout!(gpu_b, :g)
+        copyto!(get_grid_data(cpu_b), initial)
+        copyto!(get_grid_data(gpu_b), CuArray(initial))
+        ensure_layout!(cpu_b, :c)
+        ensure_layout!(gpu_b, :c)
+
+        for _ in 1:nsteps
+            step!(cpu_solver, dt)
+            step!(gpu_solver, dt)
+        end
+        CUDA.synchronize()
+
+        ensure_layout!(cpu_b, :c)
+        ensure_layout!(gpu_b, :c)
+        @test isapprox(Array(get_coeff_data(gpu_b)), get_coeff_data(cpu_b);
+                       rtol=5e-7, atol=2e-9)
+        for field in (gpu_b, gpu_tau1, gpu_tau2)
+            @test get_coeff_data(field) isa CUDA.CuArray
+            @test all(isfinite, get_coeff_data(field))
+        end
+
+        subproblems = gpu_solver.problem.parameters["subproblems"]
+        @test !isempty(subproblems)
+        for subproblem in subproblems
+            for buffer in values(subproblem.runtime.rk_buffers)
+                @test buffer isa CUDA.CuArray
+            end
+            for matrix_solver in values(subproblem.LHS_solvers)
+                @test matrix_solver isa CuSparseLU
+                @test matrix_solver.A_csr.nzVal isa CUDA.CuArray
+                @test matrix_solver.rhs_buffer isa CUDA.CuArray
+                @test matrix_solver.solution_buffer isa CUDA.CuArray
+                @test matrix_solver.temp_buffer isa CUDA.CuArray
+            end
+        end
+
+        ensure_layout!(cpu_b, :g)
+        ensure_layout!(gpu_b, :g)
+        cpu_grid = get_grid_data(cpu_b)
+        gpu_grid = Array(get_grid_data(gpu_b))
+        @test isapprox(gpu_grid, cpu_grid; rtol=5e-7, atol=2e-9)
+        @test all(isfinite, gpu_grid)
+        @test maximum(abs, gpu_grid[:, 1]) < 2e-8
+        @test maximum(abs, gpu_grid[:, end]) < 2e-8
+
+        # Fill every rotating derivative/nonlinear pool and every stage cache,
+        # then require the steady-state step to avoid fresh device allocation.
+        for _ in 1:10
+            step!(gpu_solver, dt)
+        end
+        CUDA.synchronize()
+        allocation_stats = getfield(CUDA, :alloc_stats)
+        allocated_before = allocation_stats.alloc_bytes
+        step!(gpu_solver, dt)
+        CUDA.synchronize()
+        @test allocation_stats.alloc_bytes - allocated_before == 0
+    end
 end
