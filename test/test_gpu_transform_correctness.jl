@@ -522,11 +522,10 @@ else
                        rtol=1e-9, atol=1e-11)
     end
 
-    @testset "Scaled Chebyshev axis is refused, scaled Fourier still works" begin
-        # `set_scales!` on a Chebyshev axis: the CPU chain truncates the Chebyshev
-        # coefficients back to basis size, the GPU mixed driver keeps every grid
-        # mode. Silently returning the longer spectrum skipped the truncation, so
-        # the GPU now refuses (the core turns that into an explicit error).
+    @testset "Scaled Chebyshev and Fourier axes stay on device" begin
+        # The mixed driver DCT-I's on the scaled Chebyshev grid, truncates to the
+        # basis coefficient length, and zero-pads before the inverse. Use a
+        # low-degree polynomial so that truncation is lossless.
         coords = CartesianCoordinates("x", "z")
         dist = Distributor(coords; dtype=Float64, device=GPU())
         dom = Domain(dist, (RealFourier(coords["x"]; size=16, bounds=(0.0, 2π)),
@@ -534,10 +533,19 @@ else
         u = ScalarField(dom, "u")
         Tarang.set_scales!(u, 3 / 2)
         ensure_layout!(u, :g)
-        get_grid_data(u) .= CuArray(rand(size(get_grid_data(u))...))
-        @test_throws Exception forward_transform!(u)
+        nx, nz = size(get_grid_data(u))
+        x = (0:nx-1) .* (2π / nx)
+        z = (1 .- cos.(π .* (0:nz-1) ./ (nz - 1))) ./ 2
+        data = [sin(2xi) * (1 + zj - 0.25zj^2) for xi in x, zj in z]
+        copyto!(get_grid_data(u), CuArray(data))
+        forward_transform!(u); ensure_layout!(u, :c)
+        @test size(get_coeff_data(u)) == (13, 17)
+        coeff_before = copy(get_coeff_data(u))
+        backward_transform!(u); ensure_layout!(u, :g)
+        @test get_coeff_data(u) == coeff_before
+        @test isapprox(Array(get_grid_data(u)), data; rtol=1e-9, atol=1e-11)
 
-        # ...while a scaled PURE-Fourier field is unaffected (both devices keep
+        # A scaled PURE-Fourier field is unaffected (both devices keep
         # the full scaled-length spectrum) and must still round-trip.
         coords2 = CartesianCoordinates("x", "y")
         dist2 = Distributor(coords2; dtype=Float64, device=GPU())

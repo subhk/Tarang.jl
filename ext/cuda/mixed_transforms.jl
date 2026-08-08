@@ -11,6 +11,8 @@ Stores per-dimension transform information for sequential dimension-by-dimension
 struct GPUMixedTransformPlan
     basis_types::Vector{Symbol}  # :fourier_real, :fourier_complex, :chebyshev
     transform_order::Vector{Int}  # Order to apply transforms (Fourier first recommended)
+    axis_ops::Vector{Tarang.AxisOp}  # Shared forward operation for each basis axis
+    stage_shapes::Vector{Tuple}  # Input shape followed by each Fourier-first stage shape
     fft_plans::Dict{Int, GPUFFTPlanDim}  # FFT plans by dimension
     dct_plans::Dict{Int, GPUDCTPlanDim}  # DCT plans by dimension
     grid_shape::Tuple{Vararg{Int}}
@@ -77,8 +79,8 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     end
 
     # Transform order: Fourier first (they may change array size), then Chebyshev.
-    # Chebyshev stages preserve shape and realness here (a SCALED Chebyshev axis is
-    # refused upstream), so ordering them last does not affect shape bookkeeping.
+    # Scaled Chebyshev stages may also shrink the array; `stage_shapes` below
+    # records those intermediate sizes for the shape-keyed scratch executor.
     sort!(fourier_dims)
     transform_order = vcat(fourier_dims, chebyshev_dims)
 
@@ -89,6 +91,7 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     # coefficient buffer from the GRID shape, so a scaled Chebyshev axis silently
     # kept every grid mode the CPU chain truncates.
     ops, coeff_shape, _ = Tarang.forward_layout(bases, local_grid_shape, T)
+    stage_shapes = Tarang.transform_stage_shapes(ops, local_grid_shape, transform_order)
 
     fft_plans = Dict{Int, GPUFFTPlanDim}()
     current_shape = local_grid_shape
@@ -106,7 +109,7 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
     dct_plans = Dict{Int, GPUDCTPlanDim}()
 
     return GPUMixedTransformPlan(
-        basis_types, transform_order,
+        basis_types, transform_order, ops, stage_shapes,
         fft_plans, dct_plans,
         local_grid_shape, coeff_shape
     )
@@ -141,19 +144,20 @@ end
 const GPU_MIXED_SCRATCH_CACHE = Dict{Tuple,Any}()
 
 function get_gpu_mixed_transform_scratch(plan::GPUMixedTransformPlan,
-                                         ::Type{CT}) where {CT<:Complex}
+                                         ::Type{CT}, shape::Tuple) where {CT<:Complex}
     RT = real(CT)
-    key = (_current_device_id(), plan.grid_shape, plan.coeff_shape, CT)
+    key = (_current_device_id(), plan.grid_shape, plan.coeff_shape,
+           Tuple(plan.stage_shapes), shape, CT)
     scratch = lock(GPU_MIXED_TRANSFORM_CACHE.lock) do
         get!(GPU_MIXED_SCRATCH_CACHE, key) do
-            complex_a = CUDA.zeros(CT, plan.coeff_shape...)
-            complex_b = CUDA.zeros(CT, plan.coeff_shape...)
+            complex_a = CUDA.zeros(CT, shape...)
+            complex_b = CUDA.zeros(CT, shape...)
             GPUMixedTransformScratch(
                 complex_a,
                 complex_b,
-                CUDA.zeros(RT, plan.coeff_shape...),
-                CUDA.zeros(RT, plan.coeff_shape...),
-                CUDA.zeros(RT, plan.coeff_shape...),
+                CUDA.zeros(RT, shape...),
+                CUDA.zeros(RT, shape...),
+                CUDA.zeros(RT, shape...),
             )
         end
     end
@@ -170,12 +174,13 @@ end
 Generate cache key for mixed transform plans.
 """
 function _mixed_plan_key(arch::GPU{CuDevice}, bases::Tuple, local_grid_shape::Tuple, T::Type)
-    basis_types = tuple([typeof(b) for b in bases]...)
-    return (CUDA.deviceid(arch.device), basis_types, local_grid_shape, T)
+    basis_signature = tuple(((typeof(b), b.meta.size) for b in bases)...)
+    return (CUDA.deviceid(arch.device), basis_signature, local_grid_shape, T)
 end
 
 _mixed_plan_key(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Type) =
-    (_current_device_id(), tuple([typeof(b) for b in bases]...), local_grid_shape, T)
+    (_current_device_id(), tuple(((typeof(b), b.meta.size) for b in bases)...),
+     local_grid_shape, T)
 
 """
     get_gpu_mixed_transform_plan(arch::GPU, bases::Tuple, local_grid_shape::Tuple, T::Type)
@@ -208,6 +213,12 @@ end
 # Mixed Transform Execution (N-dimensional)
 # ============================================================================
 
+function _require_mixed_shape(label::AbstractString, data, expected::Tuple)
+    size(data) == expected || throw(DimensionMismatch(
+        "$label has shape $(size(data)); the mixed transform plan requires $expected"))
+    return nothing
+end
+
 """
     gpu_mixed_forward_transform!(coeff_data::CuArray, grid_data::CuArray, plan::GPUMixedTransformPlan)
 
@@ -221,15 +232,20 @@ Transforms grid-space data to spectral coefficients:
 function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuArray{S, N},
                                       plan::GPUMixedTransformPlan) where {T, S, N}
     complex_T = T <: Complex ? T : Complex{T}
-    scratch = get_gpu_mixed_transform_scratch(plan, complex_T)
+    _require_mixed_shape("grid input", grid_data, plan.grid_shape)
+    _require_mixed_shape("coefficient output", coeff_data, plan.coeff_shape)
 
     current_data = grid_data
 
-    for dim in plan.transform_order
+    for (stage_index, dim) in enumerate(plan.transform_order)
+        input_shape = plan.stage_shapes[stage_index]
+        output_shape = plan.stage_shapes[stage_index + 1]
+        _require_mixed_shape("stage $stage_index input", current_data, input_shape)
         basis_type = plan.basis_types[dim]
 
         if basis_type == :fourier_real || basis_type == :fourier_complex
             fft_plan = plan.fft_plans[dim]
+            scratch = get_gpu_mixed_transform_scratch(plan, complex_T, output_shape)
             output = _next_mixed_complex_buffer(current_data, scratch)
 
             if fft_plan.is_real
@@ -247,6 +263,7 @@ function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuAr
             current_data = output
 
         elseif basis_type == :chebyshev
+            scratch = get_gpu_mixed_transform_scratch(plan, complex_T, input_shape)
             if eltype(current_data) <: Complex
                 scratch.real_input .= real.(current_data)
                 gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :forward)
@@ -260,10 +277,26 @@ function gpu_mixed_forward_transform!(coeff_data::CuArray{T, N}, grid_data::CuAr
                 gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :forward)
                 current_data = scratch.real_output
             end
+
+            if output_shape != input_shape
+                resized_scratch = get_gpu_mixed_transform_scratch(
+                    plan, complex_T, output_shape)
+                if eltype(current_data) <: Complex
+                    resized = _next_mixed_complex_buffer(current_data, resized_scratch)
+                    Tarang._copy_axis_prefix!(resized, current_data, dim)
+                    current_data = resized
+                else
+                    Tarang._copy_axis_prefix!(resized_scratch.real_output,
+                                              current_data, dim)
+                    current_data = resized_scratch.real_output
+                end
+            end
         end
+
+        _require_mixed_shape("stage $stage_index output", current_data, output_shape)
     end
 
-    # Copy to output
+    _require_mixed_shape("final transformed data", current_data, plan.coeff_shape)
     copyto!(coeff_data, current_data)
     return coeff_data
 end
@@ -281,23 +314,42 @@ Transforms spectral coefficients to grid-space data:
 function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuArray{S, N},
                                        plan::GPUMixedTransformPlan) where {T, S, N}
     complex_T = S <: Complex ? S : Complex{S}
-    scratch = get_gpu_mixed_transform_scratch(plan, complex_T)
+    _require_mixed_shape("coefficient input", coeff_data, plan.coeff_shape)
+    _require_mixed_shape("grid output", grid_data, plan.grid_shape)
     current_data = coeff_data
 
-    for dim in reverse(plan.transform_order)
+    for stage_index in reverse(eachindex(plan.transform_order))
+        dim = plan.transform_order[stage_index]
+        input_shape = plan.stage_shapes[stage_index + 1]
+        output_shape = plan.stage_shapes[stage_index]
+        _require_mixed_shape("inverse stage $stage_index input", current_data, input_shape)
         basis_type = plan.basis_types[dim]
 
         if basis_type == :chebyshev
-            if eltype(current_data) <: Complex
-                scratch.real_input .= real.(current_data)
+            scratch = get_gpu_mixed_transform_scratch(plan, complex_T, output_shape)
+            dct_input = current_data
+            if output_shape != input_shape
+                if eltype(current_data) <: Complex
+                    padded = _next_mixed_complex_buffer(current_data, scratch)
+                    Tarang._zero_pad_axis_prefix!(padded, current_data, dim)
+                    dct_input = padded
+                else
+                    Tarang._zero_pad_axis_prefix!(scratch.real_input,
+                                                  current_data, dim)
+                    dct_input = scratch.real_input
+                end
+            end
+
+            if eltype(dct_input) <: Complex
+                scratch.real_input .= real.(dct_input)
                 gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :backward)
-                scratch.real_input .= imag.(current_data)
+                scratch.real_input .= imag.(dct_input)
                 gpu_dct1_along_dim!(scratch.imag_output, scratch.real_input, dim, :backward)
-                output = _next_mixed_complex_buffer(current_data, scratch)
+                output = _next_mixed_complex_buffer(dct_input, scratch)
                 output .= complex.(scratch.real_output, scratch.imag_output)
                 current_data = output
             else
-                scratch.real_input .= current_data
+                scratch.real_input .= dct_input
                 gpu_dct1_along_dim!(scratch.real_output, scratch.real_input, dim, :backward)
                 current_data = scratch.real_output
             end
@@ -306,9 +358,17 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
             fft_plan = plan.fft_plans[dim]
 
             if fft_plan.is_real
+                # The R2C stage is the first Fourier stage forward and therefore
+                # the final stage backward. Keep the check explicit so a future
+                # execution-order change cannot write an intermediate into the
+                # field's final grid buffer.
+                output_shape == plan.grid_shape || throw(DimensionMismatch(
+                    "real inverse FFT produced intermediate shape $output_shape " *
+                    "instead of final grid shape $(plan.grid_shape)"))
                 gpu_ifft_dim!(grid_data, current_data, fft_plan)
                 current_data = grid_data
             else
+                scratch = get_gpu_mixed_transform_scratch(plan, complex_T, output_shape)
                 output = _next_mixed_complex_buffer(current_data, scratch)
                 if eltype(current_data) <: Real
                     input = output === scratch.complex_b ? scratch.complex_a : scratch.complex_b
@@ -320,12 +380,13 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
                 current_data = output
             end
         end
+        _require_mixed_shape("inverse stage $stage_index output", current_data, output_shape)
     end
 
     if current_data === grid_data
         return grid_data
     elseif T <: Real
-        copyto!(grid_data, real.(current_data))
+        grid_data .= real.(current_data)
     else
         copyto!(grid_data, current_data)
     end

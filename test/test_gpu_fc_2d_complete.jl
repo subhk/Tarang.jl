@@ -19,6 +19,46 @@ if !_FC_HAS_CUDA
 else
     CUDA.allowscalar(false)
 
+    function _fc_scaled_field(device, coord_names, make_bases, ::Type{T}, scales) where {T}
+        coords = CartesianCoordinates(coord_names...)
+        dist = Distributor(coords; dtype=T, device=device)
+        field = ScalarField(Domain(dist, make_bases(coords)), "u")
+        preset_scales!(field, scales)
+        ensure_layout!(field, :g)
+        return field
+    end
+
+    function _check_fc_transform(cpu_field, gpu_field, data;
+                                 rtol=2e-10, atol=2e-11, roundtrip=true)
+        @test size(get_grid_data(cpu_field)) == size(data)
+        @test size(get_grid_data(gpu_field)) == size(data)
+        copyto!(get_grid_data(cpu_field), data)
+        copyto!(get_grid_data(gpu_field), CuArray(data))
+
+        forward_transform!(cpu_field)
+        forward_transform!(gpu_field)
+        ensure_layout!(cpu_field, :c)
+        ensure_layout!(gpu_field, :c)
+
+        _, expected_shape, _ = Tarang.forward_layout(
+            gpu_field.bases, size(data), eltype(data))
+        @test size(get_coeff_data(gpu_field)) == expected_shape
+        @test isapprox(Array(get_coeff_data(gpu_field)), get_coeff_data(cpu_field);
+                       rtol, atol)
+
+        saved_coefficients = copy(get_coeff_data(gpu_field))
+        backward_transform!(cpu_field)
+        backward_transform!(gpu_field)
+        ensure_layout!(cpu_field, :g)
+        ensure_layout!(gpu_field, :g)
+
+        @test get_coeff_data(gpu_field) == saved_coefficients
+        @test isapprox(Array(get_grid_data(gpu_field)), get_grid_data(cpu_field);
+                       rtol, atol)
+        roundtrip && @test isapprox(Array(get_grid_data(gpu_field)), data; rtol, atol)
+        return nothing
+    end
+
     @testset "2D FC device axis resizing" begin
         source_host = reshape(collect(Float64, 1:54), 6, 9)
         source = CuArray(source_host)
@@ -43,5 +83,93 @@ else
         Tarang._zero_pad_axis_prefix!(complex_restored, complex_truncated, 1)
         @test Array(complex_restored[1:3, :]) == complex_host[1:3, :]
         @test iszero(Array(complex_restored[4:6, :]))
+    end
+
+    @testset "2D FC scaled transforms match CPU" begin
+        @testset "RealFourier x ChebyshevT, both axes scaled" begin
+            make_bases(c) = (
+                RealFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+                ChebyshevT(c["z"]; size=9, bounds=(0.0, 1.0)),
+            )
+            scales = (3 / 2, 14 / 9)
+            cpu = _fc_scaled_field(CPU(), ("x", "z"), make_bases, Float64, scales)
+            gpu = _fc_scaled_field(GPU(), ("x", "z"), make_bases, Float64, scales)
+            nx, nz = size(get_grid_data(cpu))
+            x = (0:nx-1) .* (2π / nx)
+            z = (1 .- cos.(π .* (0:nz-1) ./ (nz - 1))) ./ 2
+            data = [sin(2xi) * (1 + zj + 0.25 * (2zj^2 - 1)) for xi in x, zj in z]
+            _check_fc_transform(cpu, gpu, data)
+        end
+
+        @testset "ChebyshevT x RealFourier, both axes scaled" begin
+            make_bases(c) = (
+                ChebyshevT(c["z"]; size=9, bounds=(0.0, 1.0)),
+                RealFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+            )
+            scales = (14 / 9, 3 / 2)
+            cpu = _fc_scaled_field(CPU(), ("z", "x"), make_bases, Float64, scales)
+            gpu = _fc_scaled_field(GPU(), ("z", "x"), make_bases, Float64, scales)
+            nz, nx = size(get_grid_data(cpu))
+            z = (1 .- cos.(π .* (0:nz-1) ./ (nz - 1))) ./ 2
+            x = (0:nx-1) .* (2π / nx)
+            data = [(1 + zi - 0.5zi^2) * cos(2xj) for zi in z, xj in x]
+            _check_fc_transform(cpu, gpu, data)
+        end
+
+        @testset "ComplexFourier x ChebyshevT with independent scales" begin
+            make_bases(c) = (
+                ComplexFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+                ChebyshevT(c["z"]; size=10, bounds=(-1.0, 1.0)),
+            )
+            scales = (5 / 4, 3 / 2)
+            cpu = _fc_scaled_field(CPU(), ("x", "z"), make_bases, ComplexF64, scales)
+            gpu = _fc_scaled_field(GPU(), ("x", "z"), make_bases, ComplexF64, scales)
+            nx, nz = size(get_grid_data(cpu))
+            x = (0:nx-1) .* (2π / nx)
+            z = -cos.(π .* (0:nz-1) ./ (nz - 1))
+            data = [exp(2im * xi) * (1 + zj + 0.2zj^3) for xi in x, zj in z]
+            _check_fc_transform(cpu, gpu, data; rtol=5e-10, atol=5e-11)
+        end
+
+        @testset "unscaled mixed transform remains unchanged" begin
+            make_bases(c) = (
+                RealFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+                ChebyshevT(c["z"]; size=9, bounds=(0.0, 1.0)),
+            )
+            cpu = _fc_scaled_field(CPU(), ("x", "z"), make_bases, Float64, (1, 1))
+            gpu = _fc_scaled_field(GPU(), ("x", "z"), make_bases, Float64, (1, 1))
+            nx, nz = size(get_grid_data(cpu))
+            x = (0:nx-1) .* (2π / nx)
+            z = (1 .- cos.(π .* (0:nz-1) ./ (nz - 1))) ./ 2
+            data = [cos(xi) * (1 - zj^2) for xi in x, zj in z]
+            _check_fc_transform(cpu, gpu, data)
+        end
+    end
+
+    @testset "2D FC plan cache distinguishes basis sizes" begin
+        cuda_ext = Base.get_extension(Tarang, :TarangCUDAExt)
+        cuda_ext.clear_gpu_mixed_transform_cache!()
+
+        make_bases_9(c) = (
+            RealFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+            ChebyshevT(c["z"]; size=9, bounds=(0.0, 1.0)),
+        )
+        make_bases_10(c) = (
+            RealFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+            ChebyshevT(c["z"]; size=10, bounds=(0.0, 1.0)),
+        )
+        first = _fc_scaled_field(GPU(), ("x", "z"), make_bases_9,
+                                 Float64, (1, 14 / 9))
+        second = _fc_scaled_field(GPU(), ("x", "z"), make_bases_10,
+                                  Float64, (1, 14 / 10))
+        first_data = reshape(sin.(collect(1.0:112.0)), 8, 14)
+        second_data = reshape(cos.(collect(1.0:112.0)), 8, 14)
+        copyto!(get_grid_data(first), CuArray(first_data))
+        copyto!(get_grid_data(second), CuArray(second_data))
+
+        forward_transform!(first)
+        forward_transform!(second)
+        @test size(get_coeff_data(first)) == (5, 9)
+        @test size(get_coeff_data(second)) == (5, 10)
     end
 end
