@@ -66,12 +66,42 @@ Current single-GPU transform support is:
 | Bases | Support |
 |-------|---------|
 | Real or complex Fourier | Device FFT |
-| 2D/3D Fourier × Chebyshev | Device FFT plus DCT-I |
+| 2D Fourier × Chebyshev | Device FFT plus DCT-I, including scaled grids |
+| 3D Fourier × Chebyshev | Device FFT plus DCT-I for supported layouts |
 | Same-size pure Chebyshev, up to 3D | Device DCT-I |
 | Legendre transforms or scaled pure-Chebyshev transforms | Explicitly unsupported |
 
 Unsupported basis and layout combinations fail before entering the CPU
 transform chain.
+
+### Complete 2D Fourier--Chebyshev path
+
+The single-GPU 2D path supports `RealFourier` or `ComplexFourier` paired with
+`ChebyshevT`, with either basis first. Scaled Chebyshev grids are transformed at
+their nodal length and truncated or zero-padded on the device; Fourier scaling
+used by 3/2-rule nonlinear products also remains device-resident. The focused
+validation covers transforms, derivatives along both axes, dealiased products,
+and a nonlinear wall-bounded RK222 IVP with tau boundary conditions and CUDA
+sparse subproblem solves.
+
+Run the strict validation on an NVIDIA node from the repository root:
+
+```bash
+julia --project=. test/run_gpu_fc_2d.jl
+```
+
+This command prints CUDA device information and fails if CUDA is unavailable,
+scalar indexing is attempted, a CPU/GPU value comparison fails, or the warmed
+IVP step performs a fresh device allocation.
+
+The current boundary of this validation is deliberate:
+
+- scaled pure-Chebyshev fields remain unsupported on the device;
+- multi-rank 2D FC execution is not part of the single-GPU path (use the
+  separately documented distributed interfaces for supported 3D layouts); and
+- transform scratch is cached per device and shape for serial use. Run one
+  transforming Julia task at a time on each CUDA device; concurrent same-shape
+  transforms can share scratch and are not supported yet.
 
 ## 2D time stepping and solves
 
