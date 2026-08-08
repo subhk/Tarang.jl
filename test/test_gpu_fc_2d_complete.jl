@@ -135,6 +135,21 @@ else
             _check_fc_transform(cpu, gpu, data; rtol=5e-10, atol=5e-11)
         end
 
+        @testset "ChebyshevT x ComplexFourier with independent scales" begin
+            make_bases(c) = (
+                ChebyshevT(c["z"]; size=10, bounds=(-1.0, 1.0)),
+                ComplexFourier(c["x"]; size=8, bounds=(0.0, 2π)),
+            )
+            scales = (7 / 5, 5 / 4)
+            cpu = _fc_scaled_field(CPU(), ("z", "x"), make_bases, ComplexF64, scales)
+            gpu = _fc_scaled_field(GPU(), ("z", "x"), make_bases, ComplexF64, scales)
+            nz, nx = size(get_grid_data(cpu))
+            z = -cos.(π .* (0:nz-1) ./ (nz - 1))
+            x = (0:nx-1) .* (2π / nx)
+            data = [(1 - 0.5zi + 0.2zi^3) * exp(2im * xj) for zi in z, xj in x]
+            _check_fc_transform(cpu, gpu, data; rtol=5e-10, atol=5e-11)
+        end
+
         @testset "unscaled mixed transform remains unchanged" begin
             make_bases(c) = (
                 RealFourier(c["x"]; size=8, bounds=(0.0, 2π)),
@@ -244,6 +259,7 @@ else
         check_derivatives(chebyshev_first=false)
         check_derivatives(chebyshev_first=true)
         check_derivatives(chebyshev_first=false, complex_fourier=true)
+        check_derivatives(chebyshev_first=true, complex_fourier=true)
     end
 
     @testset "2D FC 3/2-dealiased products match CPU" begin

@@ -34,6 +34,16 @@ using Tarang
         complex_ops, _, _ = Tarang.forward_layout(complex_bases, (12, 14), ComplexF64)
         @test Tarang.transform_stage_shapes(complex_ops, (12, 14), (1, 2)) ==
               [(12, 14), (12, 14), (12, 9)]
+
+        reverse_coords = CartesianCoordinates("z", "x")
+        reverse_complex_bases = (
+            ChebyshevT(reverse_coords["z"]; size=9, bounds=(0.0, 1.0)),
+            ComplexFourier(reverse_coords["x"]; size=8, bounds=(0.0, 2π)),
+        )
+        reverse_ops, _, _ = Tarang.forward_layout(
+            reverse_complex_bases, (14, 12), ComplexF64)
+        @test Tarang.transform_stage_shapes(reverse_ops, (14, 12), (2, 1)) ==
+              [(14, 12), (14, 12), (9, 12)]
     end
 
     @testset "unscaled and malformed orders" begin

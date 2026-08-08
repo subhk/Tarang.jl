@@ -21,8 +21,9 @@ The functions here state each rule once. Callers ask for an `AxisOp` instead of
 re-deriving `div(N, 2) + 1` — that expression appears at 60+ sites across the
 package, and every one of them is a place the copies can drift apart.
 
-All functions are pure, allocation-free, and return isbits values, so they are
-safe on the zero-allocation transform hot path.
+The per-axis layout rules are pure, allocation-free, and return isbits values,
+so they are safe on the zero-allocation transform hot path. Plan-construction
+helpers below may allocate metadata outside that hot path.
 """
 
 """
