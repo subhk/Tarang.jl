@@ -212,43 +212,6 @@ function distributed_gpu_backward_transform!(field::ScalarField)
 end
 
 """
-    _gpu_chebyshev_axes_unscaled(bases, grid_shape) -> Bool
-
-`true` iff every Chebyshev axis carries exactly `basis.meta.size` grid points.
-
-A SCALED Chebyshev axis (`set_scales!` / `change_scales!`, i.e. grid points >
-basis size) is not supported by the GPU mixed driver, and accepting it silently
-would be WRONG, not merely slower: the CPU chain truncates a Chebyshev axis back
-to `ChebyshevTransform.coeff_size == basis.meta.size` on the forward transform
-(and zero-pads it back on the backward), whereas `plan_gpu_mixed_transform`
-derives its `coeff_shape` from the grid shape and keeps EVERY grid mode. On a
-3/2-scaled 2D Fourier×Chebyshev field the CPU stores (13, 17) coefficients while
-this path would reallocate the field's coefficient buffer to (13, 26) — a
-non-canonical spectrum that skips the truncation the scaling exists to perform,
-with no error anywhere. The backward direction fails less quietly (a scratch
-DimensionMismatch deep inside `gpu_mixed_backward_transform!`), but neither is
-acceptable. Refuse here instead; the core dispatcher turns `false` into an
-explicit error (no CPU staging). Fourier axes are exempt — a scaled Fourier axis
-keeps its full transformed length on BOTH devices, so those already agree.
-
-The pure-Chebyshev branches enforce the same condition through their existing
-grid-shape == coefficient-shape guards.
-"""
-# Shared with the CPU chain (src/core/transforms/transform_layout.jl).
-const _scaled_chebyshev_axis = Tarang.scaled_chebyshev_axis
-
-_gpu_chebyshev_axes_unscaled(bases, grid_shape::Tuple) =
-    _scaled_chebyshev_axis(bases, grid_shape) === nothing
-
-"""Refusal message for the axis `_scaled_chebyshev_axis` reported."""
-function _scaled_cheb_reason((dim, grid_n, basis_n)::Tuple{Int,Int,Int})
-    return "Chebyshev axis $dim is scaled ($grid_n grid points vs basis size $basis_n); " *
-           "the device driver has no Chebyshev truncation/zero-pad stage, so it would " *
-           "return a spectrum the CPU chain truncates. Use scales=1 on Chebyshev axes " *
-           "(Fourier axes may still be scaled)"
-end
-
-"""
     _gpu_forward_transform_impl!(field::ScalarField)
 
 GPU-specific forward transform using CUFFT (extension-local implementation).
@@ -438,10 +401,6 @@ function _gpu_forward_transform_impl!(field::ScalarField)
         # identity (4.4e-16) and the coefficients are bit-identical to the CPU mixed
         # transform. (A prior comment here mislabeled this a dead DCT-II branch — it is not.)
         # Supports: Fourier-Chebyshev, Fourier-Fourier-Chebyshev, Fourier-Chebyshev-Chebyshev, etc.
-
-        let scaled = _scaled_chebyshev_axis(bases, local_grid_shape)
-            scaled === nothing || _refuse_fwd(field, _scaled_cheb_reason(scaled))
-        end
 
         # Get or create mixed transform plan (determines correct coeff_shape)
         plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
@@ -763,14 +722,6 @@ function _gpu_backward_transform_impl!(field::ScalarField)
         if !Tarang.should_use_gpu_fft(field, local_grid_shape)
             _refuse_bwd(field, "the transform-selection heuristic declined the device " *
                                "path for a $(local_grid_shape) array")
-        end
-
-        # A scaled Chebyshev axis would need zero-padding from coeff_size to the
-        # scaled grid size (the CPU `_chebyshev_backward` does exactly that); this
-        # driver has no such stage and would only fail deep inside the scratch
-        # broadcast. See `_gpu_chebyshev_axes_unscaled`.
-        let scaled = _scaled_chebyshev_axis(bases, local_grid_shape)
-            scaled === nothing || _refuse_bwd(field, _scaled_cheb_reason(scaled))
         end
 
         real_T = field.dtype

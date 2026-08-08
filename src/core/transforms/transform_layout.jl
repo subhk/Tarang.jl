@@ -21,8 +21,9 @@ The functions here state each rule once. Callers ask for an `AxisOp` instead of
 re-deriving `div(N, 2) + 1` — that expression appears at 60+ sites across the
 package, and every one of them is a place the copies can drift apart.
 
-All functions are pure, allocation-free, and return isbits values, so they are
-safe on the zero-allocation transform hot path.
+The per-axis layout rules are pure, allocation-free, and return isbits values,
+so they are safe on the zero-allocation transform hot path. Plan-construction
+helpers below may allocate metadata outside that hot path.
 """
 
 """
@@ -118,6 +119,79 @@ function forward_layout(bases, grid_shape::Tuple, dtype::Type)
         complex_now = op.out_complex
     end
     return ops, tuple(shape...), complex_now
+end
+
+"""
+    transform_stage_shapes(ops, input_shape, order) -> Vector{Tuple}
+
+Return the input shape followed by the shape after each axis operation in
+`order`. This lets a backend execute the shared `AxisOp` rules in a different
+order (for example, Fourier axes before Chebyshev axes on CUDA) without
+re-deriving intermediate buffer sizes.
+
+`order` must be a permutation of every axis exactly once. The helper runs only
+while constructing a transform plan, so clarity is preferred over hot-path
+allocation constraints.
+"""
+function transform_stage_shapes(ops, input_shape::Tuple, order)
+    n = length(ops)
+    length(input_shape) == n || throw(DimensionMismatch(
+        "received $n axis operations for an input shape with " *
+        "$(length(input_shape)) dimensions"))
+
+    axes_order = collect(Int, order)
+    if length(axes_order) != n || sort(axes_order) != collect(1:n)
+        throw(ArgumentError(
+            "transform order must contain every axis 1:$n exactly once, got " *
+            "$(Tuple(axes_order))"))
+    end
+
+    shape = collect(Int, input_shape)
+    stages = Tuple[Tuple(shape)]
+    for axis in axes_order
+        shape[axis] = ops[axis].out_len
+        push!(stages, Tuple(shape))
+    end
+    return stages
+end
+
+function _validate_axis_prefix_shapes(dst::AbstractArray, src::AbstractArray,
+                                      axis::Int, operation::Symbol)
+    ndims(dst) == ndims(src) || throw(DimensionMismatch(
+        "$operation requires arrays with the same dimensionality, got " *
+        "$(ndims(dst))D and $(ndims(src))D"))
+    1 <= axis <= ndims(src) || throw(ArgumentError(
+        "resize axis must be between 1 and $(ndims(src)), got $axis"))
+    for dim in 1:ndims(src)
+        dim == axis && continue
+        size(dst, dim) == size(src, dim) || throw(DimensionMismatch(
+            "$operation may change only axis $axis, but axis $dim has sizes " *
+            "$(size(dst, dim)) and $(size(src, dim))"))
+    end
+    return nothing
+end
+
+"""Copy the leading part of `src` along `axis` into the shorter `dst`."""
+function _copy_axis_prefix!(dst::AbstractArray, src::AbstractArray, axis::Int)
+    _validate_axis_prefix_shapes(dst, src, axis, :truncate)
+    size(dst, axis) <= size(src, axis) || throw(ArgumentError(
+        "truncate destination axis $axis has length $(size(dst, axis)), larger than " *
+        "source length $(size(src, axis))"))
+    indices = ntuple(dim -> dim == axis ? (1:size(dst, axis)) : Colon(), ndims(src))
+    @views dst .= src[indices...]
+    return dst
+end
+
+"""Zero `dst`, then copy `src` into its leading entries along `axis`."""
+function _zero_pad_axis_prefix!(dst::AbstractArray, src::AbstractArray, axis::Int)
+    _validate_axis_prefix_shapes(dst, src, axis, :zero_pad)
+    size(dst, axis) >= size(src, axis) || throw(ArgumentError(
+        "zero-pad destination axis $axis has length $(size(dst, axis)), smaller than " *
+        "source length $(size(src, axis))"))
+    fill!(dst, zero(eltype(dst)))
+    indices = ntuple(dim -> dim == axis ? (1:size(src, axis)) : Colon(), ndims(dst))
+    @views dst[indices...] .= src
+    return dst
 end
 
 """

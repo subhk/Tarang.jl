@@ -35,9 +35,18 @@ CUDA host:
 ```bash
 julia --project=. -e 'using Pkg; Pkg.add("CUDA")'   # CUDA is a weak dependency
 julia --project=. test/run_gpu_ci.jl                # single-process GPU tests
+julia --project=. test/run_gpu_fc_2d.jl             # strict focused 2D FC validation
 # distributed (NCCL) tests across, e.g., 2 GPUs:
 TARANG_MPI_FILESET=distributed_gpu julia --project=. test/run_mpi_ci.jl 2
 ```
+
+`test/run_gpu_fc_2d.jl` is intended for a single NVIDIA device on a cluster. It
+requires functional CUDA, disables scalar indexing, prints CUDA device
+information, and runs the CPU/GPU value and allocation checks for the complete
+2D Fourier--Chebyshev path. It exits nonzero rather than skipping when CUDA is
+missing. For ordinary CPU development, running
+`test/test_gpu_fc_2d_complete.jl` directly is safe and reports one skipped
+testset when no functional device is present.
 
 ## Test Structure
 
