@@ -192,11 +192,14 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
     c = ts.c_explicit
     stages = ts.stages
 
-    F_stages = Vector{Vector{ScalarField}}(undef, stages)
-    n_fields = length(current_state)
-    # Pre-allocate Y_s containers once; reuse across stages (each inner slot gets
-    # replaced by a workspace field reference, so no per-stage Vector allocation).
-    Y_stages = [Vector{ScalarField}(undef, n_fields) for _ in 1:stages]
+    # Pooled per-stage storage: Y sets occupy workspace sets 1..stages, F sets
+    # stages+1..2·stages (see `_workspace_count`). The F sets used to be fresh
+    # `copy_state(evaluate_rhs(...))` allocations — a full new device state per
+    # stage per step.
+    Y_stages = _workspace_stage_states!(state, :diagonal_imex_Y_stages,
+                                        current_state, stages, 1)
+    F_stages = _workspace_stage_states!(state, :diagonal_imex_F_stages,
+                                        current_state, stages, stages + 1)
 
     for field in current_state
         ensure_layout!(field, :c)
@@ -206,17 +209,16 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
         state.current_substep = s
         Y_s = Y_stages[s]
         for (k, src_field) in enumerate(current_state)
-            ws_idx = (s - 1) * n_fields + k
-            ws_field = get_workspace_field!(state, src_field, ws_idx)
-            copy_field_data!(ws_field, src_field)
-            # Sync the coefficient buffer: copy_field_data! copies GRID data and
-            # leaves the field in :g, so merely flagging current_layout=:c would
-            # leave a stale (zero) coeff buffer — every in-place stage edit below
-            # would then be discarded when the field is re-read in :c (silently
-            # degrading the whole method to explicit forward Euler). ensure_layout!
-            # transforms grid→coeff so the implicit solve acts on the real X_n[k].
+            ws_field = Y_s[k]
+            # Layout-preserving copy: the state was just put in :c, so this is a
+            # straight coefficient copyto! — the old grid-normalizing copy
+            # backward-transformed the state and the ensure_layout! below then
+            # forward-transformed it again, one full FFT round-trip per field
+            # per stage.
+            copy_field_data!(ws_field, src_field; preserve_layout=true)
+            # Safety net for the fallback path (mismatched buffers → grid copy):
+            # a no-op when the coefficient copy above already left :c.
             ensure_layout!(ws_field, :c)
-            Y_s[k] = ws_field
 
             coeff_data = get_coeff_data(ws_field)   # live coeff, = X_n[k]
             Lhat = get(Lmap, k, nothing)            # nothing ⇒ no implicit term here
@@ -244,13 +246,19 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
                 _ddirk_implicit_divide!(coeff_data, Lhat, dt * γ_s)
             end
         end
-        # evaluate_rhs may return reused buffer fields; copy so a later stage's RHS
-        # evaluation cannot overwrite an earlier stage's stored F (matches the
-        # distributed sibling).
-        F_stages[s] = copy_state(evaluate_rhs(solver, Y_s, t + c[s] * dt))
+        # evaluate_rhs may return reused buffer fields; copy into the POOLED
+        # per-stage F set so a later stage's RHS evaluation cannot overwrite an
+        # earlier stage's stored F (matches the distributed sibling) — without
+        # the per-stage `copy_state` allocation this used to make.
+        _copy_field_state!(F_stages[s], evaluate_rhs(solver, Y_s, t + c[s] * dt);
+                           preserve_layout=true)
     end
 
-    new_state = copy_state(current_state)
+    # Recycle the state dropped from the previous step's history rotation
+    # instead of allocating a fresh deep copy; the coefficient-preserving copy
+    # keeps the :c layout the update block below works in.
+    new_state = _acquire_recycled_history_state!(state, :diagonal_imex_recycled,
+                                                 current_state; preserve_layout=true)
     for (k, field) in enumerate(new_state)
         # copy_state may return the field in grid layout with a stale coefficient
         # buffer; normalize to :c so the implicit update below writes the
@@ -271,7 +279,7 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
         end
     end
 
-    _push_trim!(state.history, new_state, 1)
+    _push_recycled_history_state!(state, :diagonal_imex_recycled, new_state)
 end
 
 """
@@ -903,9 +911,10 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
     # `Fs[s] = copy_state(evaluate_rhs(...))` full-state allocation). evaluate_rhs
     # reuses its output buffers across stages, so each stage's F must be RETAINED
     # until the final update — we copy it (coeff space) into this dedicated cache
-    # instead of allocating S fresh field-sets every step. The workspace POOL is
-    # unusable for this: Y already consumes up to S·n_fields of the
-    # `_workspace_count(ts)` (=4 for the DiagonalIMEX tableaux) sets.
+    # instead of allocating S fresh field-sets every step. The workspace POOL
+    # sets 1..S are taken by Y below; the serial sibling now budgets 2·S sets
+    # (`_workspace_count` for the DiagonalIMEX RK tableaux) and pools its F
+    # there, but this path keeps its dedicated cache.
     Fs_cache = _ddirk_fs_cache!(state, X_n, S, n_fields)
 
     for s in 1:S

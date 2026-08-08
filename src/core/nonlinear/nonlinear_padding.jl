@@ -125,9 +125,12 @@ function _get_padded_workspace!(evaluator::NonlinearEvaluator, bases::Tuple, dty
     # original-size buffers. The forward spec plan is built on spec1 and reused on
     # spec2 (identical size/alignment).
     if is_gpu(_arch)
-        # For GPU: AbstractFFTs.plan_fft dispatches to CUFFT (no flags arg)
-        plan_forward = plan_fft(padded1, fourier_dims)
-        plan_backward = plan_ifft(padded1, fourier_dims)
+        # For GPU: AbstractFFTs.plan_fft! dispatches to CUFFT (no flags arg).
+        # In-place plans, like the CPU branch — the out-of-place forms allocated
+        # (and then copied) a fresh padded-size device array per FFT, three times
+        # per product evaluation.
+        plan_forward = plan_fft!(padded1, fourier_dims)
+        plan_backward = plan_ifft!(padded1, fourier_dims)
         plan_spec_forward = plan_fft!(spec1, fourier_dims)
         plan_spec_backward = plan_ifft!(spec_result, fourier_dims)
     else
@@ -385,15 +388,17 @@ function evaluate_padded_multiply(field1::ScalarField, field2::ScalarField,
     _pad_spectral!(ws.padded1, ws.spec1, ws.original_shape, ws.padded_shape, ws.fourier_dims)
     _pad_spectral!(ws.padded2, ws.spec2, ws.original_shape, ws.padded_shape, ws.fourier_dims)
 
-    # Step 3: IFFT to padded grid (using pre-computed plan)
-    ws.padded1 .= ws.plan_backward * ws.padded1
-    ws.padded2 .= ws.plan_backward * ws.padded2
+    # Step 3: IFFT to padded grid. Both branches build in-place plans, so
+    # `plan * x` mutates and returns `x` — a `.=` on top of that is a full-array
+    # self-copy (and with an out-of-place plan it would be a full allocation).
+    ws.plan_backward * ws.padded1
+    ws.plan_backward * ws.padded2
 
     # Step 4: Multiply on padded grid
     ws.padded_product .= ws.padded1 .* ws.padded2
 
-    # Step 5: FFT product back
-    ws.padded_product .= ws.plan_forward * ws.padded_product
+    # Step 5: FFT product back (in place)
+    ws.plan_forward * ws.padded_product
 
     # Step 6: Truncate to original coefficients
     fill!(ws.spec_result, zero(Complex{T}))

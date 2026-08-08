@@ -164,6 +164,7 @@ const TEST_FILES = [
     "test_equation_structure_validation.jl",  # misplaced-term validation must match what actually builds
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
     "test_gpu_transpose_kernels_cpu.jl",  # transpose pack/unpack index math on the KA CPU backend — no GPU needed
+    "test_gpu_dct1_kernels_cpu.jl",       # DCT-I / Cheb-derivative kernel values on the KA CPU backend (FFTW standing in for cuFFT) — no GPU needed
 ]
 
 # CPU tests that are valid in ordinary CI but are kept out of the default

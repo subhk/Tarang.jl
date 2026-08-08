@@ -334,8 +334,9 @@ function _evaluate_local_fourier_derivative!(result::ScalarField, operand::Scala
     deriv_mult_cpu = _get_cached_deriv_mult(basis, data_shape[axis], Float64(L), order)
 
     if use_gpu
-        # GPU path: use broadcasting for all operations
-        evaluate_fourier_derivative_gpu!(result, data_g, deriv_mult_cpu, axis, dims, data_shape, layout)
+        # GPU path: cached device workspace + broadcasting
+        evaluate_fourier_derivative_gpu!(result, data_g, basis, order, deriv_mult_cpu,
+                                         axis, dims, data_shape, layout)
     else
         # CPU path: optimized with explicit loops
         evaluate_fourier_derivative_cpu!(result, data_g, deriv_mult_cpu, axis, dims, data_shape, layout)
@@ -356,66 +357,98 @@ function _write_to_grid_data!(result::ScalarField, deriv_g::AbstractArray)
     end
 end
 
-"""
-    evaluate_fourier_derivative_gpu!(result, data_g, deriv_mult, axis, dims, data_shape, layout)
+# Cached FFT plans + complex work buffers for the DEVICE Fourier derivative,
+# keyed by (device token, local shape, axis, complex eltype) — the device analogue
+# of `_DERIV_FFT_WS` below. Buffers are filled/consumed entirely within one
+# derivative call, so a single cached set per key is safe (same contract as the
+# CPU workspace). `_device_cache_token` keeps multi-GPU devices from sharing
+# buffers or CUFFT plans.
+const _DERIV_FFT_WS_GPU = Dict{Tuple, Any}()
 
-GPU-specific implementation using broadcasting operations.
-"""
-function evaluate_fourier_derivative_gpu!(result::ScalarField, data_g::AbstractArray, deriv_mult_cpu::AbstractVector, axis::Int, dims::Int, data_shape::Tuple, layout::Symbol)
-    # Move derivative multiplier to GPU
-    deriv_mult = copy_to_device(deriv_mult_cpu, data_g)
-
-    # GPU FFT and element-wise operations via broadcasting
-    # Note: For GPU, fft/ifft dispatch to CUFFT when CUDA.jl is loaded
-    if dims == 1
-        f_hat = fft(data_g)
-        f_hat .*= deriv_mult
-        deriv_g = result.dtype <: Real ? real.(ifft(f_hat)) : ifft(f_hat)
-        _write_to_grid_data!(result, deriv_g)
-        result.current_layout = :g
-
-    elseif dims == 2
-        f_hat = fft(data_g, axis)
-
-        # Reshape deriv_mult for broadcasting along the correct axis
-        if axis == 1
-            # Shape: (N, 1) to broadcast along first dimension
-            mult_shaped = reshape(deriv_mult, :, 1)
-        else  # axis == 2
-            # Shape: (1, N) to broadcast along second dimension
-            mult_shaped = reshape(deriv_mult, 1, :)
-        end
-
-        f_hat .*= mult_shaped
-        deriv_g = result.dtype <: Real ? real.(ifft(f_hat, axis)) : ifft(f_hat, axis)
-        _write_to_grid_data!(result, deriv_g)
-        result.current_layout = :g
-
-    elseif dims == 3
-        f_hat = fft(data_g, axis)
-
-        # Reshape deriv_mult for broadcasting along the correct axis
-        if axis == 1
-            mult_shaped = reshape(deriv_mult, :, 1, 1)
-        elseif axis == 2
-            mult_shaped = reshape(deriv_mult, 1, :, 1)
-        else  # axis == 3
-            mult_shaped = reshape(deriv_mult, 1, 1, :)
-        end
-
-        f_hat .*= mult_shaped
-        deriv_g = result.dtype <: Real ? real.(ifft(f_hat, axis)) : ifft(f_hat, axis)
-        _write_to_grid_data!(result, deriv_g)
-        result.current_layout = :g
-    else
-        throw(ArgumentError("Fourier derivative only implemented for 1D, 2D, and 3D"))
+function _get_gpu_deriv_workspace!(data_g::AbstractArray, axis::Int)
+    CT = complex(float(real(eltype(data_g))))
+    key = (_device_cache_token(data_g), size(data_g), axis, CT)
+    return get!(_DERIV_FFT_WS_GPU, key) do
+        cin  = similar(data_g, CT, size(data_g))
+        fhat = similar(data_g, CT, size(data_g))
+        # AbstractFFTs planning dispatches to CUFFT for device arrays.
+        pf  = plan_fft(cin, axis)
+        pin = plan_ifft(fhat, axis)
+        (cin, fhat, pf, pin)
     end
+end
+
+"""
+    _get_device_deriv_mult!(basis, deriv_mult_cpu, data_g, order, axis, dims)
+
+Device-resident derivative multiplier `(ik)^order`, converted to the field's
+complex precision and pre-shaped for broadcasting along `axis`. Cached in
+`basis.transforms` (like the host multiplier), so the host→device upload happens
+once per (basis, order, axis, precision, device) — not on every derivative call.
+"""
+function _get_device_deriv_mult!(basis::Union{RealFourier, ComplexFourier},
+                                 deriv_mult_cpu::AbstractVector, data_g::AbstractArray,
+                                 order::Int, axis::Int, dims::Int)
+    CT = complex(float(real(eltype(data_g))))
+    key = (:deriv_mult_dev, length(deriv_mult_cpu), order, axis, dims, CT,
+           _device_cache_token(data_g))
+    cached = get(basis.transforms, key, nothing)
+    cached !== nothing && return cached
+    mult_shape = ntuple(i -> i == axis ? length(deriv_mult_cpu) : 1, dims)
+    host = reshape(convert(Vector{CT}, deriv_mult_cpu), mult_shape)
+    dev = similar(data_g, CT, mult_shape)
+    copyto!(dev, host)
+    basis.transforms[key] = dev
+    return dev
+end
+
+"""
+    evaluate_fourier_derivative_gpu!(result, data_g, basis, order, deriv_mult_cpu,
+                                     axis, dims, data_shape, layout)
+
+GPU implementation mirroring `evaluate_fourier_derivative_cpu!`'s cached-workspace
+design: CUFFT plans and complex work buffers are cached per (device, shape, axis,
+eltype), and the derivative multiplier lives on the device. Per call this performs
+no allocation, no host↔device transfer, and no FFT planning — previously each call
+re-uploaded the multiplier, built a fresh CUFFT plan, and allocated three
+full-size device arrays.
+"""
+function evaluate_fourier_derivative_gpu!(result::ScalarField, data_g::AbstractArray,
+                                          basis::Union{RealFourier, ComplexFourier}, order::Int,
+                                          deriv_mult_cpu::AbstractVector, axis::Int, dims::Int,
+                                          data_shape::Tuple, layout::Symbol)
+    dims in (1, 2, 3) ||
+        throw(ArgumentError("Fourier derivative only implemented for 1D, 2D, and 3D"))
+
+    cin, fhat, pf, pin = _get_gpu_deriv_workspace!(data_g, axis)
+    mult = _get_device_deriv_mult!(basis, deriv_mult_cpu, data_g, order, axis, dims)
+
+    result_grid = get_grid_data(result)
+    dst = isa(result_grid, PencilArrays.PencilArray) ? parent(result_grid) : result_grid
+    # Function barrier: the workspace comes from an `Any`-typed cache; the
+    # broadcasts specialize on the concrete device array types inside.
+    _gpu_deriv_exec!(dst, data_g, cin, fhat, pf, pin, mult, result.dtype <: Real)
+    result.current_layout = :g
 
     # If coefficient space is requested, use full forward transform
     # (handles mixed bases correctly, not just Fourier axes)
     if layout == :c
         ensure_layout!(result, :c)
     end
+end
+
+function _gpu_deriv_exec!(dst::AbstractArray, data_g::AbstractArray, cin, fhat, pf, pin,
+                          mult::AbstractArray, real_out::Bool)
+    cin .= data_g              # promote to complex in one fused pass
+    mul!(fhat, pf, cin)
+    fhat .*= mult              # (ik)^order along the derivative axis
+    mul!(cin, pin, fhat)       # normalized inverse FFT (ScaledPlan applies 1/N)
+    if real_out
+        dst .= real.(cin)
+    else
+        dst .= cin
+    end
+    return dst
 end
 
 # Cached FFT plans + complex/real buffers for the CPU Fourier derivative, keyed by

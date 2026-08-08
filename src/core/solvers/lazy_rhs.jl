@@ -1123,7 +1123,7 @@ function _apply_lazy_diff_coeff!(field::ScalarField, order::Int, axis::Int)
     if isa(target_basis, JacobiBasis)
         coeff_data = get_local_data(coeff_storage)
         coeff_data === nothing && return field
-        D = differentiation_matrix(target_basis, order)
+        D = _lazy_differentiation_matrix(target_basis, order, coeff_data)
         _apply_1d_matrix!(coeff_data, D, _jacobi_diff_axis(coeff_storage, axis, target_basis, D),
                           target_basis)
     elseif isa(target_basis, FourierBasis)
@@ -1242,6 +1242,26 @@ function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int,
     device_multiplier = copy_to_device(host, data)
     basis.transforms[cache_key] = device_multiplier
     return device_multiplier
+end
+
+"""Return the Jacobi differentiation matrix on the same backend as `data`.
+
+`differentiation_matrix` yields a HOST sparse matrix; multiplying it into device
+coefficients fell back to the generic (scalar-indexing) matmul — an error under
+`CUDA.allowscalar(false)`, a catastrophic slow path otherwise. The device copy
+is cached DENSE in `basis.transforms` (the matrix is Nz×Nz with Nz the modest
+Chebyshev extent, and a dense CUBLAS gemm beats wrapping CUSPARSE plan types
+into the basis cache), keyed per (order, device) like the Fourier multiplier
+above. Host callers get the sparse matrix unchanged."""
+function _lazy_differentiation_matrix(basis::JacobiBasis, order::Int, data::AbstractArray)
+    D = differentiation_matrix(basis, order)
+    is_gpu_array(data) || return D
+    cache_key = (:diff_matrix_device, order, architecture(data))
+    cached = get(basis.transforms, cache_key, nothing)
+    cached !== nothing && return cached
+    device_D = copy_to_device(Matrix(D), data)
+    basis.transforms[cache_key] = device_D
+    return device_D
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place.
