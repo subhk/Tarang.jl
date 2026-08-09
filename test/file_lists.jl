@@ -151,6 +151,7 @@ const TEST_FILES = [
     "test_component_buffers.jl",
     "test_tensor_misc.jl",
     "test_subproblem_ncc.jl",
+    "test_mode_batch_signature.jl",   # batchability must be OBSERVED from built matrices, never inferred from nz/nvars — a gauge-constrained kx=0 mode batched with the rest solves the wrong system silently
     "test_pretty_printing.jl",
     "test_progress.jl",
     "test_convenience_api.jl",
