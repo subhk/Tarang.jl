@@ -19,10 +19,15 @@ using Tarang
 using SparseArrays
 using LinearAlgebra
 using KernelAbstractions
+using Random
 
 @testset "batched mode kernels (CPU backend)" begin
     n, nmodes, nrows = 9, 5, 7
     rng_vals(k) = ComplexF64[(i * 0.37 + k) + (i * 0.11 - k) * im for i in 1:k]
+    # Explicit seed: two testsets below assert bit-exact `==` against a
+    # `sprand`-generated matrix, so an unseeded RNG would make a failure
+    # non-reproducible from one run to the next.
+    rng = MersenneTwister(20260808)
 
     @testset "batched_gather! matches _gather_strided! bit-for-bit" begin
         # Emulate a coeff array with one Fourier axis and one coupled axis.
@@ -59,11 +64,69 @@ using KernelAbstractions
         @test cd_batched == cd_ref
     end
 
+    @testset "batched_gather!/batched_scatter! with step_ > 1 and row_offset > 0" begin
+        # The two testsets above pin step_ == 1 (a dense (nrows, nmodes)
+        # reshape has stride(cd,1) == 1) and row_offset == 0 — a kernel that
+        # dropped `* step_` or `row_offset +` entirely would still pass both.
+        # The real 2D layout supplies neither: a Fourier-first coefficient
+        # array puts the coupled (z) axis SECOND, so step_ == nkx != 1, and
+        # multi-variable stacking makes row_offset != 0. Reproduce that shape
+        # here: mode is the FAST axis, so moving along the coupled axis
+        # (length `len`) requires stride nmodes, not 1.
+        len = 6
+        cd = reshape(ComplexF64[(i + 0.4) + (i - 0.2) * im for i in 1:(nmodes * len)],
+                     nmodes, len)
+        step_ = stride(cd, 2)
+        @test step_ == nmodes                 # sanity: genuinely non-degenerate
+        starts = [m for m in 1:nmodes]        # mode m's run starts at position m
+
+        row_offset = 3
+        pad_below = 2
+        sentinel = ComplexF64(-9999.0, -9999.0)
+        X = fill(sentinel, row_offset + len + pad_below, nmodes)
+
+        Tarang.batched_gather!(X, cd, starts, step_, len, row_offset)
+
+        expected_block = zeros(ComplexF64, len, nmodes)
+        for m in 1:nmodes
+            buf = zeros(ComplexF64, len)
+            Tarang._gather_strided!(buf, 0, cd, starts[m], step_, len)
+            expected_block[:, m] .= buf
+        end
+        @test X[(row_offset + 1):(row_offset + len), :] == expected_block
+        @test all(==(sentinel), X[1:row_offset, :])                # above block: untouched
+        @test all(==(sentinel), X[(row_offset + len + 1):end, :])  # below block: untouched
+
+        # Scatter's mirror: the SOURCE block sits at rows
+        # row_offset2+1:row_offset2+len of a padded X; the padding rows carry
+        # a different sentinel that must never be read. A dropped row_offset
+        # would read the padding instead of the real block; a dropped step_
+        # would place values contiguously in cd instead of striding by nmodes.
+        row_offset2 = 2
+        pad_below2 = 3
+        real_block = reshape(ComplexF64[(i * 0.6) + (i * 0.15) * im for i in 1:(len * nmodes)],
+                             len, nmodes)
+        X2 = fill(ComplexF64(-1234.0, 4321.0), row_offset2 + len + pad_below2, nmodes)
+        X2[(row_offset2 + 1):(row_offset2 + len), :] .= real_block
+
+        cd_batched2 = zeros(ComplexF64, nmodes, len)
+        cd_ref2 = zeros(ComplexF64, nmodes, len)
+        starts2 = [m for m in 1:nmodes]
+        step_2 = stride(cd_batched2, 2)
+        @test step_2 == nmodes
+
+        Tarang.batched_scatter!(cd_batched2, X2, starts2, step_2, len, row_offset2)
+        for m in 1:nmodes
+            Tarang._scatter_strided!(cd_ref2, real_block[:, m], 0, starts2[m], step_2, len)
+        end
+        @test cd_batched2 == cd_ref2
+    end
+
     @testset "batched_spmv! matches per-mode mul! bit-for-bit" begin
         # NOTE: batched_spmv! iterates ROWS, so it takes the CSR pattern.
         # Passing A.colptr/A.rowval (CSC) would silently compute transpose(A)*x
         # and only agree when A is symmetric. Go through csr_pattern.
-        A = sprand(ComplexF64, n, n, 0.4)
+        A = sprand(rng, ComplexF64, n, n, 0.4)
         rowptr, colval, perm = Tarang.csr_pattern(A)
 
         nzv_csc = zeros(ComplexF64, nnz(A), nmodes)
@@ -118,7 +181,7 @@ using KernelAbstractions
     end
 
     @testset "batched_assemble_lhs! reproduces M + c*L densely" begin
-        pattern = sprand(ComplexF64, n, n, 0.5)
+        pattern = sprand(rng, ComplexF64, n, n, 0.5)
         nnzp = nnz(pattern)
         Mv = zeros(ComplexF64, nnzp, nmodes)
         Lv = zeros(ComplexF64, nnzp, nmodes)
