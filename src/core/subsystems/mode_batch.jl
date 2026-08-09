@@ -52,7 +52,11 @@ function batch_signature(sp::Subproblem)
             h = hash(P.rowval, h)
         end
     end
-    return h == 0x0 ? 0x1 : h   # never collide with the "not batchable" sentinel
+    # Never collide with the "not batchable" sentinel. `zero(UInt64)`/`one(UInt64)`
+    # rather than `0x0`/`0x1`: the latter are UInt8 literals, which would infer
+    # this function as `Union{UInt64, UInt8}` — a type instability in a package
+    # whose JET ratchet has zero headroom.
+    return h == zero(UInt64) ? one(UInt64) : h
 end
 
 """
@@ -74,4 +78,132 @@ function bucket_subproblems(sps)
         sort!(v)
     end
     return buckets
+end
+
+"""
+    ModeBatch
+
+Every Fourier mode in one structural bucket, laid out so each batched operation
+touches one array instead of `nmodes` of them. Column `m` is mode
+`sp_indices[m]` throughout.
+
+The sparsity pattern is stored ONCE (`colptr`/`rowval`); only values are
+per-mode. `M_exp_nzval` and `L_exp_nzval` are resident for the batch's lifetime,
+so `batched_assemble_lhs!` rebuilds every mode's LHS on-device from
+`M_exp + dt*a_ii*L_exp` with no host work and no upload — which is also why the
+old per-mode host `LHS.nzval` rebuild under adaptive dt disappears.
+
+`factored_key` records the `(dt, a_ii)` a factorization is valid for, alongside
+an explicit `dirty` bit. Both, not one: a bare flag plus a reallocated buffer is
+how a stale factorization silently serves zeros.
+"""
+struct ModeBatch
+    sp_indices::Vector{Int}
+    n::Int
+    nmodes::Int
+
+    colptr::AbstractVector{Int}
+    rowval::AbstractVector{Int}
+    M_exp_nzval::AbstractMatrix{ComplexF64}
+    L_exp_nzval::AbstractMatrix{ComplexF64}
+
+    M_min_colptr::AbstractVector{Int}
+    M_min_rowval::AbstractVector{Int}
+    M_min_nzval::AbstractMatrix{ComplexF64}
+
+    lhs_dense::AbstractArray{ComplexF64, 3}
+    bc_rows::AbstractVector{Int}
+
+    factored_key::Ref{Tuple{Float64, Float64}}
+    dirty::Ref{Bool}
+end
+
+"""Bytes the dense LHS workspace will occupy for `nmodes` matrices of order `n`."""
+mode_batch_bytes(n::Int, nmodes::Int) = n * n * nmodes * sizeof(ComplexF64)
+
+# `like` selects the array backend: pass an existing device vector to get device
+# storage, or a plain `ComplexF64[]` for host storage. Mirrors the `like=`
+# convention already used by `_subproblem_cached_vector!`.
+_batch_similar(like::AbstractVector, ::Type{T}, dims...) where {T} =
+    similar(like, T, dims...)
+
+"""
+    build_mode_batch(sps, indices; like) -> ModeBatch
+
+Pack the subproblems at `indices` into one batch. All of them must share a
+`batch_signature`; the caller (`bucket_subproblems`) guarantees that.
+"""
+function build_mode_batch(sps, indices::Vector{Int}; like::AbstractVector)
+    sp1 = sps[indices[1]]
+    n = size(sp1.LHS, 1)
+    nmodes = length(indices)
+
+    nnz_exp = length(sp1.M_exp.nzval)
+    nnz_m = length(sp1.M_min.nzval)
+
+    M_exp = _batch_similar(like, ComplexF64, nnz_exp, nmodes)
+    L_exp = _batch_similar(like, ComplexF64, nnz_exp, nmodes)
+    M_min = _batch_similar(like, ComplexF64, nnz_m, nmodes)
+
+    # Stage on the host, then upload each block once. Column m == mode
+    # sp_indices[m], fixed for the batch's lifetime.
+    host_M_exp = Matrix{ComplexF64}(undef, nnz_exp, nmodes)
+    host_L_exp = Matrix{ComplexF64}(undef, nnz_exp, nmodes)
+    host_M_min = Matrix{ComplexF64}(undef, nnz_m, nmodes)
+    for (m, i) in enumerate(indices)
+        sp = sps[i]
+        @views host_M_exp[:, m] .= sp.M_exp.nzval
+        @views host_L_exp[:, m] .= sp.L_exp.nzval
+        @views host_M_min[:, m] .= sp.M_min.nzval
+    end
+    copyto!(M_exp, host_M_exp)
+    copyto!(L_exp, host_L_exp)
+    copyto!(M_min, host_M_min)
+
+    int_like = _batch_similar(like, Int, 0)
+    colptr = _batch_similar(int_like, Int, length(sp1.LHS.colptr))
+    rowval = _batch_similar(int_like, Int, length(sp1.LHS.rowval))
+    copyto!(colptr, sp1.LHS.colptr)
+    copyto!(rowval, sp1.LHS.rowval)
+
+    m_colptr = _batch_similar(int_like, Int, length(sp1.M_min.colptr))
+    m_rowval = _batch_similar(int_like, Int, length(sp1.M_min.rowval))
+    copyto!(m_colptr, sp1.M_min.colptr)
+    copyto!(m_rowval, sp1.M_min.rowval)
+
+    bc_rows = _batch_similar(int_like, Int, length(sp1.bc_rows))
+    copyto!(bc_rows, sp1.bc_rows)
+
+    lhs_dense = _batch_similar(like, ComplexF64, n, n, nmodes)
+
+    return ModeBatch(copy(indices), n, nmodes,
+                     colptr, rowval, M_exp, L_exp,
+                     m_colptr, m_rowval, M_min,
+                     lhs_dense, bc_rows,
+                     Ref((NaN, NaN)), Ref(true))
+end
+
+"""
+    csr_pattern(A::SparseMatrixCSC) -> (rowptr, colval, perm)
+
+The CSR view of `A`'s sparsity pattern, plus the permutation that carries a
+CSC-ordered `nzval` into CSR order.
+
+`batched_spmv!` assigns one thread per (row, mode) and accumulates that row's
+dot product in a register, which needs row-major access. A column-major kernel
+would instead have to accumulate into `Y[row, m]` across iterations — the
+same-slot read-modify-write shape the KA CPU backend miscompiles.
+
+`perm` is shared by every mode in a batch, which is legal precisely because the
+bucket signature guarantees an identical pattern: permuting mode `m`'s values is
+`nzval[perm, m]` for every `m`.
+"""
+function csr_pattern(A::SparseMatrixCSC)
+    n = size(A, 1)
+    # Transposing a matrix whose values are 1:nnz yields, in CSC order of the
+    # transpose (== CSR order of A), the original CSC index of each entry.
+    tagged = SparseMatrixCSC(size(A, 1), size(A, 2), copy(A.colptr),
+                             copy(A.rowval), collect(1:nnz(A)))
+    tagged_t = sparse(transpose(tagged))
+    return (copy(tagged_t.colptr), copy(tagged_t.rowval), copy(tagged_t.nzval))
 end

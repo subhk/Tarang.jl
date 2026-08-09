@@ -107,3 +107,64 @@ end
         sp.M_min = saved
     end
 end
+
+@testset "ModeBatch construction" begin
+    solver = _channel_solver()
+    sps = collect(solver.problem.compiled.subproblems)
+    buckets = Tarang.bucket_subproblems(sps)
+    indices = first(values(buckets))
+
+    batch = Tarang.build_mode_batch(sps, indices; like=ComplexF64[])
+
+    sp1 = sps[indices[1]]
+    n = size(sp1.LHS, 1)
+
+    @test batch.n == n
+    @test batch.nmodes == length(indices)
+    @test batch.sp_indices == indices
+
+    @testset "pattern stored once, not per mode" begin
+        @test length(batch.colptr) == n + 1
+        @test batch.colptr == sp1.LHS.colptr
+        @test batch.rowval == sp1.LHS.rowval
+    end
+
+    @testset "values stored per mode, column-major by mode" begin
+        @test size(batch.M_exp_nzval) == (length(sp1.M_exp.nzval), length(indices))
+        @test size(batch.L_exp_nzval) == (length(sp1.L_exp.nzval), length(indices))
+        for (m, i) in enumerate(indices)
+            @test batch.M_exp_nzval[:, m] == sps[i].M_exp.nzval
+            @test batch.L_exp_nzval[:, m] == sps[i].L_exp.nzval
+            @test batch.M_min_nzval[:, m] == sps[i].M_min.nzval
+        end
+    end
+
+    @testset "dense LHS workspace is allocated but not yet valid" begin
+        @test size(batch.lhs_dense) == (n, n, length(indices))
+        @test batch.dirty[]
+    end
+
+    @testset "byte accounting matches the allocated buffer" begin
+        @test Tarang.mode_batch_bytes(n, length(indices)) ==
+              n * n * length(indices) * sizeof(ComplexF64)
+    end
+
+    @testset "csr_pattern inverts CSC and carries nzval across" begin
+        A = sparse([1, 3, 2, 3], [1, 1, 2, 3], ComplexF64[5, 7, 11, 13], 3, 3)
+        rowptr, colval, perm = Tarang.csr_pattern(A)
+
+        @test length(rowptr) == size(A, 1) + 1
+        @test rowptr[1] == 1
+        @test rowptr[end] == nnz(A) + 1
+        @test length(colval) == nnz(A)
+        @test length(perm) == nnz(A)
+
+        # Walking the CSR arrays with the permuted values must reproduce A.
+        csr_vals = A.nzval[perm]
+        rebuilt = zeros(ComplexF64, 3, 3)
+        for r in 1:3, k in rowptr[r]:(rowptr[r + 1] - 1)
+            rebuilt[r, colval[k]] = csr_vals[k]
+        end
+        @test rebuilt == Matrix(A)
+    end
+end
