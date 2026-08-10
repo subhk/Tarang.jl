@@ -20,6 +20,7 @@ The extension is organized into the following files:
 - kernels.jl: Element-wise and fused GPU kernels
 - batched_fft.jl: Batched FFT support
 - utils.jl: Utility functions, dealiasing, memory management
+- batched_matsolvers.jl: batched dense LU (cuBLAS strided-batched getrf/getrs) for BatchedDenseLU
 """
 module TarangCUDAExt
 
@@ -64,6 +65,7 @@ include("cuda/dct_distributed.jl")  # Distributed DCT for multi-GPU Chebyshev tr
 include("cuda/transforms.jl")
 include("cuda/batched_fft.jl")
 include("cuda/utils.jl")
+include("cuda/batched_matsolvers.jl")  # BatchedDenseLU GPU methods (batched Fourier-mode LU)
 include("cuda/transpose_kernels.jl")  # TransposableField GPU support
 
 # ============================================================================

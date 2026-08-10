@@ -2,3 +2,4 @@
 
 include("matsolvers.jl")
 include("gpu_matsolvers.jl")
+include("batched_matsolvers.jl")
