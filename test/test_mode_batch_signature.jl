@@ -150,9 +150,39 @@ end
         @test batch.dirty[]
     end
 
-    @testset "byte accounting matches the allocated buffer" begin
-        @test Tarang.mode_batch_bytes(n, length(indices)) ==
-              n * n * length(indices) * sizeof(ComplexF64)
+    @testset "byte accounting counts every array, not just the dense LHS" begin
+        # `mode_batch_bytes` is the only OOM guard on a default-on GPU path, so
+        # it has to count what `build_mode_batch` actually allocates. Counting
+        # `lhs_dense` alone under-counts by `1 + 3*density(LHS)` — the two CSC
+        # value blocks and the CSR `L_nzval` are each `nnz(LHS) x nmodes` —
+        # measured at 1.91x on this problem at nz=64 and 2.72x at the nz=8 used
+        # here, enough to turn an 8 GiB cap on a 12 GB device into a ~15 GB OOM
+        # with no warning.
+        #
+        # Named term by term here so the field list is pinned; the parity test
+        # walks `fieldnames(ModeBatch)` instead, so a field added later without
+        # a matching term fails there.
+        cplx_b = sizeof(ComplexF64)
+        int_b = sizeof(Int)
+        nm = length(indices)
+        op_bytes(A) = A === nothing ? 0 :
+                      nnz(A) * nm * cplx_b +        # per-mode values
+                      (size(A, 1) + 1) * int_b +    # CSR rowptr
+                      nnz(A) * int_b                # CSR colval
+        expected = n * n * nm * cplx_b +                        # lhs_dense
+                   length(sp1.LHS.colptr) * int_b +             # lhs_colptr
+                   length(sp1.LHS.rowval) * int_b +             # lhs_rowval
+                   2 * length(sp1.M_exp.nzval) * nm * cplx_b +  # M_exp/L_exp
+                   op_bytes(sp1.M_min) + op_bytes(sp1.L_exp) +
+                   op_bytes(sp1.pre_right_pinv) + op_bytes(sp1.pre_right) +
+                   op_bytes(sp1.pre_left) +
+                   length(sp1.bc_rows) * int_b +                # bc_rows
+                   nm * int_b                                   # sp_indices
+
+        @test Tarang.mode_batch_bytes(sp1, nm) == expected
+        # Strictly more than the dense buffer the old counter returned, so a
+        # regression to `n^2 * nmodes * 16` fails instead of merely shrinking.
+        @test expected > sizeof(batch.lhs_dense)
     end
 
     @testset "csr_pattern inverts CSC and carries nzval across" begin

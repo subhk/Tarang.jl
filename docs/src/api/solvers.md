@@ -499,6 +499,38 @@ solver = BoundaryValueSolver(problem; matsolver=:dense)
 `matsolver=:iterative` is accepted but warns and falls back to the sparse direct
 solver — there is no iterative or multigrid backend.
 
+### Batched Fourier-mode solve
+
+On a 2-D mixed Fourier-Chebyshev problem every Fourier mode is its own tau
+system, and all of them share a shape and a sparsity pattern. `batched_modes`
+solves them as one `(n, nmodes)` batch inside the IMEX Runge-Kutta stage loop —
+one kernel launch per operation instead of one per mode.
+
+`batched_modes` accepts `nothing` (the default), `true` or `false`. The default
+means **batch on GPU, not on CPU**: what batching buys is a lower launch count,
+which is a GPU cost, so no existing CPU run changes behavior unless it asks.
+`true` opts a CPU run in (the test suite uses it to exercise the path without a
+GPU); `false` turns batching off everywhere, GPU included.
+
+`batched_modes_max_bytes` caps the memory one batch may allocate and defaults to
+`1 << 30` (1 GiB). A batch holds a dense stage matrix per mode plus the shared
+operator values, so its cost grows as `n^2 * nmodes` in the tau-system order `n`
+and the mode count; a bucket whose batch would exceed the cap logs an `@info`
+and stays on the per-mode loop rather than allocating.
+
+Batching engages only when the run is serial (`nprocs == 1`) and the problem has
+exactly one Fourier axis, i.e. is 2-D. MPI runs, 3-D runs, and buckets holding a
+single mode stay on the per-mode path silently.
+
+```julia
+# force the batched path on a CPU run
+solver = InitialValueSolver(problem, RK222(); dt=1e-3, batched_modes=true)
+
+# raise the cap for a large-nz GPU run
+solver = InitialValueSolver(problem, RK222(); dt=1e-3,
+                            batched_modes_max_bytes=4 << 30)
+```
+
 ### Convergence criteria
 
 Only the nonlinear (NLBVP) path iterates:

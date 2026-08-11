@@ -187,8 +187,96 @@ struct ModeBatch
     dirty::Ref{Bool}
 end
 
-"""Bytes the dense LHS workspace will occupy for `nmodes` matrices of order `n`."""
-mode_batch_bytes(n::Int, nmodes::Int) = n * n * nmodes * sizeof(ComplexF64)
+# Device bytes one `_build_batched_op` result occupies: the CSR pattern, stored
+# once, plus one `ComplexF64` column per mode. `nothing` is an absent
+# preconditioner, which allocates nothing at all.
+_batched_op_bytes(::Nothing, ::Int) = 0
+_batched_op_bytes(A::SparseMatrixCSC, nmodes::Int) =
+    nnz(A) * nmodes * sizeof(ComplexF64) +      # nzval, (nnz, nmodes)
+    (size(A, 1) + 1) * sizeof(Int) +            # rowptr
+    nnz(A) * sizeof(Int)                        # colval
+
+"""
+    mode_batch_bytes(sp::Subproblem, nmodes::Int) -> Int
+
+Bytes `build_mode_batch` will allocate for a bucket of `nmodes` modes shaped
+like the representative subproblem `sp` — **every** array the resulting
+`ModeBatch` holds, not just the dense LHS.
+
+Counting `lhs_dense` alone (`n^2 * nmodes * 16`) under-counts by roughly
+`1 + 3*density(LHS)`: `M_exp_nzval`, `L_exp_nzval` and the CSR `L_nzval` are
+each `nnz(LHS) x nmodes`, and `M_min_nzval` plus the three projection operators
+add more on top. Measured on the channel problem, dense-only versus this total:
+
+| nx, nz | n  | nmodes | density(LHS) | dense-only | true    | ratio |
+|--------|----|--------|--------------|------------|---------|-------|
+| 32, 32 | 34 | 17     | 0.305        | 314432     | 647480  | 2.06  |
+| 32, 64 | 66 | 17     | 0.279        | 1184832    | 2274104 | 1.92  |
+| 64, 64 | 66 | 33     | 0.279        | 2299968    | 4391096 | 1.91  |
+
+The density does not fall off with `n` (the tau rows and the Chebyshev
+derivative blocks stay dense), so ~1.9x is what to expect at production sizes,
+not a small-problem artifact. This number is the only thing standing between
+`batched_modes_max_bytes` and a device OOM: a user who caps at 8 GiB on a 12 GB
+card would otherwise get ~15 GB of residency and an out-of-memory failure that
+the cap's `@info` never warned about, because the counted number passed the cap.
+
+The `Int` index arrays (`lhs_colptr`, `lhs_rowval`, the CSR patterns,
+`bc_rows`, `sp_indices`) are counted too. They do not scale with `nmodes` and
+are negligible at production sizes, but they are allocated, and a counter that
+sums *everything* is one a test can pin exactly against `sizeof`.
+
+Deliberately excluded: the `BatchedDenseLU` pivot/info arrays, allocated lazily
+by `_ensure_batch_factored!` on the first factorization. On GPU they are
+`O(n*nmodes)` — 1/(4n) of the dense buffer they accompany, since
+`getrf_strided_batched!` factors in place. On CPU `lu` copies each mode, so peak
+residency there is about twice what this returns; the cap exists to protect the
+device, where it does not.
+
+Raises rather than returning 0 for a subproblem whose matrices were never built:
+a 0 here would pass any cap silently, which is precisely the failure mode this
+function exists to prevent. Callers reject those subproblems first —
+`batch_signature` returns `0x0` for them.
+"""
+function mode_batch_bytes(sp::Subproblem, nmodes::Int)
+    LHS = sp.LHS
+    M_exp = sp.M_exp
+    (LHS === nothing || M_exp === nothing) && error(
+        "mode_batch_bytes: subproblem has no built matrices, so the batch it " *
+        "would produce cannot be sized. Callers must reject it first " *
+        "(`batch_signature` returns 0x0).")
+    n = size(LHS, 1)
+
+    bytes = n * n * nmodes * sizeof(ComplexF64)          # lhs_dense
+    bytes += length(LHS.colptr) * sizeof(Int)            # lhs_colptr
+    bytes += length(LHS.rowval) * sizeof(Int)            # lhs_rowval
+    # `build_mode_batch` sizes BOTH CSC value blocks from `M_exp.nzval`
+    # (`nnz_exp`), so this mirrors that rather than adding `L_exp`'s own count.
+    bytes += 2 * length(M_exp.nzval) * nmodes * sizeof(ComplexF64)
+    bytes += _batched_op_bytes(sp.M_min, nmodes)           # CSR M_min
+    bytes += _batched_op_bytes(sp.L_exp, nmodes)           # CSR L_exp
+    bytes += _batched_op_bytes(sp.pre_right_pinv, nmodes)  # compress_var
+    bytes += _batched_op_bytes(sp.pre_right, nmodes)       # expand_var
+    bytes += _batched_op_bytes(sp.pre_left, nmodes)        # compress_eqn
+    bytes += length(sp.bc_rows) * sizeof(Int)              # bc_rows
+    bytes += nmodes * sizeof(Int)                          # sp_indices
+    return bytes
+end
+
+"""
+    _mode_batch_fourier_axes(sp::Subproblem) -> Int
+
+How many separable axes this subproblem's mode group pins: one `Int` entry per
+Fourier axis, `nothing` for every coupled (Chebyshev) axis. `(3, nothing)` in
+2-D counts 1; `(2, 3, nothing)` in 3-D counts 2.
+"""
+function _mode_batch_fourier_axes(sp::Subproblem)
+    n = 0
+    for g in sp.group
+        g isa Int && (n += 1)
+    end
+    return n
+end
 
 # `like` selects the array backend: pass an existing device vector to get device
 # storage, or a plain `ComplexF64[]` for host storage. Mirrors the `like=`
@@ -326,19 +414,31 @@ end
 """
     should_batch_modes(base, sps, indices; is_gpu, nprocs) -> Bool
 
-All four conditions from the design must hold:
+All of the following must hold:
 
 1. `nprocs == 1` — distributed batching is out of scope, and the per-rank mode
    partitioning plus solve-layout bracket would need MPI verification.
 2. `base.batched_modes` resolves true for this device — `nothing` means GPU yes,
    CPU no, so no existing CPU run changes behavior.
 3. the bucket holds at least two modes — one mode has nothing to batch.
-4. the dense workspace fits under `base.batched_modes_max_bytes`.
+4. the problem has EXACTLY ONE Fourier axis, i.e. it is 2-D mixed
+   Fourier-coupled. That is the declared scope of the batched path and the only
+   shape any test on it exercises. A 3-D `(x, y)` Fourier + `z` Chebyshev run
+   otherwise qualifies on every other condition — at `nx=ny=nz=64` its 4096
+   modes sit well under the default cap — and would engage by default a gather
+   path (`_batch_field_plan` over a `(kx, ky, :)` selection) that has never
+   executed. `_subproblem_strided_index` may well express that selection
+   correctly; "may well" is not a basis for a default-on numerical path.
+5. the batch's workspace fits under `base.batched_modes_max_bytes` —
+   `mode_batch_bytes`, which counts every array the batch allocates, not just
+   the dense LHS.
 
-Condition 4 emits `@info maxlog=1` when it declines, because a silent
+Condition 5 emits `@info maxlog=1` when it declines, because a silent
 performance cliff at large `nz` is exactly what goes unnoticed for months.
-Condition 3 declines silently: warning about it would be noise on every small
-problem.
+Conditions 3 and 4 decline SILENTLY: both are structural non-qualifications, and
+an unsupported dimensionality is not a surprise the way a performance cliff is.
+Condition 4 is checked BEFORE the cap so a 3-D run never emits the cap's `@info`
+either.
 """
 function should_batch_modes(base, sps, indices::Vector{Int};
                             is_gpu::Bool, nprocs::Int)
@@ -351,12 +451,22 @@ function should_batch_modes(base, sps, indices::Vector{Int};
     length(indices) >= 2 || return false
 
     sp1 = sps[indices[1]]
-    sp1.LHS === nothing && return false
-    n = size(sp1.LHS, 1)
-    bytes = mode_batch_bytes(n, length(indices))
+    # `mode_batch_bytes` needs the built matrices to size the batch, and
+    # `build_mode_batch` needs all four. A bucket from `bucket_subproblems`
+    # always has them (`batch_signature` returns `0x0` otherwise); a
+    # hand-assembled `indices` might not.
+    LHS = sp1.LHS
+    LHS === nothing && return false
+    (sp1.M_exp === nothing || sp1.M_min === nothing ||
+     sp1.L_exp === nothing) && return false
+
+    _mode_batch_fourier_axes(sp1) == 1 || return false
+
+    n = size(LHS, 1)
+    bytes = mode_batch_bytes(sp1, length(indices))
     if bytes > base.batched_modes_max_bytes
-        @info("Batched mode solve declined: dense workspace needs $bytes bytes " *
-              "for $(length(indices)) modes of order $n, over the " *
+        @info("Batched mode solve declined: the batch workspace needs $bytes " *
+              "bytes for $(length(indices)) modes of order $n, over the " *
               "$(base.batched_modes_max_bytes)-byte cap. Falling back to the " *
               "per-mode loop. Raise `batched_modes_max_bytes` to enable.",
               maxlog=1)

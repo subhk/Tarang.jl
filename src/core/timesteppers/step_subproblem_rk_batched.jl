@@ -56,18 +56,26 @@ perfectly regular.
 `step`/`len` are shared across modes — every mode selects the same coupled axis
 — and that is asserted when the plan is built, not assumed.
 
-`cd_len` is the length of the coefficient array the offsets were measured
+`cd_size` is the SHAPE of the coefficient array the offsets were measured
 against. It is re-checked on every use: the offsets are linear indices, so a
 field whose storage was reshaped or re-pencilled underneath the plan would
-gather plausible numbers from the wrong places, and a length mismatch is the
+gather plausible numbers from the wrong places, and a mismatch here is the
 cheapest way to turn that into an error.
+
+Shape and not length, because length is not enough: the offsets were computed
+from `strides(cd)`, so a length-preserving reshape (8x9 to 9x8) leaves every
+offset in bounds while changing what each one names — a plausible wrong answer
+with no error, this repository's dominant historical bug class. The per-mode
+path is immune for the same reason stated positively:
+`_subproblem_strided_index` memoizes on `hash(size(cd), ...)`, so a reshape
+misses the cache and re-measures.
 """
 struct BatchFieldPlan
     starts::AbstractVector{Int}
     step::Int
     len::Int
     row_offset::Int
-    cd_len::Int
+    cd_size::Dims
 end
 
 """
@@ -181,15 +189,15 @@ function _batch_field_plan(batch::ModeBatch, sps, field, row_offset::Int)
 
     dev_starts = similar(_batch_like(batch), Int, nmodes)
     copyto!(dev_starts, starts)
-    return BatchFieldPlan(dev_starts, step_, len, row_offset, length(cd))
+    return BatchFieldPlan(dev_starts, step_, len, row_offset, size(cd))
 end
 
 """Resolve a field's local coefficient array and check it still matches its plan."""
 @inline function _plan_coeff_data(field, p::BatchFieldPlan)
     cd = _local_coeff_data(coeff_data!(field))
-    length(cd) == p.cd_len || error(
+    size(cd) == p.cd_size || error(
         "step_subproblem_rk_batched!: coefficient storage for a batched field " *
-        "changed length ($(length(cd)) now, $(p.cd_len) when the gather plan " *
+        "changed shape ($(size(cd)) now, $(p.cd_size) when the gather plan " *
         "was measured). The plan's linear offsets are no longer valid.")
     return cd
 end
@@ -318,14 +326,19 @@ function _build_batched_rk_plan(solver, subproblems, state_fields;
         nprocs = dist === nothing ? 1 : dist.size
         is_gpu = _gpu_subproblem_execution(sp1)
 
-        # Short-circuit the two gates that do not depend on a bucket, BEFORE
+        # Short-circuit the three gates that do not depend on a bucket, BEFORE
         # bucketing. `should_batch_modes` remains the authority and re-checks
-        # both per bucket; this only avoids hashing every subproblem's sparsity
-        # pattern on runs that provably cannot batch — which is every MPI run
-        # and every default CPU run, and which in 3-D means Nx·Ny subproblems.
+        # all three per bucket; this only avoids hashing every subproblem's
+        # sparsity pattern on runs that provably cannot batch — which is every
+        # MPI run, every default CPU run, and every problem with more than one
+        # Fourier axis, the last of which in 3-D means Nx·Ny subproblems hashed
+        # for nothing.
         nprocs == 1 || return nothing
         setting = solver.base.batched_modes
         (setting === nothing ? is_gpu : setting) || return nothing
+        # Exactly one Fourier axis: the batched path's declared 2-D scope. See
+        # condition 4 of `should_batch_modes`.
+        _mode_batch_fourier_axes(sp1) == 1 || return nothing
 
         like = zeros(sp1.dist.architecture, ComplexF64, 0)
         build_mode_batches!(solver.base, subproblems; is_gpu=is_gpu,

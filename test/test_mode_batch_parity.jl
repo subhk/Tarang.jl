@@ -48,6 +48,37 @@ function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, bc_low="0",
     return solver, b
 end
 
+# The smallest 3-D Fourier x Fourier x Chebyshev IVP that still builds
+# subproblems: `nx=ny=4` gives 12 modes, and they all land in one bucket. Same
+# equation, BCs and tau structure as the 2-D channel above, so the ONLY thing
+# that differs is the number of Fourier axes — which is the point.
+function _parity_channel_solver_3d(; nx=4, ny=4, nz=8, dt=1e-3,
+                                     device=Tarang.CPU(), kwargs...)
+    coords = CartesianCoordinates("x", "y", "z")
+    dist = Distributor(coords; dtype=Float64, device=device)
+    xbasis = RealFourier(coords["x"]; size=nx, bounds=(0.0, 2π), dealias=3 / 2)
+    ybasis = RealFourier(coords["y"]; size=ny, bounds=(0.0, 2π), dealias=3 / 2)
+    zbasis = ChebyshevT(coords["z"]; size=nz, bounds=(0.0, 1.0))
+    domain = Domain(dist, (xbasis, ybasis, zbasis))
+
+    b = ScalarField(domain, "b")
+    tau1 = ScalarField(dist, "tau1", (xbasis, ybasis), Float64)
+    tau2 = ScalarField(dist, "tau2", (xbasis, ybasis), Float64)
+    _, _, ez = unit_vector_fields(coords, dist)
+    lift_basis = derivative_basis(zbasis, 1)
+    tau_lift(A) = lift(A, lift_basis, -1)
+    grad_b = grad(b) + ez * tau_lift(tau1)
+
+    problem = IVP([b, tau1, tau2])
+    add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
+    add_equation!(problem,
+                  "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = -b*∂x(b)")
+    add_bc!(problem, "b(z=0) = 0")
+    add_bc!(problem, "b(z=1) = 0")
+    solver = InitialValueSolver(problem, RK222(); dt, kwargs...)
+    return solver, b
+end
+
 @testset "batched mode engagement guards" begin
     @testset "default on CPU is OFF" begin
         solver, _ = _parity_channel_solver()
@@ -104,6 +135,58 @@ end
                                          is_gpu=true, nprocs=2)
     end
 
+    @testset "a 3-D problem declines, silently" begin
+        # Nothing else stops it. Measured on this exact problem before the gate
+        # existed: one bucket of 12 modes, `should_batch_modes` true,
+        # `build_mode_batches!` returning a batch. At nx=ny=nz=64 that is 4096
+        # modes at a few hundred MB — under the 1 GiB default — so a 3-D GPU run
+        # would have engaged BY DEFAULT a gather over a `(kx, ky, :)` selection
+        # that has never executed and that no test on this branch covers. The
+        # declared scope is 2-D; decline like the one-mode bucket does, without
+        # the byte cap's `@info` (an unsupported dimensionality is not a
+        # surprise the way a silent performance cliff is).
+        solver, _ = _parity_channel_solver_3d(; batched_modes=true)
+        step!(solver)
+        sps = collect(solver.problem.compiled.subproblems)
+        live = [sp for sp in sps if sp.M_min !== nothing]
+        @test length(live) >= 2
+
+        # The gate's input, with the 2-D discriminator alongside it: the mode
+        # group pins two Fourier axes here and exactly one in the channel.
+        @test Tarang._mode_batch_fourier_axes(live[1]) == 2
+        solver_2d, _ = _parity_channel_solver(; batched_modes=true)
+        step!(solver_2d)
+        sps_2d = collect(solver_2d.problem.compiled.subproblems)
+        @test Tarang._mode_batch_fourier_axes(sps_2d[1]) == 1
+
+        # Every OTHER condition passes, so the decline can only be the gate.
+        buckets = Tarang.bucket_subproblems(sps)
+        @test length(buckets) == 1
+        indices = first(values(buckets))
+        @test length(indices) >= 2
+        @test Tarang.mode_batch_bytes(sps[indices[1]], length(indices)) <=
+              solver.base.batched_modes_max_bytes
+
+        result = @test_logs Tarang.should_batch_modes(solver.base, sps, indices;
+                                                        is_gpu=true, nprocs=1)
+        @test !result
+        @test isempty(Tarang.build_mode_batches!(solver.base, sps; is_gpu=true,
+                                                 nprocs=1, like=ComplexF64[]))
+
+        # And through the production entry point, which short-circuits before
+        # bucketing. Layout is set first so that a REMOVED gate would reach the
+        # workspace build and fail this assertion, rather than erroring earlier
+        # for an unrelated reason.
+        state = solver.timestepper_state
+        state_fields = state.timestepper_data[:_sp_state_fields][2]
+        for f in state_fields
+            ensure_layout!(f, :c)
+        end
+        @test Tarang._build_batched_rk_plan(solver,
+                                            solver.problem.compiled.subproblems,
+                                            state_fields) === nothing
+    end
+
     @testset "a one-mode bucket declines silently" begin
         # "Silently" is a testable claim, not just a title: wrap the call in a
         # zero-pattern @test_logs so an accidental @info here (or one migrated
@@ -144,14 +227,35 @@ end
         # buffer, so the counter and the allocation could drift apart and the
         # memory cap would guard a number nothing allocates. Measure the real
         # thing: this is the gate's whole purpose.
+        #
+        # "The real thing" is EVERY array the batch holds, not `lhs_dense`
+        # alone. Comparing against `sizeof(batch.lhs_dense)` — which this
+        # testset used to do — was wrong by construction: `M_exp_nzval`,
+        # `L_exp_nzval` and the CSR `L_nzval` are each `nnz(LHS) x nmodes`, so a
+        # cap checked against the dense buffer alone lets a user ask for 8 GiB
+        # on a 12 GB device, resident ~15 GB (measured 1.91x at nz=64), and OOM
+        # with the cap's `@info` never firing. The sum below walks
+        # `fieldnames(ModeBatch)` rather than naming fields, so a field added
+        # later without a matching term in `mode_batch_bytes` fails here instead
+        # of quietly widening the gap.
         solver, _ = _parity_channel_solver(; batched_modes=true)
         step!(solver)
         sps = collect(solver.problem.compiled.subproblems)
         indices = first(values(Tarang.bucket_subproblems(sps)))
         batch = Tarang.build_mode_batch(sps, indices; like=ComplexF64[])
 
-        @test Tarang.mode_batch_bytes(batch.n, batch.nmodes) ==
-              sizeof(batch.lhs_dense)
+        total = 0
+        for name in fieldnames(Tarang.ModeBatch)
+            v = getfield(batch, name)
+            if v isa AbstractArray
+                total += sizeof(v)
+            elseif v isa Tarang.BatchedSparseOp
+                total += sizeof(v.rowptr) + sizeof(v.colval) + sizeof(v.nzval)
+            end
+        end
+
+        @test Tarang.mode_batch_bytes(sps[indices[1]], length(indices)) == total
+        @test total > sizeof(batch.lhs_dense)
     end
 
     @testset "build_mode_batches! emptiness and ordering" begin
