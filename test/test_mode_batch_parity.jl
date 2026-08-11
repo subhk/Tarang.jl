@@ -15,7 +15,15 @@ using Tarang
 # cluster runner that included it on a real GPU would run the CPU path,
 # exercise zero device code, and report a pass. Every testset below uses the
 # `CPU()` default; the parameter exists for the runner, not for them.
-function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, device=Tarang.CPU(), kwargs...)
+# `bc_low` is the lower Dirichlet value, as a BC-expression string. It defaults
+# to the homogeneous `"0"` so the structural guard testsets below keep the exact
+# problem Task 5 pinned — but a homogeneous BC makes `maxabs(ALG_F) == 0.0`,
+# which leaves `bc_rows`, `batched_bc_override!` and `_batched_gather_alg_F!`
+# numerically INERT: deleting the override's body still reproduces the per-mode
+# answer to 4.8e-16. Every parity comparison therefore passes `bc_low="1"`
+# (measured `maxabs(ALG_F) == 16.0`) or a time-dependent expression.
+function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, bc_low="0",
+                                  device=Tarang.CPU(), kwargs...)
     coords = CartesianCoordinates("x", "z")
     dist = Distributor(coords; dtype=Float64, device=device)
     xbasis = RealFourier(coords["x"]; size=nx, bounds=(0.0, 2π), dealias=3 / 2)
@@ -34,7 +42,7 @@ function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, device=Tarang.CPU(), kwa
     add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
     add_equation!(problem,
                   "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = -b*∂x(b)")
-    add_bc!(problem, "b(z=0) = 0")
+    add_bc!(problem, "b(z=0) = $bc_low")
     add_bc!(problem, "b(z=1) = 0")
     solver = InitialValueSolver(problem, RK222(); dt, kwargs...)
     return solver, b
@@ -298,8 +306,65 @@ end
 @testset "batched stage loop reproduces the per-mode loop" begin
     nsteps = 5
 
-    ref_solver, ref_b = _parity_channel_solver(; batched_modes=false)
-    bat_solver, bat_b = _parity_channel_solver(; batched_modes=true)
+    # INHOMOGENEOUS FIRST, and not optional. With `b(z=0) = 0` the algebraic
+    # forcing is identically zero, so this comparison cannot see a broken BC
+    # override at all — the override writes `coeff * 0` either way. `b(z=0) = 1`
+    # makes `maxabs(ALG_F) == 16.0`, which is what gives the assertion its
+    # teeth. The homogeneous case runs second so the zero path keeps coverage.
+    for bc_low in ("1", "0")
+        @testset "b(z=0) = $bc_low" begin
+            ref_solver, ref_b = _parity_channel_solver(; bc_low, batched_modes=false)
+            bat_solver, bat_b = _parity_channel_solver(; bc_low, batched_modes=true)
+
+            _seed_parity_ic!(ref_b)
+            _seed_parity_ic!(bat_b)
+
+            for _ in 1:nsteps
+                step!(ref_solver)
+                step!(bat_solver)
+            end
+
+            @test isempty(Tarang.active_mode_batches(ref_solver))
+            @test !isempty(Tarang.active_mode_batches(bat_solver))
+
+            # The BC override path is only exercised when this is non-zero;
+            # assert it directly rather than trusting the BC string.
+            bat_ws = bat_solver.timestepper_state.timestepper_data[:_sp_rk_mode_batches].workspaces[1]
+            alg_max = maximum(abs, Array(bat_ws.ALG_F))
+            if bc_low == "1"
+                @test alg_max > 1.0
+            else
+                @test alg_max == 0.0
+            end
+
+            ensure_layout!(ref_b, :g)
+            ensure_layout!(bat_b, :g)
+            ref_g = Array(get_grid_data(ref_b))
+            bat_g = Array(get_grid_data(bat_b))
+
+            scale = maximum(abs, ref_g)
+            @test scale > 1e-8               # guard against comparing zeros
+            @test maximum(abs, bat_g .- ref_g) / scale < 1e-12
+        end
+    end
+end
+
+@testset "batched stage loop reproduces the per-mode loop: time-dependent BC" begin
+    # `step_subproblem_rk_batched.jl`'s `bc_dynamic` branch — the per-stage
+    # `_refresh_bcs_for_stage!` plus ALG_F re-gather at `t + c[i]*dt` — never
+    # ran in any other test, because every batching problem here had static
+    # BCs. It is also the branch a GPU run reaches by default. dt is 1e-2 so
+    # the boundary value moves appreciably WITHIN a step (the stage times are
+    # c = [0, 0.293, 1]), which is what makes a dropped per-stage re-gather
+    # visible rather than a rounding difference.
+    nsteps = 6
+    bc = "sin(6.283185307*t)"
+
+    ref_solver, ref_b = _parity_channel_solver(; bc_low=bc, dt=1e-2,
+                                                 batched_modes=false)
+    bat_solver, bat_b = _parity_channel_solver(; bc_low=bc, dt=1e-2,
+                                                 batched_modes=true)
+    @test Tarang.has_time_dependent_bcs(bat_solver.problem.bc_manager)
 
     _seed_parity_ic!(ref_b)
     _seed_parity_ic!(bat_b)
@@ -309,8 +374,9 @@ end
         step!(bat_solver)
     end
 
-    @test isempty(Tarang.active_mode_batches(ref_solver))
     @test !isempty(Tarang.active_mode_batches(bat_solver))
+    bat_ws = bat_solver.timestepper_state.timestepper_data[:_sp_rk_mode_batches].workspaces[1]
+    @test maximum(abs, Array(bat_ws.ALG_F)) > 1e-3   # the BC is live, not 0
 
     ensure_layout!(ref_b, :g)
     ensure_layout!(bat_b, :g)
@@ -318,7 +384,7 @@ end
     bat_g = Array(get_grid_data(bat_b))
 
     scale = maximum(abs, ref_g)
-    @test scale > 1e-8                       # guard against comparing zeros
+    @test scale > 1e-8
     @test maximum(abs, bat_g .- ref_g) / scale < 1e-12
 end
 
@@ -352,20 +418,76 @@ end
     @test Tarang.BATCH_FACTOR_STATS.assembles[] ==
           Tarang.BATCH_FACTOR_STATS.factors[]
 
-    # And structurally: exactly one call site each, in one function, so the
-    # counters above cannot be equal merely because a second pair exists
-    # somewhere else.
-    ts_dir = joinpath(dirname(@__DIR__), "src", "core", "timesteppers")
-    calls = 0
-    assembles = 0
-    for f in readdir(ts_dir; join=true)
-        endswith(f, ".jl") || continue
-        src = read(f, String)
-        calls += count("batched_factor!(", src)
-        assembles += count("batched_assemble_lhs!(", src)
+    # And structurally: exactly one call site each, so the counters above
+    # cannot be equal merely because a second pair exists somewhere else.
+    # Scans ALL of src/ and ext/, not just src/core/timesteppers/ — a call
+    # added under src/core/subsystems/ or src/tools/ would otherwise be
+    # invisible to this test. The two definition files are excluded by NAME
+    # (their own docstrings echo the signature); the invariant asserted is that
+    # no other file in the package mentions either call.
+    factor_sites = Tuple{String, Int}[]
+    assemble_sites = Tuple{String, Int}[]
+    for root in (joinpath(dirname(@__DIR__), "src"),
+                 joinpath(dirname(@__DIR__), "ext"))
+        isdir(root) || continue
+        for (dir, _, files) in walkdir(root), f in files
+            endswith(f, ".jl") || continue
+            src = read(joinpath(dir, f), String)
+            if f != "batched_matsolvers.jl"          # defines batched_factor!
+                n = count("batched_factor!(", src)
+                n > 0 && push!(factor_sites, (f, n))
+            end
+            if f != "mode_batch_kernels.jl"          # defines batched_assemble_lhs!
+                n = count("batched_assemble_lhs!(", src)
+                n > 0 && push!(assemble_sites, (f, n))
+            end
+        end
     end
-    @test calls == 1
-    @test assembles == 1
+    @test sort(factor_sites) == [("step_subproblem_rk_batched.jl", 1)]
+    @test sort(assemble_sites) == [("step_subproblem_rk_batched.jl", 1)]
+end
+
+@testset "the dirty bit alone forces a refactor" begin
+    # I3: the two-part gate is `!dirty[] && factored_key[] == (dt, a_ii)`, but
+    # the only production writer of `dirty[] = true` is the dt handler, which
+    # ALSO changes the key — so no end-to-end scenario separates the two, and
+    # rewriting the `&&` as `||` left every other test green. Drive the missing
+    # half directly: dirty with an UNCHANGED key must still re-assemble and
+    # re-factor. Under `||` the gate would return the cached factorization and
+    # the counters would not move, failing the first two assertions below.
+    Tarang.reset_batch_factor_stats!()
+    solver, b = _parity_channel_solver(; bc_low="1", batched_modes=true)
+    _seed_parity_ic!(b)
+    step!(solver)
+
+    batches = Tarang.active_mode_batches(solver)
+    @test length(batches) == 1
+    batch = batches[1]
+    key = batch.factored_key[]
+    @test !batch.dirty[]                       # a completed step leaves it clean
+
+    n_f = Tarang.BATCH_FACTOR_STATS.factors[]
+    n_a = Tarang.BATCH_FACTOR_STATS.assembles[]
+
+    # Same key, dirty set by hand.
+    batch.dirty[] = true
+    Tarang._ensure_batch_factored!(batch, key[1], key[2])
+    @test Tarang.BATCH_FACTOR_STATS.factors[] == n_f + 1
+    @test Tarang.BATCH_FACTOR_STATS.assembles[] == n_a + 1
+    @test batch.factored_key[] == key
+    @test !batch.dirty[]
+
+    # Clean and same key: no work, which is the other half of the gate.
+    Tarang._ensure_batch_factored!(batch, key[1], key[2])
+    @test Tarang.BATCH_FACTOR_STATS.factors[] == n_f + 1
+    @test Tarang.BATCH_FACTOR_STATS.assembles[] == n_a + 1
+
+    # The batch is still usable: re-assemble+factor of the same matrix is a
+    # no-op numerically, so stepping on must neither refactor nor blow up.
+    step!(solver)
+    @test Tarang.BATCH_FACTOR_STATS.factors[] == n_f + 1
+    ensure_layout!(b, :g)
+    @test all(isfinite, Array(get_grid_data(b)))
 end
 
 @testset "leftover modes step alongside a partial batch" begin
@@ -374,8 +496,8 @@ end
     # unreachable from a normal run and would rot untested. Install a plan that
     # batches all but the last mode and check parity anyway.
     nsteps = 4
-    ref_solver, ref_b = _parity_channel_solver(; batched_modes=false)
-    bat_solver, bat_b = _parity_channel_solver(; batched_modes=true)
+    ref_solver, ref_b = _parity_channel_solver(; bc_low="1", batched_modes=false)
+    bat_solver, bat_b = _parity_channel_solver(; bc_low="1", batched_modes=true)
     _seed_parity_ic!(ref_b)
     _seed_parity_ic!(bat_b)
 
