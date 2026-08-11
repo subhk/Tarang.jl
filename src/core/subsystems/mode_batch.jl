@@ -506,18 +506,23 @@ that is entirely empty.
 `M_min` is rank-deficient in every tau/BC formulation (its tau rows and columns
 are empty), so `M x = b` is solved per-mode with a sparse least-squares. But the
 measured `M_min` is a 0/1 partial permutation, and for such a matrix the
-minimum-norm least-squares solution is `x = M' b` for ANY `b` — matching `b`
-exactly on the image rows and taking the free null columns to zero. That is one
-kernel instead of `nmodes` sparse solves.
+minimum-norm least-squares solution is `x = M⁺b` (the pseudo-inverse — for a
+scaled partial permutation, the reciprocal-scaled transpose) for ANY `b` —
+matching `b` exactly on the image rows and taking the free null columns to
+zero. That is one kernel instead of `nmodes` sparse solves.
 
 The shortcut is only valid for this structure. Applying it to a genuine mass
 matrix would produce a plausible wrong answer with no error, so the structure is
 VERIFIED here rather than assumed, and callers fall back to the per-mode solver
 on `nothing`.
 
-An explicitly stored zero is treated as disqualifying rather than as a mapping:
-`scale[j]` is divided by, and a stored zero also means the true structure is not
-what the sparsity pattern suggests.
+An explicitly stored zero, `NaN`, or `Inf` is treated as disqualifying rather
+than as a mapping. `scale[j]` is divided by, so it must be a usable, finite
+number: a stored zero would be divided by zero, and an `Inf` scale divides
+`b[src[j]]` silently down to a plausible `0` — the same silent-wrong-answer
+failure this function exists to prevent, just reached without the least-squares
+solve. A non-finite or zero entry also means the true structure is not what the
+sparsity pattern suggests, whether or not the shortcut ever divides by it.
 """
 function mass_selection_plan(M::SparseMatrixCSC)
     n = size(M, 2)
@@ -534,7 +539,10 @@ function mass_selection_plan(M::SparseMatrixCSC)
         length(r) == 0 && continue          # empty column: src stays 0
         length(r) == 1 || return nothing    # two entries in a column
         k = first(r)
-        iszero(vals[k]) && return nothing   # stored zero: not a real mapping
+        # stored zero/NaN/Inf: not a real mapping. `isfinite` on a ComplexF64
+        # checks both the real and imaginary parts, so this also catches a
+        # NaN/Inf hiding in the imaginary part of an otherwise-finite value.
+        (iszero(vals[k]) || !isfinite(vals[k])) && return nothing
         i = rows[k]
         row_used[i] && return nothing       # two entries in a row
         row_used[i] = true

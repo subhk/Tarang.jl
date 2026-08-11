@@ -62,4 +62,25 @@ using LinearAlgebra
         M = SparseMatrixCSC(3, 3, [1, 2, 2, 2], [1], ComplexF64[0.0])
         @test Tarang.mass_selection_plan(M) === nothing
     end
+
+    @testset "rejects a stored NaN" begin
+        M = sparse([1], [1], ComplexF64[NaN], 3, 3)
+        @test Tarang.mass_selection_plan(M) === nothing
+    end
+
+    @testset "rejects a stored Inf" begin
+        # The most dangerous case: `b[src[j]] / Inf` divides down to a
+        # plausible 0 with no error raised — the exact silent-wrong-answer
+        # failure mode this function exists to prevent.
+        M = sparse([1], [1], ComplexF64[Inf], 3, 3)
+        @test Tarang.mass_selection_plan(M) === nothing
+    end
+
+    @testset "rejects NaN hiding in the imaginary part only" begin
+        # isfinite on a Complex checks both parts; pin that a NaN in only the
+        # imaginary part is not missed by a check that only looks at the real
+        # part (the real part alone here looks perfectly finite).
+        M = sparse([1], [1], [ComplexF64(1.0, NaN)], 3, 3)
+        @test Tarang.mass_selection_plan(M) === nothing
+    end
 end
