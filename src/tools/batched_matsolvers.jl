@@ -12,9 +12,27 @@
 """
     BatchedDenseLU(A)
 
-Factor and solve `A[:, :, m] * x = b` for every `m` in one call. `A` is mutated
-in place by the factorization, and callers are expected to overwrite it (see
-`batched_assemble_lhs!`) and call `batched_factor!` again when `dt` changes.
+Factor and solve `A[:, :, m] * x = b` for every `m` in one call. Callers are
+expected to fully overwrite `A` (see `batched_assemble_lhs!`) and call
+`batched_factor!` again when `dt` changes — **never factor the same buffer
+twice**, on either backend (see below for why this matters more on one than
+the other).
+
+**`A`'s fate after `batched_factor!` differs by backend, and this is not
+cosmetic.** On GPU, the factorization genuinely destroys `A`: cuBLAS's
+batched `getrf` factors directly into the buffers `A`'s own pointers name, so
+`s.A` holds the LU factors afterward, not the original matrices. On CPU, the
+reference implementation below calls `lu` (not `lu!`), which copies before
+factoring, so `s.A` happens to still hold the original matrices afterward —
+an accident of using the non-mutating entry point, not a guarantee either
+path makes to callers. Do not rely on `s.A` surviving `batched_factor!` on
+either backend: the one CPU-only test that does (`test_batched_dense_lu.jl`'s
+"refactoring after the matrix changes" testset, which does `s.A .*= 2` after
+an initial factor) is marked CPU-specific for exactly this reason — the
+identical sequence on GPU would scale and re-factor the LU factors, not the
+operator, and return a plausible wrong answer with no error. The supported
+lifecycle is assemble-then-factor: overwrite `A` completely, then
+`batched_factor!`, on both backends alike.
 
 Parametrized on the storage type of `A` (`AT`) rather than declared with a
 bare `A::AbstractArray{ComplexF64,3}` field. This is not stylistic: it is

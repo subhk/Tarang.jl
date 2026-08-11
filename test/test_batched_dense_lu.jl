@@ -65,7 +65,20 @@ using LinearAlgebra
         @test_throws Exception Tarang.batched_solve!(X, s, B)
     end
 
-    @testset "refactoring after the matrix changes gives the new answer" begin
+    # CPU-specific: this testset relies on `s.A` still holding the ORIGINAL
+    # matrices after the first `batched_factor!`, so that `s.A .*= 2` scales
+    # the operator and the second factor produces a genuinely new answer.
+    # That survival is a CPU-only accident of calling `lu` (not `lu!`), which
+    # copies before factoring — see the "differs by backend" note on
+    # `BatchedDenseLU`'s docstring in src/tools/batched_matsolvers.jl. On GPU,
+    # `getrf_strided_batched!` factors directly into `A`'s own buffers, so
+    # after the first `batched_factor!`, `s.A` holds the LU factors, not the
+    # operator; `s.A .*= 2` there would scale and re-factor the FACTORS, not
+    # the operator, and this exact sequence would silently produce the wrong
+    # answer with no error. Do not port this testset's `s.A .*=` pattern to a
+    # GPU test — the supported lifecycle is assemble-then-factor (fully
+    # overwrite `A`, then factor), never factor-mutate-refactor.
+    @testset "refactoring after the matrix changes gives the new answer (CPU-only semantics)" begin
         A = _well_conditioned_batch(n, nmodes)
         s = Tarang.BatchedDenseLU(A)
         Tarang.batched_factor!(s)
@@ -75,6 +88,9 @@ using LinearAlgebra
         Tarang.batched_solve!(X1, s, B)
 
         # Mutate in place, as batched_assemble_lhs! will, then refactor.
+        # Valid here because the CPU path's `s.A` still holds the original
+        # matrices at this point (see the CPU-specific note above) — this is
+        # NOT a general guarantee `BatchedDenseLU` makes on either backend.
         s.A .*= 2
         Tarang.batched_factor!(s)
         X2 = zeros(ComplexF64, n, nmodes)
