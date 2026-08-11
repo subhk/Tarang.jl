@@ -492,3 +492,54 @@ function build_mode_batches!(base, sps; is_gpu::Bool, nprocs::Int,
     sort!(batches; by=b -> b.sp_indices[1])
     return batches
 end
+
+"""
+    mass_selection_plan(M::SparseMatrixCSC) -> Union{Nothing, Tuple{Vector{Int}, Vector{ComplexF64}}}
+
+Decide whether `M` is a scaled partial permutation — at most one nonzero per
+column AND per row — and if so return `(src, scale)` describing it: column `j`
+draws from row `src[j]` with value `scale[j]`, or `src[j] == 0` for a column
+that is entirely empty.
+
+### Why this matters
+
+`M_min` is rank-deficient in every tau/BC formulation (its tau rows and columns
+are empty), so `M x = b` is solved per-mode with a sparse least-squares. But the
+measured `M_min` is a 0/1 partial permutation, and for such a matrix the
+minimum-norm least-squares solution is `x = M' b` for ANY `b` — matching `b`
+exactly on the image rows and taking the free null columns to zero. That is one
+kernel instead of `nmodes` sparse solves.
+
+The shortcut is only valid for this structure. Applying it to a genuine mass
+matrix would produce a plausible wrong answer with no error, so the structure is
+VERIFIED here rather than assumed, and callers fall back to the per-mode solver
+on `nothing`.
+
+An explicitly stored zero is treated as disqualifying rather than as a mapping:
+`scale[j]` is divided by, and a stored zero also means the true structure is not
+what the sparsity pattern suggests.
+"""
+function mass_selection_plan(M::SparseMatrixCSC)
+    n = size(M, 2)
+    size(M, 1) == n || return nothing
+
+    src = zeros(Int, n)
+    scale = ones(ComplexF64, n)
+    row_used = falses(size(M, 1))
+
+    rows = rowvals(M)
+    vals = nonzeros(M)
+    for j in 1:n
+        r = nzrange(M, j)
+        length(r) == 0 && continue          # empty column: src stays 0
+        length(r) == 1 || return nothing    # two entries in a column
+        k = first(r)
+        iszero(vals[k]) && return nothing   # stored zero: not a real mapping
+        i = rows[k]
+        row_used[i] && return nothing       # two entries in a row
+        row_used[i] = true
+        src[j] = i
+        scale[j] = vals[k]
+    end
+    return (src, scale)
+end
