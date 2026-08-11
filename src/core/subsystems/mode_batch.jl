@@ -81,39 +81,108 @@ function bucket_subproblems(sps)
 end
 
 """
+    BatchedSparseOp
+
+One sparse operator shared by every mode in a batch: a single CSR pattern
+(`rowptr`/`colval`) plus one column of values per mode. Built for the operators
+the batched stage loop applies with `batched_spmv!` — which iterates ROWS, so
+the pattern must be CSR and nothing else (see `ModeBatch` below).
+
+`nrows`/`ncols` are the operator's shape, kept so callers can size the `(nrows,
+nmodes)` output and check the `(ncols, nmodes)` input without touching the
+device arrays.
+"""
+struct BatchedSparseOp
+    rowptr::AbstractVector{Int}
+    colval::AbstractVector{Int}
+    nzval::AbstractMatrix{ComplexF64}
+    nrows::Int
+    ncols::Int
+end
+
+"""
     ModeBatch
 
 Every Fourier mode in one structural bucket, laid out so each batched operation
 touches one array instead of `nmodes` of them. Column `m` is mode
 `sp_indices[m]` throughout.
 
-The sparsity pattern is stored ONCE (`colptr`/`rowval`); only values are
-per-mode. `M_exp_nzval` and `L_exp_nzval` are resident for the batch's lifetime,
-so `batched_assemble_lhs!` rebuilds every mode's LHS on-device from
-`M_exp + dt*a_ii*L_exp` with no host work and no upload — which is also why the
-old per-mode host `LHS.nzval` rebuild under adaptive dt disappears.
+The sparsity pattern is stored ONCE; only values are per-mode. `M_exp_nzval` and
+`L_exp_nzval` are resident for the batch's lifetime, so `batched_assemble_lhs!`
+rebuilds every mode's LHS on-device from `M_exp + dt*a_ii*L_exp` with no host
+work and no upload — which is also why the old per-mode host `LHS.nzval` rebuild
+under adaptive dt disappears.
+
+### Two pattern encodings, deliberately not interchangeable
+
+`lhs_colptr`/`lhs_rowval` are the **CSC** pattern of `LHS`, and they exist for
+exactly one consumer: `batched_assemble_lhs!`, which walks columns to place
+stored values into a dense buffer. They are named for that consumer so they are
+never mistaken for a matvec pattern.
+
+Every operator that gets multiplied by a vector — `M_min`, `L_exp`, and the
+three preconditioner projections — is stored in **CSR**, because
+`batched_spmv!` assigns one thread per (row, mode) and iterates that row.
+Handing it a CSC pattern computes `transpose(A)*x` silently, and none of these
+matrices is symmetric. Task 2 shipped `M_min_colptr`/`M_min_rowval` (CSC) with
+no caller; they are gone rather than merely deprecated, so the mistake is
+unrepresentable. `M_min_nzval` and `L_nzval` are therefore in CSR order too (the
+`perm` from `csr_pattern` applied to each mode's `nzval`), NOT in the CSC order
+the source `SparseMatrixCSC` stores.
+
+`L_rowptr`/`L_colval`/`L_nzval` come from **`L_exp`, never `L_min`** — `L_min`'s
+pattern is not uniform across modes (kx=0 stores fewer nonzeros because ∂xx
+vanishes there), while `L_exp` holds the same values in `LHS`'s union pattern.
+Same reason `batch_signature` hashes `L_exp`.
+
+### Preconditioner projections
+
+`compress_var` (`pre_right_pinv`), `expand_var` (`pre_right`) and
+`compress_eqn` (`pre_left`) are the batched forms of
+`compress_variable_space!` / `expand_variable_space!` /
+`compress_equation_space!`. `nothing` means the subproblem has no such
+projection, in which case those helpers are a plain copy.
+
+### Factorization state
 
 `factored_key` records the `(dt, a_ii)` a factorization is valid for, alongside
 an explicit `dirty` bit. Both, not one: a bare flag plus a reallocated buffer is
 how a stale factorization silently serves zeros.
+
+`lu` holds the `BatchedDenseLU` over `lhs_dense`, created on first use. It is a
+`Ref{Any}` and not a typed field because `BatchedDenseLU` lives in
+`src/tools/batched_matsolvers.jl`, which the package loads AFTER this file. It
+is kept on the batch, next to the buffer it factors and the key that validates
+it, so a workspace rebuild can never leave a live key pointing at an absent
+factorization.
 """
 struct ModeBatch
     sp_indices::Vector{Int}
     n::Int
     nmodes::Int
 
-    colptr::AbstractVector{Int}
-    rowval::AbstractVector{Int}
-    M_exp_nzval::AbstractMatrix{ComplexF64}
-    L_exp_nzval::AbstractMatrix{ComplexF64}
+    # CSC — `batched_assemble_lhs!` only. Never a matvec pattern.
+    lhs_colptr::AbstractVector{Int}
+    lhs_rowval::AbstractVector{Int}
+    M_exp_nzval::AbstractMatrix{ComplexF64}   # CSC order, matches lhs_colptr
+    L_exp_nzval::AbstractMatrix{ComplexF64}   # CSC order, matches lhs_colptr
 
-    M_min_colptr::AbstractVector{Int}
-    M_min_rowval::AbstractVector{Int}
-    M_min_nzval::AbstractMatrix{ComplexF64}
+    # CSR — `batched_spmv!` only.
+    M_min_rowptr::AbstractVector{Int}
+    M_min_colval::AbstractVector{Int}
+    M_min_nzval::AbstractMatrix{ComplexF64}   # CSR order
+    L_rowptr::AbstractVector{Int}
+    L_colval::AbstractVector{Int}
+    L_nzval::AbstractMatrix{ComplexF64}       # CSR order, from L_exp
+
+    compress_var::Union{Nothing, BatchedSparseOp}
+    expand_var::Union{Nothing, BatchedSparseOp}
+    compress_eqn::Union{Nothing, BatchedSparseOp}
 
     lhs_dense::AbstractArray{ComplexF64, 3}
     bc_rows::AbstractVector{Int}
 
+    lu::Base.RefValue{Any}
     factored_key::Ref{Tuple{Float64, Float64}}
     dirty::Ref{Bool}
 end
@@ -128,6 +197,48 @@ _batch_similar(like::AbstractVector, ::Type{T}, dims...) where {T} =
     similar(like, T, dims...)
 
 """
+    _build_batched_op(sps, indices, select; like) -> BatchedSparseOp or nothing
+
+Pack `select(sp)` for every mode into one CSR pattern plus a per-mode value
+matrix. Returns `nothing` when the first mode has no such matrix (a legitimately
+absent preconditioner); throws when the modes disagree structurally, because
+`bucket_subproblems` promised they would not and a silent mismatch here would
+apply mode `m`'s values through mode 1's pattern.
+
+The single `perm` from `csr_pattern` reorders every mode's `nzval` — legal
+precisely because the shared pattern is what the bucket signature guarantees.
+"""
+function _build_batched_op(sps, indices::Vector{Int}, select; like::AbstractVector)
+    A1 = select(sps[indices[1]])
+    A1 === nothing && return nothing
+
+    rowptr_h, colval_h, perm = csr_pattern(A1)
+    nnz_A = length(perm)
+    nmodes = length(indices)
+
+    host = Matrix{ComplexF64}(undef, nnz_A, nmodes)
+    for (m, i) in enumerate(indices)
+        A = select(sps[i])
+        (A !== nothing && size(A) == size(A1) &&
+         A.colptr == A1.colptr && A.rowval == A1.rowval) || error(
+            "build_mode_batch: subproblem $i (batch column $m) has a different " *
+            "sparsity pattern from the bucket representative; bucket_subproblems " *
+            "must not have grouped them.")
+        @inbounds @views host[:, m] .= A.nzval[perm]
+    end
+
+    int_like = _batch_similar(like, Int, 0)
+    rowptr = _batch_similar(int_like, Int, length(rowptr_h))
+    colval = _batch_similar(int_like, Int, length(colval_h))
+    nzval = _batch_similar(like, ComplexF64, nnz_A, nmodes)
+    copyto!(rowptr, rowptr_h)
+    copyto!(colval, colval_h)
+    copyto!(nzval, host)
+
+    return BatchedSparseOp(rowptr, colval, nzval, size(A1, 1), size(A1, 2))
+end
+
+"""
     build_mode_batch(sps, indices; like) -> ModeBatch
 
 Pack the subproblems at `indices` into one batch. All of them must share a
@@ -139,37 +250,39 @@ function build_mode_batch(sps, indices::Vector{Int}; like::AbstractVector)
     nmodes = length(indices)
 
     nnz_exp = length(sp1.M_exp.nzval)
-    nnz_m = length(sp1.M_min.nzval)
 
     M_exp = _batch_similar(like, ComplexF64, nnz_exp, nmodes)
     L_exp = _batch_similar(like, ComplexF64, nnz_exp, nmodes)
-    M_min = _batch_similar(like, ComplexF64, nnz_m, nmodes)
 
     # Stage on the host, then upload each block once. Column m == mode
-    # sp_indices[m], fixed for the batch's lifetime.
+    # sp_indices[m], fixed for the batch's lifetime. These two stay in CSC
+    # order: their only consumer is `batched_assemble_lhs!`.
     host_M_exp = Matrix{ComplexF64}(undef, nnz_exp, nmodes)
     host_L_exp = Matrix{ComplexF64}(undef, nnz_exp, nmodes)
-    host_M_min = Matrix{ComplexF64}(undef, nnz_m, nmodes)
     for (m, i) in enumerate(indices)
         sp = sps[i]
         @views host_M_exp[:, m] .= sp.M_exp.nzval
         @views host_L_exp[:, m] .= sp.L_exp.nzval
-        @views host_M_min[:, m] .= sp.M_min.nzval
     end
     copyto!(M_exp, host_M_exp)
     copyto!(L_exp, host_L_exp)
-    copyto!(M_min, host_M_min)
 
     int_like = _batch_similar(like, Int, 0)
-    colptr = _batch_similar(int_like, Int, length(sp1.LHS.colptr))
-    rowval = _batch_similar(int_like, Int, length(sp1.LHS.rowval))
-    copyto!(colptr, sp1.LHS.colptr)
-    copyto!(rowval, sp1.LHS.rowval)
+    lhs_colptr = _batch_similar(int_like, Int, length(sp1.LHS.colptr))
+    lhs_rowval = _batch_similar(int_like, Int, length(sp1.LHS.rowval))
+    copyto!(lhs_colptr, sp1.LHS.colptr)
+    copyto!(lhs_rowval, sp1.LHS.rowval)
 
-    m_colptr = _batch_similar(int_like, Int, length(sp1.M_min.colptr))
-    m_rowval = _batch_similar(int_like, Int, length(sp1.M_min.rowval))
-    copyto!(m_colptr, sp1.M_min.colptr)
-    copyto!(m_rowval, sp1.M_min.rowval)
+    # CSR for everything that is multiplied by a vector.
+    M_op = _build_batched_op(sps, indices, sp -> sp.M_min; like)
+    L_op = _build_batched_op(sps, indices, sp -> sp.L_exp; like)
+    (M_op === nothing || L_op === nothing) && error(
+        "build_mode_batch: M_min/L_exp missing on the bucket representative; " *
+        "batch_signature should have rejected this subproblem.")
+
+    compress_var = _build_batched_op(sps, indices, sp -> sp.pre_right_pinv; like)
+    expand_var = _build_batched_op(sps, indices, sp -> sp.pre_right; like)
+    compress_eqn = _build_batched_op(sps, indices, sp -> sp.pre_left; like)
 
     bc_rows = _batch_similar(int_like, Int, length(sp1.bc_rows))
     copyto!(bc_rows, sp1.bc_rows)
@@ -177,10 +290,12 @@ function build_mode_batch(sps, indices::Vector{Int}; like::AbstractVector)
     lhs_dense = _batch_similar(like, ComplexF64, n, n, nmodes)
 
     return ModeBatch(copy(indices), n, nmodes,
-                     colptr, rowval, M_exp, L_exp,
-                     m_colptr, m_rowval, M_min,
+                     lhs_colptr, lhs_rowval, M_exp, L_exp,
+                     M_op.rowptr, M_op.colval, M_op.nzval,
+                     L_op.rowptr, L_op.colval, L_op.nzval,
+                     compress_var, expand_var, compress_eqn,
                      lhs_dense, bc_rows,
-                     Ref((NaN, NaN)), Ref(true))
+                     Ref{Any}(nothing), Ref((NaN, NaN)), Ref(true))
 end
 
 """

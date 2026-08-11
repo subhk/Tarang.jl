@@ -10,9 +10,14 @@ device-generic code path without a GPU.
 using Test
 using Tarang
 
-function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, kwargs...)
+# `device` is threaded through to the Distributor so a GPU runner can drive
+# these same assertions on device. Without it the file is hard-wired to CPU: a
+# cluster runner that included it on a real GPU would run the CPU path,
+# exercise zero device code, and report a pass. Every testset below uses the
+# `CPU()` default; the parameter exists for the runner, not for them.
+function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, device=Tarang.CPU(), kwargs...)
     coords = CartesianCoordinates("x", "z")
-    dist = Distributor(coords; dtype=Float64, device=CPU())
+    dist = Distributor(coords; dtype=Float64, device=device)
     xbasis = RealFourier(coords["x"]; size=nx, bounds=(0.0, 2π), dealias=3 / 2)
     zbasis = ChebyshevT(coords["z"]; size=nz, bounds=(0.0, 1.0))
     domain = Domain(dist, (xbasis, zbasis))
@@ -195,4 +200,222 @@ end
             odd2.LHS = original2
         end
     end
+end
+
+# ── Task 6: the batched stage loop ───────────────────────────────────────────
+
+"""Identical, non-trivial initial condition, so parity is not a comparison of zeros."""
+function _seed_parity_ic!(b)
+    ensure_layout!(b, :g)
+    gd = get_grid_data(b)
+    for idx in CartesianIndices(gd)
+        gd[idx] = sin(0.3 * sum(Tuple(idx))) + 0.1 * prod(Tuple(idx)) % 1
+    end
+    return b
+end
+
+@testset "ModeBatch cannot express a CSC matvec pattern" begin
+    # `batched_spmv!` iterates ROWS. Task 2 shipped `M_min_colptr`/
+    # `M_min_rowval` — the CSC pattern — with no caller; feeding those to it
+    # computes `transpose(M_min)*x`, and `M_min` is not symmetric, so the
+    # result would be wrong rather than merely differently ordered. The fields
+    # are removed, not deprecated, so the mistake is unrepresentable.
+    @test !hasfield(Tarang.ModeBatch, :M_min_colptr)
+    @test !hasfield(Tarang.ModeBatch, :M_min_rowval)
+    @test hasfield(Tarang.ModeBatch, :M_min_rowptr)
+    @test hasfield(Tarang.ModeBatch, :M_min_colval)
+    @test hasfield(Tarang.ModeBatch, :L_rowptr)
+    @test hasfield(Tarang.ModeBatch, :L_colval)
+end
+
+@testset "batched M_min matvec reproduces the per-mode mul!" begin
+    solver, _ = _parity_channel_solver(; batched_modes=true)
+    step!(solver)
+    sps = collect(solver.problem.compiled.subproblems)
+    indices = first(values(Tarang.bucket_subproblems(sps)))
+    batch = Tarang.build_mode_batch(sps, indices; like=ComplexF64[])
+
+    n = batch.n
+    # M_min is asymmetric here, which is what makes this test able to fail:
+    # a CSC/CSR mix-up would silently apply the transpose.
+    @test sps[indices[1]].M_min != permutedims(sps[indices[1]].M_min)
+
+    X = ComplexF64[(0.3 * r - 0.11 * m) + (0.07 * r * m)im
+                   for r in 1:n, m in 1:batch.nmodes]
+    Y = zeros(ComplexF64, n, batch.nmodes)
+    Tarang.batched_spmv!(Y, batch.M_min_rowptr, batch.M_min_colval,
+                         batch.M_min_nzval, X)
+    for (m, i) in enumerate(indices)
+        @test Y[:, m] ≈ sps[i].M_min * X[:, m] atol=1e-12
+    end
+
+    # Same for L, which the stage loop applies through L_exp (uniform pattern)
+    # rather than L_min (kx=0 stores fewer nonzeros).
+    YL = zeros(ComplexF64, n, batch.nmodes)
+    Tarang.batched_spmv!(YL, batch.L_rowptr, batch.L_colval, batch.L_nzval, X)
+    for (m, i) in enumerate(indices)
+        @test YL[:, m] ≈ sps[i].L_min * X[:, m] atol=1e-12
+    end
+end
+
+@testset "gather starts are MEASURED, not extrapolated" begin
+    # The subproblem tuple is not ordered by Fourier mode, so mode m's start
+    # offset is not `starts[1] + (m-1)*stride`. Assert that directly: if a
+    # future edit replaces the measured vector with an arithmetic guess, this
+    # fails instead of silently gathering the wrong modes.
+    solver, _ = _parity_channel_solver(; batched_modes=true)
+    step!(solver)
+    plan = Tarang.active_mode_batches(solver)
+    @test !isempty(plan)
+
+    cached = solver.timestepper_state.timestepper_data[:_sp_rk_mode_batches]
+    ws = cached.workspaces[1]
+    field_plan = ws.state_plan[1]                 # the 2-D Chebyshev field `b`
+    starts = collect(field_plan.starts)
+    @test length(starts) == cached.batches[1].nmodes
+    stride1 = starts[2] - starts[1]
+    @test any(m -> starts[m] != starts[1] + (m - 1) * stride1,
+              3:length(starts))
+    @test allunique(starts)
+end
+
+@testset "batches actually engaged during the run" begin
+    solver, _ = _parity_channel_solver(; batched_modes=true)
+    step!(solver)
+    batches = Tarang.active_mode_batches(solver)
+    @test !isempty(batches)
+    @test sum(b -> b.nmodes, batches) ==
+          count(sp -> sp.M_min !== nothing,
+                solver.problem.compiled.subproblems)
+
+    # ... and the default CPU solver does NOT engage them, which is the other
+    # half of the claim: parity below would pass trivially if it did not.
+    plain, _ = _parity_channel_solver()
+    step!(plain)
+    @test isempty(Tarang.active_mode_batches(plain))
+end
+
+@testset "batched stage loop reproduces the per-mode loop" begin
+    nsteps = 5
+
+    ref_solver, ref_b = _parity_channel_solver(; batched_modes=false)
+    bat_solver, bat_b = _parity_channel_solver(; batched_modes=true)
+
+    _seed_parity_ic!(ref_b)
+    _seed_parity_ic!(bat_b)
+
+    for _ in 1:nsteps
+        step!(ref_solver)
+        step!(bat_solver)
+    end
+
+    @test isempty(Tarang.active_mode_batches(ref_solver))
+    @test !isempty(Tarang.active_mode_batches(bat_solver))
+
+    ensure_layout!(ref_b, :g)
+    ensure_layout!(bat_b, :g)
+    ref_g = Array(get_grid_data(ref_b))
+    bat_g = Array(get_grid_data(bat_b))
+
+    scale = maximum(abs, ref_g)
+    @test scale > 1e-8                       # guard against comparing zeros
+    @test maximum(abs, bat_g .- ref_g) / scale < 1e-12
+end
+
+@testset "assemble and factor calls stay paired across a dt change" begin
+    # `batched_factor!` must never run without an immediately preceding
+    # `batched_assemble_lhs!` over the same buffer: the GPU
+    # `getrf_strided_batched!` overwrites `A` with the LU factors, while the CPU
+    # `lu(view(A,:,:,m))` copies. Factoring twice without re-assembling
+    # therefore works on CPU and factors the factors on GPU — a plausible wrong
+    # answer with no error. Counting is the only way to see the pairing at
+    # runtime; the calls are adjacent in `_ensure_batch_factored!` and nowhere
+    # else in `src/`.
+    Tarang.reset_batch_factor_stats!()
+    solver, b = _parity_channel_solver(; batched_modes=true)
+    _seed_parity_ic!(b)
+
+    for _ in 1:3
+        step!(solver)
+    end
+    after_fixed_dt = Tarang.BATCH_FACTOR_STATS.factors[]
+    @test after_fixed_dt >= 1
+    @test Tarang.BATCH_FACTOR_STATS.assembles[] == after_fixed_dt
+    # ESDIRK: one factorization serves every implicit stage AND every step at
+    # constant dt.
+    @test after_fixed_dt == 1
+
+    for _ in 1:2
+        step!(solver, 2e-3)
+    end
+    @test Tarang.BATCH_FACTOR_STATS.factors[] > after_fixed_dt   # dt change refactored
+    @test Tarang.BATCH_FACTOR_STATS.assembles[] ==
+          Tarang.BATCH_FACTOR_STATS.factors[]
+
+    # And structurally: exactly one call site each, in one function, so the
+    # counters above cannot be equal merely because a second pair exists
+    # somewhere else.
+    ts_dir = joinpath(dirname(@__DIR__), "src", "core", "timesteppers")
+    calls = 0
+    assembles = 0
+    for f in readdir(ts_dir; join=true)
+        endswith(f, ".jl") || continue
+        src = read(f, String)
+        calls += count("batched_factor!(", src)
+        assembles += count("batched_assemble_lhs!(", src)
+    end
+    @test calls == 1
+    @test assembles == 1
+end
+
+@testset "leftover modes step alongside a partial batch" begin
+    # A uniform Fourier problem puts every mode in one bucket, so the leftover
+    # path — the modes a declining bucket leaves on the per-mode loop — is
+    # unreachable from a normal run and would rot untested. Install a plan that
+    # batches all but the last mode and check parity anyway.
+    nsteps = 4
+    ref_solver, ref_b = _parity_channel_solver(; batched_modes=false)
+    bat_solver, bat_b = _parity_channel_solver(; batched_modes=true)
+    _seed_parity_ic!(ref_b)
+    _seed_parity_ic!(bat_b)
+
+    # One step first: `solver.timestepper_state` is `nothing` until then, and
+    # the plan has to be installed on it.
+    step!(ref_solver)
+    step!(bat_solver)
+
+    sps = bat_solver.problem.compiled.subproblems
+    indices = first(values(Tarang.bucket_subproblems(collect(sps))))
+    @test length(indices) >= 3
+
+    state = bat_solver.timestepper_state
+    state_fields = state.timestepper_data[:_sp_state_fields][2]
+    for f in state_fields
+        ensure_layout!(f, :c)
+    end
+    partial = Tarang.build_mode_batch(sps, indices[1:(end - 1)]; like=ComplexF64[])
+    plan = Tarang._build_batched_rk_plan(bat_solver, sps, state_fields;
+                                         batches=[partial])
+    @test plan !== nothing
+    @test plan.leftovers == [indices[end]]
+
+    state.timestepper_data[:_sp_rk_mode_batches] = plan
+    state.timestepper_data[:_sp_rk_mode_batches_key] = sps
+
+    for _ in 1:(nsteps - 1)
+        step!(ref_solver)
+        step!(bat_solver)
+    end
+
+    engaged = Tarang.active_mode_batches(bat_solver)
+    @test length(engaged) == 1
+    @test engaged[1].nmodes == length(indices) - 1
+
+    ensure_layout!(ref_b, :g)
+    ensure_layout!(bat_b, :g)
+    ref_g = Array(get_grid_data(ref_b))
+    bat_g = Array(get_grid_data(bat_b))
+    scale = maximum(abs, ref_g)
+    @test scale > 1e-8
+    @test maximum(abs, bat_g .- ref_g) / scale < 1e-12
 end

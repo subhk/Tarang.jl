@@ -13,7 +13,7 @@ using SparseArrays
 
 function _channel_solver(; nx=16, nz=8, dt=1e-3)
     coords = CartesianCoordinates("x", "z")
-    dist = Distributor(coords; dtype=Float64, device=CPU())
+    dist = Distributor(coords; dtype=Float64, device=Tarang.CPU())
     xbasis = RealFourier(coords["x"]; size=nx, bounds=(0.0, 2π), dealias=3 / 2)
     zbasis = ChebyshevT(coords["z"]; size=nz, bounds=(0.0, 1.0))
     domain = Domain(dist, (xbasis, zbasis))
@@ -124,18 +124,24 @@ end
     @test batch.sp_indices == indices
 
     @testset "pattern stored once, not per mode" begin
-        @test length(batch.colptr) == n + 1
-        @test batch.colptr == sp1.LHS.colptr
-        @test batch.rowval == sp1.LHS.rowval
+        # `lhs_colptr`/`lhs_rowval` are CSC and named for their only consumer,
+        # `batched_assemble_lhs!`. Task 6 removed the CSC `M_min_colptr`/
+        # `M_min_rowval` outright — see the CSR testset below.
+        @test length(batch.lhs_colptr) == n + 1
+        @test batch.lhs_colptr == sp1.LHS.colptr
+        @test batch.lhs_rowval == sp1.LHS.rowval
     end
 
     @testset "values stored per mode, column-major by mode" begin
         @test size(batch.M_exp_nzval) == (length(sp1.M_exp.nzval), length(indices))
         @test size(batch.L_exp_nzval) == (length(sp1.L_exp.nzval), length(indices))
+        # M_exp/L_exp feed the CSC assembler, so they keep CSC order; M_min
+        # feeds `batched_spmv!`, so its values are permuted into CSR order.
+        m_perm = Tarang.csr_pattern(sp1.M_min)[3]
         for (m, i) in enumerate(indices)
             @test batch.M_exp_nzval[:, m] == sps[i].M_exp.nzval
             @test batch.L_exp_nzval[:, m] == sps[i].L_exp.nzval
-            @test batch.M_min_nzval[:, m] == sps[i].M_min.nzval
+            @test batch.M_min_nzval[:, m] == sps[i].M_min.nzval[m_perm]
         end
     end
 

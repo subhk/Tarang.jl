@@ -418,6 +418,14 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         ensure_layout!(f, :c)
     end
 
+    # ── Batched per-mode plan (opt-in / GPU default) ──────────────────────
+    # `nothing` unless every gate in `should_batch_modes` passed AND a working
+    # set could be built, so the per-mode path below is untouched by default.
+    # Built here, before the dt-change handler, because that handler must also
+    # invalidate the batch factorizations. Requires the `:c` layout above (the
+    # gather plan measures each mode's strided run in the coefficient array).
+    batch_plan = _sp_rk_batch_plan!(state, solver, subproblems, state_fields)
+
     # ── LHS cache invalidation (symbolic-reuse aware) ─────────────────────
     # When `dt` changes, the LHS matrix `(M + dt*a_ii*L)` has new numeric
     # values but the same sparsity pattern (assuming the expanded-pattern
@@ -437,7 +445,22 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
                 sp.runtime.lhs_dirty[a_ii_key] = true
             end
         end
+        # The batched path's dense LHS is `M_exp + dt*a_ii*L_exp` too, so a dt
+        # change invalidates it identically. Mark it dirty here rather than
+        # relying on the `(dt, a_ii)` key alone: the key and the flag together
+        # are what make a stale factorization impossible to serve.
+        if batch_plan !== nothing
+            for batch in batch_plan.batches
+                batch.dirty[] = true
+            end
+        end
         state.timestepper_data[:_sp_rk_dt] = dt
+    end
+
+    # Batched buckets exist: the whole step runs there, leftovers included.
+    if batch_plan !== nothing
+        return step_subproblem_rk_batched!(solver, state, dt, t, batch_plan,
+                                           subproblems, state_fields, dist, ts)
     end
 
     # ── Pre-stage: compute M*X_n per subproblem ──────────────────────────
