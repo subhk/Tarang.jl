@@ -170,3 +170,37 @@ function batched_assemble_lhs!(dense::AbstractArray{ComplexF64, 3},
     KernelAbstractions.synchronize(backend)
     return dense
 end
+
+# One thread per (column, mode). Each output element is written exactly once
+# and never read back — including the null columns, which must be WRITTEN to
+# zero rather than skipped, because the destination buffer is reused across
+# stages and steps.
+@kernel function _batched_mass_apply_kernel!(X, @Const(B), @Const(src),
+                                             @Const(scale))
+    j, m = @index(Global, NTuple)
+    @inbounds begin
+        s = src[j]
+        X[j, m] = s == 0 ? zero(ComplexF64) : B[s, m] / scale[j]
+    end
+end
+
+"""
+    batched_mass_apply!(X, B, src, scale) -> X
+
+Apply the pseudo-inverse of a scaled partial-permutation mass matrix to every
+mode at once: `X[j, m] = B[src[j], m] / scale[j]`, and zero where `src[j] == 0`.
+
+This is the minimum-norm least-squares solution of `M x = b` when `M` is a
+scaled partial permutation — see `mass_selection_plan`, which verifies that
+structure and produces `src`/`scale`. Callers must not reach here without a
+plan from it.
+"""
+function batched_mass_apply!(X::AbstractMatrix{ComplexF64},
+                             B::AbstractMatrix{ComplexF64},
+                             src::AbstractVector{Int},
+                             scale::AbstractVector{ComplexF64})
+    backend = get_backend(X)
+    _batched_mass_apply_kernel!(backend)(X, B, src, scale; ndrange=size(X))
+    KernelAbstractions.synchronize(backend)
+    return X
+end
