@@ -92,6 +92,12 @@ mutable struct SolverBaseData
     entry_cutoff::Float64
     matsolver::Any         # Solver choice (Symbol, Tuple, or concrete solver)
     evaluator::Union{Nothing, AbstractEvaluator}
+    # Batched per-Fourier-mode solve. `nothing` means automatic: batch on GPU,
+    # do not batch on CPU. `true` forces it on wherever the structural
+    # conditions allow (this is what the test suite uses to exercise the
+    # device-generic path without a GPU); `false` forces it off everywhere.
+    batched_modes::Union{Nothing, Bool}
+    batched_modes_max_bytes::Int
 end
 
 function _normalize_matsolver(choice)
@@ -118,7 +124,10 @@ function _normalize_matsolver(choice)
     return choice
 end
 
-function SolverBaseData(problem::Problem; matrix_coupling=nothing, entry_cutoff::Real=1e-12, matsolver=:sparse)
+function SolverBaseData(problem::Problem; matrix_coupling=nothing,
+                        entry_cutoff::Real=1e-12, matsolver=:sparse,
+                        batched_modes::Union{Nothing, Bool}=nothing,
+                        batched_modes_max_bytes::Int=1 << 30)
     dim = (problem.domain !== nothing && hasproperty(problem.domain, :dist)) ? problem.domain.dist.dim : 0
     coupling = if matrix_coupling === nothing
         fill(true, dim)
@@ -132,10 +141,12 @@ function SolverBaseData(problem::Problem; matrix_coupling=nothing, entry_cutoff:
     if solver_choice isa Tuple
         key, rest... = solver_choice
         solver_type = MatSolvers.get_solver(key)
-        SolverBaseData(problem, coupling, Float64(entry_cutoff), (solver_type, rest...), nothing)
+        SolverBaseData(problem, coupling, Float64(entry_cutoff), (solver_type, rest...), nothing,
+                      batched_modes, batched_modes_max_bytes)
     else
         solver_type = MatSolvers.get_solver(solver_choice)
-        SolverBaseData(problem, coupling, Float64(entry_cutoff), solver_type, nothing)
+        SolverBaseData(problem, coupling, Float64(entry_cutoff), solver_type, nothing,
+                      batched_modes, batched_modes_max_bytes)
     end
 end
 
@@ -458,7 +469,9 @@ function _build_initial_value_solver(problem::IVP, timestepper;
                                      dt::Real=1e-3,
                                      device::String="cpu",
                                      matsolver::Union{String,Symbol,Type,Tuple}=:auto,
-                                     rhs_fallback::Union{String,Symbol}=:auto)
+                                     rhs_fallback::Union{String,Symbol}=:auto,
+                                     batched_modes::Union{Nothing, Bool}=nothing,
+                                     batched_modes_max_bytes::Int=1 << 30)
     reset_compiled_problem!(problem)
     setup_domain!(problem)
 
@@ -470,7 +483,8 @@ function _build_initial_value_solver(problem::IVP, timestepper;
     state = collect_state_fields(problem.variables)
     rhs_fallback_policy = _resolve_rhs_fallback_policy(rhs_fallback, state)
     selected_matsolver = _select_ivp_matsolver(matsolver, state)
-    base = SolverBaseData(problem; matsolver=selected_matsolver)
+    base = SolverBaseData(problem; matsolver=selected_matsolver,
+                          batched_modes, batched_modes_max_bytes)
 
     perf_stats = SolverPerformanceStats()
 
@@ -886,7 +900,9 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
                                       matsolver::Union{String,Symbol,Type}=:auto,
                                       solver_type::Union{Nothing, String, Symbol}=nothing,
                                       tolerance::Real=1e-10,
-                                      max_iterations::Int=100)
+                                      max_iterations::Int=100,
+                                      batched_modes::Union{Nothing, Bool}=nothing,
+                                      batched_modes_max_bytes::Int=1 << 30)
     reset_compiled_problem!(problem)
     setup_domain!(problem)
     # Merge add_bc! boundary conditions into the equation system (tau rows),
@@ -912,7 +928,8 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     else
         solver_choice
     end
-    base = SolverBaseData(problem; matsolver=selected_matsolver)
+    base = SolverBaseData(problem; matsolver=selected_matsolver,
+                          batched_modes, batched_modes_max_bytes)
 
     L, M, F = build_matrices(problem)
     apply_entry_cutoff!(L, base.entry_cutoff)
@@ -1040,7 +1057,9 @@ function _build_eigenvalue_solver(problem::EVP;
                                   nev::Int=10,
                                   which::Union{String,Symbol}=:LM,
                                   target::Union{Nothing, ComplexF64}=nothing,
-                                  matsolver::Union{String,Symbol,Type}=:sparse)
+                                  matsolver::Union{String,Symbol,Type}=:sparse,
+                                  batched_modes::Union{Nothing, Bool}=nothing,
+                                  batched_modes_max_bytes::Int=1 << 30)
     reset_compiled_problem!(problem)
     setup_domain!(problem)
     # Merge add_bc! boundary conditions into the equation set before validating
@@ -1049,7 +1068,8 @@ function _build_eigenvalue_solver(problem::EVP;
     _merge_boundary_conditions!(problem)
     validate_problem(problem)
 
-    base = SolverBaseData(problem; matsolver=matsolver)
+    base = SolverBaseData(problem; matsolver=matsolver,
+                          batched_modes, batched_modes_max_bytes)
     L, M, _ = build_matrices(problem)
     apply_entry_cutoff!(L, base.entry_cutoff)
     # For EVP, applying entry_cutoff to M can zero out intentionally small

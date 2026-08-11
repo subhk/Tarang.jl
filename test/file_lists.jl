@@ -154,6 +154,7 @@ const TEST_FILES = [
     "test_mode_batch_signature.jl",   # batchability must be OBSERVED from built matrices, never inferred from nz/nvars — a gauge-constrained kx=0 mode batched with the rest solves the wrong system silently
     "test_mode_batch_kernels_cpu.jl",  # the real KA kernel objects on the CPU backend — the KA CPU miscompile of same-slot RMW is invisible to a reimplement-and-compare test
     "test_batched_dense_lu.jl",        # getrf_batched reports singularity in an info ARRAY and returns normally — an unchecked singular mode returns buffer contents that read as a plausible solution
+    "test_mode_batch_parity.jl",       # batching must be OFF by default on CPU and never construct under MPI, or every existing run silently changes numerics
     "test_pretty_printing.jl",
     "test_progress.jl",
     "test_convenience_api.jl",

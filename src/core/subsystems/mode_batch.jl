@@ -207,3 +207,63 @@ function csr_pattern(A::SparseMatrixCSC)
     tagged_t = sparse(transpose(tagged))
     return (copy(tagged_t.colptr), copy(tagged_t.rowval), copy(tagged_t.nzval))
 end
+
+"""
+    should_batch_modes(base, sps, indices; is_gpu, nprocs) -> Bool
+
+All four conditions from the design must hold:
+
+1. `nprocs == 1` — distributed batching is out of scope, and the per-rank mode
+   partitioning plus solve-layout bracket would need MPI verification.
+2. `base.batched_modes` resolves true for this device — `nothing` means GPU yes,
+   CPU no, so no existing CPU run changes behavior.
+3. the bucket holds at least two modes — one mode has nothing to batch.
+4. the dense workspace fits under `base.batched_modes_max_bytes`.
+
+Condition 4 emits `@info maxlog=1` when it declines, because a silent
+performance cliff at large `nz` is exactly what goes unnoticed for months.
+Condition 3 declines silently: warning about it would be noise on every small
+problem.
+"""
+function should_batch_modes(base, sps, indices::Vector{Int};
+                            is_gpu::Bool, nprocs::Int)
+    nprocs == 1 || return false
+
+    setting = base.batched_modes
+    enabled = setting === nothing ? is_gpu : setting
+    enabled || return false
+
+    length(indices) >= 2 || return false
+
+    sp1 = sps[indices[1]]
+    sp1.LHS === nothing && return false
+    n = size(sp1.LHS, 1)
+    bytes = mode_batch_bytes(n, length(indices))
+    if bytes > base.batched_modes_max_bytes
+        @info("Batched mode solve declined: dense workspace needs $bytes bytes " *
+              "for $(length(indices)) modes of order $n, over the " *
+              "$(base.batched_modes_max_bytes)-byte cap. Falling back to the " *
+              "per-mode loop. Raise `batched_modes_max_bytes` to enable.",
+              maxlog=1)
+        return false
+    end
+    return true
+end
+
+"""
+    build_mode_batches!(base, sps; is_gpu, nprocs, like) -> Vector{ModeBatch}
+
+Bucket `sps` and build a `ModeBatch` for every bucket that passes
+`should_batch_modes`. Buckets that decline are simply absent from the result,
+and their subproblems stay on the per-mode path.
+"""
+function build_mode_batches!(base, sps; is_gpu::Bool, nprocs::Int,
+                             like::AbstractVector)
+    batches = ModeBatch[]
+    for indices in values(bucket_subproblems(sps))
+        should_batch_modes(base, sps, indices; is_gpu, nprocs) || continue
+        push!(batches, build_mode_batch(sps, indices; like))
+    end
+    sort!(batches; by=b -> b.sp_indices[1])
+    return batches
+end
