@@ -420,31 +420,56 @@ end
 
     # And structurally: exactly one call site each, so the counters above
     # cannot be equal merely because a second pair exists somewhere else.
-    # Scans ALL of src/ and ext/, not just src/core/timesteppers/ — a call
-    # added under src/core/subsystems/ or src/tools/ would otherwise be
-    # invisible to this test. The two definition files are excluded by NAME
-    # (their own docstrings echo the signature); the invariant asserted is that
-    # no other file in the package mentions either call.
+    #
+    # Scans EVERY .jl file under src/ and ext/ with NO file excluded. The first
+    # version of this test excluded the definition site by bare basename
+    # (`f != "batched_matsolvers.jl"`), which silently skipped
+    # `ext/cuda/batched_matsolvers.jl` as well — the GPU specialization, and the
+    # single most likely home for a GPU-only violation of the assemble-then-
+    # factor lifecycle, with no GPU CI to catch it any other way. A guard with a
+    # blind spot had reproduced the blind spot one level down.
+    #
+    # Instead of excluding files, `_call_lines` excludes by what a line IS: a
+    # `function ` definition, or any line inside a `"""` docstring block (both
+    # definition files echo their own signature in a docstring). That needs no
+    # maintenance when files move and leaves nothing unscanned.
+    function _call_lines(path::AbstractString, needle::AbstractString)
+        n = 0
+        in_docstring = false
+        for line in eachline(path)
+            # An ODD number of `"""` on a line flips the docstring state; an
+            # even number (a one-line docstring) leaves it where it was.
+            if isodd(count("\"\"\"", line))
+                in_docstring = !in_docstring
+                continue
+            end
+            in_docstring && continue
+            occursin(needle, line) || continue
+            startswith(lstrip(line), "function ") && continue   # the definition
+            n += 1
+        end
+        return n
+    end
+
+    repo = dirname(@__DIR__)
     factor_sites = Tuple{String, Int}[]
     assemble_sites = Tuple{String, Int}[]
-    for root in (joinpath(dirname(@__DIR__), "src"),
-                 joinpath(dirname(@__DIR__), "ext"))
+    for root in (joinpath(repo, "src"), joinpath(repo, "ext"))
         isdir(root) || continue
         for (dir, _, files) in walkdir(root), f in files
             endswith(f, ".jl") || continue
-            src = read(joinpath(dir, f), String)
-            if f != "batched_matsolvers.jl"          # defines batched_factor!
-                n = count("batched_factor!(", src)
-                n > 0 && push!(factor_sites, (f, n))
-            end
-            if f != "mode_batch_kernels.jl"          # defines batched_assemble_lhs!
-                n = count("batched_assemble_lhs!(", src)
-                n > 0 && push!(assemble_sites, (f, n))
-            end
+            path = joinpath(dir, f)
+            rel = relpath(path, repo)
+            nf = _call_lines(path, "batched_factor!(")
+            nf > 0 && push!(factor_sites, (rel, nf))
+            na = _call_lines(path, "batched_assemble_lhs!(")
+            na > 0 && push!(assemble_sites, (rel, na))
         end
     end
-    @test sort(factor_sites) == [("step_subproblem_rk_batched.jl", 1)]
-    @test sort(assemble_sites) == [("step_subproblem_rk_batched.jl", 1)]
+    target = joinpath("src", "core", "timesteppers",
+                      "step_subproblem_rk_batched.jl")
+    @test sort(factor_sites) == [(target, 1)]
+    @test sort(assemble_sites) == [(target, 1)]
 end
 
 @testset "the dirty bit alone forces a refactor" begin
