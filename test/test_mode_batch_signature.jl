@@ -177,8 +177,15 @@ end
                    op_bytes(sp1.pre_right_pinv) + op_bytes(sp1.pre_right) +
                    op_bytes(sp1.pre_left) +
                    length(sp1.bc_rows) * int_b +                # bc_rows
-                   nm * int_b                                   # sp_indices
+                   nm * int_b +                                 # sp_indices
+                   # The mass plan: one `src` (Int) and one `scale`
+                   # (ComplexF64) entry per column, shared by the batch rather
+                   # than stored per mode. `M_min` on this problem is a partial
+                   # permutation, so the plan exists; a problem where it did not
+                   # would add nothing here.
+                   size(sp1.M_min, 2) * (int_b + cplx_b)        # mass_src/scale
 
+        @test Tarang.mass_selection_plan(sp1.M_min) !== nothing
         @test Tarang.mode_batch_bytes(sp1, nm) == expected
         # Strictly more than the dense buffer the old counter returned, so a
         # regression to `n^2 * nmodes * 16` fails instead of merely shrinking.

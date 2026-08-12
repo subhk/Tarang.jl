@@ -9,6 +9,7 @@ device-generic code path without a GPU.
 
 using Test
 using Tarang
+using SparseArrays
 
 # `device` is threaded through to the Distributor so a GPU runner can drive
 # these same assertions on device. Without it the file is hard-wired to CPU: a
@@ -669,4 +670,108 @@ end
     scale = maximum(abs, ref_g)
     @test scale > 1e-8
     @test maximum(abs, bat_g .- ref_g) / scale < 1e-12
+end
+
+# ── Task 3 (batched mass solve): the fast path ───────────────────────────────
+
+@testset "batched mass path engages and matches the per-mode trajectory" begin
+    # Inhomogeneous BC so the ALG_F/BC path is live — a homogeneous problem
+    # makes it numerically inert and this comparison vacuous.
+    ref_solver, ref_b = _parity_channel_solver(; batched_modes=false, bc_low="1")
+    bat_solver, bat_b = _parity_channel_solver(; batched_modes=true,  bc_low="1")
+
+    _seed_parity_ic!(ref_b); _seed_parity_ic!(bat_b)
+    for _ in 1:5
+        step!(ref_solver); step!(bat_solver)
+    end
+
+    batches = Tarang.active_mode_batches(bat_solver)
+    @test !isempty(batches)
+    @test all(b -> b.mass_src !== nothing, batches)   # the fast path is ON
+
+    ensure_layout!(ref_b, :g); ensure_layout!(bat_b, :g)
+    r = Array(get_grid_data(ref_b)); v = Array(get_grid_data(bat_b))
+    scale = maximum(abs, r)
+    @test scale > 1e-8
+    @test maximum(abs, v .- r) / scale < 1e-12
+end
+
+@testset "a non-selection mass matrix falls back to the per-mode solve" begin
+    solver, _ = _parity_channel_solver(; batched_modes=true, bc_low="1")
+    step!(solver)
+    batch = first(Tarang.active_mode_batches(solver))
+    @test batch.mass_src !== nothing          # baseline: it engaged
+
+    # Perturb M_min so it is no longer a partial permutation, rebuild, and
+    # confirm the plan declines rather than silently applying the transpose.
+    sps = collect(solver.problem.compiled.subproblems)
+    live = [sp for sp in sps if sp.M_min !== nothing]
+    M = live[1].M_min
+    bad = copy(M)
+    j = findfirst(c -> length(nzrange(M, c)) == 1, 1:size(M, 2))
+    i = setdiff(1:size(M, 1), rowvals(M))[1]
+    bad[i, j] = 1.0 + 0.0im                    # two nonzeros in column j
+    @test Tarang.mass_selection_plan(bad) === nothing
+end
+
+@testset "one disagreeing mode declines the plan for the whole batch" begin
+    # The plan is measured on the bucket REPRESENTATIVE, and `M_min` was
+    # measured identical across every mode of this problem — but that is a
+    # measurement, not a guarantee. `build_mode_batch` therefore re-derives the
+    # plan for every other mode and stores `nothing` if any disagrees. Without
+    # that loop this testset passes only by luck of the measurement, so it
+    # perturbs a NON-representative mode's value: the sparsity pattern is
+    # untouched, so `batch_signature` still groups them and `build_mode_batch`
+    # is the only thing that can catch it.
+    solver, _ = _parity_channel_solver(; batched_modes=true, bc_low="1")
+    step!(solver)
+    sps = collect(solver.problem.compiled.subproblems)
+    indices = first(values(Tarang.bucket_subproblems(sps)))
+    @test length(indices) >= 2
+
+    build() = Tarang.build_mode_batch(sps, indices; like=ComplexF64[])
+    @test build().mass_src !== nothing
+
+    M1 = sps[indices[1]].M_min
+    M2 = sps[indices[2]].M_min
+    @test M1.nzval !== M2.nzval        # or the perturbation below hits mode 1 too
+
+    saved = copy(M2.nzval)
+    M2.nzval[1] *= 2                   # mode 2's scale now disagrees with mode 1's
+    try
+        b = build()
+        @test b.mass_src === nothing
+        @test b.mass_scale === nothing
+    finally
+        copyto!(M2.nzval, saved)
+    end
+    @test build().mass_src !== nothing  # and the perturbation was undone
+end
+
+@testset "the fast mass path leaves mass_ok honest" begin
+    # `mass_ok` starts life all-true, so a fast path that simply never writes it
+    # reproduces the trajectory and every parity assertion above still passes.
+    # Poison it first: the fast path cannot fail per-mode, so it must
+    # RE-ESTABLISH the mask rather than inherit whatever was there. A stale
+    # `false` sends the final update down `_scatter_solved_modes!`, which skips
+    # exactly the modes marked false — a silently frozen subset of the state.
+    solver, b = _parity_channel_solver(; batched_modes=true, bc_low="1")
+    _seed_parity_ic!(b)
+    step!(solver)
+
+    plan = solver.timestepper_state.timestepper_data[:_sp_rk_mode_batches]
+    @test plan !== nothing
+    @test plan.batches[1].mass_src !== nothing
+    ws = plan.workspaces[1]
+
+    # `batched_mass_apply!` is permutation-like — `X[j]` reads `B[src[j]]` — so
+    # in-place execution would read slots another workitem has already written.
+    # The call site passes `ws.X` and `ws.RHS`; pin that they are two buffers.
+    @test ws.X !== ws.RHS
+
+    fill!(ws.mass_ok, false)
+    step!(solver)
+    @test all(ws.mass_ok)
+    ensure_layout!(b, :g)
+    @test all(isfinite, Array(get_grid_data(b)))
 end

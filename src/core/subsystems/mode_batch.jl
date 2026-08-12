@@ -143,6 +143,17 @@ Same reason `batch_signature` hashes `L_exp`.
 `compress_equation_space!`. `nothing` means the subproblem has no such
 projection, in which case those helpers are a plain copy.
 
+### The mass solve
+
+`mass_src`/`mass_scale` are `mass_selection_plan`'s verdict on `M_min`, or
+`nothing` when it declined. Non-`nothing` means every mode's `M_min` is the SAME
+scaled partial permutation, so the mass solve is one `batched_mass_apply!`
+launch instead of `nmodes` sparse least-squares solves. The plan is re-derived
+for every mode and stored only if all of them agree — `M_min` was measured
+identical across modes on the channel problem, but a measurement is not a
+guarantee, and a plan taken from mode 1 and applied to a mode that disagrees is
+a plausible wrong answer with no error.
+
 ### Factorization state
 
 `factored_key` records the `(dt, a_ii)` a factorization is valid for, alongside
@@ -181,6 +192,11 @@ struct ModeBatch
 
     lhs_dense::AbstractArray{ComplexF64, 3}
     bc_rows::AbstractVector{Int}
+
+    # `mass_selection_plan(M_min)`, verified against every mode, or `nothing`
+    # for both when any mode declines. Never one without the other.
+    mass_src::Union{Nothing, AbstractVector{Int}}
+    mass_scale::Union{Nothing, AbstractVector{ComplexF64}}
 
     lu::Base.RefValue{Any}
     factored_key::Ref{Tuple{Float64, Float64}}
@@ -260,6 +276,19 @@ function mode_batch_bytes(sp::Subproblem, nmodes::Int)
     bytes += _batched_op_bytes(sp.pre_left, nmodes)        # compress_eqn
     bytes += length(sp.bc_rows) * sizeof(Int)              # bc_rows
     bytes += nmodes * sizeof(Int)                          # sp_indices
+    # The mass plan, when `M_min` admits one: `src` (Int) and `scale`
+    # (ComplexF64), one entry per column, not scaled by `nmodes` — the plan is
+    # shared by the whole batch. Derived from the representative only, so this
+    # OVER-counts by `n*(8+16)` bytes on a batch that `build_mode_batch` then
+    # declines because some other mode disagrees. Over-counting is the safe
+    # direction for a cap, and 24n bytes is nothing beside `n^2*nmodes*16`.
+    if sp.M_min !== nothing
+        plan = mass_selection_plan(sp.M_min)
+        if plan !== nothing
+            bytes += length(plan[1]) * sizeof(Int)          # mass_src
+            bytes += length(plan[2]) * sizeof(ComplexF64)   # mass_scale
+        end
+    end
     return bytes
 end
 
@@ -377,13 +406,62 @@ function build_mode_batch(sps, indices::Vector{Int}; like::AbstractVector)
 
     lhs_dense = _batch_similar(like, ComplexF64, n, n, nmodes)
 
+    mass_plan = _batch_mass_plan(sps, indices, n)
+    mass_src = nothing
+    mass_scale = nothing
+    if mass_plan !== nothing
+        src_h, scale_h = mass_plan
+        mass_src = _batch_similar(int_like, Int, length(src_h))
+        mass_scale = _batch_similar(like, ComplexF64, length(scale_h))
+        copyto!(mass_src, src_h)
+        copyto!(mass_scale, scale_h)
+    end
+
     return ModeBatch(copy(indices), n, nmodes,
                      lhs_colptr, lhs_rowval, M_exp, L_exp,
                      M_op.rowptr, M_op.colval, M_op.nzval,
                      L_op.rowptr, L_op.colval, L_op.nzval,
                      compress_var, expand_var, compress_eqn,
-                     lhs_dense, bc_rows,
+                     lhs_dense, bc_rows, mass_src, mass_scale,
                      Ref{Any}(nothing), Ref((NaN, NaN)), Ref(true))
+end
+
+"""
+    _batch_mass_plan(sps, indices, n) -> Union{Nothing, Tuple{Vector{Int}, Vector{ComplexF64}}}
+
+The `(src, scale)` shared by EVERY mode's `M_min`, or `nothing` if any one of
+them declines or disagrees.
+
+Checking only the representative would be enough on every problem measured so
+far — `M_min` is identical across modes on the channel problem, values included
+— but the bucket signature hashes patterns and not values, so a batch whose
+modes carry different mass scalings is representable and would be solved with
+mode 1's numbers. That is a plausible wrong answer with no error, which is the
+failure this whole path is built to avoid, so agreement is verified rather than
+inherited.
+
+`length(src) == n` is required as well: `batched_mass_apply!` runs over
+`ndrange=size(X) == (n, nmodes)` with `@inbounds`, so a plan shorter than `n`
+would index out of bounds rather than fail. `_batch_workspace` separately
+requires `size(M_min) == (n, n)` for every mode, so this only fires on a batch
+that is about to be rejected anyway.
+"""
+function _batch_mass_plan(sps, indices::Vector{Int}, n::Int)
+    M1 = sps[indices[1]].M_min
+    M1 === nothing && return nothing
+    plan = mass_selection_plan(M1)
+    plan === nothing && return nothing
+    src, scale = plan
+    length(src) == n || return nothing
+
+    for k in 2:length(indices)
+        M = sps[indices[k]].M_min
+        M === nothing && return nothing
+        other = mass_selection_plan(M)
+        other === nothing && return nothing
+        (other[1] == src && other[2] == scale) || return nothing
+    end
+    return (src, scale)
 end
 
 """

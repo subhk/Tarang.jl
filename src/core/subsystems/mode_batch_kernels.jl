@@ -194,6 +194,9 @@ This is the minimum-norm least-squares solution of `M x = b` when `M` is a
 scaled partial permutation — see `mass_selection_plan`, which verifies that
 structure and produces `src`/`scale`. Callers must not reach here without a
 plan from it.
+
+`X` and `B` must be distinct buffers: this reads permuted rows of `B`, so in
+place it would read slots other workitems have already overwritten.
 """
 function batched_mass_apply!(X::AbstractMatrix{ComplexF64},
                              B::AbstractMatrix{ComplexF64},

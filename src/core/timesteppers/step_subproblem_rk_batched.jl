@@ -15,18 +15,21 @@
 #    bit-for-bit. This is why the parity test compares to a relative 1e-12 and
 #    not to `==`.
 #
-# 2. The MASS solve (`a_ii == 0` stages and the final update) stays PER MODE.
-#    This is deliberate and is not a shortcut: in a tau/BC formulation `M_min`
-#    has an all-zero row for every algebraic equation, so it is structurally
+# 2. The MASS solve (`a_ii == 0` stages and the final update) has TWO paths,
+#    and the per-mode one is not dead code. In a tau/BC formulation `M_min` has
+#    an all-zero row for every algebraic equation, so it is structurally
 #    SINGULAR — measured rank 8 of 10 on the channel problem used by
 #    `test_mode_batch_parity.jl`. `_get_or_compute_mass_lu!` therefore falls
 #    back to SPQR and the per-mode result is a rank-deficient LEAST-SQUARES
-#    solution. `batched_factor!` raises on a singular mode by design, and a
-#    dense batched LU cannot reproduce a least-squares solve at all, so a
-#    batched mass path would either error on every realistic problem or return
-#    a different answer. `_batch_mass_solve!` below routes those two solves
-#    through the same `_get_or_compute_mass_lu!` + `_solve_cached_system!` the
-#    per-mode loop uses, one column at a time.
+#    solution, which a dense batched LU cannot reproduce and `batched_factor!`
+#    would raise on. But the measured `M_min` is also a scaled PARTIAL
+#    PERMUTATION, and for that structure the minimum-norm least-squares solution
+#    is a permuted scaled copy of the RHS — one kernel, no solver. When
+#    `mass_selection_plan` verifies that structure for every mode in the batch,
+#    `_batch_mass_solve!` takes `batched_mass_apply!`; when it does not, the
+#    same function routes both solves through the same
+#    `_get_or_compute_mass_lu!` + `_solve_cached_system!` the per-mode loop
+#    uses, one column at a time, exactly as before.
 #
 # 3. `L*X_i` is formed from a RE-GATHER of the state after the stage scatter,
 #    exactly as the per-mode loop does, not from the solve output still sitting
@@ -608,20 +611,51 @@ end
 """
     _batch_mass_solve!(X, RHS, batch, sps; skip_missing) -> Vector{Bool}
 
-Solve `M_min * X[:, m] = RHS[:, m]` per mode through the SAME cached solver the
-per-mode loop uses. See note 2 in this file's header for why this is not
-batched. Returns the per-mode success mask; `skip_missing=false` reproduces the
-`a_ii == 0` stage's behaviour of falling back to `x = rhs` when no mass solver
-could be built, `true` reproduces the final update's `continue`.
+Solve `M_min * X[:, m] = RHS[:, m]` for every mode, batched when `M_min` is a
+scaled partial permutation and per-mode otherwise.
 
-Columns are staged through the subproblem's own cached vectors rather than
-passed as `view(X, :, m)`: the GPU sparse solvers take device vectors they own,
-and a strided view into a batch matrix is not that.
+**Fast path.** `batch.mass_src !== nothing` means `mass_selection_plan` verified
+at build time, for EVERY mode, that `M_min` selects and scales — so the
+minimum-norm least-squares solution is `X[j, m] = RHS[src[j], m] / scale[j]`
+with zeros on the null columns, for any RHS. One kernel replaces `nmodes` sparse
+solves. This is what makes the mass solve mode-count-independent; see
+`mass_selection_plan` for why the shortcut is legal only for that structure.
+
+**Slow path.** Otherwise, one mode at a time through the SAME cached solver the
+per-mode loop uses (see note 2 in this file's header). Columns are staged
+through the subproblem's own cached vectors rather than passed as
+`view(X, :, m)`: the GPU sparse solvers take device vectors they own, and a
+strided view into a batch matrix is not that.
+
+Returns the per-mode success mask. `skip_missing=false` reproduces the
+`a_ii == 0` stage's behaviour of falling back to `x = rhs` when no mass solver
+could be built, `true` reproduces the final update's `continue`. The fast path
+sets the whole mask true and ignores `skip_missing`: it cannot fail per-mode,
+because its validity was established for every mode before the batch existed.
+`fill!` and not "leave it alone" — callers read the mask (`all(ws.mass_ok)`, and
+`ws.mass_ok[m] || continue` in `_scatter_solved_modes!`), so inheriting a stale
+`false` would silently skip that mode's scatter and freeze part of the state.
 """
 function _batch_mass_solve!(X::AbstractMatrix{ComplexF64},
                             RHS::AbstractMatrix{ComplexF64},
                             batch::ModeBatch, sps, ws::BatchWorkspace;
                             skip_missing::Bool)
+    src = batch.mass_src
+    scale = batch.mass_scale
+    if src !== nothing && scale !== nothing
+        # `batched_mass_apply!` is permutation-like: `X[j]` reads `B[src[j]]`,
+        # a slot another workitem may already have written. Distinct buffers are
+        # the caller's contract, so check rather than assume — `ws.X` and
+        # `ws.RHS` are separate allocations today and this is what keeps them so.
+        X === RHS && error(
+            "_batch_mass_solve!: the batched mass apply cannot run in place — " *
+            "X and RHS are the same buffer, and the kernel reads permuted rows " *
+            "of RHS while writing X.")
+        batched_mass_apply!(X, RHS, src, scale)
+        fill!(ws.mass_ok, true)
+        return ws.mass_ok
+    end
+
     for (m, i) in enumerate(batch.sp_indices)
         sp = sps[i]
         n_eq = size(sp.M_min, 1)
