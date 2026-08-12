@@ -775,3 +775,110 @@ end
     ensure_layout!(b, :g)
     @test all(isfinite, Array(get_grid_data(b)))
 end
+
+# ── Task 3 (batched mass solve): the fallback path ───────────────────────────
+
+@testset "a batch with mass_src=nothing steps through the per-mode fallback and matches the reference" begin
+    # Every batched-mass testset above has `mass_src !== nothing`: the channel
+    # problem's M_min is a clean 0/1 permutation, so the fast path always
+    # engages and the per-mode SPQR loop retained in `_batch_mass_solve!`
+    # (step_subproblem_rk_batched.jl:659-678) never runs. "a non-selection
+    # mass matrix..." and "one disagreeing mode..." above only assert that the
+    # PLAN declines; neither steps a solver through the retained branch. A
+    # retained-but-never-executed path rots, so this drives a real batch
+    # through it and compares the trajectory against the unbatched reference,
+    # not just the plan's return value.
+    nsteps = 4
+    ref_solver, ref_b = _parity_channel_solver(; bc_low="1", batched_modes=false)
+    bat_solver, bat_b = _parity_channel_solver(; bc_low="1", batched_modes=true)
+    _seed_parity_ic!(ref_b)
+    _seed_parity_ic!(bat_b)
+
+    # One step first, on the natural (fast) path: `timestepper_state` is
+    # `nothing` until then, and the forced plan has to be installed on it —
+    # same reason "leftover modes step alongside a partial batch" does this.
+    step!(ref_solver)
+    step!(bat_solver)
+    @test isempty(Tarang.active_mode_batches(ref_solver))
+
+    sps = bat_solver.problem.compiled.subproblems
+    indices = first(values(Tarang.bucket_subproblems(collect(sps))))
+    @test length(indices) >= 2
+
+    state = bat_solver.timestepper_state
+    state_fields = state.timestepper_data[:_sp_state_fields][2]
+    for f in state_fields
+        ensure_layout!(f, :c)
+    end
+
+    # Baseline: this bucket naturally takes the fast path.
+    @test Tarang.build_mode_batch(sps, indices; like=ComplexF64[]).mass_src !== nothing
+
+    # Force the decline: perturb ONE stored entry of the representative mode's
+    # M_min to an explicit stored zero. This is a VALUE-ONLY change — the
+    # colptr/rowval pattern is untouched — so `batch_signature` (which hashes
+    # only shape and pattern) still groups every mode into the same bucket;
+    # `mass_selection_plan` disqualifies a stored zero outright (see its
+    # docstring), so `build_mode_batch` bakes `mass_src = mass_scale =
+    # nothing` into the batch it returns.
+    M1 = sps[indices[1]].M_min
+    j = findfirst(c -> length(nzrange(M1, c)) == 1, 1:size(M1, 2))
+    @test j !== nothing
+    k = first(nzrange(M1, j))
+    orig = M1.nzval[k]
+    @test orig != 0
+    M1.nzval[k] = zero(ComplexF64)
+    @test Tarang.mass_selection_plan(M1) === nothing   # the perturbation works
+
+    batch = Tarang.build_mode_batch(sps, indices; like=ComplexF64[])
+    @test batch.mass_src === nothing
+    @test batch.mass_scale === nothing
+
+    # Restore the LIVE subproblem before stepping. `_batch_mass_solve!`'s slow
+    # branch reads `sp.M_min` directly at solve time, so leaving it perturbed
+    # would make the fallback solve a genuinely different mass matrix than the
+    # reference — this comparison would then fail for a reason that has
+    # nothing to do with whether the fallback branch itself is correct.
+    M1.nzval[k] = orig
+    @test Tarang.mass_selection_plan(M1) !== nothing
+
+    # `batch.M_min_nzval` — the batch's OWN copy, used only to form
+    # `MX0 = M_min * X0` at step_subproblem_rk_batched.jl:845 — was captured
+    # from the perturbed `M1` at build time and is a separate array from
+    # `sp.M_min`, so restoring the live subproblem does not fix it. Left
+    # alone, every stage would silently compute MX0 from the wrong mass
+    # matrix even though `mass_src`/`mass_scale` are correctly `nothing`, and
+    # the trajectory comparison below would fail for that reason instead of
+    # actually exercising the fallback in isolation.
+    fresh_M = Tarang._build_batched_op(sps, indices, sp -> sp.M_min;
+                                       like=ComplexF64[])
+    @test fresh_M.rowptr == batch.M_min_rowptr
+    @test fresh_M.colval == batch.M_min_colval
+    copyto!(batch.M_min_nzval, fresh_M.nzval)
+
+    plan = Tarang._build_batched_rk_plan(bat_solver, sps, state_fields;
+                                         batches=[batch])
+    @test plan !== nothing
+    @test all(i -> sps[i].M_min === nothing, plan.leftovers)
+
+    state.timestepper_data[:_sp_rk_mode_batches] = plan
+    state.timestepper_data[:_sp_rk_mode_batches_key] = sps
+
+    for _ in 1:(nsteps - 1)
+        step!(ref_solver)
+        step!(bat_solver)
+    end
+
+    engaged = Tarang.active_mode_batches(bat_solver)
+    @test length(engaged) == 1
+    @test engaged[1].mass_src === nothing          # the fallback, not the fast path
+    @test engaged[1].nmodes == length(indices)      # every live mode still covered
+
+    ensure_layout!(ref_b, :g)
+    ensure_layout!(bat_b, :g)
+    ref_g = Array(get_grid_data(ref_b))
+    bat_g = Array(get_grid_data(bat_b))
+    scale = maximum(abs, ref_g)
+    @test scale > 1e-8
+    @test maximum(abs, bat_g .- ref_g) / scale < 1e-12
+end

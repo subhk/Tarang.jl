@@ -601,6 +601,29 @@ number: a stored zero would be divided by zero, and an `Inf` scale divides
 failure this function exists to prevent, just reached without the least-squares
 solve. A non-finite or zero entry also means the true structure is not what the
 sparsity pattern suggests, whether or not the shortcut ever divides by it.
+
+### Conditioning floor
+
+Every finite nonzero `scale[j]` satisfies the algebra above, but not every one
+of them is safe to batch. The per-mode fallback this function's caller falls
+back to on `nothing` solves `M x = b` with `SPQRSolver`, which applies its own
+rank tolerance, while this function's answer is the EXACT minimum-norm
+least-squares solution with no tolerance at all. For `M = sparse([1, 3, 4], [2,
+3, 4], [1.0, 1e-14, 1.0])` the two disagree outright: this function puts `x[3]
+= b[3] / 1e-14`, a factor of `1e14`, while SPQR's rank truncation returns `x[3]
+= 0`. Both are defensible answers to a near-singular column — what is not
+defensible is a caller silently getting whichever one depending on whether the
+batched path happened to engage, when the whole contract this path is built
+against is agreement with the per-mode solver to `1e-12`.
+
+So a `scale` that is finite and nonzero is necessary but not sufficient: this
+function also declines whenever `minimum(abs, scale) / maximum(abs, scale) <
+1e-12` across the accepted (non-empty-column) entries. This is not a claim that
+the plan's own answer above is wrong — arguably it is the better one
+mathematically — only that a mass coefficient that small is exactly where the
+fast path and the solver its contract is measured against diverge the most.
+Declining is the safe direction: it falls back to the per-mode solver, which is
+what the `1e-12` contract is written against.
 """
 function mass_selection_plan(M::SparseMatrixCSC)
     n = size(M, 2)
@@ -612,6 +635,8 @@ function mass_selection_plan(M::SparseMatrixCSC)
 
     rows = rowvals(M)
     vals = nonzeros(M)
+    min_abs = Inf
+    max_abs = 0.0
     for j in 1:n
         r = nzrange(M, j)
         length(r) == 0 && continue          # empty column: src stays 0
@@ -626,6 +651,17 @@ function mass_selection_plan(M::SparseMatrixCSC)
         row_used[i] = true
         src[j] = i
         scale[j] = vals[k]
+        a = abs(vals[k])
+        min_abs = min(min_abs, a)
+        max_abs = max(max_abs, a)
     end
+
+    # Conditioning floor: see the docstring. Every accepted entry has `a > 0`
+    # (a zero entry was already rejected above), so `max_abs > 0` here is just
+    # "at least one column was accepted" — the all-empty matrix leaves it at
+    # its initial 0.0 and skips the ratio test, since there is nothing to
+    # compare.
+    max_abs > 0 && min_abs / max_abs < 1e-12 && return nothing
+
     return (src, scale)
 end

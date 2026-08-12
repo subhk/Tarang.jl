@@ -115,6 +115,57 @@ end
     end
 end
 
+@testset "mass_selection_plan conditioning floor" begin
+    # A finite nonzero scale is not enough on its own: the per-mode fallback
+    # solves via SPQR, which applies its own rank tolerance, so a scale far
+    # below the others in the same matrix computes a DIFFERENT answer under
+    # the two paths. See the docstring for the worked example this fixture is
+    # taken from.
+    @testset "rejects the reviewer's near-singular example" begin
+        # plan (pre-fix) would compute x[3] = b[3]/1e-14 = 5e14; SPQR
+        # rank-truncates the same system to x[3] = 0. cols 1,2 empty; col 2 ->
+        # row 1 (1.0); col 3 -> row 3 (1e-14); col 4 -> row 4 (1.0).
+        M = sparse([1, 3, 4], [2, 3, 4], ComplexF64[1.0, 1e-14, 1.0])
+        @test Tarang.mass_selection_plan(M) === nothing
+    end
+
+    @testset "accepts a well-conditioned scaled permutation" begin
+        # ratio = 0.25/4.0 = 0.0625, nowhere near the 1e-12 floor: the floor
+        # must not over-fire on an ordinary scale spread.
+        M = sparse([1, 3], [2, 3], ComplexF64[4.0, 0.25], 3, 3)
+        plan = Tarang.mass_selection_plan(M)
+        @test plan !== nothing
+        src, scale = plan
+        @test src == [0, 1, 3]
+        @test scale[2] == 4.0
+        @test scale[3] == 0.25
+    end
+
+    @testset "right around the threshold: below" begin
+        # ratio = 9e-13, strictly less than 1e-12 -> declined.
+        M = sparse([1, 2], [1, 2], ComplexF64[1.0, 9e-13], 2, 2)
+        @test Tarang.mass_selection_plan(M) === nothing
+    end
+
+    @testset "right around the threshold: exactly at" begin
+        # ratio = 1e-12/1.0 == 1e-12 exactly (division by 1.0 is exact in
+        # IEEE754), so this pins the boundary as `<`, not `<=`: the plan is
+        # ACCEPTED at the floor itself.
+        M = sparse([1, 2], [1, 2], ComplexF64[1.0, 1e-12], 2, 2)
+        plan = Tarang.mass_selection_plan(M)
+        @test plan !== nothing
+        src, scale = plan
+        @test scale[1] == 1.0
+        @test scale[2] == 1e-12
+    end
+
+    @testset "right around the threshold: just above" begin
+        # ratio = 1.1e-12, over the floor -> accepted.
+        M = sparse([1, 2], [1, 2], ComplexF64[1.0, 1.1e-12], 2, 2)
+        @test Tarang.mass_selection_plan(M) !== nothing
+    end
+end
+
 @testset "batched_mass_apply! equals the per-mode least-squares solve" begin
     using Tarang: MatSolvers
 
