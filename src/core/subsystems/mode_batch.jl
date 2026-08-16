@@ -282,8 +282,9 @@ function mode_batch_bytes(sp::Subproblem, nmodes::Int)
     # OVER-counts by `n*(8+16)` bytes on a batch that `build_mode_batch` then
     # declines because some other mode disagrees. Over-counting is the safe
     # direction for a cap, and 24n bytes is nothing beside `n^2*nmodes*16`.
-    if sp.M_min !== nothing
-        plan = mass_selection_plan(sp.M_min)
+    M_min = sp.M_min
+    if M_min !== nothing
+        plan = mass_selection_plan(M_min)
         if plan !== nothing
             bytes += length(plan[1]) * sizeof(Int)          # mass_src
             bytes += length(plan[2]) * sizeof(ComplexF64)   # mass_scale

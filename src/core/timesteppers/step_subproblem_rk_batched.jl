@@ -198,6 +198,14 @@ end
 """Resolve a field's local coefficient array and check it still matches its plan."""
 @inline function _plan_coeff_data(field, p::BatchFieldPlan)
     cd = _local_coeff_data(coeff_data!(field))
+    # `_batch_field_plan` refused to build a plan for a field with no coefficient
+    # storage, so reaching here with `nothing` means the field lost its storage
+    # under a live plan. Say that, instead of letting `size(nothing)` raise a
+    # bare MethodError three frames down — and, because the check narrows the
+    # return type, keep `Nothing` out of `batched_gather!`/`batched_scatter!`.
+    cd === nothing && error(
+        "step_subproblem_rk_batched!: a batched field has no coefficient " *
+        "storage, but it had some when its gather plan was measured.")
     size(cd) == p.cd_size || error(
         "step_subproblem_rk_batched!: coefficient storage for a batched field " *
         "changed shape ($(size(cd)) now, $(p.cd_size) when the gather plan " *
@@ -771,7 +779,12 @@ end
 
 function _leftover_final!(sp, sp_idx, dt::Float64, stages::Int, b_exp, b_imp,
                           MX0, RHS, F, LX, state_fields)
-    rhs = _sp_stage_vector!(sp, :final_rhs, size(sp.M_min, 1), MX0[sp_idx])
+    # Self-guarding on `M_min`, like `_leftover_prestage!`: the caller already
+    # skips these subproblems, and every `size(M_min, ...)` below reads the same
+    # bound local rather than re-reading a nullable field.
+    M_min = sp.M_min
+    M_min === nothing && return nothing
+    rhs = _sp_stage_vector!(sp, :final_rhs, size(M_min, 1), MX0[sp_idx])
     copyto!(rhs, MX0[sp_idx])
     for s in 1:stages
         be = dt * b_exp[s]
@@ -786,7 +799,7 @@ function _leftover_final!(sp, sp_idx, dt::Float64, stages::Int, b_exp, b_imp,
 
     M_lu = _get_or_compute_mass_lu!(sp)
     M_lu === nothing && return nothing
-    x_sol = _sp_stage_vector!(sp, :sol_final, size(sp.M_min, 2), RHS[sp_idx])
+    x_sol = _sp_stage_vector!(sp, :sol_final, size(M_min, 2), RHS[sp_idx])
     _solve_cached_system!(x_sol, M_lu, rhs)
     scatter_inputs(sp, x_sol, state_fields)
     return nothing
