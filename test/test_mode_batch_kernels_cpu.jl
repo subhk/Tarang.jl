@@ -9,9 +9,23 @@ read-modify-write around inner loops (found in `_cheb_coeff_to_deriv_kernel!`
 during the PR #105 work), so running the real objects is the only way to catch
 that class without hardware.
 
-Each kernel is checked against the per-mode function it replaces. Everything is
-bit-exact except `batched_assemble_lhs!`, which computes `M + c*L` and may be
-FMA-contracted by the backend.
+Each kernel is checked against the per-mode function it replaces. The kernels
+that only MOVE data — gather, scatter, the BC override — are asserted bit-exact,
+because for them bit-exactness is structural: same values, same order, just a
+different layout.
+
+The two that do ARITHMETIC are compared with a tolerance, because their low bit
+is not a property anyone guarantees:
+
+  * `batched_assemble_lhs!` computes `M + c*L`, which a backend may FMA-contract.
+  * `batched_spmv!` SUMS, accumulating a row's dot product in a register in CSR
+    order, while `mul!` accumulates per column into `y[row]` — a different
+    association order.
+
+The spmv case was learned the hard way: asserted with `==`, it passed on Julia
+1.10, 1.11, and 1.12.4, then failed on 1.12.7 by exactly 1 ulp when SparseArrays
+changed `mul!`. The rule that generalises is that "bit-exact" is earned by doing
+no arithmetic, not by being a faithful reimplementation.
 """
 
 using Test
@@ -122,10 +136,26 @@ using Random
         @test cd_batched2 == cd_ref2
     end
 
-    @testset "batched_spmv! matches per-mode mul! bit-for-bit" begin
+    @testset "batched_spmv! matches per-mode mul!" begin
         # NOTE: batched_spmv! iterates ROWS, so it takes the CSR pattern.
         # Passing A.colptr/A.rowval (CSC) would silently compute transpose(A)*x
         # and only agree when A is symmetric. Go through csr_pattern.
+        #
+        # This is the ONE kernel in this file compared with a tolerance rather
+        # than `==`, and the reason is arithmetic, not sloppiness: this kernel
+        # SUMS. It accumulates each row's dot product in a register walking CSR
+        # order, while `mul!` on a SparseMatrixCSC accumulates per column into
+        # `y[row]`. Those are different association orders, so the low bit is
+        # not a property either one guarantees.
+        #
+        # It was originally asserted with `==` and passed on Julia 1.10, 1.11,
+        # and 1.12.4 — then failed on 1.12.7 by exactly 1 ulp (e.g.
+        # `4.329202600916028` vs `...027`) when SparseArrays changed `mul!`.
+        # The kernel was never wrong; the assertion was, and it had been
+        # passing on luck. The tolerance below is tight enough that a real
+        # defect — a CSR/CSC transpose, a dropped term — is O(1) relative and
+        # still fails, which the asymmetric testset immediately after pins
+        # exactly.
         A = sprand(rng, ComplexF64, n, n, 0.4)
         rowptr, colval, perm = Tarang.csr_pattern(A)
 
@@ -145,7 +175,7 @@ using Random
                                  nzv_csc[:, m])
             expected = zeros(ComplexF64, n)
             mul!(expected, Am, X[:, m])
-            @test Y[:, m] == expected
+            @test isapprox(Y[:, m], expected; rtol=1e-13, atol=1e-13)
         end
     end
 
