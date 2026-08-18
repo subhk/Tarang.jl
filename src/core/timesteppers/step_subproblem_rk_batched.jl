@@ -579,6 +579,19 @@ function _batched_gather_alg_F!(ws::BatchWorkspace, batch::ModeBatch, sps)
     return ws.ALG_F
 end
 
+"""`true` iff every mode in this batch has provably-immutable BC F expressions
+(see `alg_F_is_static`), making the gather-once `alg_F_valid` skip safe. BC
+values read live from parameter fields / BC arrays change without being
+registered time-dependent, so those batches must re-gather every step. The
+per-subproblem classification is cached in `sp.runtime`, so this is a cheap
+flag sweep."""
+function _batch_alg_F_static(batch::ModeBatch, sps)
+    for i in batch.sp_indices
+        alg_F_is_static(sps[i]) || return false
+    end
+    return true
+end
+
 """
     _ensure_batch_factored!(batch, dt, a_ii) -> BatchedDenseLU
 
@@ -713,7 +726,10 @@ function _leftover_prestage!(sp, sp_idx, MX0, RHS, ALG_F, state_fields,
     RHS[sp_idx] = rhs
 
     alg_f = _sp_stage_vector!(sp, :alg_f, n_eq, mx0)
-    if bc_dynamic || sp.runtime.alg_F_gathered_into !== alg_f
+    # `alg_F_is_static` mirrors the guard in step_subproblem_rk.jl: BC values
+    # read live from parameter fields / BC arrays must re-gather every step.
+    if bc_dynamic || !alg_F_is_static(sp) ||
+       sp.runtime.alg_F_gathered_into !== alg_f
         gather_alg_F!(alg_f, sp)
     end
     ALG_F[sp_idx] = alg_f
@@ -857,7 +873,7 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
         _batched_gather_state!(ws.X0, ws, batch, state_fields)
         batched_spmv!(ws.MX0, batch.M_min_rowptr, batch.M_min_colval,
                       batch.M_min_nzval, ws.X0)
-        if bc_dynamic || !ws.alg_F_valid
+        if bc_dynamic || !ws.alg_F_valid || !_batch_alg_F_static(batch, subproblems)
             _batched_gather_alg_F!(ws, batch, subproblems)
         end
     end
