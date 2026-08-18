@@ -362,20 +362,42 @@ end
 # of `_DERIV_FFT_WS` below. Buffers are filled/consumed entirely within one
 # derivative call, so a single cached set per key is safe (same contract as the
 # CPU workspace). `_device_cache_token` keeps multi-GPU devices from sharing
-# buffers or CUFFT plans.
+# buffers or CUFFT plans. Registration is locked, matching every other GPU
+# cache (GPU_TRANSFORM_CACHE, _GPU_DCT_SCRATCH_CACHE, _GPU_CHEB_DERIV_CACHE):
+# an unlocked `get!` on a plain Dict can corrupt the table mid-rehash under
+# concurrent tasks, or hand two callers the same buffers.
 const _DERIV_FFT_WS_GPU = Dict{Tuple, Any}()
+const _DERIV_FFT_WS_GPU_LOCK = ReentrantLock()
 
 function _get_gpu_deriv_workspace!(data_g::AbstractArray, axis::Int)
     CT = complex(float(real(eltype(data_g))))
     key = (_device_cache_token(data_g), size(data_g), axis, CT)
-    return get!(_DERIV_FFT_WS_GPU, key) do
-        cin  = similar(data_g, CT, size(data_g))
-        fhat = similar(data_g, CT, size(data_g))
-        # AbstractFFTs planning dispatches to CUFFT for device arrays.
-        pf  = plan_fft(cin, axis)
-        pin = plan_ifft(fhat, axis)
-        (cin, fhat, pf, pin)
+    return lock(_DERIV_FFT_WS_GPU_LOCK) do
+        get!(_DERIV_FFT_WS_GPU, key) do
+            cin  = similar(data_g, CT, size(data_g))
+            fhat = similar(data_g, CT, size(data_g))
+            # AbstractFFTs planning dispatches to CUFFT for device arrays.
+            pf  = plan_fft(cin, axis)
+            pin = plan_ifft(fhat, axis)
+            (cin, fhat, pf, pin)
+        end
     end
+end
+
+"""
+    clear_gpu_deriv_workspace_cache!()
+
+Release every cached device Fourier-derivative workspace (buffers + CUFFT
+plans). The cache is otherwise unbounded — one entry per (device, shape, axis,
+eltype) — so long-running multi-resolution sessions can call this between
+problems, and GPU teardown paths can call it alongside the ext-side
+`clear_gpu_*_cache!` functions.
+"""
+function clear_gpu_deriv_workspace_cache!()
+    lock(_DERIV_FFT_WS_GPU_LOCK) do
+        empty!(_DERIV_FFT_WS_GPU)
+    end
+    return nothing
 end
 
 """
@@ -383,23 +405,20 @@ end
 
 Device-resident derivative multiplier `(ik)^order`, converted to the field's
 complex precision and pre-shaped for broadcasting along `axis`. Cached in
-`basis.transforms` (like the host multiplier), so the host→device upload happens
-once per (basis, order, axis, precision, device) — not on every derivative call.
+`basis.transforms` via `_get_device_basis_cache!` (the shared device-cache
+idiom, also used by the lazy-RHS multiplier/matrix caches), so the host→device
+upload happens once per (basis, order, axis, precision, device) — not on every
+derivative call.
 """
 function _get_device_deriv_mult!(basis::Union{RealFourier, ComplexFourier},
                                  deriv_mult_cpu::AbstractVector, data_g::AbstractArray,
                                  order::Int, axis::Int, dims::Int)
     CT = complex(float(real(eltype(data_g))))
-    key = (:deriv_mult_dev, length(deriv_mult_cpu), order, axis, dims, CT,
-           _device_cache_token(data_g))
-    cached = get(basis.transforms, key, nothing)
-    cached !== nothing && return cached
-    mult_shape = ntuple(i -> i == axis ? length(deriv_mult_cpu) : 1, dims)
-    host = reshape(convert(Vector{CT}, deriv_mult_cpu), mult_shape)
-    dev = similar(data_g, CT, mult_shape)
-    copyto!(dev, host)
-    basis.transforms[key] = dev
-    return dev
+    return _get_device_basis_cache!(basis, :deriv_mult_dev, data_g,
+                                    length(deriv_mult_cpu), order, axis, dims, CT) do
+        mult_shape = ntuple(i -> i == axis ? length(deriv_mult_cpu) : 1, dims)
+        reshape(convert(Vector{CT}, deriv_mult_cpu), mult_shape)
+    end
 end
 
 """
@@ -439,8 +458,15 @@ end
 
 function _gpu_deriv_exec!(dst::AbstractArray, data_g::AbstractArray, cin, fhat, pf, pin,
                           mult::AbstractArray, real_out::Bool)
-    cin .= data_g              # promote to complex in one fused pass
-    mul!(fhat, pf, cin)
+    if eltype(data_g) === eltype(cin)
+        # Already the workspace's complex eltype: the out-of-place forward FFT
+        # does not destroy its input, so feed `data_g` directly and skip a
+        # whole-field device copy per derivative call.
+        mul!(fhat, pf, data_g)
+    else
+        cin .= data_g          # promote (real → complex) in one fused pass
+        mul!(fhat, pf, cin)
+    end
     fhat .*= mult              # (ik)^order along the derivative axis
     mul!(cin, pin, fhat)       # normalized inverse FFT (ScaledPlan applies 1/N)
     if real_out

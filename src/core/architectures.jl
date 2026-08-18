@@ -416,6 +416,30 @@ multi-GPU process never shares cached buffers or plans across devices.
 """
 _device_cache_token(::AbstractArray) = nothing
 
+"""
+    _get_device_basis_cache!(build_host, basis, tag::Symbol, data::AbstractArray, keyparts...)
+
+Single idiom for device-resident arrays cached in `basis.transforms`: the key is
+`(tag, keyparts..., _device_cache_token(data))`, so a multi-GPU process never
+shares a cached buffer across devices, and every call site keys device identity
+the same way. On a miss, `build_host()` produces the host array, which is
+uploaded to `data`'s device WITHOUT eltype conversion — callers convert to the
+target precision in `build_host` (include the eltype in `keyparts` when it can
+vary). `basis.transforms` writes are unlocked by convention: basis caches are
+touched from the single-threaded solve loop only.
+"""
+function _get_device_basis_cache!(build_host::Function, basis, tag::Symbol,
+                                  data::AbstractArray, keyparts...)
+    key = (tag, keyparts..., _device_cache_token(data))
+    cached = get(basis.transforms, key, nothing)
+    cached !== nothing && return cached
+    host = build_host()
+    dev = similar(data, eltype(host), size(host))
+    copyto!(dev, host)
+    basis.transforms[key] = dev
+    return dev
+end
+
 # ============================================================================
 # Architecture Array Creation
 # ============================================================================

@@ -1230,18 +1230,18 @@ function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int, uses_rfft:
     return deriv_mult
 end
 
-"""Return the cached Fourier multiplier on the same backend as `data`."""
+"""Return the cached Fourier multiplier on the same backend as `data`.
+
+Device copies go through `_get_device_basis_cache!` — the shared device-cache
+idiom (also used by `_get_device_deriv_mult!` and the differentiation-matrix
+cache below), which keys device identity by `_device_cache_token` so multi-GPU
+processes never share a cached buffer across devices."""
 function _get_cached_lazy_deriv_mult(basis::FourierBasis, order::Int,
                                      uses_rfft::Bool, data::AbstractArray)
     host = _get_cached_lazy_deriv_mult(basis, order, uses_rfft)
     is_gpu_array(data) || return host
-
-    cache_key = (:lazy_deriv_mult_device, order, uses_rfft, architecture(data))
-    cached = get(basis.transforms, cache_key, nothing)
-    cached !== nothing && return cached
-    device_multiplier = copy_to_device(host, data)
-    basis.transforms[cache_key] = device_multiplier
-    return device_multiplier
+    return _get_device_basis_cache!(() -> host, basis, :lazy_deriv_mult_device,
+                                    data, order, uses_rfft)
 end
 
 """Return the Jacobi differentiation matrix on the same backend as `data`.
@@ -1251,17 +1251,21 @@ coefficients fell back to the generic (scalar-indexing) matmul — an error unde
 `CUDA.allowscalar(false)`, a catastrophic slow path otherwise. The device copy
 is cached DENSE in `basis.transforms` (the matrix is Nz×Nz with Nz the modest
 Chebyshev extent, and a dense CUBLAS gemm beats wrapping CUSPARSE plan types
-into the basis cache), keyed per (order, device) like the Fourier multiplier
-above. Host callers get the sparse matrix unchanged."""
+into the basis cache), keyed per (order, eltype, device) like the Fourier
+multiplier above. The dense matrix is converted to `eltype(data)` BEFORE the
+upload: `copy_to_device` performs no eltype conversion, and `mul!` with a
+Float64 matrix against complex (or Float32) coefficients has no CUBLAS route —
+it silently falls to the generic GPUArrays matmul kernel, defeating the gemm
+rationale above (and hard-failing on some stacks for mixed precision). The
+eltype in the key keeps a basis serving fields of different precisions from
+being handed the wrong matrix. Host callers get the sparse matrix unchanged."""
 function _lazy_differentiation_matrix(basis::JacobiBasis, order::Int, data::AbstractArray)
     D = differentiation_matrix(basis, order)
     is_gpu_array(data) || return D
-    cache_key = (:diff_matrix_device, order, architecture(data))
-    cached = get(basis.transforms, cache_key, nothing)
-    cached !== nothing && return cached
-    device_D = copy_to_device(Matrix(D), data)
-    basis.transforms[cache_key] = device_D
-    return device_D
+    return _get_device_basis_cache!(basis, :diff_matrix_device, data,
+                                    order, eltype(data)) do
+        Matrix{eltype(data)}(D)
+    end
 end
 
 """Apply a 1D matrix `D` along `axis` of multi-dimensional array `data` in place.

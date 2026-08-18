@@ -30,16 +30,23 @@
 const _GPU_CHEB_DERIV_CACHE = Dict{Any, Any}()
 const _GPU_CHEB_DERIV_LOCK = ReentrantLock()
 
-struct GPUChebyshevDerivPlan{T}
-    n::Int                          # points along transform dimension
-    batch::Int                      # product of all other dimensions
-    work_ext::CuMatrix{T}           # (2*(n-1), batch) extension buffer
-    work_cx::CuMatrix{Complex{T}}   # (n, batch) rfft output
-    work_real::CuMatrix{T}          # (n, batch) real scratch / DCT-I output
-    work_deriv::CuMatrix{T}         # (n, batch) derivative coefficients
-    work_perm::CuMatrix{T}          # (n, batch) permuted in/out staging (axis != 1)
-    work_tmp::CuMatrix{T}           # (n, batch) ping buffer for order >= 2
-    rfft_plan::Any                  # CUFFT rfft along dim 1 of work_ext
+# The DCT-only core (`_dct1_batch_mat!`) touches only `work_ext`/`work_cx`, so
+# those two are allocated eagerly; `work_real`/`work_deriv` (derivative
+# recurrence scratch) and `work_perm` (axis != 1 staging / packed re-im input)
+# are allocated LAZILY on first use — a plain-transform plan, or an
+# axis == 1/order == 1 derivative plan, never pays for buffers it cannot touch.
+# Lazy init is single-threaded-safe by the same contract as the buffers
+# themselves (see the cache NOTE above); a racing double-alloc would only
+# waste one buffer, never corrupt data.
+mutable struct GPUChebyshevDerivPlan{T}
+    const n::Int                            # points along transform dimension
+    const batch::Int                        # product of all other dimensions
+    const work_ext::CuMatrix{T}             # (2*(n-1), batch) extension buffer
+    const work_cx::CuMatrix{Complex{T}}     # (n, batch) rfft output
+    work_real::Union{Nothing, CuMatrix{T}}  # (n, batch) raw DCT-I output (deriv path)
+    work_deriv::Union{Nothing, CuMatrix{T}} # (n, batch) deriv coeffs + order>=2 ping
+    work_perm::Union{Nothing, CuMatrix{T}}  # (n, batch) permuted / packed staging
+    const rfft_plan::Any                    # CUFFT rfft along dim 1 of work_ext
 end
 
 function _get_gpu_cheb_deriv_plan(n::Int, batch::Int, ::Type{T}) where {T<:AbstractFloat}
@@ -48,19 +55,39 @@ function _get_gpu_cheb_deriv_plan(n::Int, batch::Int, ::Type{T}) where {T<:Abstr
         p = get(_GPU_CHEB_DERIV_CACHE, key, nothing)
         if p === nothing
             M = 2 * (n - 1)
-            work_ext   = CUDA.zeros(T,           M, batch)
-            work_cx    = CUDA.zeros(Complex{T},  n, batch)
-            work_real  = CUDA.zeros(T,           n, batch)
-            work_deriv = CUDA.zeros(T,           n, batch)
-            work_perm  = CUDA.zeros(T,           n, batch)
-            work_tmp   = CUDA.zeros(T,           n, batch)
-            rfft_plan  = CUFFT.plan_rfft(work_ext, (1,))
-            p = GPUChebyshevDerivPlan{T}(n, batch, work_ext, work_cx, work_real,
-                                         work_deriv, work_perm, work_tmp, rfft_plan)
+            work_ext  = CUDA.zeros(T,          M, batch)
+            work_cx   = CUDA.zeros(Complex{T}, n, batch)
+            rfft_plan = CUFFT.plan_rfft(work_ext, (1,))
+            p = GPUChebyshevDerivPlan{T}(n, batch, work_ext, work_cx,
+                                         nothing, nothing, nothing, rfft_plan)
             _GPU_CHEB_DERIV_CACHE[key] = p
         end
         p::GPUChebyshevDerivPlan{T}
     end
+end
+
+@inline function _plan_work_real!(plan::GPUChebyshevDerivPlan{T}) where {T}
+    buf = plan.work_real
+    buf === nothing || return buf::CuMatrix{T}
+    buf = CUDA.zeros(T, plan.n, plan.batch)
+    plan.work_real = buf
+    return buf
+end
+
+@inline function _plan_work_deriv!(plan::GPUChebyshevDerivPlan{T}) where {T}
+    buf = plan.work_deriv
+    buf === nothing || return buf::CuMatrix{T}
+    buf = CUDA.zeros(T, plan.n, plan.batch)
+    plan.work_deriv = buf
+    return buf
+end
+
+@inline function _plan_work_perm!(plan::GPUChebyshevDerivPlan{T}) where {T}
+    buf = plan.work_perm
+    buf === nothing || return buf::CuMatrix{T}
+    buf = CUDA.zeros(T, plan.n, plan.batch)
+    plan.work_perm = buf
+    return buf
 end
 
 # ---------------------------------------------------------------------------
@@ -211,15 +238,17 @@ function _apply_gpu_cheb_deriv_1!(inp_mat::CuMatrix{T}, out_mat::CuMatrix{T},
     mul!(plan.work_cx, plan.rfft_plan, plan.work_ext)
 
     # Step 3: extract real part → Chebyshev coefficients (raw)
-    launch!(arch, _extract_real_kernel!, plan.work_real, plan.work_cx, n, batch;
+    work_real  = _plan_work_real!(plan)
+    work_deriv = _plan_work_deriv!(plan)
+    launch!(arch, _extract_real_kernel!, work_real, plan.work_cx, n, batch;
             ndrange=(n, batch))
 
     # Step 4: recurrence → derivative coefficients in work_deriv
-    launch!(arch, _cheb_coeff_to_deriv_kernel!, plan.work_deriv, plan.work_real,
+    launch!(arch, _cheb_coeff_to_deriv_kernel!, work_deriv, work_real,
             n, batch, inv_nm1, sc_T; ndrange=batch)
 
     # Step 5: symmetric extension of derivative coefficients (no reversal)
-    launch!(arch, _dct1_ext_kernel!, plan.work_ext, plan.work_deriv, n, batch;
+    launch!(arch, _dct1_ext_kernel!, plan.work_ext, work_deriv, n, batch;
             ndrange=(M, batch))
 
     # Step 6: batched rfft again → DCT-I of derivative coefficients
@@ -241,12 +270,100 @@ function _apply_gpu_cheb_deriv_nth!(inp_mat::CuMatrix{T}, out_mat::CuMatrix{T},
     end
     _apply_gpu_cheb_deriv_1!(inp_mat, out_mat, scale, plan)
     for _ in 2:order
-        # work_tmp is a dedicated plan buffer (never touched inside the 1-pass
-        # body), so higher orders stay allocation-free.
-        copyto!(plan.work_tmp, out_mat)
-        _apply_gpu_cheb_deriv_1!(plan.work_tmp, out_mat, scale, plan)
+        # Ping through work_deriv: the 1-pass body consumes its input entirely
+        # at Step 1 (into work_ext) BEFORE Step 4 overwrites work_deriv, so the
+        # buffer safely doubles as the higher-order input and no dedicated ping
+        # buffer is needed. Higher orders stay allocation-free.
+        ping = _plan_work_deriv!(plan)
+        copyto!(ping, out_mat)
+        _apply_gpu_cheb_deriv_1!(ping, out_mat, scale, plan)
     end
     return out_mat
+end
+
+# ---------------------------------------------------------------------------
+# Shared permutation / packed-re-im scaffolds
+#
+# Every `axis != 1` path stages through the SAME mirror-image decomposition
+# (perm/iperm + permutedims! in/out) and every complex path through the same
+# pack-run-unpack sandwich. These used to be four inline copies, each carrying
+# its own buffer-disjointness rules in comments; one tested implementation of
+# each keeps a future variant from shipping an off-by-one on the one copy a
+# refactor missed (silent value corruption only on axis != 1 — which GPU CI
+# cannot exercise).
+# ---------------------------------------------------------------------------
+
+"""
+    _permuted_axis_apply!(core!, dest, src, axis, plan)
+
+Permute `src` so `axis` comes first — staged through the plan's lazily
+allocated `work_perm` — run `core!` on the resulting `(n, batch)` matrix IN
+PLACE, and un-permute into `dest`. CONTRACT: `core!` must not touch
+`work_perm` other than through the matrix it is handed (the DCT and derivative
+cores only use `work_ext`/`work_cx`/`work_real`/`work_deriv`).
+"""
+function _permuted_axis_apply!(core!::F, dest::CuArray{T,N}, src::CuArray{T,N},
+                               axis::Int, plan::GPUChebyshevDerivPlan{T}) where {F,T,N}
+    n, batch = plan.n, plan.batch
+    other_dims = ntuple(i -> i < axis ? i : i + 1, N - 1)
+    perm  = (axis, other_dims...)
+    iperm = invperm(perm)
+    perm_shape = ntuple(i -> size(src, perm[i]), N)
+
+    work_perm = _plan_work_perm!(plan)
+    in_perm = reshape(work_perm, perm_shape)
+    permutedims!(in_perm, src, perm)
+    mat = reshape(work_perm, n, batch)
+    core!(mat)
+    permutedims!(dest, reshape(mat, perm_shape), iperm)
+    return dest
+end
+
+"""
+    _packed_reim_apply!(core!, out_mat, in_mat, plan2, n, batch, arch)
+
+Pack a complex `(n, batch)` matrix as a real `(n, 2*batch)` matrix (re parts in
+columns 1..batch, im in batch+1..2*batch) into `plan2`'s `work_perm`, run
+`core!` on the packed matrix in place, and recombine into `out_mat`. `plan2`
+must be the `(n, 2*batch)` plan. `out_mat === in_mat` is allowed — the pack
+kernel fully consumes the input before `core!` runs.
+"""
+function _packed_reim_apply!(core!::F, out_mat, in_mat,
+                             plan2::GPUChebyshevDerivPlan{T},
+                             n::Int, batch::Int, arch) where {F, T}
+    packed = reshape(_plan_work_perm!(plan2), n, 2 * batch)
+    launch!(arch, _cheb_pack_reim_kernel!, packed, in_mat, n, batch;
+            ndrange=(n, 2 * batch))
+    core!(packed)
+    launch!(arch, _cheb_unpack_reim_kernel!, out_mat, packed, n, batch;
+            ndrange=(n, batch))
+    return out_mat
+end
+
+"""
+    _permuted_axis_apply_complex!(core!, dest, src, axis, plan2, arch)
+
+Complex variant of `_permuted_axis_apply!`: permutation staging goes through
+the shared count=2 DCT scratch (count=2 keeps the key disjoint from the
+count=1 users in the transform chain, which can share (shape, T)), and the
+packed-re/im sandwich runs in `plan2`'s `work_perm` via `_packed_reim_apply!`.
+"""
+function _permuted_axis_apply_complex!(core!::F, dest::CuArray{Complex{T},N},
+                                       src::CuArray{Complex{T},N}, axis::Int,
+                                       plan2::GPUChebyshevDerivPlan{T}, arch) where {F,T,N}
+    n = size(src, axis)
+    batch = prod(size(src)) ÷ n
+    other_dims = ntuple(i -> i < axis ? i : i + 1, N - 1)
+    perm  = (axis, other_dims...)
+    iperm = invperm(perm)
+    perm_shape = ntuple(i -> size(src, perm[i]), N)
+
+    cscratch = get_gpu_dct_scratch(arch, perm_shape, Complex{T}, 2)[1]
+    permutedims!(cscratch, src, perm)
+    cmat = reshape(cscratch, n, batch)
+    _packed_reim_apply!(core!, cmat, cmat, plan2, n, batch, arch)
+    permutedims!(dest, reshape(cmat, perm_shape), iperm)
+    return dest
 end
 
 # ---------------------------------------------------------------------------
@@ -263,7 +380,6 @@ device allocation anywhere on this path.
 """
 function _gpu_cheb_deriv_into!(dest::CuArray{T}, data_g::CuArray{T}, axis::Int,
                                order::Int, scale::Float64) where {T<:AbstractFloat}
-    nd = ndims(data_g)
     n  = size(data_g, axis)
     batch = prod(size(data_g)) ÷ n
     plan = _get_gpu_cheb_deriv_plan(n, batch, T)
@@ -273,16 +389,9 @@ function _gpu_cheb_deriv_into!(dest::CuArray{T}, data_g::CuArray{T}, axis::Int,
         out_mat = reshape(dest, n, batch)
         _apply_gpu_cheb_deriv_nth!(in_mat, out_mat, scale, order, plan)
     else
-        other_dims = ntuple(i -> i < axis ? i : i + 1, nd - 1)
-        perm  = (axis, other_dims...)
-        iperm = invperm(perm)
-        perm_shape = ntuple(i -> size(data_g, perm[i]), nd)
-
-        in_perm = reshape(plan.work_perm, perm_shape)
-        permutedims!(in_perm, data_g, perm)
-        mat = reshape(plan.work_perm, n, batch)
-        _apply_gpu_cheb_deriv_nth!(mat, mat, scale, order, plan)
-        permutedims!(dest, reshape(mat, perm_shape), iperm)
+        _permuted_axis_apply!(dest, data_g, axis, plan) do mat
+            _apply_gpu_cheb_deriv_nth!(mat, mat, scale, order, plan)
+        end
     end
     return dest
 end
@@ -298,39 +407,17 @@ allocated ~10 full arrays and ran the whole DCT chain twice.)
 """
 function _gpu_cheb_deriv_complex_into!(dest::CuArray{Complex{T}}, data_g::CuArray{Complex{T}},
                                        axis::Int, order::Int, scale::Float64) where {T<:AbstractFloat}
-    nd = ndims(data_g)
     n  = size(data_g, axis)
     batch = prod(size(data_g)) ÷ n
     arch  = Tarang.architecture(data_g)
     plan2 = _get_gpu_cheb_deriv_plan(n, 2 * batch, T)
-    packed = reshape(plan2.work_perm, n, 2 * batch)
+    core! = packed -> _apply_gpu_cheb_deriv_nth!(packed, packed, scale, order, plan2)
 
     if axis == 1
-        in_mat = reshape(data_g, n, batch)
-        launch!(arch, _cheb_pack_reim_kernel!, packed, in_mat, n, batch;
-                ndrange=(n, 2 * batch))
-        _apply_gpu_cheb_deriv_nth!(packed, packed, scale, order, plan2)
-        out_mat = reshape(dest, n, batch)
-        launch!(arch, _cheb_unpack_reim_kernel!, out_mat, packed, n, batch;
-                ndrange=(n, batch))
+        _packed_reim_apply!(core!, reshape(dest, n, batch), reshape(data_g, n, batch),
+                            plan2, n, batch, arch)
     else
-        other_dims = ntuple(i -> i < axis ? i : i + 1, nd - 1)
-        perm  = (axis, other_dims...)
-        iperm = invperm(perm)
-        perm_shape = ntuple(i -> size(data_g, perm[i]), nd)
-
-        # Complex permutation staging comes from the shared scratch cache
-        # (count=2 so this key never collides with the count=1 users in the
-        # transform chain).
-        cscratch = get_gpu_dct_scratch(arch, perm_shape, Complex{T}, 2)[1]
-        permutedims!(cscratch, data_g, perm)
-        cmat = reshape(cscratch, n, batch)
-        launch!(arch, _cheb_pack_reim_kernel!, packed, cmat, n, batch;
-                ndrange=(n, 2 * batch))
-        _apply_gpu_cheb_deriv_nth!(packed, packed, scale, order, plan2)
-        launch!(arch, _cheb_unpack_reim_kernel!, cmat, packed, n, batch;
-                ndrange=(n, batch))
-        permutedims!(dest, reshape(cmat, perm_shape), iperm)
+        _permuted_axis_apply_complex!(core!, dest, data_g, axis, plan2, arch)
     end
     return dest
 end
@@ -474,18 +561,9 @@ function gpu_dct1_along_dim!(output::CuArray{T,N}, input::CuArray{T,N},
         _dct1_batch_mat!(reshape(output, n, batch), reshape(input, n, batch),
                          direction, plan, arch)
     else
-        # Put the transform dimension first, staging through the plan's
-        # dedicated permutation buffer (work_perm — NOT used by the DCT core).
-        other_dims = ntuple(i -> i < dim ? i : i + 1, N - 1)
-        perm   = (dim, other_dims...)
-        iperm  = invperm(perm)
-        perm_shape = ntuple(i -> size(input, perm[i]), N)
-
-        in_perm = reshape(plan.work_perm, perm_shape)
-        permutedims!(in_perm, input, perm)
-        mat = reshape(plan.work_perm, n, batch)
-        _dct1_batch_mat!(mat, mat, direction, plan, arch)
-        permutedims!(output, reshape(mat, perm_shape), iperm)
+        _permuted_axis_apply!(output, input, dim, plan) do mat
+            _dct1_batch_mat!(mat, mat, direction, plan, arch)
+        end
     end
     return output
 end
@@ -506,32 +584,13 @@ function gpu_dct1_along_dim!(output::CuArray{Complex{T},N}, input::CuArray{Compl
     batch = prod(size(input)) ÷ n
     arch  = Tarang.architecture(input)
     plan2 = _get_gpu_cheb_deriv_plan(n, 2 * batch, T)
-    packed = reshape(plan2.work_perm, n, 2 * batch)
+    core! = packed -> _dct1_batch_mat!(packed, packed, direction, plan2, arch)
 
     if dim == 1
-        in_mat = reshape(input, n, batch)
-        launch!(arch, _cheb_pack_reim_kernel!, packed, in_mat, n, batch;
-                ndrange=(n, 2 * batch))
-        _dct1_batch_mat!(packed, packed, direction, plan2, arch)
-        launch!(arch, _cheb_unpack_reim_kernel!, reshape(output, n, batch), packed,
-                n, batch; ndrange=(n, batch))
+        _packed_reim_apply!(core!, reshape(output, n, batch), reshape(input, n, batch),
+                            plan2, n, batch, arch)
     else
-        other_dims = ntuple(i -> i < dim ? i : i + 1, N - 1)
-        perm   = (dim, other_dims...)
-        iperm  = invperm(perm)
-        perm_shape = ntuple(i -> size(input, perm[i]), N)
-
-        # count=2 keeps this scratch key disjoint from the count=1 users in the
-        # transform chain (C2R input protection), which can share (shape, T).
-        cscratch = get_gpu_dct_scratch(arch, perm_shape, Complex{T}, 2)[1]
-        permutedims!(cscratch, input, perm)
-        cmat = reshape(cscratch, n, batch)
-        launch!(arch, _cheb_pack_reim_kernel!, packed, cmat, n, batch;
-                ndrange=(n, 2 * batch))
-        _dct1_batch_mat!(packed, packed, direction, plan2, arch)
-        launch!(arch, _cheb_unpack_reim_kernel!, cmat, packed, n, batch;
-                ndrange=(n, batch))
-        permutedims!(output, reshape(cmat, perm_shape), iperm)
+        _permuted_axis_apply_complex!(core!, output, input, dim, plan2, arch)
     end
     return output
 end

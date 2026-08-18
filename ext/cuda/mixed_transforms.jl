@@ -138,7 +138,6 @@ struct GPUMixedTransformScratch{CA,RA}
     complex_b::CA
     real_input::RA
     real_output::RA
-    imag_output::RA
 end
 
 const GPU_MIXED_SCRATCH_CACHE = Dict{Tuple,Any}()
@@ -155,7 +154,6 @@ function get_gpu_mixed_transform_scratch(plan::GPUMixedTransformPlan,
             GPUMixedTransformScratch(
                 complex_a,
                 complex_b,
-                CUDA.zeros(RT, shape...),
                 CUDA.zeros(RT, shape...),
                 CUDA.zeros(RT, shape...),
             )
@@ -333,6 +331,13 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
     _require_mixed_shape("coefficient input", coeff_data, plan.coeff_shape)
     _require_mixed_shape("grid output", grid_data, plan.grid_shape)
     current_data = coeff_data
+    # PROVENANCE flag: true only while `current_data` is one of this plan's
+    # ping-pong scratch buffers, i.e. dead intermediate data the destructive
+    # cuFFT C2R may consume. Tracked explicitly at every reassignment below —
+    # an identity test like `current_data !== coeff_data` would wrongly mark a
+    # future live buffer (a caller's array reused by a new stage order) as
+    # disposable and let the C2R silently trash it.
+    current_disposable = false
 
     for stage_index in reverse(eachindex(plan.transform_order))
         dim = plan.transform_order[stage_index]
@@ -364,11 +369,13 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
                 output = _next_mixed_complex_buffer(dct_input, scratch)
                 gpu_dct1_along_dim!(output, dct_input, dim, :backward)
                 current_data = output
+                current_disposable = true   # scratch ping-pong buffer
             else
                 out_tgt = (is_final && eltype(grid_data) == eltype(dct_input)) ?
                           grid_data : scratch.real_output
                 gpu_dct1_along_dim!(out_tgt, dct_input, dim, :backward)
                 current_data = out_tgt
+                current_disposable = out_tgt !== grid_data
             end
 
         elseif basis_type == :fourier_real || basis_type == :fourier_complex
@@ -382,13 +389,14 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
                 output_shape == plan.grid_shape || throw(DimensionMismatch(
                     "real inverse FFT produced intermediate shape $output_shape " *
                     "instead of final grid shape $(plan.grid_shape)"))
-                # current_data is ping-pong scratch here (the reversed order
-                # visits a Chebyshev stage before any Fourier stage on mixed
-                # fields), so the destructive cuFFT C2R may consume it without
-                # the defensive input copy.
+                # `current_disposable` says whether current_data is dead
+                # ping-pong scratch (mixed fields visit a Chebyshev stage
+                # first, making it so); only then may the destructive cuFFT
+                # C2R consume it without the defensive input copy.
                 gpu_ifft_dim!(grid_data, current_data, fft_plan;
-                              destroy_input=(current_data !== coeff_data))
+                              destroy_input=current_disposable)
                 current_data = grid_data
+                current_disposable = false  # caller's live output buffer
             else
                 scratch = get_gpu_mixed_transform_scratch(plan, complex_T, output_shape)
                 output = _next_mixed_complex_buffer(current_data, scratch)
@@ -400,6 +408,7 @@ function gpu_mixed_backward_transform!(grid_data::CuArray{T, N}, coeff_data::CuA
                     gpu_ifft_dim!(output, current_data, fft_plan)
                 end
                 current_data = output
+                current_disposable = true   # scratch ping-pong buffer
             end
         end
         _require_mixed_shape("inverse stage $stage_index output", current_data, output_shape)
