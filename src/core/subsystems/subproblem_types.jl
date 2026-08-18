@@ -37,6 +37,12 @@ mutable struct SubproblemRuntimeCache
     # reallocated/retyped buffer can never be mistaken for a gathered one
     # (a stale flag would silently serve zeros as BC values).
     alg_F_gathered_into::Any
+    # Lazily-computed: `true` iff every algebraic (BC) F expression of this
+    # subproblem is provably IMMUTABLE (Number / ConstantOperator / compound
+    # tree of those). A ScalarField parameter or ArrayOperator leaf reads its
+    # CURRENT data at each gather — users ramp those mid-run — so such BCs
+    # must re-gather every step even though they are not time-dependent.
+    alg_F_static::Union{Nothing, Bool}
     eqn_sizes::Union{Nothing, Vector{Int}}
     eqn_raw_size::Int
     eqn_targets::Union{Nothing, Vector{Vector{Int}}}
@@ -66,7 +72,7 @@ SubproblemRuntimeCache() = SubproblemRuntimeCache(
     nothing, nothing, nothing, nothing, nothing,
     nothing, nothing, nothing,
     nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing, nothing,
-    nothing,
+    nothing, nothing,
     nothing, 0, nothing,
     nothing,
     Dict{Float64, Bool}(),

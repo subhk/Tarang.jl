@@ -656,6 +656,19 @@ function _push_recycled_history_state!(state::TimestepperState, key::Symbol, new
     return state.history
 end
 
+"""Push into a bounded history vector and stash the dropped storage under `key`
+for `_acquire_recycled_history_state!` to reuse — the depth-N generalization of
+`_push_recycled_history_state!` (which is hard-wired to `state.history` at
+depth 1)."""
+@inline function _push_trim_recycle!(vec::Vector, item, max_len::Int,
+                                     state::TimestepperState, key::Symbol)
+    push!(vec, item)
+    while length(vec) > max_len
+        state.timestepper_data[key] = popfirst!(vec)
+    end
+    return vec
+end
+
 """
     copy_field_data!(dest::ScalarField, src::ScalarField; preserve_layout=false)
 

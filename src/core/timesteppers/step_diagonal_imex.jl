@@ -345,14 +345,16 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
     F_n = evaluate_rhs(solver, current_state, t)
 
     if iteration == 0 || length(state.history) < 2
+        # Startup runs once: the copies below allocate, but every steady step
+        # reuses the storage they seed via the recycle keys.
         new_state = copy_state(current_state)
         axpy_state!(dt, F_n, new_state)
         _sbdf2_apply_be_L!(new_state, Lmap, dt)
-        _push_trim!(state.history, new_state, 2)
+        _push_trim_recycle!(state.history, new_state, 2, state, :ddi_sbdf2_X_recycled)
         # evaluate_rhs returns reused buffer fields; copy before storing so the next
         # step's RHS evaluation cannot overwrite this history entry (else F_{n-1}≡F_n
         # and the AB2 extrapolation 2F_n−F_{n-1} collapses to first order).
-        _push_trim!(F_history, copy_state(F_n), 2)
+        _push_trim_recycle!(F_history, copy_state(F_n), 2, state, :ddi_sbdf2_F_recycled)
     else
         X_n = current_state
         X_nm1 = state.history[end-1]
@@ -360,11 +362,22 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
 
         dt_prev = length(state.dt_history) >= 2 ? state.dt_history[end-1] : dt
 
-        new_state = copy_state(X_n)
+        # Recycle the state dropped from the last history trim instead of a
+        # fresh `copy_state` per step (the same pooling the RK sibling above
+        # got); the layout-preserving copy also avoids that copy's FFT
+        # round-trip. Safe: `_sbdf2_apply_bdf2_L!` fully overwrites
+        # `new_state`, and the recycled storage is the two-steps-old entry —
+        # distinct from `X_n`, `X_nm1`, and both F history entries.
+        new_state = _acquire_recycled_history_state!(state, :ddi_sbdf2_X_recycled,
+                                                     X_n; preserve_layout=true)
         _sbdf2_apply_bdf2_L!(new_state, X_n, X_nm1, F_n, F_nm1, dt, dt_prev, Lmap)
 
-        _push_trim!(state.history, new_state, 2)
-        _push_trim!(F_history, copy_state(F_n), 2)  # copy: see startup branch above
+        _push_trim_recycle!(state.history, new_state, 2, state, :ddi_sbdf2_X_recycled)
+        # Same recycling for the F history: copy F_n (reused RHS buffers — see
+        # startup branch) into the storage dropped from the last F trim.
+        F_store = _acquire_recycled_history_state!(state, :ddi_sbdf2_F_recycled,
+                                                   F_n; preserve_layout=true)
+        _push_trim_recycle!(F_history, F_store, 2, state, :ddi_sbdf2_F_recycled)
     end
 
     state.timestepper_data[:iteration] = iteration + 1

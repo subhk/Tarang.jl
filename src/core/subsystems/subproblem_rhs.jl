@@ -429,6 +429,56 @@ function gather_eqn_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem, solver,
     return dest
 end
 
+# Is this BC F expression provably IMMUTABLE — a value fixed at problem build?
+# `ConstantOperator.value::Float64` is an immutable struct field, so constants
+# and compound-constant trees over them can never change. A `ScalarField`
+# parameter or an `ArrayOperator` leaf is read LIVE at each gather
+# (`_extract_scalar` / `_bc_array_projection` read the current data), and users
+# ramp those mid-run without registering the BC as time-dependent — so any such
+# leaf makes the expression mutable and the gather-once skip unsafe.
+_alg_F_expr_immutable(::Nothing) = true
+_alg_F_expr_immutable(::ZeroOperator) = true
+_alg_F_expr_immutable(::Number) = true
+_alg_F_expr_immutable(::ConstantOperator) = true
+_alg_F_expr_immutable(n::NegateOperator) = _alg_F_expr_immutable(n.operand)
+_alg_F_expr_immutable(e::AddOperator)      = _alg_F_expr_immutable(e.left) && _alg_F_expr_immutable(e.right)
+_alg_F_expr_immutable(e::SubtractOperator) = _alg_F_expr_immutable(e.left) && _alg_F_expr_immutable(e.right)
+_alg_F_expr_immutable(e::MultiplyOperator) = _alg_F_expr_immutable(e.left) && _alg_F_expr_immutable(e.right)
+_alg_F_expr_immutable(e::DivideOperator)   = _alg_F_expr_immutable(e.left) && _alg_F_expr_immutable(e.right)
+_alg_F_expr_immutable(e::PowerOperator)    = _alg_F_expr_immutable(e.left) && _alg_F_expr_immutable(e.right)
+_alg_F_expr_immutable(::Any) = false
+
+"""
+    alg_F_is_static(sp) -> Bool
+
+`true` iff every algebraic (BC) F expression this subproblem gathers is
+provably immutable, making the steppers' gather-once ALG_F skip safe. The
+expression TREES are fixed after problem build, so the classification is
+computed once and cached in `sp.runtime.alg_F_static`.
+"""
+function alg_F_is_static(sp::Subproblem)
+    cached = sp.runtime.alg_F_static
+    cached !== nothing && return cached::Bool
+    static = true
+    eqn_sizes = _subproblem_eqn_sizes(sp)
+    for (eq_idx, eq_data) in enumerate(sp.problem.equation_data)
+        eqn_sizes[eq_idx] == 0 && continue
+        M_expr = get(eq_data, "M", nothing)
+        is_alg = M_expr === nothing || _is_zero_m_term(M_expr)
+        is_alg || continue
+        F_expr = get(eq_data, "F_expr", nothing)
+        if F_expr === nothing
+            F_expr = get(eq_data, "F", nothing)
+        end
+        if !_alg_F_expr_immutable(F_expr)
+            static = false
+            break
+        end
+    end
+    sp.runtime.alg_F_static = static
+    return static
+end
+
 """
     gather_alg_F!(dest, sp)
 

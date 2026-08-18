@@ -321,7 +321,11 @@ function step_subproblem_multistep!(
         # cached stage vector (identity-checked — a fresh `zeros` above never
         # matches and always gathers). Time-dependent BCs are rewritten into
         # equation_data once per step upstream, so they re-gather every step.
+        # `alg_F_is_static` additionally forces a re-gather for BC values that
+        # change through non-time channels (parameter fields, BC arrays),
+        # which `has_time_dependent_bcs` does not flag.
         if has_time_dependent_bcs(sp.problem.bc_manager) ||
+           !alg_F_is_static(sp) ||
            sp.runtime.alg_F_gathered_into !== alg_f
             gather_alg_F!(alg_f, sp)
         end

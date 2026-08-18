@@ -524,7 +524,12 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         RHS[sp_idx] = rhs
 
         alg_f = _sp_stage_vector!(sp, :alg_f, n_eq, mx0)
-        if bc_dynamic || sp.runtime.alg_F_gathered_into !== alg_f
+        # `alg_F_is_static` guards the skip against BC values that change
+        # through non-time channels (parameter fields, BC arrays): those read
+        # live data at each gather and must re-gather every step even though
+        # `has_time_dependent_bcs` is false.
+        if bc_dynamic || !alg_F_is_static(sp) ||
+           sp.runtime.alg_F_gathered_into !== alg_f
             gather_alg_F!(alg_f, sp)
         end
         ALG_F[sp_idx] = alg_f
