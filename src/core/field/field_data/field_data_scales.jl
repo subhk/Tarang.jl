@@ -204,7 +204,7 @@ function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple
         # that differs from the serial result. A correct distributed resample needs
         # a spectral zero-pad/truncate that respects the pencil decomposition (not
         # yet implemented), and the fixed-size PencilFFT plan cannot upsample
-        # in-place. Fail loud instead of corrupting data (audit 2026-06-23). The
+        # in-place. Fail loud instead of corrupting data. The
         # already-fixed dealiasing/filter paths resample in coefficient space and do
         # not reach here; this only bites an explicit grid-space resample/LockedField.
         error("Grid-space resampling of a distributed field (set_scales!/change_scales! " *
