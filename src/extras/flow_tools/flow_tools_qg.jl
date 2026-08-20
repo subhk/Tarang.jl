@@ -461,7 +461,7 @@ function qg_energy(qg::QGSystem)
     # (operations_integrate.jl: _integrate_full_distributed), so total_integral is
     # the COMPLETE global integral, identical on every rank. A second
     # MPI.Allreduce(SUM) here would sum that replicated scalar across all ranks and
-    # report nprocs × the true energy (round-4 audit 2026-06-23). Match the sibling
+    # report nprocs × the true energy. Match the sibling
     # diagnostics total_kinetic_energy / total_enstrophy, which integrate() directly.
     total_energy = total_integral / domain_volume
 
