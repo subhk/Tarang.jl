@@ -163,25 +163,47 @@ function _fill_random_reproducible!(data::AbstractArray, field::ScalarField,
         return
     end
 
-    gshape = global_shape(field.domain)
     local_size = size(data)
     ndims_data = ndims(data)
 
-    # Compute global index offsets for this rank
-    # For each dimension, find the starting global index
-    global_offsets = zeros(Int, ndims_data)
-    for dim in 1:min(ndims_data, length(gshape))
-        start_idx, _ = get_local_range(dist, gshape[dim], dim)
-        global_offsets[dim] = start_idx - 1  # Convert to 0-based offset
+    # The offsets and global sizes must describe THE ARRAY BEING FILLED, not
+    # the unscaled grid: a coeff-layout fill lives on a different pencil (other
+    # decomposed axis, rfft-halved first Fourier axis, permuted storage) and a
+    # scaled grid has a different global shape. Using the grid pencil for both
+    # made "c"/scaled fills decomposition-DEPENDENT — the one property this
+    # mode exists to guarantee.
+    if data isa PencilArrays.PencilArray
+        # The pencil knows its own LOGICAL global geometry, whatever the
+        # layout, scale, or permutation. Logical CartesianIndex access below
+        # handles permuted storage correctly.
+        ax = PencilArrays.range_local(data)
+        global_offsets = ntuple(d -> first(ax[d]) - 1, ndims_data)
+        global_sizes = PencilArrays.size_global(data)
+    elseif dist.size <= 1
+        # Serial: the local array IS the global array, for every layout and
+        # scale factor.
+        global_offsets = ntuple(_ -> 0, ndims_data)
+        global_sizes = local_size
+    else
+        # Distributed non-PencilArray storage (GPU+MPI / TransposableField):
+        # grid-pencil convention, as before. Coeff-layout fills on this path
+        # keep the legacy (grid-shaped) enumeration.
+        gshape = global_shape(field.domain)
+        offs = zeros(Int, ndims_data)
+        for dim in 1:min(ndims_data, length(gshape))
+            start_idx, _ = get_local_range(dist, gshape[dim], dim)
+            offs[dim] = start_idx - 1  # Convert to 0-based offset
+        end
+        global_offsets = Tuple(offs)
+        global_sizes = ntuple(dim -> dim <= length(gshape) ? gshape[dim] : local_size[dim],
+                              ndims_data)
     end
 
-    global_sizes = ntuple(dim -> dim <= length(gshape) ? gshape[dim] : local_size[dim],
-                          ndims_data)
     # Host vs device is resolved by dispatch on the architecture, not by an
     # `is_gpu` branch: a GPU distributor with no device implementation raises a
     # MethodError here instead of falling through to the host method.
     return _fill_random_global_indexed!(dist.architecture, data, seed,
-                                        Tuple(global_offsets), global_sizes,
+                                        global_offsets, global_sizes,
                                         distribution, scale)
 end
 

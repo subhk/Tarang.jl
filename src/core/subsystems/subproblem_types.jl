@@ -66,6 +66,13 @@ mutable struct SubproblemRuntimeCache
     # each Fourier axis and keep the coupled axis whole. `(start, step, len)` describes it
     # exactly, is fully concrete, and needs no views at all.
     strided_index_cache::Dict{UInt, Union{Nothing, Tuple{Int, Int, Int}}}
+    # Per-(subproblem, field) home for DOFs whose field storage cannot hold them:
+    # 0-D tau fields carry a length-0 sentinel, so a per-mode scatter has nowhere
+    # to write their solved values and the next gather would silently zero-fill —
+    # dropping every lift(tau) term from any history rebuilt by scatter→re-gather
+    # (the per-mode IMEX LX stage history). Keyed by objectid(field); only state
+    # fields that are actually scattered into ever get an entry.
+    zero_dim_stash::Dict{UInt, AbstractVector{ComplexF64}}
 end
 
 SubproblemRuntimeCache() = SubproblemRuntimeCache(
@@ -80,6 +87,7 @@ SubproblemRuntimeCache() = SubproblemRuntimeCache(
     Dict{UInt, Int}(),
     Dict{UInt, Any}(),
     Dict{UInt, Union{Nothing, Tuple{Int, Int, Int}}}(),
+    Dict{UInt, AbstractVector{ComplexF64}}(),
 )
 
 # Cap for the per-field memo Dicts (field_size_cache / coeff_index_cache) so a long

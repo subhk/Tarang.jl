@@ -167,6 +167,19 @@ function init_mpi!(handler::NetCDFFileHandler)
     end
 end
 
+"""Run `f()` and settle its outcome collectively across the handler's ranks.
+
+The write path mixes rank-locally fallible NetCDF I/O (each rank writes its own
+`_p<rank>.nc` file — one node's ENOSPC is invisible to the others) with
+unconditionally collective postprocess reductions. Without this sync a failing
+rank unwinds while its peers walk into the next task's `MPI.Allreduce` and hang
+forever. Delegates to `_collectively` (one `Allreduce` per call, success and
+failure alike, so the collective count stays rank-uniform)."""
+function _output_collectively(f, handler::NetCDFFileHandler, context::AbstractString)
+    handler.dist === nothing && return f()
+    return _collectively(f, handler.dist, context)
+end
+
 """
 Get current set path following Tarang naming: handler_name_s1/
 """
@@ -956,7 +969,7 @@ function build_layout_metadata(task::Dict, operator, data)
     # Account for it instead of bailing — otherwise NO start/count/global_shape
     # attrs are written, and the RECONSTRUCT merge falls back to inferring a
     # single-last-axis decomposition, which scrambles the restart on a >=2D process
-    # mesh (round-4 audit 2026-06-23). All leading (component + complex) dims are
+    # mesh. All leading (component + complex) dims are
     # non-spatial; the decomposed spatial dims are trailing.
     has_complex_split = (ndims_data == base_ndims + 1)
     if ndims_data != base_ndims && !has_complex_split
@@ -1294,7 +1307,7 @@ function get_local_shape(layout, domain_info, scales, rank)
                 # The previous remainder-on-FIRST + column-major formula diverged
                 # from the slab on non-divisible / >=2D-mesh decompositions, so the
                 # RECONSTRUCT merge size-guard dropped every slab and NaN-filled the
-                # whole field (audit 2026-06-23).
+                # whole field.
                 n_procs = mesh[mesh_dim_idx]
                 global_size = global_shape[i]
 
@@ -1420,7 +1433,7 @@ function get_local_start(layout, domain_info, scales, rank)
 
     # Helper: 0-based start of the PencilArrays local_data_range (remainder-on-LAST
     # ranks): start = N*c÷P. The previous remainder-on-FIRST formula diverged from
-    # the actual slab on non-divisible decompositions (audit 2026-06-23).
+    # the actual slab on non-divisible decompositions.
     function compute_start(global_size, n_procs, proc_coord)
         return div(global_size * proc_coord, n_procs)
     end
@@ -1449,7 +1462,17 @@ function get_local_start(layout, domain_info, scales, rank)
             end
         end
     else
-        # GPU+MPI / TransposableField ZLocal convention: decompose FIRST dims
+        # GPU+MPI / TransposableField ZLocal convention: decompose FIRST dims.
+        # The start formula MUST be the cumulative form of get_local_shape's
+        # remainder-on-FIRST counts (which match the actual slab from
+        # get_local_array_size). The balanced `div(N*c, P)` start paired with
+        # remainder-first counts produced overlapping AND gapped hyperslabs
+        # whenever N % P != 0 (the fix updated only this start side
+        # for the pencil convention).
+        function compute_start_remfirst(global_size, n_procs, proc_coord)
+            base = div(global_size, n_procs)
+            return proc_coord * base + min(proc_coord, global_size % n_procs)
+        end
         P1 = mesh[1]
         P2 = n_mesh_dims >= 2 ? mesh[2] : 1
         coord1 = rank % P1
@@ -1458,10 +1481,10 @@ function get_local_start(layout, domain_info, scales, rank)
         for i in 1:n_dims
             if i == 1 && n_mesh_dims >= 1
                 # Decompose dim 1 by P1
-                start_indices[i] = compute_start(global_shape[i], P1, coord1)
+                start_indices[i] = compute_start_remfirst(global_shape[i], P1, coord1)
             elseif i == 2 && n_mesh_dims >= 2
                 # Decompose dim 2 by P2
-                start_indices[i] = compute_start(global_shape[i], P2, coord2)
+                start_indices[i] = compute_start_remfirst(global_shape[i], P2, coord2)
             else
                 # This dimension is not decomposed - starts at 0
                 start_indices[i] = 0
@@ -1615,7 +1638,7 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
     # block in its collectives (MPI.Barrier in create_current_file!, MPI.Allreduce
     # in extrema/mean/var postprocess) while others return here → DEADLOCK.
     # Broadcast rank 0's decision so every rank writes or skips together, mirroring
-    # process!(VirtualFileHandler,...) (round-4 audit 2026-06-23). iter/sim_dt
+    # process!(VirtualFileHandler,...). iter/sim_dt
     # cadences are already rank-consistent, so the Bcast is a no-op for them.
     # Only a `wall_dt` cadence makes check_schedule's decision rank-divergent
     # (per-rank wall_time); iter/sim_dt decisions are identical on every rank.
@@ -1657,6 +1680,10 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
                 ))
             end
         catch e
+            # Best-effort metadata stamp: a missing/locked/failed FILE must not
+            # block rollover, but anything that is not an I/O failure is a real
+            # bug — surface it instead of swallowing.
+            (e isa NetCDF.NetCDFError || e isa SystemError || e isa Base.IOError) || rethrow()
             @debug "Failed to finalize file before rollover" exception=e
         end
         handler.set_num += 1
@@ -1665,14 +1692,20 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
         empty!(handler._created_vars)
     end
     
-    # Ensure current file exists and is fresh for new sets
+    # Ensure current file exists and is fresh for new sets. Per-rank fallible
+    # (each rank creates its own `_p<rank>.nc`; one rank's missing directory or
+    # full disk is invisible to the others), so the outcome is settled
+    # collectively — otherwise the healthy ranks sail into the write section's
+    # collectives below while the failed rank has already unwound.
     filename = current_file(handler)
-    if !isfile(filename)
-        create_current_file!(handler)
-    elseif handler.file_write_num == 1 && handler.mode == "overwrite"
-        # First write of a new set in overwrite mode - recreate the file
-        # This handles the case where files exist from a previous run
-        create_current_file!(handler)
+    _output_collectively(handler, "process! file creation") do
+        if !isfile(filename)
+            create_current_file!(handler)
+        elseif handler.file_write_num == 1 && handler.mode == "overwrite"
+            # First write of a new set in overwrite mode - recreate the file
+            # This handles the case where files exist from a previous run
+            create_current_file!(handler)
+        end
     end
 
     # Wrap all I/O in try/finally so that any exception during writing
@@ -1681,13 +1714,23 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
     # descriptor on each call, so there is no persistent handle to leak.
     # The try/finally here protects handler state consistency.
     try
-        # Write time metadata
+        # Write time metadata. These are per-rank fallible NetCDF writes (each
+        # rank owns its `_p<rank>.nc` file), and the task loop below runs
+        # COLLECTIVE staging/postprocess operations — so failures must be
+        # settled collectively before any rank enters the loop, or the healthy
+        # ranks hang in the first task's Allreduce. The same sync runs at the
+        # end of every `write_task_data!`, so a mid-loop write failure aborts
+        # all ranks together too, and the counter rollback in the catch below
+        # then happens on EVERY rank (a one-sided rollback desynchronized the
+        # per-rank time indices).
         write_index = handler.file_write_num
-        group_ncwrite([sim_time], filename, NETCDF_TIME_GROUP, "sim_time", start=[write_index])
-        group_ncwrite([wall_time], filename, NETCDF_TIME_GROUP, "wall_time", start=[write_index])
-        group_ncwrite([timestep], filename, NETCDF_TIME_GROUP, "timestep", start=[write_index])
-        group_ncwrite(Int64[iteration], filename, NETCDF_TIME_GROUP, "iteration", start=[write_index])
-        group_ncwrite(Int64[handler.total_write_num], filename, NETCDF_TIME_GROUP, "write_number", start=[write_index])
+        _output_collectively(handler, "process! time metadata") do
+            group_ncwrite([sim_time], filename, NETCDF_TIME_GROUP, "sim_time", start=[write_index])
+            group_ncwrite([wall_time], filename, NETCDF_TIME_GROUP, "wall_time", start=[write_index])
+            group_ncwrite([timestep], filename, NETCDF_TIME_GROUP, "timestep", start=[write_index])
+            group_ncwrite(Int64[iteration], filename, NETCDF_TIME_GROUP, "iteration", start=[write_index])
+            group_ncwrite(Int64[handler.total_write_num], filename, NETCDF_TIME_GROUP, "write_number", start=[write_index])
+        end
 
         # Staging cache for GPU data (per write)
         stage_cache = NetCDFStagingCache()
@@ -1697,7 +1740,9 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
             write_task_data!(handler, filename, task, write_index, stage_cache)
         end
     catch e
-        # Roll back counters so the failed write can be retried
+        # Roll back counters so the failed write can be retried. The collective
+        # failure syncs above/inside write_task_data! guarantee every rank
+        # reaches this catch when any rank fails, keeping the counters aligned.
         handler.total_write_num -= 1
         handler.file_write_num -= 1
         rethrow(e)
@@ -1932,6 +1977,10 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     # Use Julia types directly for NetCDF.jl (NC_FLOAT/NC_DOUBLE are C constants)
     nc_type = eltype(data) <: Float32 ? Float32 : Float64
     
+    # From here on: per-rank fallible NetCDF I/O, settled collectively — see
+    # `_output_collectively` for why (one rank's disk failure must not strand
+    # its peers in the NEXT task's collective staging/postprocess).
+    _output_collectively(handler, "write_task_data!($(task_name))") do
     # Check cached set before opening the file (avoids repeated open/close per task)
     variable_exists = task_name in handler._created_vars
     if !variable_exists
@@ -2008,6 +2057,7 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     data_with_time = reshape(data, 1, size(data)...)
     start_indices = [write_index; ones(Int, length(size(data)))]
     group_ncwrite(data_with_time, filename, NETCDF_VARS_GROUP, task_name, start=start_indices)
+    end  # _output_collectively
 
     return true
 end
@@ -2028,6 +2078,14 @@ function _stage_scalar_field!(cache::Dict{Tuple{UInt, Symbol}, Any}, field::Scal
     end
     ensure_layout!(field, layout)
     arr = layout == :c ? get_coeff_data(field) : get_grid_data(field)
+    # See the NetCDFStagingCache method above: permuted coeff pencils cannot be
+    # staged under grid-convention metadata.
+    if layout == :c && arr isa PencilArrays.PencilArray
+        error("layout=\"c\" output of `$(field.name)` is not supported on the " *
+              "distributed PencilArrays path: the coefficient pencil is permuted " *
+              "and decomposed differently than the metadata assumes. Write " *
+              "grid-space output instead, or gather coefficients manually.")
+    end
     staged = get_cpu_data(arr)
     cache[key] = staged
     return staged
@@ -2041,6 +2099,20 @@ function _stage_scalar_field!(cache::NetCDFStagingCache, field::ScalarField, lay
     end
     ensure_layout!(field, norm_layout)
     arr = norm_layout == :c ? get_coeff_data(field) : get_grid_data(field)
+    # Coefficient data on a PencilArray lives on the PERMUTED PencilFFTs output
+    # pencil (storage order ≠ logical order, and a different decomposed axis
+    # than the grid pencil), while the task metadata (start/count/global_shape)
+    # describes the grid convention — staging `parent()` here would write each
+    # rank's slab transposed under wrong-axis offsets, silently scrambled on
+    # merge whenever the local extents coincide. Refuse loudly until coeff
+    # output gets permutation-aware metadata. (Non-pencil coeff storage — the
+    # serial and GPU+MPI/TransposableField paths — is unaffected.)
+    if norm_layout == :c && arr isa PencilArrays.PencilArray
+        error("layout=\"c\" output of `$(field.name)` is not supported on the " *
+              "distributed PencilArrays path: the coefficient pencil is permuted " *
+              "and decomposed differently than the metadata assumes. Write " *
+              "grid-space output instead, or gather coefficients manually.")
+    end
     staged = get_cpu_data(arr)
     cache.cpu_cache[key] = staged
     return staged

@@ -9,6 +9,11 @@ for domains with various bases (Fourier, Chebyshev, Legendre).
 const _transform_setup_logged = Ref(false)
 
 # Transform planning and execution
+
+"""Basis composition a transform plan serves: (type name, size) per axis."""
+_plan_basis_signature(domain::Domain) =
+    Tuple((nameof(typeof(b)), b.meta.size) for b in domain.bases)
+
 """
     Plan all transforms for a domain.
 
@@ -20,11 +25,16 @@ function plan_transforms!(dist::Distributor, domain::Domain)
     gshape = global_shape(domain)
     ndim = length(domain.bases)
 
-    # Check if we already have a PencilFFT plan with matching input shape
-    # If so, reuse it to ensure all fields use the same pencils
+    # Check if we already have a PencilFFT plan for this configuration.
+    # If so, reuse it to ensure all fields use the same pencils. The BASIS
+    # signature must match too, not just the grid shape: (Cheb(64), RF(64)) and
+    # (RF(64), CF(64)) share gshape (64,64) but need entirely different plans —
+    # reusing across them FFT'd the Chebyshev axis and skipped its DCT and
+    # `pencil_solve`, silently (the serial guard below always checked types).
     if dist.pencil_fft_input !== nothing
         existing_gshape = dist.pencil_fft_input.size_global
-        if existing_gshape == gshape && !isempty(dist.transforms)
+        if existing_gshape == gshape && !isempty(dist.transforms) &&
+           dist.plan_basis_signature == _plan_basis_signature(domain)
             return  # Reuse existing plan - same configuration
         end
     end
@@ -55,11 +65,18 @@ function plan_transforms!(dist::Distributor, domain::Domain)
     dist.pencil_fft_input = nothing
     dist.pencil_fft_output = nothing
     dist.pencil_config = nothing
+    # Also drop the mixed-domain solve pencil and the plan signature: a stale
+    # `pencil_solve` from an earlier mixed plan makes downstream predicates
+    # (`pencil_solve !== nothing` in subsystem building / lazy RHS) misroute a
+    # replanned pure-Fourier problem as a coupled mixed solve.
+    dist.pencil_solve = nothing
+    dist.plan_basis_signature = nothing
 
     # Analyze basis types
     fourier_axes = Int[]
     chebyshev_axes = Int[]
     legendre_axes = Int[]
+    other_jacobi_axes = Int[]
 
     for (i, basis) in enumerate(domain.bases)
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
@@ -68,6 +85,13 @@ function plan_transforms!(dist::Distributor, domain::Domain)
             push!(chebyshev_axes, i)
         elseif isa(basis, Legendre)
             push!(legendre_axes, i)
+        elseif isa(basis, JacobiBasis)
+            # ChebyshevU / ChebyshevV / Ultraspherical / generic Jacobi. These
+            # MUST be classified: an unbucketed coupled axis used to fall through
+            # to the pure-Fourier MPI setup, get NoTransform, and feed GRID
+            # values to the coefficient-space tau solve — silently, and only
+            # under MPI (serial registers the transform).
+            push!(other_jacobi_axes, i)
         end
     end
 
@@ -88,6 +112,13 @@ function plan_transforms!(dist::Distributor, domain::Domain)
 
         if has_legendre
             error("MPI parallelization is not yet supported for Legendre bases. " *
+                  "Use serial execution (1 MPI process).")
+        end
+
+        if !isempty(other_jacobi_axes)
+            names = join(unique([String(nameof(typeof(domain.bases[i]))) for i in other_jacobi_axes]), ", ")
+            error("MPI parallelization is not yet supported for $(names) bases. " *
+                  "Only ChebyshevT is supported as the coupled axis under MPI. " *
                   "Use serial execution (1 MPI process).")
         end
 
@@ -112,6 +143,7 @@ function plan_transforms!(dist::Distributor, domain::Domain)
                     setup_fftw_transform!(dist, basis, i)
                 end
             end
+            dist.plan_basis_signature = _plan_basis_signature(domain)
             return
         end
 
@@ -141,6 +173,7 @@ function plan_transforms!(dist::Distributor, domain::Domain)
                 basis = domain.bases[axis]
                 setup_chebyshev_transform!(dist, basis, axis)
             end
+            dist.plan_basis_signature = _plan_basis_signature(domain)
             return
         end
 
@@ -150,6 +183,7 @@ function plan_transforms!(dist::Distributor, domain::Domain)
         else  # ndim == 3
             setup_pencil_fft_transforms_3d!(dist, domain, gshape, fourier_axes)
         end
+        dist.plan_basis_signature = _plan_basis_signature(domain)
         return
     end
 
@@ -169,6 +203,8 @@ function plan_transforms!(dist::Distributor, domain::Domain)
             setup_jacobi_transform!(dist, basis, i)
         end
     end
+    dist.plan_basis_signature = _plan_basis_signature(domain)
+    return
 end
 
 function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,

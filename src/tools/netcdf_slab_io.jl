@@ -74,15 +74,29 @@ end
 Accepts a file, a file without its `.nc` suffix, or a directory of `*.nc` slabs
 (with or without the suffix on the directory name)."""
 function _slab_files(path::AbstractString)
-    isdir(path) && return sort(filter(f -> endswith(f, ".nc"), readdir(path; join = true)))
-    isfile(path) && return [String(path)]
-
-    with_nc = endswith(path, ".nc") ? String(path) : string(path, ".nc")
-    isfile(with_nc) && return [with_nc]
-
     stem = endswith(path, ".nc") ? String(path[1:end-3]) : String(path)
-    isdir(stem) && return sort(filter(f -> endswith(f, ".nc"), readdir(stem; join = true)))
+    dir = isdir(path) ? String(path) : (isdir(stem) ? stem : nothing)
+    with_nc = endswith(path, ".nc") ? String(path) : string(path, ".nc")
+    file = (isfile(path) && !isdir(path)) ? String(path) :
+           (isfile(with_nc) ? with_nc : nothing)
 
+    dir_files = dir === nothing ? String[] :
+                sort(filter(f -> endswith(f, ".nc"), readdir(dir; join = true)))
+
+    if dir !== nothing && file !== nothing
+        # Both a slab directory and a single-file checkpoint exist for this
+        # stem — one of them is stale (the save paths now clean the other form
+        # up, so this state predates that). Pick the newer write, loudly.
+        dir_mtime = isempty(dir_files) ? 0.0 : maximum(mtime, dir_files)
+        newer = mtime(file) > dir_mtime ? "file" : "directory"
+        @warn "Both a slab directory `$dir` and a checkpoint file `$file` exist " *
+              "for this path; loading the newer $newer. Remove the stale one to " *
+              "silence this warning."
+        return mtime(file) > dir_mtime ? [file] : dir_files
+    end
+
+    dir !== nothing && return dir_files
+    file !== nothing && return [file]
     return String[]
 end
 
