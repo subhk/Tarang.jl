@@ -66,6 +66,20 @@ struct NCCLTransposeBuffer{T}
     send_displs::Vector{Int}
     recv_displs::Vector{Int}
 
+    # Device-side chunk plan for the pack/unpack kernels: per-peer chunk sizes,
+    # buffer displacements and the prefix sums the kernels binary-search. Every
+    # transpose used to REBUILD these with a host comprehension plus three fresh
+    # `CuArray` uploads and a device `cumsum` — six allocations per transpose,
+    # eight transposes per 3-D forward+backward pair, on arrays of 2-8 elements.
+    # They are `max_peers` long and filled in place by `_stage_chunk_plan!`.
+    send_chunks_dev::CuArray{Int, 1}
+    send_displs_dev::CuArray{Int, 1}
+    send_prefix_dev::CuArray{Int, 1}
+    recv_chunks_dev::CuArray{Int, 1}
+    recv_displs_dev::CuArray{Int, 1}
+    recv_prefix_dev::CuArray{Int, 1}
+    host_scratch::Vector{Int}   # 2*max_peers: chunk sizes, then prefix sums
+
     # NCCL sub-communicators (from Task 4)
     nccl_subcomms::Tarang.NCCLSubComms
 
@@ -126,9 +140,57 @@ function NCCLTransposeBuffer(pencil::PencilDecomposition, T::Type)
         zeros(Int, max_peers),
         zeros(Int, max_peers),
         zeros(Int, max_peers),
+        CUDA.zeros(Int, max_peers),
+        CUDA.zeros(Int, max_peers),
+        CUDA.zeros(Int, max_peers),
+        CUDA.zeros(Int, max_peers),
+        CUDA.zeros(Int, max_peers),
+        CUDA.zeros(Int, max_peers),
+        zeros(Int, 2 * max_peers),
         nccl_subcomms,
         pencil
     )
+end
+
+"""
+    _stage_chunk_plan!(buffer, side, n_total, npeers) -> (chunks, displs, prefix)
+
+Fill `buffer`'s preallocated device chunk-plan vectors for an even split of
+`n_total` across `npeers` peers (remainder to the first `n_total % npeers`), and
+return them. `side` is `:send` or `:recv`, selecting which host displacement
+vector to upload alongside.
+
+Entries past `npeers` are left stale on purpose: every consumer — the pack and
+unpack kernels and `_gpu_find_rank` — is passed `nranks` explicitly and reads
+only `1:nranks`.
+
+Allocation-free. The three device vectors, and the host staging vector the chunk
+sizes and prefix sums are built in, all live on `buffer`.
+"""
+function _stage_chunk_plan!(buffer::NCCLTransposeBuffer, side::Symbol,
+                            n_total::Int, npeers::Int)
+    chunks_dev, displs_dev, prefix_dev, displs_host = if side === :send
+        buffer.send_chunks_dev, buffer.send_displs_dev, buffer.send_prefix_dev, buffer.send_displs
+    elseif side === :recv
+        buffer.recv_chunks_dev, buffer.recv_displs_dev, buffer.recv_prefix_dev, buffer.recv_displs
+    else
+        error("_stage_chunk_plan!: side must be :send or :recv, got $side")
+    end
+
+    host = buffer.host_scratch
+    base, rem = divrem(n_total, npeers)
+    acc = 0
+    @inbounds for i in 1:npeers
+        c = base + (i - 1 < rem ? 1 : 0)
+        host[i] = c
+        acc += c
+        host[npeers + i] = acc      # prefix sums staged behind the chunk sizes
+    end
+
+    copyto!(chunks_dev, 1, host, 1, npeers)
+    copyto!(prefix_dev, 1, host, npeers + 1, npeers)
+    copyto!(displs_dev, 1, displs_host, 1, npeers)
+    return chunks_dev, displs_dev, prefix_dev
 end
 
 # ============================================================================
@@ -526,10 +588,8 @@ function Tarang.transpose_z_to_y!(buffer::NCCLTransposeBuffer{T},
     end
 
     # Pack data: split by Z dimension (z_chunk_sizes for each rank)
-    chunk_sizes_gpu = CuArray(Int[div(Nz, row_size) + ((i-1) < mod(Nz, row_size) ? 1 : 0) for i in 1:row_size])
-    displs_gpu = CuArray(buffer.send_displs[1:row_size])
-
-    prefix_sums_gpu = cumsum(chunk_sizes_gpu)
+    chunk_sizes_gpu, displs_gpu, prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :send, Nz, row_size)
     kernel = pack_z_to_y_kernel!(CUDABackend())
     kernel(buffer.send_buffer, data, Nx_local, Ny_local, Nz,
            chunk_sizes_gpu, displs_gpu, row_size, prefix_sums_gpu; ndrange=total)
@@ -549,10 +609,8 @@ function Tarang.transpose_z_to_y!(buffer::NCCLTransposeBuffer{T},
     Nx_y, Ny_y, Nz_y = pencil.y_pencil_shape
 
     # Unpack: each peer contributed its Ny_local chunk (Y-chunks)
-    recv_chunk_sizes_gpu = CuArray(Int[div(Ny_global, row_size) + ((i-1) < mod(Ny_global, row_size) ? 1 : 0) for i in 1:row_size])
-    recv_displs_gpu = CuArray(buffer.recv_displs[1:row_size])
-
-    recv_prefix_sums_gpu = cumsum(recv_chunk_sizes_gpu)
+    recv_chunk_sizes_gpu, recv_displs_gpu, recv_prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :recv, Ny_global, row_size)
     kernel_unpack = unpack_z_to_y_kernel!(CUDABackend())
     kernel_unpack(output, buffer.recv_buffer, Nx_y, Ny_y, Nz_y,
                   recv_chunk_sizes_gpu, recv_displs_gpu, row_size, recv_prefix_sums_gpu; ndrange=prod(pencil.y_pencil_shape))
@@ -634,10 +692,8 @@ function Tarang.transpose_y_to_z!(buffer::NCCLTransposeBuffer{T},
 
     # CRITICAL FIX: Use proper pack kernel for uneven decomposition
     # Partition Y dimension and pack data for each destination rank
-    chunk_sizes_gpu = CuArray(Int[div(Ny, row_size) + ((i-1) < mod(Ny, row_size) ? 1 : 0) for i in 1:row_size])
-    displs_gpu = CuArray(buffer.send_displs[1:row_size])
-
-    prefix_sums_gpu = cumsum(chunk_sizes_gpu)
+    chunk_sizes_gpu, displs_gpu, prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :send, Ny, row_size)
     kernel = pack_y_to_z_kernel!(CUDABackend())
     kernel(buffer.send_buffer, data, Nx_local, Ny, Nz_local,
            chunk_sizes_gpu, displs_gpu, row_size, prefix_sums_gpu; ndrange=total)
@@ -654,9 +710,8 @@ function Tarang.transpose_y_to_z!(buffer::NCCLTransposeBuffer{T},
     output = CUDA.zeros(T, pencil.z_pencil_shape...)
     Nx_z, Ny_z, Nz_z = pencil.z_pencil_shape
 
-    recv_chunk_sizes_gpu = CuArray(Int[div(Nz_global, row_size) + ((i-1) < mod(Nz_global, row_size) ? 1 : 0) for i in 1:row_size])
-    recv_displs_gpu = CuArray(buffer.recv_displs[1:row_size])
-    recv_prefix_sums_gpu = cumsum(recv_chunk_sizes_gpu)
+    recv_chunk_sizes_gpu, recv_displs_gpu, recv_prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :recv, Nz_global, row_size)
 
     kernel_unpack = unpack_y_to_z_kernel!(CUDABackend())
     kernel_unpack(output, buffer.recv_buffer, Nx_z, Ny_z, Nz_z,
@@ -737,10 +792,8 @@ function Tarang.transpose_y_to_x!(buffer::NCCLTransposeBuffer{T},
     end
 
     # Pack data: split by Y dimension (y_chunk_sizes for each rank)
-    chunk_sizes_gpu = CuArray(Int[div(Ny, col_size) + ((i-1) < mod(Ny, col_size) ? 1 : 0) for i in 1:col_size])
-    displs_gpu = CuArray(buffer.send_displs[1:col_size])
-
-    prefix_sums_gpu = cumsum(chunk_sizes_gpu)
+    chunk_sizes_gpu, displs_gpu, prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :send, Ny, col_size)
     kernel = pack_y_to_x_kernel!(CUDABackend())
     kernel(buffer.send_buffer, data, Nx_local, Ny, Nz_local,
            chunk_sizes_gpu, displs_gpu, col_size, prefix_sums_gpu; ndrange=total)
@@ -757,9 +810,8 @@ function Tarang.transpose_y_to_x!(buffer::NCCLTransposeBuffer{T},
     output = CUDA.zeros(T, pencil.x_pencil_shape...)
     Nx_x, Ny_x, Nz_x = pencil.x_pencil_shape
 
-    recv_chunk_sizes_gpu = CuArray(Int[div(Nx_global, col_size) + ((i-1) < mod(Nx_global, col_size) ? 1 : 0) for i in 1:col_size])
-    recv_displs_gpu = CuArray(buffer.recv_displs[1:col_size])
-    recv_prefix_sums_gpu = cumsum(recv_chunk_sizes_gpu)
+    recv_chunk_sizes_gpu, recv_displs_gpu, recv_prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :recv, Nx_global, col_size)
 
     kernel_unpack = unpack_y_to_x_kernel!(CUDABackend())
     kernel_unpack(output, buffer.recv_buffer, Nx_x, Ny_x, Nz_x,
@@ -839,10 +891,8 @@ function Tarang.transpose_x_to_y!(buffer::NCCLTransposeBuffer{T},
     end
 
     # Pack data: split by X dimension using GPU kernel
-    chunk_sizes_gpu = CuArray(Int[div(Nx_global, col_size) + ((i-1) < mod(Nx_global, col_size) ? 1 : 0) for i in 1:col_size])
-    displs_gpu = CuArray(buffer.send_displs[1:col_size])
-
-    prefix_sums_gpu = cumsum(chunk_sizes_gpu)
+    chunk_sizes_gpu, displs_gpu, prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :send, Nx_global, col_size)
     kernel = pack_x_to_y_kernel!(CUDABackend())
     kernel(buffer.send_buffer, data, Nx, Ny_local, Nz_local,
            chunk_sizes_gpu, displs_gpu, col_size, prefix_sums_gpu; ndrange=total)
@@ -858,9 +908,8 @@ function Tarang.transpose_x_to_y!(buffer::NCCLTransposeBuffer{T},
     output = CUDA.zeros(T, pencil.y_pencil_shape...)
     Nx_y, Ny_y, Nz_y = pencil.y_pencil_shape
 
-    recv_chunk_sizes_gpu = CuArray(Int[div(Ny_global, col_size) + ((i-1) < mod(Ny_global, col_size) ? 1 : 0) for i in 1:col_size])
-    recv_displs_gpu = CuArray(buffer.recv_displs[1:col_size])
-    recv_prefix_sums_gpu = cumsum(recv_chunk_sizes_gpu)
+    recv_chunk_sizes_gpu, recv_displs_gpu, recv_prefix_sums_gpu =
+        _stage_chunk_plan!(buffer, :recv, Ny_global, col_size)
 
     kernel_unpack = unpack_x_to_y_kernel!(CUDABackend())
     kernel_unpack(output, buffer.recv_buffer, Nx_y, Ny_y, Nz_y,

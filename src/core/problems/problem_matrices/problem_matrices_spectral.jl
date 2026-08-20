@@ -150,7 +150,7 @@ function _spectral_laplacian(field::ScalarField, eqn_size::Int, var_size::Int)
             # exception means the matrix exists but could not be built — a real fault
             # that must not be reported as "this basis is unsupported".
             D2 = try
-                ComplexF64.(differentiation_matrix(basis, 2))
+                ComplexF64.(spectral_derivative_matrix(basis, 2))
             catch err
                 err isa Union{MethodError, ArgumentError} || rethrow()
                 nothing
@@ -310,7 +310,7 @@ function _spectral_differentiate(field::ScalarField, coord::Coordinate, order::I
         # or ArgumentError and the caller falls back. Any other exception means the
         # matrix exists but could not be built, and must not read as "unsupported".
         D_dense = try
-            ComplexF64.(differentiation_matrix(basis, order))
+            ComplexF64.(spectral_derivative_matrix(basis, order))
         catch err
             err isa Union{MethodError, ArgumentError} || rethrow()
             nothing

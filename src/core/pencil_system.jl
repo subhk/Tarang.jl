@@ -316,7 +316,7 @@ distinct basis object gets its own entry.
 function _ps_cheb_diff(basis::JacobiBasis, order::Int)
     key = (objectid(basis), order)
     get!(_ps_cheb_cache, key) do
-        ComplexF64.(differentiation_matrix(basis, order))
+        ComplexF64.(spectral_derivative_matrix(basis, order))
     end
 end
 

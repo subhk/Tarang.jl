@@ -42,7 +42,8 @@ function build_operator_differentiation_matrix(var, coord::Coordinate, order::In
     D1d = nothing
 
     if isa(target_basis, JacobiBasis)
-        D1d = differentiation_matrix(target_basis, order)
+        # Bridged: this matrix is applied to a FIELD's stored coefficients.
+        D1d = spectral_derivative_matrix(target_basis, order)
     elseif isa(target_basis, FourierBasis)
         D1d = fourier_differentiation_matrix(target_basis, order)
     end

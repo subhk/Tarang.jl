@@ -15,7 +15,7 @@ The extension is organized into the following files:
 - memory.jl: Memory pool and pinned memory management
 - architecture.jl: GPU architecture implementation and data movement
 - transforms.jl: Field transforms and FFT plans
-- dct.jl: DCT transforms for Chebyshev basis (2D and 3D)
+- dct.jl: per-dimension FFT plans + shared plan/scratch caches
 - mixed_transforms.jl: Mixed Fourier-Chebyshev transform plans
 - kernels.jl: Element-wise and fused GPU kernels
 - batched_fft.jl: Batched FFT support
@@ -100,25 +100,15 @@ export transpose_y_to_x!, transpose_x_to_y!
 export nccl_alltoall!
 export compute_transpose_counts!, finalize_nccl_transpose!
 
-# GPU DCT (Discrete Cosine Transform) for Chebyshev basis
-export GPUDCTPlan, GPUDCTPlanDim
-export plan_gpu_dct, plan_gpu_dct_dim
-export gpu_forward_dct_1d!, gpu_backward_dct_1d!
-export gpu_dct_dim!
-
-# DCT reorder kernels (memory-efficient even-odd interleaving)
-export reorder_for_dct!, inverse_reorder_for_dct!
-export reorder_for_dct_dim!, inverse_reorder_for_dct_dim!
-
-# Optimized DCT (memory-efficient R2C FFT based)
-export OptimizedGPUDCTPlan
-export plan_optimized_gpu_dct
-export optimized_forward_dct_1d!, optimized_backward_dct_1d!
+# NOTE: the DCT-**II**/III family (GPUDCTPlan, OptimizedGPUDCTPlan,
+# GPUDCTPlanDim, the even-odd reorder kernels and their twiddle kernels) has
+# been removed. Tarang's Chebyshev basis is DCT-**I** (REDFT00) on the
+# Gauss-Lobatto grid; that transform is `gpu_dct1_along_dim!` in
+# ext/cuda/cheb_deriv.jl, which the mixed and distributed drivers both call.
 
 # Distributed DCT (multi-GPU Chebyshev transforms)
 export DistributedDCTPlan
 export distributed_forward_dct!, distributed_backward_dct!
-export local_dct_along_dim!
 export finalize_distributed_dct_plan!
 
 # Distributed GPU transform dispatch
@@ -160,7 +150,7 @@ export create_dealiasing_mask_gpu, apply_dealiasing_gpu!
 export gpu_memory_info, check_gpu_memory
 
 # Internal allocation helpers are NOT exported - use Base.zeros/ones/similar with GPU arch instead
-# These functions are internal: _gpu_zeros, _gpu_ones, _gpu_similar, _gpu_fill
+# These functions are internal: _ext_gpu_zeros, _ext_gpu_ones, _ext_gpu_similar, _ext_gpu_fill
 
 # Transpose kernels for TransposableField
 export pack_for_transpose_kernel_3d!, pack_for_transpose_kernel_2d!

@@ -14,7 +14,6 @@ struct GPUMixedTransformPlan
     axis_ops::Vector{Tarang.AxisOp}  # Shared forward operation for each basis axis
     stage_shapes::Vector{Tuple}  # Input shape followed by each Fourier-first stage shape
     fft_plans::Dict{Int, GPUFFTPlanDim}  # FFT plans by dimension
-    dct_plans::Dict{Int, GPUDCTPlanDim}  # DCT plans by dimension
     grid_shape::Tuple{Vararg{Int}}
     coeff_shape::Tuple{Vararg{Int}}
 end
@@ -103,14 +102,14 @@ function plan_gpu_mixed_transform(arch::GPU{CuDevice}, bases::Tuple, local_grid_
         current_shape = ntuple(i -> i == dim ? op.out_len : current_shape[i], ndims)
     end
 
-    # Mixed transforms use the cached DCT-I implementation from cheb_deriv.jl.
-    # Keep this field for plan compatibility, but do not allocate the obsolete
-    # DCT-II/III twiddle plans.
-    dct_plans = Dict{Int, GPUDCTPlanDim}()
+    # Chebyshev axes need no stored plan: `gpu_dct1_along_dim!` (cheb_deriv.jl)
+    # builds and caches its own `GPUChebyshevDerivPlan` keyed by (n, batch, T).
+    # The struct used to carry an always-empty `dct_plans::Dict{Int,
+    # GPUDCTPlanDim}` left over from the removed DCT-II implementation.
 
     return GPUMixedTransformPlan(
         basis_types, transform_order, ops, stage_shapes,
-        fft_plans, dct_plans,
+        fft_plans,
         local_grid_shape, coeff_shape
     )
 end

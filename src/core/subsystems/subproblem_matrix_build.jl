@@ -221,7 +221,7 @@ function build_matrices!(sp::Subproblem, names, solver)
 
         cheb_basis = _subproblem_cheb_basis_from_sp(sp)
         Nz = cheb_basis !== nothing ? cheb_basis.meta.size : 1
-        is_bulk_size(sz) = Nz > 1 ? (sz >= Nz && sz % Nz == 0) : sz > 1
+        is_bulk_size(sz) = _is_bulk_eqn_size(sz, Nz)
 
         row_is_bulk = Vector{Bool}(undef, I)
         offset = 0

@@ -377,15 +377,21 @@ is not, the honest move is to decline the translation so the solver keeps its ex
     differentiation matrix does not conform to a rank's slab. The interpreted derivative
     works in GRID space, where the non-Fourier axis is LOCAL — so it is correct there and we
     must fall back to it. (Verified at np=2: interpreted err 1.3e-12; lazy is unserviceable.)
-  * NON-CHEBYSHEV JACOBI (Legendre, general Jacobi). `differentiation_matrix` returns the
-    classical recurrence for UNNORMALIZED Pₙ, but the transform stores ORTHONORMAL P̃ₙ = γₙPₙ
-    coefficients. The interpreted path applies that normalization; the lazy one does not, so
-    it is silently wrong (measured: error 5.3 on an amplitude-11.8 answer, wrong sign).
-    ChebyshevT/ChebyshevU carry no such normalization and agree to ~5e-13."""
+  * NON-CHEBYSHEV JACOBI — RESOLVED, no longer declined. `differentiation_matrix` returns the
+    classical recurrence for UNNORMALIZED Pₙ while the transform stores ORTHONORMAL P̃ₙ = γₙPₙ
+    coefficients, so applying it to a Legendre field's coefficients was silently wrong
+    (measured: error 5.3 on an amplitude-11.8 answer, wrong sign). That mismatch is now
+    bridged once, at `spectral_derivative_matrix` (basis_operators.jl), which
+    `_lazy_differentiation_matrix` uses — so the lazy path is correct here and compiles.
+    Verified against the interpreted recurrence: ChebyshevT 5.7e-14, ChebyshevU 1.7e-13,
+    Legendre 1.0e-12.
+
+    The same mismatch was silently corrupting the IMPLICIT path, which had no decline to
+    protect it: a Legendre LBVP for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against
+    an amplitude-0.248 answer while reporting success. It is now exact to 4.9e-16."""
 function _lazy_diff_axis_supported(field::ScalarField, basis)
     isa(basis, FourierBasis) && return true
     isa(basis, JacobiBasis) || return false
-    (isa(basis, ChebyshevT) || isa(basis, ChebyshevU)) || return false   # Legendre & friends
     dist = field.dist
     return !(dist !== nothing && dist.size > 1)                          # distributed ⇒ decline
 end
@@ -1260,7 +1266,7 @@ rationale above (and hard-failing on some stacks for mixed precision). The
 eltype in the key keeps a basis serving fields of different precisions from
 being handed the wrong matrix. Host callers get the sparse matrix unchanged."""
 function _lazy_differentiation_matrix(basis::JacobiBasis, order::Int, data::AbstractArray)
-    D = differentiation_matrix(basis, order)
+    D = spectral_derivative_matrix(basis, order)
     is_gpu_array(data) || return D
     return _get_device_basis_cache!(basis, :diff_matrix_device, data,
                                     order, eltype(data)) do
@@ -1452,11 +1458,6 @@ function build_lazy_rhs_plan!(solver::InitialValueSolver)
                 # slower. Do not cry wolf about it (see `_lazy_diff_axis_supported`).
                 declined_non_fourier = distributed && any(
                     b -> !is_fourier_axis(b), template.bases)
-                declined_normalized_jacobi = any(
-                    b -> isa(b, JacobiBasis) &&
-                         !(isa(b, ChebyshevT) || isa(b, ChebyshevU)),
-                    template.bases,
-                )
 
                 msg = "LazyRHS: cannot compile the RHS of equation $eq_idx for `$(template.name)` " *
                       "(expression: $(string(expr)))."
@@ -1466,10 +1467,6 @@ function build_lazy_rhs_plan!(solver::InitialValueSolver)
                            "along a decomposed coefficient axis, so the interpreted evaluator " *
                            "handles it — accurately, but slowly. Move the term to the implicit " *
                            "(L) side to keep the compiled RHS."
-                elseif declined_normalized_jacobi
-                    msg *= " The field uses a Legendre/non-Chebyshev Jacobi axis, " *
-                           "whose orthonormal coefficient normalization is not supported " *
-                           "by the compiled derivative path."
                 else
                     msg *= " Usual cause: an unsupported or mistyped operator in this term."
                     # For an all-Fourier distributed field the fallback is not merely slow: the
