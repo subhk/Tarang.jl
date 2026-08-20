@@ -13,6 +13,19 @@
 # then applies `pre_left` to match L_min's filtered row space.
 # ---------------------------------------------------------------------------
 
+"""
+    _is_bulk_eqn_size(sz, Nz) -> Bool
+
+Does an equation whose block occupies `sz` rows sit in the BULK of a subproblem
+with a coupled (Chebyshev) axis of length `Nz`?
+
+This is the SAME rule `subproblem_matrix_build.jl` uses to split `sp.bulk_rows`
+from `sp.bc_rows` — it is factored out here so the two cannot drift. A bulk block
+spans the whole coupled axis (one row per Chebyshev mode, times any component
+count); a BC/constraint block is a handful of rows that do not.
+"""
+@inline _is_bulk_eqn_size(sz::Int, Nz::Int) = Nz > 1 ? (sz >= Nz && sz % Nz == 0) : sz > 1
+
 _is_zero_F_expr(::Nothing) = true
 _is_zero_F_expr(::ZeroOperator) = true
 _is_zero_F_expr(x::Number) = x == 0
@@ -36,12 +49,15 @@ Currently supports:
 - `ArrayOperator` → unnormalized RFFT of the grid-space array, picked at the
   subproblem's Fourier mode (for space-dependent BCs)
 """
-_evaluate_alg_F(::Nothing, ::Subproblem) = ComplexF64(0)
-_evaluate_alg_F(::ZeroOperator, ::Subproblem) = ComplexF64(0)
-_evaluate_alg_F(c::ConstantOperator, sp::Subproblem) = _bc_constant_projection(Float64(c.value), sp)
-_evaluate_alg_F(x::Number, sp::Subproblem) = _bc_constant_projection(Float64(x), sp)
-_evaluate_alg_F(a::ArrayOperator, sp::Subproblem) = _bc_array_projection(a.value, sp)
-function _evaluate_alg_F(expr, sp::Subproblem)
+_evaluate_alg_F(::Nothing, ::Subproblem; warn_unsupported::Bool=true) = ComplexF64(0)
+_evaluate_alg_F(::ZeroOperator, ::Subproblem; warn_unsupported::Bool=true) = ComplexF64(0)
+_evaluate_alg_F(c::ConstantOperator, sp::Subproblem; warn_unsupported::Bool=true) =
+    _bc_constant_projection(Float64(c.value), sp)
+_evaluate_alg_F(x::Number, sp::Subproblem; warn_unsupported::Bool=true) =
+    _bc_constant_projection(Float64(x), sp)
+_evaluate_alg_F(a::ArrayOperator, sp::Subproblem; warn_unsupported::Bool=true) =
+    _bc_array_projection(a.value, sp)
+function _evaluate_alg_F(expr, sp::Subproblem; warn_unsupported::Bool=true)
     # A COMPOUND CONSTANT — `T(z=0) = 10*25`, `= h*T_amb`, `= 1/Re` — arrives here as a
     # Multiply/Add/Divide operator tree, not as a ConstantOperator. It used to fall through to
     # the silent zero below, so the boundary condition was enforced as 0 with no warning and the
@@ -52,10 +68,19 @@ function _evaluate_alg_F(expr, sp::Subproblem)
     end
     # Anything else genuinely is not supported as a BC right-hand side. Enforcing it as zero is a
     # silently wrong answer, which is worse than a slow or absent one — say so.
-    @warn "Boundary condition right-hand side of type $(typeof(expr)) is not supported and is " *
-          "being enforced as ZERO. Supported: a constant, a compound constant (`10*25`, `h*T_amb`), " *
-          "or a grid array (space-dependent BC). Rewrite the BC, or the solve will silently " *
-          "satisfy the wrong condition." maxlog=5
+    #
+    # `warn_unsupported=false` means the caller established this expression belongs to a BULK
+    # equation, whose value `apply_bc_override!` never reads (it writes `sp.bc_rows` only). See
+    # `gather_alg_F!`. Warning there is a FALSE ALARM, and a costly one: it tells the user their
+    # solve is silently wrong when it is not. A BVP/NLBVP has no `∂t` in ANY equation, so the
+    # `is_alg` test below classifies the main PDE as an algebraic row — that is how
+    # `Δ(u) + l1 + l2 = u*u + g` came to be reported as an unsupported boundary condition.
+    if warn_unsupported
+        @warn "Boundary condition right-hand side of type $(typeof(expr)) is not supported and is " *
+              "being enforced as ZERO. Supported: a constant, a compound constant (`10*25`, `h*T_amb`), " *
+              "or a grid array (space-dependent BC). Rewrite the BC, or the solve will silently " *
+              "satisfy the wrong condition." maxlog=5
+    end
     return ComplexF64(0)
 end
 
@@ -515,6 +540,16 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
         fill!(raw_cpu, zero(ComplexF64))
     end
 
+    # `is_alg` below is "has no time derivative", which in an IVP means a BC or
+    # constraint row — but in a BVP/NLBVP means EVERY equation, the bulk PDE
+    # included. Only the rows `apply_bc_override!` actually writes (`sp.bc_rows`,
+    # i.e. the non-bulk blocks) are read downstream, so a bulk equation's F is
+    # computed and then discarded. Classify the block the same way the row split
+    # itself does, and suppress the unsupported-BC warning for bulk rows: the
+    # value is still computed exactly as before, so this changes no result.
+    cheb_basis = _subproblem_cheb_basis_from_sp(sp)
+    Nz_alg = cheb_basis !== nothing ? cheb_basis.meta.size : 1
+
     i0 = 0
     for (eq_idx, eq_data) in enumerate(eqns)
         eq_size = eqn_sizes[eq_idx]
@@ -531,7 +566,8 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
                 F_expr = get(eq_data, "F", nothing)
             end
             if !_is_zero_F_expr(F_expr)
-                coeff = _evaluate_alg_F(F_expr, sp)
+                is_bulk = _is_bulk_eqn_size(eq_size, Nz_alg)
+                coeff = _evaluate_alg_F(F_expr, sp; warn_unsupported = !is_bulk)
                 if coeff != 0
                     # Replicate the value across all rows of the BC
                     # equation's block. For scalar BCs `eq_size == 1` and

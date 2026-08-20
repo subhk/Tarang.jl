@@ -257,8 +257,17 @@ function validate_equation_structure(LHS, RHS, original_equation::String;
         suggested_lhs = _format_sum(new_lhs_terms)
         suggested_rhs = isempty(new_rhs_terms) ? "0" : _format_sum(new_rhs_terms)
 
+        # `maxlog` because this is an ADVISORY, not an error: the form it flags
+        # parses and runs correctly, it just treats a linear implicit-capable
+        # term explicitly (a stiffness/stability choice, sometimes a deliberate
+        # one). Unbounded, it was by far the loudest thing in a run — 115 of the
+        # 173 warnings in a full test suite, all from equations whose explicit
+        # treatment is exactly what the caller intended. Capped, the advice still
+        # reaches anyone who has not seen it, without burying every other
+        # diagnostic. Note `maxlog` dedups per CALLSITE, not per message, so this
+        # is a cap on the advisory as a whole.
         @warn "Equation has misplaced terms: \"$original_equation\"\n" *
-              "  Suggested form: $suggested_lhs = $suggested_rhs"
+              "  Suggested form: $suggested_lhs = $suggested_rhs" maxlog=10
     end
 
     return true
