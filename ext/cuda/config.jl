@@ -12,13 +12,29 @@ _current_device_id() = Int(CUDA.device().handle)
 """
     enable_tensor_cores!()
 
-Enable Tensor Core operations for compatible CUDA operations.
-Provides significant speedup on Volta+ GPUs for matrix operations.
+Switch this process's CUDA math mode to `FAST_MATH`, which lets cuBLAS use
+Tensor Cores (TF32) for `Float32`/`Float64` GEMMs on Volta+ GPUs.
+
+!!! warning "This changes numerics, process-wide and for everything"
+    This is **not** a free speedup, and it is not scoped to whatever you had in
+    mind when you called it. `CUDA.math_mode!` is global CUDA.jl state: every
+    subsequent cuBLAS call in this process is affected, including the batched
+    stage-matrix LU that `BatchedDenseLU` runs inside the timestepper. TF32
+    carries ~10 bits of mantissa, so a spectral solve that depends on
+    well-conditioned Chebyshev tau rows can lose several digits, and an
+    ill-conditioned stage matrix can go from "solvable" to "silently wrong".
+
+    Enable it only for a run you are prepared to validate against a
+    `DEFAULT_MATH` baseline, and call [`disable_tensor_cores!`](@ref) to restore
+    strict IEEE behaviour.
 """
 function enable_tensor_cores!()
     try
         CUDA.math_mode!(CUDA.FAST_MATH)
-        @info "Tensor Cores enabled (FAST_MATH mode)"
+        @warn "CUDA math mode set to FAST_MATH process-wide. Every cuBLAS call — " *
+              "including the batched stage-matrix LU inside the timestepper — now " *
+              "runs at reduced precision. Validate against a disable_tensor_cores! " *
+              "baseline before trusting these results." maxlog=1
     catch e
         @warn "Could not enable Tensor Cores: $e"
     end

@@ -27,13 +27,36 @@ struct SparseMatVec{T, Ti} <: MatVecOp
     end
 end
 
-struct DenseMatVec{T, M<:AbstractMatrix{T}} <: MatVecOp
+"""
+    DenseMatVec(matrix; transposed=false)
+
+Dense matrix-vector operator. `device_matrix` caches the uploaded copy used when
+the operator is applied to device vectors: `fast_matvec!` used to call
+`on_architecture(arch, matrix)` on EVERY call, re-uploading the whole dense
+matrix host-to-device per matvec. The cache is keyed by architecture, so a
+multi-GPU caller that alternates devices re-uploads only on the switch.
+"""
+mutable struct DenseMatVec{T, M<:AbstractMatrix{T}} <: MatVecOp
     matrix::M
     transposed::Bool
+    device_matrix::Any          # cached device copy of `matrix`, or nothing
+    device_arch::Any            # architecture `device_matrix` lives on
 end
 
 DenseMatVec(matrix::AbstractMatrix{T}; transposed::Bool=false) where T =
-    DenseMatVec{T, typeof(matrix)}(matrix, transposed)
+    DenseMatVec{T, typeof(matrix)}(matrix, transposed, nothing, nothing)
+
+"""Device-resident copy of `op.matrix` on `arch`, uploaded once and reused."""
+function _device_matrix!(op::DenseMatVec, arch)
+    cached = op.device_matrix
+    if cached !== nothing && op.device_arch == arch
+        return cached
+    end
+    dev = on_architecture(arch, op.matrix)
+    op.device_matrix = dev
+    op.device_arch = arch
+    return dev
+end
 
 struct BlockSparseMatVec{T, Ti} <: MatVecOp
     blocks::Vector{Union{SparseMatrixCSC{T, Ti}, Nothing}}
@@ -114,8 +137,26 @@ end
 
 const GLOBAL_LINALG_STATS = LinalgPerformanceStats()
 
+# Stats collection is OPT-IN. It used to be unconditional, which put a
+# `ReentrantLock` acquisition and two `time()` calls inside every single matvec
+# and matmat — a serialization point in the innermost linear-algebra loop, paid
+# by every caller whether or not anyone ever reads the counters. On a device
+# backend the wall-clock it records is meaningless anyway (kernel launches are
+# asynchronous). Turn it on around the region you want to measure.
+const LINALG_STATS_ENABLED = Ref(false)
+
+"""
+    enable_linalg_stats!(on::Bool=true) -> Bool
+
+Turn per-call linear-algebra counter collection on or off (default: off). While
+on, every `fast_matvec!` / `fast_matmat!` takes a lock and two timestamps, so
+leave it off outside of measurement.
+"""
+enable_linalg_stats!(on::Bool=true) = (LINALG_STATS_ENABLED[] = on)
+
 # Thread-safe stats update helpers
 function _record_matvec!(elapsed::Float64; sparse::Bool=false, dense::Bool=false, blas::Bool=false)
+    LINALG_STATS_ENABLED[] || return nothing
     lock(GLOBAL_LINALG_STATS.lock) do
         GLOBAL_LINALG_STATS.matvec_calls += 1
         GLOBAL_LINALG_STATS.matvec_time += elapsed
@@ -126,6 +167,7 @@ function _record_matvec!(elapsed::Float64; sparse::Bool=false, dense::Bool=false
 end
 
 function _record_matmat!(elapsed::Float64; sparse::Bool=false, dense::Bool=false, blas::Bool=false)
+    LINALG_STATS_ENABLED[] || return nothing
     lock(GLOBAL_LINALG_STATS.lock) do
         GLOBAL_LINALG_STATS.matmat_calls += 1
         GLOBAL_LINALG_STATS.matmat_time += elapsed
@@ -235,7 +277,7 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             "DenseMatVec input and output must reside on the same GPU device"))
         matrix_gpu && architecture(matrix) != arch && throw(ArgumentError(
             "DenseMatVec matrix resides on a different GPU device; implicit cross-device staging is disabled"))
-        matrix_dev = matrix_gpu ? matrix : on_architecture(arch, matrix)
+        matrix_dev = matrix_gpu ? matrix : _device_matrix!(op, arch)
         A_dev = op.transposed ? transpose(matrix_dev) : matrix_dev
 
         if β == 0.0
@@ -1039,4 +1081,7 @@ export create_operator, create_kronecker_operator
 export streaming_matvec!, cache_efficient_matmat!
 export benchmark_linalg_operations, reset_linalg_stats!, print_linalg_stats
 export LinalgPerformanceStats, GLOBAL_LINALG_STATS
+# `enable_linalg_stats!` is deliberately NOT exported: it is a measurement knob,
+# and a bare `export` in an implementation file adds to the legacy-export ratchet
+# (test_export_surface_ratchet.jl). Call it as `Tarang.enable_linalg_stats!()`.
 export get_block_ranges, get_all_block_ranges, get_total_matrix_size

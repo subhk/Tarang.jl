@@ -516,6 +516,31 @@ _ndrange_length(N::CartesianIndices) = length(N)
 _ndrange_length(N::AbstractArray) = length(N)
 _ndrange_length(N::AbstractRange) = length(N)
 
+"""
+    _split_workgroup(budget, dims) -> NTuple
+
+Distribute a `budget`-thread workgroup across `dims`, first dimension fastest,
+never giving a dimension more threads than it has work items. The product never
+exceeds `budget` (each step spends what the previous one left).
+
+This is what makes a multi-dimensional `ndrange` usable. `workgroup_size` used to
+return the bare scalar `budget` for every ndrange, and KernelAbstractions pads a
+scalar workgroup with ONES (`NDIteration.partition`) — so a 2-D launch got a
+`(256, 1)` block. When the first dimension is shorter than 256 every block still
+spawns 256 threads and masks the excess off: the DCT-I / Chebyshev-derivative
+kernels launch over `(2(n-1), batch)`, so a Chebyshev axis of n = 64 ran at 49%
+occupancy and n = 32 at 24%. Splitting the budget across dimensions keeps every
+thread in the block on real work.
+"""
+@inline _split_workgroup(::Int, ::Tuple{}) = ()
+@inline function _split_workgroup(budget::Int, dims::Tuple)
+    w = clamp(dims[1], 1, budget)
+    return (w, _split_workgroup(max(budget ÷ w, 1), Base.tail(dims))...)
+end
+
+workgroup_size(arch::AbstractArchitecture, ndrange::Tuple) =
+    _split_workgroup(workgroup_size(arch, _ndrange_length(ndrange)), ndrange)
+
 function workgroup_size(arch::AbstractArchitecture, ndrange)
     return workgroup_size(arch, _ndrange_length(ndrange))
 end
