@@ -61,16 +61,22 @@ end
 # GPU-specific Array Allocation (zeros/ones/similar) with Device Context
 # These are internal helpers - users should use Base.zeros(arch, ...) etc.
 # ============================================================================
+#
+# The `_ext_` prefix is load-bearing. These are extension-LOCAL functions, and
+# the bottom of this same file defines `Tarang._gpu_zeros` — a DIFFERENT generic
+# function that happens to live in another module. When both were spelled
+# `_gpu_zeros`, an unqualified call inside the extension silently resolved to
+# whichever one you did not mean, with no error at either definition site.
 
 # Internal helper functions (not exported, use Base.zeros/ones/similar instead)
-function _gpu_zeros(arch::GPU{CuDevice}, T::Type, dims...)
+function _ext_gpu_zeros(arch::GPU{CuDevice}, T::Type, dims...)
     ensure_device!(arch)
     return CUDA.zeros(T, dims...)
 end
 
-_gpu_zeros(::GPU, T::Type, dims...) = CUDA.zeros(T, dims...)
+_ext_gpu_zeros(::GPU, T::Type, dims...) = CUDA.zeros(T, dims...)
 
-function _gpu_zeros(arr::CuArray, T::Type, dims...)
+function _ext_gpu_zeros(arr::CuArray, T::Type, dims...)
     prev_device = CUDA.device()
     try
         CUDA.device!(CUDA.device(arr))
@@ -82,16 +88,16 @@ function _gpu_zeros(arr::CuArray, T::Type, dims...)
     end
 end
 
-_gpu_zeros(arr::CuArray, dims...) = _gpu_zeros(arr, eltype(arr), dims...)
+_ext_gpu_zeros(arr::CuArray, dims...) = _ext_gpu_zeros(arr, eltype(arr), dims...)
 
-function _gpu_ones(arch::GPU{CuDevice}, T::Type, dims...)
+function _ext_gpu_ones(arch::GPU{CuDevice}, T::Type, dims...)
     ensure_device!(arch)
     return CUDA.ones(T, dims...)
 end
 
-_gpu_ones(::GPU, T::Type, dims...) = CUDA.ones(T, dims...)
+_ext_gpu_ones(::GPU, T::Type, dims...) = CUDA.ones(T, dims...)
 
-function _gpu_ones(arr::CuArray, T::Type, dims...)
+function _ext_gpu_ones(arr::CuArray, T::Type, dims...)
     prev_device = CUDA.device()
     try
         CUDA.device!(CUDA.device(arr))
@@ -101,9 +107,9 @@ function _gpu_ones(arr::CuArray, T::Type, dims...)
     end
 end
 
-_gpu_ones(arr::CuArray, dims...) = _gpu_ones(arr, eltype(arr), dims...)
+_ext_gpu_ones(arr::CuArray, dims...) = _ext_gpu_ones(arr, eltype(arr), dims...)
 
-function _gpu_similar(arr::CuArray, T::Type, dims...)
+function _ext_gpu_similar(arr::CuArray, T::Type, dims...)
     prev_device = CUDA.device()
     try
         CUDA.device!(CUDA.device(arr))
@@ -113,17 +119,17 @@ function _gpu_similar(arr::CuArray, T::Type, dims...)
     end
 end
 
-_gpu_similar(arr::CuArray, dims...) = _gpu_similar(arr, eltype(arr), dims...)
-_gpu_similar(arr::CuArray) = _gpu_similar(arr, eltype(arr), size(arr)...)
+_ext_gpu_similar(arr::CuArray, dims...) = _ext_gpu_similar(arr, eltype(arr), dims...)
+_ext_gpu_similar(arr::CuArray) = _ext_gpu_similar(arr, eltype(arr), size(arr)...)
 
-function _gpu_fill(arch::GPU{CuDevice}, val, dims...)
+function _ext_gpu_fill(arch::GPU{CuDevice}, val, dims...)
     ensure_device!(arch)
     return CUDA.fill(val, dims...)
 end
 
-_gpu_fill(::GPU, val, dims...) = CUDA.fill(val, dims...)
+_ext_gpu_fill(::GPU, val, dims...) = CUDA.fill(val, dims...)
 
-function _gpu_fill(arr::CuArray, val, dims...)
+function _ext_gpu_fill(arr::CuArray, val, dims...)
     prev_device = CUDA.device()
     try
         CUDA.device!(CUDA.device(arr))
@@ -804,26 +810,30 @@ function Tarang._pad_spectral!(padded::CuArray{Complex{T}}, spec_data::CuArray{C
     # (get_backend + manual kernel call) don't go through `launch!`, which is the
     # only place ensure_device! is otherwise called. Without this, a multi-GPU run
     # whose current device != spec_data's device would hit an illegal access.
-    ensure_device!(Tarang.architecture(spec_data))
+    arch = Tarang.architecture(spec_data)
+    ensure_device!(arch)
     fill!(padded, zero(Complex{T}))
     ndim = length(original_shape)
     backend = KernelAbstractions.get_backend(spec_data)
 
+    # Route through `launch!` rather than constructing the kernel with a literal
+    # `256`: a scalar workgroup is padded with ones by KernelAbstractions, so a
+    # 2-D/3-D launch got a (256, 1[, 1]) block and masked off every thread past
+    # the first dimension's extent. `workgroup_size` now splits the budget across
+    # dimensions (src/core/architectures.jl).
     if ndim == 2
         N1, N2 = original_shape
         M1, M2 = padded_shape
-        kernel = pad_spectral_2d_kernel!(backend, 256)
-        kernel(padded, spec_data, N1, N2, M1, M2,
-               1 in fourier_dims, 2 in fourier_dims;
-               ndrange=(N1, N2))
+        launch!(arch, pad_spectral_2d_kernel!, padded, spec_data, N1, N2, M1, M2,
+                1 in fourier_dims, 2 in fourier_dims;
+                ndrange=(N1, N2))
         KernelAbstractions.synchronize(backend)
     elseif ndim == 3
         N1, N2, N3 = original_shape
         M1, M2, M3 = padded_shape
-        kernel = pad_spectral_3d_kernel!(backend, 256)
-        kernel(padded, spec_data, N1, N2, N3, M1, M2, M3,
-               1 in fourier_dims, 2 in fourier_dims, 3 in fourier_dims;
-               ndrange=(N1, N2, N3))
+        launch!(arch, pad_spectral_3d_kernel!, padded, spec_data, N1, N2, N3, M1, M2, M3,
+                1 in fourier_dims, 2 in fourier_dims, 3 in fourier_dims;
+                ndrange=(N1, N2, N3))
         KernelAbstractions.synchronize(backend)
     else
         # 1D: fall back to slice-based (fast enough for 1D)
@@ -862,7 +872,8 @@ function Tarang._truncate_spectral!(result::CuArray{Complex{T}}, padded_spec::Cu
                                      original_shape::Tuple, padded_shape::Tuple,
                                      fourier_dims::Vector{Int}) where T
     # Pin the current CUDA device to the array's device (see _pad_spectral! note).
-    ensure_device!(Tarang.architecture(result))
+    arch = Tarang.architecture(result)
+    ensure_device!(arch)
     ndim = length(original_shape)
     backend = KernelAbstractions.get_backend(result)
 
@@ -876,18 +887,16 @@ function Tarang._truncate_spectral!(result::CuArray{Complex{T}}, padded_spec::Cu
     if ndim == 2
         N1, N2 = original_shape
         M1, M2 = padded_shape
-        kernel = truncate_spectral_2d_kernel!(backend, 256)
-        kernel(result, padded_spec, N1, N2, M1, M2,
-               1 in fourier_dims, 2 in fourier_dims;
-               ndrange=(N1, N2))
+        launch!(arch, truncate_spectral_2d_kernel!, result, padded_spec, N1, N2, M1, M2,
+                1 in fourier_dims, 2 in fourier_dims;
+                ndrange=(N1, N2))
         KernelAbstractions.synchronize(backend)
     elseif ndim == 3
         N1, N2, N3 = original_shape
         M1, M2, M3 = padded_shape
-        kernel = truncate_spectral_3d_kernel!(backend, 256)
-        kernel(result, padded_spec, N1, N2, N3, M1, M2, M3,
-               1 in fourier_dims, 2 in fourier_dims, 3 in fourier_dims;
-               ndrange=(N1, N2, N3))
+        launch!(arch, truncate_spectral_3d_kernel!, result, padded_spec, N1, N2, N3, M1, M2, M3,
+                1 in fourier_dims, 2 in fourier_dims, 3 in fourier_dims;
+                ndrange=(N1, N2, N3))
         KernelAbstractions.synchronize(backend)
     else
         # 1D: slice-based
@@ -921,8 +930,11 @@ using SparseArrays: SparseMatrixCSC
 Tarang._gpu_cusolver_module(::Val{:cuda}) = CUDA.CUSOLVER
 Tarang._gpu_cusparse_module(::Val{:cuda}) = CUDA.CUSPARSE
 Tarang._gpu_zeros(T::Type, dims...) = CUDA.zeros(T, dims...)
-Tarang._gpu_array(data::AbstractArray, T::Type) = CuVector{T}(data)
-Tarang._gpu_array(data::AbstractMatrix, T::Type) = CuMatrix{T}(data)
+# Rank-generic: the previous pair was `::AbstractArray -> CuVector` plus an
+# `::AbstractMatrix -> CuMatrix` override, so a 3-D argument picked the VECTOR
+# method and died inside `CuVector`'s constructor with a shape error instead of
+# doing the obvious thing.
+Tarang._gpu_array(data::AbstractArray{<:Any,N}, T::Type) where {N} = CuArray{T,N}(data)
 Tarang._gpu_sparse_csr(A::SparseMatrixCSC, T::Type) = CUDA.CUSPARSE.CuSparseMatrixCSR(SparseMatrixCSC{T, Int32}(A))
 Tarang._gpu_axpy!(α, x, y) = CUDA.axpy!(α, x, y)
 Tarang._is_gpu_array(a::CuArray) = true

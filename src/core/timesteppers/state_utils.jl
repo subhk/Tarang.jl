@@ -432,6 +432,153 @@ function create_rhs_zero_field(template_field::ScalarField)
     return field
 end
 
+# ── Layout policy for state arithmetic ──────────────────────────────────────
+#
+# Every helper below computes a LINEAR COMBINATION of states, and a linear
+# combination commutes with the spectral transform: it is equally valid in grid
+# space or coefficient space, provided every operand is in the SAME one. These
+# helpers used to force `:g` unconditionally, so handing them coefficient-space
+# fields paid a backward transform per operand on entry — and, because the RHS
+# evaluators want `:c`, a forward transform right back on the next call.
+#
+# Measured directly (transform COUNTERS, not a stopwatch —
+# `Tarang.enable_transform_counts!`): `axpy_state!` on two `:c` fields used to
+# report `(forward = 0, backward = 2)` and leave both operands `:g`. It now
+# reports zero and leaves them `:c`.
+#
+# Scope, stated honestly: in the three stepper paths that were measured end to
+# end (explicit RK443, SBDF2, DiagonalIMEX_SBDF2 on the distributed field path)
+# the per-step transform count is UNCHANGED, because those callers happen to
+# reach these helpers with their fields already in `:g`. The transforms those
+# steppers do pay come from the lazy RHS's own coefficient round trip, not from
+# here. So this removes a latent cost and makes the helpers layout-honest; it is
+# not, on today's call sites, a measured end-to-end speedup.
+#
+# `_arith_layout` returns `:c` only when EVERY operand is already there with a
+# usable, mutually compatible coefficient buffer, and `:g` otherwise. So it can
+# only ever remove a transform the grid-forcing version already paid; it never
+# introduces one. When the buffers do not line up (mixed layouts, a missing
+# coeff buffer, a shape/eltype mismatch) it falls back to exactly the old
+# behaviour.
+
+# The arithmetic kernels below are split by ELEMENT TYPE, and the call sites
+# branch on `layout` so that each branch calls `get_grid_data` or
+# `get_coeff_data` DIRECTLY. Both halves matter:
+#
+#   * A `layout === :c ? get_coeff_data(f) : get_grid_data(f)` helper returns a
+#     Union of the grid and coefficient buffer types, which makes every
+#     downstream broadcast dynamically dispatched. That is not free and it is not
+#     size-independent: `test_multistep_field_path.jl`'s "steady-state cost is
+#     O(1) in the grid size" caught it immediately (464 vs 768 bytes/step,
+#     because the n>100 `@turbo` branch and the small-n broadcast branch box
+#     differently).
+#   * `@turbo` (LoopVectorization) does not vectorize `Complex`, and must never
+#     see device memory. Coefficient buffers are complex, so they take the plain
+#     broadcast; the real host path keeps the original BLAS/`@turbo`/broadcast
+#     ladder unchanged.
+
+"""`y .+= a*x` — real host arrays keep the BLAS/`@turbo`/broadcast ladder."""
+@inline function _sa_axpy!(y_data::AbstractArray{T}, a::Float64,
+                           x_data::AbstractArray{T}) where {T<:AbstractFloat}
+    if is_gpu_array(x_data)
+        y_data .+= a .* x_data
+        return y_data
+    end
+    n = length(x_data)
+    if n > 2000 && x_data isa StridedArray && y_data isa StridedArray
+        BLAS.axpy!(a, x_data, y_data)
+    elseif n > 100
+        a_local = a
+        @turbo for j in eachindex(y_data, x_data)
+            y_data[j] += a_local * x_data[j]
+        end
+    else
+        y_data .+= a .* x_data
+    end
+    return y_data
+end
+
+"""`y .+= a*x` — complex (coefficient) and device arrays: plain broadcast."""
+@inline function _sa_axpy!(y_data, a::Float64, x_data)
+    y_data .+= a .* x_data
+    return y_data
+end
+
+"""`dest .= x .+ a*y` — real host arrays keep the original ladder."""
+@inline function _sa_add_scaled!(dest::AbstractArray{T}, x_data::AbstractArray{T},
+                                 y_data::AbstractArray{T}, a::Float64) where {T<:AbstractFloat}
+    if is_gpu_array(x_data)
+        dest .= x_data .+ a .* y_data
+        return dest
+    end
+    n = length(x_data)
+    if n > 2000 && x_data isa StridedArray && y_data isa StridedArray && dest isa StridedArray
+        copyto!(dest, x_data)
+        BLAS.axpy!(a, y_data, dest)
+    elseif n > 100
+        a_local = a
+        @turbo for j in eachindex(dest, x_data, y_data)
+            dest[j] = x_data[j] + a_local * y_data[j]
+        end
+    else
+        dest .= x_data .+ a .* y_data
+    end
+    return dest
+end
+
+"""`dest .= x .+ a*y` — complex (coefficient) and device arrays."""
+@inline function _sa_add_scaled!(dest, x_data, y_data, a::Float64)
+    dest .= x_data .+ a .* y_data
+    return dest
+end
+
+"""`dest .= α*a .+ β*b` — real host arrays keep the original ladder."""
+@inline function _sa_lincomb!(dest::AbstractArray{T}, α::Float64, a_data::AbstractArray{T},
+                              β::Float64, b_data::AbstractArray{T}) where {T<:AbstractFloat}
+    if is_gpu_array(a_data)
+        dest .= α .* a_data .+ β .* b_data
+        return dest
+    end
+    if length(a_data) > 100
+        α_local, β_local = α, β
+        @turbo for j in eachindex(dest, a_data, b_data)
+            dest[j] = α_local * a_data[j] + β_local * b_data[j]
+        end
+    else
+        dest .= α .* a_data .+ β .* b_data
+    end
+    return dest
+end
+
+"""`dest .= α*a .+ β*b` — complex (coefficient) and device arrays."""
+@inline function _sa_lincomb!(dest, α::Float64, a_data, β::Float64, b_data)
+    dest .= α .* a_data .+ β .* b_data
+    return dest
+end
+
+"""
+    _arith_layout(fields::Tuple) -> Symbol
+
+`:c` when every field in `fields` is already in coefficient layout with a
+coefficient buffer, and all those buffers agree in size and element type; `:g`
+otherwise. See the comment block above for why either answer is correct and why
+this can only save work.
+"""
+function _arith_layout(fields::Tuple)
+    ref = nothing
+    for f in fields
+        f.current_layout === :c || return :g
+        cd = get_coeff_data(f)
+        cd === nothing && return :g
+        if ref === nothing
+            ref = cd
+        elseif size(cd) != size(ref) || eltype(cd) != eltype(ref)
+            return :g
+        end
+    end
+    return ref === nothing ? :g : :c
+end
+
 """
     add_scaled_state(state1::Vector{<:ScalarField}, state2::Vector{<:ScalarField}, scale::Float64)
 
@@ -454,36 +601,21 @@ function add_scaled_state(state1::Vector{<:ScalarField}, state2::Vector{<:Scalar
         # Use copy() to preserve PencilArray structure in MPI mode
         new_field = copy(field1)
 
-        ensure_layout!(field1, :g)
-        ensure_layout!(field2, :g)
-        ensure_layout!(new_field, :g)
+        layout = _arith_layout((field1, field2, new_field))
+        ensure_layout!(field1, layout)
+        ensure_layout!(field2, layout)
+        ensure_layout!(new_field, layout)
 
-        # Check for nil data
-        data1 = get_grid_data(field1)
-        data2 = get_grid_data(field2)
-        new_data = get_grid_data(new_field)
-
-        if data1 !== nothing && data2 !== nothing && new_data !== nothing
-            if is_gpu_array(data1)
-                new_data .= data1 .+ scale .* data2
-            else
-                nl = length(data1)
-                use_blas = nl > 2000 &&
-                           data1 isa StridedArray &&
-                           data2 isa StridedArray &&
-                           new_data isa StridedArray
-                if use_blas
-                    copyto!(new_data, data1)
-                    BLAS.axpy!(scale, data2, new_data)
-                elseif nl > 100
-                    scale_local = scale
-                    @turbo for j in eachindex(new_data, data1, data2)
-                        new_data[j] = data1[j] + scale_local * data2[j]
-                    end
-                else
-                    new_data .= data1 .+ scale .* data2
-                end
-            end
+        # Branch on layout so each side calls the accessor DIRECTLY and keeps
+        # concrete buffer types (see the note above `_sa_axpy!`).
+        if layout === :c
+            d1, d2, dn = get_coeff_data(field1), get_coeff_data(field2), get_coeff_data(new_field)
+            d1 !== nothing && d2 !== nothing && dn !== nothing &&
+                _sa_add_scaled!(dn, d1, d2, scale)
+        else
+            d1, d2, dn = get_grid_data(field1), get_grid_data(field2), get_grid_data(new_field)
+            d1 !== nothing && d2 !== nothing && dn !== nothing &&
+                _sa_add_scaled!(dn, d1, d2, scale)
         end
         result[i] = new_field
     end
@@ -508,38 +640,19 @@ function add_scaled_state!(dest::Vector{<:ScalarField}, state1::Vector{<:ScalarF
             continue
         end
 
-        ensure_layout!(field1, :g)
-        ensure_layout!(field2, :g)
-        ensure_layout!(dest_field, :g)
+        layout = _arith_layout((field1, field2, dest_field))
+        ensure_layout!(field1, layout)
+        ensure_layout!(field2, layout)
+        ensure_layout!(dest_field, layout)
 
-        # Check for nil data
-        data1 = get_grid_data(field1)
-        data2 = get_grid_data(field2)
-        dest_data = get_grid_data(dest_field)
-
-        if data1 === nothing || data2 === nothing || dest_data === nothing
-            continue
-        end
-
-        if is_gpu_array(data1)
-            dest_data .= data1 .+ scale .* data2
+        if layout === :c
+            d1, d2, dd = get_coeff_data(field1), get_coeff_data(field2), get_coeff_data(dest_field)
+            (d1 === nothing || d2 === nothing || dd === nothing) && continue
+            _sa_add_scaled!(dd, d1, d2, scale)
         else
-            n = length(data1)
-            use_blas = n > 2000 &&
-                       data1 isa StridedArray &&
-                       data2 isa StridedArray &&
-                       dest_data isa StridedArray
-            if use_blas
-                copyto!(dest_data, data1)
-                BLAS.axpy!(scale, data2, dest_data)
-            elseif n > 100
-                scale_local = scale
-                @turbo for j in eachindex(dest_data, data1, data2)
-                    dest_data[j] = data1[j] + scale_local * data2[j]
-                end
-            else
-                dest_data .= data1 .+ scale .* data2
-            end
+            d1, d2, dd = get_grid_data(field1), get_grid_data(field2), get_grid_data(dest_field)
+            (d1 === nothing || d2 === nothing || dd === nothing) && continue
+            _sa_add_scaled!(dd, d1, d2, scale)
         end
     end
 end
@@ -556,34 +669,18 @@ function axpy_state!(scale::Float64, x::Vector{<:ScalarField}, y::Vector{<:Scala
             continue
         end
 
-        ensure_layout!(x[i], :g)
-        ensure_layout!(y[i], :g)
+        layout = _arith_layout((x[i], y[i]))
+        ensure_layout!(x[i], layout)
+        ensure_layout!(y[i], layout)
 
-        # Check for nil data
-        x_data = get_grid_data(x[i])
-        y_data = get_grid_data(y[i])
-
-        if x_data === nothing || y_data === nothing
-            continue
-        end
-
-        if is_gpu_array(x_data)
-            y_data .+= scale .* x_data
+        if layout === :c
+            xd, yd = get_coeff_data(x[i]), get_coeff_data(y[i])
+            (xd === nothing || yd === nothing) && continue
+            _sa_axpy!(yd, scale, xd)
         else
-            n = length(x_data)
-            use_blas = n > 2000 &&
-                       x_data isa StridedArray &&
-                       y_data isa StridedArray
-            if use_blas
-                BLAS.axpy!(scale, x_data, y_data)
-            elseif n > 100
-                scale_local = scale
-                @turbo for j in eachindex(y_data, x_data)
-                    y_data[j] += scale_local * x_data[j]
-                end
-            else
-                y_data .+= scale .* x_data
-            end
+            xd, yd = get_grid_data(x[i]), get_grid_data(y[i])
+            (xd === nothing || yd === nothing) && continue
+            _sa_axpy!(yd, scale, xd)
         end
     end
 end
@@ -602,31 +699,19 @@ function linear_combination_state!(dest::Vector{<:ScalarField}, α::Float64, a::
             continue
         end
 
-        ensure_layout!(a[i], :g)
-        ensure_layout!(b[i], :g)
-        ensure_layout!(dest[i], :g)
+        layout = _arith_layout((a[i], b[i], dest[i]))
+        ensure_layout!(a[i], layout)
+        ensure_layout!(b[i], layout)
+        ensure_layout!(dest[i], layout)
 
-        # Check for nil data
-        a_data = get_grid_data(a[i])
-        b_data = get_grid_data(b[i])
-        dest_data = get_grid_data(dest[i])
-
-        if a_data === nothing || b_data === nothing || dest_data === nothing
-            continue
-        end
-
-        if is_gpu_array(a_data)
-            dest_data .= α .* a_data .+ β .* b_data
+        if layout === :c
+            ad, bd, dd = get_coeff_data(a[i]), get_coeff_data(b[i]), get_coeff_data(dest[i])
+            (ad === nothing || bd === nothing || dd === nothing) && continue
+            _sa_lincomb!(dd, α, ad, β, bd)
         else
-            n = length(a_data)
-            if n > 100
-                α_local, β_local = α, β
-                @turbo for j in eachindex(dest_data, a_data, b_data)
-                    dest_data[j] = α_local * a_data[j] + β_local * b_data[j]
-                end
-            else
-                dest_data .= α .* a_data .+ β .* b_data
-            end
+            ad, bd, dd = get_grid_data(a[i]), get_grid_data(b[i]), get_grid_data(dest[i])
+            (ad === nothing || bd === nothing || dd === nothing) && continue
+            _sa_lincomb!(dd, α, ad, β, bd)
         end
     end
 end

@@ -2,12 +2,11 @@
 GPU transform correctness — validates the single-GPU transform DISPATCH
 (`gpu_forward_transform!` / `gpu_backward_transform!`) against the CPU result,
 which is the trusted oracle. This is the gap the existing GPU tests
-(`test_dct_reorder`, `test_optimized_dct`) leave open: they pin the low-level DCT
+left open: the removed DCT-II unit tests pinned the low-level DCT
 kernels, but nothing checked that a `forward_transform!(field)` on a CuArray-backed
 field matches the CPU path for Fourier / Chebyshev / mixed / complex bases.
 
 It also exercises the single-GPU efficiency fixes added 2026-06-04/05:
-  - cached DCT plans (`get_gpu_dct_plan` / `get_gpu_dct_dim_plan`)
   - reusable scratch + ping-pong in the complex / multi-dim branches
 A correct GPU-vs-CPU match here is the regression guard for those.
 

@@ -364,6 +364,48 @@ function _apply_linear_operator(L_matrix::AbstractMatrix, state::Vector{<:Scalar
     return vector_to_fields(LX_vector, state)
 end
 
+"""Is `M` the identity, to roundoff? A one-time check — `M` is a property of the
+assembled problem, not of the step."""
+function _mass_matrix_is_identity(M::AbstractMatrix)
+    n, m = size(M)
+    n == m || return false
+    return norm(M - I, Inf) < 1e-14
+end
+
+"""
+    _check_explicit_rk_mass_matrix!(state, solver, M_matrix)
+
+Refuse — loudly — to silently drop a non-identity mass operator on the
+distributed/GPU field path.
+
+`_step_explicit_rk_gpu!` integrates `X' = F(X)`: it has no mass solve, because
+there is no distributed sparse solver behind it. For a pure-Fourier problem
+`M = I` and that is exact, which is why this went unnoticed. For any problem
+where `M ≠ I` it means the equations are integrated as though the mass operator
+were the identity — a plausible, wrong trajectory with no error and no warning.
+
+This is the same silent-drop shape that `_check_gpu_implicit_compatibility!`
+already guards for the implicit operator `L`. `L` had a guard; `M` did not.
+Memoized on `timestepper_data` once the check PASSES (never on the failing
+path, so a retry re-reports rather than sailing through).
+"""
+function _check_explicit_rk_mass_matrix!(state::TimestepperState,
+                                         solver::InitialValueSolver, M_matrix)
+    M_matrix === nothing && return nothing
+    get(state.timestepper_data, :_explicit_rk_mass_ok, false) && return nothing
+    if _mass_matrix_is_identity(M_matrix)
+        state.timestepper_data[:_explicit_rk_mass_ok] = true
+        return nothing
+    end
+    error("Explicit RK on the distributed/GPU field path cannot apply a non-identity " *
+          "mass operator: that path integrates X' = F(X) with no mass solve, so M " *
+          "would be silently treated as the identity and the trajectory would be " *
+          "wrong with no error. Options: use the per-subproblem timestepper (which " *
+          "solves M per mode on device), run on a single CPU process where the " *
+          "global-matrix path applies M, or reformulate so the mass operator is the " *
+          "identity. Refusing to drop it silently.")
+end
+
 """
     _step_explicit_rk!(state, solver, A, b, c)
 
@@ -385,8 +427,9 @@ function _step_explicit_rk!(state::TimestepperState, solver::InitialValueSolver,
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
     if _distributed_field_path_required(current_state)
-        # Note: M_matrix is ignored in GPU/MPI mode. For Fourier bases M=I anyway.
-        # Non-trivial M (e.g., Chebyshev) would require distributed sparse solvers.
+        # The GPU/MPI field path has no mass solve. For Fourier bases M = I and
+        # that is exact; anything else must not be dropped in silence.
+        _check_explicit_rk_mass_matrix!(state, solver, M_matrix)
         _step_explicit_rk_gpu!(state, solver, A, b, c)  # Works for both GPU and MPI
     else
         _step_explicit_rk_cpu!(state, solver, A, b, c, M_matrix)
@@ -414,12 +457,25 @@ function _step_explicit_rk_gpu!(state::TimestepperState, solver::InitialValueSol
     k_stages = _workspace_stage_states!(
         state, :explicit_field_rk_k_stages, current_state, stages, 2)
 
+    # `preserve_layout=true` on every copy below, and the layout-following
+    # `axpy_state!`, keep the whole stage loop in whatever space the state is
+    # already in rather than forcing it to grid space. `copy_field_data!` falls
+    # back to the grid path by itself whenever the coefficient buffers do not
+    # line up, so this is safe for mixed-layout and nothing-buffer states, and
+    # `_arith_layout` (state_utils.jl) makes the same fallback for the stage
+    # arithmetic.
+    #
+    # Measured: on the paths exercised today (linear pure-Fourier RK443 on the
+    # distributed field path) the per-step transform count is unchanged, because
+    # the lazy RHS hands the state back in `:g` and the transforms those steps
+    # pay are the RHS's own coefficient round trip. The value here is that the
+    # stage loop no longer FORCES a layout of its own on top of that.
     @inbounds for s in 1:stages
         state.current_substep = s
 
         # Compute stage value: Y_s = X_n + dt * sum_{j<s} A[s,j] * k_j
         # Copy current_state into workspace (in-place, no allocation)
-        _copy_field_state!(stage_state, current_state)
+        _copy_field_state!(stage_state, current_state; preserve_layout=true)
         # Add contributions from previous stages
         for j in 1:(s-1)
             if abs(A[s, j]) > 1e-14
@@ -429,13 +485,13 @@ function _step_explicit_rk_gpu!(state::TimestepperState, solver::InitialValueSol
 
         # Evaluate RHS: k_s = F(t + c[s]*dt, Y_s)
         F_stage = evaluate_rhs(solver, stage_state, t + c[s] * dt)
-        _copy_field_state!(k_stages[s], F_stage)
+        _copy_field_state!(k_stages[s], F_stage; preserve_layout=true)
         _release_rhs_buffer!(F_stage, solver)
     end
 
     # Compute final update: X_{n+1} = X_n + dt * sum_s b[s] * k_s
     new_state = _acquire_recycled_history_state!(
-        state, :explicit_field_rk_recycle, current_state)
+        state, :explicit_field_rk_recycle, current_state; preserve_layout=true)
     @inbounds for s in 1:stages
         if abs(b[s]) > 1e-14
             axpy_state!(dt * b[s], k_stages[s], new_state)

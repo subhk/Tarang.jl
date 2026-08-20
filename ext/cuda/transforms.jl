@@ -318,7 +318,11 @@ function _gpu_forward_transform_impl!(field::ScalarField)
             _refuse_fwd(field, "the pure-Chebyshev device path handles 1D-3D fields, got " *
                                "$(length(bases))D")
         existing_coeff = get_coeff_data(field)
-        size(existing_coeff) == local_grid_shape ||
+        # Shape-check only once there IS a buffer: `size(nothing)` is a
+        # MethodError, which would replace this branch's actionable refusal with
+        # a bare "no method matching size(::Nothing)" for a field whose
+        # coefficient buffer has not been allocated yet.
+        existing_coeff === nothing || size(existing_coeff) == local_grid_shape ||
             _refuse_fwd(field, "a pure-Chebyshev device transform needs matching grid and " *
                                "coefficient shapes, got grid $(local_grid_shape) vs " *
                                "coefficients $(size(existing_coeff)) (a scaled or truncated " *
@@ -751,9 +755,11 @@ function _gpu_backward_transform_impl!(field::ScalarField)
             set_grid_data!(field, CUDA.zeros(real_T, local_grid_shape...))
         end
 
-        # Get or create mixed transform plan (uses grid_shape as canonical reference)
-        input_T = real_T <: Complex ? real_T : real_T
-        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, input_T)
+        # Get or create mixed transform plan (uses grid_shape as canonical
+        # reference). The plan is keyed on the field's GRID element type, which
+        # is `field.dtype` for both the real and the complex case — this used to
+        # be written as a ternary whose two branches were the same expression.
+        plan = get_gpu_mixed_transform_plan(gpu_arch, bases, local_grid_shape, real_T)
 
         # Execute mixed backward transform
         gpu_mixed_backward_transform!(get_grid_data(field), data_c, plan)

@@ -148,12 +148,15 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         @test isapprox(_grid(F[1]), expected; rtol=1e-10, atol=1e-12)
     end
 
-    @testset "Legendre lap() declines to compile (and the fallback is correct)" begin
+    @testset "Legendre lap() compiles AND is correct" begin
         # `differentiation_matrix` for Legendre is the classical recurrence for UNNORMALIZED
-        # Pₙ, but the transform stores ORTHONORMAL P̃ₙ coefficients. The lazy path does not
-        # apply that normalization (the interpreted one does), so compiling lap() here was
-        # silently wrong — measured err 5.335 on an amplitude-11.8 answer, wrong sign near 0.
-        # The translator must decline, leaving the (correct) interpreted evaluator in place.
+        # Pₙ, but the transform stores ORTHONORMAL P̃ₙ coefficients. Applying it straight to a
+        # field's coefficients was silently wrong — measured err 5.335 on an amplitude-11.8
+        # answer, wrong sign near 0 — so the translator used to DECLINE here.
+        #
+        # That mismatch is now bridged once, at `spectral_derivative_matrix`, so the lazy path
+        # is correct and compiles. The value assertion is the point; `is_compiled` is asserted
+        # too so a silent regression to the ~100x-slower interpreted path is caught.
         N = 10
         coords = CartesianCoordinates("z")
         dist = Distributor(coords; dtype=Float64, architecture=CPU())
@@ -164,12 +167,12 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         problem = IVP([q]); add_parameters!(problem, nu=1.0)
         add_equation!(problem, "dt(q) = nu*lap(q)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-4)
-        @test !solver.rhs_plan.is_compiled
+        @test solver.rhs_plan.is_compiled
         F = Tarang.evaluate_rhs(solver, solver.state, 0.0)
         @test isapprox(_grid(F[1]), 6 .* zg; rtol=1e-6, atol=1e-8)   # d²/dz²(z³-0.3z) = 6z
     end
 
-    @testset "bare Legendre derivatives also decline safely" begin
+    @testset "bare Legendre derivatives compile and are correct" begin
         N = 10
         coords = CartesianCoordinates("z")
         dist = Distributor(coords; dtype=Float64, architecture=CPU())
@@ -183,7 +186,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         problem = IVP([q])
         add_equation!(problem, "dt(q_bare) = d(q_bare,z)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-4)
-        @test !solver.rhs_plan.is_compiled
+        @test solver.rhs_plan.is_compiled
 
         F = Tarang.evaluate_rhs(solver, solver.state, 0.0)
         @test isapprox(_grid(F[1]), 3 .* zg .^ 2 .- 0.3; rtol=1e-6, atol=1e-8)
@@ -217,17 +220,24 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
             return problem
         end
 
+        # Legendre now COMPILES (the normalization bridge), so it is no longer a
+        # vehicle for exercising the decline. The policy plumbing is what this
+        # testset is about, so assert that instead: the policy is recorded, and an
+        # unknown policy is still rejected at construction.
         compatible = InitialValueSolver(
             legendre_problem("q_compatible"), RK222();
             dt=1e-4, rhs_fallback=:interpreted,
         )
         @test compatible.rhs_fallback_policy === :interpreted
-        @test !compatible.rhs_plan.is_compiled
+        @test compatible.rhs_plan.is_compiled
 
-        @test_throws ErrorException InitialValueSolver(
+        strict = InitialValueSolver(
             legendre_problem("q_strict"), RK222();
             dt=1e-4, rhs_fallback=:strict,
         )
+        @test strict.rhs_fallback_policy === :strict
+        @test strict.rhs_plan.is_compiled          # :strict is satisfied by compiling
+
         @test_throws ArgumentError InitialValueSolver(
             legendre_problem("q_invalid"), RK222();
             dt=1e-4, rhs_fallback=:unknown,

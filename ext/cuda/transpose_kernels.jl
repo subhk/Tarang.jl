@@ -591,16 +591,61 @@ may be a CPU FFTW plan or a placeholder, so the cached CUFFT plan is used instea
 """
 function Tarang.fft_in_dim!(data::CuArray, dim::Int, direction::Symbol, arch::Tarang.GPU;
                             plan=nothing)
-    # Use cached CUFFT plan to avoid expensive plan creation per call
-    cufft_plan = get_fft_1d_plan(size(data), dim, eltype(data); inverse=(direction != :forward))
-    data .= cufft_plan * data
-    CUDA.synchronize()
+    # Pin the device to the DATA's device, and key the plan cache on it too. The
+    # `device_id` keyword defaults to whatever device happens to be current,
+    # which in a multi-GPU run is not necessarily where `data` lives — the plan
+    # would then be built on, and executed against, the wrong device. The
+    # sibling `gpu_fft_1d!` has always passed it explicitly; this did not.
+    data_device = CUDA.device(data)
+    device_id = CUDA.deviceid(data_device)
+    prev_device = CUDA.device()
+    CUDA.device!(data_device)
+    try
+        # Use cached CUFFT plan to avoid expensive plan creation per call
+        cufft_plan = get_fft_1d_plan(size(data), dim, eltype(data);
+                                     inverse=(direction != :forward), device_id=device_id)
+        # `data .= cufft_plan * data` allocated a whole device array per call.
+        # C2C is non-destructive, so transform into cached scratch and copy back.
+        # count=3 keeps this key disjoint from the count=1/count=2 users in the
+        # single-GPU transform chain (transforms.jl, cheb_deriv.jl).
+        scratch = get_gpu_dct_scratch(Tarang.architecture(data), size(data), eltype(data), 3)[1]
+        mul!(scratch, cufft_plan, data)
+        copyto!(data, scratch)
+        CUDA.synchronize()
+    finally
+        CUDA.device!(prev_device)
+    end
     return data
 end
 
 # ============================================================================
 # GPU DCT in dimension (for Chebyshev transforms)
 # ============================================================================
+
+# Sign vectors for the odd-degree flip, cached per (device, length, eltype).
+# `sgn` used to be rebuilt with a host comprehension + upload on EVERY call, on a
+# path that runs once per axis per distributed transform.
+const _DCT1_SIGN_CACHE = Dict{Tuple{Int, Int, DataType}, Any}()
+const _DCT1_SIGN_LOCK = ReentrantLock()
+
+function _dct1_sign_vector(::Type{RT}, n::Int) where {RT<:AbstractFloat}
+    key = (_current_device_id(), n, RT)
+    v = lock(_DCT1_SIGN_LOCK) do
+        get!(() -> CuArray(RT[iseven(k) ? -one(RT) : one(RT) for k in 1:n]),
+             _DCT1_SIGN_CACHE, key)
+    end
+    return v::CuVector{RT}
+end
+
+"""Clear the cached DCT-I odd-flip sign vectors (thread-safe)."""
+clear_dct1_sign_cache!() = lock(_DCT1_SIGN_LOCK) do
+    empty!(_DCT1_SIGN_CACHE)
+end
+
+# The sign vector is REAL even for complex data: `Complex .* Real` broadcasts
+# fine and halves the multiply work.
+@inline _dct1_sign_shaped(::Type{T}, n::Int, dim::Int) where {T} =
+    reshape(_dct1_sign_vector(real(T), n), ntuple(i -> i == dim ? n : 1, 3))
 
 """Undo the odd-degree sign flip along `dim` of a 3D array in place:
 `a[k, …] *= (-1)^(k-1)` (1-based `k` along `dim`). Since
@@ -609,9 +654,20 @@ reversed-grid DCT-I convention of `gpu_dct1_along_dim!` and the plain (unflipped
 REDFT00 convention of the CPU distributed reference."""
 function _dct1_undo_odd_flip!(a::CuArray{T,3}, dim::Int) where {T}
     n = size(a, dim)
-    sgn = CuArray(T[iseven(k) ? -one(T) : one(T) for k in 1:n])
-    a .*= reshape(sgn, ntuple(i -> i == dim ? n : 1, 3))
+    a .*= _dct1_sign_shaped(T, n, dim)
     return a
+end
+
+"""Out-of-place form of [`_dct1_undo_odd_flip!`](@ref): `dest = flip(src)`.
+
+The backward path needs this rather than the in-place form. Flipping the
+CALLER's buffer and only afterwards transforming means an exception thrown in
+between leaves the caller holding sign-flipped coefficients — a plausible-looking
+wrong answer with no indication that anything happened."""
+function _dct1_odd_flip_into!(dest::CuArray{T,3}, src::CuArray{T,3}, dim::Int) where {T}
+    n = size(src, dim)
+    dest .= src .* _dct1_sign_shaped(T, n, dim)
+    return dest
 end
 
 """
@@ -632,43 +688,44 @@ flip explicitly: AFTER the forward transform, and on the coefficients BEFORE the
 backward transform.
 """
 function Tarang.dct_in_dim!(data::CuArray{T,N}, dim::Int, direction::Symbol, arch::Tarang.GPU) where {T,N}
-    # Handle complex data by transforming real and imaginary parts separately
-    if T <: Complex
-        # Use GPU-native real/imag extraction (no host round-trip)
-        real_part = real.(data)
-        imag_part = imag.(data)
-
-        Tarang.dct_in_dim!(real_part, dim, direction, arch)
-        Tarang.dct_in_dim!(imag_part, dim, direction, arch)
-
-        data .= complex.(real_part, imag_part)
-        CUDA.synchronize()
-        return data
-    end
-
-    # Real data path — DCT-I via the verified gpu_dct1_along_dim! (3D kernels).
     n = size(data, dim)
     n <= 1 && return data
 
-    if N > 3 || !(T <: AbstractFloat)
-        error("GPU DCT-I supports real floating-point arrays with at most three " *
-              "dimensions; got $(typeof(data)). CPU fallback is disabled.")
+    RT = T <: Complex ? real(T) : T
+    if N > 3 || !(RT <: AbstractFloat)
+        error("GPU DCT-I supports real or complex floating-point arrays with at most " *
+              "three dimensions; got $(typeof(data)). CPU fallback is disabled.")
     end
+
+    ensure_device!(Tarang.architecture(data))
 
     # Reshape 1D/2D input to 3D (CuArray reshape shares storage, so writing
     # through data3 writes data). `dim` stays valid: trailing dims are appended.
     data3 = N == 3 ? data : reshape(data, size(data)..., ntuple(_ -> 1, 3 - N)...)
-    out3 = similar(data3)
 
+    # Cached scratch, not a per-call `similar`. count=4 keeps the key disjoint
+    # from the count=1/count=2 users in the single-GPU transform chain and from
+    # `fft_in_dim!`'s count=3 — the scratch cache hands the SAME buffers to every
+    # caller whose (device, shape, eltype, count) key matches.
+    out3 = get_gpu_dct_scratch(Tarang.architecture(data), size(data3), T, 4)[1]
+
+    # Complex data goes through `gpu_dct1_along_dim!`'s complex method, which
+    # packs re/im as extra batch columns and runs ONE batched DCT-I. The previous
+    # version split into `real.(data)` / `imag.(data)`, recursed twice (each
+    # recursion allocating its own `similar` and syncing), and recombined —
+    # roughly six device allocations and three device-wide syncs per axis.
     if direction == :forward
         gpu_dct1_along_dim!(out3, data3, dim, :forward)
         _dct1_undo_odd_flip!(out3, dim)
-        data3 .= out3
+    elseif direction == :backward
+        # Flip into the scratch, never the caller's buffer — see
+        # `_dct1_odd_flip_into!` for why the in-place form is unsafe here.
+        _dct1_odd_flip_into!(out3, data3, dim)
+        gpu_dct1_along_dim!(out3, out3, dim, :backward)
     else
-        _dct1_undo_odd_flip!(data3, dim)
-        gpu_dct1_along_dim!(out3, data3, dim, :backward)
-        data3 .= out3
+        error("direction must be :forward or :backward, got $direction")
     end
+    copyto!(data3, out3)
 
     CUDA.synchronize()
     return data
@@ -684,3 +741,4 @@ export copy_to_buffer_kernel!, copy_from_buffer_kernel!
 export apply_fft_normalization_kernel!
 export gpu_pack_for_transpose!, gpu_unpack_from_transpose!
 export GPU_PACK_3D_OP, GPU_UNPACK_3D_OP, GPU_PACK_2D_OP, GPU_UNPACK_2D_OP
+export clear_dct1_sign_cache!

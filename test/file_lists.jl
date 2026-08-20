@@ -170,6 +170,10 @@ const TEST_FILES = [
     "test_equation_structure_validation.jl",  # misplaced-term validation must match what actually builds
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
     "test_gpu_transpose_kernels_cpu.jl",  # transpose pack/unpack index math on the KA CPU backend — no GPU needed
+    "test_legendre_normalization.jl",  # Legendre stores ORTHONORMAL coefficients but differentiation_matrix/evaluate_basis are classical; nothing bridged them, so a Legendre LBVP was silently 80% wrong
+    "test_gpu_test_files_reachable.jl", # the GPU test files are executed by NOTHING (buildkite pipeline is inert), so they rot silently; parses them and checks the extension API they call still exists
+    "test_gpu_kernels_cpu.jl",          # element-wise/fused/spectral-pad kernels had ZERO test references and the GPU CI that would run them is inert; KA CPU backend executes the real kernel objects
+    "test_state_arith_layout.jl",       # axpy/linear-combination state helpers forced :g, paying a transform per operand; pins "no forced transform" AND that the coefficient-space answer matches the grid-space one
     "test_gpu_dct1_kernels_cpu.jl",       # DCT-I / Cheb-derivative kernel values on the KA CPU backend (FFTW standing in for cuFFT) — no GPU needed
 ]
 
@@ -191,8 +195,6 @@ const OPTIONAL_TEST_FILES = [
 # Single-process CUDA tests. Run with TARANG_RUN_GPU_TESTS=true on a CUDA host
 # (the JuliaGPU Buildkite pipeline sets this).
 const GPU_TEST_FILES = [
-    "test_dct_reorder.jl",
-    "test_optimized_dct.jl",
     "test_gpu_transform_correctness.jl",
     "test_gpu_fc_2d_complete.jl",
     "test_ilu0_preconditioner.jl",

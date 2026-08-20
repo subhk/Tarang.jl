@@ -51,30 +51,21 @@ end
             finalize_distributed_dct_plan!(plan)
         end
 
-        @testset "Local DCT along dimension" begin
-            # Test local_dct_along_dim! for single GPU
+        @testset "Local DCT-I along dimension" begin
+            # `local_transform_along_dim!` routes a :chebyshev axis to
+            # `local_dct1_along_dim!` (DCT-I, REDFT00) — this exercises that
+            # primitive directly. The old testset here drove the removed DCT-II
+            # `local_dct_along_dim!`, which no distributed path ever called.
             N = 32
-            data = CuArray(rand(Float64, N, N, N))
+            data = CuArray(ComplexF64.(rand(Float64, N, N, N)))
             output = similar(data)
             recovered = similar(data)
 
-            arch = GPU()
-            dct_plan = plan_optimized_gpu_dct(arch, N, Float64)
-
-            # Test dimension 3 (Z)
-            local_dct_along_dim!(output, data, dct_plan, 3, :forward)
-            local_dct_along_dim!(recovered, output, dct_plan, 3, :backward)
-            @test Array(recovered) ≈ Array(data) rtol=1e-10
-
-            # Test dimension 2 (Y)
-            local_dct_along_dim!(output, data, dct_plan, 2, :forward)
-            local_dct_along_dim!(recovered, output, dct_plan, 2, :backward)
-            @test Array(recovered) ≈ Array(data) rtol=1e-10
-
-            # Test dimension 1 (X)
-            local_dct_along_dim!(output, data, dct_plan, 1, :forward)
-            local_dct_along_dim!(recovered, output, dct_plan, 1, :backward)
-            @test Array(recovered) ≈ Array(data) rtol=1e-10
+            for dim in (3, 2, 1)
+                TarangCUDAExt.local_dct1_along_dim!(output, data, dim, :forward)
+                TarangCUDAExt.local_dct1_along_dim!(recovered, output, dim, :backward)
+                @test Array(recovered) ≈ Array(data) rtol=1e-10
+            end
         end
 
         @testset "Single-rank distributed DCT round-trip" begin

@@ -642,6 +642,92 @@ end
 # Differentiation matrices
 # ============================================================================
 
+# ============================================================================
+# Stored-coefficient normalization bridge
+# ============================================================================
+#
+# This codebase carries TWO deliberate conventions and they are not the same:
+#
+#   * `evaluate_basis` / `differentiation_matrix` speak CLASSICAL polynomial
+#     math — un-normalized `Tₙ` / `Uₙ` / `Pₙ`. That self-consistency is pinned
+#     by tests (`test_cov_basis_operators.jl` asserts `Dn·(B c) == B·(D c)`, and
+#     `test_lift_convert.jl` uses `evaluate_basis` as an oracle *because* it is
+#     independent of the transform's convention).
+#   * A FIELD's stored coefficients come from its transform. For Chebyshev those
+#     are also classical, so the two convention coincide and everything works.
+#     For **Legendre** they do not: `setup_legendre_transform!` normalizes with
+#     `sqrt((2n+1)/2)`, so a Legendre field stores coefficients of the
+#     ORTHONORMAL `P̃ₙ = γₙ Pₙ`.
+#
+# Any matrix built from the classical convention and then APPLIED TO STORED
+# COEFFICIENTS needs the bridge below. Without it the result is silently wrong —
+# not an error, a plausible number. Measured before this existed: a Legendre
+# LBVP for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against an answer of
+# amplitude 0.248 (~80% relative) while reporting success; the identical
+# ChebyshevT problem is exact to 1.4e-16.
+#
+# The bridge is deliberately NOT applied inside `evaluate_basis` /
+# `differentiation_matrix` themselves: that would break the classical layer's
+# self-consistency and the tests that pin it. It is applied at the point of use,
+# through the two chokepoints below, so a future call site has one obvious right
+# answer to reach for.
+
+"""
+    stored_basis_scaling(basis, n_modes) -> Vector{Float64}
+
+`γ` relating the classical basis functions `evaluate_basis` returns to the ones a
+FIELD's stored coefficients actually multiply: stored basis function
+`φ̃ₙ = γₙ · φₙ`, so `f = Σ c̃ₙ φ̃ₙ`.
+
+`ones` for every basis whose transform is un-normalized (Chebyshev T/U/V,
+Ultraspherical, generic Jacobi — verified to agree to ~5e-13). Legendre is the
+exception, and matches `setup_legendre_transform!` exactly.
+"""
+stored_basis_scaling(::Basis, n_modes::Int) = ones(Float64, n_modes)
+stored_basis_scaling(::Legendre, n_modes::Int) =
+    [sqrt((2n + 1) / 2) for n in 0:(n_modes - 1)]
+
+"""
+    spectral_derivative_matrix(basis, order=1) -> AbstractMatrix
+
+Coefficient-space derivative matrix in the basis a FIELD actually stores — i.e.
+`differentiation_matrix` bridged through [`stored_basis_scaling`](@ref).
+
+`D̃ = Γ⁻¹ D Γ`. Conjugation by a diagonal preserves sparsity, and
+`(Γ⁻¹DΓ)^k = Γ⁻¹D^kΓ`, so applying it to the already-`order`-th-power matrix is
+correct for any order. For Legendre this reproduces the verified interpreted
+recurrence in `evaluate_legendre_single_derivative!` term for term
+(`D̃[k,j] = D[k,j]·γ_j/γ_k`), and the two agree to 6.5e-13.
+
+**Every runtime consumer that applies a derivative matrix to field coefficients
+must use this, not `differentiation_matrix`.**
+"""
+function spectral_derivative_matrix(basis::Basis, order::Int=1)
+    D = differentiation_matrix(basis, order)
+    γ = stored_basis_scaling(basis, size(D, 2))
+    all(isone, γ) && return D
+    return Diagonal(1 ./ γ) * D * Diagonal(γ)
+end
+
+"""
+    evaluate_stored_basis(basis, coords, modes) -> AbstractMatrix
+
+The basis functions a FIELD's stored coefficients multiply, evaluated at
+`coords`: `evaluate_basis` scaled by [`stored_basis_scaling`](@ref).
+
+Use this wherever a row/matrix of basis values is dotted with field
+coefficients — point (Dirichlet) BC functionals, quadrature weight rows,
+interpolation. `evaluate_basis` alone answers a different question (the
+classical polynomial's value) and silently disagrees for Legendre: a `u(z=0)`
+BC row built from it returned 0.761 for a field whose value at `z=0` is 0.
+"""
+function evaluate_stored_basis(basis::Basis, coords, modes)
+    B = evaluate_basis(basis, coords, modes)
+    γ_all = stored_basis_scaling(basis, maximum(modes) + 1)
+    all(isone, γ_all) && return B
+    return B * Diagonal([γ_all[n + 1] for n in modes])
+end
+
 """
     differentiation_matrix(basis::JacobiBasis, order::Int=1)
 
