@@ -293,7 +293,7 @@ function subproblem_matrix(op::Interpolate, sp; kwargs...)
     # Jacobi (e.g. U_n(±1)=(±1)^n(n+1) ≠ T_n(±1)=(±1)^n) and at interior points for
     # any non-Chebyshev basis. evaluate_basis maps z0→[-1,1] internally and
     # reproduces the old T_n row exactly for ChebyshevT (no regression).
-    T = ComplexF64.(reshape(evaluate_basis(cheb_basis, [z0], 0:(Nz-1)), 1, Nz))
+    T = ComplexF64.(reshape(evaluate_stored_basis(cheb_basis, [z0], 0:(Nz-1)), 1, Nz))
 
     # For vector operands, apply to each component: kron(I_ncomp, T_row)
     field = _resolve_operand_field(op.operand)
@@ -360,7 +360,7 @@ function subproblem_matrix(op::Integrate, sp; kwargs...)
     q = get_integration_weights(cheb_basis)                    # physical nodal weights
     x_ref = _native_grid(cheb_basis, 1.0)                      # reference nodes ∈ [-1,1]
     z_nodes = a_b .+ (b_b - a_b) ./ 2 .* (x_ref .+ 1)          # map to physical nodes
-    Vb = evaluate_basis(cheb_basis, z_nodes, 0:(Nz-1))         # (Nz × Nz): φ_n(z_j)
+    Vb = evaluate_stored_basis(cheb_basis, z_nodes, 0:(Nz-1))  # (Nz × Nz): φ̃_n(z_j)
     w = ComplexF64.(reshape(permutedims(q) * Vb, 1, Nz))       # (1 × Nz) weight row
 
     # Scale by Fourier domain length for DC mode (x-integration gives Lx)

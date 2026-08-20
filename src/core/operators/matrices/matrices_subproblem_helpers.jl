@@ -116,7 +116,7 @@ function _subproblem_diff_matrix(sp, coord_name::String, order::Int, Nz::Int)
                     return sparse(ComplexF64(coeff) * I, Nz, Nz)
                 elseif isa(basis, JacobiBasis)
                     # Chebyshev/Jacobi coordinate: use differentiation matrix
-                    D = sparse(ComplexF64.(differentiation_matrix(basis, order)))
+                    D = sparse(ComplexF64.(spectral_derivative_matrix(basis, order)))
                     n_basis = size(D, 1)
                     if n_basis == Nz
                         return D
@@ -141,7 +141,7 @@ function _subproblem_diff_matrix(sp, coord_name::String, order::Int, Nz::Int)
                             coeff = (im * kx)^order
                             return sparse(ComplexF64(coeff) * I, Nz, Nz)
                         elseif isa(basis, JacobiBasis)
-                            D = sparse(ComplexF64.(differentiation_matrix(basis, order)))
+                            D = sparse(ComplexF64.(spectral_derivative_matrix(basis, order)))
                             n_basis = size(D, 1)
                             if n_basis == Nz
                                 return D
