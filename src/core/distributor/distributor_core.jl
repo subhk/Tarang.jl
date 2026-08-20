@@ -91,6 +91,14 @@ mutable struct Distributor
     transpose_comms_cache::Dict{Int, AbstractTransposeComms}
     transpose_counts_cache::Dict{Tuple, AbstractTransposeCounts}
 
+    # Basis composition the current transform plan was built for, as a tuple of
+    # (basis type name, size) per axis; `nothing` until a plan exists. The MPI
+    # plan-reuse guard must key on THIS, not just the grid shape: a mixed
+    # Cheb×Fourier domain has the same grid shape as a pure-Fourier one, and
+    # silently reusing the pure-Fourier plan would FFT the Chebyshev axis and
+    # never register its DCT or build `pencil_solve`.
+    plan_basis_signature::Any
+
     function Distributor(coordsys::CoordinateSystem;
                         comm::MPI.Comm=MPI.COMM_WORLD,
                         mesh::Union{Nothing, Tuple{Vararg{Int}}}=nothing,
@@ -262,7 +270,7 @@ mutable struct Distributor
             architecture, _use_pencil_arrays, pencil_config, mpi_topology, false, pencil_cache, transforms,
             pencil_fft_plan, pencil_fft_input, pencil_fft_output, pencil_solve, layouts, perf_stats,
             mesh_coords, neighbor_ranks, nothing, gpu_fft_plans, gpu_arrays, distributed_gpu_config,
-            transpose_comms_cache, transpose_counts_cache)
+            transpose_comms_cache, transpose_counts_cache, nothing)
 
         # Precompute neighbor ranks for all mesh dimensions
         if mesh !== nothing && size > 1
@@ -302,6 +310,7 @@ function Base.close(dist::Distributor)
     dist.pencil_fft_input = nothing
     dist.pencil_fft_output = nothing
     dist.pencil_solve = nothing
+    dist.plan_basis_signature = nothing
     dist.nonlinear_evaluator = nothing
 
     if MPI.Initialized() && !MPI.Finalized()

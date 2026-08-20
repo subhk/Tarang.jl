@@ -151,6 +151,7 @@ const TEST_FILES = [
     "test_component_buffers.jl",
     "test_tensor_misc.jl",
     "test_subproblem_ncc.jl",
+    "test_implicit_ncc_memo.jl",   # implicit-NCC build-pass memo: one build per coefficient per pass (MPI collective-count safety), invalidated when the coefficient data changes
     "test_mode_batch_signature.jl",   # batchability must be OBSERVED from built matrices, never inferred from nz/nvars — a gauge-constrained kx=0 mode batched with the rest solves the wrong system silently
     "test_mode_batch_kernels_cpu.jl",  # the real KA kernel objects on the CPU backend — the KA CPU miscompile of same-slot RMW is invisible to a reimplement-and-compare test
     "test_batched_dense_lu.jl",        # getrf_batched reports singularity in an info ARRAY and returns normally — an unchecked singular mode returns buffer contents that read as a plausible solution
@@ -182,6 +183,9 @@ const OPTIONAL_TEST_FILES = [
     "test_end_to_end_pde.jl",      # Full PDE solve test
     "test_pencil_imex.jl",
     "test_subproblem_rk.jl",       # Subproblem RK integration test (RBC 2D)
+    "test_permode_tau_lx.jl",      # per-mode IMEX LX history must carry lift(tau) — 0-D tau DOFs cannot round-trip through empty field storage (zero_dim_stash)
+    "test_coeff_axis_global_size.jl",  # only the FIRST Fourier axis is rfft-halved — per-mode index math must not halve a second RealFourier axis (MPI local ranges)
+    "test_netcdf_slab_geometry.jl",    # non-pencil (GPU+MPI) NetCDF start/count must partition exactly — balanced start vs remainder-first count overlapped+gapped when N%P!=0
 ]
 
 # Single-process CUDA tests. Run with TARANG_RUN_GPU_TESTS=true on a CUDA host
@@ -226,6 +230,9 @@ const MPI_TEST_FILES = [
     "test_mpi_dealiasing_product.jl",
     "test_mpi_advection_term.jl",
     "test_mpi_implicit_advection.jl",
+    "test_mpi_transform_planning_guards.jl", # plan reuse keys on basis signature (not just gshape); replan clears stale pencil_solve; ChebyshevU/Jacobi refuse loudly instead of silent NoTransform
+    "test_mpi_fill_random_reproducible.jl",  # reproducible fill_random! must be decomposition-independent for EVERY layout — coeff fills seed from the coeff pencil's own geometry, not the grid pencil's
+    "test_mpi_output_coeff_layout_refusal.jl", # layout="c" output tasks refuse at registration under MPI — permuted coeff pencil under grid-convention metadata wrote scrambled slabs silently
     "test_mpi_diagonal_imex_alloc.jl",       # distributed diagonal-IMEX SBDF2/ETD O(1)-alloc (no per-step copy_state) + behavior-preserving (np>=2 bit-identical)
     "test_mpi_rhs_buffer_layout.jl",         # distributed diagonal-IMEX steppers must not leave the shared lazy-RHS buffer :c-flagged (spurious backward FFT/step)
     "test_mpi_collective_budget.jl",         # a Fourier-axis derivative must not drag a coupled-DCT round-trip (2 collective transposes) on a mixed distributed field

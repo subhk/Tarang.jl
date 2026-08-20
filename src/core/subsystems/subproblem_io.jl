@@ -12,6 +12,24 @@ function _kx_index_global(sp::Subproblem)
 end
 
 """
+Coefficient-space global length of `field`'s axis `axis`.
+
+Only the FIRST Fourier axis is rfft-halved to `N/2+1`; every subsequent Fourier
+axis sees complex input and uses a full-length C2C fft — the same rule the
+transform plan applies (`setup_pencil_fft_transforms_2d!`) and that
+`get_separable_dim_size`/`_coefficient_shape_impl` follow. Halving EVERY
+RealFourier axis here made `local_indices` describe a split of `N/2+1` on an
+axis the pencil actually decomposes over `N` — wrong local mode ranges, wrong
+storage rows gathered, and out-of-range modes silently zero-filled.
+"""
+function _coeff_axis_global_size(field::ScalarField, axis::Int)
+    basis = field.bases[axis]
+    isa(basis, RealFourier) || return basis.meta.size
+    first_fourier = findfirst(b -> isa(b, FourierBasis), field.bases)
+    return axis == first_fourier ? div(basis.meta.size, 2) + 1 : basis.meta.size
+end
+
+"""
 Convert a global 1-based Fourier mode index to a local index within the
 coefficient data array. For serial runs, local == global. For MPI with
 PencilArrays, the local buffer only holds this rank's modes.
@@ -26,8 +44,7 @@ function _global_to_local_kx(kx_global::Int, field::ScalarField, sp::Subproblem)
         if g isa Integer && axis <= length(field.bases)
             basis = field.bases[axis]
             if isa(basis, FourierBasis)
-                global_size = isa(basis, RealFourier) ? div(basis.meta.size, 2) + 1 : basis.meta.size
-                local_range = local_indices(dist, axis, global_size)
+                local_range = local_indices(dist, axis, _coeff_axis_global_size(field, axis))
                 return kx_global - first(local_range) + 1
             end
         end
@@ -609,8 +626,7 @@ function _subproblem_coeff_index(cd::AbstractArray, field::ScalarField, sp::Subp
             kx_local = if dist === nothing || dist.size <= 1
                 kx_global
             else
-                global_size = isa(basis, RealFourier) ? div(basis.meta.size, 2) + 1 : basis.meta.size
-                lr = local_indices(dist, axis, global_size)
+                lr = local_indices(dist, axis, _coeff_axis_global_size(field, axis))
                 kx_global - first(lr) + 1
             end
             if kx_local < 1 || kx_local > size(cd, axis)
@@ -645,11 +661,53 @@ once per field, per subproblem, per gather AND scatter, per stage. That made thi
     return buffer
 end
 
+# Empty-storage (0-D tau) DOFs cannot round-trip through their field: scatter
+# has nowhere to write them and gather would zero-fill. Stash them per
+# (subproblem, field) on scatter and serve them back on gather, so vectors
+# rebuilt by scatter→re-gather (the per-mode IMEX LX history) keep their
+# lift(tau) contributions. Same-architecture only (no CPU/GPU staging, matching
+# `_assign_to_buffer!`); the CPU path avoids view wrappers (hot — see the
+# `_is_zero_dim_field` note above).
+function _stash_missing_field!(sp::Subproblem, field::ScalarField,
+                               data::AbstractVector, offset::Int, n::Int)
+    key = objectid(field)
+    stash = get(sp.runtime.zero_dim_stash, key, nothing)
+    if stash === nothing || length(stash) != n ||
+       is_gpu_array(stash) != is_gpu_array(data)
+        stash = similar_zeros(data, ComplexF64, n)
+        sp.runtime.zero_dim_stash[key] = stash
+    end
+    if !is_gpu_array(data)
+        @inbounds for i in 1:n
+            stash[i] = data[offset + i]
+        end
+    else
+        stash .= view(data, offset + 1:offset + n)
+    end
+    return nothing
+end
+
+"""Fill `buffer[offset+1:offset+n]` from the stash; `false` if nothing stashed."""
+function _restore_missing_field!(buffer::AbstractVector{ComplexF64}, offset::Int,
+                                 n::Int, sp::Subproblem, field::ScalarField)
+    stash = get(sp.runtime.zero_dim_stash, objectid(field), nothing)
+    (stash === nothing || length(stash) != n ||
+     is_gpu_array(stash) != is_gpu_array(buffer)) && return false
+    if !is_gpu_array(buffer)
+        @inbounds for i in 1:n
+            buffer[offset + i] = stash[i]
+        end
+    else
+        view(buffer, offset + 1:offset + n) .= stash
+    end
+    return true
+end
+
 function _gather_field_raw!(buffer::AbstractVector{ComplexF64}, offset::Int, field::ScalarField, kx_global::Int, sp::Subproblem)
     cd_raw = coeff_data!(field)
     if cd_raw === nothing || isempty(cd_raw)
         n = subproblem_field_size(sp, field)
-        if n > 0
+        if n > 0 && !_restore_missing_field!(buffer, offset, n, sp, field)
             if buffer isa Vector{ComplexF64}
                 _zero_buffer_range!(buffer, offset, n)
             else
@@ -737,7 +795,9 @@ end
 function _scatter_field_raw!(field::ScalarField, data::AbstractVector, offset::Int, kx_global::Int, sp::Subproblem)
     cd_raw = coeff_data!(field)
     if cd_raw === nothing || isempty(cd_raw)
-        return offset + subproblem_field_size(sp, field)
+        n = subproblem_field_size(sp, field)
+        n > 0 && _stash_missing_field!(sp, field, data, offset, n)
+        return offset + n
     end
     cd = _local_coeff_data(cd_raw)
 

@@ -23,24 +23,20 @@ function async_allreduce!(dest::AbstractArray, src::AbstractArray, op, dist::Dis
     request = MPI.Iallreduce!(src, dest, op, dist.comm)
     dist.performance_stats.mpi_operations += 1
 
-    return (request=request, staged=false)
+    return request
 end
 
 """
-    wait_async!(async_result, dist::Distributor)
+    wait_async!(request, dist::Distributor)
 
-Wait for an asynchronous MPI operation to complete.
-Handles both raw MPI.Request and staged GPU operations.
+Wait for an asynchronous MPI operation to complete. `async_allreduce!` returns
+a raw `MPI.Request` — the staged-GPU wrapper is gone along with host staging
+(GPU arrays require CUDA-aware MPI).
 """
 function wait_async!(async_result::NamedTuple, dist::Distributor)
-    start_time = time()
-
-    MPI.Wait(async_result.request)
-
-    async_result.staged && error(
-        "Async GPU communication returned a staged result; host staging is disabled.")
-
-    dist.performance_stats.communication_time += time() - start_time
+    # One-release compatibility for callers still holding the old
+    # `(request, staged)` wrapper shape.
+    return wait_async!(async_result.request, dist)
 end
 
 # Legacy support for raw MPI.Request

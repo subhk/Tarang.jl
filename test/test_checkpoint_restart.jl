@@ -537,3 +537,45 @@ end
 
     @test restarted ≈ reference atol=1e-9
 end
+
+# --- Fix round (2026-08-20 MPI review, O2): a stale MPI slab DIRECTORY of the
+# same stem must not shadow a newer serial checkpoint. `_slab_files` prefers a
+# directory over `<stem>.nc`, and the serial save path never removed one — so
+# `load_state!` silently restored the OLD multi-rank state including its clock.
+
+@testset "serial save_state removes a stale MPI slab directory" begin
+    dir = mktempdir()
+    path = joinpath(dir, "chk")
+
+    # Simulate a leftover np=2 checkpoint directory with rank slab files.
+    mkpath(path)
+    for r in 0:1
+        write(joinpath(path, "chk_p$r.nc"), "stale")
+    end
+
+    a = _decay_solver(RK222())
+    for _ in 1:5
+        step!(a, 0.02)
+    end
+    written = save_state(a, path)
+    @test isfile(written)
+    @test !isdir(path)                      # stale slab dir cleaned up
+
+    b = _decay_solver(RK222())
+    load_state!(b, path)
+    @test b.sim_time ≈ a.sim_time           # pre-fix: stale dir shadowed the file
+    @test b.iteration == a.iteration
+end
+
+@testset "serial save_state refuses a conflicting non-slab directory" begin
+    dir = mktempdir()
+    path = joinpath(dir, "chk2")
+    mkpath(path)
+    write(joinpath(path, "unrelated.txt"), "keep me")
+
+    a = _decay_solver(RK222())
+    step!(a, 0.02)
+    # Deleting arbitrary user files would be worse than failing: refuse loudly.
+    @test_throws Exception save_state(a, path)
+    @test isfile(joinpath(path, "unrelated.txt"))
+end

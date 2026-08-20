@@ -65,6 +65,21 @@ those calls comes back through here."""
 function _slab_output_path!(dist, path::AbstractString, context::AbstractString)
     stem = endswith(path, ".nc") ? String(path[1:end-3]) : String(path)
     if dist.size <= 1
+        # A leftover multi-rank checkpoint at this stem is a DIRECTORY of rank
+        # slabs, and the reader (`_slab_files`) prefers a directory over
+        # `<stem>.nc` — left in place it silently shadows the fresh serial
+        # checkpoint at restart, restoring the OLD state and clock. Remove it
+        # when it holds only slab artifacts; refuse loudly when it holds
+        # anything else rather than delete user data.
+        if isdir(stem)
+            prefix = string(basename(stem), "_p")
+            slab_like = all(e -> endswith(e, ".nc") && startswith(e, prefix),
+                            readdir(stem))
+            slab_like || error("$context: `$stem` exists as a directory with " *
+                               "non-checkpoint contents; refusing to replace it " *
+                               "with `$stem.nc`. Remove it or choose another path.")
+            rm(stem; recursive=true)
+        end
         return string(stem, ".nc")
     end
 
@@ -73,6 +88,10 @@ function _slab_output_path!(dist, path::AbstractString, context::AbstractString)
         try
             isdir(stem) || mkpath(stem)
             _remove_stale_rank_files(stem, dist.size)
+            # Mirror of the serial branch: a stale SERIAL checkpoint file next
+            # to this run's slab directory is ambiguous at read time.
+            serial_file = string(stem, ".nc")
+            isfile(serial_file) && rm(serial_file)
         catch e
             err = e
         end
@@ -228,8 +247,8 @@ end
 The whole body is one `_collectively` region. `_store_local_grid_data!` is the
 reason that has to include the tail and not just the read: it compares
 `get_local_shape`'s analytic split against the field's actual storage — two
-independent computations of the same quantity, which this repo's 2026-06-23
-audit records diverging on non-divisible splits and >=2-D meshes, i.e.
+independent computations of the same quantity, which this repo's audit
+records diverging on non-divisible splits and >=2-D meshes, i.e.
 rank-dependently by construction. A throw there used to escape after the last
 `Allreduce`, so `load_state!` would move on to the next field and open its
 `load_field!` with a collective the failed rank never reaches."""

@@ -373,7 +373,7 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
     # rank), then undo afterwards — mirroring the IVP subproblem steppers
     # (step_subproblem_rk.jl). No-op for serial / non-mixed fields. Without this
     # the gather indexes the wrong pencil → DimensionMismatch or wrong solution at
-    # np>=2 (round-2 audit 2026-06-23).
+    # np>=2.
     dist = isempty(sps) ? nothing : sps[1].dist
     _state_stash = to_solve_layout!(state, dist)
     _F_stash = to_solve_layout!(pde_F, dist)
@@ -504,7 +504,7 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
         # Each rank's `resnorm` only covers its LOCAL Fourier modes. Reduce across
         # ranks so all agree on convergence and break on the SAME iteration —
         # otherwise ranks issue a different number of solve-layout collectives and
-        # deadlock (round-2 audit 2026-06-23).
+        # deadlock.
         if dist !== nothing && dist.size > 1
             resnorm = MPI.Allreduce(resnorm, max, dist.comm)
         end
@@ -514,6 +514,10 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
         end
 
         # --- Rebuild dF per subproblem (Jacobian at current state) ---
+        # The state (and hence any state-dependent NCC coefficient) changed since
+        # the last build: clear the cross-subproblem implicit-NCC memo so each
+        # rank recomputes it exactly once this pass (rank-uniform collectives).
+        _invalidate_implicit_ncc_memo!()
         for (i, ed) in enumerate(eqd); ed["L"] = dF_expr[i]; end
         for sp in sps; sp.L_min === nothing || build_matrices!(sp, ["L"], solver); end
 
@@ -532,6 +536,7 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
         from_solve_layout!(_step_state, dist)
 
         # --- Restore the linear operator for the next residual ---
+        _invalidate_implicit_ncc_memo!()
         for (i, ed) in enumerate(eqd); ed["L"] = origL[i]; end
         for sp in sps; sp.L_min === nothing || build_matrices!(sp, ["L"], solver); end
 
@@ -656,7 +661,7 @@ function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
         # modes, so `all_λ` is a SUBSET of the global spectrum. Gather every rank's
         # eigenvalues so the global which/nev selection sees the full set —
         # otherwise each rank returns its local-subset extrema, which differ from
-        # the serial result (round-2 audit 2026-06-23). Per-mode eigenVECTORS span
+        # the serial result. Per-mode eigenVECTORS span
         # multiple ranks, so none is returned in the distributed case.
         dist = isempty(sps) ? nothing : sps[1].dist
         if dist !== nothing && dist.size > 1

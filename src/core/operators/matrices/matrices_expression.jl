@@ -314,7 +314,7 @@ function _expression_matrices_future(expr::Future, sp, vars; kwargs...)
             # Non-scalar (VectorField/TensorField) factors are rank-changing block expansions,
             # not scalar coefficients — a separate, pre-existing gap left untouched here.
             _is_scalar_coefficient(ncc) || continue
-            child_mats = _apply_implicit_ncc(_implicit_ncc_matrix(ncc), child_mats, _expr_label(expr))
+            child_mats = _apply_implicit_ncc(_implicit_ncc_matrix_memoized(ncc), child_mats, _expr_label(expr))
         end
         return _scale_expression_mats(child_mats, scalar_coeff)
     end
@@ -456,11 +456,11 @@ function expression_matrices(op::MultiplyOperator, sp, vars; kwargs...)
     if left_dep && !right_dep
         child = expression_matrices(left, sp, vars; kwargs...)
         _is_scalar_coefficient(right) || return child   # rank-changing factor; see below
-        return _apply_implicit_ncc(_implicit_ncc_matrix(right), child, _expr_label(op))
+        return _apply_implicit_ncc(_implicit_ncc_matrix_memoized(right), child, _expr_label(op))
     elseif right_dep && !left_dep
         child = expression_matrices(right, sp, vars; kwargs...)
         _is_scalar_coefficient(left) || return child
-        return _apply_implicit_ncc(_implicit_ncc_matrix(left), child, _expr_label(op))
+        return _apply_implicit_ncc(_implicit_ncc_matrix_memoized(left), child, _expr_label(op))
     end
 
     # Both depend on vars (nonlinear) or neither depends -> empty
@@ -530,6 +530,34 @@ Everything else returns `ImplicitNCCUnsupported` with a reason — the caller mu
 never drop. A coefficient that is identically zero returns an explicit ZERO matrix
 (the term really is zero; passing the operand through would wrongly imply q ≡ 1).
 """
+# Build-pass memo for `_implicit_ncc_matrix`, keyed by the coefficient FIELD.
+#
+# This is a COLLECTIVE-SAFETY device, not (primarily) a speed one: the builder
+# below runs MPI collectives (`ensure_layout!` :c↔:g transposes and a PencilArray
+# `maximum`, which Allreduces), and it is invoked from inside the per-LOCAL-
+# subproblem matrix-build loop. Local subproblem counts differ across ranks
+# whenever #Fourier modes % nprocs != 0, so per-subproblem invocation issues
+# UNMATCHED collectives → deadlock at solver build. With the memo every rank
+# computes each coefficient exactly once per build pass (same expression order on
+# every rank), and all later subproblems hit the cache with no communication.
+#
+# The result depends on the field's CURRENT data, so the memo must be cleared at
+# every build-pass boundary (`_invalidate_implicit_ncc_memo!`): the orchestrated
+# `build_subproblem_matrices` and each NLBVP Newton rebuild loop do so — those
+# rebuilds exist precisely because the coefficient data changed.
+const _IMPLICIT_NCC_MEMO = Dict{UInt, Any}()
+
+_invalidate_implicit_ncc_memo!() = empty!(_IMPLICIT_NCC_MEMO)
+
+function _implicit_ncc_matrix_memoized(ncc_operand)
+    field = _ncc_direct_field(ncc_operand)
+    # Non-field coefficients never touch field data (no collectives) — the
+    # unsupported report is cheap and rank-uniform; don't memo those.
+    field === nothing && return _implicit_ncc_matrix(ncc_operand)
+    return get!(() -> _implicit_ncc_matrix(ncc_operand), _IMPLICIT_NCC_MEMO,
+                objectid(field))
+end
+
 function _implicit_ncc_matrix(ncc_operand)
     field = _ncc_direct_field(ncc_operand)
     if field === nothing

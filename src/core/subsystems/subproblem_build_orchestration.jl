@@ -73,6 +73,9 @@ Build matrices for all subproblems.
 Following subsystems:72-81.
 """
 function build_subproblem_matrices(solver, subproblems, matrices)
+    # New build pass: implicit-NCC matrices depend on the coefficient fields'
+    # CURRENT data, so the cross-subproblem memo from any earlier pass is stale.
+    _invalidate_implicit_ncc_memo!()
     # Setup NCCs (gather coefficients)
     problem = solver.problem
     for eq_data in problem.equation_data
