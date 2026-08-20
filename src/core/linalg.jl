@@ -30,33 +30,28 @@ end
 """
     DenseMatVec(matrix; transposed=false)
 
-Dense matrix-vector operator. `device_matrix` caches the uploaded copy used when
-the operator is applied to device vectors: `fast_matvec!` used to call
-`on_architecture(arch, matrix)` on EVERY call, re-uploading the whole dense
-matrix host-to-device per matvec. The cache is keyed by architecture, so a
-multi-GPU caller that alternates devices re-uploads only on the switch.
+Dense matrix-vector operator.
+
+!!! note "Applying this to device vectors re-uploads `matrix` every call"
+    `fast_matvec!` calls `on_architecture(arch, matrix)` per call when handed GPU
+    vectors, which is a full host-to-device copy of the dense matrix each time.
+
+    A cache keyed on the architecture was tried and REVERTED: `matrix` is an
+    ordinary array and callers can mutate it in place, so the cached device copy
+    goes stale silently and the operator returns the previous matrix's answer
+    with no error. There is no cheap exact validity check either — comparing
+    against the cached source costs the same O(n²) as the upload. Correctness
+    wins; nothing in `src/` calls this (see the note on `fast_matvec!`), so the
+    upload is not on any live path. A caller who needs the cache should hold a
+    device-resident `matrix` itself, which this path uses directly.
 """
-mutable struct DenseMatVec{T, M<:AbstractMatrix{T}} <: MatVecOp
+struct DenseMatVec{T, M<:AbstractMatrix{T}} <: MatVecOp
     matrix::M
     transposed::Bool
-    device_matrix::Any          # cached device copy of `matrix`, or nothing
-    device_arch::Any            # architecture `device_matrix` lives on
 end
 
 DenseMatVec(matrix::AbstractMatrix{T}; transposed::Bool=false) where T =
-    DenseMatVec{T, typeof(matrix)}(matrix, transposed, nothing, nothing)
-
-"""Device-resident copy of `op.matrix` on `arch`, uploaded once and reused."""
-function _device_matrix!(op::DenseMatVec, arch)
-    cached = op.device_matrix
-    if cached !== nothing && op.device_arch == arch
-        return cached
-    end
-    dev = on_architecture(arch, op.matrix)
-    op.device_matrix = dev
-    op.device_arch = arch
-    return dev
-end
+    DenseMatVec{T, typeof(matrix)}(matrix, transposed)
 
 struct BlockSparseMatVec{T, Ti} <: MatVecOp
     blocks::Vector{Union{SparseMatrixCSC{T, Ti}, Nothing}}
@@ -154,6 +149,13 @@ leave it off outside of measurement.
 """
 enable_linalg_stats!(on::Bool=true) = (LINALG_STATS_ENABLED[] = on)
 
+"""Clock read that costs nothing while stats are off.
+
+Gating only inside `_record_*!` still paid two `time()` syscalls per matvec —
+the guard removed the lock, not the clock. Call sites use this instead, so a
+disabled run does one `Ref` load and no syscall."""
+@inline _stats_time() = LINALG_STATS_ENABLED[] ? time() : 0.0
+
 # Thread-safe stats update helpers
 function _record_matvec!(elapsed::Float64; sparse::Bool=false, dense::Bool=false, blas::Bool=false)
     LINALG_STATS_ENABLED[] || return nothing
@@ -232,7 +234,7 @@ function fast_matvec!(y::AbstractVector, op::SparseMatVec, x::AbstractVector, α
             "Julia's SparseMatrixCSC is CPU-only. Use dense operations for GPU."))
     end
 
-    start_time = time()
+    start_time = _stats_time()
 
     # Use sparse matrix-vector multiplication
     if β == 0.0
@@ -254,7 +256,7 @@ function fast_matvec!(y::AbstractVector, op::SparseMatVec, x::AbstractVector, α
         axpy_vector!(α, op.workspace, y)
     end
     
-    _record_matvec!(time() - start_time; sparse=true)
+    _record_matvec!(_stats_time() - start_time; sparse=true)
 
     return y
 end
@@ -262,7 +264,7 @@ end
 """Dense matrix-vector multiplication using BLAS"""
 function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α::Real=1.0, β::Real=0.0)
 
-    start_time = time()
+    start_time = _stats_time()
 
     matrix = op.matrix
     matrix_gpu = is_gpu_array(matrix)
@@ -277,7 +279,7 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             "DenseMatVec input and output must reside on the same GPU device"))
         matrix_gpu && architecture(matrix) != arch && throw(ArgumentError(
             "DenseMatVec matrix resides on a different GPU device; implicit cross-device staging is disabled"))
-        matrix_dev = matrix_gpu ? matrix : _device_matrix!(op, arch)
+        matrix_dev = matrix_gpu ? matrix : on_architecture(arch, matrix)
         A_dev = op.transposed ? transpose(matrix_dev) : matrix_dev
 
         if β == 0.0
@@ -291,7 +293,7 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             @. y = α * tmp + β * y
         end
 
-        _record_matvec!(time() - start_time; dense=true)
+        _record_matvec!(_stats_time() - start_time; dense=true)
         return y
     elseif matrix_gpu
         throw(ArgumentError(
@@ -310,7 +312,7 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             # y = α*A*x + β*y
             gemv!('N', eltype(y)(α), matrix, x, eltype(y)(β), y)
         end
-        _record_matvec!(time() - start_time; blas=true)
+        _record_matvec!(_stats_time() - start_time; blas=true)
     else
         # Generic fallback - works for both CPU and GPU arrays
         A = op.transposed ? transpose(matrix) : matrix
@@ -324,7 +326,7 @@ function fast_matvec!(y::AbstractVector, op::DenseMatVec, x::AbstractVector, α:
             mul!(tmp, A, x)
             @. y = α * tmp + β * y
         end
-        _record_matvec!(time() - start_time; dense=true)
+        _record_matvec!(_stats_time() - start_time; dense=true)
     end
 
     return y
@@ -339,7 +341,7 @@ function fast_matvec!(y::AbstractVector, op::BlockSparseMatVec, x::AbstractVecto
             "Julia's SparseMatrixCSC is CPU-only. Use dense operations for GPU."))
     end
 
-    start_time = time()
+    start_time = _stats_time()
 
     # Initialize result
     if β == 0.0
@@ -389,7 +391,7 @@ function fast_matvec!(y::AbstractVector, op::BlockSparseMatVec, x::AbstractVecto
         end
     end
     
-    _record_matvec!(time() - start_time; sparse=true)
+    _record_matvec!(_stats_time() - start_time; sparse=true)
 
     return y
 end
@@ -404,7 +406,7 @@ function fast_matmat!(C::AbstractMatrix, op::SparseDenseMatMat, A_is_sparse::Boo
             "Julia's SparseMatrixCSC is CPU-only. Use DenseDenseMatMat for GPU."))
     end
 
-    start_time = time()
+    start_time = _stats_time()
     workspace = size(op.dense_workspace) == size(C) ? op.dense_workspace : similar(C)
     
     if A_is_sparse
@@ -433,7 +435,7 @@ function fast_matmat!(C::AbstractMatrix, op::SparseDenseMatMat, A_is_sparse::Boo
         end
     end
     
-    _record_matmat!(time() - start_time; sparse=true)
+    _record_matmat!(_stats_time() - start_time; sparse=true)
 
     return C
 end
@@ -441,7 +443,7 @@ end
 """Dense matrix multiplication with BLAS"""
 function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix, B::AbstractMatrix, α::Real=1.0, β::Real=0.0)
 
-    start_time = time()
+    start_time = _stats_time()
 
     gpu_flags = (is_gpu_array(A), is_gpu_array(B), is_gpu_array(C))
     any(gpu_flags) && !all(gpu_flags) && throw(ArgumentError(
@@ -463,7 +465,7 @@ function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix
             @. C = α * tmp + β * C
         end
 
-        _record_matmat!(time() - start_time; dense=true)
+        _record_matmat!(_stats_time() - start_time; dense=true)
         return C
     end
 
@@ -472,12 +474,12 @@ function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix
     if use_blas && size(A, 1) * size(B, 2) * size(A, 2) > 1000  # Use BLAS for large matrices
         # Use BLAS GEMM: C = α*A*B + β*C
         gemm!('N', 'N', eltype(C)(α), A, B, eltype(C)(β), C)
-        _record_matmat!(time() - start_time; blas=true)
+        _record_matmat!(_stats_time() - start_time; blas=true)
 
     elseif !is_gpu && op.use_threads && use_blas && size(A, 1) > op.block_size
         # Use threaded block multiplication for medium matrices (CPU only)
         threaded_block_matmat!(C, A, B, α, β, op.block_size)
-        _record_matmat!(time() - start_time; dense=true)
+        _record_matmat!(_stats_time() - start_time; dense=true)
 
     else
         # Generic fallback - works for both CPU and GPU arrays
@@ -491,7 +493,7 @@ function fast_matmat!(C::AbstractMatrix, op::DenseDenseMatMat, A::AbstractMatrix
             mul!(tmp, A, B)
             @. C = α * tmp + β * C
         end
-        _record_matmat!(time() - start_time; dense=true)
+        _record_matmat!(_stats_time() - start_time; dense=true)
     end
 
     return C
@@ -500,7 +502,7 @@ end
 """Kronecker product matrix multiplication: C = α*(A₁⊗A₂⊗...)*vec(C) + β*C"""
 function fast_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector, α::Real=1.0, β::Real=0.0)
 
-    start_time = time()
+    start_time = _stats_time()
 
     # Reshape vector to matrix form for Kronecker operations
     n_factors = length(op.kronecker_factors)
@@ -571,7 +573,7 @@ function fast_matmat!(C::AbstractMatrix, op::TensorMatMat, vec_C::AbstractVector
         error("General Kronecker products with >2 factors not yet implemented")
     end
 
-    _record_matmat!(time() - start_time; dense=true)
+    _record_matmat!(_stats_time() - start_time; dense=true)
 
     return C
 end
