@@ -377,7 +377,13 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
     pen = PencilArrays.pencil(gd1)
     topo = PencilArrays.topology(pen)
     decomp0 = Tuple(PencilArrays.decomposition(pen))
-    length(decomp0) == D - 1 || return nothing        # exactly one local axis (slab/pencil)
+    # At most D-1 decomposed axes, i.e. at least one axis is local. A D-1
+    # decomposition (2D on a 1-D mesh, 3D on a 2-D mesh) leaves exactly one; a
+    # COARSER process mesh — a 3D field on a 1-D slab mesh, the common
+    # `mesh=(nprocs,)` case — leaves two, which the sweep below handles as a set.
+    # Requiring equality here silently routed every 3D slab-decomposed run to the
+    # 2/3-rule fallback, so it dropped resolved modes serial and a 2-D mesh keep.
+    length(decomp0) <= D - 1 || return nothing
     all(d -> isfourier(bases[d]), decomp0) || return nothing   # only pad/transpose decomposed FOURIER axes
     ws = _get_padded_dist_workspace!(dist, topo, bases, CT, N, Mp, decomp0, fourier_axes)
     ws.idx[] = 0
@@ -387,11 +393,18 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
         gc = _padded_dist_buf!(ws, PencilArrays.pencil(gd)); parent(gc) .= CT.(parent(gd))
         a = _padded_dist_buf!(ws, mkpen(N, decomp0)); PencilArrays.transpose!(a, gc); a
     end
-    # bring axis `a` into the (single) local slot by swapping it with the current
-    # local axis — a one-decomposed-dim change, which PencilArrays.transpose! allows.
-    makelocal(cur, csz, dec, loc, a) = a == loc ? (cur, dec, loc) : begin
-        ndec = [d == a ? loc : d for d in dec]
-        nxt = _padded_dist_buf!(ws, mkpen(csz, ndec)); PencilArrays.transpose!(nxt, cur); (nxt, ndec, a)
+    # Bring axis `a` into a LOCAL slot. "Local" is a SET, not a single axis: a
+    # D-1 decomposition leaves one local axis, a coarser mesh leaves several, and
+    # `a` may already be local — then no transpose is needed. Otherwise swap `a`
+    # with one currently-local axis: a one-decomposed-dim change, which
+    # PencilArrays.transpose! allows. `prefer` chooses WHICH local axis takes its
+    # place (0 = any); the final alignment loop needs that to land a specific axis
+    # in a specific decomposition slot.
+    makelocal(cur, csz, dec, a, prefer::Int) = !(a in dec) ? (cur, dec) : begin
+        locs = setdiff(1:D, dec)
+        l = (prefer != 0 && prefer in locs) ? prefer : first(locs)
+        ndec = [d == a ? l : d for d in dec]
+        nxt = _padded_dist_buf!(ws, mkpen(csz, ndec)); PencilArrays.transpose!(nxt, cur); (nxt, ndec)
     end
     # Local-axis pad/truncate: forward FFT in place on the SPENT input buffer `pin`
     # (never read again — see the workspace bump-pool note), pad/truncate into the
@@ -413,9 +426,9 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
         po = parent(pout); _padded_dist_inv_plan!(ws, po, a) * po
     end
     sweep(start, sdec, ssz, tgt, op) = begin
-        cur = start; dec = collect(sdec); loc = only(setdiff(1:D, collect(sdec))); csz = collect(ssz)
+        cur = start; dec = collect(sdec); csz = collect(ssz)
         for a in fourier_axes   # pad/truncate only Fourier axes; non-Fourier stay nodal/local
-            cur, dec, loc = makelocal(cur, csz, dec, loc, a)
+            cur, dec = makelocal(cur, csz, dec, a, 0)
             csz[a] = tgt[a]
             nxt = _padded_dist_buf!(ws, mkpen(csz, dec)); op(nxt, cur, a); cur = nxt
         end
@@ -439,13 +452,10 @@ function evaluate_padded_multiply_distributed(field1::ScalarField, field2::Scala
     # the decomp tuple slot by slot, each fix being one valid single-swap.
     rgdec = collect(PencilArrays.decomposition(PencilArrays.pencil(rg)))
     rdec = collect(PencilArrays.decomposition(PencilArrays.pencil(res)))
-    rloc = only(setdiff(1:D, rdec))
     for i in eachindex(rgdec)
         rdec[i] == rgdec[i] && continue
-        if rloc != rgdec[i]                                   # bring target axis local
-            res, rdec, rloc = makelocal(res, collect(N), rdec, rloc, rgdec[i])
-        end
-        res, rdec, rloc = makelocal(res, collect(N), rdec, rloc, rdec[i])  # swap it into slot i
+        res, rdec = makelocal(res, collect(N), rdec, rgdec[i], 0)         # free the target axis
+        res, rdec = makelocal(res, collect(N), rdec, rdec[i], rgdec[i])   # swap it into slot i
     end
     rc = _padded_dist_buf!(ws, PencilArrays.pencil(rg))
     PencilArrays.transpose!(rc, res)
