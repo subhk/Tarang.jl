@@ -272,9 +272,8 @@ function _gpu_forward_transform_impl!(field::ScalarField)
             return distributed_gpu_forward_transform!(field)
         else
             # Unsupported layout; core raises without CPU staging.
-            _refuse_fwd(field, "the distributed multi-GPU DCT-I path needs a 3D field " *
-                               "with at least one Chebyshev axis, at least one Fourier " *
-                               "axis, and every RealFourier axis on dim 1")
+            _refuse_fwd(field, "the distributed multi-GPU DCT-I path declined this field: " *
+                               Tarang.distributed_gpu_unsupported_reason(field))
         end
     end
 
@@ -536,9 +535,8 @@ function _gpu_backward_transform_impl!(field::ScalarField)
             return distributed_gpu_backward_transform!(field)
         else
             # Unsupported layout; core raises without CPU staging.
-            _refuse_bwd(field, "the distributed multi-GPU DCT-I path needs a 3D field " *
-                               "with at least one Chebyshev axis, at least one Fourier " *
-                               "axis, and every RealFourier axis on dim 1")
+            _refuse_bwd(field, "the distributed multi-GPU DCT-I path declined this field: " *
+                               Tarang.distributed_gpu_unsupported_reason(field))
         end
     end
 

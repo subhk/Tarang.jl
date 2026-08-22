@@ -235,7 +235,7 @@ function to_solve_layout!(fields, dist; fuse_from_grid::Bool=false)
             (fft_pa isa PencilArrays.PencilArray) || continue
             dtype = eltype(fft_pa)
             solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
-            PencilArrays.transpose!(solve_pa, fft_pa)
+            transpose_multistep!(solve_pa, fft_pa, cache, key)
             _solve_layout_forward_transform!(solve_pa, dist)     # coupled DCT, local, in solve pencil
             set_coeff_data!(f, solve_pa)
             push!(stash, f => fft_pa)
@@ -244,7 +244,7 @@ function to_solve_layout!(fields, dist; fuse_from_grid::Bool=false)
             (fft_pa isa PencilArrays.PencilArray) || continue
             dtype = eltype(fft_pa)
             solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
-            PencilArrays.transpose!(solve_pa, fft_pa)
+            transpose_multistep!(solve_pa, fft_pa, cache, key)
             # `:c` is already Chebyshev-SPECTRAL (forward_transform! applied the coupled
             # DCT via _apply_distributed_coupled_dct!), so the fft→solve transpose alone
             # lands the per-mode tau solve in coefficient space. No DCT here (was double).
@@ -293,7 +293,8 @@ function from_solve_layout!(stash, dist; to_grid::Bool=false)
             f.current_layout === :c || error("from_solve_layout!(to_grid=true) requires " *
                 ":c-flagged fields; got :$(f.current_layout) for '$(f.name)'")
             _solve_layout_backward_transform!(solve_pa, dist)     # inverse coupled DCT, local, in solve pencil
-            PencilArrays.transpose!(fft_pa, solve_pa)             # solve→fft (coupled axis now GRID)
+            transpose_multistep!(fft_pa, solve_pa, get_transpose_cache(),
+                                (:solve, objectid(f), objectid(dist.pencil_solve)))  # solve→fft (coupled axis now GRID)
             set_coeff_data!(f, fft_pa)
             backward_transform!(f, :g; apply_coupled_dct=false)   # Fourier ldiv! only → :g
         else
@@ -301,7 +302,8 @@ function from_solve_layout!(stash, dist; to_grid::Bool=false)
             # forward_transform!/backward_transform! (see _apply_distributed_coupled_dct!),
             # so `:c` is Chebyshev-SPECTRAL in both the fft and solve pencils. The
             # solve↔fft transpose preserves those coefficients; no DCT here.
-            PencilArrays.transpose!(fft_pa, solve_pa)
+            transpose_multistep!(fft_pa, solve_pa, get_transpose_cache(),
+                                (:solve, objectid(f), objectid(dist.pencil_solve)))
             set_coeff_data!(f, fft_pa)
         end
     end
@@ -352,10 +354,10 @@ function _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool)
     # `get_transpose_buffer!`.
     key = (:coupled_dct, objectid(dist.pencil_solve))
     solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
-    PencilArrays.transpose!(solve_pa, fft_pa)
+    transpose_multistep!(solve_pa, fft_pa, cache, key)
     forward ? _solve_layout_forward_transform!(solve_pa, dist) :
               _solve_layout_backward_transform!(solve_pa, dist)
-    PencilArrays.transpose!(fft_pa, solve_pa)
+    transpose_multistep!(fft_pa, solve_pa, cache, key)
     return field
 end
 

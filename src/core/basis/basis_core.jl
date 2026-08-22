@@ -81,19 +81,59 @@ Check if all bases are ComplexFourier (required for MPI).
 is_pure_complex_fourier_domain(bases::Tuple) = all(is_complex_fourier_basis(b) for b in bases)
 is_pure_complex_fourier_domain(bases::Vector) = all(is_complex_fourier_basis(b) for b in bases)
 
-"""Basis-level eligibility for the custom three-dimensional GPU+MPI DCT-I path."""
-function _distributed_gpu_dct_bases_supported(bases)
-    length(bases) == 3 || return false
-    all(b -> isa(b, RealFourier) || isa(b, ComplexFourier) || isa(b, ChebyshevT),
-        bases) || return false
-    any(b -> isa(b, ChebyshevT), bases) || return false
-    any(is_fourier_basis, bases) || return false
-    any(i -> isa(bases[i], RealFourier), 2:3) && return false
-    if isa(bases[1], RealFourier) && any(is_fourier_basis, bases[2:3])
-        return false
+"""
+    _distributed_gpu_dct_unsupported_reason(bases) -> Union{Nothing, String}
+
+Why `bases` cannot use the custom three-dimensional GPU+MPI DCT-I path, or
+`nothing` when it can. `_distributed_gpu_dct_bases_supported` is defined AS
+`reason === nothing`, so the refusal text a user sees can never drift from the
+rule the code actually applies — it did: the old hand-written message said
+"every RealFourier axis on dim 1", which `(RealFourier, ComplexFourier,
+ChebyshevT)` satisfies, yet that layout was refused, sending the reader back to
+a rule they had already followed.
+
+The genuine rule: exactly 3 axes, at least one Chebyshev and one Fourier, and
+every Fourier axis ComplexFourier — except that dim 1 may be RealFourier when it
+is the ONLY Fourier axis. Both halves of that are algorithmic, not conservatism:
+the half-spectrum truncation is valid only on dim 1 (the path transposes dim 1
+local before truncating), and the backward Hermitian expansion cannot place the
+conjugate partners at the flipped transverse wavenumber when another Fourier
+axis is present.
+"""
+function _distributed_gpu_dct_unsupported_reason(bases)
+    length(bases) == 3 ||
+        return "it needs a 3D field, got $(length(bases))D"
+    all(b -> isa(b, RealFourier) || isa(b, ComplexFourier) || isa(b, ChebyshevT), bases) ||
+        return "it handles only RealFourier, ComplexFourier and ChebyshevT axes, got " *
+               "$(join(nameof.(typeof.(bases)), " x "))"
+    any(b -> isa(b, ChebyshevT), bases) ||
+        return "it needs at least one Chebyshev axis"
+    any(is_fourier_basis, bases) ||
+        return "it needs at least one Fourier axis"
+    bad_rf = findall(i -> isa(bases[i], RealFourier), 2:3)
+    if !isempty(bad_rf)
+        # Do NOT suggest "move it to dim 1" unconditionally: with another Fourier
+        # axis present that lands on the next rule and refuses again, which is the
+        # send-the-reader-in-a-circle failure this whole function exists to stop.
+        n_fourier = count(is_fourier_basis, bases)
+        return "a RealFourier axis is supported only on dim 1 (its half-spectrum is " *
+               "truncated while dim 1 is local), but dim $(join(bad_rf .+ 1, " and ")) " *
+               "$(length(bad_rf) == 1 ? "is" : "are") RealFourier — make it ComplexFourier" *
+               (n_fourier == 1 ? " or move it to dim 1" : "")
     end
-    return true
+    if isa(bases[1], RealFourier) && any(is_fourier_basis, bases[2:3])
+        return "dim 1 is RealFourier and there is also a Fourier axis at dim " *
+               "$(join(findall(i -> is_fourier_basis(bases[i]), 2:3) .+ 1, " and ")); " *
+               "the backward Hermitian expansion cannot place a dim-1 half-spectrum's " *
+               "conjugate partners at the flipped transverse wavenumber, so dim 1 may be " *
+               "RealFourier only when it is the ONLY Fourier axis — make dim 1 ComplexFourier"
+    end
+    return nothing
 end
+
+"""Basis-level eligibility for the custom three-dimensional GPU+MPI DCT-I path."""
+_distributed_gpu_dct_bases_supported(bases) =
+    _distributed_gpu_dct_unsupported_reason(bases) === nothing
 
 """
     validate_mpi_fourier_only(bases, nprocs::Int; use_pencil_arrays::Bool=true)

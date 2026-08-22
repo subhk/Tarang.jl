@@ -108,6 +108,23 @@ function wavenumbers_fft(basis::RealFourier)
 end
 
 """
+    wavenumbers_fft(basis::ComplexFourier)
+
+Get wavenumbers for a ComplexFourier basis in standard FFT layout.
+
+A ComplexFourier axis is ALWAYS stored as a full-length `fft` spectrum, so its
+FFT-layout wavenumbers are just its native ones. This method exists because the
+callers that pick between the two RealFourier layouts —
+`wavenumbers_rfft` for the first (halved) axis, `wavenumbers_fft` for every
+other — reach the `wavenumbers_fft` arm for ANY non-first Fourier axis, and a
+ComplexFourier basis lands there too. Without it, building the per-mode implicit
+operator for a Fourier x Chebyshev problem with a ComplexFourier axis threw
+`MethodError: no method matching wavenumbers_fft(::ComplexFourier)` at solver
+construction (`_subproblem_kx`, matrices_subproblem_helpers.jl).
+"""
+wavenumbers_fft(basis::ComplexFourier) = wavenumbers(basis)
+
+"""
     wavenumbers_for_coefficients(basis, use_rfft::Bool=false)
 
 Get wavenumbers matching the coefficient array layout.
