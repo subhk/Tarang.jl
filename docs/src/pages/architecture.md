@@ -18,14 +18,18 @@ src/
 │   └── *.jl                  Fields/Problems/Solvers/... facades
 ├── core/
 │   ├── basis/                basis contracts and spectral matrices
+│   ├── boundary_conditions/  BC construction and types
+│   ├── cartesian_operators/  Cartesian differential operator core, dispatch, and eval
 │   ├── distributor/          MPI layouts and communication
 │   ├── field/                field storage and layout transitions
+│   ├── forcing/              stochastic forcing generation and application
 │   ├── operators/            symbolic and evaluated operators
 │   ├── problems/             parsing, EquationIR, and matrix assembly
 │   ├── solvers/              solver construction and compiled RHS
 │   ├── subsystems/           per-mode systems and runtime buffers
 │   ├── timesteppers/         RK, multistep, IMEX, and ETD schemes
 │   ├── transforms/           serial and distributed transforms
+│   ├── transpose/            MPI pencil transpose (pack/unpack, async, buffers)
 │   └── nonlinear/            nonlinear evaluation and dealiasing
 ├── tools/                    matrix solvers, output, configuration, utilities
 └── extras/                   flow diagnostics and convenience features

@@ -138,7 +138,7 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
             # distributed FFT (evaluate_padded_multiply_distributed) — the cross-rank
             # redistribution needed to embed the N-mode spectrum into the 3N/2 padded
             # spectrum is done with PencilArrays transposes, so the result matches the
-            # serial padded multiply to roundoff (round-7 audit 2026-06). Covers 2D + 3D
+            # serial padded multiply to roundoff. Covers 2D + 3D
             # (incl. 2D process mesh) pure-Fourier and mixed Fourier×(Cheb/Jacobi).
             # Fallback: it returns `nothing` for the cases it does not cover (>3D, a
             # decomposed non-Fourier axis, or a Fourier axis with N ≤ 4 — the last
@@ -344,7 +344,7 @@ end
 # scale ∏(M_d/N_d) once, so it matches serial to ROUNDOFF (verified Real+Complex
 # Fourier, 2D np=2/4 + 3D np=2/4). Returns `nothing` for cases not covered (>3D,
 # mixed bases, not pencil-decomposed) → caller falls back to truncation-after-
-# multiply. Round-7 audit 2026-06-23.
+# multiply.
 function evaluate_padded_multiply_distributed(field1::ScalarField, field2::ScalarField,
                                               evaluator::NonlinearEvaluator; result_layout::Symbol=:g)
     bases = field1.bases
