@@ -59,6 +59,18 @@ Convenience overload: delegates to `distributed_gpu_supported(field.bases)`.
 """
 distributed_gpu_supported(field) = distributed_gpu_supported(field.bases)
 
+"""
+    distributed_gpu_unsupported_reason(bases_or_field) → Union{Nothing, String}
+
+The specific reason the multi-GPU DCT-I path declines these bases (`nothing` if
+it accepts them). Refusal messages quote this instead of restating the rule, so
+they cannot describe a rule the predicate does not apply.
+"""
+distributed_gpu_unsupported_reason(bases::Tuple) =
+    _distributed_gpu_dct_unsupported_reason(bases)
+distributed_gpu_unsupported_reason(field) =
+    _distributed_gpu_dct_unsupported_reason(field.bases)
+
 # ============================================================================
 # Hermitian half-spectrum → full-spectrum expansion (1-D CPU reference)
 # ============================================================================
