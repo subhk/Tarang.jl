@@ -98,3 +98,65 @@ end
         @test _hermitian_full_from_half(half, N) ≈ full
     end
 end
+
+# ── The refusal REASON must be derived from the predicate, not restated ──────
+#
+# `distributed_gpu_supported` is now defined AS
+# `_distributed_gpu_dct_unsupported_reason(bases) === nothing`, because the two
+# had drifted: the hand-written refusal text said "every RealFourier axis on dim
+# 1", which `(RealFourier, ComplexFourier, ChebyshevT)` satisfies — yet that
+# layout is refused (the backward Hermitian expansion cannot place the dim-1
+# half-spectrum's conjugate partners at the flipped transverse wavenumber). A
+# reader who followed the advice hit the identical message again.
+@testset "refusal reason agrees with the predicate and is actionable" begin
+    coords = CartesianCoordinates("x", "y", "z")
+    names = ("x", "y", "z")
+    mk(i, kind) = kind === :RF ? RealFourier(coords[names[i]]; size=8, bounds=(0.0, 2π)) :
+                  kind === :CF ? ComplexFourier(coords[names[i]]; size=8, bounds=(0.0, 2π)) :
+                                 ChebyshevT(coords[names[i]]; size=8, bounds=(-1.0, 1.0))
+
+    # An INDEPENDENT restatement of the documented rule, so a refactor of the
+    # reason function cannot quietly change which layouts are accepted.
+    function expected_supported(kinds)
+        length(kinds) == 3 || return false
+        any(==(:CHEB), kinds) || return false
+        any(k -> k in (:RF, :CF), kinds) || return false
+        any(i -> kinds[i] === :RF, 2:3) && return false
+        kinds[1] === :RF && any(k -> k in (:RF, :CF), kinds[2:3]) && return false
+        return true
+    end
+
+    for k1 in (:RF, :CF, :CHEB), k2 in (:RF, :CF, :CHEB), k3 in (:RF, :CF, :CHEB)
+        kinds = (k1, k2, k3)
+        bases = ntuple(i -> mk(i, kinds[i]), 3)
+        reason = Tarang.distributed_gpu_unsupported_reason(bases)
+        want = expected_supported(kinds)
+        @test distributed_gpu_supported(bases) == want
+        @test (reason === nothing) == want
+        want || @test !isempty(reason)
+    end
+
+    # The layout that exposed the drift: it obeys "every RealFourier axis on dim
+    # 1" and is still refused, so the reason must NOT tell the reader to move a
+    # RealFourier axis to dim 1.
+    drift = (mk(1, :RF), mk(2, :CF), mk(3, :CHEB))
+    @test !distributed_gpu_supported(drift)
+    drift_reason = Tarang.distributed_gpu_unsupported_reason(drift)
+    @test occursin("dim 1 is RealFourier", drift_reason)
+    @test !occursin("move it to dim 1", drift_reason)
+
+    # "move it to dim 1" is only ever offered when doing so actually helps, i.e.
+    # when the RealFourier axis is the only Fourier axis.
+    @test occursin("move it to dim 1",
+                   Tarang.distributed_gpu_unsupported_reason((mk(1, :CHEB), mk(2, :RF), mk(3, :CHEB))))
+    @test !occursin("move it to dim 1",
+                    Tarang.distributed_gpu_unsupported_reason((mk(1, :CF), mk(2, :RF), mk(3, :CHEB))))
+
+    # Following the advice must reach a SUPPORTED layout, not another refusal.
+    @test distributed_gpu_supported((mk(1, :CF), mk(2, :CF), mk(3, :CHEB)))
+    @test distributed_gpu_supported((mk(1, :RF), mk(2, :CHEB), mk(3, :CHEB)))
+
+    # Non-3D and unsupported basis families report their own specific reason.
+    @test occursin("3D", Tarang.distributed_gpu_unsupported_reason((mk(1, :RF), mk(2, :CHEB))))
+    @test occursin("Chebyshev", Tarang.distributed_gpu_unsupported_reason((mk(1, :CF), mk(2, :CF), mk(3, :CF))))
+end

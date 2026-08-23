@@ -151,6 +151,74 @@ function get_transpose_buffer!(cache::TransposeBufferCache, pencil::PencilArrays
 end
 
 """
+    transpose_multistep!(dest, src, cache, key) -> dest
+
+`PencilArrays.transpose!` between two pencils whose decompositions differ in MORE
+than one slot, by hopping through intermediate pencils that each differ from the
+previous one in exactly one slot — the only difference `transpose!` accepts.
+
+A 3-D mixed Fourier×Chebyshev field on a 2-D process mesh needs this: the PencilFFT
+output pencil decomposes (Chebyshev, first Fourier) while `dist.pencil_solve`
+decomposes the two trailing Fourier axes, so the two differ in BOTH slots and the
+single direct transpose the solve-layout code used threw "pencil decompositions must
+differ in at most one dimension". A 1-D process mesh has only one decomposed slot, so
+it never hit this — which is why 3-D Chebyshev-Fourier ran on a slab and crashed on a
+pencil mesh.
+
+Falls through to a plain `transpose!` in the common ≤1-slot case, so the hot path is
+unchanged. The hop sequence is derived from replicated pencil metadata, so every rank
+performs the same collectives in the same order.
+"""
+function transpose_multistep!(dest::PencilArrays.PencilArray, src::PencilArrays.PencilArray,
+                              cache::TransposeBufferCache, key::Tuple)
+    spen  = PencilArrays.pencil(src)
+    sdecT = Tuple(PencilArrays.decomposition(spen))
+    ddecT = Tuple(PencilArrays.decomposition(PencilArrays.pencil(dest)))
+    # Fast path (every ≤1-slot transpose, i.e. all serial-equivalent and all 1-D
+    # process meshes): tuple compare only — no `collect`, so this stays allocation
+    # free in the per-step solve-layout hot path.
+    if length(sdecT) != length(ddecT) ||
+       count(i -> sdecT[i] != ddecT[i], eachindex(ddecT)) <= 1
+        PencilArrays.transpose!(dest, src)
+        return dest
+    end
+
+    sdec  = collect(sdecT)
+    ddec  = collect(ddecT)
+    topo  = PencilArrays.topology(spen)
+    gsize = PencilArrays.size_global(spen)
+    D     = length(gsize)
+    dtype = eltype(src)
+    cur  = src
+    cdec = sdec
+    step = 0
+    function hop!(next_dec)
+        step += 1
+        pen = PencilArrays.Pencil(topo, gsize, Tuple(next_dec);
+                                  permute=PencilArrays.NoPermutation())
+        buf = get_transpose_buffer!(cache, pen, dtype, (key..., :hop, step, Tuple(next_dec)))
+        PencilArrays.transpose!(buf, cur)
+        cur = buf
+        cdec = next_dec
+        return nothing
+    end
+
+    for i in eachindex(ddec)
+        cdec[i] == ddec[i] && continue
+        if ddec[i] in cdec
+            # The axis we want in slot i is decomposed elsewhere: swap it out for a
+            # currently-local axis first. One slot changes, so the transpose is legal.
+            l = first(setdiff(1:D, cdec))
+            hop!([d == ddec[i] ? l : d for d in cdec])
+        end
+        hop!([j == i ? ddec[i] : cdec[j] for j in eachindex(cdec)])
+    end
+    # Same decomposition now; this last transpose only reconciles the permutation.
+    PencilArrays.transpose!(dest, cur)
+    return dest
+end
+
+"""
     transpose_pencil_cached!(dest, src, dist::Distributor; cache=nothing)
 
 Cached version of transpose_pencil_data! that reuses buffers.

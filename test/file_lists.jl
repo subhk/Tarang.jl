@@ -75,6 +75,7 @@ const TEST_FILES = [
     "test_les_models.jl",
     "test_les_models_gpu_compat.jl",   # AMD/Smagorinsky device-safety via JLArray (no GPU needed)
     "test_chebyshev.jl",
+    "test_complex_fourier_chebyshev.jl",     # a ComplexFourier axis beside Chebyshev: wavenumbers_fft had no ComplexFourier method, so the solver never built
     "test_domain.jl",
     "test_boundary_conditions.jl",
     "test_nonlinear.jl",
@@ -174,7 +175,7 @@ const TEST_FILES = [
     "test_gpu_test_files_reachable.jl", # the GPU test files are executed by NOTHING (buildkite pipeline is inert), so they rot silently; parses them and checks the extension API they call still exists
     "test_gpu_kernels_cpu.jl",          # element-wise/fused/spectral-pad kernels had ZERO test references and the GPU CI that would run them is inert; KA CPU backend executes the real kernel objects
     "test_state_arith_layout.jl",       # axpy/linear-combination state helpers forced :g, paying a transform per operand; pins "no forced transform" AND that the coefficient-space answer matches the grid-space one
-    "test_gpu_dct1_kernels_cpu.jl",       # DCT-I / Cheb-derivative kernel values on the KA CPU backend (FFTW standing in for cuFFT) — no GPU needed
+    "test_gpu_dct1_kernels_cpu.jl",       # DCT-I / Cheb-derivative kernel values AND the full FF/FC device transform drivers (2D+3D) on the KA CPU backend (FFTW standing in for cuFFT) — no GPU needed
 ]
 
 # CPU tests that are valid in ordinary CI but are kept out of the default
@@ -263,6 +264,7 @@ const MPI_TEST_FILES = [
     "test_mpi_explicit_multistep_field.jl",   # explicit multistep on distributed pure-Fourier: field path == serial (np>=2); used to throw
     "test_mpi_checkpoint_restart.jl",         # checkpoint written on N ranks loads on M and matches serial (np>=2)
     "test_mpi_cheb_fourier_ivp_nonlinear.jl", # distributed NONLINEAR Cheb-Fourier channel IVP (advection+dealias+tau-BC+IMEX) == serial (np>=2)
+    "test_mpi_cheb_fourier_3d_pencil.jl",    # 3D Cheb-Fourier on a 2-D process mesh: the fft<->solve transpose differed in TWO decomp slots and threw (np==4)
     # MPI correctness fixes 2026-06-23 (see memory/project_mpi_audit_2026_06_21.md).
     "test_mpi_decomp_forcing_audit.jl",      # #1/#4 get_local_range slab; #2 forcing wavenumber placement (np>=2)
     "test_mpi_audit_2026_06_28.jl",          # dealias cutoff np-independence; apply_forcing! offset; mixed Cheb-Fourier :c DCT; over-decomp solve fails loud (np>=4)
@@ -274,6 +276,7 @@ const MPI_TEST_FILES = [
     "test_mpi_forcing_work.jl",              # work_stratonovich/ito/instantaneous_power distributed == serial (np>=2)
     "test_mpi_padded_dealiasing.jl",         # distributed 3/2 padded dealiasing == serial (transpose-pad) (np>=2)
     "test_mpi_padded_dealiasing_3d.jl",      # distributed 3D padded dealiasing == serial (N-D, 2D-mesh at np=4) (np>=2)
+    "test_mpi_padded_dealiasing_3d_slab.jl", # 3D padded dealiasing must also run on a 1-D slab mesh — the D-1 decomposition gate silently routed it to 2/3-rule truncation (np>=2)
     "test_mpi_padded_dealiasing_chebfourier.jl", # distributed mixed Cheb-Fourier dealiasing == serial (Fourier-only pad) (np>=2)
     "test_mpi_dealiasing_ivp_3d.jl",         # 3D Burgers IVP solve distributed == serial (e2e dealias-in-timestepper) (np>=2)
     "test_mpi_padded_dealiasing_3d_mixed.jl", # 3D Cheb-Fourier-Fourier dealiasing == serial (decomp-order alignment fix) (np>=2)
