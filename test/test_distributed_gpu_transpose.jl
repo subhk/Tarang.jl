@@ -374,10 +374,8 @@ end
 
 # GPU tests (if CUDA available)
 const _HAS_CUDA = try
-    Tarang.has_cuda() && begin
-        using CUDA
-        CUDA.functional()
-    end
+    @eval using CUDA
+    CUDA.functional()
 catch
     false
 end
@@ -389,56 +387,56 @@ if _HAS_CUDA
         CUDA.allowscalar(false)
 
         # Set GPU device based on rank (for multi-GPU systems)
-        if CUDA.ndevices() >= nprocs
-            CUDA.device!(rank % CUDA.ndevices())
-        end
+        gpu_id = rank % CUDA.ndevices()
+        CUDA.device!(gpu_id)
+        gpu_arch = GPU(device_id=gpu_id)
 
-        @testset "GPU Construction" begin
-            coords = CartesianCoordinates("x", "y")
-            dist = Distributor(coords; mesh=(nprocs,), dtype=Float32, architecture=GPU())
+        cuda_aware = nprocs == 1 || check_cuda_aware_mpi()
+        @test cuda_aware
 
-            xbasis = Fourier(coords, "x", 16)
-            ybasis = Fourier(coords, "y", 16)
+        if cuda_aware
+            @testset "GPU Construction" begin
+                coords = CartesianCoordinates("x", "y")
+                dist = Distributor(coords; comm=comm, mesh=(nprocs,), dtype=Float32,
+                                   architecture=gpu_arch, use_pencil_arrays=false)
 
-            field = ScalarField(dist, "gpu_dist", (xbasis, ybasis))
-            field["g"] .= CUDA.rand(Float32, size(field["g"])...)
+                xbasis = ComplexFourier(coords, "x", 16)
+                ybasis = ComplexFourier(coords, "y", 16)
 
-            tf = TransposableField(field)
+                field = ScalarField(dist, "gpu_dist", (xbasis, ybasis))
+                grid = Tarang.get_grid_data(field)
+                grid .= CUDA.rand(Float32, size(grid)...)
 
-            @test tf.buffers.architecture isa Tarang.GPU
-            @test tf.buffers.z_local_data isa CuArray
-            @test tf.buffers.send_buffer isa CuArray
-        end
+                tf = TransposableField(field)
 
-        @testset "GPU Round-trip" begin
-            coords = CartesianCoordinates("x", "y")
-            dist = Distributor(coords; mesh=(nprocs,), dtype=Float32, architecture=GPU())
-
-            xbasis = Fourier(coords, "x", 32)
-            ybasis = Fourier(coords, "y", 32)
-
-            field = ScalarField(dist, "gpu_roundtrip", (xbasis, ybasis))
-            field["g"] .= CUDA.rand(Float32, size(field["g"])...)
-
-            original = copy(field["g"])
-
-            # Use regular transforms which properly use PencilFFTs for distributed GPU data
-            forward_transform!(field)
-            backward_transform!(field)
-
-            @test isapprox(Array(field["g"]), Array(original), rtol=1e-4)
-        end
-
-        @testset "CUDA-aware MPI check" begin
-            is_cuda_aware = check_cuda_aware_mpi()
-
-            if rank == 0
-                println("CUDA-aware MPI: $is_cuda_aware")
+                @test tf.buffers.architecture isa Tarang.GPU
+                @test tf.buffers.z_local_data isa CuArray
+                @test tf.buffers.send_buffer isa CuArray
             end
 
-            # Test passes regardless of CUDA-aware MPI availability
-            # (code should work with or without it)
-            @test true
+            @testset "GPU Round-trip" begin
+                coords = CartesianCoordinates("x", "y")
+                dist = Distributor(coords; comm=comm, mesh=(nprocs,), dtype=Float32,
+                                   architecture=gpu_arch, use_pencil_arrays=false)
+
+                xbasis = ComplexFourier(coords, "x", 32)
+                ybasis = ComplexFourier(coords, "y", 32)
+
+                field = ScalarField(dist, "gpu_roundtrip", (xbasis, ybasis))
+                grid = Tarang.get_grid_data(field)
+                grid .= CUDA.rand(Float32, size(grid)...)
+
+                original = copy(grid)
+                tf = TransposableField(field)
+
+                distributed_forward_transform!(tf)
+                @test field.current_layout == :c
+                @test Tarang.get_coeff_data(field) isa CuArray
+
+                distributed_backward_transform!(tf)
+                @test field.current_layout == :g
+                @test isapprox(Array(Tarang.get_grid_data(field)), Array(original); rtol=1e-4)
+            end
         end
 
     end

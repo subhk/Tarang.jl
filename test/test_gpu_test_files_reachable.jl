@@ -102,6 +102,8 @@ function _scan(expr, called::Set{Symbol}, defined::Set{Symbol})
 end
 
 @testset "GPU test files parse and reference live API" begin
+    @test "test_distributed_gpu_transpose.jl" in DISTRIBUTED_GPU_TEST_FILES
+
     gpu_files = unique(vcat(GPU_TEST_FILES, DISTRIBUTED_GPU_TEST_FILES))
     @test !isempty(gpu_files)
 

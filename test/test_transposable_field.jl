@@ -317,6 +317,33 @@ if NPROCS == 1
 end
 end  # if NPROCS == 1
 
+if NPROCS > 1
+@testset "TransposableField distributed 2D public transform API" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,), dtype=Float64,
+                       architecture=CPU(), use_pencil_arrays=false)
+    bases = (
+        ComplexFourier(coords, "x", 17),
+        ComplexFourier(coords, "y", 13),
+    )
+    field = ScalarField(dist, "distributed_2d_roundtrip", bases)
+
+    grid = Tarang.get_grid_data(field)
+    for j in axes(grid, 2), i in axes(grid, 1)
+        grid[i, j] = NPROCS * dist.rank + 0.1i + 0.01j
+    end
+    original = copy(grid)
+
+    tf = TransposableField(field)
+    distributed_forward_transform!(tf)
+    @test field.current_layout == :c
+
+    distributed_backward_transform!(tf)
+    @test field.current_layout == :g
+    @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-12, atol=1e-12)
+end
+end  # if NPROCS > 1
+
 @testset "TransposableField Pack/Unpack CPU" begin
 
     # Test pack and unpack operations
