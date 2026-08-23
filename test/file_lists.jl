@@ -293,6 +293,7 @@ const MPI_TEST_FILES = [
 # run on the JuliaGPU Buildkite pipeline. Keep this list explicit so new CPU
 # test files do not silently sit outside the runner.
 const DISTRIBUTED_GPU_TEST_FILES = [
+    "test_distributed_gpu_transpose.jl", # 2D ComplexFourier TransposableField round-trip on CUDA+MPI
     "test_distributed_dct.jl",
     "test_distributed_dispatch.jl",
     "test_distributed_parseval.jl",

@@ -38,10 +38,12 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
                                         overlap::Bool=false,
                                         plans=nothing) where {F,T,N}
     arch = tf.buffers.architecture
+    grid_data = get_grid_data(tf.field)
+    coeff_data = get_coeff_data(tf.field)
 
     # Validate field size matches TransposableField expected shape
     expected_size = size(tf.buffers.z_local_data)
-    actual_size = size(tf.field["g"])
+    actual_size = size(grid_data)
     if expected_size != actual_size
         error("Field size mismatch in distributed_forward_transform!: " *
               "TransposableField expects $expected_size but field['g'] has $actual_size. " *
@@ -55,7 +57,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
 
     # Ensure we start in ZLocal layout with data from field
     tf.buffers.active_layout[] = ZLocal
-    copyto!(vec(tf.buffers.z_local_data), vec(tf.field["g"]))
+    copyto!(vec(tf.buffers.z_local_data), vec(grid_data))
 
     if N >= 3
         # 3D case with full transpose sequence
@@ -101,7 +103,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
         transpose_y_to_z!(tf)
 
         # Copy result to field - now both are in ZLocal layout
-        copyto!(vec(tf.field["c"]), vec(tf.buffers.z_local_data))
+        copyto!(vec(coeff_data), vec(tf.buffers.z_local_data))
 
     elseif N == 2
         topo = tf.topology
@@ -128,7 +130,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
             transpose_x_to_y!(tf)
             transpose_y_to_z!(tf)
 
-            copyto!(vec(tf.field["c"]), vec(tf.buffers.z_local_data))
+            copyto!(vec(coeff_data), vec(tf.buffers.z_local_data))
         elseif Ry > 1
             # 1D decomposition with Ry>1
             transform_in_dim!(tf.buffers.z_local_data, 1, :forward, xbasis, arch; plan=x_plan)
@@ -138,7 +140,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
             tf.total_fft_time += time() - fft_start
 
             transpose_y_to_z!(tf)
-            copyto!(vec(tf.field["c"]), vec(tf.buffers.z_local_data))
+            copyto!(vec(coeff_data), vec(tf.buffers.z_local_data))
         else
             # 1D decomposition with Rx>1
             transform_in_dim!(tf.buffers.z_local_data, 2, :forward, ybasis, arch; plan=y_plan)
@@ -148,7 +150,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
             tf.total_fft_time += time() - fft_start
 
             transpose_y_to_z!(tf)
-            copyto!(vec(tf.field["c"]), vec(tf.buffers.z_local_data))
+            copyto!(vec(coeff_data), vec(tf.buffers.z_local_data))
         end
 
     else
@@ -157,9 +159,10 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
         x_plan = get(tf.fft_plans, XLocal, nothing)
         transform_in_dim!(tf.buffers.z_local_data, 1, :forward, xbasis, arch; plan=x_plan)
         tf.total_fft_time += time() - fft_start
-        copyto!(vec(tf.field["c"]), vec(tf.buffers.z_local_data))
+        copyto!(vec(coeff_data), vec(tf.buffers.z_local_data))
     end
 
+    tf.field.current_layout = :c
     return tf
 end
 
@@ -174,11 +177,13 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
                                          overlap::Bool=false,
                                          plans=nothing) where {F,T,N}
     arch = tf.buffers.architecture
+    coeff_data = get_coeff_data(tf.field)
+    grid_data = get_grid_data(tf.field)
 
     # Validate field size matches TransposableField expected shape
     # For spectral data, use coefficient-space buffer for validation
     expected_size = size(tf.buffers.z_local_data)
-    actual_size = size(tf.field["c"])
+    actual_size = size(coeff_data)
     if expected_size != actual_size
         error("Field size mismatch in distributed_backward_transform!: " *
               "TransposableField expects $expected_size but field['c'] has $actual_size. " *
@@ -193,7 +198,7 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
     if N >= 3
         # Start in ZLocal layout with spectral data (field["c"] is stored in ZLocal)
         tf.buffers.active_layout[] = ZLocal
-        copyto!(vec(tf.buffers.z_local_data), vec(tf.field["c"]))
+        copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
         fft_start = time()
 
@@ -223,9 +228,9 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
 
         # Copy result to field - preserve complex values if field dtype is complex
         if tf.field.dtype <: Complex
-            copyto!(vec(tf.field["g"]), vec(tf.buffers.z_local_data))
+            copyto!(vec(grid_data), vec(tf.buffers.z_local_data))
         else
-            copyto!(vec(tf.field["g"]), real.(vec(tf.buffers.z_local_data)))
+            copyto!(vec(grid_data), real.(vec(tf.buffers.z_local_data)))
         end
 
     elseif N == 2
@@ -245,7 +250,7 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
 
             # Start in ZLocal with spectral data (field["c"] is stored in ZLocal)
             tf.buffers.active_layout[] = ZLocal
-            copyto!(vec(tf.buffers.z_local_data), vec(tf.field["c"]))
+            copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
             # Step 0: Transpose Z→Y→X to get to XLocal for inverse transforms
             transpose_z_to_y!(tf)
@@ -269,14 +274,14 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
 
             tf.total_fft_time += time() - fft_start
             if tf.field.dtype <: Complex
-                copyto!(vec(tf.field["g"]), vec(tf.buffers.z_local_data))
+                copyto!(vec(grid_data), vec(tf.buffers.z_local_data))
             else
-                copyto!(vec(tf.field["g"]), real.(vec(tf.buffers.z_local_data)))
+                copyto!(vec(grid_data), real.(vec(tf.buffers.z_local_data)))
             end
         elseif Ry > 1
             # 1D decomposition with Ry>1
             tf.buffers.active_layout[] = ZLocal
-            copyto!(vec(tf.buffers.z_local_data), vec(tf.field["c"]))
+            copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
             y_plan = get(tf.fft_plans, YLocal, nothing)
             x_plan = get(tf.fft_plans, XLocal, nothing)
@@ -288,14 +293,14 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
 
             tf.total_fft_time += time() - fft_start
             if tf.field.dtype <: Complex
-                copyto!(vec(tf.field["g"]), vec(tf.buffers.z_local_data))
+                copyto!(vec(grid_data), vec(tf.buffers.z_local_data))
             else
-                copyto!(vec(tf.field["g"]), real.(vec(tf.buffers.z_local_data)))
+                copyto!(vec(grid_data), real.(vec(tf.buffers.z_local_data)))
             end
         else
             # 1D decomposition with Rx>1
             tf.buffers.active_layout[] = ZLocal
-            copyto!(vec(tf.buffers.z_local_data), vec(tf.field["c"]))
+            copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
             y_plan = get(tf.fft_plans, YLocal, nothing)
             x_plan = get(tf.fft_plans, XLocal, nothing)
@@ -307,15 +312,15 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
 
             tf.total_fft_time += time() - fft_start
             if tf.field.dtype <: Complex
-                copyto!(vec(tf.field["g"]), vec(tf.buffers.z_local_data))
+                copyto!(vec(grid_data), vec(tf.buffers.z_local_data))
             else
-                copyto!(vec(tf.field["g"]), real.(vec(tf.buffers.z_local_data)))
+                copyto!(vec(grid_data), real.(vec(tf.buffers.z_local_data)))
             end
         end
 
     else
         tf.buffers.active_layout[] = ZLocal
-        copyto!(vec(tf.buffers.z_local_data), vec(tf.field["c"]))
+        copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
         fft_start = time()
         x_plan = get(tf.fft_plans, XLocal, nothing)
@@ -324,12 +329,13 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
 
         # Preserve complex values if field dtype is complex
         if tf.field.dtype <: Complex
-            copyto!(vec(tf.field["g"]), vec(tf.buffers.z_local_data))
+            copyto!(vec(grid_data), vec(tf.buffers.z_local_data))
         else
-            copyto!(vec(tf.field["g"]), real.(vec(tf.buffers.z_local_data)))
+            copyto!(vec(grid_data), real.(vec(tf.buffers.z_local_data)))
         end
     end
 
+    tf.field.current_layout = :g
     return tf
 end
 
