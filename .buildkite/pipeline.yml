@@ -1,26 +1,63 @@
-# JuliaGPU Buildkite pipeline for Tarang.jl
+# Buildkite GPU pipeline for Tarang.jl
 #
-# Runs the GPU test suites that GitHub-hosted runners cannot (no NVIDIA GPU):
-#   * single-GPU : GPU_TEST_FILES            (CUDA DCT / preconditioner)
-#   * multi-GPU  : DISTRIBUTED_GPU_TEST_FILES (CUDA + NCCL distributed transpose)
+# Runs the single-GPU test suite that GitHub-hosted runners cannot (no NVIDIA
+# GPU): GPU_TEST_FILES (CUDA DCT / preconditioner), via test/run_gpu_ci.jl.
+# Distributed CUDA+MPI/NCCL tests remain registered and parse-checked, but are
+# not scheduled on the current one-GPU Buildkite box.
 #
-# Test-file lists live in test/file_lists.jl and are driven by
-# test/run_gpu_ci.jl (single process) and test/run_mpi_ci.jl (mpiexec).
+# The broader multi-GPU NCCL job is DISABLED — see "MULTI-GPU NCCL JOB" at the
+# bottom of this file for the intact step and how to switch it back on.
 #
-# CUDA is a *weak* dependency of Tarang and NCCL is loaded dynamically by
-# src/core/gpu_distributed.jl, so neither is in the package test target. The GPU
-# jobs therefore `Pkg.add` them into the checkout before running, instead of
+# Test-file lists live in test/file_lists.jl.
+#
+# CUDA is a *weak* dependency of Tarang, so it is not in the package test target.
+# The GPU job therefore `Pkg.add`s it into the checkout before running, instead of
 # using the JuliaCI/julia-test plugin (which would test the CUDA-less target).
 # This keeps the CPU GitHub Actions CI lean (no CUDA artifacts there).
 #
-# ENABLEMENT (one-time, by a maintainer — free for open-source packages):
-#   1. On the Julia Slack #gpu channel, ask a JuliaGPU Buildkite admin (e.g.
-#      @maleadt, @vchuravy, @DilumAluthge) to add this repo. The GitHub account/org
-#      hosting Tarang.jl must have the Buildkite GitHub App installed.
-#   2. The admin creates a pipeline (named "Tarang") whose only configured step is
-#      `buildkite-agent pipeline upload` on the juliagpu queue. That bootstrap step
-#      reads THIS file and runs the GPU jobs below on JuliaGPU's GPU agents.
-# Until then this file is inert (no CI consumes it).
+#
+# WHICH AGENTS RUN THIS
+# The queue is parameterized so the same file works on a personal Buildkite org
+# and on JuliaGPU's shared agents, with no edit:
+#
+#   TARANG_GPU_QUEUE unset  -> "default"  (a self-hosted agent that sets no queue)
+#   TARANG_GPU_QUEUE=juliagpu             (JuliaGPU's shared GPU pool)
+#
+# Set it under Pipeline Settings > Environment Variables. `${VAR:-default}` is
+# interpolated by `buildkite-agent pipeline upload` at upload time.
+#
+# The agent MUST also carry a `cuda` tag, because the step requires `cuda: "*"`.
+# Tag it when starting the agent, e.g.
+#
+#   buildkite-agent start --tags "queue=default,cuda=true"
+#
+# or in the agent's config file (buildkite-agent.cfg):
+#
+#   tags="queue=default,cuda=true"
+#
+# This matters: a step whose agent tags match NO connected agent does not fail
+# and does not skip — the job sits queued until `timeout_in_minutes` expires.
+# An untagged agent therefore looks like a 120-minute hang, not a config error.
+#
+#
+# WHEN THE GPU JOB RUNS
+# The Buildkite GitHub App creates a build for every push and every pull request.
+# GPU agent time is scarce, and on a shared org the pipeline settings that would
+# narrow the trigger are not necessarily ours to change, so the `if:` guard on the
+# step enforces the policy from inside this repo instead:
+#
+#   * webhook builds (push / PR)                       -> run ONLY on `main`
+#   * `ui` builds  (Buildkite "New Build" button)      -> run on any branch
+#   * `api` builds (.github/workflows/gpu-buildkite.yml -> run on any branch
+#                   "GPU (Buildkite)" workflow_dispatch)
+#
+# A build whose steps are all filtered out finishes green with no jobs, so PR
+# builds stay cheap rather than being errors. To exercise a feature branch on the
+# GPU agent, run the "GPU (Buildkite)" workflow from the GitHub Actions tab (or
+# press "New Build" in the Buildkite UI) — both bypass the branch guard.
+#
+# `[skip tests]` anywhere in the commit message suppresses the job regardless of
+# how the build was created.
 
 steps:
   - label: ":julia: single-GPU — Julia {{matrix.julia}}"
@@ -41,33 +78,61 @@ steps:
         Pkg.precompile()'
       julia --project=. test/run_gpu_ci.jl
     agents:
-      queue: "juliagpu"
+      queue: "${TARANG_GPU_QUEUE:-default}"
       cuda: "*"
     env:
       JULIA_NUM_THREADS: "2"
       OMP_NUM_THREADS: "1"
-    if: build.message !~ /\[skip tests\]/
+    # Auto (webhook) builds: main only. Manual UI / workflow_dispatch API builds:
+    # any branch. See "WHEN THE GPU JOB RUNS" in the header.
+    if: >-
+      (build.branch == "main" || build.source == "ui" || build.source == "api") &&
+      build.message !~ /\[skip tests\]/
     timeout_in_minutes: 120
 
-  - label: ":julia: multi-GPU NCCL — 2 ranks"
-    plugins:
-      - JuliaCI/julia#v1:
-          version: "1.12"
-    command: |
-      julia --project=. -e '
-        using Pkg
-        Pkg.add(["CUDA", "NCCL"]) # CUDA weakdep + NCCL (loaded dynamically by gpu_distributed.jl)
-        Pkg.instantiate()
-        Pkg.precompile()'
-      julia --project=. test/run_mpi_ci.jl
-    agents:
-      queue: "juliagpu"
-      cuda: "*"
-      multigpu: "*"
-    env:
-      TARANG_MPI_FILESET: "distributed_gpu"
-      TARANG_MPI_NPROCS: "2"
-      JULIA_NUM_THREADS: "1"
-      OMP_NUM_THREADS: "1"
-    if: build.message !~ /\[skip tests\]/
-    timeout_in_minutes: 120
+# MULTI-GPU NCCL JOB — DISABLED
+#
+# This step exercises DISTRIBUTED_GPU_TEST_FILES (the CUDA + NCCL distributed
+# transpose) across 2 ranks. It needs TWO physical GPUs on a single agent host,
+# which the current agent does not have. Left commented rather than deleted so
+# that re-enabling is an uncomment, not a rewrite.
+#
+# It is commented out rather than gated by its `multigpu: "*"` tag on purpose:
+# an unmatched agent tag queues the job for the full 120-minute timeout instead
+# of skipping it (see "WHICH AGENTS RUN THIS" above).
+#
+# TO RE-ENABLE, on a host with 2+ GPUs:
+#   1. Uncomment the step below.
+#   2. Add the `multigpu` tag to that agent:
+#        buildkite-agent start --tags "queue=default,cuda=true,multigpu=true"
+#   3. NCCL is loaded dynamically by src/core/gpu_distributed.jl, so the step
+#      Pkg.adds it alongside CUDA — no change needed there.
+#
+# Nothing else depends on this being active: DISTRIBUTED_GPU_TEST_FILES stays in
+# test/file_lists.jl, run_mpi_ci.jl still accepts TARANG_MPI_FILESET=distributed_gpu,
+# and test/test_gpu_test_files_reachable.jl still parse-checks those files on CPU CI.
+#
+#   - label: ":julia: multi-GPU NCCL — 2 ranks"
+#     plugins:
+#       - JuliaCI/julia#v1:
+#           version: "1.12"
+#     command: |
+#       julia --project=. -e '
+#         using Pkg
+#         Pkg.add(["CUDA", "NCCL"]) # CUDA weakdep + NCCL (loaded dynamically by gpu_distributed.jl)
+#         Pkg.instantiate()
+#         Pkg.precompile()'
+#       julia --project=. test/run_mpi_ci.jl
+#     agents:
+#       queue: "${TARANG_GPU_QUEUE:-default}"
+#       cuda: "*"
+#       multigpu: "*"
+#     env:
+#       TARANG_MPI_FILESET: "distributed_gpu"
+#       TARANG_MPI_NPROCS: "2"
+#       JULIA_NUM_THREADS: "1"
+#       OMP_NUM_THREADS: "1"
+#     if: >-
+#       (build.branch == "main" || build.source == "ui" || build.source == "api") &&
+#       build.message !~ /\[skip tests\]/
+#     timeout_in_minutes: 120

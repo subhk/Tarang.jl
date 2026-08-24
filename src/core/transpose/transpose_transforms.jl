@@ -13,6 +13,18 @@ transposes with FFTs for spectral transforms:
 # Distributed Transform Operations (with overlap support)
 # ============================================================================
 
+"""Require the raw source buffer for a distributed transform to be authoritative."""
+function _require_distributed_source_layout(field::ScalarField, expected::Symbol,
+                                            operation::Symbol)
+    actual = field.current_layout
+    actual === expected && return nothing
+    throw(ArgumentError(
+        "distributed $operation transform requires field $(repr(field.name)) in " *
+        "$expected source layout, but its current layout is $actual. " *
+        "Transform in the opposite direction first instead of reading the stale raw buffer."
+    ))
+end
+
 """
     distributed_forward_transform!(tf::TransposableField; overlap=false)
 
@@ -37,6 +49,8 @@ Supports mixed basis types (e.g., Chebyshev-Fourier).
 function distributed_forward_transform!(tf::TransposableField{F,T,N};
                                         overlap::Bool=false,
                                         plans=nothing) where {F,T,N}
+    _require_distributed_source_layout(tf.field, :g, :forward)
+    fft_plans = plans === nothing ? tf.fft_plans : plans
     arch = tf.buffers.architecture
     grid_data = get_grid_data(tf.field)
     coeff_data = get_coeff_data(tf.field)
@@ -64,7 +78,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
         fft_start = time()
 
         # Step 1: Transform in z (local in ZLocal layout)
-        z_plan = get(tf.fft_plans, ZLocal, nothing)
+        z_plan = get(fft_plans, ZLocal, nothing)
         transform_in_dim!(tf.buffers.z_local_data, 3, :forward, zbasis, arch; plan=z_plan)
 
         if overlap && tf.topology.row_size > 1
@@ -77,7 +91,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
         end
 
         # Step 3: Transform in y (local in YLocal layout)
-        y_plan = get(tf.fft_plans, YLocal, nothing)
+        y_plan = get(fft_plans, YLocal, nothing)
         transform_in_dim!(tf.buffers.y_local_data, 2, :forward, ybasis, arch; plan=y_plan)
 
         if overlap && tf.topology.col_size > 1
@@ -88,7 +102,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
         end
 
         # Step 5: Transform in x (local in XLocal layout)
-        x_plan = get(tf.fft_plans, XLocal, nothing)
+        x_plan = get(fft_plans, XLocal, nothing)
         transform_in_dim!(tf.buffers.x_local_data, 1, :forward, xbasis, arch; plan=x_plan)
 
         tf.total_fft_time += time() - fft_start
@@ -111,8 +125,8 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
         fft_start = time()
 
         # Retrieve cached plans for 2D
-        y_plan = get(tf.fft_plans, YLocal, nothing)
-        x_plan = get(tf.fft_plans, XLocal, nothing)
+        y_plan = get(fft_plans, YLocal, nothing)
+        x_plan = get(fft_plans, XLocal, nothing)
 
         if Rx > 1 && Ry > 1
             # True 2D mesh on 2D domain
@@ -156,7 +170,7 @@ function distributed_forward_transform!(tf::TransposableField{F,T,N};
     else
         # 1D case - no transpose needed
         fft_start = time()
-        x_plan = get(tf.fft_plans, XLocal, nothing)
+        x_plan = get(fft_plans, XLocal, nothing)
         transform_in_dim!(tf.buffers.z_local_data, 1, :forward, xbasis, arch; plan=x_plan)
         tf.total_fft_time += time() - fft_start
         copyto!(vec(coeff_data), vec(tf.buffers.z_local_data))
@@ -176,6 +190,8 @@ Automatically selects IFFT for Fourier bases and inverse DCT for Chebyshev/Jacob
 function distributed_backward_transform!(tf::TransposableField{F,T,N};
                                          overlap::Bool=false,
                                          plans=nothing) where {F,T,N}
+    _require_distributed_source_layout(tf.field, :c, :backward)
+    fft_plans = plans === nothing ? tf.fft_plans : plans
     arch = tf.buffers.architecture
     coeff_data = get_coeff_data(tf.field)
     grid_data = get_grid_data(tf.field)
@@ -207,21 +223,21 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
         transpose_y_to_x!(tf)
 
         # Step 1: Inverse transform in x (local in XLocal layout)
-        x_plan = get(tf.fft_plans, XLocal, nothing)
+        x_plan = get(fft_plans, XLocal, nothing)
         transform_in_dim!(tf.buffers.x_local_data, 1, :backward, xbasis, arch; plan=x_plan)
 
         # Step 2: Transpose X→Y
         transpose_x_to_y!(tf)
 
         # Step 3: Inverse transform in y (local in YLocal layout)
-        y_plan = get(tf.fft_plans, YLocal, nothing)
+        y_plan = get(fft_plans, YLocal, nothing)
         transform_in_dim!(tf.buffers.y_local_data, 2, :backward, ybasis, arch; plan=y_plan)
 
         # Step 4: Transpose Y→Z
         transpose_y_to_z!(tf)
 
         # Step 5: Inverse transform in z (local in ZLocal layout)
-        z_plan = get(tf.fft_plans, ZLocal, nothing)
+        z_plan = get(fft_plans, ZLocal, nothing)
         transform_in_dim!(tf.buffers.z_local_data, 3, :backward, zbasis, arch; plan=z_plan)
 
         tf.total_fft_time += time() - fft_start
@@ -257,8 +273,8 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
             transpose_y_to_x!(tf)
 
             # Retrieve cached plans for 2D backward
-            y_plan = get(tf.fft_plans, YLocal, nothing)
-            x_plan = get(tf.fft_plans, XLocal, nothing)
+            y_plan = get(fft_plans, YLocal, nothing)
+            x_plan = get(fft_plans, XLocal, nothing)
 
             # Step 1: Inverse transform in x (dim 1, local in XLocal)
             transform_in_dim!(tf.buffers.x_local_data, 1, :backward, xbasis, arch; plan=x_plan)
@@ -283,8 +299,8 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
             tf.buffers.active_layout[] = ZLocal
             copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
-            y_plan = get(tf.fft_plans, YLocal, nothing)
-            x_plan = get(tf.fft_plans, XLocal, nothing)
+            y_plan = get(fft_plans, YLocal, nothing)
+            x_plan = get(fft_plans, XLocal, nothing)
 
             transpose_z_to_y!(tf)
             transform_in_dim!(tf.buffers.y_local_data, 2, :backward, ybasis, arch; plan=y_plan)
@@ -302,8 +318,8 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
             tf.buffers.active_layout[] = ZLocal
             copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
-            y_plan = get(tf.fft_plans, YLocal, nothing)
-            x_plan = get(tf.fft_plans, XLocal, nothing)
+            y_plan = get(fft_plans, YLocal, nothing)
+            x_plan = get(fft_plans, XLocal, nothing)
 
             transpose_z_to_y!(tf)
             transform_in_dim!(tf.buffers.y_local_data, 1, :backward, xbasis, arch; plan=x_plan)
@@ -323,7 +339,7 @@ function distributed_backward_transform!(tf::TransposableField{F,T,N};
         copyto!(vec(tf.buffers.z_local_data), vec(coeff_data))
 
         fft_start = time()
-        x_plan = get(tf.fft_plans, XLocal, nothing)
+        x_plan = get(fft_plans, XLocal, nothing)
         transform_in_dim!(tf.buffers.z_local_data, 1, :backward, xbasis, arch; plan=x_plan)
         tf.total_fft_time += time() - fft_start
 

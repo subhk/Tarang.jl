@@ -805,9 +805,11 @@ Check if MPI implementation is CUDA-aware.
 
 Detection priority:
 1. Explicit user override via `TARANG_CUDA_AWARE_MPI` env var ("1"=enabled, "0"=disabled)
-2. OpenMPI CUDA support indicator
-3. MVAPICH2 CUDA indicator
-4. MPICH GPU indicator
+2. MPI.jl's implementation-aware `MPI.has_cuda()` capability probe (after MPI
+   initialization, or when its explicit override is present)
+3. OpenMPI CUDA support indicator
+4. MVAPICH2 CUDA indicator
+5. MPICH/Cray GPU indicators
 
 Returns false by default if no positive indicator is found.
 """
@@ -823,7 +825,21 @@ function check_cuda_aware_mpi()
         end
     end
 
-    # Priority 2-4: Library-specific indicators
+    # Priority 2: Prefer MPI.jl's native capability query. For Open MPI this
+    # uses MPIX_Query_cuda_support(), and JULIA_MPI_HAS_CUDA provides MPI.jl's
+    # supported override for implementations that cannot be queried directly.
+    try
+        probe_is_safe = MPI.Initialized() || haskey(ENV, "JULIA_MPI_HAS_CUDA")
+        if isdefined(MPI, :has_cuda) && probe_is_safe && MPI.has_cuda()
+            return true
+        end
+    catch err
+        # Keep compatibility with MPI.jl versions/implementations whose probe
+        # is unavailable at runtime, then fall back to legacy indicators.
+        @debug "MPI.jl CUDA-awareness probe failed" exception = err
+    end
+
+    # Priority 3-5: Library-specific indicators
     try
         # OpenMPI with CUDA support
         if haskey(ENV, "OMPI_MCA_opal_cuda_support") && ENV["OMPI_MCA_opal_cuda_support"] == "true"
@@ -1463,8 +1479,9 @@ Setup or retrieve a TransposableField workspace for distributed transforms.
 """
 function setup_transposable_workspace!(transform::DistributedGPUTransform, field)
     # TransposableField is defined in transposable_field.jl
-    # Create workspace lazily
-    if transform.workspace === nothing
+    # Create the workspace lazily and replace it when the caller changes fields.
+    # A TransposableField owns buffers and metadata tied to one ScalarField.
+    if transform.workspace === nothing || transform.workspace.field !== field
         # The TransposableField constructor will be available at runtime
         # since transposable_field.jl is included after this file
         transform.workspace = TransposableField(field)
@@ -1483,7 +1500,7 @@ function distributed_transform_forward!(transform::DistributedGPUTransform, fiel
     start_time = time()
 
     # Use TransposableField's distributed transform
-    distributed_forward_transform!(workspace, transform.plans)
+    distributed_forward_transform!(workspace; plans=transform.plans)
 
     transform.total_fft_time += time() - start_time
     transform.num_transforms += 1
@@ -1501,7 +1518,7 @@ function distributed_transform_backward!(transform::DistributedGPUTransform, fie
 
     start_time = time()
 
-    distributed_backward_transform!(workspace, transform.plans)
+    distributed_backward_transform!(workspace; plans=transform.plans)
 
     transform.total_fft_time += time() - start_time
     transform.num_transforms += 1
