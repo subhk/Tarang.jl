@@ -284,6 +284,7 @@ const MPI_TEST_FILES = [
     "test_mpi_padded_dealiasing_3d_mixed.jl", # 3D Cheb-Fourier-Fourier dealiasing == serial (decomp-order alignment fix) (np>=2)
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
+    "test_mpi_transposable_parity.jl",  # distributed COEFFICIENTS must equal serial, not merely round-trip — a permutation applied by both directions is invisible to a round trip
     # The distributed half of the configuration matrix. test_configuration_matrix.jl
     # pins the serial cells; the backend is the axis it cannot see, and nearly every
     # correctness bug in this project was backend-specific (np>=2).
