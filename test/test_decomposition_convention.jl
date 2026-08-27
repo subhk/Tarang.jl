@@ -94,10 +94,24 @@ end
 end
 
 @testset "the convention is stated in exactly one place" begin
-    # Nine independently-maintained copies of this rule are how the PencilArrays
-    # and TransposableField conventions drifted apart, and how two of them ended
-    # up disagreeing about a field with fewer dims than the mesh. A tenth copy
-    # must fail the build, not wait for the next audit.
+    # HISTORY: the convention was re-derived by hand at TEN sites in the
+    # original inventory (Tasks 2-6); all ten are migrated onto
+    # decomposed_axes. The regex below was then broadened (this task) because
+    # the original required a mesh-suffixed word immediately after LAST/FIRST
+    # (e.g. "ndims_mesh"), which missed both subject-first prose ("mesh
+    # decomposes the LAST dims") and plain verb-first prose with no such word
+    # ("decompose LAST dimensions"). Broadening it surfaced a SECOND wave: five
+    # more sites, found only once the regex could see them, that were never in
+    # the original ten-site inventory — including two functions
+    # (netcdf_output.jl's get_local_shape/get_local_start) where only the
+    # PencilArrays half was migrated and the TransposableField half was left
+    # hand-rolled.
+    #
+    # KNOWN_OFFENDERS below (declared after the scan) is that second wave's
+    # baseline population — same idiom as test_catch_ratchet.jl's bare-`catch`
+    # ratchet: an explicit, named, already-triaged list, not a magic count.
+    # THE TARGET IS AN EMPTY DICT. Every entry is a TODO for a follow-up
+    # migration task, not a permanent exemption.
     srcdir = joinpath(@__DIR__, "..", "src")
     allowed = joinpath("core", "distributor", "distributor_core.jl")
 
@@ -110,12 +124,6 @@ end
     # depend on that being true forever:
     #   - verb-first:    "decompose(s)/(d) [the] LAST/FIRST ..."
     #   - subject-first: "mesh decompose(s)/(d) the LAST/FIRST ..."
-    # This replaces an earlier regex (`decompose\s+(LAST|FIRST)\s+\w*mesh`)
-    # that additionally required a mesh-suffixed word immediately after
-    # LAST/FIRST, e.g. "decompose LAST ndims_mesh dimensions". That missed
-    # plain prose restatements with no such word — e.g. "mesh decomposes the
-    # LAST dimensions" — which is real text nonlinear_pencil_utils.jl used to
-    # carry before being migrated onto decomposed_axes (see git history).
     convention_re = r"decompose[sd]?\s+(the\s+)?(LAST|FIRST)|mesh\s+decompose[sd]?\s+the\s+(LAST|FIRST)"i
 
     offenders = String[]
@@ -129,6 +137,62 @@ end
         end
     end
 
-    @test isempty(offenders)
-    isempty(offenders) || @info "convention re-derived outside decomposed_axes" offenders
+    found = Set(offenders)
+    @info "convention re-derivation scan: $(length(found)) file(s) match" sort(collect(found))
+
+    # The known, already-triaged population. Each reason names the function(s)
+    # and which half of the convention (PencilArrays/LAST vs
+    # TransposableField/FIRST) is hand-rolled instead of calling
+    # decomposed_axes / mesh_axis_for.
+    KNOWN_OFFENDERS = Dict(
+        "core/distributor/distributor_mpi.jl" =>
+            "_scatter_array_from_root hand-rolls BOTH the PencilArrays " *
+            "(LAST dims) and TransposableField (FIRST dims) decompositions, " *
+            "each computed twice (once for the local rank, again per " *
+            "dest_rank in the scatter loop).",
+        "core/field/field_data/field_data_distributor_utils.jl" =>
+            "validate_decomposition_convention restates the convention in " *
+            "prose inside its error messages; it computes no axis indices " *
+            "itself, so only its documentation — not a numerical result — " *
+            "can drift.",
+        "core/nonlinear/nonlinear_transforms.jl" =>
+            "setup_pencil_transforms_for_shape! hand-rolls the PencilArrays " *
+            "(LAST dims) decomp_dims formula.",
+        "core/transforms/transform_planning.jl" =>
+            "setup_pencil_fft_transforms_2d! hand-rolls the PencilArrays " *
+            "(LAST dims) trailing-axes formula.",
+        "tools/netcdf_output.jl" =>
+            "get_local_shape and get_local_start each migrated their " *
+            "PencilArrays branch onto mesh_axis_for, but left their " *
+            "TransposableField (non-pencil) branch hand-rolling FIRST-dims " *
+            "decomposition.",
+    )
+    known = Set(keys(KNOWN_OFFENDERS))
+
+    new_offenders = sort(collect(setdiff(found, known)))
+    fixed_offenders = sort(collect(setdiff(known, found)))
+
+    if !isempty(new_offenders)
+        @warn "convention re-derived in file(s) NOT in KNOWN_OFFENDERS — migrate onto " *
+              "decomposed_axes, or if this is a deliberate new exemption, add it there " *
+              "with a one-line reason:\n" *
+              join(("  " * f for f in new_offenders), "\n")
+    end
+    if !isempty(fixed_offenders)
+        @info "file(s) listed in KNOWN_OFFENDERS no longer re-derive the convention — " *
+              "delete their entries to tighten the ratchet:\n" *
+              join(("  $f  (was: $(KNOWN_OFFENDERS[f]))" for f in fixed_offenders), "\n")
+    end
+
+    # SET EQUALITY, not a subset check. `offenders ⊆ KNOWN_OFFENDERS` would
+    # only ever catch a NEW offender; a listed file that gets fixed would just
+    # keep sitting in KNOWN_OFFENDERS with no signal to remove it, so the list
+    # could only grow or hold — never shrink — and would rot into a permanent
+    # excuse. Set equality makes the ratchet bite in BOTH directions: a new
+    # file joining `found` fails ("the convention was re-derived somewhere
+    # new"), and a listed file dropping out of `found` WITHOUT its entry being
+    # deleted also fails ("the ratchet must tighten when you fix one") —
+    # exactly the discipline test_catch_ratchet.jl asks a human to apply by
+    # hand when lowering RATCHET, enforced here by the assertion itself.
+    @test found == known
 end
