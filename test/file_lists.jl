@@ -72,6 +72,7 @@ const TEST_FILES = [
     "test_temporal_filters_extended.jl",
     "test_arithmetic.jl",
     "test_distributor.jl",
+    "test_decomposition_convention.jl",  # the decomposition convention was re-derived by hand at nine sites; two of them disagreed about whether a field with fewer dims than the mesh is decomposed at all
     "test_les_models.jl",
     "test_les_models_gpu_compat.jl",   # AMD/Smagorinsky device-safety via JLArray (no GPU needed)
     "test_chebyshev.jl",

@@ -1056,6 +1056,60 @@ function local_indices(dist::Distributor, axis::Int)
 end
 
 """
+    decomposed_axes(dist, ndim::Int) -> NTuple{M,Int}
+
+Global axis indices decomposed across the process mesh, ascending, for an
+`ndim`-dimensional field on `dist`. Empty when the field is not decomposed.
+
+This is the SINGLE statement of both conventions. It used to be re-derived by
+hand at nine call sites, which is how the two conventions drifted:
+
+  * `use_pencil_arrays=true`  — PencilArrays decomposes the LAST `length(mesh)`
+    dimensions. When the field has fewer dimensions than the mesh, PencilArrays
+    cannot place the decomposition and the field stays local (matching
+    `get_local_array_size`, which is the allocator and therefore the authority).
+  * `use_pencil_arrays=false` — TransposableField decomposes the FIRST
+    `min(length(mesh), 2)` dimensions; it supports a 2-D process mesh at most.
+
+`ndim` is the FIELD's dimensionality, which is not always `dist.dim`; callers
+must pass the one they mean.
+"""
+function decomposed_axes(dist, ndim::Int)
+    (dist.size == 1 || dist.mesh === nothing || ndim < 1) && return ()
+    nmesh = length(dist.mesh)
+    if dist.use_pencil_arrays
+        ndim < nmesh && return ()
+        start = ndim - nmesh + 1
+        return ntuple(i -> start + i - 1, nmesh)
+    else
+        n = min(nmesh, 2, ndim)
+        return ntuple(identity, n)
+    end
+end
+
+"""
+    mesh_axis_for(dist, ndim::Int, axis::Int) -> Union{Nothing,Int}
+
+Index into `dist.mesh` of the mesh dimension decomposing global `axis`, or
+`nothing` when `axis` is local. Inverse of [`decomposed_axes`](@ref) for the
+call sites that need `dist.mesh[mesh_idx]`.
+"""
+function mesh_axis_for(dist, ndim::Int, axis::Int)
+    axes = decomposed_axes(dist, ndim)
+    for (i, a) in enumerate(axes)
+        a == axis && return i
+    end
+    return nothing
+end
+
+"""
+    is_decomposed_axis(dist, ndim::Int, axis::Int) -> Bool
+
+Whether global `axis` of an `ndim`-dimensional field is split across ranks.
+"""
+is_decomposed_axis(dist, ndim::Int, axis::Int) = mesh_axis_for(dist, ndim, axis) !== nothing
+
+"""
     Get local indices for the given axis with known global size.
 
     Respects dist.use_pencil_arrays for decomposition convention:
