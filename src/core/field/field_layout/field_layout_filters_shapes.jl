@@ -267,32 +267,16 @@ function get_grid_layout_info(dist::Distributor, domain::Domain; scales=nothing)
     local_shape = get_local_array_size(dist, global_shape)
 
     # Compute local start/end indices
-    ndims_mesh = dist.mesh !== nothing ? length(dist.mesh) : 0
     ndims_global = length(global_shape)
 
     local_start = ones(Int, ndims_global)
     local_end = collect(global_shape)
 
     if dist.mesh !== nothing && dist.size > 1
-        if dist.use_pencil_arrays
-            # PencilArrays convention: decompose LAST ndims_mesh dimensions
-            for i in 1:min(ndims_mesh, ndims_global)
-                global_dim_idx = ndims_global - ndims_mesh + i
-                if global_dim_idx >= 1
-                    # Pass global axis index to get_local_range (it handles convention internally)
-                    start_idx, end_idx = get_local_range(dist, global_shape[global_dim_idx], global_dim_idx)
-                    local_start[global_dim_idx] = start_idx
-                    local_end[global_dim_idx] = end_idx
-                end
-            end
-        else
-            # TransposableField convention: decompose FIRST ndims_mesh dimensions
-            for i in 1:min(ndims_mesh, ndims_global)
-                # Pass global axis index to get_local_range (i is both mesh dim and axis here)
-                start_idx, end_idx = get_local_range(dist, global_shape[i], i)
-                local_start[i] = start_idx
-                local_end[i] = end_idx
-            end
+        for dim in decomposed_axes(dist, ndims_global)
+            start_idx, end_idx = get_local_range(dist, global_shape[dim], dim)
+            local_start[dim] = start_idx
+            local_end[dim] = end_idx
         end
     end
 

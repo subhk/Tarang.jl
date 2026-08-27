@@ -29,23 +29,9 @@ function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField,
 
     # CRITICAL: Check if axis is distributed (requires MPI transpose for correct derivative)
     if dist.size > 1 && ndim >= 2 && dist.mesh !== nothing
-        ndims_mesh = length(dist.mesh)
-        # Determine decomposed dimensions based on convention
-        decomp_dims = if dist.use_pencil_arrays
-            # PencilArrays convention: decompose LAST ndims_mesh dimensions
-            if ndim >= ndims_mesh
-                ntuple(i -> ndim - ndims_mesh + i, ndims_mesh)
-            else
-                ntuple(identity, ndim)
-            end
-        else
-            # TransposableField convention: decompose FIRST ndims_mesh dimensions
-            ntuple(identity, min(ndims_mesh, ndim))
-        end
-
-        if axis in decomp_dims
+        if is_decomposed_axis(dist, ndim, axis)
             # Axis is distributed - need MPI transpose to compute derivative correctly
-            _evaluate_distributed_fourier_derivative!(result, operand, axis, order, layout, decomp_dims)
+            _evaluate_distributed_fourier_derivative!(result, operand, axis, order, layout, decomposed_axes(dist, ndim))
             return
         end
     end

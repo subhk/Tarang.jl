@@ -99,31 +99,18 @@ function is_shape_compatible(local_shape::Tuple, global_shape::Tuple, mesh::Tupl
     # For parallel execution, check that local shape is reasonable
     # (within expected range given the mesh decomposition)
     num_dims = length(global_shape)
-    mesh_dims = length(mesh)
+
+    # decomposed_axes takes an untyped `dist` so a stand-in with just these
+    # three fields drives it; this function is handed loose arguments, not a
+    # Distributor.
+    dist_view = (; size = MPI.Comm_size(comm), mesh = mesh,
+                 use_pencil_arrays = use_pencil_arrays)
+    decomp = decomposed_axes(dist_view, num_dims)
 
     for i in 1:num_dims
-        # Determine if this dimension is decomposed based on convention
-        is_decomposed = if use_pencil_arrays
-            # PencilArrays: decompose LAST mesh_dims dimensions
-            # For 3D with 2D mesh: dims 2,3 decomposed; dim 1 local
-            decomp_start = num_dims - mesh_dims + 1
-            mesh_idx = i - decomp_start + 1
-            i >= decomp_start && mesh_idx >= 1 && mesh_idx <= mesh_dims && mesh[mesh_idx] > 1
-        else
-            # TransposableField ZLocal: decompose FIRST mesh_dims dimensions
-            # mesh[1] (Rx) decomposes dim 1, mesh[2] (Ry) decomposes dim 2, etc.
-            i <= mesh_dims && mesh[i] > 1
-        end
+        mesh_idx = findfirst(==(i), decomp)
 
-        if is_decomposed
-            # This dimension is distributed - get the correct mesh divisor
-            mesh_idx = if use_pencil_arrays
-                decomp_start = num_dims - mesh_dims + 1
-                i - decomp_start + 1
-            else
-                i
-            end
-
+        if mesh_idx !== nothing
             expected_local = ceil(Int, global_shape[i] / mesh[mesh_idx])
             min_local = floor(Int, global_shape[i] / mesh[mesh_idx])
 
