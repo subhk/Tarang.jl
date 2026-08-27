@@ -270,13 +270,34 @@ shape and eltype makes the workspace shared and the construction rank-uniform.
 
 The wrapped `field` reference is repointed on each call: buffers, counts, and
 communicators depend only on shape, but the transform reads and writes through
-`tf.field`.
+`tf.field`. Errors if the cached workspace still has an async transpose in
+flight (`async_state.in_progress`) — repointing `tf.field` while a previous
+field's async pack/transpose/unpack is unfinished would corrupt both fields'
+staging buffers. Call `wait_transpose!` on the returned workspace before
+starting a new async transpose on it.
 """
 function transpose_workspace!(dist::Distributor, field::ScalarField)
     gshape = field.domain !== nothing ? global_shape(field.domain) : size(field["g"])
     key = (gshape, field.dtype)
     ws = get!(dist.transpose_workspace_cache, key) do
         TransposableField(field)
+    end
+    # The workspace is shared by every field with this (shape, eltype), and
+    # `ws.field` is about to be repointed below. If an async transpose is
+    # still in flight on whichever field currently owns it, its staging
+    # buffers (`ws.buffers`, `ws.async_state.request`) are live MPI state —
+    # repointing `ws.field` out from under it would let the eventual
+    # `wait_transpose!`/pack/unpack finish into (or read from) the WRONG
+    # field, corrupting both. Nothing calls this outside a test today, but
+    # the ordinary `forward_transform!`/`backward_transform!` dispatch now
+    # reaches it, so a loud refusal here is load-bearing rather than
+    # defensive dead code.
+    if ws.async_state.in_progress
+        error("transpose_workspace!: cannot repoint the cached workspace for shape $gshape " *
+              "($(field.dtype)) to field $(repr(field.name)) — an async transpose is still " *
+              "in flight on field $(repr(ws.field.name)), which shares this workspace. " *
+              "Call wait_transpose!(ws) to complete the pending transpose before requesting " *
+              "this workspace for a different field.")
     end
     ws.field = field
     return ws
