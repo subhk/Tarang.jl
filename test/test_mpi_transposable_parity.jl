@@ -131,10 +131,31 @@ end
             tf = TransposableField(field)
             distributed_forward_transform!(tf)
             c = Tarang.get_coeff_data(field)
-            # u ≡ 1 has all energy in the DC mode, owned by rank 0.
-            if RANK == 0 && !isempty(c)
+
+            # u ≡ 1 has all energy in the DC mode. Derive who owns it from
+            # block_ranges instead of hardcoding a rank: if a future refactor
+            # moves ownership, a hardcoded RANK==0 guard would go false on
+            # every rank and this testset would silently assert nothing.
+            ox, _ = block_ranges((4, 1), Nx, Ny)
+            owner = 1 in ox
+
+            # Exactly one rank may own the DC mode. Reduced with the builtin
+            # MPI.SUM op on a plain Int (not a Julia-function reduction over a
+            # distributed array, which is unsupported here) so this check
+            # itself cannot silently pass by going vacuous.
+            owner_count = MPI.Allreduce(owner ? 1 : 0, MPI.SUM, COMM)
+            @test owner_count == 1
+
+            if owner
                 @test isapprox(c[1, 1], complex(Nx * Ny, 0.0); rtol=1e-10)
+            elseif !isempty(ox)
+                # Non-empty block, not the owner: no energy should land here.
+                @test maximum(abs, c; init=0.0) < 1e-10
+            else
+                # Over-decomposed: this rank's block is empty.
+                @test isempty(c)
             end
+
             MPI.Barrier(COMM)
             @test true  # reaching the barrier on every rank is the deadlock assertion
         end
