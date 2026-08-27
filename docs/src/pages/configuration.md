@@ -163,9 +163,9 @@ TIMESTAMP_FORMAT = "yyyy-mm-dd HH:MM:SS"
 
 **Programmatic logging setup**:
 ```julia
-using Tarang.Logging
+using Tarang
 
-setup_tarang_logging(
+logger = Tarang.setup_tarang_logging(
     level="INFO",
     filename="simulation.log",
     mpi_aware=true,
@@ -280,17 +280,18 @@ export JULIA_PKG_PRECOMPILE_AUTO=0
 Some settings can be changed at runtime:
 
 ```julia
-using Tarang.Config
+using Tarang
 
-# Get current configuration
-config = get_config()
+# Access the process-wide configuration
+config = Tarang.config
 
-# Modify settings
-config.logging.level = "DEBUG"
-config.transforms.group_transforms = false
+# Read and modify values by section/key
+current_level = Tarang.get_value(config, "logging", "LEVEL"; default="INFO")
+Tarang.set_value!(config, "logging", "LEVEL", "DEBUG")
+Tarang.set_value!(config, "transforms", "GROUP_TRANSFORMS", false)
 
-# Apply changes
-apply_config!(config)
+# Configuration consumers read this shared object; there is no apply_config! step.
+@assert Tarang.get_value(config, "logging", "LEVEL") == "DEBUG"
 ```
 
 ## Example Configurations
@@ -417,14 +418,16 @@ FILE = "benchmark.log"
 Check your configuration:
 
 ```julia
-using Tarang.Config
+using Tarang
 
-# Load and validate configuration
-config = load_config("tarang.toml")
-validate_config(config)
+# Load into the process-wide configuration. The function returns false when the
+# file is absent and leaves the existing/default configuration intact.
+loaded = Tarang.load_config!("tarang.toml")
+loaded || @info "tarang.toml not found; validating defaults"
+Tarang.validate_config(Tarang.config.data)
 
 # Print current configuration
-print_config(config)
+Tarang.print_config()
 ```
 
 ## Next Steps

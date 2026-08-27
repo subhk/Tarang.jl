@@ -30,6 +30,8 @@ using Tarang
 filter = ButterworthFilter((64, 64); α=0.5)  # α = 1/averaging_time
 
 # 2. In your time loop, update the filter
+field_data = zeros(64, 64) # replace with the current field
+dt = 0.01
 update!(filter, field_data, dt)
 
 # 3. Get the filtered mean anytime
@@ -241,8 +243,7 @@ T_final = 10.0
 exp_filter = ExponentialMean((Nx,); α=α)
 but_filter = ButterworthFilter((Nx,); α=α)
 
-t = 0.0
-while t < T_final
+for t in 0.0:dt:(T_final - dt)
     # Signal: mean=2.0, slow variation, fast noise
     signal = fill(2.0 + 0.5*sin(0.1*t) + 0.3*sin(50.0*t), Nx)
     #              ↑         ↑                ↑
@@ -250,7 +251,6 @@ while t < T_final
 
     update!(exp_filter, signal, dt)
     update!(but_filter, signal, dt)
-    t += dt
 end
 
 exp_mean = get_mean(exp_filter)[1]
@@ -273,14 +273,16 @@ dt = 0.02
 # Filter for each velocity component
 u_filter = ButterworthFilter((Nx, Ny); α=α)
 v_filter = ButterworthFilter((Nx, Ny); α=α)
+u = zeros(Nx, Ny)
+v = zeros(Nx, Ny)
 
 # Simulation loop
 for step in 1:1000
     t = step * dt
 
     # Synthetic velocity: mean jet + inertia-gravity waves
-    u = zeros(Nx, Ny)
-    v = zeros(Nx, Ny)
+    fill!(u, 0)
+    fill!(v, 0)
     for i in 1:Nx, j in 1:Ny
         x, y = (i-1)/Nx * 2π, (j-1)/Ny * 2π
 
@@ -314,6 +316,7 @@ println("Mean v max: ", maximum(abs.(v̄)))     # ≈ 0.0 (waves filtered)
 
 ```julia
 using Tarang
+using Printf
 
 α = 1.0
 

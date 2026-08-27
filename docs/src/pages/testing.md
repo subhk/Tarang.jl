@@ -18,7 +18,7 @@ julia --project=. test/test_specific.jl
 
 ### With MPI
 
-The multi-rank MPI tests each run in their own `mpiexec` world, via a driver
+The multi-rank MPI tests each run in their own MPI world, via a driver
 (CI exercises 1, 2, and 4 ranks):
 
 ```bash

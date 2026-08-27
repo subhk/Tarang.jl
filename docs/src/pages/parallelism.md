@@ -31,11 +31,11 @@ MPI.Finalize()
 
 ```bash
 # Run with 4 processes
-mpiexec -n 4 julia --project simulation.jl
+mpiexecjl --project=. -n 4 julia simulation.jl
 
 # With thread control
 export OMP_NUM_THREADS=1
-mpiexec -n 4 julia --project simulation.jl
+mpiexecjl --project=. -n 4 julia simulation.jl
 ```
 
 ## Process Mesh

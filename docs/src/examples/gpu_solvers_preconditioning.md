@@ -24,34 +24,35 @@ CuIterativeCG(A; preconditioner=d_inv)   # TypeError: in keyword argument precon
 ## Requirements
 
 These solvers live behind the CUDA package extension and are gated on
-`Tarang.CUDA_AVAILABLE[]`. When the flag is `false`, every constructor below raises
+`Tarang.CUDA_AVAILABLE[]`. Loading both packages activates the extension in either
+load order. A working NVIDIA driver/device is still required for allocation and solve:
+
+```julia
+using CUDA, Tarang
+@assert CUDA.functional()
+@assert Tarang.CUDA_AVAILABLE[]
+```
+
+When the CUDA extension is unavailable, every constructor below raises
 
 ```
 ERROR: CUDA not available. Use CPU solver instead.
 ```
 
-!!! warning "Known issue: the CUDA gate never opens"
-    `CUDA_AVAILABLE[]` is set only from `_init_gpu_solvers!()`, which runs from
-    `Tarang.__init__()` — and that runs *before* Julia loads package extensions.
-    `Base.get_extension(Tarang, :TarangCUDAExt)` therefore returns `nothing` there and the flag
-    stays `false`, in **either** load order (`using CUDA, Tarang` or `using Tarang, CUDA`).
-    The extension never sets the flag itself. Until it does, the GPU matrix solvers on this page
-    error out at construction even on a machine with a working GPU, and the code below is a
-    description of the API rather than something you can run today.
-
-Until then, use the CPU solvers, which take the same `(solver, rhs)` call shape:
+For a CPU-only environment, use the CPU solvers, which take the same
+`(solver, rhs)` call shape:
 
 ```julia
 using SparseArrays, LinearAlgebra, Tarang
 
-A = sprand(10_000, 10_000, 1e-3)
+A = sprand(1_000, 1_000, 5e-3)
 A = A + A' + 10I               # symmetric positive definite
 b = rand(size(A, 1))
 
 solver = Tarang.MatSolvers.SparseLUSolver(A)
 x = Tarang.MatSolvers.solve(solver, b)
 
-norm(A * x - b) / norm(b)      # ≈ 2.4e-15
+norm(A * x - b) / norm(b)      # approximately machine precision
 ```
 
 `solve` is **not** exported by `Tarang`; call it as `Tarang.solve` (or
@@ -64,7 +65,7 @@ Simple diagonal scaling using the inverse of the matrix diagonal:
 ```julia
 using CUDA, SparseArrays, LinearAlgebra, Tarang
 
-A = sprand(10_000, 10_000, 1e-3)
+A = sprand(2_000, 2_000, 2e-3)
 A = A + A' + 10I               # symmetric positive definite
 b = rand(size(A, 1))
 
@@ -90,8 +91,8 @@ function laplacian_2d(n)
     return kron(I_n, D) + kron(D, I_n)
 end
 
-n = 100
-A = laplacian_2d(n)            # 10_000 x 10_000, SPD
+n = 32
+A = laplacian_2d(n)            # 1_024 x 1_024, SPD smoke problem
 b = rand(size(A, 1))
 
 # ILU(0) preconditioner - much better for ill-conditioned matrices
@@ -125,7 +126,7 @@ function laplacian_2d(n)
     return kron(I_n, D) + kron(D, I_n)
 end
 
-n = 100
+n = 32
 A = laplacian_2d(n)            # this is SPD
 b = rand(size(A, 1))
 
@@ -136,7 +137,7 @@ x = Tarang.solve(solver, b)
 
 **Benefits of IC(0) over ILU(0) for SPD matrices:**
 - Lower memory: IC(0) factorizes `tril(A)` and stores only `L`, where ILU(0) stores `L` and `U`
-  together. For the 2D Laplacian above that is 29,800 stored entries against 49,600.
+  together. For the 2D Laplacian above that is 3,008 stored entries against 4,992.
 - Better numerical stability for symmetric systems
 - Preserves symmetry properties
 
@@ -164,7 +165,7 @@ function convection_diffusion_1d(n; peclet=10.0)
     return diffusion + convection
 end
 
-A = convection_diffusion_1d(10_000)   # non-symmetric
+A = convection_diffusion_1d(2_000)   # non-symmetric smoke problem
 b = rand(size(A, 1))
 
 # GMRES with ILU(0) preconditioning
@@ -179,7 +180,7 @@ x = Tarang.solve(solver, b)
 
 ## Preconditioner Summary
 
-```julia
+```text
 # Allowed preconditioner values (Symbol only):
 solver = CuIterativeCG(A; preconditioner=...)
 

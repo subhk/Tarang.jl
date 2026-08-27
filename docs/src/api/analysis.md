@@ -133,7 +133,7 @@ writes it automatically at its own cadence and closes it at the end — no manua
 `process!`/`close!` in a step loop (easy to forget, silently drops output).
 
 **Syntax**:
-```julia
+```text
 add_file_handler(
     base_path::String,
     solver::InitialValueSolver,
@@ -514,13 +514,17 @@ Feed `T_last` to your plotting package of choice (Tarang does not depend on one)
 
 ---
 
-## Complete Example
+## Integration Excerpt
+
+The following block shows how analysis and output attach to an existing
+simulation; the problem and its fields are intentionally application-specific.
 
 ```julia
 using Tarang, MPI
 
 MPI.Init()
 
+# webdocs-audit: skip - requires simulation-specific problem and field definitions.
 # ... setup problem, fields, and solver ...
 solver = InitialValueSolver(problem, RK222(); dt=1e-3)
 

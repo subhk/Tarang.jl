@@ -6,13 +6,27 @@ Tarang.jl is designed for efficient parallel computing using MPI (Message Passin
 
 ### Running a Script
 
-Execute a Tarang.jl script with MPI using `mpiexec`:
+Execute a Tarang.jl script with MPI using MPI.jl's project-aware `mpiexecjl`
+wrapper on Unix, macOS, or WSL (installed as described in the
+[installation guide](installation.md)):
 
 ```bash
-mpiexec -n 4 julia --project=. your_script.jl
+mpiexecjl --project=. -n 4 julia your_script.jl
 ```
 
 The `-n 4` flag specifies 4 MPI processes. The process count must match your process mesh configuration in the script.
+
+On native Windows, `mpiexecjl` is not directly executable because it is a Unix
+shell wrapper. Use a small Julia launcher instead:
+
+```julia
+using MPI
+run(`$(MPI.mpiexec()) -n 4 $(Base.julia_cmd()) --project=. your_script.jl`)
+```
+
+Run that launcher with `julia --project=. launch_mpi.jl`. When MPI.jl is
+explicitly configured for Microsoft MPI, the matching `mpiexec.exe` can also
+launch the script directly.
 
 ### Process Mesh Configuration
 
@@ -47,10 +61,10 @@ dist = Distributor(coords; mesh=(2, 2))   # 2D domain, 4 ranks -> HARD ERROR
 !!! tip "Matching Process Count"
     `prod(mesh)` must equal the number of MPI processes:
     ```julia
-    mesh=(4,)     # 2D domain, requires: mpiexec -n 4
-    mesh=(16,)    # 2D domain, requires: mpiexec -n 16
-    mesh=(4, 2)   # 3D domain, requires: mpiexec -n 8
-    mesh=(4, 4)   # 3D domain, requires: mpiexec -n 16
+    mesh=(4,)     # 2D domain, requires 4 MPI ranks
+    mesh=(16,)    # 2D domain, requires 16 MPI ranks
+    mesh=(4, 2)   # 3D domain, requires 8 MPI ranks
+    mesh=(4, 4)   # 3D domain, requires 16 MPI ranks
     ```
 
 ## Process Mesh Strategies
@@ -202,7 +216,7 @@ from oversubscribing the same cores:
 
 ```bash
 export OMP_NUM_THREADS=1
-mpiexec -n 8 julia --project=. script.jl
+mpiexecjl --project=. -n 8 julia script.jl
 ```
 
 To override Tarang's FFTW thread count deliberately — e.g. a few fat ranks on a many-core node —
@@ -210,7 +224,7 @@ set `TARANG_FFTW_THREADS`:
 
 ```bash
 export TARANG_FFTW_THREADS=4     # 4 FFTW threads per rank
-mpiexec -n 2 julia --project=. script.jl
+mpiexecjl --project=. -n 2 julia script.jl
 ```
 
 ### Other Useful Variables
@@ -273,7 +287,7 @@ module load openmpi/4.1
 
 export OMP_NUM_THREADS=1
 
-mpiexec julia --project=. simulation.jl
+mpiexecjl --project=. julia simulation.jl
 ```
 
 Submit with:
@@ -299,6 +313,7 @@ Add diagnostics to your script. `Tarang` does not re-export `MPI`, so import it 
 ```julia
 using Tarang, MPI
 
+# webdocs-audit: skip - T is the distributed temperature field created by the simulation.
 rank  = MPI.Comm_rank(MPI.COMM_WORLD)
 nproc = MPI.Comm_size(MPI.COMM_WORLD)
 
@@ -364,11 +379,11 @@ Use MPI profiling tools to identify bottlenecks:
 
 ```bash
 # With mpiP
-mpiexec -n 8 julia --project=. script.jl
+mpiexecjl --project=. -n 8 julia script.jl
 
 # With Intel MPI
 export I_MPI_STATS=20
-mpiexec -n 8 julia --project=. script.jl
+mpiexecjl --project=. -n 8 julia script.jl
 ```
 
 ### Tarang.jl Built-in Profiling
@@ -413,14 +428,14 @@ end
 Test your code without MPI first:
 
 ```bash
-julia --project=. script.jl  # No mpiexec
+julia --project=. script.jl  # No MPI launcher
 ```
 
 The same script runs serially and in parallel — just omit `mesh=` and let the `Distributor`
 size itself from the communicator:
 
 ```julia
-dist = Distributor(coords)   # mesh = (1,) on 1 process, (nprocs,) under mpiexec
+dist = Distributor(coords)   # mesh = (1,) on 1 process, (nprocs,) under MPI
 ```
 
 ### MPI Debugging Tools
@@ -429,13 +444,13 @@ Use parallel debuggers:
 
 ```bash
 # With TotalView
-mpiexec -tv -n 4 julia script.jl
+mpiexecjl --project=. -tv -n 4 julia script.jl
 
 # With DDT (ARM Forge)
-ddt mpiexec -n 4 julia script.jl
+ddt mpiexecjl --project=. -n 4 julia script.jl
 
 # With gdb (attach to rank 0)
-mpiexec -n 4 xterm -e gdb julia script.jl
+mpiexecjl --project=. -n 4 xterm -e gdb julia script.jl
 ```
 
 ### Rank-Specific Output
@@ -446,6 +461,7 @@ the whole `PencilArray` is collective and must be called by every rank:
 ```julia
 using Tarang, MPI
 
+# webdocs-audit: skip - u is the distributed velocity field created by the simulation.
 rank = MPI.Comm_rank(MPI.COMM_WORLD)
 lmax = maximum(abs, parent(get_grid_data(u)))   # this rank's slab only
 
@@ -512,10 +528,10 @@ mesh=(16,)   # was (4,)
 ERROR: ArgumentError: Mesh size 9 does not match number of processes 4
 ```
 
-**Solution**: Match `mpiexec -n` to `prod(mesh)`:
+**Solution**: Match `mpiexecjl -n` to `prod(mesh)`:
 
 ```julia
-mesh=(4, 2)  # 3D domain, requires mpiexec -n 8
+mesh=(4, 2)  # 3D domain, requires 8 MPI ranks
 ```
 
 ### PencilFFT Plan Creation Failed
@@ -545,10 +561,10 @@ On multi-socket nodes:
 
 ```bash
 # Bind processes to cores
-mpiexec -n 16 --bind-to core julia script.jl
+mpiexecjl --project=. -n 16 --bind-to core julia script.jl
 
 # Use one process per socket
-mpiexec -n 2 --map-by socket julia script.jl
+mpiexecjl --project=. -n 2 --map-by socket julia script.jl
 ```
 
 ### Network Optimization
@@ -560,7 +576,7 @@ For InfiniBand or high-speed networks:
 export OMPI_MCA_pml=ucx
 export OMPI_MCA_osc=ucx
 
-mpiexec -n 32 julia script.jl
+mpiexecjl --project=. -n 32 julia script.jl
 ```
 
 ## Benchmarking

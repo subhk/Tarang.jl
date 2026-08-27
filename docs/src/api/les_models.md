@@ -111,7 +111,7 @@ SmagorinskyModel
 Classic Smagorinsky (1963) subgrid-scale model.
 
 **Type signature:**
-```julia
+```text
 mutable struct SmagorinskyModel{T<:AbstractFloat, N,
                                 A<:AbstractArray{T, N},
                                 Arch<:AbstractArchitecture} <: EddyViscosityModel
@@ -153,7 +153,7 @@ AMDModel
 Anisotropic Minimum Dissipation model (Rozema et al., 2015).
 
 **Type signature:**
-```julia
+```text
 mutable struct AMDModel{T<:AbstractFloat, N,
                         A<:AbstractArray{T, N},
                         Arch<:AbstractArchitecture} <: EddyViscosityModel
@@ -264,12 +264,12 @@ compute_sgs_stress
 Compute deviatoric SGS stress tensor τᵢⱼ = -2 νₑ S̄ᵢⱼ.
 
 **2D Signature:**
-```julia
+```text
 compute_sgs_stress(model, S11, S12, S22) -> (τ11, τ12, τ22)
 ```
 
 **3D Signature:**
-```julia
+```text
 compute_sgs_stress(model, S11, S12, S13, S22, S23, S33)
     -> (τ11, τ12, τ13, τ22, τ23, τ33)
 ```
