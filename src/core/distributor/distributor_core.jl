@@ -612,12 +612,13 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
     # decomp_index === nothing: FULL decomposition (for field storage) - decompose LAST ndims_mesh dims
     # decomp_index == Int: PENCIL decomposition (for FFT) - keep that dimension LOCAL
     decomp_dims = if decomp_index === nothing
-        # Full decomposition: decompose LAST ndims_mesh dimensions (PencilArrays convention)
-        # This is used for field storage where we want maximum parallelism
-        _compute_full_decomp_dims(ndims_global, ndims_mesh)
+        # Full decomposition for field storage — the same rule the allocator and
+        # the index math use.
+        decomposed_axes(dist, ndims_global)
     else
-        # Pencil decomposition: keep decomp_index dimension local
-        # This is used for FFT operations that require a specific dimension to be local
+        # Pencil decomposition: keep decomp_index LOCAL for the FFT. This is a
+        # different question from "which axes does storage decompose", so it
+        # keeps its own helper.
         _compute_decomp_dims(ndims_global, ndims_mesh, decomp_index)
     end
 
@@ -663,34 +664,6 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
               "Cannot fall back to regular arrays as this would produce incorrect results. " *
               "Please check your PencilArrays installation or use serial execution.")
     end
-end
-
-"""
-    _compute_full_decomp_dims(ndims_global::Int, ndims_mesh::Int)
-
-Compute decomposition dimensions for FULL decomposition (field storage).
-Decomposes the LAST ndims_mesh dimensions, following PencilArrays convention.
-
-This is used for field storage where we want maximum parallelism without
-keeping any dimension local. All mesh dimensions are utilized.
-
-For ndims_global=3, ndims_mesh=2: (2, 3) - dims 2,3 decomposed, dim 1 local
-For ndims_global=2, ndims_mesh=2: (1, 2) - both dims decomposed
-For ndims_global=3, ndims_mesh=3: (1, 2, 3) - all dims decomposed
-
-This matches the convention used by get_local_array_size and other helper
-utilities when use_pencil_arrays=true.
-"""
-function _compute_full_decomp_dims(ndims_global::Int, ndims_mesh::Int)
-    if ndims_mesh == 0 || ndims_global == 0
-        return ()
-    end
-
-    # Decompose LAST ndims_mesh dimensions (PencilArrays convention)
-    # This matches get_local_array_size behavior for use_pencil_arrays=true
-    n_decomp = min(ndims_mesh, ndims_global)
-    decomp_start = ndims_global - n_decomp + 1
-    return Tuple(decomp_start:ndims_global)
 end
 
 """

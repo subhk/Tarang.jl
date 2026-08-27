@@ -1296,11 +1296,10 @@ function get_local_shape(layout, domain_info, scales, rank)
     local_dims = Vector{Int}(undef, n_dims)
 
     if dist.use_pencil_arrays
-        # PencilArrays convention: decompose LAST n_mesh_dims dimensions
         for i in 1:n_dims
-            mesh_dim_idx = i - (n_dims - n_mesh_dims)
+            mesh_dim_idx = mesh_axis_for(dist, n_dims, i)
 
-            if mesh_dim_idx >= 1 && mesh_dim_idx <= n_mesh_dims
+            if mesh_dim_idx !== nothing
                 # This dimension is decomposed. Match the actual PencilArrays slab
                 # EXACTLY (remainder-on-LAST, MPI-Cart row-major coords) so the
                 # written start/count attrs agree with the data actually written.
@@ -1439,11 +1438,10 @@ function get_local_start(layout, domain_info, scales, rank)
     end
 
     if dist.use_pencil_arrays
-        # PencilArrays convention: decompose LAST n_mesh_dims dimensions
         for i in 1:n_dims
-            mesh_dim_idx = i - (n_dims - n_mesh_dims)
+            mesh_dim_idx = mesh_axis_for(dist, n_dims, i)
 
-            if mesh_dim_idx >= 1 && mesh_dim_idx <= n_mesh_dims
+            if mesh_dim_idx !== nothing
                 # This dimension is decomposed - compute start index matching the
                 # actual PencilArrays slab (see get_local_shape).
                 n_procs = mesh[mesh_dim_idx]
