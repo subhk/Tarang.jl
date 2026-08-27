@@ -72,36 +72,18 @@ end
     Returns:
     - (start_idx, end_idx) tuple with 1-based indices
 
-    Note: Respects dist.use_pencil_arrays:
-    - PencilArrays convention: decompose LAST ndims_mesh dimensions
-    - TransposableField convention: decompose FIRST ndims_mesh dimensions
+    Note: which axes are decomposed comes from `decomposed_axes` — see its
+    docstring for both conventions.
     """
 function get_local_range(dist::Distributor, global_size::Int, axis::Int)
     if dist.size == 1 || dist.mesh === nothing || axis < 1 || axis > dist.dim
         return (1, global_size)
     end
 
-    mesh_dim = length(dist.mesh)
-
-    # Determine which mesh dimension (if any) corresponds to this axis
-    mesh_axis = nothing
-    if dist.use_pencil_arrays
-        # PencilArrays convention: decompose LAST mesh_dim dimensions
-        # Axis dist.dim is mesh[mesh_dim], axis dist.dim-1 is mesh[mesh_dim-1], etc.
-        decomp_start = max(1, dist.dim - mesh_dim + 1)
-        if axis >= decomp_start
-            mesh_axis = axis - decomp_start + 1
-        end
-    else
-        # TransposableField convention: decompose FIRST mesh_dim dimensions
-        # Axis 1 is mesh[1], axis 2 is mesh[2], etc.
-        if axis <= mesh_dim
-            mesh_axis = axis
-        end
-    end
-
-    # If axis is not decomposed, return full range
-    if mesh_axis === nothing || mesh_axis < 1 || mesh_axis > mesh_dim
+    # `dist.dim` is this distributor's field dimensionality; get_local_range is
+    # called with a global axis index into a field of that rank.
+    mesh_axis = mesh_axis_for(dist, dist.dim, axis)
+    if mesh_axis === nothing
         return (1, global_size)
     end
 

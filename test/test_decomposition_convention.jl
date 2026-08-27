@@ -63,3 +63,12 @@ end
         @test Tarang.mesh_axis_for(d, 3, 4) === nothing
     end
 end
+
+@testset "get_local_range agrees with the convention" begin
+    coords = CartesianCoordinates("x", "y", "z")
+    dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
+    # Serial: every axis is whole.
+    for axis in 1:3
+        @test Tarang.get_local_range(dist, 12, axis) == (1, 12)
+    end
+end
