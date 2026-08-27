@@ -76,8 +76,13 @@ end
 @testset "allocator and index math agree on every axis" begin
     # get_local_array_size decides the ALLOCATED shape; local_indices decides
     # which global indices those slots mean. If they disagree the field is
-    # silently mis-addressed — no error, wrong values. Nothing forced them to
-    # agree before this test existed.
+    # silently mis-addressed — no error, wrong values.
+    #
+    # SERIAL SMOKE CHECK ONLY: at mesh=(1,) with size==1, every function below
+    # takes its identity early-return, so this exercises none of the
+    # decomposed branches. The load-bearing three-way agreement assertion —
+    # under LIVE decomposition, np=2 and np=4 — lives in
+    # test/test_mpi_local_indices.jl.
     coords = CartesianCoordinates("x", "y", "z")
     dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
     gshape = (8, 6, 4)
@@ -86,4 +91,44 @@ end
         @test length(Tarang.local_indices(dist, axis, gshape[axis])) == local_shape[axis]
     end
     @test collect(Tarang.compute_local_shape(dist, gshape)) == collect(local_shape)
+end
+
+@testset "the convention is stated in exactly one place" begin
+    # Nine independently-maintained copies of this rule are how the PencilArrays
+    # and TransposableField conventions drifted apart, and how two of them ended
+    # up disagreeing about a field with fewer dims than the mesh. A tenth copy
+    # must fail the build, not wait for the next audit.
+    srcdir = joinpath(@__DIR__, "..", "src")
+    allowed = joinpath("core", "distributor", "distributor_core.jl")
+
+    # The tell is a use_pencil_arrays branch that decides axis indices, restated
+    # in prose as "decompose(s) [the] LAST/FIRST ..." — in EITHER word order.
+    # A single verb-first alternative with no fixed suffix after LAST/FIRST
+    # already subsumes the subject-first case as a substring match (regex
+    # `occursin` doesn't require the whole sentence, just some contiguous
+    # span), but both orders are spelled out explicitly so the check does not
+    # depend on that being true forever:
+    #   - verb-first:    "decompose(s)/(d) [the] LAST/FIRST ..."
+    #   - subject-first: "mesh decompose(s)/(d) the LAST/FIRST ..."
+    # This replaces an earlier regex (`decompose\s+(LAST|FIRST)\s+\w*mesh`)
+    # that additionally required a mesh-suffixed word immediately after
+    # LAST/FIRST, e.g. "decompose LAST ndims_mesh dimensions". That missed
+    # plain prose restatements with no such word — e.g. "mesh decomposes the
+    # LAST dimensions" — which is real text nonlinear_pencil_utils.jl used to
+    # carry before being migrated onto decomposed_axes (see git history).
+    convention_re = r"decompose[sd]?\s+(the\s+)?(LAST|FIRST)|mesh\s+decompose[sd]?\s+the\s+(LAST|FIRST)"i
+
+    offenders = String[]
+    for (root, _, files) in walkdir(srcdir), file in files
+        endswith(file, ".jl") || continue
+        path = joinpath(root, file)
+        occursin(allowed, path) && continue
+        text = read(path, String)
+        if occursin(r"use_pencil_arrays"i, text) && occursin(convention_re, text)
+            push!(offenders, relpath(path, srcdir))
+        end
+    end
+
+    @test isempty(offenders)
+    isempty(offenders) || @info "convention re-derived outside decomposed_axes" offenders
 end
