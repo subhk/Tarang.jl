@@ -78,14 +78,17 @@ _coeff_storage_param(a::PencilArrays.PencilArray{T,N,A,Nd,Np}) where {T,N,A,Nd,N
     PencilArrays.PencilArray{T,N,A,Nd,Np}
 _coeff_storage_param(a::AbstractArray) = typeof(a)
 
-# TransposableFieldStorage is defined in transposable_field.jl (loaded later)
-# because it depends on TransposeBuffers, Topology2D, etc. from transpose_types.jl.
-# It inherits from AbstractFieldStorage defined above.
+# TransposableFieldStorage is defined in transposable_field.jl (loaded later,
+# for locality with the rest of the transpose subsystem it marks). It inherits
+# from AbstractFieldStorage defined above and mirrors SerialFieldStorage's
+# three fields exactly (architecture, grid, coeff) — it exists only to be a
+# distinct type for storage_mode/dispatch, so the field accessors below need
+# no per-storage-type specialization.
 
 # Backward-compatible alias: FieldBuffers is now SerialFieldStorage
 const FieldBuffers = SerialFieldStorage
 
-@inline function _update_field_buffer_architecture!(buffers::FieldBuffers, value)
+@inline function _update_field_buffer_architecture!(buffers::AbstractFieldStorage, value)
     if value === nothing
         return
     elseif value isa AbstractArray
@@ -132,7 +135,19 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         # sentinels so storage is never nothing (Phase 1 type-stability).
         g, c = domain !== nothing ? _build_field_arrays(dist, domain, T) : (_empty_grid(T), _empty_coeff(T))
         bundle = domain === nothing ? nothing : transform_plan_bundle(domain, T)
-        storage = SerialFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)
+        # A distributed GPU field transforms by explicit transposes
+        # (TransposableField), never by PencilFFTs (which is CPU-only). Record
+        # that at the type level so the transform can dispatch on it instead of
+        # erroring at the call site. TransposableFieldStorage carries the same
+        # (architecture, grid, coeff) fields as SerialFieldStorage — the
+        # transpose buffers/counts/comms/topology live on the Distributor-side
+        # workspace cache (`transpose_workspace!`), not here, so this selection
+        # alone performs no collective MPI call.
+        storage = if is_gpu(dist.architecture) && dist.size > 1
+            TransposableFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)
+        else
+            SerialFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)
+        end
         return new{T, typeof(storage)}(dist, name, bases, domain, dtype, bundle,
                                        storage, layout, :g, initial_scales, :auto, false, 0)
     end

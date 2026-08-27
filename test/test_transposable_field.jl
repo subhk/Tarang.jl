@@ -360,6 +360,21 @@ end
     c = ScalarField(dist, "ws_c", other)
     @test Tarang.transpose_workspace!(dist, c) !== wa
 end
+
+@testset "distributed GPU fields select transposable storage" begin
+    # TransposableFieldStorage has been defined, documented and dispatched since
+    # the wrapper was split up — but nothing ever constructed it, so every field
+    # got SerialFieldStorage and the distributed transform stayed unreachable
+    # from the ordinary API.
+    coords = CartesianCoordinates("x", "y")
+
+    cpu_dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,),
+                           dtype=ComplexF64, architecture=CPU(),
+                           use_pencil_arrays=false)
+    bases = (ComplexFourier(coords, "x", 8), ComplexFourier(coords, "y", 6))
+    cpu_field = ScalarField(cpu_dist, "storage_cpu", bases)
+    @test !Tarang.is_transposable_storage(cpu_field)
+end
 end  # if NPROCS > 1
 
 @testset "TransposableField Pack/Unpack CPU" begin

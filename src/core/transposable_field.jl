@@ -78,28 +78,45 @@ include("transpose/transpose_transforms.jl")
 # ============================================================================
 
 """
-    TransposableFieldStorage{CT, N} <: AbstractFieldStorage
+    TransposableFieldStorage{G,C} <: AbstractFieldStorage
 
-Storage for distributed GPU+MPI fields with 2D pencil decomposition.
-Absorbs the functionality previously in TransposableField wrapper.
+Storage marker for a distributed GPU field (`is_gpu(dist.architecture) &&
+dist.size > 1`). Carries exactly the same three fields as `SerialFieldStorage`
+(`architecture`, `grid::G`, `coeff::C`) — the field accessors (`get_grid_data`,
+`set_grid_data!`, `get_coeff_data`, `set_coeff_data!`) reach `:grid`/`:coeff`
+by hardcoded `getfield`/`setfield!`, not by dispatch, so this struct needs no
+forwarding methods to be a fully working storage backend.
 
-CT is the complex element type (Complex{T}), N is the number of dimensions.
+Its only remaining job is to be a TYPE distinct from `SerialFieldStorage`, so
+`storage_mode` can route a field to the explicit-transpose transform path
+instead of PencilFFTs (which is CPU-only):
+
+    storage_mode(::ScalarField{T, <:SerialFieldStorage})       = SerialStorage()
+    storage_mode(::ScalarField{T, <:TransposableFieldStorage}) = TransposableStorage()
+
+The actual transpose buffers, counts, communicators, topology and FFT plans
+used to live here, one set per field. They now live on a Distributor-side
+cache keyed by (global_shape, eltype) — see `transpose_workspace!` below —
+because a `TransposableField` owns MPI sub-communicators (`MPI.Comm_split` is
+collective), so per-field ownership would multiply that cost by field count
+and force construction order to match across ranks. Keeping this struct to
+just the three data fields means building a distributed GPU field performs no
+collective MPI calls; the workspace is created lazily on first transform.
 """
-mutable struct TransposableFieldStorage{CT, N, B<:SerialFieldStorage} <: AbstractFieldStorage
-    base::B
-    transpose_buffers::TransposeBuffers{CT, N}
-    counts::TransposeCounts
-    comms::TransposeComms
-    topology::Topology2D
-    global_shape::NTuple{N, Int}
-    local_shapes::Dict{TransposeLayout, NTuple{N, Int}}
-    async_state::AsyncTransposeState
-    fft_plans::Dict{TransposeLayout, Any}
-    total_transpose_time::Float64
-    total_fft_time::Float64
+mutable struct TransposableFieldStorage{G<:AbstractArray, C<:AbstractArray} <: AbstractFieldStorage
+    architecture::AbstractArchitecture
+    grid::G
+    coeff::C
 end
 
-# Deferred storage_mode dispatch (TransposableFieldStorage is now defined)
+# Julia auto-generates the inferring outer constructor
+# `TransposableFieldStorage(arch, grid, coeff)` from the struct definition
+# above (mirrors SerialFieldStorage — see the comment at its definition).
+
+# Deferred storage_mode dispatch (TransposableFieldStorage is now defined).
+# Stays in this file (rather than field_types.jl, which is loaded first) only
+# for locality with the rest of the transpose subsystem it marks — it no
+# longer depends on any type defined by the transpose/*.jl includes above.
 storage_mode(::ScalarField{T, <:TransposableFieldStorage}) where T = TransposableStorage()
 
 # ============================================================================
