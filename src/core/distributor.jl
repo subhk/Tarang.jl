@@ -33,8 +33,7 @@ export Layout, DistributorPerformanceStats, Distributor, TransposeBufferCache
 export setup_pencil_arrays, create_pencil, compute_local_shape,
        get_process_coordinate_in_mesh, get_layout, local_indices,
        local_grids, remedy_scales, get_axis, get_basis_axis,
-       first_axis, last_axis, decomposed_axes, mesh_axis_for,
-       is_decomposed_axis
+       first_axis, last_axis
 
 # Export MPI communication functions
 export gather_array, scatter_array, allreduce_array, mpi_alltoall,
