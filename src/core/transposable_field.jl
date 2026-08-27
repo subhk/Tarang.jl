@@ -242,6 +242,30 @@ function TransposableField(field::ScalarField; topology=nothing)
 end
 
 """
+    transpose_workspace!(dist::Distributor, field::ScalarField) -> TransposableField
+
+Cached transpose workspace for `field`'s global shape and element type.
+
+A `TransposableField` owns two MPI sub-communicators (`MPI.Comm_split` is
+collective), so one per field would consume `2 * nfields` communicators and
+require every rank to allocate the same fields in the same order. Keying on
+shape and eltype makes the workspace shared and the construction rank-uniform.
+
+The wrapped `field` reference is repointed on each call: buffers, counts, and
+communicators depend only on shape, but the transform reads and writes through
+`tf.field`.
+"""
+function transpose_workspace!(dist::Distributor, field::ScalarField)
+    gshape = field.domain !== nothing ? global_shape(field.domain) : size(field["g"])
+    key = (gshape, field.dtype)
+    ws = get!(dist.transpose_workspace_cache, key) do
+        TransposableField(field)
+    end
+    ws.field = field
+    return ws
+end
+
+"""
     make_transposable(field::ScalarField; kwargs...)
 
 Helper function to create a TransposableField from a ScalarField.

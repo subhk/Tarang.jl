@@ -339,6 +339,27 @@ if NPROCS > 1
     @test field.current_layout == :g
     @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-12, atol=1e-12)
 end
+
+@testset "transpose workspace is cached per shape, not per field" begin
+    # TransposableField's constructor performs two collective MPI.Comm_splits.
+    # One workspace per FIELD would burn 2*nfields communicators; two fields of
+    # the same shape must share one.
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,),
+                       dtype=ComplexF64, architecture=CPU(), use_pencil_arrays=false)
+    bases = (ComplexFourier(coords, "x", 8), ComplexFourier(coords, "y", 6))
+    a = ScalarField(dist, "ws_a", bases)
+    b = ScalarField(dist, "ws_b", bases)
+
+    wa = Tarang.transpose_workspace!(dist, a)
+    wb = Tarang.transpose_workspace!(dist, b)
+    @test wa === wb
+
+    # A different shape gets its own workspace.
+    other = (ComplexFourier(coords, "x", 16), ComplexFourier(coords, "y", 6))
+    c = ScalarField(dist, "ws_c", other)
+    @test Tarang.transpose_workspace!(dist, c) !== wa
+end
 end  # if NPROCS > 1
 
 @testset "TransposableField Pack/Unpack CPU" begin

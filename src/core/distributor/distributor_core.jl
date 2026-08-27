@@ -95,7 +95,11 @@ mutable struct Distributor
     distributed_gpu_config::Union{Nothing, AbstractDistributedGPUConfig}
 
     # TransposableField support (for 2D pencil decomposition)
-    transpose_comms_cache::Dict{Int, AbstractTransposeComms}
+    # Transpose workspaces for GPU+MPI (TransposableField), keyed by
+    # (global_shape, eltype). A workspace owns two MPI sub-communicators, so it
+    # is shared across every field of the same shape rather than built per field.
+    # Released in `close`. Replaces the never-written `transpose_comms_cache`.
+    transpose_workspace_cache::Dict{Tuple, Any}
     transpose_counts_cache::Dict{Tuple, AbstractTransposeCounts}
 
     # Basis composition the current transform plan was built for, as a tuple of
@@ -271,7 +275,7 @@ mutable struct Distributor
         end
 
         # Initialize transpose caches for TransposableField support
-        transpose_comms_cache = Dict{Int, AbstractTransposeComms}()
+        transpose_workspace_cache = Dict{Tuple, Any}()
         transpose_counts_cache = Dict{Tuple, AbstractTransposeCounts}()
 
         dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
@@ -279,7 +283,7 @@ mutable struct Distributor
             transform_plan_cache,
             pencil_fft_plan, pencil_fft_input, pencil_fft_output, pencil_solve, layouts, perf_stats,
             mesh_coords, neighbor_ranks, nothing, gpu_fft_plans, gpu_arrays, distributed_gpu_config,
-            transpose_comms_cache, transpose_counts_cache, nothing)
+            transpose_workspace_cache, transpose_counts_cache, nothing)
 
         # Precompute neighbor ranks for all mesh dimensions
         if mesh !== nothing && size > 1
@@ -314,6 +318,7 @@ function Base.close(dist::Distributor)
     empty!(dist.transforms)
     empty!(dist.transform_plan_cache)
     empty!(dist.layouts)
+    empty!(dist.transpose_workspace_cache)
     dist.pencil_config = nothing
     dist.pencil_fft_plan = nothing
     dist.pencil_fft_input = nothing
