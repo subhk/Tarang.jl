@@ -85,9 +85,9 @@ MPI_AWARE = true
 ALSO_STDOUT = false
 
 # Timestamp format
-TIMESTAMP_FORMAT = &quot;yyyy-mm-dd HH:MM:SS&quot;</code></pre><p><strong>Programmatic logging setup</strong>:</p><pre><code class="language-julia hljs">using Tarang.Logging
+TIMESTAMP_FORMAT = &quot;yyyy-mm-dd HH:MM:SS&quot;</code></pre><p><strong>Programmatic logging setup</strong>:</p><pre><code class="language-julia hljs">using Tarang
 
-setup_tarang_logging(
+logger = Tarang.setup_tarang_logging(
     level=&quot;INFO&quot;,
     filename=&quot;simulation.log&quot;,
     mpi_aware=true,
@@ -150,17 +150,18 @@ export JULIA_NUM_THREADS=4
 export JULIA_OPT_LEVEL=3
 
 # Disable precompilation
-export JULIA_PKG_PRECOMPILE_AUTO=0</code></pre><h2 id="Runtime-Configuration"><a class="docs-heading-anchor" href="#Runtime-Configuration">Runtime Configuration</a><a id="Runtime-Configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Runtime-Configuration" title="Permalink"></a></h2><p>Some settings can be changed at runtime:</p><pre><code class="language-julia hljs">using Tarang.Config
+export JULIA_PKG_PRECOMPILE_AUTO=0</code></pre><h2 id="Runtime-Configuration"><a class="docs-heading-anchor" href="#Runtime-Configuration">Runtime Configuration</a><a id="Runtime-Configuration-1"></a><a class="docs-heading-anchor-permalink" href="#Runtime-Configuration" title="Permalink"></a></h2><p>Some settings can be changed at runtime:</p><pre><code class="language-julia hljs">using Tarang
 
-# Get current configuration
-config = get_config()
+# Access the process-wide configuration
+config = Tarang.config
 
-# Modify settings
-config.logging.level = &quot;DEBUG&quot;
-config.transforms.group_transforms = false
+# Read and modify values by section/key
+current_level = Tarang.get_value(config, &quot;logging&quot;, &quot;LEVEL&quot;; default=&quot;INFO&quot;)
+Tarang.set_value!(config, &quot;logging&quot;, &quot;LEVEL&quot;, &quot;DEBUG&quot;)
+Tarang.set_value!(config, &quot;transforms&quot;, &quot;GROUP_TRANSFORMS&quot;, false)
 
-# Apply changes
-apply_config!(config)</code></pre><h2 id="Example-Configurations"><a class="docs-heading-anchor" href="#Example-Configurations">Example Configurations</a><a id="Example-Configurations-1"></a><a class="docs-heading-anchor-permalink" href="#Example-Configurations" title="Permalink"></a></h2><h3 id="Development-(Fast-Startup)"><a class="docs-heading-anchor" href="#Development-(Fast-Startup)">Development (Fast Startup)</a><a id="Development-(Fast-Startup)-1"></a><a class="docs-heading-anchor-permalink" href="#Development-(Fast-Startup)" title="Permalink"></a></h3><pre><code class="language-toml hljs">[transforms-fftw]
+# Configuration consumers read this shared object; there is no apply_config! step.
+@assert Tarang.get_value(config, &quot;logging&quot;, &quot;LEVEL&quot;) == &quot;DEBUG&quot;</code></pre><h2 id="Example-Configurations"><a class="docs-heading-anchor" href="#Example-Configurations">Example Configurations</a><a id="Example-Configurations-1"></a><a class="docs-heading-anchor-permalink" href="#Example-Configurations" title="Permalink"></a></h2><h3 id="Development-(Fast-Startup)"><a class="docs-heading-anchor" href="#Development-(Fast-Startup)">Development (Fast Startup)</a><a id="Development-(Fast-Startup)-1"></a><a class="docs-heading-anchor-permalink" href="#Development-(Fast-Startup)" title="Permalink"></a></h3><pre><code class="language-toml hljs">[transforms-fftw]
 PLANNING_RIGOR = &quot;FFTW_ESTIMATE&quot;  # Fast planning
 
 [logging]
@@ -219,11 +220,13 @@ ENABLE_PROFILING = true
 
 [logging]
 LEVEL = &quot;INFO&quot;
-FILE = &quot;benchmark.log&quot;</code></pre><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><p>Check your configuration:</p><pre><code class="language-julia hljs">using Tarang.Config
+FILE = &quot;benchmark.log&quot;</code></pre><h2 id="Validation"><a class="docs-heading-anchor" href="#Validation">Validation</a><a id="Validation-1"></a><a class="docs-heading-anchor-permalink" href="#Validation" title="Permalink"></a></h2><p>Check your configuration:</p><pre><code class="language-julia hljs">using Tarang
 
-# Load and validate configuration
-config = load_config(&quot;tarang.toml&quot;)
-validate_config(config)
+# Load into the process-wide configuration. The function returns false when the
+# file is absent and leaves the existing/default configuration intact.
+loaded = Tarang.load_config!(&quot;tarang.toml&quot;)
+loaded || @info &quot;tarang.toml not found; validating defaults&quot;
+Tarang.validate_config(Tarang.config.data)
 
 # Print current configuration
-print_config(config)</code></pre><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><a href="../parallelism/">Parallelism Guide</a>: Detailed MPI configuration</li><li><a href="../optimization/">Optimization</a>: Performance tuning</li><li><a href="../../tutorials/analysis_and_output/">Analysis and Output</a>: Output configuration</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../getting_started/running_with_mpi/">« Running with MPI</a><a class="docs-footer-nextpage" href="../../tutorials/overview/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Sunday 23 August 2026 22:42">Sunday 23 August 2026</span>. Using Julia version 1.10.12.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+Tarang.print_config()</code></pre><h2 id="Next-Steps"><a class="docs-heading-anchor" href="#Next-Steps">Next Steps</a><a id="Next-Steps-1"></a><a class="docs-heading-anchor-permalink" href="#Next-Steps" title="Permalink"></a></h2><ul><li><a href="../parallelism/">Parallelism Guide</a>: Detailed MPI configuration</li><li><a href="../optimization/">Optimization</a>: Performance tuning</li><li><a href="../../tutorials/analysis_and_output/">Analysis and Output</a>: Output configuration</li></ul></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../../getting_started/running_with_mpi/">« Running with MPI</a><a class="docs-footer-nextpage" href="../../tutorials/overview/">Overview »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Thursday 27 August 2026 18:51">Thursday 27 August 2026</span>. Using Julia version 1.10.12.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
