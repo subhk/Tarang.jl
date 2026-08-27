@@ -18,7 +18,18 @@
 - **Never add a bare `catch`.** `test_catch_ratchet.jl` pins the population; a new silent catch fails the suite.
 - **MPI collectives must be rank-uniform.** Any cache lookup that can trigger a collective must key on data every rank agrees on, and must not be guarded by rank-local state.
 - Register every new test file in `test/file_lists.jl` or `test_test_inventory.jl` fails.
-- Do not commit unless explicitly asked. Steps below stage changes and stop.
+- **Amended cadence (contention ruling, 2026-08-27):** another agent (Codex) is
+  working in the main checkout on the same machine. Per-task verification runs
+  ONLY the test files that task touches. The full `run_mpi_ci.jl` at np=2 AND
+  np=4 runs at the two phase boundaries: after Task 8 and after Task 13. Where a
+  task below says "run the full suites", run its targeted files instead unless it
+  is Task 8 or Task 13.
+- **Heavy-run lock:** before any `Pkg.test()` or `run_mpi_ci.jl`, wait for
+  `/tmp/tarang-heavy-run.lock` to be absent, create it, and remove it afterwards:
+  `while [ -e /tmp/tarang-heavy-run.lock ]; do sleep 20; done; touch /tmp/tarang-heavy-run.lock; <run>; rm -f /tmp/tarang-heavy-run.lock`
+- Work happens in the worktree `.worktrees/parallel-decomp-consistency` on branch
+  `sdd/parallel-decomposition-consistency`. Commit each task there. Never touch
+  the main checkout — another agent is editing it.
 
 ### Local commands
 
@@ -504,6 +515,25 @@ Leave everything from `n_procs = dist.mesh[mesh_axis]` onward untouched — the
 remainder handling (PencilArrays' real range when available, remainder-on-first
 otherwise) is not part of this refactor.
 
+Then update this function's DOCSTRING (lines 75-77), which restates the rule:
+
+```
+    Note: Respects dist.use_pencil_arrays:
+    - PencilArrays convention: decompose LAST ndims_mesh dimensions
+    - TransposableField convention: decompose FIRST ndims_mesh dimensions
+```
+
+becomes:
+
+```
+    Note: which axes are decomposed comes from `decomposed_axes` — see its
+    docstring for both conventions.
+```
+
+Leaving the old wording in place would fail Task 7's ratchet, which scans for the
+convention restated outside `decomposed_axes` and does not care whether the
+restatement is code or prose.
+
 - [ ] **Step 4: Run the full MPI suite at both rank counts**
 
 ```bash
@@ -629,6 +659,16 @@ In `src/core/field/field_data/field_data_copy_alloc.jl`, replace the
 The `coords` vector computed above this block is unchanged and still indexes by
 mesh dimension, which is what `mesh_idx` now is.
 
+Then update this function's DOCSTRING (lines 270-278), which restates both
+conventions in prose. Replace the two `- ... convention: decompose LAST/FIRST
+ndims_mesh dimensions` bullets with:
+
+```
+    - Which axes are decomposed comes from `decomposed_axes`; see its docstring.
+```
+
+Task 7's ratchet scans prose as well as code, so a surviving comment fails it.
+
 - [ ] **Step 5: Rewrite `compute_local_shape`**
 
 In `src/core/distributor/distributor_core.jl`, in `compute_local_shape(dist, global_shape)`,
@@ -679,6 +719,7 @@ git add src/core/distributor/distributor_core.jl \
 **Files:**
 - Modify: `src/core/operators/derivatives/derivatives_fourier.jl:30-46`
 - Modify: `src/core/field/field_layout/field_layout_filters_shapes.jl:265-295`
+- Modify: `src/core/nonlinear/nonlinear_pencil_utils.jl:100-136` (`is_shape_compatible`)
 
 **Interfaces:**
 - Consumes: `is_decomposed_axis`, `decomposed_axes` from Task 2.
@@ -712,24 +753,67 @@ In `src/core/field/field_layout/field_layout_filters_shapes.jl`, replace the
 `get_local_range` already resolves the convention internally (Task 3), so this
 site no longer needs to know it — it only needs the list of axes to ask about.
 
-- [ ] **Step 3: Run the suites**
+- [ ] **Step 3: Rewrite `is_shape_compatible`**
 
-```bash
-$JULIA --project=. test/run_mpi_ci.jl 4
-$JULIA --project=. -e 'using Pkg; Pkg.test()'
+This is the TENTH site — found by the pre-flight scan, not in the original
+inventory. It derives the convention TWICE inside one function (once for
+`is_decomposed`, once again for `mesh_idx`), and it takes `use_pencil_arrays`
+and `mesh` as loose arguments rather than a `Distributor`. `decomposed_axes`
+takes an untyped `dist` precisely so a lightweight stand-in works here.
+
+In `src/core/nonlinear/nonlinear_pencil_utils.jl`, replace the whole
+`for i in 1:num_dims` loop body's convention logic — from
+`# Determine if this dimension is decomposed based on convention` through the
+second `mesh_idx = if use_pencil_arrays ... end` block — with:
+
+```julia
+    # decomposed_axes takes an untyped `dist` so a stand-in with just these
+    # three fields drives it; this function is handed loose arguments, not a
+    # Distributor.
+    dist_view = (; size = MPI.Comm_size(comm), mesh = mesh,
+                 use_pencil_arrays = use_pencil_arrays)
+    decomp = decomposed_axes(dist_view, num_dims)
+
+    for i in 1:num_dims
+        mesh_idx = findfirst(==(i), decomp)
+
+        if mesh_idx !== nothing
+            expected_local = ceil(Int, global_shape[i] / mesh[mesh_idx])
 ```
 
-Expected: `54 passed, 0 failed`; `Testing Tarang tests passed`.
+and keep the rest of the loop (`min_local`, the range check, the `else` branch
+requiring `local_shape[i] == global_shape[i]`) exactly as it is.
+
+The old code additionally required `mesh[mesh_idx] > 1` before treating an axis
+as decomposed. Dropping that filter is behavior-preserving: when
+`mesh[mesh_idx] == 1`, `min_local == expected_local == global_shape[i]`, so the
+decomposed branch demands `local_shape[i] == global_shape[i]` — exactly what the
+`else` branch demanded. Do not add the filter back.
+
+- [ ] **Step 4: Run the targeted tests**
+
+```bash
+$JULIA --project=. -e 'using Test, Tarang; include("test/test_nonlinear.jl")'
+$MPIEXEC -n 4 $JULIA --project=. test/test_mpi_distributor.jl
+$MPIEXEC -n 4 $JULIA --project=. test/test_mpi_collective_budget.jl
+$MPIEXEC -n 4 $JULIA --project=. test/test_mpi_lazy_rhs_fourier.jl
+$MPIEXEC -n 4 $JULIA --project=. test/test_mpi_spectral_filter.jl
+```
+
+`test_nonlinear.jl:227` and `test_mpi_distributor.jl:478` pin
+`is_shape_compatible` directly; the other three cover the derivative guard and
+the layout filter. All must pass.
 
 The derivative guard is exercised by `test_mpi_collective_budget.jl` and
 `test_mpi_lazy_rhs_fourier.jl`; the layout filter by `test_mpi_spectral_filter.jl`.
-Confirm those three appear as `✓` in the MPI output.
 
-- [ ] **Step 4: Stage**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/core/operators/derivatives/derivatives_fourier.jl \
-        src/core/field/field_layout/field_layout_filters_shapes.jl
+        src/core/field/field_layout/field_layout_filters_shapes.jl \
+        src/core/nonlinear/nonlinear_pencil_utils.jl
+git commit -m "refactor: derive decomposed axes from decomposed_axes in three more sites"
 ```
 
 ---
