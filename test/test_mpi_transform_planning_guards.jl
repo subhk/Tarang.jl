@@ -75,3 +75,24 @@ end
     @test err isa ErrorException                                       # T3
     @test occursin("ChebyshevU", sprint(showerror, err))
 end
+
+if nprocs == 4
+    @testset "2D mesh on a 2D domain refuses with the real reason" begin
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(2, 2),
+                           dtype=Float64, architecture=CPU())
+        bases = (RealFourier(coords["x"]; size=16, bounds=(0.0, 2π)),
+                 RealFourier(coords["y"]; size=12, bounds=(0.0, 2π)))
+        err = try
+            ScalarField(dist, "no_local_axis", bases)
+            forward_transform!(ScalarField(dist, "no_local_axis2", bases))
+            nothing
+        catch e
+            e
+        end
+        @test err !== nothing
+        msg = sprint(showerror, err)
+        @test occursin("at least one local", msg) || occursin("no local axis", msg)
+        @test !occursin("PencilFFTs installation", msg)
+    end
+end

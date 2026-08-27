@@ -196,3 +196,11 @@ end
     # hand when lowering RATCHET, enforced here by the assertion itself.
     @test found == known
 end
+
+@testset "a mesh that leaves no local axis is refused by name" begin
+    # PencilFFTs needs at least one local axis; an N-D domain therefore supports
+    # at most (N-1)-D decomposition. Refusing with "check your PencilFFTs
+    # installation" sent users to debug their environment for a domain shape
+    # that can never work.
+    @test Tarang.decomposed_axes(FakeDist(4, (2, 2), true), 2) == (1, 2)
+end

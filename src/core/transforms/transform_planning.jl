@@ -331,6 +331,23 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     # guidance instead of PencilFFTs' cryptic "decomposed dimensions must be (k,)"
     # ArgumentError (mis-reported as a "PencilFFTs installation" problem). The
     # verified-correct MPI layout places the Chebyshev axis BEFORE the Fourier axes.
+
+    # PencilFFTs transforms along a LOCAL axis and transposes between stages, so
+    # at least one axis must stay local: an N-D domain supports at most (N-1)-D
+    # decomposition. A mesh that covers every axis cannot be planned at all, and
+    # the failure used to surface as a generic "PencilFFT plan creation failed …
+    # check your PencilFFTs installation" from inside solver construction.
+    decomp_axes = decomposed_axes(dist, ndims_total)
+    if length(decomp_axes) >= ndims_total
+        throw(ArgumentError(
+            "A $(ndims_total)-D domain needs at least one local axis, but mesh=" *
+            "$(dist.mesh) decomposes all $(ndims_total) of them. PencilFFTs " *
+            "transforms along a local axis and transposes between stages, so an " *
+            "N-D domain supports at most (N-1)-D process decomposition. Use a 1-D " *
+            "mesh — mesh=($(dist.size),) — for a $(ndims_total)-D domain, or add a " *
+            "dimension to the domain."))
+    end
+
     trailing = collect((ndims_total - mesh_dim + 1):ndims_total)
     nonfourier_trailing = [d for d in trailing if !(d in fourier_axes)]
     if !isempty(nonfourier_trailing)
