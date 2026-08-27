@@ -269,7 +269,10 @@ end
             result = run_bounded_command(
                 command;
                 run_directory=directory,
-                timeout_seconds=1,
+                # The x64 Julia job on arm64 macOS can take more than a second
+                # to spawn /bin/sh under translation. This regression needs the
+                # descendant to exist before the timeout cleanup is exercised.
+                timeout_seconds=10,
             )
             @test result.timed_out
             @test isfile(ready_path)
