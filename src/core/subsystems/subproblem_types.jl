@@ -284,6 +284,10 @@ function subproblem_field_size(sp::Subproblem, field::ScalarField)
 
     bases = field.bases
     group = sp.group
+    coefficient_sizes = field.domain === nothing ?
+                        ntuple(i -> bases[i] === nothing ? 1 : bases[i].meta.size,
+                               length(bases)) :
+                        coefficient_shape(field.domain, field.dtype)
     # 0-D tau fields (no bases) contribute 1 DOF.
     dofs = 1
     if !isempty(bases)
@@ -292,7 +296,7 @@ function subproblem_field_size(sp::Subproblem, field::ScalarField)
             if i <= length(group) && group[i] isa Int
                 dofs *= 1                                  # separable Fourier mode ⇒ 1 DOF
             else
-                dofs *= _basis_coeff_size(basis)           # coupled axis ⇒ full coeff size
+                dofs *= coefficient_sizes[i]               # coupled axis ⇒ full coeff size
             end
         end
     end

@@ -246,6 +246,23 @@ here stores a wrong-length or wrong-typed array instead of raising.
 end
 
 """
+    backward_axis_op(basis, in_len, grid_len, in_complex, uses_rfft) -> AxisOp
+
+Canonical inverse classification when the forward plan is known.  A
+`RealFourier` basis does not by itself imply an RFFT: complex-valued fields and
+later Fourier stages use a full C2C transform.  That distinction cannot be
+recovered from array shape for one- and two-point axes because
+`rfft_len(grid_len) == grid_len` there.
+"""
+@inline function backward_axis_op(basis, in_len::Int, grid_len::Int,
+                                  in_complex::Bool, uses_rfft::Bool)
+    if isa(basis, RealFourier) && !uses_rfft
+        return AxisOp(:ifft, in_len, true)
+    end
+    return backward_axis_op(basis, in_len, grid_len, in_complex)
+end
+
+"""
     scaled_chebyshev_axis(bases, grid_shape) -> Union{Nothing, Tuple{Int,Int,Int}}
 
 First Chebyshev axis whose grid length differs from its basis size, as

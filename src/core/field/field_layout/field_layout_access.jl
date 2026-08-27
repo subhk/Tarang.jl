@@ -317,113 +317,32 @@ function towards_coeff_space!(field::ScalarField)
 end
 
 """
-    Forward transform field using PencilFFTs for parallel transforms.
+    forward_transform_axis!(field)
 
-    CORRECT PencilFFTs usage pattern:
-    1. Input/output are PencilArray objects (NOT plain arrays)
-    2. PencilFFT automatically handles:
-       - Required transpose operations between decompositions
-       - Multi-dimensional FFT across decomposed axes
-       - Scaling and normalization
-    3. For 2D: Enables BOTH vertical and horizontal parallelization
+Move `field` to coefficient space using its canonical full-field transform.
 
-    Following distributor pattern in distributor:636-649
-    """
+Tarang tracks only a two-state field layout (`:g` or `:c`), not a separate
+layout for each axis.  This function is therefore a compatibility wrapper for
+`forward_transform!`; keeping a second PencilFFT execution path here would
+bypass the canonical mixed-basis and real-to-complex handling.
+"""
 function forward_transform_axis!(field::ScalarField)
     if field.domain === nothing || field.bases === ()
         return
     end
-
-    # Use PencilFFTs-based transforms from the distributor's transform plans
-    pencil_plan = _find_pencil_plan(field.dist)
-    if pencil_plan !== nothing
-        # CORRECT: Apply PencilFFT to PencilArray objects
-        # PencilFFT handles transposes internally
-
-        if field.dist.use_pencil_arrays && isa(get_grid_data(field), PencilArrays.PencilArray)
-            # Apply forward transform: grid space (physical) → coefficient space (spectral)
-            # Note: mul! is the in-place version
-            # Result goes into data_c pencil
-            if get_coeff_data(field) === nothing || !isa(get_coeff_data(field), PencilArrays.PencilArray)
-                # CRITICAL: Use PencilFFTs.allocate_output for compatible coeff-space array
-                set_coeff_data!(field, PencilFFTs.allocate_output(pencil_plan))
-            end
-
-            # Apply PencilFFT: transforms AND transposes as needed
-            mul!(get_coeff_data(field), pencil_plan, get_grid_data(field))
-
-            @debug "Applied PencilFFT forward transform" typeof(pencil_plan) size(get_grid_data(field))
-            field.current_layout = :c
-            return  # Successfully applied transform
-        else
-            # CRITICAL: PencilFFT found but cannot be applied - this indicates a configuration error
-            if field.dist.size > 1
-                error("PencilFFT transform found but field data is not a PencilArray. " *
-                      "In MPI mode, field data must be stored as PencilArrays for correct parallel transforms. " *
-                      "use_pencil_arrays=$(field.dist.use_pencil_arrays), " *
-                      "grid_data type=$(typeof(get_grid_data(field)))")
-            else
-                # Serial mode: fall through to standard transform
-                @debug "PencilFFT found but using serial transform (serial execution)"
-            end
-        end
-    end
-
-    # No PencilFFT or serial mode: use standard transform
     forward_transform!(field)
 end
 
 """
-    Backward transform field using PencilFFTs for parallel transforms.
+    backward_transform_axis!(field)
 
-    CORRECT PencilFFTs usage pattern:
-    1. Inverse FFT: coefficient space (spectral) → grid space (physical)
-    2. Uses ldiv! (\\) for backward transform
-    3. Maintains PencilArray objects throughout
-
-    Following distributor pattern in distributor:621-634
-    """
+Move `field` to grid space using its canonical full-field transform.  See
+[`forward_transform_axis!`](@ref) for why this is intentionally a wrapper.
+"""
 function backward_transform_axis!(field::ScalarField)
     if field.domain === nothing || field.bases === ()
         return
     end
-
-    # Use PencilFFTs-based transforms from the distributor's transform plans
-    pencil_plan = _find_pencil_plan(field.dist)
-    if pencil_plan !== nothing
-        # CORRECT: Apply inverse PencilFFT to PencilArray objects
-
-        if field.dist.use_pencil_arrays && isa(get_coeff_data(field), PencilArrays.PencilArray)
-            # Apply backward transform: coefficient space → grid space
-            if get_grid_data(field) === nothing || !isa(get_grid_data(field), PencilArrays.PencilArray)
-                # CRITICAL: Use PencilFFTs.allocate_input for compatible grid-space array
-                # allocate_input creates the input array for forward transform,
-                # which is the output of backward transform
-                set_grid_data!(field, PencilFFTs.allocate_input(pencil_plan))
-            end
-
-            # Apply inverse PencilFFT: transforms AND transposes as needed
-            # ldiv! is in-place inverse (like \ but in-place)
-            ldiv!(get_grid_data(field), pencil_plan, get_coeff_data(field))
-
-            @debug "Applied PencilFFT backward transform" typeof(pencil_plan) size(get_coeff_data(field))
-            field.current_layout = :g
-            return  # Successfully applied transform
-        else
-            # CRITICAL: PencilFFT found but cannot be applied - this indicates a configuration error
-            if field.dist.size > 1
-                error("PencilFFT transform found but field data is not a PencilArray. " *
-                      "In MPI mode, field data must be stored as PencilArrays for correct parallel transforms. " *
-                      "use_pencil_arrays=$(field.dist.use_pencil_arrays), " *
-                      "coeff_data type=$(typeof(get_coeff_data(field)))")
-            else
-                # Serial mode: fall through to standard transform
-                @debug "PencilFFT found but using serial transform (serial execution)"
-            end
-        end
-    end
-
-    # No PencilFFT or serial mode: use standard transform
     backward_transform!(field)
 end
 
@@ -451,6 +370,20 @@ end
 
 """Transform vector field from coefficient to grid space."""
 function backward_transform!(field::VectorField)
+    for component in field.components
+        backward_transform!(component)
+    end
+end
+
+"""Transform tensor field components from grid to coefficient space."""
+function forward_transform!(field::TensorField)
+    for component in field.components
+        forward_transform!(component)
+    end
+end
+
+"""Transform tensor field components from coefficient to grid space."""
+function backward_transform!(field::TensorField)
     for component in field.components
         backward_transform!(component)
     end

@@ -79,7 +79,10 @@ Any other symbol raises an `ArgumentError`.
   non-diagonal IMEX scheme (`RK222`, `SBDF2`, …) for variable coefficients.
 - `order::Int=1`: Power of Laplacian (1 for ∇², 2 for ∇⁴, 4 for ∇⁸)
 - `coefficients::AbstractArray`: Custom diagonal coefficients (required for `:custom`)
-- `dtype::Type=Float64`: Element type
+- `dtype::Type=Float64`: Real element type of the operator coefficients
+- `field_dtype::Type=dist.dtype`: Element type whose transform layout the
+  operator must match. This normally follows the distributor; field-based
+  construction supplies the field's exact dtype.
 
 # Example
 ```julia
@@ -100,7 +103,8 @@ function SpectralLinearOperator(
     ν::Real=1.0,
     order::Int=1,
     coefficients::Union{Nothing, AbstractArray}=nothing,
-    dtype::Type{T}=Float64
+    dtype::Type{T}=Float64,
+    field_dtype::Type=dist.dtype
 ) where {T<:AbstractFloat}
 
     # Reject an unrecognised operator_type up front. Falling through used to yield
@@ -126,27 +130,25 @@ function SpectralLinearOperator(
     # the rfft layout: using the basis *grid* size here was the bug that made
     # L.coefficients (e.g. 16) mismatch the field's coeff array (e.g. 9) and
     # throw DimensionMismatch in the diagonal IMEX step.
-    coeff_shape = local_shape(get_or_build_domain(dist, bases), :c)
+    domain = get_or_build_domain(dist, bases)
+    bundle = transform_plan_bundle(domain, field_dtype)
+    global_coeff_shape = get_coefficient_shape_for_context(domain, dist, field_dtype)
+    local_ranges = coefficient_local_ranges(domain, field_dtype)
+    coeff_shape = Tuple(length.(local_ranges))
 
     # Per-axis 1-based range of GLOBAL coefficient modes this rank owns. Under MPI a
     # decomposed Fourier axis is a sub-slab, so the operator must use THIS rank's
     # wavenumbers (sliced by the global offset), not the first `local_len` global modes
     # — otherwise rank>0 gets the wrong per-mode decay rate. Serial ⇒ full range
     # (identical to the old behaviour). Mirrors the slicing in step_diagonal_imex.jl.
-    local_ranges = ntuple(N) do d
-        basis = bases[d]
-        gsize = basis isa RealFourier ? (basis.meta.size ÷ 2 + 1) :
-                (basis isa ComplexFourier ? basis.meta.size : coeff_shape[d])
-        (dist.size > 1 && coeff_shape[d] != gsize) ? local_indices(dist, d, gsize) :
-                                                     (1:coeff_shape[d])
-    end
-
     if operator_type == :custom && coefficients !== nothing
         # Use provided coefficients
         L_coeffs = on_architecture(arch, T.(coefficients))
     else
         # Build wavenumber-based operator on CPU first
-        L_coeffs_cpu = _build_spectral_operator(bases, coeff_shape, operator_type, ν, order, T, local_ranges)
+        L_coeffs_cpu = _build_spectral_operator(
+            bases, coeff_shape, operator_type, ν, order, T, local_ranges,
+            global_coeff_shape, Tuple(bundle.forward_ops))
         # Move to target architecture
         L_coeffs = on_architecture(arch, L_coeffs_cpu)
     end
@@ -170,9 +172,12 @@ L = SpectralLinearOperator(q, :hyperviscosity; ν=1e-10, order=4)
 function SpectralLinearOperator(
     field::ScalarField,
     operator_type::Symbol;
+    dtype::Type{T}=typeof(real(zero(field.dtype))),
     kwargs...
-)
-    SpectralLinearOperator(field.dist, field.bases, operator_type; kwargs...)
+) where {T<:AbstractFloat}
+    SpectralLinearOperator(
+        field.dist, field.bases, operator_type;
+        dtype=dtype, field_dtype=field.dtype, kwargs...)
 end
 
 """
@@ -185,7 +190,9 @@ function _build_spectral_operator(
     ν::Real,
     order::Int,
     dtype::Type{T},
-    local_ranges::Tuple = ntuple(d -> 1:coeff_shape[d], length(bases))
+    local_ranges::Tuple = ntuple(d -> 1:coeff_shape[d], length(bases)),
+    global_coeff_shape::Tuple = coeff_shape,
+    forward_ops::Tuple = ()
 ) where {T}
 
     N = length(bases)
@@ -204,8 +211,15 @@ function _build_spectral_operator(
         # decomposed axis not even the same on every rank.
         Nb = basis.meta.size
         if basis isa RealFourier
-            full = coeff_shape[d] == (Nb ÷ 2 + 1) ? T.(wavenumbers_rfft(basis)) :
-                                                    T.(wavenumbers_fft(basis))
+            uses_rfft = !isempty(forward_ops) ? forward_ops[d].op === :rfft :
+                        global_coeff_shape[d] == rfft_len(Nb)
+            expected_global = uses_rfft ? rfft_len(Nb) : Nb
+            operation_name = uses_rfft ? "RFFT" : "FFT"
+            global_coeff_shape[d] == expected_global || throw(DimensionMismatch(
+                "coefficient axis $d has global length $(global_coeff_shape[d]); " *
+                "the selected $operation_name operation requires $expected_global"))
+            full = uses_rfft ? T.(wavenumbers_rfft(basis)) :
+                               T.(wavenumbers_fft(basis))
             full[local_ranges[d]]                       # this rank's owned global modes
         elseif basis isa ComplexFourier
             T.(wavenumbers(basis))[local_ranges[d]]

@@ -70,6 +70,13 @@ _counts_from_chunks(chunks, total, split_extent) =
 
         backend = KernelAbstractions.CPU()
 
+        @testset "Validated chunk sizes" begin
+            @test ext._validated_chunk_size(0, 0, 2, 1, "pack") == 0
+            @test ext._validated_chunk_size(6, 2, 2, 1, "pack") == 3
+            @test_throws ArgumentError ext._validated_chunk_size(1, 0, 2, 1, "pack")
+            @test_throws ArgumentError ext._validated_chunk_size(5, 2, 2, 1, "pack")
+        end
+
         @testset "3D pack matches rank-contiguous layout (dim=$dim)" for dim in 1:3
             Nx, Ny, Nz = 4, 6, 8
             data = reshape(collect(1.0:(Nx * Ny * Nz)), Nx, Ny, Nz)
@@ -155,6 +162,54 @@ _counts_from_chunks(chunks, total, split_extent) =
             # They were exported, flat-copied, and were correct only at nranks==1.
             @test !isdefined(ext, :nccl_pack_for_transpose!)
             @test !isdefined(ext, :nccl_unpack_from_transpose!)
+        end
+
+        if CUDA.functional()
+            @testset "Empty CUDA partitions are no-ops" begin
+                for (shape, dim) in (((0, 7), 2), ((7, 0), 1))
+                    data = CUDA.zeros(Float64, shape...)
+                    buffer = CUDA.zeros(Float64, 0)
+                    counts = [0, 0]
+                    displs = [0, 0]
+
+                    @test ext.gpu_pack_for_transpose!(
+                        buffer, data, counts, displs, dim, 2) === buffer
+                    @test ext.gpu_unpack_from_transpose!(
+                        data, buffer, counts, displs, dim, 2) === data
+                end
+            end
+
+            devices = collect(CUDA.devices())
+            if length(devices) >= 2
+                @testset "CUDA device is restored after launcher errors" begin
+                    previous = CUDA.device()
+                    other = first(device for device in devices if device != previous)
+                    CUDA.device!(other)
+                    data = CUDA.ones(Float64, 2, 2)
+                    buffer = CUDA.zeros(Float64, 4)
+                    CUDA.device!(previous)
+
+                    try
+                        @test_throws ArgumentError ext.gpu_pack_for_transpose!(
+                            buffer, data, [1], [0], 2, 1)
+                        @test CUDA.device() == previous
+                    finally
+                        CUDA.device!(previous)
+                    end
+
+                    try
+                        @test_throws ArgumentError ext.gpu_unpack_from_transpose!(
+                            data, buffer, [1], [0], 2, 1)
+                        @test CUDA.device() == previous
+                    finally
+                        CUDA.device!(previous)
+                    end
+                end
+            else
+                @test_skip "CUDA device-restoration test requires at least two devices"
+            end
+        else
+            @test_skip "CUDA hardware unavailable; launcher tests require a functional device"
         end
     end
 end

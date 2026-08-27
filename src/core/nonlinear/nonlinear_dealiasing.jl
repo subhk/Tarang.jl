@@ -28,6 +28,7 @@ Apply 3D dealiasing.
 GPU-compatible: uses appropriate implementation based on field's architecture.
 """
 function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
+    isempty(field.bases) && return field
     nb = length(field.bases)
     # Compute cutoffs: keep modes with |k| <= N/(2*dealiasing_factor)
     # Skip if grid too small for meaningful dealiasing (a dealiased Fourier axis
@@ -48,17 +49,17 @@ function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
 
     if isa(coeff_data, PencilArrays.PencilArray)
         # MPI-distributed: use per-rank global wavenumbers (local-index cutoff is wrong here)
-        _apply_spectral_cutoff_distributed!(coeff_data, field.bases, dealiasing_factor)
+        _apply_spectral_cutoff_distributed!(
+            coeff_data, field.bases, dealiasing_factor, field.dtype)
     else
         cutoffs = ntuple(nb) do i
             c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
             c === nothing ? size(coeff_data, i) : c
         end
 
-        rfft_dims = ntuple(nb) do i
-            basis = field.bases[i]
-            isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
-        end
+        bundle = _field_transform_bundle(field)
+        rfft_dims = ntuple(i -> isa(field.bases[i], RealFourier) &&
+                                _axis_uses_rfft(bundle, i), nb)
 
         # Apply spectral cutoff - this function handles GPU arrays automatically
         apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
@@ -85,6 +86,7 @@ high modes but cannot undo aliasing contamination of low modes. For exact
 dealiasing, use the padding approach (pad to 3N/2, multiply, truncate).
 """
 function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
+    isempty(field.bases) && return field
     nb = length(field.bases)
     # Compute cutoff wavenumbers for each Fourier basis dimension.
     # For the 2/3 rule (dealiasing_factor=1.5): keep modes with |k| <= N/3.
@@ -105,7 +107,8 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
 
     if isa(coeff_data, PencilArrays.PencilArray)
         # MPI-distributed: use per-rank global wavenumbers (local-index cutoff is wrong here)
-        _apply_spectral_cutoff_distributed!(coeff_data, field.bases, dealiasing_factor)
+        _apply_spectral_cutoff_distributed!(
+            coeff_data, field.bases, dealiasing_factor, field.dtype)
     else
         # Recompute cutoffs using actual coeff array sizes for non-Fourier bases
         cutoffs = ntuple(nb) do i
@@ -113,10 +116,9 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
             c === nothing ? size(coeff_data, i) : c
         end
 
-        rfft_dims = ntuple(nb) do i
-            basis = field.bases[i]
-            isa(basis, RealFourier) && size(coeff_data, i) == div(basis.meta.size, 2) + 1
-        end
+        bundle = _field_transform_bundle(field)
+        rfft_dims = ntuple(i -> isa(field.bases[i], RealFourier) &&
+                                _axis_uses_rfft(bundle, i), nb)
 
         # Apply spectral cutoff - this function handles GPU arrays automatically
         apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
@@ -291,7 +293,8 @@ Modes with |mode| > floor(N / (2·dealiasing_factor)) are zeroed on each Fourier
 Mirrors the per-rank wavenumber handling in `_apply_spectral_derivative_distributed!`.
 """
 function _apply_spectral_cutoff_distributed!(coeff_data::PencilArrays.PencilArray,
-                                             bases, dealiasing_factor::Float64)
+                                             bases, dealiasing_factor::Float64,
+                                             dtype::Type=Float64)
     local_data = parent(coeff_data)
     pencil = PencilArrays.pencil(coeff_data)
     local_axes = pencil.axes_local
@@ -310,7 +313,8 @@ function _apply_spectral_cutoff_distributed!(coeff_data::PencilArrays.PencilArra
         cutoff === nothing && continue   # factor ≤ 1 → no truncation on this axis
 
         # Global integer mode numbers matching the coefficient layout on this axis.
-        if isa(basis, RealFourier) && _is_first_real_fourier_axis(bases, axis)
+        if isa(basis, RealFourier) &&
+           _is_first_real_fourier_axis(bases, axis, dtype)
             modes_global = collect(0:div(N, 2))                 # RFFT: 0 … N/2
         else
             modes_global = round.(Int, _fftfreq(N) .* N)        # FFT: 0…N/2-1, -N/2…-1

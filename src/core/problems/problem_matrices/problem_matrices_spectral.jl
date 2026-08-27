@@ -93,18 +93,8 @@ Coefficient-space array shape, matching the actual state vector layout.
 First RealFourier dimension is halved (rFFT); Chebyshev/Legendre keep N.
 """
 function _coeff_shape(field::ScalarField)
-    shape = Int[]
-    first_rf = true
-    for basis in field.bases
-        basis === nothing && continue
-        if isa(basis, RealFourier) && first_rf
-            push!(shape, div(basis.meta.size, 2) + 1)
-            first_rf = false
-        else
-            push!(shape, basis.meta.size)
-        end
-    end
-    return tuple(shape...)
+    field.domain === nothing && return ()
+    return coefficient_shape(field.domain, field.dtype)
 end
 
 """
@@ -128,20 +118,11 @@ function _spectral_laplacian(field::ScalarField, eqn_size::Int, var_size::Int)
 
         if isa(basis, FourierBasis)
             # Fourier: diagonal with -k²
-            N = basis.meta.size
-            L = basis.meta.bounds[2] - basis.meta.bounds[1]
-            k0 = 2π / L
-            is_rfft = isa(basis, RealFourier) && dim == findfirst(b -> isa(b, RealFourier), field.bases)
-
-            vals = zeros(ComplexF64, Nk)
-            for j in 1:Nk
-                if is_rfft
-                    k = (j - 1) * k0
-                else
-                    k = j <= N÷2+1 ? (j-1)*k0 : (j-N-1)*k0
-                end
-                vals[j] = -k^2
-            end
+            is_rfft = isa(basis, RealFourier) &&
+                      _axis_uses_rfft(_field_transform_bundle(field), dim)
+            kvals = is_rfft ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
+            length(kvals) == Nk || return nothing
+            vals = ComplexF64.(-(kvals .^ 2))
             push!(ops_1d, spdiagm(0 => vals))
         else
             # Chebyshev/Legendre: dense D² matrix
@@ -294,16 +275,11 @@ function _spectral_differentiate(field::ScalarField, coord::Coordinate, order::I
     # Build 1D differentiation operator
     D1d = nothing
     if isa(basis, FourierBasis)
-        N = basis.meta.size
-        L = basis.meta.bounds[2] - basis.meta.bounds[1]
-        k0 = 2π / L
-        is_rfft = isa(basis, RealFourier) && dim_idx == findfirst(b -> isa(b, RealFourier), field.bases)
-
-        vals = zeros(ComplexF64, Nk)
-        for j in 1:Nk
-            k = is_rfft ? (j-1)*k0 : (j <= N÷2+1 ? (j-1)*k0 : (j-N-1)*k0)
-            vals[j] = (im * k)^order
-        end
+        is_rfft = isa(basis, RealFourier) &&
+                  _axis_uses_rfft(_field_transform_bundle(field), dim_idx)
+        kvals = is_rfft ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
+        length(kvals) == Nk || return nothing
+        vals = ComplexF64.((im .* kvals) .^ order)
         D1d = spdiagm(0 => vals)
     else
         # As above: a basis without a matrix for this order declines with MethodError

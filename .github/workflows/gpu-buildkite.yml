@@ -1,0 +1,113 @@
+# Manual GPU CI trigger.
+#
+# GPU tests cannot run on GitHub-hosted runners (no NVIDIA hardware), so they
+# live on the project's Buildkite GPU agents and are described by
+# .buildkite/pipeline.yml.
+#
+# Pushes to `main` reach those agents on their own, via the Buildkite GitHub App.
+# This workflow covers the other half of the policy: running the GPU suites on a
+# branch that is NOT main, on demand, without waiting for a merge. It creates an
+# `api`-source Buildkite build, which the `if:` guards in .buildkite/pipeline.yml
+# let through on any branch.
+#
+# SETUP (one-time, after the Buildkite pipeline exists):
+#   * Secret  BUILDKITE_API_TOKEN  — a Buildkite API access token with the
+#     `write_builds` scope, created at buildkite.com/user/api-access-tokens by a
+#     member of the Buildkite org that owns the pipeline. Add it under
+#     Settings > Secrets and variables > Actions > Secrets.
+#   * Variable BUILDKITE_ORG       — optional Buildkite org override. The default
+#     matches buildkite.com/subhajit-kar/tarang-dot-jl.
+#   * Variable BUILDKITE_PIPELINE  — optional pipeline-slug override. The default
+#     matches buildkite.com/subhajit-kar/tarang-dot-jl.
+#
+# Without the secret the workflow fails fast with an explanatory message rather
+# than reporting a green run that triggered nothing.
+
+name: GPU (Buildkite)
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Branch to build on the GPU agents"
+        required: true
+        default: main
+      message:
+        description: "Build message (optional)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  trigger:
+    name: Trigger Buildkite GPU build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Create Buildkite build
+        env:
+          BUILDKITE_API_TOKEN: ${{ secrets.BUILDKITE_API_TOKEN }}
+          BK_ORG: ${{ vars.BUILDKITE_ORG || 'subhajit-kar' }}
+          BK_PIPELINE: ${{ vars.BUILDKITE_PIPELINE || 'tarang-dot-jl' }}
+          BK_BRANCH: ${{ inputs.branch }}
+          BK_MESSAGE: ${{ inputs.message }}
+          ACTOR: ${{ github.actor }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${BUILDKITE_API_TOKEN}" ]; then
+            echo "::error::BUILDKITE_API_TOKEN is not set. See the SETUP block in this workflow file."
+            exit 1
+          fi
+
+          message="${BK_MESSAGE}"
+          if [ -z "${message}" ]; then
+            message="GPU CI on ${BK_BRANCH} (dispatched by @${ACTOR})"
+          fi
+
+          # ignore_pipeline_branch_filters: run even if the Buildkite pipeline's
+          # own branch filter excludes this branch — the in-repo `if:` guards in
+          # .buildkite/pipeline.yml are what actually gate the steps.
+          payload=$(jq -nc \
+            --arg branch "${BK_BRANCH}" \
+            --arg message "${message}" \
+            --arg actor "${ACTOR}" \
+            --arg run_url "${RUN_URL}" \
+            '{
+               commit: "HEAD",
+               branch: $branch,
+               message: $message,
+               ignore_pipeline_branch_filters: true,
+               author: {name: $actor, email: "\($actor)@users.noreply.github.com"},
+               env: {TARANG_DISPATCHED_FROM: $run_url}
+             }')
+
+          http_code=$(curl -sS -o response.json -w '%{http_code}' -X POST \
+            -H "Authorization: Bearer ${BUILDKITE_API_TOKEN}" \
+            -H "Content-Type: application/json" \
+            -d "${payload}" \
+            "https://api.buildkite.com/v2/organizations/${BK_ORG}/pipelines/${BK_PIPELINE}/builds")
+
+          if [ "${http_code}" != "201" ]; then
+            echo "::error::Buildkite API returned HTTP ${http_code} for ${BK_ORG}/${BK_PIPELINE}"
+            cat response.json
+            echo
+            echo "404 usually means the org or pipeline slug is wrong — check the pipeline URL"
+            echo "and set the BUILDKITE_ORG / BUILDKITE_PIPELINE repository variables."
+            echo "401/403 means the token lacks the write_builds scope for this org."
+            exit 1
+          fi
+
+          web_url=$(jq -r '.web_url' response.json)
+          number=$(jq -r '.number' response.json)
+          echo "Triggered Buildkite build #${number}: ${web_url}"
+          {
+            echo "### GPU build triggered"
+            echo
+            echo "- pipeline: \`${BK_ORG}/${BK_PIPELINE}\`"
+            echo "- branch: \`${BK_BRANCH}\`"
+            echo "- build: [#${number}](${web_url})"
+          } >> "${GITHUB_STEP_SUMMARY}"

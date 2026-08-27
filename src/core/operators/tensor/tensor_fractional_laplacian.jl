@@ -118,6 +118,8 @@ the squared wavenumber magnitude at each spectral coefficient location.
 function compute_wavenumber_squared_grid(field::ScalarField)
     bases = field.bases
     cd = get_coeff_data(field)
+    isempty(bases) && return similar_zeros(cd, Float64, size(cd)...)
+    bundle = _field_transform_bundle(field)
 
     # MPI-distributed (PencilArray): build |k|² on each rank's LOCAL coefficients
     # using its GLOBAL wavenumber indices (axes_local), in rfft/fft layout. The
@@ -132,7 +134,7 @@ function compute_wavenumber_squared_grid(field::ScalarField)
         perm_tuple = _perm_raw === nothing ? ntuple(identity, ndims(kp)) : _perm_raw
         for (axis, basis) in enumerate(bases)
             k_axis = if isa(basis, RealFourier)
-                _is_first_real_fourier_axis(bases, axis) ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
+                _axis_uses_rfft(bundle, axis) ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
             elseif isa(basis, ComplexFourier)
                 wavenumbers(basis)
             else
@@ -156,12 +158,7 @@ function compute_wavenumber_squared_grid(field::ScalarField)
     # Add contribution from each basis
     for (axis, basis) in enumerate(bases)
         if isa(basis, RealFourier)
-            # For RealFourier, check if we're in RFFT layout (N/2+1) or full FFT layout (N)
-            N = basis.meta.size
-            actual_size = data_shape[axis]
-            rfft_size = N ÷ 2 + 1
-
-            if actual_size == rfft_size
+            if _axis_uses_rfft(bundle, axis)
                 # RFFT layout: [k=0, k=1, ..., k=N/2]
                 k_axis_cpu = wavenumbers_rfft(basis)
             else

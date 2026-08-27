@@ -49,6 +49,13 @@ mutable struct Distributor
     closed::Bool  # true after owned MPI topology communicators are released
     pencil_cache::Dict{Tuple, PencilArrays.Pencil}  # Cache Pencil objects by (shape, decomp_dims)
     transforms::Vector{Any}
+
+    # Domain/type-owned transform plans.  The mutable `transforms`/`pencil_*`
+    # fields below are retained as a legacy view of the most recently activated
+    # bundle; transform execution resolves its bundle from the owning Domain and
+    # field dtype instead of consuming that shared view.
+    transform_plan_cache::Dict{Tuple, Any}
+
     pencil_fft_plan::Union{Nothing, PencilFFTs.PencilFFTPlan}  # Cached plan reference (avoids Vector{Any} scan)
 
     # PencilFFT plan pencils for field allocation (must match plan's expected input/output)
@@ -222,6 +229,7 @@ mutable struct Distributor
         mpi_topology = nothing
         pencil_cache = Dict{Tuple, PencilArrays.Pencil}()
         transforms = Any[]
+        transform_plan_cache = Dict{Tuple, Any}()
         pencil_fft_plan = nothing
         pencil_fft_input = nothing
         pencil_fft_output = nothing
@@ -268,6 +276,7 @@ mutable struct Distributor
 
         dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
             architecture, _use_pencil_arrays, pencil_config, mpi_topology, false, pencil_cache, transforms,
+            transform_plan_cache,
             pencil_fft_plan, pencil_fft_input, pencil_fft_output, pencil_solve, layouts, perf_stats,
             mesh_coords, neighbor_ranks, nothing, gpu_fft_plans, gpu_arrays, distributed_gpu_config,
             transpose_comms_cache, transpose_counts_cache, nothing)
@@ -298,12 +307,12 @@ longer needed. Repeated calls are safe.
 function Base.close(dist::Distributor)
     dist.closed && return nothing
     topology = dist.mpi_topology
-    topology === nothing && return nothing
 
-    # Drop every cached object which refers to the topology before invalidating
-    # its communicator handles. Distributor objects are terminal after close.
+    # Drop every cached plan even for serial/GPU distributors, which do not own
+    # an MPI topology. Distributor objects are terminal after close.
     empty!(dist.pencil_cache)
     empty!(dist.transforms)
+    empty!(dist.transform_plan_cache)
     empty!(dist.layouts)
     dist.pencil_config = nothing
     dist.pencil_fft_plan = nothing
@@ -313,7 +322,7 @@ function Base.close(dist::Distributor)
     dist.plan_basis_signature = nothing
     dist.nonlinear_evaluator = nothing
 
-    if MPI.Initialized() && !MPI.Finalized()
+    if topology !== nothing && MPI.Initialized() && !MPI.Finalized()
         # PencilArrays creates these communicators collectively. Free the
         # direction subcommunicators first, then their Cartesian parent.
         for subcomm in topology.subcomms
@@ -493,7 +502,8 @@ function initialize_mpi_topology!(dist::Distributor)
 end
 
 """Setup PencilArrays configuration for given global shape"""
-function setup_pencil_arrays(dist::Distributor, global_shape::Tuple{Vararg{Int}})
+function setup_pencil_arrays(dist::Distributor, global_shape::Tuple{Vararg{Int}};
+                             dtype::Type=dist.dtype)
 
     ndims_global = length(global_shape)
     ndims_mesh = length(dist.mesh)
@@ -515,7 +525,8 @@ function setup_pencil_arrays(dist::Distributor, global_shape::Tuple{Vararg{Int}}
         global_shape,
         dist.mesh,
         comm=dist.comm,
-        decomp_dims=decomp_flags
+        decomp_dims=decomp_flags,
+        dtype=dtype,
     )
 
     return dist.pencil_config

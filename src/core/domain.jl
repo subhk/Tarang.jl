@@ -173,8 +173,24 @@ function get_or_build_domain(dist::Distributor, bases::Tuple{Vararg{Basis}})
     end
 end
 
-"""Clear the cached Domains (thread-safe)."""
-clear_domain_cache!() = lock(() -> empty!(_DOMAIN_CACHE), _DOMAIN_CACHE_LOCK)
+"""Clear cached Domains and the transform bundles that keep them alive."""
+function clear_domain_cache!()
+    domains = lock(_DOMAIN_CACHE_LOCK) do
+        cached = collect(values(_DOMAIN_CACHE))
+        empty!(_DOMAIN_CACHE)
+        cached
+    end
+
+    # Removing only bundles owned by the evicted domains preserves manually
+    # constructed domains that happen to share the same Distributor.
+    for domain in domains
+        dist = domain.dist
+        for (key, bundle) in collect(dist.transform_plan_cache)
+            getfield(bundle, :domain) === domain && delete!(dist.transform_plan_cache, key)
+        end
+    end
+    return nothing
+end
 
 # Architecture helper functions for Domain
 """
@@ -422,13 +438,14 @@ function volume(domain::Domain)
 end
 
 """Get global shape for domain in specified layout"""
-function global_shape(domain::Domain, layout_name::Symbol=:g)
+function global_shape(domain::Domain, layout_name::Symbol=:g,
+                      dtype::Type=domain.dist.dtype)
     if layout_name == :g  # Grid layout
         nb = length(domain.bases); return ntuple(i -> domain.bases[i].meta.size, nb)
     elseif layout_name == :c  # Coefficient layout
         # Use context-aware shape: in MPI+PencilFFTs mode, only the first
         # RealFourier axis uses RFFT (N/2+1), others use FFT (full N).
-        return get_coefficient_shape_for_context(domain, domain.dist)
+        return get_coefficient_shape_for_context(domain, domain.dist, dtype)
     else
         throw(ArgumentError("Unknown layout: $layout_name"))
     end
@@ -534,20 +551,41 @@ function get_coefficient_shape_for_context(domain::Domain, dist::Distributor,
     end
 end
 
+"""Global coefficient ranges owned by this rank in logical axis order."""
+function coefficient_local_ranges(domain::Domain,
+                                  dtype::Type=domain.dist.dtype)
+    dist = domain.dist
+    cshape = get_coefficient_shape_for_context(domain, dist, dtype)
+
+    if dist.size > 1 && dist.use_pencil_arrays
+        bundle = transform_plan_bundle(domain, dtype)
+        pencil = bundle.pencil_fft_output
+        pencil === nothing && error(
+            "No PencilFFT output pencil exists for domain $(repr(domain.bases)) and dtype $dtype")
+        actual_global = Tuple(PencilArrays.size_global(pencil))
+        actual_global == cshape || throw(DimensionMismatch(
+            "PencilFFT output shape $actual_global does not match canonical coefficient shape $cshape"))
+        return Tuple(PencilArrays.range_local(pencil, PencilArrays.LogicalOrder()))
+    end
+
+    return ntuple(d -> local_indices(dist, d, cshape[d]), length(cshape))
+end
+
 """Get local shape for domain in specified layout"""
-function local_shape(domain::Domain, layout_name::Symbol=:g)
+function local_shape(domain::Domain, layout_name::Symbol=:g,
+                     dtype::Type=domain.dist.dtype)
     if layout_name == :g
-        layout = get_layout(domain.dist, domain.bases)
+        layout = get_layout(domain.dist, domain.bases, dtype)
         return layout.local_shape
     elseif layout_name == :c
         # IMPORTANT: Use get_coefficient_shape_for_context to handle MPI/PencilFFTs RFFT rules
         # In MPI mode with PencilFFTs, only the first RealFourier axis uses RFFT (N/2+1),
         # subsequent RealFourier axes use FFT (full size N).
-        cshape = get_coefficient_shape_for_context(domain, domain.dist)
+        cshape = get_coefficient_shape_for_context(domain, domain.dist, dtype)
         if domain.dist.size == 1 || domain.dist.mesh === nothing
             return cshape
         end
-        return compute_local_shape(domain.dist, cshape)
+        return Tuple(length.(coefficient_local_ranges(domain, dtype)))
     else
         throw(ArgumentError("Unknown layout: $layout_name"))
     end

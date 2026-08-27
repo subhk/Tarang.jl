@@ -151,8 +151,8 @@ mutable struct NonlinearEvaluator <: AbstractNonlinearEvaluator
     # nonlinear RHS calls can reuse memory instead of allocating every stage.
     temp_fields::Dict{String, ScalarField}
     # Rotating pool of nonlinear-product result buffers. Tuple key (pool slot,
-    # bases hash, dtype) avoids the per-product string-key allocation that a
-    # String-keyed dict would incur in `_checkout_nl_result!`.
+    # transform-bundle identity, dtype) prevents a result PencilArray from being
+    # reused by another domain while avoiding a per-product string allocation.
     nl_result_pool::Dict{Tuple{Int, UInt, DataType}, ScalarField}
     memory_pool::Vector{PencilArrays.PencilArray}
     scratch_arrays::Vector{AbstractArray}

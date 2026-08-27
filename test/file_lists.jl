@@ -227,6 +227,7 @@ const GPU_TEST_FILES = [
 #   ./test/run_mpi_tests.sh 4
 const MPI_TEST_FILES = [
     "test_mpi_distributor.jl",
+    "test_mpi_2d_backend_regressions.jl", # domain/dtype-owned plans, canonical coefficient geometry, scaling rejection, and mixed-basis parity
     "test_mpi_local_indices.jl",
     "test_mpi_field_initialization.jl",
     "test_mpi_algebraic_constraints.jl",

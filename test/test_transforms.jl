@@ -46,6 +46,31 @@ using Tarang
         @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-10, atol=1e-12)
     end
 
+    @testset "Complex RealFourier keeps a full tiny spectrum" begin
+        # At N=2, a full FFT and an RFFT both have length two. Backward dispatch
+        # must use the field's canonical forward operation, not this ambiguous
+        # shape, or it incorrectly selects irfft and produces a real grid buffer.
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; dtype=Float64)
+        bases = (
+            RealFourier(coords["x"]; size=2, bounds=(0.0, 2π)),
+            RealFourier(coords["y"]; size=4, bounds=(0.0, 2π)),
+        )
+        field = ScalarField(dist, "complex_rf_tiny", bases, ComplexF64)
+        original = ComplexF64[
+            complex(i + 2j, 3i - j) for i in 1:2, j in 1:4
+        ]
+        Tarang.get_grid_data(field) .= original
+
+        forward_transform!(field)
+        @test size(Tarang.get_coeff_data(field)) == (2, 4)
+        backward_transform!(field)
+
+        @test eltype(Tarang.get_grid_data(field)) === ComplexF64
+        @test isapprox(Tarang.get_grid_data(field), original;
+                       rtol=1e-10, atol=1e-12)
+    end
+
     @testset "ComplexFourier with a REAL dtype round-trips" begin
         # A ComplexFourier axis that is the FIRST Fourier axis of a real-dtype
         # field receives REAL grid data. FFTW's complex plan cannot consume a real

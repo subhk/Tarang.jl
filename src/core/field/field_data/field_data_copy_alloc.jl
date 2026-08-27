@@ -7,10 +7,10 @@ architecture synchronization, and initial data allocation.
 
 # Copy methods for ScalarField
 """Create a shallow copy of ScalarField with copied data arrays.
-Constructs the skeleton with the source field's REAL bases so the parametric
-`SerialFieldStorage{G,C}` is allocated with matching concrete array types, then
-copies the live-layout array's values in place (the other array stays zeroed and
-is recomputed on the next layout change via `ensure_layout!`)."""
+Constructs the skeleton with the source field's real bases so the parametric
+`SerialFieldStorage{G,C}` has matching concrete array types. Serial fields copy
+the live-layout array; PencilArray fields copy both buffers because both carry
+the source transform bundle's pencil identity."""
 function Base.copy(field::ScalarField)
     # Build with the real bases → correctly-typed (zeroed) storage arrays.
     new_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
@@ -22,12 +22,18 @@ function Base.copy(field::ScalarField)
     new_field.current_layout = field.current_layout
     new_field.fft_mode = field.fft_mode
     new_field.buffers.architecture = field.buffers.architecture
+    new_field.transform_bundle = field.transform_bundle
     # Adopt a copy of the live-layout array (sized to the source, incl. scales).
     # The off-layout array stays as the constructor's zeroed full-size buffer
     # (recomputed on the next ensure_layout!). It must remain full-size/plannable:
     # a 0-sized placeholder would defeat the transform's allocate-on-empty path and
     # make FFTW fail to plan when copy_field_data! ensure_layout!s the copy.
-    if field.current_layout == :c
+    if get_grid_data(field) isa PencilArrays.PencilArray
+        # Both buffers are tied to the source bundle's pencil identities. This
+        # matters if a public cache-clear occurred before the copy was built.
+        set_grid_data!(new_field, copy(get_grid_data(field)))
+        set_coeff_data!(new_field, copy(get_coeff_data(field)))
+    elseif field.current_layout == :c
         set_coeff_data!(new_field, copy(get_coeff_data(field)))
     else
         set_grid_data!(new_field, copy(get_grid_data(field)))
@@ -48,6 +54,9 @@ function Base.deepcopy_internal(field::ScalarField, stackdict::IdDict)
     # these struct fields does not change the already-locked storage array types.
     new_field.bases = Base.deepcopy_internal(field.bases, stackdict)
     new_field.domain = field.domain === nothing ? nothing : Base.deepcopy_internal(field.domain, stackdict)
+    # Copied PencilArrays retain the source pencil identities, so they must keep
+    # the source bundle even if a global cache was cleared between constructions.
+    new_field.transform_bundle = field.transform_bundle
     # Restore remaining state not derived from bases (scales before adopting the
     # source arrays — see Base.copy for why).
     new_field.layout = field.layout
@@ -57,7 +66,14 @@ function Base.deepcopy_internal(field::ScalarField, stackdict::IdDict)
     new_field.buffers.architecture = field.buffers.architecture
     # Deep-copy the live-layout array; the off-layout array stays as the
     # constructor's zeroed full-size buffer (recomputed on next ensure_layout!).
-    if field.current_layout == :c
+    if get_grid_data(field) isa PencilArrays.PencilArray
+        # Pencil metadata identifies the exact plan endpoints and is immutable
+        # execution state, not field-owned mutable data. `deepcopy(PencilArray)`
+        # clones that identity and makes PencilFFTs reject the array. `copy`
+        # duplicates the numerical storage while retaining the endpoint pencil.
+        set_grid_data!(new_field, copy(get_grid_data(field)))
+        set_coeff_data!(new_field, copy(get_coeff_data(field)))
+    elseif field.current_layout == :c
         set_coeff_data!(new_field, Base.deepcopy_internal(get_coeff_data(field), stackdict))
     else
         set_grid_data!(new_field, Base.deepcopy_internal(get_grid_data(field), stackdict))
@@ -147,22 +163,40 @@ function _build_field_arrays(dist::Distributor, domain::Domain, ::Type{T}) where
     coeff_dtype = coefficient_eltype(domain, T)
 
     if dist.use_pencil_arrays
-        pencil_plan = _find_pencil_plan(dist)
+        bundle = transform_plan_bundle(domain, T)
+        pencil_plan = _find_pencil_plan(bundle)
 
         if pencil_plan !== nothing
             # PencilFFTs' official allocators — guaranteed compatible with mul!/ldiv!
-            g = PencilFFTs.allocate_input(pencil_plan)
+            plan_grid = get(bundle.pencil_work_cache, :complex_grid, nothing)
+            if plan_grid === nothing
+                plan_grid = PencilFFTs.allocate_input(pencil_plan)
+            end
+            if eltype(plan_grid) === T
+                g = plan_grid
+            elseif T <: Real && eltype(plan_grid) === Complex{T}
+                # A full C2C plan (e.g. ComplexFourier with a real field) needs
+                # complex transform input, while the public grid remains real.
+                # Keep one compatible promotion buffer with the bundle.
+                bundle.pencil_work_cache[:complex_grid] = plan_grid
+                g = PencilArrays.PencilArray{T}(undef, bundle.pencil_fft_input)
+            else
+                error("PencilFFT input dtype $(eltype(plan_grid)) cannot represent field dtype $T")
+            end
             c = PencilFFTs.allocate_output(pencil_plan)
-        elseif dist.pencil_fft_input !== nothing && dist.pencil_fft_output !== nothing
+        elseif bundle.pencil_fft_input !== nothing && bundle.pencil_fft_output !== nothing
             # Fallback to stored pencils (less safe but should work)
-            g = PencilArrays.PencilArray{T}(undef, dist.pencil_fft_input)
-            c = PencilArrays.PencilArray{coeff_dtype}(undef, dist.pencil_fft_output)
+            g = PencilArrays.PencilArray{T}(undef, bundle.pencil_fft_input)
+            c = PencilArrays.PencilArray{coeff_dtype}(undef, bundle.pencil_fft_output)
         else
             # Last resort: create new pencils (may not be compatible with PencilFFTs)
             g = create_pencil(dist, gshape, nothing, dtype=T)
             c = create_pencil(dist, cshape, nothing, dtype=coeff_dtype)
         end
 
+        eltype(g) === T || error("PencilFFT grid dtype $(eltype(g)) does not match field dtype $T")
+        eltype(c) === coeff_dtype || error(
+            "PencilFFT output dtype $(eltype(c)) does not match coefficient dtype $coeff_dtype")
         fill!(g, zero(T))
         fill!(c, zero(coeff_dtype))
         return (g, c)
