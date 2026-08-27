@@ -887,9 +887,8 @@ end
 
 Compute local array shape based on MPI decomposition.
 
-Respects dist.use_pencil_arrays:
-- PencilArrays convention: decompose LAST ndims_mesh dimensions
-- TransposableField convention: decompose FIRST ndims_mesh dimensions
+Which axes are decomposed comes from `decomposed_axes` — see its docstring
+for both conventions.
 """
 function compute_local_shape(dist::Distributor, global_shape::Tuple)
     if dist.size == 1
@@ -904,21 +903,7 @@ function compute_local_shape(dist::Distributor, global_shape::Tuple)
         return global_shape
     end
 
-    for i in 1:min(ndims_mesh, ndims_global)
-        # Determine which global dimension corresponds to mesh dimension i
-        global_dim_idx = if dist.use_pencil_arrays
-            # PencilArrays convention: decompose LAST ndims_mesh dimensions
-            ndims_global - ndims_mesh + i
-        else
-            # TransposableField convention: decompose FIRST ndims_mesh dimensions
-            i
-        end
-
-        if global_dim_idx < 1 || global_dim_idx > ndims_global
-            continue
-        end
-
-        mesh_dim_idx = i
+    for (mesh_dim_idx, global_dim_idx) in enumerate(decomposed_axes(dist, ndims_global))
         n_global = global_shape[global_dim_idx]
         n_procs = dist.mesh[mesh_dim_idx]
 
@@ -1112,9 +1097,9 @@ is_decomposed_axis(dist, ndim::Int, axis::Int) = mesh_axis_for(dist, ndim, axis)
 """
     Get local indices for the given axis with known global size.
 
-    Respects dist.use_pencil_arrays for decomposition convention:
-    - PencilArrays: decompose LAST ndims_mesh dimensions
-    - TransposableField: decompose FIRST ndims_mesh dimensions
+    Which axes are decomposed comes from `decomposed_axes` — see its docstring
+    for both conventions. This function is called with `dist.dim` as the
+    field's dimensionality (it has no shape argument of its own).
 
     Note: This returns the local indices for the actual field decomposition,
     which uses full mesh decomposition (not pencil decomposition with a local dim).
@@ -1125,46 +1110,8 @@ function local_indices(dist::Distributor, axis::Int, global_size::Int)
         return 1:global_size
     end
 
-    ndims_mesh = length(dist.mesh)
-
-    # Map the axis to the corresponding mesh dimension
-    # axis is 1-indexed into the global dimensions of the array
-    mesh_dim = nothing
-    for i in 1:ndims_mesh
-        global_dim_idx = if dist.use_pencil_arrays
-            # PencilArrays: decompose LAST ndims_mesh dimensions
-            # For ndims_global dimensions, mesh dim i maps to global dim (ndims_global - ndims_mesh + i)
-            # We don't know ndims_global here, but axis is the global dimension index.
-            # Reverse: mesh dim i = axis - (ndims_global - ndims_mesh)
-            # Since we don't know ndims_global, check if axis could match any mesh dim
-            nothing  # handled below
-        else
-            # TransposableField: mesh dim i maps to global dim i
-            i
-        end
-
-        if !dist.use_pencil_arrays && global_dim_idx == axis
-            mesh_dim = i
-            break
-        end
-    end
-
-    # For PencilArrays convention, decomposition covers the LAST ndims_mesh of the
-    # field's global dimensions (matches _compute_full_decomp_dims / get_local_array_size).
-    # The distributor's total dimension `dist.dim` IS ndims_global, so map directly:
-    # decomposed axes are decomp_start..ndims_global → mesh dims 1..n_decomp; earlier
-    # axes are LOCAL (mesh_dim stays nothing → full 1:global_size returned below).
-    if dist.use_pencil_arrays && mesh_dim === nothing
-        ndims_global = dist.dim
-        n_decomp = min(ndims_mesh, ndims_global)
-        decomp_start = ndims_global - n_decomp + 1
-        if decomp_start <= axis <= ndims_global
-            mesh_dim = axis - decomp_start + 1
-        end
-    end
-
+    mesh_dim = mesh_axis_for(dist, dist.dim, axis)
     if mesh_dim === nothing
-        # Axis is not decomposed
         return 1:global_size
     end
 

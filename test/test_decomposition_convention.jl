@@ -72,3 +72,18 @@ end
         @test Tarang.get_local_range(dist, 12, axis) == (1, 12)
     end
 end
+
+@testset "allocator and index math agree on every axis" begin
+    # get_local_array_size decides the ALLOCATED shape; local_indices decides
+    # which global indices those slots mean. If they disagree the field is
+    # silently mis-addressed — no error, wrong values. Nothing forced them to
+    # agree before this test existed.
+    coords = CartesianCoordinates("x", "y", "z")
+    dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
+    gshape = (8, 6, 4)
+    local_shape = Tarang.get_local_array_size(dist, gshape)
+    for axis in 1:3
+        @test length(Tarang.local_indices(dist, axis, gshape[axis])) == local_shape[axis]
+    end
+    @test collect(Tarang.compute_local_shape(dist, gshape)) == collect(local_shape)
+end
