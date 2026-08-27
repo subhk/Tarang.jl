@@ -419,7 +419,7 @@ println("E = ", bad_energy(sqg), "  max|u| = ", bad_max_velocity(sqg))
 
 Run with:
 ```bash
-mpiexec -n 4 julia --project=. my_sqg_simulation.jl
+mpiexecjl --project=. -n 4 julia my_sqg_simulation.jl
 ```
 
 The energy is bit-identical at 1, 2 and 4 processes

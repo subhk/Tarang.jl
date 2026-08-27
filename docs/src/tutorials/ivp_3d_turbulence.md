@@ -409,7 +409,7 @@ println("Estimated memory: $(total_memory) GB")   # Estimated memory: 1.6777216 
 export OMP_NUM_THREADS=1
 
 # Run with MPI (8 ranks: a 2x4 pencil mesh)
-mpiexec -n 8 julia --project turbulence_3d.jl
+mpiexecjl --project=. -n 8 julia turbulence_3d.jl
 ```
 
 The script above runs unchanged in serial and under MPI. The time-stepped vorticity — and therefore the

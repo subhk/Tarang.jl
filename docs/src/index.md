@@ -69,8 +69,17 @@ using Pkg
 Pkg.add(url="https://github.com/subhk/Tarang.jl")
 ```
 
-That is the whole installation. MPI, PencilArrays, PencilFFTs and KernelAbstractions are
-**hard dependencies** — they are installed with Tarang, and distributed runs work out of the box.
+That is the whole serial installation. MPI, PencilArrays, PencilFFTs and KernelAbstractions are
+**hard dependencies** and are installed with Tarang. For a distributed script, add MPI as a
+direct dependency of the script's project and install its compatible launcher once
+on Unix, macOS, or WSL:
+
+```bash
+julia --project=. -e 'using Pkg; Pkg.add("MPI"); using MPI; MPI.install_mpiexecjl()'
+```
+
+On native Windows, launch through `MPI.mpiexec()` as shown in the
+[installation guide](getting_started/installation.md).
 
 GPU support is the one opt-in: CUDA is a weak dependency loaded through a package extension, so
 add it only if you want it.
@@ -199,7 +208,7 @@ to machine precision: `max|T(z=0) − 1| = 3.6e-15`, `max|T(z=Lz)| = 8.1e-15`.
 using Tarang, CUDA
 
 # Just add device=GPU() — everything else stays the same
-domain = PeriodicDomain(512, 512; device=GPU(), dtype=Float32)
+domain = PeriodicDomain(128, 128; device=GPU(), dtype=Float32)
 field = ScalarField(domain, "u")
 forward_transform!(field)   # Uses cuFFT automatically
 ```
@@ -322,13 +331,16 @@ Depth = 1
 
 | Setup | Command | Use Case |
 |-------|---------|----------|
-| **Default** | `Pkg.add(url="...")` | Single CPU **and** MPI — nothing else to install |
+| **Default** | `Pkg.add(url="...")` | Single-process CPU |
+| **MPI** | Add `MPI`; use `mpiexecjl` (Unix/WSL) or `MPI.mpiexec()` (Windows) | Multi-process CPU with the matching MPI runtime |
 | **GPU** | `Pkg.add("CUDA")` | NVIDIA GPU acceleration (loads `TarangCUDAExt`) |
 | **Cluster MPI** | `MPIPreferences.use_system_binary()` | Bind MPI.jl to the cluster's own MPI |
 
-MPI, MPIPreferences, PencilArrays, PencilFFTs and KernelAbstractions are `[deps]` of Tarang, so a
-plain install is already MPI-capable: `mpiexec -n 4 julia --project=. run.jl` works with the MPI
-binary that MPI.jl ships. Only CUDA is a `[weakdeps]` package extension.
+Tarang installs MPI, MPIPreferences, PencilArrays, PencilFFTs and KernelAbstractions transitively.
+Julia scripts that import MPI directly must also add it to their active project. Then install
+MPI.jl's project-aware launcher once with `MPI.install_mpiexecjl()` on Unix/WSL and run
+`mpiexecjl --project=. -n 4 julia run.jl`; on Windows, use `MPI.mpiexec()` as described above.
+Only CUDA is a `[weakdeps]` package extension.
 
 !!! note "Requirements"
     - Julia 1.10 or later

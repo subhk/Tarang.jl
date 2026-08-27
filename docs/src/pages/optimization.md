@@ -348,11 +348,11 @@ per-rank count use `length(get_grid_data(solver.state[1]))`.
 ### Scaling Test
 
 Strong scaling holds the problem fixed and varies the process count; weak scaling holds the
-work per process fixed. Both are driven from the shell, one `mpiexec` per point:
+work per process fixed. Both are driven from the shell, one `mpiexecjl` launch per point:
 
 ```bash
 for np in 1 2 4 8 16; do
-    mpiexec -n $np julia --project=. run_benchmark.jl
+    mpiexecjl --project=. -n $np julia run_benchmark.jl
 done
 ```
 

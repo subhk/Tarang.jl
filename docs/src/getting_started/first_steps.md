@@ -46,20 +46,25 @@ MPI.Init()
 Coordinates define the dimension names and the MPI process distribution:
 
 ```julia
-# Create 2D Cartesian coordinates
-coords = CartesianCoordinates("x", "z")
+# Put the bounded (Chebyshev) coordinate first for distributed mixed transforms
+coords = CartesianCoordinates("z", "x")
 
-# Create distributor with 2×2 process mesh (4 MPI processes total)
-dist = Distributor(coords, mesh=(2, 2))
+# A 2D domain uses a 1D (slab) process mesh
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, device=CPU())
 ```
 
-The `mesh=(2, 2)` means we'll use 4 MPI processes arranged in a 2×2 grid. This enables parallelization in both horizontal (x) and vertical (z) directions.
+For a 2D domain, Tarang keeps one transform direction local and distributes the
+other over a one-dimensional process mesh. With four MPI ranks, the mesh is
+therefore `(4,)`. In a mixed bounded-periodic domain, list the bounded coordinate
+and basis first so its Chebyshev transform remains local. For a 3D domain,
+Tarang can use a two-dimensional pencil mesh.
 
 !!! tip "Choosing Process Mesh"
     The product of mesh dimensions should equal your MPI process count:
-    - `mesh=(2, 2)` → 4 processes
-    - `mesh=(4, 2)` → 8 processes
-    - `mesh=(4, 4)` → 16 processes
+    - 2D domain: `mesh=(4,)` → 4 processes
+    - 3D domain: `mesh=(2, 2)` → 4 processes
+    - Omit `mesh` to let Tarang choose a compatible layout automatically
 
 ### Step 3: Choose Spectral Bases
 
@@ -85,7 +90,7 @@ The `size` parameter determines the spectral resolution.
 Combine the bases into a domain:
 
 ```julia
-domain = Domain(dist, (x_basis, z_basis))
+domain = Domain(dist, (z_basis, x_basis))
 ```
 
 The domain handles the spatial discretization and MPI distribution.
@@ -95,31 +100,39 @@ The domain handles the spatial discretization and MPI distribution.
 Create a scalar field for temperature:
 
 ```julia
-T = ScalarField(dist, "T", (x_basis, z_basis))
+T = ScalarField(domain, "T")
+
+# Two tau fields enforce the two Chebyshev-wall boundary conditions
+tau_T1 = ScalarField(dist, "tau_T1", (), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (), Float64)
 ```
 
 For vector fields (like velocity):
 ```julia
-u = VectorField(dist, coords, "u", (x_basis, z_basis))
+u = VectorField(domain, "u")
 ```
 
 ### Step 6: Set Up Problem
 
-Create an Initial Value Problem (IVP):
+Create an Initial Value Problem (IVP). A bounded second-order equation uses the
+tau method: one lifted tau enters the gradient and the other enters the bulk
+equation.
 
 ```julia
-problem = IVP([T])
+ez, ex = unit_vector_fields(coords, dist)  # coords are ("z", "x")
+τ_lift(A) = lift(A, derivative_basis(z_basis, 1), -1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-# Add the heat equation
-add_equation!(problem, "∂t(T) - kappa*lap(T) = 0")
+problem = IVP([T, tau_T1, tau_T2])
+add_parameters!(problem; kappa=0.01, grad_T=grad_T, τ_lift=τ_lift)
 
-# Set diffusion coefficient
-problem.namespace["kappa"] = 1.0
+# Add the heat equation with its tau corrections
+add_equation!(problem, "∂t(T) - kappa*div(grad_T) + τ_lift(tau_T2) = 0")
 ```
 
 The equation uses symbolic notation:
 - `∂t(T)`: time derivative ∂T/∂t
-- `lap(T)`: Laplacian ∇²T
+- `div(grad_T)`: Laplacian plus the first tau correction
 - `kappa`: a parameter we can easily modify
 
 ### Step 7: Add Boundary Conditions
@@ -128,10 +141,10 @@ Specify boundary conditions at the domain edges:
 
 ```julia
 # Bottom wall (z=0): hot, T=1
-add_equation!(problem, "T(z=0) = 1")
+add_bc!(problem, "T(z=0) = 1")
 
 # Top wall (z=1): cold, T=0
-add_equation!(problem, "T(z=1) = 0")
+add_bc!(problem, "T(z=1) = 0")
 ```
 
 The x-direction is periodic (RealFourier basis), so no boundary conditions are needed there.
@@ -155,18 +168,11 @@ Popular timesteppers:
 Initialize the temperature field:
 
 ```julia
-# Get the grid space representation
-T_grid = get_grid_data(T)
-
-# Set a Gaussian perturbation
-for i in 1:size(T_grid, 1), j in 1:size(T_grid, 2)
-    x = (i-1) * 2π / 128
-    z = (j-1) / 64
-    T_grid[i, j] = 0.5 + 0.1 * exp(-((x-π)^2 + (z-0.5)^2) / 0.1)
-end
-
-# Transform to spectral space
-to_spectral!(T)
+# `local_grids` returns this rank's slab, so this works in serial and under MPI
+z, x = local_grids(dist, z_basis, x_basis)
+ensure_layout!(T, :g)
+get_grid_data(T) .= 0.5 .+ 0.1 .* exp.(-((z .- 0.5).^2 .+ (x' .- π).^2) ./ 0.1)
+ensure_layout!(T, :c)
 ```
 
 ### Step 10: Run Simulation
@@ -174,15 +180,10 @@ to_spectral!(T)
 Time-step the solver:
 
 ```julia
-t_end = 1.0
-iteration = 0
-
-while solver.sim_time < t_end
+for iteration in 1:20
     step!(solver)
-    iteration += 1
 
-    # Print progress every 100 steps
-    if iteration % 100 == 0 && MPI.Comm_rank(MPI.COMM_WORLD) == 0
+    if iteration % 10 == 0 && MPI.Comm_rank(MPI.COMM_WORLD) == 0
         println("Iteration: $iteration, Time: $(solver.sim_time)")
     end
 end
@@ -206,38 +207,42 @@ using Tarang, MPI
 MPI.Init()
 
 # Setup
-coords = CartesianCoordinates("x", "z")
-dist = Distributor(coords, mesh=(2, 2))
+coords = CartesianCoordinates("z", "x")
+nprocs = MPI.Comm_size(MPI.COMM_WORLD)
+dist = Distributor(coords; mesh=(nprocs,), dtype=Float64, device=CPU())
 
-x_basis = RealFourier(coords["x"], size=128, bounds=(0.0, 2π))
-z_basis = ChebyshevT(coords["z"], size=64, bounds=(0.0, 1.0))
+x_basis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
+z_basis = ChebyshevT(coords["z"]; size=24, bounds=(0.0, 1.0))
 
-domain = Domain(dist, (x_basis, z_basis))
-T = ScalarField(dist, "T", (x_basis, z_basis))
+domain = Domain(dist, (z_basis, x_basis))
+T = ScalarField(domain, "T")
+tau_T1 = ScalarField(dist, "tau_T1", (), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (), Float64)
 
 # Problem
-problem = IVP([T])
-add_equation!(problem, "∂t(T) - kappa*lap(T) = 0")
-problem.namespace["kappa"] = 0.01
+ez, ex = unit_vector_fields(coords, dist)
+τ_lift(A) = lift(A, derivative_basis(z_basis, 1), -1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-# Boundary conditions (syntax auto-detected)
-add_equation!(problem, "T(z=0) = 1")
-add_equation!(problem, "T(z=1) = 0")
+problem = IVP([T, tau_T1, tau_T2])
+add_parameters!(problem; kappa=0.01, grad_T=grad_T, τ_lift=τ_lift)
+add_equation!(problem, "∂t(T) - kappa*div(grad_T) + τ_lift(tau_T2) = 0")
+
+# Boundary conditions
+add_bc!(problem, "T(z=0) = 1")
+add_bc!(problem, "T(z=1) = 0")
 
 # Solver
 solver = InitialValueSolver(problem, RK222(), dt=0.001)
 
-# Initial conditions
-T_grid = get_grid_data(T)
-for i in 1:size(T_grid, 1), j in 1:size(T_grid, 2)
-    x = (i-1) * 2π / 128
-    z = (j-1) / 64
-    T_grid[i, j] = 0.5 + 0.1 * exp(-((x-π)^2 + (z-0.5)^2) / 0.1)
-end
-to_spectral!(T)
+# Initial conditions on this rank's local grid
+z, x = local_grids(dist, z_basis, x_basis)
+ensure_layout!(T, :g)
+get_grid_data(T) .= 0.5 .+ 0.1 .* exp.(-((z .- 0.5).^2 .+ (x' .- π).^2) ./ 0.1)
+ensure_layout!(T, :c)
 
-# Time stepping
-while solver.sim_time < 1.0
+# Short smoke run; increase the resolution and step count for a simulation
+for _ in 1:20
     step!(solver)
 end
 
@@ -247,7 +252,7 @@ MPI.Finalize()
 Save this as `heat_diffusion.jl` and run:
 
 ```bash
-mpiexec -n 4 julia heat_diffusion.jl
+mpiexecjl --project=. -n 4 julia heat_diffusion.jl
 ```
 
 ## What's Next?
@@ -266,9 +271,9 @@ Now that you understand the basic workflow, explore:
 For coupled PDEs with multiple fields:
 
 ```julia
-u = VectorField(dist, coords, "u", (x_basis, z_basis))
-p = ScalarField(dist, "p", (x_basis, z_basis))
-T = ScalarField(dist, "T", (x_basis, z_basis))
+u = VectorField(domain, "u")
+p = ScalarField(domain, "p")
+T = ScalarField(domain, "T")
 
 problem = IVP([u.components[1], u.components[2], p, T])
 ```

@@ -179,7 +179,7 @@ solver = InitialValueSolver(problem, RK222(); dt=5e-3)
 julia --project=. examples/ivp/forced_2d_turbulence.jl
 
 # The domain is all-Fourier, so this one does decompose across ranks
-mpiexec -n 4 julia --project=. examples/ivp/forced_2d_turbulence.jl
+mpiexecjl --project=. -n 4 julia examples/ivp/forced_2d_turbulence.jl
 ```
 
 ---
@@ -668,7 +668,7 @@ Combined shear and stratification.
 
 Each example follows this structure:
 
-```julia
+```text
 # 1. Load packages
 using Tarang
 
@@ -732,7 +732,7 @@ julia --project=. examples/ivp/rayleigh_benard_2d.jl
 
 # Run with MPI — only the all-Fourier examples are distributable; a Chebyshev
 # axis must stay local, which rules out the Rayleigh-Bénard / channel examples.
-mpiexec -n 4 julia --project=. examples/ivp/forced_2d_turbulence.jl
+mpiexecjl --project=. -n 4 julia examples/ivp/forced_2d_turbulence.jl
 ```
 
 ### Modifying Examples
@@ -782,6 +782,7 @@ them with `group_ncread`. The leading axis of a task variable is the write index
 ```julia
 using Plots, Tarang
 
+# webdocs-audit: skip - file is simulation output produced by one of the gallery examples.
 file   = "snapshots/snapshots_s1/snapshots_s1.nc"
 T_data = group_ncread(file, "vars", "T")        # (write, x, z)
 t      = group_ncread(file, "time", "sim_time") # (write,)

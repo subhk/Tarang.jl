@@ -427,7 +427,7 @@ generate_forcing!(forcing, t, 1)
 
 ### Constructor
 
-```julia
+```text
 StochasticForcing(;
     field_size,                          # (Nx, Ny) or (Nx, Ny, Nz)
     domain_size = (2π, 2π, ...),        # (Lx, Ly, ...)

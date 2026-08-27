@@ -193,8 +193,8 @@ where:
 ```julia
 using Tarang
 
-# Grid parameters
-N = 128                     # Grid points per direction
+# Small runnable grid (use your simulation's actual grid size in production)
+N = 16                      # Grid points per direction
 L = 2π                      # Domain size
 Δ = L / N                   # Grid spacing
 
@@ -205,13 +205,10 @@ sgs_model = SmagorinskyModel(
     field_size = (N, N, N)         # Number of grid points
 )
 
-# Compute eddy viscosity from velocity gradients
-# You need all 9 components of the velocity gradient tensor
-compute_eddy_viscosity!(sgs_model,
-    ∂u∂x, ∂u∂y, ∂u∂z,    # Gradients of u
-    ∂v∂x, ∂v∂y, ∂v∂z,    # Gradients of v
-    ∂w∂x, ∂w∂y, ∂w∂z     # Gradients of w
-)
+# Compute eddy viscosity from all 9 velocity-gradient components. These
+# synthetic arrays make the snippet runnable; replace them with your gradients.
+gradients = ntuple(i -> fill(i == 1 ? 1.0 : 0.0, N, N, N), 9)
+compute_eddy_viscosity!(sgs_model, gradients...)
 
 # Retrieve the computed eddy viscosity field
 νₑ = get_eddy_viscosity(sgs_model)
@@ -400,12 +397,12 @@ using Statistics
 # 1. Physical and Numerical Parameters
 # ============================================================
 
-N = 128                     # Grid points per direction
+N = 16                      # Smoke-test resolution; use 128+ for production
 L = 2π                      # Domain size [m]
 Δ = L / N                   # Grid spacing [m]
 ν = 1e-4                    # Molecular (kinematic) viscosity [m²/s]
 dt = 0.001                  # Time step [s]
-nsteps = 1000               # Number of time steps
+nsteps = 3                  # Smoke run; increase for a production simulation
 
 # ============================================================
 # 2. Create the SGS Model
@@ -495,7 +492,7 @@ for step in 1:nsteps
     # variable-viscosity term must be assembled and applied explicitly.
 
     # --- Step 5: Diagnostics ---
-    if step % 100 == 0
+    if step == nsteps
         mean_νₑ = mean_eddy_viscosity(sgs)
         max_νₑ = max_eddy_viscosity(sgs)
 

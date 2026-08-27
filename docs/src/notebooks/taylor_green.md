@@ -34,7 +34,7 @@ using Plots
 ```
 
 Tarang initializes MPI itself when it loads, so there is no `MPI.Init()`/`MPI.Finalize()` to
-call. The script below is unchanged whether you run it serially or under `mpiexec`.
+call. The script below is unchanged whether you run it serially or with `mpiexecjl`.
 
 ## Parameters
 
@@ -256,7 +256,7 @@ The script needs no changes to run distributed — the initial condition already
 `local_grids`, and `total_kinetic_energy` reduces across ranks:
 
 ```bash
-mpiexec -n 4 julia --project=. taylor_green.jl
+mpiexecjl --project=. -n 4 julia taylor_green.jl
 ```
 
 Verified at 1, 2 and 4 ranks: the kinetic energy agrees with the analytical value to

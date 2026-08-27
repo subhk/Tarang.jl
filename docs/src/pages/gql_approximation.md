@@ -32,6 +32,7 @@ using FFTW
 gql = GQLDecomposition((64, 64), (2π, 2π); Λ=4.0)
 
 # 2. Decompose your spectral field
+f = rand(64, 64) # replace with the current physical-space field
 f_hat = rfft(f)  # Your field in spectral space
 f_large, f_small = decompose!(gql, f_hat)
 
@@ -233,6 +234,7 @@ sys = GQLWaveMeanSystem(field_size, domain_size; Λ, α, horizontal_dims=(1,2), 
 using Tarang
 using FFTW
 using LinearAlgebra
+using Statistics: mean
 
 # ============================================================================
 # GQL simulation of 2D turbulence with β-effect (zonal jet formation)
@@ -255,7 +257,7 @@ K2[1,1] = 1  # Avoid division by zero
 β = 10.0     # β-effect (planetary vorticity gradient)
 ν = 1e-4     # Viscosity
 dt = 0.001
-nsteps = 10000
+nsteps = 1000  # quick documentation run; increase for long-time jet statistics
 
 # GQL setup: cutoff at Λ = 4 (only large scales interact nonlinearly)
 Λ = 4.0
@@ -380,8 +382,8 @@ For problems with clear wave-mean separation (e.g., internal waves + zonal flow)
 using Tarang
 using FFTW
 
-# Domain
-Nx, Ny, Nz = 64, 64, 32
+# Small synthetic domain (replace these arrays with fields from your PDE solver)
+Nx, Ny, Nz = 16, 16, 8
 Lx, Ly = 2π, 2π
 dt = 0.01
 
@@ -399,13 +401,14 @@ add_flux!(sys, :uw)  # ⟨u'w'⟩
 add_flux!(sys, :vw)  # ⟨v'w'⟩
 add_flux!(sys, :wb)  # ⟨w'b'⟩
 
-# Time loop
-for step in 1:nsteps
-    # Your PDE solver advances u, v, w, b
-    # ...
+# Physical and spectral fields supplied by the simulation
+fields_phys = Dict(name => rand(Nx, Ny, Nz) for name in (:u, :v, :w, :b))
+fields_hat = Dict(name => rfft(field) for (name, field) in fields_phys)
 
+# Time loop (a PDE solver would refresh both dictionaries before each update)
+for step in 1:10
     # Update GQL + temporal filtering
-    update!(sys, Dict(:u => u, :v => v, :w => w, :b => b), dt)
+    update!(sys, fields_hat, fields_phys, dt)
 
     # Access decomposed fields
     u_L = get_large(sys, :u)      # Large-scale (|k| ≤ Λ) in spectral space

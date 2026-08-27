@@ -310,7 +310,7 @@ julia --project=. examples/ivp/rayleigh_benard_2d.jl
 
 ### Why this problem is serial-only
 
-Do not launch it under `mpiexec`. Two independent limits of the distributed Chebyshev support
+Do not launch it with an MPI launcher. Two independent limits of the distributed Chebyshev support
 block it, and both are loud rather than silently wrong:
 
 1. **The Chebyshev axis cannot be decomposed.** PencilArrays splits the *trailing* dimensions,

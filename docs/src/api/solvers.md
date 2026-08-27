@@ -560,7 +560,7 @@ for the no-slip and fixed-temperature walls.
 using Tarang
 
 Lx, Lz = 4.0, 1.0
-Nx, Nz = 64, 32
+Nx, Nz = 16, 12                 # smoke-test resolution
 Rayleigh, Prandtl = 2e4, 1.0
 
 coords = CartesianCoordinates("x", "z")
@@ -615,19 +615,20 @@ cfl = CFL(solver; initial_dt=1e-4, cadence=10, safety=0.4, max_dt=1e-3)
 add_velocity!(cfl, u)
 
 # Output — created with the solver, so run! writes and closes it
-output = add_file_handler("output/rbc", solver; sim_dt=0.1)
+output = add_file_handler("output/rbc", solver; iter=10)
 add_task!(output, T; name="T")
 add_task!(output, u; name="u")
 
-run!(solver; stop_time=0.5, cfl=cfl, log_interval=500,
+run!(solver; stop_iteration=20, cfl=cfl, log_interval=10,
      callbacks=Pair[
-         500 => (s -> println("t = $(s.sim_time), dt = $(s.dt), max|T| = $(global_max(T))")),
+         10 => (s -> println("t = $(s.sim_time), dt = $(s.dt), max|T| = $(global_max(T))")),
      ])
 ```
 
-This takes ~21,800 steps (a few minutes on one core) and ends with `max|T| = 1.0`,
-`max|u_z| ≈ 56.5`, and the walls held to ~1e-14. Shrink `Nx`/`Nz` or `stop_time`
-to try it quickly.
+The published settings are a fast 20-step smoke run. For a developed convection
+run, use `Nx, Nz = 64, 32` and replace `stop_iteration=20` with `stop_time=0.5`;
+that takes about 21,800 steps (a few minutes on one core) and ends with
+`max|T| = 1.0`, `max|u_z| ≈ 56.5`, and the walls held to ~1e-14.
 
 !!! warning "Choose `max_dt` conservatively"
     While the fluid is still at rest the CFL estimate is unbounded, so the controller

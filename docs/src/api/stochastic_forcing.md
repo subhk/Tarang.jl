@@ -19,7 +19,7 @@ StochasticForcing
 Stochastic forcing in Fourier space with white-noise temporal correlation.
 
 **Type signature:**
-```julia
+```text
 mutable struct StochasticForcing{
     T<:AbstractFloat, N,
     A<:AbstractArray{T, N},
@@ -182,7 +182,7 @@ DeterministicForcing
 Deterministic (non-random) forcing.
 
 **Type signature:**
-```julia
+```text
 mutable struct DeterministicForcing{T<:AbstractFloat, N, A<:AbstractArray{T, N}} <: DeterministicForcingType
 ```
 
@@ -481,7 +481,7 @@ get_cached_forcing
 
 Return the current cached forcing F̂(k), as the complex array type `CA` of the chosen architecture.
 
-```julia
+```text
 get_cached_forcing(forcing::StochasticForcing) -> CA
 get_forcing_real(forcing::StochasticForcing)   -> real part of F̂(k)
 ```

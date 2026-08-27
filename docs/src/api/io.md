@@ -495,6 +495,7 @@ plain `NetCDF.ncread(file, "T")` fails with *"does not have a variable named T"*
 ```julia
 using Tarang, NetCDF
 
+# webdocs-audit: skip - file is a snapshot written by the file-handler example above.
 file = "snapshots/snapshots_s1/snapshots_s1.nc"
 
 Tarang.group_variable_names(file, "vars")     # ["T", "T_mean", "T_min", "T_max", ...]
