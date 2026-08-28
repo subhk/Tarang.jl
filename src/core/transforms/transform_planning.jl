@@ -348,7 +348,13 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
             "dimension to the domain."))
     end
 
-    trailing = collect((ndims_total - mesh_dim + 1):ndims_total)
+    # Reuse decomp_axes (== decomposed_axes(dist, ndims_total)) rather than
+    # re-deriving the trailing-axes formula by hand a second time in this
+    # function: the hand-rolled version agreed with decomposed_axes for every
+    # reachable ndim >= mesh_dim, but diverged (produced an out-of-range axis
+    # 0) when ndim < mesh_dim, since decomposed_axes correctly falls back to
+    # "stays local" there while `ndims_total - mesh_dim + 1` goes non-positive.
+    trailing = collect(decomp_axes)
     nonfourier_trailing = [d for d in trailing if !(d in fourier_axes)]
     if !isempty(nonfourier_trailing)
         error("MPI mixed Fourier-Chebyshev: the decomposed (trailing) axis/axes " *

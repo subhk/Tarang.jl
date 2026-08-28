@@ -100,7 +100,6 @@ mutable struct Distributor
     # is shared across every field of the same shape rather than built per field.
     # Released in `close`. Replaces the never-written `transpose_comms_cache`.
     transpose_workspace_cache::Dict{Tuple, Any}
-    transpose_counts_cache::Dict{Tuple, AbstractTransposeCounts}
 
     # Basis composition the current transform plan was built for, as a tuple of
     # (basis type name, size) per axis; `nothing` until a plan exists. The MPI
@@ -276,14 +275,13 @@ mutable struct Distributor
 
         # Initialize transpose caches for TransposableField support
         transpose_workspace_cache = Dict{Tuple, Any}()
-        transpose_counts_cache = Dict{Tuple, AbstractTransposeCounts}()
 
         dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
             architecture, _use_pencil_arrays, pencil_config, mpi_topology, false, pencil_cache, transforms,
             transform_plan_cache,
             pencil_fft_plan, pencil_fft_input, pencil_fft_output, pencil_solve, layouts, perf_stats,
             mesh_coords, neighbor_ranks, nothing, gpu_fft_plans, gpu_arrays, distributed_gpu_config,
-            transpose_workspace_cache, transpose_counts_cache, nothing)
+            transpose_workspace_cache, nothing)
 
         # Precompute neighbor ranks for all mesh dimensions
         if mesh !== nothing && size > 1
@@ -296,6 +294,36 @@ mutable struct Distributor
         end
 
         return dist
+    end
+end
+
+"""
+    _free_transpose_workspaces!(dist::Distributor)
+
+Collectively free the MPI sub-communicators owned by every cached
+TransposableField workspace (`dist.transpose_workspace_cache`), without
+touching the cache itself — callers empty it afterward.
+
+`MPI_Comm_free` is COLLECTIVE. Each cached workspace's `Topology2D` normally
+gets freed by a GC finalizer (`free_topology_2d!`, transpose_types.jl), but
+`close` cannot leave that to the GC: dropping the last reference via `empty!`
+only makes the object COLLECTABLE, not collected, so each rank's GC would call
+`MPI.free` at its own unpredictable time — rank 0 freeing while ranks 1..N
+still haven't (hang), or a rank freeing after `MPI.Finalize()` (error, or a
+leaked communicator the runtime can no longer report). Freeing explicitly here
+means every rank frees at the same, well-defined point: inside `close`, which
+already requires every rank in `dist.comm` to call it together.
+
+Guarded exactly like the pencil-topology free below it. Safe on an empty cache
+and idempotent per workspace: `free_topology_2d!` nullifies each communicator
+after freeing it, so the finalizer running later on the same (now-unreferenced)
+workspace is a no-op.
+"""
+function _free_transpose_workspaces!(dist::Distributor)
+    if MPI.Initialized() && !MPI.Finalized()
+        for ws in values(dist.transpose_workspace_cache)
+            free_topology_2d!(ws.topology)
+        end
     end
 end
 
@@ -318,6 +346,12 @@ function Base.close(dist::Distributor)
     empty!(dist.transforms)
     empty!(dist.transform_plan_cache)
     empty!(dist.layouts)
+    _free_transpose_workspaces!(dist)
+    # Transpose workspaces own two MPI sub-communicators each. Free them
+    # explicitly here so the (collective) frees happen at a point every rank
+    # reaches together, rather than whenever each rank's GC runs the
+    # finalizer — which can hang, or fire after MPI.Finalize().
+    _free_transpose_workspaces!(dist)
     empty!(dist.transpose_workspace_cache)
     dist.pencil_config = nothing
     dist.pencil_fft_plan = nothing

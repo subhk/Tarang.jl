@@ -171,9 +171,14 @@ MPI.Barrier(COMM)
 # The obvious approach — a JLArray field on a CPU Distributor — never reaches the
 # branch at all: storage selection keys on is_gpu(dist.architecture), which is
 # false for CPU() regardless of the array type, so a JLArray field there just
-# gets ordinary SerialFieldStorage. And Tarang.GPU() cannot be constructed on
-# this box (it raises CUDA installation guidance), so a genuinely GPU-
-# architecture Distributor is unreachable here.
+# gets ordinary SerialFieldStorage. A genuinely GPU-architecture Distributor
+# would take that branch, but is unusable on this box for a different reason
+# than "can't construct one": Tarang.GPU{Int}(0) constructs fine with no CUDA
+# loaded (it's the zero-arg Tarang.GPU() that raises CUDA installation
+# guidance, via _gpu_device); what actually fails is array creation —
+# array_type(::GPU, T) unconditionally errors without the CUDA extension, so a
+# Distributor built with a GPU architecture cannot allocate the grid/coeff
+# arrays a field needs.
 #
 # Instead, build a field whose STORAGE is TransposableFieldStorage directly via
 # ScalarField's explicit-storage inner constructor (dist, name, bases, dtype,

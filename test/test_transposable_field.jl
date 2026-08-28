@@ -367,7 +367,24 @@ end
     @test Tarang.transpose_workspace!(dist, c) !== wa
 end
 
-@testset "distributed GPU fields select transposable storage" begin
+@testset "CPU fields do not select transposable storage, even under MPI (np=$NPROCS)" begin
+    # RENAMED from "distributed GPU fields select transposable storage": this
+    # testset only ever built a CPU-architecture field and checked the negative
+    # case (_uses_transpose_storage(CPU(), n) == false, via is_transposable_storage
+    # on the resulting field) — it never touched a GPU architecture, so the old
+    # name overclaimed what was actually verified.
+    #
+    # The GPU-positive case — _uses_transpose_storage(GPU, n>1) == true — cannot
+    # be exercised through the real ScalarField constructor on this box:
+    # _build_field_arrays runs BEFORE storage selection and needs
+    # array_type(::GPU, T), which errors without the CUDA extension loaded (see
+    # the "synthetic device-storage field dispatches..." testset in
+    # test_mpi_transposable_parity.jl for the same constraint, and the
+    # explicit-storage constructor it uses to work around it). The predicate
+    # itself is pinned directly — dispatch only, no array allocation — for both
+    # GPU and CPU, in test_decomposition_convention.jl's "_uses_transpose_storage"
+    # testset; that is where the actual GPU-positive assertion lives.
+    #
     # TransposableFieldStorage has been defined, documented and dispatched since
     # the wrapper was split up — but nothing ever constructed it, so every field
     # got SerialFieldStorage and the distributed transform stayed unreachable

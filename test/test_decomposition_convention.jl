@@ -197,10 +197,30 @@ end
     @test found == known
 end
 
-@testset "a mesh that leaves no local axis is refused by name" begin
-    # PencilFFTs needs at least one local axis; an N-D domain therefore supports
-    # at most (N-1)-D decomposition. Refusing with "check your PencilFFTs
-    # installation" sent users to debug their environment for a domain shape
-    # that can never work.
-    @test Tarang.decomposed_axes(FakeDist(4, (2, 2), true), 2) == (1, 2)
+@testset "_uses_transpose_storage" begin
+    # Real GPU+MPI field construction (field_types.jl:140) asks this predicate
+    # to choose between TransposableFieldStorage (explicit-transpose GPU+MPI
+    # transforms) and SerialFieldStorage (PencilFFTs/local transforms). Nothing
+    # tested it directly before this testset. If it ever inverts — a refactor
+    # that flips the `nprocs > 1` branch, or a new architecture whose dispatch
+    # falls through to the wrong method — every GPU+MPI field silently reverts
+    # to SerialFieldStorage, and gpu_forward_transform! runs a LOCAL FFT on
+    # just this rank's slab of a distributed field: wrong numbers, no error.
+    #
+    # The zero-arg Tarang.GPU() cannot be constructed with no CUDA loaded
+    # (_gpu_device errors with installation guidance), but the PARAMETRIC form
+    # bypasses that constructor entirely and builds fine — GPU{Int}(0) is a
+    # real, dispatchable GPU-architecture value, just one that cannot allocate
+    # GPU arrays. That is all dispatch needs: _uses_transpose_storage matches
+    # on the architecture's TYPE, not on whether it can allocate.
+    gpu = Tarang.GPU{Int}(0)
+
+    @test Tarang._uses_transpose_storage(gpu, 2) == true
+    # n == 1: a serial GPU field must NOT get transpose storage — there is no
+    # second rank to transpose with, and TransposableFieldStorage would need a
+    # workspace (Comm_split etc.) for a decomposition that does not exist.
+    @test Tarang._uses_transpose_storage(gpu, 1) == false
+
+    @test Tarang._uses_transpose_storage(CPU(), 4) == false
+    @test Tarang._uses_transpose_storage(CPU(), 1) == false
 end

@@ -278,6 +278,12 @@ staging buffers. Call `wait_transpose!` on the returned workspace before
 starting a new async transpose on it.
 """
 function transpose_workspace!(dist::Distributor, field::ScalarField)
+    # Matches create_pencil's guard (distributor_core.jl): without it, a
+    # transform reached after `close` would repopulate
+    # transpose_workspace_cache and MPI.Comm_split fresh sub-communicators on
+    # a Distributor that has already told every rank it is done — the exact
+    # kind of post-close collective call `close` exists to make impossible.
+    dist.closed && throw(ArgumentError("cannot create a transpose workspace from a closed Distributor"))
     gshape = field.domain !== nothing ? global_shape(field.domain) : size(field["g"])
     key = (gshape, field.dtype)
     ws = get!(dist.transpose_workspace_cache, key) do
