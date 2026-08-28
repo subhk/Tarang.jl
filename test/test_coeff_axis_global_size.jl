@@ -36,7 +36,21 @@ using Tarang
     @test Tarang._coeff_axis_global_size(v, 2) == 8        # ComplexFourier: full
     @test Tarang._coeff_axis_global_size(v, 3) == 8        # RF after CF: FULL (C2C)
 
-    w = ScalarField(dist, "w", (xb, zb), Float64)
+    # Use a genuinely Fourier-first coordinate system. Reusing `(z, x, y)` and
+    # merely passing `(xb, zb)` would not change the domain order: Domain
+    # canonicalises bases by coordinate axis, so that storage is still `(z, x)`.
+    coords_xz = CartesianCoordinates("x", "z")
+    dist_xz = Distributor(coords_xz; dtype=Float64)
+    xb_first = RealFourier(coords_xz["x"]; size=8, bounds=(0.0, 2π))
+    zb_second = ChebyshevT(coords_xz["z"]; size=16, bounds=(0.0, 1.0))
+
+    w = ScalarField(dist_xz, "w", (xb_first, zb_second), Float64)
     @test Tarang._coeff_axis_global_size(w, 1) == 5        # RF first axis: halved
     @test Tarang._coeff_axis_global_size(w, 2) == 16
+    @test size(Tarang.get_coeff_data(w)) == (5, 16)
+
+    wc = ScalarField(dist_xz, "wc", (xb_first, zb_second), ComplexF64)
+    @test Tarang._coeff_axis_global_size(wc, 1) == 8       # complex input: full FFT
+    @test Tarang._coeff_axis_global_size(wc, 2) == 16
+    @test size(Tarang.get_coeff_data(wc)) == (8, 16)
 end

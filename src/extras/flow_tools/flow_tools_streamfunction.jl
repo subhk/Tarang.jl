@@ -148,9 +148,10 @@ function get_2d_wavenumber_grids(field::ScalarField)
 
     # Generate wavenumber grids based on basis types
     bases = field.bases
+    bundle = _field_transform_bundle(field)
 
     # X-direction wavenumbers (with proper offset for MPI)
-    if isa(bases[1], RealFourier)
+    if isa(bases[1], RealFourier) && _axis_uses_rfft(bundle, 1)
         # RFFT: wavenumbers are 0, 1, 2, ..., N/2
         kx_indices = offset_x:(offset_x + local_nx - 1)
         kx_1d = 2π / Lx * kx_indices
@@ -167,7 +168,7 @@ function get_2d_wavenumber_grids(field::ScalarField)
     # (monotonic 0..N/2). A RealFourier axis that is NOT the first real axis
     # (e.g. y when x is also RealFourier) is a full complex FFT and must use
     # fft-frequency ordering [0,1,…,N/2-1,-N/2,…,-1] — same as ComplexFourier.
-    if isa(bases[2], RealFourier) && _is_first_real_fourier_axis(bases, 2)
+    if isa(bases[2], RealFourier) && _axis_uses_rfft(bundle, 2)
         ky_indices = offset_y:(offset_y + local_ny - 1)
         ky_1d = 2π / Ly * ky_indices
     else  # ComplexFourier, or a non-first RealFourier axis (full complex FFT)

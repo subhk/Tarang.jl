@@ -38,6 +38,19 @@ import Tarang: SpectralLinearOperator
         @test L.coefficients[2, 1] > 0.0
     end
 
+    @testset "SpectralLinearOperator default layout follows distributor dtype" begin
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; mesh=(1, 1), dtype=ComplexF64)
+        xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+        yb = RealFourier(coords["y"]; size=10, bounds=(0.0, 2π))
+        bases = (xb, yb)
+
+        field = ScalarField(dist, "u", bases, ComplexF64)
+        L = SpectralLinearOperator(dist, bases, :laplacian)
+
+        @test size(L.coefficients) == size(Tarang.get_coeff_data(field)) == (8, 10)
+    end
+
     @testset "SpectralLinearOperator construction — hyperviscosity" begin
         coords = CartesianCoordinates("x", "y")
         dist = Distributor(coords; mesh=(1, 1), dtype=Float64)

@@ -1,11 +1,13 @@
 """
-Static ratchet on the GPU test files, which nothing in CI executes.
+Static ratchet on the GPU test files, which no GPU-less CI run executes.
 
-`.buildkite/pipeline.yml` says of itself: "Until then this file is inert (no CI
-consumes it)." So every file in `GPU_TEST_FILES` / `DISTRIBUTED_GPU_TEST_FILES`
-is dead text as far as automation is concerned — it can stop parsing, or can go
-on calling a function that was deleted months ago, and nothing notices until
-somebody finally stands up a GPU node.
+`GPU_TEST_FILES` reaches a real GPU only when the Buildkite pipeline has a
+CUDA-tagged single-GPU agent connected. `DISTRIBUTED_GPU_TEST_FILES` need the
+disabled multi-GPU NCCL job and are intentionally not active in the current
+single-GPU pipeline. On GitHub Actions, and on any machine without the hardware,
+those distributed files are dead text as far as execution is concerned: they
+can stop parsing, or call a function that was deleted months ago, and nothing
+notices until somebody runs them on a suitable GPU node.
 
 This test cannot run those files (no NVIDIA GPU on CI, and several of them call
 `MPI.Init`). It does the two checks that need no hardware:
@@ -106,6 +108,28 @@ end
 
     gpu_files = unique(vcat(GPU_TEST_FILES, DISTRIBUTED_GPU_TEST_FILES))
     @test !isempty(gpu_files)
+
+    # The current hardware policy is one GPU per Buildkite box. Keep the
+    # single-GPU suite active and prevent the two-rank distributed transpose
+    # test from being reintroduced accidentally. Ignore comment-only YAML lines
+    # so the disabled multi-GPU example does not affect these assertions.
+    pipeline_path = joinpath(_TESTDIR, "..", ".buildkite", "pipeline.yml")
+    @test isfile(pipeline_path)
+    pipeline = read(pipeline_path, String)
+    active_pipeline = join(
+        filter(line -> !startswith(strip(line), "#"), split(pipeline, '\n')),
+        '\n',
+    )
+    @test occursin("test/run_gpu_ci.jl", active_pipeline)
+    @test occursin("single-GPU", active_pipeline)
+    @test !occursin("test/test_distributed_gpu_transpose.jl", active_pipeline)
+
+    trigger_path = joinpath(_TESTDIR, "..", ".github", "workflows",
+                            "gpu-buildkite.yml")
+    @test isfile(trigger_path)
+    trigger = read(trigger_path, String)
+    @test occursin(r"workflow_dispatch\s*:", trigger)
+    @test occursin("vars.BUILDKITE_ORG || 'subhajit-kar'", trigger)
 
     parsed = Dict{String, Any}()
     @testset "parse" begin

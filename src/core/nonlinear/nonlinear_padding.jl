@@ -447,17 +447,17 @@ function _dealias_truncate_field!(field::ScalarField, dealiasing_factor::Float64
     coeff_data = get_coeff_data(field)
 
     if isa(coeff_data, PencilArrays.PencilArray)
-        _apply_spectral_cutoff_distributed!(coeff_data, field.bases, dealiasing_factor)
+        _apply_spectral_cutoff_distributed!(
+            coeff_data, field.bases, dealiasing_factor, field.dtype)
     else
         nb = length(field.bases)
         cutoffs = ntuple(nb) do i
             c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
             c === nothing ? size(coeff_data, i) : c
         end
-        rfft_dims = ntuple(nb) do i
-            b = field.bases[i]
-            isa(b, RealFourier) && size(coeff_data, i) == div(b.meta.size, 2) + 1
-        end
+        bundle = _field_transform_bundle(field)
+        rfft_dims = ntuple(i -> isa(field.bases[i], RealFourier) &&
+                                _axis_uses_rfft(bundle, i), nb)
         apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
     end
 
@@ -479,45 +479,33 @@ end
 # count is otherwise independent of nprocs under slab decomposition).
 # ============================================================================
 
-const _BATCHED_PENCIL_PLAN_CACHE = Dict{Tuple, Any}()
-
-"""Transforms tuple matching `setup_pencil_fft_transforms!`: RFFT on the first
-Fourier axis, FFT on later Fourier axes, NoTransform on non-Fourier axes."""
-function _field_pencil_transforms(bases)
-    first_fourier = 0
-    for (i, b) in enumerate(bases)
-        isa(b, Union{RealFourier, ComplexFourier}) && first_fourier == 0 && (first_fourier = i)
-    end
-    tlist = Any[]
-    for (i, b) in enumerate(bases)
-        if isa(b, RealFourier)
-            push!(tlist, i == first_fourier ? PencilFFTs.Transforms.RFFT() : PencilFFTs.Transforms.FFT())
-        elseif isa(b, ComplexFourier)
-            push!(tlist, PencilFFTs.Transforms.FFT())
-        else
-            push!(tlist, PencilFFTs.Transforms.NoTransform())
-        end
-    end
-    return Tuple(tlist)
-end
-
 """Get or build (cached) a batched PencilFFTPlan for `B` stacked fields. Uses the
 same global shape / transforms / process mesh as the per-field plan plus
 `extra_dims=(B,)`, so the per-slice layout matches each field's coeff array."""
-function _get_batched_backward_plan!(dist, bases, B::Int)
-    key = (objectid(dist), B, map(b -> (nameof(typeof(b)), b.meta.size), bases))
-    cached = get(_BATCHED_PENCIL_PLAN_CACHE, key, nothing)
+function _get_batched_backward_plan!(field::ScalarField, B::Int)
+    bundle = _field_transform_bundle(field)
+    input_pencil = bundle.pencil_fft_input
+    input_pencil === nothing && error(
+        "batched PencilFFT requested for a field without an input pencil")
+    cache = bundle.batched_plan_cache
+
+    # The cache belongs to this exact domain/dtype plan bundle. Evicting the
+    # bundle therefore releases its batched plan and both full-size scratch
+    # arrays as one lifecycle unit; an object-id-only global cache leaked those
+    # arrays and could eventually return a stale plan after identity reuse.
+    cached = get(cache, B, nothing)
     cached !== nothing && return cached
 
-    transforms = _field_pencil_transforms(bases)
-    global_shape = Tuple(b.meta.size for b in bases)
-    plan = PencilFFTs.PencilFFTPlan(global_shape, transforms, dist.mesh, dist.comm; extra_dims=(B,))
-    # Reused scratch buffers (coeff-side input, grid-side output) — consumed within
-    # each call, so caching is safe and removes the two per-call allocations.
+    transforms = _pencil_transform_tuple(bundle.forward_ops)
+    real_dtype = typeof(real(zero(field.dtype)))
+    plan = PencilFFTs.PencilFFTPlan(
+        input_pencil, transforms, real_dtype; extra_dims=(B,))
+    # Reused scratch buffers (coeff-side input, grid-side output) — consumed
+    # within each call, so caching removes the two per-call allocations.
     cstack = PencilFFTs.allocate_output(plan)
     gstack = PencilFFTs.allocate_input(plan)
     entry = (plan, cstack, gstack)
-    _BATCHED_PENCIL_PLAN_CACHE[key] = entry
+    cache[B] = entry
     return entry
 end
 
@@ -544,7 +532,23 @@ function _pencil_batched_backward!(fields::Vector{<:ScalarField})
         return
     end
 
-    plan, cstack, gstack = _get_batched_backward_plan!(f0.dist, f0.bases, k)
+    if any(f -> f.domain !== f0.domain || f.dtype !== f0.dtype, fields)
+        foreach(backward_transform!, fields)
+        return
+    end
+
+    # A mixed distributed domain has a second, coupled inverse stage: transpose
+    # to `pencil_solve`, apply the local Chebyshev DCT, and transpose back.
+    # The extra-dimension PencilFFT plan below batches only the Fourier stage, so
+    # using it here would mark Fourier-inverted/Chebyshev-coefficient data as a
+    # valid grid. Keep the optimization to pure-Fourier bundles until that
+    # coupled stage has an explicitly batched implementation.
+    if any(basis -> !(basis isa Union{RealFourier, ComplexFourier}), f0.bases)
+        foreach(backward_transform!, fields)
+        return
+    end
+
+    plan, cstack, gstack = _get_batched_backward_plan!(f0, k)
     cp = parent(cstack)
     nd = ndims(cp)
     for (i, f) in enumerate(fields)
@@ -609,17 +613,17 @@ function _truncate_coeff_only!(dst::ScalarField, src::ScalarField, dealiasing_fa
     dst.current_layout = :c
 
     if isa(dc, PencilArrays.PencilArray)
-        _apply_spectral_cutoff_distributed!(dc, dst.bases, dealiasing_factor)
+        _apply_spectral_cutoff_distributed!(
+            dc, dst.bases, dealiasing_factor, dst.dtype)
     else
         nb = length(dst.bases)
         cutoffs = ntuple(nb) do i
             c = _axis_dealias_cutoff(dst.bases[i], dealiasing_factor)
             c === nothing ? size(dc, i) : c
         end
-        rfft_dims = ntuple(nb) do i
-            b = dst.bases[i]
-            isa(b, RealFourier) && size(dc, i) == div(b.meta.size, 2) + 1
-        end
+        bundle = _field_transform_bundle(dst)
+        rfft_dims = ntuple(i -> isa(dst.bases[i], RealFourier) &&
+                                _axis_uses_rfft(bundle, i), nb)
         apply_spectral_cutoff!(dc, cutoffs, rfft_dims)
     end
     return dst
@@ -646,12 +650,23 @@ exactly within the retained band.
 const _NL_RESULT_POOL_SIZE = 8
 const _NL_RESULT_IDX = Ref(0)
 
+@inline function _nonlinear_temp_field_key(name::AbstractString, template::ScalarField)
+    # Scratch PencilArrays and their transform plan must come from the exact
+    # domain/dtype bundle, not merely an equal basis tuple. A live cached field
+    # retains the bundle, so its object identity is safe for the key lifetime.
+    # Domainless scalar tau fields have no plan; an evaluator belongs to one
+    # Distributor, so name plus dtype uniquely identifies compatible 0-D scratch.
+    template.domain === nothing && return string(name, "_0d_", template.dtype)
+    bundle_id = objectid(_field_transform_bundle(template))
+    return string(name, '_', bundle_id)
+end
+
 function _checkout_nl_result!(evaluator::NonlinearEvaluator, field1::ScalarField)
     i = _NL_RESULT_IDX[] % _NL_RESULT_POOL_SIZE
     _NL_RESULT_IDX[] += 1
     # Tuple key (no per-call string allocation; matches the tuple-key convention
     # used by `_get_padded_workspace!`).
-    key = (i, hash(field1.bases), field1.dtype)
+    key = (i, objectid(_field_transform_bundle(field1)), field1.dtype)
     pool = evaluator.nl_result_pool
     cached = get(pool, key, nothing)
     cached === nothing || return cached
@@ -669,11 +684,10 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
     # so sharing them across calls is safe — unlike `result`, which the caller may
     # hold alongside a second product, e.g. CrossProduct). This avoids the two
     # per-call `copy(field)` allocations.
-    bkey = string(hash(field1.bases))
     f1 = get!(() -> ScalarField(field1.dist, "_nl_trunc_f1", field1.bases, field1.dtype),
-              evaluator.temp_fields, "_nl_trunc_f1_" * bkey)
+              evaluator.temp_fields, _nonlinear_temp_field_key("_nl_trunc_f1", field1))
     f2 = get!(() -> ScalarField(field1.dist, "_nl_trunc_f2", field1.bases, field1.dtype),
-              evaluator.temp_fields, "_nl_trunc_f2_" * bkey)
+              evaluator.temp_fields, _nonlinear_temp_field_key("_nl_trunc_f2", field1))
     # Band-limit both inputs in coeff space, then bring them back to grid with a
     # SINGLE batched transpose instead of one per input (2 backwards → 1).
     _truncate_coeff_only!(f1, field1, factor)
@@ -698,4 +712,3 @@ function evaluate_truncated_multiply_distributed(field1::ScalarField, field2::Sc
     _dealias_truncate_field!(result, factor; final_layout=result_layout)
     return result
 end
-

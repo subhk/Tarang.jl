@@ -1074,7 +1074,8 @@ A DISTRIBUTED field with a non-Fourier (Chebyshev/Jacobi) axis: `forward_transfo
 `PencilArrays.transpose!` calls (fft pencil → solve pencil → back)."""
 @inline function _has_distributed_coupled_axis(field::ScalarField)
     dist = field.dist
-    (dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing) || return false
+    (dist !== nothing && dist.size > 1 && field.domain !== nothing) || return false
+    _field_transform_bundle(field).pencil_solve !== nothing || return false
     isempty(field.bases) && return false
     return any(b -> !is_fourier_axis(b), field.bases)
 end
@@ -1189,7 +1190,8 @@ FFT order.
 """
 function _apply_lazy_fourier_diff!(coeff_storage, field::ScalarField,
                                    basis::FourierBasis, axis::Int, order::Int)
-    uses_rfft = isa(basis, RealFourier) && _is_first_real_fourier_axis(field.bases, axis)
+    uses_rfft = isa(basis, RealFourier) &&
+                _axis_uses_rfft(_field_transform_bundle(field), axis)
 
     if isa(coeff_storage, PencilArrays.PencilArray)
         _apply_spectral_derivative_distributed!(coeff_storage, basis, axis, order,

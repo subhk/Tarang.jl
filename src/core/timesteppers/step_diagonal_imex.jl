@@ -596,7 +596,8 @@ function _diagonal_deriv_grid(field::ScalarField, coord::Coordinate, order::Int)
     isa(basis, Union{RealFourier, ComplexFourier}) || return nothing
 
     k_axis = if isa(basis, RealFourier)
-        _is_first_real_fourier_axis(bases, axis) ? wavenumbers_rfft(basis) : wavenumbers_fft(basis)
+        _axis_uses_rfft(_field_transform_bundle(field), axis) ?
+            wavenumbers_rfft(basis) : wavenumbers_fft(basis)
     else
         wavenumbers(basis)
     end

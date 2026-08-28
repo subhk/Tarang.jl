@@ -156,6 +156,22 @@ using Tarang
         for (i, c) in enumerate(u.components)
             @test isapprox(Tarang.get_grid_data(c), originals[i]; rtol=1e-10, atol=1e-12)
         end
+
+        # TensorField direct transform methods must visit every matrix component.
+        S = TensorField(domain, "S_transform")
+        for (i, component) in enumerate(S.components)
+            set!(component, (x, y) -> i * sin(x) + (i + 1) * cos(y))
+        end
+        tensor_originals = [copy(Tarang.get_grid_data(c)) for c in S.components]
+
+        forward_transform!(S)
+        @test all(c -> c.current_layout == :c, S.components)
+        backward_transform!(S)
+        @test all(c -> c.current_layout == :g, S.components)
+        for (component, original) in zip(S.components, tensor_originals)
+            @test isapprox(Tarang.get_grid_data(component), original;
+                           rtol=1e-10, atol=1e-12)
+        end
     end
 
     # 7. Copy and deepcopy

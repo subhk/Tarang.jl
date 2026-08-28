@@ -87,7 +87,7 @@ function _evaluate_distributed_fourier_derivative!(result::ScalarField, operand:
     # Step 2: Apply spectral derivative in coefficient space
     # Each process works on its local portion of the distributed coefficient array
     # CRITICAL: Determine if this axis uses RFFT (only first RealFourier axis does)
-    uses_rfft = _is_first_real_fourier_axis(operand.bases, axis)
+    uses_rfft = _axis_uses_rfft(_field_transform_bundle(operand), axis)
     _apply_spectral_derivative_distributed!(coeff_data, basis, axis, order, dist; uses_rfft=uses_rfft)
 
     # Step 3: Allocate result coefficient data if needed
@@ -96,7 +96,7 @@ function _evaluate_distributed_fourier_derivative!(result::ScalarField, operand:
         if dist.use_pencil_arrays && isa(coeff_data, PencilArrays.PencilArray)
             # CRITICAL: Use PencilFFTs.allocate_output for compatible coeff-space array
             # This ensures the array works with PencilFFTs' mul!/ldiv!
-            pencil_plan = _find_pencil_plan(dist)
+            pencil_plan = _find_pencil_plan(_field_transform_bundle(result))
             if pencil_plan !== nothing
                 set_coeff_data!(result, PencilFFTs.allocate_output(pencil_plan))
             else
@@ -144,20 +144,10 @@ Returns true if:
 - The current axis is RealFourier, AND
 - No earlier axis is RealFourier
 """
-function _is_first_real_fourier_axis(bases, axis::Int)
-    # If the current axis is not RealFourier, it definitely doesn't use RFFT
-    if !isa(bases[axis], RealFourier)
-        return false
-    end
-
-    # Check if there's any earlier RealFourier axis
-    for i in 1:(axis-1)
-        if isa(bases[i], RealFourier)
-            return false  # There's an earlier RealFourier axis, so this one uses FFT not RFFT
-        end
-    end
-
-    return true  # This is the first RealFourier axis, uses RFFT
+function _is_first_real_fourier_axis(bases, axis::Int, dtype::Type=Float64)
+    grid_shape = ntuple(i -> bases[i].meta.size, length(bases))
+    ops, _, _ = forward_layout(bases, grid_shape, dtype)
+    return ops[axis].op === :rfft
 end
 
 """

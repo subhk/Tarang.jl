@@ -14,63 +14,130 @@ const _transform_setup_logged = Ref(false)
 _plan_basis_signature(domain::Domain) =
     Tuple((nameof(typeof(b)), b.meta.size) for b in domain.bases)
 
+@inline _transform_plan_cache_key(domain::Domain, dtype::Type) =
+    (objectid(domain), dtype)
+
+@inline _pencil_transform(op::AxisOp) =
+    op.op === :rfft ? PencilFFTs.Transforms.RFFT() :
+    op.op === :fft  ? PencilFFTs.Transforms.FFT() :
+                      PencilFFTs.Transforms.NoTransform()
+
+_pencil_transform_tuple(ops) = Tuple(map(_pencil_transform, ops))
+
+"""Reset only the distributor's legacy active-plan view."""
+function _reset_active_transform_plan!(dist::Distributor)
+    empty!(dist.transforms)
+    dist.pencil_fft_plan = nothing
+    dist.pencil_fft_input = nothing
+    dist.pencil_fft_output = nothing
+    dist.pencil_config = nothing
+    dist.pencil_solve = nothing
+    dist.plan_basis_signature = nothing
+    return dist
+end
+
+"""Expose `bundle` through the legacy mutable Distributor fields."""
+function _activate_transform_bundle!(dist::Distributor, bundle::TransformPlanBundle)
+    # Never alias the cached vector: legacy callers are allowed to inspect (and
+    # historically could mutate) `dist.transforms`, while the bundle is the
+    # correctness source used by fields.
+    empty!(dist.transforms)
+    append!(dist.transforms, bundle.transforms)
+    dist.pencil_config = bundle.pencil_config
+    dist.pencil_fft_plan = bundle.pencil_fft_plan
+    dist.pencil_fft_input = bundle.pencil_fft_input
+    dist.pencil_fft_output = bundle.pencil_fft_output
+    dist.pencil_solve = bundle.pencil_solve
+    dist.plan_basis_signature = bundle.basis_signature
+    return bundle
+end
+
+function _snapshot_transform_bundle(dist::Distributor, domain::Domain, dtype::Type)
+    forward_ops, _, _ = forward_layout(domain.bases, global_shape(domain), dtype)
+    return TransformPlanBundle(
+        domain,
+        dtype,
+        forward_ops,
+        copy(dist.transforms),
+        dist.pencil_config,
+        dist.pencil_fft_plan,
+        dist.pencil_fft_input,
+        dist.pencil_fft_output,
+        dist.pencil_solve,
+        _plan_basis_signature(domain),
+        Dict{Int, Any}(),
+        Dict{Symbol, Any}(),
+    )
+end
+
+"""
+    transform_plan_bundle(domain, dtype=domain.dist.dtype)
+
+Return the transform state owned by this exact domain and field element type,
+building it collectively on first use.  Execution paths call this resolver and
+never depend on whichever plan another domain most recently exposed through
+the Distributor's legacy fields.
+"""
+function transform_plan_bundle(domain::Domain, dtype::Type=domain.dist.dtype)
+    dist = domain.dist
+    dist.closed && throw(ArgumentError("cannot plan transforms on a closed Distributor"))
+    key = _transform_plan_cache_key(domain, dtype)
+    cached = get(dist.transform_plan_cache, key, nothing)
+    cached !== nothing && return cached::TransformPlanBundle
+
+    # MPI plan construction is collective and must already occur in the same
+    # order on every rank. Callers must not concurrently mutate one Distributor;
+    # a per-process lock cannot make rank-divergent collective calls safe.
+    previous = (
+        transforms=copy(dist.transforms),
+        pencil_config=dist.pencil_config,
+        pencil_fft_plan=dist.pencil_fft_plan,
+        pencil_fft_input=dist.pencil_fft_input,
+        pencil_fft_output=dist.pencil_fft_output,
+        pencil_solve=dist.pencil_solve,
+        basis_signature=dist.plan_basis_signature,
+    )
+    _reset_active_transform_plan!(dist)
+    try
+        _plan_transforms_uncached!(dist, domain, dtype)
+        bundle = _snapshot_transform_bundle(dist, domain, dtype)
+        dist.transform_plan_cache[key] = bundle
+        _activate_transform_bundle!(dist, bundle)
+        return bundle
+    catch err
+        empty!(dist.transforms)
+        append!(dist.transforms, previous.transforms)
+        dist.pencil_config = previous.pencil_config
+        dist.pencil_fft_plan = previous.pencil_fft_plan
+        dist.pencil_fft_input = previous.pencil_fft_input
+        dist.pencil_fft_output = previous.pencil_fft_output
+        dist.pencil_solve = previous.pencil_solve
+        dist.plan_basis_signature = previous.basis_signature
+        rethrow()
+    end
+end
+
 """
     Plan all transforms for a domain.
 
     MPI parallelization is ONLY supported for pure Fourier domains.
     Mixed-basis or non-Fourier domains require serial execution.
     """
-function plan_transforms!(dist::Distributor, domain::Domain)
+function plan_transforms!(dist::Distributor, domain::Domain,
+                          dtype::Type=dist.dtype)
+    dist === domain.dist || throw(ArgumentError(
+        "plan_transforms!: domain belongs to a different Distributor"))
+    bundle = transform_plan_bundle(domain, dtype)
+    _activate_transform_bundle!(dist, bundle)
+    return bundle
+end
+
+"""Build one uncached plan into the distributor's temporary active fields."""
+function _plan_transforms_uncached!(dist::Distributor, domain::Domain,
+                                    dtype::Type)
 
     gshape = global_shape(domain)
     ndim = length(domain.bases)
-
-    # Check if we already have a PencilFFT plan for this configuration.
-    # If so, reuse it to ensure all fields use the same pencils. The BASIS
-    # signature must match too, not just the grid shape: (Cheb(64), RF(64)) and
-    # (RF(64), CF(64)) share gshape (64,64) but need entirely different plans —
-    # reusing across them FFT'd the Chebyshev axis and skipped its DCT and
-    # `pencil_solve`, silently (the serial guard below always checked types).
-    if dist.pencil_fft_input !== nothing
-        existing_gshape = dist.pencil_fft_input.size_global
-        if existing_gshape == gshape && !isempty(dist.transforms) &&
-           dist.plan_basis_signature == _plan_basis_signature(domain)
-            return  # Reuse existing plan - same configuration
-        end
-    end
-
-    # Serial guard: if transforms already cover all bases in this domain, skip replanning.
-    # This avoids expensive FFTW re-planning when temporary fields are created with
-    # the same basis configuration (e.g., during RHS evaluation each timestep).
-    if dist.size == 1 && !isempty(dist.transforms)
-        all_covered = true
-        for (i, basis) in enumerate(domain.bases)
-            found = any(dist.transforms) do t
-                t.basis === basis || (t.axis == i && t.basis.meta.size == basis.meta.size &&
-                                      typeof(t.basis) == typeof(basis))
-            end
-            if !found
-                all_covered = false
-                break
-            end
-        end
-        if all_covered
-            return
-        end
-    end
-
-    # Clear existing transforms for new configuration
-    empty!(dist.transforms)
-    dist.pencil_fft_plan = nothing
-    dist.pencil_fft_input = nothing
-    dist.pencil_fft_output = nothing
-    dist.pencil_config = nothing
-    # Also drop the mixed-domain solve pencil and the plan signature: a stale
-    # `pencil_solve` from an earlier mixed plan makes downstream predicates
-    # (`pencil_solve !== nothing` in subsystem building / lazy RHS) misroute a
-    # replanned pure-Fourier problem as a coupled mixed solve.
-    dist.pencil_solve = nothing
-    dist.plan_basis_signature = nothing
 
     # Analyze basis types
     fourier_axes = Int[]
@@ -140,7 +207,7 @@ function plan_transforms!(dist::Distributor, domain::Domain)
             end
             for (i, basis) in enumerate(domain.bases)
                 if isa(basis, RealFourier) || isa(basis, ComplexFourier)
-                    setup_fftw_transform!(dist, basis, i)
+                    setup_fftw_transform!(dist, basis, i, dtype)
                 end
             end
             dist.plan_basis_signature = _plan_basis_signature(domain)
@@ -163,9 +230,9 @@ function plan_transforms!(dist::Distributor, domain::Domain)
 
             # Set up PencilFFTs for only the Fourier dimensions
             if ndim == 2
-                setup_pencil_fft_transforms_2d!(dist, domain, gshape, fourier_axes)
+                setup_pencil_fft_transforms_2d!(dist, domain, gshape, fourier_axes, dtype)
             else
-                setup_pencil_fft_transforms_3d!(dist, domain, gshape, fourier_axes)
+                setup_pencil_fft_transforms_3d!(dist, domain, gshape, fourier_axes, dtype)
             end
 
             # Set up local Chebyshev transforms for non-decomposed axes
@@ -179,9 +246,9 @@ function plan_transforms!(dist::Distributor, domain::Domain)
 
         # Pure Fourier: Setup PencilFFTs for 2D/3D
         if ndim == 2
-            setup_pencil_fft_transforms_2d!(dist, domain, gshape, fourier_axes)
+            setup_pencil_fft_transforms_2d!(dist, domain, gshape, fourier_axes, dtype)
         else  # ndim == 3
-            setup_pencil_fft_transforms_3d!(dist, domain, gshape, fourier_axes)
+            setup_pencil_fft_transforms_3d!(dist, domain, gshape, fourier_axes, dtype)
         end
         dist.plan_basis_signature = _plan_basis_signature(domain)
         return
@@ -194,7 +261,7 @@ function plan_transforms!(dist::Distributor, domain::Domain)
     # generic Jacobi, which would otherwise get no transform (silent identity).
     for (i, basis) in enumerate(domain.bases)
         if isa(basis, RealFourier) || isa(basis, ComplexFourier)
-            setup_fftw_transform!(dist, basis, i)
+            setup_fftw_transform!(dist, basis, i, dtype)
         elseif isa(basis, ChebyshevT)
             setup_chebyshev_transform!(dist, basis, i)
         elseif isa(basis, Legendre)
@@ -208,7 +275,8 @@ function plan_transforms!(dist::Distributor, domain::Domain)
 end
 
 function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
-                                    global_shape::Tuple, fourier_axes::Vector{Int})
+                                    global_shape::Tuple, fourier_axes::Vector{Int},
+                                    dtype::Type=dist.dtype)
 
     """Setup PencilFFTs transforms for parallel 2D FFT"""
 
@@ -217,60 +285,33 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
         @info "Serial execution detected, using FFTW transforms instead of PencilFFTs"
         for axis in fourier_axes
             basis = domain.bases[axis]
-            setup_fftw_transform!(dist, basis, axis)
+            setup_fftw_transform!(dist, basis, axis, dtype)
         end
         return
     end
 
     if dist.pencil_config === nothing
-        setup_pencil_arrays(dist, global_shape)
+        setup_pencil_arrays(dist, global_shape; dtype=dtype)
     end
 
     # Create PencilFFT plan for the Fourier dimensions
     # PencilFFTPlan expects a tuple of transforms, one per dimension
     # Use RFFT for RealFourier bases (real-to-complex), FFT for ComplexFourier
 
-    # Build transforms tuple based on basis types
-    # NOTE: RFFT can only be applied to the first transform dimension in PencilFFTs.
-    # Case 1: First Fourier axis is RealFourier → RFFT, subsequent RealFourier → FFT (OK with warning)
-    # Case 2: First Fourier axis is NOT RealFourier but later one is → ERROR (shape mismatch)
-    # Build transforms for ALL dimensions: Fourier axes get RFFT/FFT, others get NoTransform.
-    # PencilFFTPlan requires exactly N transforms for N-dimensional data.
-    transform_list = []
-    uses_rfft = false
-    first_fourier_axis = isempty(fourier_axes) ? 0 : fourier_axes[1]
-    first_fourier_is_real = first_fourier_axis > 0 && isa(domain.bases[first_fourier_axis], RealFourier)
+    # Derive the backend operations from the canonical layout walk. In
+    # particular, a RealFourier basis receives RFFT only while the incoming
+    # field data is real; Complex fields therefore use C2C FFT on every axis and
+    # retain a full spectrum. Non-Fourier stages are local transforms and remain
+    # NoTransform in PencilFFTs.
+    forward_ops, _, _ = forward_layout(domain.bases, global_shape, dtype)
+    transforms = _pencil_transform_tuple(forward_ops)
 
-    for (dim, basis) in enumerate(domain.bases)
-        if isa(basis, RealFourier)
-            if dim == first_fourier_axis
-                push!(transform_list, PencilFFTs.Transforms.RFFT())
-                uses_rfft = true
-            elseif first_fourier_is_real
-                push!(transform_list, PencilFFTs.Transforms.FFT())
-            else
-                error("RealFourier basis on axis $dim cannot use RFFT because the first Fourier axis " *
-                      "(axis $first_fourier_axis) is not RealFourier. In MPI mode with PencilFFTs, " *
-                      "RFFT can only be applied to dimension 1. Please reorder your domain bases " *
-                      "to place RealFourier first, or use ComplexFourier for this axis.")
-            end
-        elseif isa(basis, ComplexFourier)
-            push!(transform_list, PencilFFTs.Transforms.FFT())
-        else
-            # Non-Fourier axis (Chebyshev, Legendre): no transform, kept local
-            push!(transform_list, PencilFFTs.Transforms.NoTransform())
-        end
-    end
-    transforms = Tuple(transform_list)
-
-    # Create the PencilFFT plan (only for parallel execution)
-    # RFFT expects real input, FFT expects complex input
-    # If dtype is already complex, use it directly; otherwise wrap in Complex{}
-    pencil_dtype = if uses_rfft
-        dist.dtype
-    else
-        dist.dtype <: Complex ? dist.dtype : Complex{dist.dtype}
-    end
+    # PencilFFTs' third positional argument is the real component type used to
+    # allocate inputs and build FFTW plans. Omitting it silently defaults to
+    # Float64, which promoted Float32 fields and made their buffers incompatible.
+    real_dtype = typeof(real(zero(dtype)))
+    real_dtype <: Union{Float32, Float64} || throw(ArgumentError(
+        "PencilFFTs supports Float32/Float64 field precision, got $dtype"))
 
     # Determine decomposition strategy based on basis types:
     # - Fourier axes: can be parallelized (PencilFFTs handles transposes)
@@ -316,7 +357,7 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     # CRITICAL: If this fails in MPI mode, we CANNOT safely fall back to local FFTW
     # because that would compute incorrect results on decomposed data
     try
-        fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms)
+        fft_plan = PencilFFTs.PencilFFTPlan(pencil, transforms, real_dtype)
         push!(dist.transforms, fft_plan)
         dist.pencil_fft_plan = fft_plan
 
@@ -359,7 +400,7 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
             @info "PencilFFT plan creation failed in serial mode, using FFTW transforms"
             for axis in fourier_axes
                 basis = domain.bases[axis]
-                setup_fftw_transform!(dist, basis, axis)
+                setup_fftw_transform!(dist, basis, axis, dtype)
             end
             return
         end
@@ -376,14 +417,16 @@ end
 # The 2D implementation is dimension-generic; keep the 3D public entry point
 # so exports and 3D planning paths resolve to a defined method.
 function setup_pencil_fft_transforms_3d!(dist::Distributor, domain::Domain,
-                                    global_shape::Tuple, fourier_axes::Vector{Int})
-    return setup_pencil_fft_transforms_2d!(dist, domain, global_shape, fourier_axes)
+                                    global_shape::Tuple, fourier_axes::Vector{Int},
+                                    dtype::Type=dist.dtype)
+    return setup_pencil_fft_transforms_2d!(dist, domain, global_shape, fourier_axes, dtype)
 end
 
 """Setup FFTW transforms for 1D case (CPU only)."""
-function setup_fftw_transform!(dist::Distributor, basis::Union{RealFourier, ComplexFourier}, axis::Int)
+function setup_fftw_transform!(dist::Distributor, basis::Union{RealFourier, ComplexFourier},
+                               axis::Int, dtype::Type=dist.dtype)
     transform = FourierTransform(basis, axis)
-    setup_cpu_fft_transform!(transform, basis, dist.dtype)
+    setup_cpu_fft_transform!(transform, basis, dtype)
     push!(dist.transforms, transform)
 end
 

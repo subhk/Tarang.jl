@@ -293,20 +293,8 @@ function compute_field_vector_size(field::ScalarField)
     elseif get_grid_data(field) !== nothing
         return length(get_grid_data(field))
     else
-        # `bases` is `Tuple{Vararg{Basis}}`, so a `nothing` entry is not
-        # representable and needs no guard here. Only `full_bases(domain)` —
-        # which pads absent axes — can hand out `nothing`.
-        total_size = 1
-        first_rf = true
-        for basis in field.bases
-            if isa(basis, RealFourier) && first_rf
-                total_size *= rfft_len(get_basis_size(basis))
-                first_rf = false
-            else
-                total_size *= get_basis_size(basis)
-            end
-        end
-        return total_size
+        field.domain === nothing && return prod(get_basis_size, field.bases)
+        return prod(coefficient_shape(field.domain, field.dtype))
     end
 end
 

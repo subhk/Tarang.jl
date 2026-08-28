@@ -21,6 +21,29 @@ using InteractiveUtils
         @test length(Tarang.get_coeff_data(tau)) == 0
     end
 
+    @testset "0-D spectral filters are no-ops" begin
+        tau = ScalarField(dist, "tau_filter", (), Float64)
+        grid_before = copy(Tarang.get_grid_data(tau))
+        coeff_before = copy(Tarang.get_coeff_data(tau))
+        layout_before = tau.current_layout
+
+        @test apply_spectral_cutoff!(tau, 2 / 3) === tau
+        @test Tarang.apply_3d_dealiasing!(tau, 1.5) === tau
+        @test Tarang.apply_basic_dealiasing!(tau, 1.5) === tau
+        @test Tarang.get_grid_data(tau) == grid_before
+        @test Tarang.get_coeff_data(tau) == coeff_before
+        @test tau.current_layout === layout_before
+
+        k_squared = Tarang.compute_wavenumber_squared_grid(tau)
+        @test isempty(k_squared)
+        @test eltype(k_squared) === Float64
+
+        evaluator = NonlinearEvaluator(dist)
+        temp_tau = get_temp_field(evaluator, tau, "tau_filter_scratch")
+        @test isempty(temp_tau.bases)
+        @test temp_tau.dtype === Float64
+    end
+
     @testset "Phase 2: field array type fixed at construction" begin
         u = ScalarField(dist, "u", (xb, yb), Float64)
         ensure_layout!(u, :g)

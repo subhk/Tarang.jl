@@ -367,6 +367,11 @@ function clear_distributor_cache!(dist::Distributor)
     # Clear pencil cache
     empty!(dist.pencil_cache)
 
+    # Drop distributor ownership of domain/type transform bundles. Existing
+    # fields retain their exact bundles and remain usable; constructing a new
+    # field for an evicted domain/type pair rebuilds that bundle collectively.
+    empty!(dist.transform_plan_cache)
+
     # Reset PencilArrays configuration if needed
     dist.pencil_config = nothing
 

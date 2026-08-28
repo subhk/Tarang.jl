@@ -44,19 +44,8 @@ RealFourier axes use regular FFT (full size N).  This matches
 function _coeff_space_dofs(var::ScalarField)
     # Compute from basis metadata — always global, works for serial + MPI
     if !isempty(var.bases)
-        total = 1
-        first_rf = true
-        for basis in var.bases
-            if basis !== nothing
-                if isa(basis, RealFourier) && first_rf
-                    total *= div(basis.meta.size, 2) + 1
-                    first_rf = false
-                else
-                    total *= basis.meta.size
-                end
-            end
-        end
-        return total
+        var.domain === nothing && return prod(b.meta.size for b in var.bases if b !== nothing)
+        return prod(coefficient_shape(var.domain, var.dtype))
     end
 
     # Tau variables (empty bases): always 1 DOF (0D scalar gauge variable).

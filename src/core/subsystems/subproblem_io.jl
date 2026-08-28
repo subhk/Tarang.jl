@@ -23,10 +23,13 @@ axis the pencil actually decomposes over `N` — wrong local mode ranges, wrong
 storage rows gathered, and out-of-range modes silently zero-filled.
 """
 function _coeff_axis_global_size(field::ScalarField, axis::Int)
-    basis = field.bases[axis]
-    isa(basis, RealFourier) || return basis.meta.size
-    first_fourier = findfirst(b -> isa(b, FourierBasis), field.bases)
-    return axis == first_fourier ? div(basis.meta.size, 2) + 1 : basis.meta.size
+    domain = field.domain
+    domain === nothing && return field.bases[axis].meta.size
+    bundle = _field_transform_bundle(field)
+    if bundle.pencil_fft_output !== nothing
+        return PencilArrays.size_global(bundle.pencil_fft_output)[axis]
+    end
+    return get_coefficient_shape_for_context(domain, field.dist, field.dtype)[axis]
 end
 
 """
@@ -88,7 +91,9 @@ a built `pencil_solve`, a non-Fourier (Chebyshev/Jacobi) basis present, and the
 coeff storage actually a `PencilArray`.
 """
 function _needs_solve_transpose(field::ScalarField, dist)
-    return dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing &&
+    bundle = field.domain === nothing ? nothing : _field_transform_bundle(field)
+    return dist !== nothing && dist.size > 1 && bundle !== nothing &&
+           bundle.pencil_solve !== nothing &&
            !isempty(field.bases) &&
            any(b -> !is_fourier_axis(b), field.bases) &&
            get_coeff_data(field) isa PencilArrays.PencilArray
@@ -148,9 +153,10 @@ each such axis of `solve_pa` (NoPermutation ⇒ `parent` is in logical order, wi
 the coupled axis local). Converts the coupled axis from grid to coefficient space
 so the per-mode gather sees spectral coefficients.
 """
-function _solve_layout_forward_transform!(solve_pa::PencilArrays.PencilArray, dist)
+function _solve_layout_forward_transform!(solve_pa::PencilArrays.PencilArray,
+                                          bundle::TransformPlanBundle)
     cd = parent(solve_pa)
-    for transform in dist.transforms
+    for transform in bundle.transforms
         (transform isa Transform) || continue          # skip PencilFFTPlan
         (transform isa FourierTransform) && continue    # Fourier done by PencilFFT
         # In-place via the transform's CACHED scratch+plan (zero-alloc once warm) —
@@ -170,9 +176,10 @@ Inverse of `_solve_layout_forward_transform!`: apply the local non-Fourier
 backward transform along each coupled axis, returning the coupled axis to grid
 space before the transpose back to the FFT pencil.
 """
-function _solve_layout_backward_transform!(solve_pa::PencilArrays.PencilArray, dist)
+function _solve_layout_backward_transform!(solve_pa::PencilArrays.PencilArray,
+                                           bundle::TransformPlanBundle)
     cd = parent(solve_pa)
-    for transform in dist.transforms
+    for transform in bundle.transforms
         (transform isa Transform) || continue
         (transform isa FourierTransform) && continue
         # In-place via cached scratch+plan (zero-alloc once warm). 3-arg form ⇒
@@ -213,7 +220,7 @@ function to_solve_layout!(fields, dist; fuse_from_grid::Bool=false)
     # stash WITHOUT allocating. This guard runs ~8–14×/step even on serial runs;
     # allocating a fresh empty `Pair[]` here was pure waste. `from_solve_layout!`
     # only iterates the stash (never mutates), so a shared const is safe.
-    (dist === nothing || dist.size <= 1 || dist.pencil_solve === nothing) && return _EMPTY_SOLVE_STASH
+    (dist === nothing || dist.size <= 1) && return _EMPTY_SOLVE_STASH
     stash = Pair{ScalarField, Any}[]
     cache = get_transpose_cache()
     # `collect_state_fields`/buffered-RHS lists are ALREADY flat `ScalarField`
@@ -223,7 +230,9 @@ function to_solve_layout!(fields, dist; fuse_from_grid::Bool=false)
     leaves = eltype(fields) <: ScalarField ? fields : _iter_scalar_fields(fields)
     for f in leaves
         _needs_solve_transpose(f, dist) || continue
-        key = (:solve, objectid(f), objectid(dist.pencil_solve))
+        bundle = _field_transform_bundle(f)
+        solve_pencil = bundle.pencil_solve
+        key = (:solve, objectid(f), objectid(solve_pencil))
         if fuse_from_grid && f.current_layout === :g
             # FUSED grid→solve: apply ONLY the Fourier transform here (skip the
             # coupled DCT's fft→solve→fft round-trip), transpose fft→solve ONCE,
@@ -234,16 +243,16 @@ function to_solve_layout!(fields, dist; fuse_from_grid::Bool=false)
             fft_pa = get_coeff_data(f)
             (fft_pa isa PencilArrays.PencilArray) || continue
             dtype = eltype(fft_pa)
-            solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
+            solve_pa = get_transpose_buffer!(cache, solve_pencil, dtype, key)
             transpose_multistep!(solve_pa, fft_pa, cache, key)
-            _solve_layout_forward_transform!(solve_pa, dist)     # coupled DCT, local, in solve pencil
+            _solve_layout_forward_transform!(solve_pa, bundle)   # coupled DCT, local, in solve pencil
             set_coeff_data!(f, solve_pa)
             push!(stash, f => fft_pa)
         else
             fft_pa = coeff_data!(f)
             (fft_pa isa PencilArrays.PencilArray) || continue
             dtype = eltype(fft_pa)
-            solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
+            solve_pa = get_transpose_buffer!(cache, solve_pencil, dtype, key)
             transpose_multistep!(solve_pa, fft_pa, cache, key)
             # `:c` is already Chebyshev-SPECTRAL (forward_transform! applied the coupled
             # DCT via _apply_distributed_coupled_dct!), so the fft→solve transpose alone
@@ -268,6 +277,8 @@ PencilFFT Fourier `ldiv!`).
 function from_solve_layout!(stash, dist; to_grid::Bool=false)
     (dist === nothing || dist.size <= 1) && return
     for (f, fft_pa) in stash
+        bundle = _field_transform_bundle(f)
+        solve_pencil = bundle.pencil_solve
         solve_pa = get_coeff_data(f)
         (solve_pa isa PencilArrays.PencilArray) || continue
         if to_grid
@@ -292,9 +303,9 @@ function from_solve_layout!(stash, dist; to_grid::Bool=false)
             # replicated, so this errors on all ranks together or none).
             f.current_layout === :c || error("from_solve_layout!(to_grid=true) requires " *
                 ":c-flagged fields; got :$(f.current_layout) for '$(f.name)'")
-            _solve_layout_backward_transform!(solve_pa, dist)     # inverse coupled DCT, local, in solve pencil
+            _solve_layout_backward_transform!(solve_pa, bundle)   # inverse coupled DCT, local, in solve pencil
             transpose_multistep!(fft_pa, solve_pa, get_transpose_cache(),
-                                (:solve, objectid(f), objectid(dist.pencil_solve)))  # solve→fft (coupled axis now GRID)
+                                (:solve, objectid(f), objectid(solve_pencil)))  # solve→fft (coupled axis now GRID)
             set_coeff_data!(f, fft_pa)
             backward_transform!(f, :g; apply_coupled_dct=false)   # Fourier ldiv! only → :g
         else
@@ -303,7 +314,7 @@ function from_solve_layout!(stash, dist; to_grid::Bool=false)
             # so `:c` is Chebyshev-SPECTRAL in both the fft and solve pencils. The
             # solve↔fft transpose preserves those coefficients; no DCT here.
             transpose_multistep!(fft_pa, solve_pa, get_transpose_cache(),
-                                (:solve, objectid(f), objectid(dist.pencil_solve)))
+                                (:solve, objectid(f), objectid(solve_pencil)))
             set_coeff_data!(f, fft_pa)
         end
     end
@@ -332,9 +343,12 @@ two `PencilArrays.transpose!` collectives here are always rank-uniform.
 """
 function _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool)
     dist = field.dist
-    (dist !== nothing && dist.size > 1 && dist.pencil_solve !== nothing) || return field
+    (dist !== nothing && dist.size > 1) || return field
     isempty(field.bases) && return field
     any(b -> !is_fourier_axis(b), field.bases) || return field
+    bundle = _field_transform_bundle(field)
+    solve_pencil = bundle.pencil_solve
+    solve_pencil === nothing && return field
     fft_pa = get_coeff_data(field)
     (fft_pa isa PencilArrays.PencilArray) || return field
     _count_transform!(:coupled_dct)   # 2 collective transposes below
@@ -352,11 +366,11 @@ function _apply_distributed_coupled_dct!(field::ScalarField, forward::Bool)
     # is stable per problem (only field objectids churn on the interpreted-RHS path), so
     # this still bounds the cache to one buffer per problem. `dtype` is appended by
     # `get_transpose_buffer!`.
-    key = (:coupled_dct, objectid(dist.pencil_solve))
-    solve_pa = get_transpose_buffer!(cache, dist.pencil_solve, dtype, key)
+    key = (:coupled_dct, objectid(solve_pencil))
+    solve_pa = get_transpose_buffer!(cache, solve_pencil, dtype, key)
     transpose_multistep!(solve_pa, fft_pa, cache, key)
-    forward ? _solve_layout_forward_transform!(solve_pa, dist) :
-              _solve_layout_backward_transform!(solve_pa, dist)
+    forward ? _solve_layout_forward_transform!(solve_pa, bundle) :
+              _solve_layout_backward_transform!(solve_pa, bundle)
     transpose_multistep!(fft_pa, solve_pa, cache, key)
     return field
 end

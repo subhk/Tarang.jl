@@ -60,8 +60,10 @@ function get_pencil_compatible_data(field::ScalarField, config::PencilConfig)
     end
 
     # Verify MPI communicator compatibility
-    if field.dist.use_pencil_arrays && field.dist.pencil_config !== nothing
-        if field.dist.pencil_config.comm != config.comm
+    bundle = field.domain === nothing ? nothing : _field_transform_bundle(field)
+    field_config = bundle === nothing ? nothing : bundle.pencil_config
+    if field.dist.use_pencil_arrays && field_config !== nothing
+        if field_config.comm != config.comm
             @warn "MPI communicator mismatch between field and config"
         end
     end
@@ -145,8 +147,9 @@ end
 function get_pencil_config_from_field(field::ScalarField)
     dist = field.dist
 
-    if dist.pencil_config !== nothing
-        return dist.pencil_config
+    bundle = _field_transform_bundle(field)
+    if bundle.pencil_config !== nothing
+        return bundle.pencil_config
     end
 
     # Build a config from field properties
@@ -378,8 +381,7 @@ end
 # Memory management
 """Get temporary field for intermediate calculations """
 function get_temp_field(evaluator::NonlinearEvaluator, template::ScalarField, name::String)
-
-    key = "$(name)_$(hash(template.bases))"
+    key = _nonlinear_temp_field_key(name, template)
 
     if !haskey(evaluator.temp_fields, key)
         temp_field = ScalarField(template.dist, name, template.bases, template.dtype)
