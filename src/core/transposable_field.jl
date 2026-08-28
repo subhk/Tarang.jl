@@ -284,8 +284,22 @@ end
 """Get the current active layout"""
 active_layout(tf::TransposableField) = tf.buffers.active_layout[]
 
-"""Get data array for current layout"""
+"""Get the authoritative data array for the wrapper's current layout."""
 function current_data(tf::TransposableField)
+    # A one-rank distributed transform delegates to ScalarField's ordinary
+    # basis-aware transform because grid and coefficient shapes can differ
+    # (for example, a RealFourier half spectrum). No transpose buffer can
+    # represent both shapes, so the wrapped field remains authoritative.
+    if tf.field.dist.size == 1
+        if tf.field.current_layout === :g
+            return get_grid_data(tf.field)
+        elseif tf.field.current_layout === :c
+            return get_coeff_data(tf.field)
+        end
+        error("TransposableField has unsupported serial field layout " *
+              "$(repr(tf.field.current_layout))")
+    end
+
     layout = active_layout(tf)
     if layout == ZLocal
         return tf.buffers.z_local_data
