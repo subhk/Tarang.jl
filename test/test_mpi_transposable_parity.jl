@@ -163,3 +163,73 @@ end
 end
 
 MPI.Barrier(COMM)
+
+# Task 13: prove that the is_transposable_storage dispatch branch added to the
+# ordinary forward_transform!/backward_transform! in Task 12 actually EXECUTES,
+# and produces correct values, without needing a GPU.
+#
+# The obvious approach — a JLArray field on a CPU Distributor — never reaches the
+# branch at all: storage selection keys on is_gpu(dist.architecture), which is
+# false for CPU() regardless of the array type, so a JLArray field there just
+# gets ordinary SerialFieldStorage. And Tarang.GPU() cannot be constructed on
+# this box (it raises CUDA installation guidance), so a genuinely GPU-
+# architecture Distributor is unreachable here.
+#
+# Instead, build a field whose STORAGE is TransposableFieldStorage directly via
+# ScalarField's explicit-storage inner constructor (dist, name, bases, dtype,
+# storage) — bypassing the is_gpu(dist.architecture) && dist.size > 1 gate the
+# ordinary constructor applies — while every underlying array stays a plain CPU
+# Array and every FFT runs on FFTW. is_transposable_storage dispatches on the
+# storage TYPE parameter, not on the `architecture` field carried inside it, so
+# this legitimately takes the SAME branch a real GPU+MPI field would: through
+# forward_transform!/backward_transform! -> transpose_workspace! ->
+# distributed_forward_transform!/distributed_backward_transform!.
+#
+# Guarded to NP > 1 only: at one rank, distributed_forward_transform! delegates
+# back to forward_transform!(tf.field) (see its `dist.size == 1` short-circuit).
+# For an ordinary SerialFieldStorage field that delegation lands in a different
+# branch, but tf.field here is itself transposable-storage, so that delegation
+# would re-enter this same branch and recurse forever.
+if NP > 1
+    @testset "synthetic device-storage field dispatches through forward_transform!/backward_transform! (np=$NP)" begin
+        Nx, Ny = 8, 6
+        mesh = (NP, 1)
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; comm=COMM, mesh=mesh, dtype=ComplexF64,
+                           architecture=CPU(), use_pencil_arrays=false)
+        bases = (ComplexFourier(coords, "x", Nx), ComplexFourier(coords, "y", Ny))
+
+        # An ordinary field on this Distributor gets SerialFieldStorage (architecture
+        # is CPU, not GPU) with plain, per-rank block-shaped Arrays — exactly the grid
+        # and coeff arrays a TransposableFieldStorage needs to wrap.
+        host_field = ScalarField(dist, "device_dispatch_host", bases)
+        ox, oy = block_ranges(mesh, Nx, Ny)
+        g = Tarang.get_grid_data(host_field)
+        @test size(g) == (length(ox), length(oy))
+        for (jl, jg) in enumerate(oy), (il, ig) in enumerate(ox)
+            g[il, jl] = complex(f2(ig, jg, Nx, Ny), 0.0)
+        end
+        original = copy(g)
+        c = Tarang.get_coeff_data(host_field)
+
+        # Wrap the SAME grid/coeff arrays in a TransposableFieldStorage. The
+        # `architecture` recorded inside the storage is CPU() — it is the storage
+        # TYPE (not this field, not this value) that routes
+        # forward_transform!/backward_transform! to the distributed path.
+        storage = Tarang.TransposableFieldStorage(CPU(), g, c)
+        field = ScalarField(dist, "device_dispatch", bases, ComplexF64, storage)
+        @test Tarang.is_transposable_storage(field) == true
+        @test field.current_layout == :g
+
+        forward_transform!(field)
+        @test field.current_layout == :c
+        reference = serial_coeffs_2d(Nx, Ny)
+        @test maximum(abs, Tarang.get_coeff_data(field) .- reference[ox, oy]; init=0.0) < 1e-10
+
+        backward_transform!(field)
+        @test field.current_layout == :g
+        @test maximum(abs, Tarang.get_grid_data(field) .- original; init=0.0) < 1e-10
+    end
+end
+
+MPI.Barrier(COMM)

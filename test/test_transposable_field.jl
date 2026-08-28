@@ -265,7 +265,14 @@ if NPROCS == 1
         return field
     end
 
-    @testset "Forward transform matches the regular serial transform" begin
+    @testset "Serial short-circuit delegates to the field's own transform" begin
+        # At one rank there is no transpose to perform and the field's regular
+        # transform path owns the basis-specific shapes (a RealFourier half
+        # spectrum has no representation in the fixed-shape transpose buffers).
+        # This asserts the DELEGATION — that the wrapper leaves the field
+        # authoritative — which is all the serial path claims. The claim that the
+        # distributed path reproduces serial COEFFICIENTS is an np>1 statement and
+        # lives in test_mpi_transposable_parity.jl.
         field = serial_transform_field("transform_forward")
         reference = serial_transform_field("transform_forward_reference")
         tf = TransposableField(field)
@@ -274,7 +281,6 @@ if NPROCS == 1
         @test field.current_layout == :c
         @test field["c"] ≈ reference["c"]
         @test Tarang.current_data(tf) === Tarang.get_coeff_data(field)
-        @test Tarang.current_data(tf) ≈ reference["c"]
     end
 
     @testset "Round-trip transform" begin

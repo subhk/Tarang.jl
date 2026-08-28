@@ -78,6 +78,11 @@ function backward_transform!(field::ScalarField, target_layout::Symbol=:g; apply
     # CPU-only and the local transform chain would compute a per-rank inverse
     # FFT of a slab, which is silently wrong rather than an error.
     if is_transposable_storage(field)
+        # Dropping target_layout/apply_coupled_dct here is safe: is_transposable_storage
+        # always implies is_gpu(dist.architecture) || !dist.use_pencil_arrays, so
+        # plan_transforms! (transform_planning.jl:135) returns before dist.pencil_solve is
+        # ever built, and every apply_coupled_dct=false call site (lazy_rhs.jl,
+        # subproblem_io.jl) is gated on dist.pencil_solve !== nothing.
         ws = transpose_workspace!(field.dist, field)
         distributed_backward_transform!(ws)
         return
