@@ -1288,10 +1288,10 @@ function get_local_shape(layout, domain_info, scales, rank)
     end
 
     # Parallel execution - compute local shape based on mesh decomposition
-    # IMPORTANT: Use different conventions based on dist.use_pencil_arrays
+    # IMPORTANT: Use different conventions based on dist.use_pencil_arrays,
+    # per decomposed_axes (the single statement of both conventions).
     mesh = dist.mesh
     n_dims = length(global_shape)
-    n_mesh_dims = length(mesh)
 
     local_dims = Vector{Int}(undef, n_dims)
 
@@ -1326,27 +1326,22 @@ function get_local_shape(layout, domain_info, scales, rank)
             end
         end
     else
-        # GPU+MPI / TransposableField ZLocal convention: decompose FIRST dims
-        # mesh[1] decomposes dim 1, mesh[2] decomposes dim 2, etc.
-        P1 = mesh[1]
-        P2 = n_mesh_dims >= 2 ? mesh[2] : 1
-        coord1 = rank % P1
-        coord2 = rank ÷ P1
-
+        # GPU+MPI / TransposableField ZLocal convention (decomposed_axes): decompose FIRST dims.
+        # Which axis that is comes from mesh_axis_for, the same authority the
+        # PencilArrays branch above uses -- only the coordinate/remainder
+        # arithmetic below is convention-specific (TransposableField's
+        # column-major coords, remainder-on-FIRST-rank).
         for i in 1:n_dims
-            if i == 1 && n_mesh_dims >= 1
-                # Decompose dim 1 by P1
-                n_procs = P1
-                proc_coord = coord1
-            elseif i == 2 && n_mesh_dims >= 2
-                # Decompose dim 2 by P2
-                n_procs = P2
-                proc_coord = coord2
-            else
+            mesh_dim_idx = mesh_axis_for(dist, n_dims, i)
+
+            if mesh_dim_idx === nothing
                 # This dimension is not decomposed
                 local_dims[i] = global_shape[i]
                 continue
             end
+
+            n_procs = mesh[mesh_dim_idx]
+            proc_coord = get_process_coordinate(dist, mesh_dim_idx, rank)
 
             global_size = global_shape[i]
             base_size = div(global_size, n_procs)
@@ -1424,9 +1419,9 @@ function get_local_start(layout, domain_info, scales, rank)
     end
 
     # Parallel execution - compute start indices based on mesh decomposition
-    # IMPORTANT: Use different conventions based on dist.use_pencil_arrays
+    # IMPORTANT: Use different conventions based on dist.use_pencil_arrays,
+    # per decomposed_axes (the single statement of both conventions).
     mesh = dist.mesh
-    n_mesh_dims = length(mesh)
 
     start_indices = Vector{Int}(undef, n_dims)
 
@@ -1460,7 +1455,7 @@ function get_local_start(layout, domain_info, scales, rank)
             end
         end
     else
-        # GPU+MPI / TransposableField ZLocal convention: decompose FIRST dims.
+        # GPU+MPI / TransposableField ZLocal convention (decomposed_axes): decompose FIRST dims.
         # The start formula MUST be the cumulative form of get_local_shape's
         # remainder-on-FIRST counts (which match the actual slab from
         # get_local_array_size). The balanced `div(N*c, P)` start paired with
@@ -1471,22 +1466,23 @@ function get_local_start(layout, domain_info, scales, rank)
             base = div(global_size, n_procs)
             return proc_coord * base + min(proc_coord, global_size % n_procs)
         end
-        P1 = mesh[1]
-        P2 = n_mesh_dims >= 2 ? mesh[2] : 1
-        coord1 = rank % P1
-        coord2 = rank ÷ P1
 
+        # Which axis is decomposed comes from mesh_axis_for -- the same
+        # authority the PencilArrays branch above uses -- mirroring
+        # get_local_shape; only compute_start_remfirst above is
+        # convention-specific.
         for i in 1:n_dims
-            if i == 1 && n_mesh_dims >= 1
-                # Decompose dim 1 by P1
-                start_indices[i] = compute_start_remfirst(global_shape[i], P1, coord1)
-            elseif i == 2 && n_mesh_dims >= 2
-                # Decompose dim 2 by P2
-                start_indices[i] = compute_start_remfirst(global_shape[i], P2, coord2)
-            else
+            mesh_dim_idx = mesh_axis_for(dist, n_dims, i)
+
+            if mesh_dim_idx === nothing
                 # This dimension is not decomposed - starts at 0
                 start_indices[i] = 0
+                continue
             end
+
+            n_procs = mesh[mesh_dim_idx]
+            proc_coord = get_process_coordinate(dist, mesh_dim_idx, rank)
+            start_indices[i] = compute_start_remfirst(global_shape[i], n_procs, proc_coord)
         end
     end
 

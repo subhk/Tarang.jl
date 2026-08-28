@@ -25,29 +25,38 @@ function validate_decomposition_convention(dist::Distributor, expected_conventio
     actual_convention = dist.use_pencil_arrays ? :pencil_arrays : :transposable_field
 
     if expected_convention == :pencil_arrays && !dist.use_pencil_arrays
-        error("Convention mismatch: Expected PencilArrays convention (decompose LAST dims) " *
-              "but Distributor has use_pencil_arrays=false (TransposableField/FIRST dims). " *
-              "This would cause data layout corruption in MPI mode.")
+        error("Convention mismatch: Expected PencilArrays convention " *
+              "(decompose LAST dims, per decomposed_axes) but Distributor has " *
+              "use_pencil_arrays=false (TransposableField/FIRST dims). This would cause " *
+              "data layout corruption in MPI mode.")
     elseif expected_convention == :transposable_field && dist.use_pencil_arrays
-        error("Convention mismatch: Expected TransposableField convention (decompose FIRST dims) " *
-              "but Distributor has use_pencil_arrays=true (PencilArrays/LAST dims). " *
-              "This would cause data layout corruption in MPI mode.")
+        error("Convention mismatch: Expected TransposableField convention " *
+              "(decompose FIRST dims, per decomposed_axes) but Distributor has " *
+              "use_pencil_arrays=true (PencilArrays/LAST dims). This would cause data " *
+              "layout corruption in MPI mode.")
     end
 end
 
 """
-    Get the coordinate of this process in the specified mesh dimension.
+    Get the coordinate of a process in the specified mesh dimension.
 
     For a mesh (P₁, P₂, ..., Pₖ), the process with rank r has coordinates:
     (r % P₁, (r ÷ P₁) % P₂, ..., (r ÷ (P₁×P₂×...×Pₖ₋₁)) % Pₖ)
+
+    `rank` defaults to this process's own rank; pass an explicit rank to ask
+    the same question about a DIFFERENT process (e.g. a root rank computing
+    the range it must send to each destination during a scatter).
+
+    `dist` is untyped (reads only `.mesh`, and `.rank` for the default `rank`)
+    so this can drive the TransposableField coordinate math from a duck-typed
+    fake distributor in serial tests, matching `decomposed_axes`/`mesh_axis_for`.
     """
-function get_process_coordinate(dist::Distributor, dim::Int)
+function get_process_coordinate(dist, dim::Int, rank::Int=dist.rank)
     if dist.mesh === nothing || dim < 1 || dim > length(dist.mesh)
         return 0
     end
 
     mesh = dist.mesh
-    rank = dist.rank
 
     # Compute coordinate using column-major ordering (Fortran-style)
     # rank = coord[1] + mesh[1]*(coord[2] + mesh[2]*(coord[3] + ...))
@@ -62,12 +71,15 @@ function get_process_coordinate(dist::Distributor, dim::Int)
 end
 
 """
-    Get the local range [start, end] for this process in a given global axis.
+    Get the local range [start, end] for a process in a given global axis.
 
     Arguments:
     - dist: Distributor with MPI decomposition info
     - global_size: Size of the global array in this axis
     - axis: Global axis index (1-based)
+    - rank: process to compute the range for (defaults to this process's own
+      rank). Pass an explicit rank to ask what ANOTHER rank owns — e.g. rank 0
+      slicing out the piece it must send to each destination during a scatter.
 
     Returns:
     - (start_idx, end_idx) tuple with 1-based indices
@@ -75,7 +87,7 @@ end
     Note: which axes are decomposed comes from `decomposed_axes` — see its
     docstring for both conventions.
     """
-function get_local_range(dist::Distributor, global_size::Int, axis::Int)
+function get_local_range(dist::Distributor, global_size::Int, axis::Int, rank::Int=dist.rank)
     if dist.size == 1 || dist.mesh === nothing || axis < 1 || axis > dist.dim
         return (1, global_size)
     end
@@ -95,12 +107,15 @@ function get_local_range(dist::Distributor, global_size::Int, axis::Int)
     # remainder-on-FIRST formula below diverges on non-divisible or >=2D-mesh
     # decompositions; keep it only off the PencilArrays path (GPU /
     # TransposableField). Mirrors compute_local_shape / local_indices.
-    pr = pencil_local_range(dist, mesh_axis, n_procs, global_size)
+    # `pencil_local_range` reads the CALLING rank's own live MPI topology
+    # coordinates, so it can only answer for `dist.rank` itself; an explicit
+    # other rank falls through to the generic formula below.
+    pr = (rank == dist.rank) ? pencil_local_range(dist, mesh_axis, n_procs, global_size) : nothing
     if pr !== nothing
         return (first(pr), last(pr))
     end
 
-    proc_coord = get_process_coordinate(dist, mesh_axis)
+    proc_coord = get_process_coordinate(dist, mesh_axis, rank)
 
     base_size = div(global_size, n_procs)
     remainder = global_size % n_procs

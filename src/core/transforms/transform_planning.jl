@@ -319,7 +319,7 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     #
     # Decomposition strategy: decompose ONLY Fourier axes, keep Chebyshev local.
     # The pencil IMEX solve requires the full Chebyshev array on each rank.
-    # Select the last mesh_dim Fourier axes for decomposition (PencilArrays convention).
+    # decomposed_axes (see below) selects the trailing mesh_dim Fourier axes.
     mesh_dim = length(dist.mesh)
     ndims_total = length(domain.bases)
 
@@ -358,11 +358,12 @@ function setup_pencil_fft_transforms_2d!(dist::Distributor, domain::Domain,
     nonfourier_trailing = [d for d in trailing if !(d in fourier_axes)]
     if !isempty(nonfourier_trailing)
         error("MPI mixed Fourier-Chebyshev: the decomposed (trailing) axis/axes " *
-              "$(nonfourier_trailing) are non-Fourier (e.g. Chebyshev), but PencilArrays " *
-              "decomposes the LAST $mesh_dim dimension(s) and a Chebyshev axis cannot be " *
-              "decomposed (its DCT needs the full axis local on each rank). Reorder your " *
-              "bases so the Chebyshev axis comes BEFORE the Fourier axes — e.g. " *
-              "(z_chebyshev, x_fourier, y_fourier), which is verified correct in MPI.")
+              "$(nonfourier_trailing) are non-Fourier (e.g. Chebyshev), but " *
+              "decomposed_axes (PencilArrays convention) decomposes the LAST $mesh_dim " *
+              "dimension(s) and a Chebyshev axis cannot be decomposed (its DCT needs the " *
+              "full axis local on each rank). Reorder your bases so the Chebyshev axis " *
+              "comes BEFORE the Fourier axes — e.g. (z_chebyshev, x_fourier, y_fourier), " *
+              "which is verified correct in MPI.")
     end
     if length(fourier_axes) < mesh_dim
         error("Cannot decompose $mesh_dim dimensions with only $(length(fourier_axes)) Fourier axes. " *
