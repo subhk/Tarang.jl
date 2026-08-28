@@ -182,6 +182,30 @@ Per-mode linear solves are rank-local. Communication surrounds them:
 Collectives must remain outside the per-subproblem loop and every rank must
 issue them in the same order.
 
+### Which axes are decomposed
+
+One function answers this for the whole codebase:
+
+```julia
+decomposed_axes(dist, ndim)   # global axis indices that are split, ascending
+mesh_axis_for(dist, ndim, axis)   # which mesh dimension splits `axis`, or nothing
+```
+
+The two conventions it encodes differ: with PencilArrays the **last**
+`length(mesh)` axes are decomposed, and with `TransposableField` (GPU+MPI) the
+**first** ones are. Both live in `src/core/distributor/distributor_core.jl` and
+nowhere else.
+
+Do not re-derive the rule at a call site. It was previously written out by hand
+in seventeen places, and two of those copies drifted apart — the array allocator
+and the index math disagreed about which axes were split, so a field's shape and
+the meaning of its indices no longer matched, with no error raised.
+`test_decomposition_convention.jl` scans `src/` for hand-rolled copies, checking
+the arithmetic as well as the comments, and fails if one reappears.
+
+`ndim` is the *field's* dimensionality, which is not always `dist.dim`; pass the
+one you mean.
+
 ## Extension checklist
 
 When adding a feature:

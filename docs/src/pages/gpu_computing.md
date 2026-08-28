@@ -150,7 +150,10 @@ host memory.
 @assert check_cuda_aware_mpi()
 ```
 
-Pure complex-Fourier domains use `TransposableField`:
+Pure complex-Fourier domains transform through the ordinary call. A field on a
+GPU architecture with more than one rank is given `TransposableFieldStorage`
+when it is constructed, and `forward_transform!` routes it through the explicit
+transposes automatically:
 
 ```julia
 bases = (
@@ -159,10 +162,26 @@ bases = (
     ComplexFourier(coords["z"]; size=128, bounds=(0.0, 2π)),
 )
 field = ScalarField(Domain(dist, bases), "u")
+forward_transform!(field)
+backward_transform!(field)
+```
+
+The transpose workspace (buffers, counts, and two MPI sub-communicators) is
+cached on the `Distributor` and shared by every field of the same shape and
+element type, so allocating many fields does not allocate many communicators.
+`close(dist)` frees them collectively.
+
+Driving the wrapper by hand still works and is what to use if you need the
+lower-level control:
+
+```julia
 tf = TransposableField(field)
 distributed_forward_transform!(tf)
 distributed_backward_transform!(tf)
 ```
+
+These require the field to be in the matching layout first (`:g` for forward,
+`:c` for backward); they raise rather than silently reading the stale buffer.
 
 The distributed DCT-I path supports selected three-dimensional
 Fourier–Chebyshev layouts. It requires at least one Fourier and one Chebyshev
