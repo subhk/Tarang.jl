@@ -143,7 +143,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         # transpose buffers/counts/comms/topology live on the Distributor-side
         # workspace cache (`transpose_workspace!`), not here, so this selection
         # alone performs no collective MPI call.
-        storage = if is_gpu(dist.architecture) && dist.size > 1
+        storage = if _uses_transpose_storage(dist.architecture, dist.size)
             TransposableFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)
         else
             SerialFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)

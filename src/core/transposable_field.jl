@@ -80,12 +80,13 @@ include("transpose/transpose_transforms.jl")
 """
     TransposableFieldStorage{G,C} <: AbstractFieldStorage
 
-Storage marker for a distributed GPU field (`is_gpu(dist.architecture) &&
-dist.size > 1`). Carries exactly the same three fields as `SerialFieldStorage`
-(`architecture`, `grid::G`, `coeff::C`) — the field accessors (`get_grid_data`,
-`set_grid_data!`, `get_coeff_data`, `set_coeff_data!`) reach `:grid`/`:coeff`
-by hardcoded `getfield`/`setfield!`, not by dispatch, so this struct needs no
-forwarding methods to be a fully working storage backend.
+Storage marker for a distributed GPU field (GPU architecture, more than one
+rank — see `_uses_transpose_storage`). Carries exactly the same three fields
+as `SerialFieldStorage` (`architecture`, `grid::G`, `coeff::C`) — the field
+accessors (`get_grid_data`, `set_grid_data!`, `get_coeff_data`,
+`set_coeff_data!`) reach `:grid`/`:coeff` by hardcoded `getfield`/`setfield!`,
+not by dispatch, so this struct needs no forwarding methods to be a fully
+working storage backend.
 
 Its only remaining job is to be a TYPE distinct from `SerialFieldStorage`, so
 `storage_mode` can route a field to the explicit-transpose transform path
