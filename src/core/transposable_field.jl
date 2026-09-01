@@ -78,28 +78,46 @@ include("transpose/transpose_transforms.jl")
 # ============================================================================
 
 """
-    TransposableFieldStorage{CT, N} <: AbstractFieldStorage
+    TransposableFieldStorage{G,C} <: AbstractFieldStorage
 
-Storage for distributed GPU+MPI fields with 2D pencil decomposition.
-Absorbs the functionality previously in TransposableField wrapper.
+Storage marker for a distributed GPU field (GPU architecture, more than one
+rank — see `_uses_transpose_storage`). Carries exactly the same three fields
+as `SerialFieldStorage` (`architecture`, `grid::G`, `coeff::C`) — the field
+accessors (`get_grid_data`, `set_grid_data!`, `get_coeff_data`,
+`set_coeff_data!`) reach `:grid`/`:coeff` by hardcoded `getfield`/`setfield!`,
+not by dispatch, so this struct needs no forwarding methods to be a fully
+working storage backend.
 
-CT is the complex element type (Complex{T}), N is the number of dimensions.
+Its only remaining job is to be a TYPE distinct from `SerialFieldStorage`, so
+`storage_mode` can route a field to the explicit-transpose transform path
+instead of PencilFFTs (which is CPU-only):
+
+    storage_mode(::ScalarField{T, <:SerialFieldStorage})       = SerialStorage()
+    storage_mode(::ScalarField{T, <:TransposableFieldStorage}) = TransposableStorage()
+
+The actual transpose buffers, counts, communicators, topology and FFT plans
+used to live here, one set per field. They now live on a Distributor-side
+cache keyed by (global_shape, eltype) — see `transpose_workspace!` below —
+because a `TransposableField` owns MPI sub-communicators (`MPI.Comm_split` is
+collective), so per-field ownership would multiply that cost by field count
+and force construction order to match across ranks. Keeping this struct to
+just the three data fields means building a distributed GPU field performs no
+collective MPI calls; the workspace is created lazily on first transform.
 """
-mutable struct TransposableFieldStorage{CT, N, B<:SerialFieldStorage} <: AbstractFieldStorage
-    base::B
-    transpose_buffers::TransposeBuffers{CT, N}
-    counts::TransposeCounts
-    comms::TransposeComms
-    topology::Topology2D
-    global_shape::NTuple{N, Int}
-    local_shapes::Dict{TransposeLayout, NTuple{N, Int}}
-    async_state::AsyncTransposeState
-    fft_plans::Dict{TransposeLayout, Any}
-    total_transpose_time::Float64
-    total_fft_time::Float64
+mutable struct TransposableFieldStorage{G<:AbstractArray, C<:AbstractArray} <: AbstractFieldStorage
+    architecture::AbstractArchitecture
+    grid::G
+    coeff::C
 end
 
-# Deferred storage_mode dispatch (TransposableFieldStorage is now defined)
+# Julia auto-generates the inferring outer constructor
+# `TransposableFieldStorage(arch, grid, coeff)` from the struct definition
+# above (mirrors SerialFieldStorage — see the comment at its definition).
+
+# Deferred storage_mode dispatch (TransposableFieldStorage is now defined).
+# Stays in this file (rather than field_types.jl, which is loaded first) only
+# for locality with the rest of the transpose subsystem it marks — it no
+# longer depends on any type defined by the transpose/*.jl includes above.
 storage_mode(::ScalarField{T, <:TransposableFieldStorage}) where T = TransposableStorage()
 
 # ============================================================================
@@ -242,6 +260,57 @@ function TransposableField(field::ScalarField; topology=nothing)
 end
 
 """
+    transpose_workspace!(dist::Distributor, field::ScalarField) -> TransposableField
+
+Cached transpose workspace for `field`'s global shape and element type.
+
+A `TransposableField` owns two MPI sub-communicators (`MPI.Comm_split` is
+collective), so one per field would consume `2 * nfields` communicators and
+require every rank to allocate the same fields in the same order. Keying on
+shape and eltype makes the workspace shared and the construction rank-uniform.
+
+The wrapped `field` reference is repointed on each call: buffers, counts, and
+communicators depend only on shape, but the transform reads and writes through
+`tf.field`. Errors if the cached workspace still has an async transpose in
+flight (`async_state.in_progress`) — repointing `tf.field` while a previous
+field's async pack/transpose/unpack is unfinished would corrupt both fields'
+staging buffers. Call `wait_transpose!` on the returned workspace before
+starting a new async transpose on it.
+"""
+function transpose_workspace!(dist::Distributor, field::ScalarField)
+    # Matches create_pencil's guard (distributor_core.jl): without it, a
+    # transform reached after `close` would repopulate
+    # transpose_workspace_cache and MPI.Comm_split fresh sub-communicators on
+    # a Distributor that has already told every rank it is done — the exact
+    # kind of post-close collective call `close` exists to make impossible.
+    dist.closed && throw(ArgumentError("cannot create a transpose workspace from a closed Distributor"))
+    gshape = field.domain !== nothing ? global_shape(field.domain) : size(field["g"])
+    key = (gshape, field.dtype)
+    ws = get!(dist.transpose_workspace_cache, key) do
+        TransposableField(field)
+    end
+    # The workspace is shared by every field with this (shape, eltype), and
+    # `ws.field` is about to be repointed below. If an async transpose is
+    # still in flight on whichever field currently owns it, its staging
+    # buffers (`ws.buffers`, `ws.async_state.request`) are live MPI state —
+    # repointing `ws.field` out from under it would let the eventual
+    # `wait_transpose!`/pack/unpack finish into (or read from) the WRONG
+    # field, corrupting both. Nothing calls this outside a test today, but
+    # the ordinary `forward_transform!`/`backward_transform!` dispatch now
+    # reaches it, so a loud refusal here is load-bearing rather than
+    # defensive dead code.
+    if ws.async_state.in_progress
+        error("transpose_workspace!: cannot repoint the cached workspace for shape $gshape " *
+              "($(field.dtype)) to field $(repr(field.name)) — an async transpose is still " *
+              "in flight on field $(repr(ws.field.name)), which shares this workspace. " *
+              "Call wait_transpose!(ws) to complete the pending transpose before requesting " *
+              "this workspace for a different field.")
+    end
+    ws.field = field
+    return ws
+end
+
+"""
     make_transposable(field::ScalarField; kwargs...)
 
 Helper function to create a TransposableField from a ScalarField.
@@ -284,8 +353,22 @@ end
 """Get the current active layout"""
 active_layout(tf::TransposableField) = tf.buffers.active_layout[]
 
-"""Get data array for current layout"""
+"""Get the authoritative data array for the wrapper's current layout."""
 function current_data(tf::TransposableField)
+    # A one-rank distributed transform delegates to ScalarField's ordinary
+    # basis-aware transform because grid and coefficient shapes can differ
+    # (for example, a RealFourier half spectrum). No transpose buffer can
+    # represent both shapes, so the wrapped field remains authoritative.
+    if tf.field.dist.size == 1
+        if tf.field.current_layout === :g
+            return get_grid_data(tf.field)
+        elseif tf.field.current_layout === :c
+            return get_coeff_data(tf.field)
+        end
+        error("TransposableField has unsupported serial field layout " *
+              "$(repr(tf.field.current_layout))")
+    end
+
     layout = active_layout(tf)
     if layout == ZLocal
         return tf.buffers.z_local_data

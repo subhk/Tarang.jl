@@ -77,11 +77,20 @@ function setup_pencil_transforms_for_shape!(evaluator::NonlinearEvaluator, shape
                 ndim = length(shape)
                 ndims_mesh = length(dist.mesh)
 
-                # Decompose LAST dimensions (PencilArrays convention, matches dist.use_pencil_arrays=true)
-                decomp_dims = if ndim >= ndims_mesh
-                    ntuple(i -> ndim - ndims_mesh + i, ndims_mesh)
-                else
-                    ntuple(identity, ndim)
+                # decomposed_axes decomposes LAST dimensions here (PencilArrays
+                # convention, matches dist.use_pencil_arrays=true). A shape with
+                # FEWER dims than the mesh has no axis decomposed_axes will
+                # decompose; the previous fallback here silently decomposed
+                # EVERY dim instead, which is exactly the shape PencilFFTs'
+                # PencilFFTPlan rejects. Refuse loudly rather than silently
+                # adopt either behavior.
+                decomp_dims = decomposed_axes(dist, ndim)
+                if isempty(decomp_dims)
+                    error("Nonlinear evaluator pencil setup requested for a $(ndim)-D shape=$shape " *
+                          "under a $(ndims_mesh)-D mesh=$(dist.mesh): decomposed_axes finds no axis " *
+                          "to decompose (the shape has fewer dimensions than the mesh). A PencilFFTs " *
+                          "plan across multiple ranks that decomposes nothing is not supported. " *
+                          "Use a mesh with at most $(ndim) dimensions.")
                 end
 
                 # Use existing MPI topology from Distributor if available

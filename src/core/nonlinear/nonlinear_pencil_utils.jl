@@ -82,9 +82,8 @@ function is_shape_compatible(local_shape::Tuple, global_shape::Tuple, mesh::Tupl
     - The product of local shapes across all ranks should equal the global shape
     - The local shape should be approximately global_shape / mesh for distributed dimensions
 
-    The `use_pencil_arrays` flag controls which dimensions are expected to be decomposed:
-    - true (default): PencilArrays convention - decompose LAST dimensions
-    - false: TransposableField ZLocal convention - decompose FIRST dimensions
+    The `use_pencil_arrays` flag controls which dimensions are expected to be
+    decomposed; see `decomposed_axes` for both conventions.
     """
 
     if length(local_shape) != length(global_shape)
@@ -99,31 +98,18 @@ function is_shape_compatible(local_shape::Tuple, global_shape::Tuple, mesh::Tupl
     # For parallel execution, check that local shape is reasonable
     # (within expected range given the mesh decomposition)
     num_dims = length(global_shape)
-    mesh_dims = length(mesh)
+
+    # decomposed_axes takes an untyped `dist` so a stand-in with just these
+    # three fields drives it; this function is handed loose arguments, not a
+    # Distributor.
+    dist_view = (; size = MPI.Comm_size(comm), mesh = mesh,
+                 use_pencil_arrays = use_pencil_arrays)
+    decomp = decomposed_axes(dist_view, num_dims)
 
     for i in 1:num_dims
-        # Determine if this dimension is decomposed based on convention
-        is_decomposed = if use_pencil_arrays
-            # PencilArrays: decompose LAST mesh_dims dimensions
-            # For 3D with 2D mesh: dims 2,3 decomposed; dim 1 local
-            decomp_start = num_dims - mesh_dims + 1
-            mesh_idx = i - decomp_start + 1
-            i >= decomp_start && mesh_idx >= 1 && mesh_idx <= mesh_dims && mesh[mesh_idx] > 1
-        else
-            # TransposableField ZLocal: decompose FIRST mesh_dims dimensions
-            # mesh[1] (Rx) decomposes dim 1, mesh[2] (Ry) decomposes dim 2, etc.
-            i <= mesh_dims && mesh[i] > 1
-        end
+        mesh_idx = findfirst(==(i), decomp)
 
-        if is_decomposed
-            # This dimension is distributed - get the correct mesh divisor
-            mesh_idx = if use_pencil_arrays
-                decomp_start = num_dims - mesh_dims + 1
-                i - decomp_start + 1
-            else
-                i
-            end
-
+        if mesh_idx !== nothing
             expected_local = ceil(Int, global_shape[i] / mesh[mesh_idx])
             min_local = floor(Int, global_shape[i] / mesh[mesh_idx])
 
@@ -179,6 +165,10 @@ The global array is decomposed such that each dimension is split among the
 processes in that mesh dimension. Load balancing distributes remainders
 to the first ranks in each dimension.
 
+Which axes are decomposed comes from `decomposed_axes` — see its docstring for
+both conventions. This function always uses the PencilArrays convention (it has
+no `Distributor` to read `use_pencil_arrays` from).
+
 # Arguments
 - `global_shape`: Total size of the array in each dimension
 - `mesh`: Number of processes in each decomposition dimension
@@ -217,34 +207,29 @@ function compute_local_shape(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
         remaining_rank = remaining_rank ÷ mesh[i]
     end
 
-    # CRITICAL: Decompose LAST dimensions to match Distributor convention
-    # Distributor uses: decomp_dims = ntuple(i -> ndim - ndims_mesh + i, ndims_mesh)
-    # This means for 3D data with 2D mesh: decompose dims (2, 3), keep dim 1 local
-    # For 2D data with 1D mesh: decompose dim 2, keep dim 1 local
+    # decomposed_axes takes an untyped `dist` so a stand-in with just these
+    # three fields drives it; this function is handed loose arguments, not a
+    # Distributor. use_pencil_arrays=true reproduces this function's previous
+    # hardcoded PencilArrays behavior (see is_shape_compatible above and
+    # decomposed_axes's own docstring for what that means).
+    dist_view = (; size = nprocs, mesh = mesh, use_pencil_arrays = true)
 
-    # Compute local sizes for each decomposed dimension
-    for i in 1:min(num_dims, mesh_dims)
-        # Map mesh dimension i to global dimension (last dimensions)
-        global_dim_idx = num_dims - mesh_dims + i
+    for (mesh_idx, global_dim_idx) in enumerate(decomposed_axes(dist_view, num_dims))
+        n = global_shape[global_dim_idx]  # Global size in this dimension
+        p = mesh[mesh_idx]                 # Number of processes in this dimension
+        coord = mesh_coords[mesh_idx]      # This rank's position in mesh dimension i
 
-        if mesh[i] > 1 && global_dim_idx >= 1
-            n = global_shape[global_dim_idx]  # Global size in this dimension
-            p = mesh[i]                        # Number of processes in this dimension
-            coord = mesh_coords[i]             # This rank's position in mesh dimension i
+        # Compute local size with load balancing
+        # First (remainder) ranks get one extra element
+        base_size = n ÷ p
+        remainder = n % p
 
-            # Compute local size with load balancing
-            # First (remainder) ranks get one extra element
-            base_size = n ÷ p
-            remainder = n % p
-
-            if coord < remainder
-                # First 'remainder' ranks get base_size + 1
-                local_shape[global_dim_idx] = base_size + 1
-            else
-                local_shape[global_dim_idx] = base_size
-            end
+        if coord < remainder
+            # First 'remainder' ranks get base_size + 1
+            local_shape[global_dim_idx] = base_size + 1
+        else
+            local_shape[global_dim_idx] = base_size
         end
-        # Dimensions before decomp_dims keep their global size (local)
     end
 
     return tuple(local_shape...)
@@ -255,11 +240,16 @@ end
 
 Compute the global index ranges owned by this rank for each dimension.
 
+Which axes are decomposed comes from `decomposed_axes` — see its docstring for
+both conventions. This function always uses the PencilArrays convention (it has
+no `Distributor` to read `use_pencil_arrays` from).
+
 # Returns
 - Vector of (start, stop) tuples for each dimension (1-based indices)
 """
 function compute_local_range(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
     mpi_rank = MPI.Comm_rank(comm)
+    nprocs = MPI.Comm_size(comm)
     num_dims = length(global_shape)
     mesh_dims = length(mesh)
 
@@ -271,19 +261,16 @@ function compute_local_range(global_shape::Tuple, mesh::Tuple, comm::MPI.Comm)
         remaining_rank = remaining_rank ÷ mesh[i]
     end
 
-    # Determine which dimensions are decomposed
-    # Convention: mesh decomposes the LAST dimensions
-    # For 3D data with 2D mesh: mesh[1] -> dim 2, mesh[2] -> dim 3
-    # For 3D data with 1D mesh: mesh[1] -> dim 3
-    decomp_start = num_dims - mesh_dims + 1
+    # Same untyped-dist stand-in as compute_local_shape above; use_pencil_arrays=true
+    # reproduces this function's hardcoded convention.
+    dist_view = (; size = nprocs, mesh = mesh, use_pencil_arrays = true)
 
     ranges = Vector{Tuple{Int,Int}}(undef, num_dims)
 
     for i in 1:num_dims
-        # Map dimension i to mesh dimension (if decomposed)
-        mesh_idx = i - decomp_start + 1
+        mesh_idx = mesh_axis_for(dist_view, num_dims, i)
 
-        if mesh_idx >= 1 && mesh_idx <= mesh_dims && mesh[mesh_idx] > 1
+        if mesh_idx !== nothing
             n = global_shape[i]
             p = mesh[mesh_idx]
             coord = mesh_coords[mesh_idx]

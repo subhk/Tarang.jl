@@ -302,13 +302,13 @@ end
     It uses different conventions depending on use_pencil_arrays:
 
     When use_pencil_arrays=true (CPU+MPI with PencilFFTs):
-    - PencilArrays convention: decompose LAST ndims_mesh dimensions
+    - Which axes are decomposed comes from `decomposed_axes`; see its docstring.
     - 3D with 3D mesh: all dims decomposed
     - 3D with 2D mesh: dims 2,3 decomposed (x LOCAL not reflected here!)
     - 2D with 2D mesh: x and y decomposed
 
     When use_pencil_arrays=false (GPU+MPI or TransposableField):
-    - TransposableField ZLocal convention: decompose FIRST ndims_mesh dimensions
+    - Which axes are decomposed comes from `decomposed_axes`; see its docstring.
     - 3D with 2D mesh: x decomposed by Rx, y decomposed by Ry, z LOCAL
     - 2D with 2D mesh: x decomposed by Rx, y decomposed by Ry
 
@@ -361,55 +361,24 @@ function get_local_array_size(dist::Distributor, global_shape::Tuple)
         stride *= mesh[i]
     end
 
-    if dist.use_pencil_arrays
-        # PencilArrays convention: decompose LAST ndims_mesh dimensions
-        # For 3D with 3D mesh: all dims decomposed
-        # For 3D with 2D mesh: dims 2,3 decomposed; dim 1 local
-        # For 2D with 2D mesh: dims 1,2 decomposed
+    for (mesh_idx, dim) in enumerate(decomposed_axes(dist, ndims_global))
+        n_global = global_shape[dim]
+        n_procs = mesh[mesh_idx]
 
-        if ndims_global >= ndims_mesh
-            # Decompose last dimensions
-            decomp_start = ndims_global - ndims_mesh + 1
-
-            for mesh_idx in 1:ndims_mesh
-                dim = decomp_start + mesh_idx - 1
-                if dim <= ndims_global
-                    n_global = global_shape[dim]
-                    n_procs = mesh[mesh_idx]
-
-                    pr = pencil_local_range(dist, mesh_idx, n_procs, n_global)
-                    if pr !== nothing
-                        local_shape[dim] = length(pr)
-                    else
-                        proc_coord = coords[mesh_idx]
-                        base_size = div(n_global, n_procs)
-                        remainder = n_global % n_procs
-                        local_shape[dim] = base_size + (proc_coord < remainder ? 1 : 0)
-                    end
-                end
-            end
-        end
-    else
-        # TransposableField ZLocal convention: decompose FIRST ndims_mesh dimensions
-        # mesh[1] (Rx) decomposes dimension 1 (x)
-        # mesh[2] (Ry) decomposes dimension 2 (y)
-        # Higher dimensions (z, etc.) remain LOCAL
-        # NOTE: TransposableField only supports 2D mesh, so we limit to 2 dims
-
-        for mesh_idx in 1:min(ndims_mesh, 2)  # TransposableField max 2D
-            dim = mesh_idx
-            if dim <= ndims_global
-                n_global = global_shape[dim]
-                n_procs = mesh[mesh_idx]
-                proc_coord = coords[mesh_idx]
-
-                base_size = div(n_global, n_procs)
-                remainder = n_global % n_procs
-                local_shape[dim] = base_size + (proc_coord < remainder ? 1 : 0)
+        if dist.use_pencil_arrays
+            # Match PencilArrays' own decomposition exactly when it is available,
+            # so the reported local shape equals the slab the pencil owns.
+            pr = pencil_local_range(dist, mesh_idx, n_procs, n_global)
+            if pr !== nothing
+                local_shape[dim] = length(pr)
+                continue
             end
         end
 
-        # Dimensions >= 3 (z, etc.) remain LOCAL (not decomposed)
+        proc_coord = coords[mesh_idx]
+        base_size = div(n_global, n_procs)
+        remainder = n_global % n_procs
+        local_shape[dim] = base_size + (proc_coord < remainder ? 1 : 0)
     end
 
     return tuple(local_shape...)

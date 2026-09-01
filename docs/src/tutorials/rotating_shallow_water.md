@@ -456,7 +456,7 @@ units.
 ### Method 1: Explicit Euler (not recommended)
 
 ```julia
-update!(filter, field, dt)  # Forward Euler
+update!(u_filter, u, dt)   # Forward Euler
 ```
 **Stability limit**: $\Delta t \leq \sqrt{2}/\alpha$. `update!` *throws* an `ArgumentError`
 above it rather than silently producing garbage.
@@ -464,24 +464,24 @@ above it rather than silently producing garbage.
 ### Method 2: RK2 (moderate stability)
 
 ```julia
-update!(filter, field, dt, Val(:RK2))
+update!(u_filter, u, dt, Val(:RK2))
 ```
 **Stability limit**: $\Delta t \approx 2.183/\alpha$ for the Butterworth filter. Query it
-with `max_stable_timestep(filter; method=:RK2)` (and `method=:euler` for Method 1).
+with `max_stable_timestep(u_filter; method=:RK2)` (and `method=:euler` for Method 1).
 
 ### Method 3: ETD (recommended - unconditionally stable)
 
 ```julia
-coeffs = precompute_etd_coefficients(filter, dt)
-update_etd!(filter, field, coeffs)
+coeffs = precompute_etd_coefficients(u_filter, dt)
+update_etd!(u_filter, u, coeffs)
 ```
 **No stability limit!** Can use any timestep.
 
 ### Method 4: IMEX/SBDF (for implicit PDE solvers)
 
 ```julia
-coeffs = precompute_imex_coefficients(filter, dt; scheme=:SBDF2)
-update_imex!(filter, (h_n, h_nm1), coeffs)
+coeffs = precompute_imex_coefficients(η_filter, dt; scheme=:SBDF2)
+update_imex!(η_filter, (h_n, h_nm1), coeffs)
 ```
 **No stability limit!** Integrates naturally with SBDF timestepping. Pass a 1-tuple
 `(h_n,)` for `:SBDF1` and a 2-tuple `(h_n, h_nm1)` for `:SBDF2`.

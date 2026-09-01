@@ -44,4 +44,26 @@ const nprocs = MPI.Comm_size(comm)
         @test length(yg) <= N
         @test length(zg) <= N
     end
+
+    @testset "three-way agreement: local_indices / get_local_array_size / compute_local_shape" begin
+        # test_decomposition_convention.jl has a serial version of this same
+        # comparison; a reviewer correctly found it vacuous, since at mesh=(1,)
+        # with size==1 every function below takes its identity early-return and
+        # nothing is exercised. THIS is the load-bearing version: it runs under
+        # LIVE decomposition (np=2, np=4), so the decomposed branches actually
+        # run and can actually disagree if a future edit breaks one of them.
+        coords = CartesianCoordinates("x", "y", "z")
+        dist = Distributor(coords)
+        gshape = (16, 12, 8)
+
+        local_shape_alloc = Tarang.get_local_array_size(dist, gshape)
+        local_shape_compute = Tarang.compute_local_shape(dist, gshape)
+        @test collect(local_shape_compute) == collect(local_shape_alloc)
+
+        for axis in 1:3
+            n_local = length(Tarang.local_indices(dist, axis, gshape[axis]))
+            @test n_local == local_shape_alloc[axis]
+            @test n_local == local_shape_compute[axis]
+        end
+    end
 end

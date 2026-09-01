@@ -95,8 +95,11 @@ mutable struct Distributor
     distributed_gpu_config::Union{Nothing, AbstractDistributedGPUConfig}
 
     # TransposableField support (for 2D pencil decomposition)
-    transpose_comms_cache::Dict{Int, AbstractTransposeComms}
-    transpose_counts_cache::Dict{Tuple, AbstractTransposeCounts}
+    # Transpose workspaces for GPU+MPI (TransposableField), keyed by
+    # (global_shape, eltype). A workspace owns two MPI sub-communicators, so it
+    # is shared across every field of the same shape rather than built per field.
+    # Released in `close`. Replaces the never-written `transpose_comms_cache`.
+    transpose_workspace_cache::Dict{Tuple, Any}
 
     # Basis composition the current transform plan was built for, as a tuple of
     # (basis type name, size) per axis; `nothing` until a plan exists. The MPI
@@ -271,15 +274,14 @@ mutable struct Distributor
         end
 
         # Initialize transpose caches for TransposableField support
-        transpose_comms_cache = Dict{Int, AbstractTransposeComms}()
-        transpose_counts_cache = Dict{Tuple, AbstractTransposeCounts}()
+        transpose_workspace_cache = Dict{Tuple, Any}()
 
         dist = new(comm, size, rank, mesh, coordsys, coordsystems, coords_tuple, total_dim, dtype,
             architecture, _use_pencil_arrays, pencil_config, mpi_topology, false, pencil_cache, transforms,
             transform_plan_cache,
             pencil_fft_plan, pencil_fft_input, pencil_fft_output, pencil_solve, layouts, perf_stats,
             mesh_coords, neighbor_ranks, nothing, gpu_fft_plans, gpu_arrays, distributed_gpu_config,
-            transpose_comms_cache, transpose_counts_cache, nothing)
+            transpose_workspace_cache, nothing)
 
         # Precompute neighbor ranks for all mesh dimensions
         if mesh !== nothing && size > 1
@@ -292,6 +294,36 @@ mutable struct Distributor
         end
 
         return dist
+    end
+end
+
+"""
+    _free_transpose_workspaces!(dist::Distributor)
+
+Collectively free the MPI sub-communicators owned by every cached
+TransposableField workspace (`dist.transpose_workspace_cache`), without
+touching the cache itself — callers empty it afterward.
+
+`MPI_Comm_free` is COLLECTIVE. Each cached workspace's `Topology2D` normally
+gets freed by a GC finalizer (`free_topology_2d!`, transpose_types.jl), but
+`close` cannot leave that to the GC: dropping the last reference via `empty!`
+only makes the object COLLECTABLE, not collected, so each rank's GC would call
+`MPI.free` at its own unpredictable time — rank 0 freeing while ranks 1..N
+still haven't (hang), or a rank freeing after `MPI.Finalize()` (error, or a
+leaked communicator the runtime can no longer report). Freeing explicitly here
+means every rank frees at the same, well-defined point: inside `close`, which
+already requires every rank in `dist.comm` to call it together.
+
+Guarded exactly like the pencil-topology free below it. Safe on an empty cache
+and idempotent per workspace: `free_topology_2d!` nullifies each communicator
+after freeing it, so the finalizer running later on the same (now-unreferenced)
+workspace is a no-op.
+"""
+function _free_transpose_workspaces!(dist::Distributor)
+    if MPI.Initialized() && !MPI.Finalized()
+        for ws in values(dist.transpose_workspace_cache)
+            free_topology_2d!(ws.topology)
+        end
     end
 end
 
@@ -314,6 +346,13 @@ function Base.close(dist::Distributor)
     empty!(dist.transforms)
     empty!(dist.transform_plan_cache)
     empty!(dist.layouts)
+    _free_transpose_workspaces!(dist)
+    # Transpose workspaces own two MPI sub-communicators each. Free them
+    # explicitly here so the (collective) frees happen at a point every rank
+    # reaches together, rather than whenever each rank's GC runs the
+    # finalizer — which can hang, or fire after MPI.Finalize().
+    _free_transpose_workspaces!(dist)
+    empty!(dist.transpose_workspace_cache)
     dist.pencil_config = nothing
     dist.pencil_fft_plan = nothing
     dist.pencil_fft_input = nothing
@@ -612,12 +651,13 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
     # decomp_index === nothing: FULL decomposition (for field storage) - decompose LAST ndims_mesh dims
     # decomp_index == Int: PENCIL decomposition (for FFT) - keep that dimension LOCAL
     decomp_dims = if decomp_index === nothing
-        # Full decomposition: decompose LAST ndims_mesh dimensions (PencilArrays convention)
-        # This is used for field storage where we want maximum parallelism
-        _compute_full_decomp_dims(ndims_global, ndims_mesh)
+        # Full decomposition for field storage — the same rule the allocator and
+        # the index math use.
+        decomposed_axes(dist, ndims_global)
     else
-        # Pencil decomposition: keep decomp_index dimension local
-        # This is used for FFT operations that require a specific dimension to be local
+        # Pencil decomposition: keep decomp_index LOCAL for the FFT. This is a
+        # different question from "which axes does storage decompose", so it
+        # keeps its own helper.
         _compute_decomp_dims(ndims_global, ndims_mesh, decomp_index)
     end
 
@@ -663,34 +703,6 @@ function create_pencil(dist::Distributor, global_shape::Tuple{Vararg{Int}},
               "Cannot fall back to regular arrays as this would produce incorrect results. " *
               "Please check your PencilArrays installation or use serial execution.")
     end
-end
-
-"""
-    _compute_full_decomp_dims(ndims_global::Int, ndims_mesh::Int)
-
-Compute decomposition dimensions for FULL decomposition (field storage).
-Decomposes the LAST ndims_mesh dimensions, following PencilArrays convention.
-
-This is used for field storage where we want maximum parallelism without
-keeping any dimension local. All mesh dimensions are utilized.
-
-For ndims_global=3, ndims_mesh=2: (2, 3) - dims 2,3 decomposed, dim 1 local
-For ndims_global=2, ndims_mesh=2: (1, 2) - both dims decomposed
-For ndims_global=3, ndims_mesh=3: (1, 2, 3) - all dims decomposed
-
-This matches the convention used by get_local_array_size and other helper
-utilities when use_pencil_arrays=true.
-"""
-function _compute_full_decomp_dims(ndims_global::Int, ndims_mesh::Int)
-    if ndims_mesh == 0 || ndims_global == 0
-        return ()
-    end
-
-    # Decompose LAST ndims_mesh dimensions (PencilArrays convention)
-    # This matches get_local_array_size behavior for use_pencil_arrays=true
-    n_decomp = min(ndims_mesh, ndims_global)
-    decomp_start = ndims_global - n_decomp + 1
-    return Tuple(decomp_start:ndims_global)
 end
 
 """
@@ -887,9 +899,8 @@ end
 
 Compute local array shape based on MPI decomposition.
 
-Respects dist.use_pencil_arrays:
-- PencilArrays convention: decompose LAST ndims_mesh dimensions
-- TransposableField convention: decompose FIRST ndims_mesh dimensions
+Which axes are decomposed comes from `decomposed_axes` — see its docstring
+for both conventions.
 """
 function compute_local_shape(dist::Distributor, global_shape::Tuple)
     if dist.size == 1
@@ -904,21 +915,7 @@ function compute_local_shape(dist::Distributor, global_shape::Tuple)
         return global_shape
     end
 
-    for i in 1:min(ndims_mesh, ndims_global)
-        # Determine which global dimension corresponds to mesh dimension i
-        global_dim_idx = if dist.use_pencil_arrays
-            # PencilArrays convention: decompose LAST ndims_mesh dimensions
-            ndims_global - ndims_mesh + i
-        else
-            # TransposableField convention: decompose FIRST ndims_mesh dimensions
-            i
-        end
-
-        if global_dim_idx < 1 || global_dim_idx > ndims_global
-            continue
-        end
-
-        mesh_dim_idx = i
+    for (mesh_dim_idx, global_dim_idx) in enumerate(decomposed_axes(dist, ndims_global))
         n_global = global_shape[global_dim_idx]
         n_procs = dist.mesh[mesh_dim_idx]
 
@@ -1056,11 +1053,65 @@ function local_indices(dist::Distributor, axis::Int)
 end
 
 """
+    decomposed_axes(dist, ndim::Int) -> NTuple{M,Int}
+
+Global axis indices decomposed across the process mesh, ascending, for an
+`ndim`-dimensional field on `dist`. Empty when the field is not decomposed.
+
+This is the SINGLE statement of both conventions. It used to be re-derived by
+hand at nine call sites, which is how the two conventions drifted:
+
+  * `use_pencil_arrays=true`  — PencilArrays decomposes the LAST `length(mesh)`
+    dimensions. When the field has fewer dimensions than the mesh, PencilArrays
+    cannot place the decomposition and the field stays local (matching
+    `get_local_array_size`, which is the allocator and therefore the authority).
+  * `use_pencil_arrays=false` — TransposableField decomposes the FIRST
+    `min(length(mesh), 2)` dimensions; it supports a 2-D process mesh at most.
+
+`ndim` is the FIELD's dimensionality, which is not always `dist.dim`; callers
+must pass the one they mean.
+"""
+function decomposed_axes(dist, ndim::Int)
+    (dist.size == 1 || dist.mesh === nothing || ndim < 1) && return ()
+    nmesh = length(dist.mesh)
+    if dist.use_pencil_arrays
+        ndim < nmesh && return ()
+        start = ndim - nmesh + 1
+        return ntuple(i -> start + i - 1, nmesh)
+    else
+        n = min(nmesh, 2, ndim)
+        return ntuple(identity, n)
+    end
+end
+
+"""
+    mesh_axis_for(dist, ndim::Int, axis::Int) -> Union{Nothing,Int}
+
+Index into `dist.mesh` of the mesh dimension decomposing global `axis`, or
+`nothing` when `axis` is local. Inverse of [`decomposed_axes`](@ref) for the
+call sites that need `dist.mesh[mesh_idx]`.
+"""
+function mesh_axis_for(dist, ndim::Int, axis::Int)
+    axes = decomposed_axes(dist, ndim)
+    for (i, a) in enumerate(axes)
+        a == axis && return i
+    end
+    return nothing
+end
+
+"""
+    is_decomposed_axis(dist, ndim::Int, axis::Int) -> Bool
+
+Whether global `axis` of an `ndim`-dimensional field is split across ranks.
+"""
+is_decomposed_axis(dist, ndim::Int, axis::Int) = mesh_axis_for(dist, ndim, axis) !== nothing
+
+"""
     Get local indices for the given axis with known global size.
 
-    Respects dist.use_pencil_arrays for decomposition convention:
-    - PencilArrays: decompose LAST ndims_mesh dimensions
-    - TransposableField: decompose FIRST ndims_mesh dimensions
+    Which axes are decomposed comes from `decomposed_axes` — see its docstring
+    for both conventions. This function is called with `dist.dim` as the
+    field's dimensionality (it has no shape argument of its own).
 
     Note: This returns the local indices for the actual field decomposition,
     which uses full mesh decomposition (not pencil decomposition with a local dim).
@@ -1071,46 +1122,8 @@ function local_indices(dist::Distributor, axis::Int, global_size::Int)
         return 1:global_size
     end
 
-    ndims_mesh = length(dist.mesh)
-
-    # Map the axis to the corresponding mesh dimension
-    # axis is 1-indexed into the global dimensions of the array
-    mesh_dim = nothing
-    for i in 1:ndims_mesh
-        global_dim_idx = if dist.use_pencil_arrays
-            # PencilArrays: decompose LAST ndims_mesh dimensions
-            # For ndims_global dimensions, mesh dim i maps to global dim (ndims_global - ndims_mesh + i)
-            # We don't know ndims_global here, but axis is the global dimension index.
-            # Reverse: mesh dim i = axis - (ndims_global - ndims_mesh)
-            # Since we don't know ndims_global, check if axis could match any mesh dim
-            nothing  # handled below
-        else
-            # TransposableField: mesh dim i maps to global dim i
-            i
-        end
-
-        if !dist.use_pencil_arrays && global_dim_idx == axis
-            mesh_dim = i
-            break
-        end
-    end
-
-    # For PencilArrays convention, decomposition covers the LAST ndims_mesh of the
-    # field's global dimensions (matches _compute_full_decomp_dims / get_local_array_size).
-    # The distributor's total dimension `dist.dim` IS ndims_global, so map directly:
-    # decomposed axes are decomp_start..ndims_global → mesh dims 1..n_decomp; earlier
-    # axes are LOCAL (mesh_dim stays nothing → full 1:global_size returned below).
-    if dist.use_pencil_arrays && mesh_dim === nothing
-        ndims_global = dist.dim
-        n_decomp = min(ndims_mesh, ndims_global)
-        decomp_start = ndims_global - n_decomp + 1
-        if decomp_start <= axis <= ndims_global
-            mesh_dim = axis - decomp_start + 1
-        end
-    end
-
+    mesh_dim = mesh_axis_for(dist, dist.dim, axis)
     if mesh_dim === nothing
-        # Axis is not decomposed
         return 1:global_size
     end
 

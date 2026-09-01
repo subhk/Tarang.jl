@@ -127,8 +127,8 @@ end
     Scatter array to all processes.
 
     IMPORTANT: Uses different decomposition conventions based on dist.use_pencil_arrays:
-    - use_pencil_arrays=true (CPU+MPI): PencilArrays convention, decompose LAST dims
-    - use_pencil_arrays=false (GPU+MPI): TransposableField ZLocal convention, decompose FIRST dims
+    - use_pencil_arrays=true (CPU+MPI): PencilArrays convention, decompose LAST dims (decomposed_axes)
+    - use_pencil_arrays=false (GPU+MPI): TransposableField ZLocal convention, decompose FIRST dims (decomposed_axes)
 
     Note: For GPU architectures, the input global_array should be a CPU array.
     The function will return the local portion on the target architecture (GPU if applicable).
@@ -179,11 +179,16 @@ function _scatter_array_from_root(dist::Distributor,
     ndims_mesh = length(dist.mesh)
 
     if dist.use_pencil_arrays
-        # PencilArrays convention: decompose LAST dims
-        decomp_dims = if ndims_global >= ndims_mesh
-            ntuple(i -> ndims_global - ndims_mesh + i, ndims_mesh)
-        else
-            ntuple(identity, ndims_global)
+        # PencilArrays convention: decompose LAST dims, per decomposed_axes (the
+        # single statement of both conventions -- see its docstring).
+        decomp_dims = decomposed_axes(dist, ndims_global)
+        if isempty(decomp_dims)
+            error("PencilArrays scatter requested for a $(ndims_global)-D array under a " *
+                  "$(ndims_mesh)-D mesh=$(dist.mesh) across $(dist.size) ranks: decomposed_axes " *
+                  "finds no axis to decompose (the array has fewer dimensions than the mesh). " *
+                  "A Pencil across multiple ranks that decomposes nothing cannot serve a scatter. " *
+                  "Use a mesh with at most $(ndims_global) dimensions, or scatter a " *
+                  "$(ndims_mesh)-D-or-larger array.")
         end
 
         pencil = nothing
@@ -242,60 +247,20 @@ function _scatter_array_from_root(dist::Distributor,
             MPI.Recv!(local_array, dist.comm; source=0, tag=0)
         end
     else
-        # GPU+MPI / TransposableField ZLocal convention: decompose FIRST dims
+        # GPU+MPI / TransposableField ZLocal convention: decompose FIRST dims (decomposed_axes).
         # Use get_local_array_size which respects use_pencil_arrays convention
         local_shape = get_local_array_size(dist, global_shape)
         local_array = zeros(T, local_shape...)
 
-        # Compute local ranges for FIRST dims decomposition
-        # This matches TransposableField's ZLocal convention
-        mesh = dist.mesh
-        P1 = mesh[1]
-        P2 = ndims_mesh >= 2 ? mesh[2] : 1
-        coord1 = dist.rank % P1
-        coord2 = dist.rank ÷ P1
-
-        # Compute ranges for first decomposed dimensions
-        function compute_range(global_size, n_procs, coord)
-            base_size = div(global_size, n_procs)
-            remainder = global_size % n_procs
-            if coord < remainder
-                start = coord * (base_size + 1) + 1
-                stop = start + base_size
-            else
-                start = coord * base_size + remainder + 1
-                stop = start + base_size - 1
-            end
-            return start:stop
-        end
-
-        # Build ranges for each dimension
-        ranges = Vector{UnitRange{Int}}(undef, ndims_global)
-        for d in 1:ndims_global
-            if d == 1 && ndims_mesh >= 1
-                ranges[d] = compute_range(global_shape[1], P1, coord1)
-            elseif d == 2 && ndims_mesh >= 2
-                ranges[d] = compute_range(global_shape[2], P2, coord2)
-            else
-                ranges[d] = 1:global_shape[d]  # Not decomposed
-            end
-        end
-
         if dist.rank == 0
-            # Rank 0 distributes data
+            # Rank 0 distributes data. Each dest_rank's range comes from
+            # get_local_range's rank-parameterized form: it resolves the SAME
+            # axis-mapping and remainder-placement convention as this rank's
+            # own local_shape above, just asked on behalf of dest_rank.
             for dest_rank in 0:(dist.size-1)
-                dest_coord1 = dest_rank % P1
-                dest_coord2 = dest_rank ÷ P1
-
-                dest_ranges = Vector{UnitRange{Int}}(undef, ndims_global)
-                for d in 1:ndims_global
-                    if d == 1 && ndims_mesh >= 1
-                        dest_ranges[d] = compute_range(global_shape[1], P1, dest_coord1)
-                    elseif d == 2 && ndims_mesh >= 2
-                        dest_ranges[d] = compute_range(global_shape[2], P2, dest_coord2)
-                    else
-                        dest_ranges[d] = 1:global_shape[d]
-                    end
+                dest_ranges = ntuple(ndims_global) do d
+                    lo, hi = get_local_range(dist, global_shape[d], d, dest_rank)
+                    lo:hi
                 end
 
                 if dest_rank == 0

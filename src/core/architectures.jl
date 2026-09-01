@@ -323,6 +323,21 @@ is_gpu(::CPU) = false
 is_gpu(::GPU) = true
 
 """
+    _uses_transpose_storage(arch::AbstractArchitecture, nprocs::Integer) -> Bool
+
+Whether a field on this architecture, distributed across `nprocs` ranks, needs
+`TransposableFieldStorage` (explicit-transpose GPU+MPI transforms) instead of
+`SerialFieldStorage` (PencilFFTs / local transforms). Used by `ScalarField`'s
+constructor. Defined by dispatch on the architecture TYPE rather than a
+`is_gpu(arch) && nprocs > 1` Bool branch, for the same reason every other
+backend choice in this file is: a future architecture that forgets to add a
+method here fails loudly (`MethodError`) instead of silently taking the CPU
+branch.
+"""
+_uses_transpose_storage(::GPU, nprocs::Integer) = nprocs > 1
+_uses_transpose_storage(::CPU, nprocs::Integer) = false
+
+"""
     has_cuda()
 
 Check if CUDA is available. The CUDA extension registers `CUDA.functional`

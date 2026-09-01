@@ -307,6 +307,20 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
 
     ensure_layout!(field, :g)  # Start in grid space
 
+    # A distributed GPU field transforms by explicit transposes. PencilFFTs is
+    # CPU-only and the local transform chain would compute a per-rank FFT of a
+    # slab, which is silently wrong rather than an error.
+    if is_transposable_storage(field)
+        # Dropping target_layout/apply_coupled_dct here is safe: is_transposable_storage
+        # always implies is_gpu(dist.architecture) || !dist.use_pencil_arrays, so
+        # plan_transforms! (transform_planning.jl:135) returns before dist.pencil_solve is
+        # ever built, and every apply_coupled_dct=false call site (lazy_rhs.jl,
+        # subproblem_io.jl) is gated on dist.pencil_solve !== nothing.
+        ws = transpose_workspace!(field.dist, field)
+        distributed_forward_transform!(ws)
+        return
+    end
+
     # Try GPU transform first if on GPU architecture
     if gpu_forward_transform!(field)
         field.current_layout = :c
@@ -371,17 +385,10 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
     # If we reach here with dist.size > 1, no PencilFFTPlan was found above,
     # so local transforms would produce incorrect results on distributed data.
     if field.dist.size > 1
-        if is_gpu_array(get_grid_data(field))
-            error("Cannot run local GPU transforms on distributed data without TransposableField. " *
-                  "GPU+MPI requires explicit transposes for correct distributed FFT. " *
-                  "Use TransposableField with distributed_forward_transform!/distributed_backward_transform! " *
-                  "for correct GPU+MPI spectral transforms.")
-        else
-            error("Cannot run local FFTW transforms on distributed CPU data without PencilFFTs. " *
-                  "No PencilFFTPlan found for this domain. " *
-                  "For MPI+CPU Fourier, set use_pencil_arrays=true in Distributor. " *
-                  "For MPI+GPU, use TransposableField with distributed transforms.")
-        end
+        error("Cannot run local FFTW transforms on distributed CPU data without PencilFFTs. " *
+              "No PencilFFTPlan found for this domain. " *
+              "For MPI+CPU Fourier, set use_pencil_arrays=true in Distributor. " *
+              "For MPI+GPU, use TransposableField with distributed transforms.")
     end
 
     # ── Zero-allocation in-place transform chain ───────────────────────────

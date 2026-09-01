@@ -162,10 +162,12 @@ if NPROCS == 1
     @testset "current_data accessor" begin
         tf = TransposableField(field)
 
-        # Initially in ZLocal layout
+        # With one rank, the wrapped field is authoritative; transpose buffers
+        # are unnecessary scratch storage and may have a different spectral shape.
         @test active_layout(tf) == ZLocal
         data = Tarang.current_data(tf)
-        @test data === tf.buffers.z_local_data
+        @test data === Tarang.get_grid_data(field)
+        @test data == field["g"]
     end
 
     @testset "make_transposable helper" begin
@@ -249,69 +251,70 @@ end  # if NPROCS == 1
 if NPROCS == 1
 @testset "TransposableField Serial Transforms" begin
 
-    coords = CartesianCoordinates("x", "y")
-    dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
-
-    xbasis = Fourier(coords, "x", 16)
-    ybasis = Fourier(coords, "y", 16)
-    domain = Domain(dist, (xbasis, ybasis))
-
-    field = ScalarField(dist, "transform_test", (xbasis, ybasis))
-
-    # Initialize with a known function
-    x = range(0, 2π, length=16)
-    y = range(0, 2π, length=16)
-    for i in 1:16, j in 1:16
-        field["g"][i, j] = sin(x[i]) * cos(y[j])
+    function serial_transform_field(name)
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
+        xbasis = Fourier(coords, "x", 16)
+        ybasis = Fourier(coords, "y", 16)
+        field = ScalarField(dist, name, (xbasis, ybasis))
+        x = range(0, 2π; length=17)[1:16]
+        y = range(0, 2π; length=17)[1:16]
+        for i in 1:16, j in 1:16
+            field["g"][i, j] = sin(x[i]) * cos(y[j])
+        end
+        return field
     end
 
-    # KNOWN BUG (xfail): on a serial (1-rank) 2D TransposableField,
-    # distributed_forward_transform! throws a BoundsError — the serial path in
-    # src/core/transpose/transpose_transforms.jl mismatches the dealiased
-    # coefficient buffer (12²=144) against the grid size (16²=256). The
-    # TransposableField transform path is exercised correctly at 2/4 ranks; the
-    # 1-rank serial path is degenerate (use a regular Field for serial runs).
-    # Marked @test_broken so CI stays green and flips to a failure once fixed.
-    @testset "Forward transform preserves energy" begin
+    @testset "Serial short-circuit delegates to the field's own transform" begin
+        # At one rank there is no transpose to perform and the field's regular
+        # transform path owns the basis-specific shapes (a RealFourier half
+        # spectrum has no representation in the fixed-shape transpose buffers).
+        # This asserts the DELEGATION — that the wrapper leaves the field
+        # authoritative — which is all the serial path claims. The claim that the
+        # distributed path reproduces serial COEFFICIENTS is an np>1 statement and
+        # lives in test_mpi_transposable_parity.jl.
+        field = serial_transform_field("transform_forward")
+        reference = serial_transform_field("transform_forward_reference")
         tf = TransposableField(field)
-        initial_energy = sum(abs2.(field["g"]))
-        @test_broken begin
-            distributed_forward_transform!(tf)
-            spectral_energy = sum(abs2.(field["c"])) / prod(size(field["c"]))
-            isapprox(initial_energy, spectral_energy * prod(size(field["g"])), rtol=0.1)
-        end
+        forward_transform!(reference)
+        distributed_forward_transform!(tf)
+        @test field.current_layout == :c
+        @test field["c"] ≈ reference["c"]
+        @test Tarang.current_data(tf) === Tarang.get_coeff_data(field)
     end
 
     @testset "Round-trip transform" begin
+        field = serial_transform_field("transform_roundtrip")
         tf = TransposableField(field)
         original = copy(field["g"])
-        @test_broken begin
-            distributed_forward_transform!(tf)
-            distributed_backward_transform!(tf)
-            isapprox(field["g"], original, rtol=1e-10)
-        end
+        distributed_forward_transform!(tf)
+        distributed_backward_transform!(tf)
+        @test field.current_layout == :g
+        @test field["g"] ≈ original rtol=1e-10
+        @test Tarang.current_data(tf) === Tarang.get_grid_data(field)
+        @test Tarang.current_data(tf) ≈ original rtol=1e-10
     end
 
     @testset "Round-trip with overlap flag" begin
+        field = serial_transform_field("transform_overlap")
         tf = TransposableField(field)
         original = copy(field["g"])
-        @test_broken begin
-            distributed_forward_transform!(tf; overlap=true)
-            distributed_backward_transform!(tf; overlap=false)
-            isapprox(field["g"], original, rtol=1e-10)
-        end
+        distributed_forward_transform!(tf; overlap=true)
+        distributed_backward_transform!(tf; overlap=false)
+        @test field["g"] ≈ original rtol=1e-10
     end
 
     @testset "Performance statistics" begin
+        field = serial_transform_field("transform_stats")
         tf = TransposableField(field)
         reset_transpose_stats!(tf)
-        @test_broken begin
-            distributed_forward_transform!(tf)
-            distributed_backward_transform!(tf)
-            stats = get_transpose_stats(tf)
-            stats.num_transposes >= 0 && stats.total_fft_time >= 0.0 &&
-                stats.total_pack_time >= 0.0 && stats.total_unpack_time >= 0.0
-        end
+        distributed_forward_transform!(tf)
+        distributed_backward_transform!(tf)
+        stats = get_transpose_stats(tf)
+        @test stats.num_transposes == 0
+        @test stats.total_fft_time >= 0.0
+        @test stats.total_pack_time == 0.0
+        @test stats.total_unpack_time == 0.0
     end
 
 end
@@ -341,6 +344,59 @@ if NPROCS > 1
     distributed_backward_transform!(tf)
     @test field.current_layout == :g
     @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-12, atol=1e-12)
+end
+
+@testset "transpose workspace is cached per shape, not per field" begin
+    # TransposableField's constructor performs two collective MPI.Comm_splits.
+    # One workspace per FIELD would burn 2*nfields communicators; two fields of
+    # the same shape must share one.
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,),
+                       dtype=ComplexF64, architecture=CPU(), use_pencil_arrays=false)
+    bases = (ComplexFourier(coords, "x", 8), ComplexFourier(coords, "y", 6))
+    a = ScalarField(dist, "ws_a", bases)
+    b = ScalarField(dist, "ws_b", bases)
+
+    wa = Tarang.transpose_workspace!(dist, a)
+    wb = Tarang.transpose_workspace!(dist, b)
+    @test wa === wb
+
+    # A different shape gets its own workspace.
+    other = (ComplexFourier(coords, "x", 16), ComplexFourier(coords, "y", 6))
+    c = ScalarField(dist, "ws_c", other)
+    @test Tarang.transpose_workspace!(dist, c) !== wa
+end
+
+@testset "CPU fields do not select transposable storage, even under MPI (np=$NPROCS)" begin
+    # RENAMED from "distributed GPU fields select transposable storage": this
+    # testset only ever built a CPU-architecture field and checked the negative
+    # case (_uses_transpose_storage(CPU(), n) == false, via is_transposable_storage
+    # on the resulting field) — it never touched a GPU architecture, so the old
+    # name overclaimed what was actually verified.
+    #
+    # The GPU-positive case — _uses_transpose_storage(GPU, n>1) == true — cannot
+    # be exercised through the real ScalarField constructor on this box:
+    # _build_field_arrays runs BEFORE storage selection and needs
+    # array_type(::GPU, T), which errors without the CUDA extension loaded (see
+    # the "synthetic device-storage field dispatches..." testset in
+    # test_mpi_transposable_parity.jl for the same constraint, and the
+    # explicit-storage constructor it uses to work around it). The predicate
+    # itself is pinned directly — dispatch only, no array allocation — for both
+    # GPU and CPU, in test_decomposition_convention.jl's "_uses_transpose_storage"
+    # testset; that is where the actual GPU-positive assertion lives.
+    #
+    # TransposableFieldStorage has been defined, documented and dispatched since
+    # the wrapper was split up — but nothing ever constructed it, so every field
+    # got SerialFieldStorage and the distributed transform stayed unreachable
+    # from the ordinary API.
+    coords = CartesianCoordinates("x", "y")
+
+    cpu_dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,),
+                           dtype=ComplexF64, architecture=CPU(),
+                           use_pencil_arrays=false)
+    bases = (ComplexFourier(coords, "x", 8), ComplexFourier(coords, "y", 6))
+    cpu_field = ScalarField(cpu_dist, "storage_cpu", bases)
+    @test !Tarang.is_transposable_storage(cpu_field)
 end
 end  # if NPROCS > 1
 
