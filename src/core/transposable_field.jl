@@ -145,8 +145,9 @@ function TransposableField(field::ScalarField; topology=nothing)
               "1D domains have only one dimension which cannot be transposed. " *
               "Use regular Field with PencilFFTs for 1D distributed FFTs, or use a single process.")
     end
-    # Spectral transforms use complex; if dtype is already complex, use it directly
-    T = dist.dtype <: Complex ? dist.dtype : Complex{dist.dtype}
+    # Spectral transforms use complex storage at the wrapped field's precision.
+    # A Distributor may own fields with a dtype different from its default dtype.
+    T = field.dtype <: Complex ? field.dtype : Complex{field.dtype}
 
     # Create 2D topology
     topo = if topology !== nothing
@@ -162,81 +163,74 @@ function TransposableField(field::ScalarField; topology=nothing)
         Topology2D()
     end
 
-    # Create buffers
-    buffers = TransposeBuffers{T,N}(arch)
+    # Every operation after the communicator split belongs to this constructor.
+    # Capture local failures, agree over the parent communicator, then have every
+    # rank release its sub-communicators in the same order before throwing.
+    tf = nothing
+    construction_error = nothing
+    try
+        buffers = TransposeBuffers{T,N}(arch)
 
-    # Create counts with correct sizes for each transpose operation
-    # For 3D: Z↔Y uses row_comm, Y↔X uses col_comm
-    # For 2D with 1D decomposition: Z↔Y uses whichever comm has multiple processes
-    if N >= 3
-        zy_nprocs = max(topo.row_size, 1)  # row_comm size for Z↔Y transpose
-        yx_nprocs = max(topo.col_size, 1)  # col_comm size for Y↔X transpose
-    else
-        # 2D case: Z↔Y uses row_comm for true 2D mesh, but col_comm for 1D decomposition
-        if topo.Rx > 1 && topo.Ry > 1
-            # True 2D mesh: use row_comm (Ry processes)
+        # Create counts with correct sizes for each transpose operation.
+        if N >= 3
             zy_nprocs = max(topo.row_size, 1)
+            yx_nprocs = max(topo.col_size, 1)
         else
-            # 1D decomposition: use whichever comm has multiple processes
-            zy_nprocs = topo.row_size > 1 ? topo.row_size : max(topo.col_size, 1)
+            if topo.Rx > 1 && topo.Ry > 1
+                zy_nprocs = max(topo.row_size, 1)
+            else
+                zy_nprocs = topo.row_size > 1 ? topo.row_size : max(topo.col_size, 1)
+            end
+            yx_nprocs = max(topo.col_size, 1)
         end
-        yx_nprocs = max(topo.col_size, 1)  # Y↔X always uses col_comm
-    end
-    counts = TransposeCounts(zy_nprocs, yx_nprocs)
+        counts = TransposeCounts(zy_nprocs, yx_nprocs)
+        comms = TransposeComms(topo)
+        local_shapes = compute_local_shapes_2d(gshape, topo)
 
-    # Create comms wrapper
-    comms = TransposeComms(topo)
+        if dist.size > 1
+            field_shape = size(field["g"])
+            expected_shape = local_shapes[ZLocal]
+            if field_shape != expected_shape
+                error("TransposableField layout mismatch: field storage shape $field_shape " *
+                      "does not match expected ZLocal shape $expected_shape for topology " *
+                      "(Rx=$(topo.Rx), Ry=$(topo.Ry)). " *
+                      "Ensure field allocation uses ZLocal decomposition: " *
+                      "x decomposed by Rx, y decomposed by Ry, z local (for 3D); " *
+                      "or use serial execution (nprocs=1).")
+            end
 
-    # Compute local shapes for each layout
-    local_shapes = compute_local_shapes_2d(gshape, topo)
-
-    # Validate: field storage must match ZLocal shape for GPU+MPI
-    if dist.size > 1
-        field_shape = size(field["g"])
-        expected_shape = local_shapes[ZLocal]
-        if field_shape != expected_shape
-            error("TransposableField layout mismatch: field storage shape $field_shape " *
-                  "does not match expected ZLocal shape $expected_shape for topology " *
-                  "(Rx=$(topo.Rx), Ry=$(topo.Ry)). " *
-                  "Ensure field allocation uses ZLocal decomposition: " *
-                  "x decomposed by Rx, y decomposed by Ry, z local (for 3D); " *
-                  "or use serial execution (nprocs=1).")
+            if N == 2 && topo.Rx > 1 && topo.Ry > 1
+                @warn "TransposableField for 2D domain with 2D true mesh (Rx=$(topo.Rx), Ry=$(topo.Ry)): " *
+                      "async transposes are NOT supported. Use blocking transposes " *
+                      "(transpose_z_to_y!, transpose_y_to_x!) or distributed_forward_transform! " *
+                      "with overlap=false. Async functions will error at runtime." maxlog=1
+            end
         end
 
-        # Warn about async transpose limitations for 2D domain with 2D true mesh
-        # In this configuration, Z→Y uses Allgatherv (not Alltoallv), so async is not supported
-        if N == 2 && topo.Rx > 1 && topo.Ry > 1
-            @warn "TransposableField for 2D domain with 2D true mesh (Rx=$(topo.Rx), Ry=$(topo.Ry)): " *
-                  "async transposes are NOT supported. Use blocking transposes " *
-                  "(transpose_z_to_y!, transpose_y_to_x!) or distributed_forward_transform! " *
-                  "with overlap=false. Async functions will error at runtime." maxlog=1
-        end
-    end
-
-    # Async state
-    async_state = AsyncTransposeState()
-
-    # FFT plans dictionary
-    fft_plans = Dict{TransposeLayout, Any}()
-
-    tf = TransposableField{typeof(field), T, N}(
-        field, buffers, counts, comms, topo, gshape, local_shapes, async_state, fft_plans,
-        0.0, 0.0, 0.0, 0.0, 0
-    )
-
-    # Register finalizer to free MPI sub-communicators when TransposableField is garbage collected
-    # CRITICAL: Without this, row_comm and col_comm would leak, eventually exhausting MPI resources
-    if dist.size > 1 && topo.row_comm !== nothing
-        finalizer(tf) do x
-            free_topology_2d!(x.topology)
-        end
+        async_state = AsyncTransposeState()
+        fft_plans = Dict{TransposeLayout, Any}()
+        tf = TransposableField{typeof(field), T, N}(
+            field, buffers, counts, comms, topo, gshape, local_shapes, async_state, fft_plans,
+            0.0, 0.0, 0.0, 0.0, 0, false
+        )
+        allocate_transpose_buffers!(tf)
+        compute_transpose_counts!(tf)
+    catch err
+        construction_error = err
     end
 
-    # Allocate buffers
-    allocate_transpose_buffers!(tf)
+    construction_failed = construction_error !== nothing
+    if dist.size > 1 && MPI.Initialized() && !MPI.Finalized()
+        construction_failed = MPI.Allreduce(construction_failed ? 1 : 0, MPI.MAX, dist.comm) != 0
+    end
 
-    # Compute transpose counts
-    compute_transpose_counts!(tf)
+    if construction_failed
+        free_topology_2d!(topo)
+        construction_error === nothing && error(
+            "TransposableField construction failed on another MPI rank; " *
+            "all ranks released their transpose communicators.")
+        throw(construction_error)
+    end
 
     return tf
 end
@@ -248,6 +242,35 @@ Helper function to create a TransposableField from a ScalarField.
 """
 make_transposable(field::ScalarField; kwargs...) = TransposableField(field; kwargs...)
 
+"""
+    close(tf::TransposableField)
+
+Collectively release the MPI sub-communicators owned by `tf`. Every rank in the
+field's distributor must call `close` in the same order before `MPI.Finalize`.
+The operation is idempotent. Garbage collection never performs this collective.
+"""
+function Base.close(tf::TransposableField)
+    tf.closed && return nothing
+
+    if tf.async_state.in_progress && MPI.Initialized() && !MPI.Finalized()
+        wait_transpose!(tf)
+    end
+
+    free_topology_2d!(tf.topology)
+    tf.comms.zy_comm = nothing
+    tf.comms.yx_comm = nothing
+    tf.closed = true
+    return nothing
+end
+
+Base.isopen(tf::TransposableField) = !tf.closed
+
+@inline function _require_open(tf::TransposableField, operation::AbstractString)
+    tf.closed && throw(ArgumentError(
+        "$operation cannot use a closed TransposableField; construct a new wrapper."))
+    return nothing
+end
+
 # ============================================================================
 # MPI Communicator Creation (Legacy wrapper)
 # ============================================================================
@@ -258,9 +281,9 @@ make_transposable(field::ScalarField; kwargs...) = TransposableField(field; kwar
 Create MPI sub-communicators for transpose operations.
 This is a wrapper that creates a 2D topology internally.
 
-WARNING: This function is deprecated. Prefer using TransposableField which handles
-MPI communicator cleanup automatically via finalizers. If you must use this function,
-call `free_comms!(comms)` when done to avoid MPI resource leaks.
+WARNING: This function is deprecated. Prefer using `TransposableField` and call
+`close(tf)` collectively when it is no longer needed. If you must use this function,
+call `free_comms!(comms)` collectively when done to avoid MPI resource leaks.
 """
 function create_transpose_comms(dist::Distributor)
     if dist.size == 1
@@ -284,8 +307,22 @@ end
 """Get the current active layout"""
 active_layout(tf::TransposableField) = tf.buffers.active_layout[]
 
-"""Get data array for current layout"""
+"""Get the authoritative data array for the wrapper's current layout."""
 function current_data(tf::TransposableField)
+    # A one-rank distributed transform delegates to ScalarField's ordinary
+    # basis-aware transform because grid and coefficient shapes can differ
+    # (for example, a RealFourier half spectrum). No transpose buffer can
+    # represent both shapes, so the wrapped field remains authoritative.
+    if tf.field.dist.size == 1
+        if tf.field.current_layout === :g
+            return get_grid_data(tf.field)
+        elseif tf.field.current_layout === :c
+            return get_coeff_data(tf.field)
+        end
+        error("TransposableField has unsupported serial field layout " *
+              "$(repr(tf.field.current_layout))")
+    end
+
     layout = active_layout(tf)
     if layout == ZLocal
         return tf.buffers.z_local_data

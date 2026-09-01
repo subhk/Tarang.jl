@@ -217,7 +217,7 @@ function test_neighbor_exchange(reqs::Vector{MPI.Request})
     pending = Int[]
 
     for (i, req) in enumerate(reqs)
-        flag, _ = MPI.Test(req)
+        flag = MPI.Test(req)
         if flag
             push!(completed, i)
         else

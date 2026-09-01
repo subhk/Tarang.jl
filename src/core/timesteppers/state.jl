@@ -213,7 +213,7 @@ end
 """
 Return a cached factorization of the mass matrix, or `nothing` if M is
 singular (DAE system with non-evolution equations that have zero M rows).
-All callers and `_apply_mass_inverse` already treat `nothing` as identity.
+Callers must decide whether their scheme supports a singular mass matrix.
 """
 function _get_mass_factor!(state::TimestepperState, M_matrix::AbstractMatrix)
     cache = state.timestepper_data
@@ -282,15 +282,10 @@ function _get_linear_operator_eff!(state::TimestepperState, L_matrix::AbstractMa
     end
 
     M_factor = _get_mass_factor!(state, M_matrix)
-    if M_factor === nothing
-        # Singular mass (DAE system) — treat M as identity
-        cache = state.timestepper_data
-        if !haskey(cache, :L_neg) || get(cache, :L_neg_source, nothing) !== L_matrix
-            cache[:L_neg] = -L_matrix
-            cache[:L_neg_source] = L_matrix
-        end
-        return cache[:L_neg]::AbstractMatrix, nothing
-    end
+    M_factor === nothing && throw(ArgumentError(
+        "ETD timesteppers do not support a singular mass matrix (DAE system). " *
+        "Use a DAE-aware implicit timestepper for this formulation.",
+    ))
 
     cache = state.timestepper_data
     if !haskey(cache, :L_eff) || get(cache, :L_eff_source, nothing) !== L_matrix
@@ -448,14 +443,19 @@ function _update_registered_forcings!(solver::InitialValueSolver, sim_time::Floa
 
     # Generate forcing for each registered forcing
     for (var_idx, forcing) in problem.stochastic_forcings
-        _generate_one_forcing!(forcing, sim_time, dt)
+        var_idx <= length(solver.state) || throw(ArgumentError(
+            "Registered forcing targets state index $var_idx, but the solver has " *
+            "only $(length(solver.state)) state fields.",
+        ))
+        _generate_one_forcing!(forcing, sim_time, dt, solver.state[var_idx])
     end
 end
 
 # Function barrier: `forcing` is abstract in the dict, but here dispatch
 # specializes on its concrete type, so the dt check and generation compile
 # without runtime reflection overhead.
-function _generate_one_forcing!(forcing, sim_time::Float64, dt::Float64)
+function _generate_one_forcing!(forcing, sim_time::Float64, dt::Float64,
+                                target_field=nothing)
     # Update dt if it changed
     if hasfield(typeof(forcing), :dt) && forcing.dt != dt
         set_dt!(forcing, dt)
@@ -464,6 +464,29 @@ function _generate_one_forcing!(forcing, sim_time::Float64, dt::Float64)
     # Generate new forcing realization
     # Substep=1 ensures forcing is actually regenerated (not just cached)
     generate_forcing!(forcing, sim_time, 1)
+end
+
+function _generate_one_forcing!(forcing::DeterministicForcing,
+                                sim_time::Float64, dt::Float64,
+                                target_field::ScalarField)
+    n_dims = length(forcing.field_size)
+    length(target_field.bases) == n_dims || throw(ArgumentError(
+        "DeterministicForcing has $n_dims dimensions, but target field " *
+        "'$(target_field.name)' has $(length(target_field.bases)) bases.",
+    ))
+
+    raw_grids = local_grids(target_field.dist, target_field.bases...)
+    local_shape = ntuple(axis -> length(raw_grids[axis]), n_dims)
+    local_shape == forcing.field_size || throw(ArgumentError(
+        "DeterministicForcing field_size $(forcing.field_size) does not match " *
+        "the target field's local grid size $local_shape.",
+    ))
+    shaped_grids = ntuple(n_dims) do axis
+        shape = ntuple(dim -> dim == axis ? local_shape[axis] : 1, n_dims)
+        reshape(raw_grids[axis], shape)
+    end
+    generate_forcing!(forcing, shaped_grids, sim_time)
+    return nothing
 end
 
 """

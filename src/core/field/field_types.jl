@@ -100,6 +100,11 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
     domain::Union{Nothing, Domain}
     dtype::Type{T}
 
+    # Strongly retain the exact plan that owns PencilArray storage. This is
+    # intentionally type-erased because transform types load after field types;
+    # `_field_transform_bundle` restores the concrete return type.
+    transform_bundle::Any
+
     storage::S
 
     # Layout information
@@ -119,6 +124,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
     function ScalarField(dist::Distributor, name::String="field", bases::Tuple{Vararg{Basis}}=(),
                          dtype::Type{T}=dist.dtype) where T
         domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
+        bases = domain === nothing ? bases : domain.bases
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
 
@@ -126,17 +132,22 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         # parametrized on their real types. 0-D fields get typed length-0
         # sentinels so storage is never nothing (Phase 1 type-stability).
         g, c = domain !== nothing ? _build_field_arrays(dist, domain, T) : (_empty_grid(T), _empty_coeff(T))
+        bundle = domain === nothing ? nothing : transform_plan_bundle(domain, T)
         storage = SerialFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)
-        return new{T, typeof(storage)}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
+        return new{T, typeof(storage)}(dist, name, bases, domain, dtype, bundle,
+                                       storage, layout, :g, initial_scales, :auto, false, 0)
     end
 
     # Inner constructor for explicit storage type (e.g., TransposableFieldStorage)
     function ScalarField(dist::Distributor, name::String, bases::Tuple{Vararg{Basis}},
                          dtype::Type{T}, storage::S) where {T, S<:AbstractFieldStorage}
         domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
+        bases = domain === nothing ? bases : domain.bases
         layout = length(bases) > 0 ? get_layout(dist, bases, dtype) : nothing
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
-        field = new{T, S}(dist, name, bases, domain, dtype, storage, layout, :g, initial_scales, :auto, false, 0)
+        bundle = domain === nothing ? nothing : transform_plan_bundle(domain, T)
+        field = new{T, S}(dist, name, bases, domain, dtype, bundle, storage,
+                          layout, :g, initial_scales, :auto, false, 0)
         # Install typed length-0 sentinels for 0-D fields so storage is never nothing.
         if domain === nothing
             set_grid_data!(field, _empty_grid(T))
@@ -168,6 +179,7 @@ mutable struct VectorField{T, S<:AbstractFieldStorage} <: Operand
     function VectorField(dist::Distributor, coordsys::CoordinateSystem, name::String="vector",
                          bases::Tuple{Vararg{Basis}}=(), dtype::Type{T}=dist.dtype) where T
         domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
+        bases = domain === nothing ? bases : domain.bases
 
         # Create component fields. SerialFieldStorage is now parametric, so build
         # into an abstractly-typed vector then narrow with identity.() — all
@@ -237,6 +249,7 @@ mutable struct TensorField{T, S<:AbstractFieldStorage} <: Operand
     function TensorField(dist::Distributor, coordsys::CoordinateSystem, name::String="tensor",
                          bases::Tuple{Vararg{Basis}}=(), dtype::Type{T}=dist.dtype) where T
         domain = length(bases) > 0 ? get_or_build_domain(dist, bases) : nothing
+        bases = domain === nothing ? bases : domain.bases
 
         dim = coordsys.dim
         # SerialFieldStorage is now parametric: build an abstractly-typed matrix

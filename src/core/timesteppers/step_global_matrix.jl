@@ -259,49 +259,24 @@ Spalart–Moser–Rogers semi-implicit (IMEX) RK3 step. RKSMR now carries an ARK
 Butcher tableau (see `RKSMR` in types.jl), so — like RKGFY and RK443_IMEX — it
 delegates to the generic IMEX driver `step_rk_imex!`, which treats the nonlinear
 term `F` explicitly and the stiff linear operator `L` implicitly (M/L matrices,
-per-mode subproblems, distributed diagonal IMEX). Falls back to explicit RK443
-only if that path throws.
+per-mode subproblems, distributed diagonal IMEX). Failures propagate rather than
+falling back to an explicit method that would drop `L`, `M`, and constraints.
 
 Previously this was a fully-EXPLICIT SSP-RK3 that ignored `L` entirely (only
 emitting a warning), so diffusion-dominated problems were integrated without any
 implicit treatment and went unstable.
 """
 function step_rksmr!(state::TimestepperState, solver::InitialValueSolver)
-    try
-        step_rk_imex!(state, solver)
-    catch e
-        # GPU state: rethrow. Falling back to fully-explicit RK443 drops the
-        # implicit L, the mass matrix, AND BC/tau enforcement — exactly the
-        # silent-L-drop failure the GPU guards exist to prevent; this catch
-        # must not convert those loud errors back into a silently wrong run.
-        any(_field_uses_gpu, solver.state) && rethrow()
-        @warn "RKSMR failed: $e, falling back to RK443"
-        step_rk443!(state, solver)
-    end
+    step_rk_imex!(state, solver)
 end
 
 # `step_rkgfy!` and `step_rk443_imex!` are named scheme entry points that carry
 # no bespoke logic — they delegate to the generic `step_rk_imex!` so every IMEX
-# RK variant shares one M/L-handling implementation, falling back to explicit
-# RK443 if the generic path throws.
+# RK variant shares one M/L-handling implementation and failure policy.
 function step_rkgfy!(state::TimestepperState, solver::InitialValueSolver)
-    try
-        step_rk_imex!(state, solver)
-    catch e
-        # GPU: rethrow — see step_rksmr! (explicit fallback silently drops L/M/BC).
-        any(_field_uses_gpu, solver.state) && rethrow()
-        @warn "RKGFY failed: $e, falling back to RK443"
-        step_rk443!(state, solver)
-    end
+    step_rk_imex!(state, solver)
 end
 
 function step_rk443_imex!(state::TimestepperState, solver::InitialValueSolver)
-    try
-        step_rk_imex!(state, solver)
-    catch e
-        # GPU: rethrow — see step_rksmr! (explicit fallback silently drops L/M/BC).
-        any(_field_uses_gpu, solver.state) && rethrow()
-        @warn "RK443_IMEX failed: $e, falling back to RK443"
-        step_rk443!(state, solver)
-    end
+    step_rk_imex!(state, solver)
 end

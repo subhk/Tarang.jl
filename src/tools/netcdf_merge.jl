@@ -110,6 +110,89 @@ struct NetCDFMerger
     end
 end
 
+function _processor_rank_from_path(path::String)
+    m = match(r"_p(\d+)\.nc$", basename(path))
+    m === nothing && error("Processor filename does not end in _p<rank>.nc: '$path'")
+    return parse(Int, m.captures[1])
+end
+
+function _global_integer_attribute(info, name::String)
+    value = get(info.gatts, name, get(info.gatts, Symbol(name), nothing))
+    value === nothing && return nothing
+    value isa AbstractArray && (value = only(value))
+    return Int(value)
+end
+
+function _data_variable_names(info)
+    names = Set{String}()
+    for var_info in info.vars
+        is_time_coordinate(var_info.name) && continue
+        is_coordinate_variable(var_info) && continue
+        push!(names, var_info.name)
+    end
+    return names
+end
+
+"""Validate every source before the output path is touched."""
+function validate_merger_inputs!(merger::NetCDFMerger)
+    isempty(merger.processor_files) &&
+        error("No processor files found for $(merger.base_name)_s$(merger.set_number)")
+
+    output_path = abspath(normpath(merger.output_file))
+    source_paths = abspath.(normpath.(merger.processor_files))
+    output_path in source_paths && error(
+        "Refusing to merge in place: output '$output_path' aliases a processor source")
+    if ispath(output_path)
+        for source_path in source_paths
+            Base.Filesystem.samefile(output_path, source_path) && error(
+                "Refusing to merge in place: output '$output_path' is a filesystem " *
+                "alias of processor source '$source_path'")
+        end
+    end
+
+    ranks = _processor_rank_from_path.(merger.processor_files)
+    length(unique(ranks)) == length(ranks) ||
+        error("Duplicate processor ranks in merge input: $ranks")
+    sort(ranks) == collect(0:maximum(ranks)) ||
+        error("Processor rank set is incomplete: found $(sort(ranks))")
+
+    infos = Any[]
+    expected_sizes = Int[]
+    for (file, filename_rank) in zip(merger.processor_files, ranks)
+        isfile(file) || error("Processor source disappeared before merge: '$file'")
+        info = netcdf_file_info(file) # deliberately fails on corrupt/unreadable input
+        push!(infos, info)
+        mpi_size = _global_integer_attribute(info, "mpi_size")
+        mpi_size === nothing || push!(expected_sizes, mpi_size)
+        declared_rank = _global_integer_attribute(info, "processor_rank")
+        if declared_rank !== nothing
+            declared_rank == filename_rank || error(
+                "Processor rank metadata $declared_rank disagrees with '$file'")
+        end
+    end
+
+    if length(infos) > 1 && length(expected_sizes) != length(infos)
+        error("Every source in a multi-rank merge must declare mpi_size; " *
+              "found it on $(length(expected_sizes)) of $(length(infos)) files")
+    end
+    if !isempty(expected_sizes)
+        length(unique(expected_sizes)) == 1 ||
+            error("Processor files disagree on mpi_size: $expected_sizes")
+        expected = only(unique(expected_sizes))
+        sort(ranks) == collect(0:(expected - 1)) || error(
+            "Processor set is incomplete: expected ranks 0:$(expected - 1), found $(sort(ranks))")
+    end
+
+    reference_vars = _data_variable_names(first(infos))
+    for (file, info) in zip(merger.processor_files[2:end], infos[2:end])
+        vars = _data_variable_names(info)
+        vars == reference_vars || error(
+            "Processor variable schema mismatch in '$file': expected " *
+            "$(sort!(collect(reference_vars))), found $(sort!(collect(vars)))")
+    end
+    return infos
+end
+
 function netcdf_file_info(file::String)
     NetCDF.open(file) do nc
         dims = [
@@ -374,11 +457,27 @@ function analyze_processor_files(merger::NetCDFMerger)
             push!(data_vars, var_name)
         end
     end
+
+
+    expected_output_shapes = Dict{String, Tuple}()
+    for var_name in data_vars
+        var_info = only(filter(v -> v.name == var_name, info.vars))
+        source_shape = Tuple(var_info.dim_lengths)
+        if merger.merge_mode == SIMPLE_CONCAT
+            expected_output_shapes[var_name] = (source_shape..., length(merger.processor_files))
+        else
+            declared = normalize_global_shape(
+                get(var_info.atts, "global_shape", nothing), source_shape)
+            expected_output_shapes[var_name] =
+                declared === nothing ? source_shape : Tuple(declared)
+        end
+    end
     
     file_info["global_attrs"] = global_attrs
     file_info["time_info"] = time_info
     file_info["data_vars"] = data_vars
     file_info["coord_vars"] = coord_vars
+    file_info["expected_output_shapes"] = expected_output_shapes
     file_info["first_file"] = first_file
     
     merger.verbose && println("  Found $(length(data_vars)) data variables: $(join(data_vars, ", "))")
@@ -483,6 +582,31 @@ function merge_data_variables!(merger::NetCDFMerger, output_file::String, file_i
     end
 end
 
+function verify_merged_output!(output_file::String, file_info::Dict)
+    isfile(output_file) || error("Merged output was not created: '$output_file'")
+    expected = Set{String}(file_info["data_vars"])
+    actual = Set(group_variable_names(output_file, NETCDF_VARS_GROUP))
+    actual == expected || error(
+        "Merged output variable set is incomplete: expected $(sort!(collect(expected))), " *
+        "found $(sort!(collect(actual)))")
+    for (coord_name, expected_count) in file_info["time_info"]
+        expected_count > 0 || continue
+        actual_count = length(vec(read_netcdf_variable(output_file, coord_name)))
+        actual_count == expected_count || error(
+            "Merged '$coord_name' has $actual_count records; expected $expected_count")
+    end
+    sim_records = get(file_info["time_info"], "sim_time", 0)
+    for var_name in expected
+        data = read_netcdf_variable(output_file, var_name)
+        expected_shape = file_info["expected_output_shapes"][var_name]
+        size(data) == expected_shape || error(
+            "Merged '$var_name' has shape $(size(data)); expected $expected_shape")
+        sim_records == 0 || size(data, 1) == sim_records || error(
+            "Merged '$var_name' has $(size(data, 1)) records; expected $sim_records")
+    end
+    return true
+end
+
 """
 Simple concatenation merge: combine data along processor dimension
 """
@@ -514,26 +638,22 @@ function merge_variable_concat!(merger::NetCDFMerger, output_file::String, var_n
     dim_names = String[]
     
     for (i, file) in enumerate(merger.processor_files)
-        try
-            data = read_netcdf_variable(file, var_name)
-            push!(all_data, data)
-            
-            if i == 1
-                # Get metadata from first file
-                var_attrs["long_name"] = var_name
-                var_attrs["standard_name"] = var_name
-                var_attrs["merged_from"] = "$(length(merger.processor_files)) processors"
-                data_type = eltype(data)
-                
-                # Get dimension structure
-                data_shape = size(data)
-                dim_names = ["sim_time"]
-                for j in 2:length(data_shape)
-                    push!(dim_names, "$(var_name)_dim$(j-1)")
-                end
+        data = read_netcdf_variable(file, var_name)
+        push!(all_data, data)
+
+        if i == 1
+            # Get metadata from first file
+            var_attrs["long_name"] = var_name
+            var_attrs["standard_name"] = var_name
+            var_attrs["merged_from"] = "$(length(merger.processor_files)) processors"
+            data_type = eltype(data)
+
+            # Get dimension structure
+            data_shape = size(data)
+            dim_names = ["sim_time"]
+            for j in 2:length(data_shape)
+                push!(dim_names, "$(var_name)_dim$(j-1)")
             end
-        catch e
-            merger.verbose && println("    Warning: Could not read $var_name from $(basename(file)): $e")
         end
     end
     
@@ -551,30 +671,13 @@ function merge_variable_concat!(merger::NetCDFMerger, output_file::String, var_n
 
     # Stack data along new processor dimension
     combined_data = zeros(data_type, combined_shape)
-    skipped_count = 0
-
     for (i, data) in enumerate(all_data)
-        if size(data) == size(first_data)
-            # Build proper index tuple: (:, :, ..., :, i) for the i-th processor slice
-            # Use selectdim-style indexing for dimension-agnostic assignment
-            indices = ntuple(d -> d <= n_dims ? Colon() : i, n_dims + 1)
-            combined_data[indices...] = data
-        else
-            # Data shape mismatch - log warning and skip
-            skipped_count += 1
-            if merger.verbose && skipped_count <= 3
-                println("    Warning: Processor $i data shape $(size(data)) != expected $(size(first_data)), skipping")
-            end
-        end
-    end
-
-    if skipped_count > 0
-        merger.verbose && println("    Skipped $skipped_count processors due to shape mismatch")
-    end
-
-    if skipped_count == n_procs
-        merger.verbose && println("    Error: All processor data had mismatched shapes")
-        return
+        size(data) == size(first_data) || error(
+            "Cannot concatenate '$var_name': processor $(i - 1) has shape " *
+            "$(size(data)), expected $(size(first_data))")
+        # Build proper index tuple: (:, :, ..., :, i) for the i-th processor slice
+        indices = ntuple(d -> d <= n_dims ? Colon() : i, n_dims + 1)
+        combined_data[indices...] = data
     end
     
     # Create processor coordinate once
@@ -623,6 +726,7 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
             start_indices = nothing
             count_indices = nothing
             source_dim_names = nothing
+            source_global_shape = nothing
             
             try
                 # Look for Tarang-style attributes: 'start' and 'count'
@@ -641,7 +745,9 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
                         
                         # If we have global shape info, use it
                         if haskey(var_info.atts, "global_shape")
-                            global_shape = normalize_global_shape(var_info.atts["global_shape"], size(data))
+                            source_global_shape = normalize_global_shape(
+                                var_info.atts["global_shape"], size(data))
+                            global_shape = source_global_shape
                         end
                         break
                     end
@@ -655,6 +761,7 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
                 "data" => data,
                 "start" => start_indices,
                 "count" => count_indices,
+                "global_shape" => source_global_shape,
                 "file" => file
             )
             push!(processor_data, proc_info)
@@ -688,13 +795,26 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
             end
             
         catch e
-            merger.verbose && println("    Warning: Could not read $var_name from $(basename(file)): $e")
+            error("Could not read '$var_name' from '$(basename(file))': " *
+                  sprint(showerror, e))
         end
     end
     
     if isempty(processor_data)
         merger.verbose && println("    No data found for $var_name")
         return
+    end
+
+    if length(processor_data) > 1
+        all(p -> p["start"] !== nothing && p["count"] !== nothing,
+            processor_data) || error(
+                "Cannot reconstruct '$var_name' from multiple processors without " *
+                "explicit start/count slab metadata; use SIMPLE_CONCAT for rank-wise data")
+        all(p -> p["global_shape"] !== nothing, processor_data) || error(
+                "Cannot verify reconstruction of '$var_name': one or more processors " *
+                "lack global_shape metadata")
+        length(unique([p["global_shape"] for p in processor_data])) == 1 || error(
+                "Processor files disagree on global_shape for '$var_name'")
     end
 
     # Attempt to infer start/count metadata if missing
@@ -766,30 +886,20 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
                 # Fill global array at correct spatial location
                 slices = tuple(spatial_slices...)
                 if size(data) == size(reconstructed_data[slices...])
+                    any(coverage_mask[slices...]) && error(
+                        "Overlapping slabs while reconstructing '$var_name': " *
+                        "$(basename(proc_info["file"])) overlaps prior coverage at $slices")
                     reconstructed_data[slices...] = data
                     coverage_mask[slices...] .= true
                     merger.verbose && println("        Placed data from $(basename(proc_info["file"])) at $slices")
                 else
-                    merger.verbose && println("        Size mismatch for $(basename(proc_info["file"])): expected $(size(reconstructed_data[slices...])), got $(size(data))")
+                    error("Slab shape mismatch for '$var_name' in " *
+                          "$(basename(proc_info["file"])): expected " *
+                          "$(size(reconstructed_data[slices...])), got $(size(data))")
                 end
             catch e
-                merger.verbose && println("        Error placing data from $(basename(proc_info["file"])): $e")
-                # Fall back to overlaying at origin
-                try
-                    data_size = size(data)
-                    origin_slices = tuple([1:s for s in data_size]...)
-                    if size(data) == size(reconstructed_data[origin_slices...])
-                        reconstructed_data[origin_slices...] = data
-                        coverage_mask[origin_slices...] .= true
-                    end
-                catch err2
-                    # Last-resort overlay: a shape mismatch (DimensionMismatch /
-                    # BoundsError) means this slab genuinely does not fit at the origin
-                    # and the coverage check downstream reports the gap. Anything else
-                    # is a real fault — do not let it read as "could not place".
-                    err2 isa Union{DimensionMismatch, BoundsError} || rethrow()
-                    merger.verbose && println("        Could not place data from $(basename(proc_info["file"])): $err2")
-                end
+                error("Could not place '$var_name' slab from " *
+                      "'$(basename(proc_info["file"]))': $(sprint(showerror, e))")
             end
         else
             # No domain decomposition info - fall back to simple overlay/averaging
@@ -806,8 +916,8 @@ function merge_variable_reconstruct!(merger::NetCDFMerger, output_file::String, 
     # Handle uncovered regions
     uncovered_count = count(!, coverage_mask)
     if uncovered_count > 0
-        merger.verbose && println("        Warning: $uncovered_count grid points not covered by any processor")
-        reconstructed_data[.!coverage_mask] .= NaN
+        error("Incomplete reconstruction of '$var_name': $uncovered_count of " *
+              "$(length(coverage_mask)) points are not covered by any processor")
     end
 
     # Create variable in output file
@@ -925,13 +1035,26 @@ function merge_variable_domain_decomp!(merger::NetCDFMerger, output_file::String
             end
             
         catch e
-            merger.verbose && println("    Warning: Could not read $var_name from $(basename(file)): $e")
+            error("Could not read '$var_name' layout data from '$(basename(file))': " *
+                  sprint(showerror, e))
         end
     end
     
     if isempty(processor_data)
         merger.verbose && println("    No data found for $var_name")
         return
+    end
+
+    if length(processor_data) > 1
+        all(p -> p["layout_info"]["start"] !== nothing &&
+                 p["layout_info"]["count"] !== nothing,
+            processor_data) || error(
+                "Cannot domain-reconstruct '$var_name' from multiple processors " *
+                "without explicit start/count metadata; use SIMPLE_CONCAT instead")
+        all(p -> p["layout_info"]["global_shape"] !== nothing,
+            processor_data) || error(
+                "Cannot verify domain reconstruction of '$var_name' without " *
+                "global_shape metadata on every processor")
     end
 
     merger.verbose && println("      Field layout: $field_layout")
@@ -963,6 +1086,15 @@ function merge_files!(merger::NetCDFMerger)
         @warn "No processor files found for merging"
         return false
     end
+
+    # Validate every source, the declared rank set, and output/source separation
+    # before removing or creating anything. A failed preflight must be read-only.
+    try
+        validate_merger_inputs!(merger)
+    catch e
+        @error "Refusing unsafe/incomplete merge: $e"
+        return false
+    end
     
     try
         # Analyze input files
@@ -989,18 +1121,15 @@ function merge_files!(merger::NetCDFMerger)
         # Merge data variables
         merge_data_variables!(merger, merger.output_file, file_info)
         
-        # Add global attributes to merged file
-        try
-            # ncputatt expects (filename, varname, Dict)
-            # Convert all values to strings for global attributes
-            string_attrs = Dict{String, Any}()
-            for (att_name, att_value) in file_info["global_attrs"]
-                string_attrs[string(att_name)] = string(att_value)
-            end
-            ncputatt(merger.output_file, "global", string_attrs)
-        catch e
-            merger.verbose && println("  Warning: Could not write global attributes: $e")
+        # Add global attributes to merged file. Failure means the artifact is not
+        # complete and therefore must not authorize source cleanup.
+        string_attrs = Dict{String, Any}()
+        for (att_name, att_value) in file_info["global_attrs"]
+            string_attrs[string(att_name)] = string(att_value)
         end
+        ncputatt(merger.output_file, "global", string_attrs)
+
+        verify_merged_output!(merger.output_file, file_info)
         
         merger.verbose && println("Merge completed successfully!")
         merger.verbose && println("   Output file size: $(round(filesize(merger.output_file)/1024/1024, digits=2)) MB")

@@ -21,6 +21,7 @@ Returns immediately after initiating communication.
 Use `wait_transpose!(tf)` to complete the operation.
 """
 function async_transpose_z_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
+    _require_open(tf, "async_transpose_z_to_y!")
     # CRITICAL: Use error() instead of @assert for production safety
     # @assert can be disabled with --check-bounds=no, leaving no protection
     if tf.buffers.active_layout[] != ZLocal
@@ -117,6 +118,7 @@ end
 Start asynchronous transpose from YLocal to XLocal.
 """
 function async_transpose_y_to_x!(tf::TransposableField{F,T,N}) where {F,T,N}
+    _require_open(tf, "async_transpose_y_to_x!")
     # CRITICAL: Use error() instead of @assert for production safety
     if tf.buffers.active_layout[] != YLocal
         error("async_transpose_y_to_x!: Must be in YLocal layout, currently in $(tf.buffers.active_layout[])")
@@ -187,6 +189,7 @@ end
 Wait for asynchronous transpose to complete and finalize the operation.
 """
 function wait_transpose!(tf::TransposableField{F,T,N}) where {F,T,N}
+    _require_open(tf, "wait_transpose!")
     if !tf.async_state.in_progress
         return tf
     end
@@ -265,6 +268,7 @@ to unpack the data and update the layout, ensuring the field is in a
 consistent state when this function returns `true`.
 """
 function is_transpose_complete(tf::TransposableField)
+    _require_open(tf, "is_transpose_complete")
     if !tf.async_state.in_progress
         return true
     end
@@ -275,7 +279,7 @@ function is_transpose_complete(tf::TransposableField)
         return true
     end
 
-    flag, _ = MPI.Test(tf.async_state.request)
+    flag = MPI.Test(tf.async_state.request)
     if flag
         # MPI communication complete — finalize: unpack data, update layout.
         # MPI.Test has already internally freed the MPI handle (set to MPI_REQUEST_NULL).

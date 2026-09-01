@@ -123,6 +123,10 @@ end
                          "layout" => "g",
                      ))
             ncwrite(fill(float(rank), 2, 4, 2), file, "q")
+            ncputatt(file, "global", Dict{String, Any}(
+                "mpi_size" => 2,
+                "processor_rank" => rank,
+            ))
         end
 
         @test Tarang.merge_netcdf_files("snapshots"; cleanup=false, verbose=false)
@@ -156,6 +160,10 @@ end
                          "layout" => "g",
                      ))
             ncwrite(fill(float(rank), 1, 4, 2), file, "q")
+            ncputatt(file, "global", Dict{String, Any}(
+                "mpi_size" => 2,
+                "processor_rank" => rank,
+            ))
         end
 
         @test Tarang.merge_netcdf_files("legacy"; cleanup=false, verbose=false)
@@ -190,6 +198,10 @@ end
                                       "layout" => "g",
                                   ))
             Tarang.group_ncwrite(fill(float(rank), 2, 4, 2), file, "vars", "q")
+            ncputatt(file, "global", Dict{String, Any}(
+                "mpi_size" => 2,
+                "processor_rank" => rank,
+            ))
         end
 
         @test Tarang.merge_netcdf_files("grouped"; cleanup=false, verbose=false)

@@ -872,20 +872,32 @@ function add_task!(handler::DictionaryHandler, field::Union{ScalarField, VectorF
     handler.datasets[name] = field
 end
 
-function should_write(handler::DictionaryHandler, wall_time::Float64, sim_time::Float64, iteration::Int)
+function _combined_schedule_should_write(handler, wall_time::Float64,
+                                         sim_time::Float64, iteration::Int)
     if handler.max_writes !== nothing && handler.write_count >= handler.max_writes
         return false
     end
-    if handler.cadence !== nothing && iteration % handler.cadence != 0
-        return false
+
+    has_schedule = false
+    triggered = false
+    if handler.cadence !== nothing
+        has_schedule = true
+        triggered |= iteration % handler.cadence == 0
     end
-    if handler.sim_dt !== nothing && sim_time - handler.last_write_sim_time < handler.sim_dt
-        return false
+    if handler.sim_dt !== nothing
+        has_schedule = true
+        triggered |= sim_time - handler.last_write_sim_time >= handler.sim_dt
     end
-    if handler.wall_dt !== nothing && wall_time - handler.last_write_time < handler.wall_dt
-        return false
+    if handler.wall_dt !== nothing
+        has_schedule = true
+        triggered |= wall_time - handler.last_write_time >= handler.wall_dt
     end
-    return true
+    return !has_schedule || triggered
+end
+
+function should_write(handler::DictionaryHandler, wall_time::Float64,
+                      sim_time::Float64, iteration::Int)
+    return _combined_schedule_should_write(handler, wall_time, sim_time, iteration)
 end
 
 function process!(handler::DictionaryHandler, solver::InitialValueSolver,
@@ -998,19 +1010,7 @@ function add_task!(handler::VirtualFileHandler, field::Union{ScalarField, Vector
 end
 
 function should_write(handler::VirtualFileHandler, wall_time::Float64, sim_time::Float64, iteration::Int)
-    if handler.max_writes !== nothing && handler.write_count >= handler.max_writes
-        return false
-    end
-    if handler.cadence !== nothing && iteration % handler.cadence != 0
-        return false
-    end
-    if handler.sim_dt !== nothing && sim_time - handler.last_write_sim_time < handler.sim_dt
-        return false
-    end
-    if handler.wall_dt !== nothing && wall_time - handler.last_write_time < handler.wall_dt
-        return false
-    end
-    return true
+    return _combined_schedule_should_write(handler, wall_time, sim_time, iteration)
 end
 
 """

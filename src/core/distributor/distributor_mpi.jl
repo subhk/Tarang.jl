@@ -57,8 +57,11 @@ function gather_array(dist::Distributor, local_array::AbstractArray)
     if dist.size == 1
         result = cpu_array
     else
-        result = MPI.Allgather(cpu_array, dist.comm)
-        dist.performance_stats.mpi_operations += 1
+        send_data = vec(cpu_array)
+        counts = MPI.Allgather(length(send_data), dist.comm)
+        result = Vector{eltype(cpu_array)}(undef, sum(counts))
+        MPI.Allgatherv!(send_data, MPI.VBuffer(result, counts), dist.comm)
+        dist.performance_stats.mpi_operations += 2
     end
 
     # Update performance stats
@@ -366,6 +369,11 @@ function clear_distributor_cache!(dist::Distributor)
 
     # Clear pencil cache
     empty!(dist.pencil_cache)
+
+    # Drop distributor ownership of domain/type transform bundles. Existing
+    # fields retain their exact bundles and remain usable; constructing a new
+    # field for an evicted domain/type pair rebuilds that bundle collectively.
+    empty!(dist.transform_plan_cache)
 
     # Reset PencilArrays configuration if needed
     dist.pencil_config = nothing

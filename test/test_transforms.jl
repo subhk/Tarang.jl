@@ -46,6 +46,31 @@ using Tarang
         @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-10, atol=1e-12)
     end
 
+    @testset "Complex RealFourier keeps a full tiny spectrum" begin
+        # At N=2, a full FFT and an RFFT both have length two. Backward dispatch
+        # must use the field's canonical forward operation, not this ambiguous
+        # shape, or it incorrectly selects irfft and produces a real grid buffer.
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; dtype=Float64)
+        bases = (
+            RealFourier(coords["x"]; size=2, bounds=(0.0, 2π)),
+            RealFourier(coords["y"]; size=4, bounds=(0.0, 2π)),
+        )
+        field = ScalarField(dist, "complex_rf_tiny", bases, ComplexF64)
+        original = ComplexF64[
+            complex(i + 2j, 3i - j) for i in 1:2, j in 1:4
+        ]
+        Tarang.get_grid_data(field) .= original
+
+        forward_transform!(field)
+        @test size(Tarang.get_coeff_data(field)) == (2, 4)
+        backward_transform!(field)
+
+        @test eltype(Tarang.get_grid_data(field)) === ComplexF64
+        @test isapprox(Tarang.get_grid_data(field), original;
+                       rtol=1e-10, atol=1e-12)
+    end
+
     @testset "ComplexFourier with a REAL dtype round-trips" begin
         # A ComplexFourier axis that is the FIRST Fourier axis of a real-dtype
         # field receives REAL grid data. FFTW's complex plan cannot consume a real
@@ -178,6 +203,26 @@ using Tarang
             @test isapprox(gout, original; rtol=1e-10, atol=1e-10)
         end
     end
+
+    @testset "Downscaled ChebyshevT retains the top physical mode" begin
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        N = 12
+        zb = ChebyshevT(coords["z"]; size=N, bounds=(-1.0, 1.0))
+        field = ScalarField(Domain(dist, (zb,)), "downscaled_top_mode")
+        Tarang.require_scales!(field, 0.5)
+        g = Tarang.get_grid_data(field)
+        M = length(g)
+        @test M == 6
+        g .= [isodd(j) ? 1.0 : -1.0 for j in 1:M]
+        original = copy(g)
+
+        forward_transform!(field)
+        backward_transform!(field)
+
+        @test Tarang.get_grid_data(field) ≈ original rtol=1e-12 atol=1e-12
+    end
+
 end
 
 @testset "Transform dispatch helpers" begin

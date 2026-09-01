@@ -36,6 +36,7 @@ global spectral operation) on an incompatible pencil, producing silently-wrong
 results; this coefficient-space version uses each rank's GLOBAL wavenumbers.
 """
 function apply_spectral_cutoff!(field::ScalarField, cutoff_scales::Union{Float64, Tuple{Vararg{Float64}}})
+    isempty(field.bases) && return field
     require_coeff_space!(field)
     cd = get_coeff_data(field)
     cd === nothing && return field
@@ -44,9 +45,16 @@ function apply_spectral_cutoff!(field::ScalarField, cutoff_scales::Union{Float64
     scales = isa(cutoff_scales, Float64) ? ntuple(_ -> Float64(cutoff_scales), nb) : cutoff_scales
 
     if cd isa PencilArrays.PencilArray
-        # MPI: zero modes above the cutoff using each rank's GLOBAL wavenumber
-        # indices. A uniform relative scale s corresponds to a dealias factor 1/s.
-        _apply_spectral_cutoff_distributed!(cd, bases, 1.0 / minimum(scales))
+        # MPI: preserve each requested axis scale while using GLOBAL wavenumbers.
+        cutoffs = ntuple(nb) do i
+            b = bases[i]
+            if isa(b, Union{RealFourier, ComplexFourier})
+                max(0, floor(Int, scales[i] * b.meta.size / 2))
+            else
+                nothing
+            end
+        end
+        _apply_spectral_cutoffs_distributed!(cd, bases, cutoffs, field.dtype)
     else
         local_cd = get_local_data(cd)
         cutoffs = ntuple(nb) do i
@@ -57,7 +65,9 @@ function apply_spectral_cutoff!(field::ScalarField, cutoff_scales::Union{Float64
                 size(local_cd, i)        # non-Fourier (Chebyshev) axis: keep all modes
             end
         end
-        rfft_dims = ntuple(i -> isa(bases[i], RealFourier) && _is_first_real_fourier_axis(bases, i), nb)
+        bundle = _field_transform_bundle(field)
+        rfft_dims = ntuple(i -> isa(bases[i], RealFourier) &&
+                                _axis_uses_rfft(bundle, i), nb)
         apply_spectral_cutoff!(local_cd, cutoffs, rfft_dims)   # array method (nonlinear_dealiasing.jl)
     end
 

@@ -17,6 +17,13 @@ helpers. Additional hooks (e.g. NCC preparation) can be expanded later.
 
 abstract type Future <: Operand end
 
+# Deferred-expression metadata comes from data-bearing operands, not from the
+# incidental fields of arbitrary argument structs. Keep that distinction in
+# dispatch so a field rename fails loudly instead of silently dropping a dtype.
+@inline _future_argument_dtype(::Any) = nothing
+@inline _future_argument_dtype(arg::Union{ScalarField, VectorField, TensorField}) = arg.dtype
+@inline _future_argument_dtype(arg::Future) = future_state(arg).dtype
+
 mutable struct FutureState
     args::Vector{Any}
     original_args::Vector{Any}
@@ -33,7 +40,15 @@ end
 function FutureState(args::Vector{Any}; out=nothing, store_last::Bool=true,
                      metadata=Dict{Symbol, Any}(), name::Symbol=:unknown)
     dist = unify_attributes(args, "dist")::Union{Nothing, Distributor}
-    dtype = unify_attributes(args, "dtype")
+    # Deferred arithmetic may combine otherwise-compatible fields with different
+    # element types. Keep the future's metadata at their normal Julia promotion
+    # instead of rejecting the expression before its arithmetic method can run.
+    dtypes = DataType[]
+    for arg in args
+        arg_dtype = _future_argument_dtype(arg)
+        arg_dtype === nothing || push!(dtypes, arg_dtype)
+    end
+    dtype = isempty(dtypes) ? nothing : reduce(promote_type, dtypes)
     # Support legacy metadata dict: extract :name if present
     effective_name = haskey(metadata, :name) ? metadata[:name]::Symbol : name
     n = length(args)

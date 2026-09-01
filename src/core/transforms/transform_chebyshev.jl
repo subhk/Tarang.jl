@@ -18,6 +18,12 @@ function _scale_last_along_axis!(data::AbstractArray, axis::Int, factor)
     data[idx...] .*= factor
 end
 
+"""Scale slice `index` along `axis` by `factor`."""
+function _scale_slice_along_axis!(data::AbstractArray, axis::Int, index::Int, factor)
+    idx = ntuple(i -> i == axis ? (index:index) : Colon(), ndims(data))
+    data[idx...] .*= factor
+end
+
 """
     _flip_odd_indices_along_axis!(data, axis)
 
@@ -207,11 +213,13 @@ function _chebyshev_backward(data::AbstractArray, transform::ChebyshevTransform)
         # Undo the endpoint halving that the forward transform applied. The
         # forward halved the DC (index 1) and the physical last DCT-I mode
         # (at index grid_size). Only undo the last-endpoint doubling if the
-        # stored last coefficient IS the physical last DCT-I mode
-        # (coeff_size == grid_size).
+        # stored coefficients include the physical last DCT-I mode (at
+        # `grid_size`). This also matters for a downscaled grid, where the
+        # coefficient buffer is longer than the DCT input and its trailing
+        # entries are zero.
         _scale_first_along_axis!(scaled_real, axis, real_type(2.0))
-        if coeff_size > 1 && coeff_size == grid_size
-            _scale_last_along_axis!(scaled_real, axis, real_type(2.0))
+        if grid_size > 1 && grid_size <= coeff_size
+            _scale_slice_along_axis!(scaled_real, axis, grid_size, real_type(2.0))
         end
 
         # Zero-pad or truncate to grid_size
@@ -229,8 +237,8 @@ function _chebyshev_backward(data::AbstractArray, transform::ChebyshevTransform)
             scaled_imag = copy(imag.(host_data))
             _flip_odd_indices_along_axis!(scaled_imag, axis)
             _scale_first_along_axis!(scaled_imag, axis, real_type(2.0))
-            if coeff_size > 1 && coeff_size == grid_size
-                _scale_last_along_axis!(scaled_imag, axis, real_type(2.0))
+            if grid_size > 1 && grid_size <= coeff_size
+                _scale_slice_along_axis!(scaled_imag, axis, grid_size, real_type(2.0))
             end
             padded_imag = zeros(real_type, padded_shape)
             padded_imag[idx...] .= scaled_imag[idx...]
@@ -495,7 +503,7 @@ Algorithm (matches `_chebyshev_backward` exactly):
      along the transform axis. Undo the endpoint halving from the
      forward pass (multiply first coefficient by 2; likewise the last
      coefficient IF it's the physical DCT-I endpoint, i.e.,
-     `coeff_size == grid_size`).
+     `grid_size <= coeff_size`).
   2. DCT-I is its own inverse up to normalization: apply the cached
      r2r REDFT00 plan, then divide by 2.
   3. Copy `scratch.tmp_real` (and imag) into `out`, recombining into
@@ -542,7 +550,8 @@ function _apply_backward_kernel!(out::AbstractArray, in::AbstractArray,
     # passed in rather than read from `transform.grid_size` so scaled fields zero-pad
     # and inverse-DCT at the correct M. The endpoint-doubling guard below stays
     # correct: for a scaled field coeff_size (N) != grid_size (M), so the truncated
-    # last coefficient is (rightly) not re-doubled.
+    # last coefficient is re-doubled only when the coefficient buffer includes
+    # the physical DCT endpoint at index `grid_size`.
 
     real_T = in_eltype <: Complex ? real(in_eltype) : in_eltype
     two = real_T(2.0)
@@ -567,11 +576,10 @@ function _apply_backward_kernel!(out::AbstractArray, in::AbstractArray,
 
     _scale_first_along_axis!(scratch.real_in, ax, two)
     # Only undo the last-endpoint halving if the stored last coeff IS the
-    # physical last DCT-I mode (coeff_size == grid_size). When the
-    # coefficient axis is truncated (dealiased Chebyshev), the last
-    # retained coefficient was never halved in the forward pass, so we
-    # must not double it here.
-    if coeff_size > 1 && coeff_size == grid_size
+    # physical last DCT-I mode at index `grid_size`. An upscaled grid has no
+    # stored endpoint coefficient, while a downscaled grid does: its longer
+    # coefficient buffer contains the halved endpoint plus zero trailing modes.
+    if grid_size > 1 && grid_size <= coeff_size
         _scale_last_along_axis!(scratch.real_in, ax, two)
     end
 
@@ -584,7 +592,7 @@ function _apply_backward_kernel!(out::AbstractArray, in::AbstractArray,
         @inbounds @views @. scratch.imag_in[dst_idx...] = imag(in[src_idx...])
         _flip_odd_indices_along_axis!(scratch.imag_in, ax)
         _scale_first_along_axis!(scratch.imag_in, ax, two)
-        if coeff_size > 1 && coeff_size == grid_size
+        if grid_size > 1 && grid_size <= coeff_size
             _scale_last_along_axis!(scratch.imag_in, ax, two)
         end
         mul!(scratch.tmp_imag, scratch.plan, scratch.imag_in)

@@ -117,6 +117,26 @@ conventions coincide. Needs GPU validation at np≥4.
 column_major_grid_coords(rank::Int, proc_grid::NTuple{2, Int}) =
     (mod(rank, proc_grid[1]), div(rank, proc_grid[1]) % proc_grid[2])
 
+function _split_pencil_subcommunicators(comm, row, col;
+                                        splitter=MPI.Comm_split,
+                                        freer=MPI.free)
+    row_comm = splitter(comm, row, col)
+    try
+        col_comm = splitter(comm, col, row)
+        return row_comm, col_comm
+    catch
+        # Every rank completed the first split before entering the second. If the
+        # second split fails, release that first communicator immediately instead
+        # of leaking it from a partially constructed pencil.
+        try
+            freer(row_comm)
+        catch cleanup_error
+            @warn "Failed to release row communicator after pencil construction failure" exception=cleanup_error maxlog=1
+        end
+        rethrow()
+    end
+end
+
 """
     PencilDecomposition(global_shape, proc_grid, rank, comm; grid_coords=nothing)
 
@@ -140,8 +160,11 @@ Create a pencil decomposition for the given domain and process grid.
 
 # Returns
 A PencilDecomposition struct with pre-computed local shapes for all orientations
-and MPI sub-communicators for row and column communication.
+and MPI sub-communicators for row and column communication. Call `close(pencil)`
+collectively when the pencil is no longer needed; communicator teardown is never
+deferred to garbage collection.
 """
+
 function PencilDecomposition(global_shape::NTuple{3, Int},
                               proc_grid::NTuple{2, Int},
                               rank::Int,
@@ -150,30 +173,42 @@ function PencilDecomposition(global_shape::NTuple{3, Int},
     gc = grid_coords === nothing ? rank_to_grid(rank, proc_grid) : grid_coords
     row, col = gc
 
-    # Create row and column sub-communicators
-    # Row comm: all ranks with same row coordinate (for Y<->Z transpose)
-    # Col comm: all ranks with same col coordinate (for X<->Y transpose)
-    row_comm = MPI.Comm_split(comm, row, col)
-    col_comm = MPI.Comm_split(comm, col, row)
+    row_comm = nothing
+    col_comm = nothing
+    try
+        # Row comm: equal-row ranks (Y<->Z); col comm: equal-column ranks (X<->Y).
+        row_comm, col_comm = _split_pencil_subcommunicators(comm, row, col)
+        x_shape, y_shape, z_shape =
+            compute_pencil_shapes(global_shape, proc_grid, gc)
 
-    # Compute local shapes
-    x_shape, y_shape, z_shape = compute_pencil_shapes(global_shape, proc_grid, gc)
-
-    pd = PencilDecomposition(
-        global_shape,
-        proc_grid,
-        rank,
-        gc,
-        comm,
-        row_comm,
-        col_comm,
-        x_shape,
-        y_shape,
-        z_shape,
-        Ref(:z_pencil)  # Start in Z-pencil orientation
-    )
-    finalizer(free_pencil_decomposition!, pd)
-    return pd
+        return PencilDecomposition(
+            global_shape,
+            proc_grid,
+            rank,
+            gc,
+            comm,
+            row_comm,
+            col_comm,
+            x_shape,
+            y_shape,
+            z_shape,
+            Ref(:z_pencil)  # Start in Z-pencil orientation
+        )
+    catch
+        # No MPI collective may run from a GC finalizer. Construction is
+        # collective, so all ranks synchronously release any communicators that
+        # were created before a later validation/allocation failure.
+        for created_comm in (col_comm, row_comm)
+            created_comm === nothing && continue
+            created_comm == MPI.COMM_NULL && continue
+            try
+                MPI.free(created_comm)
+            catch cleanup_error
+                @warn "Failed to release communicator after pencil construction failure" exception=cleanup_error maxlog=1
+            end
+        end
+        rethrow()
+    end
 end
 
 """
@@ -193,15 +228,15 @@ pencil. In the Z-local coeff layout dim 1 is therefore decomposed by P1 with the
 half-spectrum length, exactly matching the framework's coeff convention.
 
 CRITICAL: the returned pencil aliases `main`'s `row_comm`/`col_comm` (so its NCCL
-sub-communicators match the shared `NCCLTransposeBuffer`). It is built WITHOUT a
-finalizer — do NOT free it / its comms independently; the owning `main` pencil's
-finalizer frees them.
+sub-communicators match the shared `NCCLTransposeBuffer`). Do NOT close it or
+free its communicators independently; explicit teardown of the owning `main`
+pencil releases the shared communicators.
 """
 function build_coeff_pencil(main::PencilDecomposition, coeff_global_shape::NTuple{3, Int})
     x_shape, y_shape, z_shape =
         compute_pencil_shapes(coeff_global_shape, main.proc_grid, main.grid_coords)
-    # Raw (finalizer-free) construction via the default field constructor — shares
-    # main's communicators; see CRITICAL note above.
+    # Raw construction via the default field constructor shares the main
+    # pencil's communicators; see CRITICAL note above.
     return PencilDecomposition(
         coeff_global_shape,
         main.proc_grid,
@@ -224,7 +259,8 @@ Free MPI sub-communicators to prevent communicator leaks.
 Safe to call multiple times.
 """
 function free_pencil_decomposition!(pd::PencilDecomposition)
-    # Guard against GC running after MPI.Finalize() (e.g., during Julia shutdown)
+    # Explicit/idempotent lifecycle only: MPI communicator teardown is collective
+    # and therefore must never be scheduled from a GC finalizer.
     if !MPI.Initialized() || MPI.Finalized()
         return
     end
@@ -245,6 +281,9 @@ function free_pencil_decomposition!(pd::PencilDecomposition)
         pd.col_comm = nothing
     end
 end
+
+"""Explicitly and idempotently release a pencil's owned MPI communicators."""
+Base.close(pd::PencilDecomposition) = (free_pencil_decomposition!(pd); nothing)
 
 # ============================================================================
 # Accessor Functions

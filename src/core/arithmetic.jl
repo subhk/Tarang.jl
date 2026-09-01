@@ -11,6 +11,13 @@ export dot, cross, ⋅, ×
 # Static name for temporary arithmetic fields — avoids string allocation per operation
 const _ARITH_TMP_NAME = "_arith_tmp"
 
+"""Check out a pooled arithmetic result and restore the operand's scaled shape."""
+function _checkout_field_arithmetic_result(field::ScalarField, dtype::DataType=field.dtype)
+    result = checkout_or_alloc(field.bases, dtype, field.dist)
+    preset_scales!(result, field.scales)
+    return result
+end
+
 # ---------------------------------------------------------------------------
 # Add
 # ---------------------------------------------------------------------------
@@ -285,13 +292,11 @@ function add_scalar_to_field(field::ScalarField, value::Number)
 end
 
 function constant_field_like(field::ScalarField, value::Number)
-    const_field = checkout_or_alloc(field.bases, field.dtype, field.dist)
-    if field.scales !== nothing
-        preset_scales!(const_field, field.scales)
-    end
+    dtype = promote_type(field.dtype, typeof(value))
+    const_field = _checkout_field_arithmetic_result(field, dtype)
     ensure_layout!(const_field, :g)
     if get_grid_data(const_field) !== nothing
-        fill!(get_grid_data(const_field), convert(field.dtype, value))
+        fill!(get_grid_data(const_field), convert(dtype, value))
     end
     return const_field
 end
@@ -357,7 +362,7 @@ end
 function power_operands(a::ScalarField, p::Real)
     # Work in grid space for nonlinear operation
     ensure_layout!(a, :g)
-    result = checkout_or_alloc(a.bases, a.dtype, a.dist)
+    result = _checkout_field_arithmetic_result(a)
     ensure_layout!(result, :g)
     get_grid_data(result) .= get_grid_data(a) .^ p
     return result
@@ -416,7 +421,7 @@ function operate(::Negate, evaluated_args::Vector{Any})
 end
 
 function negate_operand(a::ScalarField)
-    result = checkout_or_alloc(a.bases, a.dtype, a.dist)
+    result = _checkout_field_arithmetic_result(a)
     # Use the field's current layout to determine which data to negate
     if a.current_layout == :c
         ensure_layout!(result, :c)
@@ -481,10 +486,8 @@ function operate(::Subtract, evaluated_args::Vector{Any})
 end
 
 function subtract_operands(a::ScalarField, b::ScalarField)
-    if a.bases != b.bases
-        throw(ArgumentError("Cannot subtract fields with different bases"))
-    end
-    result = checkout_or_alloc(a.bases, a.dtype, a.dist)
+    _check_field_arithmetic_compatibility(a, b, "subtract")
+    result = _checkout_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     if a.current_layout == :g && b.current_layout == :g
         ensure_layout!(result, :g)
         get_grid_data(result) .= get_grid_data(a) .- get_grid_data(b)
@@ -587,13 +590,11 @@ function divide_operands(a::ScalarField, b::Number)
 end
 
 function divide_operands(a::ScalarField, b::ScalarField)
-    if a.bases != b.bases
-        throw(ArgumentError("Cannot divide fields with different bases"))
-    end
+    _check_field_arithmetic_compatibility(a, b, "divide")
     # Pointwise division in grid space
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
-    result = checkout_or_alloc(a.bases, a.dtype, a.dist)
+    result = _checkout_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     ensure_layout!(result, :g)
     get_grid_data(result) .= get_grid_data(a) ./ get_grid_data(b)
     return result

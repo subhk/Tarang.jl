@@ -348,21 +348,13 @@ function StochasticForcing(;
         @warn "Both forcing_rate and energy_injection_rate were provided; using forcing_rate"
     end
 
-    # Derive the working RNG from a single shared seed. Two goals:
-    #  1. Every MPI rank must generate the SAME global random field — the phases
-    #     have to match across ranks or the assembled forcing is incoherent. The
-    #     Bcast makes rank 0's seed win when ranks carry independent RNG state
-    #     (e.g. a default MersenneTwister with per-process OS entropy).
-    #  2. A given user seed must reproduce the SAME forcing regardless of the
-    #     number of ranks. This derivation runs UNCONDITIONALLY — previously it
-    #     was gated on Comm_size > 1, so a serial run kept the raw user RNG while
-    #     a parallel run forked to MersenneTwister(rand(rng, UInt64)); the two
-    #     then diverged (~169% different) under the same seed, and a serial
-    #     trajectory could not be reproduced in parallel.
+    # Derive a private working RNG unconditionally so serial and parallel runs
+    # consume the user RNG identically.  Communicator synchronization cannot
+    # happen here: no Distributor is known yet, and using COMM_WORLD would
+    # couple unrelated simulations or deadlock when only a subcommunicator
+    # constructs a forcing.  Registration performs the collective on the
+    # target field's Distributor communicator.
     seed_buf = Ref(rand(rng, UInt64))
-    if MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
-        MPI.Bcast!(seed_buf, 0, MPI.COMM_WORLD)
-    end
     rng = Random.MersenneTwister(seed_buf[])
 
     # Build wavenumber arrays (always on CPU for setup)
@@ -414,6 +406,16 @@ function StochasticForcing(;
         enforce_hermitian,
         architecture
     )
+end
+
+"""Synchronize a forcing RNG on the communicator that owns its target field."""
+function _synchronize_forcing_rng!(forcing::StochasticForcingType, comm::MPI.Comm)
+    seed_buf = Ref(rand(forcing.rng, UInt64))
+    if MPI.Initialized() && MPI.Comm_size(comm) > 1
+        MPI.Bcast!(seed_buf, comm; root=0)
+    end
+    forcing.rng = Random.MersenneTwister(seed_buf[])
+    return forcing
 end
 
 function _normalized_chebyshev_profile(
@@ -739,4 +741,3 @@ function _spectrum_amplitude(k::T, k_f::Real, dk_f::Real, spectrum_type::Symbol)
         error("Unknown spectrum type: $spectrum_type")
     end
 end
-

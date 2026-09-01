@@ -196,10 +196,12 @@ if NPROCS == 1
     @testset "current_data accessor" begin
         tf = TransposableField(field)
 
-        # Initially in ZLocal layout
+        # With one rank, the wrapped field is authoritative; transpose buffers
+        # are unnecessary scratch storage and may have a different spectral shape.
         @test active_layout(tf) == ZLocal
         data = Tarang.current_data(tf)
-        @test data === tf.buffers.z_local_data
+        @test data === Tarang.get_grid_data(field)
+        @test data == field["g"]
     end
 
     @testset "make_transposable helper" begin
@@ -225,6 +227,18 @@ if NPROCS == 1
         send_buf3, recv_buf3 = Tarang.get_active_buffers(tf)
         @test send_buf3 === send_buf
         @test recv_buf3 === recv_buf
+    end
+
+    @testset "deterministic lifecycle and field-owned precision" begin
+        complex32_field = ScalarField(dist, "complex32", (xbasis, ybasis), ComplexF32)
+        tf = TransposableField(complex32_field)
+
+        @test eltype(tf.buffers.z_local_data) === ComplexF32
+        @test isopen(tf)
+        @test close(tf) === nothing
+        @test !isopen(tf)
+        @test close(tf) === nothing
+        @test_throws ArgumentError distributed_forward_transform!(tf)
     end
 
 end
@@ -283,69 +297,64 @@ end  # if NPROCS == 1
 if NPROCS == 1
 @testset "TransposableField Serial Transforms" begin
 
-    coords = CartesianCoordinates("x", "y")
-    dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
-
-    xbasis = Fourier(coords, "x", 16)
-    ybasis = Fourier(coords, "y", 16)
-    domain = Domain(dist, (xbasis, ybasis))
-
-    field = ScalarField(dist, "transform_test", (xbasis, ybasis))
-
-    # Initialize with a known function
-    x = range(0, 2π, length=16)
-    y = range(0, 2π, length=16)
-    for i in 1:16, j in 1:16
-        field["g"][i, j] = sin(x[i]) * cos(y[j])
+    function serial_transform_field(name)
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
+        xbasis = Fourier(coords, "x", 16)
+        ybasis = Fourier(coords, "y", 16)
+        field = ScalarField(dist, name, (xbasis, ybasis))
+        x = range(0, 2π; length=17)[1:16]
+        y = range(0, 2π; length=17)[1:16]
+        for i in 1:16, j in 1:16
+            field["g"][i, j] = sin(x[i]) * cos(y[j])
+        end
+        return field
     end
 
-    # KNOWN BUG (xfail): on a serial (1-rank) 2D TransposableField,
-    # distributed_forward_transform! throws a BoundsError — the serial path in
-    # src/core/transpose/transpose_transforms.jl mismatches the dealiased
-    # coefficient buffer (12²=144) against the grid size (16²=256). The
-    # TransposableField transform path is exercised correctly at 2/4 ranks; the
-    # 1-rank serial path is degenerate (use a regular Field for serial runs).
-    # Marked @test_broken so CI stays green and flips to a failure once fixed.
-    @testset "Forward transform preserves energy" begin
+    @testset "Forward transform matches the regular serial transform" begin
+        field = serial_transform_field("transform_forward")
+        reference = serial_transform_field("transform_forward_reference")
         tf = TransposableField(field)
-        initial_energy = sum(abs2.(field["g"]))
-        @test_broken begin
-            distributed_forward_transform!(tf)
-            spectral_energy = sum(abs2.(field["c"])) / prod(size(field["c"]))
-            isapprox(initial_energy, spectral_energy * prod(size(field["g"])), rtol=0.1)
-        end
+        forward_transform!(reference)
+        distributed_forward_transform!(tf)
+        @test field.current_layout == :c
+        @test field["c"] ≈ reference["c"]
+        @test Tarang.current_data(tf) === Tarang.get_coeff_data(field)
+        @test Tarang.current_data(tf) ≈ reference["c"]
     end
 
     @testset "Round-trip transform" begin
+        field = serial_transform_field("transform_roundtrip")
         tf = TransposableField(field)
         original = copy(field["g"])
-        @test_broken begin
-            distributed_forward_transform!(tf)
-            distributed_backward_transform!(tf)
-            isapprox(field["g"], original, rtol=1e-10)
-        end
+        distributed_forward_transform!(tf)
+        distributed_backward_transform!(tf)
+        @test field.current_layout == :g
+        @test field["g"] ≈ original rtol=1e-10
+        @test Tarang.current_data(tf) === Tarang.get_grid_data(field)
+        @test Tarang.current_data(tf) ≈ original rtol=1e-10
     end
 
     @testset "Round-trip with overlap flag" begin
+        field = serial_transform_field("transform_overlap")
         tf = TransposableField(field)
         original = copy(field["g"])
-        @test_broken begin
-            distributed_forward_transform!(tf; overlap=true)
-            distributed_backward_transform!(tf; overlap=false)
-            isapprox(field["g"], original, rtol=1e-10)
-        end
+        distributed_forward_transform!(tf; overlap=true)
+        distributed_backward_transform!(tf; overlap=false)
+        @test field["g"] ≈ original rtol=1e-10
     end
 
     @testset "Performance statistics" begin
+        field = serial_transform_field("transform_stats")
         tf = TransposableField(field)
         reset_transpose_stats!(tf)
-        @test_broken begin
-            distributed_forward_transform!(tf)
-            distributed_backward_transform!(tf)
-            stats = get_transpose_stats(tf)
-            stats.num_transposes >= 0 && stats.total_fft_time >= 0.0 &&
-                stats.total_pack_time >= 0.0 && stats.total_unpack_time >= 0.0
-        end
+        distributed_forward_transform!(tf)
+        distributed_backward_transform!(tf)
+        stats = get_transpose_stats(tf)
+        @test stats.num_transposes == 0
+        @test stats.total_fft_time >= 0.0
+        @test stats.total_pack_time == 0.0
+        @test stats.total_unpack_time == 0.0
     end
 
 end
@@ -431,6 +440,63 @@ if NPROCS > 1
     @test Tarang.get_coeff_data(field) == coeff_after_forward
 
     distributed_backward_transform!(tf)
+
+    # GC finalization is rank-asynchronous and must never perform collective
+    # communicator destruction. Explicit close remains collective and is called
+    # by every rank here.
+    finalize(tf)
+    @test tf.topology.row_comm !== nothing
+    @test close(tf) === nothing
+    @test tf.topology.row_comm === nothing
+    @test tf.topology.col_comm === nothing
+end
+
+@testset "TransposableField constructor failure is rank-consistent" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,), dtype=ComplexF64,
+                       architecture=CPU(), use_pencil_arrays=false)
+    bases = (
+        ComplexFourier(coords, "x", 17),
+        ComplexFourier(coords, "y", 13),
+    )
+    field = ScalarField(dist, "rank_local_constructor_failure", bases, ComplexF64)
+    if dist.rank == 0
+        grid = Tarang.get_grid_data(field)
+        bad_shape = ntuple(d -> size(grid, d) + (d == 1 ? 1 : 0), ndims(grid))
+        Tarang.set_grid_data!(field, zeros(ComplexF64, bad_shape...))
+    end
+
+    constructed = nothing
+    err = try
+        constructed = TransposableField(field)
+        nothing
+    catch caught
+        caught
+    end
+
+    # Before the rank-consistent construction protocol, only rank zero threw.
+    # A successful rank explicitly closes its topology so the old implementation
+    # can complete rather than deadlocking this regression.
+    constructed === nothing || close(constructed)
+    @test err isa Exception
+    MPI.Barrier(MPI.COMM_WORLD)
+end
+
+@testset "TransposableField async completion polling returns Bool" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,), dtype=ComplexF64,
+                       architecture=CPU(), use_pencil_arrays=false)
+    bases = (
+        ComplexFourier(coords, "x", 17),
+        ComplexFourier(coords, "y", 13),
+    )
+    field = ScalarField(dist, "async_poll", bases, ComplexF64)
+    tf = TransposableField(field)
+    async_transpose_z_to_y!(tf)
+    completed = is_transpose_complete(tf)
+    @test completed isa Bool
+    completed || wait_transpose!(tf)
+    close(tf)
 end
 end  # if NPROCS > 1
 

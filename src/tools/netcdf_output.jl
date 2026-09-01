@@ -76,9 +76,13 @@ mutable struct NetCDFFileHandler
                               precision::NetCDFPrecision=Float64,
                               parallel="gather", solver=nothing)
         
-        # MPI setup - defer until MPI is initialized
-        comm = nothing
-        rank, size = 0, 1
+        mode in ("overwrite", "append") ||
+            throw(ArgumentError("NetCDFFileHandler mode must be \"overwrite\" or \"append\", got $(repr(mode))"))
+
+        # Use the Distributor's communicator whenever it has one. A handler may be
+        # created collectively by only a subgroup of COMM_WORLD.
+        comm = _handler_communicator(dist)
+        rank, size = _communicator_rank_size(comm)
         
         # Base path handling (matching Tarang)
         if endswith(base_path, ".nc")
@@ -93,30 +97,6 @@ mutable struct NetCDFFileHandler
         total_write_num = 0
         file_write_num = 0
         
-        # Mode handling: only rank 0 cleans up to avoid MPI race conditions
-        # on shared/network filesystems (Lustre, GPFS, NFS)
-        is_root = !MPI.Initialized() || MPI.Comm_rank(MPI.COMM_WORLD) == 0
-        output_dir = output_root_from_base_path(base_path)
-        if is_root && !isempty(output_dir) && isdir(output_dir) && mode == "overwrite"
-            for file in readdir(output_dir, join=true)
-                if startswith(basename(file), "$(name)_s") && (endswith(file, ".nc") || isdir(file))
-                    try
-                        if isdir(file)
-                            rm(file, recursive=true)
-                        else
-                            rm(file)
-                        end
-                    catch e
-                        @debug "File cleanup failed for $file: $e"
-                    end
-                end
-            end
-        end
-        # Barrier to ensure cleanup completes before any rank starts writing
-        if MPI.Initialized() && MPI.Comm_size(MPI.COMM_WORLD) > 1
-            MPI.Barrier(MPI.COMM_WORLD)
-        end
-        
         handler = new(base_path, name, dist, vars, solver,
                      group, wall_dt, sim_dt, iter, max_writes,
                      set_num, total_write_num, file_write_num, mode,
@@ -125,6 +105,14 @@ mutable struct NetCDFFileHandler
                      comm, rank, size,
                      -1, -1,  # last_sim_div, last_wall_div (uninitialized)
                      Set{String}())  # _created_vars
+
+        if mode == "overwrite"
+            _output_collectively(handler, "NetCDFFileHandler overwrite cleanup") do
+                handler.rank == 0 && _cleanup_handler_artifacts!(handler)
+            end
+        else
+            _recover_append_state!(handler)
+        end
 
         # Register finalizer to ensure close! is called on GC
         finalizer(close, handler)
@@ -155,13 +143,151 @@ function output_root(handler::NetCDFFileHandler)
     return output_root_from_base_path(handler.base_path)
 end
 
+function _handler_communicator(dist)
+    if dist !== nothing && hasproperty(dist, :comm)
+        return getproperty(dist, :comm)
+    end
+    return MPI.Initialized() ? MPI.COMM_WORLD : nothing
+end
+
+function _communicator_rank_size(comm)
+    if comm !== nothing && MPI.Initialized() && !MPI.Finalized()
+        return MPI.Comm_rank(comm), MPI.Comm_size(comm)
+    end
+    return 0, 1
+end
+
+"""Return the set number for an exact handler artifact, or `nothing` for siblings."""
+function _handler_artifact_set_number(path::String, handler_name::String)
+    entry = basename(path)
+    prefix = "$(handler_name)_s"
+    startswith(entry, prefix) || return nothing
+    suffix = replace(entry, prefix => ""; count=1)
+
+    set_text = if isdir(path)
+        suffix
+    elseif isfile(path) && endswith(suffix, ".nc")
+        stem = chop(suffix; tail=3)
+        proc_parts = split(stem, "_p"; limit=2)
+        if length(proc_parts) == 2
+            !isempty(proc_parts[2]) && all(isdigit, proc_parts[2]) || return nothing
+        end
+        proc_parts[1]
+    else
+        return nothing
+    end
+
+    isempty(set_text) && return nothing
+    all(isdigit, set_text) || return nothing
+    return parse(Int, set_text)
+end
+
+function _cleanup_handler_artifacts!(handler::NetCDFFileHandler)
+    root = output_root(handler)
+    (!isempty(root) && isdir(root)) || return nothing
+    for path in readdir(root; join=true)
+        _handler_artifact_set_number(path, handler.name) === nothing && continue
+        isdir(path) ? rm(path; recursive=true) : rm(path)
+    end
+    return nothing
+end
+
+function _handler_file_for_set(handler::NetCDFFileHandler, set_num::Int, rank::Int=handler.rank)
+    set_name = "$(handler.name)_s$(set_num)"
+    set_path = joinpath(output_root(handler), set_name)
+    if handler.parallel == "gather" && handler.size == 1
+        return joinpath(set_path, "$(set_name).nc")
+    end
+    return joinpath(set_path, @sprintf("%s_p%d.nc", set_name, rank))
+end
+
+function _append_file_state(filename::String, handler::NetCDFFileHandler)
+    sim_times = vec(group_ncread(filename, NETCDF_TIME_GROUP, "sim_time"))
+    record_count = length(sim_times)
+    total_count = record_count
+    if record_count > 0 && group_var_exists(filename, NETCDF_TIME_GROUP, "write_number")
+        write_numbers = vec(group_ncread(filename, NETCDF_TIME_GROUP, "write_number"))
+        length(write_numbers) == record_count || error(
+            "append recovery: '$filename' has $record_count time records but " *
+            "$(length(write_numbers)) write-number records")
+        total_count = Int(write_numbers[end])
+    end
+
+    last_sim_div = handler.sim_dt === nothing || record_count == 0 ? -1 :
+                   floor(Int, sim_times[end] / handler.sim_dt)
+    last_wall_div = -1
+    if handler.wall_dt !== nothing && record_count > 0
+        wall_times = vec(group_ncread(filename, NETCDF_TIME_GROUP, "wall_time"))
+        length(wall_times) == record_count || error(
+            "append recovery: '$filename' has inconsistent wall-time records")
+        last_wall_div = floor(Int, wall_times[end] / handler.wall_dt)
+    end
+    return record_count, total_count, last_sim_div, last_wall_div
+end
+
+"""Recover the last complete set/record before an append-mode handler writes."""
+function _recover_append_state!(handler::NetCDFFileHandler)
+    init_mpi!(handler)
+    state = Int[1, 0, 0, -1, -1] # set, file writes, total writes, schedule divisors
+
+    _output_collectively(handler, "NetCDFFileHandler append discovery") do
+        handler.rank == 0 || return nothing
+        root = output_root(handler)
+        isdir(root) || return nothing
+
+        set_numbers = Int[]
+        for path in readdir(root; join=true)
+            isdir(path) || continue
+            set_num = _handler_artifact_set_number(path, handler.name)
+            set_num === nothing || push!(set_numbers, set_num)
+        end
+        sort!(unique!(set_numbers); rev=true)
+
+        for set_num in set_numbers
+            filename = _handler_file_for_set(handler, set_num, 0)
+            isfile(filename) || continue
+            file_count, total_count, sim_div, wall_div =
+                _append_file_state(filename, handler)
+            state .= (set_num, file_count, total_count, sim_div, wall_div)
+            break
+        end
+        return nothing
+    end
+
+    if handler.size > 1 && MPI.Initialized() && !MPI.Finalized()
+        MPI.Bcast!(state, handler.comm; root=0)
+    end
+    handler.set_num, handler.file_write_num, handler.total_write_num,
+        handler.last_sim_div, handler.last_wall_div = state
+
+    if handler.file_write_num > 0
+        _output_collectively(handler, "NetCDFFileHandler append validation") do
+            filename = _handler_file_for_set(handler, handler.set_num)
+            isfile(filename) || error("append recovery: missing processor file '$filename'")
+            local_count, local_total, _, _ = _append_file_state(filename, handler)
+            local_count == handler.file_write_num || error(
+                "append recovery: '$filename' has $local_count records; expected " *
+                "$(handler.file_write_num)")
+            local_total == handler.total_write_num || error(
+                "append recovery: '$filename' ends at write $local_total; expected " *
+                "$(handler.total_write_num)")
+            union!(handler._created_vars,
+                   group_variable_names(filename, NETCDF_VARS_GROUP))
+            return nothing
+        end
+    end
+    return handler
+end
+
 
 """
 Initialize MPI information for handler
 """
 function init_mpi!(handler::NetCDFFileHandler)
-    if handler.comm === nothing && MPI.Initialized()
-        handler.comm = MPI.COMM_WORLD
+    if handler.comm === nothing && MPI.Initialized() && !MPI.Finalized()
+        handler.comm = _handler_communicator(handler.dist)
+    end
+    if handler.comm !== nothing && MPI.Initialized() && !MPI.Finalized()
         handler.rank = MPI.Comm_rank(handler.comm)
         handler.size = MPI.Comm_size(handler.comm)
     end
@@ -193,15 +319,7 @@ Get current file path following Tarang naming: handler_name_s1/handler_name_s1_p
 """
 function current_file(handler::NetCDFFileHandler)
     init_mpi!(handler)  # Ensure MPI info is available
-    set_name = "$(handler.name)_s$(handler.set_num)"
-    if handler.parallel == "gather" && handler.size == 1
-        # Single file for serial runs
-        return joinpath(current_path(handler), "$(set_name).nc")
-    else
-        # Per-processor files
-        proc_name = @sprintf("%s_p%d.nc", set_name, handler.rank)
-        return joinpath(current_path(handler), proc_name)
-    end
+    return _handler_file_for_set(handler, handler.set_num)
 end
 
 """
@@ -1545,26 +1663,24 @@ end
 Create NetCDF file with Tarang-style structure
 """
 function create_current_file!(handler::NetCDFFileHandler)
+    init_mpi!(handler)
     filename = current_file(handler)
 
-    # Create file directory — only rank 0 creates to avoid parallel filesystem races
+    # Directory creation is a root-only phase whose outcome is settled before any
+    # rank opens its processor file. This is both the synchronization point and the
+    # failure propagation path; an inner Barrier would strand peers if root throws.
     dir = dirname(filename)
-    if !isempty(dir)
-        if handler.rank == 0 && !isdir(dir)
+    _output_collectively(handler, "create_current_file! directory") do
+        if handler.rank == 0 && !isempty(dir) && !isdir(dir)
             mkpath(dir)
         end
-        if handler.size > 1 && MPI.Initialized() && !MPI.Finalized()
-            MPI.Barrier(handler.comm)
-        end
+        return nothing
     end
 
-    # Remove existing file to avoid dimension conflicts (only rank 0 on shared filesystems)
-    if handler.rank == 0 && isfile(filename)
-        rm(filename)
-    end
-    if handler.size > 1 && MPI.Initialized() && !MPI.Finalized()
-        MPI.Barrier(handler.comm)
-    end
+    # Every rank owns a distinct `_p<rank>.nc` target. Settle the complete local
+    # create sequence collectively so ENOSPC/corruption on one rank reaches all.
+    _output_collectively(handler, "create_current_file! initialize") do
+    isfile(filename) && rm(filename)
 
     create_empty_netcdf4_file!(filename)
 
@@ -1617,6 +1733,7 @@ function create_current_file!(handler::NetCDFFileHandler)
         end
     end
     ncputatt(filename, "global", string_attrs)
+    end
 
     return true
 end
@@ -1653,76 +1770,52 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
         return false
     end
 
-    refresh_solver_diagnostics!(handler)
+    # A scheduled write is a transaction with respect to handler state. Snapshot
+    # every field that affects the next path/index/schedule before any fallible
+    # refresh, filesystem operation, staging callback, or NetCDF write.
+    prior_state = (
+        set_num=handler.set_num,
+        total_write_num=handler.total_write_num,
+        file_write_num=handler.file_write_num,
+        last_sim_div=handler.last_sim_div,
+        last_wall_div=handler.last_wall_div,
+        created_vars=copy(handler._created_vars),
+    )
 
-    # Update write counts
-    handler.total_write_num += 1
-    handler.file_write_num += 1
-
-    # Update independent schedule counters so each criterion tracks its own progress
-    if handler.sim_dt !== nothing
-        handler.last_sim_div = floor(Int, sim_time / handler.sim_dt)
-    end
-    if handler.wall_dt !== nothing
-        handler.last_wall_div = floor(Int, wall_time / handler.wall_dt)
-    end
-
-    # Move to next set if necessary
-    if handler.max_writes !== nothing && handler.file_write_num > handler.max_writes
-        # Finalize the current file before rolling over
-        try
-            old_filename = current_file(handler)
-            if isfile(old_filename)
-                ncputatt(old_filename, "global", Dict{String, Any}(
-                    "writes" => handler.file_write_num - 1,
-                    "total_writes" => handler.total_write_num - 1,
-                    "closed" => Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
-                ))
-            end
-        catch e
-            # Best-effort metadata stamp: a missing/locked/failed FILE must not
-            # block rollover, but anything that is not an I/O failure is a real
-            # bug — surface it instead of swallowing.
-            (e isa NetCDF.NetCDFError || e isa SystemError || e isa Base.IOError) || rethrow()
-            @debug "Failed to finalize file before rollover" exception=e
-        end
-        handler.set_num += 1
-        handler.file_write_num = 1
-        # Clear variable-creation cache for the new file set
-        empty!(handler._created_vars)
-    end
-    
-    # Ensure current file exists and is fresh for new sets. Per-rank fallible
-    # (each rank creates its own `_p<rank>.nc`; one rank's missing directory or
-    # full disk is invisible to the others), so the outcome is settled
-    # collectively — otherwise the healthy ranks sail into the write section's
-    # collectives below while the failed rank has already unwound.
-    filename = current_file(handler)
-    _output_collectively(handler, "process! file creation") do
-        if !isfile(filename)
-            create_current_file!(handler)
-        elseif handler.file_write_num == 1 && handler.mode == "overwrite"
-            # First write of a new set in overwrite mode - recreate the file
-            # This handles the case where files exist from a previous run
-            create_current_file!(handler)
-        end
-    end
-
-    # Wrap all I/O in try/finally so that any exception during writing
-    # does not leave the handler in an inconsistent state.
-    # Note: NetCDF.jl's nccreate/ncwrite/ncread open and close the file
-    # descriptor on each call, so there is no persistent handle to leak.
-    # The try/finally here protects handler state consistency.
     try
-        # Write time metadata. These are per-rank fallible NetCDF writes (each
-        # rank owns its `_p<rank>.nc` file), and the task loop below runs
-        # COLLECTIVE staging/postprocess operations — so failures must be
-        # settled collectively before any rank enters the loop, or the healthy
-        # ranks hang in the first task's Allreduce. The same sync runs at the
-        # end of every `write_task_data!`, so a mid-loop write failure aborts
-        # all ranks together too, and the counter rollback in the catch below
-        # then happens on EVERY rank (a one-sided rollback desynchronized the
-        # per-rank time indices).
+        _output_collectively(handler, "process! diagnostic refresh") do
+            refresh_solver_diagnostics!(handler)
+        end
+
+        handler.total_write_num += 1
+        handler.file_write_num += 1
+        handler.sim_dt === nothing ||
+            (handler.last_sim_div = floor(Int, sim_time / handler.sim_dt))
+        handler.wall_dt === nothing ||
+            (handler.last_wall_div = floor(Int, wall_time / handler.wall_dt))
+
+        if handler.max_writes !== nothing && handler.file_write_num > handler.max_writes
+            _output_collectively(handler, "process! rollover finalization") do
+                old_filename = current_file(handler)
+                if isfile(old_filename)
+                    ncputatt(old_filename, "global", Dict{String, Any}(
+                        "writes" => handler.file_write_num - 1,
+                        "total_writes" => handler.total_write_num - 1,
+                        "closed" => Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
+                    ))
+                end
+            end
+            handler.set_num += 1
+            handler.file_write_num = 1
+            empty!(handler._created_vars)
+        end
+
+        filename = current_file(handler)
+        if !isfile(filename) ||
+           (handler.file_write_num == 1 && handler.mode == "overwrite")
+            create_current_file!(handler)
+        end
+
         write_index = handler.file_write_num
         _output_collectively(handler, "process! time metadata") do
             group_ncwrite([sim_time], filename, NETCDF_TIME_GROUP, "sim_time", start=[write_index])
@@ -1732,19 +1825,18 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
             group_ncwrite(Int64[handler.total_write_num], filename, NETCDF_TIME_GROUP, "write_number", start=[write_index])
         end
 
-        # Staging cache for GPU data (per write)
         stage_cache = NetCDFStagingCache()
-
-        # Write tasks
         for task in handler.tasks
             write_task_data!(handler, filename, task, write_index, stage_cache)
         end
     catch e
-        # Roll back counters so the failed write can be retried. The collective
-        # failure syncs above/inside write_task_data! guarantee every rank
-        # reaches this catch when any rank fails, keeping the counters aligned.
-        handler.total_write_num -= 1
-        handler.file_write_num -= 1
+        handler.set_num = prior_state.set_num
+        handler.total_write_num = prior_state.total_write_num
+        handler.file_write_num = prior_state.file_write_num
+        handler.last_sim_div = prior_state.last_sim_div
+        handler.last_wall_div = prior_state.last_wall_div
+        empty!(handler._created_vars)
+        union!(handler._created_vars, prior_state.created_vars)
         rethrow(e)
     end
 
@@ -1904,13 +1996,11 @@ function output_dimension_name(task_name::String, task::Dict, operator, data_dim
     return coord_name === nothing ? "$(task_name)_dim$(data_dim_index)" : coord_name
 end
 
-function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Dict, write_index::Int, stage_cache::NetCDFStagingCache)
-    init_mpi!(handler)  # Ensure MPI info is available
-    task_name = task["name"]
+function _stage_task_data!(handler::NetCDFFileHandler, task::Dict,
+                           stage_cache::NetCDFStagingCache, layout_symbol::Symbol)
     layout_symbol = normalize_layout_symbol(get(task, "layout_symbol", get(task, "layout", :g)))
-    is_coeff_layout = layout_symbol == :c
     operator = materialize_output_operator(task["operator"], layout_symbol)
-    
+
     # Generate data from operator/field when possible; otherwise fallback to zeros
     # NOTE: Uses get_cpu_data() to handle GPU arrays - automatically transfers to CPU for file I/O
     data = nothing
@@ -1949,6 +2039,10 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
             data = zeros(Float64, data_shape...)
         end
     end
+    return operator, data
+end
+
+function _postprocess_task_data(task::Dict, data)
     # Apply optional postprocess (slices/reductions)
     if task["postprocess"] !== nothing
         data = task["postprocess"](data)
@@ -1976,7 +2070,26 @@ function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Di
     data = Array(data)
     # Use Julia types directly for NetCDF.jl (NC_FLOAT/NC_DOUBLE are C constants)
     nc_type = eltype(data) <: Float32 ? Float32 : Float64
-    
+    return data, is_complex_data, nc_type
+end
+
+function write_task_data!(handler::NetCDFFileHandler, filename::String, task::Dict, write_index::Int, stage_cache::NetCDFStagingCache)
+    init_mpi!(handler)  # Ensure MPI info is available
+    task_name = task["name"]
+    layout_symbol = normalize_layout_symbol(get(task, "layout_symbol", get(task, "layout", :g)))
+    is_coeff_layout = layout_symbol == :c
+
+    # Keep rank-locally fallible staging and postprocessing in distinct settled
+    # phases. A failed rank therefore cannot skip ahead while peers enter the
+    # next task's transform/reduction or NetCDF write.
+    operator, data = _output_collectively(handler, "write_task_data!($(task_name)) staging") do
+        _stage_task_data!(handler, task, stage_cache, layout_symbol)
+    end
+    data, is_complex_data, nc_type =
+        _output_collectively(handler, "write_task_data!($(task_name)) postprocess") do
+            _postprocess_task_data(task, data)
+        end
+
     # From here on: per-rank fallible NetCDF I/O, settled collectively — see
     # `_output_collectively` for why (one rank's disk failure must not strand
     # its peers in the NEXT task's collective staging/postprocess).

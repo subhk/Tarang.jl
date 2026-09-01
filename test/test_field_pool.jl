@@ -136,7 +136,7 @@ end
         pool = FieldPool(dist)
         prewarm!(pool, bases, Float64, 3)
 
-        key   = Tarang.PoolKey(bases, Float64)
+        key   = Tarang.PoolKey(bases, Float64, dist)
         stack = pool.available[key]
 
         @test length(stack) == 3
@@ -193,6 +193,37 @@ end
         set_field_pool!(nothing)
     end
 
+    @testset "global pool honors distributor identity" begin
+        other_domain = PeriodicDomain(8, 8)
+        other_dist = other_domain.dist
+        other_bases = other_domain.bases
+        pool = FieldPool(dist)
+        set_field_pool!(pool)
+
+        field = checkout_or_alloc(other_bases, Float64, other_dist)
+        @test field.dist === other_dist
+        @test !field._from_pool
+        @test pool.in_use == 0
+        @test Tarang.PoolKey(bases, Float64, dist) !=
+              Tarang.PoolKey(other_bases, Float64, other_dist)
+
+        set_field_pool!(nothing)
+    end
+
+    @testset "returned fields reset scale and storage shape" begin
+        pool = FieldPool(dist)
+        field = checkout!(pool, bases, Float64)
+        preset_scales!(field, 1.5)
+        @test size(Tarang.get_grid_data(field)) == (12, 12)
+
+        return!(pool, field)
+        reused = checkout!(pool, bases, Float64)
+        @test reused === field
+        @test reused.scales == (1.0, 1.0)
+        @test size(Tarang.get_grid_data(reused)) == (8, 8)
+        return!(pool, reused)
+    end
+
     # -------------------------------------------------------------------
     # 10. maybe_return! — no-op for non-pool fields; returns pool fields
     # -------------------------------------------------------------------
@@ -234,7 +265,7 @@ end
         return!(pool, f2)
         return!(pool, f3)   # should be silently dropped
 
-        key   = Tarang.PoolKey(bases, Float64)
+        key   = Tarang.PoolKey(bases, Float64, dist)
         stack = pool.available[key]
         @test length(stack) == 2
         @test pool.in_use   == 0

@@ -21,6 +21,24 @@
     return dest
 end
 
+@noinline function _throw_imex_singular_stage(ts::TimeStepper, stage::Int)
+    throw(ArgumentError(
+        "IMEX RK ($(nameof(typeof(ts)))) implicit stage $stage has a singular " *
+        "system matrix; refusing to fall back to explicit RK because that would " *
+        "drop the linear operator, mass matrix, and algebraic constraints.",
+    ))
+end
+
+@inline function _rk_imex_ldiv!(dest::AbstractVector, lhs, rhs::AbstractVector,
+                                ts::TimeStepper, stage::Int)
+    try
+        return _rk_ldiv!(dest, lhs, rhs)
+    catch err
+        err isa SingularException && _throw_imex_singular_stage(ts, stage)
+        rethrow()
+    end
+end
+
 @inline function _axpy_complex_vector!(y::AbstractVector{ComplexF64},
                                        scale,
                                        x::AbstractVector{ComplexF64})
@@ -164,15 +182,10 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
                         factorize(I + dt * a_ii * L_matrix)
                     catch e
                         isa(e, SingularException) || rethrow(e)
-                        @warn "IMEX RK: system matrix is singular, falling back to explicit" maxlog=1
-                        return nothing
+                        _throw_imex_singular_stage(ts, s)
                     end
                 end
-                if lhs === nothing
-                    _step_rk_imex_explicit_fallback!(state, solver, ts)
-                    return nothing
-                end
-                _rk_ldiv!(Xs_vec, lhs, rhs_vec)
+                _rk_imex_ldiv!(Xs_vec, lhs, rhs_vec, ts, s)
             end
         else
             if abs(a_ii) < 1e-14
@@ -191,15 +204,10 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
                         factorize(M_matrix + dt * a_ii * L_matrix)
                     catch e
                         isa(e, SingularException) || rethrow(e)
-                        @warn "IMEX RK: system matrix is singular, falling back to explicit" maxlog=1
-                        return nothing
+                        _throw_imex_singular_stage(ts, s)
                     end
                 end
-                if lhs === nothing
-                    _step_rk_imex_explicit_fallback!(state, solver, ts)
-                    return nothing
-                end
-                _rk_ldiv!(Xs_vec, lhs, rhs_vec)
+                _rk_imex_ldiv!(Xs_vec, lhs, rhs_vec, ts, s)
             end
         end
 

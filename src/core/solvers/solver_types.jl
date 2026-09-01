@@ -642,8 +642,8 @@ end
 
 """Merge boundary_conditions strings into equations and track indices.
 
-For each raw BC string in `problem.boundary_conditions`, push it into
-`problem.equations` (so the equation parser sees it) and try to associate
+For each raw BC string in `problem.boundary_conditions`, ensure one equivalent
+entry exists in `problem.equations` (so the equation parser sees it) and try to associate
 it with a concrete `AbstractBoundaryCondition` object in `bc_manager.conditions`
 via `bc_to_equation(manager, bc)`.
 
@@ -661,12 +661,23 @@ function _merge_boundary_conditions!(problem::Problem)
     end
 
     bc_manager = problem.bc_manager
-    base_eq_count = length(problem.equations)
     used_bc_idxs = Set{Int}()
+    used_eq_idxs = Set{Int}()
 
-    for (i, bc_str) in enumerate(problem.boundary_conditions)
-        push!(problem.equations, bc_str)
-        eq_idx = base_eq_count + i
+    for bc_str in problem.boundary_conditions
+        # Solver construction may be repeated with the same Problem.  Reuse a
+        # one-to-one equivalent equation left by an earlier merge instead of
+        # growing the system on every construction.  `used_eq_idxs` still
+        # preserves intentionally repeated raw BC entries.
+        eq_idx = findfirst(eachindex(problem.equations)) do candidate_idx
+            candidate_idx in used_eq_idxs && return false
+            _bc_strings_equivalent(problem.equations[candidate_idx], bc_str)
+        end
+        if eq_idx === nothing
+            push!(problem.equations, bc_str)
+            eq_idx = length(problem.equations)
+        end
+        push!(used_eq_idxs, eq_idx)
 
         # First pass: exact or lenient string match against every BC object
         # the user (or our auto-registration) has already added.
@@ -802,11 +813,7 @@ function _apply_bc_values_to_equations!(solver::InitialValueSolver, current_time
         # recomputed against the current coordinate fields below. Drop stale
         # entries first so the cache stays bounded across steps.
         _drop_spatial_cache_entries!(bc_manager)
-        try
-            evaluate_space_dependent_bcs!(bc_manager, bc_manager.coordinate_fields, current_time)
-        catch err
-            @warn "evaluate_space_dependent_bcs! failed: $err" maxlog=3
-        end
+        evaluate_space_dependent_bcs!(bc_manager, bc_manager.coordinate_fields, current_time)
     end
 
     # Iterate over the union of time- and space-dependent BC indices so

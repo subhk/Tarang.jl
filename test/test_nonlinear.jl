@@ -125,6 +125,22 @@ using Test
     end
 
     @testset "Dealiasing Functions" begin
+        @testset "tiny Fourier axis does not disable other cutoffs" begin
+            coords_tiny = CartesianCoordinates("x", "y")
+            dist_tiny = Distributor(coords_tiny; mesh=(1,), dtype=ComplexF64,
+                                    architecture=CPU())
+            xb_tiny = ComplexFourier(coords_tiny["x"]; size=3, bounds=(0.0, 2π))
+            yb_wide = ComplexFourier(coords_tiny["y"]; size=12, bounds=(0.0, 2π))
+            field_tiny = ScalarField(dist_tiny, "tiny_axis", (xb_tiny, yb_wide), ComplexF64)
+            grid = Tarang.get_grid_data(field_tiny)
+            for j in axes(grid, 2), i in axes(grid, 1)
+                grid[i, j] = exp(4im * 2π * (j - 1) / 12)
+            end
+
+            Tarang.apply_basic_dealiasing!(field_tiny, 1.5)
+            @test maximum(abs, Tarang.get_grid_data(field_tiny)) < 1e-10
+        end
+
         @testset "get_dealiasing_cutoffs" begin
             # Test 1D cutoff: keep |k| <= N/(2*factor) = 64/3 = 21
             cutoffs = Tarang.get_dealiasing_cutoffs((64,), 1.5)

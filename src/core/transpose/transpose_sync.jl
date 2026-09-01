@@ -19,6 +19,7 @@ Transpose from ZLocal layout to YLocal layout (synchronous).
 Uses MPI.Alltoallv for communication.
 """
 function transpose_z_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
+    _require_open(tf, "transpose_z_to_y!")
     # CRITICAL: Use error() instead of @assert for production safety
     if tf.buffers.active_layout[] != ZLocal
         error("transpose_z_to_y!: Must be in ZLocal layout, currently in $(tf.buffers.active_layout[])")
@@ -192,6 +193,7 @@ end
 Transpose from YLocal layout to ZLocal layout (reverse of Z→Y).
 """
 function transpose_y_to_z!(tf::TransposableField{F,T,N}) where {F,T,N}
+    _require_open(tf, "transpose_y_to_z!")
     # CRITICAL: Use error() instead of @assert for production safety
     if tf.buffers.active_layout[] != YLocal
         error("transpose_y_to_z!: Must be in YLocal layout, currently in $(tf.buffers.active_layout[])")
@@ -323,6 +325,7 @@ end
 Transpose from YLocal layout to XLocal layout.
 """
 function transpose_y_to_x!(tf::TransposableField{F,T,N}) where {F,T,N}
+    _require_open(tf, "transpose_y_to_x!")
     # CRITICAL: Use error() instead of @assert for production safety
     if tf.buffers.active_layout[] != YLocal
         error("transpose_y_to_x!: Must be in YLocal layout, currently in $(tf.buffers.active_layout[])")
@@ -406,6 +409,7 @@ end
 Transpose from XLocal layout to YLocal layout (reverse of Y→X).
 """
 function transpose_x_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
+    _require_open(tf, "transpose_x_to_y!")
     # CRITICAL: Use error() instead of @assert for production safety
     if tf.buffers.active_layout[] != XLocal
         error("transpose_x_to_y!: Must be in XLocal layout, currently in $(tf.buffers.active_layout[])")
@@ -481,4 +485,3 @@ function transpose_x_to_y!(tf::TransposableField{F,T,N}) where {F,T,N}
 
     return tf
 end
-

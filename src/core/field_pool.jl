@@ -12,25 +12,25 @@ export FieldPool, checkout!, return!, with_pool_field, prewarm!,
 # ---------------------------------------------------------------------------
 
 """
-    PoolKey(bases_hash, dtype)
+    PoolKey(bases_hash, dtype, distributor_id)
 
 Key used to bucket compatible `ScalarField` objects in a `FieldPool`.
-Two fields are compatible if they have the same basis configuration (hashed)
-and the same element dtype.
+Two fields are compatible if they have the same basis configuration (hashed),
+element dtype, and owning distributor.
 """
 struct PoolKey
     bases_hash::UInt64
     dtype::DataType
+    distributor_id::UInt64
 end
 
 """
-    PoolKey(bases, dtype)
+    PoolKey(bases, dtype, dist)
 
-Construct a `PoolKey` from a tuple of bases and a data type.
+Construct a `PoolKey` from a tuple of bases, data type, and distributor.
 """
-function PoolKey(bases::Tuple{Vararg{Basis}}, dtype::DataType)
-    h = hash(bases)
-    PoolKey(h, dtype)
+function PoolKey(bases::Tuple{Vararg{Basis}}, dtype::DataType, dist::Distributor)
+    PoolKey(UInt64(hash(bases)), dtype, UInt64(objectid(dist)))
 end
 
 # ---------------------------------------------------------------------------
@@ -40,7 +40,8 @@ end
 """
     FieldPool(dist; max_per_key=16)
 
-A pool of pre-allocated `ScalarField` objects keyed by `(bases_hash, dtype)`.
+A pool of pre-allocated `ScalarField` objects keyed by
+`(bases_hash, dtype, distributor_id)`.
 
 Fields are checked out with `checkout!` and returned with `return!`. When a
 field is checked out from the pool its `_from_pool` flag is `true` and its
@@ -83,7 +84,7 @@ incremented.
 function checkout!(pool::FieldPool,
                    bases::Tuple{Vararg{Basis}},
                    dtype::DataType=Float64)
-    key = PoolKey(bases, dtype)
+    key = PoolKey(bases, dtype, pool.dist)
     stack = get!(Vector{ScalarField}, pool.available, key)
 
     field = if isempty(stack)
@@ -156,10 +157,12 @@ function return!(pool::FieldPool, field::ScalarField)
             "currently checked out; it has already been returned."))
     end
 
-    # Reset layout so the next user always starts from a known state
+    # Reset resolution and layout so the next user always starts from a known
+    # base-grid state. `preset_scales!` reallocates the grid buffer when needed.
+    preset_scales!(field, nothing)
     field.current_layout = :g
 
-    key = PoolKey(field.bases, field.dtype)
+    key = PoolKey(field.bases, field.dtype, field.dist)
     stack = get!(Vector{ScalarField}, pool.available, key)
 
     if length(stack) < pool.max_per_key
@@ -215,7 +218,7 @@ function prewarm!(pool::FieldPool,
                   bases::Tuple{Vararg{Basis}},
                   dtype::DataType,
                   count::Int)
-    key = PoolKey(bases, dtype)
+    key = PoolKey(bases, dtype, pool.dist)
     stack = get!(Vector{ScalarField}, pool.available, key)
     for _ in 1:count
         field = ScalarField(pool.dist, "pool_field", bases, dtype)
@@ -265,7 +268,7 @@ function checkout_or_alloc(bases::Tuple{Vararg{Basis}},
                            dtype::DataType,
                            dist::Distributor)
     pool = get_field_pool()
-    if pool !== nothing
+    if pool !== nothing && pool.dist === dist
         return checkout!(pool, bases, dtype)
     else
         return ScalarField(dist, "tmp_field", bases, dtype)

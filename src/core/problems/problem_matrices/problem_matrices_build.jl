@@ -109,10 +109,9 @@ function build_matrix_expressions!(problem::Problem)
     empty!(problem.equation_data)
     
     for (i, equation_str) in enumerate(problem.equations)
-        # Parse LHS first (for sizing) — it must succeed.
-        # RHS parsing may fail for nonlinear terms (e.g. u⋅∇(b)) that aren't
-        # representable in the matrix; that's fine — the explicit RHS evaluator
-        # handles them at runtime.
+        # Parse both sides into operator trees. Nonlinear RHS terms do not need to
+        # be representable as matrices, but they still must parse successfully so
+        # the explicit runtime evaluator receives the original expression.
         lhs_str, rhs_str = split_equation(equation_str)
         lhs = nothing
         rhs = nothing
@@ -124,8 +123,10 @@ function build_matrix_expressions!(problem::Problem)
         try
             rhs = parse_expression(strip(rhs_str), problem.namespace)
         catch e
-            @debug "RHS parse failed for equation $i (will use runtime evaluation): $e"
-            rhs = ZeroOperator()
+            throw(ArgumentError(
+                "Failed to parse RHS of equation $i (`$(strip(rhs_str))`): " *
+                sprint(showerror, e),
+            ))
         end
         if lhs === nothing
             lhs = UnknownOperator(equation_str)
@@ -142,17 +143,10 @@ function build_matrix_expressions!(problem::Problem)
             eq_data["equation_size"] = eq_size
             push!(problem.equation_data, eq_data)
         catch e
-            @error "Failed to build matrix expressions for equation $i: $equation_str" exception=e
-            eq_size = lhs !== nothing ? _equation_output_dofs(lhs) : 0
-            fallback_data = EquationIR(Dict(
-                "M" => nothing,
-                "L" => lhs isa UnknownOperator ? lhs : UnknownOperator(equation_str),
-                "F" => ZeroOperator(),
-                "equation_index" => i,
-                "equation_string" => equation_str,
-                "equation_size" => eq_size
+            throw(ArgumentError(
+                "Failed to build matrix expressions for equation $i " *
+                "(`$equation_str`): " * sprint(showerror, e),
             ))
-            push!(problem.equation_data, fallback_data)
         end
     end
 end

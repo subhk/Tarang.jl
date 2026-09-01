@@ -139,23 +139,27 @@ function merge_grid_space_field!(processor_data, var_attrs, output_file, var_nam
         count_indices = layout_info["count"]
         
         if start_indices !== nothing && count_indices !== nothing
-            try
-                # Create spatial slices (skip time dimension)
-                spatial_slices = Any[Colon()]  # Time dimension
-                for (s, c) in zip(start_indices, count_indices)
-                    push!(spatial_slices, (s+1):(s+c))  # Convert to 1-based
-                end
-                
-                slices = tuple(spatial_slices...)
-                if size(data) == size(reconstructed_data[slices...])
-                    reconstructed_data[slices...] = data
-                    coverage_mask[slices...] .= true
-                end
-            catch e
-                merger.verbose && println("        Error placing grid space data: $e")
+            # Create spatial slices (skip time dimension)
+            spatial_slices = Any[Colon()]  # Time dimension
+            for (s, c) in zip(start_indices, count_indices)
+                push!(spatial_slices, (s+1):(s+c))  # Convert to 1-based
             end
+            slices = tuple(spatial_slices...)
+            size(data) == size(reconstructed_data[slices...]) || error(
+                "Slab shape mismatch for '$var_name' in " *
+                "$(basename(proc_info["file"]))")
+            any(coverage_mask[slices...]) && error(
+                "Overlapping slabs while reconstructing '$var_name': " *
+                "$(basename(proc_info["file"])) overlaps prior coverage at $slices")
+            reconstructed_data[slices...] = data
+            coverage_mask[slices...] .= true
         end
     end
+
+    uncovered_count = count(!, coverage_mask)
+    uncovered_count == 0 || error(
+        "Incomplete reconstruction of '$var_name': $uncovered_count of " *
+        "$(length(coverage_mask)) points are uncovered")
     
     # Write reconstructed field
     write_reconstructed_field(reconstructed_data, var_attrs, output_file, var_name, dim_names, data_type)
@@ -177,14 +181,10 @@ function merge_coeff_space_field!(processor_data, var_attrs, output_file, var_na
     
     # Try to use mode-based reconstruction
     reconstructed_data = reconstruct_spectral_modes(processor_data, data_type, merger)
-    
-    if reconstructed_data !== nothing
-        write_reconstructed_field(reconstructed_data, var_attrs, output_file, var_name, dim_names, data_type)
-        merger.verbose && println("        Coefficient space field merged")
-    else
-        merger.verbose && println("        Falling back to spatial reconstruction for coefficient field")
-        merge_grid_space_field!(processor_data, var_attrs, output_file, var_name, dim_names, merger)
-    end
+    reconstructed_data === nothing && error(
+        "Could not verify coefficient-space reconstruction of '$var_name'")
+    write_reconstructed_field(reconstructed_data, var_attrs, output_file, var_name, dim_names, data_type)
+    merger.verbose && println("        Coefficient space field merged")
 end
 
 """
@@ -206,9 +206,7 @@ function merge_mixed_layout_field!(processor_data, var_attrs, output_file, var_n
         grid_space_flags = sample_layout_info["grid_space"]
         merger.verbose && println("          Grid space pattern: $grid_space_flags")
     else
-        merger.verbose && println("          No grid space info found, falling back to grid space merge")
-        merge_grid_space_field!(processor_data, var_attrs, output_file, var_name, dim_names, merger)
-        return
+        error("Cannot merge mixed-layout '$var_name' without grid_space metadata")
     end
     
     # Determine target layout based on predominant layout and data characteristics
@@ -243,10 +241,8 @@ function merge_mixed_layout_field!(processor_data, var_attrs, output_file, var_n
         var_attrs["layout_transformation"] = "mixed_to_$(target_layout)"
         merger.verbose && println("        Mixed layout field transformed and merged")
     else
-        # Transformation failed, fall back to grid space merge with original data
-        merger.verbose && println("          Layout transformation failed, using grid space fallback")
-        var_attrs["layout_transformation"] = "failed_fallback_to_grid"
-        merge_grid_space_field!(processor_data, var_attrs, output_file, var_name, dim_names, merger)
+        error("Could not transform mixed-layout '$var_name' to $target_layout; " *
+              "refusing to relabel the untransformed data")
     end
 end
 
@@ -738,8 +734,7 @@ function reconstruct_spectral_modes(processor_data, data_type, merger)
         proc_file = basename(proc_info["file"])
         
         if start_indices === nothing || count_sizes === nothing
-            merger.verbose && println("            Missing start/count metadata for $proc_file")
-            continue
+            error("Missing start/count metadata for coefficient slab '$proc_file'")
         end
         
         try
@@ -761,14 +756,13 @@ function reconstruct_spectral_modes(processor_data, data_type, merger)
             actual_size = size(local_data)
             
             if expected_size != actual_size
-                merger.verbose && println("            Size mismatch for $proc_file: expected $expected_size, got $actual_size")
-                continue
+                error("Coefficient slab '$proc_file' has shape $actual_size; " *
+                      "expected $expected_size")
             end
             
             # Check for overlap (should not happen with proper distribution)
             if any(filled_mask[slices...])
-                merger.verbose && println("            Detected overlap for $proc_file at $slices")
-                return nothing
+                error("Overlapping coefficient slab '$proc_file' at $slices")
             end
             
             # Place data and mark as filled
@@ -779,8 +773,8 @@ function reconstruct_spectral_modes(processor_data, data_type, merger)
             merger.verbose && println("              Placed coefficients from $proc_file at $slices")
             
         catch e
-            merger.verbose && println("            Error placing data from $proc_file: $e")
-            continue
+            error("Could not place coefficient slab '$proc_file': " *
+                  sprint(showerror, e))
         end
     end
     
@@ -792,15 +786,9 @@ function reconstruct_spectral_modes(processor_data, data_type, merger)
     merger.verbose && println("            Reconstruction coverage: $(processors_placed)/$(length(processor_data)) processors")
     merger.verbose && println("            Coverage fraction: $(round(coverage_fraction * 100, digits=1))% ($uncovered_points uncovered points)")
     
-    if uncovered_points > 0
-        if coverage_fraction < 0.9
-            merger.verbose && println("            Incomplete coefficient reconstruction (< 90% coverage)")
-            return nothing
-        else
-            merger.verbose && println("            Minor gaps detected, filling with zeros")
-            global_coeffs[.!filled_mask] .= 0.0
-        end
-    end
+    uncovered_points == 0 || error(
+        "Incomplete coefficient reconstruction: $uncovered_points of $total_points " *
+        "points are uncovered")
     
     # Verify spectral field characteristics
     if validate_spectral_coefficients(global_coeffs, merger)
@@ -875,4 +863,3 @@ function write_reconstructed_field(data, var_attrs, output_file, var_name, dim_n
 
     group_ncwrite(data, output_file, NETCDF_VARS_GROUP, var_name)
 end
-

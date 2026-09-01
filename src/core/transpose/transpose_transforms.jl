@@ -49,7 +49,21 @@ Supports mixed basis types (e.g., Chebyshev-Fourier).
 function distributed_forward_transform!(tf::TransposableField{F,T,N};
                                         overlap::Bool=false,
                                         plans=nothing) where {F,T,N}
+    _require_open(tf, "distributed_forward_transform!")
     _require_distributed_source_layout(tf.field, :g, :forward)
+
+    # With one rank there is no transpose to perform, and the field's regular
+    # transform path owns the basis-specific grid/coefficient shapes (including
+    # RealFourier half spectra and dealiasing). Reusing the fixed-shape transpose
+    # buffers here would incorrectly require grid and coefficient arrays to have
+    # the same number of elements.
+    if tf.field.dist.size == 1
+        fft_start = time()
+        forward_transform!(tf.field)
+        tf.total_fft_time += time() - fft_start
+        return tf
+    end
+
     fft_plans = plans === nothing ? tf.fft_plans : plans
     arch = tf.buffers.architecture
     grid_data = get_grid_data(tf.field)
@@ -190,7 +204,16 @@ Automatically selects IFFT for Fourier bases and inverse DCT for Chebyshev/Jacob
 function distributed_backward_transform!(tf::TransposableField{F,T,N};
                                          overlap::Bool=false,
                                          plans=nothing) where {F,T,N}
+    _require_open(tf, "distributed_backward_transform!")
     _require_distributed_source_layout(tf.field, :c, :backward)
+
+    if tf.field.dist.size == 1
+        fft_start = time()
+        backward_transform!(tf.field)
+        tf.total_fft_time += time() - fft_start
+        return tf
+    end
+
     fft_plans = plans === nothing ? tf.fft_plans : plans
     arch = tf.buffers.architecture
     coeff_data = get_coeff_data(tf.field)

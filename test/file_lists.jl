@@ -58,6 +58,7 @@ const TEST_FILES = [
     "test_subproblem_modes.jl",
     "test_problem_matrices_support.jl",
     "test_flow_tools.jl",
+    "test_qg_inversion.jl",             # public QG inversion must build a square tau LBVP and honor both surface-buoyancy Neumann conditions
     "test_spectra.jl",
     "test_quick_domains.jl",
     "test_plot_tools.jl",
@@ -173,9 +174,13 @@ const TEST_FILES = [
     "test_gpu_transpose_kernels_cpu.jl",  # transpose pack/unpack index math on the KA CPU backend — no GPU needed
     "test_legendre_normalization.jl",  # Legendre stores ORTHONORMAL coefficients but differentiation_matrix/evaluate_basis are classical; nothing bridged them, so a Legendre LBVP was silently 80% wrong
     "test_gpu_test_files_reachable.jl", # the GPU test files are executed by NOTHING (buildkite pipeline is inert), so they rot silently; parses them and checks the extension API they call still exists
+    "test_webdocs_code.jl",          # Julia/Bash/TOML/Dockerfile fences parse; opt-in isolated CPU and two-rank MPI sweeps catch API drift
     "test_gpu_kernels_cpu.jl",          # element-wise/fused/spectral-pad kernels had ZERO test references and the GPU CI that would run them is inert; KA CPU backend executes the real kernel objects
     "test_state_arith_layout.jl",       # axpy/linear-combination state helpers forced :g, paying a transform per operand; pins "no forced transform" AND that the coefficient-space answer matches the grid-space one
     "test_gpu_dct1_kernels_cpu.jl",       # DCT-I / Cheb-derivative kernel values AND the full FF/FC device transform drivers (2D+3D) on the KA CPU backend (FFTW standing in for cuFFT) — no GPU needed
+    "test_solver_review_regressions.jl",   # malformed RHS, IMEX/ETD DAE failure policy, coeff-current derivatives, reused BCs, forcing, and schedule semantics
+    "test_netcdf_integration_regressions.jl", # overwrite/append transactions and fail-closed NetCDF reconstruction
+    "test_cuda_dct_cache_context.jl",      # CPU-only AST/helper guard for distributed CUDA DCT cache context and explicit communicator teardown
 ]
 
 # CPU tests that are valid in ordinary CI but are kept out of the default
@@ -226,6 +231,7 @@ const GPU_TEST_FILES = [
 #   ./test/run_mpi_tests.sh 4
 const MPI_TEST_FILES = [
     "test_mpi_distributor.jl",
+    "test_mpi_2d_backend_regressions.jl", # PencilFFT output geometry is canonical for local_shape(:c) and diagonal spectral operators (np>=2)
     "test_mpi_local_indices.jl",
     "test_mpi_field_initialization.jl",
     "test_mpi_algebraic_constraints.jl",
@@ -282,6 +288,8 @@ const MPI_TEST_FILES = [
     "test_mpi_padded_dealiasing_3d_mixed.jl", # 3D Cheb-Fourier-Fourier dealiasing == serial (decomp-order alignment fix) (np>=2)
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",
+    "test_mpi_netcdf_subcommunicator.jl",  # NetCDF handlers must use the owning Distributor communicator, never COMM_WORLD
+    "test_stochastic_forcing_subcomm.jl",  # stochastic forcing RNG synchronization is scoped to the target field communicator (np>=4)
     # The distributed half of the configuration matrix. test_configuration_matrix.jl
     # pins the serial cells; the backend is the axis it cannot see, and nearly every
     # correctness bug in this project was backend-specific (np>=2).
