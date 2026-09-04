@@ -172,6 +172,17 @@ function _plan_transforms_uncached!(dist::Distributor, domain::Domain,
                   "1D FFT requires global data access. Use serial execution (1 MPI process).")
         end
 
+        # A fully decomposed PencilArray is valid for data storage, but
+        # PencilFFTs must keep at least one domain axis local while moving
+        # between transform stages.  Reject the FFT-incompatible topology here
+        # rather than in Distributor, which also serves data-only callers.
+        if dist.use_pencil_arrays && length(dist.mesh) >= ndim
+            throw(ArgumentError(
+                "Process-mesh dimensionality ($(length(dist.mesh))) must be less than " *
+                "spectral domain dimensionality ($ndim) so that at least one domain axis " *
+                "remains local for PencilFFTs."))
+        end
+
         # Route based on basis composition
         has_chebyshev = !isempty(chebyshev_axes)
         has_fourier = !isempty(fourier_axes)

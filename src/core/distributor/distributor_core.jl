@@ -213,21 +213,18 @@ mutable struct Distributor
             mesh = isempty(stripped) ? (size,) : stripped
         end
 
-        # CRITICAL: Validate mesh dimensionality vs domain dimensionality
-        # This catches cases where mesh has more dimensions than the domain,
-        # which can cause helper functions to desync from actual PencilArray layouts
+        # A process-mesh axis must map to a domain axis.  Allowing extra non-unit
+        # mesh axes makes ranks disagree about ownership: PencilArrays can only
+        # decompose `total_dim` axes while the Distributor helpers continue to
+        # account for every mesh factor.  Unit factors were removed above, so
+        # any remaining extra axis represents real, unusable processes.
         if size > 1 && _use_pencil_arrays && length(mesh) > total_dim
-            unused_dims = length(mesh) - total_dim
-            unused_procs = prod(mesh[total_dim+1:end])
-            if unused_procs > 1
-                @warn "Mesh dimensionality ($(length(mesh))) exceeds domain dimensionality ($total_dim) " *
-                      "with use_pencil_arrays=true. Only first $total_dim mesh dimension(s) can be used " *
-                      "for decomposition. This leaves $unused_dims dimension(s) unutilized, wasting " *
-                      "$unused_procs MPI process(es). Helper functions (get_local_array_size, scatter_array, etc.) " *
-                      "assume mesh dimensions ≤ domain dimensions. Consider using a $(total_dim)D mesh instead, " *
-                      "e.g., mesh=$(Tuple(mesh[1:total_dim]))."
-            end
+            throw(ArgumentError(
+                "Mesh dimensionality ($(length(mesh))) exceeds domain dimensionality ($total_dim) " *
+                "with use_pencil_arrays=true. Every non-unit process-mesh axis must map to a " *
+                "domain axis; use a mesh with at most $total_dim dimension(s)."))
         end
+
         pencil_config = nothing
         mpi_topology = nothing
         pencil_cache = Dict{Tuple, PencilArrays.Pencil}()

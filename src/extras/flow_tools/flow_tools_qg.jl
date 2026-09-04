@@ -15,7 +15,7 @@ The system solves:
 
 **Interior (LBVP for ψ given q and boundary θ):**
 ```
-∇²ψ + (f₀/N)² ∂²ψ/∂z² = q
+∇ₕ²ψ + (f₀/N)² ∂²ψ/∂z² = q
 ```
 with Neumann BCs from surface buoyancy:
 ```
@@ -43,6 +43,7 @@ mutable struct QGSystem
 
     # Problems
     interior_bvp::LBVP            # Interior PV inversion problem
+    interior_solver::Union{Nothing, BoundaryValueSolver}
     surface_ivp_bot::IVP          # Bottom surface evolution
     surface_ivp_top::IVP          # Top surface evolution
 
@@ -139,22 +140,40 @@ function qg_system_setup(;
     θ_bot = ScalarField(dist_2d_bot, "θ_bot", bases_2d, Float64)
     θ_top = ScalarField(dist_2d_top, "θ_top", bases_2d, Float64)
 
-    # Interior LBVP: ∇²ψ + (f₀/N)² ∂²ψ/∂z² = q
-    # This is the QG elliptic inversion
-    interior_bvp = LBVP([ψ])
-    interior_bvp.parameters["f0"] = Float64(f0)
-    interior_bvp.parameters["N"] = Float64(N)
-    interior_bvp.parameters["S"] = (f0 / N)^2  # Burger number squared
+    # Interior LBVP: ∇²ψ + (f₀/N)² ∂²ψ/∂z² = q.  A second-order
+    # Chebyshev equation with two boundary rows needs two horizontal tau fields;
+    # without them each Fourier-mode system has Nz+2 rows but only Nz unknowns.
+    # The Neumann--Neumann horizontal zero mode also has an arbitrary additive
+    # constant, so a scalar tau and integral constraint fix that gauge.
+    tau_ψ0 = ScalarField(dist_3d, "tau_ψ0", (), Float64)
+    tau_ψ1 = ScalarField(dist_3d, "tau_ψ1", (x_basis, y_basis), Float64)
+    tau_ψ2 = ScalarField(dist_3d, "tau_ψ2", (x_basis, y_basis), Float64)
+    lift_basis = derivative_basis(z_basis, 2)
+    interior_bvp = LBVP([ψ, tau_ψ0, tau_ψ1, tau_ψ2])
+    add_parameters!(interior_bvp;
+        f0 = Float64(f0),
+        N = Float64(N),
+        S = Float64((f0 / N)^2),
+        q = q,
+        θ_bot = θ_bot,
+        θ_top = θ_top,
+        lift_ψ1 = lift(tau_ψ1, lift_basis, -1),
+        lift_ψ2 = lift(tau_ψ2, lift_basis, -2),
+    )
 
     # QG elliptic operator: ∇_h²ψ + S·∂²ψ/∂z² = q. Use the HORIZONTAL Laplacian
     # explicitly: `Δ` is the full 3D Laplacian (∂xx+∂yy+∂zz), so `Δ(ψ) + S*∂z(∂z(ψ))`
     # would double-count ∂²/∂z² and give a vertical coefficient (1+S) instead of S.
-    add_equation!(interior_bvp, "∂x(∂x(ψ)) + ∂y(∂y(ψ)) + S*∂z(∂z(ψ)) = q")
+    add_equation!(interior_bvp,
+                  "∂x(∂x(ψ)) + ∂y(∂y(ψ)) + S*∂z(∂z(ψ)) + tau_ψ0 + lift_ψ1 + lift_ψ2 = q")
 
     # Boundary conditions: ∂ψ/∂z = (N/f₀)θ at surfaces
     # These will be updated at each timestep with current θ values
-    add_equation!(interior_bvp, "∂z(ψ)(z=0) = (N/f0)*θ_bot")
-    add_equation!(interior_bvp, "∂z(ψ)(z=$H) = (N/f0)*θ_top")
+    add_bc!(interior_bvp,
+            neumann_bc("ψ", "z", 0.0, "(N/f0)*θ_bot"))
+    add_bc!(interior_bvp,
+            neumann_bc("ψ", "z", Float64(H), "(N/f0)*θ_top"))
+    add_bc!(interior_bvp, "integ(ψ) = 0")
 
     # Surface IVPs: ∂θ/∂t + u·∇θ = κ(-Δ)^α θ
     surface_ivp_bot = IVP([θ_bot])
@@ -181,7 +200,7 @@ function qg_system_setup(;
     return QGSystem(
         dist_3d, dist_2d_bot, dist_2d_top,
         ψ, q, θ_bot, θ_top,
-        interior_bvp, surface_ivp_bot, surface_ivp_top,
+        interior_bvp, nothing, surface_ivp_bot, surface_ivp_top,
         Float64(f0), Float64(N), Float64(H), Float64(κ), Float64(α),
         nothing, nothing
     )
@@ -193,7 +212,7 @@ end
 Perform QG PV inversion: given q, θ_bot, θ_top → solve for ψ.
 
 Solves the elliptic problem:
-    ∇²ψ + (f₀/N)² ∂²ψ/∂z² = q
+    ∇ₕ²ψ + (f₀/N)² ∂²ψ/∂z² = q
 with boundary conditions:
     ∂ψ/∂z|_{z=0} = (N/f₀) θ_bot
     ∂ψ/∂z|_{z=H} = (N/f₀) θ_top
@@ -206,7 +225,25 @@ function qg_invert!(qg::QGSystem)
     qg.interior_bvp.namespace["q"] = qg.q
 
     # Solve the LBVP
-    solver = BoundaryValueSolver(qg.interior_bvp)
+    if qg.interior_solver === nothing
+        qg.interior_solver = BoundaryValueSolver(qg.interior_bvp)
+    end
+    solver = qg.interior_solver
+
+    # A BVP algebraic row can project an ArrayOperator onto each horizontal
+    # Fourier mode, but it cannot evaluate a live ScalarField on its RHS.  Supply
+    # the two surface fields through that supported path on every inversion so
+    # changes made by the surface IVPs are reflected in the Neumann conditions.
+    scale = qg.N / qg.f0
+    for (bc_idx, surface) in enumerate((qg.θ_bot, qg.θ_top))
+        ensure_layout!(surface, :g)
+        eq_idx = get(qg.interior_bvp.bc_manager.bc_equation_indices, bc_idx, 0)
+        eq_idx > 0 || error("QG inversion could not locate boundary equation $bc_idx")
+        rhs = ArrayOperator(scale .* Array(get_grid_data(surface)))
+        qg.interior_bvp.equation_data[eq_idx]["F"] = rhs
+        qg.interior_bvp.equation_data[eq_idx]["F_expr"] = rhs
+    end
+    invalidate_bc_array_cache!(qg.interior_bvp)
     solve!(solver)
 
     # Solution is in qg.ψ
@@ -461,7 +498,7 @@ function qg_energy(qg::QGSystem)
     # (operations_integrate.jl: _integrate_full_distributed), so total_integral is
     # the COMPLETE global integral, identical on every rank. A second
     # MPI.Allreduce(SUM) here would sum that replicated scalar across all ranks and
-    # report nprocs × the true energy. Match the sibling
+    # report nprocs × the true energy (round-4 audit 2026-06-23). Match the sibling
     # diagnostics total_kinetic_energy / total_enstrophy, which integrate() directly.
     total_energy = total_integral / domain_volume
 

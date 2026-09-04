@@ -241,12 +241,34 @@ end
         RealFourier(coords["x"]; size=n, bounds=(0.0, 2π)),
         RealFourier(coords["y"]; size=n, bounds=(0.0, 2π)),
     )
+
+    # Shape metadata must not lazily create an alternate-dtype transform plan:
+    # MPI plan construction is collective, while metadata may be queried by one
+    # rank.  Build only the default Float64 plan, then inspect ComplexF64 shape.
+    default_field = ScalarField(dist, "shape_metadata", bases, Float64)
+    domain = default_field.domain
+    complex_key = (objectid(domain), ComplexF64)
+    @test !haskey(dist.transform_plan_cache, complex_key)
+    get_local_coeff_shape(dist, domain; dtype=ComplexF64)
+    @test !haskey(dist.transform_plan_cache, complex_key)
+
+    # A genuinely rank-local query must complete without entering MPI plan
+    # construction or leaving rank-divergent cache state.
+    single_rank_key = (objectid(domain), ComplexF32)
+    single_rank_shape = BACKEND_2D_RANK == 0 ?
+        get_local_coeff_shape(dist, domain; dtype=ComplexF32) : nothing
+    MPI.Barrier(BACKEND_2D_COMM)
+    @test !haskey(dist.transform_plan_cache, single_rank_key)
+    @test BACKEND_2D_RANK == 0 ? single_rank_shape isa Tuple : single_rank_shape === nothing
+
     field = ScalarField(dist, "complex", bases, ComplexF64)
 
     @test eltype(get_grid_data(field)) === ComplexF64
     @test eltype(get_coeff_data(field)) === ComplexF64
     @test _backend_global_size(get_grid_data(field)) == (n, n)
     @test _backend_global_size(get_coeff_data(field)) == (n, n)
+    @test get_local_coeff_shape(dist, field.domain; dtype=field.dtype) ==
+          size(get_coeff_data(field))
     @test _backend_roundtrip_matches!(field; complex_values=true)
 end
 

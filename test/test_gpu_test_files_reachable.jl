@@ -10,7 +10,7 @@ can stop parsing, or call a function that was deleted months ago, and nothing
 notices until somebody runs them on a suitable GPU node.
 
 This test cannot run those files (no NVIDIA GPU on CI, and several of them call
-`MPI.Init`). It does the two checks that need no hardware:
+`MPI.Init`). It performs the checks that need no hardware:
 
 1. **They parse.** A syntax error in a GPU test file is caught here, not on the
    GPU node.
@@ -21,6 +21,12 @@ This test cannot run those files (no NVIDIA GPU on CI, and several of them call
    the GPU tests reference those names UNQUALIFIED inside `if CUDA.functional()`
    blocks, so on a CPU-only machine the reference is never resolved and a stale
    call is invisible.
+3. **The manual GPU reporter is safe.** Its shell regression suite runs in a
+   temporary Git repository, including source-mutation and status-error cases.
+4. **Capability-probe errors propagate.** An invalid MPI CUDA override is tested
+   in a clean subprocess so MPI state cached by other test files cannot mask it.
+5. **CUDA installation guidance preserves the checkout.** Documentation and
+   reporter errors must install CUDA in Julia's stacked default environment.
 """
 
 using Test
@@ -37,6 +43,81 @@ catch err
 end
 
 const _TESTDIR = @__DIR__
+
+@testset "GPU CI report shell regressions" begin
+    script = joinpath(_TESTDIR, "..", "scripts", "test_gpu_ci_report.sh")
+    @test isfile(script)
+
+    output = IOBuffer()
+    process = run(
+        pipeline(ignorestatus(`bash $script`), stdout=output, stderr=output),
+    )
+    shell_output = String(take!(output))
+    success(process) || @error "gpu_ci_report.sh regressions failed" output=shell_output
+    @test success(process)
+end
+
+@testset "invalid MPI CUDA override propagates" begin
+    repository_root = normpath(joinpath(_TESTDIR, ".."))
+    code = raw"""
+        using Tarang
+
+        caught = withenv(
+            "TARANG_CUDA_AWARE_MPI" => nothing,
+            "JULIA_MPI_HAS_CUDA" => "not-a-bool",
+            "OMPI_MCA_opal_cuda_support" => nothing,
+            "MV2_USE_CUDA" => nothing,
+            "MPIR_CVAR_ENABLE_GPU" => nothing,
+            "MPICH_GPU_SUPPORT_ENABLED" => nothing,
+        ) do
+            try
+                check_cuda_aware_mpi()
+                nothing
+            catch err
+                err
+            end
+        end
+
+        if !(caught isa ArgumentError)
+            println(stderr, "expected ArgumentError, got ", repr(caught))
+            exit(1)
+        end
+    """
+    output = IOBuffer()
+    command = `$(Base.julia_cmd()) --startup-file=no --project=$repository_root -e $code`
+    process = run(
+        pipeline(ignorestatus(command), stdout=output, stderr=output),
+    )
+    subprocess_output = String(take!(output))
+    success(process) || @error "invalid JULIA_MPI_HAS_CUDA was swallowed" output=subprocess_output
+    @test success(process)
+end
+
+@testset "CUDA installation guidance preserves the checkout" begin
+    repository_root = normpath(joinpath(_TESTDIR, ".."))
+    guidance_paths = (
+        joinpath(repository_root, "README.md"),
+        joinpath(repository_root, "docs", "src", "index.md"),
+        joinpath(repository_root, "docs", "src", "pages", "testing.md"),
+        joinpath(repository_root, "scripts", "gpu_ci_report.sh"),
+    )
+
+    unsafe_lines = Tuple{String, Int, String}[]
+    for path in guidance_paths
+        @test isfile(path)
+        for (line_number, line) in enumerate(eachline(path))
+            normalized_line = replace(line, '\\' => "")
+            mentions_add = occursin("Pkg.add(\"CUDA\")", normalized_line) ||
+                           occursin("Pkg.add([\"CUDA\"", normalized_line)
+            mentions_add || continue
+            occursin("--project=@v#.#", line) && continue
+            push!(unsafe_lines, (relpath(path, repository_root), line_number, strip(line)))
+        end
+    end
+
+    isempty(unsafe_lines) || @error "CUDA guidance can dirty the Tarang checkout" unsafe_lines
+    @test isempty(unsafe_lines)
+end
 
 # Names that look like extension API rather than a local helper or a Base call.
 const _EXT_PREFIXES = ("gpu_", "plan_gpu", "plan_optimized", "plan_batched",

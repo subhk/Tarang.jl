@@ -189,9 +189,11 @@ function get_global_size(dist::Distributor, dim::Int)
 
     # Fallback: Check if pencil_cache has any entries with shape info
     if !isempty(dist.pencil_cache)
-        for (shape_key, pencil) in dist.pencil_cache
-            if isa(shape_key, Tuple) && dim <= length(shape_key)
-                return shape_key[dim]
+        for (cache_key, _) in dist.pencil_cache
+            # Pencil cache keys are (global_shape, decomp_dims, dtype).
+            global_shape = first(cache_key)
+            if isa(global_shape, Tuple) && dim <= length(global_shape)
+                return global_shape[dim]
             end
         end
     end

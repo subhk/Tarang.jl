@@ -107,6 +107,11 @@ function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_dom
     end
     sort!(significant_modes; by = first, rev = true)
 
+    # If no modes survive the cutoff (including an identically-zero NCC), the
+    # multiplication operator is zero. Return the correctly shaped sparse
+    # matrix before the energy-retention logic, which has no first mode to keep.
+    isempty(significant_modes) && return matrix
+
     # Optional energy-retention cap: if max_ncc_terms is nothing, we can
     # additionally cap by CUMULATIVE energy fraction — keep enough modes
     # to capture 1 - ncc_cutoff² of the total power. This is another
@@ -218,4 +223,3 @@ end
 coeff_size(subsystem::Subsystem, field::ScalarField) = field_size(subsystem, field)
 coeff_size(subsystem::Subsystem, field::VectorField) = sum(field_size(subsystem, comp) for comp in field.components)
 coeff_size(subsystem::Subsystem, field::TensorField) = sum(field_size(subsystem, comp) for comp in vec(field.components))
-

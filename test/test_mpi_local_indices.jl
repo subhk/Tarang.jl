@@ -14,6 +14,17 @@ const nprocs = MPI.Comm_size(comm)
 @testset "MPI local_indices decomposition (np=$nprocs)" begin
     N = 16
 
+    @testset "global size from pencil cache" begin
+        coords = CartesianCoordinates("x", "y")
+        dist = Distributor(coords)
+        global_shape = (17, 19)
+
+        @test isempty(dist.layouts)
+        create_pencil(dist, global_shape, 1; dtype=Float64)
+        @test get_global_size(dist, 1) == global_shape[1]
+        @test get_global_size(dist, 2) == global_shape[2]
+    end
+
     @testset "2D: leading axis local, trailing axis decomposed" begin
         coords = CartesianCoordinates("x", "y")
         dist = Distributor(coords)

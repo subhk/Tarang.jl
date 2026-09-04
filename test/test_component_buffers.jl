@@ -22,10 +22,9 @@ using Tarang
 #
 # NOTE ON LAYOUTS: in :g (grid) layout a RealFourier component's data is real
 # (Matrix{Float64}); in :c (coefficient) layout it is the unnormalized complex
-# half-spectrum (Matrix{ComplexF64}). The buffer is allocated as `field.dtype`
-# (Float64 here). The :g path is therefore an exact round-trip; the :c path
-# currently has bugs that are pinned below (see the @test_broken / @test_throws
-# blocks and the report).
+# half-spectrum (Matrix{ComplexF64}). A component buffer must therefore follow
+# the element type of the selected layout, rather than always using the field's
+# grid-space dtype.
 # ============================================================================
 
 @testset "field_data_component_buffers.jl" begin
@@ -156,20 +155,8 @@ using Tarang
 
     # ------------------------------------------------------------------
     # 5. TensorField :g round-trip
-    #
-    # BUG (pinned): stack_tensor_components / unstack_tensor_components! slice
-    # the buffer with selectdim(selectdim(buf, 1, i), 2, j). After the first
-    # selectdim drops the leading tensor dimension, the SECOND selectdim's
-    # axis 2 is a DATA axis, not the second tensor index. For a buffer of
-    # shape (dim, dim, nx, ny) with nx != dim this raises a BoundsError; even
-    # when it does not raise it copies the wrong slab. The correct slicing is
-    # selectdim(selectdim(buf, 2, j), 1, i) (or view(buf, i, j, :, :)).
-    #
-    # We PIN the current broken behavior with @test_throws, and capture the
-    # INTENDED round-trip identity with @test_broken so it flips to a pass the
-    # moment the source is fixed.
     # ------------------------------------------------------------------
-    @testset "stack/unstack TensorField :g (round-trip currently broken)" begin
+    @testset "stack/unstack TensorField :g round-trip" begin
         dom = PeriodicDomain(8, 8)
         S = TensorField(dom, "S")
         @test size(S.components) == (2, 2)
@@ -182,28 +169,17 @@ using Tarang
             torig[(i, j)] = copy(pattern!(Tarang.get_grid_data(comp), 10 * i + j))
         end
 
-        # CURRENT BEHAVIOR: stacking on an 8x8 grid raises BoundsError due to
-        # the selectdim mis-ordering described above.
-        @test_throws BoundsError Tarang.stack_tensor_components(S; layout=:g)
-
-        # INTENDED BEHAVIOR (round-trip identity) once the slicing is fixed.
-        # This must not error here, so guard it in a try and assert via
-        # @test_broken on the round-trip success flag.
-        roundtrip_ok = false
-        try
-            buf = Tarang.stack_tensor_components(S; layout=:g)
-            for i in 1:2, j in 1:2
-                Tarang.get_grid_data(S.components[i, j]) .= 0.0
-            end
-            Tarang.unstack_tensor_components!(S, buf; layout=:g)
-            roundtrip_ok = all(
-                Tarang.get_grid_data(S.components[i, j]) == torig[(i, j)]
-                for i in 1:2, j in 1:2
-            )
-        catch
-            roundtrip_ok = false
+        buf = Tarang.stack_tensor_components(S; layout=:g)
+        @test size(buf) == (2, 2, 8, 8)
+        for i in 1:2, j in 1:2
+            @test collect(selectdim(selectdim(buf, 2, j), 1, i)) == torig[(i, j)]
+            Tarang.get_grid_data(S.components[i, j]) .= 0.0
         end
-        @test_broken roundtrip_ok
+
+        Tarang.unstack_tensor_components!(S, buf; layout=:g)
+        for i in 1:2, j in 1:2
+            @test Tarang.get_grid_data(S.components[i, j]) == torig[(i, j)]
+        end
     end
 
     # ------------------------------------------------------------------
@@ -224,15 +200,8 @@ using Tarang
 
     # ------------------------------------------------------------------
     # 7. VectorField :c (coefficient) layout
-    #
-    # BUG (pinned): the buffer is allocated as vf.dtype (Float64), but in :c
-    # layout a RealFourier component's data is the complex half-spectrum
-    # (Matrix{ComplexF64}). copyto! of a complex slice into the Float64 buffer
-    # raises InexactError whenever any coefficient has a nonzero imaginary part
-    # (i.e. essentially always for a non-constant field). A correct buffer would
-    # be allocated as complex(vf.dtype) for the :c layout.
     # ------------------------------------------------------------------
-    @testset "stack_components :c layout (currently broken for complex coeffs)" begin
+    @testset "stack/unstack VectorField :c round-trip" begin
         dom = PeriodicDomain(8, 8)
         u = VectorField(dom, "u")
         for (i, comp) in enumerate(u.components)
@@ -248,8 +217,52 @@ using Tarang
         # the complex half-spectrum genuinely carries imaginary content
         @test any(abs.(imag.(Tarang.get_coeff_data(u.components[1]))) .> 1e-8)
 
-        # CURRENT BEHAVIOR: Float64 buffer cannot hold the complex slice.
-        @test_throws InexactError Tarang.stack_components(u; layout=:c)
+        original = [copy(Tarang.get_coeff_data(comp)) for comp in u.components]
+        buf = Tarang.stack_components(u; layout=:c)
+        @test eltype(buf) == ComplexF64
+        for i in eachindex(u.components)
+            @test collect(selectdim(buf, 1, i)) == original[i]
+            Tarang.get_coeff_data(u.components[i]) .= 0
+        end
+
+        Tarang.unstack_components!(u, buf; layout=:c)
+        for i in eachindex(u.components)
+            @test Tarang.get_coeff_data(u.components[i]) == original[i]
+        end
+    end
+
+    # ------------------------------------------------------------------
+    # 8. TensorField :c (coefficient) layout
+    # ------------------------------------------------------------------
+    @testset "stack/unstack TensorField :c round-trip" begin
+        dom = PeriodicDomain(8, 8)
+        S = TensorField(dom, "S_coeff")
+        for i in 1:2, j in 1:2
+            comp = S.components[i, j]
+            Tarang.ensure_layout!(comp, :g)
+            g = Tarang.get_grid_data(comp)
+            nx, ny = size(g)
+            for a in 1:nx, b in 1:ny
+                g[a, b] = 10.0 * i + j + sin(2pi * (a - 1) / nx)
+            end
+        end
+        Tarang.ensure_layout!(S, :c)
+
+        original = Dict(
+            (i, j) => copy(Tarang.get_coeff_data(S.components[i, j]))
+            for i in 1:2, j in 1:2
+        )
+        buf = Tarang.stack_tensor_components(S; layout=:c)
+        @test eltype(buf) == ComplexF64
+        for i in 1:2, j in 1:2
+            @test collect(selectdim(selectdim(buf, 2, j), 1, i)) == original[(i, j)]
+            Tarang.get_coeff_data(S.components[i, j]) .= 0
+        end
+
+        Tarang.unstack_tensor_components!(S, buf; layout=:c)
+        for i in 1:2, j in 1:2
+            @test Tarang.get_coeff_data(S.components[i, j]) == original[(i, j)]
+        end
     end
 
 end

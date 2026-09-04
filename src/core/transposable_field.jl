@@ -154,14 +154,12 @@ function TransposableField(field::ScalarField; topology=nothing)
 
     N = length(gshape)
 
-    # Validate: 1D domains with MPI don't benefit from TransposableField
-    # TransposableField is designed for multi-dimensional distributed transposes
-    # For 1D, either the single dimension is local (no distribution needed) or
-    # it's distributed (regular 1D FFT handles this, no transpose needed)
+    # TransposableField is designed for multi-dimensional distributed
+    # transposes. Tarang's spectral Domain contract requires one process in 1D.
     if N == 1 && dist.size > 1
         error("TransposableField is not supported for 1D domains with MPI (nprocs=$(dist.size)). " *
               "1D domains have only one dimension which cannot be transposed. " *
-              "Use regular Field with PencilFFTs for 1D distributed FFTs, or use a single process.")
+              "Use a single process for 1D spectral transforms.")
     end
     # Spectral transforms use complex storage at the wrapped field's precision.
     # A Distributor may own fields with a dtype different from its default dtype.

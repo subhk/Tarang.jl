@@ -8,124 +8,40 @@
 #   ./test/run_mpi_tests.sh 4 --gpu   # Run with 4 processes including GPU tests
 #
 
-set -e
+set -euo pipefail
 
-# Default number of processes
-NPROCS=${1:-4}
-
-# Check for GPU flag
-GPU_FLAG=""
-if [[ "$2" == "--gpu" ]] || [[ "$1" == "--gpu" ]]; then
-    GPU_FLAG="--gpu"
-    if [[ "$1" == "--gpu" ]]; then
-        NPROCS=4
-    fi
-fi
-
-# Colors for output
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m' # No Color
-
-# Get script directory
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-
-echo -e "${BLUE}======================================${NC}"
-echo -e "${BLUE}  Tarang.jl MPI Test Suite${NC}"
-echo -e "${BLUE}======================================${NC}"
-echo ""
-echo -e "Project directory: ${PROJECT_DIR}"
-echo -e "Number of MPI processes: ${YELLOW}${NPROCS}${NC}"
-echo ""
-
-# Check for mpiexec
-if ! command -v mpiexec &> /dev/null; then
-    echo -e "${RED}Error: mpiexec not found. Please install MPI.${NC}"
-    echo "  On macOS: brew install open-mpi"
-    echo "  On Ubuntu: sudo apt-get install openmpi-bin libopenmpi-dev"
-    exit 1
-fi
-
-# Check Julia
-if ! command -v julia &> /dev/null; then
-    echo -e "${RED}Error: julia not found.${NC}"
-    exit 1
-fi
-
-echo -e "${BLUE}MPI implementation:${NC}"
-mpiexec --version | head -1
-echo ""
-
-# Function to run a test file
-run_test() {
-    local test_file=$1
-    local test_name=$(basename "$test_file" .jl)
-
-    echo -e "${YELLOW}Running: ${test_name}${NC}"
-    echo -e "Command: mpiexec -n ${NPROCS} julia --project=${PROJECT_DIR} ${test_file}"
-    echo ""
-
-    if mpiexec -n ${NPROCS} julia --project="${PROJECT_DIR}" "${test_file}"; then
-        echo -e "${GREEN}✓ ${test_name} passed${NC}"
-        echo ""
-        return 0
-    else
-        echo -e "${RED}✗ ${test_name} failed${NC}"
-        echo ""
-        return 1
-    fi
-}
-
-# Track results
-PASSED=0
-FAILED=0
-FAILED_TESTS=""
-
-# List of MPI test files
-MPI_TESTS=(
-    "${SCRIPT_DIR}/test_mpi_distributor.jl"
-    "${SCRIPT_DIR}/test_mpi_field_initialization.jl"
-    "${SCRIPT_DIR}/test_mpi_algebraic_constraints.jl"
-    "${SCRIPT_DIR}/test_mpi_lazy_rhs_fourier.jl"
-    "${SCRIPT_DIR}/test_mpi_dealiasing_product.jl"
-    "${SCRIPT_DIR}/test_stochastic_forcing_mpi.jl"
-    "${SCRIPT_DIR}/test_distributed_gpu_transpose.jl"
-)
-
-echo -e "${BLUE}======================================${NC}"
-echo -e "${BLUE}  Running MPI Tests${NC}"
-echo -e "${BLUE}======================================${NC}"
-echo ""
-
-for test_file in "${MPI_TESTS[@]}"; do
-    if [[ -f "$test_file" ]]; then
-        if run_test "$test_file"; then
-            ((PASSED++))
-        else
-            ((FAILED++))
-            FAILED_TESTS="${FAILED_TESTS}\n  - $(basename "$test_file")"
-        fi
-    else
-        echo -e "${YELLOW}Warning: Test file not found: ${test_file}${NC}"
-    fi
+NPROCS=4
+RUN_GPU=false
+for arg in "$@"; do
+    case "$arg" in
+        --gpu)
+            RUN_GPU=true
+            ;;
+        *[!0-9]*|'')
+            echo "Usage: $0 [nprocs] [--gpu]" >&2
+            exit 2
+            ;;
+        *)
+            NPROCS=$arg
+            ;;
+    esac
 done
 
-# Summary
-echo -e "${BLUE}======================================${NC}"
-echo -e "${BLUE}  Test Summary${NC}"
-echo -e "${BLUE}======================================${NC}"
-echo ""
-echo -e "Total tests: $((PASSED + FAILED))"
-echo -e "${GREEN}Passed: ${PASSED}${NC}"
-echo -e "${RED}Failed: ${FAILED}${NC}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+JULIA_BIN=${JULIA:-julia}
 
-if [[ $FAILED -gt 0 ]]; then
-    echo -e "\n${RED}Failed tests:${FAILED_TESTS}${NC}"
+if ! command -v "$JULIA_BIN" >/dev/null 2>&1; then
+    echo "Error: Julia executable not found: $JULIA_BIN" >&2
     exit 1
-else
-    echo -e "\n${GREEN}All MPI tests passed!${NC}"
-    exit 0
+fi
+
+# `run_mpi_ci.jl` consumes test/file_lists.jl, the same registry CI and the
+# inventory test use.  Keep this shell file as a convenience entry point only.
+TARANG_MPI_FILESET=mpi "$JULIA_BIN" --project="$PROJECT_DIR" \
+    "$SCRIPT_DIR/run_mpi_ci.jl" "$NPROCS"
+
+if [[ "$RUN_GPU" == true ]]; then
+    TARANG_MPI_FILESET=distributed_gpu "$JULIA_BIN" --project="$PROJECT_DIR" \
+        "$SCRIPT_DIR/run_mpi_ci.jl" "$NPROCS"
 fi

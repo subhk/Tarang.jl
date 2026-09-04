@@ -165,19 +165,15 @@ end
         nc_nil = NCCData()
         @test Tarang.build_ncc_matrix(nc_nil, sp, field.domain, field.domain) === nothing
 
-        # All-zero coeffs: the docstring promises "for coeff_max == 0
-        # (all-zero NCC), treat as zero — build_ncc_matrix returns an empty
-        # sparse matrix." That contract is currently BROKEN. With all-zero
-        # coeffs `significant_modes` is empty, but the energy-cap branch
-        # (taken when max_ncc_terms === nothing) forces `n_to_use = max(cap, 1)
-        # = 1` (subproblem_ncc.jl:135), so the accumulation loop then indexes
-        # `significant_modes[1]` out of bounds -> UndefRefError. See line 130-135.
+        # All-zero coeffs produce the correctly shaped empty multiplication matrix.
         nc_zero = NCCData()
         nc_zero.coeffs = zeros(ComplexF64, N)
-        @test_broken (Tarang.build_ncc_matrix(nc_zero, sp, field.domain, field.domain); true)
+        Mzero = Tarang.build_ncc_matrix(nc_zero, sp, field.domain, field.domain)
+        @test Mzero !== nothing
+        @test size(Mzero) == (N, N)
+        @test nnz(Mzero) == 0
 
-        # WORKAROUND path: passing max_ncc_terms avoids the max(cap,1) branch,
-        # so the all-zero NCC correctly yields an empty matrix of the right shape.
+        # The explicit max-term path has the same result.
         Mz = Tarang.build_ncc_matrix(nc_zero, sp, field.domain, field.domain; max_ncc_terms=4)
         @test Mz !== nothing
         @test size(Mz) == (N, N)

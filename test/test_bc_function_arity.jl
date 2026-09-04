@@ -26,8 +26,20 @@ const _BCA = Tarang
     coords_2d = Dict{String, Any}("x" => [0.0, 0.5], "y" => [1.0, 2.0])
 
     @testset "space callback: error inside the body propagates" begin
-        boom(x) = error("boom inside user BC")
-        @test_throws ErrorException _BCA._evaluate_space_function_expression(boom, coords_1d)
+        sentinel = ErrorException("boom inside user BC")
+        calls = Ref(0)
+        function boom(::AbstractDict)
+            calls[] += 1
+            throw(sentinel)
+        end
+        caught = try
+            _BCA._evaluate_space_function_expression(boom, coords_1d)
+            nothing
+        catch err
+            err
+        end
+        @test caught === sentinel
+        @test calls[] == 1
     end
 
     @testset "space callback: never returns the Function object as a value" begin
@@ -43,8 +55,20 @@ const _BCA = Tarang
     end
 
     @testset "time callback: error inside the body propagates" begin
-        boom(t, x) = error("boom inside user BC")
-        @test_throws ErrorException _BCA._evaluate_function_expression(boom, 0.25, coords_1d)
+        sentinel = ErrorException("boom inside user BC")
+        calls = Ref(0)
+        function boom(::Real, ::AbstractDict)
+            calls[] += 1
+            throw(sentinel)
+        end
+        caught = try
+            _BCA._evaluate_function_expression(boom, 0.25, coords_1d)
+            nothing
+        catch err
+            err
+        end
+        @test caught === sentinel
+        @test calls[] == 1
     end
 
     @testset "time callback: unsupported signature raises a clear error" begin

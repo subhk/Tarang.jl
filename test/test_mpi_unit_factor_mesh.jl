@@ -66,6 +66,49 @@ end
     end
 end
 
+@testset "invalid full/over-dimensional non-unit meshes fail fast (rank=$rank)" begin
+    if nprocs != 4
+        rank == 0 && @warn "over-dimensional mesh test requires exactly 4 ranks"
+    else
+        coords_1d = CartesianCoordinates("x")
+        err_1d = try
+            Distributor(coords_1d; mesh=(2, 2), dtype=Float64, architecture=CPU())
+            nothing
+        catch e
+            e
+        end
+        @test err_1d isa ArgumentError
+        @test occursin("exceeds domain dimensionality", sprint(showerror, err_1d))
+
+        coords_2d = CartesianCoordinates("x", "y")
+        dist_2d = try
+            Distributor(coords_2d; mesh=(2, 2), dtype=Float64, architecture=CPU())
+        catch e
+            e
+        end
+        @test dist_2d isa Distributor
+
+        if dist_2d isa Distributor
+            # Full decomposition remains valid for data-only PencilArrays.
+            storage = create_pencil(dist_2d, (8, 8), nothing; dtype=Float64)
+            @test MPI.Allreduce(length(storage), MPI.SUM, comm) == 8 * 8
+
+            bx = RealFourier(coords_2d["x"]; size=8, bounds=(0.0, 2π))
+            by = RealFourier(coords_2d["y"]; size=8, bounds=(0.0, 2π))
+            domain_err = try
+                Domain(dist_2d, (bx, by))
+                nothing
+            catch e
+                e
+            end
+            @test domain_err isa ArgumentError
+            @test occursin("must be less than spectral domain dimensionality",
+                           sprint(showerror, domain_err))
+            @test dist_2d.pencil_fft_plan === nothing
+        end
+    end
+end
+
 if !MPI.Finalized()
     MPI.Finalize()
 end
