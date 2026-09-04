@@ -184,7 +184,7 @@ These all raise clear errors; none of them silently produce wrong answers.
 | **Chebyshev axis not first** | The "Reorder your bases" error above. | Put the Chebyshev axis first. |
 | **Mesh rank == domain rank** | `PencilFFT plan creation failed with N MPI processes.` | Use a mesh with one fewer dimension than the domain. |
 | **`set!(field, ::Function)`** | `DimensionMismatch` (it builds the *global* meshgrid and writes it into the *local* slab). | Use `local_grids(dist, bases...)` and broadcast into `get_grid_data(field)`. |
-| **Grid-space `set_scales!` / `change_scales!`** | `Grid-space resampling of a distributed field ... is not supported under MPI` | Resample in coefficient space, or set the scales before distributing. |
+| **Resolution-changing `set_scales!`, `preset_scales!`, or `change_scales!`** | The operation throws before changing field metadata or storage; distributed transform plans have a fixed global shape. | Construct the field/domain at the required basis resolution. For nonlinear terms, use Tarang's automatic distributed padded dealiasing path. |
 | **Chebyshev derivative on the explicit (RHS) side** | First step errors: `Lazy RHS: cannot differentiate along the non-Fourier axis 1 (ChebyshevT) of a DISTRIBUTED field` | Move the term to the implicit (L) side. RHS derivatives along **Fourier** axes are fine. |
 
 The last one is worth spelling out: on a Chebyshev–Fourier domain, `-u⋅∇(u)` and `-u⋅∇(T)`

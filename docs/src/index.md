@@ -84,8 +84,8 @@ On native Windows, launch through `MPI.mpiexec()` as shown in the
 GPU support is the one opt-in: CUDA is a weak dependency loaded through a package extension, so
 add it only if you want it.
 
-```julia
-Pkg.add("CUDA")     # enables the GPU backend (TarangCUDAExt)
+```bash
+julia --project=@v#.# -e 'using Pkg; Pkg.add("CUDA")' # enables TarangCUDAExt
 ```
 
 ### 1D Diffusion
@@ -333,7 +333,7 @@ Depth = 1
 |-------|---------|----------|
 | **Default** | `Pkg.add(url="...")` | Single-process CPU |
 | **MPI** | Add `MPI`; use `mpiexecjl` (Unix/WSL) or `MPI.mpiexec()` (Windows) | Multi-process CPU with the matching MPI runtime |
-| **GPU** | `Pkg.add("CUDA")` | NVIDIA GPU acceleration (loads `TarangCUDAExt`) |
+| **GPU** | `julia --project=@v#.# -e 'using Pkg; Pkg.add("CUDA")'` | NVIDIA GPU acceleration (loads `TarangCUDAExt`) |
 | **Cluster MPI** | `MPIPreferences.use_system_binary()` | Bind MPI.jl to the cluster's own MPI |
 
 Tarang installs MPI, MPIPreferences, PencilArrays, PencilFFTs and KernelAbstractions transitively.

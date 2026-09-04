@@ -33,11 +33,16 @@ using Pkg
 # Basic installation
 Pkg.add(url="https://github.com/subhk/Tarang.jl")
 
-# With GPU support
-Pkg.add(["CUDA", "KernelAbstractions"])
-
 # With MPI support
 Pkg.add(["MPI", "PencilArrays", "PencilFFTs"])
+```
+
+Install the optional CUDA extension in Julia's versioned default environment.
+It remains available through Julia's environment stack without modifying this
+project's `Project.toml` or `Manifest.toml`:
+
+```bash
+julia --project=@v#.# -e 'using Pkg; Pkg.add("CUDA")'
 ```
 
 Requires Julia 1.10 or later. GPU support requires an NVIDIA GPU with CUDA. MPI requires OpenMPI or MPICH.
@@ -65,27 +70,58 @@ run!(solver; stop_time=1.0)
 ```julia
 using Tarang
 
-# Channel domain: periodic in x (Fourier), bounded in z (Chebyshev)
-domain = ChannelDomain(256, 64; Lx=4.0, Lz=1.0, dealias=3/2)
+Lx, Lz = 4.0, 1.0
+Nx, Nz = 32, 16
+Rayleigh, Prandtl = 2e4, 1.0
 
-p = ScalarField(domain, "p")               # Pressure
-b = ScalarField(domain, "b")               # Buoyancy
-u = VectorField(domain, "u")               # Velocity
+coords = CartesianCoordinates("x", "z")
+dist = Distributor(coords; dtype=Float64, device=CPU())
+xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx), dealias=3/2)
+zbasis = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, Lz), dealias=3/2)
+domain = Domain(dist, (xbasis, zbasis))
 
-problem = IVP(variables)
-add_parameters!(problem, kappa=kappa, nu=nu, Lz=Lz)
+p = ScalarField(domain, "p")
+T = ScalarField(domain, "T")
+u = VectorField(domain, "u")
 
-add_equation!(problem, "div(u) + tau_p = 0")
-add_equation!(problem, "dt(b) - kappa*lap(b) + lift(tau_b1, -1) + lift(tau_b2, -2) = -u dot grad(b)")
-add_equation!(problem, "dt(u) - nu*lap(u) + grad(p) + lift(tau_u1, -1) + lift(tau_u2, -2) = -u dot grad(u) + b*ez")
+# Tau fields supply the degrees of freedom used to enforce the wall conditions.
+tau_p  = ScalarField(dist, "tau_p", (), Float64)
+tau_T1 = ScalarField(dist, "tau_T1", (xbasis,), Float64)
+tau_T2 = ScalarField(dist, "tau_T2", (xbasis,), Float64)
+tau_u1 = VectorField(dist, coords, "tau_u1", (xbasis,), Float64)
+tau_u2 = VectorField(dist, coords, "tau_u2", (xbasis,), Float64)
 
-fixed_value!(problem, "b", "z", 0.0, Lz)   # Hot bottom
-fixed_value!(problem, "b", "z", Lz, 0.0)   # Cold top
-no_slip!(problem, "u", "z", 0.0)            # No-slip bottom
-no_slip!(problem, "u", "z", Lz)             # No-slip top
+_, ez = unit_vector_fields(coords, dist)
+lift_basis = derivative_basis(zbasis, 1)
+τ_lift(A) = lift(A, lift_basis, -1)
+grad_u = grad(u) + ez * τ_lift(tau_u1)
+grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-solver = InitialValueSolver(problem, RK222(); dt=0.125)
-run!(solver; stop_time=50.0, log_interval=100)
+problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+add_parameters!(problem,
+    nu=Prandtl, buoy=Rayleigh * Prandtl, ez=ez,
+    grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
+
+add_equation!(problem, "trace(grad_u) + tau_p = 0")
+add_equation!(problem, "∂t(T) - div(grad_T) + τ_lift(tau_T2) = -u⋅∇(T)")
+add_equation!(problem,
+    "∂t(u) - nu*div(grad_u) + ∇(p) - buoy*T*ez + τ_lift(tau_u2) = -u⋅∇(u)")
+
+add_bc!(problem, "T(z=0) = 1")
+add_bc!(problem, "T(z=$Lz) = 0")
+add_bc!(problem, "u(z=0) = 0")
+add_bc!(problem, "u(z=$Lz) = 0")
+add_bc!(problem, "integ(p) = 0")
+
+# Start from the conduction profile with a small wall-compatible perturbation.
+_, z = local_grids(dist, xbasis, zbasis)
+fill_random!(T, "g"; seed=42, distribution="normal", scale=1e-3)
+get_grid_data(T) .*= z' .* (1.0 .- z')
+get_grid_data(T) .+= 1.0 .- z'
+ensure_layout!(T, :c)
+
+solver = InitialValueSolver(problem, RK222(); dt=1e-4)
+run!(solver; stop_time=1e-3, log_interval=10)
 ```
 
 See [`examples/`](examples/) for complete runnable scripts including QG turbulence, rotating shallow water, and more.
@@ -141,7 +177,7 @@ julia --project=. -e 'using Pkg; Pkg.test()'   # CPU test suite
 julia --project=. test/run_mpi_ci.jl 4          # MPI tests across 4 ranks
 ```
 
-CPU and MPI tests run on GitHub Actions; GPU tests (CUDA + NCCL) run on JuliaGPU
-Buildkite (`.buildkite/pipeline.yml`), since GitHub-hosted runners have no GPU.
-See the [testing guide](docs/src/pages/testing.md) for running GPU/MPI tests
-locally and for enabling GPU CI.
+CPU and MPI tests run on GitHub Actions; GPU tests (CUDA) run on a self-hosted
+Buildkite agent (`.buildkite/pipeline.yml`), since GitHub-hosted runners have no
+GPU. See the [testing guide](docs/src/pages/testing.md) for running GPU/MPI tests
+locally, for the agent requirements, and for what triggers a GPU build.
