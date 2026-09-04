@@ -640,52 +640,60 @@ or a `BoundsError` into a silent degradation to a shorter (wrong) call.
 _is_signature_mismatch(e, func, nargs::Int) =
     e isa MethodError && e.f === func && length(e.args) == nargs
 
+"""Try callback signatures in order without catching errors raised inside a callback body."""
+function _try_callback_candidates(func::Function, candidates)
+    for candidate in candidates
+        applicable(func, candidate...) || continue
+        return true, func(candidate...)
+    end
+    return false, nothing
+end
+
 function _evaluate_function_expression(func::Function, current_time, coords)
     # Speculative probe of the container convention `func(t, coords)`. This one probe must
     # stay permissive: a two-argument callback written as `func(t, x)` is indistinguishable
     # from `func(t, coords)` by dispatch, so it gets *called* here with the coordinate
-    # container and can fail from inside its own body. Every probe after this one is strict.
+    # container and can fail from inside its own body. Preserve that first failure: if no
+    # coordinate-style signature is applicable below, it is the callback's real error.
     try
         return func(current_time, coords)
     catch e
         @debug "BC callback did not accept the (time, coords) form" exception = e
-    end
 
-    x = _coord_value(coords, "x")
-    y = _coord_value(coords, "y")
-    z = _coord_value(coords, "z")
-    r = _coord_value(coords, "r")
-    theta = _coord_value(coords, "θ")
-    if theta === nothing
-        theta = _coord_value(coords, "theta")
-    end
-    phi = _coord_value(coords, "φ")
-    if phi === nothing
-        phi = _coord_value(coords, "phi")
-    end
-
-    args = if x !== nothing && y !== nothing && z !== nothing
-        (current_time, x, y, z)
-    elseif x !== nothing && y !== nothing
-        (current_time, x, y)
-    elseif r !== nothing && theta !== nothing && phi !== nothing
-        (current_time, r, theta, phi)
-    elseif r !== nothing && theta !== nothing
-        (current_time, r, theta)
-    elseif x !== nothing
-        (current_time, x)
-    else
-        (current_time,)
-    end
-
-    # Fall back to progressively shorter signatures, but only on a genuine dispatch miss.
-    candidates = length(args) == 1 ? (args, ()) : (args, (current_time,), ())
-    for candidate in candidates
-        try
-            return func(candidate...)
-        catch e
-            _is_signature_mismatch(e, func, length(candidate)) || rethrow()
+        x = _coord_value(coords, "x")
+        y = _coord_value(coords, "y")
+        z = _coord_value(coords, "z")
+        r = _coord_value(coords, "r")
+        theta = _coord_value(coords, "θ")
+        if theta === nothing
+            theta = _coord_value(coords, "theta")
         end
+        phi = _coord_value(coords, "φ")
+        if phi === nothing
+            phi = _coord_value(coords, "phi")
+        end
+
+        args = if x !== nothing && y !== nothing && z !== nothing
+            (current_time, x, y, z)
+        elseif x !== nothing && y !== nothing
+            (current_time, x, y)
+        elseif r !== nothing && theta !== nothing && phi !== nothing
+            (current_time, r, theta, phi)
+        elseif r !== nothing && theta !== nothing
+            (current_time, r, theta)
+        elseif x !== nothing
+            (current_time, x)
+        else
+            (current_time,)
+        end
+
+        candidates = length(args) == 1 ? (args, ()) : (args, (current_time,), ())
+        matched, value = _try_callback_candidates(func, candidates)
+        matched && return value
+
+        # The container call entered the callback body but no alternative signature
+        # applies, so retain the exact exception object and its original backtrace.
+        _is_signature_mismatch(e, func, 2) || rethrow()
     end
 
     throw(ArgumentError(
@@ -696,53 +704,51 @@ end
 
 function _evaluate_space_function_expression(func::Function, coords)
     # Speculative probe of the container convention `func(coords)`; see the note in
-    # `_evaluate_function_expression`. Only this first probe is permissive.
+    # `_evaluate_function_expression`. Preserve its failure unless a coordinate-style
+    # signature is actually applicable.
     try
         return func(coords)
     catch e
         @debug "BC callback did not accept the (coords,) form" exception = e
-    end
 
-    x = _coord_value(coords, "x")
-    y = _coord_value(coords, "y")
-    z = _coord_value(coords, "z")
-    r = _coord_value(coords, "r")
-    theta = _coord_value(coords, "θ")
-    if theta === nothing
-        theta = _coord_value(coords, "theta")
-    end
-    phi = _coord_value(coords, "φ")
-    if phi === nothing
-        phi = _coord_value(coords, "phi")
-    end
-
-    args = if x !== nothing && y !== nothing && z !== nothing
-        (x, y, z)
-    elseif x !== nothing && y !== nothing
-        (x, y)
-    elseif r !== nothing && theta !== nothing && phi !== nothing
-        (r, theta, phi)
-    elseif r !== nothing && theta !== nothing
-        (r, theta)
-    elseif x !== nothing
-        (x,)
-    elseif r !== nothing
-        (r,)
-    elseif theta !== nothing
-        (theta,)
-    elseif phi !== nothing
-        (phi,)
-    else
-        ()
-    end
-
-    candidates = isempty(args) ? (args,) : (args, ())
-    for candidate in candidates
-        try
-            return func(candidate...)
-        catch e
-            _is_signature_mismatch(e, func, length(candidate)) || rethrow()
+        x = _coord_value(coords, "x")
+        y = _coord_value(coords, "y")
+        z = _coord_value(coords, "z")
+        r = _coord_value(coords, "r")
+        theta = _coord_value(coords, "θ")
+        if theta === nothing
+            theta = _coord_value(coords, "theta")
         end
+        phi = _coord_value(coords, "φ")
+        if phi === nothing
+            phi = _coord_value(coords, "phi")
+        end
+
+        args = if x !== nothing && y !== nothing && z !== nothing
+            (x, y, z)
+        elseif x !== nothing && y !== nothing
+            (x, y)
+        elseif r !== nothing && theta !== nothing && phi !== nothing
+            (r, theta, phi)
+        elseif r !== nothing && theta !== nothing
+            (r, theta)
+        elseif x !== nothing
+            (x,)
+        elseif r !== nothing
+            (r,)
+        elseif theta !== nothing
+            (theta,)
+        elseif phi !== nothing
+            (phi,)
+        else
+            ()
+        end
+
+        candidates = isempty(args) ? (args,) : (args, ())
+        matched, value = _try_callback_candidates(func, candidates)
+        matched && return value
+
+        _is_signature_mismatch(e, func, 1) || rethrow()
     end
 
     throw(ArgumentError(

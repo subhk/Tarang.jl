@@ -18,7 +18,7 @@ julia --project=. test/test_specific.jl
 
 ### With MPI
 
-The multi-rank MPI tests each run in their own `mpiexec` world, via a driver
+The multi-rank MPI tests each run in their own MPI world, via a driver
 (CI exercises 1, 2, and 4 ranks):
 
 ```bash
@@ -33,7 +33,7 @@ GPU tests need an NVIDIA GPU and run on JuliaGPU Buildkite CI (see
 CUDA host:
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.add("CUDA")'   # CUDA is a weak dependency
+julia --project=@v#.# -e 'using Pkg; Pkg.add("CUDA")' # keep this checkout clean
 julia --project=. test/run_gpu_ci.jl                # single-process GPU tests
 julia --project=. test/run_gpu_fc_2d.jl             # strict focused 2D FC validation
 # distributed (NCCL) tests across, e.g., 2 GPUs:
@@ -218,22 +218,114 @@ CPU tests run on **GitHub Actions** for every push and pull request:
 - the optional CPU feature tests (`TARANG_ONLY_OPTIONAL_TESTS=true`);
 - the MPI suite via `test/run_mpi_ci.jl` at 1, 2, and 4 ranks.
 
-GPU tests cannot run on GitHub-hosted runners (no NVIDIA GPU), so they run on the
-**JuliaGPU Buildkite** CI, defined in `.buildkite/pipeline.yml`:
+GPU tests cannot run on GitHub-hosted runners (no NVIDIA GPU), so they run on
+**Buildkite**, defined in `.buildkite/pipeline.yml`:
 
-- a single-GPU job (`test/run_gpu_ci.jl`) on Julia 1.10/1.11/1.12;
-- a multi-GPU NCCL job (`test/run_mpi_ci.jl` with the `distributed_gpu` fileset, 2 ranks).
+- a single-GPU job (`test/run_gpu_ci.jl`) on Julia 1.10/1.11/1.12.
 
-Because CUDA is a *weak* dependency and NCCL is loaded dynamically — which keeps
-CPU installs lean — these jobs `Pkg.add` CUDA/NCCL before running instead of using
-the standard package test target.
+Because CUDA is a *weak* dependency — which keeps CPU installs lean — that job
+`Pkg.add`s CUDA before running instead of using the standard package test target.
 
-!!! note "Enabling GPU CI"
-    The Buildkite pipeline is inert until the repository is added to the JuliaGPU
-    Buildkite organization (free for open-source packages): ask on the Julia Slack
-    `#gpu` channel for a Buildkite admin to create the pipeline, with the Buildkite
-    GitHub App installed on the hosting account. The pipeline file is then run
-    automatically on each push/PR.
+!!! note "The multi-GPU NCCL job is currently disabled"
+    A second step exercising `DISTRIBUTED_GPU_TEST_FILES` (the CUDA + NCCL
+    distributed transpose, `test/run_mpi_ci.jl` with the `distributed_gpu`
+    fileset at 2 ranks) is commented out at the bottom of
+    `.buildkite/pipeline.yml`. It needs two physical GPUs on one agent host.
+    Re-enabling is an uncomment plus a `multigpu=true` agent tag; the file spells
+    out both. The test files themselves are untouched — they stay in
+    `test/file_lists.jl`, `run_mpi_ci.jl` still accepts the fileset, and
+    `test/test_gpu_test_files_reachable.jl` still parse-checks them on CPU CI.
+
+### Which agent runs it
+
+Buildkite provides orchestration, not compute: no Buildkite-hosted agent shape
+offers a GPU, so the job needs a self-hosted agent on a machine with an NVIDIA
+card. Buildkite's free plan supports self-hosted agents, and this pipeline is
+four jobs at most, so no paid plan is required.
+
+The queue is parameterized, so the same file works on a personal Buildkite
+organization and on JuliaGPU's shared agents with no edit:
+
+| `TARANG_GPU_QUEUE` | Queue used |
+|---|---|
+| unset | `default` — a self-hosted agent that sets no queue |
+| `juliagpu` | JuliaGPU's shared GPU pool |
+
+Set it under Pipeline Settings > Environment Variables.
+
+The agent must also carry a `cuda` tag, since the step requires `cuda: "*"`:
+
+```bash
+buildkite-agent start --tags "queue=default,cuda=true"
+```
+
+!!! warning "An untagged agent looks like a hang, not an error"
+    A step whose agent tags match no connected agent neither fails nor skips —
+    the job sits queued until `timeout_in_minutes` expires. Forgetting the `cuda`
+    tag therefore presents as a 120-minute stall rather than a configuration
+    error.
+
+### When it runs
+
+The Buildkite GitHub App creates a build for every push and every pull request,
+but the GPU job does not run on all of them. GPU agent time is scarce, and on a
+shared organization the pipeline settings that would narrow the trigger are not
+necessarily ours to change, so `.buildkite/pipeline.yml` guards the step with an
+`if:` expression instead:
+
+| Build source | Runs the GPU job on |
+|---|---|
+| push / pull request (Buildkite GitHub App) | `main` only |
+| Buildkite UI, "New Build" button | any branch |
+| GitHub Actions, the **GPU (Buildkite)** workflow | any branch |
+
+A build whose steps are all filtered out finishes green with no jobs, so pull
+request builds stay cheap instead of erroring.
+
+To run the GPU suite on a branch before merging it, dispatch the **GPU
+(Buildkite)** workflow (`.github/workflows/gpu-buildkite.yml`) from the GitHub
+Actions tab and give it the branch name. It calls the Buildkite REST API, which
+produces an `api`-source build that the guard lets through on any branch. That
+workflow needs a one-time `BUILDKITE_API_TOKEN` repository secret (a Buildkite
+token with the `write_builds` scope) and, if the pipeline slug differs from the
+default, the `BUILDKITE_ORG` / `BUILDKITE_PIPELINE` repository variables — its
+header comment spells out the setup. Pressing "New Build" in the Buildkite UI
+does the same thing without any GitHub-side configuration.
+
+Add `[skip tests]` to a commit message to suppress the GPU job regardless of how
+the build was created.
+
+### Reporting a GPU run by hand
+
+If the GPU machine is not running an agent — or you just want a one-off result on
+a branch — `scripts/gpu_ci_report.sh` runs the suite locally and posts the outcome
+to GitHub as a commit status, which shows up as a check next to the commit and on
+any pull request containing it:
+
+```bash
+./scripts/gpu_ci_report.sh                 # test HEAD, post a gpu/cuda status
+./scripts/gpu_ci_report.sh --sha 6a4da42   # require the checkout to be this commit
+./scripts/gpu_ci_report.sh --no-status     # run only, post nothing
+./scripts/gpu_ci_report.sh --gist          # also upload the log as a secret gist
+```
+
+The reporter only runs from a clean working tree (including no untracked files),
+and `--sha` must resolve to the checkout's current `HEAD`. To report another
+commit, check out that commit first. These preconditions ensure the status can
+only describe the exact source tree the GPU suite executed.
+
+It needs `gh` authenticated with a token carrying `repo:status` (the plain `repo`
+scope covers it), and CUDA available in Julia's stacked default environment.
+Install it with `julia --project=@v#.# -e 'using Pkg; Pkg.add("CUDA")'`; installing
+there keeps this checkout clean, which the reporter requires.
+
+!!! warning "It refuses to run without a working GPU, by design"
+    Every file in `GPU_TEST_FILES` self-guards with `CUDA.functional()` and exits
+    0 when no device is present. That is right for CI, but it means running the
+    suite on a CUDA-less machine yields a *vacuous pass*: every test skipped, exit
+    code 0, and a green status for a GPU suite that never touched a GPU. The
+    script therefore hard-gates on `CUDA.functional()` and reports a missing
+    device as an `error` status, never as `success`.
 
 ## See Also
 

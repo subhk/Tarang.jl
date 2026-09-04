@@ -41,12 +41,14 @@ function stack_components(vf::VectorField; layout::Symbol=:g,
 
     buffer_shape = (length(vf.components), size(local_sample)...)
     buffer_arch = arch
+    buffer_eltype = eltype(local_sample)
     needs_new = force || vf.component_buffer === nothing ||
                 size(vf.component_buffer) != buffer_shape ||
+                eltype(vf.component_buffer) != buffer_eltype ||
                 architecture(vf.component_buffer) != buffer_arch
 
     if needs_new
-        vf.component_buffer = zeros(buffer_arch, vf.dtype, buffer_shape...)
+        vf.component_buffer = zeros(buffer_arch, buffer_eltype, buffer_shape...)
     end
 
     for (i, component) in enumerate(vf.components)
@@ -138,18 +140,20 @@ function stack_tensor_components(tf::TensorField; layout::Symbol=:g,
     buffer_shape = (dim, dim, size(local_sample)...)
 
     buffer_arch = arch
+    buffer_eltype = eltype(local_sample)
     needs_new = force || tf.component_buffer === nothing ||
                 size(tf.component_buffer) != buffer_shape ||
+                eltype(tf.component_buffer) != buffer_eltype ||
                 architecture(tf.component_buffer) != buffer_arch
 
     if needs_new
-        tf.component_buffer = zeros(buffer_arch, tf.dtype, buffer_shape...)
+        tf.component_buffer = zeros(buffer_arch, buffer_eltype, buffer_shape...)
     end
 
     for i in 1:dim, j in 1:dim
         src = layout == :g ? get_grid_data(tf.components[i,j]) : get_coeff_data(tf.components[i,j])
         src_local = using_pencils ? get_local_data(src) : src
-        slice = selectdim(selectdim(tf.component_buffer, 1, i), 2, j)
+        slice = selectdim(selectdim(tf.component_buffer, 2, j), 1, i)
         copyto!(slice, src_local)
     end
 
@@ -176,7 +180,7 @@ function unstack_tensor_components!(tf::TensorField, buffer::AbstractArray; layo
     for i in 1:dim, j in 1:dim
         component = tf.components[i, j]
         ensure_layout!(component, layout)
-        slice = selectdim(selectdim(buffer, 1, i), 2, j)
+        slice = selectdim(selectdim(buffer, 2, j), 1, i)
         if using_pencils
             dest = layout == :g ? get_local_data(get_grid_data(component)) : get_local_data(get_coeff_data(component))
             if buffer_arch != CPU()

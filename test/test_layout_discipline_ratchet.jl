@@ -96,7 +96,7 @@ end
 
     # Current count. Lower it when a site is folded into `grid_data!`/`coeff_data!`
     # or removed; never raise it.
-    LAYOUT_RATCHET = 287
+    LAYOUT_RATCHET = 277
 
     if total > LAYOUT_RATCHET
         worst = sort(collect(per_file); by = kv -> -kv[2])

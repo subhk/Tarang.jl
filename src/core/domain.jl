@@ -563,10 +563,31 @@ function coefficient_local_ranges(domain::Domain,
     cshape = get_coefficient_shape_for_context(domain, dist, dtype)
 
     if dist.size > 1 && dist.use_pencil_arrays
-        bundle = transform_plan_bundle(domain, dtype)
-        pencil = bundle.pencil_fft_output
+        # This is a metadata query and must stay non-collective: callers may ask
+        # from only one rank.  Reuse an existing plan's exact output pencil when
+        # available, but never call `transform_plan_bundle` here because building
+        # an uncached dtype plan is collective and would deadlock rank-local use.
+        key = (objectid(domain), dtype)
+        bundle = get(dist.transform_plan_cache, key, nothing)
+        pencil = if bundle !== nothing
+            bundle.pencil_fft_output
+        else
+            topology = dist.mpi_topology
+            topology === nothing && error(
+                "No MPI topology exists for coefficient geometry on $(dist.size) processes")
+
+            # PencilFFTs starts with dimensions (N-M+1):N decomposed and shifts
+            # each decomposed dimension left once while walking the N transform
+            # axes, so its final logical decomposition is (N-M):(N-1).
+            # Constructing this Pencil only computes local ranges; it performs
+            # no communication and mutates no caches.
+            mesh_dim = length(dist.mesh)
+            ndim = length(cshape)
+            output_decomp = ntuple(i -> ndim - mesh_dim + i - 1, mesh_dim)
+            PencilArrays.Pencil(topology, cshape, output_decomp)
+        end
         pencil === nothing && error(
-            "No PencilFFT output pencil exists for domain $(repr(domain.bases)) and dtype $dtype")
+            "No PencilFFT output geometry exists for domain $(repr(domain.bases)) and dtype $dtype")
         actual_global = Tuple(PencilArrays.size_global(pencil))
         actual_global == cshape || throw(DimensionMismatch(
             "PencilFFT output shape $actual_global does not match canonical coefficient shape $cshape"))

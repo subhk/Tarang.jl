@@ -1446,9 +1446,8 @@ function _get_wavenumber_array_for_poisson(field::ScalarField, dim::Int, local_s
     dim <= length(global_shape) || return zeros(local_shape)
 
     if isa(basis, RealFourier)
-        rfft_size = basis.meta.size ÷ 2 + 1
-        k_global = global_shape[dim] == rfft_size ? wavenumbers_rfft(basis) :
-                   wavenumbers_fft(basis)
+        k_global = _axis_uses_rfft(_field_transform_bundle(field), dim) ?
+                   wavenumbers_rfft(basis) : wavenumbers_fft(basis)
     elseif isa(basis, ComplexFourier)
         k_global = wavenumbers(basis)
     else

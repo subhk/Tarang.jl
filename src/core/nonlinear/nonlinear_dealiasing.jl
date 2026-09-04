@@ -37,20 +37,18 @@ function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     ensure_layout!(field, :c)
 
     coeff_data = get_coeff_data(field)
+    rfft_dims = _field_rfft_dims(field)
 
     if isa(coeff_data, PencilArrays.PencilArray)
         # MPI-distributed: use per-rank global wavenumbers (local-index cutoff is wrong here)
         _apply_spectral_cutoff_distributed!(
-            coeff_data, field.bases, dealiasing_factor, field.dtype)
+            coeff_data, field.bases, dealiasing_factor, field.dtype;
+            rfft_dims=rfft_dims)
     else
         cutoffs = ntuple(nb) do i
             c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
             c === nothing || c == 0 ? size(coeff_data, i) : c
         end
-
-        bundle = _field_transform_bundle(field)
-        rfft_dims = ntuple(i -> isa(field.bases[i], RealFourier) &&
-                                _axis_uses_rfft(bundle, i), nb)
 
         # Apply spectral cutoff - this function handles GPU arrays automatically
         apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
@@ -58,6 +56,13 @@ function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
 
     # Transform back to grid space
     backward_transform!(field)
+end
+
+"""Per-axis RFFT flags read from the field's own transform plan bundle."""
+function _field_rfft_dims(field::ScalarField)
+    bundle = _field_transform_bundle(field)
+    return ntuple(i -> isa(field.bases[i], RealFourier) && _axis_uses_rfft(bundle, i),
+                  length(field.bases))
 end
 
 """
@@ -88,21 +93,19 @@ function apply_basic_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     forward_transform!(field)
 
     coeff_data = get_coeff_data(field)
+    rfft_dims = _field_rfft_dims(field)
 
     if isa(coeff_data, PencilArrays.PencilArray)
         # MPI-distributed: use per-rank global wavenumbers (local-index cutoff is wrong here)
         _apply_spectral_cutoff_distributed!(
-            coeff_data, field.bases, dealiasing_factor, field.dtype)
+            coeff_data, field.bases, dealiasing_factor, field.dtype;
+            rfft_dims=rfft_dims)
     else
         # Recompute cutoffs using actual coeff array sizes for non-Fourier bases
         cutoffs = ntuple(nb) do i
             c = _axis_dealias_cutoff(field.bases[i], dealiasing_factor)
             c === nothing || c == 0 ? size(coeff_data, i) : c
         end
-
-        bundle = _field_transform_bundle(field)
-        rfft_dims = ntuple(i -> isa(field.bases[i], RealFourier) &&
-                                _axis_uses_rfft(bundle, i), nb)
 
         # Apply spectral cutoff - this function handles GPU arrays automatically
         apply_spectral_cutoff!(coeff_data, cutoffs, rfft_dims)
@@ -274,10 +277,21 @@ PencilFFT coefficient layout:
   - later RealFourier / ComplexFourier axes (FFT): 0, 1, …, N/2-1, -N/2, …, -1
 
 `nothing` skips an axis; an integer keeps modes with `|mode| <= cutoff`.
+
+`rfft_dims` says which axes hold an RFFT half spectrum. Callers that own the
+field pass the flags from its transform plan bundle (`_field_rfft_dims`) so the
+mode layout is read from the plan that produced `coeff_data`; without them the
+layout is derived once per call from the bases and `dtype`.
 """
 function _apply_spectral_cutoffs_distributed!(coeff_data::PencilArrays.PencilArray,
                                               bases, cutoffs::Tuple,
-                                              dtype::Type=Float64)
+                                              dtype::Type=Float64;
+                                              rfft_dims::Union{Nothing, Tuple}=nothing)
+    nb = length(bases)
+    uses_rfft = rfft_dims === nothing ?
+        ntuple(i -> isa(bases[i], RealFourier) &&
+                    _is_first_real_fourier_axis(bases, i, dtype), nb) :
+        rfft_dims
     local_data = parent(coeff_data)
     pencil = PencilArrays.pencil(coeff_data)
     local_axes = pencil.axes_local
@@ -295,8 +309,7 @@ function _apply_spectral_cutoffs_distributed!(coeff_data::PencilArrays.PencilArr
         cutoff === nothing && continue
 
         # Global integer mode numbers matching the coefficient layout on this axis.
-        if isa(basis, RealFourier) &&
-           _is_first_real_fourier_axis(bases, axis, dtype)
+        if isa(basis, RealFourier) && uses_rfft[axis]
             modes_global = collect(0:div(N, 2))                 # RFFT: 0 … N/2
         else
             modes_global = round.(Int, _fftfreq(N) .* N)        # FFT: 0…N/2-1, -N/2…-1
@@ -334,12 +347,14 @@ end
 """Apply the configured alias-safe cutoff independently on each distributed axis."""
 function _apply_spectral_cutoff_distributed!(coeff_data::PencilArrays.PencilArray,
                                              bases, dealiasing_factor::Float64,
-                                             dtype::Type=Float64)
+                                             dtype::Type=Float64;
+                                             rfft_dims::Union{Nothing, Tuple}=nothing)
     cutoffs = ntuple(length(bases)) do i
         cutoff = _axis_dealias_cutoff(bases[i], dealiasing_factor)
         cutoff == 0 ? nothing : cutoff
     end
-    return _apply_spectral_cutoffs_distributed!(coeff_data, bases, cutoffs, dtype)
+    return _apply_spectral_cutoffs_distributed!(coeff_data, bases, cutoffs, dtype;
+                                                rfft_dims=rfft_dims)
 end
 
 """

@@ -32,7 +32,6 @@ using Test
 using Tarang
 using SparseArrays
 using LinearAlgebra
-using KernelAbstractions
 using Random
 
 @testset "batched mode kernels (CPU backend)" begin

@@ -122,6 +122,49 @@ else
     finalize(failure_handler)
     WORLD_RANK == 0 && rm(failure_dir; recursive=true, force=true)
     MPI.Barrier(WORLD)
+
+    # Each rank owns its own `_p<rank>.nc`, so whether a rank must (re)create
+    # its file is a rank-LOCAL decision, while `create_current_file!` runs
+    # collectives. When one rank's file disappears between writes, the next
+    # write must still complete on every rank instead of desynchronizing the
+    # collective count and hanging.
+    missing_dir = joinpath(tempdir(), "tarang_netcdf_missing_file_$(root_pid[])")
+    WORLD_RANK == 0 && mkpath(missing_dir)
+    MPI.Barrier(WORLD)
+
+    missing_field = ScalarField(failure_dist, "u", failure_bases, Float64)
+    ensure_layout!(missing_field, :g)
+    fill!(get_grid_data(missing_field), Float64(WORLD_RANK + 1))
+    missing_handler = NetCDFFileHandler(
+        joinpath(missing_dir, "rank_local"), failure_dist,
+        Dict("u" => missing_field); mode="overwrite")
+    add_task!(missing_handler, missing_field; name="u")
+
+    @test process!(missing_handler; iteration=0, sim_time=0.0,
+                   wall_time=0.0, timestep=0.1)
+    MPI.Barrier(WORLD)
+    victim = WORLD_SIZE - 1
+    WORLD_RANK == victim && rm(current_file(missing_handler); force=true)
+    MPI.Barrier(WORLD)
+
+    second_ok = process!(missing_handler; iteration=1, sim_time=0.1,
+                         wall_time=0.0, timestep=0.1)
+    @test second_ok
+    @test MPI.Allreduce(second_ok ? 1 : 0, MPI.SUM, WORLD) == WORLD_SIZE
+    @test missing_handler.file_write_num == 2
+    records = length(vec(group_ncread(current_file(missing_handler),
+                                      Tarang.NETCDF_TIME_GROUP, "sim_time")))
+    if WORLD_RANK == victim
+        # Recreated file: record 2 was written into a fresh unlimited dimension.
+        @test records >= 1
+    else
+        @test records == 2
+    end
+    MPI.Barrier(WORLD)
+    close!(missing_handler)
+    finalize(missing_handler)
+    WORLD_RANK == 0 && rm(missing_dir; recursive=true, force=true)
+    MPI.Barrier(WORLD)
 end
 
 MPI.Finalized() || MPI.Finalize()

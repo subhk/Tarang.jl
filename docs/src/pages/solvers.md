@@ -438,7 +438,7 @@ run!(solver; stop_time=0.2, cfl=cfl,
      progress=false)
 ```
 
-The same script runs under MPI without modification — launch it with `mpiexec` and see
+The same script runs under MPI without modification — launch it with `mpiexecjl` and see
 [Parallelism](parallelism.md).
 
 ## See Also

@@ -33,6 +33,7 @@ function _subproblem_kx(sp, coord_name::AbstractString)
     fourier_basis = nothing
     fb_axis = 0
     fb_bases = ()
+    fb_dtype = Float64
     for var in sp.problem.variables
         hasfield(typeof(var), :bases) || continue
         for (axis, basis) in enumerate(var.bases)
@@ -41,6 +42,7 @@ function _subproblem_kx(sp, coord_name::AbstractString)
                 fourier_basis = basis
                 fb_axis = axis
                 fb_bases = var.bases
+                fb_dtype = var.dtype
                 break
             end
         end
@@ -56,7 +58,8 @@ function _subproblem_kx(sp, coord_name::AbstractString)
     # index 6 (N=8), so that mode's implicit operator used k²=36 instead of 4.
     # Reuse the same wavenumber arrays the spectral derivatives use, so the matrix
     # and the coefficient layout agree exactly.
-    karr = (isa(fourier_basis, RealFourier) && _is_first_real_fourier_axis(fb_bases, fb_axis)) ?
+    karr = (isa(fourier_basis, RealFourier) &&
+            _is_first_real_fourier_axis(fb_bases, fb_axis, fb_dtype)) ?
            wavenumbers_rfft(fourier_basis) : wavenumbers_fft(fourier_basis)
     return (n + 1) <= length(karr) ? Float64(real(karr[n + 1])) : 0.0
 end

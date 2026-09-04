@@ -257,7 +257,7 @@ Every tutorial follows this pattern. Here it is in full for 2D heat diffusion â€
 smallest complete simulation Tarang can run:
 
 ```julia
-# 1. MPI initialization (harmless in serial; needed for `mpiexec` runs)
+# 1. MPI initialization (harmless in serial; needed for multi-rank runs)
 using Tarang, MPI
 MPI.Initialized() || MPI.Init()
 

@@ -12,7 +12,7 @@
 using Test
 using Tarang
 
-function _run_etd_stepper(ts; nsteps=12, dt=0.005)
+function _run_etd_stepper(ts; nsteps=12, dt=0.005, return_solver=false)
     coords = CartesianCoordinates("x")
     dist = Distributor(coords; mesh=(1,), dtype=Float64)
     xb = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
@@ -27,8 +27,34 @@ function _run_etd_stepper(ts; nsteps=12, dt=0.005)
     for _ in 1:nsteps
         step!(solver, dt)
     end
+    return_solver && return solver
     ensure_layout!(u, :g)
     return copy(get_grid_data(u))
+end
+
+@testset "ETD multistep reuses the startup phi cache" begin
+    for (ts, duplicate_key) in ((ETD_CNAB2(), :etd_cnab_phi),
+                                (ETD_SBDF2(), :etd_sbdf_phi))
+        solver = _run_etd_stepper(ts; nsteps=2, return_solver=true)
+        cache = solver.timestepper_state.timestepper_data
+        @test haskey(cache, :etd_phi)
+        # ETDRK2 startup and the multistep phase use the same L and dt, so a
+        # second three-matrix cache would double the dominant retained memory.
+        @test !haskey(cache, duplicate_key)
+    end
+end
+
+@testset "ETD phi cache follows replacement linear operators" begin
+    state = Tarang.TimestepperState(ETD_RK222(), 0.1, ScalarField[])
+    L1 = ComplexF64[-1 0; 0 -2]
+    L2 = ComplexF64[-3 0; 0 -4]
+
+    phi1 = Tarang._get_etd_phi!(state, L1, 0.1)
+    phi2 = Tarang._get_etd_phi!(state, L2, 0.1)
+
+    @test phi2 !== phi1
+    @test phi2[1] ≈ exp(0.1 .* L2)
+    @test state.timestepper_data[:etd_phi_L_source] === L2
 end
 
 @testset "ETD multistep (ETD-AB2)" begin

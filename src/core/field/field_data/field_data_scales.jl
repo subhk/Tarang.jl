@@ -5,6 +5,27 @@ This file contains scale-management, grid resampling, and local-data helper
 functions for scalar and vector fields.
 """
 
+"""Reject distributed grid-resolution changes before any field mutation."""
+function _reject_distributed_resolution_change(field::ScalarField,
+                                                operation::AbstractString,
+                                                old_scales,
+                                                new_scales,
+                                                old_grid_shape::Tuple,
+                                                new_grid_shape::Tuple)
+    if field.dist.size > 1 && old_grid_shape != new_grid_shape
+        # A correct resize needs a new distributed transform/decomposition;
+        # neither a rank-local FFT nor the fixed-size PencilFFT plan is valid
+        # here (audit 2026-06-23). Distributed nonlinear dealiasing uses its own
+        # supported coefficient-padding path and does not resize the field.
+        error("$operation cannot change the grid resolution of a distributed field " *
+              "from scales $old_scales to $new_scales " *
+              "(grid $old_grid_shape → $new_grid_shape). Construct the field with " *
+              "the required basis resolution, or use Tarang's automatic distributed " *
+              "padded nonlinear dealiasing.")
+    end
+    return nothing
+end
+
 """
     Set new transform scales without data transformation.
 
@@ -36,6 +57,9 @@ function preset_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tu
     # Compute old and new grid sizes
     old_grid_shape = get_scaled_shape(field, old_scales)
     new_grid_shape = get_scaled_shape(field, new_scales)
+    _reject_distributed_resolution_change(
+        field, "preset_scales!", old_scales, new_scales,
+        old_grid_shape, new_grid_shape)
 
     # Update scales
     field.scales = new_scales
@@ -98,11 +122,10 @@ end
 """
     Get the coefficient (unscaled) shape, accounting for MPI execution context.
 
-    IMPORTANT: In MPI mode with PencilFFTs, only the FIRST RealFourier axis uses RFFT
-    (size N/2+1). Subsequent RealFourier axes use FFT (full size N) because PencilFFTs
-    can only apply RFFT to the first transform dimension.
-
-    In serial mode or MPI without PencilFFTs, all RealFourier axes use RFFT (N/2+1).
+    A RealFourier axis uses RFFT (size N/2+1) only while its input is real.
+    Once an earlier Fourier stage has produced complex data, later RealFourier
+    axes use full complex FFT storage. A field whose grid dtype is already
+    complex therefore keeps a full spectrum on every axis.
     """
 function get_coefficient_shape(field::ScalarField)
     if field.domain === nothing || isempty(field.bases)
@@ -110,7 +133,7 @@ function get_coefficient_shape(field::ScalarField)
     end
 
     # Use context-aware coefficient shape computation
-    return get_coefficient_shape_for_context(field.domain, field.dist)
+    return get_coefficient_shape_for_context(field.domain, field.dist, field.dtype)
 end
 
 """
@@ -146,15 +169,20 @@ end
 
     When changing scales:
     - If in grid space: interpolate/resample data to new grid size
-    - If in coefficient space: pad/truncate spectral coefficients
+    - If in coefficient space: keep coefficients unchanged and resize the grid
+      buffer used by the next inverse transform
 
     For upscaling (scale increases):
     - Grid space: interpolate to finer grid
-    - Coefficient space: zero-pad high frequencies
+    - Coefficient space: retain the stored spectral coefficients
 
     For downscaling (scale decreases):
     - Grid space: subsample or average to coarser grid
-    - Coefficient space: truncate high frequencies
+    - Coefficient space: retain the stored spectral coefficients
+
+    Resolution-changing scale updates are not supported for distributed fields;
+    they throw before modifying metadata or storage. Distributed nonlinear
+    dealiasing uses a separate coefficient-padding implementation.
 
     Arguments:
     - field: ScalarField to modify
@@ -176,7 +204,9 @@ function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple
     # Get old and new shapes
     old_grid_shape = get_scaled_shape(field, old_scales)
     new_grid_shape = get_scaled_shape(field, new_scales)
-    coeff_shape = get_coefficient_shape(field)
+    _reject_distributed_resolution_change(
+        field, "set_scales!", old_scales, new_scales,
+        old_grid_shape, new_grid_shape)
 
     # Determine current layout
     is_grid_space = (field.current_layout == :g)
@@ -194,24 +224,6 @@ function set_scales!(field::ScalarField, scales::Union{Real, Vector{Real}, Tuple
         backward_transform!(field)           # → :g at the new collocation nodes
         @debug "Changed field scales via spectral (basis-aware) resample" old_scales=old_scales new_scales=new_scales
         return field
-    end
-
-    if is_grid_space && field.dist.size > 1 && field.dist.use_pencil_arrays &&
-       get_grid_data(field) !== nothing && old_grid_shape != new_grid_shape
-        # Under MPI a Fourier axis is decomposed across ranks, so the periodic-FFT
-        # resample in resample_grid_data! runs a per-rank LOCAL FFT (treating each
-        # slab's edges as global-periodic) → silently-wrong spectral interpolation
-        # that differs from the serial result. A correct distributed resample needs
-        # a spectral zero-pad/truncate that respects the pencil decomposition (not
-        # yet implemented), and the fixed-size PencilFFT plan cannot upsample
-        # in-place. Fail loud instead of corrupting data. The
-        # already-fixed dealiasing/filter paths resample in coefficient space and do
-        # not reach here; this only bites an explicit grid-space resample/LockedField.
-        error("Grid-space resampling of a distributed field (set_scales!/change_scales! " *
-              "from $(old_scales) to $(new_scales), grid $(old_grid_shape)→$(new_grid_shape)) " *
-              "is not supported under MPI: the per-rank local FFT would corrupt the " *
-              "decomposed Fourier axis. Resample in coefficient space, or change scales " *
-              "before distributing the field.")
     end
 
     if is_grid_space && get_grid_data(field) !== nothing

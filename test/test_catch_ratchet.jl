@@ -201,7 +201,7 @@ end
     # `UnknownOperator`; the BC arity probe bound its error and called the shorter
     # signature. Both would pass the ratchet above.
     #
-    # This is NOT a claim that all 87 are wrong. Most are legitimate: an in-place
+    # This is NOT a claim that all 84 are wrong. Most are legitimate: an in-place
     # FFT that falls back to the allocating form, a sparse factorization that falls
     # back to dense, an MPI communicator free during teardown. Those reach the same
     # answer by another route, or are cleanup where there is nothing to re-raise
@@ -218,7 +218,7 @@ end
     @info "src/ catch clauses: $total total, $n_silent with no rethrow/throw/error in the handler"
 
     # Current count. Lower it when you remove one; never raise it.
-    SILENT_RATCHET = 87
+    SILENT_RATCHET = 84
 
     if n_silent > SILENT_RATCHET
         sites = sort(silent; by = x -> (x[1], x[2]))

@@ -247,9 +247,9 @@ end
 #
 # When M has all-zero rows, those rows are algebraic constraints (div(u)=0,
 # boundary conditions, gauge), not evolution equations, so `M X_{n+1} = rhs`
-# is singular and cannot be solved directly. The fix: replace each zero M row
-# with the corresponding L row, turning the constraint into an enforceable
-# linear equation, then solve the patched system. The patched matrix and its
+# is singular and cannot be solved directly. Replace each zero M row with the
+# corresponding L row, turning the constraint into an enforceable linear
+# equation, then solve the patched system. The patched matrix and its
 # factorization are cached and rebuilt only when M or L change identity.
 # ----------------------------------------------------------------------------
 
@@ -303,10 +303,63 @@ function _zero_mass_rows(M::AbstractMatrix)
     return rows
 end
 
+function _zero_mass_columns(M::AbstractMatrix)
+    columns = Int[]
+    for j in axes(M, 2)
+        column_max = zero(real(eltype(M)))
+        for i in axes(M, 1)
+            column_max = max(column_max, abs(M[i, j]))
+            column_max > 1e-14 && break
+        end
+        column_max <= 1e-14 && push!(columns, j)
+    end
+    return columns
+end
+
+function _zero_mass_columns(M::SparseMatrixCSC)
+    columns = Int[]
+    values = nonzeros(M)
+    for j in axes(M, 2)
+        column_max = zero(real(eltype(M)))
+        for ptr in nzrange(M, j)
+            column_max = max(column_max, abs(values[ptr]))
+            column_max > 1e-14 && break
+        end
+        column_max <= 1e-14 && push!(columns, j)
+    end
+    return columns
+end
+
 function _constrained_mass_matrix(M::AbstractMatrix, L::AbstractMatrix, zero_rows::Vector{Int})
     constrained = sparse(M)
     for row in zero_rows
         constrained[row, :] = L[row, :]
+    end
+    return constrained
+end
+
+"""
+Restore unresolved algebraic columns after replacing constraint rows.
+
+This augmented form is used only by the GPU subproblem final update, whose
+device solver needs a square nonsingular system. The legacy global CPU path
+keeps its original row-replacement semantics; rank-deficient Chebyshev/tau
+systems are handled by the normal per-subproblem CPU projector instead.
+"""
+function _augmented_constrained_mass_matrix(M::AbstractMatrix,
+                                            L::AbstractMatrix,
+                                            zero_rows::Vector{Int})
+    constrained = _constrained_mass_matrix(M, L, zero_rows)
+    # A zero-M column that gained an entry from a replacement row is a directly
+    # determined algebraic variable. Keep its differential rows zero: importing
+    # the full L column would change the RK mass update (e.g. [u' + v; v = g]).
+    # A column that is STILL zero after row replacement is instead an unresolved
+    # tau/pressure multiplier, so restore its L couplings. This structural test
+    # is O(nnz) and avoids one rank factorization per global pressure column.
+    # A GPU factorization will reject any genuinely rank-deficient augmented
+    # system rather than silently staging a least-squares solve on the CPU.
+    for column in _zero_mass_columns(constrained)
+        constrained[:, column] = L[:, column]
     end
     return constrained
 end
@@ -335,6 +388,12 @@ function _apply_global_algebraic_rhs!(rhs::AbstractVector{ComplexF64},
         if is_alg
             value = _global_algebraic_rhs_value(eq_data)
             if value != 0
+                eq_size == 1 || throw(ArgumentError(
+                    "Legacy global IMEX RK cannot project a nonzero algebraic " *
+                    "right-hand side across $eq_size spectral coefficients. " *
+                    "Use the per-subproblem path or rewrite the constraint as " *
+                    "homogeneous; refusing to broadcast one scalar into every " *
+                    "coefficient and return a plausible wrong field."))
                 @inbounds for local_row in 1:eq_size
                     row = offset + local_row
                     if row in zero_row_set
@@ -351,12 +410,19 @@ end
 function _global_algebraic_rhs_value(eq_data)
     F_expr = get(eq_data, "F_expr", nothing)
     F_expr === nothing && (F_expr = get(eq_data, "F", nothing))
-    if F_expr isa ConstantOperator
+    if F_expr === nothing || F_expr isa ZeroOperator
+        return ComplexF64(0)
+    elseif F_expr isa ConstantOperator
         return ComplexF64(F_expr.value)
     elseif F_expr isa Number
         return ComplexF64(F_expr)
+    elseif _is_const_or_param(F_expr)
+        return ComplexF64(_extract_scalar(F_expr))
     else
-        return ComplexF64(0)
+        throw(ArgumentError(
+            "Legacy global IMEX RK cannot evaluate algebraic right-hand side " *
+            "$(repr(F_expr)). Use a homogeneous constraint, a numeric scalar " *
+            "row, or the per-subproblem path; refusing to enforce it as zero."))
     end
 end
 

@@ -518,7 +518,7 @@ The fully periodic examples (Kelvin-Helmholtz, internal waves, decaying turbulen
 unchanged — they use `local_grids` for initial conditions, which returns each rank's own slice:
 
 ```
-mpiexec -n 2 julia --project=. kelvin_helmholtz.jl
+mpiexecjl --project=. -n 2 julia kelvin_helmholtz.jl
 ```
 
 The Kelvin-Helmholtz script above gives bit-identical output at 1 and 2 ranks

@@ -140,6 +140,8 @@ _distributed_gpu_dct_bases_supported(bases) =
 
 Validate that MPI parallelization is compatible with the provided bases.
 
+All multi-rank 1D spectral domains are unsupported; use one MPI process.
+
 device=CPU() with MPI (PencilArrays/PencilFFTs):
   - Pure Fourier domains (RealFourier + ComplexFourier): fully supported
   - Mixed Fourier-Chebyshev domains: supported via decomp_dims + solve-layout transpose
@@ -152,6 +154,12 @@ device=GPU() with MPI (TransposableField):
 function validate_mpi_fourier_only(bases, nprocs::Int; use_pencil_arrays::Bool=true)
     if nprocs <= 1
         return true
+    end
+
+    total_dim = sum(b.meta.dim for b in bases; init=0)
+    if total_dim == 1
+        error("MPI parallelization is not supported for 1D spectral domains. " *
+              "1D transforms require global data access; use serial execution (1 MPI process).")
     end
 
     # CPU+PencilArrays: supports pure Fourier AND mixed Fourier-Chebyshev

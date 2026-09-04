@@ -4,6 +4,7 @@ using MPI
 const TRANSFORMS_SOURCE = joinpath(@__DIR__, "..", "ext", "cuda", "transforms.jl")
 const DCT_SOURCE = joinpath(@__DIR__, "..", "ext", "cuda", "dct_distributed.jl")
 const PENCIL_SOURCE = joinpath(@__DIR__, "..", "ext", "cuda", "pencil.jl")
+const GPU_DISTRIBUTED_SOURCE = joinpath(@__DIR__, "..", "src", "core", "gpu_distributed.jl")
 
 function _definition_name(expr)
     expr isa Expr || return nothing
@@ -103,6 +104,19 @@ end
     close_pencil = _find_definition(pencil_ast, :close)
     @test close_pencil !== nothing
     @test _calls(close_pencil, :free_pencil_decomposition!)
+
+    # TransposableField has no GC finalizer either, so the one in-tree owner of
+    # a TransposableField workspace must close the wrapper it replaces and
+    # expose a close of its own; otherwise every field switch leaks the
+    # workspace's row/column communicators.
+    gpu_distributed_ast = Meta.parseall(read(GPU_DISTRIBUTED_SOURCE, String))
+    setup_workspace = _find_definition(gpu_distributed_ast, :setup_transposable_workspace!)
+    @test setup_workspace !== nothing
+    @test _calls(setup_workspace, :close)
+    @test _calls(setup_workspace, :TransposableField)
+    close_transform = _find_definition(gpu_distributed_ast, :close)
+    @test close_transform !== nothing
+    @test _calls(close_transform, :close)
 
     # The split helper is dependency-injected so a failure after the first
     # communicator can be tested without MPI ranks or a GPU.

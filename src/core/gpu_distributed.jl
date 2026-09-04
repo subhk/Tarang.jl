@@ -834,34 +834,33 @@ function check_cuda_aware_mpi()
             return true
         end
     catch err
-        # Keep compatibility with MPI.jl versions/implementations whose probe
-        # is unavailable at runtime, then fall back to legacy indicators.
+        # Some Open MPI builds do not expose the optional
+        # MPIX_Query_cuda_support symbol that MPI.jl probes. That compatibility
+        # miss is safe to fall back from; malformed overrides and every other
+        # probe failure must remain visible to the caller.
+        missing_query_symbol = err isa ErrorException &&
+                               occursin("could not load symbol", err.msg) &&
+                               occursin("MPIX_Query_cuda_support", err.msg)
+        missing_query_symbol || rethrow()
         @debug "MPI.jl CUDA-awareness probe failed" exception = err
     end
 
     # Priority 3-5: Library-specific indicators
-    try
-        # OpenMPI with CUDA support
-        if haskey(ENV, "OMPI_MCA_opal_cuda_support") && ENV["OMPI_MCA_opal_cuda_support"] == "true"
-            return true
-        end
-        # MVAPICH2 with CUDA
-        if haskey(ENV, "MV2_USE_CUDA") && ENV["MV2_USE_CUDA"] == "1"
-            return true
-        end
-        # MPICH with GPU support
-        if haskey(ENV, "MPIR_CVAR_ENABLE_GPU") && ENV["MPIR_CVAR_ENABLE_GPU"] == "1"
-            return true
-        end
-        # Cray MPI with GPU support
-        if haskey(ENV, "MPICH_GPU_SUPPORT_ENABLED") && ENV["MPICH_GPU_SUPPORT_ENABLED"] == "1"
-            return true
-        end
-    catch err
-        # `ENV` lookups raise nothing but they are wrapped here defensively; a genuine
-        # failure while probing the environment should not be reported as "no
-        # CUDA-aware MPI", which silently downgrades a distributed GPU run.
-        @debug "CUDA-aware MPI environment probe failed" exception = err
+    # OpenMPI with CUDA support
+    if haskey(ENV, "OMPI_MCA_opal_cuda_support") && ENV["OMPI_MCA_opal_cuda_support"] == "true"
+        return true
+    end
+    # MVAPICH2 with CUDA
+    if haskey(ENV, "MV2_USE_CUDA") && ENV["MV2_USE_CUDA"] == "1"
+        return true
+    end
+    # MPICH with GPU support
+    if haskey(ENV, "MPIR_CVAR_ENABLE_GPU") && ENV["MPIR_CVAR_ENABLE_GPU"] == "1"
+        return true
+    end
+    # Cray MPI with GPU support
+    if haskey(ENV, "MPICH_GPU_SUPPORT_ENABLED") && ENV["MPICH_GPU_SUPPORT_ENABLED"] == "1"
+        return true
     end
 
     return false
@@ -1481,12 +1480,33 @@ function setup_transposable_workspace!(transform::DistributedGPUTransform, field
     # TransposableField is defined in transposable_field.jl
     # Create the workspace lazily and replace it when the caller changes fields.
     # A TransposableField owns buffers and metadata tied to one ScalarField.
-    if transform.workspace === nothing || transform.workspace.field !== field
+    workspace = transform.workspace
+    if workspace === nothing || workspace.field !== field || !isopen(workspace)
+        # A TransposableField has no GC finalizer (communicator teardown is
+        # collective), so the wrapper being replaced must be closed here or its
+        # row/column communicators leak on every field switch. Every rank
+        # switches fields in the same order, so this collective pairs up.
+        workspace === nothing || close(workspace)
         # The TransposableField constructor will be available at runtime
         # since transposable_field.jl is included after this file
         transform.workspace = TransposableField(field)
     end
     return transform.workspace
+end
+
+"""
+    close(transform::DistributedGPUTransform)
+
+Collectively release the MPI sub-communicators owned by the transform's
+`TransposableField` workspace. Idempotent; every rank must call it in the same
+order before `MPI.Finalize`.
+"""
+function Base.close(transform::DistributedGPUTransform)
+    workspace = transform.workspace
+    workspace === nothing && return nothing
+    close(workspace)
+    transform.workspace = nothing
+    return nothing
 end
 
 """

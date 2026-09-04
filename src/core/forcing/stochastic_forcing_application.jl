@@ -63,6 +63,7 @@ function store_prevsol!(forcing::StochasticForcing{T, N, A, CA}, sol::AbstractAr
         # Note: a `[sol[I] for I in CartesianIndices(sol)]` comprehension does NOT do
         # this (it collects in the PencilArray's LINEAR/storage order == collect(sol),
         # transposing a permuted pencil); an explicit `dest[I] = sol[I]` loop does.
+        # Round-5 audit 2026-06-23.
         if forcing.prevsol === nothing || size(forcing.prevsol) != size(sol)
             forcing.prevsol = Array{Complex{T}, N}(undef, size(sol))
         end

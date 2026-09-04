@@ -323,7 +323,21 @@ function build_subsystems(solver)
     # deadlocks. This happens when nprocs exceeds the number of Fourier coefficient
     # modes. Allreduce the empty flag so EVERY rank errors together (a rank-divergent
     # error would itself hang the next collective).
-    if dist.size > 1 && dist.pencil_solve !== nothing
+    problem_domain = problem.domain
+    if problem_domain === nothing
+        for variable in problem.variables
+            for component in scalar_components(variable)
+                if component.domain !== nothing
+                    problem_domain = component.domain
+                    break
+                end
+            end
+            problem_domain !== nothing && break
+        end
+    end
+    plan_bundle = problem_domain === nothing ? nothing :
+                  transform_plan_bundle(problem_domain, infer_problem_dtype(problem))
+    if dist.size > 1 && plan_bundle !== nothing && plan_bundle.pencil_solve !== nothing
         n_empty = MPI.Allreduce(isempty(subsystems) ? 1 : 0, +, dist.comm)
         if n_empty > 0
             error("Over-decomposed distributed solve: $n_empty of $(dist.size) MPI ranks own " *
@@ -447,7 +461,7 @@ Get the number of modes in a separable dimension from problem structure.
 """
 function get_separable_dim_size(problem::Problem, dim::Int)
     if problem.domain !== nothing
-        coeff_shape = coefficient_shape(problem.domain)
+        coeff_shape = coefficient_shape(problem.domain, infer_problem_dtype(problem))
         if dim <= length(coeff_shape)
             return coeff_shape[dim]
         end
@@ -463,20 +477,8 @@ function get_separable_dim_size(problem::Problem, dim::Int)
     for var in problem.variables
         for comp in scalar_components(var)
             if dim <= length(comp.bases) && comp.bases[dim] !== nothing
-                basis = comp.bases[dim]
-                # Find the first Fourier axis in this component's basis list.
-                first_fourier_idx = nothing
-                for (i, b) in enumerate(comp.bases)
-                    if isa(b, RealFourier) || isa(b, ComplexFourier)
-                        first_fourier_idx = i
-                        break
-                    end
-                end
-                is_first = (first_fourier_idx !== nothing && dim == first_fourier_idx)
-                if isa(basis, RealFourier) && is_first
-                    return div(basis.meta.size, 2) + 1
-                end
-                return basis.meta.size
+                comp.domain === nothing && return comp.bases[dim].meta.size
+                return coefficient_shape(comp.domain, comp.dtype)[dim]
             end
         end
     end
@@ -513,4 +515,3 @@ function generate_mode_groups(separable_dims::Vector{Int}, separable_sizes::Vect
 
     return groups
 end
-

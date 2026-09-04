@@ -1,3 +1,17 @@
+"""Return the shared ETD matrix-function cache for the current operator and `dt`."""
+function _get_etd_phi!(state::TimestepperState, L_linear, dt::Float64)
+    cache = state.timestepper_data
+    cache_dt = get(cache, :etd_phi_dt, nothing)
+    cache_L = get(cache, :etd_phi_L_source, nothing)
+    if !haskey(cache, :etd_phi) || cache_dt === nothing || cache_dt != dt ||
+       cache_L !== L_linear
+        cache[:etd_phi] = phi_functions_matrix(L_linear, dt)
+        cache[:etd_phi_dt] = dt
+        cache[:etd_phi_L_source] = L_linear
+    end
+    return cache[:etd_phi]::NTuple{3, Matrix{ComplexF64}}
+end
+
 """
     2nd-order exponential Runge-Kutta method (ETDRK2).
 
@@ -52,13 +66,7 @@ function step_etd_rk222!(state::TimestepperState, solver::InitialValueSolver)
 
     try
         # Compute matrix exponentials and φ functions (cached when dt is unchanged)
-        cache = state.timestepper_data
-        cache_dt = get(cache, :etd_phi_dt, nothing)
-        if cache_dt === nothing || cache_dt != dt
-            cache[:etd_phi] = phi_functions_matrix(L_linear, dt)
-            cache[:etd_phi_dt] = dt
-        end
-        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_phi]::NTuple{3, Matrix{ComplexF64}}
+        exp_hL, φ₁_hL, φ₂_hL = _get_etd_phi!(state, L_linear, dt)
 
         X₀ = _timestep_fields_vector!(state, :etd_rk2_X0, current_state)
 
@@ -191,12 +199,7 @@ function step_etd_cnab2!(state::TimestepperState, solver::InitialValueSolver)
     try
         # Compute exponential integrators (cached when dt is unchanged)
         cache = state.timestepper_data
-        cache_dt = get(cache, :etd_cnab_phi_dt, nothing)
-        if cache_dt === nothing || cache_dt != dt_current
-            cache[:etd_cnab_phi] = phi_functions_matrix(L_linear, dt_current)
-            cache[:etd_cnab_phi_dt] = dt_current
-        end
-        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_cnab_phi]::NTuple{3, Matrix{ComplexF64}}
+        exp_hL, φ₁_hL, φ₂_hL = _get_etd_phi!(state, L_linear, dt_current)
 
         X_current = _timestep_fields_vector!(state, :etd_cnab2_X_current, current_state)
 
@@ -335,12 +338,7 @@ function step_etd_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
     try
         # Compute exponential integrators (cached when dt is unchanged)
         cache = state.timestepper_data
-        cache_dt = get(cache, :etd_sbdf_phi_dt, nothing)
-        if cache_dt === nothing || cache_dt != dt_current
-            cache[:etd_sbdf_phi] = phi_functions_matrix(L_linear, dt_current)
-            cache[:etd_sbdf_phi_dt] = dt_current
-        end
-        exp_hL, φ₁_hL, φ₂_hL = cache[:etd_sbdf_phi]::NTuple{3, Matrix{ComplexF64}}
+        exp_hL, φ₁_hL, φ₂_hL = _get_etd_phi!(state, L_linear, dt_current)
 
         X_current = _timestep_fields_vector!(state, :etd_sbdf2_X_current, current_state)
         n = length(X_current)

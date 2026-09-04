@@ -6,6 +6,33 @@ This file contains the abstract Transform type and concrete transform structs.
 
 abstract type Transform end
 
+"""
+    TransformPlanBundle
+
+All transform state owned by one `(Domain, field dtype)` pair.  A Distributor
+may serve several domains and precisions at once, so execution must use this
+bundle rather than the distributor's mutable legacy `transforms`/`pencil_*`
+view.  Keeping the `domain` reference here also makes object-identity cache keys
+safe for the lifetime of the cached plan.
+"""
+struct TransformPlanBundle
+    domain::Domain
+    dtype::DataType
+    forward_ops::Vector{AxisOp}
+    transforms::Vector{Any}
+    pencil_config::Union{Nothing, PencilConfig}
+    pencil_fft_plan::Union{Nothing, PencilFFTs.PencilFFTPlan}
+    pencil_fft_input::Union{Nothing, PencilArrays.Pencil}
+    pencil_fft_output::Union{Nothing, PencilArrays.Pencil}
+    pencil_solve::Union{Nothing, PencilArrays.Pencil}
+    basis_signature::Tuple
+    batched_plan_cache::Dict{Int, Any}
+    pencil_work_cache::Dict{Symbol, Any}
+end
+
+@inline _axis_uses_rfft(bundle::TransformPlanBundle, axis::Int) =
+    bundle.forward_ops[axis].op === :rfft
+
 # PencilFFTs-based transforms for parallel 2D FFTs
 struct PencilFFTTransform <: Transform
     plan::Union{Nothing, PencilFFTs.PencilFFTPlan}
@@ -342,3 +369,19 @@ Find cached PencilFFT plan from distributor transforms. Avoids repeated
 linear scans of dist.transforms in hot paths.
 """
 _find_pencil_plan(dist) = dist.pencil_fft_plan
+_find_pencil_plan(bundle::TransformPlanBundle) = bundle.pencil_fft_plan
+
+"""Resolve the transform bundle belonging to a concrete field."""
+function _field_transform_bundle(field::ScalarField)
+    field.dist.closed && throw(ArgumentError(
+        "cannot use transform plans from a closed Distributor"))
+    field.domain === nothing && throw(ArgumentError(
+        "a field without a Domain has no transform bundle"))
+    bundle = field.transform_bundle
+    if bundle isa TransformPlanBundle
+        return bundle
+    end
+    bundle = transform_plan_bundle(field.domain, field.dtype)
+    field.transform_bundle = bundle
+    return bundle
+end

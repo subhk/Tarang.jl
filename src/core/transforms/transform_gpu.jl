@@ -313,14 +313,25 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
         return
     end
 
-    # Find appropriate transform
-    pencil_plan = _find_pencil_plan(field.dist)
+    # Resolve the plan owned by this field's domain and dtype. Another field on
+    # the same Distributor may have a different shape, precision, or transform
+    # domain, so the distributor's legacy active plan is not an execution source.
+    bundle = _field_transform_bundle(field)
+    pencil_plan = _find_pencil_plan(bundle)
     if pencil_plan !== nothing
         # PencilFFTs is CPU-only; GPU data must have been handled by its backend.
         grid_data = get_grid_data(field)
         if is_gpu_array(grid_data)
             error("PencilFFTs cannot transform GPU data; CPU fallback is disabled.")
         else
+            plan_input = grid_data
+            complex_grid = get(bundle.pencil_work_cache, :complex_grid, nothing)
+            if complex_grid !== nothing
+                grid_data isa PencilArrays.PencilArray || error(
+                    "a PencilFFT complex-grid promotion requires PencilArray field storage")
+                parent(complex_grid) .= parent(grid_data)
+                plan_input = complex_grid
+            end
             # Use in-place mul! if coeff data is already allocated. The
             # fallback catch path allocates a fresh PencilArray each call,
             # so a single `@warn` the first time it fires makes it obvious
@@ -332,14 +343,14 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
                     set_coeff_data!(field, coeff_data)
                 end
                 try
-                    mul!(coeff_data, pencil_plan, grid_data)
+                    mul!(coeff_data, pencil_plan, plan_input)
                 catch err
                     @warn "forward_transform!: PencilFFTs mul! fast path failed, falling back to allocating `*`. This costs one PencilArray per transform — consider upgrading PencilFFTs or checking the field buffer layout." exception=(err, catch_backtrace()) maxlog=1
-                    set_coeff_data!(field, pencil_plan * grid_data)
+                    set_coeff_data!(field, pencil_plan * plan_input)
                 end
             else
                 @warn "forward_transform!: coeff buffer is not a PencilArray; using allocating `*` fallback. Expected `allocate_data!` to pre-allocate via PencilFFTs.allocate_output." maxlog=1
-                set_coeff_data!(field, pencil_plan * grid_data)
+                set_coeff_data!(field, pencil_plan * plan_input)
             end
         end
         # The PencilFFT plan transforms ONLY the Fourier axes; a coupled
@@ -375,7 +386,7 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
 
     # ── Zero-allocation in-place transform chain ───────────────────────────
     #
-    # Walk `field.dist.transforms` in order. Each transform has an in-place
+    # Walk the field-owned transform vector in order. Each transform has an in-place
     # dispatch method `_apply_forward!(out, in, transform)` that uses cached
     # plans and scratch buffers (see transform_fourier.jl / transform_chebyshev.jl).
     #
@@ -386,7 +397,7 @@ function forward_transform!(field::ScalarField, target_layout::Symbol=:c; apply_
     # wrong shape or eltype (shouldn't happen — shape is derived from the
     # same basis metadata — but be defensive), reallocate on the field.
     current = get_grid_data(field)
-    transforms = field.dist.transforms
+    transforms = bundle.transforms
     n_transforms = length(transforms)
     if n_transforms == 0
         # No transforms registered: copy grid into coeff buffer (also a fallback

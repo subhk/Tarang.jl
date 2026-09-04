@@ -11,7 +11,7 @@ function coeff_slices(subsystem::Subsystem, domain)
 
     # Subsystems currently consume the whole local coefficient block for each
     # active field. Future block-local slicing should be centralized here.
-    coeff_shape = coefficient_shape(domain)
+    coeff_shape = coefficient_shape(domain, subsystem.dtype)
     return ntuple(_ -> Colon(), length(coeff_shape))
 end
 
@@ -20,7 +20,7 @@ function coeff_shape(subsystem::Subsystem, domain)
         return ()
     end
 
-    return coefficient_shape(domain)
+    return coefficient_shape(domain, subsystem.dtype)
 end
 
 function coeff_size(subsystem::Subsystem, domain)

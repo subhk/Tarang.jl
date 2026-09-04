@@ -249,7 +249,8 @@ Only runs for time-dependent (including space+time) BCs. Pure
 space-dependent BCs are already populated at solver-build time and don't
 change between stages, so we skip them to avoid redundant FFT work.
 
-For time-varying BCs this is called at every RK stage with `t + c[i]*dt`
+For time-varying BCs this is called at every RK stage with
+`t + c_implicit[i]*dt`
 so multi-stage methods keep their formal order of accuracy on rapidly
 varying BCs.
 """
@@ -408,7 +409,8 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # Butcher tableaux (1-indexed)
     A_exp = ts.A_explicit   # explicit tableau
     A_imp = ts.A_implicit   # implicit tableau
-    c     = ts.c_explicit   # stage times
+    c_exp = ts.c_explicit   # explicit RHS evaluation times
+    c_imp = ts.c_implicit   # implicit constraint-solve times
 
     # Collect the flat list of ScalarFields that represent the state (memoized;
     # step-invariant for a solver, so rebuilt only on the first step).
@@ -507,7 +509,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     # (a real transpose back), not a pointer swap. F fields keep the default.
     # Whether this problem has any time-dependent BCs. If so, ALG_F is
     # re-gathered every step here AND the stage loop below refreshes it at each
-    # stage time `t + c[i]*dt` to retain full stage-order accuracy on
+    # implicit stage time `t + c_imp[i]*dt` to retain full stage-order accuracy on
     # rapidly-varying BCs. STATIC BCs are populated at solver build time and
     # never change — their ALG_F is gathered exactly once into the cached stage
     # vector (identity-checked via `alg_F_gathered_into`), not rebuilt on the
@@ -558,7 +560,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # rewrite `equation_data[eq_idx]["F"]`, which `gather_alg_F!` reads
         # on each call, so we simply re-gather after refreshing.
         if bc_dynamic
-            stage_time = t + dt * c[i]
+            stage_time = t + dt * c_imp[i]
             if _refresh_bcs_for_stage!(solver, stage_time)
                 for (sp_idx, sp) in enumerate(subproblems)
                     sp.M_min === nothing && continue
@@ -653,7 +655,7 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         # at zero — those are handled by the `ALG_F` override above because
         # the IMEX-RK accumulation formula gives the wrong `1/γ` scaling for
         # inhomogeneous algebraic constraints like `T(z=0) = 1`.
-        F_fields = evaluate_rhs_buffered(solver, state_fields, t + dt * c[i])
+        F_fields = evaluate_rhs_buffered(solver, state_fields, t + dt * c_exp[i])
         # Both the per-mode RHS gather (`gather_eqn_F!` reads F_fields' coeffs)
         # and the state re-gather (`gather_inputs!`) need solve layout. Transpose
         # state AND F_fields ONCE each, OUTSIDE the loop. F_fields are read-only
@@ -697,6 +699,17 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         _release_rhs_buffer!(F_fields, solver)
     end
 
+    # The public state is at `t + dt`, which need not be the final tableau
+    # abscissa for an arbitrary IMEX pair. Refresh dynamic algebraic targets at
+    # that exact time when needed; the implicit tableau determines when the
+    # constraint solve occurs. Its last abscissa is 1 for every built-in scheme.
+    if bc_dynamic && c_imp[end] != 1.0 && _refresh_bcs_for_stage!(solver, t + dt)
+        for (sp_idx, sp) in enumerate(subproblems)
+            sp.M_min === nothing && continue
+            gather_alg_F!(ALG_F[sp_idx], sp)
+        end
+    end
+
     # ── Final update: M*X_{n+1} = M*X_n + dt*Σ(b^E*F - b^I*L*X) ────────
     # Always perform the full weighted update. The "stiffly accurate" shortcut
     # (skipping this when b_imp = A_imp[end,:]) is only valid when BOTH tableaux
@@ -727,11 +740,30 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             end
         end
 
-        # Solve M * X_new = rhs
-        M_lu = _get_or_compute_mass_lu!(sp)
+        # A tau/DAE mass matrix has zero algebraic rows. First recover the normal
+        # weighted RK mass update, then (for moving constraints on CPU) apply a
+        # cached smooth correction in the differential-variable subspace.
+        # Solving one augmented mass/L system here creates an unstable recurrence
+        # for valid redundant-tau formulations even with rank-revealing QR/SVD.
+        # The weighted mass update has no algebraic rows, so even a static
+        # constraint can drift when an explicit forcing is not tangent to its
+        # boundary trace. The smooth differential-space lifting is stable for
+        # redundant tau variables and therefore applies to every constrained
+        # CPU subproblem. GPU uses its device-resident augmented solve.
+        constrained = !isempty(sp.bc_rows)
+        gpu_constrained = constrained && _gpu_subproblem_execution(sp)
+        if gpu_constrained
+            apply_bc_override!(rhs, ALG_F[sp_idx], sp, 1.0)
+        end
+        M_lu = gpu_constrained ? _get_or_compute_constrained_mass_lu!(state, sp) :
+                                _get_or_compute_mass_lu!(sp)
         if M_lu !== nothing
             x_sol = _sp_stage_vector!(sp, :sol_final, size(sp.M_min, 2), RHS[sp_idx])
             _solve_cached_system!(x_sol, M_lu, rhs)
+            if constrained && !gpu_constrained
+                _project_final_constraints!(x_sol, RHS[sp_idx], ALG_F[sp_idx],
+                                            state, sp)
+            end
         else
             # Singular M (DAE): last stage already satisfies constraints
             # via the implicit SA property. Keep the last stage value.
@@ -745,6 +777,276 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
 
     # ── Push new state to history ─────────────────────────────────────────
     _push_trim!(state.history, state_fields, 1)
+end
+
+struct _ConstraintProjectorData
+    source_constraint::Matrix{ComplexF64}
+    constraint::Matrix{ComplexF64}
+    constraint_rows::Vector{Int}
+    algebraic_columns::Vector{Int}
+    selected::Vector{Int}
+    selected_correction::Matrix{ComplexF64}
+end
+
+struct _ConstraintProjector
+    M::Any
+    L::Any
+    data::_ConstraintProjectorData
+end
+
+"""
+Hash the logical boundary-row slice of `L` together with its zero-mass columns.
+
+Do not form `L[constraint_rows, :]` here. This lookup runs once for every
+Fourier-mode subproblem on the first projected RK step; materialising that
+dense slice before consulting the shared-data pool made cold-start allocation
+scale as `nmodes * nconstraints * nvariables` in 2D/3D.
+"""
+function _constraint_projector_fingerprint(L::AbstractMatrix,
+                                           constraint_rows::AbstractVector{Int},
+                                           algebraic_columns::AbstractVector{Int})
+    fingerprint = hash((length(constraint_rows), size(L, 2),
+                        length(algebraic_columns)))
+    @inbounds for column in algebraic_columns
+        fingerprint = hash(column, fingerprint)
+    end
+
+    @inbounds for column in axes(L, 2)
+        for row in constraint_rows
+            fingerprint = hash(ComplexF64(L[row, column]), fingerprint)
+        end
+    end
+    return fingerprint
+end
+
+"""Exact, allocation-free collision check against a pooled constraint slice."""
+function _constraint_projector_matches(source_constraint::Matrix{ComplexF64},
+                                       L::AbstractMatrix,
+                                       constraint_rows::AbstractVector{Int},
+                                       algebraic_columns::AbstractVector{Int})
+    size(source_constraint) == (length(constraint_rows), size(L, 2)) ||
+        return false
+
+    @inbounds for column in axes(L, 2)
+        for (row_position, row) in pairs(constraint_rows)
+            source_constraint[row_position, column] == ComplexF64(L[row, column]) ||
+                return false
+        end
+    end
+    return true
+end
+
+"""Materialise a boundary-row slice only after the shared pool misses."""
+function _materialize_constraint(L::AbstractMatrix,
+                                 constraint_rows::AbstractVector{Int})
+    constraint = zeros(ComplexF64, length(constraint_rows), size(L, 2))
+    @inbounds for column in axes(L, 2)
+        for (row_position, row) in pairs(constraint_rows)
+            constraint[row_position, column] = L[row, column]
+        end
+    end
+    return constraint
+end
+
+"""Build or retrieve the CPU projector for a subproblem's algebraic rows."""
+function _get_or_compute_constraint_projector!(state::TimestepperState,
+                                                sp::Subproblem)
+    M = sp.M_min
+    L = sp.L_min
+    (M === nothing || L === nothing || isempty(sp.bc_rows)) && return nothing
+
+    cache = get!(state.timestepper_data, :_sp_rk_constraint_projectors) do
+        IdDict{Any, _ConstraintProjector}()
+    end::IdDict{Any, _ConstraintProjector}
+    entry = get(cache, sp, nothing)
+    if entry !== nothing && entry.M === M && entry.L === L
+        return entry
+    end
+
+    # Project through physical/differential variables only. Algebraic
+    # pressure/tau columns have no time derivative and must not carry the
+    # correction; allowing them to cancel the residual recreates the unstable
+    # augmented-DAE nullspace this projector is designed to avoid.
+    zero_columns = _zero_mass_columns(M)
+
+    # Boundary rows are normally identical across all Fourier modes of one
+    # batch. Look up their shared row slice and tiny right inverse without first
+    # allocating a dense O(nvariables*nconstraints) candidate for every mode.
+    fingerprint = _constraint_projector_fingerprint(L, sp.bc_rows, zero_columns)
+    pool = get!(state.timestepper_data, :_sp_rk_constraint_projector_data) do
+        Dict{UInt, Vector{_ConstraintProjectorData}}()
+    end::Dict{UInt, Vector{_ConstraintProjectorData}}
+    candidates = get(pool, fingerprint, nothing)
+    if candidates !== nothing
+        for data in candidates
+            if data.algebraic_columns == zero_columns &&
+               _constraint_projector_matches(data.source_constraint, L,
+                                             sp.bc_rows, zero_columns)
+                entry = _ConstraintProjector(M, L, data)
+                cache[sp] = entry
+                return entry
+            end
+        end
+    end
+
+    # Only a genuinely new boundary operator reaches the materialisation path.
+    full_constraint = _materialize_constraint(L, sp.bc_rows)
+
+    # Rank and lifting selection use only differential columns, but the final
+    # residual below must use the ORIGINAL row. A constraint may legitimately
+    # mix both spaces (for example `integ(b) + gauge = target`): after restoring
+    # the algebraic stage value, its contribution still belongs in the residual
+    # that is corrected through `b`.
+    differential_constraint = copy(full_constraint)
+    isempty(zero_columns) ||
+        fill!(view(differential_constraint, :, zero_columns), 0)
+
+    # Some subproblems mix physical boundary rows with constraints that can be
+    # satisfied only by algebraic variables (the zero-Fourier pressure gauge is
+    # the common case). A problem-wide time-dependent BC flag must not make us
+    # demand differential-space rank from those rows. Retain a maximal
+    # independent subset of the rows that is actually projectable through the
+    # differential variables; algebraic-only rows remain at their stage-solve
+    # values.
+    constraint_rows = Int[]
+    row_rank = 0
+    target_rank = rank(differential_constraint)
+    for row in axes(differential_constraint, 1)
+        trial = [constraint_rows; row]
+        trial_rank = rank(view(differential_constraint, trial, :))
+        if trial_rank > row_rank
+            push!(constraint_rows, row)
+            row_rank = trial_rank
+            row_rank == target_rank && break
+        end
+    end
+    constraint = length(constraint_rows) == size(full_constraint, 1) ?
+                 full_constraint : full_constraint[constraint_rows, :]
+    projectable_constraint =
+        length(constraint_rows) == size(differential_constraint, 1) ?
+        differential_constraint : differential_constraint[constraint_rows, :]
+
+    # Build a sparse right inverse from the earliest independent differential
+    # columns. In coefficient ordering these are the lowest retained spectral
+    # modes, so endpoint corrections are smooth liftings (constant/linear for
+    # two Dirichlet conditions) instead of the dense Moore-Penrose correction
+    # that spreads a trace residual over every Chebyshev mode and excites an
+    # unstable high-frequency recurrence.
+    is_algebraic = falses(size(projectable_constraint, 2))
+    is_algebraic[zero_columns] .= true
+    selected = Int[]
+    selected_rank = 0
+    for column in axes(projectable_constraint, 2)
+        is_algebraic[column] && continue
+        trial = [selected; column]
+        trial_rank = rank(view(projectable_constraint, :, trial))
+        if trial_rank > selected_rank
+            push!(selected, column)
+            selected_rank = trial_rank
+            selected_rank == target_rank && break
+        end
+    end
+    selected_rank == size(constraint, 1) || throw(ArgumentError(
+        "Dynamic boundary constraints for group=$(sp.group) could not be " *
+        "resolved in the differential-variable subspace."))
+
+    # Only the selected low-mode rows can be nonzero in the lifting. Retaining
+    # a full nvariables-by-nconstraints matrix for every Fourier mode roughly
+    # doubled projector storage in 2D/3D, even though almost all of it was zero.
+    selected_correction = isempty(selected) ? zeros(ComplexF64, 0, 0) :
+                          pinv(projectable_constraint[:, selected])
+    data = _ConstraintProjectorData(full_constraint, constraint, constraint_rows,
+                                    zero_columns, selected, selected_correction)
+    if candidates === nothing
+        pool[fingerprint] = _ConstraintProjectorData[data]
+    else
+        push!(candidates, data)
+    end
+    entry = _ConstraintProjector(M, L, data)
+    cache[sp] = entry
+    return entry
+end
+
+"""Enforce final algebraic targets with a cached smooth spectral lifting."""
+function _project_final_constraints!(x::AbstractVector{ComplexF64},
+                                     last_stage_x::AbstractVector{ComplexF64},
+                                     alg_f::AbstractVector{ComplexF64},
+                                     state::TimestepperState,
+                                     sp::Subproblem)
+    projector = _get_or_compute_constraint_projector!(state, sp)
+    projector === nothing && return x
+    data = projector.data
+
+    # M does not determine pressure/tau variables. Its rank-revealing solve
+    # chooses zeros for those columns, which used to erase a valid hydrostatic
+    # pressure field from the public state. All built-in RK tableaux end at
+    # c_implicit[end] == 1, so the last stage already contains their final-time
+    # values (including RK111, whose explicit abscissa is instead zero).
+    @inbounds for column in data.algebraic_columns
+        x[column] = last_stage_x[column]
+    end
+
+    isempty(data.selected) && return x
+
+    residual = _sp_stage_vector!(sp, :final_constraint_residual,
+                                 length(data.constraint_rows), x)
+    mul!(residual, data.constraint, x)
+    @inbounds for (i, row_position) in enumerate(data.constraint_rows)
+        residual[i] = alg_f[sp.bc_rows[row_position]] - residual[i]
+    end
+    delta = _sp_stage_vector!(sp, :final_constraint_correction,
+                              length(data.selected), x)
+    mul!(delta, data.selected_correction, residual)
+    @inbounds for i in eachindex(data.selected)
+        x[data.selected[i]] += delta[i]
+    end
+    return x
+end
+
+"""
+    _get_or_compute_constrained_mass_lu!(state, sp)
+
+Return a cached GPU solver for the final-update projection matrix obtained from
+`sp.M_min` by restoring the algebraic rows and columns from `sp.L_min`. This is
+the per-subproblem analogue of `_get_constrained_mass_solver!` in the global RK
+path: differential rows retain the RK mass update while pressure/tau columns
+provide the degrees of freedom needed to enforce the final-time constraints.
+The factorization is independent of `dt`. CPU stepping uses
+`_project_final_constraints!` instead, which is stable for redundant tau fields.
+"""
+function _get_or_compute_constrained_mass_lu!(state::TimestepperState,
+                                               sp::Subproblem)
+    isempty(sp.bc_rows) && return _get_or_compute_mass_lu!(sp)
+    _gpu_subproblem_execution(sp) || throw(ArgumentError(
+        "The augmented constrained-mass solver is GPU-only; CPU final updates " *
+        "must use _project_final_constraints!."))
+    M = sp.M_min
+    L = sp.L_min
+    (M === nothing || L === nothing) && return nothing
+
+    cache = get!(state.timestepper_data, :_sp_rk_constrained_mass_solvers) do
+        IdDict{Any, Any}()
+    end
+    entry = get(cache, sp, nothing)
+    if entry !== nothing && entry.M === M && entry.L === L
+        return entry.solver
+    end
+
+    constrained_mass = _augmented_constrained_mass_matrix(M, L, sp.bc_rows)
+    solver_type = _subproblem_solver_type(sp.solver.base.matsolver)
+    solver_kwargs = _subproblem_solver_kwargs(sp.solver.base.matsolver)
+    # Keep device-resident execution strict: silently staging a constrained
+    # solve through CPU QR would violate the GPU path's ownership contract.
+    constrained_solver = try
+        MatSolvers.solver_instance(solver_type, constrained_mass; solver_kwargs...)
+    catch err
+        error("GPU constrained-mass factorization failed for group=$(sp.group); " *
+              "CPU sparse/dense fallback is disabled. Original error: " *
+              "$(sprint(showerror, err))")
+    end
+
+    cache[sp] = (M=M, L=L, solver=constrained_solver)
+    return constrained_solver
 end
 
 # ── Helper: get or build LHS factorization for a stage ────────────────────────

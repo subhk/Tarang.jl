@@ -75,3 +75,28 @@ end
     @test err isa ErrorException                                       # T3
     @test occursin("ChebyshevU", sprint(showerror, err))
 end
+
+@testset "1D MPI basis validation matches Domain refusal (rank=$rank)" begin
+    coords = CartesianCoordinates("x")
+    dist = Distributor(coords; dtype=Float64, architecture=CPU())
+    basis = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
+    validation_err = try
+        Tarang.validate_mpi_fourier_only((basis,), nprocs; use_pencil_arrays=true)
+        nothing
+    catch e
+        e
+    end
+    @test validation_err isa ErrorException
+    @test occursin("not supported for 1D", sprint(showerror, validation_err))
+
+    domain_err = try
+        Domain(dist, (basis,))
+        nothing
+    catch e
+        e
+    end
+    @test domain_err isa ErrorException
+    @test occursin("not supported for 1D", sprint(showerror, domain_err))
+    @test isempty(dist.transforms)
+    @test dist.pencil_fft_plan === nothing
+end

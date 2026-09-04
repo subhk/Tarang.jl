@@ -302,8 +302,12 @@ rank unwinds while its peers walk into the next task's `MPI.Allreduce` and hang
 forever. Delegates to `_collectively` (one `Allreduce` per call, success and
 failure alike, so the collective count stays rank-uniform)."""
 function _output_collectively(f, handler::NetCDFFileHandler, context::AbstractString)
-    handler.dist === nothing && return f()
-    return _collectively(f, handler.dist, context)
+    handler.dist !== nothing && return _collectively(f, handler.dist, context)
+    # A handler built without a Distributor still runs on a communicator
+    # (COMM_WORLD under MPI). Settle the phase on it so a root-only filesystem
+    # step (overwrite cleanup, directory creation) is complete on every rank
+    # before any rank continues; `_collectively` only needs `.size`/`.comm`.
+    return _collectively(f, (size=handler.size, comm=handler.comm), context)
 end
 
 """
@@ -1662,7 +1666,7 @@ end
 """
 Create NetCDF file with Tarang-style structure
 """
-function create_current_file!(handler::NetCDFFileHandler)
+function create_current_file!(handler::NetCDFFileHandler; create::Bool=true)
     init_mpi!(handler)
     filename = current_file(handler)
 
@@ -1679,7 +1683,11 @@ function create_current_file!(handler::NetCDFFileHandler)
 
     # Every rank owns a distinct `_p<rank>.nc` target. Settle the complete local
     # create sequence collectively so ENOSPC/corruption on one rank reaches all.
+    # `create=false` keeps a rank inside both collectives without touching its
+    # file: the caller's decision is rank-local (its own file may be missing
+    # while its peers' files exist), but the collective count must not be.
     _output_collectively(handler, "create_current_file! initialize") do
+    create || return nothing
     isfile(filename) && rm(filename)
 
     create_empty_netcdf4_file!(filename)
@@ -1752,8 +1760,9 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
                                sim_time=sim_time, timestep=timestep)
     # `wall_time` differs per rank (per-rank `time()`), so a `wall_dt` cadence makes
     # check_schedule's decision rank-divergent: some ranks would enter process! and
-    # block in its collectives (MPI.Barrier in create_current_file!, MPI.Allreduce
-    # in extrema/mean/var postprocess) while others return here → DEADLOCK.
+    # block in its collectives (the `_output_collectively` phases in
+    # create_current_file!, MPI.Allreduce in extrema/mean/var postprocess) while
+    # others return here → DEADLOCK.
     # Broadcast rank 0's decision so every rank writes or skips together, mirroring
     # process!(VirtualFileHandler,...). iter/sim_dt
     # cadences are already rank-consistent, so the Bcast is a no-op for them.
@@ -1810,11 +1819,15 @@ function process!(handler::NetCDFFileHandler; iteration=nothing, wall_time=nothi
             empty!(handler._created_vars)
         end
 
+        # Per-rank decision (each rank owns its own `_p<rank>.nc`), but
+        # `create_current_file!` runs collectives, so EVERY rank enters it and
+        # the decision only gates the rank-local create body. Branching around
+        # the call would desynchronize the collective count as soon as one
+        # rank's file is missing while its peers' files exist.
         filename = current_file(handler)
-        if !isfile(filename) ||
-           (handler.file_write_num == 1 && handler.mode == "overwrite")
-            create_current_file!(handler)
-        end
+        needs_create = !isfile(filename) ||
+                       (handler.file_write_num == 1 && handler.mode == "overwrite")
+        create_current_file!(handler; create=needs_create)
 
         write_index = handler.file_write_num
         _output_collectively(handler, "process! time metadata") do

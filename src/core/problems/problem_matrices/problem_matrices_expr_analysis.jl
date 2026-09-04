@@ -184,20 +184,15 @@ function _coord_coeff_size(coord::Coordinate, operand)
     coord_name = hasfield(typeof(coord), :name) ? string(coord.name) : nothing
 
     # Match basis by element_label (stored in basis.meta.element_label)
-    first_rf = true
-    for basis in field.bases
+    coeff_shape = field.domain === nothing ?
+                  ntuple(i -> field.bases[i] === nothing ? 1 : field.bases[i].meta.size,
+                         length(field.bases)) :
+                  coefficient_shape(field.domain, field.dtype)
+    for (axis, basis) in enumerate(field.bases)
         basis === nothing && continue
         label = hasfield(typeof(basis), :meta) ? string(basis.meta.element_label) : nothing
         if label !== nothing && coord_name !== nothing && label == coord_name
-            # First RealFourier dimension is halved by rfft; others keep full size
-            if isa(basis, RealFourier) && first_rf
-                return div(basis.meta.size, 2) + 1
-            else
-                return basis.meta.size
-            end
-        end
-        if isa(basis, RealFourier)
-            first_rf = false
+            return coeff_shape[axis]
         end
     end
     return 0

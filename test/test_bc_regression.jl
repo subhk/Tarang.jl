@@ -67,7 +67,8 @@ function build_diffusion(bc_bot::String, bc_top::String;
                          Nx::Int=4, Nz::Int=16,
                          Lx::Float64=2π, Lz::Float64=1.0,
                          κ::Float64=1.0, dt::Float64=1e-3,
-                         params_extra::NamedTuple=NamedTuple())
+                         params_extra::NamedTuple=NamedTuple(),
+                         before_solver::Function=identity)
     coords = CartesianCoordinates("x", "z")
     dist   = Distributor(coords; dtype=Float64, device=CPU())
     xbasis = RealFourier(coords["x"]; size=Nx, bounds=(0.0, Lx))
@@ -89,6 +90,7 @@ function build_diffusion(bc_bot::String, bc_top::String;
     add_equation!(problem, "∂t(T) - κ*div(grad_T) + τ_lift(tau_T2) = 0")
     add_bc!(problem, bc_bot)
     add_bc!(problem, bc_top)
+    before_solver(problem)
 
     solver = InitialValueSolver(problem, RK222(); dt=dt)
     return solver, T
@@ -384,6 +386,81 @@ end
 
     max_err = maximum(abs, T_out .- expected)
     @test max_err < 5e-3
+end
+
+@testset "BC regression: space callback failures abort solver setup" begin
+    sentinel = ErrorException("intentional space-dependent BC callback failure")
+    callback_calls = Ref(0)
+    function failing_callback(::Real, ::AbstractDict)
+        callback_calls[] += 1
+        throw(sentinel)
+    end
+
+    replace_bottom_bc!(problem) = begin
+        manager = problem.bc_manager
+        original = manager.conditions[first(manager.space_dependent_bcs)]
+        manager.conditions[first(manager.space_dependent_bcs)] = dirichlet_bc(
+            original.field,
+            original.coordinate,
+            original.position,
+            failing_callback;
+            space_dependent=true,
+        )
+    end
+
+    caught = try
+        build_diffusion("T(z=0) = sin(x)", "T(z=Lz) = 0";
+                        Nx=4, Nz=8, before_solver=replace_bottom_bc!)
+        nothing
+    catch err
+        err
+    end
+
+    @test caught === sentinel
+    @test callback_calls[] == 1
+end
+
+@testset "BC regression: space-time callback failures abort an RK stage" begin
+    sentinel = ErrorException("intentional RK-stage BC callback failure")
+    failure_calls = Ref(0)
+    observed_times = Float64[]
+    dt = 1e-3
+
+    function failing_stage_callback(t::Real, coordinates::AbstractDict)
+        push!(observed_times, Float64(t))
+        if 0 < t < dt
+            failure_calls[] += 1
+            throw(sentinel)
+        end
+        return zeros(length(coordinates["x"]))
+    end
+
+    solver, _ = build_diffusion("T(z=0) = sin(x)", "T(z=Lz) = 0";
+                                Nx=4, Nz=8, dt=dt)
+    manager = solver.problem.bc_manager
+    bc_idx = first(manager.space_dependent_bcs)
+    original = manager.conditions[bc_idx]
+    manager.conditions[bc_idx] = dirichlet_bc(
+        original.field,
+        original.coordinate,
+        original.position,
+        failing_stage_callback;
+        time_dependent=true,
+        space_dependent=true,
+    )
+    push!(manager.time_dependent_bcs, bc_idx)
+
+    caught = try
+        step!(solver)
+        nothing
+    catch err
+        err
+    end
+
+    @test caught === sentinel
+    @test failure_calls[] == 1
+    @test 0.0 in observed_times
+    @test any(t -> 0 < t < dt, observed_times)
 end
 
 # ----------------------------------------------------------------------

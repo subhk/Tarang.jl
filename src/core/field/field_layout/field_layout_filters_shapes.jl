@@ -54,7 +54,8 @@ function apply_spectral_cutoff!(field::ScalarField, cutoff_scales::Union{Float64
                 nothing
             end
         end
-        _apply_spectral_cutoffs_distributed!(cd, bases, cutoffs, field.dtype)
+        _apply_spectral_cutoffs_distributed!(cd, bases, cutoffs, field.dtype;
+                                             rfft_dims=_field_rfft_dims(field))
     else
         local_cd = get_local_data(cd)
         cutoffs = ntuple(nb) do i
@@ -242,9 +243,9 @@ end
     Returns:
     - Tuple of local coefficient dimensions for this process
     """
-function get_local_coeff_shape(dist::Distributor, domain::Domain)
-    global_shape = get_global_coeff_shape(dist, domain)
-    return get_local_array_size(dist, global_shape)
+function get_local_coeff_shape(dist::Distributor, domain::Domain;
+                               dtype::Type=dist.dtype)
+    return local_shape(domain, :c, dtype)
 end
 
 """

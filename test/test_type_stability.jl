@@ -105,10 +105,10 @@ end
     end
 
     @testset "Phi function identity cache" begin
-        # Note: @inferred fails here because get!() with Dict{Tuple,Matrix} loses
-        # the element type parameter at inference time. The runtime type is correct.
+        # The cache deliberately keeps a structured O(n) identity instead of a
+        # dense O(n²) matrix. The runtime element type must still match exactly.
         I1 = _get_identity_matrix(4, Float64)
-        @test I1 isa Matrix{Float64}
+        @test I1 isa LinearAlgebra.Diagonal{Float64}
         @test size(I1) == (4, 4)
     end
 

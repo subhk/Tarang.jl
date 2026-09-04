@@ -12,12 +12,12 @@ Many physical systems involve dynamics confined to surfaces or boundaries:
 
 Tarang provides a flexible `BoundaryAdvectionDiffusion` framework for these cases.
 
-!!! warning "Interior coupling is not functional"
-    The framework also declares an *interior-coupled* mode (`InteriorDerivedVelocity` +
-    `interior_coupling=`), intended for full QG with a 3D streamfunction inversion, along
-    with a dedicated `QGSystem`. **Neither currently runs**; the sections below give the
-    exact failures. Everything else on this page is verified working, in serial and
-    under MPI.
+!!! warning "Framework-level interior coupling is not functional"
+    The `BoundaryAdvectionDiffusion` framework declares an *interior-coupled* mode
+    (`InteriorDerivedVelocity` + `interior_coupling=`), but that path is not yet
+    implemented. The separate `QGSystem` API does run its interior inversion and
+    coupled surface step on serial CPU; its current MPI limitation is described below.
+    Everything else on this page is verified working in serial and under MPI.
 
 ## The Advection-Diffusion Equation
 
@@ -419,7 +419,7 @@ println("E = ", bad_energy(sqg), "  max|u| = ", bad_max_velocity(sqg))
 
 Run with:
 ```bash
-mpiexec -n 4 julia --project=. my_sqg_simulation.jl
+mpiexecjl --project=. -n 4 julia my_sqg_simulation.jl
 ```
 
 The energy is bit-identical at 1, 2 and 4 processes
@@ -434,15 +434,17 @@ Two rules to keep the distributed version correct:
 ## The dedicated `QGSystem`
 
 `qg_system_setup`, `qg_step!`, `qg_invert!` and `qg_energy` are exported and are intended
-to provide full QG with interior PV inversion. **They do not currently work.**
-`qg_system_setup` builds the interior inversion problem with parameters written directly
-into `problem.parameters` (invisible to the equation parser, which warns
-`Unknown variable: S / N / f0`) and declares the surface Neumann conditions with
-`add_equation!` instead of `add_bc!`. The result is a non-square operator
-(1440×1152 at `Nx=Ny=16, Nz=8`) and `qg_step!` throws `DimensionMismatch`.
+to provide full QG with interior PV inversion. The interior problem uses two
+horizontal tau fields for the surface Neumann rows, plus a scalar tau and
+`integ(ψ) = 0` constraint for the horizontally uniform streamfunction gauge.
+Current surface-buoyancy arrays are projected into those boundary rows on every
+inversion, and the BVP solver is reused by subsequent calls and by `qg_step!`.
 
-Use the `BoundaryAdvectionDiffusion` framework with `SelfDerivedVelocity` — the SQG limit
-of QG — until this is repaired.
+This dedicated path is currently verified on serial CPU only. A distributed
+Fourier--Chebyshev field must keep the bounded Chebyshev axis local, while
+`QGSystem` still constructs its interior bases in `(x, y, z)` order. Therefore
+leave `mesh_xy=(1, 1)` and `mesh_z=1` for now; a nontrivial mesh is rejected by
+the mixed-transform planner rather than producing an incorrect inversion.
 
 ## Summary
 
@@ -450,7 +452,8 @@ of QG — until this is repaired.
 |----------|-----------------|--------|
 | SQG (surface buoyancy) | `SelfDerivedVelocity` | works, serial and MPI |
 | Passive tracer in a known flow | `PrescribedVelocity` | works, serial and MPI |
-| QG (coupled surface + interior) | `InteriorDerivedVelocity` | **not functional** |
+| QG (dedicated coupled surface + interior) | `QGSystem` | works on serial CPU |
+| Framework-level interior coupling | `InteriorDerivedVelocity` | **not functional** |
 
 ## See Also
 

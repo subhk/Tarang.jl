@@ -241,21 +241,26 @@ const GPU_UNPACK_2D_OP = KernelOperation(unpack_from_transpose_kernel_2d!) do da
 end
 
 """
-    _validate_chunk_divisibility(count, divisor, dim, rank, operation)
+    _validated_chunk_size(count, divisor, dim, rank, operation)
 
-Validate that count is evenly divisible by divisor for chunk size computation.
-Throws ArgumentError if not divisible.
+Return the chunk size `count ÷ divisor`, validating the MPI count metadata.
+An empty local partition has `(count, divisor) == (0, 0)` and contributes a
+zero-size chunk. A nonzero count with a zero divisor, or a non-divisible count,
+is invalid and throws `ArgumentError`.
 """
-function _validate_chunk_divisibility(count::Int, divisor::Int, dim::Int, rank::Int, operation::String)
+function _validated_chunk_size(count::Int, divisor::Int, dim::Int,
+                               rank::Int, operation::String)
     if divisor == 0
-        throw(ArgumentError("GPU $operation: divisor is zero for dim=$dim, rank=$rank. " *
-                           "This indicates zero array dimensions, which is invalid."))
+        count == 0 && return 0
+        throw(ArgumentError("GPU $operation: nonzero count=$count has a zero divisor " *
+                            "for dim=$dim, rank=$rank."))
     end
     if count % divisor != 0
         throw(ArgumentError("GPU $operation: count=$count is not evenly divisible by divisor=$divisor " *
                            "for dim=$dim, rank=$rank. This indicates misaligned MPI counts/displs. " *
                            "Check that array dimensions are compatible with the MPI decomposition."))
     end
+    return count ÷ divisor
 end
 
 # Convert small CPU int arrays to GPU. These are tiny (2-8 elements for MPI
@@ -271,14 +276,16 @@ function gpu_pack_for_transpose!(buffer::CuArray, data::CuArray,
                                  counts::Vector{Int}, displs::Vector{Int},
                                  dim::Int, nranks::Int;
                                  synchronize::Bool=true)
+    isempty(data) && return buffer
     ndims_data = ndims(data)
 
     # Ensure we're on the device where data lives for allocations, kernel launch, and sync
     data_device = CUDA.device(data)
     prev_device = CUDA.device()
-    CUDA.device!(data_device)
+    try
+        CUDA.device!(data_device)
 
-    if ndims_data == 3
+        if ndims_data == 3
         Nx, Ny, Nz = size(data)
         n_elements = Nx * Ny * Nz
 
@@ -288,20 +295,20 @@ function gpu_pack_for_transpose!(buffer::CuArray, data::CuArray,
         if dim == 3
             divisor = Nx * Ny
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], divisor, dim, r, "pack")
-                chunk_sizes[r] = counts[r] ÷ divisor
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], divisor, dim, r, "pack")
             end
         elseif dim == 2
             divisor = Nx * Nz
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], divisor, dim, r, "pack")
-                chunk_sizes[r] = counts[r] ÷ divisor
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], divisor, dim, r, "pack")
             end
         else  # dim == 1
             divisor = Ny * Nz
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], divisor, dim, r, "pack")
-                chunk_sizes[r] = counts[r] ÷ divisor
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], divisor, dim, r, "pack")
             end
         end
 
@@ -313,7 +320,7 @@ function gpu_pack_for_transpose!(buffer::CuArray, data::CuArray,
         kernel(buffer, data, Nx, Ny, Nz, nranks, dim, chunk_sizes_gpu, displs_gpu, prefix_sums_gpu;
                ndrange=n_elements)
 
-    elseif ndims_data == 2
+        elseif ndims_data == 2
         Nx, Ny = size(data)
         n_elements = Nx * Ny
 
@@ -322,13 +329,13 @@ function gpu_pack_for_transpose!(buffer::CuArray, data::CuArray,
         chunk_sizes = zeros(Int, nranks)
         if dim == 2
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], Nx, dim, r, "pack")
-                chunk_sizes[r] = counts[r] ÷ Nx
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], Nx, dim, r, "pack")
             end
         else  # dim == 1
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], Ny, dim, r, "pack")
-                chunk_sizes[r] = counts[r] ÷ Ny
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], Ny, dim, r, "pack")
             end
         end
 
@@ -339,13 +346,15 @@ function gpu_pack_for_transpose!(buffer::CuArray, data::CuArray,
         kernel = pack_for_transpose_kernel_2d!(CUDABackend())
         kernel(buffer, data, Nx, Ny, nranks, dim, chunk_sizes_gpu, displs_gpu, prefix_sums_gpu;
                ndrange=n_elements)
-    else
-        # Fallback: simple copy
-        copyto!(view(buffer, 1:length(data)), vec(data))
-    end
+        else
+            # Fallback: simple copy
+            copyto!(view(buffer, 1:length(data)), vec(data))
+        end
 
-    synchronize && CUDA.synchronize()
-    CUDA.device!(prev_device)
+        synchronize && CUDA.synchronize()
+    finally
+        CUDA.device!(prev_device)
+    end
     return buffer
 end
 
@@ -358,14 +367,16 @@ function gpu_unpack_from_transpose!(data::CuArray, buffer::CuArray,
                                     counts::Vector{Int}, displs::Vector{Int},
                                     dim::Int, nranks::Int;
                                     synchronize::Bool=true)
+    isempty(data) && return data
     ndims_data = ndims(data)
 
     # Ensure we're on the device where data lives for allocations, kernel launch, and sync
     data_device = CUDA.device(data)
     prev_device = CUDA.device()
-    CUDA.device!(data_device)
+    try
+        CUDA.device!(data_device)
 
-    if ndims_data == 3
+        if ndims_data == 3
         Nx, Ny, Nz = size(data)
         n_elements = Nx * Ny * Nz
 
@@ -375,20 +386,20 @@ function gpu_unpack_from_transpose!(data::CuArray, buffer::CuArray,
         if dim == 2  # After Z→Y: receiving y-chunks
             divisor = Nx * Nz
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], divisor, dim, r, "unpack")
-                chunk_sizes[r] = counts[r] ÷ divisor
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], divisor, dim, r, "unpack")
             end
         elseif dim == 1  # After Y→X: receiving x-chunks
             divisor = Ny * Nz
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], divisor, dim, r, "unpack")
-                chunk_sizes[r] = counts[r] ÷ divisor
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], divisor, dim, r, "unpack")
             end
         else  # dim == 3: receiving z-chunks
             divisor = Nx * Ny
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], divisor, dim, r, "unpack")
-                chunk_sizes[r] = counts[r] ÷ divisor
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], divisor, dim, r, "unpack")
             end
         end
 
@@ -400,7 +411,7 @@ function gpu_unpack_from_transpose!(data::CuArray, buffer::CuArray,
         kernel(data, buffer, Nx, Ny, Nz, nranks, dim, chunk_sizes_gpu, displs_gpu, prefix_sums_gpu;
                ndrange=n_elements)
 
-    elseif ndims_data == 2
+        elseif ndims_data == 2
         Nx, Ny = size(data)
         n_elements = Nx * Ny
 
@@ -409,13 +420,13 @@ function gpu_unpack_from_transpose!(data::CuArray, buffer::CuArray,
         chunk_sizes = zeros(Int, nranks)
         if dim == 2  # Receiving y-chunks
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], Nx, dim, r, "unpack")
-                chunk_sizes[r] = counts[r] ÷ Nx
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], Nx, dim, r, "unpack")
             end
         else  # dim == 1: Receiving x-chunks
             for r in 1:nranks
-                _validate_chunk_divisibility(counts[r], Ny, dim, r, "unpack")
-                chunk_sizes[r] = counts[r] ÷ Ny
+                chunk_sizes[r] = _validated_chunk_size(
+                    counts[r], Ny, dim, r, "unpack")
             end
         end
 
@@ -426,12 +437,14 @@ function gpu_unpack_from_transpose!(data::CuArray, buffer::CuArray,
         kernel = unpack_from_transpose_kernel_2d!(CUDABackend())
         kernel(data, buffer, Nx, Ny, nranks, dim, chunk_sizes_gpu, displs_gpu, prefix_sums_gpu;
                ndrange=n_elements)
-    else
-        copyto!(vec(data), view(buffer, 1:length(data)))
-    end
+        else
+            copyto!(vec(data), view(buffer, 1:length(data)))
+        end
 
-    synchronize && CUDA.synchronize()
-    CUDA.device!(prev_device)
+        synchronize && CUDA.synchronize()
+    finally
+        CUDA.device!(prev_device)
+    end
     return data
 end
 
@@ -477,6 +490,7 @@ Handles both forward and reverse transpose directions:
 """
 function Tarang._gpu_pack_for_transpose!(send_buf::CuArray, data::CuArray,
                                           dim::Int, config::Tarang.DistributedGPUConfig)
+    isempty(data) && return send_buf
     nprocs = config.size
     ndims_data = ndims(data)
     dims = size(data)
@@ -534,6 +548,7 @@ Handles both directions:
 """
 function Tarang._gpu_unpack_from_transpose!(output::CuArray, recv_buf::CuArray,
                                              dim::Int, config::Tarang.DistributedGPUConfig)
+    isempty(output) && return output
     nprocs = config.size
     ndims_data = ndims(output)
     out_dims = size(output)
