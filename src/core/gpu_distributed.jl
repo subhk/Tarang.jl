@@ -834,8 +834,15 @@ function check_cuda_aware_mpi()
             return true
         end
     catch err
-        # Keep compatibility with MPI.jl versions/implementations whose probe
-        # is unavailable at runtime, then fall back to legacy indicators.
+        # Some Open MPI builds do not expose the optional
+        # MPIX_Query_cuda_support symbol that MPI.jl probes. That compatibility
+        # miss is safe to fall back from; a malformed JULIA_MPI_HAS_CUDA override
+        # and every other probe failure must reach the caller, or a distributed
+        # GPU run silently downgrades to "no CUDA-aware MPI".
+        missing_query_symbol = err isa ErrorException &&
+                               occursin("could not load symbol", err.msg) &&
+                               occursin("MPIX_Query_cuda_support", err.msg)
+        missing_query_symbol || rethrow()
         @debug "MPI.jl CUDA-awareness probe failed" exception = err
     end
 

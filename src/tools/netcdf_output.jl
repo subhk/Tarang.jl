@@ -1685,6 +1685,12 @@ function create_current_file!(handler::NetCDFFileHandler; create::Bool=true)
     isfile(filename) && rm(filename)
 
     create_empty_netcdf4_file!(filename)
+    # A fresh file has no data-variable groups. `_created_vars` memoizes which
+    # variables already exist in the CURRENT file so `write_task_data!` can skip
+    # group/variable creation; when a file is recreated mid-set (its earlier
+    # copy vanished), that memo is stale and the next write would target a
+    # group that no longer exists ("NetCDF: No group found").
+    empty!(handler._created_vars)
 
     group_nccreate(filename, NETCDF_TIME_GROUP, "sim_time", "sim_time", Inf,
                    atts=Dict("long_name" => "simulation time",
