@@ -320,8 +320,9 @@ end
 
 Clean up resources used by the distributed DCT plan.
 
-This function releases NCCL sub-communicators and allows
-work arrays to be garbage collected.
+This function releases NCCL sub-communicators and the MPI row/column
+communicators owned by the plan's pencil, then allows work arrays to be garbage
+collected. Pencil cleanup is idempotent, so its GC finalizer remains safe.
 
 # Arguments
 - `plan`: DistributedDCTPlan to finalize
@@ -335,6 +336,7 @@ finalize_distributed_dct_plan!(plan)
 """
 function finalize_distributed_dct_plan!(plan::DistributedDCTPlan)
     finalize_nccl_transpose!(plan.transpose_buffer)
+    free_pencil_decomposition!(plan.pencil)
     # Work arrays will be garbage collected
     return nothing
 end

@@ -109,7 +109,7 @@ function _evaluate_local_chebyshev_derivative!(result::ScalarField, operand::Sca
 
     scale = 2.0 / (b - a)
 
-    data_g = get_grid_data(operand)
+    data_g = grid_data!(operand)
     dims = ndims(data_g)
     data_shape = size(data_g)
 

@@ -203,6 +203,26 @@ using Tarang
             @test isapprox(gout, original; rtol=1e-10, atol=1e-10)
         end
     end
+
+    @testset "Downscaled ChebyshevT retains the top physical mode" begin
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; mesh=(1,), dtype=Float64)
+        N = 12
+        zb = ChebyshevT(coords["z"]; size=N, bounds=(-1.0, 1.0))
+        field = ScalarField(Domain(dist, (zb,)), "downscaled_top_mode")
+        Tarang.require_scales!(field, 0.5)
+        g = Tarang.get_grid_data(field)
+        M = length(g)
+        @test M == 6
+        g .= [isodd(j) ? 1.0 : -1.0 for j in 1:M]
+        original = copy(g)
+
+        forward_transform!(field)
+        backward_transform!(field)
+
+        @test Tarang.get_grid_data(field) ≈ original rtol=1e-12 atol=1e-12
+    end
+
 end
 
 @testset "Transform dispatch helpers" begin

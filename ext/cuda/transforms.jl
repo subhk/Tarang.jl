@@ -55,7 +55,8 @@ const DISTRIBUTED_DCT_PLAN_LOCK = ReentrantLock()
     get_or_create_distributed_dct_plan(field)
 
 Get or create a cached distributed DCT plan for the given field.
-Thread-safe caching by field properties (global shape, proc grid, element type).
+Thread-safe caching by field and execution context (global shape, process mesh,
+element type, basis kinds, communicator identity, and CUDA device).
 """
 function get_or_create_distributed_dct_plan(field)
     dist = field.dist
@@ -64,12 +65,15 @@ function get_or_create_distributed_dct_plan(field)
     # the plan's per-axis dispatch (and the coeff-pencil half-spectrum sizing)
     # depend on the basis kinds, not just the shape/proc-grid/eltype.
     global_shape_tuple = Tuple(Tarang.global_shape(field.domain))
-    proc_grid = _compute_proc_grid(dist.size)
+    proc_grid = _distributed_dct_proc_grid(dist)
     T = real(eltype(get_grid_data(field)))
     bases = field.bases
     axis_kind = Tarang.axis_kinds(bases)
+    comm_token = _distributed_dct_comm_token(dist.comm)
+    device_id = _dct_cache_device_id(dist.architecture)
 
-    key = (global_shape_tuple, proc_grid, T, axis_kind)
+    key = _distributed_dct_plan_cache_key(
+        global_shape_tuple, proc_grid, T, axis_kind, comm_token, device_id)
 
     lock(DISTRIBUTED_DCT_PLAN_LOCK) do
         if haskey(DISTRIBUTED_DCT_PLAN_CACHE, key)
@@ -88,6 +92,26 @@ function get_or_create_distributed_dct_plan(field)
 end
 
 """
+    _distributed_dct_comm_token(comm)
+
+Return a process-local identity token for an MPI communicator object. MPI
+communicators with equal sizes (or even congruent groups) still have independent
+collective contexts and must never share a cached distributed plan.
+"""
+_distributed_dct_comm_token(comm::MPI.Comm) = objectid(comm)
+
+"""
+    _distributed_dct_plan_cache_key(global_shape, proc_grid, T, axis_kind,
+                                    comm_token, device_id)
+
+Build the complete cache key for a distributed DCT plan. Kept as a pure helper
+so context separation can be regression-tested without requiring a GPU/NCCL run.
+"""
+_distributed_dct_plan_cache_key(global_shape, proc_grid, T, axis_kind,
+                                comm_token, device_id) =
+    (global_shape, proc_grid, T, axis_kind, comm_token, device_id)
+
+"""
     _compute_proc_grid(nprocs::Int)
 
 Compute a 2D process grid (P1, P2) for the given number of processes.
@@ -100,6 +124,20 @@ function _compute_proc_grid(nprocs::Int)
     end
     P2 = nprocs ÷ P1
     return (P1, P2)
+end
+
+"""
+    _distributed_dct_proc_grid(dist)
+
+Return the actual two-dimensional process mesh used by `dist`, falling back to
+the square-ish heuristic only when the distributor has no valid 2-D mesh.
+"""
+function _distributed_dct_proc_grid(dist)
+    mesh = dist.mesh
+    if mesh isa Tuple && length(mesh) == 2 && prod(mesh) == dist.size
+        return (mesh[1], mesh[2])
+    end
+    return _compute_proc_grid(dist.size)
 end
 
 """
@@ -118,12 +156,7 @@ function get_or_create_pencil(dist, global_shape::NTuple{3, Int})
     # pencil grid (2, 4), so the pencil's local shapes disagreed with every
     # mesh-derived buffer and the shape asserts rejected the run. Fall back to
     # the square-ish heuristic only when no usable 2D mesh is present.
-    mesh = dist.mesh
-    proc_grid = if mesh isa Tuple && length(mesh) == 2 && prod(mesh) == nprocs
-        (mesh[1], mesh[2])
-    else
-        _compute_proc_grid(nprocs)
-    end
+    proc_grid = _distributed_dct_proc_grid(dist)
 
     # Align the pencil's block ownership with the distributor's column-major
     # field-buffer convention (design decision #5). Only matters when P1>1 AND

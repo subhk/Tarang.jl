@@ -598,6 +598,21 @@ end
 function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing::Forcing)
     var_idx = _stochastic_forcing_state_index(problem, variable)
 
+    if forcing isa StochasticForcingType
+        state_fields = ScalarField[]
+        for var in problem.variables
+            if isa(var, ScalarField)
+                push!(state_fields, var)
+            elseif isa(var, VectorField)
+                append!(state_fields, var.components)
+            elseif isa(var, TensorField)
+                append!(state_fields, vec(var.components))
+            end
+        end
+        target_field = state_fields[var_idx]
+        _synchronize_forcing_rng!(forcing, target_field.dist.comm)
+    end
+
     # Store in stochastic_forcings dict keyed by variable index
     problem.stochastic_forcings[var_idx] = forcing
 

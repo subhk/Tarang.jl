@@ -366,6 +366,14 @@ function _sp_stage_vector!(sp::Subproblem, kind::Symbol, n::Int)
     return _sp_stage_vector!(sp, kind, 0, n)
 end
 
+# An explicit-first RK stage is the identity stage `X_1 = X_n`.  Solving
+# `M * X_1 = M * X_n` is not equivalent when `M` is singular: the
+# least-squares mass solve discards null-space/tau components that are part of
+# the current DAE state.  Both the per-mode and batched drivers use this guard
+# to leave the already-gathered state untouched for that one stage.
+@inline _is_explicit_first_stage(stage::Int, a_ii::Real) =
+    stage == 1 && abs(a_ii) < 1e-14
+
 """
     step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
                          subproblems::Tuple)
@@ -569,6 +577,9 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         for (sp_idx, sp) in enumerate(subproblems)
             sp.M_min === nothing && continue
 
+            a_ii = A_imp[i, i]
+            _is_explicit_first_stage(i, a_ii) && continue
+
             # RHS = M*X_n + dt * Σ_{j<i}( A^E_{ij}*F_j - A^I_{ij}*L*X_j )
             # F[j] and LX[j] contain values at stage j SOLUTION (set after stage j)
             rhs = RHS[sp_idx]
@@ -586,8 +597,6 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
             end
 
             # Solve: (M_min + dt*a_ii*L_min) * x_sol = rhs
-            a_ii = A_imp[i, i]
-
             # Override BC rows with `dt*a_ii*F_alg`. For algebraic rows (M=0),
             # the stage LHS reduces to `dt*a_ii*L_row*X = dt*a_ii*F_alg`, i.e.,
             # `L_row*X = F_alg`, enforcing the BC at every stage regardless of

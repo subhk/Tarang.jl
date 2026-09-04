@@ -238,10 +238,17 @@ function _fill_random_global_indexed!(::CPU, cpu_data::AbstractArray, seed::Int,
         point_seed = seed + global_idx
         Random.seed!(point_seed)
 
+        T = eltype(cpu_data)
         if distribution == "normal" || distribution == "standard_normal"
-            cpu_data[I] = randn() * scale
+            # `randn(T)` supplies both components for complex storage. Assigning
+            # one real draw, as before, silently left every imaginary part zero.
+            cpu_data[I] = T <: Complex ? randn(T) * scale : randn() * scale
         elseif distribution == "uniform"
-            cpu_data[I] = (rand() - 0.5) * 2.0 * scale
+            if T <: Complex
+                cpu_data[I] = T(rand() - 0.5, rand() - 0.5) * (2.0 * scale)
+            else
+                cpu_data[I] = (rand() - 0.5) * 2.0 * scale
+            end
         else
             throw(ArgumentError("Unknown distribution: $distribution. Use 'normal' or 'uniform'."))
         end

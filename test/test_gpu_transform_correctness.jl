@@ -110,6 +110,30 @@ else
             _check(cpu_u, gpu_u, data)
         end
 
+        @testset "2D mixed bases canonicalize reversed caller order" begin
+            CUDA.allowscalar(false)
+            coords = CartesianCoordinates("x", "z")
+            dist = Distributor(coords; dtype=Float64, device=GPU())
+            xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+            zb = ChebyshevT(coords["z"]; size=9, bounds=(-1.0, 1.0))
+            u = ScalarField(dist, "reversed", (zb, xb), Float64)
+
+            @test u.bases == u.domain.bases == (xb, zb)
+            @test u.layout.global_shape == size(get_grid_data(u)) == (8, 9)
+            @test size(get_coeff_data(u)) == (5, 9)
+            @test get_scaled_shape(u) == (8, 9)
+
+            x = reshape(Tarang.local_grid(xb, dist, 1.0;
+                                          move_to_arch=false), :, 1)
+            z = reshape(Tarang.local_grid(zb, dist, 1.0;
+                                          move_to_arch=false), 1, :)
+            data = @. sin(2x) * (1 + z - 0.25z^2)
+            get_grid_data(u) .= CuArray(data)
+            ensure_layout!(u, :c)
+            ensure_layout!(u, :g)
+            @test isapprox(Array(get_grid_data(u)), data; rtol=1e-9, atol=1e-11)
+        end
+
         @testset "2D ComplexFourier (complex split/scratch path)" begin
             mk(c) = (ComplexFourier(c["x"]; size=16, bounds=(0.0, 2π)),
                      ComplexFourier(c["y"]; size=16, bounds=(0.0, 2π)))
@@ -519,6 +543,38 @@ else
         ensure_layout!(dz_cpu, :g); ensure_layout!(dz_gpu, :g)
         @test isapprox(Array(get_grid_data(dz_gpu)), get_grid_data(dz_cpu);
                        rtol=1e-9, atol=1e-11)
+    end
+
+    @testset "Chebyshev derivative synchronizes coefficient-authoritative operands" begin
+        CUDA.allowscalar(false)
+        coords = CartesianCoordinates("x", "z")
+        dist = Distributor(coords; dtype=Float64, device=GPU())
+        xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+        zb = ChebyshevT(coords["z"]; size=9, bounds=(-1.0, 1.0))
+        dom = Domain(dist, (xb, zb))
+        a = ScalarField(dom, "a")
+        b = ScalarField(dom, "b")
+
+        x = reshape(vec(Array(Tarang.local_grid(xb, dist, 1.0;
+                                                move_to_arch=false))), :, 1)
+        z = reshape(vec(Array(Tarang.local_grid(zb, dist, 1.0;
+                                                move_to_arch=false))), 1, :)
+
+        ensure_layout!(a, :g)
+        get_grid_data(a) .= CuArray(@. cos(x) * (1 + z))
+        ensure_layout!(a, :c)
+
+        ensure_layout!(b, :g)
+        get_grid_data(b) .= CuArray(@. sin(x) * z^3)
+        ensure_layout!(b, :c)
+
+        copyto!(get_coeff_data(a), get_coeff_data(b))
+        @test a.current_layout == :c
+
+        da = ScalarField(dom, "da")
+        Tarang.evaluate_chebyshev_derivative!(da, a, 2, 1, :g)
+        @test isapprox(Array(get_grid_data(da)), @. 3sin(x) * z^2;
+                       rtol=1e-8, atol=1e-8)
     end
 
     @testset "Scaled Chebyshev and Fourier axes stay on device" begin

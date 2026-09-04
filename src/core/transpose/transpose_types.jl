@@ -71,12 +71,16 @@ instances, failing to free communicators will exhaust MPI resources.
 Note: This is safe to call multiple times or on a default Topology2D (nothing comms).
 """
 function free_topology_2d!(topo::Topology2D)
+    mpi_active = MPI.Initialized() && !MPI.Finalized()
+
     # Free row communicator if it exists and is not MPI.COMM_NULL
     if topo.row_comm !== nothing && topo.row_comm != MPI.COMM_NULL
-        try
-            MPI.free(topo.row_comm)
-        catch e
-            @warn "Failed to free row communicator: $e" maxlog=1
+        if mpi_active
+            try
+                MPI.free(topo.row_comm)
+            catch e
+                @warn "Failed to free row communicator: $e" maxlog=1
+            end
         end
         # CRITICAL: Nullify reference to prevent use-after-free
         # Freed MPI communicators don't become COMM_NULL automatically
@@ -85,10 +89,12 @@ function free_topology_2d!(topo::Topology2D)
 
     # Free column communicator if it exists and is not MPI.COMM_NULL
     if topo.col_comm !== nothing && topo.col_comm != MPI.COMM_NULL
-        try
-            MPI.free(topo.col_comm)
-        catch e
-            @warn "Failed to free column communicator: $e" maxlog=1
+        if mpi_active
+            try
+                MPI.free(topo.col_comm)
+            catch e
+                @warn "Failed to free column communicator: $e" maxlog=1
+            end
         end
         # CRITICAL: Nullify reference to prevent use-after-free
         topo.col_comm = nothing
@@ -465,4 +471,5 @@ mutable struct TransposableField{F<:ScalarField,T,N} <: Operand
     total_pack_time::Float64
     total_unpack_time::Float64
     num_transposes::Int
+    closed::Bool
 end

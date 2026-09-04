@@ -45,10 +45,17 @@ function apply_spectral_cutoff!(field::ScalarField, cutoff_scales::Union{Float64
     scales = isa(cutoff_scales, Float64) ? ntuple(_ -> Float64(cutoff_scales), nb) : cutoff_scales
 
     if cd isa PencilArrays.PencilArray
-        # MPI: zero modes above the cutoff using each rank's GLOBAL wavenumber
-        # indices. A uniform relative scale s corresponds to a dealias factor 1/s.
-        _apply_spectral_cutoff_distributed!(
-            cd, bases, 1.0 / minimum(scales), field.dtype)
+        # MPI: preserve each requested axis scale while using GLOBAL wavenumbers.
+        cutoffs = ntuple(nb) do i
+            b = bases[i]
+            if isa(b, Union{RealFourier, ComplexFourier})
+                max(0, floor(Int, scales[i] * b.meta.size / 2))
+            else
+                nothing
+            end
+        end
+        _apply_spectral_cutoffs_distributed!(cd, bases, cutoffs, field.dtype;
+                                             rfft_dims=_field_rfft_dims(field))
     else
         local_cd = get_local_data(cd)
         cutoffs = ntuple(nb) do i

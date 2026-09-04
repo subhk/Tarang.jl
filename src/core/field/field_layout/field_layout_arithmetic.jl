@@ -12,16 +12,49 @@ const _FIELD_ARITH_TMP_NAME = "_arith_tmp"
 @inline _local_data(data::PencilArrays.PencilArray) = parent(data)
 @inline _local_data(data::AbstractArray) = data
 
+"""Validate metadata that must agree for pointwise binary field arithmetic."""
+function _check_field_arithmetic_compatibility(a::ScalarField, b::ScalarField,
+                                               operation::AbstractString)
+    a.bases == b.bases || throw(ArgumentError(
+        "Cannot $operation fields with different bases"))
+    a.dist === b.dist || throw(ArgumentError(
+        "Cannot $operation fields owned by different distributors"))
+    a.scales == b.scales || throw(ArgumentError(
+        "Cannot $operation fields with different scales ($(a.scales) and $(b.scales))"))
+    return nothing
+end
+
+"""Allocate an arithmetic result with the source field's current grid shape."""
+function _allocate_field_arithmetic_result(field::ScalarField, dtype::DataType)
+    result = ScalarField(field.dist, _FIELD_ARITH_TMP_NAME, field.bases, dtype)
+    preset_scales!(result, field.scales)
+    return result
+end
+
+"""Return `field` at `dtype`, copying only when arithmetic promotion requires it."""
+function _promote_field_arithmetic_operand(field::ScalarField, dtype::DataType)
+    field.dtype === dtype && return field
+
+    promoted = _allocate_field_arithmetic_result(field, dtype)
+    if field.current_layout == :c
+        _local_data(coeff_data!(promoted)) .= _local_data(get_coeff_data(field))
+    else
+        _local_data(grid_data!(promoted)) .= _local_data(get_grid_data(field))
+    end
+    return promoted
+end
+
+@inline _has_nonunit_arithmetic_scale(field::ScalarField) =
+    field.scales !== nothing && any(!isone, field.scales)
+
 # Field arithmetic
 # NOTE: Fresh ScalarField allocation via constructor (not copy()) avoids copying
 # data that is immediately overwritten. allocate_data!() inside the constructor
 # correctly creates PencilArray storage for MPI mode.
 function Base.:+(a::ScalarField, b::ScalarField)
-    if a.bases != b.bases
-        throw(ArgumentError("Cannot add fields with different bases"))
-    end
+    _check_field_arithmetic_compatibility(a, b, "add")
 
-    result = ScalarField(a.dist, _FIELD_ARITH_TMP_NAME, a.bases, a.dtype)
+    result = _allocate_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
     ensure_layout!(result, :g)
@@ -32,11 +65,9 @@ function Base.:+(a::ScalarField, b::ScalarField)
 end
 
 function Base.:-(a::ScalarField, b::ScalarField)
-    if a.bases != b.bases
-        throw(ArgumentError("Cannot subtract fields with different bases"))
-    end
+    _check_field_arithmetic_compatibility(a, b, "subtract")
 
-    result = ScalarField(a.dist, _FIELD_ARITH_TMP_NAME, a.bases, a.dtype)
+    result = _allocate_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
     ensure_layout!(result, :g)
@@ -53,7 +84,7 @@ function Base.:*(a::ScalarField, b::Number)
     # applied). Promote the dtype so a real field times a complex scalar yields a
     # complex field.
     T = promote_type(a.dtype, typeof(b))
-    result = ScalarField(a.dist, _FIELD_ARITH_TMP_NAME, a.bases, T)
+    result = _allocate_field_arithmetic_result(a, T)
     ensure_layout!(a, :g)
     ensure_layout!(result, :g)
 
@@ -63,9 +94,7 @@ function Base.:*(a::ScalarField, b::Number)
 end
 
 function Base.:*(a::ScalarField, b::ScalarField)
-    if a.bases != b.bases
-        throw(ArgumentError("Cannot multiply fields with different bases"))
-    end
+    _check_field_arithmetic_compatibility(a, b, "multiply")
 
     # Dealiased product for spectral fields: delegate to the SAME nonlinear-product
     # machinery the solver RHS uses — `evaluate_transform_multiply` (3/2-padded on
@@ -77,11 +106,15 @@ function Base.:*(a::ScalarField, b::ScalarField)
     # The result is handed straight to user code, which may hold any number of
     # products at once, so it must NOT be a borrowed pool buffer — keep the default
     # `own=true`. See `_own_borrowed_field` in `src/core/field_pool.jl`.
-    if has_spectral_bases(a) && prod(basis.meta.size for basis in a.bases) > 64
-        return evaluate_transform_multiply(a, b, _get_evaluator(a.dist))
+    if has_spectral_bases(a) && prod(basis.meta.size for basis in a.bases) > 64 &&
+       !_has_nonunit_arithmetic_scale(a)
+        dtype = promote_type(a.dtype, b.dtype)
+        promoted_a = _promote_field_arithmetic_operand(a, dtype)
+        promoted_b = _promote_field_arithmetic_operand(b, dtype)
+        return evaluate_transform_multiply(promoted_a, promoted_b, _get_evaluator(a.dist))
     end
 
-    result = ScalarField(a.dist, _FIELD_ARITH_TMP_NAME, a.bases, a.dtype)
+    result = _allocate_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
     ensure_layout!(result, :g)

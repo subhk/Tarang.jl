@@ -167,9 +167,14 @@ const _DOMAIN_CACHE_LOCK = ReentrantLock()
 
 """Get a cached Domain for `(dist, bases)`, building and caching on first use."""
 function get_or_build_domain(dist::Distributor, bases::Tuple{Vararg{Basis}})
-    key = (objectid(dist), map(objectid, bases))
+    # Domain canonicalizes bases by coordinate axis. Canonicalize the cache key
+    # the same way so equivalent caller orders reuse the same plans and caches.
+    # Keep every entry here: Domain must still perform its own duplicate and
+    # overlap validation rather than having invalid input normalized away.
+    canonical_bases = Tuple(sort(collect(bases); by=b -> get_basis_axis(dist, b)))
+    key = (objectid(dist), map(objectid, canonical_bases))
     lock(_DOMAIN_CACHE_LOCK) do
-        get!(() -> Domain(dist, bases), _DOMAIN_CACHE, key)
+        get!(() -> Domain(dist, canonical_bases), _DOMAIN_CACHE, key)
     end
 end
 

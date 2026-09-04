@@ -159,6 +159,38 @@ end
         @test isapprox(Array(get_grid_data(dz)), @. X^3 + 4X * Z;    rtol=1e-7, atol=1e-7)
     end
 
+    @testset "ChebyshevT derivative synchronizes coefficient-authoritative operands" begin
+        # Regression: the local Chebyshev derivative used to read the raw grid
+        # buffer even when coefficient data was authoritative.  Replacing one
+        # field's coefficients therefore differentiated its stale grid bytes.
+        coords = CartesianCoordinates("x", "z")
+        dist   = Distributor(coords; mesh=(1, 1), dtype=Float64)
+        xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+        zb = ChebyshevT(coords["z"]; size=9, bounds=(-1.0, 1.0))
+        a = ScalarField(dist, "a", (xb, zb), Float64)
+        b = ScalarField(dist, "b", (xb, zb), Float64)
+
+        mesh = Tarang.create_meshgrid(a.domain)
+        X = Array(mesh["x"])
+        Z = Array(mesh["z"])
+
+        ensure_layout!(a, :g)
+        get_grid_data(a) .= @. cos(X) * (1 + Z)
+        ensure_layout!(a, :c)
+
+        ensure_layout!(b, :g)
+        get_grid_data(b) .= @. sin(X) * Z^3
+        ensure_layout!(b, :c)
+
+        copyto!(get_coeff_data(a), get_coeff_data(b))
+        @test a.current_layout == :c
+
+        da = ScalarField(dist, "da", (xb, zb), Float64)
+        evaluate_chebyshev_derivative!(da, a, 2, 1, :g)
+        @test isapprox(Array(get_grid_data(da)), @. 3sin(X) * Z^2;
+                       rtol=1e-8, atol=1e-8)
+    end
+
     # ========================================================================
     # Part C: Legendre derivative via the Differentiate operator
     #   exercises evaluate_legendre_derivative! + evaluate_legendre_single_derivative!

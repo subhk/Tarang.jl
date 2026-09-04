@@ -19,11 +19,6 @@ This correctly handles multi-dimensional derivatives where we want d/dx
 to only apply FFT along the x-axis, not all axes.
 """
 function evaluate_fourier_derivative!(result::ScalarField, operand::ScalarField, axis::Int, order::Int, layout::Symbol)
-    # Ensure operand is in grid space
-    if operand.current_layout != :g
-        @warn "evaluate_fourier_derivative!: operand not in grid space, results may be unexpected"
-    end
-
     dist = operand.dist
     ndim = length(operand.bases)
 
@@ -297,7 +292,10 @@ function _evaluate_local_fourier_derivative!(result::ScalarField, operand::Scala
     # Use grid data for computation
     # For PencilArrays, extract the parent (local) array for FFT operations
     # Note: fft() is out-of-place (creates new output), so no copy needed
-    operand_grid = get_grid_data(operand)
+    # The raw grid buffer may be stale when coefficient space is current.
+    # Synchronize before the local FFT instead of merely warning and
+    # differentiating old values.
+    operand_grid = grid_data!(operand)
     data_g = isa(operand_grid, PencilArrays.PencilArray) ? parent(operand_grid) : operand_grid
 
     dims = ndims(data_g)

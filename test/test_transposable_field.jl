@@ -29,6 +29,40 @@ const NPROCS = MPI.Comm_size(MPI.COMM_WORLD)
         @test Int(YLocal) != Int(ZLocal)
     end
 
+    @testset "CUDA-aware MPI capability detection" begin
+        cuda_env_keys = (
+            "TARANG_CUDA_AWARE_MPI",
+            "JULIA_MPI_HAS_CUDA",
+            "OMPI_MCA_opal_cuda_support",
+            "MV2_USE_CUDA",
+            "MPIR_CVAR_ENABLE_GPU",
+            "MPICH_GPU_SUPPORT_ENABLED",
+        )
+        saved_env = Dict(key => get(ENV, key, nothing) for key in cuda_env_keys)
+
+        try
+            foreach(key -> pop!(ENV, key, nothing), cuda_env_keys)
+
+            # MPI.jl provides the implementation-aware capability probe and a
+            # portable override used by MPI installations it cannot query.
+            ENV["JULIA_MPI_HAS_CUDA"] = "true"
+            @test check_cuda_aware_mpi()
+
+            # Tarang's explicit safety override has the highest priority.
+            ENV["TARANG_CUDA_AWARE_MPI"] = "0"
+            @test !check_cuda_aware_mpi()
+        finally
+            for key in cuda_env_keys
+                old_value = saved_env[key]
+                if old_value === nothing
+                    pop!(ENV, key, nothing)
+                else
+                    ENV[key] = old_value
+                end
+            end
+        end
+    end
+
     @testset "divide_evenly" begin
         # Even division
         @test Tarang.divide_evenly(12, 4, 0) == 3
@@ -195,6 +229,18 @@ if NPROCS == 1
         @test recv_buf3 === recv_buf
     end
 
+    @testset "deterministic lifecycle and field-owned precision" begin
+        complex32_field = ScalarField(dist, "complex32", (xbasis, ybasis), ComplexF32)
+        tf = TransposableField(complex32_field)
+
+        @test eltype(tf.buffers.z_local_data) === ComplexF32
+        @test isopen(tf)
+        @test close(tf) === nothing
+        @test !isopen(tf)
+        @test close(tf) === nothing
+        @test_throws ArgumentError distributed_forward_transform!(tf)
+    end
+
 end
 end  # if NPROCS == 1
 
@@ -320,6 +366,48 @@ if NPROCS == 1
 end
 end  # if NPROCS == 1
 
+if NPROCS == 1
+@testset "DistributedGPUTransform public wrapper" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(1,), dtype=ComplexF64,
+                       architecture=CPU(), use_pencil_arrays=false)
+    bases = (
+        ComplexFourier(coords, "x", 7),
+        ComplexFourier(coords, "y", 5),
+    )
+    config = DistributedGPUConfig(MPI.COMM_WORLD, (7, 5))
+
+    @testset "workspace follows the requested field" begin
+        field1 = ScalarField(dist, "wrapper_workspace_1", bases)
+        field2 = ScalarField(dist, "wrapper_workspace_2", bases)
+        transform = DistributedGPUTransform(config, bases)
+
+        workspace1 = setup_transposable_workspace!(transform, field1)
+        workspace2 = setup_transposable_workspace!(transform, field2)
+
+        @test workspace2 !== workspace1
+        @test workspace2.field === field2
+    end
+
+    @testset "forward/backward wrapper round-trip" begin
+        field = ScalarField(dist, "wrapper_roundtrip", bases)
+        grid = Tarang.get_grid_data(field)
+        for j in axes(grid, 2), i in axes(grid, 1)
+            grid[i, j] = complex(i + 0.1j, 0.01i * j)
+        end
+        original = copy(grid)
+        transform = DistributedGPUTransform(config, bases)
+
+        distributed_transform_forward!(transform, field)
+        @test field.current_layout == :c
+
+        distributed_transform_backward!(transform, field)
+        @test field.current_layout == :g
+        @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-12, atol=1e-12)
+    end
+end
+end  # if NPROCS == 1
+
 if NPROCS > 1
 @testset "TransposableField distributed 2D public transform API" begin
     coords = CartesianCoordinates("x", "y")
@@ -344,6 +432,77 @@ if NPROCS > 1
     distributed_backward_transform!(tf)
     @test field.current_layout == :g
     @test isapprox(Tarang.get_grid_data(field), original; rtol=1e-12, atol=1e-12)
+
+    # The distributed API reads raw buffers to avoid recursively calling the
+    # ordinary field transform path. It must therefore reject a stale source
+    # layout instead of silently treating the inactive buffer as authoritative.
+    grid_after_roundtrip = copy(Tarang.get_grid_data(field))
+    @test_throws ArgumentError distributed_backward_transform!(tf)
+    @test Tarang.get_grid_data(field) == grid_after_roundtrip
+
+    distributed_forward_transform!(tf)
+    coeff_after_forward = copy(Tarang.get_coeff_data(field))
+    @test_throws ArgumentError distributed_forward_transform!(tf)
+    @test Tarang.get_coeff_data(field) == coeff_after_forward
+
+    distributed_backward_transform!(tf)
+
+    # GC finalization is rank-asynchronous and must never perform collective
+    # communicator destruction. Explicit close remains collective and is called
+    # by every rank here.
+    finalize(tf)
+    @test tf.topology.row_comm !== nothing
+    @test close(tf) === nothing
+    @test tf.topology.row_comm === nothing
+    @test tf.topology.col_comm === nothing
+end
+
+@testset "TransposableField constructor failure is rank-consistent" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,), dtype=ComplexF64,
+                       architecture=CPU(), use_pencil_arrays=false)
+    bases = (
+        ComplexFourier(coords, "x", 17),
+        ComplexFourier(coords, "y", 13),
+    )
+    field = ScalarField(dist, "rank_local_constructor_failure", bases, ComplexF64)
+    if dist.rank == 0
+        grid = Tarang.get_grid_data(field)
+        bad_shape = ntuple(d -> size(grid, d) + (d == 1 ? 1 : 0), ndims(grid))
+        Tarang.set_grid_data!(field, zeros(ComplexF64, bad_shape...))
+    end
+
+    constructed = nothing
+    err = try
+        constructed = TransposableField(field)
+        nothing
+    catch caught
+        caught
+    end
+
+    # Before the rank-consistent construction protocol, only rank zero threw.
+    # A successful rank explicitly closes its topology so the old implementation
+    # can complete rather than deadlocking this regression.
+    constructed === nothing || close(constructed)
+    @test err isa Exception
+    MPI.Barrier(MPI.COMM_WORLD)
+end
+
+@testset "TransposableField async completion polling returns Bool" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; comm=MPI.COMM_WORLD, mesh=(NPROCS,), dtype=ComplexF64,
+                       architecture=CPU(), use_pencil_arrays=false)
+    bases = (
+        ComplexFourier(coords, "x", 17),
+        ComplexFourier(coords, "y", 13),
+    )
+    field = ScalarField(dist, "async_poll", bases, ComplexF64)
+    tf = TransposableField(field)
+    async_transpose_z_to_y!(tf)
+    completed = is_transpose_complete(tf)
+    @test completed isa Bool
+    completed || wait_transpose!(tf)
+    close(tf)
 end
 
 @testset "transpose workspace is cached per shape, not per field" begin

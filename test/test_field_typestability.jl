@@ -61,6 +61,64 @@ using InteractiveUtils
         @test (@inferred Tarang.get_coeff_data(u); true)
     end
 
+    @testset "field metadata follows canonical coordinate order" begin
+        mixed_coords = CartesianCoordinates("x", "z")
+        mixed_dist = Distributor(mixed_coords; dtype=Float64, device=CPU())
+        mixed_xb = RealFourier(mixed_coords["x"]; size=8, bounds=(0.0, 2π))
+        mixed_zb = ChebyshevT(mixed_coords["z"]; size=9, bounds=(-1.0, 1.0))
+
+        # Callers may supply bases out of coordinate order. Domain owns the
+        # canonical order, and every field shape/transform must follow it.
+        canonical_u = ScalarField(mixed_dist, "canonical", (mixed_xb, mixed_zb), Float64)
+        u = ScalarField(mixed_dist, "mixed", (mixed_zb, mixed_xb), Float64)
+        @test u.domain === canonical_u.domain
+        ensure_layout!(u, :g)
+        @test u.bases == u.domain.bases == (mixed_xb, mixed_zb)
+        @test u.layout.global_shape == size(Tarang.get_grid_data(u)) == (8, 9)
+        @test size(Tarang.get_coeff_data(u)) == (5, 9)
+        @test get_scaled_shape(u) == (8, 9)
+
+        x = reshape(Tarang.local_grid(mixed_xb, mixed_dist, 1.0;
+                                      move_to_arch=false), :, 1)
+        z = reshape(Tarang.local_grid(mixed_zb, mixed_dist, 1.0;
+                                      move_to_arch=false), 1, :)
+        data = @. sin(2x) * (1 + z - 0.25z^2)
+        Tarang.get_grid_data(u) .= data
+        ensure_layout!(u, :c)
+        ensure_layout!(u, :g)
+        @test isapprox(Tarang.get_grid_data(u), data; rtol=1e-10, atol=1e-11)
+
+        v = VectorField(mixed_dist, "v", (mixed_zb, mixed_xb), Float64)
+        @test v.bases == v.domain.bases == (mixed_xb, mixed_zb)
+        @test all(component -> component.bases == v.bases, v.components)
+        @test all(component -> size(Tarang.get_grid_data(component)) == (8, 9),
+                  v.components)
+        @test all(component -> size(Tarang.get_coeff_data(component)) == (5, 9),
+                  v.components)
+        for (i, component) in enumerate(v.components)
+            Tarang.get_grid_data(component) .= i .* data
+        end
+        ensure_layout!(v, :c)
+        ensure_layout!(v, :g)
+        @test all(i -> isapprox(Tarang.get_grid_data(v.components[i]), i .* data;
+                                rtol=1e-10, atol=1e-11), eachindex(v.components))
+
+        tensor = TensorField(mixed_dist, "T", (mixed_zb, mixed_xb), Float64)
+        @test tensor.bases == tensor.domain.bases == (mixed_xb, mixed_zb)
+        @test all(component -> component.bases == tensor.bases, tensor.components)
+        @test all(component -> size(Tarang.get_grid_data(component)) == (8, 9),
+                  tensor.components)
+        @test all(component -> size(Tarang.get_coeff_data(component)) == (5, 9),
+                  tensor.components)
+        for (i, component) in enumerate(tensor.components)
+            Tarang.get_grid_data(component) .= i .* data
+        end
+        ensure_layout!(tensor, :c)
+        ensure_layout!(tensor, :g)
+        @test all(i -> isapprox(Tarang.get_grid_data(tensor.components[i]), i .* data;
+                                rtol=1e-10, atol=1e-11), eachindex(tensor.components))
+    end
+
     @testset "copy preserves live data and scales" begin
         # Regression guard (review C3): copy must not crash on a scaled field, and
         # must duplicate (not alias) the live-layout data. The off-layout array is

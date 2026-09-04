@@ -233,6 +233,67 @@ end
     run_vector_tests(CPU())
 end
 
+@testset "scaled and mixed-precision ScalarField arithmetic" begin
+    coords = CartesianCoordinates("x")
+    dist = Distributor(coords; mesh=(1,), dtype=Float64, architecture=CPU())
+    basis = RealFourier(coords["x"]; size=4, bounds=(0.0, 2π))
+    a = ScalarField(dist, "scaled_f32", (basis,), Float32)
+    b = ScalarField(dist, "scaled_f64", (basis,), Float64)
+    preset_scales!(a, 1.5)
+    preset_scales!(b, 1.5)
+    Tarang.get_grid_data(a) .= 2.0f0
+    Tarang.get_grid_data(b) .= 4.0
+
+    sum_field = a + b
+    @test sum_field.dtype === Float64
+    @test sum_field.scales == (1.5,)
+    @test size(Tarang.get_grid_data(sum_field)) == (6,)
+    @test all(Tarang.get_grid_data(sum_field) .== 6.0)
+
+    scaled = a * (2 + 1im)
+    @test scaled.dtype === promote_type(Float32, typeof(2 + 1im))
+    @test scaled.scales == (1.5,)
+    @test size(Tarang.get_grid_data(scaled)) == (6,)
+
+    large_basis = RealFourier(coords["x"]; size=66, bounds=(0.0, 2π))
+    large_a = ScalarField(dist, "large_f32", (large_basis,), Float32)
+    large_b = ScalarField(dist, "large_f64", (large_basis,), Float64)
+    Tarang.get_grid_data(large_a) .= 2.0f0
+    Tarang.get_grid_data(large_b) .= 4.0
+
+    large_ab = large_a * large_b
+    large_ba = large_b * large_a
+    @test large_ab.dtype === Float64
+    @test large_ba.dtype === Float64
+    @test large_ab.scales == large_a.scales
+    @test large_ba.scales == large_b.scales
+    @test all(Tarang.get_grid_data(large_ab) .≈ 8.0)
+    @test all(Tarang.get_grid_data(large_ba) .≈ 8.0)
+
+    preset_scales!(large_a, 1.5)
+    preset_scales!(large_b, 1.5)
+    Tarang.get_grid_data(large_a) .= 2.0f0
+    Tarang.get_grid_data(large_b) .= 4.0
+    large_scaled = large_a * large_b
+    @test large_scaled.dtype === Float64
+    @test large_scaled.scales == (1.5,)
+    @test size(Tarang.get_grid_data(large_scaled)) == (99,)
+    @test all(Tarang.get_grid_data(large_scaled) .== 8.0)
+
+    deferred = (
+        evaluate(Negate(a)),
+        evaluate(Power(a, 2)),
+        evaluate(Subtract(a, b)),
+        evaluate(Divide(b, a)),
+        evaluate(Add(a, 1im)),
+    )
+    @test all(result -> result.scales == (1.5,), deferred)
+    @test all(result -> size(Tarang.get_grid_data(result)) == (6,), deferred)
+    @test deferred[3].dtype === Float64
+    @test deferred[4].dtype === Float64
+    @test deferred[5].dtype === ComplexF32
+end
+
 if _CUDA_AVAILABLE_ARITH
     using CUDA
     @testset "Arithmetic GPU" begin

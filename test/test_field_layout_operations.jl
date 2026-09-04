@@ -219,6 +219,19 @@ using Random
         # --- unknown distribution throws ArgumentError ---
         bad = ScalarField(dom, "bad")
         @test_throws ArgumentError fill_random!(bad, "g"; seed=1, distribution="bogus")
+
+        # Reproducible complex fills sample both components. The old CPU path
+        # assigned a real scalar into each complex element, leaving imag == 0.
+        complex_coords = CartesianCoordinates("q")
+        complex_dist = Distributor(complex_coords; mesh=(1,), dtype=ComplexF64,
+                                   architecture=CPU())
+        complex_basis = ComplexFourier(complex_coords["q"]; size=16,
+                                       bounds=(0.0, 2π))
+        complex_field = ScalarField(complex_dist, "complex_noise",
+                                    (complex_basis,), ComplexF64)
+        fill_random!(complex_field, "g"; seed=41, reproducible=true)
+        complex_data = Tarang.get_grid_data(complex_field)
+        @test any(!iszero, imag.(complex_data))
     end
 
     # ------------------------------------------------------------------

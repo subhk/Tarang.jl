@@ -57,8 +57,11 @@ function gather_array(dist::Distributor, local_array::AbstractArray)
     if dist.size == 1
         result = cpu_array
     else
-        result = MPI.Allgather(cpu_array, dist.comm)
-        dist.performance_stats.mpi_operations += 1
+        send_data = vec(cpu_array)
+        counts = MPI.Allgather(length(send_data), dist.comm)
+        result = Vector{eltype(cpu_array)}(undef, sum(counts))
+        MPI.Allgatherv!(send_data, MPI.VBuffer(result, counts), dist.comm)
+        dist.performance_stats.mpi_operations += 2
     end
 
     # Update performance stats

@@ -48,4 +48,20 @@ ok_global = MPI.Allreduce(ok_local ? 1 : 0, MPI.MIN, comm) == 1
     @test li2 == (rank == 0 ? (1:2) : (3:5))
 end
 
+@testset "neighbor request polling accepts MPI.Test Bool" begin
+    req = MPI.Ibarrier(comm)
+    completed, pending = test_neighbor_exchange([req])
+    @test sort!(vcat(completed, pending)) == [1]
+    MPI.Wait(req)
+end
+
+@testset "non-Pencil gather supports unequal local counts" begin
+    np_dist = Distributor(coords; comm=comm, mesh=(2,), dtype=Float64,
+                          architecture=CPU(), use_pencil_arrays=false)
+    owned = collect(Tarang.local_range(5, nprocs, rank))
+    @test Tarang.gather_array(np_dist, owned) == collect(1:5)
+    close(np_dist)
+end
+
+close(dist)
 MPI.Finalized() || MPI.Finalize()

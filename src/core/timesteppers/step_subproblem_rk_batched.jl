@@ -788,6 +788,9 @@ end
 
 function _leftover_stage_solve!(sp, sp_idx, i::Int, dt::Float64, A_exp, A_imp,
                                 MX0, RHS, F, LX, ALG_F, state_fields)
+    a_ii = A_imp[i, i]
+    _is_explicit_first_stage(i, a_ii) && return nothing
+
     rhs = RHS[sp_idx]
     _assign_to_buffer!(rhs, MX0[sp_idx])
 
@@ -802,7 +805,6 @@ function _leftover_stage_solve!(sp, sp_idx, i::Int, dt::Float64, A_exp, A_imp,
         end
     end
 
-    a_ii = A_imp[i, i]
     if abs(a_ii) > 1e-14
         apply_bc_override!(rhs, ALG_F[sp_idx], sp, dt * a_ii)
     end
@@ -962,38 +964,40 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
         end
 
         a_ii = A_imp[i, i]
-        for k in eachindex(batches)
-            batch = batches[k]
-            ws = workspaces[k]
+        if !_is_explicit_first_stage(i, a_ii)
+            for k in eachindex(batches)
+                batch = batches[k]
+                ws = workspaces[k]
 
-            copyto!(ws.RHS, ws.MX0)
-            for j in 1:(i - 1)
-                a_ej = dt * A_exp[i, j]
-                a_ij = dt * A_imp[i, j]
-                if abs(a_ej) > 1e-14
-                    _batch_axpy!(ws.RHS, a_ej, ws.F[j])
+                copyto!(ws.RHS, ws.MX0)
+                for j in 1:(i - 1)
+                    a_ej = dt * A_exp[i, j]
+                    a_ij = dt * A_imp[i, j]
+                    if abs(a_ej) > 1e-14
+                        _batch_axpy!(ws.RHS, a_ej, ws.F[j])
+                    end
+                    if abs(a_ij) > 1e-14
+                        _batch_axpy!(ws.RHS, -a_ij, ws.LX[j])
+                    end
                 end
-                if abs(a_ij) > 1e-14
-                    _batch_axpy!(ws.RHS, -a_ij, ws.LX[j])
+
+                if abs(a_ii) > 1e-14
+                    batched_bc_override!(ws.RHS, ws.ALG_F, batch.bc_rows, dt * a_ii)
+                    s = _ensure_batch_factored!(batch, dt, a_ii)
+                    batched_solve!(ws.X, s, ws.RHS)
+                else
+                    _batch_mass_solve!(ws.X, ws.RHS, batch, subproblems, ws;
+                                       skip_missing=false)
                 end
-            end
 
-            if abs(a_ii) > 1e-14
-                batched_bc_override!(ws.RHS, ws.ALG_F, batch.bc_rows, dt * a_ii)
-                s = _ensure_batch_factored!(batch, dt, a_ii)
-                batched_solve!(ws.X, s, ws.RHS)
-            else
-                _batch_mass_solve!(ws.X, ws.RHS, batch, subproblems, ws;
-                                   skip_missing=false)
+                _batched_scatter_state!(ws, batch, state_fields, ws.X)
             end
-
-            _batched_scatter_state!(ws, batch, state_fields, ws.X)
-        end
-        for sp_idx in leftovers
-            sp = subproblems[sp_idx]
-            sp.M_min === nothing && continue
-            _leftover_stage_solve!(sp, sp_idx, i, dt, A_exp, A_imp, MX0, RHS, F,
-                                   LX, ALG_F, state_fields)
+            for sp_idx in leftovers
+                sp = subproblems[sp_idx]
+                sp.M_min === nothing && continue
+                _leftover_stage_solve!(sp, sp_idx, i, dt, A_exp, A_imp, MX0, RHS, F,
+                                       LX, ALG_F, state_fields)
+            end
         end
 
         from_solve_layout!(solve_stash, dist; to_grid=true)
