@@ -11,8 +11,9 @@
 # (DimensionMismatch) or silently produced garbage (the implicit diffusion solve
 # operated on grid-space z data).
 #
-# The reference values are the SERIAL result of this exact problem. The MAX is
-# reassociation-invariant (exact match); the SUM may reassociate by ~1 ulp.
+# The reference values are the SERIAL result of this exact problem, including
+# the RK final-state constraint projection. The MAX is reassociation-invariant
+# (exact match); the SUM may reassociate by ~1 ulp.
 using Tarang
 using MPI
 using PencilArrays
@@ -28,10 +29,36 @@ if nprocs < 2
 end
 
 # Serial reference (from the same code path at np=1).
-const SUMSQ_REF = 33.04847505669661
-const BMAX_REF = 1.430277722239972
+const SUMSQ_REF = 33.04847840557331
+const BMAX_REF = 1.4302777770134283
 
 _loc(f) = get_grid_data(f) isa PencilArrays.PencilArray ? parent(get_grid_data(f)) : get_grid_data(f)
+function _global_boundary_max(field, logical_dim, endpoints, comm)
+    data = get_grid_data(field)
+    if data isa PencilArrays.PencilArray
+        raw = parent(data)
+        nspatial = ndims(PencilArrays.pencil(data))
+        # Parent storage follows memory order; translate the logical dimension.
+        logical_dims_in_memory_order =
+            PencilArrays.permutation(data) * ntuple(identity, nspatial)
+        memory_dim = findfirst(==(logical_dim),
+                               logical_dims_in_memory_order)::Int
+        local_ranges = PencilArrays.range_local(data, PencilArrays.MemoryOrder())
+    else
+        raw = data
+        memory_dim = logical_dim
+        local_ranges = axes(raw)
+    end
+    local_max = zero(typeof(abs(zero(eltype(raw)))))
+    for global_index in endpoints
+        local_index = findfirst(==(global_index), local_ranges[memory_dim])
+        local_index === nothing && continue
+        local_max = max(local_max,
+                        maximum(abs, selectdim(raw, memory_dim, local_index)))
+    end
+    return MPI.Allreduce(local_max, MPI.MAX, comm)
+end
+
 function _assign_local!(field, gdata)
     data = get_grid_data(field)
     if data isa PencilArrays.PencilArray
@@ -76,11 +103,14 @@ end
     ensure_layout!(b, :g); lv = _loc(b)
     sumsq = MPI.Allreduce(sum(abs2, lv), MPI.SUM, comm)
     bmax = MPI.Allreduce(maximum(abs, lv), MPI.MAX, comm)
-    rank == 0 && println("  np=$nprocs sumsq=$sumsq bmax=$bmax (ref sumsq=$SUMSQ_REF bmax=$BMAX_REF)")
+    bcmax = _global_boundary_max(b, 1, (1, Nz), comm)
+    rank == 0 && println("  np=$nprocs sumsq=$sumsq bmax=$bmax bcmax=$bcmax " *
+                         "(ref sumsq=$SUMSQ_REF bmax=$BMAX_REF)")
 
     # MAX is reassociation-invariant; SUM may reassociate by ~1 ulp.
     @test isapprox(bmax, BMAX_REF; atol=1e-10)
     @test isapprox(sumsq, SUMSQ_REF; atol=1e-6)
+    @test bcmax < 1e-12
 end
 
 # Same problem, MULTISTEP (SBDF2) timestepper — exercises the solve-layout

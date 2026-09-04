@@ -143,6 +143,7 @@ import Tarang: phi_functions, phi_functions_matrix,
         I1 = _get_identity_matrix(4, Float64)
         I2 = _get_identity_matrix(4, Float64)
         @test I1 === I2  # Same object (cached)
+        @test I1 isa LinearAlgebra.Diagonal
         @test I1 == Matrix{Float64}(LinearAlgebra.I, 4, 4)
 
         # Different size returns different object
@@ -154,6 +155,28 @@ import Tarang: phi_functions, phi_functions_matrix,
         I4 = _get_identity_matrix(4, ComplexF64)
         @test I4 !== I1
         @test eltype(I4) == ComplexF64
+    end
+
+    @testset "Matrix scaling uses one dense destination" begin
+        @test isdefined(Tarang, :_scaled_dense_operator)
+        if isdefined(Tarang, :_scaled_dense_operator)
+            A = reshape(ComplexF64.(1:1024), 32, 32)
+            original = copy(A)
+            Tarang._scaled_dense_operator(A, 0.25) # compile
+            GC.gc()
+            bytes = @allocated z = Tarang._scaled_dense_operator(A, 0.25)
+            @test A == original
+            @test z == 0.25 .* original
+            @test bytes <= sizeof(A) + 1024
+
+            integer_scaled = try
+                Tarang._scaled_dense_operator(reshape(1:4, 2, 2), 0.5)
+            catch
+                nothing
+            end
+            @test integer_scaled == 0.5 .* reshape(1:4, 2, 2)
+            @test integer_scaled !== nothing && eltype(integer_scaled) == Float64
+        end
     end
 
     @testset "phi_functions_matrix small norm (Taylor)" begin
