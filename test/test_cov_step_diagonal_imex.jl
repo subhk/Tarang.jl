@@ -227,4 +227,55 @@ end
         # k=0 mode: L̂=0, so pure dt(u)=-u → exp(-1).
         @test isapprox(uf, exp(-1.0); rtol = 0.02)
     end
+
+    @testset "SBDF2 recycles RHS history field storage" begin
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh = (1,), dtype = Float64)
+        xb = RealFourier(coords["x"]; size = 64, bounds = (0.0, 2π))
+        u = ScalarField(dist, "u", (xb,), Float64)
+        ensure_layout!(u, :g)
+        fill!(Tarang.get_grid_data(u), 1.0)
+
+        L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)
+        problem = IVP([u])
+        add_equation!(problem, "dt(u) = -u")
+        solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.01)
+        Tarang.set_spectral_linear_operator!(solver, L)
+
+        # Fill the rolling two-entry history and its one dropped-storage slot.
+        for _ in 1:5
+            step!(solver)
+        end
+        state = solver.timestepper_state
+        F_history = state.timestepper_data[:F_history]
+        recycled = state.timestepper_data[:ddi_sbdf2_F_recycled]
+        @test recycled !== nothing
+        storage_ids = Set(objectid(field) for fields in (F_history..., recycled)
+                          for field in fields)
+
+        # A steady step must rotate those same three field sets. Allocating a
+        # fresh copy here makes this set change even though the live history
+        # still has the correct numerical values.
+        step!(solver)
+        F_history = state.timestepper_data[:F_history]
+        recycled = state.timestepper_data[:ddi_sbdf2_F_recycled]
+        next_storage_ids = Set(objectid(field) for fields in (F_history..., recycled)
+                               for field in fields)
+        @test next_storage_ids == storage_ids
+    end
+
+    @testset "history recycler rejects incompatible field storage" begin
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; mesh = (1,), dtype = Float64)
+        xb = RealFourier(coords["x"]; size = 8, bounds = (0.0, 2π))
+        current = [ScalarField(dist, "u64", (xb,), Float64)]
+        incompatible = ScalarField[ScalarField(dist, "u32", (xb,), Float32)]
+        state = Tarang.TimestepperState(RK111(), 0.01, current)
+        state.timestepper_data[:test_recycled] = incompatible
+
+        acquired = Tarang._acquire_recycled_history_state!(
+            state, :test_recycled, current; preserve_layout = true)
+        @test acquired !== incompatible
+        @test typeof(acquired[1]) === typeof(current[1])
+    end
 end

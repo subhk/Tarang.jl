@@ -359,7 +359,7 @@ struct RKSMR <: TimeStepper
     spectral DNS (Kim–Moin–Moser channel flow and descendants). It treats the
     nonlinear/advective term `F` EXPLICITLY (3rd-order RK, with a two-substep
     Adams-Bashforth-like blend) and the stiff linear term `L` (viscous diffusion)
-    IMPLICITLY (Crank–Nicolson, 2nd order, L-stable for the linear part):
+    IMPLICITLY (Crank–Nicolson-like, 2nd order, stiffly stable but not L-stable):
 
         (M - dt·β_k L) y^k = y^{k-1} + dt[γ_k F^{k-1} + ζ_k F^{k-2} + dt·α_k L y^{k-1}]
         γ = (8/15, 5/12, 3/4),  ζ = (0, -17/60, -5/12)
@@ -377,6 +377,9 @@ struct RKSMR <: TimeStepper
       implicit (linear) part — the standard SMR accuracy profile.
     - Implicit linear treatment is stable for diffusion-dominated problems
       (previously this method silently ran fully explicit and blew up on stiff L).
+      Its stiff-limit amplification is `87/185 ≈ 0.47027`, so very stiff modes
+      remain bounded but are not annihilated in one step as an L-stable method
+      would do.
     """
     stages::Int
     A_explicit::Matrix{Float64}

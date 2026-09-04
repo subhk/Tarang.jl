@@ -699,6 +699,56 @@ function _batch_mass_solve!(X::AbstractMatrix{ComplexF64},
     return ws.mass_ok
 end
 
+"""
+    _batch_constrained_mass_solve!(X, RHS, batch, sps, ws, state)
+
+Solve the row-patched final-update systems for every mode in `batch`. The
+factorization for each subproblem is cached by
+`_get_or_compute_constrained_mass_lu!`; only the batched column staging happens
+here. `RHS` must already contain the unscaled final-time algebraic targets in
+`batch.bc_rows`.
+"""
+function _batch_constrained_mass_solve!(X::AbstractMatrix{ComplexF64},
+                                        RHS::AbstractMatrix{ComplexF64},
+                                        batch::ModeBatch, sps,
+                                        ws::BatchWorkspace,
+                                        state::TimestepperState)
+    for (m, i) in enumerate(batch.sp_indices)
+        sp = sps[i]
+        n_eq = size(sp.M_min, 1)
+        n_var = size(sp.M_min, 2)
+        rhs_v = _sp_stage_vector!(sp, :batch_constrained_mass_rhs, n_eq)
+        copyto!(rhs_v, view(RHS, :, m))
+        constrained_solver = _get_or_compute_constrained_mass_lu!(state, sp)
+        if constrained_solver !== nothing
+            x_v = _sp_stage_vector!(sp, :batch_constrained_mass_sol, n_var)
+            _solve_cached_system!(x_v, constrained_solver, rhs_v)
+            copyto!(view(X, :, m), x_v)
+            ws.mass_ok[m] = true
+        else
+            ws.mass_ok[m] = false
+        end
+    end
+    return ws.mass_ok
+end
+
+"""Apply the cached CPU constraint projector to every successfully solved mode."""
+function _batch_project_constraints!(X::AbstractMatrix{ComplexF64},
+                                     X_stage::AbstractMatrix{ComplexF64},
+                                     ALG_F::AbstractMatrix{ComplexF64},
+                                     batch::ModeBatch, sps,
+                                     ws::BatchWorkspace,
+                                     state::TimestepperState)
+    for (m, i) in enumerate(batch.sp_indices)
+        ws.mass_ok[m] || continue
+        sp = sps[i]
+        isempty(sp.bc_rows) && continue
+        _project_final_constraints!(view(X, :, m), view(X_stage, :, m),
+                                    view(ALG_F, :, m), state, sp)
+    end
+    return X
+end
+
 # ── Per-mode mirrors, for the subproblems no batch covers ────────────────────
 #
 # These reproduce `step_subproblem_rk.jl`'s per-mode blocks verbatim so a bucket
@@ -794,7 +844,8 @@ function _leftover_stage_post!(sp, sp_idx, i::Int, solver, F_fields, state_field
 end
 
 function _leftover_final!(sp, sp_idx, dt::Float64, stages::Int, b_exp, b_imp,
-                          MX0, RHS, F, LX, state_fields)
+                          MX0, RHS, F, LX, ALG_F, state_fields, bc_dynamic::Bool,
+                          state::TimestepperState)
     # Self-guarding on `M_min`, like `_leftover_prestage!`: the caller already
     # skips these subproblems, and every `size(M_min, ...)` below reads the same
     # bound local rather than re-reading a nullable field.
@@ -813,10 +864,19 @@ function _leftover_final!(sp, sp_idx, dt::Float64, stages::Int, b_exp, b_imp,
         end
     end
 
-    M_lu = _get_or_compute_mass_lu!(sp)
+    constrained = !isempty(sp.bc_rows)
+    gpu_constrained = constrained && _gpu_subproblem_execution(sp)
+    if gpu_constrained
+        apply_bc_override!(rhs, ALG_F[sp_idx], sp, 1.0)
+    end
+    M_lu = gpu_constrained ? _get_or_compute_constrained_mass_lu!(state, sp) :
+                            _get_or_compute_mass_lu!(sp)
     M_lu === nothing && return nothing
     x_sol = _sp_stage_vector!(sp, :sol_final, size(M_min, 2), RHS[sp_idx])
     _solve_cached_system!(x_sol, M_lu, rhs)
+    if constrained && !gpu_constrained
+        _project_final_constraints!(x_sol, RHS[sp_idx], ALG_F[sp_idx], state, sp)
+    end
     scatter_inputs(sp, x_sol, state_fields)
     return nothing
 end
@@ -843,7 +903,8 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
     stages = ts.stages
     A_exp = ts.A_explicit
     A_imp = ts.A_implicit
-    c = ts.c_explicit
+    c_exp = ts.c_explicit
+    c_imp = ts.c_implicit
     b_exp = ts.b_explicit
     b_imp = ts.b_implicit
 
@@ -887,7 +948,7 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
         state.current_substep = i
 
         if bc_dynamic
-            stage_time = t + dt * c[i]
+            stage_time = t + dt * c_imp[i]
             if _refresh_bcs_for_stage!(solver, stage_time)
                 for k in eachindex(batches)
                     _batched_gather_alg_F!(workspaces[k], batches[k], subproblems)
@@ -937,7 +998,7 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
 
         from_solve_layout!(solve_stash, dist; to_grid=true)
 
-        F_fields = evaluate_rhs_buffered(solver, state_fields, t + dt * c[i])
+        F_fields = evaluate_rhs_buffered(solver, state_fields, t + dt * c_exp[i])
 
         solve_stash = to_solve_layout!(state_fields, dist; fuse_from_grid=true)
         _fg_F_stash = to_solve_layout!(F_fields, dist)
@@ -964,6 +1025,20 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
         _release_rhs_buffer!(F_fields, solver)
     end
 
+    # The public state is at `t + dt`, which an arbitrary tableau need not use
+    # as its final stage time. Re-gather dynamic algebraic targets when needed;
+    # c_implicit[end] == 1 already gathered the same target in the last stage.
+    if bc_dynamic && c_imp[end] != 1.0 && _refresh_bcs_for_stage!(solver, t + dt)
+        for k in eachindex(batches)
+            _batched_gather_alg_F!(workspaces[k], batches[k], subproblems)
+        end
+        for sp_idx in leftovers
+            sp = subproblems[sp_idx]
+            sp.M_min === nothing && continue
+            gather_alg_F!(ALG_F[sp_idx], sp)
+        end
+    end
+
     # ── Final update: M*X_{n+1} = M*X_n + dt*Σ(b^E*F - b^I*L*X) ──────────
     for k in eachindex(batches)
         batch = batches[k]
@@ -981,8 +1056,22 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
             end
         end
 
-        _batch_mass_solve!(ws.X, ws.RHS, batch, subproblems, ws;
-                           skip_missing=true)
+        constrained = !isempty(batch.bc_rows)
+        gpu_constrained = constrained &&
+                          _gpu_subproblem_execution(subproblems[first(batch.sp_indices)])
+        if !constrained
+            _batch_mass_solve!(ws.X, ws.RHS, batch, subproblems, ws;
+                               skip_missing=true)
+        elseif gpu_constrained
+            batched_bc_override!(ws.RHS, ws.ALG_F, batch.bc_rows, 1.0)
+            _batch_constrained_mass_solve!(ws.X, ws.RHS, batch, subproblems,
+                                           ws, state)
+        else
+            _batch_mass_solve!(ws.X, ws.RHS, batch, subproblems, ws;
+                               skip_missing=true)
+            _batch_project_constraints!(ws.X, ws.Xg, ws.ALG_F, batch, subproblems,
+                                        ws, state)
+        end
         if all(ws.mass_ok)
             _batched_scatter_state!(ws, batch, state_fields, ws.X)
         else
@@ -996,7 +1085,7 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
         sp = subproblems[sp_idx]
         sp.M_min === nothing && continue
         _leftover_final!(sp, sp_idx, dt, stages, b_exp, b_imp, MX0, RHS, F, LX,
-                         state_fields)
+                         ALG_F, state_fields, bc_dynamic, state)
     end
 
     from_solve_layout!(solve_stash, dist)

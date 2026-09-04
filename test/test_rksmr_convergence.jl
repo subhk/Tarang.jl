@@ -10,8 +10,8 @@ as a 4-stage ESDIRK additive-Runge–Kutta (ARK) tableau and run through the sha
 
 Tests:
 1. ARK tableau structure + consistency (row sums = c, b sums = 1, stiffly accurate).
-2. Tableau-level order (no Tarang): explicit part 3rd order, implicit part 2nd
-   order, and L-stability on a stiff linear problem.
+2. Tableau-level order (no Tarang): explicit part 3rd order, implicit part 2nd,
+   and the documented finite stiff-limit amplification.
 3. End-to-end heat equation in Tarang: 2nd-order accuracy AND stability on a stiff
    mode whose dt·λ is well outside the explicit SSP-RK3 stability region (the old
    explicit RKSMR blew up here).
@@ -59,7 +59,8 @@ using Tarang
         AE, AI = ts.A_explicit, ts.A_implicit
         bE, bI, c = ts.b_explicit, ts.b_implicit, ts.c_explicit
         function ark_step(Xn, t, dt, L, F)
-            X = zeros(4); Fx = zeros(4)
+            T = promote_type(typeof(Xn), typeof(t), typeof(dt), typeof(L))
+            X = zeros(T, 4); Fx = zeros(T, 4)
             for s in 1:4
                 rhs = Xn
                 for j in 1:s-1
@@ -95,6 +96,18 @@ using Tarang
         # stability). Implicit treatment must keep it bounded and decaying.
         xs = solve(0.05; L=100.0, F=(t,x)->0.0, X0=1.0)
         @test isfinite(xs) && abs(xs) < 1e-3
+
+        # SMR is stiffly stable but not L-stable. For the three implicit
+        # substeps, R(q)=Πₖ(1-αₖq)/(1+βₖq), hence
+        # R(∞)=(-145/111)*(9/25)*(-1)=87/185. Guard the contract explicitly so
+        # a favorable finite test point is never mistaken for L-stability.
+        setprecision(BigFloat, 256) do
+            # Float64 recurrence arithmetic suffers cancellation for q≫1;
+            # evaluate the implemented tableau at high precision instead.
+            stiff_limit = ark_step(big"1", big"0", big"1", big"1e40",
+                                   (t, x) -> zero(x))
+            @test isapprox(stiff_limit, BigFloat(87) / BigFloat(185); rtol=big"1e-14")
+        end
     end
 
     @testset "Tarang heat equation: 2nd-order accuracy + stiff stability" begin

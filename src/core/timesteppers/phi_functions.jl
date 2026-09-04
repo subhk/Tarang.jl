@@ -28,9 +28,11 @@ function phi_functions(z::Number)
     return φ₀, φ₁, φ₂, φ₃
 end
 
-# Cached workspace for phi_functions_matrix to avoid repeated identity matrix allocation
-# while preventing unbounded growth across many ETD problem sizes.
-const _phi_identity_cache = Dict{Tuple{Int, DataType}, Matrix}()
+# Cached structured identities for phi_functions_matrix. `Diagonal` keeps the
+# retained storage O(n) rather than pinning an additional dense O(n²) matrix for
+# every ETD problem size; arithmetic with the dense z/exp(z) operands still
+# materializes the same dense results where required.
+const _phi_identity_cache = Dict{Tuple{Int, DataType}, Diagonal}()
 const _phi_identity_lock = ReentrantLock()
 const _PHI_IDENTITY_CACHE_MAX_SIZE = 16
 
@@ -45,9 +47,17 @@ end
         get!(_phi_identity_cache, (n, T)) do
             length(_phi_identity_cache) >= _PHI_IDENTITY_CACHE_MAX_SIZE &&
                 _evict_phi_identity_cache_entry!()
-            Matrix{T}(LinearAlgebra.I, n, n)
+            Diagonal(fill(one(T), n))
         end
     end
+end
+
+"""Copy `A` to one dense matrix and scale it in place."""
+@inline function _scaled_dense_operator(A::AbstractMatrix, dt::Float64)
+    T = promote_type(eltype(A), typeof(dt))
+    z = Matrix{T}(A)
+    rmul!(z, dt)
+    return z
 end
 
 """Compute matrix φ functions for exponential integrators"""
@@ -63,12 +73,14 @@ function phi_functions_matrix(A::AbstractMatrix, dt::Float64)
             "Use RK222/SBDF2 for this problem size, or reduce resolution."))
     end
 
-    # Convert sparse to dense — Julia's exp() requires dense matrices
-    z = dt * Matrix{eltype(A)}(A isa SparseMatrixCSC ? A : Matrix(A))
+    # Julia's matrix exponential requires dense storage. Copy once and scale in
+    # place; `dt * Matrix(Matrix(A))` previously created two extra n×n
+    # temporaries for dense input (one extra for sparse input).
+    z = _scaled_dense_operator(A, dt)
 
     # Check matrix norm for stability
     z_norm = norm(z)
-    I_mat = _get_identity_matrix(n, eltype(A))
+    I_mat = _get_identity_matrix(n, eltype(z))
 
     if z_norm < 1e-8
         # Use Taylor expansions for small matrices (numerically stable)

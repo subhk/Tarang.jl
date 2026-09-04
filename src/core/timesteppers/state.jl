@@ -638,9 +638,22 @@ function _acquire_recycled_history_state!(state::TimestepperState, key::Symbol,
                                           current::V;
                                           preserve_layout::Bool=false) where {V<:Vector{<:ScalarField}}
     recycled = get(state.timestepper_data, key, nothing)
-    if recycled isa V && length(recycled) == length(current)
-        state.timestepper_data[key] = nothing
-        return _copy_field_state!(recycled, current; preserve_layout)
+    if recycled isa Vector{<:ScalarField} && length(recycled) == length(current)
+        # History containers may widen to `Vector{ScalarField}` even though the
+        # fields they hold retain the exact same concrete storage type as
+        # `current`. Compare the realized element types instead of rejecting
+        # reusable storage solely because the outer vector types differ.
+        compatible = true
+        @inbounds for i in eachindex(recycled, current)
+            if typeof(recycled[i]) !== typeof(current[i])
+                compatible = false
+                break
+            end
+        end
+        if compatible
+            state.timestepper_data[key] = nothing
+            return _copy_field_state!(recycled, current; preserve_layout)
+        end
     end
 
     state.timestepper_data[key] = nothing
