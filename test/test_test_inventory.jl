@@ -18,4 +18,20 @@ using Test
     mpi_wrapper = read(joinpath(@__DIR__, "run_mpi_tests.sh"), String)
     @test occursin("run_mpi_ci.jl", mpi_wrapper)
     @test !occursin("MPI_TESTS=(", mpi_wrapper)
+
+    # A registered file that exists on disk but is not tracked by git passes
+    # locally and fails on every clean clone. It has happened three times.
+    tracked = try
+        Set(basename.(filter(!isempty, split(read(
+            setenv(`git ls-files -- test/`; dir=joinpath(@__DIR__, "..")),
+            String), '\n'))))
+    catch err
+        @info "git unavailable; skipping tracked-file check" exception = err
+        nothing
+    end
+    if tracked !== nothing
+        untracked = sort!(collect(setdiff(known_test_files, tracked)))
+        isempty(untracked) || @error "registered test files not tracked by git" untracked
+        @test isempty(untracked)
+    end
 end
