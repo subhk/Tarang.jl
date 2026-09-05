@@ -179,8 +179,9 @@ function _plan_transforms_uncached!(dist::Distributor, domain::Domain,
         if dist.use_pencil_arrays && length(dist.mesh) >= ndim
             throw(ArgumentError(
                 "Process-mesh dimensionality ($(length(dist.mesh))) must be less than " *
-                "spectral domain dimensionality ($ndim) so that at least one domain axis " *
-                "remains local for PencilFFTs."))
+                "spectral domain dimensionality ($ndim): PencilFFTs needs at least one local " *
+                "axis in every transform stage, so a mesh of $(length(dist.mesh)) factors " *
+                "leaves no local axis on a $(ndim)-D domain."))
         end
 
         # Route based on basis composition
