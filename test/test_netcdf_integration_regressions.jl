@@ -335,3 +335,45 @@ if get(ENV, "TARANG_TEST_NETCDF_MERGE", "1") != "0"
     end
 end
 end
+
+@testset "NetCDF merger accepts a base path with a directory component" begin
+    # The handler's base_path normally carries a directory ("out/snap"); the
+    # merger used to build its match pattern from the full path and compare it
+    # against basename(file), so it silently found no processor files.
+    tmp = mktempdir()
+    base = joinpath(tmp, "out", "dirbase")
+    mkpath(dirname(base))
+    p0 = _write_merge_slab(base, 0; start=0, count=2, global_count=4, mpi_size=2, value=1.0)
+    p1 = _write_merge_slab(base, 1; start=2, count=2, global_count=4, mpi_size=2, value=2.0)
+    merger = Tarang.NetCDFMerger(base; verbose=false)
+    @test basename.(merger.processor_files) == ["dirbase_s1_p0.nc", "dirbase_s1_p1.nc"]
+    @test merger.output_file == joinpath(tmp, "out", "dirbase_s1", "dirbase_s1.nc")
+    @test Tarang.merge_files!(merger)
+    @test vec(Tarang.group_ncread(merger.output_file, "vars", "q")) == [1.0, 1.0, 2.0, 2.0]
+    @test isfile(p0) && isfile(p1)
+end
+
+@testset "derivative expression task resolves the coordinate from the field" begin
+    # `add_task!(handler, "∂x(u)")` is documented syntax; it used to reach
+    # `Differentiate(field, :x, 1)` and die with a MethodError because the
+    # handler's `vars` carries fields, not coordinates.
+    dist, u = _serial_output_field("u")
+    xs = vec(collect(local_grids(dist, u.bases[1])[1]))
+    grid_data!(u) .= sin.(xs)
+    tmp = mktempdir()
+    h = NetCDFFileHandler(joinpath(tmp, "expr"), dist, Dict("u" => u); mode="overwrite")
+    add_task!(h, "∂x(u)"; name="dux")
+    @test process!(h; iteration=0, sim_time=0.0, wall_time=0.0, timestep=0.1)
+    f = current_file(h)
+    close!(h)
+    @test vec(Tarang.group_ncread(f, "vars", "dux")) ≈ cos.(xs) atol=1e-12
+    # An unknown coordinate is a clear ArgumentError naming the alternatives.
+    err = try
+        Tarang.create_differentiate_operator(u, "y", 1, Dict{String, Any}())
+        nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("no coordinate named \"y\"", sprint(showerror, err))
+end
