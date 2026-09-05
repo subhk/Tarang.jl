@@ -10,6 +10,24 @@
 
 **Spec:** `docs/superpowers/specs/2026-09-05-implicit-state-mechanics-design.md`
 
+## Execution log (2026-09-05)
+
+- Tasks 1–5 executed inline and verified as written; each task's serial suite
+  was green before the next started (Task 4 also MPI np=2 58/58).
+- Deviations: (a) Task 3's extension hook first used the same signature as the
+  core default and OVERWROTE it (extension precompile error, visible only in
+  the Pkg.test precompile log because CUDA.jl is not loadable on this machine);
+  fixed by dispatching on `dist.architecture` with a `::GPU` method in the
+  extension. (b) Task 4's fold touched four timestepper files that another
+  session was editing concurrently in the same checkout; those 15 hunks were
+  left in that checkout and the remaining work moved to a separate worktree
+  (`mechanics/implicit-state-wt`). (c) Two NetCDF bugs found by a value-level
+  output check (merger base-path matching; derivative expression tasks) were
+  fixed on this branch with regression tests.
+- Task 1's git-tracked check immediately caught a real case:
+  `test_gpu_timesteppers_jlarray.jl`, registered in GPU_TEST_FILES (inert CI)
+  but never committed.
+
 ## Global Constraints
 
 - Julia binary on this machine: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=.` (the `julia` launcher is broken).
@@ -30,7 +48,7 @@
 - Consumes: `TEST_FILES`, `OPTIONAL_TEST_FILES`, `GPU_TEST_FILES`, `MPI_TEST_FILES`, `DISTRIBUTED_GPU_TEST_FILES` (globals from `test/file_lists.jl`, already loaded by `runtests.jl`).
 - Produces: nothing new.
 
-- [ ] **Step 1: Add the failing assertion**
+- [x] **Step 1: Add the failing assertion**
 
 Append inside the existing `@testset "Test file inventory"` block, after the `run_mpi_tests.sh` checks:
 
@@ -52,7 +70,7 @@ Append inside the existing `@testset "Test file inventory"` block, after the `ru
     end
 ```
 
-- [ ] **Step 2: Verify it fails on an untracked registration**
+- [x] **Step 2: Verify it fails on an untracked registration**
 
 Run:
 ```bash
@@ -62,7 +80,7 @@ sed -i '' 's|    "test_spectra.jl",|    "test_zzz_untracked_probe.jl",\n    "tes
 ```
 Expected: one failure, `untracked = ["test_zzz_untracked_probe.jl"]`.
 
-- [ ] **Step 3: Remove the probe and verify it passes**
+- [x] **Step 3: Remove the probe and verify it passes**
 
 ```bash
 git checkout -- test/file_lists.jl && rm test/test_zzz_untracked_probe.jl
@@ -70,7 +88,7 @@ git checkout -- test/file_lists.jl && rm test/test_zzz_untracked_probe.jl
 ```
 Expected: `Test file inventory | 5 5`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add test/test_test_inventory.jl
@@ -90,7 +108,7 @@ git commit -m "test: inventory requires registered test files to be git-tracked"
 - Consumes: `ScalarField.transform_bundle::Any` (set by both inner constructors in `src/core/field/field_types.jl:138,163`).
 - Produces: `_field_transform_bundle(field)` now throws `ArgumentError` when `field.transform_bundle` is not a `TransformPlanBundle`; it never calls `transform_plan_bundle`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `test/test_field_typestability.jl`:
 
@@ -111,12 +129,12 @@ Append to `test/test_field_typestability.jl`:
 end
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. -e 'using Test; include("test/test_field_typestability.jl")'`
 Expected: FAIL — `_field_transform_bundle` returns a bundle (it rebuilt), `transform_plan_cache` non-empty.
 
-- [ ] **Step 3: Replace the fallback**
+- [x] **Step 3: Replace the fallback**
 
 In `src/core/transforms/transform_types.jl` replace the tail of `_field_transform_bundle`:
 
@@ -132,7 +150,7 @@ In `src/core/transforms/transform_types.jl` replace the tail of `_field_transfor
 end
 ```
 
-- [ ] **Step 4: Document the collective contract**
+- [x] **Step 4: Document the collective contract**
 
 Append to `src/core/module_contracts.jl` after the BUFFER OWNERSHIP block:
 
@@ -162,14 +180,14 @@ Append to `src/core/module_contracts.jl` after the BUFFER OWNERSHIP block:
 #      one rank aborts all ranks before the next collective.
 ```
 
-- [ ] **Step 5: Run the test and the serial suite**
+- [x] **Step 5: Run the test and the serial suite**
 
 Run: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. -e 'using Test; include("test/test_field_typestability.jl")'`
 Expected: PASS.
 Run: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. -e 'using Pkg; Pkg.test()'` (background; ~50 min)
 Expected: `Testing Tarang tests passed`. If any test constructs a field without a bundle (e.g. via `copy`), attach the bundle in that constructor rather than relaxing the refusal.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/core/transforms/transform_types.jl src/core/module_contracts.jl test/test_field_typestability.jl
@@ -191,7 +209,7 @@ git commit -m "fix: _field_transform_bundle refuses instead of planning collecti
 - Consumes: `transpose_workspace!(dist::Distributor, field::ScalarField) -> TransposableField` (`src/core/transposable_field.jl:274`), `_distributed_dct_comm_token(comm) = objectid(comm)` (`ext/cuda/transforms.jl`).
 - Produces: `Tarang._close_backend_plan_caches!(dist::Distributor)` with a default method returning `nothing`; the CUDA extension adds a method that finalizes and deletes every `DISTRIBUTED_DCT_PLAN_CACHE` entry whose key's comm token equals `_distributed_dct_comm_token(dist.comm)`.
 
-- [ ] **Step 1: Update the AST guards (failing first)**
+- [x] **Step 1: Update the AST guards (failing first)**
 
 In `test/test_cuda_dct_cache_context.jl` replace the "TransposableField has no GC finalizer either" block with:
 
@@ -223,12 +241,12 @@ and add near the other `const *_SOURCE` lines:
 const DISTRIBUTOR_SOURCE = joinpath(@__DIR__, "..", "src", "core", "distributor", "distributor_core.jl")
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. -e 'using Test; include("test/test_cuda_dct_cache_context.jl")'`
 Expected: FAIL on `_calls(setup_workspace, :transpose_workspace!)` and on the hook lookups.
 
-- [ ] **Step 3: Make `DistributedGPUTransform` borrow**
+- [x] **Step 3: Make `DistributedGPUTransform` borrow**
 
 Replace `setup_transposable_workspace!` and `Base.close(::DistributedGPUTransform)` in `src/core/gpu_distributed.jl`:
 
@@ -254,7 +272,7 @@ function Base.close(transform::DistributedGPUTransform)
 end
 ```
 
-- [ ] **Step 4: Add the hook and call it from `close(dist)`**
+- [x] **Step 4: Add the hook and call it from `close(dist)`**
 
 In `src/core/distributor/distributor_core.jl`, before `Base.close(dist::Distributor)`:
 
@@ -276,7 +294,7 @@ and inside `Base.close(dist::Distributor)`, immediately after `dist.closed && re
     _close_backend_plan_caches!(dist)
 ```
 
-- [ ] **Step 5: Implement the hook in the extension**
+- [x] **Step 5: Implement the hook in the extension**
 
 Append to `ext/cuda/transforms.jl` after `clear_distributed_dct_plan_cache!`:
 
@@ -297,12 +315,12 @@ end
 
 (`key[5]` is the `comm_token` position in `_distributed_dct_plan_cache_key(global_shape, proc_grid, T, axis_kind, comm_token, device_id)`.)
 
-- [ ] **Step 6: Check `test_transposable_field.jl`'s use of the transform**
+- [x] **Step 6: Check `test_transposable_field.jl`'s use of the transform**
 
 Run: `grep -n "DistributedGPUTransform\|setup_transposable_workspace!\|\.workspace" test/test_transposable_field.jl`
 If a test asserts that the transform's workspace is a distinct object from the Distributor's cache, change that assertion to `@test transform.workspace === Tarang.transpose_workspace!(dist, field)`.
 
-- [ ] **Step 7: Run the affected tests and the serial suite**
+- [x] **Step 7: Run the affected tests and the serial suite**
 
 Run:
 ```bash
@@ -311,7 +329,7 @@ Run:
 Expected: all pass (the extension-load test parses the new ext method without CUDA hardware).
 Then `Pkg.test()` in the background; expected `Testing Tarang tests passed`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/core/gpu_distributed.jl src/core/distributor/distributor_core.jl ext/cuda/transforms.jl test/test_cuda_dct_cache_context.jl test/test_transposable_field.jl
@@ -330,12 +348,12 @@ git commit -m "refactor: Distributor is the single owner of communicators and ba
 - Consumes: `grid_data!(field) = (ensure_layout!(field, :g); get_grid_data(field))` and `coeff_data!` likewise (`src/core/field/field_layout/field_layout_access.jl:235-243`).
 - Produces: nothing new; behaviour identical by construction.
 
-- [ ] **Step 1: Record the starting count**
+- [x] **Step 1: Record the starting count**
 
 Run: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. -e 'using Test; include("test/test_layout_discipline_ratchet.jl")'`
 Expected: passes and logs `total = 277`.
 
-- [ ] **Step 2: Apply the fold script**
+- [x] **Step 2: Apply the fold script**
 
 Save as `scripts/fold_layout_pairs.py` and run `python3 scripts/fold_layout_pairs.py`:
 
@@ -380,7 +398,7 @@ print("folded", folded)
 
 Expected output: `folded 106` (±: the count must equal the number reported by the pre-scan in the spec's session, 106).
 
-- [ ] **Step 3: Parse-check every changed file**
+- [x] **Step 3: Parse-check every changed file**
 
 Run:
 ```bash
@@ -388,19 +406,19 @@ Run:
 ```
 Expected: `errors=0`.
 
-- [ ] **Step 4: Lower the ratchet and run it**
+- [x] **Step 4: Lower the ratchet and run it**
 
 Edit `test/test_layout_discipline_ratchet.jl`: `LAYOUT_RATCHET = 171` (277 − 106; use the number the test logs if it differs).
 Run: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. -e 'using Test; include("test/test_layout_discipline_ratchet.jl")'`
 Expected: PASS with `total = 171`.
 
-- [ ] **Step 5: Full serial suite, then MPI at 2 ranks**
+- [x] **Step 5: Full serial suite, then MPI at 2 ranks**
 
 Run `Pkg.test()` (background). Expected: `Testing Tarang tests passed`.
 Run `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. test/run_mpi_ci.jl 2` (background). Expected: `MPI summary (mpi @ 2 ranks): 58 passed, 0 failed`.
 If either fails, revert only the offending file's hunk with `git checkout -p -- <file>` and re-run; the ratchet count then goes up by the number of reverted sites.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add -A src test/test_layout_discipline_ratchet.jl scripts/fold_layout_pairs.py
@@ -420,7 +438,7 @@ git commit -m "refactor: fold 106 adjacent ensure_layout!/get_*_data pairs into 
 - Consumes: the section boundaries above (verify with `awk '/^# =+$/{getline t; print NR-1": "t}' src/core/gpu_distributed.jl` before cutting; the numbers may have shifted by Task 3).
 - Produces: identical module contents; `include("gpu_distributed.jl")` in `src/core/load_solver_stack.jl:9` is unchanged.
 
-- [ ] **Step 1: Cut the file**
+- [x] **Step 1: Cut the file**
 
 ```bash
 cd src/core && mkdir -p gpu_distributed
@@ -444,24 +462,24 @@ open("gpu_distributed.jl","w").write("\n".join(loader))
 EOF
 ```
 
-- [ ] **Step 2: Prove nothing but whitespace moved**
+- [x] **Step 2: Prove nothing but whitespace moved**
 
 ```bash
 cat src/core/gpu_distributed/{config,fft,transpose,utils,nccl,pinned,transform}.jl | diff - <(git show HEAD:src/core/gpu_distributed.jl | sed -n '1,1565p') | head
 ```
 Expected: empty diff (or only the trailing newline).
 
-- [ ] **Step 3: Update the test source path and run the affected tests**
+- [x] **Step 3: Update the test source path and run the affected tests**
 
 In `test/test_cuda_dct_cache_context.jl` set `GPU_DISTRIBUTED_SOURCE = joinpath(@__DIR__, "..", "src", "core", "gpu_distributed", "transform.jl")`.
 Run: `~/.julia/juliaup/julia-1.12.4+0.aarch64.apple.darwin14/bin/julia --project=. -e 'using Test; include("test/test_root_module_structure.jl"); include("test/test_cuda_dct_cache_context.jl"); include("test/test_gpu_test_files_reachable.jl")'`
 Expected: all pass. If `test_root_module_structure.jl` enumerates source files, add the seven new paths where `gpu_distributed.jl` is listed.
 
-- [ ] **Step 4: Serial suite**
+- [x] **Step 4: Serial suite**
 
 Run `Pkg.test()` (background). Expected: `Testing Tarang tests passed`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/core/gpu_distributed.jl src/core/gpu_distributed test
