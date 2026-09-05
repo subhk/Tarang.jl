@@ -1479,34 +1479,21 @@ end
 Setup or retrieve a TransposableField workspace for distributed transforms.
 """
 function setup_transposable_workspace!(transform::DistributedGPUTransform, field)
-    # TransposableField is defined in transposable_field.jl
-    # Create the workspace lazily and replace it when the caller changes fields.
-    # A TransposableField owns buffers and metadata tied to one ScalarField.
-    workspace = transform.workspace
-    if workspace === nothing || workspace.field !== field || !isopen(workspace)
-        # A TransposableField has no GC finalizer (communicator teardown is
-        # collective), so the wrapper being replaced must be closed here or its
-        # row/column communicators leak on every field switch. Every rank
-        # switches fields in the same order, so this collective pairs up.
-        workspace === nothing || close(workspace)
-        # The TransposableField constructor will be available at runtime
-        # since transposable_field.jl is included after this file
-        transform.workspace = TransposableField(field)
-    end
-    return transform.workspace
+    # The Distributor owns one TransposableField per (global shape, eltype) and
+    # releases its communicators in close(dist); borrowing it here means this
+    # transform never creates, and therefore never has to close, a wrapper.
+    workspace = transpose_workspace!(field.dist, field)
+    transform.workspace = workspace
+    return workspace
 end
 
 """
     close(transform::DistributedGPUTransform)
 
-Collectively release the MPI sub-communicators owned by the transform's
-`TransposableField` workspace. Idempotent; every rank must call it in the same
-order before `MPI.Finalize`.
+Drop the transform's reference to the Distributor-owned workspace. The
+communicators belong to the Distributor and are released by `close(dist)`.
 """
 function Base.close(transform::DistributedGPUTransform)
-    workspace = transform.workspace
-    workspace === nothing && return nothing
-    close(workspace)
     transform.workspace = nothing
     return nothing
 end
