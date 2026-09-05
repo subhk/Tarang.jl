@@ -92,9 +92,8 @@ function evaluate_advective_cfl(cfl_op::AdvectiveCFL, layout::Symbol=:g)
     dtype = velocity.dtype
 
     result = ScalarField(dist, "cfl_freq", bases, dtype)
-    ensure_layout!(result, :g)
 
-    get_grid_data(result) .= 0
+    grid_data!(result) .= 0
 
     ndims_field = length(bases)
     for i in 1:dim

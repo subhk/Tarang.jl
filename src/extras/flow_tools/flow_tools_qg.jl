@@ -316,8 +316,7 @@ function qg_advection_rhs(qg::QGSystem)
     dθ_dy_bot = evaluate_differentiate(Differentiate(qg.θ_bot, coord_y, 1), :g)
 
     rhs_bot = ScalarField(qg.dist_2d_bot, "rhs_bot", qg.θ_bot.bases, Float64)
-    ensure_layout!(rhs_bot, :g)
-    get_grid_data(rhs_bot) .= -(get_grid_data(qg.u_bot.components[1]) .* get_grid_data(dθ_dx_bot) .+
+    grid_data!(rhs_bot) .= -(get_grid_data(qg.u_bot.components[1]) .* get_grid_data(dθ_dx_bot) .+
                         get_grid_data(qg.u_bot.components[2]) .* get_grid_data(dθ_dy_bot))
 
     # Top surface
@@ -329,8 +328,7 @@ function qg_advection_rhs(qg::QGSystem)
     dθ_dy_top = evaluate_differentiate(Differentiate(qg.θ_top, coord_y, 1), :g)
 
     rhs_top = ScalarField(qg.dist_2d_top, "rhs_top", qg.θ_top.bases, Float64)
-    ensure_layout!(rhs_top, :g)
-    get_grid_data(rhs_top) .= -(get_grid_data(qg.u_top.components[1]) .* get_grid_data(dθ_dx_top) .+
+    grid_data!(rhs_top) .= -(get_grid_data(qg.u_top.components[1]) .* get_grid_data(dθ_dx_top) .+
                         get_grid_data(qg.u_top.components[2]) .* get_grid_data(dθ_dy_top))
 
     return rhs_bot, rhs_top
@@ -480,8 +478,7 @@ function qg_energy(qg::QGSystem)
 
     # Create energy density field for proper quadrature integration
     energy_field = ScalarField(qg.ψ.dist, "energy_density", qg.ψ.bases, qg.ψ.dtype)
-    ensure_layout!(energy_field, :g)
-    get_grid_data(energy_field) .= get_grid_data(dψ_dx).^2 .+ get_grid_data(dψ_dy).^2 .+ S .* get_grid_data(dψ_dz).^2
+    grid_data!(energy_field) .= get_grid_data(dψ_dx).^2 .+ get_grid_data(dψ_dy).^2 .+ S .* get_grid_data(dψ_dz).^2
 
     # Integrate using basis-specific quadrature weights and compute volume average
     # integrate() uses proper weights: uniform for Fourier, Gauss-Legendre for Legendre,

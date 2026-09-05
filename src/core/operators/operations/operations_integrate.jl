@@ -55,8 +55,7 @@ function evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
         if result_field isa Number
             return result_field
         end
-        ensure_layout!(result_field, :g)
-        return sum(get_grid_data(result_field))
+        return sum(grid_data!(result_field))
     end
 
     if layout == :g

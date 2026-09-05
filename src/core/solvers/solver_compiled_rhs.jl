@@ -510,8 +510,7 @@ Uses fill!() which works on both CPU and GPU arrays.
 """
 function create_zero_field(template::ScalarField)
     result = ScalarField(template.dist, "zero_field", template.bases, template.dtype)
-    ensure_layout!(result, :c)
-    if get_coeff_data(result) !== nothing
+    if coeff_data!(result) !== nothing
         # fill!() works on both CPU and GPU arrays
         fill!(get_coeff_data(result), zero(eltype(get_coeff_data(result))))
     end
@@ -538,9 +537,8 @@ function create_constant_field(expr, variables)
     end
 
     result = ScalarField(variables[1].dist, "constant_field", variables[1].bases, variables[1].dtype)
-    ensure_layout!(result, :c)
 
-    if get_coeff_data(result) !== nothing
+    if coeff_data!(result) !== nothing
         value = hasfield(typeof(expr), :value) ? expr.value : zero(eltype(get_coeff_data(result)))
         # fill!() works on both CPU and GPU arrays
         fill!(get_coeff_data(result), convert(eltype(get_coeff_data(result)), value))
@@ -560,14 +558,12 @@ function apply_add_operator(operands)
     end
 
     result = ScalarField(operands[1].dist, "add_result", operands[1].bases, operands[1].dtype)
-    ensure_layout!(result, :c)
 
-    if get_coeff_data(result) !== nothing
+    if coeff_data!(result) !== nothing
         # fill!() works on both CPU and GPU
         fill!(get_coeff_data(result), zero(eltype(get_coeff_data(result))))
         for operand in operands
-            ensure_layout!(operand, :c)
-            if get_coeff_data(operand) !== nothing
+            if coeff_data!(operand) !== nothing
                 # Broadcasting works on both CPU and GPU
                 get_coeff_data(result) .+= get_coeff_data(operand)
             end
@@ -588,12 +584,10 @@ function apply_multiply_operator(operands)
     end
 
     result = ScalarField(operands[1].dist, "multiply_result", operands[1].bases, operands[1].dtype)
-    ensure_layout!(result, :c)
 
-    if get_coeff_data(result) !== nothing
+    if coeff_data!(result) !== nothing
         # Start with first operand
-        ensure_layout!(operands[1], :c)
-        if get_coeff_data(operands[1]) !== nothing
+        if coeff_data!(operands[1]) !== nothing
             # copyto!() works on both CPU and GPU
             copyto!(get_coeff_data(result), get_coeff_data(operands[1]))
         else
@@ -602,8 +596,7 @@ function apply_multiply_operator(operands)
 
         # Multiply by remaining operands
         for i in 2:length(operands)
-            ensure_layout!(operands[i], :c)
-            if get_coeff_data(operands[i]) !== nothing
+            if coeff_data!(operands[i]) !== nothing
                 # Broadcasting works on both CPU and GPU
                 get_coeff_data(result) .*= get_coeff_data(operands[i])
             end

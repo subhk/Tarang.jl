@@ -59,6 +59,5 @@ end
 """Extract local Fourier shape from velocity field"""
 function get_fourier_shape(velocity::VectorField, fourier_axes::Vector{Int})
     first_component = velocity.components[1]
-    ensure_layout!(first_component, :c)
-    return size(get_coeff_data(first_component))
+    return size(coeff_data!(first_component))
 end
