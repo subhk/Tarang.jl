@@ -156,3 +156,18 @@ using InteractiveUtils
         @test isapprox(Tarang.get_grid_data(u), orig; rtol=1e-10)
     end
 end
+
+@testset "_field_transform_bundle never plans collectively" begin
+    coords = CartesianCoordinates("x")
+    dist = Distributor(coords; dtype=Float64)
+    xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+    f = ScalarField(dist, "f", (xb,), Float64)
+    @test Tarang._field_transform_bundle(f) isa Tarang.TransformPlanBundle
+
+    # Detach the bundle and clear the Distributor's cache: the accessor must
+    # refuse rather than rebuild (plan construction is collective under MPI).
+    f.transform_bundle = nothing
+    empty!(dist.transform_plan_cache)
+    @test_throws ArgumentError Tarang._field_transform_bundle(f)
+    @test isempty(dist.transform_plan_cache)
+end
