@@ -275,10 +275,6 @@ hr {
     border-right: 1px solid var(--border-color);
 }
 
-.docs-sidebar .docs-logo img {
-    max-width: 180px;
-}
-
 /* ===== Headings ===== */
 h1 {
     color: var(--text-dark);
