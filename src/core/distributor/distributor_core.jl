@@ -332,7 +332,12 @@ The core package owns no such cache; the CUDA extension adds a method that
 finalizes its distributed DCT plans. Called from `close(dist)` before the
 communicators are freed, so every collective teardown pairs up across ranks.
 """
-_close_backend_plan_caches!(dist::Distributor) = nothing
+_close_backend_plan_caches!(dist::Distributor) =
+    _close_backend_plan_caches!(dist.architecture, dist)
+# Backends extend this two-argument form on their architecture type; the core
+# package has no backend caches. (A same-signature method in the extension
+# would OVERWRITE the core one and fail extension precompilation.)
+_close_backend_plan_caches!(::Any, ::Distributor) = nothing
 
 """
     close(dist::Distributor)

@@ -182,7 +182,7 @@ function clear_distributed_dct_plan_cache!()
 end
 
 """Finalize and drop every cached distributed DCT plan built on `dist.comm`."""
-function Tarang._close_backend_plan_caches!(dist::Tarang.Distributor)
+function Tarang._close_backend_plan_caches!(::Tarang.GPU, dist::Tarang.Distributor)
     token = _distributed_dct_comm_token(dist.comm)
     lock(DISTRIBUTED_DCT_PLAN_LOCK) do
         for key in collect(keys(DISTRIBUTED_DCT_PLAN_CACHE))
