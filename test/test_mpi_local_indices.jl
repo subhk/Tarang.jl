@@ -21,8 +21,16 @@ const nprocs = MPI.Comm_size(comm)
 
         @test isempty(dist.layouts)
         create_pencil(dist, global_shape, 1; dtype=Float64)
-        @test get_global_size(dist, 1) == global_shape[1]
-        @test get_global_size(dist, 2) == global_shape[2]
+        if nprocs > 1
+            @test get_global_size(dist, 1) == global_shape[1]
+            @test get_global_size(dist, 2) == global_shape[2]
+        else
+            # A one-rank Distributor never creates a pencil (`create_pencil`
+            # returns a plain array), so nothing records the global shape and
+            # the context-free query must refuse rather than invent a size.
+            @test isempty(dist.pencil_cache)
+            @test_throws ArgumentError get_global_size(dist, 1)
+        end
     end
 
     @testset "2D: leading axis local, trailing axis decomposed" begin

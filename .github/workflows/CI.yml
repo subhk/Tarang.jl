@@ -34,6 +34,25 @@ jobs:
           - windows-latest
         arch:
           - x64
+        # macOS-latest is arm64 hardware. An x64 Julia there runs under Rosetta,
+        # which (a) roughly doubles the wall time and pushed the 1.12 job past the
+        # 60-minute timeout once subprocess-spawning tests were added, and (b) on
+        # some macos-26 runner images mis-executes float rounding — Base's own
+        # `range(0, 2π, length=17)` raised `InexactError: Int64(1.0)` on image
+        # 20260728 while passing on 20260831. Test the native architecture.
+        exclude:
+          - os: macOS-latest
+            arch: x64
+        include:
+          - version: '1.10'
+            os: macOS-latest
+            arch: aarch64
+          - version: '1.11'
+            os: macOS-latest
+            arch: aarch64
+          - version: '1.12'
+            os: macOS-latest
+            arch: aarch64
 
     steps:
       - uses: actions/checkout@v7

@@ -198,9 +198,15 @@ function get_global_size(dist::Distributor, dim::Int)
         end
     end
 
-    @warn "get_global_size called without domain context; returning default. " *
-          "Use get_global_size(dist, basis, dim) or get_global_size(dist, domain, dim) for accurate sizes." maxlog=1
-    return 64
+    # No layout and no pencil describe this axis. A serial Distributor never
+    # creates pencils (`create_pencil` hands back a plain array), so a
+    # context-free query there has nothing to answer from. The old fallback
+    # returned a fabricated 64, which every downstream slab/range computation
+    # then trusted; refuse instead and point at the context-carrying methods.
+    throw(ArgumentError(
+        "get_global_size(dist, $dim): no layout or pencil records a global shape " *
+        "for this Distributor (size=$(dist.size)). Use get_global_size(dist, basis, dim) " *
+        "or get_global_size(dist, domain, dim), or construct a field/pencil first."))
 end
 
 """
