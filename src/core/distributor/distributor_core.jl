@@ -325,6 +325,21 @@ function _free_transpose_workspaces!(dist::Distributor)
 end
 
 """
+    _close_backend_plan_caches!(dist::Distributor)
+
+Release any backend-owned plan caches keyed on this Distributor's communicator.
+The core package owns no such cache; the CUDA extension adds a method that
+finalizes its distributed DCT plans. Called from `close(dist)` before the
+communicators are freed, so every collective teardown pairs up across ranks.
+"""
+_close_backend_plan_caches!(dist::Distributor) =
+    _close_backend_plan_caches!(dist.architecture, dist)
+# Backends extend this two-argument form on their architecture type; the core
+# package has no backend caches. (A same-signature method in the extension
+# would OVERWRITE the core one and fail extension precompilation.)
+_close_backend_plan_caches!(::Any, ::Distributor) = nothing
+
+"""
     close(dist::Distributor)
 
 Collectively release the Cartesian communicator and subcommunicators owned by
@@ -335,6 +350,7 @@ longer needed. Repeated calls are safe.
 """
 function Base.close(dist::Distributor)
     dist.closed && return nothing
+    _close_backend_plan_caches!(dist)
     topology = dist.mpi_topology
 
     # Drop every cached plan even for serial/GPU distributors, which do not own

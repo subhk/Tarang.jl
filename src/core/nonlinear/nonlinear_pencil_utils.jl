@@ -13,10 +13,9 @@
 function get_pencil_compatible_data(field::ScalarField, config::PencilConfig)
 
     # Ensure field is in grid space layout for nonlinear operations
-    ensure_layout!(field, :g)
 
     # Verify field has allocated data
-    if get_grid_data(field) === nothing
+    if grid_data!(field) === nothing
         throw(ArgumentError("Field $(field.name) has no grid space data allocated"))
     end
 
@@ -330,10 +329,9 @@ end
 function set_pencil_compatible_data!(field::ScalarField, data, config::PencilConfig)
 
     # Ensure field is in grid space layout
-    ensure_layout!(field, :g)
 
     # Verify that field has allocated data
-    if get_grid_data(field) === nothing
+    if grid_data!(field) === nothing
         throw(ArgumentError("Field $(field.name) has no grid space data allocated"))
     end
 

@@ -711,10 +711,8 @@ Type-specialized via multiple dispatch; the JIT inlines the whole chain.
 """
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyStateField, state, ws::LazyWorkspace)
     src = state[expr.idx]
-    ensure_layout!(src, :g)
-    src_data = get_local_data(get_grid_data(src))
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    src_data = get_local_data(grid_data!(src))
+    out_data = get_local_data(grid_data!(out))
     if src_data !== nothing && out_data !== nothing && size(src_data) == size(out_data)
         copyto!(out_data, src_data)
     elseif out_data !== nothing
@@ -725,8 +723,7 @@ Type-specialized via multiple dispatch; the JIT inlines the whole chain.
 end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyParamField, state, ws::LazyWorkspace)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     out_data === nothing && return out
     f = expr.field
     if !isa(f, ScalarField)
@@ -734,8 +731,7 @@ end
               "This used to be silently replaced by ZERO, dropping the term from the RHS.")
     end
 
-    ensure_layout!(f, :g)
-    src_data = get_local_data(get_grid_data(f))
+    src_data = get_local_data(grid_data!(f))
     src_data === nothing && error("LazyRHS: parameter field `$(f.name)` has no grid data.")
 
     if size(src_data) == size(out_data)
@@ -758,8 +754,7 @@ end
 end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyConst, state, ws::LazyWorkspace)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     if out_data !== nothing
         fill!(out_data, eltype(out_data)(expr.value))
     end
@@ -816,8 +811,7 @@ function _dealiased_lazy_product!(out::ScalarField, a::ScalarField, b::ScalarFie
     # RHS path the pool exists for.
     product = evaluate_transform_multiply(a, b, evaluator; own=false)
     ensure_layout!(product, :g)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     prod_data = get_local_data(get_grid_data(product))
     if out_data !== nothing && prod_data !== nothing && size(out_data) == size(prod_data)
         copyto!(out_data, prod_data)
@@ -830,8 +824,7 @@ end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyNegate, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     if out_data !== nothing
         @. out_data = -out_data
     end
@@ -841,8 +834,7 @@ end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyScale, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     coeff = eltype(out_data) <: Real ? real(expr.coeff) : expr.coeff
     if out_data !== nothing
         @. out_data = coeff * out_data
@@ -978,8 +970,7 @@ end
 function evaluate_lazy!(out::ScalarField, expr::LazyFractionalLaplacian,
                         state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :c)
-    coeff = get_local_data(get_coeff_data(out))
+    coeff = get_local_data(coeff_data!(out))
     k2 = get_local_data(_build_k_squared(out))
     alpha = expr.alpha
     if alpha >= 0
@@ -1009,8 +1000,7 @@ end
 # `power_operands(::ScalarField, ::Real)` (grid space, undealiased).
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyPow, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     p = expr.exponent
     if out_data !== nothing
         @. out_data = out_data ^ p
@@ -1022,8 +1012,7 @@ end
 # Pointwise unary grid function (sin/exp/…), mirroring `UnaryGridFunction`.
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyUnaryFunc, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     f = expr.func
     if out_data !== nothing
         @. out_data = f(out_data)

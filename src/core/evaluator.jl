@@ -268,8 +268,7 @@ end
     GPU-aware: All results are returned on CPU for file I/O compatibility.
     """
 function evaluate_task(task::ScalarField, solver::InitialValueSolver)
-    ensure_layout!(task, :g)
-    return gather_array(task.dist, get_grid_data(task))
+    return gather_array(task.dist, grid_data!(task))
 end
 
 function evaluate_task(task::VectorField, solver::InitialValueSolver)
@@ -295,8 +294,7 @@ function evaluate_task(task, solver::InitialValueSolver)
 end
 
 function _component_grid_array(component::ScalarField)
-    ensure_layout!(component, :g)
-    return gather_array(component.dist, get_grid_data(component))
+    return gather_array(component.dist, grid_data!(component))
 end
 
 function _stack_component_arrays(component_arrays::Vector{<:AbstractArray})
@@ -517,14 +515,12 @@ function evaluate_property(flow::GlobalFlowProperty, name::String)
 
     if isa(field, ScalarField)
         # Ensure grid layout and get CPU array
-        ensure_layout!(field, :g)
-        result = on_architecture(CPU(), get_grid_data(field))
+        result = on_architecture(CPU(), grid_data!(field))
     elseif isa(field, VectorField)
         # Return all components stacked, consistent with evaluate_task
         component_arrays = Vector{AbstractArray}(undef, length(field.components))
         for (i, comp) in enumerate(field.components)
-            ensure_layout!(comp, :g)
-            component_arrays[i] = on_architecture(CPU(), get_grid_data(comp))
+            component_arrays[i] = on_architecture(CPU(), grid_data!(comp))
         end
         result = _stack_component_arrays(component_arrays)
     elseif isa(field, AbstractArray)
@@ -1418,8 +1414,7 @@ function get_task_data_array(task_data::Any)
 
     if isa(task_data, ScalarField)
         # Get grid-space data (gather_array handles GPU→CPU conversion)
-        ensure_layout!(task_data, :g)
-        return gather_array(task_data.dist, get_grid_data(task_data))
+        return gather_array(task_data.dist, grid_data!(task_data))
     elseif isa(task_data, VectorField)
         # _component_grid_array uses gather_array which handles GPU→CPU
         component_arrays = [_component_grid_array(comp) for comp in task_data.components]

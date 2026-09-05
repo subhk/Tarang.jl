@@ -618,8 +618,7 @@ function _implicit_ncc_matrix(ncc_operand)
 
     # q on the coupled-axis grid. Because q is constant along the Fourier directions, the
     # fiber at the first index of every other axis is the entire coefficient profile.
-    ensure_layout!(field, :g)
-    g = Array(get_grid_data(field))
+    g = Array(grid_data!(field))
     idx = ntuple(d -> (d == jax ? Colon() : 1), ndims(g))
     qfiber = vec(g[idx...])
     if length(qfiber) != Nc
@@ -650,8 +649,7 @@ function _implicit_ncc_matrix(ncc_operand)
     end
     Q = zeros(ComplexF64, Nc, Nc)
     for k in 1:Nc
-        ensure_layout!(tmp, :c)
-        cd = get_coeff_data(tmp); fill!(cd, 0); cd[k] = 1
+        cd = coeff_data!(tmp); fill!(cd, 0); cd[k] = 1
         backward_transform!(tmp)                            # eₖ → grid
         gg = get_grid_data(tmp); gg .= vec(gg) .* qfiber    # pointwise × q
         forward_transform!(tmp)                             # → coeffs

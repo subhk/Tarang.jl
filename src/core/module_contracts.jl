@@ -80,6 +80,30 @@ abstract type AbstractRHSPlan end
 # `test/test_deriv_pool_ownership.jl`, `test/test_nl_product_ownership.jl` and
 # `test/test_buffer_ownership_ratchet.jl` pin all of the above.
 
+# ---------------------------------------------------------------------------
+# COLLECTIVE ENTRY POINTS — which calls every rank must make together
+# ---------------------------------------------------------------------------
+#
+# Nothing in a signature says "collective". These are, and nothing else in the
+# public API may become one without being added here:
+#
+#   Distributor(...)                        MPI topology + Comm_split
+#   Domain(dist, bases) / plan_transforms!  PencilFFT plan construction
+#   ScalarField/VectorField/TensorField constructors on a distributed dist
+#   TransposableField(field), transpose_workspace!(dist, field)
+#   InitialValueSolver / BoundaryValueSolver construction
+#   forward_transform!/backward_transform!, evaluate_rhs, step!, solve!
+#   NetCDFFileHandler(...), process!(handler), save_state/load_state!
+#   close(dist)
+#
+# Three rules keep the count of collectives identical on every rank:
+#   1. An accessor never plans. `_field_transform_bundle` refuses when a field
+#      has no bundle; `local_shape(domain, :c)` derives geometry locally.
+#   2. A per-rank decision gates the BODY of a collective, never the call
+#      (`create_current_file!(handler; create=needs_create)`).
+#   3. Per-rank-fallible I/O is settled with `_collectively`, so a failure on
+#      one rank aborts all ranks before the next collective.
+
 # Custom PencilConfig struct for pencil array configuration.
 struct PencilConfig{N, M}
     global_shape::NTuple{N, Int}

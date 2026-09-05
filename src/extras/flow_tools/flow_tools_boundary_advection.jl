@@ -526,22 +526,19 @@ function compute_diffusion_term(bad::BoundaryAdvectionDiffusion, field::ScalarFi
     elseif bad.diffusion.type == :laplacian
         # Standard Laplacian: κΔc
         lap_field = evaluate_operator(lap(field))
-        ensure_layout!(lap_field, :g)
-        get_grid_data(result) .= κ .* get_grid_data(lap_field)
+        get_grid_data(result) .= κ .* grid_data!(lap_field)
 
     elseif bad.diffusion.type == :fractional
         # Fractional Laplacian: κ(-Δ)^α c
         # Note: negative sign convention - dissipative for α > 0
         frac_lap = evaluate_fractional_laplacian(FractionalLaplacian(field, α), :g)
-        ensure_layout!(frac_lap, :g)
-        get_grid_data(result) .= -κ .* get_grid_data(frac_lap)
+        get_grid_data(result) .= -κ .* grid_data!(frac_lap)
 
     elseif bad.diffusion.type == :hyperdiffusion
         # Hyperdiffusion: -κ(-Δ)^n c (n > 1)
         # Typically n = 2 gives -κΔ²c (biharmonic)
         frac_lap = evaluate_fractional_laplacian(FractionalLaplacian(field, α), :g)
-        ensure_layout!(frac_lap, :g)
-        get_grid_data(result) .= -κ .* get_grid_data(frac_lap)
+        get_grid_data(result) .= -κ .* grid_data!(frac_lap)
     end
 
     return result
@@ -604,8 +601,7 @@ end
 function bad_step_euler!(bad::BoundaryAdvectionDiffusion, dt::Real)
     for bspec in bad.boundary_specs
         rhs = bad_compute_rhs!(bad, bspec.name)
-        ensure_layout!(bad.fields[bspec.name], :g)
-        get_grid_data(bad.fields[bspec.name]) .+= dt .* get_grid_data(rhs)
+        grid_data!(bad.fields[bspec.name]) .+= dt .* get_grid_data(rhs)
     end
 end
 
@@ -613,8 +609,7 @@ function bad_step_rk2!(bad::BoundaryAdvectionDiffusion, dt::Real)
     # Save initial state
     saved_states = Dict{String, Array}()
     for bspec in bad.boundary_specs
-        ensure_layout!(bad.fields[bspec.name], :g)
-        saved_states[bspec.name] = copy(get_grid_data(bad.fields[bspec.name]))
+        saved_states[bspec.name] = copy(grid_data!(bad.fields[bspec.name]))
     end
 
     # Stage 1: Euler to midpoint
@@ -642,8 +637,7 @@ function bad_step_rk4!(bad::BoundaryAdvectionDiffusion, dt::Real)
     k4 = Dict{String, Array}()
 
     for bspec in bad.boundary_specs
-        ensure_layout!(bad.fields[bspec.name], :g)
-        saved_states[bspec.name] = copy(get_grid_data(bad.fields[bspec.name]))
+        saved_states[bspec.name] = copy(grid_data!(bad.fields[bspec.name]))
     end
 
     # k1
@@ -705,8 +699,7 @@ function bad_step_ssprk3!(bad::BoundaryAdvectionDiffusion, dt::Real)
     # Save initial state
     saved_states = Dict{String, Array}()
     for bspec in bad.boundary_specs
-        ensure_layout!(bad.fields[bspec.name], :g)
-        saved_states[bspec.name] = copy(get_grid_data(bad.fields[bspec.name]))
+        saved_states[bspec.name] = copy(grid_data!(bad.fields[bspec.name]))
     end
 
     # Stage 1: u^(1) = u^n + dt * L(u^n)
@@ -852,9 +845,8 @@ function bad_max_velocity(bad::BoundaryAdvectionDiffusion)
     for bspec in bad.boundary_specs
         vel = bad.velocities[bspec.name]
         ensure_layout!(vel.components[1], :g)
-        ensure_layout!(vel.components[2], :g)
 
-        vel_mag = sqrt.(get_grid_data(vel.components[1]).^2 .+ get_grid_data(vel.components[2]).^2)
+        vel_mag = sqrt.(get_grid_data(vel.components[1]).^2 .+ grid_data!(vel.components[2]).^2)
         # `maximum` on a PencilArray is COLLECTIVE; reduce LOCAL storage (parent) so
         # the Allreduce below is the only collective (was a redundant double-reduce).
         max_vel = max(max_vel, maximum(parent(vel_mag)))

@@ -487,8 +487,7 @@ function build_symbolic_jacobian(problem::Problem, state_fields)
     # Determine block sizes (one per variable/equation pair)
     block_sizes = Int[]
     for field in state_fields
-        ensure_layout!(field, :c)
-        push!(block_sizes, length(get_coeff_data(field)))
+        push!(block_sizes, length(coeff_data!(field)))
     end
 
     total_size = sum(block_sizes)

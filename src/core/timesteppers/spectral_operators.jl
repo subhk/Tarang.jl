@@ -318,11 +318,10 @@ function apply_implicit_diagonal!(
     γ::Real
 )
     ensure_layout!(u_old, :c)
-    ensure_layout!(u_new, :c)
 
     # û_new = û_old / (1 + dt*γ*L)
     # Broadcasting works on both CPU and GPU arrays
-    get_coeff_data(u_new) .= get_coeff_data(u_old) ./ (1 .+ dt .* γ .* L.coefficients)
+    coeff_data!(u_new) .= get_coeff_data(u_old) ./ (1 .+ dt .* γ .* L.coefficients)
 
     return u_new
 end
@@ -338,8 +337,7 @@ function apply_implicit_diagonal_inplace!(
     dt::Real,
     γ::Real
 )
-    ensure_layout!(u, :c)
-    get_coeff_data(u) ./= (1 .+ dt .* γ .* L.coefficients)
+    coeff_data!(u) ./= (1 .+ dt .* γ .* L.coefficients)
     return u
 end
 

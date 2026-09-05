@@ -715,14 +715,23 @@ function create_multiply_operator(left, right)
 end
 
 function create_differentiate_operator(operand, coord_name::AbstractString, order::Int, namespace::Dict)
-    # Try to find coordinate in namespace
     coord = get(namespace, coord_name, nothing)
-    if coord === nothing
-        # Create symbolic coordinate reference for deferred evaluation
-        coord = Symbol(coord_name)
-    end
-
     if isa(operand, ScalarField)
+        # A handler's `vars` rarely carries coordinates, so resolve the name
+        # against the field's own Distributor. `Differentiate` requires a
+        # `Coordinate`; handing it a Symbol used to raise a MethodError from
+        # deep inside the operator layer for a documented task syntax.
+        if coord === nothing
+            idx = findfirst(c -> c.name == coord_name, operand.dist.coords)
+            idx === nothing && throw(ArgumentError(
+                "∂$(coord_name)($(operand.name)): field $(repr(operand.name)) has no " *
+                "coordinate named $(repr(coord_name)); available: " *
+                join((c.name for c in operand.dist.coords), ", ")))
+            coord = operand.dist.coords[idx]
+        end
+        coord isa Coordinate || throw(ArgumentError(
+            "∂$(coord_name)($(operand.name)): namespace entry $(repr(coord_name)) is a " *
+            "$(typeof(coord)), not a Coordinate"))
         return Differentiate(operand, coord, order)
     end
     return Dict("type" => "differentiate", "operand" => operand, "coord" => coord_name, "order" => order)

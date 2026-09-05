@@ -383,10 +383,18 @@ if NPROCS == 1
         transform = DistributedGPUTransform(config, bases)
 
         workspace1 = setup_transposable_workspace!(transform, field1)
+        @test workspace1.field === field1
         workspace2 = setup_transposable_workspace!(transform, field2)
 
-        @test workspace2 !== workspace1
+        # The Distributor owns one workspace per (global shape, eltype) and
+        # repoints it; the wrapper borrows that workspace instead of building
+        # (and having to close) its own.
+        @test workspace2 === workspace1
+        @test workspace2 === Tarang.transpose_workspace!(dist, field2)
         @test workspace2.field === field2
+        @test transform.workspace === workspace2
+        close(transform)
+        @test transform.workspace === nothing
     end
 
     @testset "forward/backward wrapper round-trip" begin

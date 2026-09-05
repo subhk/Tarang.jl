@@ -269,9 +269,8 @@ function compute_timestep(cfl::CFL)
         cfl_frequency = nothing
 
         for (i, component) in enumerate(velocity.components)
-            ensure_layout!(component, :g)
 
-            component_frequency = abs.(get_grid_data(component)) ./ spacings[i]
+            component_frequency = abs.(grid_data!(component)) ./ spacings[i]
             if cfl_frequency === nothing
                 cfl_frequency = component_frequency
             else

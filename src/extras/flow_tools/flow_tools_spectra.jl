@@ -503,14 +503,12 @@ function calculate_spectral_kinetic_energy(velocity::VectorField; apply_conjugat
 
     # Get first component to determine array size (GPU-compatible allocation)
     first_component = velocity.components[1]
-    ensure_layout!(first_component, :c)
-    ke_spectral = similar(get_coeff_data(first_component), Float64)
+    ke_spectral = similar(coeff_data!(first_component), Float64)
     fill!(ke_spectral, zero(Float64))
 
     # Sum |û_i|² over all velocity components
     for component in velocity.components
-        ensure_layout!(component, :c)
-        ke_spectral .+= abs2.(get_coeff_data(component))
+        ke_spectral .+= abs2.(coeff_data!(component))
     end
 
     # Apply conjugate symmetry correction for RFFT

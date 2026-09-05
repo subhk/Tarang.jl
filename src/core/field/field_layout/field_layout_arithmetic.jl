@@ -57,9 +57,8 @@ function Base.:+(a::ScalarField, b::ScalarField)
     result = _allocate_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
-    ensure_layout!(result, :g)
 
-    _local_data(get_grid_data(result)) .= _local_data(get_grid_data(a)) .+ _local_data(get_grid_data(b))
+    _local_data(grid_data!(result)) .= _local_data(get_grid_data(a)) .+ _local_data(get_grid_data(b))
 
     return result
 end
@@ -70,9 +69,8 @@ function Base.:-(a::ScalarField, b::ScalarField)
     result = _allocate_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
-    ensure_layout!(result, :g)
 
-    _local_data(get_grid_data(result)) .= _local_data(get_grid_data(a)) .- _local_data(get_grid_data(b))
+    _local_data(grid_data!(result)) .= _local_data(get_grid_data(a)) .- _local_data(get_grid_data(b))
 
     return result
 end
@@ -86,9 +84,8 @@ function Base.:*(a::ScalarField, b::Number)
     T = promote_type(a.dtype, typeof(b))
     result = _allocate_field_arithmetic_result(a, T)
     ensure_layout!(a, :g)
-    ensure_layout!(result, :g)
 
-    _local_data(get_grid_data(result)) .= b .* _local_data(get_grid_data(a))
+    _local_data(grid_data!(result)) .= b .* _local_data(get_grid_data(a))
 
     return result
 end
@@ -117,9 +114,8 @@ function Base.:*(a::ScalarField, b::ScalarField)
     result = _allocate_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
-    ensure_layout!(result, :g)
 
-    _local_data(get_grid_data(result)) .= _local_data(get_grid_data(a)) .* _local_data(get_grid_data(b))
+    _local_data(grid_data!(result)) .= _local_data(get_grid_data(a)) .* _local_data(get_grid_data(b))
 
     return result
 end

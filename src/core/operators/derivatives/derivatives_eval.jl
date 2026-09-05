@@ -400,8 +400,7 @@ function _accumulate_conservative_flux_divergence!(result::ScalarField, coeffici
             # uᵢ ∂ᵢa (identically zero for a constant coefficient, hence the branch)
             coefficient_derivative = evaluate_differentiate(
                 Differentiate(coefficient, coord, 1), :g)
-            ensure_layout!(component, :g)
-            result_data .+= get_grid_data(component) .*
+            result_data .+= grid_data!(component) .*
                             get_grid_data(coefficient_derivative)
         end
     end

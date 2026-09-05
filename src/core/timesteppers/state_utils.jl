@@ -47,11 +47,9 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
         if hasfield(typeof(problem), :time) && problem.time !== nothing
             if problem.time isa ScalarField
                 if get_grid_data(problem.time) !== nothing
-                    ensure_layout!(problem.time, :g)
-                    fill!(get_grid_data(problem.time), time)
+                    fill!(grid_data!(problem.time), time)
                 elseif get_coeff_data(problem.time) !== nothing
-                    ensure_layout!(problem.time, :c)
-                    fill!(get_coeff_data(problem.time), time)
+                    fill!(coeff_data!(problem.time), time)
                 elseif hasfield(typeof(problem), :parameters)
                     problem.parameters["t"] = time
                 end
@@ -1340,9 +1338,8 @@ function _spectral_poisson_solve(rhs::ScalarField, dist::Distributor)
     result = _checkout_poisson_result!(rhs)
     copy_field_data!(result, rhs)
     result.name = "poisson_solution"
-    ensure_layout!(result, :c)
 
-    coeff_data = get_coeff_data(result)
+    coeff_data = coeff_data!(result)
 
     if isempty(rhs.bases)
         return result

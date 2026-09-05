@@ -378,10 +378,11 @@ function _field_transform_bundle(field::ScalarField)
     field.domain === nothing && throw(ArgumentError(
         "a field without a Domain has no transform bundle"))
     bundle = field.transform_bundle
-    if bundle isa TransformPlanBundle
-        return bundle
-    end
-    bundle = transform_plan_bundle(field.domain, field.dtype)
-    field.transform_bundle = bundle
-    return bundle
+    bundle isa TransformPlanBundle && return bundle
+    # Constructors attach the bundle; rebuilding it here would run the
+    # collective planner from an accessor that any single rank may call.
+    throw(ArgumentError(
+        "field $(repr(field.name)) carries no transform bundle; construct fields " *
+        "through ScalarField/VectorField/TensorField so the plan is attached, " *
+        "and do not detach `transform_bundle`."))
 end

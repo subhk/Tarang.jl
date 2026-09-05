@@ -218,9 +218,8 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
             copy_field_data!(ws_field, src_field; preserve_layout=true)
             # Safety net for the fallback path (mismatched buffers → grid copy):
             # a no-op when the coefficient copy above already left :c.
-            ensure_layout!(ws_field, :c)
 
-            coeff_data = get_coeff_data(ws_field)   # live coeff, = X_n[k]
+            coeff_data = coeff_data!(ws_field)   # live coeff, = X_n[k]
             Lhat = get(Lmap, k, nothing)            # nothing ⇒ no implicit term here
             for j in 1:(s-1)
                 if abs(AE[s, j]) > 1e-14
@@ -228,8 +227,7 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
                     # hand back a grid-layout field with a stale coeff buffer; force
                     # :c so the stage RHS actually contributes (matches the final
                     # update block below).
-                    ensure_layout!(F_stages[j][k], :c)
-                    _ddirk_axpy!(coeff_data, dt * AE[s, j], get_coeff_data(F_stages[j][k]))
+                    _ddirk_axpy!(coeff_data, dt * AE[s, j], coeff_data!(F_stages[j][k]))
                 end
                 if Lhat !== nothing && abs(AI[s, j]) > 1e-14
                     # Off-diagonal implicit contribution −dt·AI[s,j]·L̂·Y_j (the
@@ -268,8 +266,7 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
         Lhat = get(Lmap, k, nothing)
         for s in 1:stages
             if abs(b_exp[s]) > 1e-14
-                ensure_layout!(F_stages[s][k], :c)
-                _ddirk_axpy!(coeff_data, dt * b_exp[s], get_coeff_data(F_stages[s][k]))
+                _ddirk_axpy!(coeff_data, dt * b_exp[s], coeff_data!(F_stages[s][k]))
             end
             if Lhat !== nothing && abs(b_imp[s]) > 1e-14
                 ensure_layout!(Y_stages[s][k], :c)
@@ -392,8 +389,7 @@ function _sbdf2_apply_be_L!(fields::Vector{<:ScalarField}, Lmap::DiagonalLMap, d
     for (i, field) in enumerate(fields)
         Lhat = get(Lmap, i, nothing)
         Lhat === nothing && continue
-        ensure_layout!(field, :c)
-        _ddi_sbdf1_update!(get_coeff_data(field), Lhat, dt)
+        _ddi_sbdf1_update!(coeff_data!(field), Lhat, dt)
     end
     return fields
 end
@@ -730,8 +726,7 @@ function step_distributed_diagonal_imex_sbdf2!(state::TimestepperState, solver::
         axpy_state!(dt, F_n, new_state)
         for (i, field) in enumerate(new_state)
             haskey(Lhats, i) || continue
-            ensure_layout!(field, :c)
-            _ddi_sbdf1_update!(_local_coeff(get_coeff_data(field)), Lhats[i], dt)
+            _ddi_sbdf1_update!(_local_coeff(coeff_data!(field)), Lhats[i], dt)
         end
         _refresh_algebraic_state!(solver.problem, new_state)
         # Route pushes through the recycle-aware helpers so the state/F rings are
@@ -853,8 +848,7 @@ function step_distributed_diagonal_etd_rk222!(state::TimestepperState, solver::I
     @inbounds for i in 1:n_fields
         haskey(phis, i) || continue
         fr = _Nn_src[i]
-        ensure_layout!(fr, :c)
-        _ddirk_copy!(_local_coeff(get_coeff_data(N_n[i])), _local_coeff(get_coeff_data(fr)))
+        _ddirk_copy!(_local_coeff(get_coeff_data(N_n[i])), _local_coeff(coeff_data!(fr)))
         N_n[i].current_layout = :c
     end
     _release_rhs_buffer!(_Nn_src, solver)   # N(Xₙ) is now in the cache; free the shared buffer
@@ -947,8 +941,7 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
             src = X_n[i]
             ws = get_workspace_field!(state, src, (s - 1) * n_fields + i)
             if !isempty(src.bases)
-                ensure_layout!(src, :c)
-                _ddirk_copy!(_local_coeff(get_coeff_data(ws)), _local_coeff(get_coeff_data(src)))
+                _ddirk_copy!(_local_coeff(get_coeff_data(ws)), _local_coeff(coeff_data!(src)))
                 ws.current_layout = :c
             end
             Y[i] = ws
@@ -957,13 +950,11 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
             Lhat = Lhats[i]
             for j in 1:s-1
                 if AE[s, j] != 0.0
-                    ensure_layout!(Fs[j][i], :c)
-                    fj = _local_coeff(get_coeff_data(Fs[j][i]))
+                    fj = _local_coeff(coeff_data!(Fs[j][i]))
                     _ddirk_axpy!(d, dt * AE[s, j], fj)
                 end
                 if AI[s, j] != 0.0
-                    ensure_layout!(Ys[j][i], :c)
-                    yj = _local_coeff(get_coeff_data(Ys[j][i]))
+                    yj = _local_coeff(coeff_data!(Ys[j][i]))
                     _ddirk_axpy_lhat!(d, -dt * AI[s, j], Lhat, yj)
                 end
             end
@@ -988,8 +979,7 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
             # so this entry MUST be written — fail loud rather than skip (which
             # would leave the read seeing a stale previous-step F).
             isempty(fr.bases) && error("diagonal-IMEX RK: field $i has a diagonal L̂ but an empty-bases RHS")
-            ensure_layout!(fr, :c)
-            _ddirk_copy!(_local_coeff(get_coeff_data(dst[i])), _local_coeff(get_coeff_data(fr)))
+            _ddirk_copy!(_local_coeff(get_coeff_data(dst[i])), _local_coeff(coeff_data!(fr)))
             dst[i].current_layout = :c
         end
         _release_rhs_buffer!(F_result, solver)   # stage RHS is now in the cache; free the shared buffer
@@ -1004,18 +994,15 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
     X_new = _ddirk_acquire_xnew!(state, X_n, n_fields)
     for (i, field) in enumerate(X_new)
         haskey(Lhats, i) || continue
-        ensure_layout!(field, :c)
-        d = _local_coeff(get_coeff_data(field))
+        d = _local_coeff(coeff_data!(field))
         Lhat = Lhats[i]
         for s in 1:S
             if bE[s] != 0.0
-                ensure_layout!(Fs[s][i], :c)
-                fs = _local_coeff(get_coeff_data(Fs[s][i]))
+                fs = _local_coeff(coeff_data!(Fs[s][i]))
                 _ddirk_axpy!(d, dt * bE[s], fs)
             end
             if bI[s] != 0.0
-                ensure_layout!(Ys[s][i], :c)
-                ys = _local_coeff(get_coeff_data(Ys[s][i]))
+                ys = _local_coeff(coeff_data!(Ys[s][i]))
                 _ddirk_axpy_lhat!(d, -dt * bI[s], Lhat, ys)
             end
         end
@@ -1058,8 +1045,7 @@ function _ddirk_acquire_xnew!(state::TimestepperState, X_n, n_fields::Int)
         state.timestepper_data[:_ddirk_recycle] = nothing
         @inbounds for i in 1:n_fields
             isempty(X_n[i].bases) && continue
-            ensure_layout!(X_n[i], :c)
-            _ddirk_copy!(_local_coeff(get_coeff_data(rec[i])), _local_coeff(get_coeff_data(X_n[i])))
+            _ddirk_copy!(_local_coeff(get_coeff_data(rec[i])), _local_coeff(coeff_data!(X_n[i])))
             rec[i].current_layout = :c
         end
         return rec
@@ -1110,8 +1096,7 @@ function _ddi_sbdf2_push_fhist!(state::TimestepperState, Fhist, F_n, n_fields::I
         state.timestepper_data[:_ddi_sbdf2_frec] = nothing
         @inbounds for i in 1:n_fields
             isempty(F_n[i].bases) && continue
-            ensure_layout!(F_n[i], :c)
-            _ddirk_copy!(_local_coeff(get_coeff_data(rec[i])), _local_coeff(get_coeff_data(F_n[i])))
+            _ddirk_copy!(_local_coeff(get_coeff_data(rec[i])), _local_coeff(coeff_data!(F_n[i])))
             rec[i].current_layout = :c
         end
         push!(Fhist, rec)
