@@ -205,19 +205,3 @@ For a bounded domain, keep the Chebyshev axis first so it stays local to each ra
 Additional schemes and their backend restrictions are documented in the
 [time-stepper guide](docs/src/pages/timesteppers.md), including `Tarang.MCNAB2`
 and `Tarang.CNLF2`.
-
-## Testing
-
-```bash
-julia --threads=4,1 --project=. -e 'using Pkg; Pkg.test(; julia_args=["--threads=4,1"])'
-julia --project=. test/run_mpi_ci.jl 4          # MPI tests across 4 ranks
-```
-
-The default suite includes GPU-array emulation with scalar indexing disabled.
-Its host FFT/LU stand-ins check device storage and solver dispatch; native CUDA
-tests still require GPU hardware.
-
-CPU and MPI tests run on GitHub Actions; GPU tests (CUDA) run on a self-hosted
-Buildkite agent (`.buildkite/pipeline.yml`), since GitHub-hosted runners have no
-GPU. See the [testing guide](docs/src/pages/testing.md) for running GPU/MPI tests
-locally, for the agent requirements, and for what triggers a GPU build.
