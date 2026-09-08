@@ -24,36 +24,6 @@
 
 ---
 
-## Problem Types and Solver Support
-
-Use the explicit problem types throughout the API:
-
-| Problem | Solver | Purpose |
-|---------|--------|---------|
-| `InitialValueProblem` | `InitialValueSolver` | Time evolution |
-| `LinearBoundaryValueProblem` | `BoundaryValueSolver` | Steady linear equations |
-| `NonlinearBoundaryValueProblem` | `BoundaryValueSolver` | Steady nonlinear equations |
-| `EigenvalueProblem` | `EigenvalueSolver` | Eigenvalues and modes |
-
-**API migration:** the `IVP`, `LBVP`, `NLBVP`, and `EVP` aliases have been removed.
-Replace them with the corresponding names above.
-
-- **Boundary conditions:** spatial Dirichlet, Neumann, and Robin values work in
-  steady solves. Moving boundary values use registered parameters and the current
-  stage time; the normal coordinate evaluates at the wall. Structured stress-free
-  conditions select individual vector components, and periodic markers add no
-  constraint equations. See the [boundary-condition guide](docs/src/tutorials/boundary_conditions.md).
-- **CPU concurrency:** independent Fourier derivative evaluations and shared-factor
-  matrix solves use exclusive scratch workspaces. See [parallelism](docs/src/pages/parallelism.md).
-- **GPU and MPI time stepping:** supported schemes retain their documented order
-  and enforce boundary constraints. Support depends on the operator and backend;
-  see the [execution table](docs/src/pages/timesteppers.md#where-each-scheme-runs).
-  Linear GPU boundary solves keep solve buffers on the device. Nonlinear GPU
-  boundary-value and GPU eigenvalue solves remain unsupported.
-
-The [development manual](https://subhk.github.io/Tarang.jl/dev/) follows `main`;
-the [stable manual](https://subhk.github.io/Tarang.jl/stable/) follows tagged releases.
-
 ## Installation
 
 ```julia
