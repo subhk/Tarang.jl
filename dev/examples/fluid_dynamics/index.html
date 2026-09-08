@@ -26,7 +26,7 @@ lift_basis = derivative_basis(zbasis, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_u     = grad(u) + ez * τ_lift(tau_u1)      # first-order reduction
 
-problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+problem = InitialValueProblem([p, u, tau_p, tau_u1, tau_u2])
 add_parameters!(problem, nu=nu, fx=fx, ex=ex, grad_u=grad_u, τ_lift=τ_lift)
 
 add_equation!(problem, &quot;trace(grad_u) + tau_p = 0&quot;)
@@ -68,7 +68,7 @@ domain = Domain(dist, (xbasis, zbasis))
 u     = VectorField(domain, &quot;u&quot;)        # velocity, divergence-free by construction
 tau_ψ = ScalarField(dist, &quot;tau_psi&quot;, (), Float64)
 
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu)
 add_equation!(problem, &quot;∂t(zeta) - nu*Δ(zeta) = -u⋅∇(zeta)&quot;)   # vorticity transport
 add_equation!(problem, &quot;Δ(psi) + tau_psi - zeta = 0&quot;)          # Δψ = ζ
@@ -132,7 +132,7 @@ grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 grad_S = grad(S) + ez * τ_lift(tau_S1)
 
-problem = IVP([p, T, S, u, tau_p, tau_T1, tau_T2, tau_S1, tau_S2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, S, u, tau_p, tau_T1, tau_T2, tau_S1, tau_S2, tau_u1, tau_u2])
 add_parameters!(problem, Pr=Pr, taud=tau_d, buoyT=Ra_T*Pr, buoyS=Ra_S*Pr, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, grad_S=grad_S, τ_lift=τ_lift)
 
@@ -202,7 +202,7 @@ grad_T = grad(T) + ez * τ_lift(tau_T1)
 grad_v = grad(v) + ez * τ_lift(tau_v1)
 ux     = u.components[1]
 
-problem = IVP([p, T, v, u, tau_p, tau_T1, tau_T2, tau_v1, tau_v2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, v, u, tau_p, tau_T1, tau_T2, tau_v1, tau_v2, tau_u1, tau_u2])
 add_parameters!(problem, Pr=Pr, buoy=Ra*Pr, fcor=fcor, ex=ex, ez=ez, ux=ux,
                 grad_u=grad_u, grad_T=grad_T, grad_v=grad_v, τ_lift=τ_lift)
 
@@ -252,7 +252,7 @@ b     = ScalarField(domain, &quot;b&quot;)        # buoyancy
 u     = VectorField(domain, &quot;u&quot;)
 tau_ψ = ScalarField(dist, &quot;tau_psi&quot;, (), Float64)
 
-problem = IVP([ζ, ψ, b, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, b, u, tau_ψ])
 add_parameters!(problem, nu=nu, kappa=kappa, N2=N2)
 
 add_equation!(problem, &quot;∂t(zeta) - nu*Δ(zeta) - ∂x(b) = -u⋅∇(zeta)&quot;)
@@ -299,7 +299,7 @@ domain = Domain(dist, (xbasis, ybasis))
 u     = VectorField(domain, &quot;u&quot;)
 tau_ψ = ScalarField(dist, &quot;tau_psi&quot;, (), Float64)
 
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=ν)
 add_equation!(problem, &quot;∂t(zeta) - nu*Δ(zeta) = -u⋅∇(zeta)&quot;)
 add_equation!(problem, &quot;Δ(psi) + tau_psi - zeta = 0&quot;)
@@ -347,4 +347,4 @@ ensure_layout!(ux, :g)
 umax = global_max(dist, abs.(get_grid_data(ux)))   # MPI-reduced: same on every rank
 
 @printf(&quot;E = %.4e   Z = %.4e   max|ux| = %.4f   spectrum peak at k = %.1f\n&quot;,
-        E, Z, umax, spec.k[argmax(spec.power)])</code></pre><h3 id="Running-in-parallel"><a class="docs-heading-anchor" href="#Running-in-parallel">Running in parallel</a><a id="Running-in-parallel-1"></a><a class="docs-heading-anchor-permalink" href="#Running-in-parallel" title="Permalink"></a></h3><p>The fully periodic examples (Kelvin-Helmholtz, internal waves, decaying turbulence) run under MPI unchanged — they use <code>local_grids</code> for initial conditions, which returns each rank&#39;s own slice:</p><pre><code class="nohighlight hljs">mpiexecjl --project=. -n 2 julia kelvin_helmholtz.jl</code></pre><p>The Kelvin-Helmholtz script above gives bit-identical output at 1 and 2 ranks (<code>max|zeta| = 18.62</code>, <code>E = 0.3948</code>).</p><p>The wall-bounded examples (channel, double-diffusive, rotating convection) are <strong>serial</strong>: their right-hand sides contain <code>-u⋅∇(u)</code>, a Chebyshev derivative in the explicit RHS, which a distributed run rejects (each rank owns only part of the Chebyshev axis). MPI also requires the Chebyshev axis to come <em>first</em> in the domain. See <a href="../../getting_started/running_with_mpi/">Running with MPI</a>.</p><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../tutorials/ivp_2d_rbc/">Rayleigh-Bénard Tutorial</a></li><li><a href="../heat_transfer/">Heat Transfer Examples</a></li><li><a href="../gallery/">Example Gallery</a></li></ul></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Saturday 5 September 2026 07:31">Saturday 5 September 2026</span>. Using Julia version 1.10.12.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
+        E, Z, umax, spec.k[argmax(spec.power)])</code></pre><h3 id="Running-in-parallel"><a class="docs-heading-anchor" href="#Running-in-parallel">Running in parallel</a><a id="Running-in-parallel-1"></a><a class="docs-heading-anchor-permalink" href="#Running-in-parallel" title="Permalink"></a></h3><p>The fully periodic examples (Kelvin-Helmholtz, internal waves, decaying turbulence) run under MPI unchanged — they use <code>local_grids</code> for initial conditions, which returns each rank&#39;s own slice:</p><pre><code class="nohighlight hljs">mpiexecjl --project=. -n 2 julia kelvin_helmholtz.jl</code></pre><p>The Kelvin-Helmholtz script above gives bit-identical output at 1 and 2 ranks (<code>max|zeta| = 18.62</code>, <code>E = 0.3948</code>).</p><p>The wall-bounded examples (channel, double-diffusive, rotating convection) are <strong>serial</strong>: their right-hand sides contain <code>-u⋅∇(u)</code>, a Chebyshev derivative in the explicit RHS, which a distributed run rejects (each rank owns only part of the Chebyshev axis). MPI also requires the Chebyshev axis to come <em>first</em> in the domain. See <a href="../../getting_started/running_with_mpi/">Running with MPI</a>.</p><h2 id="See-Also"><a class="docs-heading-anchor" href="#See-Also">See Also</a><a id="See-Also-1"></a><a class="docs-heading-anchor-permalink" href="#See-Also" title="Permalink"></a></h2><ul><li><a href="../../tutorials/ivp_2d_rbc/">Rayleigh-Bénard Tutorial</a></li><li><a href="../heat_transfer/">Heat Transfer Examples</a></li><li><a href="../gallery/">Example Gallery</a></li></ul></article><nav class="docs-footer"><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.19.0 on <span class="colophon-date" title="Tuesday 8 September 2026 08:14">Tuesday 8 September 2026</span>. Using Julia version 1.10.12.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
