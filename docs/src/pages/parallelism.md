@@ -1,6 +1,27 @@
 # Parallelism
 
-Tarang.jl uses MPI for distributed-memory parallelism.
+Tarang.jl supports CPU threads for independent local operations and MPI for
+distributed-memory parallelism.
+
+## CPU threads
+
+Start Julia with multiple worker threads; an additional interactive thread pool
+can be enabled with `--threads=4,1`:
+
+```bash
+julia --threads=4,1 --project=. simulation.jl
+```
+
+Independent Fourier derivative evaluations use task-local result pools and
+exclusive reusable FFT scratch. Concurrent calls to shared `BlockDiagonalSolver`
+and `SPQRSolver` factors check out separate solve workspaces, including when tasks
+use different Julia thread pools. Give each call its own input/output fields or
+arrays. This does not permit simultaneous mutation or stepping of the same field
+or solver.
+
+These paths are covered by the CPU concurrency regressions in the
+[default test suite](testing.md). MPI collectives still require matching calls
+from all ranks; adding Julia threads does not change that requirement.
 
 ## MPI Basics
 

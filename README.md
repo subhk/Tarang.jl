@@ -24,6 +24,35 @@
 
 ---
 
+## Problem Types and Solver Support
+
+Use the explicit problem types throughout the API:
+
+| Problem | Solver | Purpose |
+|---------|--------|---------|
+| `InitialValueProblem` | `InitialValueSolver` | Time evolution |
+| `LinearBoundaryValueProblem` | `BoundaryValueSolver` | Steady linear equations |
+| `NonlinearBoundaryValueProblem` | `BoundaryValueSolver` | Steady nonlinear equations |
+| `EigenvalueProblem` | `EigenvalueSolver` | Eigenvalues and modes |
+
+**API migration:** the `IVP`, `LBVP`, `NLBVP`, and `EVP` aliases have been removed.
+Replace them with the corresponding names above.
+
+- **Boundary conditions:** spatial Dirichlet, Neumann, and Robin values work in
+  steady solves. Moving boundary values use registered parameters and the current
+  stage time; the normal coordinate evaluates at the wall. Structured stress-free
+  conditions select individual vector components, and periodic markers add no
+  constraint equations. See the [boundary-condition guide](docs/src/tutorials/boundary_conditions.md).
+- **CPU concurrency:** independent Fourier derivative evaluations and shared-factor
+  matrix solves use exclusive scratch workspaces. See [parallelism](docs/src/pages/parallelism.md).
+- **GPU and MPI time stepping:** supported schemes retain their documented order
+  and enforce boundary constraints. Support depends on the operator and backend;
+  see the [execution table](docs/src/pages/timesteppers.md#where-each-scheme-runs).
+  Linear GPU boundary solves keep solve buffers on the device. Nonlinear GPU
+  boundary-value and GPU eigenvalue solves remain unsupported.
+
+The [development manual](https://subhk.github.io/Tarang.jl/dev/) follows `main`;
+the [stable manual](https://subhk.github.io/Tarang.jl/stable/) follows tagged releases.
 
 ## Installation
 
@@ -131,7 +160,7 @@ See [`examples/`](examples/) for complete runnable scripts including QG turbulen
 ```julia
 using Tarang, CUDA
 
-# Add arch=GPU() -- everything else stays the same
+# Allocate on the GPU; select a timestepper supported by your operator/backend.
 domain = PeriodicDomain(512, 512; arch=GPU(), dtype=Float32)
 field = ScalarField(domain, "u")
 forward_transform!(field)   # Uses cuFFT automatically
@@ -148,9 +177,12 @@ mpiexec -n 4 julia --project=. examples/gpu_example.jl
 ### MPI
 
 ```bash
-# Run any script in parallel with MPI
-mpiexec -n 4 julia --project=. examples/ivp/rayleigh_benard_2d.jl
+# Run the distributed regression suite with four MPI ranks.
+julia --project=. test/run_mpi_ci.jl 4
 ```
+
+MPI scripts must follow the [domain decomposition rules](docs/src/pages/parallelism.md).
+For a bounded domain, keep the Chebyshev axis first so it stays local to each rank.
 
 ## Spectral Bases
 
@@ -170,12 +202,20 @@ mpiexec -n 4 julia --project=. examples/ivp/rayleigh_benard_2d.jl
 | **Exponential** | `ETD_RK222`, `ETD_CNAB2`, `ETD_SBDF2` |
 | **Diagonal IMEX** | `DiagonalIMEX_RK222`, `DiagonalIMEX_RK443`, `DiagonalIMEX_SBDF2` |
 
+Additional schemes and their backend restrictions are documented in the
+[time-stepper guide](docs/src/pages/timesteppers.md), including `Tarang.MCNAB2`
+and `Tarang.CNLF2`.
+
 ## Testing
 
 ```bash
-julia --project=. -e 'using Pkg; Pkg.test()'   # CPU test suite
+julia --threads=4,1 --project=. -e 'using Pkg; Pkg.test(; julia_args=["--threads=4,1"])'
 julia --project=. test/run_mpi_ci.jl 4          # MPI tests across 4 ranks
 ```
+
+The default suite includes GPU-array emulation with scalar indexing disabled.
+Its host FFT/LU stand-ins check device storage and solver dispatch; native CUDA
+tests still require GPU hardware.
 
 CPU and MPI tests run on GitHub Actions; GPU tests (CUDA) run on a self-hosted
 Buildkite agent (`.buildkite/pipeline.yml`), since GitHub-hosted runners have no
