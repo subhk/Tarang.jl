@@ -162,16 +162,3 @@ For a bounded domain, keep the Chebyshev axis first so it stays local to each ra
 | `ComplexFourier` | Periodic | Complex-valued fields |
 | `ChebyshevT` | Bounded | Wall-bounded domains, boundary conditions |
 | `Legendre` | Bounded | Alternative to Chebyshev |
-
-## Time Integrators
-
-| Family | Schemes |
-|--------|---------|
-| **IMEX Runge-Kutta** | `RK111`, `RK222`, `RK443`, `RKSMR` |
-| **Multistep IMEX** | `CNAB1`, `CNAB2`, `SBDF1`--`SBDF4` |
-| **Exponential** | `ETD_RK222`, `ETD_CNAB2`, `ETD_SBDF2` |
-| **Diagonal IMEX** | `DiagonalIMEX_RK222`, `DiagonalIMEX_RK443`, `DiagonalIMEX_SBDF2` |
-
-Additional schemes and their backend restrictions are documented in the
-[time-stepper guide](docs/src/pages/timesteppers.md), including `Tarang.MCNAB2`
-and `Tarang.CNLF2`.
