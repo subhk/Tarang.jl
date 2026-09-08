@@ -21,7 +21,7 @@
 # that list to empty first; the test is the checklist, and the count is a ratchet
 # so the list cannot quietly grow again.
 
-# Root of the problem hierarchy (`IVP`, `LBVP`, `NLBVP`, `EVP`, all in
+# Root of the problem hierarchy (`InitialValueProblem`, `LinearBoundaryValueProblem`, `NonlinearBoundaryValueProblem`, `EigenvalueProblem`, all in
 # problems/problem_types.jl). Declared here rather than next to those structs
 # because the operator layer loads two stages earlier and needs the name to
 # annotate signatures — `symbolic_diff.jl` takes `::Problem`, which is what
@@ -55,10 +55,10 @@ abstract type AbstractRHSPlan end
 #    `with_pool_field` gives RAII. It is NOT installed by default — see the
 #    docstring on `step!` for why — so `checkout_or_alloc` always allocates.
 #
-# 2. The rotating result pools track nothing. They hand out slot `idx % N` and
+# 2. The rotating result pools do not track outstanding borrows. They hand out slot `idx % N` and
 #    reissue it after N further checkouts no matter who is still holding it:
 #
-#      `_DERIV_RESULT_POOL`   (16) — `operators/derivatives/derivatives_eval.jl`
+#      `_DerivativeResultPool` (16 per task) — `operators/derivatives/derivatives_eval.jl`
 #      `_NL_RESULT_POOL`      ( 8) — `nonlinear/nonlinear_padding.jl`
 #      `_POISSON_RESULT_POOL` ( 4) — `timesteppers/state_utils.jl`
 #

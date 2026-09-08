@@ -62,6 +62,35 @@
 
 ## Quick Start
 
+### Problem API and execution support
+
+| Problem | Solver | Purpose |
+|---------|--------|---------|
+| `InitialValueProblem` | `InitialValueSolver` | Time evolution |
+| `LinearBoundaryValueProblem` | `BoundaryValueSolver` | Steady linear equations |
+| `NonlinearBoundaryValueProblem` | `BoundaryValueSolver` | Steady nonlinear equations |
+| `EigenvalueProblem` | `EigenvalueSolver` | Eigenvalues and modes |
+
+The abbreviated `IVP`, `LBVP`, `NLBVP`, and `EVP` aliases have been removed.
+Use the corresponding full names above when updating an existing script.
+
+[Boundary conditions](tutorials/boundary_conditions.md) support spatial values in
+linear and nonlinear steady solves, and parameterized moving values during time
+stepping. Normal-coordinate references use the wall position. Structured
+stress-free conditions preserve scalar component selection; periodic markers
+record metadata without adding constraints.
+
+[CPU concurrency](pages/parallelism.md#CPU-threads) uses exclusive scratch storage
+for independent Fourier derivatives and shared-factor matrix solves.
+[GPU linear boundary solves](pages/gpu_computing.md) keep solve buffers on the
+device. Nonlinear GPU boundary-value and GPU eigenvalue solves remain unsupported.
+Consult the [time-stepper execution table](pages/timesteppers.md#Where-each-scheme-runs)
+for the supported combinations of operators, CPU, MPI, and GPU execution.
+
+This site's **dev** version follows `main`; **stable** follows tagged releases.
+Pull-request previews are separate builds, so unreleased changes do not appear
+in the stable manual automatically.
+
 ### Installation
 
 ```julia
@@ -96,7 +125,7 @@ using Tarang
 domain = PeriodicDomain(64)                     # 64-point periodic [0, 2π]
 T = ScalarField(domain, "T")                    # Temperature field
 
-problem = IVP([T])
+problem = InitialValueProblem([T])
 add_parameters!(problem, kappa=0.01)
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 
@@ -144,7 +173,7 @@ lift_basis = derivative_basis(zbasis, 1)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem, nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 
@@ -261,10 +290,10 @@ it the constructor throws rather than silently falling back.
 
 | Type | Description | Example |
 |------|-------------|---------|
-| **IVP** | Initial Value Problems | Time-dependent Navier-Stokes |
-| **LBVP** | Linear Boundary Value Problems | Poisson equation |
-| **NLBVP** | Nonlinear Boundary Value Problems | Steady nonlinear systems |
-| **EVP** | Eigenvalue Problems | Linear stability analysis |
+| **InitialValueProblem** | Initial Value Problems | Time-dependent Navier-Stokes |
+| **LinearBoundaryValueProblem** | Linear Boundary Value Problems | Poisson equation |
+| **NonlinearBoundaryValueProblem** | Nonlinear Boundary Value Problems | Steady nonlinear systems |
+| **EigenvalueProblem** | Eigenvalue Problems | Linear stability analysis |
 
 ## Spectral Bases
 

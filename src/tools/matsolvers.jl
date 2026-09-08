@@ -425,6 +425,26 @@ register_solver("banded", BandedLUSolver)
 # Block diagonal solver
 # ============================================================================
 
+# A slot belongs to one active solve, not to a thread: an AbstractVector can
+# yield while being read, allowing another solve to run on the same thread.
+# Only checkout/return and growth of the workspace vectors hold this lock.
+struct _SolverWorkspacePool
+    lock::ReentrantLock
+    available::Vector{Int}
+end
+
+_SolverWorkspacePool(count::Int) = _SolverWorkspacePool(ReentrantLock(), collect(1:count))
+
+@inline function _release_workspace!(pool::_SolverWorkspacePool, index::Int)
+    lock(pool.lock)
+    try
+        push!(pool.available, index)
+    finally
+        unlock(pool.lock)
+    end
+    return nothing
+end
+
 """
     BlockDiagonalSolver <: AbstractMatSolver
 
@@ -434,6 +454,7 @@ struct BlockDiagonalSolver{T, F} <: AbstractMatSolver
     block_solvers::Vector{F}
     block_sizes::Vector{Int}
     workspace::Vector{Vector{Vector{T}}}
+    workspace_pool::_SolverWorkspacePool
 end
 
 function BlockDiagonalSolver(matrix::AbstractMatrix;
@@ -465,7 +486,28 @@ function BlockDiagonalSolver(matrix::AbstractMatrix;
     workspace = [[Vector{T}(undef, bs) for bs in block_sizes]
                  for _ in 1:Base.Threads.nthreads()]
 
-    return BlockDiagonalSolver{T, eltype(block_solvers)}(block_solvers, block_sizes, workspace)
+    return BlockDiagonalSolver{T, eltype(block_solvers)}(
+        block_solvers, block_sizes, workspace, _SolverWorkspacePool(length(workspace)))
+end
+
+@inline function _acquire_workspace!(s::BlockDiagonalSolver{T}) where T
+    pool = s.workspace_pool
+    lock(pool.lock)
+    try
+        if isempty(pool.available)
+            workspace = [Vector{T}(undef, bs) for bs in s.block_sizes]
+            push!(s.workspace, workspace)
+            index = length(s.workspace)
+        else
+            index = pop!(pool.available)
+            workspace = s.workspace[index]
+        end
+        # Return the buffer reference while locked; another checkout may grow
+        # the outer vector as soon as we unlock it.
+        return index, workspace
+    finally
+        unlock(pool.lock)
+    end
 end
 
 function solve(s::BlockDiagonalSolver{T}, rhs::AbstractVector) where T
@@ -481,19 +523,22 @@ function solve!(dest, s::BlockDiagonalSolver{T}, rhs::AbstractVector) where T
     length(rhs) == n ||
         throw(DimensionMismatch("BlockDiagonal rhs length $(length(rhs)) does not match matrix rows $n"))
 
-    workspace = s.workspace[Base.Threads.threadid()]
-    offset = 0
-
-    for (i, bs) in enumerate(s.block_sizes)
-        block_rhs = workspace[i]
-        @inbounds for j in 1:bs
-            block_rhs[j] = rhs[offset + j]
+    index, workspace = _acquire_workspace!(s)
+    try
+        offset = 0
+        for (i, bs) in enumerate(s.block_sizes)
+            block_rhs = workspace[i]
+            @inbounds for j in 1:bs
+                block_rhs[j] = rhs[offset + j]
+            end
+            ldiv!(s.block_solvers[i], block_rhs)
+            @inbounds for j in 1:bs
+                dest[offset + j] = block_rhs[j]
+            end
+            offset += bs
         end
-        ldiv!(s.block_solvers[i], block_rhs)
-        @inbounds for j in 1:bs
-            dest[offset + j] = block_rhs[j]
-        end
-        offset += bs
+    finally
+        _release_workspace!(s.workspace_pool, index)
     end
 
     return dest
@@ -524,6 +569,7 @@ struct SPQRSolver{T, F, Q, R} <: AbstractMatSolver
     rank::Int
     m::Int
     n::Int
+    workspace_pool::_SolverWorkspacePool
 end
 
 function SPQRSolver(matrix::SparseMatrixCSC; kwargs...)
@@ -544,7 +590,32 @@ function SPQRSolver(matrix::SparseMatrixCSC; kwargs...)
          for _ in 1:Base.Threads.nthreads()],
         [Vector{T}(undef, Int(rnk))
          for _ in 1:Base.Threads.nthreads()],
-        Int(rnk), size(qr_factor, 1), size(qr_factor, 2))
+        Int(rnk), size(qr_factor, 1), size(qr_factor, 2),
+        _SolverWorkspacePool(Base.Threads.nthreads()))
+end
+
+@inline function _acquire_workspace!(s::SPQRSolver{T}) where T
+    pool = s.workspace_pool
+    lock(pool.lock)
+    try
+        if isempty(pool.available)
+            x = Vector{T}(undef, max(s.m, s.n))
+            q_rhs = Vector{T}(undef, s.m)
+            rank_rhs = Vector{T}(undef, s.rank)
+            push!(s.workspace, x)
+            push!(s.q_workspace, q_rhs)
+            push!(s.rank_workspace, rank_rhs)
+            index = length(s.workspace)
+        else
+            index = pop!(pool.available)
+            x = s.workspace[index]
+            q_rhs = s.q_workspace[index]
+            rank_rhs = s.rank_workspace[index]
+        end
+        return index, x, q_rhs, rank_rhs
+    finally
+        unlock(pool.lock)
+    end
 end
 
 function SPQRSolver(matrix::AbstractMatrix; kwargs...)
@@ -569,39 +640,39 @@ function solve!(dest::AbstractVector, s::SPQRSolver{T}, rhs::AbstractVector) whe
     length(dest) == s.n ||
         throw(DimensionMismatch("SPQR destination length $(length(dest)) does not match matrix columns $(s.n)"))
 
-    thread_id = Base.Threads.threadid()
-    x = s.workspace[thread_id]
-    q_rhs = s.q_workspace[thread_id]
-    rank_rhs = s.rank_workspace[thread_id]
-    rpivinv = s.rpivinv
-
-    for i in eachindex(rpivinv)
-        @inbounds q_rhs[rpivinv[i]] = rhs[i]
-    end
-
-    lmul!(s.q_adjoint, q_rhs)
-
-    @inbounds for i in 1:s.rank
-        rank_rhs[i] = q_rhs[i]
-    end
-    ldiv!(s.r_factor, rank_rhs)
-
-    @inbounds for i in 1:s.rank
-        x[i] = rank_rhs[i]
-    end
-    if s.rank < s.n
-        z = zero(T)
-        @inbounds for i in (s.rank + 1):s.n
-            x[i] = z
+    index, x, q_rhs, rank_rhs = _acquire_workspace!(s)
+    try
+        rpivinv = s.rpivinv
+        for i in eachindex(rpivinv)
+            @inbounds q_rhs[rpivinv[i]] = rhs[i]
         end
-    end
 
-    if isempty(s.inv_cpiv)
-        copyto!(dest, 1, x, 1, s.n)
-    else
-        for i in 1:s.n
-            @inbounds dest[i] = x[s.inv_cpiv[i]]
+        lmul!(s.q_adjoint, q_rhs)
+
+        @inbounds for i in 1:s.rank
+            rank_rhs[i] = q_rhs[i]
         end
+        ldiv!(s.r_factor, rank_rhs)
+
+        @inbounds for i in 1:s.rank
+            x[i] = rank_rhs[i]
+        end
+        if s.rank < s.n
+            z = zero(T)
+            @inbounds for i in (s.rank + 1):s.n
+                x[i] = z
+            end
+        end
+
+        if isempty(s.inv_cpiv)
+            copyto!(dest, 1, x, 1, s.n)
+        else
+            for i in 1:s.n
+                @inbounds dest[i] = x[s.inv_cpiv[i]]
+            end
+        end
+    finally
+        _release_workspace!(s.workspace_pool, index)
     end
 
     return dest

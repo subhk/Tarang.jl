@@ -32,7 +32,7 @@ function _decay_solver(stepper; dt=0.02)
     domain = PeriodicDomain(8)
     u = ScalarField(domain, "u")
     set!(u, (x,) -> 1.0)
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) = -u")
     return InitialValueSolver(problem, stepper; dt)
 end
@@ -61,7 +61,8 @@ end
     # (method, stepper, expected order). The field path must not silently degrade
     # to the forward-Euler rate of 1 that the missing-matrix fallback produced.
     cases = ((:cnab2, CNAB2(), 2), (:sbdf2, SBDF2(), 2),
-             (:sbdf3, SBDF3(), 3), (:sbdf4, SBDF4(), 4))
+             (:sbdf3, SBDF3(), 3), (:sbdf4, SBDF4(), 4),
+             (:cnlf2, Tarang.CNLF2(), 2))
     for (method, stepper, order) in cases
         e_coarse = _field_path_error(stepper, method, 0.02)
         e_fine   = _field_path_error(stepper, method, 0.01)
@@ -72,9 +73,13 @@ end
 end
 
 @testset "Field path matches the global-matrix path" begin
+    # MCNAB2 runs the field path as :cnab2 (with L = 0 its θ weights nothing) and
+    # CNLF2 as its own leapfrog stencil; both must agree with their global-matrix
+    # steppers, which start with one CNAB1 step exactly as the field path does.
     for (method, stepper) in ((:cnab1, CNAB1()), (:cnab2, CNAB2()),
                               (:sbdf1, SBDF1()), (:sbdf2, SBDF2()),
-                              (:sbdf3, SBDF3()), (:sbdf4, SBDF4()))
+                              (:sbdf3, SBDF3()), (:sbdf4, SBDF4()),
+                              (:cnab2, Tarang.MCNAB2()), (:cnlf2, Tarang.CNLF2()))
         dt = 0.02
         ef = _field_path_error(stepper, method, dt)
         eg = _global_path_error(stepper, dt)
@@ -104,7 +109,7 @@ end
         domain = PeriodicDomain(n)
         u = ScalarField(domain, "u")
         set!(u, (x,) -> sin(x))
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
         solver = InitialValueSolver(problem, SBDF4(); dt=0.02)
         for _ in 1:20                      # past startup and deque growth
@@ -123,7 +128,7 @@ end
     domain = PeriodicDomain(8)
     u = ScalarField(domain, "u")
     set!(u, (x,) -> 1.0)
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) - 0.5*lap(u) = 0")
     solver = InitialValueSolver(problem, CNAB2(); dt=0.01)
     Tarang._ensure_timestepper_state!(solver, 0.01)

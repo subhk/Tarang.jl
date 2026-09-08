@@ -12,7 +12,7 @@ fields are stored **by reference**, so an LES model that refreshes νₑ in plac
 each step is picked up automatically by the next `compute_timestep` without
 re-registering.
 
-`domain` supplies the grid spacings. It is resolved lazily inside
+`domain` supplies the bases and grid spacings. It is resolved lazily inside
 `compute_timestep` (falling back to the first registered velocity's domain, then
 to the problem domain) so a diffusivity may be registered before any velocity.
 """
@@ -33,7 +33,7 @@ Adaptive timestep controller. Register the fields that constrain the step with
     timestep, `dt = safety / max(Σᵢ |uᵢ|/Δxᵢ)`. Any diffusion you integrate
     **explicitly** — most importantly an LES eddy viscosity νₑ, which cannot go
     down the implicit path because that path cannot represent a spatially
-    varying coefficient — imposes its own `dt ≲ 1/(2 ν Σᵢ Δxᵢ⁻²)` limit that is
+    varying coefficient — imposes its own spectral diffusion limit that is
     **not** accounted for here. Register it with `add_diffusivity!(cfl, ν)`.
     Diffusion handled implicitly by the timestepper needs no registration.
 
@@ -100,23 +100,25 @@ place every step needs to be registered only once.
 
 ## Stability limit
 
-With `ν_max` the global maximum of the registered coefficient and `Δxᵢ` the grid
-spacing on axis `i` (minimum spacing on a Chebyshev axis), the entry contributes
-the frequency
+With `ν_max` the global maximum of the registered coefficient, the entry
+contributes the frequency
 
-    f_diff = 2 ν_max Σᵢ Δxᵢ⁻²        ⟹        dt ≤ 1 / f_diff
+    f_diff = (ν_max / 2) Σᵢ ρᵢ        ⟹        dt ≤ 1 / f_diff
 
-which is the forward-Euler limit for the second-order central Laplacian: its
-extreme eigenvalue is `-4ν Σᵢ Δxᵢ⁻²`, and `|1 + λ dt| ≤ 1` gives
-`dt ≤ 1/(2ν Σᵢ Δxᵢ⁻²)`. The **sum** over axes (not the max) is the correct
-anisotropic form, and it matches the advective term in this file, which likewise
-sums `|uᵢ|/Δxᵢ` over axes. On an isotropic `d`-dimensional grid it reduces to the
-familiar `dt ≤ Δx²/(2dν)`.
+On a Fourier axis, `ρᵢ = max(abs2, wavenumbers(basisᵢ))`, using the global
+basis, including the Nyquist mode. The spectral Laplacian has extreme eigenvalue
+`-ν Σᵢ ρᵢ`; forward Euler requires `|1 + λ dt| ≤ 1`, hence
+`dt ≤ 2/(ν Σᵢ ρᵢ)`. For an even-sized isotropic Fourier grid this is
+`dt ≤ 2 Δx²/(d ν π²)`. Odd-sized grids use their actual largest represented mode.
+
+For non-Fourier axes, retain the conservative spacing estimate `ρᵢ = 4/Δxᵢ²`,
+using the minimum near-wall spacing on Chebyshev axes. The **sum** over axes
+also handles anisotropic and mixed Fourier/Chebyshev domains.
 
 The result is folded into the same `min_dt` reduction as the advective limit, so
 the smaller of the two wins, and the `safety` factor applies to both.
 
-## Grid spacings
+## Domain
 
 `domain` defaults to the domain of a `ScalarField` argument, else to the first
 registered velocity's domain, else to the problem domain. Pass it explicitly when
@@ -165,7 +167,7 @@ function _cfl_local_max_diffusivity(ν::ScalarField)
 end
 
 """
-Resolve the domain whose grid spacings bound a registered diffusivity: the
+Resolve the domain whose bases bound a registered diffusivity: the
 explicitly supplied one, else the first registered velocity's, else the problem's.
 """
 function _cfl_diffusivity_domain(cfl::CFL, entry::CFLDiffusivity)
@@ -187,6 +189,24 @@ function _cfl_diffusivity_domain(cfl::CFL, entry::CFLDiffusivity)
         "`add_diffusivity!(cfl, ν; domain=field.domain)`."))
 end
 
+"""Global Laplacian spectral-radius bound used by the diffusion CFL limit."""
+function _cfl_diffusion_spectral_radius(domain::Domain)
+    spacings = grid_spacing(domain)
+    radius = 0.0
+    for (i, basis) in enumerate(domain.bases)
+        if basis isa FourierBasis
+            # Global basis modes are independent of the local MPI slab and of
+            # real/complex coefficient storage, including odd sizes and Nyquist.
+            radius += maximum(abs2, wavenumbers(basis); init=0.0)
+        else
+            # Keep the near-wall spacing estimate for Chebyshev and other axes.
+            dx = spacings[i]
+            dx > 0 && (radius += 4.0 / (dx * dx))
+        end
+    end
+    return radius
+end
+
 """
     compute_timestep(cfl::CFL)
 
@@ -198,7 +218,8 @@ Compute the adaptive timestep based on the CFL condition. Returns the new
 Every registered velocity contributes the advective frequency
 `max(Σᵢ |uᵢ|/Δxᵢ)`, and every diffusivity registered with
 [`add_diffusivity!`](@ref) contributes the diffusive frequency
-`2 ν_max Σᵢ Δxᵢ⁻²`. `dt` is `safety / f` for the largest frequency `f` of all of
+`(ν_max / 2) Σᵢ ρᵢ`, where Fourier axes use their maximum squared wavenumber and
+non-Fourier axes use `4/Δxᵢ²`. `dt` is `safety / f` for the largest frequency `f` of all of
 them, so the tightest limit wins.
 
 !!! warning
@@ -207,8 +228,7 @@ them, so the tightest limit wins.
     the timestepper integrates *explicitly* is then completely unconstrained
     here. The usual offender is an LES eddy viscosity νₑ: a spatially varying
     coefficient cannot go down the implicit path, so it is stepped explicitly and
-    carries `dt ≲ 1/(2 ν_max Σᵢ Δxᵢ⁻²)` (i.e. `Δx²/(2dν)` on an isotropic
-    `d`-dimensional grid). Nothing enforces that unless you call
+    carries its own spectral diffusion limit. Nothing enforces that unless you call
     `add_diffusivity!(cfl, get_eddy_viscosity(model))`. It bites hardest on a
     Chebyshev axis, where the near-wall spacing is far below `L/N`. Diffusion
     treated implicitly needs no registration.
@@ -286,26 +306,16 @@ function compute_timestep(cfl::CFL)
         end
     end
 
-    # Diffusive (parabolic) limit — opt-in via add_diffusivity!. Forward-Euler
-    # stability for the second-order central Laplacian: its extreme eigenvalue is
-    # -4ν Σᵢ Δxᵢ⁻², and |1 + λ dt| ≤ 1 gives dt ≤ 1 / (2ν Σᵢ Δxᵢ⁻²). We SUM the
-    # inverse-square spacings over axes (the correct anisotropic form; reduces to
-    # Δx²/(2dν) on an isotropic d-dimensional grid), mirroring the advective term
-    # above, which likewise sums |uᵢ|/Δxᵢ over axes.
+    # Forward-Euler diffusion limit: dt ≤ 2 / (ν times Laplacian spectral radius).
     for (k, entry) in enumerate(cfl.diffusivities)
-        spacings = grid_spacing(_cfl_diffusivity_domain(cfl, entry))
-
-        inv_dx2_sum = 0.0
-        for dx in spacings
-            dx > 0 && (inv_dx2_sum += inv(dx * dx))
-        end
+        radius = _cfl_diffusion_spectral_radius(_cfl_diffusivity_domain(cfl, entry))
 
         # LOCAL max only (arrays are this rank's slab); the Allreduce below makes
-        # it global. Grid spacings come from the GLOBAL basis size/bounds, so they
-        # are rank-independent and may be applied before the reduction.
+        # it global. The spectral radius comes from the GLOBAL bases, so it is
+        # rank-independent and may be applied before the reduction.
         # Clamp at 0: a negative coefficient is anti-diffusion, not a dt limit.
         ν_local = max(0.0, _cfl_local_max_diffusivity(entry.value))
-        local_maxes[n_vel + k] = 2.0 * ν_local * inv_dx2_sum
+        local_maxes[n_vel + k] = 0.5 * ν_local * radius
     end
 
     # Single collective for ALL velocities AND diffusivities (was K separate
@@ -316,7 +326,7 @@ function compute_timestep(cfl::CFL)
         max_frequency = local_maxes[k]
         if max_frequency > 0
             # Advective CFL: dt < 1 / max(sum_i |u_i| / dx_i).
-            # Diffusive limit: dt < 1 / (2 ν_max sum_i dx_i^-2).
+            # Diffusive limit: dt < 2 / (ν_max times Laplacian spectral radius).
             # Both are frequencies, so the tightest (largest) one wins.
             min_dt = min(min_dt, inv(max_frequency))
         end

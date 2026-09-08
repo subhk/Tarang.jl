@@ -196,7 +196,7 @@ function _decay_solver(stepper; dt=0.02)
     domain = PeriodicDomain(16)
     u = ScalarField(domain, "u")
     set!(u, (x,) -> sin(x) + 0.25cos(2x))
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) = -u")
     return InitialValueSolver(problem, stepper; dt)
 end
@@ -450,7 +450,7 @@ end
     domain = PeriodicDomain(32)
     u = ScalarField(domain, "u")
     set!(u, (x,) -> sin(x))
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) = -u")
     wrong = InitialValueSolver(problem, RK222(); dt=0.02)
     @test_throws ErrorException load_state!(wrong, path)
@@ -467,7 +467,7 @@ end
 # history records shape/skip mismatches resolving to a plausible zero as its
 # dominant bug class, and only a value assertion catches them.
 #
-# Build a genuine Chebyshev x Fourier diffusion IVP with lift-based tau
+# Build a genuine Chebyshev x Fourier diffusion InitialValueProblem with lift-based tau
 # terms and boundary conditions -- the same problem shape as
 # test/test_mpi_sbdf_high_order.jl's `_sbdf_diffusion_error`, adapted to
 # serial and to a checkpoint round-trip instead of an MPI convergence-rate
@@ -492,7 +492,7 @@ function _cheb_tau_solver(stepper; dt=0.02, Nz=12, Nx=8, κ=0.1)
     τ_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * τ_lift(τ1)
 
-    problem = IVP([b, τ1, τ2])
+    problem = InitialValueProblem([b, τ1, τ2])
     add_parameters!(problem, kappa=κ, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
     add_equation!(problem, "dt(b) - kappa*div(grad_b) + τ_lift(tau_b2) = 0")
     add_bc!(problem, "b(z=0) = 0")

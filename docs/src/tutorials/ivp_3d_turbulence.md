@@ -115,7 +115,7 @@ tau_A1 = ScalarField(dist, "tau_A1", (), Float64)
 tau_A2 = ScalarField(dist, "tau_A2", (), Float64)
 tau_A3 = ScalarField(dist, "tau_A3", (), Float64)
 
-problem = IVP([w1, w2, w3, A1, A2, A3, u1, u2, u3, tau_A1, tau_A2, tau_A3])
+problem = InitialValueProblem([w1, w2, w3, A1, A2, A3, u1, u2, u3, tau_A1, tau_A2, tau_A3])
 add_parameters!(problem, nu=nu)
 
 # Vorticity transport: advection + vortex stretching on the explicit side,

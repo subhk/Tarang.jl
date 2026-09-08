@@ -39,7 +39,7 @@ end
 function _solver(rhs_str, params::NamedTuple=NamedTuple())
     _, _, domain = _setup()
     q = ScalarField(domain, "q"); _init!(q)
-    problem = IVP([q])
+    problem = InitialValueProblem([q])
     add_parameters!(problem; nu=NU, params...)
     add_equation!(problem, "dt(q) = $rhs_str")
     InitialValueSolver(problem, RK222(); dt=1e-3), q
@@ -78,7 +78,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
             get_grid_data(c) .= [sin(k*xs[i]) * cos(xs[j]) for i in 1:N, j in 1:N]
             ensure_layout!(c, :c)
         end
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem, nu=NU, u=u)
         add_equation!(problem, "dt(q) = nu*div(u)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -101,7 +101,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
             get_grid_data(c) .= [sin(k*xs[i]) * cos(xs[j]) for i in 1:N, j in 1:N]
             ensure_layout!(c, :c)
         end
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem, a=a, u=u)
         add_equation!(problem, "dt(q) = -div(a*u)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -118,7 +118,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         xs = [2π*(i-1)/N for i in 1:N]
         get_grid_data(a) .= [1.5 + 0.4*cos(xs[i]) * sin(xs[j]) for i in 1:N, j in 1:N]
         ensure_layout!(a, :c)
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem, a=a)
         add_equation!(problem, "dt(q) = div(a*grad(q))")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -138,7 +138,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
             get_grid_data(c) .= [sin(k*xs[i]) * cos(xs[j]) for i in 1:N, j in 1:N]
             ensure_layout!(c, :c)
         end
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem, u=u)
         add_equation!(problem, "dt(q) = -2.5*div(u)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -164,7 +164,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         q = ScalarField(dist, "q", (zb,), Float64)
         zg = collect(Tarang.local_grid(zb, dist, 1.0))
         ensure_layout!(q, :g); get_grid_data(q) .= zg .^ 3 .- 0.3 .* zg; ensure_layout!(q, :c)
-        problem = IVP([q]); add_parameters!(problem, nu=1.0)
+        problem = InitialValueProblem([q]); add_parameters!(problem, nu=1.0)
         add_equation!(problem, "dt(q) = nu*lap(q)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-4)
         @test solver.rhs_plan.is_compiled
@@ -183,7 +183,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         get_grid_data(q) .= zg .^ 3 .- 0.3 .* zg
         ensure_layout!(q, :c)
 
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_equation!(problem, "dt(q_bare) = d(q_bare,z)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-4)
         @test solver.rhs_plan.is_compiled
@@ -200,7 +200,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
         q = ScalarField(domain, "q"); _init!(q)
         u = VectorField(dist, coords, "u", (domain.bases[1], domain.bases[2]), Float64)
         for c in u.components; ensure_layout!(c, :g); get_grid_data(c) .= 1.0; ensure_layout!(c, :c); end
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem, nu=NU, u=u)
         add_equation!(problem, "dt(q) = nu*div(curl(u))")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -215,7 +215,7 @@ _grid(f) = (ensure_layout!(f, :g); copy(get_grid_data(f)))
 
         function legendre_problem(name)
             q = ScalarField(dist, name, (zb,), Float64)
-            problem = IVP([q])
+            problem = InitialValueProblem([q])
             add_equation!(problem, "dt($name) = lap($name)")
             return problem
         end

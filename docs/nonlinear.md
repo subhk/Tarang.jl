@@ -40,17 +40,17 @@ Where:
 - This separation enables efficient implicit-explicit (IMEX) timestepping
 
 ### 3. **Validation Requirements**
-Tarang enforces these requirements for IVP equations:
+Tarang enforces these requirements for InitialValueProblem equations:
 
 ```python
 # From problems.jl
 def _check_equation_conditions(self, eqn):
     LHS.require_linearity(*self.variables, allow_affine=False,
-        self_name='IVP LHS', vars_name='problem variables')
+        self_name='InitialValueProblem LHS', vars_name='problem variables')
     LHS.require_first_order(operators.TimeDerivative,
-        self_name='IVP LHS', ops_name='time derivatives')
+        self_name='InitialValueProblem LHS', ops_name='time derivatives')
     RHS.require_independent(operators.TimeDerivative,
-        self_name='IVP RHS', vars_name='time derivatives')
+        self_name='InitialValueProblem RHS', vars_name='time derivatives')
 ```
 
 ## Implementation in Tarang.jl
@@ -72,7 +72,7 @@ nl_advection = advection(u, b)
 
 ### 2. **Problem Setup**
 ```julia
-problem = IVP([u, b, p])
+problem = InitialValueProblem([u, b, p])
 
 # Linear terms on LHS, nonlinear terms on RHS
 add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
@@ -165,7 +165,7 @@ end
 # ∂u/∂t - ν∇²u + ∇p = -(u·∇)u
 # ∇·u = 0
 
-problem = IVP([u, p])
+problem = InitialValueProblem([u, p])
 add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) = -(u⋅∇(u))")
 add_equation!(problem, "div(u) = 0")
 ```
@@ -176,7 +176,7 @@ add_equation!(problem, "div(u) = 0")
 # ∂b/∂t - κ∇²b = -u·∇b
 # ∇·u = 0
 
-problem = IVP([u, b, p])
+problem = InitialValueProblem([u, b, p])
 add_equation!(problem, "∂t(u) - nu*Δ(u) + ∇(p) - b*ez = -(u⋅∇(u))")
 add_equation!(problem, "∂t(b) - kappa*Δ(b) = -u⋅∇(b)")
 add_equation!(problem, "div(u) = 0")

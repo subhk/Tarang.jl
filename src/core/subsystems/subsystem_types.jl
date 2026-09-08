@@ -209,7 +209,7 @@ function Subsystem(solver, group::Tuple=SUBSYSTEM_GROUP)
     # made matrix_dependence=false on separable axes, which let compute_matrix_group
     # collapse every nonzero mode onto one representative (default_nonconst_groups,
     # =1): only modes 0 and 1 got subproblems, so any forcing at |k|≥2 was silently
-    # never solved (LBVP/NLBVP/EVP returned 0 there). Mark every axis dependent so
+    # never solved (LinearBoundaryValueProblem/NonlinearBoundaryValueProblem/EigenvalueProblem returned 0 there). Mark every axis dependent so
     # distinct modes keep distinct matrix groups.
     matrix_dependence = fill(true, dist.dim)
     default_nonconst_groups = hasfield(typeof(dist), :default_nonconst_groups) ?

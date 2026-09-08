@@ -34,6 +34,7 @@ if !_HAS_CUDA_TS
         @test_skip "CUDA not functional on this host"
     end
 else
+    CUDA.allowscalar(false)
     _gpu_grid(u) = Array(Tarang.get_grid_data(u))
 
     function _gpu_fourier_field(N)
@@ -42,6 +43,38 @@ else
         xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
         u = ScalarField(dist, "u", (xb,), Float64)
         return coords, dist, xb, u
+    end
+
+    @testset "GPU mass operators are refused before advancement" begin
+        steppers = (RK111(), RK222(), RK443(), RKSMR(), Tarang.RKGFY(), Tarang.RK443_IMEX(),
+                    CNAB1(), CNAB2(), SBDF1(), SBDF2(), SBDF3(), SBDF4(),
+                    ETD_RK222(), ETD_CNAB2(), ETD_SBDF2(), Tarang.MCNAB2(), Tarang.CNLF2(),
+                    DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for ts in steppers
+            _, _, _, u = _gpu_fourier_field(16)
+            fill!(grid_data!(u), 1.0)
+            problem = InitialValueProblem([u])
+            add_equation!(problem, "2*dt(u) = -u")
+            solver = InitialValueSolver(problem, ts; dt=0.01)
+            @test_throws ArgumentError step!(solver)
+            @test Array(grid_data!(u)) == ones(16)
+            @test solver.sim_time == 0
+            @test solver.iteration == 0
+        end
+    end
+
+    @testset "GPU nested Laplacian retains hyperdiffusion" begin
+        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+            _, _, _, u = _gpu_fourier_field(16)
+            xs = collect(0:15) .* (2π/16)
+            copyto!(grid_data!(u), cos.(2 .* xs))
+            problem = InitialValueProblem([u])
+            add_equation!(problem, "dt(u) + lap(lap(u)) = 0")
+            solver = InitialValueSolver(problem, ts; dt=0.01)
+            step!(solver)
+            # Includes the first-order startup error of DiagonalIMEX_SBDF2.
+            @test maximum(abs, Array(grid_data!(u)) .- exp(-0.16) .* cos.(2 .* xs)) < 0.02
+        end
     end
 
     @testset "GPU DiagonalIMEX viscous decay (exact rate)" begin
@@ -54,7 +87,7 @@ else
             ensure_layout!(u, :g)
             copyto!(Tarang.get_grid_data(u), cos.(2 .* xs))
             L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=0.5)
-            problem = IVP([u]); add_equation!(problem, "dt(u) = 0")
+            problem = InitialValueProblem([u]); add_equation!(problem, "dt(u) = 0")
             solver = InitialValueSolver(problem, ts; dt=0.005)
             Tarang.set_spectral_linear_operator!(solver, L)
             u0 = maximum(abs, _gpu_grid(u))
@@ -75,7 +108,7 @@ else
             coords, dist, xb, u = _gpu_fourier_field(N)
             ensure_layout!(u, :g)
             fill!(Tarang.get_grid_data(u), 1.0)
-            problem = IVP([u]); add_equation!(problem, "dt(u) = -u*u")
+            problem = InitialValueProblem([u]); add_equation!(problem, "dt(u) = -u*u")
             solver = InitialValueSolver(problem, RK222(); dt=dt)
             for _ in 1:round(Int, T/dt)
                 step!(solver)
@@ -101,7 +134,7 @@ else
             xs = collect(range(0, 2π, length=N+1))[1:N]
             ensure_layout!(u, :g)
             copyto!(Tarang.get_grid_data(u), cos.(2 .* xs))
-            problem = IVP([u]); add_equation!(problem, "dt(u) - lap(u) = 0")
+            problem = InitialValueProblem([u]); add_equation!(problem, "dt(u) - lap(u) = 0")
             solver = InitialValueSolver(problem, ts; dt=0.01)
             @test_throws ErrorException step!(solver)
         end
@@ -119,7 +152,7 @@ else
             xs = collect(range(0, 2π, length=N+1))[1:N]
             ensure_layout!(u, :g)
             copyto!(Tarang.get_grid_data(u), cos.(2 .* xs))
-            problem = IVP([u]); add_equation!(problem, "dt(u) - 0.5*lap(u) = 0")
+            problem = InitialValueProblem([u]); add_equation!(problem, "dt(u) - 0.5*lap(u) = 0")
             solver = InitialValueSolver(problem, ts; dt=0.005)
             u0 = maximum(abs, _gpu_grid(u))
             for _ in 1:200

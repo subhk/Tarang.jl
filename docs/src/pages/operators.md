@@ -247,7 +247,7 @@ u = perp_grad(psi)
 ## Time Derivatives
 
 ```julia
-# ∂t(field) for IVP equations
+# ∂t(field) for InitialValueProblem equations
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 
 # Only valid in Initial Value Problems

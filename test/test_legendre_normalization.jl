@@ -18,7 +18,7 @@ the solver reporting success.
 Measured before the fix:
   * `differentiation_matrix(Legendre) * coeffs`  → max err 3.25 (interpreted: 6.5e-13)
   * a `u(z=0)` BC row from `evaluate_basis`      → 0.761 for a field whose u(0) is 0
-  * an LBVP `Δu = -2, u(0)=u(L)=0`               → max err 0.199 on amplitude 0.248,
+  * an LinearBoundaryValueProblem `Δu = -2, u(0)=u(L)=0`               → max err 0.199 on amplitude 0.248,
                                                     ~80% relative, no error raised
 
 The bridge is `stored_basis_scaling` / `spectral_derivative_matrix` /
@@ -36,7 +36,7 @@ using LinearAlgebra
     f(z)  = z^3 - 0.3z
     fp(z) = 3z^2 - 0.3
 
-    @testset "LBVP is exact — the silent 80%-error regression" begin
+    @testset "LinearBoundaryValueProblem is exact — the silent 80%-error regression" begin
         # Δu = -2 on z ∈ [0, Lz], u(0) = u(Lz) = 0  ->  u = z(Lz - z).
         # Before the bridge: ChebyshevT exact to 1.4e-16, Legendre off by 0.199 on
         # an amplitude-0.248 answer, with the solver reporting success.
@@ -54,7 +54,7 @@ using LinearAlgebra
             tau1 = ScalarField(dist, "tau1", (xb,), Float64)
             tau2 = ScalarField(dist, "tau2", (xb,), Float64)
             lb2  = Tarang.derivative_basis(zb, 2)
-            prob = Tarang.LBVP([u, tau1, tau2])
+            prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
             add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
             Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
             Tarang.add_bc!(prob, "u(z=0) = 0")

@@ -22,7 +22,7 @@ using Tarang
     @testset "QG RK4 surface dissipation decays (not grows) high-k modes" begin
         # The buggy line lives inside qg_step_rk4!'s `compute_rhs` closure, which first
         # calls qg_invert! (a SEPARATE, pre-existing, universally-broken 3D Fourier-Cheb
-        # LBVP solve that throws DimensionMismatch at every resolution). To reach the
+        # LinearBoundaryValueProblem solve that throws DimensionMismatch at every resolution). To reach the
         # dissipation line we neutralize ONLY that broken inversion: leave ψ = 0, so the
         # induced surface velocity is 0 and the u·∇θ advection term vanishes -> the surface
         # buoyancy evolves under dissipation alone. (Seeding a single x-dependent mode also
@@ -146,26 +146,39 @@ using Tarang
         @test Tarang.translate_to_lazy(cplx_expr, state) === nothing
     end
 
-    # Bug #5 — generic _matched_forcing_view expected a size tuple but both call
-    # sites pass the complex coeff ARRAY, so size(F)==array is false, then
-    # min(Int, ComplexF64) throws → bare catch → nothing → forcing dropped.
-    @testset "_matched_forcing_view accepts coeff ARRAY target (non-Stochastic forcing)" begin
-        # Mirror the real call sites (state_utils.jl:133, lazy_rhs.jl:908) which pass the
-        # complex coefficient ARRAY (not a size tuple) as the second argument.
-        # DeterministicForcing has no typed overload, so it hits the generic
-        # _matched_forcing_view(forcing, target_size) fallback in state_utils.jl.
-        f = DeterministicForcing((args...) -> zeros(4, 4), (4, 4))
-        f.cached_forcing .= 1.0                      # real-typed cache, size (4,4)
+    # Bug #5 (history) — the generic _matched_forcing_view once expected a size tuple,
+    # both call sites passed the coefficient ARRAY, and a bare catch turned the
+    # resulting MethodError into `nothing` (forcing dropped). The first fix made the
+    # generic fallback accept an array — which then handed a DeterministicForcing's
+    # PHYSICAL-grid values to the RHS as if they were spectral coefficients (2026-09-05
+    # audit: half amplitude, wrong shape, no error). The contract now: a registered
+    # DeterministicForcing is transformed through the target field and the view is
+    # that coefficient image; an untransformed one declines; there is no untyped
+    # fallback (an unknown forcing type is a MethodError, not a plausible wrong field).
+    @testset "_matched_forcing_view hands out the SPECTRAL image of a DeterministicForcing" begin
+        N = 8
+        domain = PeriodicDomain(N, N)
+        u = ScalarField(domain, "u")
+        set!(u, (x, y) -> 0.0)
+        f = DeterministicForcing((x, y, t, p) -> cos.(x) .* cos.(y), (N, N))
 
-        coeff = zeros(ComplexF64, 4, 4)              # the matching complex coeff array
+        # Untransformed: no spectral image yet → declines rather than returning grid values.
+        coeff = Tarang.coeff_data!(u)
+        @test Tarang._matched_forcing_view(f, coeff) === nothing
+        @test Tarang._matched_forcing_view(nothing, coeff) === nothing
 
+        # Registered-path generation transforms through the target field's own transform.
+        Tarang._generate_one_forcing!(f, 0.0, 0.01, u)
         F_view = Tarang._matched_forcing_view(f, coeff)
-
-        # Pre-fix: size(F)==coeff is false, then min(Int, ComplexF64) throws ->
-        # bare catch -> returns nothing (forcing silently dropped).
         @test F_view !== nothing
         @test size(F_view) == size(coeff)
-        @test F_view == f.cached_forcing
+        @test eltype(F_view) <: Complex
+        # It is the transform of the physical values, not the physical values themselves.
+        ref = ScalarField(domain, "ref")
+        set!(ref, (x, y) -> cos(x) * cos(y))
+        @test maximum(abs, Array(F_view) .- Array(Tarang.coeff_data!(ref))) < 1e-12
+        # ...and lives on the rfft half-grid, which the (N, N) physical cache never could.
+        @test size(F_view, 1) == N ÷ 2 + 1
     end
 
 end

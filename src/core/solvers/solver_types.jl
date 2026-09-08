@@ -21,7 +21,7 @@ execution:
    - FFTs use CUFFT on GPU via architecture abstraction
 
 4. **Data transfers**:
-   - GPU IVP state and solve vectors stay on-device
+   - GPU InitialValueProblem state and solve vectors stay on-device
    - Explicit output, checkpoint, and diagnostic APIs may copy results to host
 
 ## Linear Solver Options
@@ -44,10 +44,10 @@ solver = InitialValueSolver(problem, RK443(); dt=0.001)
 
 # Coupled GPU fields select a GPU sparse solve automatically
 domain = Domain(bases..., architecture=GPU())
-problem = IVP([eq1, eq2, eq3], namespace=namespace)
+problem = InitialValueProblem([eq1, eq2, eq3], namespace=namespace)
 solver = InitialValueSolver(problem, RK443(); dt=0.001)
 
-# GPU LBVP fields select a GPU sparse solve automatically, as an IVP does.
+# GPU LinearBoundaryValueProblem fields select a GPU sparse solve automatically, as an InitialValueProblem does.
 # Passing a CPU-only solver explicitly is still rejected rather than silently honoured.
 solver = BoundaryValueSolver(problem)
 solver = BoundaryValueSolver(problem; matsolver=:cuda_cg)   # or choose one
@@ -188,29 +188,11 @@ function _concretize_state_fields(state::Vector{ScalarField})
 end
 
 function sync_state_to_problem!(problem::Problem, state::Vector{<:ScalarField})
-    idx = 1
-    for var in problem.variables
-        if isa(var, ScalarField)
-            if idx <= length(state)
-                copy_field_data!(var, state[idx])
-            end
-            idx += 1
-        elseif isa(var, VectorField)
-            for comp in var.components
-                if idx <= length(state)
-                    copy_field_data!(comp, state[idx])
-                end
-                idx += 1
-            end
-        elseif isa(var, TensorField)
-            for comp in vec(var.components)
-                if idx <= length(state)
-                    copy_field_data!(comp, state[idx])
-                end
-                idx += 1
-            end
-        end
-    end
+    # Public handles may still share the preceding step's storage. Copying a
+    # stage into them would overwrite that retained state (and RK/multistep
+    # history). Rebind the handles to the stage instead.
+    _alias_state_to_problem!(problem, state)
+    return nothing
 end
 
 # LazyRHSPlan is defined later in lazy_rhs.jl (included after this file), so the
@@ -219,7 +201,7 @@ end
 
 mutable struct InitialValueSolver <: Solver
     base::SolverBaseData
-    problem::IVP
+    problem::InitialValueProblem
     timestepper::TimeStepper
 
     # State variables
@@ -372,7 +354,7 @@ function _try_build_subproblems!(solver::InitialValueSolver)
     @info "  $n_total subproblems built ($n_with_mats with matrices)"
 end
 
-"""True for a GPU-resident IVP whose spatial axes are all Fourier.
+"""True for a GPU-resident InitialValueProblem whose spatial axes are all Fourier.
 
 Such problems advance through the device-native field path and refresh their
 algebraic constraints spectrally.  They neither use the global CPU matrices nor
@@ -451,7 +433,7 @@ function _select_ivp_matsolver(choice, gpu::Bool, coupled::Bool)
     if gpu && coupled &&
        (normalized in (:sparse, :dense) || _cpu_only_matsolver_type(normalized))
         throw(ArgumentError(
-            "A coupled Jacobi/Chebyshev GPU IVP cannot use the CPU-only " *
+            "A coupled Jacobi/Chebyshev GPU InitialValueProblem cannot use the CPU-only " *
             "matrix solver :$normalized. Leave matsolver=:auto or select " *
             "matsolver=:cuda_sparse explicitly.",
         ))
@@ -465,7 +447,7 @@ function _select_ivp_matsolver(choice, state::Vector{<:ScalarField})
     return _select_ivp_matsolver(choice, architecture, coupled)
 end
 
-function _build_initial_value_solver(problem::IVP, timestepper;
+function _build_initial_value_solver(problem::InitialValueProblem, timestepper;
                                      dt::Real=1e-3,
                                      device::String="cpu",
                                      matsolver::Union{String,Symbol,Type,Tuple}=:auto,
@@ -511,7 +493,7 @@ function _build_initial_value_solver(problem::IVP, timestepper;
         # unused and prohibitive at production sizes (e.g. the 512² turbulence
         # example), while the algebraic Poisson/velocity constraints are handled
         # spectrally by evaluate_rhs at each stage.
-        @info "Pure-Fourier GPU IVP: skipping unused global CPU matrix assembly"
+        @info "Pure-Fourier GPU InitialValueProblem: skipping unused global CPU matrix assembly"
     else
         build_solver_matrices!(solver)
         _try_build_subproblems!(solver)
@@ -534,22 +516,22 @@ function _build_initial_value_solver(problem::IVP, timestepper;
         solver.rhs_plan = nothing
     end
 
-    # Populate equation_data F slots for any space-dependent BCs (including
-    # those that are space-only, not in `time_dependent_bcs`). Without this,
-    # the first call to `gather_alg_F!` wouldn't see the evaluated array
-    # values because `_apply_bc_values_to_equations!` is only otherwise
-    # invoked from the step loop when `has_time_dependent_bcs` is true.
-    if has_space_dependent_bcs(problem.bc_manager) ||
-       has_time_dependent_bcs(problem.bc_manager)
-        # Auto-populate coordinate fields from the problem's bases so the
-        # user doesn't have to call `add_coordinate_field!` manually for
-        # every separable axis. This is a no-op for axes that the user
-        # already registered (we never overwrite existing entries).
-        _auto_register_coordinate_fields!(problem)
-        _apply_bc_values_to_equations!(solver, 0.0)
-    end
+    _prepare_boundary_values!(problem, 0.0)
 
     return solver
+end
+
+"""Install the boundary evaluation context and initial RHS for any solver."""
+function _prepare_boundary_values!(problem::Problem, current_time=0.0)
+    manager = problem.bc_manager
+    # Keep the live namespace, including values registered with add_parameters!.
+    manager.namespace = problem.namespace
+    if has_space_dependent_bcs(manager) || has_time_dependent_bcs(manager)
+        _auto_register_coordinate_fields!(problem)
+        update_time_dependent_bcs!(manager, current_time)
+        _apply_bc_values_to_equations!(problem, current_time)
+    end
+    return nothing
 end
 
 """
@@ -719,7 +701,7 @@ Any other exception is a fault inside a parser and is re-raised, so a broken par
 cannot masquerade as an unrecognised BC and silently make two different boundary
 conditions compare equal."""
 function _try_parse_bc_string(s::AbstractString)
-    for parser in (parse_bc_string, parse_neumann_bc_string)
+    for parser in (parse_bc_string, parse_neumann_bc_string, parse_robin_bc_string)
         try
             return parser(String(s))
         catch err
@@ -758,19 +740,24 @@ function _bc_strings_equivalent(a::AbstractString, b::AbstractString)
     pa = _try_parse_bc_string(a)
     pb = _try_parse_bc_string(b)
     (pa === nothing || pb === nothing) && return false
+    length(pa) == length(pb) || return false
     # Tuple layout: (field_name, coordinate, position, value)
     pa[1] == pb[1] || return false
     pa[2] == pb[2] || return false
     _bc_positions_equivalent(pa[3], pb[3]) || return false
     # Value: Numbers via ==, Strings via whitespace-stripped compare
-    va, vb = pa[4], pb[4]
-    if isa(va, Number) && isa(vb, Number)
-        return Float64(va) == Float64(vb)
-    elseif isa(va, AbstractString) && isa(vb, AbstractString)
-        return replace(va, r"\s+" => "") == replace(vb, r"\s+" => "")
-    else
-        return va == vb
+    # Robin tuples also include both coefficients before their RHS value.
+    for (va, vb) in zip(pa[4:end], pb[4:end])
+        equal = if isa(va, Number) && isa(vb, Number)
+            Float64(va) == Float64(vb)
+        elseif isa(va, AbstractString) && isa(vb, AbstractString)
+            replace(va, r"\s+" => "") == replace(vb, r"\s+" => "")
+        else
+            va == vb
+        end
+        equal || return false
     end
+    return true
 end
 _bc_strings_equivalent(a, b) = a == b
 
@@ -798,8 +785,12 @@ Because BC arrays are swapped in fresh here, we also invalidate the
 per-problem BC-array FFT cache so the next gather call will re-transform.
 """
 function _apply_bc_values_to_equations!(solver::InitialValueSolver, current_time)
-    bc_manager = solver.problem.bc_manager
-    equation_data = solver.problem.equation_data
+    return _apply_bc_values_to_equations!(solver.problem, current_time)
+end
+
+function _apply_bc_values_to_equations!(problem::Problem, current_time)
+    bc_manager = problem.bc_manager
+    equation_data = problem.equation_data
 
     isempty(equation_data) && return
 
@@ -837,7 +828,7 @@ function _apply_bc_values_to_equations!(solver::InitialValueSolver, current_time
 
     # Any ArrayOperator we may have written is a new object: invalidate the
     # RFFT cache so the next gather will recompute transforms on demand.
-    invalidate_bc_array_cache!(solver.problem)
+    invalidate_bc_array_cache!(problem)
 end
 
 """
@@ -902,7 +893,7 @@ const _InitialValueSolver_constructor = _build_initial_value_solver
 # otherwise the choice (Symbol/String/Type) is passed through to `get_solver`.
 _solver_type(choice) = choice isa Tuple ? choice[1] : choice
 
-function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
+function _build_boundary_value_solver(problem::Union{LinearBoundaryValueProblem, NonlinearBoundaryValueProblem};
                                       device::String="cpu",
                                       matsolver::Union{String,Symbol,Type}=:auto,
                                       solver_type::Union{Nothing, String, Symbol}=nothing,
@@ -913,7 +904,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     reset_compiled_problem!(problem)
     setup_domain!(problem)
     # Merge add_bc! boundary conditions into the equation system (tau rows),
-    # mirroring the IVP build (_build_initial_value_solver). Without this the BVP
+    # mirroring the InitialValueProblem build (_build_initial_value_solver). Without this the BVP
     # system is under-determined and validation fails.
     _merge_boundary_conditions!(problem)
     validate_problem(problem)
@@ -921,7 +912,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     state = collect_state_fields(problem.variables)
     solver_choice = solver_type === nothing ? matsolver : solver_type
     has_gpu_state = any(_field_uses_gpu, state)
-    # `:auto` resolves per architecture, exactly as it does for an IVP. Without this
+    # `:auto` resolves per architecture, exactly as it does for an InitialValueProblem. Without this
     # the BVP default (:sparse) reached `_select_ivp_matsolver(:sparse, true, true)` on
     # any GPU state and was rejected as a CPU-only solver — so a GPU BVP could not be
     # constructed with default arguments at all, and the refusal advised "leave
@@ -958,7 +949,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     global_solver = try
         MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
     catch err
-        @debug "BVP/EVP: global solver factorization failed; using per-subproblem solve" exception=err
+        @debug "BVP/EigenvalueProblem: global solver factorization failed; using per-subproblem solve" exception=err
         nothing
     end
 
@@ -967,7 +958,7 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
 
     # Configure matrix coupling so build_subsystems creates PER-FOURIER-MODE
     # subproblems (Fourier separable, Chebyshev/Jacobi coupled), exactly like the
-    # IVP path (_try_build_subproblems!). Without this the BVP builds one global
+    # InitialValueProblem path (_try_build_subproblems!). Without this the BVP builds one global
     # multi-mode subsystem, incompatible with the single-mode per-mode operator
     # matrices (lift/derivative) → DimensionMismatch. Pick a full-domain field
     # (one carrying a coupled, i.e. non-Fourier, basis) to define the coupling.
@@ -992,12 +983,14 @@ function _build_boundary_value_solver(problem::Union{LBVP, NLBVP};
     setfield!(solver, :coeff_system, coeff_system)
     set_compiled_subproblems!(problem, subproblems; subsystems, coeff_system)
 
+    _prepare_boundary_values!(problem, 0.0)
+
     return solver
 end
 
 const _BoundaryValueSolver_constructor = _build_boundary_value_solver
 
-function InitialValueSolver(problem::IVP, timestepper; kwargs...)
+function InitialValueSolver(problem::InitialValueProblem, timestepper; kwargs...)
     return multiclass_new(InitialValueSolver, problem, timestepper; kwargs...)
 end
 
@@ -1005,7 +998,7 @@ end
 
 mutable struct BoundaryValueSolver <: Solver
     base::SolverBaseData
-    problem::Union{LBVP, NLBVP}
+    problem::Union{LinearBoundaryValueProblem, NonlinearBoundaryValueProblem}
 
     # Solution state
     state::Vector{<:ScalarField}
@@ -1029,7 +1022,7 @@ end
 
 mutable struct EigenvalueSolver <: Solver
     base::SolverBaseData
-    problem::EVP
+    problem::EigenvalueProblem
 
     # Solution state
     eigenvalues::Vector{ComplexF64}
@@ -1052,15 +1045,15 @@ mutable struct EigenvalueSolver <: Solver
 end
 
 # Convenience constructors (must be after struct definitions)
-function BoundaryValueSolver(problem::Union{LBVP, NLBVP}; kwargs...)
+function BoundaryValueSolver(problem::Union{LinearBoundaryValueProblem, NonlinearBoundaryValueProblem}; kwargs...)
     return multiclass_new(BoundaryValueSolver, problem; kwargs...)
 end
 
-function EigenvalueSolver(problem::EVP; kwargs...)
+function EigenvalueSolver(problem::EigenvalueProblem; kwargs...)
     return multiclass_new(EigenvalueSolver, problem; kwargs...)
 end
 
-function _build_eigenvalue_solver(problem::EVP;
+function _build_eigenvalue_solver(problem::EigenvalueProblem;
                                   nev::Int=10,
                                   which::Union{String,Symbol}=:LM,
                                   target::Union{Nothing, ComplexF64}=nothing,
@@ -1079,7 +1072,7 @@ function _build_eigenvalue_solver(problem::EVP;
                           batched_modes, batched_modes_max_bytes)
     L, M, _ = build_matrices(problem)
     apply_entry_cutoff!(L, base.entry_cutoff)
-    # For EVP, applying entry_cutoff to M can zero out intentionally small
+    # For EigenvalueProblem, applying entry_cutoff to M can zero out intentionally small
     # entries from tau-method boundary conditions, corrupting eigenvalues.
     M_rank_before = rank(sparse(M))
     apply_entry_cutoff!(M, base.entry_cutoff)
@@ -1101,7 +1094,7 @@ function _build_eigenvalue_solver(problem::EVP;
     global_solver = try
         MatSolvers.solver_instance(_solver_type(base.matsolver), L_sparse)
     catch err
-        @debug "BVP/EVP: global solver factorization failed; using per-subproblem solve" exception=err
+        @debug "BVP/EigenvalueProblem: global solver factorization failed; using per-subproblem solve" exception=err
         nothing
     end
     which_symbol = Symbol(uppercase(String(which)))
@@ -1111,7 +1104,7 @@ function _build_eigenvalue_solver(problem::EVP;
 
     # Configure matrix coupling so build_subsystems creates PER-FOURIER-MODE
     # subproblems (Fourier separable, Chebyshev/Jacobi coupled), exactly like the
-    # BVP/IVP path. The per-subproblem L/M matrices are the SQUARE, full-rank tau
+    # BVP/InitialValueProblem path. The per-subproblem L/M matrices are the SQUARE, full-rank tau
     # systems; the global L is rank-deficient for multi-variable tau systems and
     # makes Arpack's shift-invert factorization throw SingularException.
     let coupling_field = nothing
@@ -1147,8 +1140,8 @@ function dispatch_check(::Type{InitialValueSolver}, args::Tuple, kwargs::NamedTu
         throw(ArgumentError("InitialValueSolver requires (problem, timestepper) arguments"))
     end
     problem = args[1]
-    if !(problem isa IVP)
-        throw(ArgumentError("InitialValueSolver requires an IVP problem"))
+    if !(problem isa InitialValueProblem)
+        throw(ArgumentError("InitialValueSolver requires an InitialValueProblem problem"))
     end
     return true
 end
@@ -1158,8 +1151,8 @@ function dispatch_check(::Type{BoundaryValueSolver}, args::Tuple, kwargs::NamedT
         throw(ArgumentError("BoundaryValueSolver requires a problem argument"))
     end
     problem = args[1]
-    if !(problem isa LBVP || problem isa NLBVP)
-        throw(ArgumentError("BoundaryValueSolver requires an LBVP or NLBVP problem"))
+    if !(problem isa LinearBoundaryValueProblem || problem isa NonlinearBoundaryValueProblem)
+        throw(ArgumentError("BoundaryValueSolver requires an LinearBoundaryValueProblem or NonlinearBoundaryValueProblem problem"))
     end
     return true
 end
@@ -1169,8 +1162,8 @@ function dispatch_check(::Type{EigenvalueSolver}, args::Tuple, kwargs::NamedTupl
         throw(ArgumentError("EigenvalueSolver requires a problem argument"))
     end
     problem = args[1]
-    if !(problem isa EVP)
-        throw(ArgumentError("EigenvalueSolver requires an EVP problem"))
+    if !(problem isa EigenvalueProblem)
+        throw(ArgumentError("EigenvalueSolver requires an EigenvalueProblem problem"))
     end
     return true
 end

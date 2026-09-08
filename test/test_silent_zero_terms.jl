@@ -37,7 +37,7 @@ using Tarang
             lb = derivative_basis(zb, 1)
             τ(A) = lift(A, lb, -1)
             grad_T = grad(T) + ez * τ(tau1)
-            pr = IVP([T, tau1, tau2])
+            pr = InitialValueProblem([T, tau1, tau2])
             add_parameters!(pr, kappa=1.0, ez=ez, grad_T=grad_T, τ_lift=τ)
             add_equation!(pr, "∂t(T) - kappa*div(grad_T) + τ_lift(tau_T2) = 0")
             add_bc!(pr, "T(z=0) = $rhs")
@@ -66,7 +66,7 @@ using Tarang
         for c in u.components
             ensure_layout!(c, :g); get_grid_data(c) .= 0.0; ensure_layout!(c, :c)
         end
-        pr = IVP([u])
+        pr = InitialValueProblem([u])
         add_parameters!(pr, nu=0.0, dpdx=dpdx, ex=ex)
         add_equation!(pr, "∂t(u) - nu*lap(u) = dpdx*ex")
         s = InitialValueSolver(pr, RK222(); dt=dt)
@@ -99,7 +99,7 @@ using Tarang
             lb = derivative_basis(zb, 1)
             τ(A) = lift(A, lb, -1)
             grad_T = grad(T) + ez * τ(t1)
-            pr = IVP([T, t1, t2])
+            pr = InitialValueProblem([T, t1, t2])
             add_parameters!(pr, kappa=1.0, ez=ez, grad_T=grad_T, τ_lift=τ)
             add_equation!(pr, "∂t(T) - kappa*div(grad_T) + τ_lift(tau2) = 0")
             add_bc!(pr, bcstr)
@@ -130,7 +130,7 @@ using Tarang
         yb = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π))
         domain = Domain(dist, (xb, yb))
         T = ScalarField(domain, "T")
-        pr = IVP([T]); add_parameters!(pr, kappa=0.01)
+        pr = InitialValueProblem([T]); add_parameters!(pr, kappa=0.01)
         add_equation!(pr, "∂t(T) - kappa*lap(T) = 0")
         s = InitialValueSolver(pr, RK222(); dt=1e-3)
 

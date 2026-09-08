@@ -387,7 +387,7 @@ is not, the honest move is to decline the translation so the solver keeps its ex
     Legendre 1.0e-12.
 
     The same mismatch was silently corrupting the IMPLICIT path, which had no decline to
-    protect it: a Legendre LBVP for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against
+    protect it: a Legendre LinearBoundaryValueProblem for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against
     an amplitude-0.248 answer while reporting success. It is now exact to 4.9e-16."""
 function _lazy_diff_axis_supported(field::ScalarField, basis)
     isa(basis, FourierBasis) && return true
@@ -743,7 +743,13 @@ end
         # This branch used to fall into `fill!(out_data, 0)` because the shapes differ, so a term
         # like `dpdx*ex` on an explicit RHS was silently ZEROED: a pressure-gradient-driven flow
         # never got forced, the fluid stayed at rest, and `is_compiled` still reported `true`.
-        @inbounds fill!(out_data, convert(eltype(out_data), real(first(src_data))))
+        if is_gpu_array(src_data) && is_gpu_array(out_data)
+            # A singleton device view broadcasts across every output dimension
+            # without a scalar download or host indexing of the parameter.
+            out_data .= real.(view(vec(src_data), 1:1))
+        else
+            @inbounds fill!(out_data, convert(eltype(out_data), real(first(src_data))))
+        end
     else
         error("LazyRHS: parameter field `$(f.name)` has local grid size $(size(src_data)), which " *
               "does not match the target field's $(size(out_data)) and is not a 0-D constant. " *
@@ -1271,7 +1277,8 @@ The 1D/2D cases (the common Chebyshev/Jacobi spectral derivative) reuse a scratc
 buffer cached in `basis.transforms`, keyed by `(size, eltype)`, instead of
 allocating the matmul output every call. Safe because lazy RHS evaluation is
 sequential — the buffer is filled and consumed within a single call before any
-other derivative runs (same contract as the `_DERIV_FFT_WS` FFT buffers)."""
+other lazy derivative runs on the same basis. This scratch is not checked out
+exclusively and requires sequential use of that basis."""
 function _apply_1d_matrix!(data::AbstractArray, D::AbstractMatrix, axis::Int, basis)
     nd = ndims(data)
     if nd == 1 || nd == 2
@@ -1393,7 +1400,7 @@ function build_lazy_rhs_plan!(solver::InitialValueSolver)
     # reintroducing exactly the zero-RHS freeze described below, and silently.)
 
     # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
-    # global-matrix assembly — the step a pure-Fourier GPU IVP deliberately SKIPS
+    # global-matrix assembly — the step a pure-Fourier GPU InitialValueProblem deliberately SKIPS
     # (solver_types.jl, `_gpu_pure_fourier_state`). Treating "no IR" as "nothing to
     # compile" therefore produced, on every such solver, a plan holding only zero
     # fields and flagged `is_compiled = true`. That flag makes

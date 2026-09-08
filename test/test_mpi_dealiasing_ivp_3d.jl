@@ -1,4 +1,4 @@
-# Guard: 3D nonlinear IVP solve distributed == serial (np>=2; np=4 = 2D mesh).
+# Guard: 3D nonlinear InitialValueProblem solve distributed == serial (np>=2; np=4 = 2D mesh).
 #
 # End-to-end integration check: a 3D Burgers solve (RK222 IMEX — nonlinear advection
 # -u·∇u via the 3/2 padded distributed dealiasing + implicit ν∇²u) must give the SAME
@@ -15,7 +15,7 @@ const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
 const nprocs = MPI.Comm_size(comm)
 if nprocs < 2
-    rank == 0 && @warn "MPI 3D IVP dealiasing test needs >= 2 ranks; got $nprocs"
+    rank == 0 && @warn "MPI 3D InitialValueProblem dealiasing test needs >= 2 ranks; got $nprocs"
     MPI.Finalize(); exit(0)
 end
 
@@ -26,7 +26,7 @@ const NSTEPS = 5
 const SUMSQ_REF = 159.84007878174114
 const MAX_REF   = 1.4991659750206703
 
-@testset "Distributed 3D Burgers IVP == serial (np=$nprocs)" begin
+@testset "Distributed 3D Burgers InitialValueProblem == serial (np=$nprocs)" begin
     coords = CartesianCoordinates("x", "y", "z")
     dist = Distributor(coords)
     xb = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π), dealias=3/2)
@@ -45,7 +45,7 @@ const MAX_REF   = 1.4991659750206703
         Tarang.get_cpu_data(gd) .= u0
     end
 
-    prob = IVP([u]); add_parameters!(prob; nu=NU)
+    prob = InitialValueProblem([u]); add_parameters!(prob; nu=NU)
     add_equation!(prob, "∂t(u) - nu*lap(u) = -u*∂x(u) - u*∂y(u) - u*∂z(u)")
     solver = InitialValueSolver(prob, RK222(); dt=DT)
     for _ in 1:NSTEPS

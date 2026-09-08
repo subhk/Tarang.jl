@@ -36,7 +36,7 @@ MPI.Barrier(comm)
         data .= ref
     end
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "∂t(u) = 0")
     solver = InitialValueSolver(problem, RK222(); dt=0.01)
 

@@ -23,7 +23,7 @@ Where:
 - T₀(r) is the conductive temperature profile
 - Ra is Rayleigh number, Ek is Ekman number, Pm is magnetic Prandtl number
 
-This implements the rotating MHD convection EVP.
+This implements the rotating MHD convection EigenvalueProblem.
 """
 
 using Tarang
@@ -202,7 +202,7 @@ function setup_mhd_operators_and_equations(
     
     @info "Created first-order differential operators with lifting"
     
-    # Time derivative operator: handled symbolically by the EVP framework
+    # Time derivative operator: handled symbolically by the EigenvalueProblem framework
     # The eigenvalue symbol ω is substituted automatically during eigenvalue solve
     ω = eigenvalue_symbol  # symbolic marker for the eigenvalue
     dt = A -> -1im * ω * A  # evaluated symbolically, not numerically
@@ -246,14 +246,14 @@ function create_mhd_eigenvalue_problem(
     
     @info "Creating rotating MHD convection eigenvalue problem"
     
-    # Collect all variables for EVP
+    # Collect all variables for EigenvalueProblem
     variables = [p, u, Θ, B, A, τ_u1, τ_u2, τ_Θ1, τ_Θ2, τ_B1, τ_B2, τ_A1, τ_A2, τ_p]
     
     # Create eigenvalue problem
-    problem = EVP(variables, eigenvalue=eigenvalue_symbol, 
+    problem = EigenvalueProblem(variables, eigenvalue=eigenvalue_symbol,
                   namespace=Dict{String,Any}("locals" => @locals))
     
-    @info "Created EVP with $(length(variables)) variables"
+    @info "Created EigenvalueProblem with $(length(variables)) variables"
     
     # Add MHD equations
     

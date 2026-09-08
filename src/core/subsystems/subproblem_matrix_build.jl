@@ -64,7 +64,7 @@ function build_matrices!(sp::Subproblem, names, solver)
                                     # crash". Skipping the block drops an entire
                                     # equation×variable coupling out of the operator and
                                     # then solves the remaining system, returning a
-                                    # confident wrong answer — a pure-Fourier Poisson LBVP
+                                    # confident wrong answer — a pure-Fourier Poisson LinearBoundaryValueProblem
                                     # came back as exactly zero this way, with the @error
                                     # buried in the log. A crash is the correct outcome: a
                                     # block that does not fit its slot means the operator

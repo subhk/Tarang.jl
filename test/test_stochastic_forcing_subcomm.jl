@@ -24,7 +24,7 @@ const FORCING_WORLD_SIZE = MPI.Comm_size(FORCING_WORLD)
         xbasis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         ybasis = RealFourier(coords["y"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(Domain(dist, (xbasis, ybasis)), "u")
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         forcing = StochasticForcing(
             field_size=(8, 8),
             k_forcing=1.0,

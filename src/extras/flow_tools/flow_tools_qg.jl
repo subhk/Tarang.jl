@@ -8,12 +8,12 @@
     QGSystem
 
 A coupled Quasi-Geostrophic system with:
-- Surface buoyancy dynamics at z=0 and z=H (IVP, time-evolving)
-- Interior PV inversion (LBVP, diagnostic at each timestep)
+- Surface buoyancy dynamics at z=0 and z=H (InitialValueProblem, time-evolving)
+- Interior PV inversion (LinearBoundaryValueProblem, diagnostic at each timestep)
 
 The system solves:
 
-**Interior (LBVP for ψ given q and boundary θ):**
+**Interior (LinearBoundaryValueProblem for ψ given q and boundary θ):**
 ```
 ∇ₕ²ψ + (f₀/N)² ∂²ψ/∂z² = q
 ```
@@ -23,7 +23,7 @@ with Neumann BCs from surface buoyancy:
 ∂ψ/∂z|_{z=H} = (N/f₀) θ_top
 ```
 
-**Surfaces (IVP for θ):**
+**Surfaces (InitialValueProblem for θ):**
 ```
 ∂θ/∂t + u·∇θ = κ(-Δ)^α θ
 ```
@@ -42,10 +42,10 @@ mutable struct QGSystem
     θ_top::ScalarField            # 2D surface buoyancy (top)
 
     # Problems
-    interior_bvp::LBVP            # Interior PV inversion problem
+    interior_bvp::LinearBoundaryValueProblem            # Interior PV inversion problem
     interior_solver::Union{Nothing, BoundaryValueSolver}
-    surface_ivp_bot::IVP          # Bottom surface evolution
-    surface_ivp_top::IVP          # Top surface evolution
+    surface_ivp_bot::InitialValueProblem          # Bottom surface evolution
+    surface_ivp_top::InitialValueProblem          # Top surface evolution
 
     # Parameters
     f0::Float64                   # Coriolis parameter
@@ -78,7 +78,7 @@ Set up a full 3D Quasi-Geostrophic system with surface buoyancy dynamics.
 - Interior PV q (can be zero for SQG limit)
 
 # Algorithm (at each timestep)
-1. Given θ_bot, θ_top, q → Solve LBVP for ψ
+1. Given θ_bot, θ_top, q → Solve LinearBoundaryValueProblem for ψ
 2. Compute u = ∇⊥ψ at surfaces
 3. Advance θ_bot, θ_top using surface advection
 
@@ -140,7 +140,7 @@ function qg_system_setup(;
     θ_bot = ScalarField(dist_2d_bot, "θ_bot", bases_2d, Float64)
     θ_top = ScalarField(dist_2d_top, "θ_top", bases_2d, Float64)
 
-    # Interior LBVP: ∇²ψ + (f₀/N)² ∂²ψ/∂z² = q.  A second-order
+    # Interior LinearBoundaryValueProblem: ∇²ψ + (f₀/N)² ∂²ψ/∂z² = q.  A second-order
     # Chebyshev equation with two boundary rows needs two horizontal tau fields;
     # without them each Fourier-mode system has Nz+2 rows but only Nz unknowns.
     # The Neumann--Neumann horizontal zero mode also has an arbitrary additive
@@ -149,7 +149,7 @@ function qg_system_setup(;
     tau_ψ1 = ScalarField(dist_3d, "tau_ψ1", (x_basis, y_basis), Float64)
     tau_ψ2 = ScalarField(dist_3d, "tau_ψ2", (x_basis, y_basis), Float64)
     lift_basis = derivative_basis(z_basis, 2)
-    interior_bvp = LBVP([ψ, tau_ψ0, tau_ψ1, tau_ψ2])
+    interior_bvp = LinearBoundaryValueProblem([ψ, tau_ψ0, tau_ψ1, tau_ψ2])
     add_parameters!(interior_bvp;
         f0 = Float64(f0),
         N = Float64(N),
@@ -176,11 +176,11 @@ function qg_system_setup(;
     add_bc!(interior_bvp, "integ(ψ) = 0")
 
     # Surface IVPs: ∂θ/∂t + u·∇θ = κ(-Δ)^α θ
-    surface_ivp_bot = IVP([θ_bot])
+    surface_ivp_bot = InitialValueProblem([θ_bot])
     surface_ivp_bot.parameters["κ"] = Float64(κ)
     surface_ivp_bot.parameters["α"] = Float64(α)
 
-    surface_ivp_top = IVP([θ_top])
+    surface_ivp_top = InitialValueProblem([θ_top])
     surface_ivp_top.parameters["κ"] = Float64(κ)
     surface_ivp_top.parameters["α"] = Float64(α)
 
@@ -224,7 +224,7 @@ function qg_invert!(qg::QGSystem)
     qg.interior_bvp.namespace["θ_top"] = qg.θ_top
     qg.interior_bvp.namespace["q"] = qg.q
 
-    # Solve the LBVP
+    # Solve the LinearBoundaryValueProblem
     if qg.interior_solver === nothing
         qg.interior_solver = BoundaryValueSolver(qg.interior_bvp)
     end
@@ -340,7 +340,7 @@ end
 Perform one timestep of the QG system.
 
 Algorithm:
-1. Invert PV: solve LBVP for ψ given q, θ_bot, θ_top
+1. Invert PV: solve LinearBoundaryValueProblem for ψ given q, θ_bot, θ_top
 2. Compute surface velocities from ψ
 3. Advance surface buoyancy: θ_new = θ + dt * (-u·∇θ + κ(-Δ)^α θ)
 

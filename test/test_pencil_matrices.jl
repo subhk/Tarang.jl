@@ -12,7 +12,7 @@ function scalar_diffusion_pencil_system(; Nx=16, Nz=8, ν=0.1)
     domain = Domain(dist, (xb, zb))
 
     u = ScalarField(domain, "u")
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_parameters!(problem, ν=ν)
     add_equation!(problem, "∂t(u) - ν*Δ(u) = 0")
     Tarang.build_matrix_expressions!(problem)
@@ -63,7 +63,7 @@ end
 
     state = [u]
     xb, zb = domain.bases
-    problem = IVP(state)
+    problem = InitialValueProblem(state)
     ps = PencilSystem(problem, xb, zb)
 
     # Scatter to pencils
@@ -73,7 +73,7 @@ end
 
     # Gather back
     state2 = [copy(u)]
-    problem2 = IVP(state2)
+    problem2 = InitialValueProblem(state2)
     pencils_to_vars!(problem2.variables, pencils, ps)
 
     # Data should match
@@ -87,7 +87,7 @@ end
 
     state = [p, b]
     xb, zb = domain.bases
-    problem = IVP(state)
+    problem = InitialValueProblem(state)
     ps = PencilSystem(problem, xb, zb)
 
     @test ps.n_pencils == 64 ÷ 2 + 1  # RealFourier: N/2+1 = 33

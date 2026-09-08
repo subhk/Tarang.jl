@@ -47,7 +47,7 @@ end
     ensure_layout!(b, :g)
     gd = get_grid_data(b)
     (gd isa PencilArrays.PencilArray ? parent(gd) : gd) .= 0.1
-    prob = IVP([b]); add_parameters!(prob; nu=0.05)
+    prob = InitialValueProblem([b]); add_parameters!(prob; nu=0.05)
     add_equation!(prob, "∂t(b) - nu*lap(b) = 0")
     solver = InitialValueSolver(prob, RK222(); dt=1e-3)
     # Large wall-time so the run stops on iteration; this still exercises the collective

@@ -5,24 +5,39 @@
 # linear terms (LHS) are treated implicitly and nonlinear terms (RHS) explicitly.
 #
 # Naming: RKabc where a=stages, b=explicit order, c=implicit order
-# - RK111: 1-stage, 1st order IMEX
+# - RK111: 1st order IMEX (two-row tableau, one implicit solve per step)
 # - RK222: 2-stage, 2nd order IMEX
 # - RK443: 4-stage, 3rd order IMEX
 # =============================================================================
 
 struct RK111 <: TimeStepper
     """
-    1-stage, 1st order IMEX Runge-Kutta (Backward Euler / Forward Euler).
+    1st-order IMEX Runge-Kutta: backward Euler for the implicit (linear) part,
+    forward Euler for the explicit part — Ascher, Ruuth & Spiteri (1997) (1,1,1),
+    stored in the two-row form (explicit first stage) that Dedalus's RK111 uses:
 
-    Following spectral convention:
-    - Implicit: Backward Euler (treats linear terms)
-    - Explicit: Forward Euler (treats nonlinear terms)
-
-    Butcher tableaux:
     Explicit:          Implicit:
-    0 |               1 | 1
-    --|--             --|--
-      | 1               | 1
+    0 | 0  0           0 | 0  0
+    1 | 1  0           1 | 0  1
+    --|------          --|------
+      | 1  0             | 0  1
+
+    One implicit solve per step:
+        (M + dt·L) X_{n+1} = M X_n + dt·F(X_n, t)
+    Both tableaux are stiffly accurate (b = last row of A), so the final mass
+    update reproduces the last stage exactly.
+
+    Why this form and not the single-row `A_exp = [0], b_exp = [1]` it used to be:
+    that tableau evaluates F only AFTER the implicit stage — a Lie splitting
+    X_{n+1} = X_1 + dt·F(X_1), X_1 the implicit solve — whose explicit part is
+    not stiffly accurate (Σ A_exp[end,:] = 0 ≠ Σ b_exp = 1). On the tau /
+    subproblem path the stage satisfies the boundary conditions but the final
+    update then adds dt·F, so an explicit forcing that is not tangent to the
+    boundary leaves an O(dt) boundary residual on EVERY step; the CPU final
+    projector lifted that residual into the interior and the scheme did not
+    converge at all (measured on a manufactured moving-boundary problem: error
+    0.97 at dt=0.04 AND at dt=0.02, against 2.7e-2 → 1.3e-2 with this tableau).
+    On pure-Fourier problems the two forms agree to roundoff.
     """
     stages::Int
     A_explicit::Matrix{Float64}
@@ -33,15 +48,17 @@ struct RK111 <: TimeStepper
     c_implicit::Vector{Float64}
 
     function RK111()
-        stages = 1
-        # Explicit tableau (Forward Euler)
-        A_explicit = reshape([0.0], 1, 1)
-        b_explicit = [1.0]
-        c_explicit = [0.0]
-        # Implicit tableau (Backward Euler)
-        A_implicit = reshape([1.0], 1, 1)
-        b_implicit = [1.0]
-        c_implicit = [1.0]
+        stages = 2
+        # Explicit tableau (forward Euler, explicit first stage), c = [0, 1]
+        A_explicit = [0.0 0.0;
+                      1.0 0.0]
+        b_explicit = [1.0, 0.0]
+        c_explicit = [0.0, 1.0]
+        # Implicit tableau (backward Euler on the second stage), c = [0, 1]
+        A_implicit = [0.0 0.0;
+                      0.0 1.0]
+        b_implicit = [0.0, 1.0]
+        c_implicit = [0.0, 1.0]
         new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
     end
 end

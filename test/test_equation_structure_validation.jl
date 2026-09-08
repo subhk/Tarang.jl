@@ -86,7 +86,7 @@ function eqsv_fourier_problem(; N::Int=16)
     for j in 1:N, i in 1:N
         g[i, j] = sin(xs[i]) * cos(ys[j])
     end
-    prob = IVP([u]; namespace=Dict("u" => u))
+    prob = InitialValueProblem([u]; namespace=Dict("u" => u))
     return u, prob, dom, dist, coords
 end
 
@@ -98,7 +98,7 @@ function eqsv_channel_problem(; Nx::Int=8, Nz::Int=16)
     zb = ChebyshevT(coords["z"]; size=Nz, bounds=(0.0, 1.0))
     dom = Domain(dist, (xb, zb))
     u = ScalarField(dom, "u")
-    prob = IVP([u]; namespace=Dict("u" => u))
+    prob = InitialValueProblem([u]; namespace=Dict("u" => u))
     return u, prob, dom, dist, coords
 end
 
@@ -196,7 +196,7 @@ end
         ensure_layout!(q, :g)
         Tarang.get_grid_data(q) .= 1.0 .+ zc
 
-        prob = IVP([u]; namespace=Dict("u" => u))
+        prob = InitialValueProblem([u]; namespace=Dict("u" => u))
         Tarang.add_parameters!(prob, q = q)
         warned, _ = eqsv_verdict!(prob, "dt(u) - q*lap(u) = 0")
         @test warned == false
@@ -337,7 +337,7 @@ end
         zb = ChebyshevT(coords["z"]; size=16, bounds=(0.0, 1.0))
         q = ScalarField(dist, "q", (xb, zb), Float64)
         u = VectorField(dist, coords, "u", (xb, zb), Float64)
-        prob = IVP([q, u]; namespace=Dict("q" => q, "u" => u))
+        prob = InitialValueProblem([q, u]; namespace=Dict("q" => q, "u" => u))
 
         warned, msgs = eqsv_verdict!(prob, "dt(q) - lap(q) = -u⋅∇(q)")
         @test warned == false
@@ -368,7 +368,7 @@ end
         nu_e = ScalarField(dom, "nu_e")
         nu_e["g"] = @. 2 + sin(X)
 
-        prob = IVP([u]; namespace=Dict("u" => u))
+        prob = InitialValueProblem([u]; namespace=Dict("u" => u))
         Tarang.add_parameters!(prob, nu_e = nu_e)
         warned, msgs = eqsv_verdict!(prob, "dt(u) = div(nu_e*grad(u))")
         @test warned == false
@@ -385,7 +385,7 @@ end
         @test Array(Tarang.get_grid_data(rhs)) ≈ exact atol = 1e-10 rtol = 1e-10
 
         u2 = ScalarField(dom, "u")
-        prob2 = IVP([u2]; namespace=Dict("u" => u2))
+        prob2 = InitialValueProblem([u2]; namespace=Dict("u" => u2))
         Tarang.add_parameters!(prob2, nu_e = nu_e)
         warned2, _ = eqsv_verdict!(prob2, "dt(u) - nu_e*lap(u) = 0")
         @test warned2 == true
@@ -438,7 +438,7 @@ end
         ez = Tarang.unit_vector_fields(coords, dist)[end]
         @test Tarang._is_constant_term(ez)
 
-        prob = IVP([u, b]; namespace=Dict("u" => u, "b" => b))
+        prob = InitialValueProblem([u, b]; namespace=Dict("u" => u, "b" => b))
         Tarang.add_parameters!(prob, ez = ez, Ra = 1.0e6, Pr = 1.0)
         warned, msgs = eqsv_verdict!(prob, "dt(u) - lap(u) - Ra*Pr*b*ez = 0")
         @test warned == false
@@ -531,7 +531,7 @@ end
         before = copy(Array(Tarang.get_grid_data(q)))
 
         u = ScalarField(dom, "u")
-        prob = IVP([u]; namespace=Dict("u" => u))
+        prob = InitialValueProblem([u]; namespace=Dict("u" => u))
         Tarang.add_parameters!(prob, q = q)
         eqsv_verdict!(prob, "dt(u) - q*lap(u) = 0")
 

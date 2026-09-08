@@ -12,7 +12,7 @@ using Random
     @testset "temporal filter registration concrete, per-step allocation-free" begin
         domain = PeriodicDomain(N, N)
         u = ScalarField(domain, "u")
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = 0")
 
         filt = ExponentialMean((N, N); α=0.1)
@@ -41,7 +41,7 @@ using Random
     @testset "stochastic forcing dict concretely keyed and Forcing-typed" begin
         domain = PeriodicDomain(N, N)
         q = ScalarField(domain, "q")
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_equation!(problem, "∂t(q) = 0")
 
         forcing = StochasticForcing(

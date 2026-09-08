@@ -1,7 +1,7 @@
 """
 Device-safety of the 2D pure-Fourier GPU algebraic-constraint refresh WITHOUT a GPU.
 
-A pure-Fourier GPU IVP (e.g. the 2D vorticity–streamfunction turbulence example)
+A pure-Fourier GPU InitialValueProblem (e.g. the 2D vorticity–streamfunction turbulence example)
 builds no global matrix; it refreshes its algebraic constraints — the
 streamfunction Poisson solve `ψ̂ = -q̂/k²`, the |k|² grid, the spectral
 `skew(grad)` velocity — spectrally on-device every RHS. The transforms between

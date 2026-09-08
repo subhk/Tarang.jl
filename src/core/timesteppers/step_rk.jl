@@ -453,8 +453,8 @@ Refuse — loudly — to silently drop a non-identity mass operator on the
 distributed/GPU field path.
 
 `_step_explicit_rk_gpu!` integrates `X' = F(X)`: it has no mass solve, because
-there is no distributed sparse solver behind it. For a pure-Fourier problem
-`M = I` and that is exact, which is why this went unnoticed. For any problem
+there is no distributed sparse solver behind it. Fourier bases do not imply
+`M = I`: coefficients and operators on time derivatives also enter M. For a problem
 where `M ≠ I` it means the equations are integrated as though the mass operator
 were the identity — a plausible, wrong trajectory with no error and no warning.
 
@@ -465,6 +465,7 @@ path, so a retry re-reports rather than sailing through).
 """
 function _check_explicit_rk_mass_matrix!(state::TimestepperState,
                                          solver::InitialValueSolver, M_matrix)
+    _check_identity_mass_operator!(state, solver)
     M_matrix === nothing && return nothing
     get(state.timestepper_data, :_explicit_rk_mass_ok, false) && return nothing
     if _mass_matrix_is_identity(M_matrix)
@@ -501,8 +502,8 @@ function _step_explicit_rk!(state::TimestepperState, solver::InitialValueSolver,
     M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
 
     if _distributed_field_path_required(current_state)
-        # The GPU/MPI field path has no mass solve. For Fourier bases M = I and
-        # that is exact; anything else must not be dropped in silence.
+        # The GPU/MPI field path has no mass solve. Validate the parsed mass
+        # operator even when global matrix assembly was skipped.
         _check_explicit_rk_mass_matrix!(state, solver, M_matrix)
         _step_explicit_rk_gpu!(state, solver, A, b, c)  # Works for both GPU and MPI
     else

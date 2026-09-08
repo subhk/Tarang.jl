@@ -2,7 +2,7 @@
 CPU-runnable coverage for the single-GPU implicit-operator guard
 (`_check_gpu_implicit_compatibility!`, dispatch.jl).
 
-A pure-Fourier GPU IVP skips global-matrix/subproblem assembly, so a standard
+A pure-Fourier GPU InitialValueProblem skips global-matrix/subproblem assembly, so a standard
 IMEX/multistep/ETD scheme would silently drop an implicit LHS operator and
 integrate the equation without it (a heat equation runs inviscid). The guard
 turns that silent wrong answer into a loud error naming the diagonal-IMEX
@@ -31,7 +31,7 @@ using Tarang
         for j in 1:16, i in 1:16
             g[i, j] = cos(2 * xs[i])
         end
-        prob = IVP([u]; namespace=Dict("u" => u))
+        prob = InitialValueProblem([u]; namespace=Dict("u" => u))
         Tarang.add_equation!(prob, eqn)
         return u, InitialValueSolver(prob, ts; dt=1e-3)
     end
@@ -79,7 +79,7 @@ using Tarang
             dom = Domain(dist, (xb2, yb2))
             q = ScalarField(dom, "q"); psi = ScalarField(dom, "psi")
             vel = VectorField(dom, "u"); tau = ScalarField(dist, "tau", (), Float64)
-            prob = IVP([q, psi, vel, tau]); add_parameters!(prob; nu=nu)
+            prob = InitialValueProblem([q, psi, vel, tau]); add_parameters!(prob; nu=nu)
             add_equation!(prob, "∂t(q) - nu*Δ(q) = -u⋅∇(q)")
             add_equation!(prob, "Δ(psi) + tau - q = 0")
             add_equation!(prob, "u - skew(grad(psi)) = 0")
@@ -118,7 +118,7 @@ using Tarang
         zbc = ChebyshevT(cheb["z"]; size=16, bounds=(-1.0, 1.0))
         dom = Domain(cdist, (xbc, zbc))
         w = ScalarField(dom, "w")
-        prob = IVP([w]; namespace=Dict("w" => w)); add_parameters!(prob; nu=0.1)
+        prob = InitialValueProblem([w]; namespace=Dict("w" => w)); add_parameters!(prob; nu=0.1)
         Tarang.add_equation!(prob, "dt(w) - nu*lap(w) = 0")
         s = InitialValueSolver(prob, SBDF2(); dt=1e-3)
 

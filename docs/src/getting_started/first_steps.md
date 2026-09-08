@@ -11,7 +11,7 @@ Every Tarang.jl simulation follows these steps:
 3. **Choose spectral bases** for each coordinate direction
 4. **Create a domain** combining the bases
 5. **Define fields** (scalar, vector, or tensor)
-6. **Set up a problem** (IVP, BVP, or EVP)
+6. **Set up a problem** (InitialValueProblem, BVP, or EigenvalueProblem)
 7. **Add equations** using symbolic syntax
 8. **Specify boundary conditions**
 9. **Create a solver** with a timestepper
@@ -114,7 +114,7 @@ u = VectorField(domain, "u")
 
 ### Step 6: Set Up Problem
 
-Create an Initial Value Problem (IVP). A bounded second-order equation uses the
+Create an Initial Value Problem (InitialValueProblem). A bounded second-order equation uses the
 tau method: one lifted tau enters the gradient and the other enters the bulk
 equation.
 
@@ -123,7 +123,7 @@ ez, ex = unit_vector_fields(coords, dist)  # coords are ("z", "x")
 τ_lift(A) = lift(A, derivative_basis(z_basis, 1), -1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([T, tau_T1, tau_T2])
+problem = InitialValueProblem([T, tau_T1, tau_T2])
 add_parameters!(problem; kappa=0.01, grad_T=grad_T, τ_lift=τ_lift)
 
 # Add the heat equation with its tau corrections
@@ -224,7 +224,7 @@ ez, ex = unit_vector_fields(coords, dist)
 τ_lift(A) = lift(A, derivative_basis(z_basis, 1), -1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([T, tau_T1, tau_T2])
+problem = InitialValueProblem([T, tau_T1, tau_T2])
 add_parameters!(problem; kappa=0.01, grad_T=grad_T, τ_lift=τ_lift)
 add_equation!(problem, "∂t(T) - kappa*div(grad_T) + τ_lift(tau_T2) = 0")
 
@@ -275,7 +275,7 @@ u = VectorField(domain, "u")
 p = ScalarField(domain, "p")
 T = ScalarField(domain, "T")
 
-problem = IVP([u.components[1], u.components[2], p, T])
+problem = InitialValueProblem([u.components[1], u.components[2], p, T])
 ```
 
 ### Parameters

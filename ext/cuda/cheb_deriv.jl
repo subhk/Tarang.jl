@@ -99,7 +99,7 @@ Element map over the EXTENSION, ndrange = (2*(n-1), batch)."""
 @kernel function _dct1_ext_kernel!(work, @Const(inp), n, batch)
     i, j = @index(Global, NTuple)
     # i in 1..n copies; i = n+k (k = 1..n-2) mirrors inp[n-k] = inp[2n-i].
-    @inbounds work[i, j] = i <= n ? inp[i, j] : inp[2n - i, j]
+    @inbounds work[i, j] = inp[ifelse(i <= n, i, 2n - i), j]
 end
 
 """Fused reverse + symmetric extension (forward DCT-I head), ndrange = (2*(n-1), batch):
@@ -107,7 +107,7 @@ work = sym-extension of reverse(inp). rev[i] = inp[n+1-i]; ext at i = n+k is
 rev[n-k] = inp[k+1] = inp[i-n+1]."""
 @kernel function _dct1_reverse_ext_kernel!(work, @Const(inp), n, batch)
     i, j = @index(Global, NTuple)
-    @inbounds work[i, j] = i <= n ? inp[n - i + 1, j] : inp[i - n + 1, j]
+    @inbounds work[i, j] = inp[ifelse(i <= n, n - i + 1, i - n + 1), j]
 end
 
 """Fused endpoint-double + symmetric extension (backward DCT-I head),
@@ -116,12 +116,8 @@ ndrange = (2*(n-1), batch). The mirrored region only touches interior rows
 @kernel function _dct1_prescale_ext_kernel!(work, @Const(inp), n, batch)
     i, j = @index(Global, NTuple)
     @inbounds begin
-        src = i <= n ? i : 2n - i
-        v = inp[src, j]
-        if src == 1 || src == n
-            v *= 2
-        end
-        work[i, j] = v
+        src = ifelse(i <= n, i, 2n - i)
+        work[i, j] = inp[src, j] * ifelse(src == 1 || src == n, 2, 1)
     end
 end
 
@@ -135,13 +131,7 @@ end
 ndrange = (n, batch): multiply by 1/(N-1) and half-weight the two endpoints."""
 @kernel function _dct1_extract_normalize_kernel!(out, @Const(cx), n, batch, inv_nm1::T) where {T}
     i, j = @index(Global, NTuple)
-    @inbounds begin
-        v = real(cx[i, j]) * inv_nm1
-        if i == 1 || i == n
-            v *= T(0.5)
-        end
-        out[i, j] = v
-    end
+    @inbounds out[i, j] = real(cx[i, j]) * inv_nm1 * ifelse(i == 1 || i == n, T(0.5), T(1))
 end
 
 """Fused extract-real + reverse + ×½ (inverse DCT-I tail), ndrange = (n, batch):
@@ -156,7 +146,9 @@ columns 1..batch, im parts in batch+1..2*batch — so ONE batched DCT-I covers
 both. ndrange = (n, 2*batch)."""
 @kernel function _cheb_pack_reim_kernel!(out, @Const(cx), n, batch)
     i, j = @index(Global, NTuple)
-    @inbounds out[i, j] = j <= batch ? real(cx[i, j]) : imag(cx[i, j - batch])
+    # Both reads are clamped in-bounds so the select can be branch-free.
+    @inbounds out[i, j] = ifelse(j <= batch, real(cx[i, min(j, batch)]),
+                                 imag(cx[i, max(j - batch, 1)]))
 end
 
 """Inverse of `_cheb_pack_reim_kernel!`: recombine the two column blocks into a
@@ -200,10 +192,8 @@ One thread per COLUMN (ndrange = batch): the recurrence is serial in k.
             raw2 = zero(T)   # raw c'_{k+2}
             raw1 = zero(T)   # raw c'_{k+1}
             for k in n-1:-1:1
-                s = coeff[k+1, j] * inv_nm1
-                if k + 1 == n
-                    s *= T(0.5)  # last endpoint c_{N-1} is halved
-                end
+                # last endpoint c_{N-1} is halved
+                s = coeff[k+1, j] * inv_nm1 * ifelse(k + 1 == n, T(0.5), T(1))
                 raw0 = 2 * T(k) * s + raw2
                 deriv[k, j] = raw0 * scale
                 raw2 = raw1

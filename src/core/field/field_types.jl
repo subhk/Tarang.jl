@@ -61,12 +61,16 @@ mutable struct SerialFieldStorage{G<:AbstractArray, C<:AbstractArray} <: Abstrac
     architecture::AbstractArchitecture
     grid::G
     coeff::C
+    current_layout::Symbol
 end
 
-# Julia auto-generates the inferring outer constructor
-# `SerialFieldStorage(arch, grid, coeff)` (binding G=typeof(grid), C=typeof(coeff))
-# from the struct definition above, so no explicit outer constructor is needed —
-# adding one would collide with the auto-generated method during precompilation.
+# Keep the three-argument constructors, including the explicitly parameterized
+# form used for mixed-pencil storage. Layout validity belongs to the arrays:
+# two field handles sharing storage must observe the same authoritative buffer.
+SerialFieldStorage{G,C}(arch, grid, coeff) where {G,C} =
+    SerialFieldStorage{G,C}(arch, grid, coeff, :g)
+SerialFieldStorage(arch, grid::G, coeff::C) where {G<:AbstractArray,C<:AbstractArray} =
+    SerialFieldStorage{G,C}(arch, grid, coeff)
 
 # Grid arrays never change pencil permutation, so they can always use their
 # exact type. Mixed Fourier–Chebyshev subproblem solves temporarily swap the
@@ -81,7 +85,7 @@ _coeff_storage_param(a::AbstractArray) = typeof(a)
 # TransposableFieldStorage is defined in transposable_field.jl (loaded later,
 # for locality with the rest of the transpose subsystem it marks). It inherits
 # from AbstractFieldStorage defined above and mirrors SerialFieldStorage's
-# three fields exactly (architecture, grid, coeff) — it exists only to be a
+# fields exactly (architecture, grid, coeff, current_layout) — it exists only to be a
 # distinct type for storage_mode/dispatch, so the field accessors below need
 # no per-storage-type specialization.
 
@@ -112,7 +116,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
 
     # Layout information
     layout::Union{Nothing, Layout}
-    current_layout::Symbol  # :g for grid, :c for coefficient
+    # `current_layout` is a public property backed by `storage.current_layout`.
 
     # Scale information
     scales::Union{Nothing, Tuple{Vararg{Float64}}}  # Current scales for each dimension
@@ -134,13 +138,15 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         # Build the concrete arrays BEFORE storage so SerialFieldStorage{G,C} is
         # parametrized on their real types. 0-D fields get typed length-0
         # sentinels so storage is never nothing (Phase 1 type-stability).
-        g, c = domain !== nothing ? _build_field_arrays(dist, domain, T) : (_empty_grid(T), _empty_coeff(T))
+        g, c = domain !== nothing ? _build_field_arrays(dist, domain, T) :
+                                   (_empty_grid(T, dist.architecture),
+                                    _empty_coeff(T, dist.architecture))
         bundle = domain === nothing ? nothing : transform_plan_bundle(domain, T)
         # A distributed GPU field transforms by explicit transposes
         # (TransposableField), never by PencilFFTs (which is CPU-only). Record
         # that at the type level so the transform can dispatch on it instead of
         # erroring at the call site. TransposableFieldStorage carries the same
-        # (architecture, grid, coeff) fields as SerialFieldStorage — the
+        # (architecture, grid, coeff, current_layout) fields as SerialFieldStorage — the
         # transpose buffers/counts/comms/topology live on the Distributor-side
         # workspace cache (`transpose_workspace!`), not here, so this selection
         # alone performs no collective MPI call.
@@ -150,7 +156,7 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
             SerialFieldStorage{_grid_storage_param(g), _coeff_storage_param(c)}(dist.architecture, g, c)
         end
         return new{T, typeof(storage)}(dist, name, bases, domain, dtype, bundle,
-                                       storage, layout, :g, initial_scales, :auto, false, 0)
+                                       storage, layout, initial_scales, :auto, false, 0)
     end
 
     # Inner constructor for explicit storage type (e.g., TransposableFieldStorage)
@@ -162,11 +168,11 @@ mutable struct ScalarField{T, S<:AbstractFieldStorage} <: Operand
         initial_scales = length(bases) > 0 ? ntuple(_ -> 1.0, dist.dim) : nothing
         bundle = domain === nothing ? nothing : transform_plan_bundle(domain, T)
         field = new{T, S}(dist, name, bases, domain, dtype, bundle, storage,
-                          layout, :g, initial_scales, :auto, false, 0)
+                          layout, initial_scales, :auto, false, 0)
         # Install typed length-0 sentinels for 0-D fields so storage is never nothing.
         if domain === nothing
-            set_grid_data!(field, _empty_grid(T))
-            set_coeff_data!(field, _empty_coeff(T))
+            set_grid_data!(field, _empty_grid(T, storage.architecture))
+            set_coeff_data!(field, _empty_coeff(T, storage.architecture))
         end
         return field
     end

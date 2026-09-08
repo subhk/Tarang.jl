@@ -139,7 +139,7 @@ The limited distributed Fourier–Chebyshev DCT-I path is described in
 
 GPU runtime state and solver vectors stay on the device. Coupled GPU IVPs map
 `:auto`, `:gpu`, and `:hybrid` to `:cuda_sparse`; CPU-only solver choices are
-rejected. GPU LBVPs require an explicit CUDA solver. GPU NLBVP and EVP solves
+rejected. GPU LBVPs require an explicit CUDA solver. GPU NonlinearBoundaryValueProblem and EigenvalueProblem solves
 are currently unsupported.
 
 Unsupported solver operations and factorization failures raise errors rather

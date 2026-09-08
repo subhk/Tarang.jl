@@ -5,7 +5,7 @@ This test module provides comprehensive tests for:
 - 2D operations with (Fourier,Fourier), (Fourier,Chebyshev), (Chebyshev,Chebyshev)
 - 3D operations with (Fourier,Fourier,Fourier) and (Fourier,Fourier,Chebyshev)
 - Explicit evaluation and result verification
-- Implicit (matrix) evaluation for LBVP solvers
+- Implicit (matrix) evaluation for LinearBoundaryValueProblem solvers
 - Vector operations: skew, curl, trace, transpose
 - Component extraction
 """

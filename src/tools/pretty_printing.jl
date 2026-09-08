@@ -189,14 +189,14 @@ end
 
 function _problem_type_name(prob::Problem)
     T = typeof(prob)
-    if T == IVP
-        return "Initial Value Problem (IVP)"
-    elseif T == LBVP
-        return "Linear Boundary Value Problem (LBVP)"
-    elseif T == NLBVP
-        return "Nonlinear Boundary Value Problem (NLBVP)"
-    elseif T == EVP
-        return "Eigenvalue Problem (EVP)"
+    if T == InitialValueProblem
+        return "Initial Value Problem"
+    elseif T == LinearBoundaryValueProblem
+        return "Linear Boundary Value Problem"
+    elseif T == NonlinearBoundaryValueProblem
+        return "Nonlinear Boundary Value Problem"
+    elseif T == EigenvalueProblem
+        return "Eigenvalue Problem"
     else
         return string(T)
     end

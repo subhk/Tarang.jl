@@ -10,7 +10,7 @@
     2. Building dF matrices (Jacobian/Frechet differential) 
     3. Gathering results into numerical arrays for Newton solver
     """
-function evaluate_residual_and_jacobian(problem::NLBVP, x::Vector{ComplexF64})
+function evaluate_residual_and_jacobian(problem::NonlinearBoundaryValueProblem, x::Vector{ComplexF64})
     
     # Step 1: Copy solution vector back to problem fields
     state_fields = collect_state_fields(problem.variables)

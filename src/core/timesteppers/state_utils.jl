@@ -13,6 +13,7 @@ Equations with time derivatives contribute their F_expr to the appropriate state
 constraint equations (no dt) contribute zero.
 """
 function evaluate_rhs(solver::InitialValueSolver, state::Vector{<:ScalarField}, time::Float64)
+    _update_registered_forcings!(solver, time, solver.dt, DeterministicForcingType)
     strategy = _rhs_evaluation_strategy(solver)
     if strategy !== :interpreted
         _refresh_algebraic_state!(solver.problem, state)
@@ -61,7 +62,7 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
         end
 
         # `equation_data` is filled by `build_matrix_expressions!`, which runs as part
-        # of global-matrix assembly — the step a pure-Fourier GPU IVP SKIPS. Treating an
+        # of global-matrix assembly — the step a pure-Fourier GPU InitialValueProblem SKIPS. Treating an
         # empty IR as "no equations contribute" would leave `rhs` as the zero fields
         # allocated above and freeze the solution at its initial condition with nothing
         # raised. That is the bug fixed in `build_lazy_rhs_plan!`; this is the same hole
@@ -261,6 +262,7 @@ function evaluate_rhs_buffered(
     state::Vector{<:ScalarField},
     time::Float64,
 )
+    _update_registered_forcings!(solver, time, solver.dt, DeterministicForcingType)
     strategy = _rhs_evaluation_strategy(solver; buffered=true)
     if strategy !== :interpreted
         _refresh_algebraic_state!(solver.problem, state)
@@ -794,38 +796,15 @@ function _push_vector_state!(history::Vector{V}, vector::AbstractVector{<:Number
     return new_state
 end
 
-# Helper for stochastic forcing matching
-function _matched_forcing_view(forcing, target_size)
-    if forcing === nothing || forcing.cached_forcing === nothing
-        return nothing
-    end
-
-    F = forcing.cached_forcing
-    # Call sites pass the coefficient ARRAY (state_utils.jl:133, lazy_rhs.jl:908),
-    # not a size tuple; normalize so both a size tuple and an array target work.
-    tsize = target_size isa AbstractArray ? size(target_size) : target_size
-    if size(F) == tsize
-        return F
-    end
-
-    # Try to create a matching view
-    try
-        if ndims(F) == length(tsize)
-            # Truncate or pad as needed
-            slices = ntuple(d -> 1:min(size(F, d), tsize[d]), ndims(F))
-            return view(F, slices...)
-        end
-    catch err
-        # An array that cannot be viewed with these slices declines with BoundsError,
-        # DimensionMismatch or MethodError, and the caller then treats the forcing as
-        # unmatched. Any other exception is a real fault and must not be turned into a
-        # silent `nothing`, which would drop the forcing term entirely.
-        err isa Union{BoundsError, DimensionMismatch, MethodError} || rethrow()
-        return nothing
-    end
-
-    return nothing
-end
+# Forcing → RHS coefficient view. Every concrete forcing type supplies its own
+# `_matched_forcing_view` (stochastic_forcing_diagnostics.jl for the stochastic
+# types, stochastic_forcing_deterministic.jl for DeterministicForcing). There is
+# deliberately NO untyped fallback: the one that used to live here sliced
+# `forcing.cached_forcing` to the target's size whatever the array held, which
+# is how a registered DeterministicForcing had its physical-grid values added
+# to the coefficient array as though they were spectral coefficients — a wrong
+# field with no error. An unknown forcing type is a MethodError, on purpose.
+_matched_forcing_view(::Nothing, target) = nothing
 
 """
     _solve_algebraic_constraints!(problem, state)
@@ -937,7 +916,7 @@ function _try_solve_simple_constraint!(problem, L_expr, F_expr, state::Vector{<:
         return
     end
 
-    # The doubly-periodic 2D IVP uses u = skew(grad(psi)). Write those two
+    # The doubly-periodic 2D InitialValueProblem uses u = skew(grad(psi)). Write those two
     # Fourier derivatives straight into u's existing coefficient buffers. The
     # generic evaluator below constructs several full-sized temporary fields,
     # which is especially expensive when those fields live on a GPU.

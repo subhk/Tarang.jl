@@ -49,7 +49,7 @@ if NP == 1
 
     @testset "diagonal L̂ parser: real equation mixes diffusion + advection" begin
         coords, dist, xb, yb, domain, q, N = _mk_field()
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem, nu=0.05)
         add_equation!(problem, "dt(q) - nu*lap(q) - 0.3*d(q,x) = 0")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)  # populates equation_data
@@ -71,7 +71,7 @@ if NP == 1
 else
     @testset "MPI: implicit advection no longer freezes the field (rank=$RANK)" begin
         coords, dist, xb, yb, domain, q, N = _mk_field(np=NP)
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem, nu=0.05)
         add_equation!(problem, "dt(q) - nu*lap(q) - 0.3*d(q,x) - 0.2*d(q,y) = 0")
         solver = InitialValueSolver(problem, RK222(); dt=2e-3)

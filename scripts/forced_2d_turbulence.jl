@@ -64,7 +64,7 @@ forcing = StochasticForcing(
 )
 
 # ─── Problem ─────────────────────────────────────────────────
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu, drag=drag)
 
 add_equation!(problem, "∂t(ζ) + drag*ζ + nu*Δ⁴(ζ) = -u⋅∇(ζ)")  # PV evolution (forcing added below)

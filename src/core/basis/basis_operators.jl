@@ -662,7 +662,7 @@ end
 # Any matrix built from the classical convention and then APPLIED TO STORED
 # COEFFICIENTS needs the bridge below. Without it the result is silently wrong —
 # not an error, a plausible number. Measured before this existed: a Legendre
-# LBVP for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against an answer of
+# LinearBoundaryValueProblem for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against an answer of
 # amplitude 0.248 (~80% relative) while reporting success; the identical
 # ChebyshevT problem is exact to 1.4e-16.
 #

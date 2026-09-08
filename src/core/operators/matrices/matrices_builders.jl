@@ -199,7 +199,7 @@ Example: For N=10 modes
 
 Following spectral methods pattern):
 The matrix places the tau variable's coefficient at mode n in the solution.
-For LBVP solvers, this creates the "tau polynomial" that adds boundary
+For LinearBoundaryValueProblem solvers, this creates the "tau polynomial" that adds boundary
 condition enforcement terms to the highest modes.
 """
 function build_lift_matrix(var, basis, n::Int; kwargs...)

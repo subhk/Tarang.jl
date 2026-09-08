@@ -120,9 +120,9 @@ function _extract_scalar_local(expr)
     isa(expr, NegateOperator) && return -_extract_scalar_local(expr.operand)
     if isa(expr, ScalarField)
         gdata = get_grid_data(expr)
-        gdata !== nothing && length(gdata) >= 1 && return real(gdata[1])
+        gdata !== nothing && length(gdata) >= 1 && return real(_constant_field_value_on_host(gdata))
         cdata = get_coeff_data(expr)
-        cdata !== nothing && length(cdata) >= 1 && return real(cdata[1])
+        cdata !== nothing && length(cdata) >= 1 && return real(_constant_field_value_on_host(cdata))
         # See `_extract_scalar`: assuming zero for an unset coefficient silently
         # deletes every term it multiplies.
         throw(ArgumentError(
@@ -543,7 +543,7 @@ never drop. A coefficient that is identically zero returns an explicit ZERO matr
 #
 # The result depends on the field's CURRENT data, so the memo must be cleared at
 # every build-pass boundary (`_invalidate_implicit_ncc_memo!`): the orchestrated
-# `build_subproblem_matrices` and each NLBVP Newton rebuild loop do so — those
+# `build_subproblem_matrices` and each NonlinearBoundaryValueProblem Newton rebuild loop do so — those
 # rebuilds exist precisely because the coefficient data changed.
 const _IMPLICIT_NCC_MEMO = Dict{UInt, Any}()
 

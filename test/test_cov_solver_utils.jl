@@ -16,7 +16,7 @@ using SparseArrays: nnz
 # Helpers: build small serial solvers.
 # -----------------------------------------------------------------------------
 
-# Pure-Chebyshev diffusion IVP. This is a *coupled* (non-separable) direction,
+# Pure-Chebyshev diffusion InitialValueProblem. This is a *coupled* (non-separable) direction,
 # so InitialValueSolver builds real per-mode subproblem matrices and stores them
 # in problem.parameters["subproblems"]. Its lazy RHS does NOT compile (Laplacian
 # on RHS), so solver.rhs_plan is a non-compiled LazyRHSPlan -> exercises the
@@ -26,7 +26,7 @@ function build_cheb_solver(; N=16)
     dist = Distributor(coords; mesh=(1,), dtype=Float64)
     zb = ChebyshevT(coords["z"]; size=N, bounds=(-1.0, 1.0))
     field = ScalarField(dist, "u", (zb,), Float64)
-    problem = IVP([field])
+    problem = InitialValueProblem([field])
     Tarang.add_equation!(problem, "dt(u) = lap(u)")
     solver = InitialValueSolver(problem, RK111(); dt=1e-3, device="cpu")
     return solver
@@ -43,13 +43,13 @@ function build_uncompilable_solver(; N=8)
     domain = Domain(dist, (xb, yb))
     q = ScalarField(domain, "q")
     u = VectorField(dist, coords, "u", (xb, yb), Float64)
-    problem = IVP([q])
+    problem = InitialValueProblem([q])
     add_parameters!(problem, u=u)
     Tarang.add_equation!(problem, "dt(q) = div(curl(u))")
     return InitialValueSolver(problem, RK111(); dt=1e-3, device="cpu")
 end
 
-# Pure-Fourier trivial IVP. The implicit operator is diagonal per-mode, so NO
+# Pure-Fourier trivial InitialValueProblem. The implicit operator is diagonal per-mode, so NO
 # subproblems are built (parameters has no "subproblems" key). Its lazy RHS DOES
 # compile -> exercises the "lazy (type-specialized)" diagnose branch.
 function build_fourier_solver(; N=8)
@@ -57,7 +57,7 @@ function build_fourier_solver(; N=8)
     dist = Distributor(coords; mesh=(1,), dtype=Float64)
     basis = RealFourier(coords["x"]; size=N, bounds=(0.0, 2π))
     field = ScalarField(dist, "u", (basis,), Float64)
-    problem = IVP([field])
+    problem = InitialValueProblem([field])
     Tarang.add_equation!(problem, "dt(u) = 0")
     solver = InitialValueSolver(problem, RK111(); dt=1e-3, device="cpu")
     return solver
@@ -202,7 +202,7 @@ end
         ret, out = capture_stdout(() -> Tarang.diagnose(solver))
         # diagnose returns the value of its last println (nothing-ish); we only
         # care about the printed tree.
-        @test occursin("Simulation of 1-equation IVP", out)
+        @test occursin("Simulation of 1-equation InitialValueProblem", out)
         @test occursin("timestepper: RK111", out)
         @test occursin("architecture: CPU", out)
         @test occursin("MPI ranks: 1", out)

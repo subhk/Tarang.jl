@@ -13,7 +13,7 @@ using Tarang
         Tarang.ensure_layout!(u.components[1], :g)
         fill!(Tarang.get_grid_data(u.components[1]), velocity_mag)
 
-        problem = IVP([u]; namespace=Dict("u" => u))
+        problem = InitialValueProblem([u]; namespace=Dict("u" => u))
         Tarang.add_equation!(problem, "∂t(u) = 0")
 
         solver = InitialValueSolver(problem, RK111(); device="cpu")
@@ -44,7 +44,7 @@ end
     fill!(Tarang.get_grid_data(u.components[1]), 1.0)
     fill!(Tarang.get_grid_data(u.components[2]), 1.0)
 
-    problem = IVP([u]; namespace=Dict("u" => u))
+    problem = InitialValueProblem([u]; namespace=Dict("u" => u))
     Tarang.add_equation!(problem, "∂t(u) = 0")
 
     safety = 0.5

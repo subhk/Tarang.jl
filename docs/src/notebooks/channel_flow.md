@@ -65,7 +65,7 @@ lift_basis = derivative_basis(z_basis, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_u     = grad(u) + ez * τ_lift(tau_u1)
 
-problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+problem = InitialValueProblem([p, u, tau_p, tau_u1, tau_u2])
 add_parameters!(problem, nu=nu, dpdx=dpdx, ex=ex, ez=ez,
                 grad_u=grad_u, τ_lift=τ_lift)
 

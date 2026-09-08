@@ -1,7 +1,7 @@
 """
 The single-GPU implicit-operator guard must actually FIRE on device-resident fields.
 
-`_check_gpu_implicit_compatibility!` (dispatch.jl) exists because a pure-Fourier GPU IVP
+`_check_gpu_implicit_compatibility!` (dispatch.jl) exists because a pure-Fourier GPU InitialValueProblem
 builds no global matrix and no subproblems, so a standard IMEX / multistep / ETD scheme
 falls through to a fully-explicit step and drops the implicit `L` — a heat equation runs
 inviscid, with no error.
@@ -62,7 +62,7 @@ end
             dom = Domain(dist, (RealFourier(coords["x"]; size=32, bounds=(0.0, 2π)),))
             u = ScalarField(dom, "u")
             ensure_layout!(u, :g)
-            prob = IVP([u])
+            prob = InitialValueProblem([u])
             Tarang.add_equation!(prob, eqn)
             return InitialValueSolver(prob, ts; dt=1e-3)
         end

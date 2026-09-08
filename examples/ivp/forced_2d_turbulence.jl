@@ -81,7 +81,7 @@ forcing = StochasticForcing(
 )
 
 # ─── Problem ─────────────────────────────────────────────────
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu, drag=drag)
 
 # Keep every prognostic term on the explicit RHS.  Pure-Fourier GPU fields use

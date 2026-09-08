@@ -2,6 +2,7 @@ using Test
 using Tarang
 using LinearAlgebra
 using SparseArrays
+using Random
 
 const REVIEW_CASE = get(ENV, "TARANG_SOLVER_REVIEW_CASE", "all")
 review_case(name) = REVIEW_CASE == "all" || REVIEW_CASE == name
@@ -23,7 +24,7 @@ if review_case("imex_failure")
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(Domain(dist, (basis,)), "u")
         u["g"] = sin.(range(0.0, 2π; length=9)[1:8])
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) + u = 0")
         solver = InitialValueSolver(problem, timestepper; dt)
 
@@ -55,7 +56,7 @@ if review_case("rhs_parse")
         dist = Distributor(coords; dtype=Float64, device=Tarang.CPU())
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(Domain(dist, (basis,)), "u")
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = invsqrtlap()")
 
         exception = try
@@ -77,7 +78,7 @@ if review_case("rhs_build")
         dist = Distributor(coords; dtype=Float64, device=Tarang.CPU())
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(Domain(dist, (basis,)), "u")
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_parameters!(problem; malformed_rhs=MalformedReviewRHS(NonIterableReviewNode()))
         add_equation!(problem, "0 = malformed_rhs")
 
@@ -129,7 +130,7 @@ if review_case("subproblem_explicit_first")
         tau_lift(a) = lift(a, lift_basis, -1)
         grad_b = grad(b) + ez * tau_lift(tau1)
 
-        problem = IVP([b, tau1, tau2])
+        problem = InitialValueProblem([b, tau1, tau2])
         add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
         add_equation!(problem,
                       "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = 0")
@@ -195,7 +196,7 @@ if review_case("subproblem_explicit_first_batched")
         tau_lift(a) = lift(a, lift_basis, -1)
         grad_b = grad(b) + ez * tau_lift(tau1)
 
-        problem = IVP([b, tau1, tau2])
+        problem = InitialValueProblem([b, tau1, tau2])
         add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
         add_equation!(problem,
                       "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = 0")
@@ -271,7 +272,7 @@ if review_case("problem_reuse_bc")
         dist = Distributor(coords; dtype=Float64, device=Tarang.CPU())
         basis = ChebyshevT(coords["z"]; size=8, bounds=(0.0, 1.0))
         u = ScalarField(Domain(dist, (basis,)), "u")
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = 0")
         add_bc!(problem, "u(z=0) = 1")
 
@@ -294,7 +295,7 @@ if review_case("deterministic_forcing")
         dist = Distributor(coords; dtype=Float64, device=Tarang.CPU())
         basis = RealFourier(coords["x"]; size=n, bounds=(0.0, 2π))
         u = ScalarField(Domain(dist, (basis,)), "u")
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = 0")
         forcing = DeterministicForcing(
             (x, t, parameters) -> (@. parameters[:amplitude] * sin(x) + t),
@@ -323,6 +324,77 @@ if review_case("combined_schedules")
             @test Tarang.should_write(virtual, 0.0, 0.05, 10)
             @test Tarang.should_write(virtual, 0.0, 0.10, 1)
             @test !Tarang.should_write(virtual, 0.0, 0.05, 1)
+        end
+    end
+end
+
+if review_case("deterministic_forcing_stage_times")
+    @testset "deterministic forcing follows RHS evaluation times" begin
+        function time_forced_solver(timestepper, dt; interpreted=false)
+            domain = PeriodicDomain(8)
+            u = ScalarField(domain, "u")
+            u["g"] .= 0
+            problem = InitialValueProblem([u])
+            add_equation!(problem, "∂t(u) = 0")
+            forcing = DeterministicForcing((x, t, p) -> t .* cos.(x), (8,))
+            add_stochastic_forcing!(problem, :u, forcing)
+            solver = InitialValueSolver(problem, timestepper; dt)
+            interpreted && (solver.rhs_plan = nothing)
+            return solver, u
+        end
+
+        x = 2π .* collect(0:7) ./ 8
+        for interpreted in (false, true)
+            @testset "$(interpreted ? "interpreted" : "lazy") RHS" begin
+                # Stage and history evaluations need the requested time even
+                # when it moves backwards or repeats an earlier evaluation.
+                for rhs_function in (Tarang.evaluate_rhs, Tarang.evaluate_rhs_buffered)
+                    solver, _ = time_forced_solver(RK222(), 0.1; interpreted)
+                    for t in (0.4, 0.1, 0.4)
+                        rhs = rhs_function(solver, solver.state, t)
+                        ensure_layout!(rhs[1], :g)
+                        @test get_grid_data(rhs[1]) ≈ t .* cos.(x) atol=1e-12
+                    end
+                end
+
+                # All these second/third-order schemes integrate F(t)=t
+                # exactly. Freezing F at each step's start loses that order.
+                for timestepper in (RK222(), RK443(), ETD_RK222()), dt in (0.1, 0.05)
+                    solver, u = time_forced_solver(timestepper, dt; interpreted)
+                    for _ in 1:round(Int, 1 / dt)
+                        step!(solver)
+                    end
+                    ensure_layout!(u, :g)
+                    @test get_grid_data(u) ≈ 0.5 .* cos.(x) atol=1e-12
+                end
+            end
+        end
+    end
+
+    @testset "stochastic forcing keeps one realization per RK timestep" begin
+        dt = 0.1
+        domain = PeriodicDomain(8)
+        u = ScalarField(domain, "u")
+        u["g"] .= 0
+        problem = InitialValueProblem([u])
+        add_equation!(problem, "∂t(u) = 0")
+        forcing = StochasticForcing(
+            field_size=(8,), forcing_rate=0.1, k_forcing=2.0,
+            dk_forcing=1.0, dt=dt, rng=MersenneTwister(291))
+        add_stochastic_forcing!(problem, :u, forcing)
+        solver = InitialValueSolver(problem, RK443(); dt)
+        # Registration synchronizes/reseeds the RNG on the field communicator.
+        reference = deepcopy(forcing)
+        expected = zero(get_coeff_data(u))
+        for t in (0.0, dt)
+            generate_forcing!(reference, t)
+            expected .+= dt .* Tarang._matched_forcing_view(reference, expected)
+            step!(solver)
+            ensure_layout!(u, :c)
+            @test get_coeff_data(u) ≈ expected atol=1e-12
+            @test forcing.cached_forcing == reference.cached_forcing
+            @test forcing.rng == reference.rng
+            @test forcing.last_update_time == t
         end
     end
 end

@@ -250,7 +250,7 @@ function validate_tau_fields!(manager::BoundaryConditionManager)
         tau_u1 = ScalarField(dist, "tau_u1", (horizontal_basis,))
 
         # 2. Add tau to problem variables
-        problem = IVP([u, tau_u1])
+        problem = InitialValueProblem([u, tau_u1])
 
         # 3. Add equation with lift(tau) term
         add_equation!(problem, "dt(u) - lap(u) + lift(tau_u1, zbasis, -1) = 0")

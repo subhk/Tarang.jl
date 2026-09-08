@@ -10,7 +10,7 @@ function diagnose(solver::InitialValueSolver)
     arch = dist.architecture
 
     ts_name = nameof(typeof(solver.timestepper))
-    println("Simulation of $(length(problem.equations))-equation IVP")
+    println("Simulation of $(length(problem.equations))-equation InitialValueProblem")
     println("├── timestepper: $ts_name")
     println("├── Δt: $(solver.dt)")
     println("├── sim_time: $(round(solver.sim_time; digits=6))")

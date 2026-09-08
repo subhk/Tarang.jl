@@ -60,7 +60,7 @@ const nprocs = MPI.Comm_size(comm)
             data .= ref
         end
 
-        problem = IVP([u]); add_equation!(problem, "∂t(u) = 0")
+        problem = InitialValueProblem([u]); add_equation!(problem, "∂t(u) = 0")
         solver = InitialValueSolver(problem, RK222(); dt=0.01)
         vfh = VirtualFileHandler(outdir, "vcplx"; comm=comm, cadence=1)
         Tarang.add_task!(vfh, u, "u")

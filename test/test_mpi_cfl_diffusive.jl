@@ -31,7 +31,7 @@ const rank = MPI.Comm_rank(comm)
         fill!(get_grid_data(c), 1e-8)   # negligible advective limit
     end
 
-    problem = IVP([u]; namespace=Dict("u" => u))
+    problem = InitialValueProblem([u]; namespace=Dict("u" => u))
     Tarang.add_equation!(problem, "∂t(u) = 0")
     solver = InitialValueSolver(problem, RK111(); device="cpu")
 
@@ -48,8 +48,10 @@ const rank = MPI.Comm_rank(comm)
 
     dt = Tarang.compute_timestep(cfl)
 
-    inv_dx2 = sum(inv(dx^2) for dx in Tarang.grid_spacing(u.domain))
-    expected_global = safety / (2 * nu_hi * inv_dx2)
+    # Both global axes contain modes up to |k| = 16π, even when this rank's
+    # coefficient slab does not contain the highest mode.
+    spectral_radius = 2 * (16π)^2
+    expected_global = 2 * safety / (nu_hi * spectral_radius)
 
     # dt comes from the GLOBAL max diffusivity.
     @test isapprox(dt, expected_global; rtol=1e-10)
@@ -61,7 +63,7 @@ const rank = MPI.Comm_rank(comm)
     # And on a rank that does NOT hold the max, the local-only answer would have
     # been measurably different — proving the reduction actually did something.
     if nprocs > 1 && rank != nprocs - 1
-        @test !isapprox(dt, safety / (2 * nu_lo * inv_dx2); rtol=1e-6)
+        @test !isapprox(dt, 2 * safety / (nu_lo * spectral_radius); rtol=1e-6)
     end
 end
 

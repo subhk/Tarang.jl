@@ -214,7 +214,7 @@ end
 
 # Note: When using file-handler output, the GPU→CPU transfer happens
 # automatically. You don't need to manually call get_cpu_data().
-# Example (inside an IVP, the handler auto-registers on the solver and is
+# Example (inside an InitialValueProblem, the handler auto-registers on the solver and is
 # written by run! at its own cadence — no manual process!):
 #   handler = add_file_handler("output", solver; sim_dt=0.1)
 #   add_task!(handler, u; name="velocity")

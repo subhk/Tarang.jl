@@ -14,7 +14,7 @@ end
     coords, dist, basis = simple_1d_setup()
     u_lbvp = ScalarField(dist, "u", (basis,), Float64)
 
-    lbvp = Tarang.LBVP([u_lbvp])
+    lbvp = Tarang.LinearBoundaryValueProblem([u_lbvp])
     # PDE equation
     Tarang.add_equation!(lbvp, "Δ(u) = 0")
     # Boundary conditions (Dedalus-style - auto-detected by add_equation!)
@@ -27,13 +27,13 @@ end
     @test length(lbvp.equations) >= 5
 
     u_nlbvp = ScalarField(dist, "u_nl", (basis,), Float64)
-    nlbvp = Tarang.NLBVP([u_nlbvp])
+    nlbvp = Tarang.NonlinearBoundaryValueProblem([u_nlbvp])
     Tarang.add_equation!(nlbvp, "u_nl = 1 - u_nl")  # Use correct variable name
     Tarang.add_equation!(nlbvp, "u_nl(z=0) = 0")    # Dirichlet BC
     @test Tarang.validate_problem(nlbvp)
 
     u_evp = ScalarField(dist, "u_evp", (basis,), Float64)
-    evp = Tarang.EVP([u_evp]; eigenvalue=:sigma)
+    evp = Tarang.EigenvalueProblem([u_evp]; eigenvalue=:sigma)
     Tarang.add_equation!(evp, "sigma*u_evp = Δ(u_evp)")
     @test Tarang.validate_problem(evp)
 end
@@ -323,7 +323,7 @@ end
         u = VectorField(domain, "u")
         tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
 
-        problem = IVP([ζ, ψ, u, tau_ψ])
+        problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
         add_parameters!(problem, nu=1e-6, drag=1e-3)
         add_equation!(problem, "∂t(ζ) + drag*ζ + nu*Δ⁴(ζ) = -u⋅∇(ζ)")
         add_equation!(problem, "Δ(ψ) + tau_ψ - ζ = 0")
@@ -381,7 +381,7 @@ end
         u = ntuple(i -> ScalarField(domain, "u$i"), 3)
         tau = ntuple(i -> ScalarField(dist, "tau_A$i", (), Float64), 3)
 
-        problem = IVP([w..., A..., u..., tau...])
+        problem = InitialValueProblem([w..., A..., u..., tau...])
         add_parameters!(problem; nu=0.01)
         for i in 1:3
             add_equation!(problem, "∂t(w$i) - nu*Δ(w$i) = 0")

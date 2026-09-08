@@ -14,7 +14,7 @@ using Tarang
     @test Tarang.Fields.VectorField === Tarang.VectorField
     @test Tarang.Fields.PeriodicDomain === Tarang.PeriodicDomain
 
-    @test Tarang.Problems.IVP === Tarang.IVP
+    @test Tarang.Problems.InitialValueProblem === Tarang.InitialValueProblem
     @test Tarang.Problems.add_equation! === Tarang.add_equation!
     @test Tarang.Problems.add_bc! === Tarang.add_bc!
 

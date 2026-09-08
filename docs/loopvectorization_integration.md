@@ -225,7 +225,7 @@ grad_p = grad(p)
 advection = nonlinear_momentum(u)
 
 # 4. Time-stepping (uses optimized RK stages)  
-problem = IVP([u, p])
+problem = InitialValueProblem([u, p])
 solver = InitialValueSolver(problem, RK443())
 step!(solver, 0.01)  # All stages benefit from optimization
 ```

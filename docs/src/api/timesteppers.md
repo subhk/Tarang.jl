@@ -34,10 +34,13 @@ RK111()
 
 **Properties**:
 - Order: 1
-- Stages: 1 (all implicit)
+- Stages: 2 rows (explicit first stage), one implicit solve per step — the
+  Ascher–Ruuth–Spiteri (1,1,1) / Dedalus `RK111` form
 - Implicit part: Backward Euler for linear terms
-- Explicit part: Forward Euler for nonlinear terms
-- Workspace field sets: 3 (stage state, explicit RHS, implicit RHS)
+- Explicit part: Forward Euler for nonlinear terms, evaluated at the OLD time
+  inside the implicit solve, so both tableaux are stiffly accurate and
+  boundary conditions hold exactly after the step
+- Workspace field sets: 3 (stage state, one RHS per stage)
 
 ### RK222
 
@@ -55,13 +58,15 @@ RK222()
   share the abscissae `c = [0, γ, 1]`, which is what makes the IMEX pair 2nd order.)
 - Implicit part: L-stable ESDIRK with `γ = 1 - 1/sqrt(2)` on stages 2 and 3
 - Explicit part: matched three-row explicit tableau
-- Workspace field sets: 6 (stage state, explicit RHS, and implicit RHS storage)
+- Workspace field sets: 4 (one stage state plus one retained RHS per stage)
 
 **Recommended for**: General purpose problems.
 
 ### RK443
 
-3rd-order, 4-stage IMEX Runge-Kutta (Kennedy & Carpenter ARK3(2)4L[2]SA).
+3rd-order, 4-stage IMEX Runge-Kutta: an ARK built on Alexander's (1977) L-stable 3-stage
+SDIRK embedded as ESDIRK (γ ≈ 0.4359, `c = [0, γ, (1+γ)/2, 1]`). Not Kennedy & Carpenter's
+ARK3(2)4L[2]SA (whose `c₂ = 2γ`); the order-3 coupling conditions are satisfied to 1e-11.
 
 ```julia
 RK443()
@@ -72,7 +77,7 @@ RK443()
 - Stages: 4 — ESDIRK, first stage explicit, so 3 implicit solves per step
 - Implicit part: L-stable ESDIRK for linear terms
 - Explicit part: 4-stage explicit RK for nonlinear terms
-- Workspace field sets: 12 (three field sets per stage)
+- Workspace field sets: 5 (one stage state plus one retained RHS per stage)
 
 **Recommended for**: High accuracy requirements.
 
@@ -180,7 +185,7 @@ and `RK443`.
 
 ```julia
 Tarang.RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
-Tarang.RK443_IMEX()  # Same Kennedy-Carpenter coefficients as RK443; the suffix clarifies IMEX intent
+Tarang.RK443_IMEX()  # Same Alexander-SDIRK3-based ARK coefficients as RK443; the suffix clarifies IMEX intent
 ```
 
 ### Diagonal IMEX
@@ -214,7 +219,7 @@ x = local_grid(xb, dist, 1)
 ensure_layout!(u, :g)
 get_grid_data(u) .= cos.(2 .* x)          # a single mode, k = 2
 
-problem = IVP([u])
+problem = InitialValueProblem([u])
 add_equation!(problem, "∂t(u) = 0")       # the linear term lives in L, NOT in the equation
 
 solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.005)
@@ -256,7 +261,7 @@ yb     = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
 domain = Domain(dist, (xb, yb))
 
 u = ScalarField(domain, "u")
-problem = IVP([u])
+problem = InitialValueProblem([u])
 add_parameters!(problem, nu=0.1)
 add_equation!(problem, "∂t(u) - nu*lap(u) = 0")
 set!(u, (x, y) -> sin(x) * cos(y))
@@ -315,7 +320,7 @@ the current velocity field with a `safety` factor. It is constructed from the **
 v = VectorField(domain, "v")
 set!(v.components[1], (x, y) -> 0.5)
 
-prob = IVP([u, v])
+prob = InitialValueProblem([u, v])
 add_parameters!(prob, nu=0.1)
 add_equation!(prob, "∂t(u) - nu*lap(u) = -v⋅∇(u)")
 add_equation!(prob, "∂t(v) - nu*lap(v) = 0")
@@ -348,7 +353,7 @@ are IMEX.
 | Smooth high-order integration | RK443 or SBDF3/SBDF4 | Higher formal order; the multistep members need startup history and are only A(α)-stable |
 | Very stiff, linear-dominated | ETD_RK222 | Exact exponential propagation of L |
 | Classic incompressible DNS IMEX | RKSMR | SMR explicit-third / implicit-second accuracy profile |
-| Diagonal Fourier linear operator / GPU | DiagonalIMEX family | Per-mode implicit division avoids a global sparse solve (needs an attached `SpectralLinearOperator`) |
+| Diagonal Fourier linear operator / GPU | DiagonalIMEX family | Per-mode implicit division avoids a global sparse solve; the operator comes from the equation's `L` (Laplacian, hyper-/fractional Laplacian, damping, derivatives of the field itself) or an attached `SpectralLinearOperator` |
 
 ## Performance
 
@@ -362,7 +367,7 @@ is unchanged.
 
 | Method | Stages | RHS Evaluations | Implicit Solves |
 |--------|--------|-----------------|-----------------|
-| RK111 | 1 | 1 | 1 |
+| RK111 | 2 (1st explicit) | 2 (the second is unused by the weights) | 1 |
 | RK222 | 3 (1st explicit) | 3 | 2 |
 | RK443 | 4 (1st explicit) | 4 | 3 |
 | RKSMR | 4 (1st explicit) | 4 | 3 |
@@ -383,14 +388,16 @@ allocated per state field (each set is one full field):
 
 | Method | Workspace Sets |
 |--------|----------------|
-| RK111 | 3 |
-| RK222 | 6 |
-| RK443 | 12 |
+| RK111 / RK222 / RK443 | stages + 1 = 3 / 4 / 5 (one stage state, one retained RHS per stage) |
 | CNAB1 / CNAB2 | 2 |
 | SBDF1 – SBDF4 | 2 |
 | ETD_RK222 / ETD_CNAB2 / ETD_SBDF2 | 3 |
-| DiagonalIMEX_* | 4 |
-| everything else (RKSMR, MCNAB2, CNLF2, RKGFY, RK443_IMEX) | 2 |
+| DiagonalIMEX_RK222 / DiagonalIMEX_RK443 | 2 × stages = 6 / 8 (one state and one RHS set per stage) |
+| DiagonalIMEX_SBDF2 | 4 |
+| everything else (RKSMR, MCNAB2, CNLF2, RKGFY, RK443_IMEX) | 2, grown on demand by the field path |
+
+These are the counts `_workspace_count` returns per scheme; the multistep and
+distributed paths keep their own recycled history buffers on top of them.
 
 The multistep schemes additionally retain previous state and RHS levels in a history ring
 (2–5 levels, depending on order), which the RK schemes do not.

@@ -90,7 +90,7 @@ they cannot see Julia globals — so `add_parameters!` is what makes the name vi
 ```julia
 hyperdiff(f) = lap(lap(f))        # custom operator: ∇⁴
 
-problem = IVP([T])
+problem = InitialValueProblem([T])
 add_parameters!(problem, nu4=0.01, hyperdiff=hyperdiff)
 add_equation!(problem, "∂t(T) + nu4*hyperdiff(T) = 0")
 
@@ -127,7 +127,7 @@ The equation parser recognizes all built-in operators. Use them directly:
 T2 = ScalarField(domain, "T2")
 u2 = VectorField(domain, "u2")
 
-problem2 = IVP([T2, u2])
+problem2 = InitialValueProblem([T2, u2])
 add_parameters!(problem2, kappa=0.05, nu=0.05)
 add_equation!(problem2, "∂t(T2) - kappa*Δ(T2) = -u2⋅∇(T2)")
 add_equation!(problem2, "∂t(u2) - nu*lap(u2) = -u2⋅∇(u2)")

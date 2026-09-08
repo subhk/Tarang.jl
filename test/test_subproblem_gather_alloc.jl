@@ -1,4 +1,4 @@
-# Guard: per-step allocation of a 3D mixed (Chebyshev × Fourier × Fourier) IVP.
+# Guard: per-step allocation of a 3D mixed (Chebyshev × Fourier × Fourier) InitialValueProblem.
 #
 # The per-mode gather/scatter used to fall off a cliff in 3D:
 #
@@ -40,7 +40,7 @@ using Tarang
     τ_lift(A) = lift(A, lb, -1)
     grad_b = grad(b) + ez * τ_lift(t1)
 
-    pr = IVP([b, t1, t2])
+    pr = InitialValueProblem([b, t1, t2])
     add_parameters!(pr, kappa=0.1, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
     add_equation!(pr, "∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = -b*∂x(b)")
     add_bc!(pr, "b(z=0) = 0")

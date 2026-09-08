@@ -3,8 +3,8 @@
 #
 # The global-matrix multistep solve is
 #     (a[1]·M + b[1]·L)·X_new = Σ_k c[k+1]·F[k] − Σ_k a[k+1]·M·X[k] − Σ_k b[k+1]·L·X[k]
-# When the problem carries no implicit linear operator the mass operator is the
-# identity and L vanishes identically, so every L term drops and the M terms
+# When the problem has identity mass and no implicit linear operator,
+# L vanishes identically, so every L term drops and the M terms
 # become the states themselves:
 #     X_new = (Σ_k c[k+1]·F[k] − Σ_k a[k+1]·X[k]) / a[1]
 # a linear combination of stored states and right-hand sides. No global matrix,
@@ -21,14 +21,23 @@
 #
 # The same reduction is what `_step_explicit_rk_gpu!` does for Runge-Kutta; this
 # is its multistep counterpart, and it shares that path's contract: the mass
-# operator is taken to be the identity (true for the Fourier bases that reach
-# here), and algebraic variables are restored by `_refresh_algebraic_state!`.
+# operator must be the identity, which is validated from the parsed equations
+# before stepping. Fourier bases alone do not establish that contract.
+# Algebraic variables are restored by `_refresh_algebraic_state!`.
 #
 # GATED, never a silent substitution. A problem WITH an implicit linear operator
 # must not come here — dropping L would integrate the equations without their
 # stiff terms. `_explicit_multistep_field_eligible` refuses those, leaving the
 # existing loud refusals (`_check_gpu_implicit_compatibility!`, the distributed
 # fallback throw) to name the working alternative.
+#
+# MCNAB2 and CNLF2 (step_global_matrix.jl) take this path too. With L = 0 the
+# θ-weighting that distinguishes MCNAB2 from CNAB2 weights nothing, so MCNAB2
+# runs as `:cnab2`; CNLF2's leapfrog mass stencil is its own method `:cnlf2`.
+# Both used to reach their global-matrix startup gate first, which reads
+# `length(state.history) < 2` — always true on this path, whose history holds
+# one entry — and so silently stepped as first-order CNAB1 forever on every
+# GPU/MPI explicit problem.
 # ============================================================================
 
 """Deepest state/RHS history a method's own coefficient formula reads."""
@@ -36,6 +45,7 @@ function _explicit_multistep_depth(method::Symbol)
     method === :cnab1 && return 1
     method === :sbdf1 && return 1
     method === :cnab2 && return 2
+    method === :cnlf2 && return 2
     method === :sbdf2 && return 2
     method === :sbdf3 && return 3
     method === :sbdf4 && return 4
@@ -81,9 +91,10 @@ function _explicit_multistep_history!(state::TimestepperState, key::Symbol,
     return fresh
 end
 
-"""Push `value` onto the front of `hist`, recycling the dropped tail buffer."""
-function _explicit_multistep_prepend!(hist::Vector{V}, template::V, value::V,
-                                      depth::Int) where {V<:Vector{<:ScalarField}}
+"""Copy `value` into a recycled history buffer. The interpreted RHS may have a
+wider vector element type than the state; history retains the template's type."""
+function _explicit_multistep_prepend!(hist::Vector{V}, template::V,
+                                      value::Vector{<:ScalarField}, depth::Int) where {V<:Vector{<:ScalarField}}
     buffer = length(hist) >= depth ? pop!(hist) : copy_state(template)
     _copy_field_state!(buffer, value)
     pushfirst!(hist, buffer)
@@ -110,7 +121,8 @@ is false, so every branch returns a concrete tuple pair.
 function _explicit_multistep_coefficients(state::TimestepperState, method::Symbol,
                                           depth::Int)
     dt = state.dt
-    if method === :cnab1 || (method === :cnab2 && depth < 2)
+    if method === :cnab1 || ((method === :cnab2 || method === :cnlf2) && depth < 2)
+        # CNLF2's global-matrix startup is CNAB1 as well (step_cnlf2!).
         a, _, c = _cnab1_coefs(dt)
         return a, c
     elseif method === :sbdf1 || (method === :sbdf2 && depth < 2)
@@ -118,6 +130,9 @@ function _explicit_multistep_coefficients(state::TimestepperState, method::Symbo
         return a, c
     elseif method === :cnab2
         a, _, c = _cnab2_coefs(dt, get_previous_timestep(state))
+        return a, c
+    elseif method === :cnlf2
+        a, _, c = _cnlf2_coefs(dt, get_previous_timestep(state))
         return a, c
     elseif method === :sbdf2
         a, _, c = _sbdf2_coefs(dt, get_previous_timestep(state))
@@ -178,6 +193,7 @@ drive this directly on CPU, where the global-matrix path is the reference.
 function _step_explicit_multistep_field!(state::TimestepperState,
                                          solver::InitialValueSolver,
                                          method::Symbol)
+    _check_identity_mass_operator!(state, solver)
     current_state = state.history[end]
     depth = _explicit_multistep_depth(method)
 

@@ -60,175 +60,107 @@ end
     return z
 end
 
-"""Compute matrix φ functions for exponential integrators"""
+"""Compute matrix φ functions for exponential integrators.
+
+The full matrix functions use inverse-free scaling and squaring. In particular,
+zero eigenvalues and Jordan blocks require no special eigendecomposition: every
+φ function is entire, even when the operator is singular or not diagonalizable.
+"""
 function phi_functions_matrix(A::AbstractMatrix, dt::Float64)
-
     n = size(A, 1)
+    n == size(A, 2) || throw(DimensionMismatch("ETD matrix operator must be square"))
 
-    # For large matrices, dense exp() is infeasible (O(n³) and O(n²) memory).
-    # Fall back to Krylov methods or error out with a clear message.
+    # Full matrix functions retain dense O(n²) storage and cost O(n³).
+    # Check the original dimension before allocating any dense work buffers.
     if n > 4096
         throw(ArgumentError(
             "ETD matrix exponential requires dense O(n²) storage but n=$n is too large. " *
             "Use RK222/SBDF2 for this problem size, or reduce resolution."))
     end
-
-    # Julia's matrix exponential requires dense storage. Copy once and scale in
-    # place; `dt * Matrix(Matrix(A))` previously created two extra n×n
-    # temporaries for dense input (one extra for sparse input).
-    z = _scaled_dense_operator(A, dt)
-
-    # Check matrix norm for stability
-    z_norm = norm(z)
-    I_mat = _get_identity_matrix(n, eltype(z))
-
-    if z_norm < 1e-8
-        # Use Taylor expansions for small matrices (numerically stable)
-        # Pre-compute powers to reuse: z², z³, z⁴
-        z2 = z * z
-        z3 = z2 * z
-        z4 = z3 * z
-
-        # Taylor series: φ₀(z) = I + z + z²/2 + z³/6 + z⁴/24
-        exp_z = I_mat + z + z2/2 + z3/6 + z4/24
-
-        # Taylor series: φ₁(z) = I + z/2 + z²/6 + z³/24 + z⁴/120
-        φ₁ = I_mat + z/2 + z2/6 + z3/24 + z4/120
-
-        # Taylor series: φ₂(z) = I/2 + z/6 + z²/24 + z³/120 + z⁴/720
-        φ₂ = I_mat/2 + z/6 + z2/24 + z3/120 + z4/720
-
-        return exp_z, φ₁, φ₂
-
-    elseif z_norm < 50.0
-        # Use matrix exponential for moderate matrices
-        try
-            exp_z = exp(z)
-
-            # Use stable computation
-            φ₁ = _compute_phi1_stable(z, exp_z, I_mat)
-            φ₂ = _compute_phi2_stable(z, exp_z, I_mat, φ₁)
-
-            return exp_z, φ₁, φ₂
-
-        catch e
-            # z is singular when the linear operator has a zero eigenvalue (e.g.
-            # the k=0 mode of a pure diffusion operator). The inversion-based φ
-            # computation fails there; fall back to the eigen-based evaluation,
-            # which handles the removable singularity at λ=0.
-            if e isa LinearAlgebra.SingularException
-                return _phi_via_eigen(z, I_mat)
-            end
-            @warn "Matrix exponential failed: $e, using Padé approximation"
-            return _phi_functions_pade(z)
-        end
-    else
-        # Use Krylov subspace methods for large/stiff matrices
-        @warn "Matrix is large or stiff (norm=$z_norm), using Krylov approximation"
-        return _phi_functions_krylov(z)
-    end
-end
-
-"""Stable computation of φ₁"""
-function _compute_phi1_stable(z, exp_z, I)
-    z_norm = norm(z)
-    if z_norm < 1e-2
-        # Use series expansion for better accuracy (reuse z powers)
-        z2 = z * z
-        return I + z/2 + z2/6 + z2*z/24 + z2*z2/120
-    else
-        # Use left-division z \ (exp_z - I) for robustness with near-singular z,
-        # rather than right-division (exp_z - I) / z which assumes z is invertible.
-        return z \ (exp_z - I)
-    end
+    return _phi_functions_scaling_squaring(_scaled_dense_operator(A, dt))
 end
 
 """
-    Stable computation of φ₂(z) = (exp(z) - 1 - z) / z² = (φ₁(z) - I) / z
+    _phi_functions_scaling_squaring(z) -> (exp_z, φ₁, φ₂)
 
-    Reference: Cox & Matthews (2002), Hochbruck & Ostermann (2010)
-    """
-function _compute_phi2_stable(z, exp_z, I, φ₁)
-    z_norm = norm(z)
-    if z_norm < 1e-2
-        # Use series expansion for better accuracy near z=0 (reuse z powers)
-        z2 = z * z
-        return I/2 + z/6 + z2/24 + z2*z/120 + z2*z2/720
-    else
-        # Use left-division for robustness with near-singular z
-        return z \ (φ₁ - I)
-    end
-end
+Evaluate the convergent Taylor series for φ₂ on `B = z/2^s`, with
+`opnorm(B, Inf) <= 1/2`. Recover φ₁(B) = I + B*φ₂(B) and exp(B) = I + B*φ₁(B),
+then undo the scaling using the exact doubling identities
 
+    φ₂(2B) = (exp(B)*φ₂(B) + φ₂(B) + φ₁(B))/4
+    φ₁(2B) = (exp(B)*φ₁(B) + φ₁(B))/2
+    exp(2B) = exp(B)*exp(B).
+
+These are polynomial/entire-function identities and remain valid for singular,
+non-diagonalizable matrices. No division by z or eigenvector inverse is used.
+The work buffers remain n×n, avoiding the ninefold storage increase of a 3n×3n
+block exponential and the columnwise matrix exponentials used by dense `phi`.
 """
-    _phi_via_eigen(z, I) -> (exp_z, φ₁, φ₂)
-
-Compute φ functions via eigendecomposition, evaluating each scalar φ on the
-eigenvalues with the removable singularity handled at λ=0 (φ₁(0)=1, φ₂(0)=1/2).
-This works when `z` has a zero eigenvalue (e.g. the k=0 Fourier mode of a pure
-diffusion operator), where the inversion-based `z \\ (exp(z)-I)` is singular.
-"""
-function _phi_via_eigen(z::AbstractMatrix, I_mat)
-    F = eigen(Matrix(z))
-    λ = F.values
-    V = F.vectors
-    φ0 = exp.(λ)
-    φ1 = similar(λ)
-    φ2 = similar(λ)
-    @inbounds for i in eachindex(λ)
-        l = λ[i]
-        if abs(l) < 1e-2
-            # 1e-2 cutoff + extended series: the direct formulas cancel
-            # catastrophically for small |l| (see phi_functions above).
-            φ1[i] = one(eltype(λ)) + l/2 + l^2/6 + l^3/24 + l^4/120
-            φ2[i] = one(eltype(λ))/2 + l/6 + l^2/24 + l^3/120 + l^4/720
-        else
-            φ1[i] = (exp(l) - 1) / l
-            φ2[i] = (exp(l) - 1 - l) / l^2
-        end
-    end
-    exp_z = V * Diagonal(φ0) / V
-    φ₁ = V * Diagonal(φ1) / V
-    φ₂ = V * Diagonal(φ2) / V
-    return exp_z, φ₁, φ₂
-end
-
-"""Padé approximation fallback for φ functions.
-    Uses scaling-and-squaring with Padé [3/3] for better accuracy than [1/1].
-    """
-function _phi_functions_pade(z)
+function _phi_functions_scaling_squaring(z::AbstractMatrix)
     n = size(z, 1)
-    I_mat = _get_identity_matrix(n, eltype(z))
+    n == size(z, 2) || throw(DimensionMismatch("ETD matrix operator must be square"))
+    z_norm = opnorm(z, Inf)
+    isfinite(z_norm) || throw(ArgumentError("ETD matrix operator must have finite norm"))
+    s = z_norm <= 0.5 ? 0 : max(0, ceil(Int, log2(z_norm)) + 1)
+    real_type = typeof(real(one(eltype(z))))
+    # Form the small scale directly: computing 2^s can overflow for finite z.
+    scaled = z .* (real_type(2)^(-s))
+    identity = _get_identity_matrix(n, eltype(z))
 
-    # Scaling: reduce norm by dividing by 2^s
-    z_norm = norm(z)
-    s = max(0, ceil(Int, log2(z_norm / 1.0)))
-    z_scaled = z / 2^s
+    φ₂ = Matrix(identity / 2)
+    term = copy(φ₂)
+    next_term = similar(φ₂)
+    tolerance = eps(real(one(eltype(z))))
+    converged = false
+    for k in 1:256
+        mul!(next_term, scaled, term)
+        rmul!(next_term, inv(real_type(k + 2)))
+        φ₂ .+= next_term
+        term, next_term = next_term, term
+        if opnorm(term, Inf) <= tolerance * opnorm(φ₂, Inf)
+            converged = true
+            break
+        end
+    end
+    converged || error("ETD matrix φ₂ Taylor series did not converge after scaling")
 
-    # Padé [3/3] approximation for exp(z_scaled)
-    # R_{3,3}(z) = N(z)/D(z) where:
-    # N(z) = I + z/2 + z²/10 + z³/120
-    # D(z) = I - z/2 + z²/10 - z³/120
-    z2 = z_scaled^2
-    z3 = z2 * z_scaled
-    N_pade = I_mat + z_scaled/2 + z2/10 + z3/120
-    D_pade = I_mat - z_scaled/2 + z2/10 - z3/120
-    exp_scaled = D_pade \ N_pade
-
-    # Squaring: exp(z) = exp(z_scaled)^(2^s)
-    exp_z = exp_scaled
-    for _ in 1:s
-        exp_z = exp_z * exp_z
+    # Reuse the Taylor term buffers for the other two retained functions.
+    φ₁ = next_term
+    mul!(φ₁, scaled, φ₂)
+    exp_z = term
+    for i in 1:n
+        φ₁[i, i] += one(eltype(z))
+    end
+    mul!(exp_z, scaled, φ₁)
+    for i in 1:n
+        exp_z[i, i] += one(eltype(z))
     end
 
-    # Compute φ functions from exp_z using left-division (z \ ...) for numerical stability.
-    # Right-division (/ z) inverts z which is ill-conditioned for large matrices.
-    exp_z_minus_I = exp_z - I_mat
-    φ₁ = z \ exp_z_minus_I
-    φ₂ = z \ (φ₁ - I_mat)
-
+    if s > 0
+        workspace = similar(exp_z)
+        for _ in 1:s
+            # φ₂ must be updated before φ₁, and both before exp, so each
+            # identity reads the three functions at the same scale.
+            mul!(workspace, exp_z, φ₂)
+            @. workspace = (workspace + φ₂ + φ₁) / 4
+            φ₂, workspace = workspace, φ₂
+            mul!(workspace, exp_z, φ₁)
+            @. workspace = (workspace + φ₁) / 2
+            φ₁, workspace = workspace, φ₁
+            mul!(workspace, exp_z, exp_z)
+            exp_z, workspace = workspace, exp_z
+        end
+    end
     return exp_z, φ₁, φ₂
 end
+
+# Retain the existing internal entry points for callers/tests, but use the
+# inverse-free evaluator throughout. The former eigen fallback discarded Jordan
+# couplings; the division-based phi and Padé helpers failed on singular z.
+_compute_phi1_stable(z, exp_z, identity) = _phi_functions_scaling_squaring(z)[2]
+_compute_phi2_stable(z, exp_z, identity, φ₁) = _phi_functions_scaling_squaring(z)[3]
+_phi_via_eigen(z::AbstractMatrix, identity) = _phi_functions_scaling_squaring(z)
+_phi_functions_pade(z) = _phi_functions_scaling_squaring(z)
 
 """
     Krylov subspace approximation for φ functions using ExponentialUtilities.jl.
@@ -271,13 +203,9 @@ function _phi_functions_krylov(A::AbstractMatrix, krylov_dim::Int=30)
 
     catch e
         @warn "Krylov φ computation failed: $e, falling back to direct method"
-        # Fallback to direct computation
+        # The direct fallback must also handle singular/Jordan operators.
         try
-            I_n = Matrix{T}(LinearAlgebra.I, n, n)
-            exp_A = exp(A)
-            φ₁ = (exp_A - I_n) * inv(A)
-            φ₂ = (exp_A - I_n - A) * inv(A^2)
-            return exp_A, φ₁, φ₂
+            return _phi_functions_scaling_squaring(A)
         catch e2
             error("All φ function computation methods failed for matrix of size $(size(A)) " *
                   "with norm $(norm(A)). Krylov error: $e, direct error: $e2. " *

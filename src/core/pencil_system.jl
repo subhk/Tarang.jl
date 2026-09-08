@@ -133,7 +133,7 @@ spectral bases of the domain.
 
 # Arguments
 - `problem`       : Any `Problem` subtype whose `.variables` field is a
-                    `Vector{Operand}` (IVP, LBVP, etc.).
+                    `Vector{Operand}` (InitialValueProblem, LinearBoundaryValueProblem, etc.).
 - `fourier_basis` : A `FourierBasis` (`RealFourier` or `ComplexFourier`).
 - `cheb_basis`    : A `JacobiBasis` (typically `ChebyshevT`).
 

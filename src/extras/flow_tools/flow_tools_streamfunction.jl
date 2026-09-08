@@ -5,7 +5,7 @@
     Calculate streamfunction for 2D incompressible flow.
 
     Solves the Poisson equation ∇²ψ = ω to obtain streamfunction from vorticity.
-    Based on Tarang LBVP patterns for Poisson equation solving.
+    Based on Tarang LinearBoundaryValueProblem patterns for Poisson equation solving.
 
     For incompressible 2D flow (matching perp_grad): u = -∂ψ/∂y, v = ∂ψ/∂x
     Vorticity: ω = ∂v/∂x - ∂u/∂y = ∇²ψ
@@ -523,7 +523,7 @@ where:
 
 # Returns
 Named tuple with:
-- `problem`: IVP problem object
+- `problem`: InitialValueProblem problem object
 - `θ`: Buoyancy field
 - `u`: Velocity field (computed from θ)
 - `ψ`: Streamfunction field (computed from θ)
@@ -550,8 +550,8 @@ function sqg_problem_setup(dist::Distributor, bases::Tuple; κ::Real=0.0, α::Re
     # Create fields
     θ = ScalarField(dist, "θ", bases, Float64)  # Buoyancy
 
-    # Create IVP
-    problem = IVP([θ])
+    # Create InitialValueProblem
+    problem = InitialValueProblem([θ])
 
     # Add parameters
     problem.parameters["κ"] = Float64(κ)

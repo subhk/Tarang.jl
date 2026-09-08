@@ -45,7 +45,7 @@ import Tarang: check_condition, valid_modes, _eval_condition_str
         @test _eval_condition_str("nz == 0", gd) == true         # key missing → true
     end
 
-    # Build a real per-mode subproblem (2D Fourier×Chebyshev LBVP) to exercise
+    # Build a real per-mode subproblem (2D Fourier×Chebyshev LinearBoundaryValueProblem) to exercise
     # check_condition / valid_modes against an actual group dictionary.
     function spm_subproblem()
         coords = CartesianCoordinates("x", "z")
@@ -57,7 +57,7 @@ import Tarang: check_condition, valid_modes, _eval_condition_str
         tau1 = ScalarField(dist, "tau1", (xb,), Float64)
         tau2 = ScalarField(dist, "tau2", (xb,), Float64)
         lb2  = derivative_basis(zb, 2)
-        prob = Tarang.LBVP([u, tau1, tau2])
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=1.0, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
         Tarang.add_bc!(prob, "u(z=0) = 0")

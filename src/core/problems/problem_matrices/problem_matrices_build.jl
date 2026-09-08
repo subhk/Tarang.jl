@@ -148,8 +148,72 @@ function build_matrix_expressions!(problem::Problem)
                 "(`$equation_str`): " * sprint(showerror, e),
             ))
         end
+        _check_duplicate_tau_lifts(problem.equation_data[end], equation_str)
     end
 end
+
+# Collect the `Lift` terms that enter an expression ADDITIVELY at top level —
+# through +, −, negation and scalar multiplication only. A lift nested inside a
+# derivative operator (`div(grad(b) + ez*lift(tau1, b, -1))`) lands on different
+# rows than a top-level `lift(tau2, b, -1)` and is the canonical well-posed
+# channel formulation, so the walk deliberately stops at any other operator.
+function _collect_top_level_lifts!(acc::Vector{Any}, expr)
+    if expr isa Lift
+        push!(acc, expr)
+    elseif expr isa AddOperator || expr isa SubtractOperator
+        _collect_top_level_lifts!(acc, expr.left)
+        _collect_top_level_lifts!(acc, expr.right)
+    elseif expr isa NegateOperator
+        _collect_top_level_lifts!(acc, expr.operand)
+    elseif expr isa MultiplyOperator
+        # scalar · lift keeps the lift at top level; field · lift does not.
+        if expr.left isa Number || expr.left isa ConstantOperator
+            _collect_top_level_lifts!(acc, expr.right)
+        elseif expr.right isa Number || expr.right isa ConstantOperator
+            _collect_top_level_lifts!(acc, expr.left)
+        end
+    end
+    return acc
+end
+
+"""
+    _check_duplicate_tau_lifts(eq_data, equation_str)
+
+Refuse an equation that lifts two DIFFERENT tau variables onto the same mode of
+the same basis at top level, e.g. `lift(tau1, b, -1) + lift(tau2, b, -1)`.
+
+Those two columns of the per-mode matrix are identical, so every stage system is
+singular. The stepper's sparse-QR least-squares fallback would then "solve" it,
+and with a moving boundary condition that recurrence is exponentially unstable
+(2026-09-05 audit: max|u| 1 → 5e8 within 300 steps while the boundary values
+stayed exact, so a short boundary check could not see it). One tau per mode —
+`-1` and `-2` — is the well-posed form. Checked here, at parse time, because at
+factorization time it is indistinguishable from the legitimately singular
+pressure-gauge mode of an incompressible problem.
+"""
+function _check_duplicate_tau_lifts(eq_data, equation_str::AbstractString)
+    lifts = Any[]
+    for slot in ("L", "M")
+        expr = get(eq_data, slot, nothing)
+        expr === nothing && continue
+        _collect_top_level_lifts!(lifts, expr)
+    end
+    length(lifts) < 2 && return nothing
+    for i in eachindex(lifts), j in (i + 1):lastindex(lifts)
+        a, b = lifts[i], lifts[j]
+        (a.basis === b.basis && a.n == b.n && a.operand !== b.operand) || continue
+        throw(ArgumentError(
+            "Equation `$equation_str` lifts two different tau variables onto the SAME mode " *
+            "($(a.n)) of the same basis: `lift($(_lift_operand_name(a)), ..., $(a.n))` and " *
+            "`lift($(_lift_operand_name(b)), ..., $(b.n))`. Those matrix columns are identical, " *
+            "so every per-mode stage system is singular; the least-squares treatment that would " *
+            "result is exponentially unstable under a moving boundary condition. Give each tau " *
+            "its own mode, e.g. `lift(tau1, basis, -1) + lift(tau2, basis, -2)`."))
+    end
+    return nothing
+end
+
+_lift_operand_name(l::Lift) = hasproperty(l.operand, :name) ? String(l.operand.name) : repr(l.operand)
 
 """
     Build matrix expressions from LHS and RHS operators.
@@ -159,7 +223,7 @@ function build_equation_expressions(lhs, rhs, variables::Vector)
     eq_data = Dict{String, Any}()
     
     # Split LHS into mass matrix (time derivatives) and stiffness matrix (spatial) terms
-    # Following IVP pattern: M.dt(X) + L.X = F (problems:328)
+    # Following InitialValueProblem pattern: M.dt(X) + L.X = F (problems:328)
     M_terms, L_terms = split_time_spatial_operators(lhs)
     
     # Store matrix expressions

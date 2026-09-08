@@ -91,7 +91,7 @@ grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
 # ─── Problem ─────────────────────────────────────────────────
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 
 add_parameters!(problem,
     nu=nu, buoy=buoy, ez=ez,

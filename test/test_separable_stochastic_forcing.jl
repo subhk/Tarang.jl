@@ -98,7 +98,7 @@ using Tarang
         tau_lift(A) = lift(A, lift_basis, -1)
         grad_b = grad(b) + ez * tau_lift(tau1)
 
-        problem = IVP([b, tau1, tau2])
+        problem = InitialValueProblem([b, tau1, tau2])
         add_parameters!(problem; grad_b, tau_lift)
         add_equation!(problem, "∂t(b) - div(grad_b) + tau_lift(tau2) = 0")
         add_bc!(problem, "b(z=0) = 0")
@@ -148,7 +148,7 @@ using Tarang
     end
 
 
-    @testset "registered 3D Fourier--Fourier--Chebyshev IVP" begin
+    @testset "registered 3D Fourier--Fourier--Chebyshev InitialValueProblem" begin
         nx, ny, nz = 8, 8, 10
         dt = 1e-3
         coords3 = CartesianCoordinates("x", "y", "z")
@@ -166,7 +166,7 @@ using Tarang
         tau_lift3(A) = lift(A, lift_basis, -1)
         grad_b3 = grad(b) + ez * tau_lift3(tau1)
 
-        problem = IVP([b, tau1, tau2])
+        problem = InitialValueProblem([b, tau1, tau2])
         add_parameters!(problem; kappa=0.1, grad_b3, tau_lift3)
         add_equation!(problem,
                       "∂t(b3) - kappa*div(grad_b3) + tau_lift3(tau32) = 0")

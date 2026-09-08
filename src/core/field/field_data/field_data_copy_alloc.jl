@@ -111,6 +111,20 @@ end
 _empty_grid(::Type{T}) where {T} = Array{T,1}(undef, 0)
 _empty_coeff(::Type{T}) where {T} = Array{coefficient_eltype(T),1}(undef, 0)
 
+# Empty-basis fields still have architecture-fixed storage. Their placeholders
+# must accept the same backend as later scalar/unit-vector/tau allocations.
+_empty_grid(::Type{T}, arch::AbstractArchitecture) where {T} = zeros(arch, T, 0)
+_empty_coeff(::Type{T}, arch::AbstractArchitecture) where {T} =
+    zeros(arch, coefficient_eltype(T), 0)
+
+# Matrix assembly runs on the host, including scalar coefficients such as unit
+# vector components. Copy just that value from a device field, rather than
+# scalar-indexing device memory or downloading a whole field.
+function _constant_field_value_on_host(data::AbstractArray)
+    is_gpu_array(data) || return first(data)
+    return first(Array(view(vec(data), 1:1)))
+end
+
 """
     field_architecture(field::ScalarField)
 

@@ -60,7 +60,7 @@ lift_basis = derivative_basis(zbasis, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_u     = grad(u) + ez * τ_lift(tau_u1)      # first-order reduction
 
-problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+problem = InitialValueProblem([p, u, tau_p, tau_u1, tau_u2])
 add_parameters!(problem, nu=nu, fx=fx, ex=ex, grad_u=grad_u, τ_lift=τ_lift)
 
 add_equation!(problem, "trace(grad_u) + tau_p = 0")
@@ -121,7 +121,7 @@ domain = Domain(dist, (xbasis, zbasis))
 u     = VectorField(domain, "u")        # velocity, divergence-free by construction
 tau_ψ = ScalarField(dist, "tau_psi", (), Float64)
 
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu)
 add_equation!(problem, "∂t(zeta) - nu*Δ(zeta) = -u⋅∇(zeta)")   # vorticity transport
 add_equation!(problem, "Δ(psi) + tau_psi - zeta = 0")          # Δψ = ζ
@@ -202,7 +202,7 @@ grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 grad_S = grad(S) + ez * τ_lift(tau_S1)
 
-problem = IVP([p, T, S, u, tau_p, tau_T1, tau_T2, tau_S1, tau_S2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, S, u, tau_p, tau_T1, tau_T2, tau_S1, tau_S2, tau_u1, tau_u2])
 add_parameters!(problem, Pr=Pr, taud=tau_d, buoyT=Ra_T*Pr, buoyS=Ra_S*Pr, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, grad_S=grad_S, τ_lift=τ_lift)
 
@@ -287,7 +287,7 @@ grad_T = grad(T) + ez * τ_lift(tau_T1)
 grad_v = grad(v) + ez * τ_lift(tau_v1)
 ux     = u.components[1]
 
-problem = IVP([p, T, v, u, tau_p, tau_T1, tau_T2, tau_v1, tau_v2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, v, u, tau_p, tau_T1, tau_T2, tau_v1, tau_v2, tau_u1, tau_u2])
 add_parameters!(problem, Pr=Pr, buoy=Ra*Pr, fcor=fcor, ex=ex, ez=ez, ux=ux,
                 grad_u=grad_u, grad_T=grad_T, grad_v=grad_v, τ_lift=τ_lift)
 
@@ -356,7 +356,7 @@ b     = ScalarField(domain, "b")        # buoyancy
 u     = VectorField(domain, "u")
 tau_ψ = ScalarField(dist, "tau_psi", (), Float64)
 
-problem = IVP([ζ, ψ, b, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, b, u, tau_ψ])
 add_parameters!(problem, nu=nu, kappa=kappa, N2=N2)
 
 add_equation!(problem, "∂t(zeta) - nu*Δ(zeta) - ∂x(b) = -u⋅∇(zeta)")
@@ -418,7 +418,7 @@ domain = Domain(dist, (xbasis, ybasis))
 u     = VectorField(domain, "u")
 tau_ψ = ScalarField(dist, "tau_psi", (), Float64)
 
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=ν)
 add_equation!(problem, "∂t(zeta) - nu*Δ(zeta) = -u⋅∇(zeta)")
 add_equation!(problem, "Δ(psi) + tau_psi - zeta = 0")

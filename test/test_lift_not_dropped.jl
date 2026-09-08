@@ -4,7 +4,7 @@
 # when basis auto-detection failed, returned the BARE OPERAND with the comment "for matrix
 # sizing the Lift is just a shape-preserving wrapper, so the operand alone is sufficient".
 #
-# That comment is false, measured on the manufactured Poisson LBVP below
+# That comment is false, measured on the manufactured Poisson LinearBoundaryValueProblem below
 # (u(x,z) = sin(x)·z(Lz−z), Δu + lift(τ₁,−1) + lift(τ₂,−2) = f, u(z=0)=u(z=Lz)=0):
 #
 #   Lift present : max abs err 1.4e-16
@@ -64,7 +64,7 @@ using Tarang
             fd[i, j] = f_rhs(xv, zv)
         end
 
-        prob = Tarang.LBVP([u, tau1, tau2])
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), f=f)
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = f")
         Tarang.add_bc!(prob, "u(z=0) = 0")

@@ -67,7 +67,7 @@ using NetCDF
         ref = [Float64(i * 100 + j) for i in 1:N, j in 1:N]
         get_grid_data(w) .= ref
 
-        problem_fh = IVP([w])
+        problem_fh = InitialValueProblem([w])
         add_equation!(problem_fh, "dt(w) = 0")
         solver_fh = InitialValueSolver(problem_fh, RK222())
 
@@ -141,8 +141,8 @@ using NetCDF
         u = ScalarField(dist, "u", (xb, yb), Float64)
         v = ScalarField(dist, "v", (xb, yb), Float64)
 
-        # Create a minimal IVP + solver for GlobalFlowProperty
-        problem = IVP([u, v])
+        # Create a minimal InitialValueProblem + solver for GlobalFlowProperty
+        problem = InitialValueProblem([u, v])
         add_equation!(problem, "dt(u) = 0")
         add_equation!(problem, "dt(v) = 0")
         solver = InitialValueSolver(problem, RK222())

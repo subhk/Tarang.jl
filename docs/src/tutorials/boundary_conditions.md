@@ -40,17 +40,17 @@ checks this and rejects the problem otherwise. A tau field that you declare but 
 lift into an equation is an error, not a harmless extra.
 
 The wording of that rejection depends on the problem type, because a BVP is allowed to
-carry extra equations (its BCs) while an IVP is not:
+carry extra equations (its BCs) while an InitialValueProblem is not:
 
 | problem | check | message |
 |---|---|---|
-| `LBVP` / `NLBVP` | `n_equations >= n_variables` | `Number of equations (2) is less than number of variables (3)` |
-| `IVP` / `EVP` | `n_equations == n_variables` | `Number of equations (7) does not match number of variables (5)` |
+| `LinearBoundaryValueProblem` / `NonlinearBoundaryValueProblem` | `n_equations >= n_variables` | `Number of equations (2) is less than number of variables (3)` |
+| `InitialValueProblem` / `EigenvalueProblem` | `n_equations == n_variables` | `Number of equations (7) does not match number of variables (5)` |
 
 ## Complete Example: Poisson Equation
 
 Let's solve the Poisson equation $\nabla^2 u = -2$ with Dirichlet BCs `u = 0` on
-both `z` walls. This is a verified, runnable LBVP; the analytic solution is
+both `z` walls. This is a verified, runnable LinearBoundaryValueProblem; the analytic solution is
 `u = z(Lz - z)` and the solver reproduces it to machine precision.
 
 The tau method needs **one tau variable per boundary condition**. Each tau is
@@ -78,7 +78,7 @@ tau1 = ScalarField(dist, "tau1", (x_basis,), Float64)  # For BC at z=0
 tau2 = ScalarField(dist, "tau2", (x_basis,), Float64)  # For BC at z=1
 
 # Step 2: Add ALL fields to problem (including tau fields)
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 
 # Step 3: Register the lifted tau terms as parameters
 #         (use the 2nd-derivative basis for a 2nd-order problem)
@@ -123,7 +123,7 @@ tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), Float64)
 tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 
 # Add to problem
-problem = LBVP([T, tau_T1, tau_T2])
+problem = LinearBoundaryValueProblem([T, tau_T1, tau_T2])
 
 # Register the lifted tau terms (2nd-order problem -> 2nd-derivative basis)
 lb2 = derivative_basis(z_basis, 2)
@@ -180,7 +180,7 @@ lift_basis = derivative_basis(z_basis, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_u     = grad(u) + ez * τ_lift(tau_u1)
 
-problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+problem = InitialValueProblem([p, u, tau_p, tau_u1, tau_u2])
 add_parameters!(problem, nu=0.01, ez=ez, grad_u=grad_u, τ_lift=τ_lift)
 
 # Continuity with tau_p (removes the pressure degeneracy)
@@ -220,7 +220,7 @@ T = ScalarField(dom, "T")
 tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), Float64)
 tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 
-problem = LBVP([T, tau_T1, tau_T2])
+problem = LinearBoundaryValueProblem([T, tau_T1, tau_T2])
 
 # Register the lifted tau terms (2nd-order problem -> 2nd-derivative basis)
 lb2 = derivative_basis(z_basis, 2)
@@ -246,16 +246,25 @@ meant.
 
 ### Per-Component Conditions (Stress-Free Walls)
 
-A BC applies to a **whole variable**. `add_bc!(problem, "u(z=0) = 0")` constrains
-every component of the `VectorField` `u`, and there is no string syntax that
-reaches into a single component: `"u_x(z=0) = 0"` does not resolve to a component
-of `u`, so the four per-component strings are counted as four extra constraint
-rows and the problem fails validation (`Number of equations (7) does not match
-number of variables (5)`).
+`add_bc!(problem, "u(z=0) = 0")` constrains every component of the `VectorField`
+`u`. For a stress-free wall, use the structured helper to impose zero normal
+velocity and zero normal derivative of each tangential component:
 
-To impose different conditions on different components — a stress-free wall,
-where `∂u_x/∂z = 0` but `u_z = 0` — declare the components as separate
-`ScalarField`s, each with its own tau pair:
+```julia
+add_bc!(problem, stress_free_bc("u", "z", 0.0;
+                               component_coordinates=["x", "z"]))
+add_bc!(problem, stress_free_bc("u", "z", 1.0;
+                               component_coordinates=["x", "z"]))
+```
+
+The coordinate list must match the vector component order. In three dimensions,
+use `["x", "y", "z"]` for a vector in that order. Each generated condition
+contributes one scalar row and works with a whole-vector bulk equation and
+vector tau fields.
+
+Alternatively, declare the components as separate `ScalarField`s, each with
+its own tau pair. The following example uses no slip at the bottom and a
+stress-free wall at the top:
 
 ```julia
 ux = ScalarField(dom, "ux")
@@ -266,7 +275,7 @@ tx2 = ScalarField(dist, "tx2", (x_basis,), Float64)
 tz1 = ScalarField(dist, "tz1", (x_basis,), Float64)
 tz2 = ScalarField(dist, "tz2", (x_basis,), Float64)
 
-problem = LBVP([ux, uz, tx1, tx2, tz1, tz2])
+problem = LinearBoundaryValueProblem([ux, uz, tx1, tx2, tz1, tz2])
 lb2 = derivative_basis(z_basis, 2)
 add_parameters!(problem; lx1=lift(tx1, lb2, -1), lx2=lift(tx2, lb2, -2),
                          lz1=lift(tz1, lb2, -1), lz2=lift(tz2, lb2, -2))
@@ -291,16 +300,18 @@ top), recovered to `1.7e-16`.
 
 Linear combination: $\alpha u + \beta \frac{\partial u}{\partial n} = \gamma$
 
-Parameters registered with `add_parameters!` may be used both as **coefficients**
-on the left-hand side of a BC and inside a **constant right-hand side** — the
-product `h*T_amb` is folded to a number when the BC row is built.
+Parameters registered with `add_parameters!` may be used as constant
+coefficients on the left-hand side and in constant or spatial/time-dependent
+right-hand sides. Raw Robin strings and `robin_bc(...)` both refresh moving
+RHS values. Time-dependent coefficients that change the boundary matrix remain
+unsupported.
 
 ```julia
 T = ScalarField(dom, "T")
 tau_T1 = ScalarField(dist, "tau_T1", (x_basis,), Float64)
 tau_T2 = ScalarField(dist, "tau_T2", (x_basis,), Float64)
 
-problem = LBVP([T, tau_T1, tau_T2])
+problem = LinearBoundaryValueProblem([T, tau_T1, tau_T2])
 
 # Register the lifted tau terms and the scalar parameters
 lb2 = derivative_basis(z_basis, 2)
@@ -343,6 +354,10 @@ periodic_x = RealFourier(coords["x"]; size=128, bounds=(0.0, 2π))
 # The Fourier representation automatically enforces u(x=0) = u(x=2π)
 ```
 
+An optional `add_bc!(problem, periodic_bc("u", "x"))` records periodicity in
+the boundary manager without adding an equation or a tau constraint. It does
+not turn a nonperiodic basis into a periodic one.
+
 !!! warning "Mixing Periodic and Non-Periodic"
     When using Fourier (periodic) and Chebyshev (non-periodic) bases together, only create tau fields and boundary conditions for the non-periodic directions.
 
@@ -357,7 +372,7 @@ those parameter names in the equation string:
 u    = ScalarField(dom, "u")
 tau1 = ScalarField(dist, "tau1", (x_basis,), Float64)
 tau2 = ScalarField(dist, "tau2", (x_basis,), Float64)
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 
 lb2 = derivative_basis(z_basis, 2)   # direct 2nd-order equation -> 2nd-derivative basis
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
@@ -379,7 +394,7 @@ that depends on which formulation you wrote:
 | First-order reduction, `grad_u = grad(u) + ez*lift(tau_u1, …, -1)` then `div(grad_u)` | `derivative_basis(z_basis, 1)` | two taus, each lifted at `-1` — one into the gradient, one into the equation |
 | Direct 4th-order equation (∇⁴) | `derivative_basis(z_basis, 4)` | four taus, lifted at `-1 … -4` |
 
-The first-order reduction is **order 1, not 2** — this is the form used in the IVP
+The first-order reduction is **order 1, not 2** — this is the form used in the InitialValueProblem
 examples below and in the Rayleigh-Bénard tutorial. Both formulations spend the same
 budget: two taus and two BCs per field per wall pair.
 
@@ -413,7 +428,7 @@ tau_u2 = ScalarField(dist, "tau_u2", (x_basis,), Float64)
 tau_u3 = ScalarField(dist, "tau_u3", (x_basis,), Float64)
 tau_u4 = ScalarField(dist, "tau_u4", (x_basis,), Float64)
 
-problem = LBVP([u, tau_u1, tau_u2, tau_u3, tau_u4])
+problem = LinearBoundaryValueProblem([u, tau_u1, tau_u2, tau_u3, tau_u4])
 
 # Register the lifted tau terms (4th-order problem -> 4th-derivative basis)
 lb4 = derivative_basis(z_basis, 4)
@@ -473,7 +488,7 @@ lift_basis = derivative_basis(z_basis, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_u     = grad(u) + ez * τ_lift(tau_u1)
 
-problem = IVP([u, p, tau_u1, tau_u2, tau_p])
+problem = InitialValueProblem([u, p, tau_u1, tau_u2, tau_p])
 add_parameters!(problem, nu=nu, dpdx=dpdx, ex=ex, grad_u=grad_u, τ_lift=τ_lift)
 
 # Continuity with tau_p (removes degeneracy)
@@ -540,7 +555,7 @@ lift_basis = derivative_basis(z_basis, 1)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem, nu=Pr, buoy=Ra*Pr, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 
@@ -582,17 +597,20 @@ After 20 steps the buoyancy is driving a weak vertical flow
 
 ## Time- and Space-Dependent Boundary Conditions
 
-An `IVP` supports BCs whose value varies in time, space, or both. The BC
-expression string is re-evaluated at solver build time (for space-dependent) and
-at every time step / RK stage (for time-dependent), and the result is projected
-onto the appropriate Fourier mode for each per-subproblem solve.
+Initial-value and boundary-value problems support spatially varying BC values.
+An `InitialValueProblem` also supports values that vary in time. Expressions are
+evaluated when the solver is built and, for time-dependent initial-value BCs,
+at each time step / RK stage. Spatial values are projected onto the appropriate
+Fourier mode for each per-subproblem solve.
 
 Nothing extra is required — no `add_coordinate_field!` call, no `set_time_variable!` — the solver auto-registers coordinate arrays from the problem's bases and uses `t` as the default time variable.
 
-!!! note "Time-stepped problems only"
-    This machinery is driven by the stepper. In an `LBVP`/`NLBVP` a
-    space-dependent BC string is currently evaluated as **zero** — use a constant
-    BC there.
+`LinearBoundaryValueProblem` and `NonlinearBoundaryValueProblem` prepare spatial
+Dirichlet, Neumann, and Robin values at solver construction. Steady problems
+evaluate any time reference at `t = 0`.
+
+The normal coordinate is evaluated at the wall: `T(z=3) = z*sin(x)` means
+`3*sin(x)` on that boundary. Tangential coordinates retain their grid values.
 
 ### Time-dependent BC (scalar)
 
@@ -657,23 +675,16 @@ add_bc!(problem, "T(z=0) = cos(2*pi*y/2.0)")
 On the same 8×8×8 problem the enforced wall matches the intended grid-space
 pattern to `3.3e-16` for the `y`-only form and `4.4e-16` for the `x·y` product.
 
-!!! warning "Bake the box size in as a literal, not as `Lx`/`Ly`"
-    Note the `2.0` and `4.0` above rather than `Ly` and `Lx`. This is the
-    coordinate-expression rule from the table below, and it bites hardest here.
-    `"T(z=0) = cos(2*pi*y/Ly)"` does **not** fail because of the `y` axis — it
-    fails because `Ly` is a *name*, and a coordinate expression cannot see the
-    problem's parameters. It is enforced as **zero**, and says so (`Unknown
-    variable: Ly`, then `right-hand side … enforced as ZERO`). Registering `Ly`
-    with `add_parameters!` does not help; interpolate the number into the string
-    instead.
+Box lengths can also be registered parameters. For example,
+`add_parameters!(problem, Ly=2.0)` makes `"T(z=0) = cos(2*pi*y/Ly)"`
+available to the boundary evaluator.
 
 ### Constants and parameters in BC expressions
 
-A BC right-hand side is read in one of two ways, and it matters which. A
-**constant** right-hand side is folded to a number — arithmetic over numeric
-literals and registered parameters is fine. An **expression** right-hand side
-(one that mentions a coordinate or `t`) goes through a different evaluator, and
-that one sees the coordinate arrays and `t` but **not** the problem's parameters:
+Both constant and space/time-dependent BC expressions can use names registered
+with `add_parameters!`. The current time and boundary coordinates take precedence
+over parameter names that collide with them. Julia variables outside the problem
+namespace must be registered or interpolated into the string.
 
 | right-hand side | how it is read | works? |
 |---|---|---|
@@ -682,22 +693,20 @@ that one sees the coordinate arrays and `t` but **not** the problem's parameters
 | `"T(z=0) = 10*25"`, `"= h*T_amb"`, `"= 1/Re"` | compound constant, folded | ✅ |
 | `"T(z=0) = Tbot"`, with `Tbot` an unregistered Julia global | unknown name | ❌ warns, enforced as **zero** |
 | `"T(z=0) = 1.0 + 0.1*sin(2*pi*x/4.0)"` | coordinate/time expression, numeric literals | ✅ |
-| `"T(z=0) = 1.0 + amplitude*sin(2*pi*x/Lx)"` | coordinate expression naming parameters | ❌ warns, enforced as **zero** |
+| `"T(z=0) = 1.0 + amplitude*sin(2*pi*x/Lx)"`, with registered `amplitude` and `Lx` | coordinate expression naming parameters | ✅ |
 
-So a *constant* BC may name parameters freely:
+Constant Robin coefficients and RHS values may use parameters:
 
 ```julia
 add_parameters!(problem, h=10.0, k=1.0, T_amb=25.0)
 add_bc!(problem, "h*T(z=1) + k*∂z(T)(z=1) = h*T_amb")
 ```
 
-but an *expression* BC may not — bake its constants in with Julia string
-interpolation instead:
+Spatial and moving boundary values use the same registered parameters:
 
 ```julia
-Lx = 4.0
-amplitude = 0.1
-add_bc!(problem, "T(z=0) = 1.0 + $amplitude * sin(2*pi*x/$Lx)")
+add_parameters!(problem, Lx=4.0, amplitude=0.1, omega=2.0)
+add_bc!(problem, "T(z=0) = 1.0 + amplitude*sin(2*pi*x/Lx)*cos(omega*t)")
 ```
 
 An unsupported right-hand side is enforced as zero, but it says so: you get
@@ -751,13 +760,13 @@ There is no automatic name-based pairing between a BC and a tau field. A missing
 column, an unused tau variable, or the wrong number of scalar tau DOFs surfaces instead
 as a **counting or shape failure**:
 
-| mistake | what you actually see (in the `LBVP`s above) |
+| mistake | what you actually see (in the `LinearBoundaryValueProblem`s above) |
 |---|---|
 | BCs but no tau fields and no lift terms | `DimensionMismatch` during matrix construction (the BC rows have no tau columns to land in, so the system is not square) |
 | a tau field declared but never lifted | `ArgumentError: Problem validation failed: Number of equations (3) is less than number of variables (4)` |
 | a BC forgotten | `ArgumentError: Problem validation failed: Number of equations (2) is less than number of variables (3)` |
 
-In an `IVP` the same two mistakes read `Number of equations (n) does not match number of
+In an `InitialValueProblem` the same two mistakes read `Number of equations (n) does not match number of
 variables (m)` instead — that is the message the per-component `VectorField` BC above
 trips.
 
@@ -766,7 +775,7 @@ and reference every one through a lift term:
 
 ```julia
 # Wrong: no tau fields, no lift terms — the BCs have nothing to act through
-#     problem = LBVP([u])
+#     problem = LinearBoundaryValueProblem([u])
 #     add_equation!(problem, "Δ(u) = -2")
 #     add_bc!(problem, "u(z=0) = 0")
 
@@ -775,7 +784,7 @@ u = ScalarField(dom, "u")
 tau_u1 = ScalarField(dist, "tau_u1", (x_basis,), Float64)
 tau_u2 = ScalarField(dist, "tau_u2", (x_basis,), Float64)
 
-problem = LBVP([u, tau_u1, tau_u2])
+problem = LinearBoundaryValueProblem([u, tau_u1, tau_u2])
 lb2 = derivative_basis(z_basis, 2)
 add_parameters!(problem; l1=lift(tau_u1, lb2, -1), l2=lift(tau_u2, lb2, -2))
 add_equation!(problem, "Δ(u) + l1 + l2 = -2")
@@ -794,7 +803,7 @@ solve!(solver)
 
 ### Under-Specified System
 
-**Error** (in an `LBVP`): `ArgumentError: Problem validation failed: Number of equations (4) is less than number of variables (5)`
+**Error** (in an `LinearBoundaryValueProblem`): `ArgumentError: Problem validation failed: Number of equations (4) is less than number of variables (5)`
 
 **Solution**: Every variable needs an equation. Bulk equations and BCs both count,
 so a tau field you declared but never lifted into an equation — or a BC you forgot

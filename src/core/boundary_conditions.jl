@@ -367,6 +367,20 @@ end
 
 """Evaluate boundary condition value at current time and spatial coordinates"""
 function evaluate_bc_value(manager::BoundaryConditionManager, bc, current_time=0.0, coords=Dict())
+    bc isa Union{DirichletBC, NeumannBC, RobinBC} || return nothing
+    # Expressions on a boundary use the wall position for its normal coordinate.
+    # Leave the shared coordinate grids intact: other walls may use a different
+    # position, and their cached values still refer to these original grids.
+    boundary_coords = Dict{String,Any}(string(key) => value for (key, value) in coords)
+    position = bc.position isa Real ? bc.position :
+        _safe_eval_math_expr(bc.position, manager.namespace)
+    boundary_coords[bc.coordinate] = position
+    # Callbacks historically accept the supplied tangential coordinates. Do not
+    # add an argument when the caller deliberately omitted the normal axis.
+    callback_coords = haskey(boundary_coords, bc.coordinate) &&
+                      any(key -> string(key) == bc.coordinate, keys(coords)) ? boundary_coords : coords
+    evaluate_value(value) = evaluate_expression(value, current_time, boundary_coords;
+        parameters=manager.namespace, callback_coords)
 
     if isa(bc, DirichletBC)
         value = bc.value
@@ -374,9 +388,9 @@ function evaluate_bc_value(manager::BoundaryConditionManager, bc, current_time=0
         value = bc.value
     elseif isa(bc, RobinBC)
         # For Robin BCs, evaluate all components
-        alpha = evaluate_expression(bc.alpha, current_time, coords)
-        beta = evaluate_expression(bc.beta, current_time, coords)
-        val = evaluate_expression(bc.value, current_time, coords)
+        alpha = evaluate_value(bc.alpha)
+        beta = evaluate_value(bc.beta)
+        val = evaluate_value(bc.value)
         
         # Update performance statistics
         manager.performance_stats.total_evaluations += 3
@@ -386,7 +400,7 @@ function evaluate_bc_value(manager::BoundaryConditionManager, bc, current_time=0
         return nothing
     end
     
-    result = evaluate_expression(value, current_time, coords)
+    result = evaluate_value(value)
     
     # Update performance statistics
     manager.performance_stats.total_evaluations += 1
@@ -417,26 +431,26 @@ Examples:
 - "x^2 + y^2" - spatial quadratic
 - "sin(t)*sin(pi*x)*sin(pi*y)" - product of temporal and spatial modes
 """
-function evaluate_expression(expr, current_time=0.0, coords=Dict())
+function evaluate_expression(expr, current_time=0.0, coords=Dict(); parameters=nothing, callback_coords=coords)
     if isa(expr, Real)
         return expr
     elseif isa(expr, String)
-        return _evaluate_string_expression(expr, current_time, coords)
+        return _evaluate_string_expression(expr, current_time, coords; parameters)
     elseif isa(expr, Function)
-        return _evaluate_function_expression(expr, current_time, coords)
+        return _evaluate_function_expression(expr, current_time, callback_coords)
     elseif isa(expr, FieldReference)
-        return evaluate_expression(expr.expression, current_time, coords)
+        return evaluate_expression(expr.expression, current_time, coords; parameters, callback_coords)
     elseif isa(expr, TimeDependentValue) || isa(expr, TimeSpaceDependentValue)
         if expr.function_obj !== nothing
-            return _evaluate_function_expression(expr.function_obj, current_time, coords)
+            return _evaluate_function_expression(expr.function_obj, current_time, callback_coords)
         else
-            return evaluate_expression(expr.expression, current_time, coords)
+            return evaluate_expression(expr.expression, current_time, coords; parameters, callback_coords)
         end
     elseif isa(expr, SpaceDependentValue)
         if expr.function_obj !== nothing
-            return _evaluate_space_function_expression(expr.function_obj, coords)
+            return _evaluate_space_function_expression(expr.function_obj, callback_coords)
         else
-            return evaluate_expression(expr.expression, current_time, coords)
+            return evaluate_expression(expr.expression, current_time, coords; parameters, callback_coords)
         end
     end
 
@@ -447,7 +461,7 @@ end
 Evaluate a string expression by substituting variables and parsing.
 Uses Julia's Meta.parse for safe expression evaluation.
 """
-function _evaluate_string_expression(expr::String, current_time, coords)
+function _evaluate_string_expression(expr::String, current_time, coords; parameters=nothing)
     # Handle simple constant cases first
     stripped = strip(expr)
     if stripped == "0" || stripped == "0.0"
@@ -467,7 +481,11 @@ function _evaluate_string_expression(expr::String, current_time, coords)
 
     # Build variable substitution dictionary
     vars = Dict{String, Any}()
-    vars["t"] = Float64(current_time)
+    if parameters !== nothing
+        for (key, val) in parameters
+            val isa Union{Number,AbstractArray} && (vars[string(key)] = val)
+        end
+    end
     vars["pi"] = Float64(π)
     vars["π"] = Float64(π)
     vars["e"] = Float64(ℯ)
@@ -481,6 +499,8 @@ function _evaluate_string_expression(expr::String, current_time, coords)
             vars[string(key)] = val
         end
     end
+    # Simulation time and coordinates take precedence over registered parameters.
+    vars["t"] = Float64(current_time)
 
     # Check if all required variables are present
     # Build the expression with variable substitution

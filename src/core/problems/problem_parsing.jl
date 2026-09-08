@@ -10,6 +10,9 @@ See also: [`no_slip!`](@ref), [`fixed_value!`](@ref), [`free_slip!`](@ref),
 function add_bc!(problem::Problem, bc::AbstractBoundaryCondition)
     add_bc!(problem.bc_manager, bc)
 
+    # Fourier bases enforce periodicity; the marker adds no constraint equation.
+    bc isa PeriodicBC && return bc
+
     # Also add to legacy string list for compatibility
     eq = bc_to_equation(problem.bc_manager, bc)
     if isa(eq, Vector)
@@ -512,7 +515,7 @@ function _coefficient_varies_along_fourier(field)
     isempty(fourier_axes) && return false
     try
         layout = field isa ScalarField ?
-                 getfield(field, :current_layout) : :g
+                 field.current_layout : :g
         data = layout === :c ? get_coeff_data(field) : get_grid_data(field)
         data === nothing && return false
         arr = Array(data)
@@ -1487,7 +1490,7 @@ has(::ArrayOperator, vars...) = false
 has(::UnknownOperator, vars...) = false  # Conservative: unknowns don't contain tracked vars
 
 # Symbolic derivatives of constant operators are zero (they hold no variables).
-# Needed by frechet_differential when an NLBVP RHS has constant/parameter terms
+# Needed by frechet_differential when an NonlinearBoundaryValueProblem RHS has constant/parameter terms
 # (e.g. ∂(u²+g)/∂tau = 0) or is differentiated w.r.t. a non-appearing variable.
 sym_diff(::ZeroOperator, ::ScalarField) = 0
 sym_diff(::ConstantOperator, ::ScalarField) = 0

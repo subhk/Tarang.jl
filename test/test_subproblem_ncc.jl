@@ -65,7 +65,7 @@ function spncc_make_sp(bcons, N::Int; dtype=ComplexF64)
     dist = Distributor(coords; dtype=(dtype <: Real ? Float64 : Float64))
     xb = bcons(coords["x"]; size=N, bounds=(0.0, 2π))
     field = ScalarField(dist, "u", (xb,), dtype)
-    problem = IVP([field])
+    problem = InitialValueProblem([field])
     solver = SpnccSolver(problem, SpnccBase([true]))   # coupled axis
     subsys = Tarang.Subsystem(solver, (nothing,))
     sp = Tarang.Subproblem(solver, (subsys,), (nothing,))

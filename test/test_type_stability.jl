@@ -129,7 +129,7 @@ end
         u = ScalarField(domain, "u")
         set!(u, (x,) -> sin(x))
 
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = 0")
         solver = InitialValueSolver(problem, RK111(); dt=0.01)
 
@@ -149,7 +149,7 @@ end
         u = ScalarField(domain, "u")
         set!(u, (x,) -> sin(x))
 
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = 0")
         solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
         state_type = typeof(solver.state)

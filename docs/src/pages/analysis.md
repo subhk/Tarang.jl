@@ -25,7 +25,7 @@ u = VectorField(domain, "u")
 u.components[1]["g"] = @.  sin(x) * cos(y)
 u.components[2]["g"] = @. -cos(x) * sin(y)
 
-problem = IVP([u]; namespace=Dict("u" => u))
+problem = InitialValueProblem([u]; namespace=Dict("u" => u))
 add_equation!(problem, "∂t(u) = 0")
 solver = InitialValueSolver(problem, RK222(); dt=1e-3)
 
@@ -63,7 +63,7 @@ factorization in the implicit solve, so a proposed step within `threshold`
     With just `add_velocity!`, the returned `dt` accounts for **advection only**.
     Diffusion the timestepper integrates *explicitly* — notably an LES eddy
     viscosity νₑ, whose spatial variation rules out the implicit path — carries its
-    own limit `dt ≤ 1/(2 ν_max Σᵢ Δxᵢ⁻²)` that nothing enforces here. Register it:
+    own spectral diffusion limit that nothing enforces here. Register it:
 
     ```julia
     add_diffusivity!(cfl, nu)                             # constant ν

@@ -35,7 +35,7 @@ using Test
 using Tarang
 using LinearAlgebra
 
-# Manufactured Poisson LBVP Δu+lift(τ1,-1)+lift(τ2,-2)=-2, u(0)=u(Lz)=0,
+# Manufactured Poisson LinearBoundaryValueProblem Δu+lift(τ1,-1)+lift(τ2,-2)=-2, u(0)=u(Lz)=0,
 # exact u(z)=z(1-z); returns the max nodal error on the coupled `mkz` basis.
 function _b3_bvp_err(mkz)
     coords = CartesianCoordinates("x", "z")
@@ -47,7 +47,7 @@ function _b3_bvp_err(mkz)
     tau1 = ScalarField(dist, "tau1", (xb,), Float64)
     tau2 = ScalarField(dist, "tau2", (xb,), Float64)
     lb2  = derivative_basis(zb, 2)
-    prob = Tarang.LBVP([u, tau1, tau2])
+    prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
     add_parameters!(prob; Lz=1.0, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
     Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
     Tarang.add_bc!(prob, "u(z=0) = 0")
@@ -60,14 +60,14 @@ function _b3_bvp_err(mkz)
     return maximum(abs.(g[1, :] .- zc .* (1.0 .- zc)))
 end
 
-# Diagonal of the implicit L matrix for a 1D pure-Fourier IVP equation.
+# Diagonal of the implicit L matrix for a 1D pure-Fourier InitialValueProblem equation.
 function _b3_ldiag(eqstr)
     coords = CartesianCoordinates("x")
     dist   = Distributor(coords; dtype=Float64, device=CPU())
     xb  = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
     dom = Domain(dist, (xb,))
     u   = ScalarField(dom, "u")
-    prob = Tarang.IVP([u])
+    prob = Tarang.InitialValueProblem([u])
     Tarang.add_equation!(prob, eqstr)
     L, _, _ = Tarang.build_matrices(prob)
     return diag(Matrix(L))
@@ -204,7 +204,7 @@ end
             dom = Domain(dist, (xb, yb))
             q = ScalarField(dom, "q"); psi = ScalarField(dom, "psi"); u = VectorField(dom, "u")
             tau_psi = ScalarField(dist, "tau_psi", (), Float64)
-            prob = Tarang.IVP([q, psi, u, tau_psi])
+            prob = Tarang.InitialValueProblem([q, psi, u, tau_psi])
             Tarang.add_equation!(prob, "∂t(q) = 0")
             Tarang.add_equation!(prob, eqstr)
             Tarang.add_equation!(prob, "u - skew(grad(psi)) = 0")

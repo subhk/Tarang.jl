@@ -6,8 +6,8 @@ The implicit-NCC builder runs MPI-collective operations (PencilArray reductions,
 matrix-build loops; local subproblem counts differ across ranks whenever
 #Fourier modes % nprocs != 0, so per-subproblem invocation issues unmatched
 collectives — deadlock (2026-08-20 MPI review, finding R1/S1/V1; reachable via
-the NLBVP per-mode Jacobian rebuild, which calls `build_matrices!` directly —
-the IVP route rejects implicit NCCs earlier, in global matrix assembly).
+the NonlinearBoundaryValueProblem per-mode Jacobian rebuild, which calls `build_matrices!` directly —
+the InitialValueProblem route rejects implicit NCCs earlier, in global matrix assembly).
 The memo makes every rank compute each coefficient exactly ONCE per build pass.
 
 Pinned here (serially observable):
@@ -56,7 +56,7 @@ using SparseArrays
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
         lb = derivative_basis(zb, 2)
-        problem = IVP([u, tau1, tau2])
+        problem = InitialValueProblem([u, tau1, tau2])
         add_parameters!(problem; lb=lb)
         add_equation!(problem, "∂t(u) - ∂z(∂z(u)) + lift(tau1, lb, -1) + lift(tau2, lb, -2) = 0")
         add_bc!(problem, "u(z=0) = 0")

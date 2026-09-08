@@ -63,7 +63,7 @@ tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 # `grad_u`/`grad_T` formulation further down uses `derivative_basis(zb, 1)`.
 lb2 = derivative_basis(zb, 2)
 
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 
 # Register the lifts as named parameters, then reference them in the equation.
 # lift(tau, lb2, -k) places tau at the k-th-from-last Chebyshev coefficient
@@ -196,7 +196,7 @@ i.e. a linear combination of `u`'s coefficients that equals the boundary value. 
 
 This square-system condition is enforced automatically when you declare the right number of tau fields to match the number of BCs. If you miss a BC you'll get a singular / non-square system at solver-build time.
 
-### DAE-style handling in IVP steppers
+### DAE-style handling in InitialValueProblem steppers
 
 For **initial-value problems**, BC rows have `M_row = 0`, which makes the full system a **differential-algebraic equation** (DAE) rather than a pure ODE. Tarang's subproblem stepper handles this correctly via a **per-stage row override** on what it classifies as "BC rows".
 
@@ -290,7 +290,7 @@ grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
 # Problem declaration includes ALL tau fields as state
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 
 add_parameters!(problem,
     nu=nu, buoy=buoy, ez=ez,
@@ -390,15 +390,13 @@ Both are enforced to machine precision — measured `max|T(z=0) − target|` of 
     then **enforced as zero**, silently satisfying the wrong condition (measured error
     against the intended profile: `1.1`). Interpolate the value (`"…/$Lx)"`), write the
     literal, or register it with `add_parameters!`. The same applies to the *location*:
-    use `"T(z=$Lz) = 0"`, never `"T(z=Lz) = 0"`.
+    use `"T(z=$Lz) = 0"`, or register `Lz` before using `"T(z=Lz) = 0"`.
 
-!!! note "Space- and time-dependent BC strings are an IVP-path feature"
-    The coordinate-array projection and the per-stage BC refresh are wired into the
-    `InitialValueSolver` build. A `BoundaryValueSolver` (LBVP/NLBVP) does not register
-    the coordinate fields, so a BC string like `"T(z=0) = 1 + 0.1*sin(2*pi*x/4.0)"` is
-    **enforced as zero** there — with a loud `Warning: Boundary condition right-hand side
-    of type … is not supported and is being enforced as ZERO`. In a BVP, keep each BC
-    value a constant (or a compound constant like `h*T_amb`).
+`BoundaryValueSolver` prepares spatial BC expressions for both linear and
+nonlinear boundary-value problems at construction, using `t = 0`. Initial-value
+solvers additionally refresh moving boundary values during time stepping.
+References to the boundary's normal coordinate use the wall position; tangential
+coordinates use the global grid.
 
 Under MPI, every rank evaluates the BC expression on the full (global) grid and computes a local FFT — no inter-rank communication is needed because all ranks produce identical coefficient arrays.
 
@@ -436,8 +434,8 @@ correction has nothing to do. Swap the constant forcing for a non-polynomial one
 field holding `sin(7z)`, passed in with `add_parameters!`) at `Nz=16` and they become
 nonzero but tiny: `max|tau1| = 2.1e-8`, `max|tau2| = 6.5e-8`.
 
-!!! note "Tau values are not exposed after an IVP step"
-    The IVP steppers solve for the stage taus internally but leave the tau *state
+!!! note "Tau values are not exposed after an InitialValueProblem step"
+    The InitialValueProblem steppers solve for the stage taus internally but leave the tau *state
     fields* at exactly zero, so `get_coeff_data(tau_T2)` after `run!` reads `0.0` no
     matter how large the corrections were. BC enforcement itself is unaffected —
     measured `max|T(z=0) − 1| = 0.0` and `max|u_x(z=0)| < 1e-16` after 20 RK222 steps
@@ -536,6 +534,6 @@ The name "tau" (τ) comes from Lanczos's notation for the residual/correction te
 
 - [Boundary Conditions Tutorial](../tutorials/boundary_conditions.md): step-by-step BC examples
 - [Bases](bases.md): spectral bases (Chebyshev, Fourier, Legendre, Jacobi)
-- [Solvers](solvers.md): using IVP / LBVP / NLBVP solvers
+- [Solvers](solvers.md): using InitialValueProblem / LinearBoundaryValueProblem / NonlinearBoundaryValueProblem solvers
 - [API: Problems](../api/problems.md): programmatic API for adding equations and BCs
 - [2D RBC Tutorial](../tutorials/ivp_2d_rbc.md): complete Rayleigh–Bénard convection walkthrough

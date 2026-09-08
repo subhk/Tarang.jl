@@ -72,7 +72,7 @@ function _evaluate_alg_F(expr, sp::Subproblem; warn_unsupported::Bool=true)
     # `warn_unsupported=false` means the caller established this expression belongs to a BULK
     # equation, whose value `apply_bc_override!` never reads (it writes `sp.bc_rows` only). See
     # `gather_alg_F!`. Warning there is a FALSE ALARM, and a costly one: it tells the user their
-    # solve is silently wrong when it is not. A BVP/NLBVP has no `∂t` in ANY equation, so the
+    # solve is silently wrong when it is not. A BVP/NonlinearBoundaryValueProblem has no `∂t` in ANY equation, so the
     # `is_alg` test below classifies the main PDE as an algebraic row — that is how
     # `Δ(u) + l1 + l2 = u*u + g` came to be reported as an unsupported boundary condition.
     if warn_unsupported
@@ -540,8 +540,8 @@ function gather_alg_F!(dest::AbstractVector{ComplexF64}, sp::Subproblem)
         fill!(raw_cpu, zero(ComplexF64))
     end
 
-    # `is_alg` below is "has no time derivative", which in an IVP means a BC or
-    # constraint row — but in a BVP/NLBVP means EVERY equation, the bulk PDE
+    # `is_alg` below is "has no time derivative", which in an InitialValueProblem means a BC or
+    # constraint row — but in a BVP/NonlinearBoundaryValueProblem means EVERY equation, the bulk PDE
     # included. Only the rows `apply_bc_override!` actually writes (`sp.bc_rows`,
     # i.e. the non-bulk blocks) are read downstream, so a bulk equation's F is
     # computed and then discarded. Classify the block the same way the row split

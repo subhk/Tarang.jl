@@ -94,6 +94,109 @@ for MPI PencilArrays distributions.
 _distributed_field_path_required(fields::Vector{<:ScalarField}) =
     _distributed_field_path_reason(fields) !== nothing
 
+"""Whether the selected update omits a mass solve."""
+function _timestepper_requires_identity_mass(state::TimestepperState,
+                                             solver::InitialValueSolver)
+    if state.timestepper isa _DIAGONAL_IMEX_TIMESTEPPERS
+        # The serial explicit RK fallback still applies its assembled mass
+        # matrix. Diagonal SBDF2 always uses field combinations, even with L=0.
+        return state.timestepper isa DiagonalIMEX_SBDF2 ||
+               _distributed_field_path_required(state.history[end]) ||
+               _get_spectral_linear_operator(solver) !== nothing ||
+               _problem_has_implicit_linear_term(solver)
+    end
+    return _distributed_field_path_required(state.history[end]) &&
+           _timestepper_subproblems(solver) === nothing
+end
+
+_mass_scalar(expr::Number) = expr
+_mass_scalar(expr::ConstantOperator) = expr.value
+_mass_scalar(expr) = nothing
+
+"""Extract `(field, coefficient)` from a constant multiple of one first time
+derivative. `nothing` means an unsupported mass operator. A vector field is
+one operand here: its components are independent rows of a vector equation."""
+function _constant_mass_term(expr)
+    if expr isa TimeDerivative
+        expr.order == 1 || return nothing
+        expr.operand isa Union{ScalarField, VectorField} || return nothing
+        return (expr.operand, 1.0)
+    elseif expr isa AddOperator || expr isa SubtractOperator
+        left = _constant_mass_term(expr.left)
+        right = _constant_mass_term(expr.right)
+        (left === nothing || right === nothing) && return nothing
+        lf, lc = left
+        rf, rc = right
+        expr isa SubtractOperator && (rc = -rc)
+        lf === nothing && return (rf, rc)
+        rf === nothing && return (lf, lc)
+        lf === rf || return nothing  # coupled time derivatives
+        return (lf, lc + rc)
+    elseif expr isa NegateOperator
+        term = _constant_mass_term(expr.operand)
+        term === nothing && return nothing
+        return (term[1], -term[2])
+    elseif expr isa MultiplyOperator
+        scalar = _mass_scalar(expr.left)
+        operand = expr.right
+        if scalar === nothing
+            scalar = _mass_scalar(expr.right)
+            operand = expr.left
+        end
+        scalar === nothing && return nothing
+        term = _constant_mass_term(operand)
+        term === nothing && return nothing
+        return (term[1], scalar * term[2])
+    elseif expr isa DivideOperator
+        scalar = _mass_scalar(expr.right)
+        (scalar === nothing || iszero(scalar)) && return nothing
+        term = _constant_mass_term(expr.left)
+        term === nothing && return nothing
+        return (term[1], term[2] / scalar)
+    elseif _is_zero_m_term(expr) || (expr isa ConstantOperator && iszero(expr.value))
+        return (nothing, 0.0)
+    end
+    return nothing
+end
+
+"""Validate the parsed mass operator before an identity-mass update. GPU
+Fourier solvers skip matrix assembly, so a missing M matrix proves nothing.
+Algebraic equations have no mass row and are handled by state refreshes."""
+function _check_identity_mass_operator!(state::TimestepperState,
+                                         solver::InitialValueSolver)
+    get(state.timestepper_data, :identity_mass_validated, false) && return nothing
+    problem = solver.problem
+    if isempty(problem.equation_data) && !isempty(problem.equations)
+        build_matrix_expressions!(problem)
+    end
+    seen = Set{Int}()
+    for equation in problem.equation_data
+        mass = equation.mass
+        _is_zero_m_term(mass) && continue
+        term = _constant_mass_term(mass)
+        valid = term !== nothing && term[1] !== nothing &&
+                isapprox(term[2], 1; rtol=0, atol=1e-14)
+        targets = valid ? _find_time_derivative_targets(mass, solver.state, problem.variables) : Int[]
+        if !valid || isempty(targets) || any(in(seen), targets)
+            throw(ArgumentError(
+                "$(nameof(typeof(state.timestepper))) cannot apply a non-identity mass " *
+                "operator on this field/diagonal timestepper path. Each evolution " *
+                "equation must have one unscaled first time derivative of its own field. " *
+                "Use a global-matrix or per-subproblem mass solve, or reformulate the " *
+                "equation with identity mass. Refusing to advance with an incorrect mass operator."))
+        end
+        union!(seen, targets)
+    end
+    state.timestepper_data[:identity_mass_validated] = true
+    return nothing
+end
+
+function _check_timestepper_mass_compatibility!(state::TimestepperState,
+                                                solver::InitialValueSolver)
+    _timestepper_requires_identity_mass(state, solver) || return nothing
+    return _check_identity_mass_operator!(state, solver)
+end
+
 """Return true when a subproblem belongs to a GPU-resident solver state."""
 function _gpu_subproblem_execution(sp)
     solver = sp.solver

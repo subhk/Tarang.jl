@@ -31,7 +31,7 @@ For experienced users:
 
 ## Tutorial List
 
-### Initial Value Problems (IVP)
+### Initial Value Problems (InitialValueProblem)
 
 Time-evolution problems where you integrate PDEs forward in time.
 
@@ -49,16 +49,16 @@ Steady-state problems with boundary conditions.
 
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
-| Steady Convection | Fixed temperature Rayleigh-Bénard | Intermediate | LBVP, sparse linear solve |
+| Steady Convection | Fixed temperature Rayleigh-Bénard | Intermediate | LinearBoundaryValueProblem, sparse linear solve |
 | Stokes Flow | Low Reynolds number flow | Beginner | Simple BVP example |
 
-### Eigenvalue Problems (EVP)
+### Eigenvalue Problems (EigenvalueProblem)
 
 Linear stability analysis and normal modes.
 
 | Tutorial | Description | Complexity | Key Features |
 |----------|-------------|------------|--------------|
-| [Stability Analysis](eigenvalue_problems.md) | Eigenvalue problem setup | Advanced | EVP, eigensolvers |
+| [Stability Analysis](eigenvalue_problems.md) | Eigenvalue problem setup | Advanced | EigenvalueProblem, eigensolvers |
 
 ### Surface and Boundary Dynamics
 
@@ -84,7 +84,7 @@ Problems with dynamics confined to surfaces or boundaries.
 
 ## Problem Types Explained
 
-### Initial Value Problems (IVP)
+### Initial Value Problems (InitialValueProblem)
 
 **When to use**: Time-dependent PDEs where you know the initial state and want to evolve forward in time.
 
@@ -104,7 +104,7 @@ xbasis = RealFourier(coords["x"]; size=32, bounds=(0.0, 2π))
 domain = Domain(dist, (xbasis,))
 u      = ScalarField(domain, "u")
 
-problem = IVP([u])
+problem = InitialValueProblem([u])
 add_parameters!(problem, nu=0.05)          # names used in equation strings must be parameters
 add_equation!(problem, "∂t(u) - nu*Δ(u) = -u*∂x(u)")
 set!(u, x -> sin(x))                       # serial only — under MPI use `local_grids` (below)
@@ -127,8 +127,8 @@ yourself, and is what you need if you want CFL control or file output (below).
 **When to use**: Steady-state problems where you solve for the spatial distribution given boundary conditions.
 
 **Types**:
-- **LBVP**: Linear boundary value problems
-- **NLBVP**: Nonlinear boundary value problems (require iteration)
+- **LinearBoundaryValueProblem**: Linear boundary value problems
+- **NonlinearBoundaryValueProblem**: Nonlinear boundary value problems (require iteration)
 
 **Examples**:
 - Steady-state heat conduction
@@ -151,7 +151,7 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)   # one tau per BC, carrying th
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = LBVP([T, tau1, tau2])
+problem = LinearBoundaryValueProblem([T, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "Δ(T) + l1 + l2 = -2")
 add_bc!(problem, "T(z=0) = 0")
@@ -164,7 +164,7 @@ solve!(solver)     # recovers T = 2z - z² to 1.7e-16
 The BVP path supports both mixed Fourier+Chebyshev and pure single-axis Chebyshev
 domains; see the [Problems API](../api/problems.md) for a complete, runnable example.
 
-### Eigenvalue Problems (EVP)
+### Eigenvalue Problems (EigenvalueProblem)
 
 **When to use**: Linear stability analysis, computing normal modes, or finding eigenvalues of differential operators.
 
@@ -188,7 +188,7 @@ tau2 = ScalarField(dist, "tau2", (), Float64)
 lb2  = derivative_basis(zb, 2)
 
 # tau variables + lift handle the bounded-direction BCs (tau method)
-problem = EVP([u, tau1, tau2]; eigenvalue=:σ)
+problem = EigenvalueProblem([u, tau1, tau2]; eigenvalue=:σ)
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 # The eigenvalue REPLACES the time derivative: keep dt(u) to build the mass matrix.
 # Do NOT write `σ*u = ...` — that builds an empty M and returns no eigenvalues.
@@ -272,7 +272,7 @@ domain = Domain(dist, (xbasis, ybasis))
 u = ScalarField(domain, "u")
 
 # 4. Problem
-problem = IVP([u])
+problem = InitialValueProblem([u])
 add_parameters!(problem, nu=0.1)
 add_equation!(problem, "∂t(u) - nu*Δ(u) = 0")
 # add_bc!(problem, "...")   # only for bounded (Chebyshev/Jacobi) directions

@@ -10,6 +10,14 @@ operator-specific `expression_matrices` fallbacks.
 # subproblem_matrix implementations for linear operators
 # ============================================================================
 
+"""Select one scalar component, preserving its columns in the parent variable."""
+function subproblem_matrix(op::Component, sp; kwargs...)
+    inner_size = _expression_subproblem_dofs(sp, op.operand)
+    columns = _component_output_range(op, inner_size)
+    return sparse(collect(1:length(columns)), collect(columns),
+                  ones(ComplexF64, length(columns)), length(columns), inner_size)
+end
+
 """
     subproblem_matrix(op::TimeDerivative, sp; kwargs...)
 

@@ -275,9 +275,7 @@ Nyquist index n÷2+1 has |k| = n/2 > kmax (kmax ≤ (n−1)÷3) and is always ze
     i = ((idx - 1) % nx) + 1
     kill_x = (i - 1 > kmax_x) && (nx - i + 1 > kmax_x)
     kill_y = (j - 1 > kmax_y) && (ny - j + 1 > kmax_y)
-    @inbounds if kill_x || kill_y
-        data[i, j] = zero(eltype(data))
-    end
+    @inbounds data[i, j] = ifelse(kill_x || kill_y, zero(eltype(data)), data[i, j])
 end
 
 """
@@ -294,9 +292,7 @@ index ↔ mode map.
     kill_x = (i - 1 > kmax_x) && (nx - i + 1 > kmax_x)
     kill_y = (j - 1 > kmax_y) && (ny - j + 1 > kmax_y)
     kill_z = (k - 1 > kmax_z) && (nz - k + 1 > kmax_z)
-    @inbounds if kill_x || kill_y || kill_z
-        data[i, j, k] = zero(eltype(data))
-    end
+    @inbounds data[i, j, k] = ifelse(kill_x || kill_y || kill_z, zero(eltype(data)), data[i, j, k])
 end
 
 """

@@ -119,7 +119,7 @@ using Tarang
             ensure_layout!(u, :g)
             xs = collect(range(0, 2π, length=33))[1:32]
             Tarang.get_grid_data(u) .= cos.(k .* xs)
-            prob = IVP([u])
+            prob = InitialValueProblem([u])
             add_equation!(prob, "dt(u) - lap(u) = 0")   # dt(u)=Δu ; mode k -> exp(-k^2 t)
             solver = InitialValueSolver(prob, RKSMR(); dt=dt)
             for _ in 1:round(Int, T/dt); step!(solver); end

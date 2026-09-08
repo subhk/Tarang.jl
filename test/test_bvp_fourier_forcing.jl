@@ -8,7 +8,7 @@ avoid crash". Skipping drops an entire coupling out of the operator and then
 solves what remains, so the caller gets a plausible array back with the failure
 buried in the log.
 
-The reachable case: a pure-Fourier LBVP. A periodic axis has no boundary, so a
+The reachable case: a pure-Fourier LinearBoundaryValueProblem. A periodic axis has no boundary, so a
 point boundary condition like `u(x=0) = 0` has nowhere to place its tau row and
 produces a full (N,N) block where a single row is expected. `Δu = f` with
 `f = sin(x)` then came back as **exactly zero** instead of `-sin(x)` — no error
@@ -23,14 +23,14 @@ indistinguishable from a correct one by any shape, type, or did-it-throw check.
 using Test
 using Tarang
 
-@testset "A pure-Fourier LBVP with a point BC refuses instead of returning zero" begin
+@testset "A pure-Fourier LinearBoundaryValueProblem with a point BC refuses instead of returning zero" begin
     N = 16
     domain = PeriodicDomain(N)
     u = ScalarField(domain, "u")
     f = ScalarField(domain, "f")
     set!(f, (x,) -> sin(x))
 
-    prob = LBVP([u])
+    prob = LinearBoundaryValueProblem([u])
     add_parameters!(prob, f = f)
     add_equation!(prob, "lap(u) = f")
     add_bc!(prob, "u(x=0) = 0")
@@ -63,7 +63,7 @@ end
         f = ScalarField(domain, "f"); set!(f, (x,) -> sin(x))
         g = ScalarField(domain, "g"); set!(g, (x,) -> cos(2x))
 
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         add_parameters!(prob, f = f, g = g, c = 3.0)
         add_equation!(prob, "lap(u) = $rhs")
         add_bc!(prob, "u(x=0) = 0")
@@ -75,7 +75,7 @@ end
     end
 end
 
-@testset "A coupled Fourier×Chebyshev LBVP still solves to its analytic answer" begin
+@testset "A coupled Fourier×Chebyshev LinearBoundaryValueProblem still solves to its analytic answer" begin
     # The guard now throws where it used to skip, so pin the case that legitimately
     # assembles: every block fits, and the solve must be unaffected.
     Nx, Nz, Lz = 8, 24, 1.0
@@ -101,7 +101,7 @@ end
         fd[i, k] = -λ * uex(xg[i], zg[k])
     end
 
-    prob = LBVP([u, tau1, tau2])
+    prob = LinearBoundaryValueProblem([u, tau1, tau2])
     prob.namespace["f"] = fld
     add_parameters!(prob; Lz = Lz, l1 = lift(tau1, lb2, -1), l2 = lift(tau2, lb2, -2))
     add_equation!(prob, "Δ(u) + l1 + l2 = f")
@@ -153,7 +153,7 @@ end
 
     # Constant RHS: nothing dropped, the global vector can carry it.
     u1 = ScalarField(domain, "u")
-    p1 = LBVP([u1])
+    p1 = LinearBoundaryValueProblem([u1])
     add_equation!(p1, "lap(u) = 3.0")
     add_bc!(p1, "u(x=0) = 0")
     Tarang.build_matrix_expressions!(p1)
@@ -162,7 +162,7 @@ end
     # Field-valued RHS: dropped, so the guard must name that equation.
     u2 = ScalarField(domain, "u")
     f2 = ScalarField(domain, "f"); set!(f2, (x,) -> sin(x))
-    p2 = LBVP([u2])
+    p2 = LinearBoundaryValueProblem([u2])
     add_parameters!(p2, f = f2)
     add_equation!(p2, "lap(u) = f")
     add_bc!(p2, "u(x=0) = 0")

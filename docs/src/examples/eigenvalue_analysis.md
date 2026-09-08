@@ -13,7 +13,7 @@ A \mathbf{x} = \sigma B \mathbf{x}
 where σ is the eigenvalue (growth rate + frequency).
 
 In Tarang the eigenvalue **replaces the time derivative**: you write the linearised
-equation exactly as you would for an IVP, keeping the `dt(·)` term, and the solver
+equation exactly as you would for an InitialValueProblem, keeping the `dt(·)` term, and the solver
 assembles `σ M x + L x = 0`. You never multiply the eigenvalue symbol into the equation
 yourself. Every boundary condition is declared with `add_bc!` and paired with a `tau`
 variable lifted into the bulk equation.
@@ -59,7 +59,7 @@ function rbc_evp(Ra, k; Pr=1.0, Nz=32, slip=:free)
     tw = [ScalarField(dist, "tw$i", (), Float64) for i in 1:4]
     tT = [ScalarField(dist, "tT$i", (), Float64) for i in 1:2]
 
-    evp = EVP([w, T, tw..., tT...]; eigenvalue=:σ)
+    evp = EigenvalueProblem([w, T, tw..., tT...]; eigenvalue=:σ)
     add_parameters!(evp; Pr=Pr, k2=k^2, k4=k^4, twok2=2k^2, buoy=Pr*Ra*k^2,
                     lw1=lift(tw[1], lift_basis, -1), lw2=lift(tw[2], lift_basis, -2),
                     lw3=lift(tw[3], lift_basis, -3), lw4=lift(tw[4], lift_basis, -4),
@@ -175,7 +175,7 @@ function os_evp(Re, k, Nz)
     get_grid_data(U) .= 1 .- z .^ 2
     ensure_layout!(U, :c)
 
-    evp = EVP([psi, tp...]; eigenvalue=:σ)
+    evp = EigenvalueProblem([psi, tp...]; eigenvalue=:σ)
     add_parameters!(evp; U=U, k2=k^2, k4=k^4, twok2=2k^2,
                     mik=-1im*k,           # -ik
                     Upp=1im*k*(-2.0),     #  ik U''   (U'' = -2)
@@ -281,7 +281,7 @@ The stress-free eigenfunction is `sin(πz)`, recovered here to three digits. `z`
 ### Finding Specific Eigenvalues
 
 Building a solver merges the boundary conditions into the equation set, which **mutates
-the problem**: a given `EVP` can be handed to `EigenvalueSolver` only once. Reusing it
+the problem**: a given `EigenvalueProblem` can be handed to `EigenvalueSolver` only once. Reusing it
 raises `Number of equations (14) does not match number of variables (8)`. Build a fresh
 problem for each solver — which is why every example here wraps the problem in a function.
 

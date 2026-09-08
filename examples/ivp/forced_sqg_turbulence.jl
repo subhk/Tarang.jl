@@ -66,7 +66,7 @@ forcing = StochasticForcing(
 
 # ─── Problem ─────────────────────────────────────────────────
 # SQG inversion: ψ = (-Δ)^(-1/2) θ. The inverse sets the mean mode to zero.
-problem = IVP([θ, ψ, u])
+problem = InitialValueProblem([θ, ψ, u])
 add_parameters!(problem, nu=nu, alpha=alpha)
 
 add_equation!(problem, "∂t(θ) + nu*fraclap(θ, alpha) = -u⋅∇(θ)")    # Buoyancy evolution

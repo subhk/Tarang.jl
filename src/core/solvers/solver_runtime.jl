@@ -45,19 +45,10 @@ end
 """
     _sync_solver_from_timestepper!(solver)
 
-Point `solver.state` at the newest timestepper history buffer, then re-bind
-`problem.variables` — the field handles the user built and still holds — onto that same
-storage.
-
-This used to `sync_state_to_problem!`, i.e. COPY the state into the user's handles. Two
-problems with that. The steppers recycle their field-sets, so after one step
-`solver.state[1] !== T` and the user's `T` was a stale duplicate: anything written through it
-(a nudging term, a mid-run reset, a hand-set IC) was **silently discarded** on the next sync,
-with no error. And the copy itself was a full state-sized memcpy every step, which the rest of
-this stepper works hard to avoid.
-
-Aliasing fixes both: the handle and the live state share one array, so a user write IS the
-state, reads are always current, and the per-step copy disappears.
+Point `solver.state` at the newest timestepper history buffer, then bind the
+user's `problem.variables` handles to the same storage. Storage includes the
+authoritative layout, so changing either handle's grid or coefficient data is
+immediately visible through the other handle without a per-step array copy.
 """
 function _sync_solver_from_timestepper!(solver::InitialValueSolver)
     ts_state = solver.timestepper_state
@@ -68,20 +59,23 @@ function _sync_solver_from_timestepper!(solver::InitialValueSolver)
     return solver.state
 end
 
-"""Re-bind each problem variable's storage to the corresponding live state field.
+"""Bind problem variables to live state or stage storage in flattened field order.
 
-A pointer swap per field, not a copy. Walks the variables in the same order as
-`sync_state_to_problem!` so the state index lines up. A variable that already IS the state
-field (the common case before the first recycle) is left alone."""
+Share the complete storage object, including its layout flag, so transformations
+and buffer replacements through either handle cannot leave the other stale.
+Rebinding also leaves the previous storage independent for retained history.
+"""
 function _alias_state_to_problem!(problem::Problem, state::Vector{<:ScalarField})
     idx = 1
     @inline function bind!(comp)
         idx > length(state) && return
         s = state[idx]
         if comp !== s
-            set_grid_data!(comp, get_grid_data(s))
-            set_coeff_data!(comp, get_coeff_data(s))
-            comp.current_layout = s.current_layout
+            comp.storage = s.storage
+            comp.layout = s.layout
+            comp.scales = s.scales
+            comp.transform_bundle = s.transform_bundle
+            comp.fft_mode = s.fft_mode
         end
         idx += 1
         return

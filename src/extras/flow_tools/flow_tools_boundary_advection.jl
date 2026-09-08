@@ -170,7 +170,7 @@ mutable struct BoundaryAdvectionDiffusion
     # Optional interior coupling
     interior_dist::Union{Nothing, Distributor}
     interior_field::Union{Nothing, ScalarField}
-    interior_problem::Union{Nothing, LBVP}
+    interior_problem::Union{Nothing, LinearBoundaryValueProblem}
     interior_bases::Union{Nothing, Tuple}
 
     # Source terms (user-defined functions)
@@ -357,8 +357,8 @@ function setup_interior_coupling(
     # Create interior field (e.g., streamfunction)
     interior_field = ScalarField(dist_3d, "ψ", bases_3d, dtype)
 
-    # Create LBVP for interior
-    interior_problem = LBVP([interior_field])
+    # Create LinearBoundaryValueProblem for interior
+    interior_problem = LinearBoundaryValueProblem([interior_field])
 
     # Add parameters
     if haskey(config, :params)
@@ -581,7 +581,7 @@ function bad_step!(bad::BoundaryAdvectionDiffusion, dt::Real; timestepper::Symbo
 end
 
 """
-Solve interior problem (LBVP) with current boundary values as BCs.
+Solve interior problem (LinearBoundaryValueProblem) with current boundary values as BCs.
 """
 function bad_solve_interior!(bad::BoundaryAdvectionDiffusion)
     if bad.interior_problem === nothing
@@ -593,7 +593,7 @@ function bad_solve_interior!(bad::BoundaryAdvectionDiffusion)
         bad.interior_problem.namespace[bspec.field_name] = bad.fields[bspec.name]
     end
 
-    # Solve LBVP
+    # Solve LinearBoundaryValueProblem
     solver = BoundaryValueSolver(bad.interior_problem)
     solve!(solver)
 end

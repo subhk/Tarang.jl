@@ -16,7 +16,7 @@ using LinearAlgebra
     u = VectorField(domain, "u")
     tau_p = ScalarField(dist, "tau_p", (), Float64)
 
-    problem = IVP([p, b, u, tau_p])
+    problem = InitialValueProblem([p, b, u, tau_p])
 
     ps = PencilSystem(problem, xb, zb)
 
@@ -57,7 +57,7 @@ end
     original_ux = copy(get_coeff_data(u.components[1]))
     original_uz = copy(get_coeff_data(u.components[2]))
 
-    problem = IVP([b, u])
+    problem = InitialValueProblem([b, u])
     ps = PencilSystem(problem, xb, zb)
 
     # Scatter

@@ -204,6 +204,7 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
     coordinate_info::Dict{String, Any}
     time_variable::Union{String, Nothing}
     coordinate_fields::Dict{String, Any}
+    namespace::Dict{String, Any}
     time_dependent_bcs::Vector{Int}
     space_dependent_bcs::Vector{Int}
     bc_update_required::Bool
@@ -221,7 +222,7 @@ mutable struct BoundaryConditionManager{Arch<:AbstractArchitecture}
 
         new{Arch}(AbstractBoundaryCondition[], Dict{String, Any}(),
             Dict{String, Any}(), Dict{String, Any}(), nothing,
-            Dict{String, Any}(), Int[], Int[], false,
+            Dict{String, Any}(), Dict{String, Any}(), Int[], Int[], false,
             Int[],
             Dict{Int, Int}(),
             workspace, bc_cache, perf_stats, architecture)

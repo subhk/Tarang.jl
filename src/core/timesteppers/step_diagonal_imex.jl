@@ -525,11 +525,11 @@ function _accumulate_diagonal_L!(Lhat, k2, expr, sgn::Float64, field::ScalarFiel
         # ConstantOperator (parsed numeric literal, e.g. `0.3*d(q,x)`).
         cl = _as_diagonal_scalar(expr.left)
         if cl !== nothing
-            return _accumulate_diagonal_term!(Lhat, k2, sgn * cl, expr.right, field)
+            return _accumulate_diagonal_L!(Lhat, k2, expr.right, sgn * cl, field)
         end
         cr = _as_diagonal_scalar(expr.right)
         if cr !== nothing
-            return _accumulate_diagonal_term!(Lhat, k2, sgn * cr, expr.left, field)
+            return _accumulate_diagonal_L!(Lhat, k2, expr.left, sgn * cr, field)
         end
         return false
     else
@@ -541,14 +541,37 @@ end
 _as_diagonal_scalar(x) = x isa Number ? Float64(x) :
                          (isa(x, ConstantOperator) ? Float64(x.value) : nothing)
 
+"""Multiplier of an operator's operand relative to the field being stepped.
+The common bare-self operand is the scalar identity; composed operands use a
+device-matching scratch array. A cross-field or non-diagonal operand fails
+instead of being silently replaced by the stepped field."""
+function _diagonal_operand_multiplier(template, k2, operand, field::ScalarField)
+    if operand isa ScalarField
+        return (operand === field || operand.name == field.name) ? 1.0 : nothing
+    end
+    multiplier = similar_zeros(template, eltype(template), size(template)...)
+    _accumulate_diagonal_L!(multiplier, k2, operand, 1.0, field) || return nothing
+    return multiplier
+end
+
 function _accumulate_diagonal_term!(Lhat, k2, coeff::Float64, op, field::ScalarField)
     if isa(op, FractionalLaplacian)
+        operand_multiplier = _diagonal_operand_multiplier(Lhat, k2, op.operand, field)
+        operand_multiplier === nothing && return false
         α = op.α
-        @. Lhat += coeff * k2 ^ α
+        if α < 0
+            # Match the inverse fractional Laplacian's zero-mean convention.
+            @. Lhat += coeff * ifelse(k2 > 1e-14, k2 ^ α, 0.0) * operand_multiplier
+        else
+            @. Lhat += coeff * k2 ^ α * operand_multiplier
+        end
         return true
     elseif isa(op, Laplacian)
-        # ∇² → −k²
-        @. Lhat += coeff * (-k2)
+        operand_multiplier = _diagonal_operand_multiplier(Lhat, k2, op.operand, field)
+        operand_multiplier === nothing && return false
+        # Compose the outer ∇² multiplier with the complete operand: e.g.
+        # ∇²(∇²u) has multiplier (+k⁴), while ∇²(v) is cross-field coupling.
+        @. Lhat += coeff * (-k2) * operand_multiplier
         return true
     elseif isa(op, ScalarField)
         # A bare field in L is a constant damping term μ·u ONLY when it is the

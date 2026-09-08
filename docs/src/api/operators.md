@@ -210,7 +210,7 @@ advective form instead — it compiles and steps:
 omega = ScalarField(domain, "omega")     # in 2D the vorticity is a SCALAR
 set!(omega, (x, y) -> -sin(x) - cos(y))  # = curl(u) for the u above
 
-problem = IVP([omega, u])
+problem = InitialValueProblem([omega, u])
 add_parameters!(problem, nu=0.01)
 add_equation!(problem, "∂t(omega) - nu*Δ(omega) = -u⋅∇(omega)")
 add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")
@@ -272,7 +272,7 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 ```
 
 ```julia
-# Poisson equation (LBVP) — Δφ = ρ with Dirichlet BCs on a Fourier × Chebyshev domain.
+# Poisson equation (LinearBoundaryValueProblem) — Δφ = ρ with Dirichlet BCs on a Fourier × Chebyshev domain.
 # A BVP needs boundary conditions, and the Chebyshev axis needs tau terms.
 # NOTE: this block builds its OWN domain, so it uses fresh names (`pcoords`, `pdist`, …)
 # and leaves the 2-D setup above intact for the later sections.
@@ -297,7 +297,7 @@ lift_basis = derivative_basis(zb, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_phi   = grad(phi) + ez * τ_lift(tau1)
 
-problem = LBVP([phi, tau1, tau2])
+problem = LinearBoundaryValueProblem([phi, tau1, tau2])
 add_parameters!(problem, rho=rho, grad_phi=grad_phi, τ_lift=τ_lift)
 add_equation!(problem, "div(grad_phi) + τ_lift(tau2) = rho")
 add_bc!(problem, "phi(z=0) = 0")
@@ -381,7 +381,7 @@ add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")
 ```
 
-**Note**: Only use in IVP (Initial Value Problems). Not valid for BVP or EVP.
+**Note**: Only use in InitialValueProblem (Initial Value Problems). Not valid for BVP or EigenvalueProblem.
 
 ---
 
@@ -566,7 +566,7 @@ register as a parameter and then name inside an equation string:
 ```julia
 hyperdiffusion(field, k4) = k4 * Δ(Δ(field))
 
-problem = IVP([T])
+problem = InitialValueProblem([T])
 add_parameters!(problem, hyper_T = hyperdiffusion(T, 1e-4))
 add_equation!(problem, "∂t(T) + hyper_T = 0")
 

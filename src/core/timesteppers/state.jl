@@ -428,21 +428,26 @@ function get_cached_forcing(state::TimestepperState)
 end
 
 """
-    _update_registered_forcings!(solver::InitialValueSolver, sim_time::Float64, dt::Float64)
+    _update_registered_forcings!(solver::InitialValueSolver, sim_time::Float64, dt::Float64,
+                                 forcing_type=Forcing)
 
-Generate new forcing realizations for all forcings registered via `add_stochastic_forcing!`.
-Called ONCE at the beginning of each timestep to ensure Stratonovich calculus correctness.
+Update registered forcings belonging to `forcing_type`. Stochastic forcings are
+updated once at the beginning of each timestep; deterministic forcings are
+evaluated at the time requested by each RHS evaluation. The default updates all
+registered forcings for callers explicitly requesting a complete refresh.
 """
-function _update_registered_forcings!(solver::InitialValueSolver, sim_time::Float64, dt::Float64)
+function _update_registered_forcings!(solver::InitialValueSolver, sim_time::Float64,
+                                      dt::Float64, ::Type{F}=Forcing) where {F<:Forcing}
     problem = solver.problem
 
-    # Check if problem has stochastic_forcings field (only IVP does)
+    # Check if problem has stochastic_forcings field (only InitialValueProblem does)
     if !hasfield(typeof(problem), :stochastic_forcings)
         return
     end
 
     # Generate forcing for each registered forcing
     for (var_idx, forcing) in problem.stochastic_forcings
+        forcing isa F || continue
         var_idx <= length(solver.state) || throw(ArgumentError(
             "Registered forcing targets state index $var_idx, but the solver has " *
             "only $(length(solver.state)) state fields.",
@@ -486,6 +491,26 @@ function _generate_one_forcing!(forcing::DeterministicForcing,
         reshape(raw_grids[axis], shape)
     end
     generate_forcing!(forcing, shaped_grids, sim_time)
+
+    # The RHS is assembled in COEFFICIENT space (`_add_registered_forcings_to_lazy_rhs!`),
+    # but a deterministic forcing is evaluated on the physical grid. Transform it
+    # with the target field's own transform so the coefficient image has the
+    # target's exact layout (rfft half-grid, PencilArray decomposition, device).
+    # Before this existed, the untyped `_matched_forcing_view` fallback sliced
+    # the GRID values into the coefficient array: a registered
+    # `DeterministicForcing` was applied as if its physical values were spectral
+    # coefficients, and `dt(u) = 0` forced by `cos(x)` came out at half amplitude
+    # with the wrong shape, without any error.
+    scratch = forcing.spectral_scratch
+    if scratch === nothing || scratch.dist !== target_field.dist ||
+       scratch.bases !== target_field.bases || scratch.dtype !== target_field.dtype
+        scratch = ScalarField(target_field.dist, "_deterministic_forcing_scratch",
+                              target_field.bases, target_field.dtype)
+        forcing.spectral_scratch = scratch
+    end
+    scratch.current_layout = :g
+    set_local_data!(get_grid_data(scratch), forcing.cached_forcing)
+    coeff_data!(scratch)      # transform to :c; the view reads the coefficient buffer
     return nothing
 end
 
@@ -498,7 +523,7 @@ Called at the END of each timestep after the solution has been advanced.
 function _update_temporal_filters!(solver::InitialValueSolver, dt::Float64)
     problem = solver.problem
 
-    # Check if problem has temporal_filters field (only IVP does)
+    # Check if problem has temporal_filters field (only InitialValueProblem does)
     if !hasfield(typeof(problem), :temporal_filters)
         return
     end

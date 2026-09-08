@@ -12,9 +12,28 @@ julia --project=. -e 'using Pkg; Pkg.test()'
 
 ### Specific Test File
 
+Every file under `test/` is self-contained (it starts with `using Test, Tarang`),
+so it can be included on its own:
+
 ```bash
-julia --project=. test/test_specific.jl
+julia --project=. -e 'using Test, Tarang; include("test/test_solvers.jl")'
 ```
+
+Files that emulate a GPU with `JLArrays` (`test_gpu_*_jlarray.jl`,
+`test_2d_gpu_domain_compat.jl`, `test_gpu_2d_device_stack.jl`, ...) need the
+test dependencies, which resolve only under `Pkg.test()`; run those through the
+full suite, or from a scratch environment that `Pkg.develop`s this checkout and
+adds `JLArrays`. Do not run with `--project=test`: that creates a
+`test/Project.toml` and breaks the suite.
+
+The optional and GPU groups are switched on with environment variables read by
+`test/runtests.jl`:
+
+| Variable | Effect |
+|---|---|
+| `TARANG_RUN_OPTIONAL_TESTS=true` | also run `OPTIONAL_TEST_FILES` |
+| `TARANG_ONLY_OPTIONAL_TESTS=true` | run only `OPTIONAL_TEST_FILES` |
+| `TARANG_RUN_GPU_TESTS=true` | also run `GPU_TEST_FILES` (they skip without CUDA) |
 
 ### With MPI
 
@@ -50,17 +69,86 @@ testset when no functional device is present.
 
 ## Test Structure
 
-```
-test/
-├── runtests.jl              # Main test runner
-├── test_cfl.jl              # CFL condition tests
-├── test_domain_metadata.jl  # Domain tests
-├── test_solvers.jl          # Solver tests
-├── test_flow_tools.jl       # Analysis tools
-├── test_quick_domains.jl    # Domain helpers
-├── test_plot_tools.jl       # Visualization
-└── test_compatibility.jl    # Compatibility tests
-```
+There is no hand-maintained list of test files in the runner. `test/file_lists.jl`
+is the single registry, and every driver reads it:
+
+| List | Files | Run by |
+|---|---|---|
+| `TEST_FILES` | ~170 | `Pkg.test()` on every CI job |
+| `OPTIONAL_TEST_FILES` | 7 | `Pkg.test()` with `TARANG_RUN_OPTIONAL_TESTS=true` |
+| `GPU_TEST_FILES` | 5 | `test/run_gpu_ci.jl` on a CUDA host (Buildkite) |
+| `MPI_TEST_FILES` | 58 | `test/run_mpi_ci.jl [nprocs]`, one `mpiexec` world per file |
+| `DISTRIBUTED_GPU_TEST_FILES` | 8 | `TARANG_MPI_FILESET=distributed_gpu test/run_mpi_ci.jl 2` (CUDA + NCCL) |
+
+`test_test_inventory.jl` runs first and fails if a `test_*.jl` file on disk is
+missing from the registry, a registered file is missing on disk, or a registered
+file is not tracked by git (a file that was never `git add`ed passes locally and
+fails on every clean clone). Register new files in exactly one list.
+
+Beyond feature tests, several files are *ratchets* that pin a population the
+codebase must not grow — `test_layout_discipline_ratchet.jl`,
+`test_backend_dispatch_ratchet.jl`, `test_hasfield_ratchet.jl`,
+`test_buffer_ownership_ratchet.jl`, `test_decomposition_convention.jl`, and the
+JET/Aqua files. Their header comments explain what each count guards.
+
+## Testing GPU paths without a GPU
+
+GPU CI is a self-hosted Buildkite job that rarely runs, so most device coverage
+is hardware-free and lives in the default CPU suite. Three methods are in use;
+reach for the one that matches what you are testing.
+
+**Device arrays via `JLArrays`.** `JLArray` is GPUArrays' CPU-backed reference
+device array. A test file declares `Tarang.is_gpu_array(::JLArray) = true`,
+`architecture`, `on_architecture`, `copy_to_device`, and `array_type` for
+`GPU{JLBackend}`, and then every field built on
+`Distributor(coords; device=GPU(JLBackend()))` is device-resident: the
+execution plan says `:gpu`, the field path and diagonal-IMEX broadcasts run on
+device arrays, and `GPUArrays.allowscalar(false)` turns any scalar indexing
+into an error, exactly as on a `CuArray`. What `JLArray` lacks is a device FFT.
+`test_gpu_timesteppers_jlarray.jl` supplies a cuFFT stand-in — the transform
+backend copies the device buffer into a CPU twin field of the same domain, runs
+the CPU transform, and copies back — which makes device-vs-CPU comparisons of
+whole time steps exact. That file runs all twenty timesteppers on the real
+single-GPU dispatch path.
+
+`test_gpu_boundary_regressions_jlarray.jl` additionally exercises boundary-value
+solves, unit-vector fields, and moving wall constraints with scalar indexing
+disabled. FFTs and sparse LU use explicit host stand-ins; field storage,
+boundary gather/override, stage arithmetic, and solution scatter use device
+arrays. Native CUDA coverage lives in `test_gpu_fc_2d_complete.jl` and requires
+CUDA hardware.
+
+**KernelAbstractions kernels on the CPU backend.** The kernels in
+`ext/cuda/` and `src/core/subsystems/mode_batch_kernels.jl` are
+`KernelAbstractions.@kernel`s, so the same kernel object launches on
+`KernelAbstractions.CPU()` over plain arrays
+(`test_gpu_dct1_kernels_cpu.jl`, `test_gpu_transpose_kernels_cpu.jl`,
+`test_gpu_kernels_cpu.jl`). Index math and normalization are verified against
+the CPU chain; only the CUDA launch itself is not.
+
+**GPU decision branches on CPU arrays.** Some GPU-only code is selected by a
+predicate rather than by array type — the coupled subproblem steppers choose
+the batched solve and the device-style constrained final update through
+`_gpu_subproblem_execution(sp)`. Forcing that predicate on CPU arrays runs the
+GPU branch with CPU linear algebra, which is how
+`test_timestepper_boundaries.jl` pins that the GPU and CPU final updates agree
+to roundoff on well-posed problems.
+
+When you write a hardware-free GPU test, break the thing it guards and confirm
+that exactly the intended assertion fails (mutation testing). Most of the GPU
+bugs found in this repository were behind checks that looked like verification
+and were not: a parity test whose homogeneous boundary conditions made the
+whole boundary path inert, a runner that would have run the CPU path and
+reported a pass, a signature that hashed a field that differs across modes.
+
+## Documentation code is tested
+
+`test_webdocs_code.jl` parses every Julia, Bash, TOML, and Dockerfile fence under
+`docs/src` on every run. A fence that does not parse fails the suite, so
+pseudo-code belongs in a `text` fence. With `TARANG_RUN_WEBDOCS_EXAMPLES=true`
+the self-contained Julia examples (fences containing `using Tarang`) are also
+executed in fresh temporary directories; `TARANG_WEBDOCS_FILTER` narrows the run
+to matching files.
 
 ## Writing Tests
 
@@ -127,9 +215,9 @@ end
 ### Testing Solvers
 
 ```julia
-@testset "IVP Solver" begin
+@testset "InitialValueProblem Solver" begin
     # Setup problem
-    problem = IVP([field])
+    problem = InitialValueProblem([field])
     Tarang.add_equation!(problem, "∂t(f) = -f")
 
     # Create solver

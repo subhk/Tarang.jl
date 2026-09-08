@@ -78,6 +78,8 @@ end
 function Base.getproperty(field::ScalarField, s::Symbol)
     if s === :buffers
         return getfield(field, :storage)  # backward-compatible :buffers → :storage
+    elseif s === :current_layout
+        return getfield(getfield(field, :storage), :current_layout)
     elseif s === :data_g
         throw(ArgumentError("Direct access to field.data_g is deprecated. Use get_grid_data(field) instead."))
     elseif s === :data_c
@@ -90,6 +92,8 @@ end
 function Base.setproperty!(field::ScalarField, s::Symbol, value)
     if s === :buffers
         setfield!(field, :storage, value)  # backward-compatible :buffers → :storage
+    elseif s === :current_layout
+        setproperty!(getfield(field, :storage), :current_layout, value)
     elseif s === :data_g
         throw(ArgumentError("Assign to field.data_g via set_grid_data!(field, value) instead of direct property access."))
     elseif s === :data_c
@@ -103,7 +107,7 @@ end
 function Base.propertynames(::ScalarField, private::Bool=false)
     base_names = fieldnames(ScalarField)
     filtered = filter(n -> n ∉ (:data_g, :data_c), base_names)
-    return (filtered..., :buffers)  # virtual property for backward compat
+    return (filtered..., :buffers, :current_layout)  # virtual storage properties
 end
 
 # LockedField convenience constructors

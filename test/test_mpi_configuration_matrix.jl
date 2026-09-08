@@ -103,7 +103,7 @@ fourier_grid(N) = [2π * (i - 1) / N for i in 1:N]
 # Builders. Each returns (field, expected_global_array) or throws.
 # ---------------------------------------------------------------------------
 
-"""2D distributed pure-Fourier IVP: dt(u) = κ∇²u, u₀ = sin(x)cos(y).
+"""2D distributed pure-Fourier InitialValueProblem: dt(u) = κ∇²u, u₀ = sin(x)cos(y).
 
 A single eigenmode, so this is spatially exact and decays as exp(-2κt): any error
 is the time integration alone. That is what makes it a collapse detector — a
@@ -120,14 +120,14 @@ function cm_ivp_fourier_2d(stepper; N = 16, dt = 0.01)
     g = fourier_grid(N)
     u0 = [sin(x) * cos(y) for x in g, y in g]
     cm_set_local!(u, u0)
-    prob = IVP([u]); add_parameters!(prob, kappa = CM_KAPPA)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = CM_KAPPA)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     solver = InitialValueSolver(prob, stepper; dt)
     for _ in 1:round(Int, CM_TFIN / dt); step!(solver, dt); end
     return solver.state[1], u0 .* exp(-2 * CM_KAPPA * CM_TFIN)
 end
 
-"""3D distributed pure-Fourier IVP. At 4 ranks this is a 2D pencil mesh, which is
+"""3D distributed pure-Fourier InitialValueProblem. At 4 ranks this is a 2D pencil mesh, which is
 a different decomposition code path from the 2D slab above."""
 function cm_ivp_fourier_3d(stepper; N = 8, dt = 0.01)
     coords = CartesianCoordinates("x", "y", "z")
@@ -138,14 +138,14 @@ function cm_ivp_fourier_3d(stepper; N = 8, dt = 0.01)
     g = fourier_grid(N)
     u0 = [sin(x) * cos(y) * sin(z) for x in g, y in g, z in g]
     cm_set_local!(u, u0)
-    prob = IVP([u]); add_parameters!(prob, kappa = CM_KAPPA)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = CM_KAPPA)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     solver = InitialValueSolver(prob, stepper; dt)
     for _ in 1:round(Int, CM_TFIN / dt); step!(solver, dt); end
     return solver.state[1], u0 .* exp(-3 * CM_KAPPA * CM_TFIN)
 end
 
-"""Chebyshev×Fourier LBVP, Chebyshev axis FIRST: Δu + lift(τ₁) + lift(τ₂) = f,
+"""Chebyshev×Fourier LinearBoundaryValueProblem, Chebyshev axis FIRST: Δu + lift(τ₁) + lift(τ₂) = f,
 u(z=0)=u(z=Lz)=0, manufactured u = sin(πz/Lz)cos(2x).
 
 `cheb_first` and `tau_per_mode` are the two knobs that decide whether this
@@ -177,7 +177,7 @@ function cm_lbvp_cheb_fourier(; cheb_first::Bool, tau_per_mode::Bool,
     else
         for i in axes(fd, 1), k in axes(fd, 2); fd[i, k] = -λ * uex(zg[k], xg[i]); end
     end
-    prob = LBVP([u, t1, t2]); prob.namespace["f"] = fld
+    prob = LinearBoundaryValueProblem([u, t1, t2]); prob.namespace["f"] = fld
     add_parameters!(prob; Lz = Lz, l1 = lift(t1, lb2, -1), l2 = lift(t2, lb2, -2))
     add_equation!(prob, "Δ(u) + l1 + l2 = f")
     add_bc!(prob, "u(z=0) = 0"); add_bc!(prob, "u(z=Lz) = 0")
@@ -189,7 +189,7 @@ function cm_lbvp_cheb_fourier(; cheb_first::Bool, tau_per_mode::Bool,
     return u, expected
 end
 
-"""2D distributed pure-Fourier LBVP with a field RHS.
+"""2D distributed pure-Fourier LinearBoundaryValueProblem with a field RHS.
 
 Both axes are periodic, so the point BC `u(x=0)=0` has no boundary to sit on and
 its tau row does not fit the operator. This must REFUSE: the block-mismatch fix
@@ -205,7 +205,7 @@ function cm_lbvp_fourier_2d(; N = 8)
     u = ScalarField(dom, "u"); f = ScalarField(dom, "f")
     g = fourier_grid(N)
     cm_set_local!(f, [sin(x) * cos(y) for x in g, y in g])
-    prob = LBVP([u]); add_parameters!(prob, f = f)
+    prob = LinearBoundaryValueProblem([u]); add_parameters!(prob, f = f)
     add_equation!(prob, "lap(u) = f"); add_bc!(prob, "u(x=0) = 0")
     solver = BoundaryValueSolver(prob); solve!(solver)
     return u, [-sin(x) * cos(y) / 2 for x in g, y in g]
@@ -216,48 +216,48 @@ end
 # ---------------------------------------------------------------------------
 
 const CM_MATRIX = [
-    # --- IVP across timesteppers on a decomposed pure-Fourier domain. This is the
+    # --- InitialValueProblem across timesteppers on a decomposed pure-Fourier domain. This is the
     #     configuration where multistep silently became forward Euler: it builds no
     #     per-mode subproblems and cannot factorize a global matrix, so every scheme
     #     is served by the matrix-free field path. A fixed-dt value check catches an
     #     order collapse that a convergence-rate check can miss.
-    ("IVP  2D Fourier  RK222",  () -> cm_ivp_fourier_2d(RK222()), :solves, 1e-6),
-    ("IVP  2D Fourier  RK443",  () -> cm_ivp_fourier_2d(RK443()), :solves, 1e-6),
-    ("IVP  2D Fourier  CNAB2",  () -> cm_ivp_fourier_2d(CNAB2()), :solves, 1e-5),
-    ("IVP  2D Fourier  SBDF2",  () -> cm_ivp_fourier_2d(SBDF2()), :solves, 1e-5),
-    ("IVP  2D Fourier  SBDF3",  () -> cm_ivp_fourier_2d(SBDF3()), :solves, 1e-5),
-    ("IVP  2D Fourier  SBDF4",  () -> cm_ivp_fourier_2d(SBDF4()), :solves, 1e-5),
+    ("InitialValueProblem  2D Fourier  RK222",  () -> cm_ivp_fourier_2d(RK222()), :solves, 1e-6),
+    ("InitialValueProblem  2D Fourier  RK443",  () -> cm_ivp_fourier_2d(RK443()), :solves, 1e-6),
+    ("InitialValueProblem  2D Fourier  CNAB2",  () -> cm_ivp_fourier_2d(CNAB2()), :solves, 1e-5),
+    ("InitialValueProblem  2D Fourier  SBDF2",  () -> cm_ivp_fourier_2d(SBDF2()), :solves, 1e-5),
+    ("InitialValueProblem  2D Fourier  SBDF3",  () -> cm_ivp_fourier_2d(SBDF3()), :solves, 1e-5),
+    ("InitialValueProblem  2D Fourier  SBDF4",  () -> cm_ivp_fourier_2d(SBDF4()), :solves, 1e-5),
 
     # --- 3D, which is a 2D pencil mesh at 4 ranks rather than a slab.
-    ("IVP  3D Fourier  RK222",  () -> cm_ivp_fourier_3d(RK222()), :solves, 1e-6),
-    ("IVP  3D Fourier  SBDF2",  () -> cm_ivp_fourier_3d(SBDF2()), :solves, 1e-5),
+    ("InitialValueProblem  3D Fourier  RK222",  () -> cm_ivp_fourier_3d(RK222()), :solves, 1e-6),
+    ("InitialValueProblem  3D Fourier  SBDF2",  () -> cm_ivp_fourier_3d(SBDF2()), :solves, 1e-5),
 
-    # --- LBVP across (coordinate order) × (tau shape). Only one of the four is
+    # --- LinearBoundaryValueProblem across (coordinate order) × (tau shape). Only one of the four is
     #     supported distributed, and the other three must say so rather than
     #     produce a number. Each refusal has a distinct cause, noted per row.
     #
     # Supported: Chebyshev first, scalar taus. The decomposed trailing axis is the
     # Fourier one, and the solve-layout transpose covers the per-mode gather.
-    ("LBVP Cheb-first  scalar tau",
+    ("LinearBoundaryValueProblem Cheb-first  scalar tau",
         () -> cm_lbvp_cheb_fourier(cheb_first = true,  tau_per_mode = false), :solves, 1e-8),
     # Chebyshev first, per-mode taus: rejected. A tau field carrying only the
     # Fourier axis is a 1D field, and a 1D distributed FFT needs global data.
     # Serially this same construction dies on a raw DimensionMismatch out of the
     # block assembler, so it is unsupported everywhere, not merely under MPI —
     # scalar taus solve the identical x-dependent problem, so nothing is lost.
-    ("LBVP Cheb-first  per-mode tau",
+    ("LinearBoundaryValueProblem Cheb-first  per-mode tau",
         () -> cm_lbvp_cheb_fourier(cheb_first = true,  tau_per_mode = true),  :refuses, 0.0),
     # Fourier first: rejected because the decomposed trailing axis is then the
     # Chebyshev one, which has no distributed transform. Solves serially, which is
     # exactly why it needs a row here — the serial matrix covers it and would not
     # notice this becoming a silent CPU fallback.
-    ("LBVP Fourier-first scalar tau",
+    ("LinearBoundaryValueProblem Fourier-first scalar tau",
         () -> cm_lbvp_cheb_fourier(cheb_first = false, tau_per_mode = false), :refuses, 0.0),
-    ("LBVP Fourier-first per-mode tau",
+    ("LinearBoundaryValueProblem Fourier-first per-mode tau",
         () -> cm_lbvp_cheb_fourier(cheb_first = false, tau_per_mode = true),  :refuses, 0.0),
 
     # A point BC on an all-periodic domain has nowhere to put its tau row.
-    ("LBVP 2D Fourier",         cm_lbvp_fourier_2d,               :refuses, 0.0),
+    ("LinearBoundaryValueProblem 2D Fourier",         cm_lbvp_fourier_2d,               :refuses, 0.0),
 ]
 
 @testset "Distributed configuration matrix: solves correctly or refuses (np=$CM_NP)" begin

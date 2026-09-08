@@ -31,6 +31,8 @@ const TEST_FILES = [
     "test_execution_plan.jl",              # runtime path facts must be RECORDED at construction, not re-inferred; pins the per-scheme capability table that silently diverged across the multistep family
     "test_layering.jl",                    # Julia resolves calls at run time, so a core->tools inversion loads and runs fine and is invisible; derives load stages from load_order.jl and ratchets the backward references
     "test_deriv_pool_ownership.jl",        # grad() stored rotating-pool buffers in its result: two live 3-D vector gradients need 18 slots against a pool of 16, so grad(u) was silently overwritten by grad(v) (max err 3.0)
+    "test_cpu_derivative_result_concurrency.jl",
+    "test_cpu_fourier_concurrency.jl",
     "test_nl_product_ownership.jl",        # same family on the nonlinear pool: Base.:*(field, field) returned one of 8 rotating buffers, so a held product was silently overwritten (max err 99) — and the index is shared with the solver RHS
     "test_buffer_ownership_ratchet.jl",    # the set of rotating pools cannot grow without an ownership decision, and no FieldPool is installed behind a caller's back
     "test_hasfield_ratchet.jl",            # hasfield(typeof(x), :f) answers false both when x has no such thing and when the field was renamed — the second silently; pins the population and the structural facts the deleted guards asserted
@@ -53,12 +55,13 @@ const TEST_FILES = [
     "test_fft_dct.jl",
     "test_fftw_threads.jl",
     "test_solvers.jl",
+    "test_cpu_matsolver_concurrency.jl",
     "test_bvp_solve.jl",
     "test_evp_solve.jl",
     "test_subproblem_modes.jl",
     "test_problem_matrices_support.jl",
     "test_flow_tools.jl",
-    "test_qg_inversion.jl",             # public QG inversion must build a square tau LBVP and honor both surface-buoyancy Neumann conditions
+    "test_qg_inversion.jl",             # public QG inversion must build a square tau LinearBoundaryValueProblem and honor both surface-buoyancy Neumann conditions
     "test_spectra.jl",
     "test_quick_domains.jl",
     "test_plot_tools.jl",
@@ -107,17 +110,27 @@ const TEST_FILES = [
     "test_cov_flow_tools_domain_utils.jl",
     "test_analysis_tasks.jl",
     "test_phi_functions.jl",
+    "test_etd_matrix_phi_review.jl",
     "test_evaluator.jl",
     "test_parsing.jl",
     "test_operators_tensor.jl",
     "test_diagonal_imex.jl",
+    "test_diagonal_operator_composition.jl",
+    "test_gpu_diagonal_operator_composition_jlarray.jl",
     "test_gpu_implicit_guard.jl",             # single-GPU implicit-operator guard (CPU-side logic)
-    "test_gpu_zero_rhs_freeze.jl",             # a pure-Fourier GPU IVP had an identically-zero RHS and held its initial condition forever — empty equation_data compiled to an empty lazy plan flagged is_compiled
+    "test_gpu_zero_rhs_freeze.jl",             # a pure-Fourier GPU InitialValueProblem had an identically-zero RHS and held its initial condition forever — empty equation_data compiled to an empty lazy plan flagged is_compiled
     "test_gpu_implicit_guard_jlarray.jl",     # the same guard must FIRE on device fields — its detector read IR the GPU path never builds
     "test_2d_gpu_domain_compat.jl",           # 2D pure-Fourier GPU refresh device-safety (JLArray)
     "test_gpu_2d_device_stack.jl",            # 2D forcing kernels / device fields / staging contract (JLArray)
     "test_multistep_field_path.jl",           # matrix-free multistep for explicit GPU/MPI problems — was a permanent forward-Euler collapse
+    "test_multistep_subproblem_review.jl",
+    "test_timestepper_mass_guard.jl",
+    "test_gpu_timesteppers_jlarray.jl",       # every stepper on the single-GPU dispatch path via JLArray + a CPU-twin FFT: device == CPU, nominal order, loud refusals — MCNAB2/CNLF2 silently ran first-order on device
     "test_bc_value_matrix.jl",                # time-/space-dependent BCs must be enforced with the VALUE they name — only the FLAGS were tested
+    "test_bc_context_regressions.jl",
+    "test_stress_free_bc_regressions.jl",
+    "test_gpu_boundary_regressions_jlarray.jl",
+    "test_periodic_bc_marker.jl",
     "test_configuration_matrix.jl",           # every basis x problem x timestepper cell must solve correctly or refuse — no silent third option
     "test_bvp_fourier_forcing.jl",            # an unassemblable BVP operator must refuse, not skip a block and return a confident wrong answer
     "test_group_vara_bounds.jl",              # group_ncread/ncwrite must validate start/count before the ccall — a short vector was read past its end
@@ -173,7 +186,7 @@ const TEST_FILES = [
     "test_equation_structure_validation.jl",  # misplaced-term validation must match what actually builds
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
     "test_gpu_transpose_kernels_cpu.jl",  # transpose pack/unpack index math on the KA CPU backend — no GPU needed
-    "test_legendre_normalization.jl",  # Legendre stores ORTHONORMAL coefficients but differentiation_matrix/evaluate_basis are classical; nothing bridged them, so a Legendre LBVP was silently 80% wrong
+    "test_legendre_normalization.jl",  # Legendre stores ORTHONORMAL coefficients but differentiation_matrix/evaluate_basis are classical; nothing bridged them, so a Legendre LinearBoundaryValueProblem was silently 80% wrong
     "test_gpu_test_files_reachable.jl", # the GPU test files are executed by NOTHING (buildkite pipeline is inert), so they rot silently; parses them and checks the extension API they call still exists
     "test_webdocs_code.jl",          # Julia/Bash/TOML/Dockerfile fences parse; opt-in isolated CPU and two-rank MPI sweeps catch API drift
     "test_gpu_kernels_cpu.jl",          # element-wise/fused/spectral-pad kernels had ZERO test references and the GPU CI that would run them is inert; KA CPU backend executes the real kernel objects
@@ -266,11 +279,14 @@ const MPI_TEST_FILES = [
     "test_mpi_distributor_match_np4.jl",     # C1 coord ordering, 2x2 mesh (np==4)
     "test_mpi_distributor_remainder_np2.jl", # C3 remainder-on-last-rank (np==2)
     "test_mpi_fourier_chebyshev.jl",         # FFC: Cheb-last clear error, Cheb-first round-trip (np>=2)
-    "test_mpi_cheb_fourier_ivp.jl",          # distributed Cheb-Fourier IMEX IVP == serial (np>=2/4)
+    "test_mpi_cheb_fourier_ivp.jl",          # distributed Cheb-Fourier IMEX InitialValueProblem == serial (np>=2/4)
     "test_mpi_sbdf_high_order.jl",            # SBDF3/4 subproblem startup retains nominal convergence order (np>=2)
     "test_mpi_explicit_multistep_field.jl",   # explicit multistep on distributed pure-Fourier: field path == serial (np>=2); used to throw
+    "test_mpi_multistep_review.jl",
+    "test_mpi_timestepper_mass_guard.jl",
+    "test_mpi_diagonal_operator_composition.jl",
     "test_mpi_checkpoint_restart.jl",         # checkpoint written on N ranks loads on M and matches serial (np>=2)
-    "test_mpi_cheb_fourier_ivp_nonlinear.jl", # distributed NONLINEAR Cheb-Fourier channel IVP (advection+dealias+tau-BC+IMEX) == serial (np>=2)
+    "test_mpi_cheb_fourier_ivp_nonlinear.jl", # distributed NONLINEAR Cheb-Fourier channel InitialValueProblem (advection+dealias+tau-BC+IMEX) == serial (np>=2)
     "test_mpi_cheb_fourier_3d_pencil.jl",    # 3D Cheb-Fourier on a 2-D process mesh: the fft<->solve transpose differed in TWO decomp slots and threw (np==4)
     # MPI correctness fixes 2026-06-23 (see memory/project_mpi_audit_2026_06_21.md).
     "test_mpi_decomp_forcing_audit.jl",      # #1/#4 get_local_range slab; #2 forcing wavenumber placement (np>=2)
@@ -278,14 +294,14 @@ const MPI_TEST_FILES = [
     "test_mpi_audit_med_2026_06_28.jl",      # MED batch: LES diagnostics global reduce; VirtualFileHandler complex round-trip
 
 
-    "test_mpi_bvp_cheb_fourier.jl",          # steady LBVP/NLBVP solve-layout transpose + Newton resnorm Allreduce (np>=2)
+    "test_mpi_bvp_cheb_fourier.jl",          # steady LinearBoundaryValueProblem/NonlinearBoundaryValueProblem solve-layout transpose + Newton resnorm Allreduce (np>=2)
     "test_mpi_output_audit.jl",              # wall_dt schedule Bcast (no deadlock) + complex checkpoint metadata (np>=2)
     "test_mpi_forcing_work.jl",              # work_stratonovich/ito/instantaneous_power distributed == serial (np>=2)
     "test_mpi_padded_dealiasing.jl",         # distributed 3/2 padded dealiasing == serial (transpose-pad) (np>=2)
     "test_mpi_padded_dealiasing_3d.jl",      # distributed 3D padded dealiasing == serial (N-D, 2D-mesh at np=4) (np>=2)
     "test_mpi_padded_dealiasing_3d_slab.jl", # 3D padded dealiasing must also run on a 1-D slab mesh — the D-1 decomposition gate silently routed it to 2/3-rule truncation (np>=2)
     "test_mpi_padded_dealiasing_chebfourier.jl", # distributed mixed Cheb-Fourier dealiasing == serial (Fourier-only pad) (np>=2)
-    "test_mpi_dealiasing_ivp_3d.jl",         # 3D Burgers IVP solve distributed == serial (e2e dealias-in-timestepper) (np>=2)
+    "test_mpi_dealiasing_ivp_3d.jl",         # 3D Burgers InitialValueProblem solve distributed == serial (e2e dealias-in-timestepper) (np>=2)
     "test_mpi_padded_dealiasing_3d_mixed.jl", # 3D Cheb-Fourier-Fourier dealiasing == serial (decomp-order alignment fix) (np>=2)
     "test_distributed_gpu_transpose.jl",
     "test_transposable_field.jl",

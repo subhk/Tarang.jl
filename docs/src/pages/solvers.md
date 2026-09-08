@@ -4,7 +4,7 @@ Solvers integrate PDEs in time or solve for steady states.
 
 ## InitialValueSolver
 
-For time-dependent problems (IVP).
+For time-dependent problems (InitialValueProblem).
 
 ```julia
 using Tarang
@@ -16,7 +16,7 @@ ybasis = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
 domain = Domain(dist, (xbasis, ybasis))
 
 u = ScalarField(domain, "u")
-problem = IVP([u])
+problem = InitialValueProblem([u])
 add_parameters!(problem, nu=0.1)
 add_equation!(problem, "∂t(u) - nu*lap(u) = 0")
 set!(u, (x, y) -> sin(x) * cos(y))
@@ -34,7 +34,7 @@ end
 ### Properties
 
 ```julia
-solver.problem       # The IVP problem
+solver.problem       # The InitialValueProblem problem
 solver.timestepper   # Time integration scheme
 solver.dt            # Current timestep
 solver.sim_time      # Current simulation time
@@ -74,10 +74,10 @@ All four steps are transparent to the user. You only interact with the resulting
 ## BoundaryValueSolver
 
 `BoundaryValueSolver` solves both steady problem types: it dispatches on the problem,
-solving an `LBVP` with a single linear solve and an `NLBVP` with Newton iteration.
+solving an `LinearBoundaryValueProblem` with a single linear solve and an `NonlinearBoundaryValueProblem` with Newton iteration.
 There is no separate nonlinear solver type.
 
-### Linear (LBVP)
+### Linear (LinearBoundaryValueProblem)
 
 Manufactured Poisson problem `Δu = -2` on `z ∈ [0, 1]` with `u(0) = u(1) = 0`,
 whose exact solution is `u(z) = z(1-z)`:
@@ -96,7 +96,7 @@ tau1 = ScalarField(dist, "tau1", (xbasis,), Float64)
 tau2 = ScalarField(dist, "tau2", (xbasis,), Float64)
 lb   = derivative_basis(zbasis, 2)
 
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; Lz=1.0, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2))
 add_equation!(problem, "Δ(u) + l1 + l2 = -2")
 add_bc!(problem, "u(z=0) = 0")
@@ -111,9 +111,9 @@ ensure_layout!(u, :g)
 get_grid_data(u)          # matches z(1-z) to 1.4e-16
 ```
 
-### Nonlinear (NLBVP)
+### Nonlinear (NonlinearBoundaryValueProblem)
 
-Declare the problem as an `NLBVP` and put the nonlinear terms on the right-hand side.
+Declare the problem as an `NonlinearBoundaryValueProblem` and put the nonlinear terms on the right-hand side.
 The same `BoundaryValueSolver` then runs a per-Fourier-mode Newton iteration, rebuilding
 the Frechet Jacobian at the current state each iteration.
 
@@ -125,7 +125,7 @@ ensure_layout!(g, :g)
 zg = Tarang.create_meshgrid(domain; on_device=false)["z"]
 get_grid_data(g) .= -2 .- (zg .* (1 .- zg)) .^ 2
 
-problem = NLBVP([u, tau1, tau2])
+problem = NonlinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; Lz=1.0, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2), g=g)
 add_equation!(problem, "Δ(u) + l1 + l2 = u*u + g")
 add_bc!(problem, "u(z=0) = 0")
@@ -144,12 +144,12 @@ returns the solver and leaves the solution in the field variables — it does no
 convergence flag. Non-convergence is reported as a warning naming the final residual:
 
 ```
-┌ Warning: NLBVP per-mode Newton did not reach tolerance 1.0e-10 in 100 iters (final |F|=…)
+┌ Warning: NonlinearBoundaryValueProblem per-mode Newton did not reach tolerance 1.0e-10 in 100 iters (final |F|=…)
 ```
 
 ## EigenvalueSolver
 
-For eigenvalue problems (EVP). The eigenvalue symbol declared with `eigenvalue=` replaces
+For eigenvalue problems (EigenvalueProblem). The eigenvalue symbol declared with `eigenvalue=` replaces
 `dt(...)` in the equations, so `dt(u) - Δ(u) = 0` becomes the generalized problem
 `σ M u + L u = 0` and the returned values are the growth rates `σ`.
 
@@ -166,7 +166,7 @@ tau1 = ScalarField(dist, "tau1", (), Float64)
 tau2 = ScalarField(dist, "tau2", (), Float64)
 lb   = derivative_basis(zbasis, 2)
 
-problem = EVP([u, tau1, tau2]; eigenvalue=:σ)
+problem = EigenvalueProblem([u, tau1, tau2]; eigenvalue=:σ)
 add_parameters!(problem; Lz=1.0, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2))
 add_equation!(problem, "dt(u) - Δ(u) - l1 - l2 = 0")
 add_bc!(problem, "u(z=0) = 0")
@@ -275,7 +275,7 @@ domain = Domain(dist, (xbasis, ybasis))
 s = ScalarField(domain, "s")
 u = VectorField(domain, "u")
 
-problem = IVP([s, u])
+problem = InitialValueProblem([s, u])
 add_parameters!(problem, nu=0.05)
 add_equation!(problem, "∂t(s) - nu*lap(s) = -u⋅∇(s)")
 add_equation!(problem, "∂t(u) - nu*lap(u) = 0")
@@ -357,19 +357,24 @@ add_diffusivity!(cfl, nu_array; domain=other.domain)  # explicit grid for a bare
 | `Real` | Constant diffusivity |
 | `AbstractArray` | Per-point diffusivity; under MPI this rank's slab, reduced for you |
 | `ScalarField` | Transformed to grid space on each evaluation |
-| `domain=` | Grid supplying the spacings (defaults to the field's, else the first velocity's, else the problem's) |
+| `domain=` | Domain supplying the bases and spacings (defaults to the field's, else the first velocity's, else the problem's) |
 
 Each entry contributes the frequency
 
 ```
-f_diff = 2 ν_max Σᵢ Δxᵢ⁻²        ⟹        dt ≤ 1 / f_diff
+f_diff = (ν_max / 2) Σᵢ ρᵢ        ⟹        dt ≤ 1 / f_diff
 ```
 
-which is the forward-Euler limit of the second-order central Laplacian (extreme eigenvalue
-`-4ν Σᵢ Δxᵢ⁻²`, so `|1 + λ dt| ≤ 1` gives `dt ≤ 1/(2ν Σᵢ Δxᵢ⁻²)`). The **sum** over axes is
-the anisotropic form; on an isotropic `d`-dimensional grid it collapses to the familiar
-`dt ≤ Δx²/(2dν)`. The advective and diffusive limits are combined by taking the smaller
-step (the larger frequency), and `safety` applies to both.
+where a Fourier axis uses `ρᵢ = max(abs2, wavenumbers(basisᵢ))` from the global
+basis, including the Nyquist mode. The spectral Laplacian has extreme eigenvalue
+`-ν Σᵢ ρᵢ`, so forward Euler requires `dt ≤ 2/(ν Σᵢ ρᵢ)`. On an even-sized isotropic
+`d`-dimensional Fourier grid this is `dt ≤ 2 Δx²/(d ν π²)`; odd-sized grids use their
+actual largest represented mode. Non-Fourier axes retain the conservative spacing
+estimate `ρᵢ = 4/Δxᵢ²`, using the minimum near-wall spacing on Chebyshev axes.
+
+The **sum** over axes handles anisotropic and mixed Fourier/Chebyshev domains.
+The advective and diffusive limits are combined by taking the smaller step
+(the larger frequency), and `safety` applies to both.
 
 Notes:
 
@@ -417,7 +422,7 @@ domain = Domain(dist, (xbasis, ybasis))
 s = ScalarField(domain, "s")
 u = VectorField(domain, "u")
 
-problem = IVP([s, u])
+problem = InitialValueProblem([s, u])
 add_parameters!(problem, nu=0.01)
 add_equation!(problem, "∂t(s) - nu*lap(s) = -u⋅∇(s)")
 add_equation!(problem, "∂t(u) - nu*lap(u) = 0")

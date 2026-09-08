@@ -29,7 +29,7 @@ function _run(rhs_str; N=64, steps=300, dt=1e-3)
     yb = RealFourier(coords["y"]; size=N, bounds=(0.0, 2π))
     domain = Domain(dist, (xb, yb))
     q = ScalarField(domain, "q")
-    problem = IVP([q]); add_parameters!(problem, nu=0.5)
+    problem = InitialValueProblem([q]); add_parameters!(problem, nu=0.5)
     add_equation!(problem, "dt(q) = $rhs_str")
     solver = InitialValueSolver(problem, RK222(); dt=dt)
 
@@ -89,7 +89,7 @@ end
         _raw(q) .= sl(g0)
         ensure_layout!(q, :c)
 
-        problem = IVP([q]); add_parameters!(problem, nu=1.0)
+        problem = InitialValueProblem([q]); add_parameters!(problem, nu=1.0)
         add_equation!(problem, "dt(q) = nu*lap(q)")
         if NP > 1
             # Distributed explicit Chebyshev differentiation is one of the few

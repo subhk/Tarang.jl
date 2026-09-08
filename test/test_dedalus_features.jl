@@ -6,7 +6,7 @@ Test suite for the 7 Dedalus Cartesian features added to Tarang.jl:
 4. DictionaryHandler (in-memory analysis)
 5. VirtualFileHandler (NetCDF virtual datasets)
 6. Copy operator
-7. Frechet differentiation for NLBVP
+7. Frechet differentiation for NonlinearBoundaryValueProblem
 """
 
 using Test
@@ -311,7 +311,7 @@ end
 end
 
 # -----------------------------------------------------------------------
-@testset "Frechet differentiation / NLBVP" begin
+@testset "Frechet differentiation / NonlinearBoundaryValueProblem" begin
     field_u, _, _, _, _ = make_1d_fourier_field(name="u")
     field_v, _, _, _, _ = make_1d_fourier_field(name="v")
 

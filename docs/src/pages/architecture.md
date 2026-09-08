@@ -10,37 +10,69 @@ the source.
 src/
 ├── Tarang.jl                 root module; declarative bootstrap only
 ├── dependencies.jl           package imports
-├── load_order.jl             ordered implementation manifests
-├── public_api.jl             checked supported-API registry
-├── runtime_init.jl            MPI, FFTW, logging, and extension startup
+├── load_order.jl             ordered implementation manifests (see below)
+├── public_api.jl             checked supported-API registry (@public_api)
+├── runtime_init.jl           MPI, FFTW, logging, and extension startup
 ├── api/
-│   ├── public/               supported root exports by capability
-│   └── *.jl                  Fields/Problems/Solvers/... facades
+│   ├── public/               supported root exports, one file per capability
+│   ├── namespaces.jl         Tarang.Fields / .Problems / .Solvers / ... facades
+│   └── *.jl                  the facade bodies
 ├── core/
-│   ├── basis/                basis contracts and spectral matrices
+│   ├── architectures.jl, module_contracts.jl   CPU/GPU contract, ownership rules
+│   ├── basis/                basis contracts, wavenumbers, product matrices
 │   ├── boundary_conditions/  BC construction and types
-│   ├── cartesian_operators/  Cartesian differential operator core, dispatch, and eval
-│   ├── distributor/          MPI layouts and communication
-│   ├── field/                field storage and layout transitions
-│   ├── forcing/              stochastic forcing generation and application
-│   ├── operators/            symbolic and evaluated operators
-│   ├── problems/             parsing, EquationIR, and matrix assembly
-│   ├── solvers/              solver construction and compiled RHS
-│   ├── subsystems/           per-mode systems and runtime buffers
-│   ├── timesteppers/         RK, multistep, IMEX, and ETD schemes
-│   ├── transforms/           serial and distributed transforms
-│   ├── transpose/            MPI pencil transpose (pack/unpack, async, buffers)
-│   └── nonlinear/            nonlinear evaluation and dealiasing
-├── tools/                    matrix solvers, output, configuration, utilities
-└── extras/                   flow diagnostics and convenience features
+│   ├── cartesian_operators/  Cartesian differential operator core, dispatch, eval
+│   ├── distributor/          MPI layouts, decomposition convention, transposes
+│   ├── field/                ScalarField/VectorField/TensorField
+│   │   ├── field_data/       storage, copies, scales (dealiasing) — per-field data
+│   │   └── field_layout/     :g/:c layout transitions and field arithmetic
+│   ├── forcing/              stochastic + deterministic forcing (types, generation, application)
+│   ├── nonlinear/            nonlinear products, 3/2 padding, dealiasing
+│   ├── operators/            symbolic operator tree
+│   │   ├── derivatives/      Fourier / polynomial derivatives, matrix apply
+│   │   ├── matrices/         operator → sparse matrix builders
+│   │   ├── operations/       integrate, interpolate, lift/convert
+│   │   └── tensor/           grad/div/curl/Laplacian/fractional Laplacian
+│   ├── problems/             equation parsing and EquationIR
+│   │   └── problem_matrices/ EquationIR → global mass/linear blocks
+│   ├── solvers/              solver construction, ExecutionPlan, lazy (compiled) RHS, stepping loop
+│   ├── subsystems/           per-Fourier-mode subproblems, mode batching (+ KA kernels)
+│   ├── timesteppers/         RK, multistep, diagonal-IMEX, ETD schemes and path selection
+│   ├── transforms/           serial transforms, layout rules, GPU dispatch hooks
+│   └── transpose/            TransposableField: MPI pencil transposes (pack/unpack, async)
+├── tools/                    matrix solvers (sparse, GPU, batched), NetCDF I/O, checkpoints,
+│   └── temporal_filters/     config, logging, parallel helpers, temporal filters
+└── extras/
+    └── flow_tools/           CFL, spectra, QG/streamfunction diagnostics, quick domains, plotting
 
 ext/
 └── TarangCUDAExt.jl
-    └── cuda/                  CUDA allocation, kernels, transforms, and bindings
+    └── cuda/                 device architecture, cuFFT/DCT-I transforms, Chebyshev derivative
+                              kernels, batched matsolvers, NCCL transposes, memory
 ```
 
-`src/load_order.jl` loads stable subsystem manifests. Add implementation files
-to the owning manifest; do not add one-off includes to `src/Tarang.jl`.
+`src/load_order.jl` is the whole include order, as twelve manifests. Each one
+is a flat list of `include`s owning one slice; add implementation files to the
+owning manifest and never as a one-off include in `src/Tarang.jl`:
+
+| Order | Manifest | Owns |
+|---|---|---|
+| 1 | `core/load_contracts.jl` | architectures, module contracts |
+| 2 | `tools/load_bootstrap.jl` | general utilities, exceptions, caches, dispatch, parsing |
+| 3 | `core/load_fields.jl` | coords, bases, distributor, domain, fields, field pool, arithmetic |
+| 4 | `core/load_problem_stack.jl` | operators, Cartesian operators, transforms, BCs, problems, subsystems, pencil system, linalg |
+| 5 | `tools/load_matsolvers.jl` | sparse, GPU, and batched matrix solvers |
+| 6 | `core/load_solver_stack.jl` | solvers, stochastic forcing, timesteppers, distributed GPU, TransposableField |
+| 7 | `tools/load_output.jl` | NetCDF group API and output handlers |
+| 8 | `core/load_evaluation.jl` | evaluator, nonlinear products |
+| 9 | `tools/load_runtime.jl` | config, arrays, parallel, logging, progress, NetCDF merge/slab I/O, checkpoints, temporal filters |
+| 10 | `core/load_models.jl` | LES models |
+| 11 | `extras/load_extras.jl` | flow tools, plot tools, quick domains, analysis tasks |
+| 12 | `tools/load_pretty_printing.jl` | `show` methods |
+
+Most `src/core/*.jl` files at the top level (`field.jl`, `operators/operators.jl`,
+`transforms.jl`, ...) are aggregators that include the directory of the same
+name; the implementation lives in the directory.
 
 ## Dependency direction
 
@@ -103,7 +135,7 @@ leak through user parameters or be reused by an unrelated solver run.
 
 ## Solver build and step path
 
-For an IVP, trace these files:
+For an InitialValueProblem, trace these files:
 
 1. `core/solvers/solver_types.jl` resets compiled state, parses equations,
    assembles global compatibility matrices, builds subproblems, and compiles
@@ -114,10 +146,15 @@ For an IVP, trace these files:
    applies valid-mode filtering, and owns per-mode runtime buffers.
 4. `core/solvers/lazy_rhs.jl` translates explicit expressions into a
    type-specialized evaluation tree.
-5. `core/solvers/solver_stepping.jl` refreshes dynamic boundary conditions and
-   calls the timestepper dispatcher.
-6. `core/timesteppers/step_subproblem_rk.jl` or
-   `step_subproblem_multistep.jl` gathers, solves, and scatters each mode.
+5. `core/solvers/solver_execution_plan.jl` records, once, the facts every later
+   decision reads: architecture (`:cpu`/`:gpu`), distribution, spectral
+   structure, and whether global matrices and subproblems were assembled.
+6. `core/solvers/solver_stepping.jl` refreshes dynamic boundary conditions and
+   calls the timestepper dispatcher (`core/timesteppers/dispatch.jl`), which
+   first runs the loud guards (stochastic-forcing compatibility, the single-GPU
+   implicit-operator refusal).
+7. `core/timesteppers/step_selection.jl` chooses the runtime path; the
+   per-scheme `step_*!` functions then run one of the paths below.
 
 The resulting flow is:
 
@@ -132,6 +169,24 @@ InitialValueSolver {RHS policy, lazy plan, timestep state}
     ↓ step!
 refresh BCs → evaluate RHS → per-mode solve → update fields
 ```
+
+### Timestepper runtime paths
+
+Every scheme picks one of these paths from the same facts. There is never a
+silent fourth option: a configuration with no correct path raises and names
+the working alternative.
+
+| Path | File | When |
+|---|---|---|
+| per-mode subproblem RK / multistep | `step_subproblem_rk.jl`, `step_subproblem_multistep.jl` | any coupled (Chebyshev/Jacobi) axis; CPU, MPI, and single GPU |
+| batched per-mode RK | `step_subproblem_rk_batched.jl` | as above, 2D, one Fourier axis; default on GPU, `batched_modes=true` on CPU |
+| global-matrix IMEX | `step_rk.jl`, `step_multistep.jl`, `step_global_matrix.jl`, `step_etd.jl` | serial CPU with no subproblems (pure Fourier) |
+| explicit field path | `step_rk.jl` (`_step_explicit_rk_gpu!`), `step_multistep_field.jl` | GPU or MPI pure-Fourier problem with no implicit operator |
+| serial diagonal IMEX | `step_diagonal_imex.jl` | `DiagonalIMEX_*` on a pure-Fourier problem (CPU or GPU): per-mode division by `1 + a·dt·L̂(k)` |
+| distributed diagonal IMEX / ETD | `step_diagonal_imex.jl` | MPI pure-Fourier with an implicit operator: RK family, ETD family, SBDF2 |
+
+The user-facing consequences (which scheme runs where, and what refuses) are
+tabulated in [Time Steppers](timesteppers.md#Where-each-scheme-runs).
 
 ## RHS execution policy
 
@@ -218,7 +273,8 @@ When adding a feature:
 4. Add a lazy-RHS translation or make unsupported execution fail explicitly.
 5. Declare supported user-facing names with `@public_api` and update the
    relevant facade.
-6. Register tests in `test/file_lists.jl` when adding a test file.
+6. Register tests in `test/file_lists.jl` when adding a test file, and `git add`
+   it: the inventory test fails on a registered file that is not tracked.
 7. Update this page only when ownership or the runtime path changes.
 
 ## See also

@@ -1,6 +1,6 @@
-# Guard: distributed mixed Fourier-Chebyshev IVP solve (np >= 2).
+# Guard: distributed mixed Fourier-Chebyshev InitialValueProblem solve (np >= 2).
 #
-# A Chebyshev(z)-first / Fourier(x) IVP with an IMPLICIT Laplacian and tau BCs.
+# A Chebyshev(z)-first / Fourier(x) InitialValueProblem with an IMPLICIT Laplacian and tau BCs.
 # In coeff space the field's PencilArray is laid out (Fourier-axis LOCAL,
 # Chebyshev-axis DECOMPOSED, with a permutation) and the distributed PencilFFT
 # leaves the Chebyshev axis in GRID space — neither matches the per-Fourier-mode
@@ -24,7 +24,7 @@ const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
 const nprocs = MPI.Comm_size(comm)
 if nprocs < 2
-    rank == 0 && @warn "Distributed Cheb-Fourier IVP test requires >= 2 ranks; got $nprocs"
+    rank == 0 && @warn "Distributed Cheb-Fourier InitialValueProblem test requires >= 2 ranks; got $nprocs"
     MPI.Finalize(); exit(0)
 end
 
@@ -69,7 +69,7 @@ function _assign_local!(field, gdata)
     end
 end
 
-@testset "Distributed Cheb-Fourier IVP matches serial (rank=$rank)" begin
+@testset "Distributed Cheb-Fourier InitialValueProblem matches serial (rank=$rank)" begin
     kappa = 0.1; Lz = 1.0; dt = 1e-3; NSTEPS = 20; Nz = 12; Nx = 8
     coords = CartesianCoordinates("z", "x")
     dist = Distributor(coords; dtype=Float64, architecture=CPU())
@@ -83,7 +83,7 @@ end
     lift_basis = derivative_basis(zbasis, 1)
     τ_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * τ_lift(tau_b1)
-    problem = IVP([b, tau_b1, tau_b2])
+    problem = InitialValueProblem([b, tau_b1, tau_b2])
     add_parameters!(problem, kappa=kappa, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
     add_equation!(problem, "∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = 0")
     add_bc!(problem, "b(z=0) = 0")
@@ -118,7 +118,7 @@ end
 const SUMSQ_REF_MS = 33.0485280937167
 const BMAX_REF_MS  = 1.4302790931715417
 
-@testset "Distributed Cheb-Fourier IVP (SBDF2) matches serial (rank=$rank)" begin
+@testset "Distributed Cheb-Fourier InitialValueProblem (SBDF2) matches serial (rank=$rank)" begin
     kappa = 0.1; Lz = 1.0; dt = 1e-3; NSTEPS = 20; Nz = 12; Nx = 8
     coords = CartesianCoordinates("z", "x")
     dist = Distributor(coords; dtype=Float64, architecture=CPU())
@@ -132,7 +132,7 @@ const BMAX_REF_MS  = 1.4302790931715417
     lift_basis = derivative_basis(zbasis, 1)
     τ_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * τ_lift(tau_b1)
-    problem = IVP([b, tau_b1, tau_b2])
+    problem = InitialValueProblem([b, tau_b1, tau_b2])
     add_parameters!(problem, kappa=kappa, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
     add_equation!(problem, "∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = 0")
     add_bc!(problem, "b(z=0) = 0")
