@@ -33,7 +33,7 @@ lift_basis  = derivative_basis(basis, 1)
 tau_lift(A) = lift(A, lift_basis, -1)
 grad_T      = grad(T) + ex * tau_lift(tau1)
 
-problem = IVP([T, tau1, tau2])
+problem = InitialValueProblem([T, tau1, tau2])
 add_parameters!(problem; kappa=0.5, grad_T=grad_T, tau_lift=tau_lift)
 add_equation!(problem, "∂t(T) - kappa*div(grad_T) + tau_lift(tau2) = 0")
 
@@ -57,11 +57,11 @@ refers to fields by their **field name** (the `"T"`, `"tau1"`, `"tau2"` you pass
 constructor) — if the Julia variable and the field name disagree, the parser warns
 `Unknown variable` and silently substitutes zero.
 
-!!! warning "1-D pure-Chebyshev IVP: BCs are enforced to O(1/N), not to machine precision"
+!!! warning "1-D pure-Chebyshev InitialValueProblem: BCs are enforced to O(1/N), not to machine precision"
     With no periodic direction, the tau variables must live on `()`, and the
     time-stepping path enforces the Dirichlet values only to first order in `N`.
     Measured `max|T - (1-x)|` at steady state: `3.3e-2` (N=16), `1.6e-2` (N=32),
-    `7.9e-3` (N=64) — i.e. `1/(2N-2)`. The *same* steady problem solved as an LBVP
+    `7.9e-3` (N=64) — i.e. `1/(2N-2)`. The *same* steady problem solved as an LinearBoundaryValueProblem
     (the Laplace Equation section below) hits `2.5e-16`, and adding a periodic
     direction (next section) also gives machine precision. Prefer either of those if
     you need the boundary values to be exact.
@@ -90,7 +90,7 @@ lift_basis  = derivative_basis(zbasis, 1)
 tau_lift(A) = lift(A, lift_basis, -1)
 grad_T      = grad(T) + ez * tau_lift(tau1)
 
-problem = IVP([T, tau1, tau2])
+problem = InitialValueProblem([T, tau1, tau2])
 add_parameters!(problem; kappa=0.1, grad_T=grad_T, tau_lift=tau_lift)
 add_equation!(problem, "∂t(T) - kappa*div(grad_T) + tau_lift(tau2) = 0")
 
@@ -121,7 +121,7 @@ A constant advecting velocity is just a parameter, and `U*∂x(T)` is linear, so
 the implicit (left) side with the diffusion term.
 
 ```julia
-problem = IVP([T, tau1, tau2])
+problem = InitialValueProblem([T, tau1, tau2])
 add_parameters!(problem; kappa=0.01, U=1.0, grad_T=grad_T, tau_lift=tau_lift)
 add_equation!(problem, "∂t(T) + U*∂x(T) - kappa*div(grad_T) + tau_lift(tau2) = 0")
 
@@ -175,7 +175,7 @@ tau_lift(A) = lift(A, lift_basis, -1)
 grad_u = grad(u) + ez * tau_lift(tau_u1)
 grad_T = grad(T) + ez * tau_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem; nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, tau_lift=tau_lift)
 
@@ -272,7 +272,7 @@ Measured at `t = 0.1`: `T(z=0) = 0.587785`, against `sin(2π·0.1) = 0.587785`.
 
 ### Laplace Equation
 
-Steady heat conduction. This is a linear boundary value problem (LBVP): boundary
+Steady heat conduction. This is a linear boundary value problem (LinearBoundaryValueProblem): boundary
 conditions are enforced with the **tau method** (one `tau` variable per BC, lifted
 into the bulk equation and declared with `add_bc!`). The bounded direction here is
 `z` (Chebyshev); the periodic `x` direction is separable.
@@ -289,7 +289,7 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)            # one tau per z-BC
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = LBVP([T, tau1, tau2])
+problem = LinearBoundaryValueProblem([T, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 Tarang.add_equation!(problem, "Δ(T) + l1 + l2 = 0")
 
@@ -312,7 +312,7 @@ Recovers the exact conduction profile: `max|T - (1-z)| = 2.5e-16`.
 
 ### Poisson Equation
 
-With heat source. Like the Laplace example this is a steady LBVP, so the wall
+With heat source. Like the Laplace example this is a steady LinearBoundaryValueProblem, so the wall
 boundary conditions use the **tau method** (`tau` variables + `lift` + `add_bc!`).
 The source must sit on the right-hand side.
 
@@ -334,7 +334,7 @@ Tarang.ensure_layout!(q, :g)
 zg = create_meshgrid(dom; on_device=false)["z"]
 get_grid_data(q) .= sin.(π .* zg)                           # source distribution
 
-problem = LBVP([T, tau1, tau2])
+problem = LinearBoundaryValueProblem([T, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), q=q)
 Tarang.add_equation!(problem, "Δ(T) + l1 + l2 = -q")
 Tarang.add_bc!(problem, "T(z=0)   = 0")

@@ -81,7 +81,7 @@ The single-GPU 2D path supports `RealFourier` or `ComplexFourier` paired with
 their nodal length and truncated or zero-padded on the device; Fourier scaling
 used by 3/2-rule nonlinear products also remains device-resident. The focused
 validation covers transforms, derivatives along both axes, dealiased products,
-and a nonlinear wall-bounded RK222 IVP with tau boundary conditions and CUDA
+and a nonlinear wall-bounded RK222 InitialValueProblem with tau boundary conditions and CUDA
 sparse subproblem solves.
 
 Run the strict validation on an NVIDIA node from the repository root:
@@ -92,7 +92,7 @@ julia --project=. test/run_gpu_fc_2d.jl
 
 This command prints CUDA device information and fails if CUDA is unavailable,
 scalar indexing is attempted, a CPU/GPU value comparison fails, or the warmed
-IVP step performs a fresh device allocation.
+InitialValueProblem step performs a fresh device allocation.
 
 The current boundary of this validation is deliberate:
 
@@ -105,23 +105,40 @@ The current boundary of this validation is deliberate:
 
 ## 2D time stepping and solves
 
-Pure-Fourier GPU IVPs use field-native stepping. When the left-hand side has an
-implicit diagonal Fourier operator, select a diagonal IMEX scheme such as
-`DiagonalIMEX_RK222()` or `DiagonalIMEX_SBDF2()` so the operator is applied in
-spectral space on the device.
+Pure-Fourier GPU IVPs use field-native stepping: explicit Runge-Kutta and the
+matrix-free multistep field path run entirely on device arrays. When the
+left-hand side has an implicit diagonal Fourier operator, select a diagonal IMEX
+scheme — `DiagonalIMEX_RK222()`, `DiagonalIMEX_RK443()`, or
+`DiagonalIMEX_SBDF2()` — so the operator is applied per mode in spectral space
+on the device; the operator is read from the equation (Laplacian, hyper- or
+fractional Laplacian, constant damping, derivatives of the stepped field) or
+from an attached `SpectralLinearOperator`. Every other scheme refuses a
+left-hand-side operator on a single GPU with an error that names these three,
+because a pure-Fourier GPU solver assembles no global matrix to treat it with.
+The full per-architecture table is in
+[Time Steppers](timesteppers.md#Where-each-scheme-runs).
 
-Fourier–Chebyshev IVPs use per-mode coupled subproblems. With GPU fields,
+Fourier–Chebyshev IVPs use per-mode coupled subproblems, batched across Fourier
+modes by default on the device (`batched_modes=false` opts out). With GPU fields,
 `matsolver=:auto`, `:gpu`, and `:hybrid` resolve to the concrete CUDA sparse
 solver; CPU-only solvers are rejected and solver failures are not retried on
-CPU.
+CPU. A rank-deficient per-mode system — duplicate tau lifts, an under-constrained
+mode — is a factorization error on the device, not a least-squares fallback.
 
-GPU LBVPs require an explicit CUDA solver, for example:
+Most of this is covered without hardware: `test/test_gpu_timesteppers_jlarray.jl`
+drives all twenty schemes on the single-GPU dispatch path using `JLArray` device
+fields and a CPU stand-in for cuFFT (see
+[Testing](testing.md#Testing-GPU-paths-without-a-GPU)).
+
+Linear GPU boundary-value solves select the CUDA sparse solver automatically.
+Their right-hand side and solution buffers stay on the field's device backend.
+An explicit solver selection is also supported:
 
 ```julia
 solver = BoundaryValueSolver(problem; matsolver=:cuda_sparse)
 ```
 
-GPU NLBVP and EVP solves are not device-native yet and raise an unsupported
+GPU NonlinearBoundaryValueProblem and EigenvalueProblem solves are not device-native yet and raise an unsupported
 operation error.
 
 ## Multi-GPU execution

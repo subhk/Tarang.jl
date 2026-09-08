@@ -1,14 +1,14 @@
 # ============================================================================
-# Global-Matrix Timestepper Step Functions
+# Additional IMEX Timestepper Step Functions
 # ============================================================================
 #
-# These steppers operate on ONE global `(M, L)` matrix pair spanning all
+# The global fallback operates on one `(M, L)` matrix pair spanning all
 # variables and modes, factorizing `(a*M + b*L)` once and reusing the LU across
 # steps. This is the legacy path taken when no per-subproblem decomposition is
 # available (see step_subproblem_rk.jl for the preferred per-Fourier-mode path).
-# Each `step_*!` here advances one step of a specific multistep/RK scheme and
-# falls back to a simpler scheme when its history or matrix prerequisites are
-# unmet. Sign convention matches the rest of the timesteppers: `M dX/dt + L X = F`.
+# MCNAB2 and CNLF2 also use per-subproblem history when that decomposition is
+# available, or field history for explicit GPU/MPI problems. A simpler scheme
+# supplies their first step. Sign convention: `M dX/dt + L X = F`.
 
 """
     _prepare_global_matrix_timestep!(state, solver, method_name, fallback_name, fallback_step!)
@@ -40,8 +40,8 @@ end
 
     Uses modified θ parameter for the implicit Crank-Nicolson treatment.
 
-    The modification uses θ slightly different from 0.5 to improve stability
-    for certain stiff problems while maintaining 2nd order accuracy.
+    θ = 0.5 gives second order. Other θ values change the damping of the
+    implicit term and reduce its temporal accuracy to first order.
 
     Formula:
     (M + θ*dt*L) X^{n+1} = (M - (1-θ)*dt*L) X^n + dt*(c₁*F^n + c₂*F^{n-1})
@@ -53,6 +53,28 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
     current_state = state.history[end]
     dt = state.dt
     θ = state.timestepper.implicit_coefficient
+
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        # Subproblem steps keep one live field state and retain older M*X/L*X/F
+        # values in per-mode rings. A state.history-length gate never exits
+        # startup on this path; inspect the ring history instead.
+        if _sp_multistep_history_depth(state) < 1
+            step_cnab1!(state, solver)
+            return
+        end
+        a, b, c = _mcnab2_coefs(dt, get_previous_timestep(state), θ)
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
+    end
+
+    # GPU / MPI without subproblems: no global matrix exists. With no implicit
+    # operator the θ-weighting weights nothing and MCNAB2 IS CNAB2, so take the
+    # matrix-free field path (see step_multistep_field.jl). This must precede
+    # the startup gate below: the field path keeps a one-entry `state.history`,
+    # so `length(state.history) < 2` stayed true forever and every device step
+    # silently ran as first-order CNAB1.
+    _try_step_explicit_multistep_field!(state, solver, :cnab2) && return
 
     # Initialize history arrays if needed
     if !haskey(state.timestepper_data, :MX_history)
@@ -79,12 +101,9 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
     # Get timestep history for variable timestep
     dt_current = dt
     dt_previous = get_previous_timestep(state)
-    w1 = dt_current / dt_previous
 
     # MCNAB2 coefficients with modified θ
-    a = (1.0/dt_current, -1.0/dt_current)
-    b = (θ, 1.0 - θ)
-    c = (0.0, 1.0 + w1/2.0, -w1/2.0)
+    a, b, c = _mcnab2_coefs(dt_current, dt_previous, θ)
 
     try
         X_current = _timestep_fields_vector!(state, :mcnab2_X_current_vec, current_state)
@@ -164,6 +183,21 @@ function step_cnlf2!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt_current = state.dt
+
+    sps = _timestepper_subproblems(solver)
+    if sps !== nothing
+        if _sp_multistep_history_depth(state) < 1
+            step_cnab1!(state, solver)
+            return
+        end
+        a, b, c = _cnlf2_coefs(dt_current, get_previous_timestep(state))
+        step_subproblem_multistep!(state, solver, sps, a, b, c)
+        return
+    end
+
+    # GPU / MPI without subproblems: same reasoning as step_mcnab2! above. The
+    # field path carries CNLF2's own leapfrog stencil (`_cnlf2_coefs`).
+    _try_step_explicit_multistep_field!(state, solver, :cnlf2) && return
 
     # Initialize history tracking
     if !haskey(state.timestepper_data, :iteration)

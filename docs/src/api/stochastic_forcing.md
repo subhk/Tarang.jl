@@ -195,8 +195,20 @@ mutable struct DeterministicForcing{T<:AbstractFloat, N, A<:AbstractArray{T, N}}
 | `cached_forcing` | `A` | Cached forcing values on the chosen architecture |
 | `parameters` | `Dict{Symbol, Any}` | Parameters for forcing function |
 | `architecture` | `AbstractArchitecture` | CPU() or GPU() backend |
+| `spectral_scratch` | `Union{Nothing, ScalarField}` | Coefficient-space image of `cached_forcing`, built on the target field's transform once the forcing is registered on a problem |
 
 `forcing.is_gpu` is available as a property alias.
+
+**Registering on a problem.** `add_stochastic_forcing!(problem, :u, forcing)` accepts a
+`DeterministicForcing` too. The stepper then evaluates `forcing_function` on the target
+field's **local** grid at each right-hand-side evaluation time, including Runge-Kutta
+stage times (so `field_size` must be the local grid shape under MPI), transforms the
+result with the target field's own transform, and adds it
+to the right-hand side in coefficient space; `dt(u) = 0` with `F(x, y) = cos x cos y`
+integrates exactly to `u = t·cos x cos y` on every scheme. Deterministic forcing is not
+white noise, so the multistep schemes accept it. Time-dependent deterministic forcing
+uses the scheme's stage or history time; only stochastic realizations stay fixed
+across a timestep.
 
 **Constructor:**
 

@@ -387,7 +387,7 @@ is not, the honest move is to decline the translation so the solver keeps its ex
     Legendre 1.0e-12.
 
     The same mismatch was silently corrupting the IMPLICIT path, which had no decline to
-    protect it: a Legendre LBVP for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against
+    protect it: a Legendre LinearBoundaryValueProblem for `Δu = -2, u(0)=u(L)=0` returned max error 0.199 against
     an amplitude-0.248 answer while reporting success. It is now exact to 4.9e-16."""
 function _lazy_diff_axis_supported(field::ScalarField, basis)
     isa(basis, FourierBasis) && return true
@@ -711,10 +711,8 @@ Type-specialized via multiple dispatch; the JIT inlines the whole chain.
 """
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyStateField, state, ws::LazyWorkspace)
     src = state[expr.idx]
-    ensure_layout!(src, :g)
-    src_data = get_local_data(get_grid_data(src))
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    src_data = get_local_data(grid_data!(src))
+    out_data = get_local_data(grid_data!(out))
     if src_data !== nothing && out_data !== nothing && size(src_data) == size(out_data)
         copyto!(out_data, src_data)
     elseif out_data !== nothing
@@ -725,8 +723,7 @@ Type-specialized via multiple dispatch; the JIT inlines the whole chain.
 end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyParamField, state, ws::LazyWorkspace)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     out_data === nothing && return out
     f = expr.field
     if !isa(f, ScalarField)
@@ -734,8 +731,7 @@ end
               "This used to be silently replaced by ZERO, dropping the term from the RHS.")
     end
 
-    ensure_layout!(f, :g)
-    src_data = get_local_data(get_grid_data(f))
+    src_data = get_local_data(grid_data!(f))
     src_data === nothing && error("LazyRHS: parameter field `$(f.name)` has no grid data.")
 
     if size(src_data) == size(out_data)
@@ -747,7 +743,13 @@ end
         # This branch used to fall into `fill!(out_data, 0)` because the shapes differ, so a term
         # like `dpdx*ex` on an explicit RHS was silently ZEROED: a pressure-gradient-driven flow
         # never got forced, the fluid stayed at rest, and `is_compiled` still reported `true`.
-        @inbounds fill!(out_data, convert(eltype(out_data), real(first(src_data))))
+        if is_gpu_array(src_data) && is_gpu_array(out_data)
+            # A singleton device view broadcasts across every output dimension
+            # without a scalar download or host indexing of the parameter.
+            out_data .= real.(view(vec(src_data), 1:1))
+        else
+            @inbounds fill!(out_data, convert(eltype(out_data), real(first(src_data))))
+        end
     else
         error("LazyRHS: parameter field `$(f.name)` has local grid size $(size(src_data)), which " *
               "does not match the target field's $(size(out_data)) and is not a 0-D constant. " *
@@ -758,8 +760,7 @@ end
 end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyConst, state, ws::LazyWorkspace)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     if out_data !== nothing
         fill!(out_data, eltype(out_data)(expr.value))
     end
@@ -816,8 +817,7 @@ function _dealiased_lazy_product!(out::ScalarField, a::ScalarField, b::ScalarFie
     # RHS path the pool exists for.
     product = evaluate_transform_multiply(a, b, evaluator; own=false)
     ensure_layout!(product, :g)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     prod_data = get_local_data(get_grid_data(product))
     if out_data !== nothing && prod_data !== nothing && size(out_data) == size(prod_data)
         copyto!(out_data, prod_data)
@@ -830,8 +830,7 @@ end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyNegate, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     if out_data !== nothing
         @. out_data = -out_data
     end
@@ -841,8 +840,7 @@ end
 
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyScale, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     coeff = eltype(out_data) <: Real ? real(expr.coeff) : expr.coeff
     if out_data !== nothing
         @. out_data = coeff * out_data
@@ -978,8 +976,7 @@ end
 function evaluate_lazy!(out::ScalarField, expr::LazyFractionalLaplacian,
                         state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :c)
-    coeff = get_local_data(get_coeff_data(out))
+    coeff = get_local_data(coeff_data!(out))
     k2 = get_local_data(_build_k_squared(out))
     alpha = expr.alpha
     if alpha >= 0
@@ -1009,8 +1006,7 @@ end
 # `power_operands(::ScalarField, ::Real)` (grid space, undealiased).
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyPow, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     p = expr.exponent
     if out_data !== nothing
         @. out_data = out_data ^ p
@@ -1022,8 +1018,7 @@ end
 # Pointwise unary grid function (sin/exp/…), mirroring `UnaryGridFunction`.
 @inline function evaluate_lazy!(out::ScalarField, expr::LazyUnaryFunc, state, ws::LazyWorkspace)
     evaluate_lazy!(out, expr.operand, state, ws)
-    ensure_layout!(out, :g)
-    out_data = get_local_data(get_grid_data(out))
+    out_data = get_local_data(grid_data!(out))
     f = expr.func
     if out_data !== nothing
         @. out_data = f(out_data)
@@ -1282,7 +1277,8 @@ The 1D/2D cases (the common Chebyshev/Jacobi spectral derivative) reuse a scratc
 buffer cached in `basis.transforms`, keyed by `(size, eltype)`, instead of
 allocating the matmul output every call. Safe because lazy RHS evaluation is
 sequential — the buffer is filled and consumed within a single call before any
-other derivative runs (same contract as the `_DERIV_FFT_WS` FFT buffers)."""
+other lazy derivative runs on the same basis. This scratch is not checked out
+exclusively and requires sequential use of that basis."""
 function _apply_1d_matrix!(data::AbstractArray, D::AbstractMatrix, axis::Int, basis)
     nd = ndims(data)
     if nd == 1 || nd == 2
@@ -1404,7 +1400,7 @@ function build_lazy_rhs_plan!(solver::InitialValueSolver)
     # reintroducing exactly the zero-RHS freeze described below, and silently.)
 
     # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
-    # global-matrix assembly — the step a pure-Fourier GPU IVP deliberately SKIPS
+    # global-matrix assembly — the step a pure-Fourier GPU InitialValueProblem deliberately SKIPS
     # (solver_types.jl, `_gpu_pure_fourier_state`). Treating "no IR" as "nothing to
     # compile" therefore produced, on every such solver, a plan holding only zero
     # fields and flagged `is_compiled = true`. That flag makes

@@ -47,7 +47,7 @@ function _run(mesh)
     lift_basis = derivative_basis(zb, 1)
     τ_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * τ_lift(tau1)
-    problem = IVP([b, tau1, tau2])
+    problem = InitialValueProblem([b, tau1, tau2])
     add_parameters!(problem, kappa=0.1, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
     add_equation!(problem, "∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = -b*∂x(b)")
     add_bc!(problem, "b(z=0) = 0")
@@ -66,7 +66,7 @@ function _run(mesh)
             dist)
 end
 
-@testset "3D Cheb-Fourier IVP on a 2-D process mesh (np=4)" begin
+@testset "3D Cheb-Fourier InitialValueProblem on a 2-D process mesh (np=4)" begin
     sumsq, bmax, dist = _run((2, 2))
     # The path only stays exercised while the two pencils really differ in BOTH
     # slots; if a future layout change makes them differ in one, this test would
@@ -79,7 +79,7 @@ end
     @test isapprox(bmax, MAX_REF; rtol=1e-10)
 end
 
-@testset "3D Cheb-Fourier IVP: 1-D slab mesh agrees (np=4)" begin
+@testset "3D Cheb-Fourier InitialValueProblem: 1-D slab mesh agrees (np=4)" begin
     sumsq, bmax, _ = _run((4,))
     @test isapprox(sumsq, SUMSQ_REF; rtol=1e-10)
     @test isapprox(bmax, MAX_REF; rtol=1e-10)

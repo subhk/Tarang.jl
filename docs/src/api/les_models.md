@@ -2,7 +2,7 @@
 
 The SGS models are **array-level utilities**: they consume grid-space velocity-gradient
 arrays and produce an eddy-viscosity array. They are not automatically coupled into an
-`IVP` — you evaluate the gradients, call the model, and apply the resulting stress
+`InitialValueProblem` — you evaluate the gradients, call the model, and apply the resulting stress
 yourself.
 
 ## Usage

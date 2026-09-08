@@ -195,6 +195,13 @@ function _resolve_operand_field(operand)
     if isa(operand, ScalarField) || isa(operand, VectorField) || isa(operand, TensorField)
         return operand
     end
+    if operand isa Component
+        field = _resolve_operand_field(operand.operand)
+        if field isa Union{VectorField, TensorField}
+            return field.components[operand.index]
+        end
+        return nothing
+    end
     if hasfield(typeof(operand), :operand)
         field = _resolve_operand_field(operand.operand)
         field !== nothing && return field
@@ -220,6 +227,19 @@ function _resolve_operand_field(operand)
         end
     end
     return nothing
+end
+
+"""Rows retained by a scalar component selector in a component-major matrix."""
+function _component_output_range(op::Component, operand_size::Int)
+    field = _resolve_operand_field(op.operand)
+    field isa Union{VectorField, TensorField} || throw(ArgumentError(
+        "Cannot infer vector/tensor component structure for $(typeof(op.operand))"))
+    checkbounds(field.components, op.index)
+    ncomponents = length(field.components)
+    operand_size % ncomponents == 0 || throw(DimensionMismatch(
+        "Component operand has $operand_size rows for $ncomponents components"))
+    n = div(operand_size, ncomponents)
+    return ((op.index - 1)*n + 1):(op.index*n)
 end
 
 function _operand_basis_for_coord(operand, coord_name::String)

@@ -312,9 +312,8 @@ function extract_field_data_for_vector(field::ScalarField)
         "extract_field_data_for_vector cannot download GPU field '$(field.name)'; " *
         "CPU fallback is disabled.")
 
-    ensure_layout!(field, :c)
 
-    if get_coeff_data(field) !== nothing
+    if coeff_data!(field) !== nothing
         cpu_data = get_cpu_data(get_coeff_data(field))
         return vec(cpu_data)
     elseif get_grid_data(field) !== nothing

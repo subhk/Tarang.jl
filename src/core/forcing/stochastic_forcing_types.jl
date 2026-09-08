@@ -85,7 +85,7 @@ using Random
 # ============================================================================
 
 # NOTE: `abstract type Forcing end` is defined in problems/problem_types.jl
-# (which loads earlier) so IVP can type its stochastic_forcings dict.
+# (which loads earlier) so InitialValueProblem can type its stochastic_forcings dict.
 
 """
     StochasticForcingType <: Forcing

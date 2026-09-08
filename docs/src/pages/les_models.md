@@ -5,7 +5,7 @@ This page provides a comprehensive introduction to Large Eddy Simulation (LES) a
 !!! note "Scope: these models are array-level utilities"
     The SGS models are **array-level utilities**. They consume grid-space
     velocity-gradient arrays and produce an eddy-viscosity array (and, for AMD, an
-    eddy-diffusivity array). They are **not** automatically coupled into an `IVP`, and
+    eddy-diffusivity array). They are **not** automatically coupled into an `InitialValueProblem`, and
     no solver, RHS builder, timestepper or problem parser reads them: you evaluate the
     gradients, call the model, and apply the resulting stress yourself. The examples
     below therefore show the SGS update in isolation — the momentum and scalar updates

@@ -23,16 +23,29 @@ This allows stable integration of stiff problems with larger timesteps.
 
 ### RK111
 
-First-order IMEX method (Backward Euler / Forward Euler).
+First-order IMEX method (Backward Euler / Forward Euler), the Ascher–Ruuth–Spiteri
+(1,1,1) pair in the two-row form Dedalus also uses: an explicit first stage and one
+implicit solve, `(M + Δt·L) X_{n+1} = M X_n + Δt·F(X_n, t)`.
 
 ```julia
 timestepper = RK111()
 ```
 
 - **Implicit part**: Backward Euler (linear terms)
-- **Explicit part**: Forward Euler (nonlinear terms)
+- **Explicit part**: Forward Euler (nonlinear terms), evaluated at the old time
+  *inside* the implicit solve, so the step is stiffly accurate and boundary
+  conditions hold exactly after it
 - **Accuracy**: O(Δt)
 - **Use case**: Testing, simple problems
+
+!!! note "Why the two-row form matters"
+    The single-row form (`A_exp = [0]`, `b_exp = [1]`) is a Lie splitting: it takes
+    the implicit stage first and adds `Δt·F` afterwards. On a tau/boundary-value
+    problem that leaves an O(Δt) boundary residual on every step whenever the
+    explicit forcing is not tangent to the boundary, and the final projection
+    turned it into an O(1) interior error that did not shrink with `Δt`. The
+    two-row form has no such residual. On pure-Fourier problems the two agree to
+    roundoff.
 
 ### RK222
 
@@ -50,7 +63,10 @@ timestepper = RK222()
 
 ### RK443
 
-Third-order, 4-stage IMEX Runge-Kutta (Kennedy & Carpenter ARK3(2)4L[2]SA).
+Third-order, 4-stage IMEX Runge-Kutta built on Alexander's (1977) L-stable
+3-stage SDIRK embedded as an ESDIRK (γ ≈ 0.4359, `c = [0, γ, (1+γ)/2, 1]`). It is
+*not* Kennedy & Carpenter's ARK3(2)4L[2]SA, whose `c₂ = 2γ`; the order-3 ARK
+coupling conditions hold to 1e-11 either way.
 
 ```julia
 timestepper = RK443()
@@ -103,6 +119,49 @@ SBDF4()  # 4th order
 - **Nonlinear terms**: Extrapolation (explicit)
 - **Use case**: Stiff problems, high Re flows
 
+### MCNAB2 and CNLF2
+
+Two further two-step schemes live behind qualified names, `Tarang.MCNAB2(θ)` (a
+θ-weighted Crank–Nicolson + Adams–Bashforth 2; second order only at the default
+`θ = 0.5`) and `Tarang.CNLF2()` (Crank–Nicolson leapfrog). Both are
+global-matrix methods; on a GPU or MPI pure-Fourier problem with no implicit
+operator they take the same matrix-free field path as CNAB2 (MCNAB2 as CNAB2,
+since with `L = 0` the θ-weighting weights nothing; CNLF2 with its own leapfrog
+stencil) and keep second order.
+
+## Where each scheme runs
+
+The same scheme can take different code paths depending on the architecture and
+the problem. The rule that never varies: a configuration with no correct path
+**raises** at the first `step!` and names the working alternative. Nothing
+silently drops an implicit operator or substitutes a lower-order scheme.
+
+| Configuration | Runs | Refuses (loudly) |
+|---|---|---|
+| Serial CPU, pure Fourier | every scheme (global-matrix path; `DiagonalIMEX_*` per-mode division) | — |
+| Serial CPU, any Chebyshev/Jacobi axis | every IMEX RK and multistep scheme through per-mode tau subproblems | ETD (singular mass matrix of a tau/DAE system); `DiagonalIMEX_*` (operator not diagonal) |
+| MPI, pure Fourier, implicit operator on the LHS | RK111/222/443, RKSMR, RKGFY, RK443_IMEX, SBDF2, ETD_* — all as per-mode *distributed diagonal IMEX/ETD*; `DiagonalIMEX_*` | CNAB1/2, SBDF1/3/4, MCNAB2, CNLF2 (`ArgumentError`: no distributed diagonal implementation) |
+| MPI, pure Fourier, no implicit operator | every RK and multistep scheme on the matrix-free field path at nominal order | — |
+| MPI, Chebyshev axis | the per-mode subproblem path (Chebyshev axis first) | — |
+| Single GPU, pure Fourier, implicit operator | `DiagonalIMEX_RK222/RK443/SBDF2` only, per-mode on device (from the equation's `L`, or an attached `SpectralLinearOperator`) | all 17 other schemes (`ErrorException` naming DiagonalIMEX or "move the term to the RHS") |
+| Single GPU, pure Fourier, no implicit operator | explicit RK, CNAB/SBDF/MCNAB2/CNLF2 field path, `DiagonalIMEX_*` (explicit, announced once) | — |
+| Single GPU, Chebyshev axis | IMEX RK and multistep through per-mode subproblems with CUDA sparse solves, mode-batched by default | rank-deficient stage systems (e.g. duplicate tau lifts, see below); ETD; `DiagonalIMEX_*` |
+
+The field and diagonal paths in this table require identity mass; see
+[Mass operators on field and diagonal paths](@ref).
+
+Two degradations are announced with a warning rather than refused, because the
+result is still correct: serial `ETD_*` above 4096 coefficients falls back to
+CNAB2 (the operator stays implicit — see the serial size limit under ETD below), and
+the three ETD types share one distributed per-mode ETD-RK2 implementation under
+MPI.
+
+`DiagonalIMEX_*` on a single GPU and on the CPU are the same code on different
+arrays; the device run reproduces the CPU run bit for bit. This, and every row of
+the table, is pinned by `test/test_gpu_timesteppers_jlarray.jl`, which drives all
+twenty schemes on the single-GPU dispatch path without a GPU (see
+[Testing](testing.md#Testing-GPU-paths-without-a-GPU)).
+
 ## How Boundary Conditions Are Enforced During Time Stepping
 
 Tarang's stepper is aware of the fact that boundary-condition rows are *algebraic* (have no time derivative), which makes the full system a **differential-algebraic equation** (DAE) rather than a pure ODE. If you write a BC like `T(z=0) = 1`, the corresponding row of the combined `M·dX/dt + L·X = F` system has `M_row = 0`, and the raw accumulated IMEX-RK stage RHS formula produces the **wrong scaling factor** for that row.
@@ -146,6 +205,19 @@ This per-stage refresh (gated on `has_time_dependent_bcs`, so it's free when BCs
 RK dispatch via `step_rk_imex!` → `step_subproblem_rk!` is the obvious path, but `CNAB1`/`CNAB2`/`SBDF1..4` also dispatch through the subproblem path whenever `problem.compiled.subproblems` is available. The dispatch happens inside each `step_<scheme>!` function: it computes the scheme's `(a, b, c)` coefficient tuples and calls the generic `step_subproblem_multistep!(state, solver, sps, a, b, c)`.
 
 This means every IMEX stepper that supports the subproblem path gets DAE-correct BC handling automatically. The global-matrix path is still used when subproblem decomposition is unavailable, including pure-periodic/global systems. Inhomogeneous tau BCs should use the subproblem path; the global multistep path does not carry those algebraic BC values through the same override machinery.
+
+!!! warning "Give each tau variable its own lift"
+    Write `lift(tau1, basis, -1) + lift(tau2, basis, -2)`, not two lifts to the same
+    mode. Duplicate lifts make every per-mode stage matrix singular, and the
+    problem is refused when its equations are parsed, with an error naming the two
+    lifts. (The CPU used to accept the rank-deficient system through a
+    least-squares fallback; with a *moving* boundary condition that recurrence was
+    exponentially unstable — fine for a few dozen steps, then growing without
+    bound while the boundary values stayed exact.) A lift *inside* a derivative
+    operator, as in `div(grad(b) + ez*lift(tau1, b, -1)) + lift(tau2, b, -1)`, is
+    a different row and is fine. A genuinely singular mode that is not a duplicate
+    lift — the pressure-gauge mode of an incompressible problem — is still solved
+    in the least-squares sense, now with a warning naming the mode.
 
 ### Why not just always use the override
 
@@ -330,10 +402,31 @@ total number of coefficients. Above `n = 4096` degrees of freedom the phi-functi
 refuses, and the stepper emits
 
 > `Warning: ETD-RK222 failed: ArgumentError("ETD matrix exponential requires dense O(n²) storage
-> but n=8193 is too large ..."), falling back to RK222`
+> but n=8193 is too large ..."), falling back to CNAB2 (keeps the linear operator implicit)`
 
-and carries on with RK222. If you asked for ETD and see that warning, you are not getting ETD —
+and carries on with CNAB2, which keeps the linear operator implicit (it does not drop to an
+explicit scheme). If you asked for ETD and see that warning, you are not getting ETD —
 reduce the resolution or switch to SBDF2.
+
+ETD also refuses tau / DAE formulations outright: a boundary-condition row has no time
+derivative, so the mass matrix is singular and `-M⁻¹L` does not exist
+(`ArgumentError: ETD timesteppers do not support a singular mass matrix`). Use an IMEX RK
+or multistep scheme on wall-bounded problems.
+
+### Mass operators on field and diagonal paths
+
+The MPI/GPU field updates and diagonal implicit updates require identity mass:
+each evolution equation must contain an unscaled first time derivative of its
+own field. For example, `2*dt(u) = -u` raises `ArgumentError` on these paths
+before advancing. Reformulate it as `dt(u) = -0.5*u`, or use a global-matrix or
+per-subproblem solver that applies the mass operator. Equivalent identity forms
+such as `0.5*dt(u) + 0.5*dt(u)` are accepted. Algebraic constraint rows remain
+supported through their existing state refreshes.
+
+Diagonal implicit operators compose nested self-Laplacians, including
+`lap(lap(u))`, with their full Fourier multiplier. A term such as `lap(v)` in
+the equation for `u` is cross-field coupling and raises an error on a diagonal
+path. Use a coupled matrix solve or place the coupling on the explicit RHS.
 
 ### Under MPI (pure-Fourier)
 
@@ -364,7 +457,7 @@ domain  = Domain(dist, (x_basis,))
 
 T = ScalarField(domain, "T")
 
-problem = IVP([T])
+problem = InitialValueProblem([T])
 add_parameters!(problem, nu=1.0)
 add_equation!(problem, "∂t(T) - nu*lap(T) = 0")     # L is built from this line
 
@@ -441,10 +534,12 @@ only constrained by advection, not diffusion.
     cannot go down the implicit path, so it is stepped explicitly and imposes
 
     ```math
-    \Delta t \le \frac{1}{2 \nu_{max} \sum_i \Delta x_i^{-2}}
+    \Delta t \le \frac{2}{\nu_{max} \sum_i \rho_i}
     ```
 
-    (equivalently `Δx²/(2dν)` on an isotropic `d`-dimensional grid). The `CFL`
+    where Fourier axes use `ρᵢ = max(abs2, wavenumbers(basisᵢ))` and non-Fourier
+    axes use the conservative spacing estimate `ρᵢ = 4/Δxᵢ²`. For an even-sized
+    isotropic Fourier grid, the bound is `2 Δx²/(d ν π²)`. The `CFL`
     controller does **not** enforce this unless you register the coefficient with
     `add_diffusivity!(cfl, get_eddy_viscosity(model))`.
 
@@ -507,6 +602,12 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 # Subsequent steps: SBDF2
 ```
 
+The startup scheme is chosen so it cannot cap the global order: CNAB2 and SBDF2
+take one CNAB1 / SBDF1 step, while SBDF3 and SBDF4 seed their history with RK443
+steps (an order-1 start would leave them at second order). The same startup is
+used on every architecture, including the matrix-free field path, so the field
+path and the global-matrix path agree step for step.
+
 ## Performance Comparison
 
 The RK counts below are the number of stages actually driven per step. Note that `RK222` is a
@@ -514,7 +615,7 @@ The RK counts below are the number of stages actually driven per step. Note that
 
 | Method | RHS evaluations/step | Implicit/exponential work | Memory |
 |--------|----------------------|---------------------------|--------|
-| RK111 | 1 | 1 implicit stage solve | Medium |
+| RK111 | 2 | 1 implicit stage solve | Medium |
 | RK222 | 3 | 2 implicit stage solves (the first stage is explicit) | Medium |
 | RK443 | 4 | 3 implicit stage solves | Higher |
 | RKSMR | 4 | 3 implicit stage solves | Higher |
@@ -549,7 +650,7 @@ domain = Domain(dist, (xb, yb))
 s = ScalarField(domain, "s")
 u = VectorField(domain, "u")
 
-problem = IVP([s, u])
+problem = InitialValueProblem([s, u])
 add_parameters!(problem, nu=0.05)
 add_equation!(problem, "∂t(s) - nu*lap(s) = -u⋅∇(s)")   # LHS implicit, RHS explicit
 add_equation!(problem, "∂t(u) - nu*lap(u) = 0")
@@ -589,7 +690,7 @@ forcing up from there.
 ```julia
 s = ScalarField(domain, "s")                      # starts at zero
 
-problem = IVP([s])
+problem = InitialValueProblem([s])
 add_parameters!(problem, nu=0.01)
 add_equation!(problem, "∂t(s) - nu*lap(s) = 0")   # no explicit source term
 

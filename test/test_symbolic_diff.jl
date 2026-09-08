@@ -13,7 +13,7 @@ test_dedalus_features.jl; this file targets the remaining branches:
   - Differential-operator guards: two-argument sym_diff rejects operator-valued
     derivatives and directs callers to perturbation-aware Frechet differentiation.
   - Directional Frechet rules for Differentiate, Laplacian, and
-    FractionalLaplacian, plus the steady-NLBVP TimeDerivative convention.
+    FractionalLaplacian, plus the steady-NonlinearBoundaryValueProblem TimeDerivative convention.
   - The _simplify_* helpers unit-tested directly.
   - frechet_differential / build_symbolic_jacobian on simple residuals
     with analytically-known derivatives.
@@ -72,7 +72,7 @@ function sd_square_nlbvp(; N=16)
     g = ScalarField(dist, "g", (xb,), Float64)
     ensure_layout!(g, :g); Tarang.get_grid_data(g) .= 0.0
 
-    prob = Tarang.NLBVP([fu])
+    prob = Tarang.NonlinearBoundaryValueProblem([fu])
     add_parameters!(prob; g=g)
     Tarang.add_equation!(prob, "lap(u) = u*u + g")
     Tarang.build_matrix_expressions!(prob)   # matrix-free; fills equation_data
@@ -372,7 +372,7 @@ end
 # -----------------------------------------------------------------------
 @testset "TimeDerivative convention" begin
     fu, _, _, _, _ = sd_fourier_field(name="u")
-    # NLBVP steady-state convention: ∂(∂t u)/∂u = 0.
+    # NonlinearBoundaryValueProblem steady-state convention: ∂(∂t u)/∂u = 0.
     @test sym_diff(Tarang.TimeDerivative(fu), fu) == 0
     @test sym_diff(Tarang.TimeDerivative(fu, 2), fu) == 0
 end
@@ -510,7 +510,7 @@ end
     # `equations::Vector{Any}` field, reaching the assembler through a fallback
     # in `_get_equation_data` that no real problem could take. It never managed
     # to produce a Jacobian either — the assertion was `@test_broken built`.
-    # Driving a real NLBVP instead covers the production path and produces one.
+    # Driving a real NonlinearBoundaryValueProblem instead covers the production path and produces one.
     prob, fu = sd_square_nlbvp(N=16)
     state = [fu]
     ncoeff = length(Tarang.get_coeff_data(fu))
@@ -547,7 +547,7 @@ end
 
     # Guard: no equation data (IR never built) -> error.
     u_bare = ScalarField(fu.dist, "u_bare", fu.bases, Float64)
-    @test_throws ErrorException build_symbolic_jacobian(Tarang.NLBVP([u_bare]), [u_bare])
+    @test_throws ErrorException build_symbolic_jacobian(Tarang.NonlinearBoundaryValueProblem([u_bare]), [u_bare])
 
     # Guard: non-square system (1 equation, 2 variables) -> error.
     @test_throws ErrorException build_symbolic_jacobian(prob, [fu, u_bare])

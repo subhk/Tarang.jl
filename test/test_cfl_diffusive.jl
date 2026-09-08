@@ -5,16 +5,39 @@ Diffusive (parabolic) stability limit of the adaptive CFL controller.
 `add_diffusivity!`. These tests pin down
 
   * the advection-only path is byte-for-byte the behaviour of `test_cfl.jl`,
-  * a constant diffusivity reproduces `dt = safety / (2 ν Σᵢ Δxᵢ⁻²)`,
+  * a Fourier diffusivity reproduces `dt = 2 safety / (ν Σᵢ k_max,i²)`,
   * an array / `ScalarField` diffusivity uses its GLOBAL maximum,
   * the tighter of the advective and diffusive limits wins,
-  * anisotropic (and Chebyshev) spacings are summed as Σᵢ Δxᵢ⁻², not maxed,
+  * anisotropic Fourier spectral radii and Chebyshev spacing estimates are summed,
   * every registered entry flows through the single batched `Allreduce(MAX)`.
 """
 
 using Test
 using Tarang
 using MPI
+
+@testset "CFL diffusive: explicit high Fourier modes decay" begin
+    for (basis_type, dtype) in ((RealFourier, Float64), (ComplexFourier, ComplexF64))
+        coords = CartesianCoordinates("x")
+        dist = Distributor(coords; dtype=dtype)
+        xb = basis_type(coords["x"]; size=64, bounds=(0.0, 2π), dtype=dtype)
+        u = ScalarField(dist, "u", (xb,), dtype)
+        x = Tarang.local_grid(xb, dist, 1)
+        initial = dtype === Float64 ? cos.(31 .* x) : exp.(-32im .* x)
+        u["g"] .= initial
+
+        problem = InitialValueProblem([u]; namespace=Dict("u" => u))
+        add_equation!(problem, "dt(u) = lap(u)")
+        solver = InitialValueSolver(problem, RK111(); device="cpu")
+        cfl = CFL(solver; initial_dt=1.0, safety=0.5, threshold=0.0)
+        add_diffusivity!(cfl, 1.0)
+        dt = compute_timestep(cfl)
+
+        step!(solver, dt)
+        @test maximum(abs, parent(u["g"])) < maximum(abs, parent(initial))
+        @test dt ≈ 1 / 32^2
+    end
+end
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -23,7 +46,7 @@ using MPI
 const _CFL_AXES = ("x", "y", "z")
 
 """
-Periodic Fourier IVP carrying a uniform velocity `vels` on a grid of `sizes`
+Periodic Fourier InitialValueProblem carrying a uniform velocity `vels` on a grid of `sizes`
 over `bounds`. Returns `(u, solver, dist, bases)`.
 """
 function _cfl_diffusive_setup(sizes::Tuple, bounds::Tuple, vels::Tuple)
@@ -39,7 +62,7 @@ function _cfl_diffusive_setup(sizes::Tuple, bounds::Tuple, vels::Tuple)
         fill!(Tarang.get_grid_data(component), vels[i])
     end
 
-    problem = IVP([u]; namespace=Dict("u" => u))
+    problem = InitialValueProblem([u]; namespace=Dict("u" => u))
     Tarang.add_equation!(problem, "∂t(u) = 0")
     solver = InitialValueSolver(problem, RK111(); device="cpu")
     return u, solver, dist, bases
@@ -51,10 +74,10 @@ function _advective_frequency(domain, vels::Tuple)
     return sum(abs(vels[i]) / spacings[i] for i in eachindex(spacings))
 end
 
-"""Diffusive frequency `2 ν Σᵢ Δxᵢ⁻²`."""
+"""Fourier diffusion frequency from the largest represented mode on each axis."""
 function _diffusive_frequency(domain, ν::Real)
-    spacings = Tarang.grid_spacing(domain)
-    return 2 * ν * sum(inv(dx^2) for dx in spacings)
+    return ν / 2 * sum((2π * (b.meta.size ÷ 2) /
+                         (b.meta.bounds[2] - b.meta.bounds[1]))^2 for b in domain.bases)
 end
 
 # ---------------------------------------------------------------------------
@@ -109,8 +132,7 @@ end
 # ---------------------------------------------------------------------------
 
 @testset "CFL diffusive: constant ν analytic dt" begin
-    # N = 16 over [0, 1] ⇒ Δx = 1/16 = 0.0625, Δx⁻² = 256.
-    # ν = 1, safety = 0.4 ⇒ f_diff = 2·1·256 = 512 ⇒ dt = 0.4/512 = 7.8125e-4.
+    # N = 16 over [0, 1] ⇒ k_max = 16π and f_diff = ν(16π)²/2.
     # The velocity is tiny so the diffusive limit is the binding one.
     safety = 0.4
     ν = 1.0
@@ -125,16 +147,16 @@ end
 
     dx = Tarang.grid_spacing(u.domain)[1]
     @test isapprox(dx, 0.0625; rtol=1e-12)
-    @test isapprox(dt, safety * dx^2 / (2 * ν); rtol=1e-10)
-    @test isapprox(dt, 7.8125e-4; rtol=1e-10)
+    @test isapprox(dt, 2 * safety * dx^2 / (π^2 * ν); rtol=1e-10)
+    @test isapprox(dt, 0.4 / (128π^2); rtol=1e-10)
 
-    # Equivalent 1-D statement of the same limit: dt ≤ Δx²/(2 d ν) with d = 1.
+    # Equivalent 1-D statement using the represented Fourier modes.
     @test isapprox(dt, safety / _diffusive_frequency(u.domain, ν); rtol=1e-10)
 end
 
-@testset "CFL diffusive: isotropic 2-D reduces to Δx²/(2dν)" begin
+@testset "CFL diffusive: isotropic 2-D Fourier spectral bound" begin
     # 16×16 over [0,1]² ⇒ Δx = Δy = 1/16, d = 2.
-    # Σᵢ Δxᵢ⁻² = 512 ⇒ dt = safety·Δx²/(2·2·ν) = 0.5·(1/256)/(4·0.5) = 9.765625e-4.
+    # Both axes have k_max = π/Δx, so dt = 2 safety Δx² / (d ν π²).
     safety = 0.5
     ν = 0.5
     u, solver, _, _ = _cfl_diffusive_setup((16, 16), ((0.0, 1.0), (0.0, 1.0)), (1e-8, 1e-8))
@@ -147,8 +169,8 @@ end
 
     dx = Tarang.grid_spacing(u.domain)[1]
     d = 2
-    @test isapprox(dt, safety * dx^2 / (2 * d * ν); rtol=1e-10)
-    @test isapprox(dt, 9.765625e-4; rtol=1e-10)
+    @test isapprox(dt, 2 * safety * dx^2 / (d * ν * π^2); rtol=1e-10)
+    @test isapprox(dt, 1 / (256π^2); rtol=1e-10)
 end
 
 # ---------------------------------------------------------------------------
@@ -220,9 +242,9 @@ end
 
     dt = compute_timestep(cfl)
 
-    # Δx = 1/16 ⇒ f_diff = 2·0.5·256 = 256 ⇒ dt = 0.4/256 = 1.5625e-3.
+    # k_max = 16π ⇒ f_diff = 0.5·(16π)²/2 = 64π².
     @test isapprox(dt, safety / _diffusive_frequency(u.domain, ν_max); rtol=1e-10)
-    @test isapprox(dt, 1.5625e-3; rtol=1e-10)
+    @test isapprox(dt, 0.4 / (64π^2); rtol=1e-10)
 
     # The field carries its own domain, so none had to be supplied.
     @test cfl.diffusivities[1].domain === ν_field.domain
@@ -233,8 +255,8 @@ end
 # ---------------------------------------------------------------------------
 
 @testset "CFL diffusive: diffusive limit wins and loses correctly" begin
-    # Δx = 1/16, |u| = 1 ⇒ f_adv = 16. The two limits cross at
-    # ν_crit = |u|·Δx/2 = 0.03125, where f_diff = 2·ν·256 = 16.
+    # Δx = 1/16, |u| = 1 ⇒ f_adv = 16. The limits cross at
+    # ν_crit = f_adv / ((16π)²/2) = 1/(8π²).
     safety = 0.4
     velocity_mag = 1.0
     u, solver, _, _ = _cfl_diffusive_setup((16,), ((0.0, 1.0),), (velocity_mag,))
@@ -243,8 +265,8 @@ end
     f_adv = _advective_frequency(u.domain, (velocity_mag,))
     @test isapprox(f_adv, 16.0; rtol=1e-12)
 
-    ν_crit = velocity_mag * dx / 2
-    @test isapprox(ν_crit, 0.03125; rtol=1e-12)
+    ν_crit = 2 * velocity_mag * dx / π^2
+    @test isapprox(ν_crit, 1 / (8π^2); rtol=1e-12)
 
     dt_advective_only = safety / f_adv        # 0.025
 
@@ -280,12 +302,12 @@ end
 end
 
 # ---------------------------------------------------------------------------
-# 5. Anisotropic spacing: Σᵢ Δxᵢ⁻², not maxᵢ.
+# 5. Anisotropic spectral radius: sum over axes, not max.
 # ---------------------------------------------------------------------------
 
-@testset "CFL diffusive: anisotropic spacing sums Δxᵢ⁻²" begin
-    # 16 × 8 over [0,1]² ⇒ Δx = 1/16 (Δx⁻² = 256), Δy = 1/8 (Δy⁻² = 64).
-    # Σ = 320 ⇒ f_diff = 2·1·320 = 640 ⇒ dt = 0.4/640 = 6.25e-4.
+@testset "CFL diffusive: anisotropic Fourier spectral radii are summed" begin
+    # 16 × 8 over [0,1]² ⇒ k_max = (16π, 8π).
+    # Their squared sum is 320π², giving f_diff = 160νπ².
     safety = 0.4
     ν = 1.0
     u, solver, _, _ = _cfl_diffusive_setup((16, 8), ((0.0, 1.0), (0.0, 1.0)), (0.0, 0.0))
@@ -300,14 +322,14 @@ end
     @test isapprox(spacings[1], 1 / 16; rtol=1e-12)
     @test isapprox(spacings[2], 1 / 8; rtol=1e-12)
 
-    inv_dx2 = [inv(dx^2) for dx in spacings]
-    @test isapprox(sum(inv_dx2), 320.0; rtol=1e-12)
+    kmax2 = (π ./ spacings).^2
+    @test isapprox(sum(kmax2), 320π^2; rtol=1e-12)
 
-    @test isapprox(dt, safety / (2 * ν * sum(inv_dx2)); rtol=1e-10)
-    @test isapprox(dt, 6.25e-4; rtol=1e-10)
+    @test isapprox(dt, 2 * safety / (ν * sum(kmax2)); rtol=1e-10)
+    @test isapprox(dt, 0.4 / (160π^2); rtol=1e-10)
 
-    # Explicitly NOT the max-over-axes form (which would give 0.4/512 = 7.8125e-4).
-    @test !isapprox(dt, safety / (2 * ν * maximum(inv_dx2)); rtol=1e-3)
+    # Summing axes is stricter than using only the largest axis.
+    @test !isapprox(dt, 2 * safety / (ν * maximum(kmax2)); rtol=1e-3)
 
     # A zero velocity field contributes no advective frequency, so the diffusive
     # limit alone sets dt — it is not swallowed by the velocity path.
@@ -339,6 +361,29 @@ end
 
     # Using L/N instead of the near-wall spacing would overestimate dt ~33×.
     @test dt < safety / (2 * ν * 16.0^2)
+end
+
+@testset "CFL diffusive: global Fourier modes on odd and mixed domains" begin
+    _, solver, _, _ = _cfl_diffusive_setup((16,), ((0.0, 1.0),), (0.0,))
+    for (basis_type, dtype) in ((RealFourier, Float64), (ComplexFourier, ComplexF64))
+        coords = CartesianCoordinates("x", "y", "z")
+        dist = Distributor(coords; dtype=dtype)
+        xb = basis_type(coords["x"]; size=15, bounds=(0.0, 2π), dtype=dtype)
+        yb = basis_type(coords["y"]; size=8, bounds=(-2π, 2π), dtype=dtype)
+        zb = basis_type(coords["z"]; size=9, bounds=(0.0, Float64(π)), dtype=dtype)
+        domain = Tarang.Domain(dist, (xb, yb, zb))
+        cfl = CFL(solver; initial_dt=1.0, safety=0.5, threshold=0.0)
+        add_diffusivity!(cfl, 0.25; domain)
+        # floor(N/2) modes on each axis, scaled by each physical length.
+        @test compute_timestep(cfl) ≈ 1 / (0.25 * (7^2 + 2^2 + 8^2))
+
+        cheb = ChebyshevT(coords["z"]; size=16, bounds=(0.0, 1.0))
+        mixed = Tarang.Domain(dist, (xb, yb, cheb))
+        cfl_mixed = CFL(solver; initial_dt=1.0, safety=0.5, threshold=0.0)
+        add_diffusivity!(cfl_mixed, 0.25; domain=mixed)
+        dz = (1 - cos(π / 15)) / 2
+        @test compute_timestep(cfl_mixed) ≈ 1 / (0.25 * (7^2 + 2^2 + 4 / dz^2))
+    end
 end
 
 # ---------------------------------------------------------------------------

@@ -713,7 +713,7 @@ end
             rng=MersenneTwister(42)
         )
 
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_equation!(problem, "∂t(q) = 0")
         add_stochastic_forcing!(problem, :q, forcing)
 
@@ -748,7 +748,7 @@ end
                 dt=dt,
                 rng=MersenneTwister(42)
             )
-            problem = IVP([q])
+            problem = InitialValueProblem([q])
             add_equation!(problem, "∂t(q) = 0")
             add_stochastic_forcing!(problem, :q, forcing)
             return InitialValueSolver(problem, timestepper; dt=dt), forcing
@@ -792,7 +792,7 @@ end
         q = ScalarField(domain, "q")
         set!(q, (x, y) -> sin(x) + cos(y))
 
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_equation!(problem, "∂t(q) = 0")
         solver = InitialValueSolver(problem, CNAB2(); dt=dt)
         forcing = StochasticForcing(
@@ -851,7 +851,7 @@ end
             rng=MersenneTwister(42)
         )
 
-        problem = IVP([u, q])
+        problem = InitialValueProblem([u, q])
         add_equation!(problem, "∂t(u) = 0")
         add_equation!(problem, "∂t(q) = 0")
         add_stochastic_forcing!(problem, :q, forcing)
@@ -873,13 +873,13 @@ end
         @test rhs_data[3] ≈ forcing_view
 
         @testset "component names map to component state indices" begin
-            component_problem = IVP([u, q])
+            component_problem = InitialValueProblem([u, q])
             add_stochastic_forcing!(component_problem, :u_x, forcing)
             @test haskey(component_problem.stochastic_forcings, 1)
         end
 
         @testset "vector container names are ambiguous" begin
-            ambiguous_problem = IVP([u, q])
+            ambiguous_problem = InitialValueProblem([u, q])
             @test_throws ArgumentError add_stochastic_forcing!(ambiguous_problem, :u, forcing)
         end
     end
@@ -1203,7 +1203,7 @@ end
             end
         end
 
-        @testset "GPU forced 2D IVP advances without scalar indexing" begin
+        @testset "GPU forced 2D InitialValueProblem advances without scalar indexing" begin
             CUDA.allowscalar(false)
             n = 8
             dt = 1e-3
@@ -1227,7 +1227,7 @@ end
                 rng=MersenneTwister(42),
             )
 
-            problem = IVP([ζ, ψ, u, tau_ψ])
+            problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
             add_parameters!(problem; nu=1e-8, drag=1e-3)
             add_equation!(problem, "∂t(ζ) = -u⋅∇(ζ) - drag*ζ - nu*Δ⁴(ζ)")
             add_equation!(problem, "Δ(ψ) + tau_ψ - ζ = 0")
@@ -1277,8 +1277,77 @@ end
         @test_skip "GPU apply_forcing!"
         @test_skip "GPU work calculation"
         @test_skip "GPU manual work diagnostics"
-        @test_skip "GPU forced 2D IVP"
+        @test_skip "GPU forced 2D InitialValueProblem"
     end
+end
+
+@testset "registered DeterministicForcing is applied as a physical-space term" begin
+    # dt(u) = 0 with a constant deterministic forcing F(x,y) integrates EXACTLY to
+    # u = t·F for every scheme (the forcing is constant across stages and steps).
+    # Before the fix the untyped forcing view sliced the physical-grid values into
+    # the rfft coefficient array as though they were spectral coefficients: the
+    # field came out at half amplitude with the wrong shape and no error.
+    N = 16
+    xs = collect(range(0, 2π, length=N + 1))[1:N]
+    F = cos.(xs) .* cos.(xs)'                      # F(x, y) = cos x cos y
+    for ts in (RK111(), RK222(), RK443(), CNAB2(), SBDF2())   # multistep IS allowed: deterministic
+        domain = PeriodicDomain(N, N)
+        u = ScalarField(domain, "u")
+        set!(u, (x, y) -> 0.0)
+        problem = InitialValueProblem([u])
+        add_equation!(problem, "∂t(u) = 0")
+        forcing = DeterministicForcing((x, y, t, p) -> cos.(x) .* cos.(y), (N, N))
+        add_stochastic_forcing!(problem, :u, forcing)
+        solver = InitialValueSolver(problem, ts; dt=0.01)
+        for _ in 1:20
+            step!(solver)
+        end
+        ensure_layout!(u, :g)
+        @test maximum(abs, get_grid_data(u) .- solver.sim_time .* F) < 1e-12
+        # The spectral image lives on the target's own transform layout.
+        @test forcing.spectral_scratch isa ScalarField
+        @test size(Tarang.get_coeff_data(forcing.spectral_scratch)) == size(Tarang.get_coeff_data(u))
+    end
+
+    # A time-dependent forcing is re-evaluated each step at the step's start time.
+    domain = PeriodicDomain(N, N)
+    u = ScalarField(domain, "u"); set!(u, (x, y) -> 0.0)
+    problem = InitialValueProblem([u]); add_equation!(problem, "∂t(u) = 0")
+    add_stochastic_forcing!(problem, :u, DeterministicForcing((x, y, t, p) -> t .* cos.(x) .* ones(1, N), (N, N)))
+    solver = InitialValueSolver(problem, RK111(); dt=0.01)
+    for _ in 1:10; step!(solver); end
+    ensure_layout!(u, :g)
+    expected = sum(0.01 * (0.01 * n) for n in 0:9)          # Σ dt·t_n, t_n = n·dt
+    @test maximum(abs, get_grid_data(u) .- expected .* cos.(xs)) < 1e-12
+
+    # An unregistered deterministic forcing has no spectral image and declines.
+    fresh = DeterministicForcing((x, y, t, p) -> cos.(x) .* cos.(y), (N, N))
+    @test Tarang._matched_forcing_view(fresh, zeros(ComplexF64, N ÷ 2 + 1, N)) === nothing
+    @test Tarang._matched_forcing_view(nothing, zeros(ComplexF64, N ÷ 2 + 1, N)) === nothing
+end
+
+@testset "state-level set_forcing! is refused instead of silently ignored" begin
+    # `set_forcing!(state, forcing)` generated a realization every step that no RHS
+    # path ever read: the run integrated the UNFORCED equations. The one-step schemes
+    # must now refuse it (the multistep white-noise refusal keeps precedence).
+    N = 8
+    domain = PeriodicDomain(N, N)
+    q = ScalarField(domain, "q"); set!(q, (x, y) -> 0.0)
+    problem = InitialValueProblem([q]); add_equation!(problem, "∂t(q) = 0")
+    solver = InitialValueSolver(problem, RK222(); dt=0.01)
+    forcing = StochasticForcing(field_size=(N, N), forcing_rate=0.1, k_forcing=3.0, dk_forcing=1.0,
+                                dt=0.01, rng=MersenneTwister(1))
+    state = Tarang._ensure_timestepper_state!(solver, 0.01)
+    Tarang.set_forcing!(state, forcing)
+    err = try
+        step!(solver); nothing
+    catch e
+        e
+    end
+    @test err isa ArgumentError
+    @test occursin("add_stochastic_forcing!", sprint(showerror, err))
+    ensure_layout!(q, :g)
+    @test all(iszero, get_grid_data(q))          # nothing was mutated
 end
 
 println("\n" * "=" ^ 60)

@@ -41,7 +41,7 @@ u     = VectorField(domain, "u")          # Velocity
 tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
 
 # ─── Problem ─────────────────────────────────────────────────
-problem = IVP([q, ψ, u, tau_ψ])
+problem = InitialValueProblem([q, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu)
 
 add_equation!(problem, "Δ(ψ) + tau_ψ - q  = 0")           # Poisson equation

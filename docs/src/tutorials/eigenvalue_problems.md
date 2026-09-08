@@ -1,6 +1,6 @@
 # Tutorial: Eigenvalue Problems
 
-This tutorial demonstrates solving eigenvalue problems (EVP) with Tarang.jl for linear stability analysis.
+This tutorial demonstrates solving eigenvalue problems (EigenvalueProblem) with Tarang.jl for linear stability analysis.
 
 ## Overview
 
@@ -49,7 +49,7 @@ physics if you break them:
    real fields — the eigenvalues and eigenvectors are complex regardless of the
    field element type.
 
-## Basic EVP Setup
+## Basic EigenvalueProblem Setup
 
 A complete example — the 1D diffusion eigenproblem $\sigma u = \Delta u$
 with Dirichlet walls. Its spectrum is the Dirichlet Laplacian,
@@ -69,7 +69,7 @@ tau1  = ScalarField(dist, "tau1", (), Float64)
 tau2  = ScalarField(dist, "tau2", (), Float64)
 lb2   = derivative_basis(z_basis, 2)
 
-evp = Tarang.EVP([u_hat, tau1, tau2]; eigenvalue=:σ)
+evp = Tarang.EigenvalueProblem([u_hat, tau1, tau2]; eigenvalue=:σ)
 add_parameters!(evp; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 
 # σ u = Δu  ⇒  keep dt(u) (the solver maps dt → σ), move linear terms to the LHS
@@ -151,7 +151,7 @@ function rbc_evp(Ra, k; Pr=1.0, Nz=24, nev=4, which=:LR)
     tau = [ScalarField(dist, "tau$i", (), ComplexF64) for i in 1:7]
 
     lb  = derivative_basis(zb, 2)
-    evp = Tarang.EVP([u, w, p, T, tau...]; eigenvalue=:σ)
+    evp = Tarang.EigenvalueProblem([u, w, p, T, tau...]; eigenvalue=:σ)
 
     # every implicit coefficient is ONE parameter: Ra*Pr and Pr*k² are folded here
     add_parameters!(evp; Pr=Pr, RaPr=Ra*Pr, Prk2=Pr*k^2, ik=1im*k, k2=k^2,
@@ -244,7 +244,7 @@ function orr_sommerfeld(Re, k; Nz=64, nev=4)
 
     tau = [ScalarField(dist, "t$i", (), Float64) for i in 1:4]
     lb  = derivative_basis(zb, 2)
-    evp = Tarang.EVP([psi, q, tau...]; eigenvalue=:σ)
+    evp = Tarang.EigenvalueProblem([psi, q, tau...]; eigenvalue=:σ)
     add_parameters!(evp; U=U, ik=1im*k, k2=k^2, invRe=1/Re, invRe_k2=k^2/Re,
                     ikUpp=1im*k*(-2.0),                 # U'' = -2 for U = 1 − z²
                     l1=lift(tau[1], lb, -1), l2=lift(tau[2], lb, -2),
@@ -362,12 +362,12 @@ critical point of Rayleigh-Bénard convection between rigid plates.
 
 `eigenvectors[:, i]` is a stacked coefficient vector, not per-field arrays. Scatter
 it back into the problem's fields to get a grid-space profile — the fields are
-overwritten in place, so this reuses the `solver` from the Basic EVP Setup:
+overwritten in place, so this reuses the `solver` from the Basic EigenvalueProblem Setup:
 
 ```julia
 sp   = solver.subproblems[1]              # single subproblem: no Fourier axis
 mode = eigenvectors[:, 1]                 # column 1 = the mode you want
-Tarang.scatter_inputs(sp, mode, [u_hat, tau1, tau2])   # same order as EVP(...)
+Tarang.scatter_inputs(sp, mode, [u_hat, tau1, tau2])   # same order as EigenvalueProblem(...)
 
 ensure_layout!(u_hat, :g)
 z       = local_grids(dist, z_basis)[1]
@@ -419,6 +419,6 @@ tau matrices and discards spurious eigenvalues from the singular mass matrix.
 
 ## See Also
 
-- [Problems API](../api/problems.md): EVP problem definition
+- [Problems API](../api/problems.md): EigenvalueProblem problem definition
 - [Solvers API](../api/solvers.md): Eigenvalue solver details
 - [Rayleigh-Bénard Tutorial](ivp_2d_rbc.md): Time-dependent version

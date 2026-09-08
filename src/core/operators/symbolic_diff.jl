@@ -3,7 +3,7 @@
 
 Provides pointwise symbolic partial derivatives through `sym_diff(expr, var)`
 and perturbation-aware directional derivatives through
-`frechet_differential(expr, vars, perts)`. The latter is used by the NLBVP
+`frechet_differential(expr, vars, perts)`. The latter is used by the NonlinearBoundaryValueProblem
 Jacobian path because differential operators produce linear maps rather than
 scalar derivative coefficients.
 
@@ -12,7 +12,7 @@ Key components:
 - sym_diff(): pointwise symbolic differentiation following chain/product/sum rules
 - simplify(): basic algebraic simplification (0+x→x, 1*x→x, 0*x→0)
 - frechet_differential(): linearization dF(X0).dX = Σ (∂F/∂uⱼ) * δuⱼ
-- build_symbolic_jacobian(): assemble Jacobian matrix for NLBVP Newton iteration
+- build_symbolic_jacobian(): assemble Jacobian matrix for NonlinearBoundaryValueProblem Newton iteration
 """
 
 # ============================================================================
@@ -188,7 +188,7 @@ end
 sym_diff(op::Gradient, var::ScalarField) = _operator_valued_symdiff(op, var)
 sym_diff(op::Divergence, var::ScalarField) = _operator_valued_symdiff(op, var)
 
-# TimeDerivative: for NLBVP (steady-state), ∂t(u) = 0 so ∂(∂t(u))/∂u = 0
+# TimeDerivative: for NonlinearBoundaryValueProblem (steady-state), ∂t(u) = 0 so ∂(∂t(u))/∂u = 0
 function sym_diff(op::TimeDerivative, var::ScalarField)
     return 0
 end
@@ -309,7 +309,7 @@ function simplify(expr)
 end
 
 # ============================================================================
-# Frechet Differentiation for NLBVP
+# Frechet Differentiation for NonlinearBoundaryValueProblem
 # ============================================================================
 
 @inline _direction_iszero(x) = x === 0 || (x isa Number && iszero(x))
@@ -451,7 +451,7 @@ end
 """
     build_symbolic_jacobian(problem, state_fields)
 
-Build the Jacobian matrix for an NLBVP by constructing the directional
+Build the Jacobian matrix for an NonlinearBoundaryValueProblem by constructing the directional
 derivative of each equation residual and applying it to both quadratures of
 each coefficient-space basis vector at the current state.
 
@@ -487,8 +487,7 @@ function build_symbolic_jacobian(problem::Problem, state_fields)
     # Determine block sizes (one per variable/equation pair)
     block_sizes = Int[]
     for field in state_fields
-        ensure_layout!(field, :c)
-        push!(block_sizes, length(get_coeff_data(field)))
+        push!(block_sizes, length(coeff_data!(field)))
     end
 
     total_size = sum(block_sizes)

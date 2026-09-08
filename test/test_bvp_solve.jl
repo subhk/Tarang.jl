@@ -4,7 +4,7 @@ End-to-end boundary-value-problem (BVP) solve tests with a manufactured
 values come ONLY from the manufactured solution, never the solver's own output.
 
 The steady BVP solver was rehabilitated 2026-06-03 to solve PER-FOURIER-MODE
-(one square tau subproblem per separable mode), mirroring the IVP timestepper and
+(one square tau subproblem per separable mode), mirroring the InitialValueProblem timestepper and
 Dedalus. Fixes: `_solver_type` defined; `add_bc!` BCs merged in the BVP build;
 matrix-coupling configured (Fourier separable / Chebyshev coupled) so
 build_subsystems creates per-mode subproblems; `solve_linear!` rewritten to
@@ -26,7 +26,7 @@ const bvp_Nx = 4
 const bvp_Nz = 16
 bvp_u_exact(z) = z * (bvp_Lz - z)
 
-# Build the manufactured Poisson LBVP (square per-mode tau system).
+# Build the manufactured Poisson LinearBoundaryValueProblem (square per-mode tau system).
 function bvp_build_problem()
     coords = CartesianCoordinates("x", "z")
     dist   = Distributor(coords; dtype=Float64, device=CPU())
@@ -37,7 +37,7 @@ function bvp_build_problem()
     tau1 = ScalarField(dist, "tau1", (xb,), Float64)
     tau2 = ScalarField(dist, "tau2", (xb,), Float64)
     lb2  = derivative_basis(zb, 2)
-    prob = Tarang.LBVP([u, tau1, tau2])
+    prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
     add_parameters!(prob; Lz=bvp_Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
     Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
     Tarang.add_bc!(prob, "u(z=0) = 0")
@@ -110,7 +110,7 @@ end
         zg   = Tarang.create_meshgrid(dom; on_device=false)["z"]
         Tarang.get_grid_data(g) .= -2 .- (zg .* (bvp_Lz .- zg)).^2   # g = -2 - u_exact²
 
-        prob = Tarang.NLBVP([u, tau1, tau2])
+        prob = Tarang.NonlinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=bvp_Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = u*u + g")
         Tarang.add_bc!(prob, "u(z=0) = 0")
@@ -136,7 +136,7 @@ end
     # pure-Chebyshev field (1D coeff vector of length Nz) had only its first
     # coefficient gathered — the solve returned a constant. The fix gathers the
     # full coupled spectrum when the 1D field's basis is non-Fourier.
-    @testset "1D pure-Chebyshev LBVP solves manufactured Poisson" begin
+    @testset "1D pure-Chebyshev LinearBoundaryValueProblem solves manufactured Poisson" begin
         coords = CartesianCoordinates("z")
         dist   = Distributor(coords; dtype=Float64, device=CPU())
         zb = ChebyshevT(coords["z"]; size=bvp_Nz, bounds=(0.0, bvp_Lz))
@@ -145,7 +145,7 @@ end
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
         lb2  = derivative_basis(zb, 2)
-        prob = Tarang.LBVP([u, tau1, tau2])
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=bvp_Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
         Tarang.add_bc!(prob, "u(z=0) = 0")
@@ -177,7 +177,7 @@ end
         uex(x, z) = sin(π * z / Lz) * cos(2x); λ = (π / Lz)^2 + 4
         ensure_layout!(fld, :g); fd = Tarang.get_grid_data(fld)
         for i in 1:Nx, k in 1:Nz; fd[i, k] = -λ * uex(xg[i], zg[k]); end
-        prob = Tarang.LBVP([u, tau1, tau2]); prob.namespace["f"] = fld
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2]); prob.namespace["f"] = fld
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = f")
         Tarang.add_bc!(prob, "u(z=0) = 0"); Tarang.add_bc!(prob, "u(z=Lz) = 0")
@@ -205,7 +205,7 @@ end
         uex(x, y, z) = sin(π * z / Lz) * cos(x) * cos(2y); λ = (π / Lz)^2 + 1 + 4
         ensure_layout!(fld, :g); fd = Tarang.get_grid_data(fld)
         for i in 1:Nx, j in 1:Ny, k in 1:Nz; fd[i, j, k] = -λ * uex(xg[i], yg[j], zg[k]); end
-        prob = Tarang.LBVP([u, tau1, tau2]); prob.namespace["f"] = fld
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2]); prob.namespace["f"] = fld
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = f")
         Tarang.add_bc!(prob, "u(z=0) = 0"); Tarang.add_bc!(prob, "u(z=Lz) = 0")
@@ -235,7 +235,7 @@ end
         ensure_layout!(fu, :g); ensure_layout!(fv, :g)
         fud = Tarang.get_grid_data(fu); fvd = Tarang.get_grid_data(fv)
         for i in 1:Nx, k in 1:Nz; fud[i, k] = -λ * uex(xg[i], zg[k]); fvd[i, k] = -λ * vex(xg[i], zg[k]); end
-        prob = Tarang.LBVP([u, v, tu1, tu2, tv1, tv2]); prob.namespace["fu"] = fu; prob.namespace["fv"] = fv
+        prob = Tarang.LinearBoundaryValueProblem([u, v, tu1, tu2, tv1, tv2]); prob.namespace["fu"] = fu; prob.namespace["fv"] = fv
         add_parameters!(prob; Lz=Lz, lu1=lift(tu1, lb2, -1), lu2=lift(tu2, lb2, -2),
                         lv1=lift(tv1, lb2, -1), lv2=lift(tv2, lb2, -2))
         Tarang.add_equation!(prob, "Δ(u) + lu1 + lu2 = fu")
@@ -249,7 +249,7 @@ end
         @test maximum(abs(gv[i, k] - vex(xg[i], zg[k])) for i in 1:Nx, k in 1:Nz) < 1e-8
     end
 
-    @testset "1D Chebyshev variable-coefficient LBVP (implicit NCC)" begin
+    @testset "1D Chebyshev variable-coefficient LinearBoundaryValueProblem (implicit NCC)" begin
         # REGRESSION GUARD: a non-constant FIELD coefficient on the implicit side,
         # `q(z)*u`, used to be SILENTLY DROPPED (MultiplyOperator matrix Case 3 returned
         # the variable's block, ignoring the coefficient). It now builds a pseudospectral
@@ -270,7 +270,7 @@ end
         q = ScalarField(dom, "q"); ensure_layout!(q, :g); Tarang.get_grid_data(q) .= (1.0 .+ zc)
         f = ScalarField(dom, "f"); ensure_layout!(f, :g)
         Tarang.get_grid_data(f) .= d2uex.(zc) .+ (1.0 .+ zc) .* uex.(zc)
-        prob = Tarang.LBVP([u, tau1, tau2])
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), q=q, f=f)
         Tarang.add_equation!(prob, "Δ(u) + q*u + l1 + l2 = f")
         Tarang.add_bc!(prob, "u(z=0) = 0")
@@ -280,7 +280,7 @@ end
         @test maximum(abs.(vec(Array(Tarang.get_grid_data(u))) .- uex.(zc))) < 1e-8
     end
 
-    @testset "2D Fourier×Cheb z-dependent-coefficient LBVP (implicit NCC)" begin
+    @testset "2D Fourier×Cheb z-dependent-coefficient LinearBoundaryValueProblem (implicit NCC)" begin
         # REGRESSION GUARD: a coefficient varying along the Chebyshev direction (constant
         # along Fourier) in a mixed Fourier-x × Cheb-z domain — the channel-flow case. The
         # multiply-by-q(z) matrix is built per Fourier-mode subproblem. Manufactured:
@@ -302,7 +302,7 @@ end
         q = ScalarField(dom, "q"); ensure_layout!(q, :g); Tarang.get_grid_data(q) .= (1.0 .+ Z)
         f = ScalarField(dom, "f"); ensure_layout!(f, :g)
         Tarang.get_grid_data(f) .= lap_uex.(X, Z) .+ (1.0 .+ Z) .* uex.(X, Z)
-        prob = Tarang.LBVP([u, tau1, tau2])
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), q=q, f=f)
         Tarang.add_equation!(prob, "Δ(u) + q*u + l1 + l2 = f")
         Tarang.add_bc!(prob, "u(z=0) = 0")

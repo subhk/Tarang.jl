@@ -23,10 +23,9 @@ function evaluate_general_function(gf_op::GeneralFunction, layout::Symbol=:g)
 
     # Create result field
     result = ScalarField(operand.dist, "$(name)_$(operand.name)", operand.bases, operand.dtype)
-    ensure_layout!(result, :g)
 
     # Apply function element-wise
-    get_grid_data(result) .= f.(get_grid_data(operand))
+    grid_data!(result) .= f.(get_grid_data(operand))
 
     if layout == :c
         forward_transform!(result)

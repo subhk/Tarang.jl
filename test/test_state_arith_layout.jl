@@ -28,6 +28,84 @@ function _mk(name, coords, dist, bases)
     return f
 end
 
+function _public_edit_solver(stepper=RK222(); rhs="0", initial=1.0)
+    domain = PeriodicDomain(8)
+    u = ScalarField(domain, "u")
+    u["g"] .= initial
+    problem = InitialValueProblem([u])
+    add_equation!(problem, "dt(u) = " * rhs)
+    return u, InitialValueSolver(problem, stepper; dt=0.1)
+end
+
+@testset "solver handles share authoritative field storage" begin
+    @testset "public grid edits survive the next step" begin
+        u, solver = _public_edit_solver()
+        step!(solver)
+        u["g"] .= 2
+        @test solver.state[1].current_layout === :g
+        @test solver.state[1]["g"] == fill(2.0, 8)
+        step!(solver)
+        @test u["g"] == fill(2.0, 8)
+    end
+
+    @testset "coefficient writes invalidate the shared grid view" begin
+        u, solver = _public_edit_solver()
+        step!(solver)
+        solver.state[1]["g"]
+        u["c"] .*= 3
+        @test solver.state[1].current_layout === :c
+        @test solver.state[1]["g"] ≈ fill(3.0, 8)
+        step!(solver)
+        @test u["g"] ≈ fill(3.0, 8)
+    end
+
+    @testset "replacement buffers are visible through both handles" begin
+        u, solver = _public_edit_solver()
+        step!(solver)
+        u.current_layout = :g
+        Tarang.set_grid_data!(u, fill(4.0, 8))
+        @test solver.state[1]["g"] == fill(4.0, 8)
+        step!(solver)
+        @test u["g"] == fill(4.0, 8)
+    end
+
+    @testset "copies retain independent layout and values" begin
+        u, solver = _public_edit_solver()
+        step!(solver)
+        saved = copy(u)
+        u["g"] .= 5
+        @test saved["g"] == fill(1.0, 8)
+        @test solver.state[1]["g"] == fill(5.0, 8)
+    end
+
+    @testset "interpreted stage evaluation does not overwrite current history" begin
+        u, solver = _public_edit_solver(rhs="-u")
+        step!(solver)
+        current = solver.state[1]
+        before = copy(current["g"])
+        stage = Tarang.copy_state(solver.state)
+        stage[1]["g"] .= 7
+        solver.rhs_plan = nothing
+        rhs = Tarang.evaluate_rhs(solver, stage, solver.sim_time + 0.05)
+        @test rhs[1]["g"] ≈ fill(-7.0, 8)
+        @test current["g"] == before
+    end
+
+    @testset "older multistep histories stay independent" begin
+        u, solver = _public_edit_solver(CNAB2(); rhs="1", initial=0.0)
+        for _ in 1:3
+            step!(solver)
+        end
+        history = solver.timestepper_state.history
+        @test length(history) > 1
+        older = [copy(fields[1]["g"]) for fields in history[1:end-1]]
+        u["g"] .= 8
+        @test solver.state[1]["g"] == fill(8.0, 8)
+        @test all(fields[1]["g"] == expected for
+                  (fields, expected) in zip(history[1:end-1], older))
+    end
+end
+
 @testset "state arithmetic follows the operands' layout" begin
     coords = CartesianCoordinates("x", "y")
     dist = Distributor(coords; mesh=(1, 1), dtype=Float64)

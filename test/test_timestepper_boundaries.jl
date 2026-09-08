@@ -7,7 +7,7 @@ using SparseArrays
     u = ScalarField(domain, "u")
     set!(u, (x,) -> sin(x))
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "∂t(u) = 0")
     solver = InitialValueSolver(problem, RK111(); dt=0.01)
     ts_state = solver.timestepper_state
@@ -31,7 +31,7 @@ end
     u = ScalarField(domain, "u")
     set!(u, (x,) -> sin(x))
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "∂t(u) = 0")
     solver = InitialValueSolver(problem, RK111(); dt=0.01)
 
@@ -81,7 +81,7 @@ end
         u = ScalarField(domain, "u")
         set!(u, (x,) -> sin(x))
 
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = 0")
         return InitialValueSolver(problem, timestepper; dt=0.01)
     end
@@ -209,7 +209,7 @@ end
     u = ScalarField(domain, "u")
     set!(u, (x,) -> sin(x))
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "∂t(u) = -u")
     solver = InitialValueSolver(problem, RK111(); dt=0.01)
 
@@ -240,7 +240,7 @@ end
     u = ScalarField(domain, "u")
     set!(u, (x,) -> sin(x))
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "∂t(u) = 0")
     solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
 
@@ -355,7 +355,7 @@ end
     dae_v = ScalarField(dae_domain, "dae_v")
     set!(dae_u, 0.0)
     set!(dae_v, 0.0)
-    dae_problem = IVP([dae_u, dae_v])
+    dae_problem = InitialValueProblem([dae_u, dae_v])
     add_equation!(dae_problem, "dt(dae_u) + dae_u + dae_v = 1")
     add_equation!(dae_problem, "dae_v = 0")
     dae_ivp = InitialValueSolver(dae_problem, RK222(); dt=0.01)
@@ -370,7 +370,7 @@ end
 
     bad_u = ScalarField(dae_domain, "bad_u")
     bad_v = ScalarField(dae_domain, "bad_v")
-    bad_problem = IVP([bad_u, bad_v])
+    bad_problem = InitialValueProblem([bad_u, bad_v])
     add_equation!(bad_problem, "dt(bad_u) + bad_u + bad_v = 0")
     add_equation!(bad_problem, "bad_v = 1")
     bad_ivp = InitialValueSolver(bad_problem, RK222(); dt=0.01)
@@ -403,7 +403,7 @@ end
         tau_lift(A) = lift(A, lift_basis, -1)
         grad_b = grad(b) + ez * tau_lift(tau1)
 
-        problem = IVP([b, gauge, tau1, tau2])
+        problem = InitialValueProblem([b, gauge, tau1, tau2])
         add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
         add_equation!(problem,
                       "dt(b) - kappa*div(grad_b) + tau_lift(tau2) = 1 + b*b")
@@ -435,47 +435,75 @@ end
     @test moving_boundary_residual(; batched_modes=false) < 1e-10
     @test moving_boundary_residual(; batched_modes=true) < 1e-10
 
-    # A pure-Chebyshev system can legitimately carry redundant tau columns.
-    # Applying the final constraint through an augmented mass system produces
-    # enormous cancelling tau coefficients, so the CPU path must project only
-    # through the differential variables with a smooth spectral lifting.
-    function moving_redundant_tau_metrics()
+    # Two tau variables lifted to the SAME mode make every stage system singular.
+    # The CPU used to accept that through a sparse-QR least-squares fallback, and
+    # with a moving boundary condition the recurrence was exponentially unstable
+    # (max|b| 1 → 5e8 within 300 steps) while the boundary values stayed exact —
+    # so a 50-step boundary check passed. It is now refused at the first step, on
+    # CPU as on GPU, naming the duplicate lift.
+    function duplicate_lift_problem(timestepper)
         coords = CartesianCoordinates("z")
         dist = Distributor(coords; dtype=Float64, device=CPU())
         zbasis = ChebyshevT(coords["z"]; size=24, bounds=(0.0, 1.0))
         domain = Domain(dist, (zbasis,))
-
         b = ScalarField(domain, "b")
         set!(b, (z,) -> sin(π * z))
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
         lift_basis = derivative_basis(zbasis, 1)
         tau_lift(A) = lift(A, lift_basis, -1)
-
-        problem = IVP([b, tau1, tau2])
+        problem = InitialValueProblem([b, tau1, tau2])
         add_parameters!(problem; kappa=0.05, tau_lift)
-        add_equation!(problem,
-                      "dt(b) - kappa*lap(b) + tau_lift(tau1) + tau_lift(tau2) = 0")
+        add_equation!(problem, "dt(b) - kappa*lap(b) + tau_lift(tau1) + tau_lift(tau2) = 0")
         add_bc!(problem, "b(z=0) = sin(6.283185307*t)")
         add_bc!(problem, "b(z=1) = 0")
+        return InitialValueSolver(problem, timestepper; dt=0.002)
+    end
+    # Refused at problem build (the parse-time check), before any solver exists.
+    for timestepper in (RK222(), SBDF2())
+        err = try
+            duplicate_lift_problem(timestepper); nothing
+        catch e
+            e
+        end
+        @test err isa ArgumentError
+        @test occursin("SAME mode", sprint(showerror, err))
+    end
 
-        dt = 0.002
-        solver = InitialValueSolver(problem, RK222(); dt)
-        for _ in 1:50
+    # The well-posed form of the same problem stays bounded for 300 steps of a
+    # moving boundary condition, with the boundary values exact.
+    function moving_tau_metrics(timestepper; nst=300)
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; dtype=Float64, device=CPU())
+        zbasis = ChebyshevT(coords["z"]; size=24, bounds=(0.0, 1.0))
+        domain = Domain(dist, (zbasis,))
+        b = ScalarField(domain, "b")
+        set!(b, (z,) -> sin(π * z))
+        tau1 = ScalarField(dist, "tau1", (), Float64)
+        tau2 = ScalarField(dist, "tau2", (), Float64)
+        lift_basis = derivative_basis(zbasis, 1)
+        lift1 = lift(tau1, lift_basis, -1)
+        lift2 = lift(tau2, lift_basis, -2)
+        problem = InitialValueProblem([b, tau1, tau2])
+        add_parameters!(problem; kappa=0.05, lift1, lift2)
+        add_equation!(problem, "dt(b) - kappa*lap(b) + lift1 + lift2 = 0")
+        add_bc!(problem, "b(z=0) = sin(6.283185307*t)")
+        add_bc!(problem, "b(z=1) = 0")
+        solver = InitialValueSolver(problem, timestepper; dt=0.002)
+        for _ in 1:nst
             step!(solver)
         end
-
         ensure_layout!(b, :g)
         values = vec(Array(get_grid_data(b)))
         target = sin(6.283185307 * solver.sim_time)
-        boundary_error = max(abs(values[1] - target), abs(values[end]))
-        return maximum(abs, values), boundary_error
+        return maximum(abs, values), max(abs(values[1] - target), abs(values[end]))
     end
-
-    field_max, boundary_error = moving_redundant_tau_metrics()
-    @test isfinite(field_max)
-    @test field_max < 2.0
-    @test boundary_error < 1e-8
+    for timestepper in (RK222(), RK443(), SBDF2(), CNAB2())
+        field_max, boundary_error = moving_tau_metrics(timestepper)
+        @test isfinite(field_max)
+        @test field_max < 2.0
+        @test boundary_error < 1e-8
+    end
 
     # A single constraint row may contain both differential and algebraic
     # columns. Restore the algebraic stage value, but include its contribution
@@ -495,7 +523,7 @@ end
         lift1 = lift(tau1, lift_basis, -1)
         lift2 = lift(tau2, lift_basis, -2)
 
-        problem = IVP([b, a, tau1, tau2])
+        problem = InitialValueProblem([b, a, tau1, tau2])
         add_parameters!(problem; lift1, lift2)
         add_equation!(problem, "dt(b) + lift1 + lift2 = 1 + b*b")
         add_bc!(problem, "b(z=0) = 0")
@@ -532,12 +560,13 @@ end
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
         lift_basis = derivative_basis(zbasis, 1)
-        tau_lift(A) = lift(A, lift_basis, -1)
+        lift1 = lift(tau1, lift_basis, -1)
+        lift2 = lift(tau2, lift_basis, -2)
 
-        problem = IVP([b, tau1, tau2])
-        add_parameters!(problem; tau_lift)
+        problem = InitialValueProblem([b, tau1, tau2])
+        add_parameters!(problem; lift1, lift2)
         add_equation!(problem,
-                      "dt(b) + tau_lift(tau1) + tau_lift(tau2) = 1 + b*b")
+                      "dt(b) + lift1 + lift2 = 1 + b*b")
         add_bc!(problem, "b(z=0) = 0")
         add_bc!(problem, "b(z=1) = 0")
 
@@ -567,7 +596,7 @@ end
         lift_basis = derivative_basis(zbasis, 1)
         lift1 = lift(tau1, lift_basis, -1)
         lift2 = lift(tau2, lift_basis, -2)
-        problem = IVP([b, tau1, tau2])
+        problem = InitialValueProblem([b, tau1, tau2])
         add_parameters!(problem; kappa=0.05, lift1, lift2)
         add_equation!(problem, "dt(b) - kappa*lap(b) + lift1 + lift2 = 0")
         add_bc!(problem, "b(z=0) = sin(t)")
@@ -623,12 +652,13 @@ end
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
         lift_basis = derivative_basis(zbasis, 1)
-        tau_lift(A) = lift(A, lift_basis, -1)
+        lift1 = lift(tau1, lift_basis, -1)
+        lift2 = lift(tau2, lift_basis, -2)
 
-        problem = IVP([b, tau1, tau2])
-        add_parameters!(problem; shape, tau_lift)
+        problem = InitialValueProblem([b, tau1, tau2])
+        add_parameters!(problem; shape, lift1, lift2)
         add_equation!(problem,
-                      "dt(b) - b + tau_lift(tau1) + tau_lift(tau2) = shape")
+                      "dt(b) - b + lift1 + lift2 = shape")
         add_bc!(problem, "b(z=0) = exp(t) - 1")
         add_bc!(problem, "b(z=1) = 0")
 
@@ -644,10 +674,16 @@ end
         return maximum(abs, Array(get_grid_data(b)) .- Array(get_grid_data(exact)))
     end
 
-    for (timestepper, minimum_order) in ((RK222(), 1.7), (RK443(), 2.7))
+    # RK111 is in the list because its old single-row tableau put ALL explicit
+    # weight after the implicit stage: the stage met the boundary condition, the
+    # final update then added dt·F, and the projector lifted that O(dt) boundary
+    # residual into the interior on every step. The error was 0.97 at BOTH dt —
+    # no convergence — while the constraint checks below all passed.
+    for (timestepper, minimum_order) in ((RK111(), 0.8), (RK222(), 1.7), (RK443(), 2.7))
         coarse_error = moving_boundary_error(timestepper, 0.04)
         fine_error = moving_boundary_error(timestepper, 0.02)
         @test fine_error < coarse_error
+        @test fine_error < 0.05
         @test log2(coarse_error / fine_error) > minimum_order
     end
 
@@ -667,12 +703,13 @@ end
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
         lift_basis = derivative_basis(zbasis, 1)
-        tau_lift(A) = lift(A, lift_basis, -1)
+        lift1 = lift(tau1, lift_basis, -1)
+        lift2 = lift(tau2, lift_basis, -2)
 
-        problem = IVP([b, tau1, tau2])
-        add_parameters!(problem; kappa=0.05, wall, tau_lift)
+        problem = InitialValueProblem([b, tau1, tau2])
+        add_parameters!(problem; kappa=0.05, wall, lift1, lift2)
         add_equation!(problem,
-                      "dt(b) - kappa*lap(b) + tau_lift(tau1) + tau_lift(tau2) = 0")
+                      "dt(b) - kappa*lap(b) + lift1 + lift2 = 0")
         add_bc!(problem, "b(z=0) = wall")
         add_bc!(problem, "b(z=1) = 0")
 
@@ -719,7 +756,7 @@ end
         grad_u = grad(u) + ez * tau_lift(tau_u1)
         grad_b = grad(b) + ez * tau_lift(tau_b1)
 
-        problem = IVP([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
+        problem = InitialValueProblem([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
         add_parameters!(problem; kappa=0.01, nu=0.01, Lz, ez,
                         grad_u, grad_b, tau_lift)
         add_equation!(problem, "trace(grad_u) + tau_p = 0")
@@ -778,7 +815,7 @@ end
         grad_u = grad(u) + ez * tau_lift(tau_u1)
         grad_b = grad(b) + ez * tau_lift(tau_b1)
 
-        problem = IVP([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
+        problem = InitialValueProblem([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
         add_parameters!(problem; kappa=0.01, nu=0.01, Lz, ez,
                         grad_u, grad_b, tau_lift)
         add_equation!(problem, "trace(grad_u) + tau_p = 0")
@@ -818,4 +855,118 @@ end
     @test pressure_error < 1e-10
     @test buoyancy_error < 1e-10
     @test velocity_max < 1e-10
+end
+
+# ---------------------------------------------------------------------------
+# The GPU final update. On a device the constrained final update goes through
+# `_get_or_compute_constrained_mass_lu!` (an augmented mass/L system solved on
+# the device) and the mode batching defaults ON; the CPU takes the projector.
+# Both are selected by `_gpu_subproblem_execution(sp)`, so forcing that
+# predicate on CPU arrays runs the GPU decision branches with CPU linear
+# algebra — the only way this branch is exercised without CUDA hardware.
+# The two updates must agree to roundoff on every well-posed problem above.
+# ---------------------------------------------------------------------------
+const _TB_FORCE_GPU_BRANCH = Ref(false)
+# Same body as the definition in step_selection.jl, gated by the Ref: with the
+# Ref false (the state every later test file sees) it is the original predicate.
+Tarang._gpu_subproblem_execution(sp) = _TB_FORCE_GPU_BRANCH[] || begin
+    solver = sp.solver
+    hasproperty(solver, :state) || return false
+    any(f -> !isempty(f.bases) && Tarang._field_uses_gpu(f), solver.state)
+end
+
+@testset "GPU final-update branch matches the CPU projector on well-posed problems" begin
+    function tb_heat2d(ts, dt, nst; κ=0.1)
+        coords = CartesianCoordinates("x", "z")
+        dist = Distributor(coords; dtype=Float64, device=CPU())
+        xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+        zb = ChebyshevT(coords["z"]; size=16, bounds=(0.0, 1.0))
+        dom = Domain(dist, (xb, zb))
+        T = ScalarField(dom, "T")
+        set!(T, (x, z) -> sin(π * z) * cos(x))
+        tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+        tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+        lb = derivative_basis(zb, 1)
+        lift1 = lift(tau1, lb, -1)
+        lift2 = lift(tau2, lb, -2)
+        prob = InitialValueProblem([T, tau1, tau2])
+        add_parameters!(prob; kappa=κ, lift1, lift2)
+        add_equation!(prob, "dt(T) - kappa*lap(T) + lift1 + lift2 = 0")
+        add_bc!(prob, "T(z=0) = 0")
+        add_bc!(prob, "T(z=1) = 0")
+        solver = InitialValueSolver(prob, ts; dt)
+        for _ in 1:nst
+            step!(solver)
+        end
+        tf = solver.sim_time
+        ensure_layout!(T, :g)
+        vals = Array(get_grid_data(T))
+        ex = ScalarField(dom, "ex")
+        set!(ex, (x, z) -> exp(-κ * (π^2 + 1) * tf) * sin(π * z) * cos(x))
+        ensure_layout!(ex, :g)
+        return vals, maximum(abs, vals .- Array(get_grid_data(ex))),
+               !isempty(Tarang.active_mode_batches(solver))
+    end
+
+    function tb_branch(f)
+        _TB_FORCE_GPU_BRANCH[] = false
+        cpu = f()
+        _TB_FORCE_GPU_BRANCH[] = true
+        gpu = try
+            f()
+        finally
+            _TB_FORCE_GPU_BRANCH[] = false
+        end
+        return cpu, gpu
+    end
+
+    for ts in (RK111(), RK222(), RK443(), RKSMR(), CNAB2(), SBDF2(), SBDF3())
+        (cvals, cerr, cbatched), (gvals, gerr, gbatched) = tb_branch(() -> tb_heat2d(ts, 0.005, 40))
+        @test !cbatched                       # CPU default: per-mode loop
+        @test maximum(abs, cvals .- gvals) < 1e-10
+        @test cerr < 5e-3
+        @test gerr < 5e-3
+        if ts isa Union{RK111, RK222, RK443, RKSMR, SBDF3}
+            @test gbatched                    # GPU default: batched (RK stepping)
+        end
+    end
+
+    # The moving-boundary manufactured solution (well-posed lifts -1/-2): same
+    # numbers on both branches, including RK111 — the case whose old tableau
+    # was O(1) wrong on the CPU branch while the GPU branch converged.
+    function tb_moving_boundary_error(timestepper, dt)
+        coords = CartesianCoordinates("z")
+        dist = Distributor(coords; dtype=Float64, device=CPU())
+        zbasis = ChebyshevT(coords["z"]; size=16, bounds=(0.0, 1.0))
+        domain = Domain(dist, (zbasis,))
+        b = ScalarField(domain, "b")
+        set!(b, (z,) -> 0.0)
+        shape = ScalarField(domain, "shape")
+        set!(shape, (z,) -> 1 - z + sin(π * z))
+        tau1 = ScalarField(dist, "tau1", (), Float64)
+        tau2 = ScalarField(dist, "tau2", (), Float64)
+        lift_basis = derivative_basis(zbasis, 1)
+        lift1 = lift(tau1, lift_basis, -1)
+        lift2 = lift(tau2, lift_basis, -2)
+        problem = InitialValueProblem([b, tau1, tau2])
+        add_parameters!(problem; shape, lift1, lift2)
+        add_equation!(problem, "dt(b) - b + lift1 + lift2 = shape")
+        add_bc!(problem, "b(z=0) = exp(t) - 1")
+        add_bc!(problem, "b(z=1) = 0")
+        final_time = 0.4
+        solver = InitialValueSolver(problem, timestepper; dt)
+        for _ in 1:round(Int, final_time / dt)
+            step!(solver)
+        end
+        exact = ScalarField(domain, "exact")
+        set!(exact, (z,) -> (exp(final_time) - 1) * (1 - z + sin(π * z)))
+        ensure_layout!(b, :g)
+        ensure_layout!(exact, :g)
+        return maximum(abs, Array(get_grid_data(b)) .- Array(get_grid_data(exact)))
+    end
+    for (ts, dt, bound) in ((RK111(), 0.02, 0.05), (RK222(), 0.02, 1e-4), (RK443(), 0.02, 1e-6))
+        (cerr, gerr) = tb_branch(() -> tb_moving_boundary_error(ts, dt))
+        @test cerr < bound
+        @test isapprox(cerr, gerr; rtol=1e-6, atol=1e-12)
+    end
 end

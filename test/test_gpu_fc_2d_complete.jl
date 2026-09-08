@@ -19,6 +19,89 @@ if !_FC_HAS_CUDA
 else
     CUDA.allowscalar(false)
 
+    @testset "Empty-basis GPU fields and unit vectors keep device storage" begin
+        coords = CartesianCoordinates("x", "z")
+        dist = Distributor(coords; dtype=Float64, device=GPU())
+        scalar = ScalarField(dist, "constant", (), Float64)
+        @test get_grid_data(scalar) isa CUDA.CuArray{Float64,1}
+        @test get_coeff_data(scalar) isa CUDA.CuArray{ComplexF64,1}
+        @test isempty(get_grid_data(scalar))
+        for (i, unit) in enumerate(unit_vector_fields(coords, dist))
+            for (j, component) in enumerate(unit.components)
+                @test get_grid_data(component) isa CUDA.CuArray
+                @test Array(get_grid_data(component)) == [i == j ? 1.0 : 0.0]
+                @test Array(get_grid_data(copy(component))) == Array(get_grid_data(component))
+            end
+        end
+    end
+
+    @testset "GPU steady tau solve scatters device buffers" begin
+        coords = CartesianCoordinates("x", "z")
+        dist = Distributor(coords; dtype=Float64, device=GPU())
+        xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+        zb = ChebyshevT(coords["z"]; size=10, bounds=(0.0, 1.0))
+        u = ScalarField(Domain(dist, (xb, zb)), "u")
+        tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+        tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+        lb = derivative_basis(zb, 2)
+        problem = LinearBoundaryValueProblem([u, tau1, tau2])
+        add_parameters!(problem; l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2))
+        add_equation!(problem, "-lap(u) + l1 + l2 = 0")
+        add_bc!(problem, "u(z=0) = 1")
+        add_bc!(problem, "u(z=1) = 2")
+        solver = BoundaryValueSolver(problem; batched_modes=false)
+        @test solver.base.matsolver === CuSparseLU
+        @test solve!(solver) === solver
+        ensure_layout!(u, :g)
+        z = (1 .- cos.(π .* (0:9) ./ 9)) ./ 2
+        @test get_grid_data(u) isa CUDA.CuArray
+        @test Array(get_grid_data(u)) ≈ [1+zj for xi in 1:8, zj in z] atol=2e-8
+    end
+
+    @testset "GPU spatial and moving boundary expressions" begin
+        for wall_kind in (:dirichlet, :neumann, :robin)
+            coords = CartesianCoordinates("x", "z")
+            dist = Distributor(coords; dtype=Float64, device=GPU())
+            xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
+            zb = ChebyshevT(coords["z"]; size=16, bounds=(2.0, 3.0))
+            u = ScalarField(dist, "u", (xb, zb), Float64)
+            tau1 = ScalarField(dist, "tau1", (xb,), Float64)
+            tau2 = ScalarField(dist, "tau2", (xb,), Float64)
+            moving = wall_kind === :robin
+            problem = (moving ? InitialValueProblem : LinearBoundaryValueProblem)([u, tau1, tau2])
+            lb = derivative_basis(zb, 2)
+            add_parameters!(problem; l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2),
+                            lower=2.0, upper=3.0, amp=1.25, omega=2.0, h=1.0, k=0.5)
+            add_equation!(problem, moving ? "dt(u)-0.1*lap(u)+l1+l2=0" : "lap(u)+l1+l2=0")
+            bottom = wall_kind === :dirichlet ? "u(z=lower)=amp*sin(x)" :
+                     wall_kind === :neumann ? "d(u,z)(z=lower)=amp*cos(x)" :
+                     "h*u(z=lower)+k*∂z(u)(z=lower)=sin(omega*t)"
+            add_bc!(problem, bottom)
+            add_bc!(problem, moving ? "u(z=upper)=0" : "u(z=upper)=z*cos(x)")
+            if moving
+                solver = InitialValueSolver(problem, RK222(); dt=0.01, batched_modes=false)
+                for _ in 1:3
+                    step!(solver)
+                end
+                values = Array(grid_data!(u))
+                derivative = Array(grid_data!(evaluate(Differentiate(u, coords["z"], 1))))
+                @test values[:,1] .+ 0.5 .* derivative[:,1] ≈ fill(sin(2solver.sim_time), 8) atol=2e-8
+                @test maximum(abs, values[:,end]) < 2e-8
+            else
+                solve!(BoundaryValueSolver(problem; batched_modes=false))
+                xs = (0:7) .* (2π/8)
+                zs = 2 .+ (1 .- cos.(π .* (0:15) ./ 15)) ./ 2
+                expected = if wall_kind === :dirichlet
+                    [1.25sin(x)*sinh(3-z)/sinh(1) + 3cos(x)*sinh(z-2)/sinh(1) for x in xs, z in zs]
+                else
+                    [cos(x)*(3cosh(z-2)-1.25sinh(3-z))/cosh(1) for x in xs, z in zs]
+                end
+                @test Array(grid_data!(u)) ≈ expected atol=2e-8
+            end
+            @test grid_data!(u) isa CUDA.CuArray
+        end
+    end
+
     function _fc_scaled_field_with_coords(device, coord_names, make_bases,
                                           ::Type{T}, scales) where {T}
         coords = CartesianCoordinates(coord_names...)
@@ -334,7 +417,7 @@ else
         end
     end
 
-    @testset "Nonlinear wall-bounded 2D FC IVP matches CPU" begin
+    @testset "Nonlinear wall-bounded 2D FC InitialValueProblem matches CPU" begin
         nx, nz = 8, 10
         dt = 1e-3
         nsteps = 5
@@ -355,7 +438,7 @@ else
             tau_lift(A) = lift(A, lift_basis, -1)
             grad_b = grad(b) + ez * tau_lift(tau1)
 
-            problem = IVP([b, tau1, tau2])
+            problem = InitialValueProblem([b, tau1, tau2])
             add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
             add_equation!(problem,
                           "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = -b*∂x(b)")

@@ -96,7 +96,7 @@ using Tarang
 domain = PeriodicDomain(64)                     # 64-point periodic [0, 2π]
 T = ScalarField(domain, "T")                    # Temperature field
 
-problem = IVP([T])
+problem = InitialValueProblem([T])
 add_parameters!(problem, kappa=0.01)
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 
@@ -144,7 +144,7 @@ lift_basis = derivative_basis(zbasis, 1)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem, nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 
@@ -261,10 +261,10 @@ it the constructor throws rather than silently falling back.
 
 | Type | Description | Example |
 |------|-------------|---------|
-| **IVP** | Initial Value Problems | Time-dependent Navier-Stokes |
-| **LBVP** | Linear Boundary Value Problems | Poisson equation |
-| **NLBVP** | Nonlinear Boundary Value Problems | Steady nonlinear systems |
-| **EVP** | Eigenvalue Problems | Linear stability analysis |
+| **InitialValueProblem** | Initial Value Problems | Time-dependent Navier-Stokes |
+| **LinearBoundaryValueProblem** | Linear Boundary Value Problems | Poisson equation |
+| **NonlinearBoundaryValueProblem** | Nonlinear Boundary Value Problems | Steady nonlinear systems |
+| **EigenvalueProblem** | Eigenvalue Problems | Linear stability analysis |
 
 ## Spectral Bases
 

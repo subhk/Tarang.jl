@@ -5,7 +5,7 @@ Split into focused sub-files:
 - solver_execution_plan.jl: runtime path facts resolved once at construction
 - solver_types.jl: Solver definitions and constructors
 - solver_state_vectors.jl: Field/vector transport for matrix solver paths
-- solver_stepping.jl: Time stepping, BVP/EVP solve
+- solver_stepping.jl: Time stepping, BVP/EigenvalueProblem solve
 - lazy_rhs.jl: Type-specialized lazy RHS evaluation with broadcasting fusion
 - rhs_runtime.jl: RHS evaluation strategy selection
 - solver_utils.jl: Diagnostics and exports

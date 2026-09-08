@@ -9,7 +9,7 @@ using Tarang
         yb = RealFourier(coords["y"]; size=10, bounds=(0.0, 2π))
 
         field = ScalarField(dist, "u", (xb, yb), Float64)
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
 
         struct DummyBase
             matrix_coupling::Vector{Bool}
@@ -50,7 +50,7 @@ using Tarang
         # 0D tau field — no bases at all
         tau_p = ScalarField(dist, "tau_p", (), Float64)
 
-        problem = IVP([b, u, tau_b, tau_p])
+        problem = InitialValueProblem([b, u, tau_b, tau_p])
 
         # Build a mock subproblem with group (5, nothing):
         #   Fourier mode 5 (separable), Chebyshev fully coupled

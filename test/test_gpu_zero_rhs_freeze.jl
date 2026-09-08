@@ -1,8 +1,8 @@
-# Regression: a pure-Fourier GPU IVP had an identically-zero right-hand side, so the
+# Regression: a pure-Fourier GPU InitialValueProblem had an identically-zero right-hand side, so the
 # solution held its initial condition forever with no error and no warning.
 #
 # THE CHAIN. `_gpu_pure_fourier_state` (solver_types.jl) deliberately skips global
-# matrix assembly for a pure-Fourier GPU IVP — the host matrices are unused there and
+# matrix assembly for a pure-Fourier GPU InitialValueProblem — the host matrices are unused there and
 # prohibitive at production sizes. But that assembly is also what fills
 # `problem.equation_data`, and `build_lazy_rhs_plan!` read an empty `equation_data` as
 # "nothing to compile": it returned a plan holding only zero fields and set
@@ -13,7 +13,7 @@
 #
 # This is the same root cause as the GPU implicit-guard bug fixed in PR #85 (a
 # consumer reading IR that the GPU path never builds), in a different consumer, and it
-# survived for the same reason: GPU CI is inert, so no test ever ran a GPU IVP and
+# survived for the same reason: GPU CI is inert, so no test ever ran a GPU InitialValueProblem and
 # checked that the answer MOVED.
 #
 # WHY THE TESTS BELOW LOOK THE WAY THEY DO. The mechanism is not GPU-specific — it is
@@ -34,7 +34,7 @@ function _zrf_build_cpu(; N = 8, κ = 0.1)
     yb = RealFourier(coords["y"]; size = N, bounds = (0.0, 2π))
     dom = Domain(dist, (xb, yb))
     u = ScalarField(dom, "u"); set!(u, (x, y) -> sin(x) * cos(y))
-    prob = IVP([u]); add_parameters!(prob, kappa = κ)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = κ)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     return InitialValueSolver(prob, RK222(); dt = 0.01)
 end
@@ -85,7 +85,7 @@ end
     xb = RealFourier(coords["x"]; size = 8, bounds = (0.0, 2π))
     dom = Domain(dist, (xb,))
     v = ScalarField(dom, "v")
-    empty_prob = IVP([v])
+    empty_prob = InitialValueProblem([v])
     @test !Tarang._problem_has_evolution_equation(empty_prob)
 end
 
@@ -115,7 +115,7 @@ if _ZRF_OK
     Tarang.array_type(::Tarang.GPU{JLArrays.JLBackend}, T::Type) = _ZRF_JL{T}
 end
 
-@testset "A pure-Fourier GPU IVP builds its RHS IR, and never silently returns zero" begin
+@testset "A pure-Fourier GPU InitialValueProblem builds its RHS IR, and never silently returns zero" begin
     if !_ZRF_OK
         @test_skip "JLArrays not available"
     else
@@ -125,7 +125,7 @@ end
         yb = RealFourier(coords["y"]; size = 8, bounds = (0.0, 2π))
         dom = Domain(dist, (xb, yb))
         u = ScalarField(dom, "u"); set!(u, (x, y) -> sin(x) * cos(y))
-        prob = IVP([u]); add_parameters!(prob, kappa = 0.1)
+        prob = InitialValueProblem([u]); add_parameters!(prob, kappa = 0.1)
         add_equation!(prob, "dt(u) = kappa*lap(u)")
         solver = InitialValueSolver(prob, RK222(); dt = 0.01)
 

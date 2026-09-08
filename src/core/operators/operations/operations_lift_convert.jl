@@ -68,10 +68,9 @@ function evaluate_lift(lift_op::Lift, layout::Symbol=:g)
 
     # Create result field
     result = ScalarField(operand.dist, "lift_$(operand.name)", output_bases, operand.dtype)
-    ensure_layout!(result, :c)
 
     # Multiply P * operand: place operand's data at mode lift_mode
-    _multiply_lift_polynomial!(get_coeff_data(result), get_coeff_data(P),
+    _multiply_lift_polynomial!(coeff_data!(result), get_coeff_data(P),
                                get_coeff_data(operand), basis_axis, lift_mode, arch)
 
     if layout == :g

@@ -1,7 +1,7 @@
 using Test
 using Tarang
 
-@testset "QG inversion solves the tau LBVP with surface buoyancy forcing" begin
+@testset "QG inversion solves the tau LinearBoundaryValueProblem with surface buoyancy forcing" begin
     qg = qg_system_setup(
         Lx = 2π, Ly = 2π, H = 1.0,
         Nx = 4, Ny = 4, Nz = 6,

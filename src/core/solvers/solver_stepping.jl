@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-# IVP runtime entry point.
+# InitialValueProblem runtime entry point.
 #
 # Read this file first when tracing one solver step:
 # 1. refresh time-dependent boundary conditions for the new step time
@@ -216,12 +216,12 @@ function solve!(solver::BoundaryValueSolver)
     return solver
 end
 
-function _solve_bvp!(solver::BoundaryValueSolver, ::LBVP)
+function _solve_bvp!(solver::BoundaryValueSolver, ::LinearBoundaryValueProblem)
     solution = solve_linear!(solver)
     solution === nothing || copy_solution_to_fields!(solver.state, solution)
 end
 
-function _solve_bvp!(solver::BoundaryValueSolver, ::NLBVP)
+function _solve_bvp!(solver::BoundaryValueSolver, ::NonlinearBoundaryValueProblem)
     any(_field_uses_gpu, solver.state) && error(
         "GPU nonlinear boundary-value solves are not device-native; CPU fallback is disabled.")
     solve_nonlinear!(solver)
@@ -230,7 +230,7 @@ end
 """Solve linear boundary value problem.
 
 Preferred path: solve PER-FOURIER-MODE subproblem (`L_sp x = F_sp`, scatter back),
-reusing the same machinery as the IVP timestepper. Each subproblem is a small
+reusing the same machinery as the InitialValueProblem timestepper. Each subproblem is a small
 square tau system over the coupled (Chebyshev) dimension for one separable mode,
 so the single-mode operator matrices are correct. Falls back to the (legacy)
 global `L \\ F` solve only when no per-mode subproblems are available.
@@ -269,7 +269,7 @@ function solve_linear!(solver::BoundaryValueSolver)
 end
 
 # Build a solver for a subproblem's L_min, with SPQR → dense fallbacks for
-# rank-revealing / awkward tau systems (mirrors the IVP `_get_or_build_lhs!`).
+# rank-revealing / awkward tau systems (mirrors the InitialValueProblem `_get_or_build_lhs!`).
 function _bvp_lhs_solver(sp::Subproblem)
     st = _subproblem_solver_type(sp.solver.base.matsolver)
     try
@@ -325,7 +325,7 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
     state = solver.state
     sps = solver.subproblems
 
-    # The IVP forcing path is M-term-gated (`_subproblem_eqn_targets` returns []
+    # The InitialValueProblem forcing path is M-term-gated (`_subproblem_eqn_targets` returns []
     # for equations without a time derivative), so for a steady BVP it places
     # nothing. We therefore build BVP targets directly: the "bulk" PDE equations
     # are the largest equation blocks (full coupled-dimension size); the small
@@ -370,7 +370,7 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
     # data lives in the PencilFFT-output pencil (Chebyshev axis DECOMPOSED, kept in
     # grid space). Transpose state AND the forcing into the Chebyshev-local solve
     # pencil ONCE, OUTSIDE the loop (one collective per field, identical on every
-    # rank), then undo afterwards — mirroring the IVP subproblem steppers
+    # rank), then undo afterwards — mirroring the InitialValueProblem subproblem steppers
     # (step_subproblem_rk.jl). No-op for serial / non-mixed fields. Without this
     # the gather indexes the wrong pencil → DimensionMismatch or wrong solution at
     # np>=2.
@@ -382,13 +382,13 @@ function _solve_bvp_per_subproblem!(solver::BoundaryValueSolver)
         # Override the M-gated target cache with the BVP bulk-equation targets.
         sp.runtime.eqn_targets = bvp_targets
         n_eq = size(sp.L_min, 1)
-        rhs = zeros(ComplexF64, n_eq)
+        rhs = zeros(sp.dist.architecture, ComplexF64, n_eq)
         gather_eqn_F!(rhs, sp, solver, pde_F, state)
-        alg_f = zeros(ComplexF64, n_eq)
+        alg_f = similar(rhs)
         gather_alg_F!(alg_f, sp)
         apply_bc_override!(rhs, alg_f, sp, 1.0)
 
-        x = Vector{ComplexF64}(undef, size(sp.L_min, 2))
+        x = similar(rhs, size(sp.L_min, 2))
         _solve_cached_system!(x, _bvp_lhs_solver(sp), rhs)
         scatter_inputs(sp, x, state)
     end
@@ -545,7 +545,7 @@ function solve_nonlinear!(solver::BoundaryValueSolver)
 
     copy_solution_to_fields!(solver.state, x)
     if !converged
-        @warn "NLBVP per-mode Newton did not reach tolerance $(solver.tolerance) in \
+        @warn "NonlinearBoundaryValueProblem per-mode Newton did not reach tolerance $(solver.tolerance) in \
                $(solver.max_iterations) iters (final |F|=$resnorm)"
     end
     return solver
@@ -698,7 +698,7 @@ function solve!(solver::EigenvalueSolver; nev::Int=solver.nev,
 end
 
 # Gather variable-length per-rank eigenvalue vectors into the FULL global set on
-# every rank. Each rank's EVP subproblems cover only its local Fourier modes, so
+# every rank. Each rank's EigenvalueProblem subproblems cover only its local Fourier modes, so
 # the global `which`/`nev` selection must see every rank's eigenvalues.
 function _allgather_complex(local_vals::Vector{ComplexF64}, comm)
     counts = MPI.Allgather(Cint(length(local_vals)), comm)

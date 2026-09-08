@@ -2,9 +2,9 @@
 A field handed back by `grad` must not be a buffer the derivative pool can reissue.
 
 THE BUG THIS PINS. The derivative kernel writes into memory borrowed from a
-global rotating pool (`_DERIV_RESULT_POOL`, `_DERIV_RESULT_IDX`), which hands the
-same slot to the next internal borrower after `_DERIV_RESULT_POOL_SIZE`
-checkouts. Public `evaluate_differentiate` calls now copy out by default, while
+rotating pool (now task-owned), which hands the same slot to the next internal
+borrower after `_DERIV_RESULT_POOL_SIZE` checkouts in that task. Public
+`evaluate_differentiate` calls now copy out by default, while
 explicit `own=false` internal calls expose the borrowed buffer. `grad` once
 stored those buffers directly into the `VectorField` / `TensorField` it returned,
 so the container kept referencing pool slots after the pool had moved on.

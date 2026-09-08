@@ -100,6 +100,9 @@ function _equation_output_dofs(expr)
     isa(expr, VectorField)  && return _coeff_space_dofs(expr)
     isa(expr, TensorField)  && return _coeff_space_dofs(expr)
 
+    if expr isa Component
+        return length(_component_output_range(expr, _equation_output_dofs(expr.operand)))
+    end
     # ── Arithmetic (both Operator and Future types) ──────────────
     # All addends of a well-formed equation share the same shape,
     # so `max` skips zeros/constants and picks the informative term.
@@ -131,7 +134,7 @@ function _equation_output_dofs(expr)
        isa(expr, FractionalLaplacian) || isa(expr, Differentiate) ||
        isa(expr, Lift) || isa(expr, Skew) || isa(expr, Curl) ||
        isa(expr, Trace) || isa(expr, Convert) || isa(expr, HilbertTransform) ||
-       isa(expr, Component) || isa(expr, RadialComponent) ||
+       isa(expr, RadialComponent) ||
        isa(expr, AngularComponent) || isa(expr, AzimuthalComponent)
         return _equation_output_dofs(expr.operand)
     end

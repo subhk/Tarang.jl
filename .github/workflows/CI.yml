@@ -95,7 +95,8 @@ jobs:
       - name: Run tests
         uses: julia-actions/julia-runtest@v1
         env:
-          JULIA_NUM_THREADS: 2
+          # Exercise global thread IDs that extend beyond the default pool.
+          JULIA_NUM_THREADS: '2,1'
           OMP_NUM_THREADS: 1
 
       - name: Process coverage

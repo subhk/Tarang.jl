@@ -4,10 +4,10 @@ Problems define the PDE system to be solved, including equations and boundary co
 
 ## Problem Types
 
-### IVP - Initial Value Problem
+### InitialValueProblem - Initial Value Problem
 
 Time-dependent PDEs with initial conditions. Every unknown — including any `tau`
-variables — is listed in the `IVP([...])` constructor, and the number of equations
+variables — is listed in the `InitialValueProblem([...])` constructor, and the number of equations
 (evolution equations **plus** boundary conditions) must equal the number of variables.
 
 ```julia
@@ -22,7 +22,7 @@ dom = Domain(dist, (bx, by))
 s = ScalarField(dom, "s")
 u = VectorField(dom, "u")
 
-problem = IVP([s, u])
+problem = InitialValueProblem([s, u])
 add_parameters!(problem, nu=0.05)
 
 # Linear terms on the LHS (treated implicitly), nonlinear terms on the RHS
@@ -36,7 +36,7 @@ A fully periodic (all-Fourier) problem like this needs no boundary conditions an
 `tau` variables. A bounded Chebyshev/Jacobi direction needs both — see *Boundary
 Conditions* below.
 
-### LBVP - Linear Boundary Value Problem
+### LinearBoundaryValueProblem - Linear Boundary Value Problem
 
 Steady-state linear PDEs. Boundary conditions in a bounded (Chebyshev/Jacobi)
 direction use the **tau method**: declare one `tau` variable per boundary
@@ -57,7 +57,7 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)           # one tau per BC
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "Δ(u) + l1 + l2 = -2")
 add_bc!(problem, "u(z=0)   = 0")
@@ -73,21 +73,21 @@ ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid
     `x` axis and define the `tau` variables on `()`. The solver builds one coupled
     tau subproblem over the Chebyshev spectrum.
 
-### NLBVP - Nonlinear Boundary Value Problem
+### NonlinearBoundaryValueProblem - Nonlinear Boundary Value Problem
 
-Steady-state nonlinear PDEs. Same tau-method boundary handling as the LBVP
+Steady-state nonlinear PDEs. Same tau-method boundary handling as the LinearBoundaryValueProblem
 (tau variables + `lift` + `add_bc!`). Put the nonlinear terms on the right-hand
 side; the solver linearizes them with a symbolic Frechet derivative and runs a
 per-Fourier-mode Newton iteration.
 
 ```julia
 # Manufactured nonlinearity  Δu = u² + g,  with g = -2 - u_exact²  so u_exact = z(Lz - z)
-# domain / fields / taus as in the LBVP example above (u, tau1, tau2, lb2)
+# domain / fields / taus as in the LinearBoundaryValueProblem example above (u, tau1, tau2, lb2)
 g = ScalarField(dom, "g"); ensure_layout!(g, :g)
 zg = create_meshgrid(dom; on_device=false)["z"]
 get_grid_data(g) .= -2 .- (zg .* (1.0 .- zg)).^2
 
-problem = NLBVP([u, tau1, tau2])
+problem = NonlinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
 add_equation!(problem, "Δ(u) + l1 + l2 = u*u + g")   # nonlinearity on the RHS
 add_bc!(problem, "u(z=0)   = 0")
@@ -100,7 +100,7 @@ solve!(solver)
 ensure_layout!(u, :g)
 ```
 
-### EVP - Eigenvalue Problem
+### EigenvalueProblem - Eigenvalue Problem
 
 Linear stability and eigenvalue analysis. Tarang solves the generalized problem
 `L x = σ M x`, where the mass matrix `M` is assembled from the **time-derivative
@@ -121,7 +121,7 @@ tau1 = ScalarField(dist, "tau1", (), Float64)
 tau2 = ScalarField(dist, "tau2", (), Float64)
 lb2  = derivative_basis(zb, 2)
 
-evp = EVP([u, tau1, tau2]; eigenvalue=:σ)
+evp = EigenvalueProblem([u, tau1, tau2]; eigenvalue=:σ)
 add_parameters!(evp; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(evp, "dt(u) - Δ(u) - l1 - l2 = 0")   # dt(u) → σu marks M
 add_bc!(evp, "u(z=0)   = 0")
@@ -156,7 +156,7 @@ The solver automatically determines each equation's row count in the system matr
 
 ```julia
 # q, ψ: ScalarFields;  u: VectorField;  tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)
-problem = IVP([q, ψ, u, tau_ψ])
+problem = InitialValueProblem([q, ψ, u, tau_ψ])
 add_parameters!(problem, nu=1e-6)
 
 # Any order is fine:
@@ -333,7 +333,7 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)   # one tau per BC
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = IVP([T, tau1, tau2])
+problem = InitialValueProblem([T, tau1, tau2])
 add_parameters!(problem; kappa=0.01, l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "∂t(T) - kappa*Δ(T) + l1 + l2 = 0")
 add_bc!(problem, "T(z=0) = 1")   # hot bottom
@@ -369,7 +369,7 @@ lift_basis = derivative_basis(zb, 1)
 τ_lift(A)  = lift(A, lift_basis, -1)
 grad_u     = grad(u) + ez * τ_lift(tau_u1)
 
-problem = IVP([p, u, tau_p, tau_u1, tau_u2])
+problem = InitialValueProblem([p, u, tau_p, tau_u1, tau_u2])
 add_parameters!(problem, nu=0.01, grad_u=grad_u, τ_lift=τ_lift)
 add_equation!(problem, "trace(grad_u) + tau_p = 0")                                 # continuity
 add_equation!(problem, "∂t(u) - nu*div(grad_u) + ∇(p) + τ_lift(tau_u2) = -u⋅∇(u)")  # momentum
@@ -395,7 +395,7 @@ tau_T1 = ScalarField(dist, "tau_T1", (xb,), Float64)
 tau_T2 = ScalarField(dist, "tau_T2", (xb,), Float64)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem, nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 add_equation!(problem, "trace(grad_u) + tau_p = 0")
@@ -434,7 +434,7 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "Δ(u) + l1 + l2 = -2")
 add_bc!(problem, "u(z=0)   = 0")

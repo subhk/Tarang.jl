@@ -5,7 +5,7 @@ Facade for problem definitions, equations, and boundary conditions.
 """
 module Problems
 import ..Tarang:
-    IVP, EVP, LBVP, NLBVP,
+    InitialValueProblem, EigenvalueProblem, LinearBoundaryValueProblem, NonlinearBoundaryValueProblem,
     add_parameters!, add_equation!, add_bc!,
     no_slip!, fixed_value!, free_slip!, insulating!,
     BoundaryConditionManager,
@@ -16,7 +16,7 @@ import ..Tarang:
     has_space_dependent_bcs, requires_bc_update
 
 export
-    IVP, EVP, LBVP, NLBVP,
+    InitialValueProblem, EigenvalueProblem, LinearBoundaryValueProblem, NonlinearBoundaryValueProblem,
     add_parameters!, add_equation!, add_bc!,
     no_slip!, fixed_value!, free_slip!, insulating!,
     BoundaryConditionManager,

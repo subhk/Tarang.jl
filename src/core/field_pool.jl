@@ -310,7 +310,8 @@ nothing bounds how many results a caller may hold.
 
 Two of these have already been live wrong-answer bugs:
 
-  * `_DERIV_RESULT_POOL` (16 slots). A 3-D vector gradient holds 9 slots, so two
+  * The derivative result pool (now `_DerivativeResultPool`, 16 slots per task).
+    A 3-D vector gradient holds 9 slots, so two
     live gradients need 18: `gu = grad(u); gv = grad(v)` rewrote components of
     `gu` with values belonging to `gv`, max error 3.0. The pool had already been
     grown 8 -> 16 after the same failure inside a single tensor (`T[3,3]` over

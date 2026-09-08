@@ -4,6 +4,10 @@
 # Fourier Derivative Implementation
 # ============================================================================
 
+# Local and distributed derivative multipliers can share a basis's transforms
+# dictionary. Protect both cache paths, including reads concurrent with insertion.
+const _DERIV_MULT_LOCK = ReentrantLock()
+
 """
     evaluate_fourier_derivative!(result, operand, axis, order, layout)
 
@@ -190,7 +194,9 @@ function _get_cached_dist_deriv_mult!(coeff_data::PencilArrays.PencilArray,
     lr_lo = local_range === nothing ? 0 : Int(first(local_range))
     lr_hi = local_range === nothing ? 0 : Int(last(local_range))
     cache_key = (:dist_deriv_mult, order, uses_rfft, axis, lr_lo, lr_hi)
-    cached = get(basis.transforms, cache_key, nothing)
+    cached = lock(_DERIV_MULT_LOCK) do
+        get(basis.transforms, cache_key, nothing)
+    end
     cached !== nothing && return cached::Vector{ComplexF64}
 
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
@@ -234,8 +240,9 @@ function _get_cached_dist_deriv_mult!(coeff_data::PencilArrays.PencilArray,
     end
 
     deriv_mult = ComplexF64.((im .* k_local) .^ order)
-    basis.transforms[cache_key] = deriv_mult
-    return deriv_mult
+    return lock(_DERIV_MULT_LOCK) do
+        get!(() -> deriv_mult, basis.transforms, cache_key)::Vector{ComplexF64}
+    end
 end
 
 function _apply_spectral_derivative_distributed!(coeff_data::AbstractArray,
@@ -268,14 +275,17 @@ is computed once and cached in the basis's transforms dict.
 function _get_cached_deriv_mult(basis::Union{RealFourier, ComplexFourier}, N::Int, L::Float64, order::Int)
     # Tuple key avoids string allocation on every call
     cache_key = (:deriv_mult, N, order)
-    cached = get(basis.transforms, cache_key, nothing)
+    cached = lock(_DERIV_MULT_LOCK) do
+        get(basis.transforms, cache_key, nothing)
+    end
     if cached !== nothing
         return cached::Vector{ComplexF64}
     end
     k_axis = _fftfreq(N, L/N) .* 2π
     deriv_mult = (im .* k_axis) .^ order
-    basis.transforms[cache_key] = deriv_mult
-    return deriv_mult
+    return lock(_DERIV_MULT_LOCK) do
+        get!(() -> deriv_mult, basis.transforms, cache_key)::Vector{ComplexF64}
+    end
 end
 
 """
@@ -332,14 +342,13 @@ function _write_to_grid_data!(result::ScalarField, deriv_g::AbstractArray)
 end
 
 # Cached FFT plans + complex work buffers for the DEVICE Fourier derivative,
-# keyed by (device token, local shape, axis, complex eltype) — the device analogue
-# of `_DERIV_FFT_WS` below. Buffers are filled/consumed entirely within one
-# derivative call, so a single cached set per key is safe (same contract as the
-# CPU workspace). `_device_cache_token` keeps multi-GPU devices from sharing
-# buffers or CUFFT plans. Registration is locked, matching every other GPU
+# keyed by (device token, local shape, axis, complex eltype). This single-workspace
+# cache requires one transforming Julia task at a time on each device.
+# `_device_cache_token` keeps multi-GPU devices from sharing buffers or CUFFT
+# plans. Registration is locked, matching every other GPU
 # cache (GPU_TRANSFORM_CACHE, _GPU_DCT_SCRATCH_CACHE, _GPU_CHEB_DERIV_CACHE):
-# an unlocked `get!` on a plain Dict can corrupt the table mid-rehash under
-# concurrent tasks, or hand two callers the same buffers.
+# an unlocked `get!` on a plain Dict can corrupt the table mid-rehash. The lock
+# protects registration, not concurrent use of the cached device buffers.
 const _DERIV_FFT_WS_GPU = Dict{Tuple, Any}()
 const _DERIV_FFT_WS_GPU_LOCK = ReentrantLock()
 
@@ -399,9 +408,9 @@ end
     evaluate_fourier_derivative_gpu!(result, data_g, basis, order, deriv_mult_cpu,
                                      axis, dims, data_shape, layout)
 
-GPU implementation mirroring `evaluate_fourier_derivative_cpu!`'s cached-workspace
-design: CUFFT plans and complex work buffers are cached per (device, shape, axis,
-eltype), and the derivative multiplier lives on the device. Per call this performs
+GPU implementation with CUFFT plans and complex work buffers cached per
+(device, shape, axis, eltype); the derivative multiplier lives on the device.
+Calls on a device must obey its single-transforming-task contract. Per call this performs
 no allocation, no host↔device transfer, and no FFT planning — previously each call
 re-uploaded the multiplier, built a fresh CUFFT plan, and allocated three
 full-size device arrays.
@@ -451,24 +460,44 @@ function _gpu_deriv_exec!(dst::AbstractArray, data_g::AbstractArray, cin, fhat, 
     return dst
 end
 
-# Cached FFT plans + complex/real buffers for the CPU Fourier derivative, keyed by
-# (local shape, axis, dims, complex eltype). Reused across calls so the per-call
-# fft/ifft outputs are not reallocated. Buffers are filled/consumed entirely within
-# one derivative call (not held across calls), so a single cached set per key is safe.
-const _DERIV_FFT_WS = Dict{Tuple, Any}()
+# Idle FFT workspaces for CPU Fourier derivatives, keyed by local shape, axis,
+# dims, and complex eltype. Checkout removes a workspace until its caller returns
+# it, so overlapping calls never share buffers or depend on task/thread identity.
+# Locks protect the pool only; allocation, planning, and FFT execution run outside.
+const _DERIV_FFT_WS = Dict{Tuple, Vector{Any}}()
+const _DERIV_FFT_WS_LOCK = ReentrantLock()
 
+_deriv_workspace_key(data_g::AbstractArray, axis::Int, dims::Int) =
+    (size(data_g), axis, dims, complex(float(real(eltype(data_g)))))
+
+"""Check out exclusive CPU derivative scratch; return it with `_return_deriv_workspace!`."""
 function _get_deriv_workspace!(data_g::AbstractArray, axis::Int, dims::Int)
-    CT = complex(float(real(eltype(data_g))))
-    RT = real(CT)
-    key = (size(data_g), axis, dims, CT)
-    return get!(_DERIV_FFT_WS, key) do
-        cin  = Array{CT}(undef, size(data_g))
-        fhat = Array{CT}(undef, size(data_g))
-        rout = Array{RT}(undef, size(data_g))
-        pf  = dims == 1 ? plan_fft(cin)   : plan_fft(cin, axis)
-        pin = dims == 1 ? plan_ifft(fhat) : plan_ifft(fhat, axis)
-        (cin, fhat, rout, pf, pin)
+    key = _deriv_workspace_key(data_g, axis, dims)
+    workspace = lock(_DERIV_FFT_WS_LOCK) do
+        idle = get(_DERIV_FFT_WS, key, nothing)
+        idle === nothing || isempty(idle) ? nothing : pop!(idle)
     end
+    workspace === nothing || return workspace
+
+    # FFTW protects planning with its own lock. Keep that potentially expensive
+    # work outside our pool lock so other shapes and completed calls can proceed.
+    CT = key[4]
+    RT = real(CT)
+    cin  = Array{CT}(undef, size(data_g))
+    fhat = Array{CT}(undef, size(data_g))
+    rout = Array{RT}(undef, size(data_g))
+    pf  = dims == 1 ? plan_fft(cin)   : plan_fft(cin, axis)
+    pin = dims == 1 ? plan_ifft(fhat) : plan_ifft(fhat, axis)
+    return (cin, fhat, rout, pf, pin)
+end
+
+"""Return a checked-out workspace after its last read, including on error."""
+function _return_deriv_workspace!(data_g::AbstractArray, axis::Int, dims::Int, workspace)
+    key = _deriv_workspace_key(data_g, axis, dims)
+    lock(_DERIV_FFT_WS_LOCK) do
+        push!(get!(() -> Any[], _DERIV_FFT_WS, key), workspace)
+    end
+    return nothing
 end
 
 """Multiply `fhat` by the derivative factor (ik)^order along `axis`, in place.
@@ -516,24 +545,25 @@ CPU-specific implementation using optimized loops.
 """
 function evaluate_fourier_derivative_cpu!(result::ScalarField, data_g::AbstractArray, deriv_mult::AbstractVector, axis::Int, dims::Int, data_shape::Tuple, layout::Symbol)
     if dims in (1, 2, 3)
-        # Cached FFT plans + buffers (keyed by local shape/axis/eltype) reuse memory
-        # across calls instead of allocating fft/ifft outputs each time. Same
-        # semantics as fft(data_g, axis); for MPI the framework already orients the
-        # derivative axis locally before calling this, so per-rank caching is valid.
-        cin, fhat, rout, pf, pin = _get_deriv_workspace!(data_g, axis, dims)
-        copyto!(cin, data_g)
-        mul!(fhat, pf, cin)
-        # The deriv-multiplier loop runs through a function barrier so it is not
-        # boxed (cin/fhat come from an `Any`-typed cache here).
-        _apply_deriv_mult!(fhat, deriv_mult, axis, dims, data_shape)
-        mul!(cin, pin, fhat)   # cin = ifft(fhat) along axis (normalized)
-        if result.dtype <: Real
-            @inbounds @. rout = real(cin)
-            _write_to_grid_data!(result, rout)
-        else
-            _write_to_grid_data!(result, cin)
+        workspace = _get_deriv_workspace!(data_g, axis, dims)
+        try
+            cin, fhat, rout, pf, pin = workspace
+            copyto!(cin, data_g)
+            mul!(fhat, pf, cin)
+            # The deriv-multiplier loop runs through a function barrier so it is
+            # not boxed (the workspace pool stores heterogeneous FFT plan types).
+            _apply_deriv_mult!(fhat, deriv_mult, axis, dims, data_shape)
+            mul!(cin, pin, fhat)   # cin = ifft(fhat) along axis (normalized)
+            if result.dtype <: Real
+                @inbounds @. rout = real(cin)
+                _write_to_grid_data!(result, rout)
+            else
+                _write_to_grid_data!(result, cin)
+            end
+            result.current_layout = :g
+        finally
+            _return_deriv_workspace!(data_g, axis, dims, workspace)
         end
-        result.current_layout = :g
     else
         throw(ArgumentError("Fourier derivative only implemented for 1D, 2D, and 3D"))
     end

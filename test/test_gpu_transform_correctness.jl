@@ -157,7 +157,7 @@ else
             yb = RealFourier(coords["y"]; size=16, bounds=(0.0, 2π))
             dom = Domain(dist, (xb, yb))
             u = ScalarField(dom, "u")
-            prob = IVP([u]); add_parameters!(prob; nu=ν)
+            prob = InitialValueProblem([u]); add_parameters!(prob; nu=ν)
             add_equation!(prob, "∂t(u) - nu*Δ(u) = 0")
             ensure_layout!(u, :g)
             mesh = Tarang.get_grid_coordinates(dom; on_device=false)
@@ -184,7 +184,7 @@ else
     end
 
 
-    @testset "End-to-end forced RealFourier × ChebyshevT IVP" begin
+    @testset "End-to-end forced RealFourier × ChebyshevT InitialValueProblem" begin
         CUDA.allowscalar(false)
         nx, nz = 8, 10
         dt = 1e-3
@@ -204,7 +204,7 @@ else
             tau_lift(A) = lift(A, lift_basis, -1)
             grad_b = grad(b) + ez * tau_lift(tau1)
 
-            problem = IVP([b, tau1, tau2])
+            problem = InitialValueProblem([b, tau1, tau2])
             add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
             add_equation!(problem,
                           "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = 0")
@@ -279,7 +279,7 @@ else
     end
 
 
-    @testset "End-to-end GPU vs CPU: forced 3D periodic IVP" begin
+    @testset "End-to-end GPU vs CPU: forced 3D periodic InitialValueProblem" begin
         CUDA.allowscalar(false)
         n = 8
         dt = 1e-3
@@ -293,7 +293,7 @@ else
             end
             domain = Domain(dist, bases)
             q = ScalarField(domain, "q3")
-            problem = IVP([q])
+            problem = InitialValueProblem([q])
             add_parameters!(problem; nu=0.05)
             add_equation!(problem, "∂t(q3) - nu*Δ(q3) = 0")
 
@@ -388,7 +388,7 @@ else
     end
 
 
-    @testset "End-to-end forced 3D Fourier × Fourier × ChebyshevT IVP" begin
+    @testset "End-to-end forced 3D Fourier × Fourier × ChebyshevT InitialValueProblem" begin
         CUDA.allowscalar(false)
         nx, ny, nz = 8, 8, 10
         dt = 1e-3
@@ -409,7 +409,7 @@ else
             tau_lift3(A) = lift(A, lift_basis, -1)
             grad_b3 = grad(b) + ez * tau_lift3(tau1)
 
-            problem = IVP([b, tau1, tau2])
+            problem = InitialValueProblem([b, tau1, tau2])
             add_parameters!(problem; kappa=0.1, grad_b3, tau_lift3)
             add_equation!(problem,
                           "∂t(b3) - kappa*div(grad_b3) + tau_lift3(tau32) = 0")

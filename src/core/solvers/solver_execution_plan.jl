@@ -9,7 +9,7 @@
 #
 # 1. A question answered by INSPECTING state that a skipped step never produced.
 #    `_problem_has_implicit_linear_term` read `problem.equation_data`, which is
-#    filled by global-matrix assembly — precisely the step a pure-Fourier GPU IVP
+#    filled by global-matrix assembly — precisely the step a pure-Fourier GPU InitialValueProblem
 #    skips. The guard that existed to catch a silently-dropped implicit operator
 #    was therefore blind exactly when it mattered. The fix is not a better
 #    inspection: it is to RECORD what construction actually did, so a consumer

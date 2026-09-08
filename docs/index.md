@@ -6,7 +6,7 @@ This page is a concise newcomer guide. It walks you from a clean machine to a fi
 - [1. Prerequisites](#1-prerequisites)
 - [2. Install Tarang](#2-install-tarang)
 - [3. The Tarang Workflow](#3-the-tarang-workflow)
-- [4. Minimal IVP Example](#4-minimal-ivp-example)
+- [4. Minimal InitialValueProblem Example](#4-minimal-initialvalueproblem-example)
 - [5. Running with MPI](#5-running-with-mpi)
 - [6. Logging & Configuration](#6-logging--configuration)
 - [7. NetCDF Output & Postprocessing](#7-netcdf-output--postprocessing)
@@ -33,13 +33,13 @@ julia --project -e 'using Tarang; println("Tarang loaded: ", Tarang.__version__)
 2. **Set coordinates & distributor**: choose names (e.g., `"x"`, `"z"`) and an MPI process mesh.
 3. **Choose bases** per coordinate (Fourier, ChebyshevT/U, Legendre) and build a `Domain`.
 4. **Create fields**: scalar/vector/tensor fields that live on the domain.
-5. **Define a problem** (`IVP`, `LBVP`, `NLBVP`, `EVP`) and add equations/parameters.
+5. **Define a problem** (`InitialValueProblem`, `LinearBoundaryValueProblem`, `NonlinearBoundaryValueProblem`, `EigenvalueProblem`) and add equations/parameters.
 6. **Add boundary conditions** (Dirichlet/Neumann/Robin/stress-free/custom).
 7. **Pick a timestepper** (e.g., `RK222`, `CNAB2`, `SBDF2`) and build a solver.
 8. **Loop**: compute dt (often via `CFL`) and `step!` the solver.
 9. **Output/analysis**: add NetCDF handlers, CFL/flow diagnostics, and logging.
 
-## 4. Minimal IVP Example
+## 4. Minimal InitialValueProblem Example
 This is a basic 2D Rayleigh-Benard-style scaffold you can extend.
 
 ```julia
@@ -61,8 +61,8 @@ u = VectorField(dist, coords, "u", (x, z))  # velocity
 p = ScalarField(dist, "p", (x, z))          # pressure
 T = ScalarField(dist, "T", (x, z))          # temperature
 
-# 4) Problem definition (IVP)
-problem = IVP([u.components[1], u.components[2], p, T])
+# 4) Problem definition (InitialValueProblem)
+problem = InitialValueProblem([u.components[1], u.components[2], p, T])
 add_equation!(problem, "∂t(u) - Pr*Δ(u) + ∇(p) = -u⋅∇(u) + Ra*Pr*T*ez")
 add_equation!(problem, "div(u) = 0")
 add_equation!(problem, "∂t(T) - Δ(T) = -u⋅∇(T)")
@@ -94,7 +94,7 @@ MPI.Finalize()
 Key edits for your problem:
 - Swap `CartesianCoordinates` for `SphericalCoordinates`/`PolarCoordinates` if needed.
 - Pick bases per coordinate (Fourier for periodic; Chebyshev/Legendre for bounded).
-- Add/remove fields in the `IVP` list.
+- Add/remove fields in the `InitialValueProblem` list.
 - Modify equations and boundary conditions to match your PDEs.
 - Choose a timestepper: `RK222`/`RK443` (IMEX Runge-Kutta), `CNAB2`/`SBDFk` (IMEX multistep).
 

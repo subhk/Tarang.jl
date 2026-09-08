@@ -60,7 +60,7 @@ function _diffusion_amplitude(ts; dt = 0.001, N = 16, T = 1.0)
     ensure_layout!(u, :g)
     Tarang.get_grid_data(u) .= cos.(_dimex_grid(N))
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) - lap(u) = 0")
     solver = InitialValueSolver(problem, ts; dt = dt)
 
@@ -86,7 +86,7 @@ end
     ensure_layout!(u, :g)
     Tarang.get_grid_data(u) .= cos.(_dimex_grid(N))
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) - lap(u) = 0")
     solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.05)
 
@@ -111,7 +111,7 @@ end
         u = ScalarField(dist, "u", (xb,), Float64)
         ensure_layout!(u, :g)
         Tarang.get_grid_data(u) .= cos.(_dimex_grid(N))
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) - lap(u) = 0")
         solver = InitialValueSolver(problem, ts; dt = dt)
         step!(solver)
@@ -158,7 +158,7 @@ end
         u = ScalarField(dist, "u", (xb,), Float64)
         ensure_layout!(u, :g)
         fill!(Tarang.get_grid_data(u), 1.0)
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, attach ? "dt(u) = 0" : "dt(u) + u = 0")
         solver = InitialValueSolver(problem, ts; dt = 0.001)
         if attach
@@ -192,7 +192,7 @@ end
         v = ScalarField(dist, "v", (xb,), Float64)
         ensure_layout!(u, :g); fill!(Tarang.get_grid_data(u), 1.0)
         ensure_layout!(v, :g); fill!(Tarang.get_grid_data(v), 1.0)
-        problem = IVP([u, v])
+        problem = InitialValueProblem([u, v])
         add_equation!(problem, "dt(u) - v = 0")
         add_equation!(problem, "v = 0")
         return InitialValueSolver(problem, ts; dt = 0.01)
@@ -226,7 +226,7 @@ end
         v = ScalarField(dist, "v", (xb,), Float64)
         ensure_layout!(u, :g); fill!(Tarang.get_grid_data(u), 1.0)
         ensure_layout!(v, :g); fill!(Tarang.get_grid_data(v), 1.0)
-        problem = IVP([u, v])
+        problem = InitialValueProblem([u, v])
         add_equation!(problem, "dt(u) - d(v,x) = 0")   # Differentiate(v), operand ≠ u
         add_equation!(problem, "v = 0")
         solver = InitialValueSolver(problem, DiagonalIMEX_RK443(); dt = 0.01)
@@ -241,7 +241,7 @@ end
         u = ScalarField(dist, "u", (xb,), Float64)
         ensure_layout!(u, :g)
         Tarang.get_grid_data(u) .= cos.(_dimex_grid(N))
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) + d(u,x) = 0")
         solver = InitialValueSolver(problem, DiagonalIMEX_RK443(); dt = 0.002)
         for _ in 1:500                                  # advect by t = 1.0
@@ -262,7 +262,7 @@ end
         xb = Chebyshev(coords["x"]; size = N, bounds = (-1.0, 1.0))
         u = ScalarField(dist, "u", (xb,), Float64)
         ensure_layout!(u, :g); fill!(Tarang.get_grid_data(u), 1.0)
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) - lap(u) = 0")
         solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt = 0.01)
         @test_throws ArgumentError step!(solver)
@@ -280,7 +280,7 @@ end
         ensure_layout!(u, :g); Tarang.get_grid_data(u) .= cos.(xs)
         nu = ScalarField(dist, "nu", (xb,), Float64)
         ensure_layout!(nu, :g); Tarang.get_grid_data(nu) .= 1.0 .+ 0.5 .* sin.(xs)
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         problem.parameters["nu"] = nu
         add_equation!(problem, "dt(u) - nu*lap(u) = 0")
         raised = try
@@ -306,7 +306,7 @@ end
         u = ScalarField(dist, "u", (xb,), Float64)
         ensure_layout!(u, :g)
         fill!(Tarang.get_grid_data(u), 1.0)
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
         solver = InitialValueSolver(problem, ts; dt = 0.005)
         for _ in 1:200
@@ -329,7 +329,7 @@ end
     Tarang.get_grid_data(u) .= cos.(2 .* _dimex_grid(N))
 
     L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) = 0")
     solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt = 0.005)
     Tarang.set_spectral_linear_operator!(solver, L)
@@ -350,7 +350,7 @@ end
         u = ScalarField(dist, "u", (xb,), Float64)
         ensure_layout!(u, :g)
         fill!(Tarang.get_grid_data(u), 1.0)
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) + u = -0.5*u*u")
         solver = InitialValueSolver(problem, ts; dt = dt)
         for _ in 1:round(Int, 1.0 / dt)

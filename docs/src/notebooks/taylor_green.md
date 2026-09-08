@@ -76,7 +76,7 @@ tau_ψ = ScalarField(dist, "tau_ψ", (), Float64)   # Gauge for the Poisson solv
 ## Problem Definition
 
 ```julia
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu)
 
 add_equation!(problem, "∂t(ζ) - nu*lap(ζ) = -u⋅∇(ζ)")   # Vorticity transport

@@ -2,7 +2,7 @@
 @public_api(
     PeriodicDomain, ChebyshevDomain, ChannelDomain, ChannelDomain3D,
     ScalarField, VectorField, TensorField,
-    IVP, EVP, LBVP, NLBVP,
+    InitialValueProblem, EigenvalueProblem, LinearBoundaryValueProblem, NonlinearBoundaryValueProblem,
     InitialValueSolver, EigenvalueSolver, BoundaryValueSolver,
     diagnose,
     add_parameters!, add_equation!, add_bc!,

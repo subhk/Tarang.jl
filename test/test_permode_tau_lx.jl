@@ -4,7 +4,7 @@ Per-mode scatter→gather must preserve 0-D tau DOFs (zero_dim_stash).
 0-D tau fields carry length-0 sentinel storage, so a per-mode scatter has
 nowhere to write their solved values; before the fix the next gather silently
 ZERO-FILLED those slots. Any vector rebuilt by scatter→re-gather — the per-mode
-IMEX steppers' LX stage history, the NLBVP Newton state — therefore dropped
+IMEX steppers' LX stage history, the NonlinearBoundaryValueProblem Newton state — therefore dropped
 every lift(tau) contribution and integrated a (slightly) different formula than
 the global-matrix path. The `zero_dim_stash` on the subproblem runtime now
 round-trips those DOFs exactly.
@@ -29,7 +29,7 @@ function _tau_lx_build(scheme; dt=1e-3)
     tau1 = ScalarField(dist, "tau1", (), Float64)
     tau2 = ScalarField(dist, "tau2", (), Float64)
     lb = derivative_basis(zb, 2)
-    problem = IVP([u, tau1, tau2])
+    problem = InitialValueProblem([u, tau1, tau2])
     add_parameters!(problem; lb=lb)
     add_equation!(problem, "∂t(u) - ∂z(∂z(u)) + lift(tau1, lb, -1) + lift(tau2, lb, -2) = 0")
     add_bc!(problem, "u(z=0) = 1")

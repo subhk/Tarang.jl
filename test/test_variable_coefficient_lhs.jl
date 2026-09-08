@@ -66,7 +66,7 @@ function vclhs_fourier_problem(nu_kind::Symbol, nu_val::Real; N::Int=16)
         g[i, j] = sin(xs[i]) * cos(ys[j])
     end
 
-    prob = IVP([u]; namespace=Dict("u" => u))
+    prob = InitialValueProblem([u]; namespace=Dict("u" => u))
     if nu_kind === :const
         Tarang.add_equation!(prob, "dt(u) - $(nu_val)*lap(u) = 0")
     else
@@ -120,7 +120,7 @@ function vclhs_cheb_L(scale::Real; N::Int=16, Lz::Float64=1.0)
     ensure_layout!(q, :g)
     Tarang.get_grid_data(q) .= Float64(scale) .* (1.0 .+ zc)
 
-    prob = IVP([u]; namespace=Dict("u" => u))
+    prob = InitialValueProblem([u]; namespace=Dict("u" => u))
     Tarang.add_parameters!(prob, q = q)
     Tarang.add_equation!(prob, "dt(u) - q*lap(u) = 0")
     L, _, _ = Tarang.build_matrices(prob)
@@ -210,7 +210,7 @@ end
         ensure_layout!(q, :g)
         Tarang.get_grid_data(q) .= 1.0 .+ zc
 
-        prob = IVP([u]; namespace=Dict("u" => u))
+        prob = InitialValueProblem([u]; namespace=Dict("u" => u))
         Tarang.add_parameters!(prob, q = q)
         Tarang.add_equation!(prob, "dt(u) - q*lap(u) = 0")
         L, _, _ = Tarang.build_matrices(prob)
@@ -242,7 +242,7 @@ end
             q = ScalarField(dom, "q")
             ensure_layout!(q, :g)
             Tarang.get_grid_data(q) .= Float64(scale) .* (1.0 .+ Z)
-            prob = IVP([u]; namespace=Dict("u" => u))
+            prob = InitialValueProblem([u]; namespace=Dict("u" => u))
             Tarang.add_parameters!(prob, q = q)
             Tarang.add_equation!(prob, "dt(u) - q*lap(u) = 0")
             L, _, _ = Tarang.build_matrices(prob)

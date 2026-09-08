@@ -18,16 +18,21 @@ IMPORTANT for stochastic forcing (following GeophysicalFlows.jl pattern):
 - Forcing is generated ONCE at the beginning of the timestep
 - Forcing stays CONSTANT across all substeps (RK stages)
 - This is essential for correct Stratonovich calculus interpretation
+
+Deterministic forcing is instead evaluated at every RHS evaluation time.
 """
 function step!(state::TimestepperState, solver::InitialValueSolver)
     _check_stochastic_timestepper_compatibility!(state, solver)
+    _check_state_level_forcing_unapplied!(state)
     _check_gpu_implicit_compatibility!(state, solver)
+    _check_timestepper_mass_compatibility!(state, solver)
 
     # Generate stochastic forcing ONCE at the beginning of the timestep
     update_forcing!(state, solver.sim_time)
 
-    # Also generate forcing for any forcings registered via add_stochastic_forcing!
-    _update_registered_forcings!(solver, solver.sim_time, state.dt)
+    # Registered stochastic forcings share one draw across all stages.
+    # Deterministic forcings are refreshed by the RHS at the actual stage time.
+    _update_registered_forcings!(solver, solver.sim_time, state.dt, StochasticForcingType)
 
     state.current_substep = 1  # Reset substep counter
 
@@ -49,7 +54,7 @@ const _UNSAFE_STOCHASTIC_MULTISTEP_TIMESTEPPERS = Union{
 
 # The only schemes with an on-device per-mode implicit solve (diagonal Fourier
 # operator). Every other scheme needs a global-matrix or subproblem solve that a
-# pure-Fourier GPU IVP does not build.
+# pure-Fourier GPU InitialValueProblem does not build.
 const _DIAGONAL_IMEX_TIMESTEPPERS = Union{
     DiagonalIMEX_RK222, DiagonalIMEX_RK443, DiagonalIMEX_SBDF2,
 }
@@ -75,7 +80,7 @@ end
 
 function _compute_problem_has_implicit_linear_term(problem::Problem)
     # `equation_data` is filled by `build_matrix_expressions!`, which runs as part of
-    # global-matrix assembly — the step a pure-Fourier GPU IVP SKIPS. That is precisely
+    # global-matrix assembly — the step a pure-Fourier GPU InitialValueProblem SKIPS. That is precisely
     # the case `_check_gpu_implicit_compatibility!` exists to catch, so reading the IR
     # alone left the detector blind exactly when it mattered: `n(equations) == 1` while
     # `n(equation_data) == 0`, so this returned false and the implicit operator was
@@ -99,10 +104,10 @@ end
 """
     _check_gpu_implicit_compatibility!(state, solver)
 
-Refuse — loudly — to silently drop an implicit linear operator on a single-GPU IVP
+Refuse — loudly — to silently drop an implicit linear operator on a single-GPU InitialValueProblem
 that has no per-mode implicit path.
 
-A pure-Fourier GPU IVP skips global-matrix and subproblem assembly, so
+A pure-Fourier GPU InitialValueProblem skips global-matrix and subproblem assembly, so
 `L_matrix === nothing` no longer means "no implicit term". Every standard IMEX RK /
 multistep / ETD scheme then falls through to a fully-explicit step and drops the
 implicit `L` with no error — a heat equation runs inviscid. Only the diagonal-IMEX
@@ -140,6 +145,27 @@ function _check_gpu_implicit_compatibility!(state::TimestepperState, solver::Ini
         "operator per mode on-device, or move the linear term to the explicit right-hand " *
         "side (e.g. write `dt(u) = nu*lap(u) + ...` instead of `dt(u) - nu*lap(u) = ...`)."
     )
+end
+
+"""
+    _check_state_level_forcing_unapplied!(state)
+
+Refuse a forcing attached with `set_forcing!(state, forcing)`.
+
+That path generates a fresh realization at the top of every step
+(`update_forcing!`) and then nothing reads it: no RHS evaluator consults
+`state.forcing`, and `get_cached_forcing(state)` has no callers. A run that set
+one silently integrated the unforced equations. The supported registration is
+`add_stochastic_forcing!(problem, :variable, forcing)`, which the RHS does apply.
+Runs after the multistep white-noise check so that refusal keeps precedence.
+"""
+function _check_state_level_forcing_unapplied!(state::TimestepperState)
+    state.forcing === nothing && return nothing
+    throw(ArgumentError(
+        "A forcing attached with set_forcing!(state, forcing) is never applied to " *
+        "the right-hand side (the stepper generates it and no RHS path reads it), so " *
+        "the run would integrate the UNFORCED equations. Register it on the problem " *
+        "instead: add_stochastic_forcing!(problem, :variable, forcing)."))
 end
 
 function _has_registered_stochastic_forcing(solver::InitialValueSolver)

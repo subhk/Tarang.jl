@@ -34,9 +34,8 @@ function apply_3d_dealiasing!(field::ScalarField, dealiasing_factor::Float64)
     # no meaningful retained band is skipped without disabling wider axes.
 
     # Transform to coefficient space
-    ensure_layout!(field, :c)
 
-    coeff_data = get_coeff_data(field)
+    coeff_data = coeff_data!(field)
     rfft_dims = _field_rfft_dims(field)
 
     if isa(coeff_data, PencilArrays.PencilArray)

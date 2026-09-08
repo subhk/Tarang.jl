@@ -90,7 +90,7 @@ import Tarang: SpectralLinearOperator
             ensure_layout!(u, :g)
             fill!(Tarang.get_grid_data(u), 1.0)  # u(0) = 1
 
-            problem = IVP([u])
+            problem = InitialValueProblem([u])
             add_equation!(problem, "dt(u) = -u")
             solver = InitialValueSolver(problem, RK222(); dt=dt)
 
@@ -133,7 +133,7 @@ import Tarang: SpectralLinearOperator
             lambda = ScalarField(domain, "lambda")
             set!(u, (x,) -> 1.0)
 
-            problem = IVP([u, lambda])
+            problem = InitialValueProblem([u, lambda])
             add_equation!(problem, "∂t(u) = -u")
             add_equation!(problem, "lambda = 0")
             solver = InitialValueSolver(problem, RK222(); dt=dt)
@@ -173,7 +173,7 @@ import Tarang: SpectralLinearOperator
             ensure_layout!(u, :g)
             fill!(Tarang.get_grid_data(u), 1.0)
 
-            problem = IVP([u])
+            problem = InitialValueProblem([u])
             add_equation!(problem, "dt(u) = -u")
             solver = InitialValueSolver(problem, RK111(); dt=dt)
 
@@ -234,7 +234,7 @@ import Tarang: SpectralLinearOperator
         @test L.operator_type == :laplacian
 
         # Operator attaches and is retrievable (this part works correctly).
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = 0")
         solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.005)
         Tarang.set_spectral_linear_operator!(solver, L)
@@ -276,7 +276,7 @@ import Tarang: SpectralLinearOperator
             ensure_layout!(u, :g)
             Tarang.get_grid_data(u) .= cos.(2 .* collect(range(0, 2π, length=17))[1:16])
             L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=0.5)
-            problem = IVP([u]); add_equation!(problem, "dt(u) = 0")
+            problem = InitialValueProblem([u]); add_equation!(problem, "dt(u) = 0")
             solver = InitialValueSolver(problem, ts; dt=0.005)
             Tarang.set_spectral_linear_operator!(solver, L)
             for _ in 1:200
@@ -307,7 +307,7 @@ import Tarang: SpectralLinearOperator
             u0 = maximum(abs, Tarang.get_grid_data(u))
 
             L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=1.0)
-            problem = IVP([u]); add_equation!(problem, "dt(u) = 0")
+            problem = InitialValueProblem([u]); add_equation!(problem, "dt(u) = 0")
             dt = 0.25                                       # z = dt·ν·k² = 0.25·36 = 9 ≫ 4.8
             solver = InitialValueSolver(problem, ts; dt=dt)
             Tarang.set_spectral_linear_operator!(solver, L)

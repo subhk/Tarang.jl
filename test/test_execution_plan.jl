@@ -8,7 +8,7 @@ shapes came out of that, and both are in this project's history:
 
   * A consumer INFERRED a fact from state that a skipped step never produced.
     `_problem_has_implicit_linear_term` read `problem.equation_data`, which only
-    global-matrix assembly fills — the exact step a pure-Fourier GPU IVP skips. So
+    global-matrix assembly fills — the exact step a pure-Fourier GPU InitialValueProblem skips. So
     the guard against a silently-dropped implicit operator was blind precisely in
     the case it existed for, and a heat equation ran inviscid with no error.
 
@@ -39,7 +39,7 @@ diagonal per-mode implicit operator does not need tau rows)."""
 function _plan_solver_fourier_1d(stepper = RK222(); N = 16)
     domain = PeriodicDomain(N)
     u = ScalarField(domain, "u"); set!(u, (x,) -> sin(x))
-    prob = IVP([u]); add_parameters!(prob, kappa = 0.1)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = 0.1)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     return InitialValueSolver(prob, stepper; dt = 0.01)
 end
@@ -54,7 +54,7 @@ function _plan_solver_fourier_cheb(stepper = RK222(); Nx = 8, Nz = 16)
     zb = ChebyshevT(coords["z"]; size = Nz, bounds = (0.0, 1.0), dealias = 1.0)
     domain = Domain(dist, (xb, zb))
     u = ScalarField(domain, "u"); set!(u, (x, z) -> sin(x) * z * (1 - z))
-    prob = IVP([u]); add_parameters!(prob, kappa = 0.1)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = 0.1)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     return InitialValueSolver(prob, stepper; dt = 0.01)
 end
@@ -69,7 +69,7 @@ end
     @test plan.spectral_structure === :fourier
 
     # The load-bearing pair: assembly RAN, so consumers may read the artifacts.
-    # A pure-Fourier GPU IVP is the case where this is false, and reading
+    # A pure-Fourier GPU InitialValueProblem is the case where this is false, and reading
     # `equation_data` instead of this flag is what made the old guard blind.
     @test plan.assembled_global_matrices
     @test !plan.assembled_subproblems

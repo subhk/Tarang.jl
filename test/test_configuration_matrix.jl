@@ -7,7 +7,7 @@ WHY THIS FILE EXISTS. Every serious correctness bug found in this project has th
 same shape — a configuration that is not covered by a test degrades instead of
 refusing, and returns a plausible number:
 
-  * a pure-Fourier LBVP dropped its entire RHS and returned exactly zero;
+  * a pure-Fourier LinearBoundaryValueProblem dropped its entire RHS and returned exactly zero;
   * multistep timesteppers on GPU/MPI collapsed to forward Euler, silently
     turning order 2/3/4 into order 1;
   * a block that did not fit its slot in the operator was skipped, and the
@@ -45,11 +45,11 @@ using Tarang
 # Builders. Each returns (computed, expected) on the grid, or throws.
 # ---------------------------------------------------------------------------
 
-"""1D pure-Fourier IVP: dt(u) = κ∇²u, u₀ = sin x  ->  sin(x)e^{-κt}. Spatially exact."""
+"""1D pure-Fourier InitialValueProblem: dt(u) = κ∇²u, u₀ = sin x  ->  sin(x)e^{-κt}. Spatially exact."""
 function _ivp_fourier_1d(stepper; N = 16, κ = 0.1, tfinal = 0.5, dt = 0.01)
     domain = PeriodicDomain(N)
     u = ScalarField(domain, "u"); set!(u, (x,) -> sin(x))
-    prob = IVP([u]); add_parameters!(prob, kappa = κ)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = κ)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     solver = InitialValueSolver(prob, stepper; dt)
     for _ in 1:round(Int, tfinal / dt); step!(solver, dt); end
@@ -58,7 +58,7 @@ function _ivp_fourier_1d(stepper; N = 16, κ = 0.1, tfinal = 0.5, dt = 0.01)
     return real.(Array(get_grid_data(f))), sin.(xs) .* exp(-κ * tfinal)
 end
 
-"""2D pure-Fourier IVP: u₀ = sin(x)cos(y), decays at e^{-2κt}."""
+"""2D pure-Fourier InitialValueProblem: u₀ = sin(x)cos(y), decays at e^{-2κt}."""
 function _ivp_fourier_2d(stepper; N = 16, κ = 0.1, tfinal = 0.5, dt = 0.01)
     coords = CartesianCoordinates("x", "y")
     dist = Distributor(coords; dtype = Float64, architecture = CPU())
@@ -66,7 +66,7 @@ function _ivp_fourier_2d(stepper; N = 16, κ = 0.1, tfinal = 0.5, dt = 0.01)
     yb = RealFourier(coords["y"]; size = N, bounds = (0.0, 2π))
     domain = Domain(dist, (xb, yb))
     u = ScalarField(domain, "u"); set!(u, (x, y) -> sin(x) * cos(y))
-    prob = IVP([u]); add_parameters!(prob, kappa = κ)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = κ)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     solver = InitialValueSolver(prob, stepper; dt)
     for _ in 1:round(Int, tfinal / dt); step!(solver, dt); end
@@ -76,13 +76,13 @@ function _ivp_fourier_2d(stepper; N = 16, κ = 0.1, tfinal = 0.5, dt = 0.01)
            [sin(x) * cos(y) * exp(-2κ * tfinal) for x in g, y in g]
 end
 
-"""1D pure-Fourier LBVP with a field RHS. A periodic axis has no boundary, so the
+"""1D pure-Fourier LinearBoundaryValueProblem with a field RHS. A periodic axis has no boundary, so the
 point BC has nowhere to place a tau row and the operator cannot be assembled."""
 function _lbvp_fourier_1d(; N = 16)
     domain = PeriodicDomain(N)
     u = ScalarField(domain, "u")
     f = ScalarField(domain, "f"); set!(f, (x,) -> sin(x))
-    prob = LBVP([u]); add_parameters!(prob, f = f)
+    prob = LinearBoundaryValueProblem([u]); add_parameters!(prob, f = f)
     add_equation!(prob, "lap(u) = f"); add_bc!(prob, "u(x=0) = 0")
     solver = BoundaryValueSolver(prob); solve!(solver)
     uu = solver.state[1]; ensure_layout!(uu, :g)
@@ -90,7 +90,7 @@ function _lbvp_fourier_1d(; N = 16)
     return real.(Array(get_grid_data(uu))), -sin.(xs)
 end
 
-"""1D pure-Chebyshev LBVP: u'' = -π²sin(πz), u(0)=u(1)=0  ->  u = sin(πz)."""
+"""1D pure-Chebyshev LinearBoundaryValueProblem: u'' = -π²sin(πz), u(0)=u(1)=0  ->  u = sin(πz)."""
 function _lbvp_cheb_1d(; Nz = 24)
     coords = CartesianCoordinates("z")
     dist = Distributor(coords; dtype = Float64, architecture = CPU())
@@ -101,7 +101,7 @@ function _lbvp_cheb_1d(; Nz = 24)
     t1 = ScalarField(dist, "t1", (), Float64)
     t2 = ScalarField(dist, "t2", (), Float64)
     lb2 = derivative_basis(zb, 2)
-    prob = LBVP([u, t1, t2]); prob.namespace["f"] = fld
+    prob = LinearBoundaryValueProblem([u, t1, t2]); prob.namespace["f"] = fld
     add_parameters!(prob; l1 = lift(t1, lb2, -1), l2 = lift(t2, lb2, -2))
     add_equation!(prob, "lap(u) + l1 + l2 = f")
     add_bc!(prob, "u(z=0) = 0"); add_bc!(prob, "u(z=1) = 0")
@@ -111,7 +111,7 @@ function _lbvp_cheb_1d(; Nz = 24)
     return real.(Array(get_grid_data(u))), sin.(π .* zs)
 end
 
-"""Fourier×Chebyshev LBVP with a field RHS: u = sin(πz/Lz)cos(2x)."""
+"""Fourier×Chebyshev LinearBoundaryValueProblem with a field RHS: u = sin(πz/Lz)cos(2x)."""
 function _lbvp_fourier_cheb(; Nx = 8, Nz = 24, Lz = 1.0)
     coords = CartesianCoordinates("x", "z")
     dist = Distributor(coords; dtype = Float64, device = CPU())
@@ -128,7 +128,7 @@ function _lbvp_fourier_cheb(; Nx = 8, Nz = 24, Lz = 1.0)
     λ = (π / Lz)^2 + 4
     ensure_layout!(fld, :g); fd = get_grid_data(fld)
     for i in 1:Nx, k in 1:Nz; fd[i, k] = -λ * uex(xg[i], zg[k]); end
-    prob = LBVP([u, t1, t2]); prob.namespace["f"] = fld
+    prob = LinearBoundaryValueProblem([u, t1, t2]); prob.namespace["f"] = fld
     add_parameters!(prob; Lz = Lz, l1 = lift(t1, lb2, -1), l2 = lift(t2, lb2, -2))
     add_equation!(prob, "Δ(u) + l1 + l2 = f")
     add_bc!(prob, "u(z=0) = 0"); add_bc!(prob, "u(z=Lz) = 0")
@@ -137,7 +137,7 @@ function _lbvp_fourier_cheb(; Nx = 8, Nz = 24, Lz = 1.0)
     return Array(get_grid_data(u)), [uex(xg[i], zg[k]) for i in 1:Nx, k in 1:Nz]
 end
 
-"""Chebyshev-Fourier LBVP parameterised over the two knobs that decide whether the
+"""Chebyshev-Fourier LinearBoundaryValueProblem parameterised over the two knobs that decide whether the
 configuration is supported: which coordinate comes FIRST, and whether the tau
 fields carry the Fourier axis (`(xb,)`, one tau per mode) or are scalars (`()`).
 
@@ -175,7 +175,7 @@ function _lbvp_cheb_fourier_ordered(; cheb_first::Bool, tau_per_mode::Bool,
     else
         for i in axes(fd, 1), k in axes(fd, 2); fd[i, k] = -λ * uex(zg[k], xg[i]); end
     end
-    prob = LBVP([u, t1, t2]); prob.namespace["f"] = fld
+    prob = LinearBoundaryValueProblem([u, t1, t2]); prob.namespace["f"] = fld
     add_parameters!(prob; Lz = Lz, l1 = lift(t1, lb2, -1), l2 = lift(t2, lb2, -2))
     add_equation!(prob, "Δ(u) + l1 + l2 = f")
     add_bc!(prob, "u(z=0) = 0"); add_bc!(prob, "u(z=Lz) = 0")
@@ -189,7 +189,7 @@ function _lbvp_cheb_fourier_ordered(; cheb_first::Bool, tau_per_mode::Bool,
 end
 
 
-"""3D pure-Fourier IVP: u₀ = sin(x)cos(y)sin(z), decays at e^{-3κt}.
+"""3D pure-Fourier InitialValueProblem: u₀ = sin(x)cos(y)sin(z), decays at e^{-3κt}.
 
 Three Fourier axes is the case a 1D or 2D cell cannot reach: the transform chain,
 the wavenumber grid and the dealiasing all index differently once a third axis
@@ -202,7 +202,7 @@ function _ivp_fourier_3d(stepper; N = 8, κ = 0.1, tfinal = 0.2, dt = 0.005)
              RealFourier(coords["z"]; size = N, bounds = (0.0, 2π)))
     domain = Domain(dist, bases)
     u = ScalarField(domain, "u"); set!(u, (x, y, z) -> sin(x) * cos(y) * sin(z))
-    prob = IVP([u]); add_parameters!(prob, kappa = κ)
+    prob = InitialValueProblem([u]); add_parameters!(prob, kappa = κ)
     add_equation!(prob, "dt(u) = kappa*lap(u)")
     solver = InitialValueSolver(prob, stepper; dt)
     for _ in 1:round(Int, tfinal / dt); step!(solver, dt); end
@@ -212,9 +212,9 @@ function _ivp_fourier_3d(stepper; N = 8, κ = 0.1, tfinal = 0.2, dt = 0.005)
            [sin(x) * cos(y) * sin(z) * exp(-3κ * tfinal) for x in g, y in g, z in g]
 end
 
-"""1D pure-Chebyshev IVP with a tau/lift formulation: u = sin(πz)e^{-κπ²t}.
+"""1D pure-Chebyshev InitialValueProblem with a tau/lift formulation: u = sin(πz)e^{-κπ²t}.
 
-A COUPLED direction with no Fourier axis at all. Every other IVP cell has at least
+A COUPLED direction with no Fourier axis at all. Every other InitialValueProblem cell has at least
 one separable axis, so this is the only one exercising the per-mode machinery with
 a single mode."""
 function _ivp_cheb_1d(stepper; Nz = 24, κ = 0.05, tfinal = 0.1, dt = 0.002)
@@ -225,10 +225,11 @@ function _ivp_cheb_1d(stepper; Nz = 24, κ = 0.05, tfinal = 0.1, dt = 0.002)
     b = ScalarField(domain, "b"); set!(b, (z,) -> sin(π * z))
     tau1 = ScalarField(dist, "tau1", (), Float64)
     tau2 = ScalarField(dist, "tau2", (), Float64)
-    lb = derivative_basis(zb, 1); tau_lift(A) = lift(A, lb, -1)
-    prob = IVP([b, tau1, tau2])
-    add_parameters!(prob, kappa = κ, tau_lift = tau_lift)
-    add_equation!(prob, "dt(b) - kappa*lap(b) + tau_lift(tau1) + tau_lift(tau2) = 0")
+    lb = derivative_basis(zb, 1)
+    lift1 = lift(tau1, lb, -1); lift2 = lift(tau2, lb, -2)   # one tau per mode: a full-rank stage system
+    prob = InitialValueProblem([b, tau1, tau2])
+    add_parameters!(prob, kappa = κ, lift1 = lift1, lift2 = lift2)
+    add_equation!(prob, "dt(b) - kappa*lap(b) + lift1 + lift2 = 0")
     add_bc!(prob, "b(z=0) = 0"); add_bc!(prob, "b(z=1) = 0")
     solver = InitialValueSolver(prob, stepper; dt)
     for _ in 1:round(Int, tfinal / dt); step!(solver, dt); end
@@ -237,7 +238,7 @@ function _ivp_cheb_1d(stepper; Nz = 24, κ = 0.05, tfinal = 0.1, dt = 0.002)
     return real.(Array(get_grid_data(f))), sin.(π .* zs) .* exp(-κ * π^2 * tfinal)
 end
 
-"""Fourier×Chebyshev IVP with tau/lift: u = sin(πz)cos(x)e^{-κ(π²+1)t}.
+"""Fourier×Chebyshev InitialValueProblem with tau/lift: u = sin(πz)cos(x)e^{-κ(π²+1)t}.
 
 The production geometry — a separable axis plus a coupled one — driven as an
 INITIAL-value problem. The existing coupled cell is a steady BVP, so the per-mode
@@ -254,7 +255,7 @@ function _ivp_fourier_cheb(stepper; Nx = 8, Nz = 20, κ = 0.05, tfinal = 0.1, dt
     lb = derivative_basis(zb, 1); tau_lift(A) = lift(A, lb, -1)
     _, ez = unit_vector_fields(coords, dist)
     grad_b = grad(b) + ez * tau_lift(tau1)
-    prob = IVP([b, tau1, tau2])
+    prob = InitialValueProblem([b, tau1, tau2])
     add_parameters!(prob, kappa = κ, ez = ez, grad_b = grad_b, tau_lift = tau_lift)
     add_equation!(prob, "dt(b) - kappa*div(grad_b) + tau_lift(tau2) = 0")
     add_bc!(prob, "b(z=0) = 0"); add_bc!(prob, "b(z=1) = 0")
@@ -273,46 +274,46 @@ end
 # ---------------------------------------------------------------------------
 
 const MATRIX = [
-    # --- IVP across timesteppers. The multistep rows are the collapse-to-Euler
+    # --- InitialValueProblem across timesteppers. The multistep rows are the collapse-to-Euler
     #     regression: on a path with no assembled global matrix these silently fell
     #     back to their first-order member, which a fixed-dt value check catches.
-    ("IVP  1D Fourier  RK222",   () -> _ivp_fourier_1d(RK222()),   :solves, 1e-6),
-    ("IVP  1D Fourier  RK443",   () -> _ivp_fourier_1d(RK443()),   :solves, 1e-6),
-    ("IVP  1D Fourier  CNAB2",   () -> _ivp_fourier_1d(CNAB2()),   :solves, 1e-5),
-    ("IVP  1D Fourier  SBDF2",   () -> _ivp_fourier_1d(SBDF2()),   :solves, 1e-5),
-    ("IVP  1D Fourier  SBDF3",   () -> _ivp_fourier_1d(SBDF3()),   :solves, 1e-5),
-    ("IVP  1D Fourier  SBDF4",   () -> _ivp_fourier_1d(SBDF4()),   :solves, 1e-5),
-    ("IVP  2D Fourier  RK222",   () -> _ivp_fourier_2d(RK222()),   :solves, 1e-6),
-    ("IVP  2D Fourier  SBDF2",   () -> _ivp_fourier_2d(SBDF2()),   :solves, 1e-5),
+    ("InitialValueProblem  1D Fourier  RK222",   () -> _ivp_fourier_1d(RK222()),   :solves, 1e-6),
+    ("InitialValueProblem  1D Fourier  RK443",   () -> _ivp_fourier_1d(RK443()),   :solves, 1e-6),
+    ("InitialValueProblem  1D Fourier  CNAB2",   () -> _ivp_fourier_1d(CNAB2()),   :solves, 1e-5),
+    ("InitialValueProblem  1D Fourier  SBDF2",   () -> _ivp_fourier_1d(SBDF2()),   :solves, 1e-5),
+    ("InitialValueProblem  1D Fourier  SBDF3",   () -> _ivp_fourier_1d(SBDF3()),   :solves, 1e-5),
+    ("InitialValueProblem  1D Fourier  SBDF4",   () -> _ivp_fourier_1d(SBDF4()),   :solves, 1e-5),
+    ("InitialValueProblem  2D Fourier  RK222",   () -> _ivp_fourier_2d(RK222()),   :solves, 1e-6),
+    ("InitialValueProblem  2D Fourier  SBDF2",   () -> _ivp_fourier_2d(SBDF2()),   :solves, 1e-5),
 
-    # --- Coupled and 3-D IVP cells. Every pre-existing IVP row is pure Fourier in
+    # --- Coupled and 3-D InitialValueProblem cells. Every pre-existing InitialValueProblem row is pure Fourier in
     #     1D or 2D, so the per-mode TIMESTEPPING path (as opposed to the steady BVP
     #     one) and everything above two axes were uncovered. Tolerances are the
     #     measured error rounded up, not round numbers.
-    ("IVP  3D Fourier  RK222",        () -> _ivp_fourier_3d(RK222()),   :solves, 1e-6),
-    ("IVP  3D Fourier  SBDF2",        () -> _ivp_fourier_3d(SBDF2()),   :solves, 1e-5),
-    ("IVP  1D Chebyshev+tau RK222",   () -> _ivp_cheb_1d(RK222()),      :solves, 1e-7),
-    ("IVP  1D Chebyshev+tau SBDF2",   () -> _ivp_cheb_1d(SBDF2()),      :solves, 1e-5),
-    ("IVP  Fourier×Chebyshev RK222",  () -> _ivp_fourier_cheb(RK222()), :solves, 1e-7),
-    ("IVP  Fourier×Chebyshev RK443",  () -> _ivp_fourier_cheb(RK443()), :solves, 1e-9),
-    ("IVP  Fourier×Chebyshev SBDF2",  () -> _ivp_fourier_cheb(SBDF2()), :solves, 1e-5),
+    ("InitialValueProblem  3D Fourier  RK222",        () -> _ivp_fourier_3d(RK222()),   :solves, 1e-6),
+    ("InitialValueProblem  3D Fourier  SBDF2",        () -> _ivp_fourier_3d(SBDF2()),   :solves, 1e-5),
+    ("InitialValueProblem  1D Chebyshev+tau RK222",   () -> _ivp_cheb_1d(RK222()),      :solves, 1e-7),
+    ("InitialValueProblem  1D Chebyshev+tau SBDF2",   () -> _ivp_cheb_1d(SBDF2()),      :solves, 1e-5),
+    ("InitialValueProblem  Fourier×Chebyshev RK222",  () -> _ivp_fourier_cheb(RK222()), :solves, 1e-7),
+    ("InitialValueProblem  Fourier×Chebyshev RK443",  () -> _ivp_fourier_cheb(RK443()), :solves, 1e-9),
+    ("InitialValueProblem  Fourier×Chebyshev SBDF2",  () -> _ivp_fourier_cheb(SBDF2()), :solves, 1e-5),
 
-    # --- LBVP across basis combinations.
-    ("LBVP 1D Chebyshev",        _lbvp_cheb_1d,                    :solves, 1e-8),
-    ("LBVP Fourier×Chebyshev",   _lbvp_fourier_cheb,               :solves, 1e-8),
+    # --- LinearBoundaryValueProblem across basis combinations.
+    ("LinearBoundaryValueProblem 1D Chebyshev",        _lbvp_cheb_1d,                    :solves, 1e-8),
+    ("LinearBoundaryValueProblem Fourier×Chebyshev",   _lbvp_fourier_cheb,               :solves, 1e-8),
     # A periodic direction has no boundary, so a point BC has nowhere to place its
     # tau row. This must REFUSE. It used to return exactly zero.
-    ("LBVP 1D Fourier",          _lbvp_fourier_1d,                 :refuses, 0.0),
+    ("LinearBoundaryValueProblem 1D Fourier",          _lbvp_fourier_1d,                 :refuses, 0.0),
 
-    # --- LBVP across (coordinate order) × (tau shape). Ordering was an invisible
+    # --- LinearBoundaryValueProblem across (coordinate order) × (tau shape). Ordering was an invisible
     #     axis here: every mixed-basis cell above happens to put Fourier first, so
     #     nothing exercised the Chebyshev-first ordering that MPI *requires*. Three
     #     of these four solve; the fourth is the one distributed users must write.
-    ("LBVP Fourier-first scalar tau",
+    ("LinearBoundaryValueProblem Fourier-first scalar tau",
         () -> _lbvp_cheb_fourier_ordered(cheb_first = false, tau_per_mode = false), :solves, 1e-8),
-    ("LBVP Fourier-first per-mode tau",
+    ("LinearBoundaryValueProblem Fourier-first per-mode tau",
         () -> _lbvp_cheb_fourier_ordered(cheb_first = false, tau_per_mode = true),  :solves, 1e-8),
-    ("LBVP Cheb-first scalar tau",
+    ("LinearBoundaryValueProblem Cheb-first scalar tau",
         () -> _lbvp_cheb_fourier_ordered(cheb_first = true,  tau_per_mode = false), :solves, 1e-8),
     # KNOWN DEFECT, pinned rather than hidden. Chebyshev-first with per-mode taus
     # is the natural way to write a distributed mixed-basis BVP, and it fails out of
@@ -322,7 +323,7 @@ const MATRIX = [
     # inconsistency rather than a real restriction. Scalar taus solve the same
     # x-dependent problem, so there is a working alternative and no silent wrong
     # answer; when the assembler learns this case, change this row to `:solves`.
-    ("LBVP Cheb-first per-mode tau",
+    ("LinearBoundaryValueProblem Cheb-first per-mode tau",
         () -> _lbvp_cheb_fourier_ordered(cheb_first = true,  tau_per_mode = true),  :refuses, 0.0),
 ]
 

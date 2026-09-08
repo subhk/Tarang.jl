@@ -153,7 +153,7 @@ ez, ex   = unit_vector_fields(coords, dist)     # coords are ("z","x") => ez is 
 τ_lift(A) = lift(A, derivative_basis(zb, 1), -1)
 grad_b    = grad(b) + ez * τ_lift(tau1)
 
-problem = IVP([b, tau1, tau2])
+problem = InitialValueProblem([b, tau1, tau2])
 add_parameters!(problem, kappa=0.1, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
 add_equation!(problem, "∂t(b) - kappa*div(grad_b) + τ_lift(tau2) = 0")
 add_bc!(problem, "b(z=0) = 0")

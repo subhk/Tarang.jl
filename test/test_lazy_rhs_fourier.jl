@@ -11,7 +11,7 @@ using Tarang
         domain = Domain(dist, (xbasis, ybasis))
 
         q = ScalarField(domain, "q")
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_equation!(problem, "∂t(q) = d(q,y)")
         solver = InitialValueSolver(problem, SBDF1(); dt=1e-3)
 
@@ -43,7 +43,7 @@ using Tarang
         x, y = mesh["x"], mesh["y"]
         q["g"] = @. sin(2x - 3y)
 
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_parameters!(problem; ν)
         add_equation!(problem, "∂t(q) = -ν*Δ⁴(q)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -69,7 +69,7 @@ using Tarang
         reference_q = ScalarField(reference_domain, "reference_q")
         reference_x = Tarang.create_meshgrid(reference_domain)["x"]
         reference_q["g"] = sin.(reference_x)
-        reference_problem = IVP([reference_q])
+        reference_problem = InitialValueProblem([reference_q])
         add_equation!(reference_problem, "∂t(reference_q) = -Δ⁴(reference_q)")
         reference_solver = InitialValueSolver(reference_problem, RK222(); dt=1e-3)
         Tarang.evaluate_rhs(reference_solver, reference_solver.state, 0.0)
@@ -80,7 +80,7 @@ using Tarang
         x = Tarang.create_meshgrid(domain)["x"]
         q["g"] = sin.(x)
 
-        problem = IVP([q])
+        problem = InitialValueProblem([q])
         add_equation!(problem, "∂t(q) = -Δ⁴(q)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
         @test solver.rhs_plan.is_compiled

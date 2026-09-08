@@ -96,7 +96,7 @@ Parameters and substitutions are registered with `add_parameters!`; equation
 strings are parsed by Tarang and cannot see Julia globals otherwise.
 
 ```julia
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 
 add_parameters!(problem, nu=Pr, buoy=Ra*Pr, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)

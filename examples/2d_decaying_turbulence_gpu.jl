@@ -49,14 +49,14 @@ u       = VectorField(domain, "u")              # velocity (2 components)
 tau_psi = ScalarField(dist, "tau_psi", (), Float64)   # gauge multiplier
 
 # ── Problem ─────────────────────────────────────────────────────────────────
-problem = IVP([q, psi, u, tau_psi])
+problem = InitialValueProblem([q, psi, u, tau_psi])
 add_parameters!(problem; nu=ν)
 add_equation!(problem, "∂t(q) - nu*Δ(q) = -u⋅∇(q)")   # viscous implicit, advection explicit
 add_equation!(problem, "Δ(psi) + tau_psi - q = 0")    # Δψ = q
 add_equation!(problem, "u - skew(grad(psi)) = 0")     # u = ∇⊥ψ
 add_bc!(problem, "integ(psi) = 0")                    # zero-mean gauge
 
-# DiagonalIMEX_SBDF2, not SBDF2: on a pure-Fourier GPU IVP the solver builds no
+# DiagonalIMEX_SBDF2, not SBDF2: on a pure-Fourier GPU InitialValueProblem the solver builds no
 # global matrix, so the implicit viscous term `nu*Δ(q)` has no per-mode solve on a
 # standard IMEX/multistep scheme and would be silently dropped — the flow would run
 # INVISCID (no enstrophy dissipation, the whole point of this example). The

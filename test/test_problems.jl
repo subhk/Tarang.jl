@@ -1,7 +1,7 @@
 """
 Test suite for the Problem and Solver system.
 
-Tests IVP/LBVP/EVP creation, equation and BC management, parameter handling,
+Tests InitialValueProblem/LinearBoundaryValueProblem/EigenvalueProblem creation, equation and BC management, parameter handling,
 BC helper functions, parse_bc_string, namespace management, and basic solver
 construction with diagnose.
 """
@@ -32,11 +32,41 @@ end
 @testset "Problem & Solver System" begin
 # ===========================================================================
 
-# ---- 1. IVP creation -----------------------------------------------------
-@testset "IVP creation" begin
+@testset "full problem names replace abbreviated constructors" begin
+    for (full_name, short_name) in (
+        (:InitialValueProblem, :IVP),
+        (:LinearBoundaryValueProblem, :LBVP),
+        (:NonlinearBoundaryValueProblem, :NLBVP),
+        (:EigenvalueProblem, :EVP),
+    )
+        @test isdefined(Tarang, full_name)
+        isdefined(Tarang, full_name) || continue
+        constructor = getproperty(Tarang, full_name)
+        f = make_periodic_field("u")
+        kwargs = full_name === :EigenvalueProblem ?
+                 (; namespace=Dict("nu" => 0.1), eigenvalue=:sigma) :
+                 (; namespace=Dict("nu" => 0.1))
+        problem = constructor([f]; kwargs...)
+        @test nameof(typeof(problem)) === full_name
+        @test problem.variables[1] === f
+        @test problem.namespace["nu"] == 0.1
+        @test getproperty(Tarang.Problems, full_name) === constructor
+        @test Tarang.is_public_api(full_name)
+
+        @test !isdefined(Tarang, short_name)
+        @test !isdefined(Tarang.Problems, short_name)
+        @test !Tarang.is_public_api(short_name)
+        if full_name === :EigenvalueProblem
+            @test problem.eigenvalue === :sigma
+        end
+    end
+end
+
+# ---- 1. InitialValueProblem creation -----------------------------------------------------
+@testset "InitialValueProblem creation" begin
     f = make_periodic_field("u")
-    prob = IVP([f])
-    @test prob isa IVP
+    prob = InitialValueProblem([f])
+    @test prob isa InitialValueProblem
     @test length(prob.variables) == 1
     @test prob.variables[1] === f
     @test isempty(prob.equations)
@@ -49,38 +79,38 @@ end
     @test prob.equation_data[1] isa Tarang.EquationIR
     @test prob.equation_data[1].equation_size == 3
 
-    # IVP with multiple variables
+    # InitialValueProblem with multiple variables
     domain, p, T, u = make_channel_fields()
     ux, uz = u.components
-    prob2 = IVP(Tarang.Operand[p, T, ux, uz])
+    prob2 = InitialValueProblem(Tarang.Operand[p, T, ux, uz])
     @test length(prob2.variables) == 4
 end
 
-# ---- 2. LBVP creation ----------------------------------------------------
-@testset "LBVP creation" begin
+# ---- 2. LinearBoundaryValueProblem creation ----------------------------------------------------
+@testset "LinearBoundaryValueProblem creation" begin
     f = make_periodic_field("phi")
-    prob = LBVP([f])
-    @test prob isa LBVP
+    prob = LinearBoundaryValueProblem([f])
+    @test prob isa LinearBoundaryValueProblem
     @test length(prob.variables) == 1
     @test isempty(prob.equations)
 end
 
-# ---- 3. EVP creation -----------------------------------------------------
-@testset "EVP creation" begin
+# ---- 3. EigenvalueProblem creation -----------------------------------------------------
+@testset "EigenvalueProblem creation" begin
     f = make_periodic_field("psi")
-    prob = EVP([f]; eigenvalue=:sigma)
-    @test prob isa EVP
+    prob = EigenvalueProblem([f]; eigenvalue=:sigma)
+    @test prob isa EigenvalueProblem
     @test prob.eigenvalue === :sigma
 
-    # EVP without eigenvalue keyword
-    prob2 = EVP([f])
+    # EigenvalueProblem without eigenvalue keyword
+    prob2 = EigenvalueProblem([f])
     @test prob2.eigenvalue === nothing
 end
 
 # ---- 4. add_equation! with string equations -------------------------------
 @testset "add_equation! with string equations" begin
     f = make_periodic_field("u")
-    prob = IVP([f])
+    prob = InitialValueProblem([f])
 
     add_equation!(prob, "dt(u) = 0")
     @test length(prob.equations) == 1
@@ -88,7 +118,7 @@ end
 
     # Multiple equations
     f2 = make_periodic_field("v")
-    prob2 = IVP(Tarang.Operand[f, f2])
+    prob2 = InitialValueProblem(Tarang.Operand[f, f2])
     add_equation!(prob2, "dt(u) - nu*lap(u) = 0")
     add_equation!(prob2, "dt(v) = -u")
     @test length(prob2.equations) == 2
@@ -97,7 +127,7 @@ end
 # ---- 5. add_parameters! (kwargs style) -----------------------------------
 @testset "add_parameters!" begin
     f = make_periodic_field("u")
-    prob = IVP([f])
+    prob = InitialValueProblem([f])
 
     add_parameters!(prob, nu=1e-3, kappa=1e-4, Ra=1e6)
     @test prob.namespace["nu"] == 1e-3
@@ -112,7 +142,7 @@ end
 # ---- 6. add_substitution! (deprecated) -----------------------------------
 @testset "add_substitution! (deprecated)" begin
     f = make_periodic_field("u")
-    prob = IVP([f])
+    prob = InitialValueProblem([f])
 
     # add_substitution! uses Base.depwarn internally; suppress the expected warnings.
     @test_nowarn begin
@@ -135,7 +165,7 @@ end
 @testset "add_bc! with string BCs" begin
     domain, p, T, u = make_channel_fields()
     ux, uz = u.components
-    prob = IVP(Tarang.Operand[p, T, ux, uz])
+    prob = InitialValueProblem(Tarang.Operand[p, T, ux, uz])
 
     add_bc!(prob, "u(z=0) = 0")
     @test length(prob.boundary_conditions) == 1
@@ -157,7 +187,7 @@ end
 @testset "add_bc! with BC objects" begin
     domain, p, T, u = make_channel_fields()
     ux, uz = u.components
-    prob = IVP(Tarang.Operand[p, T, ux, uz])
+    prob = InitialValueProblem(Tarang.Operand[p, T, ux, uz])
 
     # Dirichlet BC via object
     bc_d = dirichlet_bc("T", "z", 0.0, 1.0)
@@ -184,7 +214,7 @@ end
 @testset "BC helpers on ChannelDomain" begin
     domain, p, T, u = make_channel_fields()
     ux, uz = u.components
-    prob = IVP(Tarang.Operand[p, T, ux, uz])
+    prob = InitialValueProblem(Tarang.Operand[p, T, ux, uz])
 
     # no_slip! returns DirichletBC with value 0
     bc1 = no_slip!(prob, "u", "z", 0.0)
@@ -262,7 +292,7 @@ end
 # ---- 10b. Neumann BC expression shape -------------------------------------
 @testset "Neumann BC parser preserves boundary shape" begin
     domain, _, T, _ = make_channel_fields()
-    prob = IVP([T])
+    prob = InitialValueProblem([T])
     add_parameters!(prob; Lz=1.0)
 
     lhs, _ = Tarang.split_equation("∂z(T)(z=0) = 1")
@@ -279,7 +309,7 @@ end
 @testset "Namespace management" begin
     domain, p, T, u = make_channel_fields()
     ux, uz = u.components
-    prob = IVP(Tarang.Operand[p, T, ux, uz])
+    prob = InitialValueProblem(Tarang.Operand[p, T, ux, uz])
 
     # Variables are registered by name
     @test haskey(prob.namespace, "p")
@@ -305,7 +335,7 @@ end
 @testset "InitialValueSolver creation" begin
     # Minimal: single periodic field
     f = make_periodic_field("u")
-    prob = IVP([f])
+    prob = InitialValueProblem([f])
     add_equation!(prob, "dt(u) = 0")
 
     solver = InitialValueSolver(prob, RK111(); dt=1e-3)
@@ -333,7 +363,7 @@ end
 
     # With RK222 timestepper
     f2 = make_periodic_field("v")
-    prob2 = IVP([f2])
+    prob2 = InitialValueProblem([f2])
     add_equation!(prob2, "dt(v) = 0")
 
     solver2 = InitialValueSolver(prob2, RK222(); dt=5e-4)
@@ -345,7 +375,7 @@ end
 # ---- 13. diagnose(solver) does not error ----------------------------------
 @testset "diagnose(solver)" begin
     f = make_periodic_field("u")
-    prob = IVP([f])
+    prob = InitialValueProblem([f])
     add_equation!(prob, "dt(u) = 0")
     solver = InitialValueSolver(prob, RK111(); dt=1e-3)
 

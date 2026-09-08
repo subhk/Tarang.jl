@@ -400,8 +400,7 @@ function _accumulate_conservative_flux_divergence!(result::ScalarField, coeffici
             # uᵢ ∂ᵢa (identically zero for a constant coefficient, hence the branch)
             coefficient_derivative = evaluate_differentiate(
                 Differentiate(coefficient, coord, 1), :g)
-            ensure_layout!(component, :g)
-            result_data .+= get_grid_data(component) .*
+            result_data .+= grid_data!(component) .*
                             get_grid_data(coefficient_derivative)
         end
     end
@@ -543,13 +542,15 @@ dimension) returns a zeroed field. Note the result basis can differ from the
 operand's — e.g. Chebyshev differentiation maps `ChebyshevT → ChebyshevU` — so
 the result is built from the differentiated component's bases, not the operand's.
 
-Scalar derivatives use a rotating internal result pool. The public default
-`own=true` copies those borrowed buffers before returning them, so callers may
-retain results safely. Internal callers that fully consume a scalar result before
-the pool can wrap may pass `own=false` to avoid that ownership copy.
+Scalar derivatives use a rotating internal result pool owned by the current
+task. The public default `own=true` copies those borrowed buffers before returning
+them, so callers may retain results safely. Internal callers that fully consume a
+scalar result before the pool can wrap may pass `own=false` to avoid that copy.
 """
-# Rotating pool of derivative-result buffers, keyed by (bases, dtype). Reuses
-# fields across calls instead of allocating a fresh ScalarField per derivative.
+# Each task owns its rotating derivative-result buffers, keyed by basis, dtype,
+# and distributor. A thread-local pool would still allow overlapping tasks on
+# the same worker to reuse live buffers when an evaluation yields.
+# Reuses fields instead of allocating a fresh ScalarField per derivative.
 # Uses N=16 distinct buffers (vs the global FieldPool's single-buffer reuse that
 # caused silent corruption — see step!), giving each of several simultaneously
 # live derivative results (e.g. the components of a gradient) its own buffer.
@@ -557,17 +558,37 @@ the pool can wrap may pass `own=false` to avoid that ownership copy.
 # one loop) never aliases buffer 1 with buffer 9 (8 was too small → T[3,3]
 # overwrote T[1,1]).
 const _DERIV_RESULT_POOL_SIZE = 16
-const _DERIV_RESULT_POOL = Dict{Tuple, Vector{ScalarField}}()
-const _DERIV_RESULT_IDX = Ref(0)
+const _DERIV_RESULT_POOL_KEY = gensym(:tarang_derivative_results)
+
+mutable struct _DerivativeResultPool
+    owner::Task
+    buffers::Dict{Tuple, Vector{ScalarField}}
+    index::Int
+end
+
+function _derivative_result_pool()
+    storage = task_local_storage()
+    pool = get(storage, _DERIV_RESULT_POOL_KEY, nothing)
+    owner = current_task()
+    # Check ownership even if a caller explicitly propagates task-local values
+    # into a child. Only the task holds this cache; no global registry keeps
+    # finished tasks or their fields alive.
+    if !(pool isa _DerivativeResultPool) || pool.owner !== owner
+        pool = _DerivativeResultPool(owner, Dict{Tuple, Vector{ScalarField}}(), 0)
+        storage[_DERIV_RESULT_POOL_KEY] = pool
+    end
+    return pool::_DerivativeResultPool
+end
 
 # `_checkout_deriv_result!` returns pool memory. Public evaluation owns it by
 # default; internal callers may explicitly borrow only for immediate consumption.
 function _checkout_deriv_result!(bases::Tuple, dtype::DataType, dist)
-    key = (hash(bases), dtype)
+    pool = _derivative_result_pool()
+    key = (bases, dtype, objectid(dist))
     bufs = get!(() -> Vector{ScalarField}(undef, _DERIV_RESULT_POOL_SIZE),
-                _DERIV_RESULT_POOL, key)
-    i = (_DERIV_RESULT_IDX[] % _DERIV_RESULT_POOL_SIZE) + 1
-    _DERIV_RESULT_IDX[] += 1
+                pool.buffers, key)
+    i = (pool.index % _DERIV_RESULT_POOL_SIZE) + 1
+    pool.index = i
     if !isassigned(bufs, i)
         bufs[i] = ScalarField(dist, "deriv_tmp", bases, dtype)
     end

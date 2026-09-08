@@ -6,12 +6,12 @@ Solvers integrate PDEs in time or solve for steady states. Tarang.jl provides sp
 
 ### InitialValueSolver
 
-Time-stepping solver for Initial Value Problems (IVP).
+Time-stepping solver for Initial Value Problems (InitialValueProblem).
 
 **Constructor**:
 ```julia
 InitialValueSolver(
-    problem::IVP,
+    problem::InitialValueProblem,
     timestepper::TimeStepper;
     dt::Real=1e-3,
     device::String="cpu",
@@ -20,7 +20,7 @@ InitialValueSolver(
 ```
 
 **Arguments**:
-- `problem`: IVP problem definition
+- `problem`: InitialValueProblem problem definition
 - `timestepper`: Time integration scheme instance (`RK222()`, `CNAB2()`, …)
 - `dt`: Initial timestep
 - `matsolver`: Backend used for the implicit per-mode solves (see [Solver options](#Solver-options))
@@ -42,7 +42,7 @@ The timestepper is passed as an **instance** — `RK222()`, not `RK222`.
 
 **Properties**:
 ```julia
-solver.problem            # IVP problem
+solver.problem            # InitialValueProblem problem
 solver.timestepper        # Time integration scheme
 solver.dt                 # Current timestep
 solver.sim_time           # Current simulation time
@@ -182,15 +182,15 @@ including bare derivatives (`∂z(u)`, `d(u,z)`, or advection):
 
 ### BoundaryValueSolver
 
-Steady-state solver. It handles **both** linear (`LBVP`) and nonlinear (`NLBVP`)
+Steady-state solver. It handles **both** linear (`LinearBoundaryValueProblem`) and nonlinear (`NonlinearBoundaryValueProblem`)
 boundary value problems — there is no separate nonlinear solver type; the problem
-type selects the algorithm (direct per-mode solve for an LBVP, per-mode Newton
-iteration with a symbolic Frechet Jacobian for an NLBVP).
+type selects the algorithm (direct per-mode solve for an LinearBoundaryValueProblem, per-mode Newton
+iteration with a symbolic Frechet Jacobian for an NonlinearBoundaryValueProblem).
 
 **Constructor**:
 ```julia
 BoundaryValueSolver(
-    problem::Union{LBVP, NLBVP};
+    problem::Union{LinearBoundaryValueProblem, NonlinearBoundaryValueProblem};
     device::String="cpu",
     matsolver=:sparse,
     solver_type=nothing,
@@ -200,11 +200,11 @@ BoundaryValueSolver(
 ```
 
 **Arguments**:
-- `problem`: LBVP or NLBVP problem definition
+- `problem`: LinearBoundaryValueProblem or NonlinearBoundaryValueProblem problem definition
 - `matsolver`: matrix-solver backend for the per-mode tau systems (see [Solver options](#Solver-options))
 - `solver_type`: alias for `matsolver`; when it is `nothing` (the default), `matsolver` is used
-- `tolerance`: Newton convergence tolerance (NLBVP only; ignored for an LBVP)
-- `max_iterations`: maximum Newton iterations (NLBVP only)
+- `tolerance`: Newton convergence tolerance (NonlinearBoundaryValueProblem only; ignored for an LinearBoundaryValueProblem)
+- `max_iterations`: maximum Newton iterations (NonlinearBoundaryValueProblem only)
 
 **Methods**:
 
@@ -232,7 +232,7 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)   # one tau variable per BC
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = LBVP([phi, tau1, tau2])
+problem = LinearBoundaryValueProblem([phi, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "Δ(phi) + l1 + l2 = -2")
 add_bc!(problem, "phi(z=0)   = 0")     # BCs use add_bc!, never add_equation!
@@ -248,16 +248,16 @@ phi_grid = get_grid_data(phi)
 The bounded (Chebyshev) direction needs explicit `tau` variables lifted into the
 bulk equation — see [Problems](problems.md) for the tau method.
 
-#### Nonlinear problems (NLBVP)
+#### Nonlinear problems (NonlinearBoundaryValueProblem)
 
-An `NLBVP` is passed to the same `BoundaryValueSolver`. Put the nonlinear terms on
+An `NonlinearBoundaryValueProblem` is passed to the same `BoundaryValueSolver`. Put the nonlinear terms on
 the right-hand side; the solver linearizes them symbolically and runs a
 per-Fourier-mode Newton iteration, rebuilding the Jacobian at the current state
 each iteration. The current field values are the **initial guess**.
 
 ```julia
 # same domain/tau setup as above, plus a forcing field g
-problem = NLBVP([u, tau1, tau2])
+problem = NonlinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
 add_equation!(problem, "Δ(u) + l1 + l2 = u*u + g")   # nonlinearity on the RHS
 add_bc!(problem, "u(z=0)   = 0")
@@ -285,19 +285,19 @@ iterate in the fields; check the residual yourself if you need a hard failure.
     **second** solver from a `Problem` that already has one produces an
     over-determined system: the next `solve!` dies with `DimensionMismatch` (BVP) or
     the build itself with `Number of equations (5) does not match number of variables
-    (3)` (EVP). To sweep a parameter, rebuild the problem from scratch — the fields
+    (3)` (EigenvalueProblem). To sweep a parameter, rebuild the problem from scratch — the fields
     persist, so the previous solution carries over as the next initial guess.
 
 ---
 
 ### EigenvalueSolver
 
-Solver for Eigenvalue Problems (EVP).
+Solver for Eigenvalue Problems (EigenvalueProblem).
 
 **Constructor**:
 ```julia
 EigenvalueSolver(
-    problem::EVP;
+    problem::EigenvalueProblem;
     nev::Int=10,
     which::Union{String,Symbol}=:LM,
     target::Union{Nothing,ComplexF64}=nothing,
@@ -306,7 +306,7 @@ EigenvalueSolver(
 ```
 
 **Arguments**:
-- `problem`: EVP problem definition
+- `problem`: EigenvalueProblem problem definition
 - `nev`: Number of eigenvalues to return
 - `which`: Which eigenvalues to keep. Symbol or String — `:LM` and `"LM"` are equivalent
 - `target`: Order by proximity to this shift instead of by `which`. The default,
@@ -357,7 +357,7 @@ tau1 = ScalarField(dist, "tau1", (), Float64)
 tau2 = ScalarField(dist, "tau2", (), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = EVP([u, tau1, tau2]; eigenvalue=:σ)
+problem = EigenvalueProblem([u, tau1, tau2]; eigenvalue=:σ)
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "dt(u) - Δ(u) - l1 - l2 = 0")   # dt(u) → σu marks M
 add_bc!(problem, "u(z=0)   = 0")
@@ -533,7 +533,7 @@ solver = InitialValueSolver(problem, RK222(); dt=1e-3,
 
 ### Convergence criteria
 
-Only the nonlinear (NLBVP) path iterates:
+Only the nonlinear (NonlinearBoundaryValueProblem) path iterates:
 
 ```julia
 solver.tolerance      = 1e-10   # Newton residual tolerance
@@ -587,7 +587,7 @@ lift_basis = derivative_basis(zbasis, 1)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem, nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 
@@ -651,4 +651,4 @@ that takes about 21,800 steps (a few minutes on one core) and ends with
 - [Problems](problems.md): Problem definition
 - [Timesteppers](timesteppers.md): Time integration schemes
 - [Analysis](analysis.md): CFL conditions and diagnostics
-- [Tutorial: IVP](../tutorials/ivp_2d_rbc.md): Complete example
+- [Tutorial: InitialValueProblem](../tutorials/ivp_2d_rbc.md): Complete example

@@ -57,7 +57,7 @@ using Tarang
 domain = PeriodicDomain(64)                     # 64-point periodic domain [0, 2pi]
 T = ScalarField(domain, "T")                    # Temperature field
 
-problem = IVP([T])
+problem = InitialValueProblem([T])
 add_substitution!(problem, "kappa", 0.01)
 add_equation!(problem, "dt(T) - kappa*lap(T) = 0")
 
@@ -97,7 +97,7 @@ lift_basis = derivative_basis(zbasis, 1)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem,
     nu=Prandtl, buoy=Rayleigh * Prandtl, ez=ez,
     grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)

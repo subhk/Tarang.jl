@@ -21,7 +21,7 @@ using LinearAlgebra
     # 0D tau field — no bases at all
     tau_p = ScalarField(dist, "tau_p", (), Float64)
 
-    problem = IVP([b, u, tau_b, tau_p])
+    problem = InitialValueProblem([b, u, tau_b, tau_p])
 
     # Build a mock subproblem with group (5, nothing):
     #   Fourier mode 5 (separable), Chebyshev fully coupled
@@ -105,7 +105,7 @@ using LinearAlgebra
 
     @testset "AddOperator with different fields" begin
         other = ScalarField(domain, "c")
-        prob2 = IVP([b, other])
+        prob2 = InitialValueProblem([b, other])
         solver2 = ExprMatSolver(prob2, ExprMatSolverBase([false, true]))
         subsys2 = Subsystem(solver2, (5, nothing))
         sp2 = Subproblem(solver2, (subsys2,), (5, nothing))
@@ -121,7 +121,7 @@ using LinearAlgebra
 
     @testset "SubtractOperator" begin
         other = ScalarField(domain, "d")
-        prob3 = IVP([b, other])
+        prob3 = InitialValueProblem([b, other])
         solver3 = ExprMatSolver(prob3, ExprMatSolverBase([false, true]))
         subsys3 = Subsystem(solver3, (5, nothing))
         sp3 = Subproblem(solver3, (subsys3,), (5, nothing))

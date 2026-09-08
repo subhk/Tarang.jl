@@ -151,11 +151,9 @@ end
     lo, hi = 1, ncols
     @inbounds while lo < hi
         mid = (lo + hi + 1) >> 1
-        if colptr[mid] <= k
-            lo = mid
-        else
-            hi = mid - 1
-        end
+        below = colptr[mid] <= k
+        lo = ifelse(below, mid, lo)
+        hi = ifelse(below, hi, mid - 1)
     end
     @inbounds dense[rowval[k], lo, m] = M_nzval[k, m] + coeff * L_nzval[k, m]
 end
@@ -196,7 +194,10 @@ end
     j, m = @index(Global, NTuple)
     @inbounds begin
         s = src[j]
-        X[j, m] = s == 0 ? zero(ComplexF64) : B[s, m] / scale[j]
+        # Branch-free: read a clamped in-bounds row for null columns too, then
+        # select the zero. `zero(ComplexF64)` (not a literal 0) keeps ifelse's
+        # two arms the same concrete type.
+        X[j, m] = ifelse(s == 0, zero(ComplexF64), B[max(s, 1), m] / scale[j])
     end
 end
 

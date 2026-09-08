@@ -137,7 +137,7 @@ const HASFIELD_BANNED = Dict(
             @test hasfield(P, :variables)
             @test hasfield(P, :domain)
         end
-        # IVP-only fields. These are real polymorphism, so they must NOT become
+        # InitialValueProblem-only fields. These are real polymorphism, so they must NOT become
         # universal either — if they do, the dispatch that replaced their guards
         # is wrong.
         @test count(P -> hasfield(P, :stochastic_forcings), problems) == 1
@@ -172,10 +172,11 @@ const HASFIELD_BANNED = Dict(
         @test !hasfield(S, :domain)
     end
 
-    @testset "Operand: layout and storage belong to one type each" begin
+    @testset "Operand: layout validity belongs to field storage" begin
         operands = _hf_concrete(Tarang.Operand)
-        @test count(O -> hasfield(O, :current_layout), operands) == 1
-        @test hasfield(Tarang.ScalarField, :current_layout)
+        @test count(O -> hasfield(O, :current_layout), operands) == 0
+        @test hasfield(Tarang.SerialFieldStorage, :current_layout)
+        @test hasfield(Tarang.TransposableFieldStorage, :current_layout)
         @test count(O -> hasfield(O, :buffers), operands) == 1
         @test hasfield(Tarang.TransposableField, :buffers)
         # ...which is exactly why `hasfield(..., :buffers)` could never stand in

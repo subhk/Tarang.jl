@@ -41,7 +41,7 @@ rank == 0 && println("=" ^ 60)
         rng=MersenneTwister(42)
     )
 
-    problem = IVP([q])
+    problem = InitialValueProblem([q])
     add_equation!(problem, "∂t(q) = 0")
     add_stochastic_forcing!(problem, :q, forcing)
 

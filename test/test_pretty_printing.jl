@@ -52,7 +52,7 @@ using Tarang
     @testset "CFL pretty printing" begin
         domain = PeriodicDomain(16)
         T = ScalarField(domain, "T")
-        problem = IVP([T])
+        problem = InitialValueProblem([T])
         add_equation!(problem, "dt(T) = 0")
         solver = InitialValueSolver(problem, RK111(); device="cpu")
 

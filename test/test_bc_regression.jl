@@ -9,7 +9,7 @@
 # parsing of BC objects).
 #
 # The existing unit tests verify that `DirichletBC("T", "z", 0.0, 1.0)`
-# constructs correctly, but they do NOT verify that stepping an IVP with
+# constructs correctly, but they do NOT verify that stepping an InitialValueProblem with
 # this BC produces the right solution. Every BC bug we've debugged in
 # this codebase has been of the latter kind:
 #
@@ -84,7 +84,7 @@ function build_diffusion(bc_bot::String, bc_top::String;
     τ_lift(A) = lift(A, lift_basis, -1)
     grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-    problem = IVP([T, tau_T1, tau_T2])
+    problem = InitialValueProblem([T, tau_T1, tau_T2])
     add_parameters!(problem; κ=κ, Lz=Lz, grad_T=grad_T, τ_lift=τ_lift,
                     params_extra...)
     add_equation!(problem, "∂t(T) - κ*div(grad_T) + τ_lift(tau_T2) = 0")
@@ -260,7 +260,7 @@ end
     zbasis = ChebyshevT(coords["z"];  size=24, bounds=(0.0, 1.0))
     domain = Domain(dist, (xbasis, zbasis))
 
-    # Use heat equation instead of Poisson to stay inside the IVP path,
+    # Use heat equation instead of Poisson to stay inside the InitialValueProblem path,
     # but with zero BCs. The integral constraint isn't conserved by pure
     # diffusion, so this test just verifies the constraint parses and
     # registers without crashing — the stepping correctness is already
@@ -274,7 +274,7 @@ end
     τ_lift(A) = lift(A, lift_basis, -1)
     grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-    problem = IVP([T, tau_T1, tau_T2])
+    problem = InitialValueProblem([T, tau_T1, tau_T2])
     add_parameters!(problem; κ=1.0, Lz=1.0, grad_T=grad_T, τ_lift=τ_lift)
     add_equation!(problem, "∂t(T) - κ*div(grad_T) + τ_lift(tau_T2) = 0")
     add_bc!(problem, "T(z=0) = 0")

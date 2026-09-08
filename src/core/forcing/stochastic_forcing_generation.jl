@@ -139,7 +139,10 @@ end
 
 @kernel function _enforce_hermitian_1d_kernel!(data::AbstractVector{Complex{T}}, n::Int) where {T}
     i = @index(Global, Linear)
-    ci = i == 1 ? 1 : n + 2 - i
+    ci = ifelse(i == 1, 1, n + 2 - i)
+    # The two arms write DIFFERENT elements (the conjugate partner vs. the
+    # self-conjugate mode), so this stays a branch: an ifelse form would need
+    # an unconditional write to both, racing with the partner's thread.
     if i < ci
         data[ci] = conj(data[i])
     elseif i == ci
@@ -151,8 +154,8 @@ end
     I = @index(Global, Cartesian)
     i = I[1]
     j = I[2]
-    ci = i == 1 ? 1 : nx + 2 - i
-    cj = j == 1 ? 1 : ny + 2 - j
+    ci = ifelse(i == 1, 1, nx + 2 - i)
+    cj = ifelse(j == 1, 1, ny + 2 - j)
 
     if (i < ci) || (i == ci && j < cj)
         data[ci, cj] = conj(data[i, j])
@@ -166,9 +169,9 @@ end
     i = I[1]
     j = I[2]
     k = I[3]
-    ci = i == 1 ? 1 : nx + 2 - i
-    cj = j == 1 ? 1 : ny + 2 - j
-    ck = k == 1 ? 1 : nz + 2 - k
+    ci = ifelse(i == 1, 1, nx + 2 - i)
+    cj = ifelse(j == 1, 1, ny + 2 - j)
+    ck = ifelse(k == 1, 1, nz + 2 - k)
 
     lin_idx = i + (j - 1) * nx + (k - 1) * nx * ny
     conj_lin_idx = ci + (cj - 1) * nx + (ck - 1) * nx * ny

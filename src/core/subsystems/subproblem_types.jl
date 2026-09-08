@@ -380,6 +380,10 @@ function _expression_subproblem_dofs(sp::Subproblem, expr)
     isa(expr, VectorField) && return subproblem_field_size(sp, expr)
     isa(expr, TensorField) && return subproblem_field_size(sp, expr)
 
+    if expr isa Component
+        inner = _expression_subproblem_dofs(sp, expr.operand)
+        return length(_component_output_range(expr, inner))
+    end
     if isa(expr, Interpolate)
         inner = _expression_subproblem_dofs(sp, expr.operand)
         cheb = _subproblem_cheb_basis_from_sp(sp)

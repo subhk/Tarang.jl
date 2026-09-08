@@ -10,7 +10,7 @@ Problem formulation classes
 Abstract base type for all forcing types.
 
 Defined here (rather than in `stochastic_forcing.jl`, which loads later) so
-that `IVP.stochastic_forcings` can be concretely typed as `Dict{Int, Forcing}`.
+that `InitialValueProblem.stochastic_forcings` can be concretely typed as `Dict{Int, Forcing}`.
 """
 abstract type Forcing end
 
@@ -27,7 +27,13 @@ struct TemporalFilterRegistration{F, V}
     source_field::V
 end
 
-mutable struct IVP <: Problem
+"""
+    InitialValueProblem(variables; namespace=nothing)
+
+Define time-dependent equations for the supplied fields. Build an
+[`InitialValueSolver`](@ref) to advance the solution.
+"""
+mutable struct InitialValueProblem <: Problem
     variables::Vector{Operand}
     equations::Vector{String}
     boundary_conditions::Vector{String}
@@ -46,7 +52,13 @@ mutable struct IVP <: Problem
     temporal_filters::Dict{Symbol, TemporalFilterRegistration}
 end
 
-mutable struct LBVP <: Problem
+"""
+    LinearBoundaryValueProblem(variables; namespace=nothing)
+
+Define a steady linear system with boundary conditions. Solve it with
+[`BoundaryValueSolver`](@ref).
+"""
+mutable struct LinearBoundaryValueProblem <: Problem
     variables::Vector{Operand}
     equations::Vector{String}
     boundary_conditions::Vector{String}
@@ -58,7 +70,13 @@ mutable struct LBVP <: Problem
     compiled::CompiledProblem
 end
 
-mutable struct NLBVP <: Problem
+"""
+    NonlinearBoundaryValueProblem(variables; namespace=nothing)
+
+Define a steady nonlinear system with boundary conditions. Solve it with
+[`BoundaryValueSolver`](@ref), which applies Newton iteration.
+"""
+mutable struct NonlinearBoundaryValueProblem <: Problem
     variables::Vector{Operand}
     equations::Vector{String}
     boundary_conditions::Vector{String}
@@ -70,7 +88,14 @@ mutable struct NLBVP <: Problem
     compiled::CompiledProblem
 end
 
-mutable struct EVP <: Problem
+"""
+    EigenvalueProblem(variables; eigenvalue=nothing, namespace=nothing)
+
+Define an eigenvalue system for the supplied fields. The optional `eigenvalue`
+symbol names the spectral parameter in the equations. Solve it with
+[`EigenvalueSolver`](@ref).
+"""
+mutable struct EigenvalueProblem <: Problem
     variables::Vector{Operand}
     equations::Vector{String}
     boundary_conditions::Vector{String}
@@ -157,61 +182,61 @@ function build_problem_namespace(variables::Vector{<:Operand}, user_ns::Union{No
     return ns
 end
 
-function _build_ivp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
+function _build_initial_value_problem(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
-    return IVP(vars, String[], String[], Dict{String, Any}(), ns,
+    return InitialValueProblem(vars, String[], String[], Dict{String, Any}(), ns,
                nothing, nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem(),
                Dict{Int, Forcing}(),                       # Empty stochastic_forcings dict
                Dict{Symbol, TemporalFilterRegistration}()) # Empty temporal_filters dict
 end
 
-function _build_lbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
+function _build_linear_boundary_value_problem(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
-    return LBVP(vars, String[], String[], Dict{String, Any}(), ns,
+    return LinearBoundaryValueProblem(vars, String[], String[], Dict{String, Any}(), ns,
                 nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem())
 end
 
-function _build_nlbvp(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
+function _build_nonlinear_boundary_value_problem(variables::Vector{<:Operand}; namespace::Union{Nothing, AbstractDict{String}}=nothing)
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
-    return NLBVP(vars, String[], String[], Dict{String, Any}(), ns,
+    return NonlinearBoundaryValueProblem(vars, String[], String[], Dict{String, Any}(), ns,
                  nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem())
 end
 
-function _build_evp(variables::Vector{<:Operand}; eigenvalue::Union{Nothing, Symbol}=nothing, namespace::Union{Nothing, AbstractDict{String}}=nothing)
+function _build_eigenvalue_problem(variables::Vector{<:Operand}; eigenvalue::Union{Nothing, Symbol}=nothing, namespace::Union{Nothing, AbstractDict{String}}=nothing)
     vars = Vector{Operand}(variables)  # Convert to Vector{Operand}
     ns = build_problem_namespace(vars, namespace)
-    return EVP(vars, String[], String[], Dict{String, Any}(), ns,
+    return EigenvalueProblem(vars, String[], String[], Dict{String, Any}(), ns,
                eigenvalue, nothing, BoundaryConditionManager(), EquationIR[], CompiledProblem())
 end
 
-const _IVP_constructor = _build_ivp
-const _LBVP_constructor = _build_lbvp
-const _NLBVP_constructor = _build_nlbvp
-const _EVP_constructor = _build_evp
+const _InitialValueProblem_constructor = _build_initial_value_problem
+const _LinearBoundaryValueProblem_constructor = _build_linear_boundary_value_problem
+const _NonlinearBoundaryValueProblem_constructor = _build_nonlinear_boundary_value_problem
+const _EigenvalueProblem_constructor = _build_eigenvalue_problem
 
-function IVP(variables::Vector{<:Operand}; kwargs...)
-    return multiclass_new(IVP, variables; kwargs...)
+function InitialValueProblem(variables::Vector{<:Operand}; kwargs...)
+    return multiclass_new(InitialValueProblem, variables; kwargs...)
 end
 
-function LBVP(variables::Vector{<:Operand}; kwargs...)
-    return multiclass_new(LBVP, variables; kwargs...)
+function LinearBoundaryValueProblem(variables::Vector{<:Operand}; kwargs...)
+    return multiclass_new(LinearBoundaryValueProblem, variables; kwargs...)
 end
 
-function NLBVP(variables::Vector{<:Operand}; kwargs...)
-    return multiclass_new(NLBVP, variables; kwargs...)
+function NonlinearBoundaryValueProblem(variables::Vector{<:Operand}; kwargs...)
+    return multiclass_new(NonlinearBoundaryValueProblem, variables; kwargs...)
 end
 
-function EVP(variables::Vector{<:Operand}; kwargs...)
-    return multiclass_new(EVP, variables; kwargs...)
+function EigenvalueProblem(variables::Vector{<:Operand}; kwargs...)
+    return multiclass_new(EigenvalueProblem, variables; kwargs...)
 end
 
-_problem_builder(::Type{IVP}) = _IVP_constructor
-_problem_builder(::Type{LBVP}) = _LBVP_constructor
-_problem_builder(::Type{NLBVP}) = _NLBVP_constructor
-_problem_builder(::Type{EVP}) = _EVP_constructor
+_problem_builder(::Type{InitialValueProblem}) = _InitialValueProblem_constructor
+_problem_builder(::Type{LinearBoundaryValueProblem}) = _LinearBoundaryValueProblem_constructor
+_problem_builder(::Type{NonlinearBoundaryValueProblem}) = _NonlinearBoundaryValueProblem_constructor
+_problem_builder(::Type{EigenvalueProblem}) = _EigenvalueProblem_constructor
 _problem_builder(::Type{T}) where {T<:Problem} = error("No problem builder registered for type $(T)")
 
 function _validate_problem_kwargs(kwargs::NamedTuple)
@@ -249,7 +274,7 @@ function dispatch_check(::Type{T}, args::Tuple, kwargs::NamedTuple) where {T<:Pr
     return true
 end
 
-function dispatch_check(::Type{EVP}, args::Tuple, kwargs::NamedTuple)
+function dispatch_check(::Type{EigenvalueProblem}, args::Tuple, kwargs::NamedTuple)
     _validate_problem_variables(args, kwargs)
     if haskey(kwargs, :eigenvalue)
         eigen = kwargs[:eigenvalue]
@@ -403,11 +428,13 @@ Returns: (field_name, coordinate, position, alpha, beta, value)
 """
 function parse_robin_bc_string(bc_string::String)
     # Remove whitespace
-    s = replace(bc_string, " " => "")
+    s = replace(bc_string, r"\s+" => "")
+    # Accept the canonical form emitted by bc_to_equation as well as ∂z(u).
+    s = replace(s, r"d\(([a-zA-Z_][a-zA-Z0-9_]*),([a-zA-Z_][a-zA-Z0-9_]*)(?:,1)?\)" => s"∂\2(\1)")
 
     # Match pattern: alpha*field(coord=pos)+beta*∂<coord>(field)(<coord>=pos)=value
     # e.g., "1.0*T(z=0)+0.5*∂z(T)(z=0)=1.0"
-    pattern = r"^([0-9.eE+-]+)\*([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)\+([0-9.eE+-]+)\*∂([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
+    pattern = r"^(.+?)\*([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)\+(.+?)\*∂([a-zA-Z_][a-zA-Z0-9_]*)\(([a-zA-Z_][a-zA-Z0-9_]*)\)\(([a-zA-Z_][a-zA-Z0-9_]*)=([^)]+)\)=(.+)$"
     m = match(pattern, s)
 
     if m === nothing
@@ -438,9 +465,13 @@ function parse_robin_bc_string(bc_string::String)
         throw(ArgumentError("Positions must match in Robin BC: '$field_pos_str' vs '$deriv_pos_str'"))
     end
 
-    # Parse coefficients
-    alpha = parse(Float64, alpha_str)
-    beta = parse(Float64, beta_str)
+    # Preserve registered coefficient names/expressions. Parsing also removes
+    # redundant parentheses from the structured form, so its equation maps
+    # back to an equivalent raw string and receives moving RHS updates.
+    alpha, beta = map((alpha_str, beta_str)) do coefficient
+        parsed = Meta.parse(coefficient)
+        parsed isa Real ? Float64(parsed) : string(parsed)
+    end
 
     # Parse numeric positions, but preserve symbolic bounds such as `Lz`.
     position = something(tryparse(Float64, field_pos_str), field_pos_str)
@@ -495,7 +526,7 @@ etc.) — equation ordering does not matter.
 
 # Example
 ```julia
-problem = IVP([q, ψ, u, tau_ψ])
+problem = InitialValueProblem([q, ψ, u, tau_ψ])
 
 add_equation!(problem, "∂t(q) + nu*Δ⁴(q) = -u⋅∇(q)")   # scalar eq  → D rows
 add_equation!(problem, "Δ(ψ) + tau_ψ - q = 0")           # scalar eq  → D rows
@@ -518,9 +549,9 @@ function add_equation!(problem::Problem, equation::String)
 end
 
 """
-    add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing)
+    add_stochastic_forcing!(problem::InitialValueProblem, variable::Symbol, forcing)
 
-Add stochastic forcing to a variable in the IVP. The forcing will be automatically
+Add stochastic forcing to a variable in the InitialValueProblem. The forcing will be automatically
 applied to the RHS during timestepping.
 
 ## Why This Exists
@@ -536,7 +567,7 @@ or `apply_forcing!` in your time loop.
 
 ## Arguments
 
-- `problem::IVP`: The initial value problem
+- `problem::InitialValueProblem`: The initial value problem
 - `variable::Symbol`: The scalar field or flattened component name whose RHS receives
   the forcing. For a vector or tensor, register a component such as `:u_x`; registering
   the container name (for example `:u`) is ambiguous and raises `ArgumentError`.
@@ -546,7 +577,7 @@ or `apply_forcing!` in your time loop.
 
 ```julia
 # Create problem
-problem = IVP([ω])
+problem = InitialValueProblem([ω])
 add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
 
 # Create and register forcing - it will be added to RHS automatically!
@@ -568,7 +599,7 @@ end
 
 See also: [`StochasticForcing`](@ref), [`generate_forcing!`](@ref)
 """
-function _stochastic_forcing_state_index(problem::IVP, variable::Symbol)
+function _stochastic_forcing_state_index(problem::InitialValueProblem, variable::Symbol)
     var_name = String(variable)
     state_idx = 0
 
@@ -595,7 +626,7 @@ function _stochastic_forcing_state_index(problem::IVP, variable::Symbol)
     throw(ArgumentError("Variable ':$variable' not found in problem variables or components"))
 end
 
-function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing::Forcing)
+function add_stochastic_forcing!(problem::InitialValueProblem, variable::Symbol, forcing::Forcing)
     var_idx = _stochastic_forcing_state_index(problem, variable)
 
     if forcing isa StochasticForcingType
@@ -621,18 +652,18 @@ function add_stochastic_forcing!(problem::IVP, variable::Symbol, forcing::Forcin
 end
 
 """
-    has_stochastic_forcing(problem::IVP) -> Bool
+    has_stochastic_forcing(problem::InitialValueProblem) -> Bool
 
 Check if the problem has any registered stochastic forcings.
 """
-has_stochastic_forcing(problem::IVP) = !isempty(problem.stochastic_forcings)
+has_stochastic_forcing(problem::InitialValueProblem) = !isempty(problem.stochastic_forcings)
 
 """
-    get_stochastic_forcing(problem::IVP, var_index::Int)
+    get_stochastic_forcing(problem::InitialValueProblem, var_index::Int)
 
 Get the stochastic forcing for a variable (by index), or nothing if none registered.
 """
-function get_stochastic_forcing(problem::IVP, var_index::Int)
+function get_stochastic_forcing(problem::InitialValueProblem, var_index::Int)
     return get(problem.stochastic_forcings, var_index, nothing)
 end
 
@@ -641,14 +672,14 @@ end
 # ============================================================================
 
 """
-    add_temporal_filter!(problem::IVP, :filter_name, filter, :source_variable)
+    add_temporal_filter!(problem::InitialValueProblem, :filter_name, filter, :source_variable)
 
 Register a temporal filter with the problem. The filter will be automatically
 updated each timestep with data from the source variable.
 
 ## Arguments
 
-- `problem::IVP`: The initial value problem
+- `problem::InitialValueProblem`: The initial value problem
 - `filter_name::Symbol`: Name to identify this filter (used to access the mean)
 - `filter::TemporalFilter`: The temporal filter (ExponentialMean, ButterworthFilter, etc.)
 - `source_variable::Symbol`: The variable whose data feeds into the filter
@@ -667,7 +698,7 @@ The filtered mean can be accessed in your equations or post-processing via
 
 ```julia
 # Create a problem with vorticity
-problem = IVP([ω])
+problem = InitialValueProblem([ω])
 add_equation!(problem, "∂t(ω) + μ*ω - ν*Δ(ω) = -J(ψ, ω)")
 
 # Create a Butterworth filter for computing Lagrangian mean
@@ -688,7 +719,7 @@ end
 
 See also: [`ExponentialMean`](@ref), [`ButterworthFilter`](@ref), [`get_mean`](@ref)
 """
-function add_temporal_filter!(problem::IVP, filter_name::Symbol, filter, source_variable::Symbol)
+function add_temporal_filter!(problem::InitialValueProblem, filter_name::Symbol, filter, source_variable::Symbol)
     # Resolve the source variable once here so the per-timestep update loop
     # never has to rebuild a name → field map.
     var_name = String(source_variable)
@@ -712,29 +743,29 @@ function add_temporal_filter!(problem::IVP, filter_name::Symbol, filter, source_
 end
 
 """
-    has_temporal_filters(problem::IVP) -> Bool
+    has_temporal_filters(problem::InitialValueProblem) -> Bool
 
 Check if the problem has any registered temporal filters.
 """
-has_temporal_filters(problem::IVP) = !isempty(problem.temporal_filters)
+has_temporal_filters(problem::InitialValueProblem) = !isempty(problem.temporal_filters)
 
 """
-    get_temporal_filter(problem::IVP, filter_name::Symbol)
+    get_temporal_filter(problem::InitialValueProblem, filter_name::Symbol)
 
 Get the temporal filter by name, or nothing if not registered.
 Returns a [`TemporalFilterRegistration`](@ref) with fields `filter`, `source`,
 and `source_field`.
 """
-function get_temporal_filter(problem::IVP, filter_name::Symbol)
+function get_temporal_filter(problem::InitialValueProblem, filter_name::Symbol)
     return get(problem.temporal_filters, filter_name, nothing)
 end
 
 """
-    get_all_temporal_filters(problem::IVP)
+    get_all_temporal_filters(problem::InitialValueProblem)
 
 Get all registered temporal filters as a Dict.
 """
-get_all_temporal_filters(problem::IVP) = problem.temporal_filters
+get_all_temporal_filters(problem::InitialValueProblem) = problem.temporal_filters
 
 """
     add_bc!(problem, bc::String)
@@ -797,6 +828,18 @@ system, but time/space dependency handling is disabled for it — the
 user would see wrong enforcement for non-constant values in that case).
 """
 function _register_string_bc!(problem::Problem, bc_string::String)
+    robin_parts = try
+        parse_robin_bc_string(bc_string)
+    catch err
+        err isa ArgumentError || rethrow()
+        nothing
+    end
+    if robin_parts !== nothing
+        field_name, coord, position, alpha, beta, value = robin_parts
+        add_bc!(problem.bc_manager, robin_bc(field_name, coord, position, alpha, beta, value))
+        return
+    end
+
     # Detect Neumann first (has `∂coord(field)(...)` prefix). Fall back to
     # Dirichlet for the usual `field(coord=pos) = value` form.
     stripped = replace(bc_string, " " => "")

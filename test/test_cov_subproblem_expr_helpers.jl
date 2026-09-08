@@ -40,7 +40,7 @@ end
     tau_b = ScalarField(dist, "tau_b", (xb,), Float64)   # 1D Fourier-only tau
     tau_p = ScalarField(dist, "tau_p", (), Float64)      # 0D tau (no bases)
 
-    problem = IVP([b, u, tau_b, tau_p])
+    problem = InitialValueProblem([b, u, tau_b, tau_p])
     # Fourier separable (false), Chebyshev coupled (true)
     solver = CovSolver(problem, CovSolverBase([false, true]))
     # group (5, nothing): Fourier mode 5 separable, Chebyshev coupled

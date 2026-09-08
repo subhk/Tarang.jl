@@ -12,7 +12,7 @@ using Tarang
     psi = ScalarField(domain, "psi")
     u = VectorField(domain, "u")
 
-    problem = IVP([psi, u])
+    problem = InitialValueProblem([psi, u])
     add_equation!(problem, "∂t(psi) = 0")
     add_equation!(problem, "u - skew(grad(psi)) = 0")
 
@@ -47,7 +47,7 @@ end
     u = VectorField(domain, "u")
     tau_psi = ScalarField(dist, "tau_psi", (), Float64)
 
-    problem = IVP([q, psi, u, tau_psi])
+    problem = InitialValueProblem([q, psi, u, tau_psi])
     add_equation!(problem, "∂t(q) = -u⋅∇(q)")
     add_equation!(problem, "Δ(psi) + tau_psi - q = 0")
     add_equation!(problem, "u - skew(grad(psi)) = 0")

@@ -51,7 +51,7 @@ using Test
         @test Tarang._normalize_matsolver(:unknown) == :unknown
     end
 
-    @testset "mixed GPU IVP matrix solver selection" begin
+    @testset "mixed GPU InitialValueProblem matrix solver selection" begin
         @test Tarang._select_ivp_matsolver(:auto, false, true) == :sparse
         @test Tarang._select_ivp_matsolver("auto", false, false) == :sparse
         @test Tarang._select_ivp_matsolver(:auto, true, false) == :sparse
@@ -125,7 +125,7 @@ using Test
         end
     end
 
-    @testset "SPQR solver uses per-thread workspaces" begin
+    @testset "SPQR solver preallocates a reusable workspace pool" begin
         MS = Tarang.MatSolvers
         A = spdiagm(0 => fill(4.0 + 0im, 8),
                     1 => fill(-1.0 + 0im, 7),
@@ -233,7 +233,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
 
         solver = InitialValueSolver(problem, RK111(); device="cpu")
@@ -276,7 +276,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
 
         solver = InitialValueSolver(problem, RK111(); dt=0.01)
@@ -289,7 +289,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
 
         solver = InitialValueSolver(problem, CNAB1(); dt=0.01)
@@ -312,7 +312,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
 
         solver = InitialValueSolver(problem, RK111())
@@ -336,7 +336,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
 
         comm = Tarang.solver_comm(problem)
@@ -379,22 +379,22 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        ivp = IVP([field])
+        ivp = InitialValueProblem([field])
         @test_throws ArgumentError Tarang.dispatch_check(BoundaryValueSolver, (ivp,), NamedTuple())
 
-        # Valid dispatch for LBVP
-        lbvp = LBVP([field])
+        # Valid dispatch for LinearBoundaryValueProblem
+        lbvp = LinearBoundaryValueProblem([field])
         @test Tarang.dispatch_check(BoundaryValueSolver, (lbvp,), NamedTuple()) == true
     end
 
     @testset "BoundaryValueSolver with custom parameters" begin
-        # Test dispatch for NLBVP
+        # Test dispatch for NonlinearBoundaryValueProblem
         coords = CartesianCoordinates("x")
         dist = Distributor(coords; mesh=(1,), dtype=Float64)
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        nlbvp = NLBVP([field])
+        nlbvp = NonlinearBoundaryValueProblem([field])
         @test Tarang.dispatch_check(BoundaryValueSolver, (nlbvp,), NamedTuple()) == true
 
         # Test that solver types exist in module
@@ -412,12 +412,12 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        # Invalid: IVP for eigenvalue solver
-        ivp = IVP([field])
+        # Invalid: InitialValueProblem for eigenvalue solver
+        ivp = InitialValueProblem([field])
         @test_throws ArgumentError Tarang.dispatch_check(EigenvalueSolver, (ivp,), NamedTuple())
 
-        # Valid: EVP
-        evp = EVP([field])
+        # Valid: EigenvalueProblem
+        evp = EigenvalueProblem([field])
         @test Tarang.dispatch_check(EigenvalueSolver, (evp,), NamedTuple()) == true
 
         # Test that solver types exist in module
@@ -432,7 +432,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        evp = EVP([field])
+        evp = EigenvalueProblem([field])
 
         # Test that kwargs validation passes for valid parameters
         kwargs = (nev=10, which=:SM)
@@ -513,7 +513,7 @@ using Test
         field = ScalarField(dist, "u", (basis,), Float64)
 
         @testset "InitialValueSolver dispatch" begin
-            ivp = IVP([field])
+            ivp = InitialValueProblem([field])
             # Valid dispatch
             @test Tarang.dispatch_check(InitialValueSolver, (ivp, RK111()), NamedTuple()) == true
 
@@ -521,34 +521,34 @@ using Test
             @test_throws ArgumentError Tarang.dispatch_check(InitialValueSolver, (ivp,), NamedTuple())
 
             # Invalid: wrong problem type
-            lbvp = LBVP([field])
+            lbvp = LinearBoundaryValueProblem([field])
             @test_throws ArgumentError Tarang.dispatch_check(InitialValueSolver, (lbvp, RK111()), NamedTuple())
         end
 
         @testset "BoundaryValueSolver dispatch" begin
-            lbvp = LBVP([field])
+            lbvp = LinearBoundaryValueProblem([field])
             @test Tarang.dispatch_check(BoundaryValueSolver, (lbvp,), NamedTuple()) == true
 
-            nlbvp = NLBVP([field])
+            nlbvp = NonlinearBoundaryValueProblem([field])
             @test Tarang.dispatch_check(BoundaryValueSolver, (nlbvp,), NamedTuple()) == true
 
             # Invalid: no args
             @test_throws ArgumentError Tarang.dispatch_check(BoundaryValueSolver, (), NamedTuple())
 
             # Invalid: wrong problem type
-            ivp = IVP([field])
+            ivp = InitialValueProblem([field])
             @test_throws ArgumentError Tarang.dispatch_check(BoundaryValueSolver, (ivp,), NamedTuple())
         end
 
         @testset "EigenvalueSolver dispatch" begin
-            evp = EVP([field])
+            evp = EigenvalueProblem([field])
             @test Tarang.dispatch_check(EigenvalueSolver, (evp,), NamedTuple()) == true
 
             # Invalid: no args
             @test_throws ArgumentError Tarang.dispatch_check(EigenvalueSolver, (), NamedTuple())
 
             # Invalid: wrong problem type
-            ivp = IVP([field])
+            ivp = InitialValueProblem([field])
             @test_throws ArgumentError Tarang.dispatch_check(EigenvalueSolver, (ivp,), NamedTuple())
         end
     end
@@ -605,7 +605,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
 
         solver = InitialValueSolver(problem, RK111())
@@ -626,7 +626,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
 
         solver = InitialValueSolver(problem, RK111())
@@ -666,7 +666,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
         Tarang.add_equation!(problem, "dt(u) = 0")
         Tarang.setup_domain!(problem)
 
@@ -682,7 +682,7 @@ using Test
         basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         field = ScalarField(dist, "u", (basis,), Float64)
 
-        problem = IVP([field])
+        problem = InitialValueProblem([field])
 
         # Create modified state
         state = Tarang.collect_state_fields(problem.variables)

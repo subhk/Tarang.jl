@@ -80,10 +80,10 @@ using Tarang
         return u, nu_e
     end
 
-    # Explicit RHS (the F vector) of a single-equation IVP, in grid layout.
+    # Explicit RHS (the F vector) of a single-equation InitialValueProblem, in grid layout.
     function rhs_of(equation::String)
         u, nu_e = manufactured_fields()
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_parameters!(problem, nu_e=nu_e)
         add_equation!(problem, equation)
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)

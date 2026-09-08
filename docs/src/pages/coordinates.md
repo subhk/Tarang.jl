@@ -186,7 +186,7 @@ domain = Domain(dist, (xbasis, ybasis))
 u = ScalarField(domain, "u")
 T = ScalarField(domain, "T")
 
-problem = IVP([u, T])
+problem = InitialValueProblem([u, T])
 add_parameters!(problem, nu=0.01)
 add_equation!(problem, "∂t(u) - nu*lap(u) = ∂x(T)")   # ∂x — named after coords["x"]
 add_equation!(problem, "∂t(T) - nu*lap(T) = 0")

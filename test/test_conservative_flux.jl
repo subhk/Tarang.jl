@@ -201,7 +201,7 @@ using Tarang
         rho = ScalarField(domain, "rho")
         rho["g"] = @. 2 + sin(x)
 
-        problem = IVP([rho])
+        problem = InitialValueProblem([rho])
         add_parameters!(problem, u=u)
         add_equation!(problem, "∂t(rho) = -div(rho*u)")
         solver = InitialValueSolver(problem, RK222(); dt=1e-3)
@@ -327,7 +327,7 @@ using Tarang
             _, uu = manufactured_fields()
             rho = ScalarField(domain, "rho")
             rho["g"] = @. 2 + sin(x)
-            problem = IVP([rho])
+            problem = InitialValueProblem([rho])
             add_parameters!(problem, u=uu)
             add_equation!(problem, "∂t(rho) = -div(u*u)")
             solver = InitialValueSolver(problem, RK222(); dt=1e-3)

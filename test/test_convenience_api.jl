@@ -87,7 +87,7 @@ using Tarang
     @testset "add_parameters!" begin
         domain = PeriodicDomain(16)
         T = ScalarField(domain, "T")
-        problem = IVP([T])
+        problem = InitialValueProblem([T])
 
         add_parameters!(problem, nu=1e-3, kappa=1e-4, Ra=1e6)
 
@@ -101,7 +101,7 @@ using Tarang
         u = VectorField(domain, "u")
         T = ScalarField(domain, "T")
 
-        problem = IVP([u, T])
+        problem = InitialValueProblem([u, T])
 
         # These should not error and should add BCs
         no_slip!(problem, "u", "z", 0.0)

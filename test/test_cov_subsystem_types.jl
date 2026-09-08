@@ -4,7 +4,7 @@ Serial-CPU coverage tests for src/core/subsystems/subsystem_types.jl.
 These pin the behavior of the Subsystem constructor and its supporting
 helpers — variable/equation range computation, matrix-group collapsing,
 group normalization, separable-dimension sizing, mode-group generation, and
-the operator-coupling analyzer — using small LBVP/IVP problems and direct
+the operator-coupling analyzer — using small LinearBoundaryValueProblem/InitialValueProblem problems and direct
 helper calls. Every assertion checks a real invariant (counts, ranges,
 shapes, error conditions), not an arbitrary number.
 
@@ -95,7 +95,7 @@ end
         zb = ChebyshevT(coords["z"]; size=6, bounds=(-1.0, 1.0))
         domain = Domain(dist, (xb, zb))
         u = ScalarField(domain, "u")
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
 
         # dtype is read off the first scalar component
         @test infer_problem_dtype(prob) == u.dtype
@@ -104,7 +104,7 @@ end
         @test infer_problem_dist(prob) === domain.dist
 
         # Without a domain, dist comes from the first component's dist.
-        prob_nodom = LBVP([u])
+        prob_nodom = LinearBoundaryValueProblem([u])
         prob_nodom.domain = nothing
         @test infer_problem_dist(prob_nodom) === u.dist
     end
@@ -115,7 +115,7 @@ end
         dist = Distributor(coords; dtype=Float64)
         xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(dist, "u", (xb,), Float64)
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         empty!(prob.variables)
         @test infer_problem_dtype(prob) == ComplexF64
     end
@@ -125,7 +125,7 @@ end
         dist = Distributor(coords; dtype=Float64)
         xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(dist, "u", (xb,), Float64)
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         prob.domain = nothing
         empty!(prob.variables)   # no domain, no variables -> ArgumentError
         @test_throws ArgumentError infer_problem_dist(prob)
@@ -139,7 +139,7 @@ end
         a = ScalarField(dist, "a", (xb,), Float64)
         b = ScalarField(dist, "b", (xb,), Float64)
         ensure_layout!(a, :c); ensure_layout!(b, :c)
-        prob = LBVP([a, b])
+        prob = LinearBoundaryValueProblem([a, b])
 
         scalar_ranges, variable_ranges, total = compute_variable_ranges(prob)
 
@@ -164,7 +164,7 @@ end
         # with an empty component set to force the empty-range branch.
         empty_vec = VectorField(Domain(dist, (xb,)), "ev")
         empty!(empty_vec.components)   # no components -> no DOFs contributed
-        prob = LBVP([empty_vec, a])
+        prob = LinearBoundaryValueProblem([empty_vec, a])
         scalar_ranges, variable_ranges, total = compute_variable_ranges(prob)
         na = scalar_field_dofs(a)
         @test total == na
@@ -179,7 +179,7 @@ end
         dist = Distributor(coords; dtype=Float64)
         xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(dist, "u", (xb,), Float64)
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         # Populate equation_data with explicit equation sizes.
         push!(prob.equation_data, Dict{String,Any}("equation_size" => 3))
         push!(prob.equation_data, Dict{String,Any}("equation_size" => 4))
@@ -194,7 +194,7 @@ end
         dist = Distributor(coords; dtype=Float64)
         xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(dist, "u", (xb,), Float64)
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         @test isempty(prob.equation_data)
         # Two raw equation strings, no equation_data -> the `equations` branch.
         push!(prob.equations, "u = 0")
@@ -275,7 +275,7 @@ end
         zb = ChebyshevT(coords["z"]; size=6, bounds=(-1.0, 1.0))
         domain = Domain(dist, (xb, zb))
         u = ScalarField(domain, "u")
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         solver = CstSolver(prob, CstBase([false, true]))  # x separable, z coupled
 
         # Default (global) group -> all-nothing.
@@ -305,7 +305,7 @@ end
         dist = Distributor(coords; dtype=Float64)
         xb = RealFourier(coords["x"]; size=8, bounds=(0.0, 2π))
         u = ScalarField(dist, "u", (xb,), Float64)
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         prob.domain = nothing   # force dist inference via variables
         solver = CstSolverNoBase(prob)
         # No base field -> matrix_coupling defaults to all-true (fill(true,dim)).
@@ -323,7 +323,7 @@ end
         zb = ChebyshevT(coords["z"]; size=6, bounds=(-1.0, 1.0))  # -> 6
         domain = Domain(dist, (xb, zb))
         u = ScalarField(domain, "u")
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
 
         cshape = Tarang.coefficient_shape(domain)
         @test get_separable_dim_size(prob, 1) == cshape[1]
@@ -341,7 +341,7 @@ end
         yb = RealFourier(coords["y"]; size=10, bounds=(0.0, 2π))
         domain = Domain(dist, (xb, yb))
         u = ScalarField(domain, "u")
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         prob.domain = nothing   # force the basis-reconstruction fallback
 
         # Axis 1 is the first Fourier axis -> 16/2 + 1 = 9.
@@ -380,7 +380,7 @@ end
         zb = ChebyshevT(coords["z"]; size=6, bounds=(-1.0, 1.0))
         domain = Domain(dist, (xb, zb))
         u = ScalarField(domain, "u")
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         mc = [false, true]
         solver = CstSolver(prob, CstBase(mc))
         out = get_matrix_coupling(solver, prob, dist)
@@ -436,7 +436,7 @@ end
         zb = ChebyshevT(coords["z"]; size=6, bounds=(-1.0, 1.0))
         domain = Domain(dist, (xb, zb))
         u = ScalarField(domain, "u")
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         solver = CstSolver(prob, CstBase([true, true]))   # all coupled
 
         subs = build_subsystems(solver)
@@ -451,7 +451,7 @@ end
         zb = ChebyshevT(coords["z"]; size=6, bounds=(-1.0, 1.0))
         domain = Domain(dist, (xb, zb))
         u = ScalarField(domain, "u")
-        prob = LBVP([u])
+        prob = LinearBoundaryValueProblem([u])
         solver = CstSolver(prob, CstBase([false, true]))  # x separable, z coupled
 
         subs = build_subsystems(solver)

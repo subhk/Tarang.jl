@@ -294,8 +294,7 @@ end
 function constant_field_like(field::ScalarField, value::Number)
     dtype = promote_type(field.dtype, typeof(value))
     const_field = _checkout_field_arithmetic_result(field, dtype)
-    ensure_layout!(const_field, :g)
-    if get_grid_data(const_field) !== nothing
+    if grid_data!(const_field) !== nothing
         fill!(get_grid_data(const_field), convert(dtype, value))
     end
     return const_field
@@ -363,8 +362,7 @@ function power_operands(a::ScalarField, p::Real)
     # Work in grid space for nonlinear operation
     ensure_layout!(a, :g)
     result = _checkout_field_arithmetic_result(a)
-    ensure_layout!(result, :g)
-    get_grid_data(result) .= get_grid_data(a) .^ p
+    grid_data!(result) .= get_grid_data(a) .^ p
     return result
 end
 
@@ -424,12 +422,10 @@ function negate_operand(a::ScalarField)
     result = _checkout_field_arithmetic_result(a)
     # Use the field's current layout to determine which data to negate
     if a.current_layout == :c
-        ensure_layout!(result, :c)
-        get_coeff_data(result) .= .-get_coeff_data(a)
+        coeff_data!(result) .= .-get_coeff_data(a)
     else
         # Default to grid space (covers :g and any uninitialized state)
-        ensure_layout!(result, :g)
-        get_grid_data(result) .= .-get_grid_data(a)
+        grid_data!(result) .= .-get_grid_data(a)
     end
     return result
 end
@@ -489,13 +485,11 @@ function subtract_operands(a::ScalarField, b::ScalarField)
     _check_field_arithmetic_compatibility(a, b, "subtract")
     result = _checkout_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
     if a.current_layout == :g && b.current_layout == :g
-        ensure_layout!(result, :g)
-        get_grid_data(result) .= get_grid_data(a) .- get_grid_data(b)
+        grid_data!(result) .= get_grid_data(a) .- get_grid_data(b)
     else
         ensure_layout!(a, :c)
         ensure_layout!(b, :c)
-        ensure_layout!(result, :c)
-        get_coeff_data(result) .= get_coeff_data(a) .- get_coeff_data(b)
+        coeff_data!(result) .= get_coeff_data(a) .- get_coeff_data(b)
     end
     return result
 end
@@ -595,8 +589,7 @@ function divide_operands(a::ScalarField, b::ScalarField)
     ensure_layout!(a, :g)
     ensure_layout!(b, :g)
     result = _checkout_field_arithmetic_result(a, promote_type(a.dtype, b.dtype))
-    ensure_layout!(result, :g)
-    get_grid_data(result) .= get_grid_data(a) ./ get_grid_data(b)
+    grid_data!(result) .= get_grid_data(a) ./ get_grid_data(b)
     return result
 end
 

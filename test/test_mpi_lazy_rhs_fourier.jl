@@ -44,7 +44,7 @@ _local_grid_data(field) = get_grid_data(field) isa PencilArrays.PencilArray ?
     domain = Domain(dist, (xbasis, ybasis))
 
     q = ScalarField(domain, "q")
-    problem = IVP([q])
+    problem = InitialValueProblem([q])
     add_equation!(problem, "∂t(q) = d(q,y)")
     solver = InitialValueSolver(problem, SBDF1(); dt=1e-3)
 

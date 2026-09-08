@@ -81,8 +81,7 @@ field_domain(::Operand) = nothing
 function _coeff_data(field)
     # Matrix assembly and subproblem I/O always work in coefficient space.
     # Force the layout once here so gather/scatter callers share the invariant.
-    ensure_layout!(field, :c)
-    if get_coeff_data(field) === nothing
+    if coeff_data!(field) === nothing
         throw(ArgumentError("Field $(field.name) has no coefficient data available."))
     end
     return get_coeff_data(field)

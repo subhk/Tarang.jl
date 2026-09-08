@@ -15,7 +15,7 @@ end
     q = ScalarField(domain, "q")
     set!(q, (x,) -> 1.0)
 
-    problem = IVP([q])
+    problem = InitialValueProblem([q])
     add_equation!(problem, "dt(q) = q")
     dt = 0.1
     solver = InitialValueSolver(problem, RK222(); dt)
@@ -59,7 +59,7 @@ end
     psi = ScalarField(domain, "psi")
     velocity = VectorField(domain, "u")
     tau_psi = ScalarField(dist, "tau_psi", (), Float64)
-    problem = IVP([zeta, psi, velocity, tau_psi])
+    problem = InitialValueProblem([zeta, psi, velocity, tau_psi])
     add_parameters!(problem; nu=1e-8, drag=1e-3)
     add_equation!(problem, "dt(zeta) = -u⋅∇(zeta) - drag*zeta - nu*Δ⁴(zeta)")
     add_equation!(problem, "Δ(psi) + tau_psi - zeta = 0")

@@ -1,16 +1,16 @@
-# Guard: distributed Chebyshev-Fourier STEADY solvers (LBVP + NLBVP) at np>=2.
+# Guard: distributed Chebyshev-Fourier STEADY solvers (LinearBoundaryValueProblem + NonlinearBoundaryValueProblem) at np>=2.
 #
-# The IVP subproblem steppers bracket every per-mode coeff gather/scatter with the
+# The InitialValueProblem subproblem steppers bracket every per-mode coeff gather/scatter with the
 # Cheb-Fourier solve-layout transpose (to_solve_layout!/from_solve_layout!), but
-# the steady BVP/NLBVP solvers in solver_stepping.jl did NOT — so the per-mode
+# the steady BVP/NonlinearBoundaryValueProblem solvers in solver_stepping.jl did NOT — so the per-mode
 # gather indexed the PencilFFT-output pencil (Chebyshev axis decomposed, Fourier
 # axis local) with solve-pencil index logic and produced a DimensionMismatch (or
-# wrong coefficients) at np>=2. The NLBVP Newton loop additionally deadlocked once
+# wrong coefficients) at np>=2. The NonlinearBoundaryValueProblem Newton loop additionally deadlocked once
 # the transpose was added because each rank's residual norm only covered its local
 # Fourier modes (different break iteration ⇒ mismatched collective count); the norm
 # is now Allreduced. Round-2 MPI CPU audit 2026-06-23.
 #
-# Manufactured Poisson Δu + lift(τ) = -2 (LBVP) / = u² + g (NLBVP), u(0)=u(Lz)=0
+# Manufactured Poisson Δu + lift(τ) = -2 (LinearBoundaryValueProblem) / = u² + g (NonlinearBoundaryValueProblem), u(0)=u(Lz)=0
 # ⇒ u = z(Lz - z), x-independent. Serial reference: sumsq=21.0, max≈0.950484.
 using Test
 using MPI
@@ -48,7 +48,7 @@ _gather(u) = (gd = get_grid_data(u);
         u    = ScalarField(dom, "u")
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
-        prob = Tarang.LBVP([u, tau1, tau2])
+        prob = Tarang.LinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2))
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = -2")
         Tarang.add_bc!(prob, "u(z=0) = 0")
@@ -65,7 +65,53 @@ _gather(u) = (gd = get_grid_data(u);
         end
     end
 
-    @testset "EVP eigenvalues match serial (global spectrum gather)" begin
+    @testset "Spatial wall values across distributed Fourier modes" begin
+        # Nonzero kx modes exercise boundary projection and rank ownership;
+        # constant walls alone cannot detect a missing spatial RHS refresh.
+        wall_zb = ChebyshevT(coords["z"]; size=16, bounds=(0.0, Lz))
+        wall_dom = Domain(dist, (wall_zb, xb))
+        wall_lb = derivative_basis(wall_zb, 1)
+        zgrid = Lz .* (1 .- cos.(π .* (0:15) ./ 15)) ./ 2
+        xgrid = (0:Nx-1) .* (2π/Nx)
+        for (problem_type, wall_case) in
+            ((LinearBoundaryValueProblem, :dirichlet),
+             (NonlinearBoundaryValueProblem, :dirichlet),
+             (LinearBoundaryValueProblem, :neumann),
+             (LinearBoundaryValueProblem, :normal_coordinate))
+            @testset "$problem_type / $wall_case" begin
+                u = ScalarField(wall_dom, "u")
+                tau1 = ScalarField(dist, "tau1", (), Float64)
+                tau2 = ScalarField(dist, "tau2", (), Float64)
+                prob = problem_type([u, tau1, tau2])
+                add_parameters!(prob; Lz=Lz, amplitude=1.25,
+                                l1=lift(tau1, wall_lb, -1),
+                                l2=lift(tau2, wall_lb, -2))
+                add_equation!(prob, "lap(u) + l1 + l2 = 0")
+                expected = if wall_case == :dirichlet
+                    add_bc!(prob, "u(z=0) = amplitude*sin(x)")
+                    add_bc!(prob, "u(z=Lz) = 0")
+                    [1.25*sin(x)*sinh(Lz-z)/sinh(Lz) for z in zgrid, x in xgrid]
+                elseif wall_case == :neumann
+                    add_bc!(prob, "∂z(u)(z=0) = amplitude*cos(x)")
+                    add_bc!(prob, "u(z=Lz) = 0")
+                    [-1.25*cos(x)*sinh(Lz-z)/cosh(Lz) for z in zgrid, x in xgrid]
+                else
+                    add_bc!(prob, "u(z=0) = 0")
+                    add_bc!(prob, "u(z=Lz) = z*cos(x)")
+                    [Lz*cos(x)*sinh(z)/sinh(Lz) for z in zgrid, x in xgrid]
+                end
+                solver = BoundaryValueSolver(prob)
+                solve!(solver)
+                ensure_layout!(u, :g)
+                values = _gather(u)
+                if rank == 0
+                    @test maximum(abs.(values .- expected)) < 1e-8
+                end
+            end
+        end
+    end
+
+    @testset "EigenvalueProblem eigenvalues match serial (global spectrum gather)" begin
         # Diffusion dt(u)=Δu ⇒ σ_{kx,n} = -(kx² + (nπ/Lz)²). Each rank's subproblems
         # cover only its local Fourier modes, so the smallest-|σ| selection must
         # gather every rank's eigenvalues; otherwise np>=2 returns local-subset
@@ -75,7 +121,7 @@ _gather(u) = (gd = get_grid_data(u);
         u    = ScalarField(dom, "u")
         tau1 = ScalarField(dist, "tau1", (), Float64)
         tau2 = ScalarField(dist, "tau2", (), Float64)
-        prob = Tarang.EVP([u, tau1, tau2]; eigenvalue=:σ)
+        prob = Tarang.EigenvalueProblem([u, tau1, tau2]; eigenvalue=:σ)
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2))
         Tarang.add_equation!(prob, "dt(u) - Δ(u) - l1 - l2 = 0")
         Tarang.add_bc!(prob, "u(z=0) = 0")
@@ -103,7 +149,7 @@ _gather(u) = (gd = get_grid_data(u);
         else
             Tarang.get_cpu_data(gd0) .= gglob
         end
-        prob = Tarang.NLBVP([u, tau1, tau2])
+        prob = Tarang.NonlinearBoundaryValueProblem([u, tau1, tau2])
         add_parameters!(prob; Lz=Lz, l1=lift(tau1, lb, -1), l2=lift(tau2, lb, -2), g=g)
         Tarang.add_equation!(prob, "Δ(u) + l1 + l2 = u*u + g")
         Tarang.add_bc!(prob, "u(z=0) = 0")

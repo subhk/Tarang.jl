@@ -180,9 +180,8 @@ function evaluate_transform_multiply(field1::ScalarField, field2::ScalarField, e
     ensure_layout!(field1, :g)
     ensure_layout!(field2, :g)
     result = ScalarField(field1.dist, "_nl_product", field1.bases, field1.dtype)
-    ensure_layout!(result, :g)
 
-    result_data = get_grid_data(result)
+    result_data = grid_data!(result)
     field1_data = get_grid_data(field1)
     field2_data = get_grid_data(field2)
 

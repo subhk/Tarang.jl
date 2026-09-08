@@ -68,7 +68,7 @@ forcing = StochasticForcing(
     architecture = device,
 )
 
-problem = IVP([ζ, ψ, u, tau_ψ])
+problem = InitialValueProblem([ζ, ψ, u, tau_ψ])
 add_equation!(problem, "∂t(ζ) = -u⋅∇(ζ) - drag*ζ - nu*Δ⁴(ζ)")
 add_equation!(problem, "Δ(ψ) + tau_ψ - ζ = 0")
 add_equation!(problem, "u - skew(grad(ψ)) = 0")
@@ -459,7 +459,7 @@ StochasticForcing(;
 ## See Also
 
 - [Timesteppers](timesteppers.md) - Time integration methods
-- [Solvers](solvers.md) - Using forcing with IVP solvers
+- [Solvers](solvers.md) - Using forcing with InitialValueProblem solvers
 - [API: Stochastic Forcing](../api/stochastic_forcing.md) - Complete API reference
 
 ## References

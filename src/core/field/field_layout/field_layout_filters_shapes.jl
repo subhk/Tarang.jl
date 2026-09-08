@@ -117,11 +117,9 @@ end
 """Get field data in specified layout"""
 function get_data(field::ScalarField, layout::Symbol)
     if layout == :g
-        ensure_layout!(field, :g)
-        return get_grid_data(field)
+        return grid_data!(field)
     elseif layout == :c
-        ensure_layout!(field, :c)
-        return get_coeff_data(field)
+        return coeff_data!(field)
     else
         throw(ArgumentError("Unknown layout: $layout"))
     end

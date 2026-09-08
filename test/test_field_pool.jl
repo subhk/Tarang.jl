@@ -6,7 +6,7 @@ function _trivial_1d_solver(timestepper)
     u = ScalarField(domain, "u")
     set!(u, (x,) -> sin(x))
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "∂t(u) = 0")
     return InitialValueSolver(problem, timestepper; dt=0.01)
 end
@@ -280,8 +280,8 @@ end
         u = ScalarField(domain, "u")
         set!(u, (x,) -> sin(x))
 
-        # Create a simple IVP: du/dt = 0 (trivial RHS)
-        problem = IVP([u])
+        # Create a simple InitialValueProblem: du/dt = 0 (trivial RHS)
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = 0")
         solver = InitialValueSolver(problem, RK111(); dt=0.01)
 
@@ -305,7 +305,7 @@ end
         u = ScalarField(domain, "u")
         set!(u, (x,) -> sin(x))
 
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "∂t(u) = 0")
         solver = InitialValueSolver(problem, RK111(); dt=0.01)
 

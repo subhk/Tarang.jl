@@ -38,7 +38,7 @@ function _solve_decay_explicit(ts, dt; T_final = 1.0)
     ensure_layout!(u, :g)
     fill!(Tarang.get_grid_data(u), 1.0)            # u(x,0) = 1 (mean mode only)
 
-    problem = IVP([u])
+    problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) = -u")
     solver = InitialValueSolver(problem, ts; dt = dt)
     # NOTE: deliberately do NOT attach a SpectralLinearOperator → explicit fallback.
@@ -110,7 +110,7 @@ end
         fill!(Tarang.get_grid_data(u), 1.0)            # mean mode only (k=0)
 
         L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)  # 0 at k=0
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
         solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.02)
         Tarang.set_spectral_linear_operator!(solver, L)
@@ -148,7 +148,7 @@ end
             u0 = maximum(abs, Tarang.get_grid_data(u))
 
             L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)
-            problem = IVP([u])
+            problem = InitialValueProblem([u])
             add_equation!(problem, "dt(u) = 0")
             solver = InitialValueSolver(problem, ts; dt = 0.005)
             Tarang.set_spectral_linear_operator!(solver, L)
@@ -183,7 +183,7 @@ end
             u0 = maximum(abs, Tarang.get_grid_data(u))
 
             L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 1.0)
-            problem = IVP([u])
+            problem = InitialValueProblem([u])
             add_equation!(problem, "dt(u) = 0")
             solver = InitialValueSolver(problem, ts; dt = 0.25)  # z = 0.25·36 = 9
             Tarang.set_spectral_linear_operator!(solver, L)
@@ -214,7 +214,7 @@ end
         fill!(Tarang.get_grid_data(u), 1.0)            # mean mode only (k=0)
 
         L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)  # 0 at k=0
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
         solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.01)
         Tarang.set_spectral_linear_operator!(solver, L)
@@ -237,7 +237,7 @@ end
         fill!(Tarang.get_grid_data(u), 1.0)
 
         L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)
-        problem = IVP([u])
+        problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
         solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.01)
         Tarang.set_spectral_linear_operator!(solver, L)

@@ -190,8 +190,7 @@ ux, uz = grid_data(u)         # returns array of component data
 ```
 """
 function grid_data(field::ScalarField)
-    ensure_layout!(field, :g)
-    return get_grid_data(field)
+    return grid_data!(field)
 end
 
 function grid_data(field::VectorField)
@@ -225,8 +224,7 @@ coeffs = coeff_data(T)        # auto-transforms to coefficient space
 ```
 """
 function coeff_data(field::ScalarField)
-    ensure_layout!(field, :c)
-    return get_coeff_data(field)
+    return coeff_data!(field)
 end
 
 function coeff_data(field::VectorField)
@@ -281,8 +279,7 @@ end
 Set all grid points to a constant value.
 """
 function set!(field::ScalarField, value::Number)
-    ensure_layout!(field, :g)
-    get_grid_data(field) .= value
+    grid_data!(field) .= value
     return field
 end
 

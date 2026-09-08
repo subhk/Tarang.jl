@@ -1,4 +1,4 @@
-# Guard: distributed NONLINEAR Cheb-Fourier IVP solve == serial (np >= 2).
+# Guard: distributed NONLINEAR Cheb-Fourier InitialValueProblem solve == serial (np >= 2).
 #
 # The hardest MPI CPU integration path: a channel-like Burgers problem
 #   ∂t(b) - κ·div(grad_b) + τ_lift(τ₂) = -b·∂x(b),  b(z=0)=b(z=1)=0
@@ -18,7 +18,7 @@ const comm = MPI.COMM_WORLD
 const rank = MPI.Comm_rank(comm)
 const nprocs = MPI.Comm_size(comm)
 if nprocs < 2
-    rank == 0 && @warn "Distributed nonlinear Cheb-Fourier IVP test requires >= 2 ranks; got $nprocs"
+    rank == 0 && @warn "Distributed nonlinear Cheb-Fourier InitialValueProblem test requires >= 2 ranks; got $nprocs"
     MPI.Finalize(); exit(0)
 end
 
@@ -62,7 +62,7 @@ function _assign_local!(field, gdata)
     end
 end
 
-@testset "Distributed NONLINEAR Cheb-Fourier IVP matches serial (rank=$rank)" begin
+@testset "Distributed NONLINEAR Cheb-Fourier InitialValueProblem matches serial (rank=$rank)" begin
     kappa = 0.1; Lz = 1.0; dt = 1e-3; NSTEPS = 15; Nz = 12; Nx = 8
     coords = CartesianCoordinates("z", "x")
     dist = Distributor(coords; dtype=Float64, architecture=CPU())
@@ -76,7 +76,7 @@ end
     lift_basis = derivative_basis(zbasis, 1)
     τ_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * τ_lift(tau_b1)
-    problem = IVP([b, tau_b1, tau_b2])
+    problem = InitialValueProblem([b, tau_b1, tau_b2])
     add_parameters!(problem, kappa=kappa, ez=ez, grad_b=grad_b, τ_lift=τ_lift)
     add_equation!(problem, "∂t(b) - kappa*div(grad_b) + τ_lift(tau_b2) = -b*∂x(b)")
     add_bc!(problem, "b(z=0) = 0")

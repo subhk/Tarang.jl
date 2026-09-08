@@ -59,7 +59,7 @@ include("operations.jl")
 # 10. Tensor operations and special operators
 include("tensor.jl")
 
-# 11. Symbolic differentiation for NLBVP Jacobians
+# 11. Symbolic differentiation for NonlinearBoundaryValueProblem Jacobians
 include("symbolic_diff.jl")
 
 # 12. Main evaluate dispatch and exports

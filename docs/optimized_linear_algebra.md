@@ -282,7 +282,7 @@ end
 using Tarang
 
 # 1. Create problem with appropriate structures
-problem = IVP([u, v, p])  # Stokes equations
+problem = InitialValueProblem([u, v, p])  # Stokes equations
 
 # 2. Use optimized solver
 solver = OptimizedInitialValueSolver(problem, RK443(),

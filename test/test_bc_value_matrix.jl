@@ -12,7 +12,7 @@ tested, the value is not, and the failure returns a plausible number. A BC that
 silently freezes at its initial value is especially quiet — the solve still runs,
 still converges, and is simply solving a different problem.
 
-Each case drives a real Fourier×Chebyshev IVP with a tau/lift formulation, steps
+Each case drives a real Fourier×Chebyshev InitialValueProblem with a tau/lift formulation, steps
 it, and compares the boundary row against the analytic right-hand side evaluated
 at the FINAL simulation time. Evaluating at the final time is what makes the test
 discriminating: `sin(2πt)` and `0.3t` are both zero at `t = 0`, so a BC pinned to
@@ -50,7 +50,7 @@ function _bc_matrix_run(bcstr::AbstractString; nsteps = 50, dt = 0.004)
     _, ez = unit_vector_fields(coords, dist)
     grad_b = grad(b) + ez * tau_lift(tau1)
 
-    prob = IVP([b, tau1, tau2])
+    prob = InitialValueProblem([b, tau1, tau2])
     add_parameters!(prob, kappa = 0.1, ez = ez, grad_b = grad_b, tau_lift = tau_lift)
     add_equation!(prob, "dt(b) - kappa*div(grad_b) + tau_lift(tau2) = 0")
     add_bc!(prob, "b(z=0) = $bcstr")

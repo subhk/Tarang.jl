@@ -9,7 +9,7 @@ This guide provides an overview of the Tarang framework. Each section describes 
 - Distribution: `Distributor(coords; mesh=(Px, Py, ...), dtype, device)` for processor meshes.
 
 ## Problems & Boundary Conditions
-- Problems: `IVP`, `LBVP`, `NLBVP`, `EVP`.
+- Problems: `InitialValueProblem`, `LinearBoundaryValueProblem`, `NonlinearBoundaryValueProblem`, `EigenvalueProblem`.
 - Equations & BCs: Use `add_equation!(problem, "...")` for both PDEs and boundary conditions. Dedalus-style BC syntax `field(coord=value)` is auto-detected and converted to `Interpolate` operators.
 - Time/space-dependent values via string expressions (t, x, y, z) or `TimeDependentValue`/`SpaceDependentValue`.
 - Tau/lift: automatic through `BoundaryConditionManager`; `register_tau_field!` for custom tau fields.

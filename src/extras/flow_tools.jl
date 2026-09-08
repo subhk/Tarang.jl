@@ -53,8 +53,7 @@ function turbulence_statistics(velocity::VectorField)
     # Maximum velocity
     max_vel = 0.0
     for component in velocity.components
-        ensure_layout!(component, :g)
-        max_vel = max(max_vel, maximum(abs, parent(get_grid_data(component))))
+        max_vel = max(max_vel, maximum(abs, parent(grid_data!(component))))
     end
 
     if use_mpi

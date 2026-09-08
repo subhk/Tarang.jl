@@ -241,6 +241,17 @@ Threads.@threads for i in 1:N
 end
 ```
 
+Concurrent CPU Fourier derivatives reserve separate FFT workspaces. Borrowed
+derivative results rotate within each task, while public evaluations return owned
+results. `BlockDiagonalSolver` and `SPQRSolver` can share their factorization
+between concurrent calls with distinct inputs and destinations; each active solve
+reserves its own temporary buffers, including when an interactive thread pool is
+enabled or a task yields.
+
+CPU timesteppers still visit subproblems sequentially within each MPI rank.
+Their existing parallel execution comes from FFTW, BLAS, CPU kernels, and MPI;
+increasing Julia's thread count does not parallelize every solver loop.
+
 ## Resolution Guidelines
 
 ### Minimum Resolution
@@ -266,7 +277,7 @@ function heat_max(N, nsteps; nu=0.1, dt=1e-3)
     domain = Domain(dist, (xb, yb))
 
     v = ScalarField(domain, "v")
-    problem = IVP([v])
+    problem = InitialValueProblem([v])
     add_parameters!(problem, nu=nu)
     add_equation!(problem, "∂t(v) - nu*lap(v) = 0")
     set!(v, (x, y) -> sin(x) * cos(y))

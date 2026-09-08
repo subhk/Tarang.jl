@@ -50,7 +50,7 @@ end
     ψ = ScalarField(domain, "ψ")
     u = VectorField(domain, "u")
 
-    problem = IVP([q, ψ, u])
+    problem = InitialValueProblem([q, ψ, u])
     add_equation!(problem, "∂t(q) = 0")
     add_equation!(problem, "Δ(ψ) - q = 0")
     add_equation!(problem, "u - skew(grad(ψ)) = 0")

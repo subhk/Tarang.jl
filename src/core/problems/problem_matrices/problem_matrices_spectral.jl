@@ -362,6 +362,17 @@ end
     Build matrix block for expression acting on variable.
     Following expression_matrices pattern.
     """
+function build_expression_matrix_block(expr::Component, var, eqn_size::Int, var_size::Int)
+    inner_size = _equation_output_dofs(expr.operand)
+    rows = _component_output_range(expr, inner_size)
+    inner = build_expression_matrix_block(expr.operand, var, inner_size, var_size)
+    selected = inner[rows, :]
+    # The global builder also passes reduced equation sizes through wrappers
+    # such as interpolation. Preserve its row projection after selecting the
+    # component, so reduction never changes which parent columns are retained.
+    return length(rows) == eqn_size ? selected : _identity_block(eqn_size, length(rows)) * selected
+end
+
 function build_expression_matrix_block(expr, var, eqn_size::Int, var_size::Int)
 
     # ── 1. Direct variable reference ────────────────────────────
@@ -773,9 +784,9 @@ function _extract_scalar(expr)
     isa(expr, PowerOperator)    && return _extract_scalar(expr.left) ^ _extract_scalar(expr.right)
     if isa(expr, ScalarField)
         gdata = get_grid_data(expr)
-        gdata !== nothing && length(gdata) >= 1 && return real(gdata[1])
+        gdata !== nothing && length(gdata) >= 1 && return real(_constant_field_value_on_host(gdata))
         cdata = get_coeff_data(expr)
-        cdata !== nothing && length(cdata) >= 1 && return real(cdata[1])
+        cdata !== nothing && length(cdata) >= 1 && return real(_constant_field_value_on_host(cdata))
         # No data to read. Substituting zero here silently turns the whole term
         # off — `dt(u) - nu0*lap(u) = 0` with an unset `nu0` integrates as
         # inviscid, which looks like a plausible answer. Note a 0-D

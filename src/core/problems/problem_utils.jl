@@ -51,21 +51,24 @@ function validate_problem(problem::Problem)
 
     # For IVPs/EVPs: equations should match variables exactly
     # For BVPs: equations should be >= variables (includes BCs)
-    if isa(problem, LBVP) || isa(problem, NLBVP)
+    if isa(problem, LinearBoundaryValueProblem) || isa(problem, NonlinearBoundaryValueProblem)
         # BVPs can have extra equations for boundary conditions
         if length(problem.equations) < length(problem.variables)
             push!(errors, "Number of equations ($(length(problem.equations))) is less than number of variables ($(length(problem.variables)))")
         end
     else
-        # IVP/EVP: strict match
-        if length(problem.equations) != length(problem.variables)
+        # A vector equation counts as one string, while a component boundary
+        # condition counts as a scalar string. When those counts differ, accept
+        # the system only if the parsed component-aware row count is square.
+        if length(problem.equations) != length(problem.variables) &&
+           !_component_equations_are_balanced(problem)
             push!(errors, "Number of equations ($(length(problem.equations))) does not match number of variables ($(length(problem.variables)))")
         end
     end
 
     # Check for required boundary conditions in boundary value problems
     # Note: BCs can be embedded in equations via field(coord=value) syntax
-    if isa(problem, LBVP) || isa(problem, NLBVP)
+    if isa(problem, LinearBoundaryValueProblem) || isa(problem, NonlinearBoundaryValueProblem)
         # For BVPs, we either need explicit BCs or equations > variables (implicit BCs)
         has_explicit_bcs = length(problem.boundary_conditions) > 0 || length(problem.bc_manager.conditions) > 0
         has_implicit_bcs = length(problem.equations) > length(problem.variables)
@@ -88,6 +91,16 @@ function validate_problem(problem::Problem)
     end
     
     return true
+end
+
+function _component_equations_are_balanced(problem::Problem)
+    any(var -> var isa Union{VectorField, TensorField}, problem.variables) || return false
+    rows = 0
+    for equation in problem.equations
+        lhs, _ = split_equation(equation)
+        rows += _equation_output_dofs(parse_expression(strip(lhs), problem.namespace))
+    end
+    return rows == sum(_coeff_space_dofs, problem.variables)
 end
 
 # Substitutions and namespace management
@@ -638,7 +651,7 @@ Add multiple equations to a problem with cleaner syntax.
 
 # Example
 ```julia
-problem = IVP([u, v, p])
+problem = InitialValueProblem([u, v, p])
 
 @equations problem begin
     "∂t(u) - ν*Δ(u) + ∇(p) = -u⋅∇(u)"
@@ -768,7 +781,7 @@ end
 # ============================================================================
 
 # Export problem types
-export Problem, IVP, LBVP, NLBVP, EVP
+export Problem, InitialValueProblem, LinearBoundaryValueProblem, NonlinearBoundaryValueProblem, EigenvalueProblem
 
 # Export core API functions
 export add_equation!, add_bc!, add_substitution!

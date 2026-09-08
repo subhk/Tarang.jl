@@ -1,16 +1,27 @@
 # Problems API
 
-Problems define the PDE systems to be solved, including equations, parameters, and boundary conditions. Tarang.jl supports Initial Value Problems (IVP), Boundary Value Problems (LBVP/NLBVP), and Eigenvalue Problems (EVP).
+Problems define the PDE systems to be solved, including equations, parameters, and boundary conditions. Tarang.jl provides `InitialValueProblem`, `LinearBoundaryValueProblem`, `NonlinearBoundaryValueProblem`, and `EigenvalueProblem`.
+
+These names are exported by both `Tarang` and `Tarang.Problems`. The abbreviated
+names have been removed. Update existing constructors, imports, and type
+annotations using this mapping:
+
+| Removed name | Replacement |
+| --- | --- |
+| `IVP` | `InitialValueProblem` |
+| `LBVP` | `LinearBoundaryValueProblem` |
+| `NLBVP` | `NonlinearBoundaryValueProblem` |
+| `EVP` | `EigenvalueProblem` |
 
 ## Problem Types
 
-### Initial Value Problems (IVP)
+### Initial Value Problems (InitialValueProblem)
 
 Time-evolution problems where PDEs are integrated forward in time from initial conditions.
 
 **Constructor**:
 ```julia
-IVP(variables::Vector{<:Operand})
+InitialValueProblem(variables::Vector{<:Operand})
 ```
 
 **Arguments**:
@@ -28,7 +39,7 @@ dom = Domain(dist, (xb, zb))
 T = ScalarField(dom, "T")
 u = VectorField(dom, "u")
 
-problem = IVP([T, u])
+problem = InitialValueProblem([T, u])
 add_parameters!(problem, kappa=0.05, nu=0.05)
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 add_equation!(problem, "∂t(u) - nu*Δ(u) = 0")
@@ -48,13 +59,13 @@ run!(solver; stop_iteration=20, progress=false)
 
 ---
 
-### Linear Boundary Value Problems (LBVP)
+### Linear Boundary Value Problems (LinearBoundaryValueProblem)
 
 Steady-state linear problems with boundary conditions.
 
 **Constructor**:
 ```julia
-LBVP(variables::Vector{<:Operand})
+LinearBoundaryValueProblem(variables::Vector{<:Operand})
 ```
 
 **Arguments**:
@@ -81,7 +92,7 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)           # one tau per BC
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "Δ(u) + l1 + l2 = -2")
 add_bc!(problem, "u(z=0)   = 0")
@@ -105,19 +116,19 @@ ensure_layout!(u, :g)            # scatter writes coefficients; switch to grid
 
 ---
 
-### Nonlinear Boundary Value Problems (NLBVP)
+### Nonlinear Boundary Value Problems (NonlinearBoundaryValueProblem)
 
 Steady-state nonlinear problems with boundary conditions.
 
 **Constructor**:
 ```julia
-NLBVP(variables::Vector{<:Operand})
+NonlinearBoundaryValueProblem(variables::Vector{<:Operand})
 ```
 
 **Arguments**:
 - `variables`: Vector of unknowns (fields plus the `tau` variables)
 
-Same tau-method boundary handling as the LBVP (tau variables + `lift` + `add_bc!`).
+Same tau-method boundary handling as the LinearBoundaryValueProblem (tau variables + `lift` + `add_bc!`).
 The nonlinear terms go on the right-hand side; the solver linearizes them with a
 symbolic Frechet derivative and runs a per-Fourier-mode Newton iteration (the
 Jacobian `dF = ∂(LHS − RHS)/∂u` is rebuilt each iteration with the current state).
@@ -126,12 +137,12 @@ Jacobian `dF = ∂(LHS − RHS)/∂u` is rebuilt each iteration with the current
 `g = -2 - u_exact²` so `u_exact = z(Lz - z)`; verified to ~1e-12):
 
 ```julia
-# domain / fields / taus as in the LBVP example above (u, tau1, tau2, lb2)
+# domain / fields / taus as in the LinearBoundaryValueProblem example above (u, tau1, tau2, lb2)
 g = ScalarField(dom, "g"); ensure_layout!(g, :g)
 zg = create_meshgrid(dom; on_device=false)["z"]
 get_grid_data(g) .= -2 .- (zg .* (1.0 .- zg)).^2
 
-problem = NLBVP([u, tau1, tau2])
+problem = NonlinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2), g=g)
 add_equation!(problem, "Δ(u) + l1 + l2 = u*u + g")   # nonlinearity on the RHS
 add_bc!(problem, "u(z=0)   = 0")
@@ -154,13 +165,13 @@ Jacobian.
 
 ---
 
-### Eigenvalue Problems (EVP)
+### Eigenvalue Problems (EigenvalueProblem)
 
 Linear eigenvalue problems for stability analysis and normal modes.
 
 **Constructor**:
 ```julia
-EVP(variables::Vector{<:Operand}; eigenvalue::Symbol)
+EigenvalueProblem(variables::Vector{<:Operand}; eigenvalue::Symbol)
 ```
 
 **Arguments**:
@@ -189,7 +200,7 @@ tau1 = ScalarField(dist, "tau1", (), Float64)
 tau2 = ScalarField(dist, "tau2", (), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = EVP([u, tau1, tau2]; eigenvalue=:σ)
+problem = EigenvalueProblem([u, tau1, tau2]; eigenvalue=:σ)
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "dt(u) - Δ(u) - l1 - l2 = 0")   # dt(u) → λu marks M
 add_bc!(problem, "u(z=0)   = 0")
@@ -225,7 +236,7 @@ add_equation!(problem, equation_string::String)
 ```
 
 **Arguments**:
-- `problem`: Problem object (IVP, LBVP, NLBVP, or EVP)
+- `problem`: Problem object (InitialValueProblem, LinearBoundaryValueProblem, NonlinearBoundaryValueProblem, or EigenvalueProblem)
 - `equation_string`: String equation using symbolic syntax
 
 The parser reads the string against the problem namespace: the problem's own
@@ -246,10 +257,10 @@ timesteppers only apply the implicit solve to the LHS.
 #### Simple equations
 
 ```julia
-# Diffusion (IVP)
+# Diffusion (InitialValueProblem)
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = 0")
 
-# Poisson (LBVP; `l1`, `l2` are the lifted tau terms)
+# Poisson (LinearBoundaryValueProblem; `l1`, `l2` are the lifted tau terms)
 add_equation!(problem, "Δ(phi) + l1 + l2 = rho")
 ```
 
@@ -261,7 +272,7 @@ add_equation!(problem, "Δ(phi) + l1 + l2 = rho")
     first-order system instead:
 
     ```julia
-    problem = IVP([u, v])
+    problem = InitialValueProblem([u, v])
     add_parameters!(problem, c2=1.0)
     add_equation!(problem, "∂t(u) - v = 0")
     add_equation!(problem, "∂t(v) - c2*Δ(u) = 0")
@@ -282,7 +293,7 @@ u = ScalarField(dom, "u")   # x-velocity
 w = ScalarField(dom, "w")   # z-velocity
 T = ScalarField(dom, "T")
 
-problem = IVP([u, w, T])
+problem = InitialValueProblem([u, w, T])
 add_parameters!(problem, nu=0.01, kappa=0.01, Ra=100.0, Pr=1.0)
 
 # Momentum: buoyancy is linear in T, so it belongs on the LHS with the diffusion
@@ -301,7 +312,7 @@ Vector notation works too, and is preferred when the unknown is a `VectorField`
 T = ScalarField(dom, "T")
 u = VectorField(dom, "u")
 
-problem = IVP([T, u])
+problem = InitialValueProblem([T, u])
 add_parameters!(problem, nu=0.01, kappa=0.01)
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)")
 add_equation!(problem, "∂t(u) - nu*Δ(u) = -u⋅∇(u)")
@@ -323,7 +334,7 @@ space- or time-dependent BC values (see
 [Boundary Conditions](#Boundary-Conditions) below).
 
 ```julia
-problem = IVP([u, w, T])
+problem = InitialValueProblem([u, w, T])
 
 # Dimensionless numbers
 add_parameters!(problem, Re=1000.0, Pr=0.7, Ra=1e6)
@@ -520,7 +531,7 @@ directly: `no_slip!(problem, "u", "z", 0.0)`, `fixed_value!(problem, "T", "z", 0
 For incompressible flow, pressure is defined only up to a constant. Fix the gauge with an integral constraint:
 
 ```julia
-tau_p = ScalarField(dist, "tau_p", (), Float64)   # add tau_p to the IVP variables
+tau_p = ScalarField(dist, "tau_p", (), Float64)   # add tau_p to the InitialValueProblem variables
 add_equation!(problem, "trace(grad_u) + tau_p = 0")
 add_bc!(problem, "integ(p) = 0")
 ```
@@ -536,7 +547,7 @@ field term becomes a column of the BC row, so it has to be an unknown:
 
 ```julia
 # T and S are both unknowns; S is pinned to 1, and T is tied to it at the wall
-problem = LBVP([T, S, tau_T1, tau_T2, tau_S1, tau_S2])
+problem = LinearBoundaryValueProblem([T, S, tau_T1, tau_T2, tau_S1, tau_S2])
 add_parameters!(problem; lT1=lift(tau_T1, lb2, -1), lT2=lift(tau_T2, lb2, -2),
                          lS1=lift(tau_S1, lb2, -1), lS2=lift(tau_S2, lb2, -2))
 add_equation!(problem, "Δ(T) + lT1 + lT2 = 0")
@@ -638,8 +649,8 @@ validate_problem(problem)   # returns true, or throws ArgumentError
 
 **Checks**:
 - There is at least one variable and at least one equation
-- IVP/EVP: `length(problem.equations) == length(problem.variables)`
-- LBVP/NLBVP: `length(problem.equations) >= length(problem.variables)`, and at least one boundary condition exists
+- InitialValueProblem/EigenvalueProblem: `length(problem.equations) == length(problem.variables)`
+- LinearBoundaryValueProblem/NonlinearBoundaryValueProblem: `length(problem.equations) >= length(problem.variables)`, and at least one boundary condition exists
 - Any BC objects registered in `bc_manager` are self-consistent
 
 **Example**:
@@ -648,7 +659,7 @@ validate_problem(problem)   # returns true, or throws ArgumentError
 T = ScalarField(dom, "T")
 u = VectorField(dom, "u")
 
-problem = IVP([T, u])                                  # 2 declared variables
+problem = InitialValueProblem([T, u])                                  # 2 declared variables
 add_parameters!(problem, kappa=0.05, nu=0.05)
 add_equation!(problem, "∂t(T) - kappa*Δ(T) = -u⋅∇(T)") # 2 equations
 add_equation!(problem, "∂t(u) - nu*Δ(u) = 0")
@@ -659,7 +670,7 @@ validate_problem(problem)   # true
 !!! warning "It counts declared operands, not degrees of freedom"
     A `VectorField` counts as **one** variable, and boundary conditions added
     with `add_bc!` are **not** counted as equations. A well-posed tau-method
-    problem therefore trips the count check — e.g. `LBVP([u, tau1, tau2])` with
+    problem therefore trips the count check — e.g. `LinearBoundaryValueProblem([u, tau1, tau2])` with
     one bulk equation and two `add_bc!` calls throws
     *"Number of equations (1) is less than number of variables (3)"*. The BCs are
     merged into `problem.equations` when the solver is built, so the very same call
@@ -686,7 +697,7 @@ w = ScalarField(dom, "w")
 # Vorticity ω = ∂x(w) - ∂z(u), built once as an operator
 omega = d(w, coords["x"], 1) - d(u, coords["z"], 1)
 
-problem = IVP([u, w])
+problem = InitialValueProblem([u, w])
 add_parameters!(problem, nu=0.01, omega=omega)
 add_equation!(problem, "∂t(u) - nu*Δ(u) = 0")
 add_equation!(problem, "∂t(w) - nu*Δ(w) = omega")
@@ -722,14 +733,14 @@ tau1 = ScalarField(dist, "tau1", (xb,), Float64)   # per-Fourier-mode tau (seria
 tau2 = ScalarField(dist, "tau2", (xb,), Float64)
 lb2  = derivative_basis(zb, 2)
 
-problem = LBVP([u, tau1, tau2])
+problem = LinearBoundaryValueProblem([u, tau1, tau2])
 add_parameters!(problem; l1=lift(tau1, lb2, -1), l2=lift(tau2, lb2, -2))
 add_equation!(problem, "Δ(u) + l1 + l2 = -2")
 ```
 
 The lifted taus add the extra degrees of freedom that make each per-mode
 subproblem square, so the boundary conditions can be enforced exactly. See
-[Tau Method](../pages/tau_method.md) for the full treatment, and the LBVP example
+[Tau Method](../pages/tau_method.md) for the full treatment, and the LinearBoundaryValueProblem example
 above for a complete run.
 
 ### Constraints
@@ -778,7 +789,7 @@ lift_basis = derivative_basis(zbasis, 1)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_T = grad(T) + ez * τ_lift(tau_T1)
 
-problem = IVP([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, T, u, tau_p, tau_T1, tau_T2, tau_u1, tau_u2])
 add_parameters!(problem, nu=Prandtl, buoy=Rayleigh*Prandtl, ez=ez,
                 grad_u=grad_u, grad_T=grad_T, τ_lift=τ_lift)
 

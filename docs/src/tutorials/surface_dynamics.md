@@ -80,8 +80,8 @@ a full QG system: the boundary fields provide Neumann boundary conditions for a 
 elliptic problem, and the velocity is `∇⊥ψ` evaluated at each surface.
 
 **This mode does not currently work.** `boundary_advection_diffusion_setup` builds the
-interior LBVP *without installing any boundary conditions on it*, so the first
-`bad_step!` — which solves that LBVP — fails validation:
+interior LinearBoundaryValueProblem *without installing any boundary conditions on it*, so the first
+`bad_step!` — which solves that LinearBoundaryValueProblem — fails validation:
 
 ```
 ArgumentError: Problem validation failed:
@@ -188,7 +188,7 @@ DiffusionSpec(type=:none)
     `DiffusionSpec` accepts an `implicit` flag, but this module has only explicit
     timesteppers. Setting `implicit=true` emits a warning and integrates the diffusion
     term explicitly anyway. Choose `dt` accordingly, or use the main solver framework
-    (`IVP` + `InitialValueSolver`) if you need a true implicit diffusion solve.
+    (`InitialValueProblem` + `InitialValueSolver`) if you need a true implicit diffusion solve.
 
 ## Complete SQG Example
 
@@ -458,5 +458,5 @@ the mixed-transform planner rather than producing an incorrect inversion.
 ## See Also
 
 - [Operators](../pages/operators.md): Fractional Laplacian details
-- [Problems](../pages/problems.md): IVP and LBVP setup
+- [Problems](../pages/problems.md): InitialValueProblem and LinearBoundaryValueProblem setup
 - [Solvers](../pages/solvers.md): Timestepping and BVP solvers

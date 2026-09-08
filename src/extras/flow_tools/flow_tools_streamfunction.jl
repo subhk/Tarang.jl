@@ -5,7 +5,7 @@
     Calculate streamfunction for 2D incompressible flow.
 
     Solves the Poisson equation ∇²ψ = ω to obtain streamfunction from vorticity.
-    Based on Tarang LBVP patterns for Poisson equation solving.
+    Based on Tarang LinearBoundaryValueProblem patterns for Poisson equation solving.
 
     For incompressible 2D flow (matching perp_grad): u = -∂ψ/∂y, v = ∂ψ/∂x
     Vorticity: ω = ∂v/∂x - ∂u/∂y = ∇²ψ
@@ -383,15 +383,13 @@ function validate_streamfunction(velocity::VectorField, streamfunction::ScalarFi
 
     # Check u = -∂ψ/∂y  (perp_grad convention; u + ∂ψ/∂y = 0)
     ensure_layout!(velocity.components[1], :g)
-    ensure_layout!(dpsi_dy, :g)
     # `maximum` on a PencilArray is COLLECTIVE; reduce LOCAL storage (parent) so the
     # Allreduce below is the only collective (was a redundant double-reduce).
-    u_error = maximum(abs.(parent(get_grid_data(velocity.components[1])) .+ parent(get_grid_data(dpsi_dy))))
+    u_error = maximum(abs.(parent(get_grid_data(velocity.components[1])) .+ parent(grid_data!(dpsi_dy))))
 
     # Check v = ∂ψ/∂x  (perp_grad convention; v - ∂ψ/∂x = 0)
     ensure_layout!(velocity.components[2], :g)
-    ensure_layout!(dpsi_dx, :g)
-    v_error = maximum(abs.(parent(get_grid_data(velocity.components[2])) .- parent(get_grid_data(dpsi_dx))))
+    v_error = maximum(abs.(parent(get_grid_data(velocity.components[2])) .- parent(grid_data!(dpsi_dx))))
 
     # MPI reduction for global error using field's communicator
     if MPI.Initialized()
@@ -449,13 +447,11 @@ function perp_grad(ψ::ScalarField)
 
     # u_x = -∂ψ/∂y (second coordinate)
     dpsi_dy = evaluate_differentiate(Differentiate(ψ, coord2, 1), :g)
-    ensure_layout!(result.components[1], :g)
-    get_grid_data(result.components[1]) .= -get_grid_data(dpsi_dy)
+    grid_data!(result.components[1]) .= -get_grid_data(dpsi_dy)
 
     # u_y = ∂ψ/∂x (first coordinate)
     dpsi_dx = evaluate_differentiate(Differentiate(ψ, coord1, 1), :g)
-    ensure_layout!(result.components[2], :g)
-    get_grid_data(result.components[2]) .= get_grid_data(dpsi_dx)
+    grid_data!(result.components[2]) .= get_grid_data(dpsi_dx)
 
     return result
 end
@@ -527,7 +523,7 @@ where:
 
 # Returns
 Named tuple with:
-- `problem`: IVP problem object
+- `problem`: InitialValueProblem problem object
 - `θ`: Buoyancy field
 - `u`: Velocity field (computed from θ)
 - `ψ`: Streamfunction field (computed from θ)
@@ -554,8 +550,8 @@ function sqg_problem_setup(dist::Distributor, bases::Tuple; κ::Real=0.0, α::Re
     # Create fields
     θ = ScalarField(dist, "θ", bases, Float64)  # Buoyancy
 
-    # Create IVP
-    problem = IVP([θ])
+    # Create InitialValueProblem
+    problem = InitialValueProblem([θ])
 
     # Add parameters
     problem.parameters["κ"] = Float64(κ)

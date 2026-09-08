@@ -82,7 +82,7 @@ grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_b = grad(b) + ez * τ_lift(tau_b1)
 
 # Problem
-problem = IVP([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
 add_parameters!(problem, kappa=kappa, nu=nu, Lz=Lz, ez=ez,
                 grad_u=grad_u, grad_b=grad_b, τ_lift=τ_lift)
 
@@ -161,7 +161,7 @@ forcing = StochasticForcing(
     enforce_hermitian     = true,
 )
 
-problem = IVP([q, ψ, u, tau_ψ])
+problem = InitialValueProblem([q, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu)
 
 add_equation!(problem, "∂t(q) + nu*Δ⁴(q)  = -u⋅∇(q)")  # PV evolution
@@ -240,7 +240,7 @@ forcing = StochasticForcing(
     enforce_hermitian     = true,
 )
 
-problem = IVP([θ, ψ, u, tau_ψ])
+problem = InitialValueProblem([θ, ψ, u, tau_ψ])
 add_parameters!(problem, nu=nu, alpha=alpha)
 
 # SQG inversion: fraclap(ψ, 0.5) implements (-Δ)^{1/2}
@@ -319,7 +319,7 @@ lift_basis  = derivative_basis(zbasis, 1)
 grad_u = grad(u) + ez * τ_lift(tau_u1)
 grad_θ = grad(θ) + ez * τ_lift(tau_θ1)
 
-problem = IVP([p, θ, u, tau_p, tau_θ1, tau_θ2, tau_u1, tau_u2])
+problem = InitialValueProblem([p, θ, u, tau_p, tau_θ1, tau_θ2, tau_u1, tau_u2])
 add_parameters!(problem,
     Ra=Ra, Ek=Ek, EPr=EPr, Lz=Lz, ez=ez,
     grad_u=grad_u, grad_θ=grad_θ, τ_lift=τ_lift)
@@ -437,9 +437,9 @@ Simple diffusion equation in one dimension.
 **Code**: See example below
 
 A bounded (Chebyshev) direction needs one **tau variable per boundary condition**:
-the BCs count as equations, so `IVP` must be given as many variables as there are
+the BCs count as equations, so `InitialValueProblem` must be given as many variables as there are
 equations, and the tau variables must be lifted back into the bulk equation. Two
-Dirichlet conditions ⇒ two tau variables ⇒ `IVP([T, tau_1, tau_2])`.
+Dirichlet conditions ⇒ two tau variables ⇒ `InitialValueProblem([T, tau_1, tau_2])`.
 
 ```julia
 using Tarang, Printf
@@ -459,7 +459,7 @@ lift_basis = derivative_basis(xbasis, 1)
 l1 = lift(tau_1, lift_basis, -1)
 l2 = lift(tau_2, lift_basis, -2)
 
-problem = IVP([T, tau_1, tau_2])
+problem = InitialValueProblem([T, tau_1, tau_2])
 add_parameters!(problem, kappa=0.01, l1=l1, l2=l2)
 add_equation!(problem, "∂t(T) - kappa*lap(T) + l1 + l2 = 0")
 
@@ -496,7 +496,7 @@ Solve Laplace equation for steady heat distribution.
 **Physics**: Steady-state diffusion, thermal equilibrium
 
 **Features**:
-- Boundary value problem (LBVP)
+- Boundary value problem (LinearBoundaryValueProblem)
 - Mixed boundary conditions
 - Sparse linear solve
 
@@ -528,7 +528,7 @@ Compute critical Rayleigh number and eigenmodes.
 **Physics**: Hydrodynamic stability, critical conditions
 
 **Features**:
-- Eigenvalue problem (EVP)
+- Eigenvalue problem (EigenvalueProblem)
 - Growth rates and frequencies
 - Critical modes visualization
 
@@ -689,7 +689,7 @@ p = ScalarField(...)
 # ...
 
 # 5. Define problem
-problem = IVP([...])
+problem = InitialValueProblem([...])
 add_equation!(problem, "...")
 add_parameters!(problem, ...)
 

@@ -37,7 +37,7 @@ function _mass_channel_solver(; nx=16, nz=8, dt=1e-3)
     lift_basis = derivative_basis(zbasis, 1)
     tau_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * tau_lift(tau1)
-    problem = IVP([b, tau1, tau2])
+    problem = InitialValueProblem([b, tau1, tau2])
     add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
     add_equation!(problem,
                   "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = -b*∂x(b)")

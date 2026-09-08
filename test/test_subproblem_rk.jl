@@ -44,7 +44,7 @@ using Printf
     grad_u = grad(u) + ez * τ_lift(tau_u1)
     grad_b = grad(b) + ez * τ_lift(tau_b1)
 
-    problem = IVP([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
+    problem = InitialValueProblem([p, b, u, tau_p, tau_b1, tau_b2, tau_u1, tau_u2])
     add_parameters!(problem, kappa=kappa, nu=nu, Lz=Lz, ez=ez,
         grad_u=grad_u, grad_b=grad_b, τ_lift=τ_lift)
 

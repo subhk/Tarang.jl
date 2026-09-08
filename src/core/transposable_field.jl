@@ -81,8 +81,8 @@ include("transpose/transpose_transforms.jl")
     TransposableFieldStorage{G,C} <: AbstractFieldStorage
 
 Storage marker for a distributed GPU field (GPU architecture, more than one
-rank — see `_uses_transpose_storage`). Carries exactly the same three fields
-as `SerialFieldStorage` (`architecture`, `grid::G`, `coeff::C`) — the field
+rank — see `_uses_transpose_storage`). Carries exactly the same fields
+as `SerialFieldStorage` (`architecture`, `grid::G`, `coeff::C`, `current_layout`) — the field
 accessors (`get_grid_data`, `set_grid_data!`, `get_coeff_data`,
 `set_coeff_data!`) reach `:grid`/`:coeff` by hardcoded `getfield`/`setfield!`,
 not by dispatch, so this struct needs no forwarding methods to be a fully
@@ -101,18 +101,21 @@ cache keyed by (global_shape, eltype) — see `transpose_workspace!` below —
 because a `TransposableField` owns MPI sub-communicators (`MPI.Comm_split` is
 collective), so per-field ownership would multiply that cost by field count
 and force construction order to match across ranks. Keeping this struct to
-just the three data fields means building a distributed GPU field performs no
+just the arrays and their validity metadata means building a distributed GPU field performs no
 collective MPI calls; the workspace is created lazily on first transform.
 """
 mutable struct TransposableFieldStorage{G<:AbstractArray, C<:AbstractArray} <: AbstractFieldStorage
     architecture::AbstractArchitecture
     grid::G
     coeff::C
+    current_layout::Symbol
 end
 
-# Julia auto-generates the inferring outer constructor
-# `TransposableFieldStorage(arch, grid, coeff)` from the struct definition
-# above (mirrors SerialFieldStorage — see the comment at its definition).
+# Preserve the three-argument construction API, as for SerialFieldStorage.
+TransposableFieldStorage{G,C}(arch, grid, coeff) where {G,C} =
+    TransposableFieldStorage{G,C}(arch, grid, coeff, :g)
+TransposableFieldStorage(arch, grid::G, coeff::C) where {G<:AbstractArray,C<:AbstractArray} =
+    TransposableFieldStorage{G,C}(arch, grid, coeff)
 
 # Deferred storage_mode dispatch (TransposableFieldStorage is now defined).
 # Stays in this file (rather than field_types.jl, which is loaded first) only

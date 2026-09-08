@@ -459,24 +459,26 @@ function _get_or_build_multistep_lhs!(sp::Subproblem, a0::Float64, b0::Float64)
                   "CPU sparse/dense fallback is disabled. Original error: " *
                   "$(sprint(showerror, err))")
         end
+        # Same policy as the RK stage system: a gauge-mode singular system is
+        # solved in the least-squares sense with a warning; duplicate tau lifts
+        # are refused at problem build (`_check_duplicate_tau_lifts!`).
         if solver_type != MatSolvers.SPQRSolver
             try
                 qr_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, LHS)
                 sp.matrices[cache_key] = qr_solver
                 sp.matrices[cache_key_k] = current_key
+                @warn "step_subproblem_multistep!: the multistep system (a₀·M + b₀·L) for " *
+                      "subproblem group=$(sp.group) is singular ($(sprint(showerror, err))); " *
+                      "solving it in the least-squares sense with sparse QR. Expected for a " *
+                      "pressure/gauge mode; otherwise check the tau/boundary rows of that " *
+                      "Fourier mode." maxlog=1
                 return qr_solver
             catch qr_err
                 @debug "multistep: sparse QR fallback also failed for group=$(sp.group)" exception=qr_err
             end
         end
-        @debug "multistep LHS build failed for group=$(sp.group)" exception=(err, catch_backtrace())
+        _throw_singular_stage_system(sp, "the multistep system (a₀·M + b₀·L)", err)
     end
-
-    # Dense fallback
-    LHS_dense = Matrix(LHS)
-    sp.matrices[cache_key] = LHS_dense
-    sp.matrices[cache_key_k] = current_key
-    return LHS_dense
 end
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -530,6 +532,24 @@ end
     a = (1.0/dt, -1.0/dt)
     b = (0.5, 0.5)
     c = (0.0, 1.0 + w1/2.0, -w1/2.0)
+    return a, b, c
+end
+
+"""Theta-weighted CNAB2 coefficients for both global and subproblem solves."""
+@inline function _mcnab2_coefs(dt::Float64, dt_prev::Float64, theta::Float64)
+    a, _, c = _cnab2_coefs(dt, dt_prev)
+    return a, (theta, 1.0 - theta), c
+end
+
+"""CNLF2 coefficients (Wang 2008 eqn 2.11) for current/previous timestep: a
+three-level leapfrog mass stencil, a wide Crank–Nicolson L stencil, and F at the
+current level only. Reduces to the classical CNLF at w1 = 1. The same numbers
+`step_cnlf2!` builds inline for the global-matrix path."""
+@inline function _cnlf2_coefs(dt::Float64, dt_prev::Float64)
+    w1 = dt / dt_prev
+    a = (1.0 / ((1.0 + w1) * dt), (w1 - 1.0) / dt, -w1^2 / ((1.0 + w1) * dt))
+    b = (1.0 / (2.0 * w1), (1.0 - 1.0 / w1) / 2.0, 0.5)
+    c = (0.0, 1.0, 0.0)
     return a, b, c
 end
 

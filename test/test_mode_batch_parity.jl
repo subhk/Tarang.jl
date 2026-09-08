@@ -39,7 +39,7 @@ function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, bc_low="0",
     tau_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * tau_lift(tau1)
 
-    problem = IVP([b, tau1, tau2])
+    problem = InitialValueProblem([b, tau1, tau2])
     add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
     add_equation!(problem,
                   "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = -b*∂x(b)")
@@ -49,7 +49,7 @@ function _parity_channel_solver(; nx=16, nz=8, dt=1e-3, bc_low="0",
     return solver, b
 end
 
-# The smallest 3-D Fourier x Fourier x Chebyshev IVP that still builds
+# The smallest 3-D Fourier x Fourier x Chebyshev InitialValueProblem that still builds
 # subproblems: `nx=ny=4` gives 12 modes, and they all land in one bucket. Same
 # equation, BCs and tau structure as the 2-D channel above, so the ONLY thing
 # that differs is the number of Fourier axes — which is the point.
@@ -70,7 +70,7 @@ function _parity_channel_solver_3d(; nx=4, ny=4, nz=8, dt=1e-3,
     tau_lift(A) = lift(A, lift_basis, -1)
     grad_b = grad(b) + ez * tau_lift(tau1)
 
-    problem = IVP([b, tau1, tau2])
+    problem = InitialValueProblem([b, tau1, tau2])
     add_parameters!(problem; kappa=0.1, grad_b, tau_lift)
     add_equation!(problem,
                   "∂t(b) - kappa*div(grad_b) + tau_lift(tau2) = -b*∂x(b)")

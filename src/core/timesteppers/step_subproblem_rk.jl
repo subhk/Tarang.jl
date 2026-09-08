@@ -788,9 +788,12 @@ struct _ConstraintProjectorData
     selected_correction::Matrix{ComplexF64}
 end
 
-struct _ConstraintProjector
-    M::Any
-    L::Any
+# `M`/`L` are the subproblem's `M_min`/`L_min` (sparse on CPU, CuSparse on GPU);
+# parametrizing keeps the identity comparisons in `_get_or_compute_constraint_projector!`
+# concretely typed instead of going through an `::Any` field.
+struct _ConstraintProjector{TM, TL}
+    M::TM
+    L::TL
     data::_ConstraintProjectorData
 end
 
@@ -1152,25 +1155,38 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
                   "stage=$stage_idx; CPU sparse/dense fallback is disabled. " *
                   "Original error: $(sprint(showerror, err))")
         end
+        # Rank-deficient stage system. Legitimate for a pressure gauge mode of an
+        # incompressible problem (the kx=0 mode of Rayleigh–Bénard reaches here),
+        # where the least-squares solve is the intended treatment. NOT safe for two
+        # tau variables lifted to the same mode under a moving boundary condition
+        # (exponentially unstable, 2026-09-05 audit) — that formulation is refused
+        # at problem build by `_check_duplicate_tau_lifts!`, so a system reaching
+        # this point is announced with a warning, not silently solved.
         if solver_type != MatSolvers.SPQRSolver
             try
                 qr_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, LHS)
                 sp.LHS_solvers[a_ii] = qr_solver
-                @info "step_subproblem_rk!: using sparse QR fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
+                @warn "step_subproblem_rk!: the IMEX stage system (M + dt·a·L) at stage " *
+                      "$stage_idx for subproblem group=$(sp.group) is singular " *
+                      "($(sprint(showerror, err))); solving it in the least-squares sense " *
+                      "with sparse QR. Expected for a pressure/gauge mode; otherwise check " *
+                      "the tau/boundary rows of that Fourier mode." maxlog=1
                 return qr_solver
             catch qr_err
                 @debug "step_subproblem_rk!: sparse QR fallback also failed for group=$(sp.group), stage=$stage_idx" exception=qr_err
             end
         end
-        @debug "step_subproblem_rk!: solver build failed for group=$(sp.group), stage=$stage_idx" exception=(err, catch_backtrace())
+        _throw_singular_stage_system(sp, "the IMEX stage system (M + dt·a·L) at stage $stage_idx", err)
     end
-
-    # Final fallback for rank-deficient or unsupported matrices
-    LHS_dense = Matrix(LHS)
-    sp.LHS_solvers[a_ii] = LHS_dense
-    @info "step_subproblem_rk!: using dense fallback for group=$(sp.group), stage=$stage_idx" maxlog=1
-    return LHS_dense
 end
+
+_throw_singular_stage_system(sp, what::String, err) = throw(ArgumentError(
+    "$what for subproblem group=$(sp.group) could not be factorized " *
+    "($(sprint(showerror, err))). A singular stage system means the tau/boundary rows " *
+    "do not close the equations for this Fourier mode — most often two tau variables " *
+    "lifted to the SAME mode (`lift(tau1, b, -1) + lift(tau2, b, -1)`; use -1 and -2), " *
+    "or a boundary condition that is missing or duplicated. Neither sparse LU nor " *
+    "sparse QR could factor it, so there is no solve to fall back to."))
 
 """
     _get_or_compute_mass_lu!(sp)
