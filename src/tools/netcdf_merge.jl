@@ -69,8 +69,12 @@ struct NetCDFMerger
             throw(ArgumentError("NetCDFMerger: set_number must be positive, got $set_number"))
         end
 
-        # Find all processor files for this handler/set
+        # Find all processor files for this handler/set. `base_name` may carry a
+        # directory component (the handler's base_path usually does); match and
+        # name files by the set's basename so "out/snap" finds
+        # out/snap_s1/snap_s1_p<rank>.nc instead of silently finding nothing.
         set_pattern = "$(base_name)_s$(set_number)"
+        set_name = basename(set_pattern)
         search_dir = "."
         
         # Look for files in set directory
@@ -83,7 +87,7 @@ struct NetCDFMerger
         for file in readdir(search_dir, join=true)
             # Match pattern more precisely: handler_s#_p#.nc
             m = match(r"_p(\d+)\.nc$", basename(file))
-            if occursin("$(set_pattern)_p", basename(file)) && m !== nothing
+            if occursin("$(set_name)_p", basename(file)) && m !== nothing
                 push!(processor_files, file)
             end
         end
@@ -97,7 +101,7 @@ struct NetCDFMerger
         # Determine output filename (matching Tarang convention)
         if isempty(output_name)
             if isdir(set_dir)
-                output_file = joinpath(set_dir, "$(set_pattern).nc")
+                output_file = joinpath(set_dir, "$(set_name).nc")
             else
                 output_file = "$(set_pattern).nc"
             end
