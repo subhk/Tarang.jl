@@ -2,7 +2,7 @@
 
 Tarang enforces boundary conditions using the **tau method**, a spectral technique that lets you solve PDEs with non-periodic boundary conditions without modifying the spectral basis. This page explains what the tau method is, how Tarang's implementation works, and how to write code that uses it correctly.
 
-If you have used [Dedalus](https://dedalus-project.readthedocs.io/), the approach here is almost identical: tau fields are added to the state vector, and `lift()` operators inject them into the equations as extra degrees of freedom to match boundary conditions.
+The formulation uses explicit tau variables: tau fields are added to the state vector, and `lift()` operators inject them into the equations as extra degrees of freedom to match boundary conditions.
 
 ## Why Do We Need the Tau Method?
 
@@ -22,7 +22,7 @@ and the PDE is projected onto the basis to give an `N × N` linear system in the
 
 The tau method solves this by **adding extra unknowns** (the *tau fields*) that act as corrections designed to make the boundary conditions hold. The classical formulation, due to Lanczos (1938), replaces the highest-order rows of the spectral system with BC rows — but that makes the interior equation different at those rows, which is awkward for nonlinear and time-dependent problems.
 
-Modern spectral codes (Dedalus, Tarang) use a cleaner variant: instead of *replacing* rows, they *add* a tau term to the equation itself:
+Modern spectral codes, including Tarang, use a cleaner variant: instead of *replacing* rows, they *add* a tau term to the equation itself:
 
 ```math
 \mathcal{L}[u] \;+\; \tau_1\,\phi_1(z) \;+\; \tau_2\,\phi_2(z) \;=\; f(z),
@@ -156,7 +156,7 @@ At the solver level, `lift(tau, basis, n)` resolves to a **single-column sparse 
 
 where ``e_{\text{lift\_mode}}`` is the unit vector with a `1` at the `lift_mode`-th Chebyshev-coefficient slot. When this is added to an equation's LHS, it contributes the unknown ``\tau`` to exactly one coefficient row, leaving every other interior row untouched. The linear solver then chooses ``\tau`` so that the BC rows hold — and because the perturbation is confined to one high-order coefficient, the interior PDE residual stays spectrally small for smooth solutions.
 
-> **Implementation detail worth knowing**: In Tarang's current solver, `subproblem_matrix(op::Lift, sp)` reads the dimension `N` from `_subproblem_cheb_basis(sp)` — the problem's own Chebyshev basis — and does **not** use `op.basis` to compute the matrix. That means `lift(tau, zb, -1)`, `lift(tau, derivative_basis(zb, 1), -1)` and `lift(tau, derivative_basis(zb, 2), -1)` produce **identical** delta columns at row `N-1`. (Measured: all three spellings give bit-identical solutions *and* bit-identical tau values on the quick-start problem.) The `basis` argument is a semantic hint inherited from Dedalus's type system; it's retained so that future refinements — e.g. explicit basis tracking through expression trees — can hook in without breaking user code.
+> **Implementation detail worth knowing**: In Tarang's current solver, `subproblem_matrix(op::Lift, sp)` reads the dimension `N` from `_subproblem_cheb_basis(sp)` — the problem's own Chebyshev basis — and does **not** use `op.basis` to compute the matrix. That means `lift(tau, zb, -1)`, `lift(tau, derivative_basis(zb, 1), -1)` and `lift(tau, derivative_basis(zb, 2), -1)` produce **identical** delta columns at row `N-1`. (Measured: all three spellings give bit-identical solutions *and* bit-identical tau values on the quick-start problem.) The `basis` argument is a semantic hint for basis tracking; it's retained so that future refinements — e.g. explicit basis tracking through expression trees — can hook in without breaking user code.
 
 ### Why still pass the derivative basis?
 
@@ -506,7 +506,7 @@ For inhomogeneous BCs like `T(z=0) = 1`, the stepper has to carry the value `1` 
 
 ## Historical Note
 
-The tau method was introduced by **Cornelius Lanczos** in 1938 as an approximation technique: rather than solving a PDE exactly, he sought polynomial approximations that satisfied the PDE with a small residual (the "tau error"). It was refined for spectral methods by **Steven Orszag**, **David Gottlieb**, and others in the 1970s–80s, and adapted to modern lift-based formulations by **Keaton Burns et al.** in the Dedalus project in the 2010s.
+The tau method was introduced by **Cornelius Lanczos** in 1938 as an approximation technique: rather than solving a PDE exactly, he sought polynomial approximations that satisfied the PDE with a small residual (the "tau error"). It was refined for spectral methods by **Steven Orszag**, **David Gottlieb**, and others in the 1970s–80s, and adapted to modern lift-based formulations by **Keaton Burns et al.** in the 2010s.
 
 The name "tau" (τ) comes from Lanczos's notation for the residual/correction terms introduced when truncating the polynomial expansion and enforcing boundary conditions.
 
@@ -526,7 +526,7 @@ The name "tau" (τ) comes from Lanczos's notation for the residual/correction te
 
 5. **Lanczos, C.** (1938). "Trigonometric interpolation of empirical and analytical functions." *Journal of Mathematics and Physics*, 17(1–4), 123–199. — Original tau method paper.
 
-6. **Burns, K. J., Vasil, G. M., Oishi, J. S., Lecoanet, D., & Brown, B. P.** (2020). "Dedalus: A flexible framework for numerical simulations with spectral methods." *Physical Review Research*, 2, 023068. — Modern lift-based tau method as implemented in Tarang and Dedalus.
+6. **Burns, K. J., Vasil, G. M., Oishi, J. S., Lecoanet, D., & Brown, B. P.** (2020). *Physical Review Research*, 2, 023068. — Modern lift-based tau methods.
 
 7. **Orszag, S. A.** (1971). "Accurate solution of the Orr-Sommerfeld stability equation." *Journal of Fluid Mechanics*, 50(4), 689–703. — Classic application to hydrodynamic stability.
 

@@ -34,6 +34,10 @@ function step!(solver::InitialValueSolver, dt::Float64=solver.dt)
     _sync_solver_from_timestepper!(solver)
     _advance_solver_clock!(solver, dt, step_time)
 
+    # Filters read public field handles; commit the state and clock first so
+    # they see the completed solution even if a filter update then throws.
+    _update_temporal_filters!(solver, dt)
+
     return solver
 end
 
@@ -403,7 +407,7 @@ end
 
 """Solve nonlinear boundary value problem using Newton iteration"""
 # Solve nonlinear boundary value problem via PER-FOURIER-MODE Newton iteration,
-# mirroring Dedalus' NonlinearBoundaryValueSolver (per-subproblem dF Jacobian
+# using a Newton iteration (per-subproblem dF Jacobian
 # rebuilt each iteration, per-subproblem residual, per-subproblem solve).
 #
 # Each iteration, per subproblem:
@@ -615,7 +619,7 @@ end
 """Solve the generalized eigenvalue problem `L v = λ M v`.
 
 Solves PER-FOURIER-MODE on the square per-subproblem tau matrices (`sp.L_min`,
-`sp.M_min`), mirroring the BVP solver and Dedalus. The GLOBAL `L`/`M` are
+`sp.M_min`), mirroring the BVP solver. The GLOBAL `L`/`M` are
 rank-deficient for multi-variable tau systems, so the dense per-subproblem solve
 is both correct and robust (Arpack on the global matrices throws
 `SingularException`). Spurious eigenvalues from the singular mass matrix (the

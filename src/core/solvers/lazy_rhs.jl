@@ -746,9 +746,9 @@ end
         if is_gpu_array(src_data) && is_gpu_array(out_data)
             # A singleton device view broadcasts across every output dimension
             # without a scalar download or host indexing of the parameter.
-            out_data .= real.(view(vec(src_data), 1:1))
+            out_data .= view(vec(src_data), 1:1)
         else
-            @inbounds fill!(out_data, convert(eltype(out_data), real(first(src_data))))
+            @inbounds fill!(out_data, convert(eltype(out_data), first(src_data)))
         end
     else
         error("LazyRHS: parameter field `$(f.name)` has local grid size $(size(src_data)), which " *

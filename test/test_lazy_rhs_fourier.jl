@@ -1,6 +1,24 @@
 using Test
 using Tarang
 
+@testset "Lazy RHS preserves complex singleton parameters" begin
+    coords = CartesianCoordinates("x")
+    dist = Distributor(coords; dtype=ComplexF64, device=CPU())
+    basis = ComplexFourier(coords["x"]; size=8, bounds=(0.0, 2pi))
+    out = ScalarField(Domain(dist, (basis,)), "out")
+    parameter = ScalarField(dist, "parameter", (), ComplexF64)
+    Tarang.set_grid_data!(parameter, ComplexF64[1im])
+    expr = Tarang.translate_to_lazy(parameter, [out]; target=out)
+    @test expr isa Tarang.LazyParamField
+    workspace = Tarang.LazyWorkspace()
+
+    for value in (1im, 2 + 3im, 4 + 0im)
+        Tarang.grid_data!(parameter) .= value
+        Tarang.evaluate_lazy!(out, expr, [out], workspace)
+        @test Tarang.grid_data!(out) == fill(ComplexF64(value), 8)
+    end
+end
+
 @testset "Lazy RHS Fourier differentiation" begin
     @testset "second RealFourier axis uses FFT wavenumber ordering" begin
         N = 32

@@ -31,6 +31,37 @@ assert the shim's exact behaviour rather than assuming Dict semantics.
 using Test
 using Tarang
 
+@testset "IVP equation format is enforced before assembly" begin
+    coords = CartesianCoordinates("x")
+    dist = Distributor(coords; dtype=Float64, device=CPU())
+    basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2pi))
+    domain = Domain(dist, (basis,))
+    u = ScalarField(domain, "u")
+    v = ScalarField(domain, "v")
+    vars = Tarang._problem_variable_operands([u, v])
+    @test !Tarang._ivp_lhs_is_linear(Tarang.Multiply(u, v), vars)
+    @test Tarang._ivp_lhs_is_linear(Tarang.Multiply(2, u), vars)
+    @test Tarang.contains_time_derivatives(Tarang.Add(Tarang.TimeDerivative(u), v))
+    for equation in ("dt(u) + u*d(u,x) = 0", "dt(u) + u*v = 0",
+                     "dt(u) + u^2 = 0", "dt(u) + sin(u) = 0",
+                     "dt(u) = dt(v)", "dt(dt(u)) = 0",
+                     "2*(dt(u) + u) = 0", "lap(dt(u)) = 0")
+        problem = InitialValueProblem([u, v]; namespace=Dict("u" => u, "v" => v))
+        push!(problem.equations, equation)
+        @test_throws ArgumentError Tarang.build_matrix_expressions!(problem)
+    end
+    for equation in ("dt(u) + u = -u*d(u,x)", "dt(u) = -u",
+                     "2*dt(u) + u = 0", "dt(u)/2 + u = 0", "u - v = 0")
+        problem = InitialValueProblem([u, v]; namespace=Dict("u" => u, "v" => v))
+        push!(problem.equations, equation)
+        @test_nowarn Tarang.build_matrix_expressions!(problem)
+        @test length(problem.equation_data) == 1
+    end
+    problem = InitialValueProblem([u]; namespace=Dict("u" => u))
+    push!(problem.equations, "dt(u) + u*d(u,x) = 0")
+    @test_throws ArgumentError InitialValueSolver(problem, RK222(); dt=1e-3)
+end
+
 @testset "EquationIR canonical slots are fields" begin
     ir = Tarang.EquationIR()
 

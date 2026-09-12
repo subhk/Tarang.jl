@@ -1043,7 +1043,13 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
         end
     end
 
-    # ── Final update: M*X_{n+1} = M*X_n + dt*Σ(b^E*F - b^I*L*X) ──────────
+    if _rk_stiffly_accurate(ts)
+        from_solve_layout!(solve_stash, dist)
+        _push_trim!(state.history, state_fields, 1)
+        return nothing
+    end
+
+    # Weighted update for alternative, non-stiffly-accurate tableaux.
     for k in eachindex(batches)
         batch = batches[k]
         ws = workspaces[k]

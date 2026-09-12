@@ -32,7 +32,7 @@
 # fallback throw) to name the working alternative.
 #
 # MCNAB2 and CNLF2 (step_global_matrix.jl) take this path too. With L = 0 the
-# θ-weighting that distinguishes MCNAB2 from CNAB2 weights nothing, so MCNAB2
+# implicit stencil that distinguishes MCNAB2 from CNAB2 vanishes, so MCNAB2
 # runs as `:cnab2`; CNLF2's leapfrog mass stencil is its own method `:cnlf2`.
 # Both used to reach their global-matrix startup gate first, which reads
 # `length(state.history) < 2` — always true on this path, whose history holds
@@ -101,26 +101,15 @@ function _explicit_multistep_prepend!(hist::Vector{V}, template::V,
     return hist
 end
 
-"""
-True while `method` still needs a higher-order self-start. Only SBDF3/SBDF4 do:
-CNAB2 and SBDF2 bridge with their own first-order member instead, exactly as the
-global-matrix path does, so the two agree step for step. A first-order start would
-cap SBDF3/SBDF4's global order at 1.
-"""
-function _explicit_multistep_needs_seeding(state::TimestepperState, method::Symbol,
-                                           depth::Int)
-    method === :sbdf3 && return depth < 3 || length(state.dt_history) < 3
-    method === :sbdf4 && return depth < 4 || length(state.dt_history) < 4
-    return false
-end
-
-"""
-Coefficients for one field-path step. Only called once `_explicit_multistep_needs_seeding`
-is false, so every branch returns a concrete tuple pair.
-"""
+"""Coefficients for one field-path step, using lower-order SBDF at startup."""
 function _explicit_multistep_coefficients(state::TimestepperState, method::Symbol,
                                           depth::Int)
     dt = state.dt
+    if method === :sbdf4 && (depth < 4 || length(state.dt_history) < 4)
+        return _explicit_multistep_coefficients(state, :sbdf3, depth)
+    elseif method === :sbdf3 && (depth < 3 || length(state.dt_history) < 3)
+        return _explicit_multistep_coefficients(state, :sbdf2, depth)
+    end
     if method === :cnab1 || ((method === :cnab2 || method === :cnlf2) && depth < 2)
         # CNLF2's global-matrix startup is CNAB1 as well (step_cnlf2!).
         a, _, c = _cnab1_coefs(dt)
@@ -201,19 +190,11 @@ function _step_explicit_multistep_field!(state::TimestepperState,
     F_history = _explicit_multistep_history!(state, :explicit_field_ms_F, current_state)
 
     # Record the current state and its right-hand side at the head of both deques
-    # BEFORE choosing coefficients, so a seeding step still contributes history
-    # (this is what `_multistep_rk443_startup!` does on the global path).
+    # before choosing the highest-order formula supported by the history.
     F_current = evaluate_rhs(solver, current_state, solver.sim_time)
     _explicit_multistep_prepend!(F_history, current_state, F_current, depth)
     _release_rhs_buffer!(F_current, solver)
     _explicit_multistep_prepend!(X_history, current_state, current_state, depth)
-
-    if _explicit_multistep_needs_seeding(state, method, length(F_history))
-        # Order-3 self-start. `step_rk_imex!` routes to the field-native explicit
-        # RK on exactly the architectures that reach here.
-        step_rk_imex!(state, solver; ts=_RK443_SINGLETON)
-        return nothing
-    end
 
     a, c = _explicit_multistep_coefficients(state, method, length(F_history))
     _explicit_multistep_apply!(state, solver, current_state, X_history, F_history, a, c)

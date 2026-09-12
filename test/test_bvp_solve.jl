@@ -5,12 +5,12 @@ values come ONLY from the manufactured solution, never the solver's own output.
 
 The steady BVP solver was rehabilitated 2026-06-03 to solve PER-FOURIER-MODE
 (one square tau subproblem per separable mode), mirroring the InitialValueProblem timestepper and
-Dedalus. Fixes: `_solver_type` defined; `add_bc!` BCs merged in the BVP build;
+the per-mode formulation. Fixes: `_solver_type` defined; `add_bc!` BCs merged in the BVP build;
 matrix-coupling configured (Fourier separable / Chebyshev coupled) so
 build_subsystems creates per-mode subproblems; `solve_linear!` rewritten to
 assemble each subproblem RHS (PDE forcing + BC rows) and solve `L_sp x = F_sp`.
 
-Problem (Dedalus second-order tau formulation):
+Problem (second-order tau formulation):
     Δu + lift(tau1,-1) + lift(tau2,-2) = -2   on z in [0, Lz]
     u(z=0) = 0,  u(z=Lz) = 0
     u_exact(z) = z (Lz - z)   (x-independent; peak Lz^2/4)

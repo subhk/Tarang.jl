@@ -23,7 +23,7 @@ end
         steppers = (RK111(), RK222(), RK443(), RKSMR(), Tarang.RKGFY(), Tarang.RK443_IMEX(),
                     CNAB1(), CNAB2(), SBDF1(), SBDF2(), SBDF3(), SBDF4(),
                     ETD_RK222(), ETD_CNAB2(), ETD_SBDF2(), Tarang.MCNAB2(), Tarang.CNLF2(),
-                    DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+                    Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
         for ts in steppers
             @testset "$(nameof(typeof(ts)))" begin
                 solver, u = tmgm_solver(ts, "2*dt(u) = -u")

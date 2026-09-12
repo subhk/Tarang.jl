@@ -35,7 +35,7 @@ RK111()
 **Properties**:
 - Order: 1
 - Stages: 2 rows (explicit first stage), one implicit solve per step — the
-  Ascher–Ruuth–Spiteri (1,1,1) / Dedalus `RK111` form
+  Ascher–Ruuth–Spiteri (1,1,1) `RK111` form
 - Implicit part: Backward Euler for linear terms
 - Explicit part: Forward Euler for nonlinear terms, evaluated at the OLD time
   inside the implicit solve, so both tableaux are stiffly accurate and
@@ -64,9 +64,9 @@ RK222()
 
 ### RK443
 
-3rd-order, 4-stage IMEX Runge-Kutta: an ARK built on Alexander's (1977) L-stable 3-stage
-SDIRK embedded as ESDIRK (γ ≈ 0.4359, `c = [0, γ, (1+γ)/2, 1]`). Not Kennedy & Carpenter's
-ARK3(2)4L[2]SA (whose `c₂ = 2γ`); the order-3 coupling conditions are satisfied to 1e-11.
+3rd-order IMEX Runge-Kutta using the Ascher-Ruuth-Spiteri (4,4,3) pair.
+Five stored rows include the initial stage; four stages require implicit solves.
+The common stage times are `c = [0, 1/2, 2/3, 1/2, 1]`.
 
 ```julia
 RK443()
@@ -74,10 +74,10 @@ RK443()
 
 **Properties**:
 - Order: 3
-- Stages: 4 — ESDIRK, first stage explicit, so 3 implicit solves per step
+- Stages: 5 rows, first stage explicit, so 4 implicit solves per step
 - Implicit part: L-stable ESDIRK for linear terms
-- Explicit part: 4-stage explicit RK for nonlinear terms
-- Workspace field sets: 5 (one stage state plus one retained RHS per stage)
+- Explicit part: four explicit evaluations for nonlinear terms
+- Workspace field sets: 6 (one stage state plus one retained RHS per stage)
 
 **Recommended for**: High accuracy requirements.
 
@@ -121,10 +121,9 @@ SBDF4()  # 4th order
 
 Multistep schemes start from a single state, so the history has to be seeded. `CNAB2` and
 `SBDF2` bootstrap with their own 1st-order member (`CNAB1` / `SBDF1`), so their first step
-is reduced order; `SBDF3` / `SBDF4` self-start with an order-3 RK443 step on the
-global-matrix path, which keeps the one-time startup error from capping the global order
-(on the per-subproblem path they still bootstrap from SBDF2/SBDF1 and are order-capped
-at 2). Only SBDF1/SBDF2 are A-stable: the higher-order members trade stability angle for
+is reduced order. `SBDF3` / `SBDF4` use the lower-order SBDF sequence on every
+architecture. Starting from a single state can therefore limit overall convergence
+to order two, despite the higher formal order once history is established. Only SBDF1/SBDF2 are A-stable: the higher-order members trade stability angle for
 formal order, so they suit *smooth, accuracy-limited* integration rather than the stiffest
 linear terms.
 
@@ -133,14 +132,13 @@ linear terms.
 Additional two-step multistep schemes. **Neither is exported** — they must be qualified:
 
 ```julia
-Tarang.MCNAB2()   # θ-weighted Crank-Nicolson + Adams-Bashforth 2
+Tarang.MCNAB2()   # Three-level modified CNAB2
 Tarang.CNLF2()    # Crank-Nicolson Leapfrog (CN implicit + centered leapfrog explicit)
 ```
 
-`MCNAB2` accepts an optional CN weight, `Tarang.MCNAB2(theta)` (default `0.5`). This is a
-**two-level θ-method**, not the three-level Ascher-Ruuth-Wetton "modified CNAB": at
-`θ = 0.5` it is Crank-Nicolson and 2nd order, but any `θ > 0.5` adds damping at the cost of
-dropping to **1st order**. Use the default unless you specifically want that trade.
+`MCNAB2()` uses the three-level modified CNAB scheme. Its implicit weights are
+`(9/16, 6/16, 1/16)` at constant timestep, with variable-step corrections based on
+the current/previous timestep ratio. It has no theta parameter.
 
 `CNLF2` is 2nd order and 2-step.
 
@@ -184,17 +182,22 @@ and `RK443`.
 ### RKGFY / RK443_IMEX
 
 ```julia
-Tarang.RKGFY()       # 3-stage 2nd-order L-stable ARK (Ascher-Ruuth-Spiteri 1997)
-Tarang.RK443_IMEX()  # Same Alexander-SDIRK3-based ARK coefficients as RK443; the suffix clarifies IMEX intent
+Tarang.RKGFY()       # 2nd-order predictor-corrector, three stored stages
+Tarang.RK443_IMEX()  # Same coefficients as RK443; the suffix clarifies IMEX intent
 ```
 
 ### Diagonal IMEX
 
 ```julia
-DiagonalIMEX_RK222()  # 2nd order
-DiagonalIMEX_RK443()  # 3rd order
-DiagonalIMEX_SBDF2()  # 2nd order multistep
+RK222()  # 2nd order; automatic diagonal implementation on GPU
+RK443()  # 3rd order
+SBDF2()  # 2nd order multistep
 ```
+
+For GPU `RK222()`, `RK443()`, and `SBDF2()`, diagonal implementations are internal;
+no GPU-specific timestepper constructors are exported. CPU and boundary-value problems
+retain the appropriate matrix or subproblem solve. An attached spectral linear
+operator also selects the internal diagonal path on serial CPU.
 
 The implicit solve is **diagonal in spectral space** — the linear operator is applied per
 Fourier mode (`(I + γ·dt·L̂)⁻¹` per wavenumber) rather than through a global matrix solve.
@@ -204,8 +207,13 @@ requires the implicit operator to be diagonal in the chosen basis.
 
 These schemes read the implicit operator from your equation's `L` and diagonalize it
 automatically, so `∂t(u) - nu*lap(u) = 0` is treated implicitly with no extra setup. You can
-still attach an explicit `SpectralLinearOperator` with `set_spectral_linear_operator!` to
-override that — an attached operator takes precedence and is applied to every field:
+still attach an explicit `SpectralLinearOperator` with `set_spectral_linear_operator!` on
+serial CPU or a single GPU to override that — an attached operator takes precedence
+and is applied to every field. MPI rejects attached operators with `ArgumentError`;
+write the linear term on the equation's LHS instead. Scalar division such as
+`dt(u) - lap(u)/2 = 0` is supported by the diagonal parser on all three paths.
+
+Serial attachment example:
 
 ```julia
 using Tarang
@@ -222,7 +230,7 @@ get_grid_data(u) .= cos.(2 .* x)          # a single mode, k = 2
 problem = InitialValueProblem([u])
 add_equation!(problem, "∂t(u) = 0")       # the linear term lives in L, NOT in the equation
 
-solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.005)
+solver = InitialValueSolver(problem, RK222(); dt=0.005)
 L = SpectralLinearOperator(dist, (xb,), :laplacian; ν=0.5)   # L̂(k) = ν k²
 set_spectral_linear_operator!(solver, L)
 
@@ -241,7 +249,8 @@ maximum(abs, get_grid_data(u))   # 0.13533 ≈ exp(-ν k² t) = exp(-2) = 0.1353
     constant-coefficient Fourier term such as `nu*lap(u)` qualifies; a term coupling
     different fields, a Chebyshev/Jacobi basis, or a field-valued (spatially varying)
     coefficient does not. In those cases the scheme raises an `ArgumentError` naming the
-    field and the offending equation — use `RK222` / `SBDF2` / `RK443`, which solve the
+    field and the offending equation — use a CPU matrix or subproblem solve with
+    `RK222` / `SBDF2` / `RK443`, which solve the
     implicit part through a global matrix. A fully explicit RK step is used only when the
     equation genuinely has no implicit term, and that is announced once at `@info`.
 
@@ -353,7 +362,7 @@ are IMEX.
 | Smooth high-order integration | RK443 or SBDF3/SBDF4 | Higher formal order; the multistep members need startup history and are only A(α)-stable |
 | Very stiff, linear-dominated | ETD_RK222 | Exact exponential propagation of L |
 | Classic incompressible DNS IMEX | RKSMR | SMR explicit-third / implicit-second accuracy profile |
-| Diagonal Fourier linear operator / GPU | DiagonalIMEX family | Per-mode implicit division avoids a global sparse solve; the operator comes from the equation's `L` (Laplacian, hyper-/fractional Laplacian, damping, derivatives of the field itself) or an attached `SpectralLinearOperator` |
+| Diagonal Fourier linear operator / GPU | RK222, RK443, SBDF2 | Per-mode implicit division avoids a global sparse solve; the operator comes from the equation's `L` (Laplacian, hyper-/fractional Laplacian, damping, derivatives of the field itself) or an attached `SpectralLinearOperator` |
 
 ## Performance
 
@@ -369,7 +378,7 @@ is unchanged.
 |--------|--------|-----------------|-----------------|
 | RK111 | 2 (1st explicit) | 2 (the second is unused by the weights) | 1 |
 | RK222 | 3 (1st explicit) | 3 | 2 |
-| RK443 | 4 (1st explicit) | 4 | 3 |
+| RK443 | 5 (1st explicit) | 5 | 4 |
 | RKSMR | 4 (1st explicit) | 4 | 3 |
 | CNAB2 | — | 1 | 1 |
 | SBDF2 | — | 1 | 1 |
@@ -377,7 +386,7 @@ is unchanged.
 The multistep rows are the per-step cost once the history ring is full; the startup steps
 cost the same but run at reduced order.
 
-For the `DiagonalIMEX_*` schemes the stage counts are the same, but each "implicit solve"
+For the internal diagonal implementations the stage counts are the same, but each "implicit solve"
 is an element-wise division by `(1 + a·dt·L̂(k))` instead of a sparse factorization.
 
 ### Memory Requirements
@@ -388,12 +397,12 @@ allocated per state field (each set is one full field):
 
 | Method | Workspace Sets |
 |--------|----------------|
-| RK111 / RK222 / RK443 | stages + 1 = 3 / 4 / 5 (one stage state, one retained RHS per stage) |
+| RK111 / RK222 / RK443 | stages + 1 = 3 / 4 / 6 (one stage state, one retained RHS per stage) |
 | CNAB1 / CNAB2 | 2 |
 | SBDF1 – SBDF4 | 2 |
 | ETD_RK222 / ETD_CNAB2 / ETD_SBDF2 | 3 |
-| DiagonalIMEX_RK222 / DiagonalIMEX_RK443 | 2 × stages = 6 / 8 (one state and one RHS set per stage) |
-| DiagonalIMEX_SBDF2 | 4 |
+| Internal diagonal RK222 / RK443 | 2 × stages = 6 / 10 (one state and one RHS set per stage) |
+| Internal diagonal SBDF2 | 4 |
 | everything else (RKSMR, MCNAB2, CNLF2, RKGFY, RK443_IMEX) | 2, grown on demand by the field path |
 
 These are the counts `_workspace_count` returns per scheme; the multistep and

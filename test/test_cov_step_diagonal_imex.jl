@@ -60,8 +60,8 @@ end
     # -----------------------------------------------------------------------
     @testset "RK222 explicit fallback — exp(-t) decay + 2nd order" begin
         exact = exp(-1.0)
-        u_coarse = _solve_decay_explicit(DiagonalIMEX_RK222(), 0.05)
-        u_fine   = _solve_decay_explicit(DiagonalIMEX_RK222(), 0.025)
+        u_coarse = _solve_decay_explicit(Tarang.DiagonalIMEX_RK222(), 0.05)
+        u_fine   = _solve_decay_explicit(Tarang.DiagonalIMEX_RK222(), 0.025)
 
         # Both must land near the analytic value exp(-1).
         @test isapprox(u_coarse, exact; rtol = 0.05)
@@ -76,8 +76,8 @@ end
 
     @testset "RK443 explicit fallback — exp(-t) decay + high order" begin
         exact = exp(-1.0)
-        u_coarse = _solve_decay_explicit(DiagonalIMEX_RK443(), 0.05)
-        u_fine   = _solve_decay_explicit(DiagonalIMEX_RK443(), 0.025)
+        u_coarse = _solve_decay_explicit(Tarang.DiagonalIMEX_RK443(), 0.05)
+        u_fine   = _solve_decay_explicit(Tarang.DiagonalIMEX_RK443(), 0.025)
 
         @test isapprox(u_coarse, exact; rtol = 0.01)
         @test isapprox(u_fine,   exact; atol = 1e-4)
@@ -112,7 +112,7 @@ end
         L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)  # 0 at k=0
         problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
-        solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.02)
+        solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_SBDF2(); dt = 0.02)
         Tarang.set_spectral_linear_operator!(solver, L)
 
         # Steps 1-2 at dt=0.02 establish history; step 3 at a clearly different
@@ -137,7 +137,7 @@ end
     @testset "implicit viscous decay exp(-ν k² t) — RK222 / RK443 / SBDF2" begin
         # cos(2x): mode k=2, k²=4; ν=0.5 → λ = ν k² = 2. Over T = 200·0.005 = 1
         # the amplitude decays to exp(-λ T) = exp(-2).
-        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
             coords = CartesianCoordinates("x")
             dist = Distributor(coords; mesh = (1,), dtype = Float64)
             xb = RealFourier(coords["x"]; size = 16, bounds = (0.0, 2π))
@@ -172,7 +172,7 @@ end
     #    grows it ~2000×).
     # -----------------------------------------------------------------------
     @testset "implicit stiff-limit L-stability — RK222 / RK443" begin
-        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443())
+        for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443())
             coords = CartesianCoordinates("x")
             dist = Distributor(coords; mesh = (1,), dtype = Float64)
             xb = RealFourier(coords["x"]; size = 16, bounds = (0.0, 2π))
@@ -216,7 +216,7 @@ end
         L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)  # 0 at k=0
         problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
-        solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.01)
+        solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_SBDF2(); dt = 0.01)
         Tarang.set_spectral_linear_operator!(solver, L)
 
         for _ in 1:100
@@ -239,7 +239,7 @@ end
         L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)
         problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = -u")
-        solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.01)
+        solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_SBDF2(); dt = 0.01)
         Tarang.set_spectral_linear_operator!(solver, L)
 
         # Fill the rolling two-entry history and its one dropped-storage slot.

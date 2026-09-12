@@ -206,7 +206,7 @@ import Tarang: SpectralLinearOperator
         @test RK111() isa Tarang.TimeStepper
         @test RK222() isa Tarang.TimeStepper
         @test RK443() isa Tarang.TimeStepper
-        @test DiagonalIMEX_RK222() isa Tarang.TimeStepper
+        @test Tarang.DiagonalIMEX_RK222() isa Tarang.TimeStepper
     end
 
     @testset "Multistep timestepper types exist" begin
@@ -236,7 +236,7 @@ import Tarang: SpectralLinearOperator
         # Operator attaches and is retrievable (this part works correctly).
         problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) = 0")
-        solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt=0.005)
+        solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_RK222(); dt=0.005)
         Tarang.set_spectral_linear_operator!(solver, L)
         @test Tarang._get_spectral_linear_operator(solver) !== nothing
 
@@ -268,7 +268,7 @@ import Tarang: SpectralLinearOperator
     @testset "DiagonalIMEX implicit stepping — RK443 and SBDF2" begin
         # Same viscous-decay check for the other diagonal-IMEX steppers; all share
         # the implicit path fixed in step_diagonal_imex.jl / spectral_operators.jl.
-        for ts in (DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for ts in (Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
             coords = CartesianCoordinates("x")
             dist = Distributor(coords; mesh=(1,), dtype=Float64)
             xb = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))
@@ -296,7 +296,7 @@ import Tarang: SpectralLinearOperator
         # one uses a deliberately stiff z = dt·ν·k² = 9.0. With the buggy
         # diagonal-only update the k=6 mode grows ~|−1.47|^20 ≈ 2000×; the correct
         # L-stable ESDIRK damps it to ≈ exp(−180) ≈ 0.
-        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443())
+        for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443())
             coords = CartesianCoordinates("x")
             dist = Distributor(coords; mesh=(1,), dtype=Float64)
             xb = RealFourier(coords["x"]; size=16, bounds=(0.0, 2π))

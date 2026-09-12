@@ -288,18 +288,15 @@ end
         @test err isa Tarang.ImplicitNCCError
     end
 
-    @testset "Genuinely nonlinear term on the LHS: warns, and is not in L" begin
+    @testset "Genuinely nonlinear term on the LHS: compilation rejects it" begin
         u, prob, = eqsv_fourier_problem()
         warned, msgs = eqsv_verdict!(prob, "dt(u) + u*d(u,x) = 0")
         @test warned == true
         @test occursin(r"∂t\(u\)\s*=", msgs[1])          # suggested: move it right
 
-        status, L, M = eqsv_build(prob)
-        @test status === :ok
-        # Reality behind the warning: the product contributes NOTHING to the implicit
-        # operator, so leaving it on the LHS means it is not solved implicitly at all.
-        @test nnz(L) == 0
-        @test nnz(M) > 0
+        status, err, _ = eqsv_build(prob)
+        @test status === :error
+        @test err isa ArgumentError
     end
 
     @testset "Linear term parked on the RHS: warns, and is not in L" begin

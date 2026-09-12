@@ -63,6 +63,96 @@ end
 
 if get(ENV, "TARANG_TEST_NETCDF_OUTPUT", "1") != "0"
 @testset "NetCDF output integration regressions" begin
+    @testset "output scales resample without changing the field" begin
+        dist, u = _serial_output_field()
+        original = cos.(collect(0:3) .* (2pi / 4))
+        get_grid_data(u) .= original
+        original_scales = u.scales
+        h = Tarang.NetCDFFileHandler(joinpath(mktempdir(), "scaled"), dist, Dict("u" => u))
+        Tarang.add_task!(h, u; name="base", scales=1)
+        Tarang.add_task!(h, u; name="fine", scales=2)
+        @test Tarang.process!(h; iteration=0, sim_time=0.0)
+        file = Tarang.current_file(h)
+        @test Tarang.group_ncread(file, "vars", "base") ≈ reshape(original, 1, 4)
+        @test Tarang.group_ncread(file, "vars", "fine") ≈
+              reshape(cos.(collect(0:7) .* (2pi / 8)), 1, 8) atol=1e-12
+        @test get_grid_data(u) ≈ original
+        @test u.scales == original_scales
+        fine = Tarang.group_variable_metadata(file, "vars", "fine")
+        @test fine.atts["count"] == [8]
+        @test vec(Tarang.group_ncread(file, "grids", fine.dim_names[2])) ≈
+              collect(0:7) .* (2pi / 8)
+    end
+
+    @testset "coefficient output scales retain the spectral shape" begin
+        dist, u = _serial_output_field()
+        fill!(get_grid_data(u), 1.0)
+        h = Tarang.NetCDFFileHandler(joinpath(mktempdir(), "coeff"), dist, Dict("u" => u))
+        Tarang.add_task!(h, u; name="u", layout="c", scales=2)
+        @test Tarang.process!(h; iteration=0, sim_time=0.0)
+        file = Tarang.current_file(h)
+        data = Tarang.group_ncread(file, "vars", "u")
+        @test size(data) == (1, 2, 3)
+        meta = Tarang.group_variable_metadata(file, "vars", "u")
+        @test meta.atts["count"] == [2, 3]
+    end
+
+    @testset "complex scalar output and requested precision" begin
+        dist, u = _serial_output_field()
+        fill!(get_grid_data(u), 1.25)
+        for precision in (Float32, Float64)
+            h = Tarang.NetCDFFileHandler(joinpath(mktempdir(), "typed"), dist,
+                                         Dict("u" => u); precision)
+            Tarang.add_task!(h, u; name="u")
+            Tarang.add_task!(h, u; name="complex_mean", postprocess=_ -> 2 + 3im)
+            @test Tarang.process!(h; iteration=0, sim_time=0.0)
+            file = Tarang.current_file(h)
+            @test eltype(Tarang.group_ncread(file, "vars", "u")) == precision
+            value = Tarang.group_ncread(file, "vars", "complex_mean")
+            @test value == reshape(precision[2, 3], 1, 2, 1)
+            meta = Tarang.group_variable_metadata(file, "vars", "complex_mean")
+            @test meta.atts["complex_split"] == 1
+        end
+    end
+
+    @testset "reopening append retries an incomplete record" begin
+        dist, u = _serial_output_field()
+        base = joinpath(mktempdir(), "incomplete")
+        h = Tarang.NetCDFFileHandler(base, dist, Dict("u" => u); sim_dt=1.0)
+        Tarang.add_task!(h, u; name="u")
+        fail = Ref(false)
+        Tarang.add_task!(h, u; name="second", postprocess=x -> (fail[] ? error("injected") : x))
+        @test Tarang.process!(h; iteration=0, sim_time=0.0)
+        fail[] = true
+        @test_throws ErrorException Tarang.process!(h; iteration=1, sim_time=1.0)
+        resumed = Tarang.NetCDFFileHandler(base, dist, Dict("u" => u); mode="append", sim_dt=1.0)
+        @test resumed.file_write_num == 1
+        Tarang.add_task!(resumed, u; name="u")
+        Tarang.add_task!(resumed, u; name="second")
+        fill!(get_grid_data(u), 7.0)
+        @test Tarang.process!(resumed; iteration=1, sim_time=1.0)
+        @test Tarang.group_ncread(Tarang.current_file(resumed), "vars", "second")[2, :] == fill(7.0, 4)
+        @test Tarang.netcdf_file_info(Tarang.current_file(resumed)).gatts["committed_writes"] == 2
+    end
+
+    @testset "failed rollover preserves the cumulative write count" begin
+        dist, u = _serial_output_field()
+        base = joinpath(mktempdir(), "rollover")
+        h = Tarang.NetCDFFileHandler(base, dist, Dict("u" => u); max_writes=1)
+        fail = Ref(false)
+        Tarang.add_task!(h, u; name="u", postprocess=x -> (fail[] ? error("injected") : x))
+        @test Tarang.process!(h; iteration=0, sim_time=0.0)
+        fail[] = true
+        @test_throws ErrorException Tarang.process!(h; iteration=1, sim_time=1.0)
+        resumed = Tarang.NetCDFFileHandler(base, dist, Dict("u" => u); mode="append", max_writes=1)
+        @test resumed.set_num == 2
+        @test resumed.file_write_num == 0
+        @test resumed.total_write_num == 1
+        Tarang.add_task!(resumed, u; name="u")
+        @test Tarang.process!(resumed; iteration=1, sim_time=1.0)
+        @test resumed.total_write_num == 2
+    end
+
     @testset "overwrite cleanup matches only the exact handler name" begin
         tmp = mktempdir()
         exact_dir = joinpath(tmp, "snap_s1")

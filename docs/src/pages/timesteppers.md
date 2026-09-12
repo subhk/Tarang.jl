@@ -24,7 +24,7 @@ This allows stable integration of stiff problems with larger timesteps.
 ### RK111
 
 First-order IMEX method (Backward Euler / Forward Euler), the Ascher–Ruuth–Spiteri
-(1,1,1) pair in the two-row form Dedalus also uses: an explicit first stage and one
+(1,1,1) pair in two-row form: an explicit first stage and one
 implicit solve, `(M + Δt·L) X_{n+1} = M X_n + Δt·F(X_n, t)`.
 
 ```julia
@@ -63,16 +63,15 @@ timestepper = RK222()
 
 ### RK443
 
-Third-order, 4-stage IMEX Runge-Kutta built on Alexander's (1977) L-stable
-3-stage SDIRK embedded as an ESDIRK (γ ≈ 0.4359, `c = [0, γ, (1+γ)/2, 1]`). It is
-*not* Kennedy & Carpenter's ARK3(2)4L[2]SA, whose `c₂ = 2γ`; the order-3 ARK
-coupling conditions hold to 1e-11 either way.
+Third-order IMEX Runge-Kutta using the Ascher-Ruuth-Spiteri (4,4,3) pair.
+The tableau has five rows including the initial stage, with four implicit solves
+and common stage times `c = [0, 1/2, 2/3, 1/2, 1]`.
 
 ```julia
 timestepper = RK443()
 ```
 
-- **Implicit part**: 4-stage ESDIRK (γ ≈ 0.4359)
+- **Implicit part**: four diagonally implicit stages (γ = 1/2)
 - **Explicit part**: 4-stage explicit RK
 - **Accuracy**: O(Δt³)
 - **Stability**: L-stable
@@ -121,13 +120,11 @@ SBDF4()  # 4th order
 
 ### MCNAB2 and CNLF2
 
-Two further two-step schemes live behind qualified names, `Tarang.MCNAB2(θ)` (a
-θ-weighted Crank–Nicolson + Adams–Bashforth 2; second order only at the default
-`θ = 0.5`) and `Tarang.CNLF2()` (Crank–Nicolson leapfrog). Both are
-global-matrix methods; on a GPU or MPI pure-Fourier problem with no implicit
-operator they take the same matrix-free field path as CNAB2 (MCNAB2 as CNAB2,
-since with `L = 0` the θ-weighting weights nothing; CNLF2 with its own leapfrog
-stencil) and keep second order.
+Two further two-step schemes use qualified names: `Tarang.MCNAB2()` (three-level
+modified CNAB2) and `Tarang.CNLF2()` (Crank-Nicolson leapfrog). MCNAB2 has fixed-step
+implicit weights `(9/16, 6/16, 1/16)` and variable-step corrections; there is no
+theta option. Both use per-mode subproblems when available. On explicit GPU/MPI
+problems, their implicit terms vanish and they use the matrix-free field path.
 
 ## Where each scheme runs
 
@@ -138,17 +135,24 @@ silently drops an implicit operator or substitutes a lower-order scheme.
 
 | Configuration | Runs | Refuses (loudly) |
 |---|---|---|
-| Serial CPU, pure Fourier | every scheme (global-matrix path; `DiagonalIMEX_*` per-mode division) | — |
-| Serial CPU, any Chebyshev/Jacobi axis | every IMEX RK and multistep scheme through per-mode tau subproblems | ETD (singular mass matrix of a tau/DAE system); `DiagonalIMEX_*` (operator not diagonal) |
-| MPI, pure Fourier, implicit operator on the LHS | RK111/222/443, RKSMR, RKGFY, RK443_IMEX, SBDF2, ETD_* — all as per-mode *distributed diagonal IMEX/ETD*; `DiagonalIMEX_*` | CNAB1/2, SBDF1/3/4, MCNAB2, CNLF2 (`ArgumentError`: no distributed diagonal implementation) |
+| Serial CPU, pure Fourier | every scheme (global-matrix path; attached diagonal operators select per-mode division) | — |
+| Serial CPU, any Chebyshev/Jacobi axis | every IMEX RK and multistep scheme through per-mode tau subproblems | ETD (singular mass matrix of a tau/DAE system) |
+| MPI, pure Fourier, implicit operator on the LHS | RK111/222/443, RKSMR, RKGFY, RK443_IMEX, SBDF2, ETD_* — all as per-mode *distributed diagonal IMEX/ETD* | CNAB1/2, SBDF1/3/4, MCNAB2, CNLF2 (`ArgumentError`: no distributed diagonal implementation) |
 | MPI, pure Fourier, no implicit operator | every RK and multistep scheme on the matrix-free field path at nominal order | — |
 | MPI, Chebyshev axis | the per-mode subproblem path (Chebyshev axis first) | — |
-| Single GPU, pure Fourier, implicit operator | `DiagonalIMEX_RK222/RK443/SBDF2` only, per-mode on device (from the equation's `L`, or an attached `SpectralLinearOperator`) | all 17 other schemes (`ErrorException` naming DiagonalIMEX or "move the term to the RHS") |
-| Single GPU, pure Fourier, no implicit operator | explicit RK, CNAB/SBDF/MCNAB2/CNLF2 field path, `DiagonalIMEX_*` (explicit, announced once) | — |
-| Single GPU, Chebyshev axis | IMEX RK and multistep through per-mode subproblems with CUDA sparse solves, mode-batched by default | rank-deficient stage systems (e.g. duplicate tau lifts, see below); ETD; `DiagonalIMEX_*` |
+| Single GPU, pure Fourier, implicit operator | `RK222`, `RK443`, `SBDF2` only, per-mode on device (from the equation's `L`, or an attached `SpectralLinearOperator`) | the remaining schemes (`ErrorException` naming supported schemes or "move the term to the RHS") |
+| Single GPU, pure Fourier, no implicit operator | explicit RK, CNAB/SBDF/MCNAB2/CNLF2 field path | — |
+| Single GPU, Chebyshev axis | IMEX RK and multistep through per-mode subproblems with CUDA sparse solves, mode-batched by default | rank-deficient stage systems (e.g. duplicate tau lifts, see below); ETD |
 
 The field and diagonal paths in this table require identity mass; see
 [Mass operators on field and diagonal paths](@ref).
+
+For `RK222`, `RK443`, and `SBDF2`, MPI CPU problems whose state consists entirely
+of spatial Fourier fields skip global sparse matrix assembly at construction.
+Equation parsing and validation still run; implicit operators are built as
+rank-local Fourier multipliers. This avoids retaining unused global matrices.
+Mixed-basis problems, states containing zero-dimensional fields, and other
+schemes retain their existing construction paths.
 
 Two degradations are announced with a warning rather than refused, because the
 result is still correct: serial `ETD_*` above 4096 coefficients falls back to
@@ -156,11 +160,10 @@ CNAB2 (the operator stays implicit — see the serial size limit under ETD below
 the three ETD types share one distributed per-mode ETD-RK2 implementation under
 MPI.
 
-`DiagonalIMEX_*` on a single GPU and on the CPU are the same code on different
-arrays; the device run reproduces the CPU run bit for bit. This, and every row of
-the table, is pinned by `test/test_gpu_timesteppers_jlarray.jl`, which drives all
-twenty schemes on the single-GPU dispatch path without a GPU (see
-[Testing](testing.md#Testing-GPU-paths-without-a-GPU)).
+`RK222()`, `RK443()`, and `SBDF2()` select internal diagonal solves on GPU Fourier
+problems. CPU matrix and subproblem paths retain the same numerical scheme.
+CPU/device parity is covered by `test/test_gpu_timesteppers_jlarray.jl`.
+
 
 ## How Boundary Conditions Are Enforced During Time Stepping
 
@@ -493,7 +496,7 @@ maximum(abs, get_grid_data(T))      # 0.36787944 == exp(-nu*1.0), to 8 digits
 | Moderate linear stiffness | Implicit linear solve permits a larger step | RK443, CNAB2, SBDF2, RKSMR |
 | Smooth solution needing higher temporal order | Fixed/slowly varying step and adequate startup history | RK443, SBDF3, SBDF4 |
 | Very stiff, manageable global matrix | Dense exponential is affordable | ETD_RK222, ETD_CNAB2, ETD_SBDF2 |
-| Pure-Fourier diagonal linear operator | Per-mode implicit division is available | `DiagonalIMEX_RK222`, `DiagonalIMEX_RK443`, `DiagonalIMEX_SBDF2` |
+| Pure-Fourier diagonal linear operator | Per-mode implicit division is available | `RK222`, `RK443`, `SBDF2` |
 
 ### By Physics
 
@@ -602,11 +605,10 @@ solver = InitialValueSolver(problem, SBDF2(); dt=0.001)
 # Subsequent steps: SBDF2
 ```
 
-The startup scheme is chosen so it cannot cap the global order: CNAB2 and SBDF2
-take one CNAB1 / SBDF1 step, while SBDF3 and SBDF4 seed their history with RK443
-steps (an order-1 start would leave them at second order). The same startup is
-used on every architecture, including the matrix-free field path, so the field
-path and the global-matrix path agree step for step.
+CNAB2 starts with CNAB1. SBDF methods build history using SBDF1, then SBDF2,
+then SBDF3 as needed. This startup is identical across architectures and can limit
+SBDF3/4 convergence from a single initial state to order two. There is no RK startup
+option.
 
 ## Performance Comparison
 
@@ -617,7 +619,7 @@ The RK counts below are the number of stages actually driven per step. Note that
 |--------|----------------------|---------------------------|--------|
 | RK111 | 2 | 1 implicit stage solve | Medium |
 | RK222 | 3 | 2 implicit stage solves (the first stage is explicit) | Medium |
-| RK443 | 4 | 3 implicit stage solves | Higher |
+| RK443 | 5 | 4 implicit stage solves | Higher |
 | RKSMR | 4 | 3 implicit stage solves | Higher |
 | CNAB2 | 1 | 1 implicit solve after startup | Medium |
 | SBDF2 | 1 | 1 implicit solve after startup | Medium |

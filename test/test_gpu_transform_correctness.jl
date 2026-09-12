@@ -165,7 +165,7 @@ else
             get_grid_data(u) .= (device isa CPU ? ic : CuArray(ic))
             # Keep the CPU global-matrix solve as an independent oracle. The GPU
             # must use its supported per-mode diagonal implicit solve.
-            ts = device isa CPU ? RK222() : DiagonalIMEX_RK222()
+            ts = RK222()
             solver = InitialValueSolver(prob, ts; dt=dt)
             for _ in 1:nsteps
                 step!(solver, dt)

@@ -49,7 +49,7 @@ else
         steppers = (RK111(), RK222(), RK443(), RKSMR(), Tarang.RKGFY(), Tarang.RK443_IMEX(),
                     CNAB1(), CNAB2(), SBDF1(), SBDF2(), SBDF3(), SBDF4(),
                     ETD_RK222(), ETD_CNAB2(), ETD_SBDF2(), Tarang.MCNAB2(), Tarang.CNLF2(),
-                    DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+                    Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
         for ts in steppers
             _, _, _, u = _gpu_fourier_field(16)
             fill!(grid_data!(u), 1.0)
@@ -64,7 +64,7 @@ else
     end
 
     @testset "GPU nested Laplacian retains hyperdiffusion" begin
-        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for ts in (RK222(), RK443(), SBDF2(), Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
             _, _, _, u = _gpu_fourier_field(16)
             xs = collect(0:15) .* (2π/16)
             copyto!(grid_data!(u), cos.(2 .* xs))
@@ -80,7 +80,7 @@ else
     @testset "GPU DiagonalIMEX viscous decay (exact rate)" begin
         # dt(u) = −ν k² u via attached SpectralLinearOperator; u0 = cos(2x),
         # ν = 0.5 → λ = 2; after T = 1.0 amplitude = exp(−2).
-        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for ts in (RK222(), RK443(), SBDF2(), Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
             N = 16
             coords, dist, xb, u = _gpu_fourier_field(N)
             xs = collect(range(0, 2π, length=N+1))[1:N]
@@ -128,7 +128,7 @@ else
         # matrix/subproblem), so step! must error loudly instead of integrating
         # without diffusion. The old behavior was a silent @debug + explicit
         # fallback — a heat equation ran inviscid with no error.
-        for ts in (RK222(), RK443(), SBDF2(), CNAB2(), ETD_RK222())
+        for ts in (CNAB2(), ETD_RK222())
             N = 16
             coords, dist, xb, u = _gpu_fourier_field(N)
             xs = collect(range(0, 2π, length=N+1))[1:N]
@@ -146,7 +146,7 @@ else
         # (_diagonal_Lhat_from_expr on GPU coefficient arrays); before the device
         # allocation fix it threw a scalar-indexing error at L̂ construction.
         # ν = 0.5, u0 = cos(2x) → λ = ν·k² = 2; after T = 1.0 amplitude = exp(−2).
-        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for ts in (RK222(), RK443(), SBDF2(), Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
             N = 16
             coords, dist, xb, u = _gpu_fourier_field(N)
             xs = collect(range(0, 2π, length=N+1))[1:N]

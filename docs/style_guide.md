@@ -10,7 +10,7 @@ This guide provides an overview of the Tarang framework. Each section describes 
 
 ## Problems & Boundary Conditions
 - Problems: `InitialValueProblem`, `LinearBoundaryValueProblem`, `NonlinearBoundaryValueProblem`, `EigenvalueProblem`.
-- Equations & BCs: Use `add_equation!(problem, "...")` for both PDEs and boundary conditions. Dedalus-style BC syntax `field(coord=value)` is auto-detected and converted to `Interpolate` operators.
+- Equations & BCs: Use `add_equation!(problem, "...")` for both PDEs and boundary conditions. mode-wise BC syntax `field(coord=value)` is auto-detected and converted to `Interpolate` operators.
 - Time/space-dependent values via string expressions (t, x, y, z) or `TimeDependentValue`/`SpaceDependentValue`.
 - Tau/lift: automatic through `BoundaryConditionManager`; `register_tau_field!` for custom tau fields.
 

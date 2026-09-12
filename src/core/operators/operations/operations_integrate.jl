@@ -20,7 +20,7 @@ function evaluate_integrate(int_op::Integrate, layout::Symbol=:g)
     coord = int_op.coord
 
     # Accept composite expressions (e.g. integrate(0.5*(u⋅u), coords)): reduce the
-    # operand tree to a scalar field first, then integrate (Dedalus-style).
+    # operand tree to a scalar field first, then integrate (mode-wise).
     if !isa(operand, ScalarField)
         operand = evaluate(operand)
     end

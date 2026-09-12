@@ -3,7 +3,7 @@
 # ---------------------------------------------------------------------------
 #
 # Subproblem matrices are assembled in a natural parser order, but the solve
-# path expects Dedalus-style grouping by spectral mode, tensor component, and
+# path expects mode-wise grouping by spectral mode, tensor component, and
 # equation/variable dimension. The helpers below produce sparse permutation
 # matrices instead of moving dense blocks by hand.
 

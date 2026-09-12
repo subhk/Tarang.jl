@@ -40,6 +40,9 @@ end
         namespace = Dict{String, Any}("u" => u, "v" => v)
         k = Float64.(0:8)
         for (expression, expected) in (
+            ("u/2", fill(0.5, length(k))),
+            ("lap(u)/2", -k.^2 ./ 2),
+            ("lap(u/2)", -k.^2 ./ 2),
             ("lap(lap(u))", k.^4),
             ("lap(-2*u)", 2 .* k.^2),
             ("lap(2*(u + u))", -4 .* k.^2),

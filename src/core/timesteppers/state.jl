@@ -559,12 +559,7 @@ function _update_one_filter!(filter_name::Symbol, reg::TemporalFilterRegistratio
         return nothing
     end
 
-    # Use try-catch in case filter types differ
-    try
-        update!(reg.filter, data, dt)
-    catch e
-        @warn "Failed to update temporal filter :$filter_name: $e"
-    end
+    update!(reg.filter, data, dt)
     return nothing
 end
 

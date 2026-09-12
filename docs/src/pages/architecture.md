@@ -182,7 +182,7 @@ the working alternative.
 | batched per-mode RK | `step_subproblem_rk_batched.jl` | as above, 2D, one Fourier axis; default on GPU, `batched_modes=true` on CPU |
 | global-matrix IMEX | `step_rk.jl`, `step_multistep.jl`, `step_global_matrix.jl`, `step_etd.jl` | serial CPU with no subproblems (pure Fourier) |
 | explicit field path | `step_rk.jl` (`_step_explicit_rk_gpu!`), `step_multistep_field.jl` | GPU or MPI pure-Fourier problem with no implicit operator |
-| serial diagonal IMEX | `step_diagonal_imex.jl` | `DiagonalIMEX_*` on a pure-Fourier problem (CPU or GPU): per-mode division by `1 + a·dt·L̂(k)` |
+| serial diagonal IMEX | `step_diagonal_imex.jl` | Selected internally by `RK222`, `RK443`, or `SBDF2` on GPU Fourier problems or serial problems with an attached diagonal operator: per-mode division by `1 + a·dt·L̂(k)` |
 | distributed diagonal IMEX / ETD | `step_diagonal_imex.jl` | MPI pure-Fourier with an implicit operator: RK family, ETD family, SBDF2 |
 
 The user-facing consequences (which scheme runs where, and what refuses) are

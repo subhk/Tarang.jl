@@ -25,7 +25,7 @@ function build_matrices!(sp::Subproblem, names, solver)
     store_expanded = config.store_expanded_matrices
 
     # Compute per-subproblem sizes.
-    # Following Dedalus (subsystems.py:504): eqn_sizes = [sp.field_size(eqn['eqn']) for eqn in eqns]
+    # Equation sizes: eqn_sizes = [sp.field_size(eqn['eqn']) for eqn in eqns]
     # Each equation's output size is determined by the LHS expression's structure,
     # not by the corresponding variable's size.
     eqn_conditions = [check_condition(sp, eq) for eq in eqns]
@@ -100,13 +100,13 @@ function build_matrices!(sp::Subproblem, names, solver)
         matrices[name_str] = sparse(rows, cols, ComplexF64.(data), I, J)
     end
 
-    # ── Dedalus-style valid mode filtering ──────────────────────────────
+    # ── mode-wise valid mode filtering ──────────────────────────────
     # For non-DC modes, gauge constraints like integ(p)=0 produce zero rows
     # (the integral of a non-DC Fourier mode over x is zero), leaving the
     # paired tau variable (tau_p) as a free parameter — a genuine gauge
-    # degree of freedom that Dedalus excludes via valid_modes.
+    # degree of freedom excluded by valid-mode filtering.
     #
-    # Approach (following Dedalus subsystems.py:539-563):
+    # Approach:
     # 1. Detect equation rows that are all-zero in both L and M (trivially
     #    satisfied, e.g., integ(p)=0 for non-DC).
     # 2. For each zero row, find the paired 0D tau variable: the 1-DOF
@@ -170,19 +170,19 @@ function build_matrices!(sp::Subproblem, names, solver)
     valid_eqn_mat = spdiagm(0 => ComplexF64.(valid_eqn))
     valid_var_mat = spdiagm(0 => ComplexF64.(valid_var))
 
-    # Dedalus-style permutations before dropping invalid rows/columns.
+    # mode-wise permutations before dropping invalid rows/columns.
     # This preserves the grouped equation/variable ordering needed by bordered
     # formulations and keeps gather/scatter consistent with the compressed space.
     left_perm = left_permutation(sp, eqns, eqn_sizes, bc_top, interleave_components)
     right_perm = right_permutation(sp, vars, tau_left, interleave_components)
 
-    # Preconditioners: permutation + valid-mode filtering (Dedalus subsystems.py:560-563)
+    # Preconditioners: permutation + valid-mode filtering
     sp.pre_left = drop_empty_rows(left_perm * valid_eqn_mat)
     sp.pre_left_pinv = sparse(sp.pre_left')
     sp.pre_right_pinv = drop_empty_rows(right_perm * valid_var_mat)
     sp.pre_right = sparse(sp.pre_right_pinv')
 
-    # Apply permutations: L_min = pre_left * L * pre_right (Dedalus subsystems.py:569-571)
+    # Apply permutations: L_min = pre_left * L * pre_right
     for (name, matrix) in matrices
         matrices[name] = sp.pre_left * matrix * sp.pre_right
     end
@@ -213,7 +213,7 @@ function build_matrices!(sp::Subproblem, names, solver)
     # bulk row in the bulk block as well. Only "pure BC" taus, which have no
     # support on bulk rows, stay in the BC block.
     #
-    # This matches the Dedalus requirement that coupling taus stay in the bulk;
+    # This matches the requirement that coupling taus stay in the bulk;
     # a size-only split is incorrect for first-order/tau formulations.
     if haskey(matrices, "L") && !isempty(eqn_sizes) && !isempty(var_sizes)
         row_order = [idx for idx in _left_permutation_indices(sp, eqns, eqn_sizes, bc_top, interleave_components) if valid_eqn[idx]]
@@ -283,7 +283,7 @@ function build_matrices!(sp::Subproblem, names, solver)
         end
     end
 
-    # Store expanded matrices for IMEX in-place LHS updates (Dedalus pattern).
+    # Store expanded matrices for IMEX in-place LHS updates (mode-wise pattern).
     # Pre-allocate sp.LHS with the union of M and L sparsity patterns, then
     # store M_exp and L_exp that have this same pattern. At timestep time,
     # we can update sp.LHS in-place via:

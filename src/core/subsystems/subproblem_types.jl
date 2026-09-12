@@ -324,7 +324,7 @@ subproblem_field_size(sp::Subproblem, field::TensorField) =
     sum(subproblem_field_size(sp, comp) for comp in vec(field.components))
 
 # ---------------------------------------------------------------------------
-# Per-subproblem equation sizing (following Dedalus subsystems.py:504)
+# Per-subproblem equation sizing (using per-mode field sizes)
 # ---------------------------------------------------------------------------
 
 """Get Chebyshev basis from subproblem problem variables."""

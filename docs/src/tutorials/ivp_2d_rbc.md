@@ -496,4 +496,4 @@ The full example is at `examples/ivp/rayleigh_benard_2d.jl` in the repository. C
 
 1. Chandrasekhar, S. (1961). *Hydrodynamic and Hydromagnetic Stability*. Oxford.
 2. Tritton, D. J. (1988). *Physical Fluid Dynamics*. Oxford.
-3. Burns, K. J., Vasil, G. M., Oishi, J. S., Lecoanet, D., & Brown, B. P. (2020). "Dedalus: A flexible framework for numerical simulations with spectral methods." *Physical Review Research*, 2, 023068.
+3. Burns, K. J., Vasil, G. M., Oishi, J. S., Lecoanet, D., & Brown, B. P. (2020). *Physical Review Research*, 2, 023068.

@@ -133,6 +133,9 @@ function build_matrix_expressions!(problem::Problem)
         end
 
         try
+            if problem isa InitialValueProblem
+                _validate_ivp_equation_format(lhs, rhs, problem.variables)
+            end
             eq_data = EquationIR(build_equation_expressions(lhs, rhs, problem.variables))
             eq_data["equation_index"] = i
             eq_data["equation_string"] = equation_str

@@ -11,7 +11,7 @@ end
 
 @testset "Diagonal implicit operator composition" begin
     @testset "nested Laplacian dissipates the represented Fourier mode" begin
-        for scheme in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for scheme in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
             u, _ = _doc_fields()
             set!(u, (x,) -> cos(2x))
             problem = InitialValueProblem([u])
@@ -27,7 +27,7 @@ end
     end
 
     @testset "cross-field diffusion is refused before a step advances" begin
-        for scheme in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2()),
+        for scheme in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2()),
             expression in ("lap(v)", "fraclap(v, 0.5)", "lap(u + v)")
             u, v = _doc_fields()
             fill!(u["g"], 0.0)
@@ -49,6 +49,9 @@ end
         namespace = Dict{String, Any}("u" => u, "v" => v, "x" => u.dist.coordsys["x"])
         k = Float64.(0:8)
         cases = (
+            ("u/2", fill(0.5, length(k))),
+            ("lap(u)/2", -k.^2 ./ 2),
+            ("lap(u/2)", -k.^2 ./ 2),
             ("lap(lap(u))", k.^4),
             ("lap(-2*u)", 2 .* k.^2),
             ("lap(2*(u + u))", -4 .* k.^2),
@@ -67,9 +70,11 @@ end
         end
 
         for expression in ("lap(v)", "fraclap(v, 0.5)", "lap(u + v)",
-                           "lap(u*v)", "lap(d(v, x))")
+                           "lap(u*v)", "lap(d(v, x))", "u/v")
             op = Tarang.parse_expression(expression, namespace)
             @test Tarang._diagonal_Lhat_from_expr(op, u) === nothing
         end
+        op = Tarang.DivideOperator(u, Tarang.ConstantOperator(0.0))
+        @test_throws ArgumentError Tarang._diagonal_Lhat_from_expr(op, u)
     end
 end

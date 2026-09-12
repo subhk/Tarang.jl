@@ -38,21 +38,14 @@ end
 """
     Modified Crank-Nicolson Adams-Bashforth 2nd order step.
 
-    Uses modified θ parameter for the implicit Crank-Nicolson treatment.
-
-    θ = 0.5 gives second order. Other θ values change the damping of the
-    implicit term and reduce its temporal accuracy to first order.
-
-    Formula:
-    (M + θ*dt*L) X^{n+1} = (M - (1-θ)*dt*L) X^n + dt*(c₁*F^n + c₂*F^{n-1})
-
-    where c₁ = 1.5, c₂ = -0.5 are Adams-Bashforth 2 coefficients.
+    Uses three implicit time levels. At constant timestep their weights are
+    (9/16, 6/16, 1/16); explicit extrapolation uses AB2 weights (3/2, -1/2).
+    Variable-step coefficients depend on the current/previous timestep ratio.
     """
 function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
     dt = state.dt
-    θ = state.timestepper.implicit_coefficient
 
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
@@ -63,13 +56,13 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
             step_cnab1!(state, solver)
             return
         end
-        a, b, c = _mcnab2_coefs(dt, get_previous_timestep(state), θ)
+        a, b, c = _mcnab2_coefs(dt, get_previous_timestep(state))
         step_subproblem_multistep!(state, solver, sps, a, b, c)
         return
     end
 
     # GPU / MPI without subproblems: no global matrix exists. With no implicit
-    # operator the θ-weighting weights nothing and MCNAB2 IS CNAB2, so take the
+    # operator the implicit stencil vanishes and MCNAB2 IS CNAB2, so take the
     # matrix-free field path (see step_multistep_field.jl). This must precede
     # the startup gate below: the field path keeps a one-entry `state.history`,
     # so `length(state.history) < 2` stayed true forever and every device step
@@ -102,8 +95,8 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
     dt_current = dt
     dt_previous = get_previous_timestep(state)
 
-    # MCNAB2 coefficients with modified θ
-    a, b, c = _mcnab2_coefs(dt_current, dt_previous, θ)
+    # Three-level MCNAB2 coefficients
+    a, b, c = _mcnab2_coefs(dt_current, dt_previous)
 
     try
         X_current = _timestep_fields_vector!(state, :mcnab2_X_current_vec, current_state)
@@ -131,6 +124,9 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
         end
         rhs .-= a[2] * MX_history[1]
         rhs .-= b[2] * LX_history[1]
+        if length(b) >= 3 && length(LX_history) >= 2
+            rhs .-= b[3] * LX_history[2]
+        end
 
         # Build and solve LHS: (a[0]*M + b[0]*L) X = RHS
         # Cache single LU factorization; recompute only when (a[1],b[1]) changes.
@@ -146,7 +142,7 @@ function step_mcnab2!(state::TimestepperState, solver::InitialValueSolver)
         _push_vector_state!(state.history, X_new, current_state, 4)
         state.timestepper_data[:iteration] += 1
 
-        @debug "MCNAB2 step completed: dt=$dt_current, θ=$θ, iteration=$(state.timestepper_data[:iteration])"
+        @debug "MCNAB2 step completed: dt=$dt_current, iteration=$(state.timestepper_data[:iteration])"
 
     catch e
         # GPU state: rethrow. Substituting another scheme here would SWALLOW the

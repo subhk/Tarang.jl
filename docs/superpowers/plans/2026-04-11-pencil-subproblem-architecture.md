@@ -4,7 +4,7 @@
 
 **Goal:** Replace the single global sparse L/M matrix with per-pencil (per-Fourier-mode) dense matrices, enabling correct implicit treatment of diffusion in mixed Fourier-Chebyshev domains (Rayleigh-Benard, channel flows).
 
-**Architecture:** For a 2D domain with Fourier(x) × Chebyshev(z), each Fourier mode kx has an independent dense matrix of size (n_vars × N_cheb) × (n_vars × N_cheb). The IMEX solver factorizes these small matrices independently — 129 pencils of 512×512 instead of one 33799×33799 sparse matrix. This is how Dedalus handles mixed-basis problems.
+**Architecture:** For a 2D domain with Fourier(x) × Chebyshev(z), each Fourier mode kx has an independent dense matrix of size (n_vars × N_cheb) × (n_vars × N_cheb). The IMEX solver factorizes these small matrices independently — 129 pencils of 512×512 instead of one 33799×33799 sparse matrix. This separates independent modes in mixed-basis problems.
 
 **Tech Stack:** Julia, SparseArrays, LinearAlgebra (dense LU), existing Tarang subsystem/distributor infrastructure.
 

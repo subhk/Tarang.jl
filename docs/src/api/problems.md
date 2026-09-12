@@ -252,6 +252,11 @@ that warning.
 linear operator on the RHS is legal but triggers a warning, because IMEX
 timesteppers only apply the implicit solve to the LHS.
 
+Initial-value equation compilation rejects nonlinear LHS terms and time
+derivatives on the RHS with an `ArgumentError`, on both CPU and GPU. Equations
+are not rearranged automatically. Write time derivatives as separate LHS
+addends: use `2*dt(u) + 2*u = 0`, not `2*(dt(u) + u) = 0`.
+
 **Examples**:
 
 #### Simple equations
@@ -266,10 +271,8 @@ add_equation!(problem, "Δ(phi) + l1 + l2 = rho")
 
 !!! warning "Only first-order time derivatives"
     `∂t(u)` is the only time derivative the mass matrix understands. A
-    second-order form such as `"∂t(∂t(u)) - c^2*Δ(u) = 0"` is *not* rejected —
-    it is silently integrated as if it were first order (measured: it decays
-    like the heat equation instead of oscillating). Reduce the equation to a
-    first-order system instead:
+    second-order form such as `"∂t(∂t(u)) - c^2*Δ(u) = 0"` is rejected during
+    initial-value equation compilation. Reduce it to a first-order system instead:
 
     ```julia
     problem = InitialValueProblem([u, v])

@@ -1,5 +1,5 @@
 """
-Test suite for the 7 Dedalus Cartesian features added to Tarang.jl:
+Test suite for the 7 Cartesian features added to Tarang.jl:
 1. CNLF2 variable-timestep coefficients
 2. HilbertTransform operator
 3. UnaryGridFunction symbolic derivatives (sym_diff)
@@ -38,7 +38,7 @@ function make_1d_complex_fourier_field(; N=64, L=2π, name="u")
 end
 
 # ============================================================================
-@testset "Dedalus Feature Tests" begin
+@testset "Cartesian Feature Tests" begin
 # ============================================================================
 
 # -----------------------------------------------------------------------
@@ -175,7 +175,7 @@ end
         dt = 0.01
         w1 = 1.0  # constant dt
 
-        # Dedalus CNLF2 coefficients
+        # CNLF2 coefficients
         a1 = 1.0 / ((1.0 + w1) * dt)
         a2 = (w1 - 1.0) / dt
         a3 = -w1^2 / ((1.0 + w1) * dt)

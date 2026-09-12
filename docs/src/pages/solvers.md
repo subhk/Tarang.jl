@@ -227,17 +227,16 @@ SBDF3()  # Semi-implicit BDF, 3rd order
 SBDF4()  # Semi-implicit BDF, 4th order
 ```
 
-Exponential and diagonal-spectral families are also public:
+Exponential methods are also public:
 
 ```julia
 ETD_RK222()
 ETD_CNAB2()
 ETD_SBDF2()
-
-DiagonalIMEX_RK222()
-DiagonalIMEX_RK443()
-DiagonalIMEX_SBDF2()
 ```
+
+`RK222()`, `RK443()`, and `SBDF2()` choose their internal diagonal implementation
+on GPU Fourier problems; no device-specific timestepper name is needed.
 
 The ETD types use global matrix φ-functions in serial; under MPI pure-Fourier
 execution they currently share the distributed ETD-RK2 path. Diagonal IMEX
@@ -253,7 +252,7 @@ requires a `SpectralLinearOperator` registered with
 | Stiff linear term | CNAB2, SBDF2 |
 | Smooth high-order integration | RK443, SBDF3, SBDF4 |
 | Affordable global matrix exponential | ETD_RK222, ETD_CNAB2, ETD_SBDF2 |
-| Pure-Fourier diagonal linear term | Diagonal IMEX family |
+| Pure-Fourier diagonal linear term | RK222, RK443, SBDF2 |
 
 ## Adaptive Time Stepping
 

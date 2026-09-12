@@ -85,7 +85,7 @@ const TEST_FILES = [
     "test_boundary_conditions.jl",
     "test_nonlinear.jl",
     "test_general.jl",
-    "test_dedalus_features.jl",
+    "test_cartesian_features.jl",
     "test_symbolic_diff.jl",
     "test_derivatives_polynomial.jl",
     "test_streamfunction.jl",
@@ -146,6 +146,7 @@ const TEST_FILES = [
     "test_type_stability.jl",
     "test_field_typestability.jl",
     "test_filter_forcing_typestability.jl",
+    "test_reference_timesteppers.jl",
     "test_fourier_algebraic_constraints.jl",
     "test_gpu_field_rk_allocations.jl",
     "test_lazy_rhs_fourier.jl",
@@ -280,7 +281,7 @@ const MPI_TEST_FILES = [
     "test_mpi_distributor_remainder_np2.jl", # C3 remainder-on-last-rank (np==2)
     "test_mpi_fourier_chebyshev.jl",         # FFC: Cheb-last clear error, Cheb-first round-trip (np>=2)
     "test_mpi_cheb_fourier_ivp.jl",          # distributed Cheb-Fourier IMEX InitialValueProblem == serial (np>=2/4)
-    "test_mpi_sbdf_high_order.jl",            # SBDF3/4 subproblem startup retains nominal convergence order (np>=2)
+    "test_mpi_sbdf_high_order.jl",            # SBDF3/4 subproblem startup-limited convergence (np>=2)
     "test_mpi_explicit_multistep_field.jl",   # explicit multistep on distributed pure-Fourier: field path == serial (np>=2); used to throw
     "test_mpi_multistep_review.jl",
     "test_mpi_timestepper_mass_guard.jl",

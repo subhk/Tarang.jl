@@ -67,6 +67,14 @@ end
             return InitialValueSolver(prob, ts; dt=1e-3)
         end
 
+        @testset "invalid equation format is rejected on device fields" begin
+            for equation in ("dt(u) + u*d(u,x) = 0", "dt(u) + u^2 = 0",
+                             "2*(dt(u) + u) = 0", "dt(dt(u)) = 0",
+                             "dt(u) = dt(u)")
+                @test_throws ArgumentError gijl_solver(equation, RK222())
+            end
+        end
+
         @testset "implicit term is detected even though the GPU path builds no matrices" begin
             s = gijl_solver("∂t(u) - 0.5*lap(u) = 0", RK222())
             @test Tarang._distributed_field_path_reason(s.state) === :gpu
@@ -75,7 +83,7 @@ end
         end
 
         @testset "non-diagonal schemes refuse instead of dropping the operator" begin
-            for ts in (RK222(), SBDF2(), ETD_RK222())
+            for ts in (CNAB2(), SBDF3(), ETD_RK222())
                 s = gijl_solver("∂t(u) - 0.5*lap(u) = 0", ts)
                 @test_throws ErrorException step!(s, 1e-3)
             end
@@ -104,11 +112,11 @@ end
             @test !gijl_guard_refused(s)
         end
 
-        @testset "diagonal-IMEX schemes remain exempt" begin
+        @testset "RK222 selects its internal diagonal path" begin
             # These solve the diagonal Fourier operator per mode on-device, so they are
             # the answer the guard's error message points users to. The implicit term is
             # present, but the guard must not refuse them.
-            s = gijl_solver("∂t(u) - 0.5*lap(u) = 0", DiagonalIMEX_RK222())
+            s = gijl_solver("∂t(u) - 0.5*lap(u) = 0", RK222())
             @test Tarang._problem_has_implicit_linear_term(s)
             @test !gijl_guard_refused(s)
         end

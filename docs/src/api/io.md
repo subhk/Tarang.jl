@@ -56,6 +56,11 @@ run!(solver; stop_iteration=6, outputs=[handler], progress=false)   # outputs= i
 - `max_writes`: maximum writes per file before starting a new file set
 - `parallel`: `"gather"` or `"virtual"` — see the Parallel I/O section below
 - `mode`: `"overwrite"` (default) or `"append"`
+- `precision`: `Float32` or `Float64` (default), applied to stored task values
+
+New output files track `committed_writes`. Append recovery retries an incomplete
+trailing record instead of treating its time metadata as a completed write.
+Older files without this marker retain legacy append recovery.
 
 **Returns**: `NetCDFFileHandler`
 
@@ -78,6 +83,14 @@ Tarang.add_task!
 ```
 
 Add a field output task.
+
+`scales` selects the grid output resolution. Resampling uses a copy and leaves
+the live field unchanged; scaled tasks have separate coordinate dimensions.
+Coefficient output retains the stored spectral mode count regardless of grid
+scales. Resolution-changing scales under MPI are currently rejected.
+
+Complex arrays and scalar postprocessing results use a leading real/imaginary
+dimension and carry the `complex_split=1` attribute on both CPU and GPU output.
 
 ---
 
@@ -586,7 +599,7 @@ Treat a distributed GPU checkpoint as unverified.
 ### Restart fidelity
 
 One-step schemes restart exactly: RK111, RK222, RK443, RK443\_IMEX, RKSMR,
-RKGFY, ETD\_RK222, DiagonalIMEX\_RK222 and DiagonalIMEX\_RK443. So do the
+RKGFY and ETD\_RK222, including internal diagonal RK implementations. So do the
 first-order multistep bootstraps CNAB1 and SBDF1 — they depend only on the
 current state, so there is no history to lose.
 
@@ -600,11 +613,9 @@ steps. The run stays correct but is not bit-identical to an uninterrupted one.
 | SBDF2, ETD\_SBDF2, ETD\_CNAB2 | 1 |
 | SBDF3 | 2 |
 | SBDF4 | 3 |
-| DiagonalIMEX\_SBDF2 | 1 |
 
-Note `DiagonalIMEX_SBDF2`: despite the family name it is a **multi-step**
-method (so says its own docstring) and does *not* restart exactly. The other two
-`DiagonalIMEX_*` schemes do.
+SBDF2 remains a multistep scheme on both CPU and GPU; its internal diagonal
+implementation also needs to rebuild history after restart.
 
 ## Field-level save and load
 
