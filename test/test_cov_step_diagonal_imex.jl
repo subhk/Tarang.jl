@@ -247,7 +247,7 @@ end
             step!(solver)
         end
         state = solver.timestepper_state
-        F_history = state.timestepper_data[:F_history]
+        F_history = state.timestepper_data[:ddi_sbdf2_F_history]
         recycled = state.timestepper_data[:ddi_sbdf2_F_recycled]
         @test recycled !== nothing
         storage_ids = Set(objectid(field) for fields in (F_history..., recycled)
@@ -257,7 +257,7 @@ end
         # fresh copy here makes this set change even though the live history
         # still has the correct numerical values.
         step!(solver)
-        F_history = state.timestepper_data[:F_history]
+        F_history = state.timestepper_data[:ddi_sbdf2_F_history]
         recycled = state.timestepper_data[:ddi_sbdf2_F_recycled]
         next_storage_ids = Set(objectid(field) for fields in (F_history..., recycled)
                                for field in fields)

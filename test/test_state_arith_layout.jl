@@ -38,6 +38,16 @@ function _public_edit_solver(stepper=RK222(); rhs="0", initial=1.0)
 end
 
 @testset "solver handles share authoritative field storage" begin
+    @testset "workspace states retain variable names" begin
+        u, solver = _public_edit_solver()
+        v = ScalarField(u.dist, "v", u.bases, u.dtype)
+        state = Tarang.TimestepperState(RK222(), 0.1, [u, v])
+        fields = Tarang._workspace_field_state!(state, :name_regression, [u, v], 1)
+        @test getproperty.(fields, :name) == ["u", "v"]
+        fallback = Tarang.get_workspace_field!(state, v, length(state.workspace_fields) + 1)
+        @test fallback.name == "v"
+    end
+
     @testset "public grid edits survive the next step" begin
         u, solver = _public_edit_solver()
         step!(solver)

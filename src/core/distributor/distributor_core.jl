@@ -328,11 +328,14 @@ end
     _close_backend_plan_caches!(dist::Distributor)
 
 Release any backend-owned plan caches keyed on this Distributor's communicator.
-The core package owns no such cache; the CUDA extension adds a method that
-finalizes its distributed DCT plans. Called from `close(dist)` before the
-communicators are freed, so every collective teardown pairs up across ranks.
+The core package owns no such cache; backend dispatch lets the CUDA extension
+finalize its distributed DCT plans without replacing a core method. Called from
+`close(dist)` before communicators are freed, so every collective teardown pairs
+up across ranks.
 """
-_close_backend_plan_caches!(dist::Distributor) = nothing
+_close_backend_plan_caches!(dist::Distributor) =
+    _close_backend_plan_caches!(dist, dist.architecture)
+_close_backend_plan_caches!(dist::Distributor, ::AbstractArchitecture) = nothing
 
 """
     close(dist::Distributor)

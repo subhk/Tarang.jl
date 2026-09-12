@@ -1585,7 +1585,8 @@ function _add_registered_forcings_to_lazy_rhs!(rhs_fields, problem::Problem)
         if F_view !== nothing
             coeff_data .+= F_view
         else
-            @warn "Forcing size doesn't match RHS size for state field $var_idx"
+            throw(ArgumentError(
+                "Forcing size doesn't match RHS size $(size(coeff_data)) for state field $var_idx"))
         end
     end
 

@@ -3,23 +3,35 @@
 # ============================================================================
 # DCT-I plan cache — zero-allocation Chebyshev transforms
 #
-# Keyed by (N::Int, T::DataType) → (plan, scratch::Vector{T}).
+# Task-owned cache keyed by (N::Int, T::DataType) → (plan, scratch::Vector{T}).
 # `plan` is an FFTW in-place REDFT00 plan created once per (N,T) pair.
 # `scratch` is the contiguous buffer the plan transforms in-place; callers
 # copyto! their input into scratch, apply `plan * scratch`, then read scratch.
-# Single-threaded assumption: scratch is reused across calls at the same (N,T).
+# Scratch is reused only by its owning task, including after task migration.
 # ============================================================================
-const _CHEB_DERIV_PLANS = Dict{Tuple{Int, DataType}, Tuple{Any, Vector}}()
+const _CHEB_DERIV_PLANS_KEY = gensym(:tarang_chebyshev_derivatives)
+
+struct _ChebyshevDerivativePlans
+    owner::Task
+    entries::Dict{Tuple{Int, DataType}, Tuple{Any, Vector}}
+end
 
 function _get_cheb_deriv_plan(N::Int, ::Type{T}) where {T<:AbstractFloat}
+    storage = task_local_storage()
+    cache = get(storage, _CHEB_DERIV_PLANS_KEY, nothing)
+    owner = current_task()
+    if !(cache isa _ChebyshevDerivativePlans) || cache.owner !== owner
+        cache = _ChebyshevDerivativePlans(owner, Dict{Tuple{Int, DataType}, Tuple{Any, Vector}}())
+        storage[_CHEB_DERIV_PLANS_KEY] = cache
+    end
     key = (N, T)
-    entry = get(_CHEB_DERIV_PLANS, key, nothing)
+    entry = get(cache.entries, key, nothing)
     entry !== nothing && return entry::Tuple{Any, Vector}
     v = Vector{T}(undef, N)
     plan = FFTW.plan_r2r!(v, FFTW.REDFT00)
     scratch = Vector{T}(undef, N)
     e = (plan, scratch)
-    _CHEB_DERIV_PLANS[key] = e
+    cache.entries[key] = e
     return e
 end
 

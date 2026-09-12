@@ -364,6 +364,15 @@ end
         e3 = _get_cheb_deriv_plan(32, Float64)
         @test e3 !== e1
         @test length(e3[2]) == 32
+
+        inherited = copy(task_local_storage())
+        child = fetch(Threads.@spawn begin
+            merge!(task_local_storage(), inherited)
+            _get_cheb_deriv_plan(16, Float64)
+        end)
+        @test child[2] !== e1[2]
+        buffers = fetch.([Threads.@spawn(_get_cheb_deriv_plan(16, Float64)[2]) for _ in 1:8])
+        @test length(unique(objectid.(buffers))) == 8
     end
 
     @testset "_cheb_deriv_nth_inplace! matches repeated single derivative" begin

@@ -631,6 +631,9 @@ end
 # Validate against all solved-for variables together: u*v is nonlinear even
 # though each individual matrix-column builder sees only one dependent factor.
 _ivp_expression_children(expr) = ()
+_ivp_expression_children(expr::Operator) = throw(ArgumentError(
+    "IVP dependency traversal is not implemented for $(typeof(expr)); " *
+    "refusing to classify an unsupported operator as a constant."))
 _ivp_expression_children(expr::Future) = future_args(expr)
 _ivp_expression_children(expr::Union{AddOperator, SubtractOperator,
     MultiplyOperator, DivideOperator, PowerOperator, Outer}) = (expr.left, expr.right)
@@ -1563,6 +1566,8 @@ end
 struct UnknownOperator <: Operator
     expression::String
 end
+
+_ivp_expression_children(::Union{ZeroOperator, ConstantOperator, ArrayOperator, UnknownOperator}) = ()
 
 # has() definitions for ZeroOperator, ConstantOperator, ArrayOperator, UnknownOperator
 # These types never contain problem variables (following spectral pattern)

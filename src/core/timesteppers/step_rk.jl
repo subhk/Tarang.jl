@@ -145,6 +145,16 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
     has_mass = M_matrix !== nothing
     M_factor = has_mass ? _get_mass_factor!(state, M_matrix) : nothing
     M_is_singular = has_mass && M_factor === nothing
+    zero_mass_rows = if M_is_singular
+        cached = get(state.timestepper_data, :imex_rk_zero_mass_rows, nothing)
+        if cached === nothing || cached[1] !== M_matrix
+            cached = (M_matrix, _zero_mass_rows(M_matrix))
+            state.timestepper_data[:imex_rk_zero_mass_rows] = cached
+        end
+        cached[2]
+    else
+        Int[]
+    end
 
     _ensure_coeff_layout!(current_state)
     vector_size = _fields_vector_size(current_state)
@@ -192,6 +202,11 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
         # When M is absent, uses (I + dt*a*L). When M is singular (DAE),
         # (M + dt*a*L) is still non-singular because L fills constraint rows.
         a_ii = A_imp[s, s]
+        if M_is_singular && abs(a_ii) >= 1e-14
+            _refresh_bcs_for_stage!(solver, t + ts.c_implicit[s] * dt)
+            _apply_global_algebraic_rhs!(rhs_vec, solver.problem, zero_mass_rows)
+            rhs_vec[zero_mass_rows] .*= dt * a_ii
+        end
         if !has_mass
             if abs(a_ii) < 1e-14
                 copyto!(Xs_vec, rhs_vec)

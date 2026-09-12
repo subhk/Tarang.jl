@@ -15,6 +15,42 @@ end
 
 struct StopAfterExplicitFirstStage <: Tarang.LazyFuture end
 
+if review_case("jacobian_failure")
+    @testset "Nonlinear Jacobian failures reach the caller" begin
+        u = ScalarField(PeriodicDomain(8), "u")
+        set!(u, 0.5)
+        problem = NonlinearBoundaryValueProblem([u])
+        custom = Tarang.GeneralFunction(u, z -> z^2, "unregistered_square")
+        add_parameters!(problem; custom)
+        add_equation!(problem, "u = custom")
+        Tarang.build_matrix_expressions!(problem)
+        x = Tarang.fields_to_vector([u])
+
+        # An evaluable residual does not imply that its derivative is supported.
+        # Neither a linear matrix nor an identity is a valid replacement for it.
+        for linear in (nothing, spdiagm(0 => ones(ComplexF64, length(x))))
+            Tarang.set_compiled_matrices!(problem, linear, nothing)
+            @test_throws "No symbolic derivative registered for function 'unregistered_square'" Tarang.evaluate_residual_and_jacobian(problem, x)
+        end
+    end
+end
+
+if review_case("forcing_mismatch")
+    @testset "Registered forcing shape mismatch aborts RHS evaluation" begin
+        u = ScalarField(PeriodicDomain(8, 8), "u")
+        problem = InitialValueProblem([u])
+        add_equation!(problem, "dt(u) = 0")
+        forcing = StochasticForcing(field_size=(4, 4), forcing_rate=0.1,
+            k_forcing=1.0, dk_forcing=1.0, dt=0.01, rng=MersenneTwister(42))
+        add_stochastic_forcing!(problem, :u, forcing)
+        solver = InitialValueSolver(problem, RK222(); dt=0.01)
+        Tarang._update_registered_forcings!(solver, 0.0, solver.dt)
+
+        @test_throws "Forcing size" Tarang.evaluate_rhs(solver, solver.state, 0.0)
+        @test_throws "Forcing size" Tarang._evaluate_rhs_interpreted(solver, solver.state, 0.0)
+    end
+end
+
 if review_case("imex_failure")
     @testset "IMEX singular stage never drops to explicit RK" begin
         dt = 0.1

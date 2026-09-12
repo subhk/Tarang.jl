@@ -31,6 +31,32 @@ assert the shim's exact behaviour rather than assuming Dict semantics.
 using Test
 using Tarang
 
+@testset "Nonlinear convenience operators are evaluated, not implicit zeros" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; dtype=Float64, device=CPU())
+    bases = Tuple(RealFourier(coords[c]; size=16, bounds=(0.0, 2pi)) for c in ("x", "y"))
+    q = ScalarField(Domain(dist, bases), "q")
+    u = VectorField(dist, coords, "u", bases, Float64)
+    x = reshape(2pi .* (0:15) ./ 16, :, 1)
+    q["g"] .= sin.(x)
+    u.components[1]["g"] .= 1
+    u.components[2]["g"] .= 0
+    vars = Tarang._problem_variable_operands([q, u])
+    for op in (advection(u, q), nonlinear_momentum(u), convection(q, q, :multiply))
+        @test Tarang._ivp_depends_on_variables(op, vars)
+        @test !Tarang._ivp_lhs_is_linear(op, vars)
+        @test_throws ArgumentError Tarang._validate_ivp_equation_format(
+            Tarang.AddOperator(Tarang.TimeDerivative(q), op), 0, vars)
+    end
+    adv = evaluate(advection(u, q))
+    @test maximum(abs.(grid_data!(adv) .- cos.(x))) < 1e-10
+    product = evaluate(convection(q, q, :multiply), :c)
+    @test product.current_layout == :c
+    @test maximum(abs.(grid_data!(product) .- sin.(x).^2)) < 1e-10
+    momentum = evaluate(nonlinear_momentum(u))
+    @test all(c -> maximum(abs, grid_data!(c)) < 1e-10, momentum.components)
+end
+
 @testset "IVP equation format is enforced before assembly" begin
     coords = CartesianCoordinates("x")
     dist = Distributor(coords; dtype=Float64, device=CPU())

@@ -215,7 +215,19 @@ end
                 end
                 @test typeof(s.timestepper_state.timestepper) === typeof(ts)
                 @test haskey(s.timestepper_state.timestepper_data, :sdi_Lmap)
-                @test gtj_grid(u) ≈ exp(-0.4) .* cos.(2 .* xs) atol=1e-4
+                actual = gtj_grid(u)
+                @test maximum(abs, actual .- exp(-0.4) .* cos.(2 .* xs)) < 1e-4
+                if ts isa SBDF2
+                    # Independent scalar recurrence for u' = -2u, including
+                    # the backward-Euler startup. Check the discrete solution
+                    # separately from its pointwise truncation error above.
+                    h = 2 * 0.005
+                    previous, current = 1.0, 1 / (1 + h)
+                    for _ in 2:40
+                        previous, current = current, (4current - previous) / (3 + 2h)
+                    end
+                    @test maximum(abs, actual .- current .* cos.(2 .* xs)) < 1e-12
+                end
             end
         end
 

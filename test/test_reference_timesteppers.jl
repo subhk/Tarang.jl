@@ -1,6 +1,40 @@
 using Test
 using Tarang
 
+@testset "Documented timestepper stability limits" begin
+    @testset "RKGFY has Crank-Nicolson stiff amplification" begin
+        for h in (0.1, 10.0, 1.0e4)
+            u = ScalarField(PeriodicDomain(8), "u")
+            set!(u, 1.0)
+            problem = InitialValueProblem([u])
+            add_parameters!(problem; decay=h / 0.1)
+            add_equation!(problem, "dt(u) + decay*u = 0")
+            solver = InitialValueSolver(problem, Tarang.RKGFY(); dt=0.1)
+            step!(solver)
+            expected = (1 - h / 2) / (1 + h / 2)
+            @test maximum(abs, Array(grid_data!(u)) .- expected) < 1e-12
+        end
+    end
+
+    @testset "CNLF2 explicit decay retains its leapfrog parasitic mode" begin
+        h = 0.2
+        u = ScalarField(PeriodicDomain(8), "u")
+        set!(u, 1.0)
+        problem = InitialValueProblem([u])
+        add_equation!(problem, "dt(u) = -2*u")
+        solver = InitialValueSolver(problem, Tarang.CNLF2(); dt=0.1)
+        # y[n+1] = y[n-1] - 2h*y[n], with Euler startup y[1] = 1-h.
+        r_plus, r_minus = -h + sqrt(1 + h^2), -h - sqrt(1 + h^2)
+        c_plus = (1 - h - r_minus) / (r_plus - r_minus)
+        @test abs(r_minus) > 1
+        for n in 1:6
+            step!(solver)
+            expected = c_plus * r_plus^n + (1 - c_plus) * r_minus^n
+            @test maximum(abs, Array(grid_data!(u)) .- expected) < 1e-12
+        end
+    end
+end
+
 @testset "Architecture-independent timestepper API" begin
     for name in (:RK222, :RK443, :SBDF2)
         @test name in names(Tarang)

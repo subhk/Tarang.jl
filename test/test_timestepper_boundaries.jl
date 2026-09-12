@@ -925,7 +925,7 @@ end
         @test maximum(abs, cvals .- gvals) < 1e-10
         @test cerr < 5e-3
         @test gerr < 5e-3
-        if ts isa Union{RK111, RK222, RK443, RKSMR, SBDF3}
+        if ts isa Union{RK111, RK222, RK443, RKSMR}
             @test gbatched                    # GPU default: batched (RK stepping)
         end
     end

@@ -79,7 +79,9 @@ if get(ENV, "TARANG_TEST_NETCDF_OUTPUT", "1") != "0"
         @test get_grid_data(u) ≈ original
         @test u.scales == original_scales
         fine = Tarang.group_variable_metadata(file, "vars", "fine")
-        @test fine.atts["count"] == [8]
+        # NetCDF may decode a one-element attribute as a scalar.
+        count = fine.atts["count"]
+        @test (count isa Number ? [count] : count) == [8]
         @test vec(Tarang.group_ncread(file, "grids", fine.dim_names[2])) ≈
               collect(0:7) .* (2pi / 8)
     end

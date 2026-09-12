@@ -140,7 +140,10 @@ Tarang.CNLF2()    # Crank-Nicolson Leapfrog (CN implicit + centered leapfrog exp
 `(9/16, 6/16, 1/16)` at constant timestep, with variable-step corrections based on
 the current/previous timestep ratio. It has no theta parameter.
 
-`CNLF2` is 2nd order and 2-step.
+`CNLF2` is 2nd order and 2-step. Its explicit leapfrog part is unstable for a
+negative real eigenvalue: for `dt(u) = -a*u`, `a > 0`, the parasitic amplification
+factor is `-a*dt - sqrt(1 + (a*dt)^2)`, whose magnitude exceeds one at every
+positive timestep. Put dissipative terms on the implicit LHS when using CNLF2.
 
 ## Exponential Time Differencing (ETD)
 
@@ -185,6 +188,10 @@ and `RK443`.
 Tarang.RKGFY()       # 2nd-order predictor-corrector, three stored stages
 Tarang.RK443_IMEX()  # Same coefficients as RK443; the suffix clarifies IMEX intent
 ```
+
+For pure implicit decay `dt(u) + a*u = 0`, RKGFY has amplification
+`(1 - a*dt/2) / (1 + a*dt/2)`. It approaches `-1` for very stiff decay, so the
+method is not L-stable and does not rapidly damp unresolved stiff modes.
 
 ### Diagonal IMEX
 

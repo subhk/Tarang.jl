@@ -200,7 +200,9 @@ function _resolve_operand_field(operand)
         if field isa Union{VectorField, TensorField}
             return field.components[operand.index]
         end
-        return nothing
+        # A component of grad(nu) still depends on the scalar coefficient nu.
+        # Preserve that leaf so unsupported implicit NCCs cannot become zero.
+        return field
     end
     if hasfield(typeof(operand), :operand)
         field = _resolve_operand_field(operand.operand)

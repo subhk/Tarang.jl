@@ -1044,6 +1044,28 @@ function step_subproblem_rk_batched!(solver::InitialValueSolver,
     end
 
     if _rk_stiffly_accurate(ts)
+        for k in eachindex(batches)
+            batch = batches[k]
+            isempty(batch.bc_rows) && continue
+            _gpu_subproblem_execution(subproblems[first(batch.sp_indices)]) && continue
+            ws = workspaces[k]
+            for (m, sp_idx) in enumerate(batch.sp_indices)
+                x = view(ws.Xg, :, m)
+                _project_final_constraints!(x, x, view(ws.ALG_F, :, m),
+                                            state, subproblems[sp_idx])
+            end
+            _batched_scatter_state!(ws, batch, state_fields, ws.Xg)
+        end
+        for sp_idx in leftovers
+            sp = subproblems[sp_idx]
+            sp.M_min === nothing && continue
+            isempty(sp.bc_rows) && continue
+            _gpu_subproblem_execution(sp) && continue
+            x = RHS[sp_idx]
+            gather_inputs!(x, sp, state_fields)
+            _project_final_constraints!(x, x, ALG_F[sp_idx], state, sp)
+            scatter_inputs(sp, x, state_fields)
+        end
         from_solve_layout!(solve_stash, dist)
         _push_trim!(state.history, state_fields, 1)
         return nothing

@@ -257,7 +257,11 @@ struct CNLF2 <: TimeStepper
     Implicit: Crank-Nicolson (θ = 0.5)
     Explicit: Leapfrog (centered 2-step extrapolation)
 
-    Formula: (1 + θ*dt*L) X^{n+1} = (1 - (1-θ)*dt*L) X^{n-1} + 2*dt*F^n
+    Constant-step formula: (1 + dt*L) X^{n+1} = (1 - dt*L) X^{n-1} + 2*dt*F^n
+    (Crank-Nicolson spans the two-step interval from n-1 to n+1.)
+
+    The explicit leapfrog part is unstable for negative real eigenvalues;
+    dissipative terms must be treated implicitly.
 
     Variable dt: the stepper generalizes the stencils with exact nonuniform
     Lagrange weights (Wang 2008 eqn 2.11) and stays 2nd order through smooth or
@@ -350,7 +354,8 @@ end
 struct RKGFY <: TimeStepper
     """Standard RKGFY. The tableau includes the initial stage.
 
-    The explicit and implicit weights equal their final tableau rows.
+    The explicit and implicit weights equal their final tableau rows. Pure
+    implicit decay has Crank-Nicolson amplification and is not L-stable.
     """
     stages::Int
     # Explicit Butcher tableau

@@ -711,8 +711,19 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
     end
 
     # Both tableaux must be stiffly accurate to retain the final stage.
-    # This preserves its constraints without a second, backend-dependent solve.
+    # Singular stage systems use least squares, which can leave a boundary
+    # residual even for a stiffly accurate tableau. Correct that residual before
+    # exposing the final state, retaining the stage's pressure/tau values.
     if _rk_stiffly_accurate(ts)
+        for (sp_idx, sp) in enumerate(subproblems)
+            sp.M_min === nothing && continue
+            isempty(sp.bc_rows) && continue
+            _gpu_subproblem_execution(sp) && continue
+            x = RHS[sp_idx]
+            gather_inputs!(x, sp, state_fields)
+            _project_final_constraints!(x, x, ALG_F[sp_idx], state, sp)
+            scatter_inputs(sp, x, state_fields)
+        end
         from_solve_layout!(solve_stash, dist)
         _push_trim!(state.history, state_fields, 1)
         return nothing
