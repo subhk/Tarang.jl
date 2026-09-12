@@ -7,7 +7,7 @@
 # diffusion left sumsq exactly at its initial value at np=2 and np=4, while np=1 decayed
 # correctly. A silent wrong answer, not just a slow one. This pins it.
 #
-# Reference is the serial (np=1) result of the same problem, which was correct all along.
+# Reference is derived from the explicit RK222 stability polynomial below.
 using Test
 using Tarang
 import MPI
@@ -17,9 +17,14 @@ const COMM = MPI.COMM_WORLD
 
 _raw(f) = (d = get_grid_data(f); d isa Tarang.PencilArrays.PencilArray ? parent(d) : d)
 
-# Serial reference: 300 steps of dt(q) = 0.5*lap(q) from the IC below, N=64, dt=1e-3.
+# RK222 with L=0 has R(z)=1+z+z^2/2. The two orthogonal Fourier modes
+# have Laplacian eigenvalues -5 and -10 and amplitudes 1 and 1/2.
+# Squaring their amplitudes after 300 steps gives R(z)^600, with each
+# mode's grid sum of squares equal to N^2/2 times its squared amplitude.
 const SUMSQ_IC  = 2560.0
-const SUMSQ_REF = 482.4622053646085
+const SUMSQ_REF = let R(z) = 1 + z + z^2/2
+    64^2/2 * (R(-0.5*5*1e-3)^600 + 0.25*R(-0.5*10*1e-3)^600)
+end
 
 function _run(rhs_str; N=64, steps=300, dt=1e-3)
     coords = CartesianCoordinates("x", "y")
@@ -53,7 +58,7 @@ end
         @test compiled
         @test isapprox(ss0, SUMSQ_IC; rtol=1e-12)      # IC is what we think it is
         @test !isapprox(ss1, ss0; rtol=1e-6)           # the field actually EVOLVED (was frozen)
-        @test isapprox(ss1, SUMSQ_REF; rtol=1e-9)      # and matches the serial reference
+        @test isapprox(ss1, SUMSQ_REF; rtol=1e-9)      # and matches the discrete-mode reference
     end
 
     @testset "div(grad(q)) compiles under MPI and matches lap(q)" begin

@@ -39,6 +39,25 @@ using Tarang
     u = ScalarField(domain, "u")
     v = ScalarField(domain, "v")
     vars = Tarang._problem_variable_operands([u, v])
+    @testset "Typed IVP expression traversal" begin
+        product = Tarang.MultiplyOperator(u, v)
+        wrappers = (identity, Tarang.NegateOperator, Tarang.Laplacian,
+                    x -> Tarang.IndexOperator(x, (1,)),
+                    x -> Tarang.AddOperator(2, x),
+                    x -> Tarang.Add(2, x))
+        for wrap in wrappers
+            nonlinear = wrap(product)
+            linear = wrap(Tarang.MultiplyOperator(2, u))
+            @test Tarang._ivp_depends_on_variables(nonlinear, vars)
+            @test !Tarang._ivp_lhs_is_linear(nonlinear, vars)
+            @test Tarang._ivp_lhs_is_linear(linear, vars)
+        end
+        @test Tarang._ivp_expression_children(product) === (u, v)
+        @test Tarang._ivp_expression_children(Tarang.NegateOperator(u)) === (u,)
+        @test Tarang._ivp_expression_children(Tarang.IndexOperator(u, (1,))) === (u,)
+        @test isempty(Tarang._ivp_expression_children(u))
+        @test isempty(Tarang._ivp_expression_children(2))
+    end
     @test !Tarang._ivp_lhs_is_linear(Tarang.Multiply(u, v), vars)
     @test Tarang._ivp_lhs_is_linear(Tarang.Multiply(2, u), vars)
     @test Tarang.contains_time_derivatives(Tarang.Add(Tarang.TimeDerivative(u), v))

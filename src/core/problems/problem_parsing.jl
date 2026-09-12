@@ -630,14 +630,25 @@ end
 
 # Validate against all solved-for variables together: u*v is nonlinear even
 # though each individual matrix-column builder sees only one dependent factor.
+_ivp_expression_children(expr) = ()
+_ivp_expression_children(expr::Future) = future_args(expr)
+_ivp_expression_children(expr::Union{AddOperator, SubtractOperator,
+    MultiplyOperator, DivideOperator, PowerOperator, Outer}) = (expr.left, expr.right)
+_ivp_expression_children(expr::IndexOperator) = (expr.array,)
+_ivp_expression_children(expr::Union{
+    NegateOperator, Gradient, Divergence, Curl, Laplacian, FractionalLaplacian,
+    Trace, Skew, TransposeComponents, TimeDerivative, Interpolate, Integrate,
+    Average, Convert, Grid, Coeff, Lift, Component, RadialComponent,
+    AngularComponent, AzimuthalComponent, Differentiate, AdvectiveCFL,
+    GeneralFunction, UnaryGridFunction, Copy, HilbertTransform,
+    CartesianComponent, CartesianGradient, CartesianDivergence, CartesianCurl,
+    CartesianLaplacian, CartesianTrace, CartesianSkew, DirectProductGradient,
+    DirectProductDivergence, DirectProductLaplacian, DirectProductTrace,
+    DirectProductCurl, DirectProductComponent}) = (expr.operand,)
+
 function _ivp_depends_on_variables(expr, variables)
-    expr isa Future && return any(a -> _ivp_depends_on_variables(a, variables), future_args(expr))
     _references_problem_variable(expr, variables) && return true
-    for name in (:operand, :left, :right, :array)
-        hasfield(typeof(expr), name) || continue
-        _ivp_depends_on_variables(getfield(expr, name), variables) && return true
-    end
-    return false
+    return any(a -> _ivp_depends_on_variables(a, variables), _ivp_expression_children(expr))
 end
 
 function _ivp_lhs_is_linear(expr, variables)
@@ -664,11 +675,7 @@ function _ivp_lhs_is_linear(expr, variables)
         end
         return all(a -> _ivp_lhs_is_linear(a, variables), args)
     end
-    for name in (:operand, :left, :right, :array)
-        hasfield(typeof(expr), name) || continue
-        _ivp_lhs_is_linear(getfield(expr, name), variables) || return false
-    end
-    return true
+    return all(a -> _ivp_lhs_is_linear(a, variables), _ivp_expression_children(expr))
 end
 
 function _validate_ivp_equation_format(lhs, rhs, variables)
