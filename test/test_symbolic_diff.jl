@@ -3,7 +3,7 @@ Test suite for src/core/operators/symbolic_diff.jl
 
 Covers the UNTESTED branches of sym_diff and its helpers. The BASIC cases
 (sym_diff base/add/sub/multiply/sin/exp) are already covered in
-test_dedalus_features.jl; this file targets the remaining branches:
+test_cartesian_features.jl; this file targets the remaining branches:
 
   - Product rule on f*f (-> 2f), quotient rule (DivideOperator), Negate,
     Power rule (PowerOperator), constant-folding paths.

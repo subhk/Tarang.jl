@@ -107,9 +107,9 @@ The current boundary of this validation is deliberate:
 
 Pure-Fourier GPU IVPs use field-native stepping: explicit Runge-Kutta and the
 matrix-free multistep field path run entirely on device arrays. When the
-left-hand side has an implicit diagonal Fourier operator, select a diagonal IMEX
-scheme — `DiagonalIMEX_RK222()`, `DiagonalIMEX_RK443()`, or
-`DiagonalIMEX_SBDF2()` — so the operator is applied per mode in spectral space
+left-hand side has an implicit diagonal Fourier operator, `RK222()`, `RK443()`,
+and `SBDF2()` select their diagonal implementations automatically. The operator
+is applied per mode in spectral space
 on the device; the operator is read from the equation (Laplacian, hyper- or
 fractional Laplacian, constant damping, derivatives of the stepped field) or
 from an attached `SpectralLinearOperator`. Every other scheme refuses a

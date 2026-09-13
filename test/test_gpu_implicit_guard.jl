@@ -100,7 +100,7 @@ using Tarang
             return Z0, 0.5 * mean(get_grid_data(q) .^ 2)
         end
         Z0_ref, Zf_ref = run_coupled(SBDF2())
-        Z0_dia, Zf_dia = run_coupled(DiagonalIMEX_SBDF2())
+        Z0_dia, Zf_dia = run_coupled(Tarang.DiagonalIMEX_SBDF2())
         @test Zf_ref / Z0_ref < 0.999                      # global-matrix run is viscous
         @test isapprox(Zf_dia, Zf_ref; rtol=1e-8)          # DiagonalIMEX matches it
         @test Zf_dia / Z0_dia < 0.999                      # ... and is therefore viscous too

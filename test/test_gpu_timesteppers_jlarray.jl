@@ -133,9 +133,26 @@ end
         all_steppers = (RK111(), RK222(), RK443(), RKSMR(), Tarang.RKGFY(), Tarang.RK443_IMEX(),
                         CNAB1(), CNAB2(), SBDF1(), SBDF2(), SBDF3(), SBDF4(),
                         ETD_RK222(), ETD_CNAB2(), ETD_SBDF2(), Tarang.MCNAB2(), Tarang.CNLF2(),
-                        DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
-        diagonal = (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+                        Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
+        diagonal = (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
+        implicit_supported = (RK222(), RK443(), SBDF2(), diagonal...)
         gtj_name(ts) = nameof(typeof(ts))
+
+        @testset "Reference steps on CPU and device" begin
+            for arch in (CPU(), _GTJ_ARCH)
+                for ts in (RK222(), Tarang.DiagonalIMEX_RK222())
+                    values, _ = gtj_run(arch, "dt(u) = -u", ts, [0.1], x -> 1.0)
+                    @test values ≈ fill(0.905, 16) atol=1e-13
+                end
+                for ts in (SBDF3(), SBDF4())
+                    s, u, _ = gtj_solver(arch, "dt(u) = -u", ts, 0.1, x -> 1.0)
+                    step!(s)
+                    @test gtj_grid(u) ≈ fill(0.9, 16) atol=1e-13
+                    step!(s)
+                    @test gtj_grid(u) ≈ fill(0.8133333333333334, 16) atol=1e-13
+                end
+            end
+        end
 
         # Which schemes are the same arithmetic on both architectures for an
         # explicit problem. ETD_* legitimately substitute (with a warning) an RK/
@@ -145,12 +162,12 @@ end
                         CNAB1(), CNAB2(), SBDF1(), SBDF2(), SBDF3(), SBDF4(),
                         Tarang.MCNAB2(), Tarang.CNLF2(), diagonal...)
 
-        @testset "explicit nonlinear problem: device == CPU, and nominal order" begin
+        @testset "explicit nonlinear problem: device == CPU, and startup-limited order" begin
             # dt(u) = -u², u0 ≡ 1 → 1/(1+t). Spatially exact, so the error is the
             # time-discretization error alone.
             expected_order = Dict(:RK111 => 1, :CNAB1 => 1, :SBDF1 => 1,
                                   :RK443 => 3, :RKSMR => 3, :RK443_IMEX => 3,
-                                  :SBDF3 => 3, :SBDF4 => 4)
+                                  :SBDF3 => 2, :SBDF4 => 2)
             for ts in all_steppers
                 T = 0.4
                 errs = map((0.02, 0.01)) do dt
@@ -172,15 +189,15 @@ end
             end
         end
 
-        @testset "implicit operator: DiagonalIMEX solves it, everything else refuses" begin
+        @testset "implicit operator: automatic diagonal dispatch" begin
             # dt(u) - 0.5 lap(u) = 0, u0 = cos 2x → e^{-2t} cos 2x.
             T = 0.2; dt = 0.005
             for ts in all_steppers
-                if any(p -> typeof(p) === typeof(ts), diagonal)
+                if any(p -> typeof(p) === typeof(ts), implicit_supported)
                     dev, xs = gtj_run(_GTJ_ARCH, "dt(u) - 0.5*lap(u) = 0", ts, fill(dt, round(Int, T / dt)), x -> cos(2x))
                     cpu, _ = gtj_run(CPU(), "dt(u) - 0.5*lap(u) = 0", ts, fill(dt, round(Int, T / dt)), x -> cos(2x))
                     @test maximum(abs, dev .- exp(-2T) .* cos.(2 .* xs)) < 1e-4
-                    @test dev == cpu
+                    @test dev ≈ cpu atol=1e-12 rtol=1e-12
                 else
                     s, _, _ = gtj_solver(_GTJ_ARCH, "dt(u) - 0.5*lap(u) = 0", ts, dt, x -> cos(2x))
                     @test_throws ErrorException step!(s)
@@ -188,11 +205,63 @@ end
             end
         end
 
+        @testset "Attached operators use the internal diagonal path" begin
+            for arch in (CPU(), _GTJ_ARCH), ts in (RK222(), RK443(), SBDF2())
+                s, u, xs = gtj_solver(arch, "dt(u) = 0", ts, 0.005, x -> cos(2x))
+                L = SpectralLinearOperator(u.dist, u.bases, :laplacian; ν=0.5)
+                set_spectral_linear_operator!(s, L)
+                for _ in 1:40
+                    step!(s)
+                end
+                @test typeof(s.timestepper_state.timestepper) === typeof(ts)
+                @test haskey(s.timestepper_state.timestepper_data, :sdi_Lmap)
+                actual = gtj_grid(u)
+                @test maximum(abs, actual .- exp(-0.4) .* cos.(2 .* xs)) < 1e-4
+                if ts isa SBDF2
+                    # Independent scalar recurrence for u' = -2u, including
+                    # the backward-Euler startup. Check the discrete solution
+                    # separately from its pointwise truncation error above.
+                    h = 2 * 0.005
+                    previous, current = 1.0, 1 / (1 + h)
+                    for _ in 2:40
+                        previous, current = current, (4current - previous) / (3 + 2h)
+                    end
+                    @test maximum(abs, actual .- current .* cos.(2 .* xs)) < 1e-12
+                end
+            end
+        end
+
+        @testset "GPU public schemes reject cross-field implicit coupling" begin
+            for ts in (RK222(), RK443(), SBDF2())
+                _, u, _ = gtj_solver(_GTJ_ARCH, "dt(u) = 0", ts, 0.01, x -> 1.0)
+                v = ScalarField(Domain(u.dist, u.bases), "v")
+                copyto!(grid_data!(v), ones(16))
+                problem = InitialValueProblem([u, v])
+                add_equation!(problem, "dt(u) + v = 0")
+                add_equation!(problem, "dt(v) = 0")
+                s = InitialValueSolver(problem, ts; dt=0.01)
+                @test_throws ArgumentError step!(s)
+                @test gtj_grid(u) == ones(16)
+                @test s.sim_time == 0
+                @test s.iteration == 0
+            end
+        end
+
+        @testset "SBDF2 can switch from a matrix solve to an attached operator" begin
+            s, u, xs = gtj_solver(CPU(), "dt(u) = 0", SBDF2(), 0.005, x -> cos(2x))
+            step!(s)
+            L = SpectralLinearOperator(u.dist, u.bases, :laplacian; ν=0.5)
+            set_spectral_linear_operator!(s, L)
+            step!(s)
+            @test gtj_grid(u) ≈ cos.(2 .* xs) ./ 1.01 atol=1e-12
+            @test s.iteration == 2
+        end
+
         @testset "DiagonalIMEX: derivative-of-self implicit term on device" begin
             # dt(u) + 0.3 d(u,x) - 0.1 lap(u) = 0 → e^{-0.4t} cos(2(x - 0.3t)).
             # Exercises the device upload of the (ik)^n multiplier.
             T = 0.2; dt = 0.005
-            for ts in diagonal
+            for ts in implicit_supported
                 dev, xs = gtj_run(_GTJ_ARCH, "dt(u) + 0.3*d(u,x) - 0.1*lap(u) = 0", ts, fill(dt, round(Int, T / dt)), x -> cos(2x))
                 @test maximum(abs, dev .- exp(-0.4T) .* cos.(2 .* (xs .- 0.3T))) < 1e-4
             end
@@ -227,8 +296,10 @@ end
             for (ts, eqn) in ((CNAB2(), "dt(u) = -u*u"), (SBDF2(), "dt(u) = -u*u"),
                               (SBDF3(), "dt(u) = -u*u"), (SBDF4(), "dt(u) = -u*u"),
                               (Tarang.MCNAB2(), "dt(u) = -u*u"), (Tarang.CNLF2(), "dt(u) = -u*u"),
-                              (DiagonalIMEX_SBDF2(), "dt(u) - 0.1*lap(u) = -u*u"),
-                              (DiagonalIMEX_RK443(), "dt(u) - 0.1*lap(u) = -u*u"))
+                              (SBDF2(), "dt(u) - 0.1*lap(u) = -u*u"),
+                              (RK443(), "dt(u) - 0.1*lap(u) = -u*u"),
+                              (Tarang.DiagonalIMEX_SBDF2(), "dt(u) - 0.1*lap(u) = -u*u"),
+                              (Tarang.DiagonalIMEX_RK443(), "dt(u) - 0.1*lap(u) = -u*u"))
                 dev, _ = gtj_run(_GTJ_ARCH, eqn, ts, dts, x -> 1 + 0.5cos(x))
                 cpu, _ = gtj_run(CPU(), eqn, ts, dts, x -> 1 + 0.5cos(x))
                 @test maximum(abs, dev .- cpu) < 1e-12

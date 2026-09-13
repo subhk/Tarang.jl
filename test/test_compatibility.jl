@@ -17,7 +17,7 @@ end
     lbvp = Tarang.LinearBoundaryValueProblem([u_lbvp])
     # PDE equation
     Tarang.add_equation!(lbvp, "Δ(u) = 0")
-    # Boundary conditions (Dedalus-style - auto-detected by add_equation!)
+    # Boundary conditions (mode-wise - auto-detected by add_equation!)
     Tarang.add_equation!(lbvp, "u(z=0) = 0")                           # Dirichlet
     Tarang.add_equation!(lbvp, "∂z(u)(z=1) = 1")                       # Neumann
     Tarang.add_equation!(lbvp, "1.0*u(z=0) + 2.0*∂z(u)(z=0) = 0.5")   # Robin

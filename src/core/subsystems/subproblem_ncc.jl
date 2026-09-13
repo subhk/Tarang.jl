@@ -38,7 +38,7 @@ To keep the resulting sparse matrix as small as possible (which directly
 reduces sparse LU factorization cost), we apply two levels of truncation:
 
 1. **Per-mode cutoff** (`ncc_cutoff`): skip contributions from NCC modes
-   whose absolute coefficient is below `ncc_cutoff`. Dedalus's default is
+   whose absolute coefficient is below `ncc_cutoff`. A typical default is
    `1e-6`; tighter cutoffs give sparser matrices at some accuracy cost.
 2. **Max-terms cap** (`max_ncc_terms`): after sorting modes by coefficient
    magnitude, retain at most `max_ncc_terms` dominant modes. Useful for
@@ -51,7 +51,7 @@ entries that appear from cross-mode accumulation (e.g. two large opposite
 contributions that partially cancel) and shrinks the nnz count for the
 downstream sparse LU.
 
-Follows the spectral methods pattern from the Dedalus arithmetic module.
+Builds multiplication matrices directly in coefficient space.
 """
 function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_domain;
                           ncc_cutoff::Float64=1e-6, max_ncc_terms::Union{Nothing, Int}=nothing)
@@ -67,14 +67,14 @@ function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_dom
     ncc_shape = size(coeffs)
 
     # ─── Relative cutoff ─────────────────────────────────────────────
-    # Dedalus convention: interpret `ncc_cutoff` as a RELATIVE threshold
+    # Convention: interpret `ncc_cutoff` as a RELATIVE threshold
     # against the L-infinity norm of the coefficient array, not as an
     # absolute magnitude. This scales automatically with the problem's
     # natural coefficient magnitude — a viscosity `ν ~ 1e-3` and a
     # temperature `T ~ 1.0` both get truncated at the same relative
     # precision without the user having to tune `ncc_cutoff` per field.
     #
-    # Matches `dedalus.core.arithmetic.Multiply._ncc_matrices` where
+    # For multiplication matrices,
     # `cutoff` is divided by the coefficient L∞ norm before comparison.
     coeff_max = 0.0
     @inbounds for i in eachindex(coeffs)
@@ -115,7 +115,7 @@ function build_ncc_matrix(ncc_data::NCCData, sp::Subproblem, arg_domain, out_dom
     # Optional energy-retention cap: if max_ncc_terms is nothing, we can
     # additionally cap by CUMULATIVE energy fraction — keep enough modes
     # to capture 1 - ncc_cutoff² of the total power. This is another
-    # Dedalus-style truncation that's independent of the count cap.
+    # mode-wise truncation that's independent of the count cap.
     total_energy = 0.0
     @inbounds for k in 1:length(significant_modes)
         total_energy += significant_modes[k][1]

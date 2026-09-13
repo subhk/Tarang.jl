@@ -438,7 +438,7 @@ end
     # The old text told the user "DiagonalIMEX_*" restarts exactly, which is
     # false for DiagonalIMEX_SBDF2.
     @test !any(w -> occursin("DiagonalIMEX_*", w), warnings)
-    @test any(w -> occursin("DiagonalIMEX_SBDF2 does NOT", w), warnings)
+    @test any(w -> occursin("SBDF2 does NOT, including its internal diagonal implementation", w), warnings)
     @test b.iteration == a.iteration
 end
 

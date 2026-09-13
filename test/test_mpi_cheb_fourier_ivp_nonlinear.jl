@@ -22,8 +22,10 @@ if nprocs < 2
     MPI.Finalize(); exit(0)
 end
 
-const SUMSQ_REF = 33.39084552380445
-const BMAX_REF  = 1.4380128840994046
+# Recomputed in serial after the RK222 tableau correction in 7968d251c,
+# with the final boundary projection from 1de3ba3e9. Keep MPI tolerances tight.
+const SUMSQ_REF = 33.39084541007002
+const BMAX_REF  = 1.438012874504084
 
 _loc(f) = get_grid_data(f) isa PencilArrays.PencilArray ? parent(get_grid_data(f)) : get_grid_data(f)
 function _global_boundary_max(field, logical_dim, endpoints, comm)

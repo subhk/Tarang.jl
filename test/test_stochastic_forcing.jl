@@ -757,7 +757,7 @@ end
         unsafe_timesteppers = (
             CNAB2(), SBDF2(), SBDF3(), SBDF4(),
             ETD_CNAB2(), ETD_SBDF2(),
-            Tarang.MCNAB2(), DiagonalIMEX_SBDF2(), Tarang.CNLF2(),
+            Tarang.MCNAB2(), Tarang.DiagonalIMEX_SBDF2(), Tarang.CNLF2(),
         )
         for timestepper in unsafe_timesteppers
             solver, forcing = forced_solver(timestepper)

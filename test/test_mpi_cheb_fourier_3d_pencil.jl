@@ -24,8 +24,10 @@ if nprocs != 4
     MPI.Finalize(); exit(0)
 end
 
-const SUMSQ_REF = 280.2120219162331
-const MAX_REF   = 1.730722575835805
+# Recomputed in serial after the RK222 tableau correction in 7968d251c,
+# with the final boundary projection from 1de3ba3e9. Keep MPI tolerances tight.
+const SUMSQ_REF = 280.21202040217696
+const MAX_REF   = 1.7307225569393774
 
 _loc(f) = get_grid_data(f) isa PencilArrays.PencilArray ? parent(get_grid_data(f)) : get_grid_data(f)
 function _assign!(field, g)

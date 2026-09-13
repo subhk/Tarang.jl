@@ -367,6 +367,10 @@ end
 
 Set the spectral linear operator for diagonal IMEX methods.
 
+Attached operators are supported only on serial CPU and single-GPU paths.
+For MPI, write the implicit linear term on the equation's LHS instead; attaching
+an operator raises `ArgumentError` rather than silently omitting it.
+
 # Example
 ```julia
 L = SpectralLinearOperator(dist, bases, :hyperviscosity; ν=1e-10, order=4)
@@ -374,10 +378,19 @@ set_spectral_linear_operator!(solver, L)
 ```
 """
 function set_spectral_linear_operator!(solver::InitialValueSolver, L::SpectralLinearOperator)
+    _check_attached_operator_distribution!(solver)
     if solver.timestepper_state !== nothing
         solver.timestepper_state.timestepper_data[:spectral_linear_operator] = L
     else
         solver.problem.parameters["spectral_linear_operator"] = L
     end
     return solver
+end
+
+function _check_attached_operator_distribution!(solver::InitialValueSolver)
+    any(field -> field.dist.size > 1, solver.state) || return nothing
+    throw(ArgumentError(
+        "Attached SpectralLinearOperator objects are not supported under MPI. " *
+        "Write the implicit linear term on the equation's LHS, e.g. " *
+        "dt(u) - nu*lap(u) = F. Refusing to ignore the attached operator."))
 end

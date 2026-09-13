@@ -161,7 +161,8 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
                             coeff_data .+= F_view
                             @debug "Added stochastic forcing to state field $var_idx"
                         else
-                            @warn "Forcing size doesn't match RHS size for state field $var_idx"
+                            throw(ArgumentError(
+                                "Forcing size doesn't match RHS size $(size(coeff_data)) for state field $var_idx"))
                         end
                     end
                 end

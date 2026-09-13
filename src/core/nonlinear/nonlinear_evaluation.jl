@@ -1,6 +1,22 @@
 # Set true to collect wall-clock timing stats; false = zero overhead (dead-code eliminated).
 const _TRACK_NL_TIMING = false
 
+_ivp_expression_children(op::AdvectionOperator) = (op.velocity, op.scalar)
+_ivp_expression_children(op::NonlinearAdvectionOperator) = (op.velocity,)
+_ivp_expression_children(op::ConvectiveOperator) = (op.field1, op.field2)
+
+function evaluate(op::Union{AdvectionOperator, NonlinearAdvectionOperator}, layout::Symbol=:g)
+    result = evaluate_nonlinear_term(op, layout)
+    ensure_layout!(result, layout)
+    return result
+end
+
+function evaluate(op::ConvectiveOperator, layout::Symbol=:g)
+    result = evaluate_convective_operator(op)
+    ensure_layout!(result, layout)
+    return result
+end
+
 # Main nonlinear evaluation functions
 """Evaluate u·∇φ nonlinear term using transform method"""
 function evaluate_nonlinear_term(op::AdvectionOperator, layout::Symbol=:g)

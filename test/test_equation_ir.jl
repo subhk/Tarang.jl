@@ -31,6 +31,82 @@ assert the shim's exact behaviour rather than assuming Dict semantics.
 using Test
 using Tarang
 
+@testset "Nonlinear convenience operators are evaluated, not implicit zeros" begin
+    coords = CartesianCoordinates("x", "y")
+    dist = Distributor(coords; dtype=Float64, device=CPU())
+    bases = Tuple(RealFourier(coords[c]; size=16, bounds=(0.0, 2pi)) for c in ("x", "y"))
+    q = ScalarField(Domain(dist, bases), "q")
+    u = VectorField(dist, coords, "u", bases, Float64)
+    x = reshape(2pi .* (0:15) ./ 16, :, 1)
+    q["g"] .= sin.(x)
+    u.components[1]["g"] .= 1
+    u.components[2]["g"] .= 0
+    vars = Tarang._problem_variable_operands([q, u])
+    for op in (advection(u, q), nonlinear_momentum(u), convection(q, q, :multiply))
+        @test Tarang._ivp_depends_on_variables(op, vars)
+        @test !Tarang._ivp_lhs_is_linear(op, vars)
+        @test_throws ArgumentError Tarang._validate_ivp_equation_format(
+            Tarang.AddOperator(Tarang.TimeDerivative(q), op), 0, vars)
+    end
+    adv = evaluate(advection(u, q))
+    @test maximum(abs.(grid_data!(adv) .- cos.(x))) < 1e-10
+    product = evaluate(convection(q, q, :multiply), :c)
+    @test product.current_layout == :c
+    @test maximum(abs.(grid_data!(product) .- sin.(x).^2)) < 1e-10
+    momentum = evaluate(nonlinear_momentum(u))
+    @test all(c -> maximum(abs, grid_data!(c)) < 1e-10, momentum.components)
+end
+
+@testset "IVP equation format is enforced before assembly" begin
+    coords = CartesianCoordinates("x")
+    dist = Distributor(coords; dtype=Float64, device=CPU())
+    basis = RealFourier(coords["x"]; size=8, bounds=(0.0, 2pi))
+    domain = Domain(dist, (basis,))
+    u = ScalarField(domain, "u")
+    v = ScalarField(domain, "v")
+    vars = Tarang._problem_variable_operands([u, v])
+    @testset "Typed IVP expression traversal" begin
+        product = Tarang.MultiplyOperator(u, v)
+        wrappers = (identity, Tarang.NegateOperator, Tarang.Laplacian,
+                    x -> Tarang.IndexOperator(x, (1,)),
+                    x -> Tarang.AddOperator(2, x),
+                    x -> Tarang.Add(2, x))
+        for wrap in wrappers
+            nonlinear = wrap(product)
+            linear = wrap(Tarang.MultiplyOperator(2, u))
+            @test Tarang._ivp_depends_on_variables(nonlinear, vars)
+            @test !Tarang._ivp_lhs_is_linear(nonlinear, vars)
+            @test Tarang._ivp_lhs_is_linear(linear, vars)
+        end
+        @test Tarang._ivp_expression_children(product) === (u, v)
+        @test Tarang._ivp_expression_children(Tarang.NegateOperator(u)) === (u,)
+        @test Tarang._ivp_expression_children(Tarang.IndexOperator(u, (1,))) === (u,)
+        @test isempty(Tarang._ivp_expression_children(u))
+        @test isempty(Tarang._ivp_expression_children(2))
+    end
+    @test !Tarang._ivp_lhs_is_linear(Tarang.Multiply(u, v), vars)
+    @test Tarang._ivp_lhs_is_linear(Tarang.Multiply(2, u), vars)
+    @test Tarang.contains_time_derivatives(Tarang.Add(Tarang.TimeDerivative(u), v))
+    for equation in ("dt(u) + u*d(u,x) = 0", "dt(u) + u*v = 0",
+                     "dt(u) + u^2 = 0", "dt(u) + sin(u) = 0",
+                     "dt(u) = dt(v)", "dt(dt(u)) = 0",
+                     "2*(dt(u) + u) = 0", "lap(dt(u)) = 0")
+        problem = InitialValueProblem([u, v]; namespace=Dict("u" => u, "v" => v))
+        push!(problem.equations, equation)
+        @test_throws ArgumentError Tarang.build_matrix_expressions!(problem)
+    end
+    for equation in ("dt(u) + u = -u*d(u,x)", "dt(u) = -u",
+                     "2*dt(u) + u = 0", "dt(u)/2 + u = 0", "u - v = 0")
+        problem = InitialValueProblem([u, v]; namespace=Dict("u" => u, "v" => v))
+        push!(problem.equations, equation)
+        @test_nowarn Tarang.build_matrix_expressions!(problem)
+        @test length(problem.equation_data) == 1
+    end
+    problem = InitialValueProblem([u]; namespace=Dict("u" => u))
+    push!(problem.equations, "dt(u) + u*d(u,x) = 0")
+    @test_throws ArgumentError InitialValueSolver(problem, RK222(); dt=1e-3)
+end
+
 @testset "EquationIR canonical slots are fields" begin
     ir = Tarang.EquationIR()
 

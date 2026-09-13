@@ -56,14 +56,9 @@ add_equation!(problem, "Δ(psi) + tau_psi - q = 0")    # Δψ = q
 add_equation!(problem, "u - skew(grad(psi)) = 0")     # u = ∇⊥ψ
 add_bc!(problem, "integ(psi) = 0")                    # zero-mean gauge
 
-# DiagonalIMEX_SBDF2, not SBDF2: on a pure-Fourier GPU InitialValueProblem the solver builds no
-# global matrix, so the implicit viscous term `nu*Δ(q)` has no per-mode solve on a
-# standard IMEX/multistep scheme and would be silently dropped — the flow would run
-# INVISCID (no enstrophy dissipation, the whole point of this example). The
-# diagonal-IMEX schemes solve the diagonal Fourier operator (−nu k²) per mode
-# on-device, which is exactly right here. On CPU it gives identical results to
-# SBDF2, so this one line works on both devices.
-solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt=dt)
+# SBDF2 chooses its internal per-mode implicit solve on GPU Fourier problems.
+# The same public scheme also works on CPU.
+solver = InitialValueSolver(problem, SBDF2(); dt=dt)
 
 # ── Initial condition: band-limited random vorticity (energy in k ∈ [4, 8]) ──
 # Built on the host, then assigned to the field (uploaded to device automatically).

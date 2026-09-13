@@ -770,8 +770,13 @@ end
     @test ws.X !== ws.RHS
 
     fill!(ws.mass_ok, false)
-    step!(solver)
+    # Stiffly accurate RK keeps its last stage and does not invert M at the
+    # final update. Exercise the mass-solve contract directly.
+    Tarang._batch_mass_solve!(ws.X, ws.RHS, plan.batches[1],
+                              Tarang.compiled_subproblems(solver.problem), ws;
+                              skip_missing=true)
     @test all(ws.mass_ok)
+    step!(solver)
     ensure_layout!(b, :g)
     @test all(isfinite, Array(get_grid_data(b)))
 end

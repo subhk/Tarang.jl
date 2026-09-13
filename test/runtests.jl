@@ -10,6 +10,7 @@ const RUN_OPTIONAL_TESTS = get(ENV, "TARANG_RUN_OPTIONAL_TESTS", "false") == "tr
 const ONLY_OPTIONAL_TESTS = get(ENV, "TARANG_ONLY_OPTIONAL_TESTS", "false") == "true"
 const RUN_GPU_TESTS = get(ENV, "TARANG_RUN_GPU_TESTS", "false") == "true"
 
+@testset "Tarang" begin
 if !ONLY_OPTIONAL_TESTS
     for file in TEST_FILES
         @testset "$file" begin
@@ -34,6 +35,7 @@ if RUN_GPU_TESTS
         end
     end
 end
+end # Aggregate failures only after every selected file has run.
 
 # Print reminder about MPI tests
 if !ONLY_OPTIONAL_TESTS

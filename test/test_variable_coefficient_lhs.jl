@@ -287,6 +287,10 @@ end
         n = Tarang._coeff_space_dofs(uf)
         @test_throws Tarang.ImplicitNCCError Tarang.build_expression_matrix_block(
             Tarang.Multiply(nf, Tarang.Laplacian(uf)), uf, n, n)
+        grad_component = Tarang.Component(Tarang.Gradient(nf, coords), 1)
+        @test Tarang._resolve_operand_field(grad_component) === nf
+        @test_throws Tarang.ImplicitNCCError Tarang.build_expression_matrix_block(
+            Tarang.Multiply(grad_component, Tarang.Laplacian(uf)), uf, n, n)
     end
 
     # ---------------------------------------------------------------------

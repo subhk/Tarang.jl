@@ -48,25 +48,10 @@ function evaluate_residual_and_jacobian(problem::NonlinearBoundaryValueProblem, 
         residual = -rhs_vec
     end
 
-    # Step 4: Build Jacobian matrix
-    # Try symbolic Jacobian first (Frechet differentiation), then fall back
-    n = length(x)
-    jacobian = try
-        build_symbolic_jacobian(problem, state_fields)
-    catch e
-        # Newton keeps converging on an approximate Jacobian — linearly instead
-        # of quadratically, or not at all with the identity — so this substitution
-        # shows up as "the solve is slow" or "it did not converge", never as the
-        # reason. It was a @debug, i.e. invisible by default.
-        @warn "Symbolic Jacobian construction failed; falling back to the " *
-              "linear matrix (or the identity if there is none). Newton will " *
-              "converge slowly or not at all." exception=e maxlog=1
-        if compiled_problem(problem).linear_matrix !== nothing
-            compiled_problem(problem).linear_matrix
-        else
-            sparse(I, n, n)
-        end
-    end
+    # Step 4: Build the actual residual derivative. An unsupported derivative
+    # must reach the caller; the linear operator or identity is not a Jacobian
+    # of the nonlinear residual and can give a misleading Newton correction.
+    jacobian = build_symbolic_jacobian(problem, state_fields)
 
     @debug "Residual evaluation completed: size=$(length(residual)), norm=$(norm(residual))"
     @debug "Jacobian evaluation completed: size=$(size(jacobian)), nnz=$(nnz(jacobian))"

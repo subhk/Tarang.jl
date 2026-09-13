@@ -1,5 +1,25 @@
 using Test
 using MPI
+using Tarang
+
+struct DCTCloseProbeArchitecture <: Tarang.AbstractArchitecture
+    calls::Base.RefValue{Int}
+end
+
+function Tarang._close_backend_plan_caches!(dist::Distributor, arch::DCTCloseProbeArchitecture)
+    arch.calls[] += 1
+    return nothing
+end
+
+@testset "Distributor close dispatches backend cleanup without replacement" begin
+    dist = Distributor(CartesianCoordinates("x"))
+    calls = Ref(0)
+    dist.architecture = DCTCloseProbeArchitecture(calls)
+    close(dist)
+    close(dist)
+    @test calls[] == 1
+    @test dist.closed
+end
 
 const TRANSFORMS_SOURCE = joinpath(@__DIR__, "..", "ext", "cuda", "transforms.jl")
 const DCT_SOURCE = joinpath(@__DIR__, "..", "ext", "cuda", "dct_distributed.jl")

@@ -618,12 +618,97 @@ function contains_time_derivatives(expr)
         return contains_time_derivatives(expr.operand)
     elseif isa(expr, IndexOperator)
         return contains_time_derivatives(expr.array)
+    elseif isa(expr, Future)
+        return any(contains_time_derivatives, future_args(expr))
     elseif hasfield(typeof(expr), :operand)
         # Handle operators like Laplacian, Differentiate, Gradient, etc.
         return contains_time_derivatives(expr.operand)
     else
         return false
     end
+end
+
+# Validate against all solved-for variables together: u*v is nonlinear even
+# though each individual matrix-column builder sees only one dependent factor.
+_ivp_expression_children(expr) = ()
+_ivp_expression_children(expr::Operator) = throw(ArgumentError(
+    "IVP dependency traversal is not implemented for $(typeof(expr)); " *
+    "refusing to classify an unsupported operator as a constant."))
+_ivp_expression_children(expr::Future) = future_args(expr)
+_ivp_expression_children(expr::Union{AddOperator, SubtractOperator,
+    MultiplyOperator, DivideOperator, PowerOperator, Outer}) = (expr.left, expr.right)
+_ivp_expression_children(expr::IndexOperator) = (expr.array,)
+_ivp_expression_children(expr::Union{
+    NegateOperator, Gradient, Divergence, Curl, Laplacian, FractionalLaplacian,
+    Trace, Skew, TransposeComponents, TimeDerivative, Interpolate, Integrate,
+    Average, Convert, Grid, Coeff, Lift, Component, RadialComponent,
+    AngularComponent, AzimuthalComponent, Differentiate, AdvectiveCFL,
+    GeneralFunction, UnaryGridFunction, Copy, HilbertTransform,
+    CartesianComponent, CartesianGradient, CartesianDivergence, CartesianCurl,
+    CartesianLaplacian, CartesianTrace, CartesianSkew, DirectProductGradient,
+    DirectProductDivergence, DirectProductLaplacian, DirectProductTrace,
+    DirectProductCurl, DirectProductComponent}) = (expr.operand,)
+
+function _ivp_depends_on_variables(expr, variables)
+    _references_problem_variable(expr, variables) && return true
+    return any(a -> _ivp_depends_on_variables(a, variables), _ivp_expression_children(expr))
+end
+
+function _ivp_lhs_is_linear(expr, variables)
+    expr isa UnknownOperator && return false
+    dependent(x) = _ivp_depends_on_variables(x, variables)
+    if expr isa Union{GeneralFunction, UnaryGridFunction, NonlinearOperator}
+        return !dependent(expr)
+    elseif expr isa Union{MultiplyOperator, Outer}
+        dependent(expr.left) && dependent(expr.right) && return false
+    elseif expr isa DivideOperator
+        dependent(expr.right) && return false
+    elseif expr isa PowerOperator
+        # The matrix builder does not implement even the identity power u^1.
+        dependent(expr) && return false
+    elseif expr isa Future
+        args = future_args(expr)
+        if expr isa Multiply || expr isa Union{DotProduct, CrossProduct, Outer}
+            count(dependent, args) > 1 && return false
+        elseif expr isa Divide
+            length(args) >= 2 && dependent(args[2]) && return false
+        elseif !(expr isa Union{Add, Subtract, Negate}) && dependent(expr)
+            # Do not assume an unrecognized object-syntax operation is linear.
+            return false
+        end
+        return all(a -> _ivp_lhs_is_linear(a, variables), args)
+    end
+    return all(a -> _ivp_lhs_is_linear(a, variables), _ivp_expression_children(expr))
+end
+
+function _validate_ivp_equation_format(lhs, rhs, variables)
+    vars = _problem_variable_operands(variables)
+    contains_time_derivatives(rhs) && throw(ArgumentError(
+        "Time derivatives must be on the LHS. Required form: M*dt(X) + L(X) = F(X,t)."))
+    _ivp_lhs_is_linear(lhs, vars) || throw(ArgumentError(
+        "The LHS must be linear in the problem variables and use supported linear operators. " *
+        "Move nonlinear terms to the RHS; equations are not rearranged automatically."))
+    mass, spatial = split_time_spatial_operators(lhs)
+    any(contains_time_derivatives, spatial) && throw(ArgumentError(
+        "Time derivatives must be separate LHS addends, optionally scaled by a constant. " *
+        "Expand expressions such as 2*(dt(u) + u) into 2*dt(u) + 2*u."))
+    for term in mass
+        inner = term
+        while !(inner isa TimeDerivative)
+            if inner isa NegateOperator
+                inner = inner.operand
+            elseif inner isa MultiplyOperator
+                inner = contains_time_derivatives(inner.left) ? inner.left : inner.right
+            elseif inner isa DivideOperator
+                inner = inner.left
+            else
+                throw(ArgumentError("Unsupported mass term; write constant*dt(variable) on the LHS."))
+            end
+        end
+        (inner.order == 1 && !contains_time_derivatives(inner.operand)) ||
+            throw(ArgumentError("Only first-order time derivatives are supported; introduce auxiliary variables."))
+    end
+    return nothing
 end
 
 
@@ -1481,6 +1566,8 @@ end
 struct UnknownOperator <: Operator
     expression::String
 end
+
+_ivp_expression_children(::Union{ZeroOperator, ConstantOperator, ArrayOperator, UnknownOperator}) = ()
 
 # has() definitions for ZeroOperator, ConstantOperator, ArrayOperator, UnknownOperator
 # These types never contain problem variables (following spectral pattern)

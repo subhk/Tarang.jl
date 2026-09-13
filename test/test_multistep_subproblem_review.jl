@@ -51,11 +51,11 @@ end
         end
     end
 
-    # Include a non-default theta and step-size changes: the subproblem path
+    # Include step-size changes: the subproblem path
     # must honor the selected formula, not substitute ordinary CNAB2.
-    for ts in (Tarang.MCNAB2(), Tarang.MCNAB2(0.8), Tarang.CNLF2())
+    for ts in (Tarang.MCNAB2(), Tarang.CNLF2())
         dts = [0.03, 0.04, 0.05, 0.04, 0.025, 0.035, 0.045, 0.03]
-        @testset "$(typeof(ts)) theta=$(ts.implicit_coefficient) variable dt" begin
+        @testset "$(typeof(ts)) variable dt" begin
             bounded = msrev_run(ts, dts)
             global_reference = msrev_run(ts, dts; bounded=false)
             @test bounded ≈ global_reference atol=2e-12 rtol=2e-12

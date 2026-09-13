@@ -186,6 +186,7 @@ try
         for _ in 1:10
             step!(solver, 0.02)
         end
+        @test _agree(solver.state[1].name == "u")
         save_state(solver, path)
         MPI.Barrier(COMM)
 

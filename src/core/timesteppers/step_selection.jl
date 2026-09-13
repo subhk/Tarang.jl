@@ -71,6 +71,17 @@ function _timestepper_subproblems(solver::InitialValueSolver)
     return sps isa Tuple ? sps : nothing
 end
 
+"""Use an internal serial diagonal solver on GPU or with an attached operator.
+Subproblem and MPI solvers retain their own implicit execution paths."""
+function _serial_diagonal_imex_applicable(solver::InitialValueSolver, ts::TimeStepper)
+    ts isa Union{RK222, RK443, SBDF2} || return false
+    _timestepper_subproblems(solver) === nothing || return false
+    isempty(solver.state) && return false
+    _mpi_pencil_distribution_active(first(solver.state).dist) && return false
+    return plan_is_gpu(solver.execution_plan) ||
+           _get_spectral_linear_operator(solver) !== nothing
+end
+
 @inline function _mpi_pencil_distribution_active(dist::Distributor)
     return dist.use_pencil_arrays && dist.size > 1
 end
@@ -326,7 +337,7 @@ function _check_mpi_implicit_compat!(solver::InitialValueSolver, method_name::St
             "$method_name with MPI requires global matrix solve (gather/scatter). " *
             "Total DOF=$total_dof exceeds $(GLOBAL_MATRIX_IMPLICIT_DOF_LIMIT) limit for gather/scatter approach. " *
             "Use a subproblem-compatible method instead: RK111, RK222, RK443, " *
-            "CNAB1, CNAB2, SBDF1, SBDF2, or DiagonalIMEX_RK222/RK443 " *
+            "CNAB1, CNAB2, SBDF1, or SBDF2 " *
             "(for purely Fourier domains)."))
     end
 

@@ -111,7 +111,7 @@ function _diagonal_imex_nondiagonal_message(scheme::AbstractString, field::Scala
         "CONSTANT-coefficient Laplacian, hyper-/fractional Laplacian, constant damping, and ",
         "derivatives of the field itself. Spatially varying coefficients, cross-field ",
         "coupling and non-Fourier (e.g. Chebyshev) directions are not representable. ",
-        "Options: (a) use a non-diagonal IMEX scheme that builds a global implicit matrix — ",
+        "Options: (a) use a CPU global-matrix or assembled subproblem solve with ",
         "RK222, RK443, SBDF1-SBDF4, CNAB1, CNAB2; (b) attach an explicit diagonal operator ",
         "with `set_spectral_linear_operator!(solver, SpectralLinearOperator(...))`; or ",
         "(c) move the term to the explicit RHS. Previously this silently degraded to a fully ",
@@ -252,6 +252,14 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
                            preserve_layout=true)
     end
 
+    if _rk_stiffly_accurate(ts)
+        new_state = _acquire_recycled_history_state!(state, :diagonal_imex_recycled,
+                                                     Y_stages[end]; preserve_layout=true)
+        _refresh_algebraic_state!(solver.problem, new_state)
+        _push_recycled_history_state!(state, :diagonal_imex_recycled, new_state)
+        return nothing
+    end
+
     # Recycle the state dropped from the previous step's history rotation
     # instead of allocating a fresh deep copy; the coefficient-preserving copy
     # keeps the :c layout the update block below works in.
@@ -276,6 +284,7 @@ function _step_diagonal_imex_rk_impl!(state::TimestepperState, solver::InitialVa
         end
     end
 
+    _refresh_algebraic_state!(solver.problem, new_state)
     _push_recycled_history_state!(state, :diagonal_imex_recycled, new_state)
 end
 
@@ -328,16 +337,21 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
     dt = state.dt
     t = solver.sim_time
 
-    Lmap = _serial_diagonal_imex_Lmap!(state, solver, "DiagonalIMEX_SBDF2")
-    isempty(Lmap) && _log_diagonal_imex_explicit_fallback(state, "DiagonalIMEX_SBDF2")
-
-    if !haskey(state.timestepper_data, :F_history)
-        state.timestepper_data[:F_history] = Vector{ScalarField}[]
-        state.timestepper_data[:iteration] = 0
+    scheme = string(nameof(typeof(state.timestepper)))
+    Lmap = _serial_diagonal_imex_Lmap!(state, solver, scheme)
+    if isempty(Lmap) && state.timestepper isa DiagonalIMEX_SBDF2
+        _log_diagonal_imex_explicit_fallback(state, scheme)
     end
 
-    iteration = state.timestepper_data[:iteration]::Int
-    F_history = state.timestepper_data[:F_history]::Vector{Vector{ScalarField}}
+    # A CPU solver can enter this path after attaching an operator mid-run.
+    # Its global-matrix F history contains vectors, not field states.
+    if !haskey(state.timestepper_data, :ddi_sbdf2_F_history)
+        state.timestepper_data[:ddi_sbdf2_F_history] = Vector{ScalarField}[]
+        state.timestepper_data[:ddi_sbdf2_iteration] = 0
+    end
+
+    iteration = state.timestepper_data[:ddi_sbdf2_iteration]::Int
+    F_history = state.timestepper_data[:ddi_sbdf2_F_history]::Vector{Vector{ScalarField}}
 
     F_n = evaluate_rhs(solver, current_state, t)
 
@@ -347,6 +361,7 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         new_state = copy_state(current_state)
         axpy_state!(dt, F_n, new_state)
         _sbdf2_apply_be_L!(new_state, Lmap, dt)
+        _refresh_algebraic_state!(solver.problem, new_state)
         _push_trim_recycle!(state.history, new_state, 2, state, :ddi_sbdf2_X_recycled)
         # evaluate_rhs returns reused buffer fields; copy before storing so the next
         # step's RHS evaluation cannot overwrite this history entry (else F_{n-1}≡F_n
@@ -368,6 +383,7 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         new_state = _acquire_recycled_history_state!(state, :ddi_sbdf2_X_recycled,
                                                      X_n; preserve_layout=true)
         _sbdf2_apply_bdf2_L!(new_state, X_n, X_nm1, F_n, F_nm1, dt, dt_prev, Lmap)
+        _refresh_algebraic_state!(solver.problem, new_state)
 
         _push_trim_recycle!(state.history, new_state, 2, state, :ddi_sbdf2_X_recycled)
         # Same recycling for the F history: copy F_n (reused RHS buffers — see
@@ -377,7 +393,7 @@ function step_diagonal_imex_sbdf2!(state::TimestepperState, solver::InitialValue
         _push_trim_recycle!(F_history, F_store, 2, state, :ddi_sbdf2_F_recycled)
     end
 
-    state.timestepper_data[:iteration] = iteration + 1
+    state.timestepper_data[:ddi_sbdf2_iteration] = iteration + 1
 end
 
 # SBDF1 startup: (1 + dt·L̂)·X_new = X_n + dt·F_n, per field. Fields with no
@@ -532,6 +548,12 @@ function _accumulate_diagonal_L!(Lhat, k2, expr, sgn::Float64, field::ScalarFiel
             return _accumulate_diagonal_L!(Lhat, k2, expr.left, sgn * cr, field)
         end
         return false
+    elseif isa(expr, DivideOperator)
+        denominator = _as_diagonal_scalar(expr.right)
+        denominator === nothing && return false
+        (isfinite(denominator) && !iszero(denominator)) || throw(ArgumentError(
+            "A diagonal implicit operator requires a finite, nonzero scalar denominator."))
+        return _accumulate_diagonal_L!(Lhat, k2, expr.left, sgn / denominator, field)
     else
         return _accumulate_diagonal_term!(Lhat, k2, sgn, expr, field)
     end
@@ -1007,6 +1029,13 @@ function step_distributed_diagonal_imex_rk!(state::TimestepperState, solver::Ini
         end
         _release_rhs_buffer!(F_result, solver)   # stage RHS is now in the cache; free the shared buffer
         Fs[s] = dst
+    end
+
+    if _rk_stiffly_accurate(ts)
+        X_new = _ddirk_acquire_xnew!(state, Ys[end], n_fields)
+        _refresh_algebraic_state!(solver.problem, X_new)
+        _ddirk_push_recycle!(state, X_new)
+        return nothing
     end
 
     # X_new reuses the field-set that `_push_trim!`-to-2 dropped from history last

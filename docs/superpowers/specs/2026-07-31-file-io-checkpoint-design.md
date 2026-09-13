@@ -7,7 +7,7 @@
 
 Tarang can write distributed output but cannot read it back.
 
-The `NetCDFFileHandler` already writes Dedalus-shaped per-rank files —
+The `NetCDFFileHandler` already writes per-rank files —
 `name_s1/name_s1_p0.nc` — and stamps each variable with `start`, `count`, and
 `global_shape` attributes (`src/tools/netcdf_output.jl:2255-2257`). Nothing reads
 those attributes except the post-hoc merge.
@@ -192,7 +192,7 @@ by a future no-fallback audit.
 A one-step scheme (RK111/222/443, DiagonalIMEX) restarts exactly.
 
 A multistep scheme (CNAB1/2, SBDF1-4) stores history the checkpoint does not carry,
-so on load it re-seeds: SBDF4 falls back to RK443 seeding for 3 steps. The result is
+so on load it re-seeds: SBDF4 builds history with SBDF1, SBDF2, then SBDF3. The result is
 correct but not bit-identical to an uninterrupted run. `load_state!` warns, naming
 the scheme and the number of reduced-order steps.
 

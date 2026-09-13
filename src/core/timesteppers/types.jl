@@ -14,7 +14,7 @@ struct RK111 <: TimeStepper
     """
     1st-order IMEX Runge-Kutta: backward Euler for the implicit (linear) part,
     forward Euler for the explicit part — Ascher, Ruuth & Spiteri (1997) (1,1,1),
-    stored in the two-row form (explicit first stage) that Dedalus's RK111 uses:
+    stored in the two-row form with an explicit initial stage:
 
     Explicit:          Implicit:
     0 | 0  0           0 | 0  0
@@ -64,26 +64,9 @@ struct RK111 <: TimeStepper
 end
 
 struct RK222 <: TimeStepper
-    """
-    2-stage, 2nd order IMEX Runge-Kutta.
+    """Standard RK222. The tableau includes the initial stage.
 
-    Based on Ascher, Ruuth, Spiteri (1997) ARK2(2,2,2).
-    "Implicit-Explicit Runge-Kutta Methods for Time-Dependent PDEs"
-
-    γ = 1 - 1/√2 ≈ 0.29289321881345254
-
-    Properties:
-    - L-stable implicit part (stiff decay)
-    - 2nd order accuracy for both parts
-    - SDIRK structure (same diagonal)
-
-    Butcher tableaux (3-stage form, shared abscissae c = [0, γ, 1]):
-    Explicit:                  Implicit (ESDIRK):
-    0   | 0    0    0          0   | 0    0    0
-    γ   | γ    0    0          γ   | 0    γ    0
-    1   | γ    1-γ  0          1   | 0    1-γ  γ
-    ----|------------          ----|------------
-        | 0    1-γ  γ              | 0    1-γ  γ
+    The explicit and implicit weights equal their final tableau rows.
     """
     stages::Int
     A_explicit::Matrix{Float64}
@@ -94,55 +77,19 @@ struct RK222 <: TimeStepper
     c_implicit::Vector{Float64}
 
     function RK222()
-        # ARS(2,2,2) — Ascher, Ruuth, Spiteri (1997). 3-stage form. The explicit
-        # and implicit tableaux MUST share the abscissae c=[0,γ,1] for the IMEX
-        # combination to be 2nd order (the explicit and implicit stages have to be
-        # evaluated at the same stage times). The previous 2-stage form had
-        # c_explicit=[0,1] ≠ c_implicit=[γ,1], which silently dropped it to 1st order.
-        stages = 3
-        γ = 1 - 1/√2  # ≈ 0.29289321881345254
-
-        # Explicit tableau (ERK), c = [0, γ, 1]
-        A_explicit = [
-            0.0    0.0      0.0;
-            γ      0.0      0.0;
-            γ      1.0-γ    0.0
-        ]
-        b_explicit = [0.0, 1.0-γ, γ]
-        c_explicit = [0.0, γ, 1.0]
-
-        # Implicit tableau (ESDIRK, explicit first stage, same γ diagonal), c = [0, γ, 1]
-        A_implicit = [
-            0.0    0.0      0.0;
-            0.0    γ        0.0;
-            0.0    1.0-γ    γ
-        ]
-        b_implicit = [0.0, 1.0-γ, γ]
-        c_implicit = [0.0, γ, 1.0]
-
-        new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
+        g = 1 - 1 / sqrt(2)
+        d = 1 - 1 / (2g)
+        A = [0.0 0 0; g 0 0; d 1-d 0]
+        H = [0.0 0 0; 0 g 0; 0 1-g g]
+        c = [0.0, g, 1.0]
+        return new(3, A, A[end, :], c, H, H[end, :], copy(c))
     end
 end
 
 struct RK443 <: TimeStepper
-    """
-    4-stage, 3rd order IMEX Runge-Kutta.
+    """Standard RK443. The tableau includes the initial stage.
 
-    ARK built on Alexander's (1977) 3-stage L-stable SDIRK3 embedded as ESDIRK:
-    γ ≈ 0.435866521508459 is the root of x³ − 3x² + (3/2)x − 1/6, with
-    c = [0, γ, (1+γ)/2, 1] and the classical b₂, b₃ weights. (Note: this is
-    NOT Kennedy & Carpenter's ARK3(2)4L[2]SA, whose c₂ = 2γ, nor ARS(4,4,3);
-    the full order-3 ARK coupling conditions are nonetheless satisfied —
-    verified numerically to ≤1e-11.)
-
-    Properties:
-    - L-stable implicit part (stiff decay)
-    - 3rd order accuracy for both parts
-    - 4 stages for improved stability region
-    - ESDIRK structure (explicit first stage, same diagonal thereafter)
-
-    This is the recommended timestepper for most problems with both
-    stiff linear terms (diffusion) and nonlinear advection.
+    The explicit and implicit weights equal their final tableau rows.
     """
     stages::Int
     A_explicit::Matrix{Float64}
@@ -153,33 +100,12 @@ struct RK443 <: TimeStepper
     c_implicit::Vector{Float64}
 
     function RK443()
-        stages = 4
-
-        # Alexander SDIRK3-based ARK coefficients (see docstring)
-        # γ is the SDIRK diagonal value: root of x³ − 3x² + (3/2)x − 1/6
-        γ = 0.4358665215084590  # Root for L-stability
-
-        # Explicit tableau (ERK part)
-        A_explicit = [
-            0.0                  0.0                  0.0                  0.0;
-            0.4358665215084590   0.0                  0.0                  0.0;
-            0.3212788860285571   0.3966543747256624   0.0                  0.0;
-            -0.105858296071263   0.5529291479590279   0.5529291481122351   0.0
-        ]
-        b_explicit = [0.0, 1.208496649176010, -0.6443631706844688, 0.4358665215084590]
-        c_explicit = [0.0, γ, 0.7179332607542195, 1.0]
-
-        # Implicit tableau (ESDIRK part - same γ on diagonal after first stage)
-        A_implicit = [
-            0.0   0.0   0.0   0.0;
-            0.0   γ     0.0   0.0;
-            0.0   0.2820667392457805  γ     0.0;
-            0.0   1.208496649176010  -0.6443631706844688  γ
-        ]
-        b_implicit = [0.0, 1.208496649176010, -0.6443631706844688, γ]
-        c_implicit = [0.0, γ, 0.7179332607542195, 1.0]
-
-        new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
+        A = [0.0 0 0 0 0; 1/2 0 0 0 0; 11/18 1/18 0 0 0;
+             5/6 -5/6 1/2 0 0; 1/4 7/4 3/4 -7/4 0]
+        H = [0.0 0 0 0 0; 0 1/2 0 0 0; 0 1/6 1/2 0 0;
+             0 -1/2 1/2 1/2 0; 0 3/2 -3/2 1/2 1/2]
+        c = [0.0, 1/2, 2/3, 1/2, 1.0]
+        return new(5, A, A[end, :], c, H, H[end, :], copy(c))
     end
 end
 
@@ -311,28 +237,13 @@ end
 # Global-Matrix Timesteppers
 # =============================================================================
 
+"""Modified CNAB2 with three implicit time levels and AB2 extrapolation."""
 struct MCNAB2 <: TimeStepper
-    """
-    Crank-Nicolson / Adams-Bashforth — 2nd order at the default θ = 1/2.
-
-    Implicit: θ-weighted treatment of the linear operator (θ on level n+1, 1−θ on n).
-    Explicit: 2nd-order Adams-Bashforth extrapolation of the nonlinear term.
-
-    θ = 1/2 (default) is Crank-Nicolson and is **2nd order**. θ > 1/2 adds damping
-    for stiff linear terms but is only **1st order** — this is a 2-level θ-method,
-    NOT the 3-level Ascher-Ruuth-Wetton "modified CNAB" (stencil 1/2+γ, 1/2−2γ, γ)
-    that retains 2nd order with damping. Use θ = 1/2 unless you specifically want the
-    extra (1st-order) damping.
-    """
     stages::Int
-    implicit_coefficient::Float64  # θ-weight: 0.5 = Crank-Nicolson (2nd order); >0.5 = damped, 1st order
     explicit_coefficients::Vector{Float64}
 
-    function MCNAB2(theta::Float64=0.5)
-        stages = 2
-        implicit_coeff = theta  # Modified CN parameter
-        explicit_coeffs = [1.5, -0.5]  # Adams-Bashforth 2
-        new(stages, implicit_coeff, explicit_coeffs)
+    function MCNAB2()
+        new(2, [1.5, -0.5])
     end
 end
 
@@ -346,7 +257,11 @@ struct CNLF2 <: TimeStepper
     Implicit: Crank-Nicolson (θ = 0.5)
     Explicit: Leapfrog (centered 2-step extrapolation)
 
-    Formula: (1 + θ*dt*L) X^{n+1} = (1 - (1-θ)*dt*L) X^{n-1} + 2*dt*F^n
+    Constant-step formula: (1 + dt*L) X^{n+1} = (1 - dt*L) X^{n-1} + 2*dt*F^n
+    (Crank-Nicolson spans the two-step interval from n-1 to n+1.)
+
+    The explicit leapfrog part is unstable for negative real eigenvalues;
+    dissipative terms must be treated implicitly.
 
     Variable dt: the stepper generalizes the stencils with exact nonuniform
     Lagrange weights (Wang 2008 eqn 2.11) and stays 2nd order through smooth or
@@ -437,19 +352,10 @@ struct RKSMR <: TimeStepper
 end
 
 struct RKGFY <: TimeStepper
-    """
-    General Framework Runge-Kutta IMEX method (RKGFY).
+    """Standard RKGFY. The tableau includes the initial stage.
 
-    This is the ARK (Additive Runge-Kutta) form for IMEX problems.
-
-    Implements the 2nd-order L-stable IMEX scheme from Ascher, Ruuth, Spiteri (1997):
-    "Implicit-Explicit Runge-Kutta Methods for Time-Dependent PDEs"
-
-    The method uses:
-    - Explicit tableau for nonlinear/advection terms
-    - Implicit (DIRK) tableau for stiff linear terms
-
-    This is a 3-stage, 2nd-order method with good stability properties.
+    The explicit and implicit weights equal their final tableau rows. Pure
+    implicit decay has Crank-Nicolson amplification and is not L-stable.
     """
     stages::Int
     # Explicit Butcher tableau
@@ -462,33 +368,10 @@ struct RKGFY <: TimeStepper
     c_implicit::Vector{Float64}
 
     function RKGFY()
-        stages = 3
-
-        # Ascher-Ruuth-Spiteri ARK2(2,2,2) coefficients
-        # Reference: Ascher, Ruuth, Spiteri (1997), Table 1
-        # γ = (2 - √2) / 2 ≈ 0.2928932..., δ = 1 - 1/(2γ) ≈ -0.7071...
-        γ = (2.0 - sqrt(2.0)) / 2.0
-        δ = 1.0 - 1.0 / (2.0 * γ)
-
-        # Explicit tableau (lower triangular, zeros on diagonal)
-        A_explicit = [
-            0.0     0.0     0.0;
-            γ       0.0     0.0;
-            δ       1.0-δ   0.0
-        ]
-        b_explicit = [0.0, 1.0-γ, γ]
-        c_explicit = [0.0, γ, 1.0]
-
-        # Implicit tableau (DIRK - γ on diagonal)
-        A_implicit = [
-            0.0     0.0     0.0;
-            0.0     γ       0.0;
-            0.0     1.0-γ   γ
-        ]
-        b_implicit = [0.0, 1.0-γ, γ]
-        c_implicit = [0.0, γ, 1.0]
-
-        new(stages, A_explicit, b_explicit, c_explicit, A_implicit, b_implicit, c_implicit)
+        A = [0.0 0 0; 1 0 0; 1/2 1/2 0]
+        H = [0.0 0 0; 1/2 1/2 0; 1/2 0 1/2]
+        c = [0.0, 1.0, 1.0]
+        return new(3, A, A[end, :], c, H, H[end, :], copy(c))
     end
 end
 
@@ -496,7 +379,7 @@ struct RK443_IMEX <: TimeStepper
     """
     4-stage 3rd-order IMEX Runge-Kutta method.
 
-    Uses the same Alexander-SDIRK3-based ARK coefficients as RK443.
+    Uses the same Ascher-Ruuth-Spiteri coefficients as RK443.
     This type exists as an alias for use in contexts where the "_IMEX" suffix
     makes the intent clearer.
 
@@ -515,7 +398,7 @@ struct RK443_IMEX <: TimeStepper
     c_implicit::Vector{Float64}
 
     function RK443_IMEX()
-        # Use the same Alexander-SDIRK3-based ARK coefficients as RK443
+        # Use the same Ascher-Ruuth-Spiteri coefficients as RK443
         # (same as RK443)
         rk = RK443()
         new(rk.stages, rk.A_explicit, rk.b_explicit, rk.c_explicit,
@@ -530,7 +413,8 @@ end
 """
     DiagonalIMEX_RK222 <: TimeStepper
 
-2nd-order IMEX Runge-Kutta with diagonal spectral implicit treatment.
+Internal 2nd-order IMEX Runge-Kutta with diagonal spectral implicit treatment.
+Users select `RK222()`; GPU diagonal execution is chosen automatically.
 
 For pseudospectral methods where the linear operator is diagonal in
 Fourier space, this method avoids sparse matrix solves entirely.
@@ -542,7 +426,7 @@ This stays 100% on GPU with no CPU transfers.
 
 # Usage
 ```julia
-ts = DiagonalIMEX_RK222()
+ts = RK222()
 L = SpectralLinearOperator(dist, bases, :hyperviscosity; ν=1e-10, order=4)
 
 # Set up solver with spectral operator
@@ -560,42 +444,19 @@ struct DiagonalIMEX_RK222 <: TimeStepper
     γ::Float64  # Implicit diagonal coefficient (A_implicit[s,s] for s≥2)
 
     function DiagonalIMEX_RK222()
-        # Ascher-Ruuth-Spiteri (1997) ARS(2,2,2) — a matched, L-stable, 2nd-order
-        # IMEX pair. The implicit part is solved DIAGONALLY per Fourier mode (vs a
-        # global matrix), but it must carry the FULL ESDIRK tableau: omitting the
-        # off-diagonal implicit terms makes R(z)→1−1/γ≈−2.41 (|R|>1 for dt·λ≳4.8),
-        # i.e. unstable in the stiff limit — the opposite of L-stable.
-        stages = 3
-        γ = 1 - 1/√2  # ≈ 0.29289321881345254
-
-        # Explicit tableau (ERK), c = [0, γ, 1]
-        A_explicit = [
-            0.0    0.0      0.0;
-            γ      0.0      0.0;
-            γ      1.0-γ    0.0
-        ]
-        b_explicit = [0.0, 1.0-γ, γ]
-        c_explicit = [0.0, γ, 1.0]
-
-        # Implicit tableau (ESDIRK, explicit first stage, same γ diagonal), c = [0, γ, 1]
-        A_implicit = [
-            0.0    0.0      0.0;
-            0.0    γ        0.0;
-            0.0    1.0-γ    γ
-        ]
-        b_implicit = [0.0, 1.0-γ, γ]
-
-        new(stages, A_explicit, b_explicit, b_implicit, c_explicit, A_implicit, γ)
+        rk = RK222()
+        new(rk.stages, rk.A_explicit, rk.b_explicit, rk.b_implicit,
+            rk.c_explicit, rk.A_implicit, rk.A_implicit[2, 2])
     end
 end
 
 """
     DiagonalIMEX_RK443 <: TimeStepper
 
-3rd-order IMEX Runge-Kutta with diagonal spectral implicit treatment.
+Internal 3rd-order IMEX Runge-Kutta with diagonal spectral implicit treatment.
+Users select `RK443()`; GPU diagonal execution is chosen automatically.
 
-Uses the same Alexander-SDIRK3-based ARK explicit tableau as RK443
-paired with its ESDIRK diagonal for the implicit part. This ensures the
+Uses the same explicit and implicit tableaux as RK443. This ensures the
 IMEX coupling conditions are satisfied for 3rd-order accuracy.
 
 Higher-order version for better accuracy with larger timesteps.
@@ -610,38 +471,17 @@ struct DiagonalIMEX_RK443 <: TimeStepper
     A_implicit_diag::Vector{Float64}  # Diagonal implicit coefficients (= diag(A_implicit))
 
     function DiagonalIMEX_RK443()
-        stages = 4
-        γ = 0.4358665215084590  # L-stable SDIRK3 root (Alexander)
-
-        # Alexander-SDIRK3-based ARK explicit tableau (matches RK443)
-        A_explicit = [
-            0.0                  0.0                  0.0                  0.0;
-            0.4358665215084590   0.0                  0.0                  0.0;
-            0.3212788860285571   0.3966543747256624   0.0                  0.0;
-            -0.105858296071263   0.5529291479590279   0.5529291481122351   0.0
-        ]
-        b_explicit = [0.0, 1.208496649176010, -0.6443631706844688, 0.4358665215084590]
-        b_implicit = [0.0, 1.208496649176010, -0.6443631706844688, γ]  # Implicit weights from ESDIRK tableau
-        c_explicit = [0.0, γ, 0.7179332607542195, 1.0]
-
-        # Full ESDIRK implicit tableau (matches RK443; off-diagonal terms are
-        # essential — dropping them is the stiff-limit instability bug).
-        A_implicit = [
-            0.0   0.0                 0.0                  0.0;
-            0.0   γ                   0.0                  0.0;
-            0.0   0.2820667392457805  γ                    0.0;
-            0.0   1.208496649176010  -0.6443631706844688   γ
-        ]
-        A_implicit_diag = [0.0, γ, γ, γ]
-
-        new(stages, A_explicit, b_explicit, b_implicit, c_explicit, A_implicit, A_implicit_diag)
+        rk = RK443()
+        new(rk.stages, rk.A_explicit, rk.b_explicit, rk.b_implicit,
+            rk.c_explicit, rk.A_implicit, diag(rk.A_implicit))
     end
 end
 
 """
     DiagonalIMEX_SBDF2 <: TimeStepper
 
-2nd-order SBDF with diagonal spectral implicit treatment.
+Internal 2nd-order SBDF with diagonal spectral implicit treatment.
+Users select `SBDF2()`; GPU diagonal execution is chosen automatically.
 
 Multi-step method that's efficient for steady-state problems.
 """
@@ -651,4 +491,11 @@ struct DiagonalIMEX_SBDF2 <: TimeStepper
     function DiagonalIMEX_SBDF2()
         new(2)
     end
+end
+
+"""Both additive tableaux return their last stage as the advanced solution."""
+function _rk_stiffly_accurate(ts)
+    return ts.c_explicit[end] == 1 &&
+           ts.b_explicit == ts.A_explicit[end, :] &&
+           ts.b_implicit == ts.A_implicit[end, :]
 end

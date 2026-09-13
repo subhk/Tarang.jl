@@ -77,7 +77,7 @@ mutable struct TimestepperState{TS<:TimeStepper, V<:Vector{<:ScalarField}, W<:Ve
 
         for _ in 1:n_workspace_sets
             for field in initial_state
-                ws_field = ScalarField(field.dist, "workspace", field.bases, field.dtype)
+                ws_field = ScalarField(field.dist, field.name, field.bases, field.dtype)
                 push!(workspace_fields, ws_field)
             end
         end
@@ -559,12 +559,7 @@ function _update_one_filter!(filter_name::Symbol, reg::TemporalFilterRegistratio
         return nothing
     end
 
-    # Use try-catch in case filter types differ
-    try
-        update!(reg.filter, data, dt)
-    catch e
-        @warn "Failed to update temporal filter :$filter_name: $e"
-    end
+    update!(reg.filter, data, dt)
     return nothing
 end
 
@@ -613,12 +608,13 @@ Get a pre-allocated workspace field, or allocate one if needed.
 function get_workspace_field!(state::TimestepperState, template::ScalarField, idx::Int)
     if idx <= length(state.workspace_fields)
         ws = state.workspace_fields[idx]
+        ws.name = template.name
         # Reset to grid layout
         ws.current_layout = :g
         return ws
     else
         # Fallback: allocate new field (should rarely happen)
-        return ScalarField(template.dist, "workspace", template.bases, template.dtype)
+        return ScalarField(template.dist, template.name, template.bases, template.dtype)
     end
 end
 

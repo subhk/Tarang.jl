@@ -83,7 +83,26 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
     # users on a perfectly correct subproblem solve that their implicit solve was wrong.
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
-        step_subproblem_rk!(state, solver, sps; ts=ts)   # thread ts (e.g. RK443 multistep startup)
+        step_subproblem_rk!(state, solver, sps; ts=ts)
+        return nothing
+    end
+
+    if _serial_diagonal_imex_applicable(solver, ts)
+        _check_identity_mass_operator!(state, solver)
+        Lmap = _serial_diagonal_imex_Lmap!(state, solver, string(nameof(typeof(ts))))
+        if isempty(Lmap)
+            _step_explicit_rk!(state, solver, ts.A_explicit, ts.b_explicit, ts.c_explicit)
+        else
+            _step_diagonal_imex_rk_impl!(state, solver, ts, Lmap)
+        end
+        return nothing
+    end
+
+    # Matrix-free MPI construction intentionally leaves L_matrix absent. Select
+    # the diagonal solve before absence can be interpreted as explicit-only.
+    if !solver.execution_plan.assembled_global_matrices &&
+       _distributed_diagonal_imex_applicable(solver)
+        step_distributed_diagonal_imex_rk!(state, solver, ts)
         return nothing
     end
 
@@ -109,7 +128,7 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
             error("IMEX RK ($(nameof(typeof(ts)))): the equations have a nonzero implicit " *
                   "linear operator, but no implicit-capable path exists for this " *
                   "configuration ($(fallback_reason)). Refusing to silently drop it. " *
-                  "Options: on GPU use DiagonalIMEX_RK222/RK443/SBDF2 with an attached " *
+                  "Options: on a single GPU use RK222, RK443, or SBDF2 with a " *
                   "SpectralLinearOperator (set_spectral_linear_operator!), move the " *
                   "linear terms to the RHS for explicit treatment, or run on CPU.")
         end
@@ -126,6 +145,16 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
     has_mass = M_matrix !== nothing
     M_factor = has_mass ? _get_mass_factor!(state, M_matrix) : nothing
     M_is_singular = has_mass && M_factor === nothing
+    zero_mass_rows = if M_is_singular
+        cached = get(state.timestepper_data, :imex_rk_zero_mass_rows, nothing)
+        if cached === nothing || cached[1] !== M_matrix
+            cached = (M_matrix, _zero_mass_rows(M_matrix))
+            state.timestepper_data[:imex_rk_zero_mass_rows] = cached
+        end
+        cached[2]
+    else
+        Int[]
+    end
 
     _ensure_coeff_layout!(current_state)
     vector_size = _fields_vector_size(current_state)
@@ -173,6 +202,11 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
         # When M is absent, uses (I + dt*a*L). When M is singular (DAE),
         # (M + dt*a*L) is still non-singular because L fills constraint rows.
         a_ii = A_imp[s, s]
+        if M_is_singular && abs(a_ii) >= 1e-14
+            _refresh_bcs_for_stage!(solver, t + ts.c_implicit[s] * dt)
+            _apply_global_algebraic_rhs!(rhs_vec, solver.problem, zero_mass_rows)
+            rhs_vec[zero_mass_rows] .*= dt * a_ii
+        end
         if !has_mass
             if abs(a_ii) < 1e-14
                 copyto!(Xs_vec, rhs_vec)
@@ -218,7 +252,12 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
         mul!(F_imp_vecs[s], L_matrix, Xs_vec)
     end
 
-    # Final update: M*X_{n+1} = M*X_n + dt*Σ(b_exp*F - b_imp*L*X)
+    if _rk_stiffly_accurate(ts)
+        _push_vector_state!(state.history, Xs_vec, current_state, 1)
+        return nothing
+    end
+
+    # Final update for alternative, non-stiffly-accurate tableaux.
     copyto!(rhs_vec, MX_n_vec)
     @inbounds for s in 1:stages
         be = dt * b_exp[s]
@@ -642,12 +681,8 @@ end
 Fallback to fully explicit RK when no L_matrix is provided. Uses only `ts`'s
 explicit tableau coefficients.
 
-`ts` MUST be the RK tableau actually in use, which is NOT always
-`state.timestepper`: during multistep startup (e.g. SBDF3) the bootstrap calls
-`step_rk_imex!(state, solver; ts=RK443())` while `state.timestepper` is the
-multistep method, which has no `A_explicit` field. Reading `state.timestepper`
-here instead of the passed `ts` therefore errors with `type SBDF3 has no field
-A_explicit`. The caller passes its `ts` through.
+`ts` must be the RK tableau actually in use. A fallback can supply a different
+tableau from `state.timestepper`, which may not have Butcher-tableau fields.
 """
 function _step_rk_imex_explicit_fallback!(state::TimestepperState, solver::InitialValueSolver,
                                           ts::TimeStepper=state.timestepper)

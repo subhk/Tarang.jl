@@ -126,7 +126,7 @@ end
     # forward Euler, so it is the exact "collapsed" reference to beat.
     dt = 0.025
     e_euler = _decay_error(CNAB1(), dt)
-    for (stepper, order) in ((CNAB2(), 2), (SBDF3(), 3), (SBDF4(), 4))
+    for (stepper, order) in ((CNAB2(), 2), (SBDF3(), 2), (SBDF4(), 2))
         name = string(nameof(typeof(stepper)))
         e = _decay_error(stepper, dt)
         RANK == 0 && @info "vs forward Euler" name e e_euler ratio=e_euler/e

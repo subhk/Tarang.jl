@@ -837,7 +837,7 @@ end
 
 # ============================================================================
 # div(skew(f)) = -curl(f) identity test (2D)
-# Following Dedalus test pattern
+# Following the Cartesian operator test pattern
 # ============================================================================
 
 @testset "div(skew(f)) = -curl(f) Identity (2D)" begin

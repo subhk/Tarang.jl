@@ -141,48 +141,6 @@ function _sp_multistep_rings!(state::TimestepperState, n_sp::Int, capacity::Int)
     return MX_rings, LX_rings, F_rings
 end
 
-"""Record M*X, L*X, and F(X) without advancing the solution.
-
-Used before a high-order RK startup step so the later SBDF3/SBDF4 call sees
-the same per-subproblem history it would have accumulated through multistep
-steps, while the startup state itself is advanced at sufficient order.
-"""
-function _seed_subproblem_multistep_history!(
-    state::TimestepperState, solver::InitialValueSolver,
-    subproblems::Tuple, capacity::Int,
-)
-    problem = solver.problem
-    state_fields = _cached_state_fields!(state, problem)
-    for f in state_fields
-        ensure_layout!(f, :c)
-    end
-
-    n_sp = length(subproblems)
-    MX_rings, LX_rings, F_rings = _sp_multistep_rings!(state, n_sp, capacity)
-    F_fields = evaluate_rhs_buffered(solver, state_fields, solver.sim_time)
-    dist = n_sp >= 1 ? subproblems[1].dist : nothing
-    state_stash = to_solve_layout!(state_fields, dist; fuse_from_grid=true)
-    F_stash = to_solve_layout!(F_fields, dist)
-
-    for (sp_idx, sp) in enumerate(subproblems)
-        sp.M_min === nothing && continue
-        x_cur = gather_inputs(sp, state_fields)
-        mx_cur = ring_push_newest!(MX_rings[sp_idx], x_cur)
-        lx_cur = ring_push_newest!(LX_rings[sp_idx], x_cur)
-        f_cur = ring_push_newest!(F_rings[sp_idx], x_cur)
-        _apply_subproblem_operator!(mx_cur, _subproblem_operator(sp, :M, x_cur), x_cur)
-        _apply_subproblem_operator!(lx_cur, _subproblem_operator(sp, :L, x_cur), x_cur)
-        gather_eqn_F!(f_cur, sp, solver, F_fields, state_fields)
-    end
-
-    for (f, fft_pa) in F_stash
-        set_coeff_data!(f, fft_pa)
-    end
-    _release_rhs_buffer!(F_fields, solver)
-    from_solve_layout!(state_stash, dist)
-    return nothing
-end
-
 """
     step_subproblem_multistep!(state, solver, subproblems, a, b, c)
 
@@ -535,10 +493,11 @@ end
     return a, b, c
 end
 
-"""Theta-weighted CNAB2 coefficients for both global and subproblem solves."""
-@inline function _mcnab2_coefs(dt::Float64, dt_prev::Float64, theta::Float64)
+"""Modified CNAB2 coefficients, including the older implicit level."""
+@inline function _mcnab2_coefs(dt::Float64, dt_prev::Float64)
     a, _, c = _cnab2_coefs(dt, dt_prev)
-    return a, (theta, 1.0 - theta), c
+    w = dt / dt_prev
+    return a, ((8 + 1/w)/16, (7 - 1/w)/16, 1/16), c
 end
 
 """CNLF2 coefficients (Wang 2008 eqn 2.11) for current/previous timestep: a

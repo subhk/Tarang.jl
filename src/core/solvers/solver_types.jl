@@ -371,6 +371,16 @@ function _gpu_pure_fourier_state(state::Vector{<:ScalarField})
     return found_spatial
 end
 
+"""MPI configurations whose public timestepper never consumes global matrices."""
+function _mpi_matrix_free_fourier_state(state::Vector{<:ScalarField}, timestepper)
+    timestepper isa Union{RK222, RK443, SBDF2} || return false
+    isempty(state) && return false
+    return all(state) do field
+        _mpi_pencil_distribution_active(field.dist) && !_field_uses_gpu(field) &&
+            !isempty(field.bases) && all(is_fourier_axis, field.bases)
+    end
+end
+
 function _gpu_coupled_state(state::Vector{<:ScalarField})
     found_spatial = false
     found_coupled = false
@@ -488,12 +498,20 @@ function _build_initial_value_solver(problem::InitialValueProblem, timestepper;
 
     assembled_global_matrices = false
     if _gpu_pure_fourier_state(state)
+        # Validate the equation IR even when no host matrices are assembled.
+        # Keep format errors outside the optional lazy-RHS fallback below.
+        build_matrix_expressions!(problem)
         # RK/IMEX dispatch deliberately uses the field-wise explicit path for
         # pure-Fourier GPU states.  Building global host matrices here is both
         # unused and prohibitive at production sizes (e.g. the 512² turbulence
         # example), while the algebraic Poisson/velocity constraints are handled
         # spectrally by evaluate_rhs at each stage.
         @info "Pure-Fourier GPU InitialValueProblem: skipping unused global CPU matrix assembly"
+    elseif _mpi_matrix_free_fourier_state(state, timestepper)
+        # Keep parsing and format validation, but omit unused sparse L/M and F.
+        # The distributed diagonal path builds only rank-local Fourier multipliers.
+        build_matrix_expressions!(problem)
+        @info "Pure-Fourier MPI InitialValueProblem: using matrix-free diagonal timestepping"
     else
         build_solver_matrices!(solver)
         _try_build_subproblems!(solver)

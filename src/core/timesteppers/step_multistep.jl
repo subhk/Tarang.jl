@@ -53,7 +53,7 @@ function _global_multistep_distributed_fallback!(state::TimestepperState,
         "and take an explicit step, which can be unstable for stiff systems. " *
         "On CPU-MPI use SBDF2 or a distributed diagonal-IMEX Runge-Kutta method. " *
         "On GPU the distributed diagonal path also declines — run single-GPU " *
-        "(DiagonalIMEX_RK222/RK443/SBDF2) or CPU-MPI instead."))
+        "(RK222, RK443, or SBDF2) or CPU-MPI instead."))
 end
 
 function _prepare_global_multistep_matrices!(state::TimestepperState,
@@ -356,6 +356,12 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
         return
     end
 
+    if _serial_diagonal_imex_applicable(solver, state.timestepper)
+        _check_identity_mass_operator!(state, solver)
+        step_diagonal_imex_sbdf2!(state, solver)
+        return nothing
+    end
+
     # MPI pure-Fourier: no subproblems are built (those are Fourier+Chebyshev
     # only), and the global-matrix implicit solve can't run distributed. Use the
     # distributed diagonal IMEX path instead of an explicit fallback that would
@@ -410,37 +416,8 @@ function step_sbdf2!(state::TimestepperState, solver::InitialValueSolver)
                             iter_key=:sbdf2_iteration, name="SBDF2")
 end
 
-"""
-RK443-seeded startup for the global (non-subproblem) multistep methods: record
-the M·X and F history at the current state, then advance the state with an
-order-3 IMEX RK step. A high-order self-start (instead of SBDF1/SBDF2) keeps the
-one-time startup error from capping the multistep's global convergence order.
-"""
-function _multistep_rk443_startup!(state::TimestepperState, solver::InitialValueSolver,
-                                   depth::Int, iter_key::Symbol)
-    current_state = state.history[end]
-    L_matrix = _get_problem_matrix(solver.problem, "L_matrix")
-    M_matrix = _get_problem_matrix(solver.problem, "M_matrix")
-    if L_matrix !== nothing && M_matrix !== nothing
-        X_current = _timestep_fields_vector!(state, :multistep_X_current_vec, current_state)
-        MX_current = _timestep_matvec!(state, :multistep_MX_current_vec, M_matrix, X_current)
-        F_current = evaluate_rhs(solver, current_state, solver.sim_time)
-        F_current_vec = _timestep_fields_vector!(state, :multistep_F_current_vec, F_current)
-        MX_history = state.timestepper_data[:MX_history]::Vector{Vector{ComplexF64}}
-        F_history = state.timestepper_data[:F_history]::Vector{Vector{ComplexF64}}
-        _prepend_history_buffer!(MX_history, MX_current, depth)
-        _prepend_history_buffer!(F_history, F_current_vec, depth)
-    end
-    # Advance the state with an order-3 IMEX RK step (RK443 tableau passed
-    # explicitly; `state.timestepper` is parametric on the multistep type and
-    # cannot be reassigned).
-    step_rk_imex!(state, solver; ts=_RK443_SINGLETON)
-    state.timestepper_data[iter_key] += 1
-    return
-end
-
 """Semi-implicit BDF3: 3rd-order BDF (implicit) + 3rd-order extrapolation (explicit).
-RK443-seeded startup for the first 2 steps; full SBDF3 thereafter."""
+SBDF1 and SBDF2 supply the first two steps; full SBDF3 thereafter."""
 function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
 
     current_state = state.history[end]
@@ -450,8 +427,7 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
         if _sp_multistep_history_depth(state) < 2 || length(state.dt_history) < 3
-            _seed_subproblem_multistep_history!(state, solver, sps, 3)
-            step_rk_imex!(state, solver; ts=_RK443_SINGLETON)
+            step_sbdf2!(state, solver)
             return
         end
         k2 = state.dt_history[end]
@@ -471,12 +447,10 @@ function step_sbdf3!(state::TimestepperState, solver::InitialValueSolver)
 
     iteration = state.timestepper_data[:sbdf3_iteration]
 
-    # Startup: seed the early steps with order-3 IMEX RK so the multistep reaches
-    # its nominal 3rd order (SBDF1/SBDF2 startup would cap it at order 2). The
-    # global path needs the MX/F deques (populated by the startup), NOT a deep
-    # state.history, so the switch is gated on iteration/timestep history only.
+    # Build history with the lower-order SBDF member.
     if iteration < 2 || length(state.dt_history) < 3
-        _multistep_rk443_startup!(state, solver, 3, :sbdf3_iteration)
+        step_sbdf2!(state, solver)
+        state.timestepper_data[:sbdf3_iteration] += 1
         return
     end
 
@@ -533,8 +507,7 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
     sps = _timestepper_subproblems(solver)
     if sps !== nothing
         if _sp_multistep_history_depth(state) < 3 || length(state.dt_history) < 4
-            _seed_subproblem_multistep_history!(state, solver, sps, 4)
-            step_rk_imex!(state, solver; ts=_RK443_SINGLETON)
+            step_sbdf3!(state, solver)
             return
         end
         k3 = state.dt_history[end]
@@ -555,11 +528,10 @@ function step_sbdf4!(state::TimestepperState, solver::InitialValueSolver)
 
     iteration = state.timestepper_data[:sbdf4_iteration]
 
-    # Startup: seed the early steps with order-3 IMEX RK (gated on iteration /
-    # timestep history; the global path needs the MX/F deques, not a deep
-    # state.history). SBDF1/SBDF2 startup would cap the order at 2.
+    # Build history with the lower-order SBDF member.
     if iteration < 3 || length(state.dt_history) < 4
-        _multistep_rk443_startup!(state, solver, 4, :sbdf4_iteration)
+        step_sbdf3!(state, solver)
+        state.timestepper_data[:sbdf4_iteration] += 1
         return
     end
 

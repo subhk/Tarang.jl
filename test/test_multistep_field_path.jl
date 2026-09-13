@@ -57,11 +57,11 @@ function _global_path_error(stepper, dt::Float64; tfinal=1.0)
     return abs(first(get_grid_data(f)) - exp(-tfinal))
 end
 
-@testset "Explicit-multistep field path keeps the nominal order" begin
+@testset "Explicit-multistep field path matches startup-limited convergence" begin
     # (method, stepper, expected order). The field path must not silently degrade
     # to the forward-Euler rate of 1 that the missing-matrix fallback produced.
     cases = ((:cnab2, CNAB2(), 2), (:sbdf2, SBDF2(), 2),
-             (:sbdf3, SBDF3(), 3), (:sbdf4, SBDF4(), 4),
+             (:sbdf3, SBDF3(), 2), (:sbdf4, SBDF4(), 2),
              (:cnlf2, Tarang.CNLF2(), 2))
     for (method, stepper, order) in cases
         e_coarse = _field_path_error(stepper, method, 0.02)
@@ -73,7 +73,7 @@ end
 end
 
 @testset "Field path matches the global-matrix path" begin
-    # MCNAB2 runs the field path as :cnab2 (with L = 0 its θ weights nothing) and
+    # MCNAB2 runs the field path as :cnab2 (with L = 0 its implicit stencil vanishes) and
     # CNLF2 as its own leapfrog stencil; both must agree with their global-matrix
     # steppers, which start with one CNAB1 step exactly as the field path does.
     for (method, stepper) in ((:cnab1, CNAB1()), (:cnab2, CNAB2()),

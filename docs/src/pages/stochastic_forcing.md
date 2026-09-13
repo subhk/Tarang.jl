@@ -391,7 +391,7 @@ generate_forcing!(forcing, t, 4)  # Same as substep 1
 First-order `CNAB1` and `SBDF1` are also supported. Methods that reuse or combine
 stochastic RHS/state values across time levels would color white noise or produce the
 wrong variance, so Tarang fails before drawing forcing for `CNAB2`, `MCNAB2`, `CNLF2`,
-`SBDF2`, `SBDF3`, `SBDF4`, `DiagonalIMEX_SBDF2`, `ETD_CNAB2`, and `ETD_SBDF2`.
+`SBDF2`, `SBDF3`, `SBDF4`, `ETD_CNAB2`, and `ETD_SBDF2`.
 Use a supported one-step Runge--Kutta/ETD method or a first-order IMEX method instead.
 
 With `enforce_hermitian=true`, self-conjugate Fourier modes are projected to

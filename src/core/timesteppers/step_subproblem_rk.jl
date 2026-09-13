@@ -396,7 +396,7 @@ invalidated lazily when `dt` changes via the dirty-flag path in
 `_get_or_build_lhs!`.
 """
 # `ts` is threaded in (default state.timestepper) so callers like step_rk_imex! can
-# run a SPECIFIC RK tableau (e.g. RK443 for multistep startup) even when
+# run a specific RK tableau for a fallback even when
 # state.timestepper is a multistep type with no Butcher-tableau fields. Reading
 # state.timestepper unconditionally here would FieldError on `ts.stages` in that case.
 function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver,
@@ -710,12 +710,26 @@ function step_subproblem_rk!(state::TimestepperState, solver::InitialValueSolver
         end
     end
 
-    # ── Final update: M*X_{n+1} = M*X_n + dt*Σ(b^E*F - b^I*L*X) ────────
-    # Always perform the full weighted update. The "stiffly accurate" shortcut
-    # (skipping this when b_imp = A_imp[end,:]) is only valid when BOTH tableaux
-    # are SA (b_exp = A_exp[end,:] AND b_imp = A_imp[end,:]). Neither RK222 nor
-    # RK443 is explicitly SA, so the shortcut cannot be used.
-    # This matches step_rk_imex! which always does the weighted update (lines 191-203).
+    # Both tableaux must be stiffly accurate to retain the final stage.
+    # Singular stage systems use least squares, which can leave a boundary
+    # residual even for a stiffly accurate tableau. Correct that residual before
+    # exposing the final state, retaining the stage's pressure/tau values.
+    if _rk_stiffly_accurate(ts)
+        for (sp_idx, sp) in enumerate(subproblems)
+            sp.M_min === nothing && continue
+            isempty(sp.bc_rows) && continue
+            _gpu_subproblem_execution(sp) && continue
+            x = RHS[sp_idx]
+            gather_inputs!(x, sp, state_fields)
+            _project_final_constraints!(x, x, ALG_F[sp_idx], state, sp)
+            scatter_inputs(sp, x, state_fields)
+        end
+        from_solve_layout!(solve_stash, dist)
+        _push_trim!(state.history, state_fields, 1)
+        return nothing
+    end
+
+    # Weighted update for alternative, non-stiffly-accurate tableaux.
     b_imp = ts.b_implicit
     b_exp = ts.b_explicit
     # State is ALREADY in the solve pencil (carried from the last stage's F/LX

@@ -2,7 +2,7 @@
 End-to-end eigenvalue-problem (EigenvalueProblem) solve tests with an analytic oracle.
 
 The EigenvalueProblem solver was rehabilitated 2026-06-04 to solve PER-FOURIER-MODE (one square
-tau subproblem per separable mode), mirroring the BVP solver and Dedalus. Fixes:
+tau subproblem per separable mode), mirroring the BVP solver. Fixes:
 add_bc! BCs merged in the EigenvalueProblem build (same Bug B as the BVP); matrix-coupling
 configured so build_subsystems creates per-mode subproblems; `solve!` rewritten to
 solve the generalized eigenproblem `L_sp v = λ M_sp v` on the SQUARE per-subproblem

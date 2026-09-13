@@ -285,7 +285,7 @@ generate_forcing!(forcing::DeterministicForcing, grid, t::Real)
 
 One forcing realization is reused across the stages of supported one-step RK/ETD methods;
 `CNAB1` and `SBDF1` are supported first-order methods. Tarang rejects `CNAB2`, `MCNAB2`,
-`CNLF2`, `SBDF2`, `SBDF3`, `SBDF4`, `DiagonalIMEX_SBDF2`, `ETD_CNAB2`, and
+`CNLF2`, `SBDF2`, `SBDF3`, `SBDF4`, `ETD_CNAB2`, and
 `ETD_SBDF2` before drawing forcing. Those schemes reuse or combine values across time
 levels, which colors white noise or gives it the wrong variance.
 

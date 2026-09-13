@@ -2,6 +2,47 @@ using Test
 using Tarang
 using Random
 
+@testset "Registered filters consume the completed solution" begin
+    for timestepper in (RK222(), CNAB2()), compiled in (true, false)
+        domain = PeriodicDomain(8)
+        u = ScalarField(domain, "u")
+        set!(u, (x,) -> 0.0)
+        problem = InitialValueProblem([u])
+        add_equation!(problem, "∂t(u) = 1")
+        filt = ExponentialMean((8,); α=0.5)
+        add_temporal_filter!(problem, :u_mean, filt, :u)
+        solver = InitialValueSolver(problem, timestepper; dt=0.1)
+        @test solver.rhs_plan.is_compiled
+        compiled || (solver.rhs_plan = nothing)
+
+        expected = zeros(8)
+        for iteration in 1:3
+            step!(solver)
+            values = Array(Tarang.grid_data!(u))
+            @test values ≈ fill(0.1 * iteration, 8)
+            expected .+= 0.05 .* (values .- expected)
+            @test get_mean(filt) ≈ expected
+        end
+    end
+end
+
+@testset "Registered filter failures propagate from step!" begin
+    domain = PeriodicDomain(8)
+    u = ScalarField(domain, "u")
+    set!(u, (x,) -> 1.0)
+    problem = InitialValueProblem([u])
+    add_equation!(problem, "∂t(u) = 0")
+    filt = ExponentialMean((8,); α=30.0)
+    add_temporal_filter!(problem, :u_mean, filt, :u)
+    solver = InitialValueSolver(problem, RK222(); dt=0.1)
+
+    @test_throws ArgumentError step!(solver)
+    # The PDE step has completed when its post-step filter rejects the update.
+    @test solver.iteration == 1
+    @test solver.sim_time == 0.1
+    @test all(iszero, get_mean(filt))
+end
+
 # Per-step paths for temporal filters and stochastic forcings must not rebuild
 # lookup structures or go through Dict{...,Any} values (type-unstable dispatch).
 

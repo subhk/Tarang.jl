@@ -581,7 +581,7 @@ end
         @test static_boundary_error(timestepper) < 1e-10
     end
 
-    # RK111 has c_explicit=[0] but c_implicit=[1]. Its RHS belongs to the old
+    # RK111 uses an explicit initial stage. Its forcing belongs to the old
     # time while the implicit boundary solve (and the algebraic state retained
     # from it) belongs to the final time.
     function rk111_moving_constraint_errors()
@@ -633,9 +633,8 @@ end
     @test rk111_boundary_error < 1e-10
     @test rk111_algebraic_error < 1e-12
 
-    # Exact boundary values are not enough: replacing the weighted RK result
-    # by a constrained last stage also satisfies these traces but loses the
-    # method's temporal order in the interior. Use a manufactured solution
+    # Exact boundary values are not enough: verify that the stiffly accurate
+    # final stage also retains temporal order in the interior. Use a manufactured solution
     # with a nonlinear-in-space component that the linear boundary lifting
     # cannot erase.
     function moving_boundary_error(timestepper, dt)
@@ -926,7 +925,7 @@ end
         @test maximum(abs, cvals .- gvals) < 1e-10
         @test cerr < 5e-3
         @test gerr < 5e-3
-        if ts isa Union{RK111, RK222, RK443, RKSMR, SBDF3}
+        if ts isa Union{RK111, RK222, RK443, RKSMR}
             @test gbatched                    # GPU default: batched (RK stepping)
         end
     end

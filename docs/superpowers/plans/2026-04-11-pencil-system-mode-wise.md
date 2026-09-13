@@ -1,8 +1,8 @@
-# Per-Pencil Subproblem System (Dedalus-Style) — Implementation Plan
+# Per-Pencil Subproblem System (mode-wise) — Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Rewrite the pencil matrix system to follow the Dedalus subproblem architecture: variables as multi-component entities (VectorField = n_comp × Nz DOFs), expression_matrices returning component-aware blocks, and proper gather/scatter with tensor indices.
+**Goal:** Rewrite the pencil matrix system to follow the mode-wise subproblem architecture: variables as multi-component entities (VectorField = n_comp × Nz DOFs), expression_matrices returning component-aware blocks, and proper gather/scatter with tensor indices.
 
 **Architecture:** Each pencil (Fourier mode kx) has a dense matrix of size `(total_var_dofs × total_var_dofs)` where `total_var_dofs = Σ field_size(var)` and `field_size(VectorField) = n_comp × Nz`, `field_size(ScalarField) = Nz`, `field_size(tau_0D) = 1`, `field_size(tau_1D) = 1`. The matrix assembly iterates over `problem.variables` (not flattened state), and `expression_matrices` returns blocks that include component structure.
 
@@ -20,7 +20,7 @@ The current pencil system has three fundamental bugs:
 
 3. **Row-column mismatch**: Equation row count (262) ≠ variable column count (263) → non-square matrix.
 
-All three stem from the same root: the system was designed around flattened scalar state fields instead of the natural variable hierarchy. The Dedalus approach works because it keeps VectorFields as single multi-component entities throughout.
+All three stem from the same root: the system was designed around flattened scalar state fields instead of the natural variable hierarchy. The mode-wise approach works because it keeps VectorFields as single multi-component entities throughout.
 
 ---
 
@@ -410,7 +410,7 @@ The step function now calls `state_to_pencils(problem, ps)` and `pencils_to_prob
 
 ## Key Differences from Current Implementation
 
-| Aspect | Current (broken) | New (Dedalus-style) |
+| Aspect | Current (broken) | New (mode-wise) |
 |--------|-----------------|---------------------|
 | Pencil indexed by | Flattened scalar state (11 fields) | problem.variables (8 vars) |
 | VectorField `u` DOFs | 2 separate entries (u_x: Nz, u_z: Nz) | 1 block (2×Nz = 128) |

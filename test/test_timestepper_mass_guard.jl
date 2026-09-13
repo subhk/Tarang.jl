@@ -29,7 +29,7 @@ end
 
 @testset "Identity-mass field paths reject unsupported equations before stepping" begin
     @testset "DiagonalIMEX implicit and SBDF2 explicit paths" begin
-        for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+        for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
             for equation in ("2*dt(u) + u = 0", "0.5*dt(u) + dt(u) + u = 0")
                 solver, u = tmg_solver(ts, equation)
                 tmg_refusal(solver, u, step!)
@@ -37,7 +37,7 @@ end
                 tmg_refusal(solver, u, step!)
             end
         end
-        solver, u = tmg_solver(DiagonalIMEX_SBDF2(), "2*dt(u) = -u")
+        solver, u = tmg_solver(Tarang.DiagonalIMEX_SBDF2(), "2*dt(u) = -u")
         tmg_refusal(solver, u, step!)
     end
 
@@ -59,14 +59,14 @@ end
     end
 
     @testset "Coupled time derivatives are not independent identity rows" begin
-        solver, u = tmg_solver(DiagonalIMEX_RK222(), "dt(u) + dt(v) + u = 0"; fields=2)
+        solver, u = tmg_solver(Tarang.DiagonalIMEX_RK222(), "dt(u) + dt(v) + u = 0"; fields=2)
         tmg_refusal(solver, u, step!)
     end
 
     @testset "Equivalent identity expressions remain valid" begin
         for equation in ("dt(u) + u = 0", "1*dt(u) + u = 0",
                          "0.5*dt(u) + 0.5*dt(u) + u = 0")
-            solver, u = tmg_solver(DiagonalIMEX_RK443(), equation)
+            solver, u = tmg_solver(Tarang.DiagonalIMEX_RK443(), equation)
             step!(solver)
             @test maximum(abs, Array(grid_data!(u)) .- exp(-0.01)) < 1e-8
         end
@@ -78,7 +78,7 @@ end
             step!(solver)
             @test maximum(abs, Array(grid_data!(u)) .- exp(-0.005)) < 1e-8
         end
-        solver, u = tmg_solver(DiagonalIMEX_RK443(), "2*dt(u) = -u")
+        solver, u = tmg_solver(Tarang.DiagonalIMEX_RK443(), "2*dt(u) = -u")
         step!(solver)
         @test maximum(abs, Array(grid_data!(u)) .- exp(-0.005)) < 1e-8
     end

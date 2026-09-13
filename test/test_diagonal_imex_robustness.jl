@@ -88,7 +88,7 @@ end
 
     problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) - lap(u) = 0")
-    solver = InitialValueSolver(problem, DiagonalIMEX_SBDF2(); dt = 0.05)
+    solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_SBDF2(); dt = 0.05)
 
     for _ in 1:5
         step!(solver)                      # crashed on iteration 2 before the fix
@@ -120,7 +120,7 @@ end
         return maximum(abs, Tarang.get_grid_data(u))
     end
 
-    u_diag = two_steps(DiagonalIMEX_SBDF2())
+    u_diag = two_steps(Tarang.DiagonalIMEX_SBDF2())
     u_ref  = two_steps(SBDF2())
 
     @test isfinite(u_diag)
@@ -129,7 +129,7 @@ end
     @test u_diag < 1.0                            # actually diffused
 
     # Over a full unit of time the two remain in agreement.
-    @test isapprox(_diffusion_amplitude(DiagonalIMEX_SBDF2()),
+    @test isapprox(_diffusion_amplitude(Tarang.DiagonalIMEX_SBDF2()),
                    _diffusion_amplitude(SBDF2()); rtol = 1e-8)
 end
 
@@ -140,7 +140,7 @@ end
     # THE regression number. Before the fix RK222/RK443 returned 1.00000000
     # (no decay at all) and SBDF2 crashed; the exact answer is exp(-1).
     exact = exp(-1.0)
-    for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+    for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
         amp = _diffusion_amplitude(ts)
         @test isfinite(amp)
         @test amp < 1.0                              # the operator was applied at all
@@ -174,7 +174,7 @@ end
         return Tarang.get_grid_data(u)[1]
     end
 
-    for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+    for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
         derived  = damped(ts; attach = false)
         attached = damped(ts; attach = true)
         @test isapprox(derived, attached; rtol = 1e-10)
@@ -198,7 +198,7 @@ end
         return InitialValueSolver(problem, ts; dt = 0.01)
     end
 
-    for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+    for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
         solver = coupled_solver(ts)
         @test_throws ArgumentError step!(solver)
     end
@@ -206,7 +206,7 @@ end
     # The message must name the scheme and point at a usable alternative,
     # rather than leaving the user to discover the missing physics themselves.
     err = try
-        step!(coupled_solver(DiagonalIMEX_RK222())); nothing
+        step!(coupled_solver(Tarang.DiagonalIMEX_RK222())); nothing
     catch e
         e
     end
@@ -229,7 +229,7 @@ end
         problem = InitialValueProblem([u, v])
         add_equation!(problem, "dt(u) - d(v,x) = 0")   # Differentiate(v), operand ≠ u
         add_equation!(problem, "v = 0")
-        solver = InitialValueSolver(problem, DiagonalIMEX_RK443(); dt = 0.01)
+        solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_RK443(); dt = 0.01)
         @test_throws ArgumentError step!(solver)
     end
 
@@ -243,7 +243,7 @@ end
         Tarang.get_grid_data(u) .= cos.(_dimex_grid(N))
         problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) + d(u,x) = 0")
-        solver = InitialValueSolver(problem, DiagonalIMEX_RK443(); dt = 0.002)
+        solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_RK443(); dt = 0.002)
         for _ in 1:500                                  # advect by t = 1.0
             step!(solver)
         end
@@ -264,7 +264,7 @@ end
         ensure_layout!(u, :g); fill!(Tarang.get_grid_data(u), 1.0)
         problem = InitialValueProblem([u])
         add_equation!(problem, "dt(u) - lap(u) = 0")
-        solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt = 0.01)
+        solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_RK222(); dt = 0.01)
         @test_throws ArgumentError step!(solver)
     end
 
@@ -284,7 +284,7 @@ end
         problem.parameters["nu"] = nu
         add_equation!(problem, "dt(u) - nu*lap(u) = 0")
         raised = try
-            solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt = 0.01)
+            solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_RK222(); dt = 0.01)
             step!(solver)
             false
         catch
@@ -300,7 +300,7 @@ end
     # This must NOT raise — the fix has to separate "no implicit term" from
     # "implicit term I cannot diagonalize".
     exact = exp(-1.0)
-    for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+    for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
         N = 4
         dist, xb = _dimex_setup(N)
         u = ScalarField(dist, "u", (xb,), Float64)
@@ -331,7 +331,7 @@ end
     L = SpectralLinearOperator(dist, (xb,), :laplacian; ν = 0.5)
     problem = InitialValueProblem([u])
     add_equation!(problem, "dt(u) = 0")
-    solver = InitialValueSolver(problem, DiagonalIMEX_RK222(); dt = 0.005)
+    solver = InitialValueSolver(problem, Tarang.DiagonalIMEX_RK222(); dt = 0.005)
     Tarang.set_spectral_linear_operator!(solver, L)
     for _ in 1:200
         step!(solver)
@@ -360,9 +360,9 @@ end
         return Tarang.get_grid_data(u)[1]
     end
 
-    @test isapprox(mixed(DiagonalIMEX_RK222()), mixed(RK222()); rtol = 1e-8)
-    @test isapprox(mixed(DiagonalIMEX_SBDF2()), mixed(SBDF2()); rtol = 1e-8)
-    for ts in (DiagonalIMEX_RK222(), DiagonalIMEX_RK443(), DiagonalIMEX_SBDF2())
+    @test isapprox(mixed(Tarang.DiagonalIMEX_RK222()), mixed(RK222()); rtol = 1e-8)
+    @test isapprox(mixed(Tarang.DiagonalIMEX_SBDF2()), mixed(SBDF2()); rtol = 1e-8)
+    for ts in (Tarang.DiagonalIMEX_RK222(), Tarang.DiagonalIMEX_RK443(), Tarang.DiagonalIMEX_SBDF2())
         @test isapprox(mixed(ts), exact; rtol = 1e-4)
     end
 end

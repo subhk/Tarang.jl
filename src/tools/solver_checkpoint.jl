@@ -64,9 +64,9 @@ function _warn_multistep_restart(solver::InitialValueSolver)
     @warn "$scheme restart re-seeds its multistep history: the checkpoint carries the " *
           "state but not the stored time levels, so the first $steps step(s) run at the " *
           "seeding order. The run is correct but not bit-identical to an uninterrupted " *
-          "one. One-step schemes (RK111/RK222/RK443, RK443_IMEX, RKSMR, RKGFY, ETD_RK222, " *
-          "DiagonalIMEX_RK222/RK443) and the first-order bootstraps CNAB1/SBDF1 restart " *
-          "exactly; DiagonalIMEX_SBDF2 does NOT -- it is multistep." maxlog=1 _id=Symbol(:multistep_restart_, scheme)
+          "one. One-step schemes (RK111/RK222/RK443, RK443_IMEX, RKSMR, RKGFY, ETD_RK222) " *
+          "and the first-order bootstraps CNAB1/SBDF1 restart exactly; SBDF2 does NOT, " *
+          "including its internal diagonal implementation -- it is multistep." maxlog=1 _id=Symbol(:multistep_restart_, scheme)
     return nothing
 end
 

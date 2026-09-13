@@ -38,7 +38,7 @@ Base.@kwdef mutable struct SolverConfig
     # still have work for the multi-threaded LU backend. Set to `false` to
     # preserve the natural kx-ordering for cache-locality reasons. Only
     # affects local ordering on a single rank — does NOT redistribute
-    # subproblems across ranks (that's a Dedalus-style MPI rebalancing
+    # subproblems across ranks (that's a mode-wise MPI rebalancing
     # project — out of scope for now).
     balance_local_cost::Bool = false
 end

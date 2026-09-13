@@ -22,6 +22,9 @@ IMPORTANT for stochastic forcing (following GeophysicalFlows.jl pattern):
 Deterministic forcing is instead evaluated at every RHS evaluation time.
 """
 function step!(state::TimestepperState, solver::InitialValueSolver)
+    # Parameters can also register an operator without going through the setter.
+    _get_spectral_linear_operator(solver) === nothing ||
+        _check_attached_operator_distribution!(solver)
     _check_stochastic_timestepper_compatibility!(state, solver)
     _check_state_level_forcing_unapplied!(state)
     _check_gpu_implicit_compatibility!(state, solver)
@@ -38,9 +41,6 @@ function step!(state::TimestepperState, solver::InitialValueSolver)
 
     # Dispatch to the appropriate stepping method based on timestepper type
     _dispatch_step!(state.timestepper, state, solver)
-
-    # Update temporal filters with the new solution
-    _update_temporal_filters!(solver, state.dt)
 
     # Reset forcing flag at the end of timestep (prepare for next forcing generation)
     reset_forcing_flag!(state)
@@ -108,17 +108,16 @@ Refuse — loudly — to silently drop an implicit linear operator on a single-G
 that has no per-mode implicit path.
 
 A pure-Fourier GPU InitialValueProblem skips global-matrix and subproblem assembly, so
-`L_matrix === nothing` no longer means "no implicit term". Every standard IMEX RK /
-multistep / ETD scheme then falls through to a fully-explicit step and drops the
-implicit `L` with no error — a heat equation runs inviscid. Only the diagonal-IMEX
-schemes solve the diagonal Fourier operator per mode on-device. Turn the silent
-wrong answer into a clear error naming the working alternative.
+`L_matrix === nothing` does not mean "no implicit term". RK222, RK443, and SBDF2
+select internal diagonal solves; internal diagonal types also solve per mode on-device.
+Other schemes must be rejected here instead of silently dropping the implicit L.
 
 Scoped to GPU: the coupled (Fourier×Chebyshev) GPU path DOES build subproblems and
 is exempt; the CPU global-matrix path is unaffected.
 """
 function _check_gpu_implicit_compatibility!(state::TimestepperState, solver::InitialValueSolver)
     state.timestepper isa _DIAGONAL_IMEX_TIMESTEPPERS && return nothing
+    _serial_diagonal_imex_applicable(solver, state.timestepper) && return nothing
 
     plan = solver.execution_plan
     plan_is_gpu(plan) || return nothing
@@ -140,8 +139,7 @@ function _check_gpu_implicit_compatibility!(state::TimestepperState, solver::Ini
         "$scheme cannot treat an implicit (left-hand-side) linear operator on a single " *
         "GPU: a pure-Fourier GPU solver builds no global matrix or subproblem, so the " *
         "term has no per-mode implicit solve and would be silently dropped — the equation " *
-        "would integrate without it. Use a diagonal-IMEX scheme (DiagonalIMEX_RK222, " *
-        "DiagonalIMEX_RK443, or DiagonalIMEX_SBDF2), which solves the diagonal Fourier " *
+        "would integrate without it. Use RK222, RK443, or SBDF2 to solve the diagonal Fourier " *
         "operator per mode on-device, or move the linear term to the explicit right-hand " *
         "side (e.g. write `dt(u) = nu*lap(u) + ...` instead of `dt(u) - nu*lap(u) = ...`)."
     )
