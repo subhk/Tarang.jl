@@ -175,10 +175,16 @@ Fourier solvers skip matrix assembly, so a missing M matrix proves nothing.
 Algebraic equations have no mass row and are handled by state refreshes."""
 function _check_identity_mass_operator!(state::TimestepperState,
                                          solver::InitialValueSolver)
-    get(state.timestepper_data, :identity_mass_validated, false) && return nothing
     problem = solver.problem
+    # Validate against a token, not a one-shot flag: `add_equation!` on a live
+    # problem, or a rebuild that re-parses `equation_data`, changes the very
+    # operator this refuses to guess at, and a permanent flag would let the run
+    # advance on a mass operator nothing ever checked.
+    token = (length(problem.equations), length(problem.equation_data))
+    get(state.timestepper_data, :identity_mass_validated, nothing) === token && return nothing
     if isempty(problem.equation_data) && !isempty(problem.equations)
         build_matrix_expressions!(problem)
+        token = (length(problem.equations), length(problem.equation_data))
     end
     seen = Set{Int}()
     for equation in problem.equation_data
@@ -198,7 +204,7 @@ function _check_identity_mass_operator!(state::TimestepperState,
         end
         union!(seen, targets)
     end
-    state.timestepper_data[:identity_mass_validated] = true
+    state.timestepper_data[:identity_mass_validated] = token
     return nothing
 end
 

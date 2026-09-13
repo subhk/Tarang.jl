@@ -384,14 +384,15 @@ run!(solver; stop_iteration=solver.iteration + 20, cfl=cfl, progress=false)
 `load_state!` writes into `solver.state` (the integrator's live fields), **not**
 the problem-variable handles — that is required, not optional:
 
-!!! warning "The state and your field handles are the same object only until the first step"
-    On a freshly built solver `solver.state[1] === T`. After the first step they are
-    distinct objects holding equal data: the stepper rebinds `solver.state` to its own
-    history buffer and then copies *from* the state back into the problem variables. The
-    sync is **one-way**. So once a run has started, `T` is a read-only view for
-    diagnostics — writing into it (to perturb, reset, or restore a field) is silently
-    discarded on the next step. `load_state!` writes to `solver.state`, which is what
-    keeps a restart correct.
+!!! warning "Your field handles alias the live state — writing into them is not inert"
+    On a freshly built solver `solver.state[1] === T`. After the first step the two are
+    distinct *objects* but they share one storage: the stepper rebinds `solver.state` to
+    its own history buffer and then re-points the problem-variable handles at that same
+    storage, so no per-step array copy happens. Between steps, reading `T` gives you the
+    current solution — and so does writing to it. A write into `T` lands in the
+    integrator's state immediately, so `T` is **not** a read-only diagnostic view:
+    perturb or reset a field deliberately, or not at all. `load_state!` writes to
+    `solver.state`, which is what keeps a restart correct.
 
 ## Complete Example
 

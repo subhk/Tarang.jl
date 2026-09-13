@@ -172,6 +172,14 @@ function _evaluate_rhs_interpreted(solver::InitialValueSolver,
     catch e
         @error "RHS evaluation failed: $e"
         rethrow()
+    finally
+        # `sync_state_to_problem!` REBINDS `problem.variables` (it shares storage
+        # now, it does not copy), and this path is handed the transient RK stage
+        # field-set. Leaving the user's handles pointing at a recycled stage
+        # buffer would make any diagnostic, output task or callback that reads a
+        # problem variable mid-step — or after a throw — see stage data instead
+        # of the solution. Put them back on the live state either way.
+        _alias_state_to_problem!(problem, solver.state)
     end
 
     return rhs

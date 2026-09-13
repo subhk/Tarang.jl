@@ -828,15 +828,21 @@ system, but time/space dependency handling is disabled for it — the
 user would see wrong enforcement for non-constant values in that case).
 """
 function _register_string_bc!(problem::Problem, bc_string::String)
-    robin_parts = try
-        parse_robin_bc_string(bc_string)
+    # The coefficient groups are `(.+?)`, so this parser now matches strings it
+    # once rejected — including symbolic alpha/beta that `robin_bc` itself
+    # refuses. Build the BC inside the guard as well: an ArgumentError from
+    # EITHER step means "not a Robin BC we can register", and must fall through
+    # to the Dirichlet/Neumann path instead of failing `add_bc!` outright.
+    robin_object = try
+        parts = parse_robin_bc_string(bc_string)
+        field_name, coord, position, alpha, beta, value = parts
+        robin_bc(field_name, coord, position, alpha, beta, value)
     catch err
         err isa ArgumentError || rethrow()
         nothing
     end
-    if robin_parts !== nothing
-        field_name, coord, position, alpha, beta, value = robin_parts
-        add_bc!(problem.bc_manager, robin_bc(field_name, coord, position, alpha, beta, value))
+    if robin_object !== nothing
+        add_bc!(problem.bc_manager, robin_object)
         return
     end
 

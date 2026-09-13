@@ -204,7 +204,8 @@ function _check_duplicate_tau_lifts(eq_data, equation_str::AbstractString)
     length(lifts) < 2 && return nothing
     for i in eachindex(lifts), j in (i + 1):lastindex(lifts)
         a, b = lifts[i], lifts[j]
-        (a.basis === b.basis && a.n == b.n && a.operand !== b.operand) || continue
+        (_lift_basis_signature(a.basis) == _lift_basis_signature(b.basis) &&
+         a.n == b.n && a.operand !== b.operand) || continue
         throw(ArgumentError(
             "Equation `$equation_str` lifts two different tau variables onto the SAME mode " *
             "($(a.n)) of the same basis: `lift($(_lift_operand_name(a)), ..., $(a.n))` and " *
@@ -214,6 +215,23 @@ function _check_duplicate_tau_lifts(eq_data, equation_str::AbstractString)
             "its own mode, e.g. `lift(tau1, basis, -1) + lift(tau2, basis, -2)`."))
     end
     return nothing
+end
+
+"""Structural identity of a lift's output basis.
+
+`derivative_basis` constructs a FRESH basis object on every call, so the common
+`lift(tau1, derivative_basis(zb, 1), -1) + lift(tau2, derivative_basis(zb, 1), -1)`
+spelling holds two distinct objects that describe one and the same basis. An
+`===` test waves that singular system straight through to the least-squares
+fallback, which is exactly what the check above exists to refuse.
+"""
+function _lift_basis_signature(basis::Basis)
+    meta = basis.meta
+    # Jacobi-family bases differ by their (a, b) parameters at equal size/bounds.
+    jacobi = (hasproperty(basis, :a) ? Float64(getproperty(basis, :a)) : nothing,
+              hasproperty(basis, :b) ? Float64(getproperty(basis, :b)) : nothing)
+    return (nameof(typeof(basis)), String(meta.element_label), meta.size,
+            meta.bounds, jacobi)
 end
 
 _lift_operand_name(l::Lift) = hasproperty(l.operand, :name) ? String(l.operand.name) : repr(l.operand)

@@ -234,10 +234,23 @@ end
 """Rows retained by a scalar component selector in a component-major matrix."""
 function _component_output_range(op::Component, operand_size::Int)
     field = _resolve_operand_field(op.operand)
-    field isa Union{VectorField, TensorField} || throw(ArgumentError(
-        "Cannot infer vector/tensor component structure for $(typeof(op.operand))"))
-    checkbounds(field.components, op.index)
-    ncomponents = length(field.components)
+    ncomponents = if field isa Union{VectorField, TensorField}
+        checkbounds(field.components, op.index)
+        length(field.components)
+    else
+        # An operator that MAKES a vector out of a scalar leaf -- `grad(nu)[1]`
+        # -- resolves to the scalar `nu` on purpose, so that an unsupported
+        # implicit NCC cannot silently become zero (see `_resolve_operand_field`
+        # above). The component count therefore has to come from the width of
+        # the expression's own row block, not from a container the leaf lacks.
+        leaf_dofs = field === nothing ? 0 : _coeff_space_dofs(field)
+        (leaf_dofs > 0 && operand_size > 0 && operand_size % leaf_dofs == 0) ||
+            throw(ArgumentError(
+                "Cannot infer vector/tensor component structure for $(typeof(op.operand))"))
+        n_inferred = div(operand_size, leaf_dofs)
+        1 <= op.index <= n_inferred || throw(BoundsError(op.operand, op.index))
+        n_inferred
+    end
     operand_size % ncomponents == 0 || throw(DimensionMismatch(
         "Component operand has $operand_size rows for $ncomponents components"))
     n = div(operand_size, ncomponents)
