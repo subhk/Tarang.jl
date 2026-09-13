@@ -474,6 +474,19 @@ end
 function _generate_one_forcing!(forcing::DeterministicForcing,
                                 sim_time::Float64, dt::Float64,
                                 target_field::ScalarField)
+    # A deterministic forcing is a pure function of (grid, t), so a second RHS
+    # evaluation at the same stage time would regenerate identical values and
+    # pay another forward transform — a collective PencilFFT on a distributed
+    # field. The memo lives only inside one `step!`, so an edited parameter is
+    # always picked up on the next step.
+    scratch_current = forcing.spectral_scratch
+    if forcing.staged_time == sim_time && scratch_current !== nothing &&
+       scratch_current.dist === target_field.dist &&
+       scratch_current.bases === target_field.bases &&
+       scratch_current.dtype === target_field.dtype
+        return nothing
+    end
+
     n_dims = length(forcing.field_size)
     length(target_field.bases) == n_dims || throw(ArgumentError(
         "DeterministicForcing has $n_dims dimensions, but target field " *
@@ -511,6 +524,28 @@ function _generate_one_forcing!(forcing::DeterministicForcing,
     scratch.current_layout = :g
     set_local_data!(get_grid_data(scratch), forcing.cached_forcing)
     coeff_data!(scratch)      # transform to :c; the view reads the coefficient buffer
+    forcing.staged_time = sim_time
+    return nothing
+end
+
+"""Drop every registered deterministic forcing's within-step memo.
+
+Called once per `step!`, before any stage runs. Keeping the memo strictly inside
+one step is what makes it safe: a parameter the user edits between steps cannot
+be served from the previous step's realization.
+"""
+_invalidate_deterministic_forcing_memo!(solver::InitialValueSolver) =
+    _invalidate_deterministic_forcing_memo!(solver.problem)
+
+# `InitialValueSolver.problem` is typed by the abstract `Problem`, so which
+# problem types carry `stochastic_forcings` is a dispatch question, not a
+# `hasfield` question.
+_invalidate_deterministic_forcing_memo!(::Problem) = nothing
+
+function _invalidate_deterministic_forcing_memo!(problem::InitialValueProblem)
+    for (_, forcing) in problem.stochastic_forcings
+        forcing isa DeterministicForcing && (forcing.staged_time = NaN)
+    end
     return nothing
 end
 
@@ -608,7 +643,11 @@ Get a pre-allocated workspace field, or allocate one if needed.
 function get_workspace_field!(state::TimestepperState, template::ScalarField, idx::Int)
     if idx <= length(state.workspace_fields)
         ws = state.workspace_fields[idx]
-        ws.name = template.name
+        # Do NOT rename: workspace sets are built from the initial state in the
+        # same flattened order, so `ws` already carries the name of the variable
+        # it stands for. Re-stamping it from an arbitrary template lets a buffer
+        # take an unrelated field's name, and `_diagonal_operand_multiplier`
+        # decides field identity by name.
         # Reset to grid layout
         ws.current_layout = :g
         return ws

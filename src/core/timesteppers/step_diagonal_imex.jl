@@ -569,7 +569,16 @@ device-matching scratch array. A cross-field or non-diagonal operand fails
 instead of being silently replaced by the stepped field."""
 function _diagonal_operand_multiplier(template, k2, operand, field::ScalarField)
     if operand isa ScalarField
-        return (operand === field || operand.name == field.name) ? 1.0 : nothing
+        # `field` may be a workspace stand-in for the stepped variable rather
+        # than the variable object the equation was parsed against, so identity
+        # falls back to the name. Require the structure to match too: a
+        # parameter or coefficient field that merely shares a name is a
+        # cross-field term and must decline, not fold itself into the diagonal.
+        same = operand === field ||
+               (operand.name == field.name &&
+                operand.dist === field.dist &&
+                operand.bases === field.bases)
+        return same ? 1.0 : nothing
     end
     multiplier = similar_zeros(template, eltype(template), size(template)...)
     _accumulate_diagonal_L!(multiplier, k2, operand, 1.0, field) || return nothing

@@ -4,9 +4,13 @@
 # Fourier Derivative Implementation
 # ============================================================================
 
-# Local and distributed derivative multipliers can share a basis's transforms
-# dictionary. Protect both cache paths, including reads concurrent with insertion.
-const _DERIV_MULT_LOCK = ReentrantLock()
+# Local and distributed derivative multipliers share a basis's `transforms`
+# dictionary, which follows the single-threaded convention stated on
+# `_get_device_basis_cache!`: basis caches are touched from the solve loop only,
+# and every writer (here, `_get_cached_lazy_deriv_mult`, `_diff_matmul_buffer`,
+# `_get_device_basis_cache!`) leaves them unlocked. A lock over only some of
+# those writers cannot stop a rehash under a concurrent reader, so it would buy
+# nothing but the appearance of safety.
 
 """
     evaluate_fourier_derivative!(result, operand, axis, order, layout)
@@ -194,9 +198,7 @@ function _get_cached_dist_deriv_mult!(coeff_data::PencilArrays.PencilArray,
     lr_lo = local_range === nothing ? 0 : Int(first(local_range))
     lr_hi = local_range === nothing ? 0 : Int(last(local_range))
     cache_key = (:dist_deriv_mult, order, uses_rfft, axis, lr_lo, lr_hi)
-    cached = lock(_DERIV_MULT_LOCK) do
-        get(basis.transforms, cache_key, nothing)
-    end
+    cached = get(basis.transforms, cache_key, nothing)
     cached !== nothing && return cached::Vector{ComplexF64}
 
     L = basis.meta.bounds[2] - basis.meta.bounds[1]
@@ -240,9 +242,8 @@ function _get_cached_dist_deriv_mult!(coeff_data::PencilArrays.PencilArray,
     end
 
     deriv_mult = ComplexF64.((im .* k_local) .^ order)
-    return lock(_DERIV_MULT_LOCK) do
-        get!(() -> deriv_mult, basis.transforms, cache_key)::Vector{ComplexF64}
-    end
+    basis.transforms[cache_key] = deriv_mult
+    return deriv_mult
 end
 
 function _apply_spectral_derivative_distributed!(coeff_data::AbstractArray,
@@ -275,17 +276,14 @@ is computed once and cached in the basis's transforms dict.
 function _get_cached_deriv_mult(basis::Union{RealFourier, ComplexFourier}, N::Int, L::Float64, order::Int)
     # Tuple key avoids string allocation on every call
     cache_key = (:deriv_mult, N, order)
-    cached = lock(_DERIV_MULT_LOCK) do
-        get(basis.transforms, cache_key, nothing)
-    end
+    cached = get(basis.transforms, cache_key, nothing)
     if cached !== nothing
         return cached::Vector{ComplexF64}
     end
     k_axis = _fftfreq(N, L/N) .* 2π
-    deriv_mult = (im .* k_axis) .^ order
-    return lock(_DERIV_MULT_LOCK) do
-        get!(() -> deriv_mult, basis.transforms, cache_key)::Vector{ComplexF64}
-    end
+    deriv_mult = ComplexF64.((im .* k_axis) .^ order)
+    basis.transforms[cache_key] = deriv_mult
+    return deriv_mult
 end
 
 """

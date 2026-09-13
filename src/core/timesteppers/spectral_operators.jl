@@ -388,7 +388,11 @@ function set_spectral_linear_operator!(solver::InitialValueSolver, L::SpectralLi
 end
 
 function _check_attached_operator_distribution!(solver::InitialValueSolver)
-    any(field -> field.dist.size > 1, solver.state) || return nothing
+    # Must agree with `_serial_diagonal_imex_applicable`, which routes this same
+    # configuration: a multi-rank run with PencilArrays switched off keeps a full
+    # field on every rank and is stepped serially, so refusing it here would fail
+    # every step of a setup the router calls supported.
+    any(field -> _mpi_pencil_distribution_active(field.dist), solver.state) || return nothing
     throw(ArgumentError(
         "Attached SpectralLinearOperator objects are not supported under MPI. " *
         "Write the implicit linear term on the equation's LHS, e.g. " *

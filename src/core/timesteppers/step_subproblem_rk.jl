@@ -1174,7 +1174,7 @@ function _get_or_build_lhs!(sp::Subproblem, stage_idx::Int, dt::Float64, a_ii::F
         # where the least-squares solve is the intended treatment. NOT safe for two
         # tau variables lifted to the same mode under a moving boundary condition
         # (exponentially unstable, 2026-09-05 audit) — that formulation is refused
-        # at problem build by `_check_duplicate_tau_lifts!`, so a system reaching
+        # at problem build by `_check_duplicate_tau_lifts`, so a system reaching
         # this point is announced with a warning, not silently solved.
         if solver_type != MatSolvers.SPQRSolver
             try

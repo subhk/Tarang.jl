@@ -419,7 +419,7 @@ function _get_or_build_multistep_lhs!(sp::Subproblem, a0::Float64, b0::Float64)
         end
         # Same policy as the RK stage system: a gauge-mode singular system is
         # solved in the least-squares sense with a warning; duplicate tau lifts
-        # are refused at problem build (`_check_duplicate_tau_lifts!`).
+        # are refused at problem build (`_check_duplicate_tau_lifts`).
         if solver_type != MatSolvers.SPQRSolver
             try
                 qr_solver = MatSolvers.solver_instance(MatSolvers.SPQRSolver, LHS)

@@ -187,6 +187,7 @@ const TEST_FILES = [
     "test_equation_structure_validation.jl",  # misplaced-term validation must match what actually builds
     "test_cuda_extension_loads.jl",  # ext-load smoke test — runs without GPU hardware
     "test_gpu_transpose_kernels_cpu.jl",  # transpose pack/unpack index math on the KA CPU backend — no GPU needed
+    "test_gpu_nccl_transpose_kernels_cpu.jl",  # the EIGHT directional NCCL pack/unpack kernels: live in transpose_*_to_*!, every launch site hardcodes CUDABackend(), multi-GPU CI is disabled — verified against an independent spec on the KA CPU backend
     "test_legendre_normalization.jl",  # Legendre stores ORTHONORMAL coefficients but differentiation_matrix/evaluate_basis are classical; nothing bridged them, so a Legendre LinearBoundaryValueProblem was silently 80% wrong
     "test_gpu_test_files_reachable.jl", # the GPU test files are executed by NOTHING (buildkite pipeline is inert), so they rot silently; parses them and checks the extension API they call still exists
     "test_webdocs_code.jl",          # Julia/Bash/TOML/Dockerfile fences parse; opt-in isolated CPU and two-rank MPI sweeps catch API drift

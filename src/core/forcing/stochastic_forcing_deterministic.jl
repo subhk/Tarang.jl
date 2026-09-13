@@ -49,6 +49,12 @@ mutable struct DeterministicForcing{T<:AbstractFloat, N, A<:AbstractArray{T, N}}
     # first registered step; the field is built lazily on the target's
     # Distributor/bases so it is device- and decomposition-correct.
     spectral_scratch::Union{Nothing, ScalarField}
+    # Simulation time `spectral_scratch` currently holds, so that several RHS
+    # evaluations at one stage time regenerate and forward-transform the forcing
+    # once rather than once each. Reset to NaN at the top of every `step!`
+    # (`_invalidate_deterministic_forcing_memo!`) so a parameter the user edits
+    # between steps can never be served from a stale realization.
+    staged_time::Float64
 end
 
 function Base.getproperty(forcing::DeterministicForcing, name::Symbol)
@@ -89,6 +95,7 @@ function DeterministicForcing(
         params,
         architecture,
         nothing,
+        NaN,
     )
 end
 

@@ -176,7 +176,7 @@ function compute_spectrum(field, kmax)
     E_k = zeros(kmax)
 
     # Get wavenumbers
-    k = get_wavenumbers(field.bases[1])
+    k = wavenumbers(field.bases[1])
 
     # Bin energy by wavenumber
     for (i, ki) in enumerate(k)
@@ -199,9 +199,9 @@ function compute_3d_spectrum(u, kmax)
     for component in u.components
         Tarang.ensure_layout!(component, :c)
 
-        kx = get_wavenumbers(component.bases[1])
-        ky = get_wavenumbers(component.bases[2])
-        kz = get_wavenumbers(component.bases[3])
+        kx = wavenumbers(component.bases[1])
+        ky = wavenumbers(component.bases[2])
+        kz = wavenumbers(component.bases[3])
 
         for i in eachindex(kx), j in eachindex(ky), k in eachindex(kz)
             k_mag = sqrt(kx[i]^2 + ky[j]^2 + kz[k]^2)

@@ -245,6 +245,13 @@ function step_rk_imex!(state::TimestepperState, solver::InitialValueSolver; ts::
             end
         end
 
+        # A stiffly accurate tableau takes the last stage AS the step, so the
+        # final stage's F_exp/F_imp never reach the update below. Stop before
+        # paying for them: `evaluate_rhs` is the most expensive operation in the
+        # step (it drives every nonlinear transform), and this skips one of them
+        # per step for RK111/RK222/RK443/RKGFY/RKSMR.
+        s == stages && _rk_stiffly_accurate(ts) && break
+
         Xs_fields = _timestep_field_state!(state, :imex_rk_stage_state, current_state)
         vector_to_fields!(Xs_fields, Xs_vec, current_state)
         F_exp_fields = evaluate_rhs(solver, Xs_fields, t + c[s] * dt)

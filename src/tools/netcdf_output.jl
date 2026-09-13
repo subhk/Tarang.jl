@@ -128,8 +128,14 @@ end
 
 mutable struct NetCDFStagingCache
     cpu_cache::Dict{Tuple, Any}
+    # Staging fields for tasks whose `scales` differ from their source field's.
+    # Keyed by (source field, output scales) and deliberately NOT dropped by
+    # `empty!`: the staged CPU arrays are per-write, but re-allocating a whole
+    # rescaled field (grid + coefficient buffers) on every write is what made
+    # `scales`-converting output allocate N field copies per `process!`.
+    rescaled::Dict{Tuple, Any}
 
-    NetCDFStagingCache() = new(Dict{Tuple, Any}())
+    NetCDFStagingCache() = new(Dict{Tuple, Any}(), Dict{Tuple, Any}())
 end
 
 Base.empty!(cache::NetCDFStagingCache) = (empty!(cache.cpu_cache); cache)
@@ -2116,10 +2122,17 @@ function _postprocess_task_data(task::Dict, data, precision::Type=Float64)
         data = cat(reshape(real_part, 1, size(real_part)...),
                    reshape(imag_part, 1, size(imag_part)...); dims=1)
     end
-    # Ensure contiguous Array (not ReshapedArray/SubArray) for NetCDF.jl
-    data = Array{precision}(data)
-    # Use Julia types directly for NetCDF.jl (NC_FLOAT/NC_DOUBLE are C constants)
-    nc_type = precision
+    # Ensure contiguous Array (not ReshapedArray/SubArray) for NetCDF.jl, at the
+    # handler's requested precision. Only NUMERIC task data can be coerced: a
+    # `postprocess` returning anything else (a Bool mask, a label) would hit an
+    # InexactError/MethodError here instead of being written as what it is.
+    if eltype(data) <: Number
+        data = Array{precision}(data)
+        nc_type = precision
+    else
+        data = Array(data)
+        nc_type = eltype(data)
+    end
     return data, is_complex_data, nc_type
 end
 
@@ -2234,26 +2247,6 @@ function materialize_output_operator(operator, layout_symbol::Symbol)
     return operator
 end
 
-function _stage_scalar_field!(cache::Dict{Tuple{UInt, Symbol}, Any}, field::ScalarField, layout::Symbol)
-    key = (objectid(field), layout)
-    if haskey(cache, key)
-        return cache[key]
-    end
-    ensure_layout!(field, layout)
-    arr = layout == :c ? get_coeff_data(field) : get_grid_data(field)
-    # See the NetCDFStagingCache method above: permuted coeff pencils cannot be
-    # staged under grid-convention metadata.
-    if layout == :c && arr isa PencilArrays.PencilArray
-        error("layout=\"c\" output of `$(field.name)` is not supported on the " *
-              "distributed PencilArrays path: the coefficient pencil is permuted " *
-              "and decomposed differently than the metadata assumes. Write " *
-              "grid-space output instead, or gather coefficients manually.")
-    end
-    staged = get_cpu_data(arr)
-    cache[key] = staged
-    return staged
-end
-
 function _stage_scalar_field!(cache::NetCDFStagingCache, field::ScalarField, layout::Symbol;
                               scales=nothing)
     norm_layout = layout == :c ? :c : :g
@@ -2264,7 +2257,12 @@ function _stage_scalar_field!(cache::NetCDFStagingCache, field::ScalarField, lay
     end
     staged_field = field
     if norm_layout == :g && output_scales != field.scales
-        staged_field = copy(field)
+        staged_field = get!(() -> copy(field), cache.rescaled,
+                            (objectid(field), output_scales))
+        # Match the source geometry before copying, then rescale: the buffer is
+        # reused across writes and is left at `output_scales` by the previous one.
+        set_scales!(staged_field, field.scales)
+        copy_field_data!(staged_field, field)
         ensure_layout!(staged_field, :c)
         set_scales!(staged_field, output_scales)
     end

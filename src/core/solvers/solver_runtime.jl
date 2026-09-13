@@ -34,6 +34,7 @@ authoritative timestep value.
 function _ensure_timestepper_state!(solver::InitialValueSolver, dt::Real)
     dt64 = Float64(dt)
     solver.dt = dt64
+    _invalidate_deterministic_forcing_memo!(solver)
     if solver.timestepper_state === nothing
         solver.timestepper_state = TimestepperState(solver.timestepper, dt64, solver.state)
     else
